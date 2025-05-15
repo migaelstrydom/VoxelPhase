@@ -1,8 +1,10 @@
 use std::error::Error;
 
 mod app;
+mod components;
 mod core;
 mod rendering;
+mod systems;
 mod utils;
 
 use crate::app::App;
@@ -18,9 +20,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     log::info!("Starting RustDude");
 
     let mut app = App::new(1920, 1080, "RustDude App")?;
-    app.run(|renderer| {
-        if let Err(e) = renderer.render_frame() {
-            eprintln!("Error during render_frame: {}", e);
+    app.run(|renderer, world| {
+        if let Err(e) = renderer.render_frame(world) {
+            log::error!("Error during render_frame: {}", e);
             // Potentially handle exit here or let the app continue
         }
     })?;

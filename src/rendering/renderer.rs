@@ -13,10 +13,16 @@ use winit::{
 };
 
 use crate::core::vulkan_context::{
-    VulkanContext, find_memorytype_index, record_submit_commandbuffer,
+    find_memorytype_index, record_submit_commandbuffer, VulkanContext,
 };
 
 use crate::rendering::vertex::Vertex;
+
+// ECS and Math imports
+use nalgebra::{Matrix4, Vector3};
+use specs::{Join, WorldExt};
+
+use crate::components::{Position, Renderable, Rotation}; // Import project components
 
 // Define offset_of! macro locally
 #[allow(unused_macros)] // Add this in case it's not immediately used after this edit
@@ -28,6 +34,14 @@ macro_rules! offset_of {
             std::ptr::addr_of!(b.$field) as isize - std::ptr::addr_of!(b) as isize
         }
     }};
+}
+
+// UBO Struct Definition
+#[derive(Clone, Debug, Copy)]
+#[repr(C)]
+pub struct ModelMatrixUbo {
+    pub model: Matrix4<f32>,
+    // Later we might add view and projection matrices here too
 }
 
 // Structs are namespaced // #[macro_export] macros are at crate root
@@ -71,6 +85,13 @@ pub struct Renderer {
     pub index_count: u32,
     pub vertex_shader_module: vk::ShaderModule,
     pub fragment_shader_module: vk::ShaderModule,
+
+    // New UBO fields for model matrix
+    pub model_matrix_ubo_buffer: vk::Buffer,
+    pub model_matrix_ubo_memory: vk::DeviceMemory,
+    pub model_matrix_descriptor_set_layout: vk::DescriptorSetLayout,
+    pub model_matrix_descriptor_pool: vk::DescriptorPool,
+    pub model_matrix_descriptor_set: vk::DescriptorSet,
 }
 
 impl Renderer {
@@ -490,13 +511,91 @@ impl Renderer {
                 .create_shader_module(&frag_shader_info, None)
                 .expect("Fragment shader module error");
 
-            // 6. Pipeline Layout
-            let layout_create_info = vk::PipelineLayoutCreateInfo::default();
+            // Create Uniform Buffer for Model Matrix (Needs to be created before descriptor set update and pipeline layout if it affects descriptor count/type)
+            let ubo_buffer_info = vk::BufferCreateInfo::default()
+                .size(std::mem::size_of::<ModelMatrixUbo>() as u64)
+                .usage(vk::BufferUsageFlags::UNIFORM_BUFFER)
+                .sharing_mode(vk::SharingMode::EXCLUSIVE);
+            let model_matrix_ubo_buffer = vulkan_context
+                .device
+                .create_buffer(&ubo_buffer_info, None)?;
+            let ubo_memory_req = vulkan_context
+                .device
+                .get_buffer_memory_requirements(model_matrix_ubo_buffer);
+            let ubo_memory_index = find_memorytype_index(
+                &ubo_memory_req,
+                &vulkan_context.device_memory_properties,
+                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+            )
+            .expect("Unable to find suitable memory type for UBO.");
+            let ubo_allocate_info = vk::MemoryAllocateInfo::default()
+                .allocation_size(ubo_memory_req.size)
+                .memory_type_index(ubo_memory_index);
+            let model_matrix_ubo_memory = vulkan_context
+                .device
+                .allocate_memory(&ubo_allocate_info, None)?;
+            vulkan_context.device.bind_buffer_memory(
+                model_matrix_ubo_buffer,
+                model_matrix_ubo_memory,
+                0,
+            )?;
+
+            // Create DescriptorSetLayout for ModelMatrixUBO
+            let ubo_descriptor_set_layout_bindings = [vk::DescriptorSetLayoutBinding::default()
+                .binding(0) // Corresponds to layout(binding=0) in shader
+                .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::VERTEX)]; // UBO used in vertex shader
+            let ubo_descriptor_set_layout_create_info =
+                vk::DescriptorSetLayoutCreateInfo::default()
+                    .bindings(&ubo_descriptor_set_layout_bindings);
+            let model_matrix_descriptor_set_layout = vulkan_context
+                .device
+                .create_descriptor_set_layout(&ubo_descriptor_set_layout_create_info, None)?;
+
+            // Create Pipeline Layout using the descriptor set layout
+            let set_layouts = [model_matrix_descriptor_set_layout];
+            let pipeline_layout_create_info =
+                vk::PipelineLayoutCreateInfo::default().set_layouts(&set_layouts);
             let pipeline_layout = vulkan_context
                 .device
-                .create_pipeline_layout(&layout_create_info, None)?;
+                .create_pipeline_layout(&pipeline_layout_create_info, None)?;
 
-            // 7. Graphics Pipeline
+            // Create Descriptor Pool for ModelMatrixUBO
+            let descriptor_pool_sizes = [vk::DescriptorPoolSize::default()
+                .ty(vk::DescriptorType::UNIFORM_BUFFER)
+                .descriptor_count(1)];
+            let descriptor_pool_create_info = vk::DescriptorPoolCreateInfo::default()
+                .max_sets(1)
+                .pool_sizes(&descriptor_pool_sizes);
+            let model_matrix_descriptor_pool = vulkan_context
+                .device
+                .create_descriptor_pool(&descriptor_pool_create_info, None)?;
+
+            // Allocate Descriptor Set
+            let descriptor_set_allocate_info = vk::DescriptorSetAllocateInfo::default()
+                .descriptor_pool(model_matrix_descriptor_pool)
+                .set_layouts(std::slice::from_ref(&model_matrix_descriptor_set_layout));
+            let model_matrix_descriptor_sets = vulkan_context
+                .device
+                .allocate_descriptor_sets(&descriptor_set_allocate_info)?;
+            let model_matrix_descriptor_set = model_matrix_descriptor_sets[0];
+
+            // Update Descriptor Set to point to the UBO buffer
+            let ubo_buffer_info_for_descriptor = [vk::DescriptorBufferInfo::default()
+                .buffer(model_matrix_ubo_buffer)
+                .offset(0)
+                .range(std::mem::size_of::<ModelMatrixUbo>() as u64)];
+            let write_descriptor_sets = [vk::WriteDescriptorSet::default()
+                .dst_set(model_matrix_descriptor_set)
+                .dst_binding(0)
+                .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                .buffer_info(&ubo_buffer_info_for_descriptor)];
+            vulkan_context
+                .device
+                .update_descriptor_sets(&write_descriptor_sets, &[]);
+
+            // Graphics Pipeline (uses the pipeline_layout)
             let shader_entry_name = std::ffi::CStr::from_bytes_with_nul(b"main\0").unwrap();
             let shader_stage_create_infos = [
                 vk::PipelineShaderStageCreateInfo {
@@ -612,8 +711,7 @@ impl Renderer {
                     None,
                 )
                 .expect("Unable to create graphics pipeline");
-            let graphics_pipeline = graphics_pipelines[0]; // Assuming one pipeline
-            // Note: The original code destroyed other pipelines in the vec, but here we only create/store one.
+            let graphics_pipeline = graphics_pipelines[0];
 
             Ok(Self {
                 vulkan_context,
@@ -647,12 +745,58 @@ impl Renderer {
                 index_count,
                 vertex_shader_module,
                 fragment_shader_module,
+                model_matrix_ubo_buffer,
+                model_matrix_ubo_memory,
+                model_matrix_descriptor_set_layout,
+                model_matrix_descriptor_pool,
+                model_matrix_descriptor_set,
             })
         }
     }
 
-    pub fn render_frame(&mut self) -> Result<(), Box<dyn Error>> {
+    pub fn render_frame(&mut self, world: &specs::World) -> Result<(), Box<dyn Error>> {
         unsafe {
+            // ECS Query and UBO Update
+            {
+                let positions = world.read_storage::<Position>();
+                let rotations = world.read_storage::<Rotation>();
+                let renderables = world.read_storage::<Renderable>();
+
+                for (pos, rot, _renderable) in (&positions, &rotations, &renderables).join() {
+                    let current_model_matrix = ModelMatrixUbo {
+                        model: Matrix4::new_translation(&pos.0)
+                            * Matrix4::from_axis_angle(&Vector3::z_axis(), rot.0),
+                    };
+                    log::debug!(
+                        "Processing entity with position: {:?}, rotation: {:.2} rad",
+                        pos.0,
+                        rot.0
+                    );
+                    // log::trace!("Calculated model matrix: {:#?}", current_model_matrix.model);
+
+                    // Update the UBO memory
+                    let ubo_size = std::mem::size_of::<ModelMatrixUbo>() as u64;
+                    let ubo_ptr = self.vulkan_context.device.map_memory(
+                        self.model_matrix_ubo_memory,
+                        0, // offset
+                        ubo_size,
+                        vk::MemoryMapFlags::empty(),
+                    )?;
+                    // Create a slice from the raw pointer and copy data
+                    // This assumes ModelMatrixUbo is #[repr(C)] and copyable, which it is.
+                    let ubo_slice =
+                        std::slice::from_raw_parts_mut(ubo_ptr as *mut ModelMatrixUbo, 1);
+                    ubo_slice[0] = current_model_matrix;
+                    self.vulkan_context
+                        .device
+                        .unmap_memory(self.model_matrix_ubo_memory);
+
+                    // Since we only have one entity for now, we can break after the first one.
+                    // In a real scenario, you might have multiple UBOs or an array of UBOs if drawing many distinct objects.
+                    break;
+                }
+            }
+
             self.vulkan_context.device.wait_for_fences(
                 &[self.draw_commands_reuse_fence],
                 true,
@@ -684,12 +828,11 @@ impl Renderer {
             ];
 
             let render_pass_begin_info = vk::RenderPassBeginInfo::default()
-                .render_pass(self.renderpass) // Uses self.renderpass
-                .framebuffer(self.framebuffers[present_index as usize]) // Uses self.framebuffers
+                .render_pass(self.renderpass)
+                .framebuffer(self.framebuffers[present_index as usize])
                 .render_area(self.surface_resolution.into())
                 .clear_values(&clear_values);
 
-            // Define viewports and scissors (assuming they are dynamic or based on surface_resolution)
             let viewports = [vk::Viewport {
                 x: 0.0,
                 y: 0.0,
@@ -717,18 +860,29 @@ impl Renderer {
                     device.cmd_bind_pipeline(
                         draw_cb,
                         vk::PipelineBindPoint::GRAPHICS,
-                        self.graphics_pipeline, // Uses self.graphics_pipeline
+                        self.graphics_pipeline,
                     );
                     device.cmd_set_viewport(draw_cb, 0, &viewports);
                     device.cmd_set_scissor(draw_cb, 0, &scissors);
-                    device.cmd_bind_vertex_buffers(draw_cb, 0, &[self.vertex_buffer], &[0]); // Uses self.vertex_buffer
+
+                    // Bind the Descriptor Set for the UBO
+                    device.cmd_bind_descriptor_sets(
+                        draw_cb,
+                        vk::PipelineBindPoint::GRAPHICS,
+                        self.pipeline_layout, // The pipeline layout that knows about this descriptor set
+                        0, // firstSet: index of the first descriptor set in the array of set layouts
+                        &[self.model_matrix_descriptor_set], // Slice of descriptor sets to bind
+                        &[], // Empty slice for dynamic offsets
+                    );
+
+                    device.cmd_bind_vertex_buffers(draw_cb, 0, &[self.vertex_buffer], &[0]);
                     device.cmd_bind_index_buffer(
                         draw_cb,
                         self.index_buffer,
                         0,
                         vk::IndexType::UINT32,
-                    ); // Uses self.index_buffer
-                    device.cmd_draw_indexed(draw_cb, self.index_count, 1, 0, 0, 0); // Uses self.index_count. Note: last param was 1, changed to 0 for instance_count as per typical single draw.
+                    );
+                    device.cmd_draw_indexed(draw_cb, self.index_count, 1, 0, 0, 0);
                     device.cmd_end_render_pass(draw_cb);
                 },
             );
@@ -753,19 +907,44 @@ impl Drop for Renderer {
         unsafe {
             self.vulkan_context.device.device_wait_idle().unwrap();
 
-            // Destroy new resources (order matters)
+            // Destroy new UBO-related resources (order can matter)
+            // Descriptor sets are implicitly freed with the pool
+            if self.model_matrix_descriptor_pool != vk::DescriptorPool::null() {
+                self.vulkan_context
+                    .device
+                    .destroy_descriptor_pool(self.model_matrix_descriptor_pool, None);
+            }
+            if self.model_matrix_descriptor_set_layout != vk::DescriptorSetLayout::null() {
+                self.vulkan_context
+                    .device
+                    .destroy_descriptor_set_layout(self.model_matrix_descriptor_set_layout, None);
+            }
+            if self.model_matrix_ubo_buffer != vk::Buffer::null() {
+                self.vulkan_context
+                    .device
+                    .destroy_buffer(self.model_matrix_ubo_buffer, None);
+            }
+            if self.model_matrix_ubo_memory != vk::DeviceMemory::null() {
+                self.vulkan_context
+                    .device
+                    .free_memory(self.model_matrix_ubo_memory, None);
+            }
+
+            // Existing cleanup (ensure order is still correct relative to new items if dependencies exist)
             self.vulkan_context
                 .device
                 .destroy_shader_module(self.vertex_shader_module, None);
             self.vulkan_context
                 .device
                 .destroy_shader_module(self.fragment_shader_module, None);
+            // Pipeline must be destroyed before its layout
             self.vulkan_context
                 .device
                 .destroy_pipeline(self.graphics_pipeline, None);
             self.vulkan_context
                 .device
                 .destroy_pipeline_layout(self.pipeline_layout, None);
+            // RenderPass can be destroyed after pipelines that use it
             self.vulkan_context
                 .device
                 .destroy_render_pass(self.renderpass, None);
@@ -787,7 +966,6 @@ impl Drop for Renderer {
                 .device
                 .free_memory(self.index_buffer_memory, None);
 
-            // Existing cleanup
             self.vulkan_context.device.free_command_buffers(
                 self.pool,
                 &[self.draw_command_buffer, self.setup_command_buffer],
@@ -824,6 +1002,7 @@ impl Drop for Renderer {
                 .device
                 .destroy_fence(self.setup_commands_reuse_fence, None);
             self.surface_loader.destroy_surface(self.surface, None);
+            // VulkanContext (which holds device and instance) is dropped after Renderer, handling their cleanup.
         }
     }
 }

@@ -1,3 +1,4 @@
 .vscode
 .cargo
 /target
+shader/*.spv
