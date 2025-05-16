@@ -11,7 +11,7 @@ use winit::{
 };
 
 // ECS imports
-use nalgebra::Vector3;
+use nalgebra::{Vector2, Vector3};
 use specs::{Builder, Dispatcher, DispatcherBuilder, World, WorldExt};
 
 // Project imports
@@ -21,6 +21,7 @@ use crate::rendering::camera::Camera; // For default camera creation
 use crate::rendering::renderer::Renderer;
 use crate::rendering::vertex::Vertex;
 use crate::systems::{RenderSystem, SpinningSystem};
+use crate::world::geometry::Landscape;
 use nalgebra::Vector4;
 pub struct App<'a, 'b> {
     // Add lifetimes for Dispatcher
@@ -67,17 +68,22 @@ impl<'a, 'b> App<'a, 'b> {
             Vertex {
                 pos: Vector4::new(-1.0, 1.0, 0.0, 1.0),
                 color: Vector4::new(0.0, 1.0, 0.0, 1.0),
+                tex_coords: Vector2::new(0.0, 0.0),
             },
             Vertex {
                 pos: Vector4::new(1.0, 1.0, 0.0, 1.0),
                 color: Vector4::new(0.0, 0.0, 1.0, 1.0),
+                tex_coords: Vector2::new(1.0, 0.0),
             },
             Vertex {
                 pos: Vector4::new(0.0, -1.0, 0.0, 1.0),
                 color: Vector4::new(1.0, 0.0, 0.0, 1.0),
+                tex_coords: Vector2::new(0.5, 1.0),
             },
         ];
         let triangle_indices = vec![0u32, 1, 2];
+
+        let world_geometry = Landscape::load_ripple_obj()?;
 
         // Create the triangle entity with a Mesh component
         world
@@ -87,8 +93,8 @@ impl<'a, 'b> App<'a, 'b> {
             .with(SpinSpeed(0.01)) // Rotation speed
             .with(Mesh {
                 // Add Mesh component
-                vertices: triangle_vertices,
-                indices: triangle_indices,
+                vertices: world_geometry.mesh.vertices,
+                indices: world_geometry.mesh.indices,
             })
             .with(Renderable) // Mark as renderable
             .build();
@@ -96,8 +102,8 @@ impl<'a, 'b> App<'a, 'b> {
         // Create Camera Entity
         let initial_aspect_ratio = window_width as f32 / window_height as f32;
         let camera_entity = Camera::new(
-            nalgebra::Point3::new(2.0, 2.0, 3.0), // Slightly adjusted default position for better view
-            nalgebra::Point3::new(0.0, 0.0, 0.0),
+            nalgebra::Point3::new(2.0, -90.0, 3.0), // Slightly adjusted default position for better view
+            nalgebra::Point3::new(0.0, 1.0, 1.0),
             nalgebra::Vector3::y(),
             std::f32::consts::FRAC_PI_4, // Default FOV (45 degrees)
             initial_aspect_ratio,

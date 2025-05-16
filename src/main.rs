@@ -5,6 +5,7 @@ mod components;
 mod core;
 mod rendering;
 mod systems;
+mod world;
 
 use crate::app::App;
 
