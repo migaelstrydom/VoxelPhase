@@ -15,8 +15,9 @@ use nalgebra::Vector3;
 use specs::{Builder, Dispatcher, DispatcherBuilder, World, WorldExt};
 
 // Project imports
-use crate::components::{Position, Renderable, Rotation, SpinSpeed}; // Import new components
+use crate::components::{CameraComponent, Position, Renderable, Rotation, SpinSpeed}; // Added CameraComponent
 use crate::core::vulkan_context::VulkanContext;
+use crate::rendering::camera::Camera; // For default camera creation
 use crate::rendering::renderer::Renderer;
 use crate::systems::SpinningSystem; // Import new system
 
@@ -53,6 +54,7 @@ impl<'a, 'b> App<'a, 'b> {
         world.register::<Rotation>();
         world.register::<SpinSpeed>();
         world.register::<Renderable>();
+        world.register::<CameraComponent>(); // Register CameraComponent
 
         // Create the triangle entity
         world
@@ -61,6 +63,23 @@ impl<'a, 'b> App<'a, 'b> {
             .with(Rotation(0.0)) // Initial rotation
             .with(SpinSpeed(0.01)) // Rotation speed (radians per frame/update)
             .with(Renderable) // Mark as renderable
+            .build();
+
+        // Create Camera Entity
+        let initial_aspect_ratio = window_width as f32 / window_height as f32;
+        let camera_entity = Camera::new(
+            nalgebra::Point3::new(2.0, 2.0, 3.0), // Slightly adjusted default position for better view
+            nalgebra::Point3::new(0.0, 0.0, 0.0),
+            nalgebra::Vector3::y(),
+            std::f32::consts::FRAC_PI_4, // Default FOV (45 degrees)
+            initial_aspect_ratio,
+            0.1,
+            100.0,
+        );
+
+        world
+            .create_entity()
+            .with(CameraComponent(camera_entity))
             .build();
 
         // Setup dispatcher

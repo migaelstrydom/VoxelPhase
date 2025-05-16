@@ -1,6 +1,6 @@
-use std::error::Error;
 use std::io::Cursor;
-use std::mem; // For offset_of, size_of etc. if needed here later // For shader loading
+use std::mem;
+use std::{error::Error, sync::Arc}; // For offset_of, size_of etc. if needed here later // For shader loading
 
 use ash::{
     khr::{surface, swapchain},
@@ -13,16 +13,16 @@ use winit::{
 };
 
 use crate::core::vulkan_context::{
-    find_memorytype_index, record_submit_commandbuffer, VulkanContext,
+    find_memorytype_index, record_submit_commandbuffer, ManagedDevice, VulkanContext,
 };
 
-use crate::rendering::vertex::Vertex;
+use crate::rendering::vertex::Vertex; // Added import for Camera
 
 // ECS and Math imports
 use nalgebra::{Matrix4, Vector3};
 use specs::{Join, WorldExt};
 
-use crate::components::{Position, Renderable, Rotation}; // Import project components
+use crate::components::{CameraComponent, Position, Renderable, Rotation}; // Import project components & CameraComponent
 
 // Define offset_of! macro locally
 #[allow(unused_macros)] // Add this in case it's not immediately used after this edit
@@ -36,18 +36,109 @@ macro_rules! offset_of {
     }};
 }
 
-// UBO Struct Definition
 #[derive(Clone, Debug, Copy)]
 #[repr(C)]
-pub struct ModelMatrixUbo {
+pub struct SceneUbo {
     pub model: Matrix4<f32>,
-    // Later we might add view and projection matrices here too
+    pub view: Matrix4<f32>,
+    pub proj: Matrix4<f32>,
 }
 
-// Structs are namespaced // #[macro_export] macros are at crate root
+pub struct ManagedBuffer {
+    pub buffer: vk::Buffer,
+    pub memory: vk::DeviceMemory,
+    pub size: vk::DeviceSize,   // Store buffer size for potential use
+    device: Arc<ManagedDevice>, // To call destroy/free in Drop
+}
+
+// Manual Debug implementation for ManagedBuffer
+impl std::fmt::Debug for ManagedBuffer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ManagedBuffer")
+            .field("buffer", &self.buffer)
+            .field("memory", &self.memory)
+            .field("size", &self.size)
+            // Skipping self.device as ash::Device is not Debug
+            .finish()
+    }
+}
+
+impl ManagedBuffer {
+    pub fn new(
+        vulkan_context: &VulkanContext,
+        size: vk::DeviceSize,
+        usage: vk::BufferUsageFlags,
+        memory_properties: vk::MemoryPropertyFlags,
+    ) -> Result<Self, Box<dyn Error>> {
+        unsafe {
+            let buffer_info = vk::BufferCreateInfo::default()
+                .size(size)
+                .usage(usage)
+                .sharing_mode(vk::SharingMode::EXCLUSIVE);
+            let buffer = vulkan_context.device().create_buffer(&buffer_info, None)?;
+
+            let memory_req = vulkan_context
+                .device()
+                .get_buffer_memory_requirements(buffer);
+            let memory_type_index = find_memorytype_index(
+                &memory_req,
+                &vulkan_context.device.device_memory_properties,
+                memory_properties,
+            )
+            .ok_or("Unable to find suitable memory type for buffer.")?;
+
+            let allocate_info = vk::MemoryAllocateInfo::default()
+                .allocation_size(memory_req.size)
+                .memory_type_index(memory_type_index);
+            let memory = vulkan_context
+                .device()
+                .allocate_memory(&allocate_info, None)?;
+
+            vulkan_context
+                .device()
+                .bind_buffer_memory(buffer, memory, 0)?;
+
+            Ok(Self {
+                buffer,
+                memory,
+                size,
+                device: Arc::clone(&vulkan_context.device),
+            })
+        }
+    }
+
+    // Helper to map memory, returning a raw pointer
+    // The caller is responsible for correct usage (size, alignment, unmapping)
+    pub unsafe fn map_memory(
+        &self,
+        offset: vk::DeviceSize,
+        flags: vk::MemoryMapFlags,
+    ) -> Result<*mut std::ffi::c_void, vk::Result> {
+        self.device
+            .device
+            .map_memory(self.memory, offset, self.size, flags)
+    }
+
+    // Helper to unmap memory
+    pub unsafe fn unmap_memory(&self) {
+        self.device.device.unmap_memory(self.memory);
+    }
+}
+
+impl Drop for ManagedBuffer {
+    fn drop(&mut self) {
+        unsafe {
+            if self.buffer != vk::Buffer::null() {
+                self.device.device.destroy_buffer(self.buffer, None);
+            }
+            if self.memory != vk::DeviceMemory::null() {
+                self.device.device.free_memory(self.memory, None);
+            }
+        }
+    }
+}
 
 pub struct Renderer {
-    pub vulkan_context: VulkanContext,
     pub surface_loader: surface::Instance,
     pub surface: vk::SurfaceKHR,
     pub swapchain_loader: swapchain::Device,
@@ -78,20 +169,19 @@ pub struct Renderer {
     pub framebuffers: Vec<vk::Framebuffer>,
     pub pipeline_layout: vk::PipelineLayout,
     pub graphics_pipeline: vk::Pipeline,
-    pub vertex_buffer: vk::Buffer,
-    pub vertex_buffer_memory: vk::DeviceMemory,
-    pub index_buffer: vk::Buffer,
-    pub index_buffer_memory: vk::DeviceMemory,
+    pub vertex_buffer: ManagedBuffer,
+    pub index_buffer: ManagedBuffer,
     pub index_count: u32,
     pub vertex_shader_module: vk::ShaderModule,
     pub fragment_shader_module: vk::ShaderModule,
 
-    // New UBO fields for model matrix
-    pub model_matrix_ubo_buffer: vk::Buffer,
-    pub model_matrix_ubo_memory: vk::DeviceMemory,
-    pub model_matrix_descriptor_set_layout: vk::DescriptorSetLayout,
-    pub model_matrix_descriptor_pool: vk::DescriptorPool,
-    pub model_matrix_descriptor_set: vk::DescriptorSet,
+    pub scene_ubo_buffer: ManagedBuffer,
+    pub scene_ubo_descriptor_set_layout: vk::DescriptorSetLayout,
+    pub scene_ubo_descriptor_pool: vk::DescriptorPool,
+    pub scene_ubo_descriptor_set: vk::DescriptorSet,
+
+    // VulkanContext should be the last field to ensure it's dropped last.
+    pub vulkan_context: VulkanContext,
 }
 
 impl Renderer {
@@ -104,20 +194,20 @@ impl Renderer {
         unsafe {
             let surface = ash_window::create_surface(
                 &vulkan_context.entry,
-                &vulkan_context.instance,
+                &vulkan_context.instance.instance,
                 window.display_handle()?.as_raw(),
                 window.window_handle()?.as_raw(),
                 None,
             )?;
             let surface_loader =
-                surface::Instance::new(&vulkan_context.entry, &vulkan_context.instance);
+                surface::Instance::new(&vulkan_context.entry, &vulkan_context.instance.instance);
 
             let surface_formats = surface_loader
-                .get_physical_device_surface_formats(vulkan_context.physical_device, surface)?;
+                .get_physical_device_surface_formats(vulkan_context.physical_device(), surface)?;
             let surface_format = surface_formats[0];
 
             let surface_capabilities = surface_loader.get_physical_device_surface_capabilities(
-                vulkan_context.physical_device,
+                vulkan_context.physical_device(),
                 surface,
             )?;
             let mut desired_image_count = surface_capabilities.min_image_count + 1;
@@ -145,7 +235,7 @@ impl Renderer {
             };
 
             let present_modes = surface_loader.get_physical_device_surface_present_modes(
-                vulkan_context.physical_device,
+                vulkan_context.physical_device(),
                 surface,
             )?;
             let present_mode = present_modes
@@ -155,7 +245,7 @@ impl Renderer {
                 .unwrap_or(vk::PresentModeKHR::FIFO);
 
             let swapchain_loader =
-                swapchain::Device::new(&vulkan_context.instance, &vulkan_context.device);
+                swapchain::Device::new(&vulkan_context.instance.instance, &vulkan_context.device());
             let swapchain_create_info = vk::SwapchainCreateInfoKHR::default()
                 .surface(surface)
                 .min_image_count(desired_image_count)
@@ -173,9 +263,9 @@ impl Renderer {
 
             let pool_create_info = vk::CommandPoolCreateInfo::default()
                 .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
-                .queue_family_index(vulkan_context.queue_family_index);
+                .queue_family_index(vulkan_context.device.queue_family_index);
             let pool = vulkan_context
-                .device
+                .device()
                 .create_command_pool(&pool_create_info, None)?;
 
             let command_buffer_allocate_info = vk::CommandBufferAllocateInfo::default()
@@ -183,7 +273,7 @@ impl Renderer {
                 .command_pool(pool)
                 .level(vk::CommandBufferLevel::PRIMARY);
             let command_buffers = vulkan_context
-                .device
+                .device()
                 .allocate_command_buffers(&command_buffer_allocate_info)?;
             let setup_command_buffer = command_buffers[0];
             let draw_command_buffer = command_buffers[1];
@@ -210,7 +300,7 @@ impl Renderer {
                         })
                         .image(image);
                     vulkan_context
-                        .device
+                        .device()
                         .create_image_view(&create_view_info, None)
                 })
                 .collect::<Result<Vec<_>, _>>()?;
@@ -227,15 +317,15 @@ impl Renderer {
                 .sharing_mode(vk::SharingMode::EXCLUSIVE);
 
             let depth_image = vulkan_context
-                .device
+                .device()
                 .create_image(&depth_image_create_info, None)?;
 
             let depth_image_memory_req = vulkan_context
-                .device
+                .device()
                 .get_image_memory_requirements(depth_image);
             let depth_image_memory_index = find_memorytype_index(
                 &depth_image_memory_req,
-                &vulkan_context.device_memory_properties,
+                &vulkan_context.device.device_memory_properties,
                 vk::MemoryPropertyFlags::DEVICE_LOCAL,
             )
             .expect("Unable to find suitable memory index for depth image.");
@@ -244,34 +334,36 @@ impl Renderer {
                 .allocation_size(depth_image_memory_req.size)
                 .memory_type_index(depth_image_memory_index);
             let depth_image_memory = vulkan_context
-                .device
+                .device()
                 .allocate_memory(&depth_image_allocate_info, None)?;
 
             vulkan_context
-                .device
+                .device()
                 .bind_image_memory(depth_image, depth_image_memory, 0)?;
 
             let fence_create_info =
                 vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED);
             let draw_commands_reuse_fence = vulkan_context
-                .device
+                .device()
                 .create_fence(&fence_create_info, None)?;
             let setup_commands_reuse_fence = vulkan_context
-                .device
+                .device()
                 .create_fence(&fence_create_info, None)?;
 
             let present_queue = vulkan_context
-                .device
-                .get_device_queue(vulkan_context.queue_family_index, 0);
+                .device()
+                .get_device_queue(vulkan_context.device.queue_family_index, 0);
 
+            vulkan_context.device().wait_for_fences(
+                &[setup_commands_reuse_fence],
+                true,
+                u64::MAX,
+            )?;
             vulkan_context
-                .device
-                .wait_for_fences(&[setup_commands_reuse_fence], true, u64::MAX)?;
-            vulkan_context
-                .device
+                .device()
                 .reset_fences(&[setup_commands_reuse_fence])?;
             record_submit_commandbuffer(
-                &vulkan_context.device,
+                &vulkan_context.device(),
                 setup_command_buffer,
                 setup_commands_reuse_fence,
                 present_queue,
@@ -316,15 +408,15 @@ impl Renderer {
                 .format(depth_image_create_info.format)
                 .view_type(vk::ImageViewType::TYPE_2D);
             let depth_image_view = vulkan_context
-                .device
+                .device()
                 .create_image_view(&depth_image_view_info, None)?;
 
             let semaphore_create_info = vk::SemaphoreCreateInfo::default();
             let present_complete_semaphore = vulkan_context
-                .device
+                .device()
                 .create_semaphore(&semaphore_create_info, None)?;
             let rendering_complete_semaphore = vulkan_context
-                .device
+                .device()
                 .create_semaphore(&semaphore_create_info, None)?;
 
             // 1. Render Pass
@@ -371,7 +463,7 @@ impl Renderer {
                 .subpasses(std::slice::from_ref(&subpass))
                 .dependencies(&dependencies);
             let renderpass = vulkan_context
-                .device
+                .device()
                 .create_render_pass(&renderpass_create_info, None)?;
 
             // 2. Framebuffers
@@ -386,56 +478,32 @@ impl Renderer {
                         .height(surface_resolution.height)
                         .layers(1);
                     vulkan_context
-                        .device
+                        .device()
                         .create_framebuffer(&frame_buffer_create_info, None)
                 })
                 .collect::<Result<Vec<_>, _>>()?;
 
-            // 3. Index Buffer
+            // 3. Index Buffer (using ManagedBuffer)
             let index_buffer_data = [0u32, 1, 2];
             let index_count = index_buffer_data.len() as u32;
-            let index_buffer_info = vk::BufferCreateInfo::default()
-                .size(mem::size_of_val(&index_buffer_data) as u64)
-                .usage(vk::BufferUsageFlags::INDEX_BUFFER)
-                .sharing_mode(vk::SharingMode::EXCLUSIVE);
-            let index_buffer = vulkan_context
-                .device
-                .create_buffer(&index_buffer_info, None)?;
-            let index_buffer_memory_req = vulkan_context
-                .device
-                .get_buffer_memory_requirements(index_buffer);
-            let index_buffer_memory_index = find_memorytype_index(
-                &index_buffer_memory_req,
-                &vulkan_context.device_memory_properties,
-                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-            )
-            .expect("Unable to find suitable memorytype for the index buffer.");
-            let index_allocate_info = vk::MemoryAllocateInfo {
-                allocation_size: index_buffer_memory_req.size,
-                memory_type_index: index_buffer_memory_index,
-                ..Default::default()
-            };
-            let index_buffer_memory = vulkan_context
-                .device
-                .allocate_memory(&index_allocate_info, None)?;
-            let index_ptr = vulkan_context.device.map_memory(
-                index_buffer_memory,
-                0,
-                index_buffer_memory_req.size,
-                vk::MemoryMapFlags::empty(),
-            )?;
-            let mut index_slice = Align::new(
-                index_ptr,
-                mem::align_of::<u32>() as u64,
-                index_buffer_memory_req.size,
-            );
-            index_slice.copy_from_slice(&index_buffer_data);
-            vulkan_context.device.unmap_memory(index_buffer_memory);
-            vulkan_context
-                .device
-                .bind_buffer_memory(index_buffer, index_buffer_memory, 0)?;
+            let index_buffer_size = mem::size_of_val(&index_buffer_data) as u64;
 
-            // 4. Vertex Buffer
+            let index_buffer = ManagedBuffer::new(
+                &vulkan_context,
+                index_buffer_size,
+                vk::BufferUsageFlags::INDEX_BUFFER,
+                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+            )?;
+
+            // Map, copy, unmap for index buffer
+            let index_ptr = index_buffer.map_memory(0, vk::MemoryMapFlags::empty())?;
+            let mut index_slice =
+                Align::new(index_ptr, mem::align_of::<u32>() as u64, index_buffer_size);
+            index_slice.copy_from_slice(&index_buffer_data);
+            index_buffer.unmap_memory();
+            // Binding to memory is handled by ManagedBuffer::new
+
+            // 4. Vertex Buffer (using ManagedBuffer)
             let vertices = [
                 Vertex {
                     pos: [-1.0, 1.0, 0.0, 1.0],
@@ -450,48 +518,24 @@ impl Renderer {
                     color: [1.0, 0.0, 0.0, 1.0],
                 },
             ];
-            let vertex_input_buffer_info = vk::BufferCreateInfo {
-                size: mem::size_of_val(&vertices) as u64,
-                usage: vk::BufferUsageFlags::VERTEX_BUFFER,
-                sharing_mode: vk::SharingMode::EXCLUSIVE,
-                ..Default::default()
-            };
-            let vertex_buffer = vulkan_context
-                .device
-                .create_buffer(&vertex_input_buffer_info, None)?;
-            let vertex_input_buffer_memory_req = vulkan_context
-                .device
-                .get_buffer_memory_requirements(vertex_buffer);
-            let vertex_input_buffer_memory_index = find_memorytype_index(
-                &vertex_input_buffer_memory_req,
-                &vulkan_context.device_memory_properties,
+            let vertex_buffer_size = mem::size_of_val(&vertices) as u64;
+            let vertex_buffer = ManagedBuffer::new(
+                &vulkan_context,
+                vertex_buffer_size,
+                vk::BufferUsageFlags::VERTEX_BUFFER,
                 vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-            )
-            .expect("Unable to find suitable memorytype for the vertex buffer.");
-            let vertex_buffer_allocate_info = vk::MemoryAllocateInfo {
-                allocation_size: vertex_input_buffer_memory_req.size,
-                memory_type_index: vertex_input_buffer_memory_index,
-                ..Default::default()
-            };
-            let vertex_buffer_memory = vulkan_context
-                .device
-                .allocate_memory(&vertex_buffer_allocate_info, None)?;
-            let vert_ptr = vulkan_context.device.map_memory(
-                vertex_buffer_memory,
-                0,
-                vertex_input_buffer_memory_req.size,
-                vk::MemoryMapFlags::empty(),
             )?;
+
+            // Map, copy, unmap using ManagedBuffer methods
+            let vert_ptr = vertex_buffer.map_memory(0, vk::MemoryMapFlags::empty())?;
             let mut vert_align = Align::new(
                 vert_ptr,
                 mem::align_of::<Vertex>() as u64,
-                vertex_input_buffer_memory_req.size,
+                vertex_buffer.size,
             );
             vert_align.copy_from_slice(&vertices);
-            vulkan_context.device.unmap_memory(vertex_buffer_memory);
-            vulkan_context
-                .device
-                .bind_buffer_memory(vertex_buffer, vertex_buffer_memory, 0)?;
+            vertex_buffer.unmap_memory();
+            // Binding to memory is handled by ManagedBuffer::new
 
             // 5. Shader Modules
             let mut vertex_spv_file = Cursor::new(&include_bytes!("../../shader/vert.spv")[..]);
@@ -500,47 +544,27 @@ impl Renderer {
                 read_spv(&mut vertex_spv_file).expect("Failed to read vertex shader spv file");
             let vertex_shader_info = vk::ShaderModuleCreateInfo::default().code(&vertex_code);
             let vertex_shader_module = vulkan_context
-                .device
+                .device()
                 .create_shader_module(&vertex_shader_info, None)
                 .expect("Vertex shader module error");
             let frag_code =
                 read_spv(&mut frag_spv_file).expect("Failed to read fragment shader spv file");
             let frag_shader_info = vk::ShaderModuleCreateInfo::default().code(&frag_code);
             let fragment_shader_module = vulkan_context
-                .device
+                .device()
                 .create_shader_module(&frag_shader_info, None)
                 .expect("Fragment shader module error");
 
-            // Create Uniform Buffer for Model Matrix (Needs to be created before descriptor set update and pipeline layout if it affects descriptor count/type)
-            let ubo_buffer_info = vk::BufferCreateInfo::default()
-                .size(std::mem::size_of::<ModelMatrixUbo>() as u64)
-                .usage(vk::BufferUsageFlags::UNIFORM_BUFFER)
-                .sharing_mode(vk::SharingMode::EXCLUSIVE);
-            let model_matrix_ubo_buffer = vulkan_context
-                .device
-                .create_buffer(&ubo_buffer_info, None)?;
-            let ubo_memory_req = vulkan_context
-                .device
-                .get_buffer_memory_requirements(model_matrix_ubo_buffer);
-            let ubo_memory_index = find_memorytype_index(
-                &ubo_memory_req,
-                &vulkan_context.device_memory_properties,
+            // Create Uniform Buffer for Scene Data (Model, View, Projection)
+            let scene_ubo_size = std::mem::size_of::<SceneUbo>() as vk::DeviceSize;
+            let scene_ubo_buffer = ManagedBuffer::new(
+                &vulkan_context,
+                scene_ubo_size,
+                vk::BufferUsageFlags::UNIFORM_BUFFER,
                 vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-            )
-            .expect("Unable to find suitable memory type for UBO.");
-            let ubo_allocate_info = vk::MemoryAllocateInfo::default()
-                .allocation_size(ubo_memory_req.size)
-                .memory_type_index(ubo_memory_index);
-            let model_matrix_ubo_memory = vulkan_context
-                .device
-                .allocate_memory(&ubo_allocate_info, None)?;
-            vulkan_context.device.bind_buffer_memory(
-                model_matrix_ubo_buffer,
-                model_matrix_ubo_memory,
-                0,
             )?;
 
-            // Create DescriptorSetLayout for ModelMatrixUBO
+            // Create DescriptorSetLayout for SceneUBO
             let ubo_descriptor_set_layout_bindings = [vk::DescriptorSetLayoutBinding::default()
                 .binding(0) // Corresponds to layout(binding=0) in shader
                 .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
@@ -549,50 +573,50 @@ impl Renderer {
             let ubo_descriptor_set_layout_create_info =
                 vk::DescriptorSetLayoutCreateInfo::default()
                     .bindings(&ubo_descriptor_set_layout_bindings);
-            let model_matrix_descriptor_set_layout = vulkan_context
-                .device
+            let scene_ubo_descriptor_set_layout = vulkan_context
+                .device()
                 .create_descriptor_set_layout(&ubo_descriptor_set_layout_create_info, None)?;
 
             // Create Pipeline Layout using the descriptor set layout
-            let set_layouts = [model_matrix_descriptor_set_layout];
+            let set_layouts = [scene_ubo_descriptor_set_layout];
             let pipeline_layout_create_info =
                 vk::PipelineLayoutCreateInfo::default().set_layouts(&set_layouts);
             let pipeline_layout = vulkan_context
-                .device
+                .device()
                 .create_pipeline_layout(&pipeline_layout_create_info, None)?;
 
-            // Create Descriptor Pool for ModelMatrixUBO
+            // Create Descriptor Pool for SceneUBO
             let descriptor_pool_sizes = [vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::UNIFORM_BUFFER)
                 .descriptor_count(1)];
             let descriptor_pool_create_info = vk::DescriptorPoolCreateInfo::default()
                 .max_sets(1)
                 .pool_sizes(&descriptor_pool_sizes);
-            let model_matrix_descriptor_pool = vulkan_context
-                .device
+            let scene_ubo_descriptor_pool = vulkan_context
+                .device()
                 .create_descriptor_pool(&descriptor_pool_create_info, None)?;
 
             // Allocate Descriptor Set
             let descriptor_set_allocate_info = vk::DescriptorSetAllocateInfo::default()
-                .descriptor_pool(model_matrix_descriptor_pool)
-                .set_layouts(std::slice::from_ref(&model_matrix_descriptor_set_layout));
-            let model_matrix_descriptor_sets = vulkan_context
-                .device
+                .descriptor_pool(scene_ubo_descriptor_pool)
+                .set_layouts(std::slice::from_ref(&scene_ubo_descriptor_set_layout));
+            let scene_ubo_descriptor_sets = vulkan_context
+                .device()
                 .allocate_descriptor_sets(&descriptor_set_allocate_info)?;
-            let model_matrix_descriptor_set = model_matrix_descriptor_sets[0];
+            let scene_ubo_descriptor_set = scene_ubo_descriptor_sets[0];
 
             // Update Descriptor Set to point to the UBO buffer
             let ubo_buffer_info_for_descriptor = [vk::DescriptorBufferInfo::default()
-                .buffer(model_matrix_ubo_buffer)
+                .buffer(scene_ubo_buffer.buffer)
                 .offset(0)
-                .range(std::mem::size_of::<ModelMatrixUbo>() as u64)];
+                .range(std::mem::size_of::<SceneUbo>() as u64)];
             let write_descriptor_sets = [vk::WriteDescriptorSet::default()
-                .dst_set(model_matrix_descriptor_set)
+                .dst_set(scene_ubo_descriptor_set)
                 .dst_binding(0)
                 .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
                 .buffer_info(&ubo_buffer_info_for_descriptor)];
             vulkan_context
-                .device
+                .device()
                 .update_descriptor_sets(&write_descriptor_sets, &[]);
 
             // Graphics Pipeline (uses the pipeline_layout)
@@ -704,7 +728,7 @@ impl Renderer {
                 .layout(pipeline_layout)
                 .render_pass(renderpass);
             let graphics_pipelines = vulkan_context
-                .device
+                .device()
                 .create_graphics_pipelines(
                     vk::PipelineCache::null(),
                     &[graphic_pipeline_info],
@@ -714,7 +738,6 @@ impl Renderer {
             let graphics_pipeline = graphics_pipelines[0];
 
             Ok(Self {
-                vulkan_context,
                 surface_loader,
                 surface,
                 swapchain_loader,
@@ -739,23 +762,39 @@ impl Renderer {
                 pipeline_layout,
                 graphics_pipeline,
                 vertex_buffer,
-                vertex_buffer_memory,
                 index_buffer,
-                index_buffer_memory,
                 index_count,
                 vertex_shader_module,
                 fragment_shader_module,
-                model_matrix_ubo_buffer,
-                model_matrix_ubo_memory,
-                model_matrix_descriptor_set_layout,
-                model_matrix_descriptor_pool,
-                model_matrix_descriptor_set,
+                scene_ubo_buffer,
+                scene_ubo_descriptor_set_layout,
+                scene_ubo_descriptor_pool,
+                scene_ubo_descriptor_set,
+                vulkan_context,
             })
         }
     }
 
     pub fn render_frame(&mut self, world: &specs::World) -> Result<(), Box<dyn Error>> {
         unsafe {
+            // Fetch Camera from ECS World
+            let camera_components = world.read_storage::<CameraComponent>();
+            let camera = (&camera_components).join().next().ok_or_else(||
+                // This creates a new Box<dyn Error> on the fly.
+                // You might want a more specific error type in a real application.
+                Box::<dyn Error>::from("No CameraComponent found in world"))?;
+
+            // Update Camera Aspect Ratio (e.g. if window was resized)
+            // This would require making CameraComponent mutable or sending an event to a camera system.
+            // For now, aspect ratio is set at creation. If you need dynamic updates:
+            // let mut camera_components_mut = world.write_storage::<CameraComponent>();
+            // if let Some(cam_comp) = (&mut camera_components_mut).join().next() {
+            //     cam_comp.0.update_aspect_ratio(new_aspect_ratio);
+            // }
+
+            let view_matrix = camera.0.get_view_matrix();
+            let proj_matrix = camera.0.get_projection_matrix();
+
             // ECS Query and UBO Update
             {
                 let positions = world.read_storage::<Position>();
@@ -763,33 +802,32 @@ impl Renderer {
                 let renderables = world.read_storage::<Renderable>();
 
                 for (pos, rot, _renderable) in (&positions, &rotations, &renderables).join() {
-                    let current_model_matrix = ModelMatrixUbo {
-                        model: Matrix4::new_translation(&pos.0)
-                            * Matrix4::from_axis_angle(&Vector3::z_axis(), rot.0),
+                    let model_matrix = Matrix4::new_translation(&pos.0)
+                        * Matrix4::from_axis_angle(&Vector3::z_axis(), rot.0);
+
+                    let current_scene_ubo = SceneUbo {
+                        model: model_matrix,
+                        view: view_matrix,
+                        proj: proj_matrix,
                     };
+
                     log::debug!(
                         "Processing entity with position: {:?}, rotation: {:.2} rad",
                         pos.0,
                         rot.0
                     );
-                    // log::trace!("Calculated model matrix: {:#?}", current_model_matrix.model);
+                    // log::trace!("Calculated model matrix: {:#?}", current_scene_ubo.model);
+                    // log::trace!("View matrix: {:#?}", current_scene_ubo.view);
+                    // log::trace!("Projection matrix: {:#?}", current_scene_ubo.proj);
 
                     // Update the UBO memory
-                    let ubo_size = std::mem::size_of::<ModelMatrixUbo>() as u64;
-                    let ubo_ptr = self.vulkan_context.device.map_memory(
-                        self.model_matrix_ubo_memory,
+                    let ubo_ptr = self.scene_ubo_buffer.map_memory(
                         0, // offset
-                        ubo_size,
                         vk::MemoryMapFlags::empty(),
                     )?;
-                    // Create a slice from the raw pointer and copy data
-                    // This assumes ModelMatrixUbo is #[repr(C)] and copyable, which it is.
-                    let ubo_slice =
-                        std::slice::from_raw_parts_mut(ubo_ptr as *mut ModelMatrixUbo, 1);
-                    ubo_slice[0] = current_model_matrix;
-                    self.vulkan_context
-                        .device
-                        .unmap_memory(self.model_matrix_ubo_memory);
+                    let ubo_slice = std::slice::from_raw_parts_mut(ubo_ptr as *mut SceneUbo, 1);
+                    ubo_slice[0] = current_scene_ubo;
+                    self.scene_ubo_buffer.unmap_memory();
 
                     // Since we only have one entity for now, we can break after the first one.
                     // In a real scenario, you might have multiple UBOs or an array of UBOs if drawing many distinct objects.
@@ -797,13 +835,13 @@ impl Renderer {
                 }
             }
 
-            self.vulkan_context.device.wait_for_fences(
+            self.vulkan_context.device().wait_for_fences(
                 &[self.draw_commands_reuse_fence],
                 true,
                 u64::MAX,
             )?;
             self.vulkan_context
-                .device
+                .device()
                 .reset_fences(&[self.draw_commands_reuse_fence])?;
 
             let (present_index, _) = self.swapchain_loader.acquire_next_image(
@@ -844,7 +882,7 @@ impl Renderer {
             let scissors = [self.surface_resolution.into()];
 
             record_submit_commandbuffer(
-                &self.vulkan_context.device,
+                &self.vulkan_context.device(),
                 self.draw_command_buffer,
                 self.draw_commands_reuse_fence,
                 self.present_queue,
@@ -871,14 +909,14 @@ impl Renderer {
                         vk::PipelineBindPoint::GRAPHICS,
                         self.pipeline_layout, // The pipeline layout that knows about this descriptor set
                         0, // firstSet: index of the first descriptor set in the array of set layouts
-                        &[self.model_matrix_descriptor_set], // Slice of descriptor sets to bind
-                        &[], // Empty slice for dynamic offsets
+                        &[self.scene_ubo_descriptor_set], // Slice of descriptor sets to bind (updated)
+                        &[],                              // Empty slice for dynamic offsets
                     );
 
-                    device.cmd_bind_vertex_buffers(draw_cb, 0, &[self.vertex_buffer], &[0]);
+                    device.cmd_bind_vertex_buffers(draw_cb, 0, &[self.vertex_buffer.buffer], &[0]);
                     device.cmd_bind_index_buffer(
                         draw_cb,
-                        self.index_buffer,
+                        self.index_buffer.buffer,
                         0,
                         vk::IndexType::UINT32,
                     );
@@ -905,104 +943,92 @@ impl Renderer {
 impl Drop for Renderer {
     fn drop(&mut self) {
         unsafe {
-            self.vulkan_context.device.device_wait_idle().unwrap();
+            // It's crucial that device_wait_idle is called before any dependent resources
+            // are destroyed. Since VulkanContext is now dropped last, its Drop impl
+            // (which should contain device destruction) will run after all other fields
+            // in Renderer are dropped. The device_wait_idle here in Renderer::drop
+            // ensures that the GPU is idle before Renderer starts dropping its own fields
+            // (like ManagedBuffers, semaphores, etc.).
+            self.vulkan_context.device().device_wait_idle().unwrap();
 
             // Destroy new UBO-related resources (order can matter)
             // Descriptor sets are implicitly freed with the pool
-            if self.model_matrix_descriptor_pool != vk::DescriptorPool::null() {
+            if self.scene_ubo_descriptor_pool != vk::DescriptorPool::null() {
                 self.vulkan_context
-                    .device
-                    .destroy_descriptor_pool(self.model_matrix_descriptor_pool, None);
+                    .device()
+                    .destroy_descriptor_pool(self.scene_ubo_descriptor_pool, None);
             }
-            if self.model_matrix_descriptor_set_layout != vk::DescriptorSetLayout::null() {
+            if self.scene_ubo_descriptor_set_layout != vk::DescriptorSetLayout::null() {
                 self.vulkan_context
-                    .device
-                    .destroy_descriptor_set_layout(self.model_matrix_descriptor_set_layout, None);
+                    .device()
+                    .destroy_descriptor_set_layout(self.scene_ubo_descriptor_set_layout, None);
             }
-            if self.model_matrix_ubo_buffer != vk::Buffer::null() {
-                self.vulkan_context
-                    .device
-                    .destroy_buffer(self.model_matrix_ubo_buffer, None);
-            }
-            if self.model_matrix_ubo_memory != vk::DeviceMemory::null() {
-                self.vulkan_context
-                    .device
-                    .free_memory(self.model_matrix_ubo_memory, None);
-            }
+            // scene_ubo_buffer (ManagedBuffer) will be dropped automatically,
+            // no need to explicitly destroy buffer or free memory here.
 
             // Existing cleanup (ensure order is still correct relative to new items if dependencies exist)
             self.vulkan_context
-                .device
+                .device()
                 .destroy_shader_module(self.vertex_shader_module, None);
             self.vulkan_context
-                .device
+                .device()
                 .destroy_shader_module(self.fragment_shader_module, None);
             // Pipeline must be destroyed before its layout
             self.vulkan_context
-                .device
+                .device()
                 .destroy_pipeline(self.graphics_pipeline, None);
             self.vulkan_context
-                .device
+                .device()
                 .destroy_pipeline_layout(self.pipeline_layout, None);
             // RenderPass can be destroyed after pipelines that use it
             self.vulkan_context
-                .device
+                .device()
                 .destroy_render_pass(self.renderpass, None);
             for framebuffer in &self.framebuffers {
                 self.vulkan_context
-                    .device
+                    .device()
                     .destroy_framebuffer(*framebuffer, None);
             }
-            self.vulkan_context
-                .device
-                .destroy_buffer(self.vertex_buffer, None);
-            self.vulkan_context
-                .device
-                .free_memory(self.vertex_buffer_memory, None);
-            self.vulkan_context
-                .device
-                .destroy_buffer(self.index_buffer, None);
-            self.vulkan_context
-                .device
-                .free_memory(self.index_buffer_memory, None);
-
-            self.vulkan_context.device.free_command_buffers(
+            self.vulkan_context.device().free_command_buffers(
                 self.pool,
                 &[self.draw_command_buffer, self.setup_command_buffer],
             );
             self.vulkan_context
-                .device
+                .device()
                 .destroy_command_pool(self.pool, None);
             self.vulkan_context
-                .device
+                .device()
                 .destroy_image_view(self.depth_image_view, None);
             self.vulkan_context
-                .device
+                .device()
                 .destroy_image(self.depth_image, None);
             self.vulkan_context
-                .device
+                .device()
                 .free_memory(self.depth_image_memory, None);
             for &image_view in self.present_image_views.iter() {
                 self.vulkan_context
-                    .device
+                    .device()
                     .destroy_image_view(image_view, None);
             }
             self.swapchain_loader
                 .destroy_swapchain(self.swapchain, None);
             self.vulkan_context
-                .device
+                .device()
                 .destroy_semaphore(self.present_complete_semaphore, None);
             self.vulkan_context
-                .device
+                .device()
                 .destroy_semaphore(self.rendering_complete_semaphore, None);
             self.vulkan_context
-                .device
+                .device()
                 .destroy_fence(self.draw_commands_reuse_fence, None);
             self.vulkan_context
-                .device
+                .device()
                 .destroy_fence(self.setup_commands_reuse_fence, None);
             self.surface_loader.destroy_surface(self.surface, None);
-            // VulkanContext (which holds device and instance) is dropped after Renderer, handling their cleanup.
+            // VulkanContext (which holds device and instance) is dropped after Renderer's other fields,
+            // handling their cleanup IF `vulkan_context` is the last field.
+            // The `device_wait_idle()` call at the start of this function is for Renderer's resources.
+            // The `VulkanContext` itself should manage the wait/destroy for device/instance in its own Drop.
         }
     }
 }

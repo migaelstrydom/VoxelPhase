@@ -1,6 +1,7 @@
-use crate::utils::Destroy;
-use ash::{Entry, Instance, ext::debug_utils, vk};
-use std::{borrow::Cow, error::Error, ffi};
+use ash::{ext::debug_utils, vk, Entry};
+use std::{borrow::Cow, error::Error, ffi, sync::Arc};
+
+use super::vulkan_context::ManagedInstance;
 
 extern "system" fn vulkan_debug_callback(
     message_severity: vk::DebugUtilsMessageSeverityFlagsEXT,
@@ -45,10 +46,11 @@ pub struct DebugManager {
     // The debug manager must be dropped before the instance
     debug_utils_loader: debug_utils::Instance,
     debug_callback: vk::DebugUtilsMessengerEXT,
+    _instance: Arc<ManagedInstance>,
 }
 
 impl DebugManager {
-    pub fn new(entry: &Entry, instance: &Instance) -> Result<Self, Box<dyn Error>> {
+    pub fn new(entry: &Entry, instance: Arc<ManagedInstance>) -> Result<Self, Box<dyn Error>> {
         let debug_info = vk::DebugUtilsMessengerCreateInfoEXT::default()
             .message_severity(
                 vk::DebugUtilsMessageSeverityFlagsEXT::ERROR
@@ -62,7 +64,7 @@ impl DebugManager {
             )
             .pfn_user_callback(Some(vulkan_debug_callback));
 
-        let debug_utils_loader = debug_utils::Instance::new(entry, instance);
+        let debug_utils_loader = debug_utils::Instance::new(entry, &instance.instance);
         let debug_callback = unsafe {
             debug_utils_loader
                 .create_debug_utils_messenger(&debug_info, None)
@@ -72,12 +74,13 @@ impl DebugManager {
         Ok(Self {
             debug_utils_loader,
             debug_callback,
+            _instance: instance,
         })
     }
 }
 
-impl Destroy for DebugManager {
-    fn destroy(&self) {
+impl Drop for DebugManager {
+    fn drop(&mut self) {
         unsafe {
             self.debug_utils_loader
                 .destroy_debug_utils_messenger(self.debug_callback, None);
