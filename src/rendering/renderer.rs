@@ -16,13 +16,10 @@ use crate::core::vulkan_context::{
     find_memorytype_index, record_submit_commandbuffer, ManagedDevice, VulkanContext,
 };
 
-use crate::rendering::vertex::Vertex; // Added import for Camera
+use crate::rendering::vertex::Vertex;
 
 // ECS and Math imports
-use nalgebra::{Matrix4, Vector3};
-use specs::{Join, WorldExt};
-
-use crate::components::{CameraComponent, Position, Renderable, Rotation}; // Import project components & CameraComponent
+use nalgebra::Matrix4;
 
 // Define offset_of! macro locally
 #[allow(unused_macros)] // Add this in case it's not immediately used after this edit
@@ -483,59 +480,25 @@ impl Renderer {
                 })
                 .collect::<Result<Vec<_>, _>>()?;
 
-            // 3. Index Buffer (using ManagedBuffer)
-            let index_buffer_data = [0u32, 1, 2];
-            let index_count = index_buffer_data.len() as u32;
-            let index_buffer_size = mem::size_of_val(&index_buffer_data) as u64;
-
+            // 3. Index Buffer (using ManagedBuffer) - Placeholder, will be dynamic
+            // Initialize with a small size or leave for first draw_mesh_data call
+            let initial_index_buffer_size = mem::size_of::<u32>() as u64 * 3; // e.g., for one triangle
             let index_buffer = ManagedBuffer::new(
                 &vulkan_context,
-                index_buffer_size,
+                initial_index_buffer_size, // Placeholder size
                 vk::BufferUsageFlags::INDEX_BUFFER,
                 vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
             )?;
+            let index_count = 0; // No static index count anymore
 
-            // Map, copy, unmap for index buffer
-            let index_ptr = index_buffer.map_memory(0, vk::MemoryMapFlags::empty())?;
-            let mut index_slice =
-                Align::new(index_ptr, mem::align_of::<u32>() as u64, index_buffer_size);
-            index_slice.copy_from_slice(&index_buffer_data);
-            index_buffer.unmap_memory();
-            // Binding to memory is handled by ManagedBuffer::new
-
-            // 4. Vertex Buffer (using ManagedBuffer)
-            let vertices = [
-                Vertex {
-                    pos: [-1.0, 1.0, 0.0, 1.0],
-                    color: [0.0, 1.0, 0.0, 1.0],
-                },
-                Vertex {
-                    pos: [1.0, 1.0, 0.0, 1.0],
-                    color: [0.0, 0.0, 1.0, 1.0],
-                },
-                Vertex {
-                    pos: [0.0, -1.0, 0.0, 1.0],
-                    color: [1.0, 0.0, 0.0, 1.0],
-                },
-            ];
-            let vertex_buffer_size = mem::size_of_val(&vertices) as u64;
+            // 4. Vertex Buffer (using ManagedBuffer) - Placeholder, will be dynamic
+            let initial_vertex_buffer_size = mem::size_of::<Vertex>() as u64 * 3; // e.g., for one triangle
             let vertex_buffer = ManagedBuffer::new(
                 &vulkan_context,
-                vertex_buffer_size,
+                initial_vertex_buffer_size, // Placeholder size
                 vk::BufferUsageFlags::VERTEX_BUFFER,
                 vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
             )?;
-
-            // Map, copy, unmap using ManagedBuffer methods
-            let vert_ptr = vertex_buffer.map_memory(0, vk::MemoryMapFlags::empty())?;
-            let mut vert_align = Align::new(
-                vert_ptr,
-                mem::align_of::<Vertex>() as u64,
-                vertex_buffer.size,
-            );
-            vert_align.copy_from_slice(&vertices);
-            vertex_buffer.unmap_memory();
-            // Binding to memory is handled by ManagedBuffer::new
 
             // 5. Shader Modules
             let mut vertex_spv_file = Cursor::new(&include_bytes!("../../shader/vert.spv")[..]);
@@ -775,66 +738,28 @@ impl Renderer {
         }
     }
 
-    pub fn render_frame(&mut self, world: &specs::World) -> Result<(), Box<dyn Error>> {
+    // Helper to re-create managed buffer if needed (e.g. if too small)
+    // This is a simplified version. A more robust implementation might try to reuse memory
+    // or use staging buffers for DEVICE_LOCAL buffers.
+    unsafe fn ensure_buffer_size(
+        vulkan_context: &VulkanContext,
+        existing_buffer: &mut ManagedBuffer,
+        required_size: vk::DeviceSize,
+        usage: vk::BufferUsageFlags,
+        memory_properties: vk::MemoryPropertyFlags,
+    ) -> Result<(), Box<dyn Error>> {
+        if existing_buffer.size < required_size {
+            // existing_buffer will be dropped, freeing its old resources
+            *existing_buffer =
+                ManagedBuffer::new(vulkan_context, required_size, usage, memory_properties)?;
+        }
+        Ok(())
+    }
+
+    pub fn prepare_frame_for_rendering(
+        &self,
+    ) -> Result<(vk::CommandBuffer, usize /*present_index*/), Box<dyn Error>> {
         unsafe {
-            // Fetch Camera from ECS World
-            let camera_components = world.read_storage::<CameraComponent>();
-            let camera = (&camera_components).join().next().ok_or_else(||
-                // This creates a new Box<dyn Error> on the fly.
-                // You might want a more specific error type in a real application.
-                Box::<dyn Error>::from("No CameraComponent found in world"))?;
-
-            // Update Camera Aspect Ratio (e.g. if window was resized)
-            // This would require making CameraComponent mutable or sending an event to a camera system.
-            // For now, aspect ratio is set at creation. If you need dynamic updates:
-            // let mut camera_components_mut = world.write_storage::<CameraComponent>();
-            // if let Some(cam_comp) = (&mut camera_components_mut).join().next() {
-            //     cam_comp.0.update_aspect_ratio(new_aspect_ratio);
-            // }
-
-            let view_matrix = camera.0.get_view_matrix();
-            let proj_matrix = camera.0.get_projection_matrix();
-
-            // ECS Query and UBO Update
-            {
-                let positions = world.read_storage::<Position>();
-                let rotations = world.read_storage::<Rotation>();
-                let renderables = world.read_storage::<Renderable>();
-
-                for (pos, rot, _renderable) in (&positions, &rotations, &renderables).join() {
-                    let model_matrix = Matrix4::new_translation(&pos.0)
-                        * Matrix4::from_axis_angle(&Vector3::z_axis(), rot.0);
-
-                    let current_scene_ubo = SceneUbo {
-                        model: model_matrix,
-                        view: view_matrix,
-                        proj: proj_matrix,
-                    };
-
-                    log::debug!(
-                        "Processing entity with position: {:?}, rotation: {:.2} rad",
-                        pos.0,
-                        rot.0
-                    );
-                    // log::trace!("Calculated model matrix: {:#?}", current_scene_ubo.model);
-                    // log::trace!("View matrix: {:#?}", current_scene_ubo.view);
-                    // log::trace!("Projection matrix: {:#?}", current_scene_ubo.proj);
-
-                    // Update the UBO memory
-                    let ubo_ptr = self.scene_ubo_buffer.map_memory(
-                        0, // offset
-                        vk::MemoryMapFlags::empty(),
-                    )?;
-                    let ubo_slice = std::slice::from_raw_parts_mut(ubo_ptr as *mut SceneUbo, 1);
-                    ubo_slice[0] = current_scene_ubo;
-                    self.scene_ubo_buffer.unmap_memory();
-
-                    // Since we only have one entity for now, we can break after the first one.
-                    // In a real scenario, you might have multiple UBOs or an array of UBOs if drawing many distinct objects.
-                    break;
-                }
-            }
-
             self.vulkan_context.device().wait_for_fences(
                 &[self.draw_commands_reuse_fence],
                 true,
@@ -850,6 +775,12 @@ impl Renderer {
                 self.present_complete_semaphore,
                 vk::Fence::null(),
             )?;
+
+            let command_buffer_begin_info = vk::CommandBufferBeginInfo::default()
+                .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
+            self.vulkan_context
+                .device()
+                .begin_command_buffer(self.draw_command_buffer, &command_buffer_begin_info)?;
 
             let clear_values = [
                 vk::ClearValue {
@@ -871,63 +802,158 @@ impl Renderer {
                 .render_area(self.surface_resolution.into())
                 .clear_values(&clear_values);
 
-            let viewports = [vk::Viewport {
-                x: 0.0,
-                y: 0.0,
-                width: self.surface_resolution.width as f32,
-                height: self.surface_resolution.height as f32,
-                min_depth: 0.0,
-                max_depth: 1.0,
-            }];
-            let scissors = [self.surface_resolution.into()];
-
-            record_submit_commandbuffer(
-                &self.vulkan_context.device(),
+            self.vulkan_context.device().cmd_begin_render_pass(
                 self.draw_command_buffer,
-                self.draw_commands_reuse_fence,
-                self.present_queue,
-                &[vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT],
-                &[self.present_complete_semaphore],
-                &[self.rendering_complete_semaphore],
-                |device, draw_cb| {
-                    device.cmd_begin_render_pass(
-                        draw_cb,
-                        &render_pass_begin_info,
-                        vk::SubpassContents::INLINE,
-                    );
-                    device.cmd_bind_pipeline(
-                        draw_cb,
-                        vk::PipelineBindPoint::GRAPHICS,
-                        self.graphics_pipeline,
-                    );
-                    device.cmd_set_viewport(draw_cb, 0, &viewports);
-                    device.cmd_set_scissor(draw_cb, 0, &scissors);
-
-                    // Bind the Descriptor Set for the UBO
-                    device.cmd_bind_descriptor_sets(
-                        draw_cb,
-                        vk::PipelineBindPoint::GRAPHICS,
-                        self.pipeline_layout, // The pipeline layout that knows about this descriptor set
-                        0, // firstSet: index of the first descriptor set in the array of set layouts
-                        &[self.scene_ubo_descriptor_set], // Slice of descriptor sets to bind (updated)
-                        &[],                              // Empty slice for dynamic offsets
-                    );
-
-                    device.cmd_bind_vertex_buffers(draw_cb, 0, &[self.vertex_buffer.buffer], &[0]);
-                    device.cmd_bind_index_buffer(
-                        draw_cb,
-                        self.index_buffer.buffer,
-                        0,
-                        vk::IndexType::UINT32,
-                    );
-                    device.cmd_draw_indexed(draw_cb, self.index_count, 1, 0, 0, 0);
-                    device.cmd_end_render_pass(draw_cb);
-                },
+                &render_pass_begin_info,
+                vk::SubpassContents::INLINE,
             );
+
+            Ok((self.draw_command_buffer, present_index as usize))
+        }
+    }
+
+    // Part 2: Drawing a specific mesh
+    pub unsafe fn draw_mesh_data(
+        &mut self,
+        draw_cb: vk::CommandBuffer, // Current command buffer
+        vertices: &[Vertex],
+        indices: &[u32],
+        model_matrix: &Matrix4<f32>,
+        view_matrix: &Matrix4<f32>,
+        proj_matrix: &Matrix4<f32>,
+    ) -> Result<(), Box<dyn Error>> {
+        // Update Vertex Buffer
+        let vertex_buffer_size = (mem::size_of::<Vertex>() * vertices.len()) as vk::DeviceSize;
+        Self::ensure_buffer_size(
+            &self.vulkan_context,
+            &mut self.vertex_buffer,
+            vertex_buffer_size,
+            vk::BufferUsageFlags::VERTEX_BUFFER,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+        )?;
+        let vert_ptr = self
+            .vertex_buffer
+            .map_memory(0, vk::MemoryMapFlags::empty())?;
+        let mut vert_align = Align::new(
+            vert_ptr,
+            mem::align_of::<Vertex>() as u64,
+            vertex_buffer_size, // Use actual data size for copy
+        );
+        vert_align.copy_from_slice(vertices);
+        self.vertex_buffer.unmap_memory();
+
+        // Update Index Buffer
+        let index_buffer_size = (mem::size_of::<u32>() * indices.len()) as vk::DeviceSize;
+        Self::ensure_buffer_size(
+            &self.vulkan_context,
+            &mut self.index_buffer,
+            index_buffer_size,
+            vk::BufferUsageFlags::INDEX_BUFFER,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+        )?;
+        let index_ptr = self
+            .index_buffer
+            .map_memory(0, vk::MemoryMapFlags::empty())?;
+        let mut index_align = Align::new(
+            index_ptr,
+            mem::align_of::<u32>() as u64,
+            index_buffer_size, // Use actual data size for copy
+        );
+        index_align.copy_from_slice(indices);
+        self.index_buffer.unmap_memory();
+
+        self.index_count = indices.len() as u32; // Update index count for this draw
+
+        // Update UBO
+        let current_scene_ubo = SceneUbo {
+            model: *model_matrix,
+            view: *view_matrix,
+            proj: *proj_matrix,
+        };
+        let ubo_ptr = self
+            .scene_ubo_buffer
+            .map_memory(0, vk::MemoryMapFlags::empty())?;
+        let ubo_slice = std::slice::from_raw_parts_mut(ubo_ptr as *mut SceneUbo, 1);
+        ubo_slice[0] = current_scene_ubo;
+        self.scene_ubo_buffer.unmap_memory();
+
+        // Bind pipeline and descriptor sets (assuming these are common for all meshes for now)
+        self.vulkan_context.device().cmd_bind_pipeline(
+            draw_cb,
+            vk::PipelineBindPoint::GRAPHICS,
+            self.graphics_pipeline,
+        );
+
+        let viewports = [vk::Viewport {
+            x: 0.0,
+            y: 0.0,
+            width: self.surface_resolution.width as f32,
+            height: self.surface_resolution.height as f32,
+            min_depth: 0.0,
+            max_depth: 1.0,
+        }];
+        let scissors = [self.surface_resolution.into()];
+        self.vulkan_context
+            .device()
+            .cmd_set_viewport(draw_cb, 0, &viewports);
+        self.vulkan_context
+            .device()
+            .cmd_set_scissor(draw_cb, 0, &scissors);
+
+        self.vulkan_context.device().cmd_bind_descriptor_sets(
+            draw_cb,
+            vk::PipelineBindPoint::GRAPHICS,
+            self.pipeline_layout,
+            0,
+            &[self.scene_ubo_descriptor_set],
+            &[],
+        );
+
+        // Bind buffers and draw
+        self.vulkan_context.device().cmd_bind_vertex_buffers(
+            draw_cb,
+            0,
+            &[self.vertex_buffer.buffer],
+            &[0],
+        );
+        self.vulkan_context.device().cmd_bind_index_buffer(
+            draw_cb,
+            self.index_buffer.buffer,
+            0,
+            vk::IndexType::UINT32,
+        );
+        self.vulkan_context
+            .device()
+            .cmd_draw_indexed(draw_cb, self.index_count, 1, 0, 0, 0);
+
+        Ok(())
+    }
+
+    // Part 3: Finalizing and presenting the frame
+    pub fn finalize_frame_and_present(
+        &self,
+        draw_cb: vk::CommandBuffer,
+        present_index: usize,
+    ) -> Result<(), Box<dyn Error>> {
+        unsafe {
+            self.vulkan_context.device().cmd_end_render_pass(draw_cb);
+            self.vulkan_context.device().end_command_buffer(draw_cb)?;
+
+            let submit_infos = [vk::SubmitInfo::default()
+                .wait_semaphores(std::slice::from_ref(&self.present_complete_semaphore))
+                .wait_dst_stage_mask(&[vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT])
+                .command_buffers(std::slice::from_ref(&draw_cb))
+                .signal_semaphores(std::slice::from_ref(&self.rendering_complete_semaphore))];
+
+            self.vulkan_context.device().queue_submit(
+                self.present_queue,
+                &submit_infos,
+                self.draw_commands_reuse_fence,
+            )?;
 
             let wait_semaphors = [self.rendering_complete_semaphore];
             let swapchains = [self.swapchain];
-            let image_indices = [present_index];
+            let image_indices = [present_index as u32];
             let present_info = vk::PresentInfoKHR::default()
                 .wait_semaphores(&wait_semaphors)
                 .swapchains(&swapchains)

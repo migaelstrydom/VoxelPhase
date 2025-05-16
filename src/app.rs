@@ -15,17 +15,17 @@ use nalgebra::Vector3;
 use specs::{Builder, Dispatcher, DispatcherBuilder, World, WorldExt};
 
 // Project imports
-use crate::components::{CameraComponent, Position, Renderable, Rotation, SpinSpeed}; // Added CameraComponent
+use crate::components::{CameraComponent, Mesh, Position, Renderable, Rotation, SpinSpeed}; // Added Mesh, Vertex
 use crate::core::vulkan_context::VulkanContext;
 use crate::rendering::camera::Camera; // For default camera creation
 use crate::rendering::renderer::Renderer;
-use crate::systems::SpinningSystem; // Import new system
-
+use crate::rendering::vertex::Vertex;
+use crate::systems::{RenderSystem, SpinningSystem};
+use nalgebra::Vector4;
 pub struct App<'a, 'b> {
     // Add lifetimes for Dispatcher
     event_loop: RefCell<EventLoop<()>>,
-    window: Window,
-    renderer: Renderer,
+    _window: Window,
     world: World,                   // Add ECS World
     dispatcher: Dispatcher<'a, 'b>, // Add ECS Dispatcher
 }
@@ -54,14 +54,42 @@ impl<'a, 'b> App<'a, 'b> {
         world.register::<Rotation>();
         world.register::<SpinSpeed>();
         world.register::<Renderable>();
-        world.register::<CameraComponent>(); // Register CameraComponent
+        world.register::<CameraComponent>();
+        world.register::<Mesh>();
 
-        // Create the triangle entity
+        // Insert Renderer as a resource
+        // This will make it available to RenderSystem
+        // Note: Renderer does not impl Default, so insert is the correct way.
+        world.insert(renderer);
+
+        // Define triangle vertices and indices for the Mesh component
+        let triangle_vertices = vec![
+            Vertex {
+                pos: Vector4::new(-1.0, 1.0, 0.0, 1.0),
+                color: Vector4::new(0.0, 1.0, 0.0, 1.0),
+            },
+            Vertex {
+                pos: Vector4::new(1.0, 1.0, 0.0, 1.0),
+                color: Vector4::new(0.0, 0.0, 1.0, 1.0),
+            },
+            Vertex {
+                pos: Vector4::new(0.0, -1.0, 0.0, 1.0),
+                color: Vector4::new(1.0, 0.0, 0.0, 1.0),
+            },
+        ];
+        let triangle_indices = vec![0u32, 1, 2];
+
+        // Create the triangle entity with a Mesh component
         world
             .create_entity()
             .with(Position(Vector3::new(0.0, 0.0, 0.0))) // Initial position
             .with(Rotation(0.0)) // Initial rotation
-            .with(SpinSpeed(0.01)) // Rotation speed (radians per frame/update)
+            .with(SpinSpeed(0.01)) // Rotation speed
+            .with(Mesh {
+                // Add Mesh component
+                vertices: triangle_vertices,
+                indices: triangle_indices,
+            })
             .with(Renderable) // Mark as renderable
             .build();
 
@@ -83,24 +111,27 @@ impl<'a, 'b> App<'a, 'b> {
             .build();
 
         // Setup dispatcher
-        let dispatcher = DispatcherBuilder::new()
-            .with(SpinningSystem, "spinning_system", &[]) // Add our spinning system
-            .build();
+        // SpinningSystem can run in parallel. RenderSystem likely needs to be thread-local.
+        let mut dispatcher_builder =
+            DispatcherBuilder::new().with(SpinningSystem, "spinning_system", &[]);
+
+        // Register RenderSystem as thread-local. It will be dispatched separately.
+        // Note: Systems added with `with_thread_local` are not given dependencies like normal systems.
+        // They run sequentially on the thread that calls `dispatch_thread_local`.
+        // If RenderSystem depends on SpinningSystem, that dependency is implicit by calling dispatch then dispatch_thread_local.
+        dispatcher_builder.add_thread_local(RenderSystem);
+
+        let dispatcher = dispatcher_builder.build();
 
         Ok(Self {
             event_loop: RefCell::new(event_loop),
-            window,
-            renderer,
+            _window: window,
             world,
             dispatcher,
         })
     }
 
-    pub fn run<F: FnMut(&mut Renderer, &World)>(
-        // Modified signature to pass World
-        &mut self,
-        mut game_logic_callback: F,
-    ) -> Result<(), Box<dyn Error>> {
+    pub fn run(&mut self) -> Result<(), Box<dyn Error>> {
         self.event_loop.borrow_mut().run_on_demand(|event, elwt| {
             elwt.set_control_flow(ControlFlow::Poll);
 
@@ -130,12 +161,12 @@ impl<'a, 'b> App<'a, 'b> {
                 }
                 Event::AboutToWait => {
                     // Run ECS systems
+                    // Dispatch parallel systems first
                     self.dispatcher.dispatch(&self.world);
-                    self.world.maintain();
+                    // Then dispatch thread-local systems (like RenderSystem)
+                    self.dispatcher.dispatch_thread_local(&self.world);
 
-                    // Call the game logic/rendering update function
-                    game_logic_callback(&mut self.renderer, &self.world); // Pass world
-                    self.window.request_redraw();
+                    self.world.maintain();
                 }
                 Event::WindowEvent {
                     event: WindowEvent::RedrawRequested,

@@ -1,4 +1,4 @@
-use ash::vk;
+use crate::rendering::vertex::Vertex;
 use nalgebra::Vector3;
 use specs::{Component, DenseVecStorage, VecStorage};
 
@@ -21,16 +21,15 @@ pub struct Rotation(pub f32); // Radians
 #[derive(Component, Debug)]
 pub struct SpinSpeed(pub f32); // Radians per logic update
 
-// Render Components
 #[derive(Component)]
 #[storage(VecStorage)]
-struct Mesh {
-    vertex_buffer: vk::Buffer,
-    index_buffer: vk::Buffer,
-    index_count: u32,
+pub struct Mesh {
+    pub vertices: Vec<Vertex>,
+    pub indices: Vec<u32>,
 }
 
 #[derive(Component, Debug, Default)]
+#[storage(DenseVecStorage)] // Changed to DenseVecStorage for consistency, can be VecStorage too
 pub struct Renderable;
 
 // New Camera Component

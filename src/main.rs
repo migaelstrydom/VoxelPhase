@@ -18,13 +18,16 @@ fn main() -> Result<(), Box<dyn Error>> {
     setup_logging();
     log::info!("Starting RustDude");
 
-    let mut app = App::new(1920, 1080, "RustDude App")?;
-    app.run(|renderer, world| {
-        if let Err(e) = renderer.render_frame(world) {
-            log::error!("Error during render_frame: {}", e);
-            // Potentially handle exit here or let the app continue
+    match App::new(800, 600, "RustDude Engine") {
+        Ok(mut app) => {
+            if let Err(e) = app.run() {
+                eprintln!("Application error: {}", e);
+            }
         }
-    })?;
+        Err(e) => {
+            eprintln!("Error creating App: {}", e);
+        }
+    }
 
     Ok(())
 }
