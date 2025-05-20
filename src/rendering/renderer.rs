@@ -62,7 +62,7 @@ impl std::fmt::Debug for ManagedBuffer {
 
 impl ManagedBuffer {
     pub fn new(
-        vulkan_context: &VulkanContext,
+        managed_device: Arc<ManagedDevice>,
         size: vk::DeviceSize,
         usage: vk::BufferUsageFlags,
         memory_properties: vk::MemoryPropertyFlags,
@@ -72,14 +72,12 @@ impl ManagedBuffer {
                 .size(size)
                 .usage(usage)
                 .sharing_mode(vk::SharingMode::EXCLUSIVE);
-            let buffer = vulkan_context.device().create_buffer(&buffer_info, None)?;
+            let buffer = managed_device.device.create_buffer(&buffer_info, None)?;
 
-            let memory_req = vulkan_context
-                .device()
-                .get_buffer_memory_requirements(buffer);
+            let memory_req = managed_device.device.get_buffer_memory_requirements(buffer);
             let memory_type_index = find_memorytype_index(
                 &memory_req,
-                &vulkan_context.device.device_memory_properties,
+                &managed_device.device_memory_properties,
                 memory_properties,
             )
             .ok_or("Unable to find suitable memory type for buffer.")?;
@@ -87,19 +85,19 @@ impl ManagedBuffer {
             let allocate_info = vk::MemoryAllocateInfo::default()
                 .allocation_size(memory_req.size)
                 .memory_type_index(memory_type_index);
-            let memory = vulkan_context
-                .device()
+            let memory = managed_device
+                .device
                 .allocate_memory(&allocate_info, None)?;
 
-            vulkan_context
-                .device()
+            managed_device
+                .device
                 .bind_buffer_memory(buffer, memory, 0)?;
 
             Ok(Self {
                 buffer,
                 memory,
                 size,
-                device: Arc::clone(&vulkan_context.device),
+                device: managed_device,
             })
         }
     }
@@ -140,7 +138,6 @@ pub struct Renderer {
     pub surface: vk::SurfaceKHR,
     pub swapchain_loader: swapchain::Device,
 
-    pub present_queue: vk::Queue,
     pub _surface_format: vk::SurfaceFormatKHR,
     pub surface_resolution: vk::Extent2D,
 
@@ -178,12 +175,12 @@ pub struct Renderer {
     pub scene_ubo_descriptor_set: vk::DescriptorSet,
 
     // VulkanContext should be the last field to ensure it's dropped last.
-    pub vulkan_context: VulkanContext,
+    pub vulkan_context: Arc<VulkanContext>,
 }
 
 impl Renderer {
     pub fn new(
-        vulkan_context: VulkanContext,
+        vulkan_context: Arc<VulkanContext>,
         window: &Window,
         window_width: u32,
         window_height: u32,
@@ -347,10 +344,6 @@ impl Renderer {
                 .device()
                 .create_fence(&fence_create_info, None)?;
 
-            let present_queue = vulkan_context
-                .device()
-                .get_device_queue(vulkan_context.device.queue_family_index, 0);
-
             vulkan_context.device().wait_for_fences(
                 &[setup_commands_reuse_fence],
                 true,
@@ -363,7 +356,7 @@ impl Renderer {
                 &vulkan_context.device(),
                 setup_command_buffer,
                 setup_commands_reuse_fence,
-                present_queue,
+                vulkan_context.queue,
                 &[],
                 &[],
                 &[],
@@ -484,7 +477,7 @@ impl Renderer {
             // Initialize with a small size or leave for first draw_mesh_data call
             let initial_index_buffer_size = mem::size_of::<u32>() as u64 * 3; // e.g., for one triangle
             let index_buffer = ManagedBuffer::new(
-                &vulkan_context,
+                Arc::clone(&vulkan_context.device),
                 initial_index_buffer_size, // Placeholder size
                 vk::BufferUsageFlags::INDEX_BUFFER,
                 vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
@@ -494,7 +487,7 @@ impl Renderer {
             // 4. Vertex Buffer (using ManagedBuffer) - Placeholder, will be dynamic
             let initial_vertex_buffer_size = mem::size_of::<Vertex>() as u64 * 3; // e.g., for one triangle
             let vertex_buffer = ManagedBuffer::new(
-                &vulkan_context,
+                Arc::clone(&vulkan_context.device),
                 initial_vertex_buffer_size, // Placeholder size
                 vk::BufferUsageFlags::VERTEX_BUFFER,
                 vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
@@ -521,7 +514,7 @@ impl Renderer {
             // Create Uniform Buffer for Scene Data (Model, View, Projection)
             let scene_ubo_size = std::mem::size_of::<SceneUbo>() as vk::DeviceSize;
             let scene_ubo_buffer = ManagedBuffer::new(
-                &vulkan_context,
+                Arc::clone(&vulkan_context.device),
                 scene_ubo_size,
                 vk::BufferUsageFlags::UNIFORM_BUFFER,
                 vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
@@ -639,7 +632,8 @@ impl Renderer {
             let rasterization_info = vk::PipelineRasterizationStateCreateInfo {
                 front_face: vk::FrontFace::COUNTER_CLOCKWISE,
                 line_width: 1.0,
-                polygon_mode: vk::PolygonMode::FILL,
+                polygon_mode: vk::PolygonMode::LINE,
+                cull_mode: vk::CullModeFlags::BACK,
                 ..Default::default()
             };
             let multisample_state_info = vk::PipelineMultisampleStateCreateInfo {
@@ -704,7 +698,6 @@ impl Renderer {
                 surface_loader,
                 surface,
                 swapchain_loader,
-                present_queue,
                 _surface_format: surface_format,
                 surface_resolution,
                 swapchain,
@@ -750,8 +743,12 @@ impl Renderer {
     ) -> Result<(), Box<dyn Error>> {
         if existing_buffer.size < required_size {
             // existing_buffer will be dropped, freeing its old resources
-            *existing_buffer =
-                ManagedBuffer::new(vulkan_context, required_size, usage, memory_properties)?;
+            *existing_buffer = ManagedBuffer::new(
+                Arc::clone(&vulkan_context.device),
+                required_size,
+                usage,
+                memory_properties,
+            )?;
         }
         Ok(())
     }
@@ -946,7 +943,7 @@ impl Renderer {
                 .signal_semaphores(std::slice::from_ref(&self.rendering_complete_semaphore))];
 
             self.vulkan_context.device().queue_submit(
-                self.present_queue,
+                self.vulkan_context.queue,
                 &submit_infos,
                 self.draw_commands_reuse_fence,
             )?;
@@ -960,7 +957,7 @@ impl Renderer {
                 .image_indices(&image_indices);
 
             self.swapchain_loader
-                .queue_present(self.present_queue, &present_info)?;
+                .queue_present(self.vulkan_context.queue, &present_info)?;
         }
         Ok(())
     }

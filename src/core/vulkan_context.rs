@@ -113,6 +113,8 @@ pub struct VulkanContext {
     pub instance: Arc<ManagedInstance>,
     _debug_manager: DebugManager, // Never used directly, only through the instance
     pub device: Arc<ManagedDevice>,
+    pub command_pool: vk::CommandPool,
+    pub queue: vk::Queue,
 }
 
 impl VulkanContext {
@@ -156,11 +158,29 @@ impl VulkanContext {
 
         let device = Arc::new(ManagedDevice::new(Arc::clone(&instance))?);
 
+        // Get the first queue from the queue family
+        let queue = unsafe { device.device.get_device_queue(device.queue_family_index, 0) };
+
+        // Create a command pool for general operations
+        let command_pool_create_info = vk::CommandPoolCreateInfo::default()
+            .queue_family_index(device.queue_family_index)
+            // Using RESET_COMMAND_BUFFER flag allows individual command buffers
+            // to be reset without resetting the entire pool
+            .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER);
+
+        let command_pool = unsafe {
+            device
+                .device
+                .create_command_pool(&command_pool_create_info, None)?
+        };
+
         Ok(Self {
             entry,
             instance,
             _debug_manager: debug_manager,
             device,
+            command_pool,
+            queue,
         })
     }
 
@@ -170,6 +190,19 @@ impl VulkanContext {
 
     pub fn physical_device(&self) -> vk::PhysicalDevice {
         self.device.physical_device
+    }
+}
+
+impl Drop for VulkanContext {
+    fn drop(&mut self) {
+        unsafe {
+            // Destroy the command pool
+            self.device
+                .device
+                .destroy_command_pool(self.command_pool, None);
+
+            // The device, instance, etc. are dropped automatically through their Arc/Drop implementations
+        }
     }
 }
 

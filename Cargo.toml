@@ -12,6 +12,7 @@ raw-window-handle = "0.6.2"
 winit = "0.29.15"
 specs = { version = "0.20.0", features = ["derive"] }
 nalgebra = "0.32"
+image = "0.24"
 
 
 [dev-dependencies]

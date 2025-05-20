@@ -1,5 +1,5 @@
-use std::cell::RefCell;
 use std::error::Error;
+use std::{cell::RefCell, sync::Arc};
 
 use winit::{
     dpi::LogicalSize,
@@ -15,13 +15,17 @@ use nalgebra::{Vector2, Vector3};
 use specs::{Builder, Dispatcher, DispatcherBuilder, World, WorldExt};
 
 // Project imports
-use crate::components::{CameraComponent, Mesh, Position, Renderable, Rotation, SpinSpeed}; // Added Mesh, Vertex
 use crate::core::vulkan_context::VulkanContext;
 use crate::rendering::camera::Camera; // For default camera creation
 use crate::rendering::renderer::Renderer;
 use crate::rendering::vertex::Vertex;
+use crate::resources::textures::TextureComponent;
 use crate::systems::{RenderSystem, SpinningSystem};
 use crate::world::geometry::Landscape;
+use crate::{
+    components::{CameraComponent, Mesh, Position, Renderable, Rotation, SpinSpeed},
+    resources::manager::ResourceManager,
+}; // Added Mesh, Vertex
 use nalgebra::Vector4;
 pub struct App<'a, 'b> {
     // Add lifetimes for Dispatcher
@@ -46,8 +50,14 @@ impl<'a, 'b> App<'a, 'b> {
             ))
             .build(&event_loop)?;
 
-        let vulkan_context = VulkanContext::new(&window)?;
-        let renderer = Renderer::new(vulkan_context, &window, window_width, window_height)?;
+        let vulkan_context = Arc::new(VulkanContext::new(&window)?);
+        let renderer = Renderer::new(
+            Arc::clone(&vulkan_context),
+            &window,
+            window_width,
+            window_height,
+        )?;
+        let resource_manager = ResourceManager::new(Arc::clone(&vulkan_context))?;
 
         // ECS Setup
         let mut world = World::new();
@@ -57,11 +67,13 @@ impl<'a, 'b> App<'a, 'b> {
         world.register::<Renderable>();
         world.register::<CameraComponent>();
         world.register::<Mesh>();
+        world.register::<TextureComponent>();
 
         // Insert Renderer as a resource
         // This will make it available to RenderSystem
         // Note: Renderer does not impl Default, so insert is the correct way.
         world.insert(renderer);
+        world.insert(resource_manager);
 
         // Define triangle vertices and indices for the Mesh component
         let triangle_vertices = vec![
