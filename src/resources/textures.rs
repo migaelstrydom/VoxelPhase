@@ -1,4 +1,4 @@
-use crate::core::vulkan_context::ManagedDevice;
+use crate::core::device::ManagedDevice;
 use crate::rendering::texture::ManagedTexture;
 use specs::{Component, DenseVecStorage};
 use std::{
@@ -43,7 +43,7 @@ impl TextureFactory {
         let width = img.width();
         let height = img.height();
         let image_data = img_rgba.into_raw();
-        let image_size = (image_data.len() as u64);
+        let image_size = image_data.len() as u64;
 
         // Calculate mip levels if mipmaps are requested
         let mip_levels = if generate_mipmaps {
@@ -55,7 +55,7 @@ impl TextureFactory {
         // Create a staging buffer to hold the image data
         let staging_buffer = ManagedBuffer::new(
             self.device.clone(),
-            image_size as u64,
+            image_size,
             vk::BufferUsageFlags::TRANSFER_SRC,
             vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
         )?;

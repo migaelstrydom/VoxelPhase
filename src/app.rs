@@ -76,7 +76,7 @@ impl<'a, 'b> App<'a, 'b> {
         world.insert(resource_manager);
 
         // Define triangle vertices and indices for the Mesh component
-        let triangle_vertices = vec![
+        let _triangle_vertices = vec![
             Vertex {
                 pos: Vector4::new(-1.0, 1.0, 0.0, 1.0),
                 color: Vector4::new(0.0, 1.0, 0.0, 1.0),
@@ -93,7 +93,7 @@ impl<'a, 'b> App<'a, 'b> {
                 tex_coords: Vector2::new(0.5, 1.0),
             },
         ];
-        let triangle_indices = vec![0u32, 1, 2];
+        let _triangle_indices = vec![0u32, 1, 2];
 
         let world_geometry = Landscape::load_ripple_obj()?;
 

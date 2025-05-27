@@ -1,7 +1,7 @@
 use ash::{ext::debug_utils, vk, Entry};
 use std::{borrow::Cow, error::Error, ffi, sync::Arc};
 
-use super::vulkan_context::ManagedInstance;
+use super::instance::ManagedInstance;
 
 extern "system" fn vulkan_debug_callback(
     message_severity: vk::DebugUtilsMessageSeverityFlagsEXT,

@@ -1,125 +1,25 @@
 use crate::core::debug_manager::DebugManager;
 use ash::{vk, Device, Entry, Instance};
-use std::{os::raw::c_char, sync::Arc};
+use std::{error::Error, os::raw::c_char, sync::Arc};
 use winit::raw_window_handle::HasDisplayHandle;
 
-pub struct ManagedInstance {
-    pub instance: Instance,
-}
+// Import the moved items
+use crate::core::command_buffer::CommandBufferManager;
+use crate::core::instance::ManagedInstance;
 
-impl ManagedInstance {
-    pub fn new(
-        entry: &Entry,
-        create_info: &vk::InstanceCreateInfo,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
-        unsafe {
-            let instance = entry.create_instance(create_info, None)?;
-            Ok(Self { instance })
-        }
-    }
-}
-
-impl Drop for ManagedInstance {
-    fn drop(&mut self) {
-        unsafe {
-            self.instance.destroy_instance(None);
-        }
-    }
-}
-
-pub struct ManagedDevice {
-    pub device: Device,
-    pub physical_device: vk::PhysicalDevice,
-    pub queue_family_index: u32,
-    pub device_memory_properties: vk::PhysicalDeviceMemoryProperties,
-    _instance: Arc<ManagedInstance>,
-}
-
-impl ManagedDevice {
-    pub fn new(instance: Arc<ManagedInstance>) -> Result<Self, Box<dyn std::error::Error>> {
-        unsafe {
-            let pdevices = instance
-                .instance
-                .enumerate_physical_devices()
-                .expect("Physical device error");
-            // We need a surface to check for present support, but surface creation is outside this context for now.
-            // So, for now, just pick a graphics queue family.
-            let (physical_device, queue_family_index) = pdevices
-                .iter()
-                .find_map(|pdevice| {
-                    instance
-                        .instance
-                        .get_physical_device_queue_family_properties(*pdevice)
-                        .iter()
-                        .enumerate()
-                        .find_map(|(index, info)| {
-                            if info.queue_flags.contains(vk::QueueFlags::GRAPHICS) {
-                                Some((*pdevice, index))
-                            } else {
-                                None
-                            }
-                        })
-                })
-                .expect("Couldn't find suitable device.");
-
-            let features = vk::PhysicalDeviceFeatures {
-                shader_clip_distance: 1,
-                ..Default::default()
-            };
-            let device_extension_names_raw = [
-                ash::khr::swapchain::NAME.as_ptr(),
-                #[cfg(any(target_os = "macos", target_os = "ios"))]
-                ash::khr::portability_subset::NAME.as_ptr(),
-            ];
-
-            let queue_family_index = queue_family_index as u32;
-            let priorities = [1.0];
-            let queue_info = vk::DeviceQueueCreateInfo::default()
-                .queue_family_index(queue_family_index)
-                .queue_priorities(&priorities);
-            let device_create_info = vk::DeviceCreateInfo::default()
-                .queue_create_infos(std::slice::from_ref(&queue_info))
-                .enabled_extension_names(&device_extension_names_raw)
-                .enabled_features(&features);
-            let device =
-                instance
-                    .instance
-                    .create_device(physical_device, &device_create_info, None)?;
-            let device_memory_properties = instance
-                .instance
-                .get_physical_device_memory_properties(physical_device);
-            Ok(Self {
-                device,
-                physical_device,
-                queue_family_index,
-                device_memory_properties,
-                _instance: instance,
-            })
-        }
-    }
-}
-
-impl Drop for ManagedDevice {
-    fn drop(&mut self) {
-        unsafe {
-            self.device.destroy_device(None);
-        }
-    }
-}
+use super::device::ManagedDevice;
 
 /// Manages Vulkan instance, device, and debug utilities
 pub struct VulkanContext {
     pub entry: Entry,
     pub instance: Arc<ManagedInstance>,
-    _debug_manager: DebugManager, // Never used directly, only through the instance
+    _debug_manager: DebugManager,
     pub device: Arc<ManagedDevice>,
-    pub command_pool: vk::CommandPool,
-    pub queue: vk::Queue,
+    pub command_buffer_manager: CommandBufferManager,
 }
 
 impl VulkanContext {
-    /// Creates a new Vulkan context
-    pub fn new(window: &impl HasDisplayHandle) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new(window: &impl HasDisplayHandle) -> Result<Self, Box<dyn Error>> {
         let entry = Entry::linked();
         let app_name = c"VulkanTriangle";
         let layer_names = [c"VK_LAYER_KHRONOS_validation"];
@@ -157,30 +57,14 @@ impl VulkanContext {
         let debug_manager = DebugManager::new(&entry, Arc::clone(&instance))?;
 
         let device = Arc::new(ManagedDevice::new(Arc::clone(&instance))?);
-
-        // Get the first queue from the queue family
-        let queue = unsafe { device.device.get_device_queue(device.queue_family_index, 0) };
-
-        // Create a command pool for general operations
-        let command_pool_create_info = vk::CommandPoolCreateInfo::default()
-            .queue_family_index(device.queue_family_index)
-            // Using RESET_COMMAND_BUFFER flag allows individual command buffers
-            // to be reset without resetting the entire pool
-            .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER);
-
-        let command_pool = unsafe {
-            device
-                .device
-                .create_command_pool(&command_pool_create_info, None)?
-        };
+        let command_buffer_manager = CommandBufferManager::new(Arc::clone(&device))?;
 
         Ok(Self {
             entry,
             instance,
             _debug_manager: debug_manager,
             device,
-            command_pool,
-            queue,
+            command_buffer_manager,
         })
     }
 
@@ -190,66 +74,6 @@ impl VulkanContext {
 
     pub fn physical_device(&self) -> vk::PhysicalDevice {
         self.device.physical_device
-    }
-}
-
-impl Drop for VulkanContext {
-    fn drop(&mut self) {
-        unsafe {
-            // Destroy the command pool
-            self.device
-                .device
-                .destroy_command_pool(self.command_pool, None);
-
-            // The device, instance, etc. are dropped automatically through their Arc/Drop implementations
-        }
-    }
-}
-
-/// Helper function for submitting command buffers. Immediately waits for the fence before the command buffer
-/// is executed. That way we can delay the waiting for the fences by 1 frame which is good for performance.
-/// Make sure to create the fence in a signaled state on the first use.
-#[allow(clippy::too_many_arguments)]
-pub fn record_submit_commandbuffer<F: FnOnce(&Device, vk::CommandBuffer)>(
-    device: &Device,
-    command_buffer: vk::CommandBuffer,
-    command_buffer_reuse_fence: vk::Fence,
-    submit_queue: vk::Queue,
-    wait_mask: &[vk::PipelineStageFlags],
-    wait_semaphores: &[vk::Semaphore],
-    signal_semaphores: &[vk::Semaphore],
-    f: F,
-) {
-    unsafe {
-        device
-            .reset_command_buffer(
-                command_buffer,
-                vk::CommandBufferResetFlags::RELEASE_RESOURCES,
-            )
-            .expect("Reset command buffer failed.");
-
-        let command_buffer_begin_info = vk::CommandBufferBeginInfo::default()
-            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
-
-        device
-            .begin_command_buffer(command_buffer, &command_buffer_begin_info)
-            .expect("Begin commandbuffer");
-        f(device, command_buffer);
-        device
-            .end_command_buffer(command_buffer)
-            .expect("End commandbuffer");
-
-        let command_buffers = vec![command_buffer];
-
-        let submit_info = vk::SubmitInfo::default()
-            .wait_semaphores(wait_semaphores)
-            .wait_dst_stage_mask(wait_mask)
-            .command_buffers(&command_buffers)
-            .signal_semaphores(signal_semaphores);
-
-        device
-            .queue_submit(submit_queue, &[submit_info], command_buffer_reuse_fence)
-            .expect("queue submit failed.");
     }
 }
 

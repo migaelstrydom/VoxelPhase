@@ -2,7 +2,7 @@ use std::{error::Error, sync::Arc};
 
 use ash::vk;
 
-use crate::core::vulkan_context::{find_memorytype_index, ManagedDevice};
+use crate::core::{device::ManagedDevice, vulkan_context::find_memorytype_index};
 
 pub struct ManagedTexture {
     pub image: vk::Image,

@@ -12,10 +12,9 @@ use winit::{
     window::Window,
 };
 
-use crate::core::vulkan_context::{
-    find_memorytype_index, record_submit_commandbuffer, ManagedDevice, VulkanContext,
-};
-
+use crate::core::command_buffer::ManagedCommandBuffer;
+use crate::core::device::ManagedDevice;
+use crate::core::vulkan_context::{find_memorytype_index, VulkanContext};
 use crate::rendering::vertex::Vertex;
 
 // ECS and Math imports
@@ -145,9 +144,7 @@ pub struct Renderer {
     pub _present_images: Vec<vk::Image>,
     pub present_image_views: Vec<vk::ImageView>,
 
-    pub pool: vk::CommandPool,
-    pub draw_command_buffer: vk::CommandBuffer,
-    pub setup_command_buffer: vk::CommandBuffer,
+    pub draw_command_buffer: ManagedCommandBuffer,
 
     pub depth_image: vk::Image,
     pub depth_image_view: vk::ImageView,
@@ -156,7 +153,6 @@ pub struct Renderer {
     pub present_complete_semaphore: vk::Semaphore,
     pub rendering_complete_semaphore: vk::Semaphore,
     pub draw_commands_reuse_fence: vk::Fence,
-    pub setup_commands_reuse_fence: vk::Fence,
 
     // Resources for the graphics pipeline and drawing, to be initialized in new()
     pub renderpass: vk::RenderPass,
@@ -255,22 +251,9 @@ impl Renderer {
                 .image_array_layers(1);
             let swapchain = swapchain_loader.create_swapchain(&swapchain_create_info, None)?;
 
-            let pool_create_info = vk::CommandPoolCreateInfo::default()
-                .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER)
-                .queue_family_index(vulkan_context.device.queue_family_index);
-            let pool = vulkan_context
-                .device()
-                .create_command_pool(&pool_create_info, None)?;
-
-            let command_buffer_allocate_info = vk::CommandBufferAllocateInfo::default()
-                .command_buffer_count(2)
-                .command_pool(pool)
-                .level(vk::CommandBufferLevel::PRIMARY);
-            let command_buffers = vulkan_context
-                .device()
-                .allocate_command_buffers(&command_buffer_allocate_info)?;
-            let setup_command_buffer = command_buffers[0];
-            let draw_command_buffer = command_buffers[1];
+            let draw_command_buffer = vulkan_context
+                .command_buffer_manager
+                .create_primary_buffer()?;
 
             let present_images = swapchain_loader.get_swapchain_images(swapchain)?;
             let present_image_views: Vec<vk::ImageView> = present_images
@@ -340,52 +323,41 @@ impl Renderer {
             let draw_commands_reuse_fence = vulkan_context
                 .device()
                 .create_fence(&fence_create_info, None)?;
-            let setup_commands_reuse_fence = vulkan_context
-                .device()
-                .create_fence(&fence_create_info, None)?;
 
-            vulkan_context.device().wait_for_fences(
-                &[setup_commands_reuse_fence],
-                true,
-                u64::MAX,
-            )?;
+            let setup_cb_transient = vulkan_context
+                .command_buffer_manager
+                .create_one_time_submit_buffer()?;
+
             vulkan_context
-                .device()
-                .reset_fences(&[setup_commands_reuse_fence])?;
-            record_submit_commandbuffer(
-                &vulkan_context.device(),
-                setup_command_buffer,
-                setup_commands_reuse_fence,
-                vulkan_context.queue,
-                &[],
-                &[],
-                &[],
-                |device, setup_cb| {
-                    let layout_transition_barriers = vk::ImageMemoryBarrier::default()
-                        .image(depth_image)
-                        .dst_access_mask(
-                            vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_READ
-                                | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
-                        )
-                        .new_layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
-                        .old_layout(vk::ImageLayout::UNDEFINED)
-                        .subresource_range(
-                            vk::ImageSubresourceRange::default()
-                                .aspect_mask(vk::ImageAspectFlags::DEPTH)
-                                .layer_count(1)
-                                .level_count(1),
+                .command_buffer_manager
+                .submit_graphics_commands_and_wait(
+                    &setup_cb_transient,
+                    |device, setup_cb_raw| {
+                        let layout_transition_barriers = vk::ImageMemoryBarrier::default()
+                            .image(depth_image)
+                            .dst_access_mask(
+                                vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_READ
+                                    | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
+                            )
+                            .new_layout(vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
+                            .old_layout(vk::ImageLayout::UNDEFINED)
+                            .subresource_range(
+                                vk::ImageSubresourceRange::default()
+                                    .aspect_mask(vk::ImageAspectFlags::DEPTH)
+                                    .layer_count(1)
+                                    .level_count(1),
+                            );
+                        device.cmd_pipeline_barrier(
+                            setup_cb_raw,
+                            vk::PipelineStageFlags::BOTTOM_OF_PIPE,
+                            vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
+                            vk::DependencyFlags::empty(),
+                            &[],
+                            &[],
+                            &[layout_transition_barriers],
                         );
-                    device.cmd_pipeline_barrier(
-                        setup_cb,
-                        vk::PipelineStageFlags::BOTTOM_OF_PIPE,
-                        vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
-                        vk::DependencyFlags::empty(),
-                        &[],
-                        &[],
-                        &[layout_transition_barriers],
-                    );
-                },
-            );
+                    },
+                )?;
 
             let depth_image_view_info = vk::ImageViewCreateInfo::default()
                 .subresource_range(
@@ -632,7 +604,7 @@ impl Renderer {
             let rasterization_info = vk::PipelineRasterizationStateCreateInfo {
                 front_face: vk::FrontFace::COUNTER_CLOCKWISE,
                 line_width: 1.0,
-                polygon_mode: vk::PolygonMode::LINE,
+                polygon_mode: vk::PolygonMode::FILL,
                 cull_mode: vk::CullModeFlags::BACK,
                 ..Default::default()
             };
@@ -703,16 +675,13 @@ impl Renderer {
                 swapchain,
                 _present_images: present_images,
                 present_image_views,
-                pool,
                 draw_command_buffer,
-                setup_command_buffer,
                 depth_image,
                 depth_image_view,
                 depth_image_memory,
                 present_complete_semaphore,
                 rendering_complete_semaphore,
                 draw_commands_reuse_fence,
-                setup_commands_reuse_fence,
                 renderpass,
                 framebuffers,
                 pipeline_layout,
@@ -773,11 +742,8 @@ impl Renderer {
                 vk::Fence::null(),
             )?;
 
-            let command_buffer_begin_info = vk::CommandBufferBeginInfo::default()
-                .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
-            self.vulkan_context
-                .device()
-                .begin_command_buffer(self.draw_command_buffer, &command_buffer_begin_info)?;
+            self.draw_command_buffer
+                .begin(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)?;
 
             let clear_values = [
                 vk::ClearValue {
@@ -800,26 +766,25 @@ impl Renderer {
                 .clear_values(&clear_values);
 
             self.vulkan_context.device().cmd_begin_render_pass(
-                self.draw_command_buffer,
+                self.draw_command_buffer.raw(),
                 &render_pass_begin_info,
                 vk::SubpassContents::INLINE,
             );
 
-            Ok((self.draw_command_buffer, present_index as usize))
+            Ok((self.draw_command_buffer.raw(), present_index as usize))
         }
     }
 
     // Part 2: Drawing a specific mesh
     pub unsafe fn draw_mesh_data(
         &mut self,
-        draw_cb: vk::CommandBuffer, // Current command buffer
+        draw_cb_raw: vk::CommandBuffer, // Raw command buffer from prepare_frame_for_rendering
         vertices: &[Vertex],
         indices: &[u32],
         model_matrix: &Matrix4<f32>,
         view_matrix: &Matrix4<f32>,
         proj_matrix: &Matrix4<f32>,
     ) -> Result<(), Box<dyn Error>> {
-        // Update Vertex Buffer
         let vertex_buffer_size = (mem::size_of::<Vertex>() * vertices.len()) as vk::DeviceSize;
         Self::ensure_buffer_size(
             &self.vulkan_context,
@@ -834,12 +799,11 @@ impl Renderer {
         let mut vert_align = Align::new(
             vert_ptr,
             mem::align_of::<Vertex>() as u64,
-            vertex_buffer_size, // Use actual data size for copy
+            vertex_buffer_size,
         );
         vert_align.copy_from_slice(vertices);
         self.vertex_buffer.unmap_memory();
 
-        // Update Index Buffer
         let index_buffer_size = (mem::size_of::<u32>() * indices.len()) as vk::DeviceSize;
         Self::ensure_buffer_size(
             &self.vulkan_context,
@@ -851,17 +815,13 @@ impl Renderer {
         let index_ptr = self
             .index_buffer
             .map_memory(0, vk::MemoryMapFlags::empty())?;
-        let mut index_align = Align::new(
-            index_ptr,
-            mem::align_of::<u32>() as u64,
-            index_buffer_size, // Use actual data size for copy
-        );
+        let mut index_align =
+            Align::new(index_ptr, mem::align_of::<u32>() as u64, index_buffer_size);
         index_align.copy_from_slice(indices);
         self.index_buffer.unmap_memory();
 
-        self.index_count = indices.len() as u32; // Update index count for this draw
+        self.index_count = indices.len() as u32;
 
-        // Update UBO
         let current_scene_ubo = SceneUbo {
             model: *model_matrix,
             view: *view_matrix,
@@ -874,9 +834,8 @@ impl Renderer {
         ubo_slice[0] = current_scene_ubo;
         self.scene_ubo_buffer.unmap_memory();
 
-        // Bind pipeline and descriptor sets (assuming these are common for all meshes for now)
         self.vulkan_context.device().cmd_bind_pipeline(
-            draw_cb,
+            draw_cb_raw,
             vk::PipelineBindPoint::GRAPHICS,
             self.graphics_pipeline,
         );
@@ -892,13 +851,13 @@ impl Renderer {
         let scissors = [self.surface_resolution.into()];
         self.vulkan_context
             .device()
-            .cmd_set_viewport(draw_cb, 0, &viewports);
+            .cmd_set_viewport(draw_cb_raw, 0, &viewports);
         self.vulkan_context
             .device()
-            .cmd_set_scissor(draw_cb, 0, &scissors);
+            .cmd_set_scissor(draw_cb_raw, 0, &scissors);
 
         self.vulkan_context.device().cmd_bind_descriptor_sets(
-            draw_cb,
+            draw_cb_raw,
             vk::PipelineBindPoint::GRAPHICS,
             self.pipeline_layout,
             0,
@@ -906,22 +865,21 @@ impl Renderer {
             &[],
         );
 
-        // Bind buffers and draw
         self.vulkan_context.device().cmd_bind_vertex_buffers(
-            draw_cb,
+            draw_cb_raw,
             0,
             &[self.vertex_buffer.buffer],
             &[0],
         );
         self.vulkan_context.device().cmd_bind_index_buffer(
-            draw_cb,
+            draw_cb_raw,
             self.index_buffer.buffer,
             0,
             vk::IndexType::UINT32,
         );
         self.vulkan_context
             .device()
-            .cmd_draw_indexed(draw_cb, self.index_count, 1, 0, 0, 0);
+            .cmd_draw_indexed(draw_cb_raw, self.index_count, 1, 0, 0, 0);
 
         Ok(())
     }
@@ -929,24 +887,24 @@ impl Renderer {
     // Part 3: Finalizing and presenting the frame
     pub fn finalize_frame_and_present(
         &self,
-        draw_cb: vk::CommandBuffer,
+        draw_cb_raw: vk::CommandBuffer, // Raw command buffer from prepare_frame_for_rendering
         present_index: usize,
     ) -> Result<(), Box<dyn Error>> {
         unsafe {
-            self.vulkan_context.device().cmd_end_render_pass(draw_cb);
-            self.vulkan_context.device().end_command_buffer(draw_cb)?;
+            self.vulkan_context
+                .device()
+                .cmd_end_render_pass(draw_cb_raw);
+            self.draw_command_buffer.end()?;
 
-            let submit_infos = [vk::SubmitInfo::default()
-                .wait_semaphores(std::slice::from_ref(&self.present_complete_semaphore))
-                .wait_dst_stage_mask(&[vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT])
-                .command_buffers(std::slice::from_ref(&draw_cb))
-                .signal_semaphores(std::slice::from_ref(&self.rendering_complete_semaphore))];
-
-            self.vulkan_context.device().queue_submit(
-                self.vulkan_context.queue,
-                &submit_infos,
-                self.draw_commands_reuse_fence,
-            )?;
+            self.vulkan_context
+                .command_buffer_manager
+                .submit_recorded_graphics_commands_async(
+                    &self.draw_command_buffer,
+                    self.draw_commands_reuse_fence,
+                    std::slice::from_ref(&self.present_complete_semaphore),
+                    std::slice::from_ref(&self.rendering_complete_semaphore),
+                    &[vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT],
+                )?;
 
             let wait_semaphors = [self.rendering_complete_semaphore];
             let swapchains = [self.swapchain];
@@ -956,8 +914,10 @@ impl Renderer {
                 .swapchains(&swapchains)
                 .image_indices(&image_indices);
 
-            self.swapchain_loader
-                .queue_present(self.vulkan_context.queue, &present_info)?;
+            self.swapchain_loader.queue_present(
+                self.vulkan_context.command_buffer_manager.graphics_queue,
+                &present_info,
+            )?;
         }
         Ok(())
     }
@@ -966,16 +926,8 @@ impl Renderer {
 impl Drop for Renderer {
     fn drop(&mut self) {
         unsafe {
-            // It's crucial that device_wait_idle is called before any dependent resources
-            // are destroyed. Since VulkanContext is now dropped last, its Drop impl
-            // (which should contain device destruction) will run after all other fields
-            // in Renderer are dropped. The device_wait_idle here in Renderer::drop
-            // ensures that the GPU is idle before Renderer starts dropping its own fields
-            // (like ManagedBuffers, semaphores, etc.).
             self.vulkan_context.device().device_wait_idle().unwrap();
 
-            // Destroy new UBO-related resources (order can matter)
-            // Descriptor sets are implicitly freed with the pool
             if self.scene_ubo_descriptor_pool != vk::DescriptorPool::null() {
                 self.vulkan_context
                     .device()
@@ -986,24 +938,19 @@ impl Drop for Renderer {
                     .device()
                     .destroy_descriptor_set_layout(self.scene_ubo_descriptor_set_layout, None);
             }
-            // scene_ubo_buffer (ManagedBuffer) will be dropped automatically,
-            // no need to explicitly destroy buffer or free memory here.
 
-            // Existing cleanup (ensure order is still correct relative to new items if dependencies exist)
             self.vulkan_context
                 .device()
                 .destroy_shader_module(self.vertex_shader_module, None);
             self.vulkan_context
                 .device()
                 .destroy_shader_module(self.fragment_shader_module, None);
-            // Pipeline must be destroyed before its layout
             self.vulkan_context
                 .device()
                 .destroy_pipeline(self.graphics_pipeline, None);
             self.vulkan_context
                 .device()
                 .destroy_pipeline_layout(self.pipeline_layout, None);
-            // RenderPass can be destroyed after pipelines that use it
             self.vulkan_context
                 .device()
                 .destroy_render_pass(self.renderpass, None);
@@ -1012,13 +959,6 @@ impl Drop for Renderer {
                     .device()
                     .destroy_framebuffer(*framebuffer, None);
             }
-            self.vulkan_context.device().free_command_buffers(
-                self.pool,
-                &[self.draw_command_buffer, self.setup_command_buffer],
-            );
-            self.vulkan_context
-                .device()
-                .destroy_command_pool(self.pool, None);
             self.vulkan_context
                 .device()
                 .destroy_image_view(self.depth_image_view, None);
@@ -1044,14 +984,7 @@ impl Drop for Renderer {
             self.vulkan_context
                 .device()
                 .destroy_fence(self.draw_commands_reuse_fence, None);
-            self.vulkan_context
-                .device()
-                .destroy_fence(self.setup_commands_reuse_fence, None);
             self.surface_loader.destroy_surface(self.surface, None);
-            // VulkanContext (which holds device and instance) is dropped after Renderer's other fields,
-            // handling their cleanup IF `vulkan_context` is the last field.
-            // The `device_wait_idle()` call at the start of this function is for Renderer's resources.
-            // The `VulkanContext` itself should manage the wait/destroy for device/instance in its own Drop.
         }
     }
 }

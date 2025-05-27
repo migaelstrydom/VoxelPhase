@@ -1,7 +1,6 @@
-use ash::vk;
 use std::sync::Arc;
 
-use crate::core::vulkan_context::{ManagedDevice, VulkanContext};
+use crate::core::{device::ManagedDevice, vulkan_context::VulkanContext};
 
 use super::{textures::TextureManager, transfer_service::TransferService};
 
