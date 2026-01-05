@@ -1,9 +1,10 @@
 use crate::components::{Rotation, SpinSpeed};
-use specs::{Join, ReadStorage, System, WriteStorage};
+use specs::{Join, ReadExpect, ReadStorage, System, WriteStorage};
 
 // New imports for RenderSystem
 use crate::components::{CameraComponent, Mesh, Position, Renderable};
 use crate::rendering::renderer::Renderer;
+use crate::resources::textures::TextureManager;
 use nalgebra::{Matrix4, Vector3};
 use specs::WriteExpect;
 
@@ -24,6 +25,7 @@ pub struct RenderSystem;
 impl<'a> System<'a> for RenderSystem {
     type SystemData = (
         WriteExpect<'a, Renderer>,
+        ReadExpect<'a, TextureManager>,
         ReadStorage<'a, Mesh>,
         ReadStorage<'a, Position>,
         ReadStorage<'a, Rotation>,
@@ -32,7 +34,15 @@ impl<'a> System<'a> for RenderSystem {
     );
 
     fn run(&mut self, data: Self::SystemData) {
-        let (mut renderer, meshes, positions, rotations, renderables, camera_components) = data;
+        let (
+            mut renderer,
+            texture_manager,
+            meshes,
+            positions,
+            rotations,
+            renderables,
+            camera_components,
+        ) = data;
 
         let camera = camera_components.join().next();
         if camera.is_none() {
@@ -43,7 +53,7 @@ impl<'a> System<'a> for RenderSystem {
         let view_matrix = camera_data.get_view_matrix();
         let proj_matrix = camera_data.get_projection_matrix();
 
-        match renderer.prepare_frame_for_rendering() {
+        match renderer.begin_frame() {
             Ok((draw_cb, present_index)) => {
                 for (mesh, pos, rot, _renderable) in
                     (&meshes, &positions, &rotations, &renderables).join()
@@ -51,26 +61,26 @@ impl<'a> System<'a> for RenderSystem {
                     let model_matrix = Matrix4::new_translation(&pos.0)
                         * Matrix4::from_axis_angle(&Vector3::y_axis(), rot.0);
 
-                    unsafe {
-                        if let Err(e) = renderer.draw_mesh_data(
-                            draw_cb,
-                            &mesh.vertices[..],
-                            &mesh.indices[..],
-                            &model_matrix,
-                            &view_matrix,
-                            &proj_matrix,
-                        ) {
-                            log::error!("RenderSystem: Failed to draw mesh data: {}", e);
-                        }
+                    if let Err(e) = renderer.draw_mesh(
+                        draw_cb,
+                        &mesh.vertices[..],
+                        &mesh.indices[..],
+                        &model_matrix,
+                        &view_matrix,
+                        &proj_matrix,
+                        &mesh.texture_handles,
+                        &texture_manager,
+                    ) {
+                        log::error!("RenderSystem: Failed to draw mesh data: {}", e);
                     }
                 }
 
-                if let Err(e) = renderer.finalize_frame_and_present(draw_cb, present_index) {
-                    log::error!("RenderSystem: Failed to finalize_frame_and_present: {}", e);
+                if let Err(e) = renderer.end_frame(draw_cb, present_index) {
+                    log::error!("RenderSystem: Failed to end_frame: {}", e);
                 }
             }
             Err(e) => {
-                log::error!("RenderSystem: Failed to prepare frame for rendering: {}", e);
+                log::error!("RenderSystem: Failed to begin_frame: {}", e);
             }
         }
     }

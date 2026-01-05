@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
+use crate::core::error::EngineResult;
 use crate::core::{device::ManagedDevice, vulkan_context::VulkanContext};
+use crate::rendering::descriptors::DescriptorManager;
 
 use super::{textures::TextureManager, transfer_service::TransferService};
 
@@ -12,7 +14,7 @@ pub struct ResourceManager {
 
 impl ResourceManager {
     /// Create a new resource manager
-    pub fn new(vulkan_context: Arc<VulkanContext>) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new(vulkan_context: Arc<VulkanContext>) -> EngineResult<Self> {
         // Create shared services
         let transfer_service = Arc::new(TransferService::new(Arc::clone(&vulkan_context))?);
 
@@ -22,9 +24,16 @@ impl ResourceManager {
         })
     }
 
-    /// Create a texture manager
-    pub fn create_texture_manager(&self) -> TextureManager {
-        TextureManager::new(self.device.clone(), self.transfer_service.clone())
+    /// Create a texture manager with the given descriptor manager
+    pub fn create_texture_manager(
+        &self,
+        descriptor_manager: Arc<DescriptorManager>,
+    ) -> EngineResult<TextureManager> {
+        TextureManager::new(
+            self.device.clone(),
+            self.transfer_service.clone(),
+            descriptor_manager,
+        )
     }
 
     /// Access the transfer service

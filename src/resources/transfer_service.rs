@@ -2,9 +2,10 @@ use ash::{
     vk::{self},
     Device,
 };
-use std::{error::Error, sync::Arc};
+use std::sync::Arc;
 
 use crate::core::command_buffer::ManagedCommandBuffer;
+use crate::core::error::{EngineError, EngineResult, VkResultExt};
 use crate::core::vulkan_context::VulkanContext;
 
 /// Service responsible for GPU data transfer operations
@@ -16,13 +17,11 @@ pub struct TransferService {
 
 impl TransferService {
     /// Create a new transfer service
-    pub fn new(vulkan_context: Arc<VulkanContext>) -> Result<Self, Box<dyn Error>> {
-        // Create a command buffer for transfer operations using CommandBufferManager
+    pub fn new(vulkan_context: Arc<VulkanContext>) -> EngineResult<Self> {
         let command_buffer = vulkan_context
             .command_buffer_manager
             .create_transfer_buffer()?;
 
-        // Create a fence (in signaled state initially so first wait succeeds)
         let fence_create_info =
             vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED);
 
@@ -30,7 +29,8 @@ impl TransferService {
             vulkan_context
                 .device
                 .device
-                .create_fence(&fence_create_info, None)?
+                .create_fence(&fence_create_info, None)
+                .sync_context("create transfer fence")?
         };
 
         Ok(Self {
@@ -44,28 +44,16 @@ impl TransferService {
         &self.vulkan_context.device.device
     }
 
-    /// Wait for the fence and reset it
-    fn wait_and_reset_fence(&self) -> Result<(), vk::Result> {
-        unsafe {
-            self.device()
-                .wait_for_fences(&[self.fence], true, std::u64::MAX)?;
-            self.device().reset_fences(&[self.fence])
-        }
-    }
-
     /// Get the access masks and pipeline stages for a layout transition
     fn get_layout_transition_info(
         old_layout: vk::ImageLayout,
         new_layout: vk::ImageLayout,
-    ) -> Result<
-        (
-            vk::AccessFlags,
-            vk::AccessFlags,
-            vk::PipelineStageFlags,
-            vk::PipelineStageFlags,
-        ),
-        Box<dyn Error>,
-    > {
+    ) -> EngineResult<(
+        vk::AccessFlags,
+        vk::AccessFlags,
+        vk::PipelineStageFlags,
+        vk::PipelineStageFlags,
+    )> {
         match (old_layout, new_layout) {
             (vk::ImageLayout::UNDEFINED, vk::ImageLayout::TRANSFER_DST_OPTIMAL) => Ok((
                 vk::AccessFlags::empty(),
@@ -95,7 +83,15 @@ impl TransferService {
                     vk::PipelineStageFlags::FRAGMENT_SHADER,
                 ))
             }
-            _ => Err(Box::from("Unsupported layout transition!")),
+            _ => Err(EngineError::Image {
+                operation: crate::core::error::ImageOperation::TransitionLayout,
+                width: 0,
+                height: 0,
+                reason: format!(
+                    "unsupported layout transition: {:?} -> {:?}",
+                    old_layout, new_layout
+                ),
+            }),
         }
     }
 
@@ -133,8 +129,21 @@ impl TransferService {
         image: vk::Image,
         width: u32,
         height: u32,
-    ) -> Result<(), Box<dyn Error>> {
-        self.wait_and_reset_fence()?;
+    ) -> EngineResult<()> {
+        unsafe {
+            self.device()
+                .wait_for_fences(&[self.fence], true, u64::MAX)
+                .sync_context("wait for transfer fence")?
+        };
+
+        unsafe {
+            self.device()
+                .reset_fences(&[self.fence])
+                .sync_context("reset transfer fence")?
+        };
+
+        self.command_buffer
+            .reset(vk::CommandBufferResetFlags::RELEASE_RESOURCES)?;
 
         let buffer_image_copy = vk::BufferImageCopy::default()
             .image_subresource(
@@ -169,7 +178,6 @@ impl TransferService {
                 },
             )?;
 
-        self.wait_and_reset_fence()?;
         Ok(())
     }
 
@@ -177,12 +185,25 @@ impl TransferService {
     pub fn transition_image_layout(
         &self,
         image: vk::Image,
-        format: vk::Format,
+        _format: vk::Format,
         old_layout: vk::ImageLayout,
         new_layout: vk::ImageLayout,
         mip_levels: u32,
-    ) -> Result<(), Box<dyn Error>> {
-        self.wait_and_reset_fence()?;
+    ) -> EngineResult<()> {
+        unsafe {
+            self.device()
+                .wait_for_fences(&[self.fence], true, u64::MAX)
+                .sync_context("wait for transfer fence")?
+        };
+
+        unsafe {
+            self.device()
+                .reset_fences(&[self.fence])
+                .sync_context("reset transfer fence")?
+        };
+
+        self.command_buffer
+            .reset(vk::CommandBufferResetFlags::RELEASE_RESOURCES)?;
 
         let (src_access_mask, dst_access_mask, src_stage, dst_stage) =
             Self::get_layout_transition_info(old_layout, new_layout)?;
@@ -218,7 +239,6 @@ impl TransferService {
                 },
             )?;
 
-        self.wait_and_reset_fence()?;
         Ok(())
     }
 
@@ -230,7 +250,7 @@ impl TransferService {
         width: u32,
         height: u32,
         mip_levels: u32,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> EngineResult<()> {
         unsafe {
             // Check if image format supports linear blitting
             let format_properties = self
@@ -246,13 +266,29 @@ impl TransferService {
                 .optimal_tiling_features
                 .contains(vk::FormatFeatureFlags::SAMPLED_IMAGE_FILTER_LINEAR)
             {
-                return Err(Box::from(
-                    "Texture image format does not support linear blitting!",
-                ));
+                return Err(EngineError::Image {
+                    operation: crate::core::error::ImageOperation::GenerateMipmaps,
+                    width,
+                    height,
+                    reason: "format does not support linear blitting".to_string(),
+                });
             }
         }
 
-        self.wait_and_reset_fence()?;
+        unsafe {
+            self.device()
+                .wait_for_fences(&[self.fence], true, u64::MAX)
+                .sync_context("wait for transfer fence")?
+        };
+
+        unsafe {
+            self.device()
+                .reset_fences(&[self.fence])
+                .sync_context("reset transfer fence")?
+        };
+
+        self.command_buffer
+            .reset(vk::CommandBufferResetFlags::RELEASE_RESOURCES)?;
 
         self.vulkan_context
             .command_buffer_manager
@@ -389,7 +425,6 @@ impl TransferService {
                 },
             )?;
 
-        self.wait_and_reset_fence()?;
         Ok(())
     }
 }

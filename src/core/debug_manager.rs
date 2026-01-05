@@ -1,6 +1,7 @@
 use ash::{ext::debug_utils, vk, Entry};
-use std::{borrow::Cow, error::Error, ffi, sync::Arc};
+use std::{borrow::Cow, ffi, sync::Arc};
 
+use super::error::{EngineError, EngineResult};
 use super::instance::ManagedInstance;
 
 extern "system" fn vulkan_debug_callback(
@@ -50,7 +51,7 @@ pub struct DebugManager {
 }
 
 impl DebugManager {
-    pub fn new(entry: &Entry, instance: Arc<ManagedInstance>) -> Result<Self, Box<dyn Error>> {
+    pub fn new(entry: &Entry, instance: Arc<ManagedInstance>) -> EngineResult<Self> {
         let debug_info = vk::DebugUtilsMessengerCreateInfoEXT::default()
             .message_severity(
                 vk::DebugUtilsMessageSeverityFlagsEXT::ERROR
@@ -68,7 +69,9 @@ impl DebugManager {
         let debug_callback = unsafe {
             debug_utils_loader
                 .create_debug_utils_messenger(&debug_info, None)
-                .map_err(|e| format!("Failed to create debug messenger: {}", e))?
+                .map_err(|e| {
+                    EngineError::InstanceCreation(format!("debug messenger creation: {:?}", e))
+                })?
         };
 
         Ok(Self {

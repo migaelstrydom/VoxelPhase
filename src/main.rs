@@ -1,5 +1,3 @@
-use std::error::Error;
-
 mod app;
 mod components;
 mod core;
@@ -9,6 +7,7 @@ mod world;
 mod resources;
 
 use crate::app::App;
+use crate::core::error::EngineResult;
 
 fn setup_logging() {
     env_logger::Builder::new()
@@ -16,7 +15,7 @@ fn setup_logging() {
         .init();
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
+fn main() -> EngineResult<()> {
     setup_logging();
     log::info!("Starting RustDude");
 

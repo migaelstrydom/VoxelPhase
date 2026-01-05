@@ -1,8 +1,8 @@
 use ash::{vk, Device};
-use std::error::Error;
 use std::sync::Arc;
 
 use super::device::ManagedDevice;
+use super::error::{EngineError, EngineResult, VkResultExt};
 
 pub struct ManagedCommandBuffer {
     pub command_buffer: vk::CommandBuffer,
@@ -15,13 +15,16 @@ impl ManagedCommandBuffer {
         device: Arc<ManagedDevice>,
         pool: Arc<ManagedCommandPool>,
         level: vk::CommandBufferLevel,
-    ) -> Result<Self, vk::Result> {
+    ) -> EngineResult<Self> {
         let allocate_info = vk::CommandBufferAllocateInfo::default()
-            .command_pool(pool.pool) // Dereference Arc to get vk::CommandPool
+            .command_pool(pool.pool)
             .level(level)
             .command_buffer_count(1);
         unsafe {
-            let command_buffer = device.device.allocate_command_buffers(&allocate_info)?[0];
+            let command_buffer = device
+                .device
+                .allocate_command_buffers(&allocate_info)
+                .command_context("allocate command buffer")?[0];
             Ok(Self {
                 command_buffer,
                 device,
@@ -30,28 +33,33 @@ impl ManagedCommandBuffer {
         }
     }
 
-    pub fn begin(&self, usage_flags: vk::CommandBufferUsageFlags) -> Result<(), vk::Result> {
+    pub fn begin(&self, usage_flags: vk::CommandBufferUsageFlags) -> EngineResult<()> {
         let begin_info = vk::CommandBufferBeginInfo::default().flags(usage_flags);
         unsafe {
             self.device
                 .device
-                .begin_command_buffer(self.command_buffer, &begin_info)?;
+                .begin_command_buffer(self.command_buffer, &begin_info)
+                .command_context("begin command buffer")?;
         }
         Ok(())
     }
 
-    pub fn end(&self) -> Result<(), vk::Result> {
-        unsafe {
-            self.device.device.end_command_buffer(self.command_buffer)?;
-        }
-        Ok(())
-    }
-
-    pub fn reset(&self, flags: vk::CommandBufferResetFlags) -> Result<(), vk::Result> {
+    pub fn end(&self) -> EngineResult<()> {
         unsafe {
             self.device
                 .device
-                .reset_command_buffer(self.command_buffer, flags)?;
+                .end_command_buffer(self.command_buffer)
+                .command_context("end command buffer")?;
+        }
+        Ok(())
+    }
+
+    pub fn reset(&self, flags: vk::CommandBufferResetFlags) -> EngineResult<()> {
+        unsafe {
+            self.device
+                .device
+                .reset_command_buffer(self.command_buffer, flags)
+                .command_context("reset command buffer")?;
         }
         Ok(())
     }
@@ -84,11 +92,16 @@ pub struct ManagedCommandPool {
 }
 
 impl ManagedCommandPool {
-    pub fn new(device: Arc<ManagedDevice>) -> Result<Self, Box<dyn Error>> {
+    pub fn new(device: Arc<ManagedDevice>, queue_family_index: u32) -> EngineResult<Self> {
         let pool_create_info = vk::CommandPoolCreateInfo::default()
-            .queue_family_index(device.queue_family_index)
+            .queue_family_index(queue_family_index)
             .flags(vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER);
-        let pool = unsafe { device.device.create_command_pool(&pool_create_info, None)? };
+        let pool = unsafe {
+            device
+                .device
+                .create_command_pool(&pool_create_info, None)
+                .command_context("create command pool")?
+        };
         Ok(Self { pool, device })
     }
 }
@@ -110,7 +123,7 @@ pub struct CommandBufferManager {
 }
 
 impl CommandBufferManager {
-    pub fn new(device: Arc<ManagedDevice>) -> Result<Self, Box<dyn Error>> {
+    pub fn new(device: Arc<ManagedDevice>) -> EngineResult<Self> {
         let graphics_queue = unsafe {
             device
                 .device
@@ -127,9 +140,18 @@ impl CommandBufferManager {
                 .get_device_queue(device.queue_family_indices.transfer, 0)
         };
 
-        let graphics_command_pool = Arc::new(ManagedCommandPool::new(Arc::clone(&device))?);
-        let compute_command_pool = Arc::new(ManagedCommandPool::new(Arc::clone(&device))?);
-        let transfer_command_pool = Arc::new(ManagedCommandPool::new(Arc::clone(&device))?);
+        let graphics_command_pool = Arc::new(ManagedCommandPool::new(
+            Arc::clone(&device),
+            device.queue_family_indices.graphics,
+        )?);
+        let compute_command_pool = Arc::new(ManagedCommandPool::new(
+            Arc::clone(&device),
+            device.queue_family_indices.compute,
+        )?);
+        let transfer_command_pool = Arc::new(ManagedCommandPool::new(
+            Arc::clone(&device),
+            device.queue_family_indices.transfer,
+        )?);
 
         Ok(Self {
             device,
@@ -142,7 +164,7 @@ impl CommandBufferManager {
         })
     }
 
-    pub fn create_primary_buffer(&self) -> Result<ManagedCommandBuffer, vk::Result> {
+    pub fn create_primary_buffer(&self) -> EngineResult<ManagedCommandBuffer> {
         ManagedCommandBuffer::new(
             Arc::clone(&self.device),
             Arc::clone(&self.graphics_command_pool),
@@ -150,7 +172,7 @@ impl CommandBufferManager {
         )
     }
 
-    pub fn create_compute_buffer(&self) -> Result<ManagedCommandBuffer, vk::Result> {
+    pub fn create_compute_buffer(&self) -> EngineResult<ManagedCommandBuffer> {
         ManagedCommandBuffer::new(
             Arc::clone(&self.device),
             Arc::clone(&self.compute_command_pool),
@@ -158,7 +180,7 @@ impl CommandBufferManager {
         )
     }
 
-    pub fn create_transfer_buffer(&self) -> Result<ManagedCommandBuffer, vk::Result> {
+    pub fn create_transfer_buffer(&self) -> EngineResult<ManagedCommandBuffer> {
         ManagedCommandBuffer::new(
             Arc::clone(&self.device),
             Arc::clone(&self.transfer_command_pool),
@@ -166,7 +188,7 @@ impl CommandBufferManager {
         )
     }
 
-    pub fn create_one_time_submit_buffer(&self) -> Result<ManagedCommandBuffer, vk::Result> {
+    pub fn create_one_time_submit_buffer(&self) -> EngineResult<ManagedCommandBuffer> {
         self.create_primary_buffer()
     }
 
@@ -175,7 +197,7 @@ impl CommandBufferManager {
         buffer: &ManagedCommandBuffer,
         queue: vk::Queue,
         record_commands_fn: F,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> EngineResult<()> {
         unsafe {
             buffer.reset(vk::CommandBufferResetFlags::RELEASE_RESOURCES)?;
             buffer.begin(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)?;
@@ -189,14 +211,20 @@ impl CommandBufferManager {
                 [vk::SubmitInfo::default().command_buffers(std::slice::from_ref(&raw_buffer))];
 
             let fence_create_info = vk::FenceCreateInfo::default();
-            let fence = self.device.device.create_fence(&fence_create_info, None)?;
+            let fence = self
+                .device
+                .device
+                .create_fence(&fence_create_info, None)
+                .sync_context("create fence for submit")?;
 
             self.device
                 .device
-                .queue_submit(queue, &submit_infos, fence)?;
+                .queue_submit(queue, &submit_infos, fence)
+                .command_context("queue submit")?;
             self.device
                 .device
-                .wait_for_fences(&[fence], true, u64::MAX)?;
+                .wait_for_fences(&[fence], true, u64::MAX)
+                .sync_context("wait for submit fence")?;
             self.device.device.destroy_fence(fence, None);
         }
         Ok(())
@@ -206,7 +234,7 @@ impl CommandBufferManager {
         &self,
         buffer: &ManagedCommandBuffer,
         record_commands_fn: F,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> EngineResult<()> {
         self.submit_commands_and_wait_internal(buffer, self.graphics_queue, record_commands_fn)
     }
 
@@ -214,7 +242,7 @@ impl CommandBufferManager {
         &self,
         buffer: &ManagedCommandBuffer,
         record_commands_fn: F,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> EngineResult<()> {
         self.submit_commands_and_wait_internal(buffer, self.compute_queue, record_commands_fn)
     }
 
@@ -222,7 +250,7 @@ impl CommandBufferManager {
         &self,
         buffer: &ManagedCommandBuffer,
         record_commands_fn: F,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> EngineResult<()> {
         self.submit_commands_and_wait_internal(buffer, self.transfer_queue, record_commands_fn)
     }
 
@@ -235,26 +263,27 @@ impl CommandBufferManager {
         signal_semaphores: &[vk::Semaphore],
         wait_dst_stage_mask: &[vk::PipelineStageFlags],
         record_commands_fn: F,
-    ) -> Result<(), vk::Result> {
+    ) -> EngineResult<()> {
+        buffer.reset(vk::CommandBufferResetFlags::RELEASE_RESOURCES)?;
+        buffer.begin(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)?;
+
+        record_commands_fn(&self.device.device, buffer.raw());
+
+        buffer.end()?;
+
+        let raw_buffer = buffer.raw();
+        let command_buffers_slice = std::slice::from_ref(&raw_buffer);
+        let submit_info = vk::SubmitInfo::default()
+            .wait_semaphores(wait_semaphores)
+            .wait_dst_stage_mask(wait_dst_stage_mask)
+            .command_buffers(command_buffers_slice)
+            .signal_semaphores(signal_semaphores);
+
         unsafe {
-            buffer.reset(vk::CommandBufferResetFlags::RELEASE_RESOURCES)?;
-            buffer.begin(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)?;
-
-            record_commands_fn(&self.device.device, buffer.raw());
-
-            buffer.end()?;
-
-            let raw_buffer = buffer.raw();
-            let command_buffers_slice = std::slice::from_ref(&raw_buffer);
-            let submit_info = vk::SubmitInfo::default()
-                .wait_semaphores(wait_semaphores)
-                .wait_dst_stage_mask(wait_dst_stage_mask)
-                .command_buffers(command_buffers_slice)
-                .signal_semaphores(signal_semaphores);
-
             self.device
                 .device
-                .queue_submit(queue, &[submit_info], fence)?;
+                .queue_submit(queue, &[submit_info], fence)
+                .command_context("async queue submit")?;
         }
         Ok(())
     }
@@ -267,7 +296,7 @@ impl CommandBufferManager {
         wait_semaphores: &[vk::Semaphore],
         signal_semaphores: &[vk::Semaphore],
         wait_dst_stage_mask: &[vk::PipelineStageFlags],
-    ) -> Result<(), vk::Result> {
+    ) -> EngineResult<()> {
         unsafe {
             let raw_buffer = buffer.raw();
             let command_buffers_slice = std::slice::from_ref(&raw_buffer);
@@ -279,7 +308,8 @@ impl CommandBufferManager {
 
             self.device
                 .device
-                .queue_submit(queue, &[submit_info], fence)?;
+                .queue_submit(queue, &[submit_info], fence)
+                .command_context("submit recorded commands")?;
         }
         Ok(())
     }
@@ -293,7 +323,7 @@ impl CommandBufferManager {
         signal_semaphores: &[vk::Semaphore],
         wait_dst_stage_mask: &[vk::PipelineStageFlags],
         record_commands_fn: F,
-    ) -> Result<(), vk::Result> {
+    ) -> EngineResult<()> {
         self.submit_commands_async_internal(
             buffer,
             self.graphics_queue,
@@ -313,7 +343,7 @@ impl CommandBufferManager {
         signal_semaphores: &[vk::Semaphore],
         wait_dst_stage_mask: &[vk::PipelineStageFlags],
         record_commands_fn: F,
-    ) -> Result<(), vk::Result> {
+    ) -> EngineResult<()> {
         self.submit_commands_async_internal(
             buffer,
             self.compute_queue,
@@ -333,7 +363,7 @@ impl CommandBufferManager {
         signal_semaphores: &[vk::Semaphore],
         wait_dst_stage_mask: &[vk::PipelineStageFlags],
         record_commands_fn: F,
-    ) -> Result<(), vk::Result> {
+    ) -> EngineResult<()> {
         self.submit_commands_async_internal(
             buffer,
             self.transfer_queue,
@@ -352,7 +382,7 @@ impl CommandBufferManager {
         wait_semaphores: &[vk::Semaphore],
         signal_semaphores: &[vk::Semaphore],
         wait_dst_stage_mask: &[vk::PipelineStageFlags],
-    ) -> Result<(), vk::Result> {
+    ) -> EngineResult<()> {
         self.submit_recorded_commands_async_internal(
             buffer,
             self.graphics_queue,
@@ -370,7 +400,7 @@ impl CommandBufferManager {
         wait_semaphores: &[vk::Semaphore],
         signal_semaphores: &[vk::Semaphore],
         wait_dst_stage_mask: &[vk::PipelineStageFlags],
-    ) -> Result<(), vk::Result> {
+    ) -> EngineResult<()> {
         self.submit_recorded_commands_async_internal(
             buffer,
             self.compute_queue,
@@ -388,7 +418,7 @@ impl CommandBufferManager {
         wait_semaphores: &[vk::Semaphore],
         signal_semaphores: &[vk::Semaphore],
         wait_dst_stage_mask: &[vk::PipelineStageFlags],
-    ) -> Result<(), vk::Result> {
+    ) -> EngineResult<()> {
         self.submit_recorded_commands_async_internal(
             buffer,
             self.transfer_queue,

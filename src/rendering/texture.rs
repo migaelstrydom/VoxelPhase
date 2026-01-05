@@ -1,7 +1,8 @@
-use std::{error::Error, sync::Arc};
+use std::sync::Arc;
 
 use ash::vk;
 
+use crate::core::error::{EngineError, EngineResult, ImageOperation, VkResultExt};
 use crate::core::{device::ManagedDevice, vulkan_context::find_memorytype_index};
 
 pub struct ManagedTexture {
@@ -43,7 +44,7 @@ impl ManagedTexture {
         usage: vk::ImageUsageFlags,
         memory_properties: vk::MemoryPropertyFlags,
         aspect_mask: vk::ImageAspectFlags, // e.g., vk::ImageAspectFlags::COLOR for color textures
-    ) -> Result<Self, Box<dyn Error>> {
+    ) -> EngineResult<Self> {
         unsafe {
             // 1. Create vk::Image
             let image_create_info = vk::ImageCreateInfo::default()
@@ -64,7 +65,8 @@ impl ManagedTexture {
 
             let image = managed_device
                 .device
-                .create_image(&image_create_info, None)?;
+                .create_image(&image_create_info, None)
+                .image_context(ImageOperation::Create, width, height)?;
 
             // 2. Allocate vk::DeviceMemory for the image
             let memory_req = managed_device.device.get_image_memory_requirements(image);
@@ -73,17 +75,26 @@ impl ManagedTexture {
                 &managed_device.device_memory_properties,
                 memory_properties,
             )
-            .ok_or("Unable to find suitable memory type for image.")?;
+            .ok_or_else(|| EngineError::Image {
+                operation: ImageOperation::AllocateMemory,
+                width,
+                height,
+                reason: "Unable to find suitable memory type for image".to_string(),
+            })?;
 
             let allocate_info = vk::MemoryAllocateInfo::default()
                 .allocation_size(memory_req.size)
                 .memory_type_index(memory_type_index);
             let memory = managed_device
                 .device
-                .allocate_memory(&allocate_info, None)?;
+                .allocate_memory(&allocate_info, None)
+                .image_context(ImageOperation::AllocateMemory, width, height)?;
 
             // 3. Bind image memory
-            managed_device.device.bind_image_memory(image, memory, 0)?;
+            managed_device
+                .device
+                .bind_image_memory(image, memory, 0)
+                .image_context(ImageOperation::Bind, width, height)?;
 
             // 4. Create vk::ImageView
             let image_view_create_info = vk::ImageViewCreateInfo::default()
@@ -105,7 +116,8 @@ impl ManagedTexture {
                 });
             let image_view = managed_device
                 .device
-                .create_image_view(&image_view_create_info, None)?;
+                .create_image_view(&image_view_create_info, None)
+                .image_context(ImageOperation::CreateView, width, height)?;
 
             // 5. Create vk::Sampler (with default parameters for now)
             let sampler_create_info = vk::SamplerCreateInfo::default()
@@ -127,7 +139,13 @@ impl ManagedTexture {
 
             let sampler = managed_device
                 .device
-                .create_sampler(&sampler_create_info, None)?;
+                .create_sampler(&sampler_create_info, None)
+                .map_err(|e| EngineError::Image {
+                    operation: ImageOperation::Create,
+                    width,
+                    height,
+                    reason: format!("Failed to create sampler: {:?}", e),
+                })?;
 
             Ok(Self {
                 image,
@@ -152,6 +170,7 @@ impl Drop for ManagedTexture {
                 self.device.device.destroy_sampler(self.sampler, None);
             }
             if self.image_view != vk::ImageView::null() {
+                log::info!("ManagedTexture::drop - Destroying image_view");
                 self.device.device.destroy_image_view(self.image_view, None);
             }
             if self.image != vk::Image::null() {

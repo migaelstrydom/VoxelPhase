@@ -1,26 +1,27 @@
-use std::{error::Error, sync::Arc};
+use std::{collections::HashSet, sync::Arc};
 
 use ash::{vk, Device};
 
+use super::error::{EngineError, EngineResult};
 use super::instance::ManagedInstance;
 
 pub struct ManagedDevice {
     pub device: Device,
     pub physical_device: vk::PhysicalDevice,
-    pub queue_family_index: u32,
     pub queue_family_indices: QueueFamilyIndices,
     pub device_memory_properties: vk::PhysicalDeviceMemoryProperties,
     _instance: Arc<ManagedInstance>, // Keep instance alive
 }
 
 impl ManagedDevice {
-    pub fn new(instance: Arc<ManagedInstance>) -> Result<Self, Box<dyn Error>> {
+    pub fn new(instance: Arc<ManagedInstance>) -> EngineResult<Self> {
         unsafe {
             let pdevices = instance
                 .instance
                 .enumerate_physical_devices()
-                .expect("Physical device error");
-            let (physical_device, queue_family_index) = pdevices
+                .map_err(|e| EngineError::PhysicalDevice(format!("enumeration failed: {:?}", e)))?;
+
+            let (physical_device, _queue_family_index) = pdevices
                 .iter()
                 .find_map(|pdevice| {
                     instance
@@ -36,15 +37,23 @@ impl ManagedDevice {
                             }
                         })
                 })
-                .expect("Couldn't find suitable device.");
+                .ok_or_else(|| {
+                    EngineError::PhysicalDevice("no suitable GPU with graphics support".to_string())
+                })?;
 
             let queue_family_indices =
                 OptionalQueueFamilyIndices::new(&instance.instance, physical_device)
                     .get_indices()
-                    .expect("Couldn't find suitable queue family indices.");
+                    .ok_or_else(|| {
+                        EngineError::PhysicalDevice(
+                            "missing required queue families (graphics/compute/transfer)"
+                                .to_string(),
+                        )
+                    })?;
 
             let features = vk::PhysicalDeviceFeatures {
                 shader_clip_distance: 1,
+                sampler_anisotropy: 1,
                 ..Default::default()
             };
             let device_extension_names_raw = [
@@ -54,24 +63,39 @@ impl ManagedDevice {
             ];
 
             let priorities = [1.0];
-            let queue_info = vk::DeviceQueueCreateInfo::default()
-                .queue_family_index(queue_family_index)
-                .queue_priorities(&priorities);
+            // Create VkDeviceQueueCreateInfo for each unique queue family index
+            let mut unique_queue_family_indices = HashSet::new();
+            unique_queue_family_indices.insert(queue_family_indices.graphics);
+            unique_queue_family_indices.insert(queue_family_indices.compute);
+            unique_queue_family_indices.insert(queue_family_indices.transfer);
+            println!(
+                "Unique queue family indices: {:?}",
+                unique_queue_family_indices
+            );
+
+            let queue_create_infos: Vec<vk::DeviceQueueCreateInfo> = unique_queue_family_indices
+                .iter()
+                .map(|&index| {
+                    vk::DeviceQueueCreateInfo::default()
+                        .queue_family_index(index)
+                        .queue_priorities(&priorities)
+                })
+                .collect();
+
             let device_create_info = vk::DeviceCreateInfo::default()
-                .queue_create_infos(std::slice::from_ref(&queue_info))
+                .queue_create_infos(&queue_create_infos) // Use the collected infos
                 .enabled_extension_names(&device_extension_names_raw)
                 .enabled_features(&features);
-            let device =
-                instance
-                    .instance
-                    .create_device(physical_device, &device_create_info, None)?;
+            let device = instance
+                .instance
+                .create_device(physical_device, &device_create_info, None)
+                .map_err(|e| EngineError::DeviceCreation(format!("{:?}", e)))?;
             let device_memory_properties = instance
                 .instance
                 .get_physical_device_memory_properties(physical_device);
             Ok(Self {
                 device,
                 physical_device,
-                queue_family_index,
                 queue_family_indices,
                 device_memory_properties,
                 _instance: instance,

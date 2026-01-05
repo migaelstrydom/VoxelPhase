@@ -1,4 +1,4 @@
-use crate::rendering::vertex::Vertex;
+use crate::{rendering::vertex::Vertex, resources::textures::TextureHandle};
 use nalgebra::Vector3;
 use specs::{Component, DenseVecStorage, VecStorage};
 
@@ -26,6 +26,7 @@ pub struct SpinSpeed(pub f32); // Radians per logic update
 pub struct Mesh {
     pub vertices: Vec<Vertex>,
     pub indices: Vec<u32>,
+    pub texture_handles: Vec<TextureHandle>,
 }
 
 #[derive(Component, Debug, Default)]

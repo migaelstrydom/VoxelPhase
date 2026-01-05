@@ -1,13 +1,12 @@
 use crate::core::debug_manager::DebugManager;
-use ash::{vk, Device, Entry, Instance};
-use std::{error::Error, os::raw::c_char, sync::Arc};
+use ash::{vk, Device, Entry};
+use std::{os::raw::c_char, sync::Arc};
 use winit::raw_window_handle::HasDisplayHandle;
 
-// Import the moved items
-use crate::core::command_buffer::CommandBufferManager;
-use crate::core::instance::ManagedInstance;
-
+use super::command_buffer::CommandBufferManager;
 use super::device::ManagedDevice;
+use super::error::{EngineError, EngineResult};
+use super::instance::ManagedInstance;
 
 /// Manages Vulkan instance, device, and debug utilities
 pub struct VulkanContext {
@@ -19,7 +18,7 @@ pub struct VulkanContext {
 }
 
 impl VulkanContext {
-    pub fn new(window: &impl HasDisplayHandle) -> Result<Self, Box<dyn Error>> {
+    pub fn new(window: &impl HasDisplayHandle) -> EngineResult<Self> {
         let entry = Entry::linked();
         let app_name = c"VulkanTriangle";
         let layer_names = [c"VK_LAYER_KHRONOS_validation"];
@@ -27,9 +26,17 @@ impl VulkanContext {
             .iter()
             .map(|raw_name| raw_name.as_ptr())
             .collect();
+        let display_handle = window
+            .display_handle()
+            .map_err(|e| EngineError::Window(format!("failed to get display handle: {:?}", e)))?;
         let mut extension_names =
-            ash_window::enumerate_required_extensions(window.display_handle()?.as_raw())
-                .unwrap()
+            ash_window::enumerate_required_extensions(display_handle.as_raw())
+                .map_err(|e| {
+                    EngineError::InstanceCreation(format!(
+                        "failed to enumerate required extensions: {:?}",
+                        e
+                    ))
+                })?
                 .to_vec();
         extension_names.push(ash::ext::debug_utils::NAME.as_ptr());
         #[cfg(any(target_os = "macos", target_os = "ios"))]

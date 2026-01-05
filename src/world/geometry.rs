@@ -3,15 +3,24 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
-use crate::{components::Mesh, rendering::vertex::Vertex};
+use crate::core::error::{EngineError, EngineResult};
+use crate::{components::Mesh, rendering::vertex::Vertex, resources::textures::TextureManager};
 
 pub struct Landscape {
     pub mesh: Mesh,
 }
 
-impl Landscape {
-    pub fn gaia() -> Self {
-        Self {
+pub struct LandscapeLoader<'a> {
+    texture_manager: &'a TextureManager,
+}
+
+impl<'a> LandscapeLoader<'a> {
+    pub fn new(texture_manager: &'a TextureManager) -> Self {
+        Self { texture_manager }
+    }
+
+    pub fn gaia(self) -> EngineResult<Landscape> {
+        Ok(Landscape {
             mesh: Mesh {
                 vertices: vec![
                     Vertex {
@@ -232,16 +241,17 @@ impl Landscape {
                     36, 40, 34, 40, 38, 39, 37, 38, 39, 38, 40, 1, 38, 37, 1, 7, 38, 7, 6, 38, 6,
                     34, 38,
                 ],
+                texture_handles: vec![self.texture_manager.load_texture("data/grass.bmp")?],
             },
-        }
+        })
     }
 
-    pub fn flat_plane() -> Self {
+    pub fn flat_plane(self) -> EngineResult<Landscape> {
         let size = 50.0; // Half-size of the plane
         let y_level = 0.0;
         let grass_color = Vector4::new(0.2, 0.8, 0.2, 1.0); // Green
 
-        Self {
+        Ok(Landscape {
             mesh: Mesh {
                 vertices: vec![
                     Vertex {
@@ -266,11 +276,17 @@ impl Landscape {
                     },
                 ],
                 indices: vec![0, 1, 2, 2, 1, 3],
+                texture_handles: vec![self.texture_manager.load_texture("data/grass.bmp")?],
             },
-        }
+        })
     }
 
-    pub fn from_obj_string(obj_data: &str, default_color: Vector4<f32>) -> Result<Self, String> {
+    pub fn from_obj_string(
+        self,
+        obj_data: &str,
+        default_color: Vector4<f32>,
+        texture_path: &str,
+    ) -> EngineResult<Landscape> {
         let mut obj_positions: Vec<Vector3<f32>> = Vec::new();
         let mut obj_tex_coords: Vec<Vector2<f32>> = Vec::new();
         // let mut obj_normals: Vec<Vector3<f32>> = Vec::new(); // Normals not handled yet
@@ -292,33 +308,41 @@ impl Landscape {
                 "v" => {
                     // Vertex position
                     if parts.len() < 4 {
-                        return Err(format!(
-                            "Invalid vertex line: '{}'. Expected 'v x y z'",
-                            line
-                        ));
+                        return Err(EngineError::Mesh {
+                            path: Some(texture_path.to_string()),
+                            reason: format!("Invalid vertex line: '{}'. Expected 'v x y z'", line),
+                        });
                     }
-                    let x = parts[1].parse::<f32>().map_err(|e| {
-                        format!("Failed to parse vertex x from '{}': {}", parts[1], e)
+                    let x = parts[1].parse::<f32>().map_err(|e| EngineError::Mesh {
+                        path: Some(texture_path.to_string()),
+                        reason: format!("Failed to parse vertex x from '{}': {}", parts[1], e),
                     })?;
-                    let y = parts[2].parse::<f32>().map_err(|e| {
-                        format!("Failed to parse vertex y from '{}': {}", parts[2], e)
+                    let y = parts[2].parse::<f32>().map_err(|e| EngineError::Mesh {
+                        path: Some(texture_path.to_string()),
+                        reason: format!("Failed to parse vertex y from '{}': {}", parts[2], e),
                     })?;
-                    let z = parts[3].parse::<f32>().map_err(|e| {
-                        format!("Failed to parse vertex z from '{}': {}", parts[3], e)
+                    let z = parts[3].parse::<f32>().map_err(|e| EngineError::Mesh {
+                        path: Some(texture_path.to_string()),
+                        reason: format!("Failed to parse vertex z from '{}': {}", parts[3], e),
                     })?;
                     obj_positions.push(Vector3::new(x, y, z));
                 }
                 "vt" => {
                     // Texture coordinate
                     if parts.len() < 3 {
-                        return Err(format!("Invalid texcoord line: '{}'", line));
+                        return Err(EngineError::Mesh {
+                            path: Some(texture_path.to_string()),
+                            reason: format!("Invalid texcoord line: '{}'", line),
+                        });
                     }
-                    let u = parts[1].parse::<f32>().map_err(|e| {
-                        format!("Failed to parse texcoord u from '{}': {}", parts[1], e)
+                    let u = parts[1].parse::<f32>().map_err(|e| EngineError::Mesh {
+                        path: Some(texture_path.to_string()),
+                        reason: format!("Failed to parse texcoord u from '{}': {}", parts[1], e),
                     })?;
                     // OBJ V coordinate can be inverted; often 1.0 - v is needed. Assuming direct use for now.
-                    let v = parts[2].parse::<f32>().map_err(|e| {
-                        format!("Failed to parse texcoord v from '{}': {}", parts[2], e)
+                    let v = parts[2].parse::<f32>().map_err(|e| EngineError::Mesh {
+                        path: Some(texture_path.to_string()),
+                        reason: format!("Failed to parse texcoord v from '{}': {}", parts[2], e),
                     })?;
                     obj_tex_coords.push(Vector2::new(u, v));
                 }
@@ -332,7 +356,10 @@ impl Landscape {
                 "f" => {
                     // Face
                     if parts.len() < 4 {
-                        return Err(format!("Face must have at least 3 vertices: '{}'", line));
+                        return Err(EngineError::Mesh {
+                            path: Some(texture_path.to_string()),
+                            reason: format!("Face must have at least 3 vertices: '{}'", line),
+                        });
                     }
 
                     let mut face_vertex_indices_in_final_list: Vec<u32> = Vec::new();
@@ -342,42 +369,63 @@ impl Landscape {
                         let face_part_str = parts[i];
                         let mut component_indices = face_part_str.split('/');
 
-                        let v_idx_str = component_indices.next().ok_or_else(|| {
-                            format!("Missing vertex index in face part: {}", face_part_str)
-                        })?;
+                        let v_idx_str =
+                            component_indices.next().ok_or_else(|| EngineError::Mesh {
+                                path: Some(texture_path.to_string()),
+                                reason: format!(
+                                    "Missing vertex index in face part: {}",
+                                    face_part_str
+                                ),
+                            })?;
                         if v_idx_str.is_empty() {
-                            return Err(format!(
-                                "Empty vertex index in face part: {}",
-                                face_part_str
-                            ));
+                            return Err(EngineError::Mesh {
+                                path: Some(texture_path.to_string()),
+                                reason: format!(
+                                    "Empty vertex index in face part: {}",
+                                    face_part_str
+                                ),
+                            });
                         }
-                        let v_idx = v_idx_str.parse::<usize>().map_err(|e| {
-                            format!(
+                        let v_idx = v_idx_str.parse::<usize>().map_err(|e| EngineError::Mesh {
+                            path: Some(texture_path.to_string()),
+                            reason: format!(
                                 "Failed to parse vertex index '{}' from '{}': {}",
                                 v_idx_str, face_part_str, e
-                            )
+                            ),
                         })?;
 
                         if v_idx == 0 || v_idx > obj_positions.len() {
-                            return Err(format!(
-                                "Vertex position index {} out of bounds (1 to {}). Line: '{}'",
-                                v_idx,
-                                obj_positions.len(),
-                                line
-                            ));
+                            return Err(EngineError::Mesh {
+                                path: Some(texture_path.to_string()),
+                                reason: format!(
+                                    "Vertex position index {} out of bounds (1 to {}). Line: '{}'",
+                                    v_idx,
+                                    obj_positions.len(),
+                                    line
+                                ),
+                            });
                         }
 
                         let vt_idx_option_str = component_indices.next();
                         let vt_idx_option = match vt_idx_option_str {
                             Some(s) if !s.is_empty() => {
-                                let vt_idx = s.parse::<usize>().map_err(|e| {
-                                    format!(
+                                let vt_idx = s.parse::<usize>().map_err(|e| EngineError::Mesh {
+                                    path: Some(texture_path.to_string()),
+                                    reason: format!(
                                         "Failed to parse texture coord index '{}' from '{}': {}",
                                         s, face_part_str, e
-                                    )
+                                    ),
                                 })?;
                                 if vt_idx == 0 || vt_idx > obj_tex_coords.len() {
-                                    return Err(format!("Texture coord index {} out of bounds (1 to {}). Line: '{}'", vt_idx, obj_tex_coords.len(), line));
+                                    return Err(EngineError::Mesh {
+                                        path: Some(texture_path.to_string()),
+                                        reason: format!(
+                                            "Texture coord index {} out of bounds (1 to {}). Line: '{}'",
+                                            vt_idx,
+                                            obj_tex_coords.len(),
+                                            line
+                                        ),
+                                    });
                                 }
                                 Some(vt_idx)
                             }
@@ -429,24 +477,29 @@ impl Landscape {
             }
         }
 
-        Ok(Self {
+        let texture_handle = self.texture_manager.load_texture(texture_path)?;
+
+        Ok(Landscape {
             mesh: Mesh {
                 vertices: final_vertices,
                 indices: final_indices,
+                texture_handles: vec![texture_handle],
             },
         })
     }
 
-    pub fn load_ripple_obj() -> Result<Self, String> {
+    pub fn load_ripple_obj(self) -> EngineResult<Landscape> {
         let obj_path_str = "data/ripple.obj";
         let obj_path = Path::new(obj_path_str);
 
-        let obj_data = fs::read_to_string(obj_path)
-            .map_err(|e| format!("Failed to read OBJ file at '{}': {}", obj_path_str, e))?;
+        let obj_data = fs::read_to_string(obj_path).map_err(|e| EngineError::Io {
+            path: obj_path_str.to_string(),
+            reason: format!("Failed to read OBJ file: {}", e),
+        })?;
 
         // Let's use a light gray as the default color for the ripple object
         let default_color = Vector4::new(0.7, 0.7, 0.7, 1.0);
 
-        Self::from_obj_string(&obj_data, default_color)
+        self.from_obj_string(&obj_data, default_color, "data/grass.bmp")
     }
 }
