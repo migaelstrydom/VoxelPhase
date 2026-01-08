@@ -17,7 +17,7 @@ use crate::core::vulkan_context::VulkanContext;
 use crate::rendering::descriptors::DescriptorManager;
 use crate::rendering::frame::{FrameData, SceneUbo};
 use crate::rendering::pipeline::{GraphicsPipeline, GraphicsPipelineConfig};
-use crate::rendering::swapchain::Swapchain;
+use crate::rendering::swapchain::{SurfaceInfo, Swapchain};
 use crate::rendering::vertex::Vertex;
 use crate::resources::textures::{TextureHandle, TextureManager};
 
@@ -41,9 +41,12 @@ impl Renderer {
         window_width: u32,
         window_height: u32,
     ) -> EngineResult<Self> {
+        // Create surface and query its format (done once)
+        let surface_info = SurfaceInfo::new(&vulkan_context, window)?;
+
         // Create pipeline first (we need the render pass for swapchain framebuffers)
         let pipeline_config = GraphicsPipelineConfig {
-            color_format: vk::Format::B8G8R8A8_UNORM, // Will be overridden by swapchain format
+            color_format: surface_info.format.format,
             depth_format: vk::Format::D16_UNORM,
             extent: vk::Extent2D {
                 width: window_width,
@@ -53,10 +56,10 @@ impl Renderer {
 
         let pipeline = GraphicsPipeline::new(Arc::clone(&vulkan_context.device), &pipeline_config)?;
 
-        // Create swapchain with framebuffers that reference the render pass
+        // Create swapchain with the existing surface info
         let swapchain = Swapchain::new(
             Arc::clone(&vulkan_context),
-            window,
+            surface_info,
             pipeline.renderpass,
             window_width,
             window_height,
@@ -223,9 +226,14 @@ impl Renderer {
             );
 
             // Draw
-            self.vulkan_context
-                .device()
-                .cmd_draw_indexed(cb, self.frame_data.index_count, 1, 0, 0, 0);
+            self.vulkan_context.device().cmd_draw_indexed(
+                cb,
+                self.frame_data.index_count,
+                1,
+                0,
+                0,
+                0,
+            );
         }
 
         Ok(())

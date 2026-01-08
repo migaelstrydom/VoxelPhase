@@ -93,7 +93,6 @@ pub struct DepthBuffer {
     pub image: vk::Image,
     pub view: vk::ImageView,
     pub memory: vk::DeviceMemory,
-    pub format: vk::Format,
     device: Arc<ManagedDevice>,
 }
 
@@ -117,15 +116,16 @@ impl DepthBuffer {
                 .usage(vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT)
                 .sharing_mode(vk::SharingMode::EXCLUSIVE);
 
-            let image = device
-                .device
-                .create_image(&image_info, None)
-                .map_err(|e| EngineError::Image {
-                    operation: crate::core::error::ImageOperation::Create,
-                    width: extent.width,
-                    height: extent.height,
-                    reason: format!("{:?}", e),
-                })?;
+            let image =
+                device
+                    .device
+                    .create_image(&image_info, None)
+                    .map_err(|e| EngineError::Image {
+                        operation: crate::core::error::ImageOperation::Create,
+                        width: extent.width,
+                        height: extent.height,
+                        reason: format!("{:?}", e),
+                    })?;
 
             let memory_req = device.device.get_image_memory_requirements(image);
             let memory_type_index = find_memorytype_index(
@@ -144,16 +144,15 @@ impl DepthBuffer {
                 .allocation_size(memory_req.size)
                 .memory_type_index(memory_type_index);
 
-            let memory =
-                device
-                    .device
-                    .allocate_memory(&alloc_info, None)
-                    .map_err(|e| EngineError::Image {
-                        operation: crate::core::error::ImageOperation::AllocateMemory,
-                        width: extent.width,
-                        height: extent.height,
-                        reason: format!("{:?}", e),
-                    })?;
+            let memory = device
+                .device
+                .allocate_memory(&alloc_info, None)
+                .map_err(|e| EngineError::Image {
+                    operation: crate::core::error::ImageOperation::AllocateMemory,
+                    width: extent.width,
+                    height: extent.height,
+                    reason: format!("{:?}", e),
+                })?;
 
             device
                 .device
@@ -193,12 +192,37 @@ impl DepthBuffer {
                 image,
                 view,
                 memory,
-                format,
                 device,
             })
         }
     }
 
+    /// Transitions a depth image from `UNDEFINED` to `DEPTH_STENCIL_ATTACHMENT_OPTIMAL` layout.
+    ///
+    /// In Vulkan, images must be in a specific layout to be used efficiently by the GPU. When an
+    /// image is first created, it starts in the `UNDEFINED` layout, which means the image contents
+    /// are undefined and the GPU may not access it in a meaningful way. Before using an image as a
+    /// depth attachment in a render pass, it must be transitioned to `DEPTH_STENCIL_ATTACHMENT_OPTIMAL`,
+    /// which tells the GPU that the image will be used for depth/stencil testing and should be
+    /// arranged in memory for optimal depth buffer access.
+    ///
+    /// This function:
+    /// 1. Creates a one-time submit command buffer
+    /// 2. Records a pipeline barrier that transitions the image layout
+    /// 3. Sets up proper access masks for depth/stencil attachment read/write operations
+    /// 4. Submits the command and waits for completion
+    ///
+    /// # Parameters
+    /// * `vulkan_context` - The Vulkan context containing the command buffer manager
+    /// * `image` - The depth image to transition
+    ///
+    /// # Returns
+    /// * `Ok(())` if the layout transition completed successfully
+    /// * `Err(EngineError)` if command buffer creation or submission failed
+    ///
+    /// # Note
+    /// This is a blocking operation that waits for the GPU to complete the transition before
+    /// returning. This is safe for initialization code but should be avoided in hot paths.
     fn transition_layout(vulkan_context: &VulkanContext, image: vk::Image) -> EngineResult<()> {
         let cmd_buffer = vulkan_context
             .command_buffer_manager
@@ -253,29 +277,30 @@ pub struct Swapchain {
     pub loader: swapchain::Device,
     pub surface_loader: surface::Instance,
     pub surface: vk::SurfaceKHR,
-    pub format: vk::SurfaceFormatKHR,
     pub extent: vk::Extent2D,
     pub image_views: Vec<vk::ImageView>,
     pub framebuffers: Vec<vk::Framebuffer>,
-    pub depth_buffer: DepthBuffer,
+    /// Depth buffer used by all framebuffers. Kept alive to ensure the depth buffer view
+    /// referenced by the framebuffers remains valid. Automatically cleaned up when Swapchain is dropped.
+    #[allow(dead_code)] // Kept for lifetime management, not direct access
+    depth_buffer: DepthBuffer,
     pub sync: FrameSync,
     pub draw_command_buffer: ManagedCommandBuffer,
-    images: Vec<vk::Image>,
     device: Arc<ManagedDevice>,
 }
 
-impl Swapchain {
-    pub fn new(
-        vulkan_context: Arc<VulkanContext>,
-        window: &Window,
-        renderpass: vk::RenderPass,
-        window_width: u32,
-        window_height: u32,
-    ) -> EngineResult<Self> {
-        let device = Arc::clone(&vulkan_context.device);
+/// Surface and format information needed for swapchain creation.
+pub struct SurfaceInfo {
+    pub surface: vk::SurfaceKHR,
+    pub surface_loader: surface::Instance,
+    pub format: vk::SurfaceFormatKHR,
+}
 
+impl SurfaceInfo {
+    /// Create a surface and query its preferred format.
+    /// Prefers sRGB formats for correct gamma handling.
+    pub fn new(vulkan_context: &VulkanContext, window: &Window) -> EngineResult<Self> {
         unsafe {
-            // Create surface
             let display_handle = window
                 .display_handle()
                 .map_err(|e| EngineError::Surface(format!("display handle: {:?}", e)))?;
@@ -295,17 +320,48 @@ impl Swapchain {
             let surface_loader =
                 surface::Instance::new(&vulkan_context.entry, &vulkan_context.instance.instance);
 
-            // Query surface properties
             let formats = surface_loader
                 .get_physical_device_surface_formats(vulkan_context.physical_device(), surface)
                 .map_err(|e| EngineError::Surface(format!("get formats: {:?}", e)))?;
-            let format = formats[0];
 
+            // Prefer sRGB format for correct gamma handling
+            let format = formats
+                .iter()
+                .find(|f| {
+                    f.format == vk::Format::B8G8R8A8_SRGB || f.format == vk::Format::R8G8B8A8_SRGB
+                })
+                .copied()
+                .unwrap_or(formats[0]);
+
+            Ok(Self {
+                surface,
+                surface_loader,
+                format,
+            })
+        }
+    }
+}
+
+impl Swapchain {
+    pub fn new(
+        vulkan_context: Arc<VulkanContext>,
+        surface_info: SurfaceInfo,
+        renderpass: vk::RenderPass,
+        window_width: u32,
+        window_height: u32,
+    ) -> EngineResult<Self> {
+        let device = Arc::clone(&vulkan_context.device);
+
+        unsafe {
+            let SurfaceInfo {
+                surface,
+                surface_loader,
+                format,
+            } = surface_info;
+
+            // Query surface capabilities
             let capabilities = surface_loader
-                .get_physical_device_surface_capabilities(
-                    vulkan_context.physical_device(),
-                    surface,
-                )
+                .get_physical_device_surface_capabilities(vulkan_context.physical_device(), surface)
                 .map_err(|e| EngineError::Surface(format!("get capabilities: {:?}", e)))?;
 
             let mut image_count = capabilities.min_image_count + 1;
@@ -397,8 +453,7 @@ impl Swapchain {
                 .map_err(|e| EngineError::Swapchain(format!("create image views: {:?}", e)))?;
 
             // Create depth buffer
-            let depth_buffer =
-                DepthBuffer::new(&vulkan_context, extent, vk::Format::D16_UNORM)?;
+            let depth_buffer = DepthBuffer::new(&vulkan_context, extent, vk::Format::D16_UNORM)?;
 
             // Create framebuffers
             let framebuffers = image_views
@@ -430,9 +485,7 @@ impl Swapchain {
                 loader,
                 surface_loader,
                 surface,
-                format,
                 extent,
-                images,
                 image_views,
                 framebuffers,
                 depth_buffer,

@@ -36,16 +36,6 @@ impl ResourceManager {
         )
     }
 
-    /// Access the transfer service
-    pub fn transfer_service(&self) -> Arc<TransferService> {
-        self.transfer_service.clone()
-    }
-
-    /// Access the device
-    pub fn device(&self) -> Arc<ManagedDevice> {
-        self.device.clone()
-    }
-
     // Future managers:
     // pub fn create_mesh_manager(&self) -> MeshManager {...}
     // pub fn create_shader_manager(&self) -> ShaderManager {...}

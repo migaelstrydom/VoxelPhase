@@ -62,8 +62,14 @@ impl GraphicsPipeline {
             let renderpass = Self::create_render_pass(&device, config)?;
 
             // Create the graphics pipeline
-            let pipeline =
-                Self::create_pipeline(&device, renderpass, layout, vertex_shader_module, fragment_shader_module, config)?;
+            let pipeline = Self::create_pipeline(
+                &device,
+                renderpass,
+                layout,
+                vertex_shader_module,
+                fragment_shader_module,
+                config,
+            )?;
 
             Ok(Self {
                 pipeline,
@@ -116,7 +122,9 @@ impl GraphicsPipeline {
         }
     }
 
-    fn create_ubo_descriptor_layout(device: &ManagedDevice) -> EngineResult<vk::DescriptorSetLayout> {
+    fn create_ubo_descriptor_layout(
+        device: &ManagedDevice,
+    ) -> EngineResult<vk::DescriptorSetLayout> {
         let bindings = [vk::DescriptorSetLayoutBinding::default()
             .binding(0)
             .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
@@ -333,8 +341,12 @@ impl Drop for GraphicsPipeline {
             log::debug!("GraphicsPipeline::drop - cleaning up pipeline resources");
 
             self.device.device.destroy_pipeline(self.pipeline, None);
-            self.device.device.destroy_pipeline_layout(self.layout, None);
-            self.device.device.destroy_render_pass(self.renderpass, None);
+            self.device
+                .device
+                .destroy_pipeline_layout(self.layout, None);
+            self.device
+                .device
+                .destroy_render_pass(self.renderpass, None);
             self.device
                 .device
                 .destroy_descriptor_set_layout(self.scene_ubo_descriptor_set_layout, None);

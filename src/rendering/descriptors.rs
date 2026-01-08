@@ -155,7 +155,8 @@ impl DescriptorManager {
                         .pools
                         .last()
                         .map(|p| p.capacity)
-                        .unwrap_or(INITIAL_TEXTURE_POOL_SIZE) as f32
+                        .unwrap_or(INITIAL_TEXTURE_POOL_SIZE)
+                        as f32
                         * POOL_GROWTH_FACTOR) as u32;
 
                     log::info!(
@@ -245,16 +246,6 @@ impl DescriptorManager {
             self.device.device.update_descriptor_sets(&write, &[]);
         }
     }
-
-    /// Get statistics about texture descriptor pool usage.
-    pub fn get_texture_pool_stats(&self) -> (usize, u32, u32) {
-        let state = self.texture_state.lock().unwrap();
-        let total_pools = state.pools.len();
-        let total_allocated: u32 = state.pools.iter().map(|p| p.allocated).sum();
-        let total_capacity: u32 = state.pools.iter().map(|p| p.capacity).sum();
-
-        (total_pools, total_allocated, total_capacity)
-    }
 }
 
 impl Drop for DescriptorManager {
@@ -262,7 +253,9 @@ impl Drop for DescriptorManager {
         unsafe {
             // Destroy UBO pool
             if self.ubo_pool != vk::DescriptorPool::null() {
-                self.device.device.destroy_descriptor_pool(self.ubo_pool, None);
+                self.device
+                    .device
+                    .destroy_descriptor_pool(self.ubo_pool, None);
             }
 
             // Destroy all texture pools

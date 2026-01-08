@@ -2,7 +2,7 @@ use ash::{vk, Device};
 use std::sync::Arc;
 
 use super::device::ManagedDevice;
-use super::error::{EngineError, EngineResult, VkResultExt};
+use super::error::{EngineResult, VkResultExt};
 
 pub struct ManagedCommandBuffer {
     pub command_buffer: vk::CommandBuffer,
@@ -386,42 +386,6 @@ impl CommandBufferManager {
         self.submit_recorded_commands_async_internal(
             buffer,
             self.graphics_queue,
-            fence,
-            wait_semaphores,
-            signal_semaphores,
-            wait_dst_stage_mask,
-        )
-    }
-
-    pub fn submit_recorded_compute_commands_async(
-        &self,
-        buffer: &ManagedCommandBuffer,
-        fence: vk::Fence,
-        wait_semaphores: &[vk::Semaphore],
-        signal_semaphores: &[vk::Semaphore],
-        wait_dst_stage_mask: &[vk::PipelineStageFlags],
-    ) -> EngineResult<()> {
-        self.submit_recorded_commands_async_internal(
-            buffer,
-            self.compute_queue,
-            fence,
-            wait_semaphores,
-            signal_semaphores,
-            wait_dst_stage_mask,
-        )
-    }
-
-    pub fn submit_recorded_transfer_commands_async(
-        &self,
-        buffer: &ManagedCommandBuffer,
-        fence: vk::Fence,
-        wait_semaphores: &[vk::Semaphore],
-        signal_semaphores: &[vk::Semaphore],
-        wait_dst_stage_mask: &[vk::PipelineStageFlags],
-    ) -> EngineResult<()> {
-        self.submit_recorded_commands_async_internal(
-            buffer,
-            self.transfer_queue,
             fence,
             wait_semaphores,
             signal_semaphores,

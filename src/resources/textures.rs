@@ -285,33 +285,6 @@ impl TextureManager {
             manager: Arc::clone(&self.inner),
         })
     }
-
-    /// Load texture with explicit settings.
-    ///
-    /// The texture and its descriptor set will be automatically cleaned up
-    /// when the last handle is dropped - no manual cleanup required!
-    pub fn load_texture_with_options<P: AsRef<Path>>(
-        &self,
-        path: P,
-        generate_mipmaps: bool,
-    ) -> EngineResult<TextureHandle> {
-        let texture = Arc::new(
-            self.texture_factory
-                .create_from_file(&path, Some(generate_mipmaps))?,
-        );
-
-        let mut inner = self.inner.lock().unwrap();
-        let id = inner.next_id;
-        inner.next_id += 1;
-
-        inner.textures.insert(id, texture.clone());
-
-        Ok(TextureHandle {
-            texture,
-            id,
-            manager: Arc::clone(&self.inner),
-        })
-    }
 }
 
 impl Drop for TextureManager {

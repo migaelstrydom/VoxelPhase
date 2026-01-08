@@ -24,13 +24,6 @@ pub enum EngineError {
     /// Swapchain creation or acquisition failed
     Swapchain(String),
 
-    /// Memory allocation failed
-    MemoryAllocation {
-        size: u64,
-        memory_type: u32,
-        reason: String,
-    },
-
     /// Buffer creation or operation failed
     Buffer {
         operation: BufferOperation,
@@ -47,10 +40,7 @@ pub enum EngineError {
     },
 
     /// Shader compilation or module creation failed
-    Shader {
-        stage: ShaderStage,
-        reason: String,
-    },
+    Shader { stage: ShaderStage, reason: String },
 
     /// Graphics or compute pipeline creation failed
     Pipeline(String),
@@ -82,20 +72,11 @@ pub enum EngineError {
         reason: String,
     },
 
-    /// Resource not found
-    ResourceNotFound {
-        resource_type: &'static str,
-        identifier: String,
-    },
-
     /// Invalid state or precondition
     InvalidState(String),
 
     /// I/O error (file operations)
-    Io {
-        path: String,
-        reason: String,
-    },
+    Io { path: String, reason: String },
 
     /// Window or display error
     Window(String),
@@ -131,10 +112,6 @@ pub enum ImageOperation {
 pub enum ShaderStage {
     Vertex,
     Fragment,
-    Compute,
-    Geometry,
-    TessellationControl,
-    TessellationEvaluation,
 }
 
 impl fmt::Display for EngineError {
@@ -145,17 +122,6 @@ impl fmt::Display for EngineError {
             Self::DeviceCreation(msg) => write!(f, "Device creation failed: {}", msg),
             Self::Surface(msg) => write!(f, "Surface error: {}", msg),
             Self::Swapchain(msg) => write!(f, "Swapchain error: {}", msg),
-            Self::MemoryAllocation {
-                size,
-                memory_type,
-                reason,
-            } => {
-                write!(
-                    f,
-                    "Memory allocation failed: {} bytes, type {}: {}",
-                    size, memory_type, reason
-                )
-            }
             Self::Buffer {
                 operation,
                 size,
@@ -196,12 +162,6 @@ impl fmt::Display for EngineError {
                 Some(p) => write!(f, "Mesh error ({}): {}", p, reason),
                 None => write!(f, "Mesh error: {}", reason),
             },
-            Self::ResourceNotFound {
-                resource_type,
-                identifier,
-            } => {
-                write!(f, "{} not found: {}", resource_type, identifier)
-            }
             Self::InvalidState(msg) => write!(f, "Invalid state: {}", msg),
             Self::Io { path, reason } => write!(f, "I/O error ({}): {}", path, reason),
             Self::Window(msg) => write!(f, "Window error: {}", msg),

@@ -39,7 +39,11 @@ impl Camera {
     }
 
     pub fn get_projection_matrix(&self) -> Matrix4<f32> {
-        Matrix4::new_perspective(self.aspect_ratio, self.fov_y_radians, self.znear, self.zfar)
+        let mut proj =
+            Matrix4::new_perspective(self.aspect_ratio, self.fov_y_radians, self.znear, self.zfar);
+        // Vulkan's Y-axis points down in clip space, flip it
+        proj[(1, 1)] *= -1.0;
+        proj
     }
 }
 
