@@ -46,13 +46,22 @@ impl GraphicsPipeline {
             let scene_ubo_descriptor_set_layout = Self::create_ubo_descriptor_layout(&device)?;
             let sampler_descriptor_set_layout = Self::create_sampler_descriptor_layout(&device)?;
 
-            // Create pipeline layout
+            // Create pipeline layout with push constants for per-object model matrix
             let set_layouts = [
                 scene_ubo_descriptor_set_layout,
                 sampler_descriptor_set_layout,
             ];
-            let pipeline_layout_create_info =
-                vk::PipelineLayoutCreateInfo::default().set_layouts(&set_layouts);
+
+            // Push constant range for model matrix (mat4 = 64 bytes)
+            let push_constant_ranges = [vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::VERTEX,
+                offset: 0,
+                size: std::mem::size_of::<nalgebra::Matrix4<f32>>() as u32,
+            }];
+
+            let pipeline_layout_create_info = vk::PipelineLayoutCreateInfo::default()
+                .set_layouts(&set_layouts)
+                .push_constant_ranges(&push_constant_ranges);
             let layout = device
                 .device
                 .create_pipeline_layout(&pipeline_layout_create_info, None)

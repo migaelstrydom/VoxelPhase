@@ -14,8 +14,10 @@ use winit::window::Window;
 
 use crate::core::error::EngineResult;
 use crate::core::vulkan_context::VulkanContext;
+use crate::model::{Model, Transform};
 use crate::rendering::descriptors::DescriptorManager;
 use crate::rendering::frame::{FrameData, SceneUbo};
+use crate::rendering::material::MaterialManager;
 use crate::rendering::pipeline::{GraphicsPipeline, GraphicsPipelineConfig};
 use crate::rendering::swapchain::{SurfaceInfo, Swapchain};
 use crate::rendering::vertex::Vertex;
@@ -97,9 +99,12 @@ impl Renderer {
     }
 
     /// Begin a new frame: wait for previous frame, acquire swapchain image.
-    pub fn begin_frame(&self) -> EngineResult<(vk::CommandBuffer, u32)> {
+    pub fn begin_frame(&mut self) -> EngineResult<(vk::CommandBuffer, u32)> {
         // Wait for previous frame to complete
         self.swapchain.sync.wait_and_reset()?;
+
+        // Now that the GPU is done with previous frames, flush deferred deletions
+        self.frame_data.begin_frame();
 
         // Acquire next swapchain image
         let image_index = self.swapchain.acquire_next_image()?;
@@ -143,23 +148,69 @@ impl Renderer {
         Ok((cb, image_index))
     }
 
-    /// Draw a mesh with the given transform and texture.
-    pub fn draw_mesh(
+    /// Update per-frame scene data (view/projection matrices).
+    /// Call this once at the start of each frame, before any draw calls.
+    pub fn update_scene(&mut self, view: &Matrix4<f32>, proj: &Matrix4<f32>) -> EngineResult<()> {
+        self.frame_data.update_scene_ubo(view, proj)
+    }
+
+    /// Draw a complete model with per-part transforms applied.
+    ///
+    /// This iterates through all model parts and draws each primitive,
+    /// applying the part's local transform combined with the world transform.
+    pub fn draw_model(
+        &mut self,
+        cb: vk::CommandBuffer,
+        model: &Model,
+        world_transform: &Matrix4<f32>,
+        part_transforms: &[Transform],
+        material_manager: &MaterialManager,
+        texture_manager: &TextureManager,
+    ) -> EngineResult<()> {
+        for (part_idx, part) in model.parts.iter().enumerate() {
+            // Get the animated/modified transform for this part
+            let part_transform = if part_idx < part_transforms.len() {
+                part.local_transform.compose(&part_transforms[part_idx])
+            } else {
+                part.local_transform.clone()
+            };
+
+            let part_matrix = part_transform.to_matrix();
+            let final_transform = world_transform * part_matrix;
+
+            // Draw each primitive in this part
+            for primitive in &part.primitives {
+                let texture = material_manager.get_effective_texture(primitive.material);
+
+                self.draw_mesh_with_texture(
+                    cb,
+                    &primitive.vertices,
+                    &primitive.indices,
+                    &final_transform,
+                    texture,
+                    texture_manager,
+                )?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Draw a mesh with a specific texture handle.
+    ///
+    /// This is a lower-level method used by draw_model.
+    fn draw_mesh_with_texture(
         &mut self,
         cb: vk::CommandBuffer,
         vertices: &[Vertex],
         indices: &[u32],
         model: &Matrix4<f32>,
-        view: &Matrix4<f32>,
-        proj: &Matrix4<f32>,
-        texture_handles: &[TextureHandle],
+        texture: &TextureHandle,
         texture_manager: &TextureManager,
     ) -> EngineResult<()> {
-        // Update frame data buffers
-        self.frame_data.update_mesh_data(vertices, indices)?;
-        self.frame_data.update_transforms(model, view, proj)?;
+        // Append mesh data to frame buffers and get draw offsets
+        let draw_info = self.frame_data.append_mesh_data(vertices, indices)?;
 
-        // Bind pipeline
         unsafe {
             self.vulkan_context.device().cmd_bind_pipeline(
                 cb,
@@ -185,20 +236,26 @@ impl Renderer {
                 .device()
                 .cmd_set_scissor(cb, 0, &scissors);
 
+            // Push model matrix (per-draw data)
+            let model_bytes: &[u8] = std::slice::from_raw_parts(
+                model.as_ptr() as *const u8,
+                std::mem::size_of::<Matrix4<f32>>(),
+            );
+            self.vulkan_context.device().cmd_push_constants(
+                cb,
+                self.pipeline.layout,
+                vk::ShaderStageFlags::VERTEX,
+                0,
+                model_bytes,
+            );
+
             // Get texture descriptor set
-            let texture_set = if !texture_handles.is_empty() {
-                texture_manager
-                    .get_or_create_descriptor_set(&texture_handles[0])
-                    .map_err(|e| crate::core::error::EngineError::Texture {
-                        path: None,
-                        reason: format!("descriptor set creation: {}", e),
-                    })?
-            } else {
-                return Err(crate::core::error::EngineError::Texture {
+            let texture_set = texture_manager
+                .get_or_create_descriptor_set(texture)
+                .map_err(|e| crate::core::error::EngineError::Texture {
                     path: None,
-                    reason: "no texture provided for mesh".to_string(),
-                });
-            };
+                    reason: format!("descriptor set creation: {}", e),
+                })?;
 
             // Bind descriptor sets
             let descriptor_sets = [self.descriptors.scene_ubo_set, texture_set];
@@ -228,10 +285,10 @@ impl Renderer {
             // Draw
             self.vulkan_context.device().cmd_draw_indexed(
                 cb,
-                self.frame_data.index_count,
+                draw_info.index_count,
                 1,
-                0,
-                0,
+                draw_info.first_index,
+                draw_info.vertex_offset,
                 0,
             );
         }
@@ -274,6 +331,8 @@ impl Drop for Renderer {
             log::info!("Renderer::drop - waiting for device idle");
             let _ = self.vulkan_context.device().device_wait_idle();
         }
+        // Flush any pending buffer deletions now that GPU is idle
+        self.frame_data.cleanup();
         // Components drop in reverse order due to struct field ordering
     }
 }

@@ -2,6 +2,7 @@
 
 use crate::core::device::ManagedDevice;
 use crate::core::error::{EngineError, EngineResult, ImageOperation};
+use crate::rendering::colour::Colour;
 use crate::rendering::descriptors::DescriptorManager;
 use crate::rendering::texture::ManagedTexture;
 use std::{
@@ -191,6 +192,88 @@ impl TextureFactory {
 
         Ok(texture)
     }
+
+    /// Create a 1x1 solid colour texture.
+    pub fn create_solid_colour(&self, colour: Colour) -> EngineResult<ManagedTexture> {
+        let width = 1u32;
+        let height = 1u32;
+        let mip_levels = 1u32;
+
+        // Create RGBA pixel data
+        let r = (colour.r.clamp(0.0, 1.0) * 255.0) as u8;
+        let g = (colour.g.clamp(0.0, 1.0) * 255.0) as u8;
+        let b = (colour.b.clamp(0.0, 1.0) * 255.0) as u8;
+        let a = (colour.a.clamp(0.0, 1.0) * 255.0) as u8;
+        let image_data: [u8; 4] = [r, g, b, a];
+        let image_size = image_data.len() as u64;
+
+        let staging_buffer = crate::rendering::frame::ManagedBuffer::new(
+            self.device.clone(),
+            image_size,
+            vk::BufferUsageFlags::TRANSFER_SRC,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+        )
+        .map_err(|e| EngineError::Buffer {
+            operation: crate::core::error::BufferOperation::Create,
+            size: image_size,
+            reason: e.to_string(),
+        })?;
+
+        unsafe {
+            let data_ptr = self.device.device.map_memory(
+                staging_buffer.memory,
+                0,
+                image_size,
+                vk::MemoryMapFlags::empty(),
+            )? as *mut u8;
+
+            std::ptr::copy_nonoverlapping(image_data.as_ptr(), data_ptr, image_data.len());
+            self.device.device.unmap_memory(staging_buffer.memory);
+        }
+
+        let texture = ManagedTexture::new(
+            self.device.clone(),
+            width,
+            height,
+            mip_levels,
+            vk::Format::R8G8B8A8_SRGB,
+            vk::ImageTiling::OPTIMAL,
+            vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED,
+            vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            vk::ImageAspectFlags::COLOR,
+        )
+        .map_err(|e| EngineError::Image {
+            operation: ImageOperation::Create,
+            width,
+            height,
+            reason: e.to_string(),
+        })?;
+
+        self.transfer_service.transition_image_layout(
+            texture.image,
+            vk::Format::R8G8B8A8_SRGB,
+            vk::ImageLayout::UNDEFINED,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            mip_levels,
+        )?;
+
+        self.transfer_service.copy_buffer_to_image(
+            staging_buffer.buffer,
+            texture.image,
+            width,
+            height,
+        )?;
+
+        self.transfer_service.transition_image_layout(
+            texture.image,
+            vk::Format::R8G8B8A8_SRGB,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            mip_levels,
+        )?;
+
+        Ok(texture)
+    }
 }
 
 impl Clone for TextureFactory {
@@ -278,6 +361,27 @@ impl TextureManager {
         inner.next_id += 1;
 
         inner.textures.insert(id, texture.clone());
+
+        Ok(TextureHandle {
+            texture,
+            id,
+            manager: Arc::clone(&self.inner),
+        })
+    }
+
+    /// Create a 1x1 solid colour texture.
+    ///
+    /// Useful for fallback textures or when materials don't need textures.
+    pub fn create_solid_colour(&self, colour: Colour) -> EngineResult<TextureHandle> {
+        let texture = Arc::new(self.texture_factory.create_solid_colour(colour)?);
+
+        let mut inner = self.inner.lock().unwrap();
+        let id = inner.next_id;
+        inner.next_id += 1;
+
+        inner.textures.insert(id, texture.clone());
+
+        log::debug!("Created solid colour texture (id={})", id);
 
         Ok(TextureHandle {
             texture,

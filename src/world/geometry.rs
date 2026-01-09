@@ -1,10 +1,13 @@
-use nalgebra::{Matrix4, Quaternion, UnitQuaternion, Vector2, Vector3, Vector4};
+use nalgebra::{Vector2, Vector3, Vector4};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
 use crate::core::error::{EngineError, EngineResult};
-use crate::{components::Mesh, rendering::vertex::Vertex, resources::textures::TextureManager};
+use crate::model::{MeshPrimitive, Model, ModelPart};
+use crate::rendering::colour::Colour;
+use crate::rendering::material::MaterialId;
+use crate::rendering::vertex::Vertex;
 
 /// Helper function to compute smooth vertex normals from an indexed mesh
 fn compute_smooth_normals(positions: &[Vector3<f32>], indices: &[u32]) -> Vec<Vector3<f32>> {
@@ -48,20 +51,25 @@ fn compute_smooth_normals(positions: &[Vector3<f32>], indices: &[u32]) -> Vec<Ve
     normals
 }
 
-pub struct Landscape {
-    pub mesh: Mesh,
+/// Loads landscape/terrain geometry and returns Models.
+pub struct LandscapeLoader {
+    material: MaterialId,
+    colour: Colour,
 }
 
-pub struct LandscapeLoader<'a> {
-    texture_manager: &'a TextureManager,
-}
-
-impl<'a> LandscapeLoader<'a> {
-    pub fn new(texture_manager: &'a TextureManager) -> Self {
-        Self { texture_manager }
+impl LandscapeLoader {
+    /// Create a new loader with the given material and vertex colour.
+    pub fn new(material: MaterialId, colour: Colour) -> Self {
+        Self { material, colour }
     }
 
-    pub fn gaia(self) -> EngineResult<Landscape> {
+    /// Create a loader with white vertex colour (texture shows through).
+    pub fn textured(material: MaterialId) -> Self {
+        Self::new(material, Colour::WHITE)
+    }
+
+    #[allow(dead_code)]
+    pub fn gaia(&self) -> EngineResult<Model> {
         // Define positions
         let positions = vec![
             Vector3::new(0.0, 0.0, 0.0),
@@ -122,6 +130,7 @@ impl<'a> LandscapeLoader<'a> {
 
         // Compute smooth normals
         let normals = compute_smooth_normals(&positions, &indices);
+        let colour_vec = self.colour.to_vec4();
 
         // Build vertices with computed normals
         let vertices: Vec<Vertex> = positions
@@ -129,73 +138,66 @@ impl<'a> LandscapeLoader<'a> {
             .zip(normals.iter())
             .map(|(pos, normal)| Vertex {
                 pos: Vector4::new(pos.x, pos.y, pos.z, 1.0),
-                color: Vector4::new(1.0, 1.0, 1.0, 1.0),
+                color: colour_vec,
                 tex_coords: Vector2::new(0.0, 0.0),
                 normal: *normal,
             })
             .collect();
 
-        Ok(Landscape {
-            mesh: Mesh {
-                vertices,
-                indices,
-                texture_handles: vec![self.texture_manager.load_texture("data/grass.bmp")?],
-            },
-        })
+        Ok(Model::flat(vec![ModelPart::new(vec![MeshPrimitive {
+            vertices,
+            indices,
+            material: self.material,
+        }])]))
     }
 
-    pub fn flat_plane(self) -> EngineResult<Landscape> {
+    #[allow(dead_code)]
+    pub fn flat_plane(&self) -> Model {
         let size = 50.0; // Half-size of the plane
         let y_level = 0.0;
-        let grass_color = Vector4::new(0.2, 0.8, 0.2, 1.0); // Green
-        let up_normal = Vector3::new(0.0, 1.0, 0.0); // Upward normal for flat plane
+        let colour_vec = self.colour.to_vec4();
+        let up_normal = Vector3::new(0.0, 1.0, 0.0);
 
-        Ok(Landscape {
-            mesh: Mesh {
-                vertices: vec![
-                    Vertex {
-                        pos: Vector4::new(-size, y_level, -size, 1.0),
-                        color: grass_color,
-                        tex_coords: Vector2::new(0.0, 0.0),
-                        normal: up_normal,
-                    },
-                    Vertex {
-                        pos: Vector4::new(-size, y_level, size, 1.0),
-                        color: grass_color,
-                        tex_coords: Vector2::new(0.0, 1.0),
-                        normal: up_normal,
-                    },
-                    Vertex {
-                        pos: Vector4::new(size, y_level, -size, 1.0),
-                        color: grass_color,
-                        tex_coords: Vector2::new(1.0, 0.0),
-                        normal: up_normal,
-                    },
-                    Vertex {
-                        pos: Vector4::new(size, y_level, size, 1.0),
-                        color: grass_color,
-                        tex_coords: Vector2::new(1.0, 1.0),
-                        normal: up_normal,
-                    },
-                ],
-                indices: vec![0, 1, 2, 2, 1, 3],
-                texture_handles: vec![self.texture_manager.load_texture("data/grass.bmp")?],
-            },
-        })
+        Model::flat(vec![ModelPart::new(vec![MeshPrimitive {
+            vertices: vec![
+                Vertex {
+                    pos: Vector4::new(-size, y_level, -size, 1.0),
+                    color: colour_vec,
+                    tex_coords: Vector2::new(0.0, 0.0),
+                    normal: up_normal,
+                },
+                Vertex {
+                    pos: Vector4::new(-size, y_level, size, 1.0),
+                    color: colour_vec,
+                    tex_coords: Vector2::new(0.0, 1.0),
+                    normal: up_normal,
+                },
+                Vertex {
+                    pos: Vector4::new(size, y_level, -size, 1.0),
+                    color: colour_vec,
+                    tex_coords: Vector2::new(1.0, 0.0),
+                    normal: up_normal,
+                },
+                Vertex {
+                    pos: Vector4::new(size, y_level, size, 1.0),
+                    color: colour_vec,
+                    tex_coords: Vector2::new(1.0, 1.0),
+                    normal: up_normal,
+                },
+            ],
+            indices: vec![0, 1, 2, 2, 1, 3],
+            material: self.material,
+        }])])
     }
 
-    pub fn from_obj_string(
-        self,
-        obj_data: &str,
-        default_color: Vector4<f32>,
-        texture_path: &str,
-    ) -> EngineResult<Landscape> {
+    pub fn from_obj_string(&self, obj_data: &str, obj_name: &str) -> EngineResult<Model> {
         let mut obj_positions: Vec<Vector3<f32>> = Vec::new();
         let mut obj_tex_coords: Vec<Vector2<f32>> = Vec::new();
         let mut obj_normals: Vec<Vector3<f32>> = Vec::new();
 
         let mut final_vertices: Vec<Vertex> = Vec::new();
         let mut final_indices: Vec<u32> = Vec::new();
+        let colour_vec = self.colour.to_vec4();
 
         // Key: (vertex_idx, tex_coord_idx_option, normal_idx_option)
         let mut vertex_map: HashMap<(usize, Option<usize>, Option<usize>), u32> = HashMap::new();
@@ -212,20 +214,20 @@ impl<'a> LandscapeLoader<'a> {
                     // Vertex position
                     if parts.len() < 4 {
                         return Err(EngineError::Mesh {
-                            path: Some(texture_path.to_string()),
+                            path: Some(obj_name.to_string()),
                             reason: format!("Invalid vertex line: '{}'. Expected 'v x y z'", line),
                         });
                     }
                     let x = parts[1].parse::<f32>().map_err(|e| EngineError::Mesh {
-                        path: Some(texture_path.to_string()),
+                        path: Some(obj_name.to_string()),
                         reason: format!("Failed to parse vertex x from '{}': {}", parts[1], e),
                     })?;
                     let y = parts[2].parse::<f32>().map_err(|e| EngineError::Mesh {
-                        path: Some(texture_path.to_string()),
+                        path: Some(obj_name.to_string()),
                         reason: format!("Failed to parse vertex y from '{}': {}", parts[2], e),
                     })?;
                     let z = parts[3].parse::<f32>().map_err(|e| EngineError::Mesh {
-                        path: Some(texture_path.to_string()),
+                        path: Some(obj_name.to_string()),
                         reason: format!("Failed to parse vertex z from '{}': {}", parts[3], e),
                     })?;
                     obj_positions.push(Vector3::new(x, y, z));
@@ -234,17 +236,17 @@ impl<'a> LandscapeLoader<'a> {
                     // Texture coordinate
                     if parts.len() < 3 {
                         return Err(EngineError::Mesh {
-                            path: Some(texture_path.to_string()),
+                            path: Some(obj_name.to_string()),
                             reason: format!("Invalid texcoord line: '{}'", line),
                         });
                     }
                     let u = parts[1].parse::<f32>().map_err(|e| EngineError::Mesh {
-                        path: Some(texture_path.to_string()),
+                        path: Some(obj_name.to_string()),
                         reason: format!("Failed to parse texcoord u from '{}': {}", parts[1], e),
                     })?;
                     // OBJ V coordinate can be inverted; often 1.0 - v is needed. Assuming direct use for now.
                     let v = parts[2].parse::<f32>().map_err(|e| EngineError::Mesh {
-                        path: Some(texture_path.to_string()),
+                        path: Some(obj_name.to_string()),
                         reason: format!("Failed to parse texcoord v from '{}': {}", parts[2], e),
                     })?;
                     obj_tex_coords.push(Vector2::new(u, v));
@@ -253,20 +255,20 @@ impl<'a> LandscapeLoader<'a> {
                     // Vertex normal
                     if parts.len() < 4 {
                         return Err(EngineError::Mesh {
-                            path: Some(texture_path.to_string()),
+                            path: Some(obj_name.to_string()),
                             reason: format!("Invalid normal line: '{}'. Expected 'vn x y z'", line),
                         });
                     }
                     let nx = parts[1].parse::<f32>().map_err(|e| EngineError::Mesh {
-                        path: Some(texture_path.to_string()),
+                        path: Some(obj_name.to_string()),
                         reason: format!("Failed to parse normal x from '{}': {}", parts[1], e),
                     })?;
                     let ny = parts[2].parse::<f32>().map_err(|e| EngineError::Mesh {
-                        path: Some(texture_path.to_string()),
+                        path: Some(obj_name.to_string()),
                         reason: format!("Failed to parse normal y from '{}': {}", parts[2], e),
                     })?;
                     let nz = parts[3].parse::<f32>().map_err(|e| EngineError::Mesh {
-                        path: Some(texture_path.to_string()),
+                        path: Some(obj_name.to_string()),
                         reason: format!("Failed to parse normal z from '{}': {}", parts[3], e),
                     })?;
                     obj_normals.push(Vector3::new(nx, ny, nz));
@@ -275,7 +277,7 @@ impl<'a> LandscapeLoader<'a> {
                     // Face
                     if parts.len() < 4 {
                         return Err(EngineError::Mesh {
-                            path: Some(texture_path.to_string()),
+                            path: Some(obj_name.to_string()),
                             reason: format!("Face must have at least 3 vertices: '{}'", line),
                         });
                     }
@@ -289,7 +291,7 @@ impl<'a> LandscapeLoader<'a> {
 
                         let v_idx_str =
                             component_indices.next().ok_or_else(|| EngineError::Mesh {
-                                path: Some(texture_path.to_string()),
+                                path: Some(obj_name.to_string()),
                                 reason: format!(
                                     "Missing vertex index in face part: {}",
                                     face_part_str
@@ -297,7 +299,7 @@ impl<'a> LandscapeLoader<'a> {
                             })?;
                         if v_idx_str.is_empty() {
                             return Err(EngineError::Mesh {
-                                path: Some(texture_path.to_string()),
+                                path: Some(obj_name.to_string()),
                                 reason: format!(
                                     "Empty vertex index in face part: {}",
                                     face_part_str
@@ -305,7 +307,7 @@ impl<'a> LandscapeLoader<'a> {
                             });
                         }
                         let v_idx = v_idx_str.parse::<usize>().map_err(|e| EngineError::Mesh {
-                            path: Some(texture_path.to_string()),
+                            path: Some(obj_name.to_string()),
                             reason: format!(
                                 "Failed to parse vertex index '{}' from '{}': {}",
                                 v_idx_str, face_part_str, e
@@ -314,7 +316,7 @@ impl<'a> LandscapeLoader<'a> {
 
                         if v_idx == 0 || v_idx > obj_positions.len() {
                             return Err(EngineError::Mesh {
-                                path: Some(texture_path.to_string()),
+                                path: Some(obj_name.to_string()),
                                 reason: format!(
                                     "Vertex position index {} out of bounds (1 to {}). Line: '{}'",
                                     v_idx,
@@ -328,7 +330,7 @@ impl<'a> LandscapeLoader<'a> {
                         let vt_idx_option = match vt_idx_option_str {
                             Some(s) if !s.is_empty() => {
                                 let vt_idx = s.parse::<usize>().map_err(|e| EngineError::Mesh {
-                                    path: Some(texture_path.to_string()),
+                                    path: Some(obj_name.to_string()),
                                     reason: format!(
                                         "Failed to parse texture coord index '{}' from '{}': {}",
                                         s, face_part_str, e
@@ -336,7 +338,7 @@ impl<'a> LandscapeLoader<'a> {
                                 })?;
                                 if vt_idx == 0 || vt_idx > obj_tex_coords.len() {
                                     return Err(EngineError::Mesh {
-                                        path: Some(texture_path.to_string()),
+                                        path: Some(obj_name.to_string()),
                                         reason: format!(
                                             "Texture coord index {} out of bounds (1 to {}). Line: '{}'",
                                             vt_idx,
@@ -355,7 +357,7 @@ impl<'a> LandscapeLoader<'a> {
                         let vn_idx_option = match vn_idx_option_str {
                             Some(s) if !s.is_empty() => {
                                 let vn_idx = s.parse::<usize>().map_err(|e| EngineError::Mesh {
-                                    path: Some(texture_path.to_string()),
+                                    path: Some(obj_name.to_string()),
                                     reason: format!(
                                         "Failed to parse normal index '{}' from '{}': {}",
                                         s, face_part_str, e
@@ -363,7 +365,7 @@ impl<'a> LandscapeLoader<'a> {
                                 })?;
                                 if vn_idx == 0 || vn_idx > obj_normals.len() {
                                     return Err(EngineError::Mesh {
-                                        path: Some(texture_path.to_string()),
+                                        path: Some(obj_name.to_string()),
                                         reason: format!(
                                             "Normal index {} out of bounds (1 to {}). Line: '{}'",
                                             vn_idx,
@@ -392,7 +394,7 @@ impl<'a> LandscapeLoader<'a> {
 
                                 let new_vertex = Vertex {
                                     pos: Vector4::new(pos3d.x, pos3d.y, pos3d.z, 1.0),
-                                    color: default_color,
+                                    color: colour_vec,
                                     tex_coords: tex_coords_2d,
                                     normal: normal3d,
                                 };
@@ -445,18 +447,14 @@ impl<'a> LandscapeLoader<'a> {
             }
         }
 
-        let texture_handle = self.texture_manager.load_texture(texture_path)?;
-
-        Ok(Landscape {
-            mesh: Mesh {
-                vertices: final_vertices,
-                indices: final_indices,
-                texture_handles: vec![texture_handle],
-            },
-        })
+        Ok(Model::flat(vec![ModelPart::new(vec![MeshPrimitive {
+            vertices: final_vertices,
+            indices: final_indices,
+            material: self.material,
+        }])]))
     }
 
-    pub fn load_ripple_obj(self) -> EngineResult<Landscape> {
+    pub fn load_ripple_obj(&self) -> EngineResult<Model> {
         let obj_path_str = "data/ripple.obj";
         let obj_path = Path::new(obj_path_str);
 
@@ -465,9 +463,6 @@ impl<'a> LandscapeLoader<'a> {
             reason: format!("Failed to read OBJ file: {}", e),
         })?;
 
-        // Use white so vertex color doesn't darken the texture
-        let default_color = Vector4::new(1.0, 1.0, 1.0, 1.0);
-
-        self.from_obj_string(&obj_data, default_color, "data/grass.bmp")
+        self.from_obj_string(&obj_data, obj_path_str)
     }
 }

@@ -79,7 +79,7 @@ impl<'a> System<'a> for PlayerInputSystem {
                 move_dir = move_dir.normalize();
 
                 // Update facing direction based on movement
-                state.facing_direction = move_dir.z.atan2(move_dir.x);
+                state.facing_direction = -move_dir.z.atan2(move_dir.x) + std::f32::consts::PI / 2.0;
             }
 
             // Apply horizontal velocity (preserve vertical velocity for gravity/jumping)

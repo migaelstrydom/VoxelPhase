@@ -3,6 +3,7 @@ mod camera;
 mod components;
 mod core;
 mod input;
+mod model;
 mod player;
 mod rendering;
 mod resources;

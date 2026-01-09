@@ -1,6 +1,10 @@
-use crate::{rendering::vertex::Vertex, resources::textures::TextureHandle};
+use std::sync::Arc;
+
 use nalgebra::Vector3;
 use specs::{Component, DenseVecStorage, VecStorage};
+
+use crate::model::Model;
+use crate::rendering::camera::Camera;
 
 // Physics Components
 #[derive(Component, Debug)]
@@ -23,24 +27,24 @@ pub struct Gravity(pub f32);
 #[derive(Component, Debug)]
 pub struct Rotation(pub f32); // Radians
 
-#[derive(Component, Debug)]
-pub struct SpinSpeed(pub f32); // Radians per logic update
-
+/// A model instance referencing a shared Model definition.
 #[derive(Component)]
 #[storage(VecStorage)]
-pub struct Mesh {
-    pub vertices: Vec<Vertex>,
-    pub indices: Vec<u32>,
-    pub texture_handles: Vec<TextureHandle>,
+pub struct ModelInstance {
+    /// The model definition (shared across instances).
+    pub model: Arc<Model>,
+}
+
+impl ModelInstance {
+    pub fn new(model: Arc<Model>) -> Self {
+        Self { model }
+    }
 }
 
 #[derive(Component, Debug, Default)]
-#[storage(DenseVecStorage)] // Changed to DenseVecStorage for consistency, can be VecStorage too
+#[storage(DenseVecStorage)]
 pub struct Renderable;
 
-// New Camera Component
-use crate::rendering::camera::Camera;
-
 #[derive(Component, Debug)]
-#[storage(DenseVecStorage)] // Can use other storage types if preferred, e.g., VecStorage
+#[storage(DenseVecStorage)]
 pub struct CameraComponent(pub Camera);

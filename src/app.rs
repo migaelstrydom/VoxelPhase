@@ -13,17 +13,23 @@ use specs::{Builder, Dispatcher, DispatcherBuilder, World, WorldExt};
 
 use crate::camera::{CameraConfig, FollowTarget};
 use crate::components::{
-    Acceleration, CameraComponent, Gravity, Mesh, Position, Renderable, Rotation, Velocity,
+    Acceleration, CameraComponent, Gravity, ModelInstance, Position, Renderable, Rotation, Velocity,
 };
 use crate::core::error::{EngineError, EngineResult};
 use crate::core::vulkan_context::VulkanContext;
 use crate::input::InputState;
-use crate::player::{Player, PlayerConfig, PlayerState};
+use crate::player::{
+    build_player_model, Player, PlayerAnimationState, PlayerConfig, PlayerMaterials,
+    PlayerModelConfig, PlayerState,
+};
 use crate::rendering::camera::Camera;
+use crate::rendering::material::{Material, MaterialManagerBuilder};
 use crate::rendering::renderer::Renderer;
+use crate::rendering::Colour;
 use crate::resources::manager::ResourceManager;
 use crate::systems::{
-    CameraControlSystem, GravitySystem, PhysicsSystem, PlayerInputSystem, RenderSystem,
+    CameraControlSystem, GravitySystem, PhysicsSystem, PlayerAnimationSystem, PlayerInputSystem,
+    PlayerStateSyncSystem, RenderSystem,
 };
 use crate::time::Time;
 use crate::world::geometry::LandscapeLoader;
@@ -63,18 +69,75 @@ impl<'a, 'b> App<'a, 'b> {
         let descriptor_manager = renderer.descriptor_manager();
         let texture_manager = resource_manager.create_texture_manager(descriptor_manager)?;
 
-        // Load world geometry
-        let landscape_loader = LandscapeLoader::new(&texture_manager);
-        let world_geometry = landscape_loader
-            .load_ripple_obj()
+        // ==========================================
+        // Phase 1: Register all materials
+        // ==========================================
+        let mut material_builder = MaterialManagerBuilder::new();
+
+        // Load textures needed for materials
+        let eye_texture =
+            texture_manager
+                .load_texture("data/eye.bmp")
+                .map_err(|e| EngineError::Mesh {
+                    path: Some("eye.bmp".to_string()),
+                    reason: format!("Failed to load eye texture: {}", e),
+                })?;
+
+        let grass_texture = texture_manager
+            .load_texture("data/grass.bmp")
             .map_err(|e| EngineError::Mesh {
-                path: Some("ripple.obj".to_string()),
-                reason: e.to_string(),
+                path: Some("grass.bmp".to_string()),
+                reason: format!("Failed to load grass texture: {}", e),
             })?;
 
+        // Create fallback white texture for untextured materials
+        let fallback_white = texture_manager
+            .create_solid_colour(Colour::WHITE)
+            .map_err(|e| EngineError::Mesh {
+                path: None,
+                reason: format!("Failed to create fallback texture: {}", e),
+            })?;
+
+        // Register player materials
+        let player_materials = PlayerMaterials {
+            body: material_builder.register(Material::coloured(Colour::RED)),
+            nose: material_builder.register(Material::coloured(Colour::GREEN)),
+            eye: material_builder.register(Material::textured(eye_texture)),
+        };
+
+        // Register landscape material
+        let landscape_material = material_builder.register(Material::textured(grass_texture));
+
+        // ==========================================
+        // Phase 2: Freeze materials - no more registration
+        // ==========================================
+        let material_manager = material_builder.build(fallback_white);
+
+        // ==========================================
+        // Phase 3: Build models using pre-registered material IDs
+        // ==========================================
+        let player_config = PlayerConfig::default();
+        let player_model_config = PlayerModelConfig {
+            body_radius: player_config.radius,
+            ..Default::default() // Use default colours (RED body, GREEN nose, WHITE eyes)
+        };
+        let player_model = Arc::new(build_player_model(&player_model_config, &player_materials));
+        log::info!("Player model built with {} parts", player_model.parts.len());
+
+        // Load landscape model
+        let landscape_loader = LandscapeLoader::textured(landscape_material);
+        let landscape_model =
+            Arc::new(
+                landscape_loader
+                    .load_ripple_obj()
+                    .map_err(|e| EngineError::Mesh {
+                        path: Some("ripple.obj".to_string()),
+                        reason: e.to_string(),
+                    })?,
+            );
         log::info!(
-            "World geometry loaded. Texture loaded with id: {}",
-            world_geometry.mesh.texture_handles[0].id()
+            "Landscape model loaded with {} parts",
+            landscape_model.parts.len()
         );
 
         // Initialize ECS world
@@ -86,17 +149,19 @@ impl<'a, 'b> App<'a, 'b> {
         world.register::<Acceleration>();
         world.register::<Gravity>();
         world.register::<Rotation>();
-        world.register::<Mesh>();
+        world.register::<ModelInstance>();
         world.register::<Renderable>();
         world.register::<CameraComponent>();
         world.register::<Player>();
         world.register::<PlayerState>();
+        world.register::<PlayerAnimationState>();
         world.register::<FollowTarget>();
 
         // Insert resources
         world.insert(renderer);
         world.insert(resource_manager);
         world.insert(texture_manager);
+        world.insert(material_manager);
         world.insert(Time::new());
         world.insert(InputState::new());
         world.insert(PlayerConfig::default());
@@ -107,21 +172,24 @@ impl<'a, 'b> App<'a, 'b> {
             .create_entity()
             .with(Position(Vector3::new(0.0, -5.0, 0.0)))
             .with(Rotation(0.0))
-            .with(world_geometry.mesh)
+            .with(ModelInstance::new(landscape_model))
             .with(Renderable)
             .build();
 
-        // Create player entity
-        let player_config = PlayerConfig::default();
+        // Create player entity with new model architecture
+        // Single entity with body, nose, and eyes as model parts
         let player_entity = world
             .create_entity()
             .with(Player)
             .with(PlayerState::default())
+            .with(PlayerAnimationState::default())
             .with(Position(Vector3::new(0.0, 5.0, 0.0)))
             .with(Velocity(Vector3::zeros()))
             .with(Acceleration(Vector3::zeros()))
             .with(Gravity(player_config.gravity))
             .with(Rotation(0.0))
+            .with(ModelInstance::new(player_model))
+            .with(Renderable)
             .build();
 
         // Create camera entity that follows the player
@@ -150,9 +218,17 @@ impl<'a, 'b> App<'a, 'b> {
         let dispatcher = DispatcherBuilder::new()
             // Input processing (reads InputState, writes Velocity)
             .with(PlayerInputSystem, "player_input", &[])
+            // Sync player state to rendering components
+            .with(
+                PlayerStateSyncSystem,
+                "player_state_sync",
+                &["player_input"],
+            )
             // Physics simulation
             .with(GravitySystem, "gravity", &[])
             .with(PhysicsSystem, "physics", &["player_input", "gravity"])
+            // Player animation (breathing, blinking, etc.)
+            .with(PlayerAnimationSystem, "player_animation", &[])
             // Camera follows player (after physics updates position)
             .with(CameraControlSystem, "camera_control", &["physics"])
             // Rendering is thread-local (must be last)

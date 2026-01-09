@@ -1,7 +1,11 @@
-// Rendering module will contain all rendering-related systems and components
+//! Rendering module: Vulkan-based graphics pipeline and resources.
+
 pub mod camera;
+pub mod colour;
+pub mod deletion_queue;
 pub mod descriptors;
 pub mod frame;
+pub mod material;
 pub mod pipeline;
 pub mod renderer;
 pub mod swapchain;
@@ -9,8 +13,4 @@ pub mod texture;
 pub mod vertex;
 
 // Re-export commonly used types
-pub use descriptors::DescriptorManager;
-pub use frame::{FrameData, ManagedBuffer, SceneUbo};
-pub use pipeline::{GraphicsPipeline, GraphicsPipelineConfig};
-pub use renderer::Renderer as NewRenderer;
-pub use swapchain::Swapchain;
+pub use colour::Colour;

@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use ash::vk;
 
 use crate::core::device::ManagedDevice;
-use crate::core::error::{EngineError, EngineResult, VkResultExt};
+use crate::core::error::{EngineResult, VkResultExt};
 use crate::rendering::frame::ManagedBuffer;
 
 // Constants for texture pool management

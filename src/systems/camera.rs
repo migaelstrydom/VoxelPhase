@@ -86,15 +86,15 @@ impl<'a> System<'a> for CameraControlSystem {
             cam.target.y += (target_pos.y - cam.target.y) * t;
             cam.target.z += (target_pos.z - cam.target.z) * t;
 
-            // Debug logging (every ~60 frames to avoid spam)
-            if time.frame_count() % 60 == 0 {
-                log::debug!(
-                    "Camera: pos=({:.1}, {:.1}, {:.1}) target=({:.1}, {:.1}, {:.1}) pitch={:.2} orbit={:.2}",
-                    cam.position.x, cam.position.y, cam.position.z,
-                    cam.target.x, cam.target.y, cam.target.z,
-                    follow.pitch, follow.orbit_angle
-                );
-            }
+            // // Debug logging (every ~60 frames to avoid spam)
+            // if time.frame_count() % 60 == 0 {
+            //     log::debug!(
+            //         "Camera: pos=({:.1}, {:.1}, {:.1}) target=({:.1}, {:.1}, {:.1}) pitch={:.2} orbit={:.2}",
+            //         cam.position.x, cam.position.y, cam.position.z,
+            //         cam.target.x, cam.target.y, cam.target.z,
+            //         follow.pitch, follow.orbit_angle
+            //     );
+            // }
         }
     }
 }

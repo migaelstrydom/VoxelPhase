@@ -1,8 +1,11 @@
-use crate::components::{CameraComponent, Mesh, Position, Renderable, Rotation};
+use crate::components::{CameraComponent, ModelInstance, Position, Renderable, Rotation};
+use crate::model::Transform;
+use crate::player::PlayerAnimationState;
+use crate::rendering::material::MaterialManager;
 use crate::rendering::renderer::Renderer;
 use crate::resources::textures::TextureManager;
 use nalgebra::{Matrix4, Vector3};
-use specs::{Join, ReadExpect, ReadStorage, System, WriteExpect};
+use specs::{Join, LendJoin, ReadExpect, ReadStorage, System, WriteExpect};
 
 pub struct RenderSystem;
 
@@ -10,22 +13,26 @@ impl<'a> System<'a> for RenderSystem {
     type SystemData = (
         WriteExpect<'a, Renderer>,
         ReadExpect<'a, TextureManager>,
-        ReadStorage<'a, Mesh>,
+        ReadExpect<'a, MaterialManager>,
+        ReadStorage<'a, ModelInstance>,
         ReadStorage<'a, Position>,
         ReadStorage<'a, Rotation>,
         ReadStorage<'a, Renderable>,
         ReadStorage<'a, CameraComponent>,
+        ReadStorage<'a, PlayerAnimationState>,
     );
 
     fn run(&mut self, data: Self::SystemData) {
         let (
             mut renderer,
             texture_manager,
-            meshes,
+            material_manager,
+            model_instances,
             positions,
             rotations,
             renderables,
             camera_components,
+            player_animations,
         ) = data;
 
         let camera = camera_components.join().next();
@@ -39,23 +46,47 @@ impl<'a> System<'a> for RenderSystem {
 
         match renderer.begin_frame() {
             Ok((draw_cb, present_index)) => {
-                for (mesh, pos, rot, _renderable) in
-                    (&meshes, &positions, &rotations, &renderables).join()
+                // Update per-frame scene data (view/projection) once
+                if let Err(e) = renderer.update_scene(&view_matrix, &proj_matrix) {
+                    log::error!("RenderSystem: Failed to update scene UBO: {}", e);
+                    return;
+                }
+
+                // Draw all model instances
+                for (model_instance, pos, rot, _renderable, player_anim) in (
+                    &model_instances,
+                    &positions,
+                    &rotations,
+                    &renderables,
+                    (&player_animations).maybe(),
+                )
+                    .join()
                 {
-                    let model_matrix = Matrix4::new_translation(&pos.0)
+                    let world_matrix = Matrix4::new_translation(&pos.0)
                         * Matrix4::from_axis_angle(&Vector3::y_axis(), rot.0);
 
-                    if let Err(e) = renderer.draw_mesh(
+                    // Collect part transforms from animation state
+                    let part_transforms: Vec<Transform> = if let Some(anim) = player_anim {
+                        // Player-specific animation
+                        use crate::player::PlayerPart;
+                        PlayerPart::all()
+                            .iter()
+                            .map(|part| anim.part_transform(*part))
+                            .collect()
+                    } else {
+                        // No animation, use identity transforms
+                        vec![Transform::default(); model_instance.model.parts.len()]
+                    };
+
+                    if let Err(e) = renderer.draw_model(
                         draw_cb,
-                        &mesh.vertices[..],
-                        &mesh.indices[..],
-                        &model_matrix,
-                        &view_matrix,
-                        &proj_matrix,
-                        &mesh.texture_handles,
+                        &model_instance.model,
+                        &world_matrix,
+                        &part_transforms,
+                        &material_manager,
                         &texture_manager,
                     ) {
-                        log::error!("RenderSystem: Failed to draw mesh data: {}", e);
+                        log::error!("RenderSystem: Failed to draw model: {}", e);
                     }
                 }
 
