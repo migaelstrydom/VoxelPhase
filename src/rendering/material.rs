@@ -91,4 +91,9 @@ impl MaterialManager {
             .as_ref()
             .unwrap_or(&self.fallback_texture)
     }
+
+    /// Get the fallback (white) texture.
+    pub fn fallback_texture(&self) -> &TextureHandle {
+        &self.fallback_texture
+    }
 }

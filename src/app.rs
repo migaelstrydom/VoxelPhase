@@ -13,7 +13,8 @@ use specs::{Builder, Dispatcher, DispatcherBuilder, World, WorldExt};
 
 use crate::camera::{CameraConfig, FollowTarget};
 use crate::components::{
-    Acceleration, CameraComponent, Gravity, ModelInstance, Position, Renderable, Rotation, Velocity,
+    Acceleration, CameraComponent, Collider, Gravity, ModelInstance, OnGround, PhysicsBody,
+    Position, Renderable, Rotation, Velocity,
 };
 use crate::core::error::{EngineError, EngineResult};
 use crate::core::vulkan_context::VulkanContext;
@@ -28,11 +29,12 @@ use crate::rendering::renderer::Renderer;
 use crate::rendering::Colour;
 use crate::resources::manager::ResourceManager;
 use crate::systems::{
-    CameraControlSystem, GravitySystem, PhysicsSystem, PlayerAnimationSystem, PlayerInputSystem,
-    PlayerStateSyncSystem, RenderSystem,
+    CameraControlSystem, GravitySystem, PenetrationResolutionSystem, PhysicsSystem,
+    PlayerAnimationSystem, PlayerInputSystem, PlayerStateSyncSystem, RenderSystem,
+    TerrainCollisionSystem,
 };
+use crate::terrain::{create_test_terrain, TerrainManager};
 use crate::time::Time;
-use crate::world::geometry::LandscapeLoader;
 
 pub struct App<'a, 'b> {
     event_loop: Option<EventLoop<()>>,
@@ -105,8 +107,8 @@ impl<'a, 'b> App<'a, 'b> {
             eye: material_builder.register(Material::textured(eye_texture)),
         };
 
-        // Register landscape material
-        let landscape_material = material_builder.register(Material::textured(grass_texture));
+        // Register landscape material (reserved for future terrain texturing)
+        let _landscape_material = material_builder.register(Material::textured(grass_texture));
 
         // ==========================================
         // Phase 2: Freeze materials - no more registration
@@ -124,21 +126,7 @@ impl<'a, 'b> App<'a, 'b> {
         let player_model = Arc::new(build_player_model(&player_model_config, &player_materials));
         log::info!("Player model built with {} parts", player_model.parts.len());
 
-        // Load landscape model
-        let landscape_loader = LandscapeLoader::textured(landscape_material);
-        let landscape_model =
-            Arc::new(
-                landscape_loader
-                    .load_ripple_obj()
-                    .map_err(|e| EngineError::Mesh {
-                        path: Some("ripple.obj".to_string()),
-                        reason: e.to_string(),
-                    })?,
-            );
-        log::info!(
-            "Landscape model loaded with {} parts",
-            landscape_model.parts.len()
-        );
+        // Note: Old OBJ landscape removed - using procedural terrain instead
 
         // Initialize ECS world
         let mut world = World::new();
@@ -156,6 +144,10 @@ impl<'a, 'b> App<'a, 'b> {
         world.register::<PlayerState>();
         world.register::<PlayerAnimationState>();
         world.register::<FollowTarget>();
+        // Collision components
+        world.register::<Collider>();
+        world.register::<OnGround>();
+        world.register::<PhysicsBody>();
 
         // Insert resources
         world.insert(renderer);
@@ -167,14 +159,19 @@ impl<'a, 'b> App<'a, 'b> {
         world.insert(PlayerConfig::default());
         world.insert(CameraConfig::default());
 
-        // Create landscape entity (static, just for rendering)
-        world
-            .create_entity()
-            .with(Position(Vector3::new(0.0, -5.0, 0.0)))
-            .with(Rotation(0.0))
-            .with(ModelInstance::new(landscape_model))
-            .with(Renderable)
-            .build();
+        // Create procedural terrain
+        log::info!("Generating procedural terrain...");
+        let terrain_svo = create_test_terrain(64.0, 6); // 64x64x64 world, depth 6
+        let terrain_manager = TerrainManager::from_svo(terrain_svo);
+        let stats = terrain_manager.collision_stats();
+        log::info!(
+            "Terrain generated: {} triangles in {} regions (avg {:.1} per region)",
+            stats.total_triangles,
+            stats.occupied_regions,
+            stats.avg_triangles_per_region
+        );
+
+        world.insert(terrain_manager);
 
         // Create player entity with new model architecture
         // Single entity with body, nose, and eyes as model parts
@@ -183,13 +180,21 @@ impl<'a, 'b> App<'a, 'b> {
             .with(Player)
             .with(PlayerState::default())
             .with(PlayerAnimationState::default())
-            .with(Position(Vector3::new(0.0, 5.0, 0.0)))
+            .with(Position(Vector3::new(0.0, -10.0, 0.0))) // Start above terrain
             .with(Velocity(Vector3::zeros()))
             .with(Acceleration(Vector3::zeros()))
             .with(Gravity(player_config.gravity))
             .with(Rotation(0.0))
             .with(ModelInstance::new(player_model))
             .with(Renderable)
+            // Collision components
+            .with(Collider::sphere(player_config.radius))
+            .with(OnGround::default())
+            .with(PhysicsBody {
+                restitution: 0.1, // Slight bounce
+                friction: 0.8,
+                mass: 1.0,
+            })
             .build();
 
         // Create camera entity that follows the player
@@ -197,12 +202,12 @@ impl<'a, 'b> App<'a, 'b> {
         let camera_config = CameraConfig::default();
         let camera = Camera::new(
             nalgebra::Point3::new(0.0, 10.0, camera_config.default_distance),
-            nalgebra::Point3::new(0.0, 50.0, 0.0),
+            nalgebra::Point3::new(0.0, 0.0, 0.0),
             nalgebra::Vector3::y(),
             std::f32::consts::FRAC_PI_4,
             initial_aspect_ratio,
             0.1,
-            100.0,
+            500.0, // Extended far plane to see terrain
         );
 
         world
@@ -215,22 +220,40 @@ impl<'a, 'b> App<'a, 'b> {
             .build();
 
         // Build the dispatcher with systems in the correct order
+        // Order: Physics -> Collision -> Input -> Animation -> Camera -> Render
+        // This ensures ground state is up-to-date when input system checks for jumping.
         let dispatcher = DispatcherBuilder::new()
-            // Input processing (reads InputState, writes Velocity)
-            .with(PlayerInputSystem, "player_input", &[])
+            // Physics simulation first (uses velocity from previous frame's input)
+            .with(GravitySystem, "gravity", &[])
+            .with(PhysicsSystem, "physics", &["gravity"])
+            // Collision detection and response (after physics moves entities)
+            // This sets OnGround.grounded which input needs for jumping
+            .with(TerrainCollisionSystem, "terrain_collision", &["physics"])
+            .with(
+                PenetrationResolutionSystem,
+                "penetration_resolution",
+                &["terrain_collision"],
+            )
+            // Input processing AFTER collision so we have current ground state
+            .with(
+                PlayerInputSystem,
+                "player_input",
+                &["penetration_resolution"],
+            )
             // Sync player state to rendering components
             .with(
                 PlayerStateSyncSystem,
                 "player_state_sync",
                 &["player_input"],
             )
-            // Physics simulation
-            .with(GravitySystem, "gravity", &[])
-            .with(PhysicsSystem, "physics", &["player_input", "gravity"])
             // Player animation (breathing, blinking, etc.)
             .with(PlayerAnimationSystem, "player_animation", &[])
-            // Camera follows player (after physics updates position)
-            .with(CameraControlSystem, "camera_control", &["physics"])
+            // Camera follows player (after collision resolved)
+            .with(
+                CameraControlSystem,
+                "camera_control",
+                &["player_state_sync"],
+            )
             // Rendering is thread-local (must be last)
             .with_thread_local(RenderSystem)
             .build();
@@ -346,16 +369,16 @@ impl<'a, 'b> App<'a, 'b> {
                         time.update();
                     }
 
-                    // Prepare input for this frame
+                    // Run all systems (input state from events is still valid)
+                    dispatcher.dispatch(world);
+                    dispatcher.dispatch_thread_local(world);
+                    world.maintain();
+
+                    // Clear per-frame input state AFTER systems have read it
                     {
                         let mut input = world.write_resource::<InputState>();
                         input.begin_frame();
                     }
-
-                    // Run all systems
-                    dispatcher.dispatch(world);
-                    dispatcher.dispatch_thread_local(world);
-                    world.maintain();
                 }
 
                 Event::WindowEvent {

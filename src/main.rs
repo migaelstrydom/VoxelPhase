@@ -1,5 +1,6 @@
 mod app;
 mod camera;
+mod collision;
 mod components;
 mod core;
 mod input;
@@ -8,6 +9,7 @@ mod player;
 mod rendering;
 mod resources;
 mod systems;
+mod terrain;
 mod time;
 mod world;
 

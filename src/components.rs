@@ -3,6 +3,7 @@ use std::sync::Arc;
 use nalgebra::Vector3;
 use specs::{Component, DenseVecStorage, VecStorage};
 
+use crate::collision::Sphere;
 use crate::model::Model;
 use crate::rendering::camera::Camera;
 
@@ -23,6 +24,55 @@ pub struct Acceleration(pub Vector3<f32>);
 #[derive(Component, Debug)]
 #[storage(VecStorage)]
 pub struct Gravity(pub f32);
+
+// Collision Components
+
+/// Collision shape for an entity. Currently supports sphere only.
+#[derive(Component, Debug)]
+#[storage(VecStorage)]
+pub struct Collider {
+    pub shape: Sphere,
+}
+
+impl Collider {
+    pub fn sphere(radius: f32) -> Self {
+        Self {
+            shape: Sphere::new(radius),
+        }
+    }
+}
+
+/// Marks an entity as being on the ground (touching terrain from above).
+#[derive(Component, Debug, Default)]
+#[storage(DenseVecStorage)]
+pub struct OnGround {
+    /// True if currently touching ground.
+    pub grounded: bool,
+    /// Normal of the ground surface (if grounded).
+    pub ground_normal: Option<Vector3<f32>>,
+}
+
+/// Physical properties for collision response.
+#[derive(Component, Debug)]
+#[storage(VecStorage)]
+pub struct PhysicsBody {
+    /// Bounciness (0 = no bounce, 1 = perfect bounce).
+    pub restitution: f32,
+    /// Friction coefficient.
+    pub friction: f32,
+    /// Mass (used for impulse calculations if needed).
+    pub mass: f32,
+}
+
+impl Default for PhysicsBody {
+    fn default() -> Self {
+        Self {
+            restitution: 0.2,
+            friction: 0.8,
+            mass: 1.0,
+        }
+    }
+}
 
 #[derive(Component, Debug)]
 pub struct Rotation(pub f32); // Radians

@@ -23,6 +23,9 @@ use crate::rendering::swapchain::{SurfaceInfo, Swapchain};
 use crate::rendering::vertex::Vertex;
 use crate::resources::textures::{TextureHandle, TextureManager};
 
+// Re-export for convenience
+pub use crate::rendering::vertex::Vertex as RenderVertex;
+
 /// The main renderer that orchestrates frame rendering.
 ///
 /// This is a thin layer that coordinates the pipeline, swapchain, frame data,
@@ -120,7 +123,7 @@ impl Renderer {
         let clear_values = [
             vk::ClearValue {
                 color: vk::ClearColorValue {
-                    float32: [0.0, 0.0, 0.0, 1.0],
+                    float32: [0.3, 0.5, 0.8, 1.0],
                 },
             },
             vk::ClearValue {
@@ -194,6 +197,34 @@ impl Renderer {
         }
 
         Ok(())
+    }
+
+    /// Draw a terrain chunk using vertex colors.
+    ///
+    /// Terrain uses a default white texture so vertex colors show through.
+    pub fn draw_terrain_chunk(
+        &mut self,
+        cb: vk::CommandBuffer,
+        vertices: &[Vertex],
+        indices: &[u32],
+        world_transform: &Matrix4<f32>,
+        material_manager: &MaterialManager,
+        texture_manager: &TextureManager,
+    ) -> EngineResult<()> {
+        if vertices.is_empty() || indices.is_empty() {
+            return Ok(());
+        }
+
+        // Use the fallback white texture so vertex colors show
+        let white_texture = material_manager.fallback_texture();
+        self.draw_mesh_with_texture(
+            cb,
+            vertices,
+            indices,
+            world_transform,
+            white_texture,
+            texture_manager,
+        )
     }
 
     /// Draw a mesh with a specific texture handle.

@@ -1,4 +1,4 @@
-use crate::components::{CameraComponent, Position, Velocity};
+use crate::components::{CameraComponent, OnGround, Position, Velocity};
 use crate::input::InputState;
 use crate::player::{Player, PlayerConfig, PlayerState};
 use nalgebra::Vector3;
@@ -19,10 +19,20 @@ impl<'a> System<'a> for PlayerInputSystem {
         ReadStorage<'a, Position>,
         WriteStorage<'a, Velocity>,
         ReadStorage<'a, CameraComponent>,
+        ReadStorage<'a, OnGround>,
     );
 
     fn run(&mut self, data: Self::SystemData) {
-        let (input, config, players, mut player_states, positions, mut velocities, cameras) = data;
+        let (
+            input,
+            config,
+            players,
+            mut player_states,
+            positions,
+            mut velocities,
+            cameras,
+            on_grounds,
+        ) = data;
 
         // Get camera position for calculating movement direction
         let camera = cameras.join().next();
@@ -30,9 +40,18 @@ impl<'a> System<'a> for PlayerInputSystem {
             .map(|c| c.0.position)
             .unwrap_or_else(|| nalgebra::Point3::new(0.0, 0.0, 5.0));
 
-        for (_player, state, pos, vel) in
-            (&players, &mut player_states, &positions, &mut velocities).join()
+        for (_player, state, pos, vel, on_ground) in (
+            &players,
+            &mut player_states,
+            &positions,
+            &mut velocities,
+            &on_grounds,
+        )
+            .join()
         {
+            // Use the collision system's ground detection
+            let is_grounded = on_ground.grounded;
+
             // Calculate forward direction from player toward camera (XZ plane only)
             // In BallDude, forward was from player toward camera position
             let to_camera = Vector3::new(
@@ -52,7 +71,7 @@ impl<'a> System<'a> for PlayerInputSystem {
             let right = Vector3::new(-forward.z, 0.0, forward.x);
 
             // Determine movement speed based on ground state
-            let speed = if state.on_ground {
+            let speed = if is_grounded {
                 config.walk_speed
             } else {
                 config.air_speed
@@ -83,16 +102,17 @@ impl<'a> System<'a> for PlayerInputSystem {
             }
 
             // Apply horizontal velocity (preserve vertical velocity for gravity/jumping)
-            vel.0.x = move_dir.x * speed;
-            vel.0.z = move_dir.z * speed;
+            if is_grounded {
+                vel.0.x = move_dir.x * speed;
+                vel.0.z = move_dir.z * speed;
+            }
 
-            // Handle jumping
+            // Handle jumping - only when grounded
             if (input.is_mouse_button_just_pressed(MouseButton::Right)
                 || input.is_key_just_pressed(KeyCode::Space))
-                && state.on_ground
+            // && is_grounded
             {
                 vel.0.y = config.jump_speed;
-                state.on_ground = false;
             }
         }
     }

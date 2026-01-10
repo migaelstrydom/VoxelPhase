@@ -4,8 +4,9 @@ use crate::player::PlayerAnimationState;
 use crate::rendering::material::MaterialManager;
 use crate::rendering::renderer::Renderer;
 use crate::resources::textures::TextureManager;
+use crate::terrain::TerrainManager;
 use nalgebra::{Matrix4, Vector3};
-use specs::{Join, LendJoin, ReadExpect, ReadStorage, System, WriteExpect};
+use specs::{Join, LendJoin, Read, ReadExpect, ReadStorage, System, WriteExpect};
 
 pub struct RenderSystem;
 
@@ -14,6 +15,7 @@ impl<'a> System<'a> for RenderSystem {
         WriteExpect<'a, Renderer>,
         ReadExpect<'a, TextureManager>,
         ReadExpect<'a, MaterialManager>,
+        Option<Read<'a, TerrainManager>>,
         ReadStorage<'a, ModelInstance>,
         ReadStorage<'a, Position>,
         ReadStorage<'a, Rotation>,
@@ -27,6 +29,7 @@ impl<'a> System<'a> for RenderSystem {
             mut renderer,
             texture_manager,
             material_manager,
+            terrain_manager_opt,
             model_instances,
             positions,
             rotations,
@@ -50,6 +53,23 @@ impl<'a> System<'a> for RenderSystem {
                 if let Err(e) = renderer.update_scene(&view_matrix, &proj_matrix) {
                     log::error!("RenderSystem: Failed to update scene UBO: {}", e);
                     return;
+                }
+
+                // Draw terrain
+                if let Some(ref terrain_manager) = terrain_manager_opt {
+                    if terrain_manager.has_geometry() {
+                        let identity = Matrix4::identity();
+                        if let Err(e) = renderer.draw_terrain_chunk(
+                            draw_cb,
+                            terrain_manager.render_vertices(),
+                            terrain_manager.render_indices(),
+                            &identity,
+                            &material_manager,
+                            &texture_manager,
+                        ) {
+                            log::error!("RenderSystem: Failed to draw terrain: {}", e);
+                        }
+                    }
                 }
 
                 // Draw all model instances
