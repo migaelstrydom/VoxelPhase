@@ -18,13 +18,11 @@ use crate::model::{Model, Transform};
 use crate::rendering::descriptors::DescriptorManager;
 use crate::rendering::frame::{FrameData, SceneUbo};
 use crate::rendering::material::MaterialManager;
+use crate::rendering::overlay::OverlayRenderer;
 use crate::rendering::pipeline::{GraphicsPipeline, GraphicsPipelineConfig};
 use crate::rendering::swapchain::{SurfaceInfo, Swapchain};
 use crate::rendering::vertex::Vertex;
 use crate::resources::textures::{TextureHandle, TextureManager};
-
-// Re-export for convenience
-pub use crate::rendering::vertex::Vertex as RenderVertex;
 
 /// The main renderer that orchestrates frame rendering.
 ///
@@ -36,6 +34,7 @@ pub struct Renderer {
     pub frame_data: FrameData,
     pub descriptors: Arc<DescriptorManager>,
     pub vulkan_context: Arc<VulkanContext>,
+    pub overlay: OverlayRenderer,
 }
 
 impl Renderer {
@@ -49,9 +48,12 @@ impl Renderer {
         // Create surface and query its format (done once)
         let surface_info = SurfaceInfo::new(&vulkan_context, window)?;
 
+        // Save format before moving surface_info
+        let color_format = surface_info.format.format;
+
         // Create pipeline first (we need the render pass for swapchain framebuffers)
         let pipeline_config = GraphicsPipelineConfig {
-            color_format: surface_info.format.format,
+            color_format,
             depth_format: vk::Format::D16_UNORM,
             extent: vk::Extent2D {
                 width: window_width,
@@ -87,12 +89,21 @@ impl Renderer {
             std::mem::size_of::<SceneUbo>() as vk::DeviceSize,
         );
 
+        // Create overlay renderer for debug text (uses same render pass for compatibility)
+        let overlay = OverlayRenderer::new(
+            Arc::clone(&vulkan_context),
+            pipeline.renderpass,
+            window_width,
+            window_height,
+        )?;
+
         Ok(Self {
             pipeline,
             swapchain,
             frame_data,
             descriptors,
             vulkan_context,
+            overlay,
         })
     }
 
@@ -325,6 +336,36 @@ impl Renderer {
         }
 
         Ok(())
+    }
+
+    /// Render debug overlay with the given debug line entries.
+    ///
+    /// Should be called after drawing the 3D scene but before end_frame.
+    pub fn render_overlay<'a>(
+        &mut self,
+        cb: vk::CommandBuffer,
+        entries: impl Iterator<Item = (&'a str, &'a str)>,
+    ) -> EngineResult<()> {
+        let extent = self.swapchain.extent;
+        let viewport = vk::Viewport {
+            x: 0.0,
+            y: 0.0,
+            width: extent.width as f32,
+            height: extent.height as f32,
+            min_depth: 0.0,
+            max_depth: 1.0,
+        };
+        let scissor = vk::Rect2D {
+            offset: vk::Offset2D { x: 0, y: 0 },
+            extent,
+        };
+
+        unsafe {
+            self.vulkan_context.device().cmd_set_viewport(cb, 0, &[viewport]);
+            self.vulkan_context.device().cmd_set_scissor(cb, 0, &[scissor]);
+        }
+
+        self.overlay.render_debug_lines(cb, entries)
     }
 
     /// End the frame: finish render pass, submit commands, present.

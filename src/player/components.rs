@@ -9,8 +9,6 @@ pub struct Player;
 #[derive(Component, Debug)]
 #[storage(DenseVecStorage)]
 pub struct PlayerState {
-    /// True when the player is standing on solid ground
-    pub on_ground: bool,
     /// Direction the player is facing (radians around Y axis)
     pub facing_direction: f32,
 }
@@ -18,7 +16,6 @@ pub struct PlayerState {
 impl Default for PlayerState {
     fn default() -> Self {
         Self {
-            on_ground: false,
             facing_direction: 0.0,
         }
     }

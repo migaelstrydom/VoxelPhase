@@ -15,6 +15,7 @@ nalgebra = "0.32"
 image = "0.24"
 noise = "0.9"        # Procedural noise for terrain generation
 smallvec = "1.13"    # Small inline vectors for contact points
+fontdue = "0.9"      # Font rasterization for debug text overlay
 
 
 [dev-dependencies]

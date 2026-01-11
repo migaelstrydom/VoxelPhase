@@ -33,6 +33,7 @@ use crate::systems::{
     PlayerAnimationSystem, PlayerInputSystem, PlayerStateSyncSystem, RenderSystem,
     TerrainCollisionSystem,
 };
+use crate::debug::DebugLines;
 use crate::terrain::{create_test_terrain, TerrainManager};
 use crate::time::Time;
 
@@ -158,6 +159,7 @@ impl<'a, 'b> App<'a, 'b> {
         world.insert(InputState::new());
         world.insert(PlayerConfig::default());
         world.insert(CameraConfig::default());
+        world.insert(DebugLines::default());
 
         // Create procedural terrain
         log::info!("Generating procedural terrain...");
@@ -374,10 +376,14 @@ impl<'a, 'b> App<'a, 'b> {
                     dispatcher.dispatch_thread_local(world);
                     world.maintain();
 
-                    // Clear per-frame input state AFTER systems have read it
+                    // Clear per-frame state AFTER systems have processed it
                     {
                         let mut input = world.write_resource::<InputState>();
                         input.begin_frame();
+                    }
+                    {
+                        let mut debug = world.write_resource::<DebugLines>();
+                        debug.clear();
                     }
                 }
 

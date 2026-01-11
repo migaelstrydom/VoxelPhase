@@ -1,0 +1,76 @@
+//! Centralized shader management.
+//!
+//! Provides compile-time embedded shaders and uniform loading functions
+//! for all pipeline types in the engine.
+
+use std::io::Cursor;
+
+use ash::{util::read_spv, vk};
+
+use crate::core::device::ManagedDevice;
+use crate::core::error::{EngineError, EngineResult, ShaderStage};
+
+/// Embedded shader bytecode.
+mod bytecode {
+    /// Main 3D pipeline shaders
+    pub const MAIN_VERTEX: &[u8] = include_bytes!("../../shader/vert.spv");
+    pub const MAIN_FRAGMENT: &[u8] = include_bytes!("../../shader/frag.spv");
+
+    /// Overlay/UI pipeline shaders
+    pub const OVERLAY_VERTEX: &[u8] = include_bytes!("../../shader/overlay.vert.spv");
+    pub const OVERLAY_FRAGMENT: &[u8] = include_bytes!("../../shader/overlay.frag.spv");
+}
+
+/// Centralized shader loading and management.
+///
+/// All shader modules are created through this manager to ensure consistent
+/// error handling and resource management.
+pub struct ShaderManager;
+
+impl ShaderManager {
+    /// Load the main 3D vertex shader.
+    pub fn load_main_vertex(device: &ManagedDevice) -> EngineResult<vk::ShaderModule> {
+        Self::load_shader(device, bytecode::MAIN_VERTEX, ShaderStage::Vertex)
+    }
+
+    /// Load the main 3D fragment shader.
+    pub fn load_main_fragment(device: &ManagedDevice) -> EngineResult<vk::ShaderModule> {
+        Self::load_shader(device, bytecode::MAIN_FRAGMENT, ShaderStage::Fragment)
+    }
+
+    /// Load the overlay vertex shader.
+    pub fn load_overlay_vertex(device: &ManagedDevice) -> EngineResult<vk::ShaderModule> {
+        Self::load_shader(device, bytecode::OVERLAY_VERTEX, ShaderStage::Vertex)
+    }
+
+    /// Load the overlay fragment shader.
+    pub fn load_overlay_fragment(device: &ManagedDevice) -> EngineResult<vk::ShaderModule> {
+        Self::load_shader(device, bytecode::OVERLAY_FRAGMENT, ShaderStage::Fragment)
+    }
+
+    /// Load a shader module from SPIR-V bytecode.
+    fn load_shader(
+        device: &ManagedDevice,
+        bytecode: &[u8],
+        stage: ShaderStage,
+    ) -> EngineResult<vk::ShaderModule> {
+        let mut cursor = Cursor::new(bytecode);
+
+        let code = read_spv(&mut cursor).map_err(|e| EngineError::Shader {
+            stage,
+            reason: format!("failed to read SPIR-V: {:?}", e),
+        })?;
+
+        let create_info = vk::ShaderModuleCreateInfo::default().code(&code);
+
+        unsafe {
+            device
+                .device
+                .create_shader_module(&create_info, None)
+                .map_err(|e| EngineError::Shader {
+                    stage,
+                    reason: format!("module creation: {:?}", e),
+                })
+        }
+    }
+}

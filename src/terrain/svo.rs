@@ -7,7 +7,7 @@
 
 use nalgebra::Point3;
 
-use super::voxel::{Voxel, VoxelMaterial};
+use super::voxel::Voxel;
 use crate::collision::AABB;
 
 /// A node in the Sparse Voxel Octree.
@@ -24,6 +24,7 @@ pub enum SvoNode {
 
 impl SvoNode {
     /// Create a uniform leaf node.
+    #[allow(unused)]
     pub fn uniform(voxel: Voxel) -> Self {
         SvoNode::Leaf(voxel)
     }
@@ -34,6 +35,7 @@ impl SvoNode {
     }
 
     /// Check if this node is a leaf.
+    #[allow(unused)]
     pub fn is_leaf(&self) -> bool {
         matches!(self, SvoNode::Leaf(_))
     }
@@ -397,6 +399,7 @@ fn child_bounds(parent: &AABB, octant: usize) -> AABB {
 
 #[cfg(test)]
 mod tests {
+    use super::super::voxel::VoxelMaterial;
     use super::*;
 
     #[test]

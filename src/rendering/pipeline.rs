@@ -3,14 +3,14 @@
 //! This module encapsulates the immutable graphics pipeline state including
 //! shaders, pipeline layout, render pass, and the pipeline itself.
 
-use std::io::Cursor;
 use std::mem;
 use std::sync::Arc;
 
-use ash::{util::read_spv, vk};
+use ash::vk;
 
 use crate::core::device::ManagedDevice;
-use crate::core::error::{EngineError, EngineResult, ShaderStage};
+use crate::core::error::{EngineError, EngineResult};
+use crate::rendering::shaders::ShaderManager;
 use crate::rendering::vertex::Vertex;
 
 /// Immutable graphics pipeline configuration and state.
@@ -94,41 +94,9 @@ impl GraphicsPipeline {
     }
 
     fn load_shaders(device: &ManagedDevice) -> EngineResult<(vk::ShaderModule, vk::ShaderModule)> {
-        let mut vertex_spv_file = Cursor::new(&include_bytes!("../../shader/vert.spv")[..]);
-        let mut frag_spv_file = Cursor::new(&include_bytes!("../../shader/frag.spv")[..]);
-
-        let vertex_code = read_spv(&mut vertex_spv_file).map_err(|e| EngineError::Shader {
-            stage: ShaderStage::Vertex,
-            reason: format!("failed to read SPIR-V: {:?}", e),
-        })?;
-
-        let frag_code = read_spv(&mut frag_spv_file).map_err(|e| EngineError::Shader {
-            stage: ShaderStage::Fragment,
-            reason: format!("failed to read SPIR-V: {:?}", e),
-        })?;
-
-        let vertex_shader_info = vk::ShaderModuleCreateInfo::default().code(&vertex_code);
-        let frag_shader_info = vk::ShaderModuleCreateInfo::default().code(&frag_code);
-
-        unsafe {
-            let vertex_module = device
-                .device
-                .create_shader_module(&vertex_shader_info, None)
-                .map_err(|e| EngineError::Shader {
-                    stage: ShaderStage::Vertex,
-                    reason: format!("module creation: {:?}", e),
-                })?;
-
-            let fragment_module = device
-                .device
-                .create_shader_module(&frag_shader_info, None)
-                .map_err(|e| EngineError::Shader {
-                    stage: ShaderStage::Fragment,
-                    reason: format!("module creation: {:?}", e),
-                })?;
-
-            Ok((vertex_module, fragment_module))
-        }
+        let vertex_module = ShaderManager::load_main_vertex(device)?;
+        let fragment_module = ShaderManager::load_main_fragment(device)?;
+        Ok((vertex_module, fragment_module))
     }
 
     fn create_ubo_descriptor_layout(

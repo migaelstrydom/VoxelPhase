@@ -1,4 +1,5 @@
 use crate::components::{CameraComponent, ModelInstance, Position, Renderable, Rotation};
+use crate::debug::DebugLines;
 use crate::model::Transform;
 use crate::player::PlayerAnimationState;
 use crate::rendering::material::MaterialManager;
@@ -6,7 +7,7 @@ use crate::rendering::renderer::Renderer;
 use crate::resources::textures::TextureManager;
 use crate::terrain::TerrainManager;
 use nalgebra::{Matrix4, Vector3};
-use specs::{Join, LendJoin, Read, ReadExpect, ReadStorage, System, WriteExpect};
+use specs::{Join, LendJoin, Read, ReadExpect, ReadStorage, System, Write, WriteExpect};
 
 pub struct RenderSystem;
 
@@ -15,6 +16,8 @@ impl<'a> System<'a> for RenderSystem {
         WriteExpect<'a, Renderer>,
         ReadExpect<'a, TextureManager>,
         ReadExpect<'a, MaterialManager>,
+        Read<'a, crate::time::Time>,
+        Write<'a, DebugLines>,
         Option<Read<'a, TerrainManager>>,
         ReadStorage<'a, ModelInstance>,
         ReadStorage<'a, Position>,
@@ -29,6 +32,8 @@ impl<'a> System<'a> for RenderSystem {
             mut renderer,
             texture_manager,
             material_manager,
+            time,
+            mut debug_lines,
             terrain_manager_opt,
             model_instances,
             positions,
@@ -108,6 +113,15 @@ impl<'a> System<'a> for RenderSystem {
                     ) {
                         log::error!("RenderSystem: Failed to draw model: {}", e);
                     }
+                }
+
+                // Add FPS to debug lines
+                let fps = 1.0 / time.delta_seconds();
+                debug_lines.add("FPS", format!("{:.0}", fps));
+
+                // Render debug overlay (cleared in app.rs after all systems complete)
+                if let Err(e) = renderer.render_overlay(draw_cb, debug_lines.iter()) {
+                    log::error!("RenderSystem: Failed to render overlay: {}", e);
                 }
 
                 if let Err(e) = renderer.end_frame(draw_cb, present_index) {

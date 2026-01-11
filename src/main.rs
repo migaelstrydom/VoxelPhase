@@ -3,6 +3,7 @@ mod camera;
 mod collision;
 mod components;
 mod core;
+mod debug;
 mod input;
 mod model;
 mod player;
