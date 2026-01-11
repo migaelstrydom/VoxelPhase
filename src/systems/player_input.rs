@@ -1,8 +1,9 @@
-use crate::components::{CameraComponent, OnGround, Position, Velocity};
+use crate::components::{Acceleration, CameraComponent, OnGround, Position, Velocity};
+use crate::debug::DebugLines;
 use crate::input::InputState;
 use crate::player::{Player, PlayerConfig, PlayerState};
 use nalgebra::Vector3;
-use specs::{Join, ReadExpect, ReadStorage, System, WriteStorage};
+use specs::{Join, ReadExpect, ReadStorage, System, Write, WriteStorage};
 use winit::event::MouseButton;
 use winit::keyboard::KeyCode;
 
@@ -14,10 +15,12 @@ impl<'a> System<'a> for PlayerInputSystem {
     type SystemData = (
         ReadExpect<'a, InputState>,
         ReadExpect<'a, PlayerConfig>,
+        Write<'a, DebugLines>,
         ReadStorage<'a, Player>,
         WriteStorage<'a, PlayerState>,
         ReadStorage<'a, Position>,
         WriteStorage<'a, Velocity>,
+        WriteStorage<'a, Acceleration>,
         ReadStorage<'a, CameraComponent>,
         ReadStorage<'a, OnGround>,
     );
@@ -26,10 +29,12 @@ impl<'a> System<'a> for PlayerInputSystem {
         let (
             input,
             config,
+            mut debug,
             players,
             mut player_states,
             positions,
             mut velocities,
+            mut accelerations,
             cameras,
             on_grounds,
         ) = data;
@@ -40,15 +45,28 @@ impl<'a> System<'a> for PlayerInputSystem {
             .map(|c| c.0.position)
             .unwrap_or_else(|| nalgebra::Point3::new(0.0, 0.0, 5.0));
 
-        for (_player, state, pos, vel, on_ground) in (
+        for (_player, state, pos, vel, accel, on_ground) in (
             &players,
             &mut player_states,
             &positions,
             &mut velocities,
+            &mut accelerations,
             &on_grounds,
         )
             .join()
         {
+            // Debug: show player position
+            debug.add(
+                "Position",
+                format!("{:.1}, {:.1}, {:.1}", pos.0.x, pos.0.y, pos.0.z),
+            );
+            // debug.add(
+            //     "Velocity",
+            //     format!("{:.1}, {:.1}, {:.1}", vel.0.x, vel.0.y, vel.0.z),
+            // );
+            // debug.add("On Ground", format!("{}", on_ground.grounded));
+            // debug.add("Facing Direction", format!("{:.1}", state.facing_direction));
+
             // Use the collision system's ground detection
             let is_grounded = on_ground.grounded;
 
@@ -69,13 +87,6 @@ impl<'a> System<'a> for PlayerInputSystem {
 
             // Right vector is perpendicular to forward (rotate 90 degrees in XZ plane)
             let right = Vector3::new(-forward.z, 0.0, forward.x);
-
-            // Determine movement speed based on ground state
-            let speed = if is_grounded {
-                config.walk_speed
-            } else {
-                config.air_speed
-            };
 
             // Build movement direction from WASD input
             let mut move_dir = Vector3::zeros();
@@ -103,14 +114,17 @@ impl<'a> System<'a> for PlayerInputSystem {
 
             // Apply horizontal velocity (preserve vertical velocity for gravity/jumping)
             if is_grounded {
-                vel.0.x = move_dir.x * speed;
-                vel.0.z = move_dir.z * speed;
+                vel.0.x = move_dir.x * config.walk_speed;
+                vel.0.z = move_dir.z * config.walk_speed;
+            } else {
+                accel.0.x = move_dir.x * config.air_acceleration;
+                accel.0.z = move_dir.z * config.air_acceleration;
             }
 
             // Handle jumping - only when grounded
             if (input.is_mouse_button_just_pressed(MouseButton::Right)
                 || input.is_key_just_pressed(KeyCode::Space))
-            // && is_grounded
+                && is_grounded
             {
                 vel.0.y = config.jump_speed;
             }
