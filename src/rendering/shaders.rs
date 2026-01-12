@@ -19,6 +19,10 @@ mod bytecode {
     /// Overlay/UI pipeline shaders
     pub const OVERLAY_VERTEX: &[u8] = include_bytes!("../../shader/overlay.vert.spv");
     pub const OVERLAY_FRAGMENT: &[u8] = include_bytes!("../../shader/overlay.frag.spv");
+
+    /// Particle system shaders
+    pub const PARTICLE_VERTEX: &[u8] = include_bytes!("../../shader/particle.vert.spv");
+    pub const PARTICLE_FRAGMENT: &[u8] = include_bytes!("../../shader/particle.frag.spv");
 }
 
 /// Centralized shader loading and management.
@@ -46,6 +50,16 @@ impl ShaderManager {
     /// Load the overlay fragment shader.
     pub fn load_overlay_fragment(device: &ManagedDevice) -> EngineResult<vk::ShaderModule> {
         Self::load_shader(device, bytecode::OVERLAY_FRAGMENT, ShaderStage::Fragment)
+    }
+
+    /// Load the particle vertex shader.
+    pub fn load_particle_vertex(device: &ManagedDevice) -> EngineResult<vk::ShaderModule> {
+        Self::load_shader(device, bytecode::PARTICLE_VERTEX, ShaderStage::Vertex)
+    }
+
+    /// Load the particle fragment shader.
+    pub fn load_particle_fragment(device: &ManagedDevice) -> EngineResult<vk::ShaderModule> {
+        Self::load_shader(device, bytecode::PARTICLE_FRAGMENT, ShaderStage::Fragment)
     }
 
     /// Load a shader module from SPIR-V bytecode.

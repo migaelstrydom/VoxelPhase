@@ -18,10 +18,20 @@ use crate::components::{
 };
 use crate::core::error::{EngineError, EngineResult};
 use crate::core::vulkan_context::VulkanContext;
+use crate::debug::DebugLines;
+use crate::explosion::{Explosion, ExplosionSystem};
 use crate::input::InputState;
+use crate::particles::{
+    ParticleConfig, ParticleEmitter, ParticlePool, ParticleSpawnSystem, ParticleUpdateSystem,
+};
 use crate::player::{
     build_player_model, Player, PlayerAnimationState, PlayerConfig, PlayerMaterials,
     PlayerModelConfig, PlayerState,
+};
+use crate::projectile::{
+    build_grenade_model, Grenade, GrenadeConfig, GrenadeCooldown, GrenadeMaterials,
+    GrenadeModelResource, GrenadeSpawnSystem, Lifetime, LifetimeSystem, Projectile,
+    ProjectileCollisionSystem,
 };
 use crate::rendering::camera::Camera;
 use crate::rendering::material::{Material, MaterialManagerBuilder};
@@ -33,7 +43,6 @@ use crate::systems::{
     PlayerAnimationSystem, PlayerInputSystem, PlayerStateSyncSystem, RenderSystem,
     TerrainCollisionSystem,
 };
-use crate::debug::DebugLines;
 use crate::terrain::{create_test_terrain, TerrainManager};
 use crate::time::Time;
 
@@ -108,6 +117,11 @@ impl<'a, 'b> App<'a, 'b> {
             eye: material_builder.register(Material::textured(eye_texture)),
         };
 
+        // Register grenade material
+        let grenade_materials = GrenadeMaterials {
+            body: material_builder.register(Material::coloured(Colour::new(0.2, 0.25, 0.2, 1.0))), // Dark green
+        };
+
         // Register landscape material (reserved for future terrain texturing)
         let _landscape_material = material_builder.register(Material::textured(grass_texture));
 
@@ -126,6 +140,15 @@ impl<'a, 'b> App<'a, 'b> {
         };
         let player_model = Arc::new(build_player_model(&player_model_config, &player_materials));
         log::info!("Player model built with {} parts", player_model.parts.len());
+
+        // Build grenade model
+        let grenade_config = GrenadeConfig::default();
+        let grenade_model = Arc::new(build_grenade_model(
+            grenade_config.radius,
+            Colour::new(1.0, 0.7, 0.1, 1.0), // Glowing fireball orange
+            &grenade_materials,
+        ));
+        log::info!("Grenade model built");
 
         // Note: Old OBJ landscape removed - using procedural terrain instead
 
@@ -149,6 +172,11 @@ impl<'a, 'b> App<'a, 'b> {
         world.register::<Collider>();
         world.register::<OnGround>();
         world.register::<PhysicsBody>();
+        world.register::<Grenade>();
+        world.register::<Lifetime>();
+        world.register::<Projectile>();
+        world.register::<Explosion>();
+        world.register::<ParticleEmitter>();
 
         // Insert resources
         world.insert(renderer);
@@ -160,7 +188,13 @@ impl<'a, 'b> App<'a, 'b> {
         world.insert(PlayerConfig::default());
         world.insert(CameraConfig::default());
         world.insert(DebugLines::default());
-
+        world.insert(GrenadeConfig::default());
+        world.insert(GrenadeModelResource {
+            model: Some(grenade_model),
+        });
+        world.insert(GrenadeCooldown::default());
+        world.insert(ParticleConfig::new());
+        world.insert(ParticlePool::default());
         // Create procedural terrain
         log::info!("Generating procedural terrain...");
         let terrain_svo = create_test_terrain(64.0, 6); // 64x64x64 world, depth 6
@@ -256,6 +290,16 @@ impl<'a, 'b> App<'a, 'b> {
                 "camera_control",
                 &["player_state_sync"],
             )
+            .with(GrenadeSpawnSystem, "grenade_spawn", &["camera_control"])
+            .with(LifetimeSystem, "lifetime", &["grenade_spawn"])
+            .with(
+                ProjectileCollisionSystem,
+                "projectile_collision",
+                &["lifetime"],
+            )
+            .with(ExplosionSystem, "explosion", &["projectile_collision"])
+            .with(ParticleSpawnSystem, "particle_spawn", &["explosion"])
+            .with(ParticleUpdateSystem, "particle_update", &["particle_spawn"])
             // Rendering is thread-local (must be last)
             .with_thread_local(RenderSystem)
             .build();

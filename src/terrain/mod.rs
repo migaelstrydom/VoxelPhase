@@ -15,4 +15,7 @@ mod voxel;
 // New unified terrain manager
 pub use manager::TerrainManager;
 
+// Voxel types for terrain modification
+pub use voxel::Voxel;
+
 pub use generation::create_test_terrain;

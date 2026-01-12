@@ -1,6 +1,7 @@
 use crate::components::{CameraComponent, ModelInstance, Position, Renderable, Rotation};
 use crate::debug::DebugLines;
 use crate::model::Transform;
+use crate::particles::ParticlePool;
 use crate::player::PlayerAnimationState;
 use crate::rendering::material::MaterialManager;
 use crate::rendering::renderer::Renderer;
@@ -18,6 +19,7 @@ impl<'a> System<'a> for RenderSystem {
         ReadExpect<'a, MaterialManager>,
         Read<'a, crate::time::Time>,
         Write<'a, DebugLines>,
+        Read<'a, ParticlePool>,
         Option<Read<'a, TerrainManager>>,
         ReadStorage<'a, ModelInstance>,
         ReadStorage<'a, Position>,
@@ -34,6 +36,7 @@ impl<'a> System<'a> for RenderSystem {
             material_manager,
             time,
             mut debug_lines,
+            particle_pool,
             terrain_manager_opt,
             model_instances,
             positions,
@@ -113,6 +116,13 @@ impl<'a> System<'a> for RenderSystem {
                     ) {
                         log::error!("RenderSystem: Failed to draw model: {}", e);
                     }
+                }
+
+                // Render particles (after models, before overlay)
+                if let Err(e) =
+                    renderer.render_particles(draw_cb, &particle_pool, &view_matrix, &proj_matrix)
+                {
+                    log::error!("RenderSystem: Failed to render particles: {}", e);
                 }
 
                 // Add FPS to debug lines

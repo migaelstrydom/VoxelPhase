@@ -8,7 +8,7 @@ use crate::model::Model;
 use crate::rendering::camera::Camera;
 
 // Physics Components
-#[derive(Component, Debug)]
+#[derive(Component, Debug, Clone, Copy)]
 #[storage(VecStorage)]
 pub struct Position(pub Vector3<f32>);
 

@@ -15,6 +15,7 @@ use winit::window::Window;
 use crate::core::error::EngineResult;
 use crate::core::vulkan_context::VulkanContext;
 use crate::model::{Model, Transform};
+use crate::particles::{ParticlePool, ParticleRenderer};
 use crate::rendering::descriptors::DescriptorManager;
 use crate::rendering::frame::{FrameData, SceneUbo};
 use crate::rendering::material::MaterialManager;
@@ -35,6 +36,7 @@ pub struct Renderer {
     pub descriptors: Arc<DescriptorManager>,
     pub vulkan_context: Arc<VulkanContext>,
     pub overlay: OverlayRenderer,
+    pub particle_renderer: ParticleRenderer,
 }
 
 impl Renderer {
@@ -97,6 +99,12 @@ impl Renderer {
             window_height,
         )?;
 
+        // Create particle renderer
+        let particle_renderer = ParticleRenderer::new(
+            Arc::clone(&vulkan_context),
+            pipeline.renderpass,
+        )?;
+
         Ok(Self {
             pipeline,
             swapchain,
@@ -104,6 +112,7 @@ impl Renderer {
             descriptors,
             vulkan_context,
             overlay,
+            particle_renderer,
         })
     }
 
@@ -336,6 +345,38 @@ impl Renderer {
         }
 
         Ok(())
+    }
+
+    /// Render particles from the particle pool.
+    ///
+    /// Should be called after drawing the 3D scene but before overlay.
+    pub fn render_particles(
+        &mut self,
+        cb: vk::CommandBuffer,
+        pool: &ParticlePool,
+        view_matrix: &Matrix4<f32>,
+        proj_matrix: &Matrix4<f32>,
+    ) -> EngineResult<()> {
+        let extent = self.swapchain.extent;
+        let viewport = vk::Viewport {
+            x: 0.0,
+            y: 0.0,
+            width: extent.width as f32,
+            height: extent.height as f32,
+            min_depth: 0.0,
+            max_depth: 1.0,
+        };
+        let scissor = vk::Rect2D {
+            offset: vk::Offset2D { x: 0, y: 0 },
+            extent,
+        };
+
+        unsafe {
+            self.vulkan_context.device().cmd_set_viewport(cb, 0, &[viewport]);
+            self.vulkan_context.device().cmd_set_scissor(cb, 0, &[scissor]);
+        }
+
+        self.particle_renderer.render(cb, pool, view_matrix, proj_matrix)
     }
 
     /// Render debug overlay with the given debug line entries.
