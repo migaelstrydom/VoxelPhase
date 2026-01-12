@@ -156,12 +156,6 @@ impl<'a> System<'a> for GrenadeSpawnSystem {
 
         // Set cooldown
         cooldown.remaining = config.cooldown;
-
-        log::debug!(
-            "Grenade spawned at {:?} with velocity {:?}",
-            spawn_pos,
-            throw_velocity
-        );
     }
 }
 
@@ -241,8 +235,6 @@ impl<'a> System<'a> for ProjectileCollisionSystem {
 
             // Delete the grenade
             let _ = entities.delete(entity);
-
-            log::debug!("Grenade exploded at {:?}", pos);
         }
     }
 }

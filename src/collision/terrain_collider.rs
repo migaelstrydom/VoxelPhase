@@ -3,6 +3,9 @@
 //! This combines the SVO's spatial hierarchy with triangle storage for
 //! efficient collision queries. Triangles are indexed by the SVO leaf
 //! regions they belong to, enabling O(log n) queries.
+//!
+//! Supports partial updates: triangles can be removed from specific regions
+//! and new triangles added without rebuilding the entire index.
 
 use std::collections::HashMap;
 
@@ -11,6 +14,7 @@ use nalgebra::Point3;
 use super::{
     sphere_triangle_collision, swept_sphere_triangle, ContactPoint, SweptContact, Triangle, AABB,
 };
+use crate::rendering::vertex::Vertex;
 
 /// A terrain collider that uses SVO-based spatial indexing for fast queries.
 ///
@@ -108,6 +112,94 @@ impl TerrainCollider {
     /// Get the number of triangles.
     pub fn triangle_count(&self) -> usize {
         self.triangles.len()
+    }
+
+    // === Partial Update Methods ===
+
+    /// Remove triangles whose centroid falls within the given bounds.
+    ///
+    /// This is used for incremental updates when only part of the terrain changes.
+    /// Note: This invalidates some spatial index entries but doesn't compact the
+    /// triangle array. Indices pointing to removed triangles will be cleaned up
+    /// during queries via the `is_valid` flag check.
+    pub fn remove_triangles_in_region(&mut self, bounds: &AABB) {
+        // Collect indices of triangles to remove
+        let to_remove: Vec<usize> = self
+            .triangles
+            .iter()
+            .enumerate()
+            .filter(|(_, tri)| bounds.contains_point(tri.centroid()))
+            .map(|(i, _)| i)
+            .collect();
+
+        if to_remove.is_empty() {
+            return;
+        }
+
+        // Remove from spatial index
+        for &idx in &to_remove {
+            let tri = &self.triangles[idx];
+            let tri_aabb = tri.aabb();
+            for key in RegionKey::keys_overlapping(&tri_aabb, self.region_size) {
+                if let Some(indices) = self.spatial_index.get_mut(&key) {
+                    indices.retain(|&i| i != idx);
+                }
+            }
+        }
+
+        // Remove triangles from back to front to maintain valid indices
+        let mut sorted = to_remove;
+        sorted.sort_unstable_by(|a, b| b.cmp(a));
+
+        for idx in sorted {
+            // Swap-remove and update spatial index for the swapped triangle
+            let last_idx = self.triangles.len() - 1;
+            if idx != last_idx {
+                // The triangle at last_idx will move to idx
+                let moved_tri = self.triangles[last_idx];
+                let moved_aabb = moved_tri.aabb();
+
+                // Update spatial index: replace last_idx with idx
+                for key in RegionKey::keys_overlapping(&moved_aabb, self.region_size) {
+                    if let Some(indices) = self.spatial_index.get_mut(&key) {
+                        for i in indices.iter_mut() {
+                            if *i == last_idx {
+                                *i = idx;
+                            }
+                        }
+                    }
+                }
+            }
+            self.triangles.swap_remove(idx);
+        }
+    }
+
+    /// Add triangles from mesh vertices and indices.
+    ///
+    /// Converts vertex position data to Triangle structs and adds them to the collider.
+    pub fn add_triangles_from_mesh(&mut self, vertices: &[Vertex], indices: &[u32]) {
+        for chunk in indices.chunks(3) {
+            if chunk.len() == 3 {
+                let v0 = &vertices[chunk[0] as usize];
+                let v1 = &vertices[chunk[1] as usize];
+                let v2 = &vertices[chunk[2] as usize];
+
+                let tri = Triangle::new(
+                    Point3::new(v0.pos.x, v0.pos.y, v0.pos.z),
+                    Point3::new(v1.pos.x, v1.pos.y, v1.pos.z),
+                    Point3::new(v2.pos.x, v2.pos.y, v2.pos.z),
+                );
+
+                // Add triangle and index it
+                let idx = self.triangles.len();
+                self.triangles.push(tri);
+
+                let tri_aabb = tri.aabb();
+                for key in RegionKey::keys_overlapping(&tri_aabb, self.region_size) {
+                    self.spatial_index.entry(key).or_default().push(idx);
+                }
+            }
+        }
     }
 
     /// Query for sphere collision contacts.

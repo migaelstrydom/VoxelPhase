@@ -1,39 +1,40 @@
 //! Terrain manager that combines SVO storage with collision and rendering.
 //!
-//! This replaces the chunk-based system with a cleaner architecture:
-//! - SVO stores voxel data
-//! - TerrainCollider provides fast collision queries
-//! - Mesh data is generated for rendering
+//! This module provides incremental terrain updates:
+//! - SVO stores voxel data with mesh region tracking
+//! - Only dirty regions are rebuilt when terrain is modified
+//! - TerrainCollider provides fast collision queries with partial updates
 
 use nalgebra::Point3;
 
-use crate::collision::{TerrainCollider, TerrainColliderStats, Triangle, AABB};
+use crate::collision::{TerrainCollider, TerrainColliderStats, AABB};
 use crate::rendering::vertex::Vertex;
 
-use super::marching_cubes::MarchingCubes;
-use super::svo::SparseVoxelOctree;
+use super::svo::{MeshRegionKey, SparseVoxelOctree};
 use super::voxel::Voxel;
 
 /// Unified terrain manager handling storage, collision, and rendering.
+///
+/// Uses incremental mesh rebuilding: when terrain is modified, only the
+/// affected mesh regions are regenerated, providing significant speedup
+/// for localized changes like explosions.
 pub struct TerrainManager {
-    /// Sparse voxel octree storing terrain data.
+    /// Sparse voxel octree storing terrain data and mesh regions.
     svo: SparseVoxelOctree,
 
     /// Collision structure with spatial indexing.
     collider: TerrainCollider,
 
-    /// Render mesh vertices.
+    /// Combined render mesh vertices (from all regions).
     render_vertices: Vec<Vertex>,
 
-    /// Render mesh indices.
+    /// Combined render mesh indices (from all regions).
     render_indices: Vec<u32>,
-
-    /// Whether the mesh needs regeneration.
-    dirty: bool,
 }
 
 impl TerrainManager {
     /// Create a new terrain manager with the given bounds and SVO depth.
+    #[allow(unused)] // Visible for testing
     pub fn new(bounds: AABB, svo_depth: u32) -> Self {
         // Collision index depth should give reasonable region sizes
         // For a 64-unit world with depth 5, regions are 2 units each
@@ -44,89 +45,121 @@ impl TerrainManager {
             collider: TerrainCollider::new(bounds, collider_depth),
             render_vertices: Vec::new(),
             render_indices: Vec::new(),
-            dirty: true,
         }
     }
 
     /// Create a terrain manager from an existing SVO.
-    pub fn from_svo(svo: SparseVoxelOctree) -> Self {
+    ///
+    /// Marks all regions dirty and performs initial mesh build.
+    pub fn from_svo(mut svo: SparseVoxelOctree) -> Self {
         let bounds = *svo.bounds();
         let svo_depth = svo.max_depth();
         let collider_depth = (svo_depth - 1).max(3);
+
+        // Mark all regions as dirty for initial build
+        svo.mark_all_regions_dirty();
 
         let mut manager = Self {
             svo,
             collider: TerrainCollider::new(bounds, collider_depth),
             render_vertices: Vec::new(),
             render_indices: Vec::new(),
-            dirty: true,
         };
 
-        manager.rebuild_mesh();
+        // Perform initial build
+        manager.update();
         manager
     }
 
-    /// Get the terrain bounds.
-    pub fn bounds(&self) -> &AABB {
-        self.svo.bounds()
-    }
-
     /// Set a voxel at a world position.
+    #[allow(unused)] // Visible for testing
     pub fn set_voxel(&mut self, position: Point3<f32>, voxel: Voxel) {
         self.svo.set(position, voxel);
-        self.dirty = true;
-    }
-
-    /// Get a voxel at a world position.
-    pub fn get_voxel(&self, position: Point3<f32>) -> Voxel {
-        self.svo.get(position)
+        // Mark the region containing this voxel as dirty
+        let voxel_size = self.svo.voxel_size();
+        let affected = AABB::new(
+            position - nalgebra::Vector3::new(voxel_size, voxel_size, voxel_size),
+            position + nalgebra::Vector3::new(voxel_size, voxel_size, voxel_size),
+        );
+        self.svo.mark_regions_dirty(&affected);
     }
 
     /// Modify terrain in a sphere (for explosions, digging, etc.)
+    ///
+    /// Only affected mesh regions will be rebuilt on next update.
     pub fn modify_sphere<F>(&mut self, center: Point3<f32>, radius: f32, modifier: F)
     where
         F: FnMut(Point3<f32>, Voxel) -> Voxel,
     {
         self.svo.modify_sphere(center, radius, modifier);
-        self.dirty = true;
+
+        // Mark affected mesh regions as dirty
+        let affected = AABB::new(
+            Point3::new(center.x - radius, center.y - radius, center.z - radius),
+            Point3::new(center.x + radius, center.y + radius, center.z + radius),
+        );
+        self.svo.mark_regions_dirty(&affected);
     }
 
-    /// Update terrain if dirty (regenerates mesh and collision data).
+    /// Update terrain incrementally (only rebuilds dirty regions).
     ///
     /// Call this once per frame or after batch modifications.
     pub fn update(&mut self) {
-        if self.dirty {
-            self.rebuild_mesh();
-            self.dirty = false;
+        if !self.svo.has_dirty_regions() {
+            return;
+        }
+
+        // Rebuild dirty mesh regions in the SVO
+        let rebuilt_keys = self.svo.rebuild_dirty_regions();
+
+        // Combine all region meshes into render buffers
+        self.combine_region_meshes();
+
+        // Update collision for affected regions only
+        self.update_collision_partial(&rebuilt_keys);
+
+        // log::debug!(
+        //     "Terrain updated: {} regions rebuilt, {} total vertices, {} triangles",
+        //     self.svo.dirty_region_count(),
+        //     self.render_vertices.len(),
+        //     self.collider.triangle_count()
+        // );
+    }
+
+    /// Combine all mesh regions into unified render buffers.
+    fn combine_region_meshes(&mut self) {
+        self.render_vertices.clear();
+        self.render_indices.clear();
+
+        for mesh in self.svo.mesh_regions().values() {
+            let index_offset = self.render_vertices.len() as u32;
+            self.render_vertices.extend_from_slice(&mesh.vertices);
+            self.render_indices
+                .extend(mesh.indices.iter().map(|i| i + index_offset));
         }
     }
 
-    /// Force immediate mesh regeneration.
-    pub fn rebuild_mesh(&mut self) {
-        let bounds = *self.svo.bounds();
-        let resolution = 1 << self.svo.max_depth();
+    /// Update collision data for rebuilt regions only.
+    fn update_collision_partial(&mut self, rebuilt_keys: &[MeshRegionKey]) {
+        for key in rebuilt_keys {
+            let region_bounds = self.svo.region_bounds(*key);
 
-        // Sample voxels into a grid
-        let grid = self.svo.sample_grid(&bounds, resolution + 1);
+            // Remove old triangles in this region
+            self.collider.remove_triangles_in_region(&region_bounds);
 
-        // Generate mesh using marching cubes
-        let marching_cubes = MarchingCubes::new();
-        let voxel_size = bounds.size().x / resolution as f32;
-        let mesh = marching_cubes.generate(&grid, bounds.min, voxel_size);
+            // Add new triangles if region has geometry
+            if let Some(mesh) = self.svo.mesh_regions().get(key) {
+                self.collider
+                    .add_triangles_from_mesh(&mesh.vertices, &mesh.indices);
+            }
+        }
+    }
 
-        // Update render data
-        self.render_vertices = mesh.to_vertices();
-        self.render_indices = mesh.render_indices().to_vec();
-
-        // Update collision data
-        self.collider.clear();
-        self.collider.add_triangles(mesh.triangles());
-
-        log::debug!(
-            "Terrain rebuilt: {} vertices, {} triangles",
-            self.render_vertices.len(),
-            self.collider.triangle_count()
-        );
+    /// Force full mesh regeneration (rebuilds all regions).
+    #[allow(unused)]
+    pub fn rebuild_all(&mut self) {
+        self.svo.mark_all_regions_dirty();
+        self.update();
     }
 
     // === Collision queries (delegate to TerrainCollider) ===

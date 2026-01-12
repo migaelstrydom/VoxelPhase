@@ -41,7 +41,7 @@ use crate::resources::manager::ResourceManager;
 use crate::systems::{
     CameraControlSystem, GravitySystem, PenetrationResolutionSystem, PhysicsSystem,
     PlayerAnimationSystem, PlayerInputSystem, PlayerStateSyncSystem, RenderSystem,
-    TerrainCollisionSystem,
+    TerrainCollisionSystem, TerrainUpdateSystem,
 };
 use crate::terrain::{create_test_terrain, TerrainManager};
 use crate::time::Time;
@@ -298,6 +298,7 @@ impl<'a, 'b> App<'a, 'b> {
                 &["lifetime"],
             )
             .with(ExplosionSystem, "explosion", &["projectile_collision"])
+            .with(TerrainUpdateSystem, "terrain_update", &["explosion"])
             .with(ParticleSpawnSystem, "particle_spawn", &["explosion"])
             .with(ParticleUpdateSystem, "particle_update", &["particle_spawn"])
             // Rendering is thread-local (must be last)

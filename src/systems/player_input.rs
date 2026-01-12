@@ -1,5 +1,4 @@
 use crate::components::{Acceleration, CameraComponent, OnGround, Position, Velocity};
-use crate::debug::DebugLines;
 use crate::input::InputState;
 use crate::player::{Player, PlayerConfig, PlayerState};
 use nalgebra::Vector3;
@@ -15,7 +14,6 @@ impl<'a> System<'a> for PlayerInputSystem {
     type SystemData = (
         ReadExpect<'a, InputState>,
         ReadExpect<'a, PlayerConfig>,
-        Write<'a, DebugLines>,
         ReadStorage<'a, Player>,
         WriteStorage<'a, PlayerState>,
         ReadStorage<'a, Position>,
@@ -29,7 +27,6 @@ impl<'a> System<'a> for PlayerInputSystem {
         let (
             input,
             config,
-            mut debug,
             players,
             mut player_states,
             positions,
@@ -56,10 +53,10 @@ impl<'a> System<'a> for PlayerInputSystem {
             .join()
         {
             // Debug: show player position
-            debug.add(
-                "Position",
-                format!("{:.1}, {:.1}, {:.1}", pos.0.x, pos.0.y, pos.0.z),
-            );
+            // debug.add(
+            //     "Position",
+            //     format!("{:.1}, {:.1}, {:.1}", pos.0.x, pos.0.y, pos.0.z),
+            // );
             // debug.add(
             //     "Velocity",
             //     format!("{:.1}, {:.1}, {:.1}", vel.0.x, vel.0.y, vel.0.z),
