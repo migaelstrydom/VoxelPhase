@@ -384,11 +384,6 @@ impl SparseVoxelOctree {
 
     // === Mesh Region Methods ===
 
-    /// Get the mesh depth (depth at which mesh regions are defined).
-    pub fn mesh_depth(&self) -> u32 {
-        self.mesh_depth
-    }
-
     /// Get the size of each mesh region in world units.
     pub fn mesh_region_size(&self) -> f32 {
         self.bounds.size().x / (1 << self.mesh_depth) as f32
@@ -470,11 +465,6 @@ impl SparseVoxelOctree {
     /// Get the number of dirty regions.
     pub fn dirty_region_count(&self) -> usize {
         self.dirty_regions.len()
-    }
-
-    /// Iterate over dirty region keys (for debugging).
-    pub fn dirty_regions_iter(&self) -> impl Iterator<Item = MeshRegionKey> + '_ {
-        self.dirty_regions.iter().copied()
     }
 
     /// Rebuild mesh for a single region.
@@ -595,11 +585,6 @@ impl SparseVoxelOctree {
     /// Get read-only access to the mesh regions.
     pub fn mesh_regions(&self) -> &HashMap<MeshRegionKey, RegionMesh> {
         &self.mesh_regions
-    }
-
-    /// Get the total number of mesh regions with geometry.
-    pub fn mesh_region_count(&self) -> usize {
-        self.mesh_regions.len()
     }
 }
 

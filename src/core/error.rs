@@ -90,8 +90,6 @@ pub enum EngineError {
 pub enum BufferOperation {
     Create,
     Map,
-    Unmap,
-    Copy,
     Bind,
 }
 
@@ -103,7 +101,6 @@ pub enum ImageOperation {
     Bind,
     CreateView,
     TransitionLayout,
-    Copy,
     GenerateMipmaps,
 }
 
@@ -206,51 +203,10 @@ impl From<image::ImageError> for EngineError {
 /// Result type alias using EngineError
 pub type EngineResult<T> = Result<T, EngineError>;
 
-/// Extension trait for adding context to Results
-pub trait ResultExt<T> {
-    /// Add context about a texture operation
-    fn texture_context(self, path: &str) -> EngineResult<T>;
-
-    /// Add context about a mesh operation
-    fn mesh_context(self, path: &str) -> EngineResult<T>;
-
-    /// Add context about an I/O operation
-    fn io_context(self, path: &str) -> EngineResult<T>;
-}
-
-impl<T, E: std::error::Error> ResultExt<T> for Result<T, E> {
-    fn texture_context(self, path: &str) -> EngineResult<T> {
-        self.map_err(|e| EngineError::Texture {
-            path: Some(path.to_string()),
-            reason: e.to_string(),
-        })
-    }
-
-    fn mesh_context(self, path: &str) -> EngineResult<T> {
-        self.map_err(|e| EngineError::Mesh {
-            path: Some(path.to_string()),
-            reason: e.to_string(),
-        })
-    }
-
-    fn io_context(self, path: &str) -> EngineResult<T> {
-        self.map_err(|e| EngineError::Io {
-            path: path.to_string(),
-            reason: e.to_string(),
-        })
-    }
-}
-
 /// Extension trait for Vulkan Results
 pub trait VkResultExt<T> {
-    /// Convert to EngineError with buffer context
-    fn buffer_context(self, op: BufferOperation, size: u64) -> EngineResult<T>;
-
     /// Convert to EngineError with image context
     fn image_context(self, op: ImageOperation, width: u32, height: u32) -> EngineResult<T>;
-
-    /// Convert to EngineError with shader context
-    fn shader_context(self, stage: ShaderStage) -> EngineResult<T>;
 
     /// Convert to EngineError with descriptor context
     fn descriptor_context(self, msg: &str) -> EngineResult<T>;
@@ -263,26 +219,11 @@ pub trait VkResultExt<T> {
 }
 
 impl<T> VkResultExt<T> for Result<T, vk::Result> {
-    fn buffer_context(self, op: BufferOperation, size: u64) -> EngineResult<T> {
-        self.map_err(|e| EngineError::Buffer {
-            operation: op,
-            size,
-            reason: format!("{:?}", e),
-        })
-    }
-
     fn image_context(self, op: ImageOperation, width: u32, height: u32) -> EngineResult<T> {
         self.map_err(|e| EngineError::Image {
             operation: op,
             width,
             height,
-            reason: format!("{:?}", e),
-        })
-    }
-
-    fn shader_context(self, stage: ShaderStage) -> EngineResult<T> {
-        self.map_err(|e| EngineError::Shader {
-            stage,
             reason: format!("{:?}", e),
         })
     }

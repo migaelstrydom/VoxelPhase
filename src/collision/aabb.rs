@@ -24,25 +24,12 @@ impl AABB {
         }
     }
 
-    /// Create an AABB that contains a single point.
-    pub fn from_point(point: Point3<f32>) -> Self {
-        Self {
-            min: point,
-            max: point,
-        }
-    }
-
     /// Create an empty (inverted) AABB suitable for expansion.
     pub fn empty() -> Self {
         Self {
             min: Point3::new(f32::INFINITY, f32::INFINITY, f32::INFINITY),
             max: Point3::new(f32::NEG_INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY),
         }
-    }
-
-    /// Check if this AABB is valid (min <= max on all axes).
-    pub fn is_valid(&self) -> bool {
-        self.min.x <= self.max.x && self.min.y <= self.max.y && self.min.z <= self.max.z
     }
 
     /// Get the center point of the AABB.
@@ -72,42 +59,6 @@ impl AABB {
         )
     }
 
-    /// Expand this AABB to include a point.
-    pub fn expand_to_include_point(&mut self, point: Point3<f32>) {
-        self.min.x = self.min.x.min(point.x);
-        self.min.y = self.min.y.min(point.y);
-        self.min.z = self.min.z.min(point.z);
-        self.max.x = self.max.x.max(point.x);
-        self.max.y = self.max.y.max(point.y);
-        self.max.z = self.max.z.max(point.z);
-    }
-
-    /// Expand this AABB to include another AABB.
-    pub fn expand_to_include(&mut self, other: &AABB) {
-        self.min.x = self.min.x.min(other.min.x);
-        self.min.y = self.min.y.min(other.min.y);
-        self.min.z = self.min.z.min(other.min.z);
-        self.max.x = self.max.x.max(other.max.x);
-        self.max.y = self.max.y.max(other.max.y);
-        self.max.z = self.max.z.max(other.max.z);
-    }
-
-    /// Return a new AABB that is the union of this and another.
-    pub fn union(&self, other: &AABB) -> AABB {
-        AABB {
-            min: Point3::new(
-                self.min.x.min(other.min.x),
-                self.min.y.min(other.min.y),
-                self.min.z.min(other.min.z),
-            ),
-            max: Point3::new(
-                self.max.x.max(other.max.x),
-                self.max.y.max(other.max.y),
-                self.max.z.max(other.max.z),
-            ),
-        }
-    }
-
     /// Check if this AABB intersects another AABB.
     pub fn intersects(&self, other: &AABB) -> bool {
         self.min.x <= other.max.x
@@ -128,16 +79,6 @@ impl AABB {
             && point.z <= self.max.z
     }
 
-    /// Check if this AABB fully contains another AABB.
-    pub fn contains(&self, other: &AABB) -> bool {
-        self.min.x <= other.min.x
-            && self.max.x >= other.max.x
-            && self.min.y <= other.min.y
-            && self.max.y >= other.max.y
-            && self.min.z <= other.min.z
-            && self.max.z >= other.max.z
-    }
-
     /// Check if a sphere intersects this AABB.
     pub fn intersects_sphere(&self, center: Point3<f32>, radius: f32) -> bool {
         // Find the closest point on the AABB to the sphere center
@@ -154,34 +95,6 @@ impl AABB {
             point.y.clamp(self.min.y, self.max.y),
             point.z.clamp(self.min.z, self.max.z),
         )
-    }
-
-    /// Expand the AABB by a margin on all sides.
-    pub fn expanded(&self, margin: f32) -> AABB {
-        AABB {
-            min: Point3::new(
-                self.min.x - margin,
-                self.min.y - margin,
-                self.min.z - margin,
-            ),
-            max: Point3::new(
-                self.max.x + margin,
-                self.max.y + margin,
-                self.max.z + margin,
-            ),
-        }
-    }
-
-    /// Get the surface area of the AABB (useful for BVH heuristics).
-    pub fn surface_area(&self) -> f32 {
-        let size = self.size();
-        2.0 * (size.x * size.y + size.y * size.z + size.z * size.x)
-    }
-
-    /// Get the volume of the AABB.
-    pub fn volume(&self) -> f32 {
-        let size = self.size();
-        size.x * size.y * size.z
     }
 }
 

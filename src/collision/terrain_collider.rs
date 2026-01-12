@@ -29,13 +29,6 @@ pub struct TerrainCollider {
     /// The key is computed from the SVO position at a fixed depth.
     spatial_index: HashMap<RegionKey, Vec<usize>>,
 
-    /// World bounds of the terrain.
-    bounds: AABB,
-
-    /// Depth of spatial indexing (determines region size).
-    /// Higher = smaller regions = more precise but more memory.
-    index_depth: u32,
-
     /// Size of each indexed region.
     region_size: f32,
 }
@@ -81,8 +74,6 @@ impl TerrainCollider {
         Self {
             triangles: Vec::new(),
             spatial_index: HashMap::new(),
-            bounds,
-            index_depth,
             region_size,
         }
     }
@@ -90,6 +81,7 @@ impl TerrainCollider {
     /// Add triangles to the collider.
     ///
     /// Each triangle is indexed by all regions it overlaps.
+    #[allow(unused)] // Visible for testing
     pub fn add_triangles(&mut self, triangles: impl IntoIterator<Item = Triangle>) {
         for triangle in triangles {
             let idx = self.triangles.len();
@@ -103,13 +95,9 @@ impl TerrainCollider {
         }
     }
 
-    /// Clear all triangles and rebuild from scratch.
-    pub fn clear(&mut self) {
-        self.triangles.clear();
-        self.spatial_index.clear();
-    }
-
     /// Get the number of triangles.
+    /// Kept for testing purposes.
+    #[allow(dead_code)]
     pub fn triangle_count(&self) -> usize {
         self.triangles.len()
     }
@@ -276,25 +264,10 @@ impl TerrainCollider {
         earliest
     }
 
-    /// Convert a world point to a region key.
-    fn point_to_key(&self, point: Point3<f32>) -> RegionKey {
-        RegionKey::new(
-            (point.x / self.region_size).floor() as i32,
-            (point.y / self.region_size).floor() as i32,
-            (point.z / self.region_size).floor() as i32,
-        )
-    }
-
     /// Get statistics about the spatial index.
     pub fn stats(&self) -> TerrainColliderStats {
         let total_triangles = self.triangles.len();
         let occupied_regions = self.spatial_index.len();
-        let max_triangles_per_region = self
-            .spatial_index
-            .values()
-            .map(|v| v.len())
-            .max()
-            .unwrap_or(0);
         let avg_triangles_per_region = if occupied_regions > 0 {
             total_triangles as f32 / occupied_regions as f32
         } else {
@@ -304,9 +277,7 @@ impl TerrainCollider {
         TerrainColliderStats {
             total_triangles,
             occupied_regions,
-            max_triangles_per_region,
             avg_triangles_per_region,
-            region_size: self.region_size,
         }
     }
 }
@@ -316,14 +287,13 @@ impl TerrainCollider {
 pub struct TerrainColliderStats {
     pub total_triangles: usize,
     pub occupied_regions: usize,
-    pub max_triangles_per_region: usize,
     pub avg_triangles_per_region: f32,
-    pub region_size: f32,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use nalgebra::Vector3;
 
     #[test]
     fn test_terrain_collider_basic() {
@@ -361,12 +331,30 @@ mod tests {
         let mut collider = TerrainCollider::new(bounds, 4);
 
         // Ground plane
-        let triangle = Triangle::new(
-            Point3::new(-10.0, 0.0, -10.0),
-            Point3::new(10.0, 0.0, -10.0),
-            Point3::new(0.0, 0.0, 10.0),
-        );
-        collider.add_triangles([triangle]);
+        use crate::rendering::vertex::Vertex;
+        use nalgebra::{Vector2, Vector4};
+        let vertices = vec![
+            Vertex {
+                pos: Vector4::new(-10.0, 0.0, -10.0, 1.0),
+                color: Vector4::new(1.0, 1.0, 1.0, 1.0),
+                tex_coords: Vector2::new(0.0, 0.0),
+                normal: Vector3::new(0.0, 1.0, 0.0),
+            },
+            Vertex {
+                pos: Vector4::new(10.0, 0.0, -10.0, 1.0),
+                color: Vector4::new(1.0, 1.0, 1.0, 1.0),
+                tex_coords: Vector2::new(1.0, 0.0),
+                normal: Vector3::new(0.0, 1.0, 0.0),
+            },
+            Vertex {
+                pos: Vector4::new(0.0, 0.0, 10.0, 1.0),
+                color: Vector4::new(1.0, 1.0, 1.0, 1.0),
+                tex_coords: Vector2::new(0.5, 1.0),
+                normal: Vector3::new(0.0, 1.0, 0.0),
+            },
+        ];
+        let indices = vec![0, 1, 2];
+        collider.add_triangles_from_mesh(&vertices, &indices);
 
         // Fast projectile from above
         let contact = collider.query_swept_sphere(

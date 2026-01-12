@@ -60,8 +60,6 @@ pub struct PhysicsBody {
     pub restitution: f32,
     /// Friction coefficient.
     pub friction: f32,
-    /// Mass (used for impulse calculations if needed).
-    pub mass: f32,
 }
 
 impl Default for PhysicsBody {
@@ -69,7 +67,6 @@ impl Default for PhysicsBody {
         Self {
             restitution: 0.2,
             friction: 0.8,
-            mass: 1.0,
         }
     }
 }

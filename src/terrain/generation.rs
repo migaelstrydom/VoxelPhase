@@ -1,105 +1,21 @@
 //! Procedural terrain generation using noise.
 
 use nalgebra::Point3;
-use noise::{NoiseFn, OpenSimplex, Perlin};
 
 use super::svo::SparseVoxelOctree;
 use super::voxel::{Voxel, VoxelMaterial};
 use crate::collision::AABB;
 
 /// Terrain generator using procedural noise.
-pub struct TerrainGenerator {
-    /// Seed for random generation.
-    seed: u32,
-    /// Primary noise for large-scale terrain shape.
-    primary_noise: Perlin,
-    /// Secondary noise for detail.
-    detail_noise: OpenSimplex,
-}
+pub struct TerrainGenerator {}
 
 impl TerrainGenerator {
-    pub fn new(seed: u32) -> Self {
-        Self {
-            seed,
-            primary_noise: Perlin::new(seed),
-            detail_noise: OpenSimplex::new(seed.wrapping_add(1)),
-        }
-    }
-
-    /// Generate terrain into an SVO.
-    ///
-    /// Creates rolling hills with varied materials based on height.
-    pub fn generate(&self, svo: &mut SparseVoxelOctree) {
-        let bounds = *svo.bounds();
-        let min_voxel = svo.min_voxel_size();
-
-        // We'll sample at the minimum voxel resolution
-        let step = min_voxel;
-
-        let mut x = bounds.min.x;
-        while x < bounds.max.x {
-            let mut z = bounds.min.z;
-            while z < bounds.max.z {
-                // Generate height at this XZ position
-                let height = self.sample_height(x, z, &bounds);
-
-                // Fill column from bottom to height
-                let mut y = bounds.min.y;
-                while y < bounds.max.y {
-                    let pos = Point3::new(x, y, z);
-                    let voxel = self.sample_voxel(pos, height, &bounds);
-                    if voxel.density > 0.0 {
-                        svo.set(pos, voxel);
-                    }
-                    y += step;
-                }
-                z += step;
-            }
-            x += step;
-        }
-    }
-
-    /// Sample the terrain height at a given XZ position.
-    fn sample_height(&self, x: f32, z: f32, bounds: &AABB) -> f32 {
-        // Normalize coordinates for noise sampling
-        let scale = 0.02; // Controls terrain frequency
-        let nx = x * scale;
-        let nz = z * scale;
-
-        // Multi-octave noise for interesting terrain
-        let mut height = 0.0;
-        let mut amplitude = 1.0;
-        let mut frequency = 1.0;
-        let persistence = 0.5;
-        let octaves = 4;
-
-        for _ in 0..octaves {
-            height += self
-                .primary_noise
-                .get([nx as f64 * frequency, nz as f64 * frequency]) as f32
-                * amplitude;
-            amplitude *= persistence;
-            frequency *= 2.0;
-        }
-
-        // Add some detail noise
-        let detail_scale = 0.1;
-        let detail = self
-            .detail_noise
-            .get([x as f64 * detail_scale, z as f64 * detail_scale]) as f32
-            * 0.2;
-        height += detail;
-
-        // Map from [-1, 1] to world Y coordinates
-        // Place terrain in the lower-middle portion of the bounds
-        let world_height = bounds.size().y;
-        let base_height = bounds.min.y + world_height * 0.3;
-        let terrain_amplitude = world_height * 0.25;
-
-        base_height + height * terrain_amplitude
+    pub fn new(_seed: u32) -> Self {
+        Self {}
     }
 
     /// Sample a voxel at a given position.
+    #[allow(unused)] // Visible for testing
     fn sample_voxel(&self, pos: Point3<f32>, surface_height: f32, bounds: &AABB) -> Voxel {
         let depth_below_surface = surface_height - pos.y;
 
@@ -197,21 +113,4 @@ pub fn create_test_terrain(size: f32, max_depth: u32) -> SparseVoxelOctree {
     generator.generate_simple_hills(&mut svo);
 
     svo
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_terrain_generation() {
-        let svo = create_test_terrain(32.0, 5);
-
-        // Check that we have some solid voxels
-        let center = svo.bounds().center();
-        let ground_pos = Point3::new(center.x, svo.bounds().min.y + 1.0, center.z);
-
-        // Should have ground near the bottom
-        // Note: This is a basic sanity check, exact behavior depends on generation
-    }
 }

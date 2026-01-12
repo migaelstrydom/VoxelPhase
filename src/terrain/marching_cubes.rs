@@ -3,11 +3,9 @@
 //! This implementation converts a 3D grid of density values into triangles,
 //! creating smooth surfaces at the boundary between solid and empty voxels.
 
-use nalgebra::{Point3, Vector2, Vector3, Vector4};
+use nalgebra::{Point3, Vector3};
 
 use super::voxel::Voxel;
-use crate::collision::Triangle;
-use crate::rendering::vertex::Vertex;
 
 /// Result of marching cubes mesh generation.
 pub struct MarchingCubesMesh {
@@ -30,50 +28,6 @@ impl MarchingCubesMesh {
             colors: Vec::new(),
             indices: Vec::new(),
         }
-    }
-
-    /// Check if the mesh is empty.
-    pub fn is_empty(&self) -> bool {
-        self.positions.is_empty()
-    }
-
-    /// Get the number of triangles.
-    pub fn triangle_count(&self) -> usize {
-        self.indices.len() / 3
-    }
-
-    /// Extract triangles for collision detection.
-    pub fn triangles(&self) -> Vec<Triangle> {
-        self.indices
-            .chunks(3)
-            .map(|idx| {
-                Triangle::new(
-                    self.positions[idx[0] as usize],
-                    self.positions[idx[1] as usize],
-                    self.positions[idx[2] as usize],
-                )
-            })
-            .collect()
-    }
-
-    /// Convert to render-ready Vertex format.
-    pub fn to_vertices(&self) -> Vec<Vertex> {
-        self.positions
-            .iter()
-            .zip(self.normals.iter())
-            .zip(self.colors.iter())
-            .map(|((pos, normal), color)| Vertex {
-                pos: Vector4::new(pos.x, pos.y, pos.z, 1.0),
-                color: Vector4::new(color[0], color[1], color[2], color[3]),
-                tex_coords: Vector2::new(pos.x * 0.1, pos.z * 0.1), // Simple planar mapping
-                normal: *normal,
-            })
-            .collect()
-    }
-
-    /// Get indices for rendering (same as collision indices).
-    pub fn render_indices(&self) -> &[u32] {
-        &self.indices
     }
 }
 

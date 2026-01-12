@@ -16,8 +16,8 @@ mod swept;
 mod terrain_collider;
 
 pub use aabb::AABB;
-pub use contact::{ContactManifold, ContactPoint};
-pub use shapes::{CollisionShape, Sphere};
+pub use contact::ContactPoint;
+pub use shapes::Sphere;
 pub use sphere_triangle::{sphere_triangle_collision, Triangle};
 pub use swept::{swept_sphere_triangle, SweptContact};
 pub use terrain_collider::{TerrainCollider, TerrainColliderStats};

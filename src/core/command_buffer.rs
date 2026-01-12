@@ -115,10 +115,8 @@ impl Drop for ManagedCommandPool {
 pub struct CommandBufferManager {
     device: Arc<ManagedDevice>,
     pub graphics_queue: vk::Queue,
-    pub compute_queue: vk::Queue,
     pub transfer_queue: vk::Queue,
     pub graphics_command_pool: Arc<ManagedCommandPool>,
-    pub compute_command_pool: Arc<ManagedCommandPool>,
     pub transfer_command_pool: Arc<ManagedCommandPool>,
 }
 
@@ -128,11 +126,6 @@ impl CommandBufferManager {
             device
                 .device
                 .get_device_queue(device.queue_family_indices.graphics, 0)
-        };
-        let compute_queue = unsafe {
-            device
-                .device
-                .get_device_queue(device.queue_family_indices.compute, 0)
         };
         let transfer_queue = unsafe {
             device
@@ -144,10 +137,6 @@ impl CommandBufferManager {
             Arc::clone(&device),
             device.queue_family_indices.graphics,
         )?);
-        let compute_command_pool = Arc::new(ManagedCommandPool::new(
-            Arc::clone(&device),
-            device.queue_family_indices.compute,
-        )?);
         let transfer_command_pool = Arc::new(ManagedCommandPool::new(
             Arc::clone(&device),
             device.queue_family_indices.transfer,
@@ -156,10 +145,8 @@ impl CommandBufferManager {
         Ok(Self {
             device,
             graphics_queue,
-            compute_queue,
             transfer_queue,
             graphics_command_pool,
-            compute_command_pool,
             transfer_command_pool,
         })
     }
@@ -168,14 +155,6 @@ impl CommandBufferManager {
         ManagedCommandBuffer::new(
             Arc::clone(&self.device),
             Arc::clone(&self.graphics_command_pool),
-            vk::CommandBufferLevel::PRIMARY,
-        )
-    }
-
-    pub fn create_compute_buffer(&self) -> EngineResult<ManagedCommandBuffer> {
-        ManagedCommandBuffer::new(
-            Arc::clone(&self.device),
-            Arc::clone(&self.compute_command_pool),
             vk::CommandBufferLevel::PRIMARY,
         )
     }
@@ -238,22 +217,6 @@ impl CommandBufferManager {
         self.submit_commands_and_wait_internal(buffer, self.graphics_queue, record_commands_fn)
     }
 
-    pub fn submit_compute_commands_and_wait<F: FnOnce(&Device, vk::CommandBuffer)>(
-        &self,
-        buffer: &ManagedCommandBuffer,
-        record_commands_fn: F,
-    ) -> EngineResult<()> {
-        self.submit_commands_and_wait_internal(buffer, self.compute_queue, record_commands_fn)
-    }
-
-    pub fn submit_transfer_commands_and_wait<F: FnOnce(&Device, vk::CommandBuffer)>(
-        &self,
-        buffer: &ManagedCommandBuffer,
-        record_commands_fn: F,
-    ) -> EngineResult<()> {
-        self.submit_commands_and_wait_internal(buffer, self.transfer_queue, record_commands_fn)
-    }
-
     fn submit_commands_async_internal<F: FnOnce(&Device, vk::CommandBuffer)>(
         &self,
         buffer: &ManagedCommandBuffer,
@@ -312,47 +275,6 @@ impl CommandBufferManager {
                 .command_context("submit recorded commands")?;
         }
         Ok(())
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn submit_graphics_commands_async<F: FnOnce(&Device, vk::CommandBuffer)>(
-        &self,
-        buffer: &ManagedCommandBuffer,
-        fence: vk::Fence,
-        wait_semaphores: &[vk::Semaphore],
-        signal_semaphores: &[vk::Semaphore],
-        wait_dst_stage_mask: &[vk::PipelineStageFlags],
-        record_commands_fn: F,
-    ) -> EngineResult<()> {
-        self.submit_commands_async_internal(
-            buffer,
-            self.graphics_queue,
-            fence,
-            wait_semaphores,
-            signal_semaphores,
-            wait_dst_stage_mask,
-            record_commands_fn,
-        )
-    }
-
-    pub fn submit_compute_commands_async<F: FnOnce(&Device, vk::CommandBuffer)>(
-        &self,
-        buffer: &ManagedCommandBuffer,
-        fence: vk::Fence,
-        wait_semaphores: &[vk::Semaphore],
-        signal_semaphores: &[vk::Semaphore],
-        wait_dst_stage_mask: &[vk::PipelineStageFlags],
-        record_commands_fn: F,
-    ) -> EngineResult<()> {
-        self.submit_commands_async_internal(
-            buffer,
-            self.compute_queue,
-            fence,
-            wait_semaphores,
-            signal_semaphores,
-            wait_dst_stage_mask,
-            record_commands_fn,
-        )
     }
 
     pub fn submit_transfer_commands_async<F: FnOnce(&Device, vk::CommandBuffer)>(

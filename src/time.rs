@@ -47,6 +47,7 @@ impl Time {
 
     /// Time elapsed since last frame as Duration
     #[inline]
+    #[allow(unused)] // Visible for testing
     pub fn delta(&self) -> Duration {
         self.delta
     }
@@ -59,18 +60,21 @@ impl Time {
 
     /// Total time since game start
     #[inline]
+    #[allow(unused)] // Visible for testing
     pub fn total(&self) -> Duration {
         self.total
     }
 
     /// Total time since game start in seconds (f32)
     #[inline]
+    #[allow(unused)] // Visible for testing
     pub fn total_seconds(&self) -> f32 {
         self.total.as_secs_f32()
     }
 
     /// Number of frames since game start
     #[inline]
+    #[allow(unused)] // Visible for testing
     pub fn frame_count(&self) -> u64 {
         self.frame_count
     }

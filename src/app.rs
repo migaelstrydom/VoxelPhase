@@ -229,7 +229,6 @@ impl<'a, 'b> App<'a, 'b> {
             .with(PhysicsBody {
                 restitution: 0.1, // Slight bounce
                 friction: 0.8,
-                mass: 1.0,
             })
             .build();
 

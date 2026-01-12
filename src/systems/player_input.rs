@@ -2,7 +2,7 @@ use crate::components::{Acceleration, CameraComponent, OnGround, Position, Veloc
 use crate::input::InputState;
 use crate::player::{Player, PlayerConfig, PlayerState};
 use nalgebra::Vector3;
-use specs::{Join, ReadExpect, ReadStorage, System, Write, WriteStorage};
+use specs::{Join, ReadExpect, ReadStorage, System, WriteStorage};
 use winit::event::MouseButton;
 use winit::keyboard::KeyCode;
 

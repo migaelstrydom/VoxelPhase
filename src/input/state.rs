@@ -104,34 +104,16 @@ impl InputState {
         self.just_pressed_keys.contains(&key)
     }
 
-    /// Returns true if the key was just released this frame
-    #[inline]
-    pub fn is_key_just_released(&self, key: KeyCode) -> bool {
-        self.just_released_keys.contains(&key)
-    }
-
     /// Returns the mouse movement delta since last frame
     #[inline]
     pub fn mouse_delta(&self) -> (f32, f32) {
         self.mouse_delta
     }
 
-    /// Returns true if the mouse button is currently held down
-    #[inline]
-    pub fn is_mouse_button_pressed(&self, button: MouseButton) -> bool {
-        self.pressed_mouse_buttons.contains(&button)
-    }
-
     /// Returns true if the mouse button was just pressed this frame
     #[inline]
     pub fn is_mouse_button_just_pressed(&self, button: MouseButton) -> bool {
         self.just_pressed_mouse_buttons.contains(&button)
-    }
-
-    /// Returns true if the mouse button was just released this frame
-    #[inline]
-    pub fn is_mouse_button_just_released(&self, button: MouseButton) -> bool {
-        self.just_released_mouse_buttons.contains(&button)
     }
 
     // === Mouse capture ===

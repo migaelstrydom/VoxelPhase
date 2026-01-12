@@ -52,12 +52,20 @@ impl TerrainManager {
     ///
     /// Marks all regions dirty and performs initial mesh build.
     pub fn from_svo(mut svo: SparseVoxelOctree) -> Self {
+        use std::time::Instant;
+
         let bounds = *svo.bounds();
         let svo_depth = svo.max_depth();
         let collider_depth = (svo_depth - 1).max(3);
 
         // Mark all regions as dirty for initial build
+        let t0 = Instant::now();
         svo.mark_all_regions_dirty();
+        log::info!(
+            "mark_all_regions_dirty: {:?} ({} regions)",
+            t0.elapsed(),
+            svo.dirty_region_count()
+        );
 
         let mut manager = Self {
             svo,
@@ -67,7 +75,10 @@ impl TerrainManager {
         };
 
         // Perform initial build
+        let t1 = Instant::now();
         manager.update();
+        log::info!("initial mesh build (update): {:?}", t1.elapsed());
+
         manager
     }
 

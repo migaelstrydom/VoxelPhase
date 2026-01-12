@@ -7,7 +7,6 @@
 use nalgebra::{Point3, Vector3};
 
 use super::sphere_triangle::Triangle;
-use super::ContactPoint;
 
 /// Result of a swept collision test.
 #[derive(Debug, Clone)]
@@ -23,11 +22,6 @@ pub struct SweptContact {
 impl SweptContact {
     pub fn new(t: f32, point: Point3<f32>, normal: Vector3<f32>) -> Self {
         Self { t, point, normal }
-    }
-
-    /// Convert to a ContactPoint for collision response.
-    pub fn to_contact_point(&self, penetration: f32) -> ContactPoint {
-        ContactPoint::new(self.point, self.normal, penetration)
     }
 }
 

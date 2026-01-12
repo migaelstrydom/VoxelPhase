@@ -57,6 +57,7 @@ pub struct LandscapeLoader {
     colour: Colour,
 }
 
+#[allow(unused)] // Visible for testing
 impl LandscapeLoader {
     /// Create a new loader with the given material and vertex colour.
     pub fn new(material: MaterialId, colour: Colour) -> Self {
