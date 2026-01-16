@@ -24,10 +24,8 @@ use crate::input::InputState;
 use crate::particles::{
     ParticleConfig, ParticleEmitter, ParticlePool, ParticleSpawnSystem, ParticleUpdateSystem,
 };
-use crate::player::{
-    build_player_model, Player, PlayerAnimationState, PlayerConfig, PlayerMaterials,
-    PlayerModelConfig, PlayerState,
-};
+use crate::player::{Player, PlayerConfig, PlayerState};
+use crate::skeleton::{ProceduralCharacter, ProceduralCharacterConfig};
 use crate::projectile::{
     build_grenade_model, Grenade, GrenadeConfig, GrenadeCooldown, GrenadeMaterials,
     GrenadeModelResource, GrenadeSpawnSystem, Lifetime, LifetimeSystem, Projectile,
@@ -40,7 +38,7 @@ use crate::rendering::Colour;
 use crate::resources::manager::ResourceManager;
 use crate::systems::{
     CameraControlSystem, GravitySystem, PenetrationResolutionSystem, PhysicsSystem,
-    PlayerAnimationSystem, PlayerInputSystem, PlayerStateSyncSystem, RenderSystem,
+    PlayerInputSystem, PlayerStateSyncSystem, ProceduralAnimationSystem, RenderSystem,
     TerrainCollisionSystem, TerrainUpdateSystem,
 };
 use crate::terrain::{create_test_terrain, TerrainManager};
@@ -87,7 +85,7 @@ impl<'a, 'b> App<'a, 'b> {
         let mut material_builder = MaterialManagerBuilder::new();
 
         // Load textures needed for materials
-        let eye_texture =
+        let _eye_texture =
             texture_manager
                 .load_texture("data/eye.bmp")
                 .map_err(|e| EngineError::Mesh {
@@ -110,13 +108,6 @@ impl<'a, 'b> App<'a, 'b> {
                 reason: format!("Failed to create fallback texture: {}", e),
             })?;
 
-        // Register player materials
-        let player_materials = PlayerMaterials {
-            body: material_builder.register(Material::coloured(Colour::RED)),
-            nose: material_builder.register(Material::coloured(Colour::GREEN)),
-            eye: material_builder.register(Material::textured(eye_texture)),
-        };
-
         // Register grenade material
         let grenade_materials = GrenadeMaterials {
             body: material_builder.register(Material::coloured(Colour::new(0.2, 0.25, 0.2, 1.0))), // Dark green
@@ -134,12 +125,6 @@ impl<'a, 'b> App<'a, 'b> {
         // Phase 3: Build models using pre-registered material IDs
         // ==========================================
         let player_config = PlayerConfig::default();
-        let player_model_config = PlayerModelConfig {
-            body_radius: player_config.radius,
-            ..Default::default() // Use default colours (RED body, GREEN nose, WHITE eyes)
-        };
-        let player_model = Arc::new(build_player_model(&player_model_config, &player_materials));
-        log::info!("Player model built with {} parts", player_model.parts.len());
 
         // Build grenade model
         let grenade_config = GrenadeConfig::default();
@@ -166,7 +151,7 @@ impl<'a, 'b> App<'a, 'b> {
         world.register::<CameraComponent>();
         world.register::<Player>();
         world.register::<PlayerState>();
-        world.register::<PlayerAnimationState>();
+        world.register::<ProceduralCharacter>();
         world.register::<FollowTarget>();
         // Collision components
         world.register::<Collider>();
@@ -207,19 +192,20 @@ impl<'a, 'b> App<'a, 'b> {
 
         world.insert(terrain_manager);
 
-        // Create player entity with new model architecture
-        // Single entity with body, nose, and eyes as model parts
+        // Create player entity with procedural skeletal animation
+        let procedural_character = ProceduralCharacter::new(ProceduralCharacterConfig::default());
+        log::info!("Procedural character skeleton created");
+
         let player_entity = world
             .create_entity()
             .with(Player)
             .with(PlayerState::default())
-            .with(PlayerAnimationState::default())
+            .with(procedural_character)
             .with(Position(Vector3::new(0.0, -10.0, 0.0))) // Start above terrain
             .with(Velocity(Vector3::zeros()))
             .with(Acceleration(Vector3::zeros()))
             .with(Gravity(player_config.gravity))
             .with(Rotation(0.0))
-            .with(ModelInstance::new(player_model))
             .with(Renderable)
             // Collision components
             .with(Collider::sphere(player_config.radius))
@@ -279,8 +265,12 @@ impl<'a, 'b> App<'a, 'b> {
                 "player_state_sync",
                 &["player_input"],
             )
-            // Player animation (breathing, blinking, etc.)
-            .with(PlayerAnimationSystem, "player_animation", &[])
+            // Procedural animation (skeleton physics, locomotion)
+            .with(
+                ProceduralAnimationSystem,
+                "procedural_animation",
+                &["player_state_sync"],
+            )
             // Camera follows player (after collision resolved)
             .with(
                 CameraControlSystem,

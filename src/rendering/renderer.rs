@@ -218,7 +218,6 @@ impl Renderer {
     }
 
     /// Draw a procedural mesh (like a skeleton character or terrain chunk) using vertex colors.
-    ///
     /// Uses a default white texture so vertex colors show through.
     pub fn draw_procedural_mesh(
         &mut self,

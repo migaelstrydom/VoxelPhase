@@ -13,6 +13,7 @@ mod player;
 mod projectile;
 mod rendering;
 mod resources;
+mod skeleton;
 mod systems;
 mod terrain;
 mod time;

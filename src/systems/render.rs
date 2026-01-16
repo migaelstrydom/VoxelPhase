@@ -2,13 +2,13 @@ use crate::components::{CameraComponent, ModelInstance, Position, Renderable, Ro
 use crate::debug::DebugLines;
 use crate::model::Transform;
 use crate::particles::ParticlePool;
-use crate::player::PlayerAnimationState;
 use crate::rendering::material::MaterialManager;
 use crate::rendering::renderer::Renderer;
 use crate::resources::textures::TextureManager;
+use crate::skeleton::ProceduralCharacter;
 use crate::terrain::TerrainManager;
 use nalgebra::{Matrix4, Vector3};
-use specs::{Join, LendJoin, Read, ReadExpect, ReadStorage, System, Write, WriteExpect};
+use specs::{Join, Read, ReadExpect, ReadStorage, System, Write, WriteExpect, WriteStorage};
 
 pub struct RenderSystem;
 
@@ -26,7 +26,7 @@ impl<'a> System<'a> for RenderSystem {
         ReadStorage<'a, Rotation>,
         ReadStorage<'a, Renderable>,
         ReadStorage<'a, CameraComponent>,
-        ReadStorage<'a, PlayerAnimationState>,
+        WriteStorage<'a, ProceduralCharacter>,
     );
 
     fn run(&mut self, data: Self::SystemData) {
@@ -43,7 +43,7 @@ impl<'a> System<'a> for RenderSystem {
             rotations,
             renderables,
             camera_components,
-            player_animations,
+            mut procedural_characters,
         ) = data;
 
         let camera = camera_components.join().next();
@@ -80,31 +80,21 @@ impl<'a> System<'a> for RenderSystem {
                     }
                 }
 
-                // Draw all model instances
-                for (model_instance, pos, rot, _renderable, player_anim) in (
+                // Draw all model instances (grenades, etc.)
+                for (model_instance, pos, rot, _renderable) in (
                     &model_instances,
                     &positions,
                     &rotations,
                     &renderables,
-                    (&player_animations).maybe(),
                 )
                     .join()
                 {
                     let world_matrix = Matrix4::new_translation(&pos.0)
                         * Matrix4::from_axis_angle(&Vector3::y_axis(), rot.0);
 
-                    // Collect part transforms from animation state
-                    let part_transforms: Vec<Transform> = if let Some(anim) = player_anim {
-                        // Player-specific animation
-                        use crate::player::PlayerPart;
-                        PlayerPart::all()
-                            .iter()
-                            .map(|part| anim.part_transform(*part))
-                            .collect()
-                    } else {
-                        // No animation, use identity transforms
-                        vec![Transform::default(); model_instance.model.parts.len()]
-                    };
+                    // No animation, use identity transforms
+                    let part_transforms: Vec<Transform> =
+                        vec![Transform::default(); model_instance.model.parts.len()];
 
                     if let Err(e) = renderer.draw_model(
                         draw_cb,
@@ -115,6 +105,34 @@ impl<'a> System<'a> for RenderSystem {
                         &texture_manager,
                     ) {
                         log::error!("RenderSystem: Failed to draw model: {}", e);
+                    }
+                }
+
+                // Draw all procedural characters
+                // Note: Procedural characters use world-space vertex positions
+                // (skeleton positions are already in world coords), so we use identity transform.
+                for (character, _pos, _rot, _renderable) in (
+                    &mut procedural_characters,
+                    &positions,
+                    &rotations,
+                    &renderables,
+                )
+                    .join()
+                {
+                    let identity = Matrix4::identity();
+
+                    // Get mesh from the character (regenerates if dirty)
+                    let (vertices, indices) = character.mesh();
+
+                    if let Err(e) = renderer.draw_procedural_mesh(
+                        draw_cb,
+                        vertices,
+                        indices,
+                        &identity,
+                        &material_manager,
+                        &texture_manager,
+                    ) {
+                        log::error!("RenderSystem: Failed to draw procedural character: {}", e);
                     }
                 }
 
