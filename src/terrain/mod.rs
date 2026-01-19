@@ -3,16 +3,17 @@
 //! This module provides:
 //! - Sparse Voxel Octree (SVO) for terrain data storage
 //! - Marching Cubes mesh generation for smooth rendering
+//! - Adaptive Mesh Octree for efficient rendering and collision queries
 //! - TerrainManager for unified terrain handling
 //! - Procedural terrain generation
 
 pub mod generation;
 mod manager;
 mod marching_cubes;
+mod mesh_octree;
 mod svo;
 mod voxel;
 
-// New unified terrain manager
 pub use manager::TerrainManager;
 
 // Voxel types for terrain modification

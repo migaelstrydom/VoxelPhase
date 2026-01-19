@@ -4,33 +4,11 @@
 //! - Efficient memory usage (empty regions use minimal storage)
 //! - Fast spatial queries (octree traversal)
 //! - Easy modification (update nodes, propagate changes)
-//!
-//! Mesh regions are used for incremental terrain rebuilding. Each region
-//! at `mesh_depth` level owns a mesh for its subtree, enabling partial
-//! updates when terrain is modified.
 
-use std::collections::{HashMap, HashSet};
+use nalgebra::Point3;
 
-use nalgebra::{Point3, Vector3};
-
-use super::marching_cubes::MarchingCubes;
 use super::voxel::Voxel;
 use crate::collision::AABB;
-use crate::rendering::vertex::Vertex;
-
-/// Key identifying a mesh region (octant coordinates at mesh_depth).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct MeshRegionKey {
-    pub x: u32,
-    pub y: u32,
-    pub z: u32,
-}
-
-/// Mesh data for a single region, ready for rendering.
-pub struct RegionMesh {
-    pub vertices: Vec<Vertex>,
-    pub indices: Vec<u32>,
-}
 
 /// A node in the Sparse Voxel Octree.
 #[derive(Debug, Clone)]
@@ -88,42 +66,17 @@ pub struct SparseVoxelOctree {
     bounds: AABB,
     /// Maximum depth of the tree (determines minimum voxel size).
     max_depth: u32,
-    // Mesh region storage for incremental rebuilding
-    /// Depth at which mesh regions are defined (configurable).
-    mesh_depth: u32,
-    /// Sparse storage of region meshes, keyed by region coordinates.
-    mesh_regions: HashMap<MeshRegionKey, RegionMesh>,
-    /// Regions that need mesh rebuilding.
-    dirty_regions: HashSet<MeshRegionKey>,
 }
-
-/// Default mesh depth if not specified.
-const DEFAULT_MESH_DEPTH: u32 = 3;
 
 impl SparseVoxelOctree {
     /// Create a new SVO with the given world bounds and maximum depth.
     ///
     /// The minimum voxel size will be `bounds.size() / 2^max_depth`.
-    /// Uses default mesh depth of 3.
     pub fn new(bounds: AABB, max_depth: u32) -> Self {
-        Self::with_mesh_depth(bounds, max_depth, DEFAULT_MESH_DEPTH)
-    }
-
-    /// Create a new SVO with configurable mesh depth.
-    ///
-    /// `mesh_depth` determines the granularity of incremental mesh updates.
-    /// Lower values = larger regions = fewer meshes but more work per update.
-    /// Higher values = smaller regions = more meshes but less work per update.
-    /// Must be <= max_depth.
-    pub fn with_mesh_depth(bounds: AABB, max_depth: u32, mesh_depth: u32) -> Self {
-        let mesh_depth = mesh_depth.min(max_depth);
         Self {
             root: SvoNode::empty(),
             bounds,
             max_depth,
-            mesh_depth,
-            mesh_regions: HashMap::new(),
-            dirty_regions: HashSet::new(),
         }
     }
 
@@ -132,16 +85,16 @@ impl SparseVoxelOctree {
         &self.bounds
     }
 
-    /// Get the maximum depth.
-    pub fn max_depth(&self) -> u32 {
-        self.max_depth
-    }
-
     /// Get the minimum voxel size (at max depth).
     pub fn min_voxel_size(&self) -> f32 {
         let size = self.bounds.size();
         let divisions = (1 << self.max_depth) as f32;
         size.x.min(size.y).min(size.z) / divisions
+    }
+
+    /// Get the voxel size at maximum depth.
+    pub fn voxel_size(&self) -> f32 {
+        self.bounds.size().x / (1 << self.max_depth) as f32
     }
 
     /// Get the voxel at a world position.
@@ -339,239 +292,6 @@ impl SparseVoxelOctree {
     /// Fill the entire SVO with a uniform voxel.
     pub fn fill(&mut self, voxel: Voxel) {
         self.root = SvoNode::Leaf(voxel);
-    }
-
-    /// Sample voxels in a regular grid within the given bounds.
-    /// Returns a 3D array of voxels for mesh generation.
-    pub fn sample_grid(&self, bounds: &AABB, resolution: usize) -> Vec<Vec<Vec<Voxel>>> {
-        let mut grid = vec![vec![vec![Voxel::air(); resolution]; resolution]; resolution];
-
-        let size = bounds.size();
-        let step = nalgebra::Vector3::new(
-            size.x / (resolution - 1) as f32,
-            size.y / (resolution - 1) as f32,
-            size.z / (resolution - 1) as f32,
-        );
-
-        for x in 0..resolution {
-            for y in 0..resolution {
-                for z in 0..resolution {
-                    let pos = Point3::new(
-                        bounds.min.x + x as f32 * step.x,
-                        bounds.min.y + y as f32 * step.y,
-                        bounds.min.z + z as f32 * step.z,
-                    );
-                    grid[x][y][z] = self.get(pos);
-                }
-            }
-        }
-
-        grid
-    }
-
-    // === Mesh Region Methods ===
-
-    /// Get the size of each mesh region in world units.
-    pub fn mesh_region_size(&self) -> f32 {
-        self.bounds.size().x / (1 << self.mesh_depth) as f32
-    }
-
-    /// Get the voxel size at maximum depth.
-    pub fn voxel_size(&self) -> f32 {
-        self.bounds.size().x / (1 << self.max_depth) as f32
-    }
-
-    /// Convert a world position to a mesh region key.
-    pub fn world_to_region(&self, pos: Point3<f32>) -> MeshRegionKey {
-        let region_size = self.mesh_region_size();
-        let relative = pos - self.bounds.min;
-        let regions_per_axis = 1u32 << self.mesh_depth;
-        MeshRegionKey {
-            x: ((relative.x / region_size).floor() as u32).min(regions_per_axis - 1),
-            y: ((relative.y / region_size).floor() as u32).min(regions_per_axis - 1),
-            z: ((relative.z / region_size).floor() as u32).min(regions_per_axis - 1),
-        }
-    }
-
-    /// Get the world-space bounds for a mesh region.
-    pub fn region_bounds(&self, key: MeshRegionKey) -> AABB {
-        let region_size = self.mesh_region_size();
-        let min = self.bounds.min
-            + Vector3::new(
-                key.x as f32 * region_size,
-                key.y as f32 * region_size,
-                key.z as f32 * region_size,
-            );
-        let max = min + Vector3::new(region_size, region_size, region_size);
-        AABB::new(min, max)
-    }
-
-    /// Mark mesh regions overlapping the given AABB as dirty.
-    ///
-    /// Expands the affected area by one voxel in each direction to account for
-    /// marching cubes cells that span region boundaries. A cell at position (x,y,z)
-    /// depends on voxels at corners (x,y,z) through (x+1,y+1,z+1), so modifications
-    /// near boundaries can affect triangles in neighboring regions.
-    pub fn mark_regions_dirty(&mut self, affected: &AABB) {
-        // Expand by one voxel to catch boundary-spanning marching cubes cells
-        let voxel_size = self.voxel_size();
-        let expanded = AABB::new(
-            affected.min - Vector3::new(voxel_size, voxel_size, voxel_size),
-            affected.max + Vector3::new(voxel_size, voxel_size, voxel_size),
-        );
-
-        let min_region = self.world_to_region(expanded.min);
-        let max_region = self.world_to_region(expanded.max);
-
-        for x in min_region.x..=max_region.x {
-            for y in min_region.y..=max_region.y {
-                for z in min_region.z..=max_region.z {
-                    self.dirty_regions.insert(MeshRegionKey { x, y, z });
-                }
-            }
-        }
-    }
-
-    /// Mark all regions as dirty (for initial build or full rebuild).
-    pub fn mark_all_regions_dirty(&mut self) {
-        let regions_per_axis = 1u32 << self.mesh_depth;
-        for x in 0..regions_per_axis {
-            for y in 0..regions_per_axis {
-                for z in 0..regions_per_axis {
-                    self.dirty_regions.insert(MeshRegionKey { x, y, z });
-                }
-            }
-        }
-    }
-
-    /// Check if any regions need rebuilding.
-    pub fn has_dirty_regions(&self) -> bool {
-        !self.dirty_regions.is_empty()
-    }
-
-    /// Get the number of dirty regions.
-    pub fn dirty_region_count(&self) -> usize {
-        self.dirty_regions.len()
-    }
-
-    /// Rebuild mesh for a single region.
-    pub fn rebuild_region(&mut self, key: MeshRegionKey) {
-        let region_bounds = self.region_bounds(key);
-        let voxel_size = self.voxel_size();
-
-        // Sample with 1-voxel padding for marching cubes neighbor lookups
-        let padded_bounds = AABB::new(
-            region_bounds.min - Vector3::new(voxel_size, voxel_size, voxel_size),
-            region_bounds.max + Vector3::new(voxel_size, voxel_size, voxel_size),
-        );
-
-        // Calculate sample resolution: cells per region + 2 for padding on each side
-        let cells_per_region = 1usize << (self.max_depth - self.mesh_depth);
-        let sample_resolution = cells_per_region + 3; // +1 for grid points, +2 for padding
-
-        let grid = self.sample_grid(&padded_bounds, sample_resolution);
-
-        // Run marching cubes
-        let marching_cubes = MarchingCubes::new();
-        let mesh = marching_cubes.generate(&grid, padded_bounds.min, voxel_size);
-
-        // Filter triangles to only those whose lexicographically smallest vertex is inside region_bounds
-        let filtered = self.filter_mesh_to_bounds(&mesh, &region_bounds);
-
-        if filtered.vertices.is_empty() {
-            self.mesh_regions.remove(&key);
-        } else {
-            self.mesh_regions.insert(key, filtered);
-        }
-    }
-
-    /// Filter mesh triangles to those owned by this region.
-    ///
-    /// Uses a deterministic "minimum vertex" strategy: each triangle is assigned
-    /// to the region containing its lexicographically smallest vertex (by x, y, z).
-    /// This ensures consistent assignment regardless of which region generates the
-    /// triangle, avoiding gaps at region boundaries.
-    fn filter_mesh_to_bounds(
-        &self,
-        mesh: &super::marching_cubes::MarchingCubesMesh,
-        bounds: &AABB,
-    ) -> RegionMesh {
-        let mut vertices = Vec::new();
-        let mut indices = Vec::new();
-
-        // Process triangles (every 3 indices)
-        for tri_indices in mesh.indices.chunks(3) {
-            if tri_indices.len() < 3 {
-                continue;
-            }
-
-            let i0 = tri_indices[0] as usize;
-            let i1 = tri_indices[1] as usize;
-            let i2 = tri_indices[2] as usize;
-
-            let p0 = mesh.positions[i0];
-            let p1 = mesh.positions[i1];
-            let p2 = mesh.positions[i2];
-
-            // Find the lexicographically minimum vertex (deterministic ownership)
-            let min_vertex = [p0, p1, p2]
-                .into_iter()
-                .min_by(|a, b| {
-                    a.x.partial_cmp(&b.x)
-                        .unwrap()
-                        .then(a.y.partial_cmp(&b.y).unwrap())
-                        .then(a.z.partial_cmp(&b.z).unwrap())
-                })
-                .unwrap();
-
-            // Only include if the minimum vertex is inside this region's bounds
-            if bounds.contains_point(min_vertex) {
-                let base = vertices.len() as u32;
-
-                // Add vertices for this triangle
-                for &idx in &[i0, i1, i2] {
-                    vertices.push(Vertex {
-                        pos: nalgebra::Vector4::new(
-                            mesh.positions[idx].x,
-                            mesh.positions[idx].y,
-                            mesh.positions[idx].z,
-                            1.0,
-                        ),
-                        color: nalgebra::Vector4::new(
-                            mesh.colors[idx][0],
-                            mesh.colors[idx][1],
-                            mesh.colors[idx][2],
-                            mesh.colors[idx][3],
-                        ),
-                        tex_coords: nalgebra::Vector2::new(
-                            mesh.positions[idx].x * 0.1,
-                            mesh.positions[idx].z * 0.1,
-                        ),
-                        normal: mesh.normals[idx],
-                    });
-                }
-
-                indices.push(base);
-                indices.push(base + 1);
-                indices.push(base + 2);
-            }
-        }
-
-        RegionMesh { vertices, indices }
-    }
-
-    /// Rebuild all dirty regions and return the keys that were rebuilt.
-    pub fn rebuild_dirty_regions(&mut self) -> Vec<MeshRegionKey> {
-        let dirty: Vec<_> = self.dirty_regions.drain().collect();
-        for key in &dirty {
-            self.rebuild_region(*key);
-        }
-        dirty
-    }
-
-    /// Get read-only access to the mesh regions.
-    pub fn mesh_regions(&self) -> &HashMap<MeshRegionKey, RegionMesh> {
-        &self.mesh_regions
     }
 }
 

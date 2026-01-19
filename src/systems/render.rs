@@ -67,7 +67,7 @@ impl<'a> System<'a> for RenderSystem {
                 if let Some(ref terrain_manager) = terrain_manager_opt {
                     if terrain_manager.has_geometry() {
                         let identity = Matrix4::identity();
-                        if let Err(e) = renderer.draw_terrain_chunk(
+                        if let Err(e) = renderer.draw_procedural_mesh(
                             draw_cb,
                             terrain_manager.render_vertices(),
                             terrain_manager.render_indices(),

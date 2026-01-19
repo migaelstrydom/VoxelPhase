@@ -15,16 +15,6 @@ pub enum VoxelMaterial {
 }
 
 impl VoxelMaterial {
-    /// Check if this material is solid (should be collided with).
-    pub fn is_solid(&self) -> bool {
-        !matches!(self, VoxelMaterial::Air | VoxelMaterial::Water)
-    }
-
-    /// Check if this material is visible (should be rendered).
-    pub fn is_visible(&self) -> bool {
-        !matches!(self, VoxelMaterial::Air)
-    }
-
     /// Get a color for this material (for simple vertex coloring).
     pub fn color(&self) -> [f32; 4] {
         match self {
@@ -52,11 +42,6 @@ pub struct Voxel {
 }
 
 impl Voxel {
-    /// Create a new voxel with the given density and material.
-    pub fn new(density: f32, material: VoxelMaterial) -> Self {
-        Self { density, material }
-    }
-
     /// Create an air voxel.
     pub fn air() -> Self {
         Self {
@@ -86,9 +71,12 @@ impl Voxel {
     pub(crate) fn is_solid(&self) -> bool {
         self.density > 0.0 && self.material.is_solid()
     }
+}
 
-    /// Check if this voxel should be rendered.
-    fn is_visible(&self) -> bool {
-        self.density > 0.0 && self.material.is_visible()
+#[cfg(test)]
+impl VoxelMaterial {
+    /// Check if this material is solid (should be collided with).
+    pub fn is_solid(&self) -> bool {
+        !matches!(self, VoxelMaterial::Air | VoxelMaterial::Water)
     }
 }

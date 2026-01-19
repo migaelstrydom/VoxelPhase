@@ -199,12 +199,10 @@ impl<'a, 'b> App<'a, 'b> {
         log::info!("Generating procedural terrain...");
         let terrain_svo = create_test_terrain(64.0, 6); // 64x64x64 world, depth 6
         let terrain_manager = TerrainManager::from_svo(terrain_svo);
-        let stats = terrain_manager.collision_stats();
         log::info!(
-            "Terrain generated: {} triangles in {} regions (avg {:.1} per region)",
-            stats.total_triangles,
-            stats.occupied_regions,
-            stats.avg_triangles_per_region
+            "Terrain generated: {} triangles in {} mesh leaves",
+            terrain_manager.triangle_count(),
+            terrain_manager.leaf_count()
         );
 
         world.insert(terrain_manager);

@@ -37,11 +37,6 @@ impl Triangle {
         }
     }
 
-    /// Get the centroid of the triangle.
-    pub fn centroid(&self) -> Point3<f32> {
-        Point3::from((self.v0.coords + self.v1.coords + self.v2.coords) / 3.0)
-    }
-
     /// Get a vertex by index (0, 1, or 2).
     #[inline]
     pub fn vertex(&self, index: usize) -> Point3<f32> {
@@ -61,21 +56,6 @@ impl Triangle {
             1 => (self.v1, self.v2),
             _ => (self.v2, self.v0),
         }
-    }
-
-    /// Get the axis-aligned bounding box of the triangle.
-    pub fn aabb(&self) -> super::AABB {
-        let min = Point3::new(
-            self.v0.x.min(self.v1.x).min(self.v2.x),
-            self.v0.y.min(self.v1.y).min(self.v2.y),
-            self.v0.z.min(self.v1.z).min(self.v2.z),
-        );
-        let max = Point3::new(
-            self.v0.x.max(self.v1.x).max(self.v2.x),
-            self.v0.y.max(self.v1.y).max(self.v2.y),
-            self.v0.z.max(self.v1.z).max(self.v2.z),
-        );
-        super::AABB::new(min, max)
     }
 }
 
