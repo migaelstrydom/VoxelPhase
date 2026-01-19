@@ -5,7 +5,7 @@ use crate::particles::ParticlePool;
 use crate::rendering::material::MaterialManager;
 use crate::rendering::renderer::Renderer;
 use crate::resources::textures::TextureManager;
-use crate::skeleton::ProceduralCharacter;
+use crate::skeleton::BipedCharacter;
 use crate::terrain::TerrainManager;
 use nalgebra::{Matrix4, Vector3};
 use specs::{Join, Read, ReadExpect, ReadStorage, System, Write, WriteExpect, WriteStorage};
@@ -26,7 +26,7 @@ impl<'a> System<'a> for RenderSystem {
         ReadStorage<'a, Rotation>,
         ReadStorage<'a, Renderable>,
         ReadStorage<'a, CameraComponent>,
-        WriteStorage<'a, ProceduralCharacter>,
+        WriteStorage<'a, BipedCharacter>,
     );
 
     fn run(&mut self, data: Self::SystemData) {
@@ -43,7 +43,7 @@ impl<'a> System<'a> for RenderSystem {
             rotations,
             renderables,
             camera_components,
-            mut procedural_characters,
+            mut biped_characters,
         ) = data;
 
         let camera = camera_components.join().next();
@@ -81,13 +81,8 @@ impl<'a> System<'a> for RenderSystem {
                 }
 
                 // Draw all model instances (grenades, etc.)
-                for (model_instance, pos, rot, _renderable) in (
-                    &model_instances,
-                    &positions,
-                    &rotations,
-                    &renderables,
-                )
-                    .join()
+                for (model_instance, pos, rot, _renderable) in
+                    (&model_instances, &positions, &rotations, &renderables).join()
                 {
                     let world_matrix = Matrix4::new_translation(&pos.0)
                         * Matrix4::from_axis_angle(&Vector3::y_axis(), rot.0);
@@ -108,16 +103,11 @@ impl<'a> System<'a> for RenderSystem {
                     }
                 }
 
-                // Draw all procedural characters
-                // Note: Procedural characters use world-space vertex positions
+                // Draw all biped characters (Stage 2 skeleton)
+                // Note: Biped characters use world-space vertex positions
                 // (skeleton positions are already in world coords), so we use identity transform.
-                for (character, _pos, _rot, _renderable) in (
-                    &mut procedural_characters,
-                    &positions,
-                    &rotations,
-                    &renderables,
-                )
-                    .join()
+                for (character, _pos, _rot, _renderable) in
+                    (&mut biped_characters, &positions, &rotations, &renderables).join()
                 {
                     let identity = Matrix4::identity();
 
@@ -132,7 +122,7 @@ impl<'a> System<'a> for RenderSystem {
                         &material_manager,
                         &texture_manager,
                     ) {
-                        log::error!("RenderSystem: Failed to draw procedural character: {}", e);
+                        log::error!("RenderSystem: Failed to draw biped character: {}", e);
                     }
                 }
 

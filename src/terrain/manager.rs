@@ -296,11 +296,6 @@ impl TerrainManager {
         self.mesh.query_aabb(query)
     }
 
-    /// Get a reference to the terrain collider for direct queries.
-    pub fn collider(&self) -> &TerrainCollider {
-        &self.collider
-    }
-
     // === Rendering data ===
 
     /// Check if there's any geometry to render.

@@ -27,12 +27,23 @@
 //! let (vertices, indices) = mesh_gen.generate(&skeleton);
 //! ```
 
+mod biped;
 mod components;
 mod fabrik;
 mod humanoid;
 mod locomotion;
 mod mesh;
+mod pogo;
 mod verlet;
 
 // Re-export main types used by the ECS
+// Stage 2: Biped (pelvis + two legs)
+pub use biped::{BipedConfig, GaitConfig, GaitController, SimpleBipedSkeleton};
+pub use components::{BipedCharacter, BipedCharacterConfig};
+
+// Stage 1: Pogo stick (simple 2-particle skeleton) - kept for reference
+pub use components::{PogoCharacter, PogoCharacterConfig};
+pub use pogo::{PogoConfig, PogoStickSkeleton};
+
+// Stage 5+: Full humanoid (kept for future use)
 pub use components::{ProceduralCharacter, ProceduralCharacterConfig};

@@ -25,7 +25,7 @@ use crate::particles::{
     ParticleConfig, ParticleEmitter, ParticlePool, ParticleSpawnSystem, ParticleUpdateSystem,
 };
 use crate::player::{Player, PlayerConfig, PlayerState};
-use crate::skeleton::{ProceduralCharacter, ProceduralCharacterConfig};
+use crate::skeleton::{BipedCharacter, BipedCharacterConfig};
 use crate::projectile::{
     build_grenade_model, Grenade, GrenadeConfig, GrenadeCooldown, GrenadeMaterials,
     GrenadeModelResource, GrenadeSpawnSystem, Lifetime, LifetimeSystem, Projectile,
@@ -151,7 +151,7 @@ impl<'a, 'b> App<'a, 'b> {
         world.register::<CameraComponent>();
         world.register::<Player>();
         world.register::<PlayerState>();
-        world.register::<ProceduralCharacter>();
+        world.register::<BipedCharacter>();
         world.register::<FollowTarget>();
         // Collision components
         world.register::<Collider>();
@@ -192,15 +192,22 @@ impl<'a, 'b> App<'a, 'b> {
 
         world.insert(terrain_manager);
 
-        // Create player entity with procedural skeletal animation
-        let procedural_character = ProceduralCharacter::new(ProceduralCharacterConfig::default());
-        log::info!("Procedural character skeleton created");
+        // Create player entity with biped skeleton (Stage 2)
+        // Initial position: slightly above terrain so we can see the legs
+        let initial_pos = nalgebra::Point3::new(0.0, -10.0, 0.0);
+        let initial_ground = -11.0; // Estimate - will be corrected by terrain collision
+        let biped_character = BipedCharacter::new(
+            BipedCharacterConfig::default(),
+            initial_pos,
+            initial_ground,
+        );
+        log::info!("Biped character skeleton created (Stage 2)");
 
         let player_entity = world
             .create_entity()
             .with(Player)
             .with(PlayerState::default())
-            .with(procedural_character)
+            .with(biped_character)
             .with(Position(Vector3::new(0.0, -10.0, 0.0))) // Start above terrain
             .with(Velocity(Vector3::zeros()))
             .with(Acceleration(Vector3::zeros()))
