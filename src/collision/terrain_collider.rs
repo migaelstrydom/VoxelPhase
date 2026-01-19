@@ -78,30 +78,6 @@ impl TerrainCollider {
         }
     }
 
-    /// Add triangles to the collider.
-    ///
-    /// Each triangle is indexed by all regions it overlaps.
-    #[allow(unused)] // Visible for testing
-    pub fn add_triangles(&mut self, triangles: impl IntoIterator<Item = Triangle>) {
-        for triangle in triangles {
-            let idx = self.triangles.len();
-            self.triangles.push(triangle);
-
-            // Index by all regions the triangle overlaps (using its bounding box)
-            let tri_aabb = triangle.aabb();
-            for key in RegionKey::keys_overlapping(&tri_aabb, self.region_size) {
-                self.spatial_index.entry(key).or_default().push(idx);
-            }
-        }
-    }
-
-    /// Get the number of triangles.
-    /// Kept for testing purposes.
-    #[allow(dead_code)]
-    pub fn triangle_count(&self) -> usize {
-        self.triangles.len()
-    }
-
     // === Partial Update Methods ===
 
     /// Remove triangles whose centroid falls within the given bounds.
@@ -288,6 +264,30 @@ pub struct TerrainColliderStats {
     pub total_triangles: usize,
     pub occupied_regions: usize,
     pub avg_triangles_per_region: f32,
+}
+
+#[cfg(test)]
+impl TerrainCollider {
+    /// Add triangles to the collider.
+    ///
+    /// Each triangle is indexed by all regions it overlaps.
+    fn add_triangles(&mut self, triangles: impl IntoIterator<Item = Triangle>) {
+        for triangle in triangles {
+            let idx = self.triangles.len();
+            self.triangles.push(triangle);
+
+            // Index by all regions the triangle overlaps (using its bounding box)
+            let tri_aabb = triangle.aabb();
+            for key in RegionKey::keys_overlapping(&tri_aabb, self.region_size) {
+                self.spatial_index.entry(key).or_default().push(idx);
+            }
+        }
+    }
+
+    /// Get the number of triangles.
+    pub fn triangle_count(&self) -> usize {
+        self.triangles.len()
+    }
 }
 
 #[cfg(test)]

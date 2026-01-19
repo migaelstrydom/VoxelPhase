@@ -100,10 +100,8 @@ impl Renderer {
         )?;
 
         // Create particle renderer
-        let particle_renderer = ParticleRenderer::new(
-            Arc::clone(&vulkan_context),
-            pipeline.renderpass,
-        )?;
+        let particle_renderer =
+            ParticleRenderer::new(Arc::clone(&vulkan_context), pipeline.renderpass)?;
 
         Ok(Self {
             pipeline,
@@ -219,10 +217,10 @@ impl Renderer {
         Ok(())
     }
 
-    /// Draw a terrain chunk using vertex colors.
+    /// Draw a procedural mesh (like a skeleton character or terrain chunk) using vertex colors.
     ///
-    /// Terrain uses a default white texture so vertex colors show through.
-    pub fn draw_terrain_chunk(
+    /// Uses a default white texture so vertex colors show through.
+    pub fn draw_procedural_mesh(
         &mut self,
         cb: vk::CommandBuffer,
         vertices: &[Vertex],
@@ -372,11 +370,16 @@ impl Renderer {
         };
 
         unsafe {
-            self.vulkan_context.device().cmd_set_viewport(cb, 0, &[viewport]);
-            self.vulkan_context.device().cmd_set_scissor(cb, 0, &[scissor]);
+            self.vulkan_context
+                .device()
+                .cmd_set_viewport(cb, 0, &[viewport]);
+            self.vulkan_context
+                .device()
+                .cmd_set_scissor(cb, 0, &[scissor]);
         }
 
-        self.particle_renderer.render(cb, pool, view_matrix, proj_matrix)
+        self.particle_renderer
+            .render(cb, pool, view_matrix, proj_matrix)
     }
 
     /// Render debug overlay with the given debug line entries.
@@ -402,8 +405,12 @@ impl Renderer {
         };
 
         unsafe {
-            self.vulkan_context.device().cmd_set_viewport(cb, 0, &[viewport]);
-            self.vulkan_context.device().cmd_set_scissor(cb, 0, &[scissor]);
+            self.vulkan_context
+                .device()
+                .cmd_set_viewport(cb, 0, &[viewport]);
+            self.vulkan_context
+                .device()
+                .cmd_set_scissor(cb, 0, &[scissor]);
         }
 
         self.overlay.render_debug_lines(cb, entries)

@@ -3,7 +3,7 @@
 /// Material type for a voxel, determining its properties and appearance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[repr(u8)]
-#[allow(unused)] // Visible for testing
+#[allow(dead_code)] // Some variants (Sand, Water) are part of API but not yet used in generation
 pub enum VoxelMaterial {
     #[default]
     Air = 0,
@@ -72,22 +72,23 @@ impl Voxel {
             material,
         }
     }
-
-    /// Check if this voxel is considered solid (inside the surface).
-    #[allow(unused)] // Visible for testing
-    pub fn is_solid(&self) -> bool {
-        self.density > 0.0 && self.material.is_solid()
-    }
-
-    /// Check if this voxel should be rendered.
-    #[allow(unused)] // Visible for testing
-    pub fn is_visible(&self) -> bool {
-        self.density > 0.0 && self.material.is_visible()
-    }
 }
 
 impl Default for Voxel {
     fn default() -> Self {
         Self::air()
+    }
+}
+
+#[cfg(test)]
+impl Voxel {
+    /// Check if this voxel is considered solid (inside the surface).
+    pub(crate) fn is_solid(&self) -> bool {
+        self.density > 0.0 && self.material.is_solid()
+    }
+
+    /// Check if this voxel should be rendered.
+    fn is_visible(&self) -> bool {
+        self.density > 0.0 && self.material.is_visible()
     }
 }

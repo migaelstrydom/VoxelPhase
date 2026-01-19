@@ -6,6 +6,7 @@
 //! - TerrainCollider provides fast collision queries with partial updates
 
 use nalgebra::Point3;
+use std::time::Instant;
 
 use crate::collision::{TerrainCollider, TerrainColliderStats, AABB};
 use crate::rendering::vertex::Vertex;
@@ -33,27 +34,10 @@ pub struct TerrainManager {
 }
 
 impl TerrainManager {
-    /// Create a new terrain manager with the given bounds and SVO depth.
-    #[allow(unused)] // Visible for testing
-    pub fn new(bounds: AABB, svo_depth: u32) -> Self {
-        // Collision index depth should give reasonable region sizes
-        // For a 64-unit world with depth 5, regions are 2 units each
-        let collider_depth = (svo_depth - 1).max(3);
-
-        Self {
-            svo: SparseVoxelOctree::new(bounds, svo_depth),
-            collider: TerrainCollider::new(bounds, collider_depth),
-            render_vertices: Vec::new(),
-            render_indices: Vec::new(),
-        }
-    }
-
     /// Create a terrain manager from an existing SVO.
     ///
     /// Marks all regions dirty and performs initial mesh build.
     pub fn from_svo(mut svo: SparseVoxelOctree) -> Self {
-        use std::time::Instant;
-
         let bounds = *svo.bounds();
         let svo_depth = svo.max_depth();
         let collider_depth = (svo_depth - 1).max(3);
@@ -82,19 +66,6 @@ impl TerrainManager {
         manager
     }
 
-    /// Set a voxel at a world position.
-    #[allow(unused)] // Visible for testing
-    pub fn set_voxel(&mut self, position: Point3<f32>, voxel: Voxel) {
-        self.svo.set(position, voxel);
-        // Mark the region containing this voxel as dirty
-        let voxel_size = self.svo.voxel_size();
-        let affected = AABB::new(
-            position - nalgebra::Vector3::new(voxel_size, voxel_size, voxel_size),
-            position + nalgebra::Vector3::new(voxel_size, voxel_size, voxel_size),
-        );
-        self.svo.mark_regions_dirty(&affected);
-    }
-
     /// Modify terrain in a sphere (for explosions, digging, etc.)
     ///
     /// Only affected mesh regions will be rebuilt on next update.
@@ -120,6 +91,9 @@ impl TerrainManager {
             return;
         }
 
+        let t0 = Instant::now();
+        let dirty_region_count = self.svo.dirty_region_count();
+
         // Rebuild dirty mesh regions in the SVO
         let rebuilt_keys = self.svo.rebuild_dirty_regions();
 
@@ -129,12 +103,13 @@ impl TerrainManager {
         // Update collision for affected regions only
         self.update_collision_partial(&rebuilt_keys);
 
-        // log::debug!(
-        //     "Terrain updated: {} regions rebuilt, {} total vertices, {} triangles",
-        //     self.svo.dirty_region_count(),
-        //     self.render_vertices.len(),
-        //     self.collider.triangle_count()
-        // );
+        log::debug!(
+            "Terrain updated: {} regions rebuilt, {} total vertices, {} triangles, {:?} time elapsed",
+            dirty_region_count,
+            self.render_vertices.len(),
+            self.collider.stats().total_triangles,
+            t0.elapsed()
+        );
     }
 
     /// Combine all mesh regions into unified render buffers.
@@ -164,13 +139,6 @@ impl TerrainManager {
                     .add_triangles_from_mesh(&mesh.vertices, &mesh.indices);
             }
         }
-    }
-
-    /// Force full mesh regeneration (rebuilds all regions).
-    #[allow(unused)]
-    pub fn rebuild_all(&mut self) {
-        self.svo.mark_all_regions_dirty();
-        self.update();
     }
 
     // === Collision queries (delegate to TerrainCollider) ===
@@ -214,6 +182,37 @@ impl TerrainManager {
     /// Get render indices.
     pub fn render_indices(&self) -> &[u32] {
         &self.render_indices
+    }
+}
+
+#[cfg(test)]
+impl TerrainManager {
+    /// Create a new terrain manager with the given bounds and SVO depth.
+    /// Test-only helper for creating terrain managers in tests.
+    fn new(bounds: AABB, svo_depth: u32) -> Self {
+        // Collision index depth should give reasonable region sizes
+        // For a 64-unit world with depth 5, regions are 2 units each
+        let collider_depth = (svo_depth - 1).max(3);
+
+        Self {
+            svo: SparseVoxelOctree::new(bounds, svo_depth),
+            collider: TerrainCollider::new(bounds, collider_depth),
+            render_vertices: Vec::new(),
+            render_indices: Vec::new(),
+        }
+    }
+
+    /// Set a voxel at a world position.
+    /// Test-only helper for setting individual voxels in tests.
+    fn set_voxel(&mut self, position: Point3<f32>, voxel: Voxel) {
+        self.svo.set(position, voxel);
+        // Mark the region containing this voxel as dirty
+        let voxel_size = self.svo.voxel_size();
+        let affected = AABB::new(
+            position - nalgebra::Vector3::new(voxel_size, voxel_size, voxel_size),
+            position + nalgebra::Vector3::new(voxel_size, voxel_size, voxel_size),
+        );
+        self.svo.mark_regions_dirty(&affected);
     }
 }
 

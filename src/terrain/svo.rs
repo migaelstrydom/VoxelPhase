@@ -45,21 +45,9 @@ pub enum SvoNode {
 }
 
 impl SvoNode {
-    /// Create a uniform leaf node.
-    #[allow(unused)]
-    pub fn uniform(voxel: Voxel) -> Self {
-        SvoNode::Leaf(voxel)
-    }
-
     /// Create an air (empty) leaf node.
     pub fn empty() -> Self {
         SvoNode::Leaf(Voxel::air())
-    }
-
-    /// Check if this node is a leaf.
-    #[allow(unused)]
-    pub fn is_leaf(&self) -> bool {
-        matches!(self, SvoNode::Leaf(_))
     }
 
     /// Try to collapse this node if all children are identical leaves.
@@ -100,7 +88,6 @@ pub struct SparseVoxelOctree {
     bounds: AABB,
     /// Maximum depth of the tree (determines minimum voxel size).
     max_depth: u32,
-
     // Mesh region storage for incremental rebuilding
     /// Depth at which mesh regions are defined (configurable).
     mesh_depth: u32,
@@ -488,7 +475,7 @@ impl SparseVoxelOctree {
         let marching_cubes = MarchingCubes::new();
         let mesh = marching_cubes.generate(&grid, padded_bounds.min, voxel_size);
 
-        // Filter triangles to only those with centroids inside region_bounds
+        // Filter triangles to only those whose lexicographically smallest vertex is inside region_bounds
         let filtered = self.filter_mesh_to_bounds(&mesh, &region_bounds);
 
         if filtered.vertices.is_empty() {

@@ -43,7 +43,7 @@ impl Default for ExplosionFlashConfig {
     fn default() -> Self {
         Self {
             min_lifetime: 0.1,
-            max_lifetime: 0.3,
+            max_lifetime: 1.3,
             min_size: 0.3,
             max_size: 0.8,
             min_speed: 5.0,
@@ -166,12 +166,12 @@ impl Default for DebrisConfig {
     fn default() -> Self {
         Self {
             min_lifetime: 1.0,
-            max_lifetime: 2.0,
+            max_lifetime: 3.0,
             min_size: 0.1,
             max_size: 0.3,
             min_speed: 8.0,
             max_speed: 20.0,
-            color: Vector4::new(0.4, 0.35, 0.3, 1.0), // Brown/gray dirt
+            color: Vector4::new(0.482, 0.247, 0.0, 1.0), // Brown/gray dirt
         }
     }
 }

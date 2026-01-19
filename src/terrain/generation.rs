@@ -14,31 +14,6 @@ impl TerrainGenerator {
         Self {}
     }
 
-    /// Sample a voxel at a given position.
-    #[allow(unused)] // Visible for testing
-    fn sample_voxel(&self, pos: Point3<f32>, surface_height: f32, bounds: &AABB) -> Voxel {
-        let depth_below_surface = surface_height - pos.y;
-
-        if depth_below_surface < 0.0 {
-            // Above surface: air
-            return Voxel::new(-depth_below_surface, VoxelMaterial::Air);
-        }
-
-        // Below surface: determine material based on depth
-        let material = if depth_below_surface < 0.5 {
-            VoxelMaterial::Grass
-        } else if depth_below_surface < 3.0 {
-            VoxelMaterial::Dirt
-        } else {
-            VoxelMaterial::Rock
-        };
-
-        // Density is positive underground, with smooth falloff near surface
-        let density = depth_below_surface.min(1.0);
-
-        Voxel::new(density, material)
-    }
-
     /// Generate a simple test terrain: a flat plane with some hills.
     pub fn generate_simple_hills(&self, svo: &mut SparseVoxelOctree) {
         let bounds = *svo.bounds();

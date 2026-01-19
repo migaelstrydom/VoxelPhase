@@ -70,18 +70,19 @@ impl<T> DeletionQueue<T> {
     pub fn flush_all(&mut self) {
         self.pending.clear();
     }
-
-    /// Returns the number of resources currently queued for deletion.
-    #[allow(dead_code)]
-    pub fn pending_count(&self) -> usize {
-        self.pending.len()
-    }
 }
 
 impl<T> Default for DeletionQueue<T> {
     fn default() -> Self {
         // Default to 2 frames (standard double-buffering)
         Self::new(2)
+    }
+}
+
+#[cfg(test)]
+impl<T> DeletionQueue<T> {
+    pub fn pending_count(&self) -> usize {
+        self.pending.len()
     }
 }
 
