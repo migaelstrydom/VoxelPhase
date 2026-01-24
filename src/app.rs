@@ -169,6 +169,16 @@ impl<'a, 'b> App<'a, 'b> {
         world.register::<Explosion>();
         world.register::<ParticleEmitter>();
 
+        // Create procedural terrain before inserting texture_manager
+        log::info!("Generating procedural terrain...");
+        let terrain_svo = create_test_terrain(64.0, 6); // 64x64x64 world, depth 6
+        let terrain_manager = TerrainManager::from_svo(terrain_svo, &texture_manager)?;
+        log::info!(
+            "Terrain generated: {} triangles in {} mesh leaves",
+            terrain_manager.triangle_count(),
+            terrain_manager.leaf_count()
+        );
+
         // Insert resources
         world.insert(renderer);
         world.insert(resource_manager);
@@ -188,16 +198,6 @@ impl<'a, 'b> App<'a, 'b> {
         world.insert(GrenadeCooldown::default());
         world.insert(ParticleConfig::new());
         world.insert(ParticlePool::default());
-        // Create procedural terrain
-        log::info!("Generating procedural terrain...");
-        let terrain_svo = create_test_terrain(64.0, 6); // 64x64x64 world, depth 6
-        let terrain_manager = TerrainManager::from_svo(terrain_svo);
-        log::info!(
-            "Terrain generated: {} triangles in {} mesh leaves",
-            terrain_manager.triangle_count(),
-            terrain_manager.leaf_count()
-        );
-
         world.insert(terrain_manager);
 
         // Create player entity with spring biped skeleton (Stage 3 - physics-based)

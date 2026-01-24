@@ -246,8 +246,8 @@ impl Renderer {
 
     /// Draw a mesh with a specific texture handle.
     ///
-    /// This is a lower-level method used by draw_model.
-    fn draw_mesh_with_texture(
+    /// This is a lower-level method used by draw_model and terrain rendering.
+    pub fn draw_mesh_with_texture(
         &mut self,
         cb: vk::CommandBuffer,
         vertices: &[Vertex],

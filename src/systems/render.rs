@@ -70,12 +70,18 @@ impl<'a> System<'a> for RenderSystem {
                 if let Some(ref terrain_manager) = terrain_manager_opt {
                     if terrain_manager.has_geometry() {
                         let identity = Matrix4::identity();
-                        if let Err(e) = renderer.draw_procedural_mesh(
+
+                        // Use terrain's texture if set, otherwise fallback to white
+                        let texture = terrain_manager
+                            .texture()
+                            .unwrap_or(material_manager.fallback_texture());
+
+                        if let Err(e) = renderer.draw_mesh_with_texture(
                             draw_cb,
                             terrain_manager.render_vertices(),
                             terrain_manager.render_indices(),
                             &identity,
-                            &material_manager,
+                            texture,
                             &texture_manager,
                         ) {
                             log::error!("RenderSystem: Failed to draw terrain: {}", e);

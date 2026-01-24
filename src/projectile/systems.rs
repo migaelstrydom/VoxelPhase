@@ -15,7 +15,7 @@ use crate::components::{
     Velocity,
 };
 use crate::explosion::Explosion;
-use crate::input::{GameplayActions, InputState};
+use crate::input::GameplayActions;
 use crate::model::Model;
 use crate::player::Player;
 use crate::terrain::TerrainManager;
@@ -69,7 +69,6 @@ pub struct GrenadeSpawnSystem;
 impl<'a> System<'a> for GrenadeSpawnSystem {
     type SystemData = (
         Entities<'a>,
-        ReadExpect<'a, InputState>,
         ReadExpect<'a, GameplayActions>,
         ReadExpect<'a, GrenadeConfig>,
         ReadExpect<'a, Time>,
@@ -84,7 +83,6 @@ impl<'a> System<'a> for GrenadeSpawnSystem {
     fn run(&mut self, data: Self::SystemData) {
         let (
             entities,
-            input,
             actions,
             config,
             time,

@@ -17,6 +17,7 @@ mod skeleton;
 mod systems;
 mod terrain;
 mod time;
+mod utils;
 mod world;
 
 use crate::app::App;

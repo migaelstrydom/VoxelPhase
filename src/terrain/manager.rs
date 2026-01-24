@@ -11,7 +11,9 @@ use std::time::Instant;
 use crate::collision::{
     sphere_triangle_collision, swept_sphere_triangle, ContactPoint, SweptContact, AABB,
 };
+use crate::core::error::EngineResult;
 use crate::rendering::vertex::Vertex;
+use crate::resources::textures::{TextureHandle, TextureManager};
 
 use super::mesh_octree::MeshOctree;
 use super::svo::SparseVoxelOctree;
@@ -37,17 +39,27 @@ pub struct TerrainManager {
     /// Cached render data (updated on each mesh rebuild).
     render_vertices: Vec<Vertex>,
     render_indices: Vec<u32>,
+
+    /// Optional noise texture for terrain surface variation.
+    texture: Option<TextureHandle>,
 }
 
 impl TerrainManager {
     /// Create a terrain manager from an existing SVO.
     ///
-    /// Performs initial mesh build for the entire terrain.
-    pub fn from_svo(svo: SparseVoxelOctree) -> Self {
+    /// Performs initial mesh build and generates procedural noise texture for surface variation.
+    pub fn from_svo(
+        svo: SparseVoxelOctree,
+        texture_manager: &TextureManager,
+    ) -> EngineResult<Self> {
         let bounds = *svo.bounds();
         let voxel_size = svo.voxel_size();
 
         let t0 = Instant::now();
+
+        // Generate procedural noise texture for terrain surface variation
+        let texture = texture_manager.create_noise_texture(512, 512, 5, 20.0, 42)?;
+        log::info!("Generated terrain noise texture (512x512, 5 octaves, scale 20.0)");
 
         let mut manager = Self {
             svo,
@@ -56,6 +68,7 @@ impl TerrainManager {
             dirty_regions: Vec::new(),
             render_vertices: Vec::new(),
             render_indices: Vec::new(),
+            texture: Some(texture),
         };
 
         // Mark entire terrain as dirty for initial build
@@ -70,7 +83,7 @@ impl TerrainManager {
             manager.mesh.leaf_count()
         );
 
-        manager
+        Ok(manager)
     }
 
     /// Modify terrain in a sphere (for explosions, digging, etc.)
@@ -313,6 +326,11 @@ impl TerrainManager {
         &self.render_indices
     }
 
+    /// Get the terrain texture handle, if set.
+    pub fn texture(&self) -> Option<&TextureHandle> {
+        self.texture.as_ref()
+    }
+
     /// Get render data with frustum culling.
     ///
     /// `frustum_planes` should be 6 planes: left, right, bottom, top, near, far.
@@ -350,6 +368,7 @@ impl TerrainManager {
             dirty_regions: Vec::new(),
             render_vertices: Vec::new(),
             render_indices: Vec::new(),
+            texture: None,
         }
     }
 
