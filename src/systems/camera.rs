@@ -1,10 +1,9 @@
 use crate::camera::{CameraConfig, FollowTarget};
 use crate::components::{CameraComponent, Position};
-use crate::input::InputState;
+use crate::input::{GameplayActions, InputState};
 use crate::time::Time;
 use nalgebra::Point3;
 use specs::{Entities, Join, ReadExpect, ReadStorage, System, WriteStorage};
-use winit::keyboard::KeyCode;
 
 /// Updates cameras that have a FollowTarget component.
 /// Handles smooth following, mouse orbit, and zoom controls.
@@ -15,6 +14,7 @@ impl<'a> System<'a> for CameraControlSystem {
         Entities<'a>,
         ReadExpect<'a, Time>,
         ReadExpect<'a, InputState>,
+        ReadExpect<'a, GameplayActions>,
         ReadExpect<'a, CameraConfig>,
         ReadStorage<'a, Position>,
         WriteStorage<'a, FollowTarget>,
@@ -22,7 +22,8 @@ impl<'a> System<'a> for CameraControlSystem {
     );
 
     fn run(&mut self, data: Self::SystemData) {
-        let (entities, time, input, config, positions, mut follow_targets, mut cameras) = data;
+        let (entities, time, input, actions, config, positions, mut follow_targets, mut cameras) =
+            data;
 
         let dt = time.delta_seconds();
 
@@ -37,7 +38,7 @@ impl<'a> System<'a> for CameraControlSystem {
             };
 
             // Handle mouse input for orbit and pitch
-            let (mouse_dx, mouse_dy) = input.mouse_delta();
+            let (mouse_dx, mouse_dy) = actions.camera_delta;
 
             // Only process mouse input if mouse is captured
             if input.is_mouse_captured() {
@@ -49,10 +50,10 @@ impl<'a> System<'a> for CameraControlSystem {
             }
 
             // Handle keyboard zoom
-            if input.is_key_pressed(KeyCode::KeyQ) {
+            if actions.zoom_in {
                 follow.distance += config.zoom_speed * dt;
             }
-            if input.is_key_pressed(KeyCode::KeyE) {
+            if actions.zoom_out {
                 follow.distance -= config.zoom_speed * dt;
             }
 

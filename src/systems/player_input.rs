@@ -1,11 +1,9 @@
 use crate::components::{Acceleration, CameraComponent, Position, Velocity};
-use crate::input::InputState;
+use crate::input::GameplayActions;
 use crate::player::{Player, PlayerConfig, PlayerState};
 use crate::skeleton::SpringBipedCharacter;
 use nalgebra::Vector3;
 use specs::{Join, ReadExpect, ReadStorage, System, WriteStorage};
-use winit::event::MouseButton;
-use winit::keyboard::KeyCode;
 
 /// Reads input and updates player velocity based on movement keys.
 /// Movement is relative to camera direction (forward = toward where camera looks).
@@ -13,7 +11,7 @@ pub struct PlayerInputSystem;
 
 impl<'a> System<'a> for PlayerInputSystem {
     type SystemData = (
-        ReadExpect<'a, InputState>,
+        ReadExpect<'a, GameplayActions>,
         ReadExpect<'a, PlayerConfig>,
         ReadStorage<'a, Player>,
         WriteStorage<'a, PlayerState>,
@@ -26,7 +24,7 @@ impl<'a> System<'a> for PlayerInputSystem {
 
     fn run(&mut self, data: Self::SystemData) {
         let (
-            input,
+            actions,
             config,
             players,
             mut player_states,
@@ -85,19 +83,19 @@ impl<'a> System<'a> for PlayerInputSystem {
             // Right vector is perpendicular to forward (rotate 90 degrees in XZ plane)
             let right = Vector3::new(-forward.z, 0.0, forward.x);
 
-            // Build movement direction from WASD input
+            // Build movement direction from input actions
             let mut move_dir = Vector3::zeros();
 
-            if input.is_key_pressed(KeyCode::KeyW) || input.is_key_pressed(KeyCode::ArrowUp) {
+            if actions.move_forward {
                 move_dir += forward;
             }
-            if input.is_key_pressed(KeyCode::KeyS) || input.is_key_pressed(KeyCode::ArrowDown) {
+            if actions.move_backward {
                 move_dir -= forward;
             }
-            if input.is_key_pressed(KeyCode::KeyA) || input.is_key_pressed(KeyCode::ArrowLeft) {
+            if actions.move_left {
                 move_dir -= right;
             }
-            if input.is_key_pressed(KeyCode::KeyD) || input.is_key_pressed(KeyCode::ArrowRight) {
+            if actions.move_right {
                 move_dir += right;
             }
 
@@ -123,10 +121,7 @@ impl<'a> System<'a> for PlayerInputSystem {
             }
 
             // Handle jumping - only when grounded
-            if (input.is_mouse_button_just_pressed(MouseButton::Right)
-                || input.is_key_just_pressed(KeyCode::Space))
-                && is_grounded
-            {
+            if actions.jump && is_grounded {
                 vel.0.y = config.jump_speed;
             }
         }

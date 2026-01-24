@@ -21,7 +21,7 @@ use crate::core::error::{EngineError, EngineResult};
 use crate::core::vulkan_context::VulkanContext;
 use crate::debug::{DebugLines, DebugOverlays};
 use crate::explosion::{Explosion, ExplosionSystem};
-use crate::input::InputState;
+use crate::input::{GameplayActions, InputActionSystem, InputState};
 use crate::particles::{
     ParticleConfig, ParticleEmitter, ParticlePool, ParticleSpawnSystem, ParticleUpdateSystem,
 };
@@ -176,6 +176,7 @@ impl<'a, 'b> App<'a, 'b> {
         world.insert(material_manager);
         world.insert(Time::new());
         world.insert(InputState::new());
+        world.insert(GameplayActions::default());
         world.insert(PlayerConfig::default());
         world.insert(CameraConfig::default());
         world.insert(DebugLines::default());
@@ -282,14 +283,17 @@ impl<'a, 'b> App<'a, 'b> {
             .build();
 
         // Build the dispatcher with systems in the correct order
-        // Pipeline: TerrainQuery -> IK -> Animation -> Input -> Forces -> Velocity -> Prediction -> Collision -> Camera -> Render
+        // Pipeline: Input -> TerrainQuery -> IK -> Animation -> PlayerInput -> Forces -> Velocity -> Prediction -> Collision -> Camera -> Render
         //
         // Key insight: Terrain probes and IK targets inform WHERE we want to go.
         // Animation computes target pelvis height from feet. Then collision prevents terrain penetration.
         let dispatcher = DispatcherBuilder::new()
+            // === Phase 0: Input processing ===
+            // Convert raw input to gameplay actions
+            .with(InputActionSystem, "input_actions", &[])
             // === Phase 1: Sensing (from last frame's resolved position) ===
             // 1. Terrain probes query ground below entity
-            .with(TerrainQuerySystem, "terrain_query", &[])
+            .with(TerrainQuerySystem, "terrain_query", &["input_actions"])
             // 2. IK target selection from probe contacts
             .with(IKTargetSystem, "ik_targets", &["terrain_query"])
             // === Phase 2: Animation (compute desired position) ===

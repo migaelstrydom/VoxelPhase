@@ -7,7 +7,6 @@ use specs::{
     Builder, Entities, Entity, Join, LazyUpdate, Read, ReadExpect, ReadStorage, System, Write,
     WriteStorage,
 };
-use winit::event::MouseButton;
 
 use super::components::{Grenade, Lifetime, Projectile};
 use super::config::GrenadeConfig;
@@ -16,7 +15,7 @@ use crate::components::{
     Velocity,
 };
 use crate::explosion::Explosion;
-use crate::input::InputState;
+use crate::input::{GameplayActions, InputState};
 use crate::model::Model;
 use crate::player::Player;
 use crate::terrain::TerrainManager;
@@ -71,6 +70,7 @@ impl<'a> System<'a> for GrenadeSpawnSystem {
     type SystemData = (
         Entities<'a>,
         ReadExpect<'a, InputState>,
+        ReadExpect<'a, GameplayActions>,
         ReadExpect<'a, GrenadeConfig>,
         ReadExpect<'a, Time>,
         Write<'a, GrenadeCooldown>,
@@ -85,6 +85,7 @@ impl<'a> System<'a> for GrenadeSpawnSystem {
         let (
             entities,
             input,
+            actions,
             config,
             time,
             mut cooldown,
@@ -98,12 +99,7 @@ impl<'a> System<'a> for GrenadeSpawnSystem {
         // Update cooldown
         cooldown.remaining = (cooldown.remaining - time.delta_seconds()).max(0.0);
 
-        // Check for left mouse click while mouse is captured
-        if !input.is_mouse_captured() {
-            return;
-        }
-
-        if !input.is_mouse_button_just_pressed(MouseButton::Left) {
+        if !actions.throw_grenade {
             return;
         }
 
