@@ -14,6 +14,7 @@ use nalgebra::{Point3, Vector3};
 /// Particles are the "joints" of the skeleton. Each has a position and
 /// remembers its previous position (velocity is implicit in the difference).
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub struct Particle {
     /// Current position in world space.
     pub position: Point3<f32>,
@@ -27,6 +28,7 @@ pub struct Particle {
     pub damping: f32,
 }
 
+#[allow(dead_code)]
 impl Particle {
     /// Create a new particle at the given position.
     pub fn new(position: Point3<f32>) -> Self {
@@ -83,6 +85,7 @@ impl Particle {
 /// This is the "bone" of the skeleton - maintains a fixed distance
 /// between two particles (joints).
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub struct DistanceConstraint {
     /// Index of the first particle.
     pub particle_a: usize,
@@ -94,6 +97,7 @@ pub struct DistanceConstraint {
     pub stiffness: f32,
 }
 
+#[allow(dead_code)]
 impl DistanceConstraint {
     /// Create a new distance constraint.
     pub fn new(particle_a: usize, particle_b: usize, rest_length: f32) -> Self {
@@ -116,6 +120,7 @@ impl DistanceConstraint {
 ///
 /// This prevents joints from bending in unnatural ways.
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub struct AngleConstraint {
     /// The "hinge" particle (shared between two bones).
     pub hinge: usize,
@@ -131,6 +136,7 @@ pub struct AngleConstraint {
     pub stiffness: f32,
 }
 
+#[allow(dead_code)]
 impl AngleConstraint {
     /// Create a new angle constraint.
     pub fn new(hinge: usize, particle_a: usize, particle_b: usize) -> Self {
@@ -155,6 +161,7 @@ impl AngleConstraint {
 /// The Verlet physics simulation.
 ///
 /// Contains particles and constraints, handles integration and solving.
+#[allow(dead_code)]
 pub struct VerletSystem {
     /// All particles in the simulation.
     pub particles: Vec<Particle>,
@@ -168,6 +175,7 @@ pub struct VerletSystem {
     pub gravity: Vector3<f32>,
 }
 
+#[allow(dead_code)]
 impl VerletSystem {
     /// Create a new Verlet system.
     pub fn new() -> Self {
@@ -411,7 +419,10 @@ mod tests {
         // The free particle should have moved down due to gravity
         // but constraint should keep it at distance 1.0 from pinned
         let dist = (system.particles[p1].position - system.particles[p0].position).magnitude();
-        assert!((dist - 1.0).abs() < 0.1, "Distance should be approximately 1.0");
+        assert!(
+            (dist - 1.0).abs() < 0.1,
+            "Distance should be approximately 1.0"
+        );
     }
 
     #[test]
@@ -431,6 +442,10 @@ mod tests {
 
         // Should converge to rest length
         let dist = (system.particles[p1].position - system.particles[p0].position).magnitude();
-        assert!((dist - 1.0).abs() < 0.01, "Distance should converge to 1.0, got {}", dist);
+        assert!(
+            (dist - 1.0).abs() < 0.01,
+            "Distance should converge to 1.0, got {}",
+            dist
+        );
     }
 }

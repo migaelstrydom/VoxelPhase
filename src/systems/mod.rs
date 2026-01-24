@@ -1,17 +1,27 @@
 mod camera;
 mod collision;
+mod dynamic_terrain_collision;
+mod ik_targets;
+mod motion_prediction;
 mod physics;
 mod player_input;
 mod player_state_sync;
 mod procedural_animation;
 mod render;
+mod spring_biped_collision;
+mod terrain_query;
 mod terrain_update;
 
 pub use camera::CameraControlSystem;
 pub use collision::{PenetrationResolutionSystem, TerrainCollisionSystem};
-pub use physics::{GravitySystem, PhysicsSystem};
+pub use dynamic_terrain_collision::DynamicTerrainCollisionSystem;
+pub use ik_targets::IKTargetSystem;
+pub use motion_prediction::MotionPredictionSystem;
+pub use physics::{GravitySystem, VelocityIntegrationSystem};
 pub use player_input::PlayerInputSystem;
 pub use player_state_sync::PlayerStateSyncSystem;
 pub use procedural_animation::ProceduralAnimationSystem;
 pub use render::RenderSystem;
+pub use spring_biped_collision::SpringBipedCollisionSystem;
+pub use terrain_query::TerrainQuerySystem;
 pub use terrain_update::TerrainUpdateSystem;

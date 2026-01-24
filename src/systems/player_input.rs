@@ -1,6 +1,7 @@
-use crate::components::{Acceleration, CameraComponent, OnGround, Position, Velocity};
+use crate::components::{Acceleration, CameraComponent, Position, Velocity};
 use crate::input::InputState;
 use crate::player::{Player, PlayerConfig, PlayerState};
+use crate::skeleton::SpringBipedCharacter;
 use nalgebra::Vector3;
 use specs::{Join, ReadExpect, ReadStorage, System, WriteStorage};
 use winit::event::MouseButton;
@@ -20,7 +21,7 @@ impl<'a> System<'a> for PlayerInputSystem {
         WriteStorage<'a, Velocity>,
         WriteStorage<'a, Acceleration>,
         ReadStorage<'a, CameraComponent>,
-        ReadStorage<'a, OnGround>,
+        ReadStorage<'a, SpringBipedCharacter>,
     );
 
     fn run(&mut self, data: Self::SystemData) {
@@ -33,7 +34,7 @@ impl<'a> System<'a> for PlayerInputSystem {
             mut velocities,
             mut accelerations,
             cameras,
-            on_grounds,
+            spring_bipeds,
         ) = data;
 
         // Get camera position for calculating movement direction
@@ -42,13 +43,13 @@ impl<'a> System<'a> for PlayerInputSystem {
             .map(|c| c.0.position)
             .unwrap_or_else(|| nalgebra::Point3::new(0.0, 0.0, 5.0));
 
-        for (_player, state, pos, vel, accel, on_ground) in (
+        for (_player, state, pos, vel, accel, spring_biped) in (
             &players,
             &mut player_states,
             &positions,
             &mut velocities,
             &mut accelerations,
-            &on_grounds,
+            &spring_bipeds,
         )
             .join()
         {
@@ -64,8 +65,7 @@ impl<'a> System<'a> for PlayerInputSystem {
             // debug.add("On Ground", format!("{}", on_ground.grounded));
             // debug.add("Facing Direction", format!("{:.1}", state.facing_direction));
 
-            // Use the collision system's ground detection
-            let is_grounded = on_ground.grounded;
+            let is_grounded = spring_biped.grounded;
 
             // Calculate forward direction from player toward camera (XZ plane only)
             // In BallDude, forward was from player toward camera position
@@ -108,6 +108,10 @@ impl<'a> System<'a> for PlayerInputSystem {
                 // Update facing direction based on movement
                 state.facing_direction = -move_dir.z.atan2(move_dir.x) + std::f32::consts::PI / 2.0;
             }
+
+            // Reset horizontal acceleration each frame (prevents stale air accel)
+            accel.0.x = 0.0;
+            accel.0.z = 0.0;
 
             // Apply horizontal velocity (preserve vertical velocity for gravity/jumping)
             if is_grounded {

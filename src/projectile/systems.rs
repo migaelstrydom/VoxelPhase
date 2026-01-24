@@ -12,7 +12,8 @@ use winit::event::MouseButton;
 use super::components::{Grenade, Lifetime, Projectile};
 use super::config::GrenadeConfig;
 use crate::components::{
-    Acceleration, Collider, Gravity, ModelInstance, Position, Renderable, Rotation, Velocity,
+    Acceleration, Collider, Gravity, ModelInstance, MotionState, Position, Renderable, Rotation,
+    Velocity,
 };
 use crate::explosion::Explosion;
 use crate::input::InputState;
@@ -140,13 +141,15 @@ impl<'a> System<'a> for GrenadeSpawnSystem {
             throw_dir * config.throw_speed + Vector3::new(0.0, config.arc_factor, 0.0);
 
         // Spawn the grenade entity
+        let spawn_point = Point3::new(spawn_pos.x, spawn_pos.y, spawn_pos.z);
         lazy.create_entity(&entities)
             .with(Position(spawn_pos))
             .with(Velocity(throw_velocity))
-            .with(Acceleration(Vector3::zeros())) // Gravity will be applied in the PhysicsSystem
+            .with(Acceleration(Vector3::zeros()))
             .with(Rotation(0.0))
             .with(Gravity(config.gravity))
             .with(Collider::sphere(config.radius))
+            .with(MotionState::new(spawn_point))
             .with(Projectile)
             .with(Grenade::new())
             .with(Lifetime::new(config.max_lifetime))

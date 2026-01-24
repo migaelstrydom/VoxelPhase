@@ -13,19 +13,19 @@ use specs::{Builder, Dispatcher, DispatcherBuilder, World, WorldExt};
 
 use crate::camera::{CameraConfig, FollowTarget};
 use crate::components::{
-    Acceleration, CameraComponent, Collider, Gravity, ModelInstance, OnGround, PhysicsBody,
-    Position, Renderable, Rotation, Velocity,
+    Acceleration, CameraComponent, Collider, ContactCandidates, Gravity, IKTargets, ModelInstance,
+    MotionState, PelvisTarget, PhysicsBody, Position, Probe, ProbePurpose, Renderable, Rotation,
+    SensorSet, Velocity,
 };
 use crate::core::error::{EngineError, EngineResult};
 use crate::core::vulkan_context::VulkanContext;
-use crate::debug::DebugLines;
+use crate::debug::{DebugLines, DebugOverlays};
 use crate::explosion::{Explosion, ExplosionSystem};
 use crate::input::InputState;
 use crate::particles::{
     ParticleConfig, ParticleEmitter, ParticlePool, ParticleSpawnSystem, ParticleUpdateSystem,
 };
 use crate::player::{Player, PlayerConfig, PlayerState};
-use crate::skeleton::{BipedCharacter, BipedCharacterConfig};
 use crate::projectile::{
     build_grenade_model, Grenade, GrenadeConfig, GrenadeCooldown, GrenadeMaterials,
     GrenadeModelResource, GrenadeSpawnSystem, Lifetime, LifetimeSystem, Projectile,
@@ -36,10 +36,12 @@ use crate::rendering::material::{Material, MaterialManagerBuilder};
 use crate::rendering::renderer::Renderer;
 use crate::rendering::Colour;
 use crate::resources::manager::ResourceManager;
+use crate::skeleton::{SpringBipedCharacter, SpringBipedCharacterConfig};
 use crate::systems::{
-    CameraControlSystem, GravitySystem, PenetrationResolutionSystem, PhysicsSystem,
-    PlayerInputSystem, PlayerStateSyncSystem, ProceduralAnimationSystem, RenderSystem,
-    TerrainCollisionSystem, TerrainUpdateSystem,
+    CameraControlSystem, DynamicTerrainCollisionSystem, GravitySystem, IKTargetSystem,
+    MotionPredictionSystem, PenetrationResolutionSystem, PlayerInputSystem, PlayerStateSyncSystem,
+    ProceduralAnimationSystem, RenderSystem, SpringBipedCollisionSystem, TerrainCollisionSystem,
+    TerrainQuerySystem, TerrainUpdateSystem, VelocityIntegrationSystem,
 };
 use crate::terrain::{create_test_terrain, TerrainManager};
 use crate::time::Time;
@@ -151,11 +153,15 @@ impl<'a, 'b> App<'a, 'b> {
         world.register::<CameraComponent>();
         world.register::<Player>();
         world.register::<PlayerState>();
-        world.register::<BipedCharacter>();
+        world.register::<SpringBipedCharacter>();
         world.register::<FollowTarget>();
         // Collision components
         world.register::<Collider>();
-        world.register::<OnGround>();
+        world.register::<MotionState>();
+        world.register::<SensorSet>();
+        world.register::<ContactCandidates>();
+        world.register::<IKTargets>();
+        world.register::<PelvisTarget>();
         world.register::<PhysicsBody>();
         world.register::<Grenade>();
         world.register::<Lifetime>();
@@ -173,6 +179,7 @@ impl<'a, 'b> App<'a, 'b> {
         world.insert(PlayerConfig::default());
         world.insert(CameraConfig::default());
         world.insert(DebugLines::default());
+        world.insert(DebugOverlays::default());
         world.insert(GrenadeConfig::default());
         world.insert(GrenadeModelResource {
             model: Some(grenade_model),
@@ -192,22 +199,45 @@ impl<'a, 'b> App<'a, 'b> {
 
         world.insert(terrain_manager);
 
-        // Create player entity with biped skeleton (Stage 2)
+        // Create player entity with spring biped skeleton (Stage 3 - physics-based)
         // Initial position: slightly above terrain so we can see the legs
         let initial_pos = nalgebra::Point3::new(0.0, -10.0, 0.0);
-        let initial_ground = -11.0; // Estimate - will be corrected by terrain collision
-        let biped_character = BipedCharacter::new(
-            BipedCharacterConfig::default(),
-            initial_pos,
-            initial_ground,
-        );
-        log::info!("Biped character skeleton created (Stage 2)");
+        let spring_config = SpringBipedCharacterConfig::default();
+        let spring_biped = SpringBipedCharacter::new(spring_config.clone(), initial_pos);
+        log::info!("Spring biped character created (Stage 3 - physics-based spring legs)");
+
+        let hip_width = spring_config.skeleton.hip_width;
+        let leg_length =
+            spring_config.skeleton.upper_leg_length + spring_config.skeleton.lower_leg_length;
+        let player_sensors = SensorSet::new(vec![
+            Probe::ray(
+                ProbePurpose::FootLeft,
+                Vector3::new(hip_width, 0.0, 0.0),
+                Vector3::new(0.0, -1.0, 0.0),
+                leg_length * 1.5,
+                0.05,
+            ),
+            Probe::ray(
+                ProbePurpose::FootRight,
+                Vector3::new(-hip_width, 0.0, 0.0),
+                Vector3::new(0.0, -1.0, 0.0),
+                leg_length * 1.5,
+                0.05,
+            ),
+            Probe::sphere_sweep(
+                ProbePurpose::Wall,
+                Vector3::new(0.0, 0.5, 0.0),
+                Vector3::new(0.0, 0.0, 1.0),
+                1.5,
+                0.2,
+            ),
+        ]);
 
         let player_entity = world
             .create_entity()
             .with(Player)
             .with(PlayerState::default())
-            .with(biped_character)
+            .with(spring_biped)
             .with(Position(Vector3::new(0.0, -10.0, 0.0))) // Start above terrain
             .with(Velocity(Vector3::zeros()))
             .with(Acceleration(Vector3::zeros()))
@@ -215,8 +245,14 @@ impl<'a, 'b> App<'a, 'b> {
             .with(Rotation(0.0))
             .with(Renderable)
             // Collision components
-            .with(Collider::sphere(player_config.radius))
-            .with(OnGround::default())
+            .with(MotionState::new(initial_pos))
+            .with(player_sensors)
+            .with(ContactCandidates::default())
+            .with(IKTargets::default())
+            .with(PelvisTarget {
+                target_y: initial_pos.y,
+                has_contact: false,
+            })
             .with(PhysicsBody {
                 restitution: 0.1, // Slight bounce
                 friction: 0.8,
@@ -246,44 +282,80 @@ impl<'a, 'b> App<'a, 'b> {
             .build();
 
         // Build the dispatcher with systems in the correct order
-        // Order: Physics -> Collision -> Input -> Animation -> Camera -> Render
-        // This ensures ground state is up-to-date when input system checks for jumping.
+        // Pipeline: TerrainQuery -> IK -> Animation -> Input -> Forces -> Velocity -> Prediction -> Collision -> Camera -> Render
+        //
+        // Key insight: Terrain probes and IK targets inform WHERE we want to go.
+        // Animation computes target pelvis height from feet. Then collision prevents terrain penetration.
         let dispatcher = DispatcherBuilder::new()
-            // Physics simulation first (uses velocity from previous frame's input)
-            .with(GravitySystem, "gravity", &[])
-            .with(PhysicsSystem, "physics", &["gravity"])
-            // Collision detection and response (after physics moves entities)
-            // This sets OnGround.grounded which input needs for jumping
-            .with(TerrainCollisionSystem, "terrain_collision", &["physics"])
+            // === Phase 1: Sensing (from last frame's resolved position) ===
+            // 1. Terrain probes query ground below entity
+            .with(TerrainQuerySystem, "terrain_query", &[])
+            // 2. IK target selection from probe contacts
+            .with(IKTargetSystem, "ik_targets", &["terrain_query"])
+            // === Phase 2: Animation (compute desired position) ===
+            // 3. Procedural animation: position feet from IK, compute pelvis target
+            .with(
+                ProceduralAnimationSystem,
+                "procedural_animation",
+                &["ik_targets"],
+            )
+            // === Phase 3: Intent (player input and forces) ===
+            // 4. Player input (uses grounded state from last frame's collision)
+            .with(PlayerInputSystem, "player_input", &["procedural_animation"])
+            // 5. Apply gravity/forces
+            .with(GravitySystem, "gravity", &["player_input"])
+            // === Phase 4: Physics integration ===
+            // 6. Velocity integration (velocity only, no position)
+            .with(
+                VelocityIntegrationSystem,
+                "velocity_integration",
+                &["gravity"],
+            )
+            // 7. Motion prediction (compute prev/predicted for CCD)
+            .with(
+                MotionPredictionSystem,
+                "motion_prediction",
+                &["velocity_integration"],
+            )
+            // === Phase 5: Collision resolution (final authority for position) ===
+            // 8. SpringBiped CCD collision
+            .with(
+                SpringBipedCollisionSystem,
+                "spring_biped_collision",
+                &["motion_prediction"],
+            )
+            // 9. Dynamic terrain CCD collision (non-biped entities)
+            .with(
+                DynamicTerrainCollisionSystem,
+                "dynamic_terrain_collision",
+                &["motion_prediction"],
+            )
+            // 10. Legacy terrain collision for non-CCD entities
+            .with(
+                TerrainCollisionSystem,
+                "terrain_collision",
+                &["spring_biped_collision", "dynamic_terrain_collision"],
+            )
+            // 11. Penetration resolution (backup for deep overlaps)
             .with(
                 PenetrationResolutionSystem,
                 "penetration_resolution",
                 &["terrain_collision"],
             )
-            // Input processing AFTER collision so we have current ground state
-            .with(
-                PlayerInputSystem,
-                "player_input",
-                &["penetration_resolution"],
-            )
-            // Sync player state to rendering components
+            // === Phase 6: Post-collision state sync ===
+            // 12. Sync player state to rendering components
             .with(
                 PlayerStateSyncSystem,
                 "player_state_sync",
-                &["player_input"],
+                &["penetration_resolution"],
             )
-            // Procedural animation (skeleton physics, locomotion)
-            .with(
-                ProceduralAnimationSystem,
-                "procedural_animation",
-                &["player_state_sync"],
-            )
-            // Camera follows player (after collision resolved)
+            // 13. Camera follows player
             .with(
                 CameraControlSystem,
                 "camera_control",
                 &["player_state_sync"],
             )
+            // === Phase 7: Projectiles and effects ===
             .with(GrenadeSpawnSystem, "grenade_spawn", &["camera_control"])
             .with(LifetimeSystem, "lifetime", &["grenade_spawn"])
             .with(
@@ -295,7 +367,7 @@ impl<'a, 'b> App<'a, 'b> {
             .with(TerrainUpdateSystem, "terrain_update", &["explosion"])
             .with(ParticleSpawnSystem, "particle_spawn", &["explosion"])
             .with(ParticleUpdateSystem, "particle_update", &["particle_spawn"])
-            // Rendering is thread-local (must be last)
+            // === Phase 8: Rendering ===
             .with_thread_local(RenderSystem)
             .build();
 
@@ -423,6 +495,10 @@ impl<'a, 'b> App<'a, 'b> {
                     {
                         let mut debug = world.write_resource::<DebugLines>();
                         debug.clear();
+                    }
+                    {
+                        let mut overlays = world.write_resource::<DebugOverlays>();
+                        overlays.clear();
                     }
                 }
 

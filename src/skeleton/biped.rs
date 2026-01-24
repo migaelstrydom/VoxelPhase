@@ -1,553 +1,640 @@
-//! Simple biped skeleton - pelvis + two legs.
+//! Spring-leg biped skeleton with physics-based locomotion.
 //!
-//! This is a simplified version for testing the step controller:
-//! - 3 positions: Pelvis, left foot, right foot
-//! - No physics simulation (Verlet removed)
-//! - Pelvis position set directly from physics body
-//! - Foot positions set directly from step controller
-//!
-//! Later stages will add FABRIK IK for knee positioning.
+//! This is a simplified biped that uses spring forces for natural bouncy walking:
+//! - Pelvis is a point mass with velocity
+//! - Each leg is a virtual spring from foot to pelvis
+//! - When grounded, springs push the pelvis forward and up
+//! - FABRIK IK positions knees cosmetically
+//! - Sphere collision on joints (feet, knees, pelvis)
 
 use nalgebra::{Point3, Vector3};
 
-/// Configuration for the biped skeleton.
+use super::fabrik::{FABRIKSolver, IKChain, IKTarget};
+use crate::collision::{sphere_triangle_collision, Triangle, AABB};
+
+/// Configuration for the spring biped skeleton.
 #[derive(Clone, Debug)]
-pub struct BipedConfig {
-    /// Distance from pelvis to knee (upper leg length).
+pub struct SpringBipedConfig {
+    /// Upper leg length (hip to knee).
     pub upper_leg_length: f32,
-    /// Distance from knee to foot (lower leg length).
+    /// Lower leg length (knee to foot).
     pub lower_leg_length: f32,
     /// Lateral distance from pelvis center to each hip.
     pub hip_width: f32,
-}
+    /// Collision radius for foot spheres.
+    pub foot_radius: f32,
+    /// Collision radius for knee spheres.
+    pub knee_radius: f32,
+    /// Collision radius for pelvis sphere.
+    pub pelvis_radius: f32,
 
-impl Default for BipedConfig {
-    fn default() -> Self {
-        Self {
-            upper_leg_length: 0.3,
-            lower_leg_length: 0.3,
-            hip_width: 0.2,
-        }
-    }
-}
-
-/// A simple biped skeleton: pelvis + two feet.
-///
-/// This is a minimal skeleton for testing the step controller.
-/// Positions are set directly - no physics simulation.
-pub struct SimpleBipedSkeleton {
-    /// Configuration.
-    pub config: BipedConfig,
-    /// Pelvis position (set directly from physics body).
-    pelvis: Point3<f32>,
-    /// Left foot position (set from step controller).
-    left_foot: Point3<f32>,
-    /// Right foot position (set from step controller).
-    right_foot: Point3<f32>,
-}
-
-impl SimpleBipedSkeleton {
-    /// Create a new biped skeleton at the given pelvis position.
-    pub fn new(config: BipedConfig, pelvis_position: Point3<f32>) -> Self {
-        // Calculate initial foot positions below pelvis
-        let total_leg_length = config.upper_leg_length + config.lower_leg_length;
-        let left_foot = Point3::new(
-            pelvis_position.x - config.hip_width,
-            pelvis_position.y - total_leg_length,
-            pelvis_position.z,
-        );
-        let right_foot = Point3::new(
-            pelvis_position.x + config.hip_width,
-            pelvis_position.y - total_leg_length,
-            pelvis_position.z,
-        );
-
-        Self {
-            config,
-            pelvis: pelvis_position,
-            left_foot,
-            right_foot,
-        }
-    }
-
-    /// Set the pelvis position directly.
-    pub fn set_pelvis_position(&mut self, position: Point3<f32>) {
-        self.pelvis = position;
-    }
-
-    /// Set the left foot position directly.
-    pub fn set_left_foot_position(&mut self, position: Point3<f32>) {
-        self.left_foot = position;
-    }
-
-    /// Set the right foot position directly.
-    pub fn set_right_foot_position(&mut self, position: Point3<f32>) {
-        self.right_foot = position;
-    }
-
-    /// Get the pelvis position.
-    pub fn pelvis_position(&self) -> Point3<f32> {
-        self.pelvis
-    }
-
-    /// Get the left foot position.
-    pub fn left_foot_position(&self) -> Point3<f32> {
-        self.left_foot
-    }
-
-    /// Get the right foot position.
-    pub fn right_foot_position(&self) -> Point3<f32> {
-        self.right_foot
-    }
-}
-
-impl Default for SimpleBipedSkeleton {
-    fn default() -> Self {
-        Self::new(BipedConfig::default(), Point3::new(0.0, 1.0, 0.0))
-    }
-}
-
-// ============================================================================
-// Simple Stepping Controller
-// ============================================================================
-
-/// State of a single foot.
-#[derive(Clone, Debug)]
-pub struct FootState {
-    /// Where the foot is planted (target when grounded).
-    pub planted_position: Point3<f32>,
-    /// Is this foot currently stepping (in the air)?
-    pub is_stepping: bool,
-    /// Progress through the step animation [0, 1].
-    pub step_progress: f32,
-    /// Where we're stepping to.
-    pub step_target: Point3<f32>,
-    /// Where we started the step from.
-    pub step_start: Point3<f32>,
-}
-
-impl FootState {
-    pub fn new(position: Point3<f32>) -> Self {
-        Self {
-            planted_position: position,
-            is_stepping: false,
-            step_progress: 0.0,
-            step_target: position,
-            step_start: position,
-        }
-    }
-
-    /// Get the current target position (interpolated if stepping).
-    pub fn current_target(&self, step_height: f32) -> Point3<f32> {
-        if !self.is_stepping {
-            return self.planted_position;
-        }
-
-        // Interpolate from start to target with an arc
-        let t = self.step_progress;
-        // Smooth step function for nicer motion
-        let smooth_t = t * t * (3.0 - 2.0 * t);
-
-        // Horizontal interpolation
-        let horizontal = self
-            .step_start
-            .coords
-            .lerp(&self.step_target.coords, smooth_t);
-
-        // Vertical arc (parabola peaking at t=0.5)
-        let arc_height = 4.0 * t * (1.0 - t) * step_height;
-
-        Point3::new(horizontal.x, horizontal.y + arc_height, horizontal.z)
-    }
-}
-
-/// Configuration for the stepping controller.
-#[derive(Clone, Debug)]
-pub struct StepConfig {
-    /// How far a foot can drift from ideal before stepping.
-    pub step_threshold: f32,
-    /// How fast steps complete (1.0 = 1 second per step).
-    pub step_speed: f32,
-    /// Height of the step arc.
-    pub step_height: f32,
-    /// How far ahead to place the foot when stepping.
-    pub step_overshoot: f32,
-    /// Lateral offset from pelvis center to ideal foot position.
-    pub foot_spread: f32,
-    /// Forward/backward offset for feet (0 = directly below pelvis).
-    pub foot_offset_z: f32,
-}
-
-impl Default for StepConfig {
-    fn default() -> Self {
-        Self {
-            step_threshold: 0.12, // Trigger steps sooner (was 0.3)
-            step_speed: 8.0,      // Faster step animation (was 5.0)
-            step_height: 0.1,     // Slightly lower arc (was 0.15)
-            step_overshoot: 0.15, // Step further ahead (was 0.1)
-            foot_spread: 0.15,
-            foot_offset_z: 0.0,
-        }
-    }
-}
-
-/// Simple stepping controller for the biped.
-pub struct SimpleStepController {
-    pub config: StepConfig,
-    pub left_foot: FootState,
-    pub right_foot: FootState,
-    /// Which foot stepped most recently (to alternate).
-    last_step_was_left: bool,
-}
-
-impl SimpleStepController {
-    pub fn new(config: StepConfig, initial_position: Point3<f32>, ground_height: f32) -> Self {
-        let left_pos = Point3::new(
-            initial_position.x - config.foot_spread,
-            ground_height,
-            initial_position.z + config.foot_offset_z,
-        );
-        let right_pos = Point3::new(
-            initial_position.x + config.foot_spread,
-            ground_height,
-            initial_position.z + config.foot_offset_z,
-        );
-
-        Self {
-            config,
-            left_foot: FootState::new(left_pos),
-            right_foot: FootState::new(right_pos),
-            last_step_was_left: false,
-        }
-    }
-
-    /// Update the stepping logic.
-    ///
-    /// `pelvis_position` - Current pelvis position.
-    /// `ground_height` - Height of the ground at the pelvis position.
-    /// `velocity` - Current movement velocity (for predicting where to step).
-    /// `dt` - Delta time.
-    pub fn update(
-        &mut self,
-        pelvis_position: Point3<f32>,
-        ground_height: f32,
-        velocity: Vector3<f32>,
-        dt: f32,
-    ) {
-        // Calculate ideal foot positions (where feet "want" to be)
-        let left_ideal = Point3::new(
-            pelvis_position.x - self.config.foot_spread,
-            ground_height,
-            pelvis_position.z + self.config.foot_offset_z,
-        );
-        let right_ideal = Point3::new(
-            pelvis_position.x + self.config.foot_spread,
-            ground_height,
-            pelvis_position.z + self.config.foot_offset_z,
-        );
-
-        // Update any ongoing steps
-        if self.left_foot.is_stepping {
-            self.left_foot.step_progress += self.config.step_speed * dt;
-            if self.left_foot.step_progress >= 1.0 {
-                // Step complete
-                self.left_foot.is_stepping = false;
-                self.left_foot.step_progress = 0.0;
-                self.left_foot.planted_position = self.left_foot.step_target;
-            }
-        }
-
-        if self.right_foot.is_stepping {
-            self.right_foot.step_progress += self.config.step_speed * dt;
-            if self.right_foot.step_progress >= 1.0 {
-                // Step complete
-                self.right_foot.is_stepping = false;
-                self.right_foot.step_progress = 0.0;
-                self.right_foot.planted_position = self.right_foot.step_target;
-            }
-        }
-
-        // Check if either foot needs to step
-        let left_drift = self.horizontal_distance(&self.left_foot.planted_position, &left_ideal);
-        let right_drift = self.horizontal_distance(&self.right_foot.planted_position, &right_ideal);
-
-        // Only one foot can step at a time
-        let can_left_step = !self.left_foot.is_stepping && !self.right_foot.is_stepping;
-        let can_right_step = !self.left_foot.is_stepping && !self.right_foot.is_stepping;
-
-        // Trigger a step if needed
-        if can_left_step && left_drift > self.config.step_threshold && !self.last_step_was_left {
-            self.trigger_step_left(left_ideal, velocity, ground_height);
-        } else if can_right_step
-            && right_drift > self.config.step_threshold
-            && self.last_step_was_left
-        {
-            self.trigger_step_right(right_ideal, velocity, ground_height);
-        } else if can_left_step && left_drift > self.config.step_threshold {
-            self.trigger_step_left(left_ideal, velocity, ground_height);
-        } else if can_right_step && right_drift > self.config.step_threshold {
-            self.trigger_step_right(right_ideal, velocity, ground_height);
-        }
-    }
-
-    fn trigger_step_left(
-        &mut self,
-        ideal: Point3<f32>,
-        velocity: Vector3<f32>,
-        ground_height: f32,
-    ) {
-        self.left_foot.is_stepping = true;
-        self.left_foot.step_progress = 0.0;
-        self.left_foot.step_start = self.left_foot.planted_position;
-
-        // Step target is ideal position + overshoot in velocity direction
-        let overshoot = if velocity.magnitude() > 0.1 {
-            velocity.normalize() * self.config.step_overshoot
-        } else {
-            Vector3::zeros()
-        };
-        self.left_foot.step_target =
-            Point3::new(ideal.x + overshoot.x, ground_height, ideal.z + overshoot.z);
-
-        self.last_step_was_left = true;
-    }
-
-    fn trigger_step_right(
-        &mut self,
-        ideal: Point3<f32>,
-        velocity: Vector3<f32>,
-        ground_height: f32,
-    ) {
-        self.right_foot.is_stepping = true;
-        self.right_foot.step_progress = 0.0;
-        self.right_foot.step_start = self.right_foot.planted_position;
-
-        let overshoot = if velocity.magnitude() > 0.1 {
-            velocity.normalize() * self.config.step_overshoot
-        } else {
-            Vector3::zeros()
-        };
-        self.right_foot.step_target =
-            Point3::new(ideal.x + overshoot.x, ground_height, ideal.z + overshoot.z);
-
-        self.last_step_was_left = false;
-    }
-
-    fn horizontal_distance(&self, a: &Point3<f32>, b: &Point3<f32>) -> f32 {
-        let dx = a.x - b.x;
-        let dz = a.z - b.z;
-        (dx * dx + dz * dz).sqrt()
-    }
-
-    /// Get the current target for the left foot.
-    pub fn left_target(&self) -> Point3<f32> {
-        self.left_foot.current_target(self.config.step_height)
-    }
-
-    /// Get the current target for the right foot.
-    pub fn right_target(&self) -> Point3<f32> {
-        self.right_foot.current_target(self.config.step_height)
-    }
-
-    /// Immediately snap feet to ideal positions below the pelvis.
-    ///
-    /// Call this when landing or when feet need to reset to a known state.
-    /// Cancels any in-progress steps.
-    pub fn snap_to_position(&mut self, pelvis_position: Point3<f32>, ground_height: f32) {
-        let left_ideal = Point3::new(
-            pelvis_position.x - self.config.foot_spread,
-            ground_height,
-            pelvis_position.z + self.config.foot_offset_z,
-        );
-        let right_ideal = Point3::new(
-            pelvis_position.x + self.config.foot_spread,
-            ground_height,
-            pelvis_position.z + self.config.foot_offset_z,
-        );
-
-        self.left_foot.planted_position = left_ideal;
-        self.left_foot.is_stepping = false;
-        self.left_foot.step_progress = 0.0;
-
-        self.right_foot.planted_position = right_ideal;
-        self.right_foot.is_stepping = false;
-        self.right_foot.step_progress = 0.0;
-    }
-}
-
-// ============================================================================
-// Phase-Based Gait Controller
-// ============================================================================
-
-/// Configuration for the gait controller.
-#[derive(Clone, Debug)]
-pub struct GaitConfig {
-    /// Lateral offset from pelvis center to each hip.
-    pub hip_width: f32,
-    /// Maximum stride length (forward/back from center) at full speed.
-    pub stride_length: f32,
-    /// Height of the step arc when foot is swinging.
-    pub step_height: f32,
-    /// How fast the gait cycle progresses per unit of speed.
-    /// Higher = faster leg movement for the same walk speed.
-    pub phase_rate: f32,
+    // Gait parameters
     /// Speed below which the character is considered standing still.
     pub idle_threshold: f32,
+    /// Height of the step arc when foot is swinging.
+    pub step_height: f32,
+    /// How far ahead to target the foot when moving.
+    pub step_ahead: f32,
 }
 
-impl Default for GaitConfig {
+impl Default for SpringBipedConfig {
     fn default() -> Self {
         Self {
-            hip_width: 0.15,
-            stride_length: 0.3,
-            step_height: 0.2,
-            phase_rate: 1.0,
+            upper_leg_length: 0.25,
+            lower_leg_length: 0.25,
+            hip_width: 0.12,
+            foot_radius: 0.06,
+            knee_radius: 0.04,
+            pelvis_radius: 0.1,
             idle_threshold: 0.1,
+            step_height: 0.2,
+            step_ahead: 5.5,
         }
     }
 }
 
-/// Phase-based gait controller for natural walking/running animation.
-///
-/// Instead of reacting to drift, this controller drives foot placement
-/// from a continuous walk phase. Feet alternate being ahead/behind the
-/// pelvis based on velocity direction.
-pub struct GaitController {
-    pub config: GaitConfig,
-    /// Current walk phase [0, 1). Drives the gait cycle.
-    walk_phase: f32,
-    /// Cached left foot position.
-    left_foot: Point3<f32>,
-    /// Cached right foot position.
-    right_foot: Point3<f32>,
+/// State of a single leg.
+#[derive(Clone, Debug)]
+pub struct LegState {
+    /// Current foot position.
+    pub foot_position: Point3<f32>,
+    /// Target foot position (where we're stepping to).
+    pub foot_target: Point3<f32>,
+    /// Is this leg currently grounded (supporting weight)?
+    pub is_grounded: bool,
+    /// Progress through swing phase [0, 1] when not grounded.
+    pub swing_progress: f32,
+    /// Position where the swing started.
+    pub swing_start: Point3<f32>,
+    /// Knee position (calculated by FABRIK).
+    pub knee_position: Point3<f32>,
 }
 
-impl GaitController {
-    pub fn new(config: GaitConfig) -> Self {
+impl LegState {
+    fn new(foot_pos: Point3<f32>, knee_pos: Point3<f32>) -> Self {
         Self {
-            config,
-            walk_phase: 0.0,
-            left_foot: Point3::origin(),
-            right_foot: Point3::origin(),
+            foot_position: foot_pos,
+            foot_target: foot_pos,
+            is_grounded: true,
+            swing_progress: 0.0,
+            swing_start: foot_pos,
+            knee_position: knee_pos,
         }
     }
+}
 
-    /// Update the gait and calculate foot positions.
-    ///
-    /// `pelvis_position` - Center of the pelvis in world space.
-    /// `ground_height` - Height of the ground below the pelvis.
-    /// `velocity` - Current horizontal movement velocity.
-    /// `facing` - Unit vector indicating which way the character is facing.
-    /// `dt` - Delta time in seconds.
-    pub fn update(
-        &mut self,
-        pelvis_position: Point3<f32>,
-        ground_height: f32,
-        velocity: Vector3<f32>,
-        facing: Vector3<f32>,
-        dt: f32,
-    ) {
-        // Calculate horizontal speed (ignore vertical velocity)
-        let horizontal_vel = Vector3::new(velocity.x, 0.0, velocity.z);
-        let speed = horizontal_vel.magnitude();
+/// A spring-leg biped skeleton.
+///
+/// Uses spring forces for natural bouncy locomotion:
+/// - Grounded legs act as springs pushing the pelvis
+/// - Pelvis integrates forces with gravity
+/// - Feet alternate between grounded and swinging
+/// - FABRIK positions knees
+pub struct SpringBipedSkeleton {
+    pub config: SpringBipedConfig,
 
-        // Advance phase based on speed
-        if speed > self.config.idle_threshold {
-            self.walk_phase += speed * self.config.phase_rate * dt;
-            self.walk_phase %= 1.0; // Wrap to [0, 1)
-        }
-        // When idle, phase freezes (feet stay in place)
+    // Pelvis state (point mass)
+    pelvis_position: Point3<f32>,
+    pelvis_velocity: Vector3<f32>,
 
-        // Calculate the "right" vector (perpendicular to facing, in XZ plane)
-        let right = facing.cross(&Vector3::y()).normalize();
+    // Leg states
+    pub left_leg: LegState,
+    pub right_leg: LegState,
 
-        // Hip positions (offset laterally from pelvis)
-        let left_hip = pelvis_position - right * self.config.hip_width;
-        let right_hip = pelvis_position + right * self.config.hip_width;
+    // Gait phase [0, 1) - drives which leg is grounded
+    gait_phase: f32,
 
-        // Calculate stride direction (direction of movement, or facing if idle)
-        let stride_dir = if speed > self.config.idle_threshold {
-            horizontal_vel.normalize()
-        } else {
-            facing
-        };
+    // Facing direction (for knee bend direction and step targeting)
+    facing: Vector3<f32>,
 
-        // Calculate stride offsets from phase
-        // Left foot: sin(phase * 2π) oscillates -1 to 1
-        // Right foot: opposite phase (180° offset)
-        let phase_angle = self.walk_phase * std::f32::consts::TAU;
-        let left_stride = phase_angle.sin();
-        let right_stride = -left_stride; // Opposite phase
+    // FABRIK solver for knees
+    ik_solver: FABRIKSolver,
+}
 
-        // Scale stride by speed (longer strides when moving faster)
-        let stride_scale = (speed / 2.0).min(1.0); // Clamp to max stride at speed=2
-        let stride_amount = self.config.stride_length * stride_scale;
+impl SpringBipedSkeleton {
+    /// Create a new spring biped at the given pelvis position.
+    pub fn new(config: SpringBipedConfig, pelvis_position: Point3<f32>) -> Self {
+        let total_leg_length = config.upper_leg_length + config.lower_leg_length;
+        let facing = Vector3::new(0.0, 0.0, 1.0);
+        let right = right_vector(facing);
 
-        // Calculate foot forward/back offset along stride direction
-        let left_offset = stride_dir * (left_stride * stride_amount);
-        let right_offset = stride_dir * (right_stride * stride_amount);
+        // Calculate hip positions using the same logic as left_hip()/right_hip()
+        let left_hip_pos = pelvis_position - right * config.hip_width;
+        let right_hip_pos = pelvis_position + right * config.hip_width;
 
-        // Calculate step height (foot lifts when swinging forward)
-        // Foot is "swinging" when moving from back to front (derivative of sin is positive)
-        // cos(phase) > 0 means left foot is swinging
-        let left_swing = phase_angle.cos().max(0.0);
-        let right_swing = (-phase_angle).cos().max(0.0); // Opposite phase
-
-        let left_lift = left_swing * self.config.step_height * stride_scale;
-        let right_lift = right_swing * self.config.step_height * stride_scale;
-
-        // Final foot positions
-        self.left_foot = Point3::new(
-            left_hip.x + left_offset.x,
-            ground_height + left_lift,
-            left_hip.z + left_offset.z,
-        );
-        self.right_foot = Point3::new(
-            right_hip.x + right_offset.x,
-            ground_height + right_lift,
-            right_hip.z + right_offset.z,
-        );
-    }
-
-    /// Get the current left foot position.
-    pub fn left_foot(&self) -> Point3<f32> {
-        self.left_foot
-    }
-
-    /// Get the current right foot position.
-    pub fn right_foot(&self) -> Point3<f32> {
-        self.right_foot
-    }
-
-    /// Calculate foot positions for airborne state.
-    ///
-    /// Returns (left_foot, right_foot) hanging below the pelvis.
-    pub fn airborne_feet(
-        &self,
-        pelvis_position: Point3<f32>,
-        leg_length: f32,
-        facing: Vector3<f32>,
-    ) -> (Point3<f32>, Point3<f32>) {
-        let right = facing.cross(&Vector3::y()).normalize();
-
+        // Initial foot positions directly below hips
         let left_foot = Point3::new(
-            pelvis_position.x - right.x * self.config.hip_width,
-            pelvis_position.y - leg_length,
-            pelvis_position.z - right.z * self.config.hip_width,
+            left_hip_pos.x,
+            pelvis_position.y - total_leg_length,
+            left_hip_pos.z,
         );
         let right_foot = Point3::new(
-            pelvis_position.x + right.x * self.config.hip_width,
-            pelvis_position.y - leg_length,
-            pelvis_position.z + right.z * self.config.hip_width,
+            right_hip_pos.x,
+            pelvis_position.y - total_leg_length,
+            right_hip_pos.z,
         );
 
-        (left_foot, right_foot)
+        // Initial knee positions (bent slightly forward)
+        let left_knee = Point3::new(
+            left_hip_pos.x,
+            pelvis_position.y - config.upper_leg_length,
+            left_hip_pos.z + 0.05,
+        );
+        let right_knee = Point3::new(
+            right_hip_pos.x,
+            pelvis_position.y - config.upper_leg_length,
+            right_hip_pos.z + 0.05,
+        );
+
+        Self {
+            config,
+            pelvis_position,
+            pelvis_velocity: Vector3::zeros(),
+            left_leg: LegState::new(left_foot, left_knee),
+            right_leg: LegState::new(right_foot, right_knee),
+            gait_phase: 0.0,
+            facing: Vector3::new(0.0, 0.0, 1.0),
+            ik_solver: FABRIKSolver::new(),
+        }
+    }
+
+    /// Get the total leg length.
+    pub fn leg_length(&self) -> f32 {
+        self.config.upper_leg_length + self.config.lower_leg_length
+    }
+
+    /// Get hip positions (derived from pelvis).
+    #[inline]
+    pub fn left_hip(&self) -> Point3<f32> {
+        let left = self.left_vector();
+        self.pelvis_position + left * self.config.hip_width
+    }
+
+    #[inline]
+    pub fn right_hip(&self) -> Point3<f32> {
+        let right = self.right_vector();
+        self.pelvis_position + right * self.config.hip_width
+    }
+
+    /// Solve FABRIK IK to position knees.
+    fn solve_knee_ik(&mut self) {
+        let right = self.right_vector();
+        let left_bend = (self.facing - right * 0.2).normalize();
+        let right_bend = (self.facing + right * 0.2).normalize();
+
+        // Left leg: hip -> knee -> foot
+        let left_hip = self.left_hip();
+        let left_foot = self.left_leg.foot_position;
+        let mut positions = vec![left_hip, self.left_leg.knee_position, left_foot];
+        let chain = IKChain::new(vec![0, 1, 2], &positions);
+        let target = IKTarget::new(left_foot);
+        self.ik_solver.solve(&mut positions, &chain, &target, true);
+
+        // Apply knee bend bias (knees should bend forward)
+        let mut left_knee = positions[1] + left_bend * 0.05;
+        Self::constrain_knee_static(
+            &mut left_knee,
+            &left_hip,
+            &left_foot,
+            self.config.upper_leg_length,
+            self.config.lower_leg_length,
+            left_bend,
+        );
+        self.left_leg.knee_position = left_knee;
+
+        // Right leg: hip -> knee -> foot
+        let right_hip = self.right_hip();
+        let right_foot = self.right_leg.foot_position;
+        positions = vec![right_hip, self.right_leg.knee_position, right_foot];
+        let chain = IKChain::new(vec![0, 1, 2], &positions);
+        let target = IKTarget::new(right_foot);
+        self.ik_solver.solve(&mut positions, &chain, &target, true);
+
+        let mut right_knee = positions[1] + right_bend * 0.05;
+        Self::constrain_knee_static(
+            &mut right_knee,
+            &right_hip,
+            &right_foot,
+            self.config.upper_leg_length,
+            self.config.lower_leg_length,
+            right_bend,
+        );
+        self.right_leg.knee_position = right_knee;
+    }
+
+    /// Constrain knee to be at correct bone lengths from hip and foot (static version).
+    fn constrain_knee_static(
+        knee: &mut Point3<f32>,
+        hip: &Point3<f32>,
+        foot: &Point3<f32>,
+        upper: f32,
+        lower: f32,
+        bend_dir: Vector3<f32>,
+    ) {
+        let hip_to_foot = foot - hip;
+        let dist = hip_to_foot.magnitude();
+
+        if dist < 0.001 {
+            // Foot at hip - just put knee forward
+            *knee = *hip + bend_dir * upper;
+            return;
+        }
+
+        // Clamp distance to valid range
+        let dist = dist.clamp(0.01, upper + lower - 0.01);
+
+        // Law of cosines to find knee angle
+        let cos_angle =
+            ((upper * upper + dist * dist - lower * lower) / (2.0 * upper * dist)).clamp(-1.0, 1.0);
+        let angle = cos_angle.acos();
+
+        // Direction from hip to foot
+        let forward = hip_to_foot.normalize();
+
+        let bend_axis = forward.cross(&bend_dir);
+        let bend_dir_orth = if bend_axis.magnitude() > 0.01 {
+            bend_axis.cross(&forward).normalize()
+        } else {
+            Vector3::y()
+        };
+
+        // Position knee in a stable bend plane
+        let knee_offset = forward * (angle.cos() * upper) + bend_dir_orth * (angle.sin() * upper);
+        *knee = hip + knee_offset;
+    }
+
+    /// Update gait and foot targeting.
+    ///
+    /// `horizontal_velocity` - Current horizontal movement velocity.
+    /// `left_target` - IK target for left foot (None if no ground contact).
+    /// `right_target` - IK target for right foot (None if no ground contact).
+    pub fn update_gait(
+        &mut self,
+        horizontal_velocity: Vector3<f32>,
+        dt: f32,
+        left_target: Option<Point3<f32>>,
+        right_target: Option<Point3<f32>>,
+    ) {
+        let speed = horizontal_velocity.magnitude();
+        let leg_length = self.leg_length();
+        let step_length = (self.config.step_ahead * 2.0).clamp(0.05, leg_length * 0.9);
+        const MIN_STRIDE_TIME: f32 = 0.35;
+        let stride_time = if speed > 1e-4 {
+            (step_length / speed).max(MIN_STRIDE_TIME)
+        } else {
+            f32::MAX
+        };
+        let swing_ratio = 0.4;
+        let swing_time = stride_time * swing_ratio;
+
+        let left_hip = self.left_hip();
+        let right_hip = self.right_hip();
+        let left_ground = left_target.map(|t| t.y).unwrap_or(left_hip.y - leg_length);
+        let right_ground = right_target
+            .map(|t| t.y)
+            .unwrap_or(right_hip.y - leg_length);
+
+        if speed <= self.config.idle_threshold || !stride_time.is_finite() {
+            let left_desired =
+                left_target.unwrap_or(Point3::new(left_hip.x, left_ground, left_hip.z));
+            let right_desired =
+                right_target.unwrap_or(Point3::new(right_hip.x, right_ground, right_hip.z));
+            let snap_threshold = 0.03;
+            let left_delta = (left_desired - self.left_leg.foot_target).magnitude();
+            let right_delta = (right_desired - self.right_leg.foot_target).magnitude();
+
+            self.left_leg.foot_target = if left_delta <= snap_threshold {
+                self.left_leg.foot_target
+            } else {
+                left_desired
+            };
+            self.left_leg.foot_position = self.left_leg.foot_target;
+            self.left_leg.is_grounded = true;
+            self.left_leg.swing_progress = 0.0;
+            self.left_leg.swing_start = self.left_leg.foot_position;
+
+            self.right_leg.foot_target = if right_delta <= snap_threshold {
+                self.right_leg.foot_target
+            } else {
+                right_desired
+            };
+            self.right_leg.foot_position = self.right_leg.foot_target;
+            self.right_leg.is_grounded = true;
+            self.right_leg.swing_progress = 0.0;
+            self.right_leg.swing_start = self.right_leg.foot_position;
+
+            self.gait_phase = 0.0;
+            return;
+        }
+
+        self.gait_phase += (speed * dt) / step_length;
+        self.gait_phase %= 1.0;
+
+        let facing = self.facing;
+        let left_phase = self.gait_phase;
+        let right_phase = (self.gait_phase + 0.5) % 1.0;
+
+        Self::update_leg_planted(
+            &mut self.left_leg,
+            left_hip,
+            left_phase,
+            facing,
+            step_length,
+            swing_ratio,
+            swing_time,
+            self.config.step_height,
+            dt,
+            left_ground,
+            left_target,
+        );
+        Self::update_leg_planted(
+            &mut self.right_leg,
+            right_hip,
+            right_phase,
+            facing,
+            step_length,
+            swing_ratio,
+            swing_time,
+            self.config.step_height,
+            dt,
+            right_ground,
+            right_target,
+        );
+    }
+
+    fn update_leg_planted(
+        leg: &mut LegState,
+        hip: Point3<f32>,
+        phase: f32,
+        facing: Vector3<f32>,
+        step_length: f32,
+        swing_ratio: f32,
+        swing_time: f32,
+        step_height: f32,
+        dt: f32,
+        ground_y: f32,
+        target: Option<Point3<f32>>,
+    ) {
+        let in_swing = phase < swing_ratio;
+
+        if in_swing {
+            if leg.is_grounded {
+                leg.is_grounded = false;
+                leg.swing_progress = 0.0;
+                leg.swing_start = leg.foot_position;
+                leg.foot_target = target.unwrap_or_else(|| {
+                    Self::compute_step_target(hip, facing, step_length, ground_y)
+                });
+            }
+
+            let step = if swing_time > 1e-5 {
+                dt / swing_time
+            } else {
+                1.0
+            };
+            leg.swing_progress = (leg.swing_progress + step).min(1.0);
+            let t = leg.swing_progress;
+            let smooth_t = t * t * (3.0 - 2.0 * t);
+
+            let horizontal = leg
+                .swing_start
+                .coords
+                .lerp(&leg.foot_target.coords, smooth_t);
+            let arc = (std::f32::consts::PI * t).sin() * step_height;
+
+            leg.foot_position = Point3::new(horizontal.x, horizontal.y + arc, horizontal.z);
+            if leg.swing_progress >= 1.0 {
+                leg.is_grounded = true;
+                leg.foot_position = leg.foot_target;
+            }
+        } else {
+            if !leg.is_grounded {
+                leg.is_grounded = true;
+                leg.foot_position = leg.foot_target;
+            }
+            leg.swing_progress = 0.0;
+            leg.swing_start = leg.foot_position;
+        }
+    }
+
+    fn compute_step_target(
+        hip: Point3<f32>,
+        facing: Vector3<f32>,
+        step_length: f32,
+        ground_y: f32,
+    ) -> Point3<f32> {
+        let forward = facing * (step_length * 0.5);
+        Point3::new(hip.x + forward.x, ground_y, hip.z + forward.z)
+    }
+
+    /// Solve IK only - updates foot positions and knee positions.
+    ///
+    /// Call this after setting pelvis position to update the leg geometry.
+    /// Does NOT run spring physics or move the pelvis.
+    pub fn solve_ik_only(&mut self) {
+        let max_leg_length = self.config.upper_leg_length + self.config.lower_leg_length;
+
+        // Get hip positions (copies, to avoid borrow issues)
+        let left_hip = self.left_hip();
+        let right_hip = self.right_hip();
+
+        // Clamp feet to be within leg reach of their respective hips
+        Self::clamp_foot_to_hip(&left_hip, &mut self.left_leg.foot_position, max_leg_length);
+        Self::clamp_foot_to_hip(
+            &right_hip,
+            &mut self.right_leg.foot_position,
+            max_leg_length,
+        );
+
+        // Solve IK for knees
+        self.solve_knee_ik();
+    }
+
+    /// Clamp a foot position to be within max distance from hip.
+    fn clamp_foot_to_hip(hip: &Point3<f32>, foot: &mut Point3<f32>, max_length: f32) {
+        let to_foot = *foot - hip;
+        let dist = to_foot.magnitude();
+
+        if dist > max_length {
+            // Foot is too far - pull it back toward hip
+            let dir = to_foot / dist;
+            *foot = hip + dir * max_length * 0.98; // Slight margin for IK
+        }
+    }
+
+    /// Resolve collisions with terrain triangles.
+    ///
+    /// Checks sphere collision for feet, knees, and pelvis against provided triangles.
+    /// Returns true if any collision was resolved.
+    pub fn resolve_collisions(&mut self, triangles: &[Triangle]) -> bool {
+        let mut had_collision = false;
+
+        // Pelvis collision
+        for tri in triangles {
+            if let Some(contact) =
+                sphere_triangle_collision(self.pelvis_position, self.config.pelvis_radius, tri)
+            {
+                // Push pelvis out of collision
+                self.pelvis_position += contact.normal * contact.depth;
+
+                // Cancel velocity into the collision surface
+                let vel_into_surface = self.pelvis_velocity.dot(&contact.normal);
+                if vel_into_surface < 0.0 {
+                    self.pelvis_velocity -= contact.normal * vel_into_surface;
+                }
+
+                had_collision = true;
+            }
+        }
+
+        // Left knee collision
+        for tri in triangles {
+            if let Some(contact) =
+                sphere_triangle_collision(self.left_leg.knee_position, self.config.knee_radius, tri)
+            {
+                self.left_leg.knee_position += contact.normal * contact.depth;
+                had_collision = true;
+            }
+        }
+
+        // Right knee collision
+        for tri in triangles {
+            if let Some(contact) = sphere_triangle_collision(
+                self.right_leg.knee_position,
+                self.config.knee_radius,
+                tri,
+            ) {
+                self.right_leg.knee_position += contact.normal * contact.depth;
+                had_collision = true;
+            }
+        }
+
+        // Left foot collision (only when grounded - swinging feet don't collide)
+        if self.left_leg.is_grounded {
+            for tri in triangles {
+                if let Some(contact) = sphere_triangle_collision(
+                    self.left_leg.foot_position,
+                    self.config.foot_radius,
+                    tri,
+                ) {
+                    self.left_leg.foot_position += contact.normal * contact.depth;
+                    had_collision = true;
+                }
+            }
+        }
+
+        // Right foot collision
+        if self.right_leg.is_grounded {
+            for tri in triangles {
+                if let Some(contact) = sphere_triangle_collision(
+                    self.right_leg.foot_position,
+                    self.config.foot_radius,
+                    tri,
+                ) {
+                    self.right_leg.foot_position += contact.normal * contact.depth;
+                    had_collision = true;
+                }
+            }
+        }
+
+        had_collision
+    }
+
+    /// Get the AABB containing all joints for terrain queries.
+    pub fn get_collision_aabb(&self) -> AABB {
+        let margin = self.config.pelvis_radius.max(self.config.foot_radius) + 0.1;
+
+        let mut min = self.pelvis_position;
+        let mut max = self.pelvis_position;
+
+        // Expand to include all joints
+        for pos in [
+            self.left_leg.foot_position,
+            self.right_leg.foot_position,
+            self.left_leg.knee_position,
+            self.right_leg.knee_position,
+            self.left_hip(),
+            self.right_hip(),
+        ] {
+            min.x = min.x.min(pos.x);
+            min.y = min.y.min(pos.y);
+            min.z = min.z.min(pos.z);
+            max.x = max.x.max(pos.x);
+            max.y = max.y.max(pos.y);
+            max.z = max.z.max(pos.z);
+        }
+
+        AABB::new(
+            Point3::new(min.x - margin, min.y - margin, min.z - margin),
+            Point3::new(max.x + margin, max.y + margin, max.z + margin),
+        )
+    }
+
+    #[inline]
+    pub fn left_vector(&self) -> Vector3<f32> {
+        left_vector(self.facing)
+    }
+
+    #[inline]
+    pub fn right_vector(&self) -> Vector3<f32> {
+        right_vector(self.facing)
+    }
+
+    // === Getters ===
+
+    pub fn pelvis_position(&self) -> Point3<f32> {
+        self.pelvis_position
+    }
+
+    pub fn left_foot_position(&self) -> Point3<f32> {
+        self.left_leg.foot_position
+    }
+
+    pub fn right_foot_position(&self) -> Point3<f32> {
+        self.right_leg.foot_position
+    }
+
+    pub fn left_knee_position(&self) -> Point3<f32> {
+        self.left_leg.knee_position
+    }
+
+    pub fn right_knee_position(&self) -> Point3<f32> {
+        self.right_leg.knee_position
+    }
+
+    pub fn facing_direction(&self) -> Vector3<f32> {
+        self.facing
+    }
+
+    // === Setters (for external physics integration) ===
+
+    /// Set pelvis position directly (e.g., from external physics body).
+    pub fn set_pelvis_position(&mut self, position: Point3<f32>) {
+        self.pelvis_position = position;
+    }
+
+    /// Set facing direction.
+    pub fn set_facing(&mut self, facing: Vector3<f32>) {
+        let horizontal = Vector3::new(facing.x, 0.0, facing.z);
+        if horizontal.magnitude() > 0.01 {
+            self.facing = horizontal.normalize();
+        }
     }
 }
 
-impl Default for GaitController {
+#[inline]
+fn right_vector(facing: Vector3<f32>) -> Vector3<f32> {
+    facing.cross(&Vector3::y()).normalize()
+}
+
+#[inline]
+fn left_vector(facing: Vector3<f32>) -> Vector3<f32> {
+    Vector3::y().cross(&facing).normalize()
+}
+
+impl Default for SpringBipedSkeleton {
     fn default() -> Self {
-        Self::new(GaitConfig::default())
+        Self::new(SpringBipedConfig::default(), Point3::new(0.0, 1.0, 0.0))
     }
 }
 
@@ -556,54 +643,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_biped_creation() {
-        let biped = SimpleBipedSkeleton::default();
+    fn test_spring_biped_creation() {
+        let biped = SpringBipedSkeleton::default();
 
-        // Pelvis should be at origin + 1.0 y
         let pelvis = biped.pelvis_position();
-        assert!((pelvis.x - 0.0).abs() < 0.001);
         assert!((pelvis.y - 1.0).abs() < 0.001);
-        assert!((pelvis.z - 0.0).abs() < 0.001);
+
+        // Feet should be below pelvis at leg length
+        let left_foot = biped.left_foot_position();
+        let right_foot = biped.right_foot_position();
+
+        assert!(left_foot.y < pelvis.y);
+        assert!(right_foot.y < pelvis.y);
     }
 
     #[test]
-    fn test_biped_set_positions() {
-        let mut biped = SimpleBipedSkeleton::default();
+    fn test_collision_aabb() {
+        let biped = SpringBipedSkeleton::default();
+        let aabb = biped.get_collision_aabb();
 
-        // Set new positions
-        biped.set_pelvis_position(Point3::new(1.0, 2.0, 3.0));
-        biped.set_left_foot_position(Point3::new(0.8, 1.0, 3.0));
-        biped.set_right_foot_position(Point3::new(1.2, 1.0, 3.0));
-
-        // Verify positions are set directly (no physics)
-        let pelvis = biped.pelvis_position();
-        assert!((pelvis.x - 1.0).abs() < 0.001);
-        assert!((pelvis.y - 2.0).abs() < 0.001);
-        assert!((pelvis.z - 3.0).abs() < 0.001);
-
-        let left = biped.left_foot_position();
-        assert!((left.x - 0.8).abs() < 0.001);
-        assert!((left.y - 1.0).abs() < 0.001);
-
-        let right = biped.right_foot_position();
-        assert!((right.x - 1.2).abs() < 0.001);
-        assert!((right.y - 1.0).abs() < 0.001);
-    }
-
-    #[test]
-    fn test_step_controller_triggers_step() {
-        let config = StepConfig {
-            step_threshold: 0.2,
-            step_speed: 10.0, // Fast for testing
-            ..Default::default()
-        };
-        let mut controller = SimpleStepController::new(config, Point3::new(0.0, 1.0, 0.0), 0.0);
-
-        // Move pelvis far enough to trigger a step
-        let new_pelvis = Point3::new(0.5, 1.0, 0.0);
-        controller.update(new_pelvis, 0.0, Vector3::new(1.0, 0.0, 0.0), 0.016);
-
-        // One foot should be stepping
-        assert!(controller.left_foot.is_stepping || controller.right_foot.is_stepping);
+        // AABB should contain all joints
+        assert!(aabb.contains_point(biped.pelvis_position()));
+        assert!(aabb.contains_point(biped.left_foot_position()));
+        assert!(aabb.contains_point(biped.right_foot_position()));
     }
 }

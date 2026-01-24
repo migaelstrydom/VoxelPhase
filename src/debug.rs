@@ -5,6 +5,10 @@
 
 use std::collections::BTreeMap;
 
+use nalgebra::Point3;
+
+use crate::rendering::Colour;
+
 /// ECS resource for accumulating debug text to display.
 ///
 /// Debug entries are stored as key-value pairs and sorted alphabetically
@@ -43,4 +47,40 @@ impl DebugLines {
     pub fn clear(&mut self) {
         self.entries.clear();
     }
+}
+
+/// Debug overlay shapes to render in 3D.
+#[derive(Default)]
+pub struct DebugOverlays {
+    spheres: Vec<DebugSphere>,
+}
+
+#[allow(dead_code)]
+impl DebugOverlays {
+    pub fn add_sphere(&mut self, position: Point3<f32>, radius: f32, colour: Colour) {
+        self.spheres.push(DebugSphere {
+            position,
+            radius,
+            colour,
+        });
+    }
+
+    pub fn add_point(&mut self, position: Point3<f32>) {
+        self.add_sphere(position, 0.06, Colour::RED);
+    }
+
+    pub fn spheres(&self) -> &[DebugSphere] {
+        &self.spheres
+    }
+
+    pub fn clear(&mut self) {
+        self.spheres.clear();
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct DebugSphere {
+    pub position: Point3<f32>,
+    pub radius: f32,
+    pub colour: Colour,
 }

@@ -1,11 +1,12 @@
 use crate::components::{CameraComponent, ModelInstance, Position, Renderable, Rotation};
-use crate::debug::DebugLines;
+use crate::debug::{DebugLines, DebugOverlays};
+use crate::geometry::{generate_sphere_indices, generate_sphere_vertices};
 use crate::model::Transform;
 use crate::particles::ParticlePool;
 use crate::rendering::material::MaterialManager;
 use crate::rendering::renderer::Renderer;
 use crate::resources::textures::TextureManager;
-use crate::skeleton::BipedCharacter;
+use crate::skeleton::SpringBipedCharacter;
 use crate::terrain::TerrainManager;
 use nalgebra::{Matrix4, Vector3};
 use specs::{Join, Read, ReadExpect, ReadStorage, System, Write, WriteExpect, WriteStorage};
@@ -19,6 +20,7 @@ impl<'a> System<'a> for RenderSystem {
         ReadExpect<'a, MaterialManager>,
         Read<'a, crate::time::Time>,
         Write<'a, DebugLines>,
+        Read<'a, DebugOverlays>,
         Read<'a, ParticlePool>,
         Option<Read<'a, TerrainManager>>,
         ReadStorage<'a, ModelInstance>,
@@ -26,7 +28,7 @@ impl<'a> System<'a> for RenderSystem {
         ReadStorage<'a, Rotation>,
         ReadStorage<'a, Renderable>,
         ReadStorage<'a, CameraComponent>,
-        WriteStorage<'a, BipedCharacter>,
+        WriteStorage<'a, SpringBipedCharacter>,
     );
 
     fn run(&mut self, data: Self::SystemData) {
@@ -36,6 +38,7 @@ impl<'a> System<'a> for RenderSystem {
             material_manager,
             time,
             mut debug_lines,
+            debug_overlays,
             particle_pool,
             terrain_manager_opt,
             model_instances,
@@ -43,7 +46,7 @@ impl<'a> System<'a> for RenderSystem {
             rotations,
             renderables,
             camera_components,
-            mut biped_characters,
+            mut spring_biped_characters,
         ) = data;
 
         let camera = camera_components.join().next();
@@ -103,11 +106,16 @@ impl<'a> System<'a> for RenderSystem {
                     }
                 }
 
-                // Draw all biped characters (Stage 2 skeleton)
-                // Note: Biped characters use world-space vertex positions
+                // Draw all spring biped characters (Stage 3 - physics-based spring legs)
+                // Note: Characters use world-space vertex positions
                 // (skeleton positions are already in world coords), so we use identity transform.
-                for (character, _pos, _rot, _renderable) in
-                    (&mut biped_characters, &positions, &rotations, &renderables).join()
+                for (character, _pos, _rot, _renderable) in (
+                    &mut spring_biped_characters,
+                    &positions,
+                    &rotations,
+                    &renderables,
+                )
+                    .join()
                 {
                     let identity = Matrix4::identity();
 
@@ -122,7 +130,29 @@ impl<'a> System<'a> for RenderSystem {
                         &material_manager,
                         &texture_manager,
                     ) {
-                        log::error!("RenderSystem: Failed to draw biped character: {}", e);
+                        log::error!("RenderSystem: Failed to draw spring biped character: {}", e);
+                    }
+                }
+
+                // Render debug overlay spheres (3D markers)
+                if !debug_overlays.spheres().is_empty() {
+                    let segments = 12;
+                    let rings = 8;
+                    let indices = generate_sphere_indices(segments, rings);
+                    for sphere in debug_overlays.spheres() {
+                        let vertices =
+                            generate_sphere_vertices(sphere.radius, segments, rings, sphere.colour);
+                        let transform = Matrix4::new_translation(&sphere.position.coords);
+                        if let Err(e) = renderer.draw_procedural_mesh(
+                            draw_cb,
+                            &vertices,
+                            &indices,
+                            &transform,
+                            &material_manager,
+                            &texture_manager,
+                        ) {
+                            log::error!("RenderSystem: Failed to draw debug sphere: {}", e);
+                        }
                     }
                 }
 

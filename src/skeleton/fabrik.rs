@@ -10,7 +10,7 @@
 //! - Joint constraints (angle limits)
 //! - Target positions for any joint
 
-use nalgebra::{Point3, Vector3};
+use nalgebra::Point3;
 
 /// A chain of joints for IK solving.
 ///
@@ -52,11 +52,6 @@ impl IKChain {
         self.joint_indices.len()
     }
 
-    /// Check if the chain is empty.
-    pub fn is_empty(&self) -> bool {
-        self.joint_indices.is_empty()
-    }
-
     /// Get the base (root) joint index.
     pub fn base(&self) -> usize {
         self.joint_indices[0]
@@ -65,27 +60,6 @@ impl IKChain {
     /// Get the end effector joint index.
     pub fn end_effector(&self) -> usize {
         *self.joint_indices.last().unwrap()
-    }
-}
-
-/// Joint constraint for angle limits.
-#[derive(Clone, Debug)]
-pub struct JointConstraint {
-    /// Minimum bend angle (0 = straight, PI = fully bent).
-    pub min_angle: f32,
-    /// Maximum bend angle.
-    pub max_angle: f32,
-    /// Preferred axis for bending (local space).
-    pub bend_axis: Vector3<f32>,
-}
-
-impl Default for JointConstraint {
-    fn default() -> Self {
-        Self {
-            min_angle: 0.0,
-            max_angle: std::f32::consts::PI,
-            bend_axis: Vector3::x(), // Default: bend on X axis
-        }
     }
 }
 
@@ -104,14 +78,6 @@ impl IKTarget {
         Self {
             position,
             weight: 1.0,
-        }
-    }
-
-    /// Create a weighted target.
-    pub fn weighted(position: Point3<f32>, weight: f32) -> Self {
-        Self {
-            position,
-            weight: weight.clamp(0.0, 1.0),
         }
     }
 }
@@ -154,7 +120,9 @@ impl FABRIKSolver {
 
         // Blend target position based on weight
         let original_end = positions[chain.end_effector()];
-        let target_pos = original_end.coords.lerp(&target.position.coords, target.weight);
+        let target_pos = original_end
+            .coords
+            .lerp(&target.position.coords, target.weight);
         let target_pos = Point3::from(target_pos);
 
         // Store the base position
@@ -174,7 +142,15 @@ impl FABRIKSolver {
             self.forward_reach(positions, chain, target_pos);
 
             // Backward reaching (from base to end effector)
-            self.backward_reach(positions, chain, if base_pinned { base_pos } else { positions[chain.base()] });
+            self.backward_reach(
+                positions,
+                chain,
+                if base_pinned {
+                    base_pos
+                } else {
+                    positions[chain.base()]
+                },
+            );
 
             // If base is pinned, restore it
             if base_pinned {
@@ -238,81 +214,6 @@ impl FABRIKSolver {
             positions[chain.joint_indices[i]] = current_pos;
         }
     }
-
-    /// Solve IK with joint constraints.
-    ///
-    /// `constraints` maps joint index to constraint (for joints 1 to n-2).
-    pub fn solve_constrained(
-        &self,
-        positions: &mut [Point3<f32>],
-        chain: &IKChain,
-        target: &IKTarget,
-        constraints: &[Option<JointConstraint>],
-        base_pinned: bool,
-    ) -> u32 {
-        // First solve without constraints
-        let iterations = self.solve(positions, chain, target, base_pinned);
-
-        // Then apply constraints
-        self.apply_constraints(positions, chain, constraints);
-
-        iterations
-    }
-
-    /// Apply joint constraints to a solved chain.
-    fn apply_constraints(
-        &self,
-        positions: &mut [Point3<f32>],
-        chain: &IKChain,
-        constraints: &[Option<JointConstraint>],
-    ) {
-        // Constraints apply to joints 1 to n-2 (not base or end effector)
-        for i in 1..chain.len().saturating_sub(1) {
-            if i >= constraints.len() {
-                break;
-            }
-
-            if let Some(ref constraint) = constraints[i] {
-                let prev_idx = chain.joint_indices[i - 1];
-                let curr_idx = chain.joint_indices[i];
-                let next_idx = chain.joint_indices[i + 1];
-
-                let to_prev = positions[prev_idx] - positions[curr_idx];
-                let to_next = positions[next_idx] - positions[curr_idx];
-
-                let len_prev = to_prev.magnitude();
-                let len_next = to_next.magnitude();
-
-                if len_prev < 0.0001 || len_next < 0.0001 {
-                    continue;
-                }
-
-                // Calculate current angle
-                let dot = to_prev.dot(&to_next) / (len_prev * len_next);
-                let current_angle = dot.clamp(-1.0, 1.0).acos();
-
-                // Clamp to constraint
-                let clamped_angle = current_angle.clamp(constraint.min_angle, constraint.max_angle);
-
-                if (clamped_angle - current_angle).abs() > 0.001 {
-                    // Need to rotate the next joint
-                    let axis = to_prev.cross(&to_next);
-                    if axis.magnitude() > 0.0001 {
-                        let axis = axis.normalize();
-                        let angle_diff = clamped_angle - current_angle;
-                        let rotation = nalgebra::UnitQuaternion::from_axis_angle(
-                            &nalgebra::Unit::new_normalize(axis),
-                            angle_diff,
-                        );
-
-                        // Rotate the "to_next" vector
-                        let new_to_next = rotation * to_next;
-                        positions[next_idx] = positions[curr_idx] + new_to_next;
-                    }
-                }
-            }
-        }
-    }
 }
 
 impl Default for FABRIKSolver {
@@ -321,55 +222,10 @@ impl Default for FABRIKSolver {
     }
 }
 
-/// Solve IK for multiple chains sharing joints (e.g., both arms from chest).
-pub struct MultiChainSolver {
-    /// The underlying FABRIK solver.
-    pub solver: FABRIKSolver,
-}
-
-impl MultiChainSolver {
-    /// Create a new multi-chain solver.
-    pub fn new() -> Self {
-        Self {
-            solver: FABRIKSolver::new(),
-        }
-    }
-
-    /// Solve multiple chains that share a common root.
-    ///
-    /// Each chain/target pair is solved, then shared joints are averaged.
-    pub fn solve_from_root(
-        &self,
-        positions: &mut [Point3<f32>],
-        chains: &[&IKChain],
-        targets: &[IKTarget],
-        root_idx: usize,
-    ) {
-        if chains.len() != targets.len() {
-            return;
-        }
-
-        let root_pos = positions[root_idx];
-
-        // Solve each chain independently
-        for (chain, target) in chains.iter().zip(targets.iter()) {
-            self.solver.solve(positions, chain, target, true);
-        }
-
-        // Restore root (it may have been affected by averaging)
-        positions[root_idx] = root_pos;
-    }
-}
-
-impl Default for MultiChainSolver {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use nalgebra::Vector3;
 
     #[test]
     fn test_simple_chain_ik() {
@@ -389,7 +245,11 @@ mod tests {
 
         // End effector should be close to target
         let dist = (positions[2] - target.position).magnitude();
-        assert!(dist < 0.01, "End effector should reach target, dist: {}", dist);
+        assert!(
+            dist < 0.01,
+            "End effector should reach target, dist: {}",
+            dist
+        );
 
         // Shoulder should not have moved
         assert_eq!(positions[0], Point3::new(0.0, 0.0, 0.0));

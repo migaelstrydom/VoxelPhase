@@ -32,14 +32,6 @@ impl Default for Transform {
 }
 
 impl Transform {
-    /// Create a translation-only transform.
-    pub fn translation(x: f32, y: f32, z: f32) -> Self {
-        Self {
-            translation: Vector3::new(x, y, z),
-            ..Default::default()
-        }
-    }
-
     /// Convert to a 4x4 transformation matrix.
     /// Order: Scale -> Rotate -> Translate
     pub fn to_matrix(&self) -> Matrix4<f32> {
@@ -85,12 +77,6 @@ impl ModelPart {
             local_transform: Transform::default(),
             primitives,
         }
-    }
-
-    /// Builder method to set the local transform.
-    pub fn with_transform(mut self, transform: Transform) -> Self {
-        self.local_transform = transform;
-        self
     }
 }
 

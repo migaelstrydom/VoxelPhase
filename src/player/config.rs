@@ -10,8 +10,6 @@ pub struct PlayerConfig {
     pub jump_speed: f32,
     /// Gravity acceleration (positive value, applied downward)
     pub gravity: f32,
-    /// Player collision radius
-    pub radius: f32,
     /// Maximum falling speed (terminal velocity) - prevents tunneling through terrain
     pub terminal_velocity: f32,
 }
@@ -19,11 +17,10 @@ pub struct PlayerConfig {
 impl Default for PlayerConfig {
     fn default() -> Self {
         Self {
-            walk_speed: 8.0,
+            walk_speed: 1.0,
             air_acceleration: 8.0,
             jump_speed: 12.0,
             gravity: 20.0,
-            radius: 0.5,
             terminal_velocity: 30.0, // Safe value: should be < radius / typical_frame_time
         }
     }

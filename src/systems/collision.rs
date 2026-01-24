@@ -4,11 +4,9 @@ use nalgebra::{Point3, Vector3};
 use specs::{Entities, Join, Read, ReadStorage, System, WriteStorage};
 
 use crate::collision::ContactPoint;
-use crate::components::{Collider, OnGround, PhysicsBody, Position, Velocity};
+use crate::components::{Collider, PhysicsBody, Position, Velocity};
+use crate::skeleton::SpringBipedCharacter;
 use crate::terrain::TerrainManager;
-
-/// Small distance for ground probing (how far below the player we check for ground)
-const GROUND_PROBE_DISTANCE: f32 = 0.1;
 
 /// System that detects collisions between entities and terrain,
 /// applies velocity response, and updates ground state.
@@ -24,8 +22,8 @@ impl<'a> System<'a> for TerrainCollisionSystem {
         ReadStorage<'a, Position>,
         ReadStorage<'a, Collider>,
         WriteStorage<'a, Velocity>,
-        WriteStorage<'a, OnGround>,
         ReadStorage<'a, PhysicsBody>,
+        ReadStorage<'a, SpringBipedCharacter>,
     );
 
     fn run(
@@ -36,8 +34,8 @@ impl<'a> System<'a> for TerrainCollisionSystem {
             positions,
             colliders,
             mut velocities,
-            mut on_grounds,
             physics_bodies,
+            spring_bipeds,
         ): Self::SystemData,
     ) {
         // Skip if no terrain loaded
@@ -48,49 +46,11 @@ impl<'a> System<'a> for TerrainCollisionSystem {
         for (entity, pos, collider, vel) in
             (&entities, &positions, &colliders, &mut velocities).join()
         {
+            if spring_bipeds.get(entity).is_some() {
+                continue;
+            }
             let center = Point3::new(pos.0.x, pos.0.y, pos.0.z);
             let radius = collider.shape.radius;
-
-            // Ground detection using a downward probe
-            // This detects ground even when swept collision keeps us slightly above
-            let probe_start = center;
-            let probe_end = Point3::new(center.x, center.y - GROUND_PROBE_DISTANCE, center.z);
-
-            let ground_contact = if let Some(contact) =
-                terrain_manager.query_swept_sphere(probe_start, probe_end, radius)
-            {
-                // Check if the contact normal points mostly upward (it's ground, not a wall)
-                contact.normal.y > 0.5
-            } else {
-                false
-            };
-
-            let ground_normal = if ground_contact {
-                // Do a regular collision check to get the actual ground normal
-                let contacts = terrain_manager.query_sphere_collision(
-                    Point3::new(center.x, center.y - GROUND_PROBE_DISTANCE * 0.5, center.z),
-                    radius,
-                );
-                contacts
-                    .iter()
-                    .filter(|c| c.normal.y > 0.5)
-                    .fold(Vector3::zeros(), |acc, c| acc + c.normal)
-            } else {
-                Vector3::zeros()
-            };
-
-            // Update ground state
-            if let Some(og) = on_grounds.get_mut(entity) {
-                og.grounded = ground_contact;
-                og.ground_normal = if ground_contact && ground_normal.magnitude_squared() > 1e-6 {
-                    Some(ground_normal.normalize())
-                } else if ground_contact {
-                    Some(Vector3::new(0.0, 1.0, 0.0)) // Default up normal
-                } else {
-                    None
-                };
-            }
-
             // Also check for any current penetration contacts and respond
             let contacts = terrain_manager.query_sphere_collision(center, radius);
             if !contacts.is_empty() {
@@ -149,11 +109,16 @@ pub struct PenetrationResolutionSystem;
 impl<'a> System<'a> for PenetrationResolutionSystem {
     type SystemData = (
         Option<Read<'a, TerrainManager>>,
+        Entities<'a>,
         WriteStorage<'a, Position>,
         ReadStorage<'a, Collider>,
+        ReadStorage<'a, SpringBipedCharacter>,
     );
 
-    fn run(&mut self, (terrain_manager_opt, mut positions, colliders): Self::SystemData) {
+    fn run(
+        &mut self,
+        (terrain_manager_opt, entities, mut positions, colliders, spring_bipeds): Self::SystemData,
+    ) {
         let Some(ref terrain_manager) = terrain_manager_opt else {
             return;
         };
@@ -161,7 +126,10 @@ impl<'a> System<'a> for PenetrationResolutionSystem {
         // Multiple iterations to resolve deep penetrations
         const MAX_ITERATIONS: usize = 4;
 
-        for (pos, collider) in (&mut positions, &colliders).join() {
+        for (entity, pos, collider) in (&entities, &mut positions, &colliders).join() {
+            if spring_bipeds.get(entity).is_some() {
+                continue;
+            }
             for _ in 0..MAX_ITERATIONS {
                 let center = Point3::new(pos.0.x, pos.0.y, pos.0.z);
                 let radius = collider.shape.radius;
