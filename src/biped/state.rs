@@ -2,7 +2,7 @@
 //!
 //! All mutable animation state lives here - no state scattered across components.
 
-use nalgebra::{Point3, Vector3};
+use nalgebra::{Point3, Vector2, Vector3};
 
 /// High-level locomotion mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -42,6 +42,20 @@ impl FootState {
     }
 }
 
+/// State of a single hand (simpler than FootState - no ground contact).
+#[derive(Debug, Clone)]
+pub struct HandState {
+    /// Current hand position in world space.
+    pub position: Point3<f32>,
+}
+
+impl HandState {
+    /// Create a new hand state at the given position.
+    pub fn new(position: Point3<f32>) -> Self {
+        Self { position }
+    }
+}
+
 /// Complete biped animation state.
 ///
 /// This is the single source of truth for all animation state.
@@ -63,6 +77,18 @@ pub struct BipedState {
     /// Right foot state.
     pub right: FootState,
 
+    /// Left hand state.
+    pub left_hand: HandState,
+    /// Right hand state.
+    pub right_hand: HandState,
+
+    /// Current shoulder twist angle (radians, positive = left shoulder forward).
+    pub shoulder_twist: f32,
+    /// Head tilt angles (x = forward/back pitch, y = left/right roll).
+    pub head_tilt: Vector2<f32>,
+    /// Head vertical bob offset.
+    pub head_bob: f32,
+
     /// Current pelvis position.
     pub pelvis_position: Point3<f32>,
     /// Current facing direction (horizontal, normalized).
@@ -79,6 +105,11 @@ impl BipedState {
         let left_foot = Point3::new(pelvis_position.x + 0.12, foot_y, pelvis_position.z);
         let right_foot = Point3::new(pelvis_position.x - 0.12, foot_y, pelvis_position.z);
 
+        // Hands start at rest position (hanging by sides)
+        let hand_y = pelvis_position.y + 0.1; // Roughly at hip height initially
+        let left_hand = Point3::new(pelvis_position.x + 0.2, hand_y, pelvis_position.z);
+        let right_hand = Point3::new(pelvis_position.x - 0.2, hand_y, pelvis_position.z);
+
         Self {
             mode: LocomotionMode::Idle,
             prev_mode: LocomotionMode::Idle,
@@ -88,6 +119,13 @@ impl BipedState {
 
             left: FootState::new(left_foot),
             right: FootState::new(right_foot),
+
+            left_hand: HandState::new(left_hand),
+            right_hand: HandState::new(right_hand),
+
+            shoulder_twist: 0.0,
+            head_tilt: Vector2::new(0.0, 0.0),
+            head_bob: 0.0,
 
             pelvis_position,
             facing: Vector3::new(0.0, 0.0, 1.0),

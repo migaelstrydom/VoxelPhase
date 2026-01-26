@@ -103,7 +103,8 @@ impl<'a> System<'a> for BipedAnimationSystem {
                 .unwrap_or(&[]);
 
             // Update the controller
-            controller.update(dt, pelvis_pos, yaw, vel.0.magnitude(), contacts);
+            let velocity = nalgebra::Vector3::new(vel.0.x, vel.0.y, vel.0.z);
+            controller.update(dt, pelvis_pos, yaw, velocity, contacts);
             // debug_lines.add(
             //     "WheelAngle",
             //     &format!(

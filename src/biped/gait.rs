@@ -37,10 +37,14 @@ impl FootOffset {
     }
 
     /// Convert to world-space position given hip position and orientation.
-    pub fn to_world(&self, hip: Point3<f32>, facing: Vector3<f32>, lateral_sign: f32) -> Point3<f32> {
+    pub fn to_world(
+        &self,
+        hip: Point3<f32>,
+        facing: Vector3<f32>,
+        lateral_sign: f32,
+    ) -> Point3<f32> {
         let right = facing.cross(&Vector3::y()).normalize();
-        hip + right * self.lateral * lateral_sign
-            - Vector3::y() * self.vertical
+        hip + right * self.lateral * lateral_sign - Vector3::y() * self.vertical
             + facing * self.forward
     }
 }
@@ -145,24 +149,55 @@ impl GaitCycle {
 
         let keyframes = vec![
             // Midstance - foot directly below hip, fully planted
-            GaitKeyframe::new(
-                0.0,
-                FootOffset::new(0.0, standing_height, 0.0),
-            ),
+            GaitKeyframe::new(0.0, FootOffset::new(0.0, standing_height, 0.0)),
             // Late stance / push-off - foot behind, still on ground
             GaitKeyframe::new(
                 FRAC_PI_2,
                 FootOffset::new(0.0, standing_height, -half_stride),
             ),
             // Mid-swing - foot raised, moving forward
-            GaitKeyframe::new(
-                PI,
-                FootOffset::new(0.0, standing_height - step_height, 0.0),
-            ),
+            GaitKeyframe::new(PI, FootOffset::new(0.0, standing_height - step_height, 0.0)),
             // Pre-contact / heel strike - foot forward, descending
             GaitKeyframe::new(
                 PI + FRAC_PI_2,
                 FootOffset::new(0.0, standing_height, half_stride),
+            ),
+        ];
+
+        Self::new(keyframes)
+    }
+
+    /// Create an arm swing gait cycle.
+    ///
+    /// Arms swing opposite to legs - when the leg is back, the arm is forward.
+    /// The swing creates a pendulum arc: hands come UP when swinging forward,
+    /// and extend DOWN/BACK when swinging backward.
+    pub fn arm_swing(arm_length: f32, swing_amplitude: f32) -> Self {
+        use std::f32::consts::{FRAC_PI_2, PI};
+
+        // Keyframes for arm swing (note: arms use OPPOSITE phase to legs)
+        // 0° = arm at rest (neutral, hand hanging down)
+        // 90° = arm fully back (hand behind and down)
+        // 180° = arm at rest (passing through neutral)
+        // 270° = arm fully forward (hand UP in front of torso)
+        //
+        // vertical = distance below shoulder (smaller = hand higher up)
+
+        let keyframes = vec![
+            // Neutral position - arm hanging down
+            GaitKeyframe::new(0.0, FootOffset::new(0.0, arm_length, 0.0)),
+            // Arm back - hand behind body and slightly down (extended back)
+            GaitKeyframe::new(
+                FRAC_PI_2,
+                FootOffset::new(0.0, arm_length * 0.85, -swing_amplitude),
+            ),
+            // Neutral position - passing through
+            GaitKeyframe::new(PI, FootOffset::new(0.0, arm_length, 0.0)),
+            // Arm forward - hand UP in front of torso (theatrical forward swing)
+            // Vertical is much smaller so hand comes up to chest/waist level
+            GaitKeyframe::new(
+                PI + FRAC_PI_2,
+                FootOffset::new(0.0, arm_length * 0.01, swing_amplitude),
             ),
         ];
 

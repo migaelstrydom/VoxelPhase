@@ -34,6 +34,7 @@ pub struct BipedController {
     pub state: BipedState,
     pub skeleton: BipedSkeleton,
     pub gait: GaitCycle,
+    pub arm_gait: GaitCycle,
 
     // Mesh caching
     cached_vertices: Vec<Vertex>,
@@ -53,12 +54,17 @@ impl BipedController {
             config.stride_length,
             config.step_height,
         );
+        let arm_gait = GaitCycle::arm_swing(
+            config.arm_length(),
+            config.arm_swing_amplitude,
+        );
 
         Self {
             config,
             state,
             skeleton,
             gait,
+            arm_gait,
             cached_vertices: Vec::new(),
             cached_indices: Vec::new(),
         }
@@ -135,9 +141,11 @@ impl BipedController {
         dt: f32,
         pelvis_position: Point3<f32>,
         yaw: f32,
-        speed: f32,
+        velocity: Vector3<f32>,
         contacts: &[ContactCandidate],
     ) {
+        let speed = velocity.magnitude();
+
         // Update facing direction
         let facing = Vector3::new(yaw.sin(), 0.0, yaw.cos());
         self.state.facing = facing;
@@ -158,26 +166,76 @@ impl BipedController {
         match self.state.mode {
             LocomotionMode::Idle => {
                 stride_wheel::handle_idle(&mut self.state, &self.config);
+                self.update_idle_upper_body();
             }
             LocomotionMode::Walking => {
-                self.update_walking(dt, speed);
+                self.update_walking(dt, speed, velocity);
             }
             LocomotionMode::Falling => {
-                // Keep feet hanging below pelvis
-                let right = self.state.facing.cross(&Vector3::y());
-                let left_hip = self.state.pelvis_position - right * self.config.hip_width;
-                let right_hip = self.state.pelvis_position + right * self.config.hip_width;
-                let hang_distance = self.config.standing_height();
-
-                self.state.left.position =
-                    Point3::new(left_hip.x, pelvis_position.y - hang_distance, left_hip.z);
-                self.state.right.position =
-                    Point3::new(right_hip.x, pelvis_position.y - hang_distance, right_hip.z);
+                self.update_falling(pelvis_position);
             }
         }
 
         // Update skeleton from state
         self.skeleton.update_from_state(&self.state, &self.config);
+    }
+
+    /// Update upper body for idle state.
+    fn update_idle_upper_body(&mut self) {
+        let facing = self.state.facing;
+        let right = facing.cross(&Vector3::y());
+        let left = -right;
+
+        // Chest position
+        let chest = self.state.pelvis_position + Vector3::y() * self.config.torso_height;
+
+        // Shoulders at rest (no twist)
+        let left_shoulder = chest + left * self.config.shoulder_width;
+        let right_shoulder = chest + right * self.config.shoulder_width;
+
+        // Hands hanging at rest
+        let arm_hang = self.config.arm_length();
+        self.state.left_hand.position = left_shoulder - Vector3::y() * arm_hang;
+        self.state.right_hand.position = right_shoulder - Vector3::y() * arm_hang;
+
+        // Reset upper body animation state
+        self.state.shoulder_twist = 0.0;
+        self.state.head_tilt = nalgebra::Vector2::new(0.0, 0.0);
+        self.state.head_bob = 0.0;
+    }
+
+    /// Update for falling state.
+    fn update_falling(&mut self, pelvis_position: Point3<f32>) {
+        let facing = self.state.facing;
+        let right = facing.cross(&Vector3::y());
+        let left = -right;
+
+        // Keep feet hanging below pelvis
+        let left_hip = self.state.pelvis_position - right * self.config.hip_width;
+        let right_hip = self.state.pelvis_position + right * self.config.hip_width;
+        let hang_distance = self.config.standing_height();
+
+        self.state.left.position =
+            Point3::new(left_hip.x, pelvis_position.y - hang_distance, left_hip.z);
+        self.state.right.position =
+            Point3::new(right_hip.x, pelvis_position.y - hang_distance, right_hip.z);
+
+        // Chest position
+        let chest = self.state.pelvis_position + Vector3::y() * self.config.torso_height;
+
+        // Arms slightly out for balance feel
+        let left_shoulder = chest + left * self.config.shoulder_width;
+        let right_shoulder = chest + right * self.config.shoulder_width;
+        let arm_hang = self.config.arm_length() * 0.9;
+
+        // Arms spread slightly outward and down
+        self.state.left_hand.position = left_shoulder + left * 0.1 - Vector3::y() * arm_hang;
+        self.state.right_hand.position = right_shoulder + right * 0.1 - Vector3::y() * arm_hang;
+
+        // Reset shoulder twist, slight backward head tilt (looking up)
+        self.state.shoulder_twist = 0.0;
+        self.state.head_tilt = nalgebra::Vector2::new(-0.05, 0.0);
+        self.state.head_bob = 0.0;
     }
 
     /// Process contact candidates from probes.
@@ -231,7 +289,7 @@ impl BipedController {
     }
 
     /// Update walking animation.
-    fn update_walking(&mut self, dt: f32, speed: f32) {
+    fn update_walking(&mut self, dt: f32, speed: f32, velocity: Vector3<f32>) {
         let radius = self.config.body_radius;
 
         // Advance stride wheel (radius = body_radius for proper ground contact velocity)
@@ -239,6 +297,7 @@ impl BipedController {
 
         // Compute hip positions
         let right = self.state.facing.cross(&Vector3::y());
+        let left = -right;
         let left_hip = self.state.pelvis_position - right * self.config.hip_width;
         let right_hip = self.state.pelvis_position + right * self.config.hip_width;
 
@@ -266,6 +325,49 @@ impl BipedController {
             facing,
             1.0, // Right side
         );
+
+        // === Upper body animation ===
+
+        // Shoulder twist
+        self.state.shoulder_twist =
+            stride_wheel::compute_shoulder_twist(wheel_angle, self.config.shoulder_twist_max);
+
+        // Compute shoulder positions (need them for arm animation)
+        let chest = self.state.pelvis_position + Vector3::y() * self.config.torso_height;
+        let twist = self.state.shoulder_twist;
+        let cos_twist = twist.cos();
+        let sin_twist = twist.sin();
+        let left_offset = left * cos_twist + facing * sin_twist;
+        let right_offset = right * cos_twist - facing * sin_twist;
+        let left_shoulder = chest + left_offset * self.config.shoulder_width;
+        let right_shoulder = chest + right_offset * self.config.shoulder_width;
+
+        // Update hands from arm gait cycle
+        // Arms swing OPPOSITE to legs: left arm uses RIGHT_PHASE, right arm uses LEFT_PHASE
+        stride_wheel::update_hand(
+            &mut self.state.left_hand,
+            &self.arm_gait,
+            wheel_angle,
+            stride_wheel::RIGHT_PHASE, // Opposite to left leg
+            left_shoulder,
+            facing,
+            -1.0,
+        );
+        stride_wheel::update_hand(
+            &mut self.state.right_hand,
+            &self.arm_gait,
+            wheel_angle,
+            stride_wheel::LEFT_PHASE, // Opposite to right leg
+            right_shoulder,
+            facing,
+            1.0,
+        );
+
+        // Head animation
+        self.state.head_tilt =
+            stride_wheel::compute_head_tilt(velocity, facing, self.config.head_tilt_factor);
+        self.state.head_bob =
+            stride_wheel::compute_head_bob(wheel_angle, self.config.head_bob_amplitude);
     }
 
     /// Whether the character has any ground contact.
