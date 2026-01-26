@@ -66,6 +66,12 @@ impl<'a> System<'a> for RenderSystem {
                     return;
                 }
 
+                // Update and render sky (before any geometry)
+                renderer.update_sky(time.delta_seconds());
+                if let Err(e) = renderer.render_sky(draw_cb, &view_matrix, &proj_matrix) {
+                    log::error!("RenderSystem: Failed to render sky: {}", e);
+                }
+
                 // Draw terrain
                 if let Some(ref terrain_manager) = terrain_manager_opt {
                     if terrain_manager.has_geometry() {
@@ -115,13 +121,8 @@ impl<'a> System<'a> for RenderSystem {
                 // Draw all biped controllers
                 // Note: Characters use world-space vertex positions
                 // (skeleton positions are already in world coords), so we use identity transform.
-                for (controller, _pos, _rot, _renderable) in (
-                    &mut biped_controllers,
-                    &positions,
-                    &rotations,
-                    &renderables,
-                )
-                    .join()
+                for (controller, _pos, _rot, _renderable) in
+                    (&mut biped_controllers, &positions, &rotations, &renderables).join()
                 {
                     let identity = Matrix4::identity();
 

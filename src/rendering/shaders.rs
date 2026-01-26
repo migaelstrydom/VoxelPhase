@@ -23,6 +23,10 @@ mod bytecode {
     /// Particle system shaders
     pub const PARTICLE_VERTEX: &[u8] = include_bytes!("../../shader/particle.vert.spv");
     pub const PARTICLE_FRAGMENT: &[u8] = include_bytes!("../../shader/particle.frag.spv");
+
+    /// Sky rendering shaders
+    pub const SKY_VERTEX: &[u8] = include_bytes!("../../shader/sky.vert.spv");
+    pub const SKY_FRAGMENT: &[u8] = include_bytes!("../../shader/sky.frag.spv");
 }
 
 /// Centralized shader loading and management.
@@ -60,6 +64,16 @@ impl ShaderManager {
     /// Load the particle fragment shader.
     pub fn load_particle_fragment(device: &ManagedDevice) -> EngineResult<vk::ShaderModule> {
         Self::load_shader(device, bytecode::PARTICLE_FRAGMENT, ShaderStage::Fragment)
+    }
+
+    /// Load the sky vertex shader.
+    pub fn load_sky_vertex(device: &ManagedDevice) -> EngineResult<vk::ShaderModule> {
+        Self::load_shader(device, bytecode::SKY_VERTEX, ShaderStage::Vertex)
+    }
+
+    /// Load the sky fragment shader.
+    pub fn load_sky_fragment(device: &ManagedDevice) -> EngineResult<vk::ShaderModule> {
+        Self::load_shader(device, bytecode::SKY_FRAGMENT, ShaderStage::Fragment)
     }
 
     /// Load a shader module from SPIR-V bytecode.

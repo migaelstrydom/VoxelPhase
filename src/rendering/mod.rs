@@ -10,6 +10,7 @@ pub mod overlay;
 pub mod pipeline;
 pub mod renderer;
 pub mod shaders;
+pub mod sky;
 pub mod swapchain;
 pub mod texture;
 pub mod vertex;

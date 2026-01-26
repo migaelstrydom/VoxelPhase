@@ -21,6 +21,7 @@ use crate::rendering::frame::{FrameData, SceneUbo};
 use crate::rendering::material::MaterialManager;
 use crate::rendering::overlay::OverlayRenderer;
 use crate::rendering::pipeline::{GraphicsPipeline, GraphicsPipelineConfig};
+use crate::rendering::sky::SkyRenderer;
 use crate::rendering::swapchain::{SurfaceInfo, Swapchain};
 use crate::rendering::vertex::Vertex;
 use crate::resources::textures::{TextureHandle, TextureManager};
@@ -37,6 +38,7 @@ pub struct Renderer {
     pub vulkan_context: Arc<VulkanContext>,
     pub overlay: OverlayRenderer,
     pub particle_renderer: ParticleRenderer,
+    pub sky_renderer: SkyRenderer,
 }
 
 impl Renderer {
@@ -103,6 +105,10 @@ impl Renderer {
         let particle_renderer =
             ParticleRenderer::new(Arc::clone(&vulkan_context), pipeline.renderpass)?;
 
+        // Create sky renderer
+        let sky_renderer =
+            SkyRenderer::new(Arc::clone(&vulkan_context), pipeline.renderpass)?;
+
         Ok(Self {
             pipeline,
             swapchain,
@@ -111,6 +117,7 @@ impl Renderer {
             vulkan_context,
             overlay,
             particle_renderer,
+            sky_renderer,
         })
     }
 
@@ -173,6 +180,40 @@ impl Renderer {
     /// Call this once at the start of each frame, before any draw calls.
     pub fn update_scene(&mut self, view: &Matrix4<f32>, proj: &Matrix4<f32>) -> EngineResult<()> {
         self.frame_data.update_scene_ubo(view, proj)
+    }
+
+    /// Update sky renderer with delta time for cloud animation.
+    pub fn update_sky(&mut self, delta_time: f32) {
+        self.sky_renderer.update(delta_time);
+    }
+
+    /// Render the procedural sky.
+    ///
+    /// Should be called immediately after begin_frame and update_scene,
+    /// before any geometry is drawn. The sky renders without depth testing
+    /// so it will appear behind all other objects.
+    pub fn render_sky(
+        &self,
+        cb: vk::CommandBuffer,
+        view_matrix: &Matrix4<f32>,
+        proj_matrix: &Matrix4<f32>,
+    ) -> EngineResult<()> {
+        let extent = self.swapchain.extent;
+        let viewport = vk::Viewport {
+            x: 0.0,
+            y: 0.0,
+            width: extent.width as f32,
+            height: extent.height as f32,
+            min_depth: 0.0,
+            max_depth: 1.0,
+        };
+        let scissor = vk::Rect2D {
+            offset: vk::Offset2D { x: 0, y: 0 },
+            extent,
+        };
+
+        self.sky_renderer
+            .render(cb, view_matrix, proj_matrix, viewport, scissor)
     }
 
     /// Draw a complete model with per-part transforms applied.
