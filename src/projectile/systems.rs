@@ -10,6 +10,7 @@ use specs::{
 
 use super::components::{Grenade, Lifetime, Projectile};
 use super::config::GrenadeConfig;
+use crate::camera::FollowTarget;
 use crate::components::{
     Acceleration, Collider, Gravity, ModelInstance, MotionState, Position, Renderable, Rotation,
     Velocity,
@@ -76,7 +77,7 @@ impl<'a> System<'a> for GrenadeSpawnSystem {
         Read<'a, GrenadeModelResource>,
         ReadStorage<'a, Player>,
         ReadStorage<'a, Position>,
-        ReadStorage<'a, Rotation>,
+        ReadStorage<'a, FollowTarget>,
         Read<'a, LazyUpdate>,
     );
 
@@ -90,7 +91,7 @@ impl<'a> System<'a> for GrenadeSpawnSystem {
             grenade_model,
             players,
             positions,
-            rotations,
+            follow_targets,
             lazy,
         ) = data;
 
@@ -115,24 +116,45 @@ impl<'a> System<'a> for GrenadeSpawnSystem {
             }
         };
 
-        // Get player position and rotation (facing direction)
-        let (player_pos, throw_dir) = match (&players, &positions, &rotations).join().next() {
-            Some((_, pos, rot)) => {
-                // Calculate forward direction from player's rotation
-                // Rotation.0 is the Y-axis rotation angle
-                let forward = Vector3::new(rot.0.sin(), 0.0, rot.0.cos());
-                (pos.0, forward.normalize())
-            }
+        // Get player position
+        let player_pos = match (&players, &positions).join().next() {
+            Some((_, pos)) => pos.0,
             None => return,
         };
 
+        // Get camera orientation from FollowTarget
+        // orbit_angle is where the camera is positioned, so we add π to get the look direction
+        let (look_angle, camera_pitch) = match (&follow_targets,).join().next() {
+            Some((follow,)) => (follow.orbit_angle + std::f32::consts::PI, follow.pitch),
+            None => {
+                log::warn!("No camera FollowTarget found");
+                return;
+            }
+        };
+
+        // Calculate throw pitch based on camera orientation.
+        // Camera pitch is positive when looking down, so we subtract it.
+        // upward_offset provides a base upward angle, pitch_influence controls how much
+        // the camera pitch affects the throw direction.
+        let throw_pitch = config.upward_offset - camera_pitch * config.pitch_influence;
+        let throw_pitch = throw_pitch.clamp(-0.4, 0.8); // Clamp to reasonable range
+
+        // Calculate 3D throw direction using spherical coordinates
+        let cos_pitch = throw_pitch.cos();
+        let sin_pitch = throw_pitch.sin();
+        let throw_dir = Vector3::new(
+            look_angle.sin() * cos_pitch,
+            sin_pitch,
+            look_angle.cos() * cos_pitch,
+        );
+
         // Spawn position: slightly in front of and above the player
-        let spawn_offset = throw_dir * 0.8 + Vector3::new(0.0, 0.5, 0.0);
+        let horizontal_dir = Vector3::new(look_angle.sin(), 0.0, look_angle.cos());
+        let spawn_offset = horizontal_dir * 0.8 + Vector3::new(0.0, 0.5, 0.0);
         let spawn_pos = player_pos + spawn_offset;
 
-        // Calculate throw velocity: forward + upward arc
-        let throw_velocity =
-            throw_dir * config.throw_speed + Vector3::new(0.0, config.arc_factor, 0.0);
+        // Calculate throw velocity: directional throw + additional arc factor
+        let throw_velocity = throw_dir * config.throw_speed + Vector3::new(0.0, config.arc_factor, 0.0);
 
         // Spawn the grenade entity
         let spawn_point = Point3::new(spawn_pos.x, spawn_pos.y, spawn_pos.z);

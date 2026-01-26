@@ -17,6 +17,10 @@ pub struct GrenadeConfig {
     pub max_lifetime: f32,
     /// Cooldown between throws (seconds).
     pub cooldown: f32,
+    /// Base upward angle offset for throws (radians). Added to throw direction.
+    pub upward_offset: f32,
+    /// How much camera pitch influences throw direction (0.0 = none, 1.0 = full).
+    pub pitch_influence: f32,
 }
 
 impl Default for GrenadeConfig {
@@ -28,6 +32,8 @@ impl Default for GrenadeConfig {
             gravity: 20.0,
             max_lifetime: 10.0,
             cooldown: 0.01,
+            upward_offset: 0.3,
+            pitch_influence: 0.5,
         }
     }
 }
