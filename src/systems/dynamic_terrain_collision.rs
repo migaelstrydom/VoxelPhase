@@ -5,12 +5,12 @@
 //! not biped characters.
 
 use nalgebra::Vector3;
-use specs::{Entities, Join, Read, ReadStorage, System, WriteStorage};
+use specs::{Entities, Join, Read, ReadStorage, System, Write, WriteStorage};
 
-use crate::biped::BipedController;
 use crate::collision::resolve_terrain_sweep;
 use crate::components::{Collider, MotionState, PhysicsBody, Position, Velocity};
 use crate::terrain::TerrainManager;
+use crate::{biped::BipedController, debug::DebugLines};
 
 /// Resolves dynamic entity collisions against terrain using CCD.
 ///
@@ -29,6 +29,7 @@ impl<'a> System<'a> for DynamicTerrainCollisionSystem {
         ReadStorage<'a, BipedController>,
         WriteStorage<'a, Position>,
         WriteStorage<'a, Velocity>,
+        Write<'a, DebugLines>,
     );
 
     fn run(
@@ -42,6 +43,7 @@ impl<'a> System<'a> for DynamicTerrainCollisionSystem {
             biped_controllers,
             mut positions,
             mut velocities,
+            mut _debug_lines,
         ): Self::SystemData,
     ) {
         let Some(ref terrain_manager) = terrain_manager_opt else {
@@ -84,11 +86,11 @@ impl<'a> System<'a> for DynamicTerrainCollisionSystem {
                     .map(|pb| (pb.restitution, pb.friction))
                     .unwrap_or((0.2, 0.5));
 
-                // Apply bounce (restitution)
-                let vel_into_surface = resolved_vel.dot(&contact.normal);
+                // Apply bounce using original velocity for magnitude calculation.
+                // The sweep already removed the into-surface component from resolved_vel,
+                // so we only need to add the bounce impulse.
+                let vel_into_surface = vel.0.dot(&contact.normal);
                 if vel_into_surface < 0.0 {
-                    // Remove velocity into surface and add bounce
-                    resolved_vel -= contact.normal * vel_into_surface;
                     resolved_vel += contact.normal * (-vel_into_surface * restitution);
                 }
 

@@ -1,12 +1,12 @@
 //! Collision detection and response systems.
 
 use nalgebra::{Point3, Vector3};
-use specs::{Entities, Join, Read, ReadStorage, System, WriteStorage};
+use specs::{Entities, Join, Read, ReadStorage, System, Write, WriteStorage};
 
-use crate::biped::BipedController;
 use crate::collision::ContactPoint;
 use crate::components::{Collider, PhysicsBody, Position, Velocity};
 use crate::terrain::TerrainManager;
+use crate::{biped::BipedController, debug::DebugLines};
 
 /// System that detects collisions between entities and terrain,
 /// applies velocity response, and updates ground state.
@@ -113,11 +113,19 @@ impl<'a> System<'a> for PenetrationResolutionSystem {
         WriteStorage<'a, Position>,
         ReadStorage<'a, Collider>,
         ReadStorage<'a, BipedController>,
+        Write<'a, DebugLines>,
     );
 
     fn run(
         &mut self,
-        (terrain_manager_opt, entities, mut positions, colliders, biped_controllers): Self::SystemData,
+        (
+            terrain_manager_opt,
+            entities,
+            mut positions,
+            colliders,
+            biped_controllers,
+            mut _debug_lines,
+        ): Self::SystemData,
     ) {
         let Some(ref terrain_manager) = terrain_manager_opt else {
             return;
@@ -127,6 +135,7 @@ impl<'a> System<'a> for PenetrationResolutionSystem {
         const MAX_ITERATIONS: usize = 4;
 
         for (entity, pos, collider) in (&entities, &mut positions, &colliders).join() {
+            // The biped should be fully kinematic, so nothing should be pushing it into the terrain.
             if biped_controllers.get(entity).is_some() {
                 continue;
             }

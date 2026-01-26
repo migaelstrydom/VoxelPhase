@@ -18,9 +18,9 @@ use crate::terrain::TerrainManager;
 /// Uses MotionState.prev → MotionState.predicted sweep for continuous collision detection.
 /// This system is authoritative for Position updates of biped entities.
 /// Grounding state is determined by whether either foot contacts the terrain.
-pub struct SpringBipedCollisionSystem;
+pub struct BipedCollisionSystem;
 
-impl<'a> System<'a> for SpringBipedCollisionSystem {
+impl<'a> System<'a> for BipedCollisionSystem {
     type SystemData = (
         Option<Read<'a, TerrainManager>>,
         ReadStorage<'a, MotionState>,
@@ -38,7 +38,7 @@ impl<'a> System<'a> for SpringBipedCollisionSystem {
             mut controllers,
             mut positions,
             mut velocities,
-            mut debug_lines,
+            mut _debug_lines,
         ): Self::SystemData,
     ) {
         let Some(ref terrain_manager) = terrain_manager_opt else {
@@ -91,7 +91,7 @@ impl<'a> System<'a> for SpringBipedCollisionSystem {
             // Update controller state
             controller.state.is_grounded = is_grounded;
 
-            debug_lines.add("Grounded", if is_grounded { "true" } else { "false" });
+            // debug_lines.add("Grounded", if is_grounded { "true" } else { "false" });
 
             // Commit resolved position and velocity
             pos.0 = Vector3::new(resolved_pos.x, resolved_pos.y, resolved_pos.z);

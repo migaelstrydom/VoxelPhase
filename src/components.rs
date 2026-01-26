@@ -65,13 +65,15 @@ impl Collider {
 }
 
 /// Physical properties for collision response.
-#[derive(Component, Debug)]
+#[derive(Component, Debug, Clone, Copy)]
 #[storage(VecStorage)]
 pub struct PhysicsBody {
     /// Bounciness (0 = no bounce, 1 = perfect bounce).
     pub restitution: f32,
     /// Friction coefficient.
     pub friction: f32,
+    /// Mass in kilograms.
+    pub mass: f32,
 }
 
 impl Default for PhysicsBody {
@@ -79,6 +81,7 @@ impl Default for PhysicsBody {
         Self {
             restitution: 0.2,
             friction: 0.8,
+            mass: 1.0,
         }
     }
 }

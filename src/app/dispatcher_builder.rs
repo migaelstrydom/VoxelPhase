@@ -4,13 +4,13 @@ use crate::biped::{BipedAnimationSystem, BipedProbeConfigSystem};
 use crate::explosion::ExplosionSystem;
 use crate::input::InputActionSystem;
 use crate::particles::{ParticleSpawnSystem, ParticleUpdateSystem};
-use crate::projectile::{GrenadeSpawnSystem, LifetimeSystem, ProjectileCollisionSystem};
+use crate::projectile::{GrenadeSpawnSystem, LifetimeSystem, ProjectileImpactDetectionSystem};
 use crate::sensing::SensorProbeSystem;
 use crate::systems::{
-    CameraControlSystem, DynamicTerrainCollisionSystem, GravitySystem, MotionPredictionSystem,
+    BipedCollisionSystem, CameraControlSystem, DynamicDynamicCollisionSystem,
+    DynamicTerrainCollisionSystem, GravitySystem, MotionPredictionSystem,
     PenetrationResolutionSystem, PlayerInputSystem, PlayerMotionSystem, RenderSystem,
-    SpringBipedCollisionSystem, TerrainCollisionSystem, TerrainUpdateSystem,
-    VelocityIntegrationSystem,
+    TerrainCollisionSystem, TerrainUpdateSystem, VelocityIntegrationSystem,
 };
 
 /// Builds the system dispatcher with proper dependency ordering.
@@ -31,9 +31,8 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
             "motion_prediction",
             &["velocity_integration"],
         )
-        // === Phase 7: Collision resolution ===
         .with(
-            SpringBipedCollisionSystem,
+            BipedCollisionSystem,
             "spring_biped_collision",
             &["motion_prediction"],
         )
@@ -43,9 +42,14 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
             &["motion_prediction"],
         )
         .with(
+            DynamicDynamicCollisionSystem,
+            "dynamic_dynamic_collision",
+            &["dynamic_terrain_collision"],
+        )
+        .with(
             TerrainCollisionSystem,
             "terrain_collision",
-            &["spring_biped_collision", "dynamic_terrain_collision"],
+            &["spring_biped_collision", "dynamic_dynamic_collision"],
         )
         .with(
             PenetrationResolutionSystem,
@@ -63,25 +67,26 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
             &["biped_animation"],
         )
         .with(SensorProbeSystem, "sensor_probe", &["biped_probe_config"])
-        // === Phase 8: Camera ===
         .with(
             CameraControlSystem,
             "camera_control",
             &["penetration_resolution"],
         )
-        // === Phase 9: Projectiles and effects ===
         .with(GrenadeSpawnSystem, "grenade_spawn", &["camera_control"])
         .with(LifetimeSystem, "lifetime", &["grenade_spawn"])
         .with(
-            ProjectileCollisionSystem,
-            "projectile_collision",
+            ProjectileImpactDetectionSystem,
+            "projectile_impact_detection",
             &["lifetime"],
         )
-        .with(ExplosionSystem, "explosion", &["projectile_collision"])
+        .with(
+            ExplosionSystem,
+            "explosion",
+            &["projectile_impact_detection"],
+        )
         .with(TerrainUpdateSystem, "terrain_update", &["explosion"])
         .with(ParticleSpawnSystem, "particle_spawn", &["explosion"])
         .with(ParticleUpdateSystem, "particle_update", &["particle_spawn"])
-        // === Phase 10: Rendering (thread-local) ===
         .with_thread_local(RenderSystem)
         .build()
 }

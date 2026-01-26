@@ -4,8 +4,8 @@ use specs::{Builder, Entity, World, WorldExt};
 use crate::biped::{BipedConfig, BipedController};
 use crate::camera::{CameraConfig, FollowTarget};
 use crate::components::{
-    Acceleration, CameraComponent, Gravity, MotionState, PhysicsBody, Position, Renderable,
-    Rotation, Velocity,
+    Acceleration, CameraComponent, Collider, Gravity, ModelInstance, MotionState, PhysicsBody,
+    Position, Renderable, Rotation, Velocity,
 };
 use crate::player::{Player, PlayerConfig, PlayerTargetState};
 use crate::rendering::camera::Camera;
@@ -18,6 +18,7 @@ pub fn spawn_player(world: &mut World, initial_pos: nalgebra::Point3<f32>) -> En
     drop(player_config);
 
     let biped_config = BipedConfig::default();
+    let body_radius = biped_config.body_radius;
     let biped_controller = BipedController::new(biped_config, initial_pos);
 
     world
@@ -41,7 +42,9 @@ pub fn spawn_player(world: &mut World, initial_pos: nalgebra::Point3<f32>) -> En
         .with(PhysicsBody {
             restitution: 0.1,
             friction: 0.8,
+            mass: 70.0,
         })
+        .with(Collider::sphere(body_radius))
         .build()
 }
 
@@ -72,5 +75,34 @@ pub fn spawn_camera(
         .create_entity()
         .with(CameraComponent(camera))
         .with(FollowTarget::new(follow_target, default_distance))
+        .build()
+}
+
+/// Spawns a beach ball entity with bouncy physics
+pub fn spawn_beach_ball(
+    world: &mut World,
+    initial_pos: nalgebra::Point3<f32>,
+    model: std::sync::Arc<crate::model::Model>,
+) -> Entity {
+    world
+        .create_entity()
+        .with(Position(Vector3::new(
+            initial_pos.x,
+            initial_pos.y,
+            initial_pos.z,
+        )))
+        .with(Velocity(Vector3::zeros()))
+        .with(Acceleration(Vector3::zeros()))
+        .with(Gravity(20.0))
+        .with(Rotation(0.0))
+        .with(Collider::sphere(0.5))
+        .with(MotionState::new(initial_pos))
+        .with(PhysicsBody {
+            restitution: 0.8,
+            friction: 0.25,
+            mass: 0.5,
+        })
+        .with(ModelInstance::new(model))
+        .with(Renderable)
         .build()
 }

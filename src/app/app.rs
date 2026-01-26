@@ -20,7 +20,7 @@ use crate::terrain::{create_test_terrain, TerrainManager};
 use crate::time::Time;
 
 use super::dispatcher_builder::build_dispatcher;
-use super::entity_spawner::{spawn_camera, spawn_player};
+use super::entity_spawner::{spawn_beach_ball, spawn_camera, spawn_player};
 use super::event_handler::{clear_frame_state, set_mouse_captured, EventHandler, EventResult};
 use super::world_builder::WorldBuilder;
 
@@ -34,11 +34,11 @@ pub struct App<'a, 'b> {
 impl<'a, 'b> App<'a, 'b> {
     pub fn new(window_width: u32, window_height: u32, app_title: &str) -> EngineResult<Self> {
         let (event_loop, window) = Self::create_window(window_width, window_height, app_title)?;
-        let (vulkan_context, renderer, resource_manager, texture_manager) =
+        let (_vulkan_context, renderer, resource_manager, texture_manager) =
             Self::create_rendering_context(&window, window_width, window_height)?;
-        let (material_manager, grenade_materials) =
-            Self::create_materials(&texture_manager, Arc::clone(&vulkan_context))?;
+        let (material_manager, grenade_materials) = Self::create_materials(&texture_manager)?;
         let grenade_model = Self::create_grenade_model(&grenade_materials);
+        let beach_ball_models = Self::create_beach_ball_models(&grenade_materials);
         let terrain_manager = Self::create_terrain(&texture_manager)?;
 
         let mut world = WorldBuilder::new()
@@ -55,6 +55,22 @@ impl<'a, 'b> App<'a, 'b> {
 
         let player_entity = spawn_player(&mut world, nalgebra::Point3::new(0.0, -10.0, 0.0));
         spawn_camera(&mut world, player_entity, window_width, window_height);
+
+        // Spawn 3 beach balls at different positions
+        let beach_ball_positions = vec![
+            nalgebra::Point3::new(-3.0, 10.0, 2.0),
+            nalgebra::Point3::new(0.0, 15.0, -3.0),
+            nalgebra::Point3::new(4.0, 12.0, 1.0),
+            nalgebra::Point3::new(0.0, 10.0, 0.0),
+            nalgebra::Point3::new(-1.0, 10.0, 0.0),
+        ];
+
+        for (pos, model) in beach_ball_positions
+            .into_iter()
+            .zip(beach_ball_models.into_iter())
+        {
+            spawn_beach_ball(&mut world, pos, model);
+        }
 
         let dispatcher = build_dispatcher();
 
@@ -107,7 +123,6 @@ impl<'a, 'b> App<'a, 'b> {
 
     fn create_materials(
         texture_manager: &crate::resources::textures::TextureManager,
-        _vulkan_context: Arc<VulkanContext>,
     ) -> EngineResult<(
         crate::rendering::material::MaterialManager,
         GrenadeMaterials,
@@ -149,6 +164,38 @@ impl<'a, 'b> App<'a, 'b> {
         ));
         log::info!("Grenade model built");
         grenade_model
+    }
+
+    fn create_beach_ball_models(
+        grenade_materials: &GrenadeMaterials,
+    ) -> Vec<Arc<crate::model::Model>> {
+        use crate::geometry::{generate_sphere_indices, generate_sphere_vertices};
+        use crate::model::{MeshPrimitive, Model, ModelPart};
+
+        let beach_ball_colors = vec![
+            Colour::new(1.0, 0.2, 0.2, 1.0), // Red
+            Colour::new(0.2, 0.5, 1.0, 1.0), // Blue
+            Colour::new(1.0, 0.9, 0.2, 1.0), // Yellow
+            Colour::new(0.2, 1.0, 0.2, 1.0), // Green
+            Colour::new(0.2, 0.2, 1.0, 1.0), // Purple
+        ];
+
+        beach_ball_colors
+            .into_iter()
+            .map(|color| {
+                let radius = 0.5;
+                let segments = 20;
+                let rings = 16;
+
+                let parts = vec![ModelPart::new(vec![MeshPrimitive {
+                    vertices: generate_sphere_vertices(radius, segments, rings, color),
+                    indices: generate_sphere_indices(segments, rings),
+                    material: grenade_materials.body,
+                }])];
+
+                Arc::new(Model::flat(parts))
+            })
+            .collect()
     }
 
     fn create_terrain(

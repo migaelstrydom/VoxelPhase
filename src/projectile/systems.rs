@@ -156,10 +156,10 @@ impl<'a> System<'a> for GrenadeSpawnSystem {
     }
 }
 
-/// System that detects projectile collisions with terrain and triggers explosions.
-pub struct ProjectileCollisionSystem;
+/// System that detects projectile impacts with terrain and triggers explosions.
+pub struct ProjectileImpactDetectionSystem;
 
-impl<'a> System<'a> for ProjectileCollisionSystem {
+impl<'a> System<'a> for ProjectileImpactDetectionSystem {
     type SystemData = (
         Entities<'a>,
         Option<Read<'a, TerrainManager>>,
