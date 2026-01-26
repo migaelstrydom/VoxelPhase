@@ -30,6 +30,7 @@ impl Material {
     }
 
     /// Create a textured material with white base colour.
+    #[allow(dead_code)]
     pub fn textured(texture: TextureHandle) -> Self {
         Self {
             base_colour: Colour::WHITE,

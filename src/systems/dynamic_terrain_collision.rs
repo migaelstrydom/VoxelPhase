@@ -2,14 +2,14 @@
 //!
 //! This system handles CCD collision resolution for entities like grenades,
 //! boxes, and other physics objects that have Collider + MotionState but are
-//! not SpringBipedCharacter.
+//! not biped characters.
 
 use nalgebra::Vector3;
 use specs::{Entities, Join, Read, ReadStorage, System, WriteStorage};
 
+use crate::biped::BipedController;
 use crate::collision::resolve_terrain_sweep;
 use crate::components::{Collider, MotionState, PhysicsBody, Position, Velocity};
-use crate::skeleton::SpringBipedCharacter;
 use crate::terrain::TerrainManager;
 
 /// Resolves dynamic entity collisions against terrain using CCD.
@@ -26,7 +26,7 @@ impl<'a> System<'a> for DynamicTerrainCollisionSystem {
         ReadStorage<'a, MotionState>,
         ReadStorage<'a, Collider>,
         ReadStorage<'a, PhysicsBody>,
-        ReadStorage<'a, SpringBipedCharacter>,
+        ReadStorage<'a, BipedController>,
         WriteStorage<'a, Position>,
         WriteStorage<'a, Velocity>,
     );
@@ -39,7 +39,7 @@ impl<'a> System<'a> for DynamicTerrainCollisionSystem {
             motion_states,
             colliders,
             physics_bodies,
-            spring_bipeds,
+            biped_controllers,
             mut positions,
             mut velocities,
         ): Self::SystemData,
@@ -58,7 +58,7 @@ impl<'a> System<'a> for DynamicTerrainCollisionSystem {
             .join()
         {
             // Skip biped entities - they're handled by SpringBipedCollisionSystem
-            if spring_bipeds.get(entity).is_some() {
+            if biped_controllers.get(entity).is_some() {
                 continue;
             }
 

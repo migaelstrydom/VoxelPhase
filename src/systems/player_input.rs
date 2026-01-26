@@ -1,39 +1,26 @@
-use crate::components::{Acceleration, CameraComponent, Position, Velocity};
+use crate::biped::BipedController;
+use crate::components::{Acceleration, CameraComponent, Position, Rotation, Velocity};
 use crate::input::GameplayActions;
-use crate::player::{Player, PlayerConfig, PlayerState};
-use crate::skeleton::SpringBipedCharacter;
+use crate::player::{Player, PlayerConfig, PlayerTargetState};
 use nalgebra::Vector3;
 use specs::{Join, ReadExpect, ReadStorage, System, WriteStorage};
 
-/// Reads input and updates player velocity based on movement keys.
+/// Processes player input and calculates desired movement target.
+/// Runs early in the frame to convert raw input into movement intent.
 /// Movement is relative to camera direction (forward = toward where camera looks).
 pub struct PlayerInputSystem;
 
 impl<'a> System<'a> for PlayerInputSystem {
     type SystemData = (
         ReadExpect<'a, GameplayActions>,
-        ReadExpect<'a, PlayerConfig>,
         ReadStorage<'a, Player>,
-        WriteStorage<'a, PlayerState>,
         ReadStorage<'a, Position>,
-        WriteStorage<'a, Velocity>,
-        WriteStorage<'a, Acceleration>,
         ReadStorage<'a, CameraComponent>,
-        ReadStorage<'a, SpringBipedCharacter>,
+        WriteStorage<'a, PlayerTargetState>,
     );
 
     fn run(&mut self, data: Self::SystemData) {
-        let (
-            actions,
-            config,
-            players,
-            mut player_states,
-            positions,
-            mut velocities,
-            mut accelerations,
-            cameras,
-            spring_bipeds,
-        ) = data;
+        let (actions, players, positions, cameras, mut player_targets) = data;
 
         // Get camera position for calculating movement direction
         let camera = cameras.join().next();
@@ -41,32 +28,8 @@ impl<'a> System<'a> for PlayerInputSystem {
             .map(|c| c.0.position)
             .unwrap_or_else(|| nalgebra::Point3::new(0.0, 0.0, 5.0));
 
-        for (_player, state, pos, vel, accel, spring_biped) in (
-            &players,
-            &mut player_states,
-            &positions,
-            &mut velocities,
-            &mut accelerations,
-            &spring_bipeds,
-        )
-            .join()
-        {
-            // Debug: show player position
-            // debug.add(
-            //     "Position",
-            //     format!("{:.1}, {:.1}, {:.1}", pos.0.x, pos.0.y, pos.0.z),
-            // );
-            // debug.add(
-            //     "Velocity",
-            //     format!("{:.1}, {:.1}, {:.1}", vel.0.x, vel.0.y, vel.0.z),
-            // );
-            // debug.add("On Ground", format!("{}", on_ground.grounded));
-            // debug.add("Facing Direction", format!("{:.1}", state.facing_direction));
-
-            let is_grounded = spring_biped.grounded;
-
+        for (_player, pos, target) in (&players, &positions, &mut player_targets).join() {
             // Calculate forward direction from player toward camera (XZ plane only)
-            // In BallDude, forward was from player toward camera position
             let to_camera = Vector3::new(
                 camera_pos.x - pos.0.x,
                 0.0, // Ignore Y for horizontal movement
@@ -102,9 +65,49 @@ impl<'a> System<'a> for PlayerInputSystem {
             // Normalize diagonal movement to prevent faster diagonal speed
             if move_dir.magnitude() > 0.001 {
                 move_dir = move_dir.normalize();
+            }
 
-                // Update facing direction based on movement
-                state.facing_direction = -move_dir.z.atan2(move_dir.x) + std::f32::consts::PI / 2.0;
+            // Write target state for later systems to use
+            target.direction = move_dir;
+            target.jump = actions.jump;
+        }
+    }
+}
+
+/// Applies player movement target to actual physics state.
+/// Runs after animation systems to apply intended movement based on grounded state.
+pub struct PlayerMotionSystem;
+
+impl<'a> System<'a> for PlayerMotionSystem {
+    type SystemData = (
+        ReadExpect<'a, PlayerConfig>,
+        ReadStorage<'a, Player>,
+        ReadStorage<'a, PlayerTargetState>,
+        ReadStorage<'a, BipedController>,
+        WriteStorage<'a, Rotation>,
+        WriteStorage<'a, Velocity>,
+        WriteStorage<'a, Acceleration>,
+    );
+
+    fn run(&mut self, data: Self::SystemData) {
+        let (config, players, player_targets, controllers, mut rotations, mut velocities, mut accelerations) = data;
+
+        for (_player, target, controller, rotation, vel, accel) in (
+            &players,
+            &player_targets,
+            &controllers,
+            &mut rotations,
+            &mut velocities,
+            &mut accelerations,
+        )
+            .join()
+        {
+            let is_grounded = controller.is_grounded();
+            let move_dir = target.direction;
+
+            // Update facing direction based on movement
+            if move_dir.magnitude() > 0.001 {
+                rotation.0 = -move_dir.z.atan2(move_dir.x) + std::f32::consts::PI / 2.0;
             }
 
             // Reset horizontal acceleration each frame (prevents stale air accel)
@@ -121,7 +124,7 @@ impl<'a> System<'a> for PlayerInputSystem {
             }
 
             // Handle jumping - only when grounded
-            if actions.jump && is_grounded {
+            if target.jump && is_grounded {
                 vel.0.y = config.jump_speed;
             }
         }

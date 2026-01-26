@@ -17,7 +17,7 @@ pub struct PlayerConfig {
 impl Default for PlayerConfig {
     fn default() -> Self {
         Self {
-            walk_speed: 1.0,
+            walk_speed: 5.0,
             air_acceleration: 8.0,
             jump_speed: 12.0,
             gravity: 20.0,

@@ -3,9 +3,9 @@
 use nalgebra::{Point3, Vector3};
 use specs::{Entities, Join, Read, ReadStorage, System, WriteStorage};
 
+use crate::biped::BipedController;
 use crate::collision::ContactPoint;
 use crate::components::{Collider, PhysicsBody, Position, Velocity};
-use crate::skeleton::SpringBipedCharacter;
 use crate::terrain::TerrainManager;
 
 /// System that detects collisions between entities and terrain,
@@ -23,7 +23,7 @@ impl<'a> System<'a> for TerrainCollisionSystem {
         ReadStorage<'a, Collider>,
         WriteStorage<'a, Velocity>,
         ReadStorage<'a, PhysicsBody>,
-        ReadStorage<'a, SpringBipedCharacter>,
+        ReadStorage<'a, BipedController>,
     );
 
     fn run(
@@ -35,7 +35,7 @@ impl<'a> System<'a> for TerrainCollisionSystem {
             colliders,
             mut velocities,
             physics_bodies,
-            spring_bipeds,
+            biped_controllers,
         ): Self::SystemData,
     ) {
         // Skip if no terrain loaded
@@ -46,7 +46,7 @@ impl<'a> System<'a> for TerrainCollisionSystem {
         for (entity, pos, collider, vel) in
             (&entities, &positions, &colliders, &mut velocities).join()
         {
-            if spring_bipeds.get(entity).is_some() {
+            if biped_controllers.get(entity).is_some() {
                 continue;
             }
             let center = Point3::new(pos.0.x, pos.0.y, pos.0.z);
@@ -112,12 +112,12 @@ impl<'a> System<'a> for PenetrationResolutionSystem {
         Entities<'a>,
         WriteStorage<'a, Position>,
         ReadStorage<'a, Collider>,
-        ReadStorage<'a, SpringBipedCharacter>,
+        ReadStorage<'a, BipedController>,
     );
 
     fn run(
         &mut self,
-        (terrain_manager_opt, entities, mut positions, colliders, spring_bipeds): Self::SystemData,
+        (terrain_manager_opt, entities, mut positions, colliders, biped_controllers): Self::SystemData,
     ) {
         let Some(ref terrain_manager) = terrain_manager_opt else {
             return;
@@ -127,7 +127,7 @@ impl<'a> System<'a> for PenetrationResolutionSystem {
         const MAX_ITERATIONS: usize = 4;
 
         for (entity, pos, collider) in (&entities, &mut positions, &colliders).join() {
-            if spring_bipeds.get(entity).is_some() {
+            if biped_controllers.get(entity).is_some() {
                 continue;
             }
             for _ in 0..MAX_ITERATIONS {

@@ -1,0 +1,172 @@
+use winit::{
+    event::{DeviceEvent, ElementState, Event, KeyEvent, MouseButton, WindowEvent},
+    event_loop::EventLoopWindowTarget,
+    keyboard::{KeyCode, PhysicalKey},
+    window::{CursorGrabMode, Window},
+};
+
+use specs::{World, WorldExt};
+
+use crate::debug::{DebugLines, DebugOverlays};
+use crate::input::InputState;
+
+/// Result of handling an event
+pub enum EventResult {
+    Continue,
+    Exit,
+}
+
+/// Handles window and input events, updating the ECS world state
+pub struct EventHandler;
+
+impl EventHandler {
+    pub fn handle(
+        event: Event<()>,
+        window: &Window,
+        world: &mut World,
+        elwt: &EventLoopWindowTarget<()>,
+    ) -> EventResult {
+        match event {
+            Event::WindowEvent {
+                event: WindowEvent::CloseRequested,
+                ..
+            } => {
+                log::info!("Close requested");
+                elwt.exit();
+                EventResult::Exit
+            }
+
+            Event::WindowEvent {
+                event:
+                    WindowEvent::KeyboardInput {
+                        event:
+                            KeyEvent {
+                                physical_key: PhysicalKey::Code(key_code),
+                                state,
+                                ..
+                            },
+                        ..
+                    },
+                ..
+            } => {
+                Self::handle_keyboard(key_code, state, window, world, elwt)
+            }
+
+            Event::WindowEvent {
+                event: WindowEvent::MouseInput { state, button, .. },
+                ..
+            } => {
+                Self::handle_mouse_button(button, state, window, world)
+            }
+
+            Event::DeviceEvent {
+                event: DeviceEvent::MouseMotion { delta },
+                ..
+            } => {
+                Self::handle_mouse_motion(delta, world)
+            }
+
+            Event::AboutToWait => EventResult::Continue,
+
+            Event::WindowEvent {
+                event: WindowEvent::RedrawRequested,
+                ..
+            } => EventResult::Continue,
+
+            _ => EventResult::Continue,
+        }
+    }
+
+    fn handle_keyboard(
+        key_code: KeyCode,
+        state: ElementState,
+        window: &Window,
+        world: &mut World,
+        elwt: &EventLoopWindowTarget<()>,
+    ) -> EventResult {
+        if key_code == KeyCode::Escape && state == ElementState::Pressed {
+            let input = world.read_resource::<InputState>();
+            let is_captured = input.is_mouse_captured();
+            drop(input);
+
+            if is_captured {
+                set_mouse_captured(window, world, false);
+            } else {
+                log::info!("Escape pressed - exiting");
+                elwt.exit();
+                return EventResult::Exit;
+            }
+            return EventResult::Continue;
+        }
+
+        let mut input = world.write_resource::<InputState>();
+        input.handle_keyboard_input(key_code, state);
+        EventResult::Continue
+    }
+
+    fn handle_mouse_button(
+        button: MouseButton,
+        state: ElementState,
+        window: &Window,
+        world: &mut World,
+    ) -> EventResult {
+        if button == MouseButton::Left && state == ElementState::Pressed {
+            let input = world.read_resource::<InputState>();
+            let is_captured = input.is_mouse_captured();
+            drop(input);
+
+            if !is_captured {
+                set_mouse_captured(window, world, true);
+                return EventResult::Continue;
+            }
+        }
+
+        let mut input = world.write_resource::<InputState>();
+        input.handle_mouse_button(button, state);
+        EventResult::Continue
+    }
+
+    fn handle_mouse_motion(delta: (f64, f64), world: &mut World) -> EventResult {
+        let mut input = world.write_resource::<InputState>();
+        if input.is_mouse_captured() {
+            input.handle_mouse_motion(delta.0, delta.1);
+        }
+        EventResult::Continue
+    }
+}
+
+/// Clears per-frame state after systems have processed
+pub fn clear_frame_state(world: &mut World) {
+    {
+        let mut input = world.write_resource::<InputState>();
+        input.begin_frame();
+    }
+    {
+        let mut debug = world.write_resource::<DebugLines>();
+        debug.clear();
+    }
+    {
+        let mut overlays = world.write_resource::<DebugOverlays>();
+        overlays.clear();
+    }
+}
+
+/// Sets the mouse capture state for the window
+pub fn set_mouse_captured(window: &Window, world: &mut World, captured: bool) {
+    let result = if captured {
+        window
+            .set_cursor_grab(CursorGrabMode::Confined)
+            .or_else(|_| window.set_cursor_grab(CursorGrabMode::Locked))
+    } else {
+        window.set_cursor_grab(CursorGrabMode::None)
+    };
+
+    if let Err(e) = result {
+        log::warn!("Failed to set cursor grab mode: {}", e);
+    }
+
+    window.set_cursor_visible(!captured);
+
+    let mut input = world.write_resource::<InputState>();
+    input.set_mouse_captured(captured);
+}

@@ -1,12 +1,12 @@
+use crate::biped::BipedController;
 use crate::components::{CameraComponent, ModelInstance, Position, Renderable, Rotation};
 use crate::debug::{DebugLines, DebugOverlays};
-use crate::geometry::{generate_sphere_indices, generate_sphere_vertices};
+use crate::geometry::{generate_cylinder, generate_sphere_indices, generate_sphere_vertices};
 use crate::model::Transform;
 use crate::particles::ParticlePool;
 use crate::rendering::material::MaterialManager;
 use crate::rendering::renderer::Renderer;
 use crate::resources::textures::TextureManager;
-use crate::skeleton::SpringBipedCharacter;
 use crate::terrain::TerrainManager;
 use nalgebra::{Matrix4, Vector3};
 use specs::{Join, Read, ReadExpect, ReadStorage, System, Write, WriteExpect, WriteStorage};
@@ -28,7 +28,7 @@ impl<'a> System<'a> for RenderSystem {
         ReadStorage<'a, Rotation>,
         ReadStorage<'a, Renderable>,
         ReadStorage<'a, CameraComponent>,
-        WriteStorage<'a, SpringBipedCharacter>,
+        WriteStorage<'a, BipedController>,
     );
 
     fn run(&mut self, data: Self::SystemData) {
@@ -46,7 +46,7 @@ impl<'a> System<'a> for RenderSystem {
             rotations,
             renderables,
             camera_components,
-            mut spring_biped_characters,
+            mut biped_controllers,
         ) = data;
 
         let camera = camera_components.join().next();
@@ -112,11 +112,11 @@ impl<'a> System<'a> for RenderSystem {
                     }
                 }
 
-                // Draw all spring biped characters (Stage 3 - physics-based spring legs)
+                // Draw all biped controllers
                 // Note: Characters use world-space vertex positions
                 // (skeleton positions are already in world coords), so we use identity transform.
-                for (character, _pos, _rot, _renderable) in (
-                    &mut spring_biped_characters,
+                for (controller, _pos, _rot, _renderable) in (
+                    &mut biped_controllers,
                     &positions,
                     &rotations,
                     &renderables,
@@ -125,8 +125,8 @@ impl<'a> System<'a> for RenderSystem {
                 {
                     let identity = Matrix4::identity();
 
-                    // Get mesh from the character (regenerates if dirty)
-                    let (vertices, indices) = character.mesh();
+                    // Get mesh from the controller (regenerates if dirty)
+                    let (vertices, indices) = controller.mesh();
 
                     if let Err(e) = renderer.draw_procedural_mesh(
                         draw_cb,
@@ -136,7 +136,7 @@ impl<'a> System<'a> for RenderSystem {
                         &material_manager,
                         &texture_manager,
                     ) {
-                        log::error!("RenderSystem: Failed to draw spring biped character: {}", e);
+                        log::error!("RenderSystem: Failed to draw biped character: {}", e);
                     }
                 }
 
@@ -158,6 +158,25 @@ impl<'a> System<'a> for RenderSystem {
                             &texture_manager,
                         ) {
                             log::error!("RenderSystem: Failed to draw debug sphere: {}", e);
+                        }
+                    }
+                }
+
+                // Render debug overlay lines (thin cylinders)
+                for line in debug_overlays.lines() {
+                    let (vertices, indices) =
+                        generate_cylinder(line.start, line.end, line.radius, 6, line.colour);
+                    if !vertices.is_empty() {
+                        let identity = Matrix4::identity();
+                        if let Err(e) = renderer.draw_procedural_mesh(
+                            draw_cb,
+                            &vertices,
+                            &indices,
+                            &identity,
+                            &material_manager,
+                            &texture_manager,
+                        ) {
+                            log::error!("RenderSystem: Failed to draw debug line: {}", e);
                         }
                     }
                 }

@@ -53,6 +53,7 @@ impl DebugLines {
 #[derive(Default)]
 pub struct DebugOverlays {
     spheres: Vec<DebugSphere>,
+    lines: Vec<DebugLine>,
 }
 
 #[allow(dead_code)]
@@ -69,18 +70,52 @@ impl DebugOverlays {
         self.add_sphere(position, 0.06, Colour::RED);
     }
 
+    pub fn add_line(&mut self, start: Point3<f32>, end: Point3<f32>, colour: Colour) {
+        self.add_line_with_radius(start, end, 0.02, colour);
+    }
+
+    pub fn add_line_with_radius(
+        &mut self,
+        start: Point3<f32>,
+        end: Point3<f32>,
+        radius: f32,
+        colour: Colour,
+    ) {
+        self.lines.push(DebugLine {
+            start,
+            end,
+            radius,
+            colour,
+        });
+    }
+
     pub fn spheres(&self) -> &[DebugSphere] {
         &self.spheres
     }
 
+    pub fn lines(&self) -> &[DebugLine] {
+        &self.lines
+    }
+
     pub fn clear(&mut self) {
         self.spheres.clear();
+        self.lines.clear();
     }
 }
 
 #[derive(Clone, Copy, Debug)]
+#[allow(dead_code)]
 pub struct DebugSphere {
     pub position: Point3<f32>,
+    pub radius: f32,
+    pub colour: Colour,
+}
+
+#[derive(Clone, Copy, Debug)]
+#[allow(dead_code)]
+pub struct DebugLine {
+    pub start: Point3<f32>,
+    pub end: Point3<f32>,
     pub radius: f32,
     pub colour: Colour,
 }

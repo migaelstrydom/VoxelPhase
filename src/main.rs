@@ -1,4 +1,5 @@
 mod app;
+mod biped;
 mod camera;
 mod collision;
 mod components;
@@ -13,6 +14,7 @@ mod player;
 mod projectile;
 mod rendering;
 mod resources;
+mod sensing;
 mod skeleton;
 mod systems;
 mod terrain;
