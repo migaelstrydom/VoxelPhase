@@ -9,7 +9,8 @@ use super::collider::{Collider, ColliderDesc, ColliderMaterial, ColliderShape};
 use super::handle::{ColliderHandle, RigidBodyHandle};
 use super::narrowphase::{generate_sphere_sphere_contacts, generate_sphere_static_contacts};
 use super::pipeline::integration::{integrate_bodies, integrate_forces};
-use super::pipeline::solver::{solve_contacts, ContactConstraint};
+use super::pipeline::manifold::ManifoldCache;
+use super::pipeline::solver::{solve, solve_contacts, ContactConstraint};
 use super::static_geometry::StaticGeometry;
 use crate::debug::DebugLines;
 
@@ -33,6 +34,10 @@ pub struct PhysicsConfig {
     /// Below this, the narrowphase handles contacts; above, CCD sweeps
     /// prevent tunneling.
     pub ccd_threshold: f32,
+    /// Local-space distance threshold for matching contact points across frames.
+    pub contact_match_threshold: f32,
+    /// Frames without a narrowphase refresh before a manifold point is pruned.
+    pub manifold_max_age: u8,
 }
 
 impl Default for PhysicsConfig {
@@ -43,6 +48,8 @@ impl Default for PhysicsConfig {
             restitution_velocity_threshold: 1.0,
             contact_margin: 0.02,
             ccd_threshold: 0.5,
+            contact_match_threshold: 0.05,
+            manifold_max_age: 3,
         }
     }
 }
@@ -66,16 +73,20 @@ pub struct PhysicsWorld {
     config: PhysicsConfig,
     bodies: Arena<RigidBody>,
     colliders: Arena<Collider>,
+    manifold_cache: ManifoldCache,
     last_contacts: Vec<ContactEvent>,
     frame_index: u64,
 }
 
 impl PhysicsWorld {
     pub fn new(config: PhysicsConfig) -> Self {
+        let manifold_cache =
+            ManifoldCache::new(config.contact_match_threshold, config.manifold_max_age);
         Self {
             config,
             bodies: Arena::new(),
             colliders: Arena::new(),
+            manifold_cache,
             last_contacts: Vec::new(),
             frame_index: 0,
         }
@@ -105,8 +116,8 @@ impl PhysicsWorld {
             return false;
         };
 
-        // Remove all attached colliders
         for collider_handle in body.colliders() {
+            self.manifold_cache.remove_collider(*collider_handle);
             self.colliders.remove(collider_handle.0);
         }
 
@@ -161,11 +172,12 @@ impl PhysicsWorld {
 
         let body_handle = collider.body();
 
-        // Update the body
         if let Some(body) = self.bodies.get_mut(body_handle.0) {
             body.remove_collider(handle);
             self.recompute_mass_properties(body_handle);
         }
+
+        self.manifold_cache.remove_collider(handle);
 
         true
     }
@@ -182,9 +194,11 @@ impl PhysicsWorld {
     /// Pipeline order (semi-implicit Euler):
     /// 1. Integrate forces into velocities
     /// 2. Narrowphase: generate contacts at current positions
-    /// 3. Solve velocity constraints (sequential impulses)
-    /// 4. Integrate positions (velocities → positions)
-    /// 5. CCD pass (fast bodies only: sweep, correct position, re-solve)
+    /// 3. Manifold cache: merge with persistent contacts, populate warm-start data
+    /// 4. Solve velocity constraints (warm-start + sequential impulses)
+    /// 5. Write solved impulses back to manifold cache
+    /// 6. Integrate positions (velocities → positions)
+    /// 7. CCD pass (fast bodies only: sweep, correct position, re-solve)
     pub fn step(
         &mut self,
         dt: f32,
@@ -196,32 +210,32 @@ impl PhysicsWorld {
         // Phase 1-2: Integrate forces into velocities
         integrate_forces(&mut self.bodies, dt, self.config.gravity);
 
-        // Phase 4: Narrowphase contact generation
-        let mut contacts = generate_sphere_static_contacts(
+        // Phase 3: Narrowphase contact generation
+        let mut raw_contacts = generate_sphere_static_contacts(
             &self.bodies,
             &self.colliders,
             static_geometry,
             self.config.contact_margin,
         );
-        contacts.extend(generate_sphere_sphere_contacts(
+        raw_contacts.extend(generate_sphere_sphere_contacts(
             &self.bodies,
             &self.colliders,
             self.config.contact_margin,
         ));
+
+        // Phase 4: Merge with manifold cache (populates warm-start impulses)
+        let contacts = self.manifold_cache.update(&raw_contacts, &self.bodies);
+
         self.last_contacts.clear();
         self.last_contacts
             .extend(contacts.iter().map(|c| ContactEvent::from_narrowphase(c)));
 
-        // Phase 7: Solve velocity constraints
-        if !contacts.is_empty() {
-            for _ in 0..self.config.solver_iterations {
-                solve_contacts(
-                    &mut self.bodies,
-                    &contacts,
-                    self.config.restitution_velocity_threshold,
-                );
-            }
-        }
+        // Phase 5: Solve velocity constraints (warm-start + N iterations)
+        let solved = solve(&mut self.bodies, &contacts, &self.config);
+
+        // Phase 6: Write solved impulses back to manifold cache
+        self.manifold_cache.write_back(&contacts, &solved);
+        self.manifold_cache.prune();
 
         // Bodies with static narrowphase contacts are managed by the solver.
         // CCD should only catch bodies in free flight that might tunnel.
@@ -239,10 +253,10 @@ impl PhysicsWorld {
                 .map(|(idx, body)| (idx, (body.position(), body.rotation())))
                 .collect();
 
-        // Phase 9: Integrate positions
+        // Phase 7: Integrate positions
         integrate_bodies(&mut self.bodies, dt);
 
-        // Phase 10: CCD pass (fast bodies only, excluding narrowphase-managed bodies)
+        // Phase 8: CCD pass (fast bodies only, excluding narrowphase-managed bodies)
         let ccd_count = self.ccd_pass(dt, static_geometry, &pre_states, &narrowphase_handled);
 
         debug_lines.add("Contacts", format!("{}", contacts.len()));
@@ -348,15 +362,19 @@ impl PhysicsWorld {
                 body.set_position(hit_pos);
             }
 
-            // Solve CCD contact to correct velocity
+            // Solve CCD contact to correct velocity (transient, not cached)
             let contact = ContactConstraint {
                 body_a: None,
                 body_b: candidate.body_handle,
+                collider_a: None,
+                collider_b: None,
                 point: hit.point,
                 normal: hit.normal,
                 depth: 0.0,
                 restitution: candidate.material.restitution,
                 friction: candidate.material.friction,
+                warm_normal_impulse: 0.0,
+                warm_tangent_impulse: [0.0, 0.0],
             };
             self.last_contacts.push(ContactEvent::from_ccd(&contact));
             solve_contacts(

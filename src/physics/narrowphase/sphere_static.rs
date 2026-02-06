@@ -55,11 +55,15 @@ pub fn generate_sphere_static_contacts(
                 contacts.push(ContactConstraint {
                     body_a: None,
                     body_b: body_handle,
+                    collider_a: None,
+                    collider_b: Some(*collider_handle),
                     point: sc.point,
                     normal: sc.normal,
                     depth: solver_depth,
                     restitution: collider.material().restitution,
                     friction: collider.material().friction,
+                    warm_normal_impulse: 0.0,
+                    warm_tangent_impulse: [0.0, 0.0],
                 });
             }
         }

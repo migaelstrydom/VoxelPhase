@@ -5,7 +5,8 @@ use nalgebra::{Point3, Vector3};
 
 use crate::physics::body::RigidBody;
 use crate::physics::collider::ColliderMaterial;
-use crate::physics::handle::RigidBodyHandle;
+use crate::physics::handle::{ColliderHandle, RigidBodyHandle};
+use crate::physics::world::PhysicsConfig;
 
 /// A contact constraint to be solved.
 #[derive(Debug, Clone)]
@@ -14,6 +15,10 @@ pub struct ContactConstraint {
     pub body_a: Option<RigidBodyHandle>,
     /// Second body.
     pub body_b: RigidBodyHandle,
+    /// First collider (None for static geometry).
+    pub collider_a: Option<ColliderHandle>,
+    /// Second collider (None for transient CCD contacts).
+    pub collider_b: Option<ColliderHandle>,
     /// Contact point in world space.
     pub point: Point3<f32>,
     /// Contact normal pointing from A to B.
@@ -23,33 +28,149 @@ pub struct ContactConstraint {
     /// Combined material properties.
     pub restitution: f32,
     pub friction: f32,
+    /// Cached normal impulse from manifold (for warm-starting).
+    pub warm_normal_impulse: f32,
+    /// Cached tangent impulses from manifold (for warm-starting).
+    pub warm_tangent_impulse: [f32; 2],
 }
 
-/// Solve contact constraints using sequential impulses.
+/// Accumulated impulses from the solver, for writing back to the manifold cache.
+#[derive(Debug, Clone, Default)]
+pub struct SolvedImpulses {
+    pub normal: f32,
+    pub tangent: [f32; 2],
+}
+
+/// Solve contact constraints with warm-starting and multiple iterations.
 ///
-/// This is a simple single-iteration solver. Phase 3 will add multiple iterations
-/// and warm starting for stable stacking.
+/// Pipeline:
+/// 1. Warm-start: apply cached impulses from the manifold cache
+/// 2. Iterative solve: run `config.solver_iterations` passes of sequential impulses
+/// 3. Return accumulated impulses for manifold writeback
+pub fn solve(
+    bodies: &mut Arena<RigidBody>,
+    contacts: &[ContactConstraint],
+    config: &PhysicsConfig,
+) -> Vec<SolvedImpulses> {
+    if contacts.is_empty() {
+        return Vec::new();
+    }
+
+    // Phase 1: Warm-start — apply cached impulses from previous frame
+    warm_start(bodies, contacts);
+
+    // Phase 2: Iterative sequential-impulse solving
+    // Initialize with warm-start values so writeback captures the total impulse
+    let mut accumulated: Vec<SolvedImpulses> = contacts
+        .iter()
+        .map(|c| SolvedImpulses {
+            normal: c.warm_normal_impulse,
+            tangent: c.warm_tangent_impulse,
+        })
+        .collect();
+
+    for _ in 0..config.solver_iterations {
+        for (i, contact) in contacts.iter().enumerate() {
+            let impulse = solve_single_contact(bodies, contact, config.restitution_velocity_threshold);
+            accumulated[i].normal += impulse.normal;
+            accumulated[i].tangent[0] += impulse.tangent[0];
+            accumulated[i].tangent[1] += impulse.tangent[1];
+        }
+    }
+
+    // Phase 3: Position correction — run once after velocity solving, not per iteration
+    for contact in contacts {
+        if contact.depth > 0.001 {
+            let inv_mass_a = contact
+                .body_a
+                .and_then(|h| bodies.get(h.0))
+                .map(|b| b.inv_mass())
+                .unwrap_or(0.0);
+            let inv_mass_b = bodies
+                .get(contact.body_b.0)
+                .map(|b| b.inv_mass())
+                .unwrap_or(0.0);
+            apply_position_correction(bodies, contact, inv_mass_a, inv_mass_b);
+        }
+    }
+
+    accumulated
+}
+
+/// Apply cached impulses from the manifold to give the solver a head start.
+fn warm_start(bodies: &mut Arena<RigidBody>, contacts: &[ContactConstraint]) {
+    for contact in contacts {
+        if contact.warm_normal_impulse.abs() < 1e-8
+            && contact.warm_tangent_impulse[0].abs() < 1e-8
+            && contact.warm_tangent_impulse[1].abs() < 1e-8
+        {
+            continue;
+        }
+
+        let impulse = contact.normal * contact.warm_normal_impulse;
+
+        // Compute tangent directions for warm-starting friction
+        let tangent_impulse = compute_tangent_impulse(contact);
+
+        let total = impulse + tangent_impulse;
+
+        if let Some(handle_a) = contact.body_a {
+            if let Some(body_a) = bodies.get_mut(handle_a.0) {
+                if body_a.is_dynamic() {
+                    body_a.apply_impulse_at_point(-total, contact.point);
+                }
+            }
+        }
+
+        if let Some(body_b) = bodies.get_mut(contact.body_b.0) {
+            if body_b.is_dynamic() {
+                body_b.apply_impulse_at_point(total, contact.point);
+            }
+        }
+    }
+}
+
+/// Compute a tangent impulse vector from cached tangent impulse magnitudes.
+fn compute_tangent_impulse(contact: &ContactConstraint) -> Vector3<f32> {
+    let (t1, t2) = compute_tangent_basis(&contact.normal);
+    t1 * contact.warm_tangent_impulse[0] + t2 * contact.warm_tangent_impulse[1]
+}
+
+/// Compute a stable orthonormal tangent basis from a normal vector.
+fn compute_tangent_basis(normal: &Vector3<f32>) -> (Vector3<f32>, Vector3<f32>) {
+    // Choose the axis least aligned with the normal to avoid degeneracy
+    let reference = if normal.x.abs() < 0.9 {
+        Vector3::x()
+    } else {
+        Vector3::y()
+    };
+    let t1 = normal.cross(&reference).normalize();
+    let t2 = normal.cross(&t1);
+    (t1, t2)
+}
+
+/// Solve contacts without warm-starting (for transient contacts like CCD).
 pub fn solve_contacts(
     bodies: &mut Arena<RigidBody>,
     contacts: &[ContactConstraint],
     restitution_velocity_threshold: f32,
-) -> Vec<f32> {
-    let mut impulses = Vec::with_capacity(contacts.len());
+) {
     for contact in contacts {
-        impulses.push(solve_single_contact(bodies, contact, restitution_velocity_threshold));
+        solve_single_contact(bodies, contact, restitution_velocity_threshold);
     }
-    impulses
 }
 
 fn solve_single_contact(
     bodies: &mut Arena<RigidBody>,
     contact: &ContactConstraint,
     restitution_velocity_threshold: f32,
-) -> f32 {
+) -> SolvedImpulses {
+    let zero = SolvedImpulses::default();
+
     // Get body B's state
     let (pos_b, vel_b, angular_vel_b, inv_mass_b, inv_inertia_b) = {
         let Some(body_b) = bodies.get(contact.body_b.0) else {
-            return 0.0;
+            return zero;
         };
         (
             body_b.position(),
@@ -64,7 +185,7 @@ fn solve_single_contact(
     let (pos_a, vel_a, angular_vel_a, inv_mass_a, inv_inertia_a) = match contact.body_a {
         Some(handle) => {
             let Some(body_a) = bodies.get(handle.0) else {
-                return 0.0;
+                return zero;
             };
             (
                 body_a.position(),
@@ -75,7 +196,7 @@ fn solve_single_contact(
             )
         }
         None => (
-            contact.point, // Static geometry at contact point
+            contact.point,
             Vector3::zeros(),
             Vector3::zeros(),
             0.0,
@@ -95,11 +216,7 @@ fn solve_single_contact(
 
     // Only resolve if objects are approaching
     if vel_along_normal > 0.0 {
-        // Separating, but still need position correction if penetrating
-        if contact.depth > 0.001 {
-            apply_position_correction(bodies, contact, inv_mass_a, inv_mass_b);
-        }
-        return 0.0;
+        return zero;
     }
 
     // Compute effective mass for the contact
@@ -113,7 +230,7 @@ fn solve_single_contact(
         inv_mass_a + inv_mass_b + (angular_effect_a + angular_effect_b).dot(&contact.normal);
 
     if effective_mass <= 0.0 {
-        return 0.0;
+        return zero;
     }
 
     // Zero out restitution for slow approaches to prevent micro-bouncing at rest
@@ -124,7 +241,7 @@ fn solve_single_contact(
     };
     let j = -(1.0 + restitution) * vel_along_normal / effective_mass;
 
-    // Apply impulse
+    // Apply normal impulse
     let impulse = contact.normal * j;
 
     if let Some(handle_a) = contact.body_a {
@@ -141,15 +258,13 @@ fn solve_single_contact(
         }
     }
 
-    // Apply friction impulse
-    apply_friction(bodies, contact, &rel_vel, j);
+    // Apply friction impulse and capture the tangent impulse magnitudes
+    let tangent_solved = apply_friction(bodies, contact, &rel_vel, j);
 
-    // Position correction for penetration
-    if contact.depth > 0.001 {
-        apply_position_correction(bodies, contact, inv_mass_a, inv_mass_b);
+    SolvedImpulses {
+        normal: j.max(0.0),
+        tangent: tangent_solved,
     }
-
-    j.max(0.0)
 }
 
 fn apply_friction(
@@ -157,22 +272,24 @@ fn apply_friction(
     contact: &ContactConstraint,
     rel_vel: &Vector3<f32>,
     normal_impulse: f32,
-) {
-    // Compute tangent velocity
-    let vel_along_normal = rel_vel.dot(&contact.normal);
-    let tangent_vel = rel_vel - contact.normal * vel_along_normal;
-    let tangent_speed = tangent_vel.magnitude();
+) -> [f32; 2] {
+    let (t1, t2) = compute_tangent_basis(&contact.normal);
 
-    if tangent_speed < 1e-6 {
-        return;
-    }
+    // Project relative velocity onto each tangent direction
+    let v_t1 = rel_vel.dot(&t1);
+    let v_t2 = rel_vel.dot(&t2);
 
-    let tangent_dir = tangent_vel / tangent_speed;
-
-    // Coulomb friction: friction impulse <= mu * normal impulse
     let max_friction = contact.friction * normal_impulse.abs();
-    let friction_impulse = tangent_speed.min(max_friction);
-    let friction = -tangent_dir * friction_impulse;
+
+    // Clamp each tangent impulse independently
+    let j_t1 = (-v_t1).clamp(-max_friction, max_friction);
+    let j_t2 = (-v_t2).clamp(-max_friction, max_friction);
+
+    let friction = t1 * j_t1 + t2 * j_t2;
+
+    if friction.magnitude_squared() < 1e-12 {
+        return [0.0, 0.0];
+    }
 
     if let Some(handle_a) = contact.body_a {
         if let Some(body_a) = bodies.get_mut(handle_a.0) {
@@ -187,6 +304,8 @@ fn apply_friction(
             body_b.apply_impulse_at_point(friction, contact.point);
         }
     }
+
+    [j_t1, j_t2]
 }
 
 fn apply_position_correction(
@@ -201,8 +320,8 @@ fn apply_position_correction(
     }
 
     // Baumgarte stabilization: push objects apart based on penetration
-    let correction_factor = 0.2; // How much penetration to correct per frame
-    let slop = 0.001; // Allow small penetration to avoid jitter
+    let correction_factor = 0.2;
+    let slop = 0.001;
     let correction = (contact.depth - slop).max(0.0) * correction_factor / total_inv_mass;
 
     if let Some(handle_a) = contact.body_a {
@@ -224,7 +343,6 @@ fn apply_position_correction(
 
 /// Combine material properties from two colliders.
 pub fn combine_materials(mat_a: &ColliderMaterial, mat_b: &ColliderMaterial) -> (f32, f32) {
-    // Average restitution, geometric mean friction (common approach)
     let restitution = (mat_a.restitution + mat_b.restitution) * 0.5;
     let friction = (mat_a.friction * mat_b.friction).sqrt();
     (restitution, friction)

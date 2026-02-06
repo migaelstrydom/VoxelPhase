@@ -561,10 +561,37 @@ primary contact source; CCD is the tunneling safety net.
 - No manifold persistence, warm-starting, or accumulated impulse caching yet; those start
   in Step 4. Expect higher bounce energy and normal jitter until then.
 
-### Step 4: Contact manifold persistence and warm-starting
+### Step 4: Contact manifold persistence and warm-starting ✅
 Add `ManifoldCache`. Store contact points in local space, match across frames, cache
 impulses. Implement warm-starting in the solver. This is the single biggest stability
 improvement for resting and stacking contacts.
+
+**Implementation notes:**
+- `ManifoldCache` lives in `pipeline/manifold.rs`, bridging narrowphase output and solver
+  input. Keyed by `(Option<ColliderHandle>, ColliderHandle)` ordered pair (`None` for
+  static geometry). Contact points stored in body-local space, matched across frames by
+  local-space distance (`contact_match_threshold`, default 0.05). Stale points pruned
+  after `manifold_max_age` frames (default 3) without a narrowphase refresh.
+- Narrowphase returns raw contacts; the manifold cache merges them with persistent
+  data and populates warm-start impulse fields on `ContactConstraint`. CCD contacts
+  are transient and bypass the cache (`collider_b: None`).
+- `solve()` in `solver.rs` is now the single entry point: warm-start, N iterations,
+  position correction (once), return `SolvedImpulses` for writeback. The iteration
+  loop moved out of `world.rs` into the solver. `solve_contacts()` remains as a
+  low-level function for CCD's one-off transient contacts.
+- Friction refactored to use a stable tangent basis (`compute_tangent_basis`) derived
+  from the contact normal, replacing the previous velocity-derived tangent direction.
+  This ensures tangent impulses from the manifold cache are applied in a consistent
+  frame across warm-start and iterative solving.
+- **Bug fix:** Position correction (Baumgarte) was previously inside `solve_single_contact`,
+  causing it to run `solver_iterations` times per frame instead of once. With
+  `correction_factor=0.2` and 4 iterations, bodies received 0.8 effective correction —
+  over-correcting penetration, injecting energy via gravity on the next frame, and
+  producing visible perpetual bouncing at low energy. Now runs once after iterations.
+- **Bug fix:** Warm-start writeback was initialized to zero, only capturing iterative
+  impulses. The total impulse (warm-start + iterative) must be written back so the
+  cache converges to the correct steady-state value. Without this, cached impulses
+  oscillate between correct and near-zero on alternating frames.
 
 ### Step 5: Accumulated impulse clamping
 Change the solver from per-iteration impulse clamping to accumulated impulse clamping.
