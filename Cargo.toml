@@ -17,6 +17,7 @@ noise = "0.9"        # Procedural noise for terrain generation
 smallvec = "1.13"    # Small inline vectors for contact points
 fontdue = "0.9"      # Font rasterization for debug text overlay
 rand = "0.8"         # Random number generation for particles
+generational-arena = "0.2"  # Handle-based storage for physics objects
 
 
 [dev-dependencies]

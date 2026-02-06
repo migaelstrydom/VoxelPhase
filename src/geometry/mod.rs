@@ -7,4 +7,7 @@ mod cylinder;
 mod sphere;
 
 pub use cylinder::generate_cylinder;
-pub use sphere::{generate_sphere_indices, generate_sphere_vertices};
+pub use sphere::{
+    generate_magic_sphere_vertices, generate_sphere_indices, generate_sphere_vertices,
+    MagicSphereConfig,
+};

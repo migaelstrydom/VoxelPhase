@@ -3,8 +3,8 @@ use specs::{World, WorldExt};
 use crate::biped::BipedController;
 use crate::camera::{CameraConfig, FollowTarget};
 use crate::components::{
-    Acceleration, CameraComponent, Collider, Gravity, ModelInstance, MotionState, PhysicsBody,
-    Position, Renderable, Rotation, Velocity,
+    Acceleration, CameraComponent, Collider, Gravity, ModelInstance, MotionState, Orientation,
+    PhysicsBody, Position, Renderable, RigidBodyComponent, Rotation, Velocity,
 };
 use crate::core::error::EngineResult;
 use crate::debug::{DebugLines, DebugOverlays};
@@ -20,6 +20,7 @@ use crate::rendering::renderer::Renderer;
 use crate::resources::manager::ResourceManager;
 use crate::resources::textures::TextureManager;
 use crate::sensing::{ContactCandidates, SensorSet};
+use crate::systems::PhysicsResource;
 use crate::terrain::TerrainManager;
 use crate::time::Time;
 
@@ -43,6 +44,7 @@ impl WorldBuilder {
         world.register::<Acceleration>();
         world.register::<Gravity>();
         world.register::<Rotation>();
+        world.register::<Orientation>();
         world.register::<ModelInstance>();
         world.register::<Renderable>();
         world.register::<CameraComponent>();
@@ -55,6 +57,7 @@ impl WorldBuilder {
         world.register::<SensorSet>();
         world.register::<ContactCandidates>();
         world.register::<PhysicsBody>();
+        world.register::<RigidBodyComponent>();
         world.register::<Grenade>();
         world.register::<Lifetime>();
         world.register::<Projectile>();
@@ -104,6 +107,7 @@ impl WorldBuilder {
         self.world.insert(GrenadeCooldown::default());
         self.world.insert(ParticleConfig::new());
         self.world.insert(ParticlePool::default());
+        self.world.insert(PhysicsResource::default());
         self
     }
 

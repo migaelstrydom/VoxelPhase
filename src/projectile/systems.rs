@@ -12,13 +12,14 @@ use super::components::{Grenade, Lifetime, Projectile};
 use super::config::GrenadeConfig;
 use crate::camera::FollowTarget;
 use crate::components::{
-    Acceleration, Collider, Gravity, ModelInstance, MotionState, Position, Renderable, Rotation,
-    Velocity,
+    ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
 };
 use crate::explosion::Explosion;
 use crate::input::GameplayActions;
 use crate::model::Model;
+use crate::physics::{ColliderDesc, ColliderShape, RigidBodyDesc};
 use crate::player::Player;
+use crate::systems::PhysicsResource;
 use crate::terrain::TerrainManager;
 use crate::time::Time;
 
@@ -73,6 +74,7 @@ impl<'a> System<'a> for GrenadeSpawnSystem {
         ReadExpect<'a, GameplayActions>,
         ReadExpect<'a, GrenadeConfig>,
         ReadExpect<'a, Time>,
+        Write<'a, PhysicsResource>,
         Write<'a, GrenadeCooldown>,
         Read<'a, GrenadeModelResource>,
         ReadStorage<'a, Player>,
@@ -87,6 +89,7 @@ impl<'a> System<'a> for GrenadeSpawnSystem {
             actions,
             config,
             time,
+            mut physics,
             mut cooldown,
             grenade_model,
             players,
@@ -154,18 +157,35 @@ impl<'a> System<'a> for GrenadeSpawnSystem {
         let spawn_pos = player_pos + spawn_offset;
 
         // Calculate throw velocity: directional throw + additional arc factor
-        let throw_velocity = throw_dir * config.throw_speed + Vector3::new(0.0, config.arc_factor, 0.0);
+        let throw_velocity =
+            throw_dir * config.throw_speed + Vector3::new(0.0, config.arc_factor, 0.0);
 
-        // Spawn the grenade entity
-        let spawn_point = Point3::new(spawn_pos.x, spawn_pos.y, spawn_pos.z);
+        let gravity_mag = physics.0.config().gravity.magnitude();
+        let gravity_scale = if gravity_mag > 1e-6 {
+            config.gravity / gravity_mag
+        } else {
+            1.0
+        };
+
+        let body_handle = {
+            let body_desc = RigidBodyDesc::dynamic()
+                .position(Point3::new(spawn_pos.x, spawn_pos.y, spawn_pos.z))
+                .linear_velocity(throw_velocity)
+                .gravity_scale(gravity_scale);
+
+            let body_handle = physics.0.create_body(body_desc);
+
+            let collider_desc = ColliderDesc::sphere(config.radius);
+            physics.0.attach_collider(body_handle, collider_desc);
+
+            body_handle
+        };
+
         lazy.create_entity(&entities)
             .with(Position(spawn_pos))
             .with(Velocity(throw_velocity))
-            .with(Acceleration(Vector3::zeros()))
-            .with(Rotation(0.0))
-            .with(Gravity(config.gravity))
-            .with(Collider::sphere(config.radius))
-            .with(MotionState::new(spawn_point))
+            .with(Orientation::default())
+            .with(RigidBodyComponent(body_handle))
             .with(Projectile)
             .with(Grenade::new())
             .with(Lifetime::new(config.max_lifetime))
@@ -186,9 +206,10 @@ impl<'a> System<'a> for ProjectileImpactDetectionSystem {
         Entities<'a>,
         Option<Read<'a, TerrainManager>>,
         ReadExpect<'a, Time>,
+        Read<'a, PhysicsResource>,
         ReadStorage<'a, Projectile>,
         ReadStorage<'a, Grenade>,
-        ReadStorage<'a, Collider>,
+        ReadStorage<'a, RigidBodyComponent>,
         WriteStorage<'a, Position>,
         WriteStorage<'a, Velocity>,
         Read<'a, LazyUpdate>,
@@ -199,9 +220,10 @@ impl<'a> System<'a> for ProjectileImpactDetectionSystem {
             entities,
             terrain_opt,
             time,
+            physics,
             projectiles,
             grenades,
-            colliders,
+            bodies,
             mut positions,
             mut velocities,
             lazy,
@@ -217,11 +239,11 @@ impl<'a> System<'a> for ProjectileImpactDetectionSystem {
         // Collect grenades that should explode
         let mut explosions: Vec<(Entity, Point3<f32>)> = Vec::new();
 
-        for (entity, _, grenade, collider, pos, vel) in (
+        for (entity, _, grenade, body, pos, vel) in (
             &entities,
             &projectiles,
             &grenades,
-            &colliders,
+            &bodies,
             &mut positions,
             &mut velocities,
         )
@@ -231,14 +253,25 @@ impl<'a> System<'a> for ProjectileImpactDetectionSystem {
                 continue;
             }
 
-            let radius = collider.shape.radius;
+            let Some(rb) = physics.0.body(body.0) else {
+                continue;
+            };
+            let Some(collider_handle) = rb.colliders().first() else {
+                continue;
+            };
+            let Some(collider) = physics.0.collider(*collider_handle) else {
+                continue;
+            };
+            let radius = match collider.shape() {
+                ColliderShape::Sphere { radius } => radius,
+            };
 
             // Calculate next position
             let current = Point3::from(pos.0);
             let next = Point3::from(pos.0 + vel.0 * dt);
 
             // Swept sphere collision detection
-            if let Some(contact) = terrain.query_swept_sphere(current, next, radius) {
+            if let Some(contact) = terrain.query_swept_sphere(current, next, *radius) {
                 // Hit terrain - explode at contact point
                 let explosion_pos = current + (next - current) * contact.t;
                 explosions.push((entity, explosion_pos));

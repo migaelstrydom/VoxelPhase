@@ -10,6 +10,7 @@ mod geometry;
 mod input;
 mod model;
 mod particles;
+mod physics;
 mod player;
 mod projectile;
 mod rendering;

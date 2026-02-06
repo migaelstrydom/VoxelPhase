@@ -1,10 +1,11 @@
 use std::sync::Arc;
 
-use nalgebra::{Point3, Vector3};
+use nalgebra::{Point3, UnitQuaternion, Vector3};
 use specs::{Component, DenseVecStorage, VecStorage};
 
 use crate::collision::Sphere;
 use crate::model::Model;
+use crate::physics::RigidBodyHandle;
 use crate::rendering::camera::Camera;
 
 // Physics Components
@@ -88,6 +89,23 @@ impl Default for PhysicsBody {
 
 #[derive(Component, Debug)]
 pub struct Rotation(pub f32); // Radians
+
+/// 3D orientation as a unit quaternion.
+/// Synced from physics for entities with RigidBodyComponent.
+#[derive(Component, Debug, Clone, Copy)]
+#[storage(VecStorage)]
+pub struct Orientation(pub UnitQuaternion<f32>);
+
+impl Default for Orientation {
+    fn default() -> Self {
+        Self(UnitQuaternion::identity())
+    }
+}
+
+/// Links an entity to a rigid body in the physics world.
+#[derive(Component, Debug, Clone, Copy)]
+#[storage(VecStorage)]
+pub struct RigidBodyComponent(pub RigidBodyHandle);
 
 /// A model instance referencing a shared Model definition.
 #[derive(Component)]

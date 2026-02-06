@@ -58,11 +58,11 @@ impl<'a, 'b> App<'a, 'b> {
 
         // Spawn 3 beach balls at different positions
         let beach_ball_positions = vec![
-            nalgebra::Point3::new(-3.0, 10.0, 2.0),
-            nalgebra::Point3::new(0.0, 15.0, -3.0),
-            nalgebra::Point3::new(4.0, 12.0, 1.0),
-            nalgebra::Point3::new(0.0, 10.0, 0.0),
-            nalgebra::Point3::new(-1.0, 10.0, 0.0),
+            nalgebra::Point3::new(-3.0, 0.0, 2.0),
+            // nalgebra::Point3::new(0.0, 5.0, -3.0),
+            // nalgebra::Point3::new(4.0, 2.0, 1.0),
+            // nalgebra::Point3::new(0.0, 10.0, 0.0),
+            // nalgebra::Point3::new(-1.0, 10.0, 0.0),
         ];
 
         for (pos, model) in beach_ball_positions
@@ -169,26 +169,68 @@ impl<'a, 'b> App<'a, 'b> {
     fn create_beach_ball_models(
         grenade_materials: &GrenadeMaterials,
     ) -> Vec<Arc<crate::model::Model>> {
-        use crate::geometry::{generate_sphere_indices, generate_sphere_vertices};
+        use crate::geometry::{
+            generate_magic_sphere_vertices, generate_sphere_indices, MagicSphereConfig,
+        };
         use crate::model::{MeshPrimitive, Model, ModelPart};
 
-        let beach_ball_colors = vec![
-            Colour::new(1.0, 0.2, 0.2, 1.0), // Red
-            Colour::new(0.2, 0.5, 1.0, 1.0), // Blue
-            Colour::new(1.0, 0.9, 0.2, 1.0), // Yellow
-            Colour::new(0.2, 1.0, 0.2, 1.0), // Green
-            Colour::new(0.2, 0.2, 1.0, 1.0), // Purple
+        let magic_configs = vec![
+            // Fiery Phoenix - red/orange swirls with tight spirals
+            MagicSphereConfig {
+                base_hue: 0.02,
+                spiral_frequency: 4.0,
+                spiral_tightness: 2.5,
+                accent_hue_offset: 0.08,
+                color_variation: 0.12,
+                glow_intensity: 1.1,
+            },
+            // Ocean Nebula - deep blue/cyan cosmic swirls
+            MagicSphereConfig {
+                base_hue: 0.55,
+                spiral_frequency: 3.0,
+                spiral_tightness: 1.8,
+                accent_hue_offset: 0.15,
+                color_variation: 0.18,
+                glow_intensity: 1.0,
+            },
+            // Solar Plasma - yellow/gold with energetic patterns
+            MagicSphereConfig {
+                base_hue: 0.12,
+                spiral_frequency: 5.0,
+                spiral_tightness: 3.0,
+                accent_hue_offset: 0.05,
+                color_variation: 0.1,
+                glow_intensity: 1.2,
+            },
+            // Emerald Vortex - green/teal magical swirls
+            MagicSphereConfig {
+                base_hue: 0.35,
+                spiral_frequency: 3.5,
+                spiral_tightness: 2.2,
+                accent_hue_offset: 0.12,
+                color_variation: 0.15,
+                glow_intensity: 1.0,
+            },
+            // Void Crystal - purple/magenta cosmic energy
+            MagicSphereConfig {
+                base_hue: 0.75,
+                spiral_frequency: 4.5,
+                spiral_tightness: 2.8,
+                accent_hue_offset: 0.2,
+                color_variation: 0.2,
+                glow_intensity: 1.15,
+            },
         ];
 
-        beach_ball_colors
+        magic_configs
             .into_iter()
-            .map(|color| {
+            .map(|config| {
                 let radius = 0.5;
-                let segments = 20;
-                let rings = 16;
+                let segments = 32;
+                let rings = 24;
 
                 let parts = vec![ModelPart::new(vec![MeshPrimitive {
-                    vertices: generate_sphere_vertices(radius, segments, rings, color),
+                    vertices: generate_magic_sphere_vertices(radius, segments, rings, &config),
                     indices: generate_sphere_indices(segments, rings),
                     material: grenade_materials.body,
                 }])];

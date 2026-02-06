@@ -1,5 +1,5 @@
 use crate::biped::BipedController;
-use crate::components::{CameraComponent, ModelInstance, Position, Renderable, Rotation};
+use crate::components::{CameraComponent, ModelInstance, Orientation, Position, Renderable, Rotation};
 use crate::debug::{DebugLines, DebugOverlays};
 use crate::geometry::{generate_cylinder, generate_sphere_indices, generate_sphere_vertices};
 use crate::model::Transform;
@@ -9,12 +9,13 @@ use crate::rendering::renderer::Renderer;
 use crate::resources::textures::TextureManager;
 use crate::terrain::TerrainManager;
 use nalgebra::{Matrix4, Vector3};
-use specs::{Join, Read, ReadExpect, ReadStorage, System, Write, WriteExpect, WriteStorage};
+use specs::{Entities, Join, Read, ReadExpect, ReadStorage, System, Write, WriteExpect, WriteStorage};
 
 pub struct RenderSystem;
 
 impl<'a> System<'a> for RenderSystem {
     type SystemData = (
+        Entities<'a>,
         WriteExpect<'a, Renderer>,
         ReadExpect<'a, TextureManager>,
         ReadExpect<'a, MaterialManager>,
@@ -26,6 +27,7 @@ impl<'a> System<'a> for RenderSystem {
         ReadStorage<'a, ModelInstance>,
         ReadStorage<'a, Position>,
         ReadStorage<'a, Rotation>,
+        ReadStorage<'a, Orientation>,
         ReadStorage<'a, Renderable>,
         ReadStorage<'a, CameraComponent>,
         WriteStorage<'a, BipedController>,
@@ -33,6 +35,7 @@ impl<'a> System<'a> for RenderSystem {
 
     fn run(&mut self, data: Self::SystemData) {
         let (
+            entities,
             mut renderer,
             texture_manager,
             material_manager,
@@ -44,6 +47,7 @@ impl<'a> System<'a> for RenderSystem {
             model_instances,
             positions,
             rotations,
+            orientations,
             renderables,
             camera_components,
             mut biped_controllers,
@@ -95,12 +99,20 @@ impl<'a> System<'a> for RenderSystem {
                     }
                 }
 
-                // Draw all model instances (grenades, etc.)
-                for (model_instance, pos, rot, _renderable) in
-                    (&model_instances, &positions, &rotations, &renderables).join()
+                // Draw all model instances (grenades, beach balls, etc.)
+                for (entity, model_instance, pos, _renderable) in
+                    (&entities, &model_instances, &positions, &renderables).join()
                 {
-                    let world_matrix = Matrix4::new_translation(&pos.0)
-                        * Matrix4::from_axis_angle(&Vector3::y_axis(), rot.0);
+                    // Prefer 3D orientation (quaternion) if available, fall back to Y-axis rotation
+                    let rotation_matrix = if let Some(orient) = orientations.get(entity) {
+                        orient.0.to_homogeneous()
+                    } else if let Some(rot) = rotations.get(entity) {
+                        Matrix4::from_axis_angle(&Vector3::y_axis(), rot.0)
+                    } else {
+                        Matrix4::identity()
+                    };
+
+                    let world_matrix = Matrix4::new_translation(&pos.0) * rotation_matrix;
 
                     // No animation, use identity transforms
                     let part_transforms: Vec<Transform> =

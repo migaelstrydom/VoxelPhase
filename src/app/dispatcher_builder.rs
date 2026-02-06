@@ -7,10 +7,9 @@ use crate::particles::{ParticleSpawnSystem, ParticleUpdateSystem};
 use crate::projectile::{GrenadeSpawnSystem, LifetimeSystem, ProjectileImpactDetectionSystem};
 use crate::sensing::SensorProbeSystem;
 use crate::systems::{
-    BipedCollisionSystem, CameraControlSystem, DynamicDynamicCollisionSystem,
-    DynamicTerrainCollisionSystem, GravitySystem, MotionPredictionSystem,
-    PenetrationResolutionSystem, PlayerInputSystem, PlayerMotionSystem, RenderSystem,
-    TerrainCollisionSystem, TerrainUpdateSystem, VelocityIntegrationSystem,
+    BipedCollisionSystem, CameraControlSystem, GravitySystem, MotionPredictionSystem,
+    PhysicsSyncSystem, PlayerInputSystem, PlayerMotionSystem, RenderSystem, TerrainUpdateSystem,
+    VelocityIntegrationSystem,
 };
 
 /// Builds the system dispatcher with proper dependency ordering.
@@ -20,6 +19,7 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
         .with(InputActionSystem, "input_actions", &[])
         .with(PlayerInputSystem, "player_input", &["input_actions"])
         .with(PlayerMotionSystem, "player_motion", &["player_input"])
+        // Player physics (biped uses old system for now)
         .with(GravitySystem, "gravity", &["player_motion"])
         .with(
             VelocityIntegrationSystem,
@@ -33,33 +33,16 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
         )
         .with(
             BipedCollisionSystem,
-            "spring_biped_collision",
+            "biped_collision",
             &["motion_prediction"],
         )
-        .with(
-            DynamicTerrainCollisionSystem,
-            "dynamic_terrain_collision",
-            &["motion_prediction"],
-        )
-        .with(
-            DynamicDynamicCollisionSystem,
-            "dynamic_dynamic_collision",
-            &["dynamic_terrain_collision"],
-        )
-        .with(
-            TerrainCollisionSystem,
-            "terrain_collision",
-            &["spring_biped_collision", "dynamic_dynamic_collision"],
-        )
-        .with(
-            PenetrationResolutionSystem,
-            "penetration_resolution",
-            &["terrain_collision"],
-        )
+        // Physics engine for dynamic bodies (beach balls, etc.)
+        .with(PhysicsSyncSystem, "physics_sync", &["motion_prediction"])
+        // Animation and sensing
         .with(
             BipedAnimationSystem,
             "biped_animation",
-            &["penetration_resolution"],
+            &["biped_collision"],
         )
         .with(
             BipedProbeConfigSystem,
@@ -70,8 +53,9 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
         .with(
             CameraControlSystem,
             "camera_control",
-            &["penetration_resolution"],
+            &["biped_collision", "physics_sync"],
         )
+        // Projectiles and explosions
         .with(GrenadeSpawnSystem, "grenade_spawn", &["camera_control"])
         .with(LifetimeSystem, "lifetime", &["grenade_spawn"])
         .with(
@@ -85,8 +69,10 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
             &["projectile_impact_detection"],
         )
         .with(TerrainUpdateSystem, "terrain_update", &["explosion"])
+        // Particles
         .with(ParticleSpawnSystem, "particle_spawn", &["explosion"])
         .with(ParticleUpdateSystem, "particle_update", &["particle_spawn"])
+        // Rendering (thread-local)
         .with_thread_local(RenderSystem)
         .build()
 }

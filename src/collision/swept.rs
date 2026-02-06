@@ -6,7 +6,7 @@
 
 use nalgebra::{Point3, Vector3};
 
-use super::sphere_triangle::Triangle;
+use super::sphere_triangle::{sphere_triangle_collision, Triangle};
 
 /// Result of a swept collision test.
 #[derive(Debug, Clone)]
@@ -40,6 +40,11 @@ pub fn swept_sphere_triangle(
 ) -> Option<SweptContact> {
     let velocity = end - start;
     let speed_sq = velocity.magnitude_squared();
+
+    if let Some(contact) = sphere_triangle_collision(start, radius, triangle) {
+        let point = start - contact.normal * radius;
+        return Some(SweptContact::new(0.0, point, contact.normal));
+    }
 
     // If not moving, fall back to point check
     if speed_sq < 1e-10 {

@@ -4,12 +4,14 @@ use specs::{Builder, Entity, World, WorldExt};
 use crate::biped::{BipedConfig, BipedController};
 use crate::camera::{CameraConfig, FollowTarget};
 use crate::components::{
-    Acceleration, CameraComponent, Collider, Gravity, ModelInstance, MotionState, PhysicsBody,
-    Position, Renderable, Rotation, Velocity,
+    Acceleration, CameraComponent, Collider, Gravity, ModelInstance, MotionState, Orientation,
+    PhysicsBody, Position, Renderable, RigidBodyComponent, Rotation, Velocity,
 };
+use crate::physics::{ColliderDesc, RigidBodyDesc};
 use crate::player::{Player, PlayerConfig, PlayerTargetState};
 use crate::rendering::camera::Camera;
 use crate::sensing::{ContactCandidates, SensorSet};
+use crate::systems::PhysicsResource;
 
 /// Spawns the player entity with all required components
 pub fn spawn_player(world: &mut World, initial_pos: nalgebra::Point3<f32>) -> Entity {
@@ -78,12 +80,37 @@ pub fn spawn_camera(
         .build()
 }
 
-/// Spawns a beach ball entity with bouncy physics
+/// Spawns a beach ball entity with bouncy physics using the new physics engine.
 pub fn spawn_beach_ball(
     world: &mut World,
     initial_pos: nalgebra::Point3<f32>,
     model: std::sync::Arc<crate::model::Model>,
 ) -> Entity {
+    let radius = 0.5;
+
+    // Create rigid body in physics world
+    let body_handle = {
+        let mut physics = world.write_resource::<PhysicsResource>();
+
+        let body_desc = RigidBodyDesc::dynamic()
+            .position(initial_pos)
+            .gravity_scale(1.0)
+            .angular_damping(0.02);
+
+        let body_handle = physics.0.create_body(body_desc);
+
+        // Attach sphere collider with bouncy material
+        // Density ~100 kg/m³ gives mass ~52kg for a 0.5m radius sphere (light beach ball)
+        let collider_desc = ColliderDesc::sphere(radius)
+            .density(100.0)
+            .restitution(0.5)
+            .friction(0.3);
+
+        physics.0.attach_collider(body_handle, collider_desc);
+
+        body_handle
+    };
+
     world
         .create_entity()
         .with(Position(Vector3::new(
@@ -92,16 +119,8 @@ pub fn spawn_beach_ball(
             initial_pos.z,
         )))
         .with(Velocity(Vector3::zeros()))
-        .with(Acceleration(Vector3::zeros()))
-        .with(Gravity(20.0))
-        .with(Rotation(0.0))
-        .with(Collider::sphere(0.5))
-        .with(MotionState::new(initial_pos))
-        .with(PhysicsBody {
-            restitution: 0.8,
-            friction: 0.25,
-            mass: 0.5,
-        })
+        .with(Orientation::default())
+        .with(RigidBodyComponent(body_handle))
         .with(ModelInstance::new(model))
         .with(Renderable)
         .build()

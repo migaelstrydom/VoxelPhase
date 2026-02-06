@@ -78,6 +78,7 @@ impl<'a> System<'a> for DynamicDynamicCollisionSystem {
             for j in (i + 1)..n {
                 let d1 = &dynamics[i];
                 let d2 = &dynamics[j];
+                _debug_lines.add("Collision", "true");
 
                 if let Some(collision) = check_sphere_sphere_collision(d1, d2) {
                     apply_collision_response(

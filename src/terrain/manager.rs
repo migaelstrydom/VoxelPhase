@@ -12,6 +12,7 @@ use crate::collision::{
     sphere_triangle_collision, swept_sphere_triangle, ContactPoint, SweptContact, AABB,
 };
 use crate::core::error::EngineResult;
+use crate::physics::{StaticContact, StaticGeometry, SweptStaticContact};
 use crate::rendering::vertex::Vertex;
 use crate::resources::textures::{TextureHandle, TextureManager};
 
@@ -383,6 +384,29 @@ impl TerrainManager {
             position + Vector3::new(padding, padding, padding),
         );
         self.dirty_regions.push(affected);
+    }
+}
+
+impl StaticGeometry for TerrainManager {
+    fn query_sphere(&self, center: Point3<f32>, radius: f32) -> Vec<StaticContact> {
+        self.query_sphere_collision(center, radius)
+            .into_iter()
+            .map(|cp| {
+                // Compute contact point from center, normal, and depth
+                let point = center - cp.normal * (radius - cp.depth);
+                StaticContact::new(point, cp.normal, cp.depth)
+            })
+            .collect()
+    }
+
+    fn sweep_sphere(
+        &self,
+        start: Point3<f32>,
+        end: Point3<f32>,
+        radius: f32,
+    ) -> Option<SweptStaticContact> {
+        self.query_swept_sphere(start, end, radius)
+            .map(|sc| SweptStaticContact::new(sc.t, sc.point, sc.normal))
     }
 }
 

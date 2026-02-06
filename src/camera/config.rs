@@ -46,7 +46,7 @@ impl Default for CameraConfig {
             height_sensitivity: 0.003,
             zoom_speed: 5.0,
             height_gradient: 0.3,
-            min_pitch: 0.1,                               // ~6 degrees above horizon
+            min_pitch: -2.0,                              // ~6 degrees above horizon
             max_pitch: std::f32::consts::FRAC_PI_2 - 0.5, // ~60 degrees
         }
     }
