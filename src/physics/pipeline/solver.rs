@@ -29,15 +29,23 @@ pub struct ContactConstraint {
 ///
 /// This is a simple single-iteration solver. Phase 3 will add multiple iterations
 /// and warm starting for stable stacking.
-pub fn solve_contacts(bodies: &mut Arena<RigidBody>, contacts: &[ContactConstraint]) -> Vec<f32> {
+pub fn solve_contacts(
+    bodies: &mut Arena<RigidBody>,
+    contacts: &[ContactConstraint],
+    restitution_velocity_threshold: f32,
+) -> Vec<f32> {
     let mut impulses = Vec::with_capacity(contacts.len());
     for contact in contacts {
-        impulses.push(solve_single_contact(bodies, contact));
+        impulses.push(solve_single_contact(bodies, contact, restitution_velocity_threshold));
     }
     impulses
 }
 
-fn solve_single_contact(bodies: &mut Arena<RigidBody>, contact: &ContactConstraint) -> f32 {
+fn solve_single_contact(
+    bodies: &mut Arena<RigidBody>,
+    contact: &ContactConstraint,
+    restitution_velocity_threshold: f32,
+) -> f32 {
     // Get body B's state
     let (pos_b, vel_b, angular_vel_b, inv_mass_b, inv_inertia_b) = {
         let Some(body_b) = bodies.get(contact.body_b.0) else {
@@ -108,8 +116,12 @@ fn solve_single_contact(bodies: &mut Arena<RigidBody>, contact: &ContactConstrai
         return 0.0;
     }
 
-    // Compute impulse magnitude
-    let restitution = contact.restitution;
+    // Zero out restitution for slow approaches to prevent micro-bouncing at rest
+    let restitution = if vel_along_normal.abs() < restitution_velocity_threshold {
+        0.0
+    } else {
+        contact.restitution
+    };
     let j = -(1.0 + restitution) * vel_along_normal / effective_mass;
 
     // Apply impulse
@@ -162,20 +174,17 @@ fn apply_friction(
     let friction_impulse = tangent_speed.min(max_friction);
     let friction = -tangent_dir * friction_impulse;
 
-    // Apply friction impulse (simplified: only linear, no angular contribution)
     if let Some(handle_a) = contact.body_a {
         if let Some(body_a) = bodies.get_mut(handle_a.0) {
-            if body_a.is_dynamic() && body_a.inv_mass() > 0.0 {
-                let vel = body_a.linear_velocity();
-                body_a.set_linear_velocity(vel - friction * body_a.inv_mass());
+            if body_a.is_dynamic() {
+                body_a.apply_impulse_at_point(-friction, contact.point);
             }
         }
     }
 
     if let Some(body_b) = bodies.get_mut(contact.body_b.0) {
-        if body_b.is_dynamic() && body_b.inv_mass() > 0.0 {
-            let vel = body_b.linear_velocity();
-            body_b.set_linear_velocity(vel + friction * body_b.inv_mass());
+        if body_b.is_dynamic() {
+            body_b.apply_impulse_at_point(friction, contact.point);
         }
     }
 }

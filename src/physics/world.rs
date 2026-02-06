@@ -24,6 +24,9 @@ pub struct PhysicsConfig {
     pub solver_iterations: u32,
     /// Maximum number of CCD loops a body can go through per step.
     pub max_ccd_iterations: u32,
+    /// Minimum approach speed for restitution to apply. Below this threshold,
+    /// restitution is zeroed to prevent micro-bouncing at resting contacts.
+    pub restitution_velocity_threshold: f32,
 }
 
 impl Default for PhysicsConfig {
@@ -32,6 +35,7 @@ impl Default for PhysicsConfig {
             gravity: Vector3::new(0.0, -20.0, 0.0),
             solver_iterations: 1,
             max_ccd_iterations: 3,
+            restitution_velocity_threshold: 1.0,
         }
     }
 }
@@ -279,7 +283,11 @@ impl PhysicsWorld {
 
             let mut accumulated_impulses = vec![0.0; event.contacts.len()];
             for _ in 0..self.config.solver_iterations {
-                let impulses = solve_contacts(&mut self.bodies, &event.contacts);
+                let impulses = solve_contacts(
+                    &mut self.bodies,
+                    &event.contacts,
+                    self.config.restitution_velocity_threshold,
+                );
                 for (accumulated, impulse) in accumulated_impulses.iter_mut().zip(impulses) {
                     *accumulated += impulse;
                 }
