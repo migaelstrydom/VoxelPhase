@@ -1,5 +1,6 @@
 //! Projectile-related ECS systems.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use nalgebra::{Point3, Vector3};
@@ -17,10 +18,9 @@ use crate::components::{
 use crate::explosion::Explosion;
 use crate::input::GameplayActions;
 use crate::model::Model;
-use crate::physics::{ColliderDesc, ColliderShape, RigidBodyDesc};
+use crate::physics::{ColliderDesc, ContactEvent, ContactSource, RigidBodyDesc, RigidBodyHandle};
 use crate::player::Player;
 use crate::systems::PhysicsResource;
-use crate::terrain::TerrainManager;
 use crate::time::Time;
 
 /// System that updates entity lifetimes and removes expired entities.
@@ -204,48 +204,43 @@ pub struct ProjectileImpactDetectionSystem;
 impl<'a> System<'a> for ProjectileImpactDetectionSystem {
     type SystemData = (
         Entities<'a>,
-        Option<Read<'a, TerrainManager>>,
-        ReadExpect<'a, Time>,
         Read<'a, PhysicsResource>,
         ReadStorage<'a, Projectile>,
         ReadStorage<'a, Grenade>,
         ReadStorage<'a, RigidBodyComponent>,
-        WriteStorage<'a, Position>,
-        WriteStorage<'a, Velocity>,
         Read<'a, LazyUpdate>,
     );
 
     fn run(&mut self, data: Self::SystemData) {
-        let (
-            entities,
-            terrain_opt,
-            time,
-            physics,
-            projectiles,
-            grenades,
-            bodies,
-            mut positions,
-            mut velocities,
-            lazy,
-        ) = data;
-
-        let terrain = match terrain_opt {
-            Some(ref t) => t,
-            None => return,
-        };
-
-        let dt = time.delta_seconds();
+        let (entities, physics, projectiles, grenades, bodies, lazy) = data;
 
         // Collect grenades that should explode
         let mut explosions: Vec<(Entity, Point3<f32>)> = Vec::new();
+        let mut best_static_contacts: HashMap<RigidBodyHandle, (f32, Point3<f32>)> = HashMap::new();
 
-        for (entity, _, grenade, body, pos, vel) in (
+        for contact in physics.0.contact_events() {
+            if !contact_is_static(contact) {
+                continue;
+            }
+            if contact.normal.magnitude_squared() <= 1e-8 {
+                continue;
+            }
+            if contact.depth <= 0.0 && contact.source != ContactSource::Ccd {
+                continue;
+            }
+            let entry = best_static_contacts
+                .entry(contact.body_b)
+                .or_insert((contact.depth, contact.point));
+            if contact.depth > entry.0 {
+                *entry = (contact.depth, contact.point);
+            }
+        }
+
+        for (entity, _, grenade, body) in (
             &entities,
             &projectiles,
             &grenades,
             &bodies,
-            &mut positions,
-            &mut velocities,
         )
             .join()
         {
@@ -253,28 +248,8 @@ impl<'a> System<'a> for ProjectileImpactDetectionSystem {
                 continue;
             }
 
-            let Some(rb) = physics.0.body(body.0) else {
-                continue;
-            };
-            let Some(collider_handle) = rb.colliders().first() else {
-                continue;
-            };
-            let Some(collider) = physics.0.collider(*collider_handle) else {
-                continue;
-            };
-            let radius = match collider.shape() {
-                ColliderShape::Sphere { radius } => radius,
-            };
-
-            // Calculate next position
-            let current = Point3::from(pos.0);
-            let next = Point3::from(pos.0 + vel.0 * dt);
-
-            // Swept sphere collision detection
-            if let Some(contact) = terrain.query_swept_sphere(current, next, *radius) {
-                // Hit terrain - explode at contact point
-                let explosion_pos = current + (next - current) * contact.t;
-                explosions.push((entity, explosion_pos));
+            if let Some((_, point)) = best_static_contacts.get(&body.0) {
+                explosions.push((entity, point.clone()));
             }
         }
 
@@ -289,4 +264,8 @@ impl<'a> System<'a> for ProjectileImpactDetectionSystem {
             let _ = entities.delete(entity);
         }
     }
+}
+
+fn contact_is_static(contact: &ContactEvent) -> bool {
+    contact.body_a.is_none()
 }

@@ -39,12 +39,13 @@ mod collider;
 mod collision;
 mod handle;
 mod math;
+mod narrowphase;
 mod pipeline;
 mod static_geometry;
 mod world;
 
-pub use body::{BodyType, RigidBody, RigidBodyDesc};
-pub use collider::{Collider, ColliderDesc, ColliderMaterial, ColliderShape};
-pub use handle::{ColliderHandle, RigidBodyHandle};
+pub use body::RigidBodyDesc;
+pub use collider::ColliderDesc;
+pub use handle::RigidBodyHandle;
 pub use static_geometry::{StaticContact, StaticGeometry, SweptStaticContact};
-pub use world::{PhysicsConfig, PhysicsWorld};
+pub use world::{ContactEvent, ContactSource, PhysicsWorld};

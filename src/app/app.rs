@@ -38,7 +38,8 @@ impl<'a, 'b> App<'a, 'b> {
             Self::create_rendering_context(&window, window_width, window_height)?;
         let (material_manager, grenade_materials) = Self::create_materials(&texture_manager)?;
         let grenade_model = Self::create_grenade_model(&grenade_materials);
-        let beach_ball_models = Self::create_beach_ball_models(&grenade_materials);
+        let num_beach_balls = 10;
+        let beach_ball_models = Self::create_beach_ball_models(&grenade_materials, num_beach_balls);
         let terrain_manager = Self::create_terrain(&texture_manager)?;
 
         let mut world = WorldBuilder::new()
@@ -56,14 +57,16 @@ impl<'a, 'b> App<'a, 'b> {
         let player_entity = spawn_player(&mut world, nalgebra::Point3::new(0.0, -10.0, 0.0));
         spawn_camera(&mut world, player_entity, window_width, window_height);
 
-        // Spawn 3 beach balls at different positions
-        let beach_ball_positions = vec![
-            nalgebra::Point3::new(-3.0, 0.0, 2.0),
-            // nalgebra::Point3::new(0.0, 5.0, -3.0),
-            // nalgebra::Point3::new(4.0, 2.0, 1.0),
-            // nalgebra::Point3::new(0.0, 10.0, 0.0),
-            // nalgebra::Point3::new(-1.0, 10.0, 0.0),
-        ];
+        // Spawn N beach balls at random positions
+        let beach_ball_positions: Vec<nalgebra::Point3<f32>> = (0..num_beach_balls)
+            .map(|_| {
+                nalgebra::Point3::new(
+                    rand::random::<f32>() * 10.0 - 5.0,
+                    rand::random::<f32>() * 10.0 - 5.0,
+                    rand::random::<f32>() * 10.0 - 5.0,
+                )
+            })
+            .collect();
 
         for (pos, model) in beach_ball_positions
             .into_iter()
@@ -168,59 +171,23 @@ impl<'a, 'b> App<'a, 'b> {
 
     fn create_beach_ball_models(
         grenade_materials: &GrenadeMaterials,
+        num_beach_balls: usize,
     ) -> Vec<Arc<crate::model::Model>> {
         use crate::geometry::{
             generate_magic_sphere_vertices, generate_sphere_indices, MagicSphereConfig,
         };
         use crate::model::{MeshPrimitive, Model, ModelPart};
 
-        let magic_configs = vec![
-            // Fiery Phoenix - red/orange swirls with tight spirals
-            MagicSphereConfig {
-                base_hue: 0.02,
-                spiral_frequency: 4.0,
-                spiral_tightness: 2.5,
-                accent_hue_offset: 0.08,
-                color_variation: 0.12,
-                glow_intensity: 1.1,
-            },
-            // Ocean Nebula - deep blue/cyan cosmic swirls
-            MagicSphereConfig {
-                base_hue: 0.55,
-                spiral_frequency: 3.0,
-                spiral_tightness: 1.8,
-                accent_hue_offset: 0.15,
-                color_variation: 0.18,
-                glow_intensity: 1.0,
-            },
-            // Solar Plasma - yellow/gold with energetic patterns
-            MagicSphereConfig {
-                base_hue: 0.12,
-                spiral_frequency: 5.0,
-                spiral_tightness: 3.0,
-                accent_hue_offset: 0.05,
-                color_variation: 0.1,
-                glow_intensity: 1.2,
-            },
-            // Emerald Vortex - green/teal magical swirls
-            MagicSphereConfig {
-                base_hue: 0.35,
-                spiral_frequency: 3.5,
-                spiral_tightness: 2.2,
-                accent_hue_offset: 0.12,
-                color_variation: 0.15,
-                glow_intensity: 1.0,
-            },
-            // Void Crystal - purple/magenta cosmic energy
-            MagicSphereConfig {
-                base_hue: 0.75,
-                spiral_frequency: 4.5,
-                spiral_tightness: 2.8,
-                accent_hue_offset: 0.2,
-                color_variation: 0.2,
-                glow_intensity: 1.15,
-            },
-        ];
+        let magic_configs: Vec<MagicSphereConfig> = (0..num_beach_balls)
+            .map(|_| MagicSphereConfig {
+                base_hue: rand::random::<f32>(),
+                spiral_frequency: rand::random::<f32>() * 10.0,
+                spiral_tightness: rand::random::<f32>() * 10.0,
+                accent_hue_offset: rand::random::<f32>(),
+                color_variation: rand::random::<f32>(),
+                glow_intensity: rand::random::<f32>() + 0.5,
+            })
+            .collect();
 
         magic_configs
             .into_iter()

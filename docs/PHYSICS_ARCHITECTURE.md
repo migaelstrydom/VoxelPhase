@@ -552,6 +552,15 @@ collision). The predict/event-loop/re-CCD machinery, manifold cache, static cont
 and warm-start cache in their current form are all removed. The narrowphase is now the
 primary contact source; CCD is the tunneling safety net.
 
+**Implementation notes:**
+- Current implementation uses narrowphase-first contact generation plus a CCD sweep after
+  integration. CCD is skipped for bodies already handled by static narrowphase contacts.
+- Static contacts currently keep a single strongest triangle contact per sphere to avoid
+  conflicting normals (multiple triangle contacts at once cause impulse jitter near edges).
+- Contact margin is applied in narrowphase queries, with solver depth clamped to `>= 0`.
+- No manifold persistence, warm-starting, or accumulated impulse caching yet; those start
+  in Step 4. Expect higher bounce energy and normal jitter until then.
+
 ### Step 4: Contact manifold persistence and warm-starting
 Add `ManifoldCache`. Store contact points in local space, match across frames, cache
 impulses. Implement warm-starting in the solver. This is the single biggest stability
