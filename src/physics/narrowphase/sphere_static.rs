@@ -51,7 +51,8 @@ pub fn generate_sphere_static_contacts(
             }
 
             if let Some((_, sc)) = best_contact {
-                let solver_depth = (sc.depth - contact_margin).max(0.0);
+                let raw_depth = sc.depth - contact_margin;
+                let solver_depth = raw_depth.max(0.0);
                 contacts.push(ContactConstraint {
                     body_a: None,
                     body_b: body_handle,
@@ -60,6 +61,7 @@ pub fn generate_sphere_static_contacts(
                     point: sc.point,
                     normal: sc.normal,
                     depth: solver_depth,
+                    raw_depth,
                     restitution: collider.material().restitution,
                     friction: collider.material().friction,
                     warm_normal_impulse: 0.0,

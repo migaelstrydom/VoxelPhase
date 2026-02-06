@@ -69,6 +69,7 @@ pub fn generate_sphere_sphere_contacts(
                     point: contact.point,
                     normal: contact.normal,
                     depth: solver_depth,
+                    raw_depth: actual_depth,
                     restitution,
                     friction,
                     warm_normal_impulse: 0.0,

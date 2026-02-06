@@ -598,6 +598,27 @@ Change the solver from per-iteration impulse clamping to accumulated impulse cla
 This improves convergence and prevents the solver from overshooting on contacts that
 are solved multiple times per iteration loop.
 
+**Implementation notes:**
+- Use Projected Gauss-Seidel: maintain an accumulated normal impulse per contact and
+  clamp the **accumulated** value to `>= 0`, then apply only the delta each iteration.
+- For friction, accumulate the 2D tangent impulse and clamp it to the friction cone:
+  `|tangent| <= mu * accumulated_normal`.
+- Restitution should be computed from the **pre-warm-start** relative normal velocity
+  so it is applied once per frame, not re-triggered by warm-start impulses.
+- Warm-start impulses are scaled (`warm_start_scale`) and written back as total
+  (warm + iterative) impulses to prevent oscillation.
+- Carry `raw_depth` alongside `depth` so restitution and warm-start gating can use the
+  unclamped penetration (margin contacts otherwise look like zero depth).
+- Gate warm-start reuse by normal alignment (`normal_alignment_threshold`) and a
+  depth slop (`warm_start_depth_slop`) so stale impulses aren’t applied across
+  changing contacts.
+- Suppress warm-start for moving contacts (|vn| above the restitution threshold) to
+  avoid injecting stale impulses into sliding/impacting contacts.
+- Allow restitution within a small depth slop (`restitution_depth_slop`) to preserve
+  bounce for fast impacts that are still inside the contact margin.
+- Tune Baumgarte parameters (`baumgarte_factor`, `baumgarte_slop`) to reduce energy
+  injection while still correcting penetrations.
+
 ### Step 6: Broadphase
 Add AABB computation for colliders. Implement brute-force broadphase (loop over all
 pairs, test AABB overlap). Replace the current all-pairs sphere check in body-body

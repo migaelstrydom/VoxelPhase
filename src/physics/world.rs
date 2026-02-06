@@ -38,6 +38,18 @@ pub struct PhysicsConfig {
     pub contact_match_threshold: f32,
     /// Frames without a narrowphase refresh before a manifold point is pruned.
     pub manifold_max_age: u8,
+    /// Scale factor applied to warm-start impulses (0..=1).
+    pub warm_start_scale: f32,
+    /// Baumgarte position correction factor.
+    pub baumgarte_factor: f32,
+    /// Baumgarte slop for penetration correction.
+    pub baumgarte_slop: f32,
+    /// Normal alignment threshold for warm-start reuse.
+    pub normal_alignment_threshold: f32,
+    /// Allow warm-start when raw depth exceeds this (can be negative).
+    pub warm_start_depth_slop: f32,
+    /// Allow restitution when raw depth exceeds this (can be negative).
+    pub restitution_depth_slop: f32,
 }
 
 impl Default for PhysicsConfig {
@@ -50,6 +62,12 @@ impl Default for PhysicsConfig {
             ccd_threshold: 0.5,
             contact_match_threshold: 0.05,
             manifold_max_age: 3,
+            warm_start_scale: 0.6,
+            baumgarte_factor: 0.05,
+            baumgarte_slop: 0.005,
+            normal_alignment_threshold: 0.95,
+            warm_start_depth_slop: 0.01,
+            restitution_depth_slop: 0.005,
         }
     }
 }
@@ -80,8 +98,12 @@ pub struct PhysicsWorld {
 
 impl PhysicsWorld {
     pub fn new(config: PhysicsConfig) -> Self {
-        let manifold_cache =
-            ManifoldCache::new(config.contact_match_threshold, config.manifold_max_age);
+        let manifold_cache = ManifoldCache::new(
+            config.contact_match_threshold,
+            config.manifold_max_age,
+            config.normal_alignment_threshold,
+            config.warm_start_depth_slop,
+        );
         Self {
             config,
             bodies: Arena::new(),
@@ -203,7 +225,7 @@ impl PhysicsWorld {
         &mut self,
         dt: f32,
         static_geometry: &dyn StaticGeometry,
-        debug_lines: &mut DebugLines,
+        _debug_lines: &mut DebugLines,
     ) {
         self.frame_index = self.frame_index.wrapping_add(1);
 
@@ -257,11 +279,8 @@ impl PhysicsWorld {
         integrate_bodies(&mut self.bodies, dt);
 
         // Phase 8: CCD pass (fast bodies only, excluding narrowphase-managed bodies)
-        let ccd_count = self.ccd_pass(dt, static_geometry, &pre_states, &narrowphase_handled);
+        let _ccd_count = self.ccd_pass(dt, static_geometry, &pre_states, &narrowphase_handled);
 
-        debug_lines.add("Contacts", format!("{}", contacts.len()));
-        debug_lines.add("CCD corrections", format!("{}", ccd_count));
-        debug_lines.add("Num bodies", format!("{}", self.bodies.len()));
     }
 
     /// Contacts generated in the most recent step.
@@ -371,6 +390,7 @@ impl PhysicsWorld {
                 point: hit.point,
                 normal: hit.normal,
                 depth: 0.0,
+                raw_depth: 0.0,
                 restitution: candidate.material.restitution,
                 friction: candidate.material.friction,
                 warm_normal_impulse: 0.0,
@@ -381,6 +401,7 @@ impl PhysicsWorld {
                 &mut self.bodies,
                 &[contact],
                 self.config.restitution_velocity_threshold,
+                self.config.restitution_depth_slop,
             );
 
             corrections += 1;

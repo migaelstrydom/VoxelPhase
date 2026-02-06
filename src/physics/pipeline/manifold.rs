@@ -89,14 +89,23 @@ pub struct ManifoldCache {
     manifolds: HashMap<ManifoldKey, ContactManifold>,
     match_threshold: f32,
     max_age: u8,
+    normal_alignment_threshold: f32,
+    warm_start_depth_slop: f32,
 }
 
 impl ManifoldCache {
-    pub fn new(match_threshold: f32, max_age: u8) -> Self {
+    pub fn new(
+        match_threshold: f32,
+        max_age: u8,
+        normal_alignment_threshold: f32,
+        warm_start_depth_slop: f32,
+    ) -> Self {
         Self {
             manifolds: HashMap::new(),
             match_threshold,
             max_age,
+            normal_alignment_threshold,
+            warm_start_depth_slop,
         }
     }
 
@@ -140,7 +149,16 @@ impl ManifoldCache {
                 Some(idx) => {
                     // Matched: inherit cached impulses, update point
                     let cached = &mut manifold.points[idx];
-                    let warm = (cached.normal_impulse, cached.tangent_impulse);
+                    let normal_alignment = cached.normal.dot(&contact.normal);
+                    let use_warm = normal_alignment >= self.normal_alignment_threshold
+                        && contact.raw_depth > -self.warm_start_depth_slop;
+                    let warm = if use_warm {
+                        (cached.normal_impulse, cached.tangent_impulse)
+                    } else {
+                        cached.normal_impulse = 0.0;
+                        cached.tangent_impulse = [0.0, 0.0];
+                        (0.0, [0.0, 0.0])
+                    };
                     cached.local_point_a = local_a;
                     cached.local_point_b = local_b;
                     cached.normal = contact.normal;
