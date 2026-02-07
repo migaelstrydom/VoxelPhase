@@ -8,7 +8,7 @@ use crate::physics::handle::RigidBodyHandle;
 use crate::physics::pipeline::solver::ContactConstraint;
 use crate::physics::static_geometry::StaticGeometry;
 
-/// Generate contacts between all dynamic sphere colliders and static geometry.
+/// Generate contacts between all non-static sphere colliders and static geometry.
 ///
 /// Queries static geometry at each sphere's current position using an expanded
 /// radius (radius + contact_margin). The margin is subtracted from the returned
@@ -23,7 +23,7 @@ pub fn generate_sphere_static_contacts(
     let mut contacts = Vec::new();
 
     for (idx, body) in bodies.iter() {
-        if !body.is_dynamic() {
+        if body.is_static() {
             continue;
         }
         let body_handle = RigidBodyHandle(idx);

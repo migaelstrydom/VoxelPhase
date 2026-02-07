@@ -22,6 +22,22 @@ pub fn spawn_player(world: &mut World, initial_pos: nalgebra::Point3<f32>) -> En
     let biped_config = BipedConfig::default();
     let body_radius = biped_config.body_radius;
     let biped_controller = BipedController::new(biped_config, initial_pos);
+    let physics_body = PhysicsBody {
+        restitution: 0.1,
+        friction: 0.8,
+        mass: 70.0,
+    };
+
+    let body_handle = {
+        let mut physics = world.write_resource::<PhysicsResource>();
+        let body_desc = RigidBodyDesc::kinematic().position(initial_pos);
+        let body_handle = physics.0.create_body(body_desc);
+        let collider_desc = ColliderDesc::sphere(body_radius)
+            .restitution(physics_body.restitution)
+            .friction(physics_body.friction);
+        physics.0.attach_collider(body_handle, collider_desc);
+        body_handle
+    };
 
     world
         .create_entity()
@@ -37,16 +53,14 @@ pub fn spawn_player(world: &mut World, initial_pos: nalgebra::Point3<f32>) -> En
         .with(Acceleration(Vector3::zeros()))
         .with(Gravity(gravity))
         .with(Rotation(0.0))
+        .with(Orientation::default())
         .with(Renderable)
         .with(MotionState::new(initial_pos))
         .with(SensorSet::default())
         .with(ContactCandidates::default())
-        .with(PhysicsBody {
-            restitution: 0.1,
-            friction: 0.8,
-            mass: 70.0,
-        })
+        .with(physics_body)
         .with(Collider::sphere(body_radius))
+        .with(RigidBodyComponent(body_handle))
         .build()
 }
 

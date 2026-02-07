@@ -648,6 +648,130 @@ Replace brute-force broadphase with an AABB tree for better scaling to large bod
 
 ---
 
+## Kinematic player integration plan
+
+**Goal:** Integrate the player character into `PhysicsWorld` as a kinematic body so it
+collides with other physics objects and terrain. Walking/footing stays animation-driven
+and uses probes only; collision response comes exclusively from the physics engine.
+
+### Design constraints
+- **Player motion is authored by game code.** The physics engine must not overwrite the
+  commanded motion except to resolve penetrations.
+- **Kinematic bodies are infinite mass.** They affect dynamic bodies, but do not receive
+  impulses that change their velocities.
+- **Collision response is authoritative.** Any penetration correction applied by the
+  solver must be fed back to the player transform so the controller does not re-embed.
+
+### Step K1: Narrowphase includes kinematic bodies
+
+**Why:** Kinematic bodies are currently filtered out of all contact generation.
+
+**Changes:**
+- `narrowphase/sphere_sphere.rs`: include bodies where `!is_static()`; emit
+  dynamic–kinematic contacts (and optionally kinematic–kinematic if needed later).
+- `narrowphase/sphere_static.rs`: include kinematic bodies in static queries.
+
+**Result:** Contacts are generated for kinematic bodies against terrain and other bodies.
+
+**Implementation notes:**
+- `generate_sphere_sphere_contacts` now filters `!is_static()` instead of `is_dynamic()`.
+- `generate_sphere_static_contacts` now skips only static bodies.
+- **Missing:** Kinematic–kinematic contacts are not required today; when needed, add an
+  explicit pair filter (or a second pass) to include them deliberately.
+
+### Step K2: Solver treats kinematic as infinite mass
+
+**Why:** The solver currently applies impulses only to dynamic bodies. Kinematics should
+contribute to relative velocity but should not be modified by impulses.
+
+**Changes:**
+- Keep relative-velocity computation unchanged (it already reads velocities from both bodies).
+- Apply impulses only to dynamic bodies.
+- Allow position correction to move kinematic bodies **only if** the controller does not
+  overwrite the corrected transform later in the frame (see K4/K5).
+
+**Result:** Dynamic bodies respond to kinematic collisions; kinematics remain user-driven.
+
+**Implementation notes:**
+- Impulse application remains `dynamic`-only for normal and friction solves.
+- Position correction now allows kinematic bodies to be moved when resolving penetration.
+- Kinematic correction weight can be constrained to static contacts only to avoid
+  kinematic–dynamic pushback.
+
+### Step K3: CCD includes kinematic bodies
+
+**Why:** Kinematic bodies moved by user code can still tunnel if moved quickly.
+
+**Changes:**
+- Include kinematic bodies in the CCD pre-state cache and candidate sweep list.
+- Allow CCD correction for kinematic bodies exactly as for dynamic bodies.
+
+**Result:** High-speed player motion does not tunnel through terrain.
+
+**Implementation notes:**
+- Pre-integration CCD state capture includes all non-static bodies.
+- CCD candidate filtering includes all non-static bodies while still skipping any body
+  already handled by static narrowphase contacts.
+
+### Step K4: Kinematic sync API in PhysicsWorld
+
+**Why:** The physics engine needs authoritative input for kinematic transforms and
+velocities before each `step()`.
+
+**Changes:**
+- Add `set_kinematic_transform(handle, position, rotation)`.
+- Add `set_kinematic_velocity(handle, linear, angular)`.
+- Optionally add `set_kinematic_motion(handle, prev, next)` if MotionState is used to
+  drive CCD more directly.
+
+**Result:** Game code can drive kinematic bodies explicitly each frame.
+
+### Step K5: ECS ↔ Physics synchronization
+
+**Why:** The player entity must write its commanded motion into the physics world, and
+must read back penetration corrections after the solver.
+
+**Changes:**
+- Pre-physics system: read player motion target and call the kinematic sync API.
+- Post-physics system: read corrected body position and write back to the player `Position`
+  (and `MotionState.prev/predicted` if used for animation).
+
+**Result:** The player respects physics corrections without the controller fighting them.
+
+### Step K6: Player body creation
+
+**Why:** The player must have a physics body and collider to participate in contacts.
+
+**Changes:**
+- Spawn a kinematic `RigidBody` for the player with a sphere or capsule collider.
+- Store the `RigidBodyHandle` on the player entity (component or resource).
+- Initialize collider material separately from projectile materials (tune friction).
+
+**Result:** The player exists in the physics world and generates contacts.
+
+### Step K7: Remove BipedCollisionSystem authority
+
+**Why:** The player should be integrated into the physics engine, not a separate terrain
+resolver. Walking/footing remains animation-driven and probe-based.
+
+**Changes:**
+- Remove or disable `BipedCollisionSystem` for the player entity.
+- Preserve probe-based grounding if desired, but do not apply collision resolution there.
+
+**Result:** All collision response is centralized in `PhysicsWorld`.
+
+### Stability notes for kinematic bodies
+- **Penetration correction:** The solver may move kinematics slightly to resolve overlap.
+  This correction must be fed back into the controller’s state to avoid re-penetration.
+- **Commanded motion vs solver:** Use a single source of truth per frame: write motion
+  to physics, solve, then read back. Do not write again after the solve.
+- **No impulse feedback:** Kinematic velocities should not be changed by impulses; only
+  external code should set them.
+- **CCD only helps continuous motion:** Teleports should be resolved by explicit overlap
+  correction or by temporarily disabling penetration resolution for that frame.
+
+---
+
 ## Stability techniques reference
 
 These are the specific techniques that prevent common physics engine bugs. Each is annotated

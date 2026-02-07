@@ -151,14 +151,40 @@ impl PhysicsWorld {
         self.bodies.get(handle.0)
     }
 
-    /// Get a mutable reference to a rigid body.
-    pub fn body_mut(&mut self, handle: RigidBodyHandle) -> Option<&mut RigidBody> {
-        self.bodies.get_mut(handle.0)
+    /// Update a kinematic body's transform (position + rotation).
+    pub fn set_kinematic_transform(
+        &mut self,
+        handle: RigidBodyHandle,
+        position: Point3<f32>,
+        rotation: UnitQuaternion<f32>,
+    ) -> bool {
+        let Some(body) = self.bodies.get_mut(handle.0) else {
+            return false;
+        };
+        if !body.is_kinematic() {
+            return false;
+        }
+        body.set_position(position);
+        body.set_rotation(rotation);
+        true
     }
 
-    /// Iterate over all rigid body handles.
-    pub fn body_handles(&self) -> impl Iterator<Item = RigidBodyHandle> + '_ {
-        self.bodies.iter().map(|(idx, _)| RigidBodyHandle(idx))
+    /// Update a kinematic body's velocities.
+    pub fn set_kinematic_velocity(
+        &mut self,
+        handle: RigidBodyHandle,
+        linear: Vector3<f32>,
+        angular: Vector3<f32>,
+    ) -> bool {
+        let Some(body) = self.bodies.get_mut(handle.0) else {
+            return false;
+        };
+        if !body.is_kinematic() {
+            return false;
+        }
+        body.set_linear_velocity(linear);
+        body.set_angular_velocity(angular);
+        true
     }
 
     // === Collider Management ===
@@ -271,7 +297,7 @@ impl PhysicsWorld {
         let pre_states: HashMap<generational_arena::Index, (Point3<f32>, UnitQuaternion<f32>)> =
             self.bodies
                 .iter()
-                .filter(|(_, body)| body.is_dynamic())
+                .filter(|(_, body)| !body.is_static())
                 .map(|(idx, body)| (idx, (body.position(), body.rotation())))
                 .collect();
 
@@ -280,7 +306,6 @@ impl PhysicsWorld {
 
         // Phase 8: CCD pass (fast bodies only, excluding narrowphase-managed bodies)
         let _ccd_count = self.ccd_pass(dt, static_geometry, &pre_states, &narrowphase_handled);
-
     }
 
     /// Contacts generated in the most recent step.
@@ -333,7 +358,7 @@ impl PhysicsWorld {
         let candidates: Vec<CcdCandidate> = self
             .bodies
             .iter()
-            .filter(|(_, body)| body.is_dynamic())
+            .filter(|(_, body)| !body.is_static())
             .filter_map(|(idx, body)| {
                 let handle = RigidBodyHandle(idx);
                 // The narrowphase already manages bodies with static contacts

@@ -114,7 +114,13 @@ pub fn solve(
                 .unwrap_or(0.0);
             let inv_mass_b = bodies
                 .get(contact.body_b.0)
-                .map(|b| b.inv_mass())
+                .map(|b| {
+                    if is_kinematic_static_contact(b, contact) {
+                        1.0
+                    } else {
+                        b.inv_mass()
+                    }
+                })
                 .unwrap_or(0.0);
             apply_position_correction(
                 bodies,
@@ -131,11 +137,7 @@ pub fn solve(
 }
 
 /// Apply cached impulses from the manifold to give the solver a head start.
-fn warm_start(
-    bodies: &mut Arena<RigidBody>,
-    contacts: &[ContactConstraint],
-    scales: &[f32],
-) {
+fn warm_start(bodies: &mut Arena<RigidBody>, contacts: &[ContactConstraint], scales: &[f32]) {
     for (contact, scale) in contacts.iter().zip(scales.iter()) {
         if *scale <= 0.0 {
             continue;
@@ -257,12 +259,21 @@ fn solve_single_contact_pgs(
         let Some(body_b) = bodies.get(contact.body_b.0) else {
             return;
         };
+        let kinematic_static = is_kinematic_static_contact(body_b, contact);
         (
             body_b.position(),
             body_b.linear_velocity(),
             body_b.angular_velocity(),
-            body_b.inv_mass(),
-            body_b.world_inv_inertia(),
+            if kinematic_static {
+                1.0
+            } else {
+                body_b.inv_mass()
+            },
+            if kinematic_static {
+                nalgebra::Matrix3::zeros()
+            } else {
+                body_b.world_inv_inertia()
+            },
         )
     };
 
@@ -270,7 +281,7 @@ fn solve_single_contact_pgs(
     let (pos_a, vel_a, angular_vel_a, inv_mass_a, inv_inertia_a) = match contact.body_a {
         Some(handle) => {
             let Some(body_a) = bodies.get(handle.0) else {
-            return;
+                return;
             };
             (
                 body_a.position(),
@@ -347,11 +358,7 @@ fn solve_single_contact_pgs(
             }
         }
 
-        if let Some(body_b) = bodies.get_mut(contact.body_b.0) {
-            if body_b.is_dynamic() {
-                body_b.apply_impulse_at_point(impulse, contact.point);
-            }
-        }
+        apply_body_b_impulse(bodies, contact, impulse);
     }
 
     if accumulated.normal <= 0.0 || contact.friction <= 0.0 {
@@ -452,12 +459,27 @@ fn solve_single_contact_pgs(
             }
         }
 
-        if let Some(body_b) = bodies.get_mut(contact.body_b.0) {
-            if body_b.is_dynamic() {
-                body_b.apply_impulse_at_point(friction, contact.point);
-            }
+        apply_body_b_impulse(bodies, contact, friction);
+    }
+}
+
+fn apply_body_b_impulse(
+    bodies: &mut Arena<RigidBody>,
+    contact: &ContactConstraint,
+    impulse: Vector3<f32>,
+) {
+    if let Some(body_b) = bodies.get_mut(contact.body_b.0) {
+        if body_b.is_dynamic() {
+            body_b.apply_impulse_at_point(impulse, contact.point);
+        } else if is_kinematic_static_contact(body_b, contact) {
+            body_b.set_linear_velocity(body_b.linear_velocity() + impulse);
         }
     }
+}
+
+#[inline]
+fn is_kinematic_static_contact(body: &RigidBody, contact: &ContactConstraint) -> bool {
+    body.is_kinematic() && contact.body_a.is_none()
 }
 
 fn apply_position_correction(
@@ -478,7 +500,7 @@ fn apply_position_correction(
 
     if let Some(handle_a) = contact.body_a {
         if let Some(body_a) = bodies.get_mut(handle_a.0) {
-            if body_a.is_dynamic() {
+            if body_a.is_dynamic() || body_a.is_kinematic() {
                 let pos = body_a.position();
                 body_a.set_position(pos - contact.normal * correction * inv_mass_a);
             }
@@ -486,7 +508,7 @@ fn apply_position_correction(
     }
 
     if let Some(body_b) = bodies.get_mut(contact.body_b.0) {
-        if body_b.is_dynamic() {
+        if body_b.is_dynamic() || body_b.is_kinematic() {
             let pos = body_b.position();
             body_b.set_position(pos + contact.normal * correction * inv_mass_b);
         }

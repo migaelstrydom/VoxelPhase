@@ -7,8 +7,8 @@ use crate::particles::{ParticleSpawnSystem, ParticleUpdateSystem};
 use crate::projectile::{GrenadeSpawnSystem, LifetimeSystem, ProjectileImpactDetectionSystem};
 use crate::sensing::SensorProbeSystem;
 use crate::systems::{
-    BipedCollisionSystem, CameraControlSystem, GravitySystem, MotionPredictionSystem,
-    PhysicsSyncSystem, PlayerInputSystem, PlayerMotionSystem, RenderSystem, TerrainUpdateSystem,
+    CameraControlSystem, GravitySystem, MotionPredictionSystem, PhysicsSyncSystem,
+    PlayerInputSystem, PlayerMotionSystem, RenderSystem, TerrainUpdateSystem,
     VelocityIntegrationSystem,
 };
 
@@ -19,7 +19,7 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
         .with(InputActionSystem, "input_actions", &[])
         .with(PlayerInputSystem, "player_input", &["input_actions"])
         .with(PlayerMotionSystem, "player_motion", &["player_input"])
-        // Player physics (biped uses old system for now)
+        // Player motion integration (kinematic body synced into physics)
         .with(GravitySystem, "gravity", &["player_motion"])
         .with(
             VelocityIntegrationSystem,
@@ -31,30 +31,17 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
             "motion_prediction",
             &["velocity_integration"],
         )
-        .with(
-            BipedCollisionSystem,
-            "biped_collision",
-            &["motion_prediction"],
-        )
         // Physics engine for dynamic bodies (beach balls, etc.)
         .with(PhysicsSyncSystem, "physics_sync", &["motion_prediction"])
         // Animation and sensing
-        .with(
-            BipedAnimationSystem,
-            "biped_animation",
-            &["biped_collision"],
-        )
+        .with(BipedAnimationSystem, "biped_animation", &["physics_sync"])
         .with(
             BipedProbeConfigSystem,
             "biped_probe_config",
             &["biped_animation"],
         )
         .with(SensorProbeSystem, "sensor_probe", &["biped_probe_config"])
-        .with(
-            CameraControlSystem,
-            "camera_control",
-            &["biped_collision", "physics_sync"],
-        )
+        .with(CameraControlSystem, "camera_control", &["physics_sync"])
         // Projectiles and explosions
         .with(GrenadeSpawnSystem, "grenade_spawn", &["camera_control"])
         .with(LifetimeSystem, "lifetime", &["grenade_spawn"])

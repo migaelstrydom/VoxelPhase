@@ -8,7 +8,7 @@ use crate::physics::collision::sphere_sphere_collision;
 use crate::physics::handle::RigidBodyHandle;
 use crate::physics::pipeline::solver::{combine_materials, ContactConstraint};
 
-/// Generate contacts between all pairs of dynamic sphere colliders.
+/// Generate contacts between all pairs of non-static sphere colliders.
 ///
 /// Uses brute-force all-pairs testing (broadphase acceleration comes in step 6).
 /// Spheres are tested with an expanded radius (radius + contact_margin) so that
@@ -23,7 +23,7 @@ pub fn generate_sphere_sphere_contacts(
 
     let spheres: Vec<_> = bodies
         .iter()
-        .filter(|(_, body)| body.is_dynamic())
+        .filter(|(_, body)| !body.is_static())
         .filter_map(|(idx, body)| {
             let collider_handle = *body.colliders().first()?;
             let collider = colliders.get(collider_handle.0)?;
