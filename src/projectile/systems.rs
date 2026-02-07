@@ -153,7 +153,7 @@ impl<'a> System<'a> for GrenadeSpawnSystem {
 
         // Spawn position: slightly in front of and above the player
         let horizontal_dir = Vector3::new(look_angle.sin(), 0.0, look_angle.cos());
-        let spawn_offset = horizontal_dir * 0.8 + Vector3::new(0.0, 0.5, 0.0);
+        let spawn_offset = horizontal_dir * 0.1 + Vector3::new(0.0, 0.5, 0.0);
         let spawn_pos = player_pos + spawn_offset;
 
         // Calculate throw velocity: directional throw + additional arc factor
@@ -204,7 +204,7 @@ pub struct ProjectileImpactDetectionSystem;
 impl<'a> System<'a> for ProjectileImpactDetectionSystem {
     type SystemData = (
         Entities<'a>,
-        Read<'a, PhysicsResource>,
+        Write<'a, PhysicsResource>,
         ReadStorage<'a, Projectile>,
         ReadStorage<'a, Grenade>,
         ReadStorage<'a, RigidBodyComponent>,
@@ -212,7 +212,7 @@ impl<'a> System<'a> for ProjectileImpactDetectionSystem {
     );
 
     fn run(&mut self, data: Self::SystemData) {
-        let (entities, physics, projectiles, grenades, bodies, lazy) = data;
+        let (entities, mut physics, projectiles, grenades, bodies, lazy) = data;
 
         // Collect grenades that should explode
         let mut explosions: Vec<(Entity, Point3<f32>)> = Vec::new();
@@ -236,14 +236,7 @@ impl<'a> System<'a> for ProjectileImpactDetectionSystem {
             }
         }
 
-        for (entity, _, grenade, body) in (
-            &entities,
-            &projectiles,
-            &grenades,
-            &bodies,
-        )
-            .join()
-        {
+        for (entity, _, grenade, body) in (&entities, &projectiles, &grenades, &bodies).join() {
             if !grenade.armed {
                 continue;
             }
@@ -259,6 +252,10 @@ impl<'a> System<'a> for ProjectileImpactDetectionSystem {
             lazy.create_entity(&entities)
                 .with(Explosion::new(pos))
                 .build();
+
+            if let Some(body) = bodies.get(entity) {
+                let _ = physics.0.remove_body(body.0);
+            }
 
             // Delete the grenade
             let _ = entities.delete(entity);

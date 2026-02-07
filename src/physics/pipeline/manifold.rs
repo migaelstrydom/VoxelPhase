@@ -6,7 +6,7 @@
 //! solver. This is the single biggest stability improvement for resting and
 //! stacking contacts.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use generational_arena::Arena;
 use nalgebra::{Point3, UnitQuaternion, Vector3};
@@ -124,6 +124,7 @@ impl ManifoldCache {
         }
 
         let mut result = Vec::with_capacity(raw_contacts.len());
+        let mut grouped: HashMap<ManifoldKey, Vec<&ContactConstraint>> = HashMap::new();
 
         for contact in raw_contacts {
             let Some(col_b) = contact.collider_b else {
@@ -131,86 +132,108 @@ impl ManifoldCache {
                 result.push(contact.clone());
                 continue;
             };
-
             let key = ManifoldKey::new(contact.collider_a, col_b);
+            grouped.entry(key).or_default().push(contact);
+        }
 
-            // Transform contact point to local space
-            let (local_a, local_b) = to_local_space(contact, bodies);
-
+        for (key, contacts) in grouped {
             let manifold = self
                 .manifolds
                 .entry(key)
                 .or_insert_with(ContactManifold::new);
 
-            // Find closest existing point in the manifold
-            let match_idx = find_closest_point(manifold, &local_b, self.match_threshold);
-
-            let (warm_normal, warm_tangent) = match match_idx {
-                Some(idx) => {
-                    // Matched: inherit cached impulses, update point
-                    let cached = &mut manifold.points[idx];
-                    let normal_alignment = cached.normal.dot(&contact.normal);
-                    let use_warm = normal_alignment >= self.normal_alignment_threshold
-                        && contact.raw_depth > -self.warm_start_depth_slop;
-                    let warm = if use_warm {
-                        (cached.normal_impulse, cached.tangent_impulse)
-                    } else {
-                        cached.normal_impulse = 0.0;
-                        cached.tangent_impulse = [0.0, 0.0];
-                        (0.0, [0.0, 0.0])
-                    };
-                    cached.local_point_a = local_a;
-                    cached.local_point_b = local_b;
-                    cached.normal = contact.normal;
-                    cached.depth = contact.depth;
-                    cached.age = 0;
-                    warm
-                }
-                None => {
-                    // New point: insert (or replace shallowest if full)
-                    let new_point = ManifoldPoint {
-                        local_point_a: local_a,
-                        local_point_b: local_b,
-                        normal: contact.normal,
-                        depth: contact.depth,
-                        normal_impulse: 0.0,
-                        tangent_impulse: [0.0, 0.0],
-                        age: 0,
-                    };
-
-                    if manifold.points.len() < 4 {
-                        manifold.points.push(new_point);
-                    } else {
-                        // Replace the shallowest (least important) point
-                        if let Some(replace_idx) = manifold
-                            .points
-                            .iter()
-                            .enumerate()
-                            .min_by(|(_, a), (_, b)| {
-                                a.depth
-                                    .partial_cmp(&b.depth)
-                                    .unwrap_or(std::cmp::Ordering::Equal)
-                            })
-                            .map(|(i, _)| i)
-                        {
-                            manifold.points[replace_idx] = new_point;
-                        }
-                    }
-                    (0.0, [0.0, 0.0])
-                }
+            let contacts = if contacts.len() > 4 {
+                reduce_contacts_with_manifold(
+                    contacts,
+                    manifold,
+                    bodies,
+                    4,
+                    self.match_threshold,
+                )
+            } else {
+                contacts
             };
 
-            let mut warm_contact = contact.clone();
-            warm_contact.warm_normal_impulse = warm_normal;
-            warm_contact.warm_tangent_impulse = warm_tangent;
-            result.push(warm_contact);
+            let mut matched_indices: HashSet<usize> = HashSet::new();
+
+            for contact in contacts {
+                // Transform contact point to local space
+                let (local_a, local_b) = to_local_space(contact, bodies);
+
+                // Find closest existing point in the manifold, excluding already matched
+                let match_idx = find_closest_point_excluding(
+                    manifold,
+                    &local_b,
+                    self.match_threshold,
+                    &matched_indices,
+                );
+
+                let (warm_normal, warm_tangent) = match match_idx {
+                    Some(idx) => {
+                        matched_indices.insert(idx);
+                        // Matched: inherit cached impulses, update point
+                        let cached = &mut manifold.points[idx];
+                        let normal_alignment = cached.normal.dot(&contact.normal);
+                        let use_warm = normal_alignment >= self.normal_alignment_threshold
+                            && contact.raw_depth > -self.warm_start_depth_slop;
+                        let warm = if use_warm {
+                            (cached.normal_impulse, cached.tangent_impulse)
+                        } else {
+                            cached.normal_impulse = 0.0;
+                            cached.tangent_impulse = [0.0, 0.0];
+                            (0.0, [0.0, 0.0])
+                        };
+                        cached.local_point_a = local_a;
+                        cached.local_point_b = local_b;
+                        cached.normal = contact.normal;
+                        cached.depth = contact.depth;
+                        cached.age = 0;
+                        warm
+                    }
+                    None => {
+                        // New point: insert (or replace shallowest if full)
+                        let new_point = ManifoldPoint {
+                            local_point_a: local_a,
+                            local_point_b: local_b,
+                            normal: contact.normal,
+                            depth: contact.depth,
+                            normal_impulse: 0.0,
+                            tangent_impulse: [0.0, 0.0],
+                            age: 0,
+                        };
+
+                        if manifold.points.len() < 4 {
+                            manifold.points.push(new_point);
+                            matched_indices.insert(manifold.points.len() - 1);
+                        } else if let Some(replace_idx) =
+                            find_shallowest_unmatched(manifold, &matched_indices)
+                        {
+                            manifold.points[replace_idx] = new_point;
+                            matched_indices.insert(replace_idx);
+                        }
+                        (0.0, [0.0, 0.0])
+                    }
+                };
+
+                let mut warm_contact = contact.clone();
+                warm_contact.warm_normal_impulse = warm_normal;
+                warm_contact.warm_tangent_impulse = warm_tangent;
+                result.push(warm_contact);
+            }
         }
 
         result
     }
 
     /// Write solved impulses back into the manifold cache for next frame's warm-start.
-    pub fn write_back(&mut self, constraints: &[ContactConstraint], solved: &[SolvedImpulses]) {
+    pub fn write_back(
+        &mut self,
+        constraints: &[ContactConstraint],
+        solved: &[SolvedImpulses],
+        bodies: &Arena<RigidBody>,
+    ) {
+        let mut used_indices: HashMap<ManifoldKey, HashSet<usize>> = HashMap::new();
+
         for (contact, impulse) in constraints.iter().zip(solved.iter()) {
             let Some(col_b) = contact.collider_b else {
                 continue;
@@ -221,10 +244,14 @@ impl ManifoldCache {
                 continue;
             };
 
-            // Find the fresh point (age == 0) that corresponds to this contact.
-            // Since we process one raw contact per manifold key per frame, the
-            // most recently updated point is the right one.
-            if let Some(point) = manifold.points.iter_mut().find(|p| p.age == 0) {
+            let (_, local_b) = to_local_space(contact, bodies);
+            let used = used_indices.entry(key).or_default();
+            let match_idx =
+                find_closest_point_excluding(manifold, &local_b, self.match_threshold, used);
+
+            if let Some(idx) = match_idx {
+                used.insert(idx);
+                let point = &mut manifold.points[idx];
                 point.normal_impulse = impulse.normal;
                 point.tangent_impulse = impulse.tangent;
             }
@@ -280,17 +307,20 @@ fn world_to_local(
     Point3::from(body_rot.inverse() * (point - body_pos))
 }
 
-/// Find the closest existing manifold point to a new contact (in body-B local space).
-fn find_closest_point(
+fn find_closest_point_excluding(
     manifold: &ContactManifold,
     local_b: &Point3<f32>,
     threshold: f32,
+    exclude: &HashSet<usize>,
 ) -> Option<usize> {
     let threshold_sq = threshold * threshold;
     let mut best_idx = None;
     let mut best_dist_sq = threshold_sq;
 
     for (i, point) in manifold.points.iter().enumerate() {
+        if exclude.contains(&i) {
+            continue;
+        }
         let dist_sq = (point.local_point_b - local_b).magnitude_squared();
         if dist_sq < best_dist_sq {
             best_dist_sq = dist_sq;
@@ -299,4 +329,106 @@ fn find_closest_point(
     }
 
     best_idx
+}
+
+fn find_shallowest_unmatched(
+    manifold: &ContactManifold,
+    exclude: &HashSet<usize>,
+) -> Option<usize> {
+    manifold
+        .points
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| !exclude.contains(i))
+        .min_by(|(_, a), (_, b)| {
+            a.depth
+                .partial_cmp(&b.depth)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map(|(i, _)| i)
+}
+
+fn reduce_contacts_with_manifold<'a>(
+    contacts: Vec<&'a ContactConstraint>,
+    manifold: &ContactManifold,
+    bodies: &Arena<RigidBody>,
+    max_points: usize,
+    match_threshold: f32,
+) -> Vec<&'a ContactConstraint> {
+    if contacts.len() <= max_points {
+        return contacts;
+    }
+
+    let locals: Vec<Point3<f32>> = contacts
+        .iter()
+        .map(|contact| to_local_space(contact, bodies).1)
+        .collect();
+    let mut selected: Vec<usize> = Vec::new();
+
+    let threshold_sq = match_threshold * match_threshold;
+    for point in &manifold.points {
+        let mut best_idx = None;
+        let mut best_dist_sq = threshold_sq;
+        for (idx, local_b) in locals.iter().enumerate() {
+            if selected.contains(&idx) {
+                continue;
+            }
+            let dist_sq = (point.local_point_b - *local_b).magnitude_squared();
+            if dist_sq < best_dist_sq {
+                best_dist_sq = dist_sq;
+                best_idx = Some(idx);
+            }
+        }
+        if let Some(idx) = best_idx {
+            selected.push(idx);
+            if selected.len() >= max_points {
+                break;
+            }
+        }
+    }
+
+    if selected.is_empty() {
+        if let Some((idx, _)) = contacts
+            .iter()
+            .enumerate()
+            .max_by(|(_, a), (_, b)| {
+                a.depth
+                    .partial_cmp(&b.depth)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+        {
+            selected.push(idx);
+        }
+    }
+
+    while selected.len() < max_points && selected.len() < contacts.len() {
+        let mut best_idx = None;
+        let mut best_score = -1.0f32;
+
+        for (idx, contact) in contacts.iter().enumerate() {
+            if selected.contains(&idx) {
+                continue;
+            }
+            let mut min_dist_sq = f32::INFINITY;
+            for &s_idx in &selected {
+                let delta: Vector3<f32> = contact.point - contacts[s_idx].point;
+                let dist_sq = delta.magnitude_squared();
+                if dist_sq < min_dist_sq {
+                    min_dist_sq = dist_sq;
+                }
+            }
+            if min_dist_sq > best_score {
+                best_score = min_dist_sq;
+                best_idx = Some(idx);
+            }
+        }
+
+        if let Some(idx) = best_idx {
+            selected.push(idx);
+        } else {
+            break;
+        }
+    }
+
+    selected.into_iter().map(|idx| contacts[idx]).collect()
 }

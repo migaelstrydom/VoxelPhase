@@ -11,8 +11,9 @@ use std::collections::HashSet;
 
 use crate::biped::BipedController;
 use crate::components::{Orientation, Position, RigidBodyComponent, Velocity};
-use crate::debug::DebugLines;
-use crate::physics::{PhysicsWorld, RigidBodyHandle};
+use crate::debug::{DebugLines, DebugOverlays};
+use crate::physics::{ContactSource, PhysicsWorld, RigidBodyHandle};
+use crate::rendering::Colour;
 use crate::terrain::TerrainManager;
 use crate::time::Time;
 
@@ -86,6 +87,28 @@ impl PhysicsSyncSystem {
             controller.state.is_grounded = grounded_handles.contains(&body.0);
         }
     }
+
+    fn add_contact_overlays(physics: &PhysicsWorld, overlays: &mut DebugOverlays) {
+        if !physics.config().debug_draw_contacts {
+            return;
+        }
+        let normal_scale = 0.3;
+
+        for contact in physics.contact_events() {
+            let colour = match contact.source {
+                ContactSource::Narrowphase => Colour::RED,
+                ContactSource::Ccd => Colour::BLUE,
+            };
+            overlays.add_sphere(contact.point, 0.06, colour);
+            if contact.normal.magnitude_squared() > 1e-8 {
+                overlays.add_line(
+                    contact.point,
+                    contact.point + contact.normal * normal_scale,
+                    colour,
+                );
+            }
+        }
+    }
 }
 
 impl<'a> System<'a> for PhysicsSyncSystem {
@@ -99,6 +122,7 @@ impl<'a> System<'a> for PhysicsSyncSystem {
         ReadStorage<'a, RigidBodyComponent>,
         WriteStorage<'a, BipedController>,
         Write<'a, DebugLines>,
+        Write<'a, DebugOverlays>,
     );
 
     fn run(
@@ -113,6 +137,7 @@ impl<'a> System<'a> for PhysicsSyncSystem {
             bodies,
             mut controllers,
             mut debug_lines,
+            mut debug_overlays,
         ): Self::SystemData,
     ) {
         let dt = time.delta_seconds();
@@ -130,6 +155,8 @@ impl<'a> System<'a> for PhysicsSyncSystem {
         if let Some(ref terrain) = terrain_opt {
             physics.0.step(dt, &**terrain, &mut debug_lines);
         }
+
+        Self::add_contact_overlays(&physics.0, &mut debug_overlays);
 
         let grounded_handles = Self::collect_grounded_handles(&physics.0);
 

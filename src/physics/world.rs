@@ -50,6 +50,8 @@ pub struct PhysicsConfig {
     pub warm_start_depth_slop: f32,
     /// Allow restitution when raw depth exceeds this (can be negative).
     pub restitution_depth_slop: f32,
+    /// Draw contact points and normals as debug overlays.
+    pub debug_draw_contacts: bool,
 }
 
 impl Default for PhysicsConfig {
@@ -68,6 +70,7 @@ impl Default for PhysicsConfig {
             normal_alignment_threshold: 0.95,
             warm_start_depth_slop: 0.01,
             restitution_depth_slop: 0.005,
+            debug_draw_contacts: true,
         }
     }
 }
@@ -282,7 +285,8 @@ impl PhysicsWorld {
         let solved = solve(&mut self.bodies, &contacts, &self.config);
 
         // Phase 6: Write solved impulses back to manifold cache
-        self.manifold_cache.write_back(&contacts, &solved);
+        self.manifold_cache
+            .write_back(&contacts, &solved, &self.bodies);
         self.manifold_cache.prune();
 
         // Bodies with static narrowphase contacts are managed by the solver.
