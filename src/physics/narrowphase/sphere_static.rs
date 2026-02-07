@@ -20,6 +20,11 @@ pub fn generate_sphere_static_contacts(
     colliders: &Arena<Collider>,
     static_geometry: &dyn StaticGeometry,
     contact_margin: f32,
+    dt: f32,
+    ccd_threshold: f32,
+    enable_speculative_contacts: bool,
+    speculative_min_speed: f32,
+    speculative_margin_multiplier: f32,
 ) -> Vec<ContactConstraint> {
     let mut contacts = Vec::new();
 
@@ -39,6 +44,8 @@ pub fn generate_sphere_static_contacts(
 
             let center = collider.world_center(body.position(), body.rotation());
             let query_radius = radius + contact_margin;
+            let linear_velocity = body.linear_velocity();
+            let travel = linear_velocity.magnitude() * dt;
 
             let mut sphere_contacts = Vec::new();
             for sc in static_geometry.query_sphere(center, query_radius) {
@@ -60,6 +67,36 @@ pub fn generate_sphere_static_contacts(
                 });
             }
 
+            if sphere_contacts.is_empty()
+                && is_speculative_candidate(
+                    travel,
+                    radius,
+                    ccd_threshold,
+                    contact_margin,
+                    enable_speculative_contacts,
+                    speculative_min_speed,
+                    speculative_margin_multiplier,
+                )
+            {
+                let end = center + linear_velocity * dt;
+                if let Some(hit) = static_geometry.sweep_sphere(center, end, query_radius) {
+                    sphere_contacts.push(ContactConstraint {
+                        body_a: None,
+                        body_b: body_handle,
+                        collider_a: None,
+                        collider_b: Some(*collider_handle),
+                        point: hit.point,
+                        normal: hit.normal,
+                        depth: 0.0,
+                        raw_depth: -contact_margin,
+                        restitution: collider.material().restitution,
+                        friction: collider.material().friction,
+                        warm_normal_impulse: 0.0,
+                        warm_tangent_impulse: [0.0, 0.0],
+                    });
+                }
+            }
+
             if sphere_contacts.len() > 4 {
                 sphere_contacts = reduce_contacts(sphere_contacts, 4);
             }
@@ -70,25 +107,37 @@ pub fn generate_sphere_static_contacts(
     contacts
 }
 
-fn reduce_contacts(
-    contacts: Vec<ContactConstraint>,
-    max_points: usize,
-) -> Vec<ContactConstraint> {
+fn is_speculative_candidate(
+    travel: f32,
+    radius: f32,
+    ccd_threshold: f32,
+    contact_margin: f32,
+    enable_speculative_contacts: bool,
+    speculative_min_speed: f32,
+    speculative_margin_multiplier: f32,
+) -> bool {
+    if !enable_speculative_contacts {
+        return false;
+    }
+    if travel < speculative_min_speed {
+        return false;
+    }
+    let margin_gate = contact_margin * speculative_margin_multiplier;
+    travel > margin_gate && travel <= radius * ccd_threshold
+}
+
+fn reduce_contacts(contacts: Vec<ContactConstraint>, max_points: usize) -> Vec<ContactConstraint> {
     if contacts.len() <= max_points {
         return contacts;
     }
 
     let mut selected: Vec<usize> = Vec::new();
 
-    if let Some((idx, _)) = contacts
-        .iter()
-        .enumerate()
-        .max_by(|(_, a), (_, b)| {
-            a.depth
-                .partial_cmp(&b.depth)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
-    {
+    if let Some((idx, _)) = contacts.iter().enumerate().max_by(|(_, a), (_, b)| {
+        a.depth
+            .partial_cmp(&b.depth)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    }) {
         selected.push(idx);
     }
 
@@ -121,7 +170,10 @@ fn reduce_contacts(
         }
     }
 
-    selected.into_iter().map(|idx| contacts[idx].clone()).collect()
+    selected
+        .into_iter()
+        .map(|idx| contacts[idx].clone())
+        .collect()
 }
 
 #[cfg(test)]

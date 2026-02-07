@@ -630,6 +630,20 @@ velocity vector, allow narrowphase to emit velocity-only contacts with `depth <=
 solve them normally. This closes the CCD activation gap without forcing full CCD on
 moderate-speed bodies.
 
+**Implementation notes:**
+- Add config toggles to gate speculative contacts:
+  `enable_speculative_contacts`, `speculative_min_speed`,
+  `speculative_margin_multiplier`.
+- Only emit speculative contacts when there are **no overlap contacts** for the pair
+  that frame (avoid redundant work on resting contacts).
+- Gate by travel distance per step: `travel = |v| * dt` with
+  `travel > contact_margin * speculative_margin_multiplier` and
+  `travel <= radius * ccd_threshold`.
+- For sphere-static, sweep the margin-inflated sphere from current to predicted center;
+  emit a velocity-only contact with `depth = 0` and `raw_depth < 0`.
+- For sphere-sphere, use swept sphere-sphere with margin-inflated radii and build a
+  contact at the time of impact.
+
 ### Step 8: CCD mini-solve
 When a CCD sweep hits, build CCD constraints and run a small solver pass (2–4 iterations)
 for the impacted bodies or island. This reduces artifacts from multiple hits in a single

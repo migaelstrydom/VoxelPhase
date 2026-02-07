@@ -1,3 +1,3 @@
 mod sphere_sphere;
 
-pub use sphere_sphere::sphere_sphere_collision;
+pub use sphere_sphere::{sphere_sphere_collision, swept_sphere_sphere};

@@ -52,6 +52,12 @@ pub struct PhysicsConfig {
     pub restitution_depth_slop: f32,
     /// Draw contact points and normals as debug overlays.
     pub debug_draw_contacts: bool,
+    /// Enable speculative contacts to close the CCD activation gap.
+    pub enable_speculative_contacts: bool,
+    /// Minimum linear speed required for speculative contact generation.
+    pub speculative_min_speed: f32,
+    /// Multiplier for contact_margin when gating speculative contacts.
+    pub speculative_margin_multiplier: f32,
 }
 
 impl Default for PhysicsConfig {
@@ -71,6 +77,9 @@ impl Default for PhysicsConfig {
             warm_start_depth_slop: 0.01,
             restitution_depth_slop: 0.005,
             debug_draw_contacts: true,
+            enable_speculative_contacts: true,
+            speculative_min_speed: 1.0,
+            speculative_margin_multiplier: 2.0,
         }
     }
 }
@@ -267,11 +276,21 @@ impl PhysicsWorld {
             &self.colliders,
             static_geometry,
             self.config.contact_margin,
+            dt,
+            self.config.ccd_threshold,
+            self.config.enable_speculative_contacts,
+            self.config.speculative_min_speed,
+            self.config.speculative_margin_multiplier,
         );
         raw_contacts.extend(generate_sphere_sphere_contacts(
             &self.bodies,
             &self.colliders,
             self.config.contact_margin,
+            dt,
+            self.config.ccd_threshold,
+            self.config.enable_speculative_contacts,
+            self.config.speculative_min_speed,
+            self.config.speculative_margin_multiplier,
         ));
 
         // Phase 4: Merge with manifold cache (populates warm-start impulses)

@@ -1,10 +1,11 @@
 //! Narrowphase contact generation for sphere-sphere collider pairs.
 
 use generational_arena::Arena;
+use nalgebra::Vector3;
 
 use crate::physics::body::RigidBody;
 use crate::physics::collider::{Collider, ColliderShape};
-use crate::physics::collision::sphere_sphere_collision;
+use crate::physics::collision::{sphere_sphere_collision, swept_sphere_sphere};
 use crate::physics::handle::RigidBodyHandle;
 use crate::physics::pipeline::solver::{combine_materials, ContactConstraint};
 
@@ -18,6 +19,11 @@ pub fn generate_sphere_sphere_contacts(
     bodies: &Arena<RigidBody>,
     colliders: &Arena<Collider>,
     contact_margin: f32,
+    dt: f32,
+    ccd_threshold: f32,
+    enable_speculative_contacts: bool,
+    speculative_min_speed: f32,
+    speculative_margin_multiplier: f32,
 ) -> Vec<ContactConstraint> {
     let mut contacts = Vec::new();
 
@@ -36,6 +42,7 @@ pub fn generate_sphere_sphere_contacts(
                 collider_handle,
                 center,
                 radius,
+                body.linear_velocity(),
                 *collider.material(),
             ))
         })
@@ -43,8 +50,8 @@ pub fn generate_sphere_sphere_contacts(
 
     for i in 0..spheres.len() {
         for j in (i + 1)..spheres.len() {
-            let (handle_a, col_a, center_a, radius_a, mat_a) = &spheres[i];
-            let (handle_b, col_b, center_b, radius_b, mat_b) = &spheres[j];
+            let (handle_a, col_a, center_a, radius_a, vel_a, mat_a) = &spheres[i];
+            let (handle_b, col_b, center_b, radius_b, vel_b, mat_b) = &spheres[j];
 
             // Test with margin-expanded radii for early detection
             let test = sphere_sphere_collision(
@@ -56,8 +63,7 @@ pub fn generate_sphere_sphere_contacts(
 
             if let Some(contact) = test {
                 // Use actual (non-inflated) depth for the constraint
-                let actual_depth =
-                    (radius_a + radius_b) - (*center_b - *center_a).magnitude();
+                let actual_depth = (radius_a + radius_b) - (*center_b - *center_a).magnitude();
                 let solver_depth = actual_depth.max(0.0);
 
                 let (restitution, friction) = combine_materials(mat_a, mat_b);
@@ -75,9 +81,82 @@ pub fn generate_sphere_sphere_contacts(
                     warm_normal_impulse: 0.0,
                     warm_tangent_impulse: [0.0, 0.0],
                 });
+            } else if should_add_speculative_contact(
+                vel_a.magnitude() * dt,
+                *radius_a,
+                vel_b.magnitude() * dt,
+                *radius_b,
+                ccd_threshold,
+                contact_margin,
+                enable_speculative_contacts,
+                speculative_min_speed,
+                speculative_margin_multiplier,
+            ) {
+                let end_a = *center_a + *vel_a * dt;
+                let end_b = *center_b + *vel_b * dt;
+                if let Some(t) = swept_sphere_sphere(
+                    *center_a,
+                    end_a,
+                    radius_a + contact_margin,
+                    *center_b,
+                    end_b,
+                    radius_b + contact_margin,
+                ) {
+                    let pos_a = *center_a + (end_a - *center_a) * t;
+                    let pos_b = *center_b + (end_b - *center_b) * t;
+                    let delta = pos_b - pos_a;
+                    let dist = delta.magnitude();
+                    let normal = if dist < 1e-6 {
+                        Vector3::y()
+                    } else {
+                        delta / dist
+                    };
+                    let actual_depth = (radius_a + radius_b) - dist;
+                    let solver_depth = actual_depth.max(0.0);
+                    let point = pos_a + normal * (radius_a - actual_depth * 0.5);
+                    let (restitution, friction) = combine_materials(mat_a, mat_b);
+                    contacts.push(ContactConstraint {
+                        body_a: Some(*handle_a),
+                        body_b: *handle_b,
+                        collider_a: Some(*col_a),
+                        collider_b: Some(*col_b),
+                        point,
+                        normal,
+                        depth: solver_depth,
+                        raw_depth: actual_depth,
+                        restitution,
+                        friction,
+                        warm_normal_impulse: 0.0,
+                        warm_tangent_impulse: [0.0, 0.0],
+                    });
+                }
             }
         }
     }
 
     contacts
+}
+
+fn should_add_speculative_contact(
+    travel_a: f32,
+    radius_a: f32,
+    travel_b: f32,
+    radius_b: f32,
+    ccd_threshold: f32,
+    contact_margin: f32,
+    enable_speculative_contacts: bool,
+    speculative_min_speed: f32,
+    speculative_margin_multiplier: f32,
+) -> bool {
+    if !enable_speculative_contacts {
+        return false;
+    }
+    let margin_gate = contact_margin * speculative_margin_multiplier;
+    let fast_a = travel_a >= speculative_min_speed
+        && travel_a > margin_gate
+        && travel_a <= radius_a * ccd_threshold;
+    let fast_b = travel_b >= speculative_min_speed
+        && travel_b > margin_gate
+        && travel_b <= radius_b * ccd_threshold;
+    fast_a || fast_b
 }
