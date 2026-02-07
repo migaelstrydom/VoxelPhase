@@ -32,7 +32,7 @@ impl Explosion {
             center,
             crater_radius: 2.5,
             blast_radius: 5.0,
-            force: 25.0,
+            force: 10.0,
             processed: false,
         }
     }

@@ -1,5 +1,7 @@
 //! Narrowphase contact generation for sphere colliders vs static geometry.
 
+use std::collections::HashSet;
+
 use generational_arena::Arena;
 use nalgebra::Vector3;
 
@@ -25,6 +27,7 @@ pub fn generate_sphere_static_contacts(
     enable_speculative_contacts: bool,
     speculative_min_speed: f32,
     speculative_margin_multiplier: f32,
+    sleeping: Option<&HashSet<RigidBodyHandle>>,
 ) -> Vec<ContactConstraint> {
     let mut contacts = Vec::new();
 
@@ -33,6 +36,11 @@ pub fn generate_sphere_static_contacts(
             continue;
         }
         let body_handle = RigidBodyHandle(idx);
+        if let Some(sleeping) = sleeping {
+            if sleeping.contains(&body_handle) {
+                continue;
+            }
+        }
 
         for collider_handle in body.colliders() {
             let Some(collider) = colliders.get(collider_handle.0) else {

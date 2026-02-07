@@ -114,11 +114,11 @@ pub fn spawn_beach_ball(
         let body_handle = physics.0.create_body(body_desc);
 
         // Attach sphere collider with bouncy material
-        // Density ~100 kg/m³ gives mass ~52kg for a 0.5m radius sphere (light beach ball)
+        // Density ~1 kg/m³ gives mass ~0.52kg for a 0.5m radius sphere.
         let collider_desc = ColliderDesc::sphere(radius)
-            .density(100.0)
+            .density(1.0)
             .restitution(0.5)
-            .friction(0.3);
+            .friction(0.5);
 
         physics.0.attach_collider(body_handle, collider_desc);
 

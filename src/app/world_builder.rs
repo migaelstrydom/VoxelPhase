@@ -15,6 +15,7 @@ use crate::player::{Player, PlayerConfig, PlayerTargetState};
 use crate::projectile::{
     Grenade, GrenadeConfig, GrenadeCooldown, GrenadeModelResource, Lifetime, Projectile,
 };
+use crate::physics::PhysicsImpulseQueue;
 use crate::rendering::material::MaterialManager;
 use crate::rendering::renderer::Renderer;
 use crate::resources::manager::ResourceManager;
@@ -108,6 +109,7 @@ impl WorldBuilder {
         self.world.insert(ParticleConfig::new());
         self.world.insert(ParticlePool::default());
         self.world.insert(PhysicsResource::default());
+        self.world.insert(PhysicsImpulseQueue::default());
         self
     }
 

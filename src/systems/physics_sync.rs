@@ -12,7 +12,7 @@ use std::collections::HashSet;
 use crate::biped::BipedController;
 use crate::components::{Orientation, Position, RigidBodyComponent, Velocity};
 use crate::debug::{DebugLines, DebugOverlays};
-use crate::physics::{ContactSource, PhysicsWorld, RigidBodyHandle};
+use crate::physics::{ContactSource, PhysicsImpulseQueue, PhysicsWorld, RigidBodyHandle};
 use crate::rendering::Colour;
 use crate::terrain::TerrainManager;
 use crate::time::Time;
@@ -109,6 +109,20 @@ impl PhysicsSyncSystem {
             }
         }
     }
+
+    fn add_sleep_overlays(physics: &PhysicsWorld, overlays: &mut DebugOverlays) {
+        if !physics.config().debug_draw_sleeping {
+            return;
+        }
+        let colour = Colour::new(0.6, 0.65, 1.0, 1.0);
+        for handle in physics.sleeping_bodies() {
+            if let Some(body) = physics.body(handle) {
+                let pos = body.position();
+                let marker_pos = Point3::new(pos.x, pos.y + 0.6, pos.z);
+                overlays.add_sphere(marker_pos, 0.08, colour);
+            }
+        }
+    }
 }
 
 impl<'a> System<'a> for PhysicsSyncSystem {
@@ -123,6 +137,7 @@ impl<'a> System<'a> for PhysicsSyncSystem {
         WriteStorage<'a, BipedController>,
         Write<'a, DebugLines>,
         Write<'a, DebugOverlays>,
+        Write<'a, PhysicsImpulseQueue>,
     );
 
     fn run(
@@ -138,6 +153,7 @@ impl<'a> System<'a> for PhysicsSyncSystem {
             mut controllers,
             mut debug_lines,
             mut debug_overlays,
+            mut impulse_queue,
         ): Self::SystemData,
     ) {
         let dt = time.delta_seconds();
@@ -151,12 +167,22 @@ impl<'a> System<'a> for PhysicsSyncSystem {
             &bodies,
         );
 
+        for impulse in impulse_queue.drain() {
+            physics.0.apply_radial_impulse(
+                impulse.center,
+                impulse.radius,
+                impulse.strength,
+                impulse.upward_boost,
+            );
+        }
+
         // Step physics with terrain as static geometry
         if let Some(ref terrain) = terrain_opt {
             physics.0.step(dt, &**terrain, &mut debug_lines);
         }
 
         Self::add_contact_overlays(&physics.0, &mut debug_overlays);
+        Self::add_sleep_overlays(&physics.0, &mut debug_overlays);
 
         let grounded_handles = Self::collect_grounded_handles(&physics.0);
 

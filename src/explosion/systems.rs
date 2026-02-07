@@ -6,6 +6,7 @@ use specs::{Builder, Entities, Join, Read, ReadStorage, System, Write, WriteStor
 use super::components::Explosion;
 use crate::components::{Position, Velocity};
 use crate::particles::ParticleEmitter;
+use crate::physics::{PhysicsImpulse, PhysicsImpulseQueue};
 use crate::terrain::{TerrainManager, Voxel};
 
 /// System that processes explosion events.
@@ -24,11 +25,19 @@ impl<'a> System<'a> for ExplosionSystem {
         ReadStorage<'a, Position>,
         WriteStorage<'a, Velocity>,
         Read<'a, specs::LazyUpdate>,
+        Write<'a, PhysicsImpulseQueue>,
     );
 
     fn run(&mut self, data: Self::SystemData) {
-        let (entities, mut terrain_manager_opt, mut explosions, positions, mut velocities, lazy) =
-            data;
+        let (
+            entities,
+            mut terrain_manager_opt,
+            mut explosions,
+            positions,
+            mut velocities,
+            lazy,
+            mut impulse_queue,
+        ) = data;
 
         // Collect explosion data first to avoid borrow issues
         let explosion_data: Vec<_> = (&entities, &explosions)
@@ -80,6 +89,11 @@ impl<'a> System<'a> for ExplosionSystem {
 
                 vel.0 += knockback + upward_boost;
             }
+        }
+
+        // Queue physics impulses for rigid bodies (applied by physics system)
+        for &(_, center, _, blast_radius, force) in &explosion_data {
+            impulse_queue.push(PhysicsImpulse::new(center, blast_radius, force, 0.5));
         }
 
         // Spawn particle emitters at explosion locations

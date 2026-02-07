@@ -1,5 +1,7 @@
 //! Narrowphase contact generation for sphere-sphere collider pairs.
 
+use std::collections::HashSet;
+
 use generational_arena::Arena;
 use nalgebra::Vector3;
 
@@ -24,6 +26,7 @@ pub fn generate_sphere_sphere_contacts(
     enable_speculative_contacts: bool,
     speculative_min_speed: f32,
     speculative_margin_multiplier: f32,
+    sleeping: Option<&HashSet<RigidBodyHandle>>,
 ) -> Vec<ContactConstraint> {
     let mut contacts = Vec::new();
 
@@ -37,6 +40,9 @@ pub fn generate_sphere_sphere_contacts(
                 ColliderShape::Sphere { radius } => *radius,
             };
             let center = collider.world_center(body.position(), body.rotation());
+            let is_sleeping = sleeping
+                .map(|sleeping| sleeping.contains(&RigidBodyHandle(idx)))
+                .unwrap_or(false);
             Some((
                 RigidBodyHandle(idx),
                 collider_handle,
@@ -44,14 +50,19 @@ pub fn generate_sphere_sphere_contacts(
                 radius,
                 body.linear_velocity(),
                 *collider.material(),
+                is_sleeping,
             ))
         })
         .collect();
 
     for i in 0..spheres.len() {
         for j in (i + 1)..spheres.len() {
-            let (handle_a, col_a, center_a, radius_a, vel_a, mat_a) = &spheres[i];
-            let (handle_b, col_b, center_b, radius_b, vel_b, mat_b) = &spheres[j];
+            let (handle_a, col_a, center_a, radius_a, vel_a, mat_a, sleep_a) = &spheres[i];
+            let (handle_b, col_b, center_b, radius_b, vel_b, mat_b, sleep_b) = &spheres[j];
+
+            if *sleep_a && *sleep_b {
+                continue;
+            }
 
             // Test with margin-expanded radii for early detection
             let test = sphere_sphere_collision(

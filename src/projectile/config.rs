@@ -26,13 +26,13 @@ pub struct GrenadeConfig {
 impl Default for GrenadeConfig {
     fn default() -> Self {
         Self {
-            throw_speed: 30.0,
-            arc_factor: 2.0,
+            throw_speed: 20.0,
+            arc_factor: 0.0,
             radius: 0.15,
             gravity: 20.0,
             max_lifetime: 10.0,
             cooldown: 0.01,
-            upward_offset: 0.3,
+            upward_offset: 0.1,
             pitch_influence: 0.5,
         }
     }

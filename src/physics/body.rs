@@ -173,16 +173,25 @@ impl RigidBody {
         self.rotation
     }
 
-    pub fn isometry(&self) -> Isometry3<f32> {
-        Isometry3::from_parts(self.position.coords.into(), self.rotation)
-    }
-
     pub fn linear_velocity(&self) -> Vector3<f32> {
         self.linear_velocity
     }
 
     pub fn angular_velocity(&self) -> Vector3<f32> {
         self.angular_velocity
+    }
+
+    pub fn kinetic_energy(&self) -> f32 {
+        if self.inv_mass == 0.0 {
+            return 0.0;
+        }
+        let linear = 0.5 * self.mass * self.linear_velocity.magnitude_squared();
+        let world_inertia = transform_inertia_tensor(&self.local_inertia, &self.rotation);
+        let angular = 0.5
+            * self
+                .angular_velocity
+                .dot(&(world_inertia * self.angular_velocity));
+        linear + angular
     }
 
     pub fn mass(&self) -> f32 {

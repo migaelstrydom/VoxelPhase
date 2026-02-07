@@ -405,6 +405,16 @@ expanded AABB.
 **Purpose:** Bodies at rest should stop being simulated. This eliminates resting jitter
 and improves performance.
 
+```mermaid
+flowchart TD
+  physicsWorld[PhysicsWorld] --> sleepManager[SleepManager]
+  sleepManager --> energyTracker[EnergyTracker]
+  sleepManager --> islandBuilder[IslandBuilder]
+  sleepManager --> wakeEvents[WakeEvents]
+  contacts[ContactConstraints] --> sleepManager
+  external[ExternalForces] --> wakeEvents
+```
+
 ### Energy-based sleep criterion
 
 A body is a sleep candidate when its kinetic energy stays below a threshold for N consecutive
@@ -656,6 +666,15 @@ Keep it disabled by default; enable once base stability is proven.
 ### Step 10: Sleeping
 Add energy tracking, island building, and sleep/wake logic. Sleeping bodies skip
 integration and solving. This eliminates residual micro-jitter and improves performance.
+
+**Implementation notes:**
+- Track per-body kinetic energy and require `sleep_delay_frames` below
+  `sleep_threshold` before marking as a sleep candidate.
+- Build islands from active contacts; an island sleeps only if all bodies are candidates.
+- Wake rules: external impulse/force or kinematic move, and contact with an awake body.
+- When a body wakes, wake the entire island to avoid half-awake constraints.
+- Sleeping bodies skip integration, narrowphase pair generation, solver, and CCD.
+- Keep manifold cache entries for sleeping bodies so warm-starting works on wake.
 
 ### Step 11: BVH broadphase (optional)
 Replace brute-force broadphase with an AABB tree for better scaling to large body counts.

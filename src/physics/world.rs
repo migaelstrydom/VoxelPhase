@@ -11,6 +11,7 @@ use super::narrowphase::{generate_sphere_sphere_contacts, generate_sphere_static
 use super::pipeline::integration::{integrate_bodies, integrate_forces};
 use super::pipeline::manifold::ManifoldCache;
 use super::pipeline::solver::{solve, solve_contacts, ContactConstraint};
+use super::sleep::SleepManager;
 use super::static_geometry::StaticGeometry;
 use crate::debug::DebugLines;
 
@@ -52,12 +53,20 @@ pub struct PhysicsConfig {
     pub restitution_depth_slop: f32,
     /// Draw contact points and normals as debug overlays.
     pub debug_draw_contacts: bool,
+    /// Draw sleep state markers over sleeping bodies.
+    pub debug_draw_sleeping: bool,
     /// Enable speculative contacts to close the CCD activation gap.
     pub enable_speculative_contacts: bool,
     /// Minimum linear speed required for speculative contact generation.
     pub speculative_min_speed: f32,
     /// Multiplier for contact_margin when gating speculative contacts.
     pub speculative_margin_multiplier: f32,
+    /// Enable sleeping for dynamic bodies.
+    pub enable_sleeping: bool,
+    /// Kinetic energy threshold below which a body is a sleep candidate.
+    pub sleep_threshold: f32,
+    /// Frames a body must remain below the threshold before sleeping.
+    pub sleep_delay_frames: u32,
 }
 
 impl Default for PhysicsConfig {
@@ -77,9 +86,13 @@ impl Default for PhysicsConfig {
             warm_start_depth_slop: 0.01,
             restitution_depth_slop: 0.005,
             debug_draw_contacts: true,
+            debug_draw_sleeping: true,
             enable_speculative_contacts: true,
             speculative_min_speed: 1.0,
             speculative_margin_multiplier: 2.0,
+            enable_sleeping: true,
+            sleep_threshold: 0.01,
+            sleep_delay_frames: 30,
         }
     }
 }
@@ -106,6 +119,7 @@ pub struct PhysicsWorld {
     manifold_cache: ManifoldCache,
     last_contacts: Vec<ContactEvent>,
     frame_index: u64,
+    sleep_manager: SleepManager,
 }
 
 impl PhysicsWorld {
@@ -116,6 +130,9 @@ impl PhysicsWorld {
             config.normal_alignment_threshold,
             config.warm_start_depth_slop,
         );
+        let mut sleep_manager =
+            SleepManager::new(config.sleep_threshold, config.sleep_delay_frames);
+        sleep_manager.set_enabled(config.enable_sleeping);
         Self {
             config,
             bodies: Arena::new(),
@@ -123,6 +140,7 @@ impl PhysicsWorld {
             manifold_cache,
             last_contacts: Vec::new(),
             frame_index: 0,
+            sleep_manager,
         }
     }
 
@@ -131,9 +149,42 @@ impl PhysicsWorld {
         &self.config
     }
 
-    /// Set gravity.
-    pub fn set_gravity(&mut self, gravity: Vector3<f32>) {
-        self.config.gravity = gravity;
+    pub fn sleeping_bodies(&self) -> Vec<RigidBodyHandle> {
+        if !self.config.enable_sleeping {
+            return Vec::new();
+        }
+        self.sleep_manager.sleeping_snapshot().into_iter().collect()
+    }
+
+    pub fn apply_radial_impulse(
+        &mut self,
+        center: Point3<f32>,
+        radius: f32,
+        strength: f32,
+        upward_boost: f32,
+    ) {
+        if radius <= 0.0 || strength.abs() < 1e-6 {
+            return;
+        }
+        for (idx, body) in self.bodies.iter_mut() {
+            if !body.is_dynamic() {
+                continue;
+            }
+            let delta = body.position() - center;
+            let distance = delta.magnitude();
+            if distance >= radius {
+                continue;
+            }
+            let (direction, falloff) = if distance < 1e-4 {
+                (Vector3::y(), 1.0)
+            } else {
+                (delta / distance, 1.0 - (distance / radius))
+            };
+            let impulse = direction * strength * falloff
+                + Vector3::new(0.0, strength * falloff * upward_boost, 0.0);
+            body.apply_impulse(impulse);
+            self.sleep_manager.wake_body(RigidBodyHandle(idx));
+        }
     }
 
     // === Body Management ===
@@ -155,6 +206,7 @@ impl PhysicsWorld {
             self.colliders.remove(collider_handle.0);
         }
 
+        self.sleep_manager.sync_bodies(&self.bodies);
         true
     }
 
@@ -178,6 +230,7 @@ impl PhysicsWorld {
         }
         body.set_position(position);
         body.set_rotation(rotation);
+        self.sleep_manager.note_kinematic_move(handle);
         true
     }
 
@@ -196,6 +249,7 @@ impl PhysicsWorld {
         }
         body.set_linear_velocity(linear);
         body.set_angular_velocity(angular);
+        self.sleep_manager.note_kinematic_move(handle);
         true
     }
 
@@ -225,6 +279,7 @@ impl PhysicsWorld {
     }
 
     /// Remove a collider from its body.
+    #[allow(dead_code)]
     pub fn remove_collider(&mut self, handle: ColliderHandle) -> bool {
         let Some(collider) = self.colliders.remove(handle.0) else {
             return false;
@@ -243,6 +298,7 @@ impl PhysicsWorld {
     }
 
     /// Get a reference to a collider.
+    #[allow(dead_code)]
     pub fn collider(&self, handle: ColliderHandle) -> Option<&Collider> {
         self.colliders.get(handle.0)
     }
@@ -266,9 +322,24 @@ impl PhysicsWorld {
         _debug_lines: &mut DebugLines,
     ) {
         self.frame_index = self.frame_index.wrapping_add(1);
+        self.sleep_manager
+            .set_thresholds(self.config.sleep_threshold, self.config.sleep_delay_frames);
+        self.sleep_manager.set_enabled(self.config.enable_sleeping);
+        self.sleep_manager.sync_bodies(&self.bodies);
+        self.sleep_manager.apply_wake_events(&[], &self.bodies);
+        let sleeping_snapshot = if self.config.enable_sleeping {
+            Some(self.sleep_manager.sleeping_snapshot())
+        } else {
+            None
+        };
 
         // Phase 1-2: Integrate forces into velocities
-        integrate_forces(&mut self.bodies, dt, self.config.gravity);
+        integrate_forces(
+            &mut self.bodies,
+            dt,
+            self.config.gravity,
+            sleeping_snapshot.as_ref(),
+        );
 
         // Phase 3: Narrowphase contact generation
         let mut raw_contacts = generate_sphere_static_contacts(
@@ -281,6 +352,7 @@ impl PhysicsWorld {
             self.config.enable_speculative_contacts,
             self.config.speculative_min_speed,
             self.config.speculative_margin_multiplier,
+            sleeping_snapshot.as_ref(),
         );
         raw_contacts.extend(generate_sphere_sphere_contacts(
             &self.bodies,
@@ -291,6 +363,7 @@ impl PhysicsWorld {
             self.config.enable_speculative_contacts,
             self.config.speculative_min_speed,
             self.config.speculative_margin_multiplier,
+            sleeping_snapshot.as_ref(),
         ));
 
         // Phase 4: Merge with manifold cache (populates warm-start impulses)
@@ -300,35 +373,68 @@ impl PhysicsWorld {
         self.last_contacts
             .extend(contacts.iter().map(|c| ContactEvent::from_narrowphase(c)));
 
+        self.sleep_manager
+            .note_contact_wakes(&contacts, &self.bodies);
+        self.sleep_manager
+            .apply_wake_events(&contacts, &self.bodies);
+        let active_contacts = self.sleep_manager.filter_active_contacts(&contacts);
+
         // Phase 5: Solve velocity constraints (warm-start + N iterations)
-        let solved = solve(&mut self.bodies, &contacts, &self.config);
+        let solved = solve(&mut self.bodies, &active_contacts, &self.config);
 
         // Phase 6: Write solved impulses back to manifold cache
         self.manifold_cache
-            .write_back(&contacts, &solved, &self.bodies);
+            .write_back(&active_contacts, &solved, &self.bodies);
         self.manifold_cache.prune();
 
         // Bodies with static narrowphase contacts are managed by the solver.
         // CCD should only catch bodies in free flight that might tunnel.
-        let narrowphase_handled: HashSet<RigidBodyHandle> = contacts
+        let narrowphase_handled: HashSet<RigidBodyHandle> = active_contacts
             .iter()
             .filter(|c| c.body_a.is_none())
             .map(|c| c.body_b)
             .collect();
 
         // Save pre-integration state for CCD
+        let sleeping_snapshot = if self.config.enable_sleeping {
+            Some(self.sleep_manager.sleeping_snapshot())
+        } else {
+            None
+        };
         let pre_states: HashMap<generational_arena::Index, (Point3<f32>, UnitQuaternion<f32>)> =
             self.bodies
                 .iter()
-                .filter(|(_, body)| !body.is_static())
+                .filter(|(idx, body)| {
+                    if body.is_static() {
+                        return false;
+                    }
+                    if let Some(sleeping) = sleeping_snapshot.as_ref() {
+                        return !sleeping.contains(&RigidBodyHandle(*idx));
+                    }
+                    true
+                })
                 .map(|(idx, body)| (idx, (body.position(), body.rotation())))
                 .collect();
 
         // Phase 7: Integrate positions
-        integrate_bodies(&mut self.bodies, dt);
+        let sleeping_snapshot = if self.config.enable_sleeping {
+            Some(self.sleep_manager.sleeping_snapshot())
+        } else {
+            None
+        };
+        integrate_bodies(&mut self.bodies, dt, sleeping_snapshot.as_ref());
 
         // Phase 8: CCD pass (fast bodies only, excluding narrowphase-managed bodies)
-        let _ccd_count = self.ccd_pass(dt, static_geometry, &pre_states, &narrowphase_handled);
+        let _ccd_count = self.ccd_pass(
+            dt,
+            static_geometry,
+            &pre_states,
+            &narrowphase_handled,
+            sleeping_snapshot.as_ref(),
+        );
+
+        self.sleep_manager
+            .update_sleep_states(&mut self.bodies, &contacts);
     }
 
     /// Contacts generated in the most recent step.
@@ -374,6 +480,7 @@ impl PhysicsWorld {
         static_geometry: &dyn StaticGeometry,
         pre_states: &HashMap<generational_arena::Index, (Point3<f32>, UnitQuaternion<f32>)>,
         narrowphase_handled: &HashSet<RigidBodyHandle>,
+        sleeping: Option<&HashSet<RigidBodyHandle>>,
     ) -> u32 {
         let mut corrections = 0u32;
 
@@ -381,7 +488,15 @@ impl PhysicsWorld {
         let candidates: Vec<CcdCandidate> = self
             .bodies
             .iter()
-            .filter(|(_, body)| !body.is_static())
+            .filter(|(idx, body)| {
+                if body.is_static() {
+                    return false;
+                }
+                if let Some(sleeping) = sleeping {
+                    return !sleeping.contains(&RigidBodyHandle(*idx));
+                }
+                true
+            })
             .filter_map(|(idx, body)| {
                 let handle = RigidBodyHandle(idx);
                 // The narrowphase already manages bodies with static contacts
