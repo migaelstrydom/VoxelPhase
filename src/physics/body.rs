@@ -1,6 +1,6 @@
 //! Rigid body representation.
 
-use nalgebra::{Isometry3, Matrix3, Point3, UnitQuaternion, Vector3};
+use nalgebra::{Matrix3, Point3, UnitQuaternion, Vector3};
 
 use super::handle::ColliderHandle;
 use super::math::{integrate_orientation, transform_inertia_tensor};

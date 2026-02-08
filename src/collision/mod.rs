@@ -13,11 +13,9 @@ mod contact;
 mod shapes;
 mod sphere_triangle;
 mod swept;
-mod terrain_sweep;
 
 pub use aabb::AABB;
 pub use contact::ContactPoint;
 pub use shapes::Sphere;
 pub use sphere_triangle::{sphere_triangle_collision, Triangle};
 pub use swept::{swept_sphere_triangle, SweptContact};
-pub use terrain_sweep::resolve_terrain_sweep;

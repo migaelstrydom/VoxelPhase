@@ -48,23 +48,6 @@ impl MotionState {
     }
 }
 
-// Collision Components
-
-/// Collision shape for an entity. Currently supports sphere only.
-#[derive(Component, Debug)]
-#[storage(VecStorage)]
-pub struct Collider {
-    pub shape: Sphere,
-}
-
-impl Collider {
-    pub fn sphere(radius: f32) -> Self {
-        Self {
-            shape: Sphere::new(radius),
-        }
-    }
-}
-
 /// Physical properties for collision response.
 #[derive(Component, Debug, Clone, Copy)]
 #[storage(VecStorage)]

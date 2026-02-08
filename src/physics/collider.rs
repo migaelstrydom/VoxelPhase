@@ -56,6 +56,15 @@ pub struct ColliderMaterial {
     pub friction: f32,
 }
 
+impl ColliderMaterial {
+    /// Combine two materials: average restitution, geometric mean friction.
+    pub fn combine(a: &Self, b: &Self) -> (f32, f32) {
+        let restitution = (a.restitution + b.restitution) * 0.5;
+        let friction = (a.friction * b.friction).sqrt();
+        (restitution, friction)
+    }
+}
+
 impl Default for ColliderMaterial {
     fn default() -> Self {
         Self {

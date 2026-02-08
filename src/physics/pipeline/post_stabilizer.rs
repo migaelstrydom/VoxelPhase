@@ -42,8 +42,8 @@ impl Default for PostStabiliseConfig {
             correction_factor: 0.2,
             slop: 0.005,
             iterations: 4,
-            contact_rolling_resistance: 2.0,
-            contact_linear_damping: 2.0,
+            contact_rolling_resistance: 0.5,
+            contact_linear_damping: 0.5,
         }
     }
 }

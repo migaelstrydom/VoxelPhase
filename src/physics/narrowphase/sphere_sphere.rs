@@ -6,10 +6,10 @@ use generational_arena::Arena;
 use nalgebra::Vector3;
 
 use crate::physics::body::RigidBody;
-use crate::physics::collider::{Collider, ColliderShape};
+use crate::physics::collider::{Collider, ColliderMaterial, ColliderShape};
 use crate::physics::collision::{sphere_sphere_collision, swept_sphere_sphere};
 use crate::physics::handle::RigidBodyHandle;
-use crate::physics::pipeline::solver::{combine_materials, ContactConstraint};
+use crate::physics::pipeline::solver::ContactConstraint;
 
 /// Generate contacts between all pairs of non-static sphere colliders.
 ///
@@ -77,7 +77,7 @@ pub fn generate_sphere_sphere_contacts(
                 let actual_depth = (radius_a + radius_b) - (*center_b - *center_a).magnitude();
                 let solver_depth = actual_depth.max(0.0);
 
-                let (restitution, friction) = combine_materials(mat_a, mat_b);
+                let (restitution, friction) = ColliderMaterial::combine(mat_a, mat_b);
                 contacts.push(ContactConstraint {
                     body_a: Some(*handle_a),
                     body_b: *handle_b,
@@ -126,7 +126,7 @@ pub fn generate_sphere_sphere_contacts(
                     let actual_depth = (radius_a + radius_b) - dist;
                     let solver_depth = actual_depth.max(0.0);
                     let point = pos_a + normal * (radius_a - actual_depth * 0.5);
-                    let (restitution, friction) = combine_materials(mat_a, mat_b);
+                    let (restitution, friction) = ColliderMaterial::combine(mat_a, mat_b);
                     contacts.push(ContactConstraint {
                         body_a: Some(*handle_a),
                         body_b: *handle_b,

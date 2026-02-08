@@ -4,8 +4,8 @@ use specs::{Builder, Entity, World, WorldExt};
 use crate::biped::{BipedConfig, BipedController};
 use crate::camera::{CameraConfig, FollowTarget};
 use crate::components::{
-    Acceleration, CameraComponent, Collider, Gravity, ModelInstance, MotionState, Orientation,
-    PhysicsBody, Position, Renderable, RigidBodyComponent, Rotation, Velocity,
+    Acceleration, CameraComponent, Gravity, ModelInstance, MotionState, Orientation, PhysicsBody,
+    Position, Renderable, RigidBodyComponent, Rotation, Velocity,
 };
 use crate::physics::{ColliderDesc, RigidBodyDesc};
 use crate::player::{Player, PlayerConfig, PlayerTargetState};
@@ -59,7 +59,6 @@ pub fn spawn_player(world: &mut World, initial_pos: nalgebra::Point3<f32>) -> En
         .with(SensorSet::default())
         .with(ContactCandidates::default())
         .with(physics_body)
-        .with(Collider::sphere(body_radius))
         .with(RigidBodyComponent(body_handle))
         .build()
 }

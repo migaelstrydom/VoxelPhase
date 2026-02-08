@@ -3,19 +3,19 @@ use specs::{World, WorldExt};
 use crate::biped::BipedController;
 use crate::camera::{CameraConfig, FollowTarget};
 use crate::components::{
-    Acceleration, CameraComponent, Collider, Gravity, ModelInstance, MotionState, Orientation,
-    PhysicsBody, Position, Renderable, RigidBodyComponent, Rotation, Velocity,
+    Acceleration, CameraComponent, Gravity, ModelInstance, MotionState, Orientation, PhysicsBody,
+    Position, Renderable, RigidBodyComponent, Rotation, Velocity,
 };
 use crate::core::error::EngineResult;
 use crate::debug::{DebugLines, DebugOverlays};
 use crate::explosion::Explosion;
 use crate::input::{GameplayActions, InputState};
 use crate::particles::{ParticleConfig, ParticleEmitter, ParticlePool};
+use crate::physics::PhysicsImpulseQueue;
 use crate::player::{Player, PlayerConfig, PlayerTargetState};
 use crate::projectile::{
     Grenade, GrenadeConfig, GrenadeCooldown, GrenadeModelResource, Lifetime, Projectile,
 };
-use crate::physics::PhysicsImpulseQueue;
 use crate::rendering::material::MaterialManager;
 use crate::rendering::renderer::Renderer;
 use crate::resources::manager::ResourceManager;
@@ -53,7 +53,6 @@ impl WorldBuilder {
         world.register::<PlayerTargetState>();
         world.register::<BipedController>();
         world.register::<FollowTarget>();
-        world.register::<Collider>();
         world.register::<MotionState>();
         world.register::<SensorSet>();
         world.register::<ContactCandidates>();

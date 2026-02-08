@@ -1,8 +1,4 @@
-mod biped_collision;
 mod camera;
-mod collision;
-mod dynamic_dynamic_collision;
-mod dynamic_terrain_collision;
 mod motion_prediction;
 mod physics;
 mod physics_sync;
@@ -10,11 +6,7 @@ mod player_input;
 mod render;
 mod terrain_update;
 
-pub use biped_collision::BipedCollisionSystem;
 pub use camera::CameraControlSystem;
-pub use collision::{PenetrationResolutionSystem, TerrainCollisionSystem};
-pub use dynamic_dynamic_collision::DynamicDynamicCollisionSystem;
-pub use dynamic_terrain_collision::DynamicTerrainCollisionSystem;
 pub use motion_prediction::MotionPredictionSystem;
 pub use physics::{GravitySystem, VelocityIntegrationSystem};
 pub use physics_sync::{PhysicsResource, PhysicsSyncSystem};
