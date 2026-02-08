@@ -13,6 +13,7 @@ use nalgebra::{Point3, UnitQuaternion, Vector3};
 
 use crate::physics::body::RigidBody;
 use crate::physics::handle::ColliderHandle;
+use crate::physics::pipeline::normal_smoothing::{NormalSmoother, NormalSmoothingConfig};
 use crate::physics::pipeline::solver::{ContactConstraint, SolvedImpulses};
 
 /// Ordered key for manifold lookup by collider pair.
@@ -89,23 +90,23 @@ pub struct ManifoldCache {
     manifolds: HashMap<ManifoldKey, ContactManifold>,
     match_threshold: f32,
     max_age: u8,
-    normal_alignment_threshold: f32,
     warm_start_depth_slop: f32,
+    normal_smoother: NormalSmoother,
 }
 
 impl ManifoldCache {
     pub fn new(
         match_threshold: f32,
         max_age: u8,
-        normal_alignment_threshold: f32,
         warm_start_depth_slop: f32,
+        normal_smoothing: NormalSmoothingConfig,
     ) -> Self {
         Self {
             manifolds: HashMap::new(),
             match_threshold,
             max_age,
-            normal_alignment_threshold,
             warm_start_depth_slop,
+            normal_smoother: NormalSmoother::from_config(normal_smoothing),
         }
     }
 
@@ -168,13 +169,21 @@ impl ManifoldCache {
                     &matched_indices,
                 );
 
-                let (warm_normal, warm_tangent) = match match_idx {
+                let (warm_normal, warm_tangent, contact_normal) = match match_idx {
                     Some(idx) => {
                         matched_indices.insert(idx);
                         // Matched: inherit cached impulses, update point
                         let cached = &mut manifold.points[idx];
-                        let normal_alignment = cached.normal.dot(&contact.normal);
-                        let use_warm = normal_alignment >= self.normal_alignment_threshold
+                        let aligned = self
+                            .normal_smoother
+                            .aligned(cached.normal, contact.normal);
+                        let contact_normal = if aligned {
+                            self.normal_smoother
+                                .smooth(cached.normal, contact.normal)
+                        } else {
+                            contact.normal
+                        };
+                        let use_warm = aligned
                             && contact.raw_depth > -self.warm_start_depth_slop;
                         let warm = if use_warm {
                             (cached.normal_impulse, cached.tangent_impulse)
@@ -185,10 +194,10 @@ impl ManifoldCache {
                         };
                         cached.local_point_a = local_a;
                         cached.local_point_b = local_b;
-                        cached.normal = contact.normal;
+                        cached.normal = contact_normal;
                         cached.depth = contact.depth;
                         cached.age = 0;
-                        warm
+                        (warm.0, warm.1, contact_normal)
                     }
                     None => {
                         // New point: insert (or replace shallowest if full)
@@ -211,11 +220,12 @@ impl ManifoldCache {
                             manifold.points[replace_idx] = new_point;
                             matched_indices.insert(replace_idx);
                         }
-                        (0.0, [0.0, 0.0])
+                        (0.0, [0.0, 0.0], contact.normal)
                     }
                 };
 
                 let mut warm_contact = contact.clone();
+                warm_contact.normal = contact_normal;
                 warm_contact.warm_normal_impulse = warm_normal;
                 warm_contact.warm_tangent_impulse = warm_tangent;
                 result.push(warm_contact);

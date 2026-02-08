@@ -6,10 +6,14 @@ use std::collections::{HashMap, HashSet};
 
 use super::body::{RigidBody, RigidBodyDesc};
 use super::collider::{Collider, ColliderDesc, ColliderMaterial, ColliderShape};
+use super::grounding::{GroundingConfig, GroundingDetector};
 use super::handle::{ColliderHandle, RigidBodyHandle};
-use super::narrowphase::{generate_sphere_sphere_contacts, generate_sphere_static_contacts};
+use super::narrowphase::{
+    generate_sphere_sphere_contacts, generate_sphere_static_contacts, NormalClusterConfig,
+};
 use super::pipeline::integration::{integrate_bodies, integrate_forces};
 use super::pipeline::manifold::ManifoldCache;
+use super::pipeline::normal_smoothing::NormalSmoothingConfig;
 use super::pipeline::solver::{solve, solve_contacts, ContactConstraint};
 use super::sleep::SleepManager;
 use super::static_geometry::StaticGeometry;
@@ -45,14 +49,20 @@ pub struct PhysicsConfig {
     pub baumgarte_factor: f32,
     /// Baumgarte slop for penetration correction.
     pub baumgarte_slop: f32,
-    /// Normal alignment threshold for warm-start reuse.
-    pub normal_alignment_threshold: f32,
+    /// Configuration for smoothing matched contact normals.
+    pub normal_smoothing: NormalSmoothingConfig,
+    /// Configuration for clustering static contact normals.
+    pub normal_clustering: NormalClusterConfig,
+    /// Configuration for grounded detection.
+    pub grounding: GroundingConfig,
     /// Allow warm-start when raw depth exceeds this (can be negative).
     pub warm_start_depth_slop: f32,
     /// Allow restitution when raw depth exceeds this (can be negative).
     pub restitution_depth_slop: f32,
     /// Draw contact points and normals as debug overlays.
     pub debug_draw_contacts: bool,
+    /// Draw raw (pre-smoothed) contact normals for comparison.
+    pub debug_draw_contact_raw_normals: bool,
     /// Draw sleep state markers over sleeping bodies.
     pub debug_draw_sleeping: bool,
     /// Enable speculative contacts to close the CCD activation gap.
@@ -82,10 +92,13 @@ impl Default for PhysicsConfig {
             warm_start_scale: 0.6,
             baumgarte_factor: 0.05,
             baumgarte_slop: 0.005,
-            normal_alignment_threshold: 0.95,
+            normal_smoothing: NormalSmoothingConfig::default(),
+            normal_clustering: NormalClusterConfig::default(),
+            grounding: GroundingConfig::default(),
             warm_start_depth_slop: 0.01,
             restitution_depth_slop: 0.005,
             debug_draw_contacts: true,
+            debug_draw_contact_raw_normals: false,
             debug_draw_sleeping: true,
             enable_speculative_contacts: true,
             speculative_min_speed: 1.0,
@@ -120,6 +133,7 @@ pub struct PhysicsWorld {
     last_contacts: Vec<ContactEvent>,
     frame_index: u64,
     sleep_manager: SleepManager,
+    grounding_detector: GroundingDetector,
 }
 
 impl PhysicsWorld {
@@ -127,12 +141,13 @@ impl PhysicsWorld {
         let manifold_cache = ManifoldCache::new(
             config.contact_match_threshold,
             config.manifold_max_age,
-            config.normal_alignment_threshold,
             config.warm_start_depth_slop,
+            config.normal_smoothing,
         );
         let mut sleep_manager =
             SleepManager::new(config.sleep_threshold, config.sleep_delay_frames);
         sleep_manager.set_enabled(config.enable_sleeping);
+        let grounding_detector = GroundingDetector::new(config.grounding);
         Self {
             config,
             bodies: Arena::new(),
@@ -141,6 +156,7 @@ impl PhysicsWorld {
             last_contacts: Vec::new(),
             frame_index: 0,
             sleep_manager,
+            grounding_detector,
         }
     }
 
@@ -352,6 +368,7 @@ impl PhysicsWorld {
             self.config.enable_speculative_contacts,
             self.config.speculative_min_speed,
             self.config.speculative_margin_multiplier,
+            self.config.normal_clustering,
             sleeping_snapshot.as_ref(),
         );
         raw_contacts.extend(generate_sphere_sphere_contacts(
@@ -440,6 +457,15 @@ impl PhysicsWorld {
     /// Contacts generated in the most recent step.
     pub fn contact_events(&self) -> &[ContactEvent] {
         &self.last_contacts
+    }
+
+    /// Bodies grounded by static contacts in the most recent step.
+    pub fn grounded_handles(&self) -> HashSet<RigidBodyHandle> {
+        self.grounding_detector
+            .grounded_bodies(self.contact_events())
+            .into_iter()
+            .filter_map(|(handle, grounded)| grounded.then_some(handle))
+            .collect()
     }
 
     // === Internal Methods ===
@@ -552,6 +578,7 @@ impl PhysicsWorld {
                 collider_b: None,
                 point: hit.point,
                 normal: hit.normal,
+                raw_normal: hit.normal,
                 depth: 0.0,
                 raw_depth: 0.0,
                 restitution: candidate.material.restitution,
@@ -581,6 +608,7 @@ pub struct ContactEvent {
     pub body_b: RigidBodyHandle,
     pub point: Point3<f32>,
     pub normal: Vector3<f32>,
+    pub raw_normal: Vector3<f32>,
     pub depth: f32,
     pub source: ContactSource,
 }
@@ -592,6 +620,7 @@ impl ContactEvent {
             body_b: contact.body_b,
             point: contact.point,
             normal: contact.normal,
+            raw_normal: contact.raw_normal,
             depth: contact.depth,
             source: ContactSource::Narrowphase,
         }
@@ -603,6 +632,7 @@ impl ContactEvent {
             body_b: contact.body_b,
             point: contact.point,
             normal: contact.normal,
+            raw_normal: contact.normal,
             depth: contact.depth,
             source: ContactSource::Ccd,
         }

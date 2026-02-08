@@ -52,16 +52,6 @@ impl PhysicsSyncSystem {
         }
     }
 
-    fn collect_grounded_handles(physics: &PhysicsWorld) -> HashSet<RigidBodyHandle> {
-        let mut grounded_handles = HashSet::new();
-        for contact in physics.contact_events() {
-            if contact.body_a.is_none() && contact.normal.y > 0.5 {
-                grounded_handles.insert(contact.body_b);
-            }
-        }
-        grounded_handles
-    }
-
     fn sync_physics_to_ecs(
         physics: &PhysicsWorld,
         positions: &mut WriteStorage<Position>,
@@ -88,11 +78,17 @@ impl PhysicsSyncSystem {
         }
     }
 
-    fn add_contact_overlays(physics: &PhysicsWorld, overlays: &mut DebugOverlays) {
+    fn add_contact_overlays(
+        physics: &PhysicsWorld,
+        overlays: &mut DebugOverlays,
+        debug_lines: &mut DebugLines,
+    ) {
         if !physics.config().debug_draw_contacts {
             return;
         }
         let normal_scale = 0.3;
+        let mut smoothed_count = 0usize;
+        let mut max_angle_deg = 0.0f32;
 
         for contact in physics.contact_events() {
             let colour = match contact.source {
@@ -107,6 +103,30 @@ impl PhysicsSyncSystem {
                     colour,
                 );
             }
+            if physics.config().debug_draw_contact_raw_normals
+                && contact.source == ContactSource::Narrowphase
+                && contact.raw_normal.magnitude_squared() > 1e-8
+            {
+                let dot = contact.normal.dot(&contact.raw_normal).clamp(-1.0, 1.0);
+                let angle_deg = dot.acos() * 180.0 / std::f32::consts::PI;
+                if angle_deg > 0.01 {
+                    smoothed_count += 1;
+                    max_angle_deg = max_angle_deg.max(angle_deg);
+                    overlays.add_line(
+                        contact.point,
+                        contact.point + contact.raw_normal * normal_scale,
+                        Colour::YELLOW,
+                    );
+                }
+            }
+        }
+
+        if physics.config().debug_draw_contact_raw_normals {
+            debug_lines.add("Contacts/Smoothed", smoothed_count.to_string());
+            debug_lines.add(
+                "Contacts/MaxNormalDeltaDeg",
+                format!("{:.3}", max_angle_deg),
+            );
         }
     }
 
@@ -181,10 +201,10 @@ impl<'a> System<'a> for PhysicsSyncSystem {
             physics.0.step(dt, &**terrain, &mut debug_lines);
         }
 
-        Self::add_contact_overlays(&physics.0, &mut debug_overlays);
+        Self::add_contact_overlays(&physics.0, &mut debug_overlays, &mut debug_lines);
         Self::add_sleep_overlays(&physics.0, &mut debug_overlays);
 
-        let grounded_handles = Self::collect_grounded_handles(&physics.0);
+        let grounded_handles = physics.0.grounded_handles();
 
         // Sync physics state back to ECS components
         Self::sync_physics_to_ecs(

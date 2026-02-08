@@ -37,6 +37,7 @@
 mod body;
 mod collider;
 mod collision;
+pub mod grounding;
 mod handle;
 mod math;
 mod narrowphase;

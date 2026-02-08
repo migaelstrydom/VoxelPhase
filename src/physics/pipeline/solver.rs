@@ -23,6 +23,8 @@ pub struct ContactConstraint {
     pub point: Point3<f32>,
     /// Contact normal pointing from A to B.
     pub normal: Vector3<f32>,
+    /// Raw contact normal before any smoothing or clustering.
+    pub raw_normal: Vector3<f32>,
     /// Penetration depth.
     pub depth: f32,
     /// Unclamped penetration depth (can be negative for margin contacts).
