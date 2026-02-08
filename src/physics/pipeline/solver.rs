@@ -1,11 +1,12 @@
 //! Constraint solver for contact resolution.
 
 use generational_arena::Arena;
-use nalgebra::{Point3, Vector3};
+use nalgebra::Vector3;
 
 use crate::physics::body::RigidBody;
 use crate::physics::collider::ColliderMaterial;
 use crate::physics::handle::{ColliderHandle, RigidBodyHandle};
+use crate::physics::pipeline::post_stabilizer::{is_kinematic_static_contact, post_stabilize};
 use crate::physics::world::PhysicsConfig;
 
 /// A contact constraint to be solved.
@@ -20,7 +21,7 @@ pub struct ContactConstraint {
     /// Second collider (None for transient CCD contacts).
     pub collider_b: Option<ColliderHandle>,
     /// Contact point in world space.
-    pub point: Point3<f32>,
+    pub point: nalgebra::Point3<f32>,
     /// Contact normal pointing from A to B.
     pub normal: Vector3<f32>,
     /// Raw contact normal before any smoothing or clustering.
@@ -50,11 +51,13 @@ pub struct SolvedImpulses {
 /// Pipeline:
 /// 1. Warm-start: apply cached impulses from the manifold cache
 /// 2. Iterative solve: run `config.solver_iterations` passes of sequential impulses
-/// 3. Return accumulated impulses for manifold writeback
+/// 3. Post-stabilization: penetration correction + contact damping
+/// 4. Return accumulated impulses for manifold writeback
 pub fn solve(
     bodies: &mut Arena<RigidBody>,
     contacts: &[ContactConstraint],
     config: &PhysicsConfig,
+    dt: f32,
 ) -> Vec<SolvedImpulses> {
     if contacts.is_empty() {
         return Vec::new();
@@ -80,7 +83,6 @@ pub fn solve(
     warm_start(bodies, contacts, &warm_scales);
 
     // Phase 3: Iterative sequential-impulse solving
-    // Initialize with warm-start values so writeback captures the total impulse
     let mut accumulated: Vec<SolvedImpulses> = contacts
         .iter()
         .zip(warm_scales.iter())
@@ -106,34 +108,8 @@ pub fn solve(
         }
     }
 
-    // Phase 4: Position correction — run once after velocity solving, not per iteration
-    for contact in contacts {
-        if contact.depth > 0.001 {
-            let inv_mass_a = contact
-                .body_a
-                .and_then(|h| bodies.get(h.0))
-                .map(|b| b.inv_mass())
-                .unwrap_or(0.0);
-            let inv_mass_b = bodies
-                .get(contact.body_b.0)
-                .map(|b| {
-                    if is_kinematic_static_contact(b, contact) {
-                        1.0
-                    } else {
-                        b.inv_mass()
-                    }
-                })
-                .unwrap_or(0.0);
-            apply_position_correction(
-                bodies,
-                contact,
-                inv_mass_a,
-                inv_mass_b,
-                config.baumgarte_factor,
-                config.baumgarte_slop,
-            );
-        }
-    }
+    // Phase 4: Post-stabilization correction after velocity solving
+    post_stabilize(bodies, contacts, &config.post_stabilise, dt);
 
     accumulated
 }
@@ -153,7 +129,6 @@ fn warm_start(bodies: &mut Arena<RigidBody>, contacts: &[ContactConstraint], sca
 
         let impulse = contact.normal * (contact.warm_normal_impulse * *scale);
 
-        // Compute tangent directions for warm-starting friction
         let tangent_impulse = compute_tangent_impulse(contact) * *scale;
 
         let total = impulse + tangent_impulse;
@@ -182,7 +157,6 @@ fn compute_tangent_impulse(contact: &ContactConstraint) -> Vector3<f32> {
 
 /// Compute a stable orthonormal tangent basis from a normal vector.
 fn compute_tangent_basis(normal: &Vector3<f32>) -> (Vector3<f32>, Vector3<f32>) {
-    // Choose the axis least aligned with the normal to avoid degeneracy
     let reference = if normal.x.abs() < 0.9 {
         Vector3::x()
     } else {
@@ -256,7 +230,6 @@ fn solve_single_contact_pgs(
     restitution_depth_slop: f32,
     accumulated: &mut SolvedImpulses,
 ) {
-    // Get body B's state
     let (pos_b, vel_b, angular_vel_b, inv_mass_b, inv_inertia_b) = {
         let Some(body_b) = bodies.get(contact.body_b.0) else {
             return;
@@ -279,7 +252,6 @@ fn solve_single_contact_pgs(
         )
     };
 
-    // Get body A's state (or defaults for static geometry)
     let (pos_a, vel_a, angular_vel_a, inv_mass_a, inv_inertia_a) = match contact.body_a {
         Some(handle) => {
             let Some(body_a) = bodies.get(handle.0) else {
@@ -302,7 +274,6 @@ fn solve_single_contact_pgs(
         ),
     };
 
-    // Compute relative velocity at contact point
     let r_a = contact.point - pos_a;
     let r_b = contact.point - pos_b;
 
@@ -312,12 +283,10 @@ fn solve_single_contact_pgs(
 
     let vel_along_normal = rel_vel.dot(&contact.normal);
 
-    // Only resolve if objects are approaching
     if vel_along_normal > 0.0 {
         return;
     }
 
-    // Compute effective mass for the contact
     let r_a_cross_n = r_a.cross(&contact.normal);
     let r_b_cross_n = r_b.cross(&contact.normal);
 
@@ -331,7 +300,6 @@ fn solve_single_contact_pgs(
         return;
     }
 
-    // Zero out restitution for slow approaches to prevent micro-bouncing at rest
     let restitution = if pre_solve_vn.abs() < restitution_velocity_threshold {
         0.0
     } else if contact.raw_depth >= -restitution_depth_slop {
@@ -475,44 +443,6 @@ fn apply_body_b_impulse(
             body_b.apply_impulse_at_point(impulse, contact.point);
         } else if is_kinematic_static_contact(body_b, contact) {
             body_b.set_linear_velocity(body_b.linear_velocity() + impulse);
-        }
-    }
-}
-
-#[inline]
-fn is_kinematic_static_contact(body: &RigidBody, contact: &ContactConstraint) -> bool {
-    body.is_kinematic() && contact.body_a.is_none()
-}
-
-fn apply_position_correction(
-    bodies: &mut Arena<RigidBody>,
-    contact: &ContactConstraint,
-    inv_mass_a: f32,
-    inv_mass_b: f32,
-    correction_factor: f32,
-    slop: f32,
-) {
-    let total_inv_mass = inv_mass_a + inv_mass_b;
-    if total_inv_mass <= 0.0 {
-        return;
-    }
-
-    // Baumgarte stabilization: push objects apart based on penetration
-    let correction = (contact.depth - slop).max(0.0) * correction_factor / total_inv_mass;
-
-    if let Some(handle_a) = contact.body_a {
-        if let Some(body_a) = bodies.get_mut(handle_a.0) {
-            if body_a.is_dynamic() || body_a.is_kinematic() {
-                let pos = body_a.position();
-                body_a.set_position(pos - contact.normal * correction * inv_mass_a);
-            }
-        }
-    }
-
-    if let Some(body_b) = bodies.get_mut(contact.body_b.0) {
-        if body_b.is_dynamic() || body_b.is_kinematic() {
-            let pos = body_b.position();
-            body_b.set_position(pos + contact.normal * correction * inv_mass_b);
         }
     }
 }

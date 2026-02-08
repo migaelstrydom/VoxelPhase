@@ -14,6 +14,7 @@ use super::narrowphase::{
 use super::pipeline::integration::{integrate_bodies, integrate_forces};
 use super::pipeline::manifold::ManifoldCache;
 use super::pipeline::normal_smoothing::NormalSmoothingConfig;
+use super::pipeline::post_stabilizer::PostStabiliseConfig;
 use super::pipeline::solver::{solve, solve_contacts, ContactConstraint};
 use super::sleep::SleepManager;
 use super::static_geometry::StaticGeometry;
@@ -45,10 +46,8 @@ pub struct PhysicsConfig {
     pub manifold_max_age: u8,
     /// Scale factor applied to warm-start impulses (0..=1).
     pub warm_start_scale: f32,
-    /// Baumgarte position correction factor.
-    pub baumgarte_factor: f32,
-    /// Baumgarte slop for penetration correction.
-    pub baumgarte_slop: f32,
+    /// Split-impulse configuration for post-stabilization.
+    pub post_stabilise: PostStabiliseConfig,
     /// Configuration for smoothing matched contact normals.
     pub normal_smoothing: NormalSmoothingConfig,
     /// Configuration for clustering static contact normals.
@@ -90,8 +89,7 @@ impl Default for PhysicsConfig {
             contact_match_threshold: 0.05,
             manifold_max_age: 3,
             warm_start_scale: 0.6,
-            baumgarte_factor: 0.05,
-            baumgarte_slop: 0.005,
+            post_stabilise: PostStabiliseConfig::default(),
             normal_smoothing: NormalSmoothingConfig::default(),
             normal_clustering: NormalClusterConfig::default(),
             grounding: GroundingConfig::default(),
@@ -104,7 +102,7 @@ impl Default for PhysicsConfig {
             speculative_min_speed: 1.0,
             speculative_margin_multiplier: 2.0,
             enable_sleeping: true,
-            sleep_threshold: 0.01,
+            sleep_threshold: 0.05,
             sleep_delay_frames: 30,
         }
     }
@@ -397,7 +395,7 @@ impl PhysicsWorld {
         let active_contacts = self.sleep_manager.filter_active_contacts(&contacts);
 
         // Phase 5: Solve velocity constraints (warm-start + N iterations)
-        let solved = solve(&mut self.bodies, &active_contacts, &self.config);
+        let solved = solve(&mut self.bodies, &active_contacts, &self.config, dt);
 
         // Phase 6: Write solved impulses back to manifold cache
         self.manifold_cache
