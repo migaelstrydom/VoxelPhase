@@ -57,22 +57,18 @@ pub fn generate_static_contacts(
             let linear_velocity = body.linear_velocity();
             let travel = linear_velocity.magnitude() * dt;
 
-            let mut collider_contacts = match collider.shape() {
+            let mut batch = match collider.shape() {
                 ColliderShape::Sphere { radius } => sphere_vs_static(
                     body_handle,
                     *collider_handle,
                     collider,
                     center,
                     *radius,
-                    linear_velocity,
-                    travel,
-                    dt,
                     static_geometry,
                     contact_margin,
-                    ccd_threshold,
-                    enable_speculative_contacts,
-                    speculative_min_speed,
-                    speculative_margin_multiplier,
+                    normal_cluster.max_points,
+                    normal_cluster.normal_cluster_dot,
+                    normal_cluster.point_cluster_distance,
                 ),
                 ColliderShape::Box { half_extents } => box_vs_static(
                     body_handle,
@@ -83,36 +79,67 @@ pub fn generate_static_contacts(
                     *half_extents,
                     static_geometry,
                     contact_margin,
+                    normal_cluster.max_points,
+                    normal_cluster.normal_cluster_dot,
+                    normal_cluster.point_cluster_distance,
                 ),
             };
 
-            if collider_contacts.len() > 1 {
+            if batch.contacts.len() > 1 && !batch.stable {
                 let clusterer = NormalClusterer::from_config(normal_cluster, contact_margin);
-                collider_contacts = clusterer.cluster_with_pre_reduction(collider_contacts);
+                batch.contacts = clusterer.cluster_with_pre_reduction(batch.contacts);
             }
-            contacts.extend(collider_contacts);
+            if batch.contacts.is_empty()
+                && is_speculative_candidate(
+                    travel,
+                    collider.shape().bounding_radius(),
+                    ccd_threshold,
+                    contact_margin,
+                    enable_speculative_contacts,
+                    speculative_min_speed,
+                    speculative_margin_multiplier,
+                )
+            {
+                let predicted_center = center + linear_velocity * dt;
+                batch.contacts = speculative_static_contacts(
+                    body_handle,
+                    *collider_handle,
+                    collider,
+                    predicted_center,
+                    body.rotation(),
+                    static_geometry,
+                    contact_margin,
+                    normal_cluster.max_points,
+                    normal_cluster.normal_cluster_dot,
+                    normal_cluster.point_cluster_distance,
+                );
+            }
+            contacts.extend(batch.contacts);
         }
     }
 
     contacts
 }
 
+/// Contact batch with a stability flag for clustering.
+struct StaticContactBatch {
+    contacts: Vec<ContactConstraint>,
+    stable: bool,
+}
+
+/// Generate sphere-static contacts, optionally stabilizing coplanar patches.
 fn sphere_vs_static(
     body_handle: RigidBodyHandle,
     collider_handle: crate::physics::handle::ColliderHandle,
     collider: &Collider,
     center: nalgebra::Point3<f32>,
     radius: f32,
-    linear_velocity: Vector3<f32>,
-    travel: f32,
-    dt: f32,
     static_geometry: &dyn StaticGeometry,
     contact_margin: f32,
-    ccd_threshold: f32,
-    enable_speculative_contacts: bool,
-    speculative_min_speed: f32,
-    speculative_margin_multiplier: f32,
-) -> Vec<ContactConstraint> {
+    max_points: usize,
+    normal_dot_threshold: f32,
+    plane_thickness: f32,
+) -> StaticContactBatch {
     let query_radius = radius + contact_margin;
     let mut sphere_contacts = Vec::new();
 
@@ -136,40 +163,29 @@ fn sphere_vs_static(
         });
     }
 
-    if sphere_contacts.is_empty()
-        && is_speculative_candidate(
-            travel,
-            radius,
-            ccd_threshold,
-            contact_margin,
-            enable_speculative_contacts,
-            speculative_min_speed,
-            speculative_margin_multiplier,
-        )
-    {
-        let end = center + linear_velocity * dt;
-        if let Some(hit) = static_geometry.sweep_sphere(center, end, query_radius) {
-            sphere_contacts.push(ContactConstraint {
-                body_a: None,
-                body_b: body_handle,
-                collider_a: None,
-                collider_b: Some(collider_handle),
-                point: hit.point,
-                normal: hit.normal,
-                raw_normal: hit.normal,
-                depth: 0.0,
-                raw_depth: -contact_margin,
-                restitution: collider.material().restitution,
-                friction: collider.material().friction,
-                warm_normal_impulse: 0.0,
-                warm_tangent_impulse: [0.0, 0.0],
-            });
-        }
+    let stabilized = stabilize_coplanar_sphere_groups(
+        center,
+        radius,
+        &sphere_contacts,
+        contact_margin,
+        max_points,
+        normal_dot_threshold,
+        plane_thickness,
+    );
+    if let Some(stable) = stabilized {
+        return StaticContactBatch {
+            contacts: stable,
+            stable: true,
+        };
     }
 
-    sphere_contacts
+    StaticContactBatch {
+        contacts: sphere_contacts,
+        stable: false,
+    }
 }
 
+/// Generate box-static contacts, optionally stabilizing coplanar patches.
 fn box_vs_static(
     body_handle: RigidBodyHandle,
     collider_handle: crate::physics::handle::ColliderHandle,
@@ -179,7 +195,10 @@ fn box_vs_static(
     half_extents: Vector3<f32>,
     static_geometry: &dyn StaticGeometry,
     contact_margin: f32,
-) -> Vec<ContactConstraint> {
+    max_points: usize,
+    normal_dot_threshold: f32,
+    plane_thickness: f32,
+) -> StaticContactBatch {
     let obb = Obb::new(center, rotation, half_extents);
     let (aabb_min, aabb_max) = obb.enclosing_aabb();
     let margin_vec = Vector3::new(contact_margin, contact_margin, contact_margin);
@@ -210,9 +229,390 @@ fn box_vs_static(
         }
     }
 
-    box_contacts
+    if let Some(stable) = stabilize_coplanar_box_groups(
+        &obb,
+        &box_contacts,
+        contact_margin,
+        max_points,
+        normal_dot_threshold,
+        plane_thickness,
+    )
+    {
+        return StaticContactBatch {
+            contacts: stable,
+            stable: true,
+        };
+    }
+
+    StaticContactBatch {
+        contacts: box_contacts,
+        stable: false,
+    }
 }
 
+/// Build speculative contacts at a predicted pose for any shape.
+fn speculative_static_contacts(
+    body_handle: RigidBodyHandle,
+    collider_handle: crate::physics::handle::ColliderHandle,
+    collider: &Collider,
+    predicted_center: nalgebra::Point3<f32>,
+    rotation: nalgebra::UnitQuaternion<f32>,
+    static_geometry: &dyn StaticGeometry,
+    contact_margin: f32,
+    max_points: usize,
+    normal_dot_threshold: f32,
+    plane_thickness: f32,
+) -> Vec<ContactConstraint> {
+    match collider.shape() {
+        ColliderShape::Sphere { radius } => {
+            let query_radius = radius + contact_margin;
+            let mut contacts = Vec::new();
+            for sc in static_geometry.query_sphere(predicted_center, query_radius) {
+                contacts.push(ContactConstraint {
+                    body_a: None,
+                    body_b: body_handle,
+                    collider_a: None,
+                    collider_b: Some(collider_handle),
+                    point: sc.point,
+                    normal: sc.normal,
+                    raw_normal: sc.normal,
+                    depth: 0.0,
+                    raw_depth: -contact_margin,
+                    restitution: collider.material().restitution,
+                    friction: collider.material().friction,
+                    warm_normal_impulse: 0.0,
+                    warm_tangent_impulse: [0.0, 0.0],
+                });
+            }
+            let stabilized = stabilize_coplanar_sphere_groups(
+                predicted_center,
+                *radius,
+                &contacts,
+                contact_margin,
+                max_points,
+                normal_dot_threshold,
+                plane_thickness,
+            );
+            stabilized.unwrap_or(contacts)
+        }
+        ColliderShape::Box { half_extents } => {
+            let expanded = *half_extents + Vector3::new(contact_margin, contact_margin, contact_margin);
+            let obb = Obb::new(predicted_center, rotation, expanded);
+            let (aabb_min, aabb_max) = obb.enclosing_aabb();
+            let query = AABB::new(aabb_min, aabb_max);
+            let triangles = static_geometry.query_triangles(&query);
+            let mut contacts = Vec::new();
+            for tri in &triangles {
+                for c in obb_triangle_contacts(&obb, tri) {
+                    contacts.push(ContactConstraint {
+                        body_a: None,
+                        body_b: body_handle,
+                        collider_a: None,
+                        collider_b: Some(collider_handle),
+                        point: c.point,
+                        normal: c.normal,
+                        raw_normal: c.normal,
+                        depth: 0.0,
+                        raw_depth: -contact_margin,
+                        restitution: collider.material().restitution,
+                        friction: collider.material().friction,
+                        warm_normal_impulse: 0.0,
+                        warm_tangent_impulse: [0.0, 0.0],
+                    });
+                }
+            }
+            if let Some(stable) = stabilize_coplanar_box_groups(
+                &obb,
+                &contacts,
+                contact_margin,
+                max_points,
+                normal_dot_threshold,
+                plane_thickness,
+            ) {
+                return stable;
+            }
+            contacts
+        }
+    }
+}
+
+/// Collapse coplanar box contacts into a stable face patch.
+fn stabilize_coplanar_box_contacts(
+    obb: &Obb,
+    contacts: &[ContactConstraint],
+    contact_margin: f32,
+) -> Option<Vec<ContactConstraint>> {
+    if contacts.len() < 2 {
+        return None;
+    }
+
+    let mut normal_sum = Vector3::zeros();
+    let mut point_sum = Vector3::zeros();
+    let mut avg_depth = 0.0;
+    let mut avg_raw = 0.0;
+    for c in contacts {
+        normal_sum += c.normal;
+        point_sum += c.point.coords;
+        avg_depth += c.depth;
+        avg_raw += c.raw_depth;
+    }
+    let normal_len = normal_sum.magnitude();
+    if normal_len < 1e-6 {
+        return None;
+    }
+    let normal = normal_sum / normal_len;
+    let plane_point = nalgebra::Point3::from(point_sum / contacts.len() as f32);
+    avg_depth /= contacts.len() as f32;
+    avg_raw /= contacts.len() as f32;
+
+    let mut min_dot = 1.0f32;
+    let mut min_plane = f32::INFINITY;
+    let mut max_plane = f32::NEG_INFINITY;
+    for c in contacts {
+        min_dot = min_dot.min(c.normal.dot(&normal));
+        let dist = (c.point - plane_point).dot(&normal);
+        min_plane = min_plane.min(dist);
+        max_plane = max_plane.max(dist);
+    }
+    if min_dot < 0.98 {
+        return None;
+    }
+    if (max_plane - min_plane).abs() > contact_margin * 0.5 {
+        return None;
+    }
+
+    let corners = obb.corners();
+    let mut min_proj = f32::INFINITY;
+    for corner in &corners {
+        min_proj = min_proj.min(corner.coords.dot(&normal));
+    }
+    let face_eps = 1e-3;
+    let face_corners: Vec<_> = corners
+        .iter()
+        .cloned()
+        .filter(|corner| (corner.coords.dot(&normal) - min_proj).abs() <= face_eps)
+        .collect();
+    if face_corners.len() != 4 {
+        return None;
+    }
+
+    let base = &contacts[0];
+    let mut stabilized = Vec::with_capacity(face_corners.len());
+    for corner in face_corners {
+        let dist = (corner - plane_point).dot(&normal);
+        let projected = corner - normal * dist;
+        stabilized.push(ContactConstraint {
+            body_a: base.body_a,
+            body_b: base.body_b,
+            collider_a: base.collider_a,
+            collider_b: base.collider_b,
+            point: projected,
+            normal,
+            raw_normal: normal,
+            depth: avg_depth.max(0.0),
+            raw_depth: avg_raw,
+            restitution: base.restitution,
+            friction: base.friction,
+            warm_normal_impulse: 0.0,
+            warm_tangent_impulse: [0.0, 0.0],
+        });
+    }
+
+    Some(stabilized)
+}
+
+/// Collapse coplanar sphere contacts into a single stable contact.
+fn stabilize_coplanar_sphere_contacts(
+    center: nalgebra::Point3<f32>,
+    radius: f32,
+    contacts: &[ContactConstraint],
+    contact_margin: f32,
+) -> Option<Vec<ContactConstraint>> {
+    if contacts.len() < 2 {
+        return None;
+    }
+
+    let mut normal_sum = Vector3::zeros();
+    let mut point_sum = Vector3::zeros();
+    let mut avg_depth = 0.0;
+    let mut avg_raw = 0.0;
+    for c in contacts {
+        normal_sum += c.normal;
+        point_sum += c.point.coords;
+        avg_depth += c.depth;
+        avg_raw += c.raw_depth;
+    }
+    let normal_len = normal_sum.magnitude();
+    if normal_len < 1e-6 {
+        return None;
+    }
+    let normal = normal_sum / normal_len;
+    let plane_point = nalgebra::Point3::from(point_sum / contacts.len() as f32);
+    avg_depth /= contacts.len() as f32;
+    avg_raw /= contacts.len() as f32;
+
+    let mut min_dot = 1.0f32;
+    let mut min_plane = f32::INFINITY;
+    let mut max_plane = f32::NEG_INFINITY;
+    for c in contacts {
+        min_dot = min_dot.min(c.normal.dot(&normal));
+        let dist = (c.point - plane_point).dot(&normal);
+        min_plane = min_plane.min(dist);
+        max_plane = max_plane.max(dist);
+    }
+    if min_dot < 0.98 {
+        return None;
+    }
+    if (max_plane - min_plane).abs() > contact_margin * 0.5 {
+        return None;
+    }
+
+    let base = &contacts[0];
+    let point = center - normal * radius;
+    Some(vec![ContactConstraint {
+        body_a: base.body_a,
+        body_b: base.body_b,
+        collider_a: base.collider_a,
+        collider_b: base.collider_b,
+        point,
+        normal,
+        raw_normal: normal,
+        depth: avg_depth.max(0.0),
+        raw_depth: avg_raw,
+        restitution: base.restitution,
+        friction: base.friction,
+        warm_normal_impulse: 0.0,
+        warm_tangent_impulse: [0.0, 0.0],
+    }])
+}
+
+/// Cluster contacts into coplanar groups by normal and plane proximity.
+struct CoplanarGroup {
+    normal_sum: Vector3<f32>,
+    point_sum: Vector3<f32>,
+    contacts: Vec<ContactConstraint>,
+}
+
+/// Group contacts into coplanar clusters for stabilization.
+fn group_coplanar_contacts(
+    contacts: &[ContactConstraint],
+    normal_dot_threshold: f32,
+    plane_thickness: f32,
+) -> Vec<CoplanarGroup> {
+    let mut groups: Vec<CoplanarGroup> = Vec::new();
+
+    for contact in contacts {
+        let mut best_idx = None;
+        for (idx, group) in groups.iter().enumerate() {
+            let normal = if group.normal_sum.magnitude_squared() > 1e-6 {
+                group.normal_sum.normalize()
+            } else {
+                contact.normal
+            };
+            let point =
+                nalgebra::Point3::from(group.point_sum / group.contacts.len() as f32);
+            let dot = contact.normal.dot(&normal);
+            let dist = (contact.point - point).dot(&normal).abs();
+            if dot >= normal_dot_threshold && dist <= plane_thickness {
+                best_idx = Some(idx);
+                break;
+            }
+        }
+
+        if let Some(idx) = best_idx {
+            let group = &mut groups[idx];
+            group.normal_sum += contact.normal;
+            group.point_sum += contact.point.coords;
+            group.contacts.push(contact.clone());
+        } else {
+            groups.push(CoplanarGroup {
+                normal_sum: contact.normal,
+                point_sum: contact.point.coords,
+                contacts: vec![contact.clone()],
+            });
+        }
+    }
+
+    groups
+}
+
+/// Stabilize coplanar clusters for box contacts and reduce to max points.
+fn stabilize_coplanar_box_groups(
+    obb: &Obb,
+    contacts: &[ContactConstraint],
+    contact_margin: f32,
+    max_points: usize,
+    normal_dot_threshold: f32,
+    plane_thickness: f32,
+) -> Option<Vec<ContactConstraint>> {
+    if contacts.len() < 2 {
+        return None;
+    }
+
+    let groups =
+        group_coplanar_contacts(contacts, normal_dot_threshold, plane_thickness);
+    if groups.iter().all(|g| g.contacts.len() == 1) {
+        return None;
+    }
+
+    let mut stabilized = Vec::new();
+    for group in groups {
+        if group.contacts.len() == 1 {
+            stabilized.push(group.contacts[0].clone());
+            continue;
+        }
+        let stable = stabilize_coplanar_box_contacts(obb, &group.contacts, contact_margin)?;
+        stabilized.extend(stable);
+    }
+
+    if stabilized.len() > max_points {
+        let reducer = crate::physics::pipeline::contact_reducer::ContactReducer::new(max_points);
+        return Some(reducer.reduce(stabilized));
+    }
+
+    Some(stabilized)
+}
+
+/// Stabilize coplanar clusters for sphere contacts and reduce to max points.
+fn stabilize_coplanar_sphere_groups(
+    center: nalgebra::Point3<f32>,
+    radius: f32,
+    contacts: &[ContactConstraint],
+    contact_margin: f32,
+    max_points: usize,
+    normal_dot_threshold: f32,
+    plane_thickness: f32,
+) -> Option<Vec<ContactConstraint>> {
+    if contacts.len() < 2 {
+        return None;
+    }
+
+    let groups =
+        group_coplanar_contacts(contacts, normal_dot_threshold, plane_thickness);
+    if groups.iter().all(|g| g.contacts.len() == 1) {
+        return None;
+    }
+
+    let mut stabilized = Vec::new();
+    for group in groups {
+        if group.contacts.len() == 1 {
+            stabilized.push(group.contacts[0].clone());
+            continue;
+        }
+        let stable =
+            stabilize_coplanar_sphere_contacts(center, radius, &group.contacts, contact_margin)?;
+        stabilized.extend(stable);
+    }
+
+    if stabilized.len() > max_points {
+        let reducer = crate::physics::pipeline::contact_reducer::ContactReducer::new(max_points);
+        return Some(reducer.reduce(stabilized));
+    }
+
+    Some(stabilized)
+}
+
+/// Gate speculative contacts by travel distance and CCD threshold.
 fn is_speculative_candidate(
     travel: f32,
     radius: f32,

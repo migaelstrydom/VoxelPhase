@@ -17,15 +17,11 @@ impl ContactReducer {
             return contacts;
         }
 
+        let mut contacts = contacts;
+        contacts.sort_by(compare_contacts);
         let mut selected: Vec<usize> = Vec::new();
 
-        if let Some((idx, _)) = contacts.iter().enumerate().max_by(|(_, a), (_, b)| {
-            a.depth
-                .partial_cmp(&b.depth)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        }) {
-            selected.push(idx);
-        }
+        selected.push(0);
 
         while selected.len() < self.max_points && selected.len() < contacts.len() {
             let mut best_idx = None;
@@ -61,6 +57,67 @@ impl ContactReducer {
             .map(|idx| contacts[idx].clone())
             .collect()
     }
+}
+
+fn compare_contacts(a: &ContactConstraint, b: &ContactConstraint) -> std::cmp::Ordering {
+    let depth = b
+        .depth
+        .partial_cmp(&a.depth)
+        .unwrap_or(std::cmp::Ordering::Equal);
+    if depth != std::cmp::Ordering::Equal {
+        return depth;
+    }
+    let raw = b
+        .raw_depth
+        .partial_cmp(&a.raw_depth)
+        .unwrap_or(std::cmp::Ordering::Equal);
+    if raw != std::cmp::Ordering::Equal {
+        return raw;
+    }
+    let point_x = a
+        .point
+        .x
+        .partial_cmp(&b.point.x)
+        .unwrap_or(std::cmp::Ordering::Equal);
+    if point_x != std::cmp::Ordering::Equal {
+        return point_x;
+    }
+    let point_y = a
+        .point
+        .y
+        .partial_cmp(&b.point.y)
+        .unwrap_or(std::cmp::Ordering::Equal);
+    if point_y != std::cmp::Ordering::Equal {
+        return point_y;
+    }
+    let point_z = a
+        .point
+        .z
+        .partial_cmp(&b.point.z)
+        .unwrap_or(std::cmp::Ordering::Equal);
+    if point_z != std::cmp::Ordering::Equal {
+        return point_z;
+    }
+    let normal_x = a
+        .normal
+        .x
+        .partial_cmp(&b.normal.x)
+        .unwrap_or(std::cmp::Ordering::Equal);
+    if normal_x != std::cmp::Ordering::Equal {
+        return normal_x;
+    }
+    let normal_y = a
+        .normal
+        .y
+        .partial_cmp(&b.normal.y)
+        .unwrap_or(std::cmp::Ordering::Equal);
+    if normal_y != std::cmp::Ordering::Equal {
+        return normal_y;
+    }
+    a.normal
+        .z
+        .partial_cmp(&b.normal.z)
+        .unwrap_or(std::cmp::Ordering::Equal)
 }
 
 #[cfg(test)]

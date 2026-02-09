@@ -2,6 +2,7 @@
 
 use generational_arena::Arena;
 use nalgebra::{Matrix3, Point3, Vector3};
+use std::collections::HashMap;
 
 use crate::physics::body::RigidBody;
 use crate::physics::handle::{ColliderHandle, RigidBodyHandle};
@@ -208,7 +209,8 @@ pub fn solve(
         })
         .collect();
 
-    for _ in 0..config.solver_iterations {
+    let iterations = effective_solver_iterations(contacts, config.solver_iterations);
+    for _ in 0..iterations {
         for (i, contact) in contacts.iter().enumerate() {
             solve_normal_impulse(
                 bodies,
@@ -226,6 +228,50 @@ pub fn solve(
     post_stabilize(bodies, contacts, &config.post_stabilise, dt);
 
     accumulated
+}
+
+fn effective_solver_iterations(contacts: &[ContactConstraint], base_iterations: u32) -> u32 {
+    let mut per_body_counts: HashMap<RigidBodyHandle, usize> = HashMap::new();
+    let mut per_body_normals: HashMap<RigidBodyHandle, Vec<Vector3<f32>>> = HashMap::new();
+    for contact in contacts {
+        let entry = per_body_counts.entry(contact.body_b).or_insert(0);
+        *entry += 1;
+        per_body_normals
+            .entry(contact.body_b)
+            .or_default()
+            .push(contact.normal);
+    }
+
+    let mut extra = 0u32;
+    if let Some(max_contacts) = per_body_counts.values().copied().max() {
+        if max_contacts > 2 {
+            extra += ((max_contacts - 2).min(4)) as u32;
+        }
+    }
+
+    for normals in per_body_normals.values() {
+        if normals.len() < 2 {
+            continue;
+        }
+        let mut sum = Vector3::zeros();
+        for n in normals {
+            sum += *n;
+        }
+        if sum.magnitude_squared() < 1e-6 {
+            continue;
+        }
+        let avg = sum.normalize();
+        let mut min_dot = 1.0f32;
+        for n in normals {
+            min_dot = min_dot.min(n.dot(&avg));
+        }
+        if min_dot < 0.85 {
+            extra += 2;
+            break;
+        }
+    }
+
+    base_iterations + extra
 }
 
 /// Apply cached impulses from the manifold to give the solver a head start.

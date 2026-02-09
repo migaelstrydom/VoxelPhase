@@ -112,7 +112,7 @@ pub fn spawn_box(
         let body_handle = physics.0.create_body(body_desc);
 
         let collider_desc = ColliderDesc::box_shape(half_extents)
-            .density(500.0)
+            .density(5.0)
             .restitution(0.2)
             .friction(0.6);
 

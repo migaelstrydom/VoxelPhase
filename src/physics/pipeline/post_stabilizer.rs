@@ -27,6 +27,8 @@ pub struct PostStabiliseConfig {
     pub slop: f32,
     /// Iterations for split-impulse post-stabilization.
     pub iterations: u32,
+    /// Max correction speed (m/s) for split impulse and Baumgarte.
+    pub max_correction_speed: f32,
     /// Rolling resistance factor applied to bodies with contacts.
     pub contact_rolling_resistance: f32,
     /// Linear damping factor applied to bodies with contacts.
@@ -42,6 +44,7 @@ impl Default for PostStabiliseConfig {
             correction_factor: 0.1,
             slop: 0.005,
             iterations: 6,
+            max_correction_speed: 0.1,
             contact_rolling_resistance: 0.1,
             contact_linear_damping: 0.1,
         }
@@ -66,10 +69,11 @@ pub(crate) fn post_stabilize(
             config.correction_factor,
             config.slop,
             config.iterations,
+            config.max_correction_speed,
             dt,
         );
     } else {
-        apply_baumgarte_correction(bodies, contacts, config);
+        apply_baumgarte_correction(bodies, contacts, config, dt);
     }
 
     apply_contact_rolling_resistance(bodies, contacts, config.contact_rolling_resistance, dt);
@@ -90,6 +94,7 @@ fn apply_baumgarte_correction(
     bodies: &mut Arena<RigidBody>,
     contacts: &[ContactConstraint],
     config: &PostStabiliseConfig,
+    dt: f32,
 ) {
     for contact in contacts {
         if contact.depth > 0.001 {
@@ -115,6 +120,8 @@ fn apply_baumgarte_correction(
                 inv_mass_b,
                 config.baumgarte_factor,
                 config.baumgarte_slop,
+                config.max_correction_speed,
+                dt,
             );
         }
     }
@@ -127,13 +134,18 @@ fn apply_position_correction(
     inv_mass_b: f32,
     correction_factor: f32,
     slop: f32,
+    max_correction_speed: f32,
+    dt: f32,
 ) {
     let total_inv_mass = inv_mass_a + inv_mass_b;
     if total_inv_mass <= 0.0 {
         return;
     }
 
-    let correction = (contact.depth - slop).max(0.0) * correction_factor / total_inv_mass;
+    let mut correction = (contact.depth - slop).max(0.0) * correction_factor / total_inv_mass;
+    if max_correction_speed > 0.0 && dt > 0.0 {
+        correction = correction.min(max_correction_speed * dt);
+    }
 
     if let Some(handle_a) = contact.body_a {
         if let Some(body_a) = bodies.get_mut(handle_a.0) {
@@ -188,6 +200,7 @@ fn apply_split_impulse_correction(
     correction_factor: f32,
     slop: f32,
     iterations: u32,
+    max_correction_speed: f32,
     dt: f32,
 ) {
     if contacts.is_empty() || iterations == 0 || dt <= 0.0 {
@@ -276,7 +289,10 @@ fn apply_split_impulse_correction(
                 continue;
             }
 
-            let bias = -depth * correction_factor * inv_dt;
+            let mut bias = -depth * correction_factor * inv_dt;
+            if max_correction_speed > 0.0 {
+                bias = bias.max(-max_correction_speed);
+            }
             let delta_impulse = -(vel_along_normal + bias) / effective_mass;
             let old_impulse = accumulated[i];
             let new_impulse = (old_impulse + delta_impulse).max(0.0);

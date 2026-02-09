@@ -89,6 +89,7 @@ impl ContactManifold {
 pub struct ManifoldCache {
     manifolds: HashMap<ManifoldKey, ContactManifold>,
     match_threshold: f32,
+    static_match_multiplier: f32,
     max_age: u8,
     warm_start_depth_slop: f32,
     normal_smoother: NormalSmoother,
@@ -97,6 +98,7 @@ pub struct ManifoldCache {
 impl ManifoldCache {
     pub fn new(
         match_threshold: f32,
+        static_match_multiplier: f32,
         max_age: u8,
         warm_start_depth_slop: f32,
         normal_smoothing: NormalSmoothingConfig,
@@ -104,6 +106,7 @@ impl ManifoldCache {
         Self {
             manifolds: HashMap::new(),
             match_threshold,
+            static_match_multiplier,
             max_age,
             warm_start_depth_slop,
             normal_smoother: NormalSmoother::from_config(normal_smoothing),
@@ -156,10 +159,15 @@ impl ManifoldCache {
                 let (local_a, local_b) = to_local_space(contact, bodies);
 
                 // Find closest existing point in the manifold, excluding already matched
+                let threshold = if contact.body_a.is_none() {
+                    self.match_threshold * self.static_match_multiplier
+                } else {
+                    self.match_threshold
+                };
                 let match_idx = find_closest_point_excluding(
                     manifold,
                     &local_b,
-                    self.match_threshold,
+                    threshold,
                     &matched_indices,
                 );
 
@@ -174,7 +182,8 @@ impl ManifoldCache {
                         } else {
                             contact.normal
                         };
-                        let use_warm = aligned && contact.raw_depth > 0.0;
+                        let use_warm =
+                            aligned && contact.raw_depth >= -self.warm_start_depth_slop;
                         let warm = if use_warm {
                             (cached.normal_impulse, cached.tangent_impulse)
                         } else {
@@ -307,6 +316,7 @@ fn world_to_local(
     Point3::from(body_rot.inverse() * (point - body_pos))
 }
 
+
 fn find_closest_point_excluding(
     manifold: &ContactManifold,
     local_b: &Point3<f32>,
@@ -348,6 +358,13 @@ fn find_shallowest_unmatched(
         .map(|(i, _)| i)
 }
 
+/// Reduce contacts while biasing toward cached manifold points.
+///
+/// This preserves temporal stability by keeping points that already exist in the manifold
+/// whenever they are within the match threshold. After the history bias is applied, the
+/// remaining slots are filled deterministically so the selection does not flicker between
+/// frames. The result is a stable, size-limited contact set that still reflects the current
+/// narrowphase output.
 fn reduce_contacts_with_manifold<'a>(
     contacts: Vec<&'a ContactConstraint>,
     manifold: &ContactManifold,
@@ -381,50 +398,100 @@ fn reduce_contacts_with_manifold<'a>(
         }
         if let Some(idx) = best_idx {
             selected.push(idx);
-            if selected.len() >= max_points {
-                break;
-            }
         }
+    }
+
+    if selected.len() > max_points {
+        selected.sort_by(|a, b| compare_contacts(contacts[*a], contacts[*b]));
+        selected.truncate(max_points);
     }
 
     if selected.is_empty() {
-        if let Some((idx, _)) = contacts.iter().enumerate().max_by(|(_, a), (_, b)| {
-            a.depth
-                .partial_cmp(&b.depth)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        }) {
-            selected.push(idx);
+        let mut indices: Vec<usize> = (0..contacts.len()).collect();
+        indices.sort_by(|a, b| compare_contacts(contacts[*a], contacts[*b]));
+        if let Some(idx) = indices.first() {
+            selected.push(*idx);
         }
     }
 
-    while selected.len() < max_points && selected.len() < contacts.len() {
-        let mut best_idx = None;
-        let mut best_score = -1.0f32;
+    let mut remaining: Vec<usize> = (0..contacts.len())
+        .filter(|idx| !selected.contains(idx))
+        .collect();
+    remaining.sort_by(|a, b| compare_contacts(contacts[*a], contacts[*b]));
 
-        for (idx, contact) in contacts.iter().enumerate() {
-            if selected.contains(&idx) {
-                continue;
-            }
-            let mut min_dist_sq = f32::INFINITY;
-            for &s_idx in &selected {
-                let delta: Vector3<f32> = contact.point - contacts[s_idx].point;
-                let dist_sq = delta.magnitude_squared();
-                if dist_sq < min_dist_sq {
-                    min_dist_sq = dist_sq;
-                }
-            }
-            if min_dist_sq > best_score {
-                best_score = min_dist_sq;
-                best_idx = Some(idx);
-            }
-        }
-
-        if let Some(idx) = best_idx {
-            selected.push(idx);
-        } else {
+    for idx in remaining {
+        if selected.len() >= max_points {
             break;
         }
+        selected.push(idx);
     }
 
     selected.into_iter().map(|idx| contacts[idx]).collect()
+}
+
+/// Deterministic ordering for contact reduction.
+///
+/// This orders by deeper contacts first, then by raw depth, then by position and normal
+/// components. The goal is stability rather than geometric optimality, so ties are broken
+/// consistently across frames. This helps prevent oscillation caused by nondeterministic
+/// contact selection.
+fn compare_contacts(a: &ContactConstraint, b: &ContactConstraint) -> std::cmp::Ordering {
+    let depth = b
+        .depth
+        .partial_cmp(&a.depth)
+        .unwrap_or(std::cmp::Ordering::Equal);
+    if depth != std::cmp::Ordering::Equal {
+        return depth;
+    }
+    let raw = b
+        .raw_depth
+        .partial_cmp(&a.raw_depth)
+        .unwrap_or(std::cmp::Ordering::Equal);
+    if raw != std::cmp::Ordering::Equal {
+        return raw;
+    }
+    let point_x = a
+        .point
+        .x
+        .partial_cmp(&b.point.x)
+        .unwrap_or(std::cmp::Ordering::Equal);
+    if point_x != std::cmp::Ordering::Equal {
+        return point_x;
+    }
+    let point_y = a
+        .point
+        .y
+        .partial_cmp(&b.point.y)
+        .unwrap_or(std::cmp::Ordering::Equal);
+    if point_y != std::cmp::Ordering::Equal {
+        return point_y;
+    }
+    let point_z = a
+        .point
+        .z
+        .partial_cmp(&b.point.z)
+        .unwrap_or(std::cmp::Ordering::Equal);
+    if point_z != std::cmp::Ordering::Equal {
+        return point_z;
+    }
+    let normal_x = a
+        .normal
+        .x
+        .partial_cmp(&b.normal.x)
+        .unwrap_or(std::cmp::Ordering::Equal);
+    if normal_x != std::cmp::Ordering::Equal {
+        return normal_x;
+    }
+    let normal_y = a
+        .normal
+        .y
+        .partial_cmp(&b.normal.y)
+        .unwrap_or(std::cmp::Ordering::Equal);
+    if normal_y != std::cmp::Ordering::Equal {
+        return normal_y;
+    }
+    a.normal
+        .z
+        .partial_cmp(&b.normal.z)
+        .unwrap_or(std::cmp::Ordering::Equal)
 }
