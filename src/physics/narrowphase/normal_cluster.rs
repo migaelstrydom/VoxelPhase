@@ -20,6 +20,8 @@ pub struct NormalClusterConfig {
     pub max_points: usize,
     /// Cosine threshold for grouping normals into the same cluster.
     pub normal_cluster_dot: f32,
+    /// Maximum distance between contact points to cluster together.
+    pub point_cluster_distance: f32,
 }
 
 impl Default for NormalClusterConfig {
@@ -27,6 +29,7 @@ impl Default for NormalClusterConfig {
         Self {
             max_points: 4,
             normal_cluster_dot: 0.98,
+            point_cluster_distance: 0.05,
         }
     }
 }
@@ -36,6 +39,8 @@ pub struct NormalClusterer {
     max_points: usize,
     /// Cosine threshold for grouping normals into the same cluster.
     normal_cluster_dot: f32,
+    /// Maximum distance between contact points to cluster together.
+    point_cluster_distance: f32,
     /// Margin used to weight normals by effective depth.
     contact_margin: f32,
     /// Shared reducer for final contact trimming.
@@ -44,13 +49,24 @@ pub struct NormalClusterer {
 
 impl NormalClusterer {
     pub fn from_config(config: NormalClusterConfig, contact_margin: f32) -> Self {
-        Self::new(config.max_points, config.normal_cluster_dot, contact_margin)
+        Self::new(
+            config.max_points,
+            config.normal_cluster_dot,
+            config.point_cluster_distance,
+            contact_margin,
+        )
     }
 
-    pub fn new(max_points: usize, normal_cluster_dot: f32, contact_margin: f32) -> Self {
+    pub fn new(
+        max_points: usize,
+        normal_cluster_dot: f32,
+        point_cluster_distance: f32,
+        contact_margin: f32,
+    ) -> Self {
         Self {
             max_points,
             normal_cluster_dot,
+            point_cluster_distance,
             contact_margin,
             reducer: ContactReducer::new(max_points),
         }
@@ -62,6 +78,7 @@ impl NormalClusterer {
         }
 
         let mut clusters: Vec<NormalCluster> = Vec::new();
+        let max_dist_sq = self.point_cluster_distance * self.point_cluster_distance;
         for contact in contacts {
             let mut best_idx = None;
             let mut best_dot = self.normal_cluster_dot;
@@ -73,7 +90,9 @@ impl NormalClusterer {
                     cluster.best_contact.normal
                 };
                 let dot = contact.normal.dot(&base_normal);
-                if dot >= best_dot {
+                let delta = contact.point - cluster.best_contact.point;
+                let dist_sq = delta.magnitude_squared();
+                if dot >= best_dot && dist_sq <= max_dist_sq {
                     best_dot = dot;
                     best_idx = Some(idx);
                 }

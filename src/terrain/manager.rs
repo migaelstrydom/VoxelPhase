@@ -408,6 +408,10 @@ impl StaticGeometry for TerrainManager {
         self.query_swept_sphere(start, end, radius)
             .map(|sc| SweptStaticContact::new(sc.t, sc.point, sc.normal))
     }
+
+    fn query_triangles(&self, aabb: &crate::collision::AABB) -> Vec<crate::collision::Triangle> {
+        self.mesh.query_aabb(aabb)
+    }
 }
 
 #[cfg(test)]

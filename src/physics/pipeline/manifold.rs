@@ -144,13 +144,7 @@ impl ManifoldCache {
                 .or_insert_with(ContactManifold::new);
 
             let contacts = if contacts.len() > 4 {
-                reduce_contacts_with_manifold(
-                    contacts,
-                    manifold,
-                    bodies,
-                    4,
-                    self.match_threshold,
-                )
+                reduce_contacts_with_manifold(contacts, manifold, bodies, 4, self.match_threshold)
             } else {
                 contacts
             };
@@ -174,17 +168,13 @@ impl ManifoldCache {
                         matched_indices.insert(idx);
                         // Matched: inherit cached impulses, update point
                         let cached = &mut manifold.points[idx];
-                        let aligned = self
-                            .normal_smoother
-                            .aligned(cached.normal, contact.normal);
+                        let aligned = self.normal_smoother.aligned(cached.normal, contact.normal);
                         let contact_normal = if aligned {
-                            self.normal_smoother
-                                .smooth(cached.normal, contact.normal)
+                            self.normal_smoother.smooth(cached.normal, contact.normal)
                         } else {
                             contact.normal
                         };
-                        let use_warm = aligned
-                            && contact.raw_depth > -self.warm_start_depth_slop;
+                        let use_warm = aligned && contact.raw_depth > 0.0;
                         let warm = if use_warm {
                             (cached.normal_impulse, cached.tangent_impulse)
                         } else {
@@ -398,15 +388,11 @@ fn reduce_contacts_with_manifold<'a>(
     }
 
     if selected.is_empty() {
-        if let Some((idx, _)) = contacts
-            .iter()
-            .enumerate()
-            .max_by(|(_, a), (_, b)| {
-                a.depth
-                    .partial_cmp(&b.depth)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
-        {
+        if let Some((idx, _)) = contacts.iter().enumerate().max_by(|(_, a), (_, b)| {
+            a.depth
+                .partial_cmp(&b.depth)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        }) {
             selected.push(idx);
         }
     }

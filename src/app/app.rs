@@ -20,7 +20,7 @@ use crate::terrain::{create_test_terrain, TerrainManager};
 use crate::time::Time;
 
 use super::dispatcher_builder::build_dispatcher;
-use super::entity_spawner::{spawn_beach_ball, spawn_camera, spawn_player};
+use super::entity_spawner::{spawn_beach_ball, spawn_box, spawn_camera, spawn_player};
 use super::event_handler::{clear_frame_state, set_mouse_captured, EventHandler, EventResult};
 use super::world_builder::WorldBuilder;
 
@@ -38,8 +38,11 @@ impl<'a, 'b> App<'a, 'b> {
             Self::create_rendering_context(&window, window_width, window_height)?;
         let (material_manager, grenade_materials) = Self::create_materials(&texture_manager)?;
         let grenade_model = Self::create_grenade_model(&grenade_materials);
-        let num_beach_balls = 10;
+        let num_beach_balls = 5;
         let beach_ball_models = Self::create_beach_ball_models(&grenade_materials, num_beach_balls);
+        let num_boxes = 5;
+        let box_half_extents = nalgebra::Vector3::new(0.5, 0.5, 0.5);
+        let box_model = Self::create_box_model(&grenade_materials, box_half_extents);
         let terrain_manager = Self::create_terrain(&texture_manager)?;
 
         let mut world = WorldBuilder::new()
@@ -73,6 +76,13 @@ impl<'a, 'b> App<'a, 'b> {
             .zip(beach_ball_models.into_iter())
         {
             spawn_beach_ball(&mut world, pos, model);
+        }
+
+        let box_spacing = box_half_extents.x * 3.0;
+        let start_x = -box_spacing * (num_boxes as f32 - 1.0) * 0.5;
+        for i in 0..num_boxes {
+            let pos = nalgebra::Point3::new(start_x + i as f32 * box_spacing, 2.0, 3.0);
+            spawn_box(&mut world, pos, box_half_extents, Arc::clone(&box_model));
         }
 
         let dispatcher = build_dispatcher();
@@ -205,6 +215,22 @@ impl<'a, 'b> App<'a, 'b> {
                 Arc::new(Model::flat(parts))
             })
             .collect()
+    }
+
+    fn create_box_model(
+        grenade_materials: &GrenadeMaterials,
+        half_extents: nalgebra::Vector3<f32>,
+    ) -> Arc<crate::model::Model> {
+        use crate::geometry::{generate_cube_indices, generate_cube_vertices};
+        use crate::model::{MeshPrimitive, Model, ModelPart};
+
+        let parts = vec![ModelPart::new(vec![MeshPrimitive {
+            vertices: generate_cube_vertices(half_extents, Colour::new(0.6, 0.6, 0.7, 1.0)),
+            indices: generate_cube_indices(),
+            material: grenade_materials.body,
+        }])];
+
+        Arc::new(Model::flat(parts))
     }
 
     fn create_terrain(

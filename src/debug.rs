@@ -49,6 +49,54 @@ impl DebugLines {
     }
 }
 
+/// ECS resource for accumulating debug logs to print to stdout.
+///
+/// Debug entries are stored as key-value pairs and sorted alphabetically
+/// by key before printing, ensuring stable output order.
+///
+/// # Usage
+/// ```ignore
+/// // In a system:
+/// fn my_system(mut debug: Write<DebugLog>) {
+///     debug.add("ContactCount", format!("{}", count));
+///     debug.add("SleepingBodies", format!("{}", sleeping));
+/// }
+///
+/// // At end of frame, if F3 is pressed:
+/// debug_log.print_and_clear(true);  // prints to stdout
+/// // Or if F3 not pressed:
+/// debug_log.print_and_clear(false); // just clears
+/// ```
+#[derive(Default)]
+pub struct DebugLog {
+    entries: BTreeMap<String, String>,
+}
+
+impl DebugLog {
+    /// Add or update a debug log entry.
+    ///
+    /// If a key already exists, its value is replaced.
+    /// Keys are sorted alphabetically when printing.
+    pub fn add(&mut self, key: impl Into<String>, value: impl Into<String>) {
+        self.entries.insert(key.into(), value.into());
+    }
+
+    /// Print all entries to stdout if `should_print` is true, then clear.
+    ///
+    /// This should be called at the end of each frame with `should_print`
+    /// set based on whether F3 is pressed.
+    pub fn print_and_clear(&mut self, should_print: bool) {
+        if should_print && !self.entries.is_empty() {
+            println!("\n=== Debug Log ===");
+            for (key, value) in &self.entries {
+                println!("{}: {}", key, value);
+            }
+            println!("=================\n");
+        }
+        self.entries.clear();
+    }
+}
+
 /// Debug overlay shapes to render in 3D.
 #[derive(Default)]
 pub struct DebugOverlays {

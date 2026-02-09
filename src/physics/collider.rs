@@ -3,30 +3,27 @@
 use nalgebra::{Isometry3, Matrix3, Point3, UnitQuaternion, Vector3};
 
 use super::handle::RigidBodyHandle;
-use super::math::sphere_inertia_tensor;
+use super::math::{box_inertia_tensor, sphere_inertia_tensor};
 
 /// Shape of a collider.
 #[derive(Debug, Clone)]
 pub enum ColliderShape {
     /// A sphere centered at the collider's local origin.
     Sphere { radius: f32 },
-    // Future phases:
-    // Box { half_extents: Vector3<f32> },
-    // Capsule { half_height: f32, radius: f32 },
-    // ConvexHull { points: Arc<Vec<Point3<f32>>> },
+    /// An oriented box (rectangular prism) centered at the collider's local origin.
+    Box { half_extents: Vector3<f32> },
 }
 
 impl ColliderShape {
-    pub fn sphere(radius: f32) -> Self {
-        Self::Sphere { radius }
-    }
-
     /// Compute the mass from shape and density.
     pub fn compute_mass(&self, density: f32) -> f32 {
         match self {
             ColliderShape::Sphere { radius } => {
-                // Volume of sphere: (4/3) * pi * r³
                 let volume = (4.0 / 3.0) * std::f32::consts::PI * radius.powi(3);
+                volume * density
+            }
+            ColliderShape::Box { half_extents } => {
+                let volume = 8.0 * half_extents.x * half_extents.y * half_extents.z;
                 volume * density
             }
         }
@@ -36,6 +33,7 @@ impl ColliderShape {
     pub fn compute_inertia(&self, mass: f32) -> Matrix3<f32> {
         match self {
             ColliderShape::Sphere { radius } => sphere_inertia_tensor(mass, *radius),
+            ColliderShape::Box { half_extents } => box_inertia_tensor(mass, *half_extents),
         }
     }
 
@@ -43,6 +41,7 @@ impl ColliderShape {
     pub fn bounding_radius(&self) -> f32 {
         match self {
             ColliderShape::Sphere { radius } => *radius,
+            ColliderShape::Box { half_extents } => half_extents.norm(),
         }
     }
 }
@@ -91,14 +90,18 @@ impl ColliderDesc {
         Self {
             shape: ColliderShape::Sphere { radius },
             offset: Isometry3::identity(),
-            density: 1000.0, // Default: water density
+            density: 1000.0,
             material: ColliderMaterial::default(),
         }
     }
 
-    pub fn offset(mut self, position: Vector3<f32>) -> Self {
-        self.offset = Isometry3::from_parts(position.into(), UnitQuaternion::identity());
-        self
+    pub fn box_shape(half_extents: Vector3<f32>) -> Self {
+        Self {
+            shape: ColliderShape::Box { half_extents },
+            offset: Isometry3::identity(),
+            density: 1000.0,
+            material: ColliderMaterial::default(),
+        }
     }
 
     pub fn density(mut self, density: f32) -> Self {
@@ -157,10 +160,6 @@ impl Collider {
         &self.shape
     }
 
-    pub fn offset(&self) -> &Isometry3<f32> {
-        &self.offset
-    }
-
     pub fn material(&self) -> &ColliderMaterial {
         &self.material
     }
@@ -174,7 +173,11 @@ impl Collider {
     }
 
     /// Get the world-space center of the collider given the body's position.
-    pub fn world_center(&self, body_position: Point3<f32>, body_rotation: UnitQuaternion<f32>) -> Point3<f32> {
+    pub fn world_center(
+        &self,
+        body_position: Point3<f32>,
+        body_rotation: UnitQuaternion<f32>,
+    ) -> Point3<f32> {
         let body_isometry = Isometry3::from_parts(body_position.coords.into(), body_rotation);
         let world_offset = body_isometry * self.offset;
         Point3::from(world_offset.translation.vector)

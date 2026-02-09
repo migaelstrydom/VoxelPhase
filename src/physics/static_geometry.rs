@@ -5,6 +5,8 @@
 
 use nalgebra::{Point3, Vector3};
 
+use crate::collision::{Triangle, AABB};
+
 /// Contact information from a static geometry query.
 #[derive(Debug, Clone)]
 pub struct StaticContact {
@@ -62,4 +64,10 @@ pub trait StaticGeometry {
         end: Point3<f32>,
         radius: f32,
     ) -> Option<SweptStaticContact>;
+
+    /// Query all triangles intersecting an AABB region.
+    ///
+    /// Used by non-sphere colliders (boxes) that need raw triangle data
+    /// for their own collision tests (e.g., SAT).
+    fn query_triangles(&self, _aabb: &AABB) -> Vec<Triangle>;
 }

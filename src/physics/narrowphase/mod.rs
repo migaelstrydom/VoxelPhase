@@ -1,7 +1,7 @@
-mod sphere_sphere;
-mod sphere_static;
+mod dynamic_contacts;
 mod normal_cluster;
+mod static_contacts;
 
-pub use sphere_sphere::generate_sphere_sphere_contacts;
-pub use sphere_static::generate_sphere_static_contacts;
+pub use dynamic_contacts::generate_dynamic_contacts;
 pub use normal_cluster::{NormalClusterConfig, NormalClusterer};
+pub use static_contacts::generate_static_contacts;

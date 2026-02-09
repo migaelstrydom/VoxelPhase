@@ -39,11 +39,11 @@ impl Default for PostStabiliseConfig {
             baumgarte_factor: 0.05,
             baumgarte_slop: 0.005,
             split_impulse_enabled: true,
-            correction_factor: 0.2,
+            correction_factor: 0.1,
             slop: 0.005,
-            iterations: 4,
-            contact_rolling_resistance: 0.5,
-            contact_linear_damping: 0.5,
+            iterations: 6,
+            contact_rolling_resistance: 0.1,
+            contact_linear_damping: 0.1,
         }
     }
 }

@@ -7,7 +7,7 @@ use winit::{
 
 use specs::{World, WorldExt};
 
-use crate::debug::{DebugLines, DebugOverlays};
+use crate::debug::{DebugLines, DebugLog, DebugOverlays};
 use crate::input::InputState;
 
 /// Result of handling an event
@@ -137,6 +137,18 @@ impl EventHandler {
 
 /// Clears per-frame state after systems have processed
 pub fn clear_frame_state(world: &mut World) {
+    use winit::keyboard::KeyCode;
+
+    let should_print_debug = {
+        let input = world.read_resource::<InputState>();
+        input.is_key_just_pressed(KeyCode::F3)
+    };
+
+    {
+        let mut debug_log = world.write_resource::<DebugLog>();
+        debug_log.print_and_clear(should_print_debug);
+    }
+
     {
         let mut input = world.write_resource::<InputState>();
         input.begin_frame();

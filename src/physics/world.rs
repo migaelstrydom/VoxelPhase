@@ -6,10 +6,12 @@ use std::collections::{HashMap, HashSet};
 
 use super::body::{RigidBody, RigidBodyDesc};
 use super::collider::{Collider, ColliderDesc, ColliderMaterial, ColliderShape};
+use super::collision::obb::Obb;
+use super::collision::obb_triangle::obb_triangle_contacts;
 use super::grounding::{GroundingConfig, GroundingDetector};
 use super::handle::{ColliderHandle, RigidBodyHandle};
 use super::narrowphase::{
-    generate_sphere_sphere_contacts, generate_sphere_static_contacts, NormalClusterConfig,
+    generate_dynamic_contacts, generate_static_contacts, NormalClusterConfig,
 };
 use super::pipeline::integration::{integrate_bodies, integrate_forces};
 use super::pipeline::manifold::ManifoldCache;
@@ -18,7 +20,7 @@ use super::pipeline::post_stabilizer::PostStabiliseConfig;
 use super::pipeline::solver::{solve, solve_contacts, ContactConstraint};
 use super::sleep::SleepManager;
 use super::static_geometry::StaticGeometry;
-use crate::debug::DebugLines;
+use crate::debug::{DebugLines, DebugLog};
 
 /// Configuration for the physics simulation.
 #[derive(Debug, Clone)]
@@ -111,10 +113,13 @@ impl Default for PhysicsConfig {
 /// Data collected for a body that needs CCD sweeping.
 struct CcdCandidate {
     body_handle: RigidBodyHandle,
+    /// Bounding sphere radius (sphere radius for spheres, half_extents.norm() for boxes).
     radius: f32,
+    shape: ColliderShape,
     material: ColliderMaterial,
     pre_body_pos: Point3<f32>,
     post_body_pos: Point3<f32>,
+    pre_rot: UnitQuaternion<f32>,
     pre_center: Point3<f32>,
     post_center: Point3<f32>,
 }
@@ -129,6 +134,7 @@ pub struct PhysicsWorld {
     colliders: Arena<Collider>,
     manifold_cache: ManifoldCache,
     last_contacts: Vec<ContactEvent>,
+    last_contact_debug: Option<ContactDebugSnapshot>,
     frame_index: u64,
     sleep_manager: SleepManager,
     grounding_detector: GroundingDetector,
@@ -152,6 +158,7 @@ impl PhysicsWorld {
             colliders: Arena::new(),
             manifold_cache,
             last_contacts: Vec::new(),
+            last_contact_debug: None,
             frame_index: 0,
             sleep_manager,
             grounding_detector,
@@ -333,7 +340,7 @@ impl PhysicsWorld {
         &mut self,
         dt: f32,
         static_geometry: &dyn StaticGeometry,
-        _debug_lines: &mut DebugLines,
+        debug_lines: &mut DebugLines,
     ) {
         self.frame_index = self.frame_index.wrapping_add(1);
         self.sleep_manager
@@ -356,7 +363,7 @@ impl PhysicsWorld {
         );
 
         // Phase 3: Narrowphase contact generation
-        let mut raw_contacts = generate_sphere_static_contacts(
+        let mut raw_contacts = generate_static_contacts(
             &self.bodies,
             &self.colliders,
             static_geometry,
@@ -369,7 +376,7 @@ impl PhysicsWorld {
             self.config.normal_clustering,
             sleeping_snapshot.as_ref(),
         );
-        raw_contacts.extend(generate_sphere_sphere_contacts(
+        raw_contacts.extend(generate_dynamic_contacts(
             &self.bodies,
             &self.colliders,
             self.config.contact_margin,
@@ -393,6 +400,13 @@ impl PhysicsWorld {
         self.sleep_manager
             .apply_wake_events(&contacts, &self.bodies);
         let active_contacts = self.sleep_manager.filter_active_contacts(&contacts);
+        self.last_contact_debug = Some(ContactDebugSnapshot::new(
+            &self.bodies,
+            &raw_contacts,
+            &contacts,
+            &active_contacts,
+            &self.last_contacts,
+        ));
 
         // Phase 5: Solve velocity constraints (warm-start + N iterations)
         let solved = solve(&mut self.bodies, &active_contacts, &self.config, dt);
@@ -448,6 +462,8 @@ impl PhysicsWorld {
             sleeping_snapshot.as_ref(),
         );
 
+        let _ = debug_lines;
+
         self.sleep_manager
             .update_sleep_states(&mut self.bodies, &contacts);
     }
@@ -455,6 +471,56 @@ impl PhysicsWorld {
     /// Contacts generated in the most recent step.
     pub fn contact_events(&self) -> &[ContactEvent] {
         &self.last_contacts
+    }
+
+    /// Write debug statistics to the debug log resource.
+    ///
+    /// Should be called every frame by the physics system. The output will
+    /// only be printed to stdout when F3 is pressed.
+    pub fn write_debug_log(&self, debug_log: &mut DebugLog) {
+        let Some(snapshot) = &self.last_contact_debug else {
+            debug_log.add("Physics/Status", "No data yet");
+            return;
+        };
+
+        debug_log.add("Physics/Events/Total", snapshot.events.total.to_string());
+        debug_log.add("Physics/Events/CCD", snapshot.events.ccd.to_string());
+        debug_log.add(
+            "Physics/Events/Narrowphase",
+            snapshot.events.narrow.to_string(),
+        );
+
+        debug_log.add("Physics/Raw/Total", snapshot.raw.total.to_string());
+        debug_log.add("Physics/Raw/Static", snapshot.raw.static_count.to_string());
+        debug_log.add("Physics/Raw/NegRaw", snapshot.raw.neg_raw.to_string());
+        debug_log.add("Physics/Raw/WarmUsed", snapshot.raw.warm_used.to_string());
+        debug_log.add(
+            "Physics/Raw/DepthRange",
+            format!(
+                "[{:.5}, {:.5}]",
+                snapshot.raw.min_depth, snapshot.raw.max_depth
+            ),
+        );
+
+        debug_log.add("Physics/Merged/Total", snapshot.merged.total.to_string());
+        debug_log.add(
+            "Physics/Merged/Static",
+            snapshot.merged.static_count.to_string(),
+        );
+        debug_log.add(
+            "Physics/Merged/WarmUsed",
+            snapshot.merged.warm_used.to_string(),
+        );
+
+        debug_log.add("Physics/Active/Total", snapshot.active.total.to_string());
+        debug_log.add(
+            "Physics/Active/Static",
+            snapshot.active.static_count.to_string(),
+        );
+        debug_log.add(
+            "Physics/Active/WarmUsed",
+            snapshot.active.warm_used.to_string(),
+        );
     }
 
     /// Bodies grounded by static contacts in the most recent step.
@@ -523,30 +589,28 @@ impl PhysicsWorld {
             })
             .filter_map(|(idx, body)| {
                 let handle = RigidBodyHandle(idx);
-                // The narrowphase already manages bodies with static contacts
                 if narrowphase_handled.contains(&handle) {
                     return None;
                 }
                 let collider_handle = *body.colliders().first()?;
                 let collider = self.colliders.get(collider_handle.0)?;
-                let radius = match collider.shape() {
-                    ColliderShape::Sphere { radius } => *radius,
-                };
+                let radius = collider.shape().bounding_radius();
                 let speed = body.linear_velocity().magnitude();
                 if speed * dt <= radius * self.config.ccd_threshold {
                     return None;
                 }
                 let &(pre_pos, pre_rot) = pre_states.get(&idx)?;
                 let post_pos = body.position();
-                let post_rot = body.rotation();
                 Some(CcdCandidate {
                     body_handle: handle,
                     radius,
+                    shape: collider.shape().clone(),
                     material: *collider.material(),
                     pre_body_pos: pre_pos,
                     post_body_pos: post_pos,
+                    pre_rot,
                     pre_center: collider.world_center(pre_pos, pre_rot),
-                    post_center: collider.world_center(post_pos, post_rot),
+                    post_center: collider.world_center(post_pos, body.rotation()),
                 })
             })
             .collect();
@@ -568,26 +632,35 @@ impl PhysicsWorld {
                 body.set_position(hit_pos);
             }
 
-            // Solve CCD contact to correct velocity (transient, not cached)
-            let contact = ContactConstraint {
-                body_a: None,
-                body_b: candidate.body_handle,
-                collider_a: None,
-                collider_b: None,
-                point: hit.point,
-                normal: hit.normal,
-                raw_normal: hit.normal,
-                depth: 0.0,
-                raw_depth: 0.0,
-                restitution: candidate.material.restitution,
-                friction: candidate.material.friction,
-                warm_normal_impulse: 0.0,
-                warm_tangent_impulse: [0.0, 0.0],
+            let ccd_contacts = match &candidate.shape {
+                ColliderShape::Sphere { .. } => {
+                    vec![ContactConstraint {
+                        body_a: None,
+                        body_b: candidate.body_handle,
+                        collider_a: None,
+                        collider_b: None,
+                        point: hit.point,
+                        normal: hit.normal,
+                        raw_normal: hit.normal,
+                        depth: 0.0,
+                        raw_depth: 0.0,
+                        restitution: candidate.material.restitution,
+                        friction: candidate.material.friction,
+                        warm_normal_impulse: 0.0,
+                        warm_tangent_impulse: [0.0, 0.0],
+                    }]
+                }
+                ColliderShape::Box { half_extents } => {
+                    self.box_ccd_contacts(candidate, *half_extents, hit_pos, static_geometry)
+                }
             };
-            self.last_contacts.push(ContactEvent::from_ccd(&contact));
+
+            for contact in &ccd_contacts {
+                self.last_contacts.push(ContactEvent::from_ccd(contact));
+            }
             solve_contacts(
                 &mut self.bodies,
-                &[contact],
+                &ccd_contacts,
                 self.config.restitution_velocity_threshold,
                 self.config.restitution_depth_slop,
             );
@@ -596,6 +669,344 @@ impl PhysicsWorld {
         }
 
         corrections
+    }
+
+    /// Generate precise box-terrain contacts at a CCD hit position.
+    ///
+    /// Bounding-sphere sweep found the approximate hit. Now build an OBB at
+    /// the hit position (using the pre-integration rotation) and run SAT
+    /// against nearby triangles for accurate contact normals.
+    fn box_ccd_contacts(
+        &self,
+        candidate: &CcdCandidate,
+        half_extents: Vector3<f32>,
+        hit_pos: Point3<f32>,
+        static_geometry: &dyn StaticGeometry,
+    ) -> Vec<ContactConstraint> {
+        let obb = Obb::new(hit_pos, candidate.pre_rot, half_extents);
+        let (aabb_min, aabb_max) = obb.enclosing_aabb();
+        let margin = Vector3::new(
+            self.config.contact_margin,
+            self.config.contact_margin,
+            self.config.contact_margin,
+        );
+        let query = crate::collision::AABB::new(aabb_min - margin, aabb_max + margin);
+        let triangles = static_geometry.query_triangles(&query);
+
+        let mut contacts = Vec::new();
+        for tri in &triangles {
+            for c in obb_triangle_contacts(&obb, tri) {
+                contacts.push(ContactConstraint {
+                    body_a: None,
+                    body_b: candidate.body_handle,
+                    collider_a: None,
+                    collider_b: None,
+                    point: c.point,
+                    normal: c.normal,
+                    raw_normal: c.normal,
+                    depth: 0.0,
+                    raw_depth: 0.0,
+                    restitution: candidate.material.restitution,
+                    friction: candidate.material.friction,
+                    warm_normal_impulse: 0.0,
+                    warm_tangent_impulse: [0.0, 0.0],
+                });
+            }
+        }
+
+        if contacts.is_empty() {
+            // Fallback: use the sweep hit directly
+            if let Some(hit) = static_geometry.sweep_sphere(
+                candidate.pre_center,
+                candidate.post_center,
+                candidate.radius,
+            ) {
+                contacts.push(ContactConstraint {
+                    body_a: None,
+                    body_b: candidate.body_handle,
+                    collider_a: None,
+                    collider_b: None,
+                    point: hit.point,
+                    normal: hit.normal,
+                    raw_normal: hit.normal,
+                    depth: 0.0,
+                    raw_depth: 0.0,
+                    restitution: candidate.material.restitution,
+                    friction: candidate.material.friction,
+                    warm_normal_impulse: 0.0,
+                    warm_tangent_impulse: [0.0, 0.0],
+                });
+            }
+        }
+
+        contacts
+    }
+}
+
+fn relative_normal_velocity(bodies: &Arena<RigidBody>, contact: &ContactConstraint) -> Option<f32> {
+    let body_b = bodies.get(contact.body_b.0)?;
+    let (pos_a, vel_a, ang_a) = match contact.body_a {
+        Some(handle) => {
+            let body_a = bodies.get(handle.0)?;
+            (
+                body_a.position(),
+                body_a.linear_velocity(),
+                body_a.angular_velocity(),
+            )
+        }
+        None => (contact.point, Vector3::zeros(), Vector3::zeros()),
+    };
+    let r_a = contact.point - pos_a;
+    let r_b = contact.point - body_b.position();
+    let vel_at_a = vel_a + ang_a.cross(&r_a);
+    let vel_at_b = body_b.linear_velocity() + body_b.angular_velocity().cross(&r_b);
+    let rel_vel = vel_at_b - vel_at_a;
+    Some(rel_vel.dot(&contact.normal))
+}
+
+#[derive(Debug, Clone)]
+struct ContactSample {
+    depth: f32,
+    raw_depth: f32,
+    rel_n: f32,
+    normal_dot_up: f32,
+    warm_used: bool,
+    point: Point3<f32>,
+    normal: Vector3<f32>,
+}
+
+#[derive(Debug, Clone)]
+struct ContactDebugStats {
+    total: usize,
+    static_count: usize,
+    neg_raw: usize,
+    steep_margin: usize,
+    warm_used: usize,
+    min_raw: f32,
+    max_raw: f32,
+    min_depth: f32,
+    max_depth: f32,
+    rel_n_min: f32,
+    rel_n_max: f32,
+    rel_n_avg: f32,
+    samples: Vec<ContactSample>,
+}
+
+impl ContactDebugStats {
+    fn empty() -> Self {
+        Self {
+            total: 0,
+            static_count: 0,
+            neg_raw: 0,
+            steep_margin: 0,
+            warm_used: 0,
+            min_raw: 0.0,
+            max_raw: 0.0,
+            min_depth: 0.0,
+            max_depth: 0.0,
+            rel_n_min: 0.0,
+            rel_n_max: 0.0,
+            rel_n_avg: 0.0,
+            samples: Vec::new(),
+        }
+    }
+
+    fn log(&self, label: &str) {
+        log::info!(
+            "Contacts/{} Total={} Static={} NegRaw={} SteepMargin={} WarmUsed={}",
+            label,
+            self.total,
+            self.static_count,
+            self.neg_raw,
+            self.steep_margin,
+            self.warm_used
+        );
+        log::info!(
+            "Contacts/{} RawDepth[min,max]=[{:.5},{:.5}] Depth[min,max]=[{:.5},{:.5}]",
+            label,
+            self.min_raw,
+            self.max_raw,
+            self.min_depth,
+            self.max_depth
+        );
+        log::info!(
+            "Contacts/{} RelN[min,max,avg]=[{:.5},{:.5},{:.5}]",
+            label,
+            self.rel_n_min,
+            self.rel_n_max,
+            self.rel_n_avg
+        );
+        for (i, sample) in self.samples.iter().enumerate() {
+            log::info!(
+                "Contacts/{} S{} depth={:.5} raw={:.5} relN={:.5} upDot={:.3} warm={} p=({:.3},{:.3},{:.3}) n=({:.3},{:.3},{:.3})",
+                label,
+                i,
+                sample.depth,
+                sample.raw_depth,
+                sample.rel_n,
+                sample.normal_dot_up,
+                sample.warm_used as u8,
+                sample.point.x,
+                sample.point.y,
+                sample.point.z,
+                sample.normal.x,
+                sample.normal.y,
+                sample.normal.z
+            );
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ContactEventStats {
+    total: usize,
+    ccd: usize,
+    narrow: usize,
+}
+
+impl ContactEventStats {
+    fn from_events(events: &[ContactEvent]) -> Self {
+        let total = events.len();
+        let ccd = events
+            .iter()
+            .filter(|e| e.source == ContactSource::Ccd)
+            .count();
+        let narrow = events
+            .iter()
+            .filter(|e| e.source == ContactSource::Narrowphase)
+            .count();
+        Self { total, ccd, narrow }
+    }
+
+    fn log(&self) {
+        log::info!(
+            "Contacts/Events Total={} CCD={} Narrowphase={}",
+            self.total,
+            self.ccd,
+            self.narrow
+        );
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ContactDebugSnapshot {
+    raw: ContactDebugStats,
+    merged: ContactDebugStats,
+    active: ContactDebugStats,
+    events: ContactEventStats,
+}
+
+impl ContactDebugSnapshot {
+    fn new(
+        bodies: &Arena<RigidBody>,
+        raw: &[ContactConstraint],
+        merged: &[ContactConstraint],
+        active: &[ContactConstraint],
+        events: &[ContactEvent],
+    ) -> Self {
+        Self {
+            raw: compute_contact_stats(bodies, raw),
+            merged: compute_contact_stats(bodies, merged),
+            active: compute_contact_stats(bodies, active),
+            events: ContactEventStats::from_events(events),
+        }
+    }
+
+    fn log(&self) {
+        self.events.log();
+        self.raw.log("Raw");
+        self.merged.log("Merged");
+        self.active.log("Active");
+    }
+}
+
+fn compute_contact_stats(
+    bodies: &Arena<RigidBody>,
+    contacts: &[ContactConstraint],
+) -> ContactDebugStats {
+    if contacts.is_empty() {
+        return ContactDebugStats::empty();
+    }
+
+    let total = contacts.len();
+    let static_count = contacts.iter().filter(|c| c.body_a.is_none()).count();
+    let neg_raw = contacts.iter().filter(|c| c.raw_depth < 0.0).count();
+    let warm_used = contacts
+        .iter()
+        .filter(|c| c.warm_normal_impulse.abs() > 1e-6)
+        .count();
+    let up = Vector3::y();
+    let steep_margin = contacts
+        .iter()
+        .filter(|c| c.raw_depth < 0.0 && c.normal.dot(&up).abs() < 0.9)
+        .count();
+
+    let mut min_raw = f32::INFINITY;
+    let mut max_raw = f32::NEG_INFINITY;
+    let mut min_depth = f32::INFINITY;
+    let mut max_depth = f32::NEG_INFINITY;
+    let mut rel_n_min = f32::INFINITY;
+    let mut rel_n_max = f32::NEG_INFINITY;
+    let mut rel_n_sum = 0.0;
+    let mut rel_n_count = 0usize;
+
+    for c in contacts {
+        min_raw = min_raw.min(c.raw_depth);
+        max_raw = max_raw.max(c.raw_depth);
+        min_depth = min_depth.min(c.depth);
+        max_depth = max_depth.max(c.depth);
+        if let Some(rel_n) = relative_normal_velocity(bodies, c) {
+            rel_n_min = rel_n_min.min(rel_n);
+            rel_n_max = rel_n_max.max(rel_n);
+            rel_n_sum += rel_n;
+            rel_n_count += 1;
+        }
+    }
+
+    let rel_n_avg = if rel_n_count > 0 {
+        rel_n_sum / rel_n_count as f32
+    } else {
+        0.0
+    };
+
+    let mut indices: Vec<usize> = (0..contacts.len()).collect();
+    indices.sort_by(|a, b| {
+        contacts[*b]
+            .depth
+            .partial_cmp(&contacts[*a].depth)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let mut samples = Vec::new();
+    for idx in indices.into_iter().take(3) {
+        let c = &contacts[idx];
+        let rel_n = relative_normal_velocity(bodies, c).unwrap_or(0.0);
+        let normal_dot_up = c.normal.dot(&up);
+        samples.push(ContactSample {
+            depth: c.depth,
+            raw_depth: c.raw_depth,
+            rel_n,
+            normal_dot_up,
+            warm_used: c.warm_normal_impulse.abs() > 1e-6,
+            point: c.point,
+            normal: c.normal,
+        });
+    }
+
+    ContactDebugStats {
+        total,
+        static_count,
+        neg_raw,
+        steep_margin,
+        warm_used,
+        min_raw,
+        max_raw,
+        min_depth,
+        max_depth,
+        rel_n_min,
+        rel_n_max,
+        rel_n_avg,
+        samples,
     }
 }
 

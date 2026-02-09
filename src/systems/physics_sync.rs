@@ -11,7 +11,7 @@ use std::collections::HashSet;
 
 use crate::biped::BipedController;
 use crate::components::{Orientation, Position, RigidBodyComponent, Velocity};
-use crate::debug::{DebugLines, DebugOverlays};
+use crate::debug::{DebugLines, DebugLog, DebugOverlays};
 use crate::physics::{ContactSource, PhysicsImpulseQueue, PhysicsWorld, RigidBodyHandle};
 use crate::rendering::Colour;
 use crate::terrain::TerrainManager;
@@ -156,6 +156,7 @@ impl<'a> System<'a> for PhysicsSyncSystem {
         ReadStorage<'a, RigidBodyComponent>,
         WriteStorage<'a, BipedController>,
         Write<'a, DebugLines>,
+        Write<'a, DebugLog>,
         Write<'a, DebugOverlays>,
         Write<'a, PhysicsImpulseQueue>,
     );
@@ -172,6 +173,7 @@ impl<'a> System<'a> for PhysicsSyncSystem {
             bodies,
             mut controllers,
             mut debug_lines,
+            mut debug_log,
             mut debug_overlays,
             mut impulse_queue,
         ): Self::SystemData,
@@ -205,6 +207,9 @@ impl<'a> System<'a> for PhysicsSyncSystem {
         Self::add_sleep_overlays(&physics.0, &mut debug_overlays);
 
         let grounded_handles = physics.0.grounded_handles();
+
+        // Write physics debug statistics (printed to stdout when F3 is pressed)
+        physics.0.write_debug_log(&mut debug_log);
 
         // Sync physics state back to ECS components
         Self::sync_physics_to_ecs(

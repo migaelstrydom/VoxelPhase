@@ -7,7 +7,7 @@ use crate::components::{
     Position, Renderable, RigidBodyComponent, Rotation, Velocity,
 };
 use crate::core::error::EngineResult;
-use crate::debug::{DebugLines, DebugOverlays};
+use crate::debug::{DebugLines, DebugLog, DebugOverlays};
 use crate::explosion::Explosion;
 use crate::input::{GameplayActions, InputState};
 use crate::particles::{ParticleConfig, ParticleEmitter, ParticlePool};
@@ -102,6 +102,7 @@ impl WorldBuilder {
         self.world.insert(PlayerConfig::default());
         self.world.insert(CameraConfig::default());
         self.world.insert(DebugLines::default());
+        self.world.insert(DebugLog::default());
         self.world.insert(DebugOverlays::default());
         self.world.insert(GrenadeConfig::default());
         self.world.insert(GrenadeCooldown::default());

@@ -93,6 +93,49 @@ pub fn spawn_camera(
         .build()
 }
 
+/// Spawns a box entity with physics.
+pub fn spawn_box(
+    world: &mut World,
+    initial_pos: nalgebra::Point3<f32>,
+    half_extents: Vector3<f32>,
+    model: std::sync::Arc<crate::model::Model>,
+) -> Entity {
+    let body_handle = {
+        let mut physics = world.write_resource::<PhysicsResource>();
+
+        let body_desc = RigidBodyDesc::dynamic()
+            .position(initial_pos)
+            .gravity_scale(1.0)
+            .linear_damping(0.01)
+            .angular_damping(0.05);
+
+        let body_handle = physics.0.create_body(body_desc);
+
+        let collider_desc = ColliderDesc::box_shape(half_extents)
+            .density(500.0)
+            .restitution(0.2)
+            .friction(0.6);
+
+        physics.0.attach_collider(body_handle, collider_desc);
+
+        body_handle
+    };
+
+    world
+        .create_entity()
+        .with(Position(Vector3::new(
+            initial_pos.x,
+            initial_pos.y,
+            initial_pos.z,
+        )))
+        .with(Velocity(Vector3::zeros()))
+        .with(Orientation::default())
+        .with(RigidBodyComponent(body_handle))
+        .with(ModelInstance::new(model))
+        .with(Renderable)
+        .build()
+}
+
 /// Spawns a beach ball entity with bouncy physics using the new physics engine.
 pub fn spawn_beach_ball(
     world: &mut World,
