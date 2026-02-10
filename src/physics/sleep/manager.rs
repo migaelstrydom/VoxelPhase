@@ -43,10 +43,6 @@ impl SleepManager {
         }
     }
 
-    pub fn set_thresholds(&mut self, threshold: f32, delay_frames: u32) {
-        self.energy.set_thresholds(threshold, delay_frames);
-    }
-
     pub fn sync_bodies(&mut self, bodies: &Arena<RigidBody>) {
         let live: HashSet<Index> = bodies.iter().map(|(idx, _)| idx).collect();
         self.sleeping.retain(|handle| live.contains(&handle.0));
@@ -110,11 +106,7 @@ impl SleepManager {
         }
     }
 
-    pub fn apply_wake_events(
-        &mut self,
-        contacts: &[ContactConstraint],
-        bodies: &Arena<RigidBody>,
-    ) {
+    pub fn apply_wake_events(&mut self, contacts: &[ContactConstraint], bodies: &Arena<RigidBody>) {
         if !self.enabled {
             self.wake_events.clear();
             return;
@@ -131,7 +123,11 @@ impl SleepManager {
 
         let islands = self.island_builder.build(bodies, contacts);
         for island in islands {
-            if island.bodies.iter().any(|handle| wake_seeds.contains(handle)) {
+            if island
+                .bodies
+                .iter()
+                .any(|handle| wake_seeds.contains(handle))
+            {
                 for handle in island.bodies {
                     self.sleeping.remove(&handle);
                     self.energy.clear_body(handle);
@@ -140,10 +136,7 @@ impl SleepManager {
         }
     }
 
-    pub fn filter_active_contacts(
-        &self,
-        contacts: &[ContactConstraint],
-    ) -> Vec<ContactConstraint> {
+    pub fn filter_active_contacts(&self, contacts: &[ContactConstraint]) -> Vec<ContactConstraint> {
         if !self.enabled {
             return contacts.to_vec();
         }
@@ -204,5 +197,4 @@ impl SleepManager {
             }
         }
     }
-
 }

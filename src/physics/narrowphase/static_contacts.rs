@@ -142,7 +142,6 @@ fn sphere_vs_static(
 ) -> StaticContactBatch {
     let query_radius = radius + contact_margin;
     let mut sphere_contacts = Vec::new();
-
     for sc in static_geometry.query_sphere(center, query_radius) {
         let raw_depth = sc.depth - contact_margin;
         let solver_depth = raw_depth.max(0.0);
@@ -206,7 +205,6 @@ fn box_vs_static(
 
     let triangles = static_geometry.query_triangles(&query);
     let mut box_contacts = Vec::new();
-
     for tri in &triangles {
         for c in obb_triangle_contacts(&obb, tri) {
             let raw_depth = c.depth - contact_margin;
@@ -236,8 +234,7 @@ fn box_vs_static(
         max_points,
         normal_dot_threshold,
         plane_thickness,
-    )
-    {
+    ) {
         return StaticContactBatch {
             contacts: stable,
             stable: true,
@@ -296,7 +293,8 @@ fn speculative_static_contacts(
             stabilized.unwrap_or(contacts)
         }
         ColliderShape::Box { half_extents } => {
-            let expanded = *half_extents + Vector3::new(contact_margin, contact_margin, contact_margin);
+            let expanded =
+                *half_extents + Vector3::new(contact_margin, contact_margin, contact_margin);
             let obb = Obb::new(predicted_center, rotation, expanded);
             let (aabb_min, aabb_max) = obb.enclosing_aabb();
             let query = AABB::new(aabb_min, aabb_max);
@@ -509,8 +507,7 @@ fn group_coplanar_contacts(
             } else {
                 contact.normal
             };
-            let point =
-                nalgebra::Point3::from(group.point_sum / group.contacts.len() as f32);
+            let point = nalgebra::Point3::from(group.point_sum / group.contacts.len() as f32);
             let dot = contact.normal.dot(&normal);
             let dist = (contact.point - point).dot(&normal).abs();
             if dot >= normal_dot_threshold && dist <= plane_thickness {
@@ -549,8 +546,7 @@ fn stabilize_coplanar_box_groups(
         return None;
     }
 
-    let groups =
-        group_coplanar_contacts(contacts, normal_dot_threshold, plane_thickness);
+    let groups = group_coplanar_contacts(contacts, normal_dot_threshold, plane_thickness);
     if groups.iter().all(|g| g.contacts.len() == 1) {
         return None;
     }
@@ -587,8 +583,7 @@ fn stabilize_coplanar_sphere_groups(
         return None;
     }
 
-    let groups =
-        group_coplanar_contacts(contacts, normal_dot_threshold, plane_thickness);
+    let groups = group_coplanar_contacts(contacts, normal_dot_threshold, plane_thickness);
     if groups.iter().all(|g| g.contacts.len() == 1) {
         return None;
     }
@@ -631,4 +626,3 @@ fn is_speculative_candidate(
     let margin_gate = contact_margin * speculative_margin_multiplier;
     travel > margin_gate && travel <= radius * ccd_threshold
 }
-

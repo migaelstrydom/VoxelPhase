@@ -4,6 +4,8 @@
 //! - SVO for voxel data storage
 //! - MeshOctree for efficient rendering and collision queries
 //! - Incremental updates when terrain is modified
+//! - Triangle adjacency map (edge-sharing neighbors), updated incrementally
+//!   alongside mesh rebuilds so cost is proportional to the dirty region
 
 use nalgebra::{Point3, Vector3};
 use std::time::Instant;
@@ -16,6 +18,7 @@ use crate::physics::{StaticContact, StaticGeometry, SweptStaticContact};
 use crate::rendering::vertex::Vertex;
 use crate::resources::textures::{TextureHandle, TextureManager};
 
+use super::adjacency::AdjacencyMap;
 use super::mesh_octree::MeshOctree;
 use super::svo::SparseVoxelOctree;
 use super::voxel::Voxel;
@@ -43,6 +46,9 @@ pub struct TerrainManager {
 
     /// Optional noise texture for terrain surface variation.
     texture: Option<TextureHandle>,
+
+    /// Edge-based triangle adjacency map, rebuilt after each mesh update.
+    adjacency: AdjacencyMap,
 }
 
 impl TerrainManager {
@@ -70,6 +76,7 @@ impl TerrainManager {
             render_vertices: Vec::new(),
             render_indices: Vec::new(),
             texture: Some(texture),
+            adjacency: AdjacencyMap::new(),
         };
 
         // Mark entire terrain as dirty for initial build
@@ -129,13 +136,37 @@ impl TerrainManager {
         let merged_regions = self.merge_dirty_regions();
         let merge_dirty_regions_time = t1.elapsed();
 
-        // Rebuild each dirty region
+        // Rebuild each dirty region with incremental adjacency updates.
         let t2 = Instant::now();
+        let mut old_tris: Vec<(super::mesh_octree::TriangleRef, [Point3<f32>; 3])> = Vec::new();
+        let mut new_tris: Vec<(super::mesh_octree::TriangleRef, [Point3<f32>; 3])> = Vec::new();
+        let mut adjacency_elapsed = std::time::Duration::ZERO;
+
         for region in &merged_regions {
-            self.rebuild_region(region);
+            let clamped = self.snap_region(region);
+
+            // Collect triangles in the region before the mesh rebuild.
+            old_tris.clear();
+            self.mesh.collect_triangles_in_region(&clamped, &mut old_tris);
+
+            // Rebuild the mesh for this region.
+            let svo = &self.svo;
+            self.mesh
+                .generate_from_voxels(&clamped, self.voxel_size, |pos| svo.get(pos));
+
+            // Collect triangles in the region after the mesh rebuild.
+            new_tris.clear();
+            self.mesh.collect_triangles_in_region(&clamped, &mut new_tris);
+
+            // Patch adjacency for the affected region.
+            let t_adj = Instant::now();
+            self.adjacency
+                .update_region(&old_tris, &new_tris, self.voxel_size * 0.01);
+            adjacency_elapsed += t_adj.elapsed();
         }
         self.dirty_regions.clear();
         let rebuild_dirty_regions_time = t2.elapsed();
+        let adjacency_time = adjacency_elapsed;
 
         let t3 = Instant::now();
         // Update cached render data
@@ -145,7 +176,7 @@ impl TerrainManager {
         let update_render_data_time = t3.elapsed();
 
         log::debug!(
-            "Terrain updated: {} dirty regions merged to {}, mesh now has {} triangles in {} leaves, {:?} merge time, {:?} rebuild time, {:?} update render data time, {:?} update time",
+            "Terrain updated: {} dirty regions merged to {}, mesh now has {} triangles in {} leaves, {:?} merge time, {:?} rebuild time, {:?} render data time, {:?} adjacency time, {:?} total",
             dirty_count,
             merged_regions.len(),
             self.mesh.triangle_count(),
@@ -153,6 +184,7 @@ impl TerrainManager {
             merge_dirty_regions_time,
             rebuild_dirty_regions_time,
             update_render_data_time,
+            adjacency_time,
             t0.elapsed()
         );
     }
@@ -194,15 +226,15 @@ impl TerrainManager {
         merged
     }
 
-    /// Rebuild mesh for a specific region from SVO voxel data.
-    fn rebuild_region(&mut self, region: &AABB) {
+    /// Snap a dirty region to voxel grid boundaries and clamp to SVO bounds.
+    ///
+    /// Without grid snapping, regenerated regions would sample at different
+    /// positions than the original terrain, causing seams at boundaries.
+    fn snap_region(&self, region: &AABB) -> AABB {
         let bounds = self.svo.bounds();
         let voxel_size = self.voxel_size;
-
-        // Snap region to voxel grid boundaries to ensure consistent sampling.
-        // Without this, regenerated regions would sample at different positions
-        // than the original terrain, causing seams at boundaries.
         let world_origin = bounds.min;
+
         let snapped = AABB::new(
             Point3::new(
                 world_origin.x
@@ -213,14 +245,16 @@ impl TerrainManager {
                     + ((region.min.z - world_origin.z) / voxel_size).floor() * voxel_size,
             ),
             Point3::new(
-                world_origin.x + ((region.max.x - world_origin.x) / voxel_size).ceil() * voxel_size,
-                world_origin.y + ((region.max.y - world_origin.y) / voxel_size).ceil() * voxel_size,
-                world_origin.z + ((region.max.z - world_origin.z) / voxel_size).ceil() * voxel_size,
+                world_origin.x
+                    + ((region.max.x - world_origin.x) / voxel_size).ceil() * voxel_size,
+                world_origin.y
+                    + ((region.max.y - world_origin.y) / voxel_size).ceil() * voxel_size,
+                world_origin.z
+                    + ((region.max.z - world_origin.z) / voxel_size).ceil() * voxel_size,
             ),
         );
 
-        // Clamp to SVO bounds
-        let clamped = AABB::new(
+        AABB::new(
             Point3::new(
                 snapped.min.x.max(bounds.min.x),
                 snapped.min.y.max(bounds.min.y),
@@ -231,12 +265,7 @@ impl TerrainManager {
                 snapped.max.y.min(bounds.max.y),
                 snapped.max.z.min(bounds.max.z),
             ),
-        );
-
-        // Generate mesh from voxel data
-        let svo = &self.svo;
-        self.mesh
-            .generate_from_voxels(&clamped, voxel_size, |pos| svo.get(pos));
+        )
     }
 
     // === Collision queries ===
@@ -344,6 +373,14 @@ impl TerrainManager {
         self.mesh.get_render_data_frustum_culled(frustum_planes)
     }
 
+    // === Adjacency ===
+
+    /// Get the triangle adjacency map.
+    #[allow(dead_code)]
+    pub fn adjacency(&self) -> &AdjacencyMap {
+        &self.adjacency
+    }
+
     // === Statistics ===
 
     /// Get the total triangle count.
@@ -370,6 +407,7 @@ impl TerrainManager {
             render_vertices: Vec::new(),
             render_indices: Vec::new(),
             texture: None,
+            adjacency: AdjacencyMap::new(),
         }
     }
 

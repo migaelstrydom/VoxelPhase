@@ -7,6 +7,9 @@
 //! - **Complete spatial queries**: Each leaf stores references to ALL triangles
 //!   that intersect its bounds, not just those it "owns"
 //! - **Efficient updates**: Only affected regions are rebuilt when terrain changes
+//! - **Region-scoped collection**: Triangles in a specific AABB can be collected
+//!   efficiently via `collect_triangles_in_region`, enabling incremental adjacency
+//!   updates without walking the entire tree
 //!
 //! Triangle ownership (for canonical storage) uses the "minimum vertex" rule:
 //! each triangle is owned by the leaf containing its lexicographically smallest
@@ -421,7 +424,7 @@ impl MeshOctree {
     ///
     /// This ensures each leaf has references to all triangles that intersect
     /// its bounds, enabling complete spatial queries.
-    fn rebuild_neighbor_refs(&mut self) {
+    pub(super) fn rebuild_neighbor_refs(&mut self) {
         // First, collect all triangles with their owners and AABBs
         let mut all_triangles: Vec<(u64, u8, u32, AABB)> = Vec::new();
         Self::collect_triangles(&self.root, 0, 0, &mut all_triangles);
@@ -511,6 +514,103 @@ impl MeshOctree {
         }
     }
 
+    // === Triangle Collection ===
+
+    /// Append all triangles with their refs and vertex positions into `out`.
+    ///
+    /// The caller is responsible for clearing `out` beforehand if desired.
+    /// Used by `AdjacencyMap::rebuild` for full adjacency builds.
+    #[allow(dead_code)]
+    pub(super) fn collect_all_triangles_into(
+        &self,
+        out: &mut Vec<(TriangleRef, [Point3<f32>; 3])>,
+    ) {
+        Self::collect_triangles_with_positions(&self.root, 0, 0, out);
+    }
+
+    fn collect_triangles_with_positions(
+        node: &MeshNode,
+        depth: u8,
+        path: u64,
+        out: &mut Vec<(TriangleRef, [Point3<f32>; 3])>,
+    ) {
+        match &node.content {
+            MeshNodeContent::Empty => {}
+            MeshNodeContent::Leaf(leaf) => {
+                for tri in 0..leaf.owned_triangle_count() {
+                    let [v0, v1, v2] = leaf.get_triangle_vertices(tri);
+                    let positions = [
+                        Point3::new(v0.pos.x, v0.pos.y, v0.pos.z),
+                        Point3::new(v1.pos.x, v1.pos.y, v1.pos.z),
+                        Point3::new(v2.pos.x, v2.pos.y, v2.pos.z),
+                    ];
+                    out.push((TriangleRef::new(path, depth, tri as u32), positions));
+                }
+            }
+            MeshNodeContent::Interior(children) => {
+                for (i, child) in children.iter().enumerate() {
+                    let child_path = path | ((i as u64) << (depth * 3));
+                    Self::collect_triangles_with_positions(child, depth + 1, child_path, out);
+                }
+            }
+        }
+    }
+
+    /// Append triangles whose AABB intersects `region` into `out`.
+    ///
+    /// Uses the same intersection predicate as `clear_region_recursive`:
+    /// a triangle is included if its AABB intersects the query region.
+    /// Nodes whose bounds don't intersect the region are skipped entirely.
+    pub(super) fn collect_triangles_in_region(
+        &self,
+        region: &AABB,
+        out: &mut Vec<(TriangleRef, [Point3<f32>; 3])>,
+    ) {
+        Self::collect_triangles_in_region_recursive(&self.root, 0, 0, region, out);
+    }
+
+    fn collect_triangles_in_region_recursive(
+        node: &MeshNode,
+        depth: u8,
+        path: u64,
+        region: &AABB,
+        out: &mut Vec<(TriangleRef, [Point3<f32>; 3])>,
+    ) {
+        if !node.bounds.intersects(region) {
+            return;
+        }
+
+        match &node.content {
+            MeshNodeContent::Empty => {}
+            MeshNodeContent::Leaf(leaf) => {
+                for tri in 0..leaf.owned_triangle_count() {
+                    let tri_aabb = leaf.triangle_aabb(tri);
+                    if region.intersects(&tri_aabb) {
+                        let [v0, v1, v2] = leaf.get_triangle_vertices(tri);
+                        let positions = [
+                            Point3::new(v0.pos.x, v0.pos.y, v0.pos.z),
+                            Point3::new(v1.pos.x, v1.pos.y, v1.pos.z),
+                            Point3::new(v2.pos.x, v2.pos.y, v2.pos.z),
+                        ];
+                        out.push((TriangleRef::new(path, depth, tri as u32), positions));
+                    }
+                }
+            }
+            MeshNodeContent::Interior(children) => {
+                for (i, child) in children.iter().enumerate() {
+                    let child_path = path | ((i as u64) << (depth * 3));
+                    Self::collect_triangles_in_region_recursive(
+                        child,
+                        depth + 1,
+                        child_path,
+                        region,
+                        out,
+                    );
+                }
+            }
+        }
+    }
+
     // === Spatial Queries ===
 
     /// Query all triangles intersecting an AABB.
@@ -570,7 +670,7 @@ impl MeshOctree {
     }
 
     /// Resolve a triangle reference to actual triangle data.
-    fn resolve_triangle_ref(&self, tri_ref: &TriangleRef) -> Option<Triangle> {
+    pub(super) fn resolve_triangle_ref(&self, tri_ref: &TriangleRef) -> Option<Triangle> {
         let mut node = &self.root;
         for level in 0..tri_ref.depth {
             match &node.content {
@@ -777,6 +877,29 @@ fn aabb_intersects_frustum(aabb: &AABB, planes: &[(Vector3<f32>, f32); 6]) -> bo
         }
     }
     true
+}
+
+#[cfg(test)]
+impl MeshOctree {
+    /// Insert a single triangle into the octree.
+    /// Test-only helper that computes min-vertex ownership automatically.
+    pub(super) fn insert_test_triangle(&mut self, v0: &Vertex, v1: &Vertex, v2: &Vertex) {
+        let positions = [
+            Point3::new(v0.pos.x, v0.pos.y, v0.pos.z),
+            Point3::new(v1.pos.x, v1.pos.y, v1.pos.z),
+            Point3::new(v2.pos.x, v2.pos.y, v2.pos.z),
+        ];
+        let min_vertex = positions
+            .into_iter()
+            .min_by(|a, b| {
+                a.x.partial_cmp(&b.x)
+                    .unwrap()
+                    .then(a.y.partial_cmp(&b.y).unwrap())
+                    .then(a.z.partial_cmp(&b.z).unwrap())
+            })
+            .unwrap();
+        Self::insert_triangle_recursive(&mut self.root, v0, v1, v2, min_vertex, 0);
+    }
 }
 
 #[cfg(test)]

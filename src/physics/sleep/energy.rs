@@ -45,9 +45,4 @@ impl EnergyTracker {
     pub fn retain_indices(&mut self, live: &std::collections::HashSet<Index>) {
         self.frames_below.retain(|idx, _| live.contains(idx));
     }
-
-    pub fn set_thresholds(&mut self, threshold: f32, delay_frames: u32) {
-        self.threshold = threshold;
-        self.delay_frames = delay_frames;
-    }
 }

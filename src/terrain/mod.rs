@@ -7,6 +7,7 @@
 //! - TerrainManager for unified terrain handling
 //! - Procedural terrain generation
 
+mod adjacency;
 pub mod generation;
 mod manager;
 mod marching_cubes;
