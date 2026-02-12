@@ -287,7 +287,7 @@ impl ParticleConfig {
             smoke: SmokeConfig::default(),
             debris: DebrisConfig::default(),
             sparks: SparksConfig::default(),
-            gravity: 10.0,
+            gravity: 9.81,
         }
     }
 }

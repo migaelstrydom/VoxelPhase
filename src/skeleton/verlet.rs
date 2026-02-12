@@ -184,7 +184,7 @@ impl VerletSystem {
             distance_constraints: Vec::new(),
             angle_constraints: Vec::new(),
             iterations: 4, // Good balance of accuracy vs performance
-            gravity: Vector3::new(0.0, -20.0, 0.0),
+            gravity: Vector3::new(0.0, -9.81, 0.0),
         }
     }
 

@@ -63,8 +63,6 @@ pub struct PhysicsConfig {
     pub grounding: GroundingConfig,
     /// Allow warm-start when raw depth exceeds this (can be negative).
     pub warm_start_depth_slop: f32,
-    /// Allow restitution when raw depth exceeds this (can be negative).
-    pub restitution_depth_slop: f32,
     /// Enable speculative contacts to close the CCD activation gap.
     pub enable_speculative_contacts: bool,
     /// Minimum linear speed required for speculative contact generation.
@@ -80,9 +78,9 @@ pub struct PhysicsConfig {
 impl Default for PhysicsConfig {
     fn default() -> Self {
         Self {
-            gravity: Vector3::new(0.0, -20.0, 0.0),
+            gravity: Vector3::new(0.0, -9.81, 0.0),
             solver_iterations: 4,
-            restitution_velocity_threshold: 1.0,
+            restitution_velocity_threshold: 0.3,
             contact_margin: 0.02,
             ccd_threshold: 0.5,
             contact_match_threshold: 0.1,
@@ -94,7 +92,6 @@ impl Default for PhysicsConfig {
             normal_clustering: NormalClusterConfig::default(),
             grounding: GroundingConfig::default(),
             warm_start_depth_slop: 0.02,
-            restitution_depth_slop: 0.005,
             enable_speculative_contacts: true,
             speculative_min_speed: 1.0,
             speculative_margin_multiplier: 2.0,
@@ -270,6 +267,29 @@ impl PhysicsWorld {
         body.set_linear_velocity(linear);
         body.set_angular_velocity(angular);
         self.sleep_manager.note_kinematic_move(handle);
+        true
+    }
+
+    /// Set velocity on any non-static body.
+    ///
+    /// Used for velocity-driven dynamic bodies (player, moving platforms)
+    /// whose velocity is set by game code each frame. The solver may then
+    /// modify the velocity via contact impulses.
+    pub fn set_body_velocity(
+        &mut self,
+        handle: RigidBodyHandle,
+        linear: Vector3<f32>,
+        angular: Vector3<f32>,
+    ) -> bool {
+        let Some(body) = self.bodies.get_mut(handle.0) else {
+            return false;
+        };
+        if body.is_static() {
+            return false;
+        }
+        body.set_linear_velocity(linear);
+        body.set_angular_velocity(angular);
+        self.sleep_manager.wake_body(handle);
         true
     }
 
@@ -630,7 +650,6 @@ impl PhysicsWorld {
                 &mut self.bodies,
                 &ccd_contacts,
                 self.config.restitution_velocity_threshold,
-                self.config.restitution_depth_slop,
             );
 
             corrections += 1;

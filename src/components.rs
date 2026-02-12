@@ -90,6 +90,18 @@ impl Default for Orientation {
 #[storage(VecStorage)]
 pub struct RigidBodyComponent(pub RigidBodyHandle);
 
+/// Marker for velocity-driven dynamic bodies.
+///
+/// Entities with this component have their ECS velocity synced into the
+/// physics engine before each step. The solver may then modify the velocity
+/// via contact impulses, and the result is synced back to ECS.
+///
+/// Use this for any gameplay object that is controlled by game code but
+/// should interact physically: player characters, moving platforms, doors.
+#[derive(Component, Debug, Default)]
+#[storage(DenseVecStorage)]
+pub struct VelocityDriven;
+
 /// A model instance referencing a shared Model definition.
 #[derive(Component)]
 #[storage(VecStorage)]

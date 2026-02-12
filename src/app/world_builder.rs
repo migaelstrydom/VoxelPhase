@@ -4,7 +4,7 @@ use crate::biped::BipedController;
 use crate::camera::{CameraConfig, FollowTarget};
 use crate::components::{
     Acceleration, CameraComponent, Gravity, ModelInstance, MotionState, Orientation, PhysicsBody,
-    Position, Renderable, RigidBodyComponent, Rotation, Velocity,
+    Position, Renderable, RigidBodyComponent, Rotation, Velocity, VelocityDriven,
 };
 use crate::core::error::EngineResult;
 use crate::debug::{DebugLines, DebugLog, DebugOverlays};
@@ -58,6 +58,7 @@ impl WorldBuilder {
         world.register::<ContactCandidates>();
         world.register::<PhysicsBody>();
         world.register::<RigidBodyComponent>();
+        world.register::<VelocityDriven>();
         world.register::<Grenade>();
         world.register::<Lifetime>();
         world.register::<Projectile>();

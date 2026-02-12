@@ -123,12 +123,7 @@ impl BodyPairState {
 
     /// Compute the effective mass for an impulse along the given direction.
     fn effective_mass(&self, contact: &ContactConstraint, direction: &Vector3<f32>) -> f32 {
-        self.effective_mass_with_overrides(
-            contact,
-            direction,
-            self.inv_mass_b,
-            self.inv_inertia_b,
-        )
+        self.effective_mass_with_overrides(contact, direction, self.inv_mass_b, self.inv_inertia_b)
     }
 
     /// Compute effective mass with explicit body_b overrides.
@@ -217,7 +212,6 @@ pub fn solve(
                 contact,
                 config.restitution_velocity_threshold,
                 pre_solve_vn[i],
-                config.restitution_depth_slop,
                 &mut accumulated[i],
             );
             solve_friction_impulse(bodies, contact, &mut accumulated[i]);
@@ -318,7 +312,6 @@ pub fn solve_contacts(
     bodies: &mut Arena<RigidBody>,
     contacts: &[ContactConstraint],
     restitution_velocity_threshold: f32,
-    restitution_depth_slop: f32,
 ) {
     for contact in contacts {
         let mut accumulated = SolvedImpulses::default();
@@ -330,7 +323,6 @@ pub fn solve_contacts(
             contact,
             restitution_velocity_threshold,
             pre_solve_vn,
-            restitution_depth_slop,
             &mut accumulated,
         );
         solve_friction_impulse(bodies, contact, &mut accumulated);
@@ -346,7 +338,6 @@ fn solve_normal_impulse(
     contact: &ContactConstraint,
     restitution_velocity_threshold: f32,
     pre_solve_vn: f32,
-    restitution_depth_slop: f32,
     accumulated: &mut SolvedImpulses,
 ) {
     let Some(state) = BodyPairState::extract(bodies, contact) else {
@@ -354,7 +345,7 @@ fn solve_normal_impulse(
     };
 
     let vel_along_normal = state.relative_normal_velocity(contact);
-    if vel_along_normal > 0.0 {
+    if vel_along_normal > 0.0 && accumulated.normal <= 1e-8 {
         return;
     }
 
@@ -380,13 +371,10 @@ fn solve_normal_impulse(
         return;
     }
 
-    let restitution = if pre_solve_vn.abs() < restitution_velocity_threshold {
-        0.0
-    } else if contact.raw_depth >= -restitution_depth_slop {
-        contact.restitution
-    } else {
-        0.0
-    };
+    let speed = pre_solve_vn.abs();
+    let restitution_scale =
+        ((speed - restitution_velocity_threshold) / restitution_velocity_threshold).clamp(0.0, 1.0);
+    let restitution = contact.restitution * restitution_scale;
     let restitution_velocity = if pre_solve_vn < 0.0 {
         restitution * pre_solve_vn
     } else {

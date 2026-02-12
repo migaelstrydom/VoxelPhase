@@ -19,8 +19,8 @@ impl Default for PlayerConfig {
         Self {
             walk_speed: 5.0,
             air_acceleration: 8.0,
-            jump_speed: 12.0,
-            gravity: 20.0,
+            jump_speed: 7.0,
+            gravity: 9.81,
             terminal_velocity: 30.0, // Safe value: should be < radius / typical_frame_time
         }
     }

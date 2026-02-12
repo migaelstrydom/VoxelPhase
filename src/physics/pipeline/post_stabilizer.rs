@@ -43,7 +43,7 @@ impl Default for PostStabiliseConfig {
             split_impulse_enabled: true,
             correction_factor: 0.1,
             slop: 0.005,
-            iterations: 6,
+            iterations: 4,
             max_correction_speed: 0.1,
             contact_rolling_resistance: 0.1,
             contact_linear_damping: 0.1,

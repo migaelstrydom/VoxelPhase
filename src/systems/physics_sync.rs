@@ -10,7 +10,7 @@ use specs::{Join, Read, ReadStorage, System, Write, WriteStorage};
 use std::collections::HashSet;
 
 use crate::biped::BipedController;
-use crate::components::{Orientation, Position, RigidBodyComponent, Velocity};
+use crate::components::{Orientation, Position, RigidBodyComponent, Velocity, VelocityDriven};
 use crate::debug::{DebugLines, DebugLog, DebugOverlays};
 use crate::physics::{PhysicsImpulseQueue, PhysicsWorld, RigidBodyHandle};
 use crate::terrain::TerrainManager;
@@ -51,6 +51,21 @@ impl PhysicsSyncSystem {
         }
     }
 
+    fn sync_velocity_driven_from_ecs(
+        physics: &mut PhysicsWorld,
+        velocities: &WriteStorage<Velocity>,
+        bodies: &ReadStorage<RigidBodyComponent>,
+        velocity_driven: &ReadStorage<VelocityDriven>,
+    ) {
+        let mut updates = Vec::new();
+        for (vel, body, _) in ((&*velocities), bodies, velocity_driven).join() {
+            updates.push((body.0, vel.0));
+        }
+        for (handle, vel) in updates {
+            let _ = physics.set_body_velocity(handle, vel, Vector3::zeros());
+        }
+    }
+
     fn sync_physics_to_ecs(
         physics: &PhysicsWorld,
         positions: &mut WriteStorage<Position>,
@@ -88,6 +103,7 @@ impl<'a> System<'a> for PhysicsSyncSystem {
         WriteStorage<'a, Velocity>,
         WriteStorage<'a, Orientation>,
         ReadStorage<'a, RigidBodyComponent>,
+        ReadStorage<'a, VelocityDriven>,
         WriteStorage<'a, BipedController>,
         Write<'a, DebugLines>,
         Write<'a, DebugLog>,
@@ -105,6 +121,7 @@ impl<'a> System<'a> for PhysicsSyncSystem {
             mut velocities,
             mut orientations,
             bodies,
+            velocity_driven,
             mut controllers,
             mut debug_lines,
             mut debug_log,
@@ -121,6 +138,14 @@ impl<'a> System<'a> for PhysicsSyncSystem {
             &velocities,
             &orientations,
             &bodies,
+        );
+
+        // Sync velocity-driven dynamic bodies (player, platforms, etc.)
+        Self::sync_velocity_driven_from_ecs(
+            &mut physics.0,
+            &velocities,
+            &bodies,
+            &velocity_driven,
         );
 
         for impulse in impulse_queue.drain() {
