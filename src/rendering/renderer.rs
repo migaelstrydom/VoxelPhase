@@ -39,6 +39,10 @@ pub struct Renderer {
     pub overlay: OverlayRenderer,
     pub particle_renderer: ParticleRenderer,
     pub sky_renderer: SkyRenderer,
+    /// When true, backfaces are rendered in wireframe with `wireframe_color`.
+    pub debug_wireframe_backfaces: bool,
+    /// The solid color used for wireframe backface rendering (RGBA, 0-1).
+    pub wireframe_color: [f32; 4],
 }
 
 impl Renderer {
@@ -106,8 +110,7 @@ impl Renderer {
             ParticleRenderer::new(Arc::clone(&vulkan_context), pipeline.renderpass)?;
 
         // Create sky renderer
-        let sky_renderer =
-            SkyRenderer::new(Arc::clone(&vulkan_context), pipeline.renderpass)?;
+        let sky_renderer = SkyRenderer::new(Arc::clone(&vulkan_context), pipeline.renderpass)?;
 
         Ok(Self {
             pipeline,
@@ -118,6 +121,8 @@ impl Renderer {
             overlay,
             particle_renderer,
             sky_renderer,
+            debug_wireframe_backfaces: false,
+            wireframe_color: [1.0, 0.0, 1.0, 1.0],
         })
     }
 
@@ -338,6 +343,20 @@ impl Renderer {
                 model_bytes,
             );
 
+            // Push color override (alpha=0 means use normal rendering)
+            let no_override: [f32; 4] = [0.0, 0.0, 0.0, 0.0];
+            let override_bytes: &[u8] = std::slice::from_raw_parts(
+                no_override.as_ptr() as *const u8,
+                std::mem::size_of::<[f32; 4]>(),
+            );
+            self.vulkan_context.device().cmd_push_constants(
+                cb,
+                self.pipeline.layout,
+                vk::ShaderStageFlags::FRAGMENT,
+                64,
+                override_bytes,
+            );
+
             // Get texture descriptor set
             let texture_set = texture_manager
                 .get_or_create_descriptor_set(texture)
@@ -380,6 +399,36 @@ impl Renderer {
                 draw_info.vertex_offset,
                 0,
             );
+
+            // Wireframe backface pass: re-draw with wireframe pipeline and solid color
+            if self.debug_wireframe_backfaces {
+                self.vulkan_context.device().cmd_bind_pipeline(
+                    cb,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    self.pipeline.wireframe_backface_pipeline,
+                );
+
+                let color_bytes: &[u8] = std::slice::from_raw_parts(
+                    self.wireframe_color.as_ptr() as *const u8,
+                    std::mem::size_of::<[f32; 4]>(),
+                );
+                self.vulkan_context.device().cmd_push_constants(
+                    cb,
+                    self.pipeline.layout,
+                    vk::ShaderStageFlags::FRAGMENT,
+                    64,
+                    color_bytes,
+                );
+
+                self.vulkan_context.device().cmd_draw_indexed(
+                    cb,
+                    draw_info.index_count,
+                    1,
+                    draw_info.first_index,
+                    draw_info.vertex_offset,
+                    0,
+                );
+            }
         }
 
         Ok(())

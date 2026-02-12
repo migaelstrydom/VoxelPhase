@@ -19,6 +19,8 @@ use crate::rendering::vertex::Vertex;
 /// Contains the render pass, pipeline layout, shader modules, and the pipeline itself.
 pub struct GraphicsPipeline {
     pub pipeline: vk::Pipeline,
+    /// Wireframe pipeline that renders only backfaces (front-face culled) in wireframe mode.
+    pub wireframe_backface_pipeline: vk::Pipeline,
     pub layout: vk::PipelineLayout,
     pub renderpass: vk::RenderPass,
     pub scene_ubo_descriptor_set_layout: vk::DescriptorSetLayout,
@@ -52,12 +54,21 @@ impl GraphicsPipeline {
                 sampler_descriptor_set_layout,
             ];
 
-            // Push constant range for model matrix (mat4 = 64 bytes)
-            let push_constant_ranges = [vk::PushConstantRange {
-                stage_flags: vk::ShaderStageFlags::VERTEX,
-                offset: 0,
-                size: std::mem::size_of::<nalgebra::Matrix4<f32>>() as u32,
-            }];
+            // Push constant ranges:
+            // - Vertex: mat4 model (offset 0, 64 bytes)
+            // - Fragment: vec4 colorOverride (offset 64, 16 bytes)
+            let push_constant_ranges = [
+                vk::PushConstantRange {
+                    stage_flags: vk::ShaderStageFlags::VERTEX,
+                    offset: 0,
+                    size: 64,
+                },
+                vk::PushConstantRange {
+                    stage_flags: vk::ShaderStageFlags::FRAGMENT,
+                    offset: 64,
+                    size: 16,
+                },
+            ];
 
             let pipeline_layout_create_info = vk::PipelineLayoutCreateInfo::default()
                 .set_layouts(&set_layouts)
@@ -78,10 +89,25 @@ impl GraphicsPipeline {
                 vertex_shader_module,
                 fragment_shader_module,
                 config,
+                vk::PolygonMode::FILL,
+                vk::CullModeFlags::BACK,
+            )?;
+
+            // Create the wireframe backface pipeline (wireframe, cull front faces)
+            let wireframe_backface_pipeline = Self::create_pipeline(
+                &device,
+                renderpass,
+                layout,
+                vertex_shader_module,
+                fragment_shader_module,
+                config,
+                vk::PolygonMode::LINE,
+                vk::CullModeFlags::FRONT,
             )?;
 
             Ok(Self {
                 pipeline,
+                wireframe_backface_pipeline,
                 layout,
                 renderpass,
                 scene_ubo_descriptor_set_layout,
@@ -204,6 +230,8 @@ impl GraphicsPipeline {
         vertex_module: vk::ShaderModule,
         fragment_module: vk::ShaderModule,
         config: &GraphicsPipelineConfig,
+        polygon_mode: vk::PolygonMode,
+        cull_mode: vk::CullModeFlags,
     ) -> EngineResult<vk::Pipeline> {
         // Vertex input configuration
         let binding_descriptions = [vk::VertexInputBindingDescription {
@@ -251,8 +279,8 @@ impl GraphicsPipeline {
             .scissors(&scissors);
 
         let rasterization = vk::PipelineRasterizationStateCreateInfo::default()
-            .polygon_mode(vk::PolygonMode::FILL)
-            .cull_mode(vk::CullModeFlags::BACK)
+            .polygon_mode(polygon_mode)
+            .cull_mode(cull_mode)
             .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
             .line_width(1.0);
 
@@ -318,6 +346,9 @@ impl Drop for GraphicsPipeline {
             log::debug!("GraphicsPipeline::drop - cleaning up pipeline resources");
 
             self.device.device.destroy_pipeline(self.pipeline, None);
+            self.device
+                .device
+                .destroy_pipeline(self.wireframe_backface_pipeline, None);
             self.device
                 .device
                 .destroy_pipeline_layout(self.layout, None);

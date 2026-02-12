@@ -54,6 +54,7 @@ impl ManagedDevice {
             let features = vk::PhysicalDeviceFeatures {
                 shader_clip_distance: 1,
                 sampler_anisotropy: 1,
+                fill_mode_non_solid: 1,
                 ..Default::default()
             };
             let device_extension_names_raw = [

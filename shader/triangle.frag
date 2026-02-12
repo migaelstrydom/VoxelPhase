@@ -11,7 +11,16 @@ layout(location = 0) out vec4 outColor;
 
 layout(set = 1, binding = 0) uniform sampler2D texSampler;
 
+// For wireframe debugging overlay
+layout(push_constant) uniform PushConstants {
+    layout(offset = 64) vec4 colorOverride;
+} push;
+
 void main() {
+    if (push.colorOverride.a > 0.0) {
+        outColor = push.colorOverride;
+        return;
+    }
     // Use interpolated normal for smooth shading
     // Check if normal is non-zero before normalizing to avoid undefined behavior
     vec3 normal = length(inNormal) > 0.001 ? normalize(inNormal) : vec3(0.0, 1.0, 0.0);
