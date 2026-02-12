@@ -38,10 +38,6 @@ impl EnergyTracker {
         self.frames_below.remove(&handle.0);
     }
 
-    pub fn clear_all(&mut self) {
-        self.frames_below.clear();
-    }
-
     pub fn retain_indices(&mut self, live: &std::collections::HashSet<Index>) {
         self.frames_below.retain(|idx, _| live.contains(idx));
     }

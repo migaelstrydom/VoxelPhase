@@ -5,7 +5,7 @@ mod dynamic_contacts;
 mod normal_cluster;
 mod static_contacts;
 
-pub use adjacency_filter::filter_internal_edge_contacts;
+pub use adjacency_filter::{filter_internal_edge_contacts, filter_internal_vertex_contacts};
 pub use contact_source::{ContactFeature, ContactSource, SourcedContact};
 pub use dynamic_contacts::generate_dynamic_contacts;
 pub use normal_cluster::{NormalClusterConfig, NormalClusterer};

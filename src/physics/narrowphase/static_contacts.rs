@@ -5,18 +5,18 @@ use std::collections::HashSet;
 use generational_arena::Arena;
 use nalgebra::{Point3, Vector3};
 
+use super::adjacency_filter::{filter_internal_edge_contacts, filter_internal_vertex_contacts};
+use super::contact_source::{ContactSource, SourcedContact};
+use super::coplanar_stabilizer::{
+    stabilize_coplanar_box_groups as stabilize_box_coplanar_groups,
+    stabilize_coplanar_sphere_groups as stabilize_sphere_coplanar_groups,
+};
 use crate::collision::{sphere_triangle_collision_with_feature, AABB};
 use crate::physics::body::RigidBody;
 use crate::physics::collider::{Collider, ColliderShape};
 use crate::physics::collision::obb::Obb;
 use crate::physics::collision::obb_triangle::obb_triangle_contacts;
 use crate::physics::handle::RigidBodyHandle;
-use super::adjacency_filter::filter_internal_edge_contacts;
-use super::contact_source::{ContactSource, SourcedContact};
-use super::coplanar_stabilizer::{
-    stabilize_coplanar_box_groups as stabilize_box_coplanar_groups,
-    stabilize_coplanar_sphere_groups as stabilize_sphere_coplanar_groups,
-};
 use crate::physics::narrowphase::NormalClusterer;
 use crate::physics::pipeline::solver::ContactConstraint;
 use crate::physics::static_geometry::StaticGeometry;
@@ -193,8 +193,11 @@ fn sphere_vs_static(
         }
     }
 
-    let sourced =
-        filter_internal_edge_contacts(sourced, &patch, normal_dot_threshold.max(0.95));
+    let sourced = filter_internal_vertex_contacts(
+        filter_internal_edge_contacts(sourced, &patch, normal_dot_threshold.max(0.95)),
+        &patch,
+        normal_dot_threshold.max(0.95),
+    );
 
     let sphere_contacts: Vec<_> = sourced.into_iter().map(|c| c.constraint).collect();
     let stabilized = stabilize_sphere_coplanar_groups(
@@ -213,7 +216,10 @@ fn sphere_vs_static(
         };
     }
 
-    StaticContactBatch { contacts: sphere_contacts, stable: false }
+    StaticContactBatch {
+        contacts: sphere_contacts,
+        stable: false,
+    }
 }
 
 /// Generate box-static contacts, optionally stabilizing coplanar patches.
@@ -265,8 +271,11 @@ fn box_vs_static(
         }
     }
 
-    let sourced =
-        filter_internal_edge_contacts(sourced, &patch, normal_dot_threshold.max(0.95));
+    let sourced = filter_internal_vertex_contacts(
+        filter_internal_edge_contacts(sourced, &patch, normal_dot_threshold.max(0.95)),
+        &patch,
+        normal_dot_threshold.max(0.95),
+    );
 
     let box_contacts: Vec<_> = sourced.into_iter().map(|c| c.constraint).collect();
     if let Some(stable) = stabilize_box_coplanar_groups(
@@ -283,7 +292,10 @@ fn box_vs_static(
         };
     }
 
-    StaticContactBatch { contacts: box_contacts, stable: false }
+    StaticContactBatch {
+        contacts: box_contacts,
+        stable: false,
+    }
 }
 
 /// Build speculative contacts at a predicted pose for any shape.
@@ -318,9 +330,11 @@ fn speculative_static_contacts(
 
             let mut sourced = Vec::new();
             for (tri_idx, pt) in patch.triangles.iter().enumerate() {
-                if let Some((cp, feature)) =
-                    sphere_triangle_collision_with_feature(predicted_center, query_radius, &pt.triangle)
-                {
+                if let Some((cp, feature)) = sphere_triangle_collision_with_feature(
+                    predicted_center,
+                    query_radius,
+                    &pt.triangle,
+                ) {
                     let point = predicted_center - cp.normal * (query_radius - cp.depth);
                     sourced.push(SourcedContact {
                         constraint: ContactConstraint {
@@ -345,8 +359,11 @@ fn speculative_static_contacts(
                     });
                 }
             }
-            let sourced =
-                filter_internal_edge_contacts(sourced, &patch, normal_dot_threshold.max(0.95));
+            let sourced = filter_internal_vertex_contacts(
+                filter_internal_edge_contacts(sourced, &patch, normal_dot_threshold.max(0.95)),
+                &patch,
+                normal_dot_threshold.max(0.95),
+            );
             let contacts: Vec<_> = sourced.into_iter().map(|c| c.constraint).collect();
             let stabilized = stabilize_sphere_coplanar_groups(
                 predicted_center,
@@ -392,8 +409,11 @@ fn speculative_static_contacts(
                     });
                 }
             }
-            let sourced =
-                filter_internal_edge_contacts(sourced, &patch, normal_dot_threshold.max(0.95));
+            let sourced = filter_internal_vertex_contacts(
+                filter_internal_edge_contacts(sourced, &patch, normal_dot_threshold.max(0.95)),
+                &patch,
+                normal_dot_threshold.max(0.95),
+            );
             let contacts: Vec<_> = sourced.into_iter().map(|c| c.constraint).collect();
             if let Some(stable) = stabilize_box_coplanar_groups(
                 &obb,

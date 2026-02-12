@@ -12,8 +12,9 @@ use super::debug::{PhysicsDebugConfig, PhysicsDebugger};
 use super::grounding::{GroundingConfig, GroundingDetector};
 use super::handle::{ColliderHandle, RigidBodyHandle};
 use super::narrowphase::{
-    filter_internal_edge_contacts, generate_dynamic_contacts, generate_static_contacts,
-    ContactSource as MeshContactSource, NormalClusterConfig, SourcedContact,
+    filter_internal_edge_contacts, filter_internal_vertex_contacts, generate_dynamic_contacts,
+    generate_static_contacts, ContactSource as MeshContactSource, NormalClusterConfig,
+    SourcedContact,
 };
 use super::pipeline::integration::{integrate_bodies, integrate_forces};
 use super::pipeline::manifold::ManifoldCache;
@@ -687,14 +688,10 @@ impl PhysicsWorld {
                 });
             }
         }
-        let mut contacts: Vec<_> = filter_internal_edge_contacts(
-            sourced,
-            &patch,
-            self.config.normal_clustering.normal_cluster_dot.max(0.95),
-        )
-        .into_iter()
-        .map(|c| c.constraint)
-        .collect();
+        let threshold = self.config.normal_clustering.normal_cluster_dot.max(0.95);
+        let sourced = filter_internal_edge_contacts(sourced, &patch, threshold);
+        let sourced = filter_internal_vertex_contacts(sourced, &patch, threshold);
+        let mut contacts: Vec<_> = sourced.into_iter().map(|c| c.constraint).collect();
 
         if contacts.is_empty() {
             // Fallback: use the sweep hit directly
