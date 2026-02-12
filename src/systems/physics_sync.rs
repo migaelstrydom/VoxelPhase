@@ -12,8 +12,7 @@ use std::collections::HashSet;
 use crate::biped::BipedController;
 use crate::components::{Orientation, Position, RigidBodyComponent, Velocity};
 use crate::debug::{DebugLines, DebugLog, DebugOverlays};
-use crate::physics::{ContactSource, PhysicsImpulseQueue, PhysicsWorld, RigidBodyHandle};
-use crate::rendering::Colour;
+use crate::physics::{PhysicsImpulseQueue, PhysicsWorld, RigidBodyHandle};
 use crate::terrain::TerrainManager;
 use crate::time::Time;
 
@@ -78,71 +77,6 @@ impl PhysicsSyncSystem {
         }
     }
 
-    fn add_contact_overlays(
-        physics: &PhysicsWorld,
-        overlays: &mut DebugOverlays,
-        debug_lines: &mut DebugLines,
-    ) {
-        if !physics.config().debug_draw_contacts {
-            return;
-        }
-        let normal_scale = 0.3;
-        let mut smoothed_count = 0usize;
-        let mut max_angle_deg = 0.0f32;
-
-        for contact in physics.contact_events() {
-            let colour = match contact.source {
-                ContactSource::Narrowphase => Colour::RED,
-                ContactSource::Ccd => Colour::BLUE,
-            };
-            overlays.add_sphere(contact.point, 0.06, colour);
-            if contact.normal.magnitude_squared() > 1e-8 {
-                overlays.add_line(
-                    contact.point,
-                    contact.point + contact.normal * normal_scale,
-                    colour,
-                );
-            }
-            if physics.config().debug_draw_contact_raw_normals
-                && contact.source == ContactSource::Narrowphase
-                && contact.raw_normal.magnitude_squared() > 1e-8
-            {
-                let dot = contact.normal.dot(&contact.raw_normal).clamp(-1.0, 1.0);
-                let angle_deg = dot.acos() * 180.0 / std::f32::consts::PI;
-                if angle_deg > 0.01 {
-                    smoothed_count += 1;
-                    max_angle_deg = max_angle_deg.max(angle_deg);
-                    overlays.add_line(
-                        contact.point,
-                        contact.point + contact.raw_normal * normal_scale,
-                        Colour::YELLOW,
-                    );
-                }
-            }
-        }
-
-        if physics.config().debug_draw_contact_raw_normals {
-            debug_lines.add("Contacts/Smoothed", smoothed_count.to_string());
-            debug_lines.add(
-                "Contacts/MaxNormalDeltaDeg",
-                format!("{:.3}", max_angle_deg),
-            );
-        }
-    }
-
-    fn add_sleep_overlays(physics: &PhysicsWorld, overlays: &mut DebugOverlays) {
-        if !physics.config().debug_draw_sleeping {
-            return;
-        }
-        let colour = Colour::new(0.6, 0.65, 1.0, 1.0);
-        for handle in physics.sleeping_bodies() {
-            if let Some(body) = physics.body(handle) {
-                let pos = body.position();
-                let marker_pos = Point3::new(pos.x, pos.y + 0.6, pos.z);
-                overlays.add_sphere(marker_pos, 0.08, colour);
-            }
-        }
-    }
 }
 
 impl<'a> System<'a> for PhysicsSyncSystem {
@@ -203,13 +137,24 @@ impl<'a> System<'a> for PhysicsSyncSystem {
             physics.0.step(dt, &**terrain, &mut debug_lines);
         }
 
-        Self::add_contact_overlays(&physics.0, &mut debug_overlays, &mut debug_lines);
-        Self::add_sleep_overlays(&physics.0, &mut debug_overlays);
-
         let grounded_handles = physics.0.grounded_handles();
 
-        // Write physics debug statistics (printed to stdout when F3 is pressed)
-        physics.0.write_debug_log(&mut debug_log);
+        // Debug visualization and logging
+        physics.0.debugger().add_contact_overlays(
+            physics.0.contact_events(),
+            &mut debug_overlays,
+            &mut debug_lines,
+        );
+        physics.0.debugger().add_sleep_overlays(
+            physics.0.bodies(),
+            &physics.0.sleeping_bodies(),
+            &mut debug_overlays,
+        );
+        physics.0.debugger().write_debug_log(
+            &mut debug_log,
+            physics.0.config().contact_margin,
+            physics.0.config().warm_start_depth_slop,
+        );
 
         // Sync physics state back to ECS components
         Self::sync_physics_to_ecs(

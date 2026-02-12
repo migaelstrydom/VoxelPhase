@@ -37,15 +37,16 @@
 mod body;
 mod collider;
 mod collision;
+mod debug;
 pub mod grounding;
 mod handle;
+mod impulses;
 mod math;
 mod narrowphase;
 mod pipeline;
 mod sleep;
 mod static_geometry;
 mod world;
-mod impulses;
 
 pub use body::RigidBodyDesc;
 pub use collider::ColliderDesc;

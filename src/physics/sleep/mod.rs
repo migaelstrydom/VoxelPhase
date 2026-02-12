@@ -3,4 +3,4 @@ mod islands;
 mod manager;
 mod wake;
 
-pub(crate) use manager::SleepManager;
+pub(crate) use manager::{SleepManager, SleepManagerConfig};

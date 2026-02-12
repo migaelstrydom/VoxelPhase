@@ -474,8 +474,16 @@ PhysicsConfig {
     baumgarte_factor: f32,                  // 0.1–0.2
     baumgarte_slop: f32,                    // 0.001–0.01
     restitution_velocity_threshold: f32,    // 0.5–1.0
-    sleep_threshold: f32,                   // 0.01
-    sleep_delay_frames: u32,               // 30–60
+    sleep: SleepManagerConfig,              // nested config for sleep system
+}
+```
+
+### SleepManagerConfig
+```
+SleepManagerConfig {
+    enabled: bool,                          // enable/disable sleep system
+    threshold: f32,                         // 0.01–0.2 (kinetic energy threshold)
+    delay_frames: u32,                      // 30–60 (frames below threshold before sleeping)
 }
 ```
 

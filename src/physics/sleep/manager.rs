@@ -10,6 +10,27 @@ use crate::physics::sleep::energy::EnergyTracker;
 use crate::physics::sleep::islands::IslandBuilder;
 use crate::physics::sleep::wake::WakeEvents;
 
+/// Configuration for the sleep system.
+#[derive(Debug, Clone, Copy)]
+pub struct SleepManagerConfig {
+    /// Enable sleeping for dynamic bodies.
+    pub enabled: bool,
+    /// Kinetic energy threshold below which a body is a sleep candidate.
+    pub threshold: f32,
+    /// Frames a body must remain below the threshold before sleeping.
+    pub delay_frames: u32,
+}
+
+impl Default for SleepManagerConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            threshold: 0.1,
+            delay_frames: 30,
+        }
+    }
+}
+
 pub struct SleepManager {
     /// Master toggle for sleeping behavior.
     enabled: bool,
@@ -24,22 +45,13 @@ pub struct SleepManager {
 }
 
 impl SleepManager {
-    pub fn new(threshold: f32, delay_frames: u32) -> Self {
+    pub fn new(config: SleepManagerConfig) -> Self {
         Self {
-            enabled: false,
-            energy: EnergyTracker::new(threshold, delay_frames),
+            enabled: config.enabled,
+            energy: EnergyTracker::new(config.threshold, config.delay_frames),
             island_builder: IslandBuilder,
             wake_events: WakeEvents::new(),
             sleeping: HashSet::new(),
-        }
-    }
-
-    pub fn set_enabled(&mut self, enabled: bool) {
-        self.enabled = enabled;
-        if !self.enabled {
-            self.sleeping.clear();
-            self.wake_events.clear();
-            self.energy.clear_all();
         }
     }
 
