@@ -7,6 +7,7 @@ use nalgebra::{Point3, Vector3};
 
 use super::obb::Obb;
 use crate::collision::Triangle;
+use crate::physics::ContactFeature;
 
 /// Contact from OBB-triangle intersection.
 #[derive(Debug, Clone)]
@@ -17,6 +18,8 @@ pub struct ObbTriangleContact {
     pub normal: Vector3<f32>,
     /// Penetration depth (positive = overlapping, zero = touching).
     pub depth: f32,
+    /// Feature path that produced this contact.
+    pub feature: ContactFeature,
 }
 
 const AXIS_EPS: f32 = 1e-6;
@@ -55,12 +58,88 @@ fn point_inside_obb(point: Point3<f32>, obb: &Obb) -> bool {
         && local[2].abs() <= obb.half_extents.z + 1e-6
 }
 
+fn point_segment_distance_sq(p: Point3<f32>, a: Point3<f32>, b: Point3<f32>) -> f32 {
+    let ab = b - a;
+    let ab_len_sq = ab.magnitude_squared();
+    if ab_len_sq <= AXIS_EPS {
+        return (p - a).magnitude_squared();
+    }
+    let t = ((p - a).dot(&ab) / ab_len_sq).clamp(0.0, 1.0);
+    let closest = a + ab * t;
+    (p - closest).magnitude_squared()
+}
+
+fn barycentric_coordinates(point: Point3<f32>, tri: &Triangle) -> Option<(f32, f32, f32)> {
+    let v0 = tri.v1 - tri.v0;
+    let v1 = tri.v2 - tri.v0;
+    let v2 = point - tri.v0;
+
+    let d00 = v0.dot(&v0);
+    let d01 = v0.dot(&v1);
+    let d11 = v1.dot(&v1);
+    let d20 = v2.dot(&v0);
+    let d21 = v2.dot(&v1);
+    let denom = d00 * d11 - d01 * d01;
+    if denom.abs() <= AXIS_EPS {
+        return None;
+    }
+
+    let v = (d11 * d20 - d01 * d21) / denom;
+    let w = (d00 * d21 - d01 * d20) / denom;
+    let u = 1.0 - v - w;
+    Some((u, v, w))
+}
+
+fn classify_projected_triangle_feature(point: Point3<f32>, tri: &Triangle) -> ContactFeature {
+    const BARY_EPS: f32 = 1e-4;
+    if let Some((u, v, w)) = barycentric_coordinates(point, tri) {
+        let on_u = u.abs() <= BARY_EPS;
+        let on_v = v.abs() <= BARY_EPS;
+        let on_w = w.abs() <= BARY_EPS;
+
+        if on_v && on_w {
+            return ContactFeature::Vertex(0);
+        }
+        if on_u && on_w {
+            return ContactFeature::Vertex(1);
+        }
+        if on_u && on_v {
+            return ContactFeature::Vertex(2);
+        }
+
+        // Edge indices match Triangle::edge: 0=v0->v1, 1=v1->v2, 2=v2->v0.
+        if on_w {
+            return ContactFeature::Edge(0);
+        }
+        if on_u {
+            return ContactFeature::Edge(1);
+        }
+        if on_v {
+            return ContactFeature::Edge(2);
+        }
+
+        return ContactFeature::Face;
+    }
+
+    // Degenerate triangle fallback: preserve behavior with geometric proximity.
+    let d0 = point_segment_distance_sq(point, tri.v0, tri.v1);
+    let d1 = point_segment_distance_sq(point, tri.v1, tri.v2);
+    let d2 = point_segment_distance_sq(point, tri.v2, tri.v0);
+    if d0 <= d1 && d0 <= d2 {
+        ContactFeature::Edge(0)
+    } else if d1 <= d2 {
+        ContactFeature::Edge(1)
+    } else {
+        ContactFeature::Edge(2)
+    }
+}
+
 fn edge_edge_contact_point(
     obb: &Obb,
     tri: &Triangle,
     normal: &Vector3<f32>,
     depth: f32,
-) -> Option<Point3<f32>> {
+) -> Option<(Point3<f32>, u8)> {
     if depth <= 0.0 {
         return None;
     }
@@ -70,8 +149,9 @@ fn edge_edge_contact_point(
 
     let mut best_dist_sq = f32::INFINITY;
     let mut best_point = None;
+    let mut best_tri_edge: u8 = 0;
     for (a0, a1) in &obb_edges {
-        for (b0, b1) in &tri_edges {
+        for (edge_idx, (b0, b1)) in tri_edges.iter().enumerate() {
             let (pa, pb) = segment_segment_closest_points(*a0, *a1, *b0, *b1);
             let delta = pb - pa;
             let sep = delta.dot(normal).abs();
@@ -82,11 +162,12 @@ fn edge_edge_contact_point(
             if dist_sq < best_dist_sq {
                 best_dist_sq = dist_sq;
                 best_point = Some(Point3::from((pa.coords + pb.coords) * 0.5));
+                best_tri_edge = edge_idx as u8;
             }
         }
     }
 
-    best_point
+    best_point.map(|p| (p, best_tri_edge))
 }
 
 fn obb_edges(obb: &Obb) -> [(Point3<f32>, Point3<f32>); 12] {
@@ -283,29 +364,32 @@ pub fn obb_triangle_contacts(obb: &Obb, tri: &Triangle) -> Vec<ObbTriangleContac
                     point: projected,
                     normal,
                     depth,
+                    feature: classify_projected_triangle_feature(projected, tri),
                 });
             }
         }
     }
 
     let tri_vertices = [tri.v0, tri.v1, tri.v2];
-    for v in &tri_vertices {
+    for (idx, v) in tri_vertices.iter().enumerate() {
         if point_inside_obb(*v, obb) {
             contacts.push(ObbTriangleContact {
                 point: *v,
                 normal,
                 depth,
+                feature: ContactFeature::Vertex(idx as u8),
             });
         }
     }
 
     if contacts.is_empty() {
         if best_is_edge_edge {
-            if let Some(edge_point) = edge_edge_contact_point(obb, tri, &normal, best_depth) {
+            if let Some((edge_point, tri_edge)) = edge_edge_contact_point(obb, tri, &normal, best_depth) {
                 contacts.push(ObbTriangleContact {
                     point: edge_point,
                     normal,
                     depth,
+                    feature: ContactFeature::Edge(tri_edge),
                 });
                 return contacts;
             }
@@ -326,6 +410,7 @@ pub fn obb_triangle_contacts(obb: &Obb, tri: &Triangle) -> Vec<ObbTriangleContac
                     point: projected,
                     normal,
                     depth,
+                    feature: classify_projected_triangle_feature(projected, tri),
                 });
             }
         }
@@ -508,6 +593,23 @@ mod tests {
         );
         let expected = [tri.v0, tri.v1, tri.v2];
         assert_contacts_match(&contacts, &expected, 1e-4);
+        for (idx, c) in contacts.iter().enumerate() {
+            assert_eq!(c.feature, ContactFeature::Vertex(idx as u8));
+        }
+    }
+
+    #[test]
+    fn box_resting_contacts_are_face_features() {
+        let obb = Obb::new(
+            Point3::new(0.0, 0.5, 0.0),
+            UnitQuaternion::identity(),
+            Vector3::new(0.5, 0.5, 0.5),
+        );
+        let contacts = obb_triangle_contacts(&obb, &floor_triangle());
+        assert!(!contacts.is_empty());
+        for c in &contacts {
+            assert_eq!(c.feature, ContactFeature::Face);
+        }
     }
 
     #[test]

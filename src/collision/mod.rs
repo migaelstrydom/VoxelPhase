@@ -19,5 +19,5 @@ pub use aabb::AABB;
 pub use contact::ContactPoint;
 pub use mesh_patch::{MeshPatch, PatchTriangle};
 pub use shapes::Sphere;
-pub use sphere_triangle::{sphere_triangle_collision, Triangle};
+pub use sphere_triangle::{sphere_triangle_collision_with_feature, Triangle};
 pub use swept::{swept_sphere_triangle, SweptContact};

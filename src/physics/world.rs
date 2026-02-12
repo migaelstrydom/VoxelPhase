@@ -12,7 +12,8 @@ use super::debug::{PhysicsDebugConfig, PhysicsDebugger};
 use super::grounding::{GroundingConfig, GroundingDetector};
 use super::handle::{ColliderHandle, RigidBodyHandle};
 use super::narrowphase::{
-    generate_dynamic_contacts, generate_static_contacts, NormalClusterConfig,
+    filter_internal_edge_contacts, generate_dynamic_contacts, generate_static_contacts,
+    ContactSource as MeshContactSource, NormalClusterConfig, SourcedContact,
 };
 use super::pipeline::integration::{integrate_bodies, integrate_forces};
 use super::pipeline::manifold::ManifoldCache;
@@ -660,26 +661,40 @@ impl PhysicsWorld {
         let query = crate::collision::AABB::new(aabb_min - margin, aabb_max + margin);
         let patch = static_geometry.query_region(&query);
 
-        let mut contacts = Vec::new();
-        for pt in &patch.triangles {
+        let mut sourced = Vec::new();
+        for (tri_idx, pt) in patch.triangles.iter().enumerate() {
             for c in obb_triangle_contacts(&obb, &pt.triangle) {
-                contacts.push(ContactConstraint {
-                    body_a: None,
-                    body_b: candidate.body_handle,
-                    collider_a: None,
-                    collider_b: None,
-                    point: c.point,
-                    normal: c.normal,
-                    raw_normal: c.normal,
-                    depth: 0.0,
-                    raw_depth: 0.0,
-                    restitution: candidate.material.restitution,
-                    friction: candidate.material.friction,
-                    warm_normal_impulse: 0.0,
-                    warm_tangent_impulse: [0.0, 0.0],
+                sourced.push(SourcedContact {
+                    constraint: ContactConstraint {
+                        body_a: None,
+                        body_b: candidate.body_handle,
+                        collider_a: None,
+                        collider_b: None,
+                        point: c.point,
+                        normal: c.normal,
+                        raw_normal: c.normal,
+                        depth: 0.0,
+                        raw_depth: 0.0,
+                        restitution: candidate.material.restitution,
+                        friction: candidate.material.friction,
+                        warm_normal_impulse: 0.0,
+                        warm_tangent_impulse: [0.0, 0.0],
+                    },
+                    source: MeshContactSource {
+                        triangle_idx: tri_idx as u32,
+                        feature: c.feature,
+                    },
                 });
             }
         }
+        let mut contacts: Vec<_> = filter_internal_edge_contacts(
+            sourced,
+            &patch,
+            self.config.normal_clustering.normal_cluster_dot.max(0.95),
+        )
+        .into_iter()
+        .map(|c| c.constraint)
+        .collect();
 
         if contacts.is_empty() {
             // Fallback: use the sweep hit directly
