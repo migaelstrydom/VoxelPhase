@@ -194,24 +194,8 @@ impl RigidBody {
         linear + angular
     }
 
-    pub fn mass(&self) -> f32 {
-        self.mass
-    }
-
     pub fn inv_mass(&self) -> f32 {
         self.inv_mass
-    }
-
-    pub fn gravity_scale(&self) -> f32 {
-        self.gravity_scale
-    }
-
-    pub fn force(&self) -> Vector3<f32> {
-        self.force
-    }
-
-    pub fn torque(&self) -> Vector3<f32> {
-        self.torque
     }
 
     pub fn colliders(&self) -> &[ColliderHandle] {
@@ -244,23 +228,6 @@ impl RigidBody {
         self.angular_velocity = velocity;
     }
 
-    /// Apply a force at the center of mass (no torque generated).
-    pub fn apply_force(&mut self, force: Vector3<f32>) {
-        self.force += force;
-    }
-
-    /// Apply a force at a world-space point, generating both force and torque.
-    pub fn apply_force_at_point(&mut self, force: Vector3<f32>, point: Point3<f32>) {
-        self.force += force;
-        let r = point - self.position;
-        self.torque += r.cross(&force);
-    }
-
-    /// Apply a torque (no linear force).
-    pub fn apply_torque(&mut self, torque: Vector3<f32>) {
-        self.torque += torque;
-    }
-
     /// Apply an instantaneous linear impulse at the center of mass.
     pub fn apply_impulse(&mut self, impulse: Vector3<f32>) {
         if self.inv_mass > 0.0 {
@@ -275,13 +242,6 @@ impl RigidBody {
             let r = point - self.position;
             let angular_impulse = r.cross(&impulse);
             self.angular_velocity += self.world_inv_inertia() * angular_impulse;
-        }
-    }
-
-    /// Apply an instantaneous angular impulse.
-    pub fn apply_angular_impulse(&mut self, impulse: Vector3<f32>) {
-        if self.inv_mass > 0.0 {
-            self.angular_velocity += self.world_inv_inertia() * impulse;
         }
     }
 

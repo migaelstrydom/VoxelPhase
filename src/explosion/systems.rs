@@ -93,7 +93,7 @@ impl<'a> System<'a> for ExplosionSystem {
 
         // Queue physics impulses for rigid bodies (applied by physics system)
         for &(_, center, _, blast_radius, force) in &explosion_data {
-            impulse_queue.push(PhysicsImpulse::new(center, blast_radius, force, 0.5));
+            impulse_queue.push(PhysicsImpulse::radial(center, blast_radius, force, 0.5));
         }
 
         // Spawn particle emitters at explosion locations

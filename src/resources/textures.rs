@@ -304,6 +304,111 @@ impl TextureFactory {
         Ok(texture)
     }
 
+    /// Create a texture from raw RGBA pixel data.
+    ///
+    /// - `width, height`: Texture dimensions
+    /// - `rgba_data`: Raw pixel data in RGBA8 format (length must be `width * height * 4`)
+    /// - `generate_mipmaps`: Whether to generate a mip chain
+    pub fn create_from_rgba(
+        &self,
+        width: u32,
+        height: u32,
+        rgba_data: &[u8],
+        generate_mipmaps: bool,
+    ) -> EngineResult<ManagedTexture> {
+        assert_eq!(
+            rgba_data.len(),
+            (width * height * 4) as usize,
+            "RGBA data length mismatch"
+        );
+
+        let image_size = rgba_data.len() as u64;
+        let mip_levels = if generate_mipmaps {
+            ((width.max(height) as f32).log2().floor() as u32) + 1
+        } else {
+            1
+        };
+
+        let staging_buffer = crate::rendering::frame::ManagedBuffer::new(
+            self.device.clone(),
+            image_size,
+            vk::BufferUsageFlags::TRANSFER_SRC,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+        )
+        .map_err(|e| EngineError::Buffer {
+            operation: crate::core::error::BufferOperation::Create,
+            size: image_size,
+            reason: e.to_string(),
+        })?;
+
+        unsafe {
+            let data_ptr = self.device.device.map_memory(
+                staging_buffer.memory,
+                0,
+                image_size,
+                vk::MemoryMapFlags::empty(),
+            )? as *mut u8;
+
+            std::ptr::copy_nonoverlapping(rgba_data.as_ptr(), data_ptr, rgba_data.len());
+            self.device.device.unmap_memory(staging_buffer.memory);
+        }
+
+        let texture = ManagedTexture::new(
+            self.device.clone(),
+            width,
+            height,
+            mip_levels,
+            vk::Format::R8G8B8A8_SRGB,
+            vk::ImageTiling::OPTIMAL,
+            vk::ImageUsageFlags::TRANSFER_DST
+                | vk::ImageUsageFlags::TRANSFER_SRC
+                | vk::ImageUsageFlags::SAMPLED,
+            vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            vk::ImageAspectFlags::COLOR,
+        )
+        .map_err(|e| EngineError::Image {
+            operation: ImageOperation::Create,
+            width,
+            height,
+            reason: e.to_string(),
+        })?;
+
+        self.transfer_service.transition_image_layout(
+            texture.image,
+            vk::Format::R8G8B8A8_SRGB,
+            vk::ImageLayout::UNDEFINED,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            mip_levels,
+        )?;
+
+        self.transfer_service.copy_buffer_to_image(
+            staging_buffer.buffer,
+            texture.image,
+            width,
+            height,
+        )?;
+
+        if generate_mipmaps {
+            self.transfer_service.generate_mipmaps(
+                texture.image,
+                vk::Format::R8G8B8A8_SRGB,
+                width,
+                height,
+                mip_levels,
+            )?;
+        } else {
+            self.transfer_service.transition_image_layout(
+                texture.image,
+                vk::Format::R8G8B8A8_SRGB,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                mip_levels,
+            )?;
+        }
+
+        Ok(texture)
+    }
+
     /// Create a 1x1 solid colour texture.
     pub fn create_solid_colour(&self, colour: Colour) -> EngineResult<ManagedTexture> {
         let width = 1u32;
@@ -472,6 +577,34 @@ impl TextureManager {
         inner.next_id += 1;
 
         inner.textures.insert(id, texture.clone());
+
+        Ok(TextureHandle {
+            texture,
+            id,
+            manager: Arc::clone(&self.inner),
+        })
+    }
+
+    /// Create a texture from raw RGBA pixel data.
+    pub fn create_from_rgba(
+        &self,
+        width: u32,
+        height: u32,
+        rgba_data: &[u8],
+        generate_mipmaps: bool,
+    ) -> EngineResult<TextureHandle> {
+        let texture = Arc::new(
+            self.texture_factory
+                .create_from_rgba(width, height, rgba_data, generate_mipmaps)?,
+        );
+
+        let mut inner = self.inner.lock().unwrap();
+        let id = inner.next_id;
+        inner.next_id += 1;
+
+        inner.textures.insert(id, texture.clone());
+
+        log::debug!("Created RGBA texture {}x{} (id={})", width, height, id);
 
         Ok(TextureHandle {
             texture,

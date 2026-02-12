@@ -38,9 +38,6 @@ impl GroundingDetector {
             if contact.source != ContactSource::Narrowphase {
                 continue;
             }
-            if contact.body_a.is_some() {
-                continue;
-            }
             let normal = contact.raw_normal;
             if normal.magnitude_squared() <= 1e-8 {
                 continue;

@@ -11,6 +11,7 @@ use super::collision::obb_triangle::obb_triangle_contacts;
 use super::debug::{PhysicsDebugConfig, PhysicsDebugger};
 use super::grounding::{GroundingConfig, GroundingDetector};
 use super::handle::{ColliderHandle, RigidBodyHandle};
+use super::impulses::{ForceField, ForceFieldRegistry, PhysicsImpulse};
 use super::narrowphase::{
     filter_internal_edge_contacts, filter_internal_vertex_contacts, generate_dynamic_contacts,
     generate_static_contacts, ContactSource as MeshContactSource, NormalClusterConfig,
@@ -129,6 +130,7 @@ pub struct PhysicsWorld {
     frame_index: u64,
     sleep_manager: SleepManager,
     grounding_detector: GroundingDetector,
+    force_fields: ForceFieldRegistry,
 }
 
 impl PhysicsWorld {
@@ -153,6 +155,7 @@ impl PhysicsWorld {
             frame_index: 0,
             sleep_manager,
             grounding_detector,
+            force_fields: ForceFieldRegistry::default(),
         }
     }
 
@@ -173,34 +176,37 @@ impl PhysicsWorld {
         self.sleep_manager.sleeping_snapshot().into_iter().collect()
     }
 
-    pub fn apply_radial_impulse(
-        &mut self,
-        center: Point3<f32>,
-        radius: f32,
-        strength: f32,
-        upward_boost: f32,
-    ) {
-        if radius <= 0.0 || strength.abs() < 1e-6 {
-            return;
-        }
+    /// Register a persistent force field. Returns its index for later removal.
+    pub fn add_force_field(&mut self, field: ForceField) -> usize {
+        self.force_fields.add(field)
+    }
+
+    /// Apply one-shot impulses and persistent force fields to all dynamic bodies.
+    fn apply_impulses(&mut self, impulses: &[PhysicsImpulse], dt: f32) {
         for (idx, body) in self.bodies.iter_mut() {
             if !body.is_dynamic() {
                 continue;
             }
-            let delta = body.position() - center;
-            let distance = delta.magnitude();
-            if distance >= radius {
-                continue;
+            let pos = body.position();
+            let mut wake = false;
+
+            for impulse in impulses {
+                if let Some(v) = impulse.impulse_at(pos) {
+                    body.apply_impulse(v);
+                    wake = true;
+                }
             }
-            let (direction, falloff) = if distance < 1e-4 {
-                (Vector3::y(), 1.0)
-            } else {
-                (delta / distance, 1.0 - (distance / radius))
-            };
-            let impulse = direction * strength * falloff
-                + Vector3::new(0.0, strength * falloff * upward_boost, 0.0);
-            body.apply_impulse(impulse);
-            self.sleep_manager.wake_body(RigidBodyHandle(idx));
+
+            for field in self.force_fields.iter() {
+                if let Some(v) = field.impulse_at(pos, dt) {
+                    body.apply_impulse(v);
+                    wake = true;
+                }
+            }
+
+            if wake {
+                self.sleep_manager.wake_body(RigidBodyHandle(idx));
+            }
         }
     }
 
@@ -348,17 +354,19 @@ impl PhysicsWorld {
     /// Step the physics simulation forward by dt seconds.
     ///
     /// Pipeline order (semi-implicit Euler):
-    /// 1. Integrate forces into velocities
-    /// 2. Narrowphase: generate contacts at current positions
-    /// 3. Manifold cache: merge with persistent contacts, populate warm-start data
-    /// 4. Solve velocity constraints (warm-start + sequential impulses)
-    /// 5. Write solved impulses back to manifold cache
-    /// 6. Integrate positions (velocities → positions)
-    /// 7. CCD pass (fast bodies only: sweep, correct position, re-solve)
+    /// 1. Integrate gravity/forces into velocities
+    /// 2. Apply one-shot impulses and persistent force fields
+    /// 3. Narrowphase: generate contacts at current positions
+    /// 4. Manifold cache: merge with persistent contacts, populate warm-start data
+    /// 5. Solve velocity constraints (warm-start + sequential impulses)
+    /// 6. Write solved impulses back to manifold cache
+    /// 7. Integrate positions (velocities → positions)
+    /// 8. CCD pass (fast bodies only: sweep, correct position, re-solve)
     pub fn step(
         &mut self,
         dt: f32,
         static_geometry: &dyn StaticGeometry,
+        impulses: &[PhysicsImpulse],
         debug_lines: &mut DebugLines,
     ) {
         self.frame_index = self.frame_index.wrapping_add(1);
@@ -370,13 +378,16 @@ impl PhysicsWorld {
             None
         };
 
-        // Phase 1-2: Integrate forces into velocities
+        // Phase 1: Integrate forces into velocities
         integrate_forces(
             &mut self.bodies,
             dt,
             self.config.gravity,
             sleeping_snapshot.as_ref(),
         );
+
+        // Phase 2: Apply one-shot impulses and persistent force fields
+        self.apply_impulses(impulses, dt);
 
         // Phase 3: Narrowphase contact generation
         let mut raw_contacts = generate_static_contacts(

@@ -267,6 +267,11 @@ impl TerrainManager {
         )
     }
 
+    /// Get the world-space bounds of the terrain.
+    pub fn bounds(&self) -> &AABB {
+        self.svo.bounds()
+    }
+
     // === Rendering data ===
 
     /// Check if there's any geometry to render.

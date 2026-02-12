@@ -27,7 +27,7 @@ impl Default for PhysicsDebugConfig {
         Self {
             draw_contacts: true,
             draw_contact_raw_normals: false,
-            draw_sleeping: true,
+            draw_sleeping: false,
         }
     }
 }

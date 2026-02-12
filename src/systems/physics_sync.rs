@@ -148,18 +148,11 @@ impl<'a> System<'a> for PhysicsSyncSystem {
             &velocity_driven,
         );
 
-        for impulse in impulse_queue.drain() {
-            physics.0.apply_radial_impulse(
-                impulse.center,
-                impulse.radius,
-                impulse.strength,
-                impulse.upward_boost,
-            );
-        }
+        let impulses: Vec<_> = impulse_queue.drain().collect();
 
         // Step physics with terrain as static geometry
         if let Some(ref terrain) = terrain_opt {
-            physics.0.step(dt, &**terrain, &mut debug_lines);
+            physics.0.step(dt, &**terrain, &impulses, &mut debug_lines);
         }
 
         let grounded_handles = physics.0.grounded_handles();
