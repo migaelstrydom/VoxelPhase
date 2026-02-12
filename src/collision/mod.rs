@@ -10,12 +10,14 @@
 
 mod aabb;
 mod contact;
+mod mesh_patch;
 mod shapes;
 mod sphere_triangle;
 mod swept;
 
 pub use aabb::AABB;
 pub use contact::ContactPoint;
+pub use mesh_patch::{MeshPatch, PatchTriangle};
 pub use shapes::Sphere;
 pub use sphere_triangle::{sphere_triangle_collision, Triangle};
 pub use swept::{swept_sphere_triangle, SweptContact};

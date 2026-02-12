@@ -615,8 +615,9 @@ impl MeshOctree {
 
     /// Query all triangles intersecting an AABB.
     ///
-    /// Returns collision triangles for intersection testing.
-    pub fn query_aabb(&self, query: &AABB) -> Vec<Triangle> {
+    /// Returns `(TriangleRef, Triangle)` pairs. The `TriangleRef` identifies
+    /// each triangle within the octree and can be used for adjacency lookups.
+    pub fn query_aabb(&self, query: &AABB) -> Vec<(TriangleRef, Triangle)> {
         let mut seen = HashSet::new();
         let mut triangles = Vec::new();
         self.query_aabb_recursive(&self.root, 0, 0, query, &mut seen, &mut triangles);
@@ -630,7 +631,7 @@ impl MeshOctree {
         path: u64,
         query: &AABB,
         seen: &mut HashSet<(u64, u8, u32)>,
-        out: &mut Vec<Triangle>,
+        out: &mut Vec<(TriangleRef, Triangle)>,
     ) {
         if !node.bounds.intersects(query) {
             return;
@@ -645,7 +646,8 @@ impl MeshOctree {
                     if seen.insert(key) {
                         let aabb = leaf.triangle_aabb(tri);
                         if query.intersects(&aabb) {
-                            out.push(leaf.to_collision_triangle(tri));
+                            let tri_ref = TriangleRef::new(path, depth, tri as u32);
+                            out.push((tri_ref, leaf.to_collision_triangle(tri)));
                         }
                     }
                 }
@@ -655,7 +657,7 @@ impl MeshOctree {
                     let key = (tri_ref.path, tri_ref.depth, tri_ref.triangle_index);
                     if seen.insert(key) {
                         if let Some(triangle) = self.resolve_triangle_ref(tri_ref) {
-                            out.push(triangle);
+                            out.push((*tri_ref, triangle));
                         }
                     }
                 }
@@ -935,6 +937,9 @@ mod tests {
         let query = AABB::new(Point3::new(0.0, 0.0, 0.0), Point3::new(3.0, 3.0, 3.0));
         let results = octree.query_aabb(&query);
         assert_eq!(results.len(), 1);
+        // Verify we get both TriangleRef and Triangle
+        let (tri_ref, _triangle) = &results[0];
+        assert_eq!(tri_ref.triangle_index, 0);
 
         // Query outside should find nothing
         let query = AABB::new(Point3::new(5.0, 5.0, 5.0), Point3::new(6.0, 6.0, 6.0));

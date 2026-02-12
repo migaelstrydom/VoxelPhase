@@ -52,5 +52,5 @@ pub use body::RigidBodyDesc;
 pub use collider::ColliderDesc;
 pub use handle::RigidBodyHandle;
 pub use impulses::{PhysicsImpulse, PhysicsImpulseQueue};
-pub use static_geometry::{StaticContact, StaticGeometry, SweptStaticContact};
+pub use static_geometry::StaticGeometry;
 pub use world::{ContactEvent, ContactSource, PhysicsWorld};

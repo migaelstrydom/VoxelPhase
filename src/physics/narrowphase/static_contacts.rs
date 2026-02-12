@@ -3,9 +3,9 @@
 use std::collections::HashSet;
 
 use generational_arena::Arena;
-use nalgebra::Vector3;
+use nalgebra::{Point3, Vector3};
 
-use crate::collision::AABB;
+use crate::collision::{sphere_triangle_collision, AABB};
 use crate::physics::body::RigidBody;
 use crate::physics::collider::{Collider, ColliderShape};
 use crate::physics::collision::obb::Obb;
@@ -18,8 +18,8 @@ use crate::physics::static_geometry::StaticGeometry;
 /// Generate contacts between all non-static colliders and static geometry.
 ///
 /// Dispatches per collider shape:
-/// - Sphere: queries static geometry with expanded radius, subtracts contact_margin from depth
-/// - Box: queries triangles in the OBB's AABB, runs SAT per triangle
+/// - Sphere: builds AABB query, tests each triangle with sphere-triangle collision
+/// - Box: builds AABB query, runs SAT per triangle
 ///
 /// Both paths share sleeping checks, speculative contacts, and normal clustering.
 pub fn generate_static_contacts(
@@ -132,7 +132,7 @@ fn sphere_vs_static(
     body_handle: RigidBodyHandle,
     collider_handle: crate::physics::handle::ColliderHandle,
     collider: &Collider,
-    center: nalgebra::Point3<f32>,
+    center: Point3<f32>,
     radius: f32,
     static_geometry: &dyn StaticGeometry,
     contact_margin: f32,
@@ -141,25 +141,42 @@ fn sphere_vs_static(
     plane_thickness: f32,
 ) -> StaticContactBatch {
     let query_radius = radius + contact_margin;
+    let query = AABB::new(
+        Point3::new(
+            center.x - query_radius,
+            center.y - query_radius,
+            center.z - query_radius,
+        ),
+        Point3::new(
+            center.x + query_radius,
+            center.y + query_radius,
+            center.z + query_radius,
+        ),
+    );
+    let patch = static_geometry.query_region(&query);
+
     let mut sphere_contacts = Vec::new();
-    for sc in static_geometry.query_sphere(center, query_radius) {
-        let raw_depth = sc.depth - contact_margin;
-        let solver_depth = raw_depth.max(0.0);
-        sphere_contacts.push(ContactConstraint {
-            body_a: None,
-            body_b: body_handle,
-            collider_a: None,
-            collider_b: Some(collider_handle),
-            point: sc.point,
-            normal: sc.normal,
-            raw_normal: sc.normal,
-            depth: solver_depth,
-            raw_depth,
-            restitution: collider.material().restitution,
-            friction: collider.material().friction,
-            warm_normal_impulse: 0.0,
-            warm_tangent_impulse: [0.0, 0.0],
-        });
+    for pt in &patch.triangles {
+        if let Some(cp) = sphere_triangle_collision(center, query_radius, &pt.triangle) {
+            let point = center - cp.normal * (query_radius - cp.depth);
+            let raw_depth = cp.depth - contact_margin;
+            let solver_depth = raw_depth.max(0.0);
+            sphere_contacts.push(ContactConstraint {
+                body_a: None,
+                body_b: body_handle,
+                collider_a: None,
+                collider_b: Some(collider_handle),
+                point,
+                normal: cp.normal,
+                raw_normal: cp.normal,
+                depth: solver_depth,
+                raw_depth,
+                restitution: collider.material().restitution,
+                friction: collider.material().friction,
+                warm_normal_impulse: 0.0,
+                warm_tangent_impulse: [0.0, 0.0],
+            });
+        }
     }
 
     let stabilized = stabilize_coplanar_sphere_groups(
@@ -189,7 +206,7 @@ fn box_vs_static(
     body_handle: RigidBodyHandle,
     collider_handle: crate::physics::handle::ColliderHandle,
     collider: &Collider,
-    center: nalgebra::Point3<f32>,
+    center: Point3<f32>,
     rotation: nalgebra::UnitQuaternion<f32>,
     half_extents: Vector3<f32>,
     static_geometry: &dyn StaticGeometry,
@@ -203,10 +220,10 @@ fn box_vs_static(
     let margin_vec = Vector3::new(contact_margin, contact_margin, contact_margin);
     let query = AABB::new(aabb_min - margin_vec, aabb_max + margin_vec);
 
-    let triangles = static_geometry.query_triangles(&query);
+    let patch = static_geometry.query_region(&query);
     let mut box_contacts = Vec::new();
-    for tri in &triangles {
-        for c in obb_triangle_contacts(&obb, tri) {
+    for pt in &patch.triangles {
+        for c in obb_triangle_contacts(&obb, &pt.triangle) {
             let raw_depth = c.depth - contact_margin;
             let solver_depth = raw_depth.max(0.0);
             box_contacts.push(ContactConstraint {
@@ -252,7 +269,7 @@ fn speculative_static_contacts(
     body_handle: RigidBodyHandle,
     collider_handle: crate::physics::handle::ColliderHandle,
     collider: &Collider,
-    predicted_center: nalgebra::Point3<f32>,
+    predicted_center: Point3<f32>,
     rotation: nalgebra::UnitQuaternion<f32>,
     static_geometry: &dyn StaticGeometry,
     contact_margin: f32,
@@ -263,23 +280,42 @@ fn speculative_static_contacts(
     match collider.shape() {
         ColliderShape::Sphere { radius } => {
             let query_radius = radius + contact_margin;
+            let query = AABB::new(
+                Point3::new(
+                    predicted_center.x - query_radius,
+                    predicted_center.y - query_radius,
+                    predicted_center.z - query_radius,
+                ),
+                Point3::new(
+                    predicted_center.x + query_radius,
+                    predicted_center.y + query_radius,
+                    predicted_center.z + query_radius,
+                ),
+            );
+            let patch = static_geometry.query_region(&query);
+
             let mut contacts = Vec::new();
-            for sc in static_geometry.query_sphere(predicted_center, query_radius) {
-                contacts.push(ContactConstraint {
-                    body_a: None,
-                    body_b: body_handle,
-                    collider_a: None,
-                    collider_b: Some(collider_handle),
-                    point: sc.point,
-                    normal: sc.normal,
-                    raw_normal: sc.normal,
-                    depth: 0.0,
-                    raw_depth: -contact_margin,
-                    restitution: collider.material().restitution,
-                    friction: collider.material().friction,
-                    warm_normal_impulse: 0.0,
-                    warm_tangent_impulse: [0.0, 0.0],
-                });
+            for pt in &patch.triangles {
+                if let Some(cp) =
+                    sphere_triangle_collision(predicted_center, query_radius, &pt.triangle)
+                {
+                    let point = predicted_center - cp.normal * (query_radius - cp.depth);
+                    contacts.push(ContactConstraint {
+                        body_a: None,
+                        body_b: body_handle,
+                        collider_a: None,
+                        collider_b: Some(collider_handle),
+                        point,
+                        normal: cp.normal,
+                        raw_normal: cp.normal,
+                        depth: 0.0,
+                        raw_depth: -contact_margin,
+                        restitution: collider.material().restitution,
+                        friction: collider.material().friction,
+                        warm_normal_impulse: 0.0,
+                        warm_tangent_impulse: [0.0, 0.0],
+                    });
+                }
             }
             let stabilized = stabilize_coplanar_sphere_groups(
                 predicted_center,
@@ -298,10 +334,10 @@ fn speculative_static_contacts(
             let obb = Obb::new(predicted_center, rotation, expanded);
             let (aabb_min, aabb_max) = obb.enclosing_aabb();
             let query = AABB::new(aabb_min, aabb_max);
-            let triangles = static_geometry.query_triangles(&query);
+            let patch = static_geometry.query_region(&query);
             let mut contacts = Vec::new();
-            for tri in &triangles {
-                for c in obb_triangle_contacts(&obb, tri) {
+            for pt in &patch.triangles {
+                for c in obb_triangle_contacts(&obb, &pt.triangle) {
                     contacts.push(ContactConstraint {
                         body_a: None,
                         body_b: body_handle,
@@ -359,7 +395,7 @@ fn stabilize_coplanar_box_contacts(
         return None;
     }
     let normal = normal_sum / normal_len;
-    let plane_point = nalgebra::Point3::from(point_sum / contacts.len() as f32);
+    let plane_point = Point3::from(point_sum / contacts.len() as f32);
     avg_depth /= contacts.len() as f32;
     avg_raw /= contacts.len() as f32;
 
@@ -421,7 +457,7 @@ fn stabilize_coplanar_box_contacts(
 
 /// Collapse coplanar sphere contacts into a single stable contact.
 fn stabilize_coplanar_sphere_contacts(
-    center: nalgebra::Point3<f32>,
+    center: Point3<f32>,
     radius: f32,
     contacts: &[ContactConstraint],
     contact_margin: f32,
@@ -445,7 +481,7 @@ fn stabilize_coplanar_sphere_contacts(
         return None;
     }
     let normal = normal_sum / normal_len;
-    let plane_point = nalgebra::Point3::from(point_sum / contacts.len() as f32);
+    let plane_point = Point3::from(point_sum / contacts.len() as f32);
     avg_depth /= contacts.len() as f32;
     avg_raw /= contacts.len() as f32;
 
@@ -507,7 +543,7 @@ fn group_coplanar_contacts(
             } else {
                 contact.normal
             };
-            let point = nalgebra::Point3::from(group.point_sum / group.contacts.len() as f32);
+            let point = Point3::from(group.point_sum / group.contacts.len() as f32);
             let dot = contact.normal.dot(&normal);
             let dist = (contact.point - point).dot(&normal).abs();
             if dot >= normal_dot_threshold && dist <= plane_thickness {
@@ -571,7 +607,7 @@ fn stabilize_coplanar_box_groups(
 
 /// Stabilize coplanar clusters for sphere contacts and reduce to max points.
 fn stabilize_coplanar_sphere_groups(
-    center: nalgebra::Point3<f32>,
+    center: Point3<f32>,
     radius: f32,
     contacts: &[ContactConstraint],
     contact_margin: f32,

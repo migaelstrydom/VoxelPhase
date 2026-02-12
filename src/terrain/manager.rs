@@ -8,13 +8,12 @@
 //!   alongside mesh rebuilds so cost is proportional to the dirty region
 
 use nalgebra::{Point3, Vector3};
+use rustc_hash::FxHashMap;
 use std::time::Instant;
 
-use crate::collision::{
-    sphere_triangle_collision, swept_sphere_triangle, ContactPoint, SweptContact, AABB,
-};
+use crate::collision::{MeshPatch, PatchTriangle, AABB};
 use crate::core::error::EngineResult;
-use crate::physics::{StaticContact, StaticGeometry, SweptStaticContact};
+use crate::physics::StaticGeometry;
 use crate::rendering::vertex::Vertex;
 use crate::resources::textures::{TextureHandle, TextureManager};
 
@@ -268,77 +267,6 @@ impl TerrainManager {
         )
     }
 
-    // === Collision queries ===
-
-    /// Query sphere collision against terrain.
-    ///
-    /// Returns contact points for all triangles the sphere intersects.
-    pub fn query_sphere_collision(&self, center: Point3<f32>, radius: f32) -> Vec<ContactPoint> {
-        // Build query AABB
-        let query = AABB::new(
-            Point3::new(center.x - radius, center.y - radius, center.z - radius),
-            Point3::new(center.x + radius, center.y + radius, center.z + radius),
-        );
-
-        // Get triangles from mesh octree
-        let triangles = self.mesh.query_aabb(&query);
-
-        // Test each triangle
-        let mut contacts = Vec::new();
-        for triangle in triangles {
-            if let Some(contact) = sphere_triangle_collision(center, radius, &triangle) {
-                contacts.push(contact);
-            }
-        }
-
-        contacts
-    }
-
-    /// Query swept sphere collision (continuous collision detection).
-    ///
-    /// Returns the first collision along the sweep path, if any.
-    pub fn query_swept_sphere(
-        &self,
-        start: Point3<f32>,
-        end: Point3<f32>,
-        radius: f32,
-    ) -> Option<SweptContact> {
-        // Build query AABB covering the entire sweep
-        let min_x = start.x.min(end.x) - radius;
-        let min_y = start.y.min(end.y) - radius;
-        let min_z = start.z.min(end.z) - radius;
-        let max_x = start.x.max(end.x) + radius;
-        let max_y = start.y.max(end.y) + radius;
-        let max_z = start.z.max(end.z) + radius;
-        let query = AABB::new(
-            Point3::new(min_x, min_y, min_z),
-            Point3::new(max_x, max_y, max_z),
-        );
-
-        // Get triangles from mesh octree
-        let triangles = self.mesh.query_aabb(&query);
-
-        // Find earliest collision
-        let mut earliest: Option<SweptContact> = None;
-        for triangle in triangles {
-            if let Some(contact) = swept_sphere_triangle(start, end, radius, &triangle) {
-                if earliest.is_none() || contact.t < earliest.as_ref().unwrap().t {
-                    earliest = Some(contact);
-                }
-            }
-        }
-
-        earliest
-    }
-
-    /// Query all triangles intersecting an AABB.
-    ///
-    /// Useful for custom collision detection or spatial queries.
-    #[allow(dead_code)]
-    pub fn query_triangles(&self, query: &AABB) -> Vec<crate::collision::Triangle> {
-        self.mesh.query_aabb(query)
-    }
-
     // === Rendering data ===
 
     /// Check if there's any geometry to render.
@@ -426,29 +354,35 @@ impl TerrainManager {
 }
 
 impl StaticGeometry for TerrainManager {
-    fn query_sphere(&self, center: Point3<f32>, radius: f32) -> Vec<StaticContact> {
-        self.query_sphere_collision(center, radius)
-            .into_iter()
-            .map(|cp| {
-                // Compute contact point from center, normal, and depth
-                let point = center - cp.normal * (radius - cp.depth);
-                StaticContact::new(point, cp.normal, cp.depth)
+    fn query_region(&self, aabb: &AABB) -> MeshPatch {
+        let results = self.mesh.query_aabb(aabb);
+
+        // Build a lookup from TriangleRef → local index in the patch.
+        let ref_to_index: FxHashMap<_, _> = results
+            .iter()
+            .enumerate()
+            .map(|(i, (tri_ref, _))| (*tri_ref, i as u32))
+            .collect();
+
+        let triangles = results
+            .iter()
+            .map(|(tri_ref, triangle)| {
+                // Look up adjacency for this triangle in the global map.
+                let neighbors = if let Some(nbrs) = self.adjacency.neighbors(tri_ref) {
+                    std::array::from_fn(|edge| {
+                        nbrs.neighbors[edge].and_then(|nbr_ref| ref_to_index.get(&nbr_ref).copied())
+                    })
+                } else {
+                    [None; 3]
+                };
+                PatchTriangle {
+                    triangle: triangle.clone(),
+                    neighbors,
+                }
             })
-            .collect()
-    }
+            .collect();
 
-    fn sweep_sphere(
-        &self,
-        start: Point3<f32>,
-        end: Point3<f32>,
-        radius: f32,
-    ) -> Option<SweptStaticContact> {
-        self.query_swept_sphere(start, end, radius)
-            .map(|sc| SweptStaticContact::new(sc.t, sc.point, sc.normal))
-    }
-
-    fn query_triangles(&self, aabb: &crate::collision::AABB) -> Vec<crate::collision::Triangle> {
-        self.mesh.query_aabb(aabb)
+        MeshPatch { triangles }
     }
 }
 

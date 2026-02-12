@@ -568,10 +568,11 @@ impl PhysicsWorld {
 
         // Sweep each candidate against static geometry
         for candidate in &candidates {
-            let Some(hit) = static_geometry.sweep_sphere(
+            let Some(hit) = sweep_sphere_against_static(
                 candidate.pre_center,
                 candidate.post_center,
                 candidate.radius,
+                static_geometry,
             ) else {
                 continue;
             };
@@ -657,11 +658,11 @@ impl PhysicsWorld {
             self.config.contact_margin,
         );
         let query = crate::collision::AABB::new(aabb_min - margin, aabb_max + margin);
-        let triangles = static_geometry.query_triangles(&query);
+        let patch = static_geometry.query_region(&query);
 
         let mut contacts = Vec::new();
-        for tri in &triangles {
-            for c in obb_triangle_contacts(&obb, tri) {
+        for pt in &patch.triangles {
+            for c in obb_triangle_contacts(&obb, &pt.triangle) {
                 contacts.push(ContactConstraint {
                     body_a: None,
                     body_b: candidate.body_handle,
@@ -682,10 +683,11 @@ impl PhysicsWorld {
 
         if contacts.is_empty() {
             // Fallback: use the sweep hit directly
-            if let Some(hit) = static_geometry.sweep_sphere(
+            if let Some(hit) = sweep_sphere_against_static(
                 candidate.pre_center,
                 candidate.post_center,
                 candidate.radius,
+                static_geometry,
             ) {
                 contacts.push(ContactConstraint {
                     body_a: None,
@@ -707,6 +709,43 @@ impl PhysicsWorld {
 
         contacts
     }
+}
+
+/// Sweep a sphere from `start` to `end` against static geometry.
+///
+/// Builds the enclosing AABB, queries the region, and returns the earliest
+/// swept contact along the path.
+fn sweep_sphere_against_static(
+    start: Point3<f32>,
+    end: Point3<f32>,
+    radius: f32,
+    static_geometry: &dyn StaticGeometry,
+) -> Option<crate::collision::SweptContact> {
+    let query = crate::collision::AABB::new(
+        Point3::new(
+            start.x.min(end.x) - radius,
+            start.y.min(end.y) - radius,
+            start.z.min(end.z) - radius,
+        ),
+        Point3::new(
+            start.x.max(end.x) + radius,
+            start.y.max(end.y) + radius,
+            start.z.max(end.z) + radius,
+        ),
+    );
+    let patch = static_geometry.query_region(&query);
+
+    let mut earliest: Option<crate::collision::SweptContact> = None;
+    for pt in &patch.triangles {
+        if let Some(contact) =
+            crate::collision::swept_sphere_triangle(start, end, radius, &pt.triangle)
+        {
+            if earliest.is_none() || contact.t < earliest.as_ref().unwrap().t {
+                earliest = Some(contact);
+            }
+        }
+    }
+    earliest
 }
 
 /// Contact event produced by collision detection.
