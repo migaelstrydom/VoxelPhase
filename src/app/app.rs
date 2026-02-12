@@ -23,7 +23,9 @@ use crate::time::Time;
 
 use super::dispatcher_builder::build_dispatcher;
 use super::event_handler::{clear_frame_state, set_mouse_captured, EventHandler, EventResult};
-use super::spawners::{create_crate_material, spawn_beach_ball, spawn_box, spawn_camera, spawn_player};
+use super::spawners::{
+    create_box_materials, spawn_beach_ball, spawn_box, spawn_camera, spawn_player,
+};
 use super::world_builder::WorldBuilder;
 
 pub struct App<'a, 'b> {
@@ -38,13 +40,13 @@ impl<'a, 'b> App<'a, 'b> {
         let (event_loop, window) = Self::create_window(window_width, window_height, app_title)?;
         let (_vulkan_context, renderer, resource_manager, texture_manager) =
             Self::create_rendering_context(&window, window_width, window_height)?;
-        let (material_manager, grenade_materials, crate_material) =
-            Self::create_materials(&texture_manager)?;
-        let grenade_model = Self::create_grenade_model(&grenade_materials);
-        let body_material = grenade_materials.body;
         let num_beach_balls = 5;
         let num_boxes = 5;
-        let box_half_extents = nalgebra::Vector3::new(0.5, 1.0, 0.5);
+        let (material_manager, grenade_materials, box_materials) =
+            Self::create_materials(&texture_manager, num_boxes)?;
+        let grenade_model = Self::create_grenade_model(&grenade_materials);
+        let body_material = grenade_materials.body;
+        let box_half_extents = nalgebra::Vector3::new(0.5, 0.5, 0.5);
         let terrain_manager = Self::create_terrain(&texture_manager)?;
 
         let mut world = WorldBuilder::new()
@@ -73,9 +75,9 @@ impl<'a, 'b> App<'a, 'b> {
 
         let box_spacing = box_half_extents.x * 3.0;
         let start_x = -box_spacing * (num_boxes as f32 - 1.0) * 0.5;
-        for i in 0..num_boxes {
+        for (i, &material) in box_materials.iter().enumerate() {
             let pos = nalgebra::Point3::new(start_x + i as f32 * box_spacing, 2.0, 3.0);
-            spawn_box(&mut world, pos, box_half_extents, crate_material);
+            spawn_box(&mut world, pos, box_half_extents, material);
         }
 
         // Register terrain boundary force field
@@ -138,10 +140,11 @@ impl<'a, 'b> App<'a, 'b> {
 
     fn create_materials(
         texture_manager: &crate::resources::textures::TextureManager,
+        num_boxes: usize,
     ) -> EngineResult<(
         crate::rendering::material::MaterialManager,
         GrenadeMaterials,
-        MaterialId,
+        Vec<MaterialId>,
     )> {
         let mut material_builder = MaterialManagerBuilder::new();
 
@@ -164,11 +167,12 @@ impl<'a, 'b> App<'a, 'b> {
             body: material_builder.register(Material::coloured(Colour::new(0.2, 0.25, 0.2, 1.0))),
         };
 
-        let crate_material = create_crate_material(texture_manager, &mut material_builder)?;
+        let box_materials =
+            create_box_materials(num_boxes, texture_manager, &mut material_builder)?;
 
         let material_manager = material_builder.build(fallback_white);
 
-        Ok((material_manager, grenade_materials, crate_material))
+        Ok((material_manager, grenade_materials, box_materials))
     }
 
     fn create_grenade_model(grenade_materials: &GrenadeMaterials) -> Arc<crate::model::Model> {
