@@ -355,6 +355,7 @@ fn solve_normal_impulse(
     let kinematic_static = bodies
         .get(contact.body_b.0)
         .is_some_and(|b| is_kinematic_static_contact(b, contact));
+
     let (eff_inv_mass_b, eff_inv_inertia_b) = if kinematic_static {
         (1.0, Matrix3::zeros())
     } else {

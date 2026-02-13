@@ -47,6 +47,8 @@ mod pipeline;
 mod sleep;
 mod static_geometry;
 mod world;
+#[cfg(test)]
+mod bench_harness;
 
 pub use body::RigidBodyDesc;
 pub use collider::ColliderDesc;
