@@ -18,7 +18,7 @@ use crate::rendering::renderer::Renderer;
 use crate::rendering::Colour;
 use crate::resources::manager::ResourceManager;
 use crate::systems::PhysicsResource;
-use crate::terrain::{create_test_terrain, TerrainManager};
+use crate::terrain::{create_test_terrain, DurabilityConfig, TerrainManager};
 use crate::time::Time;
 
 use super::dispatcher_builder::build_dispatcher;
@@ -192,7 +192,8 @@ impl<'a, 'b> App<'a, 'b> {
         texture_manager: &crate::resources::textures::TextureManager,
     ) -> EngineResult<TerrainManager> {
         log::info!("Generating procedural terrain...");
-        let terrain_svo = create_test_terrain(64.0, 6);
+        let durability = DurabilityConfig::default();
+        let terrain_svo = create_test_terrain(64.0, 6, &durability);
         let terrain_manager = TerrainManager::from_svo(terrain_svo, texture_manager)?;
         log::info!(
             "Terrain generated: {} triangles in {} mesh leaves",

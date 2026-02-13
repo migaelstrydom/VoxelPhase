@@ -18,6 +18,6 @@ mod voxel;
 pub use manager::TerrainManager;
 
 // Voxel types for terrain modification
-pub use voxel::Voxel;
+pub use voxel::DurabilityConfig;
 
 pub use generation::create_test_terrain;

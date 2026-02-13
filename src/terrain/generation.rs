@@ -3,7 +3,7 @@
 use nalgebra::Point3;
 
 use super::svo::SparseVoxelOctree;
-use super::voxel::{Voxel, VoxelMaterial};
+use super::voxel::{DurabilityConfig, Voxel, VoxelMaterial};
 use crate::collision::AABB;
 
 /// Terrain generator using procedural noise.
@@ -15,9 +15,14 @@ impl TerrainGenerator {
     }
 
     /// Generate a simple test terrain: a flat plane with some hills.
-    pub fn generate_simple_hills(&self, svo: &mut SparseVoxelOctree) {
+    pub fn generate_simple_hills(
+        &self,
+        svo: &mut SparseVoxelOctree,
+        durability: &DurabilityConfig,
+    ) {
         let bounds = *svo.bounds();
         let center = bounds.center();
+        let floor_y = bounds.min.y;
 
         // Fill with air first
         svo.fill(Voxel::air());
@@ -63,7 +68,8 @@ impl TerrainGenerator {
                     } else {
                         VoxelMaterial::Rock
                     };
-                    svo.set(Point3::new(x, y, z), Voxel::solid(material));
+                    let hp = durability.health_at(y, height, floor_y);
+                    svo.set(Point3::new(x, y, z), Voxel::solid(material, hp));
                     y += step;
                 }
 
@@ -75,7 +81,11 @@ impl TerrainGenerator {
 }
 
 /// Create a test terrain for development.
-pub fn create_test_terrain(size: f32, max_depth: u32) -> SparseVoxelOctree {
+pub fn create_test_terrain(
+    size: f32,
+    max_depth: u32,
+    durability: &DurabilityConfig,
+) -> SparseVoxelOctree {
     let half_size = size / 2.0;
     let bounds = AABB::new(
         Point3::new(-half_size, -half_size, -half_size),
@@ -85,7 +95,7 @@ pub fn create_test_terrain(size: f32, max_depth: u32) -> SparseVoxelOctree {
     let mut svo = SparseVoxelOctree::new(bounds, max_depth);
 
     let generator = TerrainGenerator::new(42);
-    generator.generate_simple_hills(&mut svo);
+    generator.generate_simple_hills(&mut svo, durability);
 
     svo
 }

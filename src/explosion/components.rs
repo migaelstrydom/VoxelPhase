@@ -21,6 +21,8 @@ pub struct Explosion {
     pub blast_radius: f32,
     /// Force magnitude for knockback.
     pub force: f32,
+    /// Damage dealt to terrain voxels within the crater radius.
+    pub terrain_damage: u8,
     /// Whether this explosion has been processed.
     pub processed: bool,
 }
@@ -33,6 +35,7 @@ impl Explosion {
             crater_radius: 2.5,
             blast_radius: 5.0,
             force: 10.0,
+            terrain_damage: 1,
             processed: false,
         }
     }

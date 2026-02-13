@@ -67,9 +67,26 @@ impl TerrainManager {
         let texture = texture_manager.create_noise_texture(512, 512, 5, 20.0, 42)?;
         log::info!("Generated terrain noise texture (512x512, 5 octaves, scale 20.0)");
 
+        // Expand mesh octree bounds by one voxel so marching cubes boundary
+        // triangles (whose vertices sit up to half a voxel outside the SVO)
+        // are accepted. This gives the terrain solid side and bottom faces,
+        // producing a floating-island look instead of a paper-thin surface.
+        let mesh_bounds = AABB::new(
+            Point3::new(
+                bounds.min.x - voxel_size,
+                bounds.min.y - voxel_size,
+                bounds.min.z - voxel_size,
+            ),
+            Point3::new(
+                bounds.max.x + voxel_size,
+                bounds.max.y + voxel_size,
+                bounds.max.z + voxel_size,
+            ),
+        );
+
         let mut manager = Self {
             svo,
-            mesh: MeshOctree::new(bounds),
+            mesh: MeshOctree::new(mesh_bounds),
             voxel_size,
             dirty_regions: Vec::new(),
             render_vertices: Vec::new(),
@@ -93,30 +110,37 @@ impl TerrainManager {
         Ok(manager)
     }
 
-    /// Modify terrain in a sphere (for explosions, digging, etc.)
+    /// Damage voxels within a sphere, reducing their health.
     ///
-    /// Only affected regions will be rebuilt on next update.
-    pub fn modify_sphere<F>(&mut self, center: Point3<f32>, radius: f32, modifier: F)
-    where
-        F: FnMut(Point3<f32>, Voxel) -> Voxel,
-    {
-        self.svo.modify_sphere(center, radius, modifier);
+    /// Voxels whose health reaches zero are converted to air. Indestructible
+    /// voxels (bedrock) are unaffected. Only marks the region dirty if at
+    /// least one voxel was actually destroyed.
+    pub fn damage_sphere(&mut self, center: Point3<f32>, radius: f32, damage: u8) {
+        let mut any_destroyed = false;
+        self.svo.modify_sphere(center, radius, |_pos, voxel| {
+            let after = voxel.apply_damage(damage);
+            if after.material != voxel.material {
+                any_destroyed = true;
+            }
+            after
+        });
 
-        // Mark affected region as dirty (with some padding for mesh generation)
-        let padding = self.voxel_size * 2.0;
-        let affected = AABB::new(
-            Point3::new(
-                center.x - radius - padding,
-                center.y - radius - padding,
-                center.z - radius - padding,
-            ),
-            Point3::new(
-                center.x + radius + padding,
-                center.y + radius + padding,
-                center.z + radius + padding,
-            ),
-        );
-        self.dirty_regions.push(affected);
+        if any_destroyed {
+            let padding = self.voxel_size * 2.0;
+            let affected = AABB::new(
+                Point3::new(
+                    center.x - radius - padding,
+                    center.y - radius - padding,
+                    center.z - radius - padding,
+                ),
+                Point3::new(
+                    center.x + radius + padding,
+                    center.y + radius + padding,
+                    center.z + radius + padding,
+                ),
+            );
+            self.dirty_regions.push(affected);
+        }
     }
 
     /// Update terrain incrementally (only rebuilds dirty regions).
@@ -146,7 +170,8 @@ impl TerrainManager {
 
             // Collect triangles in the region before the mesh rebuild.
             old_tris.clear();
-            self.mesh.collect_triangles_in_region(&clamped, &mut old_tris);
+            self.mesh
+                .collect_triangles_in_region(&clamped, &mut old_tris);
 
             // Rebuild the mesh for this region.
             let svo = &self.svo;
@@ -155,7 +180,8 @@ impl TerrainManager {
 
             // Collect triangles in the region after the mesh rebuild.
             new_tris.clear();
-            self.mesh.collect_triangles_in_region(&clamped, &mut new_tris);
+            self.mesh
+                .collect_triangles_in_region(&clamped, &mut new_tris);
 
             // Patch adjacency for the affected region.
             let t_adj = Instant::now();
@@ -244,12 +270,9 @@ impl TerrainManager {
                     + ((region.min.z - world_origin.z) / voxel_size).floor() * voxel_size,
             ),
             Point3::new(
-                world_origin.x
-                    + ((region.max.x - world_origin.x) / voxel_size).ceil() * voxel_size,
-                world_origin.y
-                    + ((region.max.y - world_origin.y) / voxel_size).ceil() * voxel_size,
-                world_origin.z
-                    + ((region.max.z - world_origin.z) / voxel_size).ceil() * voxel_size,
+                world_origin.x + ((region.max.x - world_origin.x) / voxel_size).ceil() * voxel_size,
+                world_origin.y + ((region.max.y - world_origin.y) / voxel_size).ceil() * voxel_size,
+                world_origin.z + ((region.max.z - world_origin.z) / voxel_size).ceil() * voxel_size,
             ),
         );
 
@@ -332,10 +355,23 @@ impl TerrainManager {
     /// Create a new terrain manager with the given bounds and SVO depth.
     /// Test-only helper for creating terrain managers in tests.
     fn new(bounds: AABB, svo_depth: u32) -> Self {
+        let voxel_size = bounds.size().x / (1 << svo_depth) as f32;
+        let mesh_bounds = AABB::new(
+            Point3::new(
+                bounds.min.x - voxel_size,
+                bounds.min.y - voxel_size,
+                bounds.min.z - voxel_size,
+            ),
+            Point3::new(
+                bounds.max.x + voxel_size,
+                bounds.max.y + voxel_size,
+                bounds.max.z + voxel_size,
+            ),
+        );
         Self {
             svo: SparseVoxelOctree::new(bounds, svo_depth),
-            mesh: MeshOctree::new(bounds),
-            voxel_size: bounds.size().x / (1 << svo_depth) as f32,
+            mesh: MeshOctree::new(mesh_bounds),
+            voxel_size,
             dirty_regions: Vec::new(),
             render_vertices: Vec::new(),
             render_indices: Vec::new(),
@@ -410,7 +446,7 @@ mod tests {
             for z in -5..=5 {
                 manager.set_voxel(
                     Point3::new(x as f32, 0.0, z as f32),
-                    Voxel::solid(VoxelMaterial::Rock),
+                    Voxel::solid(VoxelMaterial::Rock, 1),
                 );
             }
         }
@@ -436,7 +472,7 @@ mod tests {
             for z in -5..=5 {
                 manager.set_voxel(
                     Point3::new(x as f32, 0.0, z as f32),
-                    Voxel::solid(VoxelMaterial::Rock),
+                    Voxel::solid(VoxelMaterial::Rock, 1),
                 );
             }
         }

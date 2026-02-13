@@ -7,7 +7,7 @@ use super::components::Explosion;
 use crate::components::{Position, Velocity};
 use crate::particles::ParticleEmitter;
 use crate::physics::{PhysicsImpulse, PhysicsImpulseQueue};
-use crate::terrain::{TerrainManager, Voxel};
+use crate::terrain::TerrainManager;
 
 /// System that processes explosion events.
 ///
@@ -50,6 +50,7 @@ impl<'a> System<'a> for ExplosionSystem {
                     e.crater_radius,
                     e.blast_radius,
                     e.force,
+                    e.terrain_damage,
                 )
             })
             .collect();
@@ -60,14 +61,13 @@ impl<'a> System<'a> for ExplosionSystem {
 
         // Process terrain destruction
         if let Some(ref mut terrain_manager) = terrain_manager_opt {
-            for &(_, center, crater_radius, _, _) in &explosion_data {
-                // Carve a spherical crater - convert all voxels within radius to air
-                terrain_manager.modify_sphere(center, crater_radius, |_pos, _voxel| Voxel::air());
+            for &(_, center, crater_radius, _, _, terrain_damage) in &explosion_data {
+                terrain_manager.damage_sphere(center, crater_radius, terrain_damage);
             }
         }
 
         // Apply knockback to entities with velocity
-        for &(_, center, _, blast_radius, force) in &explosion_data {
+        for &(_, center, _, blast_radius, force, _) in &explosion_data {
             let center_vec = center.coords;
 
             for (pos, vel) in (&positions, &mut velocities).join() {
@@ -92,12 +92,12 @@ impl<'a> System<'a> for ExplosionSystem {
         }
 
         // Queue physics impulses for rigid bodies (applied by physics system)
-        for &(_, center, _, blast_radius, force) in &explosion_data {
+        for &(_, center, _, blast_radius, force, _) in &explosion_data {
             impulse_queue.push(PhysicsImpulse::radial(center, blast_radius, force, 0.5));
         }
 
         // Spawn particle emitters at explosion locations
-        for &(_, center, _, _, _) in &explosion_data {
+        for &(_, center, _, _, _, _) in &explosion_data {
             let pos = Position(center.coords);
 
             // Flash - bright, short-lived burst
@@ -126,7 +126,7 @@ impl<'a> System<'a> for ExplosionSystem {
         }
 
         // Mark explosions as processed
-        for (entity, _, _, _, _) in explosion_data {
+        for (entity, _, _, _, _, _) in explosion_data {
             if let Some(explosion) = explosions.get_mut(entity) {
                 explosion.processed = true;
             }

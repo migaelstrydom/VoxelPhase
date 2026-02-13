@@ -385,7 +385,7 @@ mod tests {
         // Set a voxel
         svo.set(
             Point3::new(8.0, 8.0, 8.0),
-            Voxel::solid(VoxelMaterial::Rock),
+            Voxel::solid(VoxelMaterial::Rock, 1),
         );
         assert!(svo.get(Point3::new(8.0, 8.0, 8.0)).is_solid());
 
@@ -399,7 +399,7 @@ mod tests {
         let mut svo = SparseVoxelOctree::new(bounds, 4);
 
         // Fill with rock
-        svo.fill(Voxel::solid(VoxelMaterial::Rock));
+        svo.fill(Voxel::solid(VoxelMaterial::Rock, 1));
 
         // Carve out a sphere of air
         svo.modify_sphere(Point3::new(8.0, 8.0, 8.0), 4.0, |pos, _| {
@@ -407,7 +407,7 @@ mod tests {
             if dist < 4.0 {
                 Voxel::air()
             } else {
-                Voxel::solid(VoxelMaterial::Rock)
+                Voxel::solid(VoxelMaterial::Rock, 1)
             }
         });
 
