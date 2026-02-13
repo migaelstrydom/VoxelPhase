@@ -16,6 +16,23 @@ use crate::physics::handle::ColliderHandle;
 use crate::physics::pipeline::normal_smoothing::{NormalSmoother, NormalSmoothingConfig};
 use crate::physics::pipeline::solver::{ContactConstraint, SolvedImpulses};
 
+/// Per-step manifold cache activity counters for diagnostics.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ManifoldFrameStats {
+    /// Number of manifold points inserted this step.
+    pub point_adds: usize,
+    /// Number of manifold points replaced this step.
+    pub point_replacements: usize,
+    /// Number of cached points matched/reused this step.
+    pub point_matches: usize,
+    /// Number of cached points pruned due to age this step.
+    pub point_pruned: usize,
+    /// Number of manifolds currently stored after prune.
+    pub manifolds: usize,
+    /// Number of points currently stored after prune.
+    pub points: usize,
+}
+
 /// Ordered key for manifold lookup by collider pair.
 #[derive(Hash, Eq, PartialEq, Clone, Copy, Debug)]
 struct ManifoldKey {
@@ -93,6 +110,7 @@ pub struct ManifoldCache {
     max_age: u8,
     warm_start_depth_slop: f32,
     normal_smoother: NormalSmoother,
+    frame_stats: ManifoldFrameStats,
 }
 
 impl ManifoldCache {
@@ -110,6 +128,7 @@ impl ManifoldCache {
             max_age,
             warm_start_depth_slop,
             normal_smoother: NormalSmoother::from_config(normal_smoothing),
+            frame_stats: ManifoldFrameStats::default(),
         }
     }
 
@@ -120,6 +139,7 @@ impl ManifoldCache {
         raw_contacts: &[ContactConstraint],
         bodies: &Arena<RigidBody>,
     ) -> Vec<ContactConstraint> {
+        self.frame_stats = ManifoldFrameStats::default();
         // Age all existing points before processing new contacts
         for manifold in self.manifolds.values_mut() {
             for point in &mut manifold.points {
@@ -174,6 +194,7 @@ impl ManifoldCache {
                 let (warm_normal, warm_tangent, contact_normal) = match match_idx {
                     Some(idx) => {
                         matched_indices.insert(idx);
+                        self.frame_stats.point_matches += 1;
                         // Matched: inherit cached impulses, update point
                         let cached = &mut manifold.points[idx];
                         let aligned = self.normal_smoother.aligned(cached.normal, contact.normal);
@@ -213,11 +234,13 @@ impl ManifoldCache {
                         if manifold.points.len() < 4 {
                             manifold.points.push(new_point);
                             matched_indices.insert(manifold.points.len() - 1);
+                            self.frame_stats.point_adds += 1;
                         } else if let Some(replace_idx) =
                             find_shallowest_unmatched(manifold, &matched_indices)
                         {
                             manifold.points[replace_idx] = new_point;
                             matched_indices.insert(replace_idx);
+                            self.frame_stats.point_replacements += 1;
                         }
                         (0.0, [0.0, 0.0], contact.normal)
                     }
@@ -270,16 +293,26 @@ impl ManifoldCache {
     /// Remove stale manifold points that haven't been refreshed within max_age frames.
     /// Remove empty manifolds entirely.
     pub fn prune(&mut self) {
+        let before_points: usize = self.manifolds.values().map(|m| m.points.len()).sum();
         self.manifolds.retain(|_, manifold| {
             manifold.points.retain(|p| p.age <= self.max_age);
             !manifold.points.is_empty()
         });
+        let after_points: usize = self.manifolds.values().map(|m| m.points.len()).sum();
+        self.frame_stats.point_pruned = before_points.saturating_sub(after_points);
+        self.frame_stats.manifolds = self.manifolds.len();
+        self.frame_stats.points = after_points;
     }
 
     /// Remove all manifolds involving the given collider.
     pub fn remove_collider(&mut self, handle: ColliderHandle) {
         self.manifolds
             .retain(|key, _| key.collider_a != Some(handle) && key.collider_b != handle);
+    }
+
+    /// Returns cache activity and size counters for the most recent step.
+    pub fn frame_stats(&self) -> ManifoldFrameStats {
+        self.frame_stats
     }
 }
 
