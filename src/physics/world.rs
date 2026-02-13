@@ -131,6 +131,13 @@ pub struct PhysicsWorld {
     sleep_manager: SleepManager,
     grounding_detector: GroundingDetector,
     force_fields: ForceFieldRegistry,
+    /// Active contacts from the most recent `update_contacts()` call,
+    /// reused across multiple `substep()` calls.
+    cached_active_contacts: Vec<ContactConstraint>,
+    /// All contacts (including sleeping) for sleep state bookkeeping.
+    cached_all_contacts: Vec<ContactConstraint>,
+    /// Bodies with static narrowphase contacts, excluded from CCD.
+    cached_narrowphase_handled: HashSet<RigidBodyHandle>,
 }
 
 impl PhysicsWorld {
@@ -156,6 +163,9 @@ impl PhysicsWorld {
             sleep_manager,
             grounding_detector,
             force_fields: ForceFieldRegistry::default(),
+            cached_active_contacts: Vec::new(),
+            cached_all_contacts: Vec::new(),
+            cached_narrowphase_handled: HashSet::new(),
         }
     }
 
@@ -353,15 +363,8 @@ impl PhysicsWorld {
 
     /// Step the physics simulation forward by dt seconds.
     ///
-    /// Pipeline order (semi-implicit Euler):
-    /// 1. Integrate gravity/forces into velocities
-    /// 2. Apply one-shot impulses and persistent force fields
-    /// 3. Narrowphase: generate contacts at current positions
-    /// 4. Manifold cache: merge with persistent contacts, populate warm-start data
-    /// 5. Solve velocity constraints (warm-start + sequential impulses)
-    /// 6. Write solved impulses back to manifold cache
-    /// 7. Integrate positions (velocities → positions)
-    /// 8. CCD pass (fast bodies only: sweep, correct position, re-solve)
+    /// Convenience method that calls `update_contacts()` then `substep()`.
+    /// For substepping, call `update_contacts()` once then `substep()` N times.
     pub fn step(
         &mut self,
         dt: f32,
@@ -369,6 +372,29 @@ impl PhysicsWorld {
         impulses: &[PhysicsImpulse],
         debug_lines: &mut DebugLines,
     ) {
+        self.update_contacts(dt, static_geometry, impulses, debug_lines);
+        self.substep(dt, static_geometry);
+    }
+
+    /// Run narrowphase contact generation and manifold cache update.
+    ///
+    /// Call once before a series of `substep()` calls. This performs:
+    /// 1. Sleep bookkeeping
+    /// 2. One-shot impulse application
+    /// 3. Narrowphase contact generation (static + dynamic)
+    /// 4. Manifold cache merge (warm-start population)
+    /// 5. Sleep/debug contact processing
+    ///
+    /// The resulting contacts are cached internally for `substep()` to consume.
+    pub fn update_contacts(
+        &mut self,
+        dt: f32,
+        static_geometry: &dyn StaticGeometry,
+        impulses: &[PhysicsImpulse],
+        debug_lines: &mut DebugLines,
+    ) {
+        let _ = debug_lines;
+
         self.frame_index = self.frame_index.wrapping_add(1);
         self.sleep_manager.sync_bodies(&self.bodies);
         self.sleep_manager.apply_wake_events(&[], &self.bodies);
@@ -378,18 +404,10 @@ impl PhysicsWorld {
             None
         };
 
-        // Phase 1: Integrate forces into velocities
-        integrate_forces(
-            &mut self.bodies,
-            dt,
-            self.config.gravity,
-            sleeping_snapshot.as_ref(),
-        );
-
-        // Phase 2: Apply one-shot impulses and persistent force fields
+        // Apply one-shot impulses and persistent force fields
         self.apply_impulses(impulses, dt);
 
-        // Phase 3: Narrowphase contact generation
+        // Narrowphase contact generation
         let mut raw_contacts = generate_static_contacts(
             &self.bodies,
             &self.colliders,
@@ -415,7 +433,7 @@ impl PhysicsWorld {
             sleeping_snapshot.as_ref(),
         ));
 
-        // Phase 4: Merge with manifold cache (populates warm-start impulses)
+        // Merge with manifold cache (populates warm-start impulses)
         let contacts = self.manifold_cache.update(&raw_contacts, &self.bodies);
 
         self.last_contacts.clear();
@@ -426,7 +444,9 @@ impl PhysicsWorld {
             .note_contact_wakes(&contacts, &self.bodies);
         self.sleep_manager
             .apply_wake_events(&contacts, &self.bodies);
+
         let active_contacts = self.sleep_manager.filter_active_contacts(&contacts);
+
         self.debugger.update(
             &self.bodies,
             &raw_contacts,
@@ -435,23 +455,57 @@ impl PhysicsWorld {
             &self.last_contacts,
         );
 
-        // Phase 5: Solve velocity constraints (warm-start + N iterations)
-        let solved = solve(&mut self.bodies, &active_contacts, &self.config, dt);
+        // Cache narrowphase-handled set for CCD exclusion
+        self.cached_narrowphase_handled.clear();
+        self.cached_narrowphase_handled.extend(
+            active_contacts
+                .iter()
+                .filter(|c| c.body_a.is_none())
+                .map(|c| c.body_b),
+        );
+
+        self.cached_active_contacts = active_contacts;
+        self.cached_all_contacts = contacts;
+    }
+
+    /// Solve velocity constraints and integrate positions using cached contacts.
+    ///
+    /// Call one or more times after `update_contacts()`. Each call performs:
+    /// 1. Integrate forces (gravity) into velocities
+    /// 2. Solve velocity constraints (warm-start + sequential impulses)
+    /// 3. Write solved impulses back to manifold cache
+    /// 4. Integrate positions
+    /// 5. CCD pass (fast bodies only)
+    /// 6. Update sleep states
+    pub fn substep(&mut self, dt: f32, static_geometry: &dyn StaticGeometry) {
+        let sleeping_snapshot = if self.config.sleep.enabled {
+            Some(self.sleep_manager.sleeping_snapshot())
+        } else {
+            None
+        };
+
+        // Integrate forces (gravity) into velocities
+        integrate_forces(
+            &mut self.bodies,
+            dt,
+            self.config.gravity,
+            sleeping_snapshot.as_ref(),
+        );
+
+        // Solve velocity constraints
+        let solved = solve(
+            &mut self.bodies,
+            &self.cached_active_contacts,
+            &self.config,
+            dt,
+        );
         self.debugger
-            .update_post_solve(&self.bodies, &active_contacts);
+            .update_post_solve(&self.bodies, &self.cached_active_contacts);
 
-        // Phase 6: Write solved impulses back to manifold cache
+        // Write solved impulses back to manifold cache
         self.manifold_cache
-            .write_back(&active_contacts, &solved, &self.bodies);
+            .write_back(&self.cached_active_contacts, &solved, &self.bodies);
         self.manifold_cache.prune();
-
-        // Bodies with static narrowphase contacts are managed by the solver.
-        // CCD should only catch bodies in free flight that might tunnel.
-        let narrowphase_handled: HashSet<RigidBodyHandle> = active_contacts
-            .iter()
-            .filter(|c| c.body_a.is_none())
-            .map(|c| c.body_b)
-            .collect();
 
         // Save pre-integration state for CCD
         let sleeping_snapshot = if self.config.sleep.enabled {
@@ -474,7 +528,7 @@ impl PhysicsWorld {
                 .map(|(idx, body)| (idx, (body.position(), body.rotation())))
                 .collect();
 
-        // Phase 7: Integrate positions
+        // Integrate positions
         let sleeping_snapshot = if self.config.sleep.enabled {
             Some(self.sleep_manager.sleeping_snapshot())
         } else {
@@ -482,7 +536,8 @@ impl PhysicsWorld {
         };
         integrate_bodies(&mut self.bodies, dt, sleeping_snapshot.as_ref());
 
-        // Phase 8: CCD pass (fast bodies only, excluding narrowphase-managed bodies)
+        // CCD pass (fast bodies only, excluding narrowphase-managed bodies)
+        let narrowphase_handled = std::mem::take(&mut self.cached_narrowphase_handled);
         let _ccd_count = self.ccd_pass(
             dt,
             static_geometry,
@@ -490,11 +545,12 @@ impl PhysicsWorld {
             &narrowphase_handled,
             sleeping_snapshot.as_ref(),
         );
+        self.cached_narrowphase_handled = narrowphase_handled;
 
-        let _ = debug_lines;
-
+        let all_contacts = std::mem::take(&mut self.cached_all_contacts);
         self.sleep_manager
-            .update_sleep_states(&mut self.bodies, &contacts);
+            .update_sleep_states(&mut self.bodies, &all_contacts);
+        self.cached_all_contacts = all_contacts;
     }
 
     /// Contacts generated in the most recent step.

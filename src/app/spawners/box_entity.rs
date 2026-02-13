@@ -328,10 +328,7 @@ fn generate_brick_block() -> Vec<u8> {
                 mortar.scale(0.92 + mortar_noise * 0.08)
             } else {
                 // Per-brick colour variation using brick position as seed
-                let brick_seed = hash_pair(
-                    ((u + offset) * cols as f32).floor() as i32,
-                    row,
-                );
+                let brick_seed = hash_pair(((u + offset) * cols as f32).floor() as i32, row);
                 let brick_var = (brick_seed as f32 / u32::MAX as f32) * 0.15 - 0.075;
                 let noise = fbm_2d_periodic(u * 10.0, v * 10.0, 3, 0.5, 2.0, seed, Some(10));
                 let factor = 0.85 + noise * 0.15;
@@ -410,7 +407,11 @@ fn corner_bracket(u: f32, v: f32) -> f32 {
     let h_bar = cu < 0.22 && (cv - 0.06).abs() < 0.025;
     let v_bar = cv < 0.22 && (cu - 0.06).abs() < 0.025;
 
-    if h_bar || v_bar { 1.0 } else { 0.0 }
+    if h_bar || v_bar {
+        1.0
+    } else {
+        0.0
+    }
 }
 
 /// Subtle vignette darkening at texture edges.

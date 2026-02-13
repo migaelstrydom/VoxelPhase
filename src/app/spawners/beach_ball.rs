@@ -3,7 +3,9 @@ use std::sync::Arc;
 use nalgebra::Vector3;
 use specs::{Builder, Entity, World, WorldExt};
 
-use crate::components::{ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity};
+use crate::components::{
+    ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
+};
 use crate::geometry::{generate_magic_sphere_vertices, generate_sphere_indices, MagicSphereConfig};
 use crate::model::{MeshPrimitive, Model, ModelPart};
 use crate::physics::{ColliderDesc, RigidBodyDesc};
@@ -65,7 +67,7 @@ pub fn spawn_beach_ball(
 
         let collider_desc = ColliderDesc::sphere(RADIUS)
             .density(1.0)
-            .restitution(0.5)
+            .restitution(0.8)
             .friction(0.5);
 
         physics.0.attach_collider(body_handle, collider_desc);

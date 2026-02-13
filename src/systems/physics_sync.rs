@@ -31,7 +31,7 @@ impl Default for PhysicsSyncSystem {
     fn default() -> Self {
         Self {
             accumulator_seconds: 0.0,
-            fixed_dt_seconds: 1.0 / 120.0,
+            fixed_dt_seconds: 1.0 / 60.0,
             max_substeps_per_frame: 4,
         }
     }
@@ -121,13 +121,16 @@ impl PhysicsSyncSystem {
             self.accumulator_seconds = max_carry;
         }
 
+        if self.accumulator_seconds < fixed_dt {
+            return 0;
+        }
+
+        // Run narrowphase once for all substeps
+        physics.update_contacts(fixed_dt, terrain, impulses, debug_lines);
+
         let mut substeps = 0u32;
         while self.accumulator_seconds >= fixed_dt && substeps < self.max_substeps_per_frame {
-            if substeps == 0 {
-                physics.step(fixed_dt, terrain, impulses, debug_lines);
-            } else {
-                physics.step(fixed_dt, terrain, &[], debug_lines);
-            }
+            physics.substep(fixed_dt, terrain);
             self.accumulator_seconds -= fixed_dt;
             substeps += 1;
         }

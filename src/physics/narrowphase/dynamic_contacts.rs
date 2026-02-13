@@ -29,8 +29,8 @@ struct ColliderState {
 
 /// Generate contacts between all pairs of non-static colliders.
 ///
-/// Collects shape-agnostic `ColliderState` snapshots, then dispatches each pair
-/// by shape combination:
+/// Uses sort-and-sweep broadphase on the axis of greatest positional spread
+/// to prune pairs before narrowphase dispatch:
 /// - (Sphere, Sphere) → sphere-sphere overlap + speculative sweep
 /// - (Sphere, Box) | (Box, Sphere) → OBB closest-point
 /// - (Box, Box) → OBB SAT + face clipping
@@ -46,48 +46,136 @@ pub fn generate_dynamic_contacts(
     sleeping: Option<&HashSet<RigidBodyHandle>>,
 ) -> Vec<ContactConstraint> {
     let states = collect_collider_states(bodies, colliders, sleeping);
+    if states.len() < 2 {
+        return Vec::new();
+    }
+
+    let pairs = sweep_and_prune(&states, contact_margin);
     let mut contacts = Vec::new();
 
-    for i in 0..states.len() {
-        for j in (i + 1)..states.len() {
-            let si = &states[i];
-            let sj = &states[j];
+    for (i, j) in pairs {
+        let si = &states[i];
+        let sj = &states[j];
 
-            if si.is_sleeping && sj.is_sleeping {
-                continue;
+        let pair_contacts = match (&si.shape, &sj.shape) {
+            (ColliderShape::Sphere { radius: ra }, ColliderShape::Sphere { radius: rb }) => {
+                sphere_sphere_pair(
+                    si,
+                    *ra,
+                    sj,
+                    *rb,
+                    contact_margin,
+                    dt,
+                    ccd_threshold,
+                    enable_speculative_contacts,
+                    speculative_min_speed,
+                    speculative_margin_multiplier,
+                )
             }
+            (ColliderShape::Sphere { radius }, ColliderShape::Box { half_extents }) => {
+                sphere_box_pair(si, *radius, sj, *half_extents, contact_margin)
+            }
+            (ColliderShape::Box { half_extents }, ColliderShape::Sphere { radius }) => {
+                box_sphere_pair(si, *half_extents, sj, *radius, contact_margin)
+            }
+            (ColliderShape::Box { half_extents: he_a }, ColliderShape::Box { half_extents: he_b }) => {
+                box_box_pair(si, *he_a, sj, *he_b, contact_margin)
+            }
+        };
 
-            let pair_contacts = match (&si.shape, &sj.shape) {
-                (ColliderShape::Sphere { radius: ra }, ColliderShape::Sphere { radius: rb }) => {
-                    sphere_sphere_pair(
-                        si,
-                        *ra,
-                        sj,
-                        *rb,
-                        contact_margin,
-                        dt,
-                        ccd_threshold,
-                        enable_speculative_contacts,
-                        speculative_min_speed,
-                        speculative_margin_multiplier,
-                    )
-                }
-                (ColliderShape::Sphere { radius }, ColliderShape::Box { half_extents }) => {
-                    sphere_box_pair(si, *radius, sj, *half_extents, contact_margin)
-                }
-                (ColliderShape::Box { half_extents }, ColliderShape::Sphere { radius }) => {
-                    box_sphere_pair(si, *half_extents, sj, *radius, contact_margin)
-                }
-                (ColliderShape::Box { half_extents: he_a }, ColliderShape::Box { half_extents: he_b }) => {
-                    box_box_pair(si, *he_a, sj, *he_b, contact_margin)
-                }
-            };
-
-            contacts.extend(pair_contacts);
-        }
+        contacts.extend(pair_contacts);
     }
 
     contacts
+}
+
+/// Sort-and-sweep broadphase returning candidate pairs.
+///
+/// Picks the axis with greatest positional spread, sorts colliders by their
+/// AABB min on that axis, then sweeps to find overlapping intervals. Pairs
+/// that overlap on the sweep axis are checked for full 3-axis AABB overlap
+/// before being emitted.
+fn sweep_and_prune(states: &[ColliderState], margin: f32) -> Vec<(usize, usize)> {
+    let sweep_axis = pick_sweep_axis(states);
+
+    // Build (aabb_min, aabb_max) per collider on each axis.
+    let bounds: Vec<([f32; 3], [f32; 3])> = states
+        .iter()
+        .map(|s| {
+            let r = s.bounding_radius + margin;
+            (
+                [s.center.x - r, s.center.y - r, s.center.z - r],
+                [s.center.x + r, s.center.y + r, s.center.z + r],
+            )
+        })
+        .collect();
+
+    // Sort indices by AABB min on the sweep axis.
+    let mut sorted: Vec<usize> = (0..states.len()).collect();
+    sorted.sort_unstable_by(|&a, &b| {
+        bounds[a].0[sweep_axis]
+            .partial_cmp(&bounds[b].0[sweep_axis])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let mut pairs = Vec::new();
+
+    for ii in 0..sorted.len() {
+        let i = sorted[ii];
+        let i_max = bounds[i].1[sweep_axis];
+
+        for jj in (ii + 1)..sorted.len() {
+            let j = sorted[jj];
+
+            // Past the end of i's interval on the sweep axis — no further overlaps.
+            if bounds[j].0[sweep_axis] > i_max {
+                break;
+            }
+
+            // Skip pairs where both are sleeping.
+            if states[i].is_sleeping && states[j].is_sleeping {
+                continue;
+            }
+
+            // Check overlap on the remaining two axes.
+            if aabb_overlap_3d(&bounds[i], &bounds[j]) {
+                pairs.push((i, j));
+            }
+        }
+    }
+
+    pairs
+}
+
+/// Pick the axis (0=x, 1=y, 2=z) with the greatest positional spread.
+fn pick_sweep_axis(states: &[ColliderState]) -> usize {
+    let mut min = [f32::MAX; 3];
+    let mut max = [f32::MIN; 3];
+    for s in states {
+        let c = [s.center.x, s.center.y, s.center.z];
+        for axis in 0..3 {
+            min[axis] = min[axis].min(c[axis]);
+            max[axis] = max[axis].max(c[axis]);
+        }
+    }
+    let spread = [max[0] - min[0], max[1] - min[1], max[2] - min[2]];
+    if spread[0] >= spread[1] && spread[0] >= spread[2] {
+        0
+    } else if spread[1] >= spread[2] {
+        1
+    } else {
+        2
+    }
+}
+
+/// Full 3-axis AABB overlap test.
+fn aabb_overlap_3d(a: &([f32; 3], [f32; 3]), b: &([f32; 3], [f32; 3])) -> bool {
+    a.0[0] <= b.1[0]
+        && a.1[0] >= b.0[0]
+        && a.0[1] <= b.1[1]
+        && a.1[1] >= b.0[1]
+        && a.0[2] <= b.1[2]
+        && a.1[2] >= b.0[2]
 }
 
 fn collect_collider_states(
