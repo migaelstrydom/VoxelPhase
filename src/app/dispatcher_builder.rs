@@ -32,7 +32,11 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
             &["velocity_integration"],
         )
         // Physics engine for dynamic bodies (beach balls, etc.)
-        .with(PhysicsSyncSystem, "physics_sync", &["motion_prediction"])
+        .with(
+            PhysicsSyncSystem::default(),
+            "physics_sync",
+            &["motion_prediction"],
+        )
         // Animation and sensing
         .with(BipedAnimationSystem, "biped_animation", &["physics_sync"])
         .with(

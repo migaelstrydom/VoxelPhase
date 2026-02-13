@@ -12,7 +12,7 @@ use std::collections::HashSet;
 use crate::biped::BipedController;
 use crate::components::{Orientation, Position, RigidBodyComponent, Velocity, VelocityDriven};
 use crate::debug::{DebugLines, DebugLog, DebugOverlays};
-use crate::physics::{PhysicsImpulseQueue, PhysicsWorld, RigidBodyHandle};
+use crate::physics::{PhysicsImpulse, PhysicsImpulseQueue, PhysicsWorld, RigidBodyHandle};
 use crate::terrain::TerrainManager;
 use crate::time::Time;
 
@@ -21,7 +21,21 @@ use crate::time::Time;
 pub struct PhysicsResource(pub PhysicsWorld);
 
 /// Steps physics simulation and syncs state to ECS.
-pub struct PhysicsSyncSystem;
+pub struct PhysicsSyncSystem {
+    accumulator_seconds: f32,
+    fixed_dt_seconds: f32,
+    max_substeps_per_frame: u32,
+}
+
+impl Default for PhysicsSyncSystem {
+    fn default() -> Self {
+        Self {
+            accumulator_seconds: 0.0,
+            fixed_dt_seconds: 1.0 / 120.0,
+            max_substeps_per_frame: 4,
+        }
+    }
+}
 
 impl PhysicsSyncSystem {
     fn sync_kinematics_from_ecs(
@@ -92,6 +106,33 @@ impl PhysicsSyncSystem {
         }
     }
 
+    fn step_fixed(
+        &mut self,
+        physics: &mut PhysicsWorld,
+        terrain: &TerrainManager,
+        frame_dt: f32,
+        impulses: &[PhysicsImpulse],
+        debug_lines: &mut DebugLines,
+    ) -> u32 {
+        let fixed_dt = self.fixed_dt_seconds.max(1e-5);
+        self.accumulator_seconds += frame_dt.max(0.0);
+        let max_carry = fixed_dt * self.max_substeps_per_frame as f32;
+        if self.accumulator_seconds > max_carry {
+            self.accumulator_seconds = max_carry;
+        }
+
+        let mut substeps = 0u32;
+        while self.accumulator_seconds >= fixed_dt && substeps < self.max_substeps_per_frame {
+            if substeps == 0 {
+                physics.step(fixed_dt, terrain, impulses, debug_lines);
+            } else {
+                physics.step(fixed_dt, terrain, &[], debug_lines);
+            }
+            self.accumulator_seconds -= fixed_dt;
+            substeps += 1;
+        }
+        substeps
+    }
 }
 
 impl<'a> System<'a> for PhysicsSyncSystem {
@@ -129,7 +170,7 @@ impl<'a> System<'a> for PhysicsSyncSystem {
             mut impulse_queue,
         ): Self::SystemData,
     ) {
-        let dt = time.delta_seconds();
+        let frame_dt = time.delta_seconds();
 
         // Sync kinematic bodies from ECS into physics before stepping.
         Self::sync_kinematics_from_ecs(
@@ -141,18 +182,20 @@ impl<'a> System<'a> for PhysicsSyncSystem {
         );
 
         // Sync velocity-driven dynamic bodies (player, platforms, etc.)
-        Self::sync_velocity_driven_from_ecs(
-            &mut physics.0,
-            &velocities,
-            &bodies,
-            &velocity_driven,
-        );
+        Self::sync_velocity_driven_from_ecs(&mut physics.0, &velocities, &bodies, &velocity_driven);
 
         let impulses: Vec<_> = impulse_queue.drain().collect();
 
         // Step physics with terrain as static geometry
+        let mut physics_substeps = 0u32;
         if let Some(ref terrain) = terrain_opt {
-            physics.0.step(dt, &**terrain, &impulses, &mut debug_lines);
+            physics_substeps = self.step_fixed(
+                &mut physics.0,
+                terrain,
+                frame_dt,
+                &impulses,
+                &mut debug_lines,
+            );
         }
 
         let grounded_handles = physics.0.grounded_handles();
@@ -172,6 +215,25 @@ impl<'a> System<'a> for PhysicsSyncSystem {
             &mut debug_log,
             physics.0.config().contact_margin,
             physics.0.config().warm_start_depth_slop,
+        );
+        let gravity = physics.0.config().gravity;
+        debug_log.add("Physics/Config/FrameDt", format!("{:.5}", frame_dt));
+        debug_log.add(
+            "Physics/Config/FixedDt",
+            format!("{:.5}", self.fixed_dt_seconds),
+        );
+        debug_log.add("Physics/Config/Substeps", physics_substeps.to_string());
+        debug_log.add(
+            "Physics/Config/Accumulator",
+            format!("{:.5}", self.accumulator_seconds),
+        );
+        debug_log.add(
+            "Physics/Config/Gdt",
+            format!("{:.5}", gravity.magnitude() * self.fixed_dt_seconds),
+        );
+        debug_log.add(
+            "Physics/Config/GyDt",
+            format!("{:.5}", gravity.y * self.fixed_dt_seconds),
         );
 
         // Sync physics state back to ECS components
