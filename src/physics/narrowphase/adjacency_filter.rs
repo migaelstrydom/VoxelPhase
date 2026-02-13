@@ -1,80 +1,73 @@
-use std::collections::HashSet;
-
 use crate::collision::MeshPatch;
 
 use super::contact_source::{ContactFeature, SourcedContact};
 
-/// Drop contacts created from interior mesh edges on near-coplanar neighbors.
-pub fn filter_internal_edge_contacts(
-    contacts: Vec<SourcedContact>,
+/// For contacts on interior mesh edges of near-coplanar neighbors, replace the
+/// contact normal with the triangle face normal. This prevents lateral impulses
+/// from edge normals while keeping the contact alive (dropping would create gaps
+/// when the sphere straddles a shared edge and both triangles classify it as an
+/// edge contact).
+pub fn fix_internal_edge_normals(
+    mut contacts: Vec<SourcedContact>,
     patch: &MeshPatch,
     coplanar_dot_threshold: f32,
 ) -> Vec<SourcedContact> {
+    for contact in &mut contacts {
+        maybe_fix_edge_normal(contact, patch, coplanar_dot_threshold);
+    }
     contacts
-        .into_iter()
-        .filter(|c| should_keep_edge_contact(c, patch, coplanar_dot_threshold))
-        .collect()
 }
 
-/// Drop contacts created from interior mesh vertices surrounded by coplanar
-/// triangles, but only when the batch already contains a face contact from the
-/// source triangle or one of its coplanar neighbors at that vertex. This
-/// prevents dropping load-bearing vertex contacts when no face support exists.
-pub fn filter_internal_vertex_contacts(
-    contacts: Vec<SourcedContact>,
+/// For contacts on interior mesh vertices surrounded by coplanar triangles,
+/// replace the contact normal with the triangle face normal.
+pub fn fix_internal_vertex_normals(
+    mut contacts: Vec<SourcedContact>,
     patch: &MeshPatch,
     coplanar_dot_threshold: f32,
 ) -> Vec<SourcedContact> {
-    let face_tri_set = build_face_triangle_set(&contacts);
+    for contact in &mut contacts {
+        maybe_fix_vertex_normal(contact, patch, coplanar_dot_threshold);
+    }
     contacts
-        .into_iter()
-        .filter(|c| should_keep_vertex_contact(c, patch, coplanar_dot_threshold, &face_tri_set))
-        .collect()
 }
 
-/// Collect the set of triangle indices that have at least one Face contact.
-fn build_face_triangle_set(contacts: &[SourcedContact]) -> HashSet<u32> {
-    contacts
-        .iter()
-        .filter(|c| matches!(c.source.feature, ContactFeature::Face))
-        .map(|c| c.source.triangle_idx)
-        .collect()
-}
-
-fn should_keep_edge_contact(
-    contact: &SourcedContact,
+fn maybe_fix_edge_normal(
+    contact: &mut SourcedContact,
     patch: &MeshPatch,
     coplanar_dot_threshold: f32,
-) -> bool {
+) {
     let tri_idx = contact.source.triangle_idx as usize;
     let Some(patch_tri) = patch.triangles.get(tri_idx) else {
-        return true;
+        return;
     };
 
     let ContactFeature::Edge(edge_idx) = contact.source.feature else {
-        return true;
+        return;
     };
     let edge_idx = edge_idx as usize;
     if edge_idx >= 3 {
-        return true;
+        return;
     }
 
     let Some(neighbor_idx) = patch_tri.neighbors[edge_idx] else {
-        return true;
+        return;
     };
     let Some(neighbor_tri) = patch.triangles.get(neighbor_idx as usize) else {
-        return true;
+        return;
     };
 
     let tri_n = patch_tri.triangle.normal();
     let nbr_n = neighbor_tri.triangle.normal();
-    tri_n.dot(&nbr_n) < coplanar_dot_threshold
+    if tri_n.dot(&nbr_n) >= coplanar_dot_threshold {
+        contact.constraint.normal = tri_n;
+        contact.constraint.raw_normal = tri_n;
+    }
 }
 
 /// Returns the two edge indices (into `PatchTriangle::neighbors`) that meet
 /// at the given vertex index.
 ///
-/// Edge 0 = v0→v1, Edge 1 = v1→v2, Edge 2 = v2→v0, so:
+/// Edge 0 = v0->v1, Edge 1 = v1->v2, Edge 2 = v2->v0, so:
 /// - Vertex 0 sits at the junction of edges 2 and 0
 /// - Vertex 1 sits at the junction of edges 0 and 1
 /// - Vertex 2 sits at the junction of edges 1 and 2
@@ -86,57 +79,43 @@ fn edges_incident_to_vertex(vertex_idx: usize) -> [usize; 2] {
     }
 }
 
-fn should_keep_vertex_contact(
-    contact: &SourcedContact,
+fn maybe_fix_vertex_normal(
+    contact: &mut SourcedContact,
     patch: &MeshPatch,
     coplanar_dot_threshold: f32,
-    face_tri_set: &HashSet<u32>,
-) -> bool {
+) {
     let tri_idx = contact.source.triangle_idx as usize;
     let Some(patch_tri) = patch.triangles.get(tri_idx) else {
-        return true;
+        return;
     };
 
     let ContactFeature::Vertex(vert_idx) = contact.source.feature else {
-        return true;
+        return;
     };
     let vert_idx = vert_idx as usize;
     if vert_idx >= 3 {
-        return true;
+        return;
     }
 
     let tri_n = patch_tri.triangle.normal();
     let incident = edges_incident_to_vertex(vert_idx);
 
-    // Collect coplanar neighbor indices (if both edges have coplanar neighbors).
-    let mut coplanar_neighbor_ids = Vec::new();
     for &edge_idx in &incident {
         let Some(neighbor_idx) = patch_tri.neighbors[edge_idx] else {
-            return true;
+            return;
         };
         let Some(neighbor_tri) = patch.triangles.get(neighbor_idx as usize) else {
-            return true;
+            return;
         };
         let nbr_n = neighbor_tri.triangle.normal();
         if tri_n.dot(&nbr_n) < coplanar_dot_threshold {
-            return true;
-        }
-        coplanar_neighbor_ids.push(neighbor_idx);
-    }
-
-    // Vertex is geometrically internal. Only drop it if there is face-based
-    // support from this triangle or one of its coplanar neighbors at the vertex.
-    if face_tri_set.contains(&(tri_idx as u32)) {
-        return false;
-    }
-    for &nbr_idx in &coplanar_neighbor_ids {
-        if face_tri_set.contains(&nbr_idx) {
-            return false;
+            return;
         }
     }
 
-    // No face support nearby — keep this vertex contact as it may be load-bearing.
-    true
+    // All incident neighbors are coplanar — replace normal with face normal.
+    contact.constraint.normal = tri_n;
+    contact.constraint.raw_normal = tri_n;
 }
 
 #[cfg(test)]
@@ -159,8 +138,8 @@ mod tests {
                 collider_a: None,
                 collider_b: Some(ColliderHandle(dummy_index)),
                 point: Point3::new(0.5, 0.0, 0.0),
-                normal: Vector3::new(0.0, 1.0, 0.0),
-                raw_normal: Vector3::new(0.0, 1.0, 0.0),
+                normal: Vector3::new(0.1, 0.995, 0.0),
+                raw_normal: Vector3::new(0.1, 0.995, 0.0),
                 depth: 0.0,
                 raw_depth: 0.0,
                 restitution: 0.0,
@@ -175,9 +154,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn drops_coplanar_internal_edge_contact() {
-        let patch = MeshPatch {
+    fn coplanar_two_tri_patch() -> MeshPatch {
+        MeshPatch {
             triangles: vec![
                 PatchTriangle {
                     triangle: Triangle::new(
@@ -196,17 +174,29 @@ mod tests {
                     neighbors: [None, None, Some(0)],
                 },
             ],
-        };
-        let filtered = filter_internal_edge_contacts(
+        }
+    }
+
+    #[test]
+    fn fixes_normal_of_coplanar_internal_edge_contact() {
+        let patch = coplanar_two_tri_patch();
+        // Edge 0 of tri 0 is the shared edge (neighbor = Some(1)).
+        let result = fix_internal_edge_normals(
             vec![make_contact(ContactFeature::Edge(0))],
             &patch,
             0.99,
         );
-        assert!(filtered.is_empty());
+        assert_eq!(result.len(), 1);
+        let n = result[0].constraint.normal;
+        let face_n = patch.triangles[0].triangle.normal();
+        assert!(
+            (n - face_n).magnitude() < 1e-5,
+            "normal should be replaced with face normal {face_n:?}, got {n:?}"
+        );
     }
 
     #[test]
-    fn keeps_boundary_edge_contact() {
+    fn keeps_boundary_edge_contact_unchanged() {
         let patch = MeshPatch {
             triangles: vec![PatchTriangle {
                 triangle: Triangle::new(
@@ -217,19 +207,18 @@ mod tests {
                 neighbors: [None, None, None],
             }],
         };
-        let filtered = filter_internal_edge_contacts(
+        let result = fix_internal_edge_normals(
             vec![make_contact(ContactFeature::Edge(0))],
             &patch,
             0.99,
         );
-        assert_eq!(filtered.len(), 1);
+        assert_eq!(result.len(), 1);
+        let n = result[0].constraint.normal;
+        assert!((n.x - 0.1).abs() < 1e-5, "boundary edge normal should be unchanged");
     }
 
     #[test]
-    fn drops_coplanar_internal_vertex_when_face_support_exists() {
-        // Vertex 1 of tri 0 (at 1,0,0) is shared by two coplanar neighbors
-        // across edges 0 and 1. A face contact exists on tri 0, so the vertex
-        // contact is redundant → drop.
+    fn fixes_normal_of_coplanar_internal_vertex() {
         let patch = MeshPatch {
             triangles: vec![
                 PatchTriangle {
@@ -258,61 +247,22 @@ mod tests {
                 },
             ],
         };
-        let filtered = filter_internal_vertex_contacts(
-            vec![
-                make_contact(ContactFeature::Face),
-                make_contact(ContactFeature::Vertex(1)),
-            ],
-            &patch,
-            0.99,
-        );
-        assert_eq!(filtered.len(), 1);
-        assert!(matches!(filtered[0].source.feature, ContactFeature::Face));
-    }
-
-    #[test]
-    fn keeps_coplanar_internal_vertex_without_face_support() {
-        // Same geometry as above but no face contact in the batch.
-        // The vertex is the only support → keep.
-        let patch = MeshPatch {
-            triangles: vec![
-                PatchTriangle {
-                    triangle: Triangle::new(
-                        Point3::new(0.0, 0.0, 0.0),
-                        Point3::new(1.0, 0.0, 0.0),
-                        Point3::new(0.0, 0.0, 1.0),
-                    ),
-                    neighbors: [Some(1), Some(2), None],
-                },
-                PatchTriangle {
-                    triangle: Triangle::new(
-                        Point3::new(1.0, 0.0, 0.0),
-                        Point3::new(1.0, 0.0, 1.0),
-                        Point3::new(0.0, 0.0, 1.0),
-                    ),
-                    neighbors: [None, None, Some(0)],
-                },
-                PatchTriangle {
-                    triangle: Triangle::new(
-                        Point3::new(1.0, 0.0, 0.0),
-                        Point3::new(2.0, 0.0, 0.0),
-                        Point3::new(1.0, 0.0, 1.0),
-                    ),
-                    neighbors: [None, None, Some(0)],
-                },
-            ],
-        };
-        let filtered = filter_internal_vertex_contacts(
+        let result = fix_internal_vertex_normals(
             vec![make_contact(ContactFeature::Vertex(1))],
             &patch,
             0.99,
         );
-        assert_eq!(filtered.len(), 1);
+        assert_eq!(result.len(), 1);
+        let n = result[0].constraint.normal;
+        let face_n = patch.triangles[0].triangle.normal();
+        assert!(
+            (n - face_n).magnitude() < 1e-5,
+            "normal should be replaced with face normal {face_n:?}, got {n:?}"
+        );
     }
 
     #[test]
-    fn keeps_boundary_vertex_contact() {
-        // Vertex 0 has no neighbors on either incident edge → boundary.
+    fn keeps_boundary_vertex_contact_unchanged() {
         let patch = MeshPatch {
             triangles: vec![PatchTriangle {
                 triangle: Triangle::new(
@@ -323,17 +273,18 @@ mod tests {
                 neighbors: [None, None, None],
             }],
         };
-        let filtered = filter_internal_vertex_contacts(
+        let result = fix_internal_vertex_normals(
             vec![make_contact(ContactFeature::Vertex(0))],
             &patch,
             0.99,
         );
-        assert_eq!(filtered.len(), 1);
+        assert_eq!(result.len(), 1);
+        let n = result[0].constraint.normal;
+        assert!((n.x - 0.1).abs() < 1e-5, "boundary vertex normal should be unchanged");
     }
 
     #[test]
-    fn keeps_crease_vertex_contact() {
-        // Vertex 1 has two neighbors but one forms a crease → keep.
+    fn keeps_crease_vertex_contact_unchanged() {
         let patch = MeshPatch {
             triangles: vec![
                 PatchTriangle {
@@ -362,47 +313,18 @@ mod tests {
                 },
             ],
         };
-        let filtered = filter_internal_vertex_contacts(
+        let result = fix_internal_vertex_normals(
             vec![make_contact(ContactFeature::Vertex(1))],
             &patch,
             0.99,
         );
-        assert_eq!(filtered.len(), 1);
+        assert_eq!(result.len(), 1);
+        let n = result[0].constraint.normal;
+        assert!((n.x - 0.1).abs() < 1e-5, "crease vertex normal should be unchanged");
     }
 
     #[test]
-    fn keeps_vertex_with_one_missing_neighbor() {
-        // Vertex 1 has one coplanar neighbor (edge 0) but edge 1 is boundary.
-        let patch = MeshPatch {
-            triangles: vec![
-                PatchTriangle {
-                    triangle: Triangle::new(
-                        Point3::new(0.0, 0.0, 0.0),
-                        Point3::new(1.0, 0.0, 0.0),
-                        Point3::new(0.0, 0.0, 1.0),
-                    ),
-                    neighbors: [Some(1), None, None],
-                },
-                PatchTriangle {
-                    triangle: Triangle::new(
-                        Point3::new(1.0, 0.0, 0.0),
-                        Point3::new(1.0, 0.0, 1.0),
-                        Point3::new(0.0, 0.0, 1.0),
-                    ),
-                    neighbors: [None, None, Some(0)],
-                },
-            ],
-        };
-        let filtered = filter_internal_vertex_contacts(
-            vec![make_contact(ContactFeature::Vertex(1))],
-            &patch,
-            0.99,
-        );
-        assert_eq!(filtered.len(), 1);
-    }
-
-    #[test]
-    fn keeps_crease_edge_contact() {
+    fn keeps_crease_edge_contact_unchanged() {
         let patch = MeshPatch {
             triangles: vec![
                 PatchTriangle {
@@ -423,11 +345,26 @@ mod tests {
                 },
             ],
         };
-        let filtered = filter_internal_edge_contacts(
+        let result = fix_internal_edge_normals(
             vec![make_contact(ContactFeature::Edge(0))],
             &patch,
             0.99,
         );
-        assert_eq!(filtered.len(), 1);
+        assert_eq!(result.len(), 1);
+        let n = result[0].constraint.normal;
+        assert!((n.x - 0.1).abs() < 1e-5, "crease edge normal should be unchanged");
+    }
+
+    #[test]
+    fn keeps_vertex_with_one_missing_neighbor_unchanged() {
+        let patch = coplanar_two_tri_patch();
+        let result = fix_internal_vertex_normals(
+            vec![make_contact(ContactFeature::Vertex(1))],
+            &patch,
+            0.99,
+        );
+        assert_eq!(result.len(), 1);
+        let n = result[0].constraint.normal;
+        assert!((n.x - 0.1).abs() < 1e-5, "partial-boundary vertex normal should be unchanged");
     }
 }

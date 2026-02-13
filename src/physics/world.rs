@@ -13,7 +13,7 @@ use super::grounding::{GroundingConfig, GroundingDetector};
 use super::handle::{ColliderHandle, RigidBodyHandle};
 use super::impulses::{ForceField, ForceFieldRegistry, PhysicsImpulse};
 use super::narrowphase::{
-    filter_internal_edge_contacts, filter_internal_vertex_contacts, generate_dynamic_contacts,
+    fix_internal_edge_normals, fix_internal_vertex_normals, generate_dynamic_contacts,
     generate_static_contacts, ContactSource as MeshContactSource, NormalClusterConfig,
     SourcedContact,
 };
@@ -719,8 +719,8 @@ impl PhysicsWorld {
             }
         }
         let threshold = self.config.normal_clustering.normal_cluster_dot.max(0.95);
-        let sourced = filter_internal_edge_contacts(sourced, &patch, threshold);
-        let sourced = filter_internal_vertex_contacts(sourced, &patch, threshold);
+        let sourced = fix_internal_edge_normals(sourced, &patch, threshold);
+        let sourced = fix_internal_vertex_normals(sourced, &patch, threshold);
         let mut contacts: Vec<_> = sourced.into_iter().map(|c| c.constraint).collect();
 
         if contacts.is_empty() {
@@ -838,5 +838,15 @@ pub enum ContactSource {
 impl Default for PhysicsWorld {
     fn default() -> Self {
         Self::new(PhysicsConfig::default())
+    }
+}
+
+/// Per-step manifold cache diagnostics for harness/metrics export.
+#[cfg(test)]
+use super::pipeline::manifold::ManifoldFrameStats;
+#[cfg(test)]
+impl PhysicsWorld {
+    pub fn manifold_frame_stats(&self) -> ManifoldFrameStats {
+        self.manifold_cache.frame_stats()
     }
 }

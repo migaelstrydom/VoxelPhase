@@ -225,9 +225,6 @@ impl<'a> System<'a> for ProjectileImpactDetectionSystem {
             if contact.normal.magnitude_squared() <= 1e-8 {
                 continue;
             }
-            if contact.depth <= 0.0 && contact.source != ContactSource::Ccd {
-                continue;
-            }
             let entry = best_static_contacts
                 .entry(contact.body_b)
                 .or_insert((contact.depth, contact.point));

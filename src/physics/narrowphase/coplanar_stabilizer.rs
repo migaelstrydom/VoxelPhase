@@ -221,13 +221,9 @@ fn stabilize_coplanar_sphere_contacts(
 
     let mut normal_sum = Vector3::zeros();
     let mut point_sum = Vector3::zeros();
-    let mut avg_depth = 0.0;
-    let mut avg_raw = 0.0;
     for c in contacts {
         normal_sum += c.normal;
         point_sum += c.point.coords;
-        avg_depth += c.depth;
-        avg_raw += c.raw_depth;
     }
     let normal_len = normal_sum.magnitude();
     if normal_len < 1e-6 {
@@ -235,8 +231,6 @@ fn stabilize_coplanar_sphere_contacts(
     }
     let normal = normal_sum / normal_len;
     let plane_point = Point3::from(point_sum / contacts.len() as f32);
-    avg_depth /= contacts.len() as f32;
-    avg_raw /= contacts.len() as f32;
 
     let mut min_dot = 1.0f32;
     let mut min_plane = f32::INFINITY;
@@ -254,6 +248,13 @@ fn stabilize_coplanar_sphere_contacts(
         return None;
     }
 
+    // Compute depth geometrically from the sphere center and the contact plane,
+    // rather than averaging raw contact depths which fluctuate as edge contacts
+    // enter and leave the query region.
+    let dist_to_plane = (center - plane_point).dot(&normal);
+    let raw_depth = radius - dist_to_plane;
+    let solver_depth = raw_depth.max(0.0);
+
     let base = &contacts[0];
     let point = center - normal * radius;
     Some(vec![ContactConstraint {
@@ -264,8 +265,8 @@ fn stabilize_coplanar_sphere_contacts(
         point,
         normal,
         raw_normal: normal,
-        depth: avg_depth.max(0.0),
-        raw_depth: avg_raw,
+        depth: solver_depth,
+        raw_depth,
         restitution: base.restitution,
         friction: base.friction,
         warm_normal_impulse: 0.0,

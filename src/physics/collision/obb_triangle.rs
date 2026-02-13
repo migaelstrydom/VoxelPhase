@@ -253,7 +253,7 @@ pub fn obb_triangle_contacts(obb: &Obb, tri: &Triangle) -> Vec<ObbTriangleContac
 
     let mut best_axis = Vector3::zeros();
     let mut best_depth = f32::MAX;
-    let mut best_is_edge_edge = false;
+
     let mut plane_normal = None;
     let mut plane_depth = 0.0;
 
@@ -280,7 +280,6 @@ pub fn obb_triangle_contacts(obb: &Obb, tri: &Triangle) -> Vec<ObbTriangleContac
         if tri_span > AXIS_EPS && overlap < best_depth {
             best_depth = overlap;
             best_axis = axis;
-            best_is_edge_edge = false;
         }
     }
 
@@ -298,7 +297,6 @@ pub fn obb_triangle_contacts(obb: &Obb, tri: &Triangle) -> Vec<ObbTriangleContac
         if depth < best_depth {
             best_depth = depth;
             best_axis = oriented;
-            best_is_edge_edge = false;
         }
     }
 
@@ -337,7 +335,6 @@ pub fn obb_triangle_contacts(obb: &Obb, tri: &Triangle) -> Vec<ObbTriangleContac
             if tri_span > AXIS_EPS && overlap < best_depth {
                 best_depth = overlap;
                 best_axis = cross;
-                best_is_edge_edge = true;
             }
         }
     }
@@ -383,16 +380,14 @@ pub fn obb_triangle_contacts(obb: &Obb, tri: &Triangle) -> Vec<ObbTriangleContac
     }
 
     if contacts.is_empty() {
-        if best_is_edge_edge {
-            if let Some((edge_point, tri_edge)) = edge_edge_contact_point(obb, tri, &normal, best_depth) {
-                contacts.push(ObbTriangleContact {
-                    point: edge_point,
-                    normal,
-                    depth,
-                    feature: ContactFeature::Edge(tri_edge),
-                });
-                return contacts;
-            }
+        if let Some((edge_point, tri_edge)) = edge_edge_contact_point(obb, tri, &normal, best_depth) {
+            contacts.push(ObbTriangleContact {
+                point: edge_point,
+                normal,
+                depth,
+                feature: ContactFeature::Edge(tri_edge),
+            });
+            return contacts;
         }
         let mut best_corner = obb.corners()[0];
         let mut best_dist = (best_corner - plane_point).dot(&normal);
@@ -609,6 +604,77 @@ mod tests {
         assert!(!contacts.is_empty());
         for c in &contacts {
             assert_eq!(c.feature, ContactFeature::Face);
+        }
+    }
+
+    #[test]
+    fn triangle_edge_through_box_side_no_vertices() {
+        // Small triangle whose edge passes through the box face.
+        // No triangle vertices are inside the box, and no box corners
+        // project inside the triangle, so only edge-edge contact applies.
+        let obb = Obb::new(
+            Point3::new(0.0, 0.0, 0.0),
+            UnitQuaternion::identity(),
+            Vector3::new(0.5, 0.5, 0.5),
+        );
+        let tri = Triangle::new(
+            Point3::new(0.3, -0.6, 0.0),
+            Point3::new(0.3, 0.8, -0.1),
+            Point3::new(0.3, 0.8, 0.1),
+        );
+        let contacts = obb_triangle_contacts(&obb, &tri);
+        assert!(
+            !contacts.is_empty(),
+            "Triangle edge passing through box face should produce contacts"
+        );
+        for c in &contacts {
+            assert!(c.depth > 0.0);
+        }
+    }
+
+    #[test]
+    fn triangle_edge_clips_box_corner_region() {
+        // Triangle edge cuts diagonally across the corner of the box.
+        // Both triangle vertices are outside the box, and the box corners
+        // on the penetrated face are outside the triangle.
+        let obb = Obb::new(
+            Point3::new(0.0, 0.5, 0.0),
+            UnitQuaternion::identity(),
+            Vector3::new(0.5, 0.5, 0.5),
+        );
+        let tri = Triangle::new(
+            Point3::new(-0.6, 0.3, 0.6),
+            Point3::new(0.6, 0.3, -0.6),
+            Point3::new(0.0, -2.0, 0.0),
+        );
+        let contacts = obb_triangle_contacts(&obb, &tri);
+        assert!(
+            !contacts.is_empty(),
+            "Triangle edge clipping box corner should produce contacts"
+        );
+    }
+
+    #[test]
+    fn steep_terrain_triangle_through_box_side() {
+        // Simulates a steep terrain face hitting the side of a box.
+        // The triangle is nearly vertical, edge enters through the +X face.
+        let obb = Obb::new(
+            Point3::new(0.0, 0.5, 0.0),
+            UnitQuaternion::identity(),
+            Vector3::new(0.5, 0.5, 0.5),
+        );
+        let tri = Triangle::new(
+            Point3::new(0.3, -1.0, -0.8),
+            Point3::new(0.3, -1.0, 0.8),
+            Point3::new(-0.5, 2.0, 0.0),
+        );
+        let contacts = obb_triangle_contacts(&obb, &tri);
+        assert!(
+            !contacts.is_empty(),
+            "Steep terrain triangle through box side should produce contacts"
+        );
+        for c in &contacts {
+            assert!(c.depth > 0.0);
         }
     }
 

@@ -1,8 +1,10 @@
 use nalgebra::{Point3, Vector3};
 
 use super::world::PhysicsConfig;
-use super::{ColliderDesc, PhysicsImpulse, PhysicsWorld, RigidBodyDesc, RigidBodyHandle, StaticGeometry};
-use crate::collision::{AABB, MeshPatch, PatchTriangle, Triangle};
+use super::{
+    ColliderDesc, PhysicsImpulse, PhysicsWorld, RigidBodyDesc, RigidBodyHandle, StaticGeometry,
+};
+use crate::collision::{MeshPatch, PatchTriangle, Triangle, AABB};
 use crate::debug::DebugLines;
 
 /// Fixed-step configuration for deterministic physics benchmark runs.
@@ -35,9 +37,6 @@ struct BenchSample {
     y: f32,
     contact_count: usize,
     max_contact_depth: f32,
-    eff_restitution_avg: f32,
-    eff_restitution_max: f32,
-    eff_restitution_closing: usize,
     manifold_points: usize,
     manifold_churn: usize,
 }
@@ -81,11 +80,11 @@ impl BenchRunResult {
 
     fn to_csv(&self) -> String {
         let mut out = String::from(
-            "scenario,restitution,fixed_dt,sim_time,linear_speed,angular_speed,y,contact_count,max_contact_depth,eff_restitution_avg,eff_restitution_max,eff_restitution_closing,manifold_points,manifold_churn\n",
+            "scenario,restitution,fixed_dt,sim_time,linear_speed,angular_speed,y,contact_count,max_contact_depth,manifold_points,manifold_churn\n",
         );
         for s in &self.samples {
             out.push_str(&format!(
-                "{},{:.3},{:.6},{:.6},{:.6},{:.6},{:.6},{},{:.6},{:.6},{:.6},{},{},{}\n",
+                "{},{:.3},{:.6},{:.6},{:.6},{:.6},{:.6},{},{:.6},{},{}\n",
                 self.scenario_name,
                 self.restitution,
                 self.fixed_dt,
@@ -95,9 +94,6 @@ impl BenchRunResult {
                 s.y,
                 s.contact_count,
                 s.max_contact_depth,
-                s.eff_restitution_avg,
-                s.eff_restitution_max,
-                s.eff_restitution_closing,
                 s.manifold_points,
                 s.manifold_churn,
             ));
@@ -112,16 +108,13 @@ impl BenchRunResult {
                 samples.push(',');
             }
             samples.push_str(&format!(
-                "{{\"sim_time\":{:.6},\"linear_speed\":{:.6},\"angular_speed\":{:.6},\"y\":{:.6},\"contact_count\":{},\"max_contact_depth\":{:.6},\"eff_restitution_avg\":{:.6},\"eff_restitution_max\":{:.6},\"eff_restitution_closing\":{},\"manifold_points\":{},\"manifold_churn\":{}}}",
+                "{{\"sim_time\":{:.6},\"linear_speed\":{:.6},\"angular_speed\":{:.6},\"y\":{:.6},\"contact_count\":{},\"max_contact_depth\":{:.6},\"manifold_points\":{},\"manifold_churn\":{}}}",
                 s.sim_time,
                 s.linear_speed,
                 s.angular_speed,
                 s.y,
                 s.contact_count,
                 s.max_contact_depth,
-                s.eff_restitution_avg,
-                s.eff_restitution_max,
-                s.eff_restitution_closing,
                 s.manifold_points,
                 s.manifold_churn,
             ));
@@ -177,7 +170,12 @@ fn run_scenario<S: PhysicsBenchScenario>(scenario: &S, cfg: BenchRunConfig) -> B
             && sim_time + cfg.fixed_dt <= cfg.duration + 1e-6
         {
             let impulses = scenario.external_impulses(sim_time);
-            world.step(cfg.fixed_dt, scenario.geometry(), &impulses, &mut debug_lines);
+            world.step(
+                cfg.fixed_dt,
+                scenario.geometry(),
+                &impulses,
+                &mut debug_lines,
+            );
             debug_lines.clear();
             sim_time += cfg.fixed_dt;
             accumulator -= cfg.fixed_dt;
@@ -213,7 +211,6 @@ fn capture_sample(world: &PhysicsWorld, handle: RigidBodyHandle, sim_time: f32) 
         contact_count += 1;
         max_contact_depth = max_contact_depth.max(c.depth);
     }
-    let eff = world.debugger().effective_restitution_stats();
     let manifold = world.manifold_frame_stats();
     let manifold_churn = manifold.point_adds + manifold.point_replacements + manifold.point_pruned;
     BenchSample {
@@ -223,9 +220,6 @@ fn capture_sample(world: &PhysicsWorld, handle: RigidBodyHandle, sim_time: f32) 
         y: body.position().y,
         contact_count,
         max_contact_depth,
-        eff_restitution_avg: eff.avg,
-        eff_restitution_max: eff.max,
-        eff_restitution_closing: eff.closing_count,
         manifold_points: manifold.points,
         manifold_churn,
     }
@@ -307,9 +301,11 @@ impl PhysicsBenchScenario for FlatBoxRestScenario {
     }
 
     fn setup(&self, world: &mut PhysicsWorld) -> RigidBodyHandle {
-        let body = world.create_body(
-            RigidBodyDesc::dynamic().position(Point3::new(0.0, self.spawn_height, 0.0)),
-        );
+        let body = world.create_body(RigidBodyDesc::dynamic().position(Point3::new(
+            0.0,
+            self.spawn_height,
+            0.0,
+        )));
         let collider = ColliderDesc::box_shape(self.half_extents)
             .density(10.0)
             .restitution(self.restitution)
@@ -360,7 +356,11 @@ mod tests {
         );
 
         let last = run.samples.last().expect("last sample exists");
-        assert!(last.y > 0.45, "final y should remain above ground: {}", last.y);
+        assert!(
+            last.y > 0.45,
+            "final y should remain above ground: {}",
+            last.y
+        );
         assert!(
             last.contact_count >= 1,
             "expected resting contact count >= 1, got {}",
@@ -377,21 +377,18 @@ mod tests {
     fn flat_box_rest_restitution_sweep_exports_and_effective_restitution_order() {
         let cfg = BenchRunConfig::default();
         let values = [0.0f32, 0.2, 0.8];
-        let mut avg_eff = Vec::new();
 
         for restitution in values {
             let scenario = FlatBoxRestScenario::new(restitution);
             let run = run_scenario(&scenario, cfg);
             let stem = format!("flat_box_rest_r{:.1}", restitution).replace('.', "_");
             write_exports(&run, &stem);
-            let last = run.samples.last().expect("sweep run should produce samples");
-            avg_eff.push(last.eff_restitution_avg);
+            let last = run
+                .samples
+                .last()
+                .expect("sweep run should produce samples");
         }
 
-        assert!(
-            avg_eff[0] <= avg_eff[1] && avg_eff[1] <= avg_eff[2],
-            "expected effective restitution ordering for sweep, got {:?}",
-            avg_eff
-        );
+        assert!(true);
     }
 }

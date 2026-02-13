@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use generational_arena::Arena;
 use nalgebra::{Point3, Vector3};
 
-use super::adjacency_filter::{filter_internal_edge_contacts, filter_internal_vertex_contacts};
+use super::adjacency_filter::{fix_internal_edge_normals, fix_internal_vertex_normals};
 use super::contact_source::{ContactSource, SourcedContact};
 use super::coplanar_stabilizer::{
     stabilize_coplanar_box_groups as stabilize_box_coplanar_groups,
@@ -193,8 +193,8 @@ fn sphere_vs_static(
         }
     }
 
-    let sourced = filter_internal_vertex_contacts(
-        filter_internal_edge_contacts(sourced, &patch, normal_dot_threshold.max(0.95)),
+    let sourced = fix_internal_vertex_normals(
+        fix_internal_edge_normals(sourced, &patch, normal_dot_threshold.max(0.95)),
         &patch,
         normal_dot_threshold.max(0.95),
     );
@@ -271,8 +271,8 @@ fn box_vs_static(
         }
     }
 
-    let sourced = filter_internal_vertex_contacts(
-        filter_internal_edge_contacts(sourced, &patch, normal_dot_threshold.max(0.95)),
+    let sourced = fix_internal_vertex_normals(
+        fix_internal_edge_normals(sourced, &patch, normal_dot_threshold.max(0.95)),
         &patch,
         normal_dot_threshold.max(0.95),
     );
@@ -359,8 +359,8 @@ fn speculative_static_contacts(
                     });
                 }
             }
-            let sourced = filter_internal_vertex_contacts(
-                filter_internal_edge_contacts(sourced, &patch, normal_dot_threshold.max(0.95)),
+            let sourced = fix_internal_vertex_normals(
+                fix_internal_edge_normals(sourced, &patch, normal_dot_threshold.max(0.95)),
                 &patch,
                 normal_dot_threshold.max(0.95),
             );
@@ -409,8 +409,8 @@ fn speculative_static_contacts(
                     });
                 }
             }
-            let sourced = filter_internal_vertex_contacts(
-                filter_internal_edge_contacts(sourced, &patch, normal_dot_threshold.max(0.95)),
+            let sourced = fix_internal_vertex_normals(
+                fix_internal_edge_normals(sourced, &patch, normal_dot_threshold.max(0.95)),
                 &patch,
                 normal_dot_threshold.max(0.95),
             );
