@@ -5,12 +5,14 @@ use std::collections::HashSet;
 use generational_arena::Arena;
 use nalgebra::{Point3, UnitQuaternion, Vector3};
 
+use crate::collision::contact::ContactManifold;
+use crate::collision::discrete::obb_obb::obb_obb_manifold;
+use crate::collision::discrete::sphere_obb::sphere_obb_manifold;
+use crate::collision::discrete::sphere_sphere::sphere_sphere_manifold;
+use crate::collision::obb::Obb;
 use crate::physics::body::RigidBody;
 use crate::physics::collider::{Collider, ColliderMaterial, ColliderShape};
-use crate::physics::collision::obb::Obb;
-use crate::physics::collision::obb_obb::obb_obb_contacts;
-use crate::physics::collision::obb_sphere::obb_sphere_contact;
-use crate::physics::collision::{sphere_sphere_collision, swept_sphere_sphere};
+use crate::physics::collision::swept_sphere_sphere;
 use crate::physics::handle::{ColliderHandle, RigidBodyHandle};
 use crate::physics::pipeline::solver::ContactConstraint;
 
@@ -227,34 +229,23 @@ fn sphere_sphere_pair(
     speculative_min_speed: f32,
     speculative_margin_multiplier: f32,
 ) -> Vec<ContactConstraint> {
-    let test = sphere_sphere_collision(
-        a.center,
-        radius_a + contact_margin,
-        b.center,
-        radius_b + contact_margin,
+    let manifold = sphere_sphere_manifold(
+        a.center, radius_a, b.center, radius_b, contact_margin,
     );
 
-    if let Some(contact) = test {
-        let actual_depth = (radius_a + radius_b) - (b.center - a.center).magnitude();
-        let solver_depth = actual_depth.max(0.0);
-        let (restitution, friction) = ColliderMaterial::combine(&a.material, &b.material);
-        return vec![ContactConstraint {
-            body_a: Some(a.body_handle),
-            body_b: b.body_handle,
-            collider_a: Some(a.collider_handle),
-            collider_b: Some(b.collider_handle),
-            point: contact.point,
-            normal: contact.normal,
-            raw_normal: contact.normal,
-            depth: solver_depth,
-            raw_depth: actual_depth,
-            restitution,
-            friction,
-            warm_normal_impulse: 0.0,
-            warm_tangent_impulse: [0.0, 0.0],
-        }];
+    if !manifold.is_empty() {
+        return manifold_to_constraints(
+            &manifold,
+            Some(a.body_handle),
+            b.body_handle,
+            Some(a.collider_handle),
+            Some(b.collider_handle),
+            &a.material,
+            &b.material,
+        );
     }
 
+    // Speculative CCD (still uses old swept_sphere_sphere until Step 4w).
     if should_add_speculative(
         a.velocity.magnitude() * dt,
         radius_a,
@@ -318,29 +309,18 @@ fn sphere_box_pair(
     contact_margin: f32,
 ) -> Vec<ContactConstraint> {
     let obb = Obb::new(box_state.center, box_state.rotation, half_extents);
-    let Some(c) = obb_sphere_contact(&obb, sphere.center, radius + contact_margin) else {
-        return Vec::new();
-    };
-    let raw_depth = c.depth - contact_margin;
-    let solver_depth = raw_depth.max(0.0);
-    let (restitution, friction) = ColliderMaterial::combine(&box_state.material, &sphere.material);
-    // Normal from obb_sphere points OBB→sphere. For body_a=box, body_b=sphere
+    let manifold = sphere_obb_manifold(&obb, sphere.center, radius, contact_margin);
+    // sphere_obb_manifold produces normal OBB→sphere. For body_a=box, body_b=sphere
     // the solver expects normal from A→B, which is OBB→sphere. Correct as-is.
-    vec![ContactConstraint {
-        body_a: Some(box_state.body_handle),
-        body_b: sphere.body_handle,
-        collider_a: Some(box_state.collider_handle),
-        collider_b: Some(sphere.collider_handle),
-        point: c.point,
-        normal: c.normal,
-        raw_normal: c.normal,
-        depth: solver_depth,
-        raw_depth,
-        restitution,
-        friction,
-        warm_normal_impulse: 0.0,
-        warm_tangent_impulse: [0.0, 0.0],
-    }]
+    manifold_to_constraints(
+        &manifold,
+        Some(box_state.body_handle),
+        sphere.body_handle,
+        Some(box_state.collider_handle),
+        Some(sphere.collider_handle),
+        &box_state.material,
+        &sphere.material,
+    )
 }
 
 fn box_sphere_pair(
@@ -362,29 +342,46 @@ fn box_box_pair(
 ) -> Vec<ContactConstraint> {
     let obb_a = Obb::new(a.center, a.rotation, he_a);
     let obb_b = Obb::new(b.center, b.rotation, he_b);
-    let raw_contacts = obb_obb_contacts(&obb_a, &obb_b);
-    let (restitution, friction) = ColliderMaterial::combine(&a.material, &b.material);
+    let manifold = obb_obb_manifold(&obb_a, &obb_b, contact_margin);
+    manifold_to_constraints(
+        &manifold,
+        Some(a.body_handle),
+        b.body_handle,
+        Some(a.collider_handle),
+        Some(b.collider_handle),
+        &a.material,
+        &b.material,
+    )
+}
 
-    raw_contacts
-        .into_iter()
-        .map(|c| {
-            let raw_depth = c.depth - contact_margin;
-            let solver_depth = raw_depth.max(0.0);
-            ContactConstraint {
-                body_a: Some(a.body_handle),
-                body_b: b.body_handle,
-                collider_a: Some(a.collider_handle),
-                collider_b: Some(b.collider_handle),
-                point: c.point,
-                normal: c.normal,
-                raw_normal: c.normal,
-                depth: solver_depth,
-                raw_depth,
-                restitution,
-                friction,
-                warm_normal_impulse: 0.0,
-                warm_tangent_impulse: [0.0, 0.0],
-            }
+/// Convert a `ContactManifold` from the collision library into solver `ContactConstraint`s.
+fn manifold_to_constraints(
+    manifold: &ContactManifold,
+    body_a: Option<RigidBodyHandle>,
+    body_b: RigidBodyHandle,
+    collider_a: Option<ColliderHandle>,
+    collider_b: Option<ColliderHandle>,
+    material_a: &ColliderMaterial,
+    material_b: &ColliderMaterial,
+) -> Vec<ContactConstraint> {
+    let (restitution, friction) = ColliderMaterial::combine(material_a, material_b);
+    manifold
+        .points
+        .iter()
+        .map(|cp| ContactConstraint {
+            body_a,
+            body_b,
+            collider_a,
+            collider_b,
+            point: cp.point,
+            normal: cp.normal,
+            raw_normal: cp.raw_normal,
+            depth: cp.depth,
+            raw_depth: cp.raw_depth,
+            restitution,
+            friction,
+            warm_normal_impulse: 0.0,
+            warm_tangent_impulse: [0.0, 0.0],
         })
         .collect()
 }
