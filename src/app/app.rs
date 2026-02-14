@@ -40,13 +40,13 @@ impl<'a, 'b> App<'a, 'b> {
         let (event_loop, window) = Self::create_window(window_width, window_height, app_title)?;
         let (_vulkan_context, renderer, resource_manager, texture_manager) =
             Self::create_rendering_context(&window, window_width, window_height)?;
-        let num_beach_balls = 5;
+        let num_beach_balls = 0;
         let num_boxes = 5;
         let (material_manager, grenade_materials, box_materials) =
             Self::create_materials(&texture_manager, num_boxes)?;
         let grenade_model = Self::create_grenade_model(&grenade_materials);
         let body_material = grenade_materials.body;
-        let box_half_extents = nalgebra::Vector3::new(0.5, 0.5, 0.5);
+        let box_half_extents = nalgebra::Vector3::new(0.5, 0.5, 4.5);
         let terrain_manager = Self::create_terrain(&texture_manager)?;
 
         let mut world = WorldBuilder::new()

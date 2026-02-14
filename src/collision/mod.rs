@@ -16,13 +16,14 @@ pub mod contact;
 pub mod contact_reducer;
 mod contact_legacy;
 pub mod discrete;
+pub mod mesh;
 mod mesh_patch;
 pub mod obb;
 pub mod sat;
 pub mod segment;
 pub mod shapes;
 mod shapes_legacy;
-mod sphere_triangle;
+pub mod sphere_triangle;
 pub mod support;
 mod swept;
 

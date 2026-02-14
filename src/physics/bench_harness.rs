@@ -239,12 +239,12 @@ impl FlatQuadGeometry {
         let v2 = Point3::new(half_size, y, half_size);
         let v3 = Point3::new(-half_size, y, half_size);
         let tri_a = PatchTriangle {
-            triangle: Triangle::new(v0, v1, v2),
-            neighbors: [None, None, Some(1)],
+            triangle: Triangle::new(v0, v2, v1),
+            neighbors: [Some(1), None, None],
         };
         let tri_b = PatchTriangle {
-            triangle: Triangle::new(v0, v2, v3),
-            neighbors: [Some(0), None, None],
+            triangle: Triangle::new(v0, v3, v2),
+            neighbors: [None, None, Some(0)],
         };
         Self {
             bounds: AABB::new(

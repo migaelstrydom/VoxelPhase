@@ -6,16 +6,15 @@ use std::collections::{HashMap, HashSet};
 
 use super::body::{RigidBody, RigidBodyDesc};
 use super::collider::{Collider, ColliderDesc, ColliderMaterial, ColliderShape};
-use super::collision::obb::Obb;
-use super::collision::obb_triangle::obb_triangle_contacts;
+use crate::collision::mesh::obb_patch::obb_patch_manifold;
+use crate::collision::mesh::seam_filter::filter_patch;
+use crate::collision::obb::Obb;
 use super::debug::{PhysicsDebugConfig, PhysicsDebugger};
 use super::grounding::{GroundingConfig, GroundingDetector};
 use super::handle::{ColliderHandle, RigidBodyHandle};
 use super::impulses::{ForceField, ForceFieldRegistry, PhysicsImpulse};
 use super::narrowphase::{
-    fix_internal_edge_normals, fix_internal_vertex_normals, generate_dynamic_contacts,
-    generate_static_contacts, ContactSource as MeshContactSource, NormalClusterConfig,
-    SourcedContact,
+    generate_dynamic_contacts, generate_static_contacts, NormalClusterConfig,
 };
 use super::pipeline::integration::{integrate_bodies, integrate_forces};
 use super::pipeline::manifold::ManifoldCache;
@@ -728,8 +727,8 @@ impl PhysicsWorld {
     /// Generate precise box-terrain contacts at a CCD hit position.
     ///
     /// Bounding-sphere sweep found the approximate hit. Now build an OBB at
-    /// the hit position (using the pre-integration rotation) and run SAT
-    /// against nearby triangles for accurate contact normals.
+    /// the hit position (using the pre-integration rotation) and run the
+    /// mesh-aware manifold pipeline for accurate contact normals.
     fn box_ccd_contacts(
         &self,
         candidate: &CcdCandidate,
@@ -747,37 +746,28 @@ impl PhysicsWorld {
         );
         let query = crate::collision::AABB::new(aabb_min - margin, aabb_max + margin);
         let patch = static_geometry.query_region(&query);
+        let filtered = filter_patch(&patch, 0.98);
+        let manifold = obb_patch_manifold(&obb, &filtered, self.config.contact_margin);
 
-        let mut sourced = Vec::new();
-        for (tri_idx, pt) in patch.triangles.iter().enumerate() {
-            for c in obb_triangle_contacts(&obb, &pt.triangle) {
-                sourced.push(SourcedContact {
-                    constraint: ContactConstraint {
-                        body_a: None,
-                        body_b: candidate.body_handle,
-                        collider_a: None,
-                        collider_b: None,
-                        point: c.point,
-                        normal: c.normal,
-                        raw_normal: c.normal,
-                        depth: 0.0,
-                        raw_depth: 0.0,
-                        restitution: candidate.material.restitution,
-                        friction: candidate.material.friction,
-                        warm_normal_impulse: 0.0,
-                        warm_tangent_impulse: [0.0, 0.0],
-                    },
-                    source: MeshContactSource {
-                        triangle_idx: tri_idx as u32,
-                        feature: c.feature,
-                    },
-                });
-            }
-        }
-        let threshold = self.config.normal_clustering.normal_cluster_dot.max(0.95);
-        let sourced = fix_internal_edge_normals(sourced, &patch, threshold);
-        let sourced = fix_internal_vertex_normals(sourced, &patch, threshold);
-        let mut contacts: Vec<_> = sourced.into_iter().map(|c| c.constraint).collect();
+        let mut contacts: Vec<ContactConstraint> = manifold
+            .points
+            .into_iter()
+            .map(|cp| ContactConstraint {
+                body_a: None,
+                body_b: candidate.body_handle,
+                collider_a: None,
+                collider_b: None,
+                point: cp.point,
+                normal: cp.normal,
+                raw_normal: cp.raw_normal,
+                depth: 0.0,
+                raw_depth: 0.0,
+                restitution: candidate.material.restitution,
+                friction: candidate.material.friction,
+                warm_normal_impulse: 0.0,
+                warm_tangent_impulse: [0.0, 0.0],
+            })
+            .collect();
 
         if contacts.is_empty() {
             // Fallback: use the sweep hit directly
