@@ -4,7 +4,7 @@
 
 use nalgebra::{Point3, Vector3};
 
-use super::ContactPoint;
+use super::contact_legacy::ContactPoint;
 use crate::physics::ContactFeature;
 
 /// A triangle represented by three vertices.

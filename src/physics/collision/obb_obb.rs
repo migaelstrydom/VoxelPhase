@@ -22,7 +22,14 @@ fn face_vertices(
     obb: &Obb,
     axis_index: usize,
     sign: f32,
-) -> (Vec<Point3<f32>>, Point3<f32>, Vector3<f32>, Vector3<f32>, f32, f32) {
+) -> (
+    Vec<Point3<f32>>,
+    Point3<f32>,
+    Vector3<f32>,
+    Vector3<f32>,
+    f32,
+    f32,
+) {
     let axes = obb.axes();
     let he = obb.half_extents;
     let (u_idx, v_idx) = match axis_index {
@@ -79,7 +86,11 @@ fn reduce_contacts(mut contacts: Vec<ObbObbContact>) -> Vec<ObbObbContact> {
     if contacts.len() <= 4 {
         return contacts;
     }
-    contacts.sort_by(|a, b| b.depth.partial_cmp(&a.depth).unwrap_or(std::cmp::Ordering::Equal));
+    contacts.sort_by(|a, b| {
+        b.depth
+            .partial_cmp(&a.depth)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     let mut selected = Vec::new();
     selected.push(contacts.remove(0));
     if contacts.is_empty() {
@@ -312,8 +323,16 @@ mod tests {
         let contacts = obb_obb_contacts(&a, &b);
         assert!(!contacts.is_empty());
         for c in &contacts {
-            assert!(c.normal.x > 0.9, "Normal should point +X, got {:?}", c.normal);
-            assert!((c.depth - 0.5).abs() < 0.1, "Expected ~0.5 depth, got {}", c.depth);
+            assert!(
+                c.normal.x > 0.9,
+                "Normal should point +X, got {:?}",
+                c.normal
+            );
+            assert!(
+                (c.depth - 0.5).abs() < 0.1,
+                "Expected ~0.5 depth, got {}",
+                c.depth
+            );
         }
     }
 
@@ -350,6 +369,10 @@ mod tests {
         let a = unit_box_at(Point3::new(0.0, 0.0, 0.0));
         let b = unit_box_at(Point3::new(0.0, 1.5, 0.0));
         let contacts = obb_obb_contacts(&a, &b);
-        assert!(contacts.len() <= 4, "Should reduce to at most 4 contacts, got {}", contacts.len());
+        assert!(
+            contacts.len() <= 4,
+            "Should reduce to at most 4 contacts, got {}",
+            contacts.len()
+        );
     }
 }

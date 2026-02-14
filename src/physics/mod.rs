@@ -51,7 +51,7 @@ mod world;
 mod bench_harness;
 
 pub use body::RigidBodyDesc;
-pub use collider::ColliderDesc;
+pub use collider::{ColliderDesc, ColliderShape};
 pub use handle::RigidBodyHandle;
 pub use impulses::{ForceField, PhysicsImpulse, PhysicsImpulseQueue};
 pub use narrowphase::ContactFeature;

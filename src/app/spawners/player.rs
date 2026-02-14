@@ -30,7 +30,7 @@ pub fn spawn_player(world: &mut World, initial_pos: nalgebra::Point3<f32>) -> En
         let mut physics = world.write_resource::<PhysicsResource>();
         let body_desc = RigidBodyDesc::dynamic()
             .position(initial_pos)
-            .gravity_scale(0.0)
+            .gravity_scale(1.0)
             .linear_damping(0.0)
             .angular_damping(1.0);
         let body_handle = physics.0.create_body(body_desc);

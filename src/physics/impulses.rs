@@ -109,12 +109,14 @@ impl ForceField {
             Self::Boundary { bounds, spring_k } => {
                 let mut push = Vector3::zeros();
 
+                let y_push = 1.0;
+
                 if body_pos.x < bounds.min.x {
                     push.x = bounds.min.x - body_pos.x;
-                    push.y = 0.1;
+                    push.y = y_push;
                 } else if body_pos.x > bounds.max.x {
                     push.x = bounds.max.x - body_pos.x;
-                    push.y = 0.1;
+                    push.y = y_push;
                 }
 
                 if body_pos.y < bounds.min.y {
@@ -125,10 +127,10 @@ impl ForceField {
 
                 if body_pos.z < bounds.min.z {
                     push.z = bounds.min.z - body_pos.z;
-                    push.y = 0.1;
+                    push.y = y_push;
                 } else if body_pos.z > bounds.max.z {
                     push.z = bounds.max.z - body_pos.z;
-                    push.y = 0.1;
+                    push.y = y_push;
                 }
 
                 if push.magnitude_squared() < 1e-10 {
