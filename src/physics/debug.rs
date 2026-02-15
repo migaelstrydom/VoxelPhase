@@ -11,6 +11,9 @@ use super::world::{ContactEvent, ContactSource};
 use crate::debug::{DebugLines, DebugLog, DebugOverlays};
 use crate::rendering::Colour;
 
+// Ignore unused fields and structures for the whole file, since these are only used for debugging.
+#[allow(unused)]
+
 /// Debug rendering configuration.
 #[derive(Debug, Clone)]
 pub struct PhysicsDebugConfig {
@@ -271,6 +274,7 @@ impl PhysicsDebugger {
 
 // === Internal Debug Statistics Structs ===
 
+#[allow(unused)]
 #[derive(Debug, Clone)]
 struct ContactSample {
     depth: f32,
@@ -282,6 +286,7 @@ struct ContactSample {
     normal: Vector3<f32>,
 }
 
+#[allow(unused)]
 #[derive(Debug, Clone)]
 struct ContactDebugStats {
     total: usize,
@@ -299,6 +304,7 @@ struct ContactDebugStats {
     samples: Vec<ContactSample>,
 }
 
+#[allow(unused)]
 #[derive(Debug, Clone)]
 struct BodyContactStats {
     handle: RigidBodyHandle,
@@ -317,6 +323,7 @@ struct BodyContactStats {
     angular_speed: f32,
 }
 
+#[allow(unused)]
 #[derive(Debug, Clone)]
 struct BodyPostSolveStats {
     handle: RigidBodyHandle,
@@ -327,6 +334,7 @@ struct BodyPostSolveStats {
     angular_speed: f32,
 }
 
+#[allow(unused)]
 #[derive(Clone)]
 struct BodyContactAccum {
     total: usize,

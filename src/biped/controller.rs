@@ -54,10 +54,7 @@ impl BipedController {
             config.stride_length,
             config.step_height,
         );
-        let arm_gait = GaitCycle::arm_swing(
-            config.arm_length(),
-            config.arm_swing_amplitude,
-        );
+        let arm_gait = GaitCycle::arm_swing(config.arm_length(), config.arm_swing_amplitude);
 
         Self {
             config,
@@ -373,12 +370,6 @@ impl BipedController {
     /// Whether the character has any ground contact.
     pub fn is_grounded(&self) -> bool {
         self.state.is_grounded
-    }
-
-    /// Set pelvis position (called by collision system).
-    pub fn set_pelvis_position(&mut self, position: Point3<f32>) {
-        self.state.pelvis_position = position;
-        self.skeleton.pelvis = position;
     }
 
     /// Get mesh vertices and indices for rendering.

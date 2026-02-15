@@ -9,10 +9,6 @@ use nalgebra::{Matrix4, UnitQuaternion, Vector3};
 use crate::rendering::material::MaterialId;
 use crate::rendering::vertex::Vertex;
 
-/// Index into a Model's parts array.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct PartIndex(pub u32);
-
 /// Local transform relative to parent.
 #[derive(Clone, Debug)]
 pub struct Transform {

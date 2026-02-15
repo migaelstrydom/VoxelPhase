@@ -49,30 +49,13 @@ impl RigidBodyDesc {
         Self::default()
     }
 
-    pub fn kinematic() -> Self {
-        Self {
-            body_type: BodyType::Kinematic,
-            ..Self::default()
-        }
-    }
-
     pub fn position(mut self, position: Point3<f32>) -> Self {
         self.position = position;
         self
     }
 
-    pub fn rotation(mut self, rotation: UnitQuaternion<f32>) -> Self {
-        self.rotation = rotation;
-        self
-    }
-
     pub fn linear_velocity(mut self, velocity: Vector3<f32>) -> Self {
         self.linear_velocity = velocity;
-        self
-    }
-
-    pub fn angular_velocity(mut self, velocity: Vector3<f32>) -> Self {
-        self.angular_velocity = velocity;
         self
     }
 
@@ -148,10 +131,6 @@ impl RigidBody {
     }
 
     // === Accessors ===
-
-    pub fn body_type(&self) -> BodyType {
-        self.body_type
-    }
 
     pub fn is_dynamic(&self) -> bool {
         self.body_type == BodyType::Dynamic

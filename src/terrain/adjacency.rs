@@ -186,7 +186,7 @@ impl AdjacencyMap {
         for (tri_ref, positions) in old_triangles {
             let edges = self.triangle_edges(positions);
 
-            for (edge_idx, edge) in edges.iter().enumerate() {
+            for edge in edges.iter() {
                 if let Some(entries) = self.edge_map.get_mut(edge) {
                     // If this was a manifold edge (2 entries), the surviving
                     // triangle loses its neighbor on this edge.
@@ -438,10 +438,7 @@ mod tests {
 
         // Now simulate removing T1 (the middle triangle) from a region.
         // Region covers only T1's area.
-        let dirty_region = AABB::new(
-            Point3::new(0.9, -0.1, -0.1),
-            Point3::new(2.1, 0.1, 0.1),
-        );
+        let dirty_region = AABB::new(Point3::new(0.9, -0.1, -0.1), Point3::new(2.1, 0.1, 0.1));
 
         // Collect old triangles in the dirty region.
         let mut old_tris = Vec::new();
@@ -450,10 +447,7 @@ mod tests {
         // All 3 triangles intersect this region (they all have vertices
         // in the y=0 range). Let's use a tighter region that only catches T1.
         old_tris.clear();
-        let tight_region = AABB::new(
-            Point3::new(1.1, -0.1, -0.1),
-            Point3::new(1.9, 0.5, 0.1),
-        );
+        let tight_region = AABB::new(Point3::new(1.1, -0.1, -0.1), Point3::new(1.9, 0.5, 0.1));
         octree.collect_triangles_in_region(&tight_region, &mut old_tris);
 
         // Remove T1 from the octree (simulate clear).

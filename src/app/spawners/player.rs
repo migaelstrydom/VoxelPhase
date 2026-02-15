@@ -3,7 +3,7 @@ use specs::{Builder, Entity, World, WorldExt};
 
 use crate::biped::{BipedConfig, BipedController};
 use crate::components::{
-    Acceleration, Gravity, MotionState, Orientation, PhysicsBody, Position, Renderable,
+    Acceleration, Gravity, MotionState, Orientation, Position, Renderable,
     RigidBodyComponent, Rotation, Velocity, VelocityDriven,
 };
 use crate::physics::{ColliderDesc, RigidBodyDesc};
@@ -20,11 +20,6 @@ pub fn spawn_player(world: &mut World, initial_pos: nalgebra::Point3<f32>) -> En
     let biped_config = BipedConfig::default();
     let body_radius = biped_config.body_radius;
     let biped_controller = BipedController::new(biped_config, initial_pos);
-    let physics_body = PhysicsBody {
-        restitution: 0.0,
-        friction: 0.3,
-        mass: 50.0,
-    };
 
     let body_handle = {
         let mut physics = world.write_resource::<PhysicsResource>();
@@ -36,8 +31,8 @@ pub fn spawn_player(world: &mut World, initial_pos: nalgebra::Point3<f32>) -> En
         let body_handle = physics.0.create_body(body_desc);
         let collider_desc = ColliderDesc::sphere(body_radius)
             .density(30.0)
-            .restitution(physics_body.restitution)
-            .friction(physics_body.friction);
+            .restitution(0.0)
+            .friction(0.3);
         physics.0.attach_collider(body_handle, collider_desc);
         body_handle
     };
@@ -61,7 +56,6 @@ pub fn spawn_player(world: &mut World, initial_pos: nalgebra::Point3<f32>) -> En
         .with(MotionState::new(initial_pos))
         .with(SensorSet::default())
         .with(ContactCandidates::default())
-        .with(physics_body)
         .with(RigidBodyComponent(body_handle))
         .with(VelocityDriven)
         .build()

@@ -1,6 +1,6 @@
 //! Math utilities for physics calculations.
 
-use nalgebra::{Isometry3, Matrix3, Point3, UnitQuaternion, Vector3};
+use nalgebra::{Matrix3, UnitQuaternion, Vector3};
 
 /// Compute the inertia tensor for a solid sphere.
 ///
@@ -29,11 +29,6 @@ pub fn box_inertia_tensor(mass: f32, half_extents: Vector3<f32>) -> Matrix3<f32>
     let i_zz = factor * (w * w + h * h);
 
     Matrix3::from_diagonal(&Vector3::new(i_xx, i_yy, i_zz))
-}
-
-/// Create an isometry from position and rotation.
-pub fn isometry(position: Point3<f32>, rotation: UnitQuaternion<f32>) -> Isometry3<f32> {
-    Isometry3::from_parts(position.coords.into(), rotation)
 }
 
 /// Transform a world-space inertia tensor to local frame.

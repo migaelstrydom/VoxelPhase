@@ -3,7 +3,6 @@ use std::sync::Arc;
 use nalgebra::{Point3, UnitQuaternion, Vector3};
 use specs::{Component, DenseVecStorage, VecStorage};
 
-use crate::collision::Sphere;
 use crate::model::Model;
 use crate::physics::RigidBodyHandle;
 use crate::rendering::camera::Camera;
@@ -44,28 +43,6 @@ impl MotionState {
         Self {
             prev: position,
             predicted: position,
-        }
-    }
-}
-
-/// Physical properties for collision response.
-#[derive(Component, Debug, Clone, Copy)]
-#[storage(VecStorage)]
-pub struct PhysicsBody {
-    /// Bounciness (0 = no bounce, 1 = perfect bounce).
-    pub restitution: f32,
-    /// Friction coefficient.
-    pub friction: f32,
-    /// Mass in kilograms.
-    pub mass: f32,
-}
-
-impl Default for PhysicsBody {
-    fn default() -> Self {
-        Self {
-            restitution: 0.2,
-            friction: 0.8,
-            mass: 1.0,
         }
     }
 }

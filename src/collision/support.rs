@@ -10,6 +10,7 @@ use super::obb::Obb;
 use super::sphere_triangle::Triangle;
 
 /// The furthest point on a convex shape in a given direction.
+#[allow(unused)]
 pub trait ConvexSupport {
     /// Returns the point on the shape's surface that is furthest along `direction`
     /// (world space). Used by GJK, EPA, and conservative advancement.
@@ -48,9 +49,21 @@ impl ConvexSupport for Obb {
         // Sign-flip of half_extents: each component takes the sign of the local direction.
         // Uses >= 0.0 instead of copysign to avoid -0.0 issues from negated vectors.
         let local_support = Vector3::new(
-            if local_dir.x >= 0.0 { self.half_extents.x } else { -self.half_extents.x },
-            if local_dir.y >= 0.0 { self.half_extents.y } else { -self.half_extents.y },
-            if local_dir.z >= 0.0 { self.half_extents.z } else { -self.half_extents.z },
+            if local_dir.x >= 0.0 {
+                self.half_extents.x
+            } else {
+                -self.half_extents.x
+            },
+            if local_dir.y >= 0.0 {
+                self.half_extents.y
+            } else {
+                -self.half_extents.y
+            },
+            if local_dir.z >= 0.0 {
+                self.half_extents.z
+            } else {
+                -self.half_extents.z
+            },
         );
 
         self.center + rot * local_support
@@ -77,8 +90,7 @@ impl ConvexSupport for Triangle {
     }
 
     fn bounding_radius(&self) -> f32 {
-        let center =
-            Point3::from((self.v0.coords + self.v1.coords + self.v2.coords) / 3.0);
+        let center = Point3::from((self.v0.coords + self.v1.coords + self.v2.coords) / 3.0);
         let r0 = (self.v0 - center).magnitude();
         let r1 = (self.v1 - center).magnitude();
         let r2 = (self.v2 - center).magnitude();

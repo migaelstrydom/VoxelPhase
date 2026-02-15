@@ -10,8 +10,6 @@ pub struct PlayerConfig {
     pub jump_speed: f32,
     /// Gravity acceleration (positive value, applied downward)
     pub gravity: f32,
-    /// Maximum falling speed (terminal velocity) - prevents tunneling through terrain
-    pub terminal_velocity: f32,
 }
 
 impl Default for PlayerConfig {
@@ -21,7 +19,6 @@ impl Default for PlayerConfig {
             air_acceleration: 8.0,
             jump_speed: 7.0,
             gravity: 9.81,
-            terminal_velocity: 30.0, // Safe value: should be < radius / typical_frame_time
         }
     }
 }

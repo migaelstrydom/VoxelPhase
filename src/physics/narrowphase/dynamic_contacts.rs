@@ -12,7 +12,7 @@ use crate::collision::discrete::sphere_sphere::sphere_sphere_manifold;
 use crate::collision::obb::Obb;
 use crate::physics::body::RigidBody;
 use crate::physics::collider::{Collider, ColliderMaterial, ColliderShape};
-use crate::physics::collision::swept_sphere_sphere;
+use crate::collision::continuous::swept_sphere_sphere;
 use crate::physics::handle::{ColliderHandle, RigidBodyHandle};
 use crate::physics::pipeline::solver::ContactConstraint;
 
@@ -245,7 +245,7 @@ fn sphere_sphere_pair(
         );
     }
 
-    // Speculative CCD (still uses old swept_sphere_sphere until Step 4w).
+    // Speculative CCD.
     if should_add_speculative(
         a.velocity.magnitude() * dt,
         radius_a,

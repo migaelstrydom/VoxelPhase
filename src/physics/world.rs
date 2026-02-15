@@ -808,7 +808,7 @@ fn sweep_sphere_against_static(
     end: Point3<f32>,
     radius: f32,
     static_geometry: &dyn StaticGeometry,
-) -> Option<crate::collision::SweptContact> {
+) -> Option<crate::collision::continuous::SweptContact> {
     let query = crate::collision::AABB::new(
         Point3::new(
             start.x.min(end.x) - radius,
@@ -823,10 +823,10 @@ fn sweep_sphere_against_static(
     );
     let patch = static_geometry.query_region(&query);
 
-    let mut earliest: Option<crate::collision::SweptContact> = None;
+    let mut earliest: Option<crate::collision::continuous::SweptContact> = None;
     for pt in &patch.triangles {
         if let Some(contact) =
-            crate::collision::swept_sphere_triangle(start, end, radius, &pt.triangle)
+            crate::collision::continuous::swept_sphere_triangle(start, end, radius, &pt.triangle)
         {
             if earliest.is_none() || contact.t < earliest.as_ref().unwrap().t {
                 earliest = Some(contact);

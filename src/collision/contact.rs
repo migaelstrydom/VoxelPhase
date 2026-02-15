@@ -34,6 +34,7 @@ impl FeatureId {
     }
 
     /// Construct from a set of mesh triangle indices composing a merged face.
+    #[allow(unused)]
     pub fn from_triangle_set(indices: &[u32]) -> Self {
         let mut hash: u64 = 0xcbf29ce484222325; // FNV-1a offset basis
         for &idx in indices {
@@ -170,24 +171,14 @@ mod tests {
 
     #[test]
     fn contact_point_clamps_depth() {
-        let cp = ContactPoint::new(
-            Point3::origin(),
-            Vector3::y(),
-            -0.01,
-            FeatureId::SINGLE,
-        );
+        let cp = ContactPoint::new(Point3::origin(), Vector3::y(), -0.01, FeatureId::SINGLE);
         assert_eq!(cp.depth, 0.0);
         assert_eq!(cp.raw_depth, -0.01);
     }
 
     #[test]
     fn contact_point_positive_depth() {
-        let cp = ContactPoint::new(
-            Point3::origin(),
-            Vector3::y(),
-            0.05,
-            FeatureId::SINGLE,
-        );
+        let cp = ContactPoint::new(Point3::origin(), Vector3::y(), 0.05, FeatureId::SINGLE);
         assert_eq!(cp.depth, 0.05);
         assert_eq!(cp.raw_depth, 0.05);
     }
@@ -208,12 +199,7 @@ mod tests {
 
     #[test]
     fn manifold_single() {
-        let cp = ContactPoint::new(
-            Point3::origin(),
-            Vector3::y(),
-            0.1,
-            FeatureId::SINGLE,
-        );
+        let cp = ContactPoint::new(Point3::origin(), Vector3::y(), 0.1, FeatureId::SINGLE);
         let m = ContactManifold::single(cp);
         assert_eq!(m.len(), 1);
     }

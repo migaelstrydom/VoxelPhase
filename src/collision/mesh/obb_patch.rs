@@ -9,10 +9,10 @@
 use nalgebra::{Point3, Vector3};
 use smallvec::SmallVec;
 
-use crate::collision::contact::{ContactManifold, ContactPoint, FeatureId};
+use crate::collision::contact::{ContactManifold, ContactPoint};
 use crate::collision::contact_reducer::ContactReducer;
 use crate::collision::discrete::clipping::{clip_polygon, obb_face};
-use crate::collision::mesh::seam_filter::{ContactEdge, ContactFace, FilteredPatch};
+use crate::collision::mesh::seam_filter::{ContactFace, FilteredPatch};
 use crate::collision::obb::Obb;
 use crate::collision::segment::segment_segment_closest_points;
 
@@ -105,9 +105,7 @@ pub fn obb_patch_manifold(
 }
 
 /// Result of testing OBB overlap against a single face.
-struct FaceOverlap<'a> {
-    face: &'a ContactFace,
-    depth: f32,
+struct FaceOverlap {
     /// Face normal oriented toward the OBB center.
     normal: Vector3<f32>,
 }
@@ -116,11 +114,11 @@ struct FaceOverlap<'a> {
 ///
 /// Allows the OBB center to be slightly behind the face plane (negative
 /// signed_dist) so contacts survive small solver-permitted penetrations.
-fn test_obb_face_overlap<'a>(
+fn test_obb_face_overlap(
     obb: &Obb,
-    face: &'a ContactFace,
+    face: &ContactFace,
     contact_margin: f32,
-) -> Option<FaceOverlap<'a>> {
+) -> Option<FaceOverlap> {
     let normal = face.normal;
     let face_point = face.vertices[0];
 
@@ -143,7 +141,7 @@ fn test_obb_face_overlap<'a>(
         return None;
     }
 
-    Some(FaceOverlap { face, depth, normal })
+    Some(FaceOverlap { normal })
 }
 
 /// Information about the OBB support face for clipping.
@@ -223,11 +221,7 @@ fn clip_against_polygon(
 }
 
 /// Fallback: test OBB edges against boundary edges of the patch.
-fn obb_vs_boundary_edges(
-    obb: &Obb,
-    patch: &FilteredPatch,
-    contact_margin: f32,
-) -> ContactManifold {
+fn obb_vs_boundary_edges(obb: &Obb, patch: &FilteredPatch, contact_margin: f32) -> ContactManifold {
     if patch.boundary_edges.is_empty() {
         return ContactManifold::empty();
     }
@@ -237,7 +231,8 @@ fn obb_vs_boundary_edges(
 
     for boundary_edge in &patch.boundary_edges {
         for &(obb_a, obb_b) in &obb_edges {
-            let (pa, pb) = segment_segment_closest_points(obb_a, obb_b, boundary_edge.a, boundary_edge.b);
+            let (pa, pb) =
+                segment_segment_closest_points(obb_a, obb_b, boundary_edge.a, boundary_edge.b);
             let delta = pa - pb;
             let dist_sq = delta.magnitude_squared();
             let expanded = contact_margin;
@@ -291,7 +286,11 @@ fn obb_edge_segments(obb: &Obb) -> [(Point3<f32>, Point3<f32>); 12] {
 }
 
 /// Test if a point lies inside a convex polygon (winding-agnostic).
-fn point_in_convex_polygon(point: &Point3<f32>, verts: &[Point3<f32>], normal: &Vector3<f32>) -> bool {
+fn point_in_convex_polygon(
+    point: &Point3<f32>,
+    verts: &[Point3<f32>],
+    normal: &Vector3<f32>,
+) -> bool {
     let n = verts.len();
     let mut positive = 0u32;
     let mut negative = 0u32;
@@ -313,6 +312,7 @@ fn point_in_convex_polygon(point: &Point3<f32>, verts: &[Point3<f32>], normal: &
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::collision::contact::FeatureId;
     use crate::collision::mesh::seam_filter::FilteredPatch;
     use nalgebra::UnitQuaternion;
 
@@ -349,10 +349,19 @@ mod tests {
         let obb = unit_obb_at(0.5);
         let m = obb_patch_manifold(&obb, &patch, 0.0);
 
-        assert_eq!(m.len(), 4, "Box resting flat should produce 4 contacts, got {}", m.len());
+        assert_eq!(
+            m.len(),
+            4,
+            "Box resting flat should produce 4 contacts, got {}",
+            m.len()
+        );
         for c in &m.points {
             assert!(c.normal.y > 0.99, "Normal should point up");
-            assert!(c.raw_depth.abs() < 0.01, "Should be touching, got {}", c.raw_depth);
+            assert!(
+                c.raw_depth.abs() < 0.01,
+                "Should be touching, got {}",
+                c.raw_depth
+            );
         }
     }
 
@@ -364,7 +373,11 @@ mod tests {
 
         assert!(!m.is_empty(), "Should have contacts");
         for c in &m.points {
-            assert!(c.raw_depth > 0.1, "Expected penetration, got {}", c.raw_depth);
+            assert!(
+                c.raw_depth > 0.1,
+                "Expected penetration, got {}",
+                c.raw_depth
+            );
         }
     }
 
@@ -387,7 +400,11 @@ mod tests {
 
         assert!(!m.is_empty(), "Margin should catch nearby contacts");
         for c in &m.points {
-            assert!(c.raw_depth < 0.0, "Should be margin-only, got {}", c.raw_depth);
+            assert!(
+                c.raw_depth < 0.0,
+                "Should be margin-only, got {}",
+                c.raw_depth
+            );
             assert_eq!(c.depth, 0.0, "Solver depth should be 0 for margin contacts");
         }
     }
@@ -395,8 +412,7 @@ mod tests {
     #[test]
     fn rotated_box_on_flat_face() {
         let patch = large_flat_patch();
-        let rot =
-            UnitQuaternion::from_axis_angle(&Vector3::z_axis(), std::f32::consts::FRAC_PI_4);
+        let rot = UnitQuaternion::from_axis_angle(&Vector3::z_axis(), std::f32::consts::FRAC_PI_4);
         let obb = Obb::new(
             Point3::new(0.0, 0.707, 0.0),
             rot,

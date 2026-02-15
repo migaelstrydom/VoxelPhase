@@ -11,16 +11,14 @@ use nalgebra::{Point3, Vector3};
 use rustc_hash::FxHashMap;
 use std::time::Instant;
 
+use super::adjacency::AdjacencyMap;
+use super::mesh_octree::MeshOctree;
+use super::svo::SparseVoxelOctree;
 use crate::collision::{MeshPatch, PatchTriangle, AABB};
 use crate::core::error::EngineResult;
 use crate::physics::StaticGeometry;
 use crate::rendering::vertex::Vertex;
 use crate::resources::textures::{TextureHandle, TextureManager};
-
-use super::adjacency::AdjacencyMap;
-use super::mesh_octree::MeshOctree;
-use super::svo::SparseVoxelOctree;
-use super::voxel::Voxel;
 
 /// Unified terrain manager handling storage, collision, and rendering.
 ///
@@ -349,6 +347,9 @@ impl TerrainManager {
         self.mesh.leaf_count()
     }
 }
+
+#[cfg(test)]
+use crate::terrain::voxel::Voxel;
 
 #[cfg(test)]
 impl TerrainManager {

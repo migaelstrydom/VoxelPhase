@@ -7,7 +7,8 @@ use nalgebra::Point3;
 use specs::{Entities, Join, Read, System, Write, WriteStorage};
 
 use super::probe::{ContactCandidate, ContactCandidates, SensorSet};
-use crate::collision::{swept_sphere_triangle, AABB};
+use crate::collision::continuous::{swept_sphere_triangle, SweptContact};
+use crate::collision::AABB;
 use crate::debug::DebugOverlays;
 use crate::physics::StaticGeometry;
 use crate::terrain::TerrainManager;
@@ -70,7 +71,7 @@ impl<'a> System<'a> for SensorProbeSystem {
                     {
                         if earliest
                             .as_ref()
-                            .map_or(true, |e: &crate::collision::SweptContact| {
+                            .map_or(true, |e: &SweptContact| {
                                 contact.t < e.t
                             })
                         {

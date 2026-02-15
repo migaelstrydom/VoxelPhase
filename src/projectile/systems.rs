@@ -18,7 +18,7 @@ use crate::components::{
 use crate::explosion::Explosion;
 use crate::input::GameplayActions;
 use crate::model::Model;
-use crate::physics::{ColliderDesc, ContactEvent, ContactSource, RigidBodyDesc, RigidBodyHandle};
+use crate::physics::{ColliderDesc, ContactEvent, RigidBodyDesc, RigidBodyHandle};
 use crate::player::Player;
 use crate::systems::PhysicsResource;
 use crate::time::Time;

@@ -134,12 +134,4 @@ impl NormalClusterer {
 
         merged
     }
-
-    pub fn cluster_with_pre_reduction(
-        &self,
-        contacts: Vec<ContactConstraint>,
-    ) -> Vec<ContactConstraint> {
-        let reduced = self.reducer.reduce(contacts);
-        self.cluster(reduced)
-    }
 }

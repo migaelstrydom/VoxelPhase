@@ -41,7 +41,7 @@ pub fn sphere_obb_manifold(
         return exterior_contact(obb, sphere_center, sphere_radius, expanded_radius);
     }
 
-    interior_contact(obb, sphere_center, sphere_radius, &axes, &local)
+    interior_contact(obb, sphere_radius, &axes, &local)
 }
 
 /// Sphere center is outside the OBB: use closest-point projection.
@@ -75,7 +75,6 @@ fn exterior_contact(
 /// Sphere center is inside the OBB: find nearest face and push out.
 fn interior_contact(
     obb: &Obb,
-    sphere_center: Point3<f32>,
     sphere_radius: f32,
     axes: &[Vector3<f32>; 3],
     local: &[f32; 3],
@@ -101,9 +100,21 @@ fn interior_contact(
     // Contact point on the nearest face, projected from sphere center.
     let mut contact_point = obb.center;
     let clamped = [
-        if min_axis == 0 { sign * obb.half_extents.x } else { local[0] },
-        if min_axis == 1 { sign * obb.half_extents.y } else { local[1] },
-        if min_axis == 2 { sign * obb.half_extents.z } else { local[2] },
+        if min_axis == 0 {
+            sign * obb.half_extents.x
+        } else {
+            local[0]
+        },
+        if min_axis == 1 {
+            sign * obb.half_extents.y
+        } else {
+            local[1]
+        },
+        if min_axis == 2 {
+            sign * obb.half_extents.z
+        } else {
+            local[2]
+        },
     ];
     for i in 0..3 {
         contact_point += axes[i] * clamped[i];
@@ -114,7 +125,12 @@ fn interior_contact(
     let face_idx = (min_axis as u32) * 2 + if sign > 0.0 { 0 } else { 1 };
     let feature_id = FeatureId::from_face(face_idx);
 
-    ContactManifold::single(ContactPoint::new(contact_point, normal, raw_depth, feature_id))
+    ContactManifold::single(ContactPoint::new(
+        contact_point,
+        normal,
+        raw_depth,
+        feature_id,
+    ))
 }
 
 /// Classify a closest point on the OBB surface into a face feature.
@@ -185,8 +201,7 @@ mod tests {
     #[test]
     fn sphere_near_corner() {
         let m = sphere_obb_manifold(&unit_box(), Point3::new(1.5, 1.5, 1.5), 1.0, 0.0);
-        let dist_to_corner =
-            (Point3::new(1.5, 1.5, 1.5) - Point3::new(1.0, 1.0, 1.0)).magnitude();
+        let dist_to_corner = (Point3::new(1.5, 1.5, 1.5) - Point3::new(1.0, 1.0, 1.0)).magnitude();
         if dist_to_corner < 1.0 {
             assert_eq!(m.len(), 1);
         } else {
@@ -208,7 +223,11 @@ mod tests {
         let m = sphere_obb_manifold(&unit_box(), Point3::new(2.05, 0.0, 0.0), 1.0, 0.1);
         assert_eq!(m.len(), 1);
         let c = &m.points[0];
-        assert!(c.raw_depth < 0.0, "Should be margin-only, got {}", c.raw_depth);
+        assert!(
+            c.raw_depth < 0.0,
+            "Should be margin-only, got {}",
+            c.raw_depth
+        );
         assert_eq!(c.depth, 0.0);
     }
 

@@ -157,13 +157,6 @@ impl ForceFieldRegistry {
         idx
     }
 
-    /// Remove a force field by index.
-    pub fn remove(&mut self, index: usize) {
-        if index < self.fields.len() {
-            self.fields.swap_remove(index);
-        }
-    }
-
     pub fn iter(&self) -> impl Iterator<Item = &ForceField> {
         self.fields.iter()
     }

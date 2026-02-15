@@ -125,8 +125,15 @@ pub fn obb_obb_manifold(a: &Obb, b: &Obb, contact_margin: f32) -> ContactManifol
 
     match best_category {
         MinAxis::FaceA(_) | MinAxis::FaceB(_) => {
-            let manifold =
-                face_face_contacts(a, b, &axes_a, &axes_b, normal, contact_margin, &best_category);
+            let manifold = face_face_contacts(
+                a,
+                b,
+                &axes_a,
+                &axes_b,
+                normal,
+                contact_margin,
+                &best_category,
+            );
             if manifold.is_empty() {
                 if let Some((a_idx, b_idx, edge_axis, edge_overlap)) = best_edge_candidate {
                     // Fallback for near-degenerate face clipping: preserve contact when SAT
@@ -737,14 +744,21 @@ mod tests {
             rot_a,
             Vector3::new(1.0, 1.0, 1.0),
         );
-        let b = Obb::new(Point3::new(1.9, 0.25, 0.15), rot_b, Vector3::new(1.0, 1.0, 1.0));
+        let b = Obb::new(
+            Point3::new(1.9, 0.25, 0.15),
+            rot_b,
+            Vector3::new(1.0, 1.0, 1.0),
+        );
 
         let m1 = obb_obb_manifold(&a, &b, 0.0);
         let m2 = obb_obb_manifold(&a, &b, 0.0);
         assert_eq!(m1.len(), m2.len(), "Contact count should be deterministic");
 
         for (cp1, cp2) in m1.points.iter().zip(m2.points.iter()) {
-            assert_eq!(cp1.feature_id, cp2.feature_id, "Feature ordering should be stable");
+            assert_eq!(
+                cp1.feature_id, cp2.feature_id,
+                "Feature ordering should be stable"
+            );
             assert!(
                 (cp1.point - cp2.point).magnitude() <= 1e-6,
                 "Point ordering/value should be stable: {:?} vs {:?}",
@@ -778,7 +792,11 @@ mod tests {
                 Vector3::new(1.0, 1.0, 1.0),
             );
             let b = Obb::new(
-                Point3::new(span(next_f32(), 2.2), span(next_f32(), 2.2), span(next_f32(), 2.2)),
+                Point3::new(
+                    span(next_f32(), 2.2),
+                    span(next_f32(), 2.2),
+                    span(next_f32(), 2.2),
+                ),
                 rot_b,
                 Vector3::new(1.0, 1.0, 1.0),
             );

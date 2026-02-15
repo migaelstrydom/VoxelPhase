@@ -34,9 +34,10 @@
 //! let pos = physics.body(body).unwrap().position();
 //! ```
 
+#[cfg(test)]
+mod bench_harness;
 mod body;
 mod collider;
-mod collision;
 mod debug;
 pub mod grounding;
 mod handle;
@@ -47,13 +48,10 @@ mod pipeline;
 mod sleep;
 mod static_geometry;
 mod world;
-#[cfg(test)]
-mod bench_harness;
 
 pub use body::RigidBodyDesc;
 pub use collider::{ColliderDesc, ColliderShape};
 pub use handle::RigidBodyHandle;
 pub use impulses::{ForceField, PhysicsImpulse, PhysicsImpulseQueue};
-pub use narrowphase::ContactFeature;
 pub use static_geometry::StaticGeometry;
-pub use world::{ContactEvent, ContactSource, PhysicsWorld};
+pub use world::{ContactEvent, PhysicsWorld};
