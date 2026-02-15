@@ -34,3 +34,9 @@ impl SatCache {
         }
     }
 }
+
+impl Default for SatCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}

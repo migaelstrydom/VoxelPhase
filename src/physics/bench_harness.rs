@@ -1062,6 +1062,76 @@ impl PhysicsBenchScenario for ObbObbCollisionScenario {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// Scenarios: many-body dynamic contacts (narrowphase throughput)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Grid of boxes dropped onto flat terrain. Exercises the dynamic-dynamic
+/// narrowphase pipeline with many simultaneous broadphase pairs. Used to
+/// benchmark the work buffer's allocation reuse and cache performance.
+#[derive(Debug, Clone)]
+struct BoxGridScenario {
+    grid_size: usize,
+    half_extent: f32,
+    spacing: f32,
+    geometry: FlatQuadGeometry,
+}
+
+impl BoxGridScenario {
+    fn new(grid_size: usize) -> Self {
+        Self {
+            grid_size,
+            half_extent: 0.3,
+            spacing: 0.8,
+            geometry: FlatQuadGeometry::new(20.0),
+        }
+    }
+}
+
+impl PhysicsBenchScenario for BoxGridScenario {
+    fn name(&self) -> &'static str {
+        "box_grid"
+    }
+
+    fn restitution(&self) -> f32 {
+        0.1
+    }
+
+    fn setup(&self, world: &mut PhysicsWorld) -> RigidBodyHandle {
+        let he = Vector3::new(self.half_extent, self.half_extent, self.half_extent);
+        let n = self.grid_size;
+        let offset = (n as f32 - 1.0) * self.spacing * 0.5;
+        let mut first_handle = None;
+
+        for ix in 0..n {
+            for iz in 0..n {
+                let x = ix as f32 * self.spacing - offset;
+                let z = iz as f32 * self.spacing - offset;
+                let y = 2.0 + (ix + iz) as f32 * 0.1;
+                let body = world.create_body(
+                    RigidBodyDesc::dynamic().position(Point3::new(x, y, z)),
+                );
+                let _ = world.attach_collider(
+                    body,
+                    ColliderDesc::box_shape(he)
+                        .density(1000.0)
+                        .restitution(0.1)
+                        .friction(0.5),
+                );
+                if first_handle.is_none() {
+                    first_handle = Some(body);
+                }
+            }
+        }
+
+        first_handle.expect("grid should contain at least one body")
+    }
+
+    fn geometry(&self) -> &dyn StaticGeometry {
+        &self.geometry
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Scenarios: continuous collision detection
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -1585,5 +1655,64 @@ mod tests {
             "sphere should rest above ground: y={}",
             last.y
         );
+    }
+
+    // ── Many-body narrowphase throughput ───────────────────────────────
+
+    #[test]
+    fn box_grid_settles_without_explosions() {
+        // 5x5 = 25 boxes. Exercises the narrowphase work buffer with many
+        // dynamic-dynamic pairs. Verifies no boxes explode or fall through.
+        let scenario = BoxGridScenario::new(5);
+        let cfg = BenchRunConfig {
+            duration: 4.0,
+            ..BenchRunConfig::default()
+        };
+        let run = run_scenario(&scenario, cfg);
+        write_exports(&run, "box_grid_5x5");
+
+        assert!(!run.samples.is_empty());
+
+        // The tracked body (first box) should settle somewhere above the ground.
+        let last = run.samples.last().unwrap();
+        assert!(
+            last.y > -0.5,
+            "box should not fall through ground: y={}",
+            last.y
+        );
+
+        // Tail speed should be low (settled or nearly settled).
+        let (tail_linear, _) = run.tail_max_speeds(1.0);
+        assert!(
+            tail_linear < 1.0,
+            "box grid should be settling: tail linear speed {tail_linear:.3}"
+        );
+    }
+
+    #[test]
+    fn box_grid_narrowphase_throughput() {
+        // Throughput benchmark: 8x8 = 64 boxes producing many broadphase pairs.
+        // Measures wall-clock time for 2 seconds of simulated time.
+        let scenario = BoxGridScenario::new(8);
+        let cfg = BenchRunConfig {
+            duration: 2.0,
+            ..BenchRunConfig::default()
+        };
+
+        let t0 = std::time::Instant::now();
+        let run = run_scenario(&scenario, cfg);
+        let elapsed = t0.elapsed();
+
+        write_exports(&run, "box_grid_8x8_throughput");
+
+        eprintln!(
+            "Box grid 8x8 (64 bodies): {} physics steps in {:.1}ms ({:.0} steps/sec)",
+            run.physics_steps,
+            elapsed.as_secs_f64() * 1000.0,
+            run.physics_steps as f64 / elapsed.as_secs_f64(),
+        );
+
+        assert!(!run.samples.is_empty());
+        assert_eq!(run.dropped_steps, 0);
     }
 }

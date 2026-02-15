@@ -9,7 +9,7 @@ use nalgebra::{Point3, Vector3};
 use crate::collision::contact::{ContactManifold, ContactPoint, FeatureId};
 use crate::collision::discrete::clipping::obb_face;
 use crate::collision::obb::Obb;
-use crate::collision::sat::{AXIS_EPS, OVERLAP_EPS};
+use crate::collision::sat::{SatCache, AXIS_EPS, OVERLAP_EPS};
 use crate::collision::segment::segment_segment_closest_points;
 
 /// Minimum penetration axis category.
@@ -23,6 +23,41 @@ enum MinAxis {
     EdgeEdge { a_idx: usize, b_idx: usize },
 }
 
+/// Test two OBBs against each other using SAT, with optional cache for early-out.
+///
+/// When a `SatCache` is provided, the cached separating axis (if any) is tested
+/// first. If it still separates the pair, the function returns immediately without
+/// testing the remaining 14 axes. For stable non-colliding pairs this reduces
+/// the cost to a single axis test.
+///
+/// The cache is updated on return:
+/// - Separated pair → stores the best separating axis for next frame.
+/// - Colliding pair → clears the cache (`separating_axis = None`).
+pub fn obb_obb_manifold_cached(
+    a: &Obb,
+    b: &Obb,
+    contact_margin: f32,
+    cache: &mut SatCache,
+) -> ContactManifold {
+    let center_dir = b.center - a.center;
+
+    // Try the cached separating axis first.
+    if let Some(cached_axis) = cache.separating_axis {
+        let distance = center_dir.dot(&cached_axis).abs();
+        let overlap =
+            a.project_half_extent(&cached_axis) + b.project_half_extent(&cached_axis)
+                + 2.0 * contact_margin - distance;
+        if overlap < -OVERLAP_EPS {
+            // Still separated on this axis — early out.
+            return ContactManifold::empty();
+        }
+    }
+
+    // Cached axis didn't separate (or no cache). Run full SAT.
+    let manifold = obb_obb_manifold_inner(a, b, contact_margin, &center_dir, cache);
+    manifold
+}
+
 /// Test two OBBs against each other using SAT.
 ///
 /// Returns a manifold of up to 4 contact points. Normal points from A toward B.
@@ -33,21 +68,49 @@ enum MinAxis {
 /// * `b` — second OBB in world space
 /// * `contact_margin` — inflation for speculative contacts
 pub fn obb_obb_manifold(a: &Obb, b: &Obb, contact_margin: f32) -> ContactManifold {
+    let center_dir = b.center - a.center;
+    obb_obb_manifold_inner(a, b, contact_margin, &center_dir, &mut SatCache::new())
+}
+
+/// Core SAT implementation shared by cached and uncached entry points.
+fn obb_obb_manifold_inner(
+    a: &Obb,
+    b: &Obb,
+    contact_margin: f32,
+    center_dir: &Vector3<f32>,
+    cache: &mut SatCache,
+) -> ContactManifold {
     let axes_a = a.axes();
     let axes_b = b.axes();
-    let center_dir = b.center - a.center;
 
     let mut best_overlap = f32::MAX;
     let mut best_axis = Vector3::zeros();
     let mut best_category = MinAxis::FaceA(0);
     let mut best_edge_candidate: Option<(usize, usize, Vector3<f32>, f32)> = None;
 
+    // Track the best separating axis seen during the full test. If we find
+    // a separating axis, we'll store it in the cache for next frame.
+    let mut best_separating_axis: Option<(Vector3<f32>, f32)> = None;
+    let mut update_separating = |axis: Vector3<f32>, overlap: f32| {
+        if overlap < 0.0 {
+            if best_separating_axis.map_or(true, |(_, best)| overlap < best) {
+                best_separating_axis = Some((axis, overlap));
+            }
+        }
+    };
+
     // Test face normals of A (axes 0-2).
     for i in 0..3 {
-        let result = test_face_axis(&axes_a[i], a, b, &center_dir, contact_margin);
+        let result = test_face_axis(&axes_a[i], a, b, center_dir, contact_margin);
         match result {
-            None => return ContactManifold::empty(),
+            None => {
+                // Separated on this axis. Cache it.
+                let axis = axes_a[i].normalize();
+                cache.separating_axis = Some(axis);
+                return ContactManifold::empty();
+            }
             Some((axis, overlap)) => {
+                update_separating(axis, overlap);
                 if overlap < best_overlap {
                     best_overlap = overlap;
                     best_axis = axis;
@@ -59,10 +122,15 @@ pub fn obb_obb_manifold(a: &Obb, b: &Obb, contact_margin: f32) -> ContactManifol
 
     // Test face normals of B (axes 3-5).
     for i in 0..3 {
-        let result = test_face_axis(&axes_b[i], a, b, &center_dir, contact_margin);
+        let result = test_face_axis(&axes_b[i], a, b, center_dir, contact_margin);
         match result {
-            None => return ContactManifold::empty(),
+            None => {
+                let axis = axes_b[i].normalize();
+                cache.separating_axis = Some(axis);
+                return ContactManifold::empty();
+            }
             Some((axis, overlap)) => {
+                update_separating(axis, overlap);
                 if overlap < best_overlap {
                     best_overlap = overlap;
                     best_axis = axis;
@@ -86,7 +154,7 @@ pub fn obb_obb_manifold(a: &Obb, b: &Obb, contact_margin: f32) -> ContactManifol
             let len = len_sq.sqrt();
             let mut axis = cross / len;
 
-            if axis.dot(&center_dir) < 0.0 {
+            if axis.dot(center_dir) < 0.0 {
                 axis = -axis;
             }
 
@@ -96,8 +164,11 @@ pub fn obb_obb_manifold(a: &Obb, b: &Obb, contact_margin: f32) -> ContactManifol
                     - distance;
 
             if overlap < -OVERLAP_EPS {
+                cache.separating_axis = Some(axis);
                 return ContactManifold::empty();
             }
+
+            update_separating(axis, overlap);
 
             if best_edge_candidate
                 .map(|(_, _, _, best_edge_overlap)| overlap < best_edge_overlap)
@@ -117,8 +188,12 @@ pub fn obb_obb_manifold(a: &Obb, b: &Obb, contact_margin: f32) -> ContactManifol
     }
 
     if best_overlap > f32::MAX * 0.5 {
+        cache.separating_axis = best_separating_axis.map(|(axis, _)| axis);
         return ContactManifold::empty();
     }
+
+    // Pair is colliding — clear the cache.
+    cache.separating_axis = None;
 
     let normal = best_axis.normalize();
     let geometric_depth = best_overlap - 2.0 * contact_margin;
@@ -766,6 +841,160 @@ mod tests {
                 cp2.point
             );
         }
+    }
+
+    // ── SAT cache tests ────────────────────────────────────────────────
+
+    #[test]
+    fn sat_cache_early_out_for_separated_pair() {
+        let a = unit_box_at(Point3::new(0.0, 0.0, 0.0));
+        let b = unit_box_at(Point3::new(5.0, 0.0, 0.0));
+
+        // First call: no cache, pair is separated. Should populate the cache.
+        let mut cache = SatCache::new();
+        let m = obb_obb_manifold_cached(&a, &b, 0.0, &mut cache);
+        assert!(m.is_empty());
+        assert!(
+            cache.separating_axis.is_some(),
+            "Cache should store a separating axis for separated pairs"
+        );
+
+        // Second call with cache: should early-out on the cached axis.
+        let m2 = obb_obb_manifold_cached(&a, &b, 0.0, &mut cache);
+        assert!(m2.is_empty());
+        assert!(cache.separating_axis.is_some());
+    }
+
+    #[test]
+    fn sat_cache_invalidated_when_pair_collides() {
+        let a = unit_box_at(Point3::new(0.0, 0.0, 0.0));
+        let b_far = unit_box_at(Point3::new(5.0, 0.0, 0.0));
+        let b_close = unit_box_at(Point3::new(1.5, 0.0, 0.0));
+
+        // Build cache with separated pair.
+        let mut cache = SatCache::new();
+        let _ = obb_obb_manifold_cached(&a, &b_far, 0.0, &mut cache);
+        assert!(cache.separating_axis.is_some());
+
+        // Now test colliding pair with stale cache — must still detect collision.
+        let m = obb_obb_manifold_cached(&a, &b_close, 0.0, &mut cache);
+        assert!(!m.is_empty(), "Must detect collision even with stale cache");
+        assert!(
+            cache.separating_axis.is_none(),
+            "Cache should be cleared when pair is colliding"
+        );
+    }
+
+    #[test]
+    fn sat_cache_produces_same_results_as_uncached() {
+        // Verify cached and uncached paths produce identical manifolds across
+        // a sweep of random configurations.
+        let mut state: u32 = 0xDEADBEEF;
+        let mut next_f32 = || {
+            state = state.wrapping_mul(1664525).wrapping_add(1013904223);
+            (state as f32) / (u32::MAX as f32)
+        };
+        let angle = |u: f32| (u * 2.0 - 1.0) * std::f32::consts::PI;
+        let span = |u: f32, r: f32| (u * 2.0 - 1.0) * r;
+
+        for _ in 0..256 {
+            let rot_a = UnitQuaternion::from_axis_angle(&Vector3::x_axis(), angle(next_f32()))
+                * UnitQuaternion::from_axis_angle(&Vector3::y_axis(), angle(next_f32()));
+            let rot_b = UnitQuaternion::from_axis_angle(&Vector3::y_axis(), angle(next_f32()))
+                * UnitQuaternion::from_axis_angle(&Vector3::z_axis(), angle(next_f32()));
+            let a = Obb::new(Point3::origin(), rot_a, Vector3::new(1.0, 1.0, 1.0));
+            let b = Obb::new(
+                Point3::new(span(next_f32(), 3.0), span(next_f32(), 3.0), span(next_f32(), 3.0)),
+                rot_b,
+                Vector3::new(1.0, 1.0, 1.0),
+            );
+
+            let uncached = obb_obb_manifold(&a, &b, 0.02);
+
+            let mut cache = SatCache::new();
+            let cached = obb_obb_manifold_cached(&a, &b, 0.02, &mut cache);
+
+            assert_eq!(
+                uncached.len(),
+                cached.len(),
+                "Cached and uncached contact counts must match"
+            );
+            for (uc, cc) in uncached.points.iter().zip(cached.points.iter()) {
+                assert_eq!(uc.feature_id, cc.feature_id);
+                assert!(
+                    (uc.raw_depth - cc.raw_depth).abs() < 1e-6,
+                    "Depth mismatch: {} vs {}",
+                    uc.raw_depth,
+                    cc.raw_depth
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn sat_cache_axis_stays_valid_across_small_movements() {
+        // Simulate a pair drifting apart over several frames.
+        let a = unit_box_at(Point3::new(0.0, 0.0, 0.0));
+        let mut cache = SatCache::new();
+
+        for i in 0..10 {
+            let x = 3.0 + i as f32 * 0.1; // moving further apart
+            let b = unit_box_at(Point3::new(x, 0.0, 0.0));
+            let m = obb_obb_manifold_cached(&a, &b, 0.0, &mut cache);
+            assert!(m.is_empty(), "Should be separated at x={x}");
+            assert!(cache.separating_axis.is_some());
+        }
+    }
+
+    #[test]
+    fn sat_cache_throughput_separated_pairs() {
+        // Micro-benchmark: measure cached vs uncached throughput for separated
+        // pairs. Uses rotated boxes so the separating axis is NOT the first face
+        // normal tested — this is where caching helps most.
+        let rot_a = UnitQuaternion::from_axis_angle(&Vector3::y_axis(), 0.7)
+            * UnitQuaternion::from_axis_angle(&Vector3::x_axis(), 0.4);
+        let rot_b = UnitQuaternion::from_axis_angle(&Vector3::z_axis(), -0.6)
+            * UnitQuaternion::from_axis_angle(&Vector3::y_axis(), 0.3);
+        let a = Obb::new(Point3::origin(), rot_a, Vector3::new(1.0, 1.0, 1.0));
+        let b = Obb::new(Point3::new(3.5, 0.5, 0.2), rot_b, Vector3::new(1.0, 1.0, 1.0));
+
+        // Verify they're actually separated.
+        assert!(obb_obb_manifold(&a, &b, 0.0).is_empty());
+
+        let iterations = 10_000;
+
+        // Warm up the cache.
+        let mut cache = SatCache::new();
+        let _ = obb_obb_manifold_cached(&a, &b, 0.0, &mut cache);
+
+        // Uncached path.
+        let t0 = std::time::Instant::now();
+        for _ in 0..iterations {
+            let m = obb_obb_manifold(&a, &b, 0.0);
+            std::hint::black_box(&m);
+        }
+        let uncached_ns = t0.elapsed().as_nanos();
+
+        // Cached path.
+        let t1 = std::time::Instant::now();
+        for _ in 0..iterations {
+            let m = obb_obb_manifold_cached(&a, &b, 0.0, &mut cache);
+            std::hint::black_box(&m);
+        }
+        let cached_ns = t1.elapsed().as_nanos();
+
+        let ratio = uncached_ns as f64 / cached_ns.max(1) as f64;
+        eprintln!(
+            "SAT cache throughput: uncached={uncached_ns}ns, cached={cached_ns}ns, \
+             speedup={ratio:.2}x over {iterations} iterations"
+        );
+
+        // Cached should be faster. In release mode the gain is smaller since
+        // the uncached path is already heavily optimized by LLVM.
+        assert!(
+            ratio > 1.1,
+            "Cached path should be faster: speedup was only {ratio:.2}x"
+        );
     }
 
     #[test]

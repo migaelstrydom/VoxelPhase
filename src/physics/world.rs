@@ -14,7 +14,8 @@ use super::grounding::{GroundingConfig, GroundingDetector};
 use super::handle::{ColliderHandle, RigidBodyHandle};
 use super::impulses::{ForceField, ForceFieldRegistry, PhysicsImpulse};
 use super::narrowphase::{
-    generate_dynamic_contacts, generate_static_contacts, NormalClusterConfig,
+    generate_dynamic_contacts, generate_static_contacts, NarrowphaseWorkBuffer, NormalClusterConfig,
+    SatCacheMap,
 };
 use super::pipeline::integration::{integrate_bodies, integrate_forces};
 use super::pipeline::manifold::ManifoldCache;
@@ -137,6 +138,10 @@ pub struct PhysicsWorld {
     cached_all_contacts: Vec<ContactConstraint>,
     /// Bodies with static narrowphase contacts, excluded from CCD.
     cached_narrowphase_handled: HashSet<RigidBodyHandle>,
+    /// SAT axis cache for OBB-OBB dynamic pair early-out.
+    sat_cache_map: SatCacheMap,
+    /// Reusable work buffer for dynamic narrowphase (avoids per-frame allocation).
+    narrowphase_work_buffer: NarrowphaseWorkBuffer,
 }
 
 impl PhysicsWorld {
@@ -165,6 +170,8 @@ impl PhysicsWorld {
             cached_active_contacts: Vec::new(),
             cached_all_contacts: Vec::new(),
             cached_narrowphase_handled: HashSet::new(),
+            sat_cache_map: SatCacheMap::new(),
+            narrowphase_work_buffer: NarrowphaseWorkBuffer::new(),
         }
     }
 
@@ -420,7 +427,7 @@ impl PhysicsWorld {
             self.config.normal_clustering,
             sleeping_snapshot.as_ref(),
         );
-        raw_contacts.extend(generate_dynamic_contacts(
+        generate_dynamic_contacts(
             &self.bodies,
             &self.colliders,
             self.config.contact_margin,
@@ -430,7 +437,10 @@ impl PhysicsWorld {
             self.config.speculative_min_speed,
             self.config.speculative_margin_multiplier,
             sleeping_snapshot.as_ref(),
-        ));
+            &mut self.sat_cache_map,
+            &mut self.narrowphase_work_buffer,
+        );
+        raw_contacts.extend_from_slice(self.narrowphase_work_buffer.contacts());
 
         // Merge with manifold cache (populates warm-start impulses)
         let contacts = self.manifold_cache.update(&raw_contacts, &self.bodies);
