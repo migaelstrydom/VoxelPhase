@@ -297,7 +297,7 @@ fn face_face_contacts(
     let inc_face = obb_face(inc_obb, inc_axis_idx, inc_axis_sign);
 
     // Clip incident face against reference face side planes.
-    let clipped = ref_face.clip_against_sides(&inc_face.vertices.to_vec());
+    let clipped = ref_face.clip_against_sides(&inc_face.vertices);
 
     // Project clipped points onto the reference plane, keep those behind it.
     let mut points = smallvec::SmallVec::<[ContactPoint; 4]>::new();
@@ -552,7 +552,7 @@ fn reduce_to_four(points: &mut smallvec::SmallVec<[ContactPoint; 4]>) {
     }
 
     // Deduplicate selected indices and collect.
-    let mut unique = Vec::with_capacity(4);
+    let mut unique = smallvec::SmallVec::<[usize; 4]>::new();
     for &idx in &selected {
         if !unique.contains(&idx) {
             unique.push(idx);
@@ -994,6 +994,41 @@ mod tests {
         assert!(
             ratio > 1.1,
             "Cached path should be faster: speedup was only {ratio:.2}x"
+        );
+    }
+
+    #[test]
+    fn obb_obb_colliding_throughput() {
+        // Measures manifold generation for overlapping OBBs (exercises the
+        // full clipping path: find faces → clip_against_sides → project).
+        let rot_a = UnitQuaternion::from_axis_angle(&Vector3::y_axis(), 0.3)
+            * UnitQuaternion::from_axis_angle(&Vector3::x_axis(), 0.15);
+        let rot_b = UnitQuaternion::from_axis_angle(&Vector3::z_axis(), -0.4)
+            * UnitQuaternion::from_axis_angle(&Vector3::y_axis(), 0.2);
+        let a = Obb::new(Point3::origin(), rot_a, Vector3::new(1.0, 0.8, 1.2));
+        let b = Obb::new(
+            Point3::new(1.6, 0.1, 0.05),
+            rot_b,
+            Vector3::new(0.9, 1.0, 0.7),
+        );
+
+        // Verify they actually collide.
+        assert!(!obb_obb_manifold(&a, &b, 0.02).is_empty());
+
+        let iterations = 100_000;
+
+        let t0 = std::time::Instant::now();
+        for _ in 0..iterations {
+            let m = obb_obb_manifold(&a, &b, 0.02);
+            std::hint::black_box(&m);
+        }
+        let elapsed = t0.elapsed();
+
+        let ns_per_call = elapsed.as_nanos() / iterations as u128;
+        eprintln!(
+            "obb_obb_manifold (colliding) throughput: {ns_per_call}ns/call \
+             ({iterations} iterations in {:.1}ms)",
+            elapsed.as_secs_f64() * 1000.0
         );
     }
 

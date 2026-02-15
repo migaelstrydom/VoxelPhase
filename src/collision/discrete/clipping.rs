@@ -4,8 +4,17 @@
 //! against reference face side planes.
 
 use nalgebra::{Point3, Vector3};
+use smallvec::SmallVec;
 
 use crate::collision::obb::Obb;
+
+/// Maximum vertices a clipped polygon can have. An N-gon clipped against
+/// 4 half-planes produces at most N+4 vertices. Starting from a quad (4)
+/// that's 8; starting from a triangle (3) that's 7.
+pub const MAX_CLIP_VERTS: usize = 8;
+
+/// Stack-allocated polygon buffer used throughout the clipping pipeline.
+pub type ClipPolygon = SmallVec<[Point3<f32>; MAX_CLIP_VERTS]>;
 
 /// Clip a convex polygon against a half-plane.
 ///
@@ -17,12 +26,12 @@ pub fn clip_polygon(
     polygon: &[Point3<f32>],
     plane_point: Point3<f32>,
     plane_normal: Vector3<f32>,
-) -> Vec<Point3<f32>> {
+) -> ClipPolygon {
     if polygon.is_empty() {
-        return Vec::new();
+        return ClipPolygon::new();
     }
 
-    let mut result = Vec::with_capacity(polygon.len() + 2);
+    let mut result = ClipPolygon::new();
 
     for i in 0..polygon.len() {
         let p1 = polygon[i];
@@ -114,11 +123,10 @@ impl ObbFace {
     /// Clip a polygon against this face's 4 side planes.
     ///
     /// The side planes are the edges of the face, extruded inward.
-    pub fn clip_against_sides(&self, polygon: &[Point3<f32>]) -> Vec<Point3<f32>> {
-        let mut clipped = polygon.to_vec();
-        clipped = clip_polygon(&clipped, self.center + self.tangent_u * self.half_u, -self.tangent_u);
-        clipped = clip_polygon(&clipped, self.center - self.tangent_u * self.half_u, self.tangent_u);
-        clipped = clip_polygon(&clipped, self.center + self.tangent_v * self.half_v, -self.tangent_v);
+    pub fn clip_against_sides(&self, polygon: &[Point3<f32>]) -> ClipPolygon {
+        let clipped = clip_polygon(polygon, self.center + self.tangent_u * self.half_u, -self.tangent_u);
+        let clipped = clip_polygon(&clipped, self.center - self.tangent_u * self.half_u, self.tangent_u);
+        let clipped = clip_polygon(&clipped, self.center + self.tangent_v * self.half_v, -self.tangent_v);
         clip_polygon(&clipped, self.center - self.tangent_v * self.half_v, self.tangent_v)
     }
 }
@@ -207,5 +215,39 @@ mod tests {
             assert!(p.y.abs() <= 1.0 + 1e-5);
             assert!(p.z.abs() <= 1.0 + 1e-5);
         }
+    }
+
+    #[test]
+    fn clip_against_sides_throughput() {
+        let obb = Obb::new(
+            Point3::origin(),
+            UnitQuaternion::from_axis_angle(&Vector3::y_axis(), 0.3),
+            Vector3::new(1.0, 0.8, 1.2),
+        );
+        let ref_face = obb_face(&obb, 1, 1.0);
+
+        // Incident polygon: 4-vertex face slightly offset and rotated.
+        let incident: Vec<Point3<f32>> = vec![
+            Point3::new(0.8, 0.79, 0.9),
+            Point3::new(-0.7, 0.79, 0.85),
+            Point3::new(-0.65, 0.79, -0.8),
+            Point3::new(0.75, 0.79, -0.75),
+        ];
+
+        let iterations = 100_000;
+
+        let t0 = std::time::Instant::now();
+        for _ in 0..iterations {
+            let clipped = ref_face.clip_against_sides(&incident);
+            std::hint::black_box(&clipped);
+        }
+        let elapsed = t0.elapsed();
+
+        let ns_per_call = elapsed.as_nanos() / iterations as u128;
+        eprintln!(
+            "clip_against_sides throughput: {ns_per_call}ns/call \
+             ({iterations} iterations in {:.1}ms)",
+            elapsed.as_secs_f64() * 1000.0
+        );
     }
 }

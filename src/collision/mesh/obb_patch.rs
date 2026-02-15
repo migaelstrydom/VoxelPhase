@@ -11,7 +11,7 @@ use smallvec::SmallVec;
 
 use crate::collision::contact::{ContactManifold, ContactPoint};
 use crate::collision::contact_reducer::ContactReducer;
-use crate::collision::discrete::clipping::{clip_polygon, obb_face};
+use crate::collision::discrete::clipping::{clip_polygon, obb_face, ClipPolygon};
 use crate::collision::mesh::seam_filter::{ContactFace, FilteredPatch};
 use crate::collision::obb::Obb;
 use crate::collision::segment::segment_segment_closest_points;
@@ -186,16 +186,16 @@ fn clip_against_polygon(
     subject: &[Point3<f32>],
     clip_verts: &[Point3<f32>],
     face_normal: &Vector3<f32>,
-) -> Vec<Point3<f32>> {
+) -> ClipPolygon {
     if clip_verts.len() < 3 {
-        return subject.to_vec();
+        return ClipPolygon::from_slice(subject);
     }
 
     let centroid = Point3::from(
         clip_verts.iter().map(|v| v.coords).sum::<Vector3<f32>>() / clip_verts.len() as f32,
     );
 
-    let mut clipped = subject.to_vec();
+    let mut clipped = ClipPolygon::from_slice(subject);
 
     for i in 0..clip_verts.len() {
         if clipped.is_empty() {
@@ -206,7 +206,6 @@ fn clip_against_polygon(
         let edge_dir = b - a;
         let candidate_inward = edge_dir.cross(face_normal);
 
-        // Determine correct inward direction using the centroid.
         let to_centroid = centroid - a;
         let inward = if to_centroid.dot(&candidate_inward) >= 0.0 {
             candidate_inward
@@ -437,6 +436,37 @@ mod tests {
                 normal_len
             );
         }
+    }
+
+    #[test]
+    fn obb_patch_colliding_throughput() {
+        let patch = large_flat_patch();
+        let rot = UnitQuaternion::from_axis_angle(&Vector3::z_axis(), 0.2)
+            * UnitQuaternion::from_axis_angle(&Vector3::x_axis(), 0.15);
+        let obb = Obb::new(
+            Point3::new(0.0, 0.6, 0.0),
+            rot,
+            Vector3::new(0.5, 0.5, 0.5),
+        );
+
+        // Verify it produces contacts.
+        assert!(!obb_patch_manifold(&obb, &patch, 0.02).is_empty());
+
+        let iterations = 100_000;
+
+        let t0 = std::time::Instant::now();
+        for _ in 0..iterations {
+            let m = obb_patch_manifold(&obb, &patch, 0.02);
+            std::hint::black_box(&m);
+        }
+        let elapsed = t0.elapsed();
+
+        let ns_per_call = elapsed.as_nanos() / iterations as u128;
+        eprintln!(
+            "obb_patch_manifold throughput: {ns_per_call}ns/call \
+             ({iterations} iterations in {:.1}ms)",
+            elapsed.as_secs_f64() * 1000.0
+        );
     }
 
     #[test]
