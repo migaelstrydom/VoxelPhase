@@ -27,8 +27,16 @@ pub struct PostStabiliseConfig {
     pub slop: f32,
     /// Iterations for split-impulse post-stabilization.
     pub iterations: u32,
-    /// Max correction speed (m/s) for split impulse and Baumgarte.
+    /// Max correction speed (m/s) for shallow contacts. Applied when
+    /// penetration depth is at or below `slop`, preventing micro-jitter.
     pub max_correction_speed: f32,
+    /// Max correction speed (m/s) for deep penetrations. The effective
+    /// cap scales linearly from `max_correction_speed` at `slop` to
+    /// this value at `deep_threshold`.
+    pub deep_correction_speed: f32,
+    /// Penetration depth at which `deep_correction_speed` fully applies.
+    /// Between `slop` and this value, the cap interpolates linearly.
+    pub deep_threshold: f32,
     /// Rolling resistance factor applied to bodies with contacts.
     pub contact_rolling_resistance: f32,
     /// Linear damping factor applied to bodies with contacts.
@@ -41,10 +49,12 @@ impl Default for PostStabiliseConfig {
             baumgarte_factor: 0.05,
             baumgarte_slop: 0.005,
             split_impulse_enabled: true,
-            correction_factor: 0.1,
+            correction_factor: 0.2,
             slop: 0.005,
             iterations: 4,
             max_correction_speed: 0.1,
+            deep_correction_speed: 1.0,
+            deep_threshold: 0.1,
             contact_rolling_resistance: 0.1,
             contact_linear_damping: 0.1,
         }
@@ -70,6 +80,8 @@ pub(crate) fn post_stabilize(
             config.slop,
             config.iterations,
             config.max_correction_speed,
+            config.deep_correction_speed,
+            config.deep_threshold,
             dt,
         );
     } else {
@@ -113,6 +125,17 @@ fn apply_baumgarte_correction(
                     }
                 })
                 .unwrap_or(0.0);
+            let effective_cap = if config.deep_threshold > config.baumgarte_slop
+                && contact.depth > config.baumgarte_slop
+            {
+                let t = ((contact.depth - config.baumgarte_slop)
+                    / (config.deep_threshold - config.baumgarte_slop))
+                    .min(1.0);
+                config.max_correction_speed
+                    + t * (config.deep_correction_speed - config.max_correction_speed)
+            } else {
+                config.max_correction_speed
+            };
             apply_position_correction(
                 bodies,
                 contact,
@@ -120,7 +143,7 @@ fn apply_baumgarte_correction(
                 inv_mass_b,
                 config.baumgarte_factor,
                 config.baumgarte_slop,
-                config.max_correction_speed,
+                effective_cap,
                 dt,
             );
         }
@@ -201,6 +224,8 @@ fn apply_split_impulse_correction(
     slop: f32,
     iterations: u32,
     max_correction_speed: f32,
+    deep_correction_speed: f32,
+    deep_threshold: f32,
     dt: f32,
 ) {
     if contacts.is_empty() || iterations == 0 || dt <= 0.0 {
@@ -291,7 +316,13 @@ fn apply_split_impulse_correction(
 
             let mut bias = -depth * correction_factor * inv_dt;
             if max_correction_speed > 0.0 {
-                bias = bias.max(-max_correction_speed);
+                let effective_cap = if deep_threshold > slop && depth > slop {
+                    let t = ((depth - slop) / (deep_threshold - slop)).min(1.0);
+                    max_correction_speed + t * (deep_correction_speed - max_correction_speed)
+                } else {
+                    max_correction_speed
+                };
+                bias = bias.max(-effective_cap);
             }
             let delta_impulse = -(vel_along_normal + bias) / effective_mass;
             let old_impulse = accumulated[i];

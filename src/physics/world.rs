@@ -6,16 +6,13 @@ use std::collections::{HashMap, HashSet};
 
 use super::body::{RigidBody, RigidBodyDesc};
 use super::collider::{Collider, ColliderDesc, ColliderMaterial, ColliderShape};
-use crate::collision::mesh::obb_patch::obb_patch_manifold;
-use crate::collision::mesh::seam_filter::filter_patch;
-use crate::collision::obb::Obb;
 use super::debug::{PhysicsDebugConfig, PhysicsDebugger};
 use super::grounding::{GroundingConfig, GroundingDetector};
 use super::handle::{ColliderHandle, RigidBodyHandle};
 use super::impulses::{ForceField, ForceFieldRegistry, PhysicsImpulse};
 use super::narrowphase::{
-    generate_dynamic_contacts, generate_static_contacts, NarrowphaseWorkBuffer, NormalClusterConfig,
-    SatCacheMap,
+    generate_dynamic_contacts, generate_static_contacts, NarrowphaseWorkBuffer,
+    NormalClusterConfig, SatCacheMap,
 };
 use super::pipeline::integration::{integrate_bodies, integrate_forces};
 use super::pipeline::manifold::ManifoldCache;
@@ -24,6 +21,9 @@ use super::pipeline::post_stabilizer::PostStabiliseConfig;
 use super::pipeline::solver::{solve, solve_contacts, ContactConstraint};
 use super::sleep::{SleepManager, SleepManagerConfig};
 use super::static_geometry::StaticGeometry;
+use crate::collision::mesh::obb_patch::obb_patch_manifold;
+use crate::collision::mesh::seam_filter::filter_patch;
+use crate::collision::obb::Obb;
 use crate::debug::DebugLines;
 
 /// Configuration for the physics simulation.
@@ -54,6 +54,10 @@ pub struct PhysicsConfig {
     pub manifold_max_age: u8,
     /// Scale factor applied to warm-start impulses (0..=1).
     pub warm_start_scale: f32,
+    /// When true, sort manifold output contacts for deterministic solver ordering.
+    ///
+    /// This is primarily intended for reproducible tests and diagnostics.
+    pub deterministic_contact_ordering: bool,
     /// Split-impulse configuration for post-stabilization.
     pub post_stabilise: PostStabiliseConfig,
     /// Configuration for smoothing matched contact normals.
@@ -80,7 +84,7 @@ impl Default for PhysicsConfig {
     fn default() -> Self {
         Self {
             gravity: Vector3::new(0.0, -9.81, 0.0),
-            solver_iterations: 4,
+            solver_iterations: 8,
             restitution_velocity_threshold: 0.3,
             contact_margin: 0.02,
             ccd_threshold: 0.5,
@@ -88,6 +92,7 @@ impl Default for PhysicsConfig {
             contact_match_threshold_static_multiplier: 2.0,
             manifold_max_age: 3,
             warm_start_scale: 0.6,
+            deterministic_contact_ordering: false,
             post_stabilise: PostStabiliseConfig::default(),
             normal_smoothing: NormalSmoothingConfig::default(),
             normal_clustering: NormalClusterConfig::default(),
@@ -443,7 +448,11 @@ impl PhysicsWorld {
         raw_contacts.extend_from_slice(self.narrowphase_work_buffer.contacts());
 
         // Merge with manifold cache (populates warm-start impulses)
-        let contacts = self.manifold_cache.update(&raw_contacts, &self.bodies);
+        let contacts = self.manifold_cache.update(
+            &raw_contacts,
+            &self.bodies,
+            self.config.deterministic_contact_ordering,
+        );
 
         self.last_contacts.clear();
         self.last_contacts

@@ -66,7 +66,7 @@ pub fn generate_static_contacts(
 
             let center = collider.world_center(body.position(), body.rotation());
             let linear_velocity = body.linear_velocity();
-            let travel = linear_velocity.magnitude() * dt;
+            let speed = linear_velocity.magnitude();
 
             let mut batch = match collider.shape() {
                 ColliderShape::Sphere { radius } => sphere_vs_static(
@@ -100,7 +100,8 @@ pub fn generate_static_contacts(
 
             if batch.is_empty()
                 && is_speculative_candidate(
-                    travel,
+                    speed,
+                    dt,
                     collider.shape().bounding_radius(),
                     ccd_threshold,
                     contact_margin,
@@ -154,12 +155,7 @@ fn sphere_vs_static(
     let filtered = filter_patch(&patch, SEAM_FILTER_COPLANAR_DOT);
     let manifold = sphere_patch_manifold(center, radius, &filtered, contact_margin);
 
-    manifold_to_constraints(
-        manifold,
-        body_handle,
-        collider_handle,
-        collider,
-    )
+    manifold_to_constraints(manifold, body_handle, collider_handle, collider)
 }
 
 /// Generate box-static contacts via the mesh pipeline.
@@ -182,12 +178,7 @@ fn box_vs_static(
     let filtered = filter_patch(&patch, SEAM_FILTER_COPLANAR_DOT);
     let manifold = obb_patch_manifold(&obb, &filtered, contact_margin);
 
-    manifold_to_constraints(
-        manifold,
-        body_handle,
-        collider_handle,
-        collider,
-    )
+    manifold_to_constraints(manifold, body_handle, collider_handle, collider)
 }
 
 /// Build speculative contacts at a predicted pose for any shape.
@@ -217,7 +208,8 @@ fn speculative_static_contacts(
             );
             let patch = static_geometry.query_region(&query);
             let filtered = filter_patch(&patch, SEAM_FILTER_COPLANAR_DOT);
-            let manifold = sphere_patch_manifold(predicted_center, *radius, &filtered, contact_margin);
+            let manifold =
+                sphere_patch_manifold(predicted_center, *radius, &filtered, contact_margin);
 
             // Speculative contacts: force depth=0, raw_depth=-margin.
             manifold_to_speculative_constraints(
@@ -309,9 +301,10 @@ fn manifold_to_speculative_constraints(
         .collect()
 }
 
-/// Gate speculative contacts by travel distance and CCD threshold.
+/// Gate speculative contacts by speed and CCD travel window.
 fn is_speculative_candidate(
-    travel: f32,
+    speed: f32,
+    dt: f32,
     radius: f32,
     ccd_threshold: f32,
     contact_margin: f32,
@@ -322,9 +315,10 @@ fn is_speculative_candidate(
     if !enable_speculative_contacts {
         return false;
     }
-    if travel < speculative_min_speed {
+    if dt <= 0.0 || speed < speculative_min_speed {
         return false;
     }
+    let travel = speed * dt;
     let margin_gate = contact_margin * speculative_margin_multiplier;
     travel > margin_gate && travel <= radius * ccd_threshold
 }

@@ -944,15 +944,63 @@ These can be done independently in any order:
   before dispatch. Physics pipeline fills the buffer; collision library iterates it
 - Benchmark: measure cache-miss reduction on 100+ body scenes
 
-**7c. Scratch arena**
-- `src/collision/scratch_arena.rs` — per-thread bump allocator
-- Wire into `clipping.rs` and `seam_filter.rs` for temporary polygon storage
-- Benchmark: measure allocation overhead reduction
+**7c. Scratch arena** — COMPLETED (SmallVec approach)
+- Instead of a `ScratchArena` bump allocator, replaced all `Vec<Point3<f32>>`
+  temporaries in the clipping pipeline with `SmallVec<[Point3<f32>; 8]>`
+  (type-aliased as `ClipPolygon`). An OBB face has 4 vertices; clipping against
+  4 half-planes produces at most 8 vertices, so inline storage covers every case.
+- Changed files: `clipping.rs` (`clip_polygon`, `clip_against_sides`),
+  `obb_patch.rs` (`clip_against_polygon`), `obb_obb.rs` (removed `.to_vec()`
+  calls, `reduce_to_four` uses `SmallVec<[usize; 4]>`)
+- `seam_filter.rs` already used SmallVec — no changes needed.
+- Benchmark results (release, M1 MacBook Pro):
 
-**7d. Parallelization**
-- Add rayon `par_iter` over pair list in dispatch loop
-- Per-thread scratch arenas, collect manifolds per-thread and merge
-- Benchmark: measure scaling on 200+ body scenes
+  | Function              | Before  | After  | Speedup  |
+  |-----------------------|---------|--------|----------|
+  | `clip_against_sides`  | 161 ns  | 67 ns  | **2.4x** |
+  | `obb_obb_manifold`    | 429 ns  | 371 ns | **1.16x**|
+  | `obb_patch_manifold`  | 169 ns  | 128 ns | **1.32x**|
+
+  The clipping function itself got 2.4x from eliminating 5 heap allocations per
+  call. End-to-end manifold functions show 16-32% because clipping is only part
+  of their work (SAT, projection, reduction are unchanged).
+
+- A full `ScratchArena` was considered but adds API pollution (threading `&mut`
+  through every function) for no benefit when max buffer sizes are well-bounded.
+  SmallVec achieves zero heap allocation with no signature changes beyond the
+  return type. If GJK/EPA or convex hull support later requires variable-size
+  temporary buffers, a scratch arena can be revisited.
+
+**7d. Parallelization** — INVESTIGATED, NOT IMPLEMENTED
+- Attempted rayon `par_iter` over both the dynamic pair dispatch loop and the
+  per-body static contact loop. Two parallelization strategies were tested:
+  - Fine-grained: `par_iter` over individual broadphase pairs / collider bodies
+  - Coarse-grained: `rayon::join` to run static and dynamic phases concurrently
+- Benchmark results (release, M1 MacBook Pro, 8 cores):
+
+  | Scene                | Sequential   | Parallel (threshold 64/32) | Delta   |
+  |----------------------|--------------|----------------------------|---------|
+  | 8x8 grid (64 boxes)  | 3350 steps/s | 2350 steps/s              | **-30%**|
+  | 16x16 grid (256 boxes)| 1700 steps/s | 1640 steps/s             | **-4%** |
+
+  Parallelism consistently *regressed* performance at every threshold tested.
+  Root cause: each narrowphase pair/body computation is very fast (100-500 ns).
+  Rayon's per-dispatch overhead (~5-10 μs for thread pool wake + work stealing +
+  collect synchronization) exceeds the total narrowphase time per physics step.
+  Cache invalidation from cross-core execution further hurts throughput.
+
+- **When parallelization would help:**
+  - Expensive per-item work: GJK/EPA iterations for convex hulls, complex
+    geometry queries with spatial indexing (octree traversal), large mesh patches
+  - Large pair counts with heavy computation: 500+ pairs where each takes > 1 μs
+  - The current shape set (sphere + box) with analytic/SAT fast-paths is simply
+    too cheap per pair for parallel dispatch to amortize its overhead
+
+- **Recommendation:** Revisit after Step 6 (GJK/EPA) when the fallback tier
+  adds significantly heavier per-pair computation. The code was prototyped and
+  is straightforward to re-add: `par_iter` over `buf.pairs` in
+  `dynamic_contacts.rs` and over work items in `static_contacts.rs`, with
+  SAT cache snapshots cloned per pair and merged back sequentially.
 
 **Dependencies:** Steps 1-5 (working pipeline to benchmark against).
 

@@ -138,6 +138,7 @@ impl ManifoldCache {
         &mut self,
         raw_contacts: &[ContactConstraint],
         bodies: &Arena<RigidBody>,
+        deterministic_contact_ordering: bool,
     ) -> Vec<ContactConstraint> {
         self.frame_stats = ManifoldFrameStats::default();
         // Age all existing points before processing new contacts
@@ -184,12 +185,8 @@ impl ManifoldCache {
                 } else {
                     self.match_threshold
                 };
-                let match_idx = find_closest_point_excluding(
-                    manifold,
-                    &local_b,
-                    threshold,
-                    &matched_indices,
-                );
+                let match_idx =
+                    find_closest_point_excluding(manifold, &local_b, threshold, &matched_indices);
 
                 let (warm_normal, warm_tangent, contact_normal) = match match_idx {
                     Some(idx) => {
@@ -203,8 +200,7 @@ impl ManifoldCache {
                         } else {
                             contact.normal
                         };
-                        let use_warm =
-                            aligned && contact.raw_depth >= -self.warm_start_depth_slop;
+                        let use_warm = aligned && contact.raw_depth >= -self.warm_start_depth_slop;
                         let warm = if use_warm {
                             (cached.normal_impulse, cached.tangent_impulse)
                         } else {
@@ -254,6 +250,11 @@ impl ManifoldCache {
             }
         }
 
+        if deterministic_contact_ordering {
+            // Sequential impulses are order-dependent, so deterministic ordering
+            // helps keep behavior reproducible in tests/debug runs.
+            result.sort_by(compare_contacts_for_solver);
+        }
         result
     }
 
@@ -348,7 +349,6 @@ fn world_to_local(
 ) -> Point3<f32> {
     Point3::from(body_rot.inverse() * (point - body_pos))
 }
-
 
 fn find_closest_point_excluding(
     manifold: &ContactManifold,
@@ -527,4 +527,61 @@ fn compare_contacts(a: &ContactConstraint, b: &ContactConstraint) -> std::cmp::O
         .z
         .partial_cmp(&b.normal.z)
         .unwrap_or(std::cmp::Ordering::Equal)
+}
+
+fn compare_contacts_for_solver(a: &ContactConstraint, b: &ContactConstraint) -> std::cmp::Ordering {
+    let body_a = compare_optional_body_handle(a.body_a, b.body_a);
+    if body_a != std::cmp::Ordering::Equal {
+        return body_a;
+    }
+    let body_b = compare_body_handle(a.body_b, b.body_b);
+    if body_b != std::cmp::Ordering::Equal {
+        return body_b;
+    }
+    let collider_a = compare_optional_collider_handle(a.collider_a, b.collider_a);
+    if collider_a != std::cmp::Ordering::Equal {
+        return collider_a;
+    }
+    let collider_b = compare_optional_collider_handle(a.collider_b, b.collider_b);
+    if collider_b != std::cmp::Ordering::Equal {
+        return collider_b;
+    }
+    compare_contacts(a, b)
+}
+
+fn compare_body_handle(
+    a: crate::physics::handle::RigidBodyHandle,
+    b: crate::physics::handle::RigidBodyHandle,
+) -> std::cmp::Ordering {
+    let (a_idx, a_gen) = a.0.into_raw_parts();
+    let (b_idx, b_gen) = b.0.into_raw_parts();
+    a_idx.cmp(&b_idx).then(a_gen.cmp(&b_gen))
+}
+
+fn compare_optional_body_handle(
+    a: Option<crate::physics::handle::RigidBodyHandle>,
+    b: Option<crate::physics::handle::RigidBodyHandle>,
+) -> std::cmp::Ordering {
+    match (a, b) {
+        (None, None) => std::cmp::Ordering::Equal,
+        (None, Some(_)) => std::cmp::Ordering::Less,
+        (Some(_), None) => std::cmp::Ordering::Greater,
+        (Some(a), Some(b)) => compare_body_handle(a, b),
+    }
+}
+
+fn compare_optional_collider_handle(
+    a: Option<ColliderHandle>,
+    b: Option<ColliderHandle>,
+) -> std::cmp::Ordering {
+    match (a, b) {
+        (None, None) => std::cmp::Ordering::Equal,
+        (None, Some(_)) => std::cmp::Ordering::Less,
+        (Some(_), None) => std::cmp::Ordering::Greater,
+        (Some(a), Some(b)) => {
+            let (a_idx, a_gen) = a.raw_parts();
+            let (b_idx, b_gen) = b.raw_parts();
+            a_idx.cmp(&b_idx).then(a_gen.cmp(&b_gen))
+        }
+    }
 }

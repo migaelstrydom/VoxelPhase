@@ -343,9 +343,10 @@ fn sphere_sphere_pair(
 
     // Speculative CCD.
     if should_add_speculative(
-        a.velocity.magnitude() * dt,
+        a.velocity.magnitude(),
+        dt,
         radius_a,
-        b.velocity.magnitude() * dt,
+        b.velocity.magnitude(),
         radius_b,
         ccd_threshold,
         contact_margin,
@@ -489,9 +490,10 @@ fn push_manifold_constraints(
 }
 
 fn should_add_speculative(
-    travel_a: f32,
+    speed_a: f32,
+    dt: f32,
     radius_a: f32,
-    travel_b: f32,
+    speed_b: f32,
     radius_b: f32,
     ccd_threshold: f32,
     contact_margin: f32,
@@ -502,11 +504,16 @@ fn should_add_speculative(
     if !enable_speculative_contacts {
         return false;
     }
+    if dt <= 0.0 {
+        return false;
+    }
+    let travel_a = speed_a * dt;
+    let travel_b = speed_b * dt;
     let margin_gate = contact_margin * speculative_margin_multiplier;
-    let fast_a = travel_a >= speculative_min_speed
+    let fast_a = speed_a >= speculative_min_speed
         && travel_a > margin_gate
         && travel_a <= radius_a * ccd_threshold;
-    let fast_b = travel_b >= speculative_min_speed
+    let fast_b = speed_b >= speculative_min_speed
         && travel_b > margin_gate
         && travel_b <= radius_b * ccd_threshold;
     fast_a || fast_b

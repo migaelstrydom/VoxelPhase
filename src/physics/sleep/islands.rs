@@ -71,7 +71,9 @@ impl IslandBuilder {
                 }
             }
 
-            islands.push(Island { bodies: island_bodies });
+            islands.push(Island {
+                bodies: island_bodies,
+            });
         }
 
         islands

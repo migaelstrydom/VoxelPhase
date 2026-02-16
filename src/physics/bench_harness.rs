@@ -25,7 +25,7 @@ struct BenchRunConfig {
 impl Default for BenchRunConfig {
     fn default() -> Self {
         Self {
-            fixed_dt: 1.0 / 120.0,
+            fixed_dt: 1.0 / 60.0,
             duration: 8.0,
             max_substeps_per_frame: 8,
         }
@@ -403,10 +403,7 @@ impl StepGeometry {
         };
 
         Self {
-            bounds: AABB::new(
-                Point3::new(-s, -0.01, -s),
-                Point3::new(s, h + 0.01, s),
-            ),
+            bounds: AABB::new(Point3::new(-s, -0.01, -s), Point3::new(s, h + 0.01, s)),
             patch: MeshPatch {
                 triangles: vec![lower_a, lower_b, wall_a, wall_b, upper_a, upper_b],
             },
@@ -473,10 +470,7 @@ impl BowlGeometry {
         };
 
         Self {
-            bounds: AABB::new(
-                Point3::new(-s, -depth - 0.01, -s),
-                Point3::new(s, 0.01, s),
-            ),
+            bounds: AABB::new(Point3::new(-s, -depth - 0.01, -s), Point3::new(s, 0.01, s)),
             patch: MeshPatch {
                 triangles: vec![front, right, back, left],
             },
@@ -683,9 +677,7 @@ impl PhysicsBenchScenario for SphereOnRampScenario {
 
     fn setup(&self, world: &mut PhysicsWorld) -> RigidBodyHandle {
         // Drop sphere onto the ramp midway up.
-        let body = world.create_body(
-            RigidBodyDesc::dynamic().position(Point3::new(0.0, 3.0, 3.0)),
-        );
+        let body = world.create_body(RigidBodyDesc::dynamic().position(Point3::new(0.0, 3.0, 3.0)));
         let collider = ColliderDesc::sphere(self.radius)
             .density(1000.0)
             .restitution(self.restitution)
@@ -728,9 +720,7 @@ impl PhysicsBenchScenario for BoxOnRampScenario {
     }
 
     fn setup(&self, world: &mut PhysicsWorld) -> RigidBodyHandle {
-        let body = world.create_body(
-            RigidBodyDesc::dynamic().position(Point3::new(0.0, 3.0, 3.0)),
-        );
+        let body = world.create_body(RigidBodyDesc::dynamic().position(Point3::new(0.0, 3.0, 3.0)));
         let collider = ColliderDesc::box_shape(self.half_extents)
             .density(1000.0)
             .restitution(self.restitution)
@@ -774,9 +764,8 @@ impl PhysicsBenchScenario for BoxOnStepScenario {
 
     fn setup(&self, world: &mut PhysicsWorld) -> RigidBodyHandle {
         // Drop box onto the lower level near the step edge.
-        let body = world.create_body(
-            RigidBodyDesc::dynamic().position(Point3::new(-0.5, 2.0, 0.0)),
-        );
+        let body =
+            world.create_body(RigidBodyDesc::dynamic().position(Point3::new(-0.5, 2.0, 0.0)));
         let collider = ColliderDesc::box_shape(self.half_extents)
             .density(1000.0)
             .restitution(self.restitution)
@@ -825,9 +814,7 @@ impl PhysicsBenchScenario for SphereInBowlScenario {
 
     fn setup(&self, world: &mut PhysicsWorld) -> RigidBodyHandle {
         // Drop the sphere from just above the rim, centered over the apex.
-        let body = world.create_body(
-            RigidBodyDesc::dynamic().position(Point3::new(0.0, 0.5, 0.0)),
-        );
+        let body = world.create_body(RigidBodyDesc::dynamic().position(Point3::new(0.0, 0.5, 0.0)));
         let collider = ColliderDesc::sphere(self.radius)
             .density(1000.0)
             .restitution(0.0)
@@ -877,9 +864,7 @@ impl PhysicsBenchScenario for SphereSphereCollisionScenario {
         let y = radius + 0.01;
 
         // Target sphere (tracked) — sitting at the origin.
-        let target = world.create_body(
-            RigidBodyDesc::dynamic().position(Point3::new(0.0, y, 0.0)),
-        );
+        let target = world.create_body(RigidBodyDesc::dynamic().position(Point3::new(0.0, y, 0.0)));
         let _ = world.attach_collider(
             target,
             ColliderDesc::sphere(radius)
@@ -889,9 +874,8 @@ impl PhysicsBenchScenario for SphereSphereCollisionScenario {
         );
 
         // Projectile sphere — offset in -X, will be kicked toward target.
-        let projectile = world.create_body(
-            RigidBodyDesc::dynamic().position(Point3::new(-4.0, y, 0.0)),
-        );
+        let projectile =
+            world.create_body(RigidBodyDesc::dynamic().position(Point3::new(-4.0, y, 0.0)));
         let _ = world.attach_collider(
             projectile,
             ColliderDesc::sphere(radius)
@@ -953,9 +937,7 @@ impl PhysicsBenchScenario for SphereObbCollisionScenario {
         let y = box_half.y + 0.01;
 
         // Target box (tracked) at the origin.
-        let target = world.create_body(
-            RigidBodyDesc::dynamic().position(Point3::new(0.0, y, 0.0)),
-        );
+        let target = world.create_body(RigidBodyDesc::dynamic().position(Point3::new(0.0, y, 0.0)));
         let _ = world.attach_collider(
             target,
             ColliderDesc::box_shape(box_half)
@@ -965,9 +947,11 @@ impl PhysicsBenchScenario for SphereObbCollisionScenario {
         );
 
         // Projectile sphere, offset in -X.
-        let projectile = world.create_body(
-            RigidBodyDesc::dynamic().position(Point3::new(-4.0, sphere_radius + 0.01, 0.0)),
-        );
+        let projectile = world.create_body(RigidBodyDesc::dynamic().position(Point3::new(
+            -4.0,
+            sphere_radius + 0.01,
+            0.0,
+        )));
         let _ = world.attach_collider(
             projectile,
             ColliderDesc::sphere(sphere_radius)
@@ -1028,9 +1012,7 @@ impl PhysicsBenchScenario for ObbObbCollisionScenario {
         let y = half.y + 0.01;
 
         // Target box (tracked) at the origin.
-        let target = world.create_body(
-            RigidBodyDesc::dynamic().position(Point3::new(0.0, y, 0.0)),
-        );
+        let target = world.create_body(RigidBodyDesc::dynamic().position(Point3::new(0.0, y, 0.0)));
         let _ = world.attach_collider(
             target,
             ColliderDesc::box_shape(half)
@@ -1107,9 +1089,8 @@ impl PhysicsBenchScenario for BoxGridScenario {
                 let x = ix as f32 * self.spacing - offset;
                 let z = iz as f32 * self.spacing - offset;
                 let y = 2.0 + (ix + iz) as f32 * 0.1;
-                let body = world.create_body(
-                    RigidBodyDesc::dynamic().position(Point3::new(x, y, z)),
-                );
+                let body =
+                    world.create_body(RigidBodyDesc::dynamic().position(Point3::new(x, y, z)));
                 let _ = world.attach_collider(
                     body,
                     ColliderDesc::box_shape(he)
@@ -1169,9 +1150,8 @@ impl PhysicsBenchScenario for HighSpeedSphereCcdScenario {
 
     fn setup(&self, world: &mut PhysicsWorld) -> RigidBodyHandle {
         let radius = 0.3;
-        let body = world.create_body(
-            RigidBodyDesc::dynamic().position(Point3::new(0.0, 50.0, 0.0)),
-        );
+        let body =
+            world.create_body(RigidBodyDesc::dynamic().position(Point3::new(0.0, 50.0, 0.0)));
         let _ = world.attach_collider(
             body,
             ColliderDesc::sphere(radius)
@@ -1285,20 +1265,9 @@ mod tests {
 
         // The sphere should stay on the surface the entire time. With
         // radius 0.5 on a y=0 plane, center should be near 0.5.
-        let min_y = run
-            .samples
-            .iter()
-            .map(|s| s.y)
-            .fold(f32::MAX, f32::min);
-        let max_y = run
-            .samples
-            .iter()
-            .map(|s| s.y)
-            .fold(0.0f32, f32::max);
-        assert!(
-            min_y > 0.4,
-            "sphere sank below surface: min_y={min_y:.4}"
-        );
+        let min_y = run.samples.iter().map(|s| s.y).fold(f32::MAX, f32::min);
+        let max_y = run.samples.iter().map(|s| s.y).fold(0.0f32, f32::max);
+        assert!(min_y > 0.4, "sphere sank below surface: min_y={min_y:.4}");
         assert!(
             max_y < 0.7,
             "sphere bounced off surface (jitter): max_y={max_y:.4}"
@@ -1337,10 +1306,7 @@ mod tests {
             .collect();
         // After initial settling (skip first 50 samples), vertical speed
         // should be very small — no sudden pops from edge contacts.
-        let max_y_speed_after_settle = y_speeds
-            .iter()
-            .skip(50)
-            .fold(0.0f32, |a, &b| a.max(b));
+        let max_y_speed_after_settle = y_speeds.iter().skip(50).fold(0.0f32, |a, &b| a.max(b));
         assert!(
             max_y_speed_after_settle < 0.5,
             "vertical speed spike detected (seam jitter): max_y_speed={max_y_speed_after_settle:.4}"
@@ -1431,11 +1397,7 @@ mod tests {
         );
 
         // Sphere must never tunnel through the ramp.
-        let min_y = run
-            .samples
-            .iter()
-            .map(|s| s.y)
-            .fold(f32::MAX, f32::min);
+        let min_y = run.samples.iter().map(|s| s.y).fold(f32::MAX, f32::min);
         assert!(
             min_y > -0.5,
             "sphere should not fall through ramp: min_y={min_y:.4}"
@@ -1464,11 +1426,7 @@ mod tests {
             "box should gain speed on ramp: peak_speed={peak_speed:.3}"
         );
 
-        let min_y = run
-            .samples
-            .iter()
-            .map(|s| s.y)
-            .fold(f32::MAX, f32::min);
+        let min_y = run.samples.iter().map(|s| s.y).fold(f32::MAX, f32::min);
         assert!(
             min_y > -0.5,
             "box should not fall through ramp: min_y={min_y:.4}"
@@ -1519,11 +1477,7 @@ mod tests {
         // The sphere should settle inside the bowl. With half_size=2,
         // depth=2, radius=0.5, the equilibrium center is at y ≈ -1.29.
         // It must NOT fall through the apex (y < -2.0).
-        let min_y = run
-            .samples
-            .iter()
-            .map(|s| s.y)
-            .fold(f32::MAX, f32::min);
+        let min_y = run.samples.iter().map(|s| s.y).fold(f32::MAX, f32::min);
         assert!(
             min_y > -2.0,
             "sphere fell through bowl apex: min_y={min_y:.4}"
@@ -1639,11 +1593,7 @@ mod tests {
         let run = run_scenario(&scenario, cfg);
         write_exports(&run, "high_speed_sphere_ccd");
 
-        let min_y = run
-            .samples
-            .iter()
-            .map(|s| s.y)
-            .fold(f32::MAX, f32::min);
+        let min_y = run.samples.iter().map(|s| s.y).fold(f32::MAX, f32::min);
         assert!(
             min_y > -0.1,
             "sphere tunneled through ground: min_y={min_y:.4}"
@@ -1714,5 +1664,177 @@ mod tests {
 
         assert!(!run.samples.is_empty());
         assert_eq!(run.dropped_steps, 0);
+    }
+
+    // ── Box stacking: dynamic-dynamic stability ─────────────────────────
+
+    #[test]
+    fn box_stack_settles_without_overlap() {
+        let box_half_extents = Vector3::new(2.5, 0.5, 2.5);
+        let geometry = FlatQuadGeometry::new(20.0);
+
+        let mut config = PhysicsConfig::default();
+        config.sleep.enabled = false;
+        config.deterministic_contact_ordering = true;
+        let mut world = PhysicsWorld::new(config);
+        let mut debug_lines = DebugLines::default();
+
+        let mut box_handles = Vec::new();
+        for i in 0..5 {
+            let y = 5.0 + (i as f32) * 5.0;
+            let body =
+                world.create_body(RigidBodyDesc::dynamic().position(Point3::new(0.0, y, 0.0)));
+            let _ = world.attach_collider(
+                body,
+                ColliderDesc::box_shape(box_half_extents)
+                    .density(1000.0)
+                    .restitution(0.0)
+                    .friction(0.6),
+            );
+            box_handles.push(body);
+        }
+
+        let fixed_dt = 1.0 / 60.0;
+        let num_steps = (10.0 / fixed_dt) as usize;
+        let tail_steps = (2.0 / fixed_dt) as usize;
+        let tail_start_step = num_steps.saturating_sub(tail_steps);
+        let mut tail_min_y = vec![f32::INFINITY; box_handles.len()];
+        let mut tail_max_y = vec![f32::NEG_INFINITY; box_handles.len()];
+        let mut tail_max_speed = 0.0f32;
+        let mut tail_max_pair_role_swaps = 0usize;
+        let mut tail_max_manifold_churn = 0usize;
+        let mut tail_max_contact_depth = 0.0f32;
+        let mut tail_points_sum = 0usize;
+        let mut tail_samples = 0usize;
+
+        for step_idx in 0..num_steps {
+            world.step(fixed_dt, &geometry, &[], &mut debug_lines);
+            debug_lines.clear();
+
+            if step_idx >= tail_start_step {
+                tail_max_pair_role_swaps =
+                    tail_max_pair_role_swaps.max(world.dynamic_pair_role_swaps());
+                let manifold = world.manifold_frame_stats();
+                let manifold_churn =
+                    manifold.point_adds + manifold.point_replacements + manifold.point_pruned;
+                tail_max_manifold_churn = tail_max_manifold_churn.max(manifold_churn);
+                tail_max_contact_depth = tail_max_contact_depth.max(
+                    world.contact_events()
+                        .iter()
+                        .map(|c| c.depth)
+                        .fold(0.0f32, f32::max),
+                );
+                tail_points_sum += manifold.points;
+                tail_samples += 1;
+                for (i, &handle) in box_handles.iter().enumerate() {
+                    let body = world.body(handle).expect("box body should exist");
+                    let y = body.position().y;
+                    tail_min_y[i] = tail_min_y[i].min(y);
+                    tail_max_y[i] = tail_max_y[i].max(y);
+                    let spd = body.linear_velocity().magnitude();
+                    if spd > tail_max_speed {
+                        tail_max_speed = spd;
+                    }
+                }
+            }
+
+            // Diagnostic: print every 60 frames (1s intervals) and last 5 frames
+            if step_idx % 60 == 0 || step_idx >= num_steps - 5 {
+                let manifold = world.manifold_frame_stats();
+                let manifold_churn =
+                    manifold.point_adds + manifold.point_replacements + manifold.point_pruned;
+                let mut line = format!(
+                    "step {step_idx:4} swaps={} m_points={} m_churn={} :",
+                    world.dynamic_pair_role_swaps(),
+                    manifold.points,
+                    manifold_churn,
+                );
+                for (i, &handle) in box_handles.iter().enumerate() {
+                    let body = world.body(handle).expect("box body should exist");
+                    let p = body.position();
+                    let v = body.linear_velocity();
+                    let av = body.angular_velocity();
+                    line.push_str(&format!(
+                        " B{i}(y={:.3} vy={:.3} spd={:.3} aspd={:.3})",
+                        p.y,
+                        v.y,
+                        v.magnitude(),
+                        av.magnitude()
+                    ));
+                }
+                eprintln!("{line}");
+            }
+        }
+
+        let mut y_positions = Vec::new();
+        let mut max_speed = 0.0f32;
+        for &handle in &box_handles {
+            let body = world.body(handle).expect("box body should exist");
+            y_positions.push(body.position().y);
+            max_speed = max_speed.max(body.linear_velocity().magnitude());
+        }
+
+        y_positions.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+        eprintln!(
+            "tail_max_pair_role_swaps={tail_max_pair_role_swaps} tail_max_speed={tail_max_speed:.6} final_max_speed={max_speed:.6}"
+        );
+        if tail_samples > 0 {
+            let tail_avg_manifold_points = tail_points_sum as f32 / tail_samples as f32;
+            eprintln!(
+                "tail_max_manifold_churn={} tail_avg_manifold_points={:.2} tail_max_contact_depth={:.4}",
+                tail_max_manifold_churn,
+                tail_avg_manifold_points,
+                tail_max_contact_depth
+            );
+        }
+        assert!(
+            max_speed < 0.2,
+            "boxes should have mostly settled: max speed {max_speed:.6}"
+        );
+        assert!(
+            tail_max_speed < 0.08,
+            "boxes should be near-rest in tail window: tail max speed {tail_max_speed:.6}"
+        );
+
+        for i in 0..tail_min_y.len() {
+            assert!(
+                tail_min_y[i].is_finite() && tail_max_y[i].is_finite(),
+                "tail window sampling failed for box {i}"
+            );
+            let tail_peak_to_peak = tail_max_y[i] - tail_min_y[i];
+            assert!(
+                tail_peak_to_peak < 0.03,
+                "box {i} jitters in tail window: peak-to-peak y={tail_peak_to_peak:.6}"
+            );
+        }
+
+        for i in 0..y_positions.len() {
+            assert!(
+                y_positions[i] > 0.0,
+                "box {i} fell through ground: y={}",
+                y_positions[i]
+            );
+        }
+
+        for i in 1..y_positions.len() {
+            let separation = y_positions[i] - y_positions[i - 1];
+            let min_separation = 2.0 * box_half_extents.y;
+            assert!(
+                separation >= min_separation * 0.95,
+                "boxes {} and {} overlap: separation={:.3}, min_separation={:.3}",
+                i - 1,
+                i,
+                separation,
+                min_separation
+            );
+        }
+
+        let bottom_box_y = y_positions[0];
+        assert!(
+            bottom_box_y > 0.4 && bottom_box_y < 0.6,
+            "bottom box should rest on ground at y ≈ 0.5, got y={}",
+            bottom_box_y
+        );
     }
 }
