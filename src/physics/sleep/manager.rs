@@ -5,7 +5,7 @@ use nalgebra::Vector3;
 
 use crate::physics::body::RigidBody;
 use crate::physics::handle::RigidBodyHandle;
-use crate::physics::pipeline::solver::ContactConstraint;
+use crate::physics::pipeline::pair::SolverManifold;
 use crate::physics::sleep::energy::EnergyTracker;
 use crate::physics::sleep::islands::IslandBuilder;
 use crate::physics::sleep::wake::WakeEvents;
@@ -25,7 +25,7 @@ impl Default for SleepManagerConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            threshold: 0.1,
+            threshold: 0.05,
             delay_frames: 30,
         }
     }
@@ -78,20 +78,16 @@ impl SleepManager {
         self.wake_events.push(handle);
     }
 
-    pub fn note_contact_wakes(
-        &mut self,
-        contacts: &[ContactConstraint],
-        bodies: &Arena<RigidBody>,
-    ) {
+    pub fn note_contact_wakes(&mut self, manifolds: &[SolverManifold], bodies: &Arena<RigidBody>) {
         if !self.enabled {
             return;
         }
-        for contact in contacts {
-            let handle_b = contact.body_b;
+        for manifold in manifolds {
+            let handle_b = manifold.header.body_b;
             let Some(body_b) = bodies.get(handle_b.0) else {
                 continue;
             };
-            let body_a_handle = contact.body_a;
+            let body_a_handle = manifold.header.body_a;
             let body_a = body_a_handle.and_then(|h| bodies.get(h.0));
 
             let sleeping_a = body_a_handle.map(|h| self.is_sleeping(h)).unwrap_or(false);
@@ -118,7 +114,7 @@ impl SleepManager {
         }
     }
 
-    pub fn apply_wake_events(&mut self, contacts: &[ContactConstraint], bodies: &Arena<RigidBody>) {
+    pub fn apply_wake_events(&mut self, manifolds: &[SolverManifold], bodies: &Arena<RigidBody>) {
         if !self.enabled {
             self.wake_events.clear();
             return;
@@ -133,7 +129,7 @@ impl SleepManager {
             self.energy.clear_body(*handle);
         }
 
-        let islands = self.island_builder.build(bodies, contacts);
+        let islands = self.island_builder.build(bodies, manifolds);
         for island in islands {
             if island
                 .bodies
@@ -148,16 +144,17 @@ impl SleepManager {
         }
     }
 
-    pub fn filter_active_contacts(&self, contacts: &[ContactConstraint]) -> Vec<ContactConstraint> {
+    pub fn filter_active_manifolds(&self, manifolds: &[SolverManifold]) -> Vec<SolverManifold> {
         if !self.enabled {
-            return contacts.to_vec();
+            return manifolds.to_vec();
         }
 
-        contacts
+        manifolds
             .iter()
-            .filter(|contact| {
-                let body_b_awake = !self.is_sleeping(contact.body_b);
-                let body_a_awake = contact
+            .filter(|manifold| {
+                let body_b_awake = !self.is_sleeping(manifold.header.body_b);
+                let body_a_awake = manifold
+                    .header
                     .body_a
                     .map(|h| !self.is_sleeping(h))
                     .unwrap_or(false);
@@ -170,7 +167,7 @@ impl SleepManager {
     pub fn update_sleep_states(
         &mut self,
         bodies: &mut Arena<RigidBody>,
-        contacts: &[ContactConstraint],
+        manifolds: &[SolverManifold],
     ) {
         if !self.enabled {
             return;
@@ -190,7 +187,7 @@ impl SleepManager {
             }
         }
 
-        let islands = self.island_builder.build(bodies, contacts);
+        let islands = self.island_builder.build(bodies, manifolds);
         for island in islands {
             if island
                 .bodies

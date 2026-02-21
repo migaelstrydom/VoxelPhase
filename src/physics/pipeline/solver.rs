@@ -5,52 +5,21 @@ use nalgebra::{Matrix3, Point3, Vector3};
 use std::collections::HashMap;
 
 use crate::physics::body::RigidBody;
-use crate::physics::handle::{ColliderHandle, RigidBodyHandle};
-use crate::physics::pipeline::post_stabilizer::{is_kinematic_static_contact, post_stabilize};
+use crate::physics::handle::RigidBodyHandle;
+use crate::physics::pipeline::pair::{PairHeader, SolverContact, SolverManifold};
+use crate::physics::pipeline::post_stabilizer::post_stabilize;
 use crate::physics::world::PhysicsConfig;
 
-/// A contact constraint to be solved.
-#[derive(Debug, Clone)]
-pub struct ContactConstraint {
-    /// First body (or None for static geometry).
-    pub body_a: Option<RigidBodyHandle>,
-    /// Second body.
-    pub body_b: RigidBodyHandle,
-    /// First collider (None for static geometry).
-    pub collider_a: Option<ColliderHandle>,
-    /// Second collider (None for transient CCD contacts).
-    pub collider_b: Option<ColliderHandle>,
-    /// Contact point in world space.
-    pub point: Point3<f32>,
-    /// Contact normal pointing from A to B.
-    pub normal: Vector3<f32>,
-    /// Raw contact normal before any smoothing or clustering.
-    pub raw_normal: Vector3<f32>,
-    /// Penetration depth.
-    pub depth: f32,
-    /// Unclamped penetration depth (can be negative for margin contacts).
-    pub raw_depth: f32,
-    /// Combined material properties.
-    pub restitution: f32,
-    pub friction: f32,
-    /// Cached normal impulse from manifold (for warm-starting).
-    pub warm_normal_impulse: f32,
-    /// Cached tangent impulses from manifold (for warm-starting).
-    pub warm_tangent_impulse: [f32; 2],
-}
-
-/// Accumulated impulses from the solver, for writing back to the manifold cache.
-#[derive(Debug, Clone, Default)]
-pub struct SolvedImpulses {
-    pub normal: f32,
-    pub tangent: [f32; 2],
-}
-
-/// Snapshot of both bodies' physics state for a single contact.
+/// Minimum effective inverse mass allowed in the normal solver.
 ///
-/// Stores the real physics values — no kinematic overrides. Callers that
-/// need the kinematic-static treatment (normal impulse) apply the override
-/// via `effective_mass_with_overrides`.
+/// Prevents near-zero denominators (degenerate geometry or deeply wedged bodies)
+/// from producing runaway impulses.
+const MIN_EFFECTIVE_INV_MASS: f32 = 1.0e-8;
+
+/// Snapshot of both bodies' physics state for a contact pair.
+///
+/// Stores real physics values — no kinematic overrides. Callers that need the
+/// kinematic-static treatment apply the override via `effective_mass_with_overrides`.
 struct BodyPairState {
     pos_a: Point3<f32>,
     vel_a: Vector3<f32>,
@@ -66,13 +35,19 @@ struct BodyPairState {
 }
 
 impl BodyPairState {
-    /// Extract physics state for both sides of a contact.
+    /// Extract physics state for both sides of a contact pair.
     ///
-    /// Returns `None` if either body handle is stale (removed from the arena).
-    fn extract(bodies: &Arena<RigidBody>, contact: &ContactConstraint) -> Option<Self> {
-        let body_b = bodies.get(contact.body_b.0)?;
+    /// `contact_point` is used as the fallback position for static body_a (where
+    /// body_a is None). The actual value doesn't affect physics since static bodies
+    /// have zero mass and inertia.
+    fn extract(
+        bodies: &Arena<RigidBody>,
+        header: &PairHeader,
+        contact_point: Point3<f32>,
+    ) -> Option<Self> {
+        let body_b = bodies.get(header.body_b.0)?;
 
-        let (pos_a, vel_a, angular_vel_a, inv_mass_a, inv_inertia_a) = match contact.body_a {
+        let (pos_a, vel_a, angular_vel_a, inv_mass_a, inv_inertia_a) = match header.body_a {
             Some(handle) => {
                 let body_a = bodies.get(handle.0)?;
                 (
@@ -84,7 +59,7 @@ impl BodyPairState {
                 )
             }
             None => (
-                contact.point,
+                contact_point,
                 Vector3::zeros(),
                 Vector3::zeros(),
                 0.0,
@@ -107,39 +82,44 @@ impl BodyPairState {
     }
 
     /// Relative velocity at the contact point, projected onto the normal.
-    fn relative_normal_velocity(&self, contact: &ContactConstraint) -> f32 {
-        let rel_vel = self.relative_velocity_at_contact(contact);
-        rel_vel.dot(&contact.normal)
+    fn relative_normal_velocity(&self, point: Point3<f32>, normal: &Vector3<f32>) -> f32 {
+        let rel_vel = self.relative_velocity_at(point);
+        rel_vel.dot(normal)
     }
 
-    /// Relative velocity at the contact point (B minus A).
-    fn relative_velocity_at_contact(&self, contact: &ContactConstraint) -> Vector3<f32> {
-        let r_a = contact.point - self.pos_a;
-        let r_b = contact.point - self.pos_b;
+    /// Relative velocity at a point (B minus A).
+    fn relative_velocity_at(&self, point: Point3<f32>) -> Vector3<f32> {
+        let r_a = point - self.pos_a;
+        let r_b = point - self.pos_b;
         let vel_at_a = self.vel_a + self.angular_vel_a.cross(&r_a);
         let vel_at_b = self.vel_b + self.angular_vel_b.cross(&r_b);
         vel_at_b - vel_at_a
     }
 
     /// Compute the effective mass for an impulse along the given direction.
-    fn effective_mass(&self, contact: &ContactConstraint, direction: &Vector3<f32>) -> f32 {
-        self.effective_mass_with_overrides(contact, direction, self.inv_mass_b, self.inv_inertia_b)
+    fn effective_inv_mass(&self, point: Point3<f32>, direction: &Vector3<f32>) -> f32 {
+        self.effective_inv_mass_with_overrides(
+            point,
+            direction,
+            self.inv_mass_b,
+            self.inv_inertia_b,
+        )
     }
 
-    /// Compute effective mass with explicit body_b overrides.
+    /// Compute effective (inverse) mass with explicit body_b overrides.
     ///
     /// Used by the normal solver to treat kinematic-vs-static contacts
-    /// as having unit mass, while friction uses the real (zero) mass so
+    /// as having unit (inverse) mass, while friction uses the real (zero) mass so
     /// kinematic bodies aren't slowed by friction against static geometry.
-    fn effective_mass_with_overrides(
+    fn effective_inv_mass_with_overrides(
         &self,
-        contact: &ContactConstraint,
+        point: Point3<f32>,
         direction: &Vector3<f32>,
         inv_mass_b: f32,
         inv_inertia_b: Matrix3<f32>,
     ) -> f32 {
-        let r_a = contact.point - self.pos_a;
-        let r_b = contact.point - self.pos_b;
+        let r_a = point - self.pos_a;
+        let r_b = point - self.pos_b;
 
         let r_a_cross = r_a.cross(direction);
         let r_b_cross = r_b.cross(direction);
@@ -151,89 +131,94 @@ impl BodyPairState {
     }
 }
 
+/// Returns true if body_b is kinematic and body_a is static geometry.
+#[inline]
+fn is_kinematic_static(body: &RigidBody, header: &PairHeader) -> bool {
+    body.is_kinematic() && header.body_a.is_none()
+}
+
 /// Solve contact constraints with warm-starting and multiple iterations.
 ///
 /// Pipeline:
 /// 1. Warm-start: apply cached impulses from the manifold cache
 /// 2. Iterative solve: run `config.solver_iterations` passes of sequential impulses
 /// 3. Post-stabilization: penetration correction + contact damping
-/// 4. Return accumulated impulses for manifold writeback
+///
+/// Accumulated impulses are written in-place on each `SolverContact`.
 pub fn solve(
     bodies: &mut Arena<RigidBody>,
-    contacts: &[ContactConstraint],
+    manifolds: &mut [SolverManifold],
     config: &PhysicsConfig,
     dt: f32,
-) -> Vec<SolvedImpulses> {
-    if contacts.is_empty() {
-        return Vec::new();
+) {
+    if manifolds.is_empty() {
+        return;
     }
 
-    // Phase 1: Capture pre-solve normal velocities (before warm-start).
-    let pre_solve_vn: Vec<f32> = contacts
+    // Phase 1: Capture pre-solve normal velocities and warm-start scales.
+    // Indexed as [manifold_idx][contact_idx] = (pre_solve_vn, warm_scale).
+    let pre_solve: Vec<Vec<(f32, f32)>> = manifolds
         .iter()
-        .map(|contact| {
-            BodyPairState::extract(bodies, contact)
-                .map(|state| state.relative_normal_velocity(contact))
-                .unwrap_or(0.0)
+        .map(|m| {
+            m.contacts
+                .iter()
+                .map(|c| {
+                    let vn = BodyPairState::extract(bodies, &m.header, c.point)
+                        .map(|s| s.relative_normal_velocity(c.point, &c.normal))
+                        .unwrap_or(0.0);
+                    let warm_scale = if vn.abs() > config.restitution_velocity_threshold {
+                        0.0
+                    } else {
+                        config.warm_start_scale
+                    };
+                    (vn, warm_scale)
+                })
+                .collect()
         })
         .collect();
 
-    // Phase 2: Warm-start — apply cached impulses from previous frame
-    let warm_scales: Vec<f32> = pre_solve_vn
-        .iter()
-        .map(|vn| {
-            if vn.abs() > config.restitution_velocity_threshold {
-                0.0
-            } else {
-                config.warm_start_scale
-            }
-        })
-        .collect();
-    warm_start(bodies, contacts, &warm_scales);
-
-    // Phase 3: Iterative sequential-impulse solving
-    let mut accumulated: Vec<SolvedImpulses> = contacts
-        .iter()
-        .zip(warm_scales.iter())
-        .map(|(c, scale)| SolvedImpulses {
-            normal: c.warm_normal_impulse * *scale,
-            tangent: [
-                c.warm_tangent_impulse[0] * *scale,
-                c.warm_tangent_impulse[1] * *scale,
-            ],
-        })
-        .collect();
-
-    let iterations = effective_solver_iterations(contacts, config.solver_iterations);
-    for _ in 0..iterations {
-        for (i, contact) in contacts.iter().enumerate() {
-            solve_normal_impulse(
-                bodies,
-                contact,
-                config.restitution_velocity_threshold,
-                pre_solve_vn[i],
-                &mut accumulated[i],
-            );
-            solve_friction_impulse(bodies, contact, &mut accumulated[i]);
+    // Phase 2: Warm-start — apply cached impulses from previous frame.
+    for (mi, manifold) in manifolds.iter_mut().enumerate() {
+        let header = &manifold.header;
+        for (ci, contact) in manifold.contacts.iter_mut().enumerate() {
+            warm_start_contact(bodies, header, contact, pre_solve[mi][ci].1);
         }
     }
 
-    // Phase 4: Post-stabilization correction after velocity solving
-    post_stabilize(bodies, contacts, &config.post_stabilise, dt);
+    // Phase 3: Iterative sequential-impulse solving.
+    let iterations = effective_solver_iterations(manifolds, config.solver_iterations);
+    for _ in 0..iterations {
+        for (mi, manifold) in manifolds.iter_mut().enumerate() {
+            let header = &manifold.header;
+            for (ci, contact) in manifold.contacts.iter_mut().enumerate() {
+                solve_normal_impulse(
+                    bodies,
+                    header,
+                    contact,
+                    config.restitution_velocity_threshold,
+                    pre_solve[mi][ci].0,
+                );
+                solve_friction_impulse(bodies, header, contact);
+            }
+        }
+    }
 
-    accumulated
+    // Phase 4: Post-stabilization correction after velocity solving.
+    post_stabilize(bodies, manifolds, &config.post_stabilise, dt);
 }
 
-fn effective_solver_iterations(contacts: &[ContactConstraint], base_iterations: u32) -> u32 {
+fn effective_solver_iterations(manifolds: &[SolverManifold], base_iterations: u32) -> u32 {
     let mut per_body_counts: HashMap<RigidBodyHandle, usize> = HashMap::new();
     let mut per_body_normals: HashMap<RigidBodyHandle, Vec<Vector3<f32>>> = HashMap::new();
-    for contact in contacts {
-        let entry = per_body_counts.entry(contact.body_b).or_insert(0);
-        *entry += 1;
-        per_body_normals
-            .entry(contact.body_b)
-            .or_default()
-            .push(contact.normal);
+    for manifold in manifolds {
+        for contact in &manifold.contacts {
+            let entry = per_body_counts.entry(manifold.header.body_b).or_insert(0);
+            *entry += 1;
+            per_body_normals
+                .entry(manifold.header.body_b)
+                .or_default()
+                .push(contact.normal);
+        }
     }
 
     let mut extra = 0u32;
@@ -268,31 +253,36 @@ fn effective_solver_iterations(contacts: &[ContactConstraint], base_iterations: 
     base_iterations + extra
 }
 
-/// Apply cached impulses from the manifold to give the solver a head start.
-fn warm_start(bodies: &mut Arena<RigidBody>, contacts: &[ContactConstraint], scales: &[f32]) {
-    for (contact, scale) in contacts.iter().zip(scales.iter()) {
-        if *scale <= 0.0 {
-            continue;
-        }
-        if contact.warm_normal_impulse.abs() < 1e-8
-            && contact.warm_tangent_impulse[0].abs() < 1e-8
-            && contact.warm_tangent_impulse[1].abs() < 1e-8
-        {
-            continue;
-        }
+/// Apply cached impulse for a single contact and initialize its accumulated impulses.
+fn warm_start_contact(
+    bodies: &mut Arena<RigidBody>,
+    header: &PairHeader,
+    contact: &mut SolverContact,
+    scale: f32,
+) {
+    contact.accumulated_normal_impulse = contact.warm_normal_impulse * scale;
+    contact.accumulated_tangent_impulse = [
+        contact.warm_tangent_impulse[0] * scale,
+        contact.warm_tangent_impulse[1] * scale,
+    ];
 
-        let normal_impulse = contact.normal * (contact.warm_normal_impulse * *scale);
-        let tangent_impulse = compute_tangent_impulse(contact) * *scale;
-        let total = normal_impulse + tangent_impulse;
-
-        apply_impulse_pair(bodies, contact, total);
+    if scale <= 0.0 {
+        return;
     }
-}
+    if contact.warm_normal_impulse.abs() < 1e-8
+        && contact.warm_tangent_impulse[0].abs() < 1e-8
+        && contact.warm_tangent_impulse[1].abs() < 1e-8
+    {
+        return;
+    }
 
-/// Compute a tangent impulse vector from cached tangent impulse magnitudes.
-fn compute_tangent_impulse(contact: &ContactConstraint) -> Vector3<f32> {
     let (t1, t2) = compute_tangent_basis(&contact.normal);
-    t1 * contact.warm_tangent_impulse[0] + t2 * contact.warm_tangent_impulse[1]
+    let normal_impulse = contact.normal * (contact.warm_normal_impulse * scale);
+    let tangent_impulse =
+        (t1 * contact.warm_tangent_impulse[0] + t2 * contact.warm_tangent_impulse[1]) * scale;
+    let total = normal_impulse + tangent_impulse;
+
+    apply_impulse_pair(bodies, header, contact.point, total);
 }
 
 /// Compute a stable orthonormal tangent basis from a normal vector.
@@ -310,22 +300,24 @@ fn compute_tangent_basis(normal: &Vector3<f32>) -> (Vector3<f32>, Vector3<f32>) 
 /// Solve contacts without warm-starting (for transient contacts like CCD).
 pub fn solve_contacts(
     bodies: &mut Arena<RigidBody>,
-    contacts: &[ContactConstraint],
+    manifolds: &mut [SolverManifold],
     restitution_velocity_threshold: f32,
 ) {
-    for contact in contacts {
-        let mut accumulated = SolvedImpulses::default();
-        let pre_solve_vn = BodyPairState::extract(bodies, contact)
-            .map(|state| state.relative_normal_velocity(contact))
-            .unwrap_or(0.0);
-        solve_normal_impulse(
-            bodies,
-            contact,
-            restitution_velocity_threshold,
-            pre_solve_vn,
-            &mut accumulated,
-        );
-        solve_friction_impulse(bodies, contact, &mut accumulated);
+    for manifold in manifolds.iter_mut() {
+        let header = &manifold.header;
+        for contact in manifold.contacts.iter_mut() {
+            let pre_solve_vn = BodyPairState::extract(bodies, header, contact.point)
+                .map(|state| state.relative_normal_velocity(contact.point, &contact.normal))
+                .unwrap_or(0.0);
+            solve_normal_impulse(
+                bodies,
+                header,
+                contact,
+                restitution_velocity_threshold,
+                pre_solve_vn,
+            );
+            solve_friction_impulse(bodies, header, contact);
+        }
     }
 }
 
@@ -335,17 +327,17 @@ pub fn solve_contacts(
 
 fn solve_normal_impulse(
     bodies: &mut Arena<RigidBody>,
-    contact: &ContactConstraint,
+    header: &PairHeader,
+    contact: &mut SolverContact,
     restitution_velocity_threshold: f32,
     pre_solve_vn: f32,
-    accumulated: &mut SolvedImpulses,
 ) {
-    let Some(state) = BodyPairState::extract(bodies, contact) else {
+    let Some(state) = BodyPairState::extract(bodies, header, contact.point) else {
         return;
     };
 
-    let vel_along_normal = state.relative_normal_velocity(contact);
-    if vel_along_normal > 0.0 && accumulated.normal <= 1e-8 {
+    let vel_along_normal = state.relative_normal_velocity(contact.point, &contact.normal);
+    if vel_along_normal > 0.0 && contact.accumulated_normal_impulse <= 1e-8 {
         return;
     }
 
@@ -353,8 +345,8 @@ fn solve_normal_impulse(
     // can push the kinematic body out of static geometry. Friction does NOT
     // use this override — kinematic bodies should move freely along surfaces.
     let kinematic_static = bodies
-        .get(contact.body_b.0)
-        .is_some_and(|b| is_kinematic_static_contact(b, contact));
+        .get(header.body_b.0)
+        .is_some_and(|b| is_kinematic_static(b, header));
 
     let (eff_inv_mass_b, eff_inv_inertia_b) = if kinematic_static {
         (1.0, Matrix3::zeros())
@@ -362,35 +354,35 @@ fn solve_normal_impulse(
         (state.inv_mass_b, state.inv_inertia_b)
     };
 
-    let effective_mass = state.effective_mass_with_overrides(
-        contact,
+    let effective_inv_mass = state.effective_inv_mass_with_overrides(
+        contact.point,
         &contact.normal,
         eff_inv_mass_b,
         eff_inv_inertia_b,
     );
-    if effective_mass <= 0.0 {
+    if effective_inv_mass <= MIN_EFFECTIVE_INV_MASS || !effective_inv_mass.is_finite() {
         return;
     }
 
     let speed = pre_solve_vn.abs();
     let restitution_scale =
         ((speed - restitution_velocity_threshold) / restitution_velocity_threshold).clamp(0.0, 1.0);
-    let restitution = contact.restitution * restitution_scale;
+    let restitution = header.restitution * restitution_scale;
     let restitution_velocity = if pre_solve_vn < 0.0 {
         restitution * pre_solve_vn
     } else {
         0.0
     };
 
-    let delta = -(vel_along_normal + restitution_velocity) / effective_mass;
-    let old = accumulated.normal;
+    let delta = -(vel_along_normal + restitution_velocity) / effective_inv_mass;
+    let old = contact.accumulated_normal_impulse;
     let new = (old + delta).max(0.0);
     let applied = new - old;
-    accumulated.normal = new;
+    contact.accumulated_normal_impulse = new;
 
     if applied.abs() > 1e-10 {
         let impulse = contact.normal * applied;
-        apply_impulse_pair(bodies, contact, impulse);
+        apply_impulse_pair(bodies, header, contact.point, impulse);
     }
 }
 
@@ -400,34 +392,36 @@ fn solve_normal_impulse(
 
 fn solve_friction_impulse(
     bodies: &mut Arena<RigidBody>,
-    contact: &ContactConstraint,
-    accumulated: &mut SolvedImpulses,
+    header: &PairHeader,
+    contact: &mut SolverContact,
 ) {
-    if accumulated.normal <= 0.0 || contact.friction <= 0.0 {
-        accumulated.tangent = [0.0, 0.0];
+    if contact.accumulated_normal_impulse <= 0.0 || header.friction <= 0.0 {
+        contact.accumulated_tangent_impulse = [0.0, 0.0];
         return;
     }
 
-    let Some(state) = BodyPairState::extract(bodies, contact) else {
+    let Some(state) = BodyPairState::extract(bodies, header, contact.point) else {
         return;
     };
 
-    let rel_vel = state.relative_velocity_at_contact(contact);
+    let rel_vel = state.relative_velocity_at(contact.point);
     let (t1, t2) = compute_tangent_basis(&contact.normal);
 
-    let effective_mass_t1 = state.effective_mass(contact, &t1);
-    let effective_mass_t2 = state.effective_mass(contact, &t2);
-    if effective_mass_t1 <= 0.0 || effective_mass_t2 <= 0.0 {
+    let effective_mass_t1 = state.effective_inv_mass(contact.point, &t1);
+    let effective_mass_t2 = state.effective_inv_mass(contact.point, &t2);
+    if effective_mass_t1 <= MIN_EFFECTIVE_INV_MASS || !effective_mass_t1.is_finite()
+        || effective_mass_t2 <= MIN_EFFECTIVE_INV_MASS || !effective_mass_t2.is_finite()
+    {
         return;
     }
 
     let delta_t1 = -rel_vel.dot(&t1) / effective_mass_t1;
     let delta_t2 = -rel_vel.dot(&t2) / effective_mass_t2;
 
-    let mut new_t1 = accumulated.tangent[0] + delta_t1;
-    let mut new_t2 = accumulated.tangent[1] + delta_t2;
+    let mut new_t1 = contact.accumulated_tangent_impulse[0] + delta_t1;
+    let mut new_t2 = contact.accumulated_tangent_impulse[1] + delta_t2;
 
-    let max_friction = contact.friction * accumulated.normal;
+    let max_friction = header.friction * contact.accumulated_normal_impulse;
     let mag = (new_t1 * new_t1 + new_t2 * new_t2).sqrt();
     if mag > max_friction {
         let scale = max_friction / mag;
@@ -435,13 +429,13 @@ fn solve_friction_impulse(
         new_t2 *= scale;
     }
 
-    let applied_t1 = new_t1 - accumulated.tangent[0];
-    let applied_t2 = new_t2 - accumulated.tangent[1];
-    accumulated.tangent = [new_t1, new_t2];
+    let applied_t1 = new_t1 - contact.accumulated_tangent_impulse[0];
+    let applied_t2 = new_t2 - contact.accumulated_tangent_impulse[1];
+    contact.accumulated_tangent_impulse = [new_t1, new_t2];
 
     if applied_t1.abs() > 1e-10 || applied_t2.abs() > 1e-10 {
         let impulse = t1 * applied_t1 + t2 * applied_t2;
-        apply_impulse_pair(bodies, contact, impulse);
+        apply_impulse_pair(bodies, header, contact.point, impulse);
     }
 }
 
@@ -452,21 +446,22 @@ fn solve_friction_impulse(
 /// Apply equal-and-opposite impulses to both bodies in a contact pair.
 fn apply_impulse_pair(
     bodies: &mut Arena<RigidBody>,
-    contact: &ContactConstraint,
+    header: &PairHeader,
+    point: Point3<f32>,
     impulse: Vector3<f32>,
 ) {
-    if let Some(handle_a) = contact.body_a {
+    if let Some(handle_a) = header.body_a {
         if let Some(body_a) = bodies.get_mut(handle_a.0) {
             if body_a.is_dynamic() {
-                body_a.apply_impulse_at_point(-impulse, contact.point);
+                body_a.apply_impulse_at_point(-impulse, point);
             }
         }
     }
 
-    if let Some(body_b) = bodies.get_mut(contact.body_b.0) {
+    if let Some(body_b) = bodies.get_mut(header.body_b.0) {
         if body_b.is_dynamic() {
-            body_b.apply_impulse_at_point(impulse, contact.point);
-        } else if is_kinematic_static_contact(body_b, contact) {
+            body_b.apply_impulse_at_point(impulse, point);
+        } else if is_kinematic_static(body_b, header) {
             body_b.set_linear_velocity(body_b.linear_velocity() + impulse);
         }
     }

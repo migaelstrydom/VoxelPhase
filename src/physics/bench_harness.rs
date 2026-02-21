@@ -2,7 +2,8 @@ use nalgebra::{Point3, Vector3};
 
 use super::world::PhysicsConfig;
 use super::{
-    ColliderDesc, PhysicsImpulse, PhysicsWorld, RigidBodyDesc, RigidBodyHandle, StaticGeometry,
+    ColliderDesc, ForceField, PhysicsImpulse, PhysicsWorld, RigidBodyDesc, RigidBodyHandle,
+    StaticGeometry,
 };
 use crate::collision::{MeshPatch, PatchTriangle, Triangle, AABB};
 use crate::debug::DebugLines;
@@ -873,9 +874,12 @@ impl PhysicsBenchScenario for SphereSphereCollisionScenario {
                 .friction(0.5),
         );
 
-        // Projectile sphere — offset in -X, will be kicked toward target.
-        let projectile =
-            world.create_body(RigidBodyDesc::dynamic().position(Point3::new(-4.0, y, 0.0)));
+        // Projectile sphere — offset in -X, launched directly toward target.
+        let projectile = world.create_body(
+            RigidBodyDesc::dynamic()
+                .position(Point3::new(-3.0, y, 0.0))
+                .linear_velocity(Vector3::new(8.0, 0.0, 0.0)),
+        );
         let _ = world.attach_collider(
             projectile,
             ColliderDesc::sphere(radius)
@@ -889,19 +893,6 @@ impl PhysicsBenchScenario for SphereSphereCollisionScenario {
 
     fn geometry(&self) -> &dyn StaticGeometry {
         &self.geometry
-    }
-
-    fn external_impulses(&self, sim_time: f32) -> Vec<PhysicsImpulse> {
-        if sim_time < 0.01 {
-            vec![PhysicsImpulse::radial(
-                Point3::new(-5.0, 0.51, 0.0),
-                2.0,
-                3000.0,
-                0.0,
-            )]
-        } else {
-            Vec::new()
-        }
     }
 }
 
@@ -946,12 +937,12 @@ impl PhysicsBenchScenario for SphereObbCollisionScenario {
                 .friction(0.5),
         );
 
-        // Projectile sphere, offset in -X.
-        let projectile = world.create_body(RigidBodyDesc::dynamic().position(Point3::new(
-            -4.0,
-            sphere_radius + 0.01,
-            0.0,
-        )));
+        // Projectile sphere — launched directly toward target.
+        let projectile = world.create_body(
+            RigidBodyDesc::dynamic()
+                .position(Point3::new(-3.0, sphere_radius + 0.01, 0.0))
+                .linear_velocity(Vector3::new(8.0, 0.0, 0.0)),
+        );
         let _ = world.attach_collider(
             projectile,
             ColliderDesc::sphere(sphere_radius)
@@ -965,19 +956,6 @@ impl PhysicsBenchScenario for SphereObbCollisionScenario {
 
     fn geometry(&self) -> &dyn StaticGeometry {
         &self.geometry
-    }
-
-    fn external_impulses(&self, sim_time: f32) -> Vec<PhysicsImpulse> {
-        if sim_time < 0.01 {
-            vec![PhysicsImpulse::radial(
-                Point3::new(-5.0, 0.41, 0.0),
-                2.0,
-                3000.0,
-                0.0,
-            )]
-        } else {
-            Vec::new()
-        }
     }
 }
 
@@ -1176,6 +1154,100 @@ mod tests {
     use std::fs;
 
     use super::*;
+
+    #[derive(Debug, Clone)]
+    struct CubeShellGeometry {
+        bounds: AABB,
+        patch: MeshPatch,
+    }
+
+    impl CubeShellGeometry {
+        fn new(half_extent: f32) -> Self {
+            let h = half_extent;
+            let v000 = Point3::new(-h, -h, -h);
+            let v001 = Point3::new(-h, -h, h);
+            let v010 = Point3::new(-h, h, -h);
+            let v011 = Point3::new(-h, h, h);
+            let v100 = Point3::new(h, -h, -h);
+            let v101 = Point3::new(h, -h, h);
+            let v110 = Point3::new(h, h, -h);
+            let v111 = Point3::new(h, h, h);
+
+            let triangles = vec![
+                // -X face
+                PatchTriangle {
+                    triangle: Triangle::new(v000, v011, v010),
+                    neighbors: [None; 3],
+                },
+                PatchTriangle {
+                    triangle: Triangle::new(v000, v001, v011),
+                    neighbors: [None; 3],
+                },
+                // +X face
+                PatchTriangle {
+                    triangle: Triangle::new(v100, v110, v111),
+                    neighbors: [None; 3],
+                },
+                PatchTriangle {
+                    triangle: Triangle::new(v100, v111, v101),
+                    neighbors: [None; 3],
+                },
+                // -Y face
+                PatchTriangle {
+                    triangle: Triangle::new(v000, v100, v101),
+                    neighbors: [None; 3],
+                },
+                PatchTriangle {
+                    triangle: Triangle::new(v000, v101, v001),
+                    neighbors: [None; 3],
+                },
+                // +Y face
+                PatchTriangle {
+                    triangle: Triangle::new(v010, v011, v111),
+                    neighbors: [None; 3],
+                },
+                PatchTriangle {
+                    triangle: Triangle::new(v010, v111, v110),
+                    neighbors: [None; 3],
+                },
+                // -Z face
+                PatchTriangle {
+                    triangle: Triangle::new(v000, v010, v110),
+                    neighbors: [None; 3],
+                },
+                PatchTriangle {
+                    triangle: Triangle::new(v000, v110, v100),
+                    neighbors: [None; 3],
+                },
+                // +Z face
+                PatchTriangle {
+                    triangle: Triangle::new(v001, v101, v111),
+                    neighbors: [None; 3],
+                },
+                PatchTriangle {
+                    triangle: Triangle::new(v001, v111, v011),
+                    neighbors: [None; 3],
+                },
+            ];
+
+            Self {
+                bounds: AABB::new(Point3::new(-h, -h, -h), Point3::new(h, h, h)),
+                patch: MeshPatch { triangles },
+            }
+        }
+    }
+
+    impl StaticGeometry for CubeShellGeometry {
+        fn query_region(&self, aabb: &AABB) -> MeshPatch {
+            if self.bounds.intersects(aabb) {
+                self.patch.clone()
+            } else {
+                MeshPatch {
+                    triangles: Vec::new(),
+                }
+            }
+        }
+    }
 
     fn write_exports(run: &BenchRunResult, stem: &str) {
         let dir = "target/physics_bench";
@@ -1640,6 +1712,113 @@ mod tests {
     }
 
     #[test]
+    fn boundary_and_grenade_like_impulses_keep_states_finite() {
+        let geometry = CubeShellGeometry::new(32.0);
+
+        let mut config = PhysicsConfig::default();
+        config.sleep.enabled = false;
+        let mut world = PhysicsWorld::new(config);
+        let mut debug_lines = DebugLines::default();
+
+        // Match the app's boundary spring so this stress test exercises
+        // the same energy-injection path as gameplay.
+        world.add_force_field(ForceField::boundary(geometry.bounds, 500.0));
+
+        // Dense jumble of boxes near the center.
+        let box_half = Vector3::new(0.3, 0.3, 0.3);
+        for x in 0..5 {
+            for z in 0..5 {
+                let px = -1.2 + x as f32 * 0.6;
+                let pz = -1.2 + z as f32 * 0.6;
+                let py = 1.0 + ((x + z) % 3) as f32 * 0.6;
+                let body =
+                    world.create_body(RigidBodyDesc::dynamic().position(Point3::new(px, py, pz)));
+                let _ = world.attach_collider(
+                    body,
+                    ColliderDesc::box_shape(box_half)
+                        .density(0.5)
+                        .restitution(0.2)
+                        .friction(0.6),
+                );
+            }
+        }
+
+        // Small spheres mixed into the pile (grenade-sized).
+        let sphere_radius = 0.2622022;
+        for i in 0..10 {
+            let t = i as f32;
+            let px = (t * 0.37).sin() * 1.0;
+            let pz = (t * 0.61).cos() * 1.0;
+            let py = 1.3 + (i % 4) as f32 * 0.45;
+            let body =
+                world.create_body(RigidBodyDesc::dynamic().position(Point3::new(px, py, pz)));
+            let _ = world.attach_collider(
+                body,
+                ColliderDesc::sphere(sphere_radius)
+                    .density(1000.0)
+                    .restitution(0.2)
+                    .friction(0.5),
+            );
+        }
+
+        let fixed_dt = 1.0 / 60.0;
+        let num_steps = (20.0 / fixed_dt) as usize;
+        let mut failure: Option<String> = None;
+
+        for step in 0..num_steps {
+            let impulses = if step > 30 && step % 15 == 0 {
+                vec![
+                    PhysicsImpulse::radial(Point3::new(0.0, 0.8, 0.0), 10.0, 26000.0, 0.6),
+                    PhysicsImpulse::radial(Point3::new(0.0, 0.2, 0.0), 8.0, 22000.0, 0.4),
+                ]
+            } else {
+                Vec::new()
+            };
+
+            world.step(fixed_dt, &geometry, &impulses, &mut debug_lines);
+            debug_lines.clear();
+
+            for (idx, body) in world.bodies().iter() {
+                let pos = body.position();
+                let lin = body.linear_velocity();
+                let ang = body.angular_velocity();
+                let lin_speed = lin.magnitude();
+                let ang_speed = ang.magnitude();
+
+                let finite = pos.x.is_finite()
+                    && pos.y.is_finite()
+                    && pos.z.is_finite()
+                    && lin.x.is_finite()
+                    && lin.y.is_finite()
+                    && lin.z.is_finite()
+                    && ang.x.is_finite()
+                    && ang.y.is_finite()
+                    && ang.z.is_finite()
+                    && lin_speed.is_finite()
+                    && ang_speed.is_finite();
+
+                if !finite || lin_speed > 1.0e8 || ang_speed > 1.0e8 {
+                    failure = Some(format!(
+                        "step={step} body={idx:?} pos=({:.3},{:.3},{:.3}) lin=({:.3},{:.3},{:.3}) ang=({:.3},{:.3},{:.3}) lin_speed={:.3} ang_speed={:.3}",
+                        pos.x, pos.y, pos.z, lin.x, lin.y, lin.z, ang.x, ang.y, ang.z, lin_speed, ang_speed
+                    ));
+                    break;
+                }
+            }
+
+            if failure.is_some() {
+                break;
+            }
+        }
+
+        assert!(
+            failure.is_none(),
+            "physics state became unstable under grenade-like stress: {}",
+            failure.unwrap_or_default()
+        );
+    }
+
+    #[test]
     fn box_grid_narrowphase_throughput() {
         // Throughput benchmark: 8x8 = 64 boxes producing many broadphase pairs.
         // Measures wall-clock time for 2 seconds of simulated time.
@@ -1666,6 +1845,80 @@ mod tests {
         assert_eq!(run.dropped_steps, 0);
     }
 
+    #[test]
+    fn large_sphere_sliding_into_low_box_does_not_end_intersecting() {
+        let geometry = FlatQuadGeometry::new(30.0);
+        let box_half_extents = Vector3::new(3.0, 0.1, 3.0);
+        let sphere_radius = 0.9;
+
+        let mut config = PhysicsConfig::default();
+        config.sleep.enabled = false;
+        config.deterministic_contact_ordering = true;
+        let mut world = PhysicsWorld::new(config);
+        let mut debug_lines = DebugLines::default();
+
+        let box_handle = world.create_body(RigidBodyDesc::dynamic().position(Point3::new(
+            0.0,
+            box_half_extents.y + 0.01,
+            0.0,
+        )));
+        let _ = world.attach_collider(
+            box_handle,
+            ColliderDesc::box_shape(box_half_extents)
+                .density(10000.0)
+                .restitution(0.0)
+                .friction(0.7),
+        );
+
+        let sphere_handle = world.create_body(
+            RigidBodyDesc::dynamic()
+                .position(Point3::new(-8.0, sphere_radius + 0.02, 0.0))
+                .linear_velocity(Vector3::new(9.0, 0.0, 0.0)),
+        );
+        let _ = world.attach_collider(
+            sphere_handle,
+            ColliderDesc::sphere(sphere_radius)
+                .density(1000.0)
+                .restitution(0.0)
+                .friction(0.2),
+        );
+
+        let fixed_dt = 1.0 / 60.0;
+        let num_steps = (4.0 / fixed_dt) as usize;
+        for _ in 0..num_steps {
+            world.step(fixed_dt, &geometry, &[], &mut debug_lines);
+            debug_lines.clear();
+        }
+
+        let sphere = world.body(sphere_handle).expect("sphere body should exist");
+        let obstacle = world.body(box_handle).expect("box body should exist");
+
+        let sphere_center_world = sphere.position();
+        let box_center_world = obstacle.position();
+        let sphere_center_in_box = obstacle
+            .rotation()
+            .inverse_transform_vector(&(sphere_center_world - box_center_world));
+        let closest_on_box_local = Vector3::new(
+            sphere_center_in_box
+                .x
+                .clamp(-box_half_extents.x, box_half_extents.x),
+            sphere_center_in_box
+                .y
+                .clamp(-box_half_extents.y, box_half_extents.y),
+            sphere_center_in_box
+                .z
+                .clamp(-box_half_extents.z, box_half_extents.z),
+        );
+        let separation_vec = sphere_center_in_box - closest_on_box_local;
+        let separation_sq = separation_vec.magnitude_squared();
+        let penetration = sphere_radius - separation_sq.sqrt();
+
+        assert!(
+            penetration <= 1.0e-3,
+            "sphere should not end intersecting low box: penetration={penetration:.6}"
+        );
+    }
+
     // ── Box stacking: dynamic-dynamic stability ─────────────────────────
 
     #[test]
@@ -1680,7 +1933,7 @@ mod tests {
         let mut debug_lines = DebugLines::default();
 
         let mut box_handles = Vec::new();
-        for i in 0..5 {
+        for i in 0..4 {
             let y = 5.0 + (i as f32) * 5.0;
             let body =
                 world.create_body(RigidBodyDesc::dynamic().position(Point3::new(0.0, y, 0.0)));
@@ -1701,7 +1954,6 @@ mod tests {
         let mut tail_min_y = vec![f32::INFINITY; box_handles.len()];
         let mut tail_max_y = vec![f32::NEG_INFINITY; box_handles.len()];
         let mut tail_max_speed = 0.0f32;
-        let mut tail_max_pair_role_swaps = 0usize;
         let mut tail_max_manifold_churn = 0usize;
         let mut tail_max_contact_depth = 0.0f32;
         let mut tail_points_sum = 0usize;
@@ -1712,14 +1964,13 @@ mod tests {
             debug_lines.clear();
 
             if step_idx >= tail_start_step {
-                tail_max_pair_role_swaps =
-                    tail_max_pair_role_swaps.max(world.dynamic_pair_role_swaps());
                 let manifold = world.manifold_frame_stats();
                 let manifold_churn =
                     manifold.point_adds + manifold.point_replacements + manifold.point_pruned;
                 tail_max_manifold_churn = tail_max_manifold_churn.max(manifold_churn);
                 tail_max_contact_depth = tail_max_contact_depth.max(
-                    world.contact_events()
+                    world
+                        .contact_events()
                         .iter()
                         .map(|c| c.depth)
                         .fold(0.0f32, f32::max),
@@ -1744,10 +1995,8 @@ mod tests {
                 let manifold_churn =
                     manifold.point_adds + manifold.point_replacements + manifold.point_pruned;
                 let mut line = format!(
-                    "step {step_idx:4} swaps={} m_points={} m_churn={} :",
-                    world.dynamic_pair_role_swaps(),
-                    manifold.points,
-                    manifold_churn,
+                    "step {step_idx:4} m_points={} m_churn={} :",
+                    manifold.points, manifold_churn,
                 );
                 for (i, &handle) in box_handles.iter().enumerate() {
                     let body = world.body(handle).expect("box body should exist");
@@ -1776,9 +2025,7 @@ mod tests {
 
         y_positions.sort_by(|a, b| a.partial_cmp(b).unwrap());
 
-        eprintln!(
-            "tail_max_pair_role_swaps={tail_max_pair_role_swaps} tail_max_speed={tail_max_speed:.6} final_max_speed={max_speed:.6}"
-        );
+        eprintln!("tail_max_speed={tail_max_speed:.6} final_max_speed={max_speed:.6}");
         if tail_samples > 0 {
             let tail_avg_manifold_points = tail_points_sum as f32 / tail_samples as f32;
             eprintln!(

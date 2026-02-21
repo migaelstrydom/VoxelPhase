@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 use super::body::RigidBody;
 use super::handle::RigidBodyHandle;
-use super::pipeline::solver::ContactConstraint;
+use super::pipeline::pair::{PairHeader, PairManifold, SolverManifold};
 use super::world::{ContactEvent, ContactSource};
 use crate::debug::{DebugLines, DebugLog, DebugOverlays};
 use crate::rendering::Colour;
@@ -53,26 +53,26 @@ impl PhysicsDebugger {
     pub fn update(
         &mut self,
         bodies: &Arena<RigidBody>,
-        raw_contacts: &[ContactConstraint],
-        merged_contacts: &[ContactConstraint],
-        active_contacts: &[ContactConstraint],
+        raw_manifolds: &[PairManifold],
+        merged_manifolds: &[SolverManifold],
+        active_manifolds: &[SolverManifold],
         events: &[ContactEvent],
     ) {
         self.last_snapshot = Some(ContactDebugSnapshot::new(
             bodies,
-            raw_contacts,
-            merged_contacts,
-            active_contacts,
+            raw_manifolds,
+            merged_manifolds,
+            active_manifolds,
             events,
         ));
     }
 
     /// Record post-solve body statistics for the primary body.
-    pub fn update_post_solve(&mut self, bodies: &Arena<RigidBody>, contacts: &[ContactConstraint]) {
+    pub fn update_post_solve(&mut self, bodies: &Arena<RigidBody>, manifolds: &[SolverManifold]) {
         if let Some(snapshot) = self.last_snapshot.as_mut() {
             if let Some(primary) = snapshot.primary_body.as_ref() {
                 snapshot.post_solve_body =
-                    compute_post_solve_body_stats(bodies, contacts, primary.handle);
+                    compute_post_solve_body_stats(bodies, manifolds, primary.handle);
             }
         }
     }
@@ -464,15 +464,15 @@ struct ContactDebugSnapshot {
 impl ContactDebugSnapshot {
     fn new(
         bodies: &Arena<RigidBody>,
-        raw: &[ContactConstraint],
-        merged: &[ContactConstraint],
-        active: &[ContactConstraint],
+        raw: &[PairManifold],
+        merged: &[SolverManifold],
+        active: &[SolverManifold],
         events: &[ContactEvent],
     ) -> Self {
         Self {
-            raw: compute_contact_stats(bodies, raw),
-            merged: compute_contact_stats(bodies, merged),
-            active: compute_contact_stats(bodies, active),
+            raw: compute_raw_stats(bodies, raw),
+            merged: compute_solver_stats(bodies, merged),
+            active: compute_solver_stats(bodies, active),
             events: ContactEventStats::from_events(events),
             primary_body: compute_primary_body_stats(bodies, active),
             post_solve_body: None,
@@ -482,9 +482,24 @@ impl ContactDebugSnapshot {
 
 // === Helper Functions ===
 
-fn relative_normal_velocity(bodies: &Arena<RigidBody>, contact: &ContactConstraint) -> Option<f32> {
-    let body_b = bodies.get(contact.body_b.0)?;
-    let (pos_a, vel_a, ang_a) = match contact.body_a {
+/// A flattened contact view used by the debug stats functions.
+struct FlatContact<'a> {
+    header: &'a PairHeader,
+    point: Point3<f32>,
+    normal: Vector3<f32>,
+    depth: f32,
+    raw_depth: f32,
+    warm_normal_impulse: f32,
+}
+
+fn relative_normal_velocity(
+    bodies: &Arena<RigidBody>,
+    header: &PairHeader,
+    point: Point3<f32>,
+    normal: &Vector3<f32>,
+) -> Option<f32> {
+    let body_b = bodies.get(header.body_b.0)?;
+    let (pos_a, vel_a, ang_a) = match header.body_a {
         Some(handle) => {
             let body_a = bodies.get(handle.0)?;
             (
@@ -493,26 +508,26 @@ fn relative_normal_velocity(bodies: &Arena<RigidBody>, contact: &ContactConstrai
                 body_a.angular_velocity(),
             )
         }
-        None => (contact.point, Vector3::zeros(), Vector3::zeros()),
+        None => (point, Vector3::zeros(), Vector3::zeros()),
     };
-    let r_a = contact.point - pos_a;
-    let r_b = contact.point - body_b.position();
+    let r_a = point - pos_a;
+    let r_b = point - body_b.position();
     let vel_at_a = vel_a + ang_a.cross(&r_a);
     let vel_at_b = body_b.linear_velocity() + body_b.angular_velocity().cross(&r_b);
     let rel_vel = vel_at_b - vel_at_a;
-    Some(rel_vel.dot(&contact.normal))
+    Some(rel_vel.dot(normal))
 }
 
-fn compute_contact_stats(
+fn compute_stats_from_flat(
     bodies: &Arena<RigidBody>,
-    contacts: &[ContactConstraint],
+    contacts: &[FlatContact],
 ) -> ContactDebugStats {
     if contacts.is_empty() {
         return ContactDebugStats::empty();
     }
 
     let total = contacts.len();
-    let static_count = contacts.iter().filter(|c| c.body_a.is_none()).count();
+    let static_count = contacts.iter().filter(|c| c.header.body_a.is_none()).count();
     let neg_raw = contacts.iter().filter(|c| c.raw_depth < 0.0).count();
     let warm_used = contacts
         .iter()
@@ -538,7 +553,7 @@ fn compute_contact_stats(
         max_raw = max_raw.max(c.raw_depth);
         min_depth = min_depth.min(c.depth);
         max_depth = max_depth.max(c.depth);
-        if let Some(rel_n) = relative_normal_velocity(bodies, c) {
+        if let Some(rel_n) = relative_normal_velocity(bodies, c.header, c.point, &c.normal) {
             rel_n_min = rel_n_min.min(rel_n);
             rel_n_max = rel_n_max.max(rel_n);
             rel_n_sum += rel_n;
@@ -563,7 +578,7 @@ fn compute_contact_stats(
     let mut samples = Vec::new();
     for idx in indices.into_iter().take(3) {
         let c = &contacts[idx];
-        let rel_n = relative_normal_velocity(bodies, c).unwrap_or(0.0);
+        let rel_n = relative_normal_velocity(bodies, c.header, c.point, &c.normal).unwrap_or(0.0);
         let normal_dot_up = c.normal.dot(&up);
         samples.push(ContactSample {
             depth: c.depth,
@@ -593,33 +608,78 @@ fn compute_contact_stats(
     }
 }
 
+/// Compute stats from raw `PairManifold` (pre-cache, no warm-start data).
+fn compute_raw_stats(
+    bodies: &Arena<RigidBody>,
+    manifolds: &[PairManifold],
+) -> ContactDebugStats {
+    let flat: Vec<FlatContact> = manifolds
+        .iter()
+        .flat_map(|m| {
+            m.manifold.points.iter().map(move |cp| FlatContact {
+                header: &m.header,
+                point: cp.point,
+                normal: cp.normal,
+                depth: cp.depth.max(0.0),
+                raw_depth: cp.depth,
+                warm_normal_impulse: 0.0,
+            })
+        })
+        .collect();
+    compute_stats_from_flat(bodies, &flat)
+}
+
+/// Compute stats from solver manifolds (post-cache, with warm-start data).
+fn compute_solver_stats(
+    bodies: &Arena<RigidBody>,
+    manifolds: &[SolverManifold],
+) -> ContactDebugStats {
+    let flat: Vec<FlatContact> = manifolds
+        .iter()
+        .flat_map(|m| {
+            m.contacts.iter().map(move |c| FlatContact {
+                header: &m.header,
+                point: c.point,
+                normal: c.normal,
+                depth: c.depth,
+                raw_depth: c.raw_depth,
+                warm_normal_impulse: c.warm_normal_impulse,
+            })
+        })
+        .collect();
+    compute_stats_from_flat(bodies, &flat)
+}
+
 fn compute_primary_body_stats(
     bodies: &Arena<RigidBody>,
-    contacts: &[ContactConstraint],
+    manifolds: &[SolverManifold],
 ) -> Option<BodyContactStats> {
-    if contacts.is_empty() {
+    let has_contacts = manifolds.iter().any(|m| !m.contacts.is_empty());
+    if !has_contacts {
         return None;
     }
 
     let mut per_body: HashMap<RigidBodyHandle, BodyContactAccum> = HashMap::new();
-    for c in contacts {
-        let entry = per_body
-            .entry(c.body_b)
-            .or_insert_with(BodyContactAccum::new);
-        entry.total += 1;
-        if c.body_a.is_none() {
-            entry.static_count += 1;
+    for m in manifolds {
+        for c in &m.contacts {
+            let entry = per_body
+                .entry(m.header.body_b)
+                .or_insert_with(BodyContactAccum::new);
+            entry.total += 1;
+            if m.header.body_a.is_none() {
+                entry.static_count += 1;
+            }
+            entry.depth_sum += c.depth;
+            entry.min_depth = entry.min_depth.min(c.depth);
+            entry.max_depth = entry.max_depth.max(c.depth);
+            if let Some(rel_n) = relative_normal_velocity(bodies, &m.header, c.point, &c.normal) {
+                entry.rel_n_sum += rel_n;
+                entry.rel_n_min = entry.rel_n_min.min(rel_n);
+                entry.rel_n_max = entry.rel_n_max.max(rel_n);
+                entry.rel_n_count += 1;
+            }
+            entry.normal_sum += c.normal;
         }
-        entry.depth_sum += c.depth;
-        entry.min_depth = entry.min_depth.min(c.depth);
-        entry.max_depth = entry.max_depth.max(c.depth);
-        if let Some(rel_n) = relative_normal_velocity(bodies, c) {
-            entry.rel_n_sum += rel_n;
-            entry.rel_n_min = entry.rel_n_min.min(rel_n);
-            entry.rel_n_max = entry.rel_n_max.max(rel_n);
-            entry.rel_n_count += 1;
-        }
-        entry.normal_sum += c.normal;
     }
 
     let (&handle, accum) = per_body.iter().max_by_key(|(_, stats)| stats.total)?;
@@ -644,8 +704,13 @@ fn compute_primary_body_stats(
 
     let mut normal_min_dot = 1.0f32;
     if normal_avg.magnitude() > 1e-6 {
-        for c in contacts.iter().filter(|c| c.body_b == handle) {
-            normal_min_dot = normal_min_dot.min(c.normal.dot(&normal_avg));
+        for m in manifolds {
+            if m.header.body_b != handle {
+                continue;
+            }
+            for c in &m.contacts {
+                normal_min_dot = normal_min_dot.min(c.normal.dot(&normal_avg));
+            }
         }
     } else {
         normal_min_dot = 0.0;
@@ -675,7 +740,7 @@ fn compute_primary_body_stats(
 
 fn compute_post_solve_body_stats(
     bodies: &Arena<RigidBody>,
-    contacts: &[ContactConstraint],
+    manifolds: &[SolverManifold],
     handle: RigidBodyHandle,
 ) -> Option<BodyPostSolveStats> {
     let mut rel_n_min = f32::INFINITY;
@@ -683,12 +748,17 @@ fn compute_post_solve_body_stats(
     let mut rel_n_sum = 0.0;
     let mut rel_n_count = 0usize;
 
-    for c in contacts.iter().filter(|c| c.body_b == handle) {
-        if let Some(rel_n) = relative_normal_velocity(bodies, c) {
-            rel_n_min = rel_n_min.min(rel_n);
-            rel_n_max = rel_n_max.max(rel_n);
-            rel_n_sum += rel_n;
-            rel_n_count += 1;
+    for m in manifolds {
+        if m.header.body_b != handle {
+            continue;
+        }
+        for c in &m.contacts {
+            if let Some(rel_n) = relative_normal_velocity(bodies, &m.header, c.point, &c.normal) {
+                rel_n_min = rel_n_min.min(rel_n);
+                rel_n_max = rel_n_max.max(rel_n);
+                rel_n_sum += rel_n;
+                rel_n_count += 1;
+            }
         }
     }
 

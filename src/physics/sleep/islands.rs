@@ -4,7 +4,7 @@ use generational_arena::{Arena, Index};
 
 use crate::physics::body::RigidBody;
 use crate::physics::handle::RigidBodyHandle;
-use crate::physics::pipeline::solver::ContactConstraint;
+use crate::physics::pipeline::pair::SolverManifold;
 
 #[derive(Debug, Clone)]
 pub struct Island {
@@ -18,7 +18,7 @@ impl IslandBuilder {
     pub fn build(
         &self,
         bodies: &Arena<RigidBody>,
-        contacts: &[ContactConstraint],
+        manifolds: &[SolverManifold],
     ) -> Vec<Island> {
         let mut adjacency: HashMap<Index, Vec<Index>> = HashMap::new();
         let mut dynamic_indices: Vec<Index> = Vec::new();
@@ -30,11 +30,11 @@ impl IslandBuilder {
             }
         }
 
-        for contact in contacts {
-            let Some(handle_a) = contact.body_a else {
+        for manifold in manifolds {
+            let Some(handle_a) = manifold.header.body_a else {
                 continue;
             };
-            let handle_b = contact.body_b;
+            let handle_b = manifold.header.body_b;
             let (Some(body_a), Some(body_b)) = (
                 bodies.get(handle_a.0),
                 bodies.get(handle_b.0),

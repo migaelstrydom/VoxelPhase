@@ -2,8 +2,7 @@
 //!
 //! Uses the manifold-first mesh pipeline: seam filter merges coplanar triangles
 //! into polygonal contact faces, then shape-specific patch routines generate
-//! manifolds directly from the merged geometry. This replaces the old per-triangle
-//! contact generation + adjacency_filter + coplanar_stabilizer approach.
+//! manifolds directly from the merged geometry.
 
 use std::collections::HashSet;
 
@@ -18,9 +17,8 @@ use crate::collision::obb::Obb;
 use crate::collision::AABB;
 use crate::physics::body::RigidBody;
 use crate::physics::collider::{Collider, ColliderShape};
-use crate::physics::handle::{ColliderHandle, RigidBodyHandle};
-use crate::physics::narrowphase::NormalClusterer;
-use crate::physics::pipeline::solver::ContactConstraint;
+use crate::physics::handle::RigidBodyHandle;
+use crate::physics::pipeline::pair::{PairHeader, PairManifold};
 use crate::physics::static_geometry::StaticGeometry;
 
 /// Default cosine threshold for seam filter coplanar merging.
@@ -28,11 +26,9 @@ const SEAM_FILTER_COPLANAR_DOT: f32 = 0.98;
 
 /// Generate contacts between all non-static colliders and static geometry.
 ///
-/// Dispatches per collider shape:
-/// - Sphere: seam filter → sphere_patch manifold
-/// - Box: seam filter → obb_patch manifold
-///
-/// Both paths share sleeping checks and speculative contacts.
+/// Returns one `PairManifold` per collider that has contacts (or speculative contacts)
+/// with static geometry. Each manifold carries the collision library's `ContactManifold`
+/// with `FeatureId` per point, wrapped with body/collider/material metadata.
 pub fn generate_static_contacts(
     bodies: &Arena<RigidBody>,
     colliders: &Arena<Collider>,
@@ -43,9 +39,8 @@ pub fn generate_static_contacts(
     enable_speculative_contacts: bool,
     speculative_min_speed: f32,
     speculative_margin_multiplier: f32,
-    normal_cluster: crate::physics::narrowphase::NormalClusterConfig,
     sleeping: Option<&HashSet<RigidBodyHandle>>,
-) -> Vec<ContactConstraint> {
+) -> Vec<PairManifold> {
     let mut contacts = Vec::new();
 
     for (idx, body) in bodies.iter() {
@@ -68,20 +63,11 @@ pub fn generate_static_contacts(
             let linear_velocity = body.linear_velocity();
             let speed = linear_velocity.magnitude();
 
-            let mut batch = match collider.shape() {
-                ColliderShape::Sphere { radius } => sphere_vs_static(
-                    body_handle,
-                    *collider_handle,
-                    collider,
-                    center,
-                    *radius,
-                    static_geometry,
-                    contact_margin,
-                ),
+            let manifold = match collider.shape() {
+                ColliderShape::Sphere { radius } => {
+                    sphere_vs_static(center, *radius, static_geometry, contact_margin)
+                }
                 ColliderShape::Box { half_extents } => box_vs_static(
-                    body_handle,
-                    *collider_handle,
-                    collider,
                     center,
                     body.rotation(),
                     *half_extents,
@@ -90,15 +76,7 @@ pub fn generate_static_contacts(
                 ),
             };
 
-            // The manifold-first pipeline produces stable manifolds directly,
-            // so clustering is rarely needed. Apply it only as a safety net
-            // when the batch has many contacts (e.g. GJK fallback in the future).
-            if batch.len() > normal_cluster.max_points {
-                let clusterer = NormalClusterer::from_config(normal_cluster, contact_margin);
-                batch = clusterer.cluster(batch);
-            }
-
-            if batch.is_empty()
+            let manifold = if manifold.is_empty()
                 && is_speculative_candidate(
                     speed,
                     dt,
@@ -111,17 +89,32 @@ pub fn generate_static_contacts(
                 )
             {
                 let predicted_center = center + linear_velocity * dt;
-                batch = speculative_static_contacts(
-                    body_handle,
-                    *collider_handle,
+                let mut m = speculative_static_manifold(
                     collider,
                     predicted_center,
                     body.rotation(),
                     static_geometry,
                     contact_margin,
                 );
+                make_speculative(&mut m, contact_margin);
+                m
+            } else {
+                manifold
+            };
+
+            if !manifold.is_empty() {
+                contacts.push(PairManifold {
+                    header: PairHeader {
+                        body_a: None,
+                        body_b: body_handle,
+                        collider_a: None,
+                        collider_b: Some(*collider_handle),
+                        restitution: collider.material().restitution,
+                        friction: collider.material().friction,
+                    },
+                    manifold,
+                });
             }
-            contacts.extend(batch);
         }
     }
 
@@ -130,14 +123,11 @@ pub fn generate_static_contacts(
 
 /// Generate sphere-static contacts via the mesh pipeline.
 fn sphere_vs_static(
-    body_handle: RigidBodyHandle,
-    collider_handle: ColliderHandle,
-    collider: &Collider,
     center: Point3<f32>,
     radius: f32,
     static_geometry: &dyn StaticGeometry,
     contact_margin: f32,
-) -> Vec<ContactConstraint> {
+) -> ContactManifold {
     let query_radius = radius + contact_margin;
     let query = AABB::new(
         Point3::new(
@@ -153,22 +143,17 @@ fn sphere_vs_static(
     );
     let patch = static_geometry.query_region(&query);
     let filtered = filter_patch(&patch, SEAM_FILTER_COPLANAR_DOT);
-    let manifold = sphere_patch_manifold(center, radius, &filtered, contact_margin);
-
-    manifold_to_constraints(manifold, body_handle, collider_handle, collider)
+    sphere_patch_manifold(center, radius, &filtered, contact_margin)
 }
 
 /// Generate box-static contacts via the mesh pipeline.
 fn box_vs_static(
-    body_handle: RigidBodyHandle,
-    collider_handle: ColliderHandle,
-    collider: &Collider,
     center: Point3<f32>,
     rotation: nalgebra::UnitQuaternion<f32>,
     half_extents: Vector3<f32>,
     static_geometry: &dyn StaticGeometry,
     contact_margin: f32,
-) -> Vec<ContactConstraint> {
+) -> ContactManifold {
     let obb = Obb::new(center, rotation, half_extents);
     let (aabb_min, aabb_max) = obb.enclosing_aabb();
     let margin_vec = Vector3::new(contact_margin, contact_margin, contact_margin);
@@ -176,129 +161,33 @@ fn box_vs_static(
 
     let patch = static_geometry.query_region(&query);
     let filtered = filter_patch(&patch, SEAM_FILTER_COPLANAR_DOT);
-    let manifold = obb_patch_manifold(&obb, &filtered, contact_margin);
-
-    manifold_to_constraints(manifold, body_handle, collider_handle, collider)
+    obb_patch_manifold(&obb, &filtered, contact_margin)
 }
 
-/// Build speculative contacts at a predicted pose for any shape.
-fn speculative_static_contacts(
-    body_handle: RigidBodyHandle,
-    collider_handle: ColliderHandle,
+/// Generate a static contact manifold at a predicted pose for any shape.
+fn speculative_static_manifold(
     collider: &Collider,
     predicted_center: Point3<f32>,
     rotation: nalgebra::UnitQuaternion<f32>,
     static_geometry: &dyn StaticGeometry,
     contact_margin: f32,
-) -> Vec<ContactConstraint> {
+) -> ContactManifold {
     match collider.shape() {
         ColliderShape::Sphere { radius } => {
-            let query_radius = radius + contact_margin;
-            let query = AABB::new(
-                Point3::new(
-                    predicted_center.x - query_radius,
-                    predicted_center.y - query_radius,
-                    predicted_center.z - query_radius,
-                ),
-                Point3::new(
-                    predicted_center.x + query_radius,
-                    predicted_center.y + query_radius,
-                    predicted_center.z + query_radius,
-                ),
-            );
-            let patch = static_geometry.query_region(&query);
-            let filtered = filter_patch(&patch, SEAM_FILTER_COPLANAR_DOT);
-            let manifold =
-                sphere_patch_manifold(predicted_center, *radius, &filtered, contact_margin);
-
-            // Speculative contacts: force depth=0, raw_depth=-margin.
-            manifold_to_speculative_constraints(
-                manifold,
-                body_handle,
-                collider_handle,
-                collider,
-                contact_margin,
-            )
+            sphere_vs_static(predicted_center, *radius, static_geometry, contact_margin)
         }
         ColliderShape::Box { half_extents } => {
-            let obb = Obb::new(predicted_center, rotation, *half_extents);
-            let (aabb_min, aabb_max) = obb.enclosing_aabb();
-            let margin_vec = Vector3::new(contact_margin, contact_margin, contact_margin);
-            let query = AABB::new(aabb_min - margin_vec, aabb_max + margin_vec);
-
-            let patch = static_geometry.query_region(&query);
-            let filtered = filter_patch(&patch, SEAM_FILTER_COPLANAR_DOT);
-            let manifold = obb_patch_manifold(&obb, &filtered, contact_margin);
-
-            manifold_to_speculative_constraints(
-                manifold,
-                body_handle,
-                collider_handle,
-                collider,
-                contact_margin,
-            )
+            box_vs_static(predicted_center, rotation, *half_extents, static_geometry, contact_margin)
         }
     }
 }
 
-/// Convert a ContactManifold to solver ContactConstraints.
-fn manifold_to_constraints(
-    manifold: ContactManifold,
-    body_handle: RigidBodyHandle,
-    collider_handle: ColliderHandle,
-    collider: &Collider,
-) -> Vec<ContactConstraint> {
-    manifold
-        .points
-        .into_iter()
-        .map(|cp| ContactConstraint {
-            body_a: None,
-            body_b: body_handle,
-            collider_a: None,
-            collider_b: Some(collider_handle),
-            point: cp.point,
-            normal: cp.normal,
-            raw_normal: cp.raw_normal,
-            depth: cp.depth,
-            raw_depth: cp.raw_depth,
-            restitution: collider.material().restitution,
-            friction: collider.material().friction,
-            warm_normal_impulse: 0.0,
-            warm_tangent_impulse: [0.0, 0.0],
-        })
-        .collect()
-}
-
-/// Convert a ContactManifold to speculative ContactConstraints.
-///
-/// Speculative contacts have depth=0 and raw_depth=-margin so the solver
-/// applies velocity-only correction without position push.
-fn manifold_to_speculative_constraints(
-    manifold: ContactManifold,
-    body_handle: RigidBodyHandle,
-    collider_handle: ColliderHandle,
-    collider: &Collider,
-    contact_margin: f32,
-) -> Vec<ContactConstraint> {
-    manifold
-        .points
-        .into_iter()
-        .map(|cp| ContactConstraint {
-            body_a: None,
-            body_b: body_handle,
-            collider_a: None,
-            collider_b: Some(collider_handle),
-            point: cp.point,
-            normal: cp.normal,
-            raw_normal: cp.raw_normal,
-            depth: 0.0,
-            raw_depth: -contact_margin,
-            restitution: collider.material().restitution,
-            friction: collider.material().friction,
-            warm_normal_impulse: 0.0,
-            warm_tangent_impulse: [0.0, 0.0],
-        })
-        .collect()
+/// Convert a manifold to speculative: depth=0, raw_depth=-margin.
+fn make_speculative(manifold: &mut ContactManifold, contact_margin: f32) {
+    for cp in &mut manifold.points {
+        cp.depth = 0.0;
+        cp.raw_depth = -contact_margin;
+    }
 }
 
 /// Gate speculative contacts by speed and CCD travel window.

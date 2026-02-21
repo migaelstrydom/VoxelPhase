@@ -2,6 +2,7 @@
 
 use generational_arena::Arena;
 use nalgebra::{Matrix3, Point3, UnitQuaternion, Vector3};
+use smallvec::{smallvec, SmallVec};
 use std::collections::{HashMap, HashSet};
 
 use super::body::{RigidBody, RigidBodyDesc};
@@ -11,16 +12,17 @@ use super::grounding::{GroundingConfig, GroundingDetector};
 use super::handle::{ColliderHandle, RigidBodyHandle};
 use super::impulses::{ForceField, ForceFieldRegistry, PhysicsImpulse};
 use super::narrowphase::{
-    generate_dynamic_contacts, generate_static_contacts, NarrowphaseWorkBuffer,
-    NormalClusterConfig, SatCacheMap,
+    generate_dynamic_contacts, generate_static_contacts, NarrowphaseWorkBuffer, SatCacheMap,
 };
 use super::pipeline::integration::{integrate_bodies, integrate_forces};
 use super::pipeline::manifold::ManifoldCache;
 use super::pipeline::normal_smoothing::NormalSmoothingConfig;
+use super::pipeline::pair::{PairHeader, SolverContact, SolverManifold};
 use super::pipeline::post_stabilizer::PostStabiliseConfig;
-use super::pipeline::solver::{solve, solve_contacts, ContactConstraint};
+use super::pipeline::solver::{solve, solve_contacts};
 use super::sleep::{SleepManager, SleepManagerConfig};
 use super::static_geometry::StaticGeometry;
+use crate::collision::contact::FeatureId;
 use crate::collision::mesh::obb_patch::obb_patch_manifold;
 use crate::collision::mesh::seam_filter::filter_patch;
 use crate::collision::obb::Obb;
@@ -62,8 +64,6 @@ pub struct PhysicsConfig {
     pub post_stabilise: PostStabiliseConfig,
     /// Configuration for smoothing matched contact normals.
     pub normal_smoothing: NormalSmoothingConfig,
-    /// Configuration for clustering static contact normals.
-    pub normal_clustering: NormalClusterConfig,
     /// Configuration for grounded detection.
     pub grounding: GroundingConfig,
     /// Allow warm-start when raw depth exceeds this (can be negative).
@@ -95,7 +95,6 @@ impl Default for PhysicsConfig {
             deterministic_contact_ordering: false,
             post_stabilise: PostStabiliseConfig::default(),
             normal_smoothing: NormalSmoothingConfig::default(),
-            normal_clustering: NormalClusterConfig::default(),
             grounding: GroundingConfig::default(),
             warm_start_depth_slop: 0.02,
             enable_speculative_contacts: true,
@@ -136,11 +135,11 @@ pub struct PhysicsWorld {
     sleep_manager: SleepManager,
     grounding_detector: GroundingDetector,
     force_fields: ForceFieldRegistry,
-    /// Active contacts from the most recent `update_contacts()` call,
+    /// Active solver manifolds from the most recent `update_contacts()` call,
     /// reused across multiple `substep()` calls.
-    cached_active_contacts: Vec<ContactConstraint>,
-    /// All contacts (including sleeping) for sleep state bookkeeping.
-    cached_all_contacts: Vec<ContactConstraint>,
+    cached_active_manifolds: Vec<SolverManifold>,
+    /// All solver manifolds (including sleeping) for sleep state bookkeeping.
+    cached_all_manifolds: Vec<SolverManifold>,
     /// Bodies with static narrowphase contacts, excluded from CCD.
     cached_narrowphase_handled: HashSet<RigidBodyHandle>,
     /// SAT axis cache for OBB-OBB dynamic pair early-out.
@@ -152,8 +151,6 @@ pub struct PhysicsWorld {
 impl PhysicsWorld {
     pub fn new(config: PhysicsConfig) -> Self {
         let manifold_cache = ManifoldCache::new(
-            config.contact_match_threshold,
-            config.contact_match_threshold_static_multiplier,
             config.manifold_max_age,
             config.warm_start_depth_slop,
             config.normal_smoothing,
@@ -172,8 +169,8 @@ impl PhysicsWorld {
             sleep_manager,
             grounding_detector,
             force_fields: ForceFieldRegistry::default(),
-            cached_active_contacts: Vec::new(),
-            cached_all_contacts: Vec::new(),
+            cached_active_manifolds: Vec::new(),
+            cached_all_manifolds: Vec::new(),
             cached_narrowphase_handled: HashSet::new(),
             sat_cache_map: SatCacheMap::new(),
             narrowphase_work_buffer: NarrowphaseWorkBuffer::new(),
@@ -396,7 +393,7 @@ impl PhysicsWorld {
     /// 4. Manifold cache merge (warm-start population)
     /// 5. Sleep/debug contact processing
     ///
-    /// The resulting contacts are cached internally for `substep()` to consume.
+    /// The resulting manifolds are cached internally for `substep()` to consume.
     pub fn update_contacts(
         &mut self,
         dt: f32,
@@ -419,7 +416,7 @@ impl PhysicsWorld {
         self.apply_impulses(impulses, dt);
 
         // Narrowphase contact generation
-        let mut raw_contacts = generate_static_contacts(
+        let mut raw_manifolds = generate_static_contacts(
             &self.bodies,
             &self.colliders,
             static_geometry,
@@ -429,7 +426,6 @@ impl PhysicsWorld {
             self.config.enable_speculative_contacts,
             self.config.speculative_min_speed,
             self.config.speculative_margin_multiplier,
-            self.config.normal_clustering,
             sleeping_snapshot.as_ref(),
         );
         generate_dynamic_contacts(
@@ -445,48 +441,55 @@ impl PhysicsWorld {
             &mut self.sat_cache_map,
             &mut self.narrowphase_work_buffer,
         );
-        raw_contacts.extend_from_slice(self.narrowphase_work_buffer.contacts());
+        raw_manifolds.extend_from_slice(self.narrowphase_work_buffer.manifolds());
 
         // Merge with manifold cache (populates warm-start impulses)
-        let contacts = self.manifold_cache.update(
-            &raw_contacts,
-            &self.bodies,
-            self.config.deterministic_contact_ordering,
-        );
+        let solver_manifolds = self
+            .manifold_cache
+            .merge(&raw_manifolds, self.config.deterministic_contact_ordering);
 
         self.last_contacts.clear();
-        self.last_contacts
-            .extend(contacts.iter().map(|c| ContactEvent::from_narrowphase(c)));
+        for manifold in &solver_manifolds {
+            for contact in &manifold.contacts {
+                self.last_contacts.push(ContactEvent::from_solver(
+                    &manifold.header,
+                    contact,
+                    ContactSource::Narrowphase,
+                ));
+            }
+        }
 
         self.sleep_manager
-            .note_contact_wakes(&contacts, &self.bodies);
+            .note_contact_wakes(&solver_manifolds, &self.bodies);
         self.sleep_manager
-            .apply_wake_events(&contacts, &self.bodies);
+            .apply_wake_events(&solver_manifolds, &self.bodies);
 
-        let active_contacts = self.sleep_manager.filter_active_contacts(&contacts);
+        let active_manifolds = self
+            .sleep_manager
+            .filter_active_manifolds(&solver_manifolds);
 
         self.debugger.update(
             &self.bodies,
-            &raw_contacts,
-            &contacts,
-            &active_contacts,
+            &raw_manifolds,
+            &solver_manifolds,
+            &active_manifolds,
             &self.last_contacts,
         );
 
         // Cache narrowphase-handled set for CCD exclusion
         self.cached_narrowphase_handled.clear();
         self.cached_narrowphase_handled.extend(
-            active_contacts
+            active_manifolds
                 .iter()
-                .filter(|c| c.body_a.is_none())
-                .map(|c| c.body_b),
+                .filter(|m| m.header.body_a.is_none())
+                .map(|m| m.header.body_b),
         );
 
-        self.cached_active_contacts = active_contacts;
-        self.cached_all_contacts = contacts;
+        self.cached_active_manifolds = active_manifolds;
+        self.cached_all_manifolds = solver_manifolds;
     }
 
-    /// Solve velocity constraints and integrate positions using cached contacts.
+    /// Solve velocity constraints and integrate positions using cached manifolds.
     ///
     /// Call one or more times after `update_contacts()`. Each call performs:
     /// 1. Integrate forces (gravity) into velocities
@@ -511,18 +514,18 @@ impl PhysicsWorld {
         );
 
         // Solve velocity constraints
-        let solved = solve(
+        solve(
             &mut self.bodies,
-            &self.cached_active_contacts,
+            &mut self.cached_active_manifolds,
             &self.config,
             dt,
         );
         self.debugger
-            .update_post_solve(&self.bodies, &self.cached_active_contacts);
+            .update_post_solve(&self.bodies, &self.cached_active_manifolds);
 
         // Write solved impulses back to manifold cache
         self.manifold_cache
-            .write_back(&self.cached_active_contacts, &solved, &self.bodies);
+            .write_back(&self.cached_active_manifolds);
         self.manifold_cache.prune();
 
         // Save pre-integration state for CCD
@@ -565,10 +568,10 @@ impl PhysicsWorld {
         );
         self.cached_narrowphase_handled = narrowphase_handled;
 
-        let all_contacts = std::mem::take(&mut self.cached_all_contacts);
+        let all_manifolds = std::mem::take(&mut self.cached_all_manifolds);
         self.sleep_manager
-            .update_sleep_states(&mut self.bodies, &all_contacts);
-        self.cached_all_contacts = all_contacts;
+            .update_sleep_states(&mut self.bodies, &all_manifolds);
+        self.cached_all_manifolds = all_manifolds;
     }
 
     /// Contacts generated in the most recent step.
@@ -701,25 +704,27 @@ impl PhysicsWorld {
                 body.set_rotation(hit_rot);
             }
 
-            let ccd_contacts = match &candidate.shape {
+            let ccd_header = PairHeader {
+                body_a: None,
+                body_b: candidate.body_handle,
+                collider_a: None,
+                collider_b: None,
+                restitution: candidate.material.restitution,
+                friction: candidate.material.friction,
+            };
+
+            let ccd_contacts: SmallVec<[SolverContact; 4]> = match &candidate.shape {
                 ColliderShape::Sphere { .. } => {
-                    vec![ContactConstraint {
-                        body_a: None,
-                        body_b: candidate.body_handle,
-                        collider_a: None,
-                        collider_b: None,
-                        point: hit.point,
-                        normal: hit.normal,
-                        raw_normal: hit.normal,
-                        depth: 0.0,
-                        raw_depth: 0.0,
-                        restitution: candidate.material.restitution,
-                        friction: candidate.material.friction,
-                        warm_normal_impulse: 0.0,
-                        warm_tangent_impulse: [0.0, 0.0],
-                    }]
+                    smallvec![cold_solver_contact(
+                        hit.point,
+                        hit.normal,
+                        hit.normal,
+                        0.0,
+                        0.0,
+                        FeatureId::SINGLE,
+                    )]
                 }
-                ColliderShape::Box { half_extents } => self.box_ccd_contacts(
+                ColliderShape::Box { half_extents } => self.box_ccd_solver_contacts(
                     candidate,
                     *half_extents,
                     hit_pos,
@@ -728,12 +733,21 @@ impl PhysicsWorld {
                 ),
             };
 
-            for contact in &ccd_contacts {
-                self.last_contacts.push(ContactEvent::from_ccd(contact));
+            let mut ccd_manifold = SolverManifold {
+                header: ccd_header,
+                contacts: ccd_contacts,
+            };
+
+            for contact in &ccd_manifold.contacts {
+                self.last_contacts.push(ContactEvent::from_solver(
+                    &ccd_manifold.header,
+                    contact,
+                    ContactSource::Ccd,
+                ));
             }
             solve_contacts(
                 &mut self.bodies,
-                &ccd_contacts,
+                std::slice::from_mut(&mut ccd_manifold),
                 self.config.restitution_velocity_threshold,
             );
 
@@ -748,14 +762,14 @@ impl PhysicsWorld {
     /// Bounding-sphere sweep found the approximate hit. Now build an OBB at
     /// the hit position (using the pre-integration rotation) and run the
     /// mesh-aware manifold pipeline for accurate contact normals.
-    fn box_ccd_contacts(
+    fn box_ccd_solver_contacts(
         &self,
         candidate: &CcdCandidate,
         half_extents: Vector3<f32>,
         hit_pos: Point3<f32>,
         rotation: UnitQuaternion<f32>,
         static_geometry: &dyn StaticGeometry,
-    ) -> Vec<ContactConstraint> {
+    ) -> SmallVec<[SolverContact; 4]> {
         let obb = Obb::new(hit_pos, rotation, half_extents);
         let (aabb_min, aabb_max) = obb.enclosing_aabb();
         let margin = Vector3::new(
@@ -768,23 +782,11 @@ impl PhysicsWorld {
         let filtered = filter_patch(&patch, 0.98);
         let manifold = obb_patch_manifold(&obb, &filtered, self.config.contact_margin);
 
-        let mut contacts: Vec<ContactConstraint> = manifold
+        let mut contacts: SmallVec<[SolverContact; 4]> = manifold
             .points
             .into_iter()
-            .map(|cp| ContactConstraint {
-                body_a: None,
-                body_b: candidate.body_handle,
-                collider_a: None,
-                collider_b: None,
-                point: cp.point,
-                normal: cp.normal,
-                raw_normal: cp.raw_normal,
-                depth: 0.0,
-                raw_depth: 0.0,
-                restitution: candidate.material.restitution,
-                friction: candidate.material.friction,
-                warm_normal_impulse: 0.0,
-                warm_tangent_impulse: [0.0, 0.0],
+            .map(|cp| {
+                cold_solver_contact(cp.point, cp.normal, cp.raw_normal, 0.0, 0.0, cp.feature_id)
             })
             .collect();
 
@@ -796,25 +798,41 @@ impl PhysicsWorld {
                 candidate.radius,
                 static_geometry,
             ) {
-                contacts.push(ContactConstraint {
-                    body_a: None,
-                    body_b: candidate.body_handle,
-                    collider_a: None,
-                    collider_b: None,
-                    point: hit.point,
-                    normal: hit.normal,
-                    raw_normal: hit.normal,
-                    depth: 0.0,
-                    raw_depth: 0.0,
-                    restitution: candidate.material.restitution,
-                    friction: candidate.material.friction,
-                    warm_normal_impulse: 0.0,
-                    warm_tangent_impulse: [0.0, 0.0],
-                });
+                contacts.push(cold_solver_contact(
+                    hit.point,
+                    hit.normal,
+                    hit.normal,
+                    0.0,
+                    0.0,
+                    FeatureId::SINGLE,
+                ));
             }
         }
 
         contacts
+    }
+}
+
+/// Build a cold (no warm-start) `SolverContact` for transient CCD contacts.
+fn cold_solver_contact(
+    point: Point3<f32>,
+    normal: Vector3<f32>,
+    raw_normal: Vector3<f32>,
+    depth: f32,
+    raw_depth: f32,
+    feature_id: FeatureId,
+) -> SolverContact {
+    SolverContact {
+        point,
+        normal,
+        raw_normal,
+        depth,
+        raw_depth,
+        feature_id,
+        warm_normal_impulse: 0.0,
+        warm_tangent_impulse: [0.0, 0.0],
+        accumulated_normal_impulse: 0.0,
+        accumulated_tangent_impulse: [0.0, 0.0],
     }
 }
 
@@ -868,27 +886,15 @@ pub struct ContactEvent {
 }
 
 impl ContactEvent {
-    fn from_narrowphase(contact: &ContactConstraint) -> Self {
+    fn from_solver(header: &PairHeader, contact: &SolverContact, source: ContactSource) -> Self {
         Self {
-            body_a: contact.body_a,
-            body_b: contact.body_b,
+            body_a: header.body_a,
+            body_b: header.body_b,
             point: contact.point,
             normal: contact.normal,
             raw_normal: contact.raw_normal,
             depth: contact.depth,
-            source: ContactSource::Narrowphase,
-        }
-    }
-
-    fn from_ccd(contact: &ContactConstraint) -> Self {
-        Self {
-            body_a: contact.body_a,
-            body_b: contact.body_b,
-            point: contact.point,
-            normal: contact.normal,
-            raw_normal: contact.normal,
-            depth: contact.depth,
-            source: ContactSource::Ccd,
+            source,
         }
     }
 }

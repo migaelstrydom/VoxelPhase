@@ -1,20 +1,29 @@
 //! Contact manifold persistence across frames.
 //!
-//! The manifold cache stores contact points in body-local space so they can be
-//! matched across frames even as bodies move. Matched contacts inherit their
-//! accumulated impulses from the previous frame, enabling warm-starting in the
-//! solver. This is the single biggest stability improvement for resting and
-//! stacking contacts.
+//! The manifold cache matches contacts by `FeatureId` so that impulses from the
+//! previous frame can be carried forward (warm-starting). This is the single
+//! biggest stability improvement for resting and stacking contacts.
+//!
+//! ## Data flow
+//!
+//! ```text
+//! Vec<PairManifold>  ──►  ManifoldCache::merge()  ──►  Vec<SolverManifold>
+//!                              │                              │
+//!                              │                         solver writes
+//!                              │                         accumulated impulses
+//!                              │                              │
+//!                              ◄── ManifoldCache::write_back()
+//! ```
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
-use generational_arena::Arena;
-use nalgebra::{Point3, UnitQuaternion, Vector3};
+use nalgebra::Vector3;
+use smallvec::SmallVec;
 
-use crate::physics::body::RigidBody;
+use crate::collision::contact::FeatureId;
 use crate::physics::handle::ColliderHandle;
 use crate::physics::pipeline::normal_smoothing::{NormalSmoother, NormalSmoothingConfig};
-use crate::physics::pipeline::solver::{ContactConstraint, SolvedImpulses};
+use crate::physics::pipeline::pair::{PairManifold, SolverContact, SolverManifold};
 
 /// Per-step manifold cache activity counters for diagnostics.
 #[derive(Debug, Clone, Copy, Default)]
@@ -69,44 +78,51 @@ impl ManifoldKey {
     }
 }
 
-/// A contact point stored in body-local space for frame-to-frame persistence.
+/// A single cached contact point, keyed by feature ID for warm-start matching.
+///
+/// Stored inside `CachedManifold` and matched against incoming `PairManifold`
+/// contacts by `FeatureId`.
 #[derive(Debug, Clone)]
-struct ManifoldPoint {
-    /// Contact point in body A's local space (world space if A is static).
-    local_point_a: Point3<f32>,
-    /// Contact point in body B's local space.
-    local_point_b: Point3<f32>,
-    /// Contact normal in world space (updated each frame).
-    normal: Vector3<f32>,
-    /// Penetration depth (updated each frame).
-    depth: f32,
-    /// Accumulated normal impulse from the solver.
-    normal_impulse: f32,
-    /// Accumulated tangent impulses from the solver.
-    tangent_impulse: [f32; 2],
-    /// Frames since this point was last refreshed by the narrowphase.
-    age: u8,
+pub struct CachedContact {
+    /// Feature pair that produced this contact, used as the match key.
+    pub feature_id: FeatureId,
+    /// Accumulated normal impulse from the solver (warm-start value).
+    pub normal_impulse: f32,
+    /// Accumulated tangent impulses from the solver (warm-start value).
+    pub tangent_impulse: [f32; 2],
+    /// Contact normal in world space at the time of caching.
+    pub normal: Vector3<f32>,
+    /// Penetration depth at the time of caching.
+    pub depth: f32,
+    /// Frames since this contact was last refreshed by the narrowphase.
+    pub age: u8,
 }
 
-/// A persistent contact manifold between two colliders (or a collider and static geometry).
+/// A persistent contact manifold keyed by feature ID.
+///
+/// Stored in `ManifoldCache` and indexed by `ManifoldKey` (collider pair).
 #[derive(Debug, Clone)]
-struct ContactManifold {
-    points: Vec<ManifoldPoint>,
+pub struct CachedManifold {
+    /// Cached contacts, up to 4 points.
+    pub points: SmallVec<[CachedContact; 4]>,
 }
 
-impl ContactManifold {
+impl CachedManifold {
     fn new() -> Self {
         Self {
-            points: Vec::with_capacity(4),
+            points: SmallVec::new(),
         }
+    }
+
+    /// Find a cached contact by feature ID.
+    fn find_by_feature(&self, id: FeatureId) -> Option<usize> {
+        self.points.iter().position(|c| c.feature_id == id)
     }
 }
 
 /// Cache of all active contact manifolds, persisted across simulation frames.
 pub struct ManifoldCache {
-    manifolds: HashMap<ManifoldKey, ContactManifold>,
-    match_threshold: f32,
-    static_match_multiplier: f32,
+    manifolds: HashMap<ManifoldKey, CachedManifold>,
     max_age: u8,
     warm_start_depth_slop: f32,
     normal_smoother: NormalSmoother,
@@ -115,16 +131,12 @@ pub struct ManifoldCache {
 
 impl ManifoldCache {
     pub fn new(
-        match_threshold: f32,
-        static_match_multiplier: f32,
         max_age: u8,
         warm_start_depth_slop: f32,
         normal_smoothing: NormalSmoothingConfig,
     ) -> Self {
         Self {
             manifolds: HashMap::new(),
-            match_threshold,
-            static_match_multiplier,
             max_age,
             warm_start_depth_slop,
             normal_smoother: NormalSmoother::from_config(normal_smoothing),
@@ -132,161 +144,145 @@ impl ManifoldCache {
         }
     }
 
-    /// Merge raw narrowphase contacts with cached manifolds, returning solver-ready
-    /// constraints with warm-start impulses populated from the cache.
-    pub fn update(
+    /// Merge raw narrowphase manifolds with cached impulses, returning solver-ready
+    /// manifolds with warm-start impulses populated from the cache.
+    pub fn merge(
         &mut self,
-        raw_contacts: &[ContactConstraint],
-        bodies: &Arena<RigidBody>,
-        deterministic_contact_ordering: bool,
-    ) -> Vec<ContactConstraint> {
+        raw_manifolds: &[PairManifold],
+        deterministic_ordering: bool,
+    ) -> Vec<SolverManifold> {
         self.frame_stats = ManifoldFrameStats::default();
-        // Age all existing points before processing new contacts
-        for manifold in self.manifolds.values_mut() {
-            for point in &mut manifold.points {
+
+        // Age all existing cached points
+        for cached in self.manifolds.values_mut() {
+            for point in &mut cached.points {
                 point.age += 1;
             }
         }
 
-        let mut result = Vec::with_capacity(raw_contacts.len());
-        let mut grouped: HashMap<ManifoldKey, Vec<&ContactConstraint>> = HashMap::new();
+        let mut result = Vec::with_capacity(raw_manifolds.len());
 
-        for contact in raw_contacts {
-            let Some(col_b) = contact.collider_b else {
+        for pair in raw_manifolds {
+            let Some(col_b) = pair.header.collider_b else {
                 // Transient contacts (e.g. CCD) without collider info skip the cache
-                result.push(contact.clone());
+                result.push(pair_to_solver_cold(pair));
                 continue;
             };
-            let key = ManifoldKey::new(contact.collider_a, col_b);
-            grouped.entry(key).or_default().push(contact);
-        }
+            let key = ManifoldKey::new(pair.header.collider_a, col_b);
+            let cached = self.manifolds.entry(key).or_insert_with(CachedManifold::new);
 
-        for (key, contacts) in grouped {
-            let manifold = self
-                .manifolds
-                .entry(key)
-                .or_insert_with(ContactManifold::new);
+            let mut solver_contacts = SmallVec::with_capacity(pair.manifold.len());
 
-            let contacts = if contacts.len() > 4 {
-                reduce_contacts_with_manifold(contacts, manifold, bodies, 4, self.match_threshold)
-            } else {
-                contacts
-            };
+            for contact_point in &pair.manifold.points {
+                let feature_id = contact_point.feature_id;
 
-            let mut matched_indices: HashSet<usize> = HashSet::new();
+                let (warm_normal, warm_tangent, contact_normal) =
+                    match cached.find_by_feature(feature_id) {
+                        Some(idx) => {
+                            self.frame_stats.point_matches += 1;
+                            let entry = &mut cached.points[idx];
 
-            for contact in contacts {
-                // Transform contact point to local space
-                let (local_a, local_b) = to_local_space(contact, bodies);
+                            let aligned =
+                                self.normal_smoother.aligned(entry.normal, contact_point.normal);
+                            let contact_normal = if aligned {
+                                self.normal_smoother.smooth(entry.normal, contact_point.normal)
+                            } else {
+                                contact_point.normal
+                            };
 
-                // Find closest existing point in the manifold, excluding already matched
-                let threshold = if contact.body_a.is_none() {
-                    self.match_threshold * self.static_match_multiplier
-                } else {
-                    self.match_threshold
-                };
-                let match_idx =
-                    find_closest_point_excluding(manifold, &local_b, threshold, &matched_indices);
+                            let use_warm =
+                                aligned && contact_point.raw_depth >= -self.warm_start_depth_slop;
+                            let warm = if use_warm {
+                                (entry.normal_impulse, entry.tangent_impulse)
+                            } else {
+                                entry.normal_impulse = 0.0;
+                                entry.tangent_impulse = [0.0, 0.0];
+                                (0.0, [0.0, 0.0])
+                            };
 
-                let (warm_normal, warm_tangent, contact_normal) = match match_idx {
-                    Some(idx) => {
-                        matched_indices.insert(idx);
-                        self.frame_stats.point_matches += 1;
-                        // Matched: inherit cached impulses, update point
-                        let cached = &mut manifold.points[idx];
-                        let aligned = self.normal_smoother.aligned(cached.normal, contact.normal);
-                        let contact_normal = if aligned {
-                            self.normal_smoother.smooth(cached.normal, contact.normal)
-                        } else {
-                            contact.normal
-                        };
-                        let use_warm = aligned && contact.raw_depth >= -self.warm_start_depth_slop;
-                        let warm = if use_warm {
-                            (cached.normal_impulse, cached.tangent_impulse)
-                        } else {
-                            cached.normal_impulse = 0.0;
-                            cached.tangent_impulse = [0.0, 0.0];
-                            (0.0, [0.0, 0.0])
-                        };
-                        cached.local_point_a = local_a;
-                        cached.local_point_b = local_b;
-                        cached.normal = contact_normal;
-                        cached.depth = contact.depth;
-                        cached.age = 0;
-                        (warm.0, warm.1, contact_normal)
-                    }
-                    None => {
-                        // New point: insert (or replace shallowest if full)
-                        let new_point = ManifoldPoint {
-                            local_point_a: local_a,
-                            local_point_b: local_b,
-                            normal: contact.normal,
-                            depth: contact.depth,
-                            normal_impulse: 0.0,
-                            tangent_impulse: [0.0, 0.0],
-                            age: 0,
-                        };
+                            entry.normal = contact_normal;
+                            entry.depth = contact_point.depth;
+                            entry.age = 0;
 
-                        if manifold.points.len() < 4 {
-                            manifold.points.push(new_point);
-                            matched_indices.insert(manifold.points.len() - 1);
-                            self.frame_stats.point_adds += 1;
-                        } else if let Some(replace_idx) =
-                            find_shallowest_unmatched(manifold, &matched_indices)
-                        {
-                            manifold.points[replace_idx] = new_point;
-                            matched_indices.insert(replace_idx);
-                            self.frame_stats.point_replacements += 1;
+                            (warm.0, warm.1, contact_normal)
                         }
-                        (0.0, [0.0, 0.0], contact.normal)
-                    }
-                };
+                        None => {
+                            // New contact: insert into cache
+                            if cached.points.len() < 4 {
+                                cached.points.push(CachedContact {
+                                    feature_id,
+                                    normal_impulse: 0.0,
+                                    tangent_impulse: [0.0, 0.0],
+                                    normal: contact_point.normal,
+                                    depth: contact_point.depth,
+                                    age: 0,
+                                });
+                                self.frame_stats.point_adds += 1;
+                            } else if let Some(replace_idx) =
+                                find_shallowest_aged(&cached.points)
+                            {
+                                cached.points[replace_idx] = CachedContact {
+                                    feature_id,
+                                    normal_impulse: 0.0,
+                                    tangent_impulse: [0.0, 0.0],
+                                    normal: contact_point.normal,
+                                    depth: contact_point.depth,
+                                    age: 0,
+                                };
+                                self.frame_stats.point_replacements += 1;
+                            }
+                            (0.0, [0.0, 0.0], contact_point.normal)
+                        }
+                    };
 
-                let mut warm_contact = contact.clone();
-                warm_contact.normal = contact_normal;
-                warm_contact.warm_normal_impulse = warm_normal;
-                warm_contact.warm_tangent_impulse = warm_tangent;
-                result.push(warm_contact);
+                solver_contacts.push(SolverContact {
+                    point: contact_point.point,
+                    normal: contact_normal,
+                    raw_normal: contact_point.raw_normal,
+                    depth: contact_point.depth,
+                    raw_depth: contact_point.raw_depth,
+                    feature_id,
+                    warm_normal_impulse: warm_normal,
+                    warm_tangent_impulse: warm_tangent,
+                    accumulated_normal_impulse: 0.0,
+                    accumulated_tangent_impulse: [0.0, 0.0],
+                });
             }
+
+            result.push(SolverManifold {
+                header: pair.header.clone(),
+                contacts: solver_contacts,
+            });
         }
 
-        if deterministic_contact_ordering {
-            // Sequential impulses are order-dependent, so deterministic ordering
-            // helps keep behavior reproducible in tests/debug runs.
-            result.sort_by(compare_contacts_for_solver);
+        if deterministic_ordering {
+            result.sort_by(compare_solver_manifolds);
         }
+
         result
     }
 
-    /// Write solved impulses back into the manifold cache for next frame's warm-start.
-    pub fn write_back(
-        &mut self,
-        constraints: &[ContactConstraint],
-        solved: &[SolvedImpulses],
-        bodies: &Arena<RigidBody>,
-    ) {
-        let mut used_indices: HashMap<ManifoldKey, HashSet<usize>> = HashMap::new();
-
-        for (contact, impulse) in constraints.iter().zip(solved.iter()) {
-            let Some(col_b) = contact.collider_b else {
+    /// Write solved impulses back into the cache for next frame's warm-start.
+    ///
+    /// Reads accumulated impulses from each `SolverContact` and stores them in the
+    /// corresponding `CachedContact` matched by `FeatureId`.
+    pub fn write_back(&mut self, solved_manifolds: &[SolverManifold]) {
+        for manifold in solved_manifolds {
+            let Some(col_b) = manifold.header.collider_b else {
                 continue;
             };
-            let key = ManifoldKey::new(contact.collider_a, col_b);
+            let key = ManifoldKey::new(manifold.header.collider_a, col_b);
 
-            let Some(manifold) = self.manifolds.get_mut(&key) else {
+            let Some(cached) = self.manifolds.get_mut(&key) else {
                 continue;
             };
 
-            let (_, local_b) = to_local_space(contact, bodies);
-            let used = used_indices.entry(key).or_default();
-            let match_idx =
-                find_closest_point_excluding(manifold, &local_b, self.match_threshold, used);
-
-            if let Some(idx) = match_idx {
-                used.insert(idx);
-                let point = &mut manifold.points[idx];
-                point.normal_impulse = impulse.normal;
-                point.tangent_impulse = impulse.tangent;
+            for contact in &manifold.contacts {
+                if let Some(idx) = cached.find_by_feature(contact.feature_id) {
+                    let entry = &mut cached.points[idx];
+                    entry.normal_impulse = contact.accumulated_normal_impulse;
+                    entry.tangent_impulse = contact.accumulated_tangent_impulse;
+                }
             }
         }
     }
@@ -317,260 +313,65 @@ impl ManifoldCache {
     }
 }
 
-/// Transform a contact point to body-local space for both bodies.
-fn to_local_space(
-    contact: &ContactConstraint,
-    bodies: &Arena<RigidBody>,
-) -> (Point3<f32>, Point3<f32>) {
-    let local_a = match contact.body_a {
-        Some(handle) => {
-            if let Some(body) = bodies.get(handle.0) {
-                world_to_local(contact.point, body.position(), body.rotation())
-            } else {
-                contact.point
-            }
-        }
-        None => contact.point, // Static: local == world
-    };
-
-    let local_b = if let Some(body) = bodies.get(contact.body_b.0) {
-        world_to_local(contact.point, body.position(), body.rotation())
-    } else {
-        contact.point
-    };
-
-    (local_a, local_b)
-}
-
-fn world_to_local(
-    point: Point3<f32>,
-    body_pos: Point3<f32>,
-    body_rot: UnitQuaternion<f32>,
-) -> Point3<f32> {
-    Point3::from(body_rot.inverse() * (point - body_pos))
-}
-
-fn find_closest_point_excluding(
-    manifold: &ContactManifold,
-    local_b: &Point3<f32>,
-    threshold: f32,
-    exclude: &HashSet<usize>,
-) -> Option<usize> {
-    let threshold_sq = threshold * threshold;
-    let mut best_idx = None;
-    let mut best_dist_sq = threshold_sq;
-
-    for (i, point) in manifold.points.iter().enumerate() {
-        if exclude.contains(&i) {
-            continue;
-        }
-        let dist_sq = (point.local_point_b - local_b).magnitude_squared();
-        if dist_sq < best_dist_sq {
-            best_dist_sq = dist_sq;
-            best_idx = Some(i);
-        }
-    }
-
-    best_idx
-}
-
-fn find_shallowest_unmatched(
-    manifold: &ContactManifold,
-    exclude: &HashSet<usize>,
-) -> Option<usize> {
-    manifold
+/// Build a cold (no warm-start) `SolverManifold` from a `PairManifold`.
+fn pair_to_solver_cold(pair: &PairManifold) -> SolverManifold {
+    let contacts = pair
+        .manifold
         .points
         .iter()
+        .map(|cp| SolverContact {
+            point: cp.point,
+            normal: cp.normal,
+            raw_normal: cp.raw_normal,
+            depth: cp.depth,
+            raw_depth: cp.raw_depth,
+            feature_id: cp.feature_id,
+            warm_normal_impulse: 0.0,
+            warm_tangent_impulse: [0.0, 0.0],
+            accumulated_normal_impulse: 0.0,
+            accumulated_tangent_impulse: [0.0, 0.0],
+        })
+        .collect();
+    SolverManifold {
+        header: pair.header.clone(),
+        contacts,
+    }
+}
+
+/// Find the cached point with the highest age and shallowest depth (best candidate
+/// for replacement when the cache is full).
+fn find_shallowest_aged(points: &SmallVec<[CachedContact; 4]>) -> Option<usize> {
+    points
+        .iter()
         .enumerate()
-        .filter(|(i, _)| !exclude.contains(i))
+        .filter(|(_, p)| p.age > 0)
         .min_by(|(_, a), (_, b)| {
-            a.depth
-                .partial_cmp(&b.depth)
-                .unwrap_or(std::cmp::Ordering::Equal)
+            // Prefer replacing older points first, then shallowest among those
+            b.age
+                .cmp(&a.age)
+                .then_with(|| {
+                    a.depth
+                        .partial_cmp(&b.depth)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
         })
         .map(|(i, _)| i)
 }
 
-/// Reduce contacts while biasing toward cached manifold points.
+/// Deterministic ordering for solver manifolds by collider pair key.
 ///
-/// This preserves temporal stability by keeping points that already exist in the manifold
-/// whenever they are within the match threshold. After the history bias is applied, the
-/// remaining slots are filled deterministically so the selection does not flicker between
-/// frames. The result is a stable, size-limited contact set that still reflects the current
-/// narrowphase output.
-fn reduce_contacts_with_manifold<'a>(
-    contacts: Vec<&'a ContactConstraint>,
-    manifold: &ContactManifold,
-    bodies: &Arena<RigidBody>,
-    max_points: usize,
-    match_threshold: f32,
-) -> Vec<&'a ContactConstraint> {
-    if contacts.len() <= max_points {
-        return contacts;
+/// Manifolds are naturally keyed by collider pair, so this replaces the old
+/// per-contact deterministic ordering. Contacts within a manifold are already
+/// in deterministic order from the collision library (deepest first).
+fn compare_solver_manifolds(a: &SolverManifold, b: &SolverManifold) -> std::cmp::Ordering {
+    let coll_a = compare_optional_collider(a.header.collider_a, b.header.collider_a);
+    if coll_a != std::cmp::Ordering::Equal {
+        return coll_a;
     }
-
-    let locals: Vec<Point3<f32>> = contacts
-        .iter()
-        .map(|contact| to_local_space(contact, bodies).1)
-        .collect();
-    let mut selected: Vec<usize> = Vec::new();
-
-    let threshold_sq = match_threshold * match_threshold;
-    for point in &manifold.points {
-        let mut best_idx = None;
-        let mut best_dist_sq = threshold_sq;
-        for (idx, local_b) in locals.iter().enumerate() {
-            if selected.contains(&idx) {
-                continue;
-            }
-            let dist_sq = (point.local_point_b - *local_b).magnitude_squared();
-            if dist_sq < best_dist_sq {
-                best_dist_sq = dist_sq;
-                best_idx = Some(idx);
-            }
-        }
-        if let Some(idx) = best_idx {
-            selected.push(idx);
-        }
-    }
-
-    if selected.len() > max_points {
-        selected.sort_by(|a, b| compare_contacts(contacts[*a], contacts[*b]));
-        selected.truncate(max_points);
-    }
-
-    if selected.is_empty() {
-        let mut indices: Vec<usize> = (0..contacts.len()).collect();
-        indices.sort_by(|a, b| compare_contacts(contacts[*a], contacts[*b]));
-        if let Some(idx) = indices.first() {
-            selected.push(*idx);
-        }
-    }
-
-    let mut remaining: Vec<usize> = (0..contacts.len())
-        .filter(|idx| !selected.contains(idx))
-        .collect();
-    remaining.sort_by(|a, b| compare_contacts(contacts[*a], contacts[*b]));
-
-    for idx in remaining {
-        if selected.len() >= max_points {
-            break;
-        }
-        selected.push(idx);
-    }
-
-    selected.into_iter().map(|idx| contacts[idx]).collect()
+    compare_optional_collider(a.header.collider_b, b.header.collider_b)
 }
 
-/// Deterministic ordering for contact reduction.
-///
-/// This orders by deeper contacts first, then by raw depth, then by position and normal
-/// components. The goal is stability rather than geometric optimality, so ties are broken
-/// consistently across frames. This helps prevent oscillation caused by nondeterministic
-/// contact selection.
-fn compare_contacts(a: &ContactConstraint, b: &ContactConstraint) -> std::cmp::Ordering {
-    let depth = b
-        .depth
-        .partial_cmp(&a.depth)
-        .unwrap_or(std::cmp::Ordering::Equal);
-    if depth != std::cmp::Ordering::Equal {
-        return depth;
-    }
-    let raw = b
-        .raw_depth
-        .partial_cmp(&a.raw_depth)
-        .unwrap_or(std::cmp::Ordering::Equal);
-    if raw != std::cmp::Ordering::Equal {
-        return raw;
-    }
-    let point_x = a
-        .point
-        .x
-        .partial_cmp(&b.point.x)
-        .unwrap_or(std::cmp::Ordering::Equal);
-    if point_x != std::cmp::Ordering::Equal {
-        return point_x;
-    }
-    let point_y = a
-        .point
-        .y
-        .partial_cmp(&b.point.y)
-        .unwrap_or(std::cmp::Ordering::Equal);
-    if point_y != std::cmp::Ordering::Equal {
-        return point_y;
-    }
-    let point_z = a
-        .point
-        .z
-        .partial_cmp(&b.point.z)
-        .unwrap_or(std::cmp::Ordering::Equal);
-    if point_z != std::cmp::Ordering::Equal {
-        return point_z;
-    }
-    let normal_x = a
-        .normal
-        .x
-        .partial_cmp(&b.normal.x)
-        .unwrap_or(std::cmp::Ordering::Equal);
-    if normal_x != std::cmp::Ordering::Equal {
-        return normal_x;
-    }
-    let normal_y = a
-        .normal
-        .y
-        .partial_cmp(&b.normal.y)
-        .unwrap_or(std::cmp::Ordering::Equal);
-    if normal_y != std::cmp::Ordering::Equal {
-        return normal_y;
-    }
-    a.normal
-        .z
-        .partial_cmp(&b.normal.z)
-        .unwrap_or(std::cmp::Ordering::Equal)
-}
-
-fn compare_contacts_for_solver(a: &ContactConstraint, b: &ContactConstraint) -> std::cmp::Ordering {
-    let body_a = compare_optional_body_handle(a.body_a, b.body_a);
-    if body_a != std::cmp::Ordering::Equal {
-        return body_a;
-    }
-    let body_b = compare_body_handle(a.body_b, b.body_b);
-    if body_b != std::cmp::Ordering::Equal {
-        return body_b;
-    }
-    let collider_a = compare_optional_collider_handle(a.collider_a, b.collider_a);
-    if collider_a != std::cmp::Ordering::Equal {
-        return collider_a;
-    }
-    let collider_b = compare_optional_collider_handle(a.collider_b, b.collider_b);
-    if collider_b != std::cmp::Ordering::Equal {
-        return collider_b;
-    }
-    compare_contacts(a, b)
-}
-
-fn compare_body_handle(
-    a: crate::physics::handle::RigidBodyHandle,
-    b: crate::physics::handle::RigidBodyHandle,
-) -> std::cmp::Ordering {
-    let (a_idx, a_gen) = a.0.into_raw_parts();
-    let (b_idx, b_gen) = b.0.into_raw_parts();
-    a_idx.cmp(&b_idx).then(a_gen.cmp(&b_gen))
-}
-
-fn compare_optional_body_handle(
-    a: Option<crate::physics::handle::RigidBodyHandle>,
-    b: Option<crate::physics::handle::RigidBodyHandle>,
-) -> std::cmp::Ordering {
-    match (a, b) {
-        (None, None) => std::cmp::Ordering::Equal,
-        (None, Some(_)) => std::cmp::Ordering::Less,
-        (Some(_), None) => std::cmp::Ordering::Greater,
-        (Some(a), Some(b)) => compare_body_handle(a, b),
-    }
-}
-
-fn compare_optional_collider_handle(
+fn compare_optional_collider(
     a: Option<ColliderHandle>,
     b: Option<ColliderHandle>,
 ) -> std::cmp::Ordering {

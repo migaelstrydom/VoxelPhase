@@ -108,28 +108,30 @@ impl ForceField {
         match self {
             Self::Boundary { bounds, spring_k } => {
                 let mut push = Vector3::zeros();
+                let max_penetration = 2.0;
+                let max_impulse = 200.0;
 
                 let y_push = 1.0;
 
                 if body_pos.x < bounds.min.x {
-                    push.x = bounds.min.x - body_pos.x;
+                    push.x = (bounds.min.x - body_pos.x).min(max_penetration);
                     push.y = y_push;
                 } else if body_pos.x > bounds.max.x {
-                    push.x = bounds.max.x - body_pos.x;
+                    push.x = (bounds.max.x - body_pos.x).max(-max_penetration);
                     push.y = y_push;
                 }
 
                 if body_pos.y < bounds.min.y {
-                    push.y = bounds.min.y - body_pos.y;
+                    push.y = (bounds.min.y - body_pos.y).min(max_penetration);
                 } else if body_pos.y > bounds.max.y {
-                    push.y = bounds.max.y - body_pos.y;
+                    push.y = (bounds.max.y - body_pos.y).max(-max_penetration);
                 }
 
                 if body_pos.z < bounds.min.z {
-                    push.z = bounds.min.z - body_pos.z;
+                    push.z = (bounds.min.z - body_pos.z).min(max_penetration);
                     push.y = y_push;
                 } else if body_pos.z > bounds.max.z {
-                    push.z = bounds.max.z - body_pos.z;
+                    push.z = (bounds.max.z - body_pos.z).max(-max_penetration);
                     push.y = y_push;
                 }
 
@@ -137,7 +139,13 @@ impl ForceField {
                     return None;
                 }
 
-                Some(push * *spring_k * dt)
+                let mut impulse = push * *spring_k * dt;
+                let impulse_mag = impulse.magnitude();
+                if impulse_mag > max_impulse {
+                    impulse *= max_impulse / impulse_mag;
+                }
+
+                Some(impulse)
             }
         }
     }
