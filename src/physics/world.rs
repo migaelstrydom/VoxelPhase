@@ -48,10 +48,6 @@ pub struct PhysicsConfig {
     /// Below this, the narrowphase handles contacts; above, CCD sweeps
     /// prevent tunneling.
     pub ccd_threshold: f32,
-    /// Local-space distance threshold for matching contact points across frames.
-    pub contact_match_threshold: f32,
-    /// Multiplier applied to contact_match_threshold for static contacts.
-    pub contact_match_threshold_static_multiplier: f32,
     /// Frames without a narrowphase refresh before a manifold point is pruned.
     pub manifold_max_age: u8,
     /// Scale factor applied to warm-start impulses (0..=1).
@@ -88,8 +84,6 @@ impl Default for PhysicsConfig {
             restitution_velocity_threshold: 0.3,
             contact_margin: 0.02,
             ccd_threshold: 0.5,
-            contact_match_threshold: 0.1,
-            contact_match_threshold_static_multiplier: 2.0,
             manifold_max_age: 3,
             warm_start_scale: 0.6,
             deterministic_contact_ordering: false,
@@ -342,37 +336,13 @@ impl PhysicsWorld {
         Some(collider_handle)
     }
 
-    /// Remove a collider from its body.
-    #[allow(dead_code)]
-    pub fn remove_collider(&mut self, handle: ColliderHandle) -> bool {
-        let Some(collider) = self.colliders.remove(handle.0) else {
-            return false;
-        };
-
-        let body_handle = collider.body();
-
-        if let Some(body) = self.bodies.get_mut(body_handle.0) {
-            body.remove_collider(handle);
-            self.recompute_mass_properties(body_handle);
-        }
-
-        self.manifold_cache.remove_collider(handle);
-
-        true
-    }
-
-    /// Get a reference to a collider.
-    #[allow(dead_code)]
-    pub fn collider(&self, handle: ColliderHandle) -> Option<&Collider> {
-        self.colliders.get(handle.0)
-    }
-
     // === Simulation ===
 
     /// Step the physics simulation forward by dt seconds.
     ///
     /// Convenience method that calls `update_contacts()` then `substep()`.
     /// For substepping, call `update_contacts()` once then `substep()` N times.
+    #[cfg(test)]
     pub fn step(
         &mut self,
         dt: f32,

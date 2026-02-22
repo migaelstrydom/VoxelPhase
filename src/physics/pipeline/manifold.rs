@@ -169,7 +169,10 @@ impl ManifoldCache {
                 continue;
             };
             let key = ManifoldKey::new(pair.header.collider_a, col_b);
-            let cached = self.manifolds.entry(key).or_insert_with(CachedManifold::new);
+            let cached = self
+                .manifolds
+                .entry(key)
+                .or_insert_with(CachedManifold::new);
 
             let mut solver_contacts = SmallVec::with_capacity(pair.manifold.len());
 
@@ -182,10 +185,12 @@ impl ManifoldCache {
                             self.frame_stats.point_matches += 1;
                             let entry = &mut cached.points[idx];
 
-                            let aligned =
-                                self.normal_smoother.aligned(entry.normal, contact_point.normal);
+                            let aligned = self
+                                .normal_smoother
+                                .aligned(entry.normal, contact_point.normal);
                             let contact_normal = if aligned {
-                                self.normal_smoother.smooth(entry.normal, contact_point.normal)
+                                self.normal_smoother
+                                    .smooth(entry.normal, contact_point.normal)
                             } else {
                                 contact_point.normal
                             };
@@ -218,9 +223,7 @@ impl ManifoldCache {
                                     age: 0,
                                 });
                                 self.frame_stats.point_adds += 1;
-                            } else if let Some(replace_idx) =
-                                find_shallowest_aged(&cached.points)
-                            {
+                            } else if let Some(replace_idx) = find_shallowest_aged(&cached.points) {
                                 cached.points[replace_idx] = CachedContact {
                                     feature_id,
                                     normal_impulse: 0.0,
@@ -308,6 +311,7 @@ impl ManifoldCache {
     }
 
     /// Returns cache activity and size counters for the most recent step.
+    #[cfg(test)]
     pub fn frame_stats(&self) -> ManifoldFrameStats {
         self.frame_stats
     }
@@ -347,13 +351,11 @@ fn find_shallowest_aged(points: &SmallVec<[CachedContact; 4]>) -> Option<usize> 
         .filter(|(_, p)| p.age > 0)
         .min_by(|(_, a), (_, b)| {
             // Prefer replacing older points first, then shallowest among those
-            b.age
-                .cmp(&a.age)
-                .then_with(|| {
-                    a.depth
-                        .partial_cmp(&b.depth)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                })
+            b.age.cmp(&a.age).then_with(|| {
+                a.depth
+                    .partial_cmp(&b.depth)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
         })
         .map(|(i, _)| i)
 }
