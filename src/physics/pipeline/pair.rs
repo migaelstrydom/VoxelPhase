@@ -61,12 +61,16 @@ pub struct SolverContact {
     pub feature_id: FeatureId,
     /// Normal impulse inherited from the previous frame's cache (warm-start).
     pub warm_normal_impulse: f32,
-    /// Tangent impulses inherited from the previous frame's cache (warm-start).
-    pub warm_tangent_impulse: [f32; 2],
+    /// Friction impulse from the previous frame, stored in world space.
+    ///
+    /// Perpendicular to the cached normal at the time of storage. On warm-start
+    /// this is re-projected onto the current tangent plane so that small normal
+    /// drift does not rotate the cached friction direction.
+    pub warm_friction_impulse_ws: Vector3<f32>,
     /// Normal impulse accumulated by the solver this step.
     pub accumulated_normal_impulse: f32,
-    /// Tangent impulses accumulated by the solver this step.
-    pub accumulated_tangent_impulse: [f32; 2],
+    /// Friction impulse accumulated by the solver this step, in world space.
+    pub accumulated_friction_impulse_ws: Vector3<f32>,
 }
 
 /// A solver-ready manifold: pair metadata plus per-contact working data.

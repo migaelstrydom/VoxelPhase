@@ -2,7 +2,9 @@
 
 use generational_arena::Arena;
 use nalgebra::{Matrix3, Point3, Vector3};
+use smallvec::SmallVec;
 use std::collections::HashMap;
+use std::sync::OnceLock;
 
 use crate::physics::body::RigidBody;
 use crate::physics::handle::RigidBodyHandle;
@@ -15,6 +17,106 @@ use crate::physics::world::PhysicsConfig;
 /// Prevents near-zero denominators (degenerate geometry or deeply wedged bodies)
 /// from producing runaway impulses.
 const MIN_EFFECTIVE_INV_MASS: f32 = 1.0e-8;
+
+/// Number of PGS micro-iterations for block normal solve on multi-contact
+/// manifolds. Extra local iterations capture cross-contact coupling within
+/// a single outer solver pass, reducing rocking in stacks and eccentric loads.
+const BLOCK_NORMAL_MICRO_ITERATIONS: u32 = 4;
+
+fn solver_diag_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("RUST_DUDE_SOLVER_DIAG")
+            .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+            .unwrap_or(false)
+    })
+}
+
+fn solver_diag_body_filter() -> Option<usize> {
+    static BODY_FILTER: OnceLock<Option<usize>> = OnceLock::new();
+    *BODY_FILTER.get_or_init(|| {
+        std::env::var("RUST_DUDE_SOLVER_DIAG_BODY_INDEX")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+    })
+}
+
+fn solver_diag_pair_includes_filtered_body(header: &PairHeader) -> bool {
+    let Some(filter_idx) = solver_diag_body_filter() else {
+        return true;
+    };
+    let body_b_idx = header.body_b.raw_parts().0;
+    if body_b_idx == filter_idx {
+        return true;
+    }
+    header
+        .body_a
+        .map(|h| h.raw_parts().0 == filter_idx)
+        .unwrap_or(false)
+}
+
+fn log_impulse_torque_diag(
+    kind: &str,
+    header: &PairHeader,
+    contact: &SolverContact,
+    state: &BodyPairState,
+    impulse_to_b: &Vector3<f32>,
+) {
+    if !solver_diag_enabled() || !solver_diag_pair_includes_filtered_body(header) {
+        return;
+    }
+    let j_mag = impulse_to_b.magnitude();
+    if j_mag <= 1.0e-6 {
+        return;
+    }
+
+    let pair_kind = if header.body_a.is_none() {
+        "static-dynamic"
+    } else {
+        "dynamic-dynamic"
+    };
+    let r_b = contact.point - state.pos_b;
+    let tau_b = r_b.cross(impulse_to_b);
+    let tangent_mag = contact.accumulated_friction_impulse_ws.magnitude();
+
+    if let Some(handle_a) = header.body_a {
+        let r_a = contact.point - state.pos_a;
+        let tau_a = r_a.cross(&(-*impulse_to_b));
+        eprintln!(
+            "solver_diag impulse kind={kind} pair={pair_kind} a={:?} b={:?} feature={:?} \
+             depth={:.5} j={:.6} jn_acc={:.6} jt_acc={:.6} \
+             tau_a=[{:.6},{:.6},{:.6}] tau_b=[{:.6},{:.6},{:.6}]",
+            handle_a,
+            header.body_b,
+            contact.feature_id,
+            contact.depth,
+            j_mag,
+            contact.accumulated_normal_impulse,
+            tangent_mag,
+            tau_a.x,
+            tau_a.y,
+            tau_a.z,
+            tau_b.x,
+            tau_b.y,
+            tau_b.z,
+        );
+    } else {
+        eprintln!(
+            "solver_diag impulse kind={kind} pair={pair_kind} a=static b={:?} feature={:?} \
+             depth={:.5} j={:.6} jn_acc={:.6} jt_acc={:.6} \
+             tau_b=[{:.6},{:.6},{:.6}]",
+            header.body_b,
+            contact.feature_id,
+            contact.depth,
+            j_mag,
+            contact.accumulated_normal_impulse,
+            tangent_mag,
+            tau_b.x,
+            tau_b.y,
+            tau_b.z,
+        );
+    }
+}
 
 /// Snapshot of both bodies' physics state for a contact pair.
 ///
@@ -189,16 +291,34 @@ pub fn solve(
     let iterations = effective_solver_iterations(manifolds, config.solver_iterations);
     for _ in 0..iterations {
         for (mi, manifold) in manifolds.iter_mut().enumerate() {
-            let header = &manifold.header;
-            for (ci, contact) in manifold.contacts.iter_mut().enumerate() {
-                solve_normal_impulse(
-                    bodies,
-                    header,
-                    contact,
-                    config.restitution_velocity_threshold,
-                    pre_solve[mi][ci].0,
-                );
-                solve_friction_impulse(bodies, header, contact);
+            // Block normal solve: multi-contact manifolds get extra local
+            // iterations to capture cross-contact coupling.
+            let normal_passes = if manifold.contacts.len() > 1 {
+                BLOCK_NORMAL_MICRO_ITERATIONS
+            } else {
+                1
+            };
+            for _ in 0..normal_passes {
+                for ci in 0..manifold.contacts.len() {
+                    solve_normal_impulse(
+                        bodies,
+                        &manifold.header,
+                        &mut manifold.contacts[ci],
+                        config.restitution_velocity_threshold,
+                        pre_solve[mi][ci].0,
+                    );
+                }
+            }
+
+            // Per-contact friction solve
+            for ci in 0..manifold.contacts.len() {
+                solve_friction_impulse(bodies, &manifold.header, &mut manifold.contacts[ci]);
+            }
+
+            // Manifold-level friction budget projection: prevent individual
+            // contacts from fighting each other with maxed-out friction cones.
+            if manifold.contacts.len() > 1 {
+                manifold_friction_projection(bodies, &manifold.header, &mut manifold.contacts);
             }
         }
     }
@@ -261,26 +381,35 @@ fn warm_start_contact(
     scale: f32,
 ) {
     contact.accumulated_normal_impulse = contact.warm_normal_impulse * scale;
-    contact.accumulated_tangent_impulse = [
-        contact.warm_tangent_impulse[0] * scale,
-        contact.warm_tangent_impulse[1] * scale,
-    ];
+
+    // Project cached world-space friction onto the current tangent plane
+    // so that small normal drift does not rotate the friction direction.
+    let warm_friction_scaled = contact.warm_friction_impulse_ws * scale;
+    let projected = warm_friction_scaled
+        - contact.normal * warm_friction_scaled.dot(&contact.normal);
+
+    // Clamp to Coulomb limit with the warm normal impulse
+    let mag = projected.magnitude();
+    let max_friction = header.friction * contact.accumulated_normal_impulse;
+    let friction_ws = if mag > max_friction && mag > 1e-8 {
+        projected * (max_friction / mag)
+    } else {
+        projected
+    };
+
+    contact.accumulated_friction_impulse_ws = friction_ws;
 
     if scale <= 0.0 {
         return;
     }
     if contact.warm_normal_impulse.abs() < 1e-8
-        && contact.warm_tangent_impulse[0].abs() < 1e-8
-        && contact.warm_tangent_impulse[1].abs() < 1e-8
+        && contact.warm_friction_impulse_ws.magnitude_squared() < 1e-16
     {
         return;
     }
 
-    let (t1, t2) = compute_tangent_basis(&contact.normal);
-    let normal_impulse = contact.normal * (contact.warm_normal_impulse * scale);
-    let tangent_impulse =
-        (t1 * contact.warm_tangent_impulse[0] + t2 * contact.warm_tangent_impulse[1]) * scale;
-    let total = normal_impulse + tangent_impulse;
+    let normal_impulse = contact.normal * contact.accumulated_normal_impulse;
+    let total = normal_impulse + friction_ws;
 
     apply_impulse_pair(bodies, header, contact.point, total);
 }
@@ -382,6 +511,7 @@ fn solve_normal_impulse(
 
     if applied.abs() > 1e-10 {
         let impulse = contact.normal * applied;
+        log_impulse_torque_diag("normal", header, contact, &state, &impulse);
         apply_impulse_pair(bodies, header, contact.point, impulse);
     }
 }
@@ -396,7 +526,7 @@ fn solve_friction_impulse(
     contact: &mut SolverContact,
 ) {
     if contact.accumulated_normal_impulse <= 0.0 || header.friction <= 0.0 {
-        contact.accumulated_tangent_impulse = [0.0, 0.0];
+        contact.accumulated_friction_impulse_ws = Vector3::zeros();
         return;
     }
 
@@ -415,11 +545,15 @@ fn solve_friction_impulse(
         return;
     }
 
+    // Decompose world-space accumulator into current tangent basis
+    let curr_t1 = contact.accumulated_friction_impulse_ws.dot(&t1);
+    let curr_t2 = contact.accumulated_friction_impulse_ws.dot(&t2);
+
     let delta_t1 = -rel_vel.dot(&t1) / effective_mass_t1;
     let delta_t2 = -rel_vel.dot(&t2) / effective_mass_t2;
 
-    let mut new_t1 = contact.accumulated_tangent_impulse[0] + delta_t1;
-    let mut new_t2 = contact.accumulated_tangent_impulse[1] + delta_t2;
+    let mut new_t1 = curr_t1 + delta_t1;
+    let mut new_t2 = curr_t2 + delta_t2;
 
     let max_friction = header.friction * contact.accumulated_normal_impulse;
     let mag = (new_t1 * new_t1 + new_t2 * new_t2).sqrt();
@@ -429,13 +563,58 @@ fn solve_friction_impulse(
         new_t2 *= scale;
     }
 
-    let applied_t1 = new_t1 - contact.accumulated_tangent_impulse[0];
-    let applied_t2 = new_t2 - contact.accumulated_tangent_impulse[1];
-    contact.accumulated_tangent_impulse = [new_t1, new_t2];
+    let applied_t1 = new_t1 - curr_t1;
+    let applied_t2 = new_t2 - curr_t2;
+
+    // Reconstruct world-space accumulator from current basis
+    contact.accumulated_friction_impulse_ws = t1 * new_t1 + t2 * new_t2;
 
     if applied_t1.abs() > 1e-10 || applied_t2.abs() > 1e-10 {
         let impulse = t1 * applied_t1 + t2 * applied_t2;
+        log_impulse_torque_diag("friction", header, contact, &state, &impulse);
         apply_impulse_pair(bodies, header, contact.point, impulse);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Manifold-level friction budget projection (Stage 2)
+// ---------------------------------------------------------------------------
+
+/// Enforce a shared friction budget across all contacts in a manifold.
+///
+/// After per-contact friction solve, the total friction effort (sum of individual
+/// friction impulse magnitudes) must not exceed `mu * sum(lambda_n)`. If it does,
+/// all contacts' friction impulses are scaled down proportionally. This prevents
+/// individual contacts from each maxing out their friction cones and producing
+/// oscillating net torque.
+fn manifold_friction_projection(
+    bodies: &mut Arena<RigidBody>,
+    header: &PairHeader,
+    contacts: &mut SmallVec<[SolverContact; 4]>,
+) {
+    let total_normal: f32 = contacts.iter().map(|c| c.accumulated_normal_impulse).sum();
+    if total_normal <= 0.0 || header.friction <= 0.0 {
+        return;
+    }
+
+    let budget = header.friction * total_normal;
+    let total_friction_mag: f32 = contacts
+        .iter()
+        .map(|c| c.accumulated_friction_impulse_ws.magnitude())
+        .sum();
+
+    if total_friction_mag <= budget || total_friction_mag < 1e-8 {
+        return;
+    }
+
+    let scale = budget / total_friction_mag;
+    for contact in contacts.iter_mut() {
+        let old = contact.accumulated_friction_impulse_ws;
+        contact.accumulated_friction_impulse_ws = old * scale;
+        let delta = contact.accumulated_friction_impulse_ws - old;
+        if delta.magnitude_squared() > 1e-20 {
+            apply_impulse_pair(bodies, header, contact.point, delta);
+        }
     }
 }
 

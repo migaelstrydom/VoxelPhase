@@ -88,8 +88,11 @@ pub struct CachedContact {
     pub feature_id: FeatureId,
     /// Accumulated normal impulse from the solver (warm-start value).
     pub normal_impulse: f32,
-    /// Accumulated tangent impulses from the solver (warm-start value).
-    pub tangent_impulse: [f32; 2],
+    /// Accumulated friction impulse in world space from the solver (warm-start value).
+    ///
+    /// Stored as a world-space vector so that small normal drift between frames
+    /// does not rotate the cached friction direction.
+    pub friction_impulse_ws: Vector3<f32>,
     /// Contact normal in world space at the time of caching.
     pub normal: Vector3<f32>,
     /// Penetration depth at the time of caching.
@@ -179,7 +182,7 @@ impl ManifoldCache {
             for contact_point in &pair.manifold.points {
                 let feature_id = contact_point.feature_id;
 
-                let (warm_normal, warm_tangent, contact_normal) =
+                let (warm_normal, warm_friction_ws, contact_normal) =
                     match cached.find_by_feature(feature_id) {
                         Some(idx) => {
                             self.frame_stats.point_matches += 1;
@@ -198,11 +201,11 @@ impl ManifoldCache {
                             let use_warm =
                                 aligned && contact_point.raw_depth >= -self.warm_start_depth_slop;
                             let warm = if use_warm {
-                                (entry.normal_impulse, entry.tangent_impulse)
+                                (entry.normal_impulse, entry.friction_impulse_ws)
                             } else {
                                 entry.normal_impulse = 0.0;
-                                entry.tangent_impulse = [0.0, 0.0];
-                                (0.0, [0.0, 0.0])
+                                entry.friction_impulse_ws = Vector3::zeros();
+                                (0.0, Vector3::zeros())
                             };
 
                             entry.normal = contact_normal;
@@ -217,7 +220,7 @@ impl ManifoldCache {
                                 cached.points.push(CachedContact {
                                     feature_id,
                                     normal_impulse: 0.0,
-                                    tangent_impulse: [0.0, 0.0],
+                                    friction_impulse_ws: Vector3::zeros(),
                                     normal: contact_point.normal,
                                     depth: contact_point.depth,
                                     age: 0,
@@ -227,14 +230,14 @@ impl ManifoldCache {
                                 cached.points[replace_idx] = CachedContact {
                                     feature_id,
                                     normal_impulse: 0.0,
-                                    tangent_impulse: [0.0, 0.0],
+                                    friction_impulse_ws: Vector3::zeros(),
                                     normal: contact_point.normal,
                                     depth: contact_point.depth,
                                     age: 0,
                                 };
                                 self.frame_stats.point_replacements += 1;
                             }
-                            (0.0, [0.0, 0.0], contact_point.normal)
+                            (0.0, Vector3::zeros(), contact_point.normal)
                         }
                     };
 
@@ -246,9 +249,9 @@ impl ManifoldCache {
                     raw_depth: contact_point.raw_depth,
                     feature_id,
                     warm_normal_impulse: warm_normal,
-                    warm_tangent_impulse: warm_tangent,
+                    warm_friction_impulse_ws: warm_friction_ws,
                     accumulated_normal_impulse: 0.0,
-                    accumulated_tangent_impulse: [0.0, 0.0],
+                    accumulated_friction_impulse_ws: Vector3::zeros(),
                 });
             }
 
@@ -284,7 +287,7 @@ impl ManifoldCache {
                 if let Some(idx) = cached.find_by_feature(contact.feature_id) {
                     let entry = &mut cached.points[idx];
                     entry.normal_impulse = contact.accumulated_normal_impulse;
-                    entry.tangent_impulse = contact.accumulated_tangent_impulse;
+                    entry.friction_impulse_ws = contact.accumulated_friction_impulse_ws;
                 }
             }
         }
@@ -331,9 +334,9 @@ fn pair_to_solver_cold(pair: &PairManifold) -> SolverManifold {
             raw_depth: cp.raw_depth,
             feature_id: cp.feature_id,
             warm_normal_impulse: 0.0,
-            warm_tangent_impulse: [0.0, 0.0],
+            warm_friction_impulse_ws: Vector3::zeros(),
             accumulated_normal_impulse: 0.0,
-            accumulated_tangent_impulse: [0.0, 0.0],
+            accumulated_friction_impulse_ws: Vector3::zeros(),
         })
         .collect();
     SolverManifold {

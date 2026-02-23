@@ -800,9 +800,9 @@ fn cold_solver_contact(
         raw_depth,
         feature_id,
         warm_normal_impulse: 0.0,
-        warm_tangent_impulse: [0.0, 0.0],
+        warm_friction_impulse_ws: Vector3::zeros(),
         accumulated_normal_impulse: 0.0,
-        accumulated_tangent_impulse: [0.0, 0.0],
+        accumulated_friction_impulse_ws: Vector3::zeros(),
     }
 }
 
