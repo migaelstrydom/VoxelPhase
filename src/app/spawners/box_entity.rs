@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use nalgebra::Vector3;
+use nalgebra::{Point3, Vector3};
 use specs::{Builder, Entity, World, WorldExt};
 
 use crate::components::{
@@ -540,12 +540,12 @@ pub fn spawn_box(
             .position(initial_pos)
             .gravity_scale(1.0)
             .linear_damping(0.01)
-            .angular_damping(0.05);
+            .angular_damping(0.005);
 
         let body_handle = physics.0.create_body(body_desc);
 
         let collider_desc = ColliderDesc::box_shape(half_extents)
-            .density(0.5)
+            .density(50.5)
             .restitution(0.2)
             .friction(0.6);
 
@@ -567,4 +567,158 @@ pub fn spawn_box(
         .with(ModelInstance::new(model))
         .with(Renderable)
         .build()
+}
+
+/// Spawns a house structure built from boxes with varied proportions.
+///
+/// The house consists of:
+/// - A foundation slab slightly wider than the walls
+/// - A solid back wall (single tall box)
+/// - A front wall with a centered door opening in the lower layer and a solid upper layer
+/// - Two side walls each with a window opening (sill + lintel framing) in the lower layer
+/// - A flat roof slab with overhang on all sides
+///
+/// Front/back walls span the full outer X (including corner thickness) so that side
+/// walls can fill between them flush, with no overlapping geometry at the corners.
+///
+/// `base_pos` is ground level at the centre of the footprint.
+/// `base_half_extents` (x, y, z) defines the interior half-extents: x/z set the
+/// footprint, and y is used as the height reference unit.
+pub fn spawn_house(
+    world: &mut World,
+    base_pos: Point3<f32>,
+    base_half_extents: Vector3<f32>,
+    materials: &[MaterialId],
+) -> Vec<Entity> {
+    let wx = base_half_extents.x;
+    let hy = base_half_extents.y;
+    let wz = base_half_extents.z;
+
+    let wt = hy * 0.25; // wall half-thickness
+    let fh = hy * 0.3; // foundation half-height
+    let wh = hy; // wall layer half-height (two layers form the full wall)
+    let rt = hy * 0.3; // roof half-thickness
+    let ro = hy * 0.5; // roof overhang per side
+
+    let door_half_w = wx * 0.4; // door half-width (centred on front wall)
+    let win_half_z = wz * 0.35; // window half-width along Z (centred on side walls)
+    let sill_h = wh * 0.3; // sill / lintel half-height
+
+    let mut entities = Vec::new();
+    let mat = |i: usize| materials[i % materials.len()];
+
+    let y0 = base_pos.y;
+    let foundation_cy = y0 + fh;
+    let y_wall_base = y0 + 2.0 * fh;
+    let lower_cy = y_wall_base + wh;
+    let upper_cy = y_wall_base + 3.0 * wh;
+    let walls_top = y_wall_base + 4.0 * wh;
+    let roof_cy = walls_top + rt;
+
+    // Foundation slab
+    entities.push(spawn_box(
+        world,
+        Point3::new(base_pos.x, foundation_cy, base_pos.z),
+        Vector3::new(wx + wt, fh, wz + wt),
+        mat(0),
+    ));
+
+    // Back wall (−Z) — solid, single tall box spanning both layers
+    entities.push(spawn_box(
+        world,
+        Point3::new(base_pos.x, y_wall_base + 2.0 * wh, base_pos.z - wz),
+        Vector3::new(wx + wt, 2.0 * wh, wt),
+        mat(1),
+    ));
+
+    // Front wall (+Z) — door opening in lower layer, solid upper layer
+    //
+    // The front wall spans X: [base_pos.x − (wx+wt), base_pos.x + (wx+wt)].
+    // The door gap runs X: [base_pos.x − door_half_w, base_pos.x + door_half_w].
+    // Each side piece therefore has half-extent = (wx + wt − door_half_w) / 2.
+    let door_side_half = (wx + wt - door_half_w) / 2.0;
+    let door_left_cx = base_pos.x - door_half_w - door_side_half;
+    let door_right_cx = base_pos.x + door_half_w + door_side_half;
+
+    entities.push(spawn_box(
+        world,
+        Point3::new(door_left_cx, lower_cy, base_pos.z + wz),
+        Vector3::new(door_side_half, wh, wt),
+        mat(2),
+    ));
+    entities.push(spawn_box(
+        world,
+        Point3::new(door_right_cx, lower_cy, base_pos.z + wz),
+        Vector3::new(door_side_half, wh, wt),
+        mat(2),
+    ));
+    entities.push(spawn_box(
+        world,
+        Point3::new(base_pos.x, upper_cy, base_pos.z + wz),
+        Vector3::new(wx + wt, wh, wt),
+        mat(3),
+    ));
+
+    // Side walls (±X) — window opening in lower layer with sill and lintel
+    //
+    // Side walls fill between the inner faces of the front and back walls, so their
+    // Z half-extent is (wz − wt).  The window is centred in Z; the columns on each
+    // side of the window have half-extent = (wz − wt − win_half_z) / 2.
+    let win_col_half = (wz - wt - win_half_z) / 2.0;
+    let win_col_neg_cz = base_pos.z - win_half_z - win_col_half;
+    let win_col_pos_cz = base_pos.z + win_half_z + win_col_half;
+    let sill_cy = y_wall_base + sill_h;
+    let lintel_cy = y_wall_base + 2.0 * wh - sill_h;
+
+    for (sign, mat_base) in [(-1.0_f32, 4_usize), (1.0_f32, 7_usize)] {
+        let cx = base_pos.x + sign * wx;
+
+        // Lower layer: columns to either side of the window opening
+        entities.push(spawn_box(
+            world,
+            Point3::new(cx, lower_cy, win_col_neg_cz),
+            Vector3::new(wt, wh, win_col_half),
+            mat(mat_base),
+        ));
+        entities.push(spawn_box(
+            world,
+            Point3::new(cx, lower_cy, win_col_pos_cz),
+            Vector3::new(wt, wh, win_col_half),
+            mat(mat_base),
+        ));
+
+        // Window sill (bottom of opening)
+        entities.push(spawn_box(
+            world,
+            Point3::new(cx, sill_cy, base_pos.z),
+            Vector3::new(wt, sill_h, win_half_z),
+            mat(mat_base + 1),
+        ));
+
+        // Window lintel (top of opening)
+        entities.push(spawn_box(
+            world,
+            Point3::new(cx, lintel_cy, base_pos.z),
+            Vector3::new(wt, sill_h, win_half_z),
+            mat(mat_base + 1),
+        ));
+
+        // Upper layer: solid, spans full interior Z
+        entities.push(spawn_box(
+            world,
+            Point3::new(cx, upper_cy, base_pos.z),
+            Vector3::new(wt, wh, wz - wt),
+            mat(mat_base + 2),
+        ));
+    }
+
+    // Roof slab with overhang
+    entities.push(spawn_box(
+        world,
+        Point3::new(base_pos.x, roof_cy, base_pos.z),
+        Vector3::new(wx + ro, rt, wz + ro),
+        mat(0),
+    ));
+
+    entities
 }

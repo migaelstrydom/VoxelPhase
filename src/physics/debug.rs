@@ -527,7 +527,10 @@ fn compute_stats_from_flat(
     }
 
     let total = contacts.len();
-    let static_count = contacts.iter().filter(|c| c.header.body_a.is_none()).count();
+    let static_count = contacts
+        .iter()
+        .filter(|c| c.header.body_a.is_none())
+        .count();
     let neg_raw = contacts.iter().filter(|c| c.raw_depth < 0.0).count();
     let warm_used = contacts
         .iter()
@@ -609,10 +612,7 @@ fn compute_stats_from_flat(
 }
 
 /// Compute stats from raw `PairManifold` (pre-cache, no warm-start data).
-fn compute_raw_stats(
-    bodies: &Arena<RigidBody>,
-    manifolds: &[PairManifold],
-) -> ContactDebugStats {
+fn compute_raw_stats(bodies: &Arena<RigidBody>, manifolds: &[PairManifold]) -> ContactDebugStats {
     let flat: Vec<FlatContact> = manifolds
         .iter()
         .flat_map(|m| {

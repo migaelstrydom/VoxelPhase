@@ -80,7 +80,7 @@ impl Default for PhysicsConfig {
     fn default() -> Self {
         Self {
             gravity: Vector3::new(0.0, -9.81, 0.0),
-            solver_iterations: 8,
+            solver_iterations: 3,
             restitution_velocity_threshold: 0.3,
             contact_margin: 0.02,
             ccd_threshold: 0.5,

@@ -26,7 +26,7 @@ struct BenchRunConfig {
 impl Default for BenchRunConfig {
     fn default() -> Self {
         Self {
-            fixed_dt: 1.0 / 60.0,
+            fixed_dt: 1.0 / 240.0,
             duration: 8.0,
             max_substeps_per_frame: 8,
         }
@@ -543,10 +543,7 @@ impl WallAndFloorGeometry {
         };
 
         Self {
-            bounds: AABB::new(
-                Point3::new(-s, -0.01, -s),
-                Point3::new(s, h + 0.01, s),
-            ),
+            bounds: AABB::new(Point3::new(-s, -0.01, -s), Point3::new(s, h + 0.01, s)),
             patch: MeshPatch {
                 triangles: vec![floor_a, floor_b, wall_a, wall_b],
             },
@@ -898,9 +895,11 @@ impl PhysicsBenchScenario for HeavySphereOnPlatformScenario {
 
     fn setup(&self, world: &mut PhysicsWorld) -> RigidBodyHandle {
         let he = self.platform_half_extents;
-        let platform = world.create_body(
-            RigidBodyDesc::dynamic().position(Point3::new(0.0, he.y + 0.01, 0.0)),
-        );
+        let platform = world.create_body(RigidBodyDesc::dynamic().position(Point3::new(
+            0.0,
+            he.y + 0.01,
+            0.0,
+        )));
         let _ = world.attach_collider(
             platform,
             ColliderDesc::box_shape(he)
@@ -912,9 +911,9 @@ impl PhysicsBenchScenario for HeavySphereOnPlatformScenario {
         let sphere_x = he.x - self.sphere_radius * 0.35;
         let sphere_z = he.z - self.sphere_radius * 0.55;
         let sphere_y = he.y * 2.0 + self.sphere_radius + 0.2;
-        let sphere = world.create_body(RigidBodyDesc::dynamic().position(Point3::new(
-            sphere_x, sphere_y, sphere_z,
-        )));
+        let sphere = world.create_body(
+            RigidBodyDesc::dynamic().position(Point3::new(sphere_x, sphere_y, sphere_z)),
+        );
         let _ = world.attach_collider(
             sphere,
             ColliderDesc::sphere(self.sphere_radius)
@@ -1411,9 +1410,11 @@ impl PhysicsBenchScenario for SlidingSphereScenario {
 
     fn setup(&self, world: &mut PhysicsWorld) -> RigidBodyHandle {
         let radius = 0.5;
-        let body = world.create_body(
-            RigidBodyDesc::dynamic().position(Point3::new(0.0, radius + 0.01, 0.0)),
-        );
+        let body = world.create_body(RigidBodyDesc::dynamic().position(Point3::new(
+            0.0,
+            radius + 0.01,
+            0.0,
+        )));
         let _ = world.attach_collider(
             body,
             ColliderDesc::sphere(radius)
@@ -1470,9 +1471,8 @@ impl PhysicsBenchScenario for LowFrictionRampScenario {
         // Start on the ramp (z > 0 is the ramp section, partway up)
         let z = 10.0;
         let y_on_ramp = 0.577 * z + radius + 0.01;
-        let body = world.create_body(
-            RigidBodyDesc::dynamic().position(Point3::new(0.0, y_on_ramp, z)),
-        );
+        let body =
+            world.create_body(RigidBodyDesc::dynamic().position(Point3::new(0.0, y_on_ramp, z)));
         let _ = world.attach_collider(
             body,
             ColliderDesc::sphere(radius)
@@ -1648,13 +1648,13 @@ mod tests {
         let peak_inelastic = run_inelastic
             .samples
             .iter()
-            .skip(100)
+            .filter(|s| s.sim_time >= 1.5)
             .map(|s| s.y)
             .fold(0.0f32, f32::max);
         let peak_bouncy = run_bouncy
             .samples
             .iter()
-            .skip(100)
+            .filter(|s| s.sim_time >= 1.5)
             .map(|s| s.y)
             .fold(0.0f32, f32::max);
 
@@ -2066,8 +2066,7 @@ mod tests {
             let b2 = 0.0;
 
             // Cramer's rule.
-            let det = a00 * (a11 * a22 - a12 * a21)
-                - a01 * (a10 * a22 - a12 * a20)
+            let det = a00 * (a11 * a22 - a12 * a21) - a01 * (a10 * a22 - a12 * a20)
                 + a02 * (a10 * a21 - a11 * a20);
 
             if det.abs() < 1e-12 {
@@ -2077,18 +2076,15 @@ mod tests {
             let inv = 1.0 / det;
 
             let theta_ddot = inv
-                * (b0 * (a11 * a22 - a12 * a21)
-                    - a01 * (b1 * a22 - a12 * b2)
+                * (b0 * (a11 * a22 - a12 * a21) - a01 * (b1 * a22 - a12 * b2)
                     + a02 * (b1 * a21 - a11 * b2));
 
             let nw = inv
-                * (a00 * (b1 * a22 - a12 * b2)
-                    - b0 * (a10 * a22 - a12 * a20)
+                * (a00 * (b1 * a22 - a12 * b2) - b0 * (a10 * a22 - a12 * a20)
                     + a02 * (a10 * b2 - b1 * a20));
 
             let nf = inv
-                * (a00 * (a11 * b2 - b1 * a21)
-                    - a01 * (a10 * b2 - b1 * a20)
+                * (a00 * (a11 * b2 - b1 * a21) - a01 * (a10 * b2 - b1 * a20)
                     + b0 * (a10 * a21 - a11 * a20));
 
             (theta_ddot, nw, nf)
@@ -2373,9 +2369,12 @@ mod tests {
         let jitter = analyse_jitter(&run.samples, fixed_dt, ref_end_time);
         eprintln!(
             "jitter: x_rev={} y_rev={} max_jerk=({:.1},{:.1}) contact_flips={} frames={}",
-            jitter.x_reversals, jitter.y_reversals,
-            jitter.max_x_jerk, jitter.max_y_jerk,
-            jitter.contact_flips, jitter.wall_contact_frames,
+            jitter.x_reversals,
+            jitter.y_reversals,
+            jitter.max_x_jerk,
+            jitter.max_y_jerk,
+            jitter.contact_flips,
+            jitter.wall_contact_frames,
         );
         assert_eq!(
             jitter.x_reversals, 0,
@@ -2437,10 +2436,7 @@ mod tests {
 
         // The box must not fall through the floor at any point.
         let min_y = run.samples.iter().map(|s| s.y).fold(f32::MAX, f32::min);
-        assert!(
-            min_y > -0.1,
-            "box fell through floor: min_y={min_y:.4}"
-        );
+        assert!(min_y > -0.1, "box fell through floor: min_y={min_y:.4}");
     }
 
     #[test]
@@ -2465,8 +2461,7 @@ mod tests {
         assert_eq!(run.dropped_steps, 0);
 
         // Integrate the analytical reference with friction.
-        let ode = LadderOde::new(scenario.half_extents, 9.81)
-            .with_friction(friction, friction);
+        let ode = LadderOde::new(scenario.half_extents, 9.81).with_friction(friction, friction);
         let ref_dt = (fixed_dt as f64) / 10.0;
         let ref_samples = ode.integrate(scenario.theta0, ref_dt, duration as f64);
 
@@ -2525,9 +2520,12 @@ mod tests {
         let jitter = analyse_jitter(&run.samples, fixed_dt, ref_end_time);
         eprintln!(
             "jitter: x_rev={} y_rev={} max_jerk=({:.1},{:.1}) contact_flips={} frames={}",
-            jitter.x_reversals, jitter.y_reversals,
-            jitter.max_x_jerk, jitter.max_y_jerk,
-            jitter.contact_flips, jitter.wall_contact_frames,
+            jitter.x_reversals,
+            jitter.y_reversals,
+            jitter.max_x_jerk,
+            jitter.max_y_jerk,
+            jitter.contact_flips,
+            jitter.wall_contact_frames,
         );
         assert_eq!(
             jitter.x_reversals, 0,
@@ -2573,8 +2571,7 @@ mod tests {
         // Compare against the frictionless reference to verify friction has
         // the expected qualitative effect: later separation and larger angle.
         let ode_frictionless = LadderOde::new(scenario.half_extents, 9.81);
-        let ref_frictionless =
-            ode_frictionless.integrate(scenario.theta0, ref_dt, duration as f64);
+        let ref_frictionless = ode_frictionless.integrate(scenario.theta0, ref_dt, duration as f64);
         let sep_time_frictionless = ref_frictionless.last().unwrap().time;
 
         assert!(
@@ -2591,10 +2588,7 @@ mod tests {
 
         // The box must not fall through the floor.
         let min_y = run.samples.iter().map(|s| s.y).fold(f32::MAX, f32::min);
-        assert!(
-            min_y > -0.1,
-            "box fell through floor: min_y={min_y:.4}"
-        );
+        assert!(min_y > -0.1, "box fell through floor: min_y={min_y:.4}");
     }
 
     // ── Dynamic pairs: sphere-sphere ───────────────────────────────────
@@ -3175,14 +3169,7 @@ mod tests {
         );
 
         // Sphere should not have fallen through
-        let min_y = run
-            .samples
-            .iter()
-            .map(|s| s.y)
-            .fold(f32::MAX, f32::min);
-        assert!(
-            min_y > -1.0,
-            "sphere fell through ramp: min_y={min_y:.4}"
-        );
+        let min_y = run.samples.iter().map(|s| s.y).fold(f32::MAX, f32::min);
+        assert!(min_y > -1.0, "sphere fell through ramp: min_y={min_y:.4}");
     }
 }

@@ -7,8 +7,8 @@ use crate::particles::{ParticleSpawnSystem, ParticleUpdateSystem};
 use crate::projectile::{GrenadeSpawnSystem, LifetimeSystem, ProjectileImpactDetectionSystem};
 use crate::sensing::SensorProbeSystem;
 use crate::systems::{
-    CameraControlSystem, GravitySystem, MotionPredictionSystem, PhysicsSyncSystem,
-    PlayerInputSystem, PlayerMotionSystem, RenderSystem, TerrainUpdateSystem,
+    CameraControlSystem, MotionPredictionSystem, PhysicsSyncSystem, PlayerInputSystem,
+    PlayerMotionSystem, RenderSystem, TerrainUpdateSystem,
 };
 
 /// Builds the system dispatcher with proper dependency ordering.
@@ -19,8 +19,11 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
         .with(PlayerInputSystem, "player_input", &["input_actions"])
         .with(PlayerMotionSystem, "player_motion", &["player_input"])
         // Player motion integration (kinematic body synced into physics)
-        .with(GravitySystem, "gravity", &["player_motion"])
-        .with(MotionPredictionSystem, "motion_prediction", &["gravity"])
+        .with(
+            MotionPredictionSystem,
+            "motion_prediction",
+            &["player_motion"],
+        )
         // Physics engine for dynamic bodies (beach balls, etc.)
         .with(
             PhysicsSyncSystem::default(),

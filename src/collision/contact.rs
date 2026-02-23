@@ -34,13 +34,22 @@ impl FeatureId {
     }
 
     /// Construct from a set of mesh triangle indices composing a merged face.
-    #[allow(unused)]
     pub fn from_triangle_set(indices: &[u32]) -> Self {
         let mut hash: u64 = 0xcbf29ce484222325; // FNV-1a offset basis
         for &idx in indices {
             hash ^= idx as u64;
             hash = hash.wrapping_mul(0x100000001b3); // FNV-1a prime
         }
+        Self(hash)
+    }
+
+    /// Combine a base feature ID with a vertex index to produce a unique
+    /// per-contact-point ID. Used when multiple contacts share the same
+    /// face feature but need distinct IDs for warm-start matching.
+    pub fn with_vertex(self, vertex_index: u32) -> Self {
+        let mut hash = self.0;
+        hash ^= (vertex_index as u64) | (0xA5u64 << 56);
+        hash = hash.wrapping_mul(0x100000001b3);
         Self(hash)
     }
 }

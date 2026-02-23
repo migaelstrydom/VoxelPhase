@@ -62,11 +62,12 @@ pub fn obb_patch_manifold(
                 }
                 let projected = corner - normal * signed_dist;
                 if point_in_convex_polygon(&projected, &face.vertices, &normal) {
+                    let vi = nearest_support_vertex(&projected, &support.vertices);
                     all_points.push(ContactPoint::new(
                         projected,
                         normal,
                         raw_depth,
-                        face.feature_id,
+                        face.feature_id.with_vertex(vi as u32),
                     ));
                 }
             }
@@ -80,11 +81,12 @@ pub fn obb_patch_manifold(
                 continue;
             }
             let projected = p - normal * signed_dist;
+            let vi = nearest_support_vertex(&projected, &support.vertices);
             all_points.push(ContactPoint::new(
                 projected,
                 normal,
                 raw_depth,
-                face.feature_id,
+                face.feature_id.with_vertex(vi as u32),
             ));
         }
     }
@@ -282,6 +284,24 @@ fn obb_edge_segments(obb: &Obb) -> [(Point3<f32>, Point3<f32>); 12] {
         (c[2], c[6]),
         (c[3], c[7]),
     ]
+}
+
+/// Find the index of the nearest OBB support face vertex to a point.
+///
+/// Used to assign temporally stable per-contact FeatureIds: each clipped
+/// contact point is associated with the OBB corner it's closest to, so
+/// small frame-to-frame rotations don't change the assignment.
+fn nearest_support_vertex(point: &Point3<f32>, support_verts: &[Point3<f32>; 4]) -> usize {
+    let mut best = 0;
+    let mut best_dist = f32::INFINITY;
+    for (i, v) in support_verts.iter().enumerate() {
+        let d = (point - v).magnitude_squared();
+        if d < best_dist {
+            best_dist = d;
+            best = i;
+        }
+    }
+    best
 }
 
 /// Test if a point lies inside a convex polygon (winding-agnostic).

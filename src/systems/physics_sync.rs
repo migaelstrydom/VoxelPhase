@@ -31,8 +31,8 @@ impl Default for PhysicsSyncSystem {
     fn default() -> Self {
         Self {
             accumulator_seconds: 0.0,
-            fixed_dt_seconds: 1.0 / 60.0,
-            max_substeps_per_frame: 4,
+            fixed_dt_seconds: 1.0 / 240.0,
+            max_substeps_per_frame: 8,
         }
     }
 }
