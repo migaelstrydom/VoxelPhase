@@ -63,3 +63,28 @@ impl SensorSet {
         Self { probes }
     }
 }
+
+/// The result of a probe sweep hitting a collidable surface.
+#[derive(Debug, Clone)]
+pub struct ProbeHit {
+    /// Parametric time of contact along the probe, in [0, 1].
+    /// 0 = at the origin, 1 = at full probe length.
+    pub t: f32,
+    /// World-space contact point on the surface.
+    pub point: Point3<f32>,
+    /// Surface normal at the contact point, pointing away from the surface.
+    pub normal: Vector3<f32>,
+}
+
+/// Any collidable surface that can be queried by swept-sphere probes.
+pub trait ProbeTarget {
+    /// Sweep a sphere of the given `radius` from `origin` along `direction`
+    /// for up to `length` units, returning the earliest surface hit if any.
+    fn swept_probe(
+        &self,
+        origin: Point3<f32>,
+        direction: Vector3<f32>,
+        length: f32,
+        radius: f32,
+    ) -> Option<ProbeHit>;
+}

@@ -1,9 +1,10 @@
 use crate::biped::BipedController;
-use crate::components::{Acceleration, CameraComponent, Position, Rotation, Velocity};
+use crate::components::{CameraComponent, Position, Rotation, Velocity};
 use crate::input::GameplayActions;
 use crate::player::{Player, PlayerConfig, PlayerTargetState};
+use crate::time::Time;
 use nalgebra::Vector3;
-use specs::{Join, ReadExpect, ReadStorage, System, WriteStorage};
+use specs::{Join, Read, ReadExpect, ReadStorage, System, WriteStorage};
 
 /// Processes player input and calculates desired movement target.
 /// Runs early in the frame to convert raw input into movement intent.
@@ -80,25 +81,26 @@ pub struct PlayerMotionSystem;
 
 impl<'a> System<'a> for PlayerMotionSystem {
     type SystemData = (
+        Read<'a, Time>,
         ReadExpect<'a, PlayerConfig>,
         ReadStorage<'a, Player>,
         ReadStorage<'a, PlayerTargetState>,
         ReadStorage<'a, BipedController>,
         WriteStorage<'a, Rotation>,
         WriteStorage<'a, Velocity>,
-        WriteStorage<'a, Acceleration>,
     );
 
     fn run(&mut self, data: Self::SystemData) {
-        let (config, players, player_targets, controllers, mut rotations, mut velocities, mut accelerations) = data;
+        let (time, config, players, player_targets, controllers, mut rotations, mut velocities) =
+            data;
+        let dt = time.delta_seconds();
 
-        for (_player, target, controller, rotation, vel, accel) in (
+        for (_player, target, controller, rotation, vel) in (
             &players,
             &player_targets,
             &controllers,
             &mut rotations,
             &mut velocities,
-            &mut accelerations,
         )
             .join()
         {
@@ -110,17 +112,16 @@ impl<'a> System<'a> for PlayerMotionSystem {
                 rotation.0 = -move_dir.z.atan2(move_dir.x) + std::f32::consts::PI / 2.0;
             }
 
-            // Reset horizontal acceleration each frame (prevents stale air accel)
-            accel.0.x = 0.0;
-            accel.0.z = 0.0;
-
-            // Apply horizontal velocity (preserve vertical velocity for gravity/jumping)
             if is_grounded {
                 vel.0.x = move_dir.x * config.walk_speed;
                 vel.0.z = move_dir.z * config.walk_speed;
             } else {
-                accel.0.x = move_dir.x * config.air_acceleration;
-                accel.0.z = move_dir.z * config.air_acceleration;
+                // Steer horizontal velocity toward input direction while preserving momentum
+                let target_x = move_dir.x * config.walk_speed;
+                let target_z = move_dir.z * config.walk_speed;
+                let max_delta = config.air_steer_speed * dt;
+                vel.0.x = move_toward(vel.0.x, target_x, max_delta);
+                vel.0.z = move_toward(vel.0.z, target_z, max_delta);
             }
 
             // Handle jumping - only when grounded
@@ -128,5 +129,14 @@ impl<'a> System<'a> for PlayerMotionSystem {
                 vel.0.y = config.jump_speed;
             }
         }
+    }
+}
+
+fn move_toward(current: f32, target: f32, max_delta: f32) -> f32 {
+    let diff = target - current;
+    if diff.abs() <= max_delta {
+        target
+    } else {
+        current + diff.signum() * max_delta
     }
 }

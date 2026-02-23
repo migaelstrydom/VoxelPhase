@@ -7,5 +7,5 @@
 mod probe;
 mod system;
 
-pub use probe::{ContactCandidate, ContactCandidates, Probe, SensorSet};
+pub use probe::{ContactCandidate, ContactCandidates, Probe, ProbeHit, ProbeTarget, SensorSet};
 pub use system::SensorProbeSystem;

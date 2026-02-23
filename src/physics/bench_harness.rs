@@ -3172,4 +3172,234 @@ mod tests {
         let min_y = run.samples.iter().map(|s| s.y).fold(f32::MAX, f32::min);
         assert!(min_y > -1.0, "sphere fell through ramp: min_y={min_y:.4}");
     }
+
+    // ── Sphere pushing box across flat ground ────────────────────────────
+
+    #[test]
+    fn sphere_pushing_box_no_jitter() {
+        let geometry = FlatQuadGeometry::new(50.0);
+        let box_half_extents = Vector3::new(0.5, 0.5, 0.5);
+        let sphere_radius = 0.5;
+
+        let mut config = PhysicsConfig::default();
+        config.sleep.enabled = false;
+        config.deterministic_contact_ordering = true;
+        let mut world = PhysicsWorld::new(config);
+        let mut debug_lines = DebugLines::default();
+
+        // Box: matching game properties
+        let box_handle = world.create_body(
+            RigidBodyDesc::dynamic()
+                .position(Point3::new(2.0, box_half_extents.y + 0.01, 0.0))
+                .gravity_scale(1.0)
+                .linear_damping(0.01)
+                .angular_damping(0.005),
+        );
+        let _ = world.attach_collider(
+            box_handle,
+            ColliderDesc::box_shape(box_half_extents)
+                .density(50.5)
+                .restitution(0.2)
+                .friction(0.6),
+        );
+
+        // Player sphere: matching game properties
+        let sphere_handle = world.create_body(
+            RigidBodyDesc::dynamic()
+                .position(Point3::new(-1.0, sphere_radius + 0.01, 0.0))
+                .gravity_scale(1.0)
+                .linear_damping(0.0)
+                .angular_damping(1.0),
+        );
+        let _ = world.attach_collider(
+            sphere_handle,
+            ColliderDesc::sphere(sphere_radius)
+                .density(30.0)
+                .restitution(0.0)
+                .friction(0.3),
+        );
+
+        // Match the game's timing: 240Hz physics, ~60fps render loop.
+        // Velocity is set once per render frame, then update_contacts once,
+        // then multiple substeps. This matches PhysicsSyncSystem::step_fixed.
+        let fixed_dt = 1.0 / 240.0;
+        let frame_dt = 1.0f32 / 60.0;
+        let substeps_per_frame = (frame_dt / fixed_dt).round() as usize; // ~4
+        let duration = 6.0;
+        let num_frames = (duration / frame_dt) as usize;
+        let push_speed = 4.0; // sustained forward speed simulating player input
+
+        struct PushSample {
+            sim_time: f32,
+            sphere_x: f32,
+            sphere_vx: f32,
+            box_x: f32,
+            box_vx: f32,
+            contact_count: usize,
+        }
+        let mut samples: Vec<PushSample> = Vec::new();
+        let mut sim_time = 0.0f32;
+
+        for frame in 0..num_frames {
+            // Once per render frame: set velocity from ECS (game does this
+            // in sync_velocity_driven_from_ecs before step_fixed).
+            let sphere_body = world.body(sphere_handle).expect("sphere exists");
+            let current_vel = *sphere_body.linear_velocity();
+            world.set_body_velocity(
+                sphere_handle,
+                Vector3::new(push_speed, current_vel.y, current_vel.z),
+                Vector3::zeros(),
+            );
+
+            // Narrowphase once per frame (matches step_fixed).
+            world.update_contacts(fixed_dt, &geometry, &[], &mut debug_lines);
+            debug_lines.clear();
+
+            // Count dynamic contacts between sphere and box this frame.
+            let dyn_contacts = world
+                .contact_events()
+                .iter()
+                .filter(|c| {
+                    (c.body_b == sphere_handle && c.body_a == Some(box_handle))
+                        || (c.body_b == box_handle && c.body_a == Some(sphere_handle))
+                })
+                .count();
+
+            // Multiple substeps per frame.
+            for _ in 0..substeps_per_frame {
+                world.substep(fixed_dt, &geometry);
+                sim_time += fixed_dt;
+
+                let sb = world.body(sphere_handle).expect("sphere exists");
+                let bb = world.body(box_handle).expect("box exists");
+                samples.push(PushSample {
+                    sim_time,
+                    sphere_x: sb.position().x,
+                    sphere_vx: sb.linear_velocity().x,
+                    box_x: bb.position().x,
+                    box_vx: bb.linear_velocity().x,
+                    contact_count: dyn_contacts,
+                });
+            }
+
+            // Print diagnostic at regular intervals.
+            if frame % 30 == 0 {
+                let sb = world.body(sphere_handle).expect("sphere exists");
+                let bb = world.body(box_handle).expect("box exists");
+                let gap = bb.position().x - sb.position().x;
+                eprintln!(
+                    "frame {:3} t={:.2} sphere(x={:.3} vx={:.3}) box(x={:.3} vx={:.3}) gap={:.3} contacts={}",
+                    frame, sim_time, sb.position().x, sb.linear_velocity().x,
+                    bb.position().x, bb.linear_velocity().x, gap, dyn_contacts
+                );
+            }
+        }
+
+        // ── Assertions ──
+
+        // The box should have been pushed forward.
+        let final_box = world.body(box_handle).expect("box exists");
+        assert!(
+            final_box.position().x > 3.0,
+            "box should have been pushed forward: x={:.3}",
+            final_box.position().x
+        );
+
+        // Identify the "push window": all samples where the sphere is close
+        // enough to the box that contact SHOULD exist. Skip the initial
+        // approach phase (first contact onset) and measure from 0.2s after
+        // first contact to avoid the impact transient.
+        let contact_distance = sphere_radius + box_half_extents.x;
+        let proximity_threshold = contact_distance + 0.1;
+        let first_contact_time = samples
+            .iter()
+            .find(|s| s.contact_count > 0)
+            .map(|s| s.sim_time)
+            .expect("sphere should contact box at least once");
+        let push_window_start = first_contact_time + 0.3;
+        let push_window: Vec<&PushSample> = samples
+            .iter()
+            .filter(|s| {
+                s.sim_time >= push_window_start
+                    && (s.box_x - s.sphere_x) < proximity_threshold
+                    && (s.box_x - s.sphere_x) > 0.0
+            })
+            .collect();
+        eprintln!(
+            "push window: {} samples ({:.2}s - {:.2}s)",
+            push_window.len(),
+            push_window.first().map(|s| s.sim_time).unwrap_or(0.0),
+            push_window.last().map(|s| s.sim_time).unwrap_or(0.0),
+        );
+        assert!(
+            push_window.len() > 50,
+            "push window too short — sphere may not be sustaining contact"
+        );
+
+        // Contact flickering: during the push window the sphere is right next
+        // to the box. Every sample should have contact. Count dropouts.
+        let contact_dropouts = push_window
+            .iter()
+            .filter(|s| s.contact_count == 0)
+            .count();
+        let contact_ratio =
+            1.0 - (contact_dropouts as f32 / push_window.len() as f32);
+        eprintln!(
+            "contact dropouts in push window: {contact_dropouts}/{} ({:.1}% contact ratio)",
+            push_window.len(),
+            contact_ratio * 100.0
+        );
+        assert!(
+            contact_dropouts == 0,
+            "contact flickering: {contact_dropouts} frames lost contact while \
+             sphere was within push distance (causes jitter in direction of motion)"
+        );
+
+        // Box x-velocity smoothness: compute per-substep acceleration and
+        // check for spikes that would cause visible jitter.
+        let mut max_box_ax = 0.0f32;
+        let mut box_ax_spike_count = 0usize;
+        let ax_spike_threshold = 30.0; // m/s² — smooth pushing should be gentle
+        for w in push_window.windows(2) {
+            let dt_between = w[1].sim_time - w[0].sim_time;
+            if dt_between < 1e-6 {
+                continue;
+            }
+            let ax = (w[1].box_vx - w[0].box_vx) / dt_between;
+            let abs_ax = ax.abs();
+            max_box_ax = max_box_ax.max(abs_ax);
+            if abs_ax > ax_spike_threshold {
+                box_ax_spike_count += 1;
+            }
+        }
+        eprintln!(
+            "box max x-accel in push window: {max_box_ax:.2} m/s², \
+             spikes (>{ax_spike_threshold}): {box_ax_spike_count}"
+        );
+        assert!(
+            box_ax_spike_count == 0,
+            "box x-acceleration spikes during push: {box_ax_spike_count} frames \
+             exceeded {ax_spike_threshold} m/s² (max={max_box_ax:.2})"
+        );
+
+        // Gap stability: the center-to-center gap should stay near the
+        // contact distance during the push window — not oscillate.
+        let push_gaps: Vec<f32> = push_window
+            .iter()
+            .map(|s| s.box_x - s.sphere_x)
+            .collect();
+        let gap_min = push_gaps.iter().fold(f32::MAX, |a, &b| a.min(b));
+        let gap_max = push_gaps
+            .iter()
+            .fold(f32::NEG_INFINITY, |a, &b| a.max(b));
+        let gap_range = gap_max - gap_min;
+        eprintln!(
+            "gap in push window: min={gap_min:.4}, max={gap_max:.4}, \
+             range={gap_range:.4}"
+        );
+        assert!(
+            gap_range < 0.15,
+            "sphere-box gap oscillation during push: range={gap_range:.4}"
+        );
+    }
 }

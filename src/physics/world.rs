@@ -23,10 +23,12 @@ use super::pipeline::solver::{solve, solve_contacts};
 use super::sleep::{SleepManager, SleepManagerConfig};
 use super::static_geometry::StaticGeometry;
 use crate::collision::contact::FeatureId;
+use crate::collision::continuous::swept_sphere_sphere;
 use crate::collision::mesh::obb_patch::obb_patch_manifold;
 use crate::collision::mesh::seam_filter::filter_patch;
 use crate::collision::obb::Obb;
 use crate::debug::DebugLines;
+use crate::sensing::{ProbeHit, ProbeTarget};
 
 /// Configuration for the physics simulation.
 #[derive(Debug, Clone)]
@@ -874,6 +876,150 @@ impl ContactEvent {
 pub enum ContactSource {
     Narrowphase,
     Ccd,
+}
+
+impl ProbeTarget for PhysicsWorld {
+    fn swept_probe(
+        &self,
+        origin: Point3<f32>,
+        direction: Vector3<f32>,
+        length: f32,
+        radius: f32,
+    ) -> Option<ProbeHit> {
+        let end = origin + direction * length;
+        let mut earliest: Option<ProbeHit> = None;
+
+        for (_idx, body) in self.bodies.iter() {
+            if body.is_static() {
+                continue;
+            }
+            let body_pos = body.position();
+            let body_rot = body.rotation();
+
+            for ch in body.colliders() {
+                let Some(collider) = self.colliders.get(ch.0) else {
+                    continue;
+                };
+                let center = collider.world_center(body_pos, body_rot);
+                let hit = match collider.shape() {
+                    ColliderShape::Sphere { radius: r } => {
+                        probe_vs_sphere(origin, end, radius, center, *r)
+                    }
+                    ColliderShape::Box { half_extents } => {
+                        let obb = Obb::new(center, body_rot, *half_extents);
+                        probe_vs_obb(origin, end, radius, &obb, *half_extents)
+                    }
+                };
+                if let Some(hit) = hit {
+                    if earliest.as_ref().map_or(true, |e: &ProbeHit| hit.t < e.t) {
+                        earliest = Some(hit);
+                    }
+                }
+            }
+        }
+
+        earliest
+    }
+}
+
+/// Sweep a probe sphere against a static sphere body.
+fn probe_vs_sphere(
+    origin: Point3<f32>,
+    end: Point3<f32>,
+    probe_radius: f32,
+    center: Point3<f32>,
+    sphere_radius: f32,
+) -> Option<ProbeHit> {
+    // Skip bodies the probe origin already overlaps (e.g. the probe source's own body).
+    let initial_dist = (origin - center).norm();
+    if initial_dist < probe_radius + sphere_radius {
+        return None;
+    }
+    let t = swept_sphere_sphere(origin, end, probe_radius, center, center, sphere_radius)?;
+    let probe_at_t = origin + (end - origin) * t;
+    let to_surface = probe_at_t - center;
+    let len = to_surface.norm();
+    if len < 1e-6 {
+        return None;
+    }
+    let normal = to_surface / len;
+    Some(ProbeHit {
+        t,
+        point: center + normal * sphere_radius,
+        normal,
+    })
+}
+
+/// Sweep a probe sphere against a box body using a slab test in OBB local space.
+///
+/// Transforms the probe into the OBB's local frame and runs a standard
+/// ray-vs-AABB slab test against the box expanded by `probe_radius`
+/// (the Minkowski sum of box and sphere, approximated at faces).
+/// This gives the correct entry time regardless of the box aspect ratio,
+/// unlike a bounding-sphere proxy which over-reports for flat/wide boxes.
+fn probe_vs_obb(
+    origin: Point3<f32>,
+    end: Point3<f32>,
+    probe_radius: f32,
+    obb: &Obb,
+    half_extents: Vector3<f32>,
+) -> Option<ProbeHit> {
+    let inv_rot = obb.rotation.inverse();
+    let local_start: Vector3<f32> = inv_rot * (origin - obb.center);
+    let local_dir: Vector3<f32> = inv_rot * (end - origin);
+
+    let expanded = half_extents + Vector3::repeat(probe_radius);
+    let t = obb_slab_entry(local_start, local_dir, expanded)?;
+
+    let probe_at_t = origin + (end - origin) * t;
+    let closest = obb.closest_point(probe_at_t);
+    let to_probe = probe_at_t - closest;
+    let len = to_probe.norm();
+    if len < 1e-6 {
+        return None;
+    }
+    Some(ProbeHit {
+        t,
+        point: closest,
+        normal: to_probe / len,
+    })
+}
+
+/// Ray-vs-AABB slab test in local space.
+///
+/// Returns the first entry time t ∈ (0, 1] where the ray enters the box.
+/// Returns None if the ray misses the box, is parallel to a slab it doesn't
+/// overlap, or if the origin is already inside the box (treated as overlap).
+fn obb_slab_entry(start: Vector3<f32>, dir: Vector3<f32>, half: Vector3<f32>) -> Option<f32> {
+    let mut t_enter = f32::NEG_INFINITY;
+    let mut t_exit = f32::INFINITY;
+
+    for i in 0..3 {
+        if dir[i].abs() < 1e-8 {
+            // Ray is parallel to this slab — miss if outside it
+            if start[i] < -half[i] || start[i] > half[i] {
+                return None;
+            }
+        } else {
+            let inv = 1.0 / dir[i];
+            let t1 = (-half[i] - start[i]) * inv;
+            let t2 = (half[i] - start[i]) * inv;
+            let (t_near, t_far) = if t1 <= t2 { (t1, t2) } else { (t2, t1) };
+            t_enter = t_enter.max(t_near);
+            t_exit = t_exit.min(t_far);
+        }
+    }
+
+    if t_enter > t_exit {
+        return None; // Miss
+    }
+    // t_enter < 0: origin is inside the expanded box — skip (treat as overlap)
+    // t_enter > 1: box is beyond probe end
+    if t_enter >= 0.0 && t_enter <= 1.0 {
+        Some(t_enter)
+    } else {
+        None
+    }
 }
 
 impl Default for PhysicsWorld {

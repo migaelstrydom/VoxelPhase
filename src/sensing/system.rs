@@ -1,27 +1,25 @@
 //! Generic terrain probe system.
 //!
-//! Executes probes against terrain and produces contact candidates.
-//! Has no knowledge of what the probes are used for.
+//! Executes probes against all registered probe targets and produces
+//! contact candidates. Has no knowledge of what the probes are used for.
 
-use nalgebra::Point3;
 use specs::{Entities, Join, Read, System, Write, WriteStorage};
 
-use super::probe::{ContactCandidate, ContactCandidates, SensorSet};
-use crate::collision::continuous::{swept_sphere_triangle, SweptContact};
-use crate::collision::AABB;
+use super::probe::{ContactCandidate, ContactCandidates, ProbeTarget, SensorSet};
 use crate::debug::DebugOverlays;
-use crate::physics::StaticGeometry;
+use crate::systems::PhysicsResource;
 use crate::terrain::TerrainManager;
 
-/// System that executes terrain probes.
+/// System that executes terrain and rigid body probes.
 ///
-/// This system is completely generic - it just executes probes and
-/// returns results.
+/// This system is completely generic — it runs each probe against all
+/// available `ProbeTarget` implementations and returns the earliest hit.
 pub struct SensorProbeSystem;
 
 impl<'a> System<'a> for SensorProbeSystem {
     type SystemData = (
         Option<Read<'a, TerrainManager>>,
+        Option<Read<'a, PhysicsResource>>,
         Entities<'a>,
         WriteStorage<'a, SensorSet>,
         WriteStorage<'a, ContactCandidates>,
@@ -30,71 +28,60 @@ impl<'a> System<'a> for SensorProbeSystem {
 
     fn run(
         &mut self,
-        (terrain_opt, entities, sensors, mut candidates, mut _debug_overlays): Self::SystemData,
+        (terrain_opt, physics_opt, entities, sensors, mut candidates, mut _debug_overlays): Self::SystemData,
     ) {
-        let Some(terrain) = terrain_opt.as_ref() else {
+        let targets: Vec<&dyn ProbeTarget> = [
+            terrain_opt.as_ref().map(|t| &**t as &dyn ProbeTarget),
+            physics_opt.as_ref().map(|p| &p.0 as &dyn ProbeTarget),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+
+        if targets.is_empty() {
             return;
-        };
+        }
 
         for (entity, sensor_set) in (&entities, &sensors).join() {
             let mut results = ContactCandidates::default();
 
             for probe in &sensor_set.probes {
-                // Skip invalid probes
                 if probe.length <= 0.0 {
                     continue;
                 }
 
-                // Compute end point
-                let end = probe.origin + probe.direction * probe.length;
-
-                // Build sweep AABB and query terrain
-                let sweep_aabb = AABB::new(
-                    Point3::new(
-                        probe.origin.x.min(end.x) - probe.radius,
-                        probe.origin.y.min(end.y) - probe.radius,
-                        probe.origin.z.min(end.z) - probe.radius,
-                    ),
-                    Point3::new(
-                        probe.origin.x.max(end.x) + probe.radius,
-                        probe.origin.y.max(end.y) + probe.radius,
-                        probe.origin.z.max(end.z) + probe.radius,
-                    ),
-                );
-                let patch = terrain.query_region(&sweep_aabb);
-
-                // Find earliest swept contact
                 let mut earliest = None;
-                for pt in &patch.triangles {
-                    if let Some(contact) =
-                        swept_sphere_triangle(probe.origin, end, probe.radius, &pt.triangle)
-                    {
+                for target in &targets {
+                    if let Some(hit) = target.swept_probe(
+                        probe.origin,
+                        probe.direction,
+                        probe.length,
+                        probe.radius,
+                    ) {
                         if earliest
                             .as_ref()
-                            .map_or(true, |e: &SweptContact| {
-                                contact.t < e.t
-                            })
+                            .map_or(true, |(t, _): &(f32, _)| hit.t < *t)
                         {
-                            earliest = Some(contact);
+                            earliest = Some((hit.t, hit));
                         }
                     }
                 }
-                if let Some(contact) = earliest {
-                    let distance = (contact.t * probe.length).max(0.0);
 
+                if let Some((_, hit)) = earliest {
+                    let distance = (hit.t * probe.length).max(0.0);
                     results.candidates.push(ContactCandidate {
                         tag: probe.tag,
-                        point: contact.point,
-                        normal: contact.normal,
+                        point: hit.point,
+                        normal: hit.normal,
                         distance,
                     });
+                    // _debug_overlays.add_line_with_radius(
+                    //     probe.origin,
+                    //     hit.point,
+                    //     probe.radius,
+                    //     Colour::YELLOW,
+                    // );
                 }
-                // debug_overlays.add_line_with_radius(
-                //     probe.origin,
-                //     end,
-                //     probe.radius,
-                //     Colour::YELLOW,
-                // );
             }
 
             let _ = candidates.insert(entity, results);
