@@ -28,7 +28,7 @@ use crate::core::error::EngineResult;
 
 fn setup_logging() {
     env_logger::Builder::new()
-        .filter_level(log::LevelFilter::Debug)
+        .filter_level(log::LevelFilter::Info)
         .filter_module("ash", log::LevelFilter::Info) // Reduce Vulkan noise
         .init();
 }

@@ -269,8 +269,8 @@ impl RigidBody {
         self.angular_velocity += self.world_inv_inertia() * self.torque * dt;
 
         // Apply damping
-        self.linear_velocity *= 1.0 - self.linear_damping.min(1.0);
-        self.angular_velocity *= 1.0 - self.angular_damping.min(1.0);
+        self.linear_velocity *= (1.0 - self.linear_damping.min(1.0)).powf(dt);
+        self.angular_velocity *= (1.0 - self.angular_damping.min(1.0)).powf(dt);
 
         // Clear accumulators
         self.force = Vector3::zeros();

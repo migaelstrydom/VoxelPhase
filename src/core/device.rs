@@ -69,10 +69,6 @@ impl ManagedDevice {
             unique_queue_family_indices.insert(queue_family_indices.graphics);
             unique_queue_family_indices.insert(queue_family_indices.compute);
             unique_queue_family_indices.insert(queue_family_indices.transfer);
-            println!(
-                "Unique queue family indices: {:?}",
-                unique_queue_family_indices
-            );
 
             let queue_create_infos: Vec<vk::DeviceQueueCreateInfo> = unique_queue_family_indices
                 .iter()

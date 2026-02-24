@@ -170,7 +170,6 @@ impl Drop for ManagedTexture {
                 self.device.device.destroy_sampler(self.sampler, None);
             }
             if self.image_view != vk::ImageView::null() {
-                log::info!("ManagedTexture::drop - Destroying image_view");
                 self.device.device.destroy_image_view(self.image_view, None);
             }
             if self.image != vk::Image::null() {
