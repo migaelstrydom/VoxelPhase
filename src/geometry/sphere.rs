@@ -164,7 +164,8 @@ pub fn generate_magic_sphere_vertices(
             let pattern = spiral_value * 0.6 + counter_value * 0.3 + latitude_factor * 0.1;
 
             // Calculate hue with variation
-            let hue_shift = pattern * config.color_variation + (y * 0.5 + 0.5) * config.color_variation;
+            let hue_shift =
+                pattern * config.color_variation + (y * 0.5 + 0.5) * config.color_variation;
             let primary_hue = config.base_hue + hue_shift;
             let secondary_hue = config.base_hue + config.accent_hue_offset + hue_shift * 0.5;
 
@@ -212,15 +213,19 @@ pub fn generate_sphere_indices(segments: u32, rings: u32) -> Vec<u32> {
             let i2 = current_ring_start + segment + 1;
             let i3 = next_ring_start + segment + 1;
 
-            // First triangle
-            indices.push(i0);
-            indices.push(i2);
-            indices.push(i1);
+            if ring != 0 {
+                // First triangle
+                indices.push(i0);
+                indices.push(i2);
+                indices.push(i1);
+            }
 
-            // Second triangle
-            indices.push(i2);
-            indices.push(i3);
-            indices.push(i1);
+            if ring != rings - 1 {
+                // Second triangle
+                indices.push(i2);
+                indices.push(i3);
+                indices.push(i1);
+            }
         }
     }
 

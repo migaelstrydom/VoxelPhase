@@ -121,8 +121,8 @@ impl Renderer {
             overlay,
             particle_renderer,
             sky_renderer,
-            debug_wireframe_backfaces: false,
-            wireframe_color: [1.0, 0.0, 1.0, 1.0],
+            debug_wireframe_backfaces: true,
+            wireframe_color: [0.0, 0.0, 0.0, 1.0],
         })
     }
 
