@@ -15,10 +15,10 @@ use crate::collision::segment::segment_segment_closest_points;
 /// Minimum penetration axis category.
 #[derive(Debug, Clone, Copy)]
 enum MinAxis {
-    /// Face normal on OBB A (axis index 0-2).
-    FaceA(usize),
-    /// Face normal on OBB B (axis index 0-2).
-    FaceB(usize),
+    /// Face normal on OBB A.
+    FaceA,
+    /// Face normal on OBB B.
+    FaceB,
     /// Edge-edge cross product: edge `a_idx` on A × edge `b_idx` on B.
     EdgeEdge { a_idx: usize, b_idx: usize },
 }
@@ -44,9 +44,10 @@ pub fn obb_obb_manifold_cached(
     // Try the cached separating axis first.
     if let Some(cached_axis) = cache.separating_axis {
         let distance = center_dir.dot(&cached_axis).abs();
-        let overlap =
-            a.project_half_extent(&cached_axis) + b.project_half_extent(&cached_axis)
-                + 2.0 * contact_margin - distance;
+        let overlap = a.project_half_extent(&cached_axis)
+            + b.project_half_extent(&cached_axis)
+            + 2.0 * contact_margin
+            - distance;
         if overlap < -OVERLAP_EPS {
             // Still separated on this axis — early out.
             return ContactManifold::empty();
@@ -56,20 +57,6 @@ pub fn obb_obb_manifold_cached(
     // Cached axis didn't separate (or no cache). Run full SAT.
     let manifold = obb_obb_manifold_inner(a, b, contact_margin, &center_dir, cache);
     manifold
-}
-
-/// Test two OBBs against each other using SAT.
-///
-/// Returns a manifold of up to 4 contact points. Normal points from A toward B.
-/// Correctly handles face-face, face-edge, and edge-edge contact configurations.
-///
-/// # Arguments
-/// * `a` — first OBB in world space
-/// * `b` — second OBB in world space
-/// * `contact_margin` — inflation for speculative contacts
-pub fn obb_obb_manifold(a: &Obb, b: &Obb, contact_margin: f32) -> ContactManifold {
-    let center_dir = b.center - a.center;
-    obb_obb_manifold_inner(a, b, contact_margin, &center_dir, &mut SatCache::new())
 }
 
 /// Core SAT implementation shared by cached and uncached entry points.
@@ -85,7 +72,7 @@ fn obb_obb_manifold_inner(
 
     let mut best_overlap = f32::MAX;
     let mut best_axis = Vector3::zeros();
-    let mut best_category = MinAxis::FaceA(0);
+    let mut best_category = MinAxis::FaceA;
     let mut best_edge_candidate: Option<(usize, usize, Vector3<f32>, f32)> = None;
 
     // Track the best separating axis seen during the full test. If we find
@@ -114,7 +101,7 @@ fn obb_obb_manifold_inner(
                 if overlap < best_overlap {
                     best_overlap = overlap;
                     best_axis = axis;
-                    best_category = MinAxis::FaceA(i);
+                    best_category = MinAxis::FaceA;
                 }
             }
         }
@@ -134,7 +121,7 @@ fn obb_obb_manifold_inner(
                 if overlap < best_overlap {
                     best_overlap = overlap;
                     best_axis = axis;
-                    best_category = MinAxis::FaceB(i);
+                    best_category = MinAxis::FaceB;
                 }
             }
         }
@@ -199,7 +186,7 @@ fn obb_obb_manifold_inner(
     let geometric_depth = best_overlap - 2.0 * contact_margin;
 
     match best_category {
-        MinAxis::FaceA(_) | MinAxis::FaceB(_) => {
+        MinAxis::FaceA | MinAxis::FaceB => {
             let manifold = face_face_contacts(
                 a,
                 b,
@@ -281,8 +268,8 @@ fn face_face_contacts(
 ) -> ContactManifold {
     // Determine reference and incident faces.
     let (ref_obb, inc_obb, ref_axes, inc_axes, flip_normal) = match category {
-        MinAxis::FaceA(_) => (a, b, axes_a, axes_b, false),
-        MinAxis::FaceB(_) => (b, a, axes_b, axes_a, true),
+        MinAxis::FaceA => (a, b, axes_a, axes_b, false),
+        MinAxis::FaceB => (b, a, axes_b, axes_a, true),
         _ => unreachable!(),
     };
 
@@ -574,6 +561,20 @@ mod tests {
 
     fn vertical_rod_at(pos: Point3<f32>) -> Obb {
         Obb::new(pos, UnitQuaternion::identity(), Vector3::new(0.1, 2.0, 0.1))
+    }
+
+    /// Test two OBBs against each other using SAT.
+    ///
+    /// Returns a manifold of up to 4 contact points. Normal points from A toward B.
+    /// Correctly handles face-face, face-edge, and edge-edge contact configurations.
+    ///
+    /// # Arguments
+    /// * `a` — first OBB in world space
+    /// * `b` — second OBB in world space
+    /// * `contact_margin` — inflation for speculative contacts
+    pub fn obb_obb_manifold(a: &Obb, b: &Obb, contact_margin: f32) -> ContactManifold {
+        let center_dir = b.center - a.center;
+        obb_obb_manifold_inner(a, b, contact_margin, &center_dir, &mut SatCache::new())
     }
 
     #[test]
@@ -904,7 +905,11 @@ mod tests {
                 * UnitQuaternion::from_axis_angle(&Vector3::z_axis(), angle(next_f32()));
             let a = Obb::new(Point3::origin(), rot_a, Vector3::new(1.0, 1.0, 1.0));
             let b = Obb::new(
-                Point3::new(span(next_f32(), 3.0), span(next_f32(), 3.0), span(next_f32(), 3.0)),
+                Point3::new(
+                    span(next_f32(), 3.0),
+                    span(next_f32(), 3.0),
+                    span(next_f32(), 3.0),
+                ),
                 rot_b,
                 Vector3::new(1.0, 1.0, 1.0),
             );
@@ -956,7 +961,11 @@ mod tests {
         let rot_b = UnitQuaternion::from_axis_angle(&Vector3::z_axis(), -0.6)
             * UnitQuaternion::from_axis_angle(&Vector3::y_axis(), 0.3);
         let a = Obb::new(Point3::origin(), rot_a, Vector3::new(1.0, 1.0, 1.0));
-        let b = Obb::new(Point3::new(3.5, 0.5, 0.2), rot_b, Vector3::new(1.0, 1.0, 1.0));
+        let b = Obb::new(
+            Point3::new(3.5, 0.5, 0.2),
+            rot_b,
+            Vector3::new(1.0, 1.0, 1.0),
+        );
 
         // Verify they're actually separated.
         assert!(obb_obb_manifold(&a, &b, 0.0).is_empty());
