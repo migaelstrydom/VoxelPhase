@@ -169,19 +169,21 @@ pub(crate) fn run_scenario<S: PhysicsBenchScenario>(
         accumulator += scenario.frame_dt(frame_idx).max(0.0);
         frame_idx = frame_idx.saturating_add(1);
 
+        if accumulator < cfg.fixed_dt {
+            continue;
+        }
+
+        // Contact generation once per frame, then N substeps (matches game loop).
+        let impulses = scenario.external_impulses(sim_time);
+        world.update_contacts(cfg.fixed_dt, scenario.geometry(), &impulses, &mut debug_lines);
+        debug_lines.clear();
+
         let mut consumed = 0usize;
         while accumulator >= cfg.fixed_dt
             && consumed < cfg.max_substeps_per_frame
             && sim_time + cfg.fixed_dt <= cfg.duration + 1e-6
         {
-            let impulses = scenario.external_impulses(sim_time);
-            world.step(
-                cfg.fixed_dt,
-                scenario.geometry(),
-                &impulses,
-                &mut debug_lines,
-            );
-            debug_lines.clear();
+            world.substep(cfg.fixed_dt, scenario.geometry());
             sim_time += cfg.fixed_dt;
             accumulator -= cfg.fixed_dt;
             consumed += 1;

@@ -57,6 +57,6 @@ pub fn spawn_player(world: &mut World, initial_pos: nalgebra::Point3<f32>) -> En
         .with(SensorSet::default())
         .with(ContactCandidates::default())
         .with(RigidBodyComponent(body_handle))
-        .with(VelocityDriven)
+        .with(VelocityDriven::default())
         .build()
 }

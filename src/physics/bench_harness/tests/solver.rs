@@ -159,13 +159,14 @@ fn sphere_pushing_box_no_jitter() {
     let mut gap_samples: Vec<f32> = Vec::new();
 
     for _ in 0..num_frames {
-        // Override sphere X velocity once per frame (matches game loop).
+        // Drive sphere velocity per frame (matches game loop).
         let sb = world.body(sphere_handle).unwrap();
         let vel = *sb.linear_velocity();
-        world.set_body_velocity(
+        world.set_body_velocity_drive(
             sphere_handle,
             Vector3::new(push_speed_x, vel.y, push_speed_z),
             Vector3::zeros(),
+            500.0,
         );
 
         // Narrowphase once per frame, then multiple substeps (matches game).
@@ -248,5 +249,88 @@ fn sphere_pushing_box_no_jitter() {
         "sphere push efficiency too low: {efficiency:.3} (avg_vx={overall_avg:.3}, \
          push_speed={push_speed}). The solver is absorbing the velocity override, \
          causing back-and-forth jitter at the contact boundary.",
+    );
+}
+
+/// A velocity-driven sphere pushed against a static wall should reach a steady
+/// resting contact — not oscillate due to restitution firing on persisted contacts.
+///
+/// Regression test: without persisted-contact restitution suppression, the solver
+/// treats every frame as a new high-speed impact (because the drive resets approach
+/// velocity above the threshold), causing repeated bouncing.
+#[test]
+fn velocity_driven_sphere_against_wall_no_bounce() {
+    use super::super::geometry::WallAndFloorGeometry;
+
+    // Wall at x=0 facing +X, sphere starts at x=2 driven toward -X.
+    let geometry = WallAndFloorGeometry::new(50.0, 5.0);
+
+    let mut config = PhysicsConfig::default();
+    config.sleep.enabled = false;
+    config.deterministic_contact_ordering = true;
+    let mut world = PhysicsWorld::new(config);
+    let mut debug_lines = DebugLines::default();
+
+    let radius = 0.5;
+    let sphere = world.create_body(
+        RigidBodyDesc::dynamic()
+            .position(Point3::new(2.0, radius + 0.01, 0.0))
+            .angular_damping(1.0),
+    );
+    let _ = world.attach_collider(
+        sphere,
+        ColliderDesc::sphere(radius)
+            .density(50.0)
+            .restitution(0.5)
+            .friction(0.3),
+    );
+
+    let fixed_dt: f32 = 1.0 / 240.0;
+    let frame_dt: f32 = 1.0 / 60.0;
+    let substeps = (frame_dt / fixed_dt).round() as usize;
+    let drive_speed = 5.0;
+
+    // Run for 3 seconds
+    let num_frames = (3.0f32 / frame_dt).round() as usize;
+    let mut x_samples: Vec<f32> = Vec::new();
+
+    for _ in 0..num_frames {
+        let sb = world.body(sphere).unwrap();
+        let vel_y = sb.linear_velocity().y;
+        // Drive toward the wall (negative X)
+        world.set_body_velocity_drive(
+            sphere,
+            Vector3::new(-drive_speed, vel_y, 0.0),
+            Vector3::zeros(),
+            500.0,
+        );
+
+        world.update_contacts(fixed_dt, &geometry, &[], &mut debug_lines);
+        debug_lines.clear();
+        for _ in 0..substeps {
+            world.substep(fixed_dt, &geometry);
+        }
+
+        x_samples.push(world.body(sphere).unwrap().position().x);
+    }
+
+    // After reaching the wall, X position should be stable (not oscillating).
+    // Skip first second for approach/settling.
+    let tail_start = 60;
+    let tail = &x_samples[tail_start..];
+
+    let max_x = tail.iter().fold(f32::NEG_INFINITY, |a, &b| a.max(b));
+    let min_x = tail.iter().fold(f32::INFINITY, |a, &b| a.min(b));
+    let x_range = max_x - min_x;
+
+    eprintln!(
+        "wall_bounce: tail x_range={x_range:.4}, min={min_x:.4}, max={max_x:.4}"
+    );
+
+    // Position should be within a small band — no large oscillations
+    assert!(
+        x_range < 0.1,
+        "velocity-driven sphere oscillates against wall: x_range={x_range:.4}. \
+         Restitution may be firing on persisted contacts.",
     );
 }

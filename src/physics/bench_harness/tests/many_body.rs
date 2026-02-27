@@ -104,8 +104,9 @@ fn boundary_and_grenade_like_impulses_keep_states_finite() {
             Vec::new()
         };
 
-        world.step(fixed_dt, &geometry, &impulses, &mut debug_lines);
+        world.update_contacts(fixed_dt, &geometry, &impulses, &mut debug_lines);
         debug_lines.clear();
+        world.substep(fixed_dt, &geometry);
 
         for (idx, body) in world.bodies().iter() {
             let pos = body.position();
@@ -212,11 +213,16 @@ fn large_sphere_sliding_into_low_box_does_not_end_intersecting() {
             .friction(0.2),
     );
 
-    let fixed_dt = 1.0 / 60.0;
-    let num_steps = (4.0 / fixed_dt) as usize;
-    for _ in 0..num_steps {
-        world.step(fixed_dt, &geometry, &[], &mut debug_lines);
+    let fixed_dt: f32 = 1.0 / 240.0;
+    let frame_dt: f32 = 1.0 / 60.0;
+    let substeps_per_frame = (frame_dt / fixed_dt).round() as usize;
+    let num_frames = (4.0 / frame_dt) as usize;
+    for _ in 0..num_frames {
+        world.update_contacts(fixed_dt, &geometry, &[], &mut debug_lines);
         debug_lines.clear();
+        for _ in 0..substeps_per_frame {
+            world.substep(fixed_dt, &geometry);
+        }
     }
 
     let sphere = world.body(sphere_handle).expect("sphere body should exist");
@@ -275,10 +281,12 @@ fn box_stack_settles_without_overlap() {
         box_handles.push(body);
     }
 
-    let fixed_dt = 1.0 / 60.0;
-    let num_steps = (10.0 / fixed_dt) as usize;
-    let tail_steps = (2.0 / fixed_dt) as usize;
-    let tail_start_step = num_steps.saturating_sub(tail_steps);
+    let fixed_dt: f32 = 1.0 / 240.0;
+    let frame_dt: f32 = 1.0 / 60.0;
+    let substeps_per_frame = (frame_dt / fixed_dt).round() as usize;
+    let num_frames = (10.0 / frame_dt) as usize;
+    let tail_frames = (2.0 / frame_dt) as usize;
+    let tail_start_frame = num_frames.saturating_sub(tail_frames);
     let mut tail_min_y = vec![f32::INFINITY; box_handles.len()];
     let mut tail_max_y = vec![f32::NEG_INFINITY; box_handles.len()];
     let mut tail_max_speed = 0.0f32;
@@ -287,11 +295,14 @@ fn box_stack_settles_without_overlap() {
     let mut tail_points_sum = 0usize;
     let mut tail_samples = 0usize;
 
-    for step_idx in 0..num_steps {
-        world.step(fixed_dt, &geometry, &[], &mut debug_lines);
+    for step_idx in 0..num_frames {
+        world.update_contacts(fixed_dt, &geometry, &[], &mut debug_lines);
         debug_lines.clear();
+        for _ in 0..substeps_per_frame {
+            world.substep(fixed_dt, &geometry);
+        }
 
-        if step_idx >= tail_start_step {
+        if step_idx >= tail_start_frame {
             let manifold = world.manifold_frame_stats();
             let manifold_churn =
                 manifold.point_adds + manifold.point_replacements + manifold.point_pruned;
@@ -318,7 +329,7 @@ fn box_stack_settles_without_overlap() {
         }
 
         // Diagnostic: print every 60 frames (1s intervals) and last 5 frames
-        if step_idx % 60 == 0 || step_idx >= num_steps - 5 {
+        if step_idx % 60 == 0 || step_idx >= num_frames - 5 {
             let manifold = world.manifold_frame_stats();
             let manifold_churn =
                 manifold.point_adds + manifold.point_replacements + manifold.point_pruned;

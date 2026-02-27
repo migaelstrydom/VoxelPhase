@@ -76,9 +76,9 @@ impl<'a, 'b> App<'a, 'b> {
         }
 
         let box_spacing = box_half_extents.x * 3.0;
-        let start_x = -box_spacing * (num_boxes as f32 - 1.0) * 0.5;
+        let start_y = -box_spacing * (num_boxes as f32 - 1.0) * 0.5;
         for (i, &material) in box_materials[num_box_materials..].iter().enumerate() {
-            let pos = nalgebra::Point3::new(start_x + i as f32 * box_spacing, 2.0, 3.0);
+            let pos = nalgebra::Point3::new(0.0, start_y + i as f32 * box_spacing, 2.0);
             spawn_box(&mut world, pos, box_half_extents, material);
         }
 

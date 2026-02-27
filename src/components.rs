@@ -67,17 +67,30 @@ impl Default for Orientation {
 #[storage(VecStorage)]
 pub struct RigidBodyComponent(pub RigidBodyHandle);
 
-/// Marker for velocity-driven dynamic bodies.
+/// Velocity-driven dynamic body with per-substep drive.
 ///
-/// Entities with this component have their ECS velocity synced into the
-/// physics engine before each step. The solver may then modify the velocity
-/// via contact impulses, and the result is synced back to ECS.
+/// Entities with this component have their ECS velocity set as a drive target
+/// in the physics engine. Each substep, the body accelerates toward the target
+/// (horizontal axes only), and the solver can oppose the drive via contact
+/// impulses. This allows smooth pushing of heavy objects at a speed determined
+/// by mass ratio, without the jitter caused by direct velocity overrides.
 ///
 /// Use this for any gameplay object that is controlled by game code but
 /// should interact physically: player characters, moving platforms, doors.
-#[derive(Component, Debug, Default)]
+#[derive(Component, Debug)]
 #[storage(DenseVecStorage)]
-pub struct VelocityDriven;
+pub struct VelocityDriven {
+    /// Maximum horizontal acceleration toward the target velocity (units/s²).
+    /// High values (500+) give snappy free movement; the solver limits speed
+    /// at contacts regardless.
+    pub max_accel: f32,
+}
+
+impl Default for VelocityDriven {
+    fn default() -> Self {
+        Self { max_accel: 500.0 }
+    }
+}
 
 /// A model instance referencing a shared Model definition.
 #[derive(Component)]

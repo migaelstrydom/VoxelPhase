@@ -72,11 +72,11 @@ impl PhysicsSyncSystem {
         velocity_driven: &ReadStorage<VelocityDriven>,
     ) {
         let mut updates = Vec::new();
-        for (vel, body, _) in ((&*velocities), bodies, velocity_driven).join() {
-            updates.push((body.0, vel.0));
+        for (vel, body, vd) in ((&*velocities), bodies, velocity_driven).join() {
+            updates.push((body.0, vel.0, vd.max_accel));
         }
-        for (handle, vel) in updates {
-            let _ = physics.set_body_velocity(handle, vel, Vector3::zeros());
+        for (handle, vel, max_accel) in updates {
+            let _ = physics.set_body_velocity_drive(handle, vel, Vector3::zeros(), max_accel);
         }
     }
 

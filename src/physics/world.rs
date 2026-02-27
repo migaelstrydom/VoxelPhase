@@ -292,9 +292,10 @@ impl PhysicsWorld {
 
     /// Set velocity on any non-static body.
     ///
-    /// Used for velocity-driven dynamic bodies (player, moving platforms)
-    /// whose velocity is set by game code each frame. The solver may then
-    /// modify the velocity via contact impulses.
+    /// Directly overwrites the body's velocity. Suitable for one-shot pushes
+    /// or initial conditions. For per-frame velocity control (player character,
+    /// moving platforms), use `set_body_velocity_drive` instead.
+    #[allow(unused)]
     pub fn set_body_velocity(
         &mut self,
         handle: RigidBodyHandle,
@@ -308,6 +309,35 @@ impl PhysicsWorld {
             return false;
         }
         body.set_linear_velocity(linear);
+        body.set_angular_velocity(angular);
+        self.sleep_manager.wake_body(handle);
+        true
+    }
+
+    /// Set a per-substep velocity drive on a non-static body.
+    ///
+    /// Instead of directly overwriting the body's velocity, this sets a drive
+    /// that accelerates toward `linear` each substep during force integration.
+    /// The solver can then oppose the drive via contact impulses, allowing
+    /// smooth pushing of heavy objects at a speed determined by mass ratio.
+    ///
+    /// Only drives horizontal (X/Z) axes. Vertical velocity is set directly
+    /// for jumps, with gravity handling the rest.
+    pub fn set_body_velocity_drive(
+        &mut self,
+        handle: RigidBodyHandle,
+        linear: Vector3<f32>,
+        angular: Vector3<f32>,
+        max_accel: f32,
+    ) -> bool {
+        let Some(body) = self.bodies.get_mut(handle.0) else {
+            return false;
+        };
+        if body.is_static() {
+            return false;
+        }
+        body.set_velocity_drive(linear, max_accel);
+        body.set_linear_velocity_y(linear.y);
         body.set_angular_velocity(angular);
         self.sleep_manager.wake_body(handle);
         true
@@ -339,22 +369,6 @@ impl PhysicsWorld {
     }
 
     // === Simulation ===
-
-    /// Step the physics simulation forward by dt seconds.
-    ///
-    /// Convenience method that calls `update_contacts()` then `substep()`.
-    /// For substepping, call `update_contacts()` once then `substep()` N times.
-    #[cfg(test)]
-    pub fn step(
-        &mut self,
-        dt: f32,
-        static_geometry: &dyn StaticGeometry,
-        impulses: &[PhysicsImpulse],
-        debug_lines: &mut DebugLines,
-    ) {
-        self.update_contacts(dt, static_geometry, impulses, debug_lines);
-        self.substep(dt, static_geometry);
-    }
 
     /// Run narrowphase contact generation and manifold cache update.
     ///

@@ -75,6 +75,20 @@ impl RigidBodyDesc {
     }
 }
 
+/// Per-substep velocity drive for externally controlled bodies.
+///
+/// Instead of directly overwriting a body's velocity (which fights the solver),
+/// the drive applies a clamped acceleration toward a target each substep.
+/// The solver then applies contact impulses on top, allowing equilibrium
+/// when pushing heavy objects.
+#[derive(Debug, Clone)]
+pub struct VelocityDrive {
+    /// Target velocity the body accelerates toward.
+    pub target: Vector3<f32>,
+    /// Maximum acceleration magnitude (units/s²).
+    pub max_accel: f32,
+}
+
 /// A rigid body in the physics simulation.
 #[derive(Debug)]
 pub struct RigidBody {
@@ -107,6 +121,9 @@ pub struct RigidBody {
 
     // Attached colliders
     colliders: Vec<ColliderHandle>,
+
+    /// Optional per-substep velocity drive for externally controlled bodies.
+    velocity_drive: Option<VelocityDrive>,
 }
 
 impl RigidBody {
@@ -127,6 +144,7 @@ impl RigidBody {
             force: Vector3::zeros(),
             torque: Vector3::zeros(),
             colliders: Vec::new(),
+            velocity_drive: None,
         }
     }
 
@@ -203,8 +221,27 @@ impl RigidBody {
         self.linear_velocity = velocity;
     }
 
+    pub fn set_linear_velocity_y(&mut self, y: f32) {
+        self.linear_velocity.y = y;
+    }
+
     pub fn set_angular_velocity(&mut self, velocity: Vector3<f32>) {
         self.angular_velocity = velocity;
+    }
+
+    /// Set a velocity drive that accelerates toward `target` each substep.
+    ///
+    /// The drive is applied during force integration, before the solver.
+    /// This replaces direct velocity setting for externally controlled bodies
+    /// (player, moving platforms) so that the solver can properly oppose the
+    /// drive when pushing heavy objects.
+    pub fn set_velocity_drive(&mut self, target: Vector3<f32>, max_accel: f32) {
+        self.velocity_drive = Some(VelocityDrive { target, max_accel });
+    }
+
+    /// Clear the velocity drive (body becomes purely physics-driven).
+    pub fn clear_velocity_drive(&mut self) {
+        self.velocity_drive = None;
     }
 
     /// Apply an instantaneous linear impulse at the center of mass.
@@ -255,7 +292,7 @@ impl RigidBody {
         }
     }
 
-    /// Integrate velocities from forces.
+    /// Integrate velocities from forces and velocity drives.
     pub(crate) fn integrate_forces(&mut self, dt: f32, gravity: Vector3<f32>) {
         if self.body_type != BodyType::Dynamic {
             return;
@@ -263,6 +300,21 @@ impl RigidBody {
 
         // Apply gravity
         self.linear_velocity += gravity * self.gravity_scale * dt;
+
+        // Apply velocity drive on horizontal axes only. The drive accelerates
+        // toward the target each substep so the solver can oppose it at contacts.
+        // Vertical velocity is left to gravity and the solver.
+        if let Some(drive) = &self.velocity_drive {
+            let dx = drive.target.x - self.linear_velocity.x;
+            let dz = drive.target.z - self.linear_velocity.z;
+            let delta_mag = (dx * dx + dz * dz).sqrt();
+            let max_delta = drive.max_accel * dt;
+            if delta_mag > 1e-6 {
+                let scale = (max_delta / delta_mag).min(1.0);
+                self.linear_velocity.x += dx * scale;
+                self.linear_velocity.z += dz * scale;
+            }
+        }
 
         // Apply accumulated forces
         self.linear_velocity += self.force * self.inv_mass * dt;
@@ -285,5 +337,96 @@ impl RigidBody {
 
         self.position += self.linear_velocity * dt;
         self.rotation = integrate_orientation(self.rotation, self.angular_velocity, dt);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dynamic_body() -> RigidBody {
+        let mut body = RigidBody::new(RigidBodyDesc::dynamic());
+        body.set_mass_properties(1.0, Matrix3::identity());
+        body
+    }
+
+    #[test]
+    fn velocity_drive_only_affects_horizontal() {
+        let mut body = dynamic_body();
+        body.set_linear_velocity(Vector3::new(0.0, -2.0, 0.0));
+        body.set_velocity_drive(Vector3::new(5.0, 0.0, 3.0), 5000.0);
+
+        let gravity = Vector3::new(0.0, -9.81, 0.0);
+        let dt = 1.0 / 240.0;
+        body.integrate_forces(dt, gravity);
+
+        // X and Z should move toward drive target
+        assert!(
+            (body.linear_velocity().x - 5.0).abs() < 0.1,
+            "X should reach drive target, got {}",
+            body.linear_velocity().x,
+        );
+        assert!(
+            (body.linear_velocity().z - 3.0).abs() < 0.1,
+            "Z should reach drive target, got {}",
+            body.linear_velocity().z,
+        );
+
+        // Y should only have gravity applied, not driven
+        let expected_y = -2.0 + gravity.y * dt;
+        assert!(
+            (body.linear_velocity().y - expected_y).abs() < 0.01,
+            "Y should reflect gravity only, got {} expected {}",
+            body.linear_velocity().y,
+            expected_y
+        );
+    }
+
+    #[test]
+    fn velocity_drive_clamps_to_max_accel() {
+        let mut body = dynamic_body();
+        body.set_linear_velocity(Vector3::zeros());
+        // Target is 10 m/s but max_accel limits how fast we get there
+        body.set_velocity_drive(Vector3::new(10.0, 0.0, 0.0), 50.0);
+
+        let dt = 1.0 / 240.0;
+        body.integrate_forces(dt, Vector3::zeros());
+
+        // max_delta = 50 * (1/240) ≈ 0.208, should not reach 10.0
+        let vx = body.linear_velocity().x;
+        assert!(
+            vx < 0.25 && vx > 0.15,
+            "velocity should be clamped by max_accel: got {vx}"
+        );
+    }
+
+    #[test]
+    fn velocity_drive_cleared_stops_driving() {
+        let mut body = dynamic_body();
+        body.set_velocity_drive(Vector3::new(5.0, 0.0, 0.0), 500.0);
+        body.clear_velocity_drive();
+
+        body.set_linear_velocity(Vector3::zeros());
+        body.integrate_forces(1.0 / 240.0, Vector3::zeros());
+
+        // No drive, no gravity, no forces → velocity stays zero
+        assert!(body.linear_velocity().magnitude() < 1e-6);
+    }
+
+    #[test]
+    fn set_body_velocity_does_not_create_drive() {
+        let mut body = dynamic_body();
+        body.set_linear_velocity(Vector3::new(5.0, 0.0, 0.0));
+
+        // Simulate friction reducing velocity
+        body.set_linear_velocity(Vector3::new(2.0, 0.0, 0.0));
+        body.integrate_forces(1.0 / 240.0, Vector3::zeros());
+
+        // Without a drive, velocity should stay near 2.0 (no re-acceleration)
+        assert!(
+            (body.linear_velocity().x - 2.0).abs() < 0.1,
+            "velocity should not re-accelerate without a drive: got {}",
+            body.linear_velocity().x
+        );
     }
 }

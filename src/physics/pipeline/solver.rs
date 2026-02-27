@@ -259,6 +259,11 @@ pub fn solve(
 
     // Phase 1: Capture pre-solve normal velocities and warm-start scales.
     // Indexed as [manifold_idx][contact_idx] = (pre_solve_vn, warm_scale).
+    //
+    // Persisted contacts (warm_normal_impulse > 0) always get warm-started
+    // regardless of approach velocity. This prevents velocity-driven bodies
+    // (e.g. player characters) from having warm-start disabled every frame
+    // due to their externally-set velocity exceeding the threshold.
     let pre_solve: Vec<Vec<(f32, f32)>> = manifolds
         .iter()
         .map(|m| {
@@ -268,7 +273,10 @@ pub fn solve(
                     let vn = BodyPairState::extract(bodies, &m.header, c.point)
                         .map(|s| s.relative_normal_velocity(c.point, &c.normal))
                         .unwrap_or(0.0);
-                    let warm_scale = if vn.abs() > config.restitution_velocity_threshold {
+                    let is_persisted = c.warm_normal_impulse > 0.0;
+                    let warm_scale = if is_persisted {
+                        config.warm_start_scale
+                    } else if vn.abs() > config.restitution_velocity_threshold {
                         0.0
                     } else {
                         config.warm_start_scale
@@ -300,12 +308,14 @@ pub fn solve(
             };
             for _ in 0..normal_passes {
                 for ci in 0..manifold.contacts.len() {
+                    let is_persisted = manifold.contacts[ci].warm_normal_impulse > 0.0;
                     solve_normal_impulse(
                         bodies,
                         &manifold.header,
                         &mut manifold.contacts[ci],
                         config.restitution_velocity_threshold,
                         pre_solve[mi][ci].0,
+                        is_persisted,
                     );
                 }
             }
@@ -385,8 +395,8 @@ fn warm_start_contact(
     // Project cached world-space friction onto the current tangent plane
     // so that small normal drift does not rotate the friction direction.
     let warm_friction_scaled = contact.warm_friction_impulse_ws * scale;
-    let projected = warm_friction_scaled
-        - contact.normal * warm_friction_scaled.dot(&contact.normal);
+    let projected =
+        warm_friction_scaled - contact.normal * warm_friction_scaled.dot(&contact.normal);
 
     // Clamp to Coulomb limit with the warm normal impulse
     let mag = projected.magnitude();
@@ -444,6 +454,7 @@ pub fn solve_contacts(
                 contact,
                 restitution_velocity_threshold,
                 pre_solve_vn,
+                false,
             );
             solve_friction_impulse(bodies, header, contact);
         }
@@ -460,6 +471,7 @@ fn solve_normal_impulse(
     contact: &mut SolverContact,
     restitution_velocity_threshold: f32,
     pre_solve_vn: f32,
+    is_persisted: bool,
 ) {
     let Some(state) = BodyPairState::extract(bodies, header, contact.point) else {
         return;
@@ -493,10 +505,17 @@ fn solve_normal_impulse(
         return;
     }
 
-    let speed = pre_solve_vn.abs();
-    let restitution_scale =
-        ((speed - restitution_velocity_threshold) / restitution_velocity_threshold).clamp(0.0, 1.0);
-    let restitution = header.restitution * restitution_scale;
+    // Persisted contacts suppress restitution: the high approach velocity
+    // is from an external velocity drive, not a new impact.
+    let restitution = if is_persisted {
+        0.0
+    } else {
+        let speed = pre_solve_vn.abs();
+        let restitution_scale = ((speed - restitution_velocity_threshold)
+            / restitution_velocity_threshold)
+            .clamp(0.0, 1.0);
+        header.restitution * restitution_scale
+    };
     let restitution_velocity = if pre_solve_vn < 0.0 {
         restitution * pre_solve_vn
     } else {
@@ -539,8 +558,10 @@ fn solve_friction_impulse(
 
     let effective_mass_t1 = state.effective_inv_mass(contact.point, &t1);
     let effective_mass_t2 = state.effective_inv_mass(contact.point, &t2);
-    if effective_mass_t1 <= MIN_EFFECTIVE_INV_MASS || !effective_mass_t1.is_finite()
-        || effective_mass_t2 <= MIN_EFFECTIVE_INV_MASS || !effective_mass_t2.is_finite()
+    if effective_mass_t1 <= MIN_EFFECTIVE_INV_MASS
+        || !effective_mass_t1.is_finite()
+        || effective_mass_t2 <= MIN_EFFECTIVE_INV_MASS
+        || !effective_mass_t2.is_finite()
     {
         return;
     }
