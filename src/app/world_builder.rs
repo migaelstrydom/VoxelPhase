@@ -3,8 +3,8 @@ use specs::{World, WorldExt};
 use crate::biped::BipedController;
 use crate::camera::{CameraConfig, FollowTarget};
 use crate::components::{
-    Acceleration, CameraComponent, Gravity, ModelInstance, MotionState, Orientation, Position,
-    Renderable, RigidBodyComponent, Rotation, Velocity, VelocityDriven,
+    CameraComponent, ModelInstance, Orientation, Position, Renderable, RigidBodyComponent,
+    Rotation, Velocity, VelocityDriven,
 };
 use crate::core::error::EngineResult;
 use crate::debug::{DebugLines, DebugLog, DebugOverlays};
@@ -42,8 +42,6 @@ impl WorldBuilder {
     fn register_components(world: &mut World) {
         world.register::<Position>();
         world.register::<Velocity>();
-        world.register::<Acceleration>();
-        world.register::<Gravity>();
         world.register::<Rotation>();
         world.register::<Orientation>();
         world.register::<ModelInstance>();
@@ -53,7 +51,6 @@ impl WorldBuilder {
         world.register::<PlayerTargetState>();
         world.register::<BipedController>();
         world.register::<FollowTarget>();
-        world.register::<MotionState>();
         world.register::<SensorSet>();
         world.register::<ContactCandidates>();
         world.register::<RigidBodyComponent>();

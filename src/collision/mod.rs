@@ -21,7 +21,6 @@ mod mesh_patch;
 pub mod obb;
 pub mod sat;
 pub mod segment;
-pub mod shapes;
 pub mod sphere_triangle;
 pub mod support;
 

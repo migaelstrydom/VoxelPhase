@@ -239,11 +239,6 @@ impl RigidBody {
         self.velocity_drive = Some(VelocityDrive { target, max_accel });
     }
 
-    /// Clear the velocity drive (body becomes purely physics-driven).
-    pub fn clear_velocity_drive(&mut self) {
-        self.velocity_drive = None;
-    }
-
     /// Apply an instantaneous linear impulse at the center of mass.
     pub fn apply_impulse(&mut self, impulse: Vector3<f32>) {
         if self.inv_mass > 0.0 {
@@ -265,10 +260,6 @@ impl RigidBody {
 
     pub(crate) fn add_collider(&mut self, handle: ColliderHandle) {
         self.colliders.push(handle);
-    }
-
-    pub(crate) fn remove_collider(&mut self, handle: ColliderHandle) {
-        self.colliders.retain(|h| *h != handle);
     }
 
     /// Update mass properties from attached colliders.
@@ -398,19 +389,6 @@ mod tests {
             vx < 0.25 && vx > 0.15,
             "velocity should be clamped by max_accel: got {vx}"
         );
-    }
-
-    #[test]
-    fn velocity_drive_cleared_stops_driving() {
-        let mut body = dynamic_body();
-        body.set_velocity_drive(Vector3::new(5.0, 0.0, 0.0), 500.0);
-        body.clear_velocity_drive();
-
-        body.set_linear_velocity(Vector3::zeros());
-        body.integrate_forces(1.0 / 240.0, Vector3::zeros());
-
-        // No drive, no gravity, no forces → velocity stays zero
-        assert!(body.linear_velocity().magnitude() < 1e-6);
     }
 
     #[test]

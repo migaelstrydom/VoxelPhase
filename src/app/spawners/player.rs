@@ -3,8 +3,7 @@ use specs::{Builder, Entity, World, WorldExt};
 
 use crate::biped::{BipedConfig, BipedController};
 use crate::components::{
-    Acceleration, Gravity, MotionState, Orientation, Position, Renderable,
-    RigidBodyComponent, Rotation, Velocity, VelocityDriven,
+    Orientation, Position, Renderable, RigidBodyComponent, Rotation, Velocity, VelocityDriven,
 };
 use crate::physics::{ColliderDesc, RigidBodyDesc};
 use crate::player::{Player, PlayerConfig, PlayerTargetState};
@@ -14,7 +13,6 @@ use crate::systems::PhysicsResource;
 /// Spawns the player entity with all required components.
 pub fn spawn_player(world: &mut World, initial_pos: nalgebra::Point3<f32>) -> Entity {
     let player_config = world.read_resource::<PlayerConfig>();
-    let gravity = player_config.gravity;
     drop(player_config);
 
     let biped_config = BipedConfig::default();
@@ -48,12 +46,9 @@ pub fn spawn_player(world: &mut World, initial_pos: nalgebra::Point3<f32>) -> En
             initial_pos.z,
         )))
         .with(Velocity(Vector3::zeros()))
-        .with(Acceleration(Vector3::zeros()))
-        .with(Gravity(gravity))
         .with(Rotation(0.0))
         .with(Orientation::default())
         .with(Renderable)
-        .with(MotionState::new(initial_pos))
         .with(SensorSet::default())
         .with(ContactCandidates::default())
         .with(RigidBodyComponent(body_handle))

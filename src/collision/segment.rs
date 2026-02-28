@@ -8,18 +8,6 @@ use nalgebra::Point3;
 /// Epsilon for degenerate segment detection.
 const EPS: f32 = 1e-6;
 
-/// Squared distance from a point to a line segment.
-pub fn point_segment_distance_sq(p: Point3<f32>, a: Point3<f32>, b: Point3<f32>) -> f32 {
-    let ab = b - a;
-    let ab_len_sq = ab.magnitude_squared();
-    if ab_len_sq <= EPS {
-        return (p - a).magnitude_squared();
-    }
-    let t = ((p - a).dot(&ab) / ab_len_sq).clamp(0.0, 1.0);
-    let closest = a + ab * t;
-    (p - closest).magnitude_squared()
-}
-
 /// Closest points between two line segments.
 ///
 /// Returns `(point_on_seg1, point_on_seg2)` — the pair of points, one on each
@@ -90,6 +78,18 @@ mod tests {
 
     fn approx_eq_point(a: Point3<f32>, b: Point3<f32>, tol: f32) -> bool {
         (a - b).magnitude() < tol
+    }
+
+    /// Squared distance from a point to a line segment.
+    pub fn point_segment_distance_sq(p: Point3<f32>, a: Point3<f32>, b: Point3<f32>) -> f32 {
+        let ab = b - a;
+        let ab_len_sq = ab.magnitude_squared();
+        if ab_len_sq <= EPS {
+            return (p - a).magnitude_squared();
+        }
+        let t = ((p - a).dot(&ab) / ab_len_sq).clamp(0.0, 1.0);
+        let closest = a + ab * t;
+        (p - closest).magnitude_squared()
     }
 
     // --- point_segment_distance_sq ---

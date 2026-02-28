@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use nalgebra::{Point3, UnitQuaternion, Vector3};
+use nalgebra::{UnitQuaternion, Vector3};
 use specs::{Component, DenseVecStorage, VecStorage};
 
 use crate::model::Model;
@@ -15,37 +15,6 @@ pub struct Position(pub Vector3<f32>);
 #[derive(Component, Debug)]
 #[storage(VecStorage)]
 pub struct Velocity(pub Vector3<f32>);
-
-#[derive(Component, Debug)]
-#[storage(VecStorage)]
-pub struct Acceleration(pub Vector3<f32>);
-
-/// Gravity strength for an entity. Applied as downward acceleration.
-#[derive(Component, Debug)]
-#[storage(VecStorage)]
-pub struct Gravity(pub f32);
-
-/// Motion state for CCD collision detection.
-///
-/// Stores previous and predicted positions for swept collision queries.
-/// Updated by MotionPredictionSystem, consumed by collision systems.
-#[derive(Component, Debug, Clone)]
-#[storage(VecStorage)]
-pub struct MotionState {
-    /// Position at the start of the frame (before movement).
-    pub prev: Point3<f32>,
-    /// Predicted position at the end of the frame (before collision resolution).
-    pub predicted: Point3<f32>,
-}
-
-impl MotionState {
-    pub fn new(position: Point3<f32>) -> Self {
-        Self {
-            prev: position,
-            predicted: position,
-        }
-    }
-}
 
 #[derive(Component, Debug)]
 pub struct Rotation(pub f32); // Radians

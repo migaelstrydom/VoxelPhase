@@ -356,7 +356,7 @@ impl PhysicsWorld {
             return None;
         }
 
-        let collider = Collider::new(body_handle, desc);
+        let collider = Collider::new(desc);
         let collider_handle = ColliderHandle(self.colliders.insert(collider));
 
         // Update body's mass properties

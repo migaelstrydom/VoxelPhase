@@ -1,10 +1,11 @@
 use crate::biped::BipedController;
 use crate::components::{CameraComponent, Position, Rotation, Velocity};
+use crate::debug::DebugLines;
 use crate::input::GameplayActions;
-use crate::player::{Player, PlayerConfig, PlayerTargetState};
+use crate::player::{Player, PlayerConfig, PlayerMoveState, PlayerTargetState};
 use crate::time::Time;
 use nalgebra::Vector3;
-use specs::{Join, Read, ReadExpect, ReadStorage, System, WriteStorage};
+use specs::{Join, Read, ReadExpect, ReadStorage, System, Write, WriteStorage};
 
 /// Processes player input and calculates desired movement target.
 /// Runs early in the frame to convert raw input into movement intent.
@@ -77,6 +78,13 @@ impl<'a> System<'a> for PlayerInputSystem {
 
 /// Applies player movement target to actual physics state.
 /// Runs after animation systems to apply intended movement based on grounded state.
+///
+/// Uses a four-state FSM:
+///   Grounded ──(jump)──────────► Launching ──(!is_grounded)──► Airborne
+///   Grounded ──(!is_grounded)──► CoyoteTime ──(timer expired)──► Airborne
+///   CoyoteTime ──(jump)──────────────────────────────────────► Airborne
+///   CoyoteTime ──(is_grounded)──► Grounded
+///   Airborne ──(is_grounded)────► Grounded
 pub struct PlayerMotionSystem;
 
 impl<'a> System<'a> for PlayerMotionSystem {
@@ -84,20 +92,29 @@ impl<'a> System<'a> for PlayerMotionSystem {
         Read<'a, Time>,
         ReadExpect<'a, PlayerConfig>,
         ReadStorage<'a, Player>,
-        ReadStorage<'a, PlayerTargetState>,
+        WriteStorage<'a, PlayerTargetState>,
         ReadStorage<'a, BipedController>,
         WriteStorage<'a, Rotation>,
         WriteStorage<'a, Velocity>,
+        Write<'a, DebugLines>,
     );
 
     fn run(&mut self, data: Self::SystemData) {
-        let (time, config, players, player_targets, controllers, mut rotations, mut velocities) =
-            data;
+        let (
+            time,
+            config,
+            players,
+            mut player_targets,
+            controllers,
+            mut rotations,
+            mut velocities,
+            mut _debug_lines,
+        ) = data;
         let dt = time.delta_seconds();
 
         for (_player, target, controller, rotation, vel) in (
             &players,
-            &player_targets,
+            &mut player_targets,
             &controllers,
             &mut rotations,
             &mut velocities,
@@ -107,29 +124,110 @@ impl<'a> System<'a> for PlayerMotionSystem {
             let is_grounded = controller.is_grounded();
             let move_dir = target.direction;
 
+            // --- State transitions ---
+            target.move_state = match target.move_state {
+                PlayerMoveState::Grounded => {
+                    if target.jump {
+                        vel.0.y = config.jump_speed;
+                        PlayerMoveState::Launching
+                    } else if !is_grounded {
+                        PlayerMoveState::CoyoteTime(config.ground_grace_period)
+                    } else {
+                        PlayerMoveState::Grounded
+                    }
+                }
+                PlayerMoveState::Launching => {
+                    if !is_grounded {
+                        PlayerMoveState::Airborne
+                    } else {
+                        PlayerMoveState::Launching
+                    }
+                }
+                PlayerMoveState::CoyoteTime(remaining) => {
+                    if target.jump {
+                        vel.0.y = config.jump_speed;
+                        PlayerMoveState::Airborne
+                    } else if is_grounded {
+                        PlayerMoveState::Grounded
+                    } else {
+                        let t = remaining - dt;
+                        if t <= 0.0 {
+                            PlayerMoveState::Airborne
+                        } else {
+                            PlayerMoveState::CoyoteTime(t)
+                        }
+                    }
+                }
+                PlayerMoveState::Airborne => {
+                    if is_grounded {
+                        PlayerMoveState::Grounded
+                    } else {
+                        PlayerMoveState::Airborne
+                    }
+                }
+            };
+
+            // --- Per-state behaviour ---
+
             // Update facing direction based on movement
             if move_dir.magnitude() > 0.001 {
                 rotation.0 = -move_dir.z.atan2(move_dir.x) + std::f32::consts::PI / 2.0;
             }
 
-            if is_grounded {
-                vel.0.x = move_dir.x * config.walk_speed;
-                vel.0.z = move_dir.z * config.walk_speed;
-            } else {
-                // Steer horizontal velocity toward input direction while preserving momentum
-                let target_x = move_dir.x * config.walk_speed;
-                let target_z = move_dir.z * config.walk_speed;
-                let max_delta = config.air_steer_speed * dt;
-                vel.0.x = move_toward(vel.0.x, target_x, max_delta);
-                vel.0.z = move_toward(vel.0.z, target_z, max_delta);
+            match target.move_state {
+                PlayerMoveState::Grounded | PlayerMoveState::Launching => {
+                    vel.0.x = move_dir.x * config.walk_speed;
+                    vel.0.z = move_dir.z * config.walk_speed;
+                }
+                PlayerMoveState::CoyoteTime(_) => {
+                    apply_air_steering(
+                        vel,
+                        move_dir,
+                        config.walk_speed,
+                        config.air_steer_speed,
+                        dt,
+                    );
+                    if vel.0.y > 0.0 {
+                        vel.0.y = 0.0;
+                    }
+                }
+                PlayerMoveState::Airborne => {
+                    apply_air_steering(
+                        vel,
+                        move_dir,
+                        config.walk_speed,
+                        config.air_steer_speed,
+                        dt,
+                    );
+                }
             }
 
-            // Handle jumping - only when grounded
-            if target.jump && is_grounded {
-                vel.0.y = config.jump_speed;
-            }
+            // Debug display
+            // let state_str = match target.move_state {
+            //     PlayerMoveState::Grounded => "Grounded".to_string(),
+            //     PlayerMoveState::Launching => "Launching".to_string(),
+            //     PlayerMoveState::CoyoteTime(t) => format!("CoyoteTime({:.3})", t),
+            //     PlayerMoveState::Airborne => "Airborne".to_string(),
+            // };
+            // debug_lines.add("Player/MoveState", state_str);
+            // debug_lines.add("Player/VelY", format!("{:.2}", vel.0.y));
+            // debug_lines.add("Player/Grounded", format!("{}", is_grounded));
         }
     }
+}
+
+fn apply_air_steering(
+    vel: &mut Velocity,
+    move_dir: Vector3<f32>,
+    walk_speed: f32,
+    air_steer_speed: f32,
+    dt: f32,
+) {
+    let target_x = move_dir.x * walk_speed;
+    let target_z = move_dir.z * walk_speed;
+    let max_delta = air_steer_speed * dt;
+    vel.0.x = move_toward(vel.0.x, target_x, max_delta);
+    vel.0.z = move_toward(vel.0.z, target_z, max_delta);
 }
 
 fn move_toward(current: f32, target: f32, max_delta: f32) -> f32 {

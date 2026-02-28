@@ -2,7 +2,6 @@
 
 use nalgebra::{Isometry3, Matrix3, Point3, UnitQuaternion, Vector3};
 
-use super::handle::RigidBodyHandle;
 use super::math::{box_inertia_tensor, sphere_inertia_tensor};
 
 /// Shape of a collider.
@@ -123,8 +122,6 @@ impl ColliderDesc {
 /// A collider attached to a rigid body.
 #[derive(Debug)]
 pub struct Collider {
-    /// The body this collider is attached to.
-    body: RigidBodyHandle,
     /// The collision shape.
     shape: ColliderShape,
     /// Local transform relative to the body.
@@ -138,22 +135,17 @@ pub struct Collider {
 }
 
 impl Collider {
-    pub(crate) fn new(body: RigidBodyHandle, desc: ColliderDesc) -> Self {
+    pub(crate) fn new(desc: ColliderDesc) -> Self {
         let mass = desc.shape.compute_mass(desc.density);
         let local_inertia = desc.shape.compute_inertia(mass);
 
         Self {
-            body,
             shape: desc.shape,
             offset: desc.offset,
             material: desc.material,
             mass,
             local_inertia,
         }
-    }
-
-    pub fn body(&self) -> RigidBodyHandle {
-        self.body
     }
 
     pub fn shape(&self) -> &ColliderShape {

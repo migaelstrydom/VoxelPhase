@@ -4,7 +4,7 @@
 //! advancement. Every convex shape implements it to get immediate access to all
 //! general-purpose collision algorithms.
 
-use nalgebra::{Point3, UnitQuaternion, Vector3};
+use nalgebra::{Point3, Vector3};
 
 use super::obb::Obb;
 use super::sphere_triangle::Triangle;
@@ -22,6 +22,7 @@ pub trait ConvexSupport {
 }
 
 /// A sphere in world space for support function evaluation.
+#[allow(unused)]
 pub struct SupportSphere {
     pub center: Point3<f32>,
     pub radius: f32,
@@ -98,23 +99,10 @@ impl ConvexSupport for Triangle {
     }
 }
 
-/// Helper: build a `SupportSphere` from position and radius.
-pub fn support_sphere(center: Point3<f32>, radius: f32) -> SupportSphere {
-    SupportSphere { center, radius }
-}
-
-/// Helper: build an `Obb` from position, rotation, and half-extents for support queries.
-pub fn support_obb(
-    center: Point3<f32>,
-    rotation: UnitQuaternion<f32>,
-    half_extents: Vector3<f32>,
-) -> Obb {
-    Obb::new(center, rotation, half_extents)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use nalgebra::UnitQuaternion;
     use std::f32::consts::FRAC_1_SQRT_2;
 
     fn approx_eq_point(a: Point3<f32>, b: Point3<f32>, tol: f32) -> bool {

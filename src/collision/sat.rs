@@ -7,6 +7,7 @@ use nalgebra::Vector3;
 
 /// Result of testing a single SAT axis.
 #[derive(Debug, Clone, Copy)]
+#[allow(unused)]
 pub struct SatAxisResult {
     /// The normalized separating/penetration axis (A→B direction).
     pub axis: Vector3<f32>,
