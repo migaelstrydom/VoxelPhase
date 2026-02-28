@@ -244,15 +244,15 @@ impl SparseVoxelOctree {
         let dist_to_center = (node_center - center).magnitude();
 
         if dist_to_center + node_radius <= radius {
-            // Node is completely inside sphere, modify as leaf
             if let SvoNode::Leaf(voxel) = node {
+                // Uniform leaf fully inside sphere — modify directly.
                 *voxel = modifier(node_center, *voxel);
-            } else {
-                // Convert to leaf with modified value
-                let voxel = modifier(node_center, Voxel::air());
-                *node = SvoNode::Leaf(voxel);
+                return;
             }
-            return;
+            // Interior node fully inside sphere — fall through to recursive
+            // case so the modifier sees each leaf's actual voxel data. This
+            // ensures callers that track changes (e.g. any_destroyed) observe
+            // every solid→air transition.
         }
 
         // Need to subdivide and recurse

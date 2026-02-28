@@ -18,9 +18,9 @@ use crate::collision::continuous::{swept_sphere_triangle, SweptContact};
 use crate::collision::{MeshPatch, PatchTriangle, AABB};
 use crate::core::error::EngineResult;
 use crate::physics::StaticGeometry;
-use crate::sensing::{ProbeHit, ProbeTarget};
 use crate::rendering::vertex::Vertex;
 use crate::resources::textures::{TextureHandle, TextureManager};
+use crate::sensing::{ProbeHit, ProbeTarget};
 
 /// Unified terrain manager handling storage, collision, and rendering.
 ///
@@ -456,7 +456,10 @@ impl ProbeTarget for TerrainManager {
         let mut earliest: Option<SweptContact> = None;
         for pt in &patch.triangles {
             if let Some(contact) = swept_sphere_triangle(origin, end, radius, &pt.triangle) {
-                if earliest.as_ref().map_or(true, |e: &SweptContact| contact.t < e.t) {
+                if earliest
+                    .as_ref()
+                    .map_or(true, |e: &SweptContact| contact.t < e.t)
+                {
                     earliest = Some(contact);
                 }
             }

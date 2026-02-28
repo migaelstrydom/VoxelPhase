@@ -40,12 +40,12 @@ impl TerrainGenerator {
                 let dx = x - center.x;
                 let dz = z - center.z;
 
-                // Base height at center of bounds
-                let base = bounds.min.y + bounds.size().y * 0.3;
+                // Average surface at y = 0
+                let base = 0.0;
 
-                // Add some gentle hills using sin
-                let hill1 = ((x * 0.1).sin() * (z * 0.1).cos() * 3.0).max(0.0);
-                let hill2 = ((x * 0.05 + 1.0).cos() * (z * 0.07).sin() * 5.0).max(0.0);
+                // Add some gentle hills and valleys using sin
+                let hill1 = (x * 0.1).sin() * (z * 0.1).cos() * 3.0;
+                let hill2 = (x * 0.05 + 1.0).cos() * (z * 0.07).sin() * 5.0;
 
                 // Crater in the middle
                 let dist_from_center = (dx * dx + dz * dz).sqrt();
@@ -57,10 +57,15 @@ impl TerrainGenerator {
 
                 let height = base + hill1 + hill2 + crater;
 
+                // Snap surface to the topmost voxel's y so it gets hp=1.
+                // The loop places voxels at y < height, so the topmost is:
+                let top_voxel_y = bounds.min.y
+                    + (((height - bounds.min.y) / step).ceil() - 1.0).max(0.0) * step;
+
                 // Fill column
                 let mut y = bounds.min.y;
                 while y < height {
-                    let depth = height - y;
+                    let depth = top_voxel_y - y;
                     let material = if depth < 1.0 {
                         VoxelMaterial::Grass
                     } else if depth < 4.0 {
@@ -68,7 +73,7 @@ impl TerrainGenerator {
                     } else {
                         VoxelMaterial::Rock
                     };
-                    let hp = durability.health_at(y, height, floor_y);
+                    let hp = durability.health_at(y, top_voxel_y, floor_y);
                     svo.set(Point3::new(x, y, z), Voxel::solid(material, hp));
                     y += step;
                 }

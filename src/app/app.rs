@@ -63,7 +63,7 @@ impl<'a, 'b> App<'a, 'b> {
             .with_default_resources()
             .build()?;
 
-        let player_entity = spawn_player(&mut world, nalgebra::Point3::new(0.0, -10.0, 0.0));
+        let player_entity = spawn_player(&mut world, nalgebra::Point3::new(0.0, 2.0, 0.0));
         spawn_camera(&mut world, player_entity, window_width, window_height);
 
         for _ in 0..num_beach_balls {
@@ -84,7 +84,7 @@ impl<'a, 'b> App<'a, 'b> {
 
         spawn_house(
             &mut world,
-            nalgebra::Point3::new(0.0, -10.0, 5.0),
+            nalgebra::Point3::new(0.0, 10.0, 5.0),
             box_half_extents,
             &box_materials,
         );
