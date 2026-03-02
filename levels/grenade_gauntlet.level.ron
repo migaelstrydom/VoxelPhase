@@ -1,0 +1,144 @@
+// Grenade Gauntlet — an obstacle course that tests destruction, physics,
+// and platforming. The player must cross gaps, topple walls, and reach
+// a floating island to win.
+//
+// Layout (top-down, X is forward):
+//
+//   [Start]---[Bridge]---[Mid Platform]---[Ramp]---[High Ground]---[Goal Tower]
+//        (-8,8)     (8,18)       (18,28)     (28,36)     (36,50)
+//                                                   \
+//                                                    [Floating Island shortcut]
+//                                                         (30, y=12, z=8)
+Level(
+    name: "Grenade Gauntlet",
+    world_size: 64.0,
+    voxel_size: 1.0,
+
+    terrain: Terrain(
+        base_height: -8.0,
+        material_layers: [
+            (depth: 1.0,  material: Grass),
+            (depth: 3.0,  material: Dirt),
+            (depth: 999.0, material: Rock),
+        ],
+
+        features: [
+            // === Starting platform ===
+            // Generous flat area to get bearings
+            Plateau(min: (-8.0, -8.0), max: (8.0, 8.0), height: 0.0),
+
+            // === Narrow bridge ===
+            // Destructible! Grenade it and you lose your way back
+            Wall(from: (9.0, 0.0), to: (18.0, 0.0), height: 10.0, thickness: 2.0),
+
+            // === Mid platform ===
+            // Wider area with a crate puzzle and a ramp entrance
+            Plateau(min: (18.0, -6.0), max: (28.0, 6.0), height: 0.0),
+
+            // === Ramp up to high ground ===
+            Ramp(from: (28.0, 0.0), to: (36.0, 0.0), start_height: 0.0, end_height: 8.0, width: 5.0),
+
+            // === High ground ===
+            // The final stretch — destructible floor over a long drop
+            Plateau(min: (36.0, -6.0), max: (50.0, 6.0), height: 8.0),
+
+            // === Scenic hills in the background ===
+            Hill(center: (-20.0, 15.0), radius: 10.0, height: 4.0),
+            Hill(center: (-15.0, -18.0), radius: 8.0, height: 3.0),
+
+            // Gentle roughness everywhere for visual interest
+            TerrainRoughness(frequency: 0.15, amplitude: 0.3, octaves: 2, seed: 7),
+        ],
+
+        volumes: [
+            // === Floating island shortcut ===
+            // Visible from the mid platform — tempting but risky.
+            // The player can grenade-jump up to it or stack crates.
+            Island(center: (30.0, 14.0, 8.0), half_extents: (4.0, 1.5, 4.0), edge_noise: 0.4),
+
+            // === Stone pillar ===
+            // A landmark near the start, and potential grenade target
+            Pillar(center: (-5.0, -5.0), height: 6.0, radius: 1.5),
+        ],
+    ),
+
+    player_spawn: (0.0, 2.0, 0.0),
+
+    objects: [
+        // =====================================================================
+        // STARTING AREA — a few objects to learn the controls
+        // =====================================================================
+
+        // Beach balls to kick around
+        BeachBall(pos: (3.0, 1.5, 3.0)),
+        BeachBall(pos: (-2.0, 1.5, -2.0)),
+
+        // A crate to practice pushing
+        Crate(pos: (5.0, 1.0, 0.0), size: 0.5),
+
+        // =====================================================================
+        // NARROW BRIDGE — hazard zone
+        // =====================================================================
+
+        // Beach balls sitting on the bridge — nudge them off or get knocked!
+        BeachBall(pos: (11.0, 1.5, 0.0)),
+        BeachBall(pos: (14.0, 1.5, 0.0)),
+
+        // =====================================================================
+        // MID PLATFORM — crate puzzle
+        // =====================================================================
+
+        // Crate wall blocking the ramp entrance — grenade it or push it aside
+        BoxWall(
+            base: (27.5, 0.5, 0.0),
+            box_half_extents: (0.5, 0.5, 0.5),
+            columns: 4,
+            rows: 4,
+            density: 30.0,
+            stagger: true,
+        ),
+
+        // Heavy crate — too heavy to push easily, but useful as a step
+        HeavyCrate(pos: (22.0, 1.0, 0.0), size: 1.0),
+
+        // Lighter crates for stacking — can the player reach the island?
+        HeavyCrate(pos: (23.0, 1.0, 3.0), size: 0.5),
+        HeavyCrate(pos: (24.0, 1.0, 3.0), size: 0.5),
+        HeavyCrate(pos: (23.5, 2.0, 3.0), size: 0.5),
+
+        // Plank — potential bridge or seesaw
+        Plank(pos: (25.0, 1.0, 4.0), length: 4.0, width: 1.0),
+
+        // =====================================================================
+        // FLOATING ISLAND — shortcut route
+        // =====================================================================
+
+        // A plank resting on the island edge — precarious bridge to high ground
+        Plank(pos: (38.0, 20.5, 6.0), length: 30.0, width: 3.0),
+
+        // Reward: beach ball trophy on the island
+        BeachBall(pos: (30.0, 16.5, 8.0)),
+
+        // =====================================================================
+        // HIGH GROUND — the final stretch
+        // =====================================================================
+
+        // Tower of crates guarding the goal — topple it with grenades!
+        Tower(
+            base: (46.0, 8.5, 0.0),
+            box_half_extents: (0.6, 0.4, 0.6),
+            count: 8,
+            density: 25.0,
+        ),
+
+        // A few loose crates scattered as cover / stepping stones
+        Crate(pos: (40.0, 9.0, 3.0), size: 0.5),
+        Crate(pos: (42.0, 9.0, -2.0), size: 0.5),
+        HeavyCrate(pos: (44.0, 9.0, -4.0), size: 0.7),
+
+        // Beach balls rolling around the high ground — chaos factor
+        BeachBall(pos: (38.0, 9.5, 0.0)),
+        BeachBall(pos: (43.0, 9.5, 1.0)),
+    ],
+
+)

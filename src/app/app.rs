@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::sync::Arc;
 
 use winit::{
@@ -11,21 +12,20 @@ use specs::{Dispatcher, World, WorldExt};
 
 use crate::core::error::{EngineError, EngineResult};
 use crate::core::vulkan_context::VulkanContext;
+use crate::level::{create_level_materials, create_level_terrain, load_level, spawn_level_objects};
 use crate::physics::ForceField;
 use crate::projectile::{build_grenade_model, GrenadeMaterials, GrenadeModelResource};
-use crate::rendering::material::{Material, MaterialId, MaterialManagerBuilder};
+use crate::rendering::material::{Material, MaterialManagerBuilder};
 use crate::rendering::renderer::Renderer;
 use crate::rendering::Colour;
 use crate::resources::manager::ResourceManager;
 use crate::systems::PhysicsResource;
-use crate::terrain::{create_test_terrain, DurabilityConfig, TerrainManager};
+use crate::terrain::TerrainManager;
 use crate::time::Time;
 
 use super::dispatcher_builder::build_dispatcher;
 use super::event_handler::{clear_frame_state, set_mouse_captured, EventHandler, EventResult};
-use super::spawners::{
-    create_box_materials, spawn_beach_ball, spawn_box, spawn_camera, spawn_house, spawn_player,
-};
+use super::spawners::{create_box_materials, spawn_camera};
 use super::world_builder::WorldBuilder;
 
 pub struct App<'a, 'b> {
@@ -36,20 +36,60 @@ pub struct App<'a, 'b> {
 }
 
 impl<'a, 'b> App<'a, 'b> {
-    pub fn new(window_width: u32, window_height: u32, app_title: &str) -> EngineResult<Self> {
+    pub fn new(
+        window_width: u32,
+        window_height: u32,
+        app_title: &str,
+        level_path: &Path,
+    ) -> EngineResult<Self> {
         let (event_loop, window) = Self::create_window(window_width, window_height, app_title)?;
         let (_vulkan_context, renderer, resource_manager, texture_manager) =
             Self::create_rendering_context(&window, window_width, window_height)?;
-        let num_beach_balls = 5;
-        let num_boxes = 5;
-        let num_box_materials = 10;
-        let (material_manager, grenade_materials, box_materials) =
-            Self::create_materials(&texture_manager, num_box_materials + num_boxes)?;
+
+        // Load the level file
+        let level = load_level(level_path).map_err(|e| {
+            EngineError::InvalidState(format!("Failed to load level: {}", e))
+        })?;
+
+        // Create materials: grenade, house pool, and level-specific box materials
+        let mut material_builder = MaterialManagerBuilder::new();
+
+        let _eye_texture =
+            texture_manager
+                .load_texture("data/eye.bmp")
+                .map_err(|e| EngineError::Mesh {
+                    path: Some("eye.bmp".to_string()),
+                    reason: format!("Failed to load eye texture: {}", e),
+                })?;
+
+        let fallback_white = texture_manager
+            .create_solid_colour(Colour::WHITE)
+            .map_err(|e| EngineError::Mesh {
+                path: None,
+                reason: format!("Failed to create fallback texture: {}", e),
+            })?;
+
+        let grenade_materials = GrenadeMaterials {
+            body: material_builder.register(Material::coloured(Colour::new(0.2, 0.25, 0.2, 1.0))),
+        };
+
+        let house_materials =
+            create_box_materials(10, &texture_manager, &mut material_builder)?;
+
+        let level_materials = create_level_materials(
+            &level,
+            grenade_materials.body,
+            house_materials,
+            &texture_manager,
+            &mut material_builder,
+        )?;
+
+        let material_manager = material_builder.build(fallback_white);
 
         let grenade_model = Self::create_grenade_model(&grenade_materials);
-        let body_material = grenade_materials.body;
-        let box_half_extents = nalgebra::Vector3::new(0.5, 0.5, 0.5);
-        let terrain_manager = Self::create_terrain(&texture_manager)?;
+
+        // Generate terrain from level description
+        let terrain_manager = create_level_terrain(&level, &texture_manager)?;
 
         let mut world = WorldBuilder::new()
             .with_renderer(renderer)
@@ -63,31 +103,9 @@ impl<'a, 'b> App<'a, 'b> {
             .with_default_resources()
             .build()?;
 
-        let player_entity = spawn_player(&mut world, nalgebra::Point3::new(0.0, 2.0, 0.0));
+        // Spawn level objects (player + all objects from the level file)
+        let player_entity = spawn_level_objects(&mut world, &level, &level_materials);
         spawn_camera(&mut world, player_entity, window_width, window_height);
-
-        for _ in 0..num_beach_balls {
-            let pos = nalgebra::Point3::new(
-                rand::random::<f32>() * 10.0 - 5.0,
-                rand::random::<f32>() * 10.0 - 5.0,
-                rand::random::<f32>() * 10.0 - 5.0,
-            );
-            spawn_beach_ball(&mut world, pos, body_material);
-        }
-
-        let box_spacing = box_half_extents.x * 3.0;
-        let start_y = -box_spacing * (num_boxes as f32 - 1.0) * 0.5;
-        for (i, &material) in box_materials[num_box_materials..].iter().enumerate() {
-            let pos = nalgebra::Point3::new(0.0, start_y + i as f32 * box_spacing, 2.0);
-            spawn_box(&mut world, pos, box_half_extents, material);
-        }
-
-        spawn_house(
-            &mut world,
-            nalgebra::Point3::new(0.0, 10.0, 5.0),
-            box_half_extents,
-            &box_materials,
-        );
 
         // Register terrain boundary force field
         {
@@ -147,43 +165,6 @@ impl<'a, 'b> App<'a, 'b> {
         Ok((vulkan_context, renderer, resource_manager, texture_manager))
     }
 
-    fn create_materials(
-        texture_manager: &crate::resources::textures::TextureManager,
-        num_boxes: usize,
-    ) -> EngineResult<(
-        crate::rendering::material::MaterialManager,
-        GrenadeMaterials,
-        Vec<MaterialId>,
-    )> {
-        let mut material_builder = MaterialManagerBuilder::new();
-
-        let _eye_texture =
-            texture_manager
-                .load_texture("data/eye.bmp")
-                .map_err(|e| EngineError::Mesh {
-                    path: Some("eye.bmp".to_string()),
-                    reason: format!("Failed to load eye texture: {}", e),
-                })?;
-
-        let fallback_white = texture_manager
-            .create_solid_colour(Colour::WHITE)
-            .map_err(|e| EngineError::Mesh {
-                path: None,
-                reason: format!("Failed to create fallback texture: {}", e),
-            })?;
-
-        let grenade_materials = GrenadeMaterials {
-            body: material_builder.register(Material::coloured(Colour::new(0.2, 0.25, 0.2, 1.0))),
-        };
-
-        let box_materials =
-            create_box_materials(num_boxes, texture_manager, &mut material_builder)?;
-
-        let material_manager = material_builder.build(fallback_white);
-
-        Ok((material_manager, grenade_materials, box_materials))
-    }
-
     fn create_grenade_model(grenade_materials: &GrenadeMaterials) -> Arc<crate::model::Model> {
         use crate::projectile::GrenadeConfig;
 
@@ -195,21 +176,6 @@ impl<'a, 'b> App<'a, 'b> {
         ));
         log::info!("Grenade model built");
         grenade_model
-    }
-
-    fn create_terrain(
-        texture_manager: &crate::resources::textures::TextureManager,
-    ) -> EngineResult<TerrainManager> {
-        log::info!("Generating procedural terrain...");
-        let durability = DurabilityConfig::default();
-        let terrain_svo = create_test_terrain(64.0, 6, &durability);
-        let terrain_manager = TerrainManager::from_svo(terrain_svo, texture_manager)?;
-        log::info!(
-            "Terrain generated: {} triangles in {} mesh leaves",
-            terrain_manager.triangle_count(),
-            terrain_manager.leaf_count()
-        );
-        Ok(terrain_manager)
     }
 
     pub fn run(&mut self) -> EngineResult<()> {

@@ -3,6 +3,7 @@
 //! This module handles descriptor pool creation, descriptor set allocation,
 //! and updates for UBOs and texture samplers. All descriptor logic is consolidated here.
 
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use ash::vk;
@@ -25,6 +26,8 @@ struct DescriptorPool {
 /// Internal mutable state for texture descriptor management
 struct TextureDescriptorState {
     pools: Vec<DescriptorPool>,
+    /// Maps each allocated descriptor set back to its pool index.
+    set_to_pool: HashMap<vk::DescriptorSet, usize>,
     texture_layout: vk::DescriptorSetLayout,
 }
 
@@ -89,6 +92,7 @@ impl DescriptorManager {
                     capacity: initial_capacity,
                     allocated: 0,
                 }],
+                set_to_pool: HashMap::new(),
                 texture_layout,
             }),
             device,
@@ -193,10 +197,12 @@ impl DescriptorManager {
                 .descriptor_context("allocate texture descriptor set")?
         };
 
-        // Update allocation count
-        let pool = &mut state.pools[pool_index];
-        pool.allocated += 1;
+        // Update allocation count and record ownership
+        let set = sets[0];
+        state.set_to_pool.insert(set, pool_index);
+        state.pools[pool_index].allocated += 1;
 
+        let pool = &state.pools[pool_index];
         log::debug!(
             "Allocated texture descriptor set from pool {} ({}/{})",
             pool_index,
@@ -204,21 +210,21 @@ impl DescriptorManager {
             pool.capacity
         );
 
-        Ok(sets[0])
+        Ok(set)
     }
 
-    /// Free a texture descriptor set.
-    ///
-    /// Note: Some Vulkan drivers don't support individual descriptor set freeing,
-    /// but we attempt it anyway for those that do.
+    /// Free a texture descriptor set back to the pool that allocated it.
     pub fn free_texture_set(&self, set: vk::DescriptorSet) -> EngineResult<()> {
-        let state = self.texture_state.lock().unwrap();
+        let mut state = self.texture_state.lock().unwrap();
 
-        // Try to free from each pool (we don't track which pool owns which set)
-        for pool in &state.pools {
+        if let Some(pool_index) = state.set_to_pool.remove(&set) {
+            let pool = &mut state.pools[pool_index];
             unsafe {
                 let _ = self.device.device.free_descriptor_sets(pool.pool, &[set]);
             }
+            pool.allocated = pool.allocated.saturating_sub(1);
+        } else {
+            log::warn!("Attempted to free untracked descriptor set {:?}", set);
         }
 
         Ok(())

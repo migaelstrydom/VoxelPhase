@@ -12,7 +12,7 @@ pub mod generation;
 mod manager;
 mod marching_cubes;
 mod mesh_octree;
-mod svo;
+pub(crate) mod svo;
 mod voxel;
 
 pub use manager::TerrainManager;
@@ -20,4 +20,4 @@ pub use manager::TerrainManager;
 // Voxel types for terrain modification
 pub use voxel::DurabilityConfig;
 
-pub use generation::create_test_terrain;
+pub use generation::generate_terrain;

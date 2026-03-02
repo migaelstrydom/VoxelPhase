@@ -8,6 +8,7 @@ use crate::components::{
 };
 use crate::core::error::EngineResult;
 use crate::geometry::{generate_cube_indices, generate_cube_vertices};
+use crate::level::BoxStyle;
 use crate::model::{MeshPrimitive, Model, ModelPart};
 use crate::physics::{ColliderDesc, RigidBodyDesc};
 use crate::rendering::colour::Colour;
@@ -17,6 +18,23 @@ use crate::systems::PhysicsResource;
 use crate::utils::noise::fbm_2d_periodic;
 
 const TEXTURE_SIZE: u32 = 128;
+
+/// Physics parameters for a spawned box.
+pub struct BoxPhysics {
+    pub density: f32,
+    pub restitution: f32,
+    pub friction: f32,
+}
+
+impl Default for BoxPhysics {
+    fn default() -> Self {
+        Self {
+            density: 50.0,
+            restitution: 0.2,
+            friction: 0.6,
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Colour helpers
@@ -67,17 +85,28 @@ fn rand_u32() -> u32 {
 // Box styles
 // ---------------------------------------------------------------------------
 
-/// Randomly picks a style and generates a unique procedural texture.
-fn generate_box_pixels() -> Vec<u8> {
-    let style = rand::random::<u32>() % 7;
+/// Generate texture pixels for a specific box style.
+fn generate_pixels_for_style(style: BoxStyle) -> Vec<u8> {
     match style {
-        0 => generate_wooden_crate(),
-        1 => generate_cardboard_box(),
-        2 => generate_metal_container(),
-        3 => generate_gift_box(),
-        4 => generate_stone_block(),
-        5 => generate_brick_block(),
-        _ => generate_warning_box(),
+        BoxStyle::WoodenCrate => generate_wooden_crate(),
+        BoxStyle::Cardboard => generate_cardboard_box(),
+        BoxStyle::Metal => generate_metal_container(),
+        BoxStyle::Gift => generate_gift_box(),
+        BoxStyle::Stone => generate_stone_block(),
+        BoxStyle::Brick => generate_brick_block(),
+        BoxStyle::Warning => generate_warning_box(),
+        BoxStyle::Random => {
+            let pick = rand::random::<u32>() % 7;
+            match pick {
+                0 => generate_wooden_crate(),
+                1 => generate_cardboard_box(),
+                2 => generate_metal_container(),
+                3 => generate_gift_box(),
+                4 => generate_stone_block(),
+                5 => generate_brick_block(),
+                _ => generate_warning_box(),
+            }
+        }
     }
 }
 
@@ -493,7 +522,19 @@ fn hash_pair(a: i32, b: i32) -> u32 {
 // Public API
 // ---------------------------------------------------------------------------
 
-/// Creates unique box materials with procedurally generated textures.
+/// Creates a single box material for the given style.
+pub fn create_box_material_for_style(
+    style: BoxStyle,
+    texture_manager: &TextureManager,
+    material_builder: &mut MaterialManagerBuilder,
+) -> EngineResult<MaterialId> {
+    let pixels = generate_pixels_for_style(style);
+    let texture = texture_manager.create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &pixels, true)?;
+    let material = Material::textured(texture);
+    Ok(material_builder.register(material))
+}
+
+/// Creates unique box materials with randomly chosen styles.
 ///
 /// Call during initialisation while `MaterialManagerBuilder` is still mutable.
 /// Each material gets a randomly chosen style and unique parameters.
@@ -504,11 +545,11 @@ pub fn create_box_materials(
 ) -> EngineResult<Vec<MaterialId>> {
     let mut ids = Vec::with_capacity(count);
     for _ in 0..count {
-        let pixels = generate_box_pixels();
-        let texture =
-            texture_manager.create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &pixels, true)?;
-        let material = Material::textured(texture);
-        ids.push(material_builder.register(material));
+        ids.push(create_box_material_for_style(
+            BoxStyle::Random,
+            texture_manager,
+            material_builder,
+        )?);
     }
     Ok(ids)
 }
@@ -530,6 +571,7 @@ pub fn spawn_box(
     initial_pos: nalgebra::Point3<f32>,
     half_extents: Vector3<f32>,
     material: MaterialId,
+    phys: &BoxPhysics,
 ) -> Entity {
     let model = build_model(half_extents, material);
 
@@ -545,9 +587,9 @@ pub fn spawn_box(
         let body_handle = physics.0.create_body(body_desc);
 
         let collider_desc = ColliderDesc::box_shape(half_extents)
-            .density(50.5)
-            .restitution(0.2)
-            .friction(0.6);
+            .density(phys.density)
+            .restitution(phys.restitution)
+            .friction(phys.friction);
 
         physics.0.attach_collider(body_handle, collider_desc);
 
@@ -606,6 +648,7 @@ pub fn spawn_house(
 
     let mut entities = Vec::new();
     let mat = |i: usize| materials[i % materials.len()];
+    let phys = BoxPhysics::default();
 
     let y0 = base_pos.y;
     let foundation_cy = y0 + fh;
@@ -621,6 +664,7 @@ pub fn spawn_house(
         Point3::new(base_pos.x, foundation_cy, base_pos.z),
         Vector3::new(wx + wt, fh, wz + wt),
         mat(0),
+        &phys,
     ));
 
     // Back wall (−Z) — solid, single tall box spanning both layers
@@ -629,6 +673,7 @@ pub fn spawn_house(
         Point3::new(base_pos.x, y_wall_base + 2.0 * wh, base_pos.z - wz),
         Vector3::new(wx + wt, 2.0 * wh, wt),
         mat(1),
+        &phys,
     ));
 
     // Front wall (+Z) — door opening in lower layer, solid upper layer
@@ -645,18 +690,21 @@ pub fn spawn_house(
         Point3::new(door_left_cx, lower_cy, base_pos.z + wz),
         Vector3::new(door_side_half, wh, wt),
         mat(2),
+        &phys,
     ));
     entities.push(spawn_box(
         world,
         Point3::new(door_right_cx, lower_cy, base_pos.z + wz),
         Vector3::new(door_side_half, wh, wt),
         mat(2),
+        &phys,
     ));
     entities.push(spawn_box(
         world,
         Point3::new(base_pos.x, upper_cy, base_pos.z + wz),
         Vector3::new(wx + wt, wh, wt),
         mat(3),
+        &phys,
     ));
 
     // Side walls (±X) — window opening in lower layer with sill and lintel
@@ -679,12 +727,14 @@ pub fn spawn_house(
             Point3::new(cx, lower_cy, win_col_neg_cz),
             Vector3::new(wt, wh, win_col_half),
             mat(mat_base),
+            &phys,
         ));
         entities.push(spawn_box(
             world,
             Point3::new(cx, lower_cy, win_col_pos_cz),
             Vector3::new(wt, wh, win_col_half),
             mat(mat_base),
+            &phys,
         ));
 
         // Window sill (bottom of opening)
@@ -693,6 +743,7 @@ pub fn spawn_house(
             Point3::new(cx, sill_cy, base_pos.z),
             Vector3::new(wt, sill_h, win_half_z),
             mat(mat_base + 1),
+            &phys,
         ));
 
         // Window lintel (top of opening)
@@ -701,6 +752,7 @@ pub fn spawn_house(
             Point3::new(cx, lintel_cy, base_pos.z),
             Vector3::new(wt, sill_h, win_half_z),
             mat(mat_base + 1),
+            &phys,
         ));
 
         // Upper layer: solid, spans full interior Z
@@ -709,6 +761,7 @@ pub fn spawn_house(
             Point3::new(cx, upper_cy, base_pos.z),
             Vector3::new(wt, wh, wz - wt),
             mat(mat_base + 2),
+            &phys,
         ));
     }
 
@@ -718,6 +771,7 @@ pub fn spawn_house(
         Point3::new(base_pos.x, roof_cy, base_pos.z),
         Vector3::new(wx + ro, rt, wz + ro),
         mat(0),
+        &phys,
     ));
 
     entities

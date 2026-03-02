@@ -19,6 +19,8 @@ fontdue = "0.9"      # Font rasterization for debug text overlay
 rand = "0.8"         # Random number generation for particles
 generational-arena = "0.2"  # Handle-based storage for physics objects
 rustc-hash = "2.1.1"
+ron = "0.8"                  # Rusty Object Notation for level files
+serde = { version = "1", features = ["derive"] }
 
 
 [dev-dependencies]

@@ -8,6 +8,7 @@ mod debug;
 mod explosion;
 mod geometry;
 mod input;
+mod level;
 mod model;
 mod particles;
 mod physics;
@@ -23,8 +24,12 @@ mod time;
 mod utils;
 mod world;
 
+use std::path::Path;
+
 use crate::app::App;
 use crate::core::error::EngineResult;
+
+const DEFAULT_LEVEL: &str = "levels/test_arena.level.ron";
 
 fn setup_logging() {
     env_logger::Builder::new()
@@ -35,9 +40,11 @@ fn setup_logging() {
 
 fn main() -> EngineResult<()> {
     setup_logging();
-    log::info!("Starting RustDude");
 
-    match App::new(1200, 800, "RustDude Engine") {
+    let level_path = std::env::args().nth(1).unwrap_or_else(|| DEFAULT_LEVEL.to_string());
+    log::info!("Starting RustDude — loading {}", level_path);
+
+    match App::new(1200, 800, "RustDude Engine", Path::new(&level_path)) {
         Ok(mut app) => {
             if let Err(e) = app.run() {
                 eprintln!("Application error: {}", e);
