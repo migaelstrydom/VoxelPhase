@@ -53,6 +53,73 @@ impl StaticGeometry for FlatQuadGeometry {
     }
 }
 
+/// Flat grid at y=0 made of unit-sized squares, each split into two triangles.
+///
+/// Mimics in-game terrain where a collider straddles many triangle edges and
+/// diagonal seams. Each cell is `cell_size × cell_size` with a diagonal from
+/// bottom-left to top-right, matching typical MC-style terrain tessellation.
+#[derive(Debug, Clone)]
+pub(crate) struct FlatGridGeometry {
+    bounds: AABB,
+    patch: MeshPatch,
+}
+
+impl FlatGridGeometry {
+    pub fn new(half_size: f32, cell_size: f32) -> Self {
+        let y = 0.0f32;
+        let cells = ((half_size * 2.0) / cell_size).ceil() as i32;
+        let origin = -(cells as f32 * cell_size) / 2.0;
+        let mut triangles = Vec::new();
+
+        for iz in 0..cells {
+            for ix in 0..cells {
+                let x0 = origin + ix as f32 * cell_size;
+                let z0 = origin + iz as f32 * cell_size;
+                let x1 = x0 + cell_size;
+                let z1 = z0 + cell_size;
+
+                let bl = Point3::new(x0, y, z0);
+                let br = Point3::new(x1, y, z0);
+                let tr = Point3::new(x1, y, z1);
+                let tl = Point3::new(x0, y, z1);
+
+                let idx = triangles.len() as u32;
+                let tri_a = PatchTriangle {
+                    triangle: Triangle::new(bl, tr, br),
+                    neighbors: [Some(idx + 1), None, None],
+                };
+                let tri_b = PatchTriangle {
+                    triangle: Triangle::new(bl, tl, tr),
+                    neighbors: [None, None, Some(idx)],
+                };
+                triangles.push(tri_a);
+                triangles.push(tri_b);
+            }
+        }
+
+        let extent = (cells as f32 * cell_size) / 2.0;
+        Self {
+            bounds: AABB::new(
+                Point3::new(-extent, -0.01, -extent),
+                Point3::new(extent, 0.01, extent),
+            ),
+            patch: MeshPatch { triangles },
+        }
+    }
+}
+
+impl StaticGeometry for FlatGridGeometry {
+    fn query_region(&self, aabb: &AABB) -> MeshPatch {
+        if self.bounds.intersects(aabb) {
+            self.patch.clone()
+        } else {
+            MeshPatch {
+                triangles: Vec::new(),
+            }
+        }
+    }
+}
+
 /// Ramp geometry: flat ground (z < 0) transitioning to a 30° upward slope (z >= 0).
 ///
 /// The ramp rises in the +Z direction. The flat section is at y=0.

@@ -822,6 +822,98 @@ impl PhysicsBenchScenario for HighSpeedSphereCcdScenario {
 // Solver stability validation scenarios
 // ═══════════════════════════════════════════════════════════════════════════
 
+/// Heavy box resting on a plank on flat terrain.
+///
+/// Reproduces stacking jitter where the bottom body (plank) develops vertical
+/// oscillation from accumulated solver forces. The plank sits at an offset
+/// from the terrain mesh center so it straddles the internal diagonal seam,
+/// matching typical in-game placement. The box sits on top, creating
+/// asymmetric load that stresses the solver.
+///
+/// The plank is the tracked body — its Y position and velocity should be
+/// rock-steady once the system settles.
+#[derive(Debug, Clone)]
+pub(crate) struct BoxOnPlankScenario {
+    /// Half-extents of the upper box.
+    pub box_half_extents: Vector3<f32>,
+    /// Density of the upper box.
+    pub box_density: f32,
+    /// Half-extents of the lower plank (height = 0.5 → full height 1.0).
+    pub plank_half_extents: Vector3<f32>,
+    /// Density of the plank.
+    pub plank_density: f32,
+    /// XZ offset from terrain center (places bodies over the mesh seam).
+    pub offset_xz: f32,
+    geometry: FlatGridGeometry,
+}
+
+impl BoxOnPlankScenario {
+    pub fn new() -> Self {
+        Self {
+            box_half_extents: Vector3::new(0.5, 0.5, 0.5),
+            box_density: 1000.0,
+            plank_half_extents: Vector3::new(1.5, 0.5, 1.5),
+            plank_density: 100.0,
+            offset_xz: 3.0,
+            geometry: FlatGridGeometry::new(10.0, 1.0),
+        }
+    }
+}
+
+impl PhysicsBenchScenario for BoxOnPlankScenario {
+    fn name(&self) -> &'static str {
+        "box_on_plank"
+    }
+
+    fn restitution(&self) -> f32 {
+        0.0
+    }
+
+    fn build_world(&self) -> PhysicsWorld {
+        let mut config = PhysicsConfig::default();
+        config.sleep.enabled = false;
+        config.deterministic_contact_ordering = true;
+        PhysicsWorld::new(config)
+    }
+
+    fn setup(&self, world: &mut PhysicsWorld) -> RigidBodyHandle {
+        let xz = self.offset_xz;
+        let plank_he = self.plank_half_extents;
+        let plank_y = plank_he.y + 0.01;
+        let plank = world.create_body(
+            RigidBodyDesc::dynamic().position(Point3::new(xz, plank_y, xz)),
+        );
+        let _ = world.attach_collider(
+            plank,
+            ColliderDesc::box_shape(plank_he)
+                .density(self.plank_density)
+                .restitution(0.0)
+                .friction(0.6),
+        );
+
+        let box_he = self.box_half_extents;
+        let box_y = plank_he.y * 2.0 + box_he.y + 0.02;
+        let box_x = xz + plank_he.x - box_he.x;
+        let box_z = xz + plank_he.z - box_he.z;
+        let upper_box = world.create_body(
+            RigidBodyDesc::dynamic().position(Point3::new(box_x, box_y, box_z)),
+        );
+        let _ = world.attach_collider(
+            upper_box,
+            ColliderDesc::box_shape(box_he)
+                .density(self.box_density)
+                .restitution(0.0)
+                .friction(0.6),
+        );
+
+        plank
+    }
+
+    fn geometry(&self) -> &dyn StaticGeometry {
+        &self.geometry
+    }
+}
+
 /// Sphere launched horizontally across a flat surface with moderate friction.
 ///
 /// Tests that friction warm-start does not inject angular torque spikes as

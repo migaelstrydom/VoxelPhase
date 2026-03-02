@@ -175,7 +175,12 @@ pub(crate) fn run_scenario<S: PhysicsBenchScenario>(
 
         // Contact generation once per frame, then N substeps (matches game loop).
         let impulses = scenario.external_impulses(sim_time);
-        world.update_contacts(cfg.fixed_dt, scenario.geometry(), &impulses, &mut debug_lines);
+        world.update_contacts(
+            cfg.fixed_dt,
+            scenario.geometry(),
+            &impulses,
+            &mut debug_lines,
+        );
         debug_lines.clear();
 
         let mut consumed = 0usize;

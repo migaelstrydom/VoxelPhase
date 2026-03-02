@@ -46,7 +46,7 @@ pub struct PostStabiliseConfig {
 impl Default for PostStabiliseConfig {
     fn default() -> Self {
         Self {
-            baumgarte_factor: 0.05,
+            baumgarte_factor: 0.3,
             baumgarte_slop: 0.005,
             split_impulse_enabled: true,
             correction_factor: 0.2,
@@ -300,8 +300,8 @@ fn apply_split_impulse_correction(
                     continue;
                 }
 
-                let r_a = contact.point - pos_a;
-                let r_b = contact.point - pos_b;
+                let r_a = contact.point - base_pos_a;
+                let r_b = contact.point - base_pos_b;
 
                 let (linear_a, angular_a) = header
                     .body_a
@@ -320,7 +320,6 @@ fn apply_split_impulse_correction(
 
                 let r_a_cross_n = r_a.cross(&contact.normal);
                 let r_b_cross_n = r_b.cross(&contact.normal);
-
                 let angular_effect_a = (inv_inertia_a * r_a_cross_n).cross(&r_a);
                 let angular_effect_b = (inv_inertia_b * r_b_cross_n).cross(&r_b);
 
@@ -361,15 +360,12 @@ fn apply_split_impulse_correction(
                             let body_a = bodies
                                 .get(handle_a.0)
                                 .map(|body| (body.position(), body.rotation()));
-                            let (pos, rot) = body_a.unwrap_or((
-                                contact.point,
-                                nalgebra::UnitQuaternion::identity(),
-                            ));
+                            let (pos, rot) = body_a
+                                .unwrap_or((contact.point, nalgebra::UnitQuaternion::identity()));
                             PseudoState::new(pos, rot)
                         });
                         entry.linear -= impulse * inv_mass_a;
-                        let angular_impulse = r_a.cross(&-impulse);
-                        entry.angular += inv_inertia_a * angular_impulse;
+                        entry.angular += inv_inertia_a * r_a.cross(&-impulse);
                     }
                 }
 
@@ -378,15 +374,12 @@ fn apply_split_impulse_correction(
                         let body_b = bodies
                             .get(header.body_b.0)
                             .map(|body| (body.position(), body.rotation()));
-                        let (pos, rot) = body_b.unwrap_or((
-                            contact.point,
-                            nalgebra::UnitQuaternion::identity(),
-                        ));
+                        let (pos, rot) =
+                            body_b.unwrap_or((contact.point, nalgebra::UnitQuaternion::identity()));
                         PseudoState::new(pos, rot)
                     });
                     entry.linear += impulse * inv_mass_b;
-                    let angular_impulse = r_b.cross(&impulse);
-                    entry.angular += inv_inertia_b * angular_impulse;
+                    entry.angular += inv_inertia_b * r_b.cross(&impulse);
                 }
 
                 flat_idx += 1;
@@ -394,8 +387,7 @@ fn apply_split_impulse_correction(
         }
 
         for state in pseudo_states.values_mut() {
-            if state.linear.magnitude_squared() < 1e-12
-                && state.angular.magnitude_squared() < 1e-12
+            if state.linear.magnitude_squared() < 1e-12 && state.angular.magnitude_squared() < 1e-12
             {
                 continue;
             }

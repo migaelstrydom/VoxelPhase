@@ -102,6 +102,35 @@ fn low_friction_ramp_sphere_slides_down() {
     assert_above_floor(&run, -1.0);
 }
 
+// ── Box-on-plank stacking jitter ────────────────────────────────────
+
+/// Heavy box placed in one corner of a plank on flat terrain.
+///
+/// The asymmetric load creates a torque that the solver must counterbalance
+/// through the plank's four ground contacts. With the current solver this
+/// causes the plank to rock — angular velocity never fully settles.
+#[test]
+fn box_on_plank_no_rotational_jitter() {
+    let scenario = BoxOnPlankScenario::new();
+    let cfg = BenchRunConfig {
+        duration: 6.0,
+        ..BenchRunConfig::default()
+    };
+    let run = run_scenario(&scenario, cfg);
+    write_exports(&run, "box_on_plank");
+
+    assert!(!run.samples.is_empty());
+
+    // Plank should settle onto the ground.
+    let expected_y = 0.5;
+    assert_final_y_near(&run, expected_y, 0.05);
+
+    // After 3 seconds of settling, both linear and angular velocity should
+    // be negligible. The angular threshold is the key one — rotational
+    // jitter from asymmetric loading is the failure mode.
+    assert_settled(&run, 3.0, 0.005, 0.005);
+}
+
 // ── Sphere pushing a box across flat ground ────────────────────────
 
 #[test]
