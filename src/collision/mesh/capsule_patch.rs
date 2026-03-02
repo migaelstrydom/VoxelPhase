@@ -1,8 +1,9 @@
 //! Capsule vs FilteredPatch manifold generation.
 //!
-//! For each face: find closest point on capsule segment to the face plane,
-//! then do a sphere-vs-face test from that point. Multi-contact output
-//! for concave terrain.
+//! For each face: test both capsule segment endpoints as sphere centers
+//! against the face. This produces two contacts when the capsule is
+//! parallel to the surface and one when it's upright. Multi-contact
+//! output for concave terrain.
 
 use nalgebra::{Point3, Vector3};
 use smallvec::SmallVec;
@@ -38,7 +39,7 @@ pub fn capsule_patch_manifold(
         if face.vertices.len() < 3 {
             continue;
         }
-        if let Some(contact) = capsule_vs_face(seg_a, seg_b, expanded_radius, face) {
+        for contact in capsule_vs_face(seg_a, seg_b, expanded_radius, face) {
             if contact.is_face {
                 face_hits.push(contact);
             } else if best_boundary
@@ -113,107 +114,81 @@ impl CapsuleContact {
     }
 }
 
-/// Find the closest point on the capsule segment to a face plane,
-/// then test sphere-vs-face from that point.
+/// Test both capsule segment endpoints as sphere centers against a face.
+///
+/// Returns up to two contacts: one per endpoint that is within range and
+/// projects inside the face polygon.
 fn capsule_vs_face(
     seg_a: Point3<f32>,
     seg_b: Point3<f32>,
     expanded_radius: f32,
     face: &ContactFace,
-) -> Option<CapsuleContact> {
+) -> SmallVec<[CapsuleContact; 2]> {
     let verts = &face.vertices;
     let normal = face.normal;
 
-    // Find the segment endpoint closest to the face plane (smallest signed distance).
     let signed_a = (seg_a - verts[0]).dot(&normal);
     let signed_b = (seg_b - verts[0]).dot(&normal);
 
-    // Pick the point on the segment that minimizes signed distance to the plane.
-    let (sphere_center, signed_dist) = if signed_a.abs() <= signed_b.abs() {
-        // But we should actually find the true closest point on the segment.
-        // The closest point is where signed_dist is minimized in abs value.
-        let seg_dir = seg_b - seg_a;
-        let denom = seg_dir.dot(&normal);
-        if denom.abs() > 1e-6 {
-            // t where signed_dist = 0
-            let t = -signed_a / denom;
-            let t = t.clamp(0.0, 1.0);
-            let p = seg_a + seg_dir * t;
-            let sd = (p - verts[0]).dot(&normal);
-            (p, sd)
-        } else {
-            // Segment parallel to plane — both signed distances ~equal, pick smaller.
-            if signed_a.abs() <= signed_b.abs() {
-                (seg_a, signed_a)
-            } else {
-                (seg_b, signed_b)
+    let mut results: SmallVec<[CapsuleContact; 2]> = SmallVec::new();
+
+    for &(center, signed_dist) in &[(seg_a, signed_a), (seg_b, signed_b)] {
+        if signed_dist > expanded_radius || signed_dist < -expanded_radius {
+            continue;
+        }
+
+        let projected = center - normal * signed_dist;
+
+        if point_in_convex_polygon(&projected, verts, &normal) {
+            results.push(CapsuleContact {
+                point: projected,
+                normal,
+                dist_sq: signed_dist * signed_dist,
+                is_face: true,
+                face_signed_dist: signed_dist,
+                feature_id: face.feature_id,
+            });
+            continue;
+        }
+
+        // Projection outside — find closest point on face boundary.
+        let mut best_dist_sq = f32::MAX;
+        let mut best_point = projected;
+
+        for i in 0..verts.len() {
+            let a = verts[i];
+            let b = verts[(i + 1) % verts.len()];
+            let cp = closest_point_on_segment(center, a, b);
+            let d_sq = (center - cp).magnitude_squared();
+            if d_sq < best_dist_sq {
+                best_dist_sq = d_sq;
+                best_point = cp;
             }
         }
-    } else {
-        let seg_dir = seg_b - seg_a;
-        let denom = seg_dir.dot(&normal);
-        if denom.abs() > 1e-6 {
-            let t = (-signed_a / denom).clamp(0.0, 1.0);
-            let p = seg_a + seg_dir * t;
-            let sd = (p - verts[0]).dot(&normal);
-            (p, sd)
-        } else {
-            (seg_b, signed_b)
+
+        if best_dist_sq > expanded_radius * expanded_radius {
+            continue;
         }
-    };
 
-    if signed_dist > expanded_radius || signed_dist < -expanded_radius {
-        return None;
-    }
+        let to_center = center - best_point;
+        let dist = best_dist_sq.sqrt();
+        let contact_normal = if dist > 1e-6 {
+            to_center / dist
+        } else {
+            normal
+        };
 
-    let projected = sphere_center - normal * signed_dist;
-
-    if point_in_convex_polygon(&projected, verts, &normal) {
-        return Some(CapsuleContact {
-            point: projected,
-            normal,
-            dist_sq: signed_dist * signed_dist,
-            is_face: true,
+        results.push(CapsuleContact {
+            point: best_point,
+            normal: contact_normal,
+            dist_sq: best_dist_sq,
+            is_face: false,
             face_signed_dist: signed_dist,
             feature_id: face.feature_id,
         });
     }
 
-    // Projection outside — find closest point on face boundary.
-    let mut best_dist_sq = f32::MAX;
-    let mut best_point = projected;
-
-    for i in 0..verts.len() {
-        let a = verts[i];
-        let b = verts[(i + 1) % verts.len()];
-        let cp = closest_point_on_segment(sphere_center, a, b);
-        let d_sq = (sphere_center - cp).magnitude_squared();
-        if d_sq < best_dist_sq {
-            best_dist_sq = d_sq;
-            best_point = cp;
-        }
-    }
-
-    if best_dist_sq > expanded_radius * expanded_radius {
-        return None;
-    }
-
-    let to_center = sphere_center - best_point;
-    let dist = best_dist_sq.sqrt();
-    let contact_normal = if dist > 1e-6 {
-        to_center / dist
-    } else {
-        normal
-    };
-
-    Some(CapsuleContact {
-        point: best_point,
-        normal: contact_normal,
-        dist_sq: best_dist_sq,
-        is_face: false,
-        face_signed_dist: signed_dist,
-        feature_id: face.feature_id,
-    })
+    results
 }
 
 /// Test capsule against a boundary/crease edge.
@@ -332,9 +307,30 @@ mod tests {
         let patch = flat_face(0.0);
         let m = capsule_patch_manifold(seg_a, seg_b, 0.5, &patch, 0.0);
 
-        assert_eq!(m.len(), 1);
-        let c = &m.points[0];
-        assert!(c.normal.y > 0.99);
-        assert!(c.raw_depth.abs() < 1e-4);
+        assert_eq!(m.len(), 2, "horizontal capsule should produce 2 face contacts");
+        for c in &m.points[..2] {
+            assert!(c.normal.y > 0.99);
+            assert!(c.raw_depth.abs() < 1e-4);
+        }
+        // Contacts should be at different X positions (one per endpoint).
+        let x0 = m.points[0].point.x;
+        let x1 = m.points[1].point.x;
+        assert!((x0 - x1).abs() > 0.5);
+    }
+
+    #[test]
+    fn parallel_capsule_above_face_with_margin() {
+        // Segment parallel to the face, slightly above contact but within margin.
+        let seg_a = Point3::new(-1.0, 0.55, 0.0);
+        let seg_b = Point3::new(1.0, 0.55, 0.0);
+        let patch = flat_face(0.0);
+        let m = capsule_patch_manifold(seg_a, seg_b, 0.5, &patch, 0.1);
+
+        assert_eq!(m.len(), 2, "parallel margin capsule should produce 2 contacts");
+        for c in &m.points[..2] {
+            assert!(c.normal.y > 0.99);
+            assert!(c.raw_depth < 0.0, "should be speculative (negative depth)");
+            assert_eq!(c.depth, 0.0, "clamped depth should be zero");
+        }
     }
 }

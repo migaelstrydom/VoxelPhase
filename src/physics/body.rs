@@ -311,6 +311,13 @@ impl RigidBody {
         self.linear_velocity += self.force * self.inv_mass * dt;
         self.angular_velocity += self.world_inv_inertia() * self.torque * dt;
 
+        // Gyroscopic correction: Euler's equation for rigid body rotation is
+        //   I·dω/dt = τ_ext − ω × (I·ω)
+        // Without the cross term, angular momentum drifts as the body rotates,
+        // causing spurious precession/nutation (especially for elongated shapes
+        // with very different principal moments).
+        self.apply_gyroscopic_correction(dt);
+
         // Apply damping
         self.linear_velocity *= (1.0 - self.linear_damping.min(1.0)).powf(dt);
         self.angular_velocity *= (1.0 - self.angular_damping.min(1.0)).powf(dt);
@@ -318,6 +325,36 @@ impl RigidBody {
         // Clear accumulators
         self.force = Vector3::zeros();
         self.torque = Vector3::zeros();
+    }
+
+    /// Apply the gyroscopic torque correction: −ω × (I·ω).
+    ///
+    /// Uses explicit Euler with a magnitude clamp to prevent instability at
+    /// large angular velocities or timesteps.
+    fn apply_gyroscopic_correction(&mut self, dt: f32) {
+        let omega_sq = self.angular_velocity.magnitude_squared();
+        if omega_sq < 1e-12 {
+            return;
+        }
+
+        let world_inertia = transform_inertia_tensor(&self.local_inertia, &self.rotation);
+        let angular_momentum = world_inertia * self.angular_velocity;
+        let gyro_torque = self.angular_velocity.cross(&angular_momentum);
+
+        if gyro_torque.magnitude_squared() < 1e-12 {
+            return;
+        }
+
+        let correction = self.world_inv_inertia() * gyro_torque * dt;
+
+        // Clamp the correction to a fraction of |ω| to keep explicit Euler stable.
+        let corr_mag = correction.magnitude();
+        let max_corr = omega_sq.sqrt() * 0.125;
+        if corr_mag > max_corr {
+            self.angular_velocity -= correction * (max_corr / corr_mag);
+        } else {
+            self.angular_velocity -= correction;
+        }
     }
 
     /// Integrate positions from velocities.
@@ -405,6 +442,50 @@ mod tests {
             (body.linear_velocity().x - 2.0).abs() < 0.1,
             "velocity should not re-accelerate without a drive: got {}",
             body.linear_velocity().x
+        );
+    }
+
+    #[test]
+    fn gyroscopic_no_effect_on_principal_axis() {
+        // Spinning about a principal axis should produce zero gyroscopic torque.
+        let mut body = RigidBody::new(RigidBodyDesc::dynamic());
+        let inertia = Matrix3::from_diagonal(&Vector3::new(10.0, 1.0, 10.0));
+        body.set_mass_properties(1.0, inertia);
+        body.set_angular_velocity(Vector3::new(0.0, 5.0, 0.0));
+
+        let omega_before = body.angular_velocity();
+        body.integrate_forces(1.0 / 240.0, Vector3::zeros());
+        let omega_after = body.angular_velocity();
+
+        // Only damping should change ω, no gyroscopic drift
+        let diff = omega_after - omega_before * (1.0 - 0.05_f32).powf(1.0 / 240.0);
+        assert!(
+            diff.magnitude() < 1e-4,
+            "principal-axis spin should be unaffected by gyroscopic term, diff={diff:?}"
+        );
+    }
+
+    #[test]
+    fn gyroscopic_correction_reduces_cross_axis_drift() {
+        // A body with I_y << I_xz and angular velocity in both X and Y
+        // should get a gyroscopic correction that prevents drift into Z.
+        let mut body = RigidBody::new(
+            RigidBodyDesc::dynamic().angular_damping(0.0),
+        );
+        let inertia = Matrix3::from_diagonal(&Vector3::new(10.0, 0.1, 10.0));
+        body.set_mass_properties(1.0, inertia);
+        body.set_angular_velocity(Vector3::new(1.0, 0.5, 0.0));
+
+        let dt = 1.0 / 240.0;
+        body.integrate_forces(dt, Vector3::zeros());
+
+        // The gyroscopic term ω × (I·ω) has a Z component:
+        //   (1, 0.5, 0) × (10, 0.05, 0) = (0, 0, 1·0.05 − 0.5·10) = (0, 0, −4.95)
+        // So the correction should push ω_z in the positive direction.
+        assert!(
+            body.angular_velocity().z > 0.0,
+            "gyroscopic correction should create Z component, got ω_z={}",
+            body.angular_velocity().z
         );
     }
 }
