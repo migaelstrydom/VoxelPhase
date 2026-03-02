@@ -4,8 +4,8 @@ use nalgebra::{Point3, Vector3};
 use specs::World;
 
 use crate::app::spawners::{
-    create_box_material_for_style, spawn_beach_ball, spawn_box, spawn_house, spawn_player,
-    BoxPhysics,
+    create_box_material_for_style, create_capsule_material, spawn_beach_ball, spawn_box,
+    spawn_capsule, spawn_house, spawn_player, BoxPhysics, CapsulePhysics,
 };
 use crate::collision::AABB;
 use crate::core::error::EngineResult;
@@ -24,6 +24,8 @@ pub struct LevelMaterials {
     pub box_materials: Vec<MaterialId>,
     /// House materials pool (passed directly to `spawn_house`).
     pub house_materials: Vec<MaterialId>,
+    /// Pre-created capsule materials, one per capsule in the level.
+    pub capsule_materials: Vec<MaterialId>,
 }
 
 /// Pre-scan the level and create all needed box materials during init.
@@ -38,15 +40,18 @@ pub fn create_level_materials(
     material_builder: &mut MaterialManagerBuilder,
 ) -> EngineResult<LevelMaterials> {
     let mut box_materials = Vec::new();
+    let mut capsule_materials = Vec::new();
 
     for obj in &level.objects {
         collect_box_materials(obj, texture_manager, material_builder, &mut box_materials)?;
+        collect_capsule_materials(obj, texture_manager, material_builder, &mut capsule_materials)?;
     }
 
     Ok(LevelMaterials {
         beach_ball_material,
         box_materials,
         house_materials,
+        capsule_materials,
     })
 }
 
@@ -116,7 +121,7 @@ fn collect_box_materials(
                             material_builder,
                         )?);
                     }
-                    StackItem::BeachBall => {}
+                    StackItem::BeachBall | StackItem::Capsule { .. } => {}
                 }
             }
         }
@@ -141,9 +146,30 @@ fn collect_box_materials(
             }
         }
 
-        LevelObject::House { .. } => {
-            // House uses house_materials pool, no extra materials needed.
+        LevelObject::House { .. } | LevelObject::Capsule { .. } => {}
+    }
+    Ok(())
+}
+
+/// Collect capsule materials for an object.
+fn collect_capsule_materials(
+    obj: &LevelObject,
+    texture_manager: &TextureManager,
+    material_builder: &mut MaterialManagerBuilder,
+    out: &mut Vec<MaterialId>,
+) -> EngineResult<()> {
+    match obj {
+        LevelObject::Capsule { .. } => {
+            out.push(create_capsule_material(texture_manager, material_builder)?);
         }
+        LevelObject::Stack { items, .. } => {
+            for item in items {
+                if let StackItem::Capsule { .. } = item {
+                    out.push(create_capsule_material(texture_manager, material_builder)?);
+                }
+            }
+        }
+        _ => {}
     }
     Ok(())
 }
@@ -189,9 +215,10 @@ pub fn spawn_level_objects(
     let player_entity = spawn_player(world, Point3::new(px, py, pz));
 
     let mut box_mat_idx = 0;
+    let mut capsule_mat_idx = 0;
 
     for obj in &level.objects {
-        spawn_object(world, obj, materials, &mut box_mat_idx);
+        spawn_object(world, obj, materials, &mut box_mat_idx, &mut capsule_mat_idx);
     }
 
     player_entity
@@ -203,6 +230,7 @@ fn spawn_object(
     obj: &LevelObject,
     materials: &LevelMaterials,
     box_mat_idx: &mut usize,
+    capsule_mat_idx: &mut usize,
 ) {
     match obj {
         LevelObject::BeachBall { pos } => {
@@ -346,6 +374,19 @@ fn spawn_object(
                         );
                         y += radius;
                     }
+                    StackItem::Capsule { half_height, radius } => {
+                        y += *half_height;
+                        let mat = next_capsule_material(materials, capsule_mat_idx);
+                        spawn_capsule(
+                            world,
+                            Point3::new(base.0, y, base.2),
+                            *half_height,
+                            *radius,
+                            mat,
+                            &CapsulePhysics::default(),
+                        );
+                        y += *half_height;
+                    }
                 }
             }
         }
@@ -407,12 +448,43 @@ fn spawn_object(
                 &materials.house_materials,
             );
         }
+
+        LevelObject::Capsule {
+            pos,
+            half_height,
+            radius,
+            density,
+            restitution,
+            friction,
+        } => {
+            let mat = next_capsule_material(materials, capsule_mat_idx);
+            let phys = CapsulePhysics {
+                density: *density,
+                restitution: *restitution,
+                friction: *friction,
+            };
+            spawn_capsule(
+                world,
+                Point3::new(pos.0, pos.1, pos.2),
+                *half_height,
+                *radius,
+                mat,
+                &phys,
+            );
+        }
     }
 }
 
 /// Consume the next pre-created box material.
 fn next_box_material(materials: &LevelMaterials, idx: &mut usize) -> MaterialId {
     let mat = materials.box_materials[*idx];
+    *idx += 1;
+    mat
+}
+
+/// Consume the next pre-created capsule material.
+fn next_capsule_material(materials: &LevelMaterials, idx: &mut usize) -> MaterialId {
+    let mat = materials.capsule_materials[*idx];
     *idx += 1;
     mat
 }

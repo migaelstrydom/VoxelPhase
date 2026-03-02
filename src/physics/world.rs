@@ -717,6 +717,17 @@ impl PhysicsWorld {
                     hit_rot,
                     static_geometry,
                 ),
+                ColliderShape::Capsule { .. } => {
+                    // Capsule CCD: single contact at sweep hit point (same as sphere).
+                    smallvec![cold_solver_contact(
+                        hit.point,
+                        hit.normal,
+                        hit.normal,
+                        0.0,
+                        0.0,
+                        FeatureId::SINGLE,
+                    )]
+                }
             };
 
             let mut ccd_manifold = SolverManifold {
@@ -922,6 +933,10 @@ impl ProbeTarget for PhysicsWorld {
                     ColliderShape::Box { half_extents } => {
                         let obb = Obb::new(center, body_rot, *half_extents);
                         probe_vs_obb(origin, end, radius, &obb, *half_extents)
+                    }
+                    ColliderShape::Capsule { half_height, .. } => {
+                        // Treat capsule as a sphere with bounding radius for probe.
+                        probe_vs_sphere(origin, end, radius, center, *half_height)
                     }
                 };
                 if let Some(hit) = hit {

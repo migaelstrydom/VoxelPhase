@@ -2,7 +2,7 @@
 
 use nalgebra::{Isometry3, Matrix3, Point3, UnitQuaternion, Vector3};
 
-use super::math::{box_inertia_tensor, sphere_inertia_tensor};
+use super::math::{box_inertia_tensor, capsule_inertia_tensor, sphere_inertia_tensor};
 
 /// Shape of a collider.
 #[derive(Debug, Clone)]
@@ -11,6 +11,9 @@ pub enum ColliderShape {
     Sphere { radius: f32 },
     /// An oriented box (rectangular prism) centered at the collider's local origin.
     Box { half_extents: Vector3<f32> },
+    /// A capsule (cylinder + hemisphere caps) along the local Y axis.
+    /// `half_height` includes the caps; total height = `2 * half_height`.
+    Capsule { half_height: f32, radius: f32 },
 }
 
 impl ColliderShape {
@@ -25,6 +28,16 @@ impl ColliderShape {
                 let volume = 8.0 * half_extents.x * half_extents.y * half_extents.z;
                 volume * density
             }
+            ColliderShape::Capsule {
+                half_height,
+                radius,
+            } => {
+                let r = *radius;
+                let cyl_h = 2.0 * (half_height - r);
+                let pi = std::f32::consts::PI;
+                let volume = pi * r * r * (cyl_h + (4.0 / 3.0) * r);
+                volume * density
+            }
         }
     }
 
@@ -33,6 +46,10 @@ impl ColliderShape {
         match self {
             ColliderShape::Sphere { radius } => sphere_inertia_tensor(mass, *radius),
             ColliderShape::Box { half_extents } => box_inertia_tensor(mass, *half_extents),
+            ColliderShape::Capsule {
+                half_height,
+                radius,
+            } => capsule_inertia_tensor(mass, *half_height, *radius),
         }
     }
 
@@ -41,6 +58,7 @@ impl ColliderShape {
         match self {
             ColliderShape::Sphere { radius } => *radius,
             ColliderShape::Box { half_extents } => half_extents.norm(),
+            ColliderShape::Capsule { half_height, .. } => *half_height,
         }
     }
 }
@@ -97,6 +115,18 @@ impl ColliderDesc {
     pub fn box_shape(half_extents: Vector3<f32>) -> Self {
         Self {
             shape: ColliderShape::Box { half_extents },
+            offset: Isometry3::identity(),
+            density: 1000.0,
+            material: ColliderMaterial::default(),
+        }
+    }
+
+    pub fn capsule(half_height: f32, radius: f32) -> Self {
+        Self {
+            shape: ColliderShape::Capsule {
+                half_height,
+                radius,
+            },
             offset: Isometry3::identity(),
             density: 1000.0,
             material: ColliderMaterial::default(),

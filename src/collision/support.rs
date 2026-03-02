@@ -6,6 +6,7 @@
 
 use nalgebra::{Point3, Vector3};
 
+use super::capsule::Capsule;
 use super::obb::Obb;
 use super::sphere_triangle::Triangle;
 
@@ -72,6 +73,28 @@ impl ConvexSupport for Obb {
 
     fn bounding_radius(&self) -> f32 {
         self.half_extents.norm()
+    }
+}
+
+impl ConvexSupport for Capsule {
+    fn support(&self, direction: Vector3<f32>) -> Point3<f32> {
+        let len = direction.magnitude();
+        if len < 1e-10 {
+            return self.center;
+        }
+        let (a, b) = self.segment_endpoints();
+        // Pick the segment endpoint furthest along direction.
+        let endpoint = if direction.dot(&(b - a)) >= 0.0 {
+            b
+        } else {
+            a
+        };
+        // Inflate by radius in the given direction.
+        endpoint + direction * (self.radius / len)
+    }
+
+    fn bounding_radius(&self) -> f32 {
+        self.half_height
     }
 }
 

@@ -133,6 +133,14 @@ Level(
         BeachBall(pos: (5.0, 0.0, -3.0)),
         BeachBall(pos: (5.0, 0.0, 3.0)),
 
+        // === CAPSULES ===
+        Capsule(pos: (-14.0, 0.0, -3.0), half_height: 1.0, radius: 0.5),
+        Capsule(pos: (-14.0, 0.0, 3.0), half_height: 1.0, radius: 0.5),
+        Capsule(pos: (-14.0, 0.0, 0.0), half_height: 1.0, radius: 0.5),
+        Capsule(pos: (-7.0, 0.0, 0.0), half_height: 1.0, radius: 0.5),
+        Capsule(pos: (3.0, 0.0, -3.0), half_height: 1.0, radius: 0.5),
+        Capsule(pos: (3.0, 0.0, 3.0), half_height: 1.0, radius: 0.5),
+
         // === LOOSE CRATES ===
         // Extra ammunition for physics mayhem
         Crate(pos: (-14.0, 0.0, -5.0), size: 0.5),

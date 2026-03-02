@@ -216,6 +216,18 @@ pub enum LevelObject {
         pos: (f32, f32, f32),
         half_extents: (f32, f32, f32),
     },
+    /// Capsule (cylinder + hemisphere caps).
+    Capsule {
+        pos: (f32, f32, f32),
+        half_height: f32,
+        radius: f32,
+        #[serde(default = "default_density")]
+        density: f32,
+        #[serde(default = "default_capsule_restitution")]
+        restitution: f32,
+        #[serde(default = "default_capsule_friction")]
+        friction: f32,
+    },
 }
 
 /// Items that can appear inside a `Stack`.
@@ -225,6 +237,7 @@ pub enum StackItem {
     HeavyCrate { size: f32 },
     Plank { length: f32, width: f32 },
     BeachBall,
+    Capsule { half_height: f32, radius: f32 },
 }
 
 // ---------------------------------------------------------------------------
@@ -240,5 +253,13 @@ fn default_box_restitution() -> f32 {
 }
 
 fn default_box_friction() -> f32 {
+    0.6
+}
+
+fn default_capsule_restitution() -> f32 {
+    0.2
+}
+
+fn default_capsule_friction() -> f32 {
     0.6
 }

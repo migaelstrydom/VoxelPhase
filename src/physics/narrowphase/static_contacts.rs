@@ -9,7 +9,9 @@ use std::collections::HashSet;
 use generational_arena::Arena;
 use nalgebra::{Point3, Vector3};
 
+use crate::collision::capsule::Capsule;
 use crate::collision::contact::ContactManifold;
+use crate::collision::mesh::capsule_patch::capsule_patch_manifold;
 use crate::collision::mesh::obb_patch::obb_patch_manifold;
 use crate::collision::mesh::seam_filter::filter_patch;
 use crate::collision::mesh::sphere_patch::sphere_patch_manifold;
@@ -74,6 +76,17 @@ pub fn generate_static_contacts(
                     static_geometry,
                     contact_margin,
                 ),
+                ColliderShape::Capsule {
+                    half_height,
+                    radius,
+                } => capsule_vs_static(
+                    center,
+                    body.rotation(),
+                    *half_height,
+                    *radius,
+                    static_geometry,
+                    contact_margin,
+                ),
             };
 
             let manifold = if manifold.is_empty()
@@ -86,8 +99,7 @@ pub fn generate_static_contacts(
                     enable_speculative_contacts,
                     speculative_min_speed,
                     speculative_margin_multiplier,
-                )
-            {
+                ) {
                 let predicted_center = center + linear_velocity * dt;
                 let mut m = speculative_static_manifold(
                     collider,
@@ -164,6 +176,26 @@ fn box_vs_static(
     obb_patch_manifold(&obb, &filtered, contact_margin)
 }
 
+/// Generate capsule-static contacts via the mesh pipeline.
+fn capsule_vs_static(
+    center: Point3<f32>,
+    rotation: nalgebra::UnitQuaternion<f32>,
+    half_height: f32,
+    radius: f32,
+    static_geometry: &dyn StaticGeometry,
+    contact_margin: f32,
+) -> ContactManifold {
+    let capsule = Capsule::new(center, rotation, half_height, radius);
+    let (aabb_min, aabb_max) = capsule.enclosing_aabb();
+    let margin_vec = Vector3::new(contact_margin, contact_margin, contact_margin);
+    let query = AABB::new(aabb_min - margin_vec, aabb_max + margin_vec);
+
+    let patch = static_geometry.query_region(&query);
+    let filtered = filter_patch(&patch, SEAM_FILTER_COPLANAR_DOT);
+    let (seg_a, seg_b) = capsule.segment_endpoints();
+    capsule_patch_manifold(seg_a, seg_b, radius, &filtered, contact_margin)
+}
+
 /// Generate a static contact manifold at a predicted pose for any shape.
 fn speculative_static_manifold(
     collider: &Collider,
@@ -176,9 +208,24 @@ fn speculative_static_manifold(
         ColliderShape::Sphere { radius } => {
             sphere_vs_static(predicted_center, *radius, static_geometry, contact_margin)
         }
-        ColliderShape::Box { half_extents } => {
-            box_vs_static(predicted_center, rotation, *half_extents, static_geometry, contact_margin)
-        }
+        ColliderShape::Box { half_extents } => box_vs_static(
+            predicted_center,
+            rotation,
+            *half_extents,
+            static_geometry,
+            contact_margin,
+        ),
+        ColliderShape::Capsule {
+            half_height,
+            radius,
+        } => capsule_vs_static(
+            predicted_center,
+            rotation,
+            *half_height,
+            *radius,
+            static_geometry,
+            contact_margin,
+        ),
     }
 }
 

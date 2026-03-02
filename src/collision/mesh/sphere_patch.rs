@@ -251,7 +251,7 @@ fn sphere_vs_edge(
 ///
 /// Works for both CW and CCW winding: a point is inside iff it's on the
 /// same side of all edges (all cross products have the same sign).
-fn point_in_convex_polygon(point: &Point3<f32>, verts: &[Point3<f32>], normal: &Vector3<f32>) -> bool {
+pub(crate) fn point_in_convex_polygon(point: &Point3<f32>, verts: &[Point3<f32>], normal: &Vector3<f32>) -> bool {
     let n = verts.len();
     let mut positive = 0u32;
     let mut negative = 0u32;
@@ -271,7 +271,7 @@ fn point_in_convex_polygon(point: &Point3<f32>, verts: &[Point3<f32>], normal: &
 }
 
 /// Closest point on a line segment to a query point.
-fn closest_point_on_segment(p: Point3<f32>, a: Point3<f32>, b: Point3<f32>) -> Point3<f32> {
+pub(crate) fn closest_point_on_segment(p: Point3<f32>, a: Point3<f32>, b: Point3<f32>) -> Point3<f32> {
     let ab = b - a;
     let len_sq = ab.magnitude_squared();
     if len_sq < 1e-12 {

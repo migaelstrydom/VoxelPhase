@@ -12,6 +12,7 @@
 //! - Mesh patch types for terrain queries
 
 mod aabb;
+pub mod capsule;
 pub mod contact;
 pub mod contact_reducer;
 pub mod continuous;
