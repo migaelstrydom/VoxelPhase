@@ -44,7 +44,12 @@ pub fn create_level_materials(
 
     for obj in &level.objects {
         collect_box_materials(obj, texture_manager, material_builder, &mut box_materials)?;
-        collect_capsule_materials(obj, texture_manager, material_builder, &mut capsule_materials)?;
+        collect_capsule_materials(
+            obj,
+            texture_manager,
+            material_builder,
+            &mut capsule_materials,
+        )?;
     }
 
     Ok(LevelMaterials {
@@ -218,7 +223,13 @@ pub fn spawn_level_objects(
     let mut capsule_mat_idx = 0;
 
     for obj in &level.objects {
-        spawn_object(world, obj, materials, &mut box_mat_idx, &mut capsule_mat_idx);
+        spawn_object(
+            world,
+            obj,
+            materials,
+            &mut box_mat_idx,
+            &mut capsule_mat_idx,
+        );
     }
 
     player_entity
@@ -374,7 +385,10 @@ fn spawn_object(
                         );
                         y += radius;
                     }
-                    StackItem::Capsule { half_height, radius } => {
+                    StackItem::Capsule {
+                        half_height,
+                        radius,
+                    } => {
                         y += *half_height;
                         let mat = next_capsule_material(materials, capsule_mat_idx);
                         spawn_capsule(

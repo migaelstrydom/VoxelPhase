@@ -469,9 +469,7 @@ mod tests {
     fn gyroscopic_correction_reduces_cross_axis_drift() {
         // A body with I_y << I_xz and angular velocity in both X and Y
         // should get a gyroscopic correction that prevents drift into Z.
-        let mut body = RigidBody::new(
-            RigidBodyDesc::dynamic().angular_damping(0.0),
-        );
+        let mut body = RigidBody::new(RigidBodyDesc::dynamic().angular_damping(0.0));
         let inertia = Matrix3::from_diagonal(&Vector3::new(10.0, 0.1, 10.0));
         body.set_mass_properties(1.0, inertia);
         body.set_angular_velocity(Vector3::new(1.0, 0.5, 0.0));
