@@ -2,6 +2,7 @@
 
 pub mod camera;
 pub mod colour;
+pub mod debug_render;
 pub mod deletion_queue;
 pub mod descriptors;
 pub mod frame;

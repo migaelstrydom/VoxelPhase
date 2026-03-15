@@ -2,6 +2,7 @@
 name = "rust_dude"
 version = "0.1.0"
 edition = "2021"
+default-run = "rust_dude"
 
 [dependencies]
 log = "0.4.21"

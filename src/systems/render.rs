@@ -1,9 +1,9 @@
 use crate::biped::BipedController;
 use crate::components::{CameraComponent, ModelInstance, Orientation, Position, Renderable, Rotation};
 use crate::debug::{DebugLines, DebugOverlays};
-use crate::geometry::{generate_cylinder, generate_sphere_indices, generate_sphere_vertices};
 use crate::model::Transform;
 use crate::particles::ParticlePool;
+use crate::rendering::debug_render::render_debug_overlays;
 use crate::rendering::material::MaterialManager;
 use crate::rendering::renderer::Renderer;
 use crate::resources::textures::TextureManager;
@@ -153,45 +153,15 @@ impl<'a> System<'a> for RenderSystem {
                     }
                 }
 
-                // Render debug overlay spheres (3D markers)
-                if !debug_overlays.spheres().is_empty() {
-                    let segments = 12;
-                    let rings = 8;
-                    let indices = generate_sphere_indices(segments, rings);
-                    for sphere in debug_overlays.spheres() {
-                        let vertices =
-                            generate_sphere_vertices(sphere.radius, segments, rings, sphere.colour);
-                        let transform = Matrix4::new_translation(&sphere.position.coords);
-                        if let Err(e) = renderer.draw_procedural_mesh(
-                            draw_cb,
-                            &vertices,
-                            &indices,
-                            &transform,
-                            &material_manager,
-                            &texture_manager,
-                        ) {
-                            log::error!("RenderSystem: Failed to draw debug sphere: {}", e);
-                        }
-                    }
-                }
-
-                // Render debug overlay lines (thin cylinders)
-                for line in debug_overlays.lines() {
-                    let (vertices, indices) =
-                        generate_cylinder(line.start, line.end, line.radius, 6, line.colour);
-                    if !vertices.is_empty() {
-                        let identity = Matrix4::identity();
-                        if let Err(e) = renderer.draw_procedural_mesh(
-                            draw_cb,
-                            &vertices,
-                            &indices,
-                            &identity,
-                            &material_manager,
-                            &texture_manager,
-                        ) {
-                            log::error!("RenderSystem: Failed to draw debug line: {}", e);
-                        }
-                    }
+                // Render debug overlay shapes (spheres, lines)
+                if let Err(e) = render_debug_overlays(
+                    &mut renderer,
+                    draw_cb,
+                    &debug_overlays,
+                    &material_manager,
+                    &texture_manager,
+                ) {
+                    log::error!("RenderSystem: Failed to draw debug overlays: {}", e);
                 }
 
                 // Render particles (after models, before overlay)

@@ -12,7 +12,7 @@ use crate::physics::{ColliderDesc, PhysicsWorld, RigidBodyDesc, RigidBodyHandle,
 /// Sphere dropped onto a flat surface. Exercises sphere-patch manifold
 /// generation and the mesh-aware pipeline (seam filter -> sphere_patch).
 #[derive(Debug, Clone)]
-pub(crate) struct FlatSphereRestScenario {
+pub struct FlatSphereRestScenario {
     pub restitution: f32,
     pub friction: f32,
     pub radius: f32,
@@ -66,7 +66,7 @@ impl PhysicsBenchScenario for FlatSphereRestScenario {
 /// the seam filter suppresses the internal edge, and FeatureId-based
 /// manifold caching ensures smooth contact transitions.
 #[derive(Debug, Clone)]
-pub(crate) struct SphereSlideScenario {
+pub struct SphereSlideScenario {
     pub radius: f32,
     geometry: FlatQuadGeometry,
 }
@@ -113,7 +113,7 @@ impl PhysicsBenchScenario for SphereSlideScenario {
 /// Box dropped onto a flat surface. Exercises OBB-patch manifold generation
 /// (seam filter -> obb_patch clipping).
 #[derive(Debug, Clone)]
-pub(crate) struct FlatBoxRestScenario {
+pub struct FlatBoxRestScenario {
     pub restitution: f32,
     pub friction: f32,
     pub half_extents: Vector3<f32>,
@@ -165,7 +165,7 @@ impl PhysicsBenchScenario for FlatBoxRestScenario {
 /// where the seam filter encounters a crease edge between the flat and sloped
 /// sections. Verifies lateral movement (x stays centered, z advances).
 #[derive(Debug, Clone)]
-pub(crate) struct SphereOnRampScenario {
+pub struct SphereOnRampScenario {
     pub restitution: f32,
     pub radius: f32,
     geometry: RampGeometry,
@@ -214,7 +214,7 @@ impl PhysicsBenchScenario for SphereOnRampScenario {
 /// Box dropped onto a ramp. Exercises OBB-patch manifold generation against
 /// a sloped surface (non-axis-aligned face normal).
 #[derive(Debug, Clone)]
-pub(crate) struct BoxOnRampScenario {
+pub struct BoxOnRampScenario {
     pub restitution: f32,
     pub half_extents: Vector3<f32>,
     geometry: RampGeometry,
@@ -257,7 +257,7 @@ impl PhysicsBenchScenario for BoxOnRampScenario {
 /// Box dropped near a step edge. Exercises OBB-patch manifold generation
 /// against multi-level terrain with a vertical wall face.
 #[derive(Debug, Clone)]
-pub(crate) struct BoxOnStepScenario {
+pub struct BoxOnStepScenario {
     pub restitution: f32,
     pub half_extents: Vector3<f32>,
     geometry: StepGeometry,
@@ -304,7 +304,7 @@ impl PhysicsBenchScenario for BoxOnStepScenario {
 /// This reproduces a dynamic-on-dynamic resting-contact case where the lower
 /// platform can develop rotational jitter under asymmetric load.
 #[derive(Debug, Clone)]
-pub(crate) struct HeavySphereOnPlatformScenario {
+pub struct HeavySphereOnPlatformScenario {
     pub platform_half_extents: Vector3<f32>,
     pub platform_density: f32,
     pub sphere_radius: f32,
@@ -384,7 +384,7 @@ impl PhysicsBenchScenario for HeavySphereOnPlatformScenario {
 /// pipeline must generate contacts on all four non-coplanar faces at once,
 /// not oscillate a single contact between opposite sides.
 #[derive(Debug, Clone)]
-pub(crate) struct SphereInBowlScenario {
+pub struct SphereInBowlScenario {
     pub radius: f32,
     geometry: BowlGeometry,
 }
@@ -445,7 +445,7 @@ impl PhysicsBenchScenario for SphereInBowlScenario {
 /// The scenario uses zero friction and zero restitution for a clean comparison
 /// against the frictionless analytical solution.
 #[derive(Debug, Clone)]
-pub(crate) struct BoxSlidesDownWallScenario {
+pub struct BoxSlidesDownWallScenario {
     /// Half-extents: x = thin (perpendicular to wall), y = long (parallel).
     pub half_extents: Vector3<f32>,
     /// Initial tilt angle from vertical (radians).
@@ -510,7 +510,7 @@ impl PhysicsBenchScenario for BoxSlidesDownWallScenario {
 /// toward the other. Exercises discrete sphere-sphere contacts and the
 /// dynamic pair pipeline.
 #[derive(Debug, Clone)]
-pub(crate) struct SphereSphereCollisionScenario {
+pub struct SphereSphereCollisionScenario {
     pub restitution: f32,
     geometry: FlatQuadGeometry,
 }
@@ -572,7 +572,7 @@ impl PhysicsBenchScenario for SphereSphereCollisionScenario {
 /// Sphere launched toward a stationary box. Exercises discrete sphere-OBB
 /// contacts in the dynamic pair pipeline.
 #[derive(Debug, Clone)]
-pub(crate) struct SphereObbCollisionScenario {
+pub struct SphereObbCollisionScenario {
     pub restitution: f32,
     geometry: FlatQuadGeometry,
 }
@@ -635,7 +635,7 @@ impl PhysicsBenchScenario for SphereObbCollisionScenario {
 /// Two boxes on a collision course. Exercises discrete OBB-OBB contact
 /// generation (15-axis SAT + Sutherland-Hodgman clipping).
 #[derive(Debug, Clone)]
-pub(crate) struct ObbObbCollisionScenario {
+pub struct ObbObbCollisionScenario {
     pub restitution: f32,
     geometry: FlatQuadGeometry,
 }
@@ -702,7 +702,7 @@ impl PhysicsBenchScenario for ObbObbCollisionScenario {
 /// narrowphase pipeline with many simultaneous broadphase pairs. Used to
 /// benchmark the work buffer's allocation reuse and cache performance.
 #[derive(Debug, Clone)]
-pub(crate) struct BoxGridScenario {
+pub struct BoxGridScenario {
     pub grid_size: usize,
     pub half_extent: f32,
     pub spacing: f32,
@@ -714,8 +714,8 @@ impl BoxGridScenario {
         Self {
             grid_size,
             half_extent: 0.3,
-            spacing: 0.8,
-            geometry: FlatQuadGeometry::new(20.0),
+            spacing: 0.6,
+            geometry: FlatQuadGeometry::new(10.0),
         }
     }
 }
@@ -732,14 +732,14 @@ impl PhysicsBenchScenario for BoxGridScenario {
     fn setup(&self, world: &mut PhysicsWorld) -> RigidBodyHandle {
         let he = Vector3::new(self.half_extent, self.half_extent, self.half_extent);
         let n = self.grid_size;
-        let offset = (n as f32 - 1.0) * self.spacing * 0.5;
+        let offset = 0.0; // (n as f32 - 1.0) * self.spacing * 0.5;
         let mut first_handle = None;
 
         for ix in 0..n {
             for iz in 0..n {
                 let x = ix as f32 * self.spacing - offset;
-                let z = iz as f32 * self.spacing - offset;
-                let y = 2.0 + (ix + iz) as f32 * 0.1;
+                let z = 0.0;
+                let y = 0.3 + iz as f32 * self.spacing - offset;
                 let body =
                     world.create_body(RigidBodyDesc::dynamic().position(Point3::new(x, y, z)));
                 let _ = world.attach_collider(
@@ -771,7 +771,7 @@ impl PhysicsBenchScenario for BoxGridScenario {
 /// tunnel through the ground. Exercises `swept_sphere_triangle` from the
 /// continuous collision module.
 #[derive(Debug, Clone)]
-pub(crate) struct HighSpeedSphereCcdScenario {
+pub struct HighSpeedSphereCcdScenario {
     geometry: FlatQuadGeometry,
 }
 
@@ -833,7 +833,7 @@ impl PhysicsBenchScenario for HighSpeedSphereCcdScenario {
 /// The plank is the tracked body — its Y position and velocity should be
 /// rock-steady once the system settles.
 #[derive(Debug, Clone)]
-pub(crate) struct BoxOnPlankScenario {
+pub struct BoxOnPlankScenario {
     /// Half-extents of the upper box.
     pub box_half_extents: Vector3<f32>,
     /// Density of the upper box.
@@ -880,9 +880,8 @@ impl PhysicsBenchScenario for BoxOnPlankScenario {
         let xz = self.offset_xz;
         let plank_he = self.plank_half_extents;
         let plank_y = plank_he.y + 0.01;
-        let plank = world.create_body(
-            RigidBodyDesc::dynamic().position(Point3::new(xz, plank_y, xz)),
-        );
+        let plank =
+            world.create_body(RigidBodyDesc::dynamic().position(Point3::new(xz, plank_y, xz)));
         let _ = world.attach_collider(
             plank,
             ColliderDesc::box_shape(plank_he)
@@ -895,9 +894,8 @@ impl PhysicsBenchScenario for BoxOnPlankScenario {
         let box_y = plank_he.y * 2.0 + box_he.y + 0.02;
         let box_x = xz + plank_he.x - box_he.x;
         let box_z = xz + plank_he.z - box_he.z;
-        let upper_box = world.create_body(
-            RigidBodyDesc::dynamic().position(Point3::new(box_x, box_y, box_z)),
-        );
+        let upper_box =
+            world.create_body(RigidBodyDesc::dynamic().position(Point3::new(box_x, box_y, box_z)));
         let _ = world.attach_collider(
             upper_box,
             ColliderDesc::box_shape(box_he)
@@ -919,7 +917,7 @@ impl PhysicsBenchScenario for BoxOnPlankScenario {
 /// Tests that friction warm-start does not inject angular torque spikes as
 /// the sphere decelerates. The sphere should slow smoothly and come to rest.
 #[derive(Debug, Clone)]
-pub(crate) struct SlidingSphereScenario {
+pub struct SlidingSphereScenario {
     geometry: FlatQuadGeometry,
 }
 
@@ -975,7 +973,7 @@ impl PhysicsBenchScenario for SlidingSphereScenario {
 /// Sphere on a low-friction 30° ramp. With friction = 0.1 (below tan(30°) ≈ 0.577),
 /// the sphere should slide down and accelerate rather than sticking.
 #[derive(Debug, Clone)]
-pub(crate) struct LowFrictionRampScenario {
+pub struct LowFrictionRampScenario {
     geometry: RampGeometry,
 }
 

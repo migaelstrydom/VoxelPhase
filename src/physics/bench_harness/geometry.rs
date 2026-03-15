@@ -9,7 +9,7 @@ use crate::physics::StaticGeometry;
 
 /// Flat quad at y=0. Two triangles forming a square.
 #[derive(Debug, Clone)]
-pub(crate) struct FlatQuadGeometry {
+pub struct FlatQuadGeometry {
     bounds: AABB,
     patch: MeshPatch,
 }
@@ -59,7 +59,7 @@ impl StaticGeometry for FlatQuadGeometry {
 /// diagonal seams. Each cell is `cell_size × cell_size` with a diagonal from
 /// bottom-left to top-right, matching typical MC-style terrain tessellation.
 #[derive(Debug, Clone)]
-pub(crate) struct FlatGridGeometry {
+pub struct FlatGridGeometry {
     bounds: AABB,
     patch: MeshPatch,
 }
@@ -125,7 +125,7 @@ impl StaticGeometry for FlatGridGeometry {
 /// The ramp rises in the +Z direction. The flat section is at y=0.
 /// The slope runs from z=0 to z=`run`, reaching height `rise`.
 #[derive(Debug, Clone)]
-pub(crate) struct RampGeometry {
+pub struct RampGeometry {
     bounds: AABB,
     patch: MeshPatch,
 }
@@ -190,7 +190,7 @@ impl StaticGeometry for RampGeometry {
 /// Lower level at y=0 (x < 0), upper level at y=`step_height` (x >= 0).
 /// The step edge runs along the Z axis.
 #[derive(Debug, Clone)]
-pub(crate) struct StepGeometry {
+pub struct StepGeometry {
     bounds: AABB,
     patch: MeshPatch,
 }
@@ -268,7 +268,7 @@ impl StaticGeometry for StepGeometry {
 /// rest where all four faces support it, not oscillate between opposite
 /// sides.
 #[derive(Debug, Clone)]
-pub(crate) struct BowlGeometry {
+pub struct BowlGeometry {
     bounds: AABB,
     patch: MeshPatch,
 }
@@ -333,7 +333,7 @@ impl StaticGeometry for BowlGeometry {
 /// spanning y from 0 to `wall_height`. Together they form a right-angle corner.
 /// Rigid bodies placed at x > 0 may collide with both faces.
 #[derive(Debug, Clone)]
-pub(crate) struct WallAndFloorGeometry {
+pub struct WallAndFloorGeometry {
     bounds: AABB,
     patch: MeshPatch,
 }
