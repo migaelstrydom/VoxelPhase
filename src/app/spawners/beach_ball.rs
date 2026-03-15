@@ -63,14 +63,14 @@ pub fn spawn_beach_ball(
             .linear_damping(0.001)
             .angular_damping(0.002);
 
-        let body_handle = physics.0.create_body(body_desc);
+        let body_handle = physics.world.create_body(body_desc);
 
         let collider_desc = ColliderDesc::sphere(RADIUS)
             .density(1.0)
             .restitution(0.6)
             .friction(0.5);
 
-        physics.0.attach_collider(body_handle, collider_desc);
+        physics.world.attach_collider(body_handle, collider_desc);
 
         body_handle
     };

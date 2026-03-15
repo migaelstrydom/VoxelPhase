@@ -112,7 +112,7 @@ impl<'a, 'b> App<'a, 'b> {
             let terrain_bounds = *world.read_resource::<TerrainManager>().bounds();
             let mut physics = world.write_resource::<PhysicsResource>();
             physics
-                .0
+                .world
                 .add_force_field(ForceField::boundary(terrain_bounds, 500.0));
         }
 

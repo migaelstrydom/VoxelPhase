@@ -34,10 +34,11 @@
 //! let pos = physics.body(body).unwrap().position();
 //! ```
 
-#[cfg(test)]
-mod bench_harness;
+pub mod bench_harness;
 mod body;
+pub mod ccd;
 mod collider;
+mod contact_event;
 mod debug;
 pub mod grounding;
 mod handle;
@@ -45,13 +46,19 @@ mod impulses;
 mod math;
 mod narrowphase;
 mod pipeline;
+pub mod solver;
 mod sleep;
 mod static_geometry;
+pub mod stepping;
 mod world;
 
-pub use body::RigidBodyDesc;
-pub use collider::ColliderDesc;
-pub use handle::RigidBodyHandle;
+pub use body::{RigidBody, RigidBodyDesc};
+pub use ccd::{CcdStrategy, SweepClampCcd};
+pub use collider::{Collider, ColliderDesc, ColliderShape};
+pub use contact_event::{ContactEvent, ContactSource};
+pub use handle::{ColliderHandle, RigidBodyHandle};
 pub use impulses::{ForceField, PhysicsImpulse, PhysicsImpulseQueue};
+pub use solver::{ContactSolver, PgsNgsConfig, PgsNgsSolver};
 pub use static_geometry::StaticGeometry;
-pub use world::{ContactEvent, PhysicsWorld};
+pub use stepping::{FixedTimestep, SequentialStepper, Stepper};
+pub use world::PhysicsWorld;

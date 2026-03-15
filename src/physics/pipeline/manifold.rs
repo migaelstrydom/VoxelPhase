@@ -314,7 +314,6 @@ impl ManifoldCache {
     }
 
     /// Returns cache activity and size counters for the most recent step.
-    #[cfg(test)]
     pub fn frame_stats(&self) -> ManifoldFrameStats {
         self.frame_stats
     }

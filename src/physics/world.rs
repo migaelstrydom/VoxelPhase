@@ -2,11 +2,12 @@
 
 use generational_arena::Arena;
 use nalgebra::{Matrix3, Point3, UnitQuaternion, Vector3};
-use smallvec::{smallvec, SmallVec};
 use std::collections::{HashMap, HashSet};
 
 use super::body::{RigidBody, RigidBodyDesc};
-use super::collider::{Collider, ColliderDesc, ColliderMaterial, ColliderShape};
+use super::ccd::{CcdContext, CcdStrategy, SweepClampCcd};
+use super::collider::{Collider, ColliderDesc, ColliderShape};
+use super::contact_event::{ContactEvent, ContactSource};
 use super::debug::{PhysicsDebugConfig, PhysicsDebugger};
 use super::grounding::{GroundingConfig, GroundingDetector};
 use super::handle::{ColliderHandle, RigidBodyHandle};
@@ -17,15 +18,11 @@ use super::narrowphase::{
 use super::pipeline::integration::{integrate_bodies, integrate_forces};
 use super::pipeline::manifold::ManifoldCache;
 use super::pipeline::normal_smoothing::NormalSmoothingConfig;
-use super::pipeline::pair::{PairHeader, SolverContact, SolverManifold};
-use super::pipeline::post_stabilizer::PostStabiliseConfig;
-use super::pipeline::solver::{solve, solve_contacts};
+use super::pipeline::pair::SolverManifold;
+use super::solver::{ContactSolver, PgsNgsSolver};
 use super::sleep::{SleepManager, SleepManagerConfig};
 use super::static_geometry::StaticGeometry;
-use crate::collision::contact::FeatureId;
 use crate::collision::continuous::swept_sphere_sphere;
-use crate::collision::mesh::obb_patch::obb_patch_manifold;
-use crate::collision::mesh::seam_filter::filter_patch;
 use crate::collision::obb::Obb;
 use crate::debug::DebugLines;
 use crate::sensing::{ProbeHit, ProbeTarget};
@@ -35,8 +32,6 @@ use crate::sensing::{ProbeHit, ProbeTarget};
 pub struct PhysicsConfig {
     /// Gravity acceleration vector.
     pub gravity: Vector3<f32>,
-    /// Number of solver iterations per step.
-    pub solver_iterations: u32,
     /// Minimum approach speed for restitution to apply. Below this threshold,
     /// restitution is zeroed to prevent micro-bouncing at resting contacts.
     pub restitution_velocity_threshold: f32,
@@ -52,14 +47,10 @@ pub struct PhysicsConfig {
     pub ccd_threshold: f32,
     /// Frames without a narrowphase refresh before a manifold point is pruned.
     pub manifold_max_age: u8,
-    /// Scale factor applied to warm-start impulses (0..=1).
-    pub warm_start_scale: f32,
     /// When true, sort manifold output contacts for deterministic solver ordering.
     ///
     /// This is primarily intended for reproducible tests and diagnostics.
     pub deterministic_contact_ordering: bool,
-    /// Split-impulse configuration for post-stabilization.
-    pub post_stabilise: PostStabiliseConfig,
     /// Configuration for smoothing matched contact normals.
     pub normal_smoothing: NormalSmoothingConfig,
     /// Configuration for grounded detection.
@@ -82,14 +73,11 @@ impl Default for PhysicsConfig {
     fn default() -> Self {
         Self {
             gravity: Vector3::new(0.0, -9.81, 0.0),
-            solver_iterations: 3,
             restitution_velocity_threshold: 0.3,
             contact_margin: 0.02,
             ccd_threshold: 0.5,
             manifold_max_age: 3,
-            warm_start_scale: 0.6,
             deterministic_contact_ordering: false,
-            post_stabilise: PostStabiliseConfig::default(),
             normal_smoothing: NormalSmoothingConfig::default(),
             grounding: GroundingConfig::default(),
             warm_start_depth_slop: 0.02,
@@ -100,20 +88,6 @@ impl Default for PhysicsConfig {
             debug: PhysicsDebugConfig::default(),
         }
     }
-}
-
-/// Data collected for a body that needs CCD sweeping.
-struct CcdCandidate {
-    body_handle: RigidBodyHandle,
-    /// Bounding sphere radius (sphere radius for spheres, half_extents.norm() for boxes).
-    radius: f32,
-    shape: ColliderShape,
-    material: ColliderMaterial,
-    pre_body_pos: Point3<f32>,
-    post_body_pos: Point3<f32>,
-    pre_rot: UnitQuaternion<f32>,
-    pre_center: Point3<f32>,
-    post_center: Point3<f32>,
 }
 
 /// The physics simulation world.
@@ -131,6 +105,13 @@ pub struct PhysicsWorld {
     sleep_manager: SleepManager,
     grounding_detector: GroundingDetector,
     force_fields: ForceFieldRegistry,
+    /// Contact constraint solver (velocity + position correction).
+    solver: Box<dyn ContactSolver + Send + Sync>,
+    /// Continuous collision detection strategy.
+    /// Wrapped in `Option` so it can be temporarily taken during `substep()`
+    /// to avoid self-referential borrows (the strategy needs mutable access
+    /// to bodies/contacts while being a field of the same struct).
+    ccd: Option<Box<dyn CcdStrategy + Send + Sync>>,
     /// Active solver manifolds from the most recent `update_contacts()` call,
     /// reused across multiple `substep()` calls.
     cached_active_manifolds: Vec<SolverManifold>,
@@ -146,6 +127,24 @@ pub struct PhysicsWorld {
 
 impl PhysicsWorld {
     pub fn new(config: PhysicsConfig) -> Self {
+        Self::with_components(
+            config,
+            Box::new(PgsNgsSolver::default()),
+            Box::new(SweepClampCcd::default()),
+        )
+    }
+
+    /// Create a physics world with a specific contact solver.
+    pub fn with_solver(config: PhysicsConfig, solver: Box<dyn ContactSolver + Send + Sync>) -> Self {
+        Self::with_components(config, solver, Box::new(SweepClampCcd::default()))
+    }
+
+    /// Create a physics world with specific solver and CCD strategy.
+    pub fn with_components(
+        config: PhysicsConfig,
+        solver: Box<dyn ContactSolver + Send + Sync>,
+        ccd: Box<dyn CcdStrategy + Send + Sync>,
+    ) -> Self {
         let manifold_cache = ManifoldCache::new(
             config.manifold_max_age,
             config.warm_start_depth_slop,
@@ -165,6 +164,8 @@ impl PhysicsWorld {
             sleep_manager,
             grounding_detector,
             force_fields: ForceFieldRegistry::default(),
+            solver,
+            ccd: Some(ccd),
             cached_active_manifolds: Vec::new(),
             cached_all_manifolds: Vec::new(),
             cached_narrowphase_handled: HashSet::new(),
@@ -250,6 +251,11 @@ impl PhysicsWorld {
     /// Get a reference to a rigid body.
     pub fn body(&self, handle: RigidBodyHandle) -> Option<&RigidBody> {
         self.bodies.get(handle.0)
+    }
+
+    /// Get a reference to a collider.
+    pub fn collider(&self, handle: ColliderHandle) -> Option<&Collider> {
+        self.colliders.get(handle.0)
     }
 
     /// Update a kinematic body's transform (position + rotation).
@@ -473,6 +479,8 @@ impl PhysicsWorld {
 
         self.cached_active_manifolds = active_manifolds;
         self.cached_all_manifolds = solver_manifolds;
+
+        self.solver.prepare(&self.bodies);
     }
 
     /// Solve velocity constraints and integrate positions using cached manifolds.
@@ -499,13 +507,9 @@ impl PhysicsWorld {
             sleeping_snapshot.as_ref(),
         );
 
-        // Solve velocity constraints
-        solve(
-            &mut self.bodies,
-            &mut self.cached_active_manifolds,
-            &self.config,
-            dt,
-        );
+        // Solve velocity constraints + position correction
+        self.solver
+            .solve(&mut self.bodies, &mut self.cached_active_manifolds, dt);
         self.debugger
             .update_post_solve(&self.bodies, &self.cached_active_manifolds);
 
@@ -545,13 +549,21 @@ impl PhysicsWorld {
 
         // CCD pass (fast bodies only, excluding narrowphase-managed bodies)
         let narrowphase_handled = std::mem::take(&mut self.cached_narrowphase_handled);
-        let _ccd_count = self.ccd_pass(
-            dt,
-            static_geometry,
-            &pre_states,
-            &narrowphase_handled,
-            sleeping_snapshot.as_ref(),
-        );
+        if let Some(mut ccd) = self.ccd.take() {
+            let mut ctx = CcdContext {
+                bodies: &mut self.bodies,
+                colliders: &self.colliders,
+                contact_events: &mut self.last_contacts,
+                narrowphase_handled: &narrowphase_handled,
+                sleeping: sleeping_snapshot.as_ref(),
+                pre_states: &pre_states,
+                contact_margin: self.config.contact_margin,
+                restitution_velocity_threshold: self.config.restitution_velocity_threshold,
+                ccd_threshold: self.config.ccd_threshold,
+            };
+            let _ccd_count = ccd.run(&mut ctx, dt, static_geometry);
+            self.ccd = Some(ccd);
+        }
         self.cached_narrowphase_handled = narrowphase_handled;
 
         let all_manifolds = std::mem::take(&mut self.cached_all_manifolds);
@@ -605,302 +617,6 @@ impl PhysicsWorld {
         }
     }
 
-    /// CCD pass: sweep fast-moving bodies against static geometry to prevent tunneling.
-    ///
-    /// A body requires CCD when `|linear_velocity| * dt > radius * ccd_threshold`
-    /// AND the narrowphase did not already generate static contacts for it.
-    /// Bodies with narrowphase contacts are managed by the solver — CCD only
-    /// catches bodies in free flight that might skip past geometry entirely.
-    fn ccd_pass(
-        &mut self,
-        dt: f32,
-        static_geometry: &dyn StaticGeometry,
-        pre_states: &HashMap<generational_arena::Index, (Point3<f32>, UnitQuaternion<f32>)>,
-        narrowphase_handled: &HashSet<RigidBodyHandle>,
-        sleeping: Option<&HashSet<RigidBodyHandle>>,
-    ) -> u32 {
-        let mut corrections = 0u32;
-
-        // Collect CCD candidate data (all owned/copied) to avoid borrow conflicts
-        let candidates: Vec<CcdCandidate> = self
-            .bodies
-            .iter()
-            .filter(|(idx, body)| {
-                if body.is_static() {
-                    return false;
-                }
-                if let Some(sleeping) = sleeping {
-                    return !sleeping.contains(&RigidBodyHandle(*idx));
-                }
-                true
-            })
-            .filter_map(|(idx, body)| {
-                let handle = RigidBodyHandle(idx);
-                if narrowphase_handled.contains(&handle) {
-                    return None;
-                }
-                let collider_handle = *body.colliders().first()?;
-                let collider = self.colliders.get(collider_handle.0)?;
-                let radius = collider.shape().bounding_radius();
-                let speed = body.linear_velocity().magnitude();
-                if speed * dt <= radius * self.config.ccd_threshold {
-                    return None;
-                }
-                let &(pre_pos, pre_rot) = pre_states.get(&idx)?;
-                let post_pos = body.position();
-                Some(CcdCandidate {
-                    body_handle: handle,
-                    radius,
-                    shape: collider.shape().clone(),
-                    material: *collider.material(),
-                    pre_body_pos: pre_pos,
-                    post_body_pos: post_pos,
-                    pre_rot,
-                    pre_center: collider.world_center(pre_pos, pre_rot),
-                    post_center: collider.world_center(post_pos, body.rotation()),
-                })
-            })
-            .collect();
-
-        // Sweep each candidate against static geometry
-        for candidate in &candidates {
-            let Some(hit) = sweep_sphere_against_static(
-                candidate.pre_center,
-                candidate.post_center,
-                candidate.radius,
-                static_geometry,
-            ) else {
-                continue;
-            };
-
-            // Move body to impact position
-            let mut hit_pos =
-                candidate.pre_body_pos + (candidate.post_body_pos - candidate.pre_body_pos) * hit.t;
-            let mut hit_rot = candidate.pre_rot;
-            if let Some(body) = self.bodies.get_mut(candidate.body_handle.0) {
-                let post_rot = body.rotation();
-                hit_rot = candidate.pre_rot.slerp(&post_rot, hit.t);
-                if let ColliderShape::Box { half_extents } = &candidate.shape {
-                    let obb = Obb::new(hit_pos, hit_rot, *half_extents);
-                    let support = obb.project_half_extent(&hit.normal);
-                    let extra = (candidate.radius - support).max(0.0);
-                    hit_pos -= hit.normal * extra;
-                }
-                body.set_position(hit_pos);
-                body.set_rotation(hit_rot);
-            }
-
-            let ccd_header = PairHeader {
-                body_a: None,
-                body_b: candidate.body_handle,
-                collider_a: None,
-                collider_b: None,
-                restitution: candidate.material.restitution,
-                friction: candidate.material.friction,
-            };
-
-            let ccd_contacts: SmallVec<[SolverContact; 4]> = match &candidate.shape {
-                ColliderShape::Sphere { .. } => {
-                    smallvec![cold_solver_contact(
-                        hit.point,
-                        hit.normal,
-                        hit.normal,
-                        0.0,
-                        0.0,
-                        FeatureId::SINGLE,
-                    )]
-                }
-                ColliderShape::Box { half_extents } => self.box_ccd_solver_contacts(
-                    candidate,
-                    *half_extents,
-                    hit_pos,
-                    hit_rot,
-                    static_geometry,
-                ),
-                ColliderShape::Capsule { .. } => {
-                    // Capsule CCD: single contact at sweep hit point (same as sphere).
-                    smallvec![cold_solver_contact(
-                        hit.point,
-                        hit.normal,
-                        hit.normal,
-                        0.0,
-                        0.0,
-                        FeatureId::SINGLE,
-                    )]
-                }
-            };
-
-            let mut ccd_manifold = SolverManifold {
-                header: ccd_header,
-                contacts: ccd_contacts,
-            };
-
-            for contact in &ccd_manifold.contacts {
-                self.last_contacts.push(ContactEvent::from_solver(
-                    &ccd_manifold.header,
-                    contact,
-                    ContactSource::Ccd,
-                ));
-            }
-            solve_contacts(
-                &mut self.bodies,
-                std::slice::from_mut(&mut ccd_manifold),
-                self.config.restitution_velocity_threshold,
-            );
-
-            corrections += 1;
-        }
-
-        corrections
-    }
-
-    /// Generate precise box-terrain contacts at a CCD hit position.
-    ///
-    /// Bounding-sphere sweep found the approximate hit. Now build an OBB at
-    /// the hit position (using the pre-integration rotation) and run the
-    /// mesh-aware manifold pipeline for accurate contact normals.
-    fn box_ccd_solver_contacts(
-        &self,
-        candidate: &CcdCandidate,
-        half_extents: Vector3<f32>,
-        hit_pos: Point3<f32>,
-        rotation: UnitQuaternion<f32>,
-        static_geometry: &dyn StaticGeometry,
-    ) -> SmallVec<[SolverContact; 4]> {
-        let obb = Obb::new(hit_pos, rotation, half_extents);
-        let (aabb_min, aabb_max) = obb.enclosing_aabb();
-        let margin = Vector3::new(
-            self.config.contact_margin,
-            self.config.contact_margin,
-            self.config.contact_margin,
-        );
-        let query = crate::collision::AABB::new(aabb_min - margin, aabb_max + margin);
-        let patch = static_geometry.query_region(&query);
-        let filtered = filter_patch(&patch, 0.98);
-        let manifold = obb_patch_manifold(&obb, &filtered, self.config.contact_margin);
-
-        let mut contacts: SmallVec<[SolverContact; 4]> = manifold
-            .points
-            .into_iter()
-            .map(|cp| {
-                cold_solver_contact(cp.point, cp.normal, cp.raw_normal, 0.0, 0.0, cp.feature_id)
-            })
-            .collect();
-
-        if contacts.is_empty() {
-            // Fallback: use the sweep hit directly
-            if let Some(hit) = sweep_sphere_against_static(
-                candidate.pre_center,
-                candidate.post_center,
-                candidate.radius,
-                static_geometry,
-            ) {
-                contacts.push(cold_solver_contact(
-                    hit.point,
-                    hit.normal,
-                    hit.normal,
-                    0.0,
-                    0.0,
-                    FeatureId::SINGLE,
-                ));
-            }
-        }
-
-        contacts
-    }
-}
-
-/// Build a cold (no warm-start) `SolverContact` for transient CCD contacts.
-fn cold_solver_contact(
-    point: Point3<f32>,
-    normal: Vector3<f32>,
-    raw_normal: Vector3<f32>,
-    depth: f32,
-    raw_depth: f32,
-    feature_id: FeatureId,
-) -> SolverContact {
-    SolverContact {
-        point,
-        normal,
-        raw_normal,
-        depth,
-        raw_depth,
-        feature_id,
-        warm_normal_impulse: 0.0,
-        warm_friction_impulse_ws: Vector3::zeros(),
-        accumulated_normal_impulse: 0.0,
-        accumulated_friction_impulse_ws: Vector3::zeros(),
-    }
-}
-
-/// Sweep a sphere from `start` to `end` against static geometry.
-///
-/// Builds the enclosing AABB, queries the region, and returns the earliest
-/// swept contact along the path.
-fn sweep_sphere_against_static(
-    start: Point3<f32>,
-    end: Point3<f32>,
-    radius: f32,
-    static_geometry: &dyn StaticGeometry,
-) -> Option<crate::collision::continuous::SweptContact> {
-    let query = crate::collision::AABB::new(
-        Point3::new(
-            start.x.min(end.x) - radius,
-            start.y.min(end.y) - radius,
-            start.z.min(end.z) - radius,
-        ),
-        Point3::new(
-            start.x.max(end.x) + radius,
-            start.y.max(end.y) + radius,
-            start.z.max(end.z) + radius,
-        ),
-    );
-    let patch = static_geometry.query_region(&query);
-
-    let mut earliest: Option<crate::collision::continuous::SweptContact> = None;
-    for pt in &patch.triangles {
-        if let Some(contact) =
-            crate::collision::continuous::swept_sphere_triangle(start, end, radius, &pt.triangle)
-        {
-            if earliest.is_none() || contact.t < earliest.as_ref().unwrap().t {
-                earliest = Some(contact);
-            }
-        }
-    }
-    earliest
-}
-
-/// Contact event produced by collision detection.
-#[derive(Debug, Clone)]
-pub struct ContactEvent {
-    pub body_a: Option<RigidBodyHandle>,
-    pub body_b: RigidBodyHandle,
-    pub point: Point3<f32>,
-    pub normal: Vector3<f32>,
-    pub raw_normal: Vector3<f32>,
-    pub depth: f32,
-    pub source: ContactSource,
-}
-
-impl ContactEvent {
-    fn from_solver(header: &PairHeader, contact: &SolverContact, source: ContactSource) -> Self {
-        Self {
-            body_a: header.body_a,
-            body_b: header.body_b,
-            point: contact.point,
-            normal: contact.normal,
-            raw_normal: contact.raw_normal,
-            depth: contact.depth,
-            source,
-        }
-    }
-}
-
-/// Source of the contact event in the pipeline.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ContactSource {
-    Narrowphase,
-    Ccd,
 }
 
 impl ProbeTarget for PhysicsWorld {
@@ -1058,9 +774,7 @@ impl Default for PhysicsWorld {
 }
 
 /// Per-step manifold cache diagnostics for harness/metrics export.
-#[cfg(test)]
 use super::pipeline::manifold::ManifoldFrameStats;
-#[cfg(test)]
 impl PhysicsWorld {
     pub fn manifold_frame_stats(&self) -> ManifoldFrameStats {
         self.manifold_cache.frame_stats()

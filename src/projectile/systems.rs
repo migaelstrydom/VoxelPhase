@@ -160,7 +160,7 @@ impl<'a> System<'a> for GrenadeSpawnSystem {
         let throw_velocity =
             throw_dir * config.throw_speed + Vector3::new(0.0, config.arc_factor, 0.0);
 
-        let gravity_mag = physics.0.config().gravity.magnitude();
+        let gravity_mag = physics.world.config().gravity.magnitude();
         let gravity_scale = if gravity_mag > 1e-6 {
             config.gravity / gravity_mag
         } else {
@@ -173,10 +173,10 @@ impl<'a> System<'a> for GrenadeSpawnSystem {
                 .linear_velocity(throw_velocity)
                 .gravity_scale(gravity_scale);
 
-            let body_handle = physics.0.create_body(body_desc);
+            let body_handle = physics.world.create_body(body_desc);
 
             let collider_desc = ColliderDesc::sphere(config.radius);
-            physics.0.attach_collider(body_handle, collider_desc);
+            physics.world.attach_collider(body_handle, collider_desc);
 
             body_handle
         };
@@ -218,7 +218,7 @@ impl<'a> System<'a> for ProjectileImpactDetectionSystem {
         let mut explosions: Vec<(Entity, Point3<f32>)> = Vec::new();
         let mut best_static_contacts: HashMap<RigidBodyHandle, (f32, Point3<f32>)> = HashMap::new();
 
-        for contact in physics.0.contact_events() {
+        for contact in physics.world.contact_events() {
             if !contact_is_static(contact) {
                 continue;
             }
@@ -251,7 +251,7 @@ impl<'a> System<'a> for ProjectileImpactDetectionSystem {
                 .build();
 
             if let Some(body) = bodies.get(entity) {
-                let _ = physics.0.remove_body(body.0);
+                let _ = physics.world.remove_body(body.0);
             }
 
             // Delete the grenade

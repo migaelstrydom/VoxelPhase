@@ -12,30 +12,43 @@ use std::collections::HashSet;
 use crate::biped::BipedController;
 use crate::components::{Orientation, Position, RigidBodyComponent, Velocity, VelocityDriven};
 use crate::debug::{DebugLines, DebugLog, DebugOverlays};
-use crate::physics::{PhysicsImpulse, PhysicsImpulseQueue, PhysicsWorld, RigidBodyHandle};
+use crate::physics::{
+    PhysicsImpulseQueue, PhysicsWorld, RigidBodyHandle, SequentialStepper, Stepper,
+};
 use crate::terrain::TerrainManager;
 use crate::time::Time;
 
-/// Wrapper for PhysicsWorld to use as a specs resource.
-#[derive(Default)]
-pub struct PhysicsResource(pub PhysicsWorld);
-
-/// Steps physics simulation and syncs state to ECS.
-pub struct PhysicsSyncSystem {
-    accumulator_seconds: f32,
-    fixed_dt_seconds: f32,
-    max_substeps_per_frame: u32,
+/// ECS resource wrapping the physics world and its stepping strategy.
+pub struct PhysicsResource {
+    pub world: PhysicsWorld,
+    stepper: Option<Box<dyn Stepper>>,
 }
 
-impl Default for PhysicsSyncSystem {
+impl PhysicsResource {
+    pub fn new(world: PhysicsWorld, stepper: Box<dyn Stepper>) -> Self {
+        Self {
+            world,
+            stepper: Some(stepper),
+        }
+    }
+
+    pub fn stepper(&self) -> &dyn Stepper {
+        self.stepper.as_ref().expect("stepper taken during step").as_ref()
+    }
+}
+
+impl Default for PhysicsResource {
     fn default() -> Self {
         Self {
-            accumulator_seconds: 0.0,
-            fixed_dt_seconds: 1.0 / 240.0,
-            max_substeps_per_frame: 8,
+            world: PhysicsWorld::default(),
+            stepper: Some(Box::new(SequentialStepper::new(1.0 / 240.0, 8))),
         }
     }
 }
+
+/// Steps physics simulation and syncs state to ECS.
+#[derive(Default)]
+pub struct PhysicsSyncSystem;
 
 impl PhysicsSyncSystem {
     fn sync_kinematics_from_ecs(
@@ -105,37 +118,6 @@ impl PhysicsSyncSystem {
             controller.state.is_grounded = grounded_handles.contains(&body.0);
         }
     }
-
-    fn step_fixed(
-        &mut self,
-        physics: &mut PhysicsWorld,
-        terrain: &TerrainManager,
-        frame_dt: f32,
-        impulses: &[PhysicsImpulse],
-        debug_lines: &mut DebugLines,
-    ) -> u32 {
-        let fixed_dt = self.fixed_dt_seconds.max(1e-5);
-        self.accumulator_seconds += frame_dt.max(0.0);
-        let max_carry = fixed_dt * self.max_substeps_per_frame as f32;
-        if self.accumulator_seconds > max_carry {
-            self.accumulator_seconds = max_carry;
-        }
-
-        if self.accumulator_seconds < fixed_dt {
-            return 0;
-        }
-
-        // Run narrowphase once for all substeps
-        physics.update_contacts(fixed_dt, terrain, impulses, debug_lines);
-
-        let mut substeps = 0u32;
-        while self.accumulator_seconds >= fixed_dt && substeps < self.max_substeps_per_frame {
-            physics.substep(fixed_dt, terrain);
-            self.accumulator_seconds -= fixed_dt;
-            substeps += 1;
-        }
-        substeps
-    }
 }
 
 impl<'a> System<'a> for PhysicsSyncSystem {
@@ -177,7 +159,7 @@ impl<'a> System<'a> for PhysicsSyncSystem {
 
         // Sync kinematic bodies from ECS into physics before stepping.
         Self::sync_kinematics_from_ecs(
-            &mut physics.0,
+            &mut physics.world,
             &positions,
             &velocities,
             &orientations,
@@ -185,63 +167,66 @@ impl<'a> System<'a> for PhysicsSyncSystem {
         );
 
         // Sync velocity-driven dynamic bodies (player, platforms, etc.)
-        Self::sync_velocity_driven_from_ecs(&mut physics.0, &velocities, &bodies, &velocity_driven);
+        Self::sync_velocity_driven_from_ecs(
+            &mut physics.world,
+            &velocities,
+            &bodies,
+            &velocity_driven,
+        );
 
         let impulses: Vec<_> = impulse_queue.drain().collect();
 
         // Step physics with terrain as static geometry
         let mut physics_substeps = 0u32;
         if let Some(ref terrain) = terrain_opt {
-            physics_substeps = self.step_fixed(
-                &mut physics.0,
-                terrain,
-                frame_dt,
-                &impulses,
-                &mut debug_lines,
-            );
+            if let Some(mut stepper) = physics.stepper.take() {
+                let result = stepper.step(
+                    &mut physics.world,
+                    frame_dt,
+                    &**terrain,
+                    &impulses,
+                    &mut debug_lines,
+                );
+                physics_substeps = result.substeps;
+                physics.stepper = Some(stepper);
+            }
         }
 
-        let grounded_handles = physics.0.grounded_handles();
+        let grounded_handles = physics.world.grounded_handles();
 
         // Debug visualization and logging
-        physics.0.debugger().add_contact_overlays(
-            physics.0.contact_events(),
+        physics.world.debugger().add_contact_overlays(
+            physics.world.contact_events(),
             &mut debug_overlays,
             &mut debug_lines,
         );
-        physics.0.debugger().add_sleep_overlays(
-            physics.0.bodies(),
-            &physics.0.sleeping_bodies(),
+        physics.world.debugger().add_sleep_overlays(
+            physics.world.bodies(),
+            &physics.world.sleeping_bodies(),
             &mut debug_overlays,
         );
-        physics.0.debugger().write_debug_log(
+        physics.world.debugger().write_debug_log(
             &mut debug_log,
-            physics.0.config().contact_margin,
-            physics.0.config().warm_start_depth_slop,
+            physics.world.config().contact_margin,
+            physics.world.config().warm_start_depth_slop,
         );
-        let gravity = physics.0.config().gravity;
+        let fixed_dt = physics.stepper().fixed_dt();
+        let gravity = physics.world.config().gravity;
         debug_log.add("Physics/Config/FrameDt", format!("{:.5}", frame_dt));
-        debug_log.add(
-            "Physics/Config/FixedDt",
-            format!("{:.5}", self.fixed_dt_seconds),
-        );
+        debug_log.add("Physics/Config/FixedDt", format!("{:.5}", fixed_dt));
         debug_log.add("Physics/Config/Substeps", physics_substeps.to_string());
         debug_log.add(
-            "Physics/Config/Accumulator",
-            format!("{:.5}", self.accumulator_seconds),
-        );
-        debug_log.add(
             "Physics/Config/Gdt",
-            format!("{:.5}", gravity.magnitude() * self.fixed_dt_seconds),
+            format!("{:.5}", gravity.magnitude() * fixed_dt),
         );
         debug_log.add(
             "Physics/Config/GyDt",
-            format!("{:.5}", gravity.y * self.fixed_dt_seconds),
+            format!("{:.5}", gravity.y * fixed_dt),
         );
 
         // Sync physics state back to ECS components
         Self::sync_physics_to_ecs(
-            &physics.0,
+            &physics.world,
             &mut positions,
             &mut velocities,
             &mut orientations,

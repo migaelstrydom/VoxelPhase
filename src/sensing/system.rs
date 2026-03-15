@@ -32,7 +32,7 @@ impl<'a> System<'a> for SensorProbeSystem {
     ) {
         let targets: Vec<&dyn ProbeTarget> = [
             terrain_opt.as_ref().map(|t| &**t as &dyn ProbeTarget),
-            physics_opt.as_ref().map(|p| &p.0 as &dyn ProbeTarget),
+            physics_opt.as_ref().map(|p| &p.world as &dyn ProbeTarget),
         ]
         .into_iter()
         .flatten()

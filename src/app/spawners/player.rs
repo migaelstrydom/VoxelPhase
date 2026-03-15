@@ -26,12 +26,12 @@ pub fn spawn_player(world: &mut World, initial_pos: nalgebra::Point3<f32>) -> En
             .gravity_scale(1.0)
             .linear_damping(0.0)
             .angular_damping(1.0);
-        let body_handle = physics.0.create_body(body_desc);
+        let body_handle = physics.world.create_body(body_desc);
         let collider_desc = ColliderDesc::sphere(body_radius)
             .density(30.0)
             .restitution(0.0)
             .friction(0.3);
-        physics.0.attach_collider(body_handle, collider_desc);
+        physics.world.attach_collider(body_handle, collider_desc);
         body_handle
     };
 

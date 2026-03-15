@@ -1,4 +1,5 @@
 use crate::debug::DebugLines;
+use crate::physics::stepping::FixedTimestep;
 use crate::physics::world::PhysicsConfig;
 use crate::physics::{PhysicsImpulse, PhysicsWorld, RigidBodyHandle, StaticGeometry};
 
@@ -8,7 +9,7 @@ use crate::physics::{PhysicsImpulse, PhysicsWorld, RigidBodyHandle, StaticGeomet
 
 /// Fixed-step configuration for deterministic physics benchmark runs.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct BenchRunConfig {
+pub struct BenchRunConfig {
     /// Fixed physics step size in seconds.
     pub fixed_dt: f32,
     /// Total simulated time in seconds.
@@ -29,7 +30,7 @@ impl Default for BenchRunConfig {
 
 /// Per-step sample captured by the benchmark runner.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct BenchSample {
+pub struct BenchSample {
     pub sim_time: f32,
     pub linear_speed: f32,
     pub angular_speed: f32,
@@ -43,7 +44,7 @@ pub(crate) struct BenchSample {
 
 /// Aggregated output from a benchmark run.
 #[derive(Debug, Default)]
-pub(crate) struct BenchRunResult {
+pub struct BenchRunResult {
     pub scenario_name: String,
     pub restitution: f32,
     pub fixed_dt: f32,
@@ -135,7 +136,7 @@ impl BenchRunResult {
 }
 
 /// Scenario contract for deterministic benchmark execution.
-pub(crate) trait PhysicsBenchScenario {
+pub trait PhysicsBenchScenario {
     fn name(&self) -> &'static str;
     fn restitution(&self) -> f32;
     fn build_world(&self) -> PhysicsWorld {
@@ -153,23 +154,23 @@ pub(crate) trait PhysicsBenchScenario {
     }
 }
 
-pub(crate) fn run_scenario<S: PhysicsBenchScenario>(
+pub fn run_scenario<S: PhysicsBenchScenario>(
     scenario: &S,
     cfg: BenchRunConfig,
 ) -> BenchRunResult {
     let mut world = scenario.build_world();
     let tracked_body = scenario.setup(&mut world);
     let mut debug_lines = DebugLines::default();
-    let mut accumulator = 0.0f32;
+    let mut timestep = FixedTimestep::new(cfg.fixed_dt, cfg.max_substeps_per_frame as u32);
     let mut sim_time = 0.0f32;
     let mut frame_idx = 0u64;
     let mut out = BenchRunResult::new(scenario.name(), scenario.restitution(), cfg.fixed_dt);
 
     while sim_time + cfg.fixed_dt <= cfg.duration + 1e-6 {
-        accumulator += scenario.frame_dt(frame_idx).max(0.0);
+        let substeps = timestep.accumulate(scenario.frame_dt(frame_idx));
         frame_idx = frame_idx.saturating_add(1);
 
-        if accumulator < cfg.fixed_dt {
+        if substeps == 0 {
             continue;
         }
 
@@ -183,26 +184,15 @@ pub(crate) fn run_scenario<S: PhysicsBenchScenario>(
         );
         debug_lines.clear();
 
-        let mut consumed = 0usize;
-        while accumulator >= cfg.fixed_dt
-            && consumed < cfg.max_substeps_per_frame
-            && sim_time + cfg.fixed_dt <= cfg.duration + 1e-6
-        {
+        for _ in 0..substeps {
+            if sim_time + cfg.fixed_dt > cfg.duration + 1e-6 {
+                break;
+            }
             world.substep(cfg.fixed_dt, scenario.geometry());
             sim_time += cfg.fixed_dt;
-            accumulator -= cfg.fixed_dt;
-            consumed += 1;
             out.physics_steps = out.physics_steps.saturating_add(1);
             out.samples
                 .push(capture_sample(&world, tracked_body, sim_time));
-        }
-
-        if consumed == cfg.max_substeps_per_frame && accumulator >= cfg.fixed_dt {
-            let dropped = (accumulator / cfg.fixed_dt).floor() as u64;
-            if dropped > 0 {
-                out.dropped_steps = out.dropped_steps.saturating_add(dropped);
-                accumulator -= dropped as f32 * cfg.fixed_dt;
-            }
         }
     }
 

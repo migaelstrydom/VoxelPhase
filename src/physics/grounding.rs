@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use nalgebra::Vector3;
 
-use crate::physics::world::{ContactEvent, ContactSource};
+use crate::physics::contact_event::{ContactEvent, ContactSource};
 use crate::physics::RigidBodyHandle;
 
 #[derive(Clone, Copy, Debug)]

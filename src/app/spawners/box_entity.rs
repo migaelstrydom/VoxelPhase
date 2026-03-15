@@ -584,14 +584,14 @@ pub fn spawn_box(
             .linear_damping(0.01)
             .angular_damping(0.005);
 
-        let body_handle = physics.0.create_body(body_desc);
+        let body_handle = physics.world.create_body(body_desc);
 
         let collider_desc = ColliderDesc::box_shape(half_extents)
             .density(phys.density)
             .restitution(phys.restitution)
             .friction(phys.friction);
 
-        physics.0.attach_collider(body_handle, collider_desc);
+        physics.world.attach_collider(body_handle, collider_desc);
 
         body_handle
     };

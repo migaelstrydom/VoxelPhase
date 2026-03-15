@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use super::body::RigidBody;
 use super::handle::RigidBodyHandle;
 use super::pipeline::pair::{PairHeader, PairManifold, SolverManifold};
-use super::world::{ContactEvent, ContactSource};
+use super::contact_event::{ContactEvent, ContactSource};
 use crate::debug::{DebugLines, DebugLog, DebugOverlays};
 use crate::rendering::Colour;
 
@@ -28,7 +28,7 @@ pub struct PhysicsDebugConfig {
 impl Default for PhysicsDebugConfig {
     fn default() -> Self {
         Self {
-            draw_contacts: false,
+            draw_contacts: true,
             draw_contact_raw_normals: false,
             draw_sleeping: false,
         }
