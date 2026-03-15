@@ -17,6 +17,7 @@ pub(crate) fn warm_start_contact(
     header: &PairHeader,
     contact: &mut SolverContact,
     scale: f32,
+    shock_scales: (f32, f32),
 ) {
     contact.accumulated_normal_impulse = contact.warm_normal_impulse * scale;
 
@@ -49,7 +50,7 @@ pub(crate) fn warm_start_contact(
     let normal_impulse = contact.normal * contact.accumulated_normal_impulse;
     let total = normal_impulse + friction_ws;
 
-    apply_impulse_pair(bodies, header, contact.point, total);
+    apply_impulse_pair(bodies, header, contact.point, total, shock_scales);
 }
 
 /// Compute effective solver iteration count based on contact complexity.

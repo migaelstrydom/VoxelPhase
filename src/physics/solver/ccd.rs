@@ -15,12 +15,14 @@ pub(crate) fn solve_contacts(
     manifolds: &mut [SolverManifold],
     restitution_velocity_threshold: f32,
 ) {
+    let no_shock = (1.0, 1.0);
     for manifold in manifolds.iter_mut() {
         let header = &manifold.header;
         for contact in manifold.contacts.iter_mut() {
-            let pre_solve_vn = BodyPairState::extract(bodies, header, contact.point)
-                .map(|state| state.relative_normal_velocity(contact.point, &contact.normal))
-                .unwrap_or(0.0);
+            let pre_solve_vn =
+                BodyPairState::extract(bodies, header, contact.point, no_shock)
+                    .map(|state| state.relative_normal_velocity(contact.point, &contact.normal))
+                    .unwrap_or(0.0);
             solve_normal_impulse(
                 bodies,
                 header,
@@ -28,8 +30,9 @@ pub(crate) fn solve_contacts(
                 restitution_velocity_threshold,
                 pre_solve_vn,
                 false,
+                no_shock,
             );
-            solve_friction_impulse(bodies, header, contact);
+            solve_friction_impulse(bodies, header, contact, no_shock);
         }
     }
 }

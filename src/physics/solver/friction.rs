@@ -16,13 +16,14 @@ pub(crate) fn solve_friction_impulse(
     bodies: &mut Arena<RigidBody>,
     header: &PairHeader,
     contact: &mut SolverContact,
+    shock_scales: (f32, f32),
 ) {
     if contact.accumulated_normal_impulse <= 0.0 || header.friction <= 0.0 {
         contact.accumulated_friction_impulse_ws = Vector3::zeros();
         return;
     }
 
-    let Some(state) = BodyPairState::extract(bodies, header, contact.point) else {
+    let Some(state) = BodyPairState::extract(bodies, header, contact.point, shock_scales) else {
         return;
     };
 
@@ -66,7 +67,7 @@ pub(crate) fn solve_friction_impulse(
     if applied_t1.abs() > 1e-10 || applied_t2.abs() > 1e-10 {
         let impulse = t1 * applied_t1 + t2 * applied_t2;
         log_impulse_torque_diag("friction", header, contact, &state, &impulse);
-        apply_impulse_pair(bodies, header, contact.point, impulse);
+        apply_impulse_pair(bodies, header, contact.point, impulse, shock_scales);
     }
 }
 
@@ -81,6 +82,7 @@ pub(crate) fn manifold_friction_projection(
     bodies: &mut Arena<RigidBody>,
     header: &PairHeader,
     contacts: &mut SmallVec<[SolverContact; 4]>,
+    shock_scales: (f32, f32),
 ) {
     let total_normal: f32 = contacts.iter().map(|c| c.accumulated_normal_impulse).sum();
     if total_normal <= 0.0 || header.friction <= 0.0 {
@@ -103,7 +105,7 @@ pub(crate) fn manifold_friction_projection(
         contact.accumulated_friction_impulse_ws = old * scale;
         let delta = contact.accumulated_friction_impulse_ws - old;
         if delta.magnitude_squared() > 1e-20 {
-            apply_impulse_pair(bodies, header, contact.point, delta);
+            apply_impulse_pair(bodies, header, contact.point, delta, shock_scales);
         }
     }
 }

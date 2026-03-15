@@ -19,13 +19,13 @@ use super::pipeline::integration::{integrate_bodies, integrate_forces};
 use super::pipeline::manifold::ManifoldCache;
 use super::pipeline::normal_smoothing::NormalSmoothingConfig;
 use super::pipeline::pair::SolverManifold;
-use super::solver::{ContactSolver, PgsNgsSolver};
 use super::sleep::{SleepManager, SleepManagerConfig};
+use super::solver::{ContactSolver, ManifoldConditioner, ManifoldConditions, PgsNgsSolver};
 use super::static_geometry::StaticGeometry;
-use crate::collision::continuous::swept_sphere_sphere;
 use crate::collision::obb::Obb;
 use crate::debug::DebugLines;
 use crate::sensing::{ProbeHit, ProbeTarget};
+use crate::{collision::continuous::swept_sphere_sphere, physics::ShockPropagationConditioner};
 
 /// Configuration for the physics simulation.
 #[derive(Debug, Clone)]
@@ -107,6 +107,10 @@ pub struct PhysicsWorld {
     force_fields: ForceFieldRegistry,
     /// Contact constraint solver (velocity + position correction).
     solver: Box<dyn ContactSolver + Send + Sync>,
+    /// Manifold conditioner (reordering + per-manifold metadata like shock scales).
+    conditioner: Box<dyn ManifoldConditioner + Send + Sync>,
+    /// Per-manifold conditions produced by the conditioner, reused across substeps.
+    manifold_conditions: ManifoldConditions,
     /// Continuous collision detection strategy.
     /// Wrapped in `Option` so it can be temporarily taken during `substep()`
     /// to avoid self-referential borrows (the strategy needs mutable access
@@ -130,19 +134,29 @@ impl PhysicsWorld {
         Self::with_components(
             config,
             Box::new(PgsNgsSolver::default()),
+            Box::new(ShockPropagationConditioner::default()),
             Box::new(SweepClampCcd::default()),
         )
     }
 
     /// Create a physics world with a specific contact solver.
-    pub fn with_solver(config: PhysicsConfig, solver: Box<dyn ContactSolver + Send + Sync>) -> Self {
-        Self::with_components(config, solver, Box::new(SweepClampCcd::default()))
+    pub fn with_solver(
+        config: PhysicsConfig,
+        solver: Box<dyn ContactSolver + Send + Sync>,
+    ) -> Self {
+        Self::with_components(
+            config,
+            solver,
+            Box::new(ShockPropagationConditioner::default()),
+            Box::new(SweepClampCcd::default()),
+        )
     }
 
-    /// Create a physics world with specific solver and CCD strategy.
+    /// Create a physics world with specific solver, conditioner, and CCD strategy.
     pub fn with_components(
         config: PhysicsConfig,
         solver: Box<dyn ContactSolver + Send + Sync>,
+        conditioner: Box<dyn ManifoldConditioner + Send + Sync>,
         ccd: Box<dyn CcdStrategy + Send + Sync>,
     ) -> Self {
         let manifold_cache = ManifoldCache::new(
@@ -165,6 +179,8 @@ impl PhysicsWorld {
             grounding_detector,
             force_fields: ForceFieldRegistry::default(),
             solver,
+            conditioner,
+            manifold_conditions: ManifoldConditions::new(),
             ccd: Some(ccd),
             cached_active_manifolds: Vec::new(),
             cached_all_manifolds: Vec::new(),
@@ -480,6 +496,22 @@ impl PhysicsWorld {
         self.cached_active_manifolds = active_manifolds;
         self.cached_all_manifolds = solver_manifolds;
 
+        // Condition manifolds (reorder + compute shock scales) before solving
+        let gravity_dir = {
+            let len = self.config.gravity.norm();
+            if len > 1e-6 {
+                self.config.gravity / len
+            } else {
+                Vector3::new(0.0, -1.0, 0.0)
+            }
+        };
+        self.conditioner.condition(
+            &self.bodies,
+            &mut self.cached_active_manifolds,
+            gravity_dir,
+            &mut self.manifold_conditions,
+        );
+
         self.solver.prepare(&self.bodies);
     }
 
@@ -508,8 +540,12 @@ impl PhysicsWorld {
         );
 
         // Solve velocity constraints + position correction
-        self.solver
-            .solve(&mut self.bodies, &mut self.cached_active_manifolds, dt);
+        self.solver.solve(
+            &mut self.bodies,
+            &mut self.cached_active_manifolds,
+            &self.manifold_conditions,
+            dt,
+        );
         self.debugger
             .update_post_solve(&self.bodies, &self.cached_active_manifolds);
 
@@ -616,7 +652,6 @@ impl PhysicsWorld {
             body.set_mass_properties(total_mass, total_inertia);
         }
     }
-
 }
 
 impl ProbeTarget for PhysicsWorld {

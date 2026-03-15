@@ -23,8 +23,9 @@ pub(crate) fn solve_normal_impulse(
     restitution_velocity_threshold: f32,
     pre_solve_vn: f32,
     is_persisted: bool,
+    shock_scales: (f32, f32),
 ) {
-    let Some(state) = BodyPairState::extract(bodies, header, contact.point) else {
+    let Some(state) = BodyPairState::extract(bodies, header, contact.point, shock_scales) else {
         return;
     };
 
@@ -82,6 +83,6 @@ pub(crate) fn solve_normal_impulse(
     if applied.abs() > 1e-10 {
         let impulse = contact.normal * applied;
         log_impulse_torque_diag("normal", header, contact, &state, &impulse);
-        apply_impulse_pair(bodies, header, contact.point, impulse);
+        apply_impulse_pair(bodies, header, contact.point, impulse, shock_scales);
     }
 }

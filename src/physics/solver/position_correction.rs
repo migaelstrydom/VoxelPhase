@@ -43,6 +43,9 @@ pub struct PositionCorrectionConfig {
     pub contact_rolling_resistance: f32,
     /// Linear damping factor applied to bodies with contacts.
     pub contact_linear_damping: f32,
+    /// Enable angular correction during NGS position solving.
+    /// When false, only linear position corrections are applied.
+    pub ngs_angular_correction: bool,
 }
 
 impl Default for PositionCorrectionConfig {
@@ -51,7 +54,7 @@ impl Default for PositionCorrectionConfig {
             baumgarte_factor: 0.3,
             baumgarte_slop: 0.005,
             ngs_enabled: true,
-            correction_factor: 0.05,
+            correction_factor: 0.2,
             slop: 0.005,
             iterations: 3,
             max_correction_speed: 0.1,
@@ -59,6 +62,7 @@ impl Default for PositionCorrectionConfig {
             deep_threshold: 0.1,
             contact_rolling_resistance: 0.1,
             contact_linear_damping: 0.1,
+            ngs_angular_correction: false,
         }
     }
 }
@@ -85,6 +89,7 @@ pub(crate) fn apply_position_correction(
             config.max_correction_speed,
             config.deep_correction_speed,
             config.deep_threshold,
+            config.ngs_angular_correction,
             dt,
             contact_generation_positions,
         );
@@ -233,6 +238,7 @@ fn apply_ngs_correction(
     max_correction_speed: f32,
     deep_correction_speed: f32,
     deep_threshold: f32,
+    angular_correction: bool,
     dt: f32,
     contact_generation_positions: &HashMap<Index, Point3<f32>>,
 ) {
@@ -314,12 +320,16 @@ fn apply_ngs_correction(
 
                 let r_a_cross_n = r_a.cross(&contact.normal);
                 let r_b_cross_n = r_b.cross(&contact.normal);
-                let angular_effect_a = (inv_inertia_a * r_a_cross_n).cross(&r_a);
-                let angular_effect_b = (inv_inertia_b * r_b_cross_n).cross(&r_b);
 
-                let effective_mass = inv_mass_a
-                    + inv_mass_b
-                    + (angular_effect_a + angular_effect_b).dot(&contact.normal);
+                let effective_mass = if angular_correction {
+                    let angular_effect_a = (inv_inertia_a * r_a_cross_n).cross(&r_a);
+                    let angular_effect_b = (inv_inertia_b * r_b_cross_n).cross(&r_b);
+                    inv_mass_a
+                        + inv_mass_b
+                        + (angular_effect_a + angular_effect_b).dot(&contact.normal)
+                } else {
+                    inv_mass_a + inv_mass_b
+                };
                 if effective_mass <= 0.0 {
                     flat_idx += 1;
                     continue;
@@ -356,9 +366,11 @@ fn apply_ngs_correction(
                     if inv_mass_a > 0.0 {
                         if let Some(entry) = transforms.get_mut(&handle_a.0) {
                             entry.position -= impulse * inv_mass_a;
-                            let delta_angle = inv_inertia_a * r_a.cross(&-impulse);
-                            entry.rotation =
-                                integrate_orientation(entry.rotation, delta_angle, 1.0);
+                            if angular_correction {
+                                let delta_angle = inv_inertia_a * r_a.cross(&-impulse);
+                                entry.rotation =
+                                    integrate_orientation(entry.rotation, delta_angle, 1.0);
+                            }
                         }
                     }
                 }
@@ -366,8 +378,11 @@ fn apply_ngs_correction(
                 if inv_mass_b > 0.0 {
                     if let Some(entry) = transforms.get_mut(&header.body_b.0) {
                         entry.position += impulse * inv_mass_b;
-                        let delta_angle = inv_inertia_b * r_b.cross(&impulse);
-                        entry.rotation = integrate_orientation(entry.rotation, delta_angle, 1.0);
+                        if angular_correction {
+                            let delta_angle = inv_inertia_b * r_b.cross(&impulse);
+                            entry.rotation =
+                                integrate_orientation(entry.rotation, delta_angle, 1.0);
+                        }
                     }
                 }
 

@@ -10,6 +10,9 @@ use crate::physics::pipeline::pair::PairHeader;
 ///
 /// Stores real physics values — no kinematic overrides. Callers that need the
 /// kinematic-static treatment apply the override via `effective_mass_with_overrides`.
+///
+/// When shock propagation is active, `inv_mass` and `inv_inertia` fields are
+/// pre-scaled by the per-body shock factor during extraction.
 pub(crate) struct BodyPairState {
     pub pos_a: Point3<f32>,
     pub vel_a: Vector3<f32>,
@@ -30,10 +33,15 @@ impl BodyPairState {
     /// `contact_point` is used as the fallback position for static body_a (where
     /// body_a is None). The actual value doesn't affect physics since static bodies
     /// have zero mass and inertia.
+    ///
+    /// `shock_scales` applies shock propagation mass scaling: `(scale_a, scale_b)`.
+    /// Inverse mass and inertia are pre-multiplied by the corresponding scale so
+    /// that all downstream effective-mass computations see shock-adjusted values.
     pub fn extract(
         bodies: &Arena<RigidBody>,
         header: &PairHeader,
         contact_point: Point3<f32>,
+        shock_scales: (f32, f32),
     ) -> Option<Self> {
         let body_b = bodies.get(header.body_b.0)?;
 
@@ -44,8 +52,8 @@ impl BodyPairState {
                     body_a.position(),
                     body_a.linear_velocity(),
                     body_a.angular_velocity(),
-                    body_a.inv_mass(),
-                    body_a.world_inv_inertia(),
+                    body_a.inv_mass() * shock_scales.0,
+                    body_a.world_inv_inertia() * shock_scales.0,
                 )
             }
             None => (
@@ -66,8 +74,8 @@ impl BodyPairState {
             pos_b: body_b.position(),
             vel_b: body_b.linear_velocity(),
             angular_vel_b: body_b.angular_velocity(),
-            inv_mass_b: body_b.inv_mass(),
-            inv_inertia_b: body_b.world_inv_inertia(),
+            inv_mass_b: body_b.inv_mass() * shock_scales.1,
+            inv_inertia_b: body_b.world_inv_inertia() * shock_scales.1,
         })
     }
 

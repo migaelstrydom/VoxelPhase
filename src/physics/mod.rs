@@ -58,7 +58,10 @@ pub use collider::{Collider, ColliderDesc, ColliderShape};
 pub use contact_event::{ContactEvent, ContactSource};
 pub use handle::{ColliderHandle, RigidBodyHandle};
 pub use impulses::{ForceField, PhysicsImpulse, PhysicsImpulseQueue};
-pub use solver::{ContactSolver, PgsNgsConfig, PgsNgsSolver};
+pub use solver::{
+    ContactSolver, IdentityConditioner, ManifoldConditioner, ManifoldConditions, PgsNgsConfig,
+    PgsNgsSolver, ShockPropagationConditioner, ShockPropagationConfig,
+};
 pub use static_geometry::StaticGeometry;
 pub use stepping::{FixedTimestep, SequentialStepper, Stepper};
 pub use world::PhysicsWorld;
