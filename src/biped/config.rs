@@ -128,10 +128,10 @@ impl Default for BipedConfig {
             pelvis_radius: 0.05,
 
             // Upper body geometry
-            torso_height: 0.2,
+            torso_height: 0.25,
             shoulder_width: 0.18,
-            upper_arm_length: 0.15,
-            lower_arm_length: 0.12,
+            upper_arm_length: 0.18,
+            lower_arm_length: 0.14,
             neck_length: 0.05,
             head_radius: 0.1,
 
