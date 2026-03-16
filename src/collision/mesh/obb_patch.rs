@@ -18,6 +18,8 @@ use crate::collision::segment::segment_segment_closest_points;
 
 /// Maximum contacts in the final manifold.
 const MAX_MANIFOLD_POINTS: usize = 4;
+/// Small tolerance for rejecting backfacing mesh contacts.
+const BACKFACE_EPSILON: f32 = 1e-4;
 
 /// Generate a contact manifold for an OBB against a filtered mesh patch.
 ///
@@ -108,14 +110,14 @@ pub fn obb_patch_manifold(
 
 /// Result of testing OBB overlap against a single face.
 struct FaceOverlap {
-    /// Face normal oriented toward the OBB center.
+    /// Face normal from the mesh surface toward the OBB.
     normal: Vector3<f32>,
 }
 
 /// Test if an OBB overlaps a face via half-extent projection.
 ///
-/// Allows the OBB center to be slightly behind the face plane (negative
-/// signed_dist) so contacts survive small solver-permitted penetrations.
+/// Mesh faces are treated as one-sided: the OBB must be on the normal side
+/// of the plane, with a tiny tolerance for floating-point noise.
 fn test_obb_face_overlap(
     obb: &Obb,
     face: &ContactFace,
@@ -127,6 +129,11 @@ fn test_obb_face_overlap(
     // Signed distance from OBB center to face plane.
     let signed_dist = (obb.center - face_point).dot(&normal);
 
+    // Reject backfacing contacts against the opposite side of a closed mesh.
+    if signed_dist < -BACKFACE_EPSILON {
+        return None;
+    }
+
     // OBB half-extent projected onto face normal.
     let half_proj = obb.project_half_extent(&normal);
 
@@ -135,11 +142,6 @@ fn test_obb_face_overlap(
 
     // Accept contacts within margin range.
     if depth < -contact_margin {
-        return None;
-    }
-
-    // Reject if OBB center is too far behind the face plane.
-    if signed_dist < -half_proj - contact_margin {
         return None;
     }
 
@@ -515,5 +517,42 @@ mod tests {
         // produce the terrain face's corners (or a subset).
         assert!(!m.is_empty(), "Should have contacts on the small face");
         assert!(m.len() <= 4);
+    }
+
+    #[test]
+    fn thin_shell_ignores_bottom_face_contacts() {
+        let patch = FilteredPatch {
+            faces: SmallVec::from_vec(vec![
+                ContactFace {
+                    vertices: SmallVec::from_vec(vec![
+                        Point3::new(-10.0, 0.0, -10.0),
+                        Point3::new(10.0, 0.0, -10.0),
+                        Point3::new(10.0, 0.0, 10.0),
+                        Point3::new(-10.0, 0.0, 10.0),
+                    ]),
+                    normal: Vector3::y(),
+                    feature_id: FeatureId::from_face(0),
+                },
+                ContactFace {
+                    vertices: SmallVec::from_vec(vec![
+                        Point3::new(-10.0, -0.6, -10.0),
+                        Point3::new(-10.0, -0.6, 10.0),
+                        Point3::new(10.0, -0.6, 10.0),
+                        Point3::new(10.0, -0.6, -10.0),
+                    ]),
+                    normal: -Vector3::y(),
+                    feature_id: FeatureId::from_face(1),
+                },
+            ]),
+            boundary_edges: SmallVec::new(),
+        };
+        let obb = unit_obb_at(0.5);
+        let m = obb_patch_manifold(&obb, &patch, 0.0);
+
+        assert!(!m.is_empty(), "Top face should still produce contacts");
+        for c in &m.points {
+            assert!(c.normal.y > 0.99, "Backfacing shell face should be rejected");
+            assert!(c.point.y.abs() < 1e-4, "Contacts should lie on the top shell face");
+        }
     }
 }

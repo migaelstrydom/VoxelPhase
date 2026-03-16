@@ -5,9 +5,9 @@ use nalgebra::{Point3, Vector3};
 use std::collections::HashMap;
 
 use super::body::RigidBody;
+use super::contact_event::{ContactEvent, ContactSource};
 use super::handle::RigidBodyHandle;
 use super::pipeline::pair::{PairHeader, PairManifold, SolverManifold};
-use super::contact_event::{ContactEvent, ContactSource};
 use crate::debug::{DebugLines, DebugLog, DebugOverlays};
 use crate::rendering::Colour;
 
@@ -28,7 +28,7 @@ pub struct PhysicsDebugConfig {
 impl Default for PhysicsDebugConfig {
     fn default() -> Self {
         Self {
-            draw_contacts: true,
+            draw_contacts: false,
             draw_contact_raw_normals: false,
             draw_sleeping: false,
         }
