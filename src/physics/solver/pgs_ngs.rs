@@ -9,13 +9,16 @@ use nalgebra::Point3;
 use crate::physics::body::RigidBody;
 use crate::physics::pipeline::pair::SolverManifold;
 
+use crate::physics::constraint::ConstraintRow;
+
 use super::body_pair::BodyPairState;
 use super::conditioning::ManifoldConditions;
+use super::constraint_row::{solve_constraint_row, warm_start_constraint_row};
 use super::friction::{manifold_friction_projection, solve_friction_impulse};
 use super::normal::solve_normal_impulse;
 use super::position_correction::{self, PositionCorrectionConfig};
 use super::warm_start::{effective_solver_iterations, warm_start_contact};
-use super::ContactSolver;
+use super::ConstraintSolver;
 
 /// Configuration for the PGS+NGS solver.
 #[derive(Debug, Clone)]
@@ -77,7 +80,7 @@ impl Default for PgsNgsSolver {
     }
 }
 
-impl ContactSolver for PgsNgsSolver {
+impl ConstraintSolver for PgsNgsSolver {
     fn prepare(&mut self, bodies: &Arena<RigidBody>) {
         self.contact_generation_positions.clear();
         for (idx, body) in bodies.iter() {
@@ -93,9 +96,10 @@ impl ContactSolver for PgsNgsSolver {
         bodies: &mut Arena<RigidBody>,
         manifolds: &mut [SolverManifold],
         conditions: &ManifoldConditions,
+        constraint_rows: &mut [ConstraintRow],
         dt: f32,
     ) {
-        if manifolds.is_empty() {
+        if manifolds.is_empty() && constraint_rows.is_empty() {
             return;
         }
 
@@ -140,10 +144,14 @@ impl ContactSolver for PgsNgsSolver {
                 warm_start_contact(bodies, header, contact, pre_solve[mi][ci].1, shock);
             }
         }
+        for row in constraint_rows.iter_mut() {
+            warm_start_constraint_row(bodies, row, self.config.warm_start_scale);
+        }
 
         // Phase 3: Iterative sequential-impulse solving.
         let iterations = effective_solver_iterations(manifolds, self.config.solver_iterations);
         for _ in 0..iterations {
+            // Contacts first — normal + friction impulses.
             for (mi, manifold) in manifolds.iter_mut().enumerate() {
                 let shock = conditions.shock_scales_for(mi);
 
@@ -188,6 +196,12 @@ impl ContactSolver for PgsNgsSolver {
                         shock,
                     );
                 }
+            }
+
+            // Joint constraints last within each iteration — higher priority
+            // than contacts, so friction can't undo constraint corrections.
+            for row in constraint_rows.iter_mut() {
+                solve_constraint_row(bodies, row);
             }
         }
 

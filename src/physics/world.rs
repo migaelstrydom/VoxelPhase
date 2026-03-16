@@ -20,7 +20,11 @@ use super::pipeline::manifold::ManifoldCache;
 use super::pipeline::normal_smoothing::NormalSmoothingConfig;
 use super::pipeline::pair::SolverManifold;
 use super::sleep::{SleepManager, SleepManagerConfig};
-use super::solver::{ContactSolver, ManifoldConditioner, ManifoldConditions, PgsNgsSolver};
+use super::constraint::expand::{expand_constraints, write_back_constraints};
+use super::constraint::projection::project_angular_velocities;
+use super::constraint::types::{Constraint, ConstraintRow};
+use super::constraint::ConstraintHandle;
+use super::solver::{ConstraintSolver, ManifoldConditioner, ManifoldConditions, PgsNgsSolver};
 use super::static_geometry::StaticGeometry;
 use crate::collision::obb::Obb;
 use crate::debug::DebugLines;
@@ -65,6 +69,10 @@ pub struct PhysicsConfig {
     pub speculative_margin_multiplier: f32,
     /// Configuration for the sleep system.
     pub sleep: SleepManagerConfig,
+    /// Position correction factor for joint constraints (beta).
+    /// Controls how aggressively constraint drift is corrected.
+    /// Higher values correct faster but may oscillate.
+    pub constraint_position_beta: f32,
     /// Debug rendering configuration.
     pub debug: PhysicsDebugConfig,
 }
@@ -85,6 +93,7 @@ impl Default for PhysicsConfig {
             speculative_min_speed: 1.0,
             speculative_margin_multiplier: 2.0,
             sleep: SleepManagerConfig::default(),
+            constraint_position_beta: 0.2,
             debug: PhysicsDebugConfig::default(),
         }
     }
@@ -105,8 +114,13 @@ pub struct PhysicsWorld {
     sleep_manager: SleepManager,
     grounding_detector: GroundingDetector,
     force_fields: ForceFieldRegistry,
-    /// Contact constraint solver (velocity + position correction).
-    solver: Box<dyn ContactSolver + Send + Sync>,
+    /// User-defined constraints (persistent across frames).
+    constraints: Arena<Constraint>,
+    /// Solver-ready constraint rows, expanded each frame from `constraints`.
+    /// Pre-allocated work buffer — cleared and refilled in `update_contacts()`.
+    cached_constraint_rows: Vec<ConstraintRow>,
+    /// Constraint solver (velocity + position correction for contacts and joints).
+    solver: Box<dyn ConstraintSolver + Send + Sync>,
     /// Manifold conditioner (reordering + per-manifold metadata like shock scales).
     conditioner: Box<dyn ManifoldConditioner + Send + Sync>,
     /// Per-manifold conditions produced by the conditioner, reused across substeps.
@@ -139,10 +153,10 @@ impl PhysicsWorld {
         )
     }
 
-    /// Create a physics world with a specific contact solver.
+    /// Create a physics world with a specific constraint solver.
     pub fn with_solver(
         config: PhysicsConfig,
-        solver: Box<dyn ContactSolver + Send + Sync>,
+        solver: Box<dyn ConstraintSolver + Send + Sync>,
     ) -> Self {
         Self::with_components(
             config,
@@ -155,7 +169,7 @@ impl PhysicsWorld {
     /// Create a physics world with specific solver, conditioner, and CCD strategy.
     pub fn with_components(
         config: PhysicsConfig,
-        solver: Box<dyn ContactSolver + Send + Sync>,
+        solver: Box<dyn ConstraintSolver + Send + Sync>,
         conditioner: Box<dyn ManifoldConditioner + Send + Sync>,
         ccd: Box<dyn CcdStrategy + Send + Sync>,
     ) -> Self {
@@ -178,6 +192,8 @@ impl PhysicsWorld {
             sleep_manager,
             grounding_detector,
             force_fields: ForceFieldRegistry::default(),
+            constraints: Arena::new(),
+            cached_constraint_rows: Vec::new(),
             solver,
             conditioner,
             manifold_conditions: ManifoldConditions::new(),
@@ -249,7 +265,8 @@ impl PhysicsWorld {
         RigidBodyHandle(self.bodies.insert(body))
     }
 
-    /// Remove a rigid body and all its attached colliders.
+    /// Remove a rigid body, all its attached colliders, and any constraints
+    /// referencing it.
     pub fn remove_body(&mut self, handle: RigidBodyHandle) -> bool {
         let Some(body) = self.bodies.remove(handle.0) else {
             return false;
@@ -258,6 +275,17 @@ impl PhysicsWorld {
         for collider_handle in body.colliders() {
             self.manifold_cache.remove_collider(*collider_handle);
             self.colliders.remove(collider_handle.0);
+        }
+
+        // Remove constraints that reference this body.
+        let to_remove: Vec<_> = self
+            .constraints
+            .iter()
+            .filter(|(_, c)| c.kind.references_body(handle))
+            .map(|(idx, _)| idx)
+            .collect();
+        for idx in to_remove {
+            self.constraints.remove(idx);
         }
 
         self.sleep_manager.sync_bodies(&self.bodies);
@@ -272,6 +300,31 @@ impl PhysicsWorld {
     /// Get a reference to a collider.
     pub fn collider(&self, handle: ColliderHandle) -> Option<&Collider> {
         self.colliders.get(handle.0)
+    }
+
+    // === Constraint Management ===
+
+    /// Create a new constraint and return its handle.
+    pub fn create_constraint(
+        &mut self,
+        kind: super::constraint::ConstraintKind,
+    ) -> ConstraintHandle {
+        ConstraintHandle(self.constraints.insert(Constraint::new(kind)))
+    }
+
+    /// Remove a constraint.
+    pub fn remove_constraint(&mut self, handle: ConstraintHandle) -> bool {
+        self.constraints.remove(handle.0).is_some()
+    }
+
+    /// Get a reference to a constraint.
+    pub fn constraint(&self, handle: ConstraintHandle) -> Option<&Constraint> {
+        self.constraints.get(handle.0)
+    }
+
+    /// Get a mutable reference to a constraint.
+    pub fn constraint_mut(&mut self, handle: ConstraintHandle) -> Option<&mut Constraint> {
+        self.constraints.get_mut(handle.0)
     }
 
     /// Update a kinematic body's transform (position + rotation).
@@ -512,6 +565,15 @@ impl PhysicsWorld {
             &mut self.manifold_conditions,
         );
 
+        // Expand user-defined constraints into solver-ready rows
+        expand_constraints(
+            &self.constraints,
+            &self.bodies,
+            dt,
+            self.config.constraint_position_beta,
+            &mut self.cached_constraint_rows,
+        );
+
         self.solver.prepare(&self.bodies);
     }
 
@@ -544,6 +606,7 @@ impl PhysicsWorld {
             &mut self.bodies,
             &mut self.cached_active_manifolds,
             &self.manifold_conditions,
+            &mut self.cached_constraint_rows,
             dt,
         );
         self.debugger
@@ -553,6 +616,20 @@ impl PhysicsWorld {
         self.manifold_cache
             .write_back(&self.cached_active_manifolds);
         self.manifold_cache.prune();
+
+        // Write solved constraint impulses back to persistent constraints
+        write_back_constraints(&mut self.constraints, &self.cached_constraint_rows);
+
+        // Hard projection: remove angular velocity components forbidden by
+        // constraints. This guarantees correctness regardless of solver
+        // iteration count and handles large-angle tilt where linearized
+        // Jacobians become degenerate.
+        project_angular_velocities(
+            &self.constraints,
+            &mut self.bodies,
+            dt,
+            self.config.constraint_position_beta,
+        );
 
         // Save pre-integration state for CCD
         let sleeping_snapshot = if self.config.sleep.enabled {

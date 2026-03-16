@@ -17,7 +17,7 @@ pub struct StepResult {
 /// - **Position-based** (XPBD): predict positions, solve constraints, derive velocities.
 ///
 /// The `Stepper` orchestrates when to call `PhysicsWorld::update_contacts()`
-/// and `PhysicsWorld::substep()`, while the `ContactSolver` inside the world
+/// and `PhysicsWorld::substep()`, while the `ConstraintSolver` inside the world
 /// handles the actual constraint solving.
 pub trait Stepper: Send + Sync {
     fn step(

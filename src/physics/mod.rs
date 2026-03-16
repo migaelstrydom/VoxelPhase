@@ -38,6 +38,7 @@ pub mod bench_harness;
 mod body;
 pub mod ccd;
 mod collider;
+pub mod constraint;
 mod contact_event;
 mod debug;
 pub mod grounding;
@@ -58,8 +59,9 @@ pub use collider::{Collider, ColliderDesc, ColliderShape};
 pub use contact_event::{ContactEvent, ContactSource};
 pub use handle::{ColliderHandle, RigidBodyHandle};
 pub use impulses::{ForceField, PhysicsImpulse, PhysicsImpulseQueue};
+pub use constraint::{Constraint, ConstraintHandle, ConstraintKind, ConstraintRow};
 pub use solver::{
-    ContactSolver, IdentityConditioner, ManifoldConditioner, ManifoldConditions, PgsNgsConfig,
+    ConstraintSolver, IdentityConditioner, ManifoldConditioner, ManifoldConditions, PgsNgsConfig,
     PgsNgsSolver, ShockPropagationConditioner, ShockPropagationConfig,
 };
 pub use static_geometry::StaticGeometry;

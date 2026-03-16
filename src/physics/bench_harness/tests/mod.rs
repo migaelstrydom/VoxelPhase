@@ -1,5 +1,6 @@
 mod assertions;
 mod ccd;
+mod constraint;
 mod dynamic_pairs;
 mod many_body;
 mod mesh_pipeline;

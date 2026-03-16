@@ -1,7 +1,8 @@
-use nalgebra::{Point3, UnitQuaternion, Vector3};
+use nalgebra::{Point3, UnitQuaternion, UnitVector3, Vector3};
 
 use super::framework::PhysicsBenchScenario;
 use super::geometry::*;
+use crate::physics::constraint::ConstraintKind;
 use crate::physics::world::PhysicsConfig;
 use crate::physics::{ColliderDesc, PhysicsWorld, RigidBodyDesc, RigidBodyHandle, StaticGeometry};
 
@@ -713,9 +714,9 @@ impl BoxGridScenario {
     pub fn new(grid_size: usize) -> Self {
         Self {
             grid_size,
-            half_extent: 0.3,
-            spacing: 0.6,
-            geometry: FlatQuadGeometry::new(10.0),
+            half_extent: 0.5,
+            spacing: 0.9,
+            geometry: FlatQuadGeometry::new(5.0),
         }
     }
 }
@@ -1018,6 +1019,73 @@ impl PhysicsBenchScenario for LowFrictionRampScenario {
                 .restitution(0.0)
                 .friction(0.1),
         );
+        body
+    }
+
+    fn geometry(&self) -> &dyn StaticGeometry {
+        &self.geometry
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Scenarios: constraint system
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Capsule on flat ground with a KeepUpright constraint, given an initial
+/// angular velocity to try to topple it. Validates that the constraint keeps
+/// the capsule upright and that it settles to rest.
+#[derive(Debug, Clone)]
+pub struct KeepUprightScenario {
+    /// Half-height of the capsule cylinder section.
+    pub half_height: f32,
+    /// Capsule radius.
+    pub radius: f32,
+    /// Initial angular velocity applied to try to topple the capsule.
+    pub initial_angular_velocity: Vector3<f32>,
+    /// Constraint compliance (0 = rigid).
+    pub compliance: f32,
+    geometry: FlatQuadGeometry,
+}
+
+impl KeepUprightScenario {
+    pub fn new() -> Self {
+        Self {
+            half_height: 0.5,
+            radius: 0.3,
+            initial_angular_velocity: Vector3::new(5.0, 0.0, 3.0),
+            compliance: 0.0,
+            geometry: FlatQuadGeometry::new(8.0),
+        }
+    }
+}
+
+impl PhysicsBenchScenario for KeepUprightScenario {
+    fn name(&self) -> &'static str {
+        "keep_upright"
+    }
+
+    fn restitution(&self) -> f32 {
+        0.0
+    }
+
+    fn setup(&self, world: &mut PhysicsWorld) -> RigidBodyHandle {
+        let spawn_y = self.half_height + self.radius + 0.01;
+        let mut desc = RigidBodyDesc::dynamic()
+            .position(Point3::new(0.0, spawn_y, 0.0));
+        desc.angular_velocity = self.initial_angular_velocity;
+        let body = world.create_body(desc);
+        let collider = ColliderDesc::capsule(self.half_height, self.radius)
+            .density(1000.0)
+            .restitution(0.0)
+            .friction(0.5);
+        let _ = world.attach_collider(body, collider);
+
+        let _ = world.create_constraint(ConstraintKind::KeepUpright {
+            body,
+            target_up: UnitVector3::new_normalize(Vector3::y()),
+            compliance: self.compliance,
+        });
+
         body
     }
 
