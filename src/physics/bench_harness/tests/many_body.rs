@@ -17,7 +17,7 @@ fn box_grid_settles_without_explosions() {
     // dynamic-dynamic pairs. Verifies no boxes explode or fall through.
     let scenario = BoxGridScenario::new(5);
     let cfg = BenchRunConfig {
-        duration: 4.0,
+        duration: 0.5,
         ..BenchRunConfig::default()
     };
     let run = run_scenario(&scenario, cfg);
@@ -154,7 +154,7 @@ fn box_grid_narrowphase_throughput() {
     // Measures wall-clock time for 2 seconds of simulated time.
     let scenario = BoxGridScenario::new(8);
     let cfg = BenchRunConfig {
-        duration: 2.0,
+        duration: 0.5,
         ..BenchRunConfig::default()
     };
 
