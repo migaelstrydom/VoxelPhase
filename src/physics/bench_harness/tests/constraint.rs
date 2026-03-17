@@ -42,7 +42,7 @@ fn keep_upright_kills_angular_velocity_in_free_fall() {
     // Single frame: update_contacts + 4 substeps
     world.update_contacts(dt, &geometry, &[], &mut debug_lines);
     for _ in 0..4 {
-        world.substep(dt, &geometry);
+        world.substep(dt, &geometry, &[]);
     }
 
     let ang_speed = world.body(body).unwrap().angular_velocity().magnitude();
@@ -86,7 +86,7 @@ fn keep_upright_sphere_rests_on_ground() {
         world.update_contacts(dt, &geometry, &[], &mut debug_lines);
         debug_lines.clear();
         for _ in 0..4 {
-            world.substep(dt, &geometry);
+            world.substep(dt, &geometry, &[]);
         }
     }
 
@@ -143,7 +143,7 @@ fn keep_upright_capsule_with_velocity_zeroing() {
         world.update_contacts(dt, &geometry, &[], &mut debug_lines);
         debug_lines.clear();
         for _ in 0..substeps {
-            world.substep(dt, &geometry);
+            world.substep(dt, &geometry, &[]);
         }
         if frame == 29 {
             let b = world.body(body).unwrap();
@@ -160,7 +160,7 @@ fn keep_upright_capsule_with_velocity_zeroing() {
         world.update_contacts(dt, &geometry, &[], &mut debug_lines);
         debug_lines.clear();
         for _ in 0..substeps {
-            world.substep(dt, &geometry);
+            world.substep(dt, &geometry, &[]);
         }
     }
     let b = world.body(body).unwrap();
@@ -174,7 +174,7 @@ fn keep_upright_capsule_with_velocity_zeroing() {
         world.update_contacts(dt, &geometry, &[], &mut debug_lines);
         debug_lines.clear();
         for _ in 0..substeps {
-            world.substep(dt, &geometry);
+            world.substep(dt, &geometry, &[]);
         }
 
         let b = world.body(body).unwrap();

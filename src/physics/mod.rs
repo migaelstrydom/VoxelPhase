@@ -39,6 +39,7 @@ mod body;
 pub mod ccd;
 mod collider;
 pub mod constraint;
+mod force_provider;
 mod contact_event;
 mod debug;
 pub mod grounding;
@@ -57,8 +58,9 @@ pub use body::{RigidBody, RigidBodyDesc};
 pub use ccd::{CcdStrategy, SweepClampCcd};
 pub use collider::{Collider, ColliderDesc, ColliderShape};
 pub use contact_event::{ContactEvent, ContactSource};
+pub use force_provider::{ForceContext, ForceOutput, SubstepForceProvider};
 pub use handle::{ColliderHandle, RigidBodyHandle};
-pub use impulses::{ForceField, PhysicsImpulse, PhysicsImpulseQueue};
+pub use impulses::{PhysicsImpulse, PhysicsImpulseQueue};
 pub use constraint::{Constraint, ConstraintHandle, ConstraintKind, ConstraintRow};
 pub use solver::{
     ConstraintSolver, IdentityConditioner, ManifoldConditioner, ManifoldConditions, PgsNgsConfig,

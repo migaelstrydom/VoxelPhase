@@ -8,7 +8,7 @@ use crate::projectile::{GrenadeSpawnSystem, LifetimeSystem, ProjectileImpactDete
 use crate::sensing::SensorProbeSystem;
 use crate::systems::{
     CameraControlSystem, PhysicsSyncSystem, PlayerInputSystem, PlayerMotionSystem, RenderSystem,
-    TerrainUpdateSystem,
+    TerrainUpdateSystem, WaterSystem,
 };
 
 /// Builds the system dispatcher with proper dependency ordering.
@@ -18,7 +18,7 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
         .with(InputActionSystem, "input_actions", &[])
         .with(PlayerInputSystem, "player_input", &["input_actions"])
         .with(PlayerMotionSystem, "player_motion", &["player_input"])
-        // Physics engine for dynamic bodies (beach balls, etc.)
+        // Physics engine (buoyancy forces computed per-substep internally)
         .with(
             PhysicsSyncSystem::default(),
             "physics_sync",
@@ -47,6 +47,8 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
             &["projectile_impact_detection"],
         )
         .with(TerrainUpdateSystem, "terrain_update", &["explosion"])
+        // Water simulation (after terrain update so dirty_regions are visible)
+        .with(WaterSystem, "water", &["terrain_update"])
         // Particles
         .with(ParticleSpawnSystem, "particle_spawn", &["explosion"])
         .with(ParticleUpdateSystem, "particle_update", &["particle_spawn"])

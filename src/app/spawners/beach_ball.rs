@@ -66,7 +66,7 @@ pub fn spawn_beach_ball(
         let body_handle = physics.world.create_body(body_desc);
 
         let collider_desc = ColliderDesc::sphere(RADIUS)
-            .density(1.0)
+            .density(100.0)
             .restitution(0.6)
             .friction(0.5);
 

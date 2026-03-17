@@ -1,3 +1,5 @@
+#![cfg(all(test, feature = "bench_harness"))]
+
 mod assertions;
 mod ccd;
 mod constraint;

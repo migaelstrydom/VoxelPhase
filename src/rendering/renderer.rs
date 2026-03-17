@@ -24,7 +24,9 @@ use crate::rendering::pipeline::{GraphicsPipeline, GraphicsPipelineConfig};
 use crate::rendering::sky::SkyRenderer;
 use crate::rendering::swapchain::{SurfaceInfo, Swapchain};
 use crate::rendering::vertex::Vertex;
+use crate::rendering::water::WaterRenderer;
 use crate::resources::textures::{TextureHandle, TextureManager};
+use crate::water::{WaterGrid, WaveGrid};
 
 /// The main renderer that orchestrates frame rendering.
 ///
@@ -39,6 +41,7 @@ pub struct Renderer {
     pub overlay: OverlayRenderer,
     pub particle_renderer: ParticleRenderer,
     pub sky_renderer: SkyRenderer,
+    pub water_renderer: WaterRenderer,
     /// When true, backfaces are rendered in wireframe with `wireframe_color`.
     pub debug_wireframe_backfaces: bool,
     /// The solid color used for wireframe backface rendering (RGBA, 0-1).
@@ -112,6 +115,10 @@ impl Renderer {
         // Create sky renderer
         let sky_renderer = SkyRenderer::new(Arc::clone(&vulkan_context), pipeline.renderpass)?;
 
+        // Create water renderer
+        let water_renderer =
+            WaterRenderer::new(Arc::clone(&vulkan_context), pipeline.renderpass)?;
+
         Ok(Self {
             pipeline,
             swapchain,
@@ -121,6 +128,7 @@ impl Renderer {
             overlay,
             particle_renderer,
             sky_renderer,
+            water_renderer,
             debug_wireframe_backfaces: true,
             wireframe_color: [0.0, 0.0, 0.0, 1.0],
         })
@@ -432,6 +440,44 @@ impl Renderer {
         }
 
         Ok(())
+    }
+
+    /// Render the water surface mesh from a `WaterGrid`.
+    ///
+    /// Should be called after drawing terrain/models but before particles.
+    pub fn render_water(
+        &mut self,
+        cb: vk::CommandBuffer,
+        flow_grid: &WaterGrid,
+        wave_grid: &WaveGrid,
+        view_matrix: &Matrix4<f32>,
+        proj_matrix: &Matrix4<f32>,
+    ) -> EngineResult<()> {
+        let extent = self.swapchain.extent;
+        let viewport = vk::Viewport {
+            x: 0.0,
+            y: 0.0,
+            width: extent.width as f32,
+            height: extent.height as f32,
+            min_depth: 0.0,
+            max_depth: 1.0,
+        };
+        let scissor = vk::Rect2D {
+            offset: vk::Offset2D { x: 0, y: 0 },
+            extent,
+        };
+
+        unsafe {
+            self.vulkan_context
+                .device()
+                .cmd_set_viewport(cb, 0, &[viewport]);
+            self.vulkan_context
+                .device()
+                .cmd_set_scissor(cb, 0, &[scissor]);
+        }
+
+        self.water_renderer
+            .render(cb, flow_grid, wave_grid, view_matrix, proj_matrix)
     }
 
     /// Render particles from the particle pool.

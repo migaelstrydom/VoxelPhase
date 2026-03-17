@@ -175,7 +175,10 @@ impl<'a> System<'a> for GrenadeSpawnSystem {
 
             let body_handle = physics.world.create_body(body_desc);
 
-            let collider_desc = ColliderDesc::sphere(config.radius);
+            let collider_desc = ColliderDesc::sphere(config.radius)
+                .density(2000.0)
+                .restitution(0.0)
+                .friction(0.3);
             physics.world.attach_collider(body_handle, collider_desc);
 
             body_handle

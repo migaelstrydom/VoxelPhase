@@ -7,11 +7,15 @@ use std::collections::{HashMap, HashSet};
 use super::body::{RigidBody, RigidBodyDesc};
 use super::ccd::{CcdContext, CcdStrategy, SweepClampCcd};
 use super::collider::{Collider, ColliderDesc, ColliderShape};
+use super::constraint::expand::{expand_constraints, write_back_constraints};
+use super::constraint::projection::project_angular_velocities;
+use super::constraint::types::{Constraint, ConstraintRow};
+use super::constraint::ConstraintHandle;
 use super::contact_event::{ContactEvent, ContactSource};
 use super::debug::{PhysicsDebugConfig, PhysicsDebugger};
 use super::grounding::{GroundingConfig, GroundingDetector};
 use super::handle::{ColliderHandle, RigidBodyHandle};
-use super::impulses::{ForceField, ForceFieldRegistry, PhysicsImpulse};
+use super::impulses::PhysicsImpulse;
 use super::narrowphase::{
     generate_dynamic_contacts, generate_static_contacts, NarrowphaseWorkBuffer, SatCacheMap,
 };
@@ -20,12 +24,11 @@ use super::pipeline::manifold::ManifoldCache;
 use super::pipeline::normal_smoothing::NormalSmoothingConfig;
 use super::pipeline::pair::SolverManifold;
 use super::sleep::{SleepManager, SleepManagerConfig};
-use super::constraint::expand::{expand_constraints, write_back_constraints};
-use super::constraint::projection::project_angular_velocities;
-use super::constraint::types::{Constraint, ConstraintRow};
-use super::constraint::ConstraintHandle;
 use super::solver::{ConstraintSolver, ManifoldConditioner, ManifoldConditions, PgsNgsSolver};
+use super::force_provider::{ForceContext, ForceOutput, SubstepForceProvider};
 use super::static_geometry::StaticGeometry;
+use crate::collision::capsule::Capsule;
+use crate::collision::discrete::sphere_capsule::sphere_capsule_manifold;
 use crate::collision::obb::Obb;
 use crate::debug::DebugLines;
 use crate::sensing::{ProbeHit, ProbeTarget};
@@ -113,7 +116,6 @@ pub struct PhysicsWorld {
     frame_index: u64,
     sleep_manager: SleepManager,
     grounding_detector: GroundingDetector,
-    force_fields: ForceFieldRegistry,
     /// User-defined constraints (persistent across frames).
     constraints: Arena<Constraint>,
     /// Solver-ready constraint rows, expanded each frame from `constraints`.
@@ -191,7 +193,6 @@ impl PhysicsWorld {
             frame_index: 0,
             sleep_manager,
             grounding_detector,
-            force_fields: ForceFieldRegistry::default(),
             constraints: Arena::new(),
             cached_constraint_rows: Vec::new(),
             solver,
@@ -223,13 +224,8 @@ impl PhysicsWorld {
         self.sleep_manager.sleeping_snapshot().into_iter().collect()
     }
 
-    /// Register a persistent force field. Returns its index for later removal.
-    pub fn add_force_field(&mut self, field: ForceField) -> usize {
-        self.force_fields.add(field)
-    }
-
-    /// Apply one-shot impulses and persistent force fields to all dynamic bodies.
-    fn apply_impulses(&mut self, impulses: &[PhysicsImpulse], dt: f32) {
+    /// Apply one-shot impulses to all dynamic bodies.
+    fn apply_impulses(&mut self, impulses: &[PhysicsImpulse]) {
         for (idx, body) in self.bodies.iter_mut() {
             if !body.is_dynamic() {
                 continue;
@@ -239,13 +235,6 @@ impl PhysicsWorld {
 
             for impulse in impulses {
                 if let Some(v) = impulse.impulse_at(pos) {
-                    body.apply_impulse(v);
-                    wake = true;
-                }
-            }
-
-            for field in self.force_fields.iter() {
-                if let Some(v) = field.impulse_at(pos, dt) {
                     body.apply_impulse(v);
                     wake = true;
                 }
@@ -295,6 +284,11 @@ impl PhysicsWorld {
     /// Get a reference to a rigid body.
     pub fn body(&self, handle: RigidBodyHandle) -> Option<&RigidBody> {
         self.bodies.get(handle.0)
+    }
+
+    /// Get a mutable reference to a rigid body.
+    pub fn body_mut(&mut self, handle: RigidBodyHandle) -> Option<&mut RigidBody> {
+        self.bodies.get_mut(handle.0)
     }
 
     /// Get a reference to a collider.
@@ -474,7 +468,7 @@ impl PhysicsWorld {
         };
 
         // Apply one-shot impulses and persistent force fields
-        self.apply_impulses(impulses, dt);
+        self.apply_impulses(impulses);
 
         // Narrowphase contact generation
         let mut raw_manifolds = generate_static_contacts(
@@ -586,12 +580,22 @@ impl PhysicsWorld {
     /// 4. Integrate positions
     /// 5. CCD pass (fast bodies only)
     /// 6. Update sleep states
-    pub fn substep(&mut self, dt: f32, static_geometry: &dyn StaticGeometry) {
+    pub fn substep(
+        &mut self,
+        dt: f32,
+        static_geometry: &dyn StaticGeometry,
+        force_providers: &[&dyn SubstepForceProvider],
+    ) {
         let sleeping_snapshot = if self.config.sleep.enabled {
             Some(self.sleep_manager.sleeping_snapshot())
         } else {
             None
         };
+
+        // Apply per-substep external forces from providers.
+        // Forces are cleared first so bodies that leave an affected region
+        // stop receiving stale forces.
+        self.apply_substep_forces(force_providers);
 
         // Integrate forces (gravity) into velocities
         integrate_forces(
@@ -695,6 +699,48 @@ impl PhysicsWorld {
         &self.bodies
     }
 
+    /// Apply per-substep forces from external providers.
+    ///
+    /// Clears all force/torque/drag accumulators first, then asks each provider
+    /// to recompute forces for its affected bodies based on current positions.
+    fn apply_substep_forces(&mut self, providers: &[&dyn SubstepForceProvider]) {
+        // Clear accumulators so bodies that leave a force region get zero.
+        for (_, body) in self.bodies.iter_mut() {
+            body.set_force(Vector3::zeros());
+            body.set_torque(Vector3::zeros());
+            body.set_drag(0.0, 0.0);
+        }
+
+        if providers.is_empty() {
+            return;
+        }
+
+        // Collect outputs first (immutable borrow of bodies/colliders),
+        // then apply them (mutable borrow of bodies).
+        let ctx = ForceContext {
+            bodies: &self.bodies,
+            colliders: &self.colliders,
+            gravity: self.config.gravity,
+            gravity_magnitude: self.config.gravity.magnitude(),
+        };
+
+        let mut outputs: Vec<(RigidBodyHandle, ForceOutput)> = Vec::new();
+        for provider in providers {
+            for &handle in provider.affected_bodies() {
+                let output = provider.compute_force(handle, &ctx);
+                outputs.push((handle, output));
+            }
+        }
+
+        for (handle, output) in outputs {
+            if let Some(body) = self.bodies.get_mut(handle.0) {
+                body.set_force(output.force);
+                body.set_torque(output.torque);
+                body.set_drag(output.linear_drag_coeff, output.angular_drag_coeff);
+            }
+        }
+    }
+
     /// Bodies grounded by static contacts in the most recent step.
     pub fn grounded_handles(&self) -> HashSet<RigidBodyHandle> {
         self.grounding_detector
@@ -762,10 +808,18 @@ impl ProbeTarget for PhysicsWorld {
                         let obb = Obb::new(center, body_rot, *half_extents);
                         probe_vs_obb(origin, end, radius, &obb, *half_extents)
                     }
-                    ColliderShape::Capsule { half_height, .. } => {
-                        // Treat capsule as a sphere with bounding radius for probe.
-                        probe_vs_sphere(origin, end, radius, center, *half_height)
-                    }
+                    ColliderShape::Capsule {
+                        half_height,
+                        radius: cap_radius,
+                    } => probe_vs_capsule(
+                        origin,
+                        end,
+                        radius,
+                        center,
+                        body_rot,
+                        *half_height,
+                        *cap_radius,
+                    ),
                 };
                 if let Some(hit) = hit {
                     if earliest.as_ref().map_or(true, |e: &ProbeHit| hit.t < e.t) {
@@ -839,6 +893,74 @@ fn probe_vs_obb(
         t,
         point: closest,
         normal: to_probe / len,
+    })
+}
+
+/// Sweep a probe sphere against a capsule body using iterative sampling.
+///
+/// Uses the analytic sphere-capsule manifold as a predicate along the probe path,
+/// first finding a bracketing interval with a coarse scan and then refining the
+/// entry time with binary search. This avoids adding a dedicated swept test while
+/// still handling the full capsule geometry (cylinder + caps).
+fn probe_vs_capsule(
+    origin: Point3<f32>,
+    end: Point3<f32>,
+    probe_radius: f32,
+    center: Point3<f32>,
+    rotation: UnitQuaternion<f32>,
+    half_height: f32,
+    cap_radius: f32,
+) -> Option<ProbeHit> {
+    let capsule = Capsule::new(center, rotation, half_height, cap_radius);
+
+    // Skip bodies the probe origin already overlaps (e.g. the probe source's own body).
+    if !sphere_capsule_manifold(&capsule, origin, probe_radius, 0.0).is_empty() {
+        return None;
+    }
+
+    let dir = end - origin;
+    let steps = 16;
+    let mut t_prev = 0.0f32;
+    let mut hit_interval: Option<(f32, f32)> = None;
+
+    // Coarse scan to find the first interval [t_prev, t] where we enter the capsule.
+    for i in 1..=steps {
+        let t = i as f32 / steps as f32;
+        let pos = origin + dir * t;
+        if !sphere_capsule_manifold(&capsule, pos, probe_radius, 0.0).is_empty() {
+            hit_interval = Some((t_prev, t));
+            break;
+        }
+        t_prev = t;
+    }
+
+    let Some((mut t_lo, mut t_hi)) = hit_interval else {
+        return None;
+    };
+
+    // Refine with binary search to approximate the entry time.
+    for _ in 0..8 {
+        let mid = 0.5 * (t_lo + t_hi);
+        let pos = origin + dir * mid;
+        if !sphere_capsule_manifold(&capsule, pos, probe_radius, 0.0).is_empty() {
+            t_hi = mid;
+        } else {
+            t_lo = mid;
+        }
+    }
+
+    let t = t_hi;
+    let probe_at_t = origin + dir * t;
+    let manifold = sphere_capsule_manifold(&capsule, probe_at_t, probe_radius, 0.0);
+    if manifold.is_empty() {
+        return None;
+    }
+    let contact = &manifold.points[0];
+
+    Some(ProbeHit {
+        t,
+        point: contact.point,
+        normal: contact.normal,
     })
 }
 

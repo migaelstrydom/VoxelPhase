@@ -3,15 +3,12 @@
 /// Material type for a voxel, determining its properties and appearance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[repr(u8)]
-#[allow(dead_code)] // Some variants (Sand, Water) are part of API but not yet used in generation
 pub enum VoxelMaterial {
     #[default]
     Air = 0,
     Rock = 1,
     Grass = 2,
     Dirt = 3,
-    Sand = 4,
-    Water = 5,
 }
 
 impl VoxelMaterial {
@@ -22,8 +19,6 @@ impl VoxelMaterial {
             VoxelMaterial::Rock => [0.5, 0.5, 0.5, 1.0],
             VoxelMaterial::Grass => [0.3, 0.7, 0.2, 1.0],
             VoxelMaterial::Dirt => [0.5, 0.3, 0.1, 1.0],
-            VoxelMaterial::Sand => [0.9, 0.8, 0.5, 1.0],
-            VoxelMaterial::Water => [0.2, 0.4, 0.8, 0.7],
         }
     }
 }
@@ -133,6 +128,6 @@ impl Voxel {
 impl VoxelMaterial {
     /// Check if this material is solid (should be collided with).
     pub fn is_solid(&self) -> bool {
-        !matches!(self, VoxelMaterial::Air | VoxelMaterial::Water)
+        !matches!(self, VoxelMaterial::Air)
     }
 }

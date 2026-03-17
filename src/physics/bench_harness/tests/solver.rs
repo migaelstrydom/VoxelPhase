@@ -203,7 +203,7 @@ fn sphere_pushing_box_no_jitter() {
         debug_lines.clear();
 
         for _ in 0..substeps {
-            world.substep(fixed_dt, &geometry);
+            world.substep(fixed_dt, &geometry, &[]);
             sim_time += fixed_dt;
 
             let sb = world.body(sphere_handle).unwrap();
@@ -337,7 +337,7 @@ fn velocity_driven_sphere_against_wall_no_bounce() {
         world.update_contacts(fixed_dt, &geometry, &[], &mut debug_lines);
         debug_lines.clear();
         for _ in 0..substeps {
-            world.substep(fixed_dt, &geometry);
+            world.substep(fixed_dt, &geometry, &[]);
         }
 
         x_samples.push(world.body(sphere).unwrap().position().x);

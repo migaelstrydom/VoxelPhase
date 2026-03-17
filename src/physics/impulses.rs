@@ -1,7 +1,5 @@
 use nalgebra::{Point3, Vector3};
 
-use crate::collision::AABB;
-
 // === One-shot impulses (explosions, jump pads, etc.) ===
 
 /// A one-shot impulse event applied to nearby bodies and then discarded.
@@ -75,97 +73,5 @@ impl PhysicsImpulseQueue {
 
     pub fn drain(&mut self) -> impl Iterator<Item = PhysicsImpulse> + '_ {
         self.events.drain(..)
-    }
-}
-
-// === Persistent force fields (boundary springs, wind zones, etc.) ===
-
-/// A persistent spatial force applied to bodies every physics step.
-#[derive(Debug, Clone)]
-pub enum ForceField {
-    /// Spring boundary that pushes bodies back inside an AABB.
-    ///
-    /// For each axis where the body is outside the AABB, a spring force
-    /// proportional to penetration depth pushes it back inward:
-    /// `impulse = spring_k * penetration_depth * dt`
-    Boundary {
-        /// The region bodies should stay inside.
-        bounds: AABB,
-        /// Spring stiffness in N/m. Higher values push bodies back more aggressively.
-        spring_k: f32,
-    },
-}
-
-impl ForceField {
-    /// Create a boundary spring field from an AABB.
-    pub fn boundary(bounds: AABB, spring_k: f32) -> Self {
-        Self::Boundary { bounds, spring_k }
-    }
-
-    /// Compute the impulse to apply to a body at the given position for a time step `dt`.
-    /// Returns `None` if the body is unaffected by this field.
-    pub fn impulse_at(&self, body_pos: Point3<f32>, dt: f32) -> Option<Vector3<f32>> {
-        match self {
-            Self::Boundary { bounds, spring_k } => {
-                let mut push = Vector3::zeros();
-                let max_penetration = 2.0;
-                let max_impulse = 200.0;
-
-                let y_push = 1.0;
-
-                if body_pos.x < bounds.min.x {
-                    push.x = (bounds.min.x - body_pos.x).min(max_penetration);
-                    push.y = y_push;
-                } else if body_pos.x > bounds.max.x {
-                    push.x = (bounds.max.x - body_pos.x).max(-max_penetration);
-                    push.y = y_push;
-                }
-
-                if body_pos.y < bounds.min.y {
-                    push.y = (bounds.min.y - body_pos.y).min(max_penetration);
-                } else if body_pos.y > bounds.max.y {
-                    push.y = (bounds.max.y - body_pos.y).max(-max_penetration);
-                }
-
-                if body_pos.z < bounds.min.z {
-                    push.z = (bounds.min.z - body_pos.z).min(max_penetration);
-                    push.y = y_push;
-                } else if body_pos.z > bounds.max.z {
-                    push.z = (bounds.max.z - body_pos.z).max(-max_penetration);
-                    push.y = y_push;
-                }
-
-                if push.magnitude_squared() < 1e-10 {
-                    return None;
-                }
-
-                let mut impulse = push * *spring_k * dt;
-                let impulse_mag = impulse.magnitude();
-                if impulse_mag > max_impulse {
-                    impulse *= max_impulse / impulse_mag;
-                }
-
-                Some(impulse)
-            }
-        }
-    }
-}
-
-/// Registry of persistent force fields applied every physics step.
-#[derive(Default)]
-pub struct ForceFieldRegistry {
-    fields: Vec<ForceField>,
-}
-
-impl ForceFieldRegistry {
-    /// Add a force field. Returns its index for later removal.
-    pub fn add(&mut self, field: ForceField) -> usize {
-        let idx = self.fields.len();
-        self.fields.push(field);
-        idx
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = &ForceField> {
-        self.fields.iter()
     }
 }

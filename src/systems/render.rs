@@ -8,6 +8,7 @@ use crate::rendering::material::MaterialManager;
 use crate::rendering::renderer::Renderer;
 use crate::resources::textures::TextureManager;
 use crate::terrain::TerrainManager;
+use crate::water::{WaterGrid, WaveGrid};
 use nalgebra::{Matrix4, Vector3};
 use specs::{Entities, Join, Read, ReadExpect, ReadStorage, System, Write, WriteExpect, WriteStorage};
 
@@ -24,6 +25,8 @@ impl<'a> System<'a> for RenderSystem {
         Read<'a, DebugOverlays>,
         Read<'a, ParticlePool>,
         Option<Read<'a, TerrainManager>>,
+        Option<Read<'a, WaterGrid>>,
+        Option<Read<'a, WaveGrid>>,
         ReadStorage<'a, ModelInstance>,
         ReadStorage<'a, Position>,
         ReadStorage<'a, Rotation>,
@@ -44,6 +47,8 @@ impl<'a> System<'a> for RenderSystem {
             debug_overlays,
             particle_pool,
             terrain_manager_opt,
+            water_grid_opt,
+            wave_grid_opt,
             model_instances,
             positions,
             rotations,
@@ -162,6 +167,21 @@ impl<'a> System<'a> for RenderSystem {
                     &texture_manager,
                 ) {
                     log::error!("RenderSystem: Failed to draw debug overlays: {}", e);
+                }
+
+                // Render water surface (after geometry, before particles)
+                if let (Some(ref water_grid), Some(ref wave_grid)) =
+                    (&water_grid_opt, &wave_grid_opt)
+                {
+                    if let Err(e) = renderer.render_water(
+                        draw_cb,
+                        water_grid,
+                        wave_grid,
+                        &view_matrix,
+                        &proj_matrix,
+                    ) {
+                        log::error!("RenderSystem: Failed to render water: {}", e);
+                    }
                 }
 
                 // Render particles (after models, before overlay)

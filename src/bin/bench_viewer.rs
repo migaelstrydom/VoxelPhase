@@ -435,7 +435,7 @@ fn step_physics<S: PhysicsBenchScenario>(state: &mut ViewerState, real_dt: f32, 
     );
 
     for _ in 0..substeps {
-        state.world.substep(fixed_dt, scenario.geometry());
+        state.world.substep(fixed_dt, scenario.geometry(), &[]);
         state.sim_time += fixed_dt;
         state.physics_steps += 1;
     }

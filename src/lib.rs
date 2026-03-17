@@ -22,4 +22,5 @@ pub mod systems;
 pub mod terrain;
 pub mod time;
 pub mod utils;
+pub mod water;
 pub mod world;

@@ -7,7 +7,7 @@ use super::write_exports;
 use super::CubeShellGeometry;
 use crate::debug::DebugLines;
 use crate::physics::world::PhysicsConfig;
-use crate::physics::{ColliderDesc, ForceField, PhysicsImpulse, PhysicsWorld, RigidBodyDesc};
+use crate::physics::{ColliderDesc, PhysicsImpulse, PhysicsWorld, RigidBodyDesc};
 
 // ── Many-body narrowphase throughput ───────────────────────────────
 
@@ -42,17 +42,13 @@ fn box_grid_settles_without_explosions() {
 }
 
 #[test]
-fn boundary_and_grenade_like_impulses_keep_states_finite() {
+fn grenade_like_impulses_keep_states_finite() {
     let geometry = CubeShellGeometry::new(32.0);
 
     let mut config = PhysicsConfig::default();
     config.sleep.enabled = false;
     let mut world = PhysicsWorld::new(config);
     let mut debug_lines = DebugLines::default();
-
-    // Match the app's boundary spring so this stress test exercises
-    // the same energy-injection path as gameplay.
-    world.add_force_field(ForceField::boundary(geometry.bounds, 500.0));
 
     // Dense jumble of boxes near the center.
     let box_half = Vector3::new(0.3, 0.3, 0.3);
@@ -106,7 +102,7 @@ fn boundary_and_grenade_like_impulses_keep_states_finite() {
 
         world.update_contacts(fixed_dt, &geometry, &impulses, &mut debug_lines);
         debug_lines.clear();
-        world.substep(fixed_dt, &geometry);
+        world.substep(fixed_dt, &geometry, &[]);
 
         for (idx, body) in world.bodies().iter() {
             let pos = body.position();
@@ -221,7 +217,7 @@ fn large_sphere_sliding_into_low_box_does_not_end_intersecting() {
         world.update_contacts(fixed_dt, &geometry, &[], &mut debug_lines);
         debug_lines.clear();
         for _ in 0..substeps_per_frame {
-            world.substep(fixed_dt, &geometry);
+            world.substep(fixed_dt, &geometry, &[]);
         }
     }
 
@@ -299,7 +295,7 @@ fn box_stack_settles_without_overlap() {
         world.update_contacts(fixed_dt, &geometry, &[], &mut debug_lines);
         debug_lines.clear();
         for _ in 0..substeps_per_frame {
-            world.substep(fixed_dt, &geometry);
+            world.substep(fixed_dt, &geometry, &[]);
         }
 
         if step_idx >= tail_start_frame {

@@ -188,7 +188,7 @@ pub fn run_scenario<S: PhysicsBenchScenario>(
             if sim_time + cfg.fixed_dt > cfg.duration + 1e-6 {
                 break;
             }
-            world.substep(cfg.fixed_dt, scenario.geometry());
+            world.substep(cfg.fixed_dt, scenario.geometry(), &[]);
             sim_time += cfg.fixed_dt;
             out.physics_steps = out.physics_steps.saturating_add(1);
             out.samples

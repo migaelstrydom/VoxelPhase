@@ -115,9 +115,18 @@ pub struct RigidBody {
     local_inertia: Matrix3<f32>,
     inv_local_inertia: Matrix3<f32>,
 
-    // Force/torque accumulators (cleared each step)
+    // Force/torque accumulators. External systems set these each frame;
+    // they are NOT cleared per substep so forces like buoyancy integrate
+    // alongside gravity across all substeps.
     force: Vector3<f32>,
     torque: Vector3<f32>,
+
+    // Drag coefficients set by external systems (e.g. water buoyancy).
+    // Applied per substep using current velocity, so drag tracks the body's
+    // actual speed even as it changes within a frame.
+    // F_drag = -linear_drag_coeff * v, τ_drag = -angular_drag_coeff * ω.
+    linear_drag_coeff: f32,
+    angular_drag_coeff: f32,
 
     // Attached colliders
     colliders: Vec<ColliderHandle>,
@@ -143,6 +152,8 @@ impl RigidBody {
             inv_local_inertia: Matrix3::zeros(),
             force: Vector3::zeros(),
             torque: Vector3::zeros(),
+            linear_drag_coeff: 0.0,
+            angular_drag_coeff: 0.0,
             colliders: Vec::new(),
             velocity_drive: None,
         }
@@ -189,6 +200,10 @@ impl RigidBody {
                 .angular_velocity
                 .dot(&(world_inertia * self.angular_velocity));
         linear + angular
+    }
+
+    pub fn mass(&self) -> f32 {
+        self.mass
     }
 
     pub fn inv_mass(&self) -> f32 {
@@ -256,6 +271,42 @@ impl RigidBody {
         }
     }
 
+    /// Apply an instantaneous angular impulse (torque × dt) directly.
+    pub fn apply_angular_impulse(&mut self, angular_impulse: Vector3<f32>) {
+        if self.inv_mass > 0.0 {
+            self.angular_velocity += self.world_inv_inertia() * angular_impulse;
+        }
+    }
+
+    /// Set the force accumulator directly.
+    ///
+    /// The accumulator is NOT cleared per substep, so the force integrates
+    /// across all substeps within a frame. The caller is responsible for
+    /// updating or clearing these each frame.
+    pub fn set_force(&mut self, force: Vector3<f32>) {
+        self.force = force;
+    }
+
+    /// Set the torque accumulator directly.
+    ///
+    /// The accumulator is NOT cleared per substep, so the torque integrates
+    /// across all substeps within a frame. The caller is responsible for
+    /// updating or clearing these each frame.
+    pub fn set_torque(&mut self, torque: Vector3<f32>) {
+        self.torque = torque;
+    }
+
+    /// Set drag coefficients applied per substep using the body's current
+    /// velocity. This ensures drag tracks actual speed even as the body
+    /// accelerates within a frame (e.g. a light body bobbing in water).
+    ///
+    /// `linear`: drag force magnitude per unit velocity (N·s/m).
+    /// `angular`: drag torque magnitude per unit angular velocity (N·m·s/rad).
+    pub fn set_drag(&mut self, linear: f32, angular: f32) {
+        self.linear_drag_coeff = linear;
+        self.angular_drag_coeff = angular;
+    }
+
     // === Internal methods ===
 
     pub(crate) fn add_collider(&mut self, handle: ColliderHandle) {
@@ -311,6 +362,19 @@ impl RigidBody {
         self.linear_velocity += self.force * self.inv_mass * dt;
         self.angular_velocity += self.world_inv_inertia() * self.torque * dt;
 
+        // Apply drag using exponential decay: v *= exp(-coeff/mass * dt).
+        // This is unconditionally stable regardless of coeff/mass ratio,
+        // unlike explicit Euler (v -= coeff*inv_mass*v*dt) which goes
+        // unstable when coeff*inv_mass*dt > 1 (e.g. light bodies in water).
+        if self.linear_drag_coeff > 0.0 {
+            let decay = (-self.linear_drag_coeff * self.inv_mass * dt).exp();
+            self.linear_velocity *= decay;
+        }
+        if self.angular_drag_coeff > 0.0 {
+            let decay = (-self.angular_drag_coeff * self.inv_mass * dt).exp();
+            self.angular_velocity *= decay;
+        }
+
         // Gyroscopic correction: Euler's equation for rigid body rotation is
         //   I·dω/dt = τ_ext − ω × (I·ω)
         // Without the cross term, angular momentum drifts as the body rotates,
@@ -321,10 +385,6 @@ impl RigidBody {
         // Apply damping
         self.linear_velocity *= (1.0 - self.linear_damping.min(1.0)).powf(dt);
         self.angular_velocity *= (1.0 - self.angular_damping.min(1.0)).powf(dt);
-
-        // Clear accumulators
-        self.force = Vector3::zeros();
-        self.torque = Vector3::zeros();
     }
 
     /// Apply the gyroscopic torque correction: −ω × (I·ω).

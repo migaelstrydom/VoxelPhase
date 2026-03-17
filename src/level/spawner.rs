@@ -9,11 +9,12 @@ use crate::app::spawners::{
 };
 use crate::collision::AABB;
 use crate::core::error::EngineResult;
-use crate::level::data::{BoxStyle, Level, LevelObject, StackItem};
+use crate::level::data::{BoxStyle, Level, LevelObject, StackItem, WaterBody};
 use crate::rendering::material::{MaterialId, MaterialManagerBuilder};
 use crate::resources::textures::TextureManager;
 use crate::terrain::svo::SparseVoxelOctree;
 use crate::terrain::{generate_terrain, DurabilityConfig, TerrainManager};
+use crate::water::{WaterGrid, WaterGridConfig, WaveGrid, WaveGridConfig};
 
 /// Materials needed to spawn level objects.
 pub struct LevelMaterials {
@@ -26,6 +27,34 @@ pub struct LevelMaterials {
     pub house_materials: Vec<MaterialId>,
     /// Pre-created capsule materials, one per capsule in the level.
     pub capsule_materials: Vec<MaterialId>,
+}
+
+struct WaterRuntimeConfig {
+    /// Coarsening factor applied to the voxel size for the flow grid.
+    grid_scale: u32,
+    /// Fluid density reserved for water-object interactions.
+    fluid_density: f32,
+    /// Equalization rate for the coarse flow simulation.
+    flow_rate: f32,
+    /// Fine-grid cell size for visible ripples.
+    wave_cell_size: f32,
+    /// Ripple propagation speed in meters per second.
+    wave_speed: f32,
+    /// Ripple damping in inverse seconds.
+    wave_damping: f32,
+}
+
+impl Default for WaterRuntimeConfig {
+    fn default() -> Self {
+        Self {
+            grid_scale: 2,
+            fluid_density: 1000.0,
+            flow_rate: 30.0,
+            wave_cell_size: 0.5,
+            wave_speed: 4.0,
+            wave_damping: 20.0,
+        }
+    }
 }
 
 /// Pre-scan the level and create all needed box materials during init.
@@ -308,7 +337,7 @@ fn spawn_object(
         LevelObject::Plank { pos, length, width } => {
             let mat = next_box_material(materials, box_mat_idx);
             let phys = BoxPhysics {
-                density: 20.0,
+                density: 500.0,
                 ..Default::default()
             };
             spawn_box(
@@ -485,6 +514,180 @@ fn spawn_object(
                 mat,
                 &phys,
             );
+        }
+    }
+}
+
+/// Create the water grids from the level's water configuration, if present.
+///
+/// Returns both the coarse flow grid and the fine wave grid. Queries terrain
+/// for floor heights at each cell center, then places water bodies (pools,
+/// lakes) as described in the level file.
+pub fn create_level_water(
+    level: &Level,
+    terrain: &TerrainManager,
+) -> Option<(WaterGrid, WaveGrid)> {
+    let water_config = level.water.as_ref()?;
+    let runtime_config = WaterRuntimeConfig::default();
+
+    let half_size = level.world_size;
+    let cell_size = level.voxel_size * runtime_config.grid_scale as f32;
+
+    // Grid covers the full world XZ extent.
+    let grid_width = (2.0 * half_size / cell_size).ceil() as usize;
+    let grid_depth = grid_width;
+
+    let config = WaterGridConfig {
+        cell_size,
+        dims: (grid_width, grid_depth),
+        origin: nalgebra::Vector3::new(-half_size, 0.0, -half_size),
+        ocean_level: water_config.ocean_level,
+        flow_rate: runtime_config.flow_rate,
+        fluid_density: runtime_config.fluid_density,
+        ..Default::default()
+    };
+
+    let mut flow_grid = WaterGrid::new(config);
+
+    // Set floor levels for all cells from terrain.
+    for j in 0..grid_depth {
+        for i in 0..grid_width {
+            let x = flow_grid.cell_center_x(i);
+            let z = flow_grid.cell_center_z(j);
+            if let Some(h) = terrain.surface_height_at(x, z) {
+                flow_grid.cell_mut(i, j).floor_level = h;
+            }
+        }
+    }
+
+    // Place water bodies.
+    for body in &water_config.bodies {
+        match body {
+            WaterBody::Pool {
+                center,
+                half_extents,
+                surface_level,
+            } => {
+                place_pool(&mut flow_grid, *center, *half_extents, *surface_level);
+            }
+            WaterBody::Lake {
+                seed,
+                surface_level,
+            } => {
+                place_lake(&mut flow_grid, *seed, *surface_level);
+            }
+        }
+    }
+
+    // Create the wave grid at fine resolution.
+    let wave_cell_size = runtime_config.wave_cell_size;
+    let cells_per_flow_cell = (cell_size / wave_cell_size).round() as usize;
+    let wave_dims = (
+        grid_width * cells_per_flow_cell,
+        grid_depth * cells_per_flow_cell,
+    );
+
+    let wave_grid = WaveGrid::new(WaveGridConfig {
+        cell_size: wave_cell_size,
+        dims: wave_dims,
+        origin: nalgebra::Vector3::new(-half_size, 0.0, -half_size),
+        wave_speed: runtime_config.wave_speed,
+        wave_damping: runtime_config.wave_damping,
+        cells_per_flow_cell,
+    });
+
+    log::info!(
+        "Water grids created: flow={}x{} (cell_size={:.1}, rate={:.1}), wave={}x{} (cell_size={:.2}, speed={:.1}, damping={:.1}), fluid_density={:.1}, {} bodies",
+        grid_width,
+        grid_depth,
+        cell_size,
+        runtime_config.flow_rate,
+        wave_dims.0,
+        wave_dims.1,
+        wave_cell_size,
+        runtime_config.wave_speed,
+        runtime_config.wave_damping,
+        runtime_config.fluid_density,
+        water_config.bodies.len(),
+    );
+
+    Some((flow_grid, wave_grid))
+}
+
+/// Fill a rectangular pool region with water up to `surface_level`.
+fn place_pool(
+    grid: &mut WaterGrid,
+    center: (f32, f32),
+    half_extents: (f32, f32),
+    surface_level: f32,
+) {
+    let min_x = center.0 - half_extents.0;
+    let max_x = center.0 + half_extents.0;
+    let min_z = center.1 - half_extents.1;
+    let max_z = center.1 + half_extents.1;
+
+    let cell_area = grid.cell_area();
+    let dims = grid.dims();
+
+    for j in 0..dims.1 {
+        for i in 0..dims.0 {
+            let cx = grid.cell_center_x(i);
+            let cz = grid.cell_center_z(j);
+
+            if cx >= min_x && cx <= max_x && cz >= min_z && cz <= max_z {
+                let floor = grid.cell(i, j).floor_level;
+                if floor < surface_level {
+                    let depth = surface_level - floor;
+                    let volume = depth * cell_area;
+                    grid.add_water(i, j, volume, floor);
+                }
+            }
+        }
+    }
+}
+
+/// Flood-fill from a seed point, filling all connected cells below `surface_level`.
+fn place_lake(grid: &mut WaterGrid, seed: (f32, f32), surface_level: f32) {
+    let Some((si, sj)) = grid.world_to_grid(seed.0, seed.1) else {
+        log::warn!(
+            "Lake seed ({:.1}, {:.1}) is outside the water grid",
+            seed.0,
+            seed.1
+        );
+        return;
+    };
+
+    let dims = grid.dims();
+    let cell_area = grid.cell_area();
+    let mut visited = vec![false; dims.0 * dims.1];
+    let mut queue = std::collections::VecDeque::new();
+
+    queue.push_back((si, sj));
+    visited[sj * dims.0 + si] = true;
+
+    while let Some((i, j)) = queue.pop_front() {
+        let floor = grid.cell(i, j).floor_level;
+        if floor >= surface_level {
+            continue;
+        }
+
+        let depth = surface_level - floor;
+        let volume = depth * cell_area;
+        grid.add_water(i, j, volume, floor);
+
+        // Expand to 4-connected neighbors.
+        for (di, dj) in [(-1i32, 0), (1, 0), (0, -1i32), (0, 1)] {
+            let ni = i as i32 + di;
+            let nj = j as i32 + dj;
+            if ni >= 0 && nj >= 0 && (ni as usize) < dims.0 && (nj as usize) < dims.1 {
+                let ni = ni as usize;
+                let nj = nj as usize;
+                let idx = nj * dims.0 + ni;
+                if !visited[idx] {
+                    visited[idx] = true;
+                    queue.push_back((ni, nj));
+                }
+            }
         }
     }
 }

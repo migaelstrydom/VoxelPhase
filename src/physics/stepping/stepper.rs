@@ -1,4 +1,5 @@
 use crate::debug::DebugLines;
+use crate::physics::force_provider::SubstepForceProvider;
 use crate::physics::impulses::PhysicsImpulse;
 use crate::physics::static_geometry::StaticGeometry;
 use crate::physics::world::PhysicsWorld;
@@ -26,6 +27,7 @@ pub trait Stepper: Send + Sync {
         frame_dt: f32,
         static_geometry: &dyn StaticGeometry,
         impulses: &[PhysicsImpulse],
+        force_providers: &[&dyn SubstepForceProvider],
         debug_lines: &mut DebugLines,
     ) -> StepResult;
 

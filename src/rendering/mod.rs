@@ -15,6 +15,7 @@ pub mod sky;
 pub mod swapchain;
 pub mod texture;
 pub mod vertex;
+pub mod water;
 
 // Re-export commonly used types
 pub use colour::Colour;

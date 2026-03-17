@@ -27,6 +27,10 @@ mod bytecode {
     /// Sky rendering shaders
     pub const SKY_VERTEX: &[u8] = include_bytes!("../../shader/sky.vert.spv");
     pub const SKY_FRAGMENT: &[u8] = include_bytes!("../../shader/sky.frag.spv");
+
+    /// Water rendering shaders
+    pub const WATER_VERTEX: &[u8] = include_bytes!("../../shader/water.vert.spv");
+    pub const WATER_FRAGMENT: &[u8] = include_bytes!("../../shader/water.frag.spv");
 }
 
 /// Centralized shader loading and management.
@@ -74,6 +78,16 @@ impl ShaderManager {
     /// Load the sky fragment shader.
     pub fn load_sky_fragment(device: &ManagedDevice) -> EngineResult<vk::ShaderModule> {
         Self::load_shader(device, bytecode::SKY_FRAGMENT, ShaderStage::Fragment)
+    }
+
+    /// Load the water vertex shader.
+    pub fn load_water_vertex(device: &ManagedDevice) -> EngineResult<vk::ShaderModule> {
+        Self::load_shader(device, bytecode::WATER_VERTEX, ShaderStage::Vertex)
+    }
+
+    /// Load the water fragment shader.
+    pub fn load_water_fragment(device: &ManagedDevice) -> EngineResult<vk::ShaderModule> {
+        Self::load_shader(device, bytecode::WATER_FRAGMENT, ShaderStage::Fragment)
     }
 
     /// Load a shader module from SPIR-V bytecode.

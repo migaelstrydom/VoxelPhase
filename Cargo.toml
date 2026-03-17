@@ -23,6 +23,12 @@ rustc-hash = "2.1.1"
 ron = "0.8"                  # Rusty Object Notation for level files
 serde = { version = "1", features = ["derive"] }
 
+[features]
+default = []
+bench_harness = []
+
 
 [dev-dependencies]
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
+
+

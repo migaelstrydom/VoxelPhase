@@ -39,6 +39,10 @@ pub struct TerrainManager {
     /// Regions that need mesh rebuilding (stored as AABBs).
     dirty_regions: Vec<AABB>,
 
+    /// Regions that were rebuilt in the most recent `update()` call.
+    /// Downstream systems (e.g. WaterSystem) read these to detect terrain changes.
+    rebuilt_regions: Vec<AABB>,
+
     /// Cached render data (updated on each mesh rebuild).
     render_vertices: Vec<Vertex>,
     render_indices: Vec<u32>,
@@ -89,6 +93,7 @@ impl TerrainManager {
             mesh: MeshOctree::new(mesh_bounds),
             voxel_size,
             dirty_regions: Vec::new(),
+            rebuilt_regions: Vec::new(),
             render_vertices: Vec::new(),
             render_indices: Vec::new(),
             texture: Some(texture),
@@ -147,6 +152,10 @@ impl TerrainManager {
     ///
     /// Call this once per frame or after batch modifications.
     pub fn update(&mut self) {
+        // Clear last frame's rebuilt regions so downstream systems see an empty
+        // list on frames with no terrain changes.
+        self.rebuilt_regions.clear();
+
         if self.dirty_regions.is_empty() {
             return;
         }
@@ -189,6 +198,8 @@ impl TerrainManager {
                 .update_region(&old_tris, &new_tris, self.voxel_size * 0.01);
             adjacency_elapsed += t_adj.elapsed();
         }
+        // Preserve dirty regions for downstream systems before clearing.
+        std::mem::swap(&mut self.rebuilt_regions, &mut self.dirty_regions);
         self.dirty_regions.clear();
         let rebuild_dirty_regions_time = t2.elapsed();
         let adjacency_time = adjacency_elapsed;
@@ -295,6 +306,64 @@ impl TerrainManager {
         self.svo.bounds()
     }
 
+    // === Water system interface ===
+
+    /// Get the highest solid terrain surface height at a given (x, z) position.
+    ///
+    /// Walks the SVO column at voxel resolution, finding where density transitions
+    /// from positive (solid) to negative (air). Returns the interpolated surface Y,
+    /// or None if the column is entirely air.
+    pub fn surface_height_at(&self, x: f32, z: f32) -> Option<f32> {
+        self.surface_heights_at(x, z).into_iter().next()
+    }
+
+    /// Get all solid surface heights in a column, sorted top-to-bottom.
+    ///
+    /// A surface is detected where density transitions from positive (solid, below)
+    /// to negative (air, above). For sky islands with multiple terrain layers, this
+    /// returns multiple heights. Used by the water system to find floors.
+    pub fn surface_heights_at(&self, x: f32, z: f32) -> Vec<f32> {
+        let bounds = self.svo.bounds();
+
+        if x < bounds.min.x || x > bounds.max.x || z < bounds.min.z || z > bounds.max.z {
+            return Vec::new();
+        }
+
+        let step = self.voxel_size;
+        let mut surfaces = Vec::new();
+
+        // Walk the column from top to bottom at voxel resolution.
+        // Detect sign transitions: solid (density > 0) below, air (density <= 0) above.
+        let mut y = bounds.max.y;
+        let mut prev_density = self.svo.get(Point3::new(x, y, z)).density;
+
+        y -= step;
+        while y >= bounds.min.y {
+            let density = self.svo.get(Point3::new(x, y, z)).density;
+
+            // Transition from solid to air (going upward): this Y is a surface.
+            if density > 0.0 && prev_density <= 0.0 {
+                // Linearly interpolate the exact surface Y between the two samples.
+                let t = density / (density - prev_density);
+                let surface_y = y + t * step;
+                surfaces.push(surface_y);
+            }
+
+            prev_density = density;
+            y -= step;
+        }
+
+        surfaces
+    }
+
+    /// Regions that were rebuilt in the most recent `update()` call.
+    ///
+    /// Downstream systems (e.g. WaterSystem) read these to detect terrain
+    /// changes and invalidate cached floor levels.
+    pub fn dirty_regions(&self) -> &[AABB] {
+        &self.rebuilt_regions
+    }
+
     // === Rendering data ===
 
     /// Check if there's any geometry to render.
@@ -376,6 +445,7 @@ impl TerrainManager {
             mesh: MeshOctree::new(mesh_bounds),
             voxel_size,
             dirty_regions: Vec::new(),
+            rebuilt_regions: Vec::new(),
             render_vertices: Vec::new(),
             render_indices: Vec::new(),
             texture: None,

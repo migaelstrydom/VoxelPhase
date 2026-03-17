@@ -18,6 +18,10 @@ pub struct Level {
     pub terrain: Terrain,
     pub player_spawn: (f32, f32, f32),
     pub objects: Vec<LevelObject>,
+
+    /// Water configuration. If omitted, no water system is created.
+    #[serde(default)]
+    pub water: Option<WaterConfig>,
 }
 
 impl Level {
@@ -240,6 +244,45 @@ pub enum StackItem {
     Capsule { half_height: f32, radius: f32 },
 }
 
+/// Level-authored water placement data.
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct WaterConfig {
+    /// Sea level for the infinite ocean plane. If None, no ocean is rendered
+    /// and boundary cells do not act as sources/sinks.
+    pub ocean_level: Option<f32>,
+
+    /// Individual water bodies placed in the level.
+    #[serde(default)]
+    pub bodies: Vec<WaterBody>,
+}
+
+/// A discrete body of water placed at level load time.
+#[derive(Deserialize)]
+pub enum WaterBody {
+    /// Fill a rectangular region up to a given surface level.
+    /// The floor_level is determined automatically from terrain height.
+    /// Only cells where terrain height < surface_level receive water.
+    Pool {
+        /// XZ center of the pool region.
+        center: (f32, f32),
+        /// XZ half-extents of the fill region.
+        half_extents: (f32, f32),
+        /// Target water surface height (world Y).
+        surface_level: f32,
+    },
+
+    /// Fill all connected terrain below a given height, flood-fill style.
+    /// Starts from a seed point and fills outward until terrain rises above
+    /// surface_level or the region boundary is reached.
+    Lake {
+        /// Seed point (x, z) — must be inside a depression.
+        seed: (f32, f32),
+        /// Target water surface height (world Y).
+        surface_level: f32,
+    },
+}
+
 // ---------------------------------------------------------------------------
 // Default value functions for serde
 // ---------------------------------------------------------------------------
@@ -262,4 +305,36 @@ fn default_capsule_restitution() -> f32 {
 
 fn default_capsule_friction() -> f32 {
     0.6
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn water_config_serde_defaults_apply_when_fields_are_omitted() {
+        let config: WaterConfig = ron::from_str("(bodies: [])").expect("WaterConfig should parse");
+
+        assert_eq!(config.ocean_level, None);
+        assert!(config.bodies.is_empty());
+    }
+
+    #[test]
+    fn water_config_default_matches_serde_defaults() {
+        let config = WaterConfig::default();
+
+        assert_eq!(config.ocean_level, None);
+        assert!(config.bodies.is_empty());
+    }
+
+    #[test]
+    fn water_config_rejects_runtime_tuning_fields() {
+        let parse_result: Result<WaterConfig, _> =
+            ron::from_str("(wave_damping: 2.0, bodies: [])");
+
+        assert!(
+            parse_result.is_err(),
+            "WaterConfig should reject runtime tuning fields from level data"
+        );
+    }
 }

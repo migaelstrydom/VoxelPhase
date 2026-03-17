@@ -12,15 +12,15 @@ use specs::{Dispatcher, World, WorldExt};
 
 use crate::core::error::{EngineError, EngineResult};
 use crate::core::vulkan_context::VulkanContext;
-use crate::level::{create_level_materials, create_level_terrain, load_level, spawn_level_objects};
-use crate::physics::ForceField;
+use crate::level::{
+    create_level_materials, create_level_terrain, create_level_water, load_level,
+    spawn_level_objects,
+};
 use crate::projectile::{build_grenade_model, GrenadeMaterials, GrenadeModelResource};
 use crate::rendering::material::{Material, MaterialManagerBuilder};
 use crate::rendering::renderer::Renderer;
 use crate::rendering::Colour;
 use crate::resources::manager::ResourceManager;
-use crate::systems::PhysicsResource;
-use crate::terrain::TerrainManager;
 use crate::time::Time;
 
 use super::dispatcher_builder::build_dispatcher;
@@ -91,6 +91,9 @@ impl<'a, 'b> App<'a, 'b> {
         // Generate terrain from level description
         let terrain_manager = create_level_terrain(&level, &texture_manager)?;
 
+        // Create water grids (needs terrain for floor height queries)
+        let water_grids = create_level_water(&level, &terrain_manager);
+
         let mut world = WorldBuilder::new()
             .with_renderer(renderer)
             .with_resource_manager(resource_manager)
@@ -103,18 +106,15 @@ impl<'a, 'b> App<'a, 'b> {
             .with_default_resources()
             .build()?;
 
+        // Insert water grids as optional resources (WaterSystem handles the None case)
+        if let Some((flow_grid, wave_grid)) = water_grids {
+            world.insert(flow_grid);
+            world.insert(wave_grid);
+        }
+
         // Spawn level objects (player + all objects from the level file)
         let player_entity = spawn_level_objects(&mut world, &level, &level_materials);
         spawn_camera(&mut world, player_entity, window_width, window_height);
-
-        // Register terrain boundary force field
-        {
-            let terrain_bounds = *world.read_resource::<TerrainManager>().bounds();
-            let mut physics = world.write_resource::<PhysicsResource>();
-            physics
-                .world
-                .add_force_field(ForceField::boundary(terrain_bounds, 500.0));
-        }
 
         let dispatcher = build_dispatcher();
 

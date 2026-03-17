@@ -5,6 +5,7 @@
 /// velocity/position solve passes.
 
 use crate::debug::DebugLines;
+use crate::physics::force_provider::SubstepForceProvider;
 use crate::physics::impulses::PhysicsImpulse;
 use crate::physics::static_geometry::StaticGeometry;
 use crate::physics::world::PhysicsWorld;
@@ -31,6 +32,7 @@ impl Stepper for SequentialStepper {
         frame_dt: f32,
         static_geometry: &dyn StaticGeometry,
         impulses: &[PhysicsImpulse],
+        force_providers: &[&dyn SubstepForceProvider],
         debug_lines: &mut DebugLines,
     ) -> StepResult {
         let substeps = self.timestep.accumulate(frame_dt);
@@ -41,7 +43,7 @@ impl Stepper for SequentialStepper {
         let dt = self.timestep.fixed_dt();
         world.update_contacts(dt, static_geometry, impulses, debug_lines);
         for _ in 0..substeps {
-            world.substep(dt, static_geometry);
+            world.substep(dt, static_geometry, force_providers);
         }
 
         StepResult { substeps }

@@ -14,9 +14,12 @@ use crate::components::{Orientation, Position, RigidBodyComponent, Velocity, Vel
 use crate::debug::{DebugLines, DebugLog, DebugOverlays};
 use crate::physics::{
     PhysicsImpulseQueue, PhysicsWorld, RigidBodyHandle, SequentialStepper, Stepper,
+    SubstepForceProvider,
 };
 use crate::terrain::TerrainManager;
 use crate::time::Time;
+use crate::water::buoyancy::BuoyancyForceProvider;
+use crate::water::{WaterGrid, WaveGrid};
 
 /// ECS resource wrapping the physics world and its stepping strategy.
 pub struct PhysicsResource {
@@ -135,6 +138,8 @@ impl<'a> System<'a> for PhysicsSyncSystem {
         Write<'a, DebugLog>,
         Write<'a, DebugOverlays>,
         Write<'a, PhysicsImpulseQueue>,
+        Option<Read<'a, WaterGrid>>,
+        Option<Read<'a, WaveGrid>>,
     );
 
     fn run(
@@ -153,6 +158,8 @@ impl<'a> System<'a> for PhysicsSyncSystem {
             mut debug_log,
             mut debug_overlays,
             mut impulse_queue,
+            flow_opt,
+            wave_opt,
         ): Self::SystemData,
     ) {
         let frame_dt = time.delta_seconds();
@@ -176,6 +183,22 @@ impl<'a> System<'a> for PhysicsSyncSystem {
 
         let impulses: Vec<_> = impulse_queue.drain().collect();
 
+        // Build per-substep force providers.
+        let buoyancy_provider = flow_opt.as_ref().map(|flow_grid| {
+            let affected: Vec<_> = (&bodies)
+                .join()
+                .filter_map(|b| {
+                    let body = physics.world.body(b.0)?;
+                    body.is_dynamic().then_some(b.0)
+                })
+                .collect();
+            BuoyancyForceProvider::new(flow_grid, wave_opt.as_deref(), affected)
+        });
+        let providers: Vec<&dyn SubstepForceProvider> = buoyancy_provider
+            .as_ref()
+            .map(|p| vec![p as &dyn SubstepForceProvider])
+            .unwrap_or_default();
+
         // Step physics with terrain as static geometry
         let mut physics_substeps = 0u32;
         if let Some(ref terrain) = terrain_opt {
@@ -185,6 +208,7 @@ impl<'a> System<'a> for PhysicsSyncSystem {
                     frame_dt,
                     &**terrain,
                     &impulses,
+                    &providers,
                     &mut debug_lines,
                 );
                 physics_substeps = result.substeps;
