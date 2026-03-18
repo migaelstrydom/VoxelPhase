@@ -13,8 +13,9 @@ pub struct RigidBodyHandle(pub(crate) Index);
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct ColliderHandle(pub(crate) Index);
 impl RigidBodyHandle {
-    /// Expose the raw index parts for diagnostics and deterministic ordering.
-    pub(crate) fn raw_parts(self) -> (usize, u64) {
+    /// Expose the raw index parts for diagnostics, deterministic ordering,
+    /// and stable ID generation.
+    pub fn raw_parts(self) -> (usize, u64) {
         self.0.into_raw_parts()
     }
 }

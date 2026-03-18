@@ -10,11 +10,14 @@
 
 use nalgebra::Vector3;
 
-use super::WaterGrid;
+use super::{WaterGrid, WaterProperties};
 
-/// Configuration for the wave grid.
+/// Geometry configuration for the wave grid.
+///
+/// Describes the spatial layout of the fine wave grid. Physical properties
+/// (wave speed, damping) are in [`WaterProperties`].
 pub struct WaveGridConfig {
-    /// World-space width/depth of each wave cell (~0.1m for 10cm resolution).
+    /// World-space width/depth of each wave cell (~0.5m for visible ripples).
     pub cell_size: f32,
 
     /// Grid dimensions (x, z). Derived from the flow grid extent and cell size.
@@ -22,12 +25,6 @@ pub struct WaveGridConfig {
 
     /// World-space position of grid corner (matches flow grid origin).
     pub origin: Vector3<f32>,
-
-    /// Wave propagation speed in m/s.
-    pub wave_speed: f32,
-
-    /// Wave damping coefficient in 1/s.
-    pub wave_damping: f32,
 
     /// Number of wave cells per flow cell in each direction.
     pub cells_per_flow_cell: usize,
@@ -74,16 +71,16 @@ pub struct WaveGrid {
 }
 
 impl WaveGrid {
-    /// Create a new wave grid from configuration.
-    pub fn new(config: WaveGridConfig) -> Self {
+    /// Create a new wave grid from geometry configuration and physical properties.
+    pub fn new(config: WaveGridConfig, properties: &WaterProperties) -> Self {
         let total = config.dims.0 * config.dims.1;
         Self {
             cells: vec![WaveCell::default(); total],
             dims: config.dims,
             cell_size: config.cell_size,
             origin: config.origin,
-            wave_speed: config.wave_speed,
-            wave_damping: config.wave_damping,
+            wave_speed: properties.wave_speed,
+            wave_damping: properties.wave_damping,
             cells_per_flow_cell: config.cells_per_flow_cell,
             acceleration: vec![0.0; total],
         }
@@ -107,6 +104,11 @@ impl WaveGrid {
     /// Number of wave cells per flow cell in each direction.
     pub fn cells_per_flow_cell(&self) -> usize {
         self.cells_per_flow_cell
+    }
+
+    /// Read-only access to the flat cell array for diagnostics.
+    pub fn cells(&self) -> &[WaveCell] {
+        &self.cells
     }
 
     /// Get a wave cell by grid coordinates.
@@ -244,8 +246,9 @@ impl WaveGrid {
                         let idx = wj * self.dims.0 + wi;
                         self.cells[idx].velocity += self.acceleration[idx] * dt;
                         self.cells[idx].displacement += self.cells[idx].velocity * dt;
-                        self.cells[idx].velocity =
-                            self.cells[idx].velocity.clamp(-MAX_WAVE_VELOCITY, MAX_WAVE_VELOCITY);
+                        self.cells[idx].velocity = self.cells[idx]
+                            .velocity
+                            .clamp(-MAX_WAVE_VELOCITY, MAX_WAVE_VELOCITY);
                         self.cells[idx].displacement = self.cells[idx]
                             .displacement
                             .clamp(-MAX_WAVE_DISPLACEMENT, MAX_WAVE_DISPLACEMENT);
@@ -260,14 +263,7 @@ impl WaveGrid {
     /// Dry or out-of-bounds neighbors clamp to zero displacement so the water
     /// surface meets the shoreline without a free-slope boundary.
     #[inline]
-    fn neighbor_disp(
-        &self,
-        wi: usize,
-        wj: usize,
-        di: i32,
-        dj: i32,
-        flow_grid: &WaterGrid,
-    ) -> f32 {
+    fn neighbor_disp(&self, wi: usize, wj: usize, di: i32, dj: i32, flow_grid: &WaterGrid) -> f32 {
         let ni = wi as i32 + di;
         let nj = wj as i32 + dj;
 
@@ -310,7 +306,7 @@ impl WaveGrid {
     }
 }
 
-const MAX_WAVE_VELOCITY: f32 = 2.0;
+const MAX_WAVE_VELOCITY: f32 = 5.0;
 const MAX_WAVE_DISPLACEMENT: f32 = 1.0;
 
 #[cfg(test)]
@@ -318,15 +314,22 @@ mod tests {
     use super::*;
     use crate::water::WaterGridConfig;
 
+    fn test_properties() -> WaterProperties {
+        WaterProperties {
+            wave_speed: 4.0,
+            flow_rate: 4.0,
+            ..Default::default()
+        }
+    }
+
     fn make_flow_grid(dims: (usize, usize), cell_size: f32) -> WaterGrid {
-        WaterGrid::new(WaterGridConfig {
+        let config = WaterGridConfig {
             cell_size,
             dims,
             origin: Vector3::new(0.0, 0.0, 0.0),
             ocean_level: None,
-            flow_rate: 4.0,
-            ..Default::default()
-        })
+        };
+        WaterGrid::new(config, &test_properties())
     }
 
     fn make_wave_grid(flow_grid: &WaterGrid, wave_cell_size: f32) -> WaveGrid {
@@ -335,14 +338,13 @@ mod tests {
         let n = (flow_cell_size / wave_cell_size).round() as usize;
         let wave_dims = (flow_dims.0 * n, flow_dims.1 * n);
 
-        WaveGrid::new(WaveGridConfig {
+        let config = WaveGridConfig {
             cell_size: wave_cell_size,
             dims: wave_dims,
             origin: flow_grid.origin(),
-            wave_speed: 4.0,
-            wave_damping: 0.5,
             cells_per_flow_cell: n,
-        })
+        };
+        WaveGrid::new(config, &test_properties())
     }
 
     /// Helper: fill all flow cells with water at a uniform level.

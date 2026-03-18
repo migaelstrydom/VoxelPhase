@@ -14,7 +14,7 @@ use crate::rendering::material::{MaterialId, MaterialManagerBuilder};
 use crate::resources::textures::TextureManager;
 use crate::terrain::svo::SparseVoxelOctree;
 use crate::terrain::{generate_terrain, DurabilityConfig, TerrainManager};
-use crate::water::{WaterGrid, WaterGridConfig, WaveGrid, WaveGridConfig};
+use crate::water::{WaterGrid, WaterGridConfig, WaterProperties, WaveGrid, WaveGridConfig};
 
 /// Materials needed to spawn level objects.
 pub struct LevelMaterials {
@@ -29,33 +29,11 @@ pub struct LevelMaterials {
     pub capsule_materials: Vec<MaterialId>,
 }
 
-struct WaterRuntimeConfig {
-    /// Coarsening factor applied to the voxel size for the flow grid.
-    grid_scale: u32,
-    /// Fluid density reserved for water-object interactions.
-    fluid_density: f32,
-    /// Equalization rate for the coarse flow simulation.
-    flow_rate: f32,
-    /// Fine-grid cell size for visible ripples.
-    wave_cell_size: f32,
-    /// Ripple propagation speed in meters per second.
-    wave_speed: f32,
-    /// Ripple damping in inverse seconds.
-    wave_damping: f32,
-}
+/// Coarsening factor applied to the voxel size for the flow grid cell size.
+const WATER_GRID_SCALE: u32 = 2;
 
-impl Default for WaterRuntimeConfig {
-    fn default() -> Self {
-        Self {
-            grid_scale: 2,
-            fluid_density: 1000.0,
-            flow_rate: 30.0,
-            wave_cell_size: 0.5,
-            wave_speed: 4.0,
-            wave_damping: 20.0,
-        }
-    }
-}
+/// Fine-grid cell size for visible ripples (meters).
+const WAVE_CELL_SIZE: f32 = 0.5;
 
 /// Pre-scan the level and create all needed box materials during init.
 ///
@@ -528,26 +506,23 @@ pub fn create_level_water(
     terrain: &TerrainManager,
 ) -> Option<(WaterGrid, WaveGrid)> {
     let water_config = level.water.as_ref()?;
-    let runtime_config = WaterRuntimeConfig::default();
+    let properties = WaterProperties::default();
 
     let half_size = level.world_size;
-    let cell_size = level.voxel_size * runtime_config.grid_scale as f32;
+    let cell_size = level.voxel_size * WATER_GRID_SCALE as f32;
+    let origin = nalgebra::Vector3::new(-half_size, 0.0, -half_size);
 
     // Grid covers the full world XZ extent.
     let grid_width = (2.0 * half_size / cell_size).ceil() as usize;
     let grid_depth = grid_width;
 
-    let config = WaterGridConfig {
+    let flow_config = WaterGridConfig {
         cell_size,
         dims: (grid_width, grid_depth),
-        origin: nalgebra::Vector3::new(-half_size, 0.0, -half_size),
+        origin,
         ocean_level: water_config.ocean_level,
-        flow_rate: runtime_config.flow_rate,
-        fluid_density: runtime_config.fluid_density,
-        ..Default::default()
     };
-
-    let mut flow_grid = WaterGrid::new(config);
+    let mut flow_grid = WaterGrid::new(flow_config, &properties);
 
     // Set floor levels for all cells from terrain.
     for j in 0..grid_depth {
@@ -580,34 +555,31 @@ pub fn create_level_water(
     }
 
     // Create the wave grid at fine resolution.
-    let wave_cell_size = runtime_config.wave_cell_size;
+    let wave_cell_size = WAVE_CELL_SIZE;
     let cells_per_flow_cell = (cell_size / wave_cell_size).round() as usize;
     let wave_dims = (
         grid_width * cells_per_flow_cell,
         grid_depth * cells_per_flow_cell,
     );
 
-    let wave_grid = WaveGrid::new(WaveGridConfig {
+    let wave_config = WaveGridConfig {
         cell_size: wave_cell_size,
         dims: wave_dims,
-        origin: nalgebra::Vector3::new(-half_size, 0.0, -half_size),
-        wave_speed: runtime_config.wave_speed,
-        wave_damping: runtime_config.wave_damping,
+        origin,
         cells_per_flow_cell,
-    });
+    };
+    let wave_grid = WaveGrid::new(wave_config, &properties);
 
     log::info!(
-        "Water grids created: flow={}x{} (cell_size={:.1}, rate={:.1}), wave={}x{} (cell_size={:.2}, speed={:.1}, damping={:.1}), fluid_density={:.1}, {} bodies",
+        "Water grids created: flow={}x{} (cell_size={:.1}), wave={}x{} (cell_size={:.2}, speed={:.1}, damping={:.1}), {} bodies",
         grid_width,
         grid_depth,
         cell_size,
-        runtime_config.flow_rate,
         wave_dims.0,
         wave_dims.1,
         wave_cell_size,
-        runtime_config.wave_speed,
-        runtime_config.wave_damping,
-        runtime_config.fluid_density,
+        properties.wave_speed,
+        properties.wave_damping,
         water_config.bodies.len(),
     );
 

@@ -657,15 +657,16 @@ fn shape_drag_properties(shape: &ColliderShape) -> (f32, f32, f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::water::WaterGridConfig;
+    use crate::water::{WaterGridConfig, WaterProperties};
 
     fn make_test_grid(surface_level: f32) -> WaterGrid {
-        let mut grid = WaterGrid::new(WaterGridConfig {
+        let config = WaterGridConfig {
             cell_size: 10.0,
             dims: (3, 3),
             origin: Vector3::new(-15.0, 0.0, -15.0),
-            ..Default::default()
-        });
+            ocean_level: None,
+        };
+        let mut grid = WaterGrid::new(config, &WaterProperties::default());
         // Fill all cells with water up to surface_level on a flat floor at y=0.
         for j in 0..3 {
             for i in 0..3 {
@@ -841,12 +842,13 @@ mod tests {
     #[test]
     fn floor_level_prevents_false_underwater() {
         // Sky island scenario: water floor is at y=10, body is at y=5 (below the island).
-        let mut grid = WaterGrid::new(WaterGridConfig {
+        let config = WaterGridConfig {
             cell_size: 10.0,
             dims: (3, 3),
             origin: Vector3::new(-15.0, 0.0, -15.0),
-            ..Default::default()
-        });
+            ocean_level: None,
+        };
+        let mut grid = WaterGrid::new(config, &WaterProperties::default());
         for j in 0..3 {
             for i in 0..3 {
                 // Water sitting on a sky island floor at y=10, surface at y=12.

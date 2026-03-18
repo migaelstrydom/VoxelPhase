@@ -61,6 +61,17 @@ impl ColliderShape {
             ColliderShape::Capsule { half_height, .. } => *half_height,
         }
     }
+
+    /// Get the XZ footprint radius of the shape on a horizontal surface.
+    pub fn footprint_radius(&self) -> f32 {
+        match self {
+            ColliderShape::Sphere { radius } => *radius,
+            ColliderShape::Box { half_extents } => {
+                (half_extents.x * half_extents.x + half_extents.z * half_extents.z).sqrt()
+            }
+            ColliderShape::Capsule { radius, .. } => *radius,
+        }
+    }
 }
 
 /// Material properties for collision response.

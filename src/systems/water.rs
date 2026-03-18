@@ -1,20 +1,22 @@
 //! System that steps the water simulation and provides debug visualisation.
 
 use nalgebra::Point3;
-use specs::{Read, System, Write};
+use specs::{Join, LendJoin, Read, ReadStorage, System, Write};
 
+use crate::components::{Position, RigidBodyComponent, Velocity, VelocityDriven};
 use crate::debug::{DebugLines, DebugOverlays};
 use crate::rendering::Colour;
+use crate::systems::PhysicsResource;
 use crate::terrain::TerrainManager;
 use crate::time::Time;
-use crate::water::{WaterGrid, WaveGrid};
+use crate::water::{BodySnapshot, WaterGrid, WaveBodyCoupler, WaveGrid};
 
 /// Steps the water flow simulation and wave equation each frame.
 ///
 /// Reads terrain dirty_regions to detect floor changes under water, then
-/// advances the flow sim by the frame's delta time. The wave equation
-/// simulation runs after the flow sim, producing fine-resolution surface
-/// ripples.
+/// advances the flow sim by the frame's delta time. Wave-body coupling
+/// injects disturbances from rigid body interactions before the wave
+/// equation step produces fine-resolution surface ripples.
 pub struct WaterSystem;
 
 const WATER_DEBUG_COLOUR: Colour = Colour {
@@ -40,15 +42,34 @@ impl<'a> System<'a> for WaterSystem {
     type SystemData = (
         Option<Write<'a, WaterGrid>>,
         Option<Write<'a, WaveGrid>>,
+        Option<Write<'a, WaveBodyCoupler>>,
         Option<Read<'a, TerrainManager>>,
         Read<'a, Time>,
+        Read<'a, PhysicsResource>,
+        ReadStorage<'a, RigidBodyComponent>,
+        ReadStorage<'a, Position>,
+        ReadStorage<'a, Velocity>,
+        ReadStorage<'a, VelocityDriven>,
         Write<'a, DebugOverlays>,
         Write<'a, DebugLines>,
     );
 
     fn run(
         &mut self,
-        (water_opt, wave_opt, terrain_opt, time, mut debug_overlays, mut debug_lines): Self::SystemData,
+        (
+            water_opt,
+            wave_opt,
+            coupler_opt,
+            terrain_opt,
+            time,
+            physics,
+            bodies,
+            positions,
+            velocities,
+            velocity_driven,
+            mut debug_overlays,
+            mut debug_lines,
+        ): Self::SystemData,
     ) {
         let Some(mut grid) = water_opt else {
             return;
@@ -86,8 +107,20 @@ impl<'a> System<'a> for WaterSystem {
             terrain_ref.and_then(|t| t.surface_height_at(x, z))
         });
 
-        // Step the wave equation simulation.
+        // Wave-body coupling + wave equation step.
         if let Some(mut wave_grid) = wave_opt {
+            // Inject wave disturbances from rigid body interactions.
+            if let Some(mut coupler) = coupler_opt {
+                let snapshots = build_body_snapshots(
+                    &physics,
+                    &bodies,
+                    &positions,
+                    &velocities,
+                    &velocity_driven,
+                );
+                coupler.update(&snapshots, &mut wave_grid, &grid);
+            }
+
             wave_grid.step(dt, &grid);
         }
 
@@ -119,4 +152,50 @@ impl<'a> System<'a> for WaterSystem {
             debug_lines.add("Water/Settled", grid.is_settled().to_string());
         }
     }
+}
+
+/// Collect rigid body snapshots for wave-body coupling.
+fn build_body_snapshots(
+    physics: &PhysicsResource,
+    bodies: &ReadStorage<RigidBodyComponent>,
+    positions: &ReadStorage<Position>,
+    velocities: &ReadStorage<Velocity>,
+    velocity_driven: &ReadStorage<VelocityDriven>,
+) -> Vec<BodySnapshot> {
+    let mut snapshots = Vec::new();
+
+    for (body_comp, pos, vel, vd) in (bodies, positions, velocities, velocity_driven.maybe()).join()
+    {
+        let is_velocity_driven: bool = vd.is_some();
+        let Some(rb) = physics.world.body(body_comp.0) else {
+            continue;
+        };
+        if !rb.is_dynamic() {
+            continue;
+        }
+
+        let collider_handle = match rb.colliders().first() {
+            Some(h) => *h,
+            None => continue,
+        };
+        let Some(collider) = physics.world.collider(collider_handle) else {
+            continue;
+        };
+
+        // Use the arena index raw parts to create a stable u64 ID.
+        let (slot, gen) = body_comp.0.raw_parts();
+        let id = (gen << 32) | (slot as u64);
+
+        let footprint_radius = collider.shape().footprint_radius();
+
+        snapshots.push(BodySnapshot {
+            id,
+            position: Point3::new(pos.0.x, pos.0.y, pos.0.z),
+            velocity: vel.0,
+            footprint_radius,
+            is_velocity_driven,
+        });
+    }
+
+    snapshots
 }

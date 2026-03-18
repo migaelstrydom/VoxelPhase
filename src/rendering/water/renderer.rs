@@ -413,17 +413,20 @@ fn bytemuck_cast_slice(slice: &[f32]) -> &[u8] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::water::{WaterGridConfig, WaveGridConfig};
+    use crate::water::{WaterGridConfig, WaterProperties, WaveGridConfig};
 
     fn make_flow_grid() -> WaterGrid {
-        WaterGrid::new(WaterGridConfig {
+        let config = WaterGridConfig {
             cell_size: 2.0,
             dims: (2, 2),
             origin: Vector3::new(0.0, 0.0, 0.0),
             ocean_level: None,
+        };
+        let props = WaterProperties {
             flow_rate: 4.0,
             ..Default::default()
-        })
+        };
+        WaterGrid::new(config, &props)
     }
 
     #[test]
@@ -454,14 +457,18 @@ mod tests {
         flow_grid.add_water(0, 1, 10.0 * cell_area, 0.0);
         flow_grid.add_water(1, 1, 14.0 * cell_area, 0.0);
 
-        let wave_grid = WaveGrid::new(WaveGridConfig {
+        let wave_config = WaveGridConfig {
             cell_size: 1.0,
             dims: (4, 4),
             origin: Vector3::new(0.0, 0.0, 0.0),
+            cells_per_flow_cell: 2,
+        };
+        let wave_props = WaterProperties {
             wave_speed: 4.0,
             wave_damping: 2.0,
-            cells_per_flow_cell: 2,
-        });
+            ..Default::default()
+        };
+        let wave_grid = WaveGrid::new(wave_config, &wave_props);
 
         let sample = bulk_level_at(&flow_grid, &wave_grid, 2, 2, cell_area);
 

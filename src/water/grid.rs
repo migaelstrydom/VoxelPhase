@@ -2,7 +2,12 @@
 
 use nalgebra::Vector3;
 
-/// Configuration for the water grid.
+use super::WaterProperties;
+
+/// Geometry configuration for the water flow grid.
+///
+/// Describes the spatial layout of the coarse flow grid. Physical properties
+/// (flow rate, density, etc.) are in [`WaterProperties`].
 pub struct WaterGridConfig {
     /// World-space width/depth of each cell.
     pub cell_size: f32,
@@ -16,29 +21,6 @@ pub struct WaterGridConfig {
     /// Sea level for the infinite ocean plane. `None` disables ocean
     /// coupling so boundary cells behave like regular terrain cells.
     pub ocean_level: Option<f32>,
-
-    /// Flow rate multiplier. Higher = faster equalization.
-    pub flow_rate: f32,
-
-    /// Surface level difference below which the simulation is considered settled.
-    pub settle_epsilon: f32,
-
-    /// Fluid density in kg/m³. Used by the buoyancy system.
-    pub fluid_density: f32,
-}
-
-impl Default for WaterGridConfig {
-    fn default() -> Self {
-        Self {
-            cell_size: 2.0,
-            dims: (64, 64),
-            origin: Vector3::new(-64.0, 0.0, -64.0),
-            ocean_level: None,
-            flow_rate: 4.0,
-            settle_epsilon: 0.001,
-            fluid_density: 1000.0,
-        }
-    }
 }
 
 /// A single cell in the water grid.
@@ -101,8 +83,8 @@ impl WaterGrid {
     /// Prevents residual volumes from the 50% outflow cap lingering forever.
     const MIN_VOLUME: f32 = 1e-2;
 
-    /// Create a new water grid from configuration.
-    pub fn new(config: WaterGridConfig) -> Self {
+    /// Create a new water grid from geometry configuration and physical properties.
+    pub fn new(config: WaterGridConfig, properties: &WaterProperties) -> Self {
         let total = config.dims.0 * config.dims.1;
         let cell_area = config.cell_size * config.cell_size;
 
@@ -113,9 +95,9 @@ impl WaterGrid {
             cell_area,
             origin: config.origin,
             ocean_level: config.ocean_level,
-            flow_rate: config.flow_rate,
-            settle_epsilon: config.settle_epsilon,
-            fluid_density: config.fluid_density,
+            flow_rate: properties.flow_rate,
+            settle_epsilon: properties.settle_epsilon,
+            fluid_density: properties.fluid_density,
             settled: false,
             delta_volume: vec![0.0; total],
             dirty_floors: Vec::new(),
@@ -524,14 +506,17 @@ mod tests {
         ocean_level: Option<f32>,
         flow_rate: f32,
     ) -> WaterGrid {
-        WaterGrid::new(WaterGridConfig {
+        let config = WaterGridConfig {
             cell_size,
             dims,
             origin: Vector3::new(0.0, 0.0, 0.0),
             ocean_level,
+        };
+        let props = WaterProperties {
             flow_rate,
             ..Default::default()
-        })
+        };
+        WaterGrid::new(config, &props)
     }
 
     /// No-op floor query that returns a flat floor at y=0.

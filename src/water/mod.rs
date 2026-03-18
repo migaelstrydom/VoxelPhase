@@ -9,8 +9,12 @@
 //! wave equation to produce visible surface ripples.
 
 pub mod buoyancy;
+pub mod coupling;
 mod grid;
+mod properties;
 mod wave;
 
+pub use coupling::{BodySnapshot, WaveCouplingConfig, WaveBodyCoupler};
 pub use grid::{WaterCell, WaterGrid, WaterGridConfig};
+pub use properties::WaterProperties;
 pub use wave::{WaveCell, WaveGrid, WaveGridConfig};

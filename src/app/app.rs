@@ -106,10 +106,14 @@ impl<'a, 'b> App<'a, 'b> {
             .with_default_resources()
             .build()?;
 
-        // Insert water grids as optional resources (WaterSystem handles the None case)
+        // Insert water grids and wave-body coupler as optional resources
+        // (WaterSystem handles the None case)
         if let Some((flow_grid, wave_grid)) = water_grids {
             world.insert(flow_grid);
             world.insert(wave_grid);
+            world.insert(crate::water::WaveBodyCoupler::new(
+                crate::water::WaveCouplingConfig::default(),
+            ));
         }
 
         // Spawn level objects (player + all objects from the level file)
