@@ -196,23 +196,59 @@ impl GraphicsPipeline {
             layout: vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
         };
 
-        let dependencies = [vk::SubpassDependency {
-            src_subpass: vk::SUBPASS_EXTERNAL,
-            src_stage_mask: vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-            dst_access_mask: vk::AccessFlags::COLOR_ATTACHMENT_READ
-                | vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
-            dst_stage_mask: vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-            ..Default::default()
+        // Subpass 1 reads the depth attachment as an input attachment (read-only).
+        let depth_ref_readonly = vk::AttachmentReference {
+            attachment: 1,
+            layout: vk::ImageLayout::DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+        };
+
+        let depth_input_refs = [vk::AttachmentReference {
+            attachment: 1,
+            layout: vk::ImageLayout::DEPTH_STENCIL_READ_ONLY_OPTIMAL,
         }];
 
-        let subpass = vk::SubpassDescription::default()
+        let dependencies = [
+            // External -> subpass 0
+            vk::SubpassDependency {
+                src_subpass: vk::SUBPASS_EXTERNAL,
+                src_stage_mask: vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                dst_access_mask: vk::AccessFlags::COLOR_ATTACHMENT_READ
+                    | vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
+                dst_stage_mask: vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                ..Default::default()
+            },
+            // Subpass 0 -> subpass 1: depth writes must complete before depth reads
+            vk::SubpassDependency {
+                src_subpass: 0,
+                dst_subpass: 1,
+                src_stage_mask: vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
+                dst_stage_mask: vk::PipelineStageFlags::FRAGMENT_SHADER
+                    | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
+                src_access_mask: vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
+                dst_access_mask: vk::AccessFlags::INPUT_ATTACHMENT_READ
+                    | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_READ,
+                dependency_flags: vk::DependencyFlags::BY_REGION,
+            },
+        ];
+
+        // Subpass 0: opaque geometry with depth read/write
+        let subpass_opaque = vk::SubpassDescription::default()
             .color_attachments(&color_refs)
             .depth_stencil_attachment(&depth_ref)
             .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS);
 
+        // Subpass 1: transparent geometry with depth read-only + input attachment
+        let subpass_transparent = vk::SubpassDescription::default()
+            .color_attachments(&color_refs)
+            .depth_stencil_attachment(&depth_ref_readonly)
+            .input_attachments(&depth_input_refs)
+            .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS);
+
+        let subpasses = [subpass_opaque, subpass_transparent];
+
         let create_info = vk::RenderPassCreateInfo::default()
             .attachments(&attachments)
-            .subpasses(std::slice::from_ref(&subpass))
+            .subpasses(&subpasses)
             .dependencies(&dependencies);
 
         unsafe {

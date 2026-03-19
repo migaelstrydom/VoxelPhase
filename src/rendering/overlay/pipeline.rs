@@ -144,7 +144,8 @@ impl OverlayPipeline {
             .color_blend_state(&color_blend)
             .dynamic_state(&dynamic_state)
             .layout(layout)
-            .render_pass(render_pass);
+            .render_pass(render_pass)
+            .subpass(1);
 
         let pipeline = unsafe {
             let pipelines = device

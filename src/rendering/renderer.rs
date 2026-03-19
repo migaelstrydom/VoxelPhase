@@ -9,7 +9,7 @@
 use std::sync::Arc;
 
 use ash::vk;
-use nalgebra::Matrix4;
+use nalgebra::{Matrix4, Vector3};
 use winit::window::Window;
 
 use crate::core::error::EngineResult;
@@ -115,9 +115,12 @@ impl Renderer {
         // Create sky renderer
         let sky_renderer = SkyRenderer::new(Arc::clone(&vulkan_context), pipeline.renderpass)?;
 
-        // Create water renderer
-        let water_renderer =
-            WaterRenderer::new(Arc::clone(&vulkan_context), pipeline.renderpass)?;
+        // Create water renderer (needs depth view for volumetric depth sampling)
+        let water_renderer = WaterRenderer::new(
+            Arc::clone(&vulkan_context),
+            pipeline.renderpass,
+            swapchain.depth_buffer.view,
+        )?;
 
         Ok(Self {
             pipeline,
@@ -442,9 +445,21 @@ impl Renderer {
         Ok(())
     }
 
+    /// Transition from subpass 0 (opaque) to subpass 1 (transparent).
+    ///
+    /// Must be called after all opaque geometry is drawn and before
+    /// water, particles, or overlay rendering.
+    pub fn next_subpass(&self, cb: vk::CommandBuffer) {
+        unsafe {
+            self.vulkan_context
+                .device()
+                .cmd_next_subpass(cb, vk::SubpassContents::INLINE);
+        }
+    }
+
     /// Render the water surface mesh from a `WaterGrid`.
     ///
-    /// Should be called after drawing terrain/models but before particles.
+    /// Should be called after next_subpass but before particles.
     pub fn render_water(
         &mut self,
         cb: vk::CommandBuffer,
@@ -452,6 +467,7 @@ impl Renderer {
         wave_grid: &WaveGrid,
         view_matrix: &Matrix4<f32>,
         proj_matrix: &Matrix4<f32>,
+        camera_pos: &Vector3<f32>,
     ) -> EngineResult<()> {
         let extent = self.swapchain.extent;
         let viewport = vk::Viewport {
@@ -476,8 +492,16 @@ impl Renderer {
                 .cmd_set_scissor(cb, 0, &[scissor]);
         }
 
-        self.water_renderer
-            .render(cb, flow_grid, wave_grid, view_matrix, proj_matrix)
+        let sun_dir = self.sky_renderer.sun_direction();
+        self.water_renderer.render(
+            cb,
+            flow_grid,
+            wave_grid,
+            view_matrix,
+            proj_matrix,
+            camera_pos,
+            &sun_dir,
+        )
     }
 
     /// Render particles from the particle pool.

@@ -34,9 +34,10 @@ impl WaterRenderer {
     pub fn new(
         vulkan_context: Arc<VulkanContext>,
         render_pass: vk::RenderPass,
+        depth_view: vk::ImageView,
     ) -> EngineResult<Self> {
         let device = Arc::clone(&vulkan_context.device);
-        let pipeline = WaterPipeline::new(Arc::clone(&device), render_pass)?;
+        let pipeline = WaterPipeline::new(Arc::clone(&device), render_pass, depth_view)?;
 
         let vertex_buffer_size =
             (MAX_WATER_QUADS * 4 * std::mem::size_of::<WaterVertex>()) as vk::DeviceSize;
@@ -73,6 +74,8 @@ impl WaterRenderer {
         wave_grid: &WaveGrid,
         view_matrix: &Matrix4<f32>,
         proj_matrix: &Matrix4<f32>,
+        camera_pos: &Vector3<f32>,
+        sun_dir: &Vector3<f32>,
     ) -> EngineResult<()> {
         let (vertices, indices) = Self::generate_mesh(flow_grid, wave_grid);
         if indices.is_empty() {
@@ -112,20 +115,65 @@ impl WaterRenderer {
                 self.pipeline.pipeline(),
             );
 
-            // Push view and projection matrices
+            // Push view and projection matrices (vertex stage, offset 0)
             let view_bytes: &[u8] = bytemuck_cast_slice(view_matrix.as_slice());
             let proj_bytes: &[u8] = bytemuck_cast_slice(proj_matrix.as_slice());
 
-            let mut push_data = [0u8; 128];
-            push_data[0..64].copy_from_slice(view_bytes);
-            push_data[64..128].copy_from_slice(proj_bytes);
+            let mut vertex_push_data = [0u8; 128];
+            vertex_push_data[0..64].copy_from_slice(view_bytes);
+            vertex_push_data[64..128].copy_from_slice(proj_bytes);
 
             self.device.device.cmd_push_constants(
                 cb,
                 self.pipeline.layout(),
                 vk::ShaderStageFlags::VERTEX,
                 0,
-                &push_data,
+                &vertex_push_data,
+            );
+
+            // Extract near/far from the projection matrix.
+            // For a Vulkan perspective projection (depth [0,1]):
+            //   proj[2][2] = far / (near - far)
+            //   proj[3][2] = (near * far) / (near - far)
+            // So: near = proj[3][2] / proj[2][2]
+            //     far  = proj[3][2] / (proj[2][2] + 1)
+            let p22 = proj_matrix[(2, 2)];
+            let p32 = proj_matrix[(3, 2)];
+            let near = p32 / p22;
+            let far = p32 / (p22 + 1.0);
+
+            // Push camera_pos, sun_dir, and proj params (fragment stage, offset 128)
+            let frag_push_data: [f32; 12] = [
+                camera_pos.x,
+                camera_pos.y,
+                camera_pos.z,
+                0.0, // padding
+                sun_dir.x,
+                sun_dir.y,
+                sun_dir.z,
+                0.0, // padding
+                near,
+                far,
+                0.0, // padding
+                0.0, // padding
+            ];
+
+            self.device.device.cmd_push_constants(
+                cb,
+                self.pipeline.layout(),
+                vk::ShaderStageFlags::FRAGMENT,
+                128,
+                bytemuck_cast_slice(&frag_push_data),
+            );
+
+            // Bind depth input attachment descriptor set
+            self.device.device.cmd_bind_descriptor_sets(
+                cb,
+                vk::PipelineBindPoint::GRAPHICS,
+                self.pipeline.layout(),
+                0,
+                &[self.pipeline.descriptor_set()],
+                &[],
             );
 
             self.device

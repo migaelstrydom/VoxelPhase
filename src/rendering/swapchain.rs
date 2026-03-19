@@ -113,7 +113,10 @@ impl DepthBuffer {
                 .array_layers(1)
                 .samples(vk::SampleCountFlags::TYPE_1)
                 .tiling(vk::ImageTiling::OPTIMAL)
-                .usage(vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT)
+                .usage(
+                    vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT
+                        | vk::ImageUsageFlags::INPUT_ATTACHMENT,
+                )
                 .sharing_mode(vk::SharingMode::EXCLUSIVE);
 
             let image =
@@ -282,8 +285,7 @@ pub struct Swapchain {
     pub framebuffers: Vec<vk::Framebuffer>,
     /// Depth buffer used by all framebuffers. Kept alive to ensure the depth buffer view
     /// referenced by the framebuffers remains valid. Automatically cleaned up when Swapchain is dropped.
-    #[allow(dead_code)] // Kept for lifetime management, not direct access
-    depth_buffer: DepthBuffer,
+    pub depth_buffer: DepthBuffer,
     pub sync: FrameSync,
     pub draw_command_buffer: ManagedCommandBuffer,
     device: Arc<ManagedDevice>,

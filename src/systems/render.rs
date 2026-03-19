@@ -169,16 +169,25 @@ impl<'a> System<'a> for RenderSystem {
                     log::error!("RenderSystem: Failed to draw debug overlays: {}", e);
                 }
 
+                // Transition to subpass 1 (transparent: water, particles, overlay)
+                renderer.next_subpass(draw_cb);
+
                 // Render water surface (after geometry, before particles)
                 if let (Some(ref water_grid), Some(ref wave_grid)) =
                     (&water_grid_opt, &wave_grid_opt)
                 {
+                    let camera_pos = Vector3::new(
+                        camera_data.position.x,
+                        camera_data.position.y,
+                        camera_data.position.z,
+                    );
                     if let Err(e) = renderer.render_water(
                         draw_cb,
                         water_grid,
                         wave_grid,
                         &view_matrix,
                         &proj_matrix,
+                        &camera_pos,
                     ) {
                         log::error!("RenderSystem: Failed to render water: {}", e);
                     }
