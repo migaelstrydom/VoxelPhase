@@ -203,7 +203,7 @@ The level spawner creates the `WaterGrid` after terrain generation:
    a. Create `WaterGrid` with dimensions derived from `world_size / voxel_size / grid_scale`.
    b. Set `ocean_level`.
    c. For each `WaterBody`:
-      - `Pool`: iterate cells in the XZ region, query `surface_height_at` for the floor,
+      - `Pool`: iterate cells in the XZ region, query `approx_surface_height_at` for the floor,
         compute volume = `(surface_level - floor) * cell_area` for cells where floor < surface_level.
       - `Lake`: BFS flood-fill from the seed cell, expanding to neighbors where terrain height
         < surface_level. Set volume per cell as above.
@@ -248,7 +248,7 @@ The water system needs two queries from the terrain:
 impl TerrainManager {
     /// Get the highest solid terrain surface height at a given (x, z) position.
     /// Returns None if the column is entirely air (no solid voxels).
-    pub fn surface_height_at(&self, x: f32, z: f32) -> Option<f32>;
+    pub fn approx_surface_height_at(&self, x: f32, z: f32) -> Option<f32>;
 
     /// Get all solid surface heights in a column (for sky islands with multiple
     /// layers). Returns heights sorted top-to-bottom.
@@ -516,7 +516,7 @@ for each cell with non-zero delta:
 
     // Set floor_level for newly-wet cells
     if cell was dry and is now wet:
-        cell.floor_level = terrain.surface_height_at(cell_x, cell_z)
+        cell.floor_level = terrain.approx_surface_height_at(cell_x, cell_z)
 ```
 
 The `0.25` cap ensures a cell never donates more than its total volume across 4 neighbors in
@@ -582,7 +582,7 @@ for each (i, j) in dirty_floors:
     if cell.volume == 0: continue
 
     old_floor = cell.floor_level
-    new_floor = terrain.surface_height_at(cell_x, cell_z)
+    new_floor = terrain.approx_surface_height_at(cell_x, cell_z)
 
     if new_floor is None:
         // Floor completely destroyed — drain all water, spawn falling particles
@@ -995,14 +995,14 @@ shader/
 ### Water flowing off a sky island
 
 When water flows to the edge of a sky island and the neighboring cell has no terrain at a
-comparable height, the neighbor's `surface_height_at` returns either the ground far below or
+comparable height, the neighbor's `approx_surface_height_at` returns either the ground far below or
 `None`. The flow sim sees a huge height differential and rapidly drains water from the edge
 cell. This is correct behavior — water falls off the island. Spawn waterfall particles at the
 island edge for the visual.
 
 The drained water should appear at the ground level below if there is terrain there. The
 simplest approach: treat it as lost volume (falls into the void or ocean). For a more complete
-simulation, query `surface_height_at` at the ground level and add the volume to that cell,
+simulation, query `approx_surface_height_at` at the ground level and add the volume to that cell,
 but this is a Step 6 refinement.
 
 ### Two water bodies at different heights in the same column
@@ -1126,7 +1126,7 @@ Not automated, but a checklist for the implementer to verify:
 Each step leaves the engine functional. Later steps build on earlier ones.
 
 ### Step 1: Terrain interface + flow grid + level format
-- Add `surface_height_at()` and `surface_heights_at()` to `TerrainManager`.
+- Add `approx_surface_height_at()` and `surface_heights_at()` to `TerrainManager`.
 - Expose `dirty_regions()` on `TerrainManager`.
 - Remove `VoxelMaterial::Water`.
 - Add `WaterConfig`, `WaterBody` to `src/level/data.rs`.

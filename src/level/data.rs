@@ -258,25 +258,14 @@ pub struct WaterConfig {
 }
 
 /// A discrete body of water placed at level load time.
+///
+/// Flood-fills from a seed point outward through all connected terrain cells
+/// whose floor is below `surface_level`. The extent is dilated by one cell
+/// to cover marching-cubes shore smoothing.
 #[derive(Deserialize)]
 pub enum WaterBody {
-    /// Fill a rectangular region up to a given surface level.
-    /// The floor_level is determined automatically from terrain height.
-    /// Only cells where terrain height < surface_level receive water.
     Pool {
-        /// XZ center of the pool region.
-        center: (f32, f32),
-        /// XZ half-extents of the fill region.
-        half_extents: (f32, f32),
-        /// Target water surface height (world Y).
-        surface_level: f32,
-    },
-
-    /// Fill all connected terrain below a given height, flood-fill style.
-    /// Starts from a seed point and fills outward until terrain rises above
-    /// surface_level or the region boundary is reached.
-    Lake {
-        /// Seed point (x, z) — must be inside a depression.
+        /// Seed point (x, z) — must be inside a terrain depression.
         seed: (f32, f32),
         /// Target water surface height (world Y).
         surface_level: f32,

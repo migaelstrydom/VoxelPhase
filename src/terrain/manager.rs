@@ -308,12 +308,22 @@ impl TerrainManager {
 
     // === Water system interface ===
 
+    /// World-space size of the smallest voxel.
+    pub fn voxel_size(&self) -> f32 {
+        self.voxel_size
+    }
+
+    /// Whether the voxel at a world-space position is solid (density > 0).
+    pub fn is_solid_at(&self, x: f32, y: f32, z: f32) -> bool {
+        self.svo.get(Point3::new(x, y, z)).density > 0.0
+    }
+
     /// Get the highest solid terrain surface height at a given (x, z) position.
     ///
     /// Walks the SVO column at voxel resolution, finding where density transitions
     /// from positive (solid) to negative (air). Returns the interpolated surface Y,
     /// or None if the column is entirely air.
-    pub fn surface_height_at(&self, x: f32, z: f32) -> Option<f32> {
+    pub fn approx_surface_height_at(&self, x: f32, z: f32) -> Option<f32> {
         self.surface_heights_at(x, z).into_iter().next()
     }
 

@@ -74,14 +74,21 @@ pub struct WaterGrid {
     /// Per-cell flow accumulator, reused across steps to avoid allocation.
     delta_volume: Vec<f32>,
 
+    /// Per-cell flag: true if the cell was snapped dry by MIN_VOLUME in the
+    /// previous step. Used for rewet hysteresis.
+    recently_snapped: Vec<bool>,
+
     /// Cells that need floor-level rechecks due to terrain damage.
     dirty_floors: Vec<(usize, usize)>,
 }
 
 impl WaterGrid {
-    /// Volume below which a cell is snapped to zero (dry).
-    /// Prevents residual volumes from the 50% outflow cap lingering forever.
+    /// Volume below which a draining cell is snapped to zero (dry).
     const MIN_VOLUME: f32 = 1e-2;
+
+    /// Volume a dry cell must receive before it becomes wet again.
+    /// Must be greater than `MIN_VOLUME` to prevent flicker at the shoreline.
+    const REWET_VOLUME: f32 = 5e-2;
 
     /// Create a new water grid from geometry configuration and physical properties.
     pub fn new(config: WaterGridConfig, properties: &WaterProperties) -> Self {
@@ -100,6 +107,7 @@ impl WaterGrid {
             fluid_density: properties.fluid_density,
             settled: false,
             delta_volume: vec![0.0; total],
+            recently_snapped: vec![false; total],
             dirty_floors: Vec::new(),
         }
     }
@@ -165,6 +173,96 @@ impl WaterGrid {
     #[inline]
     pub fn cell_center_z(&self, j: usize) -> f32 {
         self.origin.z + (j as f32 + 0.5) * self.cell_size
+    }
+
+    /// Sample points across a cell's footprint for floor-level queries.
+    ///
+    /// Returns the center plus four edge midpoints. Taking the minimum
+    /// terrain height over these points captures marching-cubes smoothing
+    /// at cell boundaries, preventing visual gaps at shorelines.
+    pub fn cell_sample_points(&self, i: usize, j: usize) -> [(f32, f32); 9] {
+        let cx = self.cell_center_x(i);
+        let cz = self.cell_center_z(j);
+        let h = self.cell_size * 0.5;
+        [
+            (cx, cz),
+            (cx - h, cz),
+            (cx + h, cz),
+            (cx, cz - h),
+            (cx, cz + h),
+            (cx - h, cz - h),
+            (cx + h, cz - h),
+            (cx - h, cz + h),
+            (cx + h, cz + h),
+        ]
+    }
+
+    /// Query the minimum terrain floor across this cell's sample points.
+    ///
+    /// Returns `None` when all samples report no floor.
+    pub(crate) fn sampled_floor_level<F>(
+        &self,
+        i: usize,
+        j: usize,
+        floor_query: &mut F,
+    ) -> Option<f32>
+    where
+        F: FnMut(f32, f32) -> Option<f32>,
+    {
+        let mut min_floor = f32::MAX;
+        for (sx, sz) in self.cell_sample_points(i, j) {
+            if let Some(floor) = floor_query(sx, sz) {
+                min_floor = min_floor.min(floor);
+            }
+        }
+        if min_floor == f32::MAX {
+            None
+        } else {
+            Some(min_floor)
+        }
+    }
+
+    /// Fill a cell to `target_surface` using sampled terrain floors.
+    ///
+    /// When `allow_shoreline_clamp` is true, floors at/above the target are
+    /// clamped just below the surface to preserve a thin visual shoreline
+    /// bridge over MC smoothing.
+    pub(crate) fn fill_cell_to_surface<F>(
+        &mut self,
+        i: usize,
+        j: usize,
+        target_surface: f32,
+        floor_query: &mut F,
+    ) -> bool
+    where
+        F: FnMut(f32, f32) -> Option<f32>,
+    {
+        if i >= self.dims.0 || j >= self.dims.1 {
+            return false;
+        }
+
+        let idx = self.index(i, j);
+        let Some(floor) = self.sampled_floor_level(i, j, floor_query) else {
+            self.cells[idx].volume = 0.0;
+            self.cells[idx].floor_level = 0.0;
+            return false;
+        };
+
+        let effective_floor = /* if allow_shoreline_clamp {
+            floor.min(target_surface - Self::SHORELINE_EPSILON)
+        } else */ {
+            if floor >= target_surface {
+                self.cells[idx].floor_level = floor;
+                self.cells[idx].volume = 0.0;
+                return false;
+            }
+            floor
+        };
+
+        self.cells[idx].floor_level = effective_floor;
+        let depth = target_surface - effective_floor;
+        self.cells[idx].volume = depth * self.cell_area;
+        true
     }
 
     /// Convert a world-space (x, z) to grid coordinates, if within bounds.
@@ -388,15 +486,25 @@ impl WaterGrid {
                 // volumes that are still growing from inflow.
                 if delta <= 0.0 && self.cells[idx].volume < Self::MIN_VOLUME {
                     self.cells[idx].volume = 0.0;
+                    self.recently_snapped[idx] = true;
+                }
+
+                // Hysteresis: a cell that was just snapped dry must
+                // accumulate REWET_VOLUME before becoming wet again,
+                // preventing flicker where snap and neighbor inflow fight.
+                if was_dry
+                    && self.recently_snapped[idx]
+                    && self.cells[idx].volume < Self::REWET_VOLUME
+                {
+                    self.cells[idx].volume = 0.0;
+                } else if self.cells[idx].volume > 0.0 {
+                    self.recently_snapped[idx] = false;
                 }
 
                 // Set floor level for newly-wet cells.
                 if was_dry && self.cells[idx].volume > 0.0 {
-                    let cx = self.cell_center_x(i);
-                    let cz = self.cell_center_z(j);
-                    if let Some(floor) = floor_query(cx, cz) {
-                        self.cells[idx].floor_level = floor;
-                    }
+                    let target_surface = self.cells[idx].surface_level(self.cell_area);
+                    self.fill_cell_to_surface(i, j, target_surface, &mut floor_query);
                 }
 
                 if should_clamp_boundary {
@@ -449,7 +557,9 @@ impl WaterGrid {
         self.settled = max_surface_diff < self.settle_epsilon;
     }
 
-    /// Process dirty floor cells: recheck terrain heights and handle drains.
+    /// Process dirty floor cells: recheck terrain heights, handle drains,
+    /// seed newly-exposed dry cells adjacent to wet neighbors, and dilate
+    /// the expansion by one cell to cover marching-cubes shore smoothing.
     fn process_dirty_floors<F>(&mut self, floor_query: &mut F)
     where
         F: FnMut(f32, f32) -> Option<f32>,
@@ -460,35 +570,114 @@ impl WaterGrid {
 
         let dirty: Vec<(usize, usize)> = self.dirty_floors.drain(..).collect();
 
-        for (i, j) in dirty {
+        // Pass 1: update floor levels and drain invalid cells.
+        let mut has_floor = vec![true; self.cells.len()];
+        for &(i, j) in &dirty {
             if i >= self.dims.0 || j >= self.dims.1 {
                 continue;
             }
+            has_floor[self.index(i, j)] = self.recheck_floor(i, j, floor_query);
+        }
 
-            let idx = self.index(i, j);
-            let cx = self.cell_center_x(i);
-            let cz = self.cell_center_z(j);
-
-            match floor_query(cx, cz) {
-                None => {
-                    // Floor completely destroyed — drain all water.
-                    self.cells[idx].volume = 0.0;
-                }
-                Some(new_floor) => {
-                    let old_floor = self.cells[idx].floor_level;
-                    let threshold = 0.1;
-                    if (new_floor - old_floor).abs() > threshold {
-                        // Floor changed — update it. For wet cells the volume
-                        // stays the same so surface_level shifts, creating a
-                        // height differential the flow sim resolves. For dry
-                        // cells the updated floor lets neighbors flow in.
-                        self.cells[idx].floor_level = new_floor;
-                    }
-                }
+        // Pass 2: seed newly-exposed dry cells that border wet neighbors.
+        // Only set the floor level and a small seed volume — the flow sim
+        // fills the cell gradually, which also drives flow into cells beyond.
+        let mut seeded = Vec::new();
+        for &(i, j) in &dirty {
+            if !has_floor[self.index(i, j)] {
+                continue;
+            }
+            if self.try_seed_cell(i, j, floor_query) {
+                seeded.push((i, j));
             }
         }
 
         self.settled = false;
+    }
+
+    /// Re-query terrain for a dirty cell's floor level. Drains the cell if
+    /// the floor is gone or has risen above the water surface. Returns true
+    /// if the cell has a valid floor afterward.
+    fn recheck_floor<F>(&mut self, i: usize, j: usize, floor_query: &mut F) -> bool
+    where
+        F: FnMut(f32, f32) -> Option<f32>,
+    {
+        let idx = self.index(i, j);
+
+        let Some(new_floor) = self.sampled_floor_level(i, j, floor_query) else {
+            self.cells[idx].volume = 0.0;
+            self.cells[idx].floor_level = 0.0;
+            return false;
+        };
+
+        // Drain wet cells where the real floor is at or above the water
+        // surface. This catches dilated shore cells whose artificial floor
+        // gets replaced by the real terrain height.
+        if self.cells[idx].volume > 0.0 {
+            let old_surface = self.cells[idx].surface_level(self.cell_area);
+            if new_floor >= old_surface {
+                self.cells[idx].volume = 0.0;
+            }
+        }
+
+        let old_floor = self.cells[idx].floor_level;
+        if (new_floor - old_floor).abs() > 0.1 {
+            self.cells[idx].floor_level = new_floor;
+        }
+
+        true
+    }
+
+    /// Seed a dry cell adjacent to a wet neighbor with a small volume.
+    ///
+    /// Sets the floor from terrain and gives the cell just enough volume to
+    /// be considered wet. The flow sim fills it gradually from there, which
+    /// also drives flow into cells beyond. Returns true if the cell was seeded.
+    fn try_seed_cell<F>(&mut self, i: usize, j: usize, floor_query: &mut F) -> bool
+    where
+        F: FnMut(f32, f32) -> Option<f32>,
+    {
+        if i >= self.dims.0 || j >= self.dims.1 {
+            return false;
+        }
+
+        let idx = self.index(i, j);
+        if self.cells[idx].volume > 0.0 {
+            return false;
+        }
+
+        let Some(neighbor_surface) = self.best_neighbor_surface(i, j) else {
+            return false;
+        };
+        let Some(floor) = self.sampled_floor_level(i, j, floor_query) else {
+            return false;
+        };
+        if floor >= neighbor_surface {
+            return false;
+        }
+
+        self.cells[idx].floor_level = floor;
+        self.cells[idx].volume = Self::REWET_VOLUME;
+        true
+    }
+
+    /// Find the highest surface level among wet 4-connected neighbors.
+    fn best_neighbor_surface(&self, i: usize, j: usize) -> Option<f32> {
+        let mut best: Option<f32> = None;
+        for (di, dj) in [(-1i32, 0), (1, 0), (0, -1i32), (0, 1)] {
+            let ni = i as i32 + di;
+            let nj = j as i32 + dj;
+            if ni < 0 || nj < 0 || ni >= self.dims.0 as i32 || nj >= self.dims.1 as i32 {
+                continue;
+            }
+            let n_idx = self.index(ni as usize, nj as usize);
+            let neighbor = &self.cells[n_idx];
+            if neighbor.volume > 0.0 {
+                let surface = neighbor.surface_level(self.cell_area);
+                best = Some(best.map_or(surface, |b: f32| b.max(surface)));
+            }
+        }
+        best
     }
 }
 

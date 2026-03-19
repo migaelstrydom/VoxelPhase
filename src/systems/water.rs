@@ -33,10 +33,39 @@ struct WaterDebugConfig {
 }
 
 const WATER_DEBUG_CONFIG: WaterDebugConfig = WaterDebugConfig {
-    draw_wet_cells: false,
+    draw_wet_cells: true,
     debug_colour: WATER_DEBUG_COLOUR,
     sphere_radius: 0.3,
 };
+
+fn overlapping_cell_range(
+    min: f32,
+    max: f32,
+    grid_origin: f32,
+    cell_size: f32,
+    dim: usize,
+) -> Option<(usize, usize)> {
+    if dim == 0 {
+        return None;
+    }
+
+    let grid_min = grid_origin;
+    let grid_max = grid_origin + dim as f32 * cell_size;
+    if max <= grid_min || min >= grid_max {
+        return None;
+    }
+
+    let start = ((min - grid_origin) / cell_size).floor() as isize;
+    let end = ((max - grid_origin) / cell_size).ceil() as isize - 1;
+
+    let clamped_start = start.clamp(0, dim as isize - 1) as usize;
+    let clamped_end = end.clamp(0, dim as isize - 1) as usize;
+    if clamped_start > clamped_end {
+        None
+    } else {
+        Some((clamped_start, clamped_end))
+    }
+}
 
 impl<'a> System<'a> for WaterSystem {
     type SystemData = (
@@ -68,7 +97,7 @@ impl<'a> System<'a> for WaterSystem {
             velocities,
             velocity_driven,
             mut debug_overlays,
-            mut debug_lines,
+            mut _debug_lines,
         ): Self::SystemData,
     ) {
         let Some(mut grid) = water_opt else {
@@ -82,12 +111,26 @@ impl<'a> System<'a> for WaterSystem {
             let dirty = terrain.dirty_regions();
             if !dirty.is_empty() {
                 let mut dirty_cells = Vec::new();
+                let dims = grid.dims();
+                let origin = grid.origin();
+                let cell_size = grid.cell_size();
                 for region in dirty {
-                    // Convert AABB to grid cells that overlap.
-                    let min_i = grid.world_to_grid(region.min.x, region.min.z);
-                    let max_i = grid.world_to_grid(region.max.x, region.max.z);
-
-                    if let (Some((i0, j0)), Some((i1, j1))) = (min_i, max_i) {
+                    // Convert AABB to grid cells that overlap, including edge regions.
+                    let x_range = overlapping_cell_range(
+                        region.min.x,
+                        region.max.x,
+                        origin.x,
+                        cell_size,
+                        dims.0,
+                    );
+                    let z_range = overlapping_cell_range(
+                        region.min.z,
+                        region.max.z,
+                        origin.z,
+                        cell_size,
+                        dims.1,
+                    );
+                    if let (Some((i0, i1)), Some((j0, j1))) = (x_range, z_range) {
                         for j in j0..=j1 {
                             for i in i0..=i1 {
                                 dirty_cells.push((i, j));
@@ -104,7 +147,7 @@ impl<'a> System<'a> for WaterSystem {
         // Step the flow simulation.
         let terrain_ref = terrain_opt.as_deref();
         grid.step(dt, |x, z| {
-            terrain_ref.and_then(|t| t.surface_height_at(x, z))
+            terrain_ref.and_then(|t| t.approx_surface_height_at(x, z))
         });
 
         // Wave-body coupling + wave equation step.
@@ -128,7 +171,6 @@ impl<'a> System<'a> for WaterSystem {
         if WATER_DEBUG_CONFIG.draw_wet_cells {
             let dims = grid.dims();
             let cell_area = grid.cell_area();
-            let mut wet_count = 0u32;
 
             for j in 0..dims.1 {
                 for i in 0..dims.0 {
@@ -136,7 +178,6 @@ impl<'a> System<'a> for WaterSystem {
                     if cell.volume <= 0.0 {
                         continue;
                     }
-                    wet_count += 1;
                     let x = grid.cell_center_x(i);
                     let z = grid.cell_center_z(j);
                     let y = cell.surface_level(cell_area);
@@ -147,9 +188,6 @@ impl<'a> System<'a> for WaterSystem {
                     );
                 }
             }
-
-            debug_lines.add("Water/Wet cells", wet_count.to_string());
-            debug_lines.add("Water/Settled", grid.is_settled().to_string());
         }
     }
 }

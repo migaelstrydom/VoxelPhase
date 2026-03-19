@@ -11,6 +11,7 @@
 pub mod buoyancy;
 pub mod coupling;
 mod grid;
+pub mod placer;
 mod properties;
 mod wave;
 

@@ -105,6 +105,10 @@ impl<'a> System<'a> for BipedAnimationSystem {
             // Update the controller
             let velocity = nalgebra::Vector3::new(vel.0.x, vel.0.y, vel.0.z);
             controller.update(dt, pelvis_pos, yaw, velocity, contacts);
+            // _debug_lines.add(
+            //     "Player/Position",
+            //     format!("{:.2}, {:.2}, {:.2}", pos.0.x, pos.0.y, pos.0.z),
+            // );
             // debug_lines.add(
             //     "WheelAngle",
             //     &format!(
