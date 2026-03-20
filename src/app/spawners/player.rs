@@ -28,7 +28,7 @@ pub fn spawn_player(world: &mut World, initial_pos: nalgebra::Point3<f32>) -> En
             .angular_damping(1.0);
         let body_handle = physics.world.create_body(body_desc);
         let collider_desc = ColliderDesc::capsule(0.5, 0.25)
-            .density(500.0)
+            .density(800.0)
             .restitution(0.0)
             .friction(0.3);
         physics.world.attach_collider(body_handle, collider_desc);

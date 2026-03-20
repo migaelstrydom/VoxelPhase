@@ -56,6 +56,9 @@ pub struct BodySnapshot {
     pub velocity: nalgebra::Vector3<f32>,
     /// Radius of the body's XZ footprint on the water surface.
     pub footprint_radius: f32,
+    /// Mass of the body (kg). Used to scale wave injection — light objects
+    /// create smaller disturbances, preventing feedback-driven bouncing.
+    pub mass: f32,
     /// Whether this body is velocity-driven (player/platform).
     pub is_velocity_driven: bool,
 }
@@ -90,6 +93,11 @@ pub struct WaveCouplingConfig {
     pub impact_speed_threshold: f32,
     /// Minimum horizontal speed (m/s) to generate a wake.
     pub wake_speed_threshold: f32,
+    /// Reference mass (kg) for wave injection scaling. Bodies at or above this
+    /// mass inject at full strength; lighter bodies inject proportionally less.
+    /// Prevents light objects (beach balls, etc.) from creating oversized waves
+    /// that feed back into buoyancy and cause perpetual bouncing.
+    pub reference_mass: f32,
 }
 
 impl Default for WaveCouplingConfig {
@@ -100,6 +108,7 @@ impl Default for WaveCouplingConfig {
             wake_strength: 0.04,
             impact_speed_threshold: 0.5,
             wake_speed_threshold: 0.3,
+            reference_mass: 100.0,
         }
     }
 }
@@ -174,11 +183,16 @@ impl WaveBodyCoupler {
                 continue;
             }
 
+            // Wave injection scales with mass: light objects create smaller
+            // disturbances, breaking the feedback loop where self-generated
+            // waves inflate buoyancy and cause perpetual bouncing.
+            let mass_factor = (body.mass / self.config.reference_mass).min(1.0).max(0.0);
+
             // 1. Impact: body just entered water with downward velocity.
             if !was_submerged {
                 let down_speed = -body.velocity.y;
                 if down_speed > self.config.impact_speed_threshold {
-                    let strength = -down_speed * self.config.impact_strength;
+                    let strength = -down_speed * self.config.impact_strength * mass_factor;
                     self.inject_at_footprint(body, wave_grid, InjectionMode::Velocity(strength));
 
                     let surface_y = sample.as_ref().map_or(body.position.y, |s| s.surface_level);
@@ -196,7 +210,7 @@ impl WaveBodyCoupler {
             if was_submerged {
                 let vy = body.velocity.y;
                 if vy.abs() > 0.01 {
-                    let strength = -vy * self.config.bobbing_strength;
+                    let strength = -vy * self.config.bobbing_strength * mass_factor;
                     self.inject_at_footprint(
                         body,
                         wave_grid,
@@ -367,6 +381,7 @@ mod tests {
             position: Point3::new(5.0, 8.0, 5.0),
             velocity: Vector3::new(0.0, -5.0, 0.0),
             footprint_radius: 0.5,
+            mass: 20.0,
             is_velocity_driven: false,
         };
         coupler.update(&[body_above], &mut wave_grid, &flow_grid);
@@ -381,6 +396,7 @@ mod tests {
             position: Point3::new(5.0, 4.8, 5.0),
             velocity: Vector3::new(0.0, -5.0, 0.0),
             footprint_radius: 0.5,
+            mass: 20.0,
             is_velocity_driven: false,
         };
         coupler.update(&[body_entering], &mut wave_grid, &flow_grid);
@@ -404,6 +420,7 @@ mod tests {
             position: Point3::new(5.0, 4.5, 5.0),
             velocity: Vector3::new(0.0, 0.5, 0.0),
             footprint_radius: 0.5,
+            mass: 20.0,
             is_velocity_driven: false,
         };
         coupler.update(&[body], &mut wave_grid, &flow_grid);
@@ -415,6 +432,7 @@ mod tests {
             position: Point3::new(5.0, 4.7, 5.0),
             velocity: Vector3::new(0.0, -0.3, 0.0),
             footprint_radius: 0.5,
+            mass: 20.0,
             is_velocity_driven: false,
         };
         coupler.update(&[body], &mut wave_grid, &flow_grid);
@@ -438,6 +456,7 @@ mod tests {
             position: Point3::new(5.0, 4.5, 5.0),
             velocity: Vector3::zeros(),
             footprint_radius: 0.5,
+            mass: 20.0,
             is_velocity_driven: true,
         };
         coupler.update(&[body], &mut wave_grid, &flow_grid);
@@ -448,6 +467,7 @@ mod tests {
             position: Point3::new(5.0, 4.5, 5.0),
             velocity: Vector3::new(3.0, 0.0, 0.0),
             footprint_radius: 0.5,
+            mass: 20.0,
             is_velocity_driven: true,
         };
         coupler.update(&[body], &mut wave_grid, &flow_grid);
@@ -470,6 +490,7 @@ mod tests {
             position: Point3::new(5.0, 10.0, 5.0),
             velocity: Vector3::new(0.0, -2.0, 0.0),
             footprint_radius: 0.5,
+            mass: 20.0,
             is_velocity_driven: false,
         };
 
@@ -494,6 +515,7 @@ mod tests {
             position: Point3::new(5.0, 4.5, 5.0),
             velocity: Vector3::zeros(),
             footprint_radius: 0.5,
+            mass: 20.0,
             is_velocity_driven: false,
         };
         coupler.update(&[body], &mut wave_grid, &flow_grid);

@@ -43,13 +43,19 @@ pub struct BuoyancyForces {
 }
 
 /// Target damping ratio for small vertical heave oscillations.
-const HEAVE_DAMPING_RATIO: f32 = 0.1;
+/// 0.3 gives ~2-4 bobs before settling — enough to look natural without
+/// sustaining perpetual oscillation via wave coupling feedback.
+const HEAVE_DAMPING_RATIO: f32 = 0.3;
 /// Drag coefficient used in Fd = 0.5 * rho * Cd * A * |v| * v.
 const DRAG_COEFF_SPHERE: f32 = 0.47;
 const DRAG_COEFF_BOX: f32 = 1.05;
 const DRAG_COEFF_CAPSULE: f32 = 0.82;
 /// Rotational drag multiplier in τd = 0.5 * rho * Cω * A * r² * |ω| * ω.
 const ANGULAR_DRAG_COEFF: f32 = 2.0;
+/// Angular damping floor (N·m·s/rad) per unit submerged fraction.
+/// Provides linear angular drag that settles low-amplitude rocking where
+/// the quadratic term (∝ |ω|·ω) is too weak to converge.
+const ANGULAR_DRAG_FLOOR: f32 = 0.5;
 /// Vertical offset used for numerical dV/dy waterplane area estimation.
 const WATERPLANE_EPSILON: f32 = 0.05;
 
@@ -131,12 +137,17 @@ impl SubstepForceProvider for BuoyancyForceProvider<'_> {
         let linear_speed = body.linear_velocity().magnitude();
         let angular_speed = body.angular_velocity().magnitude();
 
+        // Angular drag floor: linear term that guarantees rocking settles
+        // even at low angular speeds where the quadratic term vanishes.
+        let angular_drag_floor = ANGULAR_DRAG_FLOOR * result.submerged_fraction;
+
         ForceOutput {
             force: result.buoyancy_force,
             torque: buoyancy_torque,
             linear_drag_coeff: linear_drag_floor
                 + result.quadratic_linear_drag_coeff * linear_speed,
-            angular_drag_coeff: result.quadratic_angular_drag_coeff * angular_speed,
+            angular_drag_coeff: angular_drag_floor
+                + result.quadratic_angular_drag_coeff * angular_speed,
         }
     }
 }
@@ -272,9 +283,12 @@ fn compute_sphere_submersion(
 ) -> Option<(f32, f32, Point3<f32>)> {
     let sample = sample_water(flow_grid, wave_grid, center.x, center.z)?;
 
-    // Floor check: sphere center must be above the floor to be affected.
+    // Floor check: reject bodies whose center is at or below the terrain
+    // floor. This prevents false buoyancy for bodies underneath floating
+    // water (sky islands). The bottom of the shape may touch the floor
+    // while the body is legitimately in the water column.
     let bottom = center.y - radius;
-    if bottom <= sample.floor_level {
+    if center.y <= sample.floor_level {
         return None;
     }
 
@@ -509,9 +523,12 @@ fn polyhedron_volume_centroid(poly: &Polyhedron) -> Option<(f32, Point3<f32>)> {
     Some((signed_volume.abs(), Point3::from(center)))
 }
 
-/// Compute submerged volume and centroid for a capsule using 2 hemisphere probes.
+/// Compute submerged volume and centroid for a capsule analytically.
 ///
-/// Probes are placed at the bottom and top hemisphere centers (along local Y).
+/// Uses a single water sample at the capsule's XZ center and closed-form
+/// volume/centroid integrals over three zones: bottom hemisphere cap,
+/// cylinder, and top hemisphere cap. Exact for vertical capsules and a
+/// close approximation for tilted ones.
 fn compute_capsule_submersion(
     center: Point3<f32>,
     rotation: UnitQuaternion<f32>,
@@ -520,57 +537,99 @@ fn compute_capsule_submersion(
     flow_grid: &WaterGrid,
     wave_grid: Option<&WaveGrid>,
 ) -> Option<(f32, f32, Point3<f32>)> {
-    let cylinder_half = half_height - radius;
-    let full_height = 2.0 * half_height;
+    let sample = sample_water(flow_grid, wave_grid, center.x, center.z)?;
 
-    // Full capsule volume = cylinder + two hemispheres (= one sphere).
-    let cyl_volume = PI * radius * radius * (2.0 * cylinder_half);
-    let sphere_volume = (4.0 / 3.0) * PI * radius * radius * radius;
-    let full_volume = cyl_volume + sphere_volume;
+    let r = radius;
+    let cylinder_half = half_height - r;
+    let cyl_len = 2.0 * cylinder_half;
+    let total_height = 2.0 * half_height;
 
-    // Probe positions: bottom and top hemisphere centers in local space.
-    let probes_local = [
-        Vector3::new(0.0, -cylinder_half, 0.0),
-        Vector3::new(0.0, cylinder_half, 0.0),
-    ];
+    // Full capsule volume = cylinder + sphere (two hemispheres).
+    let full_volume = PI * r * r * cyl_len + (4.0 / 3.0) * PI * r * r * r;
 
-    let mut total_submerged_volume = 0.0f32;
-    let mut weighted_pos = Vector3::zeros();
-    let mut any_submerged = false;
-
-    for local in &probes_local {
-        let world = center + rotation * local;
-        let sample = match sample_water(flow_grid, wave_grid, world.x, world.z) {
-            Some(s) => s,
-            None => continue,
-        };
-
-        // The probe's effective bottom is one radius below the hemisphere center.
-        let probe_bottom = world.y - radius;
-        if probe_bottom <= sample.floor_level {
-            continue;
-        }
-
-        let depth = (sample.surface_level - probe_bottom).clamp(0.0, full_height);
-        if depth <= 0.0 {
-            continue;
-        }
-
-        any_submerged = true;
-        let column_volume = (depth / full_height) * (full_volume / 2.0);
-        total_submerged_volume += column_volume;
-
-        let centroid_y = probe_bottom + depth * 0.5;
-        weighted_pos += Vector3::new(world.x, centroid_y, world.z) * column_volume;
-    }
-
-    if !any_submerged || total_submerged_volume <= 0.0 {
+    // Capsule axis in world space. Hemisphere centers along this axis.
+    let axis = rotation * Vector3::y();
+    let p_low_y = (center.y - axis.y * cylinder_half).min(center.y + axis.y * cylinder_half);
+    let y_min = p_low_y - r;
+    let vertical_span = 2.0 * (r + axis.y.abs() * cylinder_half);
+    // Floor check: reject capsules whose center is at or below the terrain
+    // floor. A tall capsule's bottom may reach the floor while the body is
+    // legitimately in the water column.
+    if center.y <= sample.floor_level {
         return None;
     }
 
-    let submerged_fraction = (total_submerged_volume / full_volume).min(1.0);
-    let buoyancy_center = Point3::from(weighted_pos / total_submerged_volume);
-    Some((total_submerged_volume, submerged_fraction, buoyancy_center))
+    let depth_vertical = (sample.surface_level - y_min).clamp(0.0, vertical_span);
+    if depth_vertical <= 0.0 || vertical_span <= 1e-6 {
+        return None;
+    }
+    // The closed-form phase integrals are defined along the capsule's local
+    // axis depth [0, 2*half_height]. Convert vertical immersion depth into
+    // equivalent axis depth so tilted capsules preserve displaced volume.
+    let depth = (depth_vertical * total_height / vertical_span).clamp(0.0, total_height);
+
+    // Three-phase volume and centroid (measured from capsule bottom = y_min).
+    //   Phase 1: bottom hemisphere [0, r]
+    //   Phase 2: cylinder          [r, r + cyl_len]
+    //   Phase 3: top hemisphere    [r + cyl_len, total_height]
+    let (submerged_volume, centroid_from_bottom) = if depth <= r {
+        // Phase 1: spherical cap only.
+        let v = PI * depth * depth * (3.0 * r - depth) / 3.0;
+        let denom = 4.0 * (3.0 * r - depth);
+        let cy = if denom.abs() > 1e-6 {
+            depth * (4.0 * r - depth) / denom
+        } else {
+            depth * 0.5
+        };
+        (v, cy)
+    } else if depth <= r + cyl_len {
+        // Phase 2: full bottom hemisphere + partial cylinder.
+        let hemi_vol = (2.0 / 3.0) * PI * r * r * r;
+        let hemi_centroid = 3.0 * r / 8.0;
+        let cyl_h = depth - r;
+        let cyl_vol = PI * r * r * cyl_h;
+        let cyl_centroid = r + cyl_h * 0.5;
+        let v = hemi_vol + cyl_vol;
+        let cy = (hemi_vol * hemi_centroid + cyl_vol * cyl_centroid) / v;
+        (v, cy)
+    } else {
+        // Phase 3: full volume minus dry top cap.
+        let cap_remaining = total_height - depth;
+        let dry_vol = PI * cap_remaining * cap_remaining * (3.0 * r - cap_remaining) / 3.0;
+        let v = full_volume - dry_vol;
+
+        // Centroid via complement: V*cy = V_full*cy_full - V_dry*cy_dry.
+        let full_centroid = total_height * 0.5;
+        let dry_denom = 4.0 * (3.0 * r - cap_remaining);
+        let dry_centroid_from_top = if dry_denom.abs() > 1e-6 {
+            cap_remaining * (4.0 * r - cap_remaining) / dry_denom
+        } else {
+            cap_remaining * 0.5
+        };
+        let dry_centroid = total_height - dry_centroid_from_top;
+        let cy = (full_volume * full_centroid - dry_vol * dry_centroid) / v;
+        (v, cy)
+    };
+
+    if submerged_volume <= 0.0 {
+        return None;
+    }
+
+    let submerged_fraction = (submerged_volume / full_volume).min(1.0);
+    let centroid_y = y_min + centroid_from_bottom * (vertical_span / total_height);
+
+    // For tilted capsules, offset the buoyancy center along the axis so it
+    // sits at the XZ position corresponding to centroid_y on the capsule axis.
+    // This produces a natural righting torque.
+    let buoyancy_center = if axis.y.abs() > 1e-3 {
+        let t = ((centroid_y - center.y) / axis.y).clamp(-half_height, half_height);
+        let axis_point = center + axis * t;
+        Point3::new(axis_point.x, centroid_y, axis_point.z)
+    } else {
+        Point3::new(center.x, centroid_y, center.z)
+    };
+
+    Some((submerged_volume, submerged_fraction, buoyancy_center))
 }
 
 fn submerged_volume_for_pose(
@@ -888,6 +947,131 @@ mod tests {
             body.linear_velocity().y.abs() < 0.001,
             "Neutrally buoyant body should have ~zero vertical velocity, got {}",
             body.linear_velocity().y
+        );
+    }
+
+    #[test]
+    fn capsule_fully_submerged() {
+        let grid = make_test_grid(10.0);
+        let center = Point3::new(0.0, 5.0, 0.0);
+        let half_height = 1.0;
+        let radius = 0.5;
+
+        let (vol, frac, centroid) = compute_capsule_submersion(
+            center,
+            UnitQuaternion::identity(),
+            half_height,
+            radius,
+            &grid,
+            None,
+        )
+        .unwrap();
+
+        let cyl_len = 2.0 * (half_height - radius);
+        let expected_vol = PI * radius * radius * cyl_len + (4.0 / 3.0) * PI * radius.powi(3);
+        assert!(
+            (frac - 1.0).abs() < 0.01,
+            "Should be fully submerged, got fraction={frac}"
+        );
+        assert!(
+            (vol - expected_vol).abs() < 0.01,
+            "Volume should match full capsule, got {vol} expected {expected_vol}"
+        );
+        assert!(
+            (centroid.y - center.y).abs() < 0.01,
+            "Fully submerged centroid should be at center, got y={} expected y={}",
+            centroid.y,
+            center.y
+        );
+    }
+
+    #[test]
+    fn capsule_half_submerged() {
+        let grid = make_test_grid(5.0);
+        // Center at water surface → bottom half submerged.
+        let center = Point3::new(0.0, 5.0, 0.0);
+        let half_height = 1.0;
+        let radius = 0.5;
+
+        let (_vol, frac, centroid) = compute_capsule_submersion(
+            center,
+            UnitQuaternion::identity(),
+            half_height,
+            radius,
+            &grid,
+            None,
+        )
+        .unwrap();
+
+        assert!(
+            (frac - 0.5).abs() < 0.05,
+            "Should be ~half submerged, got fraction={frac}"
+        );
+        assert!(
+            centroid.y < center.y,
+            "Centroid should be below center, got y={} vs center y={}",
+            centroid.y,
+            center.y
+        );
+    }
+
+    #[test]
+    fn capsule_above_water() {
+        let grid = make_test_grid(2.0);
+        let center = Point3::new(0.0, 5.0, 0.0);
+
+        let result =
+            compute_capsule_submersion(center, UnitQuaternion::identity(), 1.0, 0.5, &grid, None);
+        assert!(result.is_none(), "Capsule above water should return None");
+    }
+
+    #[test]
+    fn capsule_tilted_produces_righting_offset() {
+        let grid = make_test_grid(5.0);
+        // Center at water surface, tilted 45° around Z axis.
+        let center = Point3::new(0.0, 5.0, 0.0);
+        let tilt = UnitQuaternion::from_euler_angles(0.0, 0.0, PI * 0.25);
+
+        let (_vol, _frac, centroid) =
+            compute_capsule_submersion(center, tilt, 1.0, 0.5, &grid, None).unwrap();
+
+        // Buoyancy center should be offset horizontally toward the lower
+        // side of the tilt (negative x for a positive z-rotation).
+        assert!(
+            (centroid.x - center.x).abs() > 0.01,
+            "Tilted capsule should have horizontal buoyancy offset, got x={}",
+            centroid.x
+        );
+    }
+
+    #[test]
+    fn capsule_horizontal_fully_submerged_matches_full_volume() {
+        let grid = make_test_grid(10.0);
+        let center = Point3::new(0.0, 5.0, 0.0);
+        let half_height = 3.0;
+        let radius = 0.5;
+        // Rotate 90° around Z so capsule axis is horizontal (X axis).
+        let horizontal = UnitQuaternion::from_euler_angles(0.0, 0.0, PI * 0.5);
+
+        let (vol, frac, centroid) =
+            compute_capsule_submersion(center, horizontal, half_height, radius, &grid, None)
+                .unwrap();
+
+        let cyl_len = 2.0 * (half_height - radius);
+        let expected_vol = PI * radius * radius * cyl_len + (4.0 / 3.0) * PI * radius.powi(3);
+        assert!(
+            (frac - 1.0).abs() < 0.01,
+            "Horizontal capsule should be fully submerged, got fraction={frac}"
+        );
+        assert!(
+            (vol - expected_vol).abs() < 0.01,
+            "Volume should match full capsule, got {vol} expected {expected_vol}"
+        );
+        assert!(
+            (centroid.y - center.y).abs() < 0.01,
+            "Fully submerged centroid should be at center, got y={} expected y={}",
+            centroid.y,
+            center.y
         );
     }
 }

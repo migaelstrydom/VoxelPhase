@@ -415,6 +415,7 @@ fn build_body_snapshots(
             position: Point3::new(pos.0.x, pos.0.y, pos.0.z),
             velocity: vel.0,
             footprint_radius,
+            mass: rb.mass(),
             is_velocity_driven,
         });
     }

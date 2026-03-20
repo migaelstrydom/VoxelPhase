@@ -371,7 +371,11 @@ impl RigidBody {
             self.linear_velocity *= decay;
         }
         if self.angular_drag_coeff > 0.0 {
-            let decay = (-self.angular_drag_coeff * self.inv_mass * dt).exp();
+            // Use the average inverse inertia (trace(I_inv)/3) so that
+            // angular drag scales with rotational inertia, not mass.
+            let inv_i = self.world_inv_inertia();
+            let avg_inv_inertia = (inv_i.m11 + inv_i.m22 + inv_i.m33) / 3.0;
+            let decay = (-self.angular_drag_coeff * avg_inv_inertia * dt).exp();
             self.angular_velocity *= decay;
         }
 

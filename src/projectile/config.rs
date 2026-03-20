@@ -28,7 +28,7 @@ impl Default for GrenadeConfig {
         Self {
             throw_speed: 20.0,
             arc_factor: 0.0,
-            radius: 0.15,
+            radius: 0.2,
             gravity: 9.81,
             max_lifetime: 10.0,
             cooldown: 0.01,
