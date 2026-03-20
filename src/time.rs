@@ -50,6 +50,12 @@ impl Time {
     pub fn delta_seconds(&self) -> f32 {
         self.delta_seconds
     }
+
+    /// Total elapsed time since game start in seconds (f32).
+    #[inline]
+    pub fn total_seconds(&self) -> f32 {
+        self.total.as_secs_f32()
+    }
 }
 
 impl Default for Time {

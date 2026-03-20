@@ -186,6 +186,33 @@ fn spawn_particle(
                 drag: cfg.drag(),
             }
         }
+
+        ParticleEffectType::WaterSplash => {
+            let cfg = &config.splash;
+            let lifetime = rng.gen_range(cfg.min_lifetime()..cfg.max_lifetime());
+            let size = rng.gen_range(cfg.min_size()..cfg.max_size());
+            let speed = rng.gen_range(cfg.min_speed()..cfg.max_speed());
+
+            // Radial outward with upward bias (upper hemisphere).
+            let mut dir = random_direction(rng);
+            dir.y = dir.y.abs() + 0.6;
+            dir = dir.normalize();
+
+            let start_color = cfg.start_color();
+            let end_color = cfg.end_color();
+            Particle {
+                position,
+                velocity: dir * speed,
+                color: start_color,
+                start_color,
+                end_color,
+                size,
+                life: lifetime,
+                max_life: lifetime,
+                gravity_scale: cfg.gravity_scale(),
+                drag: cfg.drag(),
+            }
+        }
     };
 
     pool.spawn(particle);

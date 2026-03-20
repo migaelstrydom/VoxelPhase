@@ -270,6 +270,67 @@ impl ParticleEffectConfig for SparksConfig {
     }
 }
 
+/// Configuration for water splash particles.
+#[derive(Debug, Clone)]
+pub struct WaterSplashConfig {
+    pub min_lifetime: f32,
+    pub max_lifetime: f32,
+    pub min_size: f32,
+    pub max_size: f32,
+    pub min_speed: f32,
+    pub max_speed: f32,
+    pub start_color: Vector4<f32>,
+    pub end_color: Vector4<f32>,
+}
+
+impl Default for WaterSplashConfig {
+    fn default() -> Self {
+        Self {
+            min_lifetime: 0.4,
+            max_lifetime: 0.9,
+            min_size: 0.08,
+            max_size: 0.20,
+            min_speed: 5.0,
+            max_speed: 10.0,
+            start_color: Vector4::new(0.7, 0.85, 1.0, 0.9),
+            end_color: Vector4::new(0.8, 0.9, 1.0, 0.0),
+        }
+    }
+}
+
+impl ParticleEffectConfig for WaterSplashConfig {
+    fn min_lifetime(&self) -> f32 {
+        self.min_lifetime
+    }
+    fn max_lifetime(&self) -> f32 {
+        self.max_lifetime
+    }
+    fn min_size(&self) -> f32 {
+        self.min_size
+    }
+    fn max_size(&self) -> f32 {
+        self.max_size
+    }
+    fn min_speed(&self) -> f32 {
+        self.min_speed
+    }
+    fn max_speed(&self) -> f32 {
+        self.max_speed
+    }
+    fn start_color(&self) -> Vector4<f32> {
+        self.start_color
+    }
+    fn end_color(&self) -> Vector4<f32> {
+        self.end_color
+    }
+    fn gravity_scale(&self) -> f32 {
+        1.0
+    }
+    fn drag(&self) -> f32 {
+        0.3
+    }
+}
+
 /// Combined configuration resource for all particle effects.
 #[derive(Debug, Clone, Default)]
 pub struct ParticleConfig {
@@ -277,6 +338,7 @@ pub struct ParticleConfig {
     pub smoke: SmokeConfig,
     pub debris: DebrisConfig,
     pub sparks: SparksConfig,
+    pub splash: WaterSplashConfig,
     pub gravity: f32,
 }
 
@@ -287,6 +349,7 @@ impl ParticleConfig {
             smoke: SmokeConfig::default(),
             debris: DebrisConfig::default(),
             sparks: SparksConfig::default(),
+            splash: WaterSplashConfig::default(),
             gravity: 9.81,
         }
     }

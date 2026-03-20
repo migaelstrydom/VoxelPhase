@@ -13,6 +13,8 @@ pub enum ParticleEffectType {
     Debris,
     /// Fast, small, bright trailing sparks.
     Sparks,
+    /// Radial splash from a body impacting water.
+    WaterSplash,
 }
 
 /// Component for entities that emit particles.
@@ -95,5 +97,12 @@ impl ParticleEmitter {
             .with_burst(30)
             .with_spawn_rate(50.0)
             .with_lifetime(0.5)
+    }
+
+    /// Create a water splash emitter.
+    pub fn water_splash() -> Self {
+        Self::new(ParticleEffectType::WaterSplash)
+            .with_burst(25)
+            .with_lifetime(0.2)
     }
 }

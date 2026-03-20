@@ -12,8 +12,38 @@
 
 use std::collections::HashMap;
 
+use nalgebra::Point3;
+
 use super::{WaterGrid, WaveGrid};
 use crate::water::buoyancy::sample_water;
+
+/// Emitted when a body impacts the water surface.
+///
+/// Consumed by the ECS layer to spawn splash particle effects.
+#[derive(Debug, Clone)]
+pub struct SplashEvent {
+    /// World-space position on the water surface where the impact occurred.
+    pub position: Point3<f32>,
+    /// Downward speed of the body at impact (always positive).
+    pub speed: f32,
+    /// XZ footprint radius of the impacting body.
+    pub radius: f32,
+}
+
+/// Emitted each frame for a body moving through water with a wake.
+///
+/// Consumed by the ECS layer to spawn continuous wake spray particles.
+#[derive(Debug, Clone)]
+pub struct WakeEvent {
+    /// World-space position behind the body where spray originates.
+    pub position: Point3<f32>,
+    /// Horizontal speed of the body (always positive).
+    pub speed: f32,
+    /// Normalized horizontal movement direction (XZ plane).
+    pub direction: nalgebra::Vector3<f32>,
+    /// XZ footprint radius of the body.
+    pub radius: f32,
+}
 
 /// Snapshot of a rigid body's state relevant to wave coupling.
 #[derive(Clone)]
@@ -78,6 +108,10 @@ impl Default for WaveCouplingConfig {
 pub struct WaveBodyCoupler {
     config: WaveCouplingConfig,
     body_states: HashMap<u64, BodyWaterState>,
+    /// Splash events emitted this frame. Drained by the ECS layer.
+    splash_events: Vec<SplashEvent>,
+    /// Wake events emitted this frame. Drained by the ECS layer.
+    wake_events: Vec<WakeEvent>,
 }
 
 impl WaveBodyCoupler {
@@ -85,7 +119,19 @@ impl WaveBodyCoupler {
         Self {
             config,
             body_states: HashMap::new(),
+            splash_events: Vec::new(),
+            wake_events: Vec::new(),
         }
+    }
+
+    /// Drain accumulated splash events from the last `update()` call.
+    pub fn drain_splash_events(&mut self) -> Vec<SplashEvent> {
+        std::mem::take(&mut self.splash_events)
+    }
+
+    /// Drain accumulated wake events from the last `update()` call.
+    pub fn drain_wake_events(&mut self) -> Vec<WakeEvent> {
+        std::mem::take(&mut self.wake_events)
     }
 
     /// Process all bodies and inject wave disturbances.
@@ -97,6 +143,9 @@ impl WaveBodyCoupler {
         wave_grid: &mut WaveGrid,
         flow_grid: &WaterGrid,
     ) {
+        self.splash_events.clear();
+        self.wake_events.clear();
+
         // Mark all existing entries as aged; we'll reset age for bodies we see.
         for state in self.body_states.values_mut() {
             state.age += 1;
@@ -131,6 +180,13 @@ impl WaveBodyCoupler {
                 if down_speed > self.config.impact_speed_threshold {
                     let strength = -down_speed * self.config.impact_strength;
                     self.inject_at_footprint(body, wave_grid, InjectionMode::Velocity(strength));
+
+                    let surface_y = sample.as_ref().map_or(body.position.y, |s| s.surface_level);
+                    self.splash_events.push(SplashEvent {
+                        position: Point3::new(body.position.x, surface_y, body.position.z),
+                        speed: down_speed,
+                        radius: body.footprint_radius,
+                    });
                 }
             }
 
@@ -155,15 +211,21 @@ impl WaveBodyCoupler {
                 let horizontal_vel = nalgebra::Vector3::new(body.velocity.x, 0.0, body.velocity.z);
                 let h_speed = horizontal_vel.magnitude();
                 if h_speed > self.config.wake_speed_threshold {
+                    let move_dir = horizontal_vel / h_speed;
+
                     // Inject behind the body (opposite movement direction).
-                    let wake_offset = if h_speed > 1e-4 {
-                        -horizontal_vel / h_speed * body.footprint_radius * 0.8
-                    } else {
-                        nalgebra::Vector3::zeros()
-                    };
+                    let wake_offset = -move_dir * body.footprint_radius * 0.8;
                     let wake_pos = body.position + wake_offset;
                     let strength = -h_speed * self.config.wake_strength;
                     wave_grid.inject_displacement_at(wake_pos.x, wake_pos.z, strength);
+
+                    let surface_y = sample.as_ref().map_or(body.position.y, |s| s.surface_level);
+                    self.wake_events.push(WakeEvent {
+                        position: Point3::new(wake_pos.x, surface_y, wake_pos.z),
+                        speed: h_speed,
+                        direction: move_dir,
+                        radius: body.footprint_radius,
+                    });
                 }
             }
         }

@@ -15,7 +15,7 @@ pub mod placer;
 mod properties;
 mod wave;
 
-pub use coupling::{BodySnapshot, WaveCouplingConfig, WaveBodyCoupler};
+pub use coupling::{BodySnapshot, SplashEvent, WakeEvent, WaveCouplingConfig, WaveBodyCoupler};
 pub use grid::{WaterCell, WaterGrid, WaterGridConfig};
 pub use properties::WaterProperties;
 pub use wave::{WaveCell, WaveGrid, WaveGridConfig};

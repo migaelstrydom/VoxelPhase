@@ -16,6 +16,6 @@ pub mod vertex;
 
 pub use config::ParticleConfig;
 pub use emitter::ParticleEmitter;
-pub use particle::ParticlePool;
+pub use particle::{Particle, ParticlePool};
 pub use renderer::ParticleRenderer;
 pub use systems::{ParticleSpawnSystem, ParticleUpdateSystem};
