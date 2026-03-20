@@ -1,8 +1,9 @@
 //! Water rendering pipeline.
 //!
 //! Creates a graphics pipeline configured for water surface rendering
-//! with alpha blending, depth testing (read-only), and volumetric depth
-//! via a depth input attachment from the opaque geometry pass.
+//! with alpha blending, depth testing (read-only), volumetric depth via
+//! a depth input attachment, and screen-space refraction via sampling
+//! the opaque color target as a texture at offset UVs.
 
 use std::sync::Arc;
 
@@ -22,6 +23,7 @@ use super::vertex::WaterVertex;
 /// - Depth write disabled (terrain behind water still visible through alpha)
 /// - No backface culling (water visible from both sides)
 /// - Input attachment for reading the opaque depth buffer (volumetric depth)
+/// - Combined image sampler for the opaque color target (screen-space refraction)
 pub struct WaterPipeline {
     device: Arc<ManagedDevice>,
     pipeline: vk::Pipeline,
@@ -29,6 +31,8 @@ pub struct WaterPipeline {
     descriptor_set_layout: vk::DescriptorSetLayout,
     descriptor_pool: vk::DescriptorPool,
     descriptor_set: vk::DescriptorSet,
+    color_sampler: vk::Sampler,
+    depth_sampler: vk::Sampler,
 }
 
 impl WaterPipeline {
@@ -36,7 +40,10 @@ impl WaterPipeline {
         device: Arc<ManagedDevice>,
         render_pass: vk::RenderPass,
         depth_view: vk::ImageView,
+        color_view: vk::ImageView,
     ) -> EngineResult<Self> {
+        let color_sampler = Self::create_color_sampler(&device)?;
+        let depth_sampler = Self::create_depth_sampler(&device)?;
         let descriptor_set_layout = Self::create_descriptor_set_layout(&device)?;
         let pipeline_layout = Self::create_pipeline_layout(&device, descriptor_set_layout)?;
         let pipeline = Self::create_pipeline(&device, render_pass, pipeline_layout)?;
@@ -44,8 +51,14 @@ impl WaterPipeline {
 
         let descriptor_set =
             Self::allocate_descriptor_set(&device, descriptor_pool, descriptor_set_layout)?;
-
-        Self::update_descriptor_set(&device, descriptor_set, depth_view);
+        Self::update_descriptor_set(
+            &device,
+            descriptor_set,
+            depth_view,
+            color_view,
+            color_sampler,
+            depth_sampler,
+        );
 
         Ok(Self {
             device,
@@ -54,23 +67,61 @@ impl WaterPipeline {
             descriptor_set_layout,
             descriptor_pool,
             descriptor_set,
+            color_sampler,
+            depth_sampler,
         })
+    }
+
+    fn create_color_sampler(device: &ManagedDevice) -> EngineResult<vk::Sampler> {
+        let sampler_info = vk::SamplerCreateInfo::default()
+            .mag_filter(vk::Filter::LINEAR)
+            .min_filter(vk::Filter::LINEAR)
+            .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+            .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+            .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE);
+
+        unsafe { device.device.create_sampler(&sampler_info, None) }
+            .map_err(|e| EngineError::Pipeline(format!("water color sampler: {:?}", e)))
+    }
+
+    fn create_depth_sampler(device: &ManagedDevice) -> EngineResult<vk::Sampler> {
+        let sampler_info = vk::SamplerCreateInfo::default()
+            .mag_filter(vk::Filter::NEAREST)
+            .min_filter(vk::Filter::NEAREST)
+            .address_mode_u(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+            .address_mode_v(vk::SamplerAddressMode::CLAMP_TO_EDGE)
+            .address_mode_w(vk::SamplerAddressMode::CLAMP_TO_EDGE);
+
+        unsafe { device.device.create_sampler(&sampler_info, None) }
+            .map_err(|e| EngineError::Pipeline(format!("water depth sampler: {:?}", e)))
     }
 
     fn create_descriptor_set_layout(
         device: &ManagedDevice,
     ) -> EngineResult<vk::DescriptorSetLayout> {
-        let binding = vk::DescriptorSetLayoutBinding::default()
-            .binding(0)
-            .descriptor_type(vk::DescriptorType::INPUT_ATTACHMENT)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::FRAGMENT);
+        let bindings = [
+            // Binding 0: opaque color target (sampled at offset UVs for refraction)
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(0)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+            // Binding 1: depth buffer (sampled at both current and refracted UVs)
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(1)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+        ];
 
-        let create_info = vk::DescriptorSetLayoutCreateInfo::default()
-            .bindings(std::slice::from_ref(&binding));
+        let create_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
 
-        unsafe { device.device.create_descriptor_set_layout(&create_info, None) }
-            .map_err(|e| EngineError::Pipeline(format!("water descriptor layout: {:?}", e)))
+        unsafe {
+            device
+                .device
+                .create_descriptor_set_layout(&create_info, None)
+        }
+        .map_err(|e| EngineError::Pipeline(format!("water descriptor layout: {:?}", e)))
     }
 
     fn create_pipeline_layout(
@@ -79,7 +130,8 @@ impl WaterPipeline {
     ) -> EngineResult<vk::PipelineLayout> {
         // Push constants layout:
         //   0..128  — view matrix (64) + projection matrix (64) [vertex]
-        // 128..160  — camera_pos (vec4) + sun_dir (vec4) + proj_params (vec4) [fragment]
+        // 128..192  — camera_pos (vec4) + sun_dir (vec4) + proj_params (vec4)
+        //             + screen_params (vec4) [fragment]
         let push_constant_ranges = [
             vk::PushConstantRange {
                 stage_flags: vk::ShaderStageFlags::VERTEX,
@@ -89,7 +141,7 @@ impl WaterPipeline {
             vk::PushConstantRange {
                 stage_flags: vk::ShaderStageFlags::FRAGMENT,
                 offset: 128,
-                size: 48,
+                size: 64,
             },
         ];
 
@@ -104,14 +156,14 @@ impl WaterPipeline {
     }
 
     fn create_descriptor_pool(device: &ManagedDevice) -> EngineResult<vk::DescriptorPool> {
-        let pool_size = vk::DescriptorPoolSize {
-            ty: vk::DescriptorType::INPUT_ATTACHMENT,
-            descriptor_count: 1,
-        };
+        let pool_sizes = [vk::DescriptorPoolSize {
+            ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+            descriptor_count: 2,
+        }];
 
         let create_info = vk::DescriptorPoolCreateInfo::default()
             .max_sets(1)
-            .pool_sizes(std::slice::from_ref(&pool_size));
+            .pool_sizes(&pool_sizes);
 
         unsafe { device.device.create_descriptor_pool(&create_info, None) }
             .map_err(|e| EngineError::Pipeline(format!("water descriptor pool: {:?}", e)))
@@ -136,21 +188,35 @@ impl WaterPipeline {
         device: &ManagedDevice,
         descriptor_set: vk::DescriptorSet,
         depth_view: vk::ImageView,
+        color_view: vk::ImageView,
+        color_sampler: vk::Sampler,
+        depth_sampler: vk::Sampler,
     ) {
-        let image_info = vk::DescriptorImageInfo::default()
+        let color_info = vk::DescriptorImageInfo::default()
+            .sampler(color_sampler)
+            .image_view(color_view)
+            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
+
+        let depth_info = vk::DescriptorImageInfo::default()
+            .sampler(depth_sampler)
             .image_view(depth_view)
             .image_layout(vk::ImageLayout::DEPTH_STENCIL_READ_ONLY_OPTIMAL);
 
-        let write = vk::WriteDescriptorSet::default()
-            .dst_set(descriptor_set)
-            .dst_binding(0)
-            .descriptor_type(vk::DescriptorType::INPUT_ATTACHMENT)
-            .image_info(std::slice::from_ref(&image_info));
+        let writes = [
+            vk::WriteDescriptorSet::default()
+                .dst_set(descriptor_set)
+                .dst_binding(0)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .image_info(std::slice::from_ref(&color_info)),
+            vk::WriteDescriptorSet::default()
+                .dst_set(descriptor_set)
+                .dst_binding(1)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .image_info(std::slice::from_ref(&depth_info)),
+        ];
 
         unsafe {
-            device
-                .device
-                .update_descriptor_sets(std::slice::from_ref(&write), &[]);
+            device.device.update_descriptor_sets(&writes, &[]);
         }
     }
 
@@ -203,15 +269,13 @@ impl WaterPipeline {
             .depth_write_enable(false)
             .depth_compare_op(vk::CompareOp::LESS_OR_EQUAL);
 
+        // No blending — the shader composites the final color internally
+        // (samples the opaque color target, applies absorption/Fresnel/etc.)
+        // and outputs alpha = 1.0, fully replacing the destination pixel.
         let color_blend_attachment = vk::PipelineColorBlendAttachmentState {
-            blend_enable: vk::TRUE,
-            src_color_blend_factor: vk::BlendFactor::SRC_ALPHA,
-            dst_color_blend_factor: vk::BlendFactor::ONE_MINUS_SRC_ALPHA,
-            color_blend_op: vk::BlendOp::ADD,
-            src_alpha_blend_factor: vk::BlendFactor::ONE,
-            dst_alpha_blend_factor: vk::BlendFactor::ZERO,
-            alpha_blend_op: vk::BlendOp::ADD,
+            blend_enable: vk::FALSE,
             color_write_mask: vk::ColorComponentFlags::RGBA,
+            ..Default::default()
         };
 
         let color_blend = vk::PipelineColorBlendStateCreateInfo::default()
@@ -233,7 +297,7 @@ impl WaterPipeline {
             .dynamic_state(&dynamic_state)
             .layout(layout)
             .render_pass(render_pass)
-            .subpass(1);
+            .subpass(0);
 
         let pipeline = unsafe {
             let pipelines = device
@@ -276,6 +340,8 @@ impl Drop for WaterPipeline {
             self.device
                 .device
                 .destroy_descriptor_set_layout(self.descriptor_set_layout, None);
+            self.device.device.destroy_sampler(self.color_sampler, None);
+            self.device.device.destroy_sampler(self.depth_sampler, None);
         }
     }
 }

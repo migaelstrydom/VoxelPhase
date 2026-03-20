@@ -79,6 +79,7 @@ impl Renderer {
             Arc::clone(&vulkan_context),
             surface_info,
             pipeline.renderpass,
+            pipeline.transparent_renderpass,
             window_width,
             window_height,
         )?;
@@ -100,26 +101,29 @@ impl Renderer {
             std::mem::size_of::<SceneUbo>() as vk::DeviceSize,
         );
 
-        // Create overlay renderer for debug text (uses same render pass for compatibility)
+        // Create overlay renderer for debug text (transparent pass)
         let overlay = OverlayRenderer::new(
             Arc::clone(&vulkan_context),
-            pipeline.renderpass,
+            pipeline.transparent_renderpass,
             window_width,
             window_height,
         )?;
 
-        // Create particle renderer
-        let particle_renderer =
-            ParticleRenderer::new(Arc::clone(&vulkan_context), pipeline.renderpass)?;
+        // Create particle renderer (transparent pass)
+        let particle_renderer = ParticleRenderer::new(
+            Arc::clone(&vulkan_context),
+            pipeline.transparent_renderpass,
+        )?;
 
-        // Create sky renderer
+        // Create sky renderer (opaque pass)
         let sky_renderer = SkyRenderer::new(Arc::clone(&vulkan_context), pipeline.renderpass)?;
 
-        // Create water renderer (needs depth view for volumetric depth sampling)
+        // Create water renderer (transparent pass, samples opaque color target for refraction)
         let water_renderer = WaterRenderer::new(
             Arc::clone(&vulkan_context),
-            pipeline.renderpass,
+            pipeline.transparent_renderpass,
             swapchain.depth_buffer.view,
+            swapchain.color_target.view,
         )?;
 
         Ok(Self {
@@ -177,7 +181,7 @@ impl Renderer {
 
         let render_pass_begin = vk::RenderPassBeginInfo::default()
             .render_pass(self.pipeline.renderpass)
-            .framebuffer(self.swapchain.framebuffers[image_index as usize])
+            .framebuffer(self.swapchain.opaque_framebuffer)
             .render_area(self.swapchain.extent.into())
             .clear_values(&clear_values);
 
@@ -449,11 +453,137 @@ impl Renderer {
     ///
     /// Must be called after all opaque geometry is drawn and before
     /// water, particles, or overlay rendering.
-    pub fn next_subpass(&self, cb: vk::CommandBuffer) {
+    /// End the opaque render pass, blit the result to the swapchain image,
+    /// transition the color target for sampling, and begin the transparent render pass.
+    pub fn begin_transparent_pass(
+        &self,
+        cb: vk::CommandBuffer,
+        image_index: u32,
+    ) {
+        let device = self.vulkan_context.device();
+        let extent = self.swapchain.extent;
+        let src_image = self.swapchain.color_target.image;
+        let dst_image = self.swapchain.swapchain_images[image_index as usize];
+
         unsafe {
-            self.vulkan_context
-                .device()
-                .cmd_next_subpass(cb, vk::SubpassContents::INLINE);
+            // End opaque render pass. Color target is now TRANSFER_SRC_OPTIMAL.
+            device.cmd_end_render_pass(cb);
+
+            // Transition swapchain image: UNDEFINED → TRANSFER_DST_OPTIMAL.
+            let barrier_to_dst = vk::ImageMemoryBarrier::default()
+                .image(dst_image)
+                .old_layout(vk::ImageLayout::UNDEFINED)
+                .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+                .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+                .subresource_range(
+                    vk::ImageSubresourceRange::default()
+                        .aspect_mask(vk::ImageAspectFlags::COLOR)
+                        .level_count(1)
+                        .layer_count(1),
+                );
+
+            device.cmd_pipeline_barrier(
+                cb,
+                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                vk::PipelineStageFlags::TRANSFER,
+                vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                &[barrier_to_dst],
+            );
+
+            // Blit offscreen color target → swapchain image.
+            let region = vk::ImageBlit {
+                src_subresource: vk::ImageSubresourceLayers {
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    mip_level: 0,
+                    base_array_layer: 0,
+                    layer_count: 1,
+                },
+                src_offsets: [
+                    vk::Offset3D { x: 0, y: 0, z: 0 },
+                    vk::Offset3D {
+                        x: extent.width as i32,
+                        y: extent.height as i32,
+                        z: 1,
+                    },
+                ],
+                dst_subresource: vk::ImageSubresourceLayers {
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    mip_level: 0,
+                    base_array_layer: 0,
+                    layer_count: 1,
+                },
+                dst_offsets: [
+                    vk::Offset3D { x: 0, y: 0, z: 0 },
+                    vk::Offset3D {
+                        x: extent.width as i32,
+                        y: extent.height as i32,
+                        z: 1,
+                    },
+                ],
+            };
+
+            device.cmd_blit_image(
+                cb,
+                src_image,
+                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                dst_image,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                &[region],
+                vk::Filter::NEAREST,
+            );
+
+            // Transition swapchain image: TRANSFER_DST → COLOR_ATTACHMENT_OPTIMAL
+            // (ready for the transparent render pass to composite on top).
+            let barrier_to_color = vk::ImageMemoryBarrier::default()
+                .image(dst_image)
+                .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+                .new_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+                .dst_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
+                .subresource_range(
+                    vk::ImageSubresourceRange::default()
+                        .aspect_mask(vk::ImageAspectFlags::COLOR)
+                        .level_count(1)
+                        .layer_count(1),
+                );
+
+            // Transition color target: TRANSFER_SRC → SHADER_READ_ONLY_OPTIMAL
+            // (ready to be sampled by the water shader for refraction).
+            let barrier_to_read = vk::ImageMemoryBarrier::default()
+                .image(src_image)
+                .old_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
+                .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+                .src_access_mask(vk::AccessFlags::TRANSFER_READ)
+                .dst_access_mask(vk::AccessFlags::SHADER_READ)
+                .subresource_range(
+                    vk::ImageSubresourceRange::default()
+                        .aspect_mask(vk::ImageAspectFlags::COLOR)
+                        .level_count(1)
+                        .layer_count(1),
+                );
+
+            device.cmd_pipeline_barrier(
+                cb,
+                vk::PipelineStageFlags::TRANSFER,
+                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+                    | vk::PipelineStageFlags::FRAGMENT_SHADER,
+                vk::DependencyFlags::empty(),
+                &[],
+                &[],
+                &[barrier_to_color, barrier_to_read],
+            );
+
+            // Begin transparent render pass (loads existing color + depth).
+            let render_pass_begin = vk::RenderPassBeginInfo::default()
+                .render_pass(self.pipeline.transparent_renderpass)
+                .framebuffer(
+                    self.swapchain.transparent_framebuffers[image_index as usize],
+                )
+                .render_area(extent.into());
+
+            device.cmd_begin_render_pass(cb, &render_pass_begin, vk::SubpassContents::INLINE);
         }
     }
 
@@ -468,6 +598,7 @@ impl Renderer {
         view_matrix: &Matrix4<f32>,
         proj_matrix: &Matrix4<f32>,
         camera_pos: &Vector3<f32>,
+        time: f32,
     ) -> EngineResult<()> {
         let extent = self.swapchain.extent;
         let viewport = vk::Viewport {
@@ -493,6 +624,7 @@ impl Renderer {
         }
 
         let sun_dir = self.sky_renderer.sun_direction();
+        let extent = self.swapchain.extent;
         self.water_renderer.render(
             cb,
             flow_grid,
@@ -501,6 +633,9 @@ impl Renderer {
             proj_matrix,
             camera_pos,
             &sun_dir,
+            time,
+            extent.width as f32,
+            extent.height as f32,
         )
     }
 
@@ -575,7 +710,7 @@ impl Renderer {
         self.overlay.render_debug_lines(cb, entries)
     }
 
-    /// End the frame: finish render pass, submit commands, present.
+    /// End the frame: finish transparent render pass, submit commands, present.
     pub fn end_frame(&self, cb: vk::CommandBuffer, image_index: u32) -> EngineResult<()> {
         unsafe {
             self.vulkan_context.device().cmd_end_render_pass(cb);

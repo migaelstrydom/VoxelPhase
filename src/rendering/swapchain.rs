@@ -115,7 +115,7 @@ impl DepthBuffer {
                 .tiling(vk::ImageTiling::OPTIMAL)
                 .usage(
                     vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT
-                        | vk::ImageUsageFlags::INPUT_ATTACHMENT,
+                        | vk::ImageUsageFlags::SAMPLED,
                 )
                 .sharing_mode(vk::SharingMode::EXCLUSIVE);
 
@@ -274,6 +274,131 @@ impl Drop for DepthBuffer {
     }
 }
 
+/// Offscreen color render target.
+///
+/// Rendering happens to this image (not directly to swapchain images) so we
+/// can use it as a subpass input attachment for effects like water refraction.
+/// The final result is blitted to the swapchain image for presentation.
+pub struct ColorTarget {
+    pub image: vk::Image,
+    pub view: vk::ImageView,
+    pub memory: vk::DeviceMemory,
+    device: Arc<ManagedDevice>,
+}
+
+impl ColorTarget {
+    pub fn new(
+        vulkan_context: &VulkanContext,
+        extent: vk::Extent2D,
+        format: vk::Format,
+    ) -> EngineResult<Self> {
+        let device = Arc::clone(&vulkan_context.device);
+
+        unsafe {
+            let image_info = vk::ImageCreateInfo::default()
+                .image_type(vk::ImageType::TYPE_2D)
+                .format(format)
+                .extent(extent.into())
+                .mip_levels(1)
+                .array_layers(1)
+                .samples(vk::SampleCountFlags::TYPE_1)
+                .tiling(vk::ImageTiling::OPTIMAL)
+                .usage(
+                    vk::ImageUsageFlags::COLOR_ATTACHMENT
+                        | vk::ImageUsageFlags::TRANSFER_SRC
+                        | vk::ImageUsageFlags::SAMPLED,
+                )
+                .sharing_mode(vk::SharingMode::EXCLUSIVE);
+
+            let image =
+                device
+                    .device
+                    .create_image(&image_info, None)
+                    .map_err(|e| EngineError::Image {
+                        operation: crate::core::error::ImageOperation::Create,
+                        width: extent.width,
+                        height: extent.height,
+                        reason: format!("{:?}", e),
+                    })?;
+
+            let memory_req = device.device.get_image_memory_requirements(image);
+            let memory_type_index = find_memorytype_index(
+                &memory_req,
+                &device.device_memory_properties,
+                vk::MemoryPropertyFlags::DEVICE_LOCAL,
+            )
+            .ok_or_else(|| EngineError::Image {
+                operation: crate::core::error::ImageOperation::AllocateMemory,
+                width: extent.width,
+                height: extent.height,
+                reason: "no suitable memory type".to_string(),
+            })?;
+
+            let alloc_info = vk::MemoryAllocateInfo::default()
+                .allocation_size(memory_req.size)
+                .memory_type_index(memory_type_index);
+
+            let memory = device
+                .device
+                .allocate_memory(&alloc_info, None)
+                .map_err(|e| EngineError::Image {
+                    operation: crate::core::error::ImageOperation::AllocateMemory,
+                    width: extent.width,
+                    height: extent.height,
+                    reason: format!("{:?}", e),
+                })?;
+
+            device
+                .device
+                .bind_image_memory(image, memory, 0)
+                .map_err(|e| EngineError::Image {
+                    operation: crate::core::error::ImageOperation::Bind,
+                    width: extent.width,
+                    height: extent.height,
+                    reason: format!("{:?}", e),
+                })?;
+
+            let view_info = vk::ImageViewCreateInfo::default()
+                .image(image)
+                .view_type(vk::ImageViewType::TYPE_2D)
+                .format(format)
+                .subresource_range(
+                    vk::ImageSubresourceRange::default()
+                        .aspect_mask(vk::ImageAspectFlags::COLOR)
+                        .level_count(1)
+                        .layer_count(1),
+                );
+
+            let view = device
+                .device
+                .create_image_view(&view_info, None)
+                .map_err(|e| EngineError::Image {
+                    operation: crate::core::error::ImageOperation::CreateView,
+                    width: extent.width,
+                    height: extent.height,
+                    reason: format!("{:?}", e),
+                })?;
+
+            Ok(Self {
+                image,
+                view,
+                memory,
+                device,
+            })
+        }
+    }
+}
+
+impl Drop for ColorTarget {
+    fn drop(&mut self) {
+        unsafe {
+            self.device.device.destroy_image_view(self.view, None);
+            self.device.device.destroy_image(self.image, None);
+            self.device.device.free_memory(self.memory, None);
+        }
+    }
+}
+
 /// Swapchain and presentation resources.
 pub struct Swapchain {
     pub handle: vk::SwapchainKHR,
@@ -281,10 +406,16 @@ pub struct Swapchain {
     pub surface_loader: surface::Instance,
     pub surface: vk::SurfaceKHR,
     pub extent: vk::Extent2D,
+    pub swapchain_images: Vec<vk::Image>,
     pub image_views: Vec<vk::ImageView>,
-    pub framebuffers: Vec<vk::Framebuffer>,
-    /// Depth buffer used by all framebuffers. Kept alive to ensure the depth buffer view
-    /// referenced by the framebuffers remains valid. Automatically cleaned up when Swapchain is dropped.
+    /// Framebuffer for the opaque render pass (renders to ColorTarget + depth).
+    pub opaque_framebuffer: vk::Framebuffer,
+    /// Per-swapchain-image framebuffers for the transparent render pass.
+    pub transparent_framebuffers: Vec<vk::Framebuffer>,
+    /// Offscreen color render target for the opaque pass. Blitted to the swapchain
+    /// image between passes, then sampled by the water shader for refraction.
+    pub color_target: ColorTarget,
+    /// Depth buffer shared by both render passes.
     pub depth_buffer: DepthBuffer,
     pub sync: FrameSync,
     pub draw_command_buffer: ManagedCommandBuffer,
@@ -349,6 +480,7 @@ impl Swapchain {
         vulkan_context: Arc<VulkanContext>,
         surface_info: SurfaceInfo,
         renderpass: vk::RenderPass,
+        transparent_renderpass: vk::RenderPass,
         window_width: u32,
         window_height: u32,
     ) -> EngineResult<Self> {
@@ -412,7 +544,7 @@ impl Swapchain {
                 .image_color_space(format.color_space)
                 .image_extent(extent)
                 .image_array_layers(1)
-                .image_usage(vk::ImageUsageFlags::COLOR_ATTACHMENT)
+                .image_usage(vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::TRANSFER_DST)
                 .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
                 .pre_transform(pre_transform)
                 .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
@@ -454,25 +586,41 @@ impl Swapchain {
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|e| EngineError::Swapchain(format!("create image views: {:?}", e)))?;
 
-            // Create depth buffer
+            // Create offscreen color target and depth buffer
+            let color_target = ColorTarget::new(&vulkan_context, extent, format.format)?;
             let depth_buffer = DepthBuffer::new(&vulkan_context, extent, vk::Format::D16_UNORM)?;
 
-            // Create framebuffers
-            let framebuffers = image_views
+            // Opaque framebuffer: renders to offscreen color target + depth.
+            let opaque_attachments = [color_target.view, depth_buffer.view];
+            let opaque_fb_info = vk::FramebufferCreateInfo::default()
+                .render_pass(renderpass)
+                .attachments(&opaque_attachments)
+                .width(extent.width)
+                .height(extent.height)
+                .layers(1);
+
+            let opaque_framebuffer = device
+                .device
+                .create_framebuffer(&opaque_fb_info, None)
+                .map_err(|e| EngineError::Framebuffer(format!("opaque creation: {:?}", e)))?;
+
+            // Transparent framebuffers: one per swapchain image, writes to swapchain + depth.
+            let transparent_framebuffers = image_views
                 .iter()
                 .map(|&view| {
                     let attachments = [view, depth_buffer.view];
                     let fb_info = vk::FramebufferCreateInfo::default()
-                        .render_pass(renderpass)
+                        .render_pass(transparent_renderpass)
                         .attachments(&attachments)
                         .width(extent.width)
                         .height(extent.height)
                         .layers(1);
-
                     device.device.create_framebuffer(&fb_info, None)
                 })
                 .collect::<Result<Vec<_>, _>>()
-                .map_err(|e| EngineError::Framebuffer(format!("creation: {:?}", e)))?;
+                .map_err(|e| {
+                    EngineError::Framebuffer(format!("transparent creation: {:?}", e))
+                })?;
 
             // Create sync objects
             let sync = FrameSync::new(Arc::clone(&device))?;
@@ -488,8 +636,11 @@ impl Swapchain {
                 surface_loader,
                 surface,
                 extent,
+                swapchain_images: images,
                 image_views,
-                framebuffers,
+                opaque_framebuffer,
+                transparent_framebuffers,
+                color_target,
                 depth_buffer,
                 sync,
                 draw_command_buffer,
@@ -539,8 +690,11 @@ impl Swapchain {
 impl Drop for Swapchain {
     fn drop(&mut self) {
         unsafe {
-            for &framebuffer in &self.framebuffers {
-                self.device.device.destroy_framebuffer(framebuffer, None);
+            self.device
+                .device
+                .destroy_framebuffer(self.opaque_framebuffer, None);
+            for &fb in &self.transparent_framebuffers {
+                self.device.device.destroy_framebuffer(fb, None);
             }
             for &view in &self.image_views {
                 self.device.device.destroy_image_view(view, None);

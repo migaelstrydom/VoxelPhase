@@ -35,9 +35,11 @@ impl WaterRenderer {
         vulkan_context: Arc<VulkanContext>,
         render_pass: vk::RenderPass,
         depth_view: vk::ImageView,
+        color_view: vk::ImageView,
     ) -> EngineResult<Self> {
         let device = Arc::clone(&vulkan_context.device);
-        let pipeline = WaterPipeline::new(Arc::clone(&device), render_pass, depth_view)?;
+        let pipeline =
+            WaterPipeline::new(Arc::clone(&device), render_pass, depth_view, color_view)?;
 
         let vertex_buffer_size =
             (MAX_WATER_QUADS * 4 * std::mem::size_of::<WaterVertex>()) as vk::DeviceSize;
@@ -76,6 +78,9 @@ impl WaterRenderer {
         proj_matrix: &Matrix4<f32>,
         camera_pos: &Vector3<f32>,
         sun_dir: &Vector3<f32>,
+        time: f32,
+        screen_width: f32,
+        screen_height: f32,
     ) -> EngineResult<()> {
         let (vertices, indices) = Self::generate_mesh(flow_grid, wave_grid);
         if indices.is_empty() {
@@ -142,8 +147,8 @@ impl WaterRenderer {
             let near = p32 / p22;
             let far = p32 / (p22 + 1.0);
 
-            // Push camera_pos, sun_dir, and proj params (fragment stage, offset 128)
-            let frag_push_data: [f32; 12] = [
+            // Push camera_pos, sun_dir, proj params, and screen params (fragment stage, offset 128)
+            let frag_push_data: [f32; 16] = [
                 camera_pos.x,
                 camera_pos.y,
                 camera_pos.z,
@@ -154,6 +159,10 @@ impl WaterRenderer {
                 0.0, // padding
                 near,
                 far,
+                time,
+                0.0, // padding
+                screen_width,
+                screen_height,
                 0.0, // padding
                 0.0, // padding
             ];

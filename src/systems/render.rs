@@ -169,8 +169,8 @@ impl<'a> System<'a> for RenderSystem {
                     log::error!("RenderSystem: Failed to draw debug overlays: {}", e);
                 }
 
-                // Transition to subpass 1 (transparent: water, particles, overlay)
-                renderer.next_subpass(draw_cb);
+                // End opaque pass, blit to swapchain, begin transparent pass.
+                renderer.begin_transparent_pass(draw_cb, present_index);
 
                 // Render water surface (after geometry, before particles)
                 if let (Some(ref water_grid), Some(ref wave_grid)) =
@@ -188,6 +188,7 @@ impl<'a> System<'a> for RenderSystem {
                         &view_matrix,
                         &proj_matrix,
                         &camera_pos,
+                        time.total_seconds(),
                     ) {
                         log::error!("RenderSystem: Failed to render water: {}", e);
                     }

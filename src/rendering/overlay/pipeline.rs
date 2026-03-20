@@ -145,7 +145,7 @@ impl OverlayPipeline {
             .dynamic_state(&dynamic_state)
             .layout(layout)
             .render_pass(render_pass)
-            .subpass(1);
+            .subpass(0);
 
         let pipeline = unsafe {
             let pipelines = device

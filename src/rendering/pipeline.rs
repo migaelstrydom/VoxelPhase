@@ -23,6 +23,9 @@ pub struct GraphicsPipeline {
     pub wireframe_backface_pipeline: vk::Pipeline,
     pub layout: vk::PipelineLayout,
     pub renderpass: vk::RenderPass,
+    /// Separate render pass for transparent geometry (water, particles, overlay).
+    /// Uses the swapchain image directly and has depth as an input attachment.
+    pub transparent_renderpass: vk::RenderPass,
     pub scene_ubo_descriptor_set_layout: vk::DescriptorSetLayout,
     pub sampler_descriptor_set_layout: vk::DescriptorSetLayout,
     vertex_shader_module: vk::ShaderModule,
@@ -78,8 +81,13 @@ impl GraphicsPipeline {
                 .create_pipeline_layout(&pipeline_layout_create_info, None)
                 .map_err(|e| EngineError::Pipeline(format!("layout creation: {:?}", e)))?;
 
-            // Create render pass
+            // Create render passes
             let renderpass = Self::create_render_pass(&device, config)?;
+            let transparent_renderpass = Self::create_transparent_render_pass(
+                &device,
+                config.color_format,
+                config.depth_format,
+            )?;
 
             // Create the graphics pipeline
             let pipeline = Self::create_pipeline(
@@ -110,6 +118,7 @@ impl GraphicsPipeline {
                 wireframe_backface_pipeline,
                 layout,
                 renderpass,
+                transparent_renderpass,
                 scene_ubo_descriptor_set_layout,
                 sampler_descriptor_set_layout,
                 vertex_shader_module,
@@ -163,6 +172,11 @@ impl GraphicsPipeline {
         }
     }
 
+    /// Render pass for opaque geometry (sky, terrain, models, debug overlays).
+    ///
+    /// Writes to the offscreen `ColorTarget` and depth buffer. The color attachment
+    /// transitions to `TRANSFER_SRC_OPTIMAL` at the end, ready to be blitted to
+    /// the swapchain image and sampled as a texture for water refraction.
     fn create_render_pass(
         device: &ManagedDevice,
         config: &GraphicsPipelineConfig,
@@ -173,7 +187,7 @@ impl GraphicsPipeline {
                 samples: vk::SampleCountFlags::TYPE_1,
                 load_op: vk::AttachmentLoadOp::CLEAR,
                 store_op: vk::AttachmentStoreOp::STORE,
-                final_layout: vk::ImageLayout::PRESENT_SRC_KHR,
+                final_layout: vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
                 ..Default::default()
             },
             vk::AttachmentDescription {
@@ -196,59 +210,23 @@ impl GraphicsPipeline {
             layout: vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
         };
 
-        // Subpass 1 reads the depth attachment as an input attachment (read-only).
-        let depth_ref_readonly = vk::AttachmentReference {
-            attachment: 1,
-            layout: vk::ImageLayout::DEPTH_STENCIL_READ_ONLY_OPTIMAL,
-        };
-
-        let depth_input_refs = [vk::AttachmentReference {
-            attachment: 1,
-            layout: vk::ImageLayout::DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+        let dependencies = [vk::SubpassDependency {
+            src_subpass: vk::SUBPASS_EXTERNAL,
+            src_stage_mask: vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+            dst_access_mask: vk::AccessFlags::COLOR_ATTACHMENT_READ
+                | vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
+            dst_stage_mask: vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+            ..Default::default()
         }];
 
-        let dependencies = [
-            // External -> subpass 0
-            vk::SubpassDependency {
-                src_subpass: vk::SUBPASS_EXTERNAL,
-                src_stage_mask: vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-                dst_access_mask: vk::AccessFlags::COLOR_ATTACHMENT_READ
-                    | vk::AccessFlags::COLOR_ATTACHMENT_WRITE,
-                dst_stage_mask: vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-                ..Default::default()
-            },
-            // Subpass 0 -> subpass 1: depth writes must complete before depth reads
-            vk::SubpassDependency {
-                src_subpass: 0,
-                dst_subpass: 1,
-                src_stage_mask: vk::PipelineStageFlags::LATE_FRAGMENT_TESTS,
-                dst_stage_mask: vk::PipelineStageFlags::FRAGMENT_SHADER
-                    | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
-                src_access_mask: vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
-                dst_access_mask: vk::AccessFlags::INPUT_ATTACHMENT_READ
-                    | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_READ,
-                dependency_flags: vk::DependencyFlags::BY_REGION,
-            },
-        ];
-
-        // Subpass 0: opaque geometry with depth read/write
-        let subpass_opaque = vk::SubpassDescription::default()
+        let subpass = vk::SubpassDescription::default()
             .color_attachments(&color_refs)
             .depth_stencil_attachment(&depth_ref)
             .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS);
 
-        // Subpass 1: transparent geometry with depth read-only + input attachment
-        let subpass_transparent = vk::SubpassDescription::default()
-            .color_attachments(&color_refs)
-            .depth_stencil_attachment(&depth_ref_readonly)
-            .input_attachments(&depth_input_refs)
-            .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS);
-
-        let subpasses = [subpass_opaque, subpass_transparent];
-
         let create_info = vk::RenderPassCreateInfo::default()
             .attachments(&attachments)
-            .subpasses(&subpasses)
+            .subpasses(std::slice::from_ref(&subpass))
             .dependencies(&dependencies);
 
         unsafe {
@@ -256,6 +234,77 @@ impl GraphicsPipeline {
                 .device
                 .create_render_pass(&create_info, None)
                 .map_err(|e| EngineError::RenderPass(format!("creation: {:?}", e)))
+        }
+    }
+
+    /// Render pass for transparent geometry (water, particles, overlay).
+    ///
+    /// Writes to the swapchain image (loaded from the blit of the opaque pass).
+    /// Depth is loaded from the opaque pass and available as both a read-only
+    /// depth-stencil attachment and an input attachment (for water volumetric depth).
+    pub fn create_transparent_render_pass(
+        device: &ManagedDevice,
+        color_format: vk::Format,
+        depth_format: vk::Format,
+    ) -> EngineResult<vk::RenderPass> {
+        let attachments = [
+            vk::AttachmentDescription {
+                format: color_format,
+                samples: vk::SampleCountFlags::TYPE_1,
+                load_op: vk::AttachmentLoadOp::LOAD,
+                store_op: vk::AttachmentStoreOp::STORE,
+                initial_layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+                final_layout: vk::ImageLayout::PRESENT_SRC_KHR,
+                ..Default::default()
+            },
+            vk::AttachmentDescription {
+                format: depth_format,
+                samples: vk::SampleCountFlags::TYPE_1,
+                load_op: vk::AttachmentLoadOp::LOAD,
+                store_op: vk::AttachmentStoreOp::DONT_CARE,
+                initial_layout: vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                final_layout: vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                ..Default::default()
+            },
+        ];
+
+        let color_refs = [vk::AttachmentReference {
+            attachment: 0,
+            layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+        }];
+
+        let depth_ref = vk::AttachmentReference {
+            attachment: 1,
+            layout: vk::ImageLayout::DEPTH_STENCIL_READ_ONLY_OPTIMAL,
+        };
+
+        let dependencies = [vk::SubpassDependency {
+            src_subpass: vk::SUBPASS_EXTERNAL,
+            src_stage_mask: vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+                | vk::PipelineStageFlags::TRANSFER,
+            dst_stage_mask: vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+                | vk::PipelineStageFlags::FRAGMENT_SHADER
+                | vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS,
+            dst_access_mask: vk::AccessFlags::COLOR_ATTACHMENT_WRITE
+                | vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_READ,
+            ..Default::default()
+        }];
+
+        let subpass = vk::SubpassDescription::default()
+            .color_attachments(&color_refs)
+            .depth_stencil_attachment(&depth_ref)
+            .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS);
+
+        let create_info = vk::RenderPassCreateInfo::default()
+            .attachments(&attachments)
+            .subpasses(std::slice::from_ref(&subpass))
+            .dependencies(&dependencies);
+
+        unsafe {
+            device
+                .device
+                .create_render_pass(&create_info, None)
+                .map_err(|e| EngineError::RenderPass(format!("transparent pass creation: {:?}", e)))
         }
     }
 
@@ -391,6 +440,9 @@ impl Drop for GraphicsPipeline {
             self.device
                 .device
                 .destroy_render_pass(self.renderpass, None);
+            self.device
+                .device
+                .destroy_render_pass(self.transparent_renderpass, None);
             self.device
                 .device
                 .destroy_descriptor_set_layout(self.scene_ubo_descriptor_set_layout, None);
