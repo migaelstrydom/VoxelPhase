@@ -11,15 +11,15 @@ use ash::vk;
 use crate::core::device::ManagedDevice;
 use crate::core::error::{EngineError, EngineResult};
 
-/// A single Vulkan compute pipeline with its layout and descriptor set layouts.
+/// A single Vulkan compute pipeline with its layout.
 ///
-/// Follows the same RAII pattern as `GraphicsPipeline` — all GPU resources are
-/// cleaned up automatically on drop.
+/// Follows the same RAII pattern as `GraphicsPipeline` — pipeline and layout
+/// are cleaned up automatically on drop. Descriptor set layouts are **not**
+/// owned here — the caller manages their lifetime, since they are typically
+/// needed for descriptor set allocation as well.
 pub struct ComputePipeline {
     pub pipeline: vk::Pipeline,
     pub layout: vk::PipelineLayout,
-    /// Descriptor set layouts owned by this pipeline. Destroyed on drop.
-    descriptor_set_layouts: Vec<vk::DescriptorSetLayout>,
     device: Arc<ManagedDevice>,
 }
 
@@ -28,6 +28,7 @@ pub struct ComputePipelineConfig<'a> {
     /// Compiled SPIR-V shader module for the compute stage.
     pub shader_module: vk::ShaderModule,
     /// Descriptor set layouts (bindings for textures, buffers, etc.).
+    /// These are referenced by the pipeline layout but not owned by the pipeline.
     pub descriptor_set_layouts: &'a [vk::DescriptorSetLayout],
     /// Push constant ranges for per-dispatch parameters.
     pub push_constant_ranges: &'a [vk::PushConstantRange],
@@ -37,8 +38,8 @@ impl ComputePipeline {
     /// Create a new compute pipeline.
     ///
     /// The caller is responsible for destroying the `shader_module` after this
-    /// call returns. The descriptor set layouts passed in `config` are **not**
-    /// cloned — they are moved into this struct and destroyed on drop.
+    /// call returns, and for keeping the descriptor set layouts alive for the
+    /// lifetime of this pipeline.
     pub fn new(
         device: Arc<ManagedDevice>,
         config: &ComputePipelineConfig,
@@ -49,7 +50,6 @@ impl ComputePipeline {
         Ok(Self {
             pipeline,
             layout,
-            descriptor_set_layouts: config.descriptor_set_layouts.to_vec(),
             device,
         })
     }
@@ -105,11 +105,6 @@ impl Drop for ComputePipeline {
             self.device
                 .device
                 .destroy_pipeline_layout(self.layout, None);
-            for &layout in &self.descriptor_set_layouts {
-                self.device
-                    .device
-                    .destroy_descriptor_set_layout(layout, None);
-            }
         }
     }
 }

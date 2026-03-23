@@ -1,0 +1,71 @@
+#version 450
+#extension GL_ARB_separate_shader_objects : enable
+#extension GL_ARB_shading_language_420pack : enable
+
+// Jacobi pressure projection iteration.
+//
+// Solves for a pressure field that makes the velocity divergence-free.
+// Each dispatch performs one Jacobi iteration — the host dispatches this
+// shader 20-30 times with pipeline barriers between iterations.
+
+layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
+
+layout(set = 0, binding = 0, rgba16f) uniform readonly image3D velTex;
+layout(set = 0, binding = 1, rgba16f) uniform readonly image3D pressureSrc;
+layout(set = 0, binding = 2, rgba16f) uniform writeonly image3D pressureDst;
+
+layout(push_constant) uniform FireSimParams {
+    float dt;
+    float buoyancy_strength;
+    float cooling_rate;
+    float combustion_rate;
+    float burn_rate;
+    float turbulence_amplitude;
+    float turbulence_frequency;
+    float smoke_production;
+    float time;
+    int jacobi_iteration;
+} params;
+
+void main() {
+    ivec3 pos = ivec3(gl_GlobalInvocationID.xyz);
+    ivec3 size = imageSize(velTex);
+
+    if (any(greaterThanEqual(pos, size))) return;
+
+    // Compute velocity divergence at this voxel
+    // Using central differences with boundary clamping
+    ivec3 xn = ivec3(max(pos.x - 1, 0), pos.y, pos.z);
+    ivec3 xp = ivec3(min(pos.x + 1, size.x - 1), pos.y, pos.z);
+    ivec3 yn = ivec3(pos.x, max(pos.y - 1, 0), pos.z);
+    ivec3 yp = ivec3(pos.x, min(pos.y + 1, size.y - 1), pos.z);
+    ivec3 zn = ivec3(pos.x, pos.y, max(pos.z - 1, 0));
+    ivec3 zp = ivec3(pos.x, pos.y, min(pos.z + 1, size.z - 1));
+
+    float vxp = imageLoad(velTex, xp).r;
+    float vxn = imageLoad(velTex, xn).r;
+    float vyp = imageLoad(velTex, yp).g;
+    float vyn = imageLoad(velTex, yn).g;
+    float vzp = imageLoad(velTex, zp).b;
+    float vzn = imageLoad(velTex, zn).b;
+
+    float divergence = 0.5 * ((vxp - vxn) + (vyp - vyn) + (vzp - vzn));
+
+    // Sample neighboring pressure values from previous iteration
+    float pxp = imageLoad(pressureSrc, xp).r;
+    float pxn = imageLoad(pressureSrc, xn).r;
+    float pyp = imageLoad(pressureSrc, yp).r;
+    float pyn = imageLoad(pressureSrc, yn).r;
+    float pzp = imageLoad(pressureSrc, zp).r;
+    float pzn = imageLoad(pressureSrc, zn).r;
+
+    // Jacobi iteration: p = (sum_neighbors - divergence) / 6
+    float pressure = (pxp + pxn + pyp + pyn + pzp + pzn - divergence) / 6.0;
+
+    // Open top boundary: pressure = 0 at top edge
+    if (pos.y >= size.y - 1) {
+        pressure = 0.0;
+    }
+
+    imageStore(pressureDst, pos, vec4(pressure, 0.0, 0.0, 0.0));
+}

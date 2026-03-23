@@ -6,6 +6,7 @@ pub mod components;
 pub mod core;
 pub mod debug;
 pub mod explosion;
+pub mod fire;
 pub mod geometry;
 pub mod input;
 pub mod level;

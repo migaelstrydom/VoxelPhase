@@ -1,0 +1,132 @@
+#version 450
+#extension GL_ARB_separate_shader_objects : enable
+#extension GL_ARB_shading_language_420pack : enable
+
+layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
+
+layout(set = 0, binding = 0, rgba16f) uniform image3D fieldTex;
+layout(set = 0, binding = 1, rgba16f) uniform image3D velTex;
+
+layout(push_constant) uniform FireSimParams {
+    float dt;
+    float buoyancy_strength;
+    float cooling_rate;
+    float combustion_rate;
+    float burn_rate;
+    float turbulence_amplitude;
+    float turbulence_frequency;
+    float smoke_production;
+    float time;
+    int jacobi_iteration;
+} params;
+
+// 3D hash for noise generation.
+vec3 hash3(vec3 p) {
+    p = vec3(dot(p, vec3(127.1, 311.7, 74.7)),
+             dot(p, vec3(269.5, 183.3, 246.1)),
+             dot(p, vec3(113.5, 271.9, 124.6)));
+    return fract(sin(p) * 43758.5453123);
+}
+
+// 3D value noise.
+float noise3(vec3 p) {
+    vec3 i = floor(p);
+    vec3 f = fract(p);
+    vec3 u = f * f * (3.0 - 2.0 * f);
+
+    float a = dot(hash3(i), vec3(1.0));
+    float b = dot(hash3(i + vec3(1, 0, 0)), vec3(1.0));
+    float c = dot(hash3(i + vec3(0, 1, 0)), vec3(1.0));
+    float d = dot(hash3(i + vec3(1, 1, 0)), vec3(1.0));
+    float e = dot(hash3(i + vec3(0, 0, 1)), vec3(1.0));
+    float f0 = dot(hash3(i + vec3(1, 0, 1)), vec3(1.0));
+    float g = dot(hash3(i + vec3(0, 1, 1)), vec3(1.0));
+    float h = dot(hash3(i + vec3(1, 1, 1)), vec3(1.0));
+
+    float x0 = mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+    float x1 = mix(mix(e, f0, u.x), mix(g, h, u.x), u.y);
+
+    return mix(x0, x1, u.z);
+}
+
+// Curl noise for divergence-free turbulence.
+// Computed analytically via finite differences of 3D noise.
+vec3 curlNoise(vec3 p) {
+    float eps = 0.1;
+    float n = noise3(p);
+
+    float dndx = noise3(p + vec3(eps, 0, 0)) - n;
+    float dndy = noise3(p + vec3(0, eps, 0)) - n;
+    float dndz = noise3(p + vec3(0, 0, eps)) - n;
+
+    // Use a second noise field for the cross-derivative
+    float n2 = noise3(p + vec3(31.7, 47.3, 73.1));
+    float dn2dx = noise3(p + vec3(31.7 + eps, 47.3, 73.1)) - n2;
+    float dn2dy = noise3(p + vec3(31.7, 47.3 + eps, 73.1)) - n2;
+    float dn2dz = noise3(p + vec3(31.7, 47.3, 73.1 + eps)) - n2;
+
+    return vec3(
+        dndy - dn2dz,
+        dndz - dn2dx,
+        dn2dy - dndx
+    ) / eps;
+}
+
+void main() {
+    ivec3 pos = ivec3(gl_GlobalInvocationID.xyz);
+    ivec3 size = imageSize(fieldTex);
+
+    if (any(greaterThanEqual(pos, size))) return;
+
+    vec4 field = imageLoad(fieldTex, pos);
+    vec4 vel = imageLoad(velTex, pos);
+
+    float temperature = field.r;
+    float fuel = field.g;
+    float smoke = field.b;
+    vec3 v = vel.xyz;
+
+    vec3 uvw = (vec3(pos) + 0.5) / vec3(size);
+    float dt = params.dt;
+
+    // Buoyancy: hot gas rises
+    v.y += params.buoyancy_strength * temperature * dt;
+
+    // Smoke gets gentle upward push (slower than fire)
+    v.y += smoke * 0.5 * dt;
+
+    // Turbulence: curl noise displacement scaled by temperature
+    vec3 noisePos = uvw * params.turbulence_frequency + vec3(params.time * 0.7);
+    vec3 curl = curlNoise(noisePos);
+    v += curl * params.turbulence_amplitude * temperature * dt;
+
+    // Combustion: fuel burns where hot enough
+    float ignition_threshold = 0.15;
+    if (fuel > 0.0 && temperature > ignition_threshold) {
+        float burn = params.burn_rate * dt;
+        float actual_burn = min(burn, fuel);
+        fuel -= actual_burn;
+        temperature += params.combustion_rate * actual_burn;
+        smoke += params.smoke_production * actual_burn;
+    }
+
+    // Cooling: temperature decays over time, faster near volume edges
+    float edge_distance = min(min(uvw.x, 1.0 - uvw.x),
+                             min(min(uvw.y, 1.0 - uvw.y),
+                                 min(uvw.z, 1.0 - uvw.z)));
+    float edge_factor = 1.0 + 2.0 * (1.0 - smoothstep(0.0, 0.2, edge_distance));
+    temperature -= params.cooling_rate * edge_factor * dt;
+    temperature = max(temperature, 0.0);
+
+    // Smoke fades over time
+    smoke -= smoke * 0.3 * dt;
+    smoke = max(smoke, 0.0);
+
+    // Clamp values
+    temperature = clamp(temperature, 0.0, 1.0);
+    fuel = clamp(fuel, 0.0, 1.0);
+    smoke = clamp(smoke, 0.0, 1.0);
+
+    imageStore(fieldTex, pos, vec4(temperature, fuel, smoke, 0.0));
+    imageStore(velTex, pos, vec4(v, vel.w));
+}

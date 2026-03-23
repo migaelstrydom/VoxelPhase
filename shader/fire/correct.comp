@@ -1,0 +1,53 @@
+#version 450
+#extension GL_ARB_separate_shader_objects : enable
+#extension GL_ARB_shading_language_420pack : enable
+
+// Velocity correction: subtract pressure gradient to make flow divergence-free.
+
+layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
+
+layout(set = 0, binding = 0, rgba16f) uniform image3D velTex;
+layout(set = 0, binding = 1, rgba16f) uniform readonly image3D pressureTex;
+
+layout(push_constant) uniform FireSimParams {
+    float dt;
+    float buoyancy_strength;
+    float cooling_rate;
+    float combustion_rate;
+    float burn_rate;
+    float turbulence_amplitude;
+    float turbulence_frequency;
+    float smoke_production;
+    float time;
+    int jacobi_iteration;
+} params;
+
+void main() {
+    ivec3 pos = ivec3(gl_GlobalInvocationID.xyz);
+    ivec3 size = imageSize(velTex);
+
+    if (any(greaterThanEqual(pos, size))) return;
+
+    // Compute pressure gradient using central differences
+    ivec3 xn = ivec3(max(pos.x - 1, 0), pos.y, pos.z);
+    ivec3 xp = ivec3(min(pos.x + 1, size.x - 1), pos.y, pos.z);
+    ivec3 yn = ivec3(pos.x, max(pos.y - 1, 0), pos.z);
+    ivec3 yp = ivec3(pos.x, min(pos.y + 1, size.y - 1), pos.z);
+    ivec3 zn = ivec3(pos.x, pos.y, max(pos.z - 1, 0));
+    ivec3 zp = ivec3(pos.x, pos.y, min(pos.z + 1, size.z - 1));
+
+    float pxp = imageLoad(pressureTex, xp).r;
+    float pxn = imageLoad(pressureTex, xn).r;
+    float pyp = imageLoad(pressureTex, yp).r;
+    float pyn = imageLoad(pressureTex, yn).r;
+    float pzp = imageLoad(pressureTex, zp).r;
+    float pzn = imageLoad(pressureTex, zn).r;
+
+    vec3 gradP = 0.5 * vec3(pxp - pxn, pyp - pyn, pzp - pzn);
+
+    // Subtract gradient to enforce incompressibility
+    vec4 vel = imageLoad(velTex, pos);
+    vel.xyz -= gradP;
+
+    imageStore(velTex, pos, vel);
+}

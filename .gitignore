@@ -1,5 +1,5 @@
 .vscode
 .cargo
 /target
-shader/*.spv
+shader/**/*.spv
 data/
