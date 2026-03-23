@@ -2,6 +2,7 @@ use specs::{Dispatcher, DispatcherBuilder};
 
 use crate::biped::{BipedAnimationSystem, BipedProbeConfigSystem};
 use crate::explosion::ExplosionSystem;
+use crate::fire::systems::{FireCleanupSystem, FireIgnitionSystem};
 use crate::input::InputActionSystem;
 use crate::particles::{ParticleSpawnSystem, ParticleUpdateSystem};
 use crate::projectile::{GrenadeSpawnSystem, LifetimeSystem, ProjectileImpactDetectionSystem};
@@ -46,6 +47,8 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
             "explosion",
             &["projectile_impact_detection"],
         )
+        .with(FireIgnitionSystem, "fire_ignition", &["explosion"])
+        .with(FireCleanupSystem, "fire_cleanup", &["fire_ignition"])
         .with(TerrainUpdateSystem, "terrain_update", &["explosion"])
         // Water simulation (after terrain update so dirty_regions are visible)
         .with(WaterSystem, "water", &["terrain_update"])

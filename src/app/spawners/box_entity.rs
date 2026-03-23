@@ -6,6 +6,7 @@ use specs::{Builder, Entity, World, WorldExt};
 use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
 };
+use crate::fire::components::Flammable;
 use crate::core::error::EngineResult;
 use crate::geometry::{generate_cube_indices, generate_cube_vertices};
 use crate::level::BoxStyle;
@@ -608,6 +609,7 @@ pub fn spawn_box(
         .with(RigidBodyComponent(body_handle))
         .with(ModelInstance::new(model))
         .with(Renderable)
+        .with(Flammable::wood())
         .build()
 }
 

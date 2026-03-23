@@ -144,7 +144,9 @@ impl Renderer {
         Arc::clone(&self.descriptors)
     }
 
-    /// Begin a new frame: wait for previous frame, acquire swapchain image.
+    /// Begin a new frame: wait for previous frame, acquire swapchain image,
+    /// start the command buffer. Call `begin_opaque_pass()` after any pre-pass
+    /// compute work (e.g. fire simulation) is recorded.
     pub fn begin_frame(&mut self) -> EngineResult<(vk::CommandBuffer, u32)> {
         // Wait for previous frame to complete
         self.swapchain.sync.wait_and_reset()?;
@@ -162,7 +164,12 @@ impl Renderer {
 
         let cb = self.swapchain.draw_command_buffer.raw();
 
-        // Begin render pass
+        Ok((cb, image_index))
+    }
+
+    /// Begin the opaque render pass. Call after `begin_frame()` and any
+    /// pre-pass compute dispatches.
+    pub fn begin_opaque_pass(&self, cb: vk::CommandBuffer) {
         let clear_values = [
             vk::ClearValue {
                 color: vk::ClearColorValue {
@@ -190,8 +197,6 @@ impl Renderer {
                 vk::SubpassContents::INLINE,
             );
         }
-
-        Ok((cb, image_index))
     }
 
     /// Update per-frame scene data (view/projection matrices).

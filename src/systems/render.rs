@@ -69,6 +69,9 @@ impl<'a> System<'a> for RenderSystem {
 
         match renderer.begin_frame() {
             Ok((draw_cb, present_index)) => {
+                // Begin the opaque render pass
+                renderer.begin_opaque_pass(draw_cb);
+
                 // Update per-frame scene data (view/projection) once
                 if let Err(e) = renderer.update_scene(&view_matrix, &proj_matrix) {
                     log::error!("RenderSystem: Failed to update scene UBO: {}", e);
