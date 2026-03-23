@@ -30,10 +30,10 @@ impl<'a> System<'a> for FireIgnitionSystem {
     fn run(&mut self, data: Self::SystemData) {
         let (entities, explosions, flammables, positions, mut on_fires) = data;
 
-        // Collect active explosions (not yet processed)
+        // Collect explosions that fired this frame (processed by ExplosionSystem
+        // but not yet deleted — entity deletion is deferred until world.maintain()).
         let active_explosions: Vec<_> = (&explosions)
             .join()
-            .filter(|e| !e.processed)
             .map(|e| (e.center, e.blast_radius))
             .collect();
 

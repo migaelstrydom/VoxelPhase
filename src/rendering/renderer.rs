@@ -25,6 +25,7 @@ use crate::rendering::sky::SkyRenderer;
 use crate::rendering::swapchain::{SurfaceInfo, Swapchain};
 use crate::rendering::vertex::Vertex;
 use crate::rendering::water::WaterRenderer;
+use crate::fire::renderer::{ActiveFire, FireRenderer};
 use crate::resources::textures::{TextureHandle, TextureManager};
 use crate::water::{WaterGrid, WaveGrid};
 
@@ -42,6 +43,9 @@ pub struct Renderer {
     pub particle_renderer: ParticleRenderer,
     pub sky_renderer: SkyRenderer,
     pub water_renderer: WaterRenderer,
+    pub fire_renderer: FireRenderer,
+    /// Active fire instances with their GPU resources. Keyed by entity index.
+    pub active_fires: Vec<(specs::Entity, ActiveFire)>,
     /// When true, backfaces are rendered in wireframe with `wireframe_color`.
     pub debug_wireframe_backfaces: bool,
     /// The solid color used for wireframe backface rendering (RGBA, 0-1).
@@ -124,6 +128,12 @@ impl Renderer {
             swapchain.color_target.view,
         )?;
 
+        // Create fire renderer (compute sim + transparent pass raymarching)
+        let fire_renderer = FireRenderer::new(
+            Arc::clone(&vulkan_context.device),
+            pipeline.transparent_renderpass,
+        )?;
+
         Ok(Self {
             pipeline,
             swapchain,
@@ -134,6 +144,8 @@ impl Renderer {
             particle_renderer,
             sky_renderer,
             water_renderer,
+            fire_renderer,
+            active_fires: Vec::new(),
             debug_wireframe_backfaces: true,
             wireframe_color: [0.0, 0.0, 0.0, 1.0],
         })
@@ -634,6 +646,76 @@ impl Renderer {
             extent.width as f32,
             extent.height as f32,
         )
+    }
+
+    /// Run fire simulation compute dispatches. Call after `begin_frame()`
+    /// but before `begin_opaque_pass()`.
+    pub fn simulate_fire(&mut self, cb: vk::CommandBuffer, dt: f32, total_time: f32) {
+        if self.active_fires.is_empty() {
+            return;
+        }
+
+        let mut fires: Vec<&mut ActiveFire> =
+            self.active_fires.iter_mut().map(|(_, f)| f).collect();
+        self.fire_renderer.simulate(cb, &mut fires, dt, total_time);
+    }
+
+    /// Render fire volumes via raymarching. Call during transparent pass,
+    /// after water and before particles.
+    pub fn render_fire(
+        &self,
+        cb: vk::CommandBuffer,
+        view_matrix: &Matrix4<f32>,
+        proj_matrix: &Matrix4<f32>,
+        camera_pos: &Vector3<f32>,
+    ) {
+        if self.active_fires.is_empty() {
+            return;
+        }
+
+        let extent = self.swapchain.extent;
+        let viewport = vk::Viewport {
+            x: 0.0,
+            y: 0.0,
+            width: extent.width as f32,
+            height: extent.height as f32,
+            min_depth: 0.0,
+            max_depth: 1.0,
+        };
+        let scissor = vk::Rect2D {
+            offset: vk::Offset2D { x: 0, y: 0 },
+            extent,
+        };
+
+        unsafe {
+            self.vulkan_context
+                .device()
+                .cmd_set_viewport(cb, 0, &[viewport]);
+            self.vulkan_context
+                .device()
+                .cmd_set_scissor(cb, 0, &[scissor]);
+        }
+
+        let fires: Vec<&ActiveFire> = self.active_fires.iter().map(|(_, f)| f).collect();
+        self.fire_renderer.render(cb, &fires, view_matrix, proj_matrix, camera_pos);
+    }
+
+    /// Create GPU resources for a new fire and track it by entity.
+    pub fn create_active_fire(
+        &mut self,
+        entity: specs::Entity,
+        volume_to_world: Matrix4<f32>,
+        initial_fuel: f32,
+    ) -> EngineResult<()> {
+        let depth_view = self.swapchain.depth_buffer.view;
+        let fire = self.fire_renderer.create_fire(volume_to_world, initial_fuel, depth_view)?;
+        self.active_fires.push((entity, fire));
+        Ok(())
+    }
+
+    /// Remove the active fire associated with an entity (GPU resources dropped).
+    pub fn remove_active_fire(&mut self, entity: specs::Entity) {
+        self.active_fires.retain(|(e, _)| *e != entity);
     }
 
     /// Render particles from the particle pool.

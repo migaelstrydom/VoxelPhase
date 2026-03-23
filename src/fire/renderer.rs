@@ -126,7 +126,7 @@ impl FireRenderer {
     pub fn simulate(
         &self,
         cb: vk::CommandBuffer,
-        fires: &mut [ActiveFire],
+        fires: &mut [&mut ActiveFire],
         dt: f32,
         total_time: f32,
     ) {
@@ -135,13 +135,21 @@ impl FireRenderer {
         params.time = total_time;
 
         for fire in fires.iter_mut() {
-            // Transition volume textures to GENERAL for compute read/write
             self.transition_volumes_for_compute(cb, &fire.volume);
 
             self.sim_pipelines
                 .simulate(cb, &mut fire.volume, &fire.sim_descriptors, &params);
 
             fire.burn_time += dt;
+        }
+
+        // After simulation, update render descriptors to point at the current
+        // source texture (advection swaps read/write indices each frame), then
+        // transition field textures to SHADER_READ_ONLY for fragment sampling.
+        // Both must happen here (outside the render pass), not in render().
+        for fire in fires.iter() {
+            self.update_render_volume_binding(fire.render_descriptor_set, &fire.volume);
+            self.transition_field_for_read(cb, &fire.volume);
         }
     }
 
@@ -150,7 +158,7 @@ impl FireRenderer {
     pub fn render(
         &self,
         cb: vk::CommandBuffer,
-        fires: &[ActiveFire],
+        fires: &[&ActiveFire],
         view_matrix: &Matrix4<f32>,
         proj_matrix: &Matrix4<f32>,
         camera_pos: &Vector3<f32>,
@@ -173,9 +181,6 @@ impl FireRenderer {
             );
 
             for fire in fires {
-                // Transition volume field texture to SHADER_READ_ONLY for fragment sampling
-                self.transition_field_for_read(cb, &fire.volume);
-
                 let push = FireRenderPushConstants {
                     view: matrix4_to_array(view_matrix),
                     proj: matrix4_to_array(proj_matrix),
@@ -303,6 +308,28 @@ impl FireRenderer {
         };
 
         Ok(sets[0])
+    }
+
+    /// Update only the volume texture binding (0) on a render descriptor set.
+    /// Called each frame after simulation swaps the ping-pong index.
+    fn update_render_volume_binding(&self, set: vk::DescriptorSet, volume: &FireVolume) {
+        let src = volume.src();
+        let volume_info = vk::DescriptorImageInfo::default()
+            .sampler(volume.field[src].sampler)
+            .image_view(volume.field[src].image_view)
+            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
+
+        let write = vk::WriteDescriptorSet::default()
+            .dst_set(set)
+            .dst_binding(0)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .image_info(std::slice::from_ref(&volume_info));
+
+        unsafe {
+            self.device
+                .device
+                .update_descriptor_sets(std::slice::from_ref(&write), &[]);
+        }
     }
 
     fn update_render_descriptor_set(

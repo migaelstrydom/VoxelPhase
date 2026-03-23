@@ -100,6 +100,18 @@ void main() {
     vec3 curl = curlNoise(noisePos);
     v += curl * params.turbulence_amplitude * temperature * dt;
 
+    // Source injection: burning surface feeds fuel and heat into the bottom of the volume.
+    // Uses a soft circular mask centered in XZ and confined to the lowest voxel layers.
+    float source_height = 0.12;
+    float source_radius = 0.35;
+    if (uvw.y < source_height) {
+        float xz_dist = length(uvw.xz - vec2(0.5));
+        float mask = smoothstep(source_radius, source_radius * 0.5, xz_dist)
+                   * smoothstep(source_height, 0.0, uvw.y);
+        fuel = max(fuel, mask * 0.9);
+        temperature = max(temperature, mask * 0.6);
+    }
+
     // Combustion: fuel burns where hot enough
     float ignition_threshold = 0.15;
     if (fuel > 0.0 && temperature > ignition_threshold) {
