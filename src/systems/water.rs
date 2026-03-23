@@ -154,7 +154,7 @@ impl<'a> System<'a> for WaterSystem {
         // Step the flow simulation.
         let terrain_ref = terrain_opt.as_deref();
         grid.step(dt, |x, z| {
-            terrain_ref.and_then(|t| t.approx_surface_height_at(x, z))
+            terrain_ref.and_then(|t| t.mesh_surface_height_at(x, z))
         });
 
         // Wave-body coupling + wave equation step.
@@ -171,11 +171,7 @@ impl<'a> System<'a> for WaterSystem {
                 coupler.update(&snapshots, &mut wave_grid, &grid);
 
                 for splash in coupler.drain_splash_events() {
-                    spawn_splash_particles(
-                        &splash,
-                        &particle_config,
-                        &mut particle_pool,
-                    );
+                    spawn_splash_particles(&splash, &particle_config, &mut particle_pool);
                 }
 
                 for wake in coupler.drain_wake_events() {
@@ -224,17 +220,13 @@ const SPLASH_MIST_COUNT: (u32, u32) = (6, 20);
 ///
 /// Particle count and speed scale with impact velocity, so a gentle entry
 /// produces a small puff while a fast slam creates a dramatic crown.
-fn spawn_splash_particles(
-    splash: &SplashEvent,
-    config: &ParticleConfig,
-    pool: &mut ParticlePool,
-) {
+fn spawn_splash_particles(splash: &SplashEvent, config: &ParticleConfig, pool: &mut ParticlePool) {
     let mut rng = rand::thread_rng();
     let cfg = &config.splash;
 
     // Normalized intensity: 0 at min speed, 1 at max speed.
-    let t = ((splash.speed - SPLASH_MIN_SPEED) / (SPLASH_MAX_SPEED - SPLASH_MIN_SPEED))
-        .clamp(0.0, 1.0);
+    let t =
+        ((splash.speed - SPLASH_MIN_SPEED) / (SPLASH_MAX_SPEED - SPLASH_MIN_SPEED)).clamp(0.0, 1.0);
 
     let droplet_count = lerp_u32(SPLASH_DROPLET_COUNT.0, SPLASH_DROPLET_COUNT.1, t);
     let mist_count = lerp_u32(SPLASH_MIST_COUNT.0, SPLASH_MIST_COUNT.1, t);
@@ -336,14 +328,12 @@ fn spawn_wake_particles(wake: &WakeEvent, pool: &mut ParticlePool) {
         // Full 360° azimuth with a backward bias from the movement direction.
         let base_angle = rng.gen_range(-std::f32::consts::PI..std::f32::consts::PI);
         let backward_bias = 0.3;
-        let horizontal = -fwd * backward_bias
-            + right * base_angle.sin()
-            + fwd * base_angle.cos() * 0.3;
+        let horizontal =
+            -fwd * backward_bias + right * base_angle.sin() + fwd * base_angle.cos() * 0.3;
         let elevation = rng.gen_range(10.0f32..50.0).to_radians();
 
         let dir =
-            (horizontal.normalize() * elevation.cos() + Vector3::y() * elevation.sin())
-                .normalize();
+            (horizontal.normalize() * elevation.cos() + Vector3::y() * elevation.sin()).normalize();
 
         let speed = rng.gen_range(1.5..4.0) * speed_scale;
         let lifetime = rng.gen_range(0.3..0.6);

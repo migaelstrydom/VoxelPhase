@@ -96,6 +96,41 @@ impl AABB {
             point.z.clamp(self.min.z, self.max.z),
         )
     }
+
+    /// Test whether a ray intersects this AABB.
+    ///
+    /// Uses the slab method. Returns `true` if the ray segment `[0, max_t]`
+    /// overlaps the box (including rays originating inside).
+    ///
+    /// Handles axis-aligned rays correctly: when a direction component is zero
+    /// (`inv_dir` is ±inf), the origin must lie within the slab on that axis.
+    /// The explicit checks avoid `0.0 * inf = NaN` corrupting the interval.
+    pub fn intersects_ray(&self, origin: Point3<f32>, inv_dir: Vector3<f32>, max_t: f32) -> bool {
+        let mut tmin = f32::NEG_INFINITY;
+        let mut tmax = f32::INFINITY;
+
+        for axis in 0..3 {
+            let o = origin[axis];
+            let lo = self.min[axis];
+            let hi = self.max[axis];
+            let inv_d = inv_dir[axis];
+
+            if inv_d.is_infinite() {
+                // Ray is parallel to this axis — just check containment.
+                if o < lo || o > hi {
+                    return false;
+                }
+                // Otherwise this axis doesn't constrain the interval.
+            } else {
+                let t1 = (lo - o) * inv_d;
+                let t2 = (hi - o) * inv_d;
+                tmin = tmin.max(t1.min(t2));
+                tmax = tmax.min(t1.max(t2));
+            }
+        }
+
+        tmax >= tmin.max(0.0) && tmin <= max_t
+    }
 }
 
 impl Default for AABB {

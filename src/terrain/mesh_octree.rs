@@ -857,6 +857,150 @@ impl MeshOctree {
         None
     }
 
+    /// Cast a ray and return the nearest triangle hit.
+    pub fn ray_cast(
+        &self,
+        origin: Point3<f32>,
+        direction: Vector3<f32>,
+        max_t: f32,
+    ) -> Option<crate::collision::RayHit> {
+        let inv_dir = Vector3::new(1.0 / direction.x, 1.0 / direction.y, 1.0 / direction.z);
+        let mut best: Option<crate::collision::RayHit> = None;
+        let mut best_t = max_t;
+        let mut seen = HashSet::new();
+        self.ray_cast_recursive(
+            &self.root, 0, 0, origin, direction, inv_dir, &mut best_t, &mut best, &mut seen,
+        );
+        best
+    }
+
+    /// Cast a ray and return all triangle hits, unsorted.
+    pub fn ray_cast_all(
+        &self,
+        origin: Point3<f32>,
+        direction: Vector3<f32>,
+        max_t: f32,
+    ) -> Vec<crate::collision::RayHit> {
+        let inv_dir = Vector3::new(1.0 / direction.x, 1.0 / direction.y, 1.0 / direction.z);
+        let mut hits = Vec::new();
+        let mut seen = HashSet::new();
+        self.ray_cast_all_recursive(
+            &self.root, 0, 0, origin, direction, inv_dir, max_t, &mut hits, &mut seen,
+        );
+        hits
+    }
+
+    fn ray_cast_recursive(
+        &self,
+        node: &MeshNode,
+        depth: u8,
+        path: u64,
+        origin: Point3<f32>,
+        direction: Vector3<f32>,
+        inv_dir: Vector3<f32>,
+        best_t: &mut f32,
+        best: &mut Option<crate::collision::RayHit>,
+        seen: &mut HashSet<(u64, u8, u32)>,
+    ) {
+        if !node.bounds.intersects_ray(origin, inv_dir, *best_t) {
+            return;
+        }
+
+        match &node.content {
+            MeshNodeContent::Empty => {}
+            MeshNodeContent::Leaf(leaf) => {
+                self.ray_test_leaf(leaf, depth, path, origin, direction, *best_t, seen, |hit| {
+                    if hit.t < *best_t {
+                        *best_t = hit.t;
+                        *best = Some(hit);
+                    }
+                });
+            }
+            MeshNodeContent::Interior(children) => {
+                for (i, child) in children.iter().enumerate() {
+                    let child_path = path | ((i as u64) << (depth * 3));
+                    self.ray_cast_recursive(
+                        child, depth + 1, child_path, origin, direction, inv_dir, best_t, best,
+                        seen,
+                    );
+                }
+            }
+        }
+    }
+
+    fn ray_cast_all_recursive(
+        &self,
+        node: &MeshNode,
+        depth: u8,
+        path: u64,
+        origin: Point3<f32>,
+        direction: Vector3<f32>,
+        inv_dir: Vector3<f32>,
+        max_t: f32,
+        hits: &mut Vec<crate::collision::RayHit>,
+        seen: &mut HashSet<(u64, u8, u32)>,
+    ) {
+        if !node.bounds.intersects_ray(origin, inv_dir, max_t) {
+            return;
+        }
+
+        match &node.content {
+            MeshNodeContent::Empty => {}
+            MeshNodeContent::Leaf(leaf) => {
+                self.ray_test_leaf(leaf, depth, path, origin, direction, max_t, seen, |hit| {
+                    hits.push(hit);
+                });
+            }
+            MeshNodeContent::Interior(children) => {
+                for (i, child) in children.iter().enumerate() {
+                    let child_path = path | ((i as u64) << (depth * 3));
+                    self.ray_cast_all_recursive(
+                        child, depth + 1, child_path, origin, direction, inv_dir, max_t, hits,
+                        seen,
+                    );
+                }
+            }
+        }
+    }
+
+    /// Test all triangles in a leaf against a ray, calling `on_hit` for each intersection.
+    fn ray_test_leaf(
+        &self,
+        leaf: &MeshLeaf,
+        depth: u8,
+        path: u64,
+        origin: Point3<f32>,
+        direction: Vector3<f32>,
+        max_t: f32,
+        seen: &mut HashSet<(u64, u8, u32)>,
+        mut on_hit: impl FnMut(crate::collision::RayHit),
+    ) {
+        use crate::collision::ray_triangle::ray_triangle;
+
+        // Test owned triangles.
+        for tri in 0..leaf.owned_triangle_count() {
+            let key = (path, depth, tri as u32);
+            if seen.insert(key) {
+                let triangle = leaf.to_collision_triangle(tri);
+                if let Some(hit) = ray_triangle(origin, direction, &triangle, max_t) {
+                    on_hit(hit);
+                }
+            }
+        }
+
+        // Test neighbor triangles.
+        for tri_ref in &leaf.neighbor_refs {
+            let key = (tri_ref.path, tri_ref.depth, tri_ref.triangle_index);
+            if seen.insert(key) {
+                if let Some(triangle) = self.resolve_triangle_ref(tri_ref) {
+                    if let Some(hit) = ray_triangle(origin, direction, &triangle, max_t) {
+                        on_hit(hit);
+                    }
+                }
+            }
+        }
+    }
+
     /// Get all vertices and indices for rendering.
     ///
     /// Combines all triangles from all leaves into flat arrays suitable for GPU upload.

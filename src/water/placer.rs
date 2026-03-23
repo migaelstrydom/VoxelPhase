@@ -1,8 +1,7 @@
 //! Flood-fill based water placement.
 //!
 //! Determines which water grid cells belong to a pool by flood-filling from a
-//! seed point through terrain that is below the target surface level. The
-//! filled region is dilated by one cell to cover marching-cubes shore smoothing.
+//! seed point through terrain that is below the target surface level.
 
 use std::collections::VecDeque;
 
@@ -12,10 +11,8 @@ use super::WaterGrid;
 
 /// Fill a pool by flood-filling from `seed` at `surface_level`.
 ///
-/// Queries the SVO via `terrain.is_solid_at()` to determine extent: a cell is
-/// inside the pool if the voxel at `(cell_center_x, surface_level, cell_center_z)`
-/// is air. After flood-fill, the region is dilated by one cell so the water
-/// mesh covers marching-cubes shore smoothing.
+/// Queries the terrain mesh via ray cast to determine extent: a cell is inside
+/// the pool if any of its 9 sample points has no terrain above `surface_level`.
 ///
 /// Floor levels are resolved via `WaterGrid` sampled floor admission helpers.
 pub fn fill_pool(
@@ -24,6 +21,12 @@ pub fn fill_pool(
     seed: (f32, f32),
     surface_level: f32,
 ) {
+    log::info!(
+        "Filling pool at ({:.1}, {:.1}) with surface level {:.1}",
+        seed.0,
+        seed.1,
+        surface_level
+    );
     let Some((si, sj)) = grid.world_to_grid(seed.0, seed.1) else {
         log::warn!(
             "Pool seed ({:.1}, {:.1}) is outside the water grid",
@@ -70,7 +73,7 @@ pub fn fill_pool(
     }
 
     // Phase 2: set floor levels and add water volume.
-    let mut floor_query = |x: f32, z: f32| terrain.approx_surface_height_at(x, z);
+    let mut floor_query = |x: f32, z: f32| terrain.mesh_surface_height_at(x, z);
     let mut filled_count = 0u32;
 
     for j in 0..dims.1 {
@@ -95,8 +98,8 @@ pub fn fill_pool(
 }
 
 /// Check whether any part of a cell is inside a pool: if any of the 9 sample
-/// points is air at `surface_level`, the cell is a candidate. This extends
-/// the flood-fill into shore cells where MC smoothing dips below the water.
+/// points has no terrain above `surface_level`, the cell is a candidate. This
+/// extends the flood-fill into shore cells where MC smoothing dips below the water.
 fn is_pool_cell(
     grid: &WaterGrid,
     terrain: &TerrainManager,
@@ -106,5 +109,9 @@ fn is_pool_cell(
 ) -> bool {
     grid.cell_sample_points(i, j)
         .iter()
-        .any(|&(x, z)| !terrain.is_solid_at(x, surface_level, z))
+        .any(|&(x, z)| {
+            terrain
+                .mesh_surface_height_at(x, z)
+                .map_or(true, |h| h <= surface_level)
+        })
 }

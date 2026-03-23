@@ -90,6 +90,7 @@ impl WaterGrid {
     /// Must be greater than `MIN_VOLUME` to prevent flicker at the shoreline.
     const REWET_VOLUME: f32 = 5e-2;
 
+
     /// Create a new water grid from geometry configuration and physical properties.
     pub fn new(config: WaterGridConfig, properties: &WaterProperties) -> Self {
         let total = config.dims.0 * config.dims.1;
@@ -223,10 +224,6 @@ impl WaterGrid {
     }
 
     /// Fill a cell to `target_surface` using sampled terrain floors.
-    ///
-    /// When `allow_shoreline_clamp` is true, floors at/above the target are
-    /// clamped just below the surface to preserve a thin visual shoreline
-    /// bridge over MC smoothing.
     pub(crate) fn fill_cell_to_surface<F>(
         &mut self,
         i: usize,
@@ -248,19 +245,14 @@ impl WaterGrid {
             return false;
         };
 
-        let effective_floor = /* if allow_shoreline_clamp {
-            floor.min(target_surface - Self::SHORELINE_EPSILON)
-        } else */ {
-            if floor >= target_surface {
-                self.cells[idx].floor_level = floor;
-                self.cells[idx].volume = 0.0;
-                return false;
-            }
-            floor
-        };
+        if floor >= target_surface {
+            self.cells[idx].floor_level = floor;
+            self.cells[idx].volume = 0.0;
+            return false;
+        }
 
-        self.cells[idx].floor_level = effective_floor;
-        let depth = target_surface - effective_floor;
+        self.cells[idx].floor_level = floor;
+        let depth = target_surface - floor;
         self.cells[idx].volume = depth * self.cell_area;
         true
     }

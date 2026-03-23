@@ -245,11 +245,15 @@ impl WaterRenderer {
                             return (vertices, indices);
                         }
 
-                        // Check all 4 corners are wet.
+                        // Skip only if ALL 4 corners are in dry flow cells.
+                        // Quads at the edge of a wet flow cell may have corners
+                        // in dry neighbors; emitting them avoids triangular gaps
+                        // at diagonal shorelines. bulk_level_at handles the dry
+                        // corners gracefully via bilinear interpolation.
                         if !wave_grid.is_wet(wi, wj, flow_grid)
-                            || !wave_grid.is_wet(wi + 1, wj, flow_grid)
-                            || !wave_grid.is_wet(wi, wj + 1, flow_grid)
-                            || !wave_grid.is_wet(wi + 1, wj + 1, flow_grid)
+                            && !wave_grid.is_wet(wi + 1, wj, flow_grid)
+                            && !wave_grid.is_wet(wi, wj + 1, flow_grid)
+                            && !wave_grid.is_wet(wi + 1, wj + 1, flow_grid)
                         {
                             continue;
                         }

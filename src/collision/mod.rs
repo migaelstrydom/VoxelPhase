@@ -8,6 +8,7 @@
 //! - Contact reduction (area-maximizing)
 //! - AABB for spatial queries
 //! - Sphere-triangle intersection tests
+//! - Ray-triangle intersection (Möller–Trumbore)
 //! - Continuous collision detection (CCD)
 //! - Mesh patch types for terrain queries
 
@@ -20,6 +21,7 @@ pub mod discrete;
 pub mod mesh;
 mod mesh_patch;
 pub mod obb;
+pub mod ray_triangle;
 pub mod sat;
 pub mod segment;
 pub mod sphere_triangle;
@@ -27,4 +29,5 @@ pub mod support;
 
 pub use aabb::AABB;
 pub use mesh_patch::{MeshPatch, PatchTriangle};
+pub use ray_triangle::RayHit;
 pub use sphere_triangle::Triangle;

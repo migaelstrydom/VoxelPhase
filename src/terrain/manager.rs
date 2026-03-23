@@ -55,6 +55,16 @@ pub struct TerrainManager {
 }
 
 impl TerrainManager {
+    /// Axis-aligned neighbor offsets for the 6-neighbor voxel check.
+    const NEIGHBOR_OFFSETS: [Vector3<f32>; 6] = [
+        Vector3::new(1.0, 0.0, 0.0),
+        Vector3::new(-1.0, 0.0, 0.0),
+        Vector3::new(0.0, 1.0, 0.0),
+        Vector3::new(0.0, -1.0, 0.0),
+        Vector3::new(0.0, 0.0, 1.0),
+        Vector3::new(0.0, 0.0, -1.0),
+    ];
+
     /// Create a terrain manager from an existing SVO.
     ///
     /// Performs initial mesh build and generates procedural noise texture for surface variation.
@@ -372,6 +382,81 @@ impl TerrainManager {
     /// changes and invalidate cached floor levels.
     pub fn dirty_regions(&self) -> &[AABB] {
         &self.rebuilt_regions
+    }
+
+    // === Mesh-precise queries ===
+
+    /// Whether a point is inside the terrain mesh.
+    ///
+    /// Uses a fast-path voxel neighborhood check: if the point's voxel and all
+    /// 6 axis-aligned neighbors agree (all solid or all air), the answer is
+    /// immediate. Only near the surface — where marching cubes interpolation
+    /// differs from the voxel grid — does this fall back to a ray parity test
+    /// against the actual triangle mesh.
+    pub fn is_mesh_solid_at(&self, x: f32, y: f32, z: f32) -> bool {
+        let pos = Point3::new(x, y, z);
+        let center_solid = self.svo.get(pos).density > 0.0;
+
+        // Check 6-connected voxel neighbors for unanimity.
+        let vs = self.voxel_size;
+        let all_agree = Self::NEIGHBOR_OFFSETS.iter().all(|offset| {
+            let neighbor = Point3::new(x + offset.x * vs, y + offset.y * vs, z + offset.z * vs);
+            (self.svo.get(neighbor).density > 0.0) == center_solid
+        });
+
+        if all_agree {
+            return center_solid;
+        }
+
+        // Near the surface — use ray parity test (cast +Y, count crossings).
+        let bounds = self.svo.bounds();
+        let ray_length = bounds.max.y - y + self.voxel_size;
+        if ray_length <= 0.0 {
+            return false;
+        }
+
+        let hits = self
+            .mesh
+            .ray_cast_all(pos, Vector3::new(0.0, 1.0, 0.0), ray_length);
+        hits.len() % 2 == 1
+    }
+
+    /// Get the highest mesh surface height at a given (x, z) position.
+    ///
+    /// Casts a vertical ray downward through the triangle mesh, returning the
+    /// Y coordinate of the nearest hit. This accounts for marching cubes
+    /// interpolation, unlike the voxel-based `approx_surface_height_at`.
+    pub fn mesh_surface_height_at(&self, x: f32, z: f32) -> Option<f32> {
+        let bounds = self.svo.bounds();
+        let origin = Point3::new(x, bounds.max.y + self.voxel_size, z);
+        let ray_length = (bounds.max.y - bounds.min.y) + 2.0 * self.voxel_size;
+
+        self.mesh
+            .ray_cast(origin, Vector3::new(0.0, -1.0, 0.0), ray_length)
+            .map(|hit| hit.point.y)
+    }
+
+    /// Get all mesh surface heights in a column, sorted top-to-bottom.
+    ///
+    /// Like `surface_heights_at` but uses the actual triangle mesh instead of
+    /// voxel density transitions.
+    pub fn mesh_surface_heights_at(&self, x: f32, z: f32) -> Vec<f32> {
+        let bounds = self.svo.bounds();
+        let origin = Point3::new(x, bounds.max.y + self.voxel_size, z);
+        let ray_length = (bounds.max.y - bounds.min.y) + 2.0 * self.voxel_size;
+
+        let hits = self
+            .mesh
+            .ray_cast_all(origin, Vector3::new(0.0, -1.0, 0.0), ray_length);
+
+        // Filter to surfaces facing upward (normal.y > 0 means top-of-terrain).
+        let mut heights: Vec<f32> = hits
+            .iter()
+            .filter(|h| h.normal.y > 0.0)
+            .map(|h| h.point.y)
+            .collect();
+        heights.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+        heights
     }
 
     // === Rendering data ===

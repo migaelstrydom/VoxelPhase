@@ -307,6 +307,7 @@ impl WaveGrid {
 }
 
 const MAX_WAVE_VELOCITY: f32 = 5.0;
+
 const MAX_WAVE_DISPLACEMENT: f32 = 1.0;
 
 #[cfg(test)]
