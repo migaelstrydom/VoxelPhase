@@ -23,7 +23,7 @@ mod bytecode {
 }
 
 /// Maximum number of fire volumes that can be rendered simultaneously.
-const MAX_FIRE_VOLUMES: usize = 8;
+const MAX_FIRE_VOLUMES: usize = 32;
 
 /// Push constants for the fire raymarching pipeline.
 /// Shared by both vertex and fragment stages.
@@ -43,10 +43,14 @@ pub struct ActiveFire {
     pub render_descriptor_set: vk::DescriptorSet,
     /// World-space transform of the volume (origin + scale).
     pub volume_to_world: Matrix4<f32>,
-    /// Remaining fuel (decremented as fire burns).
+    /// Remaining fuel (synced from OnFire component each frame).
     pub fuel_remaining: f32,
+    /// Initial fuel at ignition (used to compute source intensity ratio).
+    pub initial_fuel: f32,
     /// Accumulated time the fire has been burning.
     pub burn_time: f32,
+    /// Random offset for noise sampling so each fire evolves uniquely.
+    pub noise_seed: f32,
 }
 
 /// Orchestrates fire simulation and rendering.
@@ -67,10 +71,7 @@ pub struct FireRenderer {
 }
 
 impl FireRenderer {
-    pub fn new(
-        device: Arc<ManagedDevice>,
-        render_pass: vk::RenderPass,
-    ) -> EngineResult<Self> {
+    pub fn new(device: Arc<ManagedDevice>, render_pass: vk::RenderPass) -> EngineResult<Self> {
         let sim_pipelines = FireSimPipelines::new(device.clone())?;
 
         let depth_sampler = Self::create_depth_sampler(&device)?;
@@ -117,9 +118,34 @@ impl FireRenderer {
             render_descriptor_set,
             volume_to_world,
             fuel_remaining: initial_fuel,
+            initial_fuel,
             burn_time: 0.0,
+            noise_seed: rand::random::<f32>() * 1000.0,
         })
     }
+
+    /// Free descriptor sets for a destroyed fire back to their pools.
+    /// Must be called after `device_wait_idle` and before the `ActiveFire` is dropped.
+    pub fn free_fire_descriptors(&self, fire: &ActiveFire) {
+        let device = &self.device.device;
+        unsafe {
+            let sim_sets = [
+                fire.sim_descriptors.advect_sets[0],
+                fire.sim_descriptors.advect_sets[1],
+                fire.sim_descriptors.forces_set,
+                fire.sim_descriptors.pressure_sets[0],
+                fire.sim_descriptors.pressure_sets[1],
+                fire.sim_descriptors.correct_set,
+            ];
+            let _ = device.free_descriptor_sets(self.sim_pipelines.descriptor_pool(), &sim_sets);
+            let _ = device
+                .free_descriptor_sets(self.graphics_descriptor_pool, &[fire.render_descriptor_set]);
+        }
+    }
+
+    /// Simulation time scale. Values > 1.0 make fire evolve faster
+    /// (more energetic flames) without extra compute dispatches.
+    const SIM_TIME_SCALE: f32 = 1.5;
 
     /// Record compute dispatches for all active fires.
     /// Must be called before the render pass begins.
@@ -131,10 +157,17 @@ impl FireRenderer {
         total_time: f32,
     ) {
         let mut params = FireSimParams::default();
-        params.dt = dt;
-        params.time = total_time;
+        params.dt = dt * Self::SIM_TIME_SCALE;
+        params.time = total_time * Self::SIM_TIME_SCALE;
 
         for fire in fires.iter_mut() {
+            params.source_intensity = if fire.initial_fuel > 0.0 {
+                (fire.fuel_remaining / fire.initial_fuel).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            params.noise_seed = fire.noise_seed;
+
             self.transition_volumes_for_compute(cb, &fire.volume);
 
             self.sim_pipelines
@@ -233,9 +266,7 @@ impl FireRenderer {
                     .old_layout(vk::ImageLayout::UNDEFINED)
                     .new_layout(vk::ImageLayout::GENERAL)
                     .src_access_mask(vk::AccessFlags::empty())
-                    .dst_access_mask(
-                        vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE,
-                    )
+                    .dst_access_mask(vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE)
                     .subresource_range(vk::ImageSubresourceRange {
                         aspect_mask: vk::ImageAspectFlags::COLOR,
                         base_mip_level: 0,
@@ -300,10 +331,7 @@ impl FireRenderer {
                 .device
                 .allocate_descriptor_sets(&alloc_info)
                 .map_err(|e| {
-                    EngineError::Descriptor(format!(
-                        "fire render descriptor allocation: {:?}",
-                        e
-                    ))
+                    EngineError::Descriptor(format!("fire render descriptor allocation: {:?}", e))
                 })?
         };
 
@@ -527,7 +555,9 @@ impl FireRenderer {
             let pipelines = device
                 .device
                 .create_graphics_pipelines(vk::PipelineCache::null(), &[pipeline_info], None)
-                .map_err(|(_, e)| EngineError::Pipeline(format!("fire render creation: {:?}", e)))?;
+                .map_err(|(_, e)| {
+                    EngineError::Pipeline(format!("fire render creation: {:?}", e))
+                })?;
 
             device.device.destroy_shader_module(vert_module, None);
             device.device.destroy_shader_module(frag_module, None);
@@ -546,6 +576,7 @@ impl FireRenderer {
         };
 
         let create_info = vk::DescriptorPoolCreateInfo::default()
+            .flags(vk::DescriptorPoolCreateFlags::FREE_DESCRIPTOR_SET)
             .max_sets(MAX_FIRE_VOLUMES as u32)
             .pool_sizes(std::slice::from_ref(&pool_size));
 
@@ -640,9 +671,7 @@ impl Drop for FireRenderer {
             self.device
                 .device
                 .destroy_descriptor_set_layout(self.graphics_descriptor_set_layout, None);
-            self.device
-                .device
-                .destroy_sampler(self.depth_sampler, None);
+            self.device.device.destroy_sampler(self.depth_sampler, None);
         }
     }
 }

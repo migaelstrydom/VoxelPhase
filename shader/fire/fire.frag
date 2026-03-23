@@ -21,9 +21,9 @@ layout(location = 0) in vec3 fragWorldPos;
 
 layout(location = 0) out vec4 outColor;
 
-const int MAX_STEPS = 48;
-const float FIRE_OPACITY = 2.5;
-const float SMOKE_OPACITY = 1.5;
+const int MAX_STEPS = 64;
+const float FIRE_OPACITY = 6.0;
+const float SMOKE_OPACITY = 3.0;
 
 // Inverse of volume_to_world: maps world position to [0,1]^3 volume UVW.
 // Since volume_to_world is a simple scale+translate (axis-aligned box),
@@ -42,20 +42,21 @@ vec3 worldToVolume(vec3 worldPos) {
 // Blackbody-inspired color ramp for fire temperature.
 vec3 blackbodyRamp(float t) {
     // Below ignition: invisible
-    if (t < 0.1) return vec3(0.0);
+    if (t < 0.08) return vec3(0.0);
 
-    // Remap [0.1, 1.0] → [0, 1]
-    float x = clamp((t - 0.1) / 0.9, 0.0, 1.0);
+    // Remap [0.08, 1.0] → [0, 1] with power curve for sharper hot core
+    float x = clamp((t - 0.08) / 0.92, 0.0, 1.0);
+    x = pow(x, 0.7);
 
-    // Deep red → orange → yellow → white-yellow
-    vec3 c1 = vec3(0.5, 0.0, 0.0);    // dark red
-    vec3 c2 = vec3(1.0, 0.3, 0.0);    // orange
-    vec3 c3 = vec3(1.0, 0.7, 0.1);    // yellow-orange
-    vec3 c4 = vec3(1.0, 0.95, 0.6);   // hot white-yellow
+    // Deep red → bright orange → yellow → white-hot
+    vec3 c1 = vec3(0.4, 0.02, 0.0);   // dark ember red
+    vec3 c2 = vec3(1.0, 0.35, 0.0);   // vivid orange
+    vec3 c3 = vec3(1.0, 0.75, 0.15);  // flame yellow
+    vec3 c4 = vec3(1.0, 0.98, 0.7);   // white-hot
 
-    if (x < 0.33) return mix(c1, c2, x / 0.33);
-    if (x < 0.66) return mix(c2, c3, (x - 0.33) / 0.33);
-    return mix(c3, c4, (x - 0.66) / 0.34);
+    if (x < 0.25) return mix(c1, c2, x / 0.25);
+    if (x < 0.55) return mix(c2, c3, (x - 0.25) / 0.30);
+    return mix(c3, c4, (x - 0.55) / 0.45);
 }
 
 // Ray-AABB intersection for the unit cube [0,1]^3 in volume space.
@@ -133,9 +134,9 @@ void main() {
         float temperature = field.r;
         float smoke = field.b;
 
-        // Fire emission
+        // Fire emission — sharp falloff so only hot regions glow
         vec3 fireColor = blackbodyRamp(temperature);
-        float fireAlpha = smoothstep(0.05, 0.3, temperature) * FIRE_OPACITY * stepSize;
+        float fireAlpha = smoothstep(0.08, 0.25, temperature) * FIRE_OPACITY * stepSize;
 
         // Smoke absorption
         float smokeAlpha = smoke * SMOKE_OPACITY * stepSize;

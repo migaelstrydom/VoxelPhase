@@ -27,37 +27,76 @@ mod bytecode {
 const JACOBI_ITERATIONS: u32 = 25;
 
 /// Maximum number of simultaneously active fire volumes.
-const MAX_FIRE_VOLUMES: u32 = 8;
+const MAX_FIRE_VOLUMES: u32 = 32;
 
 /// Push constants shared by all fire simulation shaders.
+///
+/// These control the look and feel of the volumetric fire. The simulation runs
+/// per-voxel each frame: source injection feeds fuel+heat at the base, combustion
+/// converts fuel→heat+smoke, buoyancy carries hot gas upward, turbulence adds
+/// chaotic flicker, and cooling dissipates temperature over time.
+///
+/// # Tuning guide
+///
+/// - **Taller flames**: increase `buoyancy_strength`, decrease `cooling_rate`
+/// - **More flickery**: increase `turbulence_amplitude` and `turbulence_frequency`
+/// - **Brighter core**: increase `combustion_rate`
+/// - **Longer-lasting voxel fuel**: decrease `burn_rate`
+/// - **More/less smoke**: adjust `smoke_production`
+/// - **Sharper flame shape**: increase `cooling_rate` (fire dies faster at edges)
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct FireSimParams {
+    /// Simulation time step (seconds). Typically matches frame delta.
     pub dt: f32,
+    /// Upward velocity added per unit of temperature per second.
+    /// Higher = taller, faster-rising flames. Range: 2–15.
     pub buoyancy_strength: f32,
+    /// Temperature lost per second (multiplied by edge proximity).
+    /// Higher = fire dies faster, sharper flame edges. Range: 0.3–3.0.
     pub cooling_rate: f32,
+    /// Temperature gained per unit of fuel burned.
+    /// Higher = brighter, hotter core. Range: 2–10.
     pub combustion_rate: f32,
+    /// Fraction of voxel fuel consumed per second (when above ignition threshold).
+    /// Lower = each voxel burns longer, flame has time to rise. Range: 0.02–0.5.
     pub burn_rate: f32,
+    /// Curl noise velocity magnitude scaled by temperature.
+    /// Higher = more chaotic, flickery flames. Range: 0.5–5.0.
     pub turbulence_amplitude: f32,
+    /// Curl noise spatial frequency (higher = finer detail).
+    /// Range: 1–8.
     pub turbulence_frequency: f32,
+    /// Smoke density produced per unit of fuel burned.
+    /// Higher = thicker, darker smoke. Range: 0.1–1.0.
     pub smoke_production: f32,
+    /// Total elapsed time (seconds). Drives animated noise for flickering.
     pub time: f32,
+    /// Current Jacobi pressure solver iteration (internal, not for tuning).
     pub jacobi_iteration: i32,
+    /// Per-fire source injection multiplier (0.0 = dying out, 1.0 = full burn).
+    /// Set automatically from fuel_remaining / initial_fuel.
+    pub source_intensity: f32,
+    /// Per-fire random seed that offsets noise sampling so simultaneous fires
+    /// don't evolve identically. Set automatically at fire creation.
+    pub noise_seed: f32,
 }
 
 impl Default for FireSimParams {
     fn default() -> Self {
         Self {
             dt: 1.0 / 60.0,
-            buoyancy_strength: 3.0,
-            cooling_rate: 0.8,
-            combustion_rate: 2.0,
-            burn_rate: 0.3,
-            turbulence_amplitude: 0.5,
-            turbulence_frequency: 2.0,
-            smoke_production: 0.4,
+            buoyancy_strength: 8.0,
+            cooling_rate: 0.6,
+            combustion_rate: 6.0,
+            burn_rate: 0.05,
+            turbulence_amplitude: 6.0,
+            turbulence_frequency: 6.0,
+            smoke_production: 2.5,
             time: 0.0,
             jacobi_iteration: 0,
+            source_intensity: 1.0,
+            noise_seed: 0.0,
         }
     }
 }
@@ -103,10 +142,30 @@ impl FireSimPipelines {
         let pressure_layout = Self::create_storage_image_layout(&device, 3)?;
         let correct_layout = Self::create_storage_image_layout(&device, 2)?;
 
-        let advect = Self::create_pipeline(&device, bytecode::ADVECT, advect_layout, &push_constant_range)?;
-        let forces = Self::create_pipeline(&device, bytecode::FORCES, forces_layout, &push_constant_range)?;
-        let pressure = Self::create_pipeline(&device, bytecode::PRESSURE, pressure_layout, &push_constant_range)?;
-        let correct = Self::create_pipeline(&device, bytecode::CORRECT, correct_layout, &push_constant_range)?;
+        let advect = Self::create_pipeline(
+            &device,
+            bytecode::ADVECT,
+            advect_layout,
+            &push_constant_range,
+        )?;
+        let forces = Self::create_pipeline(
+            &device,
+            bytecode::FORCES,
+            forces_layout,
+            &push_constant_range,
+        )?;
+        let pressure = Self::create_pipeline(
+            &device,
+            bytecode::PRESSURE,
+            pressure_layout,
+            &push_constant_range,
+        )?;
+        let correct = Self::create_pipeline(
+            &device,
+            bytecode::CORRECT,
+            correct_layout,
+            &push_constant_range,
+        )?;
 
         let descriptor_pool = Self::create_descriptor_pool(&device)?;
 
@@ -122,6 +181,10 @@ impl FireSimPipelines {
             descriptor_pool,
             device,
         })
+    }
+
+    pub fn descriptor_pool(&self) -> vk::DescriptorPool {
+        self.descriptor_pool
     }
 
     /// Allocate descriptor sets for a fire volume.
@@ -168,29 +231,35 @@ impl FireSimPipelines {
         self.write_advect_descriptors(descriptors.advect_sets[1], volume, 1, 0);
 
         // Forces: reads+writes current source
-        self.write_storage_images(descriptors.forces_set, &[
-            volume.field[0].image_view,
-            volume.velocity[0].image_view,
-        ]);
+        self.write_storage_images(
+            descriptors.forces_set,
+            &[volume.field[0].image_view, volume.velocity[0].image_view],
+        );
 
         // Pressure ping A: reads vel[0], pressure[0] → pressure[1]
-        self.write_storage_images(descriptors.pressure_sets[0], &[
-            volume.velocity[0].image_view,
-            volume.pressure[0].image_view,
-            volume.pressure[1].image_view,
-        ]);
+        self.write_storage_images(
+            descriptors.pressure_sets[0],
+            &[
+                volume.velocity[0].image_view,
+                volume.pressure[0].image_view,
+                volume.pressure[1].image_view,
+            ],
+        );
         // Pressure ping B: reads vel[0], pressure[1] → pressure[0]
-        self.write_storage_images(descriptors.pressure_sets[1], &[
-            volume.velocity[0].image_view,
-            volume.pressure[1].image_view,
-            volume.pressure[0].image_view,
-        ]);
+        self.write_storage_images(
+            descriptors.pressure_sets[1],
+            &[
+                volume.velocity[0].image_view,
+                volume.pressure[1].image_view,
+                volume.pressure[0].image_view,
+            ],
+        );
 
         // Correct: reads vel[0], pressure[0]
-        self.write_storage_images(descriptors.correct_set, &[
-            volume.velocity[0].image_view,
-            volume.pressure[0].image_view,
-        ]);
+        self.write_storage_images(
+            descriptors.correct_set,
+            &[volume.velocity[0].image_view, volume.pressure[0].image_view],
+        );
     }
 
     /// Record all simulation dispatches for a fire volume into the command buffer.
@@ -215,7 +284,16 @@ impl FireSimPipelines {
             Self::barrier_compute_to_compute(cb, device);
 
             // Pass 2: Forces (reads+writes field/velocity in place)
-            self.dispatch(cb, device, &self.forces, descriptors.forces_set, params, gx, gy, gz);
+            self.dispatch(
+                cb,
+                device,
+                &self.forces,
+                descriptors.forces_set,
+                params,
+                gx,
+                gy,
+                gz,
+            );
             Self::barrier_compute_to_compute(cb, device);
 
             // Pass 3: Pressure projection (Jacobi iterations with ping-pong)
@@ -231,7 +309,16 @@ impl FireSimPipelines {
             Self::barrier_compute_to_compute(cb, device);
 
             // Pass 4: Velocity correction
-            self.dispatch(cb, device, &self.correct, descriptors.correct_set, params, gx, gy, gz);
+            self.dispatch(
+                cb,
+                device,
+                &self.correct,
+                descriptors.correct_set,
+                params,
+                gx,
+                gy,
+                gz,
+            );
         }
     }
 
@@ -295,12 +382,15 @@ impl FireSimPipelines {
         src: usize,
         dst: usize,
     ) {
-        self.write_storage_images(set, &[
-            volume.field[src].image_view,
-            volume.field[dst].image_view,
-            volume.velocity[src].image_view,
-            volume.velocity[dst].image_view,
-        ]);
+        self.write_storage_images(
+            set,
+            &[
+                volume.field[src].image_view,
+                volume.field[dst].image_view,
+                volume.velocity[src].image_view,
+                volume.velocity[dst].image_view,
+            ],
+        );
     }
 
     fn write_storage_images(&self, set: vk::DescriptorSet, image_views: &[vk::ImageView]) {
@@ -392,6 +482,7 @@ impl FireSimPipelines {
         };
 
         let create_info = vk::DescriptorPoolCreateInfo::default()
+            .flags(vk::DescriptorPoolCreateFlags::FREE_DESCRIPTOR_SET)
             .max_sets(max_sets)
             .pool_sizes(std::slice::from_ref(&pool_size));
 

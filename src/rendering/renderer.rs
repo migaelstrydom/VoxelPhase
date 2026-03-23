@@ -713,9 +713,18 @@ impl Renderer {
         Ok(())
     }
 
-    /// Remove the active fire associated with an entity (GPU resources dropped).
+    /// Remove the active fire associated with an entity.
+    /// Waits for the GPU to finish all in-flight commands, frees descriptor sets
+    /// back to their pools, then drops the fire's GPU resources.
     pub fn remove_active_fire(&mut self, entity: specs::Entity) {
-        self.active_fires.retain(|(e, _)| *e != entity);
+        let idx = self.active_fires.iter().position(|(e, _)| *e == entity);
+        if let Some(idx) = idx {
+            unsafe {
+                let _ = self.vulkan_context.device().device_wait_idle();
+            }
+            let (_, fire) = self.active_fires.remove(idx);
+            self.fire_renderer.free_fire_descriptors(&fire);
+        }
     }
 
     /// Render particles from the particle pool.

@@ -25,6 +25,8 @@ layout(push_constant) uniform FireSimParams {
     float smoke_production;
     float time;
     int jacobi_iteration;
+    float source_intensity;
+    float noise_seed;
 } params;
 
 void main() {

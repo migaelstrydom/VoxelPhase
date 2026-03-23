@@ -6,7 +6,9 @@ use specs::{Component, VecStorage};
 #[derive(Component, Debug)]
 #[storage(VecStorage)]
 pub struct Flammable {
-    /// Total fuel available (seconds of burn time).
+    /// Total fuel available. Divided by FUEL_BURN_RATE to get burn duration.
+    /// e.g. fuel=20 at rate=0.2 → ~100s burn. Also scaled by explosion
+    /// distance falloff at ignition, so distant objects burn shorter.
     pub fuel: f32,
     /// Temperature threshold to catch fire (0.0–1.0).
     pub ignition_threshold: f32,
@@ -15,7 +17,7 @@ pub struct Flammable {
 impl Flammable {
     pub fn wood() -> Self {
         Self {
-            fuel: 8.0,
+            fuel: 20.0,
             ignition_threshold: 0.2,
         }
     }

@@ -18,6 +18,8 @@ layout(push_constant) uniform FireSimParams {
     float smoke_production;
     float time;
     int jacobi_iteration;
+    float source_intensity;
+    float noise_seed;
 } params;
 
 // 3D hash for noise generation.
@@ -89,27 +91,38 @@ void main() {
     vec3 uvw = (vec3(pos) + 0.5) / vec3(size);
     float dt = params.dt;
 
-    // Buoyancy: hot gas rises
+    // Per-fire noise offset so simultaneous fires evolve differently
+    vec3 seed_offset = vec3(params.noise_seed, params.noise_seed * 0.7, params.noise_seed * 1.3);
+
+    // Buoyancy: hot gas rises, with slight random horizontal drift
     v.y += params.buoyancy_strength * temperature * dt;
+    vec3 drift = curlNoise(uvw * 2.0 + seed_offset + vec3(0.0, params.time * 0.3, 0.0));
+    v.xz += drift.xz * temperature * 1.5 * dt;
 
     // Smoke gets gentle upward push (slower than fire)
-    v.y += smoke * 0.5 * dt;
+    v.y += smoke * 1.0 * dt;
 
-    // Turbulence: curl noise displacement scaled by temperature
-    vec3 noisePos = uvw * params.turbulence_frequency + vec3(params.time * 0.7);
-    vec3 curl = curlNoise(noisePos);
-    v += curl * params.turbulence_amplitude * temperature * dt;
+    // Turbulence: multi-scale curl noise for flickering flame detail
+    vec3 noisePos1 = uvw * params.turbulence_frequency + seed_offset + vec3(params.time * 1.5);
+    vec3 noisePos2 = uvw * params.turbulence_frequency * 2.3 + seed_offset + vec3(params.time * 2.7, 0.0, params.time * 1.1);
+    vec3 curl1 = curlNoise(noisePos1);
+    vec3 curl2 = curlNoise(noisePos2);
+    v += (curl1 + curl2 * 0.5) * params.turbulence_amplitude * temperature * dt;
 
-    // Source injection: burning surface feeds fuel and heat into the bottom of the volume.
-    // Uses a soft circular mask centered in XZ and confined to the lowest voxel layers.
-    float source_height = 0.12;
-    float source_radius = 0.35;
-    if (uvw.y < source_height) {
+    // Source injection: burning surface feeds fuel and heat, scaled by remaining fuel.
+    // Noisy mask creates flickering flame tongues rather than a uniform cone.
+    float source_height = 0.15;
+    float source_radius = 0.38;
+    float intensity = params.source_intensity;
+    if (uvw.y < source_height && intensity > 0.0) {
         float xz_dist = length(uvw.xz - vec2(0.5));
-        float mask = smoothstep(source_radius, source_radius * 0.5, xz_dist)
-                   * smoothstep(source_height, 0.0, uvw.y);
-        fuel = max(fuel, mask * 0.9);
-        temperature = max(temperature, mask * 0.6);
+        float base_mask = smoothstep(source_radius, source_radius * 0.4, xz_dist)
+                        * smoothstep(source_height, 0.0, uvw.y);
+        // Animated noise breaks up the circular source into flame-like patches
+        float flicker = noise3(uvw * 8.0 + seed_offset + vec3(params.time * 3.0, params.time * 5.0, params.time * 2.0));
+        float mask = base_mask * (0.5 + flicker * 0.5) * intensity;
+        fuel = max(fuel, mask * 0.95);
+        temperature = max(temperature, mask * 0.7);
     }
 
     // Combustion: fuel burns where hot enough
