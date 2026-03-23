@@ -2,12 +2,13 @@
 //!
 //! These are thin wrappers that call into the BipedController.
 
-use specs::{Entities, Join, Read, ReadStorage, System, Write, WriteStorage};
+use specs::{Entities, Join, Read, ReadExpect, ReadStorage, System, Write, WriteStorage};
 
 use super::controller::BipedController;
 use crate::components::{Position, Rotation, Velocity};
 use crate::debug::{DebugLines, DebugOverlays};
-use crate::player::Player;
+use crate::player::grab::GrabConfig;
+use crate::player::{ArmState, Player, PlayerState};
 use crate::sensing::{ContactCandidates, SensorSet};
 use crate::time::Time;
 
@@ -56,8 +57,10 @@ pub struct BipedAnimationSystem;
 impl<'a> System<'a> for BipedAnimationSystem {
     type SystemData = (
         Read<'a, Time>,
+        ReadExpect<'a, GrabConfig>,
         Entities<'a>,
         ReadStorage<'a, Player>,
+        ReadStorage<'a, PlayerState>,
         ReadStorage<'a, Position>,
         ReadStorage<'a, Rotation>,
         ReadStorage<'a, Velocity>,
@@ -70,8 +73,10 @@ impl<'a> System<'a> for BipedAnimationSystem {
     fn run(&mut self, data: Self::SystemData) {
         let (
             time,
+            grab_config,
             entities,
             players,
+            player_states,
             positions,
             rotations,
             velocities,
@@ -83,9 +88,10 @@ impl<'a> System<'a> for BipedAnimationSystem {
 
         let dt = time.delta_seconds();
 
-        for (entity, _player, pos, rot, vel, controller) in (
+        for (entity, _player, player_state, pos, rot, vel, controller) in (
             &entities,
             &players,
+            &player_states,
             &positions,
             &rotations,
             &velocities,
@@ -95,6 +101,14 @@ impl<'a> System<'a> for BipedAnimationSystem {
         {
             let pelvis_pos = nalgebra::Point3::new(pos.0.x, pos.0.y, pos.0.z);
             let yaw = rot.0;
+
+            // Set grab hand target before animation update
+            controller.state.grab_hand_target = compute_grab_hand_target(
+                &player_state.arm,
+                pelvis_pos,
+                yaw,
+                &grab_config,
+            );
 
             // Get probe results
             let contacts = candidates
@@ -135,6 +149,44 @@ impl<'a> System<'a> for BipedAnimationSystem {
             // );
             // let rim_point = wheel_center + rim_offset;
             // debug_overlays.add_sphere(rim_point, 0.05, Colour::YELLOW);
+        }
+    }
+}
+
+/// Compute the right hand target for grab animation, if applicable.
+fn compute_grab_hand_target(
+    arm: &ArmState,
+    pelvis_pos: nalgebra::Point3<f32>,
+    yaw: f32,
+    config: &GrabConfig,
+) -> Option<nalgebra::Point3<f32>> {
+    let facing = nalgebra::Vector3::new(yaw.sin(), 0.0, yaw.cos());
+
+    match arm {
+        ArmState::Idle => None,
+        ArmState::Reaching { elapsed, target } => {
+            // Reach toward the hit point's height if we have one, otherwise
+            // use the probe direction (hold_distance forward at pelvis level).
+            let reach_height = target
+                .map(|(_body, hit)| hit.y - pelvis_pos.y)
+                .unwrap_or(0.0);
+            let reach_target = pelvis_pos
+                + facing * config.hold_distance
+                + nalgebra::Vector3::y() * reach_height;
+            let t = (elapsed / config.reach_duration).min(1.0);
+            let rest_hand = pelvis_pos + nalgebra::Vector3::y() * 0.1;
+            Some(nalgebra::Point3::from(
+                rest_hand.coords.lerp(&reach_target.coords, t),
+            ))
+        }
+        ArmState::Holding {
+            current_hold_height,
+            ..
+        } => {
+            let point = pelvis_pos
+                + facing * config.hold_distance
+                + nalgebra::Vector3::y() * *current_hold_height;
+            Some(point)
         }
     }
 }

@@ -131,8 +131,10 @@ pub struct RigidBody {
     // Attached colliders
     colliders: Vec<ColliderHandle>,
 
-    /// Optional per-substep velocity drive for externally controlled bodies.
+    /// Optional per-substep linear velocity drive for externally controlled bodies.
     velocity_drive: Option<VelocityDrive>,
+    /// Optional per-substep angular velocity drive.
+    angular_velocity_drive: Option<VelocityDrive>,
 }
 
 impl RigidBody {
@@ -156,6 +158,7 @@ impl RigidBody {
             angular_drag_coeff: 0.0,
             colliders: Vec::new(),
             velocity_drive: None,
+            angular_velocity_drive: None,
         }
     }
 
@@ -254,6 +257,26 @@ impl RigidBody {
         self.velocity_drive = Some(VelocityDrive { target, max_accel });
     }
 
+    /// Set an angular velocity drive that accelerates toward `target` each substep.
+    pub fn set_angular_velocity_drive(&mut self, target: Vector3<f32>, max_accel: f32) {
+        self.angular_velocity_drive = Some(VelocityDrive { target, max_accel });
+    }
+
+    /// Scale the diagonal elements of the local inertia tensor.
+    ///
+    /// Call after collider attachment to adjust how resistant the body is to
+    /// angular acceleration on each axis. For example, `Vector3::new(1, 50, 1)`
+    /// makes the body very resistant to yaw torques from contacts while leaving
+    /// pitch and roll unchanged.
+    pub fn scale_local_inertia(&mut self, scale: Vector3<f32>) {
+        self.local_inertia.m11 *= scale.x;
+        self.local_inertia.m22 *= scale.y;
+        self.local_inertia.m33 *= scale.z;
+        if let Some(inv) = self.local_inertia.try_inverse() {
+            self.inv_local_inertia = inv;
+        }
+    }
+
     /// Apply an instantaneous linear impulse at the center of mass.
     pub fn apply_impulse(&mut self, impulse: Vector3<f32>) {
         if self.inv_mass > 0.0 {
@@ -340,36 +363,42 @@ impl RigidBody {
             return;
         }
 
-        // Apply gravity
-        self.linear_velocity += gravity * self.gravity_scale * dt;
-
-        // Apply velocity drive on horizontal axes only. The drive accelerates
-        // toward the target each substep so the solver can oppose it at contacts.
-        // Vertical velocity is left to gravity and the solver.
+        // Apply velocity drive first, against the clean previous-substep velocity.
         if let Some(drive) = &self.velocity_drive {
-            let dx = drive.target.x - self.linear_velocity.x;
-            let dz = drive.target.z - self.linear_velocity.z;
-            let delta_mag = (dx * dx + dz * dz).sqrt();
+            let delta = drive.target - self.linear_velocity;
+            let delta_mag = delta.magnitude();
             let max_delta = drive.max_accel * dt;
             if delta_mag > 1e-6 {
                 let scale = (max_delta / delta_mag).min(1.0);
-                self.linear_velocity.x += dx * scale;
-                self.linear_velocity.z += dz * scale;
+                self.linear_velocity += delta * scale;
             }
         }
 
-        // Apply accumulated forces
-        self.linear_velocity += self.force * self.inv_mass * dt;
-        self.angular_velocity += self.world_inv_inertia() * self.torque * dt;
+        // Record velocity after drive, before external effects.
+        let vel_after_drive = self.linear_velocity;
 
-        // Apply drag using exponential decay: v *= exp(-coeff/mass * dt).
-        // This is unconditionally stable regardless of coeff/mass ratio,
-        // unlike explicit Euler (v -= coeff*inv_mass*v*dt) which goes
-        // unstable when coeff*inv_mass*dt > 1 (e.g. light bodies in water).
+        // Apply all external effects: gravity, accumulated forces, drag.
+        self.linear_velocity += gravity * self.gravity_scale * dt;
+        self.linear_velocity += self.force * self.inv_mass * dt;
         if self.linear_drag_coeff > 0.0 {
             let decay = (-self.linear_drag_coeff * self.inv_mass * dt).exp();
             self.linear_velocity *= decay;
         }
+
+        // Apply angular velocity drive (same pattern as linear drive).
+        if let Some(drive) = &self.angular_velocity_drive {
+            let delta = drive.target - self.angular_velocity;
+            let delta_mag = delta.magnitude();
+            let max_delta = drive.max_accel * dt;
+            if delta_mag > 1e-6 {
+                let scale = (max_delta / delta_mag).min(1.0);
+                self.angular_velocity += delta * scale;
+            }
+        }
+
+        let ang_vel_after_drive = self.angular_velocity;
+
+        self.angular_velocity += self.world_inv_inertia() * self.torque * dt;
         if self.angular_drag_coeff > 0.0 {
             // Use the average inverse inertia (trace(I_inv)/3) so that
             // angular drag scales with rotational inertia, not mass.
@@ -386,7 +415,18 @@ impl RigidBody {
         // with very different principal moments).
         self.apply_gyroscopic_correction(dt);
 
-        // Apply damping
+        // Shift drive targets by external forces (gravity, accumulated forces,
+        // drag, torques, gyroscopic correction) so drives don't fight these
+        // effects across substeps. Damping is excluded — it's a resistive effect
+        // that drives should actively overcome.
+        if let Some(drive) = &mut self.velocity_drive {
+            drive.target += self.linear_velocity - vel_after_drive;
+        }
+        if let Some(drive) = &mut self.angular_velocity_drive {
+            drive.target += self.angular_velocity - ang_vel_after_drive;
+        }
+
+        // Apply damping after target shift — drives fight damping intentionally.
         self.linear_velocity *= (1.0 - self.linear_damping.min(1.0)).powf(dt);
         self.angular_velocity *= (1.0 - self.angular_damping.min(1.0)).powf(dt);
     }
@@ -443,32 +483,26 @@ mod tests {
     }
 
     #[test]
-    fn velocity_drive_only_affects_horizontal() {
+    fn velocity_drive_does_not_fight_gravity() {
         let mut body = dynamic_body();
-        body.set_linear_velocity(Vector3::new(0.0, -2.0, 0.0));
-        body.set_velocity_drive(Vector3::new(5.0, 0.0, 3.0), 5000.0);
+        body.set_linear_velocity(Vector3::new(0.0, 0.0, 0.0));
+        // Drive targets zero on all axes with high max_accel.
+        body.set_velocity_drive(Vector3::new(0.0, 0.0, 0.0), 5000.0);
 
         let gravity = Vector3::new(0.0, -9.81, 0.0);
         let dt = 1.0 / 240.0;
-        body.integrate_forces(dt, gravity);
 
-        // X and Z should move toward drive target
-        assert!(
-            (body.linear_velocity().x - 5.0).abs() < 0.1,
-            "X should reach drive target, got {}",
-            body.linear_velocity().x,
-        );
-        assert!(
-            (body.linear_velocity().z - 3.0).abs() < 0.1,
-            "Z should reach drive target, got {}",
-            body.linear_velocity().z,
-        );
+        // Simulate 4 substeps (typical frame).
+        for _ in 0..4 {
+            body.integrate_forces(dt, gravity);
+        }
 
-        // Y should only have gravity applied, not driven
-        let expected_y = -2.0 + gravity.y * dt;
+        // Y should accumulate gravity over all 4 substeps. The drive target
+        // shifts with gravity each substep, so the drive doesn't fight it.
+        let expected_y = gravity.y * dt * 4.0;
         assert!(
             (body.linear_velocity().y - expected_y).abs() < 0.01,
-            "Y should reflect gravity only, got {} expected {}",
+            "Y should reflect full gravity accumulation, got {} expected {}",
             body.linear_velocity().y,
             expected_y
         );

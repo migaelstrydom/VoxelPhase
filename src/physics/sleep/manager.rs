@@ -4,6 +4,7 @@ use generational_arena::{Arena, Index};
 use nalgebra::Vector3;
 
 use crate::physics::body::RigidBody;
+use crate::physics::constraint::types::Constraint;
 use crate::physics::handle::RigidBodyHandle;
 use crate::physics::pipeline::pair::SolverManifold;
 use crate::physics::sleep::energy::EnergyTracker;
@@ -168,6 +169,7 @@ impl SleepManager {
         &mut self,
         bodies: &mut Arena<RigidBody>,
         manifolds: &[SolverManifold],
+        constraints: &Arena<Constraint>,
     ) {
         if !self.enabled {
             return;
@@ -180,6 +182,10 @@ impl SleepManager {
             }
             let handle = RigidBodyHandle(idx);
             if self.is_sleeping(handle) {
+                continue;
+            }
+            // Bodies with active constraints stay awake unconditionally.
+            if has_active_constraint(constraints, handle) {
                 continue;
             }
             if self.energy.update_body(handle, body) {
@@ -206,4 +212,19 @@ impl SleepManager {
             }
         }
     }
+}
+
+/// Whether any active constraint references the given body.
+///
+/// This is a conservative policy: any active constraint prevents sleep. Correct
+/// for grab (FollowPoint) and player upright (KeepUpright), but overly
+/// conservative for future two-body constraints where both bodies are at rest
+/// (e.g. a "glue" constraint). The proper fix is constraint-aware island
+/// building — constraints become edges in the contact graph, and entire islands
+/// sleep/wake as a unit. See `CONSTRAINT_SYSTEM_PLAN.md` ("Constraint islands
+/// for sleeping").
+fn has_active_constraint(constraints: &Arena<Constraint>, body: RigidBodyHandle) -> bool {
+    constraints
+        .iter()
+        .any(|(_, c)| c.active && c.kind.references_body(body))
 }

@@ -110,10 +110,22 @@ impl InputState {
         self.mouse_delta
     }
 
+    /// Returns true if the mouse button is currently held down
+    #[inline]
+    pub fn is_mouse_button_pressed(&self, button: MouseButton) -> bool {
+        self.pressed_mouse_buttons.contains(&button)
+    }
+
     /// Returns true if the mouse button was just pressed this frame
     #[inline]
     pub fn is_mouse_button_just_pressed(&self, button: MouseButton) -> bool {
         self.just_pressed_mouse_buttons.contains(&button)
+    }
+
+    /// Returns true if the mouse button was just released this frame
+    #[inline]
+    pub fn is_mouse_button_just_released(&self, button: MouseButton) -> bool {
+        self.just_released_mouse_buttons.contains(&button)
     }
 
     // === Mouse capture ===

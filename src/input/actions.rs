@@ -29,6 +29,13 @@ pub struct GameplayActions {
 
     /// Throw grenade (just pressed this frame)
     pub throw_grenade: bool,
+
+    /// Grab button held this frame.
+    pub grab_held: bool,
+    /// Grab button just pressed this frame.
+    pub grab_just_pressed: bool,
+    /// Grab button just released this frame.
+    pub grab_just_released: bool,
 }
 
 impl GameplayActions {
@@ -46,9 +53,8 @@ impl GameplayActions {
             move_right: input.is_key_pressed(KeyCode::KeyD)
                 || input.is_key_pressed(KeyCode::ArrowRight),
 
-            // Jump - Space or Right mouse button
-            jump: input.is_key_just_pressed(KeyCode::Space)
-                || input.is_mouse_button_just_pressed(MouseButton::Right),
+            // Jump - Space only (right-click freed for grab)
+            jump: input.is_key_just_pressed(KeyCode::Space),
 
             // Camera control
             camera_delta: input.mouse_delta(),
@@ -59,6 +65,13 @@ impl GameplayActions {
             throw_grenade: (input.is_key_just_pressed(KeyCode::ShiftLeft)
                 || input.is_mouse_button_just_pressed(MouseButton::Left))
                 && input.is_mouse_captured(),
+
+            // Grab - Right mouse button
+            grab_held: input.is_mouse_button_pressed(MouseButton::Right)
+                && input.is_mouse_captured(),
+            grab_just_pressed: input.is_mouse_button_just_pressed(MouseButton::Right)
+                && input.is_mouse_captured(),
+            grab_just_released: input.is_mouse_button_just_released(MouseButton::Right),
         }
     }
 }

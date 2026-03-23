@@ -6,7 +6,7 @@ use crate::components::{
     Orientation, Position, Renderable, RigidBodyComponent, Rotation, Velocity, VelocityDriven,
 };
 use crate::physics::{ColliderDesc, ConstraintKind, RigidBodyDesc};
-use crate::player::{Player, PlayerConfig, PlayerTargetState};
+use crate::player::{Player, PlayerConfig, PlayerState, PlayerTargetState};
 use crate::sensing::{ContactCandidates, SensorSet};
 use crate::systems::PhysicsResource;
 
@@ -25,13 +25,15 @@ pub fn spawn_player(world: &mut World, initial_pos: nalgebra::Point3<f32>) -> En
             .position(initial_pos)
             .gravity_scale(1.0)
             .linear_damping(0.0)
-            .angular_damping(1.0);
+            .angular_damping(0.95);
         let body_handle = physics.world.create_body(body_desc);
         let collider_desc = ColliderDesc::capsule(0.5, 0.25)
             .density(800.0)
             .restitution(0.0)
-            .friction(0.3);
+            .friction(0.0);
         physics.world.attach_collider(body_handle, collider_desc);
+        physics.world.body_mut(body_handle).unwrap()
+            .scale_local_inertia(Vector3::new(1.0, 50.0, 1.0));
         physics
             .world
             .create_constraint(ConstraintKind::KeepUpright {
@@ -46,6 +48,7 @@ pub fn spawn_player(world: &mut World, initial_pos: nalgebra::Point3<f32>) -> En
         .create_entity()
         .with(Player)
         .with(PlayerTargetState::default())
+        .with(PlayerState::default())
         .with(biped_controller)
         .with(Position(Vector3::new(
             initial_pos.x,

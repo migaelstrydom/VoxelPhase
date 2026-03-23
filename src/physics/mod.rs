@@ -39,33 +39,33 @@ mod body;
 pub mod ccd;
 mod collider;
 pub mod constraint;
-mod force_provider;
 mod contact_event;
 mod debug;
+mod force_provider;
 pub mod grounding;
 mod handle;
 mod impulses;
 mod math;
 mod narrowphase;
 mod pipeline;
-pub mod solver;
 mod sleep;
+pub mod solver;
 mod static_geometry;
 pub mod stepping;
 mod world;
 
-pub use body::{RigidBody, RigidBodyDesc};
+pub use body::{BodyType, RigidBody, RigidBodyDesc};
 pub use ccd::{CcdStrategy, SweepClampCcd};
 pub use collider::{Collider, ColliderDesc, ColliderShape};
+pub use constraint::{Constraint, ConstraintHandle, ConstraintKind, ConstraintRow};
 pub use contact_event::{ContactEvent, ContactSource};
 pub use force_provider::{ForceContext, ForceOutput, SubstepForceProvider};
 pub use handle::{ColliderHandle, RigidBodyHandle};
 pub use impulses::{PhysicsImpulse, PhysicsImpulseQueue};
-pub use constraint::{Constraint, ConstraintHandle, ConstraintKind, ConstraintRow};
 pub use solver::{
     ConstraintSolver, IdentityConditioner, ManifoldConditioner, ManifoldConditions, PgsNgsConfig,
     PgsNgsSolver, ShockPropagationConditioner, ShockPropagationConfig,
 };
 pub use static_geometry::StaticGeometry;
 pub use stepping::{FixedTimestep, SequentialStepper, Stepper};
-pub use world::PhysicsWorld;
+pub use world::{BodyProbeHit, PhysicsWorld};

@@ -19,7 +19,7 @@ use crate::explosion::Explosion;
 use crate::input::GameplayActions;
 use crate::model::Model;
 use crate::physics::{ColliderDesc, ContactEvent, RigidBodyDesc, RigidBodyHandle};
-use crate::player::Player;
+use crate::player::{ArmState, Player, PlayerState};
 use crate::systems::PhysicsResource;
 use crate::time::Time;
 
@@ -78,6 +78,7 @@ impl<'a> System<'a> for GrenadeSpawnSystem {
         Write<'a, GrenadeCooldown>,
         Read<'a, GrenadeModelResource>,
         ReadStorage<'a, Player>,
+        ReadStorage<'a, PlayerState>,
         ReadStorage<'a, Position>,
         ReadStorage<'a, FollowTarget>,
         Read<'a, LazyUpdate>,
@@ -93,6 +94,7 @@ impl<'a> System<'a> for GrenadeSpawnSystem {
             mut cooldown,
             grenade_model,
             players,
+            player_states,
             positions,
             follow_targets,
             lazy,
@@ -102,6 +104,14 @@ impl<'a> System<'a> for GrenadeSpawnSystem {
         cooldown.remaining = (cooldown.remaining - time.delta_seconds()).max(0.0);
 
         if !actions.throw_grenade {
+            return;
+        }
+
+        // Suppress grenade while holding a grabbed object (left-click is consumed by throw)
+        let is_holding = (&players, &player_states)
+            .join()
+            .any(|(_, state)| matches!(state.arm, ArmState::Holding { .. }));
+        if is_holding {
             return;
         }
 

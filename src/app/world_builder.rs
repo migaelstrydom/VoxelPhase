@@ -12,7 +12,8 @@ use crate::explosion::Explosion;
 use crate::input::{GameplayActions, InputState};
 use crate::particles::{ParticleConfig, ParticleEmitter, ParticlePool};
 use crate::physics::PhysicsImpulseQueue;
-use crate::player::{Player, PlayerConfig, PlayerTargetState};
+use crate::player::grab::GrabConfig;
+use crate::player::{Player, PlayerConfig, PlayerState, PlayerTargetState};
 use crate::projectile::{
     Grenade, GrenadeConfig, GrenadeCooldown, GrenadeModelResource, Lifetime, Projectile,
 };
@@ -49,6 +50,7 @@ impl WorldBuilder {
         world.register::<CameraComponent>();
         world.register::<Player>();
         world.register::<PlayerTargetState>();
+        world.register::<PlayerState>();
         world.register::<BipedController>();
         world.register::<FollowTarget>();
         world.register::<SensorSet>();
@@ -97,6 +99,7 @@ impl WorldBuilder {
         self.world.insert(InputState::new());
         self.world.insert(GameplayActions::default());
         self.world.insert(PlayerConfig::default());
+        self.world.insert(GrabConfig::default());
         self.world.insert(CameraConfig::default());
         self.world.insert(DebugLines::default());
         self.world.insert(DebugLog::default());

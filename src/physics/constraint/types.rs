@@ -1,6 +1,6 @@
 //! Constraint type definitions: persistent constraints, solver-ready rows, and the kind enum.
 
-use nalgebra::{UnitVector3, Vector3};
+use nalgebra::{UnitQuaternion, UnitVector3, Vector3};
 use smallvec::SmallVec;
 
 use crate::physics::handle::RigidBodyHandle;
@@ -23,6 +23,37 @@ pub enum ConstraintKind {
         /// Folded into effective mass as `1 / (J·M⁻¹·Jᵀ + compliance/dt²)`.
         compliance: f32,
     },
+
+    /// Drive a point on body_b toward a point on body_a, with optional
+    /// orientation locking.
+    /// Produces 3 positional rows (X, Y, Z) + 3 angular rows = 6 total.
+    /// Newton's third law is automatic — the solver applies equal and opposite
+    /// forces, so heavy held objects resist the player's movement and turning.
+    FollowPoint {
+        /// The anchor body (e.g. the player). Its local_anchor_a defines the
+        /// hold point relative to its center of mass.
+        body_a: RigidBodyHandle,
+        /// Body-local offset on body_a where the hold point is.
+        local_anchor_a: Vector3<f32>,
+        /// The driven body (e.g. the held object).
+        body_b: RigidBodyHandle,
+        /// Body-local offset on body_b (the grab surface point).
+        local_anchor_b: Vector3<f32>,
+        /// Softness for the positional constraint.
+        compliance: f32,
+        /// Maximum impulse per axis per substep for the positional constraint.
+        max_impulse: f32,
+        /// Relative orientation of body_b in body_a's frame at the time of
+        /// grab. The angular rows drive the current relative orientation back
+        /// toward this snapshot.
+        relative_orientation: UnitQuaternion<f32>,
+        /// Softness for the angular (orientation-lock) constraint.
+        angular_compliance: f32,
+        /// Maximum angular impulse per axis per substep. Controls how much
+        /// torque the grab can exert — light objects lock orientation, heavy
+        /// objects droop under gravity.
+        angular_max_impulse: f32,
+    },
 }
 
 impl ConstraintKind {
@@ -30,6 +61,7 @@ impl ConstraintKind {
     pub fn row_count(&self) -> usize {
         match self {
             ConstraintKind::KeepUpright { .. } => 2,
+            ConstraintKind::FollowPoint { .. } => 6,
         }
     }
 
@@ -37,6 +69,19 @@ impl ConstraintKind {
     pub fn references_body(&self, handle: RigidBodyHandle) -> bool {
         match self {
             ConstraintKind::KeepUpright { body, .. } => *body == handle,
+            ConstraintKind::FollowPoint {
+                body_a, body_b, ..
+            } => *body_a == handle || *body_b == handle,
+        }
+    }
+
+    /// All body handles referenced by this constraint.
+    pub fn referenced_bodies(&self) -> SmallVec<[RigidBodyHandle; 2]> {
+        match self {
+            ConstraintKind::KeepUpright { body, .. } => smallvec::smallvec![*body],
+            ConstraintKind::FollowPoint {
+                body_a, body_b, ..
+            } => smallvec::smallvec![*body_a, *body_b],
         }
     }
 }

@@ -13,6 +13,7 @@ use super::constraint::types::{Constraint, ConstraintRow};
 use super::constraint::ConstraintHandle;
 use super::contact_event::{ContactEvent, ContactSource};
 use super::debug::{PhysicsDebugConfig, PhysicsDebugger};
+use super::force_provider::{ForceContext, ForceOutput, SubstepForceProvider};
 use super::grounding::{GroundingConfig, GroundingDetector};
 use super::handle::{ColliderHandle, RigidBodyHandle};
 use super::impulses::PhysicsImpulse;
@@ -25,7 +26,6 @@ use super::pipeline::normal_smoothing::NormalSmoothingConfig;
 use super::pipeline::pair::SolverManifold;
 use super::sleep::{SleepManager, SleepManagerConfig};
 use super::solver::{ConstraintSolver, ManifoldConditioner, ManifoldConditions, PgsNgsSolver};
-use super::force_provider::{ForceContext, ForceOutput, SubstepForceProvider};
 use super::static_geometry::StaticGeometry;
 use crate::collision::capsule::Capsule;
 use crate::collision::discrete::sphere_capsule::sphere_capsule_manifold;
@@ -303,6 +303,11 @@ impl PhysicsWorld {
         &mut self,
         kind: super::constraint::ConstraintKind,
     ) -> ConstraintHandle {
+        // Wake all bodies referenced by this constraint so the solver
+        // processes them immediately (e.g. grabbing a sleeping body).
+        for handle in kind.referenced_bodies() {
+            self.sleep_manager.wake_body(handle);
+        }
         ConstraintHandle(self.constraints.insert(Constraint::new(kind)))
     }
 
@@ -389,15 +394,13 @@ impl PhysicsWorld {
     /// that accelerates toward `linear` each substep during force integration.
     /// The solver can then oppose the drive via contact impulses, allowing
     /// smooth pushing of heavy objects at a speed determined by mass ratio.
-    ///
-    /// Only drives horizontal (X/Z) axes. Vertical velocity is set directly
-    /// for jumps, with gravity handling the rest.
     pub fn set_body_velocity_drive(
         &mut self,
         handle: RigidBodyHandle,
         linear: Vector3<f32>,
         angular: Vector3<f32>,
         max_accel: f32,
+        angular_max_accel: f32,
     ) -> bool {
         let Some(body) = self.bodies.get_mut(handle.0) else {
             return false;
@@ -406,8 +409,7 @@ impl PhysicsWorld {
             return false;
         }
         body.set_velocity_drive(linear, max_accel);
-        body.set_linear_velocity_y(linear.y);
-        body.set_angular_velocity(angular);
+        body.set_angular_velocity_drive(angular, angular_max_accel);
         self.sleep_manager.wake_body(handle);
         true
     }
@@ -685,7 +687,7 @@ impl PhysicsWorld {
 
         let all_manifolds = std::mem::take(&mut self.cached_all_manifolds);
         self.sleep_manager
-            .update_sleep_states(&mut self.bodies, &all_manifolds);
+            .update_sleep_states(&mut self.bodies, &all_manifolds, &self.constraints);
         self.cached_all_manifolds = all_manifolds;
     }
 
@@ -775,6 +777,73 @@ impl PhysicsWorld {
             body.set_mass_properties(total_mass, total_inertia);
         }
     }
+
+    /// Swept-sphere probe that identifies which body was hit.
+    /// Skips static bodies and any body in `exclude`.
+    pub fn probe_bodies(
+        &self,
+        origin: Point3<f32>,
+        direction: Vector3<f32>,
+        length: f32,
+        radius: f32,
+        exclude: &[RigidBodyHandle],
+    ) -> Option<BodyProbeHit> {
+        let end = origin + direction * length;
+        let mut earliest: Option<BodyProbeHit> = None;
+
+        for (idx, body) in self.bodies.iter() {
+            if body.is_static() {
+                continue;
+            }
+            let handle = RigidBodyHandle(idx);
+            if exclude.contains(&handle) {
+                continue;
+            }
+            let body_pos = body.position();
+            let body_rot = body.rotation();
+
+            for ch in body.colliders() {
+                let Some(collider) = self.colliders.get(ch.0) else {
+                    continue;
+                };
+                let center = collider.world_center(body_pos, body_rot);
+                let hit = match collider.shape() {
+                    ColliderShape::Sphere { radius: r } => {
+                        probe_vs_sphere(origin, end, radius, center, *r)
+                    }
+                    ColliderShape::Box { half_extents } => {
+                        let obb = Obb::new(center, body_rot, *half_extents);
+                        probe_vs_obb(origin, end, radius, &obb, *half_extents)
+                    }
+                    ColliderShape::Capsule {
+                        half_height,
+                        radius: cap_radius,
+                    } => probe_vs_capsule(
+                        origin,
+                        end,
+                        radius,
+                        center,
+                        body_rot,
+                        *half_height,
+                        *cap_radius,
+                    ),
+                };
+                if let Some(hit) = hit {
+                    if earliest.as_ref().map_or(true, |e| hit.t < e.hit.t) {
+                        earliest = Some(BodyProbeHit { body: handle, hit });
+                    }
+                }
+            }
+        }
+
+        earliest
+    }
+}
+
+/// Result of a body-identifying probe.
+pub struct BodyProbeHit {
+    pub body: RigidBodyHandle,
+    pub hit: ProbeHit,
 }
 
 impl ProbeTarget for PhysicsWorld {

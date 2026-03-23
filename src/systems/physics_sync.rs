@@ -89,10 +89,10 @@ impl PhysicsSyncSystem {
     ) {
         let mut updates = Vec::new();
         for (vel, body, vd) in ((&*velocities), bodies, velocity_driven).join() {
-            updates.push((body.0, vel.0, vd.max_accel));
+            updates.push((body.0, vel.0, vd.angular_velocity, vd.max_accel, vd.angular_max_accel));
         }
-        for (handle, vel, max_accel) in updates {
-            let _ = physics.set_body_velocity_drive(handle, vel, Vector3::zeros(), max_accel);
+        for (handle, vel, angular, max_accel, angular_max_accel) in updates {
+            let _ = physics.set_body_velocity_drive(handle, vel, angular, max_accel, angular_max_accel);
         }
     }
 

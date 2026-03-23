@@ -62,6 +62,11 @@ pub fn project_angular_velocities(
 
                 body.set_angular_velocity(spin + correction);
             }
+
+            ConstraintKind::FollowPoint { .. } => {
+                // FollowPoint is a soft positional constraint — no post-solve
+                // projection needed. PGS rows alone suffice.
+            }
         }
     }
 }

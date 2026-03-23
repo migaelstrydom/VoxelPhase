@@ -7,7 +7,7 @@ use crate::particles::{ParticleSpawnSystem, ParticleUpdateSystem};
 use crate::projectile::{GrenadeSpawnSystem, LifetimeSystem, ProjectileImpactDetectionSystem};
 use crate::sensing::SensorProbeSystem;
 use crate::systems::{
-    CameraControlSystem, PhysicsSyncSystem, PlayerInputSystem, PlayerMotionSystem, RenderSystem,
+    CameraControlSystem, PhysicsSyncSystem, PlayerControlSystem, PlayerInputSystem, RenderSystem,
     TerrainUpdateSystem, WaterSystem,
 };
 
@@ -17,12 +17,12 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
         // === Phase 1: Input processing ===
         .with(InputActionSystem, "input_actions", &[])
         .with(PlayerInputSystem, "player_input", &["input_actions"])
-        .with(PlayerMotionSystem, "player_motion", &["player_input"])
+        .with(PlayerControlSystem, "player_control", &["player_input"])
         // Physics engine (buoyancy forces computed per-substep internally)
         .with(
             PhysicsSyncSystem::default(),
             "physics_sync",
-            &["player_motion"],
+            &["player_control"],
         )
         // Animation and sensing
         .with(BipedAnimationSystem, "biped_animation", &["physics_sync"])

@@ -2,6 +2,7 @@
 
 use generational_arena::Arena;
 
+use super::follow_point;
 use super::keep_upright;
 use super::types::{Constraint, ConstraintKind, ConstraintRow};
 use crate::physics::body::RigidBody;
@@ -44,6 +45,42 @@ pub fn expand_constraints(
                     beta,
                     index,
                     &constraint.warm_impulses,
+                );
+                rows.extend(expanded);
+            }
+
+            ConstraintKind::FollowPoint {
+                body_a,
+                local_anchor_a,
+                body_b,
+                local_anchor_b,
+                compliance,
+                max_impulse,
+                relative_orientation,
+                angular_compliance,
+                angular_max_impulse,
+            } => {
+                let Some(rigid_body_a) = bodies.get(body_a.0) else {
+                    continue;
+                };
+                let Some(rigid_body_b) = bodies.get(body_b.0) else {
+                    continue;
+                };
+                let expanded = follow_point::expand(
+                    rigid_body_a,
+                    *body_a,
+                    rigid_body_b,
+                    *body_b,
+                    local_anchor_a,
+                    local_anchor_b,
+                    *compliance,
+                    *max_impulse,
+                    relative_orientation,
+                    *angular_compliance,
+                    *angular_max_impulse,
+                    dt,
+                    beta,
+                    index,
                 );
                 rows.extend(expanded);
             }

@@ -173,6 +173,21 @@ impl BipedController {
             }
         }
 
+        // Apply grab hand override (after normal arm animation).
+        // Clamp to arm's reach from the shoulder so the IK solver doesn't
+        // stretch the arm when the hold point is farther than arm length.
+        if let Some(target) = self.state.grab_hand_target {
+            let shoulder = self.skeleton.right_shoulder;
+            let to_target = target - shoulder;
+            let dist = to_target.magnitude();
+            let max_reach = self.config.arm_length();
+            if dist > max_reach && dist > 1e-6 {
+                self.state.right_hand.position = shoulder + to_target * (max_reach / dist);
+            } else {
+                self.state.right_hand.position = target;
+            }
+        }
+
         // Update skeleton from state
         self.skeleton.update_from_state(&self.state, &self.config);
     }

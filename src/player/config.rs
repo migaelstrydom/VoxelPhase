@@ -11,6 +11,10 @@ pub struct PlayerConfig {
     /// Grace period after leaving ground where the character still behaves as grounded (seconds).
     /// Prevents ramp launches and enables coyote-time jumping.
     pub ground_grace_period: f32,
+    /// Proportional gain for the yaw angular velocity drive.
+    /// Higher = snappier turns when unloaded. When holding a heavy object,
+    /// the constraint reaction torque limits the actual turn rate regardless.
+    pub turn_aggression: f32,
 }
 
 impl Default for PlayerConfig {
@@ -20,6 +24,7 @@ impl Default for PlayerConfig {
             air_steer_speed: 8.0,
             jump_speed: 7.0,
             ground_grace_period: 0.08,
+            turn_aggression: 10.0,
         }
     }
 }

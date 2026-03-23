@@ -196,6 +196,7 @@ fn sphere_pushing_box_no_jitter() {
             Vector3::new(push_speed_x, vel.y, push_speed_z),
             Vector3::zeros(),
             500.0,
+            500.0,
         );
 
         // Narrowphase once per frame, then multiple substeps (matches game).
@@ -331,6 +332,7 @@ fn velocity_driven_sphere_against_wall_no_bounce() {
             sphere,
             Vector3::new(-drive_speed, vel_y, 0.0),
             Vector3::zeros(),
+            500.0,
             500.0,
         );
 
