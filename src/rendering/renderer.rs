@@ -128,10 +128,11 @@ impl Renderer {
             swapchain.color_target.view,
         )?;
 
-        // Create fire renderer (compute sim + transparent pass raymarching)
+        // Create fire renderer with shared sim pool
         let fire_renderer = FireRenderer::new(
             Arc::clone(&vulkan_context.device),
             pipeline.transparent_renderpass,
+            swapchain.depth_buffer.view,
         )?;
 
         Ok(Self {
@@ -655,9 +656,8 @@ impl Renderer {
             return;
         }
 
-        let mut fires: Vec<&mut ActiveFire> =
-            self.active_fires.iter_mut().map(|(_, f)| f).collect();
-        self.fire_renderer.simulate(cb, &mut fires, dt, total_time);
+        let fires: Vec<&ActiveFire> = self.active_fires.iter().map(|(_, f)| f).collect();
+        self.fire_renderer.simulate(cb, &fires, dt, total_time);
     }
 
     /// Render fire volumes via raymarching. Call during transparent pass,
@@ -700,31 +700,30 @@ impl Renderer {
         self.fire_renderer.render(cb, &fires, view_matrix, proj_matrix, camera_pos);
     }
 
-    /// Create GPU resources for a new fire and track it by entity.
+    /// Create a lightweight fire entry assigned to the least-used sim slot.
     pub fn create_active_fire(
         &mut self,
         entity: specs::Entity,
         volume_to_world: Matrix4<f32>,
         initial_fuel: f32,
-    ) -> EngineResult<()> {
-        let depth_view = self.swapchain.depth_buffer.view;
-        let fire = self.fire_renderer.create_fire(volume_to_world, initial_fuel, depth_view)?;
-        self.active_fires.push((entity, fire));
-        Ok(())
+    ) {
+        let slot = self.fire_renderer.assign_slot(&self.active_fires);
+        self.active_fires.push((
+            entity,
+            ActiveFire {
+                sim_slot: slot,
+                volume_to_world,
+                fuel_remaining: initial_fuel,
+                initial_fuel,
+                burn_time: 0.0,
+            },
+        ));
     }
 
     /// Remove the active fire associated with an entity.
-    /// Waits for the GPU to finish all in-flight commands, frees descriptor sets
-    /// back to their pools, then drops the fire's GPU resources.
+    /// No GPU cleanup needed — sim slots are permanent and shared.
     pub fn remove_active_fire(&mut self, entity: specs::Entity) {
-        let idx = self.active_fires.iter().position(|(e, _)| *e == entity);
-        if let Some(idx) = idx {
-            unsafe {
-                let _ = self.vulkan_context.device().device_wait_idle();
-            }
-            let (_, fire) = self.active_fires.remove(idx);
-            self.fire_renderer.free_fire_descriptors(&fire);
-        }
+        self.active_fires.retain(|(e, _)| *e != entity);
     }
 
     /// Render particles from the particle pool.

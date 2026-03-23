@@ -1,5 +1,7 @@
 use crate::biped::BipedController;
-use crate::components::{CameraComponent, ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Rotation};
+use crate::components::{
+    CameraComponent, ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Rotation,
+};
 use crate::debug::{DebugLines, DebugOverlays};
 use crate::fire::components::OnFire;
 use crate::model::Transform;
@@ -11,7 +13,9 @@ use crate::resources::textures::TextureManager;
 use crate::terrain::TerrainManager;
 use crate::water::{WaterGrid, WaveGrid};
 use nalgebra::{Matrix4, Vector3};
-use specs::{Entities, Join, Read, ReadExpect, ReadStorage, System, Write, WriteExpect, WriteStorage};
+use specs::{
+    Entities, Join, Read, ReadExpect, ReadStorage, System, Write, WriteExpect, WriteStorage,
+};
 
 pub struct RenderSystem;
 
@@ -130,23 +134,15 @@ impl<'a> System<'a> for RenderSystem {
                 let scale = fire_volume_scale(physics_world, rb);
                 let volume_to_world = fire_volume_to_world(&pos.0, &scale);
 
-                if let Err(e) = renderer.create_active_fire(
-                    entity,
-                    volume_to_world,
-                    on_fire.fuel_remaining,
-                ) {
-                    log::error!("RenderSystem: Failed to create fire: {}", e);
-                }
+                renderer.create_active_fire(entity, volume_to_world, on_fire.fuel_remaining);
             }
 
             // Update fuel and position on existing fires
             for (entity, on_fire, pos, rb) in
                 (&entities, &on_fires, &positions, &rigid_bodies).join()
             {
-                if let Some((_, fire)) = renderer
-                    .active_fires
-                    .iter_mut()
-                    .find(|(e, _)| *e == entity)
+                if let Some((_, fire)) =
+                    renderer.active_fires.iter_mut().find(|(e, _)| *e == entity)
                 {
                     fire.fuel_remaining = on_fire.fuel_remaining;
                     let scale = fire_volume_scale(physics_world, rb);
@@ -309,7 +305,13 @@ impl<'a> System<'a> for RenderSystem {
                 let fps = 1.0 / time.delta_seconds();
                 debug_lines.add("FPS", format!("{:.0}", fps));
                 if !renderer.active_fires.is_empty() {
-                    debug_lines.add("Fires", format!("{}", renderer.active_fires.len()));
+                    let fire_count = renderer.active_fires.len();
+                    let mut slot_counts = [0usize; crate::fire::renderer::SIM_POOL_SIZE];
+                    for (_, f) in &renderer.active_fires {
+                        slot_counts[f.sim_slot] += 1;
+                    }
+                    let active_slots = slot_counts.iter().filter(|&&c| c > 0).count();
+                    debug_lines.add("Fires", format!("{} ({} slots)", fire_count, active_slots));
                 }
 
                 // Render debug overlay (cleared in app.rs after all systems complete)
