@@ -110,10 +110,8 @@ impl Renderer {
         )?;
 
         // Create particle renderer (transparent pass)
-        let particle_renderer = ParticleRenderer::new(
-            Arc::clone(&vulkan_context),
-            pipeline.transparent_renderpass,
-        )?;
+        let particle_renderer =
+            ParticleRenderer::new(Arc::clone(&vulkan_context), pipeline.transparent_renderpass)?;
 
         // Create sky renderer (opaque pass)
         let sky_renderer = SkyRenderer::new(Arc::clone(&vulkan_context), pipeline.renderpass)?;
@@ -455,11 +453,7 @@ impl Renderer {
     /// water, particles, or overlay rendering.
     /// End the opaque render pass, blit the result to the swapchain image,
     /// transition the color target for sampling, and begin the transparent render pass.
-    pub fn begin_transparent_pass(
-        &self,
-        cb: vk::CommandBuffer,
-        image_index: u32,
-    ) {
+    pub fn begin_transparent_pass(&self, cb: vk::CommandBuffer, image_index: u32) {
         let device = self.vulkan_context.device();
         let extent = self.swapchain.extent;
         let src_image = self.swapchain.color_target.image;
@@ -578,9 +572,7 @@ impl Renderer {
             // Begin transparent render pass (loads existing color + depth).
             let render_pass_begin = vk::RenderPassBeginInfo::default()
                 .render_pass(self.pipeline.transparent_renderpass)
-                .framebuffer(
-                    self.swapchain.transparent_framebuffers[image_index as usize],
-                )
+                .framebuffer(self.swapchain.transparent_framebuffers[image_index as usize])
                 .render_area(extent.into());
 
             device.cmd_begin_render_pass(cb, &render_pass_begin, vk::SubpassContents::INLINE);

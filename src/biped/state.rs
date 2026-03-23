@@ -10,6 +10,9 @@ pub enum LocomotionMode {
     #[default]
     Idle,
     Walking,
+    /// Being pulled along by an external force (e.g. held heavy object)
+    /// without movement input. Uses walking animation for now.
+    Dragged,
     Falling,
 }
 

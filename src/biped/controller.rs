@@ -139,9 +139,10 @@ impl BipedController {
         pelvis_position: Point3<f32>,
         yaw: f32,
         velocity: Vector3<f32>,
+        wants_to_walk: bool,
         contacts: &[ContactCandidate],
     ) {
-        let speed = velocity.magnitude();
+        let speed = Vector3::new(velocity.x, 0.0, velocity.z).magnitude();
 
         // Update facing direction
         let facing = Vector3::new(yaw.sin(), 0.0, yaw.cos());
@@ -156,7 +157,7 @@ impl BipedController {
             self.state.left.ground_contact.is_some() || self.state.right.ground_contact.is_some();
 
         // Determine locomotion mode
-        let new_mode = self.determine_locomotion_mode(speed, has_ground_contact);
+        let new_mode = self.determine_locomotion_mode(speed, has_ground_contact, wants_to_walk);
         self.state.set_mode(new_mode, dt);
 
         // Update based on mode
@@ -165,7 +166,7 @@ impl BipedController {
                 stride_wheel::handle_idle(&mut self.state, &self.config);
                 self.update_idle_upper_body();
             }
-            LocomotionMode::Walking => {
+            LocomotionMode::Walking | LocomotionMode::Dragged => {
                 self.update_walking(dt, speed, velocity);
             }
             LocomotionMode::Falling => {
@@ -289,14 +290,33 @@ impl BipedController {
         }
     }
 
-    /// Determine locomotion mode from speed and contacts.
-    fn determine_locomotion_mode(&self, speed: f32, has_ground_contact: bool) -> LocomotionMode {
+    /// Determine locomotion mode from ground contact, movement intent, and velocity.
+    ///
+    /// Walking is driven by player input intent. When there is no input but the
+    /// body is still moving (e.g. dragged by a held heavy object), the Dragged
+    /// mode keeps legs animated until the body settles.
+    fn determine_locomotion_mode(
+        &self,
+        speed: f32,
+        has_ground_contact: bool,
+        wants_to_walk: bool,
+    ) -> LocomotionMode {
         if !has_ground_contact {
             LocomotionMode::Falling
-        } else if speed < self.config.idle_threshold {
-            LocomotionMode::Idle
-        } else {
+        } else if wants_to_walk {
             LocomotionMode::Walking
+        } else if self.state.mode == LocomotionMode::Dragged {
+            if self.state.mode_time > self.config.drag_settle_time
+                && speed < self.config.idle_threshold
+            {
+                LocomotionMode::Idle
+            } else {
+                LocomotionMode::Dragged
+            }
+        } else if speed > self.config.idle_threshold {
+            LocomotionMode::Dragged
+        } else {
+            LocomotionMode::Idle
         }
     }
 

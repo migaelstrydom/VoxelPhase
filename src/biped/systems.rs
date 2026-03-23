@@ -8,7 +8,7 @@ use super::controller::BipedController;
 use crate::components::{Position, Rotation, Velocity};
 use crate::debug::{DebugLines, DebugOverlays};
 use crate::player::grab::GrabConfig;
-use crate::player::{ArmState, Player, PlayerState};
+use crate::player::{ArmState, Player, PlayerState, PlayerTargetState};
 use crate::sensing::{ContactCandidates, SensorSet};
 use crate::time::Time;
 
@@ -64,6 +64,7 @@ impl<'a> System<'a> for BipedAnimationSystem {
         ReadStorage<'a, Position>,
         ReadStorage<'a, Rotation>,
         ReadStorage<'a, Velocity>,
+        ReadStorage<'a, PlayerTargetState>,
         ReadStorage<'a, ContactCandidates>,
         WriteStorage<'a, BipedController>,
         Write<'a, DebugLines>,
@@ -80,6 +81,7 @@ impl<'a> System<'a> for BipedAnimationSystem {
             positions,
             rotations,
             velocities,
+            target_states,
             candidates,
             mut controllers,
             mut _debug_lines,
@@ -88,13 +90,14 @@ impl<'a> System<'a> for BipedAnimationSystem {
 
         let dt = time.delta_seconds();
 
-        for (entity, _player, player_state, pos, rot, vel, controller) in (
+        for (entity, _player, player_state, pos, rot, vel, target, controller) in (
             &entities,
             &players,
             &player_states,
             &positions,
             &rotations,
             &velocities,
+            &target_states,
             &mut controllers,
         )
             .join()
@@ -103,13 +106,8 @@ impl<'a> System<'a> for BipedAnimationSystem {
             let yaw = rot.0;
 
             // Set grab hand target before animation update
-            controller.state.grab_hand_target = compute_grab_hand_target(
-                &player_state.arm,
-                pelvis_pos,
-                yaw,
-                &grab_config,
-            );
-
+            controller.state.grab_hand_target =
+                compute_grab_hand_target(&player_state.arm, pelvis_pos, yaw, &grab_config);
             // Get probe results
             let contacts = candidates
                 .get(entity)
@@ -118,11 +116,8 @@ impl<'a> System<'a> for BipedAnimationSystem {
 
             // Update the controller
             let velocity = nalgebra::Vector3::new(vel.0.x, vel.0.y, vel.0.z);
-            controller.update(dt, pelvis_pos, yaw, velocity, contacts);
-            // _debug_lines.add(
-            //     "Player/Position",
-            //     format!("{:.2}, {:.2}, {:.2}", pos.0.x, pos.0.y, pos.0.z),
-            // );
+            let wants_to_walk = target.direction.magnitude_squared() > 0.001;
+            controller.update(dt, pelvis_pos, yaw, velocity, wants_to_walk, contacts);
             // debug_lines.add(
             //     "WheelAngle",
             //     &format!(
@@ -170,9 +165,8 @@ fn compute_grab_hand_target(
             let reach_height = target
                 .map(|(_body, hit)| hit.y - pelvis_pos.y)
                 .unwrap_or(0.0);
-            let reach_target = pelvis_pos
-                + facing * config.hold_distance
-                + nalgebra::Vector3::y() * reach_height;
+            let reach_target =
+                pelvis_pos + facing * config.hold_distance + nalgebra::Vector3::y() * reach_height;
             let t = (elapsed / config.reach_duration).min(1.0);
             let rest_hand = pelvis_pos + nalgebra::Vector3::y() * 0.1;
             Some(nalgebra::Point3::from(
