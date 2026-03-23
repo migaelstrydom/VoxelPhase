@@ -90,6 +90,15 @@ impl ShaderManager {
         Self::load_shader(device, bytecode::WATER_FRAGMENT, ShaderStage::Fragment)
     }
 
+    /// Load a compute shader module from SPIR-V bytecode.
+    ///
+    /// Unlike vertex/fragment loaders, this takes raw bytecode because compute
+    /// shaders are owned by their respective subsystems (e.g. fire), not
+    /// centrally embedded in `ShaderManager`.
+    pub fn load_compute(device: &ManagedDevice, bytecode: &[u8]) -> EngineResult<vk::ShaderModule> {
+        Self::load_shader(device, bytecode, ShaderStage::Compute)
+    }
+
     /// Load a shader module from SPIR-V bytecode.
     fn load_shader(
         device: &ManagedDevice,

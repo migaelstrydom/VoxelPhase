@@ -109,6 +109,7 @@ pub enum ImageOperation {
 pub enum ShaderStage {
     Vertex,
     Fragment,
+    Compute,
 }
 
 impl fmt::Display for EngineError {
