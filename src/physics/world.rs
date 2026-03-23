@@ -224,6 +224,18 @@ impl PhysicsWorld {
         self.sleep_manager.sleeping_snapshot().into_iter().collect()
     }
 
+    /// Check whether a body is currently sleeping.
+    pub fn is_sleeping(&self, handle: RigidBodyHandle) -> bool {
+        self.sleep_manager.is_sleeping(handle)
+    }
+
+    /// Wake a sleeping body due to an external environmental change
+    /// (e.g. water surface moved under it). No-op if the body is already awake
+    /// or doesn't exist.
+    pub fn wake_body(&mut self, handle: RigidBodyHandle) {
+        self.sleep_manager.wake_body(handle);
+    }
+
     /// Apply one-shot impulses to all dynamic bodies.
     fn apply_impulses(&mut self, impulses: &[PhysicsImpulse]) {
         for (idx, body) in self.bodies.iter_mut() {

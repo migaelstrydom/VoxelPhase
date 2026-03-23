@@ -19,7 +19,7 @@ use crate::physics::{
 use crate::terrain::TerrainManager;
 use crate::time::Time;
 use crate::water::buoyancy::BuoyancyForceProvider;
-use crate::water::{WaterGrid, WaveGrid};
+use crate::water::{WaterGrid, WaterSleepTracker, WaveGrid};
 
 /// ECS resource wrapping the physics world and its stepping strategy.
 pub struct PhysicsResource {
@@ -50,8 +50,17 @@ impl Default for PhysicsResource {
 }
 
 /// Steps physics simulation and syncs state to ECS.
-#[derive(Default)]
-pub struct PhysicsSyncSystem;
+pub struct PhysicsSyncSystem {
+    water_sleep_tracker: WaterSleepTracker,
+}
+
+impl Default for PhysicsSyncSystem {
+    fn default() -> Self {
+        Self {
+            water_sleep_tracker: WaterSleepTracker::new(),
+        }
+    }
+}
 
 impl PhysicsSyncSystem {
     fn sync_kinematics_from_ecs(
@@ -183,6 +192,23 @@ impl<'a> System<'a> for PhysicsSyncSystem {
 
         let impulses: Vec<_> = impulse_queue.drain().collect();
 
+        // Wake sleeping bodies whose water surface has changed.
+        if let Some(ref flow_grid) = flow_opt {
+            let sleeping = physics.world.sleeping_bodies();
+            for handle in &sleeping {
+                if let Some(body) = physics.world.body(*handle) {
+                    if self.water_sleep_tracker.should_wake(
+                        *handle,
+                        flow_grid,
+                        wave_opt.as_deref(),
+                        body.position(),
+                    ) {
+                        physics.world.wake_body(*handle);
+                    }
+                }
+            }
+        }
+
         // Build per-substep force providers.
         let buoyancy_provider = flow_opt.as_ref().map(|flow_grid| {
             let affected: Vec<_> = (&bodies)
@@ -213,6 +239,27 @@ impl<'a> System<'a> for PhysicsSyncSystem {
                 );
                 physics_substeps = result.substeps;
                 physics.stepper = Some(stepper);
+            }
+        }
+
+        // Record water levels for awake buoyant bodies (used next frame
+        // to detect surface changes under sleeping bodies).
+        if let Some(ref flow_grid) = flow_opt {
+            for body_comp in (&bodies).join() {
+                let handle = body_comp.0;
+                if physics.world.is_sleeping(handle) {
+                    continue;
+                }
+                if let Some(body) = physics.world.body(handle) {
+                    if body.is_dynamic() {
+                        self.water_sleep_tracker.record(
+                            handle,
+                            flow_grid,
+                            wave_opt.as_deref(),
+                            body.position(),
+                        );
+                    }
+                }
             }
         }
 
