@@ -1,8 +1,8 @@
 [package]
-name = "rust_dude"
+name = "flipphase"
 version = "0.1.0"
 edition = "2021"
-default-run = "rust_dude"
+default-run = "flipphase"
 
 [dependencies]
 log = "0.4.21"

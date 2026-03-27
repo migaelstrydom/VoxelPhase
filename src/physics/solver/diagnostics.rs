@@ -11,7 +11,7 @@ use super::body_pair::BodyPairState;
 pub(crate) fn solver_diag_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| {
-        std::env::var("RUST_DUDE_SOLVER_DIAG")
+        std::env::var("FLIPPHASE_SOLVER_DIAG")
             .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
             .unwrap_or(false)
     })
@@ -20,7 +20,7 @@ pub(crate) fn solver_diag_enabled() -> bool {
 fn solver_diag_body_filter() -> Option<usize> {
     static BODY_FILTER: OnceLock<Option<usize>> = OnceLock::new();
     *BODY_FILTER.get_or_init(|| {
-        std::env::var("RUST_DUDE_SOLVER_DIAG_BODY_INDEX")
+        std::env::var("FLIPPHASE_SOLVER_DIAG_BODY_INDEX")
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
     })

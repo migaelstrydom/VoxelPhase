@@ -1,7 +1,7 @@
 use std::path::Path;
 
-use rust_dude::app::App;
-use rust_dude::core::error::EngineResult;
+use flipphase::app::App;
+use flipphase::core::error::EngineResult;
 
 const DEFAULT_LEVEL: &str = "levels/test_arena.level.ron";
 
@@ -15,10 +15,12 @@ fn setup_logging() {
 fn main() -> EngineResult<()> {
     setup_logging();
 
-    let level_path = std::env::args().nth(1).unwrap_or_else(|| DEFAULT_LEVEL.to_string());
-    log::info!("Starting RustDude — loading {}", level_path);
+    let level_path = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| DEFAULT_LEVEL.to_string());
+    log::info!("Starting Flipphase — loading {}", level_path);
 
-    match App::new(1200, 800, "RustDude Engine", Path::new(&level_path)) {
+    match App::new(1200, 800, "Flipphase", Path::new(&level_path)) {
         Ok(mut app) => {
             if let Err(e) = app.run() {
                 eprintln!("Application error: {}", e);

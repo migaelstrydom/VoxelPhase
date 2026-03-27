@@ -593,6 +593,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "flipphase"
+version = "0.1.0"
+dependencies = [
+ "ash",
+ "ash-window",
+ "env_logger",
+ "fontdue",
+ "generational-arena",
+ "image",
+ "log",
+ "nalgebra",
+ "noise",
+ "rand",
+ "raw-window-handle",
+ "ron",
+ "rustc-hash",
+ "serde",
+ "smallvec",
+ "specs",
+ "tracing-subscriber",
+ "winit",
+]
+
+[[package]]
 name = "foldhash"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1479,30 +1503,6 @@ dependencies = [
  "bitflags 2.9.0",
  "serde",
  "serde_derive",
-]
-
-[[package]]
-name = "rust_dude"
-version = "0.1.0"
-dependencies = [
- "ash",
- "ash-window",
- "env_logger",
- "fontdue",
- "generational-arena",
- "image",
- "log",
- "nalgebra",
- "noise",
- "rand",
- "raw-window-handle",
- "ron",
- "rustc-hash",
- "serde",
- "smallvec",
- "specs",
- "tracing-subscriber",
- "winit",
 ]
 
 [[package]]

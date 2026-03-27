@@ -30,20 +30,20 @@ use winit::event_loop::{ControlFlow, EventLoop, EventLoopWindowTarget};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::WindowBuilder;
 
-use rust_dude::collision::AABB;
-use rust_dude::core::error::EngineResult;
-use rust_dude::core::vulkan_context::VulkanContext;
-use rust_dude::debug::{DebugLines, DebugOverlays};
-use rust_dude::physics::bench_harness::framework::{BenchRunConfig, PhysicsBenchScenario};
-use rust_dude::physics::bench_harness::scenarios::*;
-use rust_dude::physics::stepping::FixedTimestep;
-use rust_dude::physics::{ColliderShape, PhysicsWorld, StaticGeometry};
-use rust_dude::rendering::camera::Camera;
-use rust_dude::rendering::colour::Colour;
-use rust_dude::rendering::debug_render::render_debug_overlays;
-use rust_dude::rendering::material::MaterialManagerBuilder;
-use rust_dude::rendering::renderer::Renderer;
-use rust_dude::resources::manager::ResourceManager;
+use flipphase::collision::AABB;
+use flipphase::core::error::EngineResult;
+use flipphase::core::vulkan_context::VulkanContext;
+use flipphase::debug::{DebugLines, DebugOverlays};
+use flipphase::physics::bench_harness::framework::{BenchRunConfig, PhysicsBenchScenario};
+use flipphase::physics::bench_harness::scenarios::*;
+use flipphase::physics::stepping::FixedTimestep;
+use flipphase::physics::{ColliderShape, PhysicsWorld, StaticGeometry};
+use flipphase::rendering::camera::Camera;
+use flipphase::rendering::colour::Colour;
+use flipphase::rendering::debug_render::render_debug_overlays;
+use flipphase::rendering::material::MaterialManagerBuilder;
+use flipphase::rendering::renderer::Renderer;
+use flipphase::resources::manager::ResourceManager;
 
 fn main() -> EngineResult<()> {
     env_logger::Builder::new()
@@ -195,12 +195,12 @@ fn run_with_scenario<S: PhysicsBenchScenario>(scenario: &S) -> EngineResult<()> 
     let height = 800u32;
 
     let event_loop = EventLoop::new()
-        .map_err(|e| rust_dude::core::error::EngineError::Window(format!("{}", e)))?;
+        .map_err(|e| flipphase::core::error::EngineError::Window(format!("{}", e)))?;
     let window = WindowBuilder::new()
         .with_title(format!("Bench Viewer — {}", scenario.name()))
         .with_inner_size(LogicalSize::new(f64::from(width), f64::from(height)))
         .build(&event_loop)
-        .map_err(|e| rust_dude::core::error::EngineError::Window(format!("{}", e)))?;
+        .map_err(|e| flipphase::core::error::EngineError::Window(format!("{}", e)))?;
 
     let vulkan_context = Arc::new(VulkanContext::new(&window)?);
     let mut renderer = Renderer::new(Arc::clone(&vulkan_context), &window, width, height)?;
@@ -212,7 +212,7 @@ fn run_with_scenario<S: PhysicsBenchScenario>(scenario: &S) -> EngineResult<()> 
     let fallback_white = texture_manager
         .create_solid_colour(Colour::WHITE)
         .map_err(|e| {
-            rust_dude::core::error::EngineError::InvalidState(format!(
+            flipphase::core::error::EngineError::InvalidState(format!(
                 "Failed to create fallback texture: {}",
                 e
             ))
@@ -351,7 +351,7 @@ fn run_with_scenario<S: PhysicsBenchScenario>(scenario: &S) -> EngineResult<()> 
         vulkan_context.device().device_wait_idle().ok();
     }
 
-    run_result.map_err(|e| rust_dude::core::error::EngineError::Window(format!("{}", e)))?;
+    run_result.map_err(|e| flipphase::core::error::EngineError::Window(format!("{}", e)))?;
     Ok(())
 }
 
@@ -394,7 +394,8 @@ fn handle_key<S: PhysicsBenchScenario>(
             let _ = scenario.setup(&mut state.world);
             state.sim_time = 0.0;
             state.physics_steps = 0;
-            state.timestep = FixedTimestep::new(state.cfg.fixed_dt, state.cfg.max_substeps_per_frame as u32);
+            state.timestep =
+                FixedTimestep::new(state.cfg.fixed_dt, state.cfg.max_substeps_per_frame as u32);
             state.paused = false;
         }
 
@@ -427,12 +428,9 @@ fn step_physics<S: PhysicsBenchScenario>(state: &mut ViewerState, real_dt: f32, 
 
     // Contact generation once per frame
     let impulses = scenario.external_impulses(state.sim_time);
-    state.world.update_contacts(
-        fixed_dt,
-        scenario.geometry(),
-        &impulses,
-        &mut debug_lines,
-    );
+    state
+        .world
+        .update_contacts(fixed_dt, scenario.geometry(), &impulses, &mut debug_lines);
 
     for _ in 0..substeps {
         state.world.substep(fixed_dt, scenario.geometry(), &[]);
