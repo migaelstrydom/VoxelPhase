@@ -103,6 +103,10 @@ pub struct PlayerTargetState {
     pub grab_just_pressed: bool,
     /// Grab button just released this frame.
     pub grab_just_released: bool,
+    /// Throw action (just pressed this frame). Written by PlayerInputSystem.
+    pub throw: bool,
+    /// Resolved by PlayerControlSystem: true when throw should spawn a grenade.
+    pub throw_grenade: bool,
 }
 
 impl Default for PlayerTargetState {
@@ -113,6 +117,8 @@ impl Default for PlayerTargetState {
             grab_held: false,
             grab_just_pressed: false,
             grab_just_released: false,
+            throw: false,
+            throw_grenade: false,
         }
     }
 }

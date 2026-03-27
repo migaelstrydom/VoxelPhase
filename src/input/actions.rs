@@ -27,8 +27,9 @@ pub struct GameplayActions {
     /// Zoom camera out (E key)
     pub zoom_out: bool,
 
-    /// Throw grenade (just pressed this frame)
-    pub throw_grenade: bool,
+    /// Throw action (just pressed this frame). Context-dependent: grab-throw
+    /// if holding an object, grenade throw otherwise.
+    pub throw: bool,
 
     /// Grab button held this frame.
     pub grab_held: bool,
@@ -62,7 +63,7 @@ impl GameplayActions {
             zoom_out: input.is_key_pressed(KeyCode::KeyE),
 
             // Combat actions
-            throw_grenade: (input.is_key_just_pressed(KeyCode::ShiftLeft)
+            throw: (input.is_key_just_pressed(KeyCode::ShiftLeft)
                 || input.is_mouse_button_just_pressed(MouseButton::Left))
                 && input.is_mouse_captured(),
 

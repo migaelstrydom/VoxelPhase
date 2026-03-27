@@ -54,7 +54,7 @@ impl Default for GrabConfig {
             angular_max_impulse: 500.0,
             lift_speed: 0.5,
             reach_duration: 0.15,
-            throw_impulse: 15.0,
+            throw_impulse: 1000.0,
             debug_draw: false,
         }
     }

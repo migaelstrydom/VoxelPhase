@@ -1,7 +1,6 @@
 use crate::biped::BipedController;
 use crate::components::{Position, RigidBodyComponent, Rotation, Velocity, VelocityDriven};
 use crate::debug::{DebugLines, DebugOverlays};
-use crate::input::GameplayActions;
 use crate::player::grab::{self, GrabConfig};
 use crate::player::{
     ArmState, LocomotionState, Player, PlayerConfig, PlayerState, PlayerTargetState,
@@ -28,10 +27,9 @@ impl<'a> System<'a> for PlayerControlSystem {
         Read<'a, Time>,
         ReadExpect<'a, PlayerConfig>,
         ReadExpect<'a, GrabConfig>,
-        ReadExpect<'a, GameplayActions>,
         Write<'a, PhysicsResource>,
         ReadStorage<'a, Player>,
-        ReadStorage<'a, PlayerTargetState>,
+        WriteStorage<'a, PlayerTargetState>,
         WriteStorage<'a, PlayerState>,
         ReadStorage<'a, BipedController>,
         ReadStorage<'a, Position>,
@@ -48,10 +46,9 @@ impl<'a> System<'a> for PlayerControlSystem {
             time,
             config,
             grab_config,
-            actions,
             mut physics_res,
             players,
-            player_targets,
+            mut player_targets,
             mut player_states,
             controllers,
             positions,
@@ -66,7 +63,7 @@ impl<'a> System<'a> for PlayerControlSystem {
 
         for (_player, target, state, controller, pos, rb, rotation, vel, vd) in (
             &players,
-            &player_targets,
+            &mut player_targets,
             &mut player_states,
             &controllers,
             &positions,
@@ -183,6 +180,7 @@ impl<'a> System<'a> for PlayerControlSystem {
             let facing = facing_from_rotation(rotation.0);
             let player_pos = Point3::new(pos.0.x, pos.0.y, pos.0.z);
 
+            let was_holding = matches!(state.arm, ArmState::Holding { .. });
             state.arm = match state.arm {
                 ArmState::Idle => {
                     if target.grab_just_pressed {
@@ -239,7 +237,7 @@ impl<'a> System<'a> for PlayerControlSystem {
                     } else if target.grab_just_released || !target.grab_held {
                         grab::release(&mut physics_res.world, constraint);
                         ArmState::Idle
-                    } else if actions.throw_grenade {
+                    } else if target.throw {
                         grab::throw(
                             &mut physics_res.world,
                             target_body,
@@ -265,6 +263,12 @@ impl<'a> System<'a> for PlayerControlSystem {
                     }
                 }
             };
+
+            // Resolve throw intent: if throw wasn't consumed by a grab-throw
+            // (arm was Holding), pass it through as a grenade throw.
+            if target.throw && !was_holding {
+                target.throw_grenade = true;
+            }
 
             // --- Debug visualization ---
             if grab_config.debug_draw {

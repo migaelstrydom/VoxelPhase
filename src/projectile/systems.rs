@@ -16,10 +16,9 @@ use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
 };
 use crate::explosion::Explosion;
-use crate::input::GameplayActions;
 use crate::model::Model;
 use crate::physics::{ColliderDesc, ContactEvent, RigidBodyDesc, RigidBodyHandle};
-use crate::player::{ArmState, Player, PlayerState};
+use crate::player::{Player, PlayerTargetState};
 use crate::systems::PhysicsResource;
 use crate::time::Time;
 
@@ -71,14 +70,13 @@ pub struct GrenadeSpawnSystem;
 impl<'a> System<'a> for GrenadeSpawnSystem {
     type SystemData = (
         Entities<'a>,
-        ReadExpect<'a, GameplayActions>,
         ReadExpect<'a, GrenadeConfig>,
         ReadExpect<'a, Time>,
         Write<'a, PhysicsResource>,
         Write<'a, GrenadeCooldown>,
         Read<'a, GrenadeModelResource>,
         ReadStorage<'a, Player>,
-        ReadStorage<'a, PlayerState>,
+        ReadStorage<'a, PlayerTargetState>,
         ReadStorage<'a, Position>,
         ReadStorage<'a, FollowTarget>,
         Read<'a, LazyUpdate>,
@@ -87,14 +85,13 @@ impl<'a> System<'a> for GrenadeSpawnSystem {
     fn run(&mut self, data: Self::SystemData) {
         let (
             entities,
-            actions,
             config,
             time,
             mut physics,
             mut cooldown,
             grenade_model,
             players,
-            player_states,
+            player_targets,
             positions,
             follow_targets,
             lazy,
@@ -103,15 +100,12 @@ impl<'a> System<'a> for GrenadeSpawnSystem {
         // Update cooldown
         cooldown.remaining = (cooldown.remaining - time.delta_seconds()).max(0.0);
 
-        if !actions.throw_grenade {
-            return;
-        }
-
-        // Suppress grenade while holding a grabbed object (left-click is consumed by throw)
-        let is_holding = (&players, &player_states)
+        // throw_grenade is resolved by PlayerControlSystem — only true when the
+        // throw action was not consumed by a grab-throw.
+        let should_throw = (&players, &player_targets)
             .join()
-            .any(|(_, state)| matches!(state.arm, ArmState::Holding { .. }));
-        if is_holding {
+            .any(|(_, target)| target.throw_grenade);
+        if !should_throw {
             return;
         }
 

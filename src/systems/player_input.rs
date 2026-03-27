@@ -72,6 +72,8 @@ impl<'a> System<'a> for PlayerInputSystem {
             target.grab_held = actions.grab_held;
             target.grab_just_pressed = actions.grab_just_pressed;
             target.grab_just_released = actions.grab_just_released;
+            target.throw = actions.throw;
+            target.throw_grenade = false;
         }
     }
 }

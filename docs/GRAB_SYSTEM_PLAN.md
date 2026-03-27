@@ -179,7 +179,7 @@ pub struct GrabConfig {
     pub angular_compliance: f32,    // 0.0   — angular softness
     pub angular_max_impulse: f32,   // 50.0  — angular torque clamp
     pub reach_duration: f32,        // 0.15  — reach animation time
-    pub throw_impulse: f32,         // 15.0  — throw forward impulse
+    pub throw_impulse: f32,         // 1000.0 — throw forward impulse
     pub debug_draw: bool,           // true  — debug overlays
 }
 ```
@@ -472,9 +472,16 @@ grab_just_pressed: input.is_mouse_button_just_pressed(MouseButton::Right)
 grab_just_released: input.is_mouse_button_just_released(MouseButton::Right),
 ```
 
-### Grenade suppression while holding
+### Throw intent routing
 
-When in `Holding` arm state and left-click is pressed, the throw consumes the input. This can be done by checking the arm state in whatever system handles grenade spawning, or by gating `throw_grenade` in `GameplayActions` on the arm state not being `Holding`.
+Left-click is a context-dependent action: it throws a held object if grabbing, or throws a grenade if not. The intent flows through three layers:
+
+1. **`GameplayActions`** — raw input mapping. `throw` (was `throw_grenade`) is true when left-click is just pressed. It does not know what kind of throw.
+2. **`PlayerInputSystem`** — copies `GameplayActions::throw` onto `PlayerTargetState::throw`.
+3. **`PlayerControlSystem`** — resolves `throw` based on arm state. If `Holding`, consumes it for a grab-throw. Otherwise, sets `PlayerTargetState::throw_grenade = true`.
+4. **`GrenadeSpawnSystem`** — reads `PlayerTargetState::throw_grenade`. No `GameplayActions` dependency, no `ArmState` check needed.
+
+This eliminates the ordering race between `PlayerControlSystem` and `GrenadeSpawnSystem` — `PlayerControlSystem` always runs first (via the dispatcher dependency chain) and the resolved `throw_grenade` flag is unambiguous.
 
 ---
 
@@ -499,6 +506,8 @@ When left-click is pressed during `Holding`:
 4. Transition arm to `Idle`.
 
 The impulse is applied via `body.apply_impulse()`, which correctly accounts for mass — a heavy box gets less velocity than a light beach ball from the same impulse, which feels physical.
+
+**Throw impulse tuning.** The original value (15.0) was far too low — `apply_impulse` multiplies by `inv_mass`, so a 50 kg box got only 0.3 m/s. Bumped to 1000.0. Light objects (beach balls) now fly fast, which is balanced by `linear_damping` on the body (beach ball: 0.5). Air drag scales with `inv_mass`, so light objects bleed speed quickly while heavy objects are barely affected.
 
 A throw animation for the right hand (forward flick) can be added later as polish, but the basic mechanic works without it.
 
@@ -641,7 +650,7 @@ All planned features are implemented. The grab system is feature-complete.
 
 **PlayerControlSystem split into its own file.** The plan suggested renaming `PlayerMotionSystem` to `PlayerControlSystem` in the same file. Instead, `PlayerControlSystem` was extracted to `src/systems/player_control.rs` and `PlayerInputSystem` stays in `src/systems/player_input.rs`. This keeps the growing control system (locomotion + arm state transitions + grab logic) separate from the simple input-to-intent mapping.
 
-**Grenade suppression uses PlayerState in GrenadeSpawnSystem.** The plan suggested either checking arm state in the grenade system or gating `throw_grenade` in `GameplayActions`. The implementation reads `PlayerState` in `GrenadeSpawnSystem` and suppresses spawning when `ArmState::Holding`.
+**Throw intent routed through PlayerTargetState.** `GameplayActions::throw_grenade` was renamed to `throw` (context-neutral). `PlayerInputSystem` writes it to `PlayerTargetState::throw`. `PlayerControlSystem` resolves it: if `Holding`, consumes it for a grab-throw; otherwise sets `PlayerTargetState::throw_grenade = true`. `GrenadeSpawnSystem` reads only the resolved `throw_grenade` flag — no `GameplayActions`, `ArmState`, or `PlayerState` dependency. This replaced the earlier approach of checking `ArmState::Holding` in `GrenadeSpawnSystem`, which had an ordering race (grenade system always ran after player control, so the arm was already `Idle` on the throw frame).
 
 **GrabConfig is a separate ECS resource.** Rather than adding grab parameters to `PlayerConfig`, grab configuration lives in its own `GrabConfig` resource in `src/player/grab.rs`. This follows the project's preference for moving configuration into the component that owns it.
 

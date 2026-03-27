@@ -60,7 +60,7 @@ pub fn spawn_beach_ball(
         let body_desc = RigidBodyDesc::dynamic()
             .position(initial_pos)
             .gravity_scale(1.0)
-            .linear_damping(0.001)
+            .linear_damping(0.5)
             .angular_damping(0.002);
 
         let body_handle = physics.world.create_body(body_desc);
