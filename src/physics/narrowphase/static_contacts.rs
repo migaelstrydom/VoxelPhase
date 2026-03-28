@@ -61,7 +61,9 @@ pub fn generate_static_contacts(
                 continue;
             };
 
-            let center = collider.world_center(body.position(), body.rotation());
+            let world_tf = collider.world_transform(body.position(), body.rotation());
+            let center = Point3::from(world_tf.translation.vector);
+            let rotation = world_tf.rotation;
             let linear_velocity = body.linear_velocity();
             let speed = linear_velocity.magnitude();
 
@@ -71,7 +73,7 @@ pub fn generate_static_contacts(
                 }
                 ColliderShape::Box { half_extents } => box_vs_static(
                     center,
-                    body.rotation(),
+                    rotation,
                     *half_extents,
                     static_geometry,
                     contact_margin,
@@ -81,7 +83,7 @@ pub fn generate_static_contacts(
                     radius,
                 } => capsule_vs_static(
                     center,
-                    body.rotation(),
+                    rotation,
                     *half_height,
                     *radius,
                     static_geometry,

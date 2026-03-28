@@ -56,31 +56,46 @@ impl CcdStrategy for SweepClampCcd {
                 }
                 true
             })
-            .filter_map(|(idx, body)| {
+            .flat_map(|(idx, body)| {
                 let handle = RigidBodyHandle(idx);
                 if ctx.narrowphase_handled.contains(&handle) {
-                    return None;
+                    return SmallVec::<[CcdCandidate; 4]>::new();
                 }
-                let collider_handle = *body.colliders().first()?;
-                let collider = ctx.colliders.get(collider_handle.0)?;
-                let radius = collider.shape().bounding_radius();
                 let speed = body.linear_velocity().magnitude();
-                if speed * dt <= radius * ctx.ccd_threshold {
-                    return None;
-                }
-                let &(pre_pos, pre_rot) = ctx.pre_states.get(&idx)?;
+                let &(pre_pos, pre_rot) = match ctx.pre_states.get(&idx) {
+                    Some(s) => s,
+                    None => return SmallVec::new(),
+                };
                 let post_pos = body.position();
-                Some(CcdCandidate {
-                    body_handle: handle,
-                    radius,
-                    shape: collider.shape().clone(),
-                    material: *collider.material(),
-                    pre_body_pos: pre_pos,
-                    post_body_pos: post_pos,
-                    pre_rot,
-                    pre_center: collider.world_center(pre_pos, pre_rot),
-                    post_center: collider.world_center(post_pos, body.rotation()),
-                })
+                let post_rot = body.rotation();
+
+                let mut out = SmallVec::<[CcdCandidate; 4]>::new();
+                for collider_handle in body.colliders() {
+                    let Some(collider) = ctx.colliders.get(collider_handle.0) else {
+                        continue;
+                    };
+                    let radius = collider.shape().bounding_radius();
+                    if speed * dt <= radius * ctx.ccd_threshold {
+                        continue;
+                    }
+                    let pre_center =
+                        Point3::from(collider.world_transform(pre_pos, pre_rot).translation.vector);
+                    let post_center = Point3::from(
+                        collider.world_transform(post_pos, post_rot).translation.vector,
+                    );
+                    out.push(CcdCandidate {
+                        body_handle: handle,
+                        radius,
+                        shape: collider.shape().clone(),
+                        material: *collider.material(),
+                        pre_body_pos: pre_pos,
+                        post_body_pos: post_pos,
+                        pre_rot,
+                        pre_center,
+                        post_center,
+                    });
+                }
+                out
             })
             .collect();
 
@@ -101,7 +116,9 @@ impl CcdStrategy for SweepClampCcd {
                 let post_rot = body.rotation();
                 hit_rot = candidate.pre_rot.slerp(&post_rot, hit.t);
                 if let ColliderShape::Box { half_extents } = &candidate.shape {
-                    let obb = Obb::new(hit_pos, hit_rot, *half_extents);
+                    let hit_center = candidate.pre_center
+                        + (candidate.post_center - candidate.pre_center) * hit.t;
+                    let obb = Obb::new(hit_center, hit_rot, *half_extents);
                     let support = obb.project_half_extent(&hit.normal);
                     let extra = (candidate.radius - support).max(0.0);
                     hit_pos -= hit.normal * extra;

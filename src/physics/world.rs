@@ -778,10 +778,19 @@ impl PhysicsWorld {
 
         for ch in &collider_handles {
             if let Some(collider) = self.colliders.get(ch.0) {
-                total_mass += collider.mass();
-                // For now, just add local inertias (ignoring offset transforms)
-                // A proper implementation would use parallel axis theorem
-                total_inertia += collider.local_inertia();
+                let m = collider.mass();
+                total_mass += m;
+
+                // Rotate the local inertia tensor into the body frame.
+                let r = collider.offset().rotation.to_rotation_matrix();
+                let rotated_inertia = r * collider.local_inertia() * r.transpose();
+
+                // Parallel axis theorem: shift inertia to body center of mass.
+                let d = collider.offset().translation.vector;
+                let d_sq = d.dot(&d);
+                let steiner = m * (d_sq * Matrix3::identity() - d * d.transpose());
+
+                total_inertia += rotated_inertia + steiner;
             }
         }
 

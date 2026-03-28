@@ -4,8 +4,9 @@ use nalgebra::{Point3, Vector3};
 use specs::World;
 
 use crate::app::spawners::{
-    create_box_material_for_style, create_capsule_material, spawn_beach_ball, spawn_box,
-    spawn_capsule, spawn_house, spawn_player, BoxPhysics, CapsulePhysics,
+    create_box_material_for_style, create_capsule_material, create_table_material,
+    spawn_beach_ball, spawn_box, spawn_capsule, spawn_house, spawn_player, spawn_table,
+    BoxPhysics, CapsulePhysics, TableDimensions, TablePhysics,
 };
 use crate::collision::AABB;
 use crate::core::error::EngineResult;
@@ -27,6 +28,8 @@ pub struct LevelMaterials {
     pub house_materials: Vec<MaterialId>,
     /// Pre-created capsule materials, one per capsule in the level.
     pub capsule_materials: Vec<MaterialId>,
+    /// Pre-created table materials, one per table in the level.
+    pub table_materials: Vec<MaterialId>,
 }
 
 /// Coarsening factor applied to the voxel size for the flow grid cell size.
@@ -48,6 +51,7 @@ pub fn create_level_materials(
 ) -> EngineResult<LevelMaterials> {
     let mut box_materials = Vec::new();
     let mut capsule_materials = Vec::new();
+    let mut table_materials = Vec::new();
 
     for obj in &level.objects {
         collect_box_materials(obj, texture_manager, material_builder, &mut box_materials)?;
@@ -57,6 +61,9 @@ pub fn create_level_materials(
             material_builder,
             &mut capsule_materials,
         )?;
+        if matches!(obj, LevelObject::Table { .. }) {
+            table_materials.push(create_table_material(texture_manager, material_builder)?);
+        }
     }
 
     Ok(LevelMaterials {
@@ -64,6 +71,7 @@ pub fn create_level_materials(
         box_materials,
         house_materials,
         capsule_materials,
+        table_materials,
     })
 }
 
@@ -158,7 +166,7 @@ fn collect_box_materials(
             }
         }
 
-        LevelObject::House { .. } | LevelObject::Capsule { .. } => {}
+        LevelObject::House { .. } | LevelObject::Capsule { .. } | LevelObject::Table { .. } => {}
     }
     Ok(())
 }
@@ -228,6 +236,7 @@ pub fn spawn_level_objects(
 
     let mut box_mat_idx = 0;
     let mut capsule_mat_idx = 0;
+    let mut table_mat_idx = 0;
 
     for obj in &level.objects {
         spawn_object(
@@ -236,19 +245,21 @@ pub fn spawn_level_objects(
             materials,
             &mut box_mat_idx,
             &mut capsule_mat_idx,
+            &mut table_mat_idx,
         );
     }
 
     player_entity
 }
 
-/// Spawn a single level object, advancing `box_mat_idx` for each box consumed.
+/// Spawn a single level object, advancing material indices as consumed.
 fn spawn_object(
     world: &mut World,
     obj: &LevelObject,
     materials: &LevelMaterials,
     box_mat_idx: &mut usize,
     capsule_mat_idx: &mut usize,
+    table_mat_idx: &mut usize,
 ) {
     match obj {
         LevelObject::BeachBall { pos } => {
@@ -493,6 +504,41 @@ fn spawn_object(
                 &phys,
             );
         }
+
+        LevelObject::Table {
+            pos,
+            top_half_extents,
+            leg_half_extents,
+            density,
+            restitution,
+            friction,
+        } => {
+            let mat = next_table_material(materials, table_mat_idx);
+            let dims = TableDimensions {
+                top_half_extents: Vector3::new(
+                    top_half_extents.0,
+                    top_half_extents.1,
+                    top_half_extents.2,
+                ),
+                leg_half_extents: Vector3::new(
+                    leg_half_extents.0,
+                    leg_half_extents.1,
+                    leg_half_extents.2,
+                ),
+            };
+            let phys = TablePhysics {
+                density: *density,
+                restitution: *restitution,
+                friction: *friction,
+            };
+            spawn_table(
+                world,
+                Point3::new(pos.0, pos.1, pos.2),
+                &dims,
+                mat,
+                &phys,
+            );
+        }
     }
 }
 
@@ -574,6 +620,13 @@ fn next_box_material(materials: &LevelMaterials, idx: &mut usize) -> MaterialId 
 /// Consume the next pre-created capsule material.
 fn next_capsule_material(materials: &LevelMaterials, idx: &mut usize) -> MaterialId {
     let mat = materials.capsule_materials[*idx];
+    *idx += 1;
+    mat
+}
+
+/// Consume the next pre-created table material.
+fn next_table_material(materials: &LevelMaterials, idx: &mut usize) -> MaterialId {
+    let mat = materials.table_materials[*idx];
     *idx += 1;
     mat
 }

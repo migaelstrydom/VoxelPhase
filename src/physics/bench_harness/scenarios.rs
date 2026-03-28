@@ -1093,3 +1093,100 @@ impl PhysicsBenchScenario for KeepUprightScenario {
         &self.geometry
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Scenarios: compound colliders
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// A table built from 5 box colliders (top + 4 legs) on a single body,
+/// dropped onto a flat surface. Exercises compound collider offset rotation,
+/// parallel axis theorem mass aggregation, and multi-collider narrowphase.
+#[derive(Debug, Clone)]
+pub struct CompoundTableScenario {
+    /// Half-extents of the table top.
+    pub top_half_extents: Vector3<f32>,
+    /// Half-extents of each leg.
+    pub leg_half_extents: Vector3<f32>,
+    /// Height to drop the table from (center of mass).
+    pub spawn_height: f32,
+    geometry: FlatGridGeometry,
+}
+
+impl CompoundTableScenario {
+    pub fn new() -> Self {
+        Self {
+            top_half_extents: Vector3::new(0.5, 0.025, 0.3),
+            leg_half_extents: Vector3::new(0.03, 0.175, 0.03),
+            spawn_height: 1.5,
+            geometry: FlatGridGeometry::new(8.0, 1.0),
+        }
+    }
+}
+
+impl PhysicsBenchScenario for CompoundTableScenario {
+    fn name(&self) -> &'static str {
+        "compound_table"
+    }
+
+    fn restitution(&self) -> f32 {
+        0.0
+    }
+
+    fn build_world(&self) -> PhysicsWorld {
+        let mut config = PhysicsConfig::default();
+        config.sleep.enabled = false;
+        config.deterministic_contact_ordering = true;
+        PhysicsWorld::new(config)
+    }
+
+    fn setup(&self, world: &mut PhysicsWorld) -> RigidBodyHandle {
+        let top_he = self.top_half_extents;
+        let leg_he = self.leg_half_extents;
+
+        // Table top sits at the top; legs hang below it.
+        // Body origin is at the geometric center of the table.
+        let table_height = leg_he.y * 2.0 + top_he.y * 2.0;
+        let top_y = table_height * 0.5 - top_he.y;
+        let leg_y = -top_he.y;
+
+        let body = world.create_body(
+            RigidBodyDesc::dynamic().position(Point3::new(0.0, self.spawn_height, 0.0)),
+        );
+
+        // Table top
+        let _ = world.attach_collider(
+            body,
+            ColliderDesc::box_shape(top_he)
+                .offset_translation(Vector3::new(0.0, top_y, 0.0))
+                .density(600.0)
+                .restitution(0.0)
+                .friction(0.5),
+        );
+
+        // Four legs at the corners of the table top
+        let leg_x = top_he.x - leg_he.x;
+        let leg_z = top_he.z - leg_he.z;
+        let leg_positions = [
+            Vector3::new(-leg_x, leg_y, -leg_z),
+            Vector3::new(leg_x, leg_y, -leg_z),
+            Vector3::new(-leg_x, leg_y, leg_z),
+            Vector3::new(leg_x, leg_y, leg_z),
+        ];
+        for &pos in &leg_positions {
+            let _ = world.attach_collider(
+                body,
+                ColliderDesc::box_shape(leg_he)
+                    .offset_translation(pos)
+                    .density(600.0)
+                    .restitution(0.0)
+                    .friction(0.5),
+            );
+        }
+
+        body
+    }
+
+    fn geometry(&self) -> &dyn StaticGeometry {
+        &self.geometry
+    }
+}

@@ -158,6 +158,18 @@ impl ColliderDesc {
         self.material.friction = friction;
         self
     }
+
+    /// Set the offset translation (position relative to body center of mass).
+    pub fn offset_translation(mut self, translation: Vector3<f32>) -> Self {
+        self.offset.translation.vector = translation;
+        self
+    }
+
+    /// Set the offset rotation (orientation relative to body frame).
+    pub fn offset_rotation(mut self, rotation: UnitQuaternion<f32>) -> Self {
+        self.offset.rotation = rotation;
+        self
+    }
 }
 
 /// A collider attached to a rigid body.
@@ -205,14 +217,27 @@ impl Collider {
         &self.local_inertia
     }
 
+    /// Local transform relative to the body.
+    pub fn offset(&self) -> &Isometry3<f32> {
+        &self.offset
+    }
+
+    /// Compose the body transform with this collider's local offset.
+    pub fn world_transform(
+        &self,
+        body_position: Point3<f32>,
+        body_rotation: UnitQuaternion<f32>,
+    ) -> Isometry3<f32> {
+        let body_iso = Isometry3::from_parts(body_position.coords.into(), body_rotation);
+        body_iso * self.offset
+    }
+
     /// Get the world-space center of the collider given the body's position.
     pub fn world_center(
         &self,
         body_position: Point3<f32>,
         body_rotation: UnitQuaternion<f32>,
     ) -> Point3<f32> {
-        let body_isometry = Isometry3::from_parts(body_position.coords.into(), body_rotation);
-        let world_offset = body_isometry * self.offset;
-        Point3::from(world_offset.translation.vector)
+        Point3::from(self.world_transform(body_position, body_rotation).translation.vector)
     }
 }

@@ -109,6 +109,7 @@ const SCENARIO_NAMES: &[&str] = &[
     "sliding_sphere",
     "low_friction_ramp",
     "keep_upright",
+    "compound_table",
 ];
 
 /// Builds a scenario by name and runs the viewer with it.
@@ -132,6 +133,7 @@ fn run_viewer(name: &str) -> EngineResult<()> {
         "sliding_sphere" => run_with_scenario(&SlidingSphereScenario::new()),
         "low_friction_ramp" => run_with_scenario(&LowFrictionRampScenario::new()),
         "keep_upright" => run_with_scenario(&KeepUprightScenario::new()),
+        "compound_table" => run_with_scenario(&CompoundTableScenario::new()),
         _ => {
             eprintln!("Unknown scenario: {}", name);
             eprintln!("Run with --list to see available scenarios.");
@@ -316,6 +318,8 @@ fn run_with_scenario<S: PhysicsBenchScenario>(scenario: &S) -> EngineResult<()> 
                             return;
                         }
 
+                        renderer.begin_opaque_pass(cb);
+
                         if let Err(e) = renderer.render_sky(cb, &view, &proj) {
                             log::error!("Failed to render sky: {}", e);
                         }
@@ -329,6 +333,8 @@ fn run_with_scenario<S: PhysicsBenchScenario>(scenario: &S) -> EngineResult<()> 
                         ) {
                             log::error!("Failed to render debug overlays: {}", e);
                         }
+
+                        renderer.begin_transparent_pass(cb, present_index);
 
                         if let Err(e) = renderer.render_overlay(cb, debug_lines.iter()) {
                             log::error!("Failed to render overlay: {}", e);
@@ -442,30 +448,30 @@ fn step_physics<S: PhysicsBenchScenario>(state: &mut ViewerState, real_dt: f32, 
 /// Draw rigid bodies as debug shapes based on their collider types.
 fn draw_bodies(world: &PhysicsWorld, overlays: &mut DebugOverlays) {
     for (_, body) in world.bodies().iter() {
-        let pos = body.position();
-        let rot = body.rotation();
-
         for &collider_handle in body.colliders() {
             let Some(collider) = world.collider(collider_handle) else {
                 continue;
             };
+            let world_tf = collider.world_transform(body.position(), body.rotation());
+            let center = Point3::from(world_tf.translation.vector);
+            let rot = world_tf.rotation;
+
             match collider.shape() {
                 ColliderShape::Sphere { radius } => {
-                    overlays.add_sphere(pos, *radius, Colour::new(0.2, 0.7, 1.0, 1.0));
+                    overlays.add_sphere(center, *radius, Colour::new(0.2, 0.7, 1.0, 1.0));
                 }
                 ColliderShape::Box { half_extents } => {
-                    draw_box_wireframe(overlays, pos, rot, *half_extents);
+                    draw_box_wireframe(overlays, center, rot, *half_extents);
                 }
                 ColliderShape::Capsule {
                     half_height,
                     radius,
                 } => {
-                    // Draw capsule as sphere at center + line showing extent
-                    overlays.add_sphere(pos, *radius, Colour::new(0.2, 1.0, 0.5, 1.0));
+                    overlays.add_sphere(center, *radius, Colour::new(0.2, 1.0, 0.5, 1.0));
                     let up = rot * Vector3::new(0.0, *half_height - *radius, 0.0);
                     overlays.add_line(
-                        Point3::from(pos.coords - up),
-                        Point3::from(pos.coords + up),
+                        Point3::from(center.coords - up),
+                        Point3::from(center.coords + up),
                         Colour::new(0.2, 1.0, 0.5, 1.0),
                     );
                 }

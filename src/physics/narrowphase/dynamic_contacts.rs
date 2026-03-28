@@ -155,6 +155,11 @@ pub fn generate_dynamic_contacts(
         let si = &buf.states[i];
         let sj = &buf.states[j];
 
+        // Skip pairs where both colliders belong to the same body (compound bodies).
+        if si.body_handle == sj.body_handle {
+            continue;
+        }
+
         match (&si.shape, &sj.shape) {
             (ColliderShape::Sphere { radius: ra }, ColliderShape::Sphere { radius: rb }) => {
                 sphere_sphere_pair(
@@ -398,11 +403,12 @@ fn collect_collider_states_into(
             let Some(collider) = colliders.get(collider_handle.0) else {
                 continue;
             };
+            let world_tf = collider.world_transform(body.position(), body.rotation());
             states.push(ColliderState {
                 body_handle,
                 collider_handle: *collider_handle,
-                center: collider.world_center(body.position(), body.rotation()),
-                rotation: body.rotation(),
+                center: Point3::from(world_tf.translation.vector),
+                rotation: world_tf.rotation,
                 shape: collider.shape().clone(),
                 bounding_radius: collider.shape().bounding_radius(),
                 velocity: body.linear_velocity(),

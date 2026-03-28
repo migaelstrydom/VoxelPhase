@@ -232,6 +232,22 @@ pub enum LevelObject {
         #[serde(default = "default_capsule_friction")]
         friction: f32,
     },
+    /// Table — compound body (top slab + 4 legs).
+    Table {
+        pos: (f32, f32, f32),
+        /// Half-extents of the table top (x, y_thickness, z).
+        #[serde(default = "default_table_top_half_extents")]
+        top_half_extents: (f32, f32, f32),
+        /// Half-extents of each leg.
+        #[serde(default = "default_table_leg_half_extents")]
+        leg_half_extents: (f32, f32, f32),
+        #[serde(default = "default_table_density")]
+        density: f32,
+        #[serde(default = "default_table_restitution")]
+        restitution: f32,
+        #[serde(default = "default_table_friction")]
+        friction: f32,
+    },
 }
 
 /// Items that can appear inside a `Stack`.
@@ -294,6 +310,26 @@ fn default_capsule_restitution() -> f32 {
 
 fn default_capsule_friction() -> f32 {
     0.6
+}
+
+fn default_table_top_half_extents() -> (f32, f32, f32) {
+    (0.5, 0.025, 0.3)
+}
+
+fn default_table_leg_half_extents() -> (f32, f32, f32) {
+    (0.03, 0.175, 0.03)
+}
+
+fn default_table_density() -> f32 {
+    600.0
+}
+
+fn default_table_restitution() -> f32 {
+    0.1
+}
+
+fn default_table_friction() -> f32 {
+    0.5
 }
 
 #[cfg(test)]
