@@ -25,7 +25,7 @@ use crate::time::Time;
 
 use super::dispatcher_builder::build_dispatcher;
 use super::event_handler::{clear_frame_state, set_mouse_captured, EventHandler, EventResult};
-use super::spawners::{create_box_materials, spawn_camera};
+use super::spawners::spawn_camera;
 use super::world_builder::WorldBuilder;
 
 pub struct App<'a, 'b> {
@@ -73,13 +73,8 @@ impl<'a, 'b> App<'a, 'b> {
             body: material_builder.register(Material::coloured(Colour::new(0.2, 0.25, 0.2, 1.0))),
         };
 
-        let house_materials =
-            create_box_materials(10, &texture_manager, &mut material_builder)?;
-
         let level_materials = create_level_materials(
             &level,
-            grenade_materials.body,
-            house_materials,
             &texture_manager,
             &mut material_builder,
         )?;

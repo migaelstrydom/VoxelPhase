@@ -1,0 +1,24 @@
+mod barricade;
+mod beach_ball;
+mod box_object;
+mod capsule;
+mod house;
+pub mod shared;
+mod spawnable;
+mod stack;
+mod table;
+mod trampoline;
+mod tower;
+mod wall;
+
+pub use barricade::BarricadeDef;
+pub use beach_ball::BeachBallDef;
+pub use box_object::{BoxDef, CrateDef, HeavyCrateDef, PlankDef};
+pub use capsule::CapsuleDef;
+pub use house::HouseDef;
+pub use spawnable::{MaterialCtx, Spawnable};
+pub use stack::{StackDef, StackItemDef};
+pub use table::TableDef;
+pub use trampoline::TrampolineDef;
+pub use tower::TowerDef;
+pub use wall::BoxWallDef;

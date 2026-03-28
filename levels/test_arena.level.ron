@@ -12,30 +12,60 @@ Level(
             (depth: 999.0, material: Rock),
         ],
         features: [
-            TerrainRoughness(frequency: 0.1, amplitude: 3.0, octaves: 3, seed: 42),
-            Crater(center: (0.0, 0.0), radius: 10.0, depth: 3.0),
+            //TerrainRoughness(frequency: 0.1, amplitude: 3.0, octaves: 3, seed: 42),
+            Crater(center: (-10.0, -1.0), radius: 20.0, depth: 5.0),
         ],
     ),
 
-    player_spawn: (0.0, 2.0, 0.0),
+    player_spawn: (3.0, 2.0, 0.0),
+
+    water: Some(WaterConfig(
+        ocean_level: None,
+        bodies: [
+            Pool(
+                seed: (-10.0, -1.5),
+                surface_level: -1.5,
+            ),
+        ],
+    )),
 
     objects: [
-        BeachBall(pos: (3.0, 5.0, 2.0)),
-        BeachBall(pos: (-2.0, 4.0, -1.0)),
-        BeachBall(pos: (1.0, 6.0, 4.0)),
-        BeachBall(pos: (-4.0, 3.0, -3.0)),
+        // BeachBall(pos: (3.0, 5.0, 2.0)),
+        // BeachBall(pos: (-2.0, 4.0, -1.0)),
+        // BeachBall(pos: (1.0, 6.0, 4.0)),
+        // BeachBall(pos: (-4.0, 3.0, -3.0)),
         BeachBall(pos: (2.0, 5.0, 0.0)),
+        // Capsule(pos: (0.0, 5.0, 0.0), half_height: 5.0, radius: 0.5),
+        Box(pos: (3.0, 1.0, 3.0), half_extents: (0.5, 0.5, 0.5), density: 200.0),
+        Plank(pos: (3.0, 0.0, 3.0), length: 3.0, width: 3.0),
+        Capsule(pos: (3.0, 3.0, 6.0), half_height: 3.0, radius: 0.5, density: 800.0),
+
+        Table(
+            pos: (3.0, 1.5, -2.0),
+            top_half_extents: (0.8, 0.03, 0.4),
+            leg_half_extents: (0.04, 0.25, 0.04),
+            density: 500.0,
+        ),
+
+        Barricade(
+            pos: (7.0, 0.0, -3.0),
+            plank_count: 1,
+        ),
+
+        Trampoline(
+            pos: (4.0, 0.0, -8.0),
+        ),
 
         // Stacked boxes (was 5 boxes at x=0, z=2)
-        Tower(
-            base: (0.0, -1.5, 2.0),
-            box_half_extents: (0.5, 0.5, 0.5),
-            count: 5,
-        ),
+        // Tower(
+        //     base: (0.0, -1.5, 2.0),
+        //     box_half_extents: (0.5, 0.5, 0.5),
+        //     count: 5,
+        // ),
 
-        House(
-            pos: (0.0, 10.0, 5.0),
-            half_extents: (0.5, 0.5, 0.5),
-        ),
+        // House(
+        //     pos: (0.0, 10.0, 5.0),
+        //     half_extents: (0.5, 0.5, 0.5),
+        // ),
     ],
 )

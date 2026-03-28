@@ -6,6 +6,11 @@
 
 use serde::Deserialize;
 
+use crate::app::spawnables::{
+    BarricadeDef, BeachBallDef, BoxDef, BoxWallDef, CapsuleDef, CrateDef, HeavyCrateDef, HouseDef,
+    PlankDef, StackDef, StackItemDef, TableDef, TrampolineDef, TowerDef, Spawnable,
+};
+
 /// Top-level level description.
 #[derive(Deserialize)]
 pub struct Level {
@@ -156,6 +161,13 @@ pub enum BoxStyle {
 }
 
 /// Objects that can be placed in a level.
+///
+/// Each variant maps to a RON-compatible format. The [`LevelObject::to_spawnable`]
+/// method converts any variant into a boxed [`Spawnable`] implementation.
+/// To add a new object type:
+/// 1. Create its `*Def` struct with a `Spawnable` impl in `src/app/spawnables/`.
+/// 2. Add a variant here with the same fields.
+/// 3. Add a conversion arm in `to_spawnable()`.
 #[derive(Deserialize)]
 pub enum LevelObject {
     BeachBall {
@@ -232,6 +244,27 @@ pub enum LevelObject {
         #[serde(default = "default_capsule_friction")]
         friction: f32,
     },
+    /// Barricade — two posts with planks welded across them.
+    Barricade {
+        pos: (f32, f32, f32),
+        /// Number of horizontal planks.
+        #[serde(default = "default_barricade_plank_count")]
+        plank_count: u32,
+        #[serde(default = "default_barricade_density")]
+        density: f32,
+    },
+    /// Trampoline — bouncy pad on four short legs.
+    Trampoline {
+        pos: (f32, f32, f32),
+        #[serde(default = "default_trampoline_pad_half_extents")]
+        pad_half_extents: (f32, f32, f32),
+        #[serde(default = "default_trampoline_leg_half_extents")]
+        leg_half_extents: (f32, f32, f32),
+        #[serde(default = "default_trampoline_density")]
+        density: f32,
+        #[serde(default = "default_trampoline_restitution")]
+        restitution: f32,
+    },
     /// Table — compound body (top slab + 4 legs).
     Table {
         pos: (f32, f32, f32),
@@ -248,6 +281,160 @@ pub enum LevelObject {
         #[serde(default = "default_table_friction")]
         friction: f32,
     },
+}
+
+impl LevelObject {
+    /// Convert this level object into a boxed [`Spawnable`].
+    ///
+    /// This bridges the RON deserialization format (named-field enum variants)
+    /// with the spawnable trait system. The allocation only happens at level
+    /// load time, not per frame.
+    pub fn to_spawnable(&self) -> Box<dyn Spawnable> {
+        match self {
+            LevelObject::BeachBall { pos } => Box::new(BeachBallDef { pos: *pos }),
+
+            LevelObject::Box {
+                pos,
+                half_extents,
+                style,
+                density,
+                restitution,
+                friction,
+            } => Box::new(BoxDef {
+                pos: *pos,
+                half_extents: *half_extents,
+                style: *style,
+                density: *density,
+                restitution: *restitution,
+                friction: *friction,
+            }),
+
+            LevelObject::Plank { pos, length, width } => Box::new(PlankDef {
+                pos: *pos,
+                length: *length,
+                width: *width,
+            }),
+
+            LevelObject::Crate { pos, size } => Box::new(CrateDef {
+                pos: *pos,
+                size: *size,
+            }),
+
+            LevelObject::HeavyCrate { pos, size } => Box::new(HeavyCrateDef {
+                pos: *pos,
+                size: *size,
+            }),
+
+            LevelObject::Stack { base, items } => Box::new(StackDef {
+                base: *base,
+                items: items.iter().map(|item| match item {
+                    StackItem::Crate { size } => StackItemDef::Crate { size: *size },
+                    StackItem::HeavyCrate { size } => StackItemDef::HeavyCrate { size: *size },
+                    StackItem::Plank { length, width } => StackItemDef::Plank {
+                        length: *length,
+                        width: *width,
+                    },
+                    StackItem::BeachBall => StackItemDef::BeachBall,
+                    StackItem::Capsule {
+                        half_height,
+                        radius,
+                    } => StackItemDef::Capsule {
+                        half_height: *half_height,
+                        radius: *radius,
+                    },
+                }).collect(),
+            }),
+
+            LevelObject::Tower {
+                base,
+                box_half_extents,
+                count,
+                density,
+            } => Box::new(TowerDef {
+                base: *base,
+                box_half_extents: *box_half_extents,
+                count: *count,
+                density: *density,
+            }),
+
+            LevelObject::BoxWall {
+                base,
+                box_half_extents,
+                columns,
+                rows,
+                density,
+                stagger,
+            } => Box::new(BoxWallDef {
+                base: *base,
+                box_half_extents: *box_half_extents,
+                columns: *columns,
+                rows: *rows,
+                density: *density,
+                stagger: *stagger,
+            }),
+
+            LevelObject::House { pos, half_extents } => Box::new(HouseDef {
+                pos: *pos,
+                half_extents: *half_extents,
+            }),
+
+            LevelObject::Capsule {
+                pos,
+                half_height,
+                radius,
+                density,
+                restitution,
+                friction,
+            } => Box::new(CapsuleDef {
+                pos: *pos,
+                half_height: *half_height,
+                radius: *radius,
+                density: *density,
+                restitution: *restitution,
+                friction: *friction,
+            }),
+
+            LevelObject::Barricade {
+                pos,
+                plank_count,
+                density,
+            } => Box::new(BarricadeDef {
+                pos: *pos,
+                plank_count: *plank_count,
+                density: *density,
+            }),
+
+            LevelObject::Trampoline {
+                pos,
+                pad_half_extents,
+                leg_half_extents,
+                density,
+                restitution,
+            } => Box::new(TrampolineDef {
+                pos: *pos,
+                pad_half_extents: *pad_half_extents,
+                leg_half_extents: *leg_half_extents,
+                density: *density,
+                restitution: *restitution,
+            }),
+
+            LevelObject::Table {
+                pos,
+                top_half_extents,
+                leg_half_extents,
+                density,
+                restitution,
+                friction,
+            } => Box::new(TableDef {
+                pos: *pos,
+                top_half_extents: *top_half_extents,
+                leg_half_extents: *leg_half_extents,
+                density: *density,
+                restitution: *restitution,
+                friction: *friction,
+            }),
+        }
+    }
 }
 
 /// Items that can appear inside a `Stack`.
@@ -310,6 +497,30 @@ fn default_capsule_restitution() -> f32 {
 
 fn default_capsule_friction() -> f32 {
     0.6
+}
+
+fn default_barricade_plank_count() -> u32 {
+    3
+}
+
+fn default_barricade_density() -> f32 {
+    400.0
+}
+
+fn default_trampoline_pad_half_extents() -> (f32, f32, f32) {
+    (1.8, 0.06, 1.8)
+}
+
+fn default_trampoline_leg_half_extents() -> (f32, f32, f32) {
+    (0.12, 0.36, 0.12)
+}
+
+fn default_trampoline_density() -> f32 {
+    300.0
+}
+
+fn default_trampoline_restitution() -> f32 {
+    1.5
 }
 
 fn default_table_top_half_extents() -> (f32, f32, f32) {
