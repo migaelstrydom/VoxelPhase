@@ -4,12 +4,12 @@
 use std::collections::HashMap;
 
 use generational_arena::{Arena, Index};
-use nalgebra::Point3;
+use nalgebra::{Point3, Vector3};
 
 use crate::physics::body::RigidBody;
+use crate::physics::constraint::expand::{expand_constraints, write_back_constraints};
+use crate::physics::constraint::types::{Constraint, ConstraintKind, ConstraintRow};
 use crate::physics::pipeline::pair::SolverManifold;
-
-use crate::physics::constraint::ConstraintRow;
 
 use super::body_pair::BodyPairState;
 use super::conditioning::ManifoldConditions;
@@ -36,6 +36,10 @@ pub struct PgsNgsConfig {
     pub block_normal_micro_iterations: u32,
     /// Position correction configuration.
     pub position_correction: PositionCorrectionConfig,
+    /// Position correction factor for joint constraints (beta).
+    /// Controls how aggressively constraint drift is corrected via Baumgarte
+    /// bias and KeepUpright hard projection.
+    pub constraint_position_beta: f32,
 }
 
 impl Default for PgsNgsConfig {
@@ -46,6 +50,7 @@ impl Default for PgsNgsConfig {
             warm_start_scale: 0.6,
             block_normal_micro_iterations: 4,
             position_correction: PositionCorrectionConfig::default(),
+            constraint_position_beta: 0.2,
         }
     }
 }
@@ -63,6 +68,9 @@ pub struct PgsNgsSolver {
     /// for position correction across multiple substeps so that stale
     /// `contact.depth` values don't cause re-correction.
     contact_generation_positions: HashMap<Index, Point3<f32>>,
+    /// Solver-ready constraint rows, expanded once per frame in `prepare`.
+    /// Reused across substeps within the same frame.
+    cached_constraint_rows: Vec<ConstraintRow>,
 }
 
 impl PgsNgsSolver {
@@ -70,6 +78,7 @@ impl PgsNgsSolver {
         Self {
             config,
             contact_generation_positions: HashMap::new(),
+            cached_constraint_rows: Vec::new(),
         }
     }
 }
@@ -81,7 +90,7 @@ impl Default for PgsNgsSolver {
 }
 
 impl ConstraintSolver for PgsNgsSolver {
-    fn prepare(&mut self, bodies: &Arena<RigidBody>) {
+    fn prepare(&mut self, bodies: &Arena<RigidBody>, constraints: &Arena<Constraint>, dt: f32) {
         self.contact_generation_positions.clear();
         for (idx, body) in bodies.iter() {
             if !body.is_static() {
@@ -89,6 +98,14 @@ impl ConstraintSolver for PgsNgsSolver {
                     .insert(idx, body.position());
             }
         }
+
+        expand_constraints(
+            constraints,
+            bodies,
+            dt,
+            self.config.constraint_position_beta,
+            &mut self.cached_constraint_rows,
+        );
     }
 
     fn solve(
@@ -96,9 +113,11 @@ impl ConstraintSolver for PgsNgsSolver {
         bodies: &mut Arena<RigidBody>,
         manifolds: &mut [SolverManifold],
         conditions: &ManifoldConditions,
-        constraint_rows: &mut [ConstraintRow],
+        constraints: &Arena<Constraint>,
         dt: f32,
     ) {
+        let constraint_rows = &mut self.cached_constraint_rows;
+
         if manifolds.is_empty() && constraint_rows.is_empty() {
             return;
         }
@@ -211,9 +230,63 @@ impl ConstraintSolver for PgsNgsSolver {
         position_correction::apply_position_correction(
             bodies,
             manifolds,
+            constraints,
             &self.config.position_correction,
             dt,
             &self.contact_generation_positions,
         );
+    }
+
+    fn write_back(&self, constraints: &mut Arena<Constraint>) {
+        write_back_constraints(constraints, &self.cached_constraint_rows);
+    }
+
+    fn project_velocities(
+        &self,
+        constraints: &Arena<Constraint>,
+        bodies: &mut Arena<RigidBody>,
+        dt: f32,
+    ) {
+        let beta = self.config.constraint_position_beta;
+
+        for (_index, constraint) in constraints.iter() {
+            if !constraint.active {
+                continue;
+            }
+
+            match &constraint.kind {
+                ConstraintKind::KeepUpright {
+                    body,
+                    target_up,
+                    compliance,
+                } => {
+                    if *compliance > 0.0 {
+                        continue;
+                    }
+
+                    let Some(body) = bodies.get_mut(body.0) else {
+                        continue;
+                    };
+
+                    let up = target_up.into_inner();
+                    let local_up = body.rotation() * Vector3::y();
+
+                    // Preserve only the spin component (rotation around target up)
+                    let omega = body.angular_velocity();
+                    let spin = omega.dot(&up) * up;
+
+                    // Corrective angular velocity to reduce tilt error.
+                    // The cross product local_up × target_up gives the rotation
+                    // axis and its magnitude equals sin(θ), which works correctly
+                    // at all angles (unlike the linearized dot-product Jacobian).
+                    let correction_axis = local_up.cross(&up);
+                    let correction = correction_axis * (beta / dt);
+
+                    body.set_angular_velocity(spin + correction);
+                }
+
+                ConstraintKind::Weld { .. } | ConstraintKind::FollowPoint { .. } => {}
+            }
+        }
     }
 }

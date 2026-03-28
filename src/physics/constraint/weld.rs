@@ -1,13 +1,11 @@
-//! FollowPoint constraint: drives a point on body_b toward a point on body_a,
-//! with angular rows that resist relative rotation.
+//! Weld constraint: locks two bodies at a fixed relative position and orientation.
 //!
 //! Produces 6 constraint rows:
-//! - 3 positional (X, Y, Z) with linear + angular Jacobians on both bodies.
-//! - 3 angular (X, Y, Z) with pure angular Jacobians that lock relative
-//!   orientation to the snapshot captured at grab time.
+//! - 3 positional (X, Y, Z): drive anchor points together.
+//! - 3 angular (X, Y, Z): drive relative orientation to the creation-time snapshot.
 //!
-//! Newton's third law is automatic — the solver applies equal and opposite
-//! impulses, so heavy held objects resist the anchor body's movement and turning.
+//! Unlike FollowPoint, weld joints use unbounded impulse limits and warm-start
+//! from cached impulses to achieve maximum stiffness within the PGS budget.
 
 use nalgebra::{UnitQuaternion, Vector3};
 
@@ -16,11 +14,10 @@ use crate::physics::handle::RigidBodyHandle;
 
 use super::types::ConstraintRow;
 
-/// Expand a two-body FollowPoint constraint into six solver rows.
+/// Expand a weld constraint into six solver rows.
 ///
-/// Rows 0–2: positional (X, Y, Z). Error = grab_point_b - hold_point_a.
-/// Rows 3–5: angular (X, Y, Z). Error = axis-angle of the orientation drift
-/// from the relative orientation captured at grab time.
+/// `warm_impulses` should have exactly 6 entries (one per row). They are copied
+/// into each row's `accumulated_impulse` for warm-starting.
 pub fn expand(
     body_a: &RigidBody,
     handle_a: RigidBodyHandle,
@@ -29,12 +26,11 @@ pub fn expand(
     local_anchor_a: &Vector3<f32>,
     local_anchor_b: &Vector3<f32>,
     compliance: f32,
-    max_impulse: f32,
     _relative_orientation: &UnitQuaternion<f32>,
     angular_compliance: f32,
-    angular_max_impulse: f32,
     dt: f32,
     constraint_index: generational_arena::Index,
+    warm_impulses: &[f32],
 ) -> [ConstraintRow; 6] {
     let inv_mass_a = body_a.inv_mass();
     let inv_inertia_a = body_a.world_inv_inertia();
@@ -64,8 +60,9 @@ pub fn expand(
     };
 
     core::array::from_fn(|i| {
+        let warm = warm_impulses.get(i).copied().unwrap_or(0.0);
+
         if i < 3 {
-            // Positional row
             let axis = axes[i];
             let ang_jac_a = -(r_a.cross(&axis));
             let ang_jac_b = r_b.cross(&axis);
@@ -83,16 +80,14 @@ pub fn expand(
                 ang_jac_b,
                 effective_mass_inv: eff_mass,
                 bias: 0.0,
-                accumulated_impulse: 0.0,
-                bounds: (-max_impulse, max_impulse),
+                accumulated_impulse: warm,
+                bounds: (-f32::MAX, f32::MAX),
                 constraint_index,
                 row_index: i,
             }
         } else {
-            // Angular row (i-3 maps to X, Y, Z)
             let axis_idx = i - 3;
             let axis = axes[axis_idx];
-            // Pure angular: d(error)/d(ω_a) = -axis, d(error)/d(ω_b) = +axis
             let ang_term_a = (inv_inertia_a * axis).dot(&axis);
             let ang_term_b = (inv_inertia_b * axis).dot(&axis);
             let eff_mass = 1.0 / (ang_term_a + ang_term_b + ang_compliance_term);
@@ -106,8 +101,8 @@ pub fn expand(
                 ang_jac_b: axis,
                 effective_mass_inv: eff_mass,
                 bias: 0.0,
-                accumulated_impulse: 0.0,
-                bounds: (-angular_max_impulse, angular_max_impulse),
+                accumulated_impulse: warm,
+                bounds: (-f32::MAX, f32::MAX),
                 constraint_index,
                 row_index: i,
             }

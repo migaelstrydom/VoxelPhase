@@ -7,9 +7,7 @@ use std::collections::{HashMap, HashSet};
 use super::body::{RigidBody, RigidBodyDesc};
 use super::ccd::{CcdContext, CcdStrategy, SweepClampCcd};
 use super::collider::{Collider, ColliderDesc, ColliderShape};
-use super::constraint::expand::{expand_constraints, write_back_constraints};
-use super::constraint::projection::project_angular_velocities;
-use super::constraint::types::{Constraint, ConstraintRow};
+use super::constraint::types::Constraint;
 use super::constraint::ConstraintHandle;
 use super::contact_event::{ContactEvent, ContactSource};
 use super::debug::{PhysicsDebugConfig, PhysicsDebugger};
@@ -72,10 +70,6 @@ pub struct PhysicsConfig {
     pub speculative_margin_multiplier: f32,
     /// Configuration for the sleep system.
     pub sleep: SleepManagerConfig,
-    /// Position correction factor for joint constraints (beta).
-    /// Controls how aggressively constraint drift is corrected.
-    /// Higher values correct faster but may oscillate.
-    pub constraint_position_beta: f32,
     /// Debug rendering configuration.
     pub debug: PhysicsDebugConfig,
 }
@@ -96,7 +90,6 @@ impl Default for PhysicsConfig {
             speculative_min_speed: 1.0,
             speculative_margin_multiplier: 2.0,
             sleep: SleepManagerConfig::default(),
-            constraint_position_beta: 0.2,
             debug: PhysicsDebugConfig::default(),
         }
     }
@@ -118,9 +111,6 @@ pub struct PhysicsWorld {
     grounding_detector: GroundingDetector,
     /// User-defined constraints (persistent across frames).
     constraints: Arena<Constraint>,
-    /// Solver-ready constraint rows, expanded each frame from `constraints`.
-    /// Pre-allocated work buffer — cleared and refilled in `update_contacts()`.
-    cached_constraint_rows: Vec<ConstraintRow>,
     /// Constraint solver (velocity + position correction for contacts and joints).
     solver: Box<dyn ConstraintSolver + Send + Sync>,
     /// Manifold conditioner (reordering + per-manifold metadata like shock scales).
@@ -194,7 +184,6 @@ impl PhysicsWorld {
             sleep_manager,
             grounding_detector,
             constraints: Arena::new(),
-            cached_constraint_rows: Vec::new(),
             solver,
             conditioner,
             manifold_conditions: ManifoldConditions::new(),
@@ -573,16 +562,7 @@ impl PhysicsWorld {
             &mut self.manifold_conditions,
         );
 
-        // Expand user-defined constraints into solver-ready rows
-        expand_constraints(
-            &self.constraints,
-            &self.bodies,
-            dt,
-            self.config.constraint_position_beta,
-            &mut self.cached_constraint_rows,
-        );
-
-        self.solver.prepare(&self.bodies);
+        self.solver.prepare(&self.bodies, &self.constraints, dt);
     }
 
     /// Solve velocity constraints and integrate positions using cached manifolds.
@@ -624,7 +604,7 @@ impl PhysicsWorld {
             &mut self.bodies,
             &mut self.cached_active_manifolds,
             &self.manifold_conditions,
-            &mut self.cached_constraint_rows,
+            &self.constraints,
             dt,
         );
         self.debugger
@@ -636,18 +616,14 @@ impl PhysicsWorld {
         self.manifold_cache.prune();
 
         // Write solved constraint impulses back to persistent constraints
-        write_back_constraints(&mut self.constraints, &self.cached_constraint_rows);
+        self.solver.write_back(&mut self.constraints);
 
         // Hard projection: remove angular velocity components forbidden by
         // constraints. This guarantees correctness regardless of solver
         // iteration count and handles large-angle tilt where linearized
         // Jacobians become degenerate.
-        project_angular_velocities(
-            &self.constraints,
-            &mut self.bodies,
-            dt,
-            self.config.constraint_position_beta,
-        );
+        self.solver
+            .project_velocities(&self.constraints, &mut self.bodies, dt);
 
         // Save pre-integration state for CCD
         let sleeping_snapshot = if self.config.sleep.enabled {

@@ -1,31 +1,26 @@
-//! Position correction strategies: NGS (nonlinear Gauss-Seidel) and Baumgarte.
+//! Position correction: NGS (nonlinear Gauss-Seidel) for contacts and constraints.
 //!
 //! Also includes contact damping (rolling resistance + linear damping).
 
 use std::collections::{HashMap, HashSet};
 
 use generational_arena::{Arena, Index};
-use nalgebra::{Matrix3, Point3, Vector3};
+use nalgebra::{Matrix3, Point3, UnitQuaternion, Vector3};
 
 use crate::physics::body::RigidBody;
+use crate::physics::constraint::types::{Constraint, ConstraintKind};
 use crate::physics::handle::RigidBodyHandle;
 use crate::physics::math::integrate_orientation;
-use crate::physics::pipeline::pair::{PairHeader, SolverManifold};
+use crate::physics::pipeline::pair::SolverManifold;
 
 use super::body_pair::is_kinematic_static;
 
-/// Configuration for position correction and contact damping.
+/// Configuration for NGS position correction and contact damping.
 #[derive(Debug, Clone, Copy)]
 pub struct PositionCorrectionConfig {
-    /// Baumgarte position correction factor.
-    pub baumgarte_factor: f32,
-    /// Baumgarte slop for penetration correction.
-    pub baumgarte_slop: f32,
-    /// Enable NGS position correction instead of Baumgarte.
-    pub ngs_enabled: bool,
-    /// NGS correction factor for penetration bias.
+    /// NGS correction factor for contact penetration.
     pub correction_factor: f32,
-    /// NGS slop for penetration bias.
+    /// Penetration slop — contacts shallower than this are not corrected.
     pub slop: f32,
     /// Iterations for NGS position correction.
     pub iterations: u32,
@@ -43,17 +38,27 @@ pub struct PositionCorrectionConfig {
     pub contact_rolling_resistance: f32,
     /// Linear damping factor applied to bodies with contacts.
     pub contact_linear_damping: f32,
-    /// Enable angular correction during NGS position solving.
+    /// Enable angular correction during NGS contact position solving.
     /// When false, only linear position corrections are applied.
+    ///
+    /// NOTE: Angular NGS correction is unstable in practice — for both contacts
+    /// and constraints. Constraint NGS intentionally applies linear-only
+    /// corrections for the same reason. Angular drift in weld/follow-point
+    /// constraints is handled by the PGS velocity rows (which resist relative
+    /// angular velocity) and by hard velocity projection (KeepUpright). If
+    /// you're tempted to add angular NGS for constraints, test thoroughly with
+    /// the bench harness — previous attempts caused oscillation and energy
+    /// growth.
     pub ngs_angular_correction: bool,
+    /// NGS correction factor for constraint drift (weld, follow-point).
+    /// Higher than `correction_factor` because rigid constraints need
+    /// aggressive correction — unlike contacts, there is no overshoot risk.
+    pub constraint_correction_factor: f32,
 }
 
 impl Default for PositionCorrectionConfig {
     fn default() -> Self {
         Self {
-            baumgarte_factor: 0.3,
-            baumgarte_slop: 0.005,
-            ngs_enabled: true,
             correction_factor: 0.2,
             slop: 0.005,
             iterations: 3,
@@ -63,39 +68,39 @@ impl Default for PositionCorrectionConfig {
             contact_rolling_resistance: 0.1,
             contact_linear_damping: 0.1,
             ngs_angular_correction: false,
+            constraint_correction_factor: 0.2,
         }
     }
 }
 
 /// Run all position correction passes after velocity solving.
 ///
-/// 1. Penetration correction (Baumgarte or NGS)
+/// 1. NGS penetration + constraint drift correction
 /// 2. Contact rolling resistance
 /// 3. Contact linear damping
 pub(crate) fn apply_position_correction(
     bodies: &mut Arena<RigidBody>,
     manifolds: &[SolverManifold],
+    constraints: &Arena<Constraint>,
     config: &PositionCorrectionConfig,
     dt: f32,
     contact_generation_positions: &HashMap<Index, Point3<f32>>,
 ) {
-    if config.ngs_enabled {
-        apply_ngs_correction(
-            bodies,
-            manifolds,
-            config.correction_factor,
-            config.slop,
-            config.iterations,
-            config.max_correction_speed,
-            config.deep_correction_speed,
-            config.deep_threshold,
-            config.ngs_angular_correction,
-            dt,
-            contact_generation_positions,
-        );
-    } else {
-        apply_baumgarte_correction(bodies, manifolds, config, dt);
-    }
+    apply_ngs_correction(
+        bodies,
+        manifolds,
+        constraints,
+        config.correction_factor,
+        config.constraint_correction_factor,
+        config.slop,
+        config.iterations,
+        config.max_correction_speed,
+        config.deep_correction_speed,
+        config.deep_threshold,
+        config.ngs_angular_correction,
+        dt,
+        contact_generation_positions,
+    );
 
     apply_contact_rolling_resistance(bodies, manifolds, config.contact_rolling_resistance, dt);
     apply_contact_linear_damping(bodies, manifolds, config.contact_linear_damping, dt);
@@ -103,100 +108,6 @@ pub(crate) fn apply_position_correction(
 
 // ---------------------------------------------------------------------------
 // Baumgarte position correction
-// ---------------------------------------------------------------------------
-
-fn apply_baumgarte_correction(
-    bodies: &mut Arena<RigidBody>,
-    manifolds: &[SolverManifold],
-    config: &PositionCorrectionConfig,
-    dt: f32,
-) {
-    for manifold in manifolds {
-        let header = &manifold.header;
-        for contact in &manifold.contacts {
-            if contact.depth > 0.001 {
-                let inv_mass_a = header
-                    .body_a
-                    .and_then(|h| bodies.get(h.0))
-                    .map(|b| b.inv_mass())
-                    .unwrap_or(0.0);
-                let inv_mass_b = bodies
-                    .get(header.body_b.0)
-                    .map(|b| {
-                        if is_kinematic_static(b, header) {
-                            1.0
-                        } else {
-                            b.inv_mass()
-                        }
-                    })
-                    .unwrap_or(0.0);
-                let effective_cap = if config.deep_threshold > config.baumgarte_slop
-                    && contact.depth > config.baumgarte_slop
-                {
-                    let t = ((contact.depth - config.baumgarte_slop)
-                        / (config.deep_threshold - config.baumgarte_slop))
-                        .min(1.0);
-                    config.max_correction_speed
-                        + t * (config.deep_correction_speed - config.max_correction_speed)
-                } else {
-                    config.max_correction_speed
-                };
-                apply_baumgarte_single(
-                    bodies,
-                    header,
-                    contact.normal,
-                    contact.depth,
-                    inv_mass_a,
-                    inv_mass_b,
-                    config.baumgarte_factor,
-                    config.baumgarte_slop,
-                    effective_cap,
-                    dt,
-                );
-            }
-        }
-    }
-}
-
-fn apply_baumgarte_single(
-    bodies: &mut Arena<RigidBody>,
-    header: &PairHeader,
-    normal: Vector3<f32>,
-    depth: f32,
-    inv_mass_a: f32,
-    inv_mass_b: f32,
-    correction_factor: f32,
-    slop: f32,
-    max_correction_speed: f32,
-    dt: f32,
-) {
-    let total_inv_mass = inv_mass_a + inv_mass_b;
-    if total_inv_mass <= 0.0 {
-        return;
-    }
-
-    let mut correction = (depth - slop).max(0.0) * correction_factor / total_inv_mass;
-    if max_correction_speed > 0.0 && dt > 0.0 {
-        correction = correction.min(max_correction_speed * dt);
-    }
-
-    if let Some(handle_a) = header.body_a {
-        if let Some(body_a) = bodies.get_mut(handle_a.0) {
-            if body_a.is_dynamic() || body_a.is_kinematic() {
-                let pos = body_a.position();
-                body_a.set_position(pos - normal * correction * inv_mass_a);
-            }
-        }
-    }
-
-    if let Some(body_b) = bodies.get_mut(header.body_b.0) {
-        if body_b.is_dynamic() || body_b.is_kinematic() {
-            let pos = body_b.position();
-            body_b.set_position(pos + normal * correction * inv_mass_b);
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // NGS (nonlinear Gauss-Seidel) position correction
 // ---------------------------------------------------------------------------
@@ -232,7 +143,9 @@ impl CorrectedTransform {
 fn apply_ngs_correction(
     bodies: &mut Arena<RigidBody>,
     manifolds: &[SolverManifold],
+    constraints: &Arena<Constraint>,
     correction_factor: f32,
+    constraint_correction_factor: f32,
     slop: f32,
     iterations: u32,
     max_correction_speed: f32,
@@ -243,7 +156,8 @@ fn apply_ngs_correction(
     contact_generation_positions: &HashMap<Index, Point3<f32>>,
 ) {
     let total_contacts: usize = manifolds.iter().map(|m| m.contacts.len()).sum();
-    if total_contacts == 0 || iterations == 0 || dt <= 0.0 {
+    let has_constraints = constraints.iter().any(|(_, c)| c.active);
+    if (total_contacts == 0 && !has_constraints) || iterations == 0 || dt <= 0.0 {
         return;
     }
 
@@ -254,6 +168,7 @@ fn apply_ngs_correction(
     let mut accumulated: Vec<f32> = vec![0.0; total_contacts];
 
     for _ in 0..iterations {
+        // --- Contact position corrections ---
         let mut flat_idx = 0;
         for manifold in manifolds {
             let header = &manifold.header;
@@ -389,6 +304,14 @@ fn apply_ngs_correction(
                 flat_idx += 1;
             }
         }
+
+        // --- Constraint position corrections ---
+        correct_constraint_drift(
+            bodies,
+            constraints,
+            constraint_correction_factor,
+            &mut transforms,
+        );
     }
 
     // Write corrected transforms back to bodies
@@ -399,6 +322,162 @@ fn apply_ngs_correction(
             }
             body.set_position(transform.position);
             body.set_rotation(transform.rotation);
+        }
+    }
+}
+
+/// Apply direct position/rotation corrections for weld and follow-point constraints.
+///
+/// Reads live body transforms (from the `transforms` map, falling back to the
+/// body arena) and applies mass-weighted corrections that reduce anchor drift
+/// and angular error without injecting velocity.
+fn correct_constraint_drift(
+    bodies: &Arena<RigidBody>,
+    constraints: &Arena<Constraint>,
+    correction_factor: f32,
+    transforms: &mut HashMap<Index, CorrectedTransform>,
+) {
+    for (_index, constraint) in constraints.iter() {
+        if !constraint.active {
+            continue;
+        }
+
+        match &constraint.kind {
+            ConstraintKind::Weld {
+                body_a,
+                body_b,
+                local_anchor_a,
+                local_anchor_b,
+                ..
+            } => {
+                correct_weld_drift(
+                    bodies,
+                    body_a.0,
+                    body_b.0,
+                    local_anchor_a,
+                    local_anchor_b,
+                    correction_factor,
+                    transforms,
+                );
+            }
+
+            ConstraintKind::FollowPoint {
+                body_a,
+                body_b,
+                local_anchor_a,
+                local_anchor_b,
+                compliance,
+                ..
+            } => {
+                let linear_factor = correction_factor / (1.0 + compliance);
+                correct_follow_point_drift(
+                    bodies,
+                    body_a.0,
+                    body_b.0,
+                    local_anchor_a,
+                    local_anchor_b,
+                    linear_factor,
+                    transforms,
+                );
+            }
+
+            ConstraintKind::KeepUpright { .. } => {
+                // No NGS — handled by hard velocity projection.
+            }
+        }
+    }
+}
+
+/// Get the current (corrected) position and rotation for a body.
+fn get_corrected_transform(
+    bodies: &Arena<RigidBody>,
+    handle: Index,
+    transforms: &mut HashMap<Index, CorrectedTransform>,
+) -> Option<(Point3<f32>, UnitQuaternion<f32>, f32, Matrix3<f32>)> {
+    let body = bodies.get(handle)?;
+    let transform = transforms.entry(handle).or_insert_with(|| {
+        CorrectedTransform::new(body.position(), body.position(), body.rotation())
+    });
+    Some((
+        transform.position,
+        transform.rotation,
+        body.inv_mass(),
+        body.world_inv_inertia(),
+    ))
+}
+
+fn correct_weld_drift(
+    bodies: &Arena<RigidBody>,
+    handle_a: Index,
+    handle_b: Index,
+    local_anchor_a: &Vector3<f32>,
+    local_anchor_b: &Vector3<f32>,
+    correction_factor: f32,
+    transforms: &mut HashMap<Index, CorrectedTransform>,
+) {
+    let Some((pos_a, rot_a, inv_mass_a, _)) =
+        get_corrected_transform(bodies, handle_a, transforms)
+    else {
+        return;
+    };
+    let Some((pos_b, rot_b, inv_mass_b, _)) =
+        get_corrected_transform(bodies, handle_b, transforms)
+    else {
+        return;
+    };
+
+    let anchor_a = pos_a + rot_a * local_anchor_a;
+    let anchor_b = pos_b + rot_b * local_anchor_b;
+    let error = anchor_b - anchor_a;
+
+    if error.norm_squared() > 1e-14 {
+        let inv_mass_sum = inv_mass_a + inv_mass_b;
+        if inv_mass_sum > 0.0 {
+            let correction = error * correction_factor;
+            if let Some(t) = transforms.get_mut(&handle_a) {
+                t.position += correction * (inv_mass_a / inv_mass_sum);
+            }
+            if let Some(t) = transforms.get_mut(&handle_b) {
+                t.position -= correction * (inv_mass_b / inv_mass_sum);
+            }
+        }
+    }
+}
+
+fn correct_follow_point_drift(
+    bodies: &Arena<RigidBody>,
+    handle_a: Index,
+    handle_b: Index,
+    local_anchor_a: &Vector3<f32>,
+    local_anchor_b: &Vector3<f32>,
+    linear_factor: f32,
+    transforms: &mut HashMap<Index, CorrectedTransform>,
+) {
+    let Some((pos_a, rot_a, inv_mass_a, _)) =
+        get_corrected_transform(bodies, handle_a, transforms)
+    else {
+        return;
+    };
+    let Some((pos_b, rot_b, inv_mass_b, _)) =
+        get_corrected_transform(bodies, handle_b, transforms)
+    else {
+        return;
+    };
+
+    let anchor_a = pos_a + rot_a * local_anchor_a;
+    let anchor_b = pos_b + rot_b * local_anchor_b;
+    let error = anchor_b - anchor_a;
+
+    if error.norm_squared() > 1e-14 {
+        let inv_mass_sum = inv_mass_a + inv_mass_b;
+        if inv_mass_sum > 0.0 {
+            let correction = error * linear_factor;
+            if let Some(t) = transforms.get_mut(&handle_a) {
+                t.position += correction * (inv_mass_a / inv_mass_sum);
+            }
+            if let Some(t) = transforms.get_mut(&handle_b) {
+                t.position -= correction * (inv_mass_b / inv_mass_sum);
+            }
         }
     }
 }

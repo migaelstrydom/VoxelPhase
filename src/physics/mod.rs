@@ -57,7 +57,7 @@ mod world;
 pub use body::{BodyType, RigidBody, RigidBodyDesc};
 pub use ccd::{CcdStrategy, SweepClampCcd};
 pub use collider::{Collider, ColliderDesc, ColliderShape};
-pub use constraint::{Constraint, ConstraintHandle, ConstraintKind, ConstraintRow};
+pub use constraint::{Constraint, ConstraintHandle, ConstraintKind};
 pub use contact_event::{ContactEvent, ContactSource};
 pub use force_provider::{ForceContext, ForceOutput, SubstepForceProvider};
 pub use handle::{ColliderHandle, RigidBodyHandle};

@@ -1190,3 +1190,229 @@ impl PhysicsBenchScenario for CompoundTableScenario {
         &self.geometry
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Scenarios: weld joints
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Two boxes welded together (side by side), dropped onto a flat surface.
+/// Exercises the weld constraint: the pair should fall as a unit, land, and
+/// settle without the weld separating.
+#[derive(Debug, Clone)]
+pub struct WeldedBoxPairScenario {
+    /// Half-extents of each box.
+    pub half_extents: Vector3<f32>,
+    /// Spawn height (center of the pair).
+    pub spawn_height: f32,
+    geometry: FlatGridGeometry,
+}
+
+impl WeldedBoxPairScenario {
+    pub fn new() -> Self {
+        Self {
+            half_extents: Vector3::new(0.3, 0.3, 0.3),
+            spawn_height: 2.0,
+            geometry: FlatGridGeometry::new(8.0, 1.0),
+        }
+    }
+}
+
+impl PhysicsBenchScenario for WeldedBoxPairScenario {
+    fn name(&self) -> &'static str {
+        "welded_box_pair"
+    }
+
+    fn restitution(&self) -> f32 {
+        0.0
+    }
+
+    fn build_world(&self) -> PhysicsWorld {
+        let mut config = PhysicsConfig::default();
+        config.sleep.enabled = false;
+        config.deterministic_contact_ordering = true;
+        PhysicsWorld::new(config)
+    }
+
+    fn setup(&self, world: &mut PhysicsWorld) -> RigidBodyHandle {
+        let he = self.half_extents;
+        let gap = he.x; // offset so boxes are touching along X
+
+        // Body A: left box
+        let body_a = world.create_body(
+            RigidBodyDesc::dynamic()
+                .position(Point3::new(-gap, self.spawn_height, 0.0)),
+        );
+        let _ = world.attach_collider(
+            body_a,
+            ColliderDesc::box_shape(he)
+                .density(500.0)
+                .restitution(0.0)
+                .friction(0.6),
+        );
+
+        // Body B: right box
+        let body_b = world.create_body(
+            RigidBodyDesc::dynamic()
+                .position(Point3::new(gap, self.spawn_height, 0.0)),
+        );
+        let _ = world.attach_collider(
+            body_b,
+            ColliderDesc::box_shape(he)
+                .density(500.0)
+                .restitution(0.0)
+                .friction(0.6),
+        );
+
+        // Weld them together: anchors at the touching faces.
+        let rot_a = world.body(body_a).unwrap().rotation();
+        let rot_b = world.body(body_b).unwrap().rotation();
+        let relative_orientation = rot_a.inverse() * rot_b;
+
+        let _ = world.create_constraint(ConstraintKind::Weld {
+            body_a,
+            body_b,
+            local_anchor_a: Vector3::new(he.x, 0.0, 0.0),
+            local_anchor_b: Vector3::new(-he.x, 0.0, 0.0),
+            relative_orientation,
+            compliance: 0.0,
+            angular_compliance: 0.0,
+        });
+
+        body_a
+    }
+
+    fn geometry(&self) -> &dyn StaticGeometry {
+        &self.geometry
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Scenarios: barricade (welded multi-body structure)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// 3-piece barricade (2 posts + 1 plank welded between them) dropped onto
+/// flat ground. Reproduces the barricade spawner geometry. Tests that
+/// interleaved contact + constraint NGS keeps the structure stable without
+/// energy injection from Baumgarte bias.
+#[derive(Debug, Clone)]
+pub struct BarricadeDropScenario {
+    geometry: FlatGridGeometry,
+}
+
+impl BarricadeDropScenario {
+    pub fn new() -> Self {
+        Self {
+            geometry: FlatGridGeometry::new(8.0, 1.0),
+        }
+    }
+}
+
+impl PhysicsBenchScenario for BarricadeDropScenario {
+    fn name(&self) -> &'static str {
+        "barricade_drop"
+    }
+
+    fn restitution(&self) -> f32 {
+        0.1
+    }
+
+    fn build_world(&self) -> PhysicsWorld {
+        let mut config = PhysicsConfig::default();
+        config.sleep.enabled = false;
+        PhysicsWorld::new(config)
+    }
+
+    fn setup(&self, world: &mut PhysicsWorld) -> RigidBodyHandle {
+        let post_he = Vector3::new(0.08, 0.5, 0.08);
+        let plank_he = Vector3::new(0.45, 0.08, 0.06);
+        let base_y = 0.5;
+        let density = 400.0;
+
+        let post_x = plank_he.x - post_he.x;
+        let post_cy = base_y + post_he.y;
+        let inner_half = post_x - post_he.x;
+        let actual_plank_he = Vector3::new(inner_half, plank_he.y, plank_he.z);
+
+        // Left post
+        let left_post = world.create_body(
+            RigidBodyDesc::dynamic()
+                .position(Point3::new(-post_x, post_cy, 0.0))
+                .gravity_scale(1.0)
+                .linear_damping(0.01)
+                .angular_damping(0.005),
+        );
+        let _ = world.attach_collider(
+            left_post,
+            ColliderDesc::box_shape(post_he)
+                .density(density)
+                .restitution(self.restitution())
+                .friction(0.6),
+        );
+
+        // Right post
+        let right_post = world.create_body(
+            RigidBodyDesc::dynamic()
+                .position(Point3::new(post_x, post_cy, 0.0))
+                .gravity_scale(1.0)
+                .linear_damping(0.01)
+                .angular_damping(0.005),
+        );
+        let _ = world.attach_collider(
+            right_post,
+            ColliderDesc::box_shape(post_he)
+                .density(density)
+                .restitution(self.restitution())
+                .friction(0.6),
+        );
+
+        // Plank (centered, at midpoint of posts)
+        let usable_height = post_he.y * 2.0 - plank_he.y * 2.0;
+        let plank_cy = base_y + plank_he.y + 0.5 * usable_height;
+        let plank = world.create_body(
+            RigidBodyDesc::dynamic()
+                .position(Point3::new(0.0, plank_cy, 0.0))
+                .gravity_scale(1.0)
+                .linear_damping(0.01)
+                .angular_damping(0.005),
+        );
+        let _ = world.attach_collider(
+            plank,
+            ColliderDesc::box_shape(actual_plank_he)
+                .density(density)
+                .restitution(self.restitution())
+                .friction(0.6),
+        );
+
+        // Weld plank to left post
+        let rot = world.body(left_post).unwrap().rotation();
+        let rel = rot.inverse() * world.body(plank).unwrap().rotation();
+        let _ = world.create_constraint(ConstraintKind::Weld {
+            body_a: left_post,
+            body_b: plank,
+            local_anchor_a: Vector3::new(post_he.x, plank_cy - post_cy, 0.0),
+            local_anchor_b: Vector3::new(-actual_plank_he.x, 0.0, 0.0),
+            relative_orientation: rel,
+            compliance: 0.0,
+            angular_compliance: 0.0,
+        });
+
+        // Weld plank to right post
+        let rot = world.body(right_post).unwrap().rotation();
+        let rel = rot.inverse() * world.body(plank).unwrap().rotation();
+        let _ = world.create_constraint(ConstraintKind::Weld {
+            body_a: right_post,
+            body_b: plank,
+            local_anchor_a: Vector3::new(-post_he.x, plank_cy - post_cy, 0.0),
+            local_anchor_b: Vector3::new(actual_plank_he.x, 0.0, 0.0),
+            relative_orientation: rel,
+            compliance: 0.0,
+            angular_compliance: 0.0,
+        });
+
+        left_post
+    }
+
+    fn geometry(&self) -> &dyn StaticGeometry {
+        &self.geometry
+    }
+}
