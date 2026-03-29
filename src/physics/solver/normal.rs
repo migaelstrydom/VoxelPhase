@@ -29,6 +29,28 @@ pub(crate) fn solve_normal_impulse(
         return;
     };
 
+    // Sanity check: for dynamic-dynamic pairs, the contact normal should
+    // roughly point from body_a toward body_b (the solver convention).
+    // A flipped normal inverts the impulse direction, causing penetration
+    // instead of separation. Threshold is generous (-0.5 ≈ 120°) to avoid
+    // false positives from edge/corner contacts where the normal is
+    // perpendicular to the center-to-center axis.
+    debug_assert!(
+        header.body_a.is_none() || {
+            let ab = state.pos_b - state.pos_a;
+            let ab_len_sq = ab.magnitude_squared();
+            ab_len_sq < 1e-6 || contact.normal.dot(&ab) / ab_len_sq.sqrt() > -0.5
+        },
+        "Contact normal appears to point from B toward A (dot={:.3}). \
+         This usually means the body_a/body_b ordering in PairHeader \
+         doesn't match the manifold's normal convention.",
+        {
+            let ab = state.pos_b - state.pos_a;
+            let len = ab.magnitude();
+            if len > 1e-6 { contact.normal.dot(&ab) / len } else { 0.0 }
+        }
+    );
+
     let vel_along_normal = state.relative_normal_velocity(contact.point, &contact.normal);
     if vel_along_normal > 0.0 && contact.accumulated_normal_impulse <= 1e-8 {
         return;
