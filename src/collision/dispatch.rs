@@ -1,12 +1,12 @@
 //! Centralized shape-pair dispatch for collision detection.
 //!
 //! Routes shape pairs to specialized collision functions (analytic/SAT fast-paths)
-//! based on `ColliderShape` variants. Unknown pairs will fall through to GJK/EPA
-//! once wired in a later step.
+//! based on `ColliderShape` variants. Unknown pairs fall through to GJK/EPA.
 
 use super::capsule::Capsule;
 use super::contact::ContactManifold;
 use super::discrete::capsule_capsule::capsule_capsule_manifold;
+use super::discrete::gjk_epa_manifold::gjk_epa_manifold;
 use super::discrete::obb_capsule::obb_capsule_manifold;
 use super::discrete::obb_obb::obb_obb_manifold_cached;
 use super::discrete::sphere_capsule::sphere_capsule_manifold;
@@ -124,13 +124,18 @@ pub fn generate_manifold(
             let cap_b = Capsule::new(b.center, b.rotation, *hh_b, *r_b);
             capsule_capsule_manifold(&cap_a, &cap_b, margin)
         }
+
+        // GJK/EPA fallback for any shape pair without a specialized fast-path.
+        // Unreachable with current variants; activates when ConvexHull is added.
+        #[allow(unreachable_patterns)]
+        _ => gjk_epa_manifold(a, b, margin),
     }
 }
 
 /// Generate a contact manifold between a convex shape and a filtered mesh patch.
 ///
-/// Routes to shape-specific mesh functions for known shapes. GJK/EPA fallback
-/// for unknown shapes will be added in a later step.
+/// Routes to shape-specific mesh functions for known shapes. Unknown shapes
+/// fall through to the GJK/EPA mesh path (added in Step 6.5).
 pub fn generate_mesh_manifold(
     shape: &ShapeView,
     patch: &FilteredPatch,
@@ -346,6 +351,37 @@ mod tests {
         assert_eq!(dispatched.len(), direct.len());
         for (dp, dd) in dispatched.points.iter().zip(direct.points.iter()) {
             assert!((dp.depth - dd.depth).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn dispatch_obb_obb_uses_sat_not_gjk() {
+        let ba = ColliderShape::Box {
+            half_extents: Vector3::new(1.0, 1.0, 1.0),
+        };
+        let bb = ColliderShape::Box {
+            half_extents: Vector3::new(1.0, 1.0, 1.0),
+        };
+        let rot = UnitQuaternion::identity();
+        let va = view_from(Point3::origin(), rot, &ba);
+        let vb = view_from(Point3::new(1.5, 0.0, 0.0), rot, &bb);
+        let margin = 0.02;
+
+        let mut cache = SatCache::default();
+        let dispatched = generate_manifold(&va, &vb, margin, Some(&mut cache));
+
+        let obb_a = Obb::new(Point3::origin(), rot, Vector3::new(1.0, 1.0, 1.0));
+        let obb_b = Obb::new(Point3::new(1.5, 0.0, 0.0), rot, Vector3::new(1.0, 1.0, 1.0));
+        let mut cache2 = SatCache::default();
+        let direct = obb_obb_manifold_cached(&obb_a, &obb_b, margin, &mut cache2);
+
+        // Dispatch must route to the SAT fast-path, producing identical FeatureIds.
+        assert_eq!(dispatched.len(), direct.len());
+        for (dp, dd) in dispatched.points.iter().zip(direct.points.iter()) {
+            assert_eq!(
+                dp.feature_id, dd.feature_id,
+                "FeatureId mismatch — dispatch may have used GJK/EPA instead of SAT"
+            );
         }
     }
 }

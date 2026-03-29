@@ -1,12 +1,13 @@
 //! ShapeView: world-space snapshot of a convex shape for collision dispatch.
 //!
 //! Also defines `SupportFace` and `SupportFaceExtractor` for manifold clipping
-//! (used by GJK/EPA in later steps).
+//! (used by GJK/EPA manifold generation).
 
 use nalgebra::{Point3, UnitQuaternion, Vector3};
 use smallvec::SmallVec;
 
 use super::capsule::Capsule;
+use super::discrete::clipping::obb_face;
 use super::obb::Obb;
 use super::support::{ConvexSupport, SupportSphere};
 use super::AABB;
@@ -82,7 +83,6 @@ impl ConvexSupport for ShapeView<'_> {
 }
 
 /// Polygonal face of a convex shape, used for contact manifold clipping.
-#[allow(unused)]
 pub struct SupportFace {
     /// Vertices of the face polygon (CCW winding from outside).
     pub vertices: SmallVec<[Point3<f32>; 8]>,
@@ -97,18 +97,45 @@ pub struct SupportFace {
 /// Not all ConvexSupport shapes have meaningful faces (spheres don't).
 /// Shapes without faces return None, and the manifold generator falls
 /// back to a single-point contact from the EPA witness point.
-#[allow(unused)]
 pub trait SupportFaceExtractor {
     fn support_face(&self, direction: Vector3<f32>) -> Option<SupportFace>;
 }
 
+impl SupportFaceExtractor for Obb {
+    fn support_face(&self, direction: Vector3<f32>) -> Option<SupportFace> {
+        let axes = self.axes();
+
+        // Find the face most aligned with the direction.
+        let mut best_idx = 0;
+        let mut best_dot = 0.0f32;
+        let mut best_sign = 1.0f32;
+        for i in 0..3 {
+            let dot = direction.dot(&axes[i]);
+            if dot.abs() > best_dot.abs() {
+                best_dot = dot;
+                best_idx = i;
+                best_sign = if dot >= 0.0 { 1.0 } else { -1.0 };
+            }
+        }
+
+        let face = obb_face(self, best_idx, best_sign);
+        let face_index = (best_idx as u32) * 2 + if best_sign > 0.0 { 0 } else { 1 };
+
+        Some(SupportFace {
+            vertices: SmallVec::from_slice(&face.vertices),
+            normal: face.normal,
+            face_index,
+        })
+    }
+}
+
 impl SupportFaceExtractor for ShapeView<'_> {
-    fn support_face(&self, _direction: Vector3<f32>) -> Option<SupportFace> {
+    fn support_face(&self, direction: Vector3<f32>) -> Option<SupportFace> {
         match self.shape {
             ColliderShape::Sphere { .. } => None,
-            ColliderShape::Box { half_extents: _ } => {
-                // OBB support face extraction is added in Step 6.3.
-                None
+            ColliderShape::Box { half_extents } => {
+                Obb::new(self.center, self.rotation, *half_extents)
+                    .support_face(direction)
             }
             ColliderShape::Capsule { .. } => None,
         }
