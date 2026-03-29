@@ -47,11 +47,6 @@ Level(
             density: 500.0,
         ),
 
-        Barricade(
-            pos: (7.0, 0.0, -3.0),
-            plank_count: 1,
-        ),
-
         Trampoline(
             pos: (4.0, 0.0, -8.0),
         ),

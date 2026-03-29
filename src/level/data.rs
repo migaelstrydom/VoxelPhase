@@ -7,7 +7,7 @@
 use serde::Deserialize;
 
 use crate::app::spawnables::{
-    BarricadeDef, BeachBallDef, BoxDef, BoxWallDef, CapsuleDef, CrateDef, DominoDef,
+    BeachBallDef, BoxDef, BoxWallDef, CapsuleDef, CrateDef, DominoDef,
     HeavyCrateDef, HouseDef, PlankDef, PyramidDef, StackDef, StackItemDef, TableDef,
     TrampolineDef, TowerDef, Spawnable,
 };
@@ -245,15 +245,6 @@ pub enum LevelObject {
         #[serde(default = "CapsuleDef::default_friction")]
         friction: f32,
     },
-    /// Barricade — two posts with planks welded across them.
-    Barricade {
-        pos: (f32, f32, f32),
-        /// Number of horizontal planks.
-        #[serde(default = "BarricadeDef::default_plank_count")]
-        plank_count: u32,
-        #[serde(default = "BarricadeDef::default_density")]
-        density: f32,
-    },
     /// Trampoline — bouncy pad on four short legs.
     Trampoline {
         pos: (f32, f32, f32),
@@ -416,16 +407,6 @@ impl LevelObject {
                 density: *density,
                 restitution: *restitution,
                 friction: *friction,
-            }),
-
-            LevelObject::Barricade {
-                pos,
-                plank_count,
-                density,
-            } => Box::new(BarricadeDef {
-                pos: *pos,
-                plank_count: *plank_count,
-                density: *density,
             }),
 
             LevelObject::Trampoline {

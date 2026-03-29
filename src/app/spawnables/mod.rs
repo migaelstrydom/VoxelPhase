@@ -1,4 +1,3 @@
-mod barricade;
 mod beach_ball;
 mod box_object;
 mod capsule;
@@ -13,7 +12,6 @@ mod trampoline;
 mod tower;
 mod wall;
 
-pub use barricade::BarricadeDef;
 pub use beach_ball::BeachBallDef;
 pub use box_object::{BoxDef, CrateDef, HeavyCrateDef, PlankDef};
 pub use capsule::CapsuleDef;

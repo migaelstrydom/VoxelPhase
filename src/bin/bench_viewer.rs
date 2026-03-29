@@ -110,8 +110,6 @@ const SCENARIO_NAMES: &[&str] = &[
     "low_friction_ramp",
     "keep_upright",
     "compound_table",
-    "welded_box_pair",
-    "barricade_drop",
 ];
 
 /// Builds a scenario by name and runs the viewer with it.
@@ -136,8 +134,6 @@ fn run_viewer(name: &str) -> EngineResult<()> {
         "low_friction_ramp" => run_with_scenario(&LowFrictionRampScenario::new()),
         "keep_upright" => run_with_scenario(&KeepUprightScenario::new()),
         "compound_table" => run_with_scenario(&CompoundTableScenario::new()),
-        "welded_box_pair" => run_with_scenario(&WeldedBoxPairScenario::new()),
-        "barricade_drop" => run_with_scenario(&BarricadeDropScenario::new()),
         _ => {
             eprintln!("Unknown scenario: {}", name);
             eprintln!("Run with --list to see available scenarios.");

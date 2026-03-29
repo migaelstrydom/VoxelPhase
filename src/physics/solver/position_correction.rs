@@ -343,24 +343,6 @@ fn correct_constraint_drift(
         }
 
         match &constraint.kind {
-            ConstraintKind::Weld {
-                body_a,
-                body_b,
-                local_anchor_a,
-                local_anchor_b,
-                ..
-            } => {
-                correct_weld_drift(
-                    bodies,
-                    body_a.0,
-                    body_b.0,
-                    local_anchor_a,
-                    local_anchor_b,
-                    correction_factor,
-                    transforms,
-                );
-            }
-
             ConstraintKind::FollowPoint {
                 body_a,
                 body_b,
@@ -404,44 +386,6 @@ fn get_corrected_transform(
         body.inv_mass(),
         body.world_inv_inertia(),
     ))
-}
-
-fn correct_weld_drift(
-    bodies: &Arena<RigidBody>,
-    handle_a: Index,
-    handle_b: Index,
-    local_anchor_a: &Vector3<f32>,
-    local_anchor_b: &Vector3<f32>,
-    correction_factor: f32,
-    transforms: &mut HashMap<Index, CorrectedTransform>,
-) {
-    let Some((pos_a, rot_a, inv_mass_a, _)) =
-        get_corrected_transform(bodies, handle_a, transforms)
-    else {
-        return;
-    };
-    let Some((pos_b, rot_b, inv_mass_b, _)) =
-        get_corrected_transform(bodies, handle_b, transforms)
-    else {
-        return;
-    };
-
-    let anchor_a = pos_a + rot_a * local_anchor_a;
-    let anchor_b = pos_b + rot_b * local_anchor_b;
-    let error = anchor_b - anchor_a;
-
-    if error.norm_squared() > 1e-14 {
-        let inv_mass_sum = inv_mass_a + inv_mass_b;
-        if inv_mass_sum > 0.0 {
-            let correction = error * correction_factor;
-            if let Some(t) = transforms.get_mut(&handle_a) {
-                t.position += correction * (inv_mass_a / inv_mass_sum);
-            }
-            if let Some(t) = transforms.get_mut(&handle_b) {
-                t.position -= correction * (inv_mass_b / inv_mass_sum);
-            }
-        }
-    }
 }
 
 fn correct_follow_point_drift(

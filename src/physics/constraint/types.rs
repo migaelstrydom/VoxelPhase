@@ -24,24 +24,6 @@ pub enum ConstraintKind {
         compliance: f32,
     },
 
-    /// Weld two bodies together at fixed relative position and orientation.
-    /// Produces 3 positional rows (X, Y, Z) + 3 angular rows = 6 total.
-    /// Unbounded impulse limits for maximum stiffness within PGS.
-    Weld {
-        body_a: RigidBodyHandle,
-        body_b: RigidBodyHandle,
-        /// Anchor point in body_a's local space.
-        local_anchor_a: Vector3<f32>,
-        /// Anchor point in body_b's local space.
-        local_anchor_b: Vector3<f32>,
-        /// Relative orientation of body_b in body_a's frame at creation time.
-        relative_orientation: UnitQuaternion<f32>,
-        /// Positional compliance (0 = rigid).
-        compliance: f32,
-        /// Angular compliance (0 = rigid).
-        angular_compliance: f32,
-    },
-
     /// Drive a point on body_b toward a point on body_a, with optional
     /// orientation locking.
     /// Produces 3 positional rows (X, Y, Z) + 3 angular rows = 6 total.
@@ -79,7 +61,6 @@ impl ConstraintKind {
     pub fn row_count(&self) -> usize {
         match self {
             ConstraintKind::KeepUpright { .. } => 2,
-            ConstraintKind::Weld { .. } => 6,
             ConstraintKind::FollowPoint { .. } => 6,
         }
     }
@@ -88,10 +69,7 @@ impl ConstraintKind {
     pub fn references_body(&self, handle: RigidBodyHandle) -> bool {
         match self {
             ConstraintKind::KeepUpright { body, .. } => *body == handle,
-            ConstraintKind::Weld {
-                body_a, body_b, ..
-            }
-            | ConstraintKind::FollowPoint {
+            ConstraintKind::FollowPoint {
                 body_a, body_b, ..
             } => *body_a == handle || *body_b == handle,
         }
@@ -101,10 +79,7 @@ impl ConstraintKind {
     pub fn referenced_bodies(&self) -> SmallVec<[RigidBodyHandle; 2]> {
         match self {
             ConstraintKind::KeepUpright { body, .. } => smallvec::smallvec![*body],
-            ConstraintKind::Weld {
-                body_a, body_b, ..
-            }
-            | ConstraintKind::FollowPoint {
+            ConstraintKind::FollowPoint {
                 body_a, body_b, ..
             } => smallvec::smallvec![*body_a, *body_b],
         }

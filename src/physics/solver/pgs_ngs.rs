@@ -285,7 +285,7 @@ impl ConstraintSolver for PgsNgsSolver {
                     body.set_angular_velocity(spin + correction);
                 }
 
-                ConstraintKind::Weld { .. } | ConstraintKind::FollowPoint { .. } => {}
+                ConstraintKind::FollowPoint { .. } => {}
             }
         }
     }
