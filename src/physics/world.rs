@@ -16,7 +16,8 @@ use super::grounding::{GroundingConfig, GroundingDetector};
 use super::handle::{ColliderHandle, RigidBodyHandle};
 use super::impulses::PhysicsImpulse;
 use super::narrowphase::{
-    generate_dynamic_contacts, generate_static_contacts, NarrowphaseWorkBuffer, SatCacheMap,
+    generate_dynamic_contacts, generate_static_contacts, GjkCacheMap, NarrowphaseWorkBuffer,
+    SatCacheMap,
 };
 use super::pipeline::integration::{integrate_bodies, integrate_forces};
 use super::pipeline::manifold::ManifoldCache;
@@ -131,6 +132,8 @@ pub struct PhysicsWorld {
     cached_narrowphase_handled: HashSet<RigidBodyHandle>,
     /// SAT axis cache for OBB-OBB dynamic pair early-out.
     sat_cache_map: SatCacheMap,
+    /// GJK warm-start cache for wildcard dynamic pairs.
+    gjk_cache_map: GjkCacheMap,
     /// Reusable work buffer for dynamic narrowphase (avoids per-frame allocation).
     narrowphase_work_buffer: NarrowphaseWorkBuffer,
 }
@@ -192,6 +195,7 @@ impl PhysicsWorld {
             cached_all_manifolds: Vec::new(),
             cached_narrowphase_handled: HashSet::new(),
             sat_cache_map: SatCacheMap::new(),
+            gjk_cache_map: GjkCacheMap::new(),
             narrowphase_work_buffer: NarrowphaseWorkBuffer::new(),
         }
     }
@@ -518,6 +522,7 @@ impl PhysicsWorld {
             self.config.speculative_margin_multiplier,
             sleeping_snapshot.as_ref(),
             &mut self.sat_cache_map,
+            &mut self.gjk_cache_map,
             &mut self.narrowphase_work_buffer,
         );
         raw_manifolds.extend_from_slice(self.narrowphase_work_buffer.manifolds());

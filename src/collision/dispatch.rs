@@ -6,13 +6,15 @@
 use super::capsule::Capsule;
 use super::contact::ContactManifold;
 use super::discrete::capsule_capsule::capsule_capsule_manifold;
-use super::discrete::gjk_epa_manifold::gjk_epa_manifold;
+use super::discrete::gjk::{GjkCache};
+use super::discrete::gjk_epa_manifold::gjk_epa_manifold_cached;
 use super::discrete::obb_capsule::obb_capsule_manifold;
 use super::discrete::obb_obb::obb_obb_manifold_cached;
 use super::discrete::sphere_capsule::sphere_capsule_manifold;
 use super::discrete::sphere_obb::sphere_obb_manifold;
 use super::discrete::sphere_sphere::sphere_sphere_manifold;
 use super::mesh::capsule_patch::capsule_patch_manifold;
+use super::mesh::gjk_patch::gjk_patch_manifold;
 use super::mesh::obb_patch::obb_patch_manifold;
 use super::mesh::seam_filter::FilteredPatch;
 use super::mesh::sphere_patch::sphere_patch_manifold;
@@ -24,12 +26,14 @@ use crate::physics::ColliderShape;
 /// Generate a contact manifold between two convex shapes.
 ///
 /// Routes to analytic/SAT fast-paths for known shape pairs. The `sat_cache`
-/// parameter is only used for OBB-OBB pairs; pass `None` for all others.
+/// parameter is only used for OBB-OBB pairs; `gjk_cache` is only used by
+/// the GJK/EPA fallback arm.
 pub fn generate_manifold(
     a: &ShapeView,
     b: &ShapeView,
     margin: f32,
     sat_cache: Option<&mut SatCache>,
+    gjk_cache: Option<&mut GjkCache>,
 ) -> ContactManifold {
     match (a.shape, b.shape) {
         (ColliderShape::Sphere { radius: ra }, ColliderShape::Sphere { radius: rb }) => {
@@ -128,7 +132,7 @@ pub fn generate_manifold(
         // GJK/EPA fallback for any shape pair without a specialized fast-path.
         // Unreachable with current variants; activates when ConvexHull is added.
         #[allow(unreachable_patterns)]
-        _ => gjk_epa_manifold(a, b, margin),
+        _ => gjk_epa_manifold_cached(a, b, margin, gjk_cache),
     }
 }
 
@@ -157,6 +161,11 @@ pub fn generate_mesh_manifold(
             let (seg_a, seg_b) = capsule.segment_endpoints();
             capsule_patch_manifold(seg_a, seg_b, *radius, patch, margin)
         }
+
+        // GJK/EPA fallback for any shape without a specialized mesh path.
+        // Unreachable with current variants; activates when ConvexHull is added.
+        #[allow(unreachable_patterns)]
+        _ => gjk_patch_manifold(shape, patch, margin),
     }
 }
 
@@ -186,7 +195,7 @@ mod tests {
         let vb = view_from(Point3::new(1.5, 0.0, 0.0), UnitQuaternion::identity(), &sb);
         let margin = 0.02;
 
-        let dispatched = generate_manifold(&va, &vb, margin, None);
+        let dispatched = generate_manifold(&va, &vb, margin, None, None);
         let direct = sphere_sphere_manifold(va.center, 1.0, vb.center, 1.0, margin);
 
         assert_eq!(dispatched.len(), direct.len());
@@ -211,7 +220,7 @@ mod tests {
         let vb = view_from(Point3::origin(), UnitQuaternion::identity(), &box_shape);
         let margin = 0.02;
 
-        let dispatched = generate_manifold(&vs, &vb, margin, None);
+        let dispatched = generate_manifold(&vs, &vb, margin, None, None);
         let obb = Obb::new(Point3::origin(), UnitQuaternion::identity(), Vector3::new(1.0, 1.0, 1.0));
         let direct = sphere_obb_manifold(&obb, Point3::new(1.3, 0.0, 0.0), 0.5, margin);
 
@@ -236,7 +245,7 @@ mod tests {
         let margin = 0.02;
 
         let mut cache = SatCache::default();
-        let dispatched = generate_manifold(&va, &vb, margin, Some(&mut cache));
+        let dispatched = generate_manifold(&va, &vb, margin, Some(&mut cache), None);
 
         let obb_a = Obb::new(Point3::origin(), rot, Vector3::new(1.0, 1.0, 1.0));
         let obb_b = Obb::new(Point3::new(1.5, 0.0, 0.0), rot, Vector3::new(1.0, 1.0, 1.0));
@@ -262,8 +271,8 @@ mod tests {
         let vs = view_from(Point3::new(1.3, 0.0, 0.0), rot, &sphere);
         let vb = view_from(Point3::origin(), rot, &box_shape);
 
-        let ab = generate_manifold(&vs, &vb, margin, None);
-        let ba = generate_manifold(&vb, &vs, margin, None);
+        let ab = generate_manifold(&vs, &vb, margin, None, None);
+        let ba = generate_manifold(&vb, &vs, margin, None, None);
 
         assert_eq!(ab.len(), ba.len());
         if !ab.is_empty() {
@@ -368,7 +377,7 @@ mod tests {
         let margin = 0.02;
 
         let mut cache = SatCache::default();
-        let dispatched = generate_manifold(&va, &vb, margin, Some(&mut cache));
+        let dispatched = generate_manifold(&va, &vb, margin, Some(&mut cache), None);
 
         let obb_a = Obb::new(Point3::origin(), rot, Vector3::new(1.0, 1.0, 1.0));
         let obb_b = Obb::new(Point3::new(1.5, 0.0, 0.0), rot, Vector3::new(1.0, 1.0, 1.0));

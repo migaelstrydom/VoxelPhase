@@ -9,9 +9,11 @@ use nalgebra::{Point3, UnitQuaternion, Vector3};
 use smallvec::{smallvec, SmallVec};
 
 use crate::collision::contact::FeatureId;
+use crate::collision::continuous::gjk_raycast;
 use crate::collision::mesh::obb_patch::obb_patch_manifold;
 use crate::collision::mesh::seam_filter::filter_patch;
 use crate::collision::obb::Obb;
+use crate::collision::shape_view::ShapeView;
 use crate::physics::collider::{ColliderMaterial, ColliderShape};
 use crate::physics::contact_event::{ContactEvent, ContactSource};
 use crate::physics::handle::RigidBodyHandle;
@@ -100,12 +102,24 @@ impl CcdStrategy for SweepClampCcd {
             .collect();
 
         for candidate in &candidates {
-            let Some(hit) = sweep_sphere_against_static(
-                candidate.pre_center,
-                candidate.post_center,
-                candidate.radius,
-                static_geometry,
-            ) else {
+            let hit = match &candidate.shape {
+                ColliderShape::Sphere { .. } => sweep_sphere_against_static(
+                    candidate.pre_center,
+                    candidate.post_center,
+                    candidate.radius,
+                    static_geometry,
+                ),
+                _ => sweep_shape_against_static(candidate, static_geometry)
+                    .or_else(|| {
+                        sweep_sphere_against_static(
+                            candidate.pre_center,
+                            candidate.post_center,
+                            candidate.radius,
+                            static_geometry,
+                        )
+                    }),
+            };
+            let Some(hit) = hit else {
                 continue;
             };
 
@@ -274,6 +288,60 @@ fn cold_solver_contact(
         accumulated_normal_impulse: 0.0,
         accumulated_friction_impulse_ws: Vector3::zeros(),
     }
+}
+
+/// Sweep a convex shape against static geometry using GJK raycast.
+///
+/// Uses the actual shape (not bounding sphere) for a tighter TOI estimate.
+/// Returns a `SweptContact` compatible with the existing pipeline.
+fn sweep_shape_against_static(
+    candidate: &CcdCandidate,
+    static_geometry: &dyn StaticGeometry,
+) -> Option<crate::collision::continuous::SweptContact> {
+    let start = candidate.pre_center;
+    let end = candidate.post_center;
+    let radius = candidate.radius;
+
+    let query = crate::collision::AABB::new(
+        Point3::new(
+            start.x.min(end.x) - radius,
+            start.y.min(end.y) - radius,
+            start.z.min(end.z) - radius,
+        ),
+        Point3::new(
+            start.x.max(end.x) + radius,
+            start.y.max(end.y) + radius,
+            start.z.max(end.z) + radius,
+        ),
+    );
+    let patch = static_geometry.query_region(&query);
+
+    let displacement = end - start;
+    let shape_view = ShapeView {
+        center: start,
+        rotation: candidate.pre_rot,
+        shape: &candidate.shape,
+    };
+
+    let mut earliest: Option<crate::collision::continuous::SweptContact> = None;
+
+    for pt in &patch.triangles {
+        let hit = gjk_raycast(
+            &shape_view,
+            &pt.triangle,
+            displacement,
+            Vector3::zeros(),
+        );
+        if let Some(h) = hit {
+            if earliest.is_none() || h.t < earliest.as_ref().unwrap().t {
+                earliest = Some(crate::collision::continuous::SweptContact::new(
+                    h.t, h.point, h.normal,
+                ));
+            }
+        }
+    }
+
+    earliest
 }
 
 /// Sweep a sphere from `start` to `end` against static geometry.

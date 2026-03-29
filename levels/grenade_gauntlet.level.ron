@@ -54,7 +54,7 @@ Level(
             // === Floating island shortcut ===
             // Visible from the mid platform — tempting but risky.
             // The player can grenade-jump up to it or stack crates.
-            Island(center: (30.0, 14.0, 8.0), half_extents: (4.0, 1.5, 4.0), edge_noise: 0.4),
+            Island(center: (30.0, 12.0, 8.0), half_extents: (4.0, 1.5, 4.0), edge_noise: 0.4),
 
             // === Stone pillar ===
             // A landmark near the start, and potential grenade target
@@ -114,7 +114,8 @@ Level(
         // =====================================================================
 
         // A plank resting on the island edge — precarious bridge to high ground
-        Plank(pos: (38.0, 20.5, 6.0), length: 30.0, width: 3.0),
+        Plank(pos: (38.0, 17.5, 6.0), length: 30.0, width: 3.0),
+        // Capsule(pos: (38.0, 20.5, 6.0), half_height: 20, radius: 0.25),
 
         // Reward: beach ball trophy on the island
         BeachBall(pos: (30.0, 16.5, 8.0)),

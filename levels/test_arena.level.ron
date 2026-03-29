@@ -42,8 +42,6 @@ Level(
 
         Table(
             pos: (3.0, 1.5, -2.0),
-            top_half_extents: (0.8, 0.03, 0.4),
-            leg_half_extents: (0.04, 0.25, 0.04),
             density: 500.0,
         ),
 
