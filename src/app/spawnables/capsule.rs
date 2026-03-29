@@ -24,27 +24,29 @@ const TEXTURE_SIZE: u32 = 128;
 const MESH_SEGMENTS: u32 = 24;
 const CAP_RINGS: u32 = 12;
 
-fn default_capsule_density() -> f32 {
-    50.0
-}
-fn default_capsule_restitution() -> f32 {
-    0.2
-}
-fn default_capsule_friction() -> f32 {
-    0.6
-}
-
 #[derive(Deserialize)]
 pub struct CapsuleDef {
     pub pos: (f32, f32, f32),
     pub half_height: f32,
     pub radius: f32,
-    #[serde(default = "default_capsule_density")]
+    #[serde(default = "CapsuleDef::default_density")]
     pub density: f32,
-    #[serde(default = "default_capsule_restitution")]
+    #[serde(default = "CapsuleDef::default_restitution")]
     pub restitution: f32,
-    #[serde(default = "default_capsule_friction")]
+    #[serde(default = "CapsuleDef::default_friction")]
     pub friction: f32,
+}
+
+impl CapsuleDef {
+    pub fn default_density() -> f32 {
+        50.0
+    }
+    pub fn default_restitution() -> f32 {
+        0.2
+    }
+    pub fn default_friction() -> f32 {
+        0.6
+    }
 }
 
 impl Spawnable for CapsuleDef {

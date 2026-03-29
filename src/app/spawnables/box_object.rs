@@ -141,28 +141,30 @@ fn spawn_box_entity(
 // BoxDef
 // ---------------------------------------------------------------------------
 
-fn default_box_density() -> f32 {
-    50.0
-}
-fn default_box_restitution() -> f32 {
-    0.2
-}
-fn default_box_friction() -> f32 {
-    0.6
-}
-
 #[derive(Deserialize)]
 pub struct BoxDef {
     pub pos: (f32, f32, f32),
     pub half_extents: (f32, f32, f32),
     #[serde(default)]
     pub style: BoxStyle,
-    #[serde(default = "default_box_density")]
+    #[serde(default = "BoxDef::default_density")]
     pub density: f32,
-    #[serde(default = "default_box_restitution")]
+    #[serde(default = "BoxDef::default_restitution")]
     pub restitution: f32,
-    #[serde(default = "default_box_friction")]
+    #[serde(default = "BoxDef::default_friction")]
     pub friction: f32,
+}
+
+impl BoxDef {
+    pub fn default_density() -> f32 {
+        50.0
+    }
+    pub fn default_restitution() -> f32 {
+        0.2
+    }
+    pub fn default_friction() -> f32 {
+        0.6
+    }
 }
 
 impl Spawnable for BoxDef {

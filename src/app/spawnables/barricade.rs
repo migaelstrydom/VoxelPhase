@@ -18,13 +18,6 @@ use crate::physics::{ColliderDesc, RigidBodyDesc, RigidBodyHandle};
 use crate::rendering::material::MaterialId;
 use crate::systems::PhysicsResource;
 
-fn default_barricade_plank_count() -> u32 {
-    3
-}
-fn default_barricade_density() -> f32 {
-    400.0
-}
-
 /// Dimensions for a barricade.
 pub struct BarricadeDimensions {
     /// Half-extents of each vertical post.
@@ -55,10 +48,19 @@ impl BarricadeDimensions {
 #[derive(Deserialize)]
 pub struct BarricadeDef {
     pub pos: (f32, f32, f32),
-    #[serde(default = "default_barricade_plank_count")]
+    #[serde(default = "BarricadeDef::default_plank_count")]
     pub plank_count: u32,
-    #[serde(default = "default_barricade_density")]
+    #[serde(default = "BarricadeDef::default_density")]
     pub density: f32,
+}
+
+impl BarricadeDef {
+    pub fn default_plank_count() -> u32 {
+        3
+    }
+    pub fn default_density() -> f32 {
+        400.0
+    }
 }
 
 impl Spawnable for BarricadeDef {

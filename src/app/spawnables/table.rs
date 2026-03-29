@@ -18,35 +18,37 @@ use crate::utils::noise::fbm_2d_periodic;
 
 const TEXTURE_SIZE: u32 = 128;
 
-fn default_table_top_half_extents() -> (f32, f32, f32) {
-    (0.5, 0.025, 0.3)
-}
-fn default_table_leg_half_extents() -> (f32, f32, f32) {
-    (0.03, 0.175, 0.03)
-}
-fn default_table_density() -> f32 {
-    600.0
-}
-fn default_table_restitution() -> f32 {
-    0.1
-}
-fn default_table_friction() -> f32 {
-    0.5
-}
-
 #[derive(Deserialize)]
 pub struct TableDef {
     pub pos: (f32, f32, f32),
-    #[serde(default = "default_table_top_half_extents")]
+    #[serde(default = "TableDef::default_top_half_extents")]
     pub top_half_extents: (f32, f32, f32),
-    #[serde(default = "default_table_leg_half_extents")]
+    #[serde(default = "TableDef::default_leg_half_extents")]
     pub leg_half_extents: (f32, f32, f32),
-    #[serde(default = "default_table_density")]
+    #[serde(default = "TableDef::default_density")]
     pub density: f32,
-    #[serde(default = "default_table_restitution")]
+    #[serde(default = "TableDef::default_restitution")]
     pub restitution: f32,
-    #[serde(default = "default_table_friction")]
+    #[serde(default = "TableDef::default_friction")]
     pub friction: f32,
+}
+
+impl TableDef {
+    pub fn default_top_half_extents() -> (f32, f32, f32) {
+        (0.5, 0.025, 0.3)
+    }
+    pub fn default_leg_half_extents() -> (f32, f32, f32) {
+        (0.03, 0.175, 0.03)
+    }
+    pub fn default_density() -> f32 {
+        600.0
+    }
+    pub fn default_restitution() -> f32 {
+        0.1
+    }
+    pub fn default_friction() -> f32 {
+        0.5
+    }
 }
 
 impl TableDef {

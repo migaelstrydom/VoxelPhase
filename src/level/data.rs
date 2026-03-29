@@ -7,8 +7,9 @@
 use serde::Deserialize;
 
 use crate::app::spawnables::{
-    BarricadeDef, BeachBallDef, BoxDef, BoxWallDef, CapsuleDef, CrateDef, HeavyCrateDef, HouseDef,
-    PlankDef, StackDef, StackItemDef, TableDef, TrampolineDef, TowerDef, Spawnable,
+    BarricadeDef, BeachBallDef, BoxDef, BoxWallDef, CapsuleDef, CrateDef, DominoDef,
+    HeavyCrateDef, HouseDef, PlankDef, PyramidDef, StackDef, StackItemDef, TableDef,
+    TrampolineDef, TowerDef, Spawnable,
 };
 
 /// Top-level level description.
@@ -179,11 +180,11 @@ pub enum LevelObject {
         half_extents: (f32, f32, f32),
         #[serde(default)]
         style: BoxStyle,
-        #[serde(default = "default_density")]
+        #[serde(default = "BoxDef::default_density")]
         density: f32,
-        #[serde(default = "default_box_restitution")]
+        #[serde(default = "BoxDef::default_restitution")]
         restitution: f32,
-        #[serde(default = "default_box_friction")]
+        #[serde(default = "BoxDef::default_friction")]
         friction: f32,
     },
     /// Thin wooden board. Defaults: style=WoodenCrate, density=20, thickness=0.1.
@@ -213,7 +214,7 @@ pub enum LevelObject {
         base: (f32, f32, f32),
         box_half_extents: (f32, f32, f32),
         count: u32,
-        #[serde(default = "default_density")]
+        #[serde(default = "TowerDef::default_density")]
         density: f32,
     },
     /// Grid of boxes, optionally staggered for a brick-like pattern.
@@ -222,7 +223,7 @@ pub enum LevelObject {
         box_half_extents: (f32, f32, f32),
         columns: u32,
         rows: u32,
-        #[serde(default = "default_density")]
+        #[serde(default = "BoxWallDef::default_density")]
         density: f32,
         #[serde(default)]
         stagger: bool,
@@ -237,49 +238,72 @@ pub enum LevelObject {
         pos: (f32, f32, f32),
         half_height: f32,
         radius: f32,
-        #[serde(default = "default_density")]
+        #[serde(default = "CapsuleDef::default_density")]
         density: f32,
-        #[serde(default = "default_capsule_restitution")]
+        #[serde(default = "CapsuleDef::default_restitution")]
         restitution: f32,
-        #[serde(default = "default_capsule_friction")]
+        #[serde(default = "CapsuleDef::default_friction")]
         friction: f32,
     },
     /// Barricade — two posts with planks welded across them.
     Barricade {
         pos: (f32, f32, f32),
         /// Number of horizontal planks.
-        #[serde(default = "default_barricade_plank_count")]
+        #[serde(default = "BarricadeDef::default_plank_count")]
         plank_count: u32,
-        #[serde(default = "default_barricade_density")]
+        #[serde(default = "BarricadeDef::default_density")]
         density: f32,
     },
     /// Trampoline — bouncy pad on four short legs.
     Trampoline {
         pos: (f32, f32, f32),
-        #[serde(default = "default_trampoline_pad_half_extents")]
+        #[serde(default = "TrampolineDef::default_pad_half_extents")]
         pad_half_extents: (f32, f32, f32),
-        #[serde(default = "default_trampoline_leg_half_extents")]
+        #[serde(default = "TrampolineDef::default_leg_half_extents")]
         leg_half_extents: (f32, f32, f32),
-        #[serde(default = "default_trampoline_density")]
+        #[serde(default = "TrampolineDef::default_density")]
         density: f32,
-        #[serde(default = "default_trampoline_restitution")]
+        #[serde(default = "TrampolineDef::default_restitution")]
         restitution: f32,
     },
     /// Table — compound body (top slab + 4 legs).
     Table {
         pos: (f32, f32, f32),
         /// Half-extents of the table top (x, y_thickness, z).
-        #[serde(default = "default_table_top_half_extents")]
+        #[serde(default = "TableDef::default_top_half_extents")]
         top_half_extents: (f32, f32, f32),
         /// Half-extents of each leg.
-        #[serde(default = "default_table_leg_half_extents")]
+        #[serde(default = "TableDef::default_leg_half_extents")]
         leg_half_extents: (f32, f32, f32),
-        #[serde(default = "default_table_density")]
+        #[serde(default = "TableDef::default_density")]
         density: f32,
-        #[serde(default = "default_table_restitution")]
+        #[serde(default = "TableDef::default_restitution")]
         restitution: f32,
-        #[serde(default = "default_table_friction")]
+        #[serde(default = "TableDef::default_friction")]
         friction: f32,
+    },
+    /// Pyramid — square-based pyramid of sandstone blocks.
+    Pyramid {
+        base: (f32, f32, f32),
+        block_half_extents: (f32, f32, f32),
+        /// Number of blocks along each side of the bottom layer.
+        base_width: u32,
+        #[serde(default = "PyramidDef::default_density")]
+        density: f32,
+    },
+    /// Domino row — tall thin blocks spaced for chain toppling.
+    Domino {
+        base: (f32, f32, f32),
+        /// Direction the row extends in (x, z).
+        direction: (f32, f32),
+        #[serde(default = "DominoDef::default_count")]
+        count: u32,
+        #[serde(default = "DominoDef::default_spacing")]
+        spacing: f32,
+        #[serde(default = "DominoDef::default_half_extents")]
+        half_extents: (f32, f32, f32),
+        #[serde(default = "DominoDef::default_density")]
+        density: f32,
     },
 }
 
@@ -433,6 +457,34 @@ impl LevelObject {
                 restitution: *restitution,
                 friction: *friction,
             }),
+
+            LevelObject::Pyramid {
+                base,
+                block_half_extents,
+                base_width,
+                density,
+            } => Box::new(PyramidDef {
+                base: *base,
+                block_half_extents: *block_half_extents,
+                base_width: *base_width,
+                density: *density,
+            }),
+
+            LevelObject::Domino {
+                base,
+                direction,
+                count,
+                spacing,
+                half_extents,
+                density,
+            } => Box::new(DominoDef {
+                base: *base,
+                direction: *direction,
+                count: *count,
+                spacing: *spacing,
+                half_extents: *half_extents,
+                density: *density,
+            }),
         }
     }
 }
@@ -473,74 +525,6 @@ pub enum WaterBody {
         /// Target water surface height (world Y).
         surface_level: f32,
     },
-}
-
-// ---------------------------------------------------------------------------
-// Default value functions for serde
-// ---------------------------------------------------------------------------
-
-fn default_density() -> f32 {
-    50.0
-}
-
-fn default_box_restitution() -> f32 {
-    0.2
-}
-
-fn default_box_friction() -> f32 {
-    0.6
-}
-
-fn default_capsule_restitution() -> f32 {
-    0.2
-}
-
-fn default_capsule_friction() -> f32 {
-    0.6
-}
-
-fn default_barricade_plank_count() -> u32 {
-    3
-}
-
-fn default_barricade_density() -> f32 {
-    400.0
-}
-
-fn default_trampoline_pad_half_extents() -> (f32, f32, f32) {
-    (1.8, 0.06, 1.8)
-}
-
-fn default_trampoline_leg_half_extents() -> (f32, f32, f32) {
-    (0.12, 0.36, 0.12)
-}
-
-fn default_trampoline_density() -> f32 {
-    300.0
-}
-
-fn default_trampoline_restitution() -> f32 {
-    1.5
-}
-
-fn default_table_top_half_extents() -> (f32, f32, f32) {
-    (0.5, 0.025, 0.3)
-}
-
-fn default_table_leg_half_extents() -> (f32, f32, f32) {
-    (0.03, 0.175, 0.03)
-}
-
-fn default_table_density() -> f32 {
-    600.0
-}
-
-fn default_table_restitution() -> f32 {
-    0.1
-}
-
-fn default_table_friction() -> f32 {
-    0.5
 }
 
 #[cfg(test)]

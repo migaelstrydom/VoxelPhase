@@ -19,17 +19,19 @@ use crate::systems::PhysicsResource;
 
 use specs::{Builder, WorldExt};
 
-fn default_tower_density() -> f32 {
-    50.0
-}
-
 #[derive(Deserialize)]
 pub struct TowerDef {
     pub base: (f32, f32, f32),
     pub box_half_extents: (f32, f32, f32),
     pub count: u32,
-    #[serde(default = "default_tower_density")]
+    #[serde(default = "TowerDef::default_density")]
     pub density: f32,
+}
+
+impl TowerDef {
+    pub fn default_density() -> f32 {
+        50.0
+    }
 }
 
 impl Spawnable for TowerDef {

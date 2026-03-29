@@ -69,6 +69,11 @@ impl RigidBodyDesc {
         self
     }
 
+    pub fn rotation(mut self, rotation: UnitQuaternion<f32>) -> Self {
+        self.rotation = rotation;
+        self
+    }
+
     pub fn gravity_scale(mut self, scale: f32) -> Self {
         self.gravity_scale = scale;
         self

@@ -21,37 +21,36 @@ use crate::systems::PhysicsResource;
 
 const TEXTURE_SIZE: u32 = 128;
 
-fn default_trampoline_pad_half_extents() -> (f32, f32, f32) {
-    (1.8, 0.06, 1.8)
-}
-
-fn default_trampoline_leg_half_extents() -> (f32, f32, f32) {
-    (0.12, 0.36, 0.12)
-}
-
-fn default_trampoline_density() -> f32 {
-    300.0
-}
-
-fn default_trampoline_restitution() -> f32 {
-    1.5
-}
-
 #[derive(Deserialize)]
 pub struct TrampolineDef {
     pub pos: (f32, f32, f32),
     /// Half-extents of the bouncy pad (x, y_thickness, z).
-    #[serde(default = "default_trampoline_pad_half_extents")]
+    #[serde(default = "TrampolineDef::default_pad_half_extents")]
     pub pad_half_extents: (f32, f32, f32),
     /// Half-extents of each leg.
-    #[serde(default = "default_trampoline_leg_half_extents")]
+    #[serde(default = "TrampolineDef::default_leg_half_extents")]
     pub leg_half_extents: (f32, f32, f32),
     /// Density of the entire trampoline.
-    #[serde(default = "default_trampoline_density")]
+    #[serde(default = "TrampolineDef::default_density")]
     pub density: f32,
     /// Restitution of the pad surface. Values above 1.0 add energy (super-bounce).
-    #[serde(default = "default_trampoline_restitution")]
+    #[serde(default = "TrampolineDef::default_restitution")]
     pub restitution: f32,
+}
+
+impl TrampolineDef {
+    pub fn default_pad_half_extents() -> (f32, f32, f32) {
+        (1.8, 0.06, 1.8)
+    }
+    pub fn default_leg_half_extents() -> (f32, f32, f32) {
+        (0.12, 0.36, 0.12)
+    }
+    pub fn default_density() -> f32 {
+        300.0
+    }
+    pub fn default_restitution() -> f32 {
+        1.5
+    }
 }
 
 impl TrampolineDef {
