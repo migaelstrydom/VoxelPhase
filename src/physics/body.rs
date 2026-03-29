@@ -74,6 +74,11 @@ impl RigidBodyDesc {
         self
     }
 
+    pub fn angular_velocity(mut self, velocity: Vector3<f32>) -> Self {
+        self.angular_velocity = velocity;
+        self
+    }
+
     pub fn gravity_scale(mut self, scale: f32) -> Self {
         self.gravity_scale = scale;
         self
@@ -339,6 +344,16 @@ impl RigidBody {
 
     pub(crate) fn add_collider(&mut self, handle: ColliderHandle) {
         self.colliders.push(handle);
+    }
+
+    /// Remove a collider from this body's list. Returns true if found.
+    pub(crate) fn remove_collider(&mut self, handle: ColliderHandle) -> bool {
+        if let Some(pos) = self.colliders.iter().position(|h| *h == handle) {
+            self.colliders.swap_remove(pos);
+            true
+        } else {
+            false
+        }
     }
 
     /// Update mass properties from attached colliders.

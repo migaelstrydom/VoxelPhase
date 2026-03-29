@@ -2,6 +2,7 @@ use specs::{Dispatcher, DispatcherBuilder};
 
 use crate::biped::{BipedAnimationSystem, BipedProbeConfigSystem};
 use crate::explosion::ExplosionSystem;
+use crate::fracture::FractureSystem;
 use crate::fire::systems::{FireCleanupSystem, FireIgnitionSystem};
 use crate::input::InputActionSystem;
 use crate::particles::{ParticleSpawnSystem, ParticleUpdateSystem};
@@ -25,6 +26,8 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
             "physics_sync",
             &["player_control"],
         )
+        // Compound body fracture (uses solver impulses from this frame)
+        .with(FractureSystem, "fracture", &["physics_sync"])
         // Animation and sensing
         .with(BipedAnimationSystem, "biped_animation", &["physics_sync"])
         .with(

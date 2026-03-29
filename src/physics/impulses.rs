@@ -61,9 +61,14 @@ impl PhysicsImpulse {
 }
 
 /// Queue of one-shot impulse events consumed each physics step.
+///
+/// After draining, a snapshot of the drained impulses is kept in
+/// `last_impulses` so that downstream systems (e.g. fracture) can
+/// query what was applied this frame.
 #[derive(Default)]
 pub struct PhysicsImpulseQueue {
     events: Vec<PhysicsImpulse>,
+    last_impulses: Vec<PhysicsImpulse>,
 }
 
 impl PhysicsImpulseQueue {
@@ -72,6 +77,13 @@ impl PhysicsImpulseQueue {
     }
 
     pub fn drain(&mut self) -> impl Iterator<Item = PhysicsImpulse> + '_ {
+        self.last_impulses.clear();
+        self.last_impulses.extend(self.events.iter().copied());
         self.events.drain(..)
+    }
+
+    /// Impulses that were applied during the most recent physics step.
+    pub fn last_impulses(&self) -> &[PhysicsImpulse] {
+        &self.last_impulses
     }
 }

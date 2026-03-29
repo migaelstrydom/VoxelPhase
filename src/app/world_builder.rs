@@ -10,6 +10,7 @@ use crate::core::error::EngineResult;
 use crate::debug::{DebugLines, DebugLog, DebugOverlays};
 use crate::explosion::Explosion;
 use crate::fire::components::{Flammable, OnFire};
+use crate::fracture::CompoundFracture;
 use crate::input::{GameplayActions, InputState};
 use crate::particles::{ParticleConfig, ParticleEmitter, ParticlePool};
 use crate::physics::PhysicsImpulseQueue;
@@ -65,6 +66,7 @@ impl WorldBuilder {
         world.register::<ParticleEmitter>();
         world.register::<Flammable>();
         world.register::<OnFire>();
+        world.register::<CompoundFracture>();
     }
 
     pub fn with_renderer(mut self, renderer: Renderer) -> Self {

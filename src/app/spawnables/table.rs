@@ -11,6 +11,7 @@ use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
 };
 use crate::core::error::EngineResult;
+use crate::fracture::{CompoundFracture, FractureJoint};
 use crate::physics::{ColliderDesc, RigidBodyDesc};
 use crate::rendering::material::{Material, MaterialId};
 use crate::systems::PhysicsResource;
@@ -35,10 +36,10 @@ pub struct TableDef {
 
 impl TableDef {
     pub fn default_top_half_extents() -> (f32, f32, f32) {
-        (0.5, 0.025, 0.3)
+        (1.0, 0.1, 0.6)
     }
     pub fn default_leg_half_extents() -> (f32, f32, f32) {
-        (0.03, 0.175, 0.03)
+        (0.12, 0.35, 0.12)
     }
     pub fn default_density() -> f32 {
         600.0
@@ -80,9 +81,9 @@ impl Spawnable for TableDef {
 
     fn create_materials(&self, ctx: &mut MaterialCtx) -> EngineResult<Vec<MaterialId>> {
         let pixels = generate_table_wood();
-        let texture =
-            ctx.textures
-                .create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &pixels, true)?;
+        let texture = ctx
+            .textures
+            .create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &pixels, true)?;
         let material = Material::textured(texture);
         Ok(vec![ctx.materials.register(material)])
     }
@@ -147,6 +148,20 @@ impl Spawnable for TableDef {
             body_handle
         };
 
+        // 5 children: [0] top slab, [1..4] legs.
+        // 4 joints: each leg connects to the top.
+        let joint_threshold = 10.0;
+        let fracture = CompoundFracture {
+            joints: vec![
+                FractureJoint { child_a: 0, child_b: 1, threshold: joint_threshold },
+                FractureJoint { child_a: 0, child_b: 2, threshold: joint_threshold },
+                FractureJoint { child_a: 0, child_b: 3, threshold: joint_threshold },
+                FractureJoint { child_a: 0, child_b: 4, threshold: joint_threshold },
+            ],
+            child_count: 5,
+            material: materials[0],
+        };
+
         vec![world
             .create_entity()
             .with(Position(Vector3::new(
@@ -159,6 +174,7 @@ impl Spawnable for TableDef {
             .with(RigidBodyComponent(body_handle))
             .with(ModelInstance::new(model))
             .with(Renderable)
+            .with(fracture)
             .build()]
     }
 }
@@ -192,15 +208,13 @@ fn generate_table_wood() -> Vec<u8> {
             let variation =
                 fbm_2d_periodic(u * 3.0, v * 3.0, 3, 0.45, 2.0, seed_grain + 1, Some(3));
 
-            let ring_distort =
-                fbm_2d_periodic(u * 4.0, v * 4.0, 2, 0.4, 2.0, seed_rings, Some(4));
+            let ring_distort = fbm_2d_periodic(u * 4.0, v * 4.0, 2, 0.4, 2.0, seed_rings, Some(4));
             let ring_u = u - 0.5 + ring_distort * 0.15;
             let ring_v = (v - 0.5) * 3.0;
             let ring_dist = (ring_u * ring_u + ring_v * ring_v).sqrt();
             let ring = ((ring_dist * 30.0).sin() * 0.5 + 0.5).powf(6.0) * 0.08;
 
-            let knot_noise =
-                fbm_2d_periodic(u * 2.0, v * 2.0, 3, 0.6, 2.0, seed_knots, Some(2));
+            let knot_noise = fbm_2d_periodic(u * 2.0, v * 2.0, 3, 0.6, 2.0, seed_knots, Some(2));
             let knot = if knot_noise > 0.72 {
                 (knot_noise - 0.72) / 0.28 * 0.2
             } else {

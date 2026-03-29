@@ -34,7 +34,7 @@ impl Explosion {
             center,
             crater_radius: 2.5,
             blast_radius: 5.0,
-            force: 10.0,
+            force: 1000.0,
             terrain_damage: 1,
             processed: false,
         }

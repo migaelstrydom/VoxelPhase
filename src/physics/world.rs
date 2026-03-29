@@ -440,6 +440,27 @@ impl PhysicsWorld {
         Some(collider_handle)
     }
 
+    /// Detach a single collider from a body, removing it from the physics world.
+    ///
+    /// Returns the detached `Collider` so the caller can use its shape, offset,
+    /// density, and material to create a new body. Recomputes the body's mass
+    /// properties after removal. Also purges the manifold cache for the collider.
+    pub fn detach_collider(
+        &mut self,
+        body_handle: RigidBodyHandle,
+        collider_handle: ColliderHandle,
+    ) -> Option<Collider> {
+        let body = self.bodies.get_mut(body_handle.0)?;
+        if !body.remove_collider(collider_handle) {
+            return None;
+        }
+
+        self.manifold_cache.remove_collider(collider_handle);
+        let collider = self.colliders.remove(collider_handle.0)?;
+        self.recompute_mass_properties(body_handle);
+        Some(collider)
+    }
+
     // === Simulation ===
 
     /// Run narrowphase contact generation and manifold cache update.

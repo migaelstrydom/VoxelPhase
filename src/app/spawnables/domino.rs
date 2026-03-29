@@ -48,7 +48,7 @@ impl DominoDef {
         0.70
     }
     pub fn default_density() -> f32 {
-        120.0
+        800.0
     }
     pub fn default_half_extents() -> (f32, f32, f32) {
         (0.30, 0.60, 0.08)
@@ -74,7 +74,11 @@ impl Spawnable for DominoDef {
     }
 
     fn spawn(&self, world: &mut specs::World, materials: &[MaterialId]) -> Vec<Entity> {
-        let he = Vector3::new(self.half_extents.0, self.half_extents.1, self.half_extents.2);
+        let he = Vector3::new(
+            self.half_extents.0,
+            self.half_extents.1,
+            self.half_extents.2,
+        );
 
         let dir_len = (self.direction.0 * self.direction.0 + self.direction.1 * self.direction.1)
             .sqrt()
@@ -84,8 +88,7 @@ impl Spawnable for DominoDef {
 
         // Orient dominoes so their thin axis (Z) aligns with the row direction.
         let facing_angle = dir_x.atan2(dir_z);
-        let orientation =
-            UnitQuaternion::from_axis_angle(&Vector3::y_axis(), facing_angle);
+        let orientation = UnitQuaternion::from_axis_angle(&Vector3::y_axis(), facing_angle);
 
         let mut entities = Vec::with_capacity(self.count as usize);
 
