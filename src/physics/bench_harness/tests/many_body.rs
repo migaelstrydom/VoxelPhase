@@ -358,7 +358,7 @@ fn box_stack_settles_without_overlap() {
         max_speed = max_speed.max(body.linear_velocity().magnitude());
     }
 
-    y_positions.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    y_positions.sort_by(|a, b| a.total_cmp(b));
 
     eprintln!("tail_max_speed={tail_max_speed:.6} final_max_speed={max_speed:.6}");
     if tail_samples > 0 {

@@ -6,8 +6,6 @@
 //! behavior on flat terrain while allowing true shaft support on uneven
 //! terrain.
 
-use std::cmp::Ordering;
-
 use nalgebra::{Point3, Vector3};
 use smallvec::SmallVec;
 
@@ -372,7 +370,7 @@ fn extend_with_parallel_face_spans(
             group.push(spans[j]);
         }
 
-        group.sort_by(|a, b| a.t_min.partial_cmp(&b.t_min).unwrap_or(Ordering::Equal));
+        group.sort_by(|a, b| a.t_min.total_cmp(&b.t_min));
         let mut merged = MergedParallelFaceSpan {
             start_t: group[0].t_min,
             end_t: group[0].t_max,

@@ -571,12 +571,7 @@ fn compute_stats_from_flat(
     };
 
     let mut indices: Vec<usize> = (0..contacts.len()).collect();
-    indices.sort_by(|a, b| {
-        contacts[*b]
-            .depth
-            .partial_cmp(&contacts[*a].depth)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    indices.sort_by(|a, b| contacts[*b].depth.total_cmp(&contacts[*a].depth));
 
     let mut samples = Vec::new();
     for idx in indices.into_iter().take(3) {

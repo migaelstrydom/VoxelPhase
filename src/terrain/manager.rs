@@ -455,7 +455,7 @@ impl TerrainManager {
             .filter(|h| h.normal.y > 0.0)
             .map(|h| h.point.y)
             .collect();
-        heights.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+        heights.sort_by(|a, b| b.total_cmp(a));
         heights
     }
 

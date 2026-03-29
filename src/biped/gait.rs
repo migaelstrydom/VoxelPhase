@@ -79,7 +79,7 @@ impl GaitCycle {
     ///
     /// Keyframes will be sorted by angle automatically.
     pub fn new(mut keyframes: Vec<GaitKeyframe>) -> Self {
-        keyframes.sort_by(|a, b| a.angle.partial_cmp(&b.angle).unwrap());
+        keyframes.sort_by(|a, b| a.angle.total_cmp(&b.angle));
         Self { keyframes }
     }
 

@@ -328,9 +328,7 @@ fn sweep_and_prune_into(
 
     sorted.extend(0..states.len());
     sorted.sort_unstable_by(|&a, &b| {
-        bounds[a].0[sweep_axis]
-            .partial_cmp(&bounds[b].0[sweep_axis])
-            .unwrap_or(std::cmp::Ordering::Equal)
+        bounds[a].0[sweep_axis].total_cmp(&bounds[b].0[sweep_axis])
     });
 
     for ii in 0..sorted.len() {
