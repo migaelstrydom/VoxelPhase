@@ -5,17 +5,11 @@ use std::collections::{HashMap, HashSet};
 use generational_arena::Arena;
 use nalgebra::{Point3, UnitQuaternion, Vector3};
 
-use crate::collision::capsule::Capsule;
 use crate::collision::contact::{ContactManifold, ContactPoint, FeatureId};
 use crate::collision::continuous::swept_sphere_sphere;
-use crate::collision::discrete::capsule_capsule::capsule_capsule_manifold;
-use crate::collision::discrete::obb_capsule::obb_capsule_manifold;
-use crate::collision::discrete::obb_obb::obb_obb_manifold_cached;
-use crate::collision::discrete::sphere_capsule::sphere_capsule_manifold;
-use crate::collision::discrete::sphere_obb::sphere_obb_manifold;
-use crate::collision::discrete::sphere_sphere::sphere_sphere_manifold;
-use crate::collision::obb::Obb;
+use crate::collision::dispatch;
 use crate::collision::sat::SatCache;
+use crate::collision::shape_view::ShapeView;
 use crate::physics::body::RigidBody;
 use crate::physics::collider::{Collider, ColliderMaterial, ColliderShape};
 use crate::physics::handle::{ColliderHandle, RigidBodyHandle};
@@ -155,14 +149,49 @@ pub fn generate_dynamic_contacts(
         let si = &buf.states[i];
         let sj = &buf.states[j];
 
-        // Skip pairs where both colliders belong to the same body (compound bodies).
         if si.body_handle == sj.body_handle {
             continue;
         }
 
-        match (&si.shape, &sj.shape) {
-            (ColliderShape::Sphere { radius: ra }, ColliderShape::Sphere { radius: rb }) => {
-                sphere_sphere_pair(
+        let view_a = ShapeView {
+            center: si.center,
+            rotation: si.rotation,
+            shape: &si.shape,
+        };
+        let view_b = ShapeView {
+            center: sj.center,
+            rotation: sj.rotation,
+            shape: &sj.shape,
+        };
+
+        // SAT cache: only look up for Box-Box pairs.
+        let mut sat_cache_opt = match (&si.shape, &sj.shape) {
+            (ColliderShape::Box { .. }, ColliderShape::Box { .. }) => {
+                buf.active_box_pairs
+                    .insert((si.collider_handle, sj.collider_handle));
+                let key = SatPairKey::new(si.collider_handle, sj.collider_handle);
+                Some(sat_cache_map.caches.entry(key).or_default())
+            }
+            _ => None,
+        };
+
+        let manifold = dispatch::generate_manifold(
+            &view_a,
+            &view_b,
+            contact_margin,
+            sat_cache_opt.as_deref_mut(),
+        );
+
+        if !manifold.is_empty() {
+            push_if_nonempty(&mut buf.manifolds, make_pair_header(si, sj), manifold);
+        } else {
+            // Speculative CCD for sphere-sphere pairs.
+            if let (
+                ColliderShape::Sphere { radius: ra },
+                ColliderShape::Sphere { radius: rb },
+            ) = (&si.shape, &sj.shape)
+            {
+                sphere_sphere_speculative(
                     si,
                     *ra,
                     sj,
@@ -173,131 +202,6 @@ pub fn generate_dynamic_contacts(
                     enable_speculative_contacts,
                     speculative_min_speed,
                     speculative_margin_multiplier,
-                    &mut buf.manifolds,
-                );
-            }
-            (ColliderShape::Sphere { radius }, ColliderShape::Box { half_extents }) => {
-                sphere_box_pair(
-                    si,
-                    *radius,
-                    sj,
-                    *half_extents,
-                    contact_margin,
-                    &mut buf.manifolds,
-                );
-            }
-            (ColliderShape::Box { half_extents }, ColliderShape::Sphere { radius }) => {
-                box_sphere_pair(
-                    si,
-                    *half_extents,
-                    sj,
-                    *radius,
-                    contact_margin,
-                    &mut buf.manifolds,
-                );
-            }
-            (
-                ColliderShape::Box { half_extents: he_a },
-                ColliderShape::Box { half_extents: he_b },
-            ) => {
-                buf.active_box_pairs
-                    .insert((si.collider_handle, sj.collider_handle));
-                box_box_pair(
-                    si,
-                    *he_a,
-                    sj,
-                    *he_b,
-                    contact_margin,
-                    sat_cache_map,
-                    &mut buf.manifolds,
-                );
-            }
-            (
-                ColliderShape::Sphere { radius },
-                ColliderShape::Capsule {
-                    half_height,
-                    radius: cap_r,
-                },
-            ) => {
-                sphere_capsule_pair(
-                    si,
-                    *radius,
-                    sj,
-                    *half_height,
-                    *cap_r,
-                    contact_margin,
-                    &mut buf.manifolds,
-                );
-            }
-            (
-                ColliderShape::Capsule {
-                    half_height,
-                    radius: cap_r,
-                },
-                ColliderShape::Sphere { radius },
-            ) => {
-                sphere_capsule_pair(
-                    sj,
-                    *radius,
-                    si,
-                    *half_height,
-                    *cap_r,
-                    contact_margin,
-                    &mut buf.manifolds,
-                );
-            }
-            (
-                ColliderShape::Box { half_extents },
-                ColliderShape::Capsule {
-                    half_height,
-                    radius: cap_r,
-                },
-            ) => {
-                box_capsule_pair(
-                    si,
-                    *half_extents,
-                    sj,
-                    *half_height,
-                    *cap_r,
-                    contact_margin,
-                    &mut buf.manifolds,
-                );
-            }
-            (
-                ColliderShape::Capsule {
-                    half_height,
-                    radius: cap_r,
-                },
-                ColliderShape::Box { half_extents },
-            ) => {
-                box_capsule_pair(
-                    sj,
-                    *half_extents,
-                    si,
-                    *half_height,
-                    *cap_r,
-                    contact_margin,
-                    &mut buf.manifolds,
-                );
-            }
-            (
-                ColliderShape::Capsule {
-                    half_height: hh_a,
-                    radius: r_a,
-                },
-                ColliderShape::Capsule {
-                    half_height: hh_b,
-                    radius: r_b,
-                },
-            ) => {
-                capsule_capsule_pair(
-                    si,
-                    *hh_a,
-                    *r_a,
-                    sj,
-                    *hh_b,
-                    *r_b,
-                    contact_margin,
                     &mut buf.manifolds,
                 );
             }
@@ -437,7 +341,8 @@ fn push_if_nonempty(out: &mut Vec<PairManifold>, header: PairHeader, manifold: C
     }
 }
 
-fn sphere_sphere_pair(
+/// Sphere-sphere speculative CCD (special case that uses swept_sphere_sphere).
+fn sphere_sphere_speculative(
     a: &ColliderState,
     radius_a: f32,
     b: &ColliderState,
@@ -450,15 +355,7 @@ fn sphere_sphere_pair(
     speculative_margin_multiplier: f32,
     out: &mut Vec<PairManifold>,
 ) {
-    let manifold = sphere_sphere_manifold(a.center, radius_a, b.center, radius_b, contact_margin);
-
-    if !manifold.is_empty() {
-        push_if_nonempty(out, make_pair_header(a, b), manifold);
-        return;
-    }
-
-    // Speculative CCD.
-    if should_add_speculative(
+    if !should_add_speculative(
         a.velocity.magnitude(),
         dt,
         radius_a,
@@ -470,135 +367,41 @@ fn sphere_sphere_pair(
         speculative_min_speed,
         speculative_margin_multiplier,
     ) {
-        let end_a = a.center + a.velocity * dt;
-        let end_b = b.center + b.velocity * dt;
-        if let Some(t) = swept_sphere_sphere(
-            a.center,
-            end_a,
-            radius_a + contact_margin,
-            b.center,
-            end_b,
-            radius_b + contact_margin,
-        ) {
-            let pos_a = a.center + (end_a - a.center) * t;
-            let pos_b = b.center + (end_b - b.center) * t;
-            let delta = pos_b - pos_a;
-            let dist = delta.magnitude();
-            let normal = if dist < 1e-6 {
-                Vector3::y()
-            } else {
-                delta / dist
-            };
-            let actual_depth = (radius_a + radius_b) - dist;
-            let solver_depth = actual_depth.max(0.0);
-            let point = pos_a + normal * (radius_a - actual_depth * 0.5);
-
-            let cp = ContactPoint::new(point, normal, actual_depth, FeatureId::SINGLE);
-            let mut speculative = ContactManifold::single(cp);
-            speculative.points[0].depth = solver_depth;
-
-            out.push(PairManifold {
-                header: make_pair_header(a, b),
-                manifold: speculative,
-            });
-        }
+        return;
     }
-}
 
-fn sphere_box_pair(
-    sphere: &ColliderState,
-    radius: f32,
-    box_state: &ColliderState,
-    half_extents: Vector3<f32>,
-    contact_margin: f32,
-    out: &mut Vec<PairManifold>,
-) {
-    let obb = Obb::new(box_state.center, box_state.rotation, half_extents);
-    let manifold = sphere_obb_manifold(&obb, sphere.center, radius, contact_margin);
-    push_if_nonempty(out, make_pair_header(box_state, sphere), manifold);
-}
+    let end_a = a.center + a.velocity * dt;
+    let end_b = b.center + b.velocity * dt;
+    if let Some(t) = swept_sphere_sphere(
+        a.center,
+        end_a,
+        radius_a + contact_margin,
+        b.center,
+        end_b,
+        radius_b + contact_margin,
+    ) {
+        let pos_a = a.center + (end_a - a.center) * t;
+        let pos_b = b.center + (end_b - b.center) * t;
+        let delta = pos_b - pos_a;
+        let dist = delta.magnitude();
+        let normal = if dist < 1e-6 {
+            Vector3::y()
+        } else {
+            delta / dist
+        };
+        let actual_depth = (radius_a + radius_b) - dist;
+        let solver_depth = actual_depth.max(0.0);
+        let point = pos_a + normal * (radius_a - actual_depth * 0.5);
 
-fn box_sphere_pair(
-    box_state: &ColliderState,
-    half_extents: Vector3<f32>,
-    sphere: &ColliderState,
-    radius: f32,
-    contact_margin: f32,
-    out: &mut Vec<PairManifold>,
-) {
-    sphere_box_pair(sphere, radius, box_state, half_extents, contact_margin, out);
-}
+        let cp = ContactPoint::new(point, normal, actual_depth, FeatureId::SINGLE);
+        let mut speculative = ContactManifold::single(cp);
+        speculative.points[0].depth = solver_depth;
 
-fn box_box_pair(
-    a: &ColliderState,
-    he_a: Vector3<f32>,
-    b: &ColliderState,
-    he_b: Vector3<f32>,
-    contact_margin: f32,
-    sat_cache_map: &mut SatCacheMap,
-    out: &mut Vec<PairManifold>,
-) {
-    let obb_a = Obb::new(a.center, a.rotation, he_a);
-    let obb_b = Obb::new(b.center, b.rotation, he_b);
-    let key = SatPairKey::new(a.collider_handle, b.collider_handle);
-    let cache = sat_cache_map.caches.entry(key).or_default();
-    let manifold = obb_obb_manifold_cached(&obb_a, &obb_b, contact_margin, cache);
-    push_if_nonempty(out, make_pair_header(a, b), manifold);
-}
-
-fn sphere_capsule_pair(
-    sphere: &ColliderState,
-    sphere_radius: f32,
-    capsule_state: &ColliderState,
-    half_height: f32,
-    cap_radius: f32,
-    contact_margin: f32,
-    out: &mut Vec<PairManifold>,
-) {
-    let capsule = Capsule::new(
-        capsule_state.center,
-        capsule_state.rotation,
-        half_height,
-        cap_radius,
-    );
-    let manifold = sphere_capsule_manifold(&capsule, sphere.center, sphere_radius, contact_margin);
-    push_if_nonempty(out, make_pair_header(capsule_state, sphere), manifold);
-}
-
-fn box_capsule_pair(
-    box_state: &ColliderState,
-    half_extents: Vector3<f32>,
-    capsule_state: &ColliderState,
-    half_height: f32,
-    cap_radius: f32,
-    contact_margin: f32,
-    out: &mut Vec<PairManifold>,
-) {
-    let obb = Obb::new(box_state.center, box_state.rotation, half_extents);
-    let capsule = Capsule::new(
-        capsule_state.center,
-        capsule_state.rotation,
-        half_height,
-        cap_radius,
-    );
-    let manifold = obb_capsule_manifold(&obb, &capsule, contact_margin);
-    push_if_nonempty(out, make_pair_header(box_state, capsule_state), manifold);
-}
-
-fn capsule_capsule_pair(
-    a: &ColliderState,
-    hh_a: f32,
-    r_a: f32,
-    b: &ColliderState,
-    hh_b: f32,
-    r_b: f32,
-    contact_margin: f32,
-    out: &mut Vec<PairManifold>,
-) {
-    let cap_a = Capsule::new(a.center, a.rotation, hh_a, r_a);
-    let cap_b = Capsule::new(b.center, b.rotation, hh_b, r_b);
-    let manifold = capsule_capsule_manifold(&cap_a, &cap_b, contact_margin);
-    push_if_nonempty(out, make_pair_header(a, b), manifold);
+        out.push(PairManifold {
+            header: make_pair_header(a, b),
+            manifold: speculative,
+        });
+    }
 }
 
 fn should_add_speculative(

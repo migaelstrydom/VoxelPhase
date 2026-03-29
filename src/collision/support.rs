@@ -11,7 +11,6 @@ use super::obb::Obb;
 use super::sphere_triangle::Triangle;
 
 /// The furthest point on a convex shape in a given direction.
-#[allow(unused)]
 pub trait ConvexSupport {
     /// Returns the point on the shape's surface that is furthest along `direction`
     /// (world space). Used by GJK, EPA, and conservative advancement.
@@ -23,7 +22,6 @@ pub trait ConvexSupport {
 }
 
 /// A sphere in world space for support function evaluation.
-#[allow(unused)]
 pub struct SupportSphere {
     pub center: Point3<f32>,
     pub radius: f32,
