@@ -169,7 +169,7 @@ impl CcdStrategy for SweepClampCcd {
                     static_geometry,
                     ctx.contact_margin,
                 ),
-                ColliderShape::Capsule { .. } => {
+                ColliderShape::Capsule { .. } | ColliderShape::ConvexHull { .. } => {
                     smallvec![cold_solver_contact(
                         hit.point,
                         hit.normal,

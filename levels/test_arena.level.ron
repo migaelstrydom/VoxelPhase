@@ -30,37 +30,42 @@ Level(
     )),
 
     objects: [
-        // BeachBall(pos: (3.0, 5.0, 2.0)),
+        BeachBall(pos: (3.0, 5.0, 2.0)),
         // BeachBall(pos: (-2.0, 4.0, -1.0)),
         // BeachBall(pos: (1.0, 6.0, 4.0)),
         // BeachBall(pos: (-4.0, 3.0, -3.0)),
-        BeachBall(pos: (2.0, 5.0, 0.0)),
-        // Capsule(pos: (0.0, 5.0, 0.0), half_height: 5.0, radius: 0.5),
+        // BeachBall(pos: (2.0, 5.0, 0.0)),
+        // // Capsule(pos: (0.0, 5.0, 0.0), half_height: 5.0, radius: 0.5),
         Box(pos: (3.0, 1.0, 3.0), half_extents: (0.5, 0.5, 0.5), density: 200.0),
-        Plank(pos: (3.0, 0.0, 3.0), length: 3.0, width: 3.0),
-        Capsule(pos: (3.0, 3.0, 6.0), half_height: 3.0, radius: 0.5, density: 800.0),
+        // Plank(pos: (3.0, 0.0, 3.0), length: 3.0, width: 3.0),
+        // Capsule(pos: (3.0, 3.0, 6.0), half_height: 3.0, radius: 0.5, density: 800.0),
 
-        Table(
-            pos: (3.0, 1.5, -2.0),
-            density: 500.0,
-        ),
+        // Table(
+        //     pos: (3.0, 1.5, -2.0),
+        //     density: 500.0,
+        // ),
 
-        Trampoline(
-            pos: (4.0, 0.0, -8.0),
-        ),
+        // Trampoline(
+        //     pos: (4.0, 0.0, -8.0),
+        // ),
 
-        Pyramid(
-            base: (10.0, 0.0, 5.0),
-            block_half_extents: (0.4, 0.25, 0.4),
-            base_width: 5,
-        ),
+        // Pyramid(
+        //     base: (10.0, 0.0, 5.0),
+        //     block_half_extents: (0.4, 0.25, 0.4),
+        //     base_width: 5,
+        // ),
 
-        Domino(
-            base: (10.0, 0.0, -4.0),
-            direction: (0.0, -1.0),
-            count: 10,
-            spacing: 0.4,
-        ),
+        Tetrahedron(pos: (6.0, 3.0, 0.0), size: 1.5),
+        Octahedron(pos: (10.0, 3.0, 0.0), size: 1.5),
+        Dodecahedron(pos: (14.0, 3.0, 0.0), size: 0.8),
+        Icosahedron(pos: (18.0, 3.0, 0.0), size: 1.2),
+
+        // Domino(
+        //     base: (10.0, 0.0, -4.0),
+        //     direction: (0.0, -1.0),
+        //     count: 10,
+        //     spacing: 0.4,
+        // ),
 
         // Stacked boxes (was 5 boxes at x=0, z=2)
         // Tower(

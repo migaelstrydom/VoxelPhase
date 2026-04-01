@@ -1,8 +1,11 @@
 //! Collider shapes and collision properties.
 
+use std::sync::Arc;
+
 use nalgebra::{Isometry3, Matrix3, Point3, UnitQuaternion, Vector3};
 
 use super::math::{box_inertia_tensor, capsule_inertia_tensor, sphere_inertia_tensor};
+use crate::collision::ConvexHull;
 
 /// Shape of a collider.
 #[derive(Debug, Clone)]
@@ -14,6 +17,9 @@ pub enum ColliderShape {
     /// A capsule (cylinder + hemisphere caps) along the local Y axis.
     /// `half_height` includes the caps; total height = `2 * half_height`.
     Capsule { half_height: f32, radius: f32 },
+    /// A convex hull defined by pre-computed vertices and faces.
+    /// `Arc` because hull data is potentially large and shared across cloned colliders.
+    ConvexHull { hull: Arc<ConvexHull> },
 }
 
 impl ColliderShape {
@@ -38,6 +44,7 @@ impl ColliderShape {
                 let volume = pi * r * r * (cyl_h + (4.0 / 3.0) * r);
                 volume * density
             }
+            ColliderShape::ConvexHull { hull } => hull.compute_volume() * density,
         }
     }
 
@@ -50,6 +57,7 @@ impl ColliderShape {
                 half_height,
                 radius,
             } => capsule_inertia_tensor(mass, *half_height, *radius),
+            ColliderShape::ConvexHull { hull } => hull.compute_inertia(mass),
         }
     }
 
@@ -59,6 +67,7 @@ impl ColliderShape {
             ColliderShape::Sphere { radius } => *radius,
             ColliderShape::Box { half_extents } => half_extents.norm(),
             ColliderShape::Capsule { half_height, .. } => *half_height,
+            ColliderShape::ConvexHull { hull } => hull.bounding_radius,
         }
     }
 
@@ -70,6 +79,7 @@ impl ColliderShape {
                 (half_extents.x * half_extents.x + half_extents.z * half_extents.z).sqrt()
             }
             ColliderShape::Capsule { radius, .. } => *radius,
+            ColliderShape::ConvexHull { hull } => hull.bounding_radius,
         }
     }
 }
@@ -126,6 +136,15 @@ impl ColliderDesc {
     pub fn box_shape(half_extents: Vector3<f32>) -> Self {
         Self {
             shape: ColliderShape::Box { half_extents },
+            offset: Isometry3::identity(),
+            density: 1000.0,
+            material: ColliderMaterial::default(),
+        }
+    }
+
+    pub fn convex_hull(hull: Arc<ConvexHull>) -> Self {
+        Self {
+            shape: ColliderShape::ConvexHull { hull },
             offset: Isometry3::identity(),
             density: 1000.0,
             material: ColliderMaterial::default(),
@@ -238,6 +257,10 @@ impl Collider {
         body_position: Point3<f32>,
         body_rotation: UnitQuaternion<f32>,
     ) -> Point3<f32> {
-        Point3::from(self.world_transform(body_position, body_rotation).translation.vector)
+        Point3::from(
+            self.world_transform(body_position, body_rotation)
+                .translation
+                .vector,
+        )
     }
 }

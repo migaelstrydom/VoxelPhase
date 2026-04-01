@@ -850,6 +850,9 @@ impl PhysicsWorld {
                         *half_height,
                         *cap_radius,
                     ),
+                    ColliderShape::ConvexHull { hull } => {
+                        probe_vs_sphere(origin, end, radius, center, hull.bounding_radius)
+                    }
                 };
                 if let Some(hit) = hit {
                     if earliest.as_ref().map_or(true, |e| hit.t < e.hit.t) {
@@ -912,6 +915,9 @@ impl ProbeTarget for PhysicsWorld {
                         *half_height,
                         *cap_radius,
                     ),
+                    ColliderShape::ConvexHull { hull } => {
+                        probe_vs_sphere(origin, end, radius, center, hull.bounding_radius)
+                    }
                 };
                 if let Some(hit) = hit {
                     if earliest.as_ref().map_or(true, |e: &ProbeHit| hit.t < e.t) {

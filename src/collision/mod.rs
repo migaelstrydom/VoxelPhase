@@ -15,6 +15,7 @@
 mod aabb;
 pub mod capsule;
 pub mod contact;
+pub mod convex_hull;
 pub mod contact_reducer;
 pub mod continuous;
 pub mod discrete;
@@ -30,6 +31,7 @@ pub mod sphere_triangle;
 pub mod support;
 
 pub use aabb::AABB;
+pub use convex_hull::ConvexHull;
 pub use mesh_patch::{MeshPatch, PatchTriangle};
 pub use ray_triangle::RayHit;
 pub use shape_view::ShapeView;

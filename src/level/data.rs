@@ -7,9 +7,9 @@
 use serde::Deserialize;
 
 use crate::app::spawnables::{
-    BeachBallDef, BoxDef, BoxWallDef, CapsuleDef, CrateDef, DominoDef,
-    HeavyCrateDef, HouseDef, PlankDef, PyramidDef, StackDef, StackItemDef, TableDef,
-    TrampolineDef, TowerDef, Spawnable,
+    BeachBallDef, BoxDef, BoxWallDef, CapsuleDef, CrateDef, DodecahedronDef, DominoDef,
+    HeavyCrateDef, HouseDef, IcosahedronDef, OctahedronDef, PlankDef, PyramidDef, Spawnable,
+    StackDef, StackItemDef, TableDef, TetrahedronDef, TowerDef, TrampolineDef,
 };
 
 /// Top-level level description.
@@ -245,6 +245,54 @@ pub enum LevelObject {
         #[serde(default = "CapsuleDef::default_friction")]
         friction: f32,
     },
+    /// Regular tetrahedron with ConvexHull collider.
+    Tetrahedron {
+        pos: (f32, f32, f32),
+        #[serde(default = "TetrahedronDef::default_size")]
+        size: f32,
+        #[serde(default = "TetrahedronDef::default_density")]
+        density: f32,
+        #[serde(default = "TetrahedronDef::default_restitution")]
+        restitution: f32,
+        #[serde(default = "TetrahedronDef::default_friction")]
+        friction: f32,
+    },
+    /// Regular octahedron with ConvexHull collider.
+    Octahedron {
+        pos: (f32, f32, f32),
+        #[serde(default = "OctahedronDef::default_size")]
+        size: f32,
+        #[serde(default = "OctahedronDef::default_density")]
+        density: f32,
+        #[serde(default = "OctahedronDef::default_restitution")]
+        restitution: f32,
+        #[serde(default = "OctahedronDef::default_friction")]
+        friction: f32,
+    },
+    /// Regular dodecahedron with ConvexHull collider.
+    Dodecahedron {
+        pos: (f32, f32, f32),
+        #[serde(default = "DodecahedronDef::default_size")]
+        size: f32,
+        #[serde(default = "DodecahedronDef::default_density")]
+        density: f32,
+        #[serde(default = "DodecahedronDef::default_restitution")]
+        restitution: f32,
+        #[serde(default = "DodecahedronDef::default_friction")]
+        friction: f32,
+    },
+    /// Regular icosahedron with ConvexHull collider.
+    Icosahedron {
+        pos: (f32, f32, f32),
+        #[serde(default = "IcosahedronDef::default_size")]
+        size: f32,
+        #[serde(default = "IcosahedronDef::default_density")]
+        density: f32,
+        #[serde(default = "IcosahedronDef::default_restitution")]
+        restitution: f32,
+        #[serde(default = "IcosahedronDef::default_friction")]
+        friction: f32,
+    },
     /// Trampoline — bouncy pad on four short legs.
     Trampoline {
         pos: (f32, f32, f32),
@@ -342,22 +390,25 @@ impl LevelObject {
 
             LevelObject::Stack { base, items } => Box::new(StackDef {
                 base: *base,
-                items: items.iter().map(|item| match item {
-                    StackItem::Crate { size } => StackItemDef::Crate { size: *size },
-                    StackItem::HeavyCrate { size } => StackItemDef::HeavyCrate { size: *size },
-                    StackItem::Plank { length, width } => StackItemDef::Plank {
-                        length: *length,
-                        width: *width,
-                    },
-                    StackItem::BeachBall => StackItemDef::BeachBall,
-                    StackItem::Capsule {
-                        half_height,
-                        radius,
-                    } => StackItemDef::Capsule {
-                        half_height: *half_height,
-                        radius: *radius,
-                    },
-                }).collect(),
+                items: items
+                    .iter()
+                    .map(|item| match item {
+                        StackItem::Crate { size } => StackItemDef::Crate { size: *size },
+                        StackItem::HeavyCrate { size } => StackItemDef::HeavyCrate { size: *size },
+                        StackItem::Plank { length, width } => StackItemDef::Plank {
+                            length: *length,
+                            width: *width,
+                        },
+                        StackItem::BeachBall => StackItemDef::BeachBall,
+                        StackItem::Capsule {
+                            half_height,
+                            radius,
+                        } => StackItemDef::Capsule {
+                            half_height: *half_height,
+                            radius: *radius,
+                        },
+                    })
+                    .collect(),
             }),
 
             LevelObject::Tower {
@@ -404,6 +455,62 @@ impl LevelObject {
                 pos: *pos,
                 half_height: *half_height,
                 radius: *radius,
+                density: *density,
+                restitution: *restitution,
+                friction: *friction,
+            }),
+
+            LevelObject::Tetrahedron {
+                pos,
+                size,
+                density,
+                restitution,
+                friction,
+            } => Box::new(TetrahedronDef {
+                pos: *pos,
+                size: *size,
+                density: *density,
+                restitution: *restitution,
+                friction: *friction,
+            }),
+
+            LevelObject::Octahedron {
+                pos,
+                size,
+                density,
+                restitution,
+                friction,
+            } => Box::new(OctahedronDef {
+                pos: *pos,
+                size: *size,
+                density: *density,
+                restitution: *restitution,
+                friction: *friction,
+            }),
+
+            LevelObject::Dodecahedron {
+                pos,
+                size,
+                density,
+                restitution,
+                friction,
+            } => Box::new(DodecahedronDef {
+                pos: *pos,
+                size: *size,
+                density: *density,
+                restitution: *restitution,
+                friction: *friction,
+            }),
+
+            LevelObject::Icosahedron {
+                pos,
+                size,
+                density,
+                restitution,
+                friction,
+            } => Box::new(IcosahedronDef {
+                pos: *pos,
+                size: *size,
                 density: *density,
                 restitution: *restitution,
                 friction: *friction,
@@ -530,8 +637,7 @@ mod tests {
 
     #[test]
     fn water_config_rejects_runtime_tuning_fields() {
-        let parse_result: Result<WaterConfig, _> =
-            ron::from_str("(wave_damping: 2.0, bodies: [])");
+        let parse_result: Result<WaterConfig, _> = ron::from_str("(wave_damping: 2.0, bodies: [])");
 
         assert!(
             parse_result.is_err(),

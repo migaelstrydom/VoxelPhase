@@ -225,6 +225,9 @@ pub fn compute_buoyancy(
             flow_grid,
             wave_grid,
         )?,
+        ColliderShape::ConvexHull { hull } => {
+            compute_sphere_submersion(collider_center, hull.bounding_radius, flow_grid, wave_grid)?
+        }
     };
 
     if submerged_volume <= 0.0 {
@@ -663,6 +666,11 @@ fn submerged_volume_for_pose(
         )
         .map(|(v, _, _)| v)
         .unwrap_or(0.0),
+        ColliderShape::ConvexHull { hull } => {
+            compute_sphere_submersion(center, hull.bounding_radius, flow_grid, wave_grid)
+                .map(|(v, _, _)| v)
+                .unwrap_or(0.0)
+        }
     }
 }
 
@@ -709,6 +717,11 @@ fn shape_drag_properties(shape: &ColliderShape) -> (f32, f32, f32) {
             let projected_area = surface_area * 0.25;
             let radius_sq = half_height * half_height;
             (DRAG_COEFF_CAPSULE, projected_area, radius_sq)
+        }
+        ColliderShape::ConvexHull { hull } => {
+            let r = hull.bounding_radius;
+            let projected_area = PI * r * r;
+            (DRAG_COEFF_SPHERE, projected_area, r * r)
         }
     }
 }

@@ -475,6 +475,13 @@ fn draw_bodies(world: &PhysicsWorld, overlays: &mut DebugOverlays) {
                         Colour::new(0.2, 1.0, 0.5, 1.0),
                     );
                 }
+                ColliderShape::ConvexHull { hull } => {
+                    overlays.add_sphere(
+                        center,
+                        hull.bounding_radius,
+                        Colour::new(0.8, 0.5, 1.0, 1.0),
+                    );
+                }
             }
         }
     }

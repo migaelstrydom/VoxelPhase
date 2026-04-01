@@ -282,6 +282,7 @@ pub fn generate_dynamic_contacts(
 /// higher-ranked shape type.
 fn shape_type_rank(shape: &ColliderShape) -> u8 {
     match shape {
+        ColliderShape::ConvexHull { .. } => 3,
         ColliderShape::Box { .. } => 2,
         ColliderShape::Capsule { .. } => 1,
         ColliderShape::Sphere { .. } => 0,

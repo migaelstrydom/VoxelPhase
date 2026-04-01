@@ -143,6 +143,16 @@ pub fn gjk_query_seeded(
         return GjkResult::Intersecting { simplex };
     }
 
+    // Track minimum distance observed.  If GJK stalls (distance stops
+    // decreasing) with a non-trivial simplex, the shapes are nearly
+    // touching and we should let EPA resolve the penetration.  The bounding
+    // radius heuristic prevents false positives on well-separated shapes
+    // where support-function tiebreaking causes minor oscillation.
+    let mut min_dist_sq = v.magnitude_squared();
+    let mut stall_count: u32 = 0;
+    const STALL_LIMIT: u32 = 8;
+    let bounding_sq = (a.bounding_radius() + b.bounding_radius()).powi(2);
+
     for _ in 0..MAX_ITERATIONS {
         // Search direction: from closest point toward origin.
         let d = -v;
@@ -178,13 +188,41 @@ pub fn gjk_query_seeded(
             _ => unreachable!(),
         }
 
-        if v.magnitude_squared() < DEGENERATE_TOLERANCE {
+        let dist_sq = v.magnitude_squared();
+        if dist_sq < DEGENERATE_TOLERANCE {
             return GjkResult::Intersecting { simplex };
+        }
+
+        // Stall detection: if the distance hasn't improved, we're likely
+        // oscillating around a shallow-penetration simplex.  Only trigger
+        // when the minimum distance is small relative to the shapes (truly
+        // separated shapes converge via the vv-vw check above).
+        if dist_sq < min_dist_sq - TOLERANCE {
+            min_dist_sq = dist_sq;
+            stall_count = 0;
+        } else {
+            stall_count += 1;
+            if stall_count >= STALL_LIMIT && simplex.count >= 2
+                && min_dist_sq < 0.25 * bounding_sq
+            {
+                // A bad warm-start seed can occasionally stall on a separated
+                // pair and satisfy the heuristic above. Re-run once without a
+                // seed before classifying as intersecting.
+                if initial_direction.is_some() {
+                    return gjk_query_seeded(a, b, None);
+                }
+                return GjkResult::Intersecting { simplex };
+            }
         }
     }
 
-    // Max iterations: if we have a tetrahedron, assume intersection.
-    if simplex.count == 4 {
+    // Max iterations exhausted: for truly separated shapes, GJK converges
+    // well within the limit.  Hitting the cap means the shapes are either
+    // overlapping or nearly touching (thin Minkowski difference).
+    if simplex.count >= 3 && min_dist_sq < 0.25 * bounding_sq {
+        if initial_direction.is_some() {
+            return gjk_query_seeded(a, b, None);
+        }
         GjkResult::Intersecting { simplex }
     } else {
         let (closest_a, closest_b, distance) = extract_closest_points(&simplex);
@@ -319,10 +357,12 @@ fn process_triangle_simplex(simplex: &mut GjkSimplex, v: &mut Vector3<f32>) {
         *v = a;
         return;
     }
-    let u = va_bary / denom;
-    let frac_v = vb_bary / denom;
-    let w = 1.0 - u - frac_v;
-    *v = a * w + b * u + c * frac_v;
+    // Ericson barycentrics:
+    // va_bary weights A, vb_bary weights B, vc_bary weights C.
+    let wa = va_bary / denom;
+    let wb = vb_bary / denom;
+    let wc = 1.0 - wa - wb;
+    *v = a * wa + b * wb + c * wc;
 }
 
 /// Process a 4-vertex simplex (tetrahedron). Returns true if the origin is
@@ -370,7 +410,7 @@ fn process_tetrahedron_simplex(simplex: &mut GjkSimplex, v: &mut Vector3<f32>) -
     if in_front_abc {
         let mut s = GjkSimplex::new();
         s.vertices[0] = simplex.vertices[0 /* placeholder */];
-        // Rearrange: face ABC → [C, B, A] so newest is at index 2.
+        // Rearrange: face ABC -> [C, B, A] so newest is at index 2.
         s.vertices[0] = simplex.vertices[1]; // C
         s.vertices[1] = simplex.vertices[2]; // B
         s.vertices[2] = simplex.vertices[3]; // A
@@ -876,6 +916,895 @@ mod tests {
                 );
             }
             GjkResult::Intersecting { .. } => panic!("Expected Separated"),
+        }
+    }
+
+    // =================================================================
+    // process_line_simplex tests
+    // =================================================================
+
+    fn mkv(point: Point3<f32>) -> MinkowskiVertex {
+        MinkowskiVertex {
+            point,
+            support_a: point,
+            support_b: Point3::origin(),
+        }
+    }
+
+    fn make_simplex(points: &[Point3<f32>]) -> GjkSimplex {
+        let mut s = GjkSimplex::new();
+        for &p in points {
+            s.push(mkv(p));
+        }
+        s
+    }
+
+    #[test]
+    fn line_closest_to_vertex_a() {
+        // Origin is behind vertex A (the newest, index 1). The projection
+        // of O onto AB has t <= 0, so the simplex reduces to A alone.
+        //
+        //   O          A -----> B
+        // (origin)
+        let mut simplex = make_simplex(&[
+            Point3::new(3.0, 0.0, 0.0), // B (oldest, index 0)
+            Point3::new(1.0, 1.0, 0.0), // A (newest, index 1)
+        ]);
+        let mut v = Vector3::zeros();
+        process_line_simplex(&mut simplex, &mut v);
+
+        assert_eq!(simplex.count, 1);
+        assert!((v - Vector3::new(1.0, 1.0, 0.0)).magnitude() < 1e-6);
+    }
+
+    #[test]
+    fn line_closest_to_vertex_b() {
+        // Origin projects beyond vertex B (t >= |AB|^2), so the simplex
+        // reduces to B alone.
+        //
+        //   A -----> B          O
+        let mut simplex = make_simplex(&[
+            Point3::new(-1.0, 1.0, 0.0), // B (oldest, index 0)
+            Point3::new(-3.0, 0.0, 0.0), // A (newest, index 1)
+        ]);
+        let mut v = Vector3::zeros();
+        process_line_simplex(&mut simplex, &mut v);
+
+        assert_eq!(simplex.count, 1);
+        assert!((v - Vector3::new(-1.0, 1.0, 0.0)).magnitude() < 1e-6);
+    }
+
+    #[test]
+    fn line_closest_to_interior() {
+        // Origin projects onto the interior of segment AB.
+        //
+        //        O
+        //        |
+        //   A ---+--- B
+        let mut simplex = make_simplex(&[
+            Point3::new(2.0, 0.0, 0.0), // B (oldest, index 0)
+            Point3::new(-2.0, 0.0, 0.0), // A (newest, index 1)
+        ]);
+        let mut v = Vector3::zeros();
+        process_line_simplex(&mut simplex, &mut v);
+
+        assert_eq!(simplex.count, 2);
+        // Origin is on the segment itself, so v should be ~(0,0,0).
+        assert!(v.magnitude() < 1e-6);
+    }
+
+    #[test]
+    fn line_closest_to_interior_off_axis() {
+        // Segment doesn't pass through origin, but origin projects onto
+        // its interior.
+        //
+        //   A ========= B
+        //        O (below)
+        let mut simplex = make_simplex(&[
+            Point3::new(1.0, 1.0, 0.0), // B
+            Point3::new(-1.0, 1.0, 0.0), // A
+        ]);
+        let mut v = Vector3::zeros();
+        process_line_simplex(&mut simplex, &mut v);
+
+        assert_eq!(simplex.count, 2);
+        assert!((v - Vector3::new(0.0, 1.0, 0.0)).magnitude() < 1e-6);
+    }
+
+    // =================================================================
+    // process_triangle_simplex tests
+    // =================================================================
+
+    #[test]
+    fn triangle_vertex_a_region() {
+        // Origin is in vertex A's Voronoi region: d1 <= 0 && d2 <= 0.
+        // A is the newest vertex (index 2).
+        let mut simplex = make_simplex(&[
+            Point3::new(5.0, 0.0, 2.0), // C (oldest, index 0)
+            Point3::new(5.0, 2.0, 0.0), // B (index 1)
+            Point3::new(3.0, 1.0, 1.0), // A (newest, index 2)
+        ]);
+        let mut v = Vector3::zeros();
+        process_triangle_simplex(&mut simplex, &mut v);
+
+        assert_eq!(simplex.count, 1);
+        assert!((v - Vector3::new(3.0, 1.0, 1.0)).magnitude() < 1e-5);
+    }
+
+    #[test]
+    fn triangle_vertex_b_region() {
+        // Origin is in vertex B's Voronoi region: d3 >= 0 && d4 <= d3.
+        let mut simplex = make_simplex(&[
+            Point3::new(5.0, 0.0, 2.0), // C
+            Point3::new(3.0, 1.0, 1.0), // B
+            Point3::new(5.0, 2.0, 0.0), // A (newest)
+        ]);
+        let mut v = Vector3::zeros();
+        process_triangle_simplex(&mut simplex, &mut v);
+
+        assert_eq!(simplex.count, 1);
+        assert!((v - Vector3::new(3.0, 1.0, 1.0)).magnitude() < 1e-5);
+    }
+
+    #[test]
+    fn triangle_vertex_c_region() {
+        // Origin is in vertex C's Voronoi region: d6 >= 0 && d5 <= d6.
+        let mut simplex = make_simplex(&[
+            Point3::new(3.0, 1.0, 1.0), // C (closest)
+            Point3::new(5.0, 2.0, 0.0), // B
+            Point3::new(5.0, 0.0, 2.0), // A (newest)
+        ]);
+        let mut v = Vector3::zeros();
+        process_triangle_simplex(&mut simplex, &mut v);
+
+        assert_eq!(simplex.count, 1);
+        assert!((v - Vector3::new(3.0, 1.0, 1.0)).magnitude() < 1e-5);
+    }
+
+    #[test]
+    fn triangle_interior_region_permuted_ab() {
+        // Independent geometric solve (closest point on triangle) puts the
+        // closest point in the triangle interior for this fixture.
+        //        O
+        //   A ---+--- B
+        //        C (far away)
+        let mut simplex = make_simplex(&[
+            Point3::new(0.0, 0.0, 5.0), // C (far, index 0)
+            Point3::new(1.0, 1.0, 0.0), // B (index 1)
+            Point3::new(-1.0, 1.0, 0.0), // A (newest, index 2)
+        ]);
+        let mut v = Vector3::zeros();
+        process_triangle_simplex(&mut simplex, &mut v);
+
+        assert_eq!(simplex.count, 3);
+        assert!((v - Vector3::new(0.0, 0.96153843, 0.1923077)).magnitude() < 1e-5);
+    }
+
+    #[test]
+    fn triangle_interior_region_permuted_ac() {
+        // Independent geometric solve (closest point on triangle) puts the
+        // closest point in the triangle interior for this fixture.
+        let mut simplex = make_simplex(&[
+            Point3::new(1.0, 1.0, 0.0), // C (index 0)
+            Point3::new(0.0, 0.0, 5.0), // B (far, index 1)
+            Point3::new(-1.0, 1.0, 0.0), // A (newest, index 2)
+        ]);
+        let mut v = Vector3::zeros();
+        process_triangle_simplex(&mut simplex, &mut v);
+
+        assert_eq!(simplex.count, 3);
+        assert!((v - Vector3::new(0.0, 0.96153843, 0.1923077)).magnitude() < 1e-5);
+    }
+
+    #[test]
+    fn triangle_interior_region_permuted_bc() {
+        // Independent geometric solve (closest point on triangle) puts the
+        // closest point in the triangle interior for this fixture.
+        let mut simplex = make_simplex(&[
+            Point3::new(1.0, 1.0, 0.0),  // C (index 0)
+            Point3::new(-1.0, 1.0, 0.0), // B (index 1)
+            Point3::new(0.0, 0.0, 5.0),  // A (far away, newest, index 2)
+        ]);
+        let mut v = Vector3::zeros();
+        process_triangle_simplex(&mut simplex, &mut v);
+
+        assert_eq!(simplex.count, 3);
+        assert!((v - Vector3::new(0.0, 0.96153843, 0.1923077)).magnitude() < 1e-5);
+    }
+
+    #[test]
+    fn triangle_interior_region() {
+        // Origin projects onto the interior of the triangle. The triangle
+        // is in the XZ plane at y=1, so closest point is directly above O.
+        let mut simplex = make_simplex(&[
+            Point3::new(2.0, 1.0, -1.0),  // C
+            Point3::new(-2.0, 1.0, -1.0), // B
+            Point3::new(0.0, 1.0, 2.0),   // A (newest)
+        ]);
+        let mut v = Vector3::zeros();
+        process_triangle_simplex(&mut simplex, &mut v);
+
+        assert_eq!(simplex.count, 3);
+        assert!((v.y - 1.0).abs() < 1e-5);
+        assert!(v.x.abs() < 1e-5);
+        assert!(v.z.abs() < 1e-5);
+    }
+
+    #[test]
+    fn triangle_degenerate_collinear() {
+        // Degenerate triangle (collinear points). Should not crash; the
+        // function hits the degenerate denom guard and falls back to vertex A.
+        let mut simplex = make_simplex(&[
+            Point3::new(3.0, 0.0, 0.0), // C
+            Point3::new(2.0, 0.0, 0.0), // B
+            Point3::new(1.0, 0.0, 0.0), // A
+        ]);
+        let mut v = Vector3::zeros();
+        process_triangle_simplex(&mut simplex, &mut v);
+
+        // Should produce a finite, non-NaN result.
+        assert!(v.magnitude().is_finite());
+    }
+
+    #[test]
+    fn triangle_origin_on_edge_ab_boundary() {
+        // Independent geometry: closest point is exactly on AB at the origin.
+        let mut simplex = make_simplex(&[
+            Point3::new(0.0, 2.0, 0.0),  // C (oldest)
+            Point3::new(1.0, 0.0, 0.0),  // B
+            Point3::new(-1.0, 0.0, 0.0), // A (newest)
+        ]);
+        let mut v = Vector3::zeros();
+        process_triangle_simplex(&mut simplex, &mut v);
+
+        assert_eq!(simplex.count, 2);
+        assert!(v.magnitude() < 1e-6);
+    }
+
+    #[test]
+    fn triangle_origin_on_vertex_a_boundary() {
+        // Independent geometry: origin coincides with newest vertex A.
+        let mut simplex = make_simplex(&[
+            Point3::new(-1.0, 2.0, 0.0), // C (oldest)
+            Point3::new(1.0, 2.0, 0.0),  // B
+            Point3::new(0.0, 0.0, 0.0),  // A (newest)
+        ]);
+        let mut v = Vector3::zeros();
+        process_triangle_simplex(&mut simplex, &mut v);
+
+        assert_eq!(simplex.count, 1);
+        assert!(v.magnitude() < 1e-6);
+    }
+
+    // =================================================================
+    // process_tetrahedron_simplex tests
+    // =================================================================
+
+    #[test]
+    fn tetrahedron_origin_inside() {
+        // Origin is enclosed by the tetrahedron → returns true.
+        let mut simplex = make_simplex(&[
+            Point3::new(0.0, 0.0, -1.0), // D (oldest, index 0)
+            Point3::new(-1.0, 0.0, 1.0), // C (index 1)
+            Point3::new(1.0, 0.0, 1.0),  // B (index 2)
+            Point3::new(0.0, 2.0, 0.0),  // A (newest, index 3)
+        ]);
+        let mut v = Vector3::zeros();
+        let enclosed = process_tetrahedron_simplex(&mut simplex, &mut v);
+
+        assert!(enclosed, "Origin should be enclosed by the tetrahedron");
+    }
+
+    #[test]
+    fn tetrahedron_origin_on_face_boundary_treated_as_enclosed() {
+        // Independent geometry: origin lies on face ABC plane and all three
+        // face-side dots are zero, which this routine treats as enclosed.
+        let mut simplex = make_simplex(&[
+            Point3::new(0.0, 1.0, -1.0),  // D (oldest, index 0)
+            Point3::new(-1.0, 1.0, 1.0),  // C (index 1)
+            Point3::new(1.0, 1.0, 1.0),   // B (index 2)
+            Point3::new(0.0, 0.0, 0.0),   // A (newest, index 3)
+        ]);
+        let mut v = Vector3::zeros();
+        let enclosed = process_tetrahedron_simplex(&mut simplex, &mut v);
+
+        assert!(enclosed);
+    }
+
+    #[test]
+    fn tetrahedron_origin_outside_one_face() {
+        // Origin is outside face ABC only. Move the tetrahedron so origin
+        // is clearly on the ABC side but not ACD or ADB.
+        let mut simplex = make_simplex(&[
+            Point3::new(0.0, 3.0, 0.0),  // D (far above, index 0)
+            Point3::new(-1.0, 1.0, 0.0), // C (index 1)
+            Point3::new(1.0, 1.0, 0.0),  // B (index 2)
+            Point3::new(0.0, 1.0, -1.0), // A (newest, index 3)
+        ]);
+        let mut v = Vector3::zeros();
+        let enclosed = process_tetrahedron_simplex(&mut simplex, &mut v);
+
+        assert!(!enclosed);
+        assert!(simplex.count <= 3);
+        assert!(v.magnitude() > 0.0);
+    }
+
+    #[test]
+    fn tetrahedron_origin_outside_two_faces() {
+        // Origin is outside two faces. Place the tetrahedron so origin is
+        // near an edge shared by two visible faces.
+        let mut simplex = make_simplex(&[
+            Point3::new(0.0, 0.0, 2.0), // D (index 0)
+            Point3::new(-2.0, 2.0, 0.0), // C (index 1)
+            Point3::new(2.0, 2.0, 0.0),  // B (index 2)
+            Point3::new(0.0, 1.0, -1.0), // A (newest, index 3)
+        ]);
+        let mut v = Vector3::zeros();
+        let enclosed = process_tetrahedron_simplex(&mut simplex, &mut v);
+
+        assert!(!enclosed);
+        assert!(simplex.count <= 3);
+    }
+
+    #[test]
+    fn tetrahedron_origin_outside_three_faces() {
+        // Origin is far from the tetrahedron — visible from all three faces
+        // containing the newest vertex A.
+        let mut simplex = make_simplex(&[
+            Point3::new(3.0, 4.0, 3.0), // D
+            Point3::new(3.0, 4.0, 5.0), // C
+            Point3::new(5.0, 4.0, 3.0), // B
+            Point3::new(3.0, 6.0, 3.0), // A (newest)
+        ]);
+        let mut v = Vector3::zeros();
+        let enclosed = process_tetrahedron_simplex(&mut simplex, &mut v);
+
+        assert!(!enclosed);
+        assert!(simplex.count <= 3);
+        // v should point toward the closest feature of the tetrahedron.
+        assert!(v.magnitude() > 0.0);
+    }
+
+    #[test]
+    fn tetrahedron_reduces_to_correct_closest_feature() {
+        // Place a tetrahedron so origin lies outside a face that includes
+        // the newest vertex A. The closest point should be near (0, 2, 0).
+        let mut simplex = make_simplex(&[
+            Point3::new(0.0, 4.0, -1.0), // D
+            Point3::new(-1.0, 2.0, 1.0), // C
+            Point3::new(1.0, 2.0, 1.0),  // B
+            Point3::new(0.0, 2.0, 0.0),  // A (newest)
+        ]);
+        let mut v = Vector3::zeros();
+        let enclosed = process_tetrahedron_simplex(&mut simplex, &mut v);
+
+        assert!(!enclosed);
+        // Independent geometry gives the closest point near (0, 2, 0).
+        assert!((v.y - 2.0).abs() < 0.5, "v.y should be near 2.0, got {}", v.y);
+        assert!(v.x.abs() < 0.5);
+        assert!(v.z.abs() < 0.5);
+    }
+
+    // =================================================================
+    // closest_on_line_segment tests
+    // =================================================================
+
+    fn mkv_full(
+        mink: Point3<f32>,
+        sa: Point3<f32>,
+        sb: Point3<f32>,
+    ) -> MinkowskiVertex {
+        MinkowskiVertex {
+            point: mink,
+            support_a: sa,
+            support_b: sb,
+        }
+    }
+
+    #[test]
+    fn closest_line_origin_projects_to_v0() {
+        // Origin behind v0: t clamps to 0, returns v0's witnesses.
+        let v0 = mkv_full(
+            Point3::new(1.0, 1.0, 0.0),
+            Point3::new(2.0, 0.0, 0.0),
+            Point3::new(1.0, -1.0, 0.0),
+        );
+        let v1 = mkv_full(
+            Point3::new(3.0, 1.0, 0.0),
+            Point3::new(4.0, 0.0, 0.0),
+            Point3::new(1.0, -1.0, 0.0),
+        );
+        let (ca, cb, dist) = closest_on_line_segment(&v0, &v1);
+
+        assert!((ca - v0.support_a).magnitude() < 1e-6);
+        assert!((cb - v0.support_b).magnitude() < 1e-6);
+        assert!(approx_eq(dist, v0.point.coords.magnitude(), 1e-5));
+    }
+
+    #[test]
+    fn closest_line_origin_projects_to_v1() {
+        // Origin behind v1: t clamps to 1, returns v1's witnesses.
+        let v0 = mkv_full(
+            Point3::new(-3.0, 1.0, 0.0),
+            Point3::new(-2.0, 0.0, 0.0),
+            Point3::new(1.0, -1.0, 0.0),
+        );
+        let v1 = mkv_full(
+            Point3::new(-1.0, 1.0, 0.0),
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, -1.0, 0.0),
+        );
+        let (ca, cb, dist) = closest_on_line_segment(&v0, &v1);
+
+        assert!((ca - v1.support_a).magnitude() < 1e-6);
+        assert!((cb - v1.support_b).magnitude() < 1e-6);
+        assert!(approx_eq(dist, v1.point.coords.magnitude(), 1e-5));
+    }
+
+    #[test]
+    fn closest_line_origin_projects_to_interior() {
+        // Segment: (-2, 1, 0) to (2, 1, 0). Origin projects to (0, 1, 0)
+        // at t = 0.5. Witnesses should be interpolated at t = 0.5.
+        let v0 = mkv_full(
+            Point3::new(-2.0, 1.0, 0.0),
+            Point3::new(-1.0, 3.0, 0.0),
+            Point3::new(1.0, 2.0, 0.0),
+        );
+        let v1 = mkv_full(
+            Point3::new(2.0, 1.0, 0.0),
+            Point3::new(3.0, 5.0, 0.0),
+            Point3::new(1.0, 4.0, 0.0),
+        );
+        let (ca, cb, dist) = closest_on_line_segment(&v0, &v1);
+
+        let expected_a = Point3::new(1.0, 4.0, 0.0); // lerp at 0.5
+        let expected_b = Point3::new(1.0, 3.0, 0.0);
+        assert!((ca - expected_a).magnitude() < 1e-5);
+        assert!((cb - expected_b).magnitude() < 1e-5);
+        assert!(approx_eq(dist, 1.0, 1e-5)); // closest mink point is (0, 1, 0)
+    }
+
+    #[test]
+    fn closest_line_degenerate_zero_length() {
+        // Both endpoints are the same point — degenerate segment.
+        let v0 = mkv_full(
+            Point3::new(1.0, 2.0, 0.0),
+            Point3::new(3.0, 0.0, 0.0),
+            Point3::new(2.0, -2.0, 0.0),
+        );
+        let v1 = mkv_full(
+            Point3::new(1.0, 2.0, 0.0),
+            Point3::new(5.0, 0.0, 0.0),
+            Point3::new(4.0, -2.0, 0.0),
+        );
+        let (ca, cb, dist) = closest_on_line_segment(&v0, &v1);
+
+        assert!((ca - v0.support_a).magnitude() < 1e-6);
+        assert!((cb - v0.support_b).magnitude() < 1e-6);
+        assert!(approx_eq(dist, v0.point.coords.magnitude(), 1e-5));
+    }
+
+    // =================================================================
+    // closest_on_triangle tests
+    // =================================================================
+
+    #[test]
+    fn closest_tri_vertex_a_region() {
+        // Origin in vertex A (v0) region: d1 <= 0 && d2 <= 0.
+        let v0 = mkv_full(
+            Point3::new(1.0, 1.0, 0.0),
+            Point3::new(10.0, 0.0, 0.0),
+            Point3::new(9.0, -1.0, 0.0),
+        );
+        let v1 = mkv_full(
+            Point3::new(3.0, 3.0, 0.0),
+            Point3::new(12.0, 0.0, 0.0),
+            Point3::new(9.0, -3.0, 0.0),
+        );
+        let v2 = mkv_full(
+            Point3::new(3.0, 0.0, 3.0),
+            Point3::new(12.0, 0.0, 3.0),
+            Point3::new(9.0, 0.0, 0.0),
+        );
+        let (ca, cb, dist) = closest_on_triangle(&v0, &v1, &v2);
+
+        assert!((ca - v0.support_a).magnitude() < 1e-5);
+        assert!((cb - v0.support_b).magnitude() < 1e-5);
+        assert!(approx_eq(dist, v0.point.coords.magnitude(), 1e-5));
+    }
+
+    #[test]
+    fn closest_tri_vertex_b_region() {
+        // Origin in vertex B (v1) region: d3 >= 0 && d4 <= d3.
+        let v0 = mkv_full(
+            Point3::new(3.0, 3.0, 0.0),
+            Point3::new(10.0, 0.0, 0.0),
+            Point3::new(7.0, -3.0, 0.0),
+        );
+        let v1 = mkv_full(
+            Point3::new(1.0, 1.0, 0.0),
+            Point3::new(8.0, 0.0, 0.0),
+            Point3::new(7.0, -1.0, 0.0),
+        );
+        let v2 = mkv_full(
+            Point3::new(3.0, 0.0, 3.0),
+            Point3::new(10.0, 0.0, 3.0),
+            Point3::new(7.0, 0.0, 0.0),
+        );
+        let (ca, cb, dist) = closest_on_triangle(&v0, &v1, &v2);
+
+        assert!((ca - v1.support_a).magnitude() < 1e-5);
+        assert!((cb - v1.support_b).magnitude() < 1e-5);
+        assert!(approx_eq(dist, v1.point.coords.magnitude(), 1e-5));
+    }
+
+    #[test]
+    fn closest_tri_vertex_c_region() {
+        // Origin in vertex C (v2) region: d6 >= 0 && d5 <= d6.
+        let v0 = mkv_full(
+            Point3::new(3.0, 3.0, 0.0),
+            Point3::new(10.0, 0.0, 0.0),
+            Point3::new(7.0, -3.0, 0.0),
+        );
+        let v1 = mkv_full(
+            Point3::new(3.0, 0.0, 3.0),
+            Point3::new(10.0, 0.0, 3.0),
+            Point3::new(7.0, 0.0, 0.0),
+        );
+        let v2 = mkv_full(
+            Point3::new(1.0, 1.0, 0.0),
+            Point3::new(8.0, 0.0, 0.0),
+            Point3::new(7.0, -1.0, 0.0),
+        );
+        let (ca, cb, dist) = closest_on_triangle(&v0, &v1, &v2);
+
+        assert!((ca - v2.support_a).magnitude() < 1e-5);
+        assert!((cb - v2.support_b).magnitude() < 1e-5);
+        assert!(approx_eq(dist, v2.point.coords.magnitude(), 1e-5));
+    }
+
+    #[test]
+    fn closest_tri_edge_ab_region() {
+        // Segment v0-v1 is the lowest edge of the triangle, so origin
+        // projects onto edge AB instead of the triangle interior.
+        let v0 = mkv_full(
+            Point3::new(-2.0, 1.0, 0.0),
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(2.0, -1.0, 0.0),
+        );
+        let v1 = mkv_full(
+            Point3::new(2.0, 1.0, 0.0),
+            Point3::new(4.0, 0.0, 0.0),
+            Point3::new(2.0, -1.0, 0.0),
+        );
+        let v2 = mkv_full(
+            Point3::new(0.0, 3.0, 0.0),
+            Point3::new(2.0, 2.0, 0.0),
+            Point3::new(2.0, 0.0, 0.0),
+        );
+        let (ca, cb, dist) = closest_on_triangle(&v0, &v1, &v2);
+
+        // Closest mink point is (0, 1, 0) at t=0.5 on AB.
+        assert!(approx_eq(dist, 1.0, 1e-5));
+        let expected_a = Point3::new(2.0, 0.0, 0.0); // lerp(v0.sa, v1.sa, 0.5)
+        let expected_b = Point3::new(2.0, -1.0, 0.0);
+        assert!((ca - expected_a).magnitude() < 1e-5);
+        assert!((cb - expected_b).magnitude() < 1e-5);
+    }
+
+    #[test]
+    fn closest_tri_edge_ac_region() {
+        // Segment v0-v2 is the lowest edge of the triangle.
+        let v0 = mkv_full(
+            Point3::new(-2.0, 1.0, 0.0),
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(2.0, -1.0, 0.0),
+        );
+        let v1 = mkv_full(
+            Point3::new(0.0, 3.0, 0.0),
+            Point3::new(2.0, 2.0, 0.0),
+            Point3::new(2.0, 0.0, 0.0),
+        );
+        let v2 = mkv_full(
+            Point3::new(2.0, 1.0, 0.0),
+            Point3::new(4.0, 0.0, 0.0),
+            Point3::new(2.0, -1.0, 0.0),
+        );
+        let (ca, cb, dist) = closest_on_triangle(&v0, &v1, &v2);
+
+        assert!(approx_eq(dist, 1.0, 1e-5));
+        let expected_a = Point3::new(2.0, 0.0, 0.0);
+        let expected_b = Point3::new(2.0, -1.0, 0.0);
+        assert!((ca - expected_a).magnitude() < 1e-5);
+        assert!((cb - expected_b).magnitude() < 1e-5);
+    }
+
+    #[test]
+    fn closest_tri_edge_bc_region() {
+        // Segment v1-v2 is the lowest edge of the triangle.
+        let v0 = mkv_full(
+            Point3::new(0.0, 3.0, 0.0),
+            Point3::new(2.0, 2.0, 0.0),
+            Point3::new(2.0, 0.0, 0.0),
+        );
+        let v1 = mkv_full(
+            Point3::new(-2.0, 1.0, 0.0),
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(2.0, -1.0, 0.0),
+        );
+        let v2 = mkv_full(
+            Point3::new(2.0, 1.0, 0.0),
+            Point3::new(4.0, 0.0, 0.0),
+            Point3::new(2.0, -1.0, 0.0),
+        );
+        let (ca, cb, dist) = closest_on_triangle(&v0, &v1, &v2);
+
+        assert!(approx_eq(dist, 1.0, 1e-5));
+        let expected_a = Point3::new(2.0, 0.0, 0.0);
+        let expected_b = Point3::new(2.0, -1.0, 0.0);
+        assert!((ca - expected_a).magnitude() < 1e-5);
+        assert!((cb - expected_b).magnitude() < 1e-5);
+    }
+
+    #[test]
+    fn closest_tri_interior_region() {
+        // Triangle in the y=2 plane containing the point directly above origin.
+        let v0 = mkv_full(
+            Point3::new(-2.0, 2.0, -1.0),
+            Point3::new(0.0, 3.0, -1.0),
+            Point3::new(2.0, 1.0, 0.0),
+        );
+        let v1 = mkv_full(
+            Point3::new(2.0, 2.0, -1.0),
+            Point3::new(4.0, 3.0, -1.0),
+            Point3::new(2.0, 1.0, 0.0),
+        );
+        let v2 = mkv_full(
+            Point3::new(0.0, 2.0, 2.0),
+            Point3::new(2.0, 3.0, 2.0),
+            Point3::new(2.0, 1.0, 0.0),
+        );
+        let (_ca, _cb, dist) = closest_on_triangle(&v0, &v1, &v2);
+
+        // Closest point on the y=2 plane is (0, 2, 0), distance = 2.
+        assert!(approx_eq(dist, 2.0, 1e-4));
+    }
+
+    #[test]
+    fn closest_tri_witnesses_reconstruct_closest_minkowski_point() {
+        // Python-verified fixture: interior region with closest Minkowski
+        // point near (0, 2, 0), and witnesses satisfy ca - cb == closest.
+        let v0 = mkv_full(
+            Point3::new(-2.0, 2.0, -1.0),
+            Point3::new(8.0, 2.0, -1.0),
+            Point3::new(10.0, 0.0, 0.0),
+        );
+        let v1 = mkv_full(
+            Point3::new(2.0, 2.0, -1.0),
+            Point3::new(22.0, 3.0, -1.0),
+            Point3::new(20.0, 1.0, 0.0),
+        );
+        let v2 = mkv_full(
+            Point3::new(0.0, 2.0, 2.0),
+            Point3::new(15.0, 0.0, 5.0),
+            Point3::new(15.0, -2.0, 3.0),
+        );
+        let (ca, cb, dist) = closest_on_triangle(&v0, &v1, &v2);
+        let closest_mink = ca - cb;
+
+        assert!(approx_eq(dist, 2.0, 1e-5));
+        assert!(approx_eq(closest_mink.x, 0.0, 1e-5));
+        assert!(approx_eq(closest_mink.y, 2.0, 1e-5));
+        assert!(approx_eq(closest_mink.z, 0.0, 1e-5));
+        assert!(approx_eq(closest_mink.magnitude(), dist, 1e-5));
+    }
+
+    #[test]
+    fn closest_tri_degenerate() {
+        // Degenerate triangle (collinear points). Should return v0's witnesses.
+        let v0 = mkv_full(
+            Point3::new(1.0, 1.0, 0.0),
+            Point3::new(5.0, 0.0, 0.0),
+            Point3::new(4.0, -1.0, 0.0),
+        );
+        let v1 = mkv_full(
+            Point3::new(2.0, 2.0, 0.0),
+            Point3::new(6.0, 0.0, 0.0),
+            Point3::new(4.0, -2.0, 0.0),
+        );
+        let v2 = mkv_full(
+            Point3::new(3.0, 3.0, 0.0),
+            Point3::new(7.0, 0.0, 0.0),
+            Point3::new(4.0, -3.0, 0.0),
+        );
+        let (ca, cb, dist) = closest_on_triangle(&v0, &v1, &v2);
+
+        // Should not crash or return NaN.
+        assert!(dist.is_finite());
+        assert!(ca.coords.magnitude().is_finite());
+        assert!(cb.coords.magnitude().is_finite());
+    }
+
+    // =================================================================
+    // extract_closest_points tests
+    // =================================================================
+
+    #[test]
+    fn extract_single_vertex() {
+        let mut simplex = GjkSimplex::new();
+        simplex.push(mkv_full(
+            Point3::new(2.0, 0.0, 0.0),
+            Point3::new(3.0, 1.0, 0.0),
+            Point3::new(1.0, 1.0, 0.0),
+        ));
+        let (ca, cb, dist) = extract_closest_points(&simplex);
+
+        assert!((ca - Point3::new(3.0, 1.0, 0.0)).magnitude() < 1e-6);
+        assert!((cb - Point3::new(1.0, 1.0, 0.0)).magnitude() < 1e-6);
+        assert!(approx_eq(dist, 2.0, 1e-5));
+    }
+
+    #[test]
+    fn extract_two_vertices() {
+        let mut simplex = GjkSimplex::new();
+        simplex.push(mkv_full(
+            Point3::new(-1.0, 1.0, 0.0),
+            Point3::new(0.0, 2.0, 0.0),
+            Point3::new(1.0, 1.0, 0.0),
+        ));
+        simplex.push(mkv_full(
+            Point3::new(1.0, 1.0, 0.0),
+            Point3::new(2.0, 2.0, 0.0),
+            Point3::new(1.0, 1.0, 0.0),
+        ));
+        let (_ca, _cb, dist) = extract_closest_points(&simplex);
+
+        // Closest mink point on segment (-1,1,0)-(1,1,0) to origin is (0,1,0).
+        assert!(approx_eq(dist, 1.0, 1e-5));
+    }
+
+    #[test]
+    fn extract_three_vertices() {
+        let mut simplex = GjkSimplex::new();
+        simplex.push(mkv_full(
+            Point3::new(-2.0, 2.0, -1.0),
+            Point3::new(0.0, 3.0, -1.0),
+            Point3::new(2.0, 1.0, 0.0),
+        ));
+        simplex.push(mkv_full(
+            Point3::new(2.0, 2.0, -1.0),
+            Point3::new(4.0, 3.0, -1.0),
+            Point3::new(2.0, 1.0, 0.0),
+        ));
+        simplex.push(mkv_full(
+            Point3::new(0.0, 2.0, 2.0),
+            Point3::new(2.0, 3.0, 2.0),
+            Point3::new(2.0, 1.0, 0.0),
+        ));
+        let (_ca, _cb, dist) = extract_closest_points(&simplex);
+
+        assert!(approx_eq(dist, 2.0, 1e-4));
+    }
+
+    #[test]
+    fn extract_two_vertices_order_invariant_for_distance_and_minkowski() {
+        let v0 = mkv_full(
+            Point3::new(-2.0, 1.0, 0.0),
+            Point3::new(-1.0, 1.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+        );
+        let v1 = mkv_full(
+            Point3::new(2.0, 1.0, 0.0),
+            Point3::new(5.0, 3.0, 0.0),
+            Point3::new(3.0, 2.0, 0.0),
+        );
+
+        let mut s01 = GjkSimplex::new();
+        s01.push(v0);
+        s01.push(v1);
+        let (ca01, cb01, d01) = extract_closest_points(&s01);
+        let m01 = ca01 - cb01;
+
+        let mut s10 = GjkSimplex::new();
+        s10.push(v1);
+        s10.push(v0);
+        let (ca10, cb10, d10) = extract_closest_points(&s10);
+        let m10 = ca10 - cb10;
+
+        assert!(approx_eq(d01, d10, 1e-5));
+        assert!(approx_eq(m01.x, 0.0, 1e-5));
+        assert!(approx_eq(m01.y, 1.0, 1e-5));
+        assert!(approx_eq(m01.z, 0.0, 1e-5));
+        assert!((m01 - m10).magnitude() < 1e-5);
+    }
+
+    #[test]
+    fn extract_four_vertices_fallback() {
+        // count=4 hits the fallback arm — returns v0's data.
+        let mut simplex = GjkSimplex::new();
+        for i in 0..4 {
+            simplex.push(mkv_full(
+                Point3::new(i as f32, 1.0, 0.0),
+                Point3::new(i as f32 + 1.0, 2.0, 0.0),
+                Point3::new(1.0, 1.0, 0.0),
+            ));
+        }
+        let (ca, cb, dist) = extract_closest_points(&simplex);
+
+        assert!((ca - simplex.vertices[0].support_a).magnitude() < 1e-6);
+        assert!((cb - simplex.vertices[0].support_b).magnitude() < 1e-6);
+        assert!(dist.is_finite());
+    }
+
+    #[test]
+    fn seeded_separated_obbs_do_not_false_intersect() {
+        let a = Obb::new(
+            Point3::origin(),
+            UnitQuaternion::identity(),
+            Vector3::new(1.0, 1.0, 1.0),
+        );
+        let b = Obb::new(
+            Point3::new(5.0, 0.1, -0.1),
+            UnitQuaternion::identity(),
+            Vector3::new(1.0, 1.0, 1.0),
+        );
+
+        let seeds = [
+            Some(Vector3::x()),
+            Some(Vector3::y()),
+            Some(Vector3::z()),
+            Some(Vector3::new(1.0, 0.1, -0.1)),
+            None,
+        ];
+
+        for seed in seeds {
+            match gjk_query_seeded(&a, &b, seed) {
+                GjkResult::Separated { distance, .. } => {
+                    assert!(
+                        distance > 0.0,
+                        "Expected positive gap for seed {:?}, got {}",
+                        seed,
+                        distance
+                    );
+                }
+                GjkResult::Intersecting { .. } => {
+                    panic!("Expected Separated for seed {:?}, got Intersecting", seed);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn seeded_intersecting_obbs_remain_intersecting_for_adversarial_seeds() {
+        let a = Obb::new(
+            Point3::origin(),
+            UnitQuaternion::identity(),
+            Vector3::new(1.0, 1.0, 1.0),
+        );
+        let b = Obb::new(
+            Point3::new(0.5, 0.1, -0.1),
+            UnitQuaternion::identity(),
+            Vector3::new(1.0, 1.0, 1.0),
+        );
+
+        let seeds = [
+            Some(Vector3::x()),
+            Some(-Vector3::x()),
+            Some(Vector3::new(0.0, 1.0, 0.0)),
+            Some(Vector3::new(1.0e-8, 0.0, 0.0)),
+            None,
+        ];
+
+        for seed in seeds {
+            match gjk_query_seeded(&a, &b, seed) {
+                GjkResult::Intersecting { .. } => {}
+                GjkResult::Separated { distance, .. } => {
+                    panic!(
+                        "Expected Intersecting for seed {:?}, got Separated {}",
+                        seed, distance
+                    );
+                }
+            }
         }
     }
 }

@@ -61,12 +61,11 @@ Conservative advancement adds iterative GJK distance queries bounded by
 **When to revisit:** when gameplay introduces fast-rotating convex hulls that
 tunnel through geometry.
 
-### D2: ConvexHull shape variant
+### D2: ConvexHull shape variant — DONE (Step 6.7)
 
 Adding `ConvexHull` to `ColliderShape` is the primary consumer of the
-GJK/EPA path, but it touches many systems beyond collision: mass/inertia
-computation, mesh loading, ECS spawnable wiring, debug rendering. It is
-implemented as the final step of this plan.
+GJK/EPA path. Implemented as Step 6.7 including mass/inertia computation,
+ECS spawnable wiring, and dispatch integration.
 
 ### D3: Hill-climbing support with adjacency
 
@@ -76,13 +75,13 @@ graph to find the support point in `O(sqrt(n))` amortized time by walking from
 the previous frame's support vertex. **When to revisit:** when profiling shows
 support function cost dominating GJK for hulls with > 32 vertices.
 
-### D4: GJK warm-starting (cache seeding)
+### D4: GJK warm-starting (cache seeding) — DONE (Step 6.4)
 
 Implemented as **direction seeding** (not full simplex caching):
 - Per-pair `GjkCache` stores last direction.
-- Next frame seeds GJK's initial search direction with that cached vector.
-- This captures most of the low-complexity warm-start benefit while avoiding
-  simplex validity/ownership complexity across changing transforms.
+- `gjk_query_seeded()` seeds GJK's initial search direction with that cached vector.
+- `gjk_epa_manifold_cached()` threads the cache through the full pipeline.
+- Dynamic narrowphase owns and prunes `GjkCacheMap` (parallel to `SatCacheMap`).
 
 Future extension: full simplex caching on top of direction seeding if profiling
 shows GJK iteration count is still a bottleneck.
@@ -614,8 +613,10 @@ pub fn gjk_epa_manifold(
             let epa = epa_penetration(a, b, margin, simplex);
 
             // 3. Try face clipping for multi-point manifold.
-            let face_a = a.support_face(-epa.normal);
-            let face_b = b.support_face(epa.normal);
+            // Normal points A→B, so A's face faces toward B (+normal)
+            // and B's face faces toward A (-normal).
+            let face_a = a.support_face(epa.normal);
+            let face_b = b.support_face(-epa.normal);
 
             match (face_a, face_b) {
                 (Some(fa), Some(fb)) => {
@@ -795,23 +796,28 @@ and hull-vs-anything produces up to 4.
 
 `src/collision/mesh/gjk_patch.rs`
 
-**Input:** `ShapeView` (any convex shape), `FilteredPatch` (merged mesh faces + boundary edges).
+**Input:** Any `S: ConvexSupport + SupportFaceExtractor`, `FilteredPatch` (merged mesh faces).
 **Output:** `ContactManifold` with up to 4 contacts.
 
-**Algorithm:**
+**Algorithm (direct face-normal projection):**
 1. For each `ContactFace` in the filtered patch:
-   a. Run GJK between the shape and the face polygon (face polygon implements
-      `ConvexSupport` as a triangle or convex polygon — vertices only).
-   b. If separated and distance > margin: skip.
-   c. If overlapping: run EPA to get penetration normal and depth.
-   d. Extract support face of the convex shape along `-normal`.
-   e. Clip support face against the contact face polygon edges.
-   f. Project clipped vertices to contact points.
-2. Also test boundary edges (closest point between shape and edge segment).
-3. Collect all contacts, reduce to 4 via `ContactReducer`.
+   a. Backface check: reject if the shape's highest support point along the
+      face normal is behind the face plane.
+   b. Depth check: find the shape's deepest support point along `-normal`.
+      If the signed distance to the face plane exceeds the margin, skip.
+   c. For shallow contacts (near-touching), emit a single projected point.
+   d. For deeper contacts: extract the shape's support face along `-normal`,
+      clip it against the mesh face edges via Sutherland-Hodgman, and project
+      clipped vertices onto the face plane.
+2. Collect all contacts from all faces, reduce to 4 via `ContactReducer`.
 
-For the common case of a convex shape resting on flat terrain (single merged
-face), this produces a stable multi-point manifold from one GJK+EPA+clip pass.
+The original design planned GJK/EPA per mesh face. The implementation uses
+direct face-normal projection instead: the contact normal for one-sided
+terrain is always the face normal, and penetration depth is the projection
+of the shape's deepest support point onto the face plane. This avoids GJK's
+numerical instability when a small convex shape collides with a large mesh
+polygon (the Minkowski difference has extreme aspect ratio, causing simplex
+refinement failures).
 
 ---
 
@@ -999,15 +1005,17 @@ GJK/EPA contacts", and "Support face extraction" in the Architecture section.
 **Status: COMPLETE** (commit `f029d8c`)
 
 **Implementation notes:**
-- EPA uses constructive tetrahedron building (`ensure_tetrahedron`): grows
-  point→segment→triangle→tetrahedron using targeted support queries. Prefers
-  origin-containing tetrahedra over maximum-volume ones to avoid degenerate
-  faces at distance=0 from origin.
+- EPA's `ensure_tetrahedron` first checks if the GJK simplex is already a valid
+  origin-enclosing tetrahedron (fast path). If not, it gathers a diverse set of
+  Minkowski support points (axis-aligned + diagonal directions + simplex vertices,
+  ~14 candidates) and exhaustively searches all 4-tuples for the largest-volume
+  tetrahedron enclosing the origin. The O(n⁴) search is negligible for n ≤ 14.
+  Falls back to the largest-volume tetrahedron overall if none encloses the origin.
 - EPA convergence on spheres is loose (~10% error) due to polytope approximation
   of curved surfaces. Acceptable since spheres use the analytic fast-path in
   practice.
 - `gjk_epa_manifold` orients the EPA normal deterministically using witness point
-  ordering (`witness_b - witness_a`), with `estimate_center_delta` fallback for
+  ordering (`witness_b - witness_a`), with `midpoint_of_supports` fallback for
   degenerate witness separation (e.g. coincident shapes).
 - `SupportFaceExtractor` implemented for `Obb` (delegates to `obb_face()` from
   clipping.rs) and `ShapeView`. Sphere/Capsule return `None` → single-point
@@ -1110,17 +1118,18 @@ plan text below:
 **Implementation notes:**
 - `gjk_patch_manifold()` is generic over `S: ConvexSupport + SupportFaceExtractor`,
   not `ShapeView`-specific, so future shapes automatically get mesh support.
-- Per-face pipeline: backface check → GJK → EPA → support face clipping →
-  plane projection → `ContactReducer` to 4 points. Each `ContactFace` in the
-  `FilteredPatch` is wrapped in a `SupportPolygon` struct implementing both
-  `ConvexSupport` (brute-force vertex scan) and `SupportFaceExtractor` (returns
-  the face itself).
-- Shape center estimated via 6-direction support queries for the backface check
-  (same approach as `gjk_epa_manifold`'s `estimate_center_delta`).
-- Separated (margin-only) contacts use the face normal for stability rather than
-  the GJK closest-point direction.
-- Clipping fallback: if Sutherland-Hodgman produces no points, projects shape face
-  vertices into the mesh face polygon and keeps those inside.
+- Uses direct face-normal projection instead of GJK/EPA per face (see gjk_patch
+  architecture section above for rationale). Per-face pipeline: backface check →
+  depth check via support function → support face clipping → plane projection →
+  `ContactReducer` to 4 points. Each `ContactFace` is wrapped in a
+  `SupportPolygon` struct implementing `ConvexSupport` and `SupportFaceExtractor`
+  for the clipping step.
+- Backface check uses exact support points (shape's highest support along face
+  normal) rather than center estimation, avoiding center-estimation jitter.
+- Shallow contacts (near-touching) emit a single projected point to avoid
+  premature face-face manifolds during edge/vertex-to-face transitions.
+- Clipping fallback: if Sutherland-Hodgman produces no points, projects the
+  shape's deepest point onto the face plane if it lands inside the polygon.
 - Wildcard arm in `generate_mesh_manifold()` uses `#[allow(unreachable_patterns)]`
   (same pattern as `generate_manifold()`). Currently unreachable; activates when
   `ConvexHull` is added.
@@ -1293,6 +1302,29 @@ GJK/EPA pipeline end-to-end.
   Verify they collide with terrain, spheres, boxes, capsules, and each other.
   Verify they don't tunnel at moderate speeds (CCD via gjk_raycast).
 
+**Status: COMPLETE**
+
+**Implementation notes:**
+- `ConvexHull` struct with `new()` validation (vertex cap, minimum thickness),
+  `compute_volume()` and `compute_inertia()` via tetrahedron decomposition.
+- `ConvexSupport` impl: brute-force vertex scan (local space). `TransformedHull`
+  wrapper applies center/rotation for world-space queries.
+- `SupportFaceExtractor` impl: linear scan of face normals. First face wins on
+  ties for consistent axis ordering with OBB support-face path.
+- `ColliderShape::ConvexHull { hull: Arc<ConvexHull> }` variant with mass, inertia,
+  bounding radius delegation. `ColliderDesc::convex_hull()` builder.
+- `ShapeView` delegates `ConvexSupport` and `SupportFaceExtractor` to
+  `TransformedHull` for the `ConvexHull` variant.
+- Dispatch routes all `ConvexHull` pairs through the GJK/EPA wildcard arm.
+  Mesh dispatch routes through `gjk_patch_manifold`.
+- `cube_hull()` utility for testing: constructs a cube hull matching OBB geometry.
+- ECS spawnable wiring for tetrahedron, octahedron, icosahedron, dodecahedron.
+- 10+ unit tests: support correctness vs OBB, mass/inertia cross-validation,
+  vertex cap, thickness check, face extraction, bounding radius.
+- Hull-hull, hull-OBB, hull-sphere, and hull-capsule cross-validation tests
+  in `gjk_epa_manifold.rs` against analytic/SAT reference results.
+- Bench harness scenarios deferred — requires runtime testing with physics pipeline.
+
 ---
 
 ## Performance notes
@@ -1321,25 +1353,35 @@ not the primary path, for Sphere/Box/Capsule pairs.
   and GJK/EPA.
 - **Support function batching:** For hull-vs-mesh with multiple faces,
   batch the support queries to improve branch prediction.
+- **Constructive tetrahedron init for EPA:** The current `ensure_tetrahedron`
+  exhaustively searches all 4-tuples of candidate support points for the
+  best origin-enclosing tetrahedron (O(n⁴)). A constructive O(n) approach —
+  pick a point, find the farthest from it, find the point farthest from that
+  line, find the point farthest from that triangle plane on the origin's side
+  — would be faster but greedy (no guarantee of finding the largest-volume
+  enclosing tetrahedron). With n bounded at ~14, the exhaustive search
+  evaluates ~1001 combinations and is negligible. **When to revisit:** only
+  if the candidate set grows significantly (e.g. adding more probe directions
+  for difficult geometries).
 
 ---
 
 ## Summary
 
 ```
-Step 6.1: Dispatch refactor ───────────────────────────────────┐
+Step 6.1: Dispatch refactor ◄── COMPLETE ──────────────────────┐
     │                                                           │
-Step 6.2: GJK algorithm                                        │
+Step 6.2: GJK algorithm ◄── COMPLETE                           │
     │                                                           │
-Step 6.3: EPA + face clipping + manifold generation             │
+Step 6.3: EPA + face clipping + manifold generation ◄── COMPLETE│
     │                                                           │
-Step 6.4: Wire GJK/EPA fallback into dispatch ◄── DONE ────── │
+Step 6.4: Wire GJK/EPA fallback into dispatch ◄── COMPLETE ── │
     │                                                           │
-Step 6.5: gjk_patch (general convex vs mesh) ◄── DONE ─────── │
+Step 6.5: gjk_patch (general convex vs mesh) ◄── COMPLETE ─── │
     │                                                           │
-Step 6.6: GJK raycast CCD ◄── DONE ───────────────────────── │
+Step 6.6: GJK raycast CCD ◄── COMPLETE ───────────────────── │
     │                                                           │
-Step 6.7: ConvexHull shape variant ◄── LIVE ───────────────── │
+Step 6.7: ConvexHull shape variant ◄── COMPLETE ──────────── │
 ```
 
 Each step produces a compiling, testable result. Steps are wired live as

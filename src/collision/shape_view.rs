@@ -7,6 +7,7 @@ use nalgebra::{Point3, UnitQuaternion, Vector3};
 use smallvec::SmallVec;
 
 use super::capsule::Capsule;
+use super::convex_hull::TransformedHull;
 use super::discrete::clipping::obb_face;
 use super::obb::Obb;
 use super::support::{ConvexSupport, SupportSphere};
@@ -51,6 +52,13 @@ impl ShapeView<'_> {
                 let margin_vec = Vector3::new(margin, margin, margin);
                 AABB::new(aabb_min - margin_vec, aabb_max + margin_vec)
             }
+            ColliderShape::ConvexHull { hull } => {
+                let r = hull.bounding_radius + margin;
+                AABB::new(
+                    Point3::new(self.center.x - r, self.center.y - r, self.center.z - r),
+                    Point3::new(self.center.x + r, self.center.y + r, self.center.z + r),
+                )
+            }
         }
     }
 }
@@ -73,6 +81,14 @@ impl ConvexSupport for ShapeView<'_> {
                 radius,
             } => {
                 Capsule::new(self.center, self.rotation, *half_height, *radius).support(direction)
+            }
+            ColliderShape::ConvexHull { hull } => {
+                TransformedHull {
+                    hull,
+                    center: self.center,
+                    rotation: self.rotation,
+                }
+                .support(direction)
             }
         }
     }
@@ -138,6 +154,14 @@ impl SupportFaceExtractor for ShapeView<'_> {
                     .support_face(direction)
             }
             ColliderShape::Capsule { .. } => None,
+            ColliderShape::ConvexHull { hull } => {
+                TransformedHull {
+                    hull,
+                    center: self.center,
+                    rotation: self.rotation,
+                }
+                .support_face(direction)
+            }
         }
     }
 }

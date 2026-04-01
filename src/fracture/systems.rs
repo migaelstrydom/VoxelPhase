@@ -284,12 +284,8 @@ fn spawn_freed_piece(
     let new_body_handle = physics.world.create_body(new_body_desc);
 
     let density = info.mass / info.shape.compute_mass(1.0);
-    let new_collider_desc = collider_desc_from_shape(
-        &info.shape,
-        density,
-        info.restitution,
-        info.friction,
-    );
+    let new_collider_desc =
+        collider_desc_from_shape(&info.shape, density, info.restitution, info.friction);
     physics
         .world
         .attach_collider(new_body_handle, new_collider_desc);
@@ -362,6 +358,11 @@ fn collider_desc_from_shape(
             half_height,
             radius,
         } => crate::physics::ColliderDesc::capsule(*half_height, *radius),
+        ColliderShape::ConvexHull { hull } => {
+            crate::physics::ColliderDesc::convex_hull(hull.clone())
+        }
     };
-    desc.density(density).restitution(restitution).friction(friction)
+    desc.density(density)
+        .restitution(restitution)
+        .friction(friction)
 }

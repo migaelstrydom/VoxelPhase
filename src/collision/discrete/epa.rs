@@ -233,9 +233,10 @@ fn inflated_support(
 /// Build a tetrahedron enclosing the origin from the Minkowski difference.
 ///
 /// The GJK simplex may have fewer than 4 vertices (if intersection was
-/// detected early via `v ≈ 0`). We expand to a full tetrahedron using
-/// support function queries. This fast path grows the simplex constructively
-/// instead of scanning combinatorial point sets.
+/// detected early via `v ≈ 0`), or the simplex may be degenerate (nearly
+/// flat). When the GJK simplex isn't usable directly, we gather a diverse
+/// set of Minkowski support points and exhaustively search for the
+/// largest-volume tetrahedron that encloses the origin.
 fn ensure_tetrahedron(
     a: &dyn ConvexSupport,
     b: &dyn ConvexSupport,
@@ -244,7 +245,7 @@ fn ensure_tetrahedron(
 ) -> Vec<MinkowskiVertex> {
     const MIN_TETRA_VOL6: f32 = 1e-12;
 
-    // Fastest path: if GJK already gave a valid enclosing tetrahedron, use it.
+    // Fast path: if GJK already gave a valid enclosing tetrahedron, use it.
     if simplex.count == 4 {
         let candidate = [
             simplex.vertices[0],
@@ -258,7 +259,23 @@ fn ensure_tetrahedron(
         }
     }
 
-    // Fallback: build a robust candidate set and pick the largest origin-containing tetra.
+    let candidates = gather_candidate_supports(a, b, margin, simplex);
+    find_best_tetrahedron(&candidates)
+}
+
+/// Gather a diverse set of Minkowski support points for tetrahedron construction.
+///
+/// Includes both axis-aligned and diagonal directions. Diagonals are critical
+/// for ConvexHull shapes, whose support tiebreaking for axis-aligned queries
+/// can produce coplanar Minkowski vertices. Diagonals force distinct corner
+/// vertices, preventing degenerate initial tetrahedra.
+fn gather_candidate_supports(
+    a: &dyn ConvexSupport,
+    b: &dyn ConvexSupport,
+    margin: f32,
+    simplex: &GjkSimplex,
+) -> Vec<MinkowskiVertex> {
+    let d = std::f32::consts::FRAC_1_SQRT_2;
     let dirs = [
         Vector3::x(),
         -Vector3::x(),
@@ -266,48 +283,65 @@ fn ensure_tetrahedron(
         -Vector3::y(),
         Vector3::z(),
         -Vector3::z(),
+        Vector3::new(d, d, d),
+        Vector3::new(d, d, -d),
+        Vector3::new(d, -d, d),
+        Vector3::new(-d, d, d),
     ];
 
-    let mut support_pts: Vec<MinkowskiVertex> = Vec::with_capacity(6 + simplex.count);
+    let mut pts = Vec::with_capacity(dirs.len() + simplex.count);
     for dir in &dirs {
-        support_pts.push(inflated_minkowski_support(a, b, *dir, margin));
+        pts.push(inflated_minkowski_support(a, b, *dir, margin));
     }
     for i in 0..simplex.count {
-        support_pts.push(simplex.vertices[i]);
+        pts.push(simplex.vertices[i]);
     }
+    pts
+}
 
-    let n = support_pts.len();
-    let mut best_vol = -1.0f32;
-    let mut best_verts: Option<Vec<MinkowskiVertex>> = None;
-    let mut best_vol_any = 0.0f32;
-    let mut best_quad_any = (0, 1, 2, 3.min(n - 1));
+/// Find the largest-volume tetrahedron enclosing the origin from a set of
+/// candidate Minkowski vertices.
+///
+/// Exhaustively searches all 4-tuples (O(n⁴) on a small candidate set,
+/// typically ≤14 points). Prefers the tetrahedron that encloses the origin
+/// with the greatest volume; if none encloses the origin, falls back to the
+/// largest-volume tetrahedron overall.
+fn find_best_tetrahedron(candidates: &[MinkowskiVertex]) -> Vec<MinkowskiVertex> {
+    let n = candidates.len();
+
+    let mut best_enclosing_vol = -1.0f32;
+    let mut best_enclosing: Option<[usize; 4]> = None;
+
+    let mut best_any_vol = 0.0f32;
+    let mut best_any = [0, 1, 2, 3.min(n - 1)];
 
     for i in 0..n {
         for j in (i + 1)..n {
             for k in (j + 1)..n {
-                let e1 = support_pts[j].point - support_pts[i].point;
-                let e2 = support_pts[k].point - support_pts[i].point;
+                let e1 = candidates[j].point - candidates[i].point;
+                let e2 = candidates[k].point - candidates[i].point;
                 let tri_n = e1.cross(&e2);
                 if tri_n.magnitude() < 1e-10 {
                     continue;
                 }
                 for l in (k + 1)..n {
-                    let e3 = support_pts[l].point - support_pts[i].point;
+                    let e3 = candidates[l].point - candidates[i].point;
                     let vol = e3.dot(&tri_n).abs();
-                    if vol > best_vol_any {
-                        best_vol_any = vol;
-                        best_quad_any = (i, j, k, l);
+
+                    if vol > best_any_vol {
+                        best_any_vol = vol;
+                        best_any = [i, j, k, l];
                     }
-                    if vol > best_vol {
-                        let candidate = [
-                            support_pts[i],
-                            support_pts[j],
-                            support_pts[k],
-                            support_pts[l],
+                    if vol > best_enclosing_vol {
+                        let quad = [
+                            candidates[i],
+                            candidates[j],
+                            candidates[k],
+                            candidates[l],
                         ];
-                        if origin_inside_tetrahedron(&candidate) {
-                            best_vol = vol;
-                            best_verts = Some(candidate.to_vec());
+                        if origin_inside_tetrahedron(&quad) {
+                            best_enclosing_vol = vol;
+                            best_enclosing = Some([i, j, k, l]);
                         }
                     }
                 }
@@ -315,14 +349,8 @@ fn ensure_tetrahedron(
         }
     }
 
-    best_verts.unwrap_or_else(|| {
-        vec![
-            support_pts[best_quad_any.0],
-            support_pts[best_quad_any.1],
-            support_pts[best_quad_any.2],
-            support_pts[best_quad_any.3],
-        ]
-    })
+    let indices = best_enclosing.unwrap_or(best_any);
+    indices.iter().map(|&i| candidates[i]).collect()
 }
 
 /// Triple product magnitude for tetrahedron volume comparison.
