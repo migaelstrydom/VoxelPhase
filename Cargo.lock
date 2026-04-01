@@ -593,30 +593,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "flipphase"
-version = "0.1.0"
-dependencies = [
- "ash",
- "ash-window",
- "env_logger",
- "fontdue",
- "generational-arena",
- "image",
- "log",
- "nalgebra",
- "noise",
- "rand",
- "raw-window-handle",
- "ron",
- "rustc-hash",
- "serde",
- "smallvec",
- "specs",
- "tracing-subscriber",
- "winit",
-]
-
-[[package]]
 name = "foldhash"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1953,6 +1929,30 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
+
+[[package]]
+name = "voxel_phase"
+version = "0.1.0"
+dependencies = [
+ "ash",
+ "ash-window",
+ "env_logger",
+ "fontdue",
+ "generational-arena",
+ "image",
+ "log",
+ "nalgebra",
+ "noise",
+ "rand",
+ "raw-window-handle",
+ "ron",
+ "rustc-hash",
+ "serde",
+ "smallvec",
+ "specs",
+ "tracing-subscriber",
+ "winit",
+]
 
 [[package]]
 name = "walkdir"

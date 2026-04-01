@@ -1,7 +1,7 @@
 use std::path::Path;
 
-use flipphase::app::App;
-use flipphase::core::error::EngineResult;
+use voxel_phase::app::App;
+use voxel_phase::core::error::EngineResult;
 
 const DEFAULT_LEVEL: &str = "levels/test_arena.level.ron";
 
@@ -18,9 +18,9 @@ fn main() -> EngineResult<()> {
     let level_path = std::env::args()
         .nth(1)
         .unwrap_or_else(|| DEFAULT_LEVEL.to_string());
-    log::info!("Starting Flipphase — loading {}", level_path);
+    log::info!("Starting Voxel Phase — loading {}", level_path);
 
-    match App::new(1200, 800, "Flipphase", Path::new(&level_path)) {
+    match App::new(1200, 800, "Voxel Phase", Path::new(&level_path)) {
         Ok(mut app) => {
             if let Err(e) = app.run() {
                 eprintln!("Application error: {}", e);

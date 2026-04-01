@@ -1,4 +1,4 @@
-//! Core error types for the Flipphase engine.
+//! Core error types for the Voxel Phase engine.
 //!
 //! This module provides a unified error type that enables proper error handling
 //! and recovery throughout the engine, replacing `Box<dyn Error>` with typed errors.
