@@ -7,7 +7,7 @@ use crate::physics::body::RigidBody;
 use crate::physics::constraint::types::Constraint;
 use crate::physics::handle::RigidBodyHandle;
 use crate::physics::pipeline::pair::SolverManifold;
-use crate::physics::sleep::energy::EnergyTracker;
+use crate::physics::sleep::energy::SleepTracker;
 use crate::physics::sleep::islands::IslandBuilder;
 use crate::physics::sleep::wake::WakeEvents;
 
@@ -16,9 +16,11 @@ use crate::physics::sleep::wake::WakeEvents;
 pub struct SleepManagerConfig {
     /// Enable sleeping for dynamic bodies.
     pub enabled: bool,
-    /// Kinetic energy threshold below which a body is a sleep candidate.
-    pub threshold: f32,
-    /// Frames a body must remain below the threshold before sleeping.
+    /// Linear velocity threshold (m/s) below which a body is a sleep candidate.
+    pub linear_threshold: f32,
+    /// Angular velocity threshold (rad/s) below which a body is a sleep candidate.
+    pub angular_threshold: f32,
+    /// Frames a body must remain below both thresholds before sleeping.
     pub delay_frames: u32,
 }
 
@@ -26,7 +28,8 @@ impl Default for SleepManagerConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            threshold: 0.05,
+            linear_threshold: 0.1,
+            angular_threshold: 0.15,
             delay_frames: 30,
         }
     }
@@ -35,8 +38,8 @@ impl Default for SleepManagerConfig {
 pub struct SleepManager {
     /// Master toggle for sleeping behavior.
     enabled: bool,
-    /// Tracks per-body energy and sleep candidacy.
-    energy: EnergyTracker,
+    /// Tracks per-body velocity and sleep candidacy.
+    sleep_tracker: SleepTracker,
     /// Builds contact islands for group sleep/wake decisions.
     island_builder: IslandBuilder,
     /// Pending wake events to apply this frame.
@@ -49,7 +52,11 @@ impl SleepManager {
     pub fn new(config: SleepManagerConfig) -> Self {
         Self {
             enabled: config.enabled,
-            energy: EnergyTracker::new(config.threshold, config.delay_frames),
+            sleep_tracker: SleepTracker::new(
+                config.linear_threshold,
+                config.angular_threshold,
+                config.delay_frames,
+            ),
             island_builder: IslandBuilder,
             wake_events: WakeEvents::new(),
             sleeping: FxHashSet::default(),
@@ -59,7 +66,7 @@ impl SleepManager {
     pub fn sync_bodies(&mut self, bodies: &Arena<RigidBody>) {
         let live: FxHashSet<Index> = bodies.iter().map(|(idx, _)| idx).collect();
         self.sleeping.retain(|handle| live.contains(&handle.0));
-        self.energy.retain_indices(&live);
+        self.sleep_tracker.retain_indices(&live);
     }
 
     pub fn is_sleeping(&self, handle: RigidBodyHandle) -> bool {
@@ -72,7 +79,7 @@ impl SleepManager {
 
     pub fn wake_body(&mut self, handle: RigidBodyHandle) {
         self.sleeping.remove(&handle);
-        self.energy.clear_body(handle);
+        self.sleep_tracker.clear_body(handle);
     }
 
     pub fn note_kinematic_move(&mut self, handle: RigidBodyHandle) {
@@ -127,7 +134,7 @@ impl SleepManager {
         }
         for handle in &wake_seeds {
             self.sleeping.remove(handle);
-            self.energy.clear_body(*handle);
+            self.sleep_tracker.clear_body(*handle);
         }
 
         let islands = self.island_builder.build(bodies, manifolds);
@@ -139,7 +146,7 @@ impl SleepManager {
             {
                 for handle in island.bodies {
                     self.sleeping.remove(&handle);
-                    self.energy.clear_body(handle);
+                    self.sleep_tracker.clear_body(handle);
                 }
             }
         }
@@ -188,7 +195,7 @@ impl SleepManager {
             if has_active_constraint(constraints, handle) {
                 continue;
             }
-            if self.energy.update_body(handle, body) {
+            if self.sleep_tracker.update_body(handle, body) {
                 candidates.insert(handle);
             }
         }

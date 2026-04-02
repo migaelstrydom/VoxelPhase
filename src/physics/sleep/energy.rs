@@ -5,28 +5,33 @@ use generational_arena::Index;
 use crate::physics::body::RigidBody;
 use crate::physics::handle::RigidBodyHandle;
 
-pub struct EnergyTracker {
-    /// Kinetic energy threshold for sleep candidacy.
-    threshold: f32,
+pub struct SleepTracker {
+    /// Squared linear velocity threshold for sleep candidacy.
+    linear_threshold_sq: f32,
+    /// Squared angular velocity threshold for sleep candidacy.
+    angular_threshold_sq: f32,
     /// Frames below threshold required to qualify for sleep.
     delay_frames: u32,
     /// Per-body counters tracking consecutive below-threshold frames.
     frames_below: FxHashMap<Index, u32>,
 }
 
-impl EnergyTracker {
-    pub fn new(threshold: f32, delay_frames: u32) -> Self {
+impl SleepTracker {
+    pub fn new(linear_threshold: f32, angular_threshold: f32, delay_frames: u32) -> Self {
         Self {
-            threshold,
+            linear_threshold_sq: linear_threshold * linear_threshold,
+            angular_threshold_sq: angular_threshold * angular_threshold,
             delay_frames,
             frames_below: FxHashMap::default(),
         }
     }
 
     pub fn update_body(&mut self, handle: RigidBodyHandle, body: &RigidBody) -> bool {
-        let energy = body.kinetic_energy() / body.mass();
+        let lin_sq = body.linear_velocity().norm_squared();
+        let ang_sq = body.angular_velocity().norm_squared();
+        let below = lin_sq < self.linear_threshold_sq && ang_sq < self.angular_threshold_sq;
         let entry = self.frames_below.entry(handle.0).or_insert(0);
-        if energy < self.threshold {
+        if below {
             *entry = entry.saturating_add(1);
         } else {
             *entry = 0;
