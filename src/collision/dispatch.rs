@@ -893,6 +893,180 @@ mod tests {
         }
     }
 
+    /// Build a regular tetrahedron ConvexHull with the given edge length,
+    /// centered at the origin. Same geometry as the spawnable.
+    fn tetrahedron_hull(edge: f32) -> crate::collision::convex_hull::ConvexHull {
+        use crate::collision::convex_hull::{ConvexHull, HullFace};
+        use smallvec::SmallVec;
+
+        let r = edge * (6.0f32).sqrt() / 4.0;
+        let top = Vector3::new(0.0, r, 0.0);
+        let y_base = -r / 3.0;
+        let base_r = (r * r - y_base * y_base).sqrt();
+
+        let v0 = Vector3::new(0.0, y_base, base_r);
+        let v1 = Vector3::new(
+            base_r * (2.0 * std::f32::consts::PI / 3.0).sin(),
+            y_base,
+            base_r * (2.0 * std::f32::consts::PI / 3.0).cos(),
+        );
+        let v2 = Vector3::new(
+            base_r * (4.0 * std::f32::consts::PI / 3.0).sin(),
+            y_base,
+            base_r * (4.0 * std::f32::consts::PI / 3.0).cos(),
+        );
+
+        let vertices = vec![top, v0, v1, v2];
+
+        let face_defs: [(usize, usize, usize, usize); 4] =
+            [(1, 2, 3, 0), (0, 2, 1, 3), (0, 3, 2, 1), (0, 1, 3, 2)];
+
+        let faces = face_defs
+            .iter()
+            .map(|&(a, b, c, opp)| {
+                let va = vertices[a];
+                let vb = vertices[b];
+                let vc = vertices[c];
+                let vopp = vertices[opp];
+
+                let raw_normal = (vb - va).cross(&(vc - va));
+                let flip = raw_normal.dot(&(va - vopp)) < 0.0;
+                let normal = if flip {
+                    -raw_normal.normalize()
+                } else {
+                    raw_normal.normalize()
+                };
+
+                let mut indices: SmallVec<[u16; 6]> =
+                    SmallVec::from_slice(&[a as u16, b as u16, c as u16]);
+                if flip {
+                    indices[1..].reverse();
+                }
+
+                HullFace {
+                    vertex_indices: indices,
+                    normal,
+                }
+            })
+            .collect();
+
+        ConvexHull::new(vertices, faces)
+    }
+
+    #[test]
+    fn box_tetrahedron_no_spurious_contact() {
+        use std::sync::Arc;
+
+        let box_shape = ColliderShape::Box {
+            half_extents: Vector3::new(10.0, 0.15, 10.0),
+        };
+        let hull_data = Arc::new(tetrahedron_hull(1.5));
+        let hull_shape = ColliderShape::ConvexHull { hull: hull_data };
+        let margin = 0.02;
+
+        let box_view = view_from(
+            Point3::new(3.0, 0.0, -6.0),
+            UnitQuaternion::identity(),
+            &box_shape,
+        );
+        let hull_view = view_from(
+            Point3::new(3.0, 1.0, -6.0),
+            UnitQuaternion::identity(),
+            &hull_shape,
+        );
+
+        // Test both orderings — dispatch puts hull (rank 3) as a, box (rank 2) as b.
+        let manifold_dispatch = generate_manifold(&hull_view, &box_view, margin, None, None);
+        let manifold_reversed = generate_manifold(&box_view, &hull_view, margin, None, None);
+
+        // The tetrahedron's lowest point is at y ≈ 1.0 - 0.306 = 0.694, well above
+        // the box top at y = 0.15. There should be no contacts.
+        assert!(
+            manifold_dispatch.is_empty(),
+            "Expected no contacts (dispatch order hull,box) but got {} contacts: {:?}",
+            manifold_dispatch.len(),
+            manifold_dispatch
+                .points
+                .iter()
+                .map(|p| format!(
+                    "({:.3}, {:.3}, {:.3}) depth={:.4}",
+                    p.point.x, p.point.y, p.point.z, p.depth
+                ))
+                .collect::<Vec<_>>(),
+        );
+        assert!(
+            manifold_reversed.is_empty(),
+            "Expected no contacts (reversed order box,hull) but got {} contacts: {:?}",
+            manifold_reversed.len(),
+            manifold_reversed
+                .points
+                .iter()
+                .map(|p| format!(
+                    "({:.3}, {:.3}, {:.3}) depth={:.4}",
+                    p.point.x, p.point.y, p.point.z, p.depth
+                ))
+                .collect::<Vec<_>>(),
+        );
+    }
+
+    /// Same scenario but with a thicker box (half_y=0.5). The gap is only ~0.19,
+    /// which is small enough that the tightened GJK stall heuristic still fires.
+    /// This test verifies the clipping guard (axis_raw_depth < -margin) catches
+    /// the spurious contact even when GJK falsely reports Intersecting.
+    #[test]
+    fn box_tetrahedron_no_spurious_contact_thick_box() {
+        use std::sync::Arc;
+
+        let box_shape = ColliderShape::Box {
+            half_extents: Vector3::new(10.0, 0.5, 10.0),
+        };
+        let hull_data = Arc::new(tetrahedron_hull(1.5));
+        let hull_shape = ColliderShape::ConvexHull { hull: hull_data };
+        let margin = 0.02;
+
+        let box_view = view_from(
+            Point3::new(3.0, 0.0, -6.0),
+            UnitQuaternion::identity(),
+            &box_shape,
+        );
+        let hull_view = view_from(
+            Point3::new(3.0, 1.0, -6.0),
+            UnitQuaternion::identity(),
+            &hull_shape,
+        );
+
+        let manifold_dispatch = generate_manifold(&hull_view, &box_view, margin, None, None);
+        let manifold_reversed = generate_manifold(&box_view, &hull_view, margin, None, None);
+
+        // Box top at y=0.5, tetrahedron bottom at y≈0.694. Gap ≈ 0.19.
+        assert!(
+            manifold_dispatch.is_empty(),
+            "Expected no contacts (dispatch order hull,box) but got {} contacts: {:?}",
+            manifold_dispatch.len(),
+            manifold_dispatch
+                .points
+                .iter()
+                .map(|p| format!(
+                    "({:.3}, {:.3}, {:.3}) depth={:.4}",
+                    p.point.x, p.point.y, p.point.z, p.depth
+                ))
+                .collect::<Vec<_>>(),
+        );
+        assert!(
+            manifold_reversed.is_empty(),
+            "Expected no contacts (reversed order box,hull) but got {} contacts: {:?}",
+            manifold_reversed.len(),
+            manifold_reversed
+                .points
+                .iter()
+                .map(|p| format!(
+                    "({:.3}, {:.3}, {:.3}) depth={:.4}",
+                    p.point.x, p.point.y, p.point.z, p.depth
+                ))
+                .collect::<Vec<_>>(),
+        );
+    }
+
     #[test]
     fn sphere_tetrahedron_contact_on_sphere_surface() {
         use crate::collision::convex_hull::{ConvexHull, HullFace};

@@ -567,7 +567,9 @@ fn clip_face_face_manifold(
     let clipped = clip_against_face_sides(&ref_face.vertices, ref_face.normal, &inc_face.vertices);
 
     if clipped.is_empty() {
-        // Clipping eliminated everything — fall back to single contact.
+        if axis_raw_depth < -margin {
+            return ContactManifold::empty();
+        }
         return ContactManifold::single(ContactPoint::new(
             compute_face_center(&ref_face.vertices),
             normal,
@@ -598,6 +600,9 @@ fn clip_face_face_manifold(
     }
 
     if contacts.is_empty() {
+        if axis_raw_depth < -margin {
+            return ContactManifold::empty();
+        }
         return ContactManifold::single(ContactPoint::new(
             ref_center,
             normal,

@@ -30,13 +30,13 @@ Level(
     )),
 
     objects: [
-        BeachBall(pos: (3.0, 5.0, 2.0)),
+        // BeachBall(pos: (3.0, 5.0, 2.0)),
         // BeachBall(pos: (-2.0, 4.0, -1.0)),
         // BeachBall(pos: (1.0, 6.0, 4.0)),
         // BeachBall(pos: (-4.0, 3.0, -3.0)),
         // BeachBall(pos: (2.0, 5.0, 0.0)),
         // // Capsule(pos: (0.0, 5.0, 0.0), half_height: 5.0, radius: 0.5),
-        Box(pos: (3.0, 1.0, 3.0), half_extents: (0.5, 0.5, 0.5), density: 200.0),
+        // Box(pos: (3.0, 1.0, 3.0), half_extents: (0.5, 0.5, 0.5), density: 200.0),
         // Plank(pos: (3.0, 0.0, 3.0), length: 3.0, width: 3.0),
         // Capsule(pos: (3.0, 3.0, 6.0), half_height: 3.0, radius: 0.5, density: 800.0),
 
@@ -55,11 +55,11 @@ Level(
         //     base_width: 5,
         // ),
 
-        Tetrahedron(pos: (30.0, 3.0, -26.0), size: 1.5),
-        Box(pos: (30.0, 3.0, -28.0), half_extents: (0.5, 0.5, 0.5), density: 200.0),
-        Octahedron(pos: (30.0, 3.0, -30.0), size: 1.5),
-        Dodecahedron(pos: (30.0, 3.0, -32.0), size: 0.8),
-        Icosahedron(pos: (30.0, 3.0, -34.0), size: 1.2),
+        // Tetrahedron(pos: (30.0, 3.0, -26.0), size: 1.5),
+        // Box(pos: (30.0, 3.0, -28.0), half_extents: (0.5, 0.5, 0.5), density: 200.0),
+        // Octahedron(pos: (30.0, 3.0, -30.0), size: 1.5),
+        // Dodecahedron(pos: (30.0, 3.0, -32.0), size: 0.8),
+        // Icosahedron(pos: (30.0, 3.0, -34.0), size: 1.2),
 
         // HoneycombWall(
         //     base: (6.0, -1.0, -6.0),
@@ -91,6 +91,9 @@ Level(
         Temple(
             pos: (30.0, 0.0, -30.0),
         ),
+
+        Box(pos: (3.0, 0.0, -6.0), half_extents: (10.0, 0.5, 10.0), density: 2000.0),
+        Tetrahedron(pos: (3.0, 1.0, -6.0), size: 1.5),
 
         // VoussoirArch(
         //     base: (15.0, 0.0, 8.0),

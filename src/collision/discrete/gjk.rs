@@ -143,15 +143,10 @@ pub fn gjk_query_seeded(
         return GjkResult::Intersecting { simplex };
     }
 
-    // Track minimum distance observed.  If GJK stalls (distance stops
-    // decreasing) with a non-trivial simplex, the shapes are nearly
-    // touching and we should let EPA resolve the penetration.  The bounding
-    // radius heuristic prevents false positives on well-separated shapes
-    // where support-function tiebreaking causes minor oscillation.
+    // Track the best simplex seen so far so we can return robust witness
+    // points if we hit the iteration cap before a formal convergence exit.
     let mut min_dist_sq = v.magnitude_squared();
-    let mut stall_count: u32 = 0;
-    const STALL_LIMIT: u32 = 8;
-    let bounding_sq = (a.bounding_radius() + b.bounding_radius()).powi(2);
+    let mut best_simplex = simplex.clone();
 
     for _ in 0..MAX_ITERATIONS {
         // Search direction: from closest point toward origin.
@@ -164,7 +159,7 @@ pub fn gjk_query_seeded(
         // found the minimum distance.
         let vv = v.magnitude_squared();
         let vw = v.dot(&w.point.coords);
-        if vv - vw <= TOLERANCE * vv.max(1.0) {
+        if simplex.count >= 2 && vv - vw <= TOLERANCE * vv.max(1.0) {
             let (closest_a, closest_b, distance) = extract_closest_points(&simplex);
             return GjkResult::Separated {
                 distance,
@@ -193,43 +188,19 @@ pub fn gjk_query_seeded(
             return GjkResult::Intersecting { simplex };
         }
 
-        // Stall detection: if the distance hasn't improved, we're likely
-        // oscillating around a shallow-penetration simplex.  Only trigger
-        // when the minimum distance is small relative to the shapes (truly
-        // separated shapes converge via the vv-vw check above).
+        // Keep the best simplex by closest distance-to-origin.
         if dist_sq < min_dist_sq - TOLERANCE {
             min_dist_sq = dist_sq;
-            stall_count = 0;
-        } else {
-            stall_count += 1;
-            if stall_count >= STALL_LIMIT && simplex.count >= 2 && min_dist_sq < 0.25 * bounding_sq
-            {
-                // A bad warm-start seed can occasionally stall on a separated
-                // pair and satisfy the heuristic above. Re-run once without a
-                // seed before classifying as intersecting.
-                if initial_direction.is_some() {
-                    return gjk_query_seeded(a, b, None);
-                }
-                return GjkResult::Intersecting { simplex };
-            }
+            best_simplex = simplex.clone();
         }
     }
 
-    // Max iterations exhausted: for truly separated shapes, GJK converges
-    // well within the limit.  Hitting the cap means the shapes are either
-    // overlapping or nearly touching (thin Minkowski difference).
-    if simplex.count >= 3 && min_dist_sq < 0.25 * bounding_sq {
-        if initial_direction.is_some() {
-            return gjk_query_seeded(a, b, None);
-        }
-        GjkResult::Intersecting { simplex }
-    } else {
-        let (closest_a, closest_b, distance) = extract_closest_points(&simplex);
-        GjkResult::Separated {
-            distance,
-            closest_a,
-            closest_b,
-        }
+    // Max iterations exhausted. Return the best separated witness pair found.
+    let (closest_a, closest_b, distance) = extract_closest_points(&best_simplex);
+    GjkResult::Separated {
+        distance,
+        closest_a,
+        closest_b,
     }
 }
 
@@ -582,15 +553,17 @@ fn closest_on_triangle(
     if denom.abs() < DEGENERATE_TOLERANCE {
         return (v0.support_a, v0.support_b, a.magnitude());
     }
-    let u = va / denom;
-    let v = vb / denom;
-    let w = 1.0 - u - v;
+    let wa = va / denom;
+    let wb = vb / denom;
+    let wc = vc / denom;
 
-    let closest_a =
-        Point3::from(v0.support_a.coords * w + v1.support_a.coords * u + v2.support_a.coords * v);
-    let closest_b =
-        Point3::from(v0.support_b.coords * w + v1.support_b.coords * u + v2.support_b.coords * v);
-    let closest_mink = a * w + b * u + c * v;
+    let closest_a = Point3::from(
+        v0.support_a.coords * wa + v1.support_a.coords * wb + v2.support_a.coords * wc,
+    );
+    let closest_b = Point3::from(
+        v0.support_b.coords * wa + v1.support_b.coords * wb + v2.support_b.coords * wc,
+    );
+    let closest_mink = a * wa + b * wb + c * wc;
     (closest_a, closest_b, closest_mink.magnitude())
 }
 
@@ -889,6 +862,102 @@ mod tests {
             }
             GjkResult::Intersecting { .. } => {
                 // Also acceptable for exactly touching shapes.
+            }
+        }
+    }
+
+    // --- Flat OBB vs separated tetrahedron hull ---
+
+    /// Build a regular tetrahedron ConvexHull centered at the origin.
+    fn tetrahedron_hull(edge: f32) -> crate::collision::convex_hull::ConvexHull {
+        use crate::collision::convex_hull::{ConvexHull, HullFace};
+        use smallvec::SmallVec;
+
+        let r = edge * (6.0f32).sqrt() / 4.0;
+        let top = Vector3::new(0.0, r, 0.0);
+        let y_base = -r / 3.0;
+        let base_r = (r * r - y_base * y_base).sqrt();
+
+        let v0 = Vector3::new(0.0, y_base, base_r);
+        let v1 = Vector3::new(
+            base_r * (2.0 * std::f32::consts::PI / 3.0).sin(),
+            y_base,
+            base_r * (2.0 * std::f32::consts::PI / 3.0).cos(),
+        );
+        let v2 = Vector3::new(
+            base_r * (4.0 * std::f32::consts::PI / 3.0).sin(),
+            y_base,
+            base_r * (4.0 * std::f32::consts::PI / 3.0).cos(),
+        );
+
+        let vertices = vec![top, v0, v1, v2];
+        let face_defs: [(usize, usize, usize, usize); 4] =
+            [(1, 2, 3, 0), (0, 2, 1, 3), (0, 3, 2, 1), (0, 1, 3, 2)];
+        let faces = face_defs
+            .iter()
+            .map(|&(a, b, c, opp)| {
+                let va = vertices[a];
+                let vb = vertices[b];
+                let vc = vertices[c];
+                let vopp = vertices[opp];
+                let raw_normal = (vb - va).cross(&(vc - va));
+                let flip = raw_normal.dot(&(va - vopp)) < 0.0;
+                let normal = if flip {
+                    -raw_normal.normalize()
+                } else {
+                    raw_normal.normalize()
+                };
+                let mut indices: SmallVec<[u16; 6]> =
+                    SmallVec::from_slice(&[a as u16, b as u16, c as u16]);
+                if flip {
+                    indices[1..].reverse();
+                }
+                HullFace {
+                    vertex_indices: indices,
+                    normal,
+                }
+            })
+            .collect();
+        ConvexHull::new(vertices, faces)
+    }
+
+    #[test]
+    fn obb_vs_hull_separated_reports_separated() {
+        use crate::collision::convex_hull::TransformedHull;
+
+        let obb = Obb::new(
+            Point3::new(3.0, 0.0, -6.0),
+            UnitQuaternion::identity(),
+            Vector3::new(10.0, 0.5, 10.0),
+        );
+        let hull = tetrahedron_hull(1.5);
+        let transformed = TransformedHull {
+            hull: &hull,
+            center: Point3::new(3.0, 1.0, -6.0),
+            rotation: UnitQuaternion::identity(),
+        };
+
+        // Box top at y=0.5, tetrahedron bottom at y≈0.694. Gap ≈ 0.19.
+        // GJK must report Separated, not Intersecting.
+        // Dispatch ordering: hull (rank 3) as a, box (rank 2) as b.
+        // Test both orderings — dispatch puts hull as a, box as b.
+        for (label, result) in [
+            ("hull_a", gjk_query(&transformed, &obb)),
+            ("obb_a", gjk_query(&obb, &transformed)),
+        ] {
+            match result {
+                GjkResult::Separated { distance, .. } => {
+                    assert!(
+                        distance > 0.1 && distance < 0.3,
+                        "{label}: Expected distance ~0.19, got {}",
+                        distance
+                    );
+                }
+                GjkResult::Intersecting { .. } => {
+                    panic!(
+                        "{label}: GJK falsely reported Intersecting for shapes separated by ~0.19 gap"
+                    );
+                }
             }
         }
     }

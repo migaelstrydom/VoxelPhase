@@ -43,26 +43,37 @@ impl ConvexSupport for SupportSphere {
 
 impl ConvexSupport for Obb {
     fn support(&self, direction: Vector3<f32>) -> Point3<f32> {
+        if direction.magnitude_squared() < 1e-10 {
+            return self.center;
+        }
+
         let rot = self.rotation.to_rotation_matrix();
         let local_dir = rot.inverse() * direction;
 
-        // Sign-flip of half_extents: each component takes the sign of the local direction.
-        // Uses >= 0.0 instead of copysign to avoid -0.0 issues from negated vectors.
+        // Sign-flip of half_extents with stable tie handling: for near-zero
+        // directional components, pick the face center (0.0 on that axis)
+        // instead of an arbitrary corner.
         let local_support = Vector3::new(
-            if local_dir.x >= 0.0 {
+            if local_dir.x > 1e-8 {
                 self.half_extents.x
-            } else {
+            } else if local_dir.x < -1e-8 {
                 -self.half_extents.x
+            } else {
+                0.0
             },
-            if local_dir.y >= 0.0 {
+            if local_dir.y > 1e-8 {
                 self.half_extents.y
-            } else {
+            } else if local_dir.y < -1e-8 {
                 -self.half_extents.y
-            },
-            if local_dir.z >= 0.0 {
-                self.half_extents.z
             } else {
+                0.0
+            },
+            if local_dir.z > 1e-8 {
+                self.half_extents.z
+            } else if local_dir.z < -1e-8 {
                 -self.half_extents.z
+            } else {
+                0.0
             },
         );
 
@@ -189,7 +200,7 @@ mod tests {
             Vector3::new(2.0, 3.0, 4.0),
         );
         let p = obb.support(Vector3::x());
-        assert!(approx_eq_point(p, Point3::new(2.0, 3.0, 4.0), 1e-6));
+        assert!(approx_eq_point(p, Point3::new(2.0, 0.0, 0.0), 1e-6));
     }
 
     #[test]
@@ -200,7 +211,7 @@ mod tests {
             Vector3::new(2.0, 3.0, 4.0),
         );
         let p = obb.support(-Vector3::y());
-        assert!(approx_eq_point(p, Point3::new(2.0, -3.0, 4.0), 1e-6));
+        assert!(approx_eq_point(p, Point3::new(0.0, -3.0, 0.0), 1e-6));
     }
 
     #[test]
@@ -226,7 +237,7 @@ mod tests {
             Vector3::new(1.0, 1.0, 1.0),
         );
         let p = obb.support(Vector3::x());
-        assert!(approx_eq_point(p, Point3::new(11.0, 1.0, 1.0), 1e-6));
+        assert!(approx_eq_point(p, Point3::new(11.0, 0.0, 0.0), 1e-6));
     }
 
     #[test]
