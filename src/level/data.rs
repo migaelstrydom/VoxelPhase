@@ -10,7 +10,7 @@ use crate::app::spawnables::{
     BeachBallDef, BoxDef, BoxWallDef, CapsuleDef, CrateDef, DodecahedronDef, DominoDef,
     HeavyCrateDef, HexPrismDef, HoneycombWallDef, HouseDef, IcosahedronDef, JengaDef,
     OctahedronDef, PlankBridgeDef, PlankDef, PyramidDef, Spawnable, StackDef, StackItemDef,
-    TableDef, TetrahedronDef, TowerDef, TrampolineDef, VoussoirArchDef,
+    TableDef, TempleDef, TetrahedronDef, TowerDef, TrampolineDef, VoussoirArchDef,
 };
 
 /// Top-level level description.
@@ -423,6 +423,16 @@ pub enum LevelObject {
         #[serde(default = "PlankBridgeDef::default_fracture_threshold")]
         fracture_threshold: f32,
     },
+    /// Classical Greek Doric temple with peristyle colonnade.
+    Temple {
+        pos: (f32, f32, f32),
+        #[serde(default = "TempleDef::default_column_height")]
+        column_height: f32,
+        #[serde(default = "TempleDef::default_front_columns")]
+        front_columns: u32,
+        #[serde(default = "TempleDef::default_side_columns")]
+        side_columns: u32,
+    },
 }
 
 impl LevelObject {
@@ -739,6 +749,18 @@ impl LevelObject {
                 density: *density,
                 yaw: *yaw,
                 fracture_threshold: *fracture_threshold,
+            }),
+
+            LevelObject::Temple {
+                pos,
+                column_height,
+                front_columns,
+                side_columns,
+            } => Box::new(TempleDef {
+                pos: *pos,
+                column_height: *column_height,
+                front_columns: *front_columns,
+                side_columns: *side_columns,
             }),
         }
     }

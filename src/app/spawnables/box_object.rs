@@ -66,23 +66,6 @@ pub fn create_box_material_for_style(
     Ok(material_builder.register(material))
 }
 
-/// Creates unique box materials with randomly chosen styles.
-pub fn create_box_materials(
-    count: usize,
-    texture_manager: &TextureManager,
-    material_builder: &mut MaterialManagerBuilder,
-) -> EngineResult<Vec<MaterialId>> {
-    let mut ids = Vec::with_capacity(count);
-    for _ in 0..count {
-        ids.push(create_box_material_for_style(
-            BoxStyle::Random,
-            texture_manager,
-            material_builder,
-        )?);
-    }
-    Ok(ids)
-}
-
 // ---------------------------------------------------------------------------
 // Shared spawn helper
 // ---------------------------------------------------------------------------

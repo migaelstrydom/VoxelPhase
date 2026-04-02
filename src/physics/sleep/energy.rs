@@ -24,7 +24,7 @@ impl EnergyTracker {
     }
 
     pub fn update_body(&mut self, handle: RigidBodyHandle, body: &RigidBody) -> bool {
-        let energy = body.kinetic_energy();
+        let energy = body.kinetic_energy() / body.mass();
         let entry = self.frames_below.entry(handle.0).or_insert(0);
         if energy < self.threshold {
             *entry = entry.saturating_add(1);
