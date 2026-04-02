@@ -8,6 +8,7 @@ mod many_body;
 mod mesh_pipeline;
 mod solver;
 mod wall_slide;
+mod wobble;
 
 use std::fs;
 

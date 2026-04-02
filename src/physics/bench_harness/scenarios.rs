@@ -1095,6 +1095,120 @@ impl PhysicsBenchScenario for KeepUprightScenario {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// Scenarios: thin-block wobble
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Two Jenga-proportioned blocks in a cross configuration: bottom block flat on
+/// terrain, top block perpendicular and resting roughly halfway across the bottom
+/// block's top edge.
+///
+/// Reproduces a persistent angular oscillation (wobble) that thin OBB-on-OBB
+/// contacts are susceptible to. The top block is given a small initial tilt and
+/// lateral offset to break symmetry, matching the configurations that arise
+/// naturally when a Jenga tower collapses.
+#[derive(Debug, Clone)]
+pub struct JengaCrossWobbleScenario {
+    /// Half-extents of each Jenga block: (half_length, half_height, half_width).
+    pub block_half_extents: Vector3<f32>,
+    /// Density of both blocks.
+    pub density: f32,
+    /// Friction coefficient for both blocks and terrain contact.
+    pub friction: f32,
+    /// Small tilt angle (radians) applied to the top block to break symmetry.
+    pub tilt_rad: f32,
+    geometry: FlatGridGeometry,
+}
+
+impl JengaCrossWobbleScenario {
+    pub fn new() -> Self {
+        let half_length = 0.75;
+        Self {
+            block_half_extents: Vector3::new(half_length, half_length / 5.0, half_length / 3.0),
+            density: 500.0,
+            friction: 0.6,
+            tilt_rad: 0.012,
+            geometry: FlatGridGeometry::new(10.0, 1.0),
+        }
+    }
+}
+
+impl PhysicsBenchScenario for JengaCrossWobbleScenario {
+    fn name(&self) -> &'static str {
+        "jenga_cross_wobble"
+    }
+
+    fn restitution(&self) -> f32 {
+        0.0
+    }
+
+    fn build_world(&self) -> PhysicsWorld {
+        let mut config = PhysicsConfig::default();
+        config.sleep.enabled = false;
+        config.deterministic_contact_ordering = true;
+        PhysicsWorld::new(config)
+    }
+
+    fn setup(&self, world: &mut PhysicsWorld) -> RigidBodyHandle {
+        let he = self.block_half_extents;
+
+        // Bottom block: a narrow ridge (thin in Z) on terrain. The narrow top
+        // surface creates an edge-like contact strip with the perpendicular top
+        // block, mimicking the cross-block configuration from a Jenga collapse.
+        let ridge_he = Vector3::new(he.x, he.y, 0.05);
+        let bottom_y = ridge_he.y + 0.001;
+        let bottom = world.create_body(
+            RigidBodyDesc::dynamic()
+                .position(Point3::new(0.0, bottom_y, 0.0))
+                .linear_damping(0.01)
+                .angular_damping(0.005),
+        );
+        let _ = world.attach_collider(
+            bottom,
+            ColliderDesc::box_shape(ridge_he)
+                .density(self.density * 3.0)
+                .restitution(0.0)
+                .friction(self.friction),
+        );
+
+        // Top block: perpendicular (90° around Y), resting on the narrow ridge.
+        // The contact strip is only 0.10m wide, creating a near-edge contact
+        // that provides minimal restoring torque around the long axis.
+        let bottom_top = bottom_y + ridge_he.y;
+        let top_y = bottom_top + he.y + 0.003;
+        let top_x = 0.0;
+        let top_z = 0.013;
+
+        let yaw = UnitQuaternion::from_axis_angle(
+            &Vector3::y_axis(),
+            std::f32::consts::FRAC_PI_2,
+        );
+        let tilt = UnitQuaternion::from_axis_angle(&Vector3::z_axis(), self.tilt_rad);
+        let rotation = tilt * yaw;
+
+        let top = world.create_body(
+            RigidBodyDesc::dynamic()
+                .position(Point3::new(top_x, top_y, top_z))
+                .rotation(rotation)
+                .linear_damping(0.01)
+                .angular_damping(0.005),
+        );
+        let _ = world.attach_collider(
+            top,
+            ColliderDesc::box_shape(he)
+                .density(self.density)
+                .restitution(0.0)
+                .friction(self.friction),
+        );
+
+        top
+    }
+
+    fn geometry(&self) -> &dyn StaticGeometry {
+        &self.geometry
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Scenarios: compound colliders
 // ═══════════════════════════════════════════════════════════════════════════
 

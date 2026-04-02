@@ -445,11 +445,22 @@ mod tests {
             for (j, sp) in src_points.iter().enumerate() {
                 let mut best_dot = f32::NEG_INFINITY;
                 let mut best_dp = &dst_points[0];
+                let mut best_depth_diff = f32::INFINITY;
+                let mut best_dist_sq = f32::INFINITY;
                 for dp in dst_points.iter() {
                     let d = sp.normal.dot(&dp.normal);
-                    if d > best_dot {
+                    let depth_diff = (sp.depth - dp.depth).abs();
+                    let dist_sq = (sp.point - dp.point).magnitude_squared();
+                    let better_dot = d > best_dot + 1e-6;
+                    let tied_dot = (d - best_dot).abs() <= 1e-6;
+                    let better_depth = depth_diff < best_depth_diff - 1e-6;
+                    let tied_depth = (depth_diff - best_depth_diff).abs() <= 1e-6;
+                    let better_dist = dist_sq < best_dist_sq;
+                    if better_dot || (tied_dot && (better_depth || (tied_depth && better_dist))) {
                         best_dot = d;
                         best_dp = dp;
+                        best_depth_diff = depth_diff;
+                        best_dist_sq = dist_sq;
                     }
                 }
 

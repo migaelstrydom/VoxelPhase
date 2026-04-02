@@ -59,6 +59,20 @@ pub fn obb_obb_manifold_cached(
     manifold
 }
 
+/// Fraction of `contact_margin` by which an edge-edge overlap must beat the
+/// best face overlap to win the classification. Face-face clipping produces
+/// multi-point manifolds that resist torque, while edge-edge gives a single
+/// point. Preferring the face path in ambiguous cases prevents rocking
+/// instabilities (e.g. Jenga cross-block wobble).
+const EDGE_WIN_MARGIN_FRACTION: f32 = 0.1;
+
+/// Maximum dot² between an edge-edge cross-product axis and any face normal
+/// for the edge axis to be eligible for classification. When the cross product
+/// aligns closely with a face normal, the overlap is redundant and the face
+/// path should be preferred (it produces multi-point clipping). The edge axis
+/// is still tested for separation but cannot win the min-overlap classification.
+const EDGE_FACE_ALIGN_THRESHOLD: f32 = 0.99; // cos²(~5.7°)
+
 /// Core SAT implementation shared by cached and uncached entry points.
 fn obb_obb_manifold_inner(
     a: &Obb,
@@ -70,10 +84,12 @@ fn obb_obb_manifold_inner(
     let axes_a = a.axes();
     let axes_b = b.axes();
 
-    let mut best_overlap = f32::MAX;
-    let mut best_axis = Vector3::zeros();
-    let mut best_category = MinAxis::FaceA;
+    let mut best_face_overlap = f32::MAX;
+    let mut best_face_axis = Vector3::zeros();
+    let mut best_face_category = MinAxis::FaceA;
+
     let mut best_edge_candidate: Option<(usize, usize, Vector3<f32>, f32)> = None;
+    let mut best_edge_winning_candidate: Option<(usize, usize, Vector3<f32>, f32)> = None;
 
     // Track the best separating axis seen during the full test. If we find
     // a separating axis, we'll store it in the cache for next frame.
@@ -91,17 +107,16 @@ fn obb_obb_manifold_inner(
         let result = test_face_axis(&axes_a[i], a, b, center_dir, contact_margin);
         match result {
             None => {
-                // Separated on this axis. Cache it.
                 let axis = axes_a[i].normalize();
                 cache.separating_axis = Some(axis);
                 return ContactManifold::empty();
             }
             Some((axis, overlap)) => {
                 update_separating(axis, overlap);
-                if overlap < best_overlap {
-                    best_overlap = overlap;
-                    best_axis = axis;
-                    best_category = MinAxis::FaceA;
+                if overlap < best_face_overlap {
+                    best_face_overlap = overlap;
+                    best_face_axis = axis;
+                    best_face_category = MinAxis::FaceA;
                 }
             }
         }
@@ -118,19 +133,22 @@ fn obb_obb_manifold_inner(
             }
             Some((axis, overlap)) => {
                 update_separating(axis, overlap);
-                if overlap < best_overlap {
-                    best_overlap = overlap;
-                    best_axis = axis;
-                    best_category = MinAxis::FaceB;
+                if overlap < best_face_overlap {
+                    best_face_overlap = overlap;
+                    best_face_axis = axis;
+                    best_face_category = MinAxis::FaceB;
                 }
             }
         }
     }
 
     // Test 9 edge-edge cross product axes.
-    // Apply a small bias to prefer face axes over edge axes when overlaps are similar.
-    // This prevents noisy edge-edge contacts when a face-face solution is nearly as good.
-    let face_best = best_overlap;
+    //
+    // Edge axes are tracked separately from face axes. After the loop, the
+    // edge candidate only wins if its overlap is meaningfully less than the
+    // best face overlap (by `edge_win_slop`). This prevents near-degenerate
+    // edge-edge classifications when a face path would produce a better
+    // multi-point manifold.
     for i in 0..3 {
         for j in 0..3 {
             let cross = axes_a[i].cross(&axes_b[j]);
@@ -157,6 +175,8 @@ fn obb_obb_manifold_inner(
 
             update_separating(axis, overlap);
 
+            // Always track the best edge candidate for the face-clip-empty
+            // fallback, regardless of whether this axis can win classification.
             if best_edge_candidate
                 .map(|(_, _, _, best_edge_overlap)| overlap < best_edge_overlap)
                 .unwrap_or(true)
@@ -164,15 +184,48 @@ fn obb_obb_manifold_inner(
                 best_edge_candidate = Some((i, j, axis, overlap));
             }
 
-            // Bias: prefer edge axis only if it's meaningfully better than the best face axis.
-            let biased_overlap = overlap + OVERLAP_EPS;
-            if biased_overlap < best_overlap && biased_overlap < face_best {
-                best_overlap = overlap;
-                best_axis = axis;
-                best_category = MinAxis::EdgeEdge { a_idx: i, b_idx: j };
+            // Skip edge axes whose cross product aligns with the best face
+            // axis. When the overlap winner is nearly the same direction as
+            // an existing face normal, the face path produces a better
+            // multi-point manifold. Only compare against the winning face
+            // axis — alignment with unrelated faces is irrelevant.
+            let d = axis.dot(&best_face_axis);
+            let face_len_sq = best_face_axis.magnitude_squared();
+            if face_len_sq > 1e-12 && d * d > EDGE_FACE_ALIGN_THRESHOLD * face_len_sq {
+                continue;
+            }
+
+            // Track only classification-eligible edge axes separately from the
+            // fallback candidate. Otherwise filtered edge axes can still win.
+            if best_edge_winning_candidate
+                .map(|(_, _, _, best_edge_overlap)| overlap < best_edge_overlap)
+                .unwrap_or(true)
+            {
+                best_edge_winning_candidate = Some((i, j, axis, overlap));
             }
         }
     }
+
+    // Decide final classification: edge-edge only wins if it beats the best
+    // face overlap by a margin-relative slop.
+    let edge_win_slop = EDGE_WIN_MARGIN_FRACTION * contact_margin.max(OVERLAP_EPS);
+    let (best_overlap, best_axis, best_category) =
+        if let Some((ei, ej, edge_axis, edge_overlap)) = best_edge_winning_candidate {
+        if edge_overlap + edge_win_slop < best_face_overlap {
+            (
+                edge_overlap,
+                edge_axis,
+                MinAxis::EdgeEdge {
+                    a_idx: ei,
+                    b_idx: ej,
+                },
+            )
+        } else {
+            (best_face_overlap, best_face_axis, best_face_category)
+        }
+    } else {
+        (best_face_overlap, best_face_axis, best_face_category)
+    };
 
     if best_overlap > f32::MAX * 0.5 {
         cache.separating_axis = best_separating_axis.map(|(axis, _)| axis);
@@ -464,14 +517,20 @@ fn sort_contacts_deterministic(points: &mut smallvec::SmallVec<[ContactPoint; 4]
     const POSITION_QUANT: f32 = 10_000.0;
     let quantize = |v: f32| (v * POSITION_QUANT).round() as i32;
 
+    // Sort by feature ID first, then by quantized position, then by depth.
+    // Position sorts before depth so that contacts sharing a feature ID (e.g.
+    // OBB face-face) maintain a stable iteration order as the block tilts.
+    // Sorting by depth first causes the PGS bias direction to flip every frame
+    // when the deeper side alternates, actively driving oscillation on thin
+    // blocks.
     points.sort_by(|a, b| {
         a.feature_id
             .0
             .cmp(&b.feature_id.0)
-            .then_with(|| b.raw_depth.total_cmp(&a.raw_depth))
             .then_with(|| quantize(a.point.x).cmp(&quantize(b.point.x)))
             .then_with(|| quantize(a.point.y).cmp(&quantize(b.point.y)))
             .then_with(|| quantize(a.point.z).cmp(&quantize(b.point.z)))
+            .then_with(|| b.raw_depth.total_cmp(&a.raw_depth))
     });
 }
 
@@ -1108,6 +1167,69 @@ mod tests {
                     cp.raw_depth
                 );
             }
+        }
+    }
+
+    /// Regression test for Jenga cross-block wobble scenario.
+    ///
+    /// A thin block (the "ridge") has fallen on its side. A wider block rests
+    /// perpendicular on top, creating a face-vs-edge contact. The SAT minimum
+    /// penetration axis is a face normal (Y), but a near-parallel edge-edge
+    /// cross product can win due to floating-point tie-breaking. SAT must
+    /// select the face axis so the face-face clipping path runs, producing
+    /// 2+ contact points along the edge strip. The edge-edge path produces
+    /// only 1 point and cannot resist rocking torque.
+    ///
+    /// Body transforms captured from the bench harness at t ≈ 2.0s when the
+    /// system has settled into a steady rocking oscillation.
+    #[test]
+    fn jenga_cross_face_edge_not_classified_as_edge_edge() {
+        // Bottom block (ridge): half_extents (0.75, 0.15, 0.05), fallen on its side.
+        // Quaternion (i,j,k,w) from simulation.
+        let rot_a = UnitQuaternion::from_quaternion(nalgebra::Quaternion::new(
+            0.698237, 0.715864, 0.000951, 0.001459,
+        ));
+        let a = Obb::new(
+            Point3::new(-0.0001, 0.0485, 0.2156),
+            rot_a,
+            Vector3::new(0.75, 0.15, 0.05),
+        );
+
+        // Top block: half_extents (0.75, 0.15, 0.25), rotated 90° around Y + slight tilt.
+        let rot_b = UnitQuaternion::from_quaternion(nalgebra::Quaternion::new(
+            0.730206, -0.018544, 0.682908, -0.009539,
+        ));
+        let b = Obb::new(
+            Point3::new(-0.0331, 0.2424, 0.2459),
+            rot_b,
+            Vector3::new(0.75, 0.15, 0.25),
+        );
+
+        let margin = 0.02;
+        let m = obb_obb_manifold(&a, &b, margin);
+
+        assert!(
+            !m.is_empty(),
+            "Boxes should be colliding (resting contact)"
+        );
+
+        // The face-face clipping path produces at least 2 points along the edge
+        // strip (one at each end). The edge-edge path produces exactly 1.
+        assert!(
+            m.len() >= 2,
+            "Face-vs-edge contact should produce >= 2 clip points, got {} \
+             (edge-edge misclassification produces 1)",
+            m.len()
+        );
+
+        // All contacts should use the face-face path (no high bit on feature IDs).
+        for cp in &m.points {
+            assert!(
+                cp.feature_id.0 & (1u64 << 63) == 0,
+                "Contact should use face-face clipping path, not edge-edge. \
+                 FeatureId {} has edge-edge high bit set",
+                cp.feature_id.0
+            );
         }
     }
 }

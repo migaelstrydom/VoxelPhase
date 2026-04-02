@@ -119,9 +119,7 @@ pub fn gjk_epa_manifold_cached<S: ConvexSupport + SupportFaceExtractor>(
     margin: f32,
     gjk_cache: Option<&mut GjkCache>,
 ) -> ContactManifold {
-    let seed = gjk_cache
-        .as_ref()
-        .and_then(|cache| cache.last_direction);
+    let seed = gjk_cache.as_ref().and_then(|cache| cache.last_direction);
     let result = gjk_query_seeded(a, b, seed);
 
     match result {
@@ -186,16 +184,22 @@ pub fn gjk_epa_manifold_cached<S: ConvexSupport + SupportFaceExtractor>(
                     if let (Some(best_fa), Some(best_fb)) =
                         (a.support_face(best_normal), b.support_face(-best_normal))
                     {
-                        clip_face_face_manifold(&best_fa, &best_fb, best_normal, epa.depth, margin)
+                        let best_raw_depth = support_overlap(a, b, best_normal);
+                        clip_face_face_manifold(
+                            &best_fa,
+                            &best_fb,
+                            best_normal,
+                            best_raw_depth,
+                            margin,
+                        )
                     } else {
-                        clip_face_face_manifold(&fa, &fb, normal, epa.depth, margin)
+                        let raw_depth = support_overlap(a, b, normal);
+                        clip_face_face_manifold(&fa, &fb, normal, raw_depth, margin)
                     }
                 }
                 (Some(fa), None) => {
                     // A has a face (hull/OBB), B is faceless (sphere/capsule).
-                    let result = face_vs_faceless_contact(
-                        a, b, &fa, normal, &epa, margin,
-                    );
+                    let result = face_vs_faceless_contact(a, b, &fa, normal, &epa, margin);
                     match result {
                         Some(manifold) => manifold,
                         None => ContactManifold::empty(),
@@ -225,9 +229,7 @@ pub fn gjk_epa_manifold_cached<S: ConvexSupport + SupportFaceExtractor>(
                 (None, None) => {
                     // Both shapes are faceless (sphere-sphere, sphere-capsule).
                     let raw_depth = epa.depth - 2.0 * margin;
-                    let point = Point3::from(
-                        (epa.witness_a.coords + epa.witness_b.coords) * 0.5,
-                    );
+                    let point = Point3::from((epa.witness_a.coords + epa.witness_b.coords) * 0.5);
                     ContactManifold::single(ContactPoint::new(
                         point,
                         normal,
@@ -289,6 +291,26 @@ fn refine_face_face_normal<S: ConvexSupport + SupportFaceExtractor>(
     dirs.push(-face_b.normal);
     if center_dir.magnitude_squared() > 1e-8 {
         dirs.extend(jittered_probe_directions(center_dir));
+    }
+
+    // Probe additional deterministic directions and pull support-face normals
+    // from both shapes. This helps recover the SAT-like face axis when EPA's
+    // local normal and center-direction jitter both miss it.
+    let basis = [
+        Vector3::x(),
+        -Vector3::x(),
+        Vector3::y(),
+        -Vector3::y(),
+        Vector3::z(),
+        -Vector3::z(),
+    ];
+    for probe in basis {
+        if let Some(fa) = a.support_face(probe) {
+            dirs.push(fa.normal);
+        }
+        if let Some(fb) = b.support_face(-probe) {
+            dirs.push(-fb.normal);
+        }
     }
 
     let mut best_normal = epa_normal;
@@ -525,7 +547,7 @@ fn clip_face_face_manifold(
     face_a: &SupportFace,
     face_b: &SupportFace,
     normal: Vector3<f32>,
-    epa_depth: f32,
+    axis_raw_depth: f32,
     margin: f32,
 ) -> ContactManifold {
     // Determine reference and incident faces.
@@ -546,11 +568,10 @@ fn clip_face_face_manifold(
 
     if clipped.is_empty() {
         // Clipping eliminated everything — fall back to single contact.
-        let raw_depth = epa_depth - 2.0 * margin;
         return ContactManifold::single(ContactPoint::new(
             compute_face_center(&ref_face.vertices),
             normal,
-            raw_depth,
+            axis_raw_depth,
             FeatureId::from_face_pair(face_a.face_index, face_b.face_index),
         ));
     }
@@ -560,7 +581,6 @@ fn clip_face_face_manifold(
     let ref_plane_d = ref_face.normal.dot(&ref_center.coords);
 
     let base_feature = FeatureId::from_face_pair(face_a.face_index, face_b.face_index);
-    let manifold_depth = epa_depth - 2.0 * margin;
     let mut contacts: SmallVec<[ContactPoint; 8]> = SmallVec::with_capacity(clipped.len());
 
     for (i, vertex) in clipped.iter().enumerate() {
@@ -570,7 +590,7 @@ fn clip_face_face_manifold(
 
         // Accept vertices that are penetrating or within margin tolerance.
         if signed_dist < margin + 1e-4 {
-            let raw_depth = (-signed_dist).max(manifold_depth);
+            let raw_depth = (-signed_dist).min(axis_raw_depth);
             let feature_id = base_feature.with_vertex(i as u32);
 
             contacts.push(ContactPoint::new(*vertex, normal, raw_depth, feature_id));
@@ -578,11 +598,10 @@ fn clip_face_face_manifold(
     }
 
     if contacts.is_empty() {
-        let raw_depth = epa_depth - 2.0 * margin;
         return ContactManifold::single(ContactPoint::new(
             ref_center,
             normal,
-            raw_depth,
+            axis_raw_depth,
             base_feature,
         ));
     }
@@ -691,7 +710,6 @@ fn compute_face_center(verts: &SmallVec<[Point3<f32>; 8]>) -> Point3<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
     use crate::collision::capsule::Capsule;
     use crate::collision::convex_hull::{cube_hull, ConvexHull, HullFace};
     use crate::collision::discrete::obb_capsule::obb_capsule_manifold;
@@ -700,6 +718,7 @@ mod tests {
     use crate::collision::obb::Obb;
     use crate::collision::sat::SatCache;
     use crate::collision::shape_view::ShapeView;
+    use std::sync::Arc;
 
     use crate::physics::ColliderShape;
     use nalgebra::UnitQuaternion;
@@ -745,9 +764,19 @@ mod tests {
             "SAT should produce contacts for overlapping OBBs"
         );
 
-        // Same normal direction (dot > 0.99).
-        let gjk_normal = gjk_result.points[0].normal;
-        let sat_normal = sat_result.points[0].normal;
+        // Same normal direction (dot > 0.99) for the deepest contact on each manifold.
+        let gjk_p = gjk_result
+            .points
+            .iter()
+            .max_by(|a, b| a.raw_depth.total_cmp(&b.raw_depth))
+            .expect("non-empty");
+        let sat_p = sat_result
+            .points
+            .iter()
+            .max_by(|a, b| a.raw_depth.total_cmp(&b.raw_depth))
+            .expect("non-empty");
+        let gjk_normal = gjk_p.normal;
+        let sat_normal = sat_p.normal;
         let dot = gjk_normal.dot(&sat_normal);
         assert!(
             dot > 0.99 || dot < -0.99,
@@ -758,8 +787,8 @@ mod tests {
         );
 
         // Similar depth (±0.1).
-        let gjk_depth = gjk_result.points[0].raw_depth;
-        let sat_depth = sat_result.points[0].raw_depth;
+        let gjk_depth = gjk_p.raw_depth;
+        let sat_depth = sat_p.raw_depth;
         assert!(
             approx_eq(gjk_depth, sat_depth, 0.1),
             "Depth mismatch: GJK {} vs SAT {}",
@@ -933,7 +962,11 @@ mod tests {
         };
 
         let result = gjk_epa_manifold(&view_a, &view_b, 0.0);
-        assert_eq!(result.len(), 1, "Coincident spheres should produce one contact");
+        assert_eq!(
+            result.len(),
+            1,
+            "Coincident spheres should produce one contact"
+        );
 
         let n = result.points[0].normal;
         assert!(
@@ -1041,12 +1074,8 @@ mod tests {
 
         let vertices = vec![top, v0, v1, v2];
 
-        let face_defs: [(usize, usize, usize, usize); 4] = [
-            (1, 2, 3, 0),
-            (0, 2, 1, 3),
-            (0, 3, 2, 1),
-            (0, 1, 3, 2),
-        ];
+        let face_defs: [(usize, usize, usize, usize); 4] =
+            [(1, 2, 3, 0), (0, 2, 1, 3), (0, 3, 2, 1), (0, 1, 3, 2)];
 
         let faces = face_defs
             .iter()
@@ -1081,7 +1110,12 @@ mod tests {
     }
 
     /// Signed distance from point to an axis-aligned box surface (negative = inside).
-    fn signed_distance_to_box(p: Point3<f32>, center: Point3<f32>, rot: UnitQuaternion<f32>, he: Vector3<f32>) -> f32 {
+    fn signed_distance_to_box(
+        p: Point3<f32>,
+        center: Point3<f32>,
+        rot: UnitQuaternion<f32>,
+        he: Vector3<f32>,
+    ) -> f32 {
         let local = rot.inverse() * (p - center);
         let dx = local.x.abs() - he.x;
         let dy = local.y.abs() - he.y;
@@ -1123,7 +1157,10 @@ mod tests {
         let mut cache = SatCache::default();
         let sat_result = obb_obb_manifold_cached(&obb_a, &obb_b, margin, &mut cache);
 
-        assert!(!gjk_result.is_empty(), "Hull GJK/EPA should produce contacts");
+        assert!(
+            !gjk_result.is_empty(),
+            "Hull GJK/EPA should produce contacts"
+        );
         assert!(!sat_result.is_empty(), "OBB SAT should produce contacts");
 
         let gjk_p = gjk_result
@@ -1141,7 +1178,8 @@ mod tests {
         assert!(
             gjk_n.dot(&sat_n).abs() > 0.95,
             "Normal mismatch: GJK {:?} vs SAT {:?}",
-            gjk_n, sat_n
+            gjk_n,
+            sat_n
         );
 
         let gjk_d = gjk_p.raw_depth;
@@ -1149,7 +1187,8 @@ mod tests {
         assert!(
             approx_eq(gjk_d, sat_d, 0.1),
             "Depth mismatch: GJK {} vs SAT {}",
-            gjk_d, sat_d
+            gjk_d,
+            sat_d
         );
 
         assert!(
@@ -1184,7 +1223,10 @@ mod tests {
         };
 
         let gjk_result = gjk_epa_manifold(&view_a, &view_b, margin);
-        assert!(!gjk_result.is_empty(), "Hull GJK/EPA should produce contacts");
+        assert!(
+            !gjk_result.is_empty(),
+            "Hull GJK/EPA should produce contacts"
+        );
 
         let obb_a = Obb::new(Point3::origin(), rot_a, he_a);
         let obb_b = Obb::new(center_b, UnitQuaternion::identity(), he_b);
@@ -1192,8 +1234,19 @@ mod tests {
         let sat_result = obb_obb_manifold_cached(&obb_a, &obb_b, margin, &mut cache);
         assert!(!sat_result.is_empty(), "OBB SAT should produce contacts");
 
-        let gjk_n = gjk_result.points[0].normal;
-        let sat_n = sat_result.points[0].normal;
+        let gjk_p = gjk_result
+            .points
+            .iter()
+            .max_by(|a, b| a.raw_depth.total_cmp(&b.raw_depth))
+            .expect("non-empty");
+        let sat_p = sat_result
+            .points
+            .iter()
+            .max_by(|a, b| a.raw_depth.total_cmp(&b.raw_depth))
+            .expect("non-empty");
+
+        let gjk_n = gjk_p.normal;
+        let sat_n = sat_p.normal;
         assert!(
             gjk_n.dot(&sat_n).abs() > 0.95,
             "Normal mismatch: GJK {:?} vs SAT {:?}",
@@ -1201,8 +1254,8 @@ mod tests {
             sat_n
         );
 
-        let gjk_d = gjk_result.points[0].raw_depth;
-        let sat_d = sat_result.points[0].raw_depth;
+        let gjk_d = gjk_p.raw_depth;
+        let sat_d = sat_p.raw_depth;
         assert!(
             approx_eq(gjk_d, sat_d, 0.1),
             "Depth mismatch: GJK {} vs SAT {}",
@@ -1245,12 +1298,14 @@ mod tests {
             assert!(
                 d_a <= margin + 0.05,
                 "Contact {:?} too far outside hull A (sd={})",
-                cp.point, d_a
+                cp.point,
+                d_a
             );
             assert!(
                 d_b <= margin + 0.05,
                 "Contact {:?} too far outside hull B (sd={})",
-                cp.point, d_b
+                cp.point,
+                d_b
             );
         }
     }
@@ -1266,10 +1321,8 @@ mod tests {
         let shape_a = ColliderShape::ConvexHull { hull: hull.clone() };
         let shape_b = ColliderShape::ConvexHull { hull: hull.clone() };
 
-        let rot_b = UnitQuaternion::from_axis_angle(
-            &Vector3::y_axis(),
-            std::f32::consts::FRAC_PI_4,
-        );
+        let rot_b =
+            UnitQuaternion::from_axis_angle(&Vector3::y_axis(), std::f32::consts::FRAC_PI_4);
         let center_b = Point3::new(2.0, 0.0, 0.0);
 
         let view_a = ShapeView {
@@ -1284,23 +1337,31 @@ mod tests {
         };
 
         let result = gjk_epa_manifold(&view_a, &view_b, margin);
-        assert!(!result.is_empty(), "Should produce contacts for rotated overlap");
+        assert!(
+            !result.is_empty(),
+            "Should produce contacts for rotated overlap"
+        );
 
         for cp in &result.points {
-            let d_a = signed_distance_to_box(
-                cp.point, Point3::origin(), UnitQuaternion::identity(), he,
-            );
+            let d_a =
+                signed_distance_to_box(cp.point, Point3::origin(), UnitQuaternion::identity(), he);
             let d_b = signed_distance_to_box(cp.point, center_b, rot_b, he);
 
             assert!(
                 d_a <= margin + 0.1,
                 "Contact {:?} outside hull A (sd={:.3}), normal={:?}, depth={:.3}",
-                cp.point, d_a, cp.normal, cp.raw_depth
+                cp.point,
+                d_a,
+                cp.normal,
+                cp.raw_depth
             );
             assert!(
                 d_b <= margin + 0.1,
                 "Contact {:?} outside hull B (sd={:.3}), normal={:?}, depth={:.3}",
-                cp.point, d_b, cp.normal, cp.raw_depth
+                cp.point,
+                d_b,
+                cp.normal,
+                cp.raw_depth
             );
 
             assert!(
@@ -1389,15 +1450,32 @@ mod tests {
         };
 
         let hull_result = gjk_epa_manifold(&view_hull, &view_cap, margin);
-        assert!(!hull_result.is_empty(), "Hull path should produce a contact");
+        assert!(
+            !hull_result.is_empty(),
+            "Hull path should produce a contact"
+        );
 
         let obb = Obb::new(Point3::origin(), rot, he);
         let capsule = Capsule::new(center, rot, 0.8, 0.3);
         let obb_result = obb_capsule_manifold(&obb, &capsule, margin);
-        assert!(!obb_result.is_empty(), "OBB reference should produce a contact");
+        assert!(
+            !obb_result.is_empty(),
+            "OBB reference should produce a contact"
+        );
 
-        let hn = hull_result.points[0].normal;
-        let on = obb_result.points[0].normal;
+        let hull_p = hull_result
+            .points
+            .iter()
+            .max_by(|a, b| a.raw_depth.total_cmp(&b.raw_depth))
+            .expect("non-empty");
+        let obb_p = obb_result
+            .points
+            .iter()
+            .max_by(|a, b| a.raw_depth.total_cmp(&b.raw_depth))
+            .expect("non-empty");
+
+        let hn = hull_p.normal;
+        let on = obb_p.normal;
         let dot = hn.dot(&on);
         assert!(
             dot > 0.95,
@@ -1410,10 +1488,10 @@ mod tests {
         // Independent geometry (Python): segment-box gap ~0.025, so expected
         // geometric depth is about 0.3 - 0.025 = 0.275.
         assert!(
-            (hull_result.points[0].raw_depth - obb_result.points[0].raw_depth).abs() < 0.1,
+            (hull_p.raw_depth - obb_p.raw_depth).abs() < 0.1,
             "Depth mismatch: hull={:.4}, obb={:.4}",
-            hull_result.points[0].raw_depth,
-            obb_result.points[0].raw_depth
+            hull_p.raw_depth,
+            obb_p.raw_depth
         );
     }
 
@@ -1443,7 +1521,10 @@ mod tests {
         };
 
         let result = gjk_epa_manifold(&view_a, &view_b, margin);
-        assert!(!result.is_empty(), "Should produce contacts for overlapping tetrahedra");
+        assert!(
+            !result.is_empty(),
+            "Should produce contacts for overlapping tetrahedra"
+        );
 
         let bounding_r = tet.bounding_radius;
         for cp in &result.points {
@@ -1452,12 +1533,16 @@ mod tests {
             assert!(
                 dist_a <= bounding_r + margin + 0.1,
                 "Contact {:?} too far from tet A center (dist={:.3}, bound={:.3})",
-                cp.point, dist_a, bounding_r
+                cp.point,
+                dist_a,
+                bounding_r
             );
             assert!(
                 dist_b <= bounding_r + margin + 0.1,
                 "Contact {:?} too far from tet B center (dist={:.3}, bound={:.3})",
-                cp.point, dist_b, bounding_r
+                cp.point,
+                dist_b,
+                bounding_r
             );
 
             assert!(
@@ -1507,7 +1592,9 @@ mod tests {
                 assert!(
                     dot > 0.9,
                     "Normal flipped between steps: prev={:?}, cur={:?}, dot={:.3}",
-                    prev, n, dot
+                    prev,
+                    n,
+                    dot
                 );
             }
             prev_normal = Some(n);
@@ -1518,8 +1605,8 @@ mod tests {
 
     #[test]
     fn hull_epa_normal_matches_obb_for_cubes() {
-        use crate::collision::discrete::gjk::{gjk_query, GjkResult};
         use crate::collision::discrete::epa::epa_penetration;
+        use crate::collision::discrete::gjk::{gjk_query, GjkResult};
 
         let margin = 0.02;
         let he = Vector3::new(1.0, 1.0, 1.0);
@@ -1536,8 +1623,16 @@ mod tests {
         let hull = Arc::new(cube_hull(he));
         let shape_a = ColliderShape::ConvexHull { hull: hull.clone() };
         let shape_b = ColliderShape::ConvexHull { hull: hull.clone() };
-        let view_a = ShapeView { center: Point3::origin(), rotation: rot, shape: &shape_a };
-        let view_b = ShapeView { center: Point3::new(1.5, 0.0, 0.0), rotation: rot, shape: &shape_b };
+        let view_a = ShapeView {
+            center: Point3::origin(),
+            rotation: rot,
+            shape: &shape_a,
+        };
+        let view_b = ShapeView {
+            center: Point3::new(1.5, 0.0, 0.0),
+            rotation: rot,
+            shape: &shape_b,
+        };
         let hull_simplex = match gjk_query(&view_a, &view_b) {
             GjkResult::Intersecting { simplex } => simplex,
             _ => panic!("Hull should intersect"),
@@ -1547,12 +1642,14 @@ mod tests {
         assert!(
             hull_epa.normal.dot(&obb_epa.normal).abs() > 0.9,
             "Hull EPA normal {:?} should match OBB {:?}",
-            hull_epa.normal, obb_epa.normal
+            hull_epa.normal,
+            obb_epa.normal
         );
         assert!(
             (hull_epa.depth - obb_epa.depth).abs() < 0.05,
             "Hull EPA depth {:.3} should match OBB {:.3}",
-            hull_epa.depth, obb_epa.depth
+            hull_epa.depth,
+            obb_epa.depth
         );
     }
 }

@@ -36,7 +36,10 @@ impl PhysicsResource {
     }
 
     pub fn stepper(&self) -> &dyn Stepper {
-        self.stepper.as_ref().expect("stepper taken during step").as_ref()
+        self.stepper
+            .as_ref()
+            .expect("stepper taken during step")
+            .as_ref()
     }
 }
 
@@ -98,10 +101,17 @@ impl PhysicsSyncSystem {
     ) {
         let mut updates = Vec::new();
         for (vel, body, vd) in ((&*velocities), bodies, velocity_driven).join() {
-            updates.push((body.0, vel.0, vd.angular_velocity, vd.max_accel, vd.angular_max_accel));
+            updates.push((
+                body.0,
+                vel.0,
+                vd.angular_velocity,
+                vd.max_accel,
+                vd.angular_max_accel,
+            ));
         }
         for (handle, vel, angular, max_accel, angular_max_accel) in updates {
-            let _ = physics.set_body_velocity_drive(handle, vel, angular, max_accel, angular_max_accel);
+            let _ =
+                physics.set_body_velocity_drive(handle, vel, angular, max_accel, angular_max_accel);
         }
     }
 
