@@ -92,6 +92,50 @@ pub fn multi_material_compound_cuboid_model(
     Arc::new(Model::flat(parts))
 }
 
+/// Build a compound model from multiple boxes with per-box materials and
+/// optional per-box Y-axis rotation.
+///
+/// Same as [`multi_material_compound_cuboid_model`] but each box can be
+/// individually rotated.
+pub fn multi_material_rotated_compound_cuboid_model(
+    boxes: &[(Vector3<f32>, Vector3<f32>, nalgebra::UnitQuaternion<f32>, MaterialId)],
+) -> Arc<Model> {
+    let mut groups: Vec<(MaterialId, Vec<Vertex>, Vec<u32>)> = Vec::new();
+
+    for &(half_extents, offset, rotation, material) in boxes {
+        let group = groups.iter_mut().find(|(m, _, _)| *m == material);
+        let (_, verts, indices) = match group {
+            Some(g) => g,
+            None => {
+                groups.push((material, Vec::new(), Vec::new()));
+                groups.last_mut().unwrap()
+            }
+        };
+
+        let base_idx = verts.len() as u32;
+        verts.extend(generate_rotated_offset_cube_vertices(
+            half_extents,
+            offset,
+            rotation,
+            Colour::WHITE,
+        ));
+        let cube_indices = generate_cube_indices();
+        indices.extend(cube_indices.iter().map(|i| i + base_idx));
+    }
+
+    let primitives = groups
+        .into_iter()
+        .map(|(material, vertices, indices)| MeshPrimitive {
+            vertices,
+            indices,
+            material,
+        })
+        .collect();
+
+    let parts = vec![ModelPart::new(primitives)];
+    Arc::new(Model::flat(parts))
+}
+
 /// A face definition for convex solid model/hull building.
 ///
 /// `vertex_indices` are indices into the vertex array. `opposite_vertex` is the
@@ -287,6 +331,25 @@ fn generate_offset_cube_vertices(
         v.pos.x += offset.x;
         v.pos.y += offset.y;
         v.pos.z += offset.z;
+    }
+    verts
+}
+
+/// Generate cube vertices rotated then translated.
+fn generate_rotated_offset_cube_vertices(
+    half_extents: Vector3<f32>,
+    offset: Vector3<f32>,
+    rotation: nalgebra::UnitQuaternion<f32>,
+    colour: Colour,
+) -> Vec<Vertex> {
+    let rot = rotation.to_rotation_matrix();
+    let mut verts = generate_cube_vertices(half_extents, colour);
+    for v in &mut verts {
+        let p = rot * Vector3::new(v.pos.x, v.pos.y, v.pos.z);
+        v.pos.x = p.x + offset.x;
+        v.pos.y = p.y + offset.y;
+        v.pos.z = p.z + offset.z;
+        v.normal = rot * v.normal;
     }
     verts
 }

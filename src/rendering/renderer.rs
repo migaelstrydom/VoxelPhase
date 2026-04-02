@@ -333,6 +333,10 @@ impl Renderer {
         texture: &TextureHandle,
         texture_manager: &TextureManager,
     ) -> EngineResult<()> {
+        if vertices.is_empty() || indices.is_empty() {
+            return Ok(());
+        }
+
         // Append mesh data to frame buffers and get draw offsets
         let draw_info = self.frame_data.append_mesh_data(vertices, indices)?;
 

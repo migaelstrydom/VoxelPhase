@@ -124,9 +124,15 @@ impl OverlayRenderer {
             return Ok(());
         }
 
+        // Clamp to buffer capacity to avoid writing past the fixed-size buffers.
+        let max_indices = MAX_OVERLAY_CHARS * 6;
+        let max_vertices = MAX_OVERLAY_CHARS * 4;
+        let index_count = all_indices.len().min(max_indices);
+        let vertex_count = all_vertices.len().min(max_vertices);
+
         // Single upload and single draw call
-        self.upload_geometry(&all_vertices, &all_indices)?;
-        self.record_draw_commands(cb, all_indices.len() as u32);
+        self.upload_geometry(&all_vertices[..vertex_count], &all_indices[..index_count])?;
+        self.record_draw_commands(cb, index_count as u32);
 
         Ok(())
     }

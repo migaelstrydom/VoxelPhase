@@ -1,14 +1,13 @@
 //! Fracture ECS system.
 
 use nalgebra::{Point3, Vector3};
-use specs::{Builder, Entities, Join, Read, System, Write, WriteStorage};
+use specs::{Builder, Entities, Join, Read, System, WriteStorage};
 
 use super::components::CompoundFracture;
 use crate::app::spawnables::shared::models::{compound_cuboid_model, cuboid_model};
 use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
 };
-use crate::debug::DebugLines;
 use crate::physics::{ColliderHandle, ColliderShape, PhysicsImpulseQueue};
 use crate::systems::PhysicsResource;
 
@@ -29,7 +28,6 @@ impl<'a> System<'a> for FractureSystem {
         WriteStorage<'a, RigidBodyComponent>,
         WriteStorage<'a, ModelInstance>,
         Read<'a, specs::LazyUpdate>,
-        Write<'a, DebugLines>,
         Read<'a, PhysicsImpulseQueue>,
     );
 
@@ -41,7 +39,6 @@ impl<'a> System<'a> for FractureSystem {
             bodies,
             mut models,
             lazy,
-            mut debug_lines,
             impulse_queue,
         ) = data;
 
@@ -72,16 +69,6 @@ impl<'a> System<'a> for FractureSystem {
                 .filter_map(|imp| imp.impulse_at(body_pos))
                 .map(|v| v.magnitude())
                 .sum();
-
-            // Debug display.
-            if impulse_mag > 0.01 {
-                for (ji, joint) in fracture.joints.iter().enumerate() {
-                    debug_lines.add(
-                        &format!("Fracture/J{} ({}-{})", ji, joint.child_a, joint.child_b),
-                        format!("{:.2} / {:.1}", impulse_mag, joint.threshold),
-                    );
-                }
-            }
 
             // Check if any joint should break.
             let any_broken = fracture
@@ -325,6 +312,15 @@ fn rebuild_compound_model(
                 _ => return None,
             };
             let offset = c.offset().translation.vector;
+            if !he.x.is_finite() || !he.y.is_finite() || !he.z.is_finite()
+                || !offset.x.is_finite() || !offset.y.is_finite() || !offset.z.is_finite()
+            {
+                log::error!(
+                    "Fracture: NaN/Inf in remaining collider: he={:?} offset={:?}",
+                    he, offset
+                );
+                return None;
+            }
             Some((he, offset))
         })
         .collect();

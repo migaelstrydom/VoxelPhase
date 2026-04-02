@@ -9,8 +9,8 @@ use serde::Deserialize;
 use crate::app::spawnables::{
     BeachBallDef, BoxDef, BoxWallDef, CapsuleDef, CrateDef, DodecahedronDef, DominoDef,
     HeavyCrateDef, HexPrismDef, HoneycombWallDef, HouseDef, IcosahedronDef, JengaDef,
-    OctahedronDef, PlankDef, PyramidDef, Spawnable, StackDef, StackItemDef, TableDef,
-    TetrahedronDef, TowerDef, TrampolineDef, VoussoirArchDef,
+    OctahedronDef, PlankBridgeDef, PlankDef, PyramidDef, Spawnable, StackDef, StackItemDef,
+    TableDef, TetrahedronDef, TowerDef, TrampolineDef, VoussoirArchDef,
 };
 
 /// Top-level level description.
@@ -403,6 +403,26 @@ pub enum LevelObject {
         #[serde(default = "JengaDef::default_friction")]
         friction: f32,
     },
+    /// Plank bridge — rustic destructible bridge with two beams and cross-planks.
+    PlankBridge {
+        pos: (f32, f32, f32),
+        #[serde(default = "PlankBridgeDef::default_length")]
+        length: f32,
+        #[serde(default = "PlankBridgeDef::default_beam_spacing")]
+        beam_spacing: f32,
+        #[serde(default = "PlankBridgeDef::default_plank_count")]
+        plank_count: u32,
+        #[serde(default = "PlankBridgeDef::default_beam_half_extents")]
+        beam_half_extents: (f32, f32, f32),
+        #[serde(default = "PlankBridgeDef::default_plank_half_extents")]
+        plank_half_extents: (f32, f32, f32),
+        #[serde(default = "PlankBridgeDef::default_density")]
+        density: f32,
+        #[serde(default)]
+        yaw: f32,
+        #[serde(default = "PlankBridgeDef::default_fracture_threshold")]
+        fracture_threshold: f32,
+    },
 }
 
 impl LevelObject {
@@ -697,6 +717,28 @@ impl LevelObject {
                 block_half_length: *block_half_length,
                 density: *density,
                 friction: *friction,
+            }),
+
+            LevelObject::PlankBridge {
+                pos,
+                length,
+                beam_spacing,
+                plank_count,
+                beam_half_extents,
+                plank_half_extents,
+                density,
+                yaw,
+                fracture_threshold,
+            } => Box::new(PlankBridgeDef {
+                pos: *pos,
+                length: *length,
+                beam_spacing: *beam_spacing,
+                plank_count: *plank_count,
+                beam_half_extents: *beam_half_extents,
+                plank_half_extents: *plank_half_extents,
+                density: *density,
+                yaw: *yaw,
+                fracture_threshold: *fracture_threshold,
             }),
         }
     }
