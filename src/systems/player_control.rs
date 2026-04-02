@@ -299,9 +299,6 @@ fn draw_grab_debug(
     // Probe ray (cyan line from player to max grab range)
     overlays.add_line_with_radius(player_pos, probe_end, 0.01, Colour::rgb(0.0, 0.8, 0.8));
 
-    // Probe tip sphere (shows swept-sphere radius at end)
-    overlays.add_sphere(probe_end, config.probe_radius, Colour::rgb(0.0, 0.5, 0.5));
-
     // Hold point (where the object is pulled toward)
     overlays.add_sphere(hold_point, 0.05, Colour::YELLOW);
 

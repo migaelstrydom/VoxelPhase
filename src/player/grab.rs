@@ -13,8 +13,6 @@ use super::components::ArmState;
 pub struct GrabConfig {
     /// Maximum distance for the grab probe (world units).
     pub grab_range: f32,
-    /// Probe swept-sphere radius.
-    pub probe_radius: f32,
     /// Distance in front of the player to hold the object.
     pub hold_distance: f32,
     /// Height offset above pelvis for the hold point.
@@ -45,7 +43,6 @@ impl Default for GrabConfig {
     fn default() -> Self {
         Self {
             grab_range: 2.0,
-            probe_radius: 0.3,
             hold_distance: 0.5,
             hold_height: 0.3,
             compliance: 0.0,
@@ -92,7 +89,6 @@ pub fn begin_reach(
         player_pos,
         facing,
         config.grab_range,
-        config.probe_radius,
         &[player_body],
     );
     ArmState::Reaching {

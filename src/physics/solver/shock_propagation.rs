@@ -164,18 +164,11 @@ impl ContactGraph {
             };
 
             // Only create edges for dynamic bodies
-            let upper_dynamic = bodies
-                .get(upper.0)
-                .map_or(false, |b| b.is_dynamic());
-            let lower_dynamic = bodies
-                .get(lower.0)
-                .map_or(false, |b| b.is_dynamic());
+            let upper_dynamic = bodies.get(upper.0).map_or(false, |b| b.is_dynamic());
+            let lower_dynamic = bodies.get(lower.0).map_or(false, |b| b.is_dynamic());
 
             if upper_dynamic && lower_dynamic {
-                self.adjacency
-                    .entry(lower)
-                    .or_default()
-                    .push(upper);
+                self.adjacency.entry(lower).or_default().push(upper);
             } else if upper_dynamic && !lower_dynamic {
                 // Lower is kinematic/static-like — upper is at depth 0
                 if !self.depth.contains_key(&upper) {
@@ -223,9 +216,7 @@ impl ContactGraph {
         for manifold in manifolds.iter() {
             let header = &manifold.header;
 
-            let depth_a = header
-                .body_a
-                .and_then(|h| self.depth.get(&h).copied());
+            let depth_a = header.body_a.and_then(|h| self.depth.get(&h).copied());
             let depth_b = self.depth.get(&header.body_b).copied();
 
             let scales = match (depth_a, depth_b) {

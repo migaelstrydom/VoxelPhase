@@ -6,7 +6,7 @@
 use nalgebra::{Point3, Vector3};
 use specs::{Component, VecStorage};
 
-/// A terrain probe in world coordinates.
+/// A ray probe in world coordinates.
 ///
 /// The sensing system executes probes without knowing their purpose.
 /// The `tag` field is passed through to results for the caller to interpret.
@@ -21,8 +21,6 @@ pub struct Probe {
     pub direction: Vector3<f32>,
     /// Maximum probe distance.
     pub length: f32,
-    /// Radius for swept sphere queries.
-    pub radius: f32,
 }
 
 /// A contact candidate from a terrain probe.
@@ -76,15 +74,14 @@ pub struct ProbeHit {
     pub normal: Vector3<f32>,
 }
 
-/// Any collidable surface that can be queried by swept-sphere probes.
+/// Any collidable surface that can be queried by ray probes.
 pub trait ProbeTarget {
-    /// Sweep a sphere of the given `radius` from `origin` along `direction`
-    /// for up to `length` units, returning the earliest surface hit if any.
-    fn swept_probe(
+    /// Cast a ray from `origin` along `direction` for up to `length` units,
+    /// returning the earliest surface hit if any.
+    fn raycast(
         &self,
         origin: Point3<f32>,
         direction: Vector3<f32>,
         length: f32,
-        radius: f32,
     ) -> Option<ProbeHit>;
 }

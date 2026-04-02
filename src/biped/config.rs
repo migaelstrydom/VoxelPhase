@@ -76,8 +76,6 @@ pub struct BipedConfig {
     // === Probe parameters ===
     /// Probe length as multiplier of leg length.
     pub probe_length_factor: f32,
-    /// Probe radius for ground detection.
-    pub probe_radius: f32,
 
     // === Mesh/rendering colors ===
     /// Color of the torso and head.
@@ -163,8 +161,7 @@ impl Default for BipedConfig {
             head_bob_amplitude: 0.02,
 
             // Probe parameters
-            probe_length_factor: 1.5,
-            probe_radius: 0.05,
+            probe_length_factor: 1.3,
 
             // Colors - metallic blue
             body_colour: Colour::new(0.2, 0.4, 0.85, 1.0),

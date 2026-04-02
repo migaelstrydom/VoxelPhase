@@ -75,7 +75,6 @@ impl BipedController {
         let right_hip_offset = right * self.config.hip_width;
 
         let probe_length = self.config.probe_length();
-        let probe_radius = self.config.probe_radius;
 
         let mut probes = Vec::with_capacity(2);
 
@@ -86,7 +85,6 @@ impl BipedController {
             &self.state.left,
             stride_wheel::is_swinging(self.state.wheel_angle, stride_wheel::LEFT_PHASE),
             probe_length,
-            probe_radius,
         );
         probes.push(left_probe);
 
@@ -97,7 +95,6 @@ impl BipedController {
             &self.state.right,
             stride_wheel::is_swinging(self.state.wheel_angle, stride_wheel::RIGHT_PHASE),
             probe_length,
-            probe_radius,
         );
         probes.push(right_probe);
 
@@ -112,7 +109,6 @@ impl BipedController {
         foot: &super::state::FootState,
         is_swinging: bool,
         length: f32,
-        radius: f32,
     ) -> Probe {
         let (origin, direction) = if is_swinging {
             // Probe ahead toward target with downward bias
@@ -128,7 +124,6 @@ impl BipedController {
             origin,
             direction,
             length,
-            radius,
         }
     }
 

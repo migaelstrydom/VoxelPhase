@@ -52,11 +52,10 @@ impl<'a> System<'a> for SensorProbeSystem {
 
                 let mut earliest = None;
                 for target in &targets {
-                    if let Some(hit) = target.swept_probe(
+                    if let Some(hit) = target.raycast(
                         probe.origin,
                         probe.direction,
                         probe.length,
-                        probe.radius,
                     ) {
                         if earliest
                             .as_ref()
@@ -75,10 +74,9 @@ impl<'a> System<'a> for SensorProbeSystem {
                         normal: hit.normal,
                         distance,
                     });
-                    // _debug_overlays.add_line_with_radius(
+                    // _debug_overlays.add_line(
                     //     probe.origin,
                     //     hit.point,
-                    //     probe.radius,
                     //     Colour::YELLOW,
                     // );
                 }

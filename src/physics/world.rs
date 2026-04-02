@@ -1,7 +1,7 @@
 //! Physics world containing all simulation state.
 
 use generational_arena::Arena;
-use nalgebra::{Matrix3, Point3, UnitQuaternion, Vector3};
+use nalgebra::{Isometry3, Matrix3, Point3, UnitQuaternion, Vector3};
 use std::collections::{HashMap, HashSet};
 
 use super::body::{RigidBody, RigidBodyDesc};
@@ -26,12 +26,11 @@ use super::pipeline::pair::SolverManifold;
 use super::sleep::{SleepManager, SleepManagerConfig};
 use super::solver::{ConstraintSolver, ManifoldConditioner, ManifoldConditions, PgsNgsSolver};
 use super::static_geometry::StaticGeometry;
-use crate::collision::capsule::Capsule;
-use crate::collision::discrete::sphere_capsule::sphere_capsule_manifold;
+use crate::collision::convex_hull::ConvexHull;
 use crate::collision::obb::Obb;
 use crate::debug::DebugLines;
 use crate::sensing::{ProbeHit, ProbeTarget};
-use crate::{collision::continuous::swept_sphere_sphere, physics::ShockPropagationConditioner};
+use crate::physics::ShockPropagationConditioner;
 
 /// Configuration for the physics simulation.
 #[derive(Debug, Clone)]
@@ -801,14 +800,13 @@ impl PhysicsWorld {
         }
     }
 
-    /// Swept-sphere probe that identifies which body was hit.
+    /// Ray probe that identifies which body was hit.
     /// Skips static bodies and any body in `exclude`.
     pub fn probe_bodies(
         &self,
         origin: Point3<f32>,
         direction: Vector3<f32>,
         length: f32,
-        radius: f32,
         exclude: &[RigidBodyHandle],
     ) -> Option<BodyProbeHit> {
         let end = origin + direction * length;
@@ -830,28 +828,21 @@ impl PhysicsWorld {
                     continue;
                 };
                 let center = collider.world_center(body_pos, body_rot);
+                let world_xform = collider.world_transform(body_pos, body_rot);
                 let hit = match collider.shape() {
                     ColliderShape::Sphere { radius: r } => {
-                        probe_vs_sphere(origin, end, radius, center, *r)
+                        ray_vs_sphere(origin, direction, length, center, *r)
                     }
                     ColliderShape::Box { half_extents } => {
                         let obb = Obb::new(center, body_rot, *half_extents);
-                        probe_vs_obb(origin, end, radius, &obb, *half_extents)
+                        ray_vs_obb(origin, end, &obb, *half_extents)
                     }
                     ColliderShape::Capsule {
                         half_height,
                         radius: cap_radius,
-                    } => probe_vs_capsule(
-                        origin,
-                        end,
-                        radius,
-                        center,
-                        body_rot,
-                        *half_height,
-                        *cap_radius,
-                    ),
+                    } => ray_vs_capsule(origin, direction, length, center, body_rot, *half_height, *cap_radius),
                     ColliderShape::ConvexHull { hull } => {
-                        probe_vs_sphere(origin, end, radius, center, hull.bounding_radius)
+                        ray_vs_convex_hull(origin, direction, length, &world_xform, hull)
                     }
                 };
                 if let Some(hit) = hit {
@@ -873,12 +864,11 @@ pub struct BodyProbeHit {
 }
 
 impl ProbeTarget for PhysicsWorld {
-    fn swept_probe(
+    fn raycast(
         &self,
         origin: Point3<f32>,
         direction: Vector3<f32>,
         length: f32,
-        radius: f32,
     ) -> Option<ProbeHit> {
         let end = origin + direction * length;
         let mut earliest: Option<ProbeHit> = None;
@@ -895,28 +885,21 @@ impl ProbeTarget for PhysicsWorld {
                     continue;
                 };
                 let center = collider.world_center(body_pos, body_rot);
+                let world_xform = collider.world_transform(body_pos, body_rot);
                 let hit = match collider.shape() {
                     ColliderShape::Sphere { radius: r } => {
-                        probe_vs_sphere(origin, end, radius, center, *r)
+                        ray_vs_sphere(origin, direction, length, center, *r)
                     }
                     ColliderShape::Box { half_extents } => {
                         let obb = Obb::new(center, body_rot, *half_extents);
-                        probe_vs_obb(origin, end, radius, &obb, *half_extents)
+                        ray_vs_obb(origin, end, &obb, *half_extents)
                     }
                     ColliderShape::Capsule {
                         half_height,
                         radius: cap_radius,
-                    } => probe_vs_capsule(
-                        origin,
-                        end,
-                        radius,
-                        center,
-                        body_rot,
-                        *half_height,
-                        *cap_radius,
-                    ),
+                    } => ray_vs_capsule(origin, direction, length, center, body_rot, *half_height, *cap_radius),
                     ColliderShape::ConvexHull { hull } => {
-                        probe_vs_sphere(origin, end, radius, center, hull.bounding_radius)
+                        ray_vs_convex_hull(origin, direction, length, &world_xform, hull)
                     }
                 };
                 if let Some(hit) = hit {
@@ -931,45 +914,39 @@ impl ProbeTarget for PhysicsWorld {
     }
 }
 
-/// Sweep a probe sphere against a static sphere body.
-fn probe_vs_sphere(
+/// Cast a ray against a sphere. Returns the hit in [0,1] parametric space.
+fn ray_vs_sphere(
     origin: Point3<f32>,
-    end: Point3<f32>,
-    probe_radius: f32,
+    direction: Vector3<f32>,
+    length: f32,
     center: Point3<f32>,
     sphere_radius: f32,
 ) -> Option<ProbeHit> {
-    // Skip bodies the probe origin already overlaps (e.g. the probe source's own body).
-    let initial_dist = (origin - center).norm();
-    if initial_dist < probe_radius + sphere_radius {
+    let oc = origin - center;
+    let a = direction.dot(&direction);
+    let b = 2.0 * oc.dot(&direction);
+    let c = oc.dot(&oc) - sphere_radius * sphere_radius;
+    let discriminant = b * b - 4.0 * a * c;
+    if discriminant < 0.0 {
         return None;
     }
-    let t = swept_sphere_sphere(origin, end, probe_radius, center, center, sphere_radius)?;
-    let probe_at_t = origin + (end - origin) * t;
-    let to_surface = probe_at_t - center;
-    let len = to_surface.norm();
-    if len < 1e-6 {
+    let t_ray = (-b - discriminant.sqrt()) / (2.0 * a);
+    if t_ray < 0.0 || t_ray > length {
         return None;
     }
-    let normal = to_surface / len;
+    let point = origin + direction * t_ray;
+    let normal = (point - center).normalize();
     Some(ProbeHit {
-        t,
-        point: center + normal * sphere_radius,
+        t: t_ray / length,
+        point,
         normal,
     })
 }
 
-/// Sweep a probe sphere against a box body using a slab test in OBB local space.
-///
-/// Transforms the probe into the OBB's local frame and runs a standard
-/// ray-vs-AABB slab test against the box expanded by `probe_radius`
-/// (the Minkowski sum of box and sphere, approximated at faces).
-/// This gives the correct entry time regardless of the box aspect ratio,
-/// unlike a bounding-sphere proxy which over-reports for flat/wide boxes.
-fn probe_vs_obb(
+/// Cast a ray against an OBB using a slab test in the OBB's local frame.
+fn ray_vs_obb(
     origin: Point3<f32>,
     end: Point3<f32>,
-    probe_radius: f32,
     obb: &Obb,
     half_extents: Vector3<f32>,
 ) -> Option<ProbeHit> {
@@ -977,88 +954,186 @@ fn probe_vs_obb(
     let local_start: Vector3<f32> = inv_rot * (origin - obb.center);
     let local_dir: Vector3<f32> = inv_rot * (end - origin);
 
-    let expanded = half_extents + Vector3::repeat(probe_radius);
-    let t = obb_slab_entry(local_start, local_dir, expanded)?;
+    let t = obb_slab_entry(local_start, local_dir, half_extents)?;
 
-    let probe_at_t = origin + (end - origin) * t;
-    let closest = obb.closest_point(probe_at_t);
-    let to_probe = probe_at_t - closest;
-    let len = to_probe.norm();
-    if len < 1e-6 {
-        return None;
-    }
+    let hit_point = origin + (end - origin) * t;
+    let closest = obb.closest_point(hit_point);
+    let to_ray = hit_point - closest;
+    let len = to_ray.norm();
+    let normal = if len < 1e-6 {
+        // Ray hit exactly on the surface — derive normal from the slab axis.
+        let local_hit = inv_rot * (hit_point - obb.center);
+        let mut best_axis = 0;
+        let mut best_dist = f32::MAX;
+        for i in 0..3 {
+            let dist = (local_hit[i].abs() - half_extents[i]).abs();
+            if dist < best_dist {
+                best_dist = dist;
+                best_axis = i;
+            }
+        }
+        let mut n = Vector3::zeros();
+        n[best_axis] = local_hit[best_axis].signum();
+        obb.rotation * n
+    } else {
+        to_ray / len
+    };
     Some(ProbeHit {
         t,
         point: closest,
-        normal: to_probe / len,
+        normal,
     })
 }
 
-/// Sweep a probe sphere against a capsule body using iterative sampling.
-///
-/// Uses the analytic sphere-capsule manifold as a predicate along the probe path,
-/// first finding a bracketing interval with a coarse scan and then refining the
-/// entry time with binary search. This avoids adding a dedicated swept test while
-/// still handling the full capsule geometry (cylinder + caps).
-fn probe_vs_capsule(
+/// Cast a ray against a capsule (cylinder + hemisphere caps).
+fn ray_vs_capsule(
     origin: Point3<f32>,
-    end: Point3<f32>,
-    probe_radius: f32,
+    direction: Vector3<f32>,
+    length: f32,
     center: Point3<f32>,
     rotation: UnitQuaternion<f32>,
     half_height: f32,
     cap_radius: f32,
 ) -> Option<ProbeHit> {
-    let capsule = Capsule::new(center, rotation, half_height, cap_radius);
+    // Transform ray into capsule local space (capsule axis = local Y).
+    let inv_rot = rotation.inverse();
+    let local_origin = inv_rot * (origin - center);
+    let local_dir = inv_rot * direction;
 
-    // Skip bodies the probe origin already overlaps (e.g. the probe source's own body).
-    if !sphere_capsule_manifold(&capsule, origin, probe_radius, 0.0).is_empty() {
-        return None;
-    }
+    let cyl_half = half_height - cap_radius;
 
-    let dir = end - origin;
-    let steps = 16;
-    let mut t_prev = 0.0f32;
-    let mut hit_interval: Option<(f32, f32)> = None;
+    // Test against the infinite cylinder (XZ radius).
+    let dx = local_dir.x;
+    let dz = local_dir.z;
+    let ox = local_origin.x;
+    let oz = local_origin.z;
 
-    // Coarse scan to find the first interval [t_prev, t] where we enter the capsule.
-    for i in 1..=steps {
-        let t = i as f32 / steps as f32;
-        let pos = origin + dir * t;
-        if !sphere_capsule_manifold(&capsule, pos, probe_radius, 0.0).is_empty() {
-            hit_interval = Some((t_prev, t));
-            break;
-        }
-        t_prev = t;
-    }
+    let a = dx * dx + dz * dz;
+    let b = 2.0 * (ox * dx + oz * dz);
+    let c = ox * ox + oz * oz - cap_radius * cap_radius;
 
-    let Some((mut t_lo, mut t_hi)) = hit_interval else {
-        return None;
-    };
+    let mut best_t = f32::MAX;
+    let mut best_normal_local = Vector3::zeros();
 
-    // Refine with binary search to approximate the entry time.
-    for _ in 0..8 {
-        let mid = 0.5 * (t_lo + t_hi);
-        let pos = origin + dir * mid;
-        if !sphere_capsule_manifold(&capsule, pos, probe_radius, 0.0).is_empty() {
-            t_hi = mid;
-        } else {
-            t_lo = mid;
+    // Cylinder body hit.
+    if a > 1e-12 {
+        let disc = b * b - 4.0 * a * c;
+        if disc >= 0.0 {
+            let t_cyl = (-b - disc.sqrt()) / (2.0 * a);
+            if t_cyl >= 0.0 && t_cyl <= length {
+                let y_at_t = local_origin.y + local_dir.y * t_cyl;
+                if y_at_t.abs() <= cyl_half {
+                    best_t = t_cyl;
+                    let p = local_origin + local_dir * t_cyl;
+                    best_normal_local = Vector3::new(p.x, 0.0, p.z).normalize();
+                }
+            }
         }
     }
 
-    let t = t_hi;
-    let probe_at_t = origin + dir * t;
-    let manifold = sphere_capsule_manifold(&capsule, probe_at_t, probe_radius, 0.0);
-    if manifold.is_empty() {
+    // Test both hemisphere caps.
+    for &cap_y in &[cyl_half, -cyl_half] {
+        let cap_center = Vector3::new(0.0, cap_y, 0.0);
+        let oc = local_origin - cap_center;
+        let a_s = local_dir.dot(&local_dir);
+        let b_s = 2.0 * oc.dot(&local_dir);
+        let c_s = oc.dot(&oc) - cap_radius * cap_radius;
+        let disc = b_s * b_s - 4.0 * a_s * c_s;
+        if disc < 0.0 {
+            continue;
+        }
+        let t_cap = (-b_s - disc.sqrt()) / (2.0 * a_s);
+        if t_cap >= 0.0 && t_cap <= length && t_cap < best_t {
+            let hit_y = local_origin.y + local_dir.y * t_cap;
+            // Ensure hit is on the hemisphere side (not inside the cylinder).
+            if (cap_y > 0.0 && hit_y >= cap_y) || (cap_y < 0.0 && hit_y <= cap_y) {
+                best_t = t_cap;
+                let p = local_origin + local_dir * t_cap;
+                best_normal_local = (p - cap_center).normalize();
+            }
+        }
+    }
+
+    if best_t > length {
         return None;
     }
-    let contact = &manifold.points[0];
+
+    let point_local = local_origin + local_dir * best_t;
+    let point = center + rotation * point_local;
+    let normal = rotation * best_normal_local;
 
     Some(ProbeHit {
-        t,
-        point: contact.point,
-        normal: contact.normal,
+        t: best_t / length,
+        point,
+        normal,
+    })
+}
+
+/// Cast a ray against a convex hull by testing each face plane.
+///
+/// Uses a slab-style approach: the ray must be inside all face half-spaces
+/// simultaneously. We track the latest entry and earliest exit across all
+/// face planes to find the intersection interval.
+fn ray_vs_convex_hull(
+    origin: Point3<f32>,
+    direction: Vector3<f32>,
+    length: f32,
+    world_xform: &Isometry3<f32>,
+    hull: &ConvexHull,
+) -> Option<ProbeHit> {
+    let inv_rot = world_xform.rotation.inverse();
+    let local_origin = inv_rot * (origin - Point3::from(world_xform.translation.vector));
+    let local_dir = inv_rot * direction;
+
+    let mut t_enter = 0.0f32;
+    let mut t_exit = length;
+    let mut enter_normal = Vector3::zeros();
+
+    for face in &hull.faces {
+        // Use the first vertex on the face to define the plane.
+        let face_point = hull.vertices[face.vertex_indices[0] as usize];
+        let denom = face.normal.dot(&local_dir);
+        let dist = face.normal.dot(&(face_point - local_origin));
+
+        if denom.abs() < 1e-8 {
+            // Ray is parallel to this face plane.
+            if dist < 0.0 {
+                return None; // Origin is outside this half-space.
+            }
+            continue;
+        }
+
+        let t = dist / denom;
+        if denom < 0.0 {
+            // Ray entering this half-space.
+            if t > t_enter {
+                t_enter = t;
+                enter_normal = face.normal;
+            }
+        } else {
+            // Ray exiting this half-space.
+            if t < t_exit {
+                t_exit = t;
+            }
+        }
+
+        if t_enter > t_exit {
+            return None;
+        }
+    }
+
+    if t_enter < 0.0 || t_enter > length || t_enter > t_exit {
+        return None;
+    }
+
+    let local_point = local_origin + local_dir * t_enter;
+    let point = Point3::from(world_xform.translation.vector) + world_xform.rotation * local_point;
+    let normal = world_xform.rotation * enter_normal;
+
+    Some(ProbeHit {
+        t: t_enter / length,
+        point,
+        normal,
     })
 }
 

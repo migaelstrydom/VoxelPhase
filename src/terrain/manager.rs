@@ -14,7 +14,7 @@ use std::time::Instant;
 use super::adjacency::AdjacencyMap;
 use super::mesh_octree::MeshOctree;
 use super::svo::SparseVoxelOctree;
-use crate::collision::continuous::{swept_sphere_triangle, SweptContact};
+use crate::collision::ray_triangle::{ray_triangle, RayHit};
 use crate::collision::{MeshPatch, PatchTriangle, AABB};
 use crate::core::error::EngineResult;
 use crate::physics::StaticGeometry;
@@ -596,44 +596,32 @@ impl StaticGeometry for TerrainManager {
 }
 
 impl ProbeTarget for TerrainManager {
-    fn swept_probe(
+    fn raycast(
         &self,
         origin: Point3<f32>,
         direction: Vector3<f32>,
         length: f32,
-        radius: f32,
     ) -> Option<ProbeHit> {
         let end = origin + direction * length;
         let sweep_aabb = AABB::new(
-            Point3::new(
-                origin.x.min(end.x) - radius,
-                origin.y.min(end.y) - radius,
-                origin.z.min(end.z) - radius,
-            ),
-            Point3::new(
-                origin.x.max(end.x) + radius,
-                origin.y.max(end.y) + radius,
-                origin.z.max(end.z) + radius,
-            ),
+            Point3::new(origin.x.min(end.x), origin.y.min(end.y), origin.z.min(end.z)),
+            Point3::new(origin.x.max(end.x), origin.y.max(end.y), origin.z.max(end.z)),
         );
         let patch = self.query_region(&sweep_aabb);
 
-        let mut earliest: Option<SweptContact> = None;
+        let mut earliest: Option<RayHit> = None;
         for pt in &patch.triangles {
-            if let Some(contact) = swept_sphere_triangle(origin, end, radius, &pt.triangle) {
-                if earliest
-                    .as_ref()
-                    .map_or(true, |e: &SweptContact| contact.t < e.t)
-                {
-                    earliest = Some(contact);
+            if let Some(hit) = ray_triangle(origin, direction, &pt.triangle, length) {
+                if earliest.as_ref().map_or(true, |e: &RayHit| hit.t < e.t) {
+                    earliest = Some(hit);
                 }
             }
         }
 
-        earliest.map(|c| ProbeHit {
-            t: c.t,
-            point: c.point,
-            normal: c.normal,
+        earliest.map(|h| ProbeHit {
+            t: h.t / length,
+            point: h.point,
+            normal: h.normal,
         })
     }
 }
