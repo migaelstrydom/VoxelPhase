@@ -143,31 +143,28 @@ pub fn convex_solid_model(
             ordered[1..].reverse();
         }
 
-        // Triangulate as fan from first vertex.
-        let v0 = ordered[0];
+        // Emit one vertex per face vertex (shared across fan triangles within
+        // this face) to avoid visible seams from duplicated positions.
+        let base_idx = mesh_verts.len() as u32;
+
+        // Build a 2D coordinate frame on the face plane and project vertices
+        // into it, then normalize to [0,1] so the texture fills the face.
+        let face_uvs = planar_face_uvs(&ordered);
+
+        for (j, v) in ordered.iter().enumerate() {
+            mesh_verts.push(Vertex {
+                pos: Vector4::new(v.x, v.y, v.z, 1.0),
+                color: color_v4,
+                tex_coords: face_uvs[j],
+                normal,
+            });
+        }
+
+        // Triangulate as fan from first vertex, indexing into shared vertices.
         for i in 1..ordered.len() - 1 {
-            let v1 = ordered[i];
-            let v2 = ordered[i + 1];
-
-            let base_idx = mesh_verts.len() as u32;
-            let uvs = [
-                Vector2::new(0.5, 0.0),
-                Vector2::new(0.0, 1.0),
-                Vector2::new(1.0, 1.0),
-            ];
-
-            for (j, v) in [v0, v1, v2].iter().enumerate() {
-                mesh_verts.push(Vertex {
-                    pos: Vector4::new(v.x, v.y, v.z, 1.0),
-                    color: color_v4,
-                    tex_coords: uvs[j],
-                    normal,
-                });
-            }
-
             mesh_indices.push(base_idx);
-            mesh_indices.push(base_idx + 1);
-            mesh_indices.push(base_idx + 2);
+            mesh_indices.push(base_idx + i as u32);
+            mesh_indices.push(base_idx + (i + 1) as u32);
         }
     }
 
@@ -177,6 +174,69 @@ pub fn convex_solid_model(
         material,
     }])];
     Arc::new(Model::flat(parts))
+}
+
+/// Project face vertices onto a 2D coordinate frame on the face plane,
+/// then normalize so UVs span [0,1] across the face.
+fn planar_face_uvs(vertices: &[Vector3<f32>]) -> Vec<Vector2<f32>> {
+    if vertices.len() < 2 {
+        return vertices.iter().map(|_| Vector2::new(0.5, 0.5)).collect();
+    }
+
+    // Tangent: direction from first to second vertex.
+    let center = vertices.iter().copied().sum::<Vector3<f32>>() / vertices.len() as f32;
+    let edge = vertices[1] - vertices[0];
+    let tangent = if edge.magnitude_squared() > 1e-12 {
+        edge.normalize()
+    } else {
+        Vector3::x()
+    };
+
+    // Face normal from first triangle, then bitangent.
+    let face_normal = if vertices.len() >= 3 {
+        let n = (vertices[1] - vertices[0]).cross(&(vertices[2] - vertices[0]));
+        if n.magnitude_squared() > 1e-12 { n.normalize() } else { Vector3::z() }
+    } else {
+        Vector3::z()
+    };
+    let bitangent = face_normal.cross(&tangent).normalize();
+
+    // Project each vertex relative to center.
+    let coords: Vec<(f32, f32)> = vertices
+        .iter()
+        .map(|v| {
+            let local = v - center;
+            (local.dot(&tangent), local.dot(&bitangent))
+        })
+        .collect();
+
+    // Normalize to [0,1].
+    let (mut min_u, mut max_u) = (f32::MAX, f32::MIN);
+    let (mut min_v, mut max_v) = (f32::MAX, f32::MIN);
+    for &(u, v) in &coords {
+        min_u = min_u.min(u);
+        max_u = max_u.max(u);
+        min_v = min_v.min(v);
+        max_v = max_v.max(v);
+    }
+    let range_u = (max_u - min_u).max(1e-6);
+    let range_v = (max_v - min_v).max(1e-6);
+
+    // Use the larger range for both axes to preserve aspect ratio, and
+    // center the shorter axis.
+    let range = range_u.max(range_v);
+    let offset_u = (range - range_u) * 0.5;
+    let offset_v = (range - range_v) * 0.5;
+
+    coords
+        .iter()
+        .map(|&(u, v)| {
+            Vector2::new(
+                (u - min_u + offset_u) / range,
+                (v - min_v + offset_v) / range,
+            )
+        })
+        .collect()
 }
 
 /// Build a `ConvexHull` from vertices and face definitions.

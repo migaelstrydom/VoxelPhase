@@ -8,8 +8,9 @@ use serde::Deserialize;
 
 use crate::app::spawnables::{
     BeachBallDef, BoxDef, BoxWallDef, CapsuleDef, CrateDef, DodecahedronDef, DominoDef,
-    HeavyCrateDef, HouseDef, IcosahedronDef, OctahedronDef, PlankDef, PyramidDef, Spawnable,
-    StackDef, StackItemDef, TableDef, TetrahedronDef, TowerDef, TrampolineDef,
+    HeavyCrateDef, HexPrismDef, HoneycombWallDef, HouseDef, IcosahedronDef, JengaDef,
+    OctahedronDef, PlankDef, PyramidDef, Spawnable, StackDef, StackItemDef, TableDef,
+    TetrahedronDef, TowerDef, TrampolineDef, VoussoirArchDef,
 };
 
 /// Top-level level description.
@@ -281,6 +282,34 @@ pub enum LevelObject {
         #[serde(default = "DodecahedronDef::default_friction")]
         friction: f32,
     },
+    /// Hexagonal prism with ConvexHull collider.
+    HexPrism {
+        pos: (f32, f32, f32),
+        #[serde(default = "HexPrismDef::default_radius")]
+        radius: f32,
+        #[serde(default = "HexPrismDef::default_half_height")]
+        half_height: f32,
+        #[serde(default = "HexPrismDef::default_density")]
+        density: f32,
+        #[serde(default = "HexPrismDef::default_restitution")]
+        restitution: f32,
+        #[serde(default = "HexPrismDef::default_friction")]
+        friction: f32,
+    },
+    /// Honeycomb wall — tiled hexagonal prisms in a honeycomb grid.
+    HoneycombWall {
+        base: (f32, f32, f32),
+        #[serde(default = "HoneycombWallDef::default_columns")]
+        columns: u32,
+        #[serde(default = "HoneycombWallDef::default_rows")]
+        rows: u32,
+        #[serde(default = "HexPrismDef::default_radius")]
+        radius: f32,
+        #[serde(default = "HexPrismDef::default_half_height")]
+        half_height: f32,
+        #[serde(default = "HexPrismDef::default_density")]
+        density: f32,
+    },
     /// Regular icosahedron with ConvexHull collider.
     Icosahedron {
         pos: (f32, f32, f32),
@@ -343,6 +372,36 @@ pub enum LevelObject {
         half_extents: (f32, f32, f32),
         #[serde(default = "DominoDef::default_density")]
         density: f32,
+    },
+    /// Voussoir arch — semicircular masonry arch with abutment pillars.
+    VoussoirArch {
+        base: (f32, f32, f32),
+        #[serde(default = "VoussoirArchDef::default_inner_radius")]
+        inner_radius: f32,
+        #[serde(default = "VoussoirArchDef::default_thickness")]
+        thickness: f32,
+        #[serde(default = "VoussoirArchDef::default_depth")]
+        depth: f32,
+        #[serde(default = "VoussoirArchDef::default_num_voussoirs")]
+        num_voussoirs: u32,
+        #[serde(default = "VoussoirArchDef::default_abutment_height")]
+        abutment_height: f32,
+        #[serde(default = "VoussoirArchDef::default_density")]
+        density: f32,
+        #[serde(default = "VoussoirArchDef::default_friction")]
+        friction: f32,
+    },
+    /// Jenga tower — alternating layers of three planks rotated 90°.
+    Jenga {
+        base: (f32, f32, f32),
+        #[serde(default = "JengaDef::default_layers")]
+        layers: u32,
+        #[serde(default = "JengaDef::default_block_half_length")]
+        block_half_length: f32,
+        #[serde(default = "JengaDef::default_density")]
+        density: f32,
+        #[serde(default = "JengaDef::default_friction")]
+        friction: f32,
     },
 }
 
@@ -502,6 +561,38 @@ impl LevelObject {
                 friction: *friction,
             }),
 
+            LevelObject::HexPrism {
+                pos,
+                radius,
+                half_height,
+                density,
+                restitution,
+                friction,
+            } => Box::new(HexPrismDef {
+                pos: *pos,
+                radius: *radius,
+                half_height: *half_height,
+                density: *density,
+                restitution: *restitution,
+                friction: *friction,
+            }),
+
+            LevelObject::HoneycombWall {
+                base,
+                columns,
+                rows,
+                radius,
+                half_height,
+                density,
+            } => Box::new(HoneycombWallDef {
+                base: *base,
+                columns: *columns,
+                rows: *rows,
+                radius: *radius,
+                half_height: *half_height,
+                density: *density,
+            }),
+
             LevelObject::Icosahedron {
                 pos,
                 size,
@@ -572,6 +663,40 @@ impl LevelObject {
                 spacing: *spacing,
                 half_extents: *half_extents,
                 density: *density,
+            }),
+
+            LevelObject::VoussoirArch {
+                base,
+                inner_radius,
+                thickness,
+                depth,
+                num_voussoirs,
+                abutment_height,
+                density,
+                friction,
+            } => Box::new(VoussoirArchDef {
+                base: *base,
+                inner_radius: *inner_radius,
+                thickness: *thickness,
+                depth: *depth,
+                num_voussoirs: *num_voussoirs,
+                abutment_height: *abutment_height,
+                density: *density,
+                friction: *friction,
+            }),
+
+            LevelObject::Jenga {
+                base,
+                layers,
+                block_half_length,
+                density,
+                friction,
+            } => Box::new(JengaDef {
+                base: *base,
+                layers: *layers,
+                block_half_length: *block_half_length,
+                density: *density,
+                friction: *friction,
             }),
         }
     }

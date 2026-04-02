@@ -60,6 +60,14 @@ Level(
         Dodecahedron(pos: (14.0, 3.0, 0.0), size: 0.8),
         Icosahedron(pos: (18.0, 3.0, 0.0), size: 1.2),
 
+        // HoneycombWall(
+        //     base: (6.0, -1.0, -6.0),
+        //     columns: 5,
+        //     rows: 4,
+        //     radius: 0.4,
+        //     half_height: 0.25,
+        // ),
+
         // Domino(
         //     base: (10.0, 0.0, -4.0),
         //     direction: (0.0, -1.0),
@@ -78,5 +86,20 @@ Level(
         //     pos: (0.0, 10.0, 5.0),
         //     half_extents: (0.5, 0.5, 0.5),
         // ),
+
+        VoussoirArch(
+            base: (15.0, 0.0, 8.0),
+            inner_radius: 1.0,
+            thickness: 1.0,
+            depth: 3.2,
+            num_voussoirs: 5,
+            abutment_height: 0.5,
+            friction: 0.9,
+        ),
+
+        Jenga(
+            base: (6.0, 0.0, -10.0),
+            layers: 10,
+        ),
     ],
 )
