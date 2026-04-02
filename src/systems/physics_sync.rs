@@ -6,8 +6,8 @@
 //! 2. Syncs physics state back to ECS components
 
 use nalgebra::{Point3, Vector3};
+use rustc_hash::FxHashSet;
 use specs::{Join, Read, ReadStorage, System, Write, WriteStorage};
-use std::collections::HashSet;
 
 use crate::biped::BipedController;
 use crate::components::{Orientation, Position, RigidBodyComponent, Velocity, VelocityDriven};
@@ -132,7 +132,7 @@ impl PhysicsSyncSystem {
     }
 
     fn apply_grounded_state(
-        grounded_handles: &HashSet<RigidBodyHandle>,
+        grounded_handles: &FxHashSet<RigidBodyHandle>,
         bodies: &ReadStorage<RigidBodyComponent>,
         controllers: &mut WriteStorage<BipedController>,
     ) {

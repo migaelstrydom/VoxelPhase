@@ -4,7 +4,8 @@
 //! graph, then sorts manifolds top-down and computes per-manifold mass-scaling
 //! factors so that lower bodies appear heavier during the solve.
 
-use std::collections::{HashMap, VecDeque};
+use rustc_hash::FxHashMap;
+use std::collections::VecDeque;
 
 use generational_arena::Arena;
 use nalgebra::Vector3;
@@ -88,20 +89,20 @@ impl ManifoldConditioner for ShockPropagationConditioner {
 /// All internal allocations are reused across frames (clear + repopulate).
 struct ContactGraph {
     /// Depth for each body. Bodies not in the map have no contacts.
-    depth: HashMap<RigidBodyHandle, u32>,
+    depth: FxHashMap<RigidBodyHandle, u32>,
     /// BFS work queue, kept allocated between frames.
     bfs_queue: VecDeque<RigidBodyHandle>,
     /// Adjacency list: for each body, which bodies does it support
     /// (i.e. which bodies have this body as their `lower`)?
-    adjacency: HashMap<RigidBodyHandle, Vec<RigidBodyHandle>>,
+    adjacency: FxHashMap<RigidBodyHandle, Vec<RigidBodyHandle>>,
 }
 
 impl ContactGraph {
     fn new() -> Self {
         Self {
-            depth: HashMap::new(),
+            depth: FxHashMap::default(),
             bfs_queue: VecDeque::new(),
-            adjacency: HashMap::new(),
+            adjacency: FxHashMap::default(),
         }
     }
 

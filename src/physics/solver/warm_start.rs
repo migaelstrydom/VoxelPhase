@@ -1,6 +1,6 @@
 //! Warm-starting and adaptive iteration count for PGS solvers.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use generational_arena::Arena;
 use nalgebra::Vector3;
@@ -61,8 +61,8 @@ pub(crate) fn effective_solver_iterations(
     manifolds: &[SolverManifold],
     base_iterations: u32,
 ) -> u32 {
-    let mut per_body_counts: HashMap<RigidBodyHandle, usize> = HashMap::new();
-    let mut per_body_normals: HashMap<RigidBodyHandle, Vec<Vector3<f32>>> = HashMap::new();
+    let mut per_body_counts: FxHashMap<RigidBodyHandle, usize> = FxHashMap::default();
+    let mut per_body_normals: FxHashMap<RigidBodyHandle, Vec<Vector3<f32>>> = FxHashMap::default();
     for manifold in manifolds {
         for contact in &manifold.contacts {
             let entry = per_body_counts.entry(manifold.header.body_b).or_insert(0);

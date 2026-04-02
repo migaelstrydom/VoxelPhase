@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 use generational_arena::{Arena, Index};
 use nalgebra::Vector3;
@@ -42,7 +42,7 @@ pub struct SleepManager {
     /// Pending wake events to apply this frame.
     wake_events: WakeEvents,
     /// Set of bodies currently sleeping.
-    sleeping: HashSet<RigidBodyHandle>,
+    sleeping: FxHashSet<RigidBodyHandle>,
 }
 
 impl SleepManager {
@@ -52,12 +52,12 @@ impl SleepManager {
             energy: EnergyTracker::new(config.threshold, config.delay_frames),
             island_builder: IslandBuilder,
             wake_events: WakeEvents::new(),
-            sleeping: HashSet::new(),
+            sleeping: FxHashSet::default(),
         }
     }
 
     pub fn sync_bodies(&mut self, bodies: &Arena<RigidBody>) {
-        let live: HashSet<Index> = bodies.iter().map(|(idx, _)| idx).collect();
+        let live: FxHashSet<Index> = bodies.iter().map(|(idx, _)| idx).collect();
         self.sleeping.retain(|handle| live.contains(&handle.0));
         self.energy.retain_indices(&live);
     }
@@ -66,7 +66,7 @@ impl SleepManager {
         self.sleeping.contains(&handle)
     }
 
-    pub fn sleeping_snapshot(&self) -> HashSet<RigidBodyHandle> {
+    pub fn sleeping_snapshot(&self) -> FxHashSet<RigidBodyHandle> {
         self.sleeping.clone()
     }
 
@@ -120,7 +120,7 @@ impl SleepManager {
             self.wake_events.clear();
             return;
         }
-        let wake_seeds: HashSet<RigidBodyHandle> =
+        let wake_seeds: FxHashSet<RigidBodyHandle> =
             self.wake_events.drain().map(|event| event.body).collect();
         if wake_seeds.is_empty() {
             return;
@@ -175,7 +175,7 @@ impl SleepManager {
             return;
         }
 
-        let mut candidates: HashSet<RigidBodyHandle> = HashSet::new();
+        let mut candidates: FxHashSet<RigidBodyHandle> = FxHashSet::default();
         for (idx, body) in bodies.iter() {
             if !body.is_dynamic() {
                 continue;

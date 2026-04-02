@@ -2,7 +2,7 @@
 //!
 //! Also includes contact damping (rolling resistance + linear damping).
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use generational_arena::{Arena, Index};
 use nalgebra::{Matrix3, Point3, UnitQuaternion, Vector3};
@@ -84,7 +84,7 @@ pub(crate) fn apply_position_correction(
     constraints: &Arena<Constraint>,
     config: &PositionCorrectionConfig,
     dt: f32,
-    contact_generation_positions: &HashMap<Index, Point3<f32>>,
+    contact_generation_positions: &FxHashMap<Index, Point3<f32>>,
 ) {
     apply_ngs_correction(
         bodies,
@@ -153,7 +153,7 @@ fn apply_ngs_correction(
     deep_threshold: f32,
     angular_correction: bool,
     dt: f32,
-    contact_generation_positions: &HashMap<Index, Point3<f32>>,
+    contact_generation_positions: &FxHashMap<Index, Point3<f32>>,
 ) {
     let total_contacts: usize = manifolds.iter().map(|m| m.contacts.len()).sum();
     let has_constraints = constraints.iter().any(|(_, c)| c.active);
@@ -164,7 +164,7 @@ fn apply_ngs_correction(
     let max_correction = max_correction_speed * dt;
     let deep_correction = deep_correction_speed * dt;
 
-    let mut transforms: HashMap<Index, CorrectedTransform> = HashMap::new();
+    let mut transforms: FxHashMap<Index, CorrectedTransform> = FxHashMap::default();
     let mut accumulated: Vec<f32> = vec![0.0; total_contacts];
 
     for _ in 0..iterations {
@@ -335,7 +335,7 @@ fn correct_constraint_drift(
     bodies: &Arena<RigidBody>,
     constraints: &Arena<Constraint>,
     correction_factor: f32,
-    transforms: &mut HashMap<Index, CorrectedTransform>,
+    transforms: &mut FxHashMap<Index, CorrectedTransform>,
 ) {
     for (_index, constraint) in constraints.iter() {
         if !constraint.active {
@@ -374,7 +374,7 @@ fn correct_constraint_drift(
 fn get_corrected_transform(
     bodies: &Arena<RigidBody>,
     handle: Index,
-    transforms: &mut HashMap<Index, CorrectedTransform>,
+    transforms: &mut FxHashMap<Index, CorrectedTransform>,
 ) -> Option<(Point3<f32>, UnitQuaternion<f32>, f32, Matrix3<f32>)> {
     let body = bodies.get(handle)?;
     let transform = transforms.entry(handle).or_insert_with(|| {
@@ -395,15 +395,13 @@ fn correct_follow_point_drift(
     local_anchor_a: &Vector3<f32>,
     local_anchor_b: &Vector3<f32>,
     linear_factor: f32,
-    transforms: &mut HashMap<Index, CorrectedTransform>,
+    transforms: &mut FxHashMap<Index, CorrectedTransform>,
 ) {
-    let Some((pos_a, rot_a, inv_mass_a, _)) =
-        get_corrected_transform(bodies, handle_a, transforms)
+    let Some((pos_a, rot_a, inv_mass_a, _)) = get_corrected_transform(bodies, handle_a, transforms)
     else {
         return;
     };
-    let Some((pos_b, rot_b, inv_mass_b, _)) =
-        get_corrected_transform(bodies, handle_b, transforms)
+    let Some((pos_b, rot_b, inv_mass_b, _)) = get_corrected_transform(bodies, handle_b, transforms)
     else {
         return;
     };
@@ -446,7 +444,7 @@ fn apply_contact_rolling_resistance(
         return;
     }
 
-    let mut impacted: HashSet<RigidBodyHandle> = HashSet::new();
+    let mut impacted: FxHashSet<RigidBodyHandle> = FxHashSet::default();
     for manifold in manifolds {
         if let Some(handle_a) = manifold.header.body_a {
             impacted.insert(handle_a);
@@ -479,7 +477,7 @@ fn apply_contact_linear_damping(
         return;
     }
 
-    let mut impacted: HashSet<RigidBodyHandle> = HashSet::new();
+    let mut impacted: FxHashSet<RigidBodyHandle> = FxHashSet::default();
     for manifold in manifolds {
         if let Some(handle_a) = manifold.header.body_a {
             impacted.insert(handle_a);

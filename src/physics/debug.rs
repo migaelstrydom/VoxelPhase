@@ -2,7 +2,7 @@
 
 use generational_arena::Arena;
 use nalgebra::{Point3, Vector3};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use super::body::RigidBody;
 use super::contact_event::{ContactEvent, ContactSource};
@@ -654,7 +654,7 @@ fn compute_primary_body_stats(
         return None;
     }
 
-    let mut per_body: HashMap<RigidBodyHandle, BodyContactAccum> = HashMap::new();
+    let mut per_body: FxHashMap<RigidBodyHandle, BodyContactAccum> = FxHashMap::default();
     for m in manifolds {
         for c in &m.contacts {
             let entry = per_body

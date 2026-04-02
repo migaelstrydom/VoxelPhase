@@ -4,7 +4,7 @@
 //! into polygonal contact faces, then shape-specific patch routines generate
 //! manifolds directly from the merged geometry.
 
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 use generational_arena::Arena;
 use nalgebra::Point3;
@@ -37,7 +37,7 @@ pub fn generate_static_contacts(
     enable_speculative_contacts: bool,
     speculative_min_speed: f32,
     speculative_margin_multiplier: f32,
-    sleeping: Option<&HashSet<RigidBodyHandle>>,
+    sleeping: Option<&FxHashSet<RigidBodyHandle>>,
 ) -> Vec<PairManifold> {
     let mut contacts = Vec::new();
 

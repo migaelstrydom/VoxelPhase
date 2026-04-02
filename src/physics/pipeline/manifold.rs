@@ -19,7 +19,7 @@
 //!                              ◄── ManifoldCache::write_back()
 //! ```
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use nalgebra::{Point3, Vector3};
 use smallvec::SmallVec;
@@ -129,7 +129,7 @@ impl CachedManifold {
 
 /// Cache of all active contact manifolds, persisted across simulation frames.
 pub struct ManifoldCache {
-    manifolds: HashMap<ManifoldKey, CachedManifold>,
+    manifolds: FxHashMap<ManifoldKey, CachedManifold>,
     max_age: u8,
     warm_start_depth_slop: f32,
     normal_smoother: NormalSmoother,
@@ -143,7 +143,7 @@ impl ManifoldCache {
         normal_smoothing: NormalSmoothingConfig,
     ) -> Self {
         Self {
-            manifolds: HashMap::new(),
+            manifolds: FxHashMap::default(),
             max_age,
             warm_start_depth_slop,
             normal_smoother: NormalSmoother::from_config(normal_smoothing),
@@ -335,12 +335,7 @@ fn match_contacts(
     new_points: &SmallVec<[crate::collision::contact::ContactPoint; 4]>,
     cached: &SmallVec<[CachedContact; 4]>,
 ) -> SmallVec<[Option<usize>; 4]> {
-    match_by_feature_and_proximity(
-        new_points,
-        cached,
-        |cp| cp.feature_id,
-        |cp| cp.point,
-    )
+    match_by_feature_and_proximity(new_points, cached, |cp| cp.feature_id, |cp| cp.point)
 }
 
 /// Match solver contacts to cached entries for write-back.
@@ -352,12 +347,7 @@ fn match_solver_contacts(
     solver_contacts: &SmallVec<[SolverContact; 4]>,
     cached: &SmallVec<[CachedContact; 4]>,
 ) -> SmallVec<[Option<usize>; 4]> {
-    match_by_feature_and_proximity(
-        solver_contacts,
-        cached,
-        |sc| sc.feature_id,
-        |sc| sc.point,
-    )
+    match_by_feature_and_proximity(solver_contacts, cached, |sc| sc.feature_id, |sc| sc.point)
 }
 
 /// Generic matcher used by both narrowphase merge and solver write-back.
@@ -580,20 +570,22 @@ mod tests {
 
         let raw = PairManifold {
             header: test_pair_header(),
-            manifold: crate::collision::contact::ContactManifold::from_vec(SmallVec::from_vec(vec![
-                crate::collision::contact::ContactPoint::new(
-                    Point3::new(0.95, 0.0, 0.0),
-                    Vector3::x(),
-                    0.2,
-                    feature,
-                ),
-                crate::collision::contact::ContactPoint::new(
-                    Point3::new(-0.95, 0.0, 0.0),
-                    Vector3::x(),
-                    0.2,
-                    feature,
-                ),
-            ])),
+            manifold: crate::collision::contact::ContactManifold::from_vec(SmallVec::from_vec(
+                vec![
+                    crate::collision::contact::ContactPoint::new(
+                        Point3::new(0.95, 0.0, 0.0),
+                        Vector3::x(),
+                        0.2,
+                        feature,
+                    ),
+                    crate::collision::contact::ContactPoint::new(
+                        Point3::new(-0.95, 0.0, 0.0),
+                        Vector3::x(),
+                        0.2,
+                        feature,
+                    ),
+                ],
+            )),
         };
 
         let merged = cache.merge(&[raw], true);

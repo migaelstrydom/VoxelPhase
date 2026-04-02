@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use nalgebra::Vector3;
 
@@ -32,8 +32,8 @@ impl GroundingDetector {
         Self { config }
     }
 
-    pub fn grounded_bodies(&self, contacts: &[ContactEvent]) -> HashMap<RigidBodyHandle, bool> {
-        let mut accum: HashMap<RigidBodyHandle, SupportAccumulator> = HashMap::new();
+    pub fn grounded_bodies(&self, contacts: &[ContactEvent]) -> FxHashMap<RigidBodyHandle, bool> {
+        let mut accum: FxHashMap<RigidBodyHandle, SupportAccumulator> = FxHashMap::default();
         for contact in contacts {
             if contact.source != ContactSource::Narrowphase {
                 continue;

@@ -1,4 +1,5 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use rustc_hash::{FxHashMap, FxHashSet};
+use std::collections::VecDeque;
 
 use generational_arena::{Arena, Index};
 
@@ -15,12 +16,8 @@ pub struct Island {
 pub struct IslandBuilder;
 
 impl IslandBuilder {
-    pub fn build(
-        &self,
-        bodies: &Arena<RigidBody>,
-        manifolds: &[SolverManifold],
-    ) -> Vec<Island> {
-        let mut adjacency: HashMap<Index, Vec<Index>> = HashMap::new();
+    pub fn build(&self, bodies: &Arena<RigidBody>, manifolds: &[SolverManifold]) -> Vec<Island> {
+        let mut adjacency: FxHashMap<Index, Vec<Index>> = FxHashMap::default();
         let mut dynamic_indices: Vec<Index> = Vec::new();
 
         for (idx, body) in bodies.iter() {
@@ -35,10 +32,8 @@ impl IslandBuilder {
                 continue;
             };
             let handle_b = manifold.header.body_b;
-            let (Some(body_a), Some(body_b)) = (
-                bodies.get(handle_a.0),
-                bodies.get(handle_b.0),
-            ) else {
+            let (Some(body_a), Some(body_b)) = (bodies.get(handle_a.0), bodies.get(handle_b.0))
+            else {
                 continue;
             };
             if !body_a.is_dynamic() || !body_b.is_dynamic() {
@@ -48,7 +43,7 @@ impl IslandBuilder {
             adjacency.entry(handle_b.0).or_default().push(handle_a.0);
         }
 
-        let mut visited: HashSet<Index> = HashSet::new();
+        let mut visited: FxHashSet<Index> = FxHashSet::default();
         let mut islands = Vec::new();
 
         for idx in dynamic_indices {

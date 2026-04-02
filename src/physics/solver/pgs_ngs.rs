@@ -1,7 +1,7 @@
 //! PGS + NGS solver: Projected Gauss-Seidel velocity solve with
 //! nonlinear Gauss-Seidel position correction.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use generational_arena::{Arena, Index};
 use nalgebra::{Point3, Vector3};
@@ -67,7 +67,7 @@ pub struct PgsNgsSolver {
     /// Body positions at the time contacts were generated. Used as the reference
     /// for position correction across multiple substeps so that stale
     /// `contact.depth` values don't cause re-correction.
-    contact_generation_positions: HashMap<Index, Point3<f32>>,
+    contact_generation_positions: FxHashMap<Index, Point3<f32>>,
     /// Solver-ready constraint rows, expanded once per frame in `prepare`.
     /// Reused across substeps within the same frame.
     cached_constraint_rows: Vec<ConstraintRow>,
@@ -77,7 +77,7 @@ impl PgsNgsSolver {
     pub fn new(config: PgsNgsConfig) -> Self {
         Self {
             config,
-            contact_generation_positions: HashMap::new(),
+            contact_generation_positions: FxHashMap::default(),
             cached_constraint_rows: Vec::new(),
         }
     }

@@ -2,7 +2,7 @@
 
 use generational_arena::Arena;
 use nalgebra::{Isometry3, Matrix3, Point3, UnitQuaternion, Vector3};
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::body::{RigidBody, RigidBodyDesc};
 use super::ccd::{CcdContext, CcdStrategy, SweepClampCcd};
@@ -29,8 +29,8 @@ use super::static_geometry::StaticGeometry;
 use crate::collision::convex_hull::ConvexHull;
 use crate::collision::obb::Obb;
 use crate::debug::DebugLines;
-use crate::sensing::{ProbeHit, ProbeTarget};
 use crate::physics::ShockPropagationConditioner;
+use crate::sensing::{ProbeHit, ProbeTarget};
 
 /// Configuration for the physics simulation.
 #[derive(Debug, Clone)]
@@ -128,7 +128,7 @@ pub struct PhysicsWorld {
     /// All solver manifolds (including sleeping) for sleep state bookkeeping.
     cached_all_manifolds: Vec<SolverManifold>,
     /// Bodies with static narrowphase contacts, excluded from CCD.
-    cached_narrowphase_handled: HashSet<RigidBodyHandle>,
+    cached_narrowphase_handled: FxHashSet<RigidBodyHandle>,
     /// SAT axis cache for OBB-OBB dynamic pair early-out.
     sat_cache_map: SatCacheMap,
     /// GJK warm-start cache for wildcard dynamic pairs.
@@ -192,7 +192,7 @@ impl PhysicsWorld {
             ccd: Some(ccd),
             cached_active_manifolds: Vec::new(),
             cached_all_manifolds: Vec::new(),
-            cached_narrowphase_handled: HashSet::new(),
+            cached_narrowphase_handled: FxHashSet::default(),
             sat_cache_map: SatCacheMap::new(),
             gjk_cache_map: GjkCacheMap::new(),
             narrowphase_work_buffer: NarrowphaseWorkBuffer::new(),
@@ -656,7 +656,7 @@ impl PhysicsWorld {
         } else {
             None
         };
-        let pre_states: HashMap<generational_arena::Index, (Point3<f32>, UnitQuaternion<f32>)> =
+        let pre_states: FxHashMap<generational_arena::Index, (Point3<f32>, UnitQuaternion<f32>)> =
             self.bodies
                 .iter()
                 .filter(|(idx, body)| {
@@ -757,7 +757,7 @@ impl PhysicsWorld {
     }
 
     /// Bodies grounded by static contacts in the most recent step.
-    pub fn grounded_handles(&self) -> HashSet<RigidBodyHandle> {
+    pub fn grounded_handles(&self) -> FxHashSet<RigidBodyHandle> {
         self.grounding_detector
             .grounded_bodies(self.contact_events())
             .into_iter()
@@ -840,7 +840,15 @@ impl PhysicsWorld {
                     ColliderShape::Capsule {
                         half_height,
                         radius: cap_radius,
-                    } => ray_vs_capsule(origin, direction, length, center, body_rot, *half_height, *cap_radius),
+                    } => ray_vs_capsule(
+                        origin,
+                        direction,
+                        length,
+                        center,
+                        body_rot,
+                        *half_height,
+                        *cap_radius,
+                    ),
                     ColliderShape::ConvexHull { hull } => {
                         ray_vs_convex_hull(origin, direction, length, &world_xform, hull)
                     }
@@ -897,7 +905,15 @@ impl ProbeTarget for PhysicsWorld {
                     ColliderShape::Capsule {
                         half_height,
                         radius: cap_radius,
-                    } => ray_vs_capsule(origin, direction, length, center, body_rot, *half_height, *cap_radius),
+                    } => ray_vs_capsule(
+                        origin,
+                        direction,
+                        length,
+                        center,
+                        body_rot,
+                        *half_height,
+                        *cap_radius,
+                    ),
                     ColliderShape::ConvexHull { hull } => {
                         ray_vs_convex_hull(origin, direction, length, &world_xform, hull)
                     }

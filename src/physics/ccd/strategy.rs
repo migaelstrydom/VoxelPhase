@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use generational_arena::Arena;
 use nalgebra::{Point3, UnitQuaternion};
@@ -15,11 +15,11 @@ pub struct CcdContext<'a> {
     pub colliders: &'a Arena<Collider>,
     pub contact_events: &'a mut Vec<ContactEvent>,
     /// Bodies already handled by the narrowphase (excluded from CCD).
-    pub narrowphase_handled: &'a HashSet<RigidBodyHandle>,
+    pub narrowphase_handled: &'a FxHashSet<RigidBodyHandle>,
     /// Currently sleeping bodies (excluded from CCD).
-    pub sleeping: Option<&'a HashSet<RigidBodyHandle>>,
+    pub sleeping: Option<&'a FxHashSet<RigidBodyHandle>>,
     /// Body positions/rotations captured before position integration.
-    pub pre_states: &'a HashMap<generational_arena::Index, (Point3<f32>, UnitQuaternion<f32>)>,
+    pub pre_states: &'a FxHashMap<generational_arena::Index, (Point3<f32>, UnitQuaternion<f32>)>,
     /// Shared contact margin from PhysicsConfig.
     pub contact_margin: f32,
     /// Shared restitution velocity threshold from PhysicsConfig.

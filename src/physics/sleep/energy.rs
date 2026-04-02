@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use generational_arena::Index;
 
@@ -11,7 +11,7 @@ pub struct EnergyTracker {
     /// Frames below threshold required to qualify for sleep.
     delay_frames: u32,
     /// Per-body counters tracking consecutive below-threshold frames.
-    frames_below: HashMap<Index, u32>,
+    frames_below: FxHashMap<Index, u32>,
 }
 
 impl EnergyTracker {
@@ -19,7 +19,7 @@ impl EnergyTracker {
         Self {
             threshold,
             delay_frames,
-            frames_below: HashMap::new(),
+            frames_below: FxHashMap::default(),
         }
     }
 
@@ -38,7 +38,7 @@ impl EnergyTracker {
         self.frames_below.remove(&handle.0);
     }
 
-    pub fn retain_indices(&mut self, live: &std::collections::HashSet<Index>) {
+    pub fn retain_indices(&mut self, live: &FxHashSet<Index>) {
         self.frames_below.retain(|idx, _| live.contains(idx));
     }
 }

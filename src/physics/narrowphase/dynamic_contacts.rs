@@ -1,14 +1,14 @@
 //! Unified narrowphase contact generation for all dynamic-vs-dynamic collider pairs.
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use generational_arena::Arena;
 use nalgebra::{Point3, UnitQuaternion, Vector3};
 
 use crate::collision::contact::{ContactManifold, ContactPoint, FeatureId};
 use crate::collision::continuous::swept_sphere_sphere;
-use crate::collision::dispatch;
 use crate::collision::discrete::gjk::GjkCache;
+use crate::collision::dispatch;
 use crate::collision::sat::SatCache;
 use crate::collision::shape_view::ShapeView;
 use crate::physics::body::RigidBody;
@@ -37,18 +37,18 @@ impl SatPairKey {
 /// Stores the last separating axis found for each pair. When the cached axis
 /// still separates the pair next frame, the full 15-axis SAT test is skipped.
 pub struct SatCacheMap {
-    caches: HashMap<SatPairKey, SatCache>,
+    caches: FxHashMap<SatPairKey, SatCache>,
 }
 
 impl SatCacheMap {
     pub fn new() -> Self {
         Self {
-            caches: HashMap::new(),
+            caches: FxHashMap::default(),
         }
     }
 
     /// Remove entries for pairs that were not tested this frame.
-    pub fn prune(&mut self, active_pairs: &HashSet<(ColliderHandle, ColliderHandle)>) {
+    pub fn prune(&mut self, active_pairs: &FxHashSet<(ColliderHandle, ColliderHandle)>) {
         self.caches.retain(|key, _| {
             active_pairs.contains(&(key.0, key.1)) || active_pairs.contains(&(key.1, key.0))
         });
@@ -73,18 +73,18 @@ impl GjkPairKey {
 
 /// Per-frame GJK warm-start cache map for wildcard dispatch pairs.
 pub struct GjkCacheMap {
-    caches: HashMap<GjkPairKey, GjkCache>,
+    caches: FxHashMap<GjkPairKey, GjkCache>,
 }
 
 impl GjkCacheMap {
     pub fn new() -> Self {
         Self {
-            caches: HashMap::new(),
+            caches: FxHashMap::default(),
         }
     }
 
     /// Remove entries for pairs that were not tested this frame.
-    pub fn prune(&mut self, active_pairs: &HashSet<(ColliderHandle, ColliderHandle)>) {
+    pub fn prune(&mut self, active_pairs: &FxHashSet<(ColliderHandle, ColliderHandle)>) {
         self.caches.retain(|key, _| {
             active_pairs.contains(&(key.0, key.1)) || active_pairs.contains(&(key.1, key.0))
         });
@@ -115,8 +115,8 @@ pub struct NarrowphaseWorkBuffer {
     sorted_indices: Vec<usize>,
     pairs: Vec<(usize, usize)>,
     manifolds: Vec<PairManifold>,
-    active_box_pairs: HashSet<(ColliderHandle, ColliderHandle)>,
-    active_gjk_pairs: HashSet<(ColliderHandle, ColliderHandle)>,
+    active_box_pairs: FxHashSet<(ColliderHandle, ColliderHandle)>,
+    active_gjk_pairs: FxHashSet<(ColliderHandle, ColliderHandle)>,
 }
 
 impl NarrowphaseWorkBuffer {
@@ -127,8 +127,8 @@ impl NarrowphaseWorkBuffer {
             sorted_indices: Vec::new(),
             pairs: Vec::new(),
             manifolds: Vec::new(),
-            active_box_pairs: HashSet::new(),
-            active_gjk_pairs: HashSet::new(),
+            active_box_pairs: FxHashSet::default(),
+            active_gjk_pairs: FxHashSet::default(),
         }
     }
 
@@ -165,7 +165,7 @@ pub fn generate_dynamic_contacts(
     enable_speculative_contacts: bool,
     speculative_min_speed: f32,
     speculative_margin_multiplier: f32,
-    sleeping: Option<&HashSet<RigidBodyHandle>>,
+    sleeping: Option<&FxHashSet<RigidBodyHandle>>,
     sat_cache_map: &mut SatCacheMap,
     gjk_cache_map: &mut GjkCacheMap,
     buf: &mut NarrowphaseWorkBuffer,
@@ -247,10 +247,8 @@ pub fn generate_dynamic_contacts(
             push_if_nonempty(&mut buf.manifolds, header, manifold);
         } else {
             // Speculative CCD for sphere-sphere pairs.
-            if let (
-                ColliderShape::Sphere { radius: ra },
-                ColliderShape::Sphere { radius: rb },
-            ) = (&si.shape, &sj.shape)
+            if let (ColliderShape::Sphere { radius: ra }, ColliderShape::Sphere { radius: rb }) =
+                (&si.shape, &sj.shape)
             {
                 sphere_sphere_speculative(
                     si,
@@ -324,9 +322,7 @@ fn sweep_and_prune_into(
     }
 
     sorted.extend(0..states.len());
-    sorted.sort_unstable_by(|&a, &b| {
-        bounds[a].0[sweep_axis].total_cmp(&bounds[b].0[sweep_axis])
-    });
+    sorted.sort_unstable_by(|&a, &b| bounds[a].0[sweep_axis].total_cmp(&bounds[b].0[sweep_axis]));
 
     for ii in 0..sorted.len() {
         let i = sorted[ii];
@@ -385,7 +381,7 @@ fn collect_collider_states_into(
     states: &mut Vec<ColliderState>,
     bodies: &Arena<RigidBody>,
     colliders: &Arena<Collider>,
-    sleeping: Option<&HashSet<RigidBodyHandle>>,
+    sleeping: Option<&FxHashSet<RigidBodyHandle>>,
 ) {
     for (idx, body) in bodies.iter() {
         if body.is_static() {
@@ -594,18 +590,11 @@ mod tests {
             shape: &box_shape,
         };
 
-        let manifold = dispatch::generate_manifold(
-            &view_capsule,
-            &view_box,
-            0.02,
-            None,
-            None,
-        );
+        let manifold = dispatch::generate_manifold(&view_capsule, &view_box, 0.02, None, None);
         assert!(!manifold.is_empty(), "Should have contacts");
 
         // Apply the same ordering logic used in generate_dynamic_contacts.
-        let capsule_is_a =
-            shape_type_rank(&capsule_shape) >= shape_type_rank(&box_shape);
+        let capsule_is_a = shape_type_rank(&capsule_shape) >= shape_type_rank(&box_shape);
 
         for cp in &manifold.points {
             let (pos_a, pos_b) = if capsule_is_a {
@@ -652,17 +641,10 @@ mod tests {
             shape: &box_shape,
         };
 
-        let manifold = dispatch::generate_manifold(
-            &view_sphere,
-            &view_box,
-            0.02,
-            None,
-            None,
-        );
+        let manifold = dispatch::generate_manifold(&view_sphere, &view_box, 0.02, None, None);
         assert!(!manifold.is_empty(), "Should have contacts");
 
-        let sphere_is_a =
-            shape_type_rank(&sphere_shape) >= shape_type_rank(&box_shape);
+        let sphere_is_a = shape_type_rank(&sphere_shape) >= shape_type_rank(&box_shape);
 
         for cp in &manifold.points {
             let (pos_a, pos_b) = if sphere_is_a {
