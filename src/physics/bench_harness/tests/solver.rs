@@ -354,9 +354,7 @@ fn velocity_driven_sphere_against_wall_no_bounce() {
     let min_x = tail.iter().fold(f32::INFINITY, |a, &b| a.min(b));
     let x_range = max_x - min_x;
 
-    eprintln!(
-        "wall_bounce: tail x_range={x_range:.4}, min={min_x:.4}, max={max_x:.4}"
-    );
+    eprintln!("wall_bounce: tail x_range={x_range:.4}, min={min_x:.4}, max={max_x:.4}");
 
     // Position should be within a small band — no large oscillations
     assert!(

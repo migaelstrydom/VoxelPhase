@@ -32,7 +32,10 @@ pub fn spawn_player(world: &mut World, initial_pos: nalgebra::Point3<f32>) -> En
             .restitution(0.0)
             .friction(0.0);
         physics.world.attach_collider(body_handle, collider_desc);
-        physics.world.body_mut(body_handle).unwrap()
+        physics
+            .world
+            .body_mut(body_handle)
+            .unwrap()
             .scale_local_inertia(Vector3::new(1.0, 50.0, 1.0));
         physics
             .world

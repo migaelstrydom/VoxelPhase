@@ -56,9 +56,9 @@ impl Spawnable for IcosahedronDef {
 
     fn create_materials(&self, ctx: &mut MaterialCtx) -> EngineResult<Vec<MaterialId>> {
         let pixels = generate_jade_texture();
-        let texture =
-            ctx.textures
-                .create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &pixels, true)?;
+        let texture = ctx
+            .textures
+            .create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &pixels, true)?;
         let material = Material::textured(texture);
         Ok(vec![ctx.materials.register(material)])
     }
@@ -140,28 +140,88 @@ fn icosahedron_geometry(edge: f32) -> (Vec<Vector3<f32>>, Vec<SolidFace>) {
     // so any vertex across the origin from the face triangle suffices.
     let faces = vec![
         // Top cap (around vertex 0)
-        SolidFace { vertex_indices: vec![0, 2, 8],   opposite_vertex: 3 },
-        SolidFace { vertex_indices: vec![0, 8, 4],   opposite_vertex: 7 },
-        SolidFace { vertex_indices: vec![0, 4, 6],   opposite_vertex: 5 },
-        SolidFace { vertex_indices: vec![0, 6, 10],  opposite_vertex: 9 },
-        SolidFace { vertex_indices: vec![0, 10, 2],  opposite_vertex: 3 },
+        SolidFace {
+            vertex_indices: vec![0, 2, 8],
+            opposite_vertex: 3,
+        },
+        SolidFace {
+            vertex_indices: vec![0, 8, 4],
+            opposite_vertex: 7,
+        },
+        SolidFace {
+            vertex_indices: vec![0, 4, 6],
+            opposite_vertex: 5,
+        },
+        SolidFace {
+            vertex_indices: vec![0, 6, 10],
+            opposite_vertex: 9,
+        },
+        SolidFace {
+            vertex_indices: vec![0, 10, 2],
+            opposite_vertex: 3,
+        },
         // Middle band
-        SolidFace { vertex_indices: vec![2, 5, 8],   opposite_vertex: 6 },
-        SolidFace { vertex_indices: vec![8, 5, 9],   opposite_vertex: 10 },
-        SolidFace { vertex_indices: vec![8, 9, 4],   opposite_vertex: 7 },
-        SolidFace { vertex_indices: vec![4, 9, 1],   opposite_vertex: 2 },
-        SolidFace { vertex_indices: vec![4, 1, 6],   opposite_vertex: 5 },
-        SolidFace { vertex_indices: vec![6, 1, 11],  opposite_vertex: 8 },
-        SolidFace { vertex_indices: vec![6, 11, 10], opposite_vertex: 9 },
-        SolidFace { vertex_indices: vec![10, 11, 7], opposite_vertex: 4 },
-        SolidFace { vertex_indices: vec![10, 7, 2],  opposite_vertex: 1 },
-        SolidFace { vertex_indices: vec![2, 7, 5],   opposite_vertex: 6 },
+        SolidFace {
+            vertex_indices: vec![2, 5, 8],
+            opposite_vertex: 6,
+        },
+        SolidFace {
+            vertex_indices: vec![8, 5, 9],
+            opposite_vertex: 10,
+        },
+        SolidFace {
+            vertex_indices: vec![8, 9, 4],
+            opposite_vertex: 7,
+        },
+        SolidFace {
+            vertex_indices: vec![4, 9, 1],
+            opposite_vertex: 2,
+        },
+        SolidFace {
+            vertex_indices: vec![4, 1, 6],
+            opposite_vertex: 5,
+        },
+        SolidFace {
+            vertex_indices: vec![6, 1, 11],
+            opposite_vertex: 8,
+        },
+        SolidFace {
+            vertex_indices: vec![6, 11, 10],
+            opposite_vertex: 9,
+        },
+        SolidFace {
+            vertex_indices: vec![10, 11, 7],
+            opposite_vertex: 4,
+        },
+        SolidFace {
+            vertex_indices: vec![10, 7, 2],
+            opposite_vertex: 1,
+        },
+        SolidFace {
+            vertex_indices: vec![2, 7, 5],
+            opposite_vertex: 6,
+        },
         // Bottom cap (around vertex 3)
-        SolidFace { vertex_indices: vec![3, 9, 5],   opposite_vertex: 10 },
-        SolidFace { vertex_indices: vec![3, 1, 9],   opposite_vertex: 2 },
-        SolidFace { vertex_indices: vec![3, 11, 1],  opposite_vertex: 8 },
-        SolidFace { vertex_indices: vec![3, 7, 11],  opposite_vertex: 4 },
-        SolidFace { vertex_indices: vec![3, 5, 7],   opposite_vertex: 6 },
+        SolidFace {
+            vertex_indices: vec![3, 9, 5],
+            opposite_vertex: 10,
+        },
+        SolidFace {
+            vertex_indices: vec![3, 1, 9],
+            opposite_vertex: 2,
+        },
+        SolidFace {
+            vertex_indices: vec![3, 11, 1],
+            opposite_vertex: 8,
+        },
+        SolidFace {
+            vertex_indices: vec![3, 7, 11],
+            opposite_vertex: 4,
+        },
+        SolidFace {
+            vertex_indices: vec![3, 5, 7],
+            opposite_vertex: 6,
+        },
     ];
 
     (vertices, faces)
@@ -181,7 +241,8 @@ fn generate_jade_texture() -> Vec<u8> {
             let u = x as f32 / size as f32;
             let v = y as f32 / size as f32;
 
-            let swirl = fbm_2d_periodic(u * 3.0 + v * 2.0, v * 5.0 - u, 5, 0.55, 2.0, seed, Some(5));
+            let swirl =
+                fbm_2d_periodic(u * 3.0 + v * 2.0, v * 5.0 - u, 5, 0.55, 2.0, seed, Some(5));
             let fleck = fbm_2d_periodic(u * 20.0, v * 20.0, 2, 0.3, 2.0, seed + 11, Some(20));
             let factor = 0.72 + swirl * 0.22 + fleck * 0.06;
             let c = base.scale(factor);

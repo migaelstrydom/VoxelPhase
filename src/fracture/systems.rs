@@ -32,15 +32,7 @@ impl<'a> System<'a> for FractureSystem {
     );
 
     fn run(&mut self, data: Self::SystemData) {
-        let (
-            entities,
-            mut physics,
-            mut fractures,
-            bodies,
-            mut models,
-            lazy,
-            impulse_queue,
-        ) = data;
+        let (entities, mut physics, mut fractures, bodies, mut models, lazy, impulse_queue) = data;
 
         let last_impulses = impulse_queue.last_impulses();
         if last_impulses.is_empty() {
@@ -312,12 +304,17 @@ fn rebuild_compound_model(
                 _ => return None,
             };
             let offset = c.offset().translation.vector;
-            if !he.x.is_finite() || !he.y.is_finite() || !he.z.is_finite()
-                || !offset.x.is_finite() || !offset.y.is_finite() || !offset.z.is_finite()
+            if !he.x.is_finite()
+                || !he.y.is_finite()
+                || !he.z.is_finite()
+                || !offset.x.is_finite()
+                || !offset.y.is_finite()
+                || !offset.z.is_finite()
             {
                 log::error!(
                     "Fracture: NaN/Inf in remaining collider: he={:?} offset={:?}",
-                    he, offset
+                    he,
+                    offset
                 );
                 return None;
             }

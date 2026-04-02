@@ -14,6 +14,7 @@ use winit::window::Window;
 
 use crate::core::error::EngineResult;
 use crate::core::vulkan_context::VulkanContext;
+use crate::fire::renderer::{ActiveFire, FireRenderer};
 use crate::model::{Model, Transform};
 use crate::particles::{ParticlePool, ParticleRenderer};
 use crate::rendering::descriptors::DescriptorManager;
@@ -25,7 +26,6 @@ use crate::rendering::sky::SkyRenderer;
 use crate::rendering::swapchain::{SurfaceInfo, Swapchain};
 use crate::rendering::vertex::Vertex;
 use crate::rendering::water::WaterRenderer;
-use crate::fire::renderer::{ActiveFire, FireRenderer};
 use crate::resources::textures::{TextureHandle, TextureManager};
 use crate::water::{WaterGrid, WaveGrid};
 
@@ -701,7 +701,8 @@ impl Renderer {
         }
 
         let fires: Vec<&ActiveFire> = self.active_fires.iter().map(|(_, f)| f).collect();
-        self.fire_renderer.render(cb, &fires, view_matrix, proj_matrix, camera_pos);
+        self.fire_renderer
+            .render(cb, &fires, view_matrix, proj_matrix, camera_pos);
     }
 
     /// Create a lightweight fire entry assigned to the least-used sim slot.

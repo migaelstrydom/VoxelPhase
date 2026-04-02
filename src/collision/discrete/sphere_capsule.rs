@@ -26,12 +26,8 @@ pub fn sphere_capsule_manifold(
     let (seg_a, seg_b) = capsule.segment_endpoints();
 
     // Closest point on capsule segment to sphere center (degenerate point-vs-segment).
-    let (_, closest_on_seg) = segment_segment_closest_points(
-        sphere_center,
-        sphere_center,
-        seg_a,
-        seg_b,
-    );
+    let (_, closest_on_seg) =
+        segment_segment_closest_points(sphere_center, sphere_center, seg_a, seg_b);
 
     // Now it's a sphere-sphere test between (closest_on_seg, capsule.radius)
     // and (sphere_center, sphere_radius).
@@ -54,7 +50,12 @@ pub fn sphere_capsule_manifold(
     let raw_depth = combined_radius - dist;
     let point = closest_on_seg + normal * (capsule.radius - raw_depth * 0.5);
 
-    ContactManifold::single(ContactPoint::new(point, normal, raw_depth, FeatureId::SINGLE))
+    ContactManifold::single(ContactPoint::new(
+        point,
+        normal,
+        raw_depth,
+        FeatureId::SINGLE,
+    ))
 }
 
 #[cfg(test)]
@@ -74,12 +75,7 @@ mod tests {
     #[test]
     fn sphere_touching_capsule_side() {
         let capsule = upright_capsule(0.0);
-        let m = sphere_capsule_manifold(
-            &capsule,
-            Point3::new(1.4, 0.0, 0.0),
-            1.0,
-            0.0,
-        );
+        let m = sphere_capsule_manifold(&capsule, Point3::new(1.4, 0.0, 0.0), 1.0, 0.0);
         assert_eq!(m.len(), 1);
         let c = &m.points[0];
         assert!(c.raw_depth > 0.0);
@@ -89,12 +85,7 @@ mod tests {
     #[test]
     fn sphere_overlapping_capsule_cap() {
         let capsule = upright_capsule(0.0);
-        let m = sphere_capsule_manifold(
-            &capsule,
-            Point3::new(0.0, 1.8, 0.0),
-            1.0,
-            0.0,
-        );
+        let m = sphere_capsule_manifold(&capsule, Point3::new(0.0, 1.8, 0.0), 1.0, 0.0);
         assert_eq!(m.len(), 1);
         let c = &m.points[0];
         assert!(c.raw_depth > 0.0);
@@ -104,12 +95,7 @@ mod tests {
     #[test]
     fn sphere_separated_from_capsule() {
         let capsule = upright_capsule(0.0);
-        let m = sphere_capsule_manifold(
-            &capsule,
-            Point3::new(5.0, 0.0, 0.0),
-            1.0,
-            0.0,
-        );
+        let m = sphere_capsule_manifold(&capsule, Point3::new(5.0, 0.0, 0.0), 1.0, 0.0);
         assert!(m.is_empty());
     }
 
@@ -117,12 +103,7 @@ mod tests {
     fn margin_only_contact() {
         let capsule = upright_capsule(0.0);
         // Sphere just beyond contact distance, but within margin.
-        let m = sphere_capsule_manifold(
-            &capsule,
-            Point3::new(1.55, 0.0, 0.0),
-            1.0,
-            0.1,
-        );
+        let m = sphere_capsule_manifold(&capsule, Point3::new(1.55, 0.0, 0.0), 1.0, 0.1);
         assert_eq!(m.len(), 1);
         let c = &m.points[0];
         assert!(c.raw_depth < 0.0);
@@ -132,12 +113,7 @@ mod tests {
     #[test]
     fn coincident_centers() {
         let capsule = upright_capsule(0.0);
-        let m = sphere_capsule_manifold(
-            &capsule,
-            Point3::new(0.0, 0.0, 0.0),
-            0.3,
-            0.0,
-        );
+        let m = sphere_capsule_manifold(&capsule, Point3::new(0.0, 0.0, 0.0), 0.3, 0.0);
         assert_eq!(m.len(), 1);
         assert!(m.points[0].raw_depth > 0.0);
     }

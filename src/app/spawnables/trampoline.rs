@@ -194,11 +194,16 @@ fn generate_leg_metal() -> Vec<u8> {
             let u = x as f32 / size as f32;
             let v = y as f32 / size as f32;
 
-            let brush = crate::utils::noise::fbm_2d_periodic(
-                u * 6.0, v * 30.0, 3, 0.5, 2.0, seed, Some(6),
-            );
+            let brush =
+                crate::utils::noise::fbm_2d_periodic(u * 6.0, v * 30.0, 3, 0.5, 2.0, seed, Some(6));
             let scratches = crate::utils::noise::fbm_2d_periodic(
-                u * 20.0, v * 20.0, 2, 0.3, 2.0, seed + 7, Some(20),
+                u * 20.0,
+                v * 20.0,
+                2,
+                0.3,
+                2.0,
+                seed + 7,
+                Some(20),
             );
             let c_factor = 0.82 + brush * 0.12 + scratches * 0.06;
             let c = base.scale(c_factor).scale(edge_vignette(u, v));

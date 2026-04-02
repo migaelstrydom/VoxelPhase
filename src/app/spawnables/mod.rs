@@ -15,8 +15,8 @@ mod spawnable;
 mod stack;
 mod table;
 mod tetrahedron;
-mod trampoline;
 mod tower;
+mod trampoline;
 mod voussoir_arch;
 mod wall;
 
@@ -36,7 +36,7 @@ pub use spawnable::{MaterialCtx, Spawnable};
 pub use stack::{StackDef, StackItemDef};
 pub use table::TableDef;
 pub use tetrahedron::TetrahedronDef;
-pub use trampoline::TrampolineDef;
 pub use tower::TowerDef;
+pub use trampoline::TrampolineDef;
 pub use voussoir_arch::VoussoirArchDef;
 pub use wall::BoxWallDef;

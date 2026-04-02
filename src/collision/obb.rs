@@ -158,8 +158,7 @@ mod tests {
         let obb = unit_cube();
         let corners = obb.corners();
         assert_eq!(corners.len(), 8);
-        let centroid: Vector3<f32> =
-            corners.iter().map(|c| c.coords).sum::<Vector3<f32>>() / 8.0;
+        let centroid: Vector3<f32> = corners.iter().map(|c| c.coords).sum::<Vector3<f32>>() / 8.0;
         assert!(centroid.magnitude() < 1e-6);
     }
 }

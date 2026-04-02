@@ -52,11 +52,7 @@ impl<'a> System<'a> for SensorProbeSystem {
 
                 let mut earliest = None;
                 for target in &targets {
-                    if let Some(hit) = target.raycast(
-                        probe.origin,
-                        probe.direction,
-                        probe.length,
-                    ) {
+                    if let Some(hit) = target.raycast(probe.origin, probe.direction, probe.length) {
                         if earliest
                             .as_ref()
                             .map_or(true, |(t, _): &(f32, _)| hit.t < *t)

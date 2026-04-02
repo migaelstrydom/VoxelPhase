@@ -40,10 +40,7 @@ impl ComputePipeline {
     /// The caller is responsible for destroying the `shader_module` after this
     /// call returns, and for keeping the descriptor set layouts alive for the
     /// lifetime of this pipeline.
-    pub fn new(
-        device: Arc<ManagedDevice>,
-        config: &ComputePipelineConfig,
-    ) -> EngineResult<Self> {
+    pub fn new(device: Arc<ManagedDevice>, config: &ComputePipelineConfig) -> EngineResult<Self> {
         let layout = Self::create_pipeline_layout(&device, config)?;
         let pipeline = Self::create_pipeline(&device, layout, config.shader_module)?;
 

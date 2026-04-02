@@ -47,9 +47,8 @@ impl<'a, 'b> App<'a, 'b> {
             Self::create_rendering_context(&window, window_width, window_height)?;
 
         // Load the level file
-        let level = load_level(level_path).map_err(|e| {
-            EngineError::InvalidState(format!("Failed to load level: {}", e))
-        })?;
+        let level = load_level(level_path)
+            .map_err(|e| EngineError::InvalidState(format!("Failed to load level: {}", e)))?;
 
         // Create materials: grenade, house pool, and level-specific box materials
         let mut material_builder = MaterialManagerBuilder::new();
@@ -73,11 +72,8 @@ impl<'a, 'b> App<'a, 'b> {
             body: material_builder.register(Material::coloured(Colour::new(0.2, 0.25, 0.2, 1.0))),
         };
 
-        let level_materials = create_level_materials(
-            &level,
-            &texture_manager,
-            &mut material_builder,
-        )?;
+        let level_materials =
+            create_level_materials(&level, &texture_manager, &mut material_builder)?;
 
         let material_manager = material_builder.build(fallback_white);
 

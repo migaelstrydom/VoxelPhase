@@ -74,12 +74,7 @@ pub fn epa_penetration(
     // Create 4 triangular faces with outward-pointing normals.
     // For each face, orient the normal away from the origin (the origin is
     // inside the Minkowski difference, so all face normals should point outward).
-    let face_indices: [[usize; 3]; 4] = [
-        [0, 1, 2],
-        [0, 3, 1],
-        [0, 2, 3],
-        [1, 3, 2],
-    ];
+    let face_indices: [[usize; 3]; 4] = [[0, 1, 2], [0, 3, 1], [0, 2, 3], [1, 3, 2]];
 
     for indices in &face_indices {
         if let Some(mut face) = make_face(&vertices, indices[0], indices[1], indices[2]) {
@@ -333,12 +328,7 @@ fn find_best_tetrahedron(candidates: &[MinkowskiVertex]) -> Vec<MinkowskiVertex>
                         best_any = [i, j, k, l];
                     }
                     if vol > best_enclosing_vol {
-                        let quad = [
-                            candidates[i],
-                            candidates[j],
-                            candidates[k],
-                            candidates[l],
-                        ];
+                        let quad = [candidates[i], candidates[j], candidates[k], candidates[l]];
                         if origin_inside_tetrahedron(&quad) {
                             best_enclosing_vol = vol;
                             best_enclosing = Some([i, j, k, l]);
@@ -354,13 +344,17 @@ fn find_best_tetrahedron(candidates: &[MinkowskiVertex]) -> Vec<MinkowskiVertex>
 }
 
 /// Triple product magnitude for tetrahedron volume comparison.
-fn tetra_volume6(a: MinkowskiVertex, b: MinkowskiVertex, c: MinkowskiVertex, d: MinkowskiVertex) -> f32 {
+fn tetra_volume6(
+    a: MinkowskiVertex,
+    b: MinkowskiVertex,
+    c: MinkowskiVertex,
+    d: MinkowskiVertex,
+) -> f32 {
     let ab = b.point.coords - a.point.coords;
     let ac = c.point.coords - a.point.coords;
     let ad = d.point.coords - a.point.coords;
     ad.dot(&ab.cross(&ac)).abs()
 }
-
 
 /// Check if the origin is inside a tetrahedron defined by 4 Minkowski vertices.
 fn origin_inside_tetrahedron(verts: &[MinkowskiVertex]) -> bool {
@@ -466,25 +460,17 @@ fn compute_witness_points(
     let bary_u = 1.0 - bary_v - bary_w;
 
     let witness_a = Point3::from(
-        va.support_a.coords * bary_u
-            + vb.support_a.coords * bary_v
-            + vc.support_a.coords * bary_w,
+        va.support_a.coords * bary_u + vb.support_a.coords * bary_v + vc.support_a.coords * bary_w,
     );
     let witness_b = Point3::from(
-        va.support_b.coords * bary_u
-            + vb.support_b.coords * bary_v
-            + vc.support_b.coords * bary_w,
+        va.support_b.coords * bary_u + vb.support_b.coords * bary_v + vc.support_b.coords * bary_w,
     );
 
     (witness_a, witness_b)
 }
 
 /// Fallback result when EPA can't construct a valid polytope.
-fn fallback_result(
-    a: &dyn ConvexSupport,
-    b: &dyn ConvexSupport,
-    _margin: f32,
-) -> EpaResult {
+fn fallback_result(a: &dyn ConvexSupport, b: &dyn ConvexSupport, _margin: f32) -> EpaResult {
     let ca = a.support(Vector3::zeros());
     let cb = b.support(Vector3::zeros());
     let delta = cb - ca;
@@ -514,15 +500,14 @@ mod tests {
         (a - b).abs() < tol
     }
 
-    fn run_epa(
-        a: &dyn ConvexSupport,
-        b: &dyn ConvexSupport,
-        margin: f32,
-    ) -> EpaResult {
+    fn run_epa(a: &dyn ConvexSupport, b: &dyn ConvexSupport, margin: f32) -> EpaResult {
         match gjk_query(a, b) {
             GjkResult::Intersecting { simplex } => epa_penetration(a, b, margin, &simplex),
             GjkResult::Separated { distance, .. } => {
-                panic!("Expected intersection, got separation with distance {}", distance);
+                panic!(
+                    "Expected intersection, got separation with distance {}",
+                    distance
+                );
             }
         }
     }
@@ -596,11 +581,7 @@ mod tests {
         );
         // Rotated OBB extends sqrt(2) ≈ 1.414 along X.
         // Place B so its -X face at 1.0 overlaps the rotated OBB's edge.
-        let a = Obb::new(
-            Point3::origin(),
-            rot45,
-            Vector3::new(1.0, 1.0, 1.0),
-        );
+        let a = Obb::new(Point3::origin(), rot45, Vector3::new(1.0, 1.0, 1.0));
         let b = Obb::new(
             Point3::new(2.0, 0.0, 0.0),
             UnitQuaternion::identity(),

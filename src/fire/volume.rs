@@ -39,7 +39,12 @@ pub struct FireVolume {
 impl FireVolume {
     /// Allocate a new fire volume with the default resolution.
     pub fn new(device: Arc<ManagedDevice>) -> EngineResult<Self> {
-        Self::with_resolution(device, DEFAULT_VOLUME_WIDTH, DEFAULT_VOLUME_HEIGHT, DEFAULT_VOLUME_DEPTH)
+        Self::with_resolution(
+            device,
+            DEFAULT_VOLUME_WIDTH,
+            DEFAULT_VOLUME_HEIGHT,
+            DEFAULT_VOLUME_DEPTH,
+        )
     }
 
     /// Allocate a new fire volume with a custom resolution.

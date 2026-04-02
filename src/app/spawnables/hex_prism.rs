@@ -183,11 +183,7 @@ impl Spawnable for HoneycombWallDef {
 
         for row in 0..self.rows {
             let y = self.base.1 + self.radius + row as f32 * row_spacing;
-            let x_offset = if row % 2 == 1 {
-                col_spacing * 0.5
-            } else {
-                0.0
-            };
+            let x_offset = if row % 2 == 1 { col_spacing * 0.5 } else { 0.0 };
 
             for col in 0..self.columns {
                 let x = x_start + col as f32 * col_spacing + x_offset;

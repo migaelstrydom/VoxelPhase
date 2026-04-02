@@ -4,7 +4,6 @@
 /// AND the narrowphase did not already generate static contacts for it.
 /// Bodies with narrowphase contacts are managed by the solver — CCD only
 /// catches bodies in free flight that might skip past geometry entirely.
-
 use nalgebra::{Point3, UnitQuaternion, Vector3};
 use smallvec::{smallvec, SmallVec};
 
@@ -80,10 +79,17 @@ impl CcdStrategy for SweepClampCcd {
                     if speed * dt <= radius * ctx.ccd_threshold {
                         continue;
                     }
-                    let pre_center =
-                        Point3::from(collider.world_transform(pre_pos, pre_rot).translation.vector);
+                    let pre_center = Point3::from(
+                        collider
+                            .world_transform(pre_pos, pre_rot)
+                            .translation
+                            .vector,
+                    );
                     let post_center = Point3::from(
-                        collider.world_transform(post_pos, post_rot).translation.vector,
+                        collider
+                            .world_transform(post_pos, post_rot)
+                            .translation
+                            .vector,
                     );
                     out.push(CcdCandidate {
                         body_handle: handle,
@@ -109,15 +115,14 @@ impl CcdStrategy for SweepClampCcd {
                     candidate.radius,
                     static_geometry,
                 ),
-                _ => sweep_shape_against_static(candidate, static_geometry)
-                    .or_else(|| {
-                        sweep_sphere_against_static(
-                            candidate.pre_center,
-                            candidate.post_center,
-                            candidate.radius,
-                            static_geometry,
-                        )
-                    }),
+                _ => sweep_shape_against_static(candidate, static_geometry).or_else(|| {
+                    sweep_sphere_against_static(
+                        candidate.pre_center,
+                        candidate.post_center,
+                        candidate.radius,
+                        static_geometry,
+                    )
+                }),
             };
             let Some(hit) = hit else {
                 continue;
@@ -326,12 +331,7 @@ fn sweep_shape_against_static(
     let mut earliest: Option<crate::collision::continuous::SweptContact> = None;
 
     for pt in &patch.triangles {
-        let hit = gjk_raycast(
-            &shape_view,
-            &pt.triangle,
-            displacement,
-            Vector3::zeros(),
-        );
+        let hit = gjk_raycast(&shape_view, &pt.triangle, displacement, Vector3::zeros());
         if let Some(h) = hit {
             if earliest.is_none() || h.t < earliest.as_ref().unwrap().t {
                 earliest = Some(crate::collision::continuous::SweptContact::new(

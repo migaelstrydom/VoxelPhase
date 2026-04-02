@@ -15,9 +15,9 @@
 mod aabb;
 pub mod capsule;
 pub mod contact;
-pub mod convex_hull;
 pub mod contact_reducer;
 pub mod continuous;
+pub mod convex_hull;
 pub mod discrete;
 pub mod dispatch;
 pub mod mesh;

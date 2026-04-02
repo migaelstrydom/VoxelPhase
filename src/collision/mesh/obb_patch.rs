@@ -465,11 +465,7 @@ mod tests {
         let patch = large_flat_patch();
         let rot = UnitQuaternion::from_axis_angle(&Vector3::z_axis(), 0.2)
             * UnitQuaternion::from_axis_angle(&Vector3::x_axis(), 0.15);
-        let obb = Obb::new(
-            Point3::new(0.0, 0.6, 0.0),
-            rot,
-            Vector3::new(0.5, 0.5, 0.5),
-        );
+        let obb = Obb::new(Point3::new(0.0, 0.6, 0.0), rot, Vector3::new(0.5, 0.5, 0.5));
 
         // Verify it produces contacts.
         assert!(!obb_patch_manifold(&obb, &patch, 0.02).is_empty());
@@ -551,8 +547,14 @@ mod tests {
 
         assert!(!m.is_empty(), "Top face should still produce contacts");
         for c in &m.points {
-            assert!(c.normal.y > 0.99, "Backfacing shell face should be rejected");
-            assert!(c.point.y.abs() < 1e-4, "Contacts should lie on the top shell face");
+            assert!(
+                c.normal.y > 0.99,
+                "Backfacing shell face should be rejected"
+            );
+            assert!(
+                c.point.y.abs() < 1e-4,
+                "Contacts should lie on the top shell face"
+            );
         }
     }
 }

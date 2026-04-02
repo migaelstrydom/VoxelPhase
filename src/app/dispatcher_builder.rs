@@ -2,8 +2,8 @@ use specs::{Dispatcher, DispatcherBuilder};
 
 use crate::biped::{BipedAnimationSystem, BipedProbeConfigSystem};
 use crate::explosion::ExplosionSystem;
-use crate::fracture::FractureSystem;
 use crate::fire::systems::{FireCleanupSystem, FireIgnitionSystem};
+use crate::fracture::FractureSystem;
 use crate::input::InputActionSystem;
 use crate::particles::{ParticleSpawnSystem, ParticleUpdateSystem};
 use crate::projectile::{GrenadeSpawnSystem, LifetimeSystem, ProjectileImpactDetectionSystem};

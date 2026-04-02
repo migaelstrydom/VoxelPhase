@@ -74,7 +74,11 @@ pub fn multi_material_compound_cuboid_model(
         };
 
         let base_idx = verts.len() as u32;
-        verts.extend(generate_offset_cube_vertices(half_extents, offset, Colour::WHITE));
+        verts.extend(generate_offset_cube_vertices(
+            half_extents,
+            offset,
+            Colour::WHITE,
+        ));
         let cube_indices = generate_cube_indices();
         indices.extend(cube_indices.iter().map(|i| i + base_idx));
     }
@@ -98,7 +102,12 @@ pub fn multi_material_compound_cuboid_model(
 /// Same as [`multi_material_compound_cuboid_model`] but each box can be
 /// individually rotated.
 pub fn multi_material_rotated_compound_cuboid_model(
-    boxes: &[(Vector3<f32>, Vector3<f32>, nalgebra::UnitQuaternion<f32>, MaterialId)],
+    boxes: &[(
+        Vector3<f32>,
+        Vector3<f32>,
+        nalgebra::UnitQuaternion<f32>,
+        MaterialId,
+    )],
 ) -> Arc<Model> {
     let mut groups: Vec<(MaterialId, Vec<Vertex>, Vec<u32>)> = Vec::new();
 
@@ -239,7 +248,11 @@ fn planar_face_uvs(vertices: &[Vector3<f32>]) -> Vec<Vector2<f32>> {
     // Face normal from first triangle, then bitangent.
     let face_normal = if vertices.len() >= 3 {
         let n = (vertices[1] - vertices[0]).cross(&(vertices[2] - vertices[0]));
-        if n.magnitude_squared() > 1e-12 { n.normalize() } else { Vector3::z() }
+        if n.magnitude_squared() > 1e-12 {
+            n.normalize()
+        } else {
+            Vector3::z()
+        }
     } else {
         Vector3::z()
     };
@@ -297,15 +310,16 @@ pub fn build_convex_hull(vertices: &[Vector3<f32>], faces: &[SolidFace]) -> Conv
 
             let raw_normal = (b - a).cross(&(c - a));
             let flip = raw_normal.dot(&(a - opp)) < 0.0;
-            let normal = if flip { -raw_normal.normalize() } else { raw_normal.normalize() };
+            let normal = if flip {
+                -raw_normal.normalize()
+            } else {
+                raw_normal.normalize()
+            };
 
             // If normal was flipped, reverse winding so vertices remain CCW
             // from outside. This is critical for face clipping in GJK/EPA.
-            let mut indices: SmallVec<[u16; 6]> = face
-                .vertex_indices
-                .iter()
-                .map(|&i| i as u16)
-                .collect();
+            let mut indices: SmallVec<[u16; 6]> =
+                face.vertex_indices.iter().map(|&i| i as u16).collect();
             if flip {
                 indices[1..].reverse();
             }

@@ -167,9 +167,7 @@ fn gjk_epa_vs_face<S: ConvexSupport + SupportFaceExtractor>(
     let face_support = polygon.support_face(normal);
 
     let clipped = match (shape_face, face_support) {
-        (Some(sf), Some(ff)) => {
-            clip_shape_face_against_mesh_face(&sf, &ff, normal, margin, face)
-        }
+        (Some(sf), Some(ff)) => clip_shape_face_against_mesh_face(&sf, &ff, normal, margin, face),
         _ => SmallVec::new(),
     };
 

@@ -56,9 +56,9 @@ impl Spawnable for DodecahedronDef {
 
     fn create_materials(&self, ctx: &mut MaterialCtx) -> EngineResult<Vec<MaterialId>> {
         let pixels = generate_marble_texture();
-        let texture =
-            ctx.textures
-                .create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &pixels, true)?;
+        let texture = ctx
+            .textures
+            .create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &pixels, true)?;
         let material = Material::textured(texture);
         Ok(vec![ctx.materials.register(material)])
     }
@@ -157,18 +157,54 @@ fn dodecahedron_geometry(edge: f32) -> (Vec<Vector3<f32>>, Vec<SolidFace>) {
     // Each face lists 5 vertex indices in order. opposite_vertex is any vertex
     // on the far side (centroid-opposing vertex works for normal correction).
     let faces = vec![
-        SolidFace { vertex_indices: vec![0, 8, 10, 2, 16],   opposite_vertex: 7 },
-        SolidFace { vertex_indices: vec![0, 16, 17, 1, 12],   opposite_vertex: 7 },
-        SolidFace { vertex_indices: vec![0, 12, 14, 4, 8],    opposite_vertex: 3 },
-        SolidFace { vertex_indices: vec![1, 17, 3, 11, 9],    opposite_vertex: 4 },
-        SolidFace { vertex_indices: vec![1, 9, 5, 14, 12],    opposite_vertex: 2 },
-        SolidFace { vertex_indices: vec![2, 10, 6, 15, 13],   opposite_vertex: 5 },
-        SolidFace { vertex_indices: vec![2, 13, 3, 17, 16],   opposite_vertex: 4 },
-        SolidFace { vertex_indices: vec![4, 14, 5, 19, 18],   opposite_vertex: 3 },
-        SolidFace { vertex_indices: vec![4, 18, 6, 10, 8],    opposite_vertex: 1 },
-        SolidFace { vertex_indices: vec![5, 9, 11, 7, 19],    opposite_vertex: 0 },
-        SolidFace { vertex_indices: vec![3, 13, 15, 7, 11],   opposite_vertex: 0 },
-        SolidFace { vertex_indices: vec![6, 18, 19, 7, 15],   opposite_vertex: 0 },
+        SolidFace {
+            vertex_indices: vec![0, 8, 10, 2, 16],
+            opposite_vertex: 7,
+        },
+        SolidFace {
+            vertex_indices: vec![0, 16, 17, 1, 12],
+            opposite_vertex: 7,
+        },
+        SolidFace {
+            vertex_indices: vec![0, 12, 14, 4, 8],
+            opposite_vertex: 3,
+        },
+        SolidFace {
+            vertex_indices: vec![1, 17, 3, 11, 9],
+            opposite_vertex: 4,
+        },
+        SolidFace {
+            vertex_indices: vec![1, 9, 5, 14, 12],
+            opposite_vertex: 2,
+        },
+        SolidFace {
+            vertex_indices: vec![2, 10, 6, 15, 13],
+            opposite_vertex: 5,
+        },
+        SolidFace {
+            vertex_indices: vec![2, 13, 3, 17, 16],
+            opposite_vertex: 4,
+        },
+        SolidFace {
+            vertex_indices: vec![4, 14, 5, 19, 18],
+            opposite_vertex: 3,
+        },
+        SolidFace {
+            vertex_indices: vec![4, 18, 6, 10, 8],
+            opposite_vertex: 1,
+        },
+        SolidFace {
+            vertex_indices: vec![5, 9, 11, 7, 19],
+            opposite_vertex: 0,
+        },
+        SolidFace {
+            vertex_indices: vec![3, 13, 15, 7, 11],
+            opposite_vertex: 0,
+        },
+        SolidFace {
+            vertex_indices: vec![6, 18, 19, 7, 15],
+            opposite_vertex: 0,
+        },
     ];
 
     (vertices, faces)

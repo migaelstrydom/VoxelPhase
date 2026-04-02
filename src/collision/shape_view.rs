@@ -66,30 +66,24 @@ impl ShapeView<'_> {
 impl ConvexSupport for ShapeView<'_> {
     fn support(&self, direction: Vector3<f32>) -> Point3<f32> {
         match self.shape {
-            ColliderShape::Sphere { radius } => {
-                SupportSphere {
-                    center: self.center,
-                    radius: *radius,
-                }
-                .support(direction)
+            ColliderShape::Sphere { radius } => SupportSphere {
+                center: self.center,
+                radius: *radius,
             }
+            .support(direction),
             ColliderShape::Box { half_extents } => {
                 Obb::new(self.center, self.rotation, *half_extents).support(direction)
             }
             ColliderShape::Capsule {
                 half_height,
                 radius,
-            } => {
-                Capsule::new(self.center, self.rotation, *half_height, *radius).support(direction)
+            } => Capsule::new(self.center, self.rotation, *half_height, *radius).support(direction),
+            ColliderShape::ConvexHull { hull } => TransformedHull {
+                hull,
+                center: self.center,
+                rotation: self.rotation,
             }
-            ColliderShape::ConvexHull { hull } => {
-                TransformedHull {
-                    hull,
-                    center: self.center,
-                    rotation: self.rotation,
-                }
-                .support(direction)
-            }
+            .support(direction),
         }
     }
 
@@ -150,18 +144,15 @@ impl SupportFaceExtractor for ShapeView<'_> {
         match self.shape {
             ColliderShape::Sphere { .. } => None,
             ColliderShape::Box { half_extents } => {
-                Obb::new(self.center, self.rotation, *half_extents)
-                    .support_face(direction)
+                Obb::new(self.center, self.rotation, *half_extents).support_face(direction)
             }
             ColliderShape::Capsule { .. } => None,
-            ColliderShape::ConvexHull { hull } => {
-                TransformedHull {
-                    hull,
-                    center: self.center,
-                    rotation: self.rotation,
-                }
-                .support_face(direction)
+            ColliderShape::ConvexHull { hull } => TransformedHull {
+                hull,
+                center: self.center,
+                rotation: self.rotation,
             }
+            .support_face(direction),
         }
     }
 }

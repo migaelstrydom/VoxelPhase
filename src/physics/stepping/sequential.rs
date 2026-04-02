@@ -3,7 +3,6 @@
 /// This is the stepping pattern used by PGS and PGS+NGS solvers, where
 /// contacts are generated once per frame and reused across multiple
 /// velocity/position solve passes.
-
 use crate::debug::DebugLines;
 use crate::physics::force_provider::SubstepForceProvider;
 use crate::physics::impulses::PhysicsImpulse;

@@ -34,9 +34,9 @@ impl Spawnable for BeachBallDef {
     }
 
     fn create_materials(&self, ctx: &mut MaterialCtx) -> EngineResult<Vec<MaterialId>> {
-        let texture = ctx.textures.create_solid_colour(
-            crate::rendering::colour::Colour::new(1.0, 1.0, 1.0, 1.0),
-        )?;
+        let texture = ctx
+            .textures
+            .create_solid_colour(crate::rendering::colour::Colour::new(1.0, 1.0, 1.0, 1.0))?;
         let material = Material::textured(texture);
         Ok(vec![ctx.materials.register(material)])
     }

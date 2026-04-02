@@ -211,21 +211,21 @@ fn obb_obb_manifold_inner(
     let edge_win_slop = EDGE_WIN_MARGIN_FRACTION * contact_margin.max(OVERLAP_EPS);
     let (best_overlap, best_axis, best_category) =
         if let Some((ei, ej, edge_axis, edge_overlap)) = best_edge_winning_candidate {
-        if edge_overlap + edge_win_slop < best_face_overlap {
-            (
-                edge_overlap,
-                edge_axis,
-                MinAxis::EdgeEdge {
-                    a_idx: ei,
-                    b_idx: ej,
-                },
-            )
+            if edge_overlap + edge_win_slop < best_face_overlap {
+                (
+                    edge_overlap,
+                    edge_axis,
+                    MinAxis::EdgeEdge {
+                        a_idx: ei,
+                        b_idx: ej,
+                    },
+                )
+            } else {
+                (best_face_overlap, best_face_axis, best_face_category)
+            }
         } else {
             (best_face_overlap, best_face_axis, best_face_category)
-        }
-    } else {
-        (best_face_overlap, best_face_axis, best_face_category)
-    };
+        };
 
     if best_overlap > f32::MAX * 0.5 {
         cache.separating_axis = best_separating_axis.map(|(axis, _)| axis);
@@ -1208,10 +1208,7 @@ mod tests {
         let margin = 0.02;
         let m = obb_obb_manifold(&a, &b, margin);
 
-        assert!(
-            !m.is_empty(),
-            "Boxes should be colliding (resting contact)"
-        );
+        assert!(!m.is_empty(), "Boxes should be colliding (resting contact)");
 
         // The face-face clipping path produces at least 2 points along the edge
         // strip (one at each end). The edge-edge path produces exactly 1.

@@ -20,11 +20,7 @@ use nalgebra::{Point3, Vector3};
 /// * `obb` — the oriented bounding box in world space
 /// * `capsule` — the capsule in world space
 /// * `contact_margin` — inflation distance for speculative contacts
-pub fn obb_capsule_manifold(
-    obb: &Obb,
-    capsule: &Capsule,
-    contact_margin: f32,
-) -> ContactManifold {
+pub fn obb_capsule_manifold(obb: &Obb, capsule: &Capsule, contact_margin: f32) -> ContactManifold {
     let (seg_a, seg_b) = capsule.segment_endpoints();
     let sample = closest_point_on_segment_to_obb(obb, seg_a, seg_b);
     sphere_obb_manifold(obb, sample, capsule.radius, contact_margin)
@@ -148,12 +144,7 @@ mod tests {
     }
 
     fn upright_capsule(x: f32, y: f32) -> Capsule {
-        Capsule::new(
-            Point3::new(x, y, 0.0),
-            UnitQuaternion::identity(),
-            1.0,
-            0.3,
-        )
+        Capsule::new(Point3::new(x, y, 0.0), UnitQuaternion::identity(), 1.0, 0.3)
     }
 
     fn long_capsule_along_x() -> Capsule {

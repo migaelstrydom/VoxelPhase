@@ -113,10 +113,7 @@ impl DepthBuffer {
                 .array_layers(1)
                 .samples(vk::SampleCountFlags::TYPE_1)
                 .tiling(vk::ImageTiling::OPTIMAL)
-                .usage(
-                    vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT
-                        | vk::ImageUsageFlags::SAMPLED,
-                )
+                .usage(vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::SAMPLED)
                 .sharing_mode(vk::SharingMode::EXCLUSIVE);
 
             let image =
@@ -544,7 +541,9 @@ impl Swapchain {
                 .image_color_space(format.color_space)
                 .image_extent(extent)
                 .image_array_layers(1)
-                .image_usage(vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::TRANSFER_DST)
+                .image_usage(
+                    vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::TRANSFER_DST,
+                )
                 .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
                 .pre_transform(pre_transform)
                 .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
@@ -618,9 +617,7 @@ impl Swapchain {
                     device.device.create_framebuffer(&fb_info, None)
                 })
                 .collect::<Result<Vec<_>, _>>()
-                .map_err(|e| {
-                    EngineError::Framebuffer(format!("transparent creation: {:?}", e))
-                })?;
+                .map_err(|e| EngineError::Framebuffer(format!("transparent creation: {:?}", e)))?;
 
             // Create sync objects
             let sync = FrameSync::new(Arc::clone(&device))?;

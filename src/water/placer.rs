@@ -107,11 +107,9 @@ fn is_pool_cell(
     j: usize,
     surface_level: f32,
 ) -> bool {
-    grid.cell_sample_points(i, j)
-        .iter()
-        .any(|&(x, z)| {
-            terrain
-                .mesh_surface_height_at(x, z)
-                .map_or(true, |h| h <= surface_level)
-        })
+    grid.cell_sample_points(i, j).iter().any(|&(x, z)| {
+        terrain
+            .mesh_surface_height_at(x, z)
+            .map_or(true, |h| h <= surface_level)
+    })
 }

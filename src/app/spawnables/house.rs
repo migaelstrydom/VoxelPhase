@@ -4,8 +4,8 @@ use nalgebra::{Point3, Vector3};
 use serde::Deserialize;
 use specs::{Entity, World};
 
-use super::shared::models::cuboid_model;
 use super::box_object::create_box_materials;
+use super::shared::models::cuboid_model;
 use super::{MaterialCtx, Spawnable};
 use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
@@ -64,10 +64,10 @@ impl Spawnable for HouseDef {
         let roof_cy = walls_top + rt;
 
         let spawn = |world: &mut World,
-                      entities: &mut Vec<Entity>,
-                      pos: Point3<f32>,
-                      he: Vector3<f32>,
-                      material: MaterialId| {
+                     entities: &mut Vec<Entity>,
+                     pos: Point3<f32>,
+                     he: Vector3<f32>,
+                     material: MaterialId| {
             let model = cuboid_model(he, material);
 
             let body_handle = {

@@ -86,12 +86,7 @@ mod tests {
 
     #[test]
     fn segment_endpoints_identity() {
-        let c = Capsule::new(
-            Point3::origin(),
-            UnitQuaternion::identity(),
-            2.0,
-            0.5,
-        );
+        let c = Capsule::new(Point3::origin(), UnitQuaternion::identity(), 2.0, 0.5);
         let (a, b) = c.segment_endpoints();
         assert!((a - Point3::new(0.0, -1.5, 0.0)).magnitude() < 1e-6);
         assert!((b - Point3::new(0.0, 1.5, 0.0)).magnitude() < 1e-6);
@@ -112,12 +107,7 @@ mod tests {
 
     #[test]
     fn degenerate_sphere() {
-        let c = Capsule::new(
-            Point3::origin(),
-            UnitQuaternion::identity(),
-            0.5,
-            0.5,
-        );
+        let c = Capsule::new(Point3::origin(), UnitQuaternion::identity(), 0.5, 0.5);
         let (a, b) = c.segment_endpoints();
         assert!((a - Point3::origin()).magnitude() < 1e-6);
         assert!((b - Point3::origin()).magnitude() < 1e-6);
@@ -125,12 +115,7 @@ mod tests {
 
     #[test]
     fn enclosing_aabb_identity() {
-        let c = Capsule::new(
-            Point3::origin(),
-            UnitQuaternion::identity(),
-            2.0,
-            0.5,
-        );
+        let c = Capsule::new(Point3::origin(), UnitQuaternion::identity(), 2.0, 0.5);
         let (min, max) = c.enclosing_aabb();
         assert!((min - Point3::new(-0.5, -2.0, -0.5)).magnitude() < 1e-6);
         assert!((max - Point3::new(0.5, 2.0, 0.5)).magnitude() < 1e-6);
@@ -138,12 +123,7 @@ mod tests {
 
     #[test]
     fn bounding_radius_equals_half_height() {
-        let c = Capsule::new(
-            Point3::origin(),
-            UnitQuaternion::identity(),
-            3.0,
-            1.0,
-        );
+        let c = Capsule::new(Point3::origin(), UnitQuaternion::identity(), 3.0, 1.0);
         assert_eq!(c.bounding_radius(), 3.0);
     }
 }

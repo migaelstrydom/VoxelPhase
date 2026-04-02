@@ -181,7 +181,11 @@ impl Spawnable for BoxDef {
     }
 
     fn spawn(&self, world: &mut World, materials: &[MaterialId]) -> Vec<Entity> {
-        let he = Vector3::new(self.half_extents.0, self.half_extents.1, self.half_extents.2);
+        let he = Vector3::new(
+            self.half_extents.0,
+            self.half_extents.1,
+            self.half_extents.2,
+        );
         vec![spawn_box_entity(
             world,
             Point3::new(self.pos.0, self.pos.1, self.pos.2),

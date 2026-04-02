@@ -125,9 +125,8 @@ impl OverlayPipeline {
             color_write_mask: vk::ColorComponentFlags::RGBA,
         };
 
-        let color_blend =
-            vk::PipelineColorBlendStateCreateInfo::default()
-                .attachments(std::slice::from_ref(&color_blend_attachment));
+        let color_blend = vk::PipelineColorBlendStateCreateInfo::default()
+            .attachments(std::slice::from_ref(&color_blend_attachment));
 
         let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
         let dynamic_state =

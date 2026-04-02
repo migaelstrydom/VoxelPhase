@@ -21,14 +21,10 @@ fn keep_upright_kills_angular_velocity_in_free_fall() {
     config.sleep.enabled = false;
     let mut world = PhysicsWorld::new(config);
 
-    let mut desc = RigidBodyDesc::dynamic()
-        .position(Point3::new(0.0, 10.0, 0.0)); // high up, no ground contact
+    let mut desc = RigidBodyDesc::dynamic().position(Point3::new(0.0, 10.0, 0.0)); // high up, no ground contact
     desc.angular_velocity = Vector3::new(5.0, 0.0, 3.0);
     let body = world.create_body(desc);
-    let _ = world.attach_collider(
-        body,
-        ColliderDesc::sphere(0.5).density(1000.0),
-    );
+    let _ = world.attach_collider(body, ColliderDesc::sphere(0.5).density(1000.0));
     let _ = world.create_constraint(ConstraintKind::KeepUpright {
         body,
         target_up: UnitVector3::new_normalize(Vector3::y()),
@@ -64,9 +60,7 @@ fn keep_upright_sphere_rests_on_ground() {
 
     let radius = 0.5;
     let spawn_y = radius + 0.5; // slightly above ground
-    let body = world.create_body(
-        RigidBodyDesc::dynamic().position(Point3::new(0.0, spawn_y, 0.0)),
-    );
+    let body = world.create_body(RigidBodyDesc::dynamic().position(Point3::new(0.0, spawn_y, 0.0)));
     let _ = world.attach_collider(
         body,
         ColliderDesc::sphere(radius).density(1000.0).friction(0.5),
@@ -99,10 +93,7 @@ fn keep_upright_sphere_rests_on_ground() {
         ang_speed < 1.0,
         "sphere should be at rest: ang_speed={ang_speed:.4}"
     );
-    assert!(
-        y > radius - 0.1,
-        "sphere should not fall through: y={y:.4}"
-    );
+    assert!(y > radius - 0.1, "sphere should not fall through: y={y:.4}");
 }
 
 /// Simulates game-loop conditions: capsule on ground with angular velocity
@@ -124,7 +115,9 @@ fn keep_upright_capsule_with_velocity_zeroing() {
     );
     let _ = world.attach_collider(
         body,
-        ColliderDesc::capsule(half_height, radius).density(30.0).friction(0.3),
+        ColliderDesc::capsule(half_height, radius)
+            .density(30.0)
+            .friction(0.3),
     );
     let _ = world.create_constraint(ConstraintKind::KeepUpright {
         body,
@@ -147,9 +140,14 @@ fn keep_upright_capsule_with_velocity_zeroing() {
         }
         if frame == 29 {
             let b = world.body(body).unwrap();
-            eprintln!("after settle: y={:.4}, tilt={:.2}°",
+            eprintln!(
+                "after settle: y={:.4}, tilt={:.2}°",
                 b.position().y,
-                (b.rotation() * Vector3::y()).dot(&Vector3::y()).acos().to_degrees());
+                (b.rotation() * Vector3::y())
+                    .dot(&Vector3::y())
+                    .acos()
+                    .to_degrees()
+            );
         }
     }
 
@@ -164,9 +162,14 @@ fn keep_upright_capsule_with_velocity_zeroing() {
         }
     }
     let b = world.body(body).unwrap();
-    eprintln!("after move: y={:.4}, tilt={:.2}°",
+    eprintln!(
+        "after move: y={:.4}, tilt={:.2}°",
         b.position().y,
-        (b.rotation() * Vector3::y()).dot(&Vector3::y()).acos().to_degrees());
+        (b.rotation() * Vector3::y())
+            .dot(&Vector3::y())
+            .acos()
+            .to_degrees()
+    );
 
     // Phase 3: stop and observe (120 frames = 2s)
     for frame in 0..120 {
@@ -196,7 +199,10 @@ fn keep_upright_capsule_with_velocity_zeroing() {
     let local_up = b.rotation() * Vector3::y();
     let tilt = local_up.dot(&Vector3::y()).acos().to_degrees();
     eprintln!("final: y={:.4}, tilt={tilt:.2}°", b.position().y);
-    assert!(tilt < 10.0, "capsule should be near-upright: tilt={tilt:.1}°");
+    assert!(
+        tilt < 10.0,
+        "capsule should be near-upright: tilt={tilt:.1}°"
+    );
 }
 
 /// Validates the bench scenario runs and exports successfully.

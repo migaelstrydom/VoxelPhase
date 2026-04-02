@@ -93,8 +93,14 @@ pub fn gjk_raycast(
         // Create shape views offset to their positions at time `t`.
         let offset_a = displacement_a * t;
         let offset_b = displacement_b * t;
-        let shifted_a = TranslatedShape { shape: a, offset: offset_a };
-        let shifted_b = TranslatedShape { shape: b, offset: offset_b };
+        let shifted_a = TranslatedShape {
+            shape: a,
+            offset: offset_a,
+        };
+        let shifted_b = TranslatedShape {
+            shape: b,
+            offset: offset_b,
+        };
 
         let result = gjk_query(&shifted_a, &shifted_b);
 
@@ -399,7 +405,10 @@ mod tests {
         // Same displacement — zero relative motion.
         let disp = Vector3::new(5.0, 0.0, 0.0);
         let hit = gjk_raycast(&a, &b, disp, disp);
-        assert!(hit.is_none(), "Should not collide with zero relative velocity");
+        assert!(
+            hit.is_none(),
+            "Should not collide with zero relative velocity"
+        );
     }
 
     // --- Both shapes moving toward each other ---
@@ -423,11 +432,7 @@ mod tests {
 
         let h = hit.unwrap();
         // Distance = 8, rel speed = 10, t ≈ 0.8.
-        assert!(
-            (h.t - 0.8).abs() < 0.02,
-            "TOI should be ~0.8, got {}",
-            h.t,
-        );
+        assert!((h.t - 0.8).abs() < 0.02, "TOI should be ~0.8, got {}", h.t,);
     }
 
     // --- Rotated OBB approaching ---
@@ -455,6 +460,10 @@ mod tests {
         let hit = gjk_raycast(&a, &b, disp_a, disp_b);
         assert!(hit.is_some(), "Rotated OBB should hit");
         let h = hit.unwrap();
-        assert!(h.t > 0.0 && h.t < 1.0, "TOI should be in (0, 1), got {}", h.t);
+        assert!(
+            h.t > 0.0 && h.t < 1.0,
+            "TOI should be in (0, 1), got {}",
+            h.t
+        );
     }
 }

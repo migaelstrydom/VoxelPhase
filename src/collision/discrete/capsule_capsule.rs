@@ -44,7 +44,12 @@ pub fn capsule_capsule_manifold(
     let raw_depth = combined_radius - dist;
     let point = closest_a + normal * (cap_a.radius - raw_depth * 0.5);
 
-    ContactManifold::single(ContactPoint::new(point, normal, raw_depth, FeatureId::SINGLE))
+    ContactManifold::single(ContactPoint::new(
+        point,
+        normal,
+        raw_depth,
+        FeatureId::SINGLE,
+    ))
 }
 
 #[cfg(test)]
@@ -53,12 +58,7 @@ mod tests {
     use nalgebra::{Point3, UnitQuaternion};
 
     fn upright_capsule(x: f32, y: f32) -> Capsule {
-        Capsule::new(
-            Point3::new(x, y, 0.0),
-            UnitQuaternion::identity(),
-            1.0,
-            0.5,
-        )
+        Capsule::new(Point3::new(x, y, 0.0), UnitQuaternion::identity(), 1.0, 0.5)
     }
 
     #[test]
@@ -82,22 +82,12 @@ mod tests {
 
     #[test]
     fn perpendicular_capsules() {
-        let a = Capsule::new(
-            Point3::origin(),
-            UnitQuaternion::identity(),
-            1.0,
-            0.3,
-        );
+        let a = Capsule::new(Point3::origin(), UnitQuaternion::identity(), 1.0, 0.3);
         let rot_z = UnitQuaternion::from_axis_angle(
             &nalgebra::Unit::new_normalize(Vector3::z()),
             std::f32::consts::FRAC_PI_2,
         );
-        let b = Capsule::new(
-            Point3::new(0.0, 0.0, 0.0),
-            rot_z,
-            1.0,
-            0.3,
-        );
+        let b = Capsule::new(Point3::new(0.0, 0.0, 0.0), rot_z, 1.0, 0.3);
         let m = capsule_capsule_manifold(&a, &b, 0.0);
         assert_eq!(m.len(), 1);
         assert!(m.points[0].raw_depth > 0.0);

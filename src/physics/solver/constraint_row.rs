@@ -33,11 +33,7 @@ fn jacobian_dot_velocity(bodies: &Arena<RigidBody>, row: &ConstraintRow) -> f32 
 ///
 /// Linear: v += inv_mass * J_lin * impulse
 /// Angular: ω += I_world_inv * J_ang * impulse
-fn apply_constraint_impulse(
-    bodies: &mut Arena<RigidBody>,
-    row: &ConstraintRow,
-    impulse: f32,
-) {
+fn apply_constraint_impulse(bodies: &mut Arena<RigidBody>, row: &ConstraintRow, impulse: f32) {
     if let Some(handle) = row.body_a {
         if let Some(body) = bodies.get_mut(handle.0) {
             body.apply_impulse(row.lin_jac_a * impulse);
@@ -56,10 +52,7 @@ fn apply_constraint_impulse(
 }
 
 /// Solve one constraint row: compute impulse, clamp, apply to bodies.
-pub fn solve_constraint_row(
-    bodies: &mut Arena<RigidBody>,
-    row: &mut ConstraintRow,
-) {
+pub fn solve_constraint_row(bodies: &mut Arena<RigidBody>, row: &mut ConstraintRow) {
     let cdot = jacobian_dot_velocity(bodies, row);
 
     let lambda = row.effective_mass_inv * -(cdot + row.bias);

@@ -154,10 +154,7 @@ pub trait PhysicsBenchScenario {
     }
 }
 
-pub fn run_scenario<S: PhysicsBenchScenario>(
-    scenario: &S,
-    cfg: BenchRunConfig,
-) -> BenchRunResult {
+pub fn run_scenario<S: PhysicsBenchScenario>(scenario: &S, cfg: BenchRunConfig) -> BenchRunResult {
     let mut world = scenario.build_world();
     let tracked_body = scenario.setup(&mut world);
     let mut debug_lines = DebugLines::default();

@@ -71,7 +71,14 @@ pub fn capsule_patch_manifold(
         }
     }
 
-    extend_with_parallel_face_spans(seg_a, seg_b, expanded_radius, &patch.faces, &parallel_spans, &mut face_hits);
+    extend_with_parallel_face_spans(
+        seg_a,
+        seg_b,
+        expanded_radius,
+        &patch.faces,
+        &parallel_spans,
+        &mut face_hits,
+    );
 
     for edge in &patch.boundary_edges {
         if let Some(contact) = capsule_vs_edge(seg_a, seg_b, expanded_radius, edge) {
@@ -213,7 +220,8 @@ fn capsule_vs_face(
 
     if parallel_span.is_none() {
         for &(center, signed_dist) in &[(seg_a, signed_a), (seg_b, signed_b)] {
-            if let Some(contact) = sample_center_vs_face(center, signed_dist, expanded_radius, face) {
+            if let Some(contact) = sample_center_vs_face(center, signed_dist, expanded_radius, face)
+            {
                 results.push(contact);
             }
         }
@@ -299,9 +307,7 @@ fn projected_segment_face_interval(
     let projected_a = seg_a - normal * signed_a;
     let projected_b = seg_b - normal * signed_b;
     let centroid = {
-        let sum = verts
-            .iter()
-            .fold(Vector3::zeros(), |acc, v| acc + v.coords);
+        let sum = verts.iter().fold(Vector3::zeros(), |acc, v| acc + v.coords);
         Point3::from(sum / verts.len() as f32)
     };
 
@@ -412,9 +418,13 @@ fn push_parallel_span_contacts(
     span: MergedParallelFaceSpan,
     out: &mut SmallVec<[CapsuleContact; 4]>,
 ) {
-    if let Some(start) =
-        sample_axis_t_vs_face(seg_a, seg_b, expanded_radius, &faces[span.start_face_index], span.start_t)
-    {
+    if let Some(start) = sample_axis_t_vs_face(
+        seg_a,
+        seg_b,
+        expanded_radius,
+        &faces[span.start_face_index],
+        span.start_t,
+    ) {
         out.push(start);
     }
 
@@ -422,12 +432,16 @@ fn push_parallel_span_contacts(
         return;
     }
 
-    if let Some(end) =
-        sample_axis_t_vs_face(seg_a, seg_b, expanded_radius, &faces[span.end_face_index], span.end_t)
-    {
-        let duplicate = out
-            .last()
-            .map_or(false, |prev| (prev.point - end.point).magnitude_squared() < 1e-8);
+    if let Some(end) = sample_axis_t_vs_face(
+        seg_a,
+        seg_b,
+        expanded_radius,
+        &faces[span.end_face_index],
+        span.end_t,
+    ) {
+        let duplicate = out.last().map_or(false, |prev| {
+            (prev.point - end.point).magnitude_squared() < 1e-8
+        });
         if !duplicate {
             out.push(end);
         }
@@ -575,7 +589,11 @@ mod tests {
         let patch = flat_face(0.0);
         let m = capsule_patch_manifold(seg_a, seg_b, 0.5, &patch, 0.0);
 
-        assert_eq!(m.len(), 2, "horizontal capsule should produce 2 face contacts");
+        assert_eq!(
+            m.len(),
+            2,
+            "horizontal capsule should produce 2 face contacts"
+        );
         for c in &m.points[..2] {
             assert!(c.normal.y > 0.99);
             assert!(c.raw_depth.abs() < 1e-4);
@@ -594,7 +612,11 @@ mod tests {
         let patch = flat_face(0.0);
         let m = capsule_patch_manifold(seg_a, seg_b, 0.5, &patch, 0.1);
 
-        assert_eq!(m.len(), 2, "parallel margin capsule should produce 2 contacts");
+        assert_eq!(
+            m.len(),
+            2,
+            "parallel margin capsule should produce 2 contacts"
+        );
         for c in &m.points[..2] {
             assert!(c.normal.y > 0.99);
             assert!(c.raw_depth < 0.0, "should be speculative (negative depth)");
@@ -624,7 +646,11 @@ mod tests {
         let seg_b = Point3::new(3.0, 0.5, 0.0);
         let m = capsule_patch_manifold(seg_a, seg_b, 0.5, &patch, 0.0);
 
-        assert_eq!(m.len(), 2, "face overlap under the shaft should emit interior contacts");
+        assert_eq!(
+            m.len(),
+            2,
+            "face overlap under the shaft should emit interior contacts"
+        );
         let has_contact_near = |x: f32| m.points.iter().any(|c| (c.point.x - x).abs() < 0.15);
         assert!(has_contact_near(-1.0));
         assert!(has_contact_near(1.0));
@@ -644,7 +670,11 @@ mod tests {
         let seg_b = Point3::new(2.5, 0.5, 0.0);
         let m = capsule_patch_manifold(seg_a, seg_b, 0.5, &patch, 0.0);
 
-        assert_eq!(m.len(), 2, "adjacent coplanar spans should collapse to 2 contacts");
+        assert_eq!(
+            m.len(),
+            2,
+            "adjacent coplanar spans should collapse to 2 contacts"
+        );
         let has_contact_near = |x: f32| m.points.iter().any(|c| (c.point.x - x).abs() < 0.15);
         assert!(has_contact_near(-2.5));
         assert!(has_contact_near(2.5));
@@ -666,7 +696,11 @@ mod tests {
         let seg_b = Point3::new(2.5, 0.5, 0.0);
         let m = capsule_patch_manifold(seg_a, seg_b, 0.5, &patch, 0.0);
 
-        assert_eq!(m.len(), 2, "near-parallel resting cases should still collapse to 2 contacts");
+        assert_eq!(
+            m.len(),
+            2,
+            "near-parallel resting cases should still collapse to 2 contacts"
+        );
         let has_contact_near = |x: f32| m.points.iter().any(|c| (c.point.x - x).abs() < 0.15);
         assert!(has_contact_near(-2.5));
         assert!(has_contact_near(2.5));
@@ -687,7 +721,11 @@ mod tests {
         let seg_b = Point3::new(2.5, 0.5, 0.0);
         let m = capsule_patch_manifold(seg_a, seg_b, 0.5, &patch, 0.0);
 
-        assert_eq!(m.len(), 4, "disjoint coplanar support spans should stay separate");
+        assert_eq!(
+            m.len(),
+            4,
+            "disjoint coplanar support spans should stay separate"
+        );
         let has_contact_near = |x: f32| m.points.iter().any(|c| (c.point.x - x).abs() < 0.15);
         assert!(has_contact_near(-2.5));
         assert!(has_contact_near(-1.0));

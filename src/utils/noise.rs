@@ -49,8 +49,8 @@ pub fn fbm_2d_periodic(
     for i in 0..octaves {
         // Scale period with frequency to maintain tiling at each octave
         let octave_period = period.map(|p| (p as f32 * frequency) as i32);
-        total += noise_2d_periodic(x * frequency, y * frequency, seed + i, octave_period)
-            * amplitude;
+        total +=
+            noise_2d_periodic(x * frequency, y * frequency, seed + i, octave_period) * amplitude;
         max_value += amplitude;
         amplitude *= persistence;
         frequency *= lacunarity;

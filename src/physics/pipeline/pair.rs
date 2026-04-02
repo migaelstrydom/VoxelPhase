@@ -6,8 +6,8 @@
 use nalgebra::{Point3, Vector3};
 use smallvec::SmallVec;
 
-use crate::collision::contact::FeatureId;
 use crate::collision::contact::ContactManifold;
+use crate::collision::contact::FeatureId;
 use crate::physics::handle::{ColliderHandle, RigidBodyHandle};
 
 /// Metadata shared by all contacts in a collider pair manifold.

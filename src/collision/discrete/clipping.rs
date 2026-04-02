@@ -62,11 +62,7 @@ pub fn clip_polygon(
 /// `sign` selects which of the two parallel faces (+1.0 or -1.0).
 ///
 /// Returns `(vertices, center, tangent_u, tangent_v, half_u, half_v)`.
-pub fn obb_face(
-    obb: &Obb,
-    axis_index: usize,
-    sign: f32,
-) -> ObbFace {
+pub fn obb_face(obb: &Obb, axis_index: usize, sign: f32) -> ObbFace {
     let axes = obb.axes();
     let he = obb.half_extents;
 
@@ -124,10 +120,26 @@ impl ObbFace {
     ///
     /// The side planes are the edges of the face, extruded inward.
     pub fn clip_against_sides(&self, polygon: &[Point3<f32>]) -> ClipPolygon {
-        let clipped = clip_polygon(polygon, self.center + self.tangent_u * self.half_u, -self.tangent_u);
-        let clipped = clip_polygon(&clipped, self.center - self.tangent_u * self.half_u, self.tangent_u);
-        let clipped = clip_polygon(&clipped, self.center + self.tangent_v * self.half_v, -self.tangent_v);
-        clip_polygon(&clipped, self.center - self.tangent_v * self.half_v, self.tangent_v)
+        let clipped = clip_polygon(
+            polygon,
+            self.center + self.tangent_u * self.half_u,
+            -self.tangent_u,
+        );
+        let clipped = clip_polygon(
+            &clipped,
+            self.center - self.tangent_u * self.half_u,
+            self.tangent_u,
+        );
+        let clipped = clip_polygon(
+            &clipped,
+            self.center + self.tangent_v * self.half_v,
+            -self.tangent_v,
+        );
+        clip_polygon(
+            &clipped,
+            self.center - self.tangent_v * self.half_v,
+            self.tangent_v,
+        )
     }
 }
 
@@ -148,7 +160,11 @@ mod tests {
         let result = clip_polygon(&polygon, Point3::new(1.0, 0.0, 0.0), Vector3::x());
         assert!(!result.is_empty());
         for p in &result {
-            assert!(p.x >= 1.0 - 1e-6, "Point should be on inside, got x={}", p.x);
+            assert!(
+                p.x >= 1.0 - 1e-6,
+                "Point should be on inside, got x={}",
+                p.x
+            );
         }
     }
 

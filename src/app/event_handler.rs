@@ -48,23 +48,17 @@ impl EventHandler {
                         ..
                     },
                 ..
-            } => {
-                Self::handle_keyboard(key_code, state, window, world, elwt)
-            }
+            } => Self::handle_keyboard(key_code, state, window, world, elwt),
 
             Event::WindowEvent {
                 event: WindowEvent::MouseInput { state, button, .. },
                 ..
-            } => {
-                Self::handle_mouse_button(button, state, window, world)
-            }
+            } => Self::handle_mouse_button(button, state, window, world),
 
             Event::DeviceEvent {
                 event: DeviceEvent::MouseMotion { delta },
                 ..
-            } => {
-                Self::handle_mouse_motion(delta, world)
-            }
+            } => Self::handle_mouse_motion(delta, world),
 
             Event::AboutToWait => EventResult::Continue,
 

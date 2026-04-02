@@ -10,9 +10,9 @@ use nalgebra::{Vector2, Vector4};
 #[derive(Copy, Clone, Debug)]
 #[repr(C)]
 pub struct OverlayVertex {
-    pub pos: Vector2<f32>,      // Screen-space position in pixels
-    pub uv: Vector2<f32>,        // Texture coordinates
-    pub color: Vector4<f32>,     // RGBA color
+    pub pos: Vector2<f32>,   // Screen-space position in pixels
+    pub uv: Vector2<f32>,    // Texture coordinates
+    pub color: Vector4<f32>, // RGBA color
 }
 
 impl OverlayVertex {

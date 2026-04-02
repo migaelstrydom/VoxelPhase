@@ -16,12 +16,7 @@ pub trait ConstraintSolver {
     /// Called once per frame after contact generation, before substeps.
     /// The solver can snapshot body state, pre-process constraints,
     /// expand into internal representations, etc.
-    fn prepare(
-        &mut self,
-        bodies: &Arena<RigidBody>,
-        constraints: &Arena<Constraint>,
-        dt: f32,
-    );
+    fn prepare(&mut self, bodies: &Arena<RigidBody>, constraints: &Arena<Constraint>, dt: f32);
 
     /// Solve all constraints (contacts + joints) for one substep.
     ///

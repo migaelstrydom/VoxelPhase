@@ -339,9 +339,7 @@ fn draw_grab_debug(
                             let grab_point = body.position() + r_b;
                             overlays.add_sphere(grab_point, 0.05, Colour::GREEN);
                             // Line from hold point to grab point (constraint stretch)
-                            overlays.add_line_with_radius(
-                                hold, grab_point, 0.01, Colour::GREEN,
-                            );
+                            overlays.add_line_with_radius(hold, grab_point, 0.01, Colour::GREEN);
                         }
                     }
                 }

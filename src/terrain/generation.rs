@@ -27,8 +27,8 @@ pub fn generate_terrain(
         while z < bounds.max.z {
             let height = height_at(x, z, terrain);
 
-            let top_voxel_y = bounds.min.y
-                + (((height - bounds.min.y) / step).ceil() - 1.0).max(0.0) * step;
+            let top_voxel_y =
+                bounds.min.y + (((height - bounds.min.y) / step).ceil() - 1.0).max(0.0) * step;
 
             let mut y = bounds.min.y;
             while y < height {
@@ -46,7 +46,14 @@ pub fn generate_terrain(
 
     // Pass 2: volumetric features — place or carve voxels in 3D.
     for volume in &terrain.volumes {
-        apply_volume(svo, volume, &terrain.material_layers, durability, &bounds, step);
+        apply_volume(
+            svo,
+            volume,
+            &terrain.material_layers,
+            durability,
+            &bounds,
+            step,
+        );
     }
 }
 
@@ -181,7 +188,9 @@ fn apply_volume(
             half_extents: (hx, hy, hz),
             edge_noise,
         } => {
-            apply_island(svo, cx, cy, cz, hx, hy, hz, edge_noise, layers, durability, bounds, step);
+            apply_island(
+                svo, cx, cy, cz, hx, hy, hz, edge_noise, layers, durability, bounds, step,
+            );
         }
 
         VolumeFeature::Pillar {
@@ -189,7 +198,9 @@ fn apply_volume(
             height,
             radius,
         } => {
-            apply_pillar(svo, cx, cz, height, radius, layers, durability, bounds, step);
+            apply_pillar(
+                svo, cx, cz, height, radius, layers, durability, bounds, step,
+            );
         }
 
         VolumeFeature::Tunnel {
@@ -208,7 +219,9 @@ fn apply_volume(
             radius,
             thickness,
         } => {
-            apply_arch(svo, fx, fy, fz, tx, ty, tz, radius, thickness, layers, durability, bounds, step);
+            apply_arch(
+                svo, fx, fy, fz, tx, ty, tz, radius, thickness, layers, durability, bounds, step,
+            );
         }
     }
 }
@@ -216,8 +229,12 @@ fn apply_volume(
 /// Floating solid mass — a rounded box with optional noisy edges.
 fn apply_island(
     svo: &mut SparseVoxelOctree,
-    cx: f32, cy: f32, cz: f32,
-    hx: f32, hy: f32, hz: f32,
+    cx: f32,
+    cy: f32,
+    cz: f32,
+    hx: f32,
+    hy: f32,
+    hz: f32,
     edge_noise: f32,
     layers: &[MaterialLayer],
     durability: &DurabilityConfig,
@@ -251,8 +268,13 @@ fn apply_island(
                 // Displace surface with noise for organic edges
                 if edge_noise > 0.0 {
                     let n = fbm_2d_periodic(
-                        x * 0.5 + y * 0.3, z * 0.5 + y * 0.3,
-                        3, 0.5, 2.0, noise_seed, None,
+                        x * 0.5 + y * 0.3,
+                        z * 0.5 + y * 0.3,
+                        3,
+                        0.5,
+                        2.0,
+                        noise_seed,
+                        None,
                     );
                     sd += (n - 0.5) * edge_noise * 2.0;
                 }
@@ -276,8 +298,10 @@ fn apply_island(
 /// Vertical column rising from the heightfield surface.
 fn apply_pillar(
     svo: &mut SparseVoxelOctree,
-    cx: f32, cz: f32,
-    height: f32, radius: f32,
+    cx: f32,
+    cz: f32,
+    height: f32,
+    radius: f32,
     layers: &[MaterialLayer],
     durability: &DurabilityConfig,
     bounds: &AABB,
@@ -320,9 +344,13 @@ fn apply_pillar(
 /// Horizontal bore that carves a cylindrical tunnel through existing terrain.
 fn apply_tunnel(
     svo: &mut SparseVoxelOctree,
-    cx: f32, cz: f32,
-    dx: f32, dz: f32,
-    length: f32, radius: f32, depth: f32,
+    cx: f32,
+    cz: f32,
+    dx: f32,
+    dz: f32,
+    length: f32,
+    radius: f32,
+    depth: f32,
     bounds: &AABB,
     step: f32,
 ) {
@@ -386,9 +414,14 @@ fn apply_tunnel(
 /// Curved bridge (circular arc) between two 3D points.
 fn apply_arch(
     svo: &mut SparseVoxelOctree,
-    fx: f32, fy: f32, fz: f32,
-    tx: f32, ty: f32, tz: f32,
-    radius: f32, thickness: f32,
+    fx: f32,
+    fy: f32,
+    fz: f32,
+    tx: f32,
+    ty: f32,
+    tz: f32,
+    radius: f32,
+    thickness: f32,
     layers: &[MaterialLayer],
     durability: &DurabilityConfig,
     bounds: &AABB,
@@ -502,14 +535,7 @@ fn point_to_segment_dist(px: f32, pz: f32, ax: f32, az: f32, bx: f32, bz: f32) -
 
 /// Project point (px, pz) onto segment (ax, az)→(bx, bz).
 /// Returns (t, perpendicular_distance) where t is the clamped [0,1] parameter.
-fn point_to_segment_projection(
-    px: f32,
-    pz: f32,
-    ax: f32,
-    az: f32,
-    bx: f32,
-    bz: f32,
-) -> (f32, f32) {
+fn point_to_segment_projection(px: f32, pz: f32, ax: f32, az: f32, bx: f32, bz: f32) -> (f32, f32) {
     let abx = bx - ax;
     let abz = bz - az;
     let len_sq = abx * abx + abz * abz;

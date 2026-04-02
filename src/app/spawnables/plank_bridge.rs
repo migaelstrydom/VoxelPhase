@@ -88,11 +88,7 @@ impl PlankBridgeDef {
     fn plank_he(&self) -> Vector3<f32> {
         // Override plank X to span beam spacing + overhang.
         let span_x = self.beam_spacing / 2.0 + self.beam_half_extents.0 + 0.25;
-        Vector3::new(
-            span_x,
-            self.plank_half_extents.1,
-            self.plank_half_extents.2,
-        )
+        Vector3::new(span_x, self.plank_half_extents.1, self.plank_half_extents.2)
     }
 
     fn child_count(&self) -> usize {
@@ -164,9 +160,14 @@ impl Spawnable for PlankBridgeDef {
                 let z = start_z + (i as f32 + 0.5) * base_spacing + jitter_z;
                 let half_w = plank_he.z * width_factor;
                 let yaw = pseudo_range(h, 3) * 0.18;
-                let z_footprint =
-                    plank_he.x * yaw.abs().sin() + half_w * yaw.abs().cos();
-                PlankLayout { z, half_w, yaw, z_footprint, hash: h }
+                let z_footprint = plank_he.x * yaw.abs().sin() + half_w * yaw.abs().cos();
+                PlankLayout {
+                    z,
+                    half_w,
+                    yaw,
+                    z_footprint,
+                    hash: h,
+                }
             })
             .collect();
 
@@ -289,7 +290,9 @@ impl Spawnable for PlankBridgeDef {
 
 /// Deterministic float in [-1, 1] from a hash and channel index.
 fn pseudo_range(hash: u32, channel: u32) -> f32 {
-    let h = hash.wrapping_mul(2654435761).wrapping_add(channel.wrapping_mul(374761393));
+    let h = hash
+        .wrapping_mul(2654435761)
+        .wrapping_add(channel.wrapping_mul(374761393));
     let h = (h ^ (h >> 16)).wrapping_mul(0x45d9f3b);
     ((h & 0xFFFF) as f32 / 32768.0) - 1.0
 }
@@ -364,8 +367,7 @@ fn generate_plank_wood() -> Vec<u8> {
             let nail = nail_holes(u, v);
 
             // Subtle weathering.
-            let weather =
-                fbm_2d_periodic(u * 8.0, v * 8.0, 2, 0.4, 2.0, seed + 5, Some(8));
+            let weather = fbm_2d_periodic(u * 8.0, v * 8.0, 2, 0.4, 2.0, seed + 5, Some(8));
             let weather_factor = 0.92 + weather * 0.08;
 
             let mut c = base.scale(grain_factor * saw_factor * weather_factor);

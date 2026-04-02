@@ -604,8 +604,16 @@ impl ProbeTarget for TerrainManager {
     ) -> Option<ProbeHit> {
         let end = origin + direction * length;
         let sweep_aabb = AABB::new(
-            Point3::new(origin.x.min(end.x), origin.y.min(end.y), origin.z.min(end.z)),
-            Point3::new(origin.x.max(end.x), origin.y.max(end.y), origin.z.max(end.z)),
+            Point3::new(
+                origin.x.min(end.x),
+                origin.y.min(end.y),
+                origin.z.min(end.z),
+            ),
+            Point3::new(
+                origin.x.max(end.x),
+                origin.y.max(end.y),
+                origin.z.max(end.z),
+            ),
         );
         let patch = self.query_region(&sweep_aabb);
 

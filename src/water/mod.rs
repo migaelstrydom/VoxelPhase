@@ -16,7 +16,7 @@ mod properties;
 pub mod sleep_tracker;
 mod wave;
 
-pub use coupling::{BodySnapshot, SplashEvent, WakeEvent, WaveCouplingConfig, WaveBodyCoupler};
+pub use coupling::{BodySnapshot, SplashEvent, WakeEvent, WaveBodyCoupler, WaveCouplingConfig};
 pub use grid::{WaterCell, WaterGrid, WaterGridConfig};
 pub use properties::WaterProperties;
 pub use sleep_tracker::WaterSleepTracker;

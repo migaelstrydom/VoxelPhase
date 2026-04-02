@@ -47,7 +47,11 @@ pub(crate) fn solve_normal_impulse(
         {
             let ab = state.pos_b - state.pos_a;
             let len = ab.magnitude();
-            if len > 1e-6 { contact.normal.dot(&ab) / len } else { 0.0 }
+            if len > 1e-6 {
+                contact.normal.dot(&ab) / len
+            } else {
+                0.0
+            }
         }
     );
 

@@ -69,9 +69,9 @@ impl ConstraintKind {
     pub fn references_body(&self, handle: RigidBodyHandle) -> bool {
         match self {
             ConstraintKind::KeepUpright { body, .. } => *body == handle,
-            ConstraintKind::FollowPoint {
-                body_a, body_b, ..
-            } => *body_a == handle || *body_b == handle,
+            ConstraintKind::FollowPoint { body_a, body_b, .. } => {
+                *body_a == handle || *body_b == handle
+            }
         }
     }
 
@@ -79,9 +79,9 @@ impl ConstraintKind {
     pub fn referenced_bodies(&self) -> SmallVec<[RigidBodyHandle; 2]> {
         match self {
             ConstraintKind::KeepUpright { body, .. } => smallvec::smallvec![*body],
-            ConstraintKind::FollowPoint {
-                body_a, body_b, ..
-            } => smallvec::smallvec![*body_a, *body_b],
+            ConstraintKind::FollowPoint { body_a, body_b, .. } => {
+                smallvec::smallvec![*body_a, *body_b]
+            }
         }
     }
 }

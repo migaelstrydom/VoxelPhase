@@ -593,10 +593,12 @@ impl TextureManager {
         rgba_data: &[u8],
         generate_mipmaps: bool,
     ) -> EngineResult<TextureHandle> {
-        let texture = Arc::new(
-            self.texture_factory
-                .create_from_rgba(width, height, rgba_data, generate_mipmaps)?,
-        );
+        let texture = Arc::new(self.texture_factory.create_from_rgba(
+            width,
+            height,
+            rgba_data,
+            generate_mipmaps,
+        )?);
 
         let mut inner = self.inner.lock().unwrap();
         let id = inner.next_id;

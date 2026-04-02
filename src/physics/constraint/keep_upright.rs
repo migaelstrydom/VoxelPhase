@@ -58,10 +58,8 @@ pub fn expand(
     } else {
         0.0
     };
-    let eff_mass_1 =
-        1.0 / ((inv_inertia_ws * perp1).dot(&perp1) + compliance_term);
-    let eff_mass_2 =
-        1.0 / ((inv_inertia_ws * perp2).dot(&perp2) + compliance_term);
+    let eff_mass_1 = 1.0 / ((inv_inertia_ws * perp1).dot(&perp1) + compliance_term);
+    let eff_mass_2 = 1.0 / ((inv_inertia_ws * perp2).dot(&perp2) + compliance_term);
 
     // Bias: position correction drives error toward zero
     let bias_1 = -(beta / dt) * error_1;

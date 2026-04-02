@@ -251,7 +251,11 @@ fn sphere_vs_edge(
 ///
 /// Works for both CW and CCW winding: a point is inside iff it's on the
 /// same side of all edges (all cross products have the same sign).
-pub(crate) fn point_in_convex_polygon(point: &Point3<f32>, verts: &[Point3<f32>], normal: &Vector3<f32>) -> bool {
+pub(crate) fn point_in_convex_polygon(
+    point: &Point3<f32>,
+    verts: &[Point3<f32>],
+    normal: &Vector3<f32>,
+) -> bool {
     let n = verts.len();
     let mut positive = 0u32;
     let mut negative = 0u32;
@@ -271,7 +275,11 @@ pub(crate) fn point_in_convex_polygon(point: &Point3<f32>, verts: &[Point3<f32>]
 }
 
 /// Closest point on a line segment to a query point.
-pub(crate) fn closest_point_on_segment(p: Point3<f32>, a: Point3<f32>, b: Point3<f32>) -> Point3<f32> {
+pub(crate) fn closest_point_on_segment(
+    p: Point3<f32>,
+    a: Point3<f32>,
+    b: Point3<f32>,
+) -> Point3<f32> {
     let ab = b - a;
     let len_sq = ab.magnitude_squared();
     if len_sq < 1e-12 {
@@ -313,8 +321,16 @@ mod tests {
 
         assert_eq!(m.len(), 1);
         let c = &m.points[0];
-        assert!(c.normal.y > 0.99, "Normal should point up, got {:?}", c.normal);
-        assert!(c.raw_depth.abs() < 1e-4, "Should be touching, got {}", c.raw_depth);
+        assert!(
+            c.normal.y > 0.99,
+            "Normal should point up, got {:?}",
+            c.normal
+        );
+        assert!(
+            c.raw_depth.abs() < 1e-4,
+            "Should be touching, got {}",
+            c.raw_depth
+        );
         assert!(c.depth.abs() < 1e-4);
     }
 
@@ -325,7 +341,11 @@ mod tests {
 
         assert_eq!(m.len(), 1);
         let c = &m.points[0];
-        assert!((c.raw_depth - 0.2).abs() < 1e-4, "Expected ~0.2 depth, got {}", c.raw_depth);
+        assert!(
+            (c.raw_depth - 0.2).abs() < 1e-4,
+            "Expected ~0.2 depth, got {}",
+            c.raw_depth
+        );
     }
 
     #[test]
@@ -343,7 +363,11 @@ mod tests {
 
         assert_eq!(m.len(), 1);
         let c = &m.points[0];
-        assert!(c.raw_depth < 0.0, "Should be margin-only, got {}", c.raw_depth);
+        assert!(
+            c.raw_depth < 0.0,
+            "Should be margin-only, got {}",
+            c.raw_depth
+        );
         assert_eq!(c.depth, 0.0);
     }
 

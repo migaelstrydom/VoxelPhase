@@ -90,7 +90,6 @@ impl WaterGrid {
     /// Must be greater than `MIN_VOLUME` to prevent flicker at the shoreline.
     const REWET_VOLUME: f32 = 5e-2;
 
-
     /// Create a new water grid from geometry configuration and physical properties.
     pub fn new(config: WaterGridConfig, properties: &WaterProperties) -> Self {
         let total = config.dims.0 * config.dims.1;

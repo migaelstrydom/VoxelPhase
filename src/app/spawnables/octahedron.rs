@@ -56,9 +56,9 @@ impl Spawnable for OctahedronDef {
 
     fn create_materials(&self, ctx: &mut MaterialCtx) -> EngineResult<Vec<MaterialId>> {
         let pixels = generate_metallic_texture();
-        let texture =
-            ctx.textures
-                .create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &pixels, true)?;
+        let texture = ctx
+            .textures
+            .create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &pixels, true)?;
         let material = Material::textured(texture);
         Ok(vec![ctx.materials.register(material)])
     }
@@ -129,15 +129,39 @@ fn octahedron_geometry(edge: f32) -> (Vec<Vector3<f32>>, Vec<SolidFace>) {
     // opposite side of the origin from the face.
     let faces = vec![
         // Upper four faces (contain vertex 0 = +Y), opposite is 1 = -Y.
-        SolidFace { vertex_indices: vec![0, 4, 2], opposite_vertex: 1 },
-        SolidFace { vertex_indices: vec![0, 2, 5], opposite_vertex: 1 },
-        SolidFace { vertex_indices: vec![0, 5, 3], opposite_vertex: 1 },
-        SolidFace { vertex_indices: vec![0, 3, 4], opposite_vertex: 1 },
+        SolidFace {
+            vertex_indices: vec![0, 4, 2],
+            opposite_vertex: 1,
+        },
+        SolidFace {
+            vertex_indices: vec![0, 2, 5],
+            opposite_vertex: 1,
+        },
+        SolidFace {
+            vertex_indices: vec![0, 5, 3],
+            opposite_vertex: 1,
+        },
+        SolidFace {
+            vertex_indices: vec![0, 3, 4],
+            opposite_vertex: 1,
+        },
         // Lower four faces (contain vertex 1 = -Y), opposite is 0 = +Y.
-        SolidFace { vertex_indices: vec![1, 2, 4], opposite_vertex: 0 },
-        SolidFace { vertex_indices: vec![1, 5, 2], opposite_vertex: 0 },
-        SolidFace { vertex_indices: vec![1, 3, 5], opposite_vertex: 0 },
-        SolidFace { vertex_indices: vec![1, 4, 3], opposite_vertex: 0 },
+        SolidFace {
+            vertex_indices: vec![1, 2, 4],
+            opposite_vertex: 0,
+        },
+        SolidFace {
+            vertex_indices: vec![1, 5, 2],
+            opposite_vertex: 0,
+        },
+        SolidFace {
+            vertex_indices: vec![1, 3, 5],
+            opposite_vertex: 0,
+        },
+        SolidFace {
+            vertex_indices: vec![1, 4, 3],
+            opposite_vertex: 0,
+        },
     ];
 
     (vertices, faces)

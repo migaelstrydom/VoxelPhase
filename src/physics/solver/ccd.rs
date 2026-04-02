@@ -19,10 +19,9 @@ pub(crate) fn solve_contacts(
     for manifold in manifolds.iter_mut() {
         let header = &manifold.header;
         for contact in manifold.contacts.iter_mut() {
-            let pre_solve_vn =
-                BodyPairState::extract(bodies, header, contact.point, no_shock)
-                    .map(|state| state.relative_normal_velocity(contact.point, &contact.normal))
-                    .unwrap_or(0.0);
+            let pre_solve_vn = BodyPairState::extract(bodies, header, contact.point, no_shock)
+                .map(|state| state.relative_normal_velocity(contact.point, &contact.normal))
+                .unwrap_or(0.0);
             solve_normal_impulse(
                 bodies,
                 header,

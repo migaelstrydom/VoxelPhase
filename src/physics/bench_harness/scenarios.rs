@@ -1070,8 +1070,7 @@ impl PhysicsBenchScenario for KeepUprightScenario {
 
     fn setup(&self, world: &mut PhysicsWorld) -> RigidBodyHandle {
         let spawn_y = self.half_height + self.radius + 0.01;
-        let mut desc = RigidBodyDesc::dynamic()
-            .position(Point3::new(0.0, spawn_y, 0.0));
+        let mut desc = RigidBodyDesc::dynamic().position(Point3::new(0.0, spawn_y, 0.0));
         desc.angular_velocity = self.initial_angular_velocity;
         let body = world.create_body(desc);
         let collider = ColliderDesc::capsule(self.half_height, self.radius)
@@ -1178,10 +1177,7 @@ impl PhysicsBenchScenario for JengaCrossWobbleScenario {
         let top_x = 0.0;
         let top_z = 0.013;
 
-        let yaw = UnitQuaternion::from_axis_angle(
-            &Vector3::y_axis(),
-            std::f32::consts::FRAC_PI_2,
-        );
+        let yaw = UnitQuaternion::from_axis_angle(&Vector3::y_axis(), std::f32::consts::FRAC_PI_2);
         let tilt = UnitQuaternion::from_axis_angle(&Vector3::z_axis(), self.tilt_rad);
         let rotation = tilt * yaw;
 
@@ -1263,9 +1259,11 @@ impl PhysicsBenchScenario for CompoundTableScenario {
         let top_y = table_height * 0.5 - top_he.y;
         let leg_y = -top_he.y;
 
-        let body = world.create_body(
-            RigidBodyDesc::dynamic().position(Point3::new(0.0, self.spawn_height, 0.0)),
-        );
+        let body = world.create_body(RigidBodyDesc::dynamic().position(Point3::new(
+            0.0,
+            self.spawn_height,
+            0.0,
+        )));
 
         // Table top
         let _ = world.attach_collider(
@@ -1304,4 +1302,3 @@ impl PhysicsBenchScenario for CompoundTableScenario {
         &self.geometry
     }
 }
-

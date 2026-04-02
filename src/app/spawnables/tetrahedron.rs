@@ -56,9 +56,9 @@ impl Spawnable for TetrahedronDef {
 
     fn create_materials(&self, ctx: &mut MaterialCtx) -> EngineResult<Vec<MaterialId>> {
         let pixels = generate_faceted_texture();
-        let texture =
-            ctx.textures
-                .create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &pixels, true)?;
+        let texture = ctx
+            .textures
+            .create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &pixels, true)?;
         let material = Material::textured(texture);
         Ok(vec![ctx.materials.register(material)])
     }
@@ -130,10 +130,22 @@ fn tetrahedron_geometry(edge: f32) -> (Vec<Vector3<f32>>, Vec<SolidFace>) {
 
     let vertices = vec![top, v0, v1, v2];
     let faces = vec![
-        SolidFace { vertex_indices: vec![1, 2, 3], opposite_vertex: 0 },
-        SolidFace { vertex_indices: vec![0, 2, 1], opposite_vertex: 3 },
-        SolidFace { vertex_indices: vec![0, 3, 2], opposite_vertex: 1 },
-        SolidFace { vertex_indices: vec![0, 1, 3], opposite_vertex: 2 },
+        SolidFace {
+            vertex_indices: vec![1, 2, 3],
+            opposite_vertex: 0,
+        },
+        SolidFace {
+            vertex_indices: vec![0, 2, 1],
+            opposite_vertex: 3,
+        },
+        SolidFace {
+            vertex_indices: vec![0, 3, 2],
+            opposite_vertex: 1,
+        },
+        SolidFace {
+            vertex_indices: vec![0, 1, 3],
+            opposite_vertex: 2,
+        },
     ];
 
     (vertices, faces)

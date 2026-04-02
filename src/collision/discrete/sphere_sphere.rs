@@ -45,7 +45,12 @@ pub fn sphere_sphere_manifold(
     // Contact point on the surface between the two spheres.
     let point = center_a + normal * (radius_a - raw_depth * 0.5);
 
-    ContactManifold::single(ContactPoint::new(point, normal, raw_depth, FeatureId::SINGLE))
+    ContactManifold::single(ContactPoint::new(
+        point,
+        normal,
+        raw_depth,
+        FeatureId::SINGLE,
+    ))
 }
 
 #[cfg(test)]
@@ -93,19 +98,17 @@ mod tests {
         );
         assert_eq!(m.len(), 1);
         let cp = &m.points[0];
-        assert!(cp.raw_depth < 0.0, "Should be margin-only, got raw_depth={}", cp.raw_depth);
+        assert!(
+            cp.raw_depth < 0.0,
+            "Should be margin-only, got raw_depth={}",
+            cp.raw_depth
+        );
         assert_eq!(cp.depth, 0.0, "Solver depth should be clamped to 0");
     }
 
     #[test]
     fn coincident_spheres() {
-        let m = sphere_sphere_manifold(
-            Point3::origin(),
-            1.0,
-            Point3::origin(),
-            1.0,
-            0.0,
-        );
+        let m = sphere_sphere_manifold(Point3::origin(), 1.0, Point3::origin(), 1.0, 0.0);
         assert_eq!(m.len(), 1);
         let cp = &m.points[0];
         assert_eq!(cp.normal, Vector3::y());

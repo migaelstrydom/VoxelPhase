@@ -457,8 +457,7 @@ fn rendered_level(
     wj: usize,
     cell_area: f32,
 ) -> f32 {
-    bulk_level_at(flow_grid, wave_grid, wi, wj, cell_area)
-        + wave_grid.cell(wi, wj).displacement
+    bulk_level_at(flow_grid, wave_grid, wi, wj, cell_area) + wave_grid.cell(wi, wj).displacement
 }
 
 /// Helper to cast a slice of f32 to bytes.

@@ -85,12 +85,7 @@ pub fn begin_reach(
     player_body: RigidBodyHandle,
     config: &GrabConfig,
 ) -> ArmState {
-    let probe_hit = physics.probe_bodies(
-        player_pos,
-        facing,
-        config.grab_range,
-        &[player_body],
-    );
+    let probe_hit = physics.probe_bodies(player_pos, facing, config.grab_range, &[player_body]);
     ArmState::Reaching {
         elapsed: 0.0,
         target: probe_hit.map(|h| (h.body, h.hit.point)),

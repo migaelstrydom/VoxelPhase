@@ -153,10 +153,26 @@ impl Spawnable for TableDef {
         let joint_threshold = 10.0;
         let fracture = CompoundFracture {
             joints: vec![
-                FractureJoint { child_a: 0, child_b: 1, threshold: joint_threshold },
-                FractureJoint { child_a: 0, child_b: 2, threshold: joint_threshold },
-                FractureJoint { child_a: 0, child_b: 3, threshold: joint_threshold },
-                FractureJoint { child_a: 0, child_b: 4, threshold: joint_threshold },
+                FractureJoint {
+                    child_a: 0,
+                    child_b: 1,
+                    threshold: joint_threshold,
+                },
+                FractureJoint {
+                    child_a: 0,
+                    child_b: 2,
+                    threshold: joint_threshold,
+                },
+                FractureJoint {
+                    child_a: 0,
+                    child_b: 3,
+                    threshold: joint_threshold,
+                },
+                FractureJoint {
+                    child_a: 0,
+                    child_b: 4,
+                    threshold: joint_threshold,
+                },
             ],
             child_count: 5,
             material: materials[0],

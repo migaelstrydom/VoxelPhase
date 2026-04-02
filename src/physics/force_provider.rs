@@ -51,9 +51,5 @@ pub trait SubstepForceProvider {
 
     /// Compute force, torque, and drag for a single body.
     /// Called for each handle returned by `affected_bodies()`.
-    fn compute_force(
-        &self,
-        handle: RigidBodyHandle,
-        ctx: &ForceContext,
-    ) -> ForceOutput;
+    fn compute_force(&self, handle: RigidBodyHandle, ctx: &ForceContext) -> ForceOutput;
 }

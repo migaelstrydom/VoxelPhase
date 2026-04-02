@@ -82,11 +82,7 @@ impl ConvexSupport for Capsule {
         }
         let (a, b) = self.segment_endpoints();
         // Pick the segment endpoint furthest along direction.
-        let endpoint = if direction.dot(&(b - a)) >= 0.0 {
-            b
-        } else {
-            a
-        };
+        let endpoint = if direction.dot(&(b - a)) >= 0.0 { b } else { a };
         // Inflate by radius in the given direction.
         endpoint + direction * (self.radius / len)
     }

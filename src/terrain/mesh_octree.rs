@@ -439,7 +439,14 @@ impl MeshOctree {
 
         // Step 2: Collect triangles owned by affected leaves.
         let mut affected_triangles: Vec<(u64, u8, u32, AABB)> = Vec::new();
-        Self::collect_triangles_from_region(&self.root, 0, 0, region, &affected_set, &mut affected_triangles);
+        Self::collect_triangles_from_region(
+            &self.root,
+            0,
+            0,
+            region,
+            &affected_set,
+            &mut affected_triangles,
+        );
 
         // Step 3: Clear neighbor_refs on affected leaves and remove stale refs
         // from non-affected leaves. Expand the prune region so we visit
@@ -463,9 +470,7 @@ impl MeshOctree {
 
         // Step 4: For each affected triangle, insert refs into all overlapping leaves.
         for &(path, depth, tri_idx, ref aabb) in &affected_triangles {
-            Self::add_neighbor_refs_for_triangle(
-                &mut self.root, 0, 0, path, depth, tri_idx, aabb,
-            );
+            Self::add_neighbor_refs_for_triangle(&mut self.root, 0, 0, path, depth, tri_idx, aabb);
         }
 
         // Step 5: For each affected leaf, find non-affected triangles that overlap
@@ -473,7 +478,12 @@ impl MeshOctree {
         for &(leaf_path, leaf_depth, ref leaf_bounds) in &affected_leaves {
             let mut overlapping: Vec<(u64, u8, u32, AABB)> = Vec::new();
             Self::collect_triangles_overlapping(
-                &self.root, 0, 0, leaf_bounds, &affected_set, &mut overlapping,
+                &self.root,
+                0,
+                0,
+                leaf_bounds,
+                &affected_set,
+                &mut overlapping,
             );
             for (tri_path, tri_depth, tri_idx, _) in overlapping {
                 // Only add if the triangle is from a different leaf than this one.
@@ -540,7 +550,14 @@ impl MeshOctree {
             MeshNodeContent::Interior(children) => {
                 for (i, child) in children.iter().enumerate() {
                     let child_path = path | ((i as u64) << (depth * 3));
-                    Self::collect_triangles_from_region(child, depth + 1, child_path, region, affected_set, out);
+                    Self::collect_triangles_from_region(
+                        child,
+                        depth + 1,
+                        child_path,
+                        region,
+                        affected_set,
+                        out,
+                    );
                 }
             }
         }
@@ -574,7 +591,13 @@ impl MeshOctree {
             MeshNodeContent::Interior(children) => {
                 for (i, child) in children.iter_mut().enumerate() {
                     let child_path = path | ((i as u64) << (depth * 3));
-                    Self::clear_and_prune_neighbor_refs(child, depth + 1, child_path, prune_region, affected_set);
+                    Self::clear_and_prune_neighbor_refs(
+                        child,
+                        depth + 1,
+                        child_path,
+                        prune_region,
+                        affected_set,
+                    );
                 }
             }
         }
@@ -607,7 +630,14 @@ impl MeshOctree {
             MeshNodeContent::Interior(children) => {
                 for (i, child) in children.iter().enumerate() {
                     let child_path = path | ((i as u64) << (depth * 3));
-                    Self::collect_triangles_overlapping(child, depth + 1, child_path, bounds, affected_set, out);
+                    Self::collect_triangles_overlapping(
+                        child,
+                        depth + 1,
+                        child_path,
+                        bounds,
+                        affected_set,
+                        out,
+                    );
                 }
             }
         }
@@ -869,7 +899,15 @@ impl MeshOctree {
         let mut best_t = max_t;
         let mut seen = HashSet::new();
         self.ray_cast_recursive(
-            &self.root, 0, 0, origin, direction, inv_dir, &mut best_t, &mut best, &mut seen,
+            &self.root,
+            0,
+            0,
+            origin,
+            direction,
+            inv_dir,
+            &mut best_t,
+            &mut best,
+            &mut seen,
         );
         best
     }
@@ -920,7 +958,14 @@ impl MeshOctree {
                 for (i, child) in children.iter().enumerate() {
                     let child_path = path | ((i as u64) << (depth * 3));
                     self.ray_cast_recursive(
-                        child, depth + 1, child_path, origin, direction, inv_dir, best_t, best,
+                        child,
+                        depth + 1,
+                        child_path,
+                        origin,
+                        direction,
+                        inv_dir,
+                        best_t,
+                        best,
                         seen,
                     );
                 }
@@ -955,7 +1000,14 @@ impl MeshOctree {
                 for (i, child) in children.iter().enumerate() {
                     let child_path = path | ((i as u64) << (depth * 3));
                     self.ray_cast_all_recursive(
-                        child, depth + 1, child_path, origin, direction, inv_dir, max_t, hits,
+                        child,
+                        depth + 1,
+                        child_path,
+                        origin,
+                        direction,
+                        inv_dir,
+                        max_t,
+                        hits,
                         seen,
                     );
                 }
@@ -1481,7 +1533,10 @@ mod tests {
             let v = tri.v0;
             (v.x - 4.0).abs() < 0.01 && (v.y - 1.0).abs() < 0.01
         });
-        assert!(has_spanning, "Boundary-spanning triangle should still be queryable after region rebuild");
+        assert!(
+            has_spanning,
+            "Boundary-spanning triangle should still be queryable after region rebuild"
+        );
 
         // Verify against global rebuild.
         octree.rebuild_neighbor_refs();

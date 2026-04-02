@@ -456,7 +456,8 @@ mod tests {
         let mass = volume * density;
 
         let hull_inertia = hull.compute_inertia(mass);
-        let box_inertia = crate::physics::ColliderShape::Box { half_extents: he }.compute_inertia(mass);
+        let box_inertia =
+            crate::physics::ColliderShape::Box { half_extents: he }.compute_inertia(mass);
 
         for i in 0..3 {
             for j in 0..3 {

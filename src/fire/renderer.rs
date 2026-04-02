@@ -152,12 +152,7 @@ impl FireRenderer {
         for (_, fire) in existing_fires {
             counts[fire.sim_slot] += 1;
         }
-        counts
-            .iter()
-            .enumerate()
-            .min_by_key(|(_, &c)| c)
-            .unwrap()
-            .0
+        counts.iter().enumerate().min_by_key(|(_, &c)| c).unwrap().0
     }
 
     /// Simulation time scale. Values > 1.0 make fire evolve faster
@@ -669,11 +664,7 @@ fn transition_volumes_for_compute(
     }
 }
 
-fn transition_field_for_read(
-    device: &ash::Device,
-    cb: vk::CommandBuffer,
-    volume: &FireVolume,
-) {
+fn transition_field_for_read(device: &ash::Device, cb: vk::CommandBuffer, volume: &FireVolume) {
     let src = volume.src();
     let barrier = vk::ImageMemoryBarrier::default()
         .image(volume.field[src].image)
@@ -702,11 +693,7 @@ fn transition_field_for_read(
     }
 }
 
-fn update_render_volume_binding(
-    device: &ash::Device,
-    set: vk::DescriptorSet,
-    volume: &FireVolume,
-) {
+fn update_render_volume_binding(device: &ash::Device, set: vk::DescriptorSet, volume: &FireVolume) {
     let src = volume.src();
     let volume_info = vk::DescriptorImageInfo::default()
         .sampler(volume.field[src].sampler)

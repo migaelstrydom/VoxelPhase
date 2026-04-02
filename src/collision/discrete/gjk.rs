@@ -202,8 +202,7 @@ pub fn gjk_query_seeded(
             stall_count = 0;
         } else {
             stall_count += 1;
-            if stall_count >= STALL_LIMIT && simplex.count >= 2
-                && min_dist_sq < 0.25 * bounding_sq
+            if stall_count >= STALL_LIMIT && simplex.count >= 2 && min_dist_sq < 0.25 * bounding_sq
             {
                 // A bad warm-start seed can occasionally stall on a separated
                 // pair and satisfy the heuristic above. Re-run once without a
@@ -469,10 +468,7 @@ fn extract_closest_points(simplex: &GjkSimplex) -> (Point3<f32>, Point3<f32>, f3
             let v = &simplex.vertices[0];
             (v.support_a, v.support_b, v.point.coords.magnitude())
         }
-        2 => closest_on_line_segment(
-            &simplex.vertices[0],
-            &simplex.vertices[1],
-        ),
+        2 => closest_on_line_segment(&simplex.vertices[0], &simplex.vertices[1]),
         3 => closest_on_triangle(
             &simplex.vertices[0],
             &simplex.vertices[1],
@@ -590,8 +586,10 @@ fn closest_on_triangle(
     let v = vb / denom;
     let w = 1.0 - u - v;
 
-    let closest_a = Point3::from(v0.support_a.coords * w + v1.support_a.coords * u + v2.support_a.coords * v);
-    let closest_b = Point3::from(v0.support_b.coords * w + v1.support_b.coords * u + v2.support_b.coords * v);
+    let closest_a =
+        Point3::from(v0.support_a.coords * w + v1.support_a.coords * u + v2.support_a.coords * v);
+    let closest_b =
+        Point3::from(v0.support_b.coords * w + v1.support_b.coords * u + v2.support_b.coords * v);
     let closest_mink = a * w + b * u + c * v;
     (closest_a, closest_b, closest_mink.magnitude())
 }
@@ -667,7 +665,10 @@ mod tests {
                 assert!(simplex.count >= 1, "Simplex should have at least 1 vertex");
             }
             GjkResult::Separated { distance, .. } => {
-                panic!("Expected Intersecting, got Separated with distance {}", distance);
+                panic!(
+                    "Expected Intersecting, got Separated with distance {}",
+                    distance
+                );
             }
         }
     }
@@ -718,7 +719,10 @@ mod tests {
         match gjk_query(&a, &b) {
             GjkResult::Intersecting { .. } => {}
             GjkResult::Separated { distance, .. } => {
-                panic!("Expected Intersecting, got Separated with distance {}", distance);
+                panic!(
+                    "Expected Intersecting, got Separated with distance {}",
+                    distance
+                );
             }
         }
     }
@@ -798,7 +802,10 @@ mod tests {
         match gjk_query(&a, &b) {
             GjkResult::Intersecting { .. } => {}
             GjkResult::Separated { distance, .. } => {
-                panic!("Expected Intersecting, got Separated with distance {}", distance);
+                panic!(
+                    "Expected Intersecting, got Separated with distance {}",
+                    distance
+                );
             }
         }
     }
@@ -894,11 +901,7 @@ mod tests {
             &nalgebra::Unit::new_normalize(Vector3::y()),
             std::f32::consts::FRAC_PI_4,
         );
-        let a = Obb::new(
-            Point3::new(0.0, 0.0, 0.0),
-            rot,
-            Vector3::new(1.0, 1.0, 1.0),
-        );
+        let a = Obb::new(Point3::new(0.0, 0.0, 0.0), rot, Vector3::new(1.0, 1.0, 1.0));
         let b = Obb::new(
             Point3::new(5.0, 0.0, 0.0),
             UnitQuaternion::identity(),
@@ -982,7 +985,7 @@ mod tests {
         //        |
         //   A ---+--- B
         let mut simplex = make_simplex(&[
-            Point3::new(2.0, 0.0, 0.0), // B (oldest, index 0)
+            Point3::new(2.0, 0.0, 0.0),  // B (oldest, index 0)
             Point3::new(-2.0, 0.0, 0.0), // A (newest, index 1)
         ]);
         let mut v = Vector3::zeros();
@@ -1001,7 +1004,7 @@ mod tests {
         //   A ========= B
         //        O (below)
         let mut simplex = make_simplex(&[
-            Point3::new(1.0, 1.0, 0.0), // B
+            Point3::new(1.0, 1.0, 0.0),  // B
             Point3::new(-1.0, 1.0, 0.0), // A
         ]);
         let mut v = Vector3::zeros();
@@ -1069,8 +1072,8 @@ mod tests {
         //   A ---+--- B
         //        C (far away)
         let mut simplex = make_simplex(&[
-            Point3::new(0.0, 0.0, 5.0), // C (far, index 0)
-            Point3::new(1.0, 1.0, 0.0), // B (index 1)
+            Point3::new(0.0, 0.0, 5.0),  // C (far, index 0)
+            Point3::new(1.0, 1.0, 0.0),  // B (index 1)
             Point3::new(-1.0, 1.0, 0.0), // A (newest, index 2)
         ]);
         let mut v = Vector3::zeros();
@@ -1085,8 +1088,8 @@ mod tests {
         // Independent geometric solve (closest point on triangle) puts the
         // closest point in the triangle interior for this fixture.
         let mut simplex = make_simplex(&[
-            Point3::new(1.0, 1.0, 0.0), // C (index 0)
-            Point3::new(0.0, 0.0, 5.0), // B (far, index 1)
+            Point3::new(1.0, 1.0, 0.0),  // C (index 0)
+            Point3::new(0.0, 0.0, 5.0),  // B (far, index 1)
             Point3::new(-1.0, 1.0, 0.0), // A (newest, index 2)
         ]);
         let mut v = Vector3::zeros();
@@ -1200,10 +1203,10 @@ mod tests {
         // Independent geometry: origin lies on face ABC plane and all three
         // face-side dots are zero, which this routine treats as enclosed.
         let mut simplex = make_simplex(&[
-            Point3::new(0.0, 1.0, -1.0),  // D (oldest, index 0)
-            Point3::new(-1.0, 1.0, 1.0),  // C (index 1)
-            Point3::new(1.0, 1.0, 1.0),   // B (index 2)
-            Point3::new(0.0, 0.0, 0.0),   // A (newest, index 3)
+            Point3::new(0.0, 1.0, -1.0), // D (oldest, index 0)
+            Point3::new(-1.0, 1.0, 1.0), // C (index 1)
+            Point3::new(1.0, 1.0, 1.0),  // B (index 2)
+            Point3::new(0.0, 0.0, 0.0),  // A (newest, index 3)
         ]);
         let mut v = Vector3::zeros();
         let enclosed = process_tetrahedron_simplex(&mut simplex, &mut v);
@@ -1234,7 +1237,7 @@ mod tests {
         // Origin is outside two faces. Place the tetrahedron so origin is
         // near an edge shared by two visible faces.
         let mut simplex = make_simplex(&[
-            Point3::new(0.0, 0.0, 2.0), // D (index 0)
+            Point3::new(0.0, 0.0, 2.0),  // D (index 0)
             Point3::new(-2.0, 2.0, 0.0), // C (index 1)
             Point3::new(2.0, 2.0, 0.0),  // B (index 2)
             Point3::new(0.0, 1.0, -1.0), // A (newest, index 3)
@@ -1280,7 +1283,11 @@ mod tests {
 
         assert!(!enclosed);
         // Independent geometry gives the closest point near (0, 2, 0).
-        assert!((v.y - 2.0).abs() < 0.5, "v.y should be near 2.0, got {}", v.y);
+        assert!(
+            (v.y - 2.0).abs() < 0.5,
+            "v.y should be near 2.0, got {}",
+            v.y
+        );
         assert!(v.x.abs() < 0.5);
         assert!(v.z.abs() < 0.5);
     }
@@ -1289,11 +1296,7 @@ mod tests {
     // closest_on_line_segment tests
     // =================================================================
 
-    fn mkv_full(
-        mink: Point3<f32>,
-        sa: Point3<f32>,
-        sb: Point3<f32>,
-    ) -> MinkowskiVertex {
+    fn mkv_full(mink: Point3<f32>, sa: Point3<f32>, sb: Point3<f32>) -> MinkowskiVertex {
         MinkowskiVertex {
             point: mink,
             support_a: sa,

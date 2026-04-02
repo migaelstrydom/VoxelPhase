@@ -95,14 +95,24 @@ pub fn filter_patch(patch: &MeshPatch, coplanar_dot_threshold: f32) -> FilteredP
                 continue;
             }
 
-            if let Some(quad) =
-                try_merge_coplanar(&pt_i.triangle, edge_idx, &patch.triangles[j].triangle, &normal_i)
-            {
+            if let Some(quad) = try_merge_coplanar(
+                &pt_i.triangle,
+                edge_idx,
+                &patch.triangles[j].triangle,
+                &normal_i,
+            ) {
                 let lo = i.min(j) as u32;
                 let hi = i.max(j) as u32;
                 faces.push(ContactFace {
                     vertices: SmallVec::from_buf_and_len(
-                        [quad[0], quad[1], quad[2], quad[3], Point3::origin(), Point3::origin()],
+                        [
+                            quad[0],
+                            quad[1],
+                            quad[2],
+                            quad[3],
+                            Point3::origin(),
+                            Point3::origin(),
+                        ],
                         4,
                     ),
                     normal: normal_i,
@@ -186,12 +196,9 @@ fn try_merge_coplanar(
     };
 
     // Find the vertex of tri_j not on the shared edge.
-    let non_shared_j = [tri_j.v0, tri_j.v1, tri_j.v2]
-        .into_iter()
-        .find(|v| {
-            (v - shared_a).magnitude_squared() > 1e-8
-                && (v - shared_b).magnitude_squared() > 1e-8
-        })?;
+    let non_shared_j = [tri_j.v0, tri_j.v1, tri_j.v2].into_iter().find(|v| {
+        (v - shared_a).magnitude_squared() > 1e-8 && (v - shared_b).magnitude_squared() > 1e-8
+    })?;
 
     // Quad winding: non_shared_i → shared_a → non_shared_j → shared_b
     // This preserves the original triangle's winding direction.
@@ -314,10 +321,7 @@ mod tests {
             let b = face.vertices[(k + 1) % 4];
             let c = face.vertices[(k + 2) % 4];
             let cross = (b - a).cross(&(c - b));
-            assert!(
-                cross.dot(&n) > 0.0,
-                "Merged quad vertex {k} is not convex"
-            );
+            assert!(cross.dot(&n) > 0.0, "Merged quad vertex {k} is not convex");
         }
     }
 
