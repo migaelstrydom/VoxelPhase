@@ -8,12 +8,15 @@ use nalgebra::{Point3, UnitQuaternion, Vector2, Vector3, Vector4};
 use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
-use super::shared::models::{build_convex_hull, convex_solid_model, cuboid_model, SolidFace};
+use super::shared::models::{
+    build_convex_hull, compound_cuboid_model, convex_solid_model, cuboid_model, SolidFace,
+};
 use super::shared::textures::*;
 use super::{MaterialCtx, Spawnable};
 use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
 };
+use crate::fracture::{CompoundFracture, FractureJoint};
 use crate::core::error::EngineResult;
 use crate::model::{MeshPrimitive, Model, ModelPart};
 use crate::physics::{ColliderDesc, RigidBodyDesc};
@@ -278,27 +281,86 @@ impl Spawnable for TempleDef {
         };
 
         // =================================================================
-        // Stylobate — three stepped platforms
+        // Stylobate — three stepped platforms as a compound body
         // =================================================================
 
         let top_step_hw = lay.half_w + lay.col_base_r + lay.step_margin;
         let top_step_hl = lay.half_l + lay.col_base_r + lay.step_margin;
 
+        let stylobate_center_y = py + lay.num_steps as f32 * lay.step_h / 2.0;
+        let stylobate_pos = Point3::new(px, stylobate_center_y, pz);
+
+        let mut step_boxes = Vec::new();
         for i in 0..lay.num_steps {
             let grow = (lay.num_steps - 1 - i) as f32 * lay.step_margin;
             let hw = top_step_hw + grow;
             let hl = top_step_hl + grow;
             let hh = lay.step_h / 2.0;
-            let cy = py + i as f32 * lay.step_h + hh;
+            let offset_y =
+                i as f32 * lay.step_h + hh - lay.num_steps as f32 * lay.step_h / 2.0;
 
-            spawn_box(
-                world,
-                &mut entities,
-                Point3::new(px, cy, pz),
+            step_boxes.push((
                 Vector3::new(hw, hh, hl),
-                stone,
-            );
+                Vector3::new(0.0, offset_y, 0.0),
+            ));
         }
+
+        let stylobate_model = compound_cuboid_model(&step_boxes, stone);
+
+        let stylobate_handle = {
+            let mut physics = world.write_resource::<PhysicsResource>();
+            let bh = physics.world.create_body(
+                RigidBodyDesc::dynamic()
+                    .position(stylobate_pos)
+                    .linear_damping(0.01)
+                    .angular_damping(0.005),
+            );
+            for &(ref he, ref offset) in &step_boxes {
+                physics.world.attach_collider(
+                    bh,
+                    ColliderDesc::box_shape(*he)
+                        .offset_translation(*offset)
+                        .density(density)
+                        .restitution(0.05)
+                        .friction(friction),
+                );
+            }
+            bh
+        };
+
+        let stylobate_fracture = CompoundFracture {
+            joints: vec![
+                FractureJoint {
+                    child_a: 0,
+                    child_b: 1,
+                    threshold: 500.0,
+                },
+                FractureJoint {
+                    child_a: 1,
+                    child_b: 2,
+                    threshold: 500.0,
+                },
+            ],
+            child_count: 3,
+            material: stone,
+        };
+
+        entities.push(
+            world
+                .create_entity()
+                .with(Position(Vector3::new(
+                    stylobate_pos.x,
+                    stylobate_pos.y,
+                    stylobate_pos.z,
+                )))
+                .with(Velocity(Vector3::zeros()))
+                .with(Orientation::default())
+                .with(RigidBodyComponent(stylobate_handle))
+                .with(ModelInstance::new(stylobate_model))
+                .with(Renderable)
+                .with(stylobate_fracture)
+                .build(),
+        );
 
         // =================================================================
         // Columns — fluted tapered prisms around the perimeter
