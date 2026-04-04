@@ -8,10 +8,12 @@
 use nalgebra::{Point3, Vector3};
 use smallvec::SmallVec;
 
+use super::clipping::{clip_against_face_sides, face_centroid};
 use super::epa::{epa_penetration, EpaResult};
 use super::gjk::{gjk_query_seeded, GjkCache, GjkResult};
 use crate::collision::contact::{ContactManifold, ContactPoint, FeatureId};
 use crate::collision::contact_reducer::ContactReducer;
+use crate::collision::segment::segment_segment_closest_points;
 use crate::collision::shape_view::{SupportFace, SupportFaceExtractor};
 use crate::collision::support::ConvexSupport;
 
@@ -179,23 +181,20 @@ pub fn gjk_epa_manifold_cached<S: ConvexSupport + SupportFaceExtractor>(
 
             match (face_a, face_b) {
                 (Some(fa), Some(fb)) => {
-                    let best_normal = refine_face_face_normal(a, b, normal, &fa, &fb);
-
-                    if let (Some(best_fa), Some(best_fb)) =
-                        (a.support_face(best_normal), b.support_face(-best_normal))
-                    {
-                        let best_raw_depth = support_overlap(a, b, best_normal);
-                        clip_face_face_manifold(
-                            &best_fa,
-                            &best_fb,
-                            best_normal,
-                            best_raw_depth,
-                            margin,
-                        )
-                    } else {
-                        let raw_depth = support_overlap(a, b, normal);
-                        clip_face_face_manifold(&fa, &fb, normal, raw_depth, margin)
+                    let raw_depth = support_overlap(a, b, normal);
+                    let mut manifold =
+                        clip_face_face_manifold(&fa, &fb, normal, raw_depth, margin);
+                    if manifold.is_empty() && raw_depth > -margin {
+                        let base_feature =
+                            FeatureId::from_face_pair(fa.face_index, fb.face_index);
+                        let point = Point3::from(
+                            (epa.witness_a.coords + epa.witness_b.coords) * 0.5,
+                        );
+                        manifold = ContactManifold::single(ContactPoint::new(
+                            point, normal, raw_depth, base_feature,
+                        ));
                     }
+                    manifold
                 }
                 (Some(fa), None) => {
                     // A has a face (hull/OBB), B is faceless (sphere/capsule).
@@ -266,66 +265,6 @@ fn face_contact_candidate<S: ConvexSupport>(
     };
     let feature_id = FeatureId::from_face(face.face_index);
     (corrected_normal, raw_depth, feature_id)
-}
-
-/// Refine the contact normal for a face-face pair.
-///
-/// EPA can return slightly different normals for symmetric configurations.
-/// This probes several candidate directions (EPA normal, face normals,
-/// center-to-center, jittered variants) and picks the minimum-overlap
-/// direction, breaking ties with lexicographic normal ordering.
-fn refine_face_face_normal<S: ConvexSupport + SupportFaceExtractor>(
-    a: &S,
-    b: &S,
-    epa_normal: Vector3<f32>,
-    face_a: &SupportFace,
-    face_b: &SupportFace,
-) -> Vector3<f32> {
-    let a_center = midpoint_of_supports(a, epa_normal);
-    let b_center = midpoint_of_supports(b, epa_normal);
-    let center_dir = b_center - a_center;
-
-    let mut dirs = SmallVec::<[Vector3<f32>; 12]>::new();
-    dirs.push(epa_normal);
-    dirs.push(face_a.normal);
-    dirs.push(-face_b.normal);
-    if center_dir.magnitude_squared() > 1e-8 {
-        dirs.extend(jittered_probe_directions(center_dir));
-    }
-
-    // Probe additional deterministic directions and pull support-face normals
-    // from both shapes. This helps recover the SAT-like face axis when EPA's
-    // local normal and center-direction jitter both miss it.
-    let basis = [
-        Vector3::x(),
-        -Vector3::x(),
-        Vector3::y(),
-        -Vector3::y(),
-        Vector3::z(),
-        -Vector3::z(),
-    ];
-    for probe in basis {
-        if let Some(fa) = a.support_face(probe) {
-            dirs.push(fa.normal);
-        }
-        if let Some(fb) = b.support_face(-probe) {
-            dirs.push(-fb.normal);
-        }
-    }
-
-    let mut best_normal = epa_normal;
-    let mut best_depth = support_overlap(a, b, epa_normal);
-    for candidate in dirs {
-        let depth = support_overlap(a, b, candidate);
-        let shallower = depth + DEPTH_TIE_EPS < best_depth;
-        let tied = (depth - best_depth).abs() <= DEPTH_TIE_EPS;
-        if shallower || (tied && normal_precedes(candidate, best_normal)) {
-            best_depth = depth;
-            best_normal = candidate;
-        }
-    }
-
-    best_normal
 }
 
 /// Generate a single-point contact for a face shape (A) against a faceless
@@ -487,7 +426,7 @@ fn closest_point_on_face(face: &SupportFace, query: Point3<f32>) -> Point3<f32> 
     }
 
     // Project query onto the face plane.
-    let face_center = compute_face_center(verts);
+    let face_center = face_centroid(verts);
     let signed_dist = (query - face_center).dot(&face.normal);
     let projected = query - face.normal * signed_dist;
 
@@ -570,8 +509,10 @@ fn clip_face_face_manifold(
         if axis_raw_depth < -margin {
             return ContactManifold::empty();
         }
+        let (pa, pb) = closest_points_between_face_polygons(ref_face, inc_face);
+        let point = Point3::from((pa.coords + pb.coords) * 0.5);
         return ContactManifold::single(ContactPoint::new(
-            compute_face_center(&ref_face.vertices),
+            point,
             normal,
             axis_raw_depth,
             FeatureId::from_face_pair(face_a.face_index, face_b.face_index),
@@ -579,22 +520,18 @@ fn clip_face_face_manifold(
     }
 
     // Project clipped vertices onto the reference face plane and filter.
-    let ref_center = compute_face_center(&ref_face.vertices);
+    let ref_center = face_centroid(&ref_face.vertices);
     let ref_plane_d = ref_face.normal.dot(&ref_center.coords);
 
     let base_feature = FeatureId::from_face_pair(face_a.face_index, face_b.face_index);
     let mut contacts: SmallVec<[ContactPoint; 8]> = SmallVec::with_capacity(clipped.len());
 
     for (i, vertex) in clipped.iter().enumerate() {
-        // Signed distance from vertex to reference face plane.
-        // Negative = below the plane (penetrating).
         let signed_dist = vertex.coords.dot(&ref_face.normal) - ref_plane_d;
 
-        // Accept vertices that are penetrating or within margin tolerance.
         if signed_dist < margin + 1e-4 {
             let raw_depth = (-signed_dist).min(axis_raw_depth);
             let feature_id = base_feature.with_vertex(i as u32);
-
             contacts.push(ContactPoint::new(*vertex, normal, raw_depth, feature_id));
         }
     }
@@ -603,8 +540,10 @@ fn clip_face_face_manifold(
         if axis_raw_depth < -margin {
             return ContactManifold::empty();
         }
+        let (pa, pb) = closest_points_between_face_polygons(ref_face, inc_face);
+        let point = Point3::from((pa.coords + pb.coords) * 0.5);
         return ContactManifold::single(ContactPoint::new(
-            ref_center,
+            point,
             normal,
             axis_raw_depth,
             base_feature,
@@ -614,102 +553,40 @@ fn clip_face_face_manifold(
     // Reduce to 4 contacts if needed.
     let reducer = ContactReducer::new(MAX_CONTACTS);
     let reduced = reducer.reduce(&contacts);
-
     ContactManifold::from_vec(SmallVec::from_vec(reduced))
 }
 
-/// Clip a polygon against the side planes of a reference face.
-///
-/// The side planes are the edges of the reference face, each forming a half-plane
-/// with the edge normal pointing inward (toward the face center).
-fn clip_against_face_sides(
-    ref_verts: &SmallVec<[Point3<f32>; 8]>,
-    ref_normal: Vector3<f32>,
-    inc_verts: &SmallVec<[Point3<f32>; 8]>,
-) -> SmallVec<[Point3<f32>; 8]> {
-    let mut polygon: SmallVec<[Point3<f32>; 8]> = inc_verts.clone();
-    let mut scratch: SmallVec<[Point3<f32>; 8]> = SmallVec::new();
+fn closest_points_between_face_polygons(
+    face_a: &SupportFace,
+    face_b: &SupportFace,
+) -> (Point3<f32>, Point3<f32>) {
+    let mut best_a = face_a.vertices[0];
+    let mut best_b = face_b.vertices[0];
+    let mut best_dist_sq = (best_a - best_b).magnitude_squared();
 
-    let n = ref_verts.len();
-    if n < 3 || polygon.is_empty() {
-        return polygon;
+    let na = face_a.vertices.len();
+    let nb = face_b.vertices.len();
+    if na == 0 || nb == 0 {
+        return (best_a, best_b);
     }
 
-    // Compute face center for inward normal orientation.
-    let center = compute_face_center(ref_verts);
-    let face_normal = if ref_normal.magnitude_squared() > 1e-10 {
-        ref_normal
-    } else {
-        Vector3::y()
-    };
-
-    for i in 0..n {
-        let edge_start = ref_verts[i];
-        let edge_end = ref_verts[(i + 1) % n];
-
-        // Edge direction.
-        let edge = edge_end - edge_start;
-
-        // Inward-pointing normal: perpendicular to edge, pointing toward face center.
-        // Use the reference face normal to compute the perpendicular in the face plane.
-        let inward = edge.cross(&face_normal);
-
-        // Orient so it points toward the center.
-        let inward = if inward.dot(&(center - edge_start)) >= 0.0 {
-            inward
-        } else {
-            -inward
-        };
-
-        clip_polygon_into(&polygon, edge_start, inward, &mut scratch);
-        std::mem::swap(&mut polygon, &mut scratch);
-        if polygon.is_empty() {
-            return polygon;
+    for i in 0..na {
+        let a0 = face_a.vertices[i];
+        let a1 = face_a.vertices[(i + 1) % na];
+        for j in 0..nb {
+            let b0 = face_b.vertices[j];
+            let b1 = face_b.vertices[(j + 1) % nb];
+            let (pa, pb) = segment_segment_closest_points(a0, a1, b0, b1);
+            let d2 = (pa - pb).magnitude_squared();
+            if d2 < best_dist_sq {
+                best_dist_sq = d2;
+                best_a = pa;
+                best_b = pb;
+            }
         }
     }
 
-    polygon
-}
-
-/// Clip a convex polygon against a half-plane into a caller-provided buffer.
-///
-/// Keeps the portion on the inside (non-negative side) of the plane.
-fn clip_polygon_into(
-    polygon: &[Point3<f32>],
-    plane_point: Point3<f32>,
-    plane_normal: Vector3<f32>,
-    out: &mut SmallVec<[Point3<f32>; 8]>,
-) {
-    out.clear();
-    if polygon.is_empty() {
-        return;
-    }
-
-    for i in 0..polygon.len() {
-        let p1 = polygon[i];
-        let p2 = polygon[(i + 1) % polygon.len()];
-        let d1 = (p1 - plane_point).dot(&plane_normal);
-        let d2 = (p2 - plane_point).dot(&plane_normal);
-        let inside1 = d1 >= 0.0;
-        let inside2 = d2 >= 0.0;
-
-        if inside1 && inside2 {
-            out.push(p2);
-        } else if inside1 && !inside2 {
-            let t = d1 / (d1 - d2);
-            out.push(p1 + (p2 - p1) * t);
-        } else if !inside1 && inside2 {
-            let t = d1 / (d1 - d2);
-            out.push(p1 + (p2 - p1) * t);
-            out.push(p2);
-        }
-    }
-}
-
-/// Compute the centroid of a face polygon.
-fn compute_face_center(verts: &SmallVec<[Point3<f32>; 8]>) -> Point3<f32> {
-    let sum: Vector3<f32> = verts.iter().map(|v| v.coords).sum();
-    Point3::from(sum / verts.len() as f32)
+    (best_a, best_b)
 }
 
 #[cfg(test)]
@@ -920,6 +797,72 @@ mod tests {
                 cp.normal
             );
         }
+    }
+
+    fn support_face_square(
+        center: Point3<f32>,
+        normal: Vector3<f32>,
+        half_extent: f32,
+        face_index: u32,
+    ) -> SupportFace {
+        SupportFace {
+            vertices: SmallVec::from_slice(&[
+                Point3::new(center.x - half_extent, center.y - half_extent, center.z),
+                Point3::new(center.x + half_extent, center.y - half_extent, center.z),
+                Point3::new(center.x + half_extent, center.y + half_extent, center.z),
+                Point3::new(center.x - half_extent, center.y + half_extent, center.z),
+            ]),
+            normal,
+            face_index,
+        }
+    }
+
+    #[test]
+    fn face_face_fallback_uses_edge_midpoint_when_clipping_empty() {
+        let face_a = support_face_square(Point3::new(0.0, 0.0, 0.0), Vector3::z(), 1.0, 0);
+        let face_b = support_face_square(Point3::new(4.0, 0.0, 0.0), -Vector3::z(), 1.0, 1);
+
+        let manifold = clip_face_face_manifold(&face_a, &face_b, Vector3::z(), 0.01, 0.02);
+        let manifold = manifold;
+        assert_eq!(
+            manifold.len(),
+            1,
+            "Empty clipping fallback should return one contact"
+        );
+
+        let (pa, pb) = closest_points_between_face_polygons(&face_a, &face_b);
+        let expected = Point3::from((pa.coords + pb.coords) * 0.5);
+        let cp = manifold.points[0].point;
+        assert!(
+            (cp - expected).magnitude() < 1e-6,
+            "Expected edge-midpoint fallback point {:?}, got {:?}",
+            expected,
+            cp
+        );
+    }
+
+    #[test]
+    fn face_face_fallback_uses_edge_midpoint_when_all_clipped_points_rejected() {
+        let face_a = support_face_square(Point3::new(0.0, 0.0, 0.0), Vector3::z(), 1.0, 0);
+        let face_b = support_face_square(Point3::new(0.0, 0.0, 0.2), -Vector3::z(), 1.0, 1);
+
+        let manifold = clip_face_face_manifold(&face_a, &face_b, Vector3::z(), 0.01, 0.02);
+        let manifold = manifold;
+        assert_eq!(
+            manifold.len(),
+            1,
+            "Rejected clipped points fallback should return one contact"
+        );
+
+        let (pa, pb) = closest_points_between_face_polygons(&face_a, &face_b);
+        let expected = Point3::from((pa.coords + pb.coords) * 0.5);
+        let cp = manifold.points[0].point;
+        assert!(
+            (cp - expected).magnitude() < 1e-6,
+            "Expected edge-midpoint fallback point {:?}, got {:?}",
+            expected,
+            cp
+        );
     }
 
     // --- Sphere-sphere through GJK/EPA ---

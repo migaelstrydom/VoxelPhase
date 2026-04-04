@@ -3,6 +3,8 @@ pub mod clipping;
 pub mod epa;
 pub mod gjk;
 pub mod gjk_epa_manifold;
+pub mod hull_hull;
+pub mod hull_obb;
 pub mod obb_capsule;
 pub mod obb_obb;
 pub mod sphere_capsule;

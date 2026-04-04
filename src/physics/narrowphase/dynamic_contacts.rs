@@ -115,7 +115,7 @@ pub struct NarrowphaseWorkBuffer {
     sorted_indices: Vec<usize>,
     pairs: Vec<(usize, usize)>,
     manifolds: Vec<PairManifold>,
-    active_box_pairs: FxHashSet<(ColliderHandle, ColliderHandle)>,
+    active_sat_pairs: FxHashSet<(ColliderHandle, ColliderHandle)>,
     active_gjk_pairs: FxHashSet<(ColliderHandle, ColliderHandle)>,
 }
 
@@ -127,7 +127,7 @@ impl NarrowphaseWorkBuffer {
             sorted_indices: Vec::new(),
             pairs: Vec::new(),
             manifolds: Vec::new(),
-            active_box_pairs: FxHashSet::default(),
+            active_sat_pairs: FxHashSet::default(),
             active_gjk_pairs: FxHashSet::default(),
         }
     }
@@ -138,7 +138,7 @@ impl NarrowphaseWorkBuffer {
         self.sorted_indices.clear();
         self.pairs.clear();
         self.manifolds.clear();
-        self.active_box_pairs.clear();
+        self.active_sat_pairs.clear();
         self.active_gjk_pairs.clear();
     }
 
@@ -205,10 +205,13 @@ pub fn generate_dynamic_contacts(
             shape: &sj.shape,
         };
 
-        // SAT cache: only look up for Box-Box pairs.
+        // SAT cache: look up for Box-Box, ConvexHull-ConvexHull, and Box-ConvexHull pairs.
         let mut sat_cache_opt = match (&si.shape, &sj.shape) {
-            (ColliderShape::Box { .. }, ColliderShape::Box { .. }) => {
-                buf.active_box_pairs
+            (ColliderShape::Box { .. }, ColliderShape::Box { .. })
+            | (ColliderShape::ConvexHull { .. }, ColliderShape::ConvexHull { .. })
+            | (ColliderShape::Box { .. }, ColliderShape::ConvexHull { .. })
+            | (ColliderShape::ConvexHull { .. }, ColliderShape::Box { .. }) => {
+                buf.active_sat_pairs
                     .insert((si.collider_handle, sj.collider_handle));
                 let key = SatPairKey::new(si.collider_handle, sj.collider_handle);
                 Some(sat_cache_map.caches.entry(key).or_default())
@@ -267,7 +270,7 @@ pub fn generate_dynamic_contacts(
         }
     }
 
-    sat_cache_map.prune(&buf.active_box_pairs);
+    sat_cache_map.prune(&buf.active_sat_pairs);
     gjk_cache_map.prune(&buf.active_gjk_pairs);
 }
 

@@ -280,6 +280,8 @@ fn aabb_of(vertices: &[Vector3<f32>]) -> (Vector3<f32>, Vector3<f32>) {
 }
 
 /// Build a cube-shaped ConvexHull with the given half-extents, centered at origin.
+///
+/// Used by tests to create cube-shaped hulls for comparison against OBB paths.
 #[cfg(test)]
 pub fn cube_hull(half_extents: Vector3<f32>) -> ConvexHull {
     let hx = half_extents.x;

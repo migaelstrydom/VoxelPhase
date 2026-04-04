@@ -13,6 +13,14 @@ use crate::collision::obb::Obb;
 /// that's 8; starting from a triangle (3) that's 7.
 pub const MAX_CLIP_VERTS: usize = 8;
 
+/// Larger clip buffer for general N-gon vs N-gon clipping (hull-hull).
+/// A 20-gon clipped against a 20-gon can produce up to 40 vertices, but
+/// in practice incident faces on high-poly hulls are quads (side faces).
+pub const MAX_HULL_CLIP_VERTS: usize = 12;
+
+/// Stack-allocated polygon buffer for hull-hull clipping.
+pub type HullClipPolygon = SmallVec<[Point3<f32>; MAX_HULL_CLIP_VERTS]>;
+
 /// Stack-allocated polygon buffer used throughout the clipping pipeline.
 pub type ClipPolygon = SmallVec<[Point3<f32>; MAX_CLIP_VERTS]>;
 
@@ -140,6 +148,96 @@ impl ObbFace {
             self.center - self.tangent_v * self.half_v,
             self.tangent_v,
         )
+    }
+}
+
+/// Compute the centroid of a convex face polygon.
+pub fn face_centroid(verts: &[Point3<f32>]) -> Point3<f32> {
+    let sum: Vector3<f32> = verts.iter().map(|v| v.coords).sum();
+    Point3::from(sum / verts.len() as f32)
+}
+
+/// Clip a polygon against the side planes of a general convex reference face.
+///
+/// This is the general-purpose equivalent of `ObbFace::clip_against_sides()` for
+/// arbitrary N-gon reference faces. Each edge of the reference polygon defines a
+/// half-plane (with inward-pointing normal toward the face center), and the incident
+/// polygon is clipped against each in sequence.
+pub fn clip_against_face_sides(
+    ref_verts: &[Point3<f32>],
+    ref_normal: Vector3<f32>,
+    inc_verts: &[Point3<f32>],
+) -> HullClipPolygon {
+    let mut polygon: HullClipPolygon = inc_verts.iter().copied().collect();
+    let mut scratch: HullClipPolygon = HullClipPolygon::new();
+
+    let n = ref_verts.len();
+    if n < 3 || polygon.is_empty() {
+        return polygon;
+    }
+
+    let center = face_centroid(ref_verts);
+    let face_normal = if ref_normal.magnitude_squared() > 1e-10 {
+        ref_normal
+    } else {
+        Vector3::y()
+    };
+
+    for i in 0..n {
+        let edge_start = ref_verts[i];
+        let edge_end = ref_verts[(i + 1) % n];
+        let edge = edge_end - edge_start;
+
+        // Inward-pointing normal: perpendicular to edge in the face plane.
+        let inward = edge.cross(&face_normal);
+        let inward = if inward.dot(&(center - edge_start)) >= 0.0 {
+            inward
+        } else {
+            -inward
+        };
+
+        clip_polygon_into(&polygon, edge_start, inward, &mut scratch);
+        std::mem::swap(&mut polygon, &mut scratch);
+        if polygon.is_empty() {
+            return polygon;
+        }
+    }
+
+    polygon
+}
+
+/// Clip a convex polygon against a half-plane into a caller-provided buffer.
+///
+/// Keeps the portion on the inside (non-negative side) of the plane.
+fn clip_polygon_into(
+    polygon: &[Point3<f32>],
+    plane_point: Point3<f32>,
+    plane_normal: Vector3<f32>,
+    out: &mut HullClipPolygon,
+) {
+    out.clear();
+    if polygon.is_empty() {
+        return;
+    }
+
+    for i in 0..polygon.len() {
+        let p1 = polygon[i];
+        let p2 = polygon[(i + 1) % polygon.len()];
+        let d1 = (p1 - plane_point).dot(&plane_normal);
+        let d2 = (p2 - plane_point).dot(&plane_normal);
+        let inside1 = d1 >= 0.0;
+        let inside2 = d2 >= 0.0;
+
+        if inside1 && inside2 {
+            out.push(p2);
+        } else if inside1 && !inside2 {
+            let t = d1 / (d1 - d2);
+            out.push(p1 + (p2 - p1) * t);
+        } else if !inside1 && inside2 {
+            let t = d1 / (d1 - d2);
+            out.push(p1 + (p2 - p1) * t);
+            out.push(p2);
+        }
     }
 }
 

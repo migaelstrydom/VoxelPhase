@@ -88,7 +88,7 @@ pub fn fill_pool(
         }
     }
 
-    log::info!(
+    log::debug!(
         "Pool at ({:.1}, {:.1}): filled {} cells at surface_level {:.1}",
         seed.0,
         seed.1,
