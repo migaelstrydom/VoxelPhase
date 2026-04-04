@@ -7,6 +7,7 @@ mod dynamic_pairs;
 mod many_body;
 mod mesh_pipeline;
 mod solver;
+mod stability;
 mod wall_slide;
 mod wobble;
 

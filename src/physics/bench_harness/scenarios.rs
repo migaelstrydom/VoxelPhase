@@ -1,7 +1,11 @@
+use std::sync::Arc;
+
 use nalgebra::{Point3, UnitQuaternion, UnitVector3, Vector3};
+use smallvec::SmallVec;
 
 use super::framework::PhysicsBenchScenario;
 use super::geometry::*;
+use crate::collision::convex_hull::{ConvexHull, HullFace};
 use crate::physics::constraint::ConstraintKind;
 use crate::physics::world::PhysicsConfig;
 use crate::physics::{ColliderDesc, PhysicsWorld, RigidBodyDesc, RigidBodyHandle, StaticGeometry};
@@ -1301,4 +1305,842 @@ impl PhysicsBenchScenario for CompoundTableScenario {
     fn geometry(&self) -> &dyn StaticGeometry {
         &self.geometry
     }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Convex hull helper
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Face definition for building convex hulls in bench scenarios.
+///
+/// Mirrors `SolidFace` from the app layer but lives in the physics bench
+/// harness to avoid a reverse dependency.
+struct FaceDef {
+    /// Vertex indices defining the face polygon (CCW from outside).
+    indices: Vec<usize>,
+    /// Index of a vertex on the opposite side of the hull, used to determine
+    /// the outward normal direction.
+    opposite: usize,
+}
+
+/// Build a `ConvexHull` from vertices and face definitions.
+///
+/// Computes outward normals using the opposite-vertex trick: the cross product
+/// of the first two edges gives a candidate normal; if it points toward the
+/// opposite vertex, it's flipped.
+fn build_hull(vertices: &[Vector3<f32>], faces: &[FaceDef]) -> ConvexHull {
+    let hull_faces: Vec<HullFace> = faces
+        .iter()
+        .map(|face| {
+            let a = vertices[face.indices[0]];
+            let b = vertices[face.indices[1]];
+            let c = vertices[face.indices[2]];
+            let opp = vertices[face.opposite];
+
+            let raw_normal = (b - a).cross(&(c - a));
+            let flip = raw_normal.dot(&(a - opp)) < 0.0;
+            let normal = if flip {
+                -raw_normal.normalize()
+            } else {
+                raw_normal.normalize()
+            };
+
+            let mut indices: SmallVec<[u16; 6]> =
+                face.indices.iter().map(|&i| i as u16).collect();
+            if flip {
+                indices[1..].reverse();
+            }
+
+            HullFace {
+                vertex_indices: indices,
+                normal,
+            }
+        })
+        .collect();
+
+    ConvexHull::new(vertices.to_vec(), hull_faces)
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Scenarios: structural stability regression
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Honeycomb wall: a tiled grid of hexagonal prisms stacked in a honeycomb
+/// pattern. Each cell is an independent dynamic body with a convex hull
+/// collider. Tests multi-body convex-hull-on-ground and hull-on-hull contact
+/// stability.
+#[derive(Debug, Clone)]
+pub struct HoneycombWallScenario {
+    pub columns: u32,
+    pub rows: u32,
+    pub radius: f32,
+    pub half_height: f32,
+    pub density: f32,
+    geometry: FlatQuadGeometry,
+}
+
+impl HoneycombWallScenario {
+    pub fn new() -> Self {
+        Self {
+            columns: 5,
+            rows: 4,
+            radius: 0.4,
+            half_height: 0.25,
+            density: 500.0,
+            geometry: FlatQuadGeometry::new(10.0),
+        }
+    }
+}
+
+impl PhysicsBenchScenario for HoneycombWallScenario {
+    fn name(&self) -> &'static str {
+        "honeycomb_wall"
+    }
+
+    fn restitution(&self) -> f32 {
+        0.15
+    }
+
+    fn build_world(&self) -> PhysicsWorld {
+        let mut config = PhysicsConfig::default();
+        config.sleep.enabled = false;
+        config.deterministic_contact_ordering = true;
+        PhysicsWorld::new(config)
+    }
+
+    fn setup(&self, world: &mut PhysicsWorld) -> RigidBodyHandle {
+        let (vertices, faces) = hex_prism_geometry_z(self.radius, self.half_height);
+        let hull = Arc::new(build_hull(&vertices, &faces));
+
+        let col_spacing = self.radius * 3.0f32.sqrt();
+        let row_spacing = self.radius * 1.5;
+        let total_width = (self.columns - 1) as f32 * col_spacing;
+        let x_start = -total_width * 0.5;
+
+        let mut tracked = None;
+
+        for row in 0..self.rows {
+            let y = self.radius + row as f32 * row_spacing;
+            let x_offset = if row % 2 == 1 { col_spacing * 0.5 } else { 0.0 };
+
+            for col in 0..self.columns {
+                let x = x_start + col as f32 * col_spacing + x_offset;
+                let pos = Point3::new(x, y, 0.0);
+
+                let body = world.create_body(
+                    RigidBodyDesc::dynamic()
+                        .position(pos)
+                        .linear_damping(0.01)
+                        .angular_damping(0.005),
+                );
+                world.attach_collider(
+                    body,
+                    ColliderDesc::convex_hull(hull.clone())
+                        .density(self.density)
+                        .restitution(0.15)
+                        .friction(0.7),
+                );
+
+                // Track a top-row center cell.
+                if row == self.rows - 1 && col == self.columns / 2 {
+                    tracked = Some(body);
+                }
+            }
+        }
+
+        tracked.expect("should have created at least one body")
+    }
+
+    fn geometry(&self) -> &dyn StaticGeometry {
+        &self.geometry
+    }
+}
+
+/// Hex prism with the prism axis along Z (hex faces point ±Z).
+///
+/// Pointy-topped in XY: vertex 0 at +Y, flat edges horizontal. This is the
+/// classic honeycomb orientation when viewed from the front (+Z).
+fn hex_prism_geometry_z(radius: f32, half_depth: f32) -> (Vec<Vector3<f32>>, Vec<FaceDef>) {
+    let mut vertices = Vec::with_capacity(12);
+
+    for i in 0..6 {
+        let angle = std::f32::consts::FRAC_PI_3 * i as f32 + std::f32::consts::FRAC_PI_6;
+        let x = radius * angle.cos();
+        let y = radius * angle.sin();
+        vertices.push(Vector3::new(x, y, half_depth));
+    }
+    for i in 0..6 {
+        let angle = std::f32::consts::FRAC_PI_3 * i as f32 + std::f32::consts::FRAC_PI_6;
+        let x = radius * angle.cos();
+        let y = radius * angle.sin();
+        vertices.push(Vector3::new(x, y, -half_depth));
+    }
+
+    let mut faces = Vec::with_capacity(8);
+
+    faces.push(FaceDef {
+        indices: vec![0, 1, 2, 3, 4, 5],
+        opposite: 6,
+    });
+    faces.push(FaceDef {
+        indices: vec![11, 10, 9, 8, 7, 6],
+        opposite: 0,
+    });
+    for i in 0..6usize {
+        let next = (i + 1) % 6;
+        let opposite = (i + 3) % 6;
+        faces.push(FaceDef {
+            indices: vec![i, i + 6, next + 6, next],
+            opposite,
+        });
+    }
+
+    (vertices, faces)
+}
+
+/// Voussoir arch: a semicircular masonry arch from wedge-shaped stones held
+/// together by compression and friction, supported by two heavy abutment
+/// pillars. Tests convex-hull-on-hull stability under gravitational load.
+#[derive(Debug, Clone)]
+pub struct VoussoirArchScenario {
+    pub inner_radius: f32,
+    pub thickness: f32,
+    pub depth: f32,
+    pub num_voussoirs: u32,
+    pub abutment_height: f32,
+    pub density: f32,
+    pub friction: f32,
+    geometry: FlatQuadGeometry,
+}
+
+impl VoussoirArchScenario {
+    pub fn new() -> Self {
+        Self {
+            inner_radius: 10.0,
+            thickness: 5.0,
+            depth: 3.2,
+            num_voussoirs: 15,
+            abutment_height: 0.5,
+            density: 2000.0,
+            friction: 0.9,
+            geometry: FlatQuadGeometry::new(25.0),
+        }
+    }
+}
+
+impl PhysicsBenchScenario for VoussoirArchScenario {
+    fn name(&self) -> &'static str {
+        "voussoir_arch"
+    }
+
+    fn restitution(&self) -> f32 {
+        0.05
+    }
+
+    fn build_world(&self) -> PhysicsWorld {
+        let mut config = PhysicsConfig::default();
+        config.sleep.enabled = false;
+        config.deterministic_contact_ordering = true;
+        PhysicsWorld::new(config)
+    }
+
+    fn setup(&self, world: &mut PhysicsWorld) -> RigidBodyHandle {
+        let n = self.num_voussoirs;
+        let inner_r = self.inner_radius;
+        let outer_r = inner_r + self.thickness;
+        let half_depth = self.depth / 2.0;
+        let angle_step = std::f32::consts::PI / n as f32;
+        let center_y = self.abutment_height;
+
+        let mut keystone_handle = None;
+        let keystone_idx = n / 2;
+
+        // Voussoirs
+        for i in 0..n {
+            let angle_start = i as f32 * angle_step;
+            let angle_end = (i + 1) as f32 * angle_step;
+
+            let (arch_verts, faces) =
+                voussoir_geometry(inner_r, outer_r, half_depth, angle_start, angle_end);
+
+            let centroid =
+                arch_verts.iter().copied().sum::<Vector3<f32>>() / arch_verts.len() as f32;
+            let local_verts: Vec<_> = arch_verts.iter().map(|v| v - centroid).collect();
+
+            let pos = Point3::new(centroid.x, center_y + centroid.y, centroid.z);
+            let hull = Arc::new(build_hull(&local_verts, &faces));
+
+            let body = world.create_body(
+                RigidBodyDesc::dynamic()
+                    .position(pos)
+                    .linear_damping(0.01)
+                    .angular_damping(0.005),
+            );
+            world.attach_collider(
+                body,
+                ColliderDesc::convex_hull(hull)
+                    .density(self.density)
+                    .restitution(0.05)
+                    .friction(self.friction),
+            );
+
+            if i == keystone_idx {
+                keystone_handle = Some(body);
+            }
+        }
+
+        // Abutment pillars
+        let abutment_he =
+            Vector3::new(self.thickness / 2.0, self.abutment_height / 2.0, half_depth);
+        let abutment_density = self.density * 2.0;
+
+        for side in [1.0f32, -1.0] {
+            let x = side * (inner_r + self.thickness / 2.0);
+            let y = self.abutment_height / 2.0;
+            let pos = Point3::new(x, y, 0.0);
+
+            let body = world.create_body(
+                RigidBodyDesc::dynamic()
+                    .position(pos)
+                    .linear_damping(0.01)
+                    .angular_damping(0.005),
+            );
+            world.attach_collider(
+                body,
+                ColliderDesc::box_shape(abutment_he)
+                    .density(abutment_density)
+                    .restitution(0.05)
+                    .friction(self.friction),
+            );
+        }
+
+        keystone_handle.expect("should have created the keystone voussoir")
+    }
+
+    fn geometry(&self) -> &dyn StaticGeometry {
+        &self.geometry
+    }
+}
+
+/// Vertices and faces of a single voussoir (truncated wedge).
+///
+/// Computed in arch-local space where the arch center of curvature is at the
+/// origin. The voussoir spans from `angle_start` to `angle_end` (radians,
+/// measured counter-clockwise from the +X axis in the XY plane).
+fn voussoir_geometry(
+    inner_radius: f32,
+    outer_radius: f32,
+    half_depth: f32,
+    angle_start: f32,
+    angle_end: f32,
+) -> (Vec<Vector3<f32>>, Vec<FaceDef>) {
+    let cos_s = angle_start.cos();
+    let sin_s = angle_start.sin();
+    let cos_e = angle_end.cos();
+    let sin_e = angle_end.sin();
+
+    let vertices = vec![
+        Vector3::new(inner_radius * cos_s, inner_radius * sin_s, half_depth),
+        Vector3::new(outer_radius * cos_s, outer_radius * sin_s, half_depth),
+        Vector3::new(outer_radius * cos_e, outer_radius * sin_e, half_depth),
+        Vector3::new(inner_radius * cos_e, inner_radius * sin_e, half_depth),
+        Vector3::new(inner_radius * cos_s, inner_radius * sin_s, -half_depth),
+        Vector3::new(outer_radius * cos_s, outer_radius * sin_s, -half_depth),
+        Vector3::new(outer_radius * cos_e, outer_radius * sin_e, -half_depth),
+        Vector3::new(inner_radius * cos_e, inner_radius * sin_e, -half_depth),
+    ];
+
+    let faces = vec![
+        FaceDef { indices: vec![0, 1, 2, 3], opposite: 4 },
+        FaceDef { indices: vec![7, 6, 5, 4], opposite: 0 },
+        FaceDef { indices: vec![0, 4, 5, 1], opposite: 3 },
+        FaceDef { indices: vec![3, 2, 6, 7], opposite: 0 },
+        FaceDef { indices: vec![1, 5, 6, 2], opposite: 0 },
+        FaceDef { indices: vec![0, 3, 7, 4], opposite: 1 },
+    ];
+
+    (vertices, faces)
+}
+
+/// Jenga tower: alternating layers of three planks rotated 90°, using real
+/// Jenga proportions. Tests OBB-on-OBB stacking stability with many thin
+/// contacts.
+#[derive(Debug, Clone)]
+pub struct JengaTowerScenario {
+    pub layers: u32,
+    pub block_half_length: f32,
+    pub density: f32,
+    pub friction: f32,
+    geometry: FlatQuadGeometry,
+}
+
+impl JengaTowerScenario {
+    pub fn new(layers: u32) -> Self {
+        Self {
+            layers,
+            block_half_length: 0.75,
+            density: 500.0,
+            friction: 0.6,
+            geometry: FlatQuadGeometry::new(10.0),
+        }
+    }
+
+    fn block_half_extents(&self) -> Vector3<f32> {
+        let hl = self.block_half_length;
+        Vector3::new(hl, hl / 5.0, hl / 3.0)
+    }
+}
+
+impl PhysicsBenchScenario for JengaTowerScenario {
+    fn name(&self) -> &'static str {
+        "jenga_tower"
+    }
+
+    fn restitution(&self) -> f32 {
+        0.05
+    }
+
+    fn build_world(&self) -> PhysicsWorld {
+        let mut config = PhysicsConfig::default();
+        config.sleep.enabled = false;
+        config.deterministic_contact_ordering = true;
+        PhysicsWorld::new(config)
+    }
+
+    fn setup(&self, world: &mut PhysicsWorld) -> RigidBodyHandle {
+        let he = self.block_half_extents();
+        let block_height = he.y * 2.0;
+        let block_width = he.z * 2.0;
+        let blocks_per_layer = 3u32;
+
+        let yaw_90 =
+            UnitQuaternion::from_axis_angle(&Vector3::y_axis(), std::f32::consts::FRAC_PI_2);
+
+        let mut tracked = None;
+
+        for layer in 0..self.layers {
+            let y = he.y + layer as f32 * block_height;
+            let rotated = layer % 2 == 1;
+
+            for slot in 0..blocks_per_layer {
+                let lateral_offset =
+                    (slot as f32 - (blocks_per_layer - 1) as f32 / 2.0) * block_width;
+
+                let (x, z) = if rotated {
+                    (lateral_offset, 0.0)
+                } else {
+                    (0.0, lateral_offset)
+                };
+
+                let pos = Point3::new(x, y, z);
+                let rotation = if rotated {
+                    yaw_90
+                } else {
+                    UnitQuaternion::identity()
+                };
+
+                let body = world.create_body(
+                    RigidBodyDesc::dynamic()
+                        .position(pos)
+                        .rotation(rotation)
+                        .linear_damping(0.01)
+                        .angular_damping(0.05),
+                );
+                world.attach_collider(
+                    body,
+                    ColliderDesc::box_shape(he)
+                        .density(self.density)
+                        .restitution(0.05)
+                        .friction(self.friction),
+                );
+
+                // Track the center block of the top layer.
+                if layer == self.layers - 1 && slot == 1 {
+                    tracked = Some(body);
+                }
+            }
+        }
+
+        tracked.expect("should have created at least one block")
+    }
+
+    fn geometry(&self) -> &dyn StaticGeometry {
+        &self.geometry
+    }
+}
+
+const PHI: f32 = 1.618034;
+const COLUMN_SIDES: u32 = 20;
+
+/// Greek temple: stepped stylobate, tapered Doric columns, entablature beams,
+/// triangular pediments, and pitched roof panels — all independent dynamic
+/// bodies. Tests large-scale multi-body structural stability with mixed
+/// collider types (boxes + convex hulls).
+#[derive(Debug, Clone)]
+pub struct TempleScenario {
+    pub column_height: f32,
+    pub front_columns: u32,
+    pub side_columns: u32,
+    geometry: FlatQuadGeometry,
+}
+
+impl TempleScenario {
+    pub fn new() -> Self {
+        Self {
+            column_height: 8.0,
+            front_columns: 6,
+            side_columns: 9,
+            geometry: FlatQuadGeometry::new(20.0),
+        }
+    }
+}
+
+struct TempleLayout {
+    col_base_r: f32,
+    col_top_r: f32,
+    col_height: f32,
+    spacing: f32,
+    half_w: f32,
+    half_l: f32,
+    num_steps: u32,
+    step_h: f32,
+    step_margin: f32,
+    stylobate_top: f32,
+    entab_h: f32,
+    entab_overhang: f32,
+    entab_base_y: f32,
+    pediment_h: f32,
+    pediment_base_y: f32,
+    roof_t: f32,
+}
+
+impl TempleLayout {
+    fn from_scenario(s: &TempleScenario) -> Self {
+        let ch = s.column_height;
+        let col_base_r = ch / 12.0;
+        let col_top_r = col_base_r * 0.82;
+        let spacing = ch / PHI.powi(2);
+        let half_w = (s.front_columns - 1) as f32 * spacing / 2.0;
+        let half_l = (s.side_columns - 1) as f32 * spacing / 2.0;
+        let num_steps = 3u32;
+        let step_h = ch / 24.0;
+        let step_margin = spacing * 0.12;
+        let stylobate_top = num_steps as f32 * step_h;
+        let entab_h = ch / PHI.powi(2);
+        let entab_overhang = col_base_r * 0.6;
+        let entab_base_y = stylobate_top + ch;
+        let pediment_h = half_w / PHI;
+        let pediment_base_y = entab_base_y + entab_h;
+        let roof_t = ch / 40.0;
+
+        Self {
+            col_base_r,
+            col_top_r,
+            col_height: ch,
+            spacing,
+            half_w,
+            half_l,
+            num_steps,
+            step_h,
+            step_margin,
+            stylobate_top,
+            entab_h,
+            entab_overhang,
+            entab_base_y,
+            pediment_h,
+            pediment_base_y,
+            roof_t,
+        }
+    }
+}
+
+impl PhysicsBenchScenario for TempleScenario {
+    fn name(&self) -> &'static str {
+        "temple"
+    }
+
+    fn restitution(&self) -> f32 {
+        0.05
+    }
+
+    fn build_world(&self) -> PhysicsWorld {
+        let mut config = PhysicsConfig::default();
+        config.sleep.enabled = false;
+        config.deterministic_contact_ordering = true;
+        PhysicsWorld::new(config)
+    }
+
+    fn setup(&self, world: &mut PhysicsWorld) -> RigidBodyHandle {
+        let lay = TempleLayout::from_scenario(self);
+        let density = 2400.0;
+        let friction = 1.5;
+
+        let mut tracked = None;
+
+        // ── Stylobate (compound body with 3 stepped box colliders) ───
+        let top_step_hw = lay.half_w + lay.col_base_r + lay.step_margin;
+        let top_step_hl = lay.half_l + lay.col_base_r + lay.step_margin;
+        let stylobate_center_y = lay.num_steps as f32 * lay.step_h / 2.0;
+
+        let stylobate = world.create_body(
+            RigidBodyDesc::dynamic()
+                .position(Point3::new(0.0, stylobate_center_y, 0.0))
+                .linear_damping(0.01)
+                .angular_damping(0.005),
+        );
+        for i in 0..lay.num_steps {
+            let grow = (lay.num_steps - 1 - i) as f32 * lay.step_margin;
+            let hw = top_step_hw + grow;
+            let hl = top_step_hl + grow;
+            let hh = lay.step_h / 2.0;
+            let offset_y =
+                i as f32 * lay.step_h + hh - lay.num_steps as f32 * lay.step_h / 2.0;
+            world.attach_collider(
+                stylobate,
+                ColliderDesc::box_shape(Vector3::new(hw, hh, hl))
+                    .offset_translation(Vector3::new(0.0, offset_y, 0.0))
+                    .density(density)
+                    .restitution(0.05)
+                    .friction(friction),
+            );
+        }
+
+        // ── Columns ──────────────────────────────────────────────────
+        let col_y_base = lay.stylobate_top;
+        let mut col_positions = Vec::new();
+
+        for i in 0..self.front_columns {
+            let x = -lay.half_w + i as f32 * lay.spacing;
+            col_positions.push((x, lay.half_l));
+            col_positions.push((x, -lay.half_l));
+        }
+        for j in 1..(self.side_columns - 1) {
+            let z = -lay.half_l + j as f32 * lay.spacing;
+            col_positions.push((-lay.half_w, z));
+            col_positions.push((lay.half_w, z));
+        }
+
+        let (hull_verts, hull_faces) =
+            column_hull_geometry(lay.col_base_r, lay.col_top_r, lay.col_height, COLUMN_SIDES);
+
+        for (idx, &(cx, cz)) in col_positions.iter().enumerate() {
+            let world_hull: Vec<_> = hull_verts
+                .iter()
+                .map(|v| Vector3::new(v.x + cx, v.y + col_y_base, v.z + cz))
+                .collect();
+            let centroid =
+                world_hull.iter().copied().sum::<Vector3<f32>>() / world_hull.len() as f32;
+            let local_hull: Vec<_> = world_hull.iter().map(|v| v - centroid).collect();
+            let pos = Point3::new(centroid.x, centroid.y, centroid.z);
+            let hull = Arc::new(build_hull(&local_hull, &hull_faces));
+
+            let body = world.create_body(
+                RigidBodyDesc::dynamic()
+                    .position(pos)
+                    .linear_damping(0.01)
+                    .angular_damping(0.005),
+            );
+            world.attach_collider(
+                body,
+                ColliderDesc::convex_hull(hull)
+                    .density(density)
+                    .restitution(0.05)
+                    .friction(friction),
+            );
+
+            // Track a front-center column.
+            if idx == 0 {
+                tracked = Some(body);
+            }
+        }
+
+        // ── Entablature (4 beams) ────────────────────────────────────
+        let entab_hh = lay.entab_h / 2.0;
+        let entab_cy = lay.entab_base_y + entab_hh;
+        let beam_depth = lay.col_base_r + lay.entab_overhang;
+        let fb_hw = lay.half_w + beam_depth;
+
+        let spawn_box = |world: &mut PhysicsWorld, pos: Point3<f32>, he: Vector3<f32>| {
+            let body = world.create_body(
+                RigidBodyDesc::dynamic()
+                    .position(pos)
+                    .linear_damping(0.01)
+                    .angular_damping(0.005),
+            );
+            world.attach_collider(
+                body,
+                ColliderDesc::box_shape(he)
+                    .density(density)
+                    .restitution(0.05)
+                    .friction(friction),
+            );
+            body
+        };
+
+        // Front and back beams
+        for &z_sign in &[1.0f32, -1.0] {
+            spawn_box(
+                world,
+                Point3::new(0.0, entab_cy, z_sign * lay.half_l),
+                Vector3::new(fb_hw, entab_hh, beam_depth),
+            );
+        }
+
+        // Side beams
+        let side_hl = lay.half_l - beam_depth;
+        for &x_sign in &[1.0f32, -1.0] {
+            spawn_box(
+                world,
+                Point3::new(x_sign * lay.half_w, entab_cy, 0.0),
+                Vector3::new(beam_depth, entab_hh, side_hl),
+            );
+        }
+
+        // ── Pediments (triangular gables) ────────────────────────────
+        let ped_base = lay.pediment_base_y;
+        let ped_peak = ped_base + lay.pediment_h;
+        let ped_hw = lay.half_w + beam_depth;
+
+        for &z_sign in &[1.0f32, -1.0] {
+            let z_outer = z_sign * (lay.half_l + beam_depth);
+            let z_inner = z_sign * (lay.half_l - beam_depth);
+            let (verts, faces) =
+                gable_hull_geometry(0.0, ped_base, ped_peak, ped_hw, z_outer, z_inner);
+            let centroid = verts.iter().copied().sum::<Vector3<f32>>() / verts.len() as f32;
+            let local: Vec<_> = verts.iter().map(|v| v - centroid).collect();
+            let pos = Point3::new(centroid.x, centroid.y, centroid.z);
+            let hull = Arc::new(build_hull(&local, &faces));
+
+            let body = world.create_body(
+                RigidBodyDesc::dynamic()
+                    .position(pos)
+                    .linear_damping(0.01)
+                    .angular_damping(0.005),
+            );
+            world.attach_collider(
+                body,
+                ColliderDesc::convex_hull(hull)
+                    .density(density)
+                    .restitution(0.05)
+                    .friction(friction),
+            );
+        }
+
+        // ── Roof (two sloped panels) ─────────────────────────────────
+        let eave_dist = ped_hw;
+        let peak_h = lay.pediment_h;
+        let slope_len = (eave_dist * eave_dist + peak_h * peak_h).sqrt();
+        let roof_angle = peak_h.atan2(eave_dist);
+        let roof_overhang = lay.step_margin * 2.0;
+        let roof_half_depth = lay.half_l + beam_depth + roof_overhang;
+        let roof_he = Vector3::new(slope_len / 2.0, lay.roof_t / 2.0, roof_half_depth);
+
+        for &side in &[-1.0f32, 1.0] {
+            let mid_x = side * eave_dist / 2.0;
+            let mid_y = ped_base + peak_h / 2.0;
+            let rot = UnitQuaternion::from_axis_angle(&Vector3::z_axis(), -side * roof_angle);
+
+            let body = world.create_body(
+                RigidBodyDesc::dynamic()
+                    .position(Point3::new(mid_x, mid_y, 0.0))
+                    .rotation(rot)
+                    .linear_damping(0.01)
+                    .angular_damping(0.005),
+            );
+            world.attach_collider(
+                body,
+                ColliderDesc::box_shape(roof_he)
+                    .density(density)
+                    .restitution(0.05)
+                    .friction(friction),
+            );
+        }
+
+        tracked.expect("should have created columns")
+    }
+
+    fn geometry(&self) -> &dyn StaticGeometry {
+        &self.geometry
+    }
+}
+
+/// Tapered polygonal prism for a Doric column (physics hull only).
+fn column_hull_geometry(
+    base_radius: f32,
+    top_radius: f32,
+    height: f32,
+    num_sides: u32,
+) -> (Vec<Vector3<f32>>, Vec<FaceDef>) {
+    let n = num_sides as usize;
+    let angle_step = std::f32::consts::TAU / num_sides as f32;
+    let mut vertices = Vec::with_capacity(2 * n);
+
+    for i in 0..n {
+        let angle = i as f32 * angle_step;
+        vertices.push(Vector3::new(
+            base_radius * angle.cos(),
+            0.0,
+            base_radius * angle.sin(),
+        ));
+    }
+    for i in 0..n {
+        let angle = i as f32 * angle_step;
+        vertices.push(Vector3::new(
+            top_radius * angle.cos(),
+            height,
+            top_radius * angle.sin(),
+        ));
+    }
+
+    let mut faces = Vec::with_capacity(n + 2);
+
+    // Bottom face
+    faces.push(FaceDef {
+        indices: (0..n).rev().collect(),
+        opposite: n,
+    });
+    // Top face
+    faces.push(FaceDef {
+        indices: (n..2 * n).collect(),
+        opposite: 0,
+    });
+    // Side faces
+    for i in 0..n {
+        let i_next = (i + 1) % n;
+        faces.push(FaceDef {
+            indices: vec![i, i_next, n + i_next, n + i],
+            opposite: (i + n / 2) % n,
+        });
+    }
+
+    (vertices, faces)
+}
+
+/// Triangular gable prism geometry.
+fn gable_hull_geometry(
+    cx: f32,
+    base_y: f32,
+    peak_y: f32,
+    half_w: f32,
+    z_a: f32,
+    z_b: f32,
+) -> (Vec<Vector3<f32>>, Vec<FaceDef>) {
+    let vertices = vec![
+        Vector3::new(cx - half_w, base_y, z_a),
+        Vector3::new(cx + half_w, base_y, z_a),
+        Vector3::new(cx, peak_y, z_a),
+        Vector3::new(cx - half_w, base_y, z_b),
+        Vector3::new(cx + half_w, base_y, z_b),
+        Vector3::new(cx, peak_y, z_b),
+    ];
+
+    let faces = vec![
+        FaceDef { indices: vec![0, 1, 2], opposite: 3 },
+        FaceDef { indices: vec![5, 4, 3], opposite: 0 },
+        FaceDef { indices: vec![0, 3, 4, 1], opposite: 2 },
+        FaceDef { indices: vec![0, 2, 5, 3], opposite: 1 },
+        FaceDef { indices: vec![1, 4, 5, 2], opposite: 0 },
+    ];
+
+    (vertices, faces)
 }
