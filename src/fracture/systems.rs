@@ -64,9 +64,7 @@ impl<'a> System<'a> for FractureSystem {
                         .world
                         .collider(*ch)
                         .map(|c| {
-                            Point3::from(
-                                c.world_transform(body_pos, body_rot).translation.vector,
-                            )
+                            Point3::from(c.world_transform(body_pos, body_rot).translation.vector)
                         })
                         .unwrap_or(body_pos);
                     last_impulses

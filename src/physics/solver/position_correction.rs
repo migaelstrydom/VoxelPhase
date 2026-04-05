@@ -363,6 +363,24 @@ fn correct_constraint_drift(
                 );
             }
 
+            ConstraintKind::AnchorPoint {
+                body,
+                local_anchor,
+                world_anchor,
+                compliance,
+                ..
+            } => {
+                let linear_factor = correction_factor / (1.0 + compliance);
+                correct_anchor_point_drift(
+                    bodies,
+                    body.0,
+                    local_anchor,
+                    world_anchor,
+                    linear_factor,
+                    transforms,
+                );
+            }
+
             ConstraintKind::KeepUpright { .. } => {
                 // No NGS — handled by hard velocity projection.
             }
@@ -420,6 +438,32 @@ fn correct_follow_point_drift(
             if let Some(t) = transforms.get_mut(&handle_b) {
                 t.position -= correction * (inv_mass_b / inv_mass_sum);
             }
+        }
+    }
+}
+
+fn correct_anchor_point_drift(
+    bodies: &Arena<RigidBody>,
+    handle: Index,
+    local_anchor: &Vector3<f32>,
+    world_anchor: &Point3<f32>,
+    linear_factor: f32,
+    transforms: &mut FxHashMap<Index, CorrectedTransform>,
+) {
+    let Some((pos, rot, inv_mass, _)) = get_corrected_transform(bodies, handle, transforms) else {
+        return;
+    };
+    if inv_mass == 0.0 {
+        return;
+    }
+
+    let anchor = pos + rot * local_anchor;
+    let error = anchor - world_anchor;
+
+    if error.norm_squared() > 1e-14 {
+        let correction = error * linear_factor;
+        if let Some(t) = transforms.get_mut(&handle) {
+            t.position -= correction;
         }
     }
 }

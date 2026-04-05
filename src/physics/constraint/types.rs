@@ -1,6 +1,6 @@
 //! Constraint type definitions: persistent constraints, solver-ready rows, and the kind enum.
 
-use nalgebra::{UnitQuaternion, UnitVector3, Vector3};
+use nalgebra::{Point3, UnitQuaternion, UnitVector3, Vector3};
 use smallvec::SmallVec;
 
 use crate::physics::handle::RigidBodyHandle;
@@ -22,6 +22,25 @@ pub enum ConstraintKind {
         /// Angular compliance (0 = perfectly rigid, >0 = soft).
         /// Folded into effective mass as `1 / (J·M⁻¹·Jᵀ + compliance/dt²)`.
         compliance: f32,
+    },
+
+    /// Pin a body to a fixed world-space position.
+    /// Produces 3 positional rows (X, Y, Z) with `body_a: None`,
+    /// plus an optional 4th angular row locking yaw (spin around world Y).
+    /// Pair with KeepUpright to also lock tilt.
+    AnchorPoint {
+        /// The body to pin.
+        body: RigidBodyHandle,
+        /// Body-local offset of the anchored point (e.g. bottom of a post).
+        local_anchor: Vector3<f32>,
+        /// Fixed world-space target position.
+        world_anchor: Point3<f32>,
+        /// Positional compliance (0 = perfectly rigid).
+        compliance: f32,
+        /// Maximum impulse per axis per substep.
+        max_impulse: f32,
+        /// If true, adds a 4th row constraining spin around world Y.
+        lock_yaw: bool,
     },
 
     /// Drive a point on body_b toward a point on body_a, with optional
@@ -61,6 +80,13 @@ impl ConstraintKind {
     pub fn row_count(&self) -> usize {
         match self {
             ConstraintKind::KeepUpright { .. } => 2,
+            ConstraintKind::AnchorPoint { lock_yaw, .. } => {
+                if *lock_yaw {
+                    4
+                } else {
+                    3
+                }
+            }
             ConstraintKind::FollowPoint { .. } => 6,
         }
     }
@@ -68,7 +94,9 @@ impl ConstraintKind {
     /// Whether this constraint references the given body.
     pub fn references_body(&self, handle: RigidBodyHandle) -> bool {
         match self {
-            ConstraintKind::KeepUpright { body, .. } => *body == handle,
+            ConstraintKind::KeepUpright { body, .. } | ConstraintKind::AnchorPoint { body, .. } => {
+                *body == handle
+            }
             ConstraintKind::FollowPoint { body_a, body_b, .. } => {
                 *body_a == handle || *body_b == handle
             }
@@ -78,7 +106,9 @@ impl ConstraintKind {
     /// All body handles referenced by this constraint.
     pub fn referenced_bodies(&self) -> SmallVec<[RigidBodyHandle; 2]> {
         match self {
-            ConstraintKind::KeepUpright { body, .. } => smallvec::smallvec![*body],
+            ConstraintKind::KeepUpright { body, .. } | ConstraintKind::AnchorPoint { body, .. } => {
+                smallvec::smallvec![*body]
+            }
             ConstraintKind::FollowPoint { body_a, body_b, .. } => {
                 smallvec::smallvec![*body_a, *body_b]
             }

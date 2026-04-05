@@ -114,5 +114,17 @@ Level(
             pos: (8.0, 0.0, 10.0),
             length: 10.0,
         ),
+
+        FencePost(
+            pos: (5.0, -13.0),
+            half_height: 1.0,
+            radius: 0.2,
+        ),
+
+        PlayWheel(
+            pos: (5.0, -16.0),
+            radius: 2.0,
+            hub_height: 0.4,
+        ),
     ],
 )

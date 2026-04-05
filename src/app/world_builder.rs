@@ -4,7 +4,7 @@ use crate::biped::BipedController;
 use crate::camera::{CameraConfig, FollowTarget};
 use crate::components::{
     CameraComponent, ModelInstance, Orientation, Position, Renderable, RigidBodyComponent,
-    Rotation, Velocity, VelocityDriven,
+    Rotation, TerrainAnchored, Velocity, VelocityDriven,
 };
 use crate::core::error::EngineResult;
 use crate::debug::{DebugLines, DebugLog, DebugOverlays};
@@ -67,6 +67,7 @@ impl WorldBuilder {
         world.register::<Flammable>();
         world.register::<OnFire>();
         world.register::<CompoundFracture>();
+        world.register::<TerrainAnchored>();
     }
 
     pub fn with_renderer(mut self, renderer: Renderer) -> Self {

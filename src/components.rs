@@ -4,7 +4,8 @@ use nalgebra::{UnitQuaternion, Vector3};
 use specs::{Component, DenseVecStorage, VecStorage};
 
 use crate::model::Model;
-use crate::physics::RigidBodyHandle;
+use crate::physics::constraint::ConstraintHandle;
+use crate::physics::{ColliderDesc, RigidBodyHandle};
 use crate::rendering::camera::Camera;
 
 // Physics Components
@@ -88,6 +89,25 @@ impl ModelInstance {
 #[derive(Component, Debug, Default)]
 #[storage(DenseVecStorage)]
 pub struct Renderable;
+
+/// Anchors an entity to a fixed world-space position via physics constraints.
+///
+/// When the terrain beneath the anchor point is destroyed, both constraints
+/// are removed, the collider is swapped to its full-size version, and this
+/// component is removed — releasing the body to fall freely.
+#[derive(Component, Debug)]
+#[storage(DenseVecStorage)]
+pub struct TerrainAnchored {
+    /// Handle to the AnchorPoint constraint pinning the body's position.
+    pub anchor_handle: ConstraintHandle,
+    /// Handle to the KeepUpright constraint locking orientation.
+    pub upright_handle: ConstraintHandle,
+    /// World-space position to check for terrain solidity.
+    pub anchor_world: nalgebra::Point3<f32>,
+    /// Full-size collider to attach when released (replaces the short
+    /// anchored-mode collider that avoids terrain overlap).
+    pub released_collider: Option<ColliderDesc>,
+}
 
 #[derive(Component, Debug)]
 #[storage(DenseVecStorage)]

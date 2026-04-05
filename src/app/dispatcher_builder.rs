@@ -10,7 +10,7 @@ use crate::projectile::{GrenadeSpawnSystem, LifetimeSystem, ProjectileImpactDete
 use crate::sensing::SensorProbeSystem;
 use crate::systems::{
     CameraControlSystem, PhysicsSyncSystem, PlayerControlSystem, PlayerInputSystem, RenderSystem,
-    TerrainUpdateSystem, WaterSystem,
+    TerrainAnchorSystem, TerrainUpdateSystem, WaterSystem,
 };
 
 /// Builds the system dispatcher with proper dependency ordering.
@@ -52,6 +52,7 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
         )
         .with(FireIgnitionSystem, "fire_ignition", &["explosion"])
         .with(FireCleanupSystem, "fire_cleanup", &["fire_ignition"])
+        .with(TerrainAnchorSystem, "terrain_anchor", &["explosion"])
         .with(TerrainUpdateSystem, "terrain_update", &["explosion"])
         // Water simulation (after terrain update so dirty_regions are visible)
         .with(WaterSystem, "water", &["terrain_update"])

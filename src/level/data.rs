@@ -8,9 +8,9 @@ use serde::Deserialize;
 
 use crate::app::spawnables::{
     BeachBallDef, BoxDef, BoxWallDef, CapsuleDef, CrateDef, DodecahedronDef, DominoDef,
-    HeavyCrateDef, HexPrismDef, HoneycombWallDef, HouseDef, IcosahedronDef, JengaDef,
-    OctahedronDef, PlankBridgeDef, PlankDef, PyramidDef, Spawnable, StackDef, StackItemDef,
-    TableDef, TempleDef, TetrahedronDef, TowerDef, TrampolineDef, VoussoirArchDef,
+    FencePostDef, HeavyCrateDef, HexPrismDef, HoneycombWallDef, HouseDef, IcosahedronDef, JengaDef,
+    OctahedronDef, PlankBridgeDef, PlankDef, PlayWheelDef, PyramidDef, Spawnable, StackDef,
+    StackItemDef, TableDef, TempleDef, TetrahedronDef, TowerDef, TrampolineDef, VoussoirArchDef,
 };
 
 /// Top-level level description.
@@ -245,6 +245,30 @@ pub enum LevelObject {
         restitution: f32,
         #[serde(default = "CapsuleDef::default_friction")]
         friction: f32,
+    },
+    /// Vertical post anchored to terrain. Released when terrain is destroyed.
+    FencePost {
+        /// Position (x, z). Y is determined by terrain surface height.
+        pos: (f32, f32),
+        #[serde(default = "FencePostDef::default_half_height")]
+        half_height: f32,
+        #[serde(default = "FencePostDef::default_radius")]
+        radius: f32,
+        #[serde(default = "FencePostDef::default_density")]
+        density: f32,
+    },
+    /// Spinning playground wheel anchored to terrain. Spins freely around Y.
+    PlayWheel {
+        /// Position (x, z). Y is determined by terrain surface height.
+        pos: (f32, f32),
+        #[serde(default = "PlayWheelDef::default_radius")]
+        radius: f32,
+        #[serde(default = "PlayWheelDef::default_thickness")]
+        thickness: f32,
+        #[serde(default = "PlayWheelDef::default_density")]
+        density: f32,
+        #[serde(default = "PlayWheelDef::default_hub_height")]
+        hub_height: f32,
     },
     /// Regular tetrahedron with ConvexHull collider.
     Tetrahedron {
@@ -547,6 +571,32 @@ impl LevelObject {
                 density: *density,
                 restitution: *restitution,
                 friction: *friction,
+            }),
+
+            LevelObject::FencePost {
+                pos,
+                half_height,
+                radius,
+                density,
+            } => Box::new(FencePostDef {
+                pos: *pos,
+                half_height: *half_height,
+                radius: *radius,
+                density: *density,
+            }),
+
+            LevelObject::PlayWheel {
+                pos,
+                radius,
+                thickness,
+                density,
+                hub_height,
+            } => Box::new(PlayWheelDef {
+                pos: *pos,
+                radius: *radius,
+                thickness: *thickness,
+                density: *density,
+                hub_height: *hub_height,
             }),
 
             LevelObject::Tetrahedron {

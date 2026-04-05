@@ -2,6 +2,7 @@
 
 use generational_arena::Arena;
 
+use super::anchor_point;
 use super::follow_point;
 use super::keep_upright;
 use super::types::{Constraint, ConstraintKind, ConstraintRow};
@@ -41,6 +42,33 @@ pub fn expand_constraints(
                     *body,
                     target_up,
                     *compliance,
+                    dt,
+                    beta,
+                    index,
+                    &constraint.warm_impulses,
+                );
+                rows.extend(expanded);
+            }
+
+            ConstraintKind::AnchorPoint {
+                body,
+                local_anchor,
+                world_anchor,
+                compliance,
+                max_impulse,
+                lock_yaw,
+            } => {
+                let Some(rigid_body) = bodies.get(body.0) else {
+                    continue;
+                };
+                let expanded = anchor_point::expand(
+                    rigid_body,
+                    *body,
+                    local_anchor,
+                    world_anchor,
+                    *compliance,
+                    *max_impulse,
+                    *lock_yaw,
                     dt,
                     beta,
                     index,

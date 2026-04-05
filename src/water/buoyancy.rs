@@ -788,7 +788,10 @@ fn shape_drag_properties(shape: &ColliderShape) -> (f32, f32, f32) {
             (DRAG_COEFF_CAPSULE, projected_area, radius_sq)
         }
         ColliderShape::ConvexHull { hull } => {
-            let (mut min_v, mut max_v) = (Vector3::from_element(f32::MAX), Vector3::from_element(f32::MIN));
+            let (mut min_v, mut max_v) = (
+                Vector3::from_element(f32::MAX),
+                Vector3::from_element(f32::MIN),
+            );
             for v in &hull.vertices {
                 min_v = min_v.zip_map(v, f32::min);
                 max_v = max_v.zip_map(v, f32::max);
