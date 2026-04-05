@@ -2,7 +2,7 @@ use crate::camera::{CameraConfig, FollowTarget};
 use crate::components::{CameraComponent, Position};
 use crate::input::{GameplayActions, InputState};
 use crate::time::Time;
-use nalgebra::Point3;
+use nalgebra::{Point3, Vector3};
 use specs::{Entities, Join, ReadExpect, ReadStorage, System, WriteStorage};
 
 /// Updates cameras that have a FollowTarget component.
@@ -30,7 +30,7 @@ impl<'a> System<'a> for CameraControlSystem {
         for (_entity, follow, camera) in (&entities, &mut follow_targets, &mut cameras).join() {
             // Get target position
             let target_pos = match positions.get(follow.target) {
-                Some(pos) => pos.0,
+                Some(pos) => pos.0 + Vector3::new(0.0, 1.0, 0.0),
                 None => {
                     log::warn!("CameraControlSystem: Follow target entity has no Position");
                     continue;

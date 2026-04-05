@@ -12,6 +12,7 @@ pub const MAX_HULL_VERTICES: usize = 64;
 /// Minimum ratio of thinnest to thickest AABB dimension.
 /// Hulls thinner than this are rejected to avoid degenerate Minkowski differences.
 const MIN_THICKNESS_RATIO: f32 = 0.01;
+const FACE_NORMAL_EPS: f32 = 1e-8;
 
 /// A face of a convex hull.
 #[derive(Debug, Clone)]
@@ -20,6 +21,26 @@ pub struct HullFace {
     pub vertex_indices: SmallVec<[u16; 6]>,
     /// Outward face normal (precomputed, normalized).
     pub normal: Vector3<f32>,
+}
+
+/// An edge with precomputed Gauss map adjacency for SAT edge-pair filtering.
+///
+/// Each edge on a convex hull is shared by exactly two faces. The two adjacent
+/// face normals define an arc on the Gauss map (unit sphere). When testing
+/// edge-edge separating axes between two hulls, only edge pairs whose Gauss
+/// map arcs intersect can produce a valid separating axis (Minkowski face test).
+///
+/// Reference: Gregorius, "The Separating Axis Test", GDC 2013.
+#[derive(Debug, Clone)]
+pub struct HullEdgeAdj {
+    /// First vertex index.
+    pub v0: u16,
+    /// Second vertex index.
+    pub v1: u16,
+    /// Outward normal of the first adjacent face.
+    pub normal_a: Vector3<f32>,
+    /// Outward normal of the second adjacent face.
+    pub normal_b: Vector3<f32>,
 }
 
 /// A convex hull defined by vertices and faces.
@@ -33,6 +54,8 @@ pub struct ConvexHull {
     pub vertices: Vec<Vector3<f32>>,
     /// Faces of the hull, each with vertex indices and precomputed normal.
     pub faces: Vec<HullFace>,
+    /// Unique edges with precomputed Gauss map adjacency (adjacent face normals).
+    pub edges: Vec<HullEdgeAdj>,
     /// Precomputed bounding radius (max vertex distance from origin).
     pub bounding_radius: f32,
 }
@@ -51,6 +74,10 @@ impl ConvexHull {
             vertices.len(),
             MAX_HULL_VERTICES,
         );
+        assert!(
+            !vertices.is_empty(),
+            "ConvexHull: at least one vertex required"
+        );
         assert!(!faces.is_empty(), "ConvexHull: at least one face required");
 
         // Validate minimum thickness.
@@ -63,14 +90,19 @@ impl ConvexHull {
             "ConvexHull: degenerate hull — thinnest dimension {min_dim} is < 1% of thickest {max_dim}",
         );
 
+        let canonical_faces = canonicalize_faces(&vertices, faces);
+
         let bounding_radius = vertices
             .iter()
             .map(|v| v.magnitude())
             .fold(0.0f32, f32::max);
 
+        let edges = build_edge_adjacency(&vertices, &canonical_faces);
+
         Self {
             vertices,
-            faces,
+            faces: canonical_faces,
+            edges,
             bounding_radius,
         }
     }
@@ -277,6 +309,120 @@ fn aabb_of(vertices: &[Vector3<f32>]) -> (Vector3<f32>, Vector3<f32>) {
         max_v.z = max_v.z.max(v.z);
     }
     (min_v, max_v)
+}
+
+fn canonicalize_faces(vertices: &[Vector3<f32>], mut faces: Vec<HullFace>) -> Vec<HullFace> {
+    let hull_center =
+        vertices.iter().fold(Vector3::zeros(), |acc, v| acc + *v) / (vertices.len() as f32);
+
+    for (face_idx, face) in faces.iter_mut().enumerate() {
+        assert!(
+            face.vertex_indices.len() >= 3,
+            "ConvexHull: face {face_idx} has fewer than 3 vertices"
+        );
+
+        for &idx in &face.vertex_indices {
+            assert!(
+                (idx as usize) < vertices.len(),
+                "ConvexHull: face {face_idx} references invalid vertex index {idx}"
+            );
+        }
+
+        let computed_normal =
+            compute_face_normal(vertices, &face.vertex_indices).unwrap_or_else(|| {
+                panic!("ConvexHull: face {face_idx} is degenerate (collinear vertices)")
+            });
+        let face_center = face
+            .vertex_indices
+            .iter()
+            .fold(Vector3::zeros(), |acc, &idx| acc + vertices[idx as usize])
+            / (face.vertex_indices.len() as f32);
+
+        let mut outward_normal = computed_normal;
+        let to_face = face_center - hull_center;
+        if to_face.dot(&outward_normal) < 0.0 {
+            face.vertex_indices.reverse();
+            outward_normal = -outward_normal;
+        }
+
+        face.normal = outward_normal;
+    }
+
+    faces
+}
+
+fn compute_face_normal(vertices: &[Vector3<f32>], indices: &[u16]) -> Option<Vector3<f32>> {
+    let v0 = vertices[*indices.first()? as usize];
+    let mut normal = Vector3::zeros();
+    for i in 1..indices.len() - 1 {
+        let v1 = vertices[indices[i] as usize];
+        let v2 = vertices[indices[i + 1] as usize];
+        normal += (v1 - v0).cross(&(v2 - v0));
+    }
+    let len_sq = normal.magnitude_squared();
+    if len_sq <= FACE_NORMAL_EPS {
+        None
+    } else {
+        Some(normal / len_sq.sqrt())
+    }
+}
+
+/// Build the unique edge list with adjacent face normals from a hull's face data.
+///
+/// Each edge (shared by exactly two faces with opposite windings) is stored once
+/// with both adjacent face normals. Boundary edges (only one adjacent face) are
+/// skipped — these shouldn't exist on a closed convex hull.
+fn build_edge_adjacency(_vertices: &[Vector3<f32>], faces: &[HullFace]) -> Vec<HullEdgeAdj> {
+    struct FaceEdgeRef {
+        face_idx: usize,
+        a: u16,
+        b: u16,
+    }
+
+    let mut edge_faces: Vec<((u16, u16), Vec<FaceEdgeRef>)> = Vec::new();
+
+    for (face_idx, face) in faces.iter().enumerate() {
+        let indices = &face.vertex_indices;
+        let n = indices.len();
+        for j in 0..n {
+            let a = indices[j];
+            let b = indices[(j + 1) % n];
+            let key = if a < b { (a, b) } else { (b, a) };
+
+            if let Some((_, refs)) = edge_faces.iter_mut().find(|(k, _)| *k == key) {
+                refs.push(FaceEdgeRef { face_idx, a, b });
+            } else {
+                edge_faces.push((key, vec![FaceEdgeRef { face_idx, a, b }]));
+            }
+        }
+    }
+
+    edge_faces
+        .into_iter()
+        .map(|((key_v0, key_v1), refs)| {
+            assert!(
+                refs.len() == 2,
+                "ConvexHull: edge ({key_v0},{key_v1}) has {} adjacent faces; expected 2 for closed manifold",
+                refs.len()
+            );
+
+            let e0 = &refs[0];
+            let e1 = &refs[1];
+            assert!(
+                e0.a == e1.b && e0.b == e1.a,
+                "ConvexHull: edge ({key_v0},{key_v1}) has inconsistent face winding"
+            );
+
+            HullEdgeAdj {
+                // Preserve topological edge direction from face winding.
+                // The Gauss-map Minkowski-face test depends on this orientation.
+                v0: e0.a,
+                v1: e0.b,
+                normal_a: faces[e0.face_idx].normal,
+                normal_b: faces[e1.face_idx].normal,
+            }
+        })
+        .collect()
 }
 
 /// Build a cube-shaped ConvexHull with the given half-extents, centered at origin.
@@ -519,6 +665,97 @@ mod tests {
             vertex_indices: SmallVec::from_slice(&[0, 1, 2, 3]),
             normal: Vector3::z(),
         }];
+        ConvexHull::new(vertices, faces);
+    }
+
+    #[test]
+    fn canonicalizes_face_normals_and_winding() {
+        let s = 1.0f32;
+        let vertices = vec![
+            Vector3::new(s, s, s),
+            Vector3::new(s, -s, -s),
+            Vector3::new(-s, s, -s),
+            Vector3::new(-s, -s, s),
+        ];
+        // Deliberately provide mixed winding and bogus normals.
+        let faces = vec![
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[0, 2, 1]),
+                normal: Vector3::new(0.0, 0.0, 0.0),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[0, 2, 3]),
+                normal: Vector3::new(99.0, -3.0, 2.0),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[1, 3, 0]),
+                normal: Vector3::new(-7.0, 2.0, 1.0),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[1, 2, 3]),
+                normal: Vector3::new(1.0, 1.0, 1.0),
+            },
+        ];
+
+        let hull = ConvexHull::new(vertices.clone(), faces);
+        assert_eq!(
+            hull.edges.len(),
+            6,
+            "Tetrahedron must have 6 manifold edges"
+        );
+
+        let center =
+            vertices.iter().fold(Vector3::zeros(), |acc, v| acc + *v) / (vertices.len() as f32);
+        for (face_idx, face) in hull.faces.iter().enumerate() {
+            let face_center = face
+                .vertex_indices
+                .iter()
+                .fold(Vector3::zeros(), |acc, &idx| acc + vertices[idx as usize])
+                / (face.vertex_indices.len() as f32);
+            assert!(
+                (face.normal.magnitude() - 1.0).abs() < 1e-5,
+                "face {face_idx} normal must be unit length"
+            );
+            assert!(
+                (face_center - center).dot(&face.normal) > 0.0,
+                "face {face_idx} normal must point outward"
+            );
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "adjacent faces")]
+    fn rejects_non_manifold_edge_adjacency() {
+        let s = 1.0f32;
+        let vertices = vec![
+            Vector3::new(s, s, s),
+            Vector3::new(s, -s, -s),
+            Vector3::new(-s, s, -s),
+            Vector3::new(-s, -s, s),
+        ];
+        // Duplicate one face to force edges with 3 adjacent faces.
+        let faces = vec![
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[0, 1, 2]),
+                normal: Vector3::new(0.0, 0.0, 1.0),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[0, 1, 2]),
+                normal: Vector3::new(0.0, 0.0, 1.0),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[0, 2, 3]),
+                normal: Vector3::new(0.0, 1.0, 0.0),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[0, 3, 1]),
+                normal: Vector3::new(1.0, 0.0, 0.0),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[1, 3, 2]),
+                normal: Vector3::new(-1.0, 0.0, 0.0),
+            },
+        ];
         ConvexHull::new(vertices, faces);
     }
 

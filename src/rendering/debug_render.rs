@@ -43,8 +43,8 @@ fn render_debug_spheres(
         return Ok(());
     }
 
-    let segments = 12;
-    let rings = 8;
+    let segments = 6;
+    let rings = 6;
     let indices = generate_sphere_indices(segments, rings);
 
     for sphere in overlays.spheres() {
@@ -75,7 +75,7 @@ fn render_debug_lines(
 
     for line in overlays.lines() {
         let (vertices, indices) =
-            generate_cylinder(line.start, line.end, line.radius, 6, line.colour);
+            generate_cylinder(line.start, line.end, line.radius, 4, line.colour);
         if !vertices.is_empty() {
             renderer.draw_procedural_mesh(
                 cb,

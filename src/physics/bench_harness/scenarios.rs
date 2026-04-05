@@ -1345,8 +1345,7 @@ fn build_hull(vertices: &[Vector3<f32>], faces: &[FaceDef]) -> ConvexHull {
                 raw_normal.normalize()
             };
 
-            let mut indices: SmallVec<[u16; 6]> =
-                face.indices.iter().map(|&i| i as u16).collect();
+            let mut indices: SmallVec<[u16; 6]> = face.indices.iter().map(|&i| i as u16).collect();
             if flip {
                 indices[1..].reverse();
             }
@@ -1651,12 +1650,30 @@ fn voussoir_geometry(
     ];
 
     let faces = vec![
-        FaceDef { indices: vec![0, 1, 2, 3], opposite: 4 },
-        FaceDef { indices: vec![7, 6, 5, 4], opposite: 0 },
-        FaceDef { indices: vec![0, 4, 5, 1], opposite: 3 },
-        FaceDef { indices: vec![3, 2, 6, 7], opposite: 0 },
-        FaceDef { indices: vec![1, 5, 6, 2], opposite: 0 },
-        FaceDef { indices: vec![0, 3, 7, 4], opposite: 1 },
+        FaceDef {
+            indices: vec![0, 1, 2, 3],
+            opposite: 4,
+        },
+        FaceDef {
+            indices: vec![7, 6, 5, 4],
+            opposite: 0,
+        },
+        FaceDef {
+            indices: vec![0, 4, 5, 1],
+            opposite: 3,
+        },
+        FaceDef {
+            indices: vec![3, 2, 6, 7],
+            opposite: 0,
+        },
+        FaceDef {
+            indices: vec![1, 5, 6, 2],
+            opposite: 0,
+        },
+        FaceDef {
+            indices: vec![0, 3, 7, 4],
+            opposite: 1,
+        },
     ];
 
     (vertices, faces)
@@ -1893,8 +1910,7 @@ impl PhysicsBenchScenario for TempleScenario {
             let hw = top_step_hw + grow;
             let hl = top_step_hl + grow;
             let hh = lay.step_h / 2.0;
-            let offset_y =
-                i as f32 * lay.step_h + hh - lay.num_steps as f32 * lay.step_h / 2.0;
+            let offset_y = i as f32 * lay.step_h + hh - lay.num_steps as f32 * lay.step_h / 2.0;
             world.attach_collider(
                 stylobate,
                 ColliderDesc::box_shape(Vector3::new(hw, hh, hl))
@@ -2135,11 +2151,26 @@ fn gable_hull_geometry(
     ];
 
     let faces = vec![
-        FaceDef { indices: vec![0, 1, 2], opposite: 3 },
-        FaceDef { indices: vec![5, 4, 3], opposite: 0 },
-        FaceDef { indices: vec![0, 3, 4, 1], opposite: 2 },
-        FaceDef { indices: vec![0, 2, 5, 3], opposite: 1 },
-        FaceDef { indices: vec![1, 4, 5, 2], opposite: 0 },
+        FaceDef {
+            indices: vec![0, 1, 2],
+            opposite: 3,
+        },
+        FaceDef {
+            indices: vec![5, 4, 3],
+            opposite: 0,
+        },
+        FaceDef {
+            indices: vec![0, 3, 4, 1],
+            opposite: 2,
+        },
+        FaceDef {
+            indices: vec![0, 2, 5, 3],
+            opposite: 1,
+        },
+        FaceDef {
+            indices: vec![1, 4, 5, 2],
+            opposite: 0,
+        },
     ];
 
     (vertices, faces)

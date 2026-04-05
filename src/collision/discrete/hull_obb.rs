@@ -15,7 +15,9 @@ use crate::collision::contact::{ContactManifold, ContactPoint, FeatureId};
 use crate::collision::contact_reducer::ContactReducer;
 use crate::collision::convex_hull::{ConvexHull, TransformedHull};
 use crate::collision::obb::Obb;
-use crate::collision::sat::{SatCache, AXIS_EPS, OVERLAP_EPS};
+use crate::collision::sat::{
+    edge_pair_overlap, is_minkowski_face, SatCache, AXIS_EPS, OVERLAP_EPS,
+};
 use crate::collision::segment::segment_segment_closest_points;
 use crate::collision::shape_view::ShapeView;
 use crate::collision::support::ConvexSupport;
@@ -25,10 +27,6 @@ const MAX_CONTACTS: usize = 4;
 
 /// Tolerance for GJK separation distance check.
 const GJK_TOLERANCE: f32 = 1e-4;
-
-/// Maximum hull face count for edge-edge SAT to be enabled.
-/// OBBs always contribute 6 faces, so this threshold applies to the hull only.
-const EDGE_EDGE_HULL_FACE_THRESHOLD: usize = 18;
 
 /// Fraction of `margin` by which an edge-edge overlap must beat the best face
 /// overlap to win.
@@ -166,49 +164,78 @@ pub fn hull_obb_manifold(
         }
     }
 
-    // Edge-edge SAT for small hulls.
+    // Edge-edge SAT with Gauss map filtering (Gregorius, GDC 2013).
+    //
+    // For each hull edge, test against each of the 3 OBB edge directions.
+    // An OBB edge along axis i has adjacent face normals on the two
+    // perpendicular axes. All 4 parallel variants of that OBB edge share
+    // the same adjacent normals, so the Minkowski face test is per-axis,
+    // not per-variant.
     let mut best_edge: Option<EdgeEdgeResult> = None;
 
-    if hull.faces.len() <= EDGE_EDGE_HULL_FACE_THRESHOLD {
-        let hull_edges = extract_edges(hull);
+    // Precompute OBB adjacent face normal pairs (one pair per OBB axis).
+    let obb_adj_normals: [(Vector3<f32>, Vector3<f32>); 3] = [
+        (obb_axes[1], obb_axes[2]), // axis 0: adjacent faces on axes 1, 2
+        (obb_axes[0], obb_axes[2]), // axis 1: adjacent faces on axes 0, 2
+        (obb_axes[0], obb_axes[1]), // axis 2: adjacent faces on axes 0, 1
+    ];
 
-        for &(ea0, ea1) in &hull_edges {
-            let edge_a = hull_view.rotation
-                * (hull.vertices[ea1 as usize] - hull.vertices[ea0 as usize]);
+    for hull_edge in &hull.edges {
+        let na1 = hull_view.rotation * hull_edge.normal_a;
+        let na2 = hull_view.rotation * hull_edge.normal_b;
+        let dir_a = hull_view.rotation
+            * (hull.vertices[hull_edge.v1 as usize] - hull.vertices[hull_edge.v0 as usize]);
 
-            for obb_axis_idx in 0..3 {
-                let edge_b = obb_axes[obb_axis_idx];
-                let cross = edge_a.cross(&edge_b);
-                let len_sq = cross.magnitude_squared();
-                if len_sq < AXIS_EPS {
-                    continue;
-                }
-                let mut axis = cross / len_sq.sqrt();
-                if axis.dot(&center_dir) < 0.0 {
-                    axis = -axis;
-                }
+        for obb_axis_idx in 0..3 {
+            let (ob_n1, ob_n2) = obb_adj_normals[obb_axis_idx];
 
-                let overlap = support_overlap_mixed(&th, obb, axis, margin);
+            if !is_minkowski_face(na1, na2, -ob_n1, -ob_n2) {
+                continue;
+            }
 
-                if overlap < -OVERLAP_EPS {
-                    sat_cache.separating_axis = Some(axis);
-                    return ContactManifold::empty();
-                }
+            let edge_b = obb_axes[obb_axis_idx];
+            let cross = dir_a.cross(&edge_b);
+            let len_sq = cross.magnitude_squared();
+            if len_sq < AXIS_EPS {
+                continue;
+            }
 
-                update_separating(axis, overlap);
+            let ha0 = hull_view.center + hull_view.rotation * hull.vertices[hull_edge.v0 as usize];
+            let ha1 = hull_view.center + hull_view.rotation * hull.vertices[hull_edge.v1 as usize];
 
-                let d = axis.dot(&best_face_axis);
-                let face_len_sq = best_face_axis.magnitude_squared();
-                if face_len_sq > 1e-12 && d * d > EDGE_FACE_ALIGN_THRESHOLD * face_len_sq {
-                    continue;
-                }
+            // Pick the OBB edge variant closest to the hull edge (support of
+            // OBB in -axis direction). The OBB edge along `obb_axis_idx` has
+            // 4 parallel variants at different offsets on the two perp axes.
+            let mut axis = cross / len_sq.sqrt();
+            if axis.dot(&(na1 + na2)) < 0.0 {
+                axis = -axis;
+            }
+            let variant = obb_support_edge_variant(&obb_axes, obb_axis_idx, -axis);
+            let (b0, b1) = obb_edge_variant(obb, &obb_axes, obb_axis_idx, variant);
 
-                if best_edge.as_ref().map_or(true, |e| overlap < e.overlap) {
-                    best_edge = Some(EdgeEdgeResult {
-                        axis,
-                        overlap,
-                    });
-                }
+            let overlap = edge_pair_overlap(axis, ha0, ha1, b0, b1, margin);
+
+            if overlap < -OVERLAP_EPS {
+                sat_cache.separating_axis = Some(axis);
+                return ContactManifold::empty();
+            }
+
+            update_separating(axis, overlap);
+
+            let d = axis.dot(&best_face_axis);
+            let face_len_sq = best_face_axis.magnitude_squared();
+            if face_len_sq > 1e-12 && d * d > EDGE_FACE_ALIGN_THRESHOLD * face_len_sq {
+                continue;
+            }
+
+            if best_edge.as_ref().map_or(true, |e| overlap < e.overlap) {
+                best_edge = Some(EdgeEdgeResult {
+                    axis,
+                    overlap,
+                    hull_edge: (hull_edge.v0, hull_edge.v1),
+                    obb_axis_idx,
+                    obb_variant: variant,
+                });
             }
         }
     }
@@ -218,7 +245,15 @@ pub fn hull_obb_manifold(
     let (best_overlap, best_axis, classification) = if let Some(ref ee) = best_edge {
         let penetrating = ee.overlap > 2.0 * margin;
         if penetrating && ee.overlap + edge_win_slop < best_face_overlap {
-            (ee.overlap, ee.axis, AxisClassification::EdgeEdge)
+            (
+                ee.overlap,
+                ee.axis,
+                AxisClassification::EdgeEdge {
+                    hull_edge: ee.hull_edge,
+                    obb_axis_idx: ee.obb_axis_idx,
+                    obb_variant: ee.obb_variant,
+                },
+            )
         } else {
             (
                 best_face_overlap,
@@ -252,36 +287,24 @@ pub fn hull_obb_manifold(
         AxisClassification::Face { from_hull } => {
             face_contact(hull, hull_view, obb, &obb_axes, normal, margin, from_hull)
         }
-        AxisClassification::EdgeEdge => {
-            let hull_witness_edge = support_witness_hull_edge(hull, hull_view, normal);
-            let obb_witness_edge = support_witness_obb_edge_variant(&obb_axes, normal);
-            if let (Some(hull_edge), Some((obb_axis_idx, obb_variant))) =
-                (hull_witness_edge, obb_witness_edge)
-            {
-                match edge_edge_contact(
-                    hull,
-                    hull_view,
-                    obb,
-                    &obb_axes,
-                    normal,
-                    geometric_depth,
-                    hull_edge,
-                    obb_axis_idx,
-                    obb_variant,
-                ) {
-                    Some(manifold) => manifold,
-                    None => face_contact(
-                        hull,
-                        hull_view,
-                        obb,
-                        &obb_axes,
-                        best_face_axis.normalize(),
-                        margin,
-                        best_face_from_hull,
-                    ),
-                }
-            } else {
-                face_contact(
+        AxisClassification::EdgeEdge {
+            hull_edge,
+            obb_axis_idx,
+            obb_variant,
+        } => {
+            match edge_edge_contact(
+                hull,
+                hull_view,
+                obb,
+                &obb_axes,
+                normal,
+                geometric_depth,
+                hull_edge,
+                obb_axis_idx,
+                obb_variant,
+            ) {
+                Some(manifold) => manifold,
+                None => face_contact(
                     hull,
                     hull_view,
                     obb,
@@ -289,20 +312,29 @@ pub fn hull_obb_manifold(
                     best_face_axis.normalize(),
                     margin,
                     best_face_from_hull,
-                )
+                ),
             }
         }
     }
 }
 
 enum AxisClassification {
-    Face { from_hull: bool },
-    EdgeEdge,
+    Face {
+        from_hull: bool,
+    },
+    EdgeEdge {
+        hull_edge: HullEdge,
+        obb_axis_idx: usize,
+        obb_variant: usize,
+    },
 }
 
 struct EdgeEdgeResult {
     axis: Vector3<f32>,
     overlap: f32,
+    hull_edge: HullEdge,
+    obb_axis_idx: usize,
+    obb_variant: usize,
 }
 
 /// Compute SAT overlap between a hull and an OBB along a candidate axis.
@@ -527,11 +559,18 @@ fn obb_edge_variant(
     let (s0, s1) = signs[variant];
     let offset = axes[perp0] * (he0 * s0) + axes[perp1] * (he1 * s1);
 
-    (obb.center + offset - edge_dir, obb.center + offset + edge_dir)
+    (
+        obb.center + offset - edge_dir,
+        obb.center + offset + edge_dir,
+    )
 }
 
 /// Find the hull face most aligned with a direction.
-fn find_most_aligned_hull_face(hull: &ConvexHull, view: &ShapeView, direction: Vector3<f32>) -> usize {
+fn find_most_aligned_hull_face(
+    hull: &ConvexHull,
+    view: &ShapeView,
+    direction: Vector3<f32>,
+) -> usize {
     let mut best_idx = 0;
     let mut best_dot = f32::NEG_INFINITY;
     for (idx, face) in hull.faces.iter().enumerate() {
@@ -592,106 +631,37 @@ fn find_most_opposed_obb_face(axes: &[Vector3<f32>; 3], direction: Vector3<f32>)
     (best_idx, best_sign)
 }
 
-/// Extract unique directed edges from a convex hull's face winding.
-fn extract_edges(hull: &ConvexHull) -> SmallVec<[HullEdge; 32]> {
-    let mut seen = SmallVec::<[HullEdge; 32]>::new();
-    for face in &hull.faces {
-        let indices = &face.vertex_indices;
-        let n = indices.len();
-        for j in 0..n {
-            let a = indices[j];
-            let b = indices[(j + 1) % n];
-            let edge = if a < b { (a, b) } else { (b, a) };
-            if !seen.contains(&edge) {
-                seen.push(edge);
-            }
-        }
-    }
-    seen
-}
-
-/// Return the hull support witness edge on +axis if the support feature is an edge.
-fn support_witness_hull_edge(
-    hull: &ConvexHull,
-    hull_view: &ShapeView,
-    axis: Vector3<f32>,
-) -> Option<HullEdge> {
-    let mut target = f32::NEG_INFINITY;
-    let mut dots = Vec::with_capacity(hull.vertices.len());
-
-    for v in &hull.vertices {
-        let world = hull_view.center + hull_view.rotation * *v;
-        let d = world.coords.dot(&axis);
-        target = target.max(d);
-        dots.push(d);
-    }
-
-    let support_eps = 1e-5 * (1.0 + target.abs());
-    let mut support_ids = SmallVec::<[u16; 8]>::new();
-    for (idx, d) in dots.iter().enumerate() {
-        if (*d - target).abs() <= support_eps {
-            support_ids.push(idx as u16);
-        }
-    }
-
-    if support_ids.len() != 2 {
-        return None;
-    }
-
-    let edge = if support_ids[0] < support_ids[1] {
-        (support_ids[0], support_ids[1])
-    } else {
-        (support_ids[1], support_ids[0])
-    };
-
-    if extract_edges(hull).contains(&edge) {
-        Some(edge)
-    } else {
-        None
-    }
-}
-
-/// Return the OBB support witness edge on -axis if the support feature is an edge.
-///
-/// Returns `(edge_axis_idx, edge_variant)` matching `obb_edge_variant`.
-fn support_witness_obb_edge_variant(
-    obb_axes: &[Vector3<f32>; 3],
-    axis: Vector3<f32>,
-) -> Option<(usize, usize)> {
-    // In OBB local coordinates, edge support occurs when exactly one axis
-    // projection is near zero; the other two signs select one of 4 variants.
-    let axis_eps = 1e-5;
-    let mut projections = [0.0f32; 3];
-    let mut near_zero = [false; 3];
-    for i in 0..3 {
-        projections[i] = axis.dot(&obb_axes[i]);
-        near_zero[i] = projections[i].abs() <= axis_eps;
-    }
-
-    let zero_count = near_zero.iter().filter(|&&z| z).count();
-    if zero_count != 1 {
-        return None;
-    }
-
-    let edge_axis_idx = near_zero.iter().position(|&z| z)?;
-    let (perp0, perp1) = match edge_axis_idx {
+/// Find the OBB edge variant along `axis_idx` that is the support feature
+/// in the given `direction`. Returns the variant index (0..3) for `obb_edge_variant`.
+fn obb_support_edge_variant(
+    axes: &[Vector3<f32>; 3],
+    axis_idx: usize,
+    direction: Vector3<f32>,
+) -> usize {
+    let (perp0, perp1) = match axis_idx {
         0 => (1, 2),
         1 => (0, 2),
         _ => (0, 1),
     };
 
-    // For obb_min on +axis, fixed signs are the opposite of projection signs.
-    let s0 = if projections[perp0] >= 0.0 { -1.0 } else { 1.0 };
-    let s1 = if projections[perp1] >= 0.0 { -1.0 } else { 1.0 };
+    // The support edge variant has signs that maximize projection onto `direction`.
+    let s0: f32 = if direction.dot(&axes[perp0]) >= 0.0 {
+        1.0
+    } else {
+        -1.0
+    };
+    let s1: f32 = if direction.dot(&axes[perp1]) >= 0.0 {
+        1.0
+    } else {
+        -1.0
+    };
 
-    let variant = match (s0 > 0.0, s1 > 0.0) {
+    match (s0 > 0.0, s1 > 0.0) {
         (true, true) => 0,
         (false, true) => 1,
         (false, false) => 2,
         (true, false) => 3,
-    };
-
-    Some((edge_axis_idx, variant))
+    }
 }
 
 #[cfg(test)]
@@ -722,16 +692,14 @@ mod tests {
             rotation: rot,
             shape: &shape,
         };
-        let hull_manifold = hull_obb_manifold(
-            &view,
-            &obb_b,
-            margin,
-            &mut SatCache::default(),
-            None,
-        );
+        let hull_manifold =
+            hull_obb_manifold(&view, &obb_b, margin, &mut SatCache::default(), None);
 
         assert!(!obb_manifold.is_empty(), "OBB-OBB should produce contacts");
-        assert!(!hull_manifold.is_empty(), "Hull-OBB should produce contacts");
+        assert!(
+            !hull_manifold.is_empty(),
+            "Hull-OBB should produce contacts"
+        );
         assert_eq!(
             obb_manifold.len(),
             hull_manifold.len(),
@@ -740,9 +708,15 @@ mod tests {
             hull_manifold.len(),
         );
 
-        let obb_depth = obb_manifold.points.iter().map(|p| p.raw_depth)
+        let obb_depth = obb_manifold
+            .points
+            .iter()
+            .map(|p| p.raw_depth)
             .fold(f32::NEG_INFINITY, f32::max);
-        let hull_depth = hull_manifold.points.iter().map(|p| p.raw_depth)
+        let hull_depth = hull_manifold
+            .points
+            .iter()
+            .map(|p| p.raw_depth)
             .fold(f32::NEG_INFINITY, f32::max);
         assert!(
             (obb_depth - hull_depth).abs() < 0.05,
@@ -758,16 +732,20 @@ mod tests {
         let hull = Arc::new(cube_hull(he));
         let shape = ColliderShape::ConvexHull { hull: hull.clone() };
         let rot = UnitQuaternion::from_axis_angle(&Vector3::y_axis(), 0.3);
-        let view = ShapeView { center: Point3::origin(), rotation: rot, shape: &shape };
+        let view = ShapeView {
+            center: Point3::origin(),
+            rotation: rot,
+            shape: &shape,
+        };
 
         let obb = Obb::new(Point3::new(1.5, 0.0, 0.0), UnitQuaternion::identity(), he);
         let manifold = hull_obb_manifold(&view, &obb, margin, &mut SatCache::default(), None);
 
-        assert!(!manifold.is_empty(), "Rotated hull-obb should produce contacts");
         assert!(
-            manifold.points[0].raw_depth > 0.0,
-            "Should be penetrating"
+            !manifold.is_empty(),
+            "Rotated hull-obb should produce contacts"
         );
+        assert!(manifold.points[0].raw_depth > 0.0, "Should be penetrating");
     }
 
     #[test]
@@ -782,11 +760,7 @@ mod tests {
             rotation: UnitQuaternion::identity(),
             shape: &shape,
         };
-        let obb = Obb::new(
-            Point3::new(5.0, 0.0, 0.0),
-            UnitQuaternion::identity(),
-            he,
-        );
+        let obb = Obb::new(Point3::new(5.0, 0.0, 0.0), UnitQuaternion::identity(), he);
 
         let manifold = hull_obb_manifold(&view, &obb, margin, &mut SatCache::default(), None);
         assert!(manifold.is_empty(), "Well-separated pair should be empty");
@@ -804,11 +778,7 @@ mod tests {
             rotation: UnitQuaternion::identity(),
             shape: &shape,
         };
-        let obb = Obb::new(
-            Point3::new(5.0, 0.0, 0.0),
-            UnitQuaternion::identity(),
-            he,
-        );
+        let obb = Obb::new(Point3::new(5.0, 0.0, 0.0), UnitQuaternion::identity(), he);
 
         let mut cache = SatCache::default();
         let m1 = hull_obb_manifold(&view, &obb, margin, &mut cache, None);
@@ -831,11 +801,7 @@ mod tests {
             rotation: UnitQuaternion::identity(),
             shape: &shape,
         };
-        let obb = Obb::new(
-            Point3::new(1.5, 0.0, 0.0),
-            UnitQuaternion::identity(),
-            he,
-        );
+        let obb = Obb::new(Point3::new(1.5, 0.0, 0.0), UnitQuaternion::identity(), he);
 
         let mut cache = SatCache::default();
         cache.separating_axis = Some(Vector3::x());
@@ -858,11 +824,7 @@ mod tests {
             shape: &shape,
         };
         // Separated by 0.01 — within 2*margin (0.04).
-        let obb = Obb::new(
-            Point3::new(2.01, 0.0, 0.0),
-            UnitQuaternion::identity(),
-            he,
-        );
+        let obb = Obb::new(Point3::new(2.01, 0.0, 0.0), UnitQuaternion::identity(), he);
 
         let manifold = hull_obb_manifold(&view, &obb, margin, &mut SatCache::default(), None);
         assert!(!manifold.is_empty(), "Margin contact expected");
@@ -935,11 +897,7 @@ mod tests {
             rotation: UnitQuaternion::identity(),
             shape: &shape,
         };
-        let obb = Obb::new(
-            Point3::new(1.5, 0.0, 0.0),
-            UnitQuaternion::identity(),
-            he,
-        );
+        let obb = Obb::new(Point3::new(1.5, 0.0, 0.0), UnitQuaternion::identity(), he);
 
         let manifold = hull_obb_manifold(&view, &obb, margin, &mut SatCache::default(), None);
         assert!(!manifold.is_empty());
@@ -965,14 +923,16 @@ mod tests {
             let rot_a = UnitQuaternion::from_axis_angle(&Vector3::y_axis(), angle);
             let rot_b = UnitQuaternion::from_axis_angle(&Vector3::z_axis(), angle * 0.7);
 
-            let view = ShapeView { center: Point3::origin(), rotation: rot_a, shape: &shape };
+            let view = ShapeView {
+                center: Point3::origin(),
+                rotation: rot_a,
+                shape: &shape,
+            };
             let obb_a = Obb::new(Point3::origin(), rot_a, he);
             let obb_b = Obb::new(Point3::new(1.8, 0.3, 0.0), rot_b, he);
 
-            let obb_m =
-                obb_obb_manifold_cached(&obb_a, &obb_b, margin, &mut SatCache::default());
-            let hull_m =
-                hull_obb_manifold(&view, &obb_b, margin, &mut SatCache::default(), None);
+            let obb_m = obb_obb_manifold_cached(&obb_a, &obb_b, margin, &mut SatCache::default());
+            let hull_m = hull_obb_manifold(&view, &obb_b, margin, &mut SatCache::default(), None);
 
             // Both should agree on empty/non-empty.
             assert_eq!(
@@ -984,9 +944,15 @@ mod tests {
             );
 
             if !obb_m.is_empty() && !hull_m.is_empty() {
-                let d_obb = obb_m.points.iter().map(|p| p.raw_depth)
+                let d_obb = obb_m
+                    .points
+                    .iter()
+                    .map(|p| p.raw_depth)
                     .fold(f32::NEG_INFINITY, f32::max);
-                let d_hull = hull_m.points.iter().map(|p| p.raw_depth)
+                let d_hull = hull_m
+                    .points
+                    .iter()
+                    .map(|p| p.raw_depth)
                     .fold(f32::NEG_INFINITY, f32::max);
                 assert!(
                     (d_obb - d_hull).abs() < 0.15,
@@ -997,17 +963,16 @@ mod tests {
     }
 
     #[test]
-    fn obb_witness_edge_variant_matches_axis_support_feature() {
-        // axis . obb_axis0 = 0 => witness feature is an edge along obb axis 0.
-        // axis . obb_axis1 > 0 and axis . obb_axis2 < 0 pick one unique variant.
+    fn obb_support_edge_variant_selects_correct_variant() {
+        // For an edge along axis 0, the support in direction (0, -1, 1)
+        // should select the variant with perp signs (-1, +1) = variant 1.
         let obb_axes = [Vector3::x(), Vector3::y(), Vector3::z()];
-        let axis = Vector3::new(0.0, 1.0, -2.0).normalize();
+        let direction = Vector3::new(0.0, -1.0, 1.0);
 
-        let witness = support_witness_obb_edge_variant(&obb_axes, axis);
+        let variant = obb_support_edge_variant(&obb_axes, 0, direction);
         assert_eq!(
-            witness,
-            Some((0, 1)),
-            "Expected edge along axis 0 with variant 1 for this axis sign pattern"
+            variant, 1,
+            "Expected variant 1 (perp signs: -y, +z) for direction (0, -1, 1)"
         );
     }
 }

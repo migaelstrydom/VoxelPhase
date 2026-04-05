@@ -4,7 +4,7 @@
 //! with a principled SAT-based minimum-penetration-axis search, followed by
 //! reference/incident face clipping.
 //!
-//! Pipeline: GJK (cached) → SAT over face normals (+ edge-edge for small hulls)
+//! Pipeline: GJK (cached) → SAT over face normals + Gauss map filtered edge-edge
 //!           → reference/incident clip or edge-edge closest point.
 
 use nalgebra::{Point3, Vector3};
@@ -15,7 +15,9 @@ use super::gjk::{gjk_query_seeded, GjkCache, GjkResult};
 use crate::collision::contact::{ContactManifold, ContactPoint, FeatureId};
 use crate::collision::contact_reducer::ContactReducer;
 use crate::collision::convex_hull::{ConvexHull, TransformedHull};
-use crate::collision::sat::{SatCache, AXIS_EPS, OVERLAP_EPS};
+use crate::collision::sat::{
+    edge_pair_overlap, is_minkowski_face, SatCache, AXIS_EPS, OVERLAP_EPS,
+};
 use crate::collision::segment::segment_segment_closest_points;
 use crate::collision::shape_view::ShapeView;
 use crate::collision::support::ConvexSupport;
@@ -26,13 +28,6 @@ const MAX_CONTACTS: usize = 4;
 
 /// Tolerance for GJK separation distance check.
 const GJK_TOLERANCE: f32 = 1e-4;
-
-/// Maximum total face count (A + B) for edge-edge SAT to be enabled.
-/// Below this threshold, edge-edge cross-product axes are tested in addition
-/// to face normals. This covers tetrahedra (4+4=8), hexagonal prisms (8+8=16),
-/// wedges (5+5=10), and similar low-poly shapes while excluding high-poly
-/// hulls like 20-gon cylinders (22+22=44) where edge-edge would be O(E²).
-const EDGE_EDGE_FACE_THRESHOLD: usize = 24;
 
 /// Fraction of `margin` by which an edge-edge overlap must beat the best face
 /// overlap to win. Face clipping produces multi-point manifolds that resist
@@ -187,54 +182,76 @@ pub fn hull_hull_manifold(
         }
     }
 
-    // Edge-edge SAT for small hulls.
-    let total_faces = hull_a.faces.len() + hull_b.faces.len();
+    // Edge-edge SAT with Gauss map filtering (Gregorius, GDC 2013).
+    //
+    // Two edges can only form a valid separating axis if their adjacent face
+    // normals define intersecting arcs on the Gauss map — the "Minkowski face"
+    // test. For the passing pairs, overlap is computed directly from the two
+    // candidate edges (no global support queries): if the pair forms a
+    // Minkowski face, those edges are already the supporting features.
     let mut best_edge: Option<EdgeEdgeResult> = None;
 
-    if total_faces <= EDGE_EDGE_FACE_THRESHOLD {
-        let edges_a = extract_edges(hull_a);
-        let edges_b = extract_edges(hull_b);
+    for edge_a in &hull_a.edges {
+        let na1 = a.rotation * edge_a.normal_a;
+        let na2 = a.rotation * edge_a.normal_b;
+        let dir_a = a.rotation
+            * (hull_a.vertices[edge_a.v1 as usize] - hull_a.vertices[edge_a.v0 as usize]);
 
-        for &(ea0, ea1) in &edges_a {
-            let edge_a =
-                a.rotation * (hull_a.vertices[ea1 as usize] - hull_a.vertices[ea0 as usize]);
-            for &(eb0, eb1) in &edges_b {
-                let edge_b =
-                    b.rotation * (hull_b.vertices[eb1 as usize] - hull_b.vertices[eb0 as usize]);
+        for edge_b in &hull_b.edges {
+            let nb1 = b.rotation * edge_b.normal_a;
+            let nb2 = b.rotation * edge_b.normal_b;
 
-                let cross = edge_a.cross(&edge_b);
-                let len_sq = cross.magnitude_squared();
-                if len_sq < AXIS_EPS {
-                    continue;
-                }
-                let mut axis = cross / len_sq.sqrt();
-                if axis.dot(&center_dir) < 0.0 {
-                    axis = -axis;
-                }
+            if !is_minkowski_face(na1, na2, -nb2, -nb1) {
+                continue;
+            }
 
-                let overlap = support_overlap(&th_a, &th_b, axis, margin);
+            let dir_b = b.rotation
+                * (hull_b.vertices[edge_b.v1 as usize] - hull_b.vertices[edge_b.v0 as usize]);
 
-                if overlap < -OVERLAP_EPS {
-                    sat_cache.separating_axis = Some(axis);
-                    return ContactManifold::empty();
-                }
+            let cross = dir_a.cross(&dir_b);
+            let len_sq = cross.magnitude_squared();
+            if len_sq < AXIS_EPS {
+                continue;
+            }
+            let a0 = a.center + a.rotation * hull_a.vertices[edge_a.v0 as usize];
+            let a1 = a.center + a.rotation * hull_a.vertices[edge_a.v1 as usize];
+            let b0 = b.center + b.rotation * hull_b.vertices[edge_b.v0 as usize];
+            let b1 = b.center + b.rotation * hull_b.vertices[edge_b.v1 as usize];
+            let mut axis = cross / len_sq.sqrt();
 
-                update_separating(axis, overlap);
+            // Orient the axis outward from hull A at edge_a. The cross product
+            // axis lies between edge_a's two adjacent face normals; aligning it
+            // with their sum ensures edge_a is the max-support feature of A
+            // along this axis. Back-facing Minkowski face pairs get large
+            // positive overlaps and naturally lose the min-overlap search.
+            if axis.dot(&(na1 + na2)) < 0.0 {
+                axis = -axis;
+            }
 
-                // Skip edge axes that align closely with the best face axis —
-                // the face path produces better multi-point contacts.
-                let d = axis.dot(&best_face_axis);
-                let face_len_sq = best_face_axis.magnitude_squared();
-                if face_len_sq > 1e-12 && d * d > EDGE_FACE_ALIGN_THRESHOLD * face_len_sq {
-                    continue;
-                }
+            let overlap = edge_pair_overlap(axis, a0, a1, b0, b1, margin);
 
-                if best_edge.as_ref().map_or(true, |e| overlap < e.overlap) {
-                    best_edge = Some(EdgeEdgeResult {
-                        axis,
-                        overlap,
-                    });
-                }
+            if overlap < -OVERLAP_EPS {
+                sat_cache.separating_axis = Some(axis);
+                return ContactManifold::empty();
+            }
+
+            update_separating(axis, overlap);
+
+            // Skip edge axes that align closely with the best face axis —
+            // the face path produces better multi-point contacts.
+            let d = axis.dot(&best_face_axis);
+            let face_len_sq = best_face_axis.magnitude_squared();
+            if face_len_sq > 1e-12 && d * d > EDGE_FACE_ALIGN_THRESHOLD * face_len_sq {
+                continue;
+            }
+
+            if best_edge.as_ref().map_or(true, |e| overlap < e.overlap) {
+                best_edge = Some(EdgeEdgeResult {
+                    axis,
+                    overlap,
+                    edge_a: (edge_a.v0, edge_a.v1),
+                    edge_b: (edge_b.v0, edge_b.v1),
+                });
             }
         }
     }
@@ -254,7 +271,14 @@ pub fn hull_hull_manifold(
         // along the contact normal (like the face path does).
         let penetrating = ee.overlap > 2.0 * margin;
         if penetrating && ee.overlap + edge_win_slop < best_face_overlap {
-            (ee.overlap, ee.axis, AxisClassification::EdgeEdge)
+            (
+                ee.overlap,
+                ee.axis,
+                AxisClassification::EdgeEdge {
+                    edge_a: ee.edge_a,
+                    edge_b: ee.edge_b,
+                },
+            )
         } else {
             (
                 best_face_overlap,
@@ -290,37 +314,22 @@ pub fn hull_hull_manifold(
         AxisClassification::Face { from_a } => {
             face_contact(hull_a, a, hull_b, b, normal, margin, from_a)
         }
-        AxisClassification::EdgeEdge => {
-            let witness_edge_a = support_witness_edge(hull_a, a, normal, true);
-            let witness_edge_b = support_witness_edge(hull_b, b, normal, false);
-
-            if let (Some(edge_a), Some(edge_b)) = (witness_edge_a, witness_edge_b) {
-                // If the closest-point computation clamps to a segment endpoint,
-                // the true contact feature isn't edge-edge interior — fall back
-                // to face clipping using the best face axis.
-                match edge_edge_contact(
-                    hull_a,
-                    a,
-                    hull_b,
-                    b,
-                    normal,
-                    geometric_depth,
-                    edge_a,
-                    edge_b,
-                ) {
-                    Some(manifold) => manifold,
-                    None => face_contact(
-                        hull_a,
-                        a,
-                        hull_b,
-                        b,
-                        best_face_axis.normalize(),
-                        margin,
-                        best_face_from_a,
-                    ),
-                }
-            } else {
-                face_contact(
+        AxisClassification::EdgeEdge { edge_a, edge_b } => {
+            // If the closest-point computation clamps to a segment endpoint,
+            // the true contact feature isn't edge-edge interior — fall back
+            // to face clipping using the best face axis.
+            match edge_edge_contact(
+                hull_a,
+                a,
+                hull_b,
+                b,
+                normal,
+                geometric_depth,
+                edge_a,
+                edge_b,
+            ) {
+                Some(manifold) => manifold,
+                None => face_contact(
                     hull_a,
                     a,
                     hull_b,
@@ -328,7 +337,7 @@ pub fn hull_hull_manifold(
                     best_face_axis.normalize(),
                     margin,
                     best_face_from_a,
-                )
+                ),
             }
         }
     }
@@ -337,13 +346,15 @@ pub fn hull_hull_manifold(
 /// Result of the best face-normal SAT classification.
 enum AxisClassification {
     Face { from_a: bool },
-    EdgeEdge,
+    EdgeEdge { edge_a: HullEdge, edge_b: HullEdge },
 }
 
 /// Tracked state for the best edge-edge candidate.
 struct EdgeEdgeResult {
     axis: Vector3<f32>,
     overlap: f32,
+    edge_a: HullEdge,
+    edge_b: HullEdge,
 }
 
 /// Generate face-face contacts via reference/incident clipping.
@@ -524,81 +535,6 @@ fn find_incident_face(hull: &ConvexHull, view: &ShapeView, ref_normal: Vector3<f
         }
     }
     best_idx
-}
-
-/// Extract unique directed edges from a convex hull's face winding.
-///
-/// Each edge is stored with the lower vertex index first to deduplicate
-/// (each edge is shared by exactly two faces with opposite windings).
-fn extract_edges(hull: &ConvexHull) -> SmallVec<[HullEdge; 32]> {
-    let mut seen = SmallVec::<[HullEdge; 32]>::new();
-    for face in &hull.faces {
-        let indices = &face.vertex_indices;
-        let n = indices.len();
-        for j in 0..n {
-            let a = indices[j];
-            let b = indices[(j + 1) % n];
-            let edge = if a < b { (a, b) } else { (b, a) };
-            if !seen.contains(&edge) {
-                seen.push(edge);
-            }
-        }
-    }
-    seen
-}
-
-/// Return the SAT witness edge for `axis` if the support feature is exactly one edge.
-///
-/// `maximize=true` selects the support feature at +axis (hull A in overlap test),
-/// `maximize=false` selects the support feature at -axis (hull B in overlap test).
-/// Returns `None` for vertex or face support features.
-fn support_witness_edge(
-    hull: &ConvexHull,
-    view: &ShapeView,
-    axis: Vector3<f32>,
-    maximize: bool,
-) -> Option<HullEdge> {
-    let mut target = if maximize {
-        f32::NEG_INFINITY
-    } else {
-        f32::INFINITY
-    };
-    let mut dots = Vec::with_capacity(hull.vertices.len());
-
-    for v in &hull.vertices {
-        let world = view.center + view.rotation * *v;
-        let d = world.coords.dot(&axis);
-        if maximize {
-            target = target.max(d);
-        } else {
-            target = target.min(d);
-        }
-        dots.push(d);
-    }
-
-    let support_eps = 1e-5 * (1.0 + target.abs());
-    let mut support_ids = SmallVec::<[u16; 8]>::new();
-    for (idx, d) in dots.iter().enumerate() {
-        if (*d - target).abs() <= support_eps {
-            support_ids.push(idx as u16);
-        }
-    }
-
-    if support_ids.len() != 2 {
-        return None;
-    }
-
-    let edge = if support_ids[0] < support_ids[1] {
-        (support_ids[0], support_ids[1])
-    } else {
-        (support_ids[1], support_ids[0])
-    };
-
-    if extract_edges(hull).contains(&edge) {
-        Some(edge)
-    } else {
-        None
-    }
 }
 
 #[cfg(test)]
@@ -1472,33 +1408,31 @@ mod tests {
     }
 
     #[test]
-    fn extract_edges_tetrahedron() {
+    fn edge_adjacency_tetrahedron() {
         let hull = tetrahedron_hull();
-        let edges = extract_edges(&hull);
         // A tetrahedron has 6 unique edges.
         assert_eq!(
-            edges.len(),
+            hull.edges.len(),
             6,
             "Tetrahedron should have 6 edges, got {}",
-            edges.len()
+            hull.edges.len()
         );
     }
 
     #[test]
-    fn extract_edges_cube() {
+    fn edge_adjacency_cube() {
         let hull = cube_hull(Vector3::new(1.0, 1.0, 1.0));
-        let edges = extract_edges(&hull);
         // A cube has 12 unique edges.
         assert_eq!(
-            edges.len(),
+            hull.edges.len(),
             12,
             "Cube should have 12 edges, got {}",
-            edges.len()
+            hull.edges.len()
         );
     }
 
     #[test]
-    fn extract_edges_hexagonal_prism() {
+    fn edge_adjacency_hexagonal_prism() {
         use crate::collision::convex_hull::HullFace;
         use smallvec::SmallVec;
 
@@ -1551,13 +1485,12 @@ mod tests {
             },
         ];
         let hull = ConvexHull::new(vertices, faces);
-        let edges = extract_edges(&hull);
         // 6 top cap + 6 bottom cap + 6 vertical = 18 unique edges.
         assert_eq!(
-            edges.len(),
+            hull.edges.len(),
             18,
             "Hex prism should have 18 edges, got {}",
-            edges.len()
+            hull.edges.len()
         );
     }
 
@@ -2013,14 +1946,13 @@ mod tests {
             }
         }
 
-        let edges_a = extract_edges(&hull_a);
-        let edges_b = extract_edges(&hull_b);
         let mut best_edge: Option<(Vector3<f32>, f32, HullEdge, HullEdge)> = None;
-        for &(ea0, ea1) in &edges_a {
-            let edge_a = view_a.rotation * (hull_a.vertices[ea1 as usize] - hull_a.vertices[ea0 as usize]);
-            for &(eb0, eb1) in &edges_b {
-                let edge_b =
-                    view_b.rotation * (hull_b.vertices[eb1 as usize] - hull_b.vertices[eb0 as usize]);
+        for ea in &hull_a.edges {
+            let edge_a = view_a.rotation
+                * (hull_a.vertices[ea.v1 as usize] - hull_a.vertices[ea.v0 as usize]);
+            for eb in &hull_b.edges {
+                let edge_b = view_b.rotation
+                    * (hull_b.vertices[eb.v1 as usize] - hull_b.vertices[eb.v0 as usize]);
                 let cross = edge_a.cross(&edge_b);
                 let len_sq = cross.magnitude_squared();
                 if len_sq < AXIS_EPS {
@@ -2039,7 +1971,7 @@ mod tests {
                 }
 
                 if best_edge.as_ref().map_or(true, |e| overlap < e.1) {
-                    best_edge = Some((axis, overlap, (ea0, ea1), (eb0, eb1)));
+                    best_edge = Some((axis, overlap, (ea.v0, ea.v1), (eb.v0, eb.v1)));
                 }
             }
         }
@@ -2136,9 +2068,7 @@ mod tests {
         let midpoint = Point3::from((pa.coords + pb.coords) * 0.5);
         let va = max_face_plane_violation_test(&midpoint, &hull_a, &center_a, &rot_a);
         let vb = max_face_plane_violation_test(&midpoint, &hull_b, &center_b, &rot_b);
-        eprintln!(
-            "[DEBUG] midpoint={midpoint:?} violation_a={va:.6} violation_b={vb:.6}"
-        );
+        eprintln!("[DEBUG] midpoint={midpoint:?} violation_a={va:.6} violation_b={vb:.6}");
     }
 
     fn max_face_plane_violation_test(

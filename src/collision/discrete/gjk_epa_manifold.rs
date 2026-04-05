@@ -182,16 +182,16 @@ pub fn gjk_epa_manifold_cached<S: ConvexSupport + SupportFaceExtractor>(
             match (face_a, face_b) {
                 (Some(fa), Some(fb)) => {
                     let raw_depth = support_overlap(a, b, normal);
-                    let mut manifold =
-                        clip_face_face_manifold(&fa, &fb, normal, raw_depth, margin);
+                    let mut manifold = clip_face_face_manifold(&fa, &fb, normal, raw_depth, margin);
                     if manifold.is_empty() && raw_depth > -margin {
-                        let base_feature =
-                            FeatureId::from_face_pair(fa.face_index, fb.face_index);
-                        let point = Point3::from(
-                            (epa.witness_a.coords + epa.witness_b.coords) * 0.5,
-                        );
+                        let base_feature = FeatureId::from_face_pair(fa.face_index, fb.face_index);
+                        let point =
+                            Point3::from((epa.witness_a.coords + epa.witness_b.coords) * 0.5);
                         manifold = ContactManifold::single(ContactPoint::new(
-                            point, normal, raw_depth, base_feature,
+                            point,
+                            normal,
+                            raw_depth,
+                            base_feature,
                         ));
                     }
                     manifold

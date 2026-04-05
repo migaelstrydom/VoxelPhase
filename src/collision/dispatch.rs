@@ -214,10 +214,8 @@ fn validate_hull_hull_contacts(
     let mut geometry_printed = false;
 
     for (i, cp) in manifold.points.iter().enumerate() {
-        let violation_a =
-            max_face_plane_violation(&cp.point, hull_a, &a.center, &a.rotation);
-        let violation_b =
-            max_face_plane_violation(&cp.point, hull_b, &b.center, &b.rotation);
+        let violation_a = max_face_plane_violation(&cp.point, hull_a, &a.center, &a.rotation);
+        let violation_b = max_face_plane_violation(&cp.point, hull_b, &b.center, &b.rotation);
 
         if violation_a > tolerance || violation_b > tolerance {
             eprintln!("=== PHANTOM CONTACT DETECTED (point {i}) ===");
@@ -245,11 +243,7 @@ fn validate_hull_hull_contacts(
 }
 
 /// Print hull geometry in a format that can be pasted into a unit test.
-fn print_hull_geometry(
-    hull: &ConvexHull,
-    center: &Point3<f32>,
-    rotation: &UnitQuaternion<f32>,
-) {
+fn print_hull_geometry(hull: &ConvexHull, center: &Point3<f32>, rotation: &UnitQuaternion<f32>) {
     eprintln!(
         "  center: Point3::new({:.6}, {:.6}, {:.6})",
         center.x, center.y, center.z,
@@ -1360,28 +1354,98 @@ mod tests {
             Vector3::new(0.519913, 4.000000, -0.168926),
         ];
         let faces_a = vec![
-            HullFace { vertex_indices: SmallVec::from_slice(&[19, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]), normal: Vector3::new(0.0, -1.0, 0.0) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[20, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25, 24, 23, 22, 21]), normal: Vector3::new(0.0, 1.0, 0.0) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[0, 20, 21, 1]), normal: Vector3::new(0.987580, 0.014814, 0.156416) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[1, 21, 22, 2]), normal: Vector3::new(0.890909, 0.014814, 0.453940) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[2, 22, 23, 3]), normal: Vector3::new(0.707029, 0.014814, 0.707029) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[3, 23, 24, 4]), normal: Vector3::new(0.453936, 0.014813, 0.890911) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[4, 24, 25, 5]), normal: Vector3::new(0.156427, 0.014814, 0.987578) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[5, 25, 26, 6]), normal: Vector3::new(-0.156427, 0.014813, 0.987578) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[6, 26, 27, 7]), normal: Vector3::new(-0.453936, 0.014814, 0.890911) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[7, 27, 28, 8]), normal: Vector3::new(-0.707029, 0.014814, 0.707029) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[8, 28, 29, 9]), normal: Vector3::new(-0.890909, 0.014814, 0.453940) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[9, 29, 30, 10]), normal: Vector3::new(-0.987580, 0.014814, 0.156416) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[10, 30, 31, 11]), normal: Vector3::new(-0.987580, 0.014814, -0.156416) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[11, 31, 32, 12]), normal: Vector3::new(-0.890909, 0.014814, -0.453940) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[12, 32, 33, 13]), normal: Vector3::new(-0.707029, 0.014813, -0.707029) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[13, 33, 34, 14]), normal: Vector3::new(-0.453936, 0.014813, -0.890911) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[14, 34, 35, 15]), normal: Vector3::new(-0.156427, 0.014814, -0.987578) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[15, 35, 36, 16]), normal: Vector3::new(0.156427, 0.014813, -0.987578) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[16, 36, 37, 17]), normal: Vector3::new(0.453936, 0.014814, -0.890911) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[17, 37, 38, 18]), normal: Vector3::new(0.707029, 0.014814, -0.707029) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[18, 38, 39, 19]), normal: Vector3::new(0.890909, 0.014814, -0.453940) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[19, 39, 20, 0]), normal: Vector3::new(0.987580, 0.014814, -0.156416) },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[
+                    19, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18,
+                ]),
+                normal: Vector3::new(0.0, -1.0, 0.0),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[
+                    20, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25, 24, 23, 22, 21,
+                ]),
+                normal: Vector3::new(0.0, 1.0, 0.0),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[0, 20, 21, 1]),
+                normal: Vector3::new(0.987580, 0.014814, 0.156416),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[1, 21, 22, 2]),
+                normal: Vector3::new(0.890909, 0.014814, 0.453940),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[2, 22, 23, 3]),
+                normal: Vector3::new(0.707029, 0.014814, 0.707029),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[3, 23, 24, 4]),
+                normal: Vector3::new(0.453936, 0.014813, 0.890911),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[4, 24, 25, 5]),
+                normal: Vector3::new(0.156427, 0.014814, 0.987578),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[5, 25, 26, 6]),
+                normal: Vector3::new(-0.156427, 0.014813, 0.987578),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[6, 26, 27, 7]),
+                normal: Vector3::new(-0.453936, 0.014814, 0.890911),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[7, 27, 28, 8]),
+                normal: Vector3::new(-0.707029, 0.014814, 0.707029),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[8, 28, 29, 9]),
+                normal: Vector3::new(-0.890909, 0.014814, 0.453940),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[9, 29, 30, 10]),
+                normal: Vector3::new(-0.987580, 0.014814, 0.156416),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[10, 30, 31, 11]),
+                normal: Vector3::new(-0.987580, 0.014814, -0.156416),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[11, 31, 32, 12]),
+                normal: Vector3::new(-0.890909, 0.014814, -0.453940),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[12, 32, 33, 13]),
+                normal: Vector3::new(-0.707029, 0.014813, -0.707029),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[13, 33, 34, 14]),
+                normal: Vector3::new(-0.453936, 0.014813, -0.890911),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[14, 34, 35, 15]),
+                normal: Vector3::new(-0.156427, 0.014814, -0.987578),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[15, 35, 36, 16]),
+                normal: Vector3::new(0.156427, 0.014813, -0.987578),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[16, 36, 37, 17]),
+                normal: Vector3::new(0.453936, 0.014814, -0.890911),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[17, 37, 38, 18]),
+                normal: Vector3::new(0.707029, 0.014814, -0.707029),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[18, 38, 39, 19]),
+                normal: Vector3::new(0.890909, 0.014814, -0.453940),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[19, 39, 20, 0]),
+                normal: Vector3::new(0.987580, 0.014814, -0.156416),
+            },
         ];
 
         let vertices_b = vec![
@@ -1427,44 +1491,120 @@ mod tests {
             Vector3::new(0.519913, 4.000000, -0.168934),
         ];
         let faces_b = vec![
-            HullFace { vertex_indices: SmallVec::from_slice(&[19, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]), normal: Vector3::new(0.0, -1.0, 0.0) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[20, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25, 24, 23, 22, 21]), normal: Vector3::new(0.0, 1.0, 0.0) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[0, 20, 21, 1]), normal: Vector3::new(0.987580, 0.014814, 0.156416) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[1, 21, 22, 2]), normal: Vector3::new(0.890909, 0.014814, 0.453940) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[2, 22, 23, 3]), normal: Vector3::new(0.707029, 0.014814, 0.707029) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[3, 23, 24, 4]), normal: Vector3::new(0.453936, 0.014813, 0.890911) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[4, 24, 25, 5]), normal: Vector3::new(0.156427, 0.014814, 0.987578) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[5, 25, 26, 6]), normal: Vector3::new(-0.156427, 0.014813, 0.987578) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[6, 26, 27, 7]), normal: Vector3::new(-0.453936, 0.014814, 0.890911) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[7, 27, 28, 8]), normal: Vector3::new(-0.707029, 0.014814, 0.707029) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[8, 28, 29, 9]), normal: Vector3::new(-0.890909, 0.014814, 0.453940) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[9, 29, 30, 10]), normal: Vector3::new(-0.987580, 0.014814, 0.156416) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[10, 30, 31, 11]), normal: Vector3::new(-0.987580, 0.014814, -0.156416) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[11, 31, 32, 12]), normal: Vector3::new(-0.890909, 0.014814, -0.453940) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[12, 32, 33, 13]), normal: Vector3::new(-0.707029, 0.014813, -0.707029) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[13, 33, 34, 14]), normal: Vector3::new(-0.453936, 0.014813, -0.890911) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[14, 34, 35, 15]), normal: Vector3::new(-0.156427, 0.014814, -0.987578) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[15, 35, 36, 16]), normal: Vector3::new(0.156427, 0.014813, -0.987578) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[16, 36, 37, 17]), normal: Vector3::new(0.453936, 0.014814, -0.890911) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[17, 37, 38, 18]), normal: Vector3::new(0.707029, 0.014814, -0.707029) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[18, 38, 39, 19]), normal: Vector3::new(0.890909, 0.014814, -0.453940) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[19, 39, 20, 0]), normal: Vector3::new(0.987580, 0.014814, -0.156416) },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[
+                    19, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18,
+                ]),
+                normal: Vector3::new(0.0, -1.0, 0.0),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[
+                    20, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25, 24, 23, 22, 21,
+                ]),
+                normal: Vector3::new(0.0, 1.0, 0.0),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[0, 20, 21, 1]),
+                normal: Vector3::new(0.987580, 0.014814, 0.156416),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[1, 21, 22, 2]),
+                normal: Vector3::new(0.890909, 0.014814, 0.453940),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[2, 22, 23, 3]),
+                normal: Vector3::new(0.707029, 0.014814, 0.707029),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[3, 23, 24, 4]),
+                normal: Vector3::new(0.453936, 0.014813, 0.890911),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[4, 24, 25, 5]),
+                normal: Vector3::new(0.156427, 0.014814, 0.987578),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[5, 25, 26, 6]),
+                normal: Vector3::new(-0.156427, 0.014813, 0.987578),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[6, 26, 27, 7]),
+                normal: Vector3::new(-0.453936, 0.014814, 0.890911),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[7, 27, 28, 8]),
+                normal: Vector3::new(-0.707029, 0.014814, 0.707029),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[8, 28, 29, 9]),
+                normal: Vector3::new(-0.890909, 0.014814, 0.453940),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[9, 29, 30, 10]),
+                normal: Vector3::new(-0.987580, 0.014814, 0.156416),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[10, 30, 31, 11]),
+                normal: Vector3::new(-0.987580, 0.014814, -0.156416),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[11, 31, 32, 12]),
+                normal: Vector3::new(-0.890909, 0.014814, -0.453940),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[12, 32, 33, 13]),
+                normal: Vector3::new(-0.707029, 0.014813, -0.707029),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[13, 33, 34, 14]),
+                normal: Vector3::new(-0.453936, 0.014813, -0.890911),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[14, 34, 35, 15]),
+                normal: Vector3::new(-0.156427, 0.014814, -0.987578),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[15, 35, 36, 16]),
+                normal: Vector3::new(0.156427, 0.014813, -0.987578),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[16, 36, 37, 17]),
+                normal: Vector3::new(0.453936, 0.014814, -0.890911),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[17, 37, 38, 18]),
+                normal: Vector3::new(0.707029, 0.014814, -0.707029),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[18, 38, 39, 19]),
+                normal: Vector3::new(0.890909, 0.014814, -0.453940),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[19, 39, 20, 0]),
+                normal: Vector3::new(0.987580, 0.014814, -0.156416),
+            },
         ];
 
         let (hull_a, shape_a) = hull_view_from(vertices_a, faces_a);
         let (hull_b, shape_b) = hull_view_from(vertices_b, faces_b);
 
         let center_a = Point3::new(19.071051, -0.511147, -34.252190);
-        let rot_a = UnitQuaternion::from_quaternion(Quaternion::new(0.455293, 0.598422, 0.206850, 0.625949));
+        let rot_a = UnitQuaternion::from_quaternion(Quaternion::new(
+            0.455293, 0.598422, 0.206850, 0.625949,
+        ));
         let center_b = Point3::new(19.258074, -1.270623, -31.333380);
-        let rot_b = UnitQuaternion::from_quaternion(Quaternion::new(0.578825, 0.666153, 0.118727, 0.455088));
+        let rot_b = UnitQuaternion::from_quaternion(Quaternion::new(
+            0.578825, 0.666153, 0.118727, 0.455088,
+        ));
 
         let va = view_from(center_a, rot_a, &shape_a);
         let vb = view_from(center_b, rot_b, &shape_b);
         let margin = 0.02;
 
         let manifold = generate_manifold(&va, &vb, margin, None, None);
-        assert_no_phantom_contacts(&manifold, &hull_a, &center_a, &rot_a, &hull_b, &center_b, &rot_b, margin);
+        assert_no_phantom_contacts(
+            &manifold, &hull_a, &center_a, &rot_a, &hull_b, &center_b, &rot_b, margin,
+        );
     }
 
     /// Regression test: tapered cylinder vs tetrahedron, contact 0.076 outside
@@ -1517,28 +1657,98 @@ mod tests {
             Vector3::new(0.519913, 4.000000, -0.168932),
         ];
         let faces_a = vec![
-            HullFace { vertex_indices: SmallVec::from_slice(&[19, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]), normal: Vector3::new(0.0, -1.0, 0.0) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[20, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25, 24, 23, 22, 21]), normal: Vector3::new(0.0, 1.0, 0.0) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[0, 20, 21, 1]), normal: Vector3::new(0.987580, 0.014814, 0.156418) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[1, 21, 22, 2]), normal: Vector3::new(0.890911, 0.014814, 0.453936) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[2, 22, 23, 3]), normal: Vector3::new(0.707029, 0.014814, 0.707029) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[3, 23, 24, 4]), normal: Vector3::new(0.453936, 0.014814, 0.890911) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[4, 24, 25, 5]), normal: Vector3::new(0.156418, 0.014814, 0.987580) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[5, 25, 26, 6]), normal: Vector3::new(-0.156418, 0.014814, 0.987580) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[6, 26, 27, 7]), normal: Vector3::new(-0.453936, 0.014814, 0.890911) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[7, 27, 28, 8]), normal: Vector3::new(-0.707029, 0.014814, 0.707029) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[8, 28, 29, 9]), normal: Vector3::new(-0.890911, 0.014814, 0.453936) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[9, 29, 30, 10]), normal: Vector3::new(-0.987580, 0.014814, 0.156418) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[10, 30, 31, 11]), normal: Vector3::new(-0.987580, 0.014814, -0.156418) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[11, 31, 32, 12]), normal: Vector3::new(-0.890911, 0.014814, -0.453936) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[12, 32, 33, 13]), normal: Vector3::new(-0.707029, 0.014814, -0.707029) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[13, 33, 34, 14]), normal: Vector3::new(-0.453936, 0.014814, -0.890911) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[14, 34, 35, 15]), normal: Vector3::new(-0.156418, 0.014814, -0.987580) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[15, 35, 36, 16]), normal: Vector3::new(0.156418, 0.014814, -0.987580) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[16, 36, 37, 17]), normal: Vector3::new(0.453936, 0.014814, -0.890911) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[17, 37, 38, 18]), normal: Vector3::new(0.707029, 0.014814, -0.707029) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[18, 38, 39, 19]), normal: Vector3::new(0.890911, 0.014814, -0.453936) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[19, 39, 20, 0]), normal: Vector3::new(0.987580, 0.014814, -0.156418) },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[
+                    19, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18,
+                ]),
+                normal: Vector3::new(0.0, -1.0, 0.0),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[
+                    20, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25, 24, 23, 22, 21,
+                ]),
+                normal: Vector3::new(0.0, 1.0, 0.0),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[0, 20, 21, 1]),
+                normal: Vector3::new(0.987580, 0.014814, 0.156418),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[1, 21, 22, 2]),
+                normal: Vector3::new(0.890911, 0.014814, 0.453936),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[2, 22, 23, 3]),
+                normal: Vector3::new(0.707029, 0.014814, 0.707029),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[3, 23, 24, 4]),
+                normal: Vector3::new(0.453936, 0.014814, 0.890911),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[4, 24, 25, 5]),
+                normal: Vector3::new(0.156418, 0.014814, 0.987580),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[5, 25, 26, 6]),
+                normal: Vector3::new(-0.156418, 0.014814, 0.987580),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[6, 26, 27, 7]),
+                normal: Vector3::new(-0.453936, 0.014814, 0.890911),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[7, 27, 28, 8]),
+                normal: Vector3::new(-0.707029, 0.014814, 0.707029),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[8, 28, 29, 9]),
+                normal: Vector3::new(-0.890911, 0.014814, 0.453936),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[9, 29, 30, 10]),
+                normal: Vector3::new(-0.987580, 0.014814, 0.156418),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[10, 30, 31, 11]),
+                normal: Vector3::new(-0.987580, 0.014814, -0.156418),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[11, 31, 32, 12]),
+                normal: Vector3::new(-0.890911, 0.014814, -0.453936),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[12, 32, 33, 13]),
+                normal: Vector3::new(-0.707029, 0.014814, -0.707029),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[13, 33, 34, 14]),
+                normal: Vector3::new(-0.453936, 0.014814, -0.890911),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[14, 34, 35, 15]),
+                normal: Vector3::new(-0.156418, 0.014814, -0.987580),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[15, 35, 36, 16]),
+                normal: Vector3::new(0.156418, 0.014814, -0.987580),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[16, 36, 37, 17]),
+                normal: Vector3::new(0.453936, 0.014814, -0.890911),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[17, 37, 38, 18]),
+                normal: Vector3::new(0.707029, 0.014814, -0.707029),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[18, 38, 39, 19]),
+                normal: Vector3::new(0.890911, 0.014814, -0.453936),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[19, 39, 20, 0]),
+                normal: Vector3::new(0.987580, 0.014814, -0.156418),
+            },
         ];
 
         let vertices_b = vec![
@@ -1548,16 +1758,32 @@ mod tests {
             Vector3::new(-0.750000, -0.306186, -0.433013),
         ];
         let faces_b = vec![
-            HullFace { vertex_indices: SmallVec::from_slice(&[1, 3, 2]), normal: Vector3::new(0.0, -1.0, 0.0) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[0, 1, 2]), normal: Vector3::new(0.816497, 0.333333, 0.471405) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[0, 2, 3]), normal: Vector3::new(0.0, 0.333333, -0.942809) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[0, 3, 1]), normal: Vector3::new(-0.816496, 0.333333, 0.471405) },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[1, 3, 2]),
+                normal: Vector3::new(0.0, -1.0, 0.0),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[0, 1, 2]),
+                normal: Vector3::new(0.816497, 0.333333, 0.471405),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[0, 2, 3]),
+                normal: Vector3::new(0.0, 0.333333, -0.942809),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[0, 3, 1]),
+                normal: Vector3::new(-0.816496, 0.333333, 0.471405),
+            },
         ];
 
         let center_a = Point3::new(25.326393, 0.421691, -22.565800);
-        let rot_a = UnitQuaternion::from_quaternion(Quaternion::new(0.558867, 0.741737, 0.321328, -0.185047));
+        let rot_a = UnitQuaternion::from_quaternion(Quaternion::new(
+            0.558867, 0.741737, 0.321328, -0.185047,
+        ));
         let center_b = Point3::new(26.925224, -0.258862, -22.313391);
-        let rot_b = UnitQuaternion::from_quaternion(Quaternion::new(0.673709, -0.002595, -0.737262, -0.050532));
+        let rot_b = UnitQuaternion::from_quaternion(Quaternion::new(
+            0.673709, -0.002595, -0.737262, -0.050532,
+        ));
 
         let (hull_a, shape_a) = hull_view_from(vertices_a, faces_a);
         let (hull_b, shape_b) = hull_view_from(vertices_b, faces_b);
@@ -1567,7 +1793,9 @@ mod tests {
         let margin = 0.02;
 
         let manifold = generate_manifold(&va, &vb, margin, None, None);
-        assert_no_phantom_contacts(&manifold, &hull_a, &center_a, &rot_a, &hull_b, &center_b, &rot_b, margin);
+        assert_no_phantom_contacts(
+            &manifold, &hull_a, &center_a, &rot_a, &hull_b, &center_b, &rot_b, margin,
+        );
     }
 
     /// Regression test: two tapered cylinders, contact 1.99 outside hull A's
@@ -1620,28 +1848,98 @@ mod tests {
             Vector3::new(0.519913, 4.000000, -0.168934),
         ];
         let faces_a = vec![
-            HullFace { vertex_indices: SmallVec::from_slice(&[19, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]), normal: Vector3::new(0.0, -1.0, 0.0) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[20, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25, 24, 23, 22, 21]), normal: Vector3::new(0.0, 1.0, 0.0) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[0, 20, 21, 1]), normal: Vector3::new(0.987580, 0.014814, 0.156416) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[1, 21, 22, 2]), normal: Vector3::new(0.890909, 0.014814, 0.453940) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[2, 22, 23, 3]), normal: Vector3::new(0.707029, 0.014814, 0.707029) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[3, 23, 24, 4]), normal: Vector3::new(0.453936, 0.014813, 0.890911) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[4, 24, 25, 5]), normal: Vector3::new(0.156427, 0.014814, 0.987578) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[5, 25, 26, 6]), normal: Vector3::new(-0.156427, 0.014813, 0.987578) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[6, 26, 27, 7]), normal: Vector3::new(-0.453936, 0.014814, 0.890911) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[7, 27, 28, 8]), normal: Vector3::new(-0.707029, 0.014814, 0.707029) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[8, 28, 29, 9]), normal: Vector3::new(-0.890909, 0.014814, 0.453940) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[9, 29, 30, 10]), normal: Vector3::new(-0.987580, 0.014814, 0.156416) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[10, 30, 31, 11]), normal: Vector3::new(-0.987580, 0.014814, -0.156416) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[11, 31, 32, 12]), normal: Vector3::new(-0.890909, 0.014814, -0.453940) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[12, 32, 33, 13]), normal: Vector3::new(-0.707029, 0.014813, -0.707029) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[13, 33, 34, 14]), normal: Vector3::new(-0.453936, 0.014813, -0.890911) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[14, 34, 35, 15]), normal: Vector3::new(-0.156427, 0.014814, -0.987578) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[15, 35, 36, 16]), normal: Vector3::new(0.156427, 0.014813, -0.987578) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[16, 36, 37, 17]), normal: Vector3::new(0.453936, 0.014814, -0.890911) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[17, 37, 38, 18]), normal: Vector3::new(0.707029, 0.014814, -0.707029) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[18, 38, 39, 19]), normal: Vector3::new(0.890909, 0.014814, -0.453940) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[19, 39, 20, 0]), normal: Vector3::new(0.987580, 0.014814, -0.156416) },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[
+                    19, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18,
+                ]),
+                normal: Vector3::new(0.0, -1.0, 0.0),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[
+                    20, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25, 24, 23, 22, 21,
+                ]),
+                normal: Vector3::new(0.0, 1.0, 0.0),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[0, 20, 21, 1]),
+                normal: Vector3::new(0.987580, 0.014814, 0.156416),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[1, 21, 22, 2]),
+                normal: Vector3::new(0.890909, 0.014814, 0.453940),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[2, 22, 23, 3]),
+                normal: Vector3::new(0.707029, 0.014814, 0.707029),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[3, 23, 24, 4]),
+                normal: Vector3::new(0.453936, 0.014813, 0.890911),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[4, 24, 25, 5]),
+                normal: Vector3::new(0.156427, 0.014814, 0.987578),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[5, 25, 26, 6]),
+                normal: Vector3::new(-0.156427, 0.014813, 0.987578),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[6, 26, 27, 7]),
+                normal: Vector3::new(-0.453936, 0.014814, 0.890911),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[7, 27, 28, 8]),
+                normal: Vector3::new(-0.707029, 0.014814, 0.707029),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[8, 28, 29, 9]),
+                normal: Vector3::new(-0.890909, 0.014814, 0.453940),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[9, 29, 30, 10]),
+                normal: Vector3::new(-0.987580, 0.014814, 0.156416),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[10, 30, 31, 11]),
+                normal: Vector3::new(-0.987580, 0.014814, -0.156416),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[11, 31, 32, 12]),
+                normal: Vector3::new(-0.890909, 0.014814, -0.453940),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[12, 32, 33, 13]),
+                normal: Vector3::new(-0.707029, 0.014813, -0.707029),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[13, 33, 34, 14]),
+                normal: Vector3::new(-0.453936, 0.014813, -0.890911),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[14, 34, 35, 15]),
+                normal: Vector3::new(-0.156427, 0.014814, -0.987578),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[15, 35, 36, 16]),
+                normal: Vector3::new(0.156427, 0.014813, -0.987578),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[16, 36, 37, 17]),
+                normal: Vector3::new(0.453936, 0.014814, -0.890911),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[17, 37, 38, 18]),
+                normal: Vector3::new(0.707029, 0.014814, -0.707029),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[18, 38, 39, 19]),
+                normal: Vector3::new(0.890909, 0.014814, -0.453940),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[19, 39, 20, 0]),
+                normal: Vector3::new(0.987580, 0.014814, -0.156416),
+            },
         ];
 
         let vertices_b = vec![
@@ -1687,34 +1985,108 @@ mod tests {
             Vector3::new(0.519913, 4.000000, -0.168926),
         ];
         let faces_b = vec![
-            HullFace { vertex_indices: SmallVec::from_slice(&[19, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18]), normal: Vector3::new(0.0, -1.0, 0.0) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[20, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25, 24, 23, 22, 21]), normal: Vector3::new(0.0, 1.0, 0.0) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[0, 20, 21, 1]), normal: Vector3::new(0.987580, 0.014814, 0.156416) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[1, 21, 22, 2]), normal: Vector3::new(0.890909, 0.014814, 0.453940) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[2, 22, 23, 3]), normal: Vector3::new(0.707029, 0.014813, 0.707029) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[3, 23, 24, 4]), normal: Vector3::new(0.453936, 0.014813, 0.890911) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[4, 24, 25, 5]), normal: Vector3::new(0.156427, 0.014814, 0.987578) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[5, 25, 26, 6]), normal: Vector3::new(-0.156427, 0.014813, 0.987578) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[6, 26, 27, 7]), normal: Vector3::new(-0.453936, 0.014813, 0.890911) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[7, 27, 28, 8]), normal: Vector3::new(-0.707029, 0.014814, 0.707029) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[8, 28, 29, 9]), normal: Vector3::new(-0.890909, 0.014814, 0.453940) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[9, 29, 30, 10]), normal: Vector3::new(-0.987580, 0.014814, 0.156416) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[10, 30, 31, 11]), normal: Vector3::new(-0.987580, 0.014814, -0.156416) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[11, 31, 32, 12]), normal: Vector3::new(-0.890909, 0.014814, -0.453940) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[12, 32, 33, 13]), normal: Vector3::new(-0.707029, 0.014813, -0.707029) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[13, 33, 34, 14]), normal: Vector3::new(-0.453936, 0.014813, -0.890911) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[14, 34, 35, 15]), normal: Vector3::new(-0.156427, 0.014814, -0.987578) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[15, 35, 36, 16]), normal: Vector3::new(0.156427, 0.014813, -0.987578) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[16, 36, 37, 17]), normal: Vector3::new(0.453936, 0.014814, -0.890911) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[17, 37, 38, 18]), normal: Vector3::new(0.707029, 0.014814, -0.707029) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[18, 38, 39, 19]), normal: Vector3::new(0.890909, 0.014814, -0.453940) },
-            HullFace { vertex_indices: SmallVec::from_slice(&[19, 39, 20, 0]), normal: Vector3::new(0.987580, 0.014814, -0.156416) },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[
+                    19, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18,
+                ]),
+                normal: Vector3::new(0.0, -1.0, 0.0),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[
+                    20, 39, 38, 37, 36, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25, 24, 23, 22, 21,
+                ]),
+                normal: Vector3::new(0.0, 1.0, 0.0),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[0, 20, 21, 1]),
+                normal: Vector3::new(0.987580, 0.014814, 0.156416),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[1, 21, 22, 2]),
+                normal: Vector3::new(0.890909, 0.014814, 0.453940),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[2, 22, 23, 3]),
+                normal: Vector3::new(0.707029, 0.014813, 0.707029),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[3, 23, 24, 4]),
+                normal: Vector3::new(0.453936, 0.014813, 0.890911),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[4, 24, 25, 5]),
+                normal: Vector3::new(0.156427, 0.014814, 0.987578),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[5, 25, 26, 6]),
+                normal: Vector3::new(-0.156427, 0.014813, 0.987578),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[6, 26, 27, 7]),
+                normal: Vector3::new(-0.453936, 0.014813, 0.890911),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[7, 27, 28, 8]),
+                normal: Vector3::new(-0.707029, 0.014814, 0.707029),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[8, 28, 29, 9]),
+                normal: Vector3::new(-0.890909, 0.014814, 0.453940),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[9, 29, 30, 10]),
+                normal: Vector3::new(-0.987580, 0.014814, 0.156416),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[10, 30, 31, 11]),
+                normal: Vector3::new(-0.987580, 0.014814, -0.156416),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[11, 31, 32, 12]),
+                normal: Vector3::new(-0.890909, 0.014814, -0.453940),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[12, 32, 33, 13]),
+                normal: Vector3::new(-0.707029, 0.014813, -0.707029),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[13, 33, 34, 14]),
+                normal: Vector3::new(-0.453936, 0.014813, -0.890911),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[14, 34, 35, 15]),
+                normal: Vector3::new(-0.156427, 0.014814, -0.987578),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[15, 35, 36, 16]),
+                normal: Vector3::new(0.156427, 0.014813, -0.987578),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[16, 36, 37, 17]),
+                normal: Vector3::new(0.453936, 0.014814, -0.890911),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[17, 37, 38, 18]),
+                normal: Vector3::new(0.707029, 0.014814, -0.707029),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[18, 38, 39, 19]),
+                normal: Vector3::new(0.890909, 0.014814, -0.453940),
+            },
+            HullFace {
+                vertex_indices: SmallVec::from_slice(&[19, 39, 20, 0]),
+                normal: Vector3::new(0.987580, 0.014814, -0.156416),
+            },
         ];
 
         let center_a = Point3::new(19.981676, 2.806889, -38.121651);
-        let rot_a = UnitQuaternion::from_quaternion(Quaternion::new(0.839891, -0.247287, 0.244666, 0.416618));
+        let rot_a = UnitQuaternion::from_quaternion(Quaternion::new(
+            0.839891, -0.247287, 0.244666, 0.416618,
+        ));
         let center_b = Point3::new(19.560469, 2.277419, -36.412941);
-        let rot_b = UnitQuaternion::from_quaternion(Quaternion::new(0.707800, -0.501969, 0.292429, 0.401909));
+        let rot_b = UnitQuaternion::from_quaternion(Quaternion::new(
+            0.707800, -0.501969, 0.292429, 0.401909,
+        ));
 
         let (hull_a, shape_a) = hull_view_from(vertices_a, faces_a);
         let (hull_b, shape_b) = hull_view_from(vertices_b, faces_b);
@@ -1729,6 +2101,8 @@ mod tests {
             last_direction: Some(Vector3::new(-0.2442, 0.0364, 0.9690)),
         };
         let manifold = generate_manifold(&vb, &va, margin, None, Some(&mut cache));
-        assert_no_phantom_contacts(&manifold, &hull_a, &center_a, &rot_a, &hull_b, &center_b, &rot_b, margin);
+        assert_no_phantom_contacts(
+            &manifold, &hull_a, &center_a, &rot_a, &hull_b, &center_b, &rot_b, margin,
+        );
     }
 }

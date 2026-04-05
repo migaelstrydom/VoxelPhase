@@ -16,8 +16,8 @@ use super::{MaterialCtx, Spawnable};
 use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
 };
-use crate::fracture::{CompoundFracture, FractureJoint};
 use crate::core::error::EngineResult;
+use crate::fracture::{CompoundFracture, FractureJoint};
 use crate::model::{MeshPrimitive, Model, ModelPart};
 use crate::physics::{ColliderDesc, RigidBodyDesc};
 use crate::rendering::material::{Material, MaterialId};
@@ -296,13 +296,9 @@ impl Spawnable for TempleDef {
             let hw = top_step_hw + grow;
             let hl = top_step_hl + grow;
             let hh = lay.step_h / 2.0;
-            let offset_y =
-                i as f32 * lay.step_h + hh - lay.num_steps as f32 * lay.step_h / 2.0;
+            let offset_y = i as f32 * lay.step_h + hh - lay.num_steps as f32 * lay.step_h / 2.0;
 
-            step_boxes.push((
-                Vector3::new(hw, hh, hl),
-                Vector3::new(0.0, offset_y, 0.0),
-            ));
+            step_boxes.push((Vector3::new(hw, hh, hl), Vector3::new(0.0, offset_y, 0.0)));
         }
 
         let stylobate_model = compound_cuboid_model(&step_boxes, stone);
