@@ -49,24 +49,41 @@ impl<'a> System<'a> for FractureSystem {
             };
 
             let body_pos = body.position();
+            let body_rot = body.rotation();
             let collider_handles: Vec<_> = body.colliders().to_vec();
             if collider_handles.len() <= 1 {
                 continue;
             }
 
-            // Compute the total impulse magnitude this body received from
-            // explicit impulse sources (explosions, etc.).
-            let impulse_mag: f32 = last_impulses
+            // Compute per-child impulse magnitudes at each collider's world
+            // position so that distance falloff is respected per piece.
+            let child_impulses: Vec<f32> = collider_handles
                 .iter()
-                .filter_map(|imp| imp.impulse_at(body_pos))
-                .map(|v| v.magnitude())
-                .sum();
+                .map(|ch| {
+                    let child_pos = physics
+                        .world
+                        .collider(*ch)
+                        .map(|c| {
+                            Point3::from(
+                                c.world_transform(body_pos, body_rot).translation.vector,
+                            )
+                        })
+                        .unwrap_or(body_pos);
+                    last_impulses
+                        .iter()
+                        .filter_map(|imp| imp.impulse_at(child_pos))
+                        .map(|v| v.magnitude())
+                        .sum()
+                })
+                .collect();
 
-            // Check if any joint should break.
-            let any_broken = fracture
-                .joints
-                .iter()
-                .any(|joint| impulse_mag > joint.threshold);
+            // Check if any joint should break (impulse at either endpoint
+            // exceeds that joint's threshold).
+            let any_broken = fracture.joints.iter().any(|joint| {
+                let imp_a = child_impulses.get(joint.child_a).copied().unwrap_or(0.0);
+                let imp_b = child_impulses.get(joint.child_b).copied().unwrap_or(0.0);
+                imp_a.max(imp_b) > joint.threshold
+            });
 
             if !any_broken {
                 continue;
@@ -76,7 +93,7 @@ impl<'a> System<'a> for FractureSystem {
                 entity,
                 body_handle,
                 collider_handles,
-                impulse_mag,
+                child_impulses,
             });
         }
 
@@ -87,10 +104,21 @@ impl<'a> System<'a> for FractureSystem {
             };
             let material = fracture.material;
 
-            // Break joints whose threshold is exceeded.
-            fracture
-                .joints
-                .retain(|joint| trigger.impulse_mag <= joint.threshold);
+            // Break joints where the impulse at either endpoint exceeds the
+            // joint's threshold — joints far from the blast survive.
+            fracture.joints.retain(|joint| {
+                let imp_a = trigger
+                    .child_impulses
+                    .get(joint.child_a)
+                    .copied()
+                    .unwrap_or(0.0);
+                let imp_b = trigger
+                    .child_impulses
+                    .get(joint.child_b)
+                    .copied()
+                    .unwrap_or(0.0);
+                imp_a.max(imp_b) <= joint.threshold
+            });
 
             // Compute connected components from surviving joints.
             let components = fracture.connected_components();
@@ -197,7 +225,8 @@ struct FractureTrigger {
     entity: specs::Entity,
     body_handle: crate::physics::RigidBodyHandle,
     collider_handles: Vec<ColliderHandle>,
-    impulse_mag: f32,
+    /// Per-child impulse magnitudes, indexed by child position in collider list.
+    child_impulses: Vec<f32>,
 }
 
 /// Snapshot of a child collider's state, captured before detachment.
@@ -322,13 +351,10 @@ fn rebuild_compound_model(
         })
         .collect();
 
-    let new_model = if remaining.len() == 1 {
-        cuboid_model(remaining[0].0, material)
-    } else if remaining.is_empty() {
+    if remaining.is_empty() {
         return;
-    } else {
-        compound_cuboid_model(&remaining, material)
-    };
+    }
+    let new_model = compound_cuboid_model(&remaining, material);
 
     if let Some(model_inst) = models.get_mut(entity) {
         model_inst.model = new_model;

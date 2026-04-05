@@ -100,38 +100,62 @@ impl SubstepForceProvider for BuoyancyForceProvider<'_> {
             return ForceOutput::zero();
         }
 
-        let collider_handle = match body.colliders().first() {
-            Some(h) => *h,
-            None => return ForceOutput::zero(),
-        };
-        let Some(collider) = ctx.colliders.get(collider_handle.0) else {
+        let body_pos = body.position();
+        let body_rot = body.rotation();
+
+        // Accumulate buoyancy contributions from all colliders so compound
+        // bodies (bridges, fracturable structures) get correct total buoyancy.
+        let mut total_force = Vector3::zeros();
+        let mut total_torque = Vector3::zeros();
+        let mut total_heave_stiffness = 0.0f32;
+        let mut total_linear_drag_coeff = 0.0f32;
+        let mut total_angular_drag_coeff = 0.0f32;
+        let mut total_submerged_fraction = 0.0f32;
+        let mut collider_count = 0u32;
+
+        for &collider_handle in body.colliders() {
+            let Some(collider) = ctx.colliders.get(collider_handle.0) else {
+                continue;
+            };
+
+            let collider_xform = collider.world_transform(body_pos, body_rot);
+            let collider_center = Point3::from(collider_xform.translation.vector);
+            let collider_rot = collider_xform.rotation;
+
+            let result = match compute_buoyancy(
+                collider_center,
+                collider_rot,
+                collider.shape(),
+                self.fluid_density,
+                ctx.gravity,
+                ctx.gravity_magnitude,
+                self.flow_grid,
+                self.wave_grid,
+            ) {
+                Some(f) => f,
+                None => continue,
+            };
+
+            let r = result.buoyancy_center - body_pos;
+            total_force += result.buoyancy_force;
+            total_torque += r.cross(&result.buoyancy_force);
+            total_heave_stiffness += result.heave_stiffness;
+            total_linear_drag_coeff += result.quadratic_linear_drag_coeff;
+            total_angular_drag_coeff += result.quadratic_angular_drag_coeff;
+            total_submerged_fraction += result.submerged_fraction;
+            collider_count += 1;
+        }
+
+        if collider_count == 0 {
             return ForceOutput::zero();
-        };
+        }
 
-        let collider_center = collider.world_center(body.position(), body.rotation());
-
-        let result = match compute_buoyancy(
-            collider_center,
-            body.rotation(),
-            collider.shape(),
-            self.fluid_density,
-            ctx.gravity,
-            ctx.gravity_magnitude,
-            self.flow_grid,
-            self.wave_grid,
-        ) {
-            Some(f) => f,
-            None => return ForceOutput::zero(),
-        };
-
-        // Decompose off-center buoyancy into central force + torque.
-        let r = result.buoyancy_center - body.position();
-        let buoyancy_torque = r.cross(&result.buoyancy_force);
+        let avg_submerged_fraction = total_submerged_fraction / collider_count as f32;
 
         // Linearized heave damping target: c = 2 ζ sqrt(m k).
         let mass = body.mass().max(1e-4);
         let linear_drag_floor =
-            2.0 * HEAVE_DAMPING_RATIO * (mass * result.heave_stiffness.max(0.0)).sqrt();
+            2.0 * HEAVE_DAMPING_RATIO * (mass * total_heave_stiffness.max(0.0)).sqrt();
 
         // Quadratic drag from shape area: Fd = -k |v| v.
         let linear_speed = body.linear_velocity().magnitude();
@@ -139,15 +163,13 @@ impl SubstepForceProvider for BuoyancyForceProvider<'_> {
 
         // Angular drag floor: linear term that guarantees rocking settles
         // even at low angular speeds where the quadratic term vanishes.
-        let angular_drag_floor = ANGULAR_DRAG_FLOOR * result.submerged_fraction;
+        let angular_drag_floor = ANGULAR_DRAG_FLOOR * avg_submerged_fraction;
 
         ForceOutput {
-            force: result.buoyancy_force,
-            torque: buoyancy_torque,
-            linear_drag_coeff: linear_drag_floor
-                + result.quadratic_linear_drag_coeff * linear_speed,
-            angular_drag_coeff: angular_drag_floor
-                + result.quadratic_angular_drag_coeff * angular_speed,
+            force: total_force,
+            torque: total_torque,
+            linear_drag_coeff: linear_drag_floor + total_linear_drag_coeff * linear_speed,
+            angular_drag_coeff: angular_drag_floor + total_angular_drag_coeff * angular_speed,
         }
     }
 }
@@ -226,7 +248,7 @@ pub fn compute_buoyancy(
             wave_grid,
         )?,
         ColliderShape::ConvexHull { hull } => {
-            compute_sphere_submersion(collider_center, hull.bounding_radius, flow_grid, wave_grid)?
+            compute_hull_submersion(collider_center, body_rotation, hull, flow_grid, wave_grid)?
         }
     };
 
@@ -339,6 +361,53 @@ fn compute_box_submersion(
 
     let mut poly = build_obb_polyhedron(center, rotation, half_extents);
     // Water occupies the slab floor <= y <= surface.
+    clip_polyhedron_with_plane(&mut poly, Vector3::new(0.0, 1.0, 0.0), sample.surface_level);
+    clip_polyhedron_with_plane(&mut poly, Vector3::new(0.0, -1.0, 0.0), -sample.floor_level);
+
+    let (submerged_volume, buoyancy_center) = polyhedron_volume_centroid(&poly)?;
+    if submerged_volume <= 0.0 {
+        return None;
+    }
+    let submerged_fraction = (submerged_volume / full_volume).min(1.0);
+    Some((submerged_volume, submerged_fraction, buoyancy_center))
+}
+
+/// Compute submerged volume and centroid for a convex hull.
+///
+/// Transforms hull vertices into world space, builds a closed polyhedron, and
+/// clips against the water surface and floor planes — same approach as OBB
+/// submersion but with arbitrary face topology.
+fn compute_hull_submersion(
+    center: Point3<f32>,
+    rotation: UnitQuaternion<f32>,
+    hull: &crate::collision::convex_hull::ConvexHull,
+    flow_grid: &WaterGrid,
+    wave_grid: Option<&WaveGrid>,
+) -> Option<(f32, f32, Point3<f32>)> {
+    let sample = sample_water(flow_grid, wave_grid, center.x, center.z)?;
+
+    if center.y <= sample.floor_level {
+        return None;
+    }
+
+    let full_volume = hull.compute_volume();
+    if full_volume <= 1e-10 {
+        return None;
+    }
+
+    let vertices: Vec<Point3<f32>> = hull
+        .vertices
+        .iter()
+        .map(|v| center + rotation * v)
+        .collect();
+
+    let faces: Vec<Vec<usize>> = hull
+        .faces
+        .iter()
+        .map(|f| f.vertex_indices.iter().map(|&i| i as usize).collect())
+        .collect();
+
+    let mut poly = Polyhedron { vertices, faces };
     clip_polyhedron_with_plane(&mut poly, Vector3::new(0.0, 1.0, 0.0), sample.surface_level);
     clip_polyhedron_with_plane(&mut poly, Vector3::new(0.0, -1.0, 0.0), -sample.floor_level);
 
@@ -667,7 +736,7 @@ fn submerged_volume_for_pose(
         .map(|(v, _, _)| v)
         .unwrap_or(0.0),
         ColliderShape::ConvexHull { hull } => {
-            compute_sphere_submersion(center, hull.bounding_radius, flow_grid, wave_grid)
+            compute_hull_submersion(center, rotation, hull, flow_grid, wave_grid)
                 .map(|(v, _, _)| v)
                 .unwrap_or(0.0)
         }
@@ -719,9 +788,16 @@ fn shape_drag_properties(shape: &ColliderShape) -> (f32, f32, f32) {
             (DRAG_COEFF_CAPSULE, projected_area, radius_sq)
         }
         ColliderShape::ConvexHull { hull } => {
-            let r = hull.bounding_radius;
-            let projected_area = PI * r * r;
-            (DRAG_COEFF_SPHERE, projected_area, r * r)
+            let (mut min_v, mut max_v) = (Vector3::from_element(f32::MAX), Vector3::from_element(f32::MIN));
+            for v in &hull.vertices {
+                min_v = min_v.zip_map(v, f32::min);
+                max_v = max_v.zip_map(v, f32::max);
+            }
+            let ext = max_v - min_v;
+            // Mean projected area from three AABB face areas.
+            let projected_area = (ext.x * ext.y + ext.y * ext.z + ext.x * ext.z) / 3.0;
+            let radius_sq = hull.bounding_radius * hull.bounding_radius;
+            (DRAG_COEFF_BOX, projected_area, radius_sq)
         }
     }
 }

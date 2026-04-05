@@ -329,12 +329,12 @@ impl Spawnable for TempleDef {
                 FractureJoint {
                     child_a: 0,
                     child_b: 1,
-                    threshold: 500.0,
+                    threshold: 50000.0,
                 },
                 FractureJoint {
                     child_a: 1,
                     child_b: 2,
-                    threshold: 500.0,
+                    threshold: 50000.0,
                 },
             ],
             child_count: 3,
