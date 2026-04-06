@@ -164,6 +164,7 @@ impl Spawnable for FencePostDef {
                     compliance: 0.0,
                     max_impulse: f32::MAX,
                     lock_yaw: true,
+                    lock_roll: false,
                 });
 
             let upright_handle = physics

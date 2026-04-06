@@ -304,15 +304,15 @@ impl<'a> System<'a> for RenderSystem {
                 // Add FPS and fire count to debug lines
                 let fps = 1.0 / time.delta_seconds();
                 debug_lines.add("FPS", format!("{:.0}", fps));
-                if !renderer.active_fires.is_empty() {
-                    let fire_count = renderer.active_fires.len();
-                    let mut slot_counts = [0usize; crate::fire::renderer::SIM_POOL_SIZE];
-                    for (_, f) in &renderer.active_fires {
-                        slot_counts[f.sim_slot] += 1;
-                    }
-                    let active_slots = slot_counts.iter().filter(|&&c| c > 0).count();
-                    debug_lines.add("Fires", format!("{} ({} slots)", fire_count, active_slots));
-                }
+                // if !renderer.active_fires.is_empty() {
+                //     let fire_count = renderer.active_fires.len();
+                //     let mut slot_counts = [0usize; crate::fire::renderer::SIM_POOL_SIZE];
+                //     for (_, f) in &renderer.active_fires {
+                //         slot_counts[f.sim_slot] += 1;
+                //     }
+                //     let active_slots = slot_counts.iter().filter(|&&c| c > 0).count();
+                //     debug_lines.add("Fires", format!("{} ({} slots)", fire_count, active_slots));
+                // }
 
                 // Render debug overlay (cleared in app.rs after all systems complete)
                 if let Err(e) = renderer.render_overlay(draw_cb, debug_lines.iter()) {

@@ -9,8 +9,9 @@ use serde::Deserialize;
 use crate::app::spawnables::{
     BeachBallDef, BoxDef, BoxWallDef, CapsuleDef, CrateDef, DodecahedronDef, DominoDef,
     FencePostDef, HeavyCrateDef, HexPrismDef, HoneycombWallDef, HouseDef, IcosahedronDef, JengaDef,
-    OctahedronDef, PlankBridgeDef, PlankDef, PlayWheelDef, PyramidDef, Spawnable, StackDef,
-    StackItemDef, TableDef, TempleDef, TetrahedronDef, TowerDef, TrampolineDef, VoussoirArchDef,
+    OctahedronDef, PlankBridgeDef, PlankDef, PlayWheelDef, PyramidDef, SeesawDef, Spawnable,
+    StackDef, StackItemDef, TableDef, TempleDef, TetrahedronDef, TowerDef, TrampolineDef,
+    VoussoirArchDef,
 };
 
 /// Top-level level description.
@@ -269,6 +270,21 @@ pub enum LevelObject {
         density: f32,
         #[serde(default = "PlayWheelDef::default_hub_height")]
         hub_height: f32,
+    },
+    /// Seesaw — tilting beam with seats, anchored at fulcrum.
+    Seesaw {
+        /// Position (x, z). Y is determined by terrain surface height.
+        pos: (f32, f32),
+        #[serde(default = "SeesawDef::default_beam_half_length")]
+        beam_half_length: f32,
+        #[serde(default = "SeesawDef::default_beam_half_width")]
+        beam_half_width: f32,
+        #[serde(default = "SeesawDef::default_beam_half_thickness")]
+        beam_half_thickness: f32,
+        #[serde(default = "SeesawDef::default_fulcrum_height")]
+        fulcrum_height: f32,
+        #[serde(default = "SeesawDef::default_density")]
+        density: f32,
     },
     /// Regular tetrahedron with ConvexHull collider.
     Tetrahedron {
@@ -597,6 +613,22 @@ impl LevelObject {
                 thickness: *thickness,
                 density: *density,
                 hub_height: *hub_height,
+            }),
+
+            LevelObject::Seesaw {
+                pos,
+                beam_half_length,
+                beam_half_width,
+                beam_half_thickness,
+                fulcrum_height,
+                density,
+            } => Box::new(SeesawDef {
+                pos: *pos,
+                beam_half_length: *beam_half_length,
+                beam_half_width: *beam_half_width,
+                beam_half_thickness: *beam_half_thickness,
+                fulcrum_height: *fulcrum_height,
+                density: *density,
             }),
 
             LevelObject::Tetrahedron {

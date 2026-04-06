@@ -147,7 +147,7 @@ impl Spawnable for PlayWheelDef {
                 .position(initial_pos)
                 .gravity_scale(1.0)
                 .linear_damping(0.01)
-                .angular_damping(0.002);
+                .angular_damping(0.5);
 
             let body_handle = physics.world.create_body(body_desc);
             physics.world.attach_collider(body_handle, collider);
@@ -161,6 +161,7 @@ impl Spawnable for PlayWheelDef {
                     compliance: 0.0,
                     max_impulse: f32::MAX,
                     lock_yaw: false,
+                    lock_roll: false,
                 });
 
             let upright_handle = physics

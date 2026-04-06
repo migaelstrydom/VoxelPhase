@@ -28,7 +28,7 @@ pub struct PhysicsDebugConfig {
 impl Default for PhysicsDebugConfig {
     fn default() -> Self {
         Self {
-            draw_contacts: true,
+            draw_contacts: false,
             draw_contact_raw_normals: false,
             draw_sleeping: false,
         }

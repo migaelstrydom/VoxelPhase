@@ -26,7 +26,7 @@ pub enum ConstraintKind {
 
     /// Pin a body to a fixed world-space position.
     /// Produces 3 positional rows (X, Y, Z) with `body_a: None`,
-    /// plus an optional 4th angular row locking yaw (spin around world Y).
+    /// plus optional angular rows locking rotation around world axes.
     /// Pair with KeepUpright to also lock tilt.
     AnchorPoint {
         /// The body to pin.
@@ -39,8 +39,10 @@ pub enum ConstraintKind {
         compliance: f32,
         /// Maximum impulse per axis per substep.
         max_impulse: f32,
-        /// If true, adds a 4th row constraining spin around world Y.
+        /// If true, constrains spin around world Y (yaw).
         lock_yaw: bool,
+        /// If true, constrains spin around world X (roll).
+        lock_roll: bool,
     },
 
     /// Drive a point on body_b toward a point on body_a, with optional
@@ -80,13 +82,11 @@ impl ConstraintKind {
     pub fn row_count(&self) -> usize {
         match self {
             ConstraintKind::KeepUpright { .. } => 2,
-            ConstraintKind::AnchorPoint { lock_yaw, .. } => {
-                if *lock_yaw {
-                    4
-                } else {
-                    3
-                }
-            }
+            ConstraintKind::AnchorPoint {
+                lock_yaw,
+                lock_roll,
+                ..
+            } => 3 + *lock_yaw as usize + *lock_roll as usize,
             ConstraintKind::FollowPoint { .. } => 6,
         }
     }

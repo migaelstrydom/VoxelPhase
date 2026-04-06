@@ -59,11 +59,11 @@ pub struct PositionCorrectionConfig {
 impl Default for PositionCorrectionConfig {
     fn default() -> Self {
         Self {
-            correction_factor: 0.2,
+            correction_factor: 0.3,
             slop: 0.005,
             iterations: 3,
             max_correction_speed: 0.1,
-            deep_correction_speed: 1.0,
+            deep_correction_speed: 2.0,
             deep_threshold: 0.1,
             contact_rolling_resistance: 0.1,
             contact_linear_damping: 0.1,

@@ -57,6 +57,7 @@ pub fn expand_constraints(
                 compliance,
                 max_impulse,
                 lock_yaw,
+                lock_roll,
             } => {
                 let Some(rigid_body) = bodies.get(body.0) else {
                     continue;
@@ -69,6 +70,7 @@ pub fn expand_constraints(
                     *compliance,
                     *max_impulse,
                     *lock_yaw,
+                    *lock_roll,
                     dt,
                     beta,
                     index,
