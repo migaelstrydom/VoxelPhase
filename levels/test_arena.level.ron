@@ -134,5 +134,16 @@ Level(
             beam_half_thickness: 0.1,
             fulcrum_height: 0.5,
         ),
+
+        Menhir(
+            pos: (15.0, 0.0),
+            half_height: 2.0,
+            bottom_radius: 0.8,
+            top_radius: 0.5,
+        ),
+
+        Trilithon(
+            pos: (15.0, 0.0, -5.0),
+        ),
     ],
 )

@@ -9,9 +9,9 @@ use serde::Deserialize;
 use crate::app::spawnables::{
     BeachBallDef, BoxDef, BoxWallDef, CapsuleDef, CrateDef, DodecahedronDef, DominoDef,
     FencePostDef, HeavyCrateDef, HexPrismDef, HoneycombWallDef, HouseDef, IcosahedronDef, JengaDef,
-    OctahedronDef, PlankBridgeDef, PlankDef, PlayWheelDef, PyramidDef, SeesawDef, Spawnable,
+    MenhirDef, OctahedronDef, PlankBridgeDef, PlankDef, PlayWheelDef, PyramidDef, SeesawDef, Spawnable,
     StackDef, StackItemDef, TableDef, TempleDef, TetrahedronDef, TowerDef, TrampolineDef,
-    VoussoirArchDef,
+    TrilithonDef, VoussoirArchDef,
 };
 
 /// Top-level level description.
@@ -247,6 +247,19 @@ pub enum LevelObject {
         #[serde(default = "CapsuleDef::default_friction")]
         friction: f32,
     },
+    /// Standing stone anchored to terrain. Released when terrain is destroyed.
+    Menhir {
+        /// Position (x, z). Y is determined by terrain surface height.
+        pos: (f32, f32),
+        #[serde(default = "MenhirDef::default_half_height")]
+        half_height: f32,
+        #[serde(default = "MenhirDef::default_bottom_radius")]
+        bottom_radius: f32,
+        #[serde(default = "MenhirDef::default_top_radius")]
+        top_radius: f32,
+        #[serde(default = "MenhirDef::default_density")]
+        density: f32,
+    },
     /// Vertical post anchored to terrain. Released when terrain is destroyed.
     FencePost {
         /// Position (x, z). Y is determined by terrain surface height.
@@ -463,6 +476,24 @@ pub enum LevelObject {
         #[serde(default = "PlankBridgeDef::default_fracture_threshold")]
         fracture_threshold: f32,
     },
+    /// Neolithic trilithon — two uprights with a lintel.
+    Trilithon {
+        pos: (f32, f32, f32),
+        #[serde(default = "TrilithonDef::default_upright_half_height")]
+        upright_half_height: f32,
+        #[serde(default = "TrilithonDef::default_upright_half_width")]
+        upright_half_width: f32,
+        #[serde(default = "TrilithonDef::default_upright_half_depth")]
+        upright_half_depth: f32,
+        #[serde(default = "TrilithonDef::default_gap")]
+        gap: f32,
+        #[serde(default = "TrilithonDef::default_lintel_half_thickness")]
+        lintel_half_thickness: f32,
+        #[serde(default = "TrilithonDef::default_lintel_overhang")]
+        lintel_overhang: f32,
+        #[serde(default = "TrilithonDef::default_density")]
+        density: f32,
+    },
     /// Classical Greek Doric temple with peristyle colonnade.
     Temple {
         pos: (f32, f32, f32),
@@ -587,6 +618,20 @@ impl LevelObject {
                 density: *density,
                 restitution: *restitution,
                 friction: *friction,
+            }),
+
+            LevelObject::Menhir {
+                pos,
+                half_height,
+                bottom_radius,
+                top_radius,
+                density,
+            } => Box::new(MenhirDef {
+                pos: *pos,
+                half_height: *half_height,
+                bottom_radius: *bottom_radius,
+                top_radius: *top_radius,
+                density: *density,
             }),
 
             LevelObject::FencePost {
@@ -831,6 +876,26 @@ impl LevelObject {
                 density: *density,
                 yaw: *yaw,
                 fracture_threshold: *fracture_threshold,
+            }),
+
+            LevelObject::Trilithon {
+                pos,
+                upright_half_height,
+                upright_half_width,
+                upright_half_depth,
+                gap,
+                lintel_half_thickness,
+                lintel_overhang,
+                density,
+            } => Box::new(TrilithonDef {
+                pos: *pos,
+                upright_half_height: *upright_half_height,
+                upright_half_width: *upright_half_width,
+                upright_half_depth: *upright_half_depth,
+                gap: *gap,
+                lintel_half_thickness: *lintel_half_thickness,
+                lintel_overhang: *lintel_overhang,
+                density: *density,
             }),
 
             LevelObject::Temple {

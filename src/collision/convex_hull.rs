@@ -7,7 +7,7 @@ use super::shape_view::{SupportFace, SupportFaceExtractor};
 use super::support::ConvexSupport;
 
 /// Maximum number of vertices allowed in a convex hull.
-pub const MAX_HULL_VERTICES: usize = 64;
+pub const MAX_HULL_VERTICES: usize = 128;
 
 /// Minimum ratio of thinnest to thickest AABB dimension.
 /// Hulls thinner than this are rejected to avoid degenerate Minkowski differences.

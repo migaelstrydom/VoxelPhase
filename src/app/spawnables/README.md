@@ -20,7 +20,7 @@ pub struct MyThingDef {
 }
 ```
 
-The `Spawnable` trait has three methods:
+The `Spawnable` trait (in `spawnable.rs`) has three methods:
 
 - `material_count()` — how many materials this spawnable needs (called during
   pre-allocation).
@@ -54,20 +54,59 @@ MyThing(
 ),
 ```
 
+## Required imports
+
+Every spawnable needs a subset of these (copy what you need):
+
+```rust
+use std::f32::consts::TAU;
+use std::sync::Arc;
+
+use nalgebra::{Point3, UnitQuaternion, UnitVector3, Vector2, Vector3, Vector4};
+use serde::Deserialize;
+use specs::{Builder, Entity, World, WorldExt};
+
+use super::shared::models::{build_convex_hull, convex_solid_model, SolidFace};
+use super::shared::textures::Rgb;
+use super::{MaterialCtx, Spawnable};
+use crate::components::{
+    Flammable, ModelInstance, Orientation, Position, Renderable, RigidBodyComponent,
+    TerrainAnchored, Velocity,
+};
+use crate::core::error::EngineResult;
+use crate::model::{MeshPrimitive, Model, ModelPart};
+use crate::physics::{ColliderDesc, ConstraintKind, RigidBodyDesc};
+use crate::rendering::colour::Colour;
+use crate::rendering::material::{Material, MaterialId};
+use crate::rendering::vertex::Vertex;
+use crate::systems::PhysicsResource;
+use crate::terrain::TerrainManager;
+use crate::utils::noise::fbm_2d_periodic;
+```
+
 ## Geometry and models
 
 ### Shared model builders (`shared/models.rs`)
 
 - `cuboid_model(half_extents, material)` — single axis-aligned box.
+  Returns `Arc<Model>`.
 - `compound_cuboid_model(boxes, material)` — multiple boxes, one material.
+  `boxes` is `&[(Vector3<f32>, MaterialId)]` — each entry is `(half_extents, offset)`.
 - `multi_material_compound_cuboid_model(boxes)` — multiple boxes, per-box
-  materials.
+  materials. `boxes` is `&[(Vector3<f32>, Vector3<f32>, MaterialId)]` —
+  `(half_extents, offset, material)`.
 - `multi_material_rotated_compound_cuboid_model(boxes)` — same but with per-box
-  rotation quaternions.
+  rotation quaternions. `boxes` is
+  `&[(Vector3<f32>, Vector3<f32>, UnitQuaternion<f32>, MaterialId)]`.
 - `convex_solid_model(vertices, faces, material)` — arbitrary convex shape from
   vertex + face definitions. Uses per-face planar UV projection.
+  `vertices: &[Vector3<f32>]`, `faces: &[SolidFace]`, `material: MaterialId`.
+  Returns `Arc<Model>`.
 - `build_convex_hull(vertices, faces)` — builds a `ConvexHull` for the physics
-  collider from the same vertex/face data.
+  collider from the same vertex/face data. Returns `ConvexHull` (wrap in
+  `Arc::new()` for `ColliderDesc::convex_hull()`).
+
+All model functions return `Arc<Model>`.
 
 ### Prefer boxes over convex hulls
 
@@ -106,18 +145,56 @@ clockwise in world space become counter-clockwise in clip space**. This means:
 - If you build a custom mesh (like the temple's fluted column model with
   cylindrical UVs), you must get the winding right yourself.
 
+### Custom mesh building
+
+For shapes that need custom UV mapping (cylinders, spheres, etc.) where
+`convex_solid_model`'s planar UV projection isn't suitable, build the mesh
+directly using `Vertex`, `MeshPrimitive`, `ModelPart`, and `Model`:
+
+```rust
+let parts = vec![ModelPart::new(vec![
+    MeshPrimitive {
+        vertices: my_vertices,   // Vec<Vertex>
+        indices: my_indices,     // Vec<u32>
+        material: my_material,   // MaterialId
+    },
+])];
+let model = Arc::new(Model::flat(parts));
+```
+
+`Vertex` fields:
+```rust
+Vertex {
+    pos: Vector4::new(x, y, z, 1.0),    // local-space position
+    color: Colour::WHITE.to_vec4(),      // vertex colour (usually white with textures)
+    tex_coords: Vector2::new(u, v),      // UV coordinates
+    normal: Vector3::new(nx, ny, nz),    // surface normal
+}
+```
+
+Multiple `MeshPrimitive`s in one `ModelPart` share a single draw call but can
+have different materials. Use this for multi-material objects (e.g. fence post
+barrel + caps).
+
 ## Procedural textures
 
 ### Shared helpers (`shared/textures.rs`)
 
-- `Rgb` — colour struct with `scale`, `lerp`, `write_rgba`.
-- `rand_range`, `rand_u32` — random values for per-instance variation.
-- `hash_pair(a, b)` — deterministic integer hash for per-element variation
-  (e.g. per-brick colour shifts).
+- `Rgb` — colour struct with `scale(f32)`, `lerp(other, t)`, `write_rgba(&mut Vec<u8>)`.
+- `rand_range(lo, hi)` — random `f32` in range.
+- `rand_u32()` — random u32 for seeding.
+- `hue_to_rgb(h, s, v)` — HSV to RGB. `h` is in 0..6 (not 0..360).
 - `edge_vignette(u, v)` — subtle darkening at texture edges.
 - `border_band(u, v, width)` — darkening band at a given inset distance.
-- `fbm_2d_periodic(...)` — tileable fractal Brownian motion noise (from
-  `crate::utils::noise`). The `period` parameter controls tiling.
+- `crack_pattern(u, v, seed)` — crack-like noise.
+- `rivet_pattern(u, v, size)` — rivet dots.
+- `plank_border(u, v, width)` — plank divider.
+- `hash_pair(a, b)` — deterministic integer hash for per-element variation
+  (e.g. per-brick colour shifts).
+- `fbm_2d_periodic(u, v, octaves, persistence, lacunarity, seed, period)` —
+  tileable fractal Brownian motion noise (from `crate::utils::noise`). The
+  `period` parameter (`Option<u32>`) controls tiling; use `Some(N)` where N
+  matches the frequency multiplier for seamless tiling.
 
 ### Material consistency
 
@@ -140,6 +217,43 @@ fn create_my_material(
 ```
 
 The last `bool` parameter enables mipmapping.
+
+### Typical texture generation structure
+
+```rust
+const TEXTURE_SIZE: u32 = 256;  // or 128 for simpler materials
+
+fn generate_my_texture(seed: u32) -> Vec<u8> {
+    let size = TEXTURE_SIZE;
+    let mut pixels = Vec::with_capacity((size * size * 4) as usize);
+
+    let base_colour = Rgb::new(0.5, 0.4, 0.3);
+
+    for y in 0..size {
+        for x in 0..size {
+            let u = x as f32 / size as f32;
+            let v = y as f32 / size as f32;
+
+            // Use fbm_2d_periodic for natural variation.
+            let noise = fbm_2d_periodic(
+                u * 6.0, v * 6.0,  // frequency
+                3,                  // octaves
+                0.5,                // persistence (amplitude falloff)
+                2.0,                // lacunarity (frequency multiplier)
+                seed,               // PRNG seed
+                Some(6),            // period (match frequency for tiling)
+            );
+
+            let colour = base_colour.scale(0.85 + noise * 0.15);
+            colour.write_rgba(&mut pixels);
+        }
+    }
+    pixels
+}
+```
+
+Use `seed.wrapping_add(N)` for multiple independent noise layers from the same
+base seed.
 
 ## Physics
 
@@ -166,9 +280,19 @@ physics.world.attach_collider(
 ### Collider types
 
 - `ColliderDesc::box_shape(half_extents)` — OBB, cheapest.
-- `ColliderDesc::sphere(radius)` — sphere.
-- `ColliderDesc::capsule(half_height, radius)` — capsule.
+  `half_extents: Vector3<f32>`.
+- `ColliderDesc::sphere(radius)` — sphere. `radius: f32`.
+- `ColliderDesc::capsule(half_height, radius)` — capsule. Both `f32`.
 - `ColliderDesc::convex_hull(arc_hull)` — arbitrary convex shape.
+  `arc_hull: Arc<ConvexHull>`.
+
+All collider types support these builder methods:
+- `.density(f32)` — mass = density x volume.
+- `.restitution(f32)` — bounciness (0 = no bounce, 1 = perfectly elastic).
+- `.friction(f32)` — surface friction (see below).
+- `.offset_translation(Vector3<f32>)` — offset the collider relative to the
+  body origin. Used for anchored objects where only the exposed portion should
+  collide.
 
 ### Friction
 
@@ -209,8 +333,89 @@ value must match or you get a one-frame visual pop.
 | Wood      | 500-700 |
 | Brick     | 1800    |
 | Concrete  | 2400    |
+| Granite   | 2700    |
 | Marble    | 2700    |
 | Steel     | 7800    |
+
+## Terrain-anchored objects
+
+For objects pinned to the terrain surface (fence posts, menhirs, play wheels),
+use `(f32, f32)` for the position (x, z) and query the terrain for Y:
+
+```rust
+pub pos: (f32, f32),  // not (f32, f32, f32)
+
+// In spawn():
+let surface_y = {
+    let terrain = world.read_resource::<TerrainManager>();
+    terrain.mesh_surface_height_at(self.pos.0, self.pos.1)
+};
+let Some(surface_y) = surface_y else {
+    return Vec::new();
+};
+```
+
+### Constraint setup
+
+Use `AnchorPoint` to pin a body-local point to a world position, and
+`KeepUpright` to maintain vertical orientation:
+
+```rust
+let anchor_handle = physics.world.create_constraint(
+    ConstraintKind::AnchorPoint {
+        body: body_handle,
+        local_anchor: Vector3::new(0.0, -half_height, 0.0),  // bottom of body
+        world_anchor: Point3::new(x, buried_y, z),
+        compliance: 0.0,        // rigid (no springiness)
+        max_impulse: f32::MAX,  // unbreakable
+        lock_yaw: true,         // prevent rotation around Y
+        lock_roll: false,
+    }
+);
+
+let upright_handle = physics.world.create_constraint(
+    ConstraintKind::KeepUpright {
+        body: body_handle,
+        target_up: UnitVector3::new_normalize(Vector3::y()),
+        compliance: 0.0,
+    }
+);
+```
+
+### TerrainAnchored component
+
+Attach the `TerrainAnchored` component so the terrain system can release the
+constraints when the terrain beneath is destroyed:
+
+```rust
+.with(TerrainAnchored {
+    anchor_handle,                  // ConstraintHandle
+    upright_handle,                 // ConstraintHandle
+    anchor_world: Point3::new(      // sample point checked each frame
+        x,
+        surface_y - 0.1,           // slightly below surface
+        z,
+    ),
+    released_collider: Some(full_collider),  // swapped in on release
+})
+```
+
+### Anchored vs released collider pattern
+
+While anchored, the collider covers only the exposed portion (offset upward).
+When released, the full-size collider is swapped in:
+
+```rust
+let exposed_half_height = (full_height - buried_depth) / 2.0;
+let collider_offset_y = half_height - exposed_half_height;
+
+let anchored_collider = ColliderDesc::capsule(exposed_half_height, radius)
+    .density(density)
+    .offset_translation(Vector3::new(0.0, collider_offset_y, 0.0));
+
+let released_collider = ColliderDesc::capsule(half_height, radius)
+    .density(density);
+```
 
 ## ECS entity setup
 
@@ -229,3 +434,15 @@ world.create_entity()
 
 Optional components:
 - `Flammable::wood()` — makes the entity catch fire.
+- `TerrainAnchored { ... }` — terrain-pinned with release on destruction.
+
+## Reference implementations
+
+| Pattern | Example file | Key feature |
+|---------|-------------|-------------|
+| Simple free body | `tetrahedron.rs` | ConvexHull collider + `convex_solid_model` |
+| Terrain-anchored | `fence_post.rs` | AnchorPoint + KeepUpright + TerrainAnchored |
+| Custom mesh | `fence_post.rs` | Hand-built barrel + cap meshes with `MeshPrimitive` |
+| Multi-entity | `pyramid.rs` | Grid of independent bodies from one spawnable |
+| Compound body | `table.rs` | Multiple colliders on one body + fracture |
+| Box-based | `box_object.rs` | `cuboid_model` + `ColliderDesc::box_shape` |
