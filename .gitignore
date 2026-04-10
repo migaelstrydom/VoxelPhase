@@ -3,3 +3,5 @@
 /target
 shader/**/*.spv
 data/
+.venv/
+scratch/
