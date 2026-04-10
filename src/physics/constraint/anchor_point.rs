@@ -15,7 +15,7 @@ use smallvec::SmallVec;
 use crate::physics::body::RigidBody;
 use crate::physics::handle::RigidBodyHandle;
 
-use super::types::ConstraintRow;
+use super::types::{ConstraintRow, CorrectionMode, Enforcement, RowKind};
 
 /// Expand an AnchorPoint constraint into 3–5 solver rows.
 ///
@@ -78,6 +78,9 @@ pub fn expand(
             bounds: (-max_impulse, max_impulse),
             constraint_index,
             row_index: i,
+            correction_mode: CorrectionMode::PositionAndVelocity,
+            row_kind: RowKind::Linear,
+            enforcement: Enforcement::Iterative,
         });
     }
 
@@ -102,6 +105,9 @@ pub fn expand(
             bounds: (-max_impulse, max_impulse),
             constraint_index,
             row_index: row_idx,
+            correction_mode: CorrectionMode::VelocityOnly,
+            row_kind: RowKind::Angular,
+            enforcement: Enforcement::Iterative,
         });
         row_idx += 1;
     }
@@ -124,6 +130,9 @@ pub fn expand(
             bounds: (-max_impulse, max_impulse),
             constraint_index,
             row_index: row_idx,
+            correction_mode: CorrectionMode::VelocityOnly,
+            row_kind: RowKind::Angular,
+            enforcement: Enforcement::Iterative,
         });
     }
 

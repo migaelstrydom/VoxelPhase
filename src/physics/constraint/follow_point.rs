@@ -14,7 +14,7 @@ use nalgebra::{UnitQuaternion, Vector3};
 use crate::physics::body::RigidBody;
 use crate::physics::handle::RigidBodyHandle;
 
-use super::types::ConstraintRow;
+use super::types::{ConstraintRow, CorrectionMode, Enforcement, RowKind};
 
 /// Expand a two-body FollowPoint constraint into six solver rows.
 ///
@@ -35,6 +35,7 @@ pub fn expand(
     angular_max_impulse: f32,
     dt: f32,
     constraint_index: generational_arena::Index,
+    warm_impulses: &[f32],
 ) -> [ConstraintRow; 6] {
     let inv_mass_a = body_a.inv_mass();
     let inv_inertia_a = body_a.world_inv_inertia();
@@ -83,10 +84,13 @@ pub fn expand(
                 ang_jac_b,
                 effective_mass_inv: eff_mass,
                 bias: 0.0,
-                accumulated_impulse: 0.0,
+                accumulated_impulse: warm_impulses[i],
                 bounds: (-max_impulse, max_impulse),
                 constraint_index,
                 row_index: i,
+                correction_mode: CorrectionMode::PositionAndVelocity,
+                row_kind: RowKind::Linear,
+                enforcement: Enforcement::Iterative,
             }
         } else {
             // Angular row (i-3 maps to X, Y, Z)
@@ -106,10 +110,13 @@ pub fn expand(
                 ang_jac_b: axis,
                 effective_mass_inv: eff_mass,
                 bias: 0.0,
-                accumulated_impulse: 0.0,
+                accumulated_impulse: warm_impulses[i],
                 bounds: (-angular_max_impulse, angular_max_impulse),
                 constraint_index,
                 row_index: i,
+                correction_mode: CorrectionMode::VelocityOnly,
+                row_kind: RowKind::Angular,
+                enforcement: Enforcement::Iterative,
             }
         }
     })

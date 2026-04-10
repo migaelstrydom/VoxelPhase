@@ -2,13 +2,14 @@
 //! nonlinear Gauss-Seidel position correction.
 
 use rustc_hash::FxHashMap;
+use smallvec::SmallVec;
 
 use generational_arena::{Arena, Index};
 use nalgebra::{Point3, Vector3};
 
 use crate::physics::body::RigidBody;
 use crate::physics::constraint::expand::{expand_constraints, write_back_constraints};
-use crate::physics::constraint::types::{Constraint, ConstraintKind, ConstraintRow};
+use crate::physics::constraint::types::{Constraint, ConstraintRow, Enforcement, RowKind};
 use crate::physics::pipeline::pair::SolverManifold;
 
 use super::body_pair::BodyPairState;
@@ -156,6 +157,10 @@ impl ConstraintSolver for PgsNgsSolver {
             .collect();
 
         // Phase 2: Warm-start — apply cached impulses from previous frame.
+        // Joint constraints first, contacts second (matches solve order).
+        for row in constraint_rows.iter_mut() {
+            warm_start_constraint_row(bodies, row, self.config.warm_start_scale);
+        }
         for (mi, manifold) in manifolds.iter_mut().enumerate() {
             let header = &manifold.header;
             let shock = conditions.shock_scales_for(mi);
@@ -163,14 +168,17 @@ impl ConstraintSolver for PgsNgsSolver {
                 warm_start_contact(bodies, header, contact, pre_solve[mi][ci].1, shock);
             }
         }
-        for row in constraint_rows.iter_mut() {
-            warm_start_constraint_row(bodies, row, self.config.warm_start_scale);
-        }
 
         // Phase 3: Iterative sequential-impulse solving.
         let iterations = effective_solver_iterations(manifolds, self.config.solver_iterations);
         for _ in 0..iterations {
-            // Contacts first — normal + friction impulses.
+            // Joint constraints first — solved early so contacts get the
+            // last word for penetration prevention.
+            for row in constraint_rows.iter_mut() {
+                solve_constraint_row(bodies, row);
+            }
+
+            // Contacts last — normal + friction impulses.
             for (mi, manifold) in manifolds.iter_mut().enumerate() {
                 let shock = conditions.shock_scales_for(mi);
 
@@ -216,12 +224,6 @@ impl ConstraintSolver for PgsNgsSolver {
                     );
                 }
             }
-
-            // Joint constraints last within each iteration — higher priority
-            // than contacts, so friction can't undo constraint corrections.
-            for row in constraint_rows.iter_mut() {
-                solve_constraint_row(bodies, row);
-            }
         }
 
         // Phase 4: Position correction after velocity solving.
@@ -231,6 +233,7 @@ impl ConstraintSolver for PgsNgsSolver {
             bodies,
             manifolds,
             constraints,
+            constraint_rows,
             &self.config.position_correction,
             dt,
             &self.contact_generation_positions,
@@ -241,52 +244,84 @@ impl ConstraintSolver for PgsNgsSolver {
         write_back_constraints(constraints, &self.cached_constraint_rows);
     }
 
-    fn project_velocities(
-        &self,
-        constraints: &Arena<Constraint>,
-        bodies: &mut Arena<RigidBody>,
-        dt: f32,
-    ) {
+    fn project_velocities(&self, bodies: &mut Arena<RigidBody>, dt: f32) {
         let beta = self.config.constraint_position_beta;
 
-        for (_index, constraint) in constraints.iter() {
-            if !constraint.active {
+        // Collect HardProjection angular rows grouped by constraint index.
+        // Each group's Jacobian axes span the plane perpendicular to the
+        // constraint's target direction, so cross(perp1, perp2) recovers it.
+        let mut groups: SmallVec<[(Index, SmallVec<[Vector3<f32>; 2]>); 4]> = SmallVec::new();
+        for row in &self.cached_constraint_rows {
+            if row.enforcement != Enforcement::HardProjection
+                || row.row_kind != RowKind::Angular
+            {
+                continue;
+            }
+            let jac = if row.body_a.is_some() {
+                row.ang_jac_a
+            } else {
+                row.ang_jac_b
+            };
+            if let Some(entry) = groups.iter_mut().find(|(idx, _)| *idx == row.constraint_index) {
+                entry.1.push(jac);
+            } else {
+                let body_handle = row.body_a.or(row.body_b);
+                if body_handle.is_none() {
+                    continue;
+                }
+                let mut axes = SmallVec::new();
+                axes.push(jac);
+                groups.push((row.constraint_index, axes));
+            }
+        }
+
+        for (constraint_index, axes) in &groups {
+            debug_assert!(
+                axes.len() >= 2,
+                "HardProjection constraint {constraint_index:?} has only {} angular row(s), \
+                 expected at least 2 — likely a constraint expansion bug",
+                axes.len(),
+            );
+            if axes.len() < 2 {
                 continue;
             }
 
-            match &constraint.kind {
-                ConstraintKind::KeepUpright {
-                    body,
-                    target_up,
-                    compliance,
-                } => {
-                    if *compliance > 0.0 {
-                        continue;
-                    }
-
-                    let Some(body) = bodies.get_mut(body.0) else {
-                        continue;
-                    };
-
-                    let up = target_up.into_inner();
-                    let local_up = body.rotation() * Vector3::y();
-
-                    // Preserve only the spin component (rotation around target up)
-                    let omega = body.angular_velocity();
-                    let spin = omega.dot(&up) * up;
-
-                    // Corrective angular velocity to reduce tilt error.
-                    // The cross product local_up × target_up gives the rotation
-                    // axis and its magnitude equals sin(θ), which works correctly
-                    // at all angles (unlike the linearized dot-product Jacobian).
-                    let correction_axis = local_up.cross(&up);
-                    let correction = correction_axis * (beta / dt);
-
-                    body.set_angular_velocity(spin + correction);
-                }
-
-                ConstraintKind::AnchorPoint { .. } | ConstraintKind::FollowPoint { .. } => {}
+            // Recover the target up direction from the perpendicular Jacobian axes.
+            let up_raw = axes[0].cross(&axes[1]);
+            let mag = up_raw.magnitude();
+            if mag < 1e-6 {
+                continue;
             }
+            let up = up_raw / mag;
+
+            // Find the body handle from any HardProjection row of this constraint.
+            let body_handle = self
+                .cached_constraint_rows
+                .iter()
+                .find(|r| r.constraint_index == *constraint_index && r.enforcement == Enforcement::HardProjection)
+                .and_then(|r| r.body_a.or(r.body_b));
+
+            let Some(handle) = body_handle else {
+                continue;
+            };
+            let Some(body) = bodies.get_mut(handle.0) else {
+                continue;
+            };
+
+            let local_up = body.rotation() * Vector3::y();
+
+            // Preserve only the spin component (rotation around target up).
+            let omega = body.angular_velocity();
+            let spin = omega.dot(&up) * up;
+
+            // Corrective angular velocity to reduce tilt error.
+            // The cross product local_up x target_up gives the rotation
+            // axis and its magnitude equals sin(theta), which works correctly
+            // at all angles (unlike the linearized dot-product Jacobian).
+            let correction_axis = local_up.cross(&up);
+            let correction = correction_axis * (beta / dt);
+
+            body.set_angular_velocity(spin + correction);
         }
     }
 }

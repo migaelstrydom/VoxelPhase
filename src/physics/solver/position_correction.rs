@@ -3,12 +3,15 @@
 //! Also includes contact damping (rolling resistance + linear damping).
 
 use rustc_hash::{FxHashMap, FxHashSet};
+use smallvec::SmallVec;
 
 use generational_arena::{Arena, Index};
 use nalgebra::{Matrix3, Point3, UnitQuaternion, Vector3};
 
 use crate::physics::body::RigidBody;
-use crate::physics::constraint::types::{Constraint, ConstraintKind};
+use crate::physics::constraint::types::{
+    Constraint, ConstraintKind, ConstraintRow, CorrectionMode, RowKind,
+};
 use crate::physics::handle::RigidBodyHandle;
 use crate::physics::math::integrate_orientation;
 use crate::physics::pipeline::pair::SolverManifold;
@@ -82,6 +85,7 @@ pub(crate) fn apply_position_correction(
     bodies: &mut Arena<RigidBody>,
     manifolds: &[SolverManifold],
     constraints: &Arena<Constraint>,
+    constraint_rows: &[ConstraintRow],
     config: &PositionCorrectionConfig,
     dt: f32,
     contact_generation_positions: &FxHashMap<Index, Point3<f32>>,
@@ -90,6 +94,7 @@ pub(crate) fn apply_position_correction(
         bodies,
         manifolds,
         constraints,
+        constraint_rows,
         config.correction_factor,
         config.constraint_correction_factor,
         config.slop,
@@ -144,6 +149,7 @@ fn apply_ngs_correction(
     bodies: &mut Arena<RigidBody>,
     manifolds: &[SolverManifold],
     constraints: &Arena<Constraint>,
+    constraint_rows: &[ConstraintRow],
     correction_factor: f32,
     constraint_correction_factor: f32,
     slop: f32,
@@ -309,6 +315,7 @@ fn apply_ngs_correction(
         correct_constraint_drift(
             bodies,
             constraints,
+            constraint_rows,
             constraint_correction_factor,
             &mut transforms,
         );
@@ -326,18 +333,39 @@ fn apply_ngs_correction(
     }
 }
 
-/// Apply direct position/rotation corrections for weld and follow-point constraints.
+/// Apply direct position corrections for constraint rows with
+/// `CorrectionMode::PositionAndVelocity` and `RowKind::Linear`.
 ///
 /// Reads live body transforms (from the `transforms` map, falling back to the
 /// body arena) and applies mass-weighted corrections that reduce anchor drift
-/// and angular error without injecting velocity.
+/// without injecting velocity.
+///
+/// Both the gating and dispatch are driven by per-row metadata. Angular rows
+/// (e.g. KeepUpright) are skipped — angular drift is handled by velocity-level
+/// PGS and hard projection, not position correction (see the
+/// `ngs_angular_correction` doc comment for why).
 fn correct_constraint_drift(
     bodies: &Arena<RigidBody>,
     constraints: &Arena<Constraint>,
+    constraint_rows: &[ConstraintRow],
     correction_factor: f32,
     transforms: &mut FxHashMap<Index, CorrectedTransform>,
 ) {
-    for (_index, constraint) in constraints.iter() {
+    // Collect unique constraint indices that have linear position-correction rows.
+    let mut corrected_indices: SmallVec<[Index; 4]> = SmallVec::new();
+    for row in constraint_rows {
+        if row.correction_mode == CorrectionMode::PositionAndVelocity
+            && row.row_kind == RowKind::Linear
+            && !corrected_indices.contains(&row.constraint_index)
+        {
+            corrected_indices.push(row.constraint_index);
+        }
+    }
+
+    for index in corrected_indices {
+        let Some(constraint) = constraints.get(index) else {
+            continue;
+        };
         if !constraint.active {
             continue;
         }
@@ -381,9 +409,10 @@ fn correct_constraint_drift(
                 );
             }
 
-            ConstraintKind::KeepUpright { .. } => {
-                // No NGS — handled by hard velocity projection.
-            }
+            // KeepUpright has no linear rows, so it never reaches here.
+            // Other angular-only constraints would be similarly excluded
+            // by the RowKind::Linear filter above.
+            _ => {}
         }
     }
 }

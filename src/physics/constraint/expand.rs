@@ -110,6 +110,7 @@ pub fn expand_constraints(
                     *angular_max_impulse,
                     dt,
                     index,
+                    &constraint.warm_impulses,
                 );
                 rows.extend(expanded);
             }

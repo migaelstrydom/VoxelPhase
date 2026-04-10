@@ -11,6 +11,7 @@ use generational_arena::Arena;
 use nalgebra::Vector3;
 
 use crate::physics::body::RigidBody;
+use crate::physics::constraint::types::Constraint;
 use crate::physics::handle::RigidBodyHandle;
 use crate::physics::pipeline::pair::SolverManifold;
 
@@ -65,12 +66,14 @@ impl ManifoldConditioner for ShockPropagationConditioner {
     fn condition(
         &mut self,
         bodies: &Arena<RigidBody>,
+        constraints: &Arena<Constraint>,
         manifolds: &mut [SolverManifold],
         gravity_dir: Vector3<f32>,
         conditions: &mut ManifoldConditions,
     ) {
         self.graph.rebuild(
             bodies,
+            constraints,
             manifolds,
             gravity_dir,
             self.config.horizontal_threshold,
@@ -106,10 +109,11 @@ impl ContactGraph {
         }
     }
 
-    /// Rebuild the graph from the current manifold set.
+    /// Rebuild the graph from the current manifold set and active constraints.
     fn rebuild(
         &mut self,
         bodies: &Arena<RigidBody>,
+        constraints: &Arena<Constraint>,
         manifolds: &[SolverManifold],
         gravity_dir: Vector3<f32>,
         horizontal_threshold: f32,
@@ -117,6 +121,44 @@ impl ContactGraph {
         self.depth.clear();
         self.bfs_queue.clear();
         self.adjacency.clear();
+
+        // Pass 0: include active constraints in the graph.
+        // World-anchored (single-body) constraints make the body depth 0.
+        // Two-body constraints add bidirectional edges.
+        for (_, constraint) in constraints.iter() {
+            if !constraint.active {
+                continue;
+            }
+            let refs = constraint.kind.referenced_bodies();
+            if refs.len() == 1 {
+                let handle = refs[0];
+                if bodies.get(handle.0).map_or(false, |b| b.is_dynamic()) {
+                    if !self.depth.contains_key(&handle) {
+                        self.depth.insert(handle, 0);
+                        self.bfs_queue.push_back(handle);
+                    }
+                }
+            } else if refs.len() == 2 {
+                let a = refs[0];
+                let b = refs[1];
+                let a_dynamic = bodies.get(a.0).map_or(false, |b| b.is_dynamic());
+                let b_dynamic = bodies.get(b.0).map_or(false, |b| b.is_dynamic());
+                if a_dynamic && b_dynamic {
+                    self.adjacency.entry(a).or_default().push(b);
+                    self.adjacency.entry(b).or_default().push(a);
+                } else if a_dynamic && !b_dynamic {
+                    if !self.depth.contains_key(&a) {
+                        self.depth.insert(a, 0);
+                        self.bfs_queue.push_back(a);
+                    }
+                } else if b_dynamic && !a_dynamic {
+                    if !self.depth.contains_key(&b) {
+                        self.depth.insert(b, 0);
+                        self.bfs_queue.push_back(b);
+                    }
+                }
+            }
+        }
 
         // Pass 1: identify depth-0 bodies (touching static geometry) and
         // build directed support edges for dynamic-dynamic pairs.

@@ -5,6 +5,7 @@ use generational_arena::Arena;
 use nalgebra::Vector3;
 
 use crate::physics::body::RigidBody;
+use crate::physics::constraint::types::Constraint;
 use crate::physics::pipeline::pair::SolverManifold;
 
 /// Per-manifold data produced by a `ManifoldConditioner`.
@@ -51,6 +52,7 @@ pub trait ManifoldConditioner: Send + Sync {
     fn condition(
         &mut self,
         bodies: &Arena<RigidBody>,
+        constraints: &Arena<Constraint>,
         manifolds: &mut [SolverManifold],
         gravity_dir: Vector3<f32>,
         conditions: &mut ManifoldConditions,
@@ -64,6 +66,7 @@ impl ManifoldConditioner for IdentityConditioner {
     fn condition(
         &mut self,
         _bodies: &Arena<RigidBody>,
+        _constraints: &Arena<Constraint>,
         manifolds: &mut [SolverManifold],
         _gravity_dir: Vector3<f32>,
         conditions: &mut ManifoldConditions,

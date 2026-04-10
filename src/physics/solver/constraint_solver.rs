@@ -35,12 +35,7 @@ pub trait ConstraintSolver {
     /// The solver owns what gets cached (impulses, factorizations, nothing).
     fn write_back(&self, constraints: &mut Arena<Constraint>);
 
-    /// Post-solve velocity projection (e.g., KeepUpright hard projection).
+    /// Post-solve velocity projection for rows marked `Enforcement::HardProjection`.
     /// Called after write_back, before position integration.
-    fn project_velocities(
-        &self,
-        constraints: &Arena<Constraint>,
-        bodies: &mut Arena<RigidBody>,
-        dt: f32,
-    );
+    fn project_velocities(&self, bodies: &mut Arena<RigidBody>, dt: f32);
 }

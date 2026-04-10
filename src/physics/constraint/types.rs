@@ -138,6 +138,41 @@ impl Constraint {
     }
 }
 
+/// Controls whether the NGS position correction pass processes this row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CorrectionMode {
+    /// PGS velocity solving only. No position correction.
+    /// Use for: friction rows, motor rows, angular rows without positional drift.
+    VelocityOnly,
+    /// PGS velocity solving + NGS position correction.
+    /// Use for: joint position locks, contact normals.
+    PositionAndVelocity,
+}
+
+/// Identifies what kind of correction the row applies if its `CorrectionMode`
+/// permits position correction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RowKind {
+    /// Position correction moves bodies along a linear axis.
+    Linear,
+    /// Position correction rotates bodies around an angular axis.
+    Angular,
+}
+
+/// Controls whether the post-solve projection pass enforces this row exactly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Enforcement {
+    /// Normal iterative solving (PGS + optional NGS).
+    Iterative,
+    /// Post-solve direct velocity projection. The solver rewrites the
+    /// velocity to satisfy the constraint exactly, bypassing iterative
+    /// convergence. Used when PGS convergence is too slow for visual
+    /// correctness (e.g. upright constraints, where even zero compliance
+    /// allows visible drift due to limited solver iterations and
+    /// Jacobian degeneracy at large angles).
+    HardProjection,
+}
+
 /// Flat, uniform struct the solver iterates during the PGS loop.
 ///
 /// Each user-defined `Constraint` is expanded into one or more of these
@@ -170,4 +205,10 @@ pub struct ConstraintRow {
     /// Which row within the parent constraint (0, 1, ...).
     /// Used to write accumulated_impulse back to the correct warm_impulses slot.
     pub row_index: usize,
+    /// Whether NGS position correction processes this row.
+    pub correction_mode: CorrectionMode,
+    /// What kind of correction (linear position or angular rotation).
+    pub row_kind: RowKind,
+    /// Whether the post-solve projection pass enforces this row exactly.
+    pub enforcement: Enforcement,
 }

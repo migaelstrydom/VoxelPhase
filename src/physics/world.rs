@@ -582,6 +582,7 @@ impl PhysicsWorld {
         };
         self.conditioner.condition(
             &self.bodies,
+            &self.constraints,
             &mut self.cached_active_manifolds,
             gravity_dir,
             &mut self.manifold_conditions,
@@ -648,7 +649,7 @@ impl PhysicsWorld {
         // iteration count and handles large-angle tilt where linearized
         // Jacobians become degenerate.
         self.solver
-            .project_velocities(&self.constraints, &mut self.bodies, dt);
+            .project_velocities(&mut self.bodies, dt);
 
         // Save pre-integration state for CCD
         let sleeping_snapshot = if self.config.sleep.enabled {

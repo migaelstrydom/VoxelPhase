@@ -8,7 +8,7 @@ use nalgebra::{UnitVector3, Vector3};
 use crate::physics::body::RigidBody;
 use crate::physics::handle::RigidBodyHandle;
 
-use super::types::ConstraintRow;
+use super::types::{ConstraintRow, CorrectionMode, Enforcement, RowKind};
 
 /// Build an orthonormal basis perpendicular to `target_up`.
 ///
@@ -81,6 +81,13 @@ pub fn expand(
             bounds: (-f32::MAX, f32::MAX),
             constraint_index,
             row_index: 0,
+            correction_mode: CorrectionMode::PositionAndVelocity,
+            row_kind: RowKind::Angular,
+            enforcement: if compliance > 0.0 {
+                Enforcement::Iterative
+            } else {
+                Enforcement::HardProjection
+            },
         },
         ConstraintRow {
             body_a: Some(body_handle),
@@ -95,6 +102,13 @@ pub fn expand(
             bounds: (-f32::MAX, f32::MAX),
             constraint_index,
             row_index: 1,
+            correction_mode: CorrectionMode::PositionAndVelocity,
+            row_kind: RowKind::Angular,
+            enforcement: if compliance > 0.0 {
+                Enforcement::Iterative
+            } else {
+                Enforcement::HardProjection
+            },
         },
     ]
 }

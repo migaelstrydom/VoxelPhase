@@ -64,7 +64,7 @@ impl ConvexHull {
     /// Create a new convex hull from vertices and faces.
     ///
     /// # Panics
-    /// - If vertex count exceeds `MAX_HULL_VERTICES` (64).
+    /// - If vertex count exceeds `MAX_HULL_VERTICES` (128).
     /// - If the hull is degenerate (thinnest AABB dimension < 1% of thickest).
     /// - If no faces are provided.
     pub fn new(vertices: Vec<Vector3<f32>>, faces: Vec<HullFace>) -> Self {
@@ -638,9 +638,10 @@ mod tests {
     #[test]
     #[should_panic(expected = "vertex count")]
     fn rejects_too_many_vertices() {
-        let vertices: Vec<Vector3<f32>> = (0..65)
+        let count = MAX_HULL_VERTICES + 1;
+        let vertices: Vec<Vector3<f32>> = (0..count)
             .map(|i| {
-                let angle = (i as f32) * std::f32::consts::TAU / 65.0;
+                let angle = (i as f32) * std::f32::consts::TAU / count as f32;
                 Vector3::new(angle.cos(), angle.sin(), 0.5)
             })
             .collect();

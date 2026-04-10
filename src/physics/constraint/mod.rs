@@ -4,4 +4,7 @@ pub mod follow_point;
 pub mod keep_upright;
 pub mod types;
 
-pub use types::{Constraint, ConstraintHandle, ConstraintKind, ConstraintRow};
+pub use types::{
+    Constraint, ConstraintHandle, ConstraintKind, ConstraintRow, CorrectionMode, Enforcement,
+    RowKind,
+};
