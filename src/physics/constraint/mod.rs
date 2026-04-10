@@ -1,5 +1,6 @@
 pub mod anchor_point;
 pub mod expand;
+pub mod fixed;
 pub mod follow_point;
 pub mod hinge;
 pub mod keep_upright;

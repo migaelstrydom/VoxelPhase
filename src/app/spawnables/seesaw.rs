@@ -277,7 +277,7 @@ impl Spawnable for SeesawDef {
         let fulcrum_model = convex_solid_model(&fulcrum_verts, &fulcrum_faces, fulcrum_mat);
         let fulcrum_hull = build_convex_hull(&fulcrum_verts, &fulcrum_faces);
 
-        let (fulcrum_handle, fulcrum_anchor_h, fulcrum_upright_h) = {
+        let (fulcrum_handle, fulcrum_fixed_h) = {
             let mut physics = world.write_resource::<PhysicsResource>();
 
             let body = physics.world.create_body(
@@ -295,27 +295,19 @@ impl Spawnable for SeesawDef {
                     .friction(0.6),
             );
 
-            let anchor = physics
+            // Single Fixed constraint replaces AnchorPoint + KeepUpright.
+            // Locks all 6 DOF; tilt rows get HardProjection (compliance=0).
+            let fixed = physics
                 .world
-                .create_constraint(ConstraintKind::AnchorPoint {
+                .create_constraint(ConstraintKind::world_fixed(
                     body,
-                    local_anchor: Vector3::zeros(),
-                    world_anchor: fulcrum_pos,
-                    compliance: 0.0,
-                    max_impulse: f32::MAX,
-                    lock_yaw: true,
-                    lock_roll: false,
-                });
+                    fulcrum_pos,
+                    Vector3::zeros(),
+                    0.0,
+                    f32::MAX,
+                ));
 
-            let upright = physics
-                .world
-                .create_constraint(ConstraintKind::KeepUpright {
-                    body,
-                    target_up: UnitVector3::new_normalize(Vector3::y()),
-                    compliance: 0.0,
-                });
-
-            (body, anchor, upright)
+            (body, fixed)
         };
 
         let fulcrum_entity = world
@@ -331,8 +323,8 @@ impl Spawnable for SeesawDef {
             .with(ModelInstance::new(fulcrum_model))
             .with(Renderable)
             .with(TerrainAnchored {
-                anchor_handle: fulcrum_anchor_h,
-                upright_handle: fulcrum_upright_h,
+                anchor_handle: fulcrum_fixed_h,
+                upright_handle: fulcrum_fixed_h,
                 anchor_world: anchor_check,
                 released_collider: None,
             })

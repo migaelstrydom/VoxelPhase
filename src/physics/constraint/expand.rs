@@ -3,6 +3,7 @@
 use generational_arena::Arena;
 
 use super::anchor_point;
+use super::fixed;
 use super::follow_point;
 use super::hinge;
 use super::keep_upright;
@@ -72,6 +73,39 @@ pub fn expand_constraints(
                     *max_impulse,
                     *lock_yaw,
                     *lock_roll,
+                    dt,
+                    beta,
+                    index,
+                    &constraint.warm_impulses,
+                );
+                rows.extend(expanded);
+            }
+
+            ConstraintKind::Fixed {
+                body_a,
+                body_b,
+                local_anchor_a,
+                local_anchor_b,
+                compliance,
+                max_impulse,
+            } => {
+                let Some(rigid_body_b) = bodies.get(body_b.0) else {
+                    continue;
+                };
+                let body_a_pair = body_a.and_then(|ha| {
+                    bodies.get(ha.0).map(|ba| (ba, ha))
+                });
+                if body_a.is_some() && body_a_pair.is_none() {
+                    continue;
+                }
+                let expanded = fixed::expand(
+                    body_a_pair,
+                    rigid_body_b,
+                    *body_b,
+                    local_anchor_a,
+                    local_anchor_b,
+                    *compliance,
+                    *max_impulse,
                     dt,
                     beta,
                     index,
@@ -167,6 +201,27 @@ pub fn write_back_constraints(constraints: &mut Arena<Constraint>, rows: &[Const
         if let Some(constraint) = constraints.get_mut(row.constraint_index) {
             if row.row_index < constraint.warm_impulses.len() {
                 constraint.warm_impulses[row.row_index] = row.accumulated_impulse;
+            }
+        }
+    }
+}
+
+/// Deactivate breakable constraints whose rows have saturated.
+///
+/// A constraint is breakable when its rows have finite impulse bounds
+/// (max_impulse < f32::MAX). When any row's accumulated impulse reaches the
+/// bound, the joint cannot provide enough force and is permanently deactivated.
+pub fn check_constraint_breakage(constraints: &mut Arena<Constraint>, rows: &[ConstraintRow]) {
+    const SATURATION_THRESHOLD: f32 = 0.999;
+
+    for row in rows {
+        let max_bound = row.bounds.1;
+        if max_bound >= f32::MAX * 0.5 {
+            continue;
+        }
+        if row.accumulated_impulse.abs() >= max_bound * SATURATION_THRESHOLD {
+            if let Some(constraint) = constraints.get_mut(row.constraint_index) {
+                constraint.active = false;
             }
         }
     }

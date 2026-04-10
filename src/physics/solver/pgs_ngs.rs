@@ -8,7 +8,9 @@ use generational_arena::{Arena, Index};
 use nalgebra::{Point3, Vector3};
 
 use crate::physics::body::RigidBody;
-use crate::physics::constraint::expand::{expand_constraints, write_back_constraints};
+use crate::physics::constraint::expand::{
+    check_constraint_breakage, expand_constraints, write_back_constraints,
+};
 use crate::physics::constraint::types::{Constraint, ConstraintRow, Enforcement, RowKind};
 use crate::physics::pipeline::pair::SolverManifold;
 
@@ -242,6 +244,7 @@ impl ConstraintSolver for PgsNgsSolver {
 
     fn write_back(&self, constraints: &mut Arena<Constraint>) {
         write_back_constraints(constraints, &self.cached_constraint_rows);
+        check_constraint_breakage(constraints, &self.cached_constraint_rows);
     }
 
     fn project_velocities(&self, bodies: &mut Arena<RigidBody>, dt: f32) {

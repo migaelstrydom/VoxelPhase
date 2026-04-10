@@ -45,6 +45,26 @@ pub enum ConstraintKind {
         lock_roll: bool,
     },
 
+    /// Locks all 6 DOF between two bodies (or body to world). Equivalent
+    /// to a weld joint. Produces 3 positional rows (X, Y, Z) + 3 angular
+    /// rows = 6 total. For world-anchored Fixed with compliance=0, the tilt
+    /// angular rows get `Enforcement::HardProjection`.
+    Fixed {
+        /// The first body (None for world-anchored).
+        body_a: Option<RigidBodyHandle>,
+        /// The second body.
+        body_b: RigidBodyHandle,
+        /// Body-local anchor on body_a (or world position if body_a is None).
+        local_anchor_a: Vector3<f32>,
+        /// Body-local anchor on body_b.
+        local_anchor_b: Vector3<f32>,
+        /// Positional compliance (0 = perfectly rigid).
+        compliance: f32,
+        /// Maximum impulse per axis per substep. Finite values make the
+        /// joint breakable — if any row saturates, the joint deactivates.
+        max_impulse: f32,
+    },
+
     /// Constrains two anchor points to coincide and restricts rotation to
     /// one axis (the hinge axis). 5 DOF locked, 1 DOF free.
     /// Produces 3 positional rows (X, Y, Z) + 2 angular rows = 5 total.
@@ -104,6 +124,26 @@ pub enum ConstraintKind {
 }
 
 impl ConstraintKind {
+    /// Convenience constructor for a world-anchored fixed joint (weld to world).
+    ///
+    /// Locks all 6 DOF, pinning the body at its current position and orientation.
+    pub fn world_fixed(
+        body: RigidBodyHandle,
+        world_anchor: Point3<f32>,
+        local_anchor: Vector3<f32>,
+        compliance: f32,
+        max_impulse: f32,
+    ) -> Self {
+        ConstraintKind::Fixed {
+            body_a: None,
+            body_b: body,
+            local_anchor_a: world_anchor.coords,
+            local_anchor_b: local_anchor,
+            compliance,
+            max_impulse,
+        }
+    }
+
     /// Convenience constructor for a world-anchored hinge.
     ///
     /// `hinge_axis` is in world space; it is converted to body-local for both
@@ -155,6 +195,7 @@ impl ConstraintKind {
                 lock_roll,
                 ..
             } => 3 + *lock_yaw as usize + *lock_roll as usize,
+            ConstraintKind::Fixed { .. } => 6,
             ConstraintKind::Hinge { .. } => 5,
             ConstraintKind::FollowPoint { .. } => 6,
         }
@@ -166,7 +207,8 @@ impl ConstraintKind {
             ConstraintKind::KeepUpright { body, .. } | ConstraintKind::AnchorPoint { body, .. } => {
                 *body == handle
             }
-            ConstraintKind::Hinge { body_a, body_b, .. } => {
+            ConstraintKind::Fixed { body_a, body_b, .. }
+            | ConstraintKind::Hinge { body_a, body_b, .. } => {
                 body_a.map_or(false, |a| a == handle) || *body_b == handle
             }
             ConstraintKind::FollowPoint { body_a, body_b, .. } => {
@@ -181,7 +223,8 @@ impl ConstraintKind {
             ConstraintKind::KeepUpright { body, .. } | ConstraintKind::AnchorPoint { body, .. } => {
                 smallvec::smallvec![*body]
             }
-            ConstraintKind::Hinge { body_a, body_b, .. } => {
+            ConstraintKind::Fixed { body_a, body_b, .. }
+            | ConstraintKind::Hinge { body_a, body_b, .. } => {
                 let mut bodies = SmallVec::new();
                 if let Some(a) = body_a {
                     bodies.push(*a);

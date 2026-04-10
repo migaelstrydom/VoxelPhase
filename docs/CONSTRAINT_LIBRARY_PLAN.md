@@ -966,8 +966,8 @@ the wall by the Grab constraint while the wall contact pushes back.
 
 ## Implementation notes
 
-Phases 1, 2, and 3 implemented. No regressions — all 483 tests pass
-(unit + bench harness).
+Phases 1–7 implemented. No regressions — all 488 tests pass
+(unit + bench harness), 1 ignored (unrelated SAT debug test).
 
 ### Phase 1: Per-row metadata
 
@@ -1110,3 +1110,107 @@ Phases 1, 2, and 3 implemented. No regressions — all 483 tests pass
   `config.gravity = zeros()`. Threshold relaxed from 10% to 25% free-
   axis velocity loss — iterative PGS damping of the free axis is
   expected.
+
+### Phase 6: Fixed joint
+
+- Added `ConstraintKind::Fixed` variant with `body_a`, `body_b`,
+  `local_anchor_a`, `local_anchor_b`, `compliance`, `max_impulse`.
+  Convenience constructor `world_fixed()` for world-anchored joints.
+- `fixed::expand()` produces 6 rows: 3 `lock_linear_axis` (pin anchors)
+  + 3 `lock_angular_axis` (lock all rotation). For world-anchored Fixed
+  with compliance=0, the two tilt rows (perpendicular to world Y) get
+  `Enforcement::HardProjection` — matching KeepUpright projection
+  behavior. The spin row (around Y) uses `Iterative` + `VelocityOnly`.
+- Perpendicular basis for HardProjection: `perp1 = Y × X = -Z`,
+  `perp2 = Y × perp1 = -X`. `cross(perp1, perp2) = +Y`, so the
+  projection pass recovers world +Y as target_up.
+- Added `Fixed` arm to `correct_constraint_drift` in
+  `position_correction.rs` — combined with `Hinge` arm since both use
+  identical two-body/world-anchored linear correction dispatch.
+- Migrated seesaw fulcrum from `AnchorPoint { lock_yaw } + KeepUpright`
+  to a single `world_fixed()`. `TerrainAnchored` uses the same handle
+  for both `anchor_handle` and `upright_handle` (second remove is
+  harmless, same pattern as the beam entity).
+
+### Constraint breakage mechanism
+
+- Added `check_constraint_breakage()` in `expand.rs`, called from
+  `PgsNgsSolver::write_back()` after impulse write-back.
+- Checks each row: if bounds are finite (`max_bound < f32::MAX * 0.5`)
+  and `|accumulated_impulse| >= max_bound * 0.999`, the parent
+  constraint is deactivated (`active = false`).
+- This makes `max_impulse` dual-purpose: per-row impulse clamp during
+  PGS, and break threshold via saturation detection.
+
+### Breakable Fixed joint test
+
+- Two 2 kg boxes connected by `Fixed { max_impulse: 5.0 }`, elevated
+  at y=3.0. A 20 kg sphere with initial velocity (0, -10, 0) impacts
+  box_b. The joint saturates and deactivates cleanly.
+- Plan specified `max_impulse: 50.0` with a gravity-only drop, but at
+  240 Hz substep rate the per-substep impulse from a 20 kg sphere is
+  ~11 N⋅s on the Y-axis row — below 50. Lowered to 5.0 and added
+  initial sphere velocity so the impact reliably exceeds the threshold.
+- Validates: joint breaks, both bodies have speed < 10 m/s (no
+  explosion), `active` flag is false.
+
+### Phase 7: Angular NGS for hinge joints
+
+- Added `correct_constraint_angular_drift()` in `position_correction.rs`,
+  called after `correct_constraint_drift()` in the NGS iteration loop.
+- Gating: `CorrectionMode::PositionAndVelocity` + `RowKind::Angular` +
+  `Enforcement::Iterative`. HardProjection rows are excluded (handled by
+  the projection pass). Contact angular correction is unaffected — still
+  gated by the `ngs_angular_correction` flag.
+- Dispatches per constraint kind:
+  - **Hinge**: `correct_hinge_angular_drift()` — cross product of
+    world-space hinge axes gives the rotation error vector directly.
+  - **KeepUpright** (soft, compliance > 0): `correct_upright_angular_drift()`
+    — cross product of body's local up and target direction.
+  - **Fixed** (soft or two-body, world-anchored): delegates to
+    `correct_upright_angular_drift()` with target_up = +Y.
+- Two-body hinge splits the correction by inverse inertia trace ratio.
+
+### Dot product vs cross product for angular error
+
+- Initial implementation used dot product projections (error_i =
+  world_axis_a·n_i) applied as rotation around n_i. This caused
+  immediate blowup (10^14 rad/s) because the dot product gives the
+  error *magnitude* along the measurement axis, but applying that
+  magnitude as rotation around the *same* axis is 90° off from the
+  correct correction direction.
+- Fixed by using the cross product: `world_axis_b × world_axis_a`
+  gives the rotation vector directly — correct axis AND magnitude
+  for any misalignment angle.
+
+### Selective angular contact correction for hinged bodies
+
+- Phase 7's joint angular NGS alone didn't fix the seesaw's original
+  problem: the plank penetrating terrain when the player jumps on it.
+  The issue was in the *contact* correction loop, not the joint loop.
+  A hinge-constrained plank can only rotate around the pivot — linear-
+  only contact correction pushes the center of mass but the hinge holds
+  it in place, so penetration isn't resolved.
+- Enabling the global `ngs_angular_correction` flag fixes the seesaw
+  but destabilizes stacks (angular correction fights friction).
+- Solution: before the NGS loop, build `hinge_bodies` — the set of
+  body handles that participate in active `Hinge` constraints. In the
+  contact loop, enable angular correction (`use_angular`) for contacts
+  where either body is in `hinge_bodies`. All other contacts use
+  linear-only correction as before.
+- Initially included `Fixed` and `AnchorPoint` bodies too, but fully
+  pinned bodies (menhir = AnchorPoint + KeepUpright) jittered because
+  angular correction overcorrects when the body has no rotational
+  freedom. Narrowed to `Hinge` only — the distinguishing property is
+  that hinged bodies have residual rotational DOF that contacts need
+  to resolve via rotation.
+- All 488 bench tests pass, including stack stability tests (jenga,
+  honeycomb, arch, temple).
+
+### Angular NGS test results
+
+- `hinge_settles_under_load`: passes (was `#[ignore]`).
+- `hinge_holds_under_sustained_force`: passes (was `#[ignore]`).
+- `hinge_axis_no_drift_zero_gravity`: passes (unchanged).
+- `hinge_angular_ngs_no_oscillation`: new test, passes. Confirms
+  monotonic peak decay and energy dissipation < 1% at t=3s.

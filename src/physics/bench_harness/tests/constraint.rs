@@ -8,7 +8,7 @@ use crate::debug::DebugLines;
 use crate::physics::constraint::ConstraintKind;
 use crate::physics::stepping::FixedTimestep;
 use crate::physics::world::PhysicsConfig;
-use crate::physics::{ColliderDesc, PhysicsWorld, RigidBodyDesc};
+use crate::physics::{ColliderDesc, ConstraintHandle, PhysicsWorld, RigidBodyDesc};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Constraint system validation tests
@@ -236,10 +236,9 @@ fn keep_upright_scenario_runs() {
     );
 }
 
-/// World-anchored hinge with a box on one end. Requires angular NGS (Phase 7)
-/// for reliable settling under gravity load.
+/// World-anchored hinge with a box on one end. Angular NGS position correction
+/// enables reliable settling under gravity load.
 #[test]
-#[ignore]
 fn hinge_settles_under_load() {
     let scenario = HingeSettlesUnderLoadScenario::new();
     let cfg = BenchRunConfig {
@@ -268,9 +267,9 @@ fn hinge_settles_under_load() {
     );
 }
 
-/// World-anchored hinge with a 10 kg body. Requires angular NGS (Phase 7).
+/// World-anchored hinge with a 10 kg body. Angular NGS position correction
+/// prevents angular drift under sustained gravitational torque.
 #[test]
-#[ignore]
 fn hinge_holds_under_sustained_force() {
     let scenario = HingeHoldsUnderSustainedForceScenario::new();
     let cfg = BenchRunConfig {
@@ -293,6 +292,77 @@ fn hinge_holds_under_sustained_force() {
         max_angular_after_1s < 0.02,
         "plank should be near-steady after 1s: max_angular={max_angular_after_1s:.4}"
     );
+}
+
+/// Verify angular NGS doesn't cause oscillation growth. Reuses the
+/// hinge_settles_under_load setup. Samples angular velocity peaks each
+/// half-oscillation cycle. After the first full cycle, each successive
+/// peak must decay monotonically (within 5% tolerance for solver noise).
+/// Total kinetic energy at t=3s must be < 1% of energy at t=0.2s.
+#[test]
+#[cfg(feature = "bench_harness")]
+fn hinge_angular_ngs_no_oscillation() {
+    let scenario = HingeSettlesUnderLoadScenario::new();
+    let cfg = BenchRunConfig {
+        duration: 3.0,
+        ..BenchRunConfig::default()
+    };
+    let run = run_scenario(&scenario, cfg);
+    write_exports(&run, "hinge_angular_ngs_no_oscillation");
+
+    // Find angular velocity peaks: local maxima where sign of angular_speed
+    // change flips from increasing to decreasing (half-cycle boundaries).
+    let speeds: Vec<f32> = run.samples.iter().map(|s| s.angular_speed).collect();
+    let mut peaks: Vec<(f32, f32)> = Vec::new(); // (sim_time, peak_speed)
+    for i in 1..speeds.len().saturating_sub(1) {
+        if speeds[i] > speeds[i - 1] && speeds[i] >= speeds[i + 1] && speeds[i] > 0.01 {
+            peaks.push((run.samples[i].sim_time, speeds[i]));
+        }
+    }
+
+    eprintln!("hinge_ngs_oscillation: found {} peaks", peaks.len());
+    for (i, (t, s)) in peaks.iter().enumerate() {
+        eprintln!("  peak {i}: t={t:.4}, angular_speed={s:.6}");
+    }
+
+    // After the first full cycle (skip the first peak, which is the initial
+    // deflection), each successive peak should be <= 1.05x the previous.
+    if peaks.len() >= 3 {
+        for i in 2..peaks.len() {
+            let ratio = peaks[i].1 / peaks[i - 1].1;
+            assert!(
+                ratio <= 1.05,
+                "peak {} ({:.6}) > 1.05 * peak {} ({:.6}): ratio={ratio:.4} — oscillation growing",
+                i, peaks[i].1, i - 1, peaks[i - 1].1,
+            );
+        }
+    }
+
+    // Energy check: kinetic energy at t=3s should be < 1% of energy at t=0.2s.
+    // Angular speed is proportional to sqrt(kinetic energy), so we compare
+    // speed² values.
+    let energy_early = run
+        .samples
+        .iter()
+        .filter(|s| s.sim_time >= 0.15 && s.sim_time <= 0.25)
+        .map(|s| s.angular_speed * s.angular_speed)
+        .fold(0.0f32, f32::max);
+    let energy_late = run
+        .samples
+        .last()
+        .map(|s| s.angular_speed * s.angular_speed)
+        .unwrap_or(0.0);
+
+    eprintln!(
+        "hinge_ngs_oscillation: energy_early={energy_early:.6}, energy_late={energy_late:.8}"
+    );
+    if energy_early > 1e-6 {
+        let ratio = energy_late / energy_early;
+        assert!(
+            ratio < 0.01,
+            "kinetic energy should decay to < 1%: ratio={ratio:.6}"
+        );
+    }
 }
 
 /// Zero-gravity hinge spinning at 3 rad/s around the free axis (Z). Run 5s.
@@ -350,5 +420,145 @@ fn hinge_axis_no_drift_zero_gravity() {
     assert!(
         min_free_speed > initial_speed * 0.75,
         "free axis should retain most of its velocity: min={min_free_speed:.4}, initial={initial_speed:.4}"
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Fixed joint tests
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Two boxes connected by a breakable Fixed joint, elevated so they're in free
+/// fall. A heavy sphere dropped from above impacts one box, stressing the joint
+/// beyond its impulse limit. The joint must break cleanly.
+#[test]
+#[cfg(feature = "bench_harness")]
+fn breakable_fixed_joint_breaks_cleanly() {
+    let geometry = FlatQuadGeometry::new(10.0);
+    let mut config = PhysicsConfig::default();
+    config.sleep.enabled = false;
+    let mut world = PhysicsWorld::new(config);
+
+    let box_he = Vector3::new(0.25, 0.25, 0.25);
+    let box_mass = 2.0f32;
+    let box_volume = box_he.x * box_he.y * box_he.z * 8.0;
+    let box_density = box_mass / box_volume;
+
+    // Two boxes side by side, elevated so ground contacts don't absorb the
+    // impact — the joint is the only connection between them.
+    let box_a_pos = Point3::new(-0.3, 3.0, 0.0);
+    let box_b_pos = Point3::new(0.3, 3.0, 0.0);
+
+    let box_a = world.create_body(RigidBodyDesc::dynamic().position(box_a_pos));
+    let _ = world.attach_collider(
+        box_a,
+        ColliderDesc::box_shape(box_he)
+            .density(box_density)
+            .restitution(0.0)
+            .friction(0.5),
+    );
+
+    let box_b = world.create_body(RigidBodyDesc::dynamic().position(box_b_pos));
+    let _ = world.attach_collider(
+        box_b,
+        ColliderDesc::box_shape(box_he)
+            .density(box_density)
+            .restitution(0.0)
+            .friction(0.5),
+    );
+
+    // Fixed joint with a low impulse limit so the sphere impact breaks it.
+    // At 240 Hz substep rate, the per-substep impulse from a 20 kg sphere
+    // at ~6 m/s hitting a 2 kg box exceeds this threshold on the Y-axis row.
+    let fixed_handle: ConstraintHandle = world.create_constraint(ConstraintKind::Fixed {
+        body_a: Some(box_a),
+        body_b: box_b,
+        local_anchor_a: Vector3::new(0.3, 0.0, 0.0),
+        local_anchor_b: Vector3::new(-0.3, 0.0, 0.0),
+        compliance: 0.0,
+        max_impulse: 5.0,
+    });
+
+    // Heavy sphere just above box_b with a large initial downward velocity.
+    // Since both boxes and sphere are in free fall, relative velocity from
+    // a height difference alone is zero. An initial velocity ensures impact.
+    let sphere_radius: f32 = 0.3;
+    let sphere_mass = 20.0f32;
+    let sphere_volume = (4.0 / 3.0) * std::f32::consts::PI * sphere_radius.powi(3);
+    let sphere_density = sphere_mass / sphere_volume;
+    let sphere_pos = Point3::new(
+        0.3,
+        box_b_pos.y + box_he.y + sphere_radius + 0.5,
+        0.0,
+    );
+
+    let sphere = world.create_body(
+        RigidBodyDesc::dynamic()
+            .position(sphere_pos)
+            .linear_velocity(Vector3::new(0.0, -10.0, 0.0)),
+    );
+    let _ = world.attach_collider(
+        sphere,
+        ColliderDesc::sphere(sphere_radius)
+            .density(sphere_density)
+            .restitution(0.0)
+            .friction(0.3),
+    );
+
+    let dt = 1.0 / 240.0;
+    let substeps = 4;
+    let mut debug_lines = DebugLines::default();
+    let mut broken = false;
+    let mut break_frame = 0u32;
+
+    // Simulate 3 seconds — enough for sphere to fall, impact, and settle.
+    for frame in 0..180 {
+        world.update_contacts(dt, &geometry, &[], &mut debug_lines);
+        debug_lines.clear();
+        for _ in 0..substeps {
+            world.substep(dt, &geometry, &[]);
+        }
+
+        if !broken {
+            if let Some(c) = world.constraint(fixed_handle) {
+                if !c.active {
+                    broken = true;
+                    break_frame = frame;
+                    eprintln!("joint broke at frame {frame}");
+                }
+            }
+        }
+    }
+
+    assert!(broken, "Fixed joint should have broken under the sphere impact");
+
+    eprintln!("breakable_fixed: broke at frame {break_frame}");
+
+    // Both boxes should have bounded speeds (no explosion).
+    let speed_a = world
+        .body(box_a)
+        .unwrap()
+        .linear_velocity()
+        .magnitude();
+    let speed_b = world
+        .body(box_b)
+        .unwrap()
+        .linear_velocity()
+        .magnitude();
+    eprintln!("breakable_fixed: speed_a={speed_a:.4}, speed_b={speed_b:.4}");
+
+    assert!(
+        speed_a < 10.0,
+        "box_a should not explode: speed={speed_a:.4}"
+    );
+    assert!(
+        speed_b < 10.0,
+        "box_b should not explode: speed={speed_b:.4}"
+    );
+
+    // Constraint should be deactivated.
+    let constraint = world.constraint(fixed_handle).unwrap();
+    assert!(
+        !constraint.active,
+        "constraint should be deactivated after break"
     );
 }

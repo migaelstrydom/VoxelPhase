@@ -6,11 +6,11 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 
 use generational_arena::{Arena, Index};
-use nalgebra::{Matrix3, Point3, UnitQuaternion, Vector3};
+use nalgebra::{Matrix3, Point3, UnitQuaternion, UnitVector3, Vector3};
 
 use crate::physics::body::RigidBody;
 use crate::physics::constraint::types::{
-    Constraint, ConstraintKind, ConstraintRow, CorrectionMode, RowKind,
+    Constraint, ConstraintKind, ConstraintRow, CorrectionMode, Enforcement, RowKind,
 };
 use crate::physics::handle::RigidBodyHandle;
 use crate::physics::math::integrate_orientation;
@@ -41,18 +41,6 @@ pub struct PositionCorrectionConfig {
     pub contact_rolling_resistance: f32,
     /// Linear damping factor applied to bodies with contacts.
     pub contact_linear_damping: f32,
-    /// Enable angular correction during NGS contact position solving.
-    /// When false, only linear position corrections are applied.
-    ///
-    /// NOTE: Angular NGS correction is unstable in practice — for both contacts
-    /// and constraints. Constraint NGS intentionally applies linear-only
-    /// corrections for the same reason. Angular drift in weld/follow-point
-    /// constraints is handled by the PGS velocity rows (which resist relative
-    /// angular velocity) and by hard velocity projection (KeepUpright). If
-    /// you're tempted to add angular NGS for constraints, test thoroughly with
-    /// the bench harness — previous attempts caused oscillation and energy
-    /// growth.
-    pub ngs_angular_correction: bool,
     /// NGS correction factor for constraint drift (weld, follow-point).
     /// Higher than `correction_factor` because rigid constraints need
     /// aggressive correction — unlike contacts, there is no overshoot risk.
@@ -70,7 +58,6 @@ impl Default for PositionCorrectionConfig {
             deep_threshold: 0.1,
             contact_rolling_resistance: 0.1,
             contact_linear_damping: 0.1,
-            ngs_angular_correction: false,
             constraint_correction_factor: 0.2,
         }
     }
@@ -102,7 +89,6 @@ pub(crate) fn apply_position_correction(
         config.max_correction_speed,
         config.deep_correction_speed,
         config.deep_threshold,
-        config.ngs_angular_correction,
         dt,
         contact_generation_positions,
     );
@@ -157,7 +143,6 @@ fn apply_ngs_correction(
     max_correction_speed: f32,
     deep_correction_speed: f32,
     deep_threshold: f32,
-    angular_correction: bool,
     dt: f32,
     contact_generation_positions: &FxHashMap<Index, Point3<f32>>,
 ) {
@@ -169,6 +154,18 @@ fn apply_ngs_correction(
 
     let max_correction = max_correction_speed * dt;
     let deep_correction = deep_correction_speed * dt;
+
+    // Bodies constrained by a Hinge need angular contact correction because
+    // they're pinned at one point and can only rotate — linear-only correction
+    // can't resolve their contact penetrations. Fully locked bodies (Fixed,
+    // AnchorPoint + KeepUpright) don't need this because they have no
+    // rotational freedom for contacts to resolve.
+    let hinge_bodies: FxHashSet<Index> = constraints
+        .iter()
+        .filter(|(_, c)| c.active && matches!(c.kind, ConstraintKind::Hinge { .. }))
+        .flat_map(|(_, c)| c.kind.referenced_bodies())
+        .map(|h| h.0)
+        .collect();
 
     let mut transforms: FxHashMap<Index, CorrectedTransform> = FxHashMap::default();
     let mut accumulated: Vec<f32> = vec![0.0; total_contacts];
@@ -242,7 +239,17 @@ fn apply_ngs_correction(
                 let r_a_cross_n = r_a.cross(&contact.normal);
                 let r_b_cross_n = r_b.cross(&contact.normal);
 
-                let effective_mass = if angular_correction {
+                // Enable angular correction for contacts involving hinge-
+                // constrained bodies. Hinged bodies can only rotate around the
+                // pivot, so linear-only correction can't resolve their contact
+                // penetrations. Globally enabling angular contact correction is
+                // unstable for stacks (fights friction), so it's selective.
+                let use_angular = hinge_bodies.contains(&header.body_b.0)
+                    || header
+                        .body_a
+                        .map_or(false, |h| hinge_bodies.contains(&h.0));
+
+                let effective_mass = if use_angular {
                     let angular_effect_a = (inv_inertia_a * r_a_cross_n).cross(&r_a);
                     let angular_effect_b = (inv_inertia_b * r_b_cross_n).cross(&r_b);
                     inv_mass_a
@@ -287,7 +294,7 @@ fn apply_ngs_correction(
                     if inv_mass_a > 0.0 {
                         if let Some(entry) = transforms.get_mut(&handle_a.0) {
                             entry.position -= impulse * inv_mass_a;
-                            if angular_correction {
+                            if use_angular {
                                 let delta_angle = inv_inertia_a * r_a.cross(&-impulse);
                                 entry.rotation =
                                     integrate_orientation(entry.rotation, delta_angle, 1.0);
@@ -299,7 +306,7 @@ fn apply_ngs_correction(
                 if inv_mass_b > 0.0 {
                     if let Some(entry) = transforms.get_mut(&header.body_b.0) {
                         entry.position += impulse * inv_mass_b;
-                        if angular_correction {
+                        if use_angular {
                             let delta_angle = inv_inertia_b * r_b.cross(&impulse);
                             entry.rotation =
                                 integrate_orientation(entry.rotation, delta_angle, 1.0);
@@ -313,6 +320,15 @@ fn apply_ngs_correction(
 
         // --- Constraint position corrections ---
         correct_constraint_drift(
+            bodies,
+            constraints,
+            constraint_rows,
+            constraint_correction_factor,
+            &mut transforms,
+        );
+
+        // --- Joint angular position corrections ---
+        correct_constraint_angular_drift(
             bodies,
             constraints,
             constraint_rows,
@@ -340,10 +356,8 @@ fn apply_ngs_correction(
 /// body arena) and applies mass-weighted corrections that reduce anchor drift
 /// without injecting velocity.
 ///
-/// Both the gating and dispatch are driven by per-row metadata. Angular rows
-/// (e.g. KeepUpright) are skipped — angular drift is handled by velocity-level
-/// PGS and hard projection, not position correction (see the
-/// `ngs_angular_correction` doc comment for why).
+/// Gating is driven by per-row metadata. Angular rows are handled separately
+/// by `correct_constraint_angular_drift`.
 fn correct_constraint_drift(
     bodies: &Arena<RigidBody>,
     constraints: &Arena<Constraint>,
@@ -409,7 +423,15 @@ fn correct_constraint_drift(
                 );
             }
 
-            ConstraintKind::Hinge {
+            ConstraintKind::Fixed {
+                body_a,
+                body_b,
+                local_anchor_a,
+                local_anchor_b,
+                compliance,
+                ..
+            }
+            | ConstraintKind::Hinge {
                 body_a,
                 body_b,
                 local_anchor_a,
@@ -526,6 +548,210 @@ fn correct_anchor_point_drift(
         if let Some(t) = transforms.get_mut(&handle) {
             t.position -= correction;
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Joint angular position correction
+// ---------------------------------------------------------------------------
+
+/// Apply direct rotation corrections for constraint rows with
+/// `CorrectionMode::PositionAndVelocity`, `RowKind::Angular`, and
+/// `Enforcement::Iterative`.
+///
+/// This is the angular complement to `correct_constraint_drift` (which handles
+/// linear rows). Rows with `Enforcement::HardProjection` are excluded — those
+/// are handled by the projection pass in the solver.
+///
+/// Safe for joint rows because:
+/// - Joint angular locks don't fight friction (no friction to fight).
+/// - The correction is along a well-defined locked axis.
+/// - The constraint and its correction both drive the same error to zero.
+fn correct_constraint_angular_drift(
+    bodies: &Arena<RigidBody>,
+    constraints: &Arena<Constraint>,
+    constraint_rows: &[ConstraintRow],
+    correction_factor: f32,
+    transforms: &mut FxHashMap<Index, CorrectedTransform>,
+) {
+    let mut corrected_indices: SmallVec<[Index; 4]> = SmallVec::new();
+    for row in constraint_rows {
+        if row.correction_mode == CorrectionMode::PositionAndVelocity
+            && row.row_kind == RowKind::Angular
+            && row.enforcement == Enforcement::Iterative
+            && !corrected_indices.contains(&row.constraint_index)
+        {
+            corrected_indices.push(row.constraint_index);
+        }
+    }
+
+    for index in corrected_indices {
+        let Some(constraint) = constraints.get(index) else {
+            continue;
+        };
+        if !constraint.active {
+            continue;
+        }
+
+        match &constraint.kind {
+            ConstraintKind::Hinge {
+                body_a,
+                body_b,
+                local_axis_a,
+                local_axis_b,
+                compliance,
+                ..
+            } => {
+                let angular_factor = correction_factor / (1.0 + compliance);
+                correct_hinge_angular_drift(
+                    bodies,
+                    body_a.map(|h| h.0),
+                    body_b.0,
+                    local_axis_a,
+                    local_axis_b,
+                    angular_factor,
+                    transforms,
+                );
+            }
+
+            ConstraintKind::KeepUpright {
+                body,
+                target_up,
+                compliance,
+            } => {
+                let angular_factor = correction_factor / (1.0 + compliance);
+                correct_upright_angular_drift(
+                    bodies,
+                    body.0,
+                    target_up,
+                    angular_factor,
+                    transforms,
+                );
+            }
+
+            ConstraintKind::Fixed {
+                body_a,
+                body_b,
+                compliance,
+                ..
+            } => {
+                // Fixed tilt rows use the same perpendicular-to-Y basis as
+                // KeepUpright. Only reached when compliance > 0 (rigid
+                // world-anchored Fixed uses HardProjection, which is excluded).
+                let angular_factor = correction_factor / (1.0 + compliance);
+                if body_a.is_none() {
+                    let target_up = UnitVector3::new_normalize(Vector3::y());
+                    correct_upright_angular_drift(
+                        bodies,
+                        body_b.0,
+                        &target_up,
+                        angular_factor,
+                        transforms,
+                    );
+                }
+                // Two-body Fixed angular correction would need stored reference
+                // orientations. No current use case — skipped.
+            }
+
+            _ => {}
+        }
+    }
+}
+
+/// Correct hinge axis misalignment via direct rotation.
+///
+/// Uses the cross product of the two world-space hinge axes to compute the
+/// rotation vector that aligns them. For small misalignment angles,
+/// `world_axis_b × world_axis_a ≈ sin(θ) * rotation_axis`, which gives both
+/// the correct direction and magnitude for the correction.
+fn correct_hinge_angular_drift(
+    bodies: &Arena<RigidBody>,
+    handle_a: Option<Index>,
+    handle_b: Index,
+    local_axis_a: &UnitVector3<f32>,
+    local_axis_b: &UnitVector3<f32>,
+    angular_factor: f32,
+    transforms: &mut FxHashMap<Index, CorrectedTransform>,
+) {
+    let Some((_, rot_b, _, _)) = get_corrected_transform(bodies, handle_b, transforms) else {
+        return;
+    };
+
+    let world_axis_a = if let Some(ha) = handle_a {
+        let Some((_, rot_a, _, _)) = get_corrected_transform(bodies, ha, transforms) else {
+            return;
+        };
+        rot_a * local_axis_a.into_inner()
+    } else {
+        local_axis_a.into_inner()
+    };
+
+    let world_axis_b = rot_b * local_axis_b.into_inner();
+
+    // Cross product gives the rotation vector to align world_axis_b with
+    // world_axis_a. For small angles, magnitude ≈ sin(θ) ≈ θ.
+    let error = world_axis_b.cross(&world_axis_a);
+    if error.norm_squared() < 1e-14 {
+        return;
+    }
+
+    let correction = error * angular_factor;
+
+    if let Some(ha) = handle_a {
+        // Two-body: split correction by inverse inertia magnitude.
+        let Some((_, _, _, inv_inertia_a)) = get_corrected_transform(bodies, ha, transforms) else {
+            return;
+        };
+        let Some((_, _, _, inv_inertia_b)) = get_corrected_transform(bodies, handle_b, transforms)
+        else {
+            return;
+        };
+        let trace_a = inv_inertia_a.trace();
+        let trace_b = inv_inertia_b.trace();
+        let total = trace_a + trace_b;
+        if total > 0.0 {
+            if let Some(t) = transforms.get_mut(&ha) {
+                t.rotation =
+                    integrate_orientation(t.rotation, -correction * (trace_a / total), 1.0);
+            }
+            if let Some(t) = transforms.get_mut(&handle_b) {
+                t.rotation = integrate_orientation(t.rotation, correction * (trace_b / total), 1.0);
+            }
+        }
+    } else {
+        // World-anchored: body_b gets the full correction.
+        if let Some(t) = transforms.get_mut(&handle_b) {
+            t.rotation = integrate_orientation(t.rotation, correction, 1.0);
+        }
+    }
+}
+
+/// Correct tilt error for KeepUpright-style constraints.
+///
+/// Uses the cross product of the body's current up and the target direction
+/// to compute the rotation vector that aligns them. Same approach as hinge
+/// axis correction — the cross product gives the correct rotation axis and
+/// magnitude for any misalignment angle.
+fn correct_upright_angular_drift(
+    bodies: &Arena<RigidBody>,
+    handle: Index,
+    target_up: &UnitVector3<f32>,
+    angular_factor: f32,
+    transforms: &mut FxHashMap<Index, CorrectedTransform>,
+) {
+    let Some((_, rot, _, _)) = get_corrected_transform(bodies, handle, transforms) else {
+        return;
+    };
+
+    let local_up = rot * Vector3::y();
+    let error = local_up.cross(&target_up.into_inner());
+    if error.norm_squared() < 1e-14 {
+        return;
+    }
+
+    let correction = error * angular_factor;
+    if let Some(t) = transforms.get_mut(&handle) {
+        t.rotation = integrate_orientation(t.rotation, correction, 1.0);
     }
 }
 
