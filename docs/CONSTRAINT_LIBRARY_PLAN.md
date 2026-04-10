@@ -966,7 +966,7 @@ the wall by the Grab constraint while the wall contact pushes back.
 
 ## Implementation notes
 
-Phases 1–8 implemented. No regressions — all 489 tests pass
+Phases 1–8, 10 implemented. No regressions — all 489 tests pass
 (unit + bench harness), 1 ignored (unrelated SAT debug test).
 
 ### Phase 1: Per-row metadata
@@ -1242,3 +1242,15 @@ Phases 1–8 implemented. No regressions — all 489 tests pass
   within 0.05 m of expected. Position tolerance relaxed from the
   plan's 0.02 m to 0.05 m — a freely-swinging pendulum with only
   linear damping (no contact damping) takes longer to center precisely.
+
+### Phase 10: Deprecate AnchorPoint
+
+- Removed `ConstraintKind::AnchorPoint` variant, `anchor_point.rs`,
+  and all match arms referencing it.
+- Migrated menhir from `AnchorPoint { lock_yaw: true } + KeepUpright`
+  to a single `world_fixed()`. Same for fence_post.
+- Both spawnables now use a single constraint handle for both
+  `anchor_handle` and `upright_handle` in `TerrainAnchored` (second
+  remove is harmless).
+- Updated spawnables README: constraint setup example now shows
+  `world_fixed()` instead of `AnchorPoint + KeepUpright`.

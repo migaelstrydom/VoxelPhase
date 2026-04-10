@@ -98,7 +98,7 @@ pub struct Renderable;
 #[derive(Component)]
 #[storage(DenseVecStorage)]
 pub struct TerrainAnchored {
-    /// Handle to the AnchorPoint constraint pinning the body's position.
+    /// Handle to the constraint pinning the body's position.
     pub anchor_handle: ConstraintHandle,
     /// Handle to the KeepUpright constraint locking orientation.
     pub upright_handle: ConstraintHandle,

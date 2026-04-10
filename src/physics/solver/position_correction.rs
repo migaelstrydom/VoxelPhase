@@ -157,9 +157,9 @@ fn apply_ngs_correction(
 
     // Bodies constrained by a Hinge need angular contact correction because
     // they're pinned at one point and can only rotate — linear-only correction
-    // can't resolve their contact penetrations. Fully locked bodies (Fixed,
-    // AnchorPoint + KeepUpright) don't need this because they have no
-    // rotational freedom for contacts to resolve.
+    // can't resolve their contact penetrations. Fully locked bodies (Fixed)
+    // don't need this because they have no rotational freedom for contacts
+    // to resolve.
     let hinge_bodies: FxHashSet<Index> = constraints
         .iter()
         .filter(|(_, c)| c.active && matches!(c.kind, ConstraintKind::Hinge { .. }))
@@ -400,24 +400,6 @@ fn correct_constraint_drift(
                     body_b.0,
                     local_anchor_a,
                     local_anchor_b,
-                    linear_factor,
-                    transforms,
-                );
-            }
-
-            ConstraintKind::AnchorPoint {
-                body,
-                local_anchor,
-                world_anchor,
-                compliance,
-                ..
-            } => {
-                let linear_factor = correction_factor / (1.0 + compliance);
-                correct_anchor_point_drift(
-                    bodies,
-                    body.0,
-                    local_anchor,
-                    world_anchor,
                     linear_factor,
                     transforms,
                 );

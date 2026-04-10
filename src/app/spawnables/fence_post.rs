@@ -1,7 +1,7 @@
 //! Fence post spawnable — terrain-anchored vertical cylinder.
 //!
-//! The post is pinned to the terrain surface via AnchorPoint + KeepUpright
-//! constraints, with its bottom third buried in terrain. While anchored the
+//! The post is pinned to the terrain surface via a Fixed constraint, with
+//! its bottom third buried in terrain. While anchored the
 //! physics collider covers only the exposed portion; on release it expands
 //! to the full post length so the freed body tumbles with correct collision.
 //!
@@ -10,7 +10,7 @@
 use std::f32::consts::TAU;
 use std::sync::Arc;
 
-use nalgebra::{Point3, UnitVector3, Vector2, Vector3, Vector4};
+use nalgebra::{Point3, Vector2, Vector3, Vector4};
 use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
@@ -155,27 +155,17 @@ impl Spawnable for FencePostDef {
             let local_anchor = Vector3::new(0.0, -self.half_height, 0.0);
             let world_anchor = Point3::new(self.pos.0, surface_y - buried_depth, self.pos.1);
 
-            let anchor_handle = physics
+            let fixed_handle = physics
                 .world
-                .create_constraint(ConstraintKind::AnchorPoint {
-                    body: body_handle,
-                    local_anchor,
+                .create_constraint(ConstraintKind::world_fixed(
+                    body_handle,
                     world_anchor,
-                    compliance: 0.0,
-                    max_impulse: f32::MAX,
-                    lock_yaw: true,
-                    lock_roll: false,
-                });
+                    local_anchor,
+                    0.0,
+                    f32::MAX,
+                ));
 
-            let upright_handle = physics
-                .world
-                .create_constraint(ConstraintKind::KeepUpright {
-                    body: body_handle,
-                    target_up: UnitVector3::new_normalize(Vector3::y()),
-                    compliance: 0.0,
-                });
-
-            (body_handle, anchor_handle, upright_handle)
+            (body_handle, fixed_handle, fixed_handle)
         };
 
         // Check terrain slightly below the surface so the sample is inside solid voxels.

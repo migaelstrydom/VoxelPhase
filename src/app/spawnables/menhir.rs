@@ -1,7 +1,7 @@
 //! Menhir spawnable — terrain-anchored standing stone.
 //!
-//! An egg-shaped monolith pinned to the terrain via AnchorPoint +
-//! KeepUpright constraints. The geometry is a UV sphere whose horizontal
+//! An egg-shaped monolith pinned to the terrain via a Fixed constraint.
+//! The geometry is a UV sphere whose horizontal
 //! radius blends linearly from `bottom_radius` (wide base) to `top_radius`
 //! (narrow tip) as a function of latitude, producing a natural egg profile.
 //!
@@ -11,7 +11,7 @@
 use std::f32::consts::{FRAC_PI_2, TAU};
 use std::sync::Arc;
 
-use nalgebra::{Point3, UnitVector3, Vector2, Vector3, Vector4};
+use nalgebra::{Point3, Vector2, Vector3, Vector4};
 use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
@@ -144,27 +144,17 @@ impl Spawnable for MenhirDef {
             let local_anchor = Vector3::new(0.0, -self.half_height, 0.0);
             let world_anchor = Point3::new(self.pos.0, surface_y - buried_depth, self.pos.1);
 
-            let anchor_handle = physics
+            let fixed_handle = physics
                 .world
-                .create_constraint(ConstraintKind::AnchorPoint {
-                    body: body_handle,
-                    local_anchor,
+                .create_constraint(ConstraintKind::world_fixed(
+                    body_handle,
                     world_anchor,
-                    compliance: 0.0,
-                    max_impulse: f32::MAX,
-                    lock_yaw: true,
-                    lock_roll: false,
-                });
+                    local_anchor,
+                    0.0,
+                    f32::MAX,
+                ));
 
-            let upright_handle = physics
-                .world
-                .create_constraint(ConstraintKind::KeepUpright {
-                    body: body_handle,
-                    target_up: UnitVector3::new_normalize(Vector3::y()),
-                    compliance: 0.0,
-                });
-
-            (body_handle, anchor_handle, upright_handle)
+            (body_handle, fixed_handle, fixed_handle)
         };
 
         let anchor_check = Point3::new(self.pos.0, surface_y - 0.1, self.pos.1);

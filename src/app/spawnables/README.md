@@ -357,28 +357,18 @@ let Some(surface_y) = surface_y else {
 
 ### Constraint setup
 
-Use `AnchorPoint` to pin a body-local point to a world position, and
-`KeepUpright` to maintain vertical orientation:
+Use `world_fixed` to pin a body at a fixed world position and orientation
+(all 6 DOF locked):
 
 ```rust
-let anchor_handle = physics.world.create_constraint(
-    ConstraintKind::AnchorPoint {
-        body: body_handle,
-        local_anchor: Vector3::new(0.0, -half_height, 0.0),  // bottom of body
-        world_anchor: Point3::new(x, buried_y, z),
-        compliance: 0.0,        // rigid (no springiness)
-        max_impulse: f32::MAX,  // unbreakable
-        lock_yaw: true,         // prevent rotation around Y
-        lock_roll: false,
-    }
-);
-
-let upright_handle = physics.world.create_constraint(
-    ConstraintKind::KeepUpright {
-        body: body_handle,
-        target_up: UnitVector3::new_normalize(Vector3::y()),
-        compliance: 0.0,
-    }
+let fixed_handle = physics.world.create_constraint(
+    ConstraintKind::world_fixed(
+        body_handle,
+        Point3::new(x, buried_y, z),       // world anchor position
+        Vector3::new(0.0, -half_height, 0.0), // body-local anchor
+        0.0,                                // compliance (rigid)
+        f32::MAX,                           // max impulse (unbreakable)
+    )
 );
 ```
 
@@ -389,14 +379,15 @@ constraints when the terrain beneath is destroyed:
 
 ```rust
 .with(TerrainAnchored {
-    anchor_handle,                  // ConstraintHandle
-    upright_handle,                 // ConstraintHandle
+    anchor_handle: fixed_handle,    // ConstraintHandle
+    upright_handle: fixed_handle,   // same handle (second remove is harmless)
     anchor_world: Point3::new(      // sample point checked each frame
         x,
         surface_y - 0.1,           // slightly below surface
         z,
     ),
     released_collider: Some(full_collider),  // swapped in on release
+    released_model: None,           // or Some(model) to swap visual on release
 })
 ```
 
@@ -441,7 +432,7 @@ Optional components:
 | Pattern | Example file | Key feature |
 |---------|-------------|-------------|
 | Simple free body | `tetrahedron.rs` | ConvexHull collider + `convex_solid_model` |
-| Terrain-anchored | `fence_post.rs` | AnchorPoint + KeepUpright + TerrainAnchored |
+| Terrain-anchored | `fence_post.rs` | Fixed + TerrainAnchored |
 | Custom mesh | `fence_post.rs` | Hand-built barrel + cap meshes with `MeshPrimitive` |
 | Multi-entity | `pyramid.rs` | Grid of independent bodies from one spawnable |
 | Compound body | `table.rs` | Multiple colliders on one body + fracture |
