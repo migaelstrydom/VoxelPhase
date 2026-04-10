@@ -111,6 +111,9 @@ const SCENARIO_NAMES: &[&str] = &[
     "keep_upright",
     "compound_table",
     "jenga_cross_wobble",
+    "hinge_settles_under_load",
+    "hinge_holds_under_sustained_force",
+    "hinge_axis_no_drift_zero_gravity",
 ];
 
 /// Builds a scenario by name and runs the viewer with it.
@@ -136,6 +139,13 @@ fn run_viewer(name: &str) -> EngineResult<()> {
         "keep_upright" => run_with_scenario(&KeepUprightScenario::new()),
         "compound_table" => run_with_scenario(&CompoundTableScenario::new()),
         "jenga_cross_wobble" => run_with_scenario(&JengaCrossWobbleScenario::new()),
+        "hinge_settles_under_load" => run_with_scenario(&HingeSettlesUnderLoadScenario::new()),
+        "hinge_holds_under_sustained_force" => {
+            run_with_scenario(&HingeHoldsUnderSustainedForceScenario::new())
+        }
+        "hinge_axis_no_drift_zero_gravity" => {
+            run_with_scenario(&HingeAxisNoDriftZeroGravityScenario::new())
+        }
         _ => {
             eprintln!("Unknown scenario: {}", name);
             eprintln!("Run with --list to see available scenarios.");

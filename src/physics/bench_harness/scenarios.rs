@@ -2175,3 +2175,276 @@ fn gable_hull_geometry(
 
     (vertices, faces)
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Scenarios: hinge constraint
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// World-anchored hinge with a plank and a box on one end. The plank tilts
+/// under the box's weight and should settle to a steady angle once
+/// angular damping dissipates energy.
+#[derive(Debug, Clone)]
+pub struct HingeSettlesUnderLoadScenario {
+    /// Half-extents of the plank.
+    pub plank_half_extents: Vector3<f32>,
+    /// Density of the plank.
+    pub plank_density: f32,
+    /// Half-extents of the load box.
+    pub box_half_extents: Vector3<f32>,
+    /// Mass of the load box.
+    pub box_mass: f32,
+    geometry: FlatQuadGeometry,
+}
+
+impl HingeSettlesUnderLoadScenario {
+    pub fn new() -> Self {
+        Self {
+            plank_half_extents: Vector3::new(2.0, 0.06, 0.3),
+            plank_density: 500.0,
+            box_half_extents: Vector3::new(0.25, 0.25, 0.25),
+            box_mass: 5.0,
+            geometry: FlatQuadGeometry::new(8.0),
+        }
+    }
+}
+
+impl PhysicsBenchScenario for HingeSettlesUnderLoadScenario {
+    fn name(&self) -> &'static str {
+        "hinge_settles_under_load"
+    }
+
+    fn restitution(&self) -> f32 {
+        0.0
+    }
+
+    fn build_world(&self) -> PhysicsWorld {
+        let mut config = PhysicsConfig::default();
+        config.sleep.enabled = false;
+        PhysicsWorld::new(config)
+    }
+
+    fn setup(&self, world: &mut PhysicsWorld) -> RigidBodyHandle {
+        let plank_he = self.plank_half_extents;
+        let box_he = self.box_half_extents;
+        let pivot_y = 0.3;
+
+        let plank_pos = Point3::new(0.0, pivot_y, 0.0);
+        let plank = world.create_body(
+            RigidBodyDesc::dynamic()
+                .position(plank_pos)
+                .angular_damping(0.2)
+                .linear_damping(0.01),
+        );
+        let _ = world.attach_collider(
+            plank,
+            ColliderDesc::box_shape(plank_he)
+                .density(self.plank_density)
+                .restitution(0.0)
+                .friction(0.6),
+        );
+
+        let _ = world.create_constraint(ConstraintKind::world_hinge(
+            plank,
+            plank_pos,
+            Vector3::zeros(),
+            UnitVector3::new_normalize(Vector3::z()),
+            &UnitQuaternion::identity(),
+            0.0,
+            f32::MAX,
+        ));
+
+        let box_x = plank_he.x - box_he.x;
+        let box_y = pivot_y + plank_he.y + box_he.y + 0.01;
+        let box_body = world.create_body(
+            RigidBodyDesc::dynamic().position(Point3::new(box_x, box_y, 0.0)),
+        );
+        let box_volume = box_he.x * box_he.y * box_he.z * 8.0;
+        let box_density = self.box_mass / box_volume;
+        let _ = world.attach_collider(
+            box_body,
+            ColliderDesc::box_shape(box_he)
+                .density(box_density)
+                .restitution(0.0)
+                .friction(0.6),
+        );
+
+        plank
+    }
+
+    fn geometry(&self) -> &dyn StaticGeometry {
+        &self.geometry
+    }
+}
+
+/// World-anchored hinge with a heavy (10 kg) box. Tests that the hinge holds
+/// under sustained gravitational torque.
+#[derive(Debug, Clone)]
+pub struct HingeHoldsUnderSustainedForceScenario {
+    /// Half-extents of the plank.
+    pub plank_half_extents: Vector3<f32>,
+    /// Density of the plank.
+    pub plank_density: f32,
+    /// Half-extents of the load box.
+    pub box_half_extents: Vector3<f32>,
+    /// Mass of the load box.
+    pub box_mass: f32,
+    geometry: FlatQuadGeometry,
+}
+
+impl HingeHoldsUnderSustainedForceScenario {
+    pub fn new() -> Self {
+        Self {
+            plank_half_extents: Vector3::new(2.0, 0.06, 0.3),
+            plank_density: 500.0,
+            box_half_extents: Vector3::new(0.3, 0.3, 0.3),
+            box_mass: 10.0,
+            geometry: FlatQuadGeometry::new(8.0),
+        }
+    }
+}
+
+impl PhysicsBenchScenario for HingeHoldsUnderSustainedForceScenario {
+    fn name(&self) -> &'static str {
+        "hinge_holds_under_sustained_force"
+    }
+
+    fn restitution(&self) -> f32 {
+        0.0
+    }
+
+    fn build_world(&self) -> PhysicsWorld {
+        let mut config = PhysicsConfig::default();
+        config.sleep.enabled = false;
+        PhysicsWorld::new(config)
+    }
+
+    fn setup(&self, world: &mut PhysicsWorld) -> RigidBodyHandle {
+        let plank_he = self.plank_half_extents;
+        let box_he = self.box_half_extents;
+        let pivot_y = 0.3;
+
+        let plank_pos = Point3::new(0.0, pivot_y, 0.0);
+        let plank = world.create_body(
+            RigidBodyDesc::dynamic()
+                .position(plank_pos)
+                .angular_damping(0.2)
+                .linear_damping(0.01),
+        );
+        let _ = world.attach_collider(
+            plank,
+            ColliderDesc::box_shape(plank_he)
+                .density(self.plank_density)
+                .restitution(0.0)
+                .friction(0.6),
+        );
+
+        let _ = world.create_constraint(ConstraintKind::world_hinge(
+            plank,
+            plank_pos,
+            Vector3::zeros(),
+            UnitVector3::new_normalize(Vector3::z()),
+            &UnitQuaternion::identity(),
+            0.0,
+            f32::MAX,
+        ));
+
+        let box_x = plank_he.x - box_he.x;
+        let box_y = pivot_y + plank_he.y + box_he.y + 0.01;
+        let box_body = world.create_body(
+            RigidBodyDesc::dynamic().position(Point3::new(box_x, box_y, 0.0)),
+        );
+        let box_volume = box_he.x * box_he.y * box_he.z * 8.0;
+        let box_density = self.box_mass / box_volume;
+        let _ = world.attach_collider(
+            box_body,
+            ColliderDesc::box_shape(box_he)
+                .density(box_density)
+                .restitution(0.0)
+                .friction(0.6),
+        );
+
+        plank
+    }
+
+    fn geometry(&self) -> &dyn StaticGeometry {
+        &self.geometry
+    }
+}
+
+/// Zero-gravity hinge spinning around the free axis (Z). The locked axes
+/// (X, Y) should accumulate no drift; the free axis should maintain its
+/// initial angular velocity.
+#[derive(Debug, Clone)]
+pub struct HingeAxisNoDriftZeroGravityScenario {
+    /// Half-extents of the body.
+    pub half_extents: Vector3<f32>,
+    /// Density of the body.
+    pub density: f32,
+    /// Initial angular velocity around the free axis (Z).
+    pub initial_angular_velocity: f32,
+    geometry: EmptyGeometry,
+}
+
+impl HingeAxisNoDriftZeroGravityScenario {
+    pub fn new() -> Self {
+        Self {
+            half_extents: Vector3::new(1.0, 0.2, 0.3),
+            density: 500.0,
+            initial_angular_velocity: 3.0,
+            geometry: EmptyGeometry,
+        }
+    }
+}
+
+impl PhysicsBenchScenario for HingeAxisNoDriftZeroGravityScenario {
+    fn name(&self) -> &'static str {
+        "hinge_axis_no_drift_zero_gravity"
+    }
+
+    fn restitution(&self) -> f32 {
+        0.0
+    }
+
+    fn build_world(&self) -> PhysicsWorld {
+        let mut config = PhysicsConfig::default();
+        config.sleep.enabled = false;
+        config.gravity = Vector3::zeros();
+        PhysicsWorld::new(config)
+    }
+
+    fn setup(&self, world: &mut PhysicsWorld) -> RigidBodyHandle {
+        let pos = Point3::new(0.0, 2.0, 0.0);
+        let body = world.create_body(
+            RigidBodyDesc::dynamic().position(pos),
+        );
+        let _ = world.attach_collider(
+            body,
+            ColliderDesc::box_shape(self.half_extents)
+                .density(self.density)
+                .restitution(0.0)
+                .friction(0.5),
+        );
+
+        world.set_body_velocity(
+            body,
+            Vector3::zeros(),
+            Vector3::new(0.0, 0.0, self.initial_angular_velocity),
+        );
+
+        let _ = world.create_constraint(ConstraintKind::world_hinge(
+            body,
+            pos,
+            Vector3::zeros(),
+            UnitVector3::new_normalize(Vector3::z()),
+            &UnitQuaternion::identity(),
+            0.0,
+            f32::MAX,
+        ));
+
+        body
+    }
+
+    fn geometry(&self) -> &dyn StaticGeometry {
+        &self.geometry
+    }
+}

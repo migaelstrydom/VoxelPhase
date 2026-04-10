@@ -1,14 +1,13 @@
 //! Seesaw spawnable — terrain-anchored tilting beam with seats and fulcrum.
 //!
-//! A compound body (beam + two seats) pinned at its center via AnchorPoint
-//! (lock_yaw: true) with NO KeepUpright, so it tilts freely when weight is
-//! placed on either end. A separate fulcrum entity sits underneath as a
-//! fully-pinned terrain-anchored support. Both break free when the terrain
-//! is destroyed.
+//! A compound body (beam + two seats) pinned at its center via a Hinge
+//! constraint (Z axis free), so it tilts freely when weight is placed on
+//! either end. A separate fulcrum entity sits underneath as a fully-pinned
+//! terrain-anchored support. Both break free when the terrain is destroyed.
 
 use std::sync::Arc;
 
-use nalgebra::{Point3, UnitVector3, Vector3};
+use nalgebra::{Point3, UnitQuaternion, UnitVector3, Vector3};
 use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
@@ -222,18 +221,18 @@ impl Spawnable for SeesawDef {
                 ),
             );
 
-            // AnchorPoint at beam center, lock_yaw but NO KeepUpright — tilts freely.
+            // Hinge at beam center — tilts freely around Z only.
             let anchor = physics
                 .world
-                .create_constraint(ConstraintKind::AnchorPoint {
+                .create_constraint(ConstraintKind::world_hinge(
                     body,
-                    local_anchor: Vector3::zeros(),
-                    world_anchor: beam_pos,
-                    compliance: 0.0,
-                    max_impulse: f32::MAX,
-                    lock_yaw: true,
-                    lock_roll: true,
-                });
+                    beam_pos,
+                    Vector3::zeros(),
+                    UnitVector3::new_normalize(Vector3::z()),
+                    &UnitQuaternion::identity(),
+                    0.0,
+                    f32::MAX,
+                ));
 
             // Dummy KeepUpright handle — we need one for TerrainAnchored but the
             // seesaw must tilt freely, so we don't create one. Use the anchor

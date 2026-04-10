@@ -1,10 +1,12 @@
 use nalgebra::{Point3, UnitVector3, Vector3};
 
-use super::super::framework::{run_scenario, BenchRunConfig};
+use super::super::framework::{run_scenario, BenchRunConfig, PhysicsBenchScenario};
 use super::super::geometry::{FlatGridGeometry, FlatQuadGeometry};
 use super::super::scenarios::*;
 use super::write_exports;
+use crate::debug::DebugLines;
 use crate::physics::constraint::ConstraintKind;
+use crate::physics::stepping::FixedTimestep;
 use crate::physics::world::PhysicsConfig;
 use crate::physics::{ColliderDesc, PhysicsWorld, RigidBodyDesc};
 
@@ -231,5 +233,122 @@ fn keep_upright_scenario_runs() {
     assert!(
         early_max_angular < 1.0,
         "constraint should work in early sim: early_max_angular={early_max_angular:.4}"
+    );
+}
+
+/// World-anchored hinge with a box on one end. Requires angular NGS (Phase 7)
+/// for reliable settling under gravity load.
+#[test]
+#[ignore]
+fn hinge_settles_under_load() {
+    let scenario = HingeSettlesUnderLoadScenario::new();
+    let cfg = BenchRunConfig {
+        duration: 3.0,
+        ..BenchRunConfig::default()
+    };
+    let run = run_scenario(&scenario, cfg);
+    write_exports(&run, "hinge_settles_under_load");
+
+    let last = run.samples.last().expect("should have samples");
+    eprintln!(
+        "hinge_settles_under_load: final angular_speed={:.6}",
+        last.angular_speed
+    );
+    assert!(
+        last.angular_speed < 0.05,
+        "plank should have settled: angular_speed={:.4}",
+        last.angular_speed
+    );
+
+    let (_, tail_max_angular) = run.tail_max_speeds(0.5);
+    eprintln!("hinge_settles_under_load: tail_max_angular={tail_max_angular:.6}");
+    assert!(
+        tail_max_angular < 0.05,
+        "plank should be steady in tail: tail_max_angular={tail_max_angular:.4}"
+    );
+}
+
+/// World-anchored hinge with a 10 kg body. Requires angular NGS (Phase 7).
+#[test]
+#[ignore]
+fn hinge_holds_under_sustained_force() {
+    let scenario = HingeHoldsUnderSustainedForceScenario::new();
+    let cfg = BenchRunConfig {
+        duration: 5.0,
+        ..BenchRunConfig::default()
+    };
+    let run = run_scenario(&scenario, cfg);
+    write_exports(&run, "hinge_holds_under_sustained_force");
+
+    let max_angular_after_1s = run
+        .samples
+        .iter()
+        .filter(|s| s.sim_time > 1.0)
+        .map(|s| s.angular_speed)
+        .fold(0.0f32, f32::max);
+    eprintln!(
+        "hinge_holds_under_sustained_force: max_angular after 1s = {max_angular_after_1s:.6}"
+    );
+    assert!(
+        max_angular_after_1s < 0.02,
+        "plank should be near-steady after 1s: max_angular={max_angular_after_1s:.4}"
+    );
+}
+
+/// Zero-gravity hinge spinning at 3 rad/s around the free axis (Z). Run 5s.
+/// Locked axes angular velocity must stay < 0.01 rad/s. Free axis velocity
+/// must stay within 25% of initial.
+#[test]
+fn hinge_axis_no_drift_zero_gravity() {
+    let scenario = HingeAxisNoDriftZeroGravityScenario::new();
+    let initial_speed = scenario.initial_angular_velocity;
+
+    let mut world = scenario.build_world();
+    let tracked = scenario.setup(&mut world);
+
+    let fixed_dt = 1.0 / 240.0;
+    let duration = 5.0;
+    let substeps_per_frame = 4;
+    let mut timestep = FixedTimestep::new(fixed_dt, substeps_per_frame);
+    let mut debug_lines = DebugLines::default();
+    let mut sim_time = 0.0f32;
+
+    let mut max_locked_speed = 0.0f32;
+    let mut min_free_speed = f32::MAX;
+
+    while sim_time < duration {
+        let frame_dt = 1.0 / 60.0;
+        let substeps = timestep.accumulate(frame_dt);
+        if substeps == 0 {
+            continue;
+        }
+
+        world.update_contacts(fixed_dt, scenario.geometry(), &[], &mut debug_lines);
+        debug_lines.clear();
+        for _ in 0..substeps {
+            world.substep(fixed_dt, scenario.geometry(), &[]);
+            sim_time += fixed_dt;
+        }
+
+        let body = world.body(tracked).unwrap();
+        let ang_vel = body.angular_velocity();
+
+        // Decompose angular velocity into free (Z) and locked (X, Y) components.
+        let locked_speed = (ang_vel.x * ang_vel.x + ang_vel.y * ang_vel.y).sqrt();
+        let free_speed = ang_vel.z.abs();
+
+        max_locked_speed = max_locked_speed.max(locked_speed);
+        min_free_speed = min_free_speed.min(free_speed);
+    }
+
+    eprintln!("hinge_no_drift: max_locked={max_locked_speed:.6}, min_free={min_free_speed:.6}");
+
+    assert!(
+        max_locked_speed < 0.01,
+        "locked axes should have near-zero angular velocity: {max_locked_speed:.4}"
+    );
+    assert!(
+        min_free_speed > initial_speed * 0.75,
+        "free axis should retain most of its velocity: min={min_free_speed:.4}, initial={initial_speed:.4}"
     );
 }

@@ -409,6 +409,38 @@ fn correct_constraint_drift(
                 );
             }
 
+            ConstraintKind::Hinge {
+                body_a,
+                body_b,
+                local_anchor_a,
+                local_anchor_b,
+                compliance,
+                ..
+            } => {
+                let linear_factor = correction_factor / (1.0 + compliance);
+                if let Some(ha) = body_a {
+                    correct_follow_point_drift(
+                        bodies,
+                        ha.0,
+                        body_b.0,
+                        local_anchor_a,
+                        local_anchor_b,
+                        linear_factor,
+                        transforms,
+                    );
+                } else {
+                    let world_anchor = Point3::from(*local_anchor_a);
+                    correct_anchor_point_drift(
+                        bodies,
+                        body_b.0,
+                        local_anchor_b,
+                        &world_anchor,
+                        linear_factor,
+                        transforms,
+                    );
+                }
+            }
+
             // KeepUpright has no linear rows, so it never reaches here.
             // Other angular-only constraints would be similarly excluded
             // by the RowKind::Linear filter above.

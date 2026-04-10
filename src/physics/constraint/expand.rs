@@ -4,6 +4,7 @@ use generational_arena::Arena;
 
 use super::anchor_point;
 use super::follow_point;
+use super::hinge;
 use super::keep_upright;
 use super::types::{Constraint, ConstraintKind, ConstraintRow};
 use crate::physics::body::RigidBody;
@@ -71,6 +72,45 @@ pub fn expand_constraints(
                     *max_impulse,
                     *lock_yaw,
                     *lock_roll,
+                    dt,
+                    beta,
+                    index,
+                    &constraint.warm_impulses,
+                );
+                rows.extend(expanded);
+            }
+
+            ConstraintKind::Hinge {
+                body_a,
+                body_b,
+                local_anchor_a,
+                local_anchor_b,
+                local_axis_b,
+                local_axis_a,
+                local_ref_b,
+                compliance,
+                max_impulse,
+            } => {
+                let Some(rigid_body_b) = bodies.get(body_b.0) else {
+                    continue;
+                };
+                let body_a_pair = body_a.and_then(|ha| {
+                    bodies.get(ha.0).map(|ba| (ba, ha))
+                });
+                if body_a.is_some() && body_a_pair.is_none() {
+                    continue;
+                }
+                let expanded = hinge::expand(
+                    body_a_pair,
+                    rigid_body_b,
+                    *body_b,
+                    local_anchor_a,
+                    local_anchor_b,
+                    local_axis_a,
+                    local_axis_b,
+                    local_ref_b,
+                    *compliance,
+                    *max_impulse,
                     dt,
                     beta,
                     index,

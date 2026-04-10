@@ -7,6 +7,19 @@ use crate::physics::StaticGeometry;
 // Geometry: static terrain shapes used by scenarios
 // ═══════════════════════════════════════════════════════════════════════════
 
+/// Empty geometry with no triangles. Used for scenarios that don't need
+/// terrain (e.g. zero-gravity constraint tests).
+#[derive(Debug, Clone)]
+pub struct EmptyGeometry;
+
+impl StaticGeometry for EmptyGeometry {
+    fn query_region(&self, _aabb: &AABB) -> MeshPatch {
+        MeshPatch {
+            triangles: Vec::new(),
+        }
+    }
+}
+
 /// Flat quad at y=0. Two triangles forming a square.
 #[derive(Debug, Clone)]
 pub struct FlatQuadGeometry {

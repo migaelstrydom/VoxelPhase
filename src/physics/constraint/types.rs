@@ -45,6 +45,32 @@ pub enum ConstraintKind {
         lock_roll: bool,
     },
 
+    /// Constrains two anchor points to coincide and restricts rotation to
+    /// one axis (the hinge axis). 5 DOF locked, 1 DOF free.
+    /// Produces 3 positional rows (X, Y, Z) + 2 angular rows = 5 total.
+    Hinge {
+        /// The first body (None for world-anchored hinges).
+        body_a: Option<RigidBodyHandle>,
+        /// The second body.
+        body_b: RigidBodyHandle,
+        /// Body-local anchor on body_a (or world position if body_a is None).
+        local_anchor_a: Vector3<f32>,
+        /// Body-local anchor on body_b.
+        local_anchor_b: Vector3<f32>,
+        /// Hinge axis in body_b's local frame.
+        local_axis_b: UnitVector3<f32>,
+        /// Hinge axis in body_a's local frame (or world-space if body_a is None).
+        local_axis_a: UnitVector3<f32>,
+        /// Reference axis perpendicular to the hinge axis in body_b's local
+        /// frame. Used to construct a stable perpendicular basis for the
+        /// angular lock rows and to measure hinge angle for limits/motors.
+        local_ref_b: UnitVector3<f32>,
+        /// Positional compliance (0 = perfectly rigid).
+        compliance: f32,
+        /// Maximum impulse per axis per substep.
+        max_impulse: f32,
+    },
+
     /// Drive a point on body_b toward a point on body_a, with optional
     /// orientation locking.
     /// Produces 3 positional rows (X, Y, Z) + 3 angular rows = 6 total.
@@ -78,6 +104,48 @@ pub enum ConstraintKind {
 }
 
 impl ConstraintKind {
+    /// Convenience constructor for a world-anchored hinge.
+    ///
+    /// `hinge_axis` is in world space; it is converted to body-local for both
+    /// the axis and reference vectors.
+    pub fn world_hinge(
+        body: RigidBodyHandle,
+        world_anchor: Point3<f32>,
+        local_anchor: Vector3<f32>,
+        hinge_axis: UnitVector3<f32>,
+        body_rotation: &UnitQuaternion<f32>,
+        compliance: f32,
+        max_impulse: f32,
+    ) -> Self {
+        let inv_rot = body_rotation.inverse();
+        let local_axis_b = UnitVector3::new_normalize(inv_rot * hinge_axis.into_inner());
+
+        // Pick the cardinal axis least aligned with local_axis_b for a stable
+        // perpendicular reference.
+        let abs_a = local_axis_b.into_inner().map(|c| c.abs());
+        let seed = if abs_a.x <= abs_a.y && abs_a.x <= abs_a.z {
+            Vector3::x()
+        } else if abs_a.y <= abs_a.z {
+            Vector3::y()
+        } else {
+            Vector3::z()
+        };
+        let local_ref_b =
+            UnitVector3::new_normalize(local_axis_b.into_inner().cross(&seed).normalize());
+
+        ConstraintKind::Hinge {
+            body_a: None,
+            body_b: body,
+            local_anchor_a: world_anchor.coords,
+            local_anchor_b: local_anchor,
+            local_axis_b,
+            local_axis_a: hinge_axis,
+            local_ref_b,
+            compliance,
+            max_impulse,
+        }
+    }
+
     /// Number of solver rows this constraint expands to.
     pub fn row_count(&self) -> usize {
         match self {
@@ -87,6 +155,7 @@ impl ConstraintKind {
                 lock_roll,
                 ..
             } => 3 + *lock_yaw as usize + *lock_roll as usize,
+            ConstraintKind::Hinge { .. } => 5,
             ConstraintKind::FollowPoint { .. } => 6,
         }
     }
@@ -96,6 +165,9 @@ impl ConstraintKind {
         match self {
             ConstraintKind::KeepUpright { body, .. } | ConstraintKind::AnchorPoint { body, .. } => {
                 *body == handle
+            }
+            ConstraintKind::Hinge { body_a, body_b, .. } => {
+                body_a.map_or(false, |a| a == handle) || *body_b == handle
             }
             ConstraintKind::FollowPoint { body_a, body_b, .. } => {
                 *body_a == handle || *body_b == handle
@@ -108,6 +180,14 @@ impl ConstraintKind {
         match self {
             ConstraintKind::KeepUpright { body, .. } | ConstraintKind::AnchorPoint { body, .. } => {
                 smallvec::smallvec![*body]
+            }
+            ConstraintKind::Hinge { body_a, body_b, .. } => {
+                let mut bodies = SmallVec::new();
+                if let Some(a) = body_a {
+                    bodies.push(*a);
+                }
+                bodies.push(*body_b);
+                bodies
             }
             ConstraintKind::FollowPoint { body_a, body_b, .. } => {
                 smallvec::smallvec![*body_a, *body_b]

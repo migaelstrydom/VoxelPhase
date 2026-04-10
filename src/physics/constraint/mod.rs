@@ -1,7 +1,9 @@
 pub mod anchor_point;
 pub mod expand;
 pub mod follow_point;
+pub mod hinge;
 pub mod keep_upright;
+pub mod primitives;
 pub mod types;
 
 pub use types::{

@@ -8,7 +8,8 @@ use nalgebra::{UnitVector3, Vector3};
 use crate::physics::body::RigidBody;
 use crate::physics::handle::RigidBodyHandle;
 
-use super::types::{ConstraintRow, CorrectionMode, Enforcement, RowKind};
+use super::primitives::{self, BodySide, RowParams};
+use super::types::{ConstraintRow, CorrectionMode, Enforcement};
 
 /// Build an orthonormal basis perpendicular to `target_up`.
 ///
@@ -51,64 +52,59 @@ pub fn expand(
     let error_1 = local_up.dot(&perp1);
     let error_2 = local_up.dot(&perp2);
 
-    // Effective mass: 1 / (J · I⁻¹ · Jᵀ + compliance/dt²)
-    let inv_inertia_ws = body.world_inv_inertia();
     let compliance_term = if compliance > 0.0 {
         compliance / (dt * dt)
     } else {
         0.0
     };
-    let eff_mass_1 = 1.0 / ((inv_inertia_ws * perp1).dot(&perp1) + compliance_term);
-    let eff_mass_2 = 1.0 / ((inv_inertia_ws * perp2).dot(&perp2) + compliance_term);
 
-    // Bias: position correction drives error toward zero
     let bias_1 = -(beta / dt) * error_1;
     let bias_2 = -(beta / dt) * error_2;
 
-    let zeros = Vector3::zeros();
+    let enforcement = if compliance > 0.0 {
+        Enforcement::Iterative
+    } else {
+        Enforcement::HardProjection
+    };
+
+    let side_a = BodySide {
+        handle: Some(body_handle),
+        inv_mass: 0.0,
+        inv_inertia: body.world_inv_inertia(),
+        lever_arm: Vector3::zeros(),
+    };
+    let side_b = BodySide::world();
 
     [
-        ConstraintRow {
-            body_a: Some(body_handle),
-            body_b: None,
-            lin_jac_a: zeros,
-            ang_jac_a: perp1,
-            lin_jac_b: zeros,
-            ang_jac_b: zeros,
-            effective_mass_inv: eff_mass_1,
-            bias: bias_1,
-            accumulated_impulse: warm_impulses[0],
-            bounds: (-f32::MAX, f32::MAX),
-            constraint_index,
-            row_index: 0,
-            correction_mode: CorrectionMode::PositionAndVelocity,
-            row_kind: RowKind::Angular,
-            enforcement: if compliance > 0.0 {
-                Enforcement::Iterative
-            } else {
-                Enforcement::HardProjection
+        primitives::lock_angular_axis(
+            &side_a,
+            &side_b,
+            perp1,
+            bias_1,
+            compliance_term,
+            f32::MAX,
+            CorrectionMode::PositionAndVelocity,
+            enforcement,
+            &RowParams {
+                constraint_index,
+                row_index: 0,
+                warm_impulse: warm_impulses[0],
             },
-        },
-        ConstraintRow {
-            body_a: Some(body_handle),
-            body_b: None,
-            lin_jac_a: zeros,
-            ang_jac_a: perp2,
-            lin_jac_b: zeros,
-            ang_jac_b: zeros,
-            effective_mass_inv: eff_mass_2,
-            bias: bias_2,
-            accumulated_impulse: warm_impulses[1],
-            bounds: (-f32::MAX, f32::MAX),
-            constraint_index,
-            row_index: 1,
-            correction_mode: CorrectionMode::PositionAndVelocity,
-            row_kind: RowKind::Angular,
-            enforcement: if compliance > 0.0 {
-                Enforcement::Iterative
-            } else {
-                Enforcement::HardProjection
+        ),
+        primitives::lock_angular_axis(
+            &side_a,
+            &side_b,
+            perp2,
+            bias_2,
+            compliance_term,
+            f32::MAX,
+            CorrectionMode::PositionAndVelocity,
+            enforcement,
+            &RowParams {
+                constraint_index,
+                row_index: 1,
+                warm_impulse: warm_impulses[1],
             },
-        },
+        ),
     ]
 }
