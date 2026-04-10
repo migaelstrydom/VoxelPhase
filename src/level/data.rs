@@ -9,7 +9,8 @@ use serde::Deserialize;
 use crate::app::spawnables::{
     BeachBallDef, BoxDef, BoxWallDef, CapsuleDef, CrateDef, DodecahedronDef, DominoDef,
     FencePostDef, HeavyCrateDef, HexPrismDef, HoneycombWallDef, HouseDef, IcosahedronDef, JengaDef,
-    MenhirDef, OctahedronDef, PlankBridgeDef, PlankDef, PlayWheelDef, PyramidDef, SeesawDef, Spawnable,
+    MenhirDef, OctahedronDef, PendulumDef, PlankBridgeDef, PlankDef, PlayWheelDef, PyramidDef,
+    SeesawDef, Spawnable,
     StackDef, StackItemDef, TableDef, TempleDef, TetrahedronDef, TowerDef, TrampolineDef,
     TrilithonDef, VoussoirArchDef,
 };
@@ -270,6 +271,21 @@ pub enum LevelObject {
         radius: f32,
         #[serde(default = "FencePostDef::default_density")]
         density: f32,
+    },
+    /// Pendulum — terrain-anchored frame with a swinging ball.
+    Pendulum {
+        /// Position (x, z). Y is determined by terrain surface height.
+        pos: (f32, f32),
+        #[serde(default = "PendulumDef::default_frame_height")]
+        frame_height: f32,
+        #[serde(default = "PendulumDef::default_arm_length")]
+        arm_length: f32,
+        #[serde(default = "PendulumDef::default_rope_length")]
+        rope_length: f32,
+        #[serde(default = "PendulumDef::default_ball_radius")]
+        ball_radius: f32,
+        #[serde(default = "PendulumDef::default_ball_density")]
+        ball_density: f32,
     },
     /// Spinning playground wheel anchored to terrain. Spins freely around Y.
     PlayWheel {
@@ -644,6 +660,22 @@ impl LevelObject {
                 half_height: *half_height,
                 radius: *radius,
                 density: *density,
+            }),
+
+            LevelObject::Pendulum {
+                pos,
+                frame_height,
+                arm_length,
+                rope_length,
+                ball_radius,
+                ball_density,
+            } => Box::new(PendulumDef {
+                pos: *pos,
+                frame_height: *frame_height,
+                arm_length: *arm_length,
+                rope_length: *rope_length,
+                ball_radius: *ball_radius,
+                ball_density: *ball_density,
             }),
 
             LevelObject::PlayWheel {

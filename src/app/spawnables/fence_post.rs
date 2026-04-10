@@ -198,6 +198,7 @@ impl Spawnable for FencePostDef {
                 upright_handle,
                 anchor_world: anchor_check,
                 released_collider: Some(released_collider),
+                released_model: None,
             })
             .build()]
     }

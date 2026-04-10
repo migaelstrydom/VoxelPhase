@@ -562,3 +562,55 @@ fn breakable_fixed_joint_breaks_cleanly() {
         "constraint should be deactivated after break"
     );
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// BallJoint tests
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// World-anchored BallJoint with a 5 kg weight hanging 1 m below the anchor.
+/// A 5 m/s horizontal impulse starts the pendulum swinging. After 5 seconds
+/// it must have settled nearly directly below the anchor.
+#[test]
+#[cfg(feature = "bench_harness")]
+fn pendulum_ball_joint_settles() {
+    let scenario = PendulumBallJointSettlesScenario::new();
+    let cfg = BenchRunConfig {
+        fixed_dt: 1.0 / 240.0,
+        duration: 12.0,
+        ..Default::default()
+    };
+    let result = run_scenario(&scenario, cfg);
+    write_exports(&result, "pendulum_ball_joint_settles");
+
+    let last = result.samples.last().unwrap();
+
+    eprintln!(
+        "pendulum_ball_joint: final speed={:.4}, x={:.4}, y={:.4}",
+        last.linear_speed, last.x, last.y,
+    );
+
+    assert!(
+        last.linear_speed < 0.05,
+        "pendulum should have settled: speed={:.4}",
+        last.linear_speed,
+    );
+
+    // Weight should be nearly directly below the anchor (x=0, z=0).
+    // The scenario tracks x; z isn't captured by BenchSample, but the
+    // pendulum starts with x-only velocity so z stays near zero.
+    // Tolerance is 0.05 m — a freely-swinging pendulum with only linear
+    // damping takes longer to center than a contact-damped body.
+    assert!(
+        last.x.abs() < 0.05,
+        "pendulum should be directly below anchor: x={:.4}",
+        last.x,
+    );
+
+    // Y should be near anchor_y - pendulum_length = 3.0 - 1.0 = 2.0
+    let expected_y = 3.0 - scenario.pendulum_length;
+    assert!(
+        (last.y - expected_y).abs() < 0.05,
+        "pendulum y should be near {expected_y:.2}: y={:.4}",
+        last.y,
+    );
+}

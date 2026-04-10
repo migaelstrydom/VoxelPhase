@@ -1,4 +1,5 @@
 pub mod anchor_point;
+pub mod ball_joint;
 pub mod expand;
 pub mod fixed;
 pub mod follow_point;

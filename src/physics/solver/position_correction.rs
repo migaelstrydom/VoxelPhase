@@ -423,7 +423,15 @@ fn correct_constraint_drift(
                 );
             }
 
-            ConstraintKind::Fixed {
+            ConstraintKind::BallJoint {
+                body_a,
+                body_b,
+                local_anchor_a,
+                local_anchor_b,
+                compliance,
+                ..
+            }
+            | ConstraintKind::Fixed {
                 body_a,
                 body_b,
                 local_anchor_a,

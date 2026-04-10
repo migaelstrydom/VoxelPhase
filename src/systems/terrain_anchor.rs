@@ -2,7 +2,7 @@
 
 use specs::{Entities, Join, Read, ReadStorage, System, Write, WriteStorage};
 
-use crate::components::{RigidBodyComponent, TerrainAnchored};
+use crate::components::{ModelInstance, RigidBodyComponent, TerrainAnchored};
 use crate::systems::PhysicsResource;
 use crate::terrain::TerrainManager;
 
@@ -16,13 +16,14 @@ impl<'a> System<'a> for TerrainAnchorSystem {
         Entities<'a>,
         WriteStorage<'a, TerrainAnchored>,
         ReadStorage<'a, RigidBodyComponent>,
+        WriteStorage<'a, ModelInstance>,
         Write<'a, PhysicsResource>,
         Option<Read<'a, TerrainManager>>,
     );
 
     fn run(
         &mut self,
-        (entities, mut anchored, bodies, mut physics, terrain_opt): Self::SystemData,
+        (entities, mut anchored, bodies, mut models, mut physics, terrain_opt): Self::SystemData,
     ) {
         let Some(terrain) = terrain_opt else {
             return;
@@ -49,6 +50,12 @@ impl<'a> System<'a> for TerrainAnchorSystem {
                     physics
                         .world
                         .attach_collider(body_handle, released_collider);
+                }
+
+                if let Some(released_model) = anchor.released_model.take() {
+                    if let Some(model_instance) = models.get_mut(entity) {
+                        model_instance.model = released_model;
+                    }
                 }
 
                 released.push(entity);

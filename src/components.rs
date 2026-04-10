@@ -95,7 +95,7 @@ pub struct Renderable;
 /// When the terrain beneath the anchor point is destroyed, both constraints
 /// are removed, the collider is swapped to its full-size version, and this
 /// component is removed — releasing the body to fall freely.
-#[derive(Component, Debug)]
+#[derive(Component)]
 #[storage(DenseVecStorage)]
 pub struct TerrainAnchored {
     /// Handle to the AnchorPoint constraint pinning the body's position.
@@ -107,6 +107,21 @@ pub struct TerrainAnchored {
     /// Full-size collider to attach when released (replaces the short
     /// anchored-mode collider that avoids terrain overlap).
     pub released_collider: Option<ColliderDesc>,
+    /// Model to swap in when released (e.g. to remove a rope visual that
+    /// only makes sense while the constraint is active).
+    pub released_model: Option<Arc<Model>>,
+}
+
+impl std::fmt::Debug for TerrainAnchored {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TerrainAnchored")
+            .field("anchor_handle", &self.anchor_handle)
+            .field("upright_handle", &self.upright_handle)
+            .field("anchor_world", &self.anchor_world)
+            .field("released_collider", &self.released_collider.is_some())
+            .field("released_model", &self.released_model.is_some())
+            .finish()
+    }
 }
 
 #[derive(Component, Debug)]

@@ -1,8 +1,8 @@
 //! Playground spinning wheel — terrain-anchored disc that spins freely.
 //!
-//! A flat disc pinned to the terrain via AnchorPoint (with `lock_yaw: false`)
-//! + KeepUpright. Players can spin it by pushing against it. When the terrain
-//! is destroyed, it breaks free as a normal dynamic body.
+//! A flat disc pinned to the terrain via BallJoint + KeepUpright. Players can
+//! spin it by pushing against it. When the terrain is destroyed, it breaks free
+//! as a normal dynamic body.
 //!
 //! Uses three materials: painted top, painted bottom, and metallic rim.
 
@@ -154,15 +154,13 @@ impl Spawnable for PlayWheelDef {
 
             let anchor_handle = physics
                 .world
-                .create_constraint(ConstraintKind::AnchorPoint {
-                    body: body_handle,
-                    local_anchor: Vector3::zeros(),
-                    world_anchor: initial_pos,
-                    compliance: 0.0,
-                    max_impulse: f32::MAX,
-                    lock_yaw: false,
-                    lock_roll: false,
-                });
+                .create_constraint(ConstraintKind::world_ball_joint(
+                    body_handle,
+                    initial_pos,
+                    Vector3::zeros(),
+                    0.0,
+                    f32::MAX,
+                ));
 
             let upright_handle = physics
                 .world
@@ -194,6 +192,7 @@ impl Spawnable for PlayWheelDef {
                 upright_handle,
                 anchor_world: anchor_check,
                 released_collider: None,
+                released_model: None,
             })
             .build()]
     }

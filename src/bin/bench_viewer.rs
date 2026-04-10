@@ -111,6 +111,7 @@ const SCENARIO_NAMES: &[&str] = &[
     "keep_upright",
     "compound_table",
     "jenga_cross_wobble",
+    "pendulum_ball_joint_settles",
     "hinge_settles_under_load",
     "hinge_holds_under_sustained_force",
     "hinge_axis_no_drift_zero_gravity",
@@ -139,6 +140,9 @@ fn run_viewer(name: &str) -> EngineResult<()> {
         "keep_upright" => run_with_scenario(&KeepUprightScenario::new()),
         "compound_table" => run_with_scenario(&CompoundTableScenario::new()),
         "jenga_cross_wobble" => run_with_scenario(&JengaCrossWobbleScenario::new()),
+        "pendulum_ball_joint_settles" => {
+            run_with_scenario(&PendulumBallJointSettlesScenario::new())
+        }
         "hinge_settles_under_load" => run_with_scenario(&HingeSettlesUnderLoadScenario::new()),
         "hinge_holds_under_sustained_force" => {
             run_with_scenario(&HingeHoldsUnderSustainedForceScenario::new())

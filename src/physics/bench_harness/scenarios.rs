@@ -2180,6 +2180,98 @@ fn gable_hull_geometry(
 // Scenarios: hinge constraint
 // ═══════════════════════════════════════════════════════════════════════════
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Scenarios: BallJoint constraints
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// World-anchored BallJoint with a 5 kg weight hanging 1 m below.
+/// Exercises BallJoint under gravity with no angular constraints.
+#[derive(Debug, Clone)]
+pub struct PendulumBallJointSettlesScenario {
+    /// Mass of the pendulum weight.
+    pub weight_mass: f32,
+    /// Distance from anchor to weight center.
+    pub pendulum_length: f32,
+    /// Initial horizontal velocity applied to the weight.
+    pub initial_horizontal_speed: f32,
+    geometry: EmptyGeometry,
+}
+
+impl PendulumBallJointSettlesScenario {
+    pub fn new() -> Self {
+        Self {
+            weight_mass: 5.0,
+            pendulum_length: 1.0,
+            initial_horizontal_speed: 5.0,
+            geometry: EmptyGeometry,
+        }
+    }
+}
+
+impl PhysicsBenchScenario for PendulumBallJointSettlesScenario {
+    fn name(&self) -> &'static str {
+        "pendulum_ball_joint_settles"
+    }
+
+    fn restitution(&self) -> f32 {
+        0.0
+    }
+
+    fn build_world(&self) -> PhysicsWorld {
+        let mut config = PhysicsConfig::default();
+        config.sleep.enabled = false;
+        PhysicsWorld::new(config)
+    }
+
+    fn setup(&self, world: &mut PhysicsWorld) -> RigidBodyHandle {
+        let anchor_y = 3.0;
+        let anchor_pos = Point3::new(0.0, anchor_y, 0.0);
+        let weight_pos = Point3::new(0.0, anchor_y - self.pendulum_length, 0.0);
+
+        let sphere_radius: f32 = 0.15;
+        let sphere_volume = (4.0 / 3.0) * std::f32::consts::PI * sphere_radius.powi(3);
+        let sphere_density = self.weight_mass / sphere_volume;
+
+        let weight = world.create_body(
+            RigidBodyDesc::dynamic()
+                .position(weight_pos)
+                .linear_damping(0.5)
+                .angular_damping(0.05),
+        );
+        let _ = world.attach_collider(
+            weight,
+            ColliderDesc::sphere(sphere_radius)
+                .density(sphere_density)
+                .restitution(0.0)
+                .friction(0.5),
+        );
+
+        let _ = world.create_constraint(ConstraintKind::world_ball_joint(
+            weight,
+            anchor_pos,
+            Vector3::new(0.0, self.pendulum_length, 0.0),
+            0.0,
+            f32::MAX,
+        ));
+
+        world.set_body_velocity(
+            weight,
+            Vector3::new(self.initial_horizontal_speed, 0.0, 0.0),
+            Vector3::zeros(),
+        );
+
+        weight
+    }
+
+    fn geometry(&self) -> &dyn StaticGeometry {
+        &self.geometry
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Scenarios: Hinge constraints
+// ═══════════════════════════════════════════════════════════════════════════
+
 /// World-anchored hinge with a plank and a box on one end. The plank tilts
 /// under the box's weight and should settle to a steady angle once
 /// angular damping dissipates energy.
