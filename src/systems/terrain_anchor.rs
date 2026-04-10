@@ -33,7 +33,10 @@ impl<'a> System<'a> for TerrainAnchorSystem {
 
         for (entity, anchor, body) in (&entities, &mut anchored, &bodies).join() {
             let p = anchor.anchor_world;
-            if !terrain.is_solid_at(p.x, p.y, p.z) {
+            let terrain_gone = terrain
+                .mesh_surface_height_at(p.x, p.z)
+                .map_or(true, |surface_y| surface_y < p.y);
+            if terrain_gone {
                 physics.world.remove_constraint(anchor.anchor_handle);
                 physics.world.remove_constraint(anchor.upright_handle);
 
