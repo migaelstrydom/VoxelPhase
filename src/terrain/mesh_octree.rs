@@ -104,18 +104,7 @@ impl MeshLeaf {
 
     /// Compute AABB for a specific owned triangle.
     fn triangle_aabb(&self, triangle_index: usize) -> AABB {
-        let [v0, v1, v2] = self.get_triangle_vertices(triangle_index);
-        let min = Point3::new(
-            v0.pos.x.min(v1.pos.x).min(v2.pos.x),
-            v0.pos.y.min(v1.pos.y).min(v2.pos.y),
-            v0.pos.z.min(v1.pos.z).min(v2.pos.z),
-        );
-        let max = Point3::new(
-            v0.pos.x.max(v1.pos.x).max(v2.pos.x),
-            v0.pos.y.max(v1.pos.y).max(v2.pos.y),
-            v0.pos.z.max(v1.pos.z).max(v2.pos.z),
-        );
-        AABB::new(min, max)
+        self.to_collision_triangle(triangle_index).aabb()
     }
 }
 
@@ -851,7 +840,9 @@ impl MeshOctree {
                     let key = (tri_ref.path, tri_ref.depth, tri_ref.triangle_index);
                     if seen.insert(key) {
                         if let Some(triangle) = self.resolve_triangle_ref(tri_ref) {
-                            out.push((*tri_ref, triangle));
+                            if query.intersects(&triangle.aabb()) {
+                                out.push((*tri_ref, triangle));
+                            }
                         }
                     }
                 }
@@ -1542,5 +1533,55 @@ mod tests {
         octree.rebuild_neighbor_refs();
         let global_refs = collect_all_neighbor_refs(&octree);
         assert_eq!(region_refs, global_refs);
+    }
+
+    #[test]
+    fn test_query_filters_neighbor_refs_by_triangle_aabb() {
+        // Regression test: query_aabb must filter neighbor ref triangles
+        // against the query AABB, not just the leaf node bounds.
+        //
+        // Manually build a two-leaf octree: octant 0 owns a triangle,
+        // octant 1 has a neighbor_ref pointing to it. Querying octant 1
+        // with an AABB that hits the leaf bounds but not the triangle
+        // must exclude it.
+        let bounds = AABB::new(Point3::origin(), Point3::new(10.0, 10.0, 10.0));
+        let mut octree = MeshOctree::new(bounds);
+
+        // Build an Interior root with 8 children.
+        let mut children: [MeshNode; 8] =
+            std::array::from_fn(|i| MeshNode::empty(child_bounds(&bounds, i)));
+
+        // Octant 0 covers (0,0,0)→(5,5,5). Put a triangle that spans
+        // into octant 1 (x goes from 4 to 6, so it crosses x=5).
+        // Owned by octant 0 because min vertex (4,0,1) is in octant 0.
+        let mut owner_leaf = MeshLeaf::new();
+        owner_leaf.vertices.push(test_vertex(4.0, 0.0, 1.0));
+        owner_leaf.vertices.push(test_vertex(6.0, 0.0, 1.0));
+        owner_leaf.vertices.push(test_vertex(5.0, 1.0, 1.0));
+        owner_leaf.indices.extend_from_slice(&[0, 1, 2]);
+        children[0].content = MeshNodeContent::Leaf(owner_leaf);
+
+        // Octant 1 covers (5,0,0)→(10,5,5). Add a neighbor_ref to octant 0's
+        // triangle since the triangle extends into this octant.
+        let mut ref_leaf = MeshLeaf::new();
+        ref_leaf.neighbor_refs.push(TriangleRef::new(0, 1, 0));
+        children[1].content = MeshNodeContent::Leaf(ref_leaf);
+
+        octree.root.content = MeshNodeContent::Interior(Box::new(children));
+
+        // Query the top of octant 1 (y=3..5) — hits leaf bounds but not
+        // the triangle (which is at y=0..1).
+        let query = AABB::new(Point3::new(6.0, 3.0, 0.0), Point3::new(9.0, 5.0, 5.0));
+        let results = octree.query_aabb(&query);
+        assert!(
+            results.is_empty(),
+            "Neighbor ref triangle should be excluded when its AABB doesn't intersect the query"
+        );
+
+        // Sanity check: a query overlapping the triangle's actual extent
+        // in octant 1 (x=5..6, y=0..1) should find it via the neighbor ref.
+        let query = AABB::new(Point3::new(5.0, 0.0, 0.5), Point3::new(7.0, 2.0, 1.5));
+        let results = octree.query_aabb(&query);
+        assert_eq!(results.len(), 1, "Should find the triangle when query overlaps its AABB");
     }
 }

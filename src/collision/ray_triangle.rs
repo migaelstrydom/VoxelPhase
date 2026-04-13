@@ -2,7 +2,7 @@
 
 use nalgebra::{Point3, Vector3};
 
-use super::sphere_triangle::Triangle;
+use super::triangle::Triangle;
 
 /// Result of a ray-triangle intersection test.
 #[derive(Debug, Clone, Copy)]

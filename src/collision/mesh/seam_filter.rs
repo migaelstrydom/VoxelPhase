@@ -17,7 +17,7 @@ use smallvec::SmallVec;
 
 use crate::collision::contact::FeatureId;
 use crate::collision::mesh_patch::MeshPatch;
-use crate::collision::sphere_triangle::Triangle;
+use crate::collision::triangle::Triangle;
 
 /// A MeshPatch after seam filtering: contact faces (triangles or merged
 /// quads) and boundary/crease edges only.

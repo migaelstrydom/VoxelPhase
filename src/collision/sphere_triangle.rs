@@ -2,58 +2,7 @@
 
 use nalgebra::{Point3, Vector3};
 
-/// A triangle represented by three vertices.
-#[derive(Debug, Clone, Copy)]
-pub struct Triangle {
-    pub v0: Point3<f32>,
-    pub v1: Point3<f32>,
-    pub v2: Point3<f32>,
-}
-
-impl Triangle {
-    pub fn new(v0: Point3<f32>, v1: Point3<f32>, v2: Point3<f32>) -> Self {
-        Self { v0, v1, v2 }
-    }
-
-    /// Compute the face normal (not normalized).
-    pub fn normal_unnormalized(&self) -> Vector3<f32> {
-        let e1 = self.v1 - self.v0;
-        let e2 = self.v2 - self.v0;
-        e1.cross(&e2)
-    }
-
-    /// Compute the unit face normal.
-    pub fn normal(&self) -> Vector3<f32> {
-        let n = self.normal_unnormalized();
-        let len_sq = n.magnitude_squared();
-        if len_sq > 1e-10 {
-            n / len_sq.sqrt()
-        } else {
-            Vector3::new(0.0, 1.0, 0.0) // Degenerate triangle fallback
-        }
-    }
-
-    /// Get a vertex by index (0, 1, or 2).
-    #[inline]
-    pub fn vertex(&self, index: usize) -> Point3<f32> {
-        match index {
-            0 => self.v0,
-            1 => self.v1,
-            _ => self.v2,
-        }
-    }
-
-    /// Get an edge by index (0, 1, or 2).
-    /// Returns (start, end) of the edge.
-    #[inline]
-    pub fn edge(&self, index: usize) -> (Point3<f32>, Point3<f32>) {
-        match index {
-            0 => (self.v0, self.v1),
-            1 => (self.v1, self.v2),
-            _ => (self.v2, self.v0),
-        }
-    }
-}
+use super::triangle::Triangle;
 
 /// Contact from a sphere-triangle overlap test.
 #[derive(Debug, Clone, Copy)]

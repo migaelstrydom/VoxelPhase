@@ -8,7 +8,7 @@ use nalgebra::{Point3, Vector3};
 
 use super::capsule::Capsule;
 use super::obb::Obb;
-use super::sphere_triangle::Triangle;
+use super::triangle::Triangle;
 
 /// The furthest point on a convex shape in a given direction.
 pub trait ConvexSupport {

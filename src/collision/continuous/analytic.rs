@@ -7,7 +7,8 @@
 
 use nalgebra::{Point3, Vector3};
 
-use crate::collision::sphere_triangle::{self, Triangle};
+use crate::collision::sphere_triangle;
+use crate::collision::triangle::Triangle;
 
 /// Result of a swept collision test.
 #[derive(Debug, Clone)]
