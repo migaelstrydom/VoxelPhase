@@ -515,6 +515,88 @@ mod tests {
         assert!(m.len() <= 4);
     }
 
+    /// Same patch geometry as the hull_patch pop_replay test, but using an
+    /// OBB that approximates the menhir's bounding dimensions.
+    fn pop_replay_patch_minimal() -> FilteredPatch {
+        FilteredPatch {
+            faces: SmallVec::from_vec(vec![
+                ContactFace {
+                    vertices: SmallVec::from_vec(vec![
+                        Point3::new(12.0, -3.0, -4.0),
+                        Point3::new(10.0, -3.0, -4.0),
+                        Point3::new(10.0, -3.0, -2.0),
+                        Point3::new(12.0, -3.0, -2.0),
+                    ]),
+                    normal: Vector3::y(),
+                    feature_id: FeatureId::from_face(58),
+                },
+                ContactFace {
+                    vertices: SmallVec::from_vec(vec![
+                        Point3::new(12.0, -3.0, -2.0),
+                        Point3::new(10.0, -3.0, -2.0),
+                        Point3::new(10.0, -3.0, 0.0),
+                        Point3::new(12.0, -3.0, 0.0),
+                    ]),
+                    normal: Vector3::y(),
+                    feature_id: FeatureId::from_face(59),
+                },
+                ContactFace {
+                    vertices: SmallVec::from_vec(vec![
+                        Point3::new(9.0, -2.0, -4.0),
+                        Point3::new(10.0, -2.0, -5.0),
+                        Point3::new(10.0, -1.0, -6.0),
+                        Point3::new(8.0, -1.0, -4.0),
+                    ]),
+                    normal: Vector3::new(0.577350, 0.577350, 0.577350),
+                    feature_id: FeatureId::from_face(35),
+                },
+                ContactFace {
+                    vertices: SmallVec::from_vec(vec![
+                        Point3::new(10.0, -3.0, -4.0),
+                        Point3::new(10.0, -2.0, -5.0),
+                        Point3::new(9.0, -2.0, -4.0),
+                    ]),
+                    normal: Vector3::new(0.577350, 0.577350, 0.577350),
+                    feature_id: FeatureId::from_face(53),
+                },
+            ]),
+            boundary_edges: SmallVec::new(),
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "SAT-consistent manifold should keep one contact direction")]
+    fn pop_replay_obb_manifold_should_not_mix_normals() {
+        let patch = pop_replay_patch_minimal();
+
+        // OBB approximating the menhir: half_extents match the egg's bounding
+        // dimensions (half_height=4, max_radius=1.8).
+        let center = Point3::new(10.586787, -1.690402, -4.410592);
+        let rot = UnitQuaternion::from_quaternion(nalgebra::Quaternion::new(
+            0.335174, 0.163065, -0.581374, 0.723237,
+        ));
+        let obb = Obb::new(center, rot, Vector3::new(1.8, 4.0, 1.8));
+        let margin = 0.02;
+
+        let manifold = obb_patch_manifold(&obb, &patch, margin);
+        assert!(
+            !manifold.is_empty(),
+            "OBB replay case should produce contacts for analysis"
+        );
+
+        let base = manifold.points[0].raw_normal.normalize();
+        for (i, cp) in manifold.points.iter().enumerate() {
+            let d = base.dot(&cp.raw_normal.normalize());
+            assert!(
+                d > 0.95,
+                "SAT-consistent manifold should keep one contact direction. \
+                 Contact {i} has mixed normal {:?} vs base {:?} (dot={d:.4})",
+                cp.raw_normal,
+                base
+            );
+        }
+    }
+
     #[test]
     fn thin_shell_ignores_bottom_face_contacts() {
         let patch = FilteredPatch {

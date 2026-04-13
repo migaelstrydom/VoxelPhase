@@ -410,6 +410,8 @@ mod tests {
                     a: Point3::new(0.0, 0.0, 0.0),
                     b: Point3::new(1.0, 0.0, 0.0),
                     feature_id: FeatureId::from_edge_pair(0, 0),
+                    normal_a: Vector3::y(),
+                    normal_b: None,
                 },
                 1,
             ),

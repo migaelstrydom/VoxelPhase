@@ -322,7 +322,9 @@ mod tests {
     use super::*;
     use crate::collision::contact::FeatureId;
     use crate::collision::convex_hull::{ConvexHull, HullFace};
+    use crate::collision::mesh::seam_filter::{ContactFace, FilteredPatch};
     use nalgebra::{Point3, UnitQuaternion, Vector3};
+    use smallvec::SmallVec;
 
     fn view_from(
         center: Point3<f32>,
@@ -2104,5 +2106,159 @@ mod tests {
         assert_no_phantom_contacts(
             &manifold, &hull_a, &center_a, &rot_a, &hull_b, &center_b, &rot_b, margin,
         );
+    }
+
+    // ─── Hull/OBB vs concave mesh: mixed-normal regression tests ─────
+
+    /// Build an egg-shaped convex hull matching the menhir's geometry.
+    fn menhir_hull(half_height: f32, bottom_radius: f32, top_radius: f32) -> ConvexHull {
+        use crate::app::spawnables::shared::models::{build_convex_hull, SolidFace};
+        use std::f32::consts::{FRAC_PI_2, TAU};
+
+        let segments = 8usize;
+        let rings = 6usize;
+
+        let egg_point = |phi: f32, theta: f32| -> Vector3<f32> {
+            let t = (phi.sin() + 1.0) * 0.5;
+            let r = (bottom_radius + (top_radius - bottom_radius) * t) * phi.cos();
+            Vector3::new(r * theta.cos(), half_height * phi.sin(), r * theta.sin())
+        };
+
+        let mut vertices = Vec::new();
+        vertices.push(Vector3::new(0.0, -half_height, 0.0));
+
+        for ri in 0..rings {
+            let phi = -FRAC_PI_2 + (ri as f32 + 1.0) / (rings as f32 + 1.0) * std::f32::consts::PI;
+            for si in 0..segments {
+                let theta = si as f32 * TAU / segments as f32;
+                vertices.push(egg_point(phi, theta));
+            }
+        }
+        let north = vertices.len();
+        vertices.push(Vector3::new(0.0, half_height, 0.0));
+
+        let rv = |ri: usize, si: usize| -> usize { 1 + ri * segments + si };
+        let mut faces = Vec::new();
+
+        for si in 0..segments {
+            let next = (si + 1) % segments;
+            faces.push(SolidFace {
+                vertex_indices: vec![0, rv(0, next), rv(0, si)],
+                opposite_vertex: north,
+            });
+        }
+        for ri in 0..(rings - 1) {
+            for si in 0..segments {
+                let next = (si + 1) % segments;
+                faces.push(SolidFace {
+                    vertex_indices: vec![
+                        rv(ri, si),
+                        rv(ri, next),
+                        rv(ri + 1, next),
+                        rv(ri + 1, si),
+                    ],
+                    opposite_vertex: rv(ri, (si + segments / 2) % segments),
+                });
+            }
+        }
+        let last = rings - 1;
+        for si in 0..segments {
+            let next = (si + 1) % segments;
+            faces.push(SolidFace {
+                vertex_indices: vec![rv(last, si), rv(last, next), north],
+                opposite_vertex: 0,
+            });
+        }
+
+        build_convex_hull(&vertices, &faces)
+    }
+
+    /// Captured patch geometry from an in-game pop dump: two flat floor faces
+    /// at y=-3 and two sloped faces forming a step.
+    fn pop_replay_patch_minimal() -> FilteredPatch {
+        FilteredPatch {
+            faces: SmallVec::from_vec(vec![
+                ContactFace {
+                    vertices: SmallVec::from_vec(vec![
+                        Point3::new(12.0, -3.0, -4.0),
+                        Point3::new(10.0, -3.0, -4.0),
+                        Point3::new(10.0, -3.0, -2.0),
+                        Point3::new(12.0, -3.0, -2.0),
+                    ]),
+                    normal: Vector3::y(),
+                    feature_id: FeatureId::from_face(58),
+                },
+                ContactFace {
+                    vertices: SmallVec::from_vec(vec![
+                        Point3::new(12.0, -3.0, -2.0),
+                        Point3::new(10.0, -3.0, -2.0),
+                        Point3::new(10.0, -3.0, 0.0),
+                        Point3::new(12.0, -3.0, 0.0),
+                    ]),
+                    normal: Vector3::y(),
+                    feature_id: FeatureId::from_face(59),
+                },
+                ContactFace {
+                    vertices: SmallVec::from_vec(vec![
+                        Point3::new(9.0, -2.0, -4.0),
+                        Point3::new(10.0, -2.0, -5.0),
+                        Point3::new(10.0, -1.0, -6.0),
+                        Point3::new(8.0, -1.0, -4.0),
+                    ]),
+                    normal: Vector3::new(0.577350, 0.577350, 0.577350),
+                    feature_id: FeatureId::from_face(35),
+                },
+                ContactFace {
+                    vertices: SmallVec::from_vec(vec![
+                        Point3::new(10.0, -3.0, -4.0),
+                        Point3::new(10.0, -2.0, -5.0),
+                        Point3::new(9.0, -2.0, -4.0),
+                    ]),
+                    normal: Vector3::new(0.577350, 0.577350, 0.577350),
+                    feature_id: FeatureId::from_face(53),
+                },
+            ]),
+            boundary_edges: SmallVec::new(),
+        }
+    }
+
+    /// Regression test: hull vs concave step terrain should not produce a
+    /// manifold with mixed normals from unrelated faces.
+    ///
+    /// Currently routes through GJK/EPA (no dedicated hull-patch path),
+    /// which happens to avoid the mixed-normal issue. When a face-clipping
+    /// hull-patch path is (re)introduced, this test should verify that it
+    /// also produces consistent normals.
+    #[test]
+    fn hull_pop_replay_minimal_manifold_should_not_mix_normals() {
+        let hull = menhir_hull(4.0, 1.8, 1.0);
+        let shape = ColliderShape::ConvexHull {
+            hull: std::sync::Arc::new(hull),
+        };
+        let patch = pop_replay_patch_minimal();
+        let center = Point3::new(10.586787, -1.690402, -4.410592);
+        let rot = UnitQuaternion::from_quaternion(nalgebra::Quaternion::new(
+            0.335174, 0.163065, -0.581374, 0.723237,
+        ));
+        let margin = 0.02;
+
+        let view = view_from(center, rot, &shape);
+        let manifold = generate_mesh_manifold(&view, &patch, margin);
+        assert!(
+            !manifold.is_empty(),
+            "Replay case should produce contacts for analysis"
+        );
+
+        let base = manifold.points[0].raw_normal.normalize();
+        for (i, cp) in manifold.points.iter().enumerate() {
+            let d = base.dot(&cp.raw_normal.normalize());
+            assert!(
+                d > 0.95,
+                "SAT-consistent manifold should keep one contact direction. \
+                 Contact {i} has mixed normal {:?} vs base {:?} (dot={d:.4})",
+                cp.raw_normal,
+                base
+            );
+        }
     }
 }

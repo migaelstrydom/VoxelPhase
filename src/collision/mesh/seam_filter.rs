@@ -45,11 +45,21 @@ pub struct ContactFace {
 }
 
 /// A boundary or crease edge, valid as a contact feature.
+///
+/// Carries the adjacent face normals for Gauss map filtering in edge-edge
+/// SAT tests. `normal_a` is always present (the face this edge belongs to).
+/// `normal_b` is the neighbor face normal for crease edges, or `None` for
+/// true boundary edges (no neighbor in the patch).
 #[derive(Debug, Clone)]
 pub struct ContactEdge {
     pub a: Point3<f32>,
     pub b: Point3<f32>,
     pub feature_id: FeatureId,
+    /// Outward normal of the face this edge belongs to.
+    pub normal_a: Vector3<f32>,
+    /// Outward normal of the neighboring face (crease edge), or `None`
+    /// for true boundary edges where no neighbor exists.
+    pub normal_b: Option<Vector3<f32>>,
 }
 
 /// Filter a mesh patch: merge coplanar triangle pairs into convex quads
@@ -152,12 +162,12 @@ pub fn filter_patch(patch: &MeshPatch, coplanar_dot_threshold: f32) -> FilteredP
         let ti = i as u32;
 
         for edge_idx in 0..3u32 {
-            let is_internal = match pt.neighbors[edge_idx as usize] {
+            let neighbor_normal = pt.neighbors[edge_idx as usize]
+                .map(|nbr| patch.triangles[nbr as usize].triangle.normal());
+
+            let is_internal = match neighbor_normal {
                 None => false,
-                Some(nbr) => {
-                    let nbr_normal = patch.triangles[nbr as usize].triangle.normal();
-                    normal.dot(&nbr_normal) >= coplanar_dot_threshold
-                }
+                Some(nbr_normal) => normal.dot(&nbr_normal) >= coplanar_dot_threshold,
             };
 
             if !is_internal {
@@ -166,6 +176,8 @@ pub fn filter_patch(patch: &MeshPatch, coplanar_dot_threshold: f32) -> FilteredP
                     a,
                     b,
                     feature_id: FeatureId::from_edge_pair(ti, edge_idx),
+                    normal_a: normal,
+                    normal_b: neighbor_normal,
                 });
             }
         }
@@ -504,6 +516,117 @@ mod tests {
         );
         for face in &filtered.faces {
             assert_eq!(face.vertices.len(), 3);
+        }
+    }
+
+    #[test]
+    fn boundary_edges_have_normal_a_from_owning_face() {
+        let patch = MeshPatch {
+            triangles: vec![PatchTriangle {
+                triangle: Triangle::new(
+                    Point3::new(0.0, 0.0, 0.0),
+                    Point3::new(1.0, 0.0, 0.0),
+                    Point3::new(0.0, 0.0, 1.0),
+                ),
+                neighbors: [None, None, None],
+            }],
+        };
+        let filtered = filter_patch(&patch, 0.98);
+
+        assert_eq!(filtered.boundary_edges.len(), 3);
+        let expected_normal = patch.triangles[0].triangle.normal();
+        for edge in &filtered.boundary_edges {
+            let dot = edge.normal_a.dot(&expected_normal);
+            assert!(
+                (dot - 1.0).abs() < 1e-5,
+                "normal_a should match owning triangle normal, dot={}",
+                dot
+            );
+            assert!(
+                edge.normal_b.is_none(),
+                "No-neighbor edge should have normal_b = None"
+            );
+        }
+    }
+
+    #[test]
+    fn crease_edges_have_both_normals() {
+        let patch = l_shaped_patch();
+        let filtered = filter_patch(&patch, 0.98);
+
+        let crease_edges: Vec<_> = filtered
+            .boundary_edges
+            .iter()
+            .filter(|e| e.normal_b.is_some())
+            .collect();
+
+        // The L-shaped patch has one shared crease edge, emitted from each
+        // side → 2 crease-edge entries with both normals populated.
+        assert_eq!(
+            crease_edges.len(),
+            2,
+            "Crease edge should be emitted from both adjacent triangles"
+        );
+
+        let n0 = patch.triangles[0].triangle.normal();
+        let n1 = patch.triangles[1].triangle.normal();
+
+        for edge in &crease_edges {
+            let na = edge.normal_a;
+            let nb = edge.normal_b.unwrap();
+
+            // normal_a and normal_b should be the two distinct triangle normals.
+            let matches_n0_n1 = na.dot(&n0) > 0.99 && nb.dot(&n1) > 0.99;
+            let matches_n1_n0 = na.dot(&n1) > 0.99 && nb.dot(&n0) > 0.99;
+            assert!(
+                matches_n0_n1 || matches_n1_n0,
+                "Crease edge normals should be the two triangle normals, got na={:?} nb={:?}",
+                na,
+                nb
+            );
+        }
+    }
+
+    #[test]
+    fn coplanar_suppressed_edges_have_no_entries() {
+        let patch = flat_quad_patch();
+        let filtered = filter_patch(&patch, 0.98);
+
+        // The internal diagonal is suppressed — no boundary edge should have
+        // both normals pointing the same direction (which would mean a
+        // coplanar edge leaked through).
+        for edge in &filtered.boundary_edges {
+            if let Some(nb) = edge.normal_b {
+                let dot = edge.normal_a.dot(&nb);
+                assert!(
+                    dot < 0.98,
+                    "Coplanar edge should be suppressed, got normal_a·normal_b={}",
+                    dot
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn crease_edge_normals_are_unit_length() {
+        let patch = l_shaped_patch();
+        let filtered = filter_patch(&patch, 0.98);
+
+        for edge in &filtered.boundary_edges {
+            let len_a = edge.normal_a.magnitude();
+            assert!(
+                (len_a - 1.0).abs() < 1e-5,
+                "normal_a should be unit, got {}",
+                len_a
+            );
+            if let Some(nb) = edge.normal_b {
+                let len_b = nb.magnitude();
+                assert!(
+                    (len_b - 1.0).abs() < 1e-5,
+                    "normal_b should be unit, got {}",
+                    len_b
+                );
+            }
         }
     }
 }
