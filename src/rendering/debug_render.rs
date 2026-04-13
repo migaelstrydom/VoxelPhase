@@ -12,7 +12,9 @@ use nalgebra::{Matrix4, Vector2, Vector4};
 
 use crate::core::error::EngineResult;
 use crate::debug::{DebugOverlays, DebugShape};
-use crate::geometry::{generate_cylinder, generate_sphere_indices, generate_sphere_vertices};
+use crate::geometry::{
+    generate_capsule, generate_cylinder, generate_sphere_indices, generate_sphere_vertices,
+};
 use crate::rendering::material::MaterialManager;
 use crate::rendering::renderer::Renderer;
 use crate::rendering::vertex::Vertex;
@@ -124,6 +126,18 @@ fn tessellate(shape: &DebugShape) -> (Vec<Vertex>, Vec<u32>, Matrix4<f32>) {
                 },
             ];
             (tri_verts, vec![0, 1, 2], Matrix4::identity())
+        }
+        DebugShape::Capsule {
+            center,
+            rotation,
+            half_height,
+            radius,
+            colour,
+        } => {
+            let (vertices, indices) = generate_capsule(*half_height, *radius, 12, 6, *colour);
+            let transform =
+                Matrix4::new_translation(&center.coords) * rotation.to_homogeneous();
+            (vertices, indices, transform)
         }
     }
 }

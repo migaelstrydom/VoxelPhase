@@ -286,6 +286,20 @@ impl<'a> System<'a> for PhysicsSyncSystem {
             &physics.world.sleeping_bodies(),
             &mut debug_overlays,
         );
+        if let Some(ref terrain) = terrain_opt {
+            physics.world.debugger().add_broadphase_patch_overlays(
+                physics.world.bodies(),
+                physics.world.colliders_arena(),
+                &**terrain,
+                physics.world.config().contact_margin,
+                &mut debug_overlays,
+            );
+        }
+        physics.world.debugger().add_collider_shape_overlays(
+            physics.world.bodies(),
+            physics.world.colliders_arena(),
+            &mut debug_overlays,
+        );
         physics.world.debugger().write_debug_log(
             &mut debug_log,
             physics.world.config().contact_margin,

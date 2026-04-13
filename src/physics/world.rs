@@ -715,6 +715,11 @@ impl PhysicsWorld {
         &self.bodies
     }
 
+    /// Get access to the collider arena.
+    pub fn colliders_arena(&self) -> &Arena<Collider> {
+        &self.colliders
+    }
+
     /// Apply per-substep forces from external providers.
     ///
     /// Clears all force/torque/drag accumulators first, then asks each provider

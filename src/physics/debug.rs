@@ -1,13 +1,17 @@
 //! Physics debug visualization and logging.
 
 use generational_arena::Arena;
-use nalgebra::{Point3, Vector3};
+use nalgebra::Point3;
+use nalgebra::Vector3;
 use rustc_hash::FxHashMap;
 
 use super::body::RigidBody;
+use super::collider::Collider;
 use super::contact_event::{ContactEvent, ContactSource};
 use super::handle::RigidBodyHandle;
 use super::pipeline::pair::{PairHeader, PairManifold, SolverManifold};
+use super::static_geometry::StaticGeometry;
+use crate::collision::shape_view::ShapeView;
 use crate::debug::{DebugLines, DebugLog, DebugOverlays};
 use crate::rendering::Colour;
 
@@ -23,14 +27,20 @@ pub struct PhysicsDebugConfig {
     pub draw_contact_raw_normals: bool,
     /// Draw sleep state markers over sleeping bodies.
     pub draw_sleeping: bool,
+    /// Draw the terrain triangles returned by broadphase queries as transparent overlays.
+    pub draw_broadphase_patches: bool,
+    /// Draw collider shapes as transparent overlays.
+    pub draw_collider_shapes: bool,
 }
 
 impl Default for PhysicsDebugConfig {
     fn default() -> Self {
         Self {
-            draw_contacts: true,
+            draw_contacts: false,
             draw_contact_raw_normals: false,
             draw_sleeping: false,
+            draw_broadphase_patches: false,
+            draw_collider_shapes: false,
         }
     }
 }
@@ -267,6 +277,95 @@ impl PhysicsDebugger {
                 let pos = body.position();
                 let marker_pos = Point3::new(pos.x, pos.y + 0.6, pos.z);
                 overlays.add_sphere(marker_pos, 0.08, colour);
+            }
+        }
+    }
+
+    /// Draw the terrain triangles returned by broadphase queries as transparent overlays.
+    ///
+    /// For every non-static body, re-queries the static geometry broadphase
+    /// using the same AABB the narrowphase would use, and draws each returned
+    /// triangle.
+    pub fn add_broadphase_patch_overlays(
+        &self,
+        bodies: &Arena<RigidBody>,
+        colliders: &Arena<Collider>,
+        static_geometry: &dyn StaticGeometry,
+        contact_margin: f32,
+        overlays: &mut DebugOverlays,
+    ) {
+        if !self.config.draw_broadphase_patches {
+            return;
+        }
+
+        for (_, body) in bodies.iter() {
+            if body.is_static() {
+                continue;
+            }
+
+            for collider_handle in body.colliders() {
+                let Some(collider) = colliders.get(collider_handle.0) else {
+                    continue;
+                };
+
+                let world_tf = collider.world_transform(body.position(), body.rotation());
+                let view = ShapeView {
+                    center: Point3::from(world_tf.translation.vector),
+                    rotation: world_tf.rotation,
+                    shape: collider.shape(),
+                };
+                let query_aabb = view.query_aabb(contact_margin);
+                let patch = static_geometry.query_region(&query_aabb);
+
+                for pt in &patch.triangles {
+                    overlays.add_triangle(
+                        [pt.triangle.v0, pt.triangle.v1, pt.triangle.v2],
+                        PATCH_COLOUR,
+                    );
+                }
+            }
+        }
+    }
+
+    /// Draw collider shapes as transparent overlays.
+    pub fn add_collider_shape_overlays(
+        &self,
+        bodies: &Arena<RigidBody>,
+        colliders: &Arena<Collider>,
+        overlays: &mut DebugOverlays,
+    ) {
+        if !self.config.draw_collider_shapes {
+            return;
+        }
+
+        let colour = COLLIDER_COLOUR;
+
+        for (_, body) in bodies.iter() {
+            if body.is_static() {
+                continue;
+            }
+
+            for collider_handle in body.colliders() {
+                let Some(collider) = colliders.get(collider_handle.0) else {
+                    continue;
+                };
+
+                let world_tf = collider.world_transform(body.position(), body.rotation());
+                let center = Point3::from(world_tf.translation.vector);
+                let rotation = world_tf.rotation;
+
+                match collider.shape() {
+                    super::ColliderShape::Sphere { radius } => {
+                        overlays.add_sphere(center, *radius, colour);
+                    }
+                    super::ColliderShape::Capsule {
+                        half_height,
+                        radius,
+                    } => {
+                        overlays.add_capsule(center, rotation, *half_height, *radius, colour);
+                    }
+                    _ => {}
+                }
             }
         }
     }
@@ -775,3 +874,6 @@ fn compute_post_solve_body_stats(
         angular_speed,
     })
 }
+
+const PATCH_COLOUR: Colour = Colour::new(0.2, 0.8, 0.3, 0.25);
+const COLLIDER_COLOUR: Colour = Colour::new(1.0, 0.4, 0.7, 0.25);

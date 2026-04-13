@@ -119,6 +119,13 @@ pub enum DebugShape {
         vertices: [Point3<f32>; 3],
         colour: Colour,
     },
+    Capsule {
+        center: Point3<f32>,
+        rotation: nalgebra::UnitQuaternion<f32>,
+        half_height: f32,
+        radius: f32,
+        colour: Colour,
+    },
 }
 
 impl DebugShape {
@@ -145,6 +152,11 @@ impl DebugShape {
                     .fold(0.0f32, f32::max);
                 (centroid, max_dist)
             }
+            DebugShape::Capsule {
+                center,
+                half_height,
+                ..
+            } => (*center, *half_height),
         }
     }
 }
@@ -191,6 +203,24 @@ impl DebugOverlays {
         self.transparent_shapes.push(DebugShape::Line {
             start,
             end,
+            radius,
+            colour,
+        });
+    }
+
+    /// Add a capsule overlay (Y-axis oriented, positioned and rotated in world space).
+    pub fn add_capsule(
+        &mut self,
+        center: Point3<f32>,
+        rotation: nalgebra::UnitQuaternion<f32>,
+        half_height: f32,
+        radius: f32,
+        colour: Colour,
+    ) {
+        self.transparent_shapes.push(DebugShape::Capsule {
+            center,
+            rotation,
+            half_height,
             radius,
             colour,
         });
