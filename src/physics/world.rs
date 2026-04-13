@@ -4,7 +4,7 @@ use generational_arena::Arena;
 use nalgebra::{Isometry3, Matrix3, Point3, UnitQuaternion, Vector3};
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use super::body::{RigidBody, RigidBodyDesc};
+use super::body::{BodyType, RigidBody, RigidBodyDesc};
 use super::ccd::{CcdContext, CcdStrategy, SweepClampCcd};
 use super::collider::{Collider, ColliderDesc, ColliderShape};
 use super::constraint::types::Constraint;
@@ -253,9 +253,24 @@ impl PhysicsWorld {
     // === Body Management ===
 
     /// Create a new rigid body and return its handle.
+    ///
+    /// Dynamic bodies with zero velocity are created asleep so that pre-placed
+    /// level geometry doesn't pay broadphase/solver cost until something
+    /// interacts with it.
     pub fn create_body(&mut self, desc: RigidBodyDesc) -> RigidBodyHandle {
+        let start_asleep = self.config.sleep.enabled
+            && desc.body_type == BodyType::Dynamic
+            && desc.linear_velocity.magnitude_squared() < 1e-12
+            && desc.angular_velocity.magnitude_squared() < 1e-12;
+
         let body = RigidBody::new(desc);
-        RigidBodyHandle(self.bodies.insert(body))
+        let handle = RigidBodyHandle(self.bodies.insert(body));
+
+        if start_asleep {
+            self.sleep_manager.sleep_body(handle);
+        }
+
+        handle
     }
 
     /// Remove a rigid body, all its attached colliders, and any constraints
@@ -648,8 +663,7 @@ impl PhysicsWorld {
         // constraints. This guarantees correctness regardless of solver
         // iteration count and handles large-angle tilt where linearized
         // Jacobians become degenerate.
-        self.solver
-            .project_velocities(&mut self.bodies, dt);
+        self.solver.project_velocities(&mut self.bodies, dt);
 
         // Save pre-integration state for CCD
         let sleeping_snapshot = if self.config.sleep.enabled {

@@ -285,8 +285,11 @@ impl GraphicsPipeline {
 
         // Create render passes
         let renderpass = Self::create_render_pass(&device, config)?;
-        let transparent_renderpass =
-            Self::create_transparent_render_pass(&device, config.color_format, config.depth_format)?;
+        let transparent_renderpass = Self::create_transparent_render_pass(
+            &device,
+            config.color_format,
+            config.depth_format,
+        )?;
 
         // Create pipeline factory and stamp out standard variants
         let factory = PipelineFactory::new(Arc::clone(&device), config.extent)?;

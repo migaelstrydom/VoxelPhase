@@ -63,9 +63,7 @@ pub fn expand_constraints(
                 let Some(rigid_body_b) = bodies.get(body_b.0) else {
                     continue;
                 };
-                let body_a_pair = body_a.and_then(|ha| {
-                    bodies.get(ha.0).map(|ba| (ba, ha))
-                });
+                let body_a_pair = body_a.and_then(|ha| bodies.get(ha.0).map(|ba| (ba, ha)));
                 if body_a.is_some() && body_a_pair.is_none() {
                     continue;
                 }
@@ -96,9 +94,7 @@ pub fn expand_constraints(
                 let Some(rigid_body_b) = bodies.get(body_b.0) else {
                     continue;
                 };
-                let body_a_pair = body_a.and_then(|ha| {
-                    bodies.get(ha.0).map(|ba| (ba, ha))
-                });
+                let body_a_pair = body_a.and_then(|ha| bodies.get(ha.0).map(|ba| (ba, ha)));
                 if body_a.is_some() && body_a_pair.is_none() {
                     continue;
                 }
@@ -132,9 +128,7 @@ pub fn expand_constraints(
                 let Some(rigid_body_b) = bodies.get(body_b.0) else {
                     continue;
                 };
-                let body_a_pair = body_a.and_then(|ha| {
-                    bodies.get(ha.0).map(|ba| (ba, ha))
-                });
+                let body_a_pair = body_a.and_then(|ha| bodies.get(ha.0).map(|ba| (ba, ha)));
                 if body_a.is_some() && body_a_pair.is_none() {
                     continue;
                 }

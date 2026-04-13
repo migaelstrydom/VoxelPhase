@@ -80,9 +80,9 @@ impl Spawnable for MenhirDef {
     fn create_materials(&self, ctx: &mut MaterialCtx) -> EngineResult<Vec<MaterialId>> {
         let seed = rand::random::<u32>();
         let pixels = generate_stone_texture(seed);
-        let texture =
-            ctx.textures
-                .create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &pixels, true)?;
+        let texture = ctx
+            .textures
+            .create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &pixels, true)?;
         Ok(vec![ctx.materials.register(Material::textured(texture))])
     }
 
@@ -144,15 +144,13 @@ impl Spawnable for MenhirDef {
             let local_anchor = Vector3::new(0.0, -self.half_height, 0.0);
             let world_anchor = Point3::new(self.pos.0, surface_y - buried_depth, self.pos.1);
 
-            let fixed_handle = physics
-                .world
-                .create_constraint(ConstraintKind::world_fixed(
-                    body_handle,
-                    world_anchor,
-                    local_anchor,
-                    0.0,
-                    f32::MAX,
-                ));
+            let fixed_handle = physics.world.create_constraint(ConstraintKind::world_fixed(
+                body_handle,
+                world_anchor,
+                local_anchor,
+                0.0,
+                f32::MAX,
+            ));
 
             (body_handle, fixed_handle, fixed_handle)
         };
@@ -206,7 +204,11 @@ impl EggParams {
     /// Egg surface point at latitude `phi` and longitude `theta`.
     fn point(&self, phi: f32, theta: f32) -> Vector3<f32> {
         let r = self.radius_at(phi);
-        Vector3::new(r * theta.cos(), self.half_height * phi.sin(), r * theta.sin())
+        Vector3::new(
+            r * theta.cos(),
+            self.half_height * phi.sin(),
+            r * theta.sin(),
+        )
     }
 }
 

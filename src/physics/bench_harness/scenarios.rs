@@ -2347,9 +2347,8 @@ impl PhysicsBenchScenario for HingeSettlesUnderLoadScenario {
 
         let box_x = plank_he.x - box_he.x;
         let box_y = pivot_y + plank_he.y + box_he.y + 0.01;
-        let box_body = world.create_body(
-            RigidBodyDesc::dynamic().position(Point3::new(box_x, box_y, 0.0)),
-        );
+        let box_body =
+            world.create_body(RigidBodyDesc::dynamic().position(Point3::new(box_x, box_y, 0.0)));
         let box_volume = box_he.x * box_he.y * box_he.z * 8.0;
         let box_density = self.box_mass / box_volume;
         let _ = world.attach_collider(
@@ -2442,9 +2441,8 @@ impl PhysicsBenchScenario for HingeHoldsUnderSustainedForceScenario {
 
         let box_x = plank_he.x - box_he.x;
         let box_y = pivot_y + plank_he.y + box_he.y + 0.01;
-        let box_body = world.create_body(
-            RigidBodyDesc::dynamic().position(Point3::new(box_x, box_y, 0.0)),
-        );
+        let box_body =
+            world.create_body(RigidBodyDesc::dynamic().position(Point3::new(box_x, box_y, 0.0)));
         let box_volume = box_he.x * box_he.y * box_he.z * 8.0;
         let box_density = self.box_mass / box_volume;
         let _ = world.attach_collider(
@@ -2506,9 +2504,7 @@ impl PhysicsBenchScenario for HingeAxisNoDriftZeroGravityScenario {
 
     fn setup(&self, world: &mut PhysicsWorld) -> RigidBodyHandle {
         let pos = Point3::new(0.0, 2.0, 0.0);
-        let body = world.create_body(
-            RigidBodyDesc::dynamic().position(pos),
-        );
+        let body = world.create_body(RigidBodyDesc::dynamic().position(pos));
         let _ = world.attach_collider(
             body,
             ColliderDesc::box_shape(self.half_extents)

@@ -245,9 +245,7 @@ fn apply_ngs_correction(
                 // penetrations. Globally enabling angular contact correction is
                 // unstable for stacks (fights friction), so it's selective.
                 let use_angular = hinge_bodies.contains(&header.body_b.0)
-                    || header
-                        .body_a
-                        .map_or(false, |h| hinge_bodies.contains(&h.0));
+                    || header.body_a.map_or(false, |h| hinge_bodies.contains(&h.0));
 
                 let effective_mass = if use_angular {
                     let angular_effect_a = (inv_inertia_a * r_a_cross_n).cross(&r_a);

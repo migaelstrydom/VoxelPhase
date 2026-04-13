@@ -174,8 +174,16 @@ impl Spawnable for PendulumDef {
         let frame_world_pos = frame_base + com;
 
         let frame_model = multi_material_compound_cuboid_model(&[
-            (self.post_half_extents(), self.post_center_from_base() - com, frame_mat),
-            (self.arm_half_extents(), self.arm_center_from_base() - com, frame_mat),
+            (
+                self.post_half_extents(),
+                self.post_center_from_base() - com,
+                frame_mat,
+            ),
+            (
+                self.arm_half_extents(),
+                self.arm_center_from_base() - com,
+                frame_mat,
+            ),
         ]);
 
         let (frame_handle, frame_constraint) = {
@@ -205,15 +213,13 @@ impl Spawnable for PendulumDef {
                     .offset_translation(self.arm_center_from_base() - com),
             );
 
-            let constraint = physics
-                .world
-                .create_constraint(ConstraintKind::world_fixed(
-                    body,
-                    frame_world_pos,
-                    Vector3::zeros(),
-                    0.0,
-                    f32::MAX,
-                ));
+            let constraint = physics.world.create_constraint(ConstraintKind::world_fixed(
+                body,
+                frame_world_pos,
+                Vector3::zeros(),
+                0.0,
+                f32::MAX,
+            ));
 
             (body, constraint)
         };
@@ -246,12 +252,8 @@ impl Spawnable for PendulumDef {
         // it's close enough; at large angles the rope visually stretches
         // but the physics is still correct.
 
-        let ball_model = build_ball_with_rope_model(
-            self.ball_radius,
-            self.rope_length,
-            ball_mat,
-            rope_mat,
-        );
+        let ball_model =
+            build_ball_with_rope_model(self.ball_radius, self.rope_length, ball_mat, rope_mat);
 
         let (ball_handle, ball_constraint) = {
             let mut physics = world.write_resource::<PhysicsResource>();
@@ -335,8 +337,13 @@ fn build_ball_with_rope_model(
 
     let rope_start = Point3::new(0.0, radius, 0.0);
     let rope_end = Point3::new(0.0, rope_length, 0.0);
-    let (rope_verts, rope_indices) =
-        generate_cylinder(rope_start, rope_end, ROPE_RADIUS, ROPE_SEGMENTS, Colour::WHITE);
+    let (rope_verts, rope_indices) = generate_cylinder(
+        rope_start,
+        rope_end,
+        ROPE_RADIUS,
+        ROPE_SEGMENTS,
+        Colour::WHITE,
+    );
 
     let parts = vec![ModelPart::new(vec![
         MeshPrimitive {
@@ -369,15 +376,7 @@ fn generate_painted_wood(seed: u32, base_colour: Rgb) -> Vec<u8> {
             let u = x as f32 / size as f32;
             let v = y as f32 / size as f32;
 
-            let grain = fbm_2d_periodic(
-                u * 12.0,
-                v * 3.0,
-                2,
-                0.4,
-                2.0,
-                seed,
-                Some(12),
-            );
+            let grain = fbm_2d_periodic(u * 12.0, v * 3.0, 2, 0.4, 2.0, seed, Some(12));
             let colour = base_colour.lerp(dark, (grain * 0.5 + 0.5).clamp(0.0, 1.0) * 0.3);
             colour.write_rgba(&mut pixels);
         }
@@ -428,15 +427,7 @@ fn generate_beach_ball_texture(seed: u32) -> Vec<u8> {
             colour = colour.scale(0.7 + lat_factor * 0.3);
 
             // Faint surface noise for a painted look.
-            let noise = fbm_2d_periodic(
-                u * 8.0,
-                v * 8.0,
-                2,
-                0.3,
-                2.0,
-                seed,
-                Some(8),
-            );
+            let noise = fbm_2d_periodic(u * 8.0, v * 8.0, 2, 0.3, 2.0, seed, Some(8));
             colour = colour.scale(0.92 + noise * 0.08);
 
             colour.write_rgba(&mut pixels);

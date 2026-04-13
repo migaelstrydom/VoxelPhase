@@ -3,7 +3,7 @@
 use generational_arena::Arena;
 use nalgebra::Point3;
 use nalgebra::Vector3;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::body::RigidBody;
 use super::collider::Collider;
@@ -29,6 +29,8 @@ pub struct PhysicsDebugConfig {
     pub draw_sleeping: bool,
     /// Draw the terrain triangles returned by broadphase queries as transparent overlays.
     pub draw_broadphase_patches: bool,
+    /// Include sleeping bodies in broadphase patch overlays.
+    pub draw_broadphase_patches_sleeping: bool,
     /// Draw collider shapes as transparent overlays.
     pub draw_collider_shapes: bool,
 }
@@ -40,6 +42,7 @@ impl Default for PhysicsDebugConfig {
             draw_contact_raw_normals: false,
             draw_sleeping: false,
             draw_broadphase_patches: false,
+            draw_broadphase_patches_sleeping: false,
             draw_collider_shapes: false,
         }
     }
@@ -262,21 +265,32 @@ impl PhysicsDebugger {
     }
 
     /// Add sleep state debug overlays to the scene.
+    ///
+    /// Draws a transparent bounding sphere around each sleeping body so it
+    /// appears encased in a force-field.
     pub fn add_sleep_overlays(
         &self,
         bodies: &Arena<RigidBody>,
+        colliders: &Arena<Collider>,
         sleeping_handles: &[RigidBodyHandle],
         overlays: &mut DebugOverlays,
     ) {
         if !self.config.draw_sleeping {
             return;
         }
-        let colour = Colour::new(0.6, 0.65, 1.0, 1.0);
+        let colour = Colour::new(0.5, 0.6, 1.0, 0.15);
         for handle in sleeping_handles {
             if let Some(body) = bodies.get(handle.0) {
-                let pos = body.position();
-                let marker_pos = Point3::new(pos.x, pos.y + 0.6, pos.z);
-                overlays.add_sphere(marker_pos, 0.08, colour);
+                let mut radius = 0.0f32;
+                for collider_handle in body.colliders() {
+                    if let Some(collider) = colliders.get(collider_handle.0) {
+                        let offset = collider.offset().translation.vector.norm();
+                        radius = radius.max(collider.shape().bounding_radius() + offset);
+                    }
+                }
+                if radius > 0.0 {
+                    overlays.add_sphere(body.position(), radius * 1.15, colour);
+                }
             }
         }
     }
@@ -292,14 +306,25 @@ impl PhysicsDebugger {
         colliders: &Arena<Collider>,
         static_geometry: &dyn StaticGeometry,
         contact_margin: f32,
+        sleeping: &[RigidBodyHandle],
         overlays: &mut DebugOverlays,
     ) {
         if !self.config.draw_broadphase_patches {
             return;
         }
 
-        for (_, body) in bodies.iter() {
+        let sleeping_set: FxHashSet<RigidBodyHandle> =
+            if self.config.draw_broadphase_patches_sleeping {
+                FxHashSet::default()
+            } else {
+                sleeping.iter().copied().collect()
+            };
+
+        for (idx, body) in bodies.iter() {
             if body.is_static() {
+                continue;
+            }
+            if sleeping_set.contains(&RigidBodyHandle(idx)) {
                 continue;
             }
 

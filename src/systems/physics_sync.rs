@@ -281,9 +281,11 @@ impl<'a> System<'a> for PhysicsSyncSystem {
             &mut debug_overlays,
             &mut debug_lines,
         );
+        let sleeping_bodies = physics.world.sleeping_bodies();
         physics.world.debugger().add_sleep_overlays(
             physics.world.bodies(),
-            &physics.world.sleeping_bodies(),
+            physics.world.colliders_arena(),
+            &sleeping_bodies,
             &mut debug_overlays,
         );
         if let Some(ref terrain) = terrain_opt {
@@ -292,6 +294,7 @@ impl<'a> System<'a> for PhysicsSyncSystem {
                 physics.world.colliders_arena(),
                 &**terrain,
                 physics.world.config().contact_margin,
+                &sleeping_bodies,
                 &mut debug_overlays,
             );
         }

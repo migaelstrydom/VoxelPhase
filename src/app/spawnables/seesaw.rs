@@ -222,17 +222,15 @@ impl Spawnable for SeesawDef {
             );
 
             // Hinge at beam center — tilts freely around Z only.
-            let anchor = physics
-                .world
-                .create_constraint(ConstraintKind::world_hinge(
-                    body,
-                    beam_pos,
-                    Vector3::zeros(),
-                    UnitVector3::new_normalize(Vector3::z()),
-                    &UnitQuaternion::identity(),
-                    0.0,
-                    f32::MAX,
-                ));
+            let anchor = physics.world.create_constraint(ConstraintKind::world_hinge(
+                body,
+                beam_pos,
+                Vector3::zeros(),
+                UnitVector3::new_normalize(Vector3::z()),
+                &UnitQuaternion::identity(),
+                0.0,
+                f32::MAX,
+            ));
 
             // Dummy KeepUpright handle — we need one for TerrainAnchored but the
             // seesaw must tilt freely, so we don't create one. Use the anchor
@@ -298,15 +296,13 @@ impl Spawnable for SeesawDef {
 
             // Single Fixed constraint replaces AnchorPoint + KeepUpright.
             // Locks all 6 DOF; tilt rows get HardProjection (compliance=0).
-            let fixed = physics
-                .world
-                .create_constraint(ConstraintKind::world_fixed(
-                    body,
-                    fulcrum_pos,
-                    Vector3::zeros(),
-                    0.0,
-                    f32::MAX,
-                ));
+            let fixed = physics.world.create_constraint(ConstraintKind::world_fixed(
+                body,
+                fulcrum_pos,
+                Vector3::zeros(),
+                0.0,
+                f32::MAX,
+            ));
 
             (body, fixed)
         };

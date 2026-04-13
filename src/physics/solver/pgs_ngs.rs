@@ -255,9 +255,7 @@ impl ConstraintSolver for PgsNgsSolver {
         // constraint's target direction, so cross(perp1, perp2) recovers it.
         let mut groups: SmallVec<[(Index, SmallVec<[Vector3<f32>; 2]>); 4]> = SmallVec::new();
         for row in &self.cached_constraint_rows {
-            if row.enforcement != Enforcement::HardProjection
-                || row.row_kind != RowKind::Angular
-            {
+            if row.enforcement != Enforcement::HardProjection || row.row_kind != RowKind::Angular {
                 continue;
             }
             let jac = if row.body_a.is_some() {
@@ -265,7 +263,10 @@ impl ConstraintSolver for PgsNgsSolver {
             } else {
                 row.ang_jac_b
             };
-            if let Some(entry) = groups.iter_mut().find(|(idx, _)| *idx == row.constraint_index) {
+            if let Some(entry) = groups
+                .iter_mut()
+                .find(|(idx, _)| *idx == row.constraint_index)
+            {
                 entry.1.push(jac);
             } else {
                 let body_handle = row.body_a.or(row.body_b);
@@ -301,7 +302,10 @@ impl ConstraintSolver for PgsNgsSolver {
             let body_handle = self
                 .cached_constraint_rows
                 .iter()
-                .find(|r| r.constraint_index == *constraint_index && r.enforcement == Enforcement::HardProjection)
+                .find(|r| {
+                    r.constraint_index == *constraint_index
+                        && r.enforcement == Enforcement::HardProjection
+                })
                 .and_then(|r| r.body_a.or(r.body_b));
 
             let Some(handle) = body_handle else {

@@ -40,7 +40,9 @@ use voxel_phase::physics::stepping::FixedTimestep;
 use voxel_phase::physics::{ColliderShape, PhysicsWorld, StaticGeometry};
 use voxel_phase::rendering::camera::Camera;
 use voxel_phase::rendering::colour::Colour;
-use voxel_phase::rendering::debug_render::{render_debug_overlays_opaque, render_debug_overlays_transparent};
+use voxel_phase::rendering::debug_render::{
+    render_debug_overlays_opaque, render_debug_overlays_transparent,
+};
 use voxel_phase::rendering::material::MaterialManagerBuilder;
 use voxel_phase::rendering::renderer::Renderer;
 use voxel_phase::resources::manager::ResourceManager;

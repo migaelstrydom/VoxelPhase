@@ -6,7 +6,9 @@ use crate::debug::{DebugLines, DebugOverlays};
 use crate::fire::components::OnFire;
 use crate::model::Transform;
 use crate::particles::ParticlePool;
-use crate::rendering::debug_render::{render_debug_overlays_opaque, render_debug_overlays_transparent};
+use crate::rendering::debug_render::{
+    render_debug_overlays_opaque, render_debug_overlays_transparent,
+};
 use crate::rendering::material::MaterialManager;
 use crate::rendering::renderer::Renderer;
 use crate::resources::textures::TextureManager;
@@ -302,7 +304,10 @@ impl<'a> System<'a> for RenderSystem {
                     &material_manager,
                     &texture_manager,
                 ) {
-                    log::error!("RenderSystem: Failed to draw transparent debug overlays: {}", e);
+                    log::error!(
+                        "RenderSystem: Failed to draw transparent debug overlays: {}",
+                        e
+                    );
                 }
 
                 // Render particles (after models, before overlay)

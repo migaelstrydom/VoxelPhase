@@ -363,8 +363,14 @@ impl Renderer {
         texture_manager: &TextureManager,
     ) -> EngineResult<()> {
         self.draw_mesh_internal(
-            cb, vertices, indices, model, texture, texture_manager,
-            self.pipeline.opaque, true,
+            cb,
+            vertices,
+            indices,
+            model,
+            texture,
+            texture_manager,
+            self.pipeline.opaque,
+            true,
         )
     }
 

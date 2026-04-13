@@ -135,8 +135,7 @@ fn tessellate(shape: &DebugShape) -> (Vec<Vertex>, Vec<u32>, Matrix4<f32>) {
             colour,
         } => {
             let (vertices, indices) = generate_capsule(*half_height, *radius, 12, 6, *colour);
-            let transform =
-                Matrix4::new_translation(&center.coords) * rotation.to_homogeneous();
+            let transform = Matrix4::new_translation(&center.coords) * rotation.to_homogeneous();
             (vertices, indices, transform)
         }
     }

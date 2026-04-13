@@ -78,11 +78,7 @@ pub fn lock_linear_axis(
     } else {
         zeros
     };
-    let lin_jac_b = if side_b.handle.is_some() {
-        axis
-    } else {
-        zeros
-    };
+    let lin_jac_b = if side_b.handle.is_some() { axis } else { zeros };
 
     ConstraintRow {
         body_a: side_a.handle,

@@ -10,9 +10,8 @@ use crate::app::spawnables::{
     BeachBallDef, BoxDef, BoxWallDef, CapsuleDef, CrateDef, DodecahedronDef, DominoDef,
     FencePostDef, HeavyCrateDef, HexPrismDef, HoneycombWallDef, HouseDef, IcosahedronDef, JengaDef,
     MenhirDef, OctahedronDef, PendulumDef, PlankBridgeDef, PlankDef, PlayWheelDef, PyramidDef,
-    SeesawDef, Spawnable,
-    StackDef, StackItemDef, TableDef, TempleDef, TetrahedronDef, TowerDef, TrampolineDef,
-    TrilithonDef, VoussoirArchDef,
+    SeesawDef, Spawnable, StackDef, StackItemDef, TableDef, TempleDef, TetrahedronDef, TowerDef,
+    TrampolineDef, TrilithonDef, VoussoirArchDef,
 };
 
 /// Top-level level description.

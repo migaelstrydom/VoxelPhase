@@ -77,6 +77,12 @@ impl SleepManager {
         self.sleeping.clone()
     }
 
+    /// Immediately put a body to sleep.
+    pub fn sleep_body(&mut self, handle: RigidBodyHandle) {
+        self.sleeping.insert(handle);
+        self.sleep_tracker.clear_body(handle);
+    }
+
     pub fn wake_body(&mut self, handle: RigidBodyHandle) {
         self.sleeping.remove(&handle);
         self.sleep_tracker.clear_body(handle);

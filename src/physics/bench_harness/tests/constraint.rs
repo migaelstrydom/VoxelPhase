@@ -333,7 +333,10 @@ fn hinge_angular_ngs_no_oscillation() {
             assert!(
                 ratio <= 1.05,
                 "peak {} ({:.6}) > 1.05 * peak {} ({:.6}): ratio={ratio:.4} — oscillation growing",
-                i, peaks[i].1, i - 1, peaks[i - 1].1,
+                i,
+                peaks[i].1,
+                i - 1,
+                peaks[i - 1].1,
             );
         }
     }
@@ -485,11 +488,7 @@ fn breakable_fixed_joint_breaks_cleanly() {
     let sphere_mass = 20.0f32;
     let sphere_volume = (4.0 / 3.0) * std::f32::consts::PI * sphere_radius.powi(3);
     let sphere_density = sphere_mass / sphere_volume;
-    let sphere_pos = Point3::new(
-        0.3,
-        box_b_pos.y + box_he.y + sphere_radius + 0.5,
-        0.0,
-    );
+    let sphere_pos = Point3::new(0.3, box_b_pos.y + box_he.y + sphere_radius + 0.5, 0.0);
 
     let sphere = world.create_body(
         RigidBodyDesc::dynamic()
@@ -529,21 +528,16 @@ fn breakable_fixed_joint_breaks_cleanly() {
         }
     }
 
-    assert!(broken, "Fixed joint should have broken under the sphere impact");
+    assert!(
+        broken,
+        "Fixed joint should have broken under the sphere impact"
+    );
 
     eprintln!("breakable_fixed: broke at frame {break_frame}");
 
     // Both boxes should have bounded speeds (no explosion).
-    let speed_a = world
-        .body(box_a)
-        .unwrap()
-        .linear_velocity()
-        .magnitude();
-    let speed_b = world
-        .body(box_b)
-        .unwrap()
-        .linear_velocity()
-        .magnitude();
+    let speed_a = world.body(box_a).unwrap().linear_velocity().magnitude();
+    let speed_b = world.body(box_b).unwrap().linear_velocity().magnitude();
     eprintln!("breakable_fixed: speed_a={speed_a:.4}, speed_b={speed_b:.4}");
 
     assert!(

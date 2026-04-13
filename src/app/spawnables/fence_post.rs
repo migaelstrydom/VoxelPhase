@@ -155,15 +155,13 @@ impl Spawnable for FencePostDef {
             let local_anchor = Vector3::new(0.0, -self.half_height, 0.0);
             let world_anchor = Point3::new(self.pos.0, surface_y - buried_depth, self.pos.1);
 
-            let fixed_handle = physics
-                .world
-                .create_constraint(ConstraintKind::world_fixed(
-                    body_handle,
-                    world_anchor,
-                    local_anchor,
-                    0.0,
-                    f32::MAX,
-                ));
+            let fixed_handle = physics.world.create_constraint(ConstraintKind::world_fixed(
+                body_handle,
+                world_anchor,
+                local_anchor,
+                0.0,
+                f32::MAX,
+            ));
 
             (body_handle, fixed_handle, fixed_handle)
         };

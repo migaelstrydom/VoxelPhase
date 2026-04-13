@@ -1582,6 +1582,10 @@ mod tests {
         // in octant 1 (x=5..6, y=0..1) should find it via the neighbor ref.
         let query = AABB::new(Point3::new(5.0, 0.0, 0.5), Point3::new(7.0, 2.0, 1.5));
         let results = octree.query_aabb(&query);
-        assert_eq!(results.len(), 1, "Should find the triangle when query overlaps its AABB");
+        assert_eq!(
+            results.len(),
+            1,
+            "Should find the triangle when query overlaps its AABB"
+        );
     }
 }

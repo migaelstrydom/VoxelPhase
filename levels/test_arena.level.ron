@@ -17,7 +17,7 @@ Level(
         ],
     ),
 
-    player_spawn: (3.0, 2.0, 0.0),
+    player_spawn: (3.0, 1.0, 0.0),
 
     water: Some(WaterConfig(
         ocean_level: None,
