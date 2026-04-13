@@ -1,7 +1,8 @@
 //! Debug overlay system for displaying runtime information.
 //!
-//! Provides an ECS resource for accumulating debug key-value pairs that are
-//! rendered as text overlays. Lines are sorted by key for stable positioning.
+//! Provides ECS resources for accumulating debug key-value pairs (rendered as
+//! text overlays), debug log entries (printed to stdout on F3), and debug shapes
+//! (rendered in the 3D scene).
 
 use std::collections::BTreeMap;
 
@@ -97,18 +98,76 @@ impl DebugLog {
     }
 }
 
+/// A geometric primitive for debug visualisation.
+///
+/// Shapes are stored with minimal data at creation time. Tessellation into
+/// renderable vertices is deferred to draw time, allowing frustum culling
+/// to skip off-screen shapes before doing any mesh generation.
+pub enum DebugShape {
+    Sphere {
+        center: Point3<f32>,
+        radius: f32,
+        colour: Colour,
+    },
+    Line {
+        start: Point3<f32>,
+        end: Point3<f32>,
+        radius: f32,
+        colour: Colour,
+    },
+    Triangle {
+        vertices: [Point3<f32>; 3],
+        colour: Colour,
+    },
+}
+
+impl DebugShape {
+    /// Bounding sphere for frustum culling.
+    ///
+    /// Returns (centre, radius) enclosing the entire shape.
+    pub fn bounding_sphere(&self) -> (Point3<f32>, f32) {
+        match self {
+            DebugShape::Sphere { center, radius, .. } => (*center, *radius),
+            DebugShape::Line {
+                start, end, radius, ..
+            } => {
+                let mid = nalgebra::center(start, end);
+                let half_len = nalgebra::distance(start, end) * 0.5;
+                (mid, half_len + radius)
+            }
+            DebugShape::Triangle { vertices, .. } => {
+                let centroid = Point3::from(
+                    (vertices[0].coords + vertices[1].coords + vertices[2].coords) / 3.0,
+                );
+                let max_dist = vertices
+                    .iter()
+                    .map(|v| nalgebra::distance(&centroid, v))
+                    .fold(0.0f32, f32::max);
+                (centroid, max_dist)
+            }
+        }
+    }
+}
+
 /// Debug overlay shapes to render in 3D.
+///
+/// Shapes are split into opaque and transparent buckets, which are drawn
+/// during the opaque and transparent render passes respectively. All shapes
+/// are stored as lightweight [`DebugShape`] descriptors; mesh tessellation
+/// is deferred to render time.
 #[derive(Default)]
 pub struct DebugOverlays {
-    spheres: Vec<DebugSphere>,
-    lines: Vec<DebugLine>,
+    /// Shapes drawn during the opaque render pass.
+    opaque_shapes: Vec<DebugShape>,
+    /// Shapes drawn during the transparent render pass (alpha-blended).
+    transparent_shapes: Vec<DebugShape>,
 }
 
 #[allow(dead_code)]
 impl DebugOverlays {
     pub fn add_sphere(&mut self, position: Point3<f32>, radius: f32, colour: Colour) {
-        self.spheres.push(DebugSphere {
-            position,
+        self.transparent_shapes.push(DebugShape::Sphere {
+            center: position,
             radius,
             colour,
         });
@@ -129,7 +188,7 @@ impl DebugOverlays {
         radius: f32,
         colour: Colour,
     ) {
-        self.lines.push(DebugLine {
+        self.transparent_shapes.push(DebugShape::Line {
             start,
             end,
             radius,
@@ -137,33 +196,27 @@ impl DebugOverlays {
         });
     }
 
-    pub fn spheres(&self) -> &[DebugSphere] {
-        &self.spheres
+    /// Add a transparent triangle overlay.
+    ///
+    /// Triangles are rendered with alpha blending during the transparent pass,
+    /// making them useful for visualising mesh patches, collision geometry, etc.
+    pub fn add_triangle(&mut self, vertices: [Point3<f32>; 3], colour: Colour) {
+        self.transparent_shapes
+            .push(DebugShape::Triangle { vertices, colour });
     }
 
-    pub fn lines(&self) -> &[DebugLine] {
-        &self.lines
+    /// Shapes to draw during the opaque render pass.
+    pub fn opaque_shapes(&self) -> &[DebugShape] {
+        &self.opaque_shapes
+    }
+
+    /// Shapes to draw during the transparent render pass.
+    pub fn transparent_shapes(&self) -> &[DebugShape] {
+        &self.transparent_shapes
     }
 
     pub fn clear(&mut self) {
-        self.spheres.clear();
-        self.lines.clear();
+        self.opaque_shapes.clear();
+        self.transparent_shapes.clear();
     }
-}
-
-#[derive(Clone, Copy, Debug)]
-#[allow(dead_code)]
-pub struct DebugSphere {
-    pub position: Point3<f32>,
-    pub radius: f32,
-    pub colour: Colour,
-}
-
-#[derive(Clone, Copy, Debug)]
-#[allow(dead_code)]
-pub struct DebugLine {
-    pub start: Point3<f32>,
-    pub end: Point3<f32>,
-    pub radius: f32,
-    pub colour: Colour,
 }

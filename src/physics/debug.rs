@@ -28,7 +28,7 @@ pub struct PhysicsDebugConfig {
 impl Default for PhysicsDebugConfig {
     fn default() -> Self {
         Self {
-            draw_contacts: false,
+            draw_contacts: true,
             draw_contact_raw_normals: false,
             draw_sleeping: false,
         }
@@ -215,8 +215,8 @@ impl PhysicsDebugger {
 
         for contact in events {
             let colour = match contact.source {
-                ContactSource::Narrowphase => Colour::RED,
-                ContactSource::Ccd => Colour::BLUE,
+                ContactSource::Narrowphase => Colour::RED.with_alpha(0.5),
+                ContactSource::Ccd => Colour::BLUE.with_alpha(0.5),
             };
             overlays.add_sphere(contact.point, 0.06, colour);
             if contact.normal.magnitude_squared() > 1e-8 {

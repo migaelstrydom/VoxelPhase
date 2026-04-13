@@ -57,6 +57,16 @@ impl Colour {
         Self { r, g, b, a: 1.0 }
     }
 
+    /// Return a copy with a different alpha value.
+    pub const fn with_alpha(self, a: f32) -> Self {
+        Self {
+            r: self.r,
+            g: self.g,
+            b: self.b,
+            a,
+        }
+    }
+
     /// Convert to a Vector4 for shader upload.
     pub fn to_vec4(self) -> Vector4<f32> {
         Vector4::new(self.r, self.g, self.b, self.a)

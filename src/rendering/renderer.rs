@@ -294,8 +294,8 @@ impl Renderer {
         Ok(())
     }
 
-    /// Draw a procedural mesh (like a skeleton character or terrain chunk) using vertex colors.
-    /// Uses a default white texture so vertex colors show through.
+    /// Draw a procedural mesh (like a skeleton character or terrain chunk) using vertex colours.
+    /// Uses a default white texture so vertex colours show through.
     pub fn draw_procedural_mesh(
         &mut self,
         cb: vk::CommandBuffer,
@@ -309,15 +309,44 @@ impl Renderer {
             return Ok(());
         }
 
-        // Use the fallback white texture so vertex colors show
         let white_texture = material_manager.fallback_texture();
-        self.draw_mesh_with_texture(
+        self.draw_mesh_internal(
             cb,
             vertices,
             indices,
             world_transform,
             white_texture,
             texture_manager,
+            self.pipeline.opaque,
+            true,
+        )
+    }
+
+    /// Draw a procedural mesh using the transparent (alpha-blended) pipeline.
+    /// No wireframe overlay is applied.
+    pub fn draw_procedural_mesh_transparent(
+        &mut self,
+        cb: vk::CommandBuffer,
+        vertices: &[Vertex],
+        indices: &[u32],
+        world_transform: &Matrix4<f32>,
+        material_manager: &MaterialManager,
+        texture_manager: &TextureManager,
+    ) -> EngineResult<()> {
+        if vertices.is_empty() || indices.is_empty() {
+            return Ok(());
+        }
+
+        let white_texture = material_manager.fallback_texture();
+        self.draw_mesh_internal(
+            cb,
+            vertices,
+            indices,
+            world_transform,
+            white_texture,
+            texture_manager,
+            self.pipeline.transparent,
+            false,
         )
     }
 
@@ -333,6 +362,24 @@ impl Renderer {
         texture: &TextureHandle,
         texture_manager: &TextureManager,
     ) -> EngineResult<()> {
+        self.draw_mesh_internal(
+            cb, vertices, indices, model, texture, texture_manager,
+            self.pipeline.opaque, true,
+        )
+    }
+
+    /// Record a mesh draw call with the specified pipeline.
+    fn draw_mesh_internal(
+        &mut self,
+        cb: vk::CommandBuffer,
+        vertices: &[Vertex],
+        indices: &[u32],
+        model: &Matrix4<f32>,
+        texture: &TextureHandle,
+        texture_manager: &TextureManager,
+        pipeline: vk::Pipeline,
+        wireframe_overlay: bool,
+    ) -> EngineResult<()> {
         if vertices.is_empty() || indices.is_empty() {
             return Ok(());
         }
@@ -344,7 +391,7 @@ impl Renderer {
             self.vulkan_context.device().cmd_bind_pipeline(
                 cb,
                 vk::PipelineBindPoint::GRAPHICS,
-                self.pipeline.pipeline,
+                pipeline,
             );
 
             // Set dynamic state
@@ -435,12 +482,12 @@ impl Renderer {
                 0,
             );
 
-            // Wireframe backface pass: re-draw with wireframe pipeline and solid color
-            if self.debug_wireframe_backfaces {
+            // Wireframe backface pass: re-draw with wireframe pipeline and solid colour
+            if wireframe_overlay && self.debug_wireframe_backfaces {
                 self.vulkan_context.device().cmd_bind_pipeline(
                     cb,
                     vk::PipelineBindPoint::GRAPHICS,
-                    self.pipeline.wireframe_backface_pipeline,
+                    self.pipeline.wireframe_backface,
                 );
 
                 let color_bytes: &[u8] = std::slice::from_raw_parts(

@@ -6,7 +6,7 @@ use crate::debug::{DebugLines, DebugOverlays};
 use crate::fire::components::OnFire;
 use crate::model::Transform;
 use crate::particles::ParticlePool;
-use crate::rendering::debug_render::render_debug_overlays;
+use crate::rendering::debug_render::{render_debug_overlays_opaque, render_debug_overlays_transparent};
 use crate::rendering::material::MaterialManager;
 use crate::rendering::renderer::Renderer;
 use crate::resources::textures::TextureManager;
@@ -248,8 +248,8 @@ impl<'a> System<'a> for RenderSystem {
                     }
                 }
 
-                // Render debug overlay shapes (spheres, lines)
-                if let Err(e) = render_debug_overlays(
+                // Render opaque debug overlay shapes (spheres, lines)
+                if let Err(e) = render_debug_overlays_opaque(
                     &mut renderer,
                     draw_cb,
                     &debug_overlays,
@@ -292,6 +292,17 @@ impl<'a> System<'a> for RenderSystem {
                         camera_data.position.z,
                     );
                     renderer.render_fire(draw_cb, &view_matrix, &proj_matrix, &camera_pos);
+                }
+
+                // Render transparent debug overlay shapes (triangles)
+                if let Err(e) = render_debug_overlays_transparent(
+                    &mut renderer,
+                    draw_cb,
+                    &debug_overlays,
+                    &material_manager,
+                    &texture_manager,
+                ) {
+                    log::error!("RenderSystem: Failed to draw transparent debug overlays: {}", e);
                 }
 
                 // Render particles (after models, before overlay)
