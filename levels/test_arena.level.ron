@@ -14,6 +14,16 @@ Level(
         features: [
             //TerrainRoughness(frequency: 0.1, amplitude: 3.0, octaves: 3, seed: 42),
             Crater(center: (-10.0, -1.0), radius: 20.0, depth: 5.0),
+            Cliff(
+                from: (-40.0, -60.0),
+                to: (40.0, -60.0),
+                low_height: 0.0,
+                high_height: 8.0,
+                high_side: (0.0, -1.0),
+                steepness: 3.0,
+                end_falloff: 0.0,
+                roughness: 5.0,
+            ),
         ],
         volumes: [
             Caves(
@@ -37,6 +47,15 @@ Level(
                     (depth: 999.0, material: Slate),
                 ],
                 floor_bias: 0.15,
+            ),
+            Overhang(
+                from: (-30.0, -60.0),
+                to: (30.0, -60.0),
+                height: 8.0,
+                depth: 6.0,
+                thickness: 3.0,
+                direction: (0.0, 1.0),
+                noise: 1.5,
             ),
         ],
     ),

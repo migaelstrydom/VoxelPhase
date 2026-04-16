@@ -169,6 +169,77 @@ fn contribute(feature: &TerrainFeature, x: f32, z: f32, current_h: f32) -> f32 {
             // fbm_2d_periodic returns [0, 1]; centre around 0
             (n - 0.5) * 2.0 * amplitude
         }
+
+        TerrainFeature::Cliff {
+            from: (fx, fz),
+            to: (tx, tz),
+            low_height,
+            high_height,
+            high_side: (hx, hz),
+            steepness,
+            end_falloff,
+            roughness,
+            roughness_seed,
+        } => {
+            // Signed distance from the cliff edge line: positive on the
+            // high_side, negative on the low side.
+            let signed_dist = signed_dist_to_line(x, z, fx, fz, tx, tz, hx, hz);
+
+            // Sigmoid transition: maps signed distance to [0, 1] where
+            // 0 = fully low side, 1 = fully high side.
+            let t = sigmoid(signed_dist * steepness);
+
+            // Fade the cliff effect beyond the segment endpoints.
+            let end_factor = if end_falloff > 0.0 {
+                let edge_dx = tx - fx;
+                let edge_dz = tz - fz;
+                let len_sq = edge_dx * edge_dx + edge_dz * edge_dz;
+                if len_sq < 1e-10 {
+                    1.0
+                } else {
+                    // Unclamped parameter along the edge
+                    let raw_t = ((x - fx) * edge_dx + (z - fz) * edge_dz) / len_sq;
+                    if raw_t >= 0.0 && raw_t <= 1.0 {
+                        1.0
+                    } else {
+                        let edge_len = len_sq.sqrt();
+                        let overshoot = if raw_t < 0.0 {
+                            -raw_t * edge_len
+                        } else {
+                            (raw_t - 1.0) * edge_len
+                        };
+                        if overshoot >= end_falloff {
+                            0.0
+                        } else {
+                            let ft = overshoot / end_falloff;
+                            (1.0 + (ft * std::f32::consts::PI).cos()) * 0.5
+                        }
+                    }
+                }
+            } else {
+                1.0
+            };
+
+            if end_factor < 1e-6 {
+                return 0.0;
+            }
+
+            // Noise displacement localised to the cliff face.
+            // 4*t*(1-t) peaks at 1.0 at the transition midpoint and
+            // falls to 0.0 on both flat sides.
+            let noise_offset = if roughness > 0.0 {
+                let face_factor = 4.0 * t * (1.0 - t);
+                let n = fbm_2d_periodic(
+                    x * 0.3, z * 0.3, 3, 0.5, 2.0, roughness_seed, None,
+                );
+                (n - 0.5) * roughness * face_factor
+            } else {
+                0.0
+            };
+
+            let target = low_height + (high_height - low_height) * t + noise_offset;
+            (target - current_h) * end_factor
+        }
     }
 }
 
@@ -254,6 +325,22 @@ fn apply_volume(
                 floor_bias,
                 bounds,
                 step,
+            );
+        }
+
+        VolumeFeature::Overhang {
+            from: (fx, fz),
+            to: (tx, tz),
+            height,
+            depth,
+            thickness,
+            direction: (dx, dz),
+            noise,
+            noise_seed,
+        } => {
+            apply_overhang(
+                svo, fx, fz, tx, tz, height, depth, thickness, dx, dz, noise, noise_seed,
+                layers, durability, bounds, step,
             );
         }
     }
@@ -530,6 +617,123 @@ fn apply_arch(
     }
 }
 
+/// Solid rock lip extending horizontally from a cliff edge.
+///
+/// The lip is thickest at the cliff edge and tapers linearly to zero at
+/// the outer extent (`depth`). Noise displaces the underside for an
+/// organic, weathered look.
+#[allow(clippy::too_many_arguments)]
+fn apply_overhang(
+    svo: &mut SparseVoxelOctree,
+    fx: f32,
+    fz: f32,
+    tx: f32,
+    tz: f32,
+    height: f32,
+    depth: f32,
+    thickness: f32,
+    dx: f32,
+    dz: f32,
+    noise: f32,
+    noise_seed: u32,
+    layers: &[MaterialLayer],
+    durability: &DurabilityConfig,
+    bounds: &AABB,
+    step: f32,
+) {
+    // Normalise the outward direction
+    let dir_len = (dx * dx + dz * dz).sqrt();
+    if dir_len < 1e-6 {
+        return;
+    }
+    let ndx = dx / dir_len;
+    let ndz = dz / dir_len;
+
+    // Edge direction (along the cliff line)
+    let edx = tx - fx;
+    let edz = tz - fz;
+    let edge_len = (edx * edx + edz * edz).sqrt();
+    if edge_len < 1e-6 {
+        return;
+    }
+
+    // Bounding box of the overhang volume
+    let corners_x = [fx, tx, fx + ndx * depth, tx + ndx * depth];
+    let corners_z = [fz, tz, fz + ndz * depth, tz + ndz * depth];
+    let bb_min_x = corners_x.iter().copied().reduce(f32::min).unwrap() - step;
+    let bb_max_x = corners_x.iter().copied().reduce(f32::max).unwrap() + step;
+    let bb_min_z = corners_z.iter().copied().reduce(f32::min).unwrap() - step;
+    let bb_max_z = corners_z.iter().copied().reduce(f32::max).unwrap() + step;
+    let bb_min_y = height - thickness - noise;
+    let bb_max_y = height + step;
+
+    let min_x = bb_min_x.max(bounds.min.x);
+    let max_x = bb_max_x.min(bounds.max.x);
+    let min_z = bb_min_z.max(bounds.min.z);
+    let max_z = bb_max_z.min(bounds.max.z);
+    let min_y = bb_min_y.max(bounds.min.y);
+    let max_y = bb_max_y.min(bounds.max.y);
+
+    let mut x = min_x;
+    while x < max_x {
+        let mut z = min_z;
+        while z < max_z {
+            // Project (x,z) onto the cliff edge to get the "along" parameter
+            // and the perpendicular outward distance.
+            let (along_t, _perp_to_edge) = point_to_segment_projection(x, z, fx, fz, tx, tz);
+            if along_t < 0.0 || along_t > 1.0 {
+                z += step;
+                continue;
+            }
+
+            // Closest point on the edge
+            let ex = fx + along_t * edx;
+            let ez = fz + along_t * edz;
+
+            // Outward distance from the edge in the lip direction
+            let rel_x = x - ex;
+            let rel_z = z - ez;
+            let outward = rel_x * ndx + rel_z * ndz;
+
+            if outward < 0.0 || outward > depth {
+                z += step;
+                continue;
+            }
+
+            // Taper: full thickness at the edge, zero at the outer extent
+            let taper_t = 1.0 - outward / depth;
+            let local_thickness = thickness * taper_t;
+
+            // Noise displacement on the underside
+            let underside_offset = if noise > 0.0 {
+                let n = fbm_2d_periodic(
+                    x * 0.5, z * 0.5, 3, 0.5, 2.0, noise_seed, None,
+                );
+                (n - 0.5) * noise * 2.0 * taper_t
+            } else {
+                0.0
+            };
+
+            let top_y = height;
+            let bottom_y = height - local_thickness + underside_offset;
+
+            let mut y = min_y;
+            while y < max_y {
+                if y >= bottom_y && y <= top_y {
+                    let depth_in_lip = top_y - y;
+                    let material = material_at_depth(depth_in_lip, layers);
+                    let hp = durability.health_at(y, top_y, bounds.min.y);
+                    svo.set(Point3::new(x, y, z), Voxel::solid(material, hp));
+                }
+                y += step;
+            }
+
+            z += step;
+        }
+        x += step;
+    }
+}
+
 /// 3D noise-driven cave carving with depth-dependent threshold.
 ///
 /// For each solid voxel, computes its depth below the heightfield surface,
@@ -788,6 +992,42 @@ fn to_voxel_material(id: VoxelMaterialId) -> VoxelMaterial {
 // ---------------------------------------------------------------------------
 // Geometry helpers
 // ---------------------------------------------------------------------------
+
+/// Signed perpendicular distance from point (px, pz) to the infinite line
+/// through (ax, az)→(bx, bz). Positive when the point is on the same side
+/// as the `high_side` direction (hx, hz).
+fn signed_dist_to_line(
+    px: f32,
+    pz: f32,
+    ax: f32,
+    az: f32,
+    bx: f32,
+    bz: f32,
+    hx: f32,
+    hz: f32,
+) -> f32 {
+    let edx = bx - ax;
+    let edz = bz - az;
+    let len = (edx * edx + edz * edz).sqrt();
+    if len < 1e-10 {
+        return 0.0;
+    }
+    // Outward normal of the edge (perpendicular in 2D)
+    let nx = -edz / len;
+    let nz = edx / len;
+    // Flip so the normal points toward the high side
+    let dot_high = nx * hx + nz * hz;
+    let sign = if dot_high >= 0.0 { 1.0 } else { -1.0 };
+    let nx = nx * sign;
+    let nz = nz * sign;
+    // Signed distance: positive on high side
+    (px - ax) * nx + (pz - az) * nz
+}
+
+/// Sigmoid function mapping any real value to (0, 1).
+fn sigmoid(x: f32) -> f32 {
+    1.0 / (1.0 + (-x).exp())
+}
 
 /// Shortest distance from point (px, pz) to line segment (ax, az)→(bx, bz).
 fn point_to_segment_dist(px: f32, pz: f32, ax: f32, az: f32, bx: f32, bz: f32) -> f32 {

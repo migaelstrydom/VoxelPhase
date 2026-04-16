@@ -117,6 +117,42 @@ pub enum TerrainFeature {
         octaves: u32,
         seed: u32,
     },
+    /// Sharp height transition along a line segment, creating a cliff face.
+    ///
+    /// Terrain on the `high_side` of the edge is at `high_height`; terrain on
+    /// the opposite side is at `low_height`. The transition between them is
+    /// controlled by `steepness` — higher values produce a narrower, more
+    /// vertical face.
+    Cliff {
+        /// Start of the cliff edge line.
+        from: (f32, f32),
+        /// End of the cliff edge line.
+        to: (f32, f32),
+        /// Terrain height on the low side.
+        low_height: f32,
+        /// Terrain height on the high side.
+        high_height: f32,
+        /// Direction (xz) pointing toward the high side of the cliff.
+        /// Does not need to be normalised.
+        high_side: (f32, f32),
+        /// Controls how narrow the height transition is. Higher values
+        /// produce a steeper, more vertical cliff face.
+        steepness: f32,
+        /// Distance over which the cliff effect fades to nothing beyond each
+        /// endpoint of the edge line. 0.0 = cliff extends infinitely.
+        #[serde(default)]
+        end_falloff: f32,
+        /// Optional noise roughness applied to the cliff face. 0.0 = smooth.
+        #[serde(default)]
+        roughness: f32,
+        /// Noise seed for face roughness.
+        #[serde(default = "default_cliff_seed")]
+        roughness_seed: u32,
+    },
+}
+
+fn default_cliff_seed() -> u32 {
+    42
 }
 
 /// A point on a depth-vs-threshold curve for cave generation.
@@ -207,6 +243,33 @@ pub enum VolumeFeature {
         #[serde(default)]
         floor_bias: f32,
     },
+    /// Solid rock lip extending horizontally from a cliff edge, creating
+    /// a dramatic overhang. Pairs with `TerrainFeature::Cliff`.
+    Overhang {
+        /// Start of the cliff edge line (xz).
+        from: (f32, f32),
+        /// End of the cliff edge line (xz).
+        to: (f32, f32),
+        /// Y level of the overhang (typically the cliff's `high_height`).
+        height: f32,
+        /// How far the lip extends outward from the cliff edge.
+        depth: f32,
+        /// Vertical thickness of the lip at the cliff edge.
+        thickness: f32,
+        /// Direction (xz) the lip extends toward (away from the cliff top).
+        /// Does not need to be normalised.
+        direction: (f32, f32),
+        /// Noise amplitude for organic underside roughness. 0.0 = smooth.
+        #[serde(default)]
+        noise: f32,
+        /// Noise seed for underside roughness.
+        #[serde(default = "default_overhang_seed")]
+        noise_seed: u32,
+    },
+}
+
+fn default_overhang_seed() -> u32 {
+    99
 }
 
 /// Visual style for box textures.
