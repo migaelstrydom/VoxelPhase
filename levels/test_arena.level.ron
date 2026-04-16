@@ -1,7 +1,7 @@
 // Test arena — reproduces the original hardcoded scene.
 Level(
     name: "Test Arena",
-    world_size: 64.0,
+    world_size: 256.0,
     voxel_size: 1.0,
 
     terrain: Terrain(
@@ -14,6 +14,30 @@ Level(
         features: [
             //TerrainRoughness(frequency: 0.1, amplitude: 3.0, octaves: 3, seed: 42),
             Crater(center: (-10.0, -1.0), radius: 20.0, depth: 5.0),
+        ],
+        volumes: [
+            Caves(
+                frequency: 0.08,
+                octaves: 4,
+                seed: 77,
+                depth_curve: [
+                    (depth: 0.0,  threshold: 0.95),
+                    (depth: 3.0,  threshold: 0.45),
+                    (depth: 10.0, threshold: 0.50),
+                    (depth: 20.0, threshold: 1.0),
+                ],
+                region: Some(CaveRegion(
+                    center: (-10.0, -15.0, -1.0),
+                    radius: 30.0,
+                    falloff: 15.0,
+                )),
+                material_layers: [
+                    (depth: 0.5,  material: Ite),
+                    (depth: 3.0,  material: Limestone),
+                    (depth: 999.0, material: Slate),
+                ],
+                floor_bias: 0.15,
+            ),
         ],
     ),
 

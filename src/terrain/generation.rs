@@ -3,10 +3,13 @@
 use nalgebra::Point3;
 
 use super::svo::SparseVoxelOctree;
-use super::voxel::{DurabilityConfig, Voxel, VoxelMaterial};
+use super::voxel::{DurabilityConfig, Voxel, VoxelMaterial, INDESTRUCTIBLE};
 use crate::collision::AABB;
-use crate::level::{MaterialLayer, Terrain, TerrainFeature, VolumeFeature, VoxelMaterialId};
-use crate::utils::noise::fbm_2d_periodic;
+use crate::level::{
+    CaveDepthPoint, CaveRegion, MaterialLayer, Terrain, TerrainFeature, VolumeFeature,
+    VoxelMaterialId,
+};
+use crate::utils::noise::{fbm_2d_periodic, fbm_3d};
 
 /// Generate terrain into an SVO from a `Terrain` description.
 pub fn generate_terrain(
@@ -49,7 +52,7 @@ pub fn generate_terrain(
         apply_volume(
             svo,
             volume,
-            &terrain.material_layers,
+            terrain,
             durability,
             &bounds,
             step,
@@ -177,11 +180,12 @@ fn contribute(feature: &TerrainFeature, x: f32, z: f32, current_h: f32) -> f32 {
 fn apply_volume(
     svo: &mut SparseVoxelOctree,
     volume: &VolumeFeature,
-    layers: &[MaterialLayer],
+    terrain: &Terrain,
     durability: &DurabilityConfig,
     bounds: &AABB,
     step: f32,
 ) {
+    let layers = &terrain.material_layers;
     match *volume {
         VolumeFeature::Island {
             center: (cx, cy, cz),
@@ -221,6 +225,35 @@ fn apply_volume(
         } => {
             apply_arch(
                 svo, fx, fy, fz, tx, ty, tz, radius, thickness, layers, durability, bounds, step,
+            );
+        }
+
+        VolumeFeature::Caves {
+            frequency,
+            octaves,
+            seed,
+            ref depth_curve,
+            ref region,
+            ref material_layers,
+            floor_bias,
+        } => {
+            let cave_layers = if material_layers.is_empty() {
+                layers
+            } else {
+                material_layers
+            };
+            apply_caves(
+                svo,
+                terrain,
+                frequency,
+                octaves,
+                seed,
+                depth_curve,
+                region.as_ref(),
+                cave_layers,
+                floor_bias,
+                bounds,
+                step,
             );
         }
     }
@@ -497,6 +530,232 @@ fn apply_arch(
     }
 }
 
+/// 3D noise-driven cave carving with depth-dependent threshold.
+///
+/// For each solid voxel, computes its depth below the heightfield surface,
+/// evaluates 3D FBM noise, and carves to air if the noise exceeds the
+/// depth-curve threshold. When a `CaveRegion` is specified, the threshold
+/// fades toward 1.0 (no carving) outside the region. After carving, fixes
+/// up surface materials using cave-specific layers and assigns health based
+/// on material type and depth from the cave wall.
+fn apply_caves(
+    svo: &mut SparseVoxelOctree,
+    terrain: &Terrain,
+    frequency: f32,
+    octaves: u32,
+    seed: u32,
+    depth_curve: &[CaveDepthPoint],
+    region: Option<&CaveRegion>,
+    cave_layers: &[MaterialLayer],
+    floor_bias: f32,
+    bounds: &AABB,
+    step: f32,
+) {
+    // Compute iteration bounds — clip to the region's outer envelope if present.
+    let (min_x, min_y, min_z, max_x, max_y, max_z) = if let Some(r) = region {
+        let outer = r.radius + r.falloff;
+        (
+            (r.center.0 - outer).max(bounds.min.x),
+            (r.center.1 - outer).max(bounds.min.y),
+            (r.center.2 - outer).max(bounds.min.z),
+            (r.center.0 + outer).min(bounds.max.x),
+            (r.center.1 + outer).min(bounds.max.y),
+            (r.center.2 + outer).min(bounds.max.z),
+        )
+    } else {
+        (bounds.min.x, bounds.min.y, bounds.min.z, bounds.max.x, bounds.max.y, bounds.max.z)
+    };
+
+    // Pass A: carve caves based on 3D noise and depth curve.
+    let mut x = min_x;
+    while x < max_x {
+        let mut z = min_z;
+        while z < max_z {
+            let surface_y = height_at(x, z, terrain);
+
+            let mut y = min_y;
+            while y < max_y {
+                let depth = surface_y - y;
+                if depth <= 0.0 {
+                    y += step;
+                    continue;
+                }
+
+                if svo.get(Point3::new(x, y, z)).density <= 0.0 {
+                    y += step;
+                    continue;
+                }
+
+                let mut threshold = sample_depth_curve(depth, depth_curve);
+
+                // Blend threshold toward 1.0 based on distance from region center.
+                if let Some(r) = region {
+                    let dx = x - r.center.0;
+                    let dy = y - r.center.1;
+                    let dz = z - r.center.2;
+                    let dist = (dx * dx + dy * dy + dz * dz).sqrt();
+                    if dist > r.radius {
+                        if r.falloff <= 0.0 || dist >= r.radius + r.falloff {
+                            y += step;
+                            continue;
+                        }
+                        let fade = (dist - r.radius) / r.falloff;
+                        threshold = threshold + (1.0 - threshold) * fade;
+                    }
+                }
+
+                if threshold >= 1.0 {
+                    y += step;
+                    continue;
+                }
+
+                let mut noise = fbm_3d(
+                    x * frequency,
+                    y * frequency,
+                    z * frequency,
+                    octaves,
+                    0.5,
+                    2.0,
+                    seed,
+                );
+
+                // Bias noise downward below the cave midpoint to flatten floors.
+                // Voxels near the bottom of a cave get a lower noise value,
+                // making them less likely to be carved.
+                if floor_bias > 0.0 {
+                    let cave_mid_y = surface_y - depth * 0.5;
+                    if y < cave_mid_y {
+                        let below_t = (cave_mid_y - y) / (cave_mid_y - min_y).max(1.0);
+                        noise -= floor_bias * below_t;
+                    }
+                }
+
+                if noise > threshold {
+                    svo.set(Point3::new(x, y, z), Voxel::air());
+                }
+
+                y += step;
+            }
+            z += step;
+        }
+        x += step;
+    }
+
+    // Pass B: reassign materials and health on cave-exposed surfaces.
+    fixup_cave_materials(
+        svo,
+        &terrain.material_layers,
+        cave_layers,
+        min_x,
+        min_z,
+        max_x,
+        max_z,
+        min_y,
+        max_y,
+        step,
+    );
+}
+
+/// After cave carving, reassign materials on newly-exposed underground surfaces
+/// using cave-specific layers, and set health based on material type and depth
+/// from the cave wall.
+///
+/// The first solid run from the top of each column is the terrain surface —
+/// those voxels keep the terrain's material layers. Only after passing through
+/// an underground air gap (a cave) do we switch to cave layers.
+fn fixup_cave_materials(
+    svo: &mut SparseVoxelOctree,
+    terrain_layers: &[MaterialLayer],
+    cave_layers: &[MaterialLayer],
+    min_x: f32,
+    min_z: f32,
+    max_x: f32,
+    max_z: f32,
+    min_y: f32,
+    max_y: f32,
+    step: f32,
+) {
+    let mut x = min_x;
+    while x < max_x {
+        let mut z = min_z;
+        while z < max_z {
+            let mut depth_below_surface = 0.0_f32;
+            let mut in_solid = false;
+            // Whether we've passed through at least one underground air gap.
+            // The first solid run is the terrain surface; subsequent runs
+            // after air gaps are cave walls/ceilings.
+            let mut seen_underground_air = false;
+
+            let mut y = max_y - step;
+            while y >= min_y {
+                let voxel = svo.get(Point3::new(x, y, z));
+                if voxel.density > 0.0 {
+                    if !in_solid {
+                        depth_below_surface = 0.0;
+                        in_solid = true;
+                    }
+                    let layers = if seen_underground_air {
+                        cave_layers
+                    } else {
+                        terrain_layers
+                    };
+                    let material = material_at_depth(depth_below_surface, layers);
+                    let health = if seen_underground_air {
+                        material_health(material, depth_below_surface)
+                    } else {
+                        voxel.health
+                    };
+                    if voxel.material != material || voxel.health != health {
+                        svo.set(Point3::new(x, y, z), Voxel::solid(material, health));
+                    }
+                    depth_below_surface += step;
+                } else {
+                    if in_solid {
+                        seen_underground_air = true;
+                    }
+                    in_solid = false;
+                }
+                y -= step;
+            }
+            z += step;
+        }
+        x += step;
+    }
+}
+
+/// Compute voxel health from material base health and depth from the nearest
+/// exposed surface. Surface voxels get the material's base health; deeper
+/// voxels get progressively more, capped at 254.
+fn material_health(material: VoxelMaterial, depth_from_surface: f32) -> u8 {
+    let base = material.base_health();
+    if base == 0 {
+        return 0;
+    }
+    let depth_bonus = (depth_from_surface * 0.5) as u8;
+    base.saturating_add(depth_bonus).min(INDESTRUCTIBLE - 1)
+}
+
+/// Linearly interpolate the carve threshold from a depth curve.
+///
+/// For depths before the first point, uses the first point's threshold.
+/// For depths beyond the last point, uses the last point's threshold.
+fn sample_depth_curve(depth: f32, curve: &[CaveDepthPoint]) -> f32 {
+    if curve.is_empty() {
+        return 1.0;
+    }
+    if depth <= curve[0].depth {
+        return curve[0].threshold;
+    }
+    for i in 1..curve.len() {
+        if depth <= curve[i].depth {
+            let prev = &curve[i - 1];
+            let t = (depth - prev.depth) / (curve[i].depth - prev.depth);
+            return prev.threshold + (curve[i].threshold - prev.threshold) * t;
+        }
+    }
+    curve[curve.len() - 1].threshold
+}
+
 /// Map a depth below the surface to a `VoxelMaterial` using the level's
 /// material layers. Falls through to Rock if no layer matches.
 fn material_at_depth(depth: f32, layers: &[MaterialLayer]) -> VoxelMaterial {
@@ -520,6 +779,9 @@ fn to_voxel_material(id: VoxelMaterialId) -> VoxelMaterial {
         VoxelMaterialId::Grass => VoxelMaterial::Grass,
         VoxelMaterialId::Dirt => VoxelMaterial::Dirt,
         VoxelMaterialId::Rock => VoxelMaterial::Rock,
+        VoxelMaterialId::Ite => VoxelMaterial::Ite,
+        VoxelMaterialId::Limestone => VoxelMaterial::Limestone,
+        VoxelMaterialId::Slate => VoxelMaterial::Slate,
     }
 }
 

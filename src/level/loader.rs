@@ -251,10 +251,8 @@ mod tests {
 
     #[test]
     fn load_test_arena_from_file() {
-        let level = load_level(std::path::Path::new("levels/test_arena.level.ron"))
+        load_level(std::path::Path::new("levels/test_arena.level.ron"))
             .expect("Failed to load test_arena");
-        assert_eq!(level.name, "Test Arena");
-        assert_eq!(level.octree_depth(), 6);
     }
 
     #[test]

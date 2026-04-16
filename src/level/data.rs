@@ -68,6 +68,9 @@ pub enum VoxelMaterialId {
     Grass,
     Dirt,
     Rock,
+    Ite,
+    Limestone,
+    Slate,
 }
 
 /// Heightfield features operate on 2D (xz) coordinates, modifying the terrain
@@ -116,6 +119,34 @@ pub enum TerrainFeature {
     },
 }
 
+/// A point on a depth-vs-threshold curve for cave generation.
+///
+/// The carve threshold is linearly interpolated between consecutive points.
+/// At a given depth below the surface, if the 3D noise value exceeds the
+/// interpolated threshold, the voxel is carved to air.
+#[derive(Deserialize, Clone)]
+pub struct CaveDepthPoint {
+    /// Depth below the terrain surface.
+    pub depth: f32,
+    /// Noise threshold at this depth (0.0 = carve everything, 1.0 = carve nothing).
+    pub threshold: f32,
+}
+
+/// Spatial region that controls where caves are generated.
+///
+/// Caves are strongest within `radius` of the center point, then fade out
+/// over the `falloff` distance by blending the carve threshold toward 1.0
+/// (no carving). Outside `radius + falloff`, no caves are generated.
+#[derive(Deserialize, Clone)]
+pub struct CaveRegion {
+    /// Center of the cave region in world coordinates (x, y, z).
+    pub center: (f32, f32, f32),
+    /// Radius within which caves are at full strength.
+    pub radius: f32,
+    /// Distance beyond `radius` over which caves fade to nothing.
+    pub falloff: f32,
+}
+
 /// Volumetric features operate in 3D, directly placing or carving voxels.
 /// Applied as a second pass after the heightfield.
 #[derive(Deserialize)]
@@ -146,6 +177,35 @@ pub enum VolumeFeature {
         length: f32,
         radius: f32,
         depth: f32,
+    },
+    /// 3D noise-driven cave carving with depth-dependent threshold.
+    ///
+    /// Carves overhangs near the surface, cave networks at medium depth,
+    /// and leaves deep rock solid. The `depth_curve` controls the carve
+    /// threshold at each depth below the heightfield surface.
+    Caves {
+        /// Noise sample frequency — lower values produce larger caverns.
+        frequency: f32,
+        /// Number of FBM octaves — more octaves add finer wall detail.
+        octaves: u32,
+        /// Noise seed for reproducibility.
+        seed: u32,
+        /// Piecewise-linear curve mapping depth below surface to carve threshold.
+        /// Must be sorted by depth ascending. Noise values above the threshold
+        /// at a given depth will be carved.
+        depth_curve: Vec<CaveDepthPoint>,
+        /// Optional spatial region with soft falloff. If omitted, caves span
+        /// the entire terrain.
+        #[serde(default)]
+        region: Option<CaveRegion>,
+        /// Material layering for cave surfaces, by depth from the cave wall.
+        /// If empty, falls back to the terrain's material layers.
+        #[serde(default)]
+        material_layers: Vec<MaterialLayer>,
+        /// Downward bias applied below the local cave midpoint to flatten
+        /// cave floors, making them more walkable. 0.0 = no flattening.
+        #[serde(default)]
+        floor_bias: f32,
     },
 }
 

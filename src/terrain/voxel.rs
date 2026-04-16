@@ -9,6 +9,12 @@ pub enum VoxelMaterial {
     Rock = 1,
     Grass = 2,
     Dirt = 3,
+    /// Pale grey-yellow cave surface crust from mineral deposits.
+    Ite = 4,
+    /// Pale grey cave wall rock — the main bulk of cave interiors.
+    Limestone = 5,
+    /// Dark layered deep-cave rock.
+    Slate = 6,
 }
 
 impl VoxelMaterial {
@@ -19,6 +25,22 @@ impl VoxelMaterial {
             VoxelMaterial::Rock => [0.5, 0.5, 0.5, 1.0],
             VoxelMaterial::Grass => [0.3, 0.7, 0.2, 1.0],
             VoxelMaterial::Dirt => [0.5, 0.3, 0.1, 1.0],
+            VoxelMaterial::Ite => [0.55, 0.50, 0.35, 1.0],
+            VoxelMaterial::Limestone => [0.75, 0.73, 0.68, 1.0],
+            VoxelMaterial::Slate => [0.30, 0.32, 0.35, 1.0],
+        }
+    }
+
+    /// Base health for this material before depth modifiers.
+    pub fn base_health(&self) -> u8 {
+        match self {
+            VoxelMaterial::Air => 0,
+            VoxelMaterial::Grass => 1,
+            VoxelMaterial::Dirt => 2,
+            VoxelMaterial::Ite => 3,
+            VoxelMaterial::Rock => 5,
+            VoxelMaterial::Limestone => 4,
+            VoxelMaterial::Slate => 8,
         }
     }
 }
