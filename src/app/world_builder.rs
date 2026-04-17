@@ -7,7 +7,7 @@ use crate::components::{
     Rotation, TerrainAnchored, Velocity, VelocityDriven,
 };
 use crate::core::error::EngineResult;
-use crate::debug::{DebugLines, DebugLog, DebugOverlays};
+use crate::debug::{DebugConfig, DebugLines, DebugLog, DebugOverlays};
 use crate::explosion::Explosion;
 use crate::fire::components::{Flammable, OnFire};
 use crate::fracture::CompoundFracture;
@@ -24,7 +24,7 @@ use crate::rendering::renderer::Renderer;
 use crate::resources::manager::ResourceManager;
 use crate::resources::textures::TextureManager;
 use crate::sensing::{ContactCandidates, SensorSet};
-use crate::systems::PhysicsResource;
+use crate::systems::{FrameStart, PhysicsResource};
 use crate::terrain::TerrainManager;
 use crate::time::Time;
 
@@ -107,6 +107,7 @@ impl WorldBuilder {
         self.world.insert(PlayerConfig::default());
         self.world.insert(GrabConfig::default());
         self.world.insert(CameraConfig::default());
+        self.world.insert(DebugConfig::default());
         self.world.insert(DebugLines::default());
         self.world.insert(DebugLog::default());
         self.world.insert(DebugOverlays::default());
@@ -115,6 +116,7 @@ impl WorldBuilder {
         self.world.insert(ParticleConfig::new());
         self.world.insert(ParticlePool::default());
         self.world.insert(PhysicsResource::default());
+        self.world.insert(FrameStart::default());
         self.world.insert(PhysicsImpulseQueue::default());
         self
     }

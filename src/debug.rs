@@ -10,6 +10,28 @@ use nalgebra::Point3;
 
 use crate::rendering::Colour;
 
+/// Runtime toggles for debug instrumentation.
+///
+/// Each flag gates a piece of optional diagnostic work. Disabled flags should
+/// skip their measurement entirely so the instrumentation doesn't pay any cost
+/// in release builds where it isn't needed.
+pub struct DebugConfig {
+    /// If true, display the frame rate as `FPS` in the overlay.
+    pub show_fps: bool,
+    /// If true, measure per-frame CPU work (excluding the vsync acquire wait)
+    /// and display it as `CPU ms` in the overlay.
+    pub show_cpu_ms: bool,
+}
+
+impl Default for DebugConfig {
+    fn default() -> Self {
+        Self {
+            show_fps: true,
+            show_cpu_ms: false,
+        }
+    }
+}
+
 /// ECS resource for accumulating debug text to display.
 ///
 /// Debug entries are stored as key-value pairs and sorted alphabetically

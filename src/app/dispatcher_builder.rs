@@ -60,6 +60,6 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
         .with(ParticleSpawnSystem, "particle_spawn", &["explosion"])
         .with(ParticleUpdateSystem, "particle_update", &["particle_spawn"])
         // Rendering (thread-local)
-        .with_thread_local(RenderSystem)
+        .with_thread_local(RenderSystem::default())
         .build()
 }

@@ -2,7 +2,7 @@ use crate::biped::BipedController;
 use crate::components::{
     CameraComponent, ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Rotation,
 };
-use crate::debug::{DebugLines, DebugOverlays};
+use crate::debug::{DebugConfig, DebugLines, DebugOverlays};
 use crate::fire::components::OnFire;
 use crate::model::Transform;
 use crate::particles::ParticlePool;
@@ -19,7 +19,16 @@ use specs::{
     Entities, Join, Read, ReadExpect, ReadStorage, System, Write, WriteExpect, WriteStorage,
 };
 
-pub struct RenderSystem;
+#[derive(Default)]
+pub struct RenderSystem {
+    cpu_ms_ema: f32,
+}
+
+/// Marks the start of a frame's CPU work. Set by `app.rs` immediately before
+/// the dispatcher runs; read by `RenderSystem` to compute total per-frame CPU
+/// time excluding the vsync wait.
+#[derive(Default)]
+pub struct FrameStart(pub Option<std::time::Instant>);
 
 /// Compute the fire volume scale from an entity's collider bounding radius.
 fn fire_volume_scale(
@@ -74,6 +83,8 @@ impl<'a> System<'a> for RenderSystem {
         ReadStorage<'a, OnFire>,
         ReadStorage<'a, RigidBodyComponent>,
         ReadExpect<'a, super::PhysicsResource>,
+        Read<'a, FrameStart>,
+        Read<'a, DebugConfig>,
     );
 
     fn run(&mut self, data: Self::SystemData) {
@@ -99,6 +110,8 @@ impl<'a> System<'a> for RenderSystem {
             on_fires,
             rigid_bodies,
             physics_resource,
+            frame_start,
+            debug_config,
         ) = data;
 
         let camera = camera_components.join().next();
@@ -153,7 +166,11 @@ impl<'a> System<'a> for RenderSystem {
             }
         }
 
-        match renderer.begin_frame() {
+        let begin_frame_start = std::time::Instant::now();
+        let begin_frame_result = renderer.begin_frame();
+        let vsync_wait = begin_frame_start.elapsed();
+
+        match begin_frame_result {
             Ok((draw_cb, present_index)) => {
                 // Run fire simulation compute passes before the render pass
                 renderer.simulate_fire(draw_cb, time.delta_seconds(), time.total_seconds());
@@ -318,8 +335,13 @@ impl<'a> System<'a> for RenderSystem {
                 }
 
                 // Add FPS and fire count to debug lines
-                let fps = 1.0 / time.delta_seconds();
-                debug_lines.add("FPS", format!("{:.0}", fps));
+                if debug_config.show_fps {
+                    let fps = 1.0 / time.delta_seconds();
+                    debug_lines.add("FPS", format!("{:.0}", fps));
+                }
+                if debug_config.show_cpu_ms {
+                    debug_lines.add("CPU ms", format!("{:.2}", self.cpu_ms_ema));
+                }
                 // if !renderer.active_fires.is_empty() {
                 //     let fire_count = renderer.active_fires.len();
                 //     let mut slot_counts = [0usize; crate::fire::renderer::SIM_POOL_SIZE];
@@ -337,6 +359,18 @@ impl<'a> System<'a> for RenderSystem {
 
                 if let Err(e) = renderer.end_frame(draw_cb, present_index) {
                     log::error!("RenderSystem: Failed to end_frame: {}", e);
+                }
+
+                if let Some(start) = frame_start.0 {
+                    let total = start.elapsed();
+                    let cpu_work = total.saturating_sub(vsync_wait);
+                    let cpu_ms = cpu_work.as_secs_f32() * 1000.0;
+                    let alpha = 0.1;
+                    self.cpu_ms_ema = if self.cpu_ms_ema == 0.0 {
+                        cpu_ms
+                    } else {
+                        self.cpu_ms_ema * (1.0 - alpha) + cpu_ms * alpha
+                    };
                 }
             }
             Err(e) => {

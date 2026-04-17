@@ -21,6 +21,8 @@ use crate::rendering::material::{Material, MaterialManagerBuilder};
 use crate::rendering::renderer::Renderer;
 use crate::rendering::Colour;
 use crate::resources::manager::ResourceManager;
+use crate::debug::DebugConfig;
+use crate::systems::FrameStart;
 use crate::time::Time;
 
 use super::dispatcher_builder::build_dispatcher;
@@ -199,6 +201,11 @@ impl<'a, 'b> App<'a, 'b> {
                 {
                     let mut time = world.write_resource::<Time>();
                     time.update();
+                }
+                {
+                    let show_cpu_ms = world.read_resource::<DebugConfig>().show_cpu_ms;
+                    let mut frame_start = world.write_resource::<FrameStart>();
+                    frame_start.0 = show_cpu_ms.then(std::time::Instant::now);
                 }
 
                 dispatcher.dispatch(world);
