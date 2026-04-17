@@ -69,6 +69,11 @@ impl<'a> System<'a> for PlayerInputSystem {
             // Write target state for later systems to use
             target.direction = move_dir;
             target.jump = actions.jump;
+            target.jump_held = actions.jump_held;
+            target.jump_released = actions.jump_released;
+            target.crouch = actions.crouch_held;
+            target.crouch_just_pressed = actions.crouch_just_pressed;
+            target.sprint = actions.sprint_held;
             target.grab_held = actions.grab_held;
             target.grab_just_pressed = actions.grab_just_pressed;
             target.grab_just_released = actions.grab_just_released;

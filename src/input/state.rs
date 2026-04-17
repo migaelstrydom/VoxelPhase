@@ -104,6 +104,12 @@ impl InputState {
         self.just_pressed_keys.contains(&key)
     }
 
+    /// Returns true if the key was just released this frame
+    #[inline]
+    pub fn is_key_just_released(&self, key: KeyCode) -> bool {
+        self.just_released_keys.contains(&key)
+    }
+
     /// Returns the mouse movement delta since last frame
     #[inline]
     pub fn mouse_delta(&self) -> (f32, f32) {

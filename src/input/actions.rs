@@ -16,8 +16,19 @@ pub struct GameplayActions {
     /// Strafe right relative to camera direction
     pub move_right: bool,
 
+    /// Crouch modifier held (LCtrl). Slows ground movement; wins over sprint.
+    pub crouch_held: bool,
+    /// Crouch just pressed this frame (used to gate long-jump via crouch buffer).
+    pub crouch_just_pressed: bool,
+    /// Sprint modifier held (LShift). Speeds up ground movement.
+    pub sprint_held: bool,
+
     /// Jump (just pressed this frame)
     pub jump: bool,
+    /// Jump key held this frame (used to decide cutoff on buffered jumps).
+    pub jump_held: bool,
+    /// Jump key released this frame (triggers variable-height jump cutoff).
+    pub jump_released: bool,
 
     /// Camera look delta (mouse movement)
     pub camera_delta: (f32, f32),
@@ -56,6 +67,13 @@ impl GameplayActions {
 
             // Jump - Space only (right-click freed for grab)
             jump: input.is_key_just_pressed(KeyCode::Space),
+            jump_held: input.is_key_pressed(KeyCode::Space),
+            jump_released: input.is_key_just_released(KeyCode::Space),
+
+            // Gait modifiers
+            crouch_held: input.is_key_pressed(KeyCode::ControlLeft),
+            crouch_just_pressed: input.is_key_just_pressed(KeyCode::ControlLeft),
+            sprint_held: input.is_key_pressed(KeyCode::ShiftLeft),
 
             // Camera control
             camera_delta: input.mouse_delta(),
@@ -63,8 +81,7 @@ impl GameplayActions {
             zoom_out: input.is_key_pressed(KeyCode::KeyE),
 
             // Combat actions
-            throw: (input.is_key_just_pressed(KeyCode::ShiftLeft)
-                || input.is_mouse_button_just_pressed(MouseButton::Left))
+            throw: input.is_mouse_button_just_pressed(MouseButton::Left)
                 && input.is_mouse_captured(),
 
             // Grab - Right mouse button

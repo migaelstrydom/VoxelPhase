@@ -3,7 +3,8 @@ use crate::components::{Position, RigidBodyComponent, Rotation, Velocity, Veloci
 use crate::debug::{DebugLines, DebugOverlays};
 use crate::player::grab::{self, GrabConfig};
 use crate::player::{
-    ArmState, LocomotionState, Player, PlayerConfig, PlayerState, PlayerTargetState,
+    ArmState, LocomotionInput, LocomotionState, MovementRule, Player, PlayerConfig, PlayerState,
+    PlayerTargetState,
 };
 use crate::rendering::colour::Colour;
 use crate::systems::PhysicsResource;
@@ -77,53 +78,64 @@ impl<'a> System<'a> for PlayerControlSystem {
             let is_grounded = controller.is_grounded();
             let move_dir = target.direction;
             let player_body = rb.0;
+            let horizontal_speed = (vel.0.x * vel.0.x + vel.0.z * vel.0.z).sqrt();
 
-            // --- Locomotion state transitions ---
-            state.locomotion = match state.locomotion {
-                LocomotionState::Grounded => {
-                    if target.jump {
-                        vel.0.y = config.jump_speed;
-                        LocomotionState::Launching
-                    } else if !is_grounded {
-                        LocomotionState::CoyoteTime(config.ground_grace_period)
-                    } else {
-                        LocomotionState::Grounded
-                    }
-                }
-                LocomotionState::Launching => {
-                    if !is_grounded {
-                        LocomotionState::Airborne
-                    } else {
-                        LocomotionState::Launching
-                    }
-                }
-                LocomotionState::CoyoteTime(remaining) => {
-                    if target.jump {
-                        vel.0.y = config.jump_speed;
-                        LocomotionState::Airborne
-                    } else if is_grounded {
-                        LocomotionState::Grounded
-                    } else {
-                        let t = remaining - dt;
-                        if t <= 0.0 {
-                            LocomotionState::Airborne
-                        } else {
-                            LocomotionState::CoyoteTime(t)
-                        }
-                    }
-                }
-                LocomotionState::Airborne => {
-                    if is_grounded {
-                        LocomotionState::Grounded
-                    } else {
-                        LocomotionState::Airborne
-                    }
-                }
-            };
+            // Tick all input-grace timers once per frame before use.
+            state.jump_buffer.tick(dt);
+            state.crouch_buffer.tick(dt);
+            state.crouch_lockout.tick(dt);
+            if target.jump {
+                state.jump_buffer.arm(config.jump_buffer_window);
+            }
+            if target.crouch_just_pressed {
+                state.crouch_buffer.arm(config.crouch_buffer_window);
+            }
 
-            // --- Per-state locomotion behaviour ---
+            // Snapshot "was in a committed maneuver" before the tick overwrites state.
+            let was_committed = state.locomotion.is_committed();
 
-            // Extract current yaw from the physics body's quaternion.
+            // --- Locomotion state transition ---
+            let outcome = state.locomotion.tick(&LocomotionInput {
+                dt,
+                is_grounded,
+                jump_pressed: state.jump_buffer.active(),
+                horizontal_speed,
+                move_dir,
+                long_jump_armed: state.crouch_buffer.active(),
+                config: &config,
+            });
+            state.locomotion = outcome.next_state;
+            if let Some(vy) = outcome.set_vy {
+                vel.0.y = vy;
+            }
+            if let Some(air) = outcome.set_air_speed {
+                state.air_speed = air;
+            }
+            // Landing from a committed maneuver (long jump) arms the crouch
+            // lockout so a still-held Ctrl doesn't instantly slow the player.
+            if was_committed && matches!(state.locomotion, LocomotionState::Grounded) {
+                state.crouch_lockout.arm(config.long_jump_crouch_lockout);
+            }
+
+            if outcome.consumed_jump {
+                state.jump_buffer.clear();
+                // Tap-then-land (buffered jump, button already released): apply
+                // cutoff up-front so the hop is short. Skip committed maneuvers.
+                if !target.jump_held && state.locomotion.allows_jump_cutoff() {
+                    vel.0.y *= config.jump_cutoff_factor;
+                }
+            }
+
+            // Variable-height jump: cut upward velocity on early release.
+            if target.jump_released && state.locomotion.allows_jump_cutoff() && vel.0.y > 0.0 {
+                vel.0.y *= config.jump_cutoff_factor;
+            }
+
+            // Compute ground speed AFTER lockout tick + landing so a long-jump
+            // landing frame already sees crouch suppressed.
+            let ground_speed = resolve_ground_speed(target, &config, &state.crouch_lockout);
+
+            // --- Yaw drive (physics body → Rotation, input → angular velocity) ---
             let current_yaw = {
                 let body = physics_res.world.body(player_body);
                 body.map(|b| {
@@ -132,14 +144,8 @@ impl<'a> System<'a> for PlayerControlSystem {
                 })
                 .unwrap_or(rotation.0)
             };
-
-            // Write physics yaw to Rotation so biped/grab systems track the
-            // physics body's actual facing, not a stale input-driven value.
             rotation.0 = current_yaw;
 
-            // Compute target yaw from movement input and apply angular velocity
-            // drive to turn the physics body. When not moving, angular velocity
-            // is zero and the body holds its current facing.
             if move_dir.magnitude() > 0.001 {
                 let target_yaw = -move_dir.z.atan2(move_dir.x) + std::f32::consts::PI / 2.0;
                 let yaw_error = wrap_angle(target_yaw - current_yaw);
@@ -148,33 +154,18 @@ impl<'a> System<'a> for PlayerControlSystem {
                 vd.angular_velocity = Vector3::zeros();
             }
 
-            match state.locomotion {
-                LocomotionState::Grounded | LocomotionState::Launching => {
-                    vel.0.x = move_dir.x * config.walk_speed;
-                    vel.0.z = move_dir.z * config.walk_speed;
-                }
-                LocomotionState::CoyoteTime(_) => {
-                    apply_air_steering(
-                        vel,
-                        move_dir,
-                        config.walk_speed,
-                        config.air_steer_speed,
-                        dt,
-                    );
-                    if vel.0.y > 0.0 {
-                        vel.0.y = 0.0;
-                    }
-                }
-                LocomotionState::Airborne => {
-                    apply_air_steering(
-                        vel,
-                        move_dir,
-                        config.walk_speed,
-                        config.air_steer_speed,
-                        dt,
-                    );
-                }
-            }
+            // --- Apply the movement rule for the resolved locomotion state ---
+            apply_movement_rule(
+                vel,
+                state.locomotion.movement_rule(
+                    move_dir,
+                    ground_speed,
+                    config.ground_accel,
+                    state.air_speed,
+                    config.air_steer_speed,
+                ),
+                dt,
+            );
 
             // --- Arm state transitions ---
             let facing = facing_from_rotation(rotation.0);
@@ -348,23 +339,45 @@ fn draw_grab_debug(
     }
 }
 
+/// Resolve effective ground speed from gait intent. Crouch wins over sprint,
+/// except while the crouch lockout is active (post-long-jump recovery), in
+/// which case crouch is ignored so holding Ctrl doesn't brake the player.
+fn resolve_ground_speed(
+    target: &PlayerTargetState,
+    config: &PlayerConfig,
+    crouch_lockout: &crate::player::Timer,
+) -> f32 {
+    let crouch_active = target.crouch && !crouch_lockout.active();
+    let mul = if crouch_active {
+        config.crouch_speed_mul
+    } else if target.sprint {
+        config.sprint_speed_mul
+    } else {
+        1.0
+    };
+    config.walk_speed * mul
+}
+
+/// Apply a `MovementRule` to a velocity: steer planar velocity toward the
+/// rule's target at `accel` (infinite = snap), and optionally cancel any
+/// positive y component.
+fn apply_movement_rule(vel: &mut Velocity, rule: MovementRule, dt: f32) {
+    if rule.accel.is_infinite() {
+        vel.0.x = rule.target.x;
+        vel.0.z = rule.target.z;
+    } else {
+        let max_delta = rule.accel * dt;
+        vel.0.x = move_toward(vel.0.x, rule.target.x, max_delta);
+        vel.0.z = move_toward(vel.0.z, rule.target.z, max_delta);
+    }
+    if rule.clamp_up && vel.0.y > 0.0 {
+        vel.0.y = 0.0;
+    }
+}
+
 /// Convert a Y-axis rotation angle to a facing direction vector (unit, XZ plane).
 fn facing_from_rotation(rotation_y: f32) -> Vector3<f32> {
     Vector3::new(rotation_y.sin(), 0.0, rotation_y.cos())
-}
-
-fn apply_air_steering(
-    vel: &mut Velocity,
-    move_dir: Vector3<f32>,
-    walk_speed: f32,
-    air_steer_speed: f32,
-    dt: f32,
-) {
-    let target_x = move_dir.x * walk_speed;
-    let target_z = move_dir.z * walk_speed;
-    let max_delta = air_steer_speed * dt;
-    vel.0.x = move_toward(vel.0.x, target_x, max_delta);
-    vel.0.z = move_toward(vel.0.z, target_z, max_delta);
 }
 
 fn move_toward(current: f32, target: f32, max_delta: f32) -> f32 {
