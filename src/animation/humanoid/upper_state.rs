@@ -14,6 +14,17 @@ use crate::animation::state::{AnimationState, HandState};
 use crate::physics::{ConstraintHandle, RigidBodyHandle};
 use crate::player::grab::GrabConfig;
 
+/// Coarse discriminant used to decide when a crossfade fires. Continuous
+/// parameters (`elapsed`, `current_hold_height`, etc.) do not change the
+/// key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpperKey {
+    Swinging,
+    Reaching,
+    Holding,
+    Braced,
+}
+
 /// Upper-body animation state.
 #[derive(Debug, Clone, Copy)]
 pub enum UpperState {
@@ -57,6 +68,16 @@ impl UpperState {
     #[allow(clippy::needless_pass_by_value)]
     pub fn tick(self, _ctx: &UpperTickCtx) -> Self {
         self
+    }
+
+    /// Coarse key used to gate crossfade triggers.
+    pub fn transition_key(&self) -> UpperKey {
+        match self {
+            UpperState::Swinging => UpperKey::Swinging,
+            UpperState::Reaching { .. } => UpperKey::Reaching,
+            UpperState::Holding { .. } => UpperKey::Holding,
+            UpperState::Braced => UpperKey::Braced,
+        }
     }
 
     /// Emit the upper-body fragment (hands + shoulder twist).

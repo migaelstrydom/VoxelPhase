@@ -12,7 +12,7 @@ use super::humanoid::pose_state::{AirKind, Gait, PoseState, SampleCtx, Takeoff, 
 use super::humanoid::skeleton::{generate_character_mesh, Skeleton};
 use super::humanoid::stride_wheel;
 use super::humanoid::upper_state::{UpperSampleCtx, UpperState, UpperTickCtx};
-use super::pose::PoseFragment;
+use super::pose::{Crossfade, Linear, PoseFragment};
 use super::state::{AnimationState, FootState};
 use crate::player::grab::GrabConfig;
 use crate::player::{AirSteering, ArmState, LocomotionState, PlayerState, PlayerTargetState};
@@ -22,6 +22,9 @@ use crate::sensing::{ContactCandidate, Probe};
 /// Minimum movement (metres) required before an idle foot replants.
 /// Keeps planting stable against probe jitter.
 const IDLE_PLANT_SNAP: f32 = 0.03;
+
+/// Duration of the crossfade when either FSM changes variant kind.
+const TRANSITION_BLEND_DURATION: f32 = 0.1;
 
 /// Probe tags used by the character animator.
 pub mod probe_tags {
@@ -49,6 +52,11 @@ pub struct CharacterAnimator {
     pub pose_state: PoseState,
     /// Current upper-body FSM variant.
     pub upper_state: UpperState,
+    /// Active blend for the lower-body FSM. `Some` only during the
+    /// short window after a variant-kind change; `None` between transitions.
+    pose_crossfade: Option<Crossfade<Linear>>,
+    /// Active blend for the upper-body FSM.
+    upper_crossfade: Option<Crossfade<Linear>>,
     /// Previous-frame `PlayerState.locomotion`, kept so the driver can
     /// detect variant edges (airborne→grounded, grounded→launching) for
     /// Landing/Launching splicing.
@@ -82,6 +90,8 @@ impl CharacterAnimator {
             arm_gait,
             pose_state: PoseState::Grounded { gait: Gait::Idle },
             upper_state: UpperState::Swinging,
+            pose_crossfade: None,
+            upper_crossfade: None,
             last_locomotion: LocomotionState::Grounded,
             cached_vertices: Vec::new(),
             cached_indices: Vec::new(),
@@ -171,8 +181,8 @@ impl CharacterAnimator {
             self.state.left.ground_contact.is_some() || self.state.right.ground_contact.is_some();
         self.state.is_grounded = has_ground_contact;
 
-        // Map PlayerState → PoseState each frame.
-        self.pose_state = map_pose_state(
+        // Map PlayerState → next PoseState variant.
+        let new_pose = map_pose_state(
             self.pose_state,
             player_state,
             target,
@@ -183,14 +193,14 @@ impl CharacterAnimator {
 
         // Re-plant feet when idle. Hysteresis prevents per-frame jitter
         // driven by probe noise.
-        if matches!(self.pose_state, PoseState::Grounded { gait: Gait::Idle }) {
+        if matches!(new_pose, PoseState::Grounded { gait: Gait::Idle }) {
             replant_foot(&mut self.state.left, IDLE_PLANT_SNAP);
             replant_foot(&mut self.state.right, IDLE_PLANT_SNAP);
         }
 
         // Advance stride wheel only when a gait cycle is actually playing.
         let running_stride = matches!(
-            self.pose_state,
+            new_pose,
             PoseState::Grounded { gait } if !matches!(gait, Gait::Idle)
         );
         if running_stride {
@@ -202,10 +212,50 @@ impl CharacterAnimator {
             );
         }
 
-        // Map ArmState + current PoseState → UpperState.
-        self.upper_state = map_upper_state(&player_state.arm, self.pose_state);
+        // Pick the upper variant alongside the new pose variant so Idle-vs-
+        // airborne gating sees the just-computed pose.
+        let new_upper = map_upper_state(&player_state.arm, new_pose);
 
-        // Tick both FSMs.
+        let pose_sample_ctx = SampleCtx {
+            rig: &self.config,
+            anim: &self.state,
+            velocity,
+            leg_gait: &self.gait,
+        };
+
+        // Snapshot outgoing fragments BEFORE the variant swap, so the
+        // crossfade `from` reflects what the old state was producing.
+        if self.pose_state.transition_key() != new_pose.transition_key() {
+            let from = self.pose_state.sample(&pose_sample_ctx);
+            self.pose_crossfade = Some(Crossfade {
+                from,
+                to_duration: TRANSITION_BLEND_DURATION,
+                elapsed: 0.0,
+                policy: Linear,
+            });
+        }
+        let old_cycle = self.pose_state.cycle(&self.state);
+        if self.upper_state.transition_key() != new_upper.transition_key() {
+            let old_upper_ctx = UpperSampleCtx {
+                rig: &self.config,
+                anim: &self.state,
+                arm_gait: &self.arm_gait,
+                grab: grab_config,
+                cycle: old_cycle,
+            };
+            let from = self.upper_state.sample(&old_upper_ctx);
+            self.upper_crossfade = Some(Crossfade {
+                from,
+                to_duration: TRANSITION_BLEND_DURATION,
+                elapsed: 0.0,
+                policy: Linear,
+            });
+        }
+
+        // Swap in new variants, then tick.
+        self.pose_state = new_pose;
+        self.upper_state = new_upper;
+
         let pose_tick_ctx = TickCtx {
             dt,
             velocity,
@@ -215,16 +265,9 @@ impl CharacterAnimator {
         self.pose_state = self.pose_state.tick(&pose_tick_ctx);
         self.upper_state = self.upper_state.tick(&UpperTickCtx { dt });
 
-        // Sample both and compose (upper overlays pose).
-        let pose_sample_ctx = SampleCtx {
-            rig: &self.config,
-            anim: &self.state,
-            velocity,
-            leg_gait: &self.gait,
-        };
-        let pose_fragment = self.pose_state.sample(&pose_sample_ctx);
+        // Sample the (now current) states.
+        let to_pose = self.pose_state.sample(&pose_sample_ctx);
         let cycle = self.pose_state.cycle(&self.state);
-
         let upper_sample_ctx = UpperSampleCtx {
             rig: &self.config,
             anim: &self.state,
@@ -232,7 +275,12 @@ impl CharacterAnimator {
             grab: grab_config,
             cycle,
         };
-        let upper_fragment = self.upper_state.sample(&upper_sample_ctx);
+        let to_upper = self.upper_state.sample(&upper_sample_ctx);
+
+        // Apply any running crossfades. `is_active` is checked AFTER ticking
+        // so the final frame of a blend lands on weight=1.0 cleanly.
+        let pose_fragment = blend_through(&mut self.pose_crossfade, to_pose, dt);
+        let upper_fragment = blend_through(&mut self.upper_crossfade, to_upper, dt);
 
         let fragment = pose_fragment.compose(&upper_fragment);
         self.apply_fragment_to_state(&fragment);
@@ -326,6 +374,22 @@ impl CharacterAnimator {
         let (vertices, indices) = generate_character_mesh(&self.skeleton, &self.config);
         self.cached_vertices = vertices;
         self.cached_indices = indices;
+    }
+}
+
+/// Advance a crossfade (if any) and return the fragment the driver should
+/// use this frame. Clears the slot once the blend has fully resolved.
+fn blend_through(slot: &mut Option<Crossfade<Linear>>, to: PoseFragment, dt: f32) -> PoseFragment {
+    match slot.as_mut() {
+        Some(cf) => {
+            let blended = cf.sample(&to);
+            cf.tick(dt);
+            if !cf.is_active() {
+                *slot = None;
+            }
+            blended
+        }
+        None => to,
     }
 }
 

@@ -146,7 +146,6 @@ impl BlendPolicy for Linear {
 
 /// A running crossfade from a snapshotted `from` fragment toward whatever
 /// the FSM is currently emitting.
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct Crossfade<P: BlendPolicy = Linear> {
     pub from: PoseFragment,
@@ -155,7 +154,6 @@ pub struct Crossfade<P: BlendPolicy = Linear> {
     pub policy: P,
 }
 
-#[allow(dead_code)]
 impl<P: BlendPolicy> Crossfade<P> {
     /// Whether the crossfade is still in progress.
     pub fn is_active(&self) -> bool {

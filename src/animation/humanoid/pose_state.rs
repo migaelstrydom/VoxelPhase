@@ -25,6 +25,27 @@ pub enum Gait {
     Crouch { walking: bool },
 }
 
+/// `Gait` reduced to its crossfade-triggering identity. The `walking`
+/// flag on `Crouch` is a parameter, not a state, so it collapses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GaitKey {
+    Idle,
+    Walk,
+    Sprint,
+    Crouch,
+}
+
+impl Gait {
+    fn key(self) -> GaitKey {
+        match self {
+            Gait::Idle => GaitKey::Idle,
+            Gait::Walk => GaitKey::Walk,
+            Gait::Sprint => GaitKey::Sprint,
+            Gait::Crouch { .. } => GaitKey::Crouch,
+        }
+    }
+}
+
 /// Kind of airborne motion. All three currently share one "falling" pose.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AirKind {
@@ -49,6 +70,18 @@ impl Default for Takeoff {
             air_speed: 0.0,
         }
     }
+}
+
+/// Coarse discriminant used to decide when a crossfade fires. Two
+/// `PoseState`s with equal keys are treated as the same pose for
+/// transition purposes; continuous parameters (`t`, `takeoff`) are
+/// intentionally ignored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PoseKey {
+    Grounded(GaitKey),
+    Launching(AirKind),
+    Airborne(AirKind),
+    Landing(AirKind),
 }
 
 /// Lower-body / core animation state.
@@ -107,6 +140,18 @@ impl PoseState {
             PoseState::Launching { .. }
             | PoseState::Airborne { .. }
             | PoseState::Landing { .. } => sample_airborne(ctx),
+        }
+    }
+
+    /// Coarse key used to gate crossfade triggers. Changes in this key
+    /// are what fire a blend; changes in continuous params (e.g. a
+    /// Launching timer) are not.
+    pub fn transition_key(&self) -> PoseKey {
+        match *self {
+            PoseState::Grounded { gait } => PoseKey::Grounded(gait.key()),
+            PoseState::Launching { kind, .. } => PoseKey::Launching(kind),
+            PoseState::Airborne { kind, .. } => PoseKey::Airborne(kind),
+            PoseState::Landing { kind, .. } => PoseKey::Landing(kind),
         }
     }
 
