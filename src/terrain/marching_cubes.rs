@@ -83,9 +83,6 @@ impl MarchingCubes {
             }
         }
 
-        // Compute normals from geometry
-        self.compute_normals(&mut mesh);
-
         mesh
     }
 
@@ -174,28 +171,50 @@ impl MarchingCubes {
             return;
         }
 
-        // Interpolate vertices on edges
+        // Gradient of the density field at each corner, via central differences
+        // on the grid (clamped at boundaries). The surface normal is the
+        // negated, normalised gradient since density > 0 marks the interior.
+        let corner_indices = [
+            (x, y, z),
+            (x + 1, y, z),
+            (x + 1, y, z + 1),
+            (x, y, z + 1),
+            (x, y + 1, z),
+            (x + 1, y + 1, z),
+            (x + 1, y + 1, z + 1),
+            (x, y + 1, z + 1),
+        ];
+        let mut corner_gradients = [Vector3::zeros(); 8];
+        for (i, (cx, cy, cz)) in corner_indices.iter().enumerate() {
+            corner_gradients[i] = sample_gradient(grid, *cx, *cy, *cz, cell_size);
+        }
+
+        // Interpolate vertices, colors, and normals on edges
         let mut edge_vertices = [Point3::origin(); 12];
         let mut edge_colors = [[0.0f32; 4]; 12];
+        let mut edge_normals = [Vector3::zeros(); 12];
 
         for i in 0..12 {
             if edge_flags & (1 << i) != 0 {
                 let (v0, v1) = EDGE_CONNECTIONS[i];
-                edge_vertices[i] = interpolate_vertex(
-                    positions[v0],
-                    positions[v1],
-                    corners[v0].density,
-                    corners[v1].density,
-                    self.iso_level,
-                );
-                // Blend colors based on interpolation
-                edge_colors[i] = blend_colors(
-                    corners[v0].material.color(),
-                    corners[v1].material.color(),
-                    corners[v0].density,
-                    corners[v1].density,
-                    self.iso_level,
-                );
+                let d0 = corners[v0].density;
+                let d1 = corners[v1].density;
+                let t = lerp_t(d0, d1, self.iso_level);
+                edge_vertices[i] =
+                    Point3::from(positions[v0].coords.lerp(&positions[v1].coords, t));
+                // Colour comes from the solid side only. Blending toward the
+                // air corner pulls the vertex colour toward transparent black,
+                // which darkens exposed surfaces where t is close to 0 or 1
+                // (e.g. destroyed voxels or grid-aligned heightfields).
+                let solid_corner = if d0 > self.iso_level { v0 } else { v1 };
+                edge_colors[i] = corners[solid_corner].material.color();
+                let grad = corner_gradients[v0].lerp(&corner_gradients[v1], t);
+                let n = -grad;
+                edge_normals[i] = if n.magnitude_squared() > 1e-10 {
+                    n.normalize()
+                } else {
+                    Vector3::new(0.0, 1.0, 0.0)
+                };
             }
         }
 
@@ -210,86 +229,70 @@ impl MarchingCubes {
                 let edge = triangles[i + j] as usize;
                 mesh.positions.push(edge_vertices[edge]);
                 mesh.colors.push(edge_colors[edge]);
-                mesh.normals.push(Vector3::zeros()); // Will be computed later
+                mesh.normals.push(edge_normals[edge]);
                 mesh.indices.push(base_index + (i + j) as u32);
             }
             i += 3;
         }
     }
+}
 
-    fn compute_normals(&self, mesh: &mut MarchingCubesMesh) {
-        // Reset normals
-        for normal in mesh.normals.iter_mut() {
-            *normal = Vector3::zeros();
-        }
+/// Central-difference gradient of the density field at grid index (x,y,z).
+/// Falls back to forward/backward differences at the grid boundary.
+fn sample_gradient(
+    grid: &[Vec<Vec<Voxel>>],
+    x: usize,
+    y: usize,
+    z: usize,
+    cell_size: f32,
+) -> Vector3<f32> {
+    let size_x = grid.len();
+    let size_y = grid[0].len();
+    let size_z = grid[0][0].len();
 
-        // Accumulate face normals to vertices
-        for tri_idx in mesh.indices.chunks(3) {
-            let i0 = tri_idx[0] as usize;
-            let i1 = tri_idx[1] as usize;
-            let i2 = tri_idx[2] as usize;
+    let d = |cx: usize, cy: usize, cz: usize| grid[cx][cy][cz].density;
 
-            let v0 = mesh.positions[i0];
-            let v1 = mesh.positions[i1];
-            let v2 = mesh.positions[i2];
+    let dx = if x == 0 {
+        (d(x + 1, y, z) - d(x, y, z)) / cell_size
+    } else if x + 1 >= size_x {
+        (d(x, y, z) - d(x - 1, y, z)) / cell_size
+    } else {
+        (d(x + 1, y, z) - d(x - 1, y, z)) / (2.0 * cell_size)
+    };
 
-            let edge1 = v1 - v0;
-            let edge2 = v2 - v0;
-            let face_normal = edge1.cross(&edge2);
+    let dy = if y == 0 {
+        (d(x, y + 1, z) - d(x, y, z)) / cell_size
+    } else if y + 1 >= size_y {
+        (d(x, y, z) - d(x, y - 1, z)) / cell_size
+    } else {
+        (d(x, y + 1, z) - d(x, y - 1, z)) / (2.0 * cell_size)
+    };
 
-            mesh.normals[i0] += face_normal;
-            mesh.normals[i1] += face_normal;
-            mesh.normals[i2] += face_normal;
-        }
+    let dz = if z == 0 {
+        (d(x, y, z + 1) - d(x, y, z)) / cell_size
+    } else if z + 1 >= size_z {
+        (d(x, y, z) - d(x, y, z - 1)) / cell_size
+    } else {
+        (d(x, y, z + 1) - d(x, y, z - 1)) / (2.0 * cell_size)
+    };
 
-        // Normalize
-        for normal in mesh.normals.iter_mut() {
-            if normal.magnitude_squared() > 1e-10 {
-                *normal = normal.normalize();
-            } else {
-                *normal = Vector3::new(0.0, 1.0, 0.0);
-            }
-        }
-    }
+    Vector3::new(dx, dy, dz)
+}
+
+/// Interpolation parameter for an MC edge crossing the iso-surface.
+fn lerp_t(d0: f32, d1: f32, iso_level: f32) -> f32 {
+    let t = if (d1 - d0).abs() > 1e-6 {
+        (iso_level - d0) / (d1 - d0)
+    } else {
+        0.5
+    };
+    t.clamp(0.0, 1.0)
 }
 
 impl Default for MarchingCubes {
     fn default() -> Self {
         Self::new()
     }
-}
-
-/// Interpolate vertex position along an edge based on density values.
-fn interpolate_vertex(
-    p0: Point3<f32>,
-    p1: Point3<f32>,
-    d0: f32,
-    d1: f32,
-    iso_level: f32,
-) -> Point3<f32> {
-    let t = if (d1 - d0).abs() > 1e-6 {
-        (iso_level - d0) / (d1 - d0)
-    } else {
-        0.5
-    };
-    let t = t.clamp(0.0, 1.0);
-    Point3::from(p0.coords.lerp(&p1.coords, t))
-}
-
-/// Blend two colors based on density interpolation.
-fn blend_colors(c0: [f32; 4], c1: [f32; 4], d0: f32, d1: f32, iso_level: f32) -> [f32; 4] {
-    let t = if (d1 - d0).abs() > 1e-6 {
-        (iso_level - d0) / (d1 - d0)
-    } else {
-        0.5
-    };
-    let t = t.clamp(0.0, 1.0);
-    [
-        c0[0] + (c1[0] - c0[0]) * t,
-        c0[1] + (c1[1] - c0[1]) * t,
-        c0[2] + (c1[2] - c0[2]) * t,
-        c0[3] + (c1[3] - c0[3]) * t,
-    ]
 }
 
 /// Edge connections: which two corners each edge connects.
@@ -596,3 +599,93 @@ const TRI_TABLE: [[i8; 16]; 256] = [
         -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
     ],
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::terrain::voxel::VoxelMaterial;
+
+    fn voxel(density: f32) -> Voxel {
+        Voxel {
+            density,
+            material: if density > 0.0 {
+                VoxelMaterial::Rock
+            } else {
+                VoxelMaterial::Air
+            },
+            health: 0,
+        }
+    }
+
+    #[test]
+    fn flat_terrain_normals_point_up() {
+        // 4x4x4 grid with the bottom half solid and the top half air.
+        let mut grid = vec![vec![vec![voxel(-1.0); 4]; 4]; 4];
+        for x in 0..4 {
+            for z in 0..4 {
+                grid[x][0][z] = voxel(1.0);
+                grid[x][1][z] = voxel(1.0);
+                grid[x][2][z] = voxel(0.0); // partial-air voxel on the surface
+                grid[x][3][z] = voxel(-1.0);
+            }
+        }
+        let mc = MarchingCubes::new();
+        let mesh = mc.generate(&grid, Point3::origin(), 1.0);
+        assert!(!mesh.normals.is_empty(), "mesh should have normals");
+        for (i, n) in mesh.normals.iter().enumerate() {
+            assert!(n.y > 0.9, "normal {i} should point up, got {:?}", n);
+        }
+    }
+
+    #[test]
+    fn crater_floor_normals_point_up() {
+        // Simulates a destroyed pit carved into flat terrain.
+        // Column layout (bottom to top):
+        //   y=0..3: deep solid (survived)        density=1
+        //   y=4..6: destroyed solid              density=-1
+        //   y=7: original partial-air voxel      density=0 (surface material)
+        //   y=8: air above original surface      density=-1
+        let mut grid = vec![vec![vec![voxel(-1.0); 9]; 9]; 9];
+        for x in 0..9 {
+            for z in 0..9 {
+                for y in 0..=3 {
+                    grid[x][y][z] = voxel(1.0);
+                }
+                grid[x][7][z] = voxel(0.0);
+            }
+        }
+        let mc = MarchingCubes::new();
+        let mesh = mc.generate(&grid, Point3::origin(), 1.0);
+        assert!(!mesh.normals.is_empty());
+        // Expect triangles on the crater floor (y transition 3->4) to have upward normals.
+        for (i, (p, n)) in mesh.positions.iter().zip(mesh.normals.iter()).enumerate() {
+            if p.y > 3.0 && p.y < 5.0 {
+                assert!(
+                    n.y > 0.9,
+                    "crater floor normal {i} at {:?} should point up, got {:?}",
+                    p,
+                    n
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn flat_terrain_binary_density_normals_point_up() {
+        // Pre-fix style: no partial-air voxel, just binary +1/-1.
+        let mut grid = vec![vec![vec![voxel(-1.0); 4]; 4]; 4];
+        for x in 0..4 {
+            for z in 0..4 {
+                grid[x][0][z] = voxel(1.0);
+                grid[x][1][z] = voxel(1.0);
+                // y=2, y=3 remain air
+            }
+        }
+        let mc = MarchingCubes::new();
+        let mesh = mc.generate(&grid, Point3::origin(), 1.0);
+        assert!(!mesh.normals.is_empty(), "mesh should have normals");
+        for (i, n) in mesh.normals.iter().enumerate() {
+            assert!(n.y > 0.9, "normal {i} should point up, got {:?}", n);
+        }
+    }
+}

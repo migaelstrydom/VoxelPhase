@@ -38,8 +38,26 @@ pub fn generate_terrain(
                 let depth = top_voxel_y - y;
                 let material = material_at_depth(depth, &terrain.material_layers);
                 let hp = durability.health_at(y, top_voxel_y, floor_y);
-                svo.set(Point3::new(x, y, z), Voxel::solid(material, hp));
+                let mut voxel = Voxel::solid(material, hp);
+                // Topmost voxel: encode the sub-voxel surface offset as an SDF
+                // density so marching cubes lands the triangle at y = height
+                // instead of at the midpoint between solid and air corners.
+                if y + step > height {
+                    voxel.density = ((height - y) / step).clamp(f32::MIN_POSITIVE, 1.0);
+                }
+                svo.set(Point3::new(x, y, z), voxel);
                 y += step;
+            }
+
+            // Matching partial-air voxel directly above the surface so the MC
+            // edge interpolates to exactly y = height.
+            if y > bounds.min.y && y < bounds.max.y {
+                let air = Voxel {
+                    density: ((height - y) / step).clamp(-1.0, 0.0),
+                    material: VoxelMaterial::Air,
+                    health: 0,
+                };
+                svo.set(Point3::new(x, y, z), air);
             }
 
             z += step;
@@ -49,14 +67,7 @@ pub fn generate_terrain(
 
     // Pass 2: volumetric features — place or carve voxels in 3D.
     for volume in &terrain.volumes {
-        apply_volume(
-            svo,
-            volume,
-            terrain,
-            durability,
-            &bounds,
-            step,
-        );
+        apply_volume(svo, volume, terrain, durability, &bounds, step);
     }
 }
 
@@ -229,9 +240,7 @@ fn contribute(feature: &TerrainFeature, x: f32, z: f32, current_h: f32) -> f32 {
             // falls to 0.0 on both flat sides.
             let noise_offset = if roughness > 0.0 {
                 let face_factor = 4.0 * t * (1.0 - t);
-                let n = fbm_2d_periodic(
-                    x * 0.3, z * 0.3, 3, 0.5, 2.0, roughness_seed, None,
-                );
+                let n = fbm_2d_periodic(x * 0.3, z * 0.3, 3, 0.5, 2.0, roughness_seed, None);
                 (n - 0.5) * roughness * face_factor
             } else {
                 0.0
@@ -246,6 +255,68 @@ fn contribute(feature: &TerrainFeature, x: f32, z: f32, current_h: f32) -> f32 {
 // ---------------------------------------------------------------------------
 // Pass 2: volumetric features
 // ---------------------------------------------------------------------------
+
+/// Union a solid into the SVO using SDF-style density.
+///
+/// Writes a smoothly-varying density based on the signed distance `sdf`
+/// (negative inside the solid, positive outside). Voxels are only updated
+/// when the new density is greater than what's already there — so features
+/// layer correctly and never clobber deeper geometry.
+fn union_solid(
+    svo: &mut SparseVoxelOctree,
+    pos: Point3<f32>,
+    sdf: f32,
+    step: f32,
+    material: VoxelMaterial,
+    health: u8,
+) {
+    let new_density = (-sdf / step).clamp(-1.0, 1.0);
+    let existing = svo.get(pos);
+    if new_density <= existing.density {
+        return;
+    }
+    let (mat, hp) = if new_density > 0.0 {
+        (material, health)
+    } else {
+        (VoxelMaterial::Air, 0)
+    };
+    svo.set(
+        pos,
+        Voxel {
+            density: new_density,
+            material: mat,
+            health: hp,
+        },
+    );
+}
+
+/// Carve a volume out of the SVO using SDF-style density.
+///
+/// `sdf_carve` is the signed distance to the carve surface (negative inside
+/// the region being removed). Uses CSG subtraction semantics so existing
+/// solids outside the carve are preserved, and voxels near the cut get a
+/// smooth partial density for MC to interpolate.
+fn carve_with_sdf(svo: &mut SparseVoxelOctree, pos: Point3<f32>, sdf_carve: f32, step: f32) {
+    let carve_density = (sdf_carve / step).clamp(-1.0, 1.0);
+    let existing = svo.get(pos);
+    let new_density = existing.density.min(carve_density);
+    if new_density >= existing.density {
+        return;
+    }
+    let (mat, hp) = if new_density > 0.0 {
+        (existing.material, existing.health)
+    } else {
+        (VoxelMaterial::Air, 0)
+    };
+    svo.set(
+        pos,
+        Voxel {
+            density: new_density,
+            material: mat,
+            health: hp,
+        },
+    );
+}
 
 /// Apply a single volumetric feature to the SVO.
 fn apply_volume(
@@ -339,8 +410,8 @@ fn apply_volume(
             noise_seed,
         } => {
             apply_overhang(
-                svo, fx, fz, tx, tz, height, depth, thickness, dx, dz, noise, noise_seed,
-                layers, durability, bounds, step,
+                svo, fx, fz, tx, tz, height, depth, thickness, dx, dz, noise, noise_seed, layers,
+                durability, bounds, step,
             );
         }
     }
@@ -399,13 +470,10 @@ fn apply_island(
                     sd += (n - 0.5) * edge_noise * 2.0;
                 }
 
-                if sd < 0.0 {
-                    // Depth from island surface for material selection
-                    let depth = (-sd).max(0.0);
-                    let material = material_at_depth(depth, layers);
-                    let hp = durability.health_at(y, cy + hy, bounds.min.y);
-                    svo.set(Point3::new(x, y, z), Voxel::solid(material, hp));
-                }
+                let depth = (-sd).max(0.0);
+                let material = material_at_depth(depth, layers);
+                let hp = durability.health_at(y, cy + hy, bounds.min.y);
+                union_solid(svo, Point3::new(x, y, z), sd, step, material, hp);
 
                 z += step;
             }
@@ -427,11 +495,14 @@ fn apply_pillar(
     bounds: &AABB,
     step: f32,
 ) {
-    let min_x = (cx - radius).max(bounds.min.x);
-    let max_x = (cx + radius).min(bounds.max.x);
-    let min_z = (cz - radius).max(bounds.min.z);
-    let max_z = (cz + radius).min(bounds.max.z);
+    // Pad by one voxel so the SDF shell on the pillar exterior lands inside
+    // the iteration region (needed for MC to find the smooth boundary).
+    let min_x = (cx - radius - step).max(bounds.min.x);
+    let max_x = (cx + radius + step).min(bounds.max.x);
+    let min_z = (cz - radius - step).max(bounds.min.z);
+    let max_z = (cz + radius + step).min(bounds.max.z);
     let top_y = height.min(bounds.max.y);
+    let max_y = (top_y + step).min(bounds.max.y);
 
     let mut x = min_x;
     while x < max_x {
@@ -439,19 +510,18 @@ fn apply_pillar(
         while z < max_z {
             let dx = x - cx;
             let dz = z - cz;
-            let dist_sq = dx * dx + dz * dz;
-            if dist_sq >= radius * radius {
-                z += step;
-                continue;
-            }
+            let dist = (dx * dx + dz * dz).sqrt();
+            // Open at bottom, capped at top. SDF = max(radial, top_cap).
+            let radial_sd = dist - radius;
 
-            // Fill from the bottom of the world up to the specified height
             let mut y = bounds.min.y;
-            while y < top_y {
-                let depth = top_y - y;
+            while y < max_y {
+                let top_sd = y - top_y;
+                let sd = radial_sd.max(top_sd);
+                let depth = (top_y - y).max(0.0);
                 let material = material_at_depth(depth, layers);
                 let hp = durability.health_at(y, top_y, bounds.min.y);
-                svo.set(Point3::new(x, y, z), Voxel::solid(material, hp));
+                union_solid(svo, Point3::new(x, y, z), sd, step, material, hp);
                 y += step;
             }
 
@@ -489,13 +559,13 @@ fn apply_tunnel(
     let bx = cx + ndx * half_len;
     let bz = cz + ndz * half_len;
 
-    // Bounding box of the tunnel
-    let min_x = ax.min(bx) - radius;
-    let max_x = ax.max(bx) + radius;
-    let min_z = az.min(bz) - radius;
-    let max_z = az.max(bz) + radius;
-    let min_y = depth - radius;
-    let max_y = depth + radius;
+    // Bounding box of the tunnel, padded by one voxel for the SDF shell.
+    let min_x = ax.min(bx) - radius - step;
+    let max_x = ax.max(bx) + radius + step;
+    let min_z = az.min(bz) - radius - step;
+    let max_z = az.max(bz) + radius + step;
+    let min_y = depth - radius - step;
+    let max_y = depth + radius + step;
 
     let min_x = min_x.max(bounds.min.x);
     let max_x = max_x.min(bounds.max.x);
@@ -510,18 +580,18 @@ fn apply_tunnel(
         while y < max_y {
             let mut z = min_z;
             while z < max_z {
-                // Project (x, z) onto the tunnel axis segment
+                // Project (x, z) onto the tunnel axis segment. Out-of-segment
+                // positions aren't carved (skip).
                 let (t, perp_xz) = point_to_segment_projection(x, z, ax, az, bx, bz);
                 if t < 0.0 || t > 1.0 {
                     z += step;
                     continue;
                 }
-                // Distance in the YZ cross-section (circular bore)
+                // Signed distance to the cylindrical bore (positive outside).
                 let dy = y - depth;
                 let dist = (perp_xz * perp_xz + dy * dy).sqrt();
-                if dist < radius {
-                    svo.set(Point3::new(x, y, z), Voxel::air());
-                }
+                let sd = dist - radius;
+                carve_with_sdf(svo, Point3::new(x, y, z), sd, step);
 
                 z += step;
             }
@@ -594,20 +664,27 @@ fn apply_arch(
                 let rel_x = x - mid_x;
                 let rel_z = z - mid_z;
                 let along = rel_x * dir_x + rel_z * dir_z;
-                let perp_h = (rel_x - along * dir_x).powi(2) + (rel_z - along * dir_z).powi(2);
-                let perp_h = perp_h.sqrt();
+                let perp_h =
+                    ((rel_x - along * dir_x).powi(2) + (rel_z - along * dir_z).powi(2)).sqrt();
 
-                if along.abs() <= half_span && perp_h <= half_t {
-                    // Arc height at this position along the span
-                    let t = along / half_span; // [-1, 1]
-                    let arc_y = mid_y + radius * (1.0 - t * t).max(0.0).sqrt();
-                    let dy = (y - arc_y).abs();
-                    if dy <= half_t {
-                        let material = material_at_depth(0.5, layers);
-                        let hp = durability.health_at(y, arc_y + half_t, bounds.min.y);
-                        svo.set(Point3::new(x, y, z), Voxel::solid(material, hp));
-                    }
+                // Only evaluate inside the span extent; outside we leave the
+                // voxel alone so the arch doesn't stamp air past its ends.
+                if along.abs() > half_span + step {
+                    z += step;
+                    continue;
                 }
+
+                let t_norm = (along / half_span).clamp(-1.0, 1.0);
+                let arc_y = mid_y + radius * (1.0 - t_norm * t_norm).max(0.0).sqrt();
+                // Signed distance to the sweep tube: take the larger of the
+                // horizontal and vertical offsets minus the tube half-thickness.
+                // Uses box-like metric rather than euclidean for simplicity.
+                let dy = (y - arc_y).abs();
+                let sd = perp_h.max(dy) - half_t;
+
+                let material = material_at_depth(0.5, layers);
+                let hp = durability.health_at(y, arc_y + half_t, bounds.min.y);
+                union_solid(svo, Point3::new(x, y, z), sd, step, material, hp);
 
                 z += step;
             }
@@ -706,9 +783,7 @@ fn apply_overhang(
 
             // Noise displacement on the underside
             let underside_offset = if noise > 0.0 {
-                let n = fbm_2d_periodic(
-                    x * 0.5, z * 0.5, 3, 0.5, 2.0, noise_seed, None,
-                );
+                let n = fbm_2d_periodic(x * 0.5, z * 0.5, 3, 0.5, 2.0, noise_seed, None);
                 (n - 0.5) * noise * 2.0 * taper_t
             } else {
                 0.0
@@ -716,15 +791,17 @@ fn apply_overhang(
 
             let top_y = height;
             let bottom_y = height - local_thickness + underside_offset;
+            let mid_y = (top_y + bottom_y) * 0.5;
+            let half_thick = (top_y - bottom_y) * 0.5;
 
             let mut y = min_y;
             while y < max_y {
-                if y >= bottom_y && y <= top_y {
-                    let depth_in_lip = top_y - y;
-                    let material = material_at_depth(depth_in_lip, layers);
-                    let hp = durability.health_at(y, top_y, bounds.min.y);
-                    svo.set(Point3::new(x, y, z), Voxel::solid(material, hp));
-                }
+                // Signed distance to the vertical slab at this (x,z).
+                let sd = (y - mid_y).abs() - half_thick;
+                let depth_in_lip = (top_y - y).max(0.0);
+                let material = material_at_depth(depth_in_lip, layers);
+                let hp = durability.health_at(y, top_y, bounds.min.y);
+                union_solid(svo, Point3::new(x, y, z), sd, step, material, hp);
                 y += step;
             }
 
@@ -767,7 +844,14 @@ fn apply_caves(
             (r.center.2 + outer).min(bounds.max.z),
         )
     } else {
-        (bounds.min.x, bounds.min.y, bounds.min.z, bounds.max.x, bounds.max.y, bounds.max.z)
+        (
+            bounds.min.x,
+            bounds.min.y,
+            bounds.min.z,
+            bounds.max.x,
+            bounds.max.y,
+            bounds.max.z,
+        )
     };
 
     // Pass A: carve caves based on 3D noise and depth curve.
@@ -834,9 +918,12 @@ fn apply_caves(
                     }
                 }
 
-                if noise > threshold {
-                    svo.set(Point3::new(x, y, z), Voxel::air());
-                }
+                // SDF-style carve: distance proxy is (threshold - noise),
+                // scaled so a full-voxel gradient maps to density ±1. Noise
+                // gradients aren't true distances, but at unit step this gives
+                // a reasonable smooth cave wall for MC interpolation.
+                let sdf_carve = threshold - noise;
+                carve_with_sdf(svo, Point3::new(x, y, z), sdf_carve, step);
 
                 y += step;
             }
@@ -910,7 +997,15 @@ fn fixup_cave_materials(
                         voxel.health
                     };
                     if voxel.material != material || voxel.health != health {
-                        svo.set(Point3::new(x, y, z), Voxel::solid(material, health));
+                        // Preserve the SDF density while updating material/health.
+                        svo.set(
+                            Point3::new(x, y, z),
+                            Voxel {
+                                density: voxel.density,
+                                material,
+                                health,
+                            },
+                        );
                     }
                     depth_below_surface += step;
                 } else {

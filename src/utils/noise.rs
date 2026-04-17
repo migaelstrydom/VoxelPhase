@@ -109,13 +109,8 @@ pub fn fbm_3d(
     let mut max_value = 0.0;
 
     for i in 0..octaves {
-        total += noise_3d_periodic(
-            x * frequency,
-            y * frequency,
-            z * frequency,
-            seed + i,
-            None,
-        ) * amplitude;
+        total += noise_3d_periodic(x * frequency, y * frequency, z * frequency, seed + i, None)
+            * amplitude;
         max_value += amplitude;
         amplitude *= persistence;
         frequency *= lacunarity;
@@ -213,7 +208,11 @@ mod tests {
     #[test]
     fn test_fbm_3d_range() {
         let n = fbm_3d(5.5, 3.2, 1.7, 4, 0.5, 2.0, 123);
-        assert!(n >= 0.0 && n <= 1.0, "fbm_3d should be in [0, 1], got {}", n);
+        assert!(
+            n >= 0.0 && n <= 1.0,
+            "fbm_3d should be in [0, 1], got {}",
+            n
+        );
     }
 
     #[test]
