@@ -8,8 +8,7 @@ use std::f32::consts::{FRAC_PI_2, PI, TAU};
 use nalgebra::{Point3, Vector2, Vector3};
 
 use super::gait::GaitCycle;
-use crate::animation::config::CharacterRigConfig;
-use crate::animation::state::{AnimationState, FootState, HandState};
+use crate::animation::state::{FootState, HandState};
 
 /// Phase offset for the left foot.
 pub const LEFT_PHASE: f32 = 0.0;
@@ -44,41 +43,6 @@ pub fn update_foot(
     // Sample the gait cycle and pin foot directly to target
     let offset = gait.sample(foot_angle);
     foot.position = offset.to_world(hip, facing, lateral_sign);
-}
-
-/// Handle idle state - plant both feet at ground contacts.
-pub fn handle_idle(state: &mut AnimationState, _config: &CharacterRigConfig) {
-    let snap_threshold = 0.03;
-
-    // Compute desired positions from ground contacts or current positions
-    let left_desired = state.left.ground_contact.unwrap_or(state.left.position);
-    let right_desired = state.right.ground_contact.unwrap_or(state.right.position);
-
-    // Only update if significantly different (prevents jitter)
-    let left_delta = (left_desired - state.left.planted_position).magnitude();
-    let right_delta = (right_desired - state.right.planted_position).magnitude();
-
-    if left_delta > snap_threshold {
-        state.left.planted_position = left_desired;
-    }
-    if right_delta > snap_threshold {
-        state.right.planted_position = right_desired;
-    }
-
-    // Snap feet to planted positions
-    state.left.position = state.left.planted_position;
-    state.right.position = state.right.planted_position;
-
-    // Update normals from ground contact
-    if let Some(normal) = state.left.ground_normal {
-        state.left.normal = normal;
-    }
-    if let Some(normal) = state.right.ground_normal {
-        state.right.normal = normal;
-    }
-
-    // Reset wheel angle
-    state.wheel_angle = 0.0;
 }
 
 /// Update hand position from arm gait cycle.

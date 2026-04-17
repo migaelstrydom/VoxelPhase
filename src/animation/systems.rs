@@ -116,8 +116,15 @@ impl<'a> System<'a> for CharacterAnimationSystem {
 
             // Update the animator
             let velocity = nalgebra::Vector3::new(vel.0.x, vel.0.y, vel.0.z);
-            let wants_to_walk = target.direction.magnitude_squared() > 0.001;
-            animator.update(dt, pelvis_pos, yaw, velocity, wants_to_walk, contacts);
+            animator.update(
+                dt,
+                pelvis_pos,
+                yaw,
+                velocity,
+                player_state,
+                target,
+                contacts,
+            );
             // debug_lines.add(
             //     "WheelAngle",
             //     &format!(

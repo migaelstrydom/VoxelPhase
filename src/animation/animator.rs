@@ -8,12 +8,18 @@ use specs::{Component, VecStorage};
 
 use super::config::CharacterRigConfig;
 use super::humanoid::gait::GaitCycle;
+use super::humanoid::pose_state::{AirKind, Gait, PoseState, SampleCtx, Takeoff, TickCtx};
 use super::humanoid::skeleton::{generate_character_mesh, Skeleton};
 use super::humanoid::stride_wheel;
 use super::pose::{FeetPose, HandsPose, PoseFragment};
-use super::state::{AnimationState, LocomotionMode};
+use super::state::{AnimationState, FootState};
+use crate::player::{AirSteering, LocomotionState, PlayerState, PlayerTargetState};
 use crate::rendering::vertex::Vertex;
 use crate::sensing::{ContactCandidate, Probe};
+
+/// Minimum movement (metres) required before an idle foot replants.
+/// Keeps planting stable against probe jitter.
+const IDLE_PLANT_SNAP: f32 = 0.03;
 
 /// Probe tags used by the character animator.
 pub mod probe_tags {
@@ -36,6 +42,13 @@ pub struct CharacterAnimator {
     pub skeleton: Skeleton,
     pub gait: GaitCycle,
     pub arm_gait: GaitCycle,
+
+    /// Current lower-body / core pose FSM variant.
+    pub pose_state: PoseState,
+    /// Previous-frame `PlayerState.locomotion`, kept so the driver can
+    /// detect variant edges (airborne→grounded, grounded→launching) for
+    /// Landing/Launching splicing.
+    last_locomotion: LocomotionState,
 
     // Mesh caching
     cached_vertices: Vec<Vertex>,
@@ -63,6 +76,8 @@ impl CharacterAnimator {
             skeleton,
             gait,
             arm_gait,
+            pose_state: PoseState::Grounded { gait: Gait::Idle },
+            last_locomotion: LocomotionState::Grounded,
             cached_vertices: Vec::new(),
             cached_indices: Vec::new(),
         }
@@ -135,44 +150,74 @@ impl CharacterAnimator {
         pelvis_position: Point3<f32>,
         yaw: f32,
         velocity: Vector3<f32>,
-        wants_to_walk: bool,
+        player_state: &PlayerState,
+        target: &PlayerTargetState,
         contacts: &[ContactCandidate],
     ) {
         let speed = Vector3::new(velocity.x, 0.0, velocity.z).magnitude();
-
-        // Update facing direction
         let facing = Vector3::new(yaw.sin(), 0.0, yaw.cos());
-        self.state.facing = facing;
 
-        // Sync pelvis position from physics
+        self.state.facing = facing;
         self.state.pelvis_position = pelvis_position;
 
-        // Process probe contacts
         self.process_contacts(contacts);
         let has_ground_contact =
             self.state.left.ground_contact.is_some() || self.state.right.ground_contact.is_some();
+        self.state.is_grounded = has_ground_contact;
 
-        // Determine locomotion mode
-        let new_mode = self.determine_locomotion_mode(speed, has_ground_contact, wants_to_walk);
-        self.state.set_mode(new_mode, dt);
+        // Map PlayerState → PoseState each frame.
+        self.pose_state = map_pose_state(
+            self.pose_state,
+            player_state,
+            target,
+            speed,
+            self.config.idle_threshold,
+            facing,
+        );
 
-        // Update based on mode
-        match self.state.mode {
-            LocomotionMode::Idle => {
-                stride_wheel::handle_idle(&mut self.state, &self.config);
-                self.update_idle_upper_body();
-            }
-            LocomotionMode::Walking | LocomotionMode::Dragged => {
-                self.update_walking(dt, speed, velocity);
-            }
-            LocomotionMode::Falling => {
-                self.update_falling(pelvis_position);
-            }
+        // Re-plant feet when idle. Hysteresis prevents per-frame jitter
+        // driven by probe noise.
+        if matches!(self.pose_state, PoseState::Grounded { gait: Gait::Idle }) {
+            replant_foot(&mut self.state.left, IDLE_PLANT_SNAP);
+            replant_foot(&mut self.state.right, IDLE_PLANT_SNAP);
         }
 
-        // Apply grab hand override (after normal arm animation).
-        // Clamp to arm's reach from the shoulder so the IK solver doesn't
-        // stretch the arm when the hold point is farther than arm length.
+        // Advance stride wheel only when a gait cycle is actually playing.
+        let running_stride = matches!(
+            self.pose_state,
+            PoseState::Grounded { gait } if !matches!(gait, Gait::Idle)
+        );
+        if running_stride {
+            stride_wheel::advance_wheel(
+                &mut self.state.wheel_angle,
+                speed,
+                dt,
+                self.config.body_radius,
+            );
+        }
+
+        let tick_ctx = TickCtx {
+            dt,
+            velocity,
+            horizontal_speed: speed,
+            rig: &self.config,
+        };
+        self.pose_state = self.pose_state.tick(&tick_ctx);
+
+        let sample_ctx = SampleCtx {
+            rig: &self.config,
+            anim: &self.state,
+            velocity,
+            leg_gait: &self.gait,
+            arm_gait: &self.arm_gait,
+        };
+        let fragment = self.pose_state.sample(&sample_ctx);
+
+        // Mirror fragment channels into `AnimationState` so other systems
+        // (probes, grab override) observe consistent values.
+        self.apply_fragment_to_state(&fragment);
+
+        // Grab override: post-sample right-hand write.
         if let Some(target) = self.state.grab_hand_target {
             let shoulder = self.skeleton.right_shoulder;
             let to_target = target - shoulder;
@@ -185,11 +230,9 @@ impl CharacterAnimator {
             }
         }
 
-        // Build a PoseFragment reflecting the state the per-mode updates
-        // just wrote, and route the skeleton update through apply_fragment.
-        // Once per-state FSMs exist, each will emit its own fragment and this
-        // redundant reflection goes away.
-        let fragment = PoseFragment {
+        // Build the fragment the skeleton renders from. Reads `state` so
+        // the grab override and any upper-body post-writes flow through.
+        let render_fragment = PoseFragment {
             feet: Some(FeetPose {
                 left: self.state.left.position,
                 right: self.state.right.position,
@@ -204,65 +247,40 @@ impl CharacterAnimator {
             head_bob: Some(self.state.head_bob),
         };
         self.skeleton
-            .apply_fragment(&fragment, &self.state, &self.config);
+            .apply_fragment(&render_fragment, &self.state, &self.config);
+
+        self.last_locomotion = player_state.locomotion;
     }
 
-    /// Update upper body for idle state.
-    fn update_idle_upper_body(&mut self) {
-        let facing = self.state.facing;
-        let right = facing.cross(&Vector3::y());
-        let left = -right;
+    /// Copy fragment channels (feet, hands, twist, head) back into
+    /// `AnimationState`. This keeps downstream consumers (grab override,
+    /// probes) reading the values the FSM just produced.
+    fn apply_fragment_to_state(&mut self, fragment: &PoseFragment) {
+        if let Some(feet) = &fragment.feet {
+            self.state.left.position = feet.left;
+            self.state.right.position = feet.right;
+        }
+        if let Some(hands) = &fragment.hands {
+            self.state.left_hand.position = hands.left;
+            self.state.right_hand.position = hands.right;
+        }
+        if let Some(twist) = fragment.shoulder_twist {
+            self.state.shoulder_twist = twist;
+        }
+        if let Some(tilt) = fragment.head_tilt {
+            self.state.head_tilt = tilt;
+        }
+        if let Some(bob) = fragment.head_bob {
+            self.state.head_bob = bob;
+        }
 
-        // Chest position
-        let chest = self.state.pelvis_position + Vector3::y() * self.config.torso_height;
-
-        // Shoulders at rest (no twist)
-        let left_shoulder = chest + left * self.config.shoulder_width;
-        let right_shoulder = chest + right * self.config.shoulder_width;
-
-        // Hands hanging at rest
-        let arm_hang = self.config.arm_length();
-        self.state.left_hand.position = left_shoulder - Vector3::y() * arm_hang;
-        self.state.right_hand.position = right_shoulder - Vector3::y() * arm_hang;
-
-        // Reset upper body animation state
-        self.state.shoulder_twist = 0.0;
-        self.state.head_tilt = nalgebra::Vector2::new(0.0, 0.0);
-        self.state.head_bob = 0.0;
-    }
-
-    /// Update for falling state.
-    fn update_falling(&mut self, pelvis_position: Point3<f32>) {
-        let facing = self.state.facing;
-        let right = facing.cross(&Vector3::y());
-        let left = -right;
-
-        // Keep feet hanging below pelvis
-        let left_hip = self.state.pelvis_position - right * self.config.hip_width;
-        let right_hip = self.state.pelvis_position + right * self.config.hip_width;
-        let hang_distance = self.config.standing_height();
-
-        self.state.left.position =
-            Point3::new(left_hip.x, pelvis_position.y - hang_distance, left_hip.z);
-        self.state.right.position =
-            Point3::new(right_hip.x, pelvis_position.y - hang_distance, right_hip.z);
-
-        // Chest position
-        let chest = self.state.pelvis_position + Vector3::y() * self.config.torso_height;
-
-        // Arms slightly out for balance feel
-        let left_shoulder = chest + left * self.config.shoulder_width;
-        let right_shoulder = chest + right * self.config.shoulder_width;
-        let arm_hang = self.config.arm_length() * 0.9;
-
-        // Arms spread slightly outward and down
-        self.state.left_hand.position = left_shoulder + left * 0.1 - Vector3::y() * arm_hang;
-        self.state.right_hand.position = right_shoulder + right * 0.1 - Vector3::y() * arm_hang;
-
-        // Reset shoulder twist, slight backward head tilt (looking up)
-        self.state.shoulder_twist = 0.0;
-        self.state.head_tilt = nalgebra::Vector2::new(-0.05, 0.0);
-        self.state.head_bob = 0.0;
+        // Update foot normals from the most recent ground contact.
+        if let Some(normal) = self.state.left.ground_normal {
+            self.state.left.normal = normal;
+        }
+        if let Some(normal) = self.state.right.ground_normal {
+            self.state.right.normal = normal;
+        }
     }
 
     /// Process contact candidates from probes.
@@ -304,118 +322,6 @@ impl CharacterAnimator {
         }
     }
 
-    /// Determine locomotion mode from ground contact, movement intent, and velocity.
-    ///
-    /// Walking is driven by player input intent. When there is no input but the
-    /// body is still moving (e.g. dragged by a held heavy object), the Dragged
-    /// mode keeps legs animated until the body settles.
-    fn determine_locomotion_mode(
-        &self,
-        speed: f32,
-        has_ground_contact: bool,
-        wants_to_walk: bool,
-    ) -> LocomotionMode {
-        if !has_ground_contact {
-            LocomotionMode::Falling
-        } else if wants_to_walk {
-            LocomotionMode::Walking
-        } else if self.state.mode == LocomotionMode::Dragged {
-            if self.state.mode_time > self.config.drag_settle_time
-                && speed < self.config.idle_threshold
-            {
-                LocomotionMode::Idle
-            } else {
-                LocomotionMode::Dragged
-            }
-        } else if speed > self.config.idle_threshold {
-            LocomotionMode::Dragged
-        } else {
-            LocomotionMode::Idle
-        }
-    }
-
-    /// Update walking animation.
-    fn update_walking(&mut self, dt: f32, speed: f32, velocity: Vector3<f32>) {
-        let radius = self.config.body_radius;
-
-        // Advance stride wheel (radius = body_radius for proper ground contact velocity)
-        stride_wheel::advance_wheel(&mut self.state.wheel_angle, speed, dt, radius);
-
-        // Compute hip positions
-        let right = self.state.facing.cross(&Vector3::y());
-        let left = -right;
-        let left_hip = self.state.pelvis_position - right * self.config.hip_width;
-        let right_hip = self.state.pelvis_position + right * self.config.hip_width;
-
-        let facing = self.state.facing;
-        let wheel_angle = self.state.wheel_angle;
-
-        // Update left foot from gait cycle
-        stride_wheel::update_foot(
-            &mut self.state.left,
-            &self.gait,
-            wheel_angle,
-            stride_wheel::LEFT_PHASE,
-            Point3::from(left_hip.coords),
-            facing,
-            -1.0, // Left side
-        );
-
-        // Update right foot from gait cycle
-        stride_wheel::update_foot(
-            &mut self.state.right,
-            &self.gait,
-            wheel_angle,
-            stride_wheel::RIGHT_PHASE,
-            Point3::from(right_hip.coords),
-            facing,
-            1.0, // Right side
-        );
-
-        // === Upper body animation ===
-
-        // Shoulder twist
-        self.state.shoulder_twist =
-            stride_wheel::compute_shoulder_twist(wheel_angle, self.config.shoulder_twist_max);
-
-        // Compute shoulder positions (need them for arm animation)
-        let chest = self.state.pelvis_position + Vector3::y() * self.config.torso_height;
-        let twist = self.state.shoulder_twist;
-        let cos_twist = twist.cos();
-        let sin_twist = twist.sin();
-        let left_offset = left * cos_twist + facing * sin_twist;
-        let right_offset = right * cos_twist - facing * sin_twist;
-        let left_shoulder = chest + left_offset * self.config.shoulder_width;
-        let right_shoulder = chest + right_offset * self.config.shoulder_width;
-
-        // Update hands from arm gait cycle
-        // Arms swing OPPOSITE to legs: left arm uses RIGHT_PHASE, right arm uses LEFT_PHASE
-        stride_wheel::update_hand(
-            &mut self.state.left_hand,
-            &self.arm_gait,
-            wheel_angle,
-            stride_wheel::RIGHT_PHASE, // Opposite to left leg
-            left_shoulder,
-            facing,
-            -1.0,
-        );
-        stride_wheel::update_hand(
-            &mut self.state.right_hand,
-            &self.arm_gait,
-            wheel_angle,
-            stride_wheel::LEFT_PHASE, // Opposite to right leg
-            right_shoulder,
-            facing,
-            1.0,
-        );
-
-        // Head animation
-        self.state.head_tilt =
-            stride_wheel::compute_head_tilt(velocity, facing, self.config.head_tilt_factor);
-        self.state.head_bob =
-            stride_wheel::compute_head_bob(wheel_angle, self.config.head_bob_amplitude);
-    }
-
     /// Whether the character has any ground contact.
     pub fn is_grounded(&self) -> bool {
         self.state.is_grounded
@@ -432,5 +338,86 @@ impl CharacterAnimator {
         let (vertices, indices) = generate_character_mesh(&self.skeleton, &self.config);
         self.cached_vertices = vertices;
         self.cached_indices = indices;
+    }
+}
+
+/// Replant an idle foot at its latest ground contact if the contact has
+/// shifted beyond `snap_threshold`. Smaller shifts are ignored to avoid
+/// per-frame jitter from probe noise.
+fn replant_foot(foot: &mut FootState, snap_threshold: f32) {
+    let desired = foot.ground_contact.unwrap_or(foot.position);
+    if (desired - foot.planted_position).magnitude() > snap_threshold {
+        foot.planted_position = desired;
+    }
+}
+
+/// Map `PlayerState` (+ intent) to a `PoseState` variant.
+fn map_pose_state(
+    prev: PoseState,
+    player: &PlayerState,
+    target: &PlayerTargetState,
+    speed: f32,
+    idle_threshold: f32,
+    facing: Vector3<f32>,
+) -> PoseState {
+    let moving = speed > idle_threshold || target.direction.magnitude_squared() > 0.001;
+
+    match player.locomotion {
+        LocomotionState::Grounded => {
+            let gait = if target.crouch {
+                Gait::Crouch { walking: moving }
+            } else if !moving {
+                Gait::Idle
+            } else if target.sprint {
+                Gait::Sprint
+            } else {
+                Gait::Walk
+            };
+            PoseState::Grounded { gait }
+        }
+        LocomotionState::Launching { steering, .. } => {
+            let kind = match steering {
+                AirSteering::Locked { .. } => AirKind::LongJump,
+                AirSteering::Responsive => AirKind::Jump,
+            };
+            let takeoff = Takeoff {
+                facing,
+                air_speed: player.air_speed,
+            };
+            // Preserve any in-flight Launching timer from the previous frame.
+            let t = match prev {
+                PoseState::Launching { t, .. } => t,
+                _ => 0.0,
+            };
+            PoseState::Launching { kind, takeoff, t }
+        }
+        LocomotionState::Airborne { steering, .. } => {
+            let kind = match (prev, steering) {
+                (PoseState::Launching { kind, .. }, _) => kind,
+                (PoseState::Airborne { kind, .. }, _) => kind,
+                (_, AirSteering::Locked { .. }) => AirKind::LongJump,
+                (_, AirSteering::Responsive) => AirKind::Fall,
+            };
+            let takeoff = match prev {
+                PoseState::Launching { takeoff, .. } | PoseState::Airborne { takeoff, .. } => {
+                    takeoff
+                }
+                _ => Takeoff {
+                    facing,
+                    air_speed: player.air_speed,
+                },
+            };
+            PoseState::Airborne { kind, takeoff }
+        }
+        LocomotionState::CoyoteTime(_) => {
+            let takeoff = Takeoff {
+                facing,
+                air_speed: player.air_speed,
+            };
+            PoseState::Airborne {
+                kind: AirKind::Fall,
+                takeoff,
+            }
+        }
     }
 }

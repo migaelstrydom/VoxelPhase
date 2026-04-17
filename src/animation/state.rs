@@ -4,18 +4,6 @@
 
 use nalgebra::{Point3, Vector2, Vector3};
 
-/// High-level locomotion mode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum LocomotionMode {
-    #[default]
-    Idle,
-    Walking,
-    /// Being pulled along by an external force (e.g. held heavy object)
-    /// without movement input. Uses walking animation for now.
-    Dragged,
-    Falling,
-}
-
 /// State of a single foot.
 #[derive(Debug, Clone)]
 pub struct FootState {
@@ -65,13 +53,6 @@ impl HandState {
 /// No other components should store animation-related state.
 #[derive(Debug, Clone)]
 pub struct AnimationState {
-    /// Current locomotion mode.
-    pub mode: LocomotionMode,
-    /// Previous locomotion mode (for transition detection).
-    pub prev_mode: LocomotionMode,
-    /// Time spent in current mode.
-    pub mode_time: f32,
-
     /// Stride wheel rotation [0, TAU).
     pub wheel_angle: f32,
 
@@ -118,10 +99,6 @@ impl AnimationState {
         let right_hand = Point3::new(pelvis_position.x - 0.2, hand_y, pelvis_position.z);
 
         Self {
-            mode: LocomotionMode::Idle,
-            prev_mode: LocomotionMode::Idle,
-            mode_time: 0.0,
-
             wheel_angle: 0.0,
 
             left: FootState::new(left_foot),
@@ -140,17 +117,6 @@ impl AnimationState {
             is_grounded: false,
 
             grab_hand_target: None,
-        }
-    }
-
-    /// Update locomotion mode and track transitions.
-    pub fn set_mode(&mut self, new_mode: LocomotionMode, dt: f32) {
-        if new_mode != self.mode {
-            self.prev_mode = self.mode;
-            self.mode = new_mode;
-            self.mode_time = 0.0;
-        } else {
-            self.mode_time += dt;
         }
     }
 }

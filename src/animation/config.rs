@@ -54,8 +54,6 @@ pub struct CharacterRigConfig {
     // === Gait parameters ===
     /// Speed below which the character is considered standing still.
     pub idle_threshold: f32,
-    /// Minimum time (seconds) to stay in Dragged mode before allowing transition to Idle.
-    pub drag_settle_time: f32,
     /// Height of the step arc when foot is swinging.
     pub step_height: f32,
     /// Total stride length (distance covered in one full gait cycle).
@@ -149,7 +147,6 @@ impl Default for CharacterRigConfig {
 
             // Gait parameters
             idle_threshold: 0.1,
-            drag_settle_time: 0.5,
             step_height: 0.15,
             stride_length: 0.4,
             standing_height_ratio: 0.85,
