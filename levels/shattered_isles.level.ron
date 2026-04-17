@@ -1,5 +1,21 @@
 // The Shattered Isles — a sprawling adventure across broken terrain,
 // floating islands, ancient ruins, and a chaotic playground.
+//
+// Zone layout (roughly to scale):
+//
+//           LOOKOUT PEAK           SKYBRIDGE CANYON
+//           (-35,-35) h=12         (0,-35) d=10
+//                                  floating islands
+//     PLAYGROUND RIDGE                   ^
+//     (-24,-18) h=3                      |         CRATER LAKE
+//                              SPAWN     |         (25,-22) d=8
+//                              KNOLL     |
+//                              (0,0) h=4 |         TEMPLE PLATEAU
+//                                        |         (40,10) h=6
+//     THE GAUNTLET                       |
+//     (-22,18) d=3                       v
+//                                  TOWER FIELD
+//                                  (10,32) h=-1
 Level(
     name: "The Shattered Isles",
     world_size: 64.0,
@@ -66,7 +82,7 @@ Level(
             Island(center: (-4.0, 8.0, -32.0), half_extents: (1.5, 0.8, 1.5), edge_noise: 0.6),
             Island(center: (4.0, 9.0, -38.0), half_extents: (2.0, 0.8, 2.0), edge_noise: 0.5),
 
-            // Floating island near lookout peak — reward platform
+            // Floating reward island above the lookout peak
             Island(center: (-35.0, 18.0, -35.0), half_extents: (3.0, 1.0, 3.0), edge_noise: 0.3),
 
             // Natural stone arch connecting spawn area to playground
@@ -113,19 +129,26 @@ Level(
     )),
 
     objects: [
-        // ===================================================================
-        //  SPAWN KNOLL — gentle introduction
-        // ===================================================================
+        // ==========================================================
+        //  SPAWN KNOLL — gentle introduction (hill at origin, h=4)
+        // ==========================================================
         BeachBall(pos: (2.0, 6.0, 2.0)),
         BeachBall(pos: (-1.0, 6.0, -2.0)),
-        BeachBall(pos: (-3.0, 5.0, 1.0)),
+        BeachBall(pos: (-3.0, 6.0, 1.0)),
 
-        // A welcoming trampoline to get airborne early
-        Trampoline(pos: (4.0, 4.0, -2.0)),
+        // Welcoming trampoline to launch players into the world
+        Trampoline(pos: (4.0, 4.5, -2.0)),
 
-        // ===================================================================
-        //  CRATER LAKE — standing stone circle
-        // ===================================================================
+        // A few jacks to kick around on the knoll
+        Jack(pos: (1.0, 5.0, 4.0), length: 0.5, thickness: 0.1),
+        Jack(pos: (-2.0, 5.0, 4.0), length: 0.5, thickness: 0.1),
+        Jack(pos: (3.0, 5.0, 1.0), length: 0.5, thickness: 0.1),
+
+        // ==========================================================
+        //  CRATER LAKE — stone circle + concrete breakwater armour
+        //  (crater (25,-22), r=16, d=8; water surface y=-4, floor ~y=-8)
+        // ==========================================================
+        // Ring of menhirs around the crater (anchored — snaps to surface)
         Menhir(pos: (25.0, -12.0), half_height: 3.0, bottom_radius: 1.0, top_radius: 0.6),
         Menhir(pos: (18.0, -18.0), half_height: 2.5, bottom_radius: 0.9, top_radius: 0.5),
         Menhir(pos: (32.0, -18.0), half_height: 2.5, bottom_radius: 0.9, top_radius: 0.5),
@@ -133,22 +156,45 @@ Level(
         Menhir(pos: (32.0, -26.0), half_height: 2.0, bottom_radius: 0.8, top_radius: 0.5),
         Menhir(pos: (25.0, -32.0), half_height: 3.0, bottom_radius: 1.0, top_radius: 0.6),
 
-        // Trilithon gateway at crater entrance
+        // Trilithon gateway on the crater approach
         Trilithon(pos: (20.0, 0.0, -14.0)),
 
-        // Platonic solids scattered around the crater rim like relics
-        Dodecahedron(pos: (22.0, 2.0, -14.0), size: 0.6),
-        Icosahedron(pos: (28.0, 2.0, -14.0), size: 0.8),
-        Octahedron(pos: (25.0, 2.0, -11.0), size: 0.7),
+        // Dolos breakwater — heavy concrete armour on the crater slope.
+        // Crater formula: y = -d*(1+cos(πt))/2 with d=8, r=16. Positions
+        // chosen so each dolos rests in the shallow dry lip just above
+        // water surface y=-4.
+        // At dist 7 from (25,-22), floor y ≈ -4.78.
+        // At dist 9 from (25,-22), floor y ≈ -3.30.
+        Dolos(pos: (18.0, -4.2, -22.0)),                 // dist 7 W
+        Dolos(pos: (32.0, -4.2, -22.0)),                 // dist 7 E
+        Dolos(pos: (25.0, -4.2, -29.0)),                 // dist 7 S
+        Dolos(pos: (19.0, -2.9, -14.0), shank_length: 1.8, fluke_length: 1.3, thickness: 0.55),  // NW
+        Dolos(pos: (31.0, -2.9, -14.0), shank_length: 1.8, fluke_length: 1.3, thickness: 0.55),  // NE
 
-        // ===================================================================
-        //  TEMPLE PLATEAU — ancient ruins
-        // ===================================================================
-        Temple(pos: (40.0, 6.0, 10.0)),
+        // Platonic-solid relics at the gateway (base terrain ~y=0 ± roughness).
+        Dodecahedron(pos: (22.0, 0.7, -14.0), size: 0.6),
+        Icosahedron(pos: (28.0, 0.6, -14.0), size: 0.8),
+        Octahedron(pos: (25.0, 0.3, -11.0), size: 0.7),
 
-        // Voussoir arch — grand temple entrance
+        // ==========================================================
+        //  TEMPLE PLATEAU — ancient ruins (plateau top y=6, x 30-52, z 2-18)
+        //
+        //  Temple is sized to fit the plateau: column_height=5 gives
+        //  spacing=1.91, half_w=2.86, half_l=3.82. Footprint x 37.14-42.86,
+        //  z 6.18-13.82. Arch sits in front of temple (z 2.75-5.25), trilithon
+        //  pair sits behind (z ~15.6-16.4), Jenga + pyramid fill the east side.
+        // ==========================================================
+        Temple(
+            pos: (40.0, 6.0, 10.0),
+            column_height: 5.0,
+            front_columns: 4,
+            side_columns: 5,
+        ),
+
+        // Grand voussoir entrance arch — centered in front of temple
+        // (x 34-46, z 2.75-5.25, plateau edges x 30/52, z 2/18)
         VoussoirArch(
-            base: (34.0, 6.0, 10.0),
+            base: (40.0, 6.0, 4.0),
             inner_radius: 4.0,
             thickness: 2.0,
             depth: 2.5,
@@ -157,79 +203,88 @@ Level(
             friction: 0.9,
         ),
 
-        // Trilithon pair flanking the temple
-        Trilithon(pos: (38.0, 6.0, 5.0)),
-        Trilithon(pos: (42.0, 6.0, 5.0)),
+        // Trilithon pair behind the temple (z 15.6-16.4)
+        Trilithon(pos: (38.0, 6.0, 16.0)),
+        Trilithon(pos: (42.0, 6.0, 16.0)),
 
-        // Jenga tower — can the player topple it onto the temple?
-        Jenga(base: (48.0, 6.0, 8.0), layers: 10),
+        // Jenga tower in back-right corner (1.5 x 1.5 footprint)
+        Jenga(base: (50.0, 6.0, 14.0), layers: 6),
 
-        // Offerings on the temple steps
-        Tetrahedron(pos: (40.0, 8.0, 7.0), size: 0.8),
-        HexPrism(pos: (41.0, 8.0, 7.0), radius: 0.4, half_height: 0.6),
-
-        // Pyramid near the temple — smaller companion
+        // Stepped pyramid beside Jenga (2.4 x 2.4 footprint)
         Pyramid(
             base: (46.0, 6.0, 14.0),
             block_half_extents: (0.4, 0.25, 0.4),
             base_width: 3,
         ),
 
-        // ===================================================================
-        //  THE GAUNTLET (southwest) — obstacle course in a crater
-        // ===================================================================
+        // Offerings on the plateau beside the arch (west and east flanks).
+        // Heights set to inradius/half-height on plateau y=6 so they start
+        // touching the surface when asleep.
+        Tetrahedron(pos: (33.0, 6.16, 10.0), size: 0.8),
+        HexPrism(pos: (47.0, 6.4, 10.0), radius: 0.3, half_height: 0.4),
+        // Two jacks flanking the temple entrance
+        Jack(pos: (36.0, 6.3, 5.0), length: 0.6, thickness: 0.12),
+        Jack(pos: (44.0, 6.3, 5.0), length: 0.6, thickness: 0.12),
 
-        // Domino run spiralling through the gauntlet
+        // ==========================================================
+        //  THE GAUNTLET — obstacle course in a crater (floor ~y=-3)
+        //  (crater (-22,18), r=10, d=3)
+        // ==========================================================
+        // Domino spiral feeding into the gauntlet
         Domino(
-            base: (-16.0, -2.0, 14.0),
+            base: (-16.0, -3.0, 14.0),
             direction: (0.0, 1.0),
             count: 14,
             spacing: 0.45,
         ),
         Domino(
-            base: (-16.0, -2.0, 20.0),
+            base: (-16.0, -3.0, 20.0),
             direction: (-1.0, 0.0),
             count: 10,
             spacing: 0.45,
         ),
         Domino(
-            base: (-26.0, -2.0, 20.0),
+            base: (-26.0, -3.0, 20.0),
             direction: (0.0, -1.0),
             count: 8,
             spacing: 0.45,
         ),
 
-        // Honeycomb wall to smash through
+        // Honeycomb wall to smash through mid-gauntlet
         HoneycombWall(
-            base: (-22.0, -2.0, 16.0),
+            base: (-22.0, -3.0, 16.0),
             columns: 6,
             rows: 5,
             radius: 0.35,
             half_height: 0.2,
         ),
 
-        // Box wall barricade
+        // Staggered box wall barricade
         BoxWall(
-            base: (-20.0, -2.5, 22.0),
+            base: (-20.0, -3.0, 22.0),
             box_half_extents: (0.4, 0.4, 0.4),
             columns: 6,
             rows: 4,
             stagger: true,
         ),
 
-        // Heavy crate to push around as a step
-        HeavyCrate(pos: (-18.0, -1.5, 18.0), size: 0.8),
+        // Heavy crate — useful as a stepping block
+        HeavyCrate(pos: (-18.0, -1.0, 18.0), size: 0.8),
 
-        // Plank bridge over the deepest part
+        // Plank bridge across the deepest part of the crater
         PlankBridge(
-            pos: (-22.0, -2.5, 18.0),
+            pos: (-22.0, -2.0, 18.0),
             length: 6.0,
             yaw: 1.57,
         ),
 
-        // ===================================================================
-        //  PLAYGROUND RIDGE (northwest) — interactive physics toys
-        // ===================================================================
+        // Dolos guarding the gauntlet rim — heavy to shove aside
+        Dolos(pos: (-22.0, 1.0, 10.0)),
+
+        // ==========================================================
+        //  PLAYGROUND RIDGE — interactive toys (hill (-24,-18), h=3)
+        // ==========================================================
+        // All anchored toys auto-snap to terrain surface
         Seesaw(
             pos: (-20.0, -14.0),
             beam_half_length: 5.0,
@@ -244,27 +299,25 @@ Level(
             hub_height: 0.5,
         ),
 
-        Pendulum(
-            pos: (-20.0, -22.0),
-        ),
+        Pendulum(pos: (-20.0, -22.0)),
 
-        // Trampoline park — three in a row for chaining bounces
-        Trampoline(pos: (-28.0, 4.0, -16.0)),
-        Trampoline(pos: (-24.0, 4.0, -16.0)),
-        Trampoline(pos: (-20.0, 4.0, -16.0)),
+        // Trampoline chain above the ridge — bounce between them
+        Trampoline(pos: (-28.0, 4.5, -16.0)),
+        Trampoline(pos: (-24.0, 5.0, -16.0)),
+        Trampoline(pos: (-20.0, 4.5, -16.0)),
 
-        // Fence posts to weave through
+        // Fence-post slalom (all terrain-anchored)
         FencePost(pos: (-22.0, -12.0), half_height: 1.2, radius: 0.2),
         FencePost(pos: (-24.0, -13.0), half_height: 1.2, radius: 0.2),
         FencePost(pos: (-26.0, -12.0), half_height: 1.2, radius: 0.2),
         FencePost(pos: (-28.0, -13.0), half_height: 1.2, radius: 0.2),
 
-        // Beach balls on the ridge — kick them off!
+        // Beach balls for seesaw / playwheel play
         BeachBall(pos: (-22.0, 5.0, -18.0)),
         BeachBall(pos: (-25.0, 5.0, -20.0)),
         BeachBall(pos: (-19.0, 5.0, -17.0)),
 
-        // Table with stuff on it
+        // Table with a small stack on top
         Table(pos: (-30.0, 4.0, -20.0)),
         Stack(
             base: (-30.0, 5.2, -20.0),
@@ -274,25 +327,28 @@ Level(
             ],
         ),
 
-        // ===================================================================
-        //  TOWER FIELD (south) — destructible playground
-        // ===================================================================
+        // Small jacks scattered on the ridge — trip hazard
+        Jack(pos: (-23.0, 4.0, -15.0), length: 0.4, thickness: 0.08),
+        Jack(pos: (-27.0, 4.0, -19.0), length: 0.4, thickness: 0.08),
 
-        // Tall tower to topple
+        // ==========================================================
+        //  TOWER FIELD — destructible playground (plateau y=-1)
+        // ==========================================================
+        // Tall tower — the main target
         Tower(
             base: (5.0, -1.0, 28.0),
             box_half_extents: (0.5, 0.5, 0.5),
             count: 8,
         ),
 
-        // Pyramid of crates
+        // Crate pyramid beside it
         Pyramid(
             base: (10.0, -1.0, 32.0),
             block_half_extents: (0.5, 0.3, 0.5),
             base_width: 3,
         ),
 
-        // Staggered box wall to charge through
+        // Staggered wall to charge through
         BoxWall(
             base: (14.0, -1.0, 28.0),
             box_half_extents: (0.5, 0.5, 0.5),
@@ -309,52 +365,59 @@ Level(
             spacing: 0.4,
         ),
 
-        // Scattered crates and shapes to kick around
-        Crate(pos: (8.0, 0.0, 30.0), size: 0.5),
-        Crate(pos: (12.0, 0.0, 30.0), size: 0.5),
-        Box(pos: (6.0, 0.0, 34.0), half_extents: (0.6, 0.6, 0.6), style: Gift),
-        Box(pos: (16.0, 0.0, 34.0), half_extents: (0.5, 0.5, 0.5), style: WoodenCrate),
-        Tetrahedron(pos: (4.0, 0.0, 32.0), size: 1.2),
-        Octahedron(pos: (18.0, 0.0, 32.0), size: 1.0),
+        // Scattered projectiles. Plateau y=-1; pos.y = -1 + half_extent so
+        // each sits flush on the surface.
+        Crate(pos: (8.0, -0.5, 30.0), size: 0.5),
+        Crate(pos: (12.0, -0.5, 30.0), size: 0.5),
+        Box(pos: (6.0, -0.4, 34.0), half_extents: (0.6, 0.6, 0.6), style: Gift),
+        Box(pos: (16.0, -0.5, 34.0), half_extents: (0.5, 0.5, 0.5), style: WoodenCrate),
+        Tetrahedron(pos: (4.0, -0.75, 32.0), size: 1.2),
+        Octahedron(pos: (18.0, -0.6, 32.0), size: 1.0),
 
-        // House to wreck
-        House(pos: (10.0, 0.0, 38.0), half_extents: (1.5, 1.2, 1.5)),
+        // House at the back of the field — final target
+        House(pos: (10.0, -1.0, 38.0), half_extents: (1.5, 1.2, 1.5)),
 
-        // ===================================================================
-        //  SKYBRIDGE CANYON (north) — floating island platforming
-        // ===================================================================
+        // Bowling alley: heavy crate as the ball, dolos as the pins
+        HeavyCrate(pos: (1.0, -0.3, 38.0), size: 0.7),
+        Dolos(pos: (6.0, -0.8, 38.0)),
+        Dolos(pos: (8.0, -0.8, 38.0)),
+        Dolos(pos: (10.0, -0.8, 38.0)),
 
-        // Objects on the floating islands to reward exploration
-        // Western island
-        Capsule(pos: (-8.0, 12.0, -35.0), half_height: 1.0, radius: 0.3),
+        // ==========================================================
+        //  SKYBRIDGE CANYON — floating-island platforming
+        //  Island tops: west y≈11.5, central y≈15, east y≈12.5.
+        //  Canyon formula depth = -d*(1+cos(πt))/2 with d=10, r=20: at dist 3
+        //  floor is ~y=-9.45; pool surface at y=-6.
+        // ==========================================================
+        // Western island (top y≈11.5) — capsule lying on its side, beachball
+        Capsule(pos: (-8.0, 11.8, -35.0), half_height: 1.0, radius: 0.3),
         BeachBall(pos: (-7.0, 12.0, -34.0)),
 
-        // Central island — high point, great view
-        Tetrahedron(pos: (0.0, 16.0, -35.0), size: 1.5),
+        // Central island (top y≈15) — reward for the hardest jump
+        Tetrahedron(pos: (0.0, 15.25, -35.0), size: 1.2),
+        Jack(pos: (0.5, 15.3, -33.5), length: 0.5, thickness: 0.1),
 
-        // Eastern island
-        Jenga(base: (8.0, 13.0, -35.0), layers: 5),
+        // Eastern island (top y≈12.5) — tiny Jenga to topple
+        Jenga(base: (8.0, 12.5, -35.0), layers: 5),
 
-        // PlankBridge spanning part of the canyon
-        PlankBridge(
-            pos: (-4.0, 7.0, -32.0),
-            length: 8.0,
-            yaw: 0.4,
-        ),
+        // Canyon floor — wrecked dolos breakwater (floor ~y=-9.45, pool y=-6)
+        Dolos(pos: (-3.0, -9.0, -35.0), shank_length: 1.8, fluke_length: 1.3, thickness: 0.5),
+        Dolos(pos: (3.0, -9.0, -35.0), shank_length: 1.8, fluke_length: 1.3, thickness: 0.5),
+        Dolos(pos: (0.0, -9.0, -38.0), shank_length: 1.8, fluke_length: 1.3, thickness: 0.5),
 
-        // ===================================================================
-        //  LOOKOUT PEAK (far northwest) — the summit
-        // ===================================================================
-
-        // Reward for climbing: a pendulum and scenic overlook
-        Pendulum(pos: (-35.0, -35.0)),
-
-        // Menhir at the very top
+        // ==========================================================
+        //  LOOKOUT PEAK — the summit (hill (-35,-35), h=12)
+        // ==========================================================
+        // Solitary menhir at the peak — landmark visible from everywhere
         Menhir(pos: (-35.0, -35.0), half_height: 4.0, bottom_radius: 1.2, top_radius: 0.7),
 
-        // Stack of geometric shapes as a cairn
+        // Pendulum relocated to the slope below so it doesn't clip the menhir
+        Pendulum(pos: (-30.0, -32.0)),
+
+        // Reward cairn on the floating island above the peak.
+        // Island center (-35, 18, -35) half_extents (3, 1, 3), top at y=19.
         Stack(
-            base: (-33.0, 13.0, -34.0),
+            base: (-35.0, 19.0, -35.0),
             items: [
                 HeavyCrate(size: 0.6),
                 Crate(size: 0.5),
@@ -363,26 +426,30 @@ Level(
             ],
         ),
 
-        // ===================================================================
-        //  CONNECTING ELEMENTS — things along paths between zones
-        // ===================================================================
+        // A pair of jacks beside the menhir at the summit.
+        // Peak hill h=12 at (-35,-35); dist 1 from center → surface y≈11.54.
+        Jack(pos: (-34.0, 11.9, -35.0), length: 0.5, thickness: 0.1),
+        Jack(pos: (-36.0, 11.9, -35.0), length: 0.5, thickness: 0.1),
 
-        // Stone arch near spawn has a plank bridge underneath
+        // ==========================================================
+        //  CONNECTING ELEMENTS
+        // ==========================================================
+        // Plank bridge hanging beneath the natural arch near spawn
         PlankBridge(
             pos: (-12.0, 2.0, -9.0),
             length: 8.0,
             yaw: 0.7,
         ),
 
-        // Capsule logs scattered along paths
+        // Capsule logs along the main paths
         Capsule(pos: (10.0, 1.0, 5.0), half_height: 2.0, radius: 0.3, density: 600.0),
         Capsule(pos: (15.0, 1.0, -5.0), half_height: 2.5, radius: 0.35, density: 600.0),
 
-        // Decorative hex prisms along temple approach ramp
+        // Hex prisms along the temple-ramp approach
         HexPrism(pos: (30.0, 4.0, 8.0), radius: 0.5, half_height: 0.8),
-        HexPrism(pos: (30.0, 2.0, 12.0), radius: 0.5, half_height: 0.8),
+        HexPrism(pos: (30.0, 3.0, 12.0), radius: 0.5, half_height: 0.8),
 
-        // Random beach balls dotted around the world
+        // Wandering beach balls dotting the world
         BeachBall(pos: (15.0, 3.0, 0.0)),
         BeachBall(pos: (-5.0, 2.0, 10.0)),
         BeachBall(pos: (8.0, 2.0, -15.0)),

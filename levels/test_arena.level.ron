@@ -14,16 +14,16 @@ Level(
         features: [
             //TerrainRoughness(frequency: 0.1, amplitude: 3.0, octaves: 3, seed: 42),
             Crater(center: (-10.0, -1.0), radius: 20.0, depth: 5.0),
-            Cliff(
-                from: (-40.0, -60.0),
-                to: (40.0, -60.0),
-                low_height: 0.0,
-                high_height: 8.0,
-                high_side: (0.0, -1.0),
-                steepness: 3.0,
-                end_falloff: 0.0,
-                roughness: 5.0,
-            ),
+            // Cliff(
+            //     from: (-40.0, -60.0),
+            //     to: (40.0, -60.0),
+            //     low_height: 0.0,
+            //     high_height: 8.0,
+            //     high_side: (0.0, -1.0),
+            //     steepness: 10.0,
+            //     end_falloff: 0.0,
+            //     roughness: 5.0,
+            // ),
         ],
         volumes: [
             Caves(
@@ -37,7 +37,7 @@ Level(
                     (depth: 20.0, threshold: 1.0),
                 ],
                 region: Some(CaveRegion(
-                    center: (-10.0, -15.0, -1.0),
+                    center: (-50.0, -15.0, -1.0),
                     radius: 30.0,
                     falloff: 15.0,
                 )),
@@ -105,7 +105,7 @@ Level(
         Icosahedron(pos: (30.0, 3.0, -34.0), size: 1.2),
 
         HoneycombWall(
-            base: (6.0, -1.0, -6.0),
+            base: (6.0, 0.0, -6.0),
             columns: 5,
             rows: 4,
             radius: 0.4,
@@ -192,5 +192,11 @@ Level(
         Pendulum(
             pos: (15.0, -10.0),
         ),
+
+        Jack(pos: (5.0, 0.0, 0.0), length: 1.0, thickness: 0.2),
+        Jack(pos: (0.0, 0.0, 0.0), length: 1.0, thickness: 0.2),
+
+        Dolos(pos: (-5.0, 0.0, 0.0)),
+        Dolos(pos: (-7.0, 0.0, 0.0), shank_length: 2.0, fluke_length: 1.4, thickness: 0.6),
     ],
 )

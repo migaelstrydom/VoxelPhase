@@ -7,11 +7,11 @@
 use serde::Deserialize;
 
 use crate::app::spawnables::{
-    BeachBallDef, BoxDef, BoxWallDef, CapsuleDef, CrateDef, DodecahedronDef, DominoDef,
-    FencePostDef, HeavyCrateDef, HexPrismDef, HoneycombWallDef, HouseDef, IcosahedronDef, JengaDef,
-    MenhirDef, OctahedronDef, PendulumDef, PlankBridgeDef, PlankDef, PlayWheelDef, PyramidDef,
-    SeesawDef, Spawnable, StackDef, StackItemDef, TableDef, TempleDef, TetrahedronDef, TowerDef,
-    TrampolineDef, TrilithonDef, VoussoirArchDef,
+    BeachBallDef, BoxDef, BoxWallDef, CapsuleDef, CrateDef, DodecahedronDef, DolosDef, DominoDef,
+    FencePostDef, HeavyCrateDef, HexPrismDef, HoneycombWallDef, HouseDef, IcosahedronDef, JackDef,
+    JengaDef, MenhirDef, OctahedronDef, PendulumDef, PlankBridgeDef, PlankDef, PlayWheelDef,
+    PyramidDef, SeesawDef, Spawnable, StackDef, StackItemDef, TableDef, TempleDef, TetrahedronDef,
+    TowerDef, TrampolineDef, TrilithonDef, VoussoirArchDef,
 };
 
 /// Top-level level description.
@@ -550,6 +550,23 @@ pub enum LevelObject {
         #[serde(default = "PyramidDef::default_density")]
         density: f32,
     },
+    /// Dolos — concrete breakwater armour unit. Central shank with two
+    /// perpendicular flukes, one at each end.
+    Dolos {
+        pos: (f32, f32, f32),
+        #[serde(default = "DolosDef::default_shank_length")]
+        shank_length: f32,
+        #[serde(default = "DolosDef::default_fluke_length")]
+        fluke_length: f32,
+        #[serde(default = "DolosDef::default_thickness")]
+        thickness: f32,
+        #[serde(default = "DolosDef::default_density")]
+        density: f32,
+        #[serde(default = "DolosDef::default_restitution")]
+        restitution: f32,
+        #[serde(default = "DolosDef::default_friction")]
+        friction: f32,
+    },
     /// Domino row — tall thin blocks spaced for chain toppling.
     Domino {
         base: (f32, f32, f32),
@@ -580,6 +597,20 @@ pub enum LevelObject {
         #[serde(default = "VoussoirArchDef::default_density")]
         density: f32,
         #[serde(default = "VoussoirArchDef::default_friction")]
+        friction: f32,
+    },
+    /// Jack — classic six-pointed metal toy. Three perpendicular bars.
+    Jack {
+        pos: (f32, f32, f32),
+        #[serde(default = "JackDef::default_length")]
+        length: f32,
+        #[serde(default = "JackDef::default_thickness")]
+        thickness: f32,
+        #[serde(default = "JackDef::default_density")]
+        density: f32,
+        #[serde(default = "JackDef::default_restitution")]
+        restitution: f32,
+        #[serde(default = "JackDef::default_friction")]
         friction: f32,
     },
     /// Jenga tower — alternating layers of three planks rotated 90°.
@@ -960,6 +991,24 @@ impl LevelObject {
                 density: *density,
             }),
 
+            LevelObject::Dolos {
+                pos,
+                shank_length,
+                fluke_length,
+                thickness,
+                density,
+                restitution,
+                friction,
+            } => Box::new(DolosDef {
+                pos: *pos,
+                shank_length: *shank_length,
+                fluke_length: *fluke_length,
+                thickness: *thickness,
+                density: *density,
+                restitution: *restitution,
+                friction: *friction,
+            }),
+
             LevelObject::Domino {
                 base,
                 direction,
@@ -993,6 +1042,22 @@ impl LevelObject {
                 num_voussoirs: *num_voussoirs,
                 abutment_height: *abutment_height,
                 density: *density,
+                friction: *friction,
+            }),
+
+            LevelObject::Jack {
+                pos,
+                length,
+                thickness,
+                density,
+                restitution,
+                friction,
+            } => Box::new(JackDef {
+                pos: *pos,
+                length: *length,
+                thickness: *thickness,
+                density: *density,
+                restitution: *restitution,
                 friction: *friction,
             }),
 
