@@ -141,7 +141,7 @@ impl TerrainManager {
         });
 
         if any_destroyed {
-            let padding = self.voxel_size * 2.0;
+            let padding = self.voxel_size;
             let affected = AABB::new(
                 Point3::new(
                     center.x - radius - padding,
