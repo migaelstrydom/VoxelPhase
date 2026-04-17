@@ -10,6 +10,7 @@ use super::config::CharacterRigConfig;
 use super::humanoid::gait::GaitCycle;
 use super::humanoid::skeleton::{generate_character_mesh, Skeleton};
 use super::humanoid::stride_wheel;
+use super::pose::{FeetPose, HandsPose, PoseFragment};
 use super::state::{AnimationState, LocomotionMode};
 use crate::rendering::vertex::Vertex;
 use crate::sensing::{ContactCandidate, Probe};
@@ -184,8 +185,26 @@ impl CharacterAnimator {
             }
         }
 
-        // Update skeleton from state
-        self.skeleton.update_from_state(&self.state, &self.config);
+        // Build a PoseFragment reflecting the state the per-mode updates
+        // just wrote, and route the skeleton update through apply_fragment.
+        // Once per-state FSMs exist, each will emit its own fragment and this
+        // redundant reflection goes away.
+        let fragment = PoseFragment {
+            feet: Some(FeetPose {
+                left: self.state.left.position,
+                right: self.state.right.position,
+            }),
+            hands: Some(HandsPose {
+                left: self.state.left_hand.position,
+                right: self.state.right_hand.position,
+            }),
+            pelvis_offset: None,
+            shoulder_twist: Some(self.state.shoulder_twist),
+            head_tilt: Some(self.state.head_tilt),
+            head_bob: Some(self.state.head_bob),
+        };
+        self.skeleton
+            .apply_fragment(&fragment, &self.state, &self.config);
     }
 
     /// Update upper body for idle state.

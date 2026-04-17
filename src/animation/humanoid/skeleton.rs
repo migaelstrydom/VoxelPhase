@@ -2,9 +2,10 @@
 //!
 //! Pure geometry and math, no animation state.
 
-use nalgebra::{Point3, Vector3, Vector4};
+use nalgebra::{Point3, Vector2, Vector3, Vector4};
 
 use crate::animation::config::CharacterRigConfig;
+use crate::animation::pose::PoseFragment;
 use crate::animation::state::AnimationState;
 use crate::{
     geometry::{generate_cylinder, generate_sphere_indices, generate_sphere_vertices},
@@ -106,69 +107,96 @@ impl Skeleton {
         }
     }
 
-    /// Update skeleton from animation state.
-    ///
-    /// Takes current state and config, computes all joint positions.
+    /// Update skeleton from animation state. Convenience wrapper for
+    /// `apply_fragment` with an empty fragment — the skeleton reads every
+    /// channel from `state`.
     pub fn update_from_state(&mut self, state: &AnimationState, config: &CharacterRigConfig) {
-        // Update pelvis
-        self.pelvis = state.pelvis_position;
+        self.apply_fragment(&PoseFragment::default(), state, config);
+    }
 
-        // Compute hip positions from pelvis and facing
+    /// Update skeleton from a pose fragment, falling back to `state` for any
+    /// channel the fragment leaves `None`. This is the single render-path
+    /// entry point: all pose data flows through a `PoseFragment`.
+    pub fn apply_fragment(
+        &mut self,
+        fragment: &PoseFragment,
+        state: &AnimationState,
+        config: &CharacterRigConfig,
+    ) {
+        let pelvis_base = state.pelvis_position;
+        let pelvis_offset = fragment.pelvis_offset.unwrap_or_else(Vector3::zeros);
+        self.pelvis = pelvis_base + pelvis_offset;
+
         let right = right_vector(state.facing);
         let left = Vector3::new(-right.x, 0.0, -right.z);
         self.left_hip = self.pelvis + left * config.hip_width;
         self.right_hip = self.pelvis + right * config.hip_width;
 
-        // Copy foot positions from state
-        self.left_foot = state.left.position;
-        self.right_foot = state.right.position;
+        let (left_foot, right_foot) = match &fragment.feet {
+            Some(feet) => (feet.left, feet.right),
+            None => (state.left.position, state.right.position),
+        };
+        self.left_foot = left_foot;
+        self.right_foot = right_foot;
 
-        // Solve IK for knees
         self.solve_knee_ik(state.facing, config);
 
-        // Update upper body
-        self.update_upper_body(state, config);
+        let shoulder_twist = fragment.shoulder_twist.unwrap_or(state.shoulder_twist);
+        let head_tilt = fragment.head_tilt.unwrap_or(state.head_tilt);
+        let head_bob = fragment.head_bob.unwrap_or(state.head_bob);
+        let (left_hand, right_hand) = match &fragment.hands {
+            Some(hands) => (hands.left, hands.right),
+            None => (state.left_hand.position, state.right_hand.position),
+        };
+
+        self.update_upper_body(
+            state.facing,
+            config,
+            shoulder_twist,
+            head_tilt,
+            head_bob,
+            left_hand,
+            right_hand,
+        );
     }
 
-    /// Update upper body joint positions.
-    fn update_upper_body(&mut self, state: &AnimationState, config: &CharacterRigConfig) {
-        let facing = state.facing;
+    /// Update upper body joint positions from resolved pose channels.
+    fn update_upper_body(
+        &mut self,
+        facing: Vector3<f32>,
+        config: &CharacterRigConfig,
+        shoulder_twist: f32,
+        head_tilt: Vector2<f32>,
+        head_bob: f32,
+        left_hand: Point3<f32>,
+        right_hand: Point3<f32>,
+    ) {
         let right = right_vector(facing);
         let left = Vector3::new(-right.x, 0.0, -right.z);
 
-        // Chest is directly above pelvis
         self.chest = self.pelvis + Vector3::y() * config.torso_height;
 
-        // Apply shoulder twist rotation
-        let twist = state.shoulder_twist;
-        let cos_twist = twist.cos();
-        let sin_twist = twist.sin();
+        let cos_twist = shoulder_twist.cos();
+        let sin_twist = shoulder_twist.sin();
 
-        // Rotate shoulder positions around vertical axis through chest
-        // Left shoulder goes forward when twist is positive
+        // Left shoulder goes forward when twist is positive.
         let left_offset = left * cos_twist + facing * sin_twist;
         let right_offset = right * cos_twist - facing * sin_twist;
 
         self.left_shoulder = self.chest + left_offset * config.shoulder_width;
         self.right_shoulder = self.chest + right_offset * config.shoulder_width;
 
-        // Copy hand positions from state
-        self.left_hand = state.left_hand.position;
-        self.right_hand = state.right_hand.position;
+        self.left_hand = left_hand;
+        self.right_hand = right_hand;
 
-        // Solve IK for elbows
         self.solve_elbow_ik(facing, config);
 
-        // Neck and head
         self.neck = self.chest + Vector3::y() * config.neck_length;
 
-        // Apply head tilt and bob
-        let tilt_forward = state.head_tilt.x;
-        let tilt_lateral = state.head_tilt.y;
-        let bob = state.head_bob;
+        let tilt_forward = head_tilt.x;
+        let tilt_lateral = head_tilt.y;
 
-        // Head offset: forward tilt moves head forward, lateral tilt moves it sideways
-        let head_offset = Vector3::y() * (config.head_radius + bob)
+        let head_offset = Vector3::y() * (config.head_radius + head_bob)
             + facing * tilt_forward
             + right * tilt_lateral;
 

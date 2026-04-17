@@ -12,9 +12,13 @@
 mod animator;
 mod config;
 pub mod humanoid;
+mod pose;
 mod state;
 mod systems;
 
 pub use animator::CharacterAnimator;
 pub use config::CharacterRigConfig;
+pub use pose::{
+    BlendPolicy, Crossfade, Cycle, CycleKind, FeetPose, HandsPose, Linear, PoseFragment,
+};
 pub use systems::{AnimationProbeConfigSystem, CharacterAnimationSystem};

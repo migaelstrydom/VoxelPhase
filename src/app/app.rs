@@ -12,6 +12,7 @@ use specs::{Dispatcher, World, WorldExt};
 
 use crate::core::error::{EngineError, EngineResult};
 use crate::core::vulkan_context::VulkanContext;
+use crate::debug::DebugConfig;
 use crate::level::{
     create_level_materials, create_level_terrain, create_level_water, load_level,
     spawn_level_objects,
@@ -21,7 +22,6 @@ use crate::rendering::material::{Material, MaterialManagerBuilder};
 use crate::rendering::renderer::Renderer;
 use crate::rendering::Colour;
 use crate::resources::manager::ResourceManager;
-use crate::debug::DebugConfig;
 use crate::systems::FrameStart;
 use crate::time::Time;
 
