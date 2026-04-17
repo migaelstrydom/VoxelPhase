@@ -80,10 +80,6 @@ pub struct AnimationState {
 
     /// Whether the character has any ground contact.
     pub is_grounded: bool,
-
-    /// If Some, the right hand is driven to this world-space position
-    /// (overrides gait-based arm swing). Set by the grab system.
-    pub grab_hand_target: Option<Point3<f32>>,
 }
 
 impl AnimationState {
@@ -115,8 +111,6 @@ impl AnimationState {
             facing: Vector3::new(0.0, 0.0, 1.0),
 
             is_grounded: false,
-
-            grab_hand_target: None,
         }
     }
 }

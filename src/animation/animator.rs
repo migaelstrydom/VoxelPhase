@@ -11,9 +11,11 @@ use super::humanoid::gait::GaitCycle;
 use super::humanoid::pose_state::{AirKind, Gait, PoseState, SampleCtx, Takeoff, TickCtx};
 use super::humanoid::skeleton::{generate_character_mesh, Skeleton};
 use super::humanoid::stride_wheel;
-use super::pose::{FeetPose, HandsPose, PoseFragment};
+use super::humanoid::upper_state::{UpperSampleCtx, UpperState, UpperTickCtx};
+use super::pose::PoseFragment;
 use super::state::{AnimationState, FootState};
-use crate::player::{AirSteering, LocomotionState, PlayerState, PlayerTargetState};
+use crate::player::grab::GrabConfig;
+use crate::player::{AirSteering, ArmState, LocomotionState, PlayerState, PlayerTargetState};
 use crate::rendering::vertex::Vertex;
 use crate::sensing::{ContactCandidate, Probe};
 
@@ -45,6 +47,8 @@ pub struct CharacterAnimator {
 
     /// Current lower-body / core pose FSM variant.
     pub pose_state: PoseState,
+    /// Current upper-body FSM variant.
+    pub upper_state: UpperState,
     /// Previous-frame `PlayerState.locomotion`, kept so the driver can
     /// detect variant edges (airborne→grounded, grounded→launching) for
     /// Landing/Launching splicing.
@@ -77,6 +81,7 @@ impl CharacterAnimator {
             gait,
             arm_gait,
             pose_state: PoseState::Grounded { gait: Gait::Idle },
+            upper_state: UpperState::Swinging,
             last_locomotion: LocomotionState::Grounded,
             cached_vertices: Vec::new(),
             cached_indices: Vec::new(),
@@ -152,6 +157,7 @@ impl CharacterAnimator {
         velocity: Vector3<f32>,
         player_state: &PlayerState,
         target: &PlayerTargetState,
+        grab_config: &GrabConfig,
         contacts: &[ContactCandidate],
     ) {
         let speed = Vector3::new(velocity.x, 0.0, velocity.z).magnitude();
@@ -196,65 +202,48 @@ impl CharacterAnimator {
             );
         }
 
-        let tick_ctx = TickCtx {
+        // Map ArmState + current PoseState → UpperState.
+        self.upper_state = map_upper_state(&player_state.arm, self.pose_state);
+
+        // Tick both FSMs.
+        let pose_tick_ctx = TickCtx {
             dt,
             velocity,
             horizontal_speed: speed,
             rig: &self.config,
         };
-        self.pose_state = self.pose_state.tick(&tick_ctx);
+        self.pose_state = self.pose_state.tick(&pose_tick_ctx);
+        self.upper_state = self.upper_state.tick(&UpperTickCtx { dt });
 
-        let sample_ctx = SampleCtx {
+        // Sample both and compose (upper overlays pose).
+        let pose_sample_ctx = SampleCtx {
             rig: &self.config,
             anim: &self.state,
             velocity,
             leg_gait: &self.gait,
+        };
+        let pose_fragment = self.pose_state.sample(&pose_sample_ctx);
+        let cycle = self.pose_state.cycle(&self.state);
+
+        let upper_sample_ctx = UpperSampleCtx {
+            rig: &self.config,
+            anim: &self.state,
             arm_gait: &self.arm_gait,
+            grab: grab_config,
+            cycle,
         };
-        let fragment = self.pose_state.sample(&sample_ctx);
+        let upper_fragment = self.upper_state.sample(&upper_sample_ctx);
 
-        // Mirror fragment channels into `AnimationState` so other systems
-        // (probes, grab override) observe consistent values.
+        let fragment = pose_fragment.compose(&upper_fragment);
         self.apply_fragment_to_state(&fragment);
-
-        // Grab override: post-sample right-hand write.
-        if let Some(target) = self.state.grab_hand_target {
-            let shoulder = self.skeleton.right_shoulder;
-            let to_target = target - shoulder;
-            let dist = to_target.magnitude();
-            let max_reach = self.config.arm_length();
-            if dist > max_reach && dist > 1e-6 {
-                self.state.right_hand.position = shoulder + to_target * (max_reach / dist);
-            } else {
-                self.state.right_hand.position = target;
-            }
-        }
-
-        // Build the fragment the skeleton renders from. Reads `state` so
-        // the grab override and any upper-body post-writes flow through.
-        let render_fragment = PoseFragment {
-            feet: Some(FeetPose {
-                left: self.state.left.position,
-                right: self.state.right.position,
-            }),
-            hands: Some(HandsPose {
-                left: self.state.left_hand.position,
-                right: self.state.right_hand.position,
-            }),
-            pelvis_offset: None,
-            shoulder_twist: Some(self.state.shoulder_twist),
-            head_tilt: Some(self.state.head_tilt),
-            head_bob: Some(self.state.head_bob),
-        };
         self.skeleton
-            .apply_fragment(&render_fragment, &self.state, &self.config);
+            .apply_fragment(&fragment, &self.state, &self.config);
 
         self.last_locomotion = player_state.locomotion;
     }
 
-    /// Copy fragment channels (feet, hands, twist, head) back into
-    /// `AnimationState`. This keeps downstream consumers (grab override,
-    /// probes) reading the values the FSM just produced.
+    /// Mirror fragment channels into `AnimationState` so next-frame probes
+    /// and any external readers see a coherent snapshot.
     fn apply_fragment_to_state(&mut self, fragment: &PoseFragment) {
         if let Some(feet) = &fragment.feet {
             self.state.left.position = feet.left;
@@ -274,7 +263,6 @@ impl CharacterAnimator {
             self.state.head_bob = bob;
         }
 
-        // Update foot normals from the most recent ground contact.
         if let Some(normal) = self.state.left.ground_normal {
             self.state.left.normal = normal;
         }
@@ -348,6 +336,34 @@ fn replant_foot(foot: &mut FootState, snap_threshold: f32) {
     let desired = foot.ground_contact.unwrap_or(foot.position);
     if (desired - foot.planted_position).magnitude() > snap_threshold {
         foot.planted_position = desired;
+    }
+}
+
+/// Map `ArmState` (+ current `PoseState`) to an `UpperState` variant.
+/// `Idle + airborne` → `Braced`; `Idle + grounded` → `Swinging`;
+/// `Reaching`/`Holding` mirror their `ArmState` shape.
+fn map_upper_state(arm: &ArmState, pose: PoseState) -> UpperState {
+    match arm {
+        ArmState::Idle => {
+            if matches!(pose, PoseState::Grounded { .. }) {
+                UpperState::Swinging
+            } else {
+                UpperState::Braced
+            }
+        }
+        ArmState::Reaching { elapsed, target } => UpperState::Reaching {
+            elapsed: *elapsed,
+            target: *target,
+        },
+        ArmState::Holding {
+            target_body,
+            constraint,
+            current_hold_height,
+        } => UpperState::Holding {
+            target_body: *target_body,
+            constraint: *constraint,
+            current_hold_height: *current_hold_height,
+        },
     }
 }
 

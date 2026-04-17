@@ -1,0 +1,280 @@
+//! Upper-body pose state machine (arms + torso overlay).
+//!
+//! `UpperState` owns the `hands` and `shoulder_twist` channels. It runs
+//! orthogonally to `PoseState`: the driver samples both and composes the
+//! fragments with overlay semantics (UpperState wins on its channels).
+
+use nalgebra::{Point3, Vector3};
+
+use super::gait::GaitCycle;
+use super::stride_wheel;
+use crate::animation::config::CharacterRigConfig;
+use crate::animation::pose::{Cycle, CycleKind, HandsPose, PoseFragment};
+use crate::animation::state::{AnimationState, HandState};
+use crate::physics::{ConstraintHandle, RigidBodyHandle};
+use crate::player::grab::GrabConfig;
+
+/// Upper-body animation state.
+#[derive(Debug, Clone, Copy)]
+pub enum UpperState {
+    /// Normal arm carriage. Coupled to `PoseState::cycle()` — swings on
+    /// Stride, hangs at rest otherwise.
+    Swinging,
+    /// Right hand animating toward a grab target.
+    Reaching {
+        elapsed: f32,
+        target: Option<(RigidBodyHandle, Point3<f32>)>,
+    },
+    /// Right hand locked to a held object via `constraint`.
+    Holding {
+        target_body: RigidBodyHandle,
+        constraint: ConstraintHandle,
+        current_hold_height: f32,
+    },
+    /// Arms spread outward and down (falling / landing).
+    Braced,
+}
+
+/// Per-frame tick inputs for `UpperState`.
+pub struct UpperTickCtx {
+    pub dt: f32,
+}
+
+/// Per-frame sample inputs for `UpperState`.
+pub struct UpperSampleCtx<'a> {
+    pub rig: &'a CharacterRigConfig,
+    pub anim: &'a AnimationState,
+    pub arm_gait: &'a GaitCycle,
+    pub grab: &'a GrabConfig,
+    /// The cycle `PoseState` exposes this frame, if any.
+    pub cycle: Option<Cycle>,
+}
+
+impl UpperState {
+    /// Advance any FSM-internal timers. `Reaching::elapsed` is authored
+    /// by the grab system on `PlayerState` — the driver re-syncs each
+    /// frame — so no variant currently owns a timer here.
+    #[allow(clippy::needless_pass_by_value)]
+    pub fn tick(self, _ctx: &UpperTickCtx) -> Self {
+        self
+    }
+
+    /// Emit the upper-body fragment (hands + shoulder twist).
+    pub fn sample(&self, ctx: &UpperSampleCtx<'_>) -> PoseFragment {
+        match self {
+            UpperState::Swinging => sample_swinging(ctx),
+            UpperState::Braced => sample_braced(ctx),
+            UpperState::Reaching { elapsed, target } => sample_reaching(ctx, *elapsed, *target),
+            UpperState::Holding {
+                current_hold_height,
+                ..
+            } => sample_holding(ctx, *current_hold_height),
+        }
+    }
+}
+
+/// Shoulder positions for a twist-aware rig.
+struct Shoulders {
+    left: Point3<f32>,
+    right: Point3<f32>,
+}
+
+fn shoulders_with_twist(rig: &CharacterRigConfig, anim: &AnimationState, twist: f32) -> Shoulders {
+    let facing = anim.facing;
+    let right = facing.cross(&Vector3::y());
+    let left = -right;
+
+    let chest = anim.pelvis_position + Vector3::y() * rig.torso_height;
+    let cos_twist = twist.cos();
+    let sin_twist = twist.sin();
+    let left_offset = left * cos_twist + facing * sin_twist;
+    let right_offset = right * cos_twist - facing * sin_twist;
+
+    Shoulders {
+        left: chest + left_offset * rig.shoulder_width,
+        right: chest + right_offset * rig.shoulder_width,
+    }
+}
+
+/// Natural hand carriage when the rig is not grabbing — either swinging
+/// opposite to the legs (stride cycle active) or hanging at rest.
+fn natural_hands(ctx: &UpperSampleCtx<'_>, shoulders: &Shoulders) -> HandsPose {
+    let rig = ctx.rig;
+    let anim = ctx.anim;
+    let facing = anim.facing;
+
+    match ctx.cycle {
+        Some(Cycle {
+            phase,
+            kind: CycleKind::Stride,
+        }) => {
+            let mut left_hand = HandState::new(anim.left_hand.position);
+            let mut right_hand = HandState::new(anim.right_hand.position);
+            // Arms swing OPPOSITE to legs for counter-balance.
+            stride_wheel::update_hand(
+                &mut left_hand,
+                ctx.arm_gait,
+                phase,
+                stride_wheel::RIGHT_PHASE,
+                shoulders.left,
+                facing,
+                -1.0,
+            );
+            stride_wheel::update_hand(
+                &mut right_hand,
+                ctx.arm_gait,
+                phase,
+                stride_wheel::LEFT_PHASE,
+                shoulders.right,
+                facing,
+                1.0,
+            );
+            HandsPose {
+                left: left_hand.position,
+                right: right_hand.position,
+            }
+        }
+        _ => {
+            let arm_hang = rig.arm_length();
+            HandsPose {
+                left: shoulders.left - Vector3::y() * arm_hang,
+                right: shoulders.right - Vector3::y() * arm_hang,
+            }
+        }
+    }
+}
+
+fn sample_swinging(ctx: &UpperSampleCtx<'_>) -> PoseFragment {
+    let twist = match ctx.cycle {
+        Some(Cycle {
+            phase,
+            kind: CycleKind::Stride,
+        }) => stride_wheel::compute_shoulder_twist(phase, ctx.rig.shoulder_twist_max),
+        _ => 0.0,
+    };
+    let shoulders = shoulders_with_twist(ctx.rig, ctx.anim, twist);
+    let hands = natural_hands(ctx, &shoulders);
+
+    PoseFragment {
+        feet: None,
+        hands: Some(hands),
+        pelvis_offset: None,
+        shoulder_twist: Some(twist),
+        head_tilt: None,
+        head_bob: None,
+    }
+}
+
+fn sample_braced(ctx: &UpperSampleCtx<'_>) -> PoseFragment {
+    let rig = ctx.rig;
+    let anim = ctx.anim;
+    let facing = anim.facing;
+    let right = facing.cross(&Vector3::y());
+    let left = -right;
+
+    let shoulders = shoulders_with_twist(rig, anim, 0.0);
+    let arm_hang = rig.arm_length() * 0.9;
+
+    let hands = HandsPose {
+        left: shoulders.left + left * 0.1 - Vector3::y() * arm_hang,
+        right: shoulders.right + right * 0.1 - Vector3::y() * arm_hang,
+    };
+
+    PoseFragment {
+        feet: None,
+        hands: Some(hands),
+        pelvis_offset: None,
+        shoulder_twist: Some(0.0),
+        head_tilt: None,
+        head_bob: None,
+    }
+}
+
+/// Clamp a hand target to the arm's maximum reach from its shoulder.
+fn clamp_to_reach(shoulder: Point3<f32>, target: Point3<f32>, max_reach: f32) -> Point3<f32> {
+    let to_target = target - shoulder;
+    let dist = to_target.magnitude();
+    if dist > max_reach && dist > 1e-6 {
+        shoulder + to_target * (max_reach / dist)
+    } else {
+        target
+    }
+}
+
+fn sample_reaching(
+    ctx: &UpperSampleCtx<'_>,
+    elapsed: f32,
+    target: Option<(RigidBodyHandle, Point3<f32>)>,
+) -> PoseFragment {
+    let rig = ctx.rig;
+    let anim = ctx.anim;
+    let grab = ctx.grab;
+
+    // Shoulder twist and natural carriage continue (left hand keeps
+    // swinging while the right hand reaches).
+    let twist = match ctx.cycle {
+        Some(Cycle {
+            phase,
+            kind: CycleKind::Stride,
+        }) => stride_wheel::compute_shoulder_twist(phase, rig.shoulder_twist_max),
+        _ => 0.0,
+    };
+    let shoulders = shoulders_with_twist(rig, anim, twist);
+    let natural = natural_hands(ctx, &shoulders);
+
+    let facing = anim.facing;
+    let reach_height = target
+        .map(|(_body, hit)| hit.y - anim.pelvis_position.y)
+        .unwrap_or(0.0);
+    let reach_target =
+        anim.pelvis_position + facing * grab.hold_distance + Vector3::y() * reach_height;
+    let rest_hand = anim.pelvis_position + Vector3::y() * 0.1;
+    let t = (elapsed / grab.reach_duration).min(1.0);
+    let right_target = Point3::from(rest_hand.coords.lerp(&reach_target.coords, t));
+    let right = clamp_to_reach(shoulders.right, right_target, rig.arm_length());
+
+    PoseFragment {
+        feet: None,
+        hands: Some(HandsPose {
+            left: natural.left,
+            right,
+        }),
+        pelvis_offset: None,
+        shoulder_twist: Some(twist),
+        head_tilt: None,
+        head_bob: None,
+    }
+}
+
+fn sample_holding(ctx: &UpperSampleCtx<'_>, current_hold_height: f32) -> PoseFragment {
+    let rig = ctx.rig;
+    let anim = ctx.anim;
+    let grab = ctx.grab;
+
+    let twist = match ctx.cycle {
+        Some(Cycle {
+            phase,
+            kind: CycleKind::Stride,
+        }) => stride_wheel::compute_shoulder_twist(phase, rig.shoulder_twist_max),
+        _ => 0.0,
+    };
+    let shoulders = shoulders_with_twist(rig, anim, twist);
+    let natural = natural_hands(ctx, &shoulders);
+
+    let hold_point = anim.pelvis_position
+        + anim.facing * grab.hold_distance
+        + Vector3::y() * current_hold_height;
+    let right = clamp_to_reach(shoulders.right, hold_point, rig.arm_length());
+
+    PoseFragment {
+        feet: None,
+        hands: Some(HandsPose {
+            left: natural.left,
+            right,
+        }),
+        pelvis_offset: None,
+        shoulder_twist: Some(twist),
+        head_tilt: None,
+        head_bob: None,
+    }
+}

@@ -40,6 +40,19 @@ pub struct PoseFragment {
 }
 
 impl PoseFragment {
+    /// Overlay `overlay` on top of `self`. For each channel, `overlay`
+    /// wins if it sets it; otherwise `self` passes through.
+    pub fn compose(&self, overlay: &Self) -> Self {
+        Self {
+            feet: overlay.feet.clone().or_else(|| self.feet.clone()),
+            hands: overlay.hands.clone().or_else(|| self.hands.clone()),
+            pelvis_offset: overlay.pelvis_offset.or(self.pelvis_offset),
+            shoulder_twist: overlay.shoulder_twist.or(self.shoulder_twist),
+            head_tilt: overlay.head_tilt.or(self.head_tilt),
+            head_bob: overlay.head_bob.or(self.head_bob),
+        }
+    }
+
     /// Per-channel blend toward `other` by `t` in `[0, 1]`.
     ///
     /// Both sides `Some` → lerp. Only one side `Some` → that side unchanged
