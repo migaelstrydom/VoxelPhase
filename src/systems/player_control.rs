@@ -1,4 +1,4 @@
-use crate::biped::BipedController;
+use crate::animation::CharacterAnimator;
 use crate::components::{Position, RigidBodyComponent, Rotation, Velocity, VelocityDriven};
 use crate::debug::{DebugLines, DebugOverlays};
 use crate::player::grab::{self, GrabConfig};
@@ -32,7 +32,7 @@ impl<'a> System<'a> for PlayerControlSystem {
         ReadStorage<'a, Player>,
         WriteStorage<'a, PlayerTargetState>,
         WriteStorage<'a, PlayerState>,
-        ReadStorage<'a, BipedController>,
+        ReadStorage<'a, CharacterAnimator>,
         ReadStorage<'a, Position>,
         ReadStorage<'a, RigidBodyComponent>,
         WriteStorage<'a, Rotation>,

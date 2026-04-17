@@ -1,6 +1,6 @@
 use specs::{World, WorldExt};
 
-use crate::biped::BipedController;
+use crate::animation::CharacterAnimator;
 use crate::camera::{CameraConfig, FollowTarget};
 use crate::components::{
     CameraComponent, ModelInstance, Orientation, Position, Renderable, RigidBodyComponent,
@@ -53,7 +53,7 @@ impl WorldBuilder {
         world.register::<Player>();
         world.register::<PlayerTargetState>();
         world.register::<PlayerState>();
-        world.register::<BipedController>();
+        world.register::<CharacterAnimator>();
         world.register::<FollowTarget>();
         world.register::<SensorSet>();
         world.register::<ContactCandidates>();

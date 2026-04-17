@@ -1,7 +1,7 @@
 use nalgebra::Vector3;
 use specs::{Builder, Entity, World, WorldExt};
 
-use crate::biped::{BipedConfig, BipedController};
+use crate::animation::{CharacterAnimator, CharacterRigConfig};
 use crate::components::{
     Orientation, Position, Renderable, RigidBodyComponent, Rotation, Velocity, VelocityDriven,
 };
@@ -15,9 +15,9 @@ pub fn spawn_player(world: &mut World, initial_pos: nalgebra::Point3<f32>) -> En
     let player_config = world.read_resource::<PlayerConfig>();
     drop(player_config);
 
-    let biped_config = BipedConfig::default();
-    // let body_radius = biped_config.body_radius;
-    let biped_controller = BipedController::new(biped_config, initial_pos);
+    let rig_config = CharacterRigConfig::default();
+    // let body_radius = rig_config.body_radius;
+    let animator = CharacterAnimator::new(rig_config, initial_pos);
 
     let body_handle = {
         let mut physics = world.write_resource::<PhysicsResource>();
@@ -52,7 +52,7 @@ pub fn spawn_player(world: &mut World, initial_pos: nalgebra::Point3<f32>) -> En
         .with(Player)
         .with(PlayerTargetState::default())
         .with(PlayerState::default())
-        .with(biped_controller)
+        .with(animator)
         .with(Position(Vector3::new(
             initial_pos.x,
             initial_pos.y,

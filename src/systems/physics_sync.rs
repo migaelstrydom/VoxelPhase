@@ -9,7 +9,7 @@ use nalgebra::{Point3, Vector3};
 use rustc_hash::FxHashSet;
 use specs::{Join, Read, ReadStorage, System, Write, WriteStorage};
 
-use crate::biped::BipedController;
+use crate::animation::CharacterAnimator;
 use crate::components::{Orientation, Position, RigidBodyComponent, Velocity, VelocityDriven};
 use crate::debug::{DebugLines, DebugLog, DebugOverlays};
 use crate::physics::{
@@ -134,7 +134,7 @@ impl PhysicsSyncSystem {
     fn apply_grounded_state(
         grounded_handles: &FxHashSet<RigidBodyHandle>,
         bodies: &ReadStorage<RigidBodyComponent>,
-        controllers: &mut WriteStorage<BipedController>,
+        controllers: &mut WriteStorage<CharacterAnimator>,
     ) {
         for (body, controller) in (bodies, controllers).join() {
             controller.state.is_grounded = grounded_handles.contains(&body.0);
@@ -152,7 +152,7 @@ impl<'a> System<'a> for PhysicsSyncSystem {
         WriteStorage<'a, Orientation>,
         ReadStorage<'a, RigidBodyComponent>,
         ReadStorage<'a, VelocityDriven>,
-        WriteStorage<'a, BipedController>,
+        WriteStorage<'a, CharacterAnimator>,
         Write<'a, DebugLines>,
         Write<'a, DebugLog>,
         Write<'a, DebugOverlays>,

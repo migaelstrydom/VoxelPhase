@@ -1,4 +1,4 @@
-use crate::biped::BipedController;
+use crate::animation::CharacterAnimator;
 use crate::components::{
     CameraComponent, ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Rotation,
 };
@@ -79,7 +79,7 @@ impl<'a> System<'a> for RenderSystem {
         ReadStorage<'a, Orientation>,
         ReadStorage<'a, Renderable>,
         ReadStorage<'a, CameraComponent>,
-        WriteStorage<'a, BipedController>,
+        WriteStorage<'a, CharacterAnimator>,
         ReadStorage<'a, OnFire>,
         ReadStorage<'a, RigidBodyComponent>,
         ReadExpect<'a, super::PhysicsResource>,

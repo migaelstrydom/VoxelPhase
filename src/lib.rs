@@ -1,5 +1,5 @@
+pub mod animation;
 pub mod app;
-pub mod biped;
 pub mod camera;
 pub mod collision;
 pub mod components;
