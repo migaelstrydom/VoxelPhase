@@ -170,23 +170,34 @@ impl CharacterAnimator {
             self.state.left.ground_contact.is_some() || self.state.right.ground_contact.is_some();
         self.state.is_grounded = has_ground_contact;
 
+        // Snapshot ground y for a potential Landing splice this frame.
+        // Prefer a real probe contact; fall back to pelvis minus standing
+        // height. Cheap to compute whether Landing actually fires.
+        let landing_ground_y = self
+            .state
+            .left
+            .ground_contact
+            .or(self.state.right.ground_contact)
+            .map(|c| c.y)
+            .unwrap_or(pelvis_position.y - self.config.standing_height());
+
         // Map PlayerState → next PoseState variant.
-        let new_pose = map_pose_state(
+        let new_pose = next_pose_state(
             self.pose_state,
             player_state,
             target,
             speed,
             self.config.idle_threshold,
             facing,
+            landing_ground_y,
         );
 
-        // On transition INTO an idle-like gait (Idle or Crouch{walking:false})
-        // from a non-idle gait, hard-reset the planted positions to the
-        // feet's current positions. Otherwise the idle sample snaps the feet
-        // back to where the character last stood still.
+        // On transition INTO an idle-like gait from a non-idle pose,
+        // anchor the planted targets directly beneath the current hips.
+        // Launching tracks the pelvis each frame; Landing carries its own
+        // ground_y — neither needs `planted_position`.
         if is_idle_gait(&new_pose) && !is_idle_gait(&self.pose_state) {
-            self.state.left.planted_position = self.state.left.position;
-            self.state.right.planted_position = self.state.right.position;
+            anchor_feet_under_hips(&mut self.state, &self.config, pelvis_position, facing);
         }
 
         // Re-plant feet when idle. Hysteresis prevents per-frame jitter
@@ -436,6 +447,36 @@ fn is_idle_gait(pose: &PoseState) -> bool {
     )
 }
 
+/// Anchor both feet's `planted_position` directly beneath the current
+/// hips. Foot x/z come from the hip under `pelvis + pelvis_offset`;
+/// foot y uses the probe ground contact when available, else drops by
+/// `standing_height`. Also mirrors the result into `position` so any
+/// intra-frame reader sees a coherent snapshot.
+fn anchor_feet_under_hips(
+    state: &mut AnimationState,
+    rig: &CharacterRigConfig,
+    pelvis_position: Point3<f32>,
+    facing: Vector3<f32>,
+) {
+    let right = facing.cross(&Vector3::y());
+    let standing_height = rig.standing_height();
+    let fallback_y = pelvis_position.y - standing_height;
+
+    let left_hip = pelvis_position - right * rig.hip_width;
+    let right_hip = pelvis_position + right * rig.hip_width;
+
+    let left_y = state.left.ground_contact.map_or(fallback_y, |c| c.y);
+    let right_y = state.right.ground_contact.map_or(fallback_y, |c| c.y);
+
+    let left = Point3::new(left_hip.x, left_y, left_hip.z);
+    let right_foot = Point3::new(right_hip.x, right_y, right_hip.z);
+
+    state.left.planted_position = left;
+    state.left.position = left;
+    state.right.planted_position = right_foot;
+    state.right.position = right_foot;
+}
+
 /// Replant an idle foot at its latest ground contact if the contact has
 /// shifted beyond `snap_threshold`. Smaller shifts are ignored to avoid
 /// per-frame jitter from probe noise.
@@ -447,17 +488,15 @@ fn replant_foot(foot: &mut FootState, snap_threshold: f32) {
 }
 
 /// Map `ArmState` (+ current `PoseState`) to an `UpperState` variant.
-/// `Idle + airborne` → `Braced`; `Idle + grounded` → `Swinging`;
-/// `Reaching`/`Holding` mirror their `ArmState` shape.
+/// `Idle + grounded` → `Swinging`; anything else with `Idle` (airborne,
+/// launching, landing) → `Braced`. `Reaching`/`Holding` mirror their
+/// `ArmState` shape.
 fn map_upper_state(arm: &ArmState, pose: PoseState) -> UpperState {
     match arm {
-        ArmState::Idle => {
-            if matches!(pose, PoseState::Grounded { .. }) {
-                UpperState::Swinging
-            } else {
-                UpperState::Braced
-            }
-        }
+        ArmState::Idle => match pose {
+            PoseState::Grounded { .. } => UpperState::Swinging,
+            _ => UpperState::Braced,
+        },
         ArmState::Reaching { elapsed, target } => UpperState::Reaching {
             elapsed: *elapsed,
             target: *target,
@@ -474,18 +513,47 @@ fn map_upper_state(arm: &ArmState, pose: PoseState) -> UpperState {
     }
 }
 
-/// Map `PlayerState` (+ intent) to a `PoseState` variant.
-fn map_pose_state(
-    prev: PoseState,
+/// Decide the next `PoseState`, honouring in-flight Launching/Landing
+/// timers so anticipation/follow-through play through to completion even
+/// if the underlying player state moves on. `landing_ground_y` is the
+/// impact y baked into any fresh `Landing` splice.
+fn next_pose_state(
+    current: PoseState,
     player: &PlayerState,
     target: &PlayerTargetState,
     speed: f32,
     idle_threshold: f32,
     facing: Vector3<f32>,
+    landing_ground_y: f32,
 ) -> PoseState {
+    // Launching: hold for the full anticipation window unless physics
+    // reports an early touchdown (rare — e.g. hit ceiling, dropped back).
+    if let PoseState::Launching { kind, takeoff, t } = current {
+        if matches!(player.locomotion, LocomotionState::Grounded) {
+            return PoseState::Landing {
+                kind,
+                t: 0.0,
+                ground_y: landing_ground_y,
+            };
+        }
+        if !current.timer_expired() {
+            return PoseState::Launching { kind, takeoff, t };
+        }
+        // Timer expired: fall through to the player-driven mapping (which
+        // will typically observe Airborne and produce Airborne { kind }).
+    }
+
+    // Landing: hold for the full follow-through window. No early exits —
+    // even if the player input changes, we keep squashing.
+    if let PoseState::Landing { kind, t, ground_y } = current {
+        if !current.timer_expired() {
+            return PoseState::Landing { kind, t, ground_y };
+        }
+    }
+
     let moving = speed > idle_threshold || target.direction.magnitude_squared() > 0.001;
 
-    match player.locomotion {
+    let mapped = match player.locomotion {
         LocomotionState::Grounded => {
             let gait = if target.crouch {
                 Gait::Crouch { walking: moving }
@@ -507,21 +575,20 @@ fn map_pose_state(
                 facing,
                 air_speed: player.air_speed,
             };
-            // Preserve any in-flight Launching timer from the previous frame.
-            let t = match prev {
-                PoseState::Launching { t, .. } => t,
-                _ => 0.0,
-            };
-            PoseState::Launching { kind, takeoff, t }
+            PoseState::Launching {
+                kind,
+                takeoff,
+                t: 0.0,
+            }
         }
         LocomotionState::Airborne { steering, .. } => {
-            let kind = match (prev, steering) {
+            let kind = match (current, steering) {
                 (PoseState::Launching { kind, .. }, _) => kind,
                 (PoseState::Airborne { kind, .. }, _) => kind,
                 (_, AirSteering::Locked { .. }) => AirKind::LongJump,
                 (_, AirSteering::Responsive) => AirKind::Fall,
             };
-            let takeoff = match prev {
+            let takeoff = match current {
                 PoseState::Launching { takeoff, .. } | PoseState::Airborne { takeoff, .. } => {
                     takeoff
                 }
@@ -542,5 +609,23 @@ fn map_pose_state(
                 takeoff,
             }
         }
+    };
+
+    // Splice Landing on the Airborne-ish → Grounded edge. Uses the prior
+    // airborne `kind` so a LongJump ends in a heavy squash.
+    if let PoseState::Grounded { .. } = mapped {
+        let prev_air_kind = match current {
+            PoseState::Airborne { kind, .. } | PoseState::Launching { kind, .. } => Some(kind),
+            _ => None,
+        };
+        if let Some(kind) = prev_air_kind {
+            return PoseState::Landing {
+                kind,
+                t: 0.0,
+                ground_y: landing_ground_y,
+            };
+        }
     }
+
+    mapped
 }
