@@ -61,6 +61,14 @@ pub struct UpperSampleCtx<'a> {
     /// Active gait preset. `None` when the lower body is airborne — in
     /// that case the upper body reads rig-level defaults.
     pub preset: Option<GaitPreset>,
+    /// Visual pelvis offset the lower body is emitting this frame
+    /// (e.g. crouch drop). Shoulders and hand targets are computed against
+    /// the offset pelvis so the upper body tracks a crouched torso.
+    pub pelvis_offset: Vector3<f32>,
+    /// Forward torso lean in radians (positive = hunched forward). Used to
+    /// tilt the shoulder frame so hand targets sit in the pitched torso
+    /// frame.
+    pub torso_pitch: f32,
 }
 
 impl UpperSampleCtx<'_> {
@@ -77,7 +85,11 @@ impl UpperSampleCtx<'_> {
     }
 
     fn arm_gait(&self) -> GaitCycle {
-        GaitCycle::arm_swing(self.rig.arm_length(), self.arm_swing_amplitude())
+        GaitCycle::arm_swing(
+            self.rig.arm_length(),
+            self.arm_swing_amplitude(),
+            self.rig.shoulder_width,
+        )
     }
 }
 
@@ -120,12 +132,22 @@ struct Shoulders {
     right: Point3<f32>,
 }
 
-fn shoulders_with_twist(rig: &CharacterRigConfig, anim: &AnimationState, twist: f32) -> Shoulders {
+fn shoulders_with_twist(ctx: &UpperSampleCtx<'_>, twist: f32) -> Shoulders {
+    let rig = ctx.rig;
+    let anim = ctx.anim;
     let facing = anim.facing;
     let right = facing.cross(&Vector3::y());
     let left = -right;
 
-    let chest = anim.pelvis_position + Vector3::y() * rig.torso_height;
+    // Pelvis origin for the torso stack, shifted by any visual crouch offset.
+    let pelvis = anim.pelvis_position + ctx.pelvis_offset;
+
+    // Rotate the torso-local up axis forward by `torso_pitch` around the
+    // lateral (right) axis. The chest sits on the pitched up-axis.
+    let pitch = ctx.torso_pitch;
+    let torso_up = Vector3::y() * pitch.cos() + facing * pitch.sin();
+    let chest = pelvis + torso_up * rig.torso_height;
+
     let cos_twist = twist.cos();
     let sin_twist = twist.sin();
     let left_offset = left * cos_twist + facing * sin_twist;
@@ -194,7 +216,7 @@ fn sample_swinging(ctx: &UpperSampleCtx<'_>) -> PoseFragment {
         }) => stride_wheel::compute_shoulder_twist(phase, ctx.shoulder_twist_max()),
         _ => 0.0,
     };
-    let shoulders = shoulders_with_twist(ctx.rig, ctx.anim, twist);
+    let shoulders = shoulders_with_twist(ctx, twist);
     let hands = natural_hands(ctx, &shoulders);
 
     PoseFragment {
@@ -204,6 +226,7 @@ fn sample_swinging(ctx: &UpperSampleCtx<'_>) -> PoseFragment {
         shoulder_twist: Some(twist),
         head_tilt: None,
         head_bob: None,
+        torso_pitch: None,
     }
 }
 
@@ -214,7 +237,7 @@ fn sample_braced(ctx: &UpperSampleCtx<'_>) -> PoseFragment {
     let right = facing.cross(&Vector3::y());
     let left = -right;
 
-    let shoulders = shoulders_with_twist(rig, anim, 0.0);
+    let shoulders = shoulders_with_twist(ctx, 0.0);
     let arm_hang = rig.arm_length() * 0.9;
 
     let hands = HandsPose {
@@ -229,6 +252,7 @@ fn sample_braced(ctx: &UpperSampleCtx<'_>) -> PoseFragment {
         shoulder_twist: Some(0.0),
         head_tilt: None,
         head_bob: None,
+        torso_pitch: None,
     }
 }
 
@@ -261,16 +285,18 @@ fn sample_reaching(
         }) => stride_wheel::compute_shoulder_twist(phase, ctx.shoulder_twist_max()),
         _ => 0.0,
     };
-    let shoulders = shoulders_with_twist(rig, anim, twist);
+    let shoulders = shoulders_with_twist(ctx, twist);
     let natural = natural_hands(ctx, &shoulders);
 
     let facing = anim.facing;
+    // Reach target is a world-space grab target — stays in world frame so
+    // the hand actually reaches the object regardless of crouch.
     let reach_height = target
         .map(|(_body, hit)| hit.y - anim.pelvis_position.y)
         .unwrap_or(0.0);
     let reach_target =
         anim.pelvis_position + facing * grab.hold_distance + Vector3::y() * reach_height;
-    let rest_hand = anim.pelvis_position + Vector3::y() * 0.1;
+    let rest_hand = anim.pelvis_position + ctx.pelvis_offset + Vector3::y() * 0.1;
     let t = (elapsed / grab.reach_duration).min(1.0);
     let right_target = Point3::from(rest_hand.coords.lerp(&reach_target.coords, t));
     let right = clamp_to_reach(shoulders.right, right_target, rig.arm_length());
@@ -285,6 +311,7 @@ fn sample_reaching(
         shoulder_twist: Some(twist),
         head_tilt: None,
         head_bob: None,
+        torso_pitch: None,
     }
 }
 
@@ -300,7 +327,7 @@ fn sample_holding(ctx: &UpperSampleCtx<'_>, current_hold_height: f32) -> PoseFra
         }) => stride_wheel::compute_shoulder_twist(phase, ctx.shoulder_twist_max()),
         _ => 0.0,
     };
-    let shoulders = shoulders_with_twist(rig, anim, twist);
+    let shoulders = shoulders_with_twist(ctx, twist);
     let natural = natural_hands(ctx, &shoulders);
 
     let hold_point = anim.pelvis_position
@@ -318,5 +345,6 @@ fn sample_holding(ctx: &UpperSampleCtx<'_>, current_hold_height: f32) -> PoseFra
         shoulder_twist: Some(twist),
         head_tilt: None,
         head_bob: None,
+        torso_pitch: None,
     }
 }

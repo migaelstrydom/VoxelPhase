@@ -25,6 +25,9 @@ pub struct GaitPreset {
     /// Downward pelvis offset (metres). `0.0` for Walk/Sprint, positive
     /// for Crouch.
     pub pelvis_crouch_offset: f32,
+    /// Forward torso lean in radians. `0.0` for upright gaits, positive
+    /// for crouched gaits.
+    pub torso_pitch: f32,
 }
 
 /// Bundle of gait presets carried on `CharacterRigConfig`.
@@ -213,15 +216,17 @@ impl Default for CharacterRigConfig {
                     shoulder_twist_max: 0.15,
                     head_bob_amplitude: 0.02,
                     pelvis_crouch_offset: 0.0,
+                    torso_pitch: 0.0,
                 },
                 sprint: GaitPreset {
-                    stride_length: 0.4 * 1.4,
+                    stride_length: 0.4 * 1.25,
                     step_height: 0.15 * 1.2,
                     frequency_mul: 1.35,
-                    arm_swing_amplitude: 0.3 * 1.5,
+                    arm_swing_amplitude: 0.3 * 1.2,
                     shoulder_twist_max: 0.15 * 1.3,
                     head_bob_amplitude: 0.02 * 1.4,
                     pelvis_crouch_offset: 0.0,
+                    torso_pitch: 0.0,
                 },
                 crouch_walk: GaitPreset {
                     stride_length: 0.4 * 0.5,
@@ -231,6 +236,7 @@ impl Default for CharacterRigConfig {
                     shoulder_twist_max: 0.15 * 0.4,
                     head_bob_amplitude: 0.02 * 0.3,
                     pelvis_crouch_offset: 0.25,
+                    torso_pitch: 0.30,
                 },
                 crouch_idle: GaitPreset {
                     stride_length: 0.4 * 0.5,
@@ -240,6 +246,7 @@ impl Default for CharacterRigConfig {
                     shoulder_twist_max: 0.15 * 0.4,
                     head_bob_amplitude: 0.02 * 0.3,
                     pelvis_crouch_offset: 0.25,
+                    torso_pitch: 0.30,
                 },
             },
         }

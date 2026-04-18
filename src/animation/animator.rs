@@ -180,18 +180,25 @@ impl CharacterAnimator {
             facing,
         );
 
+        // On transition INTO an idle-like gait (Idle or Crouch{walking:false})
+        // from a non-idle gait, hard-reset the planted positions to the
+        // feet's current positions. Otherwise the idle sample snaps the feet
+        // back to where the character last stood still.
+        if is_idle_gait(&new_pose) && !is_idle_gait(&self.pose_state) {
+            self.state.left.planted_position = self.state.left.position;
+            self.state.right.planted_position = self.state.right.position;
+        }
+
         // Re-plant feet when idle. Hysteresis prevents per-frame jitter
         // driven by probe noise.
-        if matches!(new_pose, PoseState::Grounded { gait: Gait::Idle }) {
+        if is_idle_gait(&new_pose) {
             replant_foot(&mut self.state.left, IDLE_PLANT_SNAP);
             replant_foot(&mut self.state.right, IDLE_PLANT_SNAP);
         }
 
         // Advance stride wheel only when a gait cycle is actually playing.
-        let running_stride = matches!(
-            new_pose,
-            PoseState::Grounded { gait } if !matches!(gait, Gait::Idle)
-        );
+        let running_stride =
+            matches!(new_pose, PoseState::Grounded { .. }) && !is_idle_gait(&new_pose);
         if running_stride {
             stride_wheel::advance_wheel(
                 &mut self.state.wheel_angle,
@@ -225,6 +232,7 @@ impl CharacterAnimator {
         }
         let old_cycle = self.pose_state.cycle(&self.state);
         let old_preset = gait_preset_for(&self.pose_state, &self.config);
+        let (old_pelvis_offset, old_torso_pitch) = upper_torso_inputs(old_preset);
         if self.upper_state.transition_key() != new_upper.transition_key() {
             let old_upper_ctx = UpperSampleCtx {
                 rig: &self.config,
@@ -232,6 +240,8 @@ impl CharacterAnimator {
                 grab: grab_config,
                 cycle: old_cycle,
                 preset: old_preset,
+                pelvis_offset: old_pelvis_offset,
+                torso_pitch: old_torso_pitch,
             };
             let from = self.upper_state.sample(&old_upper_ctx);
             self.upper_crossfade = Some(Crossfade {
@@ -260,12 +270,15 @@ impl CharacterAnimator {
         let to_pose = self.pose_state.sample(&pose_sample_ctx);
         let cycle = self.pose_state.cycle(&self.state);
         let preset = gait_preset_for(&self.pose_state, &self.config);
+        let (pelvis_offset, torso_pitch) = upper_torso_inputs(preset);
         let upper_sample_ctx = UpperSampleCtx {
             rig: &self.config,
             anim: &self.state,
             grab: grab_config,
             cycle,
             preset,
+            pelvis_offset,
+            torso_pitch,
         };
         let to_upper = self.upper_state.sample(&upper_sample_ctx);
 
@@ -399,6 +412,28 @@ fn gait_preset_for(pose: &PoseState, rig: &CharacterRigConfig) -> Option<GaitPre
         PoseState::Grounded { gait } => Some(rig.gait_presets.for_gait(*gait)),
         _ => None,
     }
+}
+
+/// Pelvis offset and torso pitch that `UpperState` should apply this frame.
+/// Mirrors the values `PoseState::Grounded::sample` emits into the pose
+/// fragment so the upper body tracks a crouched/pitched torso.
+fn upper_torso_inputs(preset: Option<GaitPreset>) -> (Vector3<f32>, f32) {
+    let pelvis_offset = preset
+        .map(|p| Vector3::new(0.0, -p.pelvis_crouch_offset, 0.0))
+        .unwrap_or_else(Vector3::zeros);
+    let torso_pitch = preset.map(|p| p.torso_pitch).unwrap_or(0.0);
+    (pelvis_offset, torso_pitch)
+}
+
+/// Whether a pose variant is an idle-like gait — no stride cycle, feet
+/// planted. Used to trigger foot-replant on transitions INTO such a gait.
+fn is_idle_gait(pose: &PoseState) -> bool {
+    matches!(
+        pose,
+        PoseState::Grounded {
+            gait: Gait::Idle | Gait::Crouch { walking: false },
+        }
+    )
 }
 
 /// Replant an idle foot at its latest ground contact if the contact has

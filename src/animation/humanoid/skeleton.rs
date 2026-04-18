@@ -144,6 +144,7 @@ impl Skeleton {
         let shoulder_twist = fragment.shoulder_twist.unwrap_or(state.shoulder_twist);
         let head_tilt = fragment.head_tilt.unwrap_or(state.head_tilt);
         let head_bob = fragment.head_bob.unwrap_or(state.head_bob);
+        let torso_pitch = fragment.torso_pitch.unwrap_or(0.0);
         let (left_hand, right_hand) = match &fragment.hands {
             Some(hands) => (hands.left, hands.right),
             None => (state.left_hand.position, state.right_hand.position),
@@ -155,6 +156,7 @@ impl Skeleton {
             shoulder_twist,
             head_tilt,
             head_bob,
+            torso_pitch,
             left_hand,
             right_hand,
         );
@@ -168,13 +170,18 @@ impl Skeleton {
         shoulder_twist: f32,
         head_tilt: Vector2<f32>,
         head_bob: f32,
+        torso_pitch: f32,
         left_hand: Point3<f32>,
         right_hand: Point3<f32>,
     ) {
         let right = right_vector(facing);
         let left = Vector3::new(-right.x, 0.0, -right.z);
 
-        self.chest = self.pelvis + Vector3::y() * config.torso_height;
+        // Torso-local up axis, pitched forward by `torso_pitch` around the
+        // lateral axis. Chest, neck, and head ride on this axis.
+        let torso_up = Vector3::y() * torso_pitch.cos() + facing * torso_pitch.sin();
+
+        self.chest = self.pelvis + torso_up * config.torso_height;
 
         let cos_twist = shoulder_twist.cos();
         let sin_twist = shoulder_twist.sin();
@@ -191,12 +198,12 @@ impl Skeleton {
 
         self.solve_elbow_ik(facing, config);
 
-        self.neck = self.chest + Vector3::y() * config.neck_length;
+        self.neck = self.chest + torso_up * config.neck_length;
 
         let tilt_forward = head_tilt.x;
         let tilt_lateral = head_tilt.y;
 
-        let head_offset = Vector3::y() * (config.head_radius + head_bob)
+        let head_offset = torso_up * (config.head_radius + head_bob)
             + facing * tilt_forward
             + right * tilt_lateral;
 

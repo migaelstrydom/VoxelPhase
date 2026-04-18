@@ -169,35 +169,43 @@ impl GaitCycle {
 
     /// Create an arm swing gait cycle.
     ///
-    /// Arms swing opposite to legs - when the leg is back, the arm is forward.
-    /// The swing creates a pendulum arc: hands come UP when swinging forward,
-    /// and extend DOWN/BACK when swinging backward.
-    pub fn arm_swing(arm_length: f32, swing_amplitude: f32) -> Self {
+    /// Arms swing opposite to legs — forward peak curves INWARD toward a
+    /// point in front of the pec; back peak extends straight behind near
+    /// the hip. Peak hand height stays at pec level (never reaches the
+    /// shoulder).
+    ///
+    /// `shoulder_width` caps the inward component so the hand can't cross
+    /// the body midline. Inward amplitude scales with `swing_amplitude` so
+    /// wide-armed gaits (sprint) keep a proportional curve and narrow ones
+    /// (crouch) shrink naturally.
+    pub fn arm_swing(arm_length: f32, swing_amplitude: f32, shoulder_width: f32) -> Self {
         use std::f32::consts::{FRAC_PI_2, PI};
 
-        // Keyframes for arm swing (note: arms use OPPOSITE phase to legs)
-        // 0° = arm at rest (neutral, hand hanging down)
-        // 90° = arm fully back (hand behind and down)
-        // 180° = arm at rest (passing through neutral)
-        // 270° = arm fully forward (hand UP in front of torso)
-        //
-        // vertical = distance below shoulder (smaller = hand higher up)
+        // Lateral component in the `FootOffset` frame is applied with
+        // `lateral_sign` in `to_world`: for the right arm (sign +1) a
+        // NEGATIVE lateral pulls the hand toward the body midline, and
+        // likewise for the left arm (sign -1). So we store the inward
+        // pull as a negative lateral value, once, and it mirrors per-side.
+        let inward = -(swing_amplitude * 0.7).min(shoulder_width * 0.8);
+
+        // Forward peak: hand must stay ≥ arm_length * 0.4 below shoulder
+        // so it never rises above pec height.
+        let fwd_down = arm_length * 0.3;
+        // Back peak: hand sits near the hip — deeper below the shoulder.
+        let back_down = arm_length * 0.75;
+        let back_reach = swing_amplitude * 0.5;
 
         let keyframes = vec![
-            // Neutral position - arm hanging down
+            // Neutral (rest) — arm hanging straight.
             GaitKeyframe::new(0.0, FootOffset::new(0.0, arm_length, 0.0)),
-            // Arm back - hand behind body and slightly down (extended back)
-            GaitKeyframe::new(
-                FRAC_PI_2,
-                FootOffset::new(0.0, arm_length * 0.85, -swing_amplitude),
-            ),
-            // Neutral position - passing through
+            // Back peak — hand behind and low, no inward curve.
+            GaitKeyframe::new(FRAC_PI_2, FootOffset::new(0.0, back_down, -back_reach)),
+            // Neutral (rest) — passing through hanging.
             GaitKeyframe::new(PI, FootOffset::new(0.0, arm_length, 0.0)),
-            // Arm forward - hand UP in front of torso (theatrical forward swing)
-            // Vertical is much smaller so hand comes up to chest/waist level
+            // Forward peak — hand in front of the pec (inward + pec-height).
             GaitKeyframe::new(
                 PI + FRAC_PI_2,
-                FootOffset::new(0.0, arm_length * 0.01, swing_amplitude),
+                FootOffset::new(inward, fwd_down, swing_amplitude),
             ),
         ];
 

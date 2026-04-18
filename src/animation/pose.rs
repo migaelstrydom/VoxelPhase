@@ -37,6 +37,11 @@ pub struct PoseFragment {
     pub shoulder_twist: Option<f32>,
     pub head_tilt: Option<Vector2<f32>>,
     pub head_bob: Option<f32>,
+    /// Forward lean of the torso around the lateral axis, in radians.
+    /// Positive = leaning forward (crouched). The skeleton rotates the
+    /// chest/head mesh by this angle; `UpperState` reads the same value
+    /// so shoulders (and thus hand targets) tilt consistently.
+    pub torso_pitch: Option<f32>,
 }
 
 impl PoseFragment {
@@ -57,6 +62,7 @@ impl PoseFragment {
             shoulder_twist: self.shoulder_twist,
             head_tilt: self.head_tilt,
             head_bob: self.head_bob,
+            torso_pitch: self.torso_pitch,
         }
     }
 
@@ -70,6 +76,7 @@ impl PoseFragment {
             shoulder_twist: overlay.shoulder_twist.or(self.shoulder_twist),
             head_tilt: overlay.head_tilt.or(self.head_tilt),
             head_bob: overlay.head_bob.or(self.head_bob),
+            torso_pitch: overlay.torso_pitch.or(self.torso_pitch),
         }
     }
 
@@ -94,6 +101,9 @@ impl PoseFragment {
                 a + (b - a) * t
             }),
             head_bob: lerp_option(&self.head_bob, &other.head_bob, t, |a, b, t| {
+                a + (b - a) * t
+            }),
+            torso_pitch: lerp_option(&self.torso_pitch, &other.torso_pitch, t, |a, b, t| {
                 a + (b - a) * t
             }),
         }

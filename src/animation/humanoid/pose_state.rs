@@ -190,6 +190,8 @@ fn sample_idle(ctx: &SampleCtx<'_>, preset: Option<&GaitPreset>) -> PoseFragment
         .filter(|v| *v != 0.0)
         .map(|v| Vector3::new(0.0, -v, 0.0));
 
+    let torso_pitch = preset.map(|p| p.torso_pitch).unwrap_or(0.0);
+
     PoseFragment {
         feet: Some(feet),
         hands: None,
@@ -197,6 +199,7 @@ fn sample_idle(ctx: &SampleCtx<'_>, preset: Option<&GaitPreset>) -> PoseFragment
         shoulder_twist: None,
         head_tilt: Some(Vector2::new(0.0, 0.0)),
         head_bob: Some(0.0),
+        torso_pitch: Some(torso_pitch),
     }
 }
 
@@ -256,6 +259,7 @@ fn sample_walking(ctx: &SampleCtx<'_>, preset: &GaitPreset) -> PoseFragment {
         shoulder_twist: None,
         head_tilt: Some(head_tilt),
         head_bob: Some(head_bob),
+        torso_pitch: Some(preset.torso_pitch),
     }
 }
 
@@ -288,5 +292,6 @@ fn sample_airborne(ctx: &SampleCtx<'_>) -> PoseFragment {
         shoulder_twist: None,
         head_tilt: Some(Vector2::new(-0.05, 0.0)),
         head_bob: Some(0.0),
+        torso_pitch: Some(0.0),
     }
 }
