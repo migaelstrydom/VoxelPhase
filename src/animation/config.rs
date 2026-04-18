@@ -4,6 +4,38 @@
 
 use crate::rendering::Colour;
 
+/// Per-gait animation parameters. Values that differ between Walk / Sprint /
+/// Crouch live here; rig-level constants (arm length, torso height, etc.)
+/// stay on `CharacterRigConfig`.
+#[derive(Clone, Copy, Debug)]
+pub struct GaitPreset {
+    /// How far forward the foot reaches per full cycle.
+    pub stride_length: f32,
+    /// Peak foot lift during swing.
+    pub step_height: f32,
+    /// Stride-wheel advance multiplier. Currently unused (foot-plant sync
+    /// is driven entirely by `stride_length`); kept for future tuning.
+    pub frequency_mul: f32,
+    /// Forward/backward swing amplitude for the arms.
+    pub arm_swing_amplitude: f32,
+    /// Maximum shoulder twist angle in radians.
+    pub shoulder_twist_max: f32,
+    /// Vertical head bob amplitude.
+    pub head_bob_amplitude: f32,
+    /// Downward pelvis offset (metres). `0.0` for Walk/Sprint, positive
+    /// for Crouch.
+    pub pelvis_crouch_offset: f32,
+}
+
+/// Bundle of gait presets carried on `CharacterRigConfig`.
+#[derive(Clone, Copy, Debug)]
+pub struct GaitPresets {
+    pub walk: GaitPreset,
+    pub sprint: GaitPreset,
+    pub crouch_walk: GaitPreset,
+    pub crouch_idle: GaitPreset,
+}
+
 /// Configuration for a character rig.
 #[derive(Clone, Debug)]
 pub struct CharacterRigConfig {
@@ -88,6 +120,10 @@ pub struct CharacterRigConfig {
     pub hip_colour: Colour,
     /// Segments around capsules (higher = smoother).
     pub mesh_segments: u32,
+
+    // === Gait presets ===
+    /// Per-gait parameter bundle (Walk, Sprint, Crouch walking, Crouch idle).
+    pub gait_presets: GaitPresets,
 }
 
 impl CharacterRigConfig {
@@ -167,6 +203,60 @@ impl Default for CharacterRigConfig {
             foot_colour: Colour::new(0.14, 0.22, 0.5, 1.0),
             hip_colour: Colour::new(0.18, 0.38, 0.8, 1.0),
             mesh_segments: 8,
+
+            gait_presets: GaitPresets {
+                walk: GaitPreset {
+                    stride_length: 0.4,
+                    step_height: 0.15,
+                    frequency_mul: 1.0,
+                    arm_swing_amplitude: 0.3,
+                    shoulder_twist_max: 0.15,
+                    head_bob_amplitude: 0.02,
+                    pelvis_crouch_offset: 0.0,
+                },
+                sprint: GaitPreset {
+                    stride_length: 0.4 * 1.4,
+                    step_height: 0.15 * 1.2,
+                    frequency_mul: 1.35,
+                    arm_swing_amplitude: 0.3 * 1.5,
+                    shoulder_twist_max: 0.15 * 1.3,
+                    head_bob_amplitude: 0.02 * 1.4,
+                    pelvis_crouch_offset: 0.0,
+                },
+                crouch_walk: GaitPreset {
+                    stride_length: 0.4 * 0.5,
+                    step_height: 0.15 * 0.4,
+                    frequency_mul: 0.75,
+                    arm_swing_amplitude: 0.3 * 0.3,
+                    shoulder_twist_max: 0.15 * 0.4,
+                    head_bob_amplitude: 0.02 * 0.3,
+                    pelvis_crouch_offset: 0.25,
+                },
+                crouch_idle: GaitPreset {
+                    stride_length: 0.4 * 0.5,
+                    step_height: 0.15 * 0.4,
+                    frequency_mul: 0.75,
+                    arm_swing_amplitude: 0.3 * 0.3,
+                    shoulder_twist_max: 0.15 * 0.4,
+                    head_bob_amplitude: 0.02 * 0.3,
+                    pelvis_crouch_offset: 0.25,
+                },
+            },
+        }
+    }
+}
+
+impl GaitPresets {
+    /// Return the preset for the given gait state. `Idle` falls back to
+    /// `walk` since none of its movement params are sampled anyway.
+    pub fn for_gait(&self, gait: super::humanoid::pose_state::Gait) -> GaitPreset {
+        use super::humanoid::pose_state::Gait;
+        match gait {
+            Gait::Idle => self.walk,
+            Gait::Walk => self.walk,
+            Gait::Sprint => self.sprint,
+            Gait::Crouch { walking: true } => self.crouch_walk,
+            Gait::Crouch { walking: false } => self.crouch_idle,
         }
     }
 }

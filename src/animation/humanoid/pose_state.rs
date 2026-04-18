@@ -9,7 +9,7 @@ use nalgebra::{Point3, Vector2, Vector3};
 
 use super::gait::GaitCycle;
 use super::stride_wheel;
-use crate::animation::config::CharacterRigConfig;
+use crate::animation::config::{CharacterRigConfig, GaitPreset};
 use crate::animation::pose::{Cycle, CycleKind, FeetPose, PoseFragment};
 use crate::animation::state::AnimationState;
 
@@ -121,7 +121,6 @@ pub struct SampleCtx<'a> {
     pub rig: &'a CharacterRigConfig,
     pub anim: &'a AnimationState,
     pub velocity: Vector3<f32>,
-    pub leg_gait: &'a GaitCycle,
 }
 
 impl PoseState {
@@ -135,8 +134,14 @@ impl PoseState {
     /// Emit the pose fragment this state contributes.
     pub fn sample(&self, ctx: &SampleCtx<'_>) -> PoseFragment {
         match self {
-            PoseState::Grounded { gait: Gait::Idle } => sample_idle(ctx),
-            PoseState::Grounded { .. } => sample_walking(ctx),
+            PoseState::Grounded { gait: Gait::Idle } => sample_idle(ctx, None),
+            PoseState::Grounded { gait } => {
+                let preset = ctx.rig.gait_presets.for_gait(*gait);
+                match gait {
+                    Gait::Crouch { walking: false } => sample_idle(ctx, Some(&preset)),
+                    _ => sample_walking(ctx, &preset),
+                }
+            }
             PoseState::Launching { .. }
             | PoseState::Airborne { .. }
             | PoseState::Landing { .. } => sample_airborne(ctx),
@@ -170,7 +175,7 @@ impl PoseState {
     }
 }
 
-fn sample_idle(ctx: &SampleCtx<'_>) -> PoseFragment {
+fn sample_idle(ctx: &SampleCtx<'_>, preset: Option<&GaitPreset>) -> PoseFragment {
     let anim = ctx.anim;
 
     // Feet snap to the planted position. The driver re-plants (with a
@@ -180,17 +185,22 @@ fn sample_idle(ctx: &SampleCtx<'_>) -> PoseFragment {
         right: anim.right.planted_position,
     };
 
+    let pelvis_offset = preset
+        .map(|p| p.pelvis_crouch_offset)
+        .filter(|v| *v != 0.0)
+        .map(|v| Vector3::new(0.0, -v, 0.0));
+
     PoseFragment {
         feet: Some(feet),
         hands: None,
-        pelvis_offset: None,
+        pelvis_offset,
         shoulder_twist: None,
         head_tilt: Some(Vector2::new(0.0, 0.0)),
         head_bob: Some(0.0),
     }
 }
 
-fn sample_walking(ctx: &SampleCtx<'_>) -> PoseFragment {
+fn sample_walking(ctx: &SampleCtx<'_>, preset: &GaitPreset) -> PoseFragment {
     let rig = ctx.rig;
     let anim = ctx.anim;
     let facing = anim.facing;
@@ -200,11 +210,17 @@ fn sample_walking(ctx: &SampleCtx<'_>) -> PoseFragment {
     let left_hip = anim.pelvis_position - right * rig.hip_width;
     let right_hip = anim.pelvis_position + right * rig.hip_width;
 
+    let leg_gait = GaitCycle::walking(
+        rig.standing_height(),
+        preset.stride_length,
+        preset.step_height,
+    );
+
     let mut left_foot = anim.left.clone();
     let mut right_foot = anim.right.clone();
     stride_wheel::update_foot(
         &mut left_foot,
-        ctx.leg_gait,
+        &leg_gait,
         wheel_angle,
         stride_wheel::LEFT_PHASE,
         Point3::from(left_hip.coords),
@@ -213,7 +229,7 @@ fn sample_walking(ctx: &SampleCtx<'_>) -> PoseFragment {
     );
     stride_wheel::update_foot(
         &mut right_foot,
-        ctx.leg_gait,
+        &leg_gait,
         wheel_angle,
         stride_wheel::RIGHT_PHASE,
         Point3::from(right_hip.coords),
@@ -222,7 +238,13 @@ fn sample_walking(ctx: &SampleCtx<'_>) -> PoseFragment {
     );
 
     let head_tilt = stride_wheel::compute_head_tilt(ctx.velocity, facing, rig.head_tilt_factor);
-    let head_bob = stride_wheel::compute_head_bob(wheel_angle, rig.head_bob_amplitude);
+    let head_bob = stride_wheel::compute_head_bob(wheel_angle, preset.head_bob_amplitude);
+
+    let pelvis_offset = if preset.pelvis_crouch_offset != 0.0 {
+        Some(Vector3::new(0.0, -preset.pelvis_crouch_offset, 0.0))
+    } else {
+        None
+    };
 
     PoseFragment {
         feet: Some(FeetPose {
@@ -230,7 +252,7 @@ fn sample_walking(ctx: &SampleCtx<'_>) -> PoseFragment {
             right: right_foot.position,
         }),
         hands: None,
-        pelvis_offset: None,
+        pelvis_offset,
         shoulder_twist: None,
         head_tilt: Some(head_tilt),
         head_bob: Some(head_bob),

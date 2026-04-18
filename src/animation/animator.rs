@@ -6,8 +6,7 @@
 use nalgebra::{Point3, Vector3};
 use specs::{Component, VecStorage};
 
-use super::config::CharacterRigConfig;
-use super::humanoid::gait::GaitCycle;
+use super::config::{CharacterRigConfig, GaitPreset};
 use super::humanoid::pose_state::{AirKind, Gait, PoseState, SampleCtx, Takeoff, TickCtx};
 use super::humanoid::skeleton::{generate_character_mesh, Skeleton};
 use super::humanoid::stride_wheel;
@@ -45,8 +44,6 @@ pub struct CharacterAnimator {
     pub config: CharacterRigConfig,
     pub state: AnimationState,
     pub skeleton: Skeleton,
-    pub gait: GaitCycle,
-    pub arm_gait: GaitCycle,
 
     /// Current lower-body / core pose FSM variant.
     pub pose_state: PoseState,
@@ -75,19 +72,11 @@ impl CharacterAnimator {
 
         let state = AnimationState::new(pelvis_position, leg_length);
         let skeleton = Skeleton::new(&config, pelvis_position, facing);
-        let gait = GaitCycle::walking(
-            config.standing_height(),
-            config.stride_length,
-            config.step_height,
-        );
-        let arm_gait = GaitCycle::arm_swing(config.arm_length(), config.arm_swing_amplitude);
 
         Self {
             config,
             state,
             skeleton,
-            gait,
-            arm_gait,
             pose_state: PoseState::Grounded { gait: Gait::Idle },
             upper_state: UpperState::Swinging,
             pose_crossfade: None,
@@ -220,7 +209,6 @@ impl CharacterAnimator {
             rig: &self.config,
             anim: &self.state,
             velocity,
-            leg_gait: &self.gait,
         };
 
         // Snapshot outgoing fragments BEFORE the variant swap, so the
@@ -236,13 +224,14 @@ impl CharacterAnimator {
             });
         }
         let old_cycle = self.pose_state.cycle(&self.state);
+        let old_preset = gait_preset_for(&self.pose_state, &self.config);
         if self.upper_state.transition_key() != new_upper.transition_key() {
             let old_upper_ctx = UpperSampleCtx {
                 rig: &self.config,
                 anim: &self.state,
-                arm_gait: &self.arm_gait,
                 grab: grab_config,
                 cycle: old_cycle,
+                preset: old_preset,
             };
             let from = self.upper_state.sample(&old_upper_ctx);
             self.upper_crossfade = Some(Crossfade {
@@ -270,12 +259,13 @@ impl CharacterAnimator {
         // Sample the (now current) states.
         let to_pose = self.pose_state.sample(&pose_sample_ctx);
         let cycle = self.pose_state.cycle(&self.state);
+        let preset = gait_preset_for(&self.pose_state, &self.config);
         let upper_sample_ctx = UpperSampleCtx {
             rig: &self.config,
             anim: &self.state,
-            arm_gait: &self.arm_gait,
             grab: grab_config,
             cycle,
+            preset,
         };
         let to_upper = self.upper_state.sample(&upper_sample_ctx);
 
@@ -398,6 +388,16 @@ fn blend_through(
             blended
         }
         None => to,
+    }
+}
+
+/// Look up the active `GaitPreset` for the current `PoseState`. Returns
+/// `None` when the lower body is not Grounded — the upper body falls back
+/// to rig-level defaults in that case.
+fn gait_preset_for(pose: &PoseState, rig: &CharacterRigConfig) -> Option<GaitPreset> {
+    match pose {
+        PoseState::Grounded { gait } => Some(rig.gait_presets.for_gait(*gait)),
+        _ => None,
     }
 }
 

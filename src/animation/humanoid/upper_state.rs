@@ -8,7 +8,7 @@ use nalgebra::{Point3, Vector3};
 
 use super::gait::GaitCycle;
 use super::stride_wheel;
-use crate::animation::config::CharacterRigConfig;
+use crate::animation::config::{CharacterRigConfig, GaitPreset};
 use crate::animation::pose::{Cycle, CycleKind, HandsPose, PoseFragment};
 use crate::animation::state::{AnimationState, HandState};
 use crate::physics::{ConstraintHandle, RigidBodyHandle};
@@ -55,10 +55,30 @@ pub struct UpperTickCtx {
 pub struct UpperSampleCtx<'a> {
     pub rig: &'a CharacterRigConfig,
     pub anim: &'a AnimationState,
-    pub arm_gait: &'a GaitCycle,
     pub grab: &'a GrabConfig,
     /// The cycle `PoseState` exposes this frame, if any.
     pub cycle: Option<Cycle>,
+    /// Active gait preset. `None` when the lower body is airborne — in
+    /// that case the upper body reads rig-level defaults.
+    pub preset: Option<GaitPreset>,
+}
+
+impl UpperSampleCtx<'_> {
+    fn arm_swing_amplitude(&self) -> f32 {
+        self.preset
+            .map(|p| p.arm_swing_amplitude)
+            .unwrap_or(self.rig.arm_swing_amplitude)
+    }
+
+    fn shoulder_twist_max(&self) -> f32 {
+        self.preset
+            .map(|p| p.shoulder_twist_max)
+            .unwrap_or(self.rig.shoulder_twist_max)
+    }
+
+    fn arm_gait(&self) -> GaitCycle {
+        GaitCycle::arm_swing(self.rig.arm_length(), self.arm_swing_amplitude())
+    }
 }
 
 impl UpperState {
@@ -129,12 +149,13 @@ fn natural_hands(ctx: &UpperSampleCtx<'_>, shoulders: &Shoulders) -> HandsPose {
             phase,
             kind: CycleKind::Stride,
         }) => {
+            let arm_gait = ctx.arm_gait();
             let mut left_hand = HandState::new(anim.left_hand.position);
             let mut right_hand = HandState::new(anim.right_hand.position);
             // Arms swing OPPOSITE to legs for counter-balance.
             stride_wheel::update_hand(
                 &mut left_hand,
-                ctx.arm_gait,
+                &arm_gait,
                 phase,
                 stride_wheel::RIGHT_PHASE,
                 shoulders.left,
@@ -143,7 +164,7 @@ fn natural_hands(ctx: &UpperSampleCtx<'_>, shoulders: &Shoulders) -> HandsPose {
             );
             stride_wheel::update_hand(
                 &mut right_hand,
-                ctx.arm_gait,
+                &arm_gait,
                 phase,
                 stride_wheel::LEFT_PHASE,
                 shoulders.right,
@@ -170,7 +191,7 @@ fn sample_swinging(ctx: &UpperSampleCtx<'_>) -> PoseFragment {
         Some(Cycle {
             phase,
             kind: CycleKind::Stride,
-        }) => stride_wheel::compute_shoulder_twist(phase, ctx.rig.shoulder_twist_max),
+        }) => stride_wheel::compute_shoulder_twist(phase, ctx.shoulder_twist_max()),
         _ => 0.0,
     };
     let shoulders = shoulders_with_twist(ctx.rig, ctx.anim, twist);
@@ -237,7 +258,7 @@ fn sample_reaching(
         Some(Cycle {
             phase,
             kind: CycleKind::Stride,
-        }) => stride_wheel::compute_shoulder_twist(phase, rig.shoulder_twist_max),
+        }) => stride_wheel::compute_shoulder_twist(phase, ctx.shoulder_twist_max()),
         _ => 0.0,
     };
     let shoulders = shoulders_with_twist(rig, anim, twist);
@@ -276,7 +297,7 @@ fn sample_holding(ctx: &UpperSampleCtx<'_>, current_hold_height: f32) -> PoseFra
         Some(Cycle {
             phase,
             kind: CycleKind::Stride,
-        }) => stride_wheel::compute_shoulder_twist(phase, rig.shoulder_twist_max),
+        }) => stride_wheel::compute_shoulder_twist(phase, ctx.shoulder_twist_max()),
         _ => 0.0,
     };
     let shoulders = shoulders_with_twist(rig, anim, twist);
