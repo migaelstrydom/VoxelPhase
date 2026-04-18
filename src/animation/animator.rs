@@ -229,6 +229,7 @@ impl CharacterAnimator {
             let from = self.pose_state.sample(&pose_sample_ctx);
             self.pose_crossfade = Some(Crossfade {
                 from,
+                from_pelvis: pelvis_position,
                 to_duration: TRANSITION_BLEND_DURATION,
                 elapsed: 0.0,
                 policy: Linear,
@@ -246,6 +247,7 @@ impl CharacterAnimator {
             let from = self.upper_state.sample(&old_upper_ctx);
             self.upper_crossfade = Some(Crossfade {
                 from,
+                from_pelvis: pelvis_position,
                 to_duration: TRANSITION_BLEND_DURATION,
                 elapsed: 0.0,
                 policy: Linear,
@@ -279,8 +281,9 @@ impl CharacterAnimator {
 
         // Apply any running crossfades. `is_active` is checked AFTER ticking
         // so the final frame of a blend lands on weight=1.0 cleanly.
-        let pose_fragment = blend_through(&mut self.pose_crossfade, to_pose, dt);
-        let upper_fragment = blend_through(&mut self.upper_crossfade, to_upper, dt);
+        let pose_fragment = blend_through(&mut self.pose_crossfade, to_pose, pelvis_position, dt);
+        let upper_fragment =
+            blend_through(&mut self.upper_crossfade, to_upper, pelvis_position, dt);
 
         let fragment = pose_fragment.compose(&upper_fragment);
         self.apply_fragment_to_state(&fragment);
@@ -379,10 +382,15 @@ impl CharacterAnimator {
 
 /// Advance a crossfade (if any) and return the fragment the driver should
 /// use this frame. Clears the slot once the blend has fully resolved.
-fn blend_through(slot: &mut Option<Crossfade<Linear>>, to: PoseFragment, dt: f32) -> PoseFragment {
+fn blend_through(
+    slot: &mut Option<Crossfade<Linear>>,
+    to: PoseFragment,
+    current_pelvis: Point3<f32>,
+    dt: f32,
+) -> PoseFragment {
     match slot.as_mut() {
         Some(cf) => {
-            let blended = cf.sample(&to);
+            let blended = cf.sample(&to, current_pelvis);
             cf.tick(dt);
             if !cf.is_active() {
                 *slot = None;

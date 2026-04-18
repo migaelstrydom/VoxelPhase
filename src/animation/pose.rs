@@ -40,6 +40,26 @@ pub struct PoseFragment {
 }
 
 impl PoseFragment {
+    /// Return a copy with world-space spatial channels translated by `delta`.
+    /// Only `feet` and `hands` are world-space; `pelvis_offset` is already an
+    /// offset-from-pelvis and scalar channels are frame-invariant.
+    pub fn translated(&self, delta: Vector3<f32>) -> Self {
+        Self {
+            feet: self.feet.as_ref().map(|f| FeetPose {
+                left: f.left + delta,
+                right: f.right + delta,
+            }),
+            hands: self.hands.as_ref().map(|h| HandsPose {
+                left: h.left + delta,
+                right: h.right + delta,
+            }),
+            pelvis_offset: self.pelvis_offset,
+            shoulder_twist: self.shoulder_twist,
+            head_tilt: self.head_tilt,
+            head_bob: self.head_bob,
+        }
+    }
+
     /// Overlay `overlay` on top of `self`. For each channel, `overlay`
     /// wins if it sets it; otherwise `self` passes through.
     pub fn compose(&self, overlay: &Self) -> Self {
@@ -146,9 +166,15 @@ impl BlendPolicy for Linear {
 
 /// A running crossfade from a snapshotted `from` fragment toward whatever
 /// the FSM is currently emitting.
+///
+/// The snapshot is anchored to the pelvis position at capture time. When
+/// sampled, the `from` fragment's world-space spatial channels are translated
+/// by `current_pelvis - from_pelvis` so feet and hands ride along with body
+/// motion during the blend (e.g. a rising pelvis during a jump).
 #[derive(Debug, Clone)]
 pub struct Crossfade<P: BlendPolicy = Linear> {
     pub from: PoseFragment,
+    pub from_pelvis: Point3<f32>,
     pub to_duration: f32,
     pub elapsed: f32,
     pub policy: P,
@@ -160,10 +186,12 @@ impl<P: BlendPolicy> Crossfade<P> {
         self.elapsed < self.to_duration
     }
 
-    /// Blend `self.from` toward `current` using the policy weight.
-    pub fn sample(&self, current: &PoseFragment) -> PoseFragment {
+    /// Blend `self.from` (translated into the current pelvis frame) toward
+    /// `current` using the policy weight.
+    pub fn sample(&self, current: &PoseFragment, current_pelvis: Point3<f32>) -> PoseFragment {
         let t = self.policy.weight(self.elapsed, self.to_duration);
-        self.from.lerp(current, t)
+        let delta = current_pelvis - self.from_pelvis;
+        self.from.translated(delta).lerp(current, t)
     }
 
     /// Advance the crossfade timer.

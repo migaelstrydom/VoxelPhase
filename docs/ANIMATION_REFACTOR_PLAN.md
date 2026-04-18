@@ -343,11 +343,14 @@ onward adds visible animation polish.
   wrong.
 - Should `Gait::Crouch { walking: false }` be a separate `Gait::CrouchIdle`
   preset, or handled by amplitude-scaling Walk? Guess: a preset.
-- Foot locking during a crossfade — if the feet blend between two
-  significantly different planted positions, they'll slide. Easiest fix is
-  to make foot planting a post-sample step so both source and destination
-  fragments re-snap feet to the latest IK contact. Punted to after step 5
-  lands.
+- Foot/hand slide during a crossfade — crossfade snapshots are now
+  pelvis-relative: the `from` fragment's world-space spatial channels
+  (`feet`, `hands`) are translated by `current_pelvis - from_pelvis` before
+  lerping. This fixes sticky feet during jumps and the worst of the
+  walk→idle slide. Only position delta is applied — rapid rotation during a
+  blend will still cause the `from` spatial channels to lag (they stay in
+  the snapshot-time facing). Upgrading to a full pelvis-local frame
+  (position + facing) is future work if it becomes visible.
 - Whether `CoyoteTime` deserves a distinct pose variant or just reuses
   `Airborne { kind: Fall }`. Current guess: reuse.
 
