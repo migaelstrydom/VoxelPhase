@@ -8,7 +8,7 @@ use specs::{Component, VecStorage};
 
 use super::config::{CharacterRigConfig, GaitPreset};
 use super::humanoid::pose_state::{AirKind, Gait, PoseState, SampleCtx, Takeoff, TickCtx};
-use super::humanoid::skeleton::{generate_character_mesh, Skeleton};
+use super::humanoid::skeleton::{generate_character_mesh, Skeleton, FOOT_HEIGHT};
 use super::humanoid::stride_wheel;
 use super::humanoid::upper_state::{UpperSampleCtx, UpperState, UpperTickCtx};
 use super::pose::{Crossfade, Linear, PoseFragment};
@@ -164,21 +164,26 @@ impl CharacterAnimator {
 
         self.state.facing = facing;
         self.state.pelvis_position = pelvis_position;
+        // Feet always point along the body facing. Per-foot swing yaw is
+        // future polish.
+        self.state.left.forward = facing;
+        self.state.right.forward = facing;
 
         self.process_contacts(contacts);
         let has_ground_contact =
             self.state.left.ground_contact.is_some() || self.state.right.ground_contact.is_some();
         self.state.is_grounded = has_ground_contact;
 
-        // Snapshot ground y for a potential Landing splice this frame.
-        // Prefer a real probe contact; fall back to pelvis minus standing
-        // height. Cheap to compute whether Landing actually fires.
+        // Snapshot the ankle y for a potential Landing splice this frame.
+        // Probe contact is a surface point; lift by `FOOT_HEIGHT` so the
+        // stored value is ankle-y (matches the convention used by every
+        // other sample path). Fallback is already ankle-y.
         let landing_ground_y = self
             .state
             .left
             .ground_contact
             .or(self.state.right.ground_contact)
-            .map(|c| c.y)
+            .map(|c| c.y + FOOT_HEIGHT)
             .unwrap_or(pelvis_position.y - self.config.standing_height());
 
         // Map PlayerState → next PoseState variant.
@@ -201,10 +206,13 @@ impl CharacterAnimator {
         }
 
         // Re-plant feet when idle. Hysteresis prevents per-frame jitter
-        // driven by probe noise.
+        // driven by probe noise. Ankle y is pelvis-relative (matches the
+        // anchor formula) so the rendered foot bottom sits on the same
+        // terrain line as the walking stride.
         if is_idle_gait(&new_pose) {
-            replant_foot(&mut self.state.left, IDLE_PLANT_SNAP);
-            replant_foot(&mut self.state.right, IDLE_PLANT_SNAP);
+            let ankle_y = pelvis_position.y - self.config.standing_height();
+            replant_foot(&mut self.state.left, IDLE_PLANT_SNAP, ankle_y);
+            replant_foot(&mut self.state.right, IDLE_PLANT_SNAP, ankle_y);
         }
 
         // Advance stride wheel only when a gait cycle is actually playing.
@@ -244,6 +252,7 @@ impl CharacterAnimator {
         let old_cycle = self.pose_state.cycle(&self.state);
         let old_preset = gait_preset_for(&self.pose_state, &self.config);
         let (old_pelvis_offset, old_torso_pitch) = upper_torso_inputs(old_preset);
+        let old_airborne = airborne_ctx_for(&self.pose_state);
         if self.upper_state.transition_key() != new_upper.transition_key() {
             let old_upper_ctx = UpperSampleCtx {
                 rig: &self.config,
@@ -253,6 +262,7 @@ impl CharacterAnimator {
                 preset: old_preset,
                 pelvis_offset: old_pelvis_offset,
                 torso_pitch: old_torso_pitch,
+                airborne: old_airborne,
             };
             let from = self.upper_state.sample(&old_upper_ctx);
             self.upper_crossfade = Some(Crossfade {
@@ -282,6 +292,7 @@ impl CharacterAnimator {
         let cycle = self.pose_state.cycle(&self.state);
         let preset = gait_preset_for(&self.pose_state, &self.config);
         let (pelvis_offset, torso_pitch) = upper_torso_inputs(preset);
+        let airborne = airborne_ctx_for(&self.pose_state);
         let upper_sample_ctx = UpperSampleCtx {
             rig: &self.config,
             anim: &self.state,
@@ -290,6 +301,7 @@ impl CharacterAnimator {
             preset,
             pelvis_offset,
             torso_pitch,
+            airborne,
         };
         let to_upper = self.upper_state.sample(&upper_sample_ctx);
 
@@ -436,6 +448,18 @@ fn upper_torso_inputs(preset: Option<GaitPreset>) -> (Vector3<f32>, f32) {
     (pelvis_offset, torso_pitch)
 }
 
+/// Airborne context (kind + latched takeoff) to expose to `UpperState`,
+/// when the lower body is mid-air. `Launching` and `Airborne` both count
+/// — both reflect a committed takeoff that Braced should read.
+fn airborne_ctx_for(pose: &PoseState) -> Option<(AirKind, Takeoff)> {
+    match pose {
+        PoseState::Launching { kind, takeoff, .. } | PoseState::Airborne { kind, takeoff } => {
+            Some((*kind, *takeoff))
+        }
+        _ => None,
+    }
+}
+
 /// Whether a pose variant is an idle-like gait — no stride cycle, feet
 /// planted. Used to trigger foot-replant on transitions INTO such a gait.
 fn is_idle_gait(pose: &PoseState) -> bool {
@@ -448,10 +472,11 @@ fn is_idle_gait(pose: &PoseState) -> bool {
 }
 
 /// Anchor both feet's `planted_position` directly beneath the current
-/// hips. Foot x/z come from the hip under `pelvis + pelvis_offset`;
-/// foot y uses the probe ground contact when available, else drops by
-/// `standing_height`. Also mirrors the result into `position` so any
-/// intra-frame reader sees a coherent snapshot.
+/// hips. x/z come from the hip; y uses the same pelvis-relative formula
+/// as the walking stride (`pelvis.y - standing_height`) so idle and
+/// running share the ankle convention by construction. Probe
+/// `ground_contact.y` is intentionally NOT used for vertical positioning
+/// — the probe point isn't always the visible terrain surface.
 fn anchor_feet_under_hips(
     state: &mut AnimationState,
     rig: &CharacterRigConfig,
@@ -459,17 +484,13 @@ fn anchor_feet_under_hips(
     facing: Vector3<f32>,
 ) {
     let right = facing.cross(&Vector3::y());
-    let standing_height = rig.standing_height();
-    let fallback_y = pelvis_position.y - standing_height;
+    let ankle_y = pelvis_position.y - rig.standing_height();
 
     let left_hip = pelvis_position - right * rig.hip_width;
     let right_hip = pelvis_position + right * rig.hip_width;
 
-    let left_y = state.left.ground_contact.map_or(fallback_y, |c| c.y);
-    let right_y = state.right.ground_contact.map_or(fallback_y, |c| c.y);
-
-    let left = Point3::new(left_hip.x, left_y, left_hip.z);
-    let right_foot = Point3::new(right_hip.x, right_y, right_hip.z);
+    let left = Point3::new(left_hip.x, ankle_y, left_hip.z);
+    let right_foot = Point3::new(right_hip.x, ankle_y, right_hip.z);
 
     state.left.planted_position = left;
     state.left.position = left;
@@ -479,9 +500,15 @@ fn anchor_feet_under_hips(
 
 /// Replant an idle foot at its latest ground contact if the contact has
 /// shifted beyond `snap_threshold`. Smaller shifts are ignored to avoid
-/// per-frame jitter from probe noise.
-fn replant_foot(foot: &mut FootState, snap_threshold: f32) {
-    let desired = foot.ground_contact.unwrap_or(foot.position);
+/// per-frame jitter from probe noise. Vertical y is supplied by the
+/// caller (pelvis-relative ankle y) — we do NOT trust the probe's y,
+/// since the probe hit point isn't always the visible terrain surface.
+fn replant_foot(foot: &mut FootState, snap_threshold: f32, ankle_y: f32) {
+    let (desired_xz, _) = foot
+        .ground_contact
+        .map(|c| ((c.x, c.z), true))
+        .unwrap_or(((foot.position.x, foot.position.z), false));
+    let desired = Point3::new(desired_xz.0, ankle_y, desired_xz.1);
     if (desired - foot.planted_position).magnitude() > snap_threshold {
         foot.planted_position = desired;
     }

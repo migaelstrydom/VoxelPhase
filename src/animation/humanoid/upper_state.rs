@@ -7,12 +7,18 @@
 use nalgebra::{Point3, Vector3};
 
 use super::gait::GaitCycle;
+use super::pose_state::{AirKind, Takeoff};
 use super::stride_wheel;
 use crate::animation::config::{CharacterRigConfig, GaitPreset};
 use crate::animation::pose::{Cycle, CycleKind, HandsPose, PoseFragment};
 use crate::animation::state::{AnimationState, HandState};
 use crate::physics::{ConstraintHandle, RigidBodyHandle};
 use crate::player::grab::GrabConfig;
+
+/// Reference horizontal speed used to scale the LongJump reach-forward
+/// magnitude. Chosen as a nominal walk speed — the rig config does not
+/// expose one directly today.
+const LONG_JUMP_REFERENCE_SPEED: f32 = 3.0;
 
 /// Coarse discriminant used to decide when a crossfade fires. Continuous
 /// parameters (`elapsed`, `current_hold_height`, etc.) do not change the
@@ -69,6 +75,10 @@ pub struct UpperSampleCtx<'a> {
     /// tilt the shoulder frame so hand targets sit in the pitched torso
     /// frame.
     pub torso_pitch: f32,
+    /// Airborne context (kind + takeoff) when `PoseState` is in
+    /// `Launching` or `Airborne`. Drives per-AirKind hand variations in
+    /// `Braced` (e.g. LongJump reach-forward).
+    pub airborne: Option<(AirKind, Takeoff)>,
 }
 
 impl UpperSampleCtx<'_> {
@@ -239,10 +249,39 @@ fn sample_braced(ctx: &UpperSampleCtx<'_>) -> PoseFragment {
 
     let shoulders = shoulders_with_twist(ctx, 0.0);
     let arm_hang = rig.arm_length() * 0.9;
+    let arm_reach = rig.arm_length();
 
-    let hands = HandsPose {
-        left: shoulders.left + left * 0.1 - Vector3::y() * arm_hang,
-        right: shoulders.right + right * 0.1 - Vector3::y() * arm_hang,
+    let hands = match ctx.airborne.map(|(k, t)| (k, t)) {
+        Some((AirKind::LongJump, takeoff)) => {
+            // Reach both hands forward along the latched facing, scaled by
+            // takeoff speed. Small up-bias keeps them above belt line.
+            let forward = Vector3::new(takeoff.facing.x, 0.0, takeoff.facing.z)
+                .try_normalize(1e-4)
+                .unwrap_or(facing);
+            let scale = (takeoff.air_speed / LONG_JUMP_REFERENCE_SPEED).clamp(0.8, 1.4);
+            let reach = forward * (arm_reach * 0.75 * scale) + Vector3::y() * 0.05;
+            HandsPose {
+                left: shoulders.left + reach,
+                right: shoulders.right + reach,
+            }
+        }
+        Some((AirKind::Jump, _)) => {
+            // Arms slightly forward and up for a deliberate hop.
+            let forward_bias = facing * (arm_reach * 0.25);
+            let up_bias = Vector3::y() * (arm_reach * 0.15);
+            HandsPose {
+                left: shoulders.left + left * 0.1 - Vector3::y() * arm_hang
+                    + forward_bias
+                    + up_bias,
+                right: shoulders.right + right * 0.1 - Vector3::y() * arm_hang
+                    + forward_bias
+                    + up_bias,
+            }
+        }
+        _ => HandsPose {
+            left: shoulders.left + left * 0.1 - Vector3::y() * arm_hang,
+            right: shoulders.right + right * 0.1 - Vector3::y() * arm_hang,
+        },
     };
 
     PoseFragment {

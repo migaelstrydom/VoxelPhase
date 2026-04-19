@@ -7,12 +7,18 @@ use nalgebra::{Point3, Vector2, Vector3};
 /// State of a single foot.
 #[derive(Debug, Clone)]
 pub struct FootState {
-    /// Current foot position in world space.
+    /// Current foot position in world space. `y` is the intended
+    /// ground-contact height; the rendered capsule sits above it by
+    /// `foot_radius` so its bottom tangent is on the ground.
     pub position: Point3<f32>,
     /// World-space position when planted.
     pub planted_position: Point3<f32>,
     /// Ground surface normal at contact point.
     pub normal: Vector3<f32>,
+    /// Horizontal forward direction of the foot (toe points here). The
+    /// driver mirrors the body's facing into this each frame; per-foot
+    /// swing yaw is future polish.
+    pub forward: Vector3<f32>,
 
     /// Most recent ground contact point from probe (if any).
     pub ground_contact: Option<Point3<f32>>,
@@ -27,6 +33,7 @@ impl FootState {
             position,
             planted_position: position,
             normal: Vector3::y(),
+            forward: Vector3::new(0.0, 0.0, 1.0),
             ground_contact: None,
             ground_normal: None,
         }

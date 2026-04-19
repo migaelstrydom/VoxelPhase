@@ -214,7 +214,7 @@ impl PoseState {
             }
             PoseState::Launching { kind, t, .. } => sample_launching(ctx, *kind, *t),
             PoseState::Landing { kind, t, ground_y } => sample_landing(ctx, *kind, *t, *ground_y),
-            PoseState::Airborne { .. } => sample_airborne(ctx),
+            PoseState::Airborne { kind, takeoff } => sample_airborne(ctx, *kind, *takeoff),
         }
     }
 
@@ -333,30 +333,48 @@ fn sample_walking(ctx: &SampleCtx<'_>, preset: &GaitPreset) -> PoseFragment {
     }
 }
 
-fn sample_airborne(ctx: &SampleCtx<'_>) -> PoseFragment {
-    // Legs naturally tuck up in the air; also closes the gap to the
-    // landing pose so the Airborne→Landing crossfade has less distance
-    // to cover.
-    const AIRBORNE_TUCK_FACTOR: f32 = 0.7;
-
+/// Airborne pose varies by `AirKind`:
+/// - `Jump`: tucked legs, small forward torso lean, neutral head.
+/// - `LongJump`: legs slightly extended forward along takeoff facing, body
+///   committed forward, head pitched down.
+/// - `Fall`: dangly legs, slight backward head tilt (arms handled by
+///   `UpperState::Braced`).
+fn sample_airborne(ctx: &SampleCtx<'_>, kind: AirKind, takeoff: Takeoff) -> PoseFragment {
     let rig = ctx.rig;
     let anim = ctx.anim;
     let right = anim.facing.cross(&Vector3::y());
-
     let left_hip = anim.pelvis_position - right * rig.hip_width;
     let right_hip = anim.pelvis_position + right * rig.hip_width;
-    let hang_distance = rig.standing_height() * AIRBORNE_TUCK_FACTOR;
+
+    let (hang_factor, feet_forward, torso_pitch, head_tilt) = match kind {
+        AirKind::Jump => (0.7, 0.0, 0.08, Vector2::new(0.0, 0.0)),
+        AirKind::LongJump => (0.85, 0.18, 0.20, Vector2::new(0.08, 0.0)),
+        AirKind::Fall => (0.85, 0.0, -0.05, Vector2::new(-0.05, 0.0)),
+    };
+
+    let hang_distance = rig.standing_height() * hang_factor;
+    let forward = match kind {
+        AirKind::LongJump => {
+            let f = takeoff.facing;
+            let planar = Vector3::new(f.x, 0.0, f.z);
+            planar
+                .try_normalize(1e-4)
+                .unwrap_or_else(|| Vector3::new(0.0, 0.0, 1.0))
+        }
+        _ => Vector3::zeros(),
+    };
+    let foot_push = forward * feet_forward;
 
     let feet = FeetPose {
         left: Point3::new(
-            left_hip.x,
+            left_hip.x + foot_push.x,
             anim.pelvis_position.y - hang_distance,
-            left_hip.z,
+            left_hip.z + foot_push.z,
         ),
         right: Point3::new(
-            right_hip.x,
+            right_hip.x + foot_push.x,
             anim.pelvis_position.y - hang_distance,
-            right_hip.z,
+            right_hip.z + foot_push.z,
         ),
     };
 
@@ -365,9 +383,9 @@ fn sample_airborne(ctx: &SampleCtx<'_>) -> PoseFragment {
         hands: None,
         pelvis_offset: None,
         shoulder_twist: None,
-        head_tilt: Some(Vector2::new(-0.05, 0.0)),
+        head_tilt: Some(head_tilt),
         head_bob: Some(0.0),
-        torso_pitch: Some(0.0),
+        torso_pitch: Some(torso_pitch),
     }
 }
 

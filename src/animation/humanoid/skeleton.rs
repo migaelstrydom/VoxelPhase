@@ -8,10 +8,30 @@ use crate::animation::config::CharacterRigConfig;
 use crate::animation::pose::PoseFragment;
 use crate::animation::state::AnimationState;
 use crate::{
-    geometry::{generate_cylinder, generate_sphere_indices, generate_sphere_vertices},
+    geometry::{
+        generate_capsule, generate_cylinder, generate_sphere_indices, generate_sphere_vertices,
+    },
     rendering::{colour::Colour, vertex::Vertex},
     skeleton::fabrik::{FABRIKSolver, IKChain, IKTarget},
 };
+
+/// Visible foot dimensions. Independent from `foot_radius` (which keeps
+/// its physics / gait meaning).
+///
+/// Convention: `foot.position` is the ANKLE (where the leg ends). The
+/// rendered capsule extends DOWN from the ankle by `FOOT_HEIGHT` so its
+/// bottom tangent is at `ankle.y - FOOT_HEIGHT`.
+pub const FOOT_CAPSULE_RADIUS: f32 = 0.035;
+/// Half of the capsule axis length (distance from centre to hemisphere
+/// endcap centre along the foot's forward axis).
+pub const FOOT_CAPSULE_HALF_LENGTH: f32 = 0.075;
+/// Vertical thickness of the rendered foot. The ankle sits at the top
+/// of the capsule; ground contact is `FOOT_HEIGHT` below the ankle.
+pub const FOOT_HEIGHT: f32 = 2.0 * FOOT_CAPSULE_RADIUS;
+/// Forward shift of the capsule centre from the ankle so the heel is
+/// shorter than the toe. Toe extent = half_length + offset; heel extent
+/// = half_length - offset.
+pub const FOOT_ANKLE_FORWARD_OFFSET: f32 = 0.02;
 
 /// Joint positions for a humanoid skeleton.
 ///
@@ -26,6 +46,11 @@ pub struct Skeleton {
     pub right_knee: Point3<f32>,
     pub left_foot: Point3<f32>,
     pub right_foot: Point3<f32>,
+    /// Horizontal forward direction each foot's toe points. Updated per
+    /// frame by `apply_fragment` from the foot state. Both feet share the
+    /// body facing today.
+    pub left_foot_forward: Vector3<f32>,
+    pub right_foot_forward: Vector3<f32>,
 
     // Upper body joints
     pub chest: Point3<f32>,
@@ -94,6 +119,8 @@ impl Skeleton {
             right_knee,
             left_foot,
             right_foot,
+            left_foot_forward: facing,
+            right_foot_forward: facing,
             chest,
             left_shoulder,
             right_shoulder,
@@ -138,6 +165,8 @@ impl Skeleton {
         };
         self.left_foot = left_foot;
         self.right_foot = right_foot;
+        self.left_foot_forward = state.left.forward;
+        self.right_foot_forward = state.right.forward;
 
         self.solve_knee_ik(state.facing, config);
 
@@ -522,19 +551,19 @@ pub fn generate_character_mesh(
         segments,
         config.leg_colour,
     );
-    add_sphere_to_mesh(
+    add_foot_capsule_to_mesh(
         &mut vertices,
         &mut indices,
         skeleton.left_foot,
-        config.foot_radius,
+        skeleton.left_foot_forward,
         segments,
         config.foot_colour,
     );
-    add_sphere_to_mesh(
+    add_foot_capsule_to_mesh(
         &mut vertices,
         &mut indices,
         skeleton.right_foot,
-        config.foot_radius,
+        skeleton.right_foot_forward,
         segments,
         config.foot_colour,
     );
@@ -651,6 +680,60 @@ fn add_sphere_to_mesh(
         vertices.push(vert);
     }
     indices.extend(sphere_indices.iter().map(|i| i + base_index));
+}
+
+/// Add a horizontal foot capsule whose axis points along `forward` and
+/// whose bottom tangent rests at `position.y`. The capsule centre is
+/// lifted by `FOOT_CAPSULE_RADIUS` so `position.y` is the ground line.
+fn add_foot_capsule_to_mesh(
+    vertices: &mut Vec<Vertex>,
+    indices: &mut Vec<u32>,
+    position: Point3<f32>,
+    forward: Vector3<f32>,
+    segments: u32,
+    colour: Colour,
+) {
+    let base_index = vertices.len() as u32;
+    let (caps_verts, caps_indices) = generate_capsule(
+        FOOT_CAPSULE_HALF_LENGTH,
+        FOOT_CAPSULE_RADIUS,
+        segments,
+        (segments / 2).max(4),
+        colour,
+    );
+
+    // Right-handed basis: local Y → `forward` (toe direction), local X →
+    // world up, local Z → right-hand-rule lateral. `up × axis` keeps the
+    // determinant at +1 so triangle winding stays outward-facing.
+    let axis = project_to_horizontal(forward);
+    let up = Vector3::y();
+    let lateral = up.cross(&axis).normalize();
+
+    // Ankle sits at `position`; capsule hangs below and shifted forward
+    // so the heel is shorter than the toe. Top tangent stays at
+    // `position.y`; toe at `+axis * (half_length + offset)` from the
+    // ankle; heel at `-axis * (half_length - offset)`.
+    let centre = position - up * FOOT_CAPSULE_RADIUS + axis * FOOT_ANKLE_FORWARD_OFFSET;
+
+    for mut vert in caps_verts {
+        let local = Vector3::new(vert.pos.x, vert.pos.y, vert.pos.z);
+        let rotated = up * local.x + axis * local.y + lateral * local.z;
+        let world = centre + rotated;
+        vert.pos = Vector4::new(world.x, world.y, world.z, 1.0);
+        // Rotate the vertex normal with the same basis so lighting
+        // reflects the horizontal orientation.
+        let n = vert.normal;
+        vert.normal = up * n.x + axis * n.y + lateral * n.z;
+        vertices.push(vert);
+    }
+    indices.extend(caps_indices.iter().map(|i| i + base_index));
+}
+
+fn project_to_horizontal(v: Vector3<f32>) -> Vector3<f32> {
+    let planar = Vector3::new(v.x, 0.0, v.z);
+    planar
+        .try_normalize(1e-4)
+        .unwrap_or_else(|| Vector3::new(0.0, 0.0, 1.0))
 }
 
 fn add_cylinder_to_mesh(
