@@ -28,21 +28,24 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
         )
         // Compound body fracture (uses solver impulses from this frame)
         .with(FractureSystem, "fracture", &["physics_sync"])
-        // Animation and sensing
-        .with(
-            CharacterAnimationSystem,
-            "character_animation",
-            &["physics_sync"],
-        )
+        // Animation and sensing. Probes are configured from last-frame
+        // animator state, fired against this-frame physics, and consumed
+        // by the animator in the same frame — no one-frame lag on ground
+        // contacts.
         .with(
             AnimationProbeConfigSystem,
             "animation_probe_config",
-            &["character_animation"],
+            &["physics_sync"],
         )
         .with(
             SensorProbeSystem,
             "sensor_probe",
             &["animation_probe_config"],
+        )
+        .with(
+            CharacterAnimationSystem,
+            "character_animation",
+            &["sensor_probe"],
         )
         .with(CameraControlSystem, "camera_control", &["physics_sync"])
         // Projectiles and explosions

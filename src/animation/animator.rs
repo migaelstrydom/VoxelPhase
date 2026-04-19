@@ -54,10 +54,6 @@ pub struct CharacterAnimator {
     pose_crossfade: Option<Crossfade<Linear>>,
     /// Active blend for the upper-body FSM.
     upper_crossfade: Option<Crossfade<Linear>>,
-    /// Previous-frame `PlayerState.locomotion`, kept so the driver can
-    /// detect variant edges (airborne→grounded, grounded→launching) for
-    /// Landing/Launching splicing.
-    last_locomotion: LocomotionState,
 
     // Mesh caching
     cached_vertices: Vec<Vertex>,
@@ -81,7 +77,6 @@ impl CharacterAnimator {
             upper_state: UpperState::Swinging,
             pose_crossfade: None,
             upper_crossfade: None,
-            last_locomotion: LocomotionState::Grounded,
             cached_vertices: Vec::new(),
             cached_indices: Vec::new(),
         }
@@ -239,40 +234,23 @@ impl CharacterAnimator {
 
         // Snapshot outgoing fragments BEFORE the variant swap, so the
         // crossfade `from` reflects what the old state was producing.
-        if self.pose_state.transition_key() != new_pose.transition_key() {
-            let from = self.pose_state.sample(&pose_sample_ctx);
-            self.pose_crossfade = Some(Crossfade {
-                from,
-                from_pelvis: pelvis_position,
-                to_duration: TRANSITION_BLEND_DURATION,
-                elapsed: 0.0,
-                policy: Linear,
-            });
-        }
-        let old_cycle = self.pose_state.cycle(&self.state);
-        let old_preset = gait_preset_for(&self.pose_state, &self.config);
-        let (old_pelvis_offset, old_torso_pitch) = upper_torso_inputs(old_preset);
-        let old_airborne = airborne_ctx_for(&self.pose_state);
-        if self.upper_state.transition_key() != new_upper.transition_key() {
-            let old_upper_ctx = UpperSampleCtx {
-                rig: &self.config,
-                anim: &self.state,
-                grab: grab_config,
-                cycle: old_cycle,
-                preset: old_preset,
-                pelvis_offset: old_pelvis_offset,
-                torso_pitch: old_torso_pitch,
-                airborne: old_airborne,
-            };
-            let from = self.upper_state.sample(&old_upper_ctx);
-            self.upper_crossfade = Some(Crossfade {
-                from,
-                from_pelvis: pelvis_position,
-                to_duration: TRANSITION_BLEND_DURATION,
-                elapsed: 0.0,
-                policy: Linear,
-            });
-        }
+        begin_crossfade_if_changed(
+            &mut self.pose_crossfade,
+            self.pose_state.transition_key(),
+            new_pose.transition_key(),
+            pelvis_position,
+            || self.pose_state.sample(&pose_sample_ctx),
+        );
+        begin_crossfade_if_changed(
+            &mut self.upper_crossfade,
+            self.upper_state.transition_key(),
+            new_upper.transition_key(),
+            pelvis_position,
+            || {
+                let ctx = build_upper_ctx(&self.pose_state, &self.config, &self.state, grab_config);
+                self.upper_state.sample(&ctx)
+            },
+        );
 
         // Swap in new variants, then tick.
         self.pose_state = new_pose;
@@ -289,20 +267,8 @@ impl CharacterAnimator {
 
         // Sample the (now current) states.
         let to_pose = self.pose_state.sample(&pose_sample_ctx);
-        let cycle = self.pose_state.cycle(&self.state);
-        let preset = gait_preset_for(&self.pose_state, &self.config);
-        let (pelvis_offset, torso_pitch) = upper_torso_inputs(preset);
-        let airborne = airborne_ctx_for(&self.pose_state);
-        let upper_sample_ctx = UpperSampleCtx {
-            rig: &self.config,
-            anim: &self.state,
-            grab: grab_config,
-            cycle,
-            preset,
-            pelvis_offset,
-            torso_pitch,
-            airborne,
-        };
+        let upper_sample_ctx =
+            build_upper_ctx(&self.pose_state, &self.config, &self.state, grab_config);
         let to_upper = self.upper_state.sample(&upper_sample_ctx);
 
         // Apply any running crossfades. `is_active` is checked AFTER ticking
@@ -315,8 +281,6 @@ impl CharacterAnimator {
         self.apply_fragment_to_state(&fragment);
         self.skeleton
             .apply_fragment(&fragment, &self.state, &self.config);
-
-        self.last_locomotion = player_state.locomotion;
     }
 
     /// Mirror fragment channels into `AnimationState` so next-frame probes
@@ -338,13 +302,6 @@ impl CharacterAnimator {
         }
         if let Some(bob) = fragment.head_bob {
             self.state.head_bob = bob;
-        }
-
-        if let Some(normal) = self.state.left.ground_normal {
-            self.state.left.normal = normal;
-        }
-        if let Some(normal) = self.state.right.ground_normal {
-            self.state.right.normal = normal;
         }
     }
 
@@ -376,14 +333,17 @@ impl CharacterAnimator {
             }
         }
 
-        // Store contacts in state
+        // Store contacts in state. `normal` mirrors `ground_normal` so
+        // downstream readers see a coherent snapshot.
         if let Some(contact) = best_left {
             self.state.left.ground_contact = Some(contact.point);
             self.state.left.ground_normal = Some(contact.normal);
+            self.state.left.normal = contact.normal;
         }
         if let Some(contact) = best_right {
             self.state.right.ground_contact = Some(contact.point);
             self.state.right.ground_normal = Some(contact.normal);
+            self.state.right.normal = contact.normal;
         }
     }
 
@@ -403,6 +363,50 @@ impl CharacterAnimator {
         let (vertices, indices) = generate_character_mesh(&self.skeleton, &self.config);
         self.cached_vertices = vertices;
         self.cached_indices = indices;
+    }
+}
+
+/// Open a fresh crossfade into a new FSM variant when the transition key
+/// has changed. The `sample_from` closure produces the outgoing fragment
+/// — it is only evaluated when a crossfade is actually needed.
+fn begin_crossfade_if_changed<K: PartialEq, F: FnOnce() -> PoseFragment>(
+    slot: &mut Option<Crossfade<Linear>>,
+    old_key: K,
+    new_key: K,
+    pelvis: Point3<f32>,
+    sample_from: F,
+) {
+    if old_key != new_key {
+        *slot = Some(Crossfade {
+            from: sample_from(),
+            from_pelvis: pelvis,
+            to_duration: TRANSITION_BLEND_DURATION,
+            elapsed: 0.0,
+            policy: Linear,
+        });
+    }
+}
+
+/// Build the `UpperSampleCtx` derived from the current `PoseState` — the
+/// cycle, preset, pelvis offset, torso pitch and airborne context the
+/// upper body should track this frame.
+fn build_upper_ctx<'a>(
+    pose: &PoseState,
+    rig: &'a CharacterRigConfig,
+    anim: &'a AnimationState,
+    grab: &'a GrabConfig,
+) -> UpperSampleCtx<'a> {
+    let preset = gait_preset_for(pose, rig);
+    let (pelvis_offset, torso_pitch) = upper_torso_inputs(preset);
+    UpperSampleCtx {
+        rig,
+        anim,
+        grab,
+        cycle: pose.cycle(anim),
+        preset,
+        pelvis_offset,
+        torso_pitch,
+        airborne: airborne_ctx_for(pose),
     }
 }
 
