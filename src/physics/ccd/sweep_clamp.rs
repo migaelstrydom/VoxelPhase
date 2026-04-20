@@ -152,7 +152,7 @@ impl CcdStrategy for SweepClampCcd {
                 collider_a: None,
                 collider_b: None,
                 restitution: candidate.material.restitution,
-                friction: candidate.material.friction,
+                friction: candidate.material.friction_at(&hit.normal, &hit_rot),
             };
 
             let ccd_contacts: SmallVec<[SolverContact; 4]> = match &candidate.shape {

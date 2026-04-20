@@ -7,7 +7,7 @@
 use rustc_hash::FxHashSet;
 
 use generational_arena::Arena;
-use nalgebra::Point3;
+use nalgebra::{Point3, Vector3};
 
 use crate::collision::contact::ContactManifold;
 use crate::collision::dispatch;
@@ -95,6 +95,8 @@ pub fn generate_static_contacts(
             };
 
             if !manifold.is_empty() {
+                let rep_normal = representative_normal(&manifold);
+                let friction = collider.material().friction_at(&rep_normal, &rotation);
                 contacts.push(PairManifold {
                     header: PairHeader {
                         body_a: None,
@@ -102,7 +104,7 @@ pub fn generate_static_contacts(
                         collider_a: None,
                         collider_b: Some(*collider_handle),
                         restitution: collider.material().restitution,
-                        friction: collider.material().friction,
+                        friction,
                     },
                     manifold,
                 });
@@ -131,6 +133,22 @@ fn make_speculative(manifold: &mut ContactManifold, contact_margin: f32) {
         cp.depth = 0.0;
         cp.raw_depth = -contact_margin;
     }
+}
+
+/// Pick a representative world-space normal for a manifold. Uses the deepest
+/// contact — most faithful on mixed-normal manifolds (e.g. capsule on a step)
+/// where the dominant interaction should drive friction selection.
+fn representative_normal(manifold: &ContactManifold) -> Vector3<f32> {
+    manifold
+        .points
+        .iter()
+        .max_by(|a, b| {
+            a.depth
+                .partial_cmp(&b.depth)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map(|cp| cp.normal)
+        .unwrap_or_else(Vector3::y)
 }
 
 /// Gate speculative contacts by speed and CCD travel window.

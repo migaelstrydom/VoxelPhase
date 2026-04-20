@@ -8,7 +8,7 @@ use crate::app::spawnables::shared::models::{compound_cuboid_model, cuboid_model
 use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
 };
-use crate::physics::{ColliderHandle, ColliderShape, PhysicsImpulseQueue};
+use crate::physics::{ColliderHandle, ColliderShape, FrictionModel, PhysicsImpulseQueue};
 use crate::systems::PhysicsResource;
 
 /// Breaks joints on compound bodies when explicit impulse sources (explosions,
@@ -232,7 +232,7 @@ struct ChildSnapshot {
     shape: ColliderShape,
     mass: f32,
     restitution: f32,
-    friction: f32,
+    friction: FrictionModel,
     world_pos: Point3<f32>,
     world_rot: nalgebra::UnitQuaternion<f32>,
     lin_vel: Vector3<f32>,
@@ -364,7 +364,7 @@ fn collider_desc_from_shape(
     shape: &ColliderShape,
     density: f32,
     restitution: f32,
-    friction: f32,
+    friction: FrictionModel,
 ) -> crate::physics::ColliderDesc {
     let desc = match shape {
         ColliderShape::Box { half_extents } => {
@@ -381,5 +381,5 @@ fn collider_desc_from_shape(
     };
     desc.density(density)
         .restitution(restitution)
-        .friction(friction)
+        .friction_model(friction)
 }

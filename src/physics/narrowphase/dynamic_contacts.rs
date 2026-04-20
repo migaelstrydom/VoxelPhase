@@ -242,10 +242,11 @@ pub fn generate_dynamic_contacts(
             // normal always points from the "larger" shape toward the "smaller".
             // The solver convention is normal from A→B, so body_a must be the
             // larger shape type to match.
+            let rep_normal = manifold_representative_normal(&manifold);
             let header = if shape_type_rank(&si.shape) >= shape_type_rank(&sj.shape) {
-                make_pair_header(si, sj)
+                make_pair_header(si, sj, &rep_normal)
             } else {
-                make_pair_header(sj, si)
+                make_pair_header(sj, si, &rep_normal)
             };
             push_if_nonempty(&mut buf.manifolds, header, manifold);
         } else {
@@ -422,8 +423,18 @@ fn collect_collider_states_into(
 /// Callers must ensure that `a` corresponds to the shape that dispatch treats
 /// as "first" — use `shape_type_rank` to enforce this for mixed-type pairs.
 /// Getting this wrong inverts the impulse direction and causes penetration.
-fn make_pair_header(a: &ColliderState, b: &ColliderState) -> PairHeader {
-    let (restitution, friction) = ColliderMaterial::combine(&a.material, &b.material);
+fn make_pair_header(
+    a: &ColliderState,
+    b: &ColliderState,
+    contact_normal_world: &Vector3<f32>,
+) -> PairHeader {
+    let (restitution, friction) = ColliderMaterial::combine_at(
+        &a.material,
+        &b.material,
+        contact_normal_world,
+        &a.rotation,
+        &b.rotation,
+    );
     PairHeader {
         body_a: Some(a.body_handle),
         body_b: b.body_handle,
@@ -432,6 +443,20 @@ fn make_pair_header(a: &ColliderState, b: &ColliderState) -> PairHeader {
         restitution,
         friction,
     }
+}
+
+/// Pick a representative world-space normal for a manifold (deepest contact).
+fn manifold_representative_normal(manifold: &ContactManifold) -> Vector3<f32> {
+    manifold
+        .points
+        .iter()
+        .max_by(|a, b| {
+            a.depth
+                .partial_cmp(&b.depth)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map(|cp| cp.normal)
+        .unwrap_or_else(Vector3::y)
 }
 
 /// Push a `PairManifold` into the output buffer if the manifold is non-empty.
@@ -498,7 +523,7 @@ fn sphere_sphere_speculative(
         speculative.points[0].depth = solver_depth;
 
         out.push(PairManifold {
-            header: make_pair_header(a, b),
+            header: make_pair_header(a, b, &normal),
             manifold: speculative,
         });
     }

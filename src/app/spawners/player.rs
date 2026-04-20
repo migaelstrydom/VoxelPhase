@@ -1,11 +1,11 @@
-use nalgebra::Vector3;
+use nalgebra::{UnitVector3, Vector3};
 use specs::{Builder, Entity, World, WorldExt};
 
 use crate::animation::{CharacterAnimator, CharacterRigConfig};
 use crate::components::{
     Orientation, Position, Renderable, RigidBodyComponent, Rotation, Velocity, VelocityDriven,
 };
-use crate::physics::{ColliderDesc, ConstraintKind, RigidBodyDesc};
+use crate::physics::{ColliderDesc, ConstraintKind, FrictionModel, RigidBodyDesc};
 use crate::player::{Player, PlayerConfig, PlayerState, PlayerTargetState};
 use crate::sensing::{ContactCandidates, SensorSet};
 use crate::systems::PhysicsResource;
@@ -27,10 +27,22 @@ pub fn spawn_player(world: &mut World, initial_pos: nalgebra::Point3<f32>) -> En
             .linear_damping(0.0)
             .angular_damping(0.95);
         let body_handle = physics.world.create_body(body_desc);
+        // Floor friction keeps the player planted on slopes and lets moving
+        // surfaces (play-wheels, platforms) drag them tangentially. Wall
+        // friction stays near zero so jumps along vertical surfaces don't get
+        // grabbed. The local up axis is body-Y — the KeepUpright constraint
+        // holds that aligned with world up, so contact normals pointing up
+        // resolve to "floor" and horizontal normals resolve to "wall".
         let collider_desc = ColliderDesc::capsule(0.5, 0.25)
             .density(800.0)
             .restitution(0.0)
-            .friction(0.0);
+            .friction_model(FrictionModel::AxisBiased {
+                floor: 0.8,
+                wall: 0.0,
+                local_up: UnitVector3::new_normalize(Vector3::y()),
+                cos_floor: (45.0f32.to_radians()).cos(),
+                cos_wall: (75.0f32.to_radians()).cos(),
+            });
         physics.world.attach_collider(body_handle, collider_desc);
         physics
             .world
