@@ -1,6 +1,6 @@
 use specs::{World, WorldExt};
 
-use crate::animation::CharacterAnimator;
+use crate::animation::{AnimationDebugConfig, CharacterAnimator};
 use crate::camera::{CameraConfig, FollowTarget};
 use crate::components::{
     CameraComponent, ModelInstance, Orientation, Position, Renderable, RigidBodyComponent,
@@ -108,6 +108,7 @@ impl WorldBuilder {
         self.world.insert(GrabConfig::default());
         self.world.insert(CameraConfig::default());
         self.world.insert(DebugConfig::default());
+        self.world.insert(AnimationDebugConfig::default());
         self.world.insert(DebugLines::default());
         self.world.insert(DebugLog::default());
         self.world.insert(DebugOverlays::default());

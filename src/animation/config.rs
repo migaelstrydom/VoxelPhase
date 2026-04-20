@@ -2,6 +2,7 @@
 //!
 //! All tuning parameters in one place.
 
+use super::foot_placer::FootPlacerConfig;
 use crate::rendering::Colour;
 
 /// Per-gait animation parameters. Values that differ between Walk / Sprint /
@@ -28,6 +29,15 @@ pub struct GaitPreset {
     /// Forward torso lean in radians. `0.0` for upright gaits, positive
     /// for crouched gaits.
     pub torso_pitch: f32,
+    /// Fraction of the capture point the foot plants at, in `(0, 1)`.
+    /// `1.0` puts the foot at the stopping foothold (body arrests over
+    /// it). Values below 1 preserve the divergent component of the LIP
+    /// pendulum, so the body passes over the planted foot and continues.
+    /// Lower = longer, more committed strides; higher = shorter, more
+    /// controlled strides. Step trigger scales with the same quantity so
+    /// the planted foot travels symmetrically from `+gain·v/ω` ahead to
+    /// `-gain·v/ω` behind the hip before the next step fires.
+    pub stride_gain: f32,
 }
 
 /// Bundle of gait presets carried on `CharacterRigConfig`.
@@ -127,6 +137,10 @@ pub struct CharacterRigConfig {
     // === Gait presets ===
     /// Per-gait parameter bundle (Walk, Sprint, Crouch walking, Crouch idle).
     pub gait_presets: GaitPresets,
+
+    // === Foot placer ===
+    /// Procedural foot-placement tuning (capture-point stepping).
+    pub foot_placer: FootPlacerConfig,
 }
 
 impl CharacterRigConfig {
@@ -216,7 +230,8 @@ impl Default for CharacterRigConfig {
                     shoulder_twist_max: 0.15,
                     head_bob_amplitude: 0.02,
                     pelvis_crouch_offset: 0.0,
-                    torso_pitch: 0.0,
+                    torso_pitch: 0.08,
+                    stride_gain: 0.2,
                 },
                 sprint: GaitPreset {
                     stride_length: 0.4 * 1.25,
@@ -226,7 +241,8 @@ impl Default for CharacterRigConfig {
                     shoulder_twist_max: 0.15 * 1.3,
                     head_bob_amplitude: 0.02 * 1.4,
                     pelvis_crouch_offset: 0.0,
-                    torso_pitch: 0.0,
+                    torso_pitch: 0.20,
+                    stride_gain: 0.15,
                 },
                 crouch_walk: GaitPreset {
                     stride_length: 0.4 * 0.5,
@@ -237,6 +253,7 @@ impl Default for CharacterRigConfig {
                     head_bob_amplitude: 0.02 * 0.3,
                     pelvis_crouch_offset: 0.25,
                     torso_pitch: 0.30,
+                    stride_gain: 0.7,
                 },
                 crouch_idle: GaitPreset {
                     stride_length: 0.4 * 0.5,
@@ -247,8 +264,11 @@ impl Default for CharacterRigConfig {
                     head_bob_amplitude: 0.02 * 0.3,
                     pelvis_crouch_offset: 0.25,
                     torso_pitch: 0.30,
+                    stride_gain: 0.7,
                 },
             },
+
+            foot_placer: FootPlacerConfig::default(),
         }
     }
 }

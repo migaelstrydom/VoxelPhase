@@ -18,15 +18,18 @@ use crate::{
 /// Visible foot dimensions. Independent from `foot_radius` (which keeps
 /// its physics / gait meaning).
 ///
-/// Convention: `foot.position` is the ANKLE (where the leg ends). The
-/// rendered capsule extends DOWN from the ankle by `FOOT_HEIGHT` so its
-/// bottom tangent is at `ankle.y - FOOT_HEIGHT`.
+/// Convention: `foot.position` is the foot *centre* — the capsule is
+/// drawn centred on this point, so the sole ends up one
+/// `FOOT_CAPSULE_RADIUS` below it. When the placer tracks per-foot
+/// terrain contact, the sole sits one radius below the ground (the
+/// half-submerged look we want).
 pub const FOOT_CAPSULE_RADIUS: f32 = 0.035;
 /// Half of the capsule axis length (distance from centre to hemisphere
 /// endcap centre along the foot's forward axis).
 pub const FOOT_CAPSULE_HALF_LENGTH: f32 = 0.075;
-/// Vertical thickness of the rendered foot. The ankle sits at the top
-/// of the capsule; ground contact is `FOOT_HEIGHT` below the ankle.
+/// Vertical thickness of the rendered foot (top tangent to bottom
+/// tangent). Useful for converting a terrain-surface y to a foot-centre
+/// y — the foot centre sits `FOOT_HEIGHT / 2` above the sole.
 pub const FOOT_HEIGHT: f32 = 2.0 * FOOT_CAPSULE_RADIUS;
 /// Forward shift of the capsule centre from the ankle so the heel is
 /// shorter than the toe. Toe extent = half_length + offset; heel extent
@@ -51,6 +54,10 @@ pub struct Skeleton {
     /// body facing today.
     pub left_foot_forward: Vector3<f32>,
     pub right_foot_forward: Vector3<f32>,
+    /// Foot up-axis per side (perpendicular to the sole). Drives the
+    /// ankle tilt of the rendered capsule so feet hug slopes/stairs.
+    pub left_foot_up: Vector3<f32>,
+    pub right_foot_up: Vector3<f32>,
 
     // Upper body joints
     pub chest: Point3<f32>,
@@ -121,6 +128,8 @@ impl Skeleton {
             right_foot,
             left_foot_forward: facing,
             right_foot_forward: facing,
+            left_foot_up: Vector3::y(),
+            right_foot_up: Vector3::y(),
             chest,
             left_shoulder,
             right_shoulder,
@@ -167,6 +176,8 @@ impl Skeleton {
         self.right_foot = right_foot;
         self.left_foot_forward = state.left.forward;
         self.right_foot_forward = state.right.forward;
+        self.left_foot_up = state.left.up;
+        self.right_foot_up = state.right.up;
 
         self.solve_knee_ik(state.facing, config);
 
@@ -556,6 +567,7 @@ pub fn generate_character_mesh(
         &mut indices,
         skeleton.left_foot,
         skeleton.left_foot_forward,
+        skeleton.left_foot_up,
         segments,
         config.foot_colour,
     );
@@ -564,6 +576,7 @@ pub fn generate_character_mesh(
         &mut indices,
         skeleton.right_foot,
         skeleton.right_foot_forward,
+        skeleton.right_foot_up,
         segments,
         config.foot_colour,
     );
@@ -682,14 +695,17 @@ fn add_sphere_to_mesh(
     indices.extend(sphere_indices.iter().map(|i| i + base_index));
 }
 
-/// Add a horizontal foot capsule whose axis points along `forward` and
-/// whose bottom tangent rests at `position.y`. The capsule centre is
-/// lifted by `FOOT_CAPSULE_RADIUS` so `position.y` is the ground line.
+/// Add a horizontal foot capsule centred on `position`. When `position`
+/// tracks the per-foot terrain contact, the sole ends up one
+/// `FOOT_CAPSULE_RADIUS` below the ground — i.e. the foot is half-
+/// submerged while planted, which reads better on a stylised voxel
+/// character than a capsule balanced exactly on the surface.
 fn add_foot_capsule_to_mesh(
     vertices: &mut Vec<Vertex>,
     indices: &mut Vec<u32>,
     position: Point3<f32>,
     forward: Vector3<f32>,
+    foot_up: Vector3<f32>,
     segments: u32,
     colour: Colour,
 ) {
@@ -702,18 +718,22 @@ fn add_foot_capsule_to_mesh(
         colour,
     );
 
-    // Right-handed basis: local Y → `forward` (toe direction), local X →
-    // world up, local Z → right-hand-rule lateral. `up × axis` keeps the
-    // determinant at +1 so triangle winding stays outward-facing.
-    let axis = project_to_horizontal(forward);
-    let up = Vector3::y();
-    let lateral = up.cross(&axis).normalize();
+    // Right-handed basis: local Y → `axis` (toe direction, in the ground
+    // plane), local X → `up` (sole normal), local Z → lateral. Build from
+    // `foot_up` so a tilted foot tips its toe along the slope instead of
+    // staying horizontal.
+    let up = foot_up.try_normalize(1e-4).unwrap_or_else(Vector3::y);
+    let forward_h = project_to_horizontal(forward);
+    let lateral = up.cross(&forward_h).try_normalize(1e-4).unwrap_or_else(|| {
+        // Foot up is already aligned with the intended forward (nearly
+        // vertical foot). Fall back to facing-cross-Y lateral.
+        Vector3::y().cross(&forward_h).normalize()
+    });
+    let axis = lateral.cross(&up).normalize();
 
-    // Ankle sits at `position`; capsule hangs below and shifted forward
-    // so the heel is shorter than the toe. Top tangent stays at
-    // `position.y`; toe at `+axis * (half_length + offset)` from the
-    // ankle; heel at `-axis * (half_length - offset)`.
-    let centre = position - up * FOOT_CAPSULE_RADIUS + axis * FOOT_ANKLE_FORWARD_OFFSET;
+    // Centred on `position` and shifted forward so the toe sticks out
+    // further than the heel.
+    let centre = position + axis * FOOT_ANKLE_FORWARD_OFFSET;
 
     for mut vert in caps_verts {
         let local = Vector3::new(vert.pos.x, vert.pos.y, vert.pos.z);

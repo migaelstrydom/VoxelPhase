@@ -7,8 +7,7 @@
 
 use nalgebra::{Point3, Vector2, Vector3};
 
-use super::gait::GaitCycle;
-use super::stride_wheel;
+use super::stride_sync;
 use crate::animation::config::{CharacterRigConfig, GaitPreset};
 use crate::animation::pose::{Cycle, CycleKind, FeetPose, PoseFragment};
 use crate::animation::state::AnimationState;
@@ -230,14 +229,15 @@ impl PoseState {
         }
     }
 
-    /// Cycle this state exposes for upper-body synchronisation. Only
-    /// populated for non-Idle Grounded states (stride cycle); returns
-    /// `None` otherwise.
+    /// Cycle this state exposes for upper-body synchronisation.
+    /// Populated for all `Grounded` states (including Idle) — the phase
+    /// always exists; the upper body scales amplitude by
+    /// `AnimationState::stride_activity` so rest-pose falls out of the
+    /// same math. Airborne states return `None` (no stride cycle).
     pub fn cycle(&self, anim: &AnimationState) -> Option<Cycle> {
         match self {
-            PoseState::Grounded { gait: Gait::Idle } => None,
             PoseState::Grounded { .. } => Some(Cycle {
-                phase: anim.wheel_angle,
+                phase: anim.stride_phase,
                 kind: CycleKind::Stride,
             }),
             _ => None,
@@ -246,13 +246,15 @@ impl PoseState {
 }
 
 fn sample_idle(ctx: &SampleCtx<'_>, preset: Option<&GaitPreset>) -> PoseFragment {
+    let rig = ctx.rig;
     let anim = ctx.anim;
 
-    // Feet snap to the planted position. The driver re-plants (with a
-    // small hysteresis threshold) before sampling.
+    // Feet come from `FootPlacer`, which the driver has ticked and
+    // mirrored into `AnimationState` before sampling. Idle cases
+    // converge to neutral stance via the placer's settle rule.
     let feet = FeetPose {
-        left: anim.left.planted_position,
-        right: anim.right.planted_position,
+        left: anim.left.position,
+        right: anim.right.position,
     };
 
     let pelvis_offset = preset
@@ -262,13 +264,23 @@ fn sample_idle(ctx: &SampleCtx<'_>, preset: Option<&GaitPreset>) -> PoseFragment
 
     let torso_pitch = preset.map(|p| p.torso_pitch).unwrap_or(0.0);
 
+    // Head channels go through the same formulas as sample_walking —
+    // `stride_activity` is near zero at true idle (head_bob fades to 0),
+    // and `compute_head_tilt` already returns zero for near-zero
+    // velocity. On a slope slide, activity stays at 1 while feet step,
+    // so head tilt/bob stay continuous instead of flickering.
+    let head_bob_amplitude = preset.map(|p| p.head_bob_amplitude).unwrap_or(0.0);
+    let head_bob =
+        stride_sync::compute_head_bob(anim.stride_phase, head_bob_amplitude) * anim.stride_activity;
+    let head_tilt = stride_sync::compute_head_tilt(ctx.velocity, anim.facing, rig.head_tilt_factor);
+
     PoseFragment {
         feet: Some(feet),
         hands: None,
         pelvis_offset,
         shoulder_twist: None,
-        head_tilt: Some(Vector2::new(0.0, 0.0)),
-        head_bob: Some(0.0),
+        head_tilt: Some(head_tilt),
+        head_bob: Some(head_bob),
         torso_pitch: Some(torso_pitch),
     }
 }
@@ -277,41 +289,19 @@ fn sample_walking(ctx: &SampleCtx<'_>, preset: &GaitPreset) -> PoseFragment {
     let rig = ctx.rig;
     let anim = ctx.anim;
     let facing = anim.facing;
-    let wheel_angle = anim.wheel_angle;
+    let stride_phase = anim.stride_phase;
 
-    let right = facing.cross(&Vector3::y());
-    let left_hip = anim.pelvis_position - right * rig.hip_width;
-    let right_hip = anim.pelvis_position + right * rig.hip_width;
+    // Feet come from `FootPlacer` via `AnimationState`; stride xy is
+    // no longer derived from the wheel. The wheel still parameterises
+    // stylistic channels (head_bob, arm swing).
+    let feet = FeetPose {
+        left: anim.left.position,
+        right: anim.right.position,
+    };
 
-    let leg_gait = GaitCycle::walking(
-        rig.standing_height(),
-        preset.stride_length,
-        preset.step_height,
-    );
-
-    let mut left_foot = anim.left.clone();
-    let mut right_foot = anim.right.clone();
-    stride_wheel::update_foot(
-        &mut left_foot,
-        &leg_gait,
-        wheel_angle,
-        stride_wheel::LEFT_PHASE,
-        Point3::from(left_hip.coords),
-        facing,
-        -1.0,
-    );
-    stride_wheel::update_foot(
-        &mut right_foot,
-        &leg_gait,
-        wheel_angle,
-        stride_wheel::RIGHT_PHASE,
-        Point3::from(right_hip.coords),
-        facing,
-        1.0,
-    );
-
-    let head_tilt = stride_wheel::compute_head_tilt(ctx.velocity, facing, rig.head_tilt_factor);
-    let head_bob = stride_wheel::compute_head_bob(wheel_angle, preset.head_bob_amplitude);
+    let head_tilt = stride_sync::compute_head_tilt(ctx.velocity, facing, rig.head_tilt_factor);
+    let head_bob = stride_sync::compute_head_bob(stride_phase, preset.head_bob_amplitude)
+        * anim.stride_activity;
 
     let pelvis_offset = if preset.pelvis_crouch_offset != 0.0 {
         Some(Vector3::new(0.0, -preset.pelvis_crouch_offset, 0.0))
@@ -320,10 +310,7 @@ fn sample_walking(ctx: &SampleCtx<'_>, preset: &GaitPreset) -> PoseFragment {
     };
 
     PoseFragment {
-        feet: Some(FeetPose {
-            left: left_foot.position,
-            right: right_foot.position,
-        }),
+        feet: Some(feet),
         hands: None,
         pelvis_offset,
         shoulder_twist: None,

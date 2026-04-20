@@ -69,30 +69,39 @@ A step can also be *triggered* by accumulated facing change, not only by planted
 ### Core loop (per foot, per frame)
 
 ```text
-ideal_xz = capture_point(pelvis, velocity, support_height)
-         + turn_in_place_offset(facing, yaw_rate)
-         + stance_offset(facing, foot_side)
+stride_offset = stride_gain · (capture_point - pelvis)
+              + turn_in_place_offset(facing, yaw_rate)      // clamped to max_reach
+ideal_xz      = pelvis + stride_offset + stance_offset(facing, foot_side)
+
+symmetric_trigger = 2 · stride_gain · |v| · √(h/g)
+trigger_threshold = max(symmetric_trigger, settle_trigger)
 
 trigger = max(||planted_xz - ideal_xz||,
-              |Δfacing_since_plant| * hip_width * k_turn_trigger)
+              |Δfacing_since_plant| · hip_width · k_turn_trigger)
 
 Planted:
-    if trigger > step_trigger AND other_foot.is_planted:
-        → Stepping {
-              from: planted_xz,
-              to:   ideal_xz,     // committed at step start; no retarget
-              t:    0,
-              duration: step_duration(speed, yaw_rate),
-          }
+    if trigger ≥ trigger_threshold AND other_foot.is_planted:
+        duration  = clamp(trigger_threshold / speed, min_step, max_step)
+        travel    = (ceil(duration/dt) - 1) · dt · v      // discrete preview
+        to        = ideal_xz + travel                     // land where the hip WILL be
+        → Stepping { from: planted_xz, to, t: 0, duration }
 
 Stepping:
     t += dt
     foot.position = swing_trajectory(from, to, t / duration, step_height(preset))
-    if t >= duration:
+    if t ≥ duration:
         → Planted at `to`
 ```
 
-`swing_trajectory` is a minimum-jerk-style arc (or cycloidal) rather than a straight parabola — smooths lift-off and plant, hides the keyframe-like look of pure parabolic lifts.
+Two quantities marked by the LIP: the **plant target** is at `stride_gain · v/ω` ahead of the hip (not at the full capture point — that would arrest motion; see `stride_gain` below), and the **trigger threshold** `2·stride_gain·v/ω` is exactly the distance at which the planted foot is mirror-symmetric about the hip. Preview shifts the target by the distance the hip will travel during the swing, so discretisation doesn't tilt the cycle forward.
+
+`swing_trajectory` is a smoothstep horizontal + parabolic lift arc. Minimum-jerk refinement deferred.
+
+#### Stride gain: planting short of the capture point
+
+The capture point is where a foot planted *now* would arrest body motion. Plant exactly at CP → body stops. For continuous walking you need the body to pass *over* the foot, which means planting short of CP so the LIP's divergent component survives the step and the body keeps moving forward. `stride_gain ∈ (0, 1]` is the fraction of the CP offset the foot actually plants at. A per-gait knob on `GaitPreset`: walk ≈ 0.5, sprint ≈ 0.35, crouch ≈ 0.7. Lower gain = longer, more committed strides; higher gain = shorter, more controlled strides.
+
+Because `symmetric_trigger` scales with the same quantity as `stride_offset`, lowering `stride_gain` shrinks both plant-ahead and trigger-behind distances together and the cycle stays symmetric around the hip.
 
 ### Why this unifies the three failure cases
 
@@ -184,27 +193,36 @@ This is a Stage-3+ refinement; not required for the initial cutover.
 
 ## Tunables
 
-All live on `CharacterRigConfig` (or a sub-struct `FootPlacerConfig`):
+Two layers. Per-gait style knobs live on `GaitPreset`; placer-wide machinery lives on `FootPlacerConfig`.
+
+### `GaitPreset` (per-gait)
 
 | name | rough default | effect |
 |---|---|---|
-| `step_trigger` | 0.25 m | error magnitude (or equivalent from yaw) that fires a step. Larger = more stable planting, lazier reaction. |
-| `k_yaw` | 0.4 | how much yaw rate pulls feet sideways during turn-in-place. |
-| `k_turn_trigger` | 0.3 | how much accumulated facing change (in rad · hip_width units) counts toward `step_trigger`. |
-| `min_step_duration` | 0.18 s | floor on a step's airtime (prevents teleport-stepping at high speeds). |
-| `max_step_duration` | 0.45 s | ceiling (prevents interminably-lifted feet when speed drops mid-step). |
-| `max_stride_reach` | 1.5 × leg_length | clamp on `ideal_xz` offset from hip. Pathology guard. |
-| `step_height` | 0.08 m (walk) / 0.14 m (sprint) | per-preset peak lift. Sourced from `GaitPreset`. |
+| `stride_gain` | walk 0.5 / sprint 0.35 / crouch 0.7 | fraction of CP the foot plants at. Drives both plant-ahead and trigger-behind distance symmetrically. Lower = longer strides, less controlled; higher = shorter strides, more controlled. |
+| `step_height` | walk 0.15 / sprint 0.18 / crouch 0.06 | peak foot lift during swing. |
+| `pelvis_crouch_offset`, `torso_pitch`, `head_bob_amplitude`, `arm_swing_amplitude`, `shoulder_twist_max` | — | stylistic channels, unrelated to stepping. |
 
-Step duration scales inversely with speed within the [min, max] range, so sprint cadence is naturally faster than walk cadence.
+### `FootPlacerConfig` (rig-wide)
 
-Note: `sqrt(h/g)` is *not* a tunable — it's derived from rig geometry and world gravity, following the capture-point result.
+| name | rough default | effect |
+|---|---|---|
+| `settle_trigger` | 0.05 m | always-on trigger floor. Dominant only at very low speeds; at rest it pulls off-centre feet to neutral stance. |
+| `k_yaw` | 0.4 | how much yaw rate pulls the ideal sideways during turn-in-place. |
+| `k_turn_trigger` | 0.2 | how much accumulated facing change (in rad · hip_width units) contributes to the trigger. |
+| `min_step_duration` | 0.08 s | floor on a step's airtime. |
+| `max_step_duration` | 0.1 s | ceiling on a step's airtime. |
+| `max_stride_reach_ratio` | 1.5 | `stride` (capture + turn) clamped to this × leg length. `stance` is preserved through the clamp — otherwise lateral foot spacing would collapse at speed. |
+
+The main trigger is `2 · stride_gain · |v| · √(h/g)`, not a configured value — it's derived from rig geometry and world gravity. `settle_trigger` is just a floor.
+
+Step duration is `clamp(trigger_threshold / speed, min, max)`. At steady walking speed the symmetric trigger dominates and duration ≈ clamped near `max`, giving a consistent cadence.
 
 ### Safety invariants
 
 - Only one foot may be `Stepping` at any time. Second trigger waits.
-- A `Stepping` foot is never interrupted by a new target — it always completes to its committed `to`. Target prediction at step-start bakes in capture point at that instant; we accept minor error rather than retarget mid-step. (If this proves visibly wrong on sudden direction changes, add a retarget hook, but start without.)
-- Vertical ankle position during `Planted` stays pelvis-relative by default (`pelvis.y - standing_height`). Per-foot ground-contact y overrides only when `FootState.ground_contact` exists and differs meaningfully (uneven terrain, stairs). Matches the convention documented in `animator.rs:476-480`.
+- A `Stepping` foot is never interrupted by a new target — it always completes to its committed `to`. Target prediction bakes in capture point + swing-preview at step start; minor error over retargeting mid-step. (If this proves wrong on sudden direction changes, add a retarget hook.)
+- Vertical ankle position during `Planted` tracks pelvis-relative `ankle_y = pelvis.y − standing_height` every frame (`sync_planted_y`). Freezing y at plant time left feet stuck above or below the terrain after landing recoil; the per-frame sync lets feet follow the body's vertical settle.
 
 ---
 
@@ -212,25 +230,35 @@ Note: `sqrt(h/g)` is *not* a tunable — it's derived from rig geometry and worl
 
 Staged so each step is independently testable and the character stays animating at every intermediate state.
 
-### Stage 1: Introduce `FootPlacer` in parallel
+### Stage 1: Introduce `FootPlacer` in parallel ✅
 
-Add the module with capture-point math and turn-in-place. Wire it into `update()` but do **not** read from it yet — feet still come from `PoseState::Grounded::sample`. Log `foot_placer` output vs current output each frame (debug overlay): visualise where steps *would* have fired. Tune `step_trigger` against real gameplay (walking, sprinting, landing slide, incline, spinning in place) until step cadence matches what looks natural.
+Module with capture-point math and turn-in-place, wired into `update()` with a debug overlay but not driving the skeleton.
 
-### Stage 2: Switch foot xz source
+### Stage 2: Switch foot xz source ✅
 
-Flip `PoseState::Grounded::sample` to read xz from `FootPlacer` instead of computing from stride wheel. Delete `anchor_feet_under_hips`, `replant_foot`, the `is_idle_gait` branches in `update()`. Gait variants now differ only in stylistic channels.
+`PoseState::Grounded::sample` now reads feet from `AnimationState.left/right.position`, mirrored from the placer each frame. `anchor_feet_under_hips`, `replant_foot`, `IDLE_PLANT_SNAP`, and the `is_idle_gait` branches in `update()` are gone. See the Implementation Notes below for the physically-grounded refinements that followed (stride gain, preview, planted-y sync, airborne resume).
 
-Expected regressions: gait-preset crossfades may temporarily jar if step height is large and the blend lands mid-step. Tune crossfade duration; add step-height interpolation inside `FootPlacer` so changing preset smoothly morphs the active step's arc.
+### Stage 3a: Ankle IK ✅
 
-### Stage 3: Ankle IK + swing-leg collision
+Foot-orientation slerp landed. `PlacerFoot::up` / `takeoff_up` plus a three-segment swing target (takeoff-ease → neutral → landing-ease) drive a per-frame exponential chase toward the ground normal. Mirrored into `FootState::up` and consumed by `add_foot_capsule_to_mesh`, which now builds its basis from the foot's own up-axis so capsules tilt with slopes/stairs.
 
-Add the foot-orientation slerp described above. Add predictive probes along the committed swing arc and lift the peak to clear obstacles. At this point feet behave correctly on slopes, stairs, and uneven voxel geometry.
+### Stage 3b: Swing-leg collision
 
-### Stage 4: Collapse the stride wheel
+Predictive probes along the committed swing arc to lift the peak over obstacles. Deferred until clipping is actually visible in play.
 
-The arm-swing phase reference is the only remaining consumer. Derive arm phase from `FootPlacer` (foot.position relative to hip, normalised) or from step-completion events. Delete `stride_wheel` module.
+### Stage 4: Collapse the stride wheel ✅
 
-### Stage 5: Pelvis planner (the biomechanics upgrade)
+Stride phase is now derived from the placer's per-foot `Stepping { t, duration }` state. Right swinging → phase in `[0, PI]`; left swinging → `[PI, TAU]`; both planted → phase holds so arms coast rather than snap to rest. `stride_wheel.rs` is gone; `stride_sync.rs` retains only the phase-consuming helpers (`phase_from_placer`, `update_hand`, `compute_shoulder_twist`, `compute_head_bob`, `compute_head_tilt`). Foot-probe swing selection now queries `placer.left/right.is_planted()` directly. `AnimationState::wheel_angle` renamed to `stride_phase`. `Gait::drives_stride_cycle` deleted (no longer needed).
+
+### Stage 5: Pelvis planner — deferred
+
+Implemented and reverted. The math worked (vertical `amp · 0.5 · (1 − cos(2·phase))`, lateral `−sin(phase) · right · amp`, anticipatory forward lean during the first third of a step, all scaled by `stride_activity`). The problem is frequency: with `min/max_step_duration = 0.08–0.10 s`, the stride cycle runs at 5–6 Hz and the vertical channel peaks at 10–12 Hz. At a 30 Hz monitor that's 2–3 frames per cycle — below anything that reconstructs as smooth motion; it aliases into flicker.
+
+Torso lean is a separate concern and already parameterised on `GaitPreset::torso_pitch` (walk = 0.08, sprint = 0.20, crouch = 0.30 rad). No planner needed for that channel.
+
+Revisit conditions: if the gait cadence slows (longer `min/max_step_duration`) or the render rate goes up, or if we want pelvis motion specifically for slow walks, rebuild the module — the derivation is preserved above. An amplitude-gate on step duration (`smoothstep(0.08, 0.25, step_duration)`) would let it turn on automatically once the cadence drops into the visible band.
+
+### Stage 5 (original): Pelvis planner — reference design
 
 This is the stage that distinguishes "placed correctly" from "walks convincingly." Add a `PelvisPlanner` component that *computes* pelvis offset relative to the physics-supplied capsule position, rather than treating pelvis as a fixed input.
 
@@ -244,9 +272,78 @@ The pelvis in real walking is not static — it traces an inverted-pendulum arc:
 
 This stage is what pushes the system past Overgrowth-tier toward biomechanically-grounded procedural locomotion. It's also the stage that will make the character's upper body move the way people instinctively expect — head bob, shoulder roll, arm swing all react to pelvis arc automatically because they're all pelvis-relative.
 
+### Stage 5.5: Torso-yaw decoupling (follow-up)
+
+Turning in place currently pins visible torso yaw to the physics/input yaw, so the upper body rotates continuously while feet step discretely — one foot always looks stretched until the next trigger catches up. Fix by giving the animator its own `rendered_yaw` that chases `input_yaw` with a cap (`max_yaw_offset_rad`, on the order of 15–25°). When the cap hits, force a step; when the step completes, let `rendered_yaw` relax back toward `input_yaw`. The `stance_offset` and `capture_point` math then run against `rendered_yaw`, so the placer sees the yaw the feet actually believe in. Independent of Stage 5, but shares the pelvis planner as a natural home.
+
 ### Stage 6: Landing anticipation (optional follow-up)
 
 Add the `reach_toward_ground` hook for the airborne feet-gap case. Natural next step once `FootPlacer` owns foot position.
+
+---
+
+## Implementation notes (for future sessions)
+
+Stages 1 and 2 are landed. The placer owns foot xz for all grounded states; the stride wheel is reduced to a head-bob / head-tilt / arm-swing reference. Airborne states (`Launching` / `Airborne`) suspend the placer; `Landing` samples feet from the landing pose directly (pelvis-tracking at impact `ground_y`).
+
+### Current state
+
+**Code in place (`src/animation/foot_placer/`):**
+- `mod.rs` — re-exports
+- `config.rs` — `FootPlacerConfig` (lives on `CharacterRigConfig::foot_placer`)
+- `capture_point.rs` — pure math: `capture_point_xz`, `turn_in_place_offset`, `stance_offset`. `GRAVITY` const = 9.81 (matches `PhysicsConfig::gravity` default magnitude).
+- `swing.rs` — `swing_position`: smoothstepped horizontal + parabolic lift. Minimum-jerk refinement deferred.
+- `placer.rs` — `FootPlacer`, per-foot `Planted`/`Stepping` FSM. Trace tests at the bottom under `#[cfg(test)] mod trace` — run with `cargo test --lib foot_placer::placer::trace -- --ignored --nocapture`.
+
+**Integration (`src/animation/animator.rs`):**
+- `update()` flow: `process_contacts` → compute `next_pose` → `tick_foot_placer(next_pose)` → `mirror_placer_into_state` → sample pose/upper with placer output already baked into `AnimationState.left/right.position` → blend crossfades → apply to skeleton.
+- `FootPlacer::set_suspended(true)` while `next_pose` is `Launching` / `Airborne`. On the resume edge (`true → false`) the next tick calls `replant_at_stance`, snapping both feet to neutral stance under the current pelvis. Without this, airborne→grounded resumes from pre-takeoff foot positions.
+- `stride_gain` comes from `gait_preset_for(next_pose)`; airborne-adjacent states fall back to the walk preset (placer is suspended there anyway).
+
+**Debug overlay (`src/animation/systems.rs::draw_foot_placer_overlay`):**
+- Green sphere = `ideal_xz` (stride_gain · capture point + stance + turn offsets)
+- Yellow sphere = `planted_position`
+- Magenta line = planted → ideal (error vector)
+- Orange sphere + line = mid-swing position and from→to, only while `Stepping`
+
+### Refinements landed on top of the Stage-2 skeleton
+
+Each was a visible symptom discovered in play, with a physically-grounded fix:
+
+1. **`stride_gain` (per preset).** Foot stayed in front of torso at all times. Planting at the full capture point is the *stopping* foothold (LIP → zero divergent component), so the body can't walk over it. Scaling the CP offset by `stride_gain ∈ (0,1)` preserves the divergent component and lets the hip pass over the planted foot.
+2. **Symmetric, speed-proportional trigger.** Foot either dragged too far behind or plant-ahead/trigger-behind distances were asymmetric depending on whether fixed `step_trigger` or `2·gain·v/ω` dominated. Fixed by using only `max(symmetric_trigger, settle_trigger)` — the two quantities compose additively across the speed range, with `settle_trigger` acting as a rest-stance floor and `symmetric_trigger` owning everything above a crawl. `step_trigger` as a separate knob is gone.
+3. **Reach clamp preserves stance width.** Applying `max_stride_reach` to `cp + turn + stance` uniformly shrank lateral foot spacing at speed (clamped vector scaled x *and* z). Clamp the stride portion only; always add `stance` after.
+4. **Swing preview.** Foot plants at `+s` ahead of hip *at plant time*, not at trigger time. Without preview, hip travels `v·duration` during swing and the cycle tilts backward by that amount. `to = ideal + velocity · (ceil(duration/dt) − 1) · dt`. Discretisation matters: using `v·duration` naively overshoots by one tick's worth of motion (`v·dt`), tilting the cycle forward at high speed.
+5. **Planted-y syncs to pelvis every frame.** Freezing `planted_position.y` at plant time left feet stuck above/below terrain after landing recoil or any physics y-settle. `sync_planted_y` pulls planted y to `ctx.ankle_y` each tick. Swing arc still owns y during `Stepping`.
+6. **Airborne resume.** Suspending the placer in air + resuming from wherever the feet happened to be at takeoff snapped feet backward on landing. Resume path re-plants both feet at stance under the current pelvis (`replant_at_stance`, driven by a `resuming` flag latched in `set_suspended`).
+7. **Ankle IK (Stage 3a).** Per-foot `up` and `takeoff_up` on `PlacerFoot`; target is phase-dependent (planted → ground normal; swing → takeoff-ease → neutral → landing-ease across configurable fractions). Exponential chase at `FootPlacerConfig::ankle_slerp_rate`. Mirrored into `FootState::up` and consumed by `add_foot_capsule_to_mesh`, which now builds its basis from the foot's own up-axis. Avoided full quaternion slerp — for the angles involved (slopes, not somersaults), lerp-and-renormalise on the up vector is indistinguishable.
+8. **Stride phase from placer (Stage 4).** `AnimationState::wheel_angle` → `stride_phase`. Derived from placer's per-foot stepping state: right swinging → `[0, PI]`, left swinging → `[PI, TAU]`, both planted → hold. `stride_wheel.rs` collapsed into `stride_sync.rs` (phase derivation + phase-consuming helpers only). Probe aim (`configure_probes`) now queries `placer.foot.is_planted()` directly. `Gait::drives_stride_cycle` deleted.
+9. **Stride activity (decouples upper body from gait FSM).** Added `AnimationState::stride_activity` ∈ `[0, 1]`: snaps to 1 while any foot is stepping, exp-decays (τ ≈ 0.25 s) when both planted. Scales arm-swing amplitude, shoulder twist, and head bob. `PoseState::cycle()` now returns `Some(Stride)` for all `Grounded` variants (including `Idle`); `natural_hands` always computes both rest-hang and swinging targets and lerps by activity. Fixes slope-slide flicker where gait oscillated Idle↔Walk across `idle_threshold` and hands/head snapped between poses even though the placer was stepping correctly.
+10. **Head bob cadence.** Original `cos(phase).abs()` gave two bobs per stride cycle (one per foot strike). Replaced with `(1 − cos(phase)) · 0.5` — one bob per full cycle (peak at `phase = PI`).
+11. **Per-foot terrain-following y.** Planted y was synced to a shared `pelvis − standing_height`, so feet stayed flat across slopes and stairs. `PlacerCtx` now carries `left_ground_y` / `right_ground_y` (`Option<f32>` from `FootState.ground_contact.y`); `sync_planted_y` uses the per-foot terrain surface when a probe has hit, falling back to the pelvis-relative value otherwise. Explicitly called out as a known gap in Tradeoffs but never wired until now.
+12. **Foot semantic: centre, not ankle; sole submerged by one radius.** `add_foot_capsule_to_mesh` used to draw the capsule *below* `position` with `position.y` as the top tangent — i.e. `position` was conceptually the ankle and the sole sat `2·FOOT_CAPSULE_RADIUS` underneath. The capsule is now drawn centred on `position`, so `position.y` is the foot centre and the sole sits one radius below. Combined with (11), this gives a half-submerged look on terrain that reads better on voxel geometry than a capsule balanced exactly on the surface. Knock-on fixes: `landing_ground_y` snapshot in `animator.rs` no longer adds `FOOT_HEIGHT` to the probe hit (would have floated landing feet a full diameter up); `PlacerCtx::ankle_y` renamed to `foot_y_fallback` with semantic now "terrain surface under the rest pose" = `pelvis − standing_height − FOOT_HEIGHT`; `FOOT_HEIGHT` / `FOOT_CAPSULE_RADIUS` doc blocks updated. Side effect: hip→foot distance grew by `FOOT_HEIGHT`, so IK reaches further and legs look more extended at rest — intentional, matches the submerged look, but the rig's `standing_height_ratio` may want trimming by ~`FOOT_HEIGHT / leg_length` if knees start locking.
+
+### Gotchas already hit (don't re-burn these)
+
+1. **Coordinate convention.** `facing.cross(&Vector3::y())` is "right" and points to **−x when facing +z**. `FootPlacer::new` must initialise feet via `stance_offset` with the same sign convention, or left/right start swapped and every ideal pulls feet across the body.
+2. **Trigger-before-advance.** `try_trigger_step` must run *before* `advance_stepping`. If advance runs first, a completing foot transitions Stepping→Planted mid-tick and its now-huge error retriggers it the same frame, starving the other foot.
+3. **Alternation preference.** At high speed, a freshly-planted foot's error immediately exceeds the trigger. Whichever foot is evaluated first re-fires forever. Fixed by tracking `last_planted_side` and evaluating the *other* side first.
+4. **No trigger floor larger than `settle_trigger` at speed.** A floor like the old `step_trigger` broke the symmetric-plant property: `stride_offset` scaled with gain but the trigger stayed pinned at the floor, so the foot ended up further behind the hip than it was ahead.
+5. **Don't project `to` by raw `duration`.** Use `(ceil(duration/dt) − 1) · dt` — see refinement 4 above.
+
+### Known-open follow-ups
+
+- **Non-zero spawn yaw and variable dt** are not exercised by the trace harness. Real game inputs should be covered before the next major change.
+- **Swing-leg collision (Stage 3b).** Ankle IK landed; swing-arc clipping on raised voxels / stairs is still open.
+- **Pelvis planner (Stage 5).** Pelvis is still a passive physics output; biomechanical rise/fall/sway not yet derived from support state.
+- **Mid-step retargeting.** Currently we commit `to` at trigger and never retarget. Sharp direction reversals mid-swing could look wrong; not yet observed in gameplay.
+
+### Resume checklist
+
+Before touching any code:
+1. `cargo test --lib foot_placer::placer::trace -- --ignored --nocapture` — confirm the walk/sprint/landing/walk-to-idle traces still produce symmetric `±s` foot offsets around the hip.
+2. Run the game, watch the debug overlay. The ideal-sphere (green) sits roughly `stride_gain · v/ω` ahead of the hip; planted-sphere (yellow) should oscillate between `+s` ahead and `−s` behind symmetrically.
+3. Skim `animator.rs::tick_foot_placer` and confirm the airborne-suspend branch still matches current `PoseState` variants.
 
 ---
 
@@ -254,7 +351,7 @@ Add the `reach_toward_ground` hook for the airborne feet-gap case. Natural next 
 
 **This is a real refactor, not a patch.** The current `PoseState::Grounded::sample` produces a complete foot trajectory; the new design requires splitting that across two layers and accepting that the layered system has its own tuning surface. The capture-point math itself is ~10 lines; the work is in restructuring who owns what.
 
-**Gait presets become thinner.** Today a preset controls step length, lift, hip drop, torso pitch, arm swing. After this change it controls step *height* and stylistic channels only — stride length emerges from `v * sqrt(h/g)`, not from the preset. This is correct biomechanically but means the "crouch walks with tiny steps" look must come from a smaller `step_trigger` multiplier under crouch, not a smaller stride-wheel amplitude.
+**Gait presets become thinner.** A preset now controls `step_height`, `stride_gain`, and stylistic channels only. Stride length emerges from `stride_gain · v · √(h/g)`, not from a preset-supplied `stride_length`. Different gaits distinguish themselves by picking different `stride_gain` values — crouch uses a higher gain (shorter, more controlled strides), sprint a lower gain (longer, more committed strides). `GaitPreset.stride_length` and `frequency_mul` still exist but are dead code; safe to delete.
 
 **No retargeting mid-step** may look wrong on sharp direction changes. Low-risk to start without; easy to add later if the capture point shifts significantly during a step's swing phase.
 

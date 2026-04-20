@@ -11,6 +11,8 @@
 
 mod animator;
 mod config;
+mod debug_config;
+mod foot_placer;
 pub mod humanoid;
 mod pose;
 mod state;
@@ -18,6 +20,8 @@ mod systems;
 
 pub use animator::CharacterAnimator;
 pub use config::CharacterRigConfig;
+pub use debug_config::AnimationDebugConfig;
+pub use foot_placer::{FootPhase, FootPlacer, FootPlacerConfig, FootSide, PlacerFoot};
 pub use pose::{
     BlendPolicy, Crossfade, Cycle, CycleKind, FeetPose, HandsPose, Linear, PoseFragment,
 };

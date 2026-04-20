@@ -5,10 +5,13 @@
 use specs::{Entities, Join, Read, ReadExpect, ReadStorage, System, Write, WriteStorage};
 
 use super::animator::CharacterAnimator;
+use super::debug_config::AnimationDebugConfig;
+use super::foot_placer::{FootPhase, FootPlacer};
 use crate::components::{Position, Rotation, Velocity};
 use crate::debug::{DebugLines, DebugOverlays};
 use crate::player::grab::GrabConfig;
 use crate::player::{Player, PlayerState, PlayerTargetState};
+use crate::rendering::Colour;
 use crate::sensing::{ContactCandidates, SensorSet};
 use crate::time::Time;
 
@@ -55,6 +58,7 @@ impl<'a> System<'a> for CharacterAnimationSystem {
     type SystemData = (
         Read<'a, Time>,
         ReadExpect<'a, GrabConfig>,
+        ReadExpect<'a, AnimationDebugConfig>,
         Entities<'a>,
         ReadStorage<'a, Player>,
         ReadStorage<'a, PlayerState>,
@@ -72,6 +76,7 @@ impl<'a> System<'a> for CharacterAnimationSystem {
         let (
             time,
             grab_config,
+            debug_config,
             entities,
             players,
             player_states,
@@ -82,7 +87,7 @@ impl<'a> System<'a> for CharacterAnimationSystem {
             candidates,
             mut animators,
             mut _debug_lines,
-            mut _debug_overlays,
+            mut debug_overlays,
         ) = data;
 
         let dt = time.delta_seconds();
@@ -118,6 +123,29 @@ impl<'a> System<'a> for CharacterAnimationSystem {
                 &grab_config,
                 contacts,
             );
+
+            if debug_config.foot_placer_overlay {
+                draw_foot_placer_overlay(&animator.foot_placer, &mut debug_overlays);
+            }
+        }
+    }
+}
+
+/// Stage 1 debug: visualise what the foot placer *would* do if it were
+/// driving the skeleton. Green = ideal target, yellow = planted,
+/// orange = current swing position, magenta line = error vector.
+fn draw_foot_placer_overlay(placer: &FootPlacer, overlays: &mut DebugOverlays) {
+    for foot in [&placer.left, &placer.right] {
+        overlays.add_sphere(foot.ideal_xz, 0.03, Colour::GREEN);
+        overlays.add_sphere(foot.planted_position, 0.03, Colour::YELLOW);
+        overlays.add_line(
+            foot.planted_position,
+            foot.ideal_xz,
+            Colour::new(1.0, 0.0, 1.0, 1.0),
+        );
+        if let FootPhase::Stepping { from, to, .. } = foot.phase {
+            overlays.add_sphere(foot.position, 0.035, Colour::new(1.0, 0.6, 0.0, 1.0));
+            overlays.add_line(from, to, Colour::new(1.0, 0.6, 0.0, 1.0));
         }
     }
 }

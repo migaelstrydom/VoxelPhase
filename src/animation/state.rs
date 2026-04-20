@@ -19,6 +19,10 @@ pub struct FootState {
     /// driver mirrors the body's facing into this each frame; per-foot
     /// swing yaw is future polish.
     pub forward: Vector3<f32>,
+    /// Foot up-axis used by rendering. Mirrored from the foot placer's
+    /// slerped orientation each frame. Matches world Y for a flat stance
+    /// on level ground.
+    pub up: Vector3<f32>,
 
     /// Most recent ground contact point from probe (if any).
     pub ground_contact: Option<Point3<f32>>,
@@ -34,6 +38,7 @@ impl FootState {
             planted_position: position,
             normal: Vector3::y(),
             forward: Vector3::new(0.0, 0.0, 1.0),
+            up: Vector3::y(),
             ground_contact: None,
             ground_normal: None,
         }
@@ -60,8 +65,16 @@ impl HandState {
 /// No other components should store animation-related state.
 #[derive(Debug, Clone)]
 pub struct AnimationState {
-    /// Stride wheel rotation [0, TAU).
-    pub wheel_angle: f32,
+    /// Stride phase in [0, TAU). Derived from the foot placer each
+    /// frame; parameterises arm swing, shoulder twist, head bob.
+    pub stride_phase: f32,
+    /// Stride activity in [0, 1]. Snaps to 1 whenever either foot is
+    /// stepping and decays exponentially when both are planted. Scales
+    /// arm swing amplitude, shoulder twist, and head bob so the upper
+    /// body tracks real motion rather than the gait FSM — passive
+    /// motion (slope slide) no longer flickers between idle and walking
+    /// poses as speed oscillates across the idle threshold.
+    pub stride_activity: f32,
 
     /// Left foot state.
     pub left: FootState,
@@ -102,7 +115,8 @@ impl AnimationState {
         let right_hand = Point3::new(pelvis_position.x - 0.2, hand_y, pelvis_position.z);
 
         Self {
-            wheel_angle: 0.0,
+            stride_phase: 0.0,
+            stride_activity: 0.0,
 
             left: FootState::new(left_foot),
             right: FootState::new(right_foot),

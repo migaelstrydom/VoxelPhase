@@ -1,9 +1,9 @@
-//! Humanoid-specific character animation: skeleton, stride wheel, gait.
+//! Humanoid-specific character animation: skeleton, stride phase, gait.
 
 pub mod gait;
 pub mod pose_state;
 pub mod skeleton;
-pub mod stride_wheel;
+pub mod stride_sync;
 pub mod upper_state;
 
 pub use gait::GaitCycle;

@@ -8,7 +8,7 @@ use nalgebra::{Point3, Vector3};
 
 use super::gait::GaitCycle;
 use super::pose_state::{AirKind, Takeoff};
-use super::stride_wheel;
+use super::stride_sync;
 use crate::animation::config::{CharacterRigConfig, GaitPreset};
 use crate::animation::pose::{Cycle, CycleKind, HandsPose, PoseFragment};
 use crate::animation::state::{AnimationState, HandState};
@@ -176,45 +176,51 @@ fn natural_hands(ctx: &UpperSampleCtx<'_>, shoulders: &Shoulders) -> HandsPose {
     let anim = ctx.anim;
     let facing = anim.facing;
 
+    let arm_hang = rig.arm_length();
+    let rest_left = shoulders.left - Vector3::y() * arm_hang;
+    let rest_right = shoulders.right - Vector3::y() * arm_hang;
+
     match ctx.cycle {
         Some(Cycle {
             phase,
             kind: CycleKind::Stride,
         }) => {
             let arm_gait = ctx.arm_gait();
-            let mut left_hand = HandState::new(anim.left_hand.position);
-            let mut right_hand = HandState::new(anim.right_hand.position);
+            let mut left_hand = HandState::new(rest_left);
+            let mut right_hand = HandState::new(rest_right);
             // Arms swing OPPOSITE to legs for counter-balance.
-            stride_wheel::update_hand(
+            stride_sync::update_hand(
                 &mut left_hand,
                 &arm_gait,
                 phase,
-                stride_wheel::RIGHT_PHASE,
+                stride_sync::RIGHT_PHASE,
                 shoulders.left,
                 facing,
                 -1.0,
             );
-            stride_wheel::update_hand(
+            stride_sync::update_hand(
                 &mut right_hand,
                 &arm_gait,
                 phase,
-                stride_wheel::LEFT_PHASE,
+                stride_sync::LEFT_PHASE,
                 shoulders.right,
                 facing,
                 1.0,
             );
+            // Blend between rest-hang and the swinging target by
+            // `stride_activity`. The gait FSM no longer gates whether
+            // arms swing — arms follow the feet, amplitude fades in and
+            // out with the step cadence.
+            let a = anim.stride_activity.clamp(0.0, 1.0);
             HandsPose {
-                left: left_hand.position,
-                right: right_hand.position,
+                left: Point3::from(rest_left.coords.lerp(&left_hand.position.coords, a)),
+                right: Point3::from(rest_right.coords.lerp(&right_hand.position.coords, a)),
             }
         }
-        _ => {
-            let arm_hang = rig.arm_length();
-            HandsPose {
-                left: shoulders.left - Vector3::y() * arm_hang,
-                right: shoulders.right - Vector3::y() * arm_hang,
-            }
-        }
+        _ => HandsPose {
+            left: rest_left,
+            right: rest_right,
+        },
     }
 }
 
@@ -223,7 +229,10 @@ fn sample_swinging(ctx: &UpperSampleCtx<'_>) -> PoseFragment {
         Some(Cycle {
             phase,
             kind: CycleKind::Stride,
-        }) => stride_wheel::compute_shoulder_twist(phase, ctx.shoulder_twist_max()),
+        }) => {
+            stride_sync::compute_shoulder_twist(phase, ctx.shoulder_twist_max())
+                * ctx.anim.stride_activity.clamp(0.0, 1.0)
+        }
         _ => 0.0,
     };
     let shoulders = shoulders_with_twist(ctx, twist);
@@ -321,7 +330,10 @@ fn sample_reaching(
         Some(Cycle {
             phase,
             kind: CycleKind::Stride,
-        }) => stride_wheel::compute_shoulder_twist(phase, ctx.shoulder_twist_max()),
+        }) => {
+            stride_sync::compute_shoulder_twist(phase, ctx.shoulder_twist_max())
+                * ctx.anim.stride_activity.clamp(0.0, 1.0)
+        }
         _ => 0.0,
     };
     let shoulders = shoulders_with_twist(ctx, twist);
@@ -363,7 +375,10 @@ fn sample_holding(ctx: &UpperSampleCtx<'_>, current_hold_height: f32) -> PoseFra
         Some(Cycle {
             phase,
             kind: CycleKind::Stride,
-        }) => stride_wheel::compute_shoulder_twist(phase, ctx.shoulder_twist_max()),
+        }) => {
+            stride_sync::compute_shoulder_twist(phase, ctx.shoulder_twist_max())
+                * ctx.anim.stride_activity.clamp(0.0, 1.0)
+        }
         _ => 0.0,
     };
     let shoulders = shoulders_with_twist(ctx, twist);
