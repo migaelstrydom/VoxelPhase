@@ -109,6 +109,11 @@ pub struct PhysicsWorld {
     frame_index: u64,
     sleep_manager: SleepManager,
     grounding_detector: GroundingDetector,
+    /// Grounded set from the previous `grounded_handles` call. Sleeping
+    /// bodies produce no contact events, so their support state is
+    /// carried over from when they were last awake — sleep freezes a
+    /// body in place, which must include its groundedness.
+    last_grounded: FxHashSet<RigidBodyHandle>,
     /// User-defined constraints (persistent across frames).
     constraints: Arena<Constraint>,
     /// Constraint solver (velocity + position correction for contacts and joints).
@@ -185,6 +190,7 @@ impl PhysicsWorld {
             frame_index: 0,
             sleep_manager,
             grounding_detector,
+            last_grounded: FxHashSet::default(),
             constraints: Arena::new(),
             solver,
             conditioner,
@@ -777,12 +783,25 @@ impl PhysicsWorld {
     }
 
     /// Bodies grounded by static contacts in the most recent step.
-    pub fn grounded_handles(&self) -> FxHashSet<RigidBodyHandle> {
-        self.grounding_detector
+    ///
+    /// Sleeping bodies are carried over from their last awake support
+    /// state: they generate no contact events, but they haven't moved
+    /// either — without the carry-over, a body falling asleep while
+    /// resting on the floor would read as airborne.
+    pub fn grounded_handles(&mut self) -> FxHashSet<RigidBodyHandle> {
+        let mut grounded: FxHashSet<RigidBodyHandle> = self
+            .grounding_detector
             .grounded_bodies(self.contact_events())
             .into_iter()
             .filter_map(|(handle, grounded)| grounded.then_some(handle))
-            .collect()
+            .collect();
+        for handle in self.sleep_manager.sleeping_snapshot() {
+            if self.last_grounded.contains(&handle) {
+                grounded.insert(handle);
+            }
+        }
+        self.last_grounded = grounded.clone();
+        grounded
     }
 
     // === Internal Methods ===

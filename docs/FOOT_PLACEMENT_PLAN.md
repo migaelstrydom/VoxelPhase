@@ -135,10 +135,15 @@ Normal walking, sprinting, and push-recovery are the same mechanism scaled by in
 ```text
 src/animation/foot_placer/
     mod.rs
-    placer.rs          // FootPlacer: per-foot Planted/Stepping state + tick
+    placer.rs          // FootPlacer: substep loop + per-foot Planted/Stepping FSM
+    timing.rs          // GaitTiming: trigger/cycle/duty/swing derived from speed
+    clock.rs           // GaitClock: phase clock + latched stance-window releases
     capture_point.rs   // pure math: capture point + turn-in-place
-    swing.rs           // minimum-jerk swing trajectories + probe-based
-                       // collision avoidance
+    swing.rs           // swing arc: smoothstep horizontal + parabolic lift
+    sim.rs             // (test) scenario simulator over analytic terrain
+    scenarios.rs       // (test) named scenario registry (terrain + inputs)
+    trace.rs           // (test) stdout traces + CSV export for plotting
+    invariants.rs      // (test) asserting scenario sweeps
 ```
 
 `FootPlacer` is owned by `CharacterAnimator`, ticked once per frame *before* the pose FSM samples. Its output (current foot position + orientation + `is_stepping` flag per foot) feeds into the pose sample ctx, so stylistic layers can react (subtle lean during single-support, etc.).
@@ -207,16 +212,23 @@ Two layers. Per-gait style knobs live on `GaitPreset`; placer-wide machinery liv
 
 | name | rough default | effect |
 |---|---|---|
+| `max_substep_dt` | 1/240 s | upper bound on the placer's internal simulation step (frame split into equal substeps). |
+| `intent_speed_floor` | 0.5 m/s | gait-clock speed floor while movement intent is held — lets the first step fire before physics catches up. |
+| `moving_speed_threshold` | 0.15 m/s | speed above which the body counts as moving without intent (slides); filters physics jitter. |
 | `settle_trigger` | 0.05 m | always-on trigger floor. Dominant only at very low speeds; at rest it pulls off-centre feet to neutral stance. |
 | `k_yaw` | 0.4 | how much yaw rate pulls the ideal sideways during turn-in-place. |
 | `k_turn_trigger` | 0.2 | how much accumulated facing change (in rad · hip_width units) contributes to the trigger. |
-| `min_step_duration` | 0.08 s | floor on a step's airtime. |
-| `max_step_duration` | 0.1 s | ceiling on a step's airtime. |
-| `max_stride_reach_ratio` | 1.5 | `stride` (capture + turn) clamped to this × leg length. `stance` is preserved through the clamp — otherwise lateral foot spacing would collapse at speed. |
+| `min_step_duration` | 0.12 s | floor on a step's airtime (≥ 3–4 display frames at 30 Hz). |
+| `max_step_duration` | 0.4 s | ceiling on a step's airtime; also the duration of idle settle steps. |
+| `max_leg_stretch_ratio` | 1.15 | Maximum hip→foot distance as a fraction of leg length (slightly >1 allows heel/toe extension). Drives both the horizontal stride budget for ideal targets (Pythagoras with `standing_height`) and the overstretch release that forces a planted foot to step when the hip slides too far from it. `stance` is preserved through the stride clamp — otherwise lateral foot spacing would collapse at speed. |
+| `takeoff_stagger_fraction` | 0.4 | Minimum time between any two takeoffs while moving, as a fraction of the current swing duration. Prevents simultaneous releases from phase-locking the feet into a two-footed hop (gotcha 11). |
+| `min_stance_fraction` | 0.6 | Minimum stance age before a non-overstretch release may fire, as a fraction of the current swing duration. Kills one-frame stances when a turn trigger re-arms the instant a foot lands mid-turn. Swing-relative so legitimate short sprint stances are unaffected. |
+| `overstretch_hard_margin` | 0.03 m | Stretch past the budget at which an opening leg fires even inside the takeoff stagger window — bounds the worst-case stretch at sprint-speed reversals. |
+| `swing_obstacle_clearance` | 0.03 m | Minimum mid-swing height above the probed surface, faded to zero at the endpoints (Stage 3b clamp). |
 
 The main trigger is `2 · stride_gain · |v| · √(h/g)`, not a configured value — it's derived from rig geometry and world gravity. `settle_trigger` is just a floor.
 
-Step duration is `clamp(trigger_threshold / speed, min, max)`. At steady walking speed the symmetric trigger dominates and duration ≈ clamped near `max`, giving a consistent cadence.
+Step duration is `(1 − duty_factor) · cycle_time` clamped to `[min, max]` — the swing fills its share of the gait cycle (see `timing.rs`), rather than being an independent knob that can desync from the cadence.
 
 ### Safety invariants
 
@@ -242,9 +254,30 @@ Module with capture-point math and turn-in-place, wired into `update()` with a d
 
 Foot-orientation slerp landed. `PlacerFoot::up` / `takeoff_up` plus a three-segment swing target (takeoff-ease → neutral → landing-ease) drive a per-frame exponential chase toward the ground normal. Mirrored into `FootState::up` and consumed by `add_foot_capsule_to_mesh`, which now builds its basis from the foot's own up-axis so capsules tilt with slopes/stairs.
 
-### Stage 3b: Swing-leg collision
+### Stage 3b: Swing-leg collision ✅
 
-Predictive probes along the committed swing arc to lift the peak over obstacles. Deferred until clipping is actually visible in play.
+Landed as terrain-aware swings rather than extra probes along the arc — the
+single existing foot probe is re-aimed at the *landing target* while
+stepping (`PlacerFoot::probe_anchor`), giving the swing a live height
+estimate of where it will plant. Three mechanisms compose:
+
+1. **Landing-height chase.** `to.y` chases the probed floor height
+   (extrapolated along the contact's tangent plane to the target xz) for
+   the *entire* swing — a vertical correction cannot skate, but a stale
+   height pops at plant. Initialised at step start from the same plane,
+   so uniform slopes are exact from the first substep.
+2. **Apex raise.** When the landing is higher than the takeoff, peak lift
+   becomes `step_height + rise/2`, so the arc clears the higher tread by
+   a full step height rather than just the lerp baseline's midpoint.
+3. **Clearance clamp.** The rendered swing y is clamped to the probed
+   surface plus `swing_obstacle_clearance · sin(π·u)` — risers and bumps
+   between the endpoints push the foot over instead of cutting through.
+   Faded at the endpoints so takeoff and plant stay on the surface.
+
+All three gate on a floor-like contact (`normal.y > 0.6`); wall hits do
+not steer swing heights. Pinned by `feet_never_clip_terrain` and
+`plants_land_without_vertical_pop` across the whole scenario registry
+(stairs, rough ground, hills, 20% inclines both directions).
 
 ### Stage 4: Collapse the stride wheel ✅
 
@@ -279,6 +312,64 @@ Turning in place currently pins visible torso yaw to the physics/input yaw, so t
 ### Stage 6: Landing anticipation (optional follow-up)
 
 Add the `reach_toward_ground` hook for the airborne feet-gap case. Natural next step once `FootPlacer` owns foot position.
+
+### Stage 7: Phase authority ✅ (the antiphase fix)
+
+In-game finding (2026-06): on triangulated terrain the legs settled into
+a *stable* off-antiphase split — takeoffs at 0.6π/1.4π instead of π/π —
+whose **antiphase error** varied with run direction, only hopping between
+attractors when a random early step occurred. Diagnosed from real
+recordings (see record-and-replay): the time-based `min_stance` gate
+delayed one foot's scheduled release every cycle (predicted block of
+0.231 s matched the observed 0.234 s takeoff gap), and
+`resync_to_takeoff` then *adopted* the corrupted timing as the new
+schedule — a self-consistent limit cycle.
+
+Fix — the clock holds timing authority; landed as four changes:
+
+1. **No takeoff resync.** The phase free-runs at ω(speed); step events
+   never re-anchor it. A reactive (turn/overstretch) or gate-delayed step
+   costs one odd stance and the fixed schedule pulls the foot straight
+   back. The phase is *set* only where no rhythm exists: the idle→moving
+   edge and the landing replant, both via `seed_to_release` (one foot
+   released now, the other exactly half a cycle later).
+2. **Scheduled releases drop the stance-age gate.** Under a phase-true
+   schedule, stance ≥ duty·cycle holds by construction; the wall-clock
+   gate was the thing fighting the schedule. (`min_stance` remains for
+   Turn and idle-settle steps.)
+3. **Overstretch fires on actual stretch only.** The predictive lead
+   (`distance + radial·gap_remaining`) read 0.3 m into the future at
+   sprint speed and, with sticky latches, re-paced the gait reactively.
+4. **Cadence respects reach** (`STRIDE_REACH_SAFETY` in `timing.rs`).
+   The stride is capped so the scheduled plant-ahead `2·duty·s` fits
+   0.9× the horizontal reach budget — short legs at speed take faster,
+   shorter steps instead of letting the stretch release pace the gait.
+   The budget itself now uses the true rest vertical
+   (`pelvis.y − foot_y_fallback`, ≈ standing_height + FOOT_HEIGHT); the
+   bare `standing_height` overstated reach by ~30%. `ideal_target` caps
+   its capture-point term at the same plant-ahead so planner and
+   schedule agree.
+
+Self-healing property: when a transient leaves the feet ahead of the
+clock, reactive pacing (at full reach) is inherently *slower* than the
+schedule (at 0.9× reach), so the phase drifts back into alignment. On
+top of that, **bounded catch-up** (`phase_debt` / `CATCH_UP_RATE` in
+`clock.rs`) accelerates recapture: each reactive fire ahead of its
+window edge measures the feet's lead as a fresh phase debt, and the
+clock runs 1.35× until it's paid (a scheduled fire clears it; late
+fires and idle leave it alone). Still rate-only and one-directional —
+the phase is never set by step events, so the old attractor cannot
+re-form. Measured on the recorded reversal stream: post-landing
+scramble recovers in 3 steps (~0.45 s, was ~1.7 s), the mid-run
+reactive episodes vanish entirely, and about-faces are single-step
+excursions.
+
+Validation: replayed all three player recordings through old vs new —
+steady mean antiphase offset 0.99–1.00π (sd 0.03–0.05 on straight runs)
+vs stable 0.6π splits before; every registry scenario at 1.00 exactly;
+pinned by `steady_takeoffs_are_antiphase` (+ sub-frame-corrected
+analysis in `scratch/antiphase2.py`, raw in `scratch/antiphase.py`).
+The 35 rad/s arm-phase slew in `stride_sync` is retained as a safety.
 
 ---
 
@@ -322,6 +413,134 @@ Each was a visible symptom discovered in play, with a physically-grounded fix:
 10. **Head bob cadence.** Original `cos(phase).abs()` gave two bobs per stride cycle (one per foot strike). Replaced with `(1 − cos(phase)) · 0.5` — one bob per full cycle (peak at `phase = PI`).
 11. **Per-foot terrain-following y.** Planted y was synced to a shared `pelvis − standing_height`, so feet stayed flat across slopes and stairs. `PlacerCtx` now carries `left_ground_y` / `right_ground_y` (`Option<f32>` from `FootState.ground_contact.y`); `sync_planted_y` uses the per-foot terrain surface when a probe has hit, falling back to the pelvis-relative value otherwise. Explicitly called out as a known gap in Tradeoffs but never wired until now.
 12. **Foot semantic: centre, not ankle; sole submerged by one radius.** `add_foot_capsule_to_mesh` used to draw the capsule *below* `position` with `position.y` as the top tangent — i.e. `position` was conceptually the ankle and the sole sat `2·FOOT_CAPSULE_RADIUS` underneath. The capsule is now drawn centred on `position`, so `position.y` is the foot centre and the sole sits one radius below. Combined with (11), this gives a half-submerged look on terrain that reads better on voxel geometry than a capsule balanced exactly on the surface. Knock-on fixes: `landing_ground_y` snapshot in `animator.rs` no longer adds `FOOT_HEIGHT` to the probe hit (would have floated landing feet a full diameter up); `PlacerCtx::ankle_y` renamed to `foot_y_fallback` with semantic now "terrain surface under the rest pose" = `pelvis − standing_height − FOOT_HEIGHT`; `FOOT_HEIGHT` / `FOOT_CAPSULE_RADIUS` doc blocks updated. Side effect: hip→foot distance grew by `FOOT_HEIGHT`, so IK reaches further and legs look more extended at rest — intentional, matches the submerged look, but the rig's `standing_height_ratio` may want trimming by ~`FOOT_HEIGHT / leg_length` if knees start locking.
+13. **Terrain-aware swing landings (Stage 3b).** Probes aim at each foot's `probe_anchor` (landing target while stepping); `PlacerCtx` carries the full contact point so heights extrapolate along the floor's tangent plane. The landing height chases the probed surface all swing, the apex rises for upward steps, and a bell-faded clamp keeps the arc above risers. Without this, every step on a 20% incline popped ~5 cm at plant and stair risers were clipped through. `probe_length_factor` 1.3 → 1.8 so landing-aimed probes still reach downhill targets.
+14. **Release-rule hardening for violent inputs.** Stance-age gate (`min_stance_fraction`) on non-overstretch releases, opening gate + stagger-lead on overstretch, hard-margin stagger bypass, and `Turn < Scheduled < Overstretch` priority. Found via the running about-face scenario and the random-input fuzz — see gotchas 12–14.
+15. **Duty-scaled plant-ahead (fixes forward-tilted legs).** A stance lasts `duty` of the cycle = `4·duty·s` of hip travel, so planting at `+s` is hip-symmetric only at duty 0.5. At running duty (0.38) the stance spanned `+s … −0.52s` — the whole leg cycle sat ahead of the torso and read as a permanent forward tilt in game (the 5 m/s "walk" is in the running-duty band). Plant-ahead is now `2·duty·s` (`plant_ahead_distance`), which is symmetric at every duty; cycle distance stays `4s`, so cadence is unchanged. Verified numerically: per-foot mean stance offset along travel is ≤ 0.023 m at a 40 m/s² start to 5 m/s. Pinned by `run_stance_is_hip_symmetric`.
+16. **Displacement-gated resume + split replant (fixes in-phase legs over seams).** Triangulated-terrain seams drop ground contact for a frame; the resulting suspend/resume replanted *both feet at the same spot* at speed, both legs hit the stretch release in unison, and the recovery phase-locked into a two-footed gallop re-seeded at every seam. Resume now skips the replant entirely when the pelvis moved less than the horizontal reach budget during the suspension (`prev_pelvis` freezes while suspended, so the displacement is free); a real jump's replant splits the stance along travel (left forward, right back, each by `plant_ahead_distance`, clock phase 0 releasing the back foot first). Pinned by `seam_blip_does_not_break_gait` and `hard_accel_run_settles_into_even_rhythm`.
+17. **Slewed stride phase (fixes arm snapping).** `stride_sync::phase_from_placer`'s raw phase is discontinuous when swings overlap (flight phases): tracking switches feet mid-swing and the phase jumps, snapping the arms — clearly visible at high display rates. The phase now chases the raw target at ≤ 35 rad/s (above the fastest legitimate phase speed ≈ 26 rad/s, so clean gaits track exactly), staying continuous through tracking switches.
+
+### Cadence rework: substepped clock + derived timing
+
+The first phase-clock implementation produced frantic clumped takeoffs
+(both feet airborne at walking speed, ~15 steps/s). Root cause was an
+intent-speed floor of `settle_trigger / dt` — frame-rate dependent and
+huge (3 m/s at 60 fps) — feeding both the phase clock and the duty
+factor. The structural rework that replaced it:
+
+1. **Internal substepping (`FootPlacer::tick`).** Each render frame is
+   split into equal substeps `≤ max_substep_dt` (default 1/240 s, capped
+   at 64 substeps). Pelvis and yaw are lerped from the previous frame's
+   cached values; velocity, intent, and probe data are held constant.
+   Step sequencing is therefore identical at 30 Hz and 240 Hz, and the
+   `ceil(duration/dt)` discrete-preview compensation became unnecessary
+   (`to = ideal + v·duration`, residual ≤ `v·substep_dt`).
+2. **One cadence source of truth (`timing.rs`).** `GaitTiming::derive`
+   computes trigger threshold (`max(2·gain·v/ω, settle_trigger)`),
+   cycle distance (`2·trigger`), duty factor (Froude smoothstep), and
+   swing duration (`(1−duty)·cycle_time`, clamped) from one gait speed.
+   The phase clock, the step trigger, and the swing length cannot
+   desync — `GaitPreset::stride_length`/`frequency_mul` are deleted;
+   `stride_gain` alone sets both stride and cadence (cycle travel =
+   `4·gain·v/ω`, so cycle *time* is speed-independent above the settle
+   floor, ≈ `4·gain·√(h/g)`).
+3. **Latched releases (`clock.rs`).** Stance-window exits latch a
+   pending release instead of edge-triggering; a release blocked by the
+   continuous-support guard (other foot mid-swing, duty ≥ 0.5) fires as
+   soon as the guard clears instead of being dropped for a full cycle.
+   Stale latches are cleared when movement stops. At most one step
+   fires per substep, so a same-instant double release resolves as two
+   takeoffs milliseconds apart, never a simultaneous double-flight.
+4. **Sane intent floor.** The gait speed is
+   `max(|v_xz|, intent_speed_floor)` while intent is held (0.5 m/s
+   default), plain `|v_xz|` otherwise; `moving` additionally requires
+   `|v_xz| > moving_speed_threshold` to ignore physics jitter. The
+   scheduled-side / phase-step-consumed / next-step-side machinery is
+   gone — alternation falls out of the clock, and idle settling picks
+   the larger-error foot with the other-planted guard.
+5. **Retuned for the rig.** `stride_gain`: walk 0.4, sprint 0.3, crouch
+   0.7. `min/max_step_duration`: 0.12/0.4 s (a swing now spans ≥ 3–4
+   display frames at 30 Hz). The anticipatory reach preview
+   (`anticipatory_preview_time`/`anticipatory_reach_ratio`) is deleted —
+   it only ever fed pre-lift, and the clock's schedule covers its job.
+
+`facing` left `PlacerCtx` (derived from `yaw`, which substep
+interpolation owns). Trace tests grew 30 Hz variants
+(`trace_walk_forward_30hz`, `trace_run_30hz`); `timing.rs` and
+`clock.rs` carry one shallow unit test per code path.
+
+### CoyoteTime pose mapping (airborne flicker fix)
+
+Running across geometry seams occasionally flicked the character into
+the airborne pose, then a Landing splice + neutral replant. The physics
+never jittered — `LocomotionState::CoyoteTime` bridged the one-frame
+contact loss as designed — but `next_pose_state` mapped CoyoteTime to
+`PoseState::Airborne { Fall }`, suspending the placer and splicing a
+Landing on the way back. CoyoteTime now maps to the same Grounded gait
+as `Grounded`; the fall pose starts only when the grace period expires
+into real `Airborne`. Covered by a unit test in `animator.rs`
+(`coyote_time_keeps_grounded_pose`). Lesson: any state the *physics*
+treats as grounded-grace must be grounded for the animation too, or the
+grace period is defeated visually.
+
+### Test infrastructure (cfg(test) modules in `foot_placer/`)
+
+- `sim.rs` — shared scenario simulator: integrates the pelvis from
+  per-frame `(velocity, yaw, intent)`, derives per-foot ground contacts
+  and normals from an analytic terrain height function (probing at each
+  foot's `probe_anchor`, matching the game), snapshots placer state per
+  display frame. Supports per-frame variable dt (`simulate_var_dt`) and
+  per-gait parameters (`simulate_gait` — crouch uses gain 0.7 / lift
+  0.06). Intent is supplied separately from velocity so anticipation
+  cases are expressible; initial facing comes from `input(0).yaw`.
+- `scenarios.rs` — the named scenario registry, all at 30 Hz (the worst
+  display rate the placer must look natural at): walk, run, game-accel
+  hard start (40 m/s²), start/stop, turn-in-place, walking 90° turn,
+  standing reversal, running about-face, landing slide, 20% incline up
+  + down, rough ground (±8 cm bumps), rolling hills (0.4 m / 8 m),
+  voxel stairs (0.12 m risers), crouch walk, 45°-spawn-yaw diagonal
+  walk. `sim::simulate_with_suspend` additionally drives per-frame
+  placer suspension for seam-blip / hop modelling.
+- `trace.rs` (`#[ignore]`) — `trace_scenarios` prints per-frame state
+  for every scenario; `export_csv` writes one CSV per scenario to
+  `scratch/foot_traces/` (includes terrain height under each foot).
+  `scratch/plot_traces.py` (venv: matplotlib) renders each CSV to a
+  4-panel PNG: foot y vs terrain (pops/clipping), world position along
+  the travel axis (planted segments must be horizontal = no slide),
+  top-down paths with plant markers, and a stance timeline. This is the
+  fastest way to *see* gait quality without running the game.
+- `invariants.rs` — asserting scenario tests pinning the properties
+  that kept regressing: single-support at walking duty, strict L/R
+  takeoff alternation, even takeoff spacing, step-count parity across
+  display rates and under jittered frame times, prompt first step from
+  a standing start, both feet reshuffling on a 180° turn-in-place, no
+  instant re-lifts through standing *and* running reversals, the leg
+  stretch budget across run/reversal/slide/incline, clean settling
+  after a stop, crouch-gait support rules, spawn-yaw equivalence — plus
+  registry-wide sweeps (no planted-foot slide, no terrain clipping,
+  bounded vertical pop at plant) and a 20 s deterministic random-input
+  fuzz over rough terrain asserting the universal properties.
+
+### Record-and-replay (game ↔ offline bridge)
+
+The synthetic scenarios are open-loop; the game is a closed loop through
+physics, probes and the locomotion FSM. When the game looks wrong but the
+tests pass, capture the real input stream and replay it offline:
+
+1. Record in game: `PLACER_REC=scratch/recordings/<name>.csv cargo run`.
+   `recorder.rs` (compiled into the game, ~zero cost when the env var is
+   unset) writes every `PlacerCtx` field + the suspend flag + pose tag per
+   tick, plus the placer's outputs, with exact f32 round-tripping.
+2. Replay offline: `PLACER_REC_CSV=<recording> cargo test --lib
+   foot_placer::replay -- --ignored --nocapture`. Rebuilds the placer from
+   the recorded `# init` line, feeds the exact stream, prints the max
+   divergence vs the in-game outputs (must be ~0 — nonzero means the
+   recording misses an input), and writes
+   `scratch/foot_traces/replay_<name>.csv` for `scratch/plot_traces.py`.
+3. `record_replay_round_trip` (always-on test) pins the loop bit-exactly
+   without the game.
+
+Caveat: the replay assumes the default `FootPlacerConfig`; mirror any
+config tuning into `replay.rs` before trusting the divergence number.
 
 ### Gotchas already hit (don't re-burn these)
 
@@ -329,21 +548,39 @@ Each was a visible symptom discovered in play, with a physically-grounded fix:
 2. **Trigger-before-advance.** `try_trigger_step` must run *before* `advance_stepping`. If advance runs first, a completing foot transitions Stepping→Planted mid-tick and its now-huge error retriggers it the same frame, starving the other foot.
 3. **Alternation preference.** At high speed, a freshly-planted foot's error immediately exceeds the trigger. Whichever foot is evaluated first re-fires forever. Fixed by tracking `last_planted_side` and evaluating the *other* side first.
 4. **No trigger floor larger than `settle_trigger` at speed.** A floor like the old `step_trigger` broke the symmetric-plant property: `stride_offset` scaled with gain but the trigger stayed pinned at the floor, so the foot ended up further behind the hip than it was ahead.
-5. **Don't project `to` by raw `duration`.** Use `(ceil(duration/dt) − 1) · dt` — see refinement 4 above.
+5. **Don't project `to` by raw `duration`.** ~~Use `(ceil(duration/dt) − 1) · dt`~~ — superseded by substepping; raw `duration` is now correct to within one substep.
+6. **Never put `dt` inside a speed/threshold formula.** The old `settle_trigger / dt` intent floor made cadence frame-rate dependent and was the root cause of the clumped-takeoff bug. Rates and thresholds must be expressed in sim-time units; only integration multiplies by `dt`.
+7. **`planted_yaw` must be set at *landing*, not takeoff.** When it was assigned in `start_step`, a fast turn swept a large yaw angle mid-swing, so the foot landed already past the turn trigger and re-lifted after one substep of stance. The reference is now `yaw_from_facing(to_forward)` at the plant in `advance_stepping` (the orientation the foot actually landed with). Repro: `trace_reverse_direction_30hz`; pinned by `reverse_direction_settles_into_rhythm`.
+8. **Drop clock releases that latch mid-swing.** The latch exists to survive coarse frames, but if a foot's stance-window exit happens while that foot is *already swinging* (gait accelerating through a speed ramp, or a turn step fired ahead of schedule), the pending release fired the instant the foot landed — another one-substep stance. The placer now consumes any pending release for a foot that is mid-swing; the next regular window exit re-arms it.
+9. **~~The clock must not free-run against the feet~~ — INVERTED by Stage 7.** `resync_to_takeoff` (every step fire re-anchored the phase to that foot's window edge) was introduced because off-schedule steps left a foot stranded ~0.76 m behind the pelvis waiting for a far-away window. But making the clock a follower meant every gate or reactive trigger that delayed a step reshaped the schedule itself, and off-antiphase timings became stable attractors (the in-game 0.6π/1.4π split). The stranded-foot problem is instead solved by the escape valves: the overstretch release caps how far behind a foot can get, and the mid-swing pending-drop (gotcha 8) absorbs the window/foot collisions. The clock free-runs; feet are pulled to it.
+10. **Turn steps must be single-support.** Releases carry a `ReleaseKind` (`Scheduled` / `Overstretch` / `Turn`, with upgrade priority in that order). `Turn` releases only fire while the other foot is planted, regardless of duty factor — during a fast reversal the body crosses the walk/run duty threshold mid-turn, and without this rule a turn step would lift the second foot while the first was still mid-swing (both feet visibly moving forward at once). `Overstretch` fires under normal gait rules like `Scheduled`: delaying it would stretch the leg without bound (e.g. replant-at-stance after landing while moving fast, where the second foot *must* lift before the first lands — that's just running).
+11. **Stagger all takeoffs or the gait hops.** When both feet hit their release conditions together (instant speed change, or both replanted at the same spot after a landing), they took off in phase, landed in phase, hit the overstretch trigger together again — a *stable* two-footed-hop attractor, plainly visible in `trace_run_30hz` as both feet swinging forward simultaneously. `select_step` now refuses any takeoff within `takeoff_stagger_fraction × swing_duration` of the previous one; the scheduled windows then pull the feet back to antiphase within one cycle. Corollary: feet planted together at speed must either hop or briefly overstretch on the push-off step — the placer deliberately chooses the stretch, which is why the slide invariant exempts the first cycle. Pinned by `run_takeoffs_stagger_and_alternate`. Lesson: after any trigger/support-rule change, *read the steady-state traces end to end* — the bug was in the most basic scenario, not the new one.
+12. **Overstretch needs an opening gate (and must not fire at landing).** A foot that lands far ahead during a hard deceleration (about-face) is momentarily beyond the stretch budget, but the pelvis is *closing* on it and the stretch resolves by itself. Firing there re-lifted the foot after one frame of contact. The release now requires the radial speed of hip-away-from-foot to be positive, and leads the trigger by `radial_speed · stagger_remaining` so the step fires the instant the stagger gap expires instead of overshooting the limit while blocked. Repro was `reverse_running`; pinned by `running_reversal_settles_into_rhythm`.
+13. **Overstretch must outrank Scheduled in `ReleaseKind`.** `request_release` upgrades by `Ord` and never downgrades. With Scheduled at the top of the order, a foot whose stance window had already exited could not be upgraded to Overstretch — its release stayed gated by the stagger + stance rules while the leg blew past the hard stretch limit (found by the random-input fuzz at a sprint-speed direction flip, not by any hand-written scenario). Order is now `Turn < Scheduled < Overstretch`, because Overstretch carries bypass powers (fresh-plant stance gate always, takeoff stagger past `overstretch_hard_margin`). Pinned by `random_inputs_hold_core_invariants`.
+14. **A fresh plant needs a stance-age gate.** During a fast turn, a foot that has just landed immediately re-accumulates yaw error (and the clock can re-release it within a frame), producing one-frame stances. `min_stance_fraction × swing_duration` of contact is now required before any non-overstretch release fires. The gate must be swing-relative, not absolute: legitimate sprint stances (~0.1 s) are shorter than any reasonable fixed floor.
+15. **Test with the real `ground_accel` (40 m/s²), not a gentle ramp.** The original run scenarios ramped at 10 m/s² and hid both the forward-tilt bias and the gallop dynamics — game starts reach 5 m/s in 0.125 s, faster than half a gait cycle, which is a different regime for the reactive releases. `run_hard_accel` is the game-faithful scenario; prefer it for anything trigger-related.
+16. **Grounding is contact-event based — sleep needs a carry-over.** A sleeping body generates no narrowphase events, so `PhysicsWorld::grounded_handles` reported it airborne while it rested on the floor. Locomotion then walked Grounded → CoyoteTime → Airborne and stayed there (jumps are only consumed in Grounded/CoyoteTime — the player was soft-locked). Sleeping bodies now carry over their last awake support state.
+17. **Time-based gates must not police a phase-based schedule.** `min_stance` (wall-clock stance age) blocked one foot's scheduled release every cycle at run speed; with the takeoff resync the delay became the schedule. Express step-firing rules in phase terms or drop them where the schedule already guarantees the property. Same lesson for the predictive overstretch lead: any trigger that reads time-into-the-future re-paces the gait when latches are sticky.
+18. **Keep planner, schedule and stretch release on one geometry.** Three reach numbers existed: the planner's budget (from bare `standing_height` — 30% too big), the schedule's plant-ahead (uncapped `2·duty·s`), and the release's actual 3D hip→foot limit. At 5 m/s the schedule demanded more than the real reach, so the stretch release — not the clock — paced the gait (persistent antiphase wobble). One source of truth: true-vertical reach budget → caps stride in `GaitTiming::derive` → `plant_ahead_distance(timing)` used by planner and replant alike.
+19. **CoyoteTime must keep ground handling.** It used to steer with the air model (`air_speed`/`air_steer_speed`); since every terrain-seam crossing dips into coyote for a frame or two, that injected a velocity perturbation at the seam-crossing rate — direction-dependent, and strong enough to entrain the event-driven step releases (in-game symptom: near-in-phase legs whose antiphase error varied with run direction). `movement_rule` now keeps `ground_speed`/`ground_accel` in coyote, retaining only `clamp_up`.
 
 ### Known-open follow-ups
 
-- **Non-zero spawn yaw and variable dt** are not exercised by the trace harness. Real game inputs should be covered before the next major change.
-- **Swing-leg collision (Stage 3b).** Ankle IK landed; swing-arc clipping on raised voxels / stairs is still open.
+- **Slope-scramble validation.** The phase-authority + catch-up stack is
+  validated on flat-ground recordings; sloped scrambling (frequent in
+  play) additionally stresses the reach geometry and probe behaviour.
+  Needs one in-game recording on slopes as acceptance data.
 - **Pelvis planner (Stage 5).** Pelvis is still a passive physics output; biomechanical rise/fall/sway not yet derived from support state.
-- **Mid-step retargeting.** Currently we commit `to` at trigger and never retarget. Sharp direction reversals mid-swing could look wrong; not yet observed in gameplay.
+- **Torso-yaw decoupling (Stage 5.5).** Visible torso yaw is still pinned to input yaw while feet step discretely.
+- **In-game probe misses on deep drop-offs.** A swing landing more than ~`0.39 m` below the feet exceeds the probe length (`probe_length_factor` = 1.8) and falls back to the flat pelvis-relative height. Walking off a cliff edge transitions to Airborne anyway, so this has no visible window so far.
 
 ### Resume checklist
 
 Before touching any code:
-1. `cargo test --lib foot_placer::placer::trace -- --ignored --nocapture` — confirm the walk/sprint/landing/walk-to-idle traces still produce symmetric `±s` foot offsets around the hip.
-2. Run the game, watch the debug overlay. The ideal-sphere (green) sits roughly `stride_gain · v/ω` ahead of the hip; planted-sphere (yellow) should oscillate between `+s` ahead and `−s` behind symmetrically.
-3. Skim `animator.rs::tick_foot_placer` and confirm the airborne-suspend branch still matches current `PoseState` variants.
+1. `cargo test --lib foot_placer` — the invariant sweeps cover every scenario; all must pass.
+2. For anything visual: `cargo test --lib foot_placer::trace::export_csv -- --ignored`, then `.venv/bin/python3 scratch/plot_traces.py`, and read the PNGs in `scratch/foot_traces/plots/`. Planted segments horizontal in panel 2, foot y never below the dotted terrain in panel 1, no sliver bars in the stance timeline.
+3. Run the game, watch the debug overlay. The ideal-sphere (green) sits roughly `stride_gain · v/ω` ahead of the hip; planted-sphere (yellow) should oscillate between `+s` ahead and `−s` behind symmetrically.
+4. Skim `animator.rs::tick_foot_placer` and confirm the airborne-suspend branch still matches current `PoseState` variants.
 
 ---
 

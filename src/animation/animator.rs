@@ -7,7 +7,7 @@ use nalgebra::{Point3, Vector3};
 use specs::{Component, VecStorage};
 
 use super::config::{CharacterRigConfig, GaitPreset};
-use super::foot_placer::{FootPlacer, PlacerCtx, PlacerFoot};
+use super::foot_placer::{FootPlacer, PlacerCtx, PlacerFoot, PlacerRecorder};
 use super::humanoid::pose_state::{AirKind, Gait, PoseState, SampleCtx, Takeoff, TickCtx};
 use super::humanoid::skeleton::{generate_character_mesh, Skeleton, FOOT_HEIGHT};
 use super::humanoid::stride_sync;
@@ -57,6 +57,9 @@ pub struct CharacterAnimator {
     pub foot_placer: FootPlacer,
     /// Previous-frame yaw, used to derive yaw rate for `FootPlacer`.
     last_yaw: f32,
+    /// Optional input/output recorder for the foot placer (enabled via
+    /// the `PLACER_REC` env var). Feeds the offline replay harness.
+    recorder: Option<PlacerRecorder>,
 
     // Mesh caching
     cached_vertices: Vec<Vertex>,
@@ -73,6 +76,8 @@ impl CharacterAnimator {
         let skeleton = Skeleton::new(&config, pelvis_position, facing);
         let foot_centre_y = pelvis_position.y - config.standing_height() - FOOT_HEIGHT;
         let foot_placer = FootPlacer::new(pelvis_position, facing, config.hip_width, foot_centre_y);
+        let recorder =
+            PlacerRecorder::from_env(pelvis_position, 0.0, config.hip_width, foot_centre_y);
 
         Self {
             config,
@@ -84,6 +89,7 @@ impl CharacterAnimator {
             upper_crossfade: None,
             foot_placer,
             last_yaw: 0.0,
+            recorder,
             cached_vertices: Vec::new(),
             cached_indices: Vec::new(),
         }
@@ -100,52 +106,57 @@ impl CharacterAnimator {
 
         let mut probes = Vec::with_capacity(2);
 
-        // Left foot probe — aim ahead while the left foot is stepping so
-        // the probe catches terrain at the swing target rather than at
-        // the current foot position.
-        let left_probe = self.configure_foot_probe(
+        // Each foot's probe aims at the placer's probe anchor — the
+        // committed landing target while stepping (so the swing reads
+        // the terrain height where it will plant, not where the foot
+        // currently hangs), the planted anchor otherwise (so planted
+        // feet track the surface directly beneath them). While the
+        // placer is suspended (airborne), aim at the visible foot from
+        // the airborne sampler instead.
+        let left_aim = if self.foot_placer.is_suspended() {
+            self.state.left.position
+        } else {
+            self.foot_placer.left.probe_anchor()
+        };
+        probes.push(self.configure_foot_probe(
             probe_tags::FOOT_LEFT,
             pelvis_position + left_hip_offset,
-            &self.state.left,
-            !self.foot_placer.left.is_planted(),
+            left_aim,
             probe_length,
-        );
-        probes.push(left_probe);
+        ));
 
-        // Right foot probe
-        let right_probe = self.configure_foot_probe(
+        let right_aim = if self.foot_placer.is_suspended() {
+            self.state.right.position
+        } else {
+            self.foot_placer.right.probe_anchor()
+        };
+        probes.push(self.configure_foot_probe(
             probe_tags::FOOT_RIGHT,
             pelvis_position + right_hip_offset,
-            &self.state.right,
-            !self.foot_placer.right.is_planted(),
+            right_aim,
             probe_length,
-        );
-        probes.push(right_probe);
+        ));
 
         probes
     }
 
-    /// Configure a single foot probe based on foot state.
+    /// Configure a single foot probe: a ray from the hip through the
+    /// aim point. Falls back to straight down when the aim point is
+    /// degenerate (at the hip itself).
     fn configure_foot_probe(
         &self,
         tag: u32,
         hip_position: Point3<f32>,
-        foot: &super::state::FootState,
-        is_swinging: bool,
+        aim: Point3<f32>,
         length: f32,
     ) -> Probe {
-        let (origin, direction) = if is_swinging {
-            // Probe ahead toward target with downward bias
-            let to_target = foot.position - hip_position;
-            (hip_position, to_target.normalize())
-        } else {
-            // Probe straight down from hip position
-            (hip_position, Vector3::new(0.0, -1.0, 0.0))
-        };
+        let direction = (aim - hip_position)
+            .try_normalize(1e-4)
+            .unwrap_or_else(|| Vector3::new(0.0, -1.0, 0.0));
 
         Probe {
             tag,
-            origin,
+            origin: hip_position,
             direction,
             length,
         }
@@ -168,11 +179,6 @@ impl CharacterAnimator {
 
         self.state.facing = facing;
         self.state.pelvis_position = pelvis_position;
-        // Feet always point along the body facing. Per-foot swing yaw is
-        // future polish.
-        self.state.left.forward = facing;
-        self.state.right.forward = facing;
-
         self.process_contacts(contacts);
         let has_ground_contact =
             self.state.left.ground_contact.is_some() || self.state.right.ground_contact.is_some();
@@ -206,7 +212,7 @@ impl CharacterAnimator {
         // Tick the foot placer before sampling so the pose layer reads a
         // current foot position. Airborne states suspend the placer; feet
         // come from the airborne/landing samplers in those cases.
-        self.tick_foot_placer(dt, pelvis_position, yaw, velocity, &new_pose);
+        self.tick_foot_placer(dt, pelvis_position, yaw, velocity, target, &new_pose);
         mirror_placer_into_state(&mut self.state, &self.foot_placer);
 
         // Stride phase is derived directly from the placer's stepping
@@ -215,7 +221,7 @@ impl CharacterAnimator {
         // feet planted) the phase holds, so arms coast instead of
         // snapping to rest.
         self.state.stride_phase =
-            stride_sync::phase_from_placer(&self.foot_placer, self.state.stride_phase);
+            stride_sync::phase_from_placer(&self.foot_placer, self.state.stride_phase, dt);
 
         // Stride activity snaps to 1 while anything is stepping and
         // decays exponentially to 0 once both feet are planted. Upper
@@ -302,6 +308,7 @@ impl CharacterAnimator {
         pelvis_position: Point3<f32>,
         yaw: f32,
         velocity: Vector3<f32>,
+        target: &PlayerTargetState,
         next_pose: &PoseState,
     ) {
         let yaw_rate = if dt > 0.0 {
@@ -337,14 +344,14 @@ impl CharacterAnimator {
         let foot_centre_y = pelvis_position.y - self.config.standing_height() - FOOT_HEIGHT;
         let left_ground_normal = self.state.left.ground_normal.unwrap_or_else(Vector3::y);
         let right_ground_normal = self.state.right.ground_normal.unwrap_or_else(Vector3::y);
-        let left_ground_y = self.state.left.ground_contact.map(|p| p.y);
-        let right_ground_y = self.state.right.ground_contact.map(|p| p.y);
+        let left_ground = self.state.left.ground_contact;
+        let right_ground = self.state.right.ground_contact;
 
         let ctx = PlacerCtx {
             dt,
             pelvis: pelvis_position,
             velocity,
-            facing: self.state.facing,
+            intent_direction: target.direction,
             yaw,
             yaw_rate,
             hip_width: self.config.hip_width,
@@ -355,11 +362,15 @@ impl CharacterAnimator {
             stride_gain,
             left_ground_normal,
             right_ground_normal,
-            left_ground_y,
-            right_ground_y,
+            left_ground,
+            right_ground,
             config: &self.config.foot_placer,
         };
         self.foot_placer.tick(&ctx);
+
+        if let Some(recorder) = &mut self.recorder {
+            recorder.record(airborne, pose_tag(next_pose), &ctx, &self.foot_placer);
+        }
     }
 
     /// Mirror fragment channels into `AnimationState` so next-frame probes
@@ -526,6 +537,23 @@ fn blend_through(
 /// Look up the active `GaitPreset` for the current `PoseState`. Returns
 /// `None` when the lower body is not Grounded — the upper body falls back
 /// to rig-level defaults in that case.
+/// Short comma-free tag identifying the pose FSM variant, for the placer
+/// input recorder.
+fn pose_tag(pose: &PoseState) -> &'static str {
+    match pose {
+        PoseState::Grounded { gait } => match gait {
+            Gait::Idle => "idle",
+            Gait::Walk => "walk",
+            Gait::Sprint => "sprint",
+            Gait::Crouch { walking: false } => "crouch",
+            Gait::Crouch { walking: true } => "crouch_walk",
+        },
+        PoseState::Launching { .. } => "launching",
+        PoseState::Airborne { .. } => "airborne",
+        PoseState::Landing { .. } => "landing",
+    }
+}
+
 fn gait_preset_for(pose: &PoseState, rig: &CharacterRigConfig) -> Option<GaitPreset> {
     match pose {
         PoseState::Grounded { gait } => Some(rig.gait_presets.for_gait(*gait)),
@@ -557,8 +585,8 @@ fn airborne_ctx_for(pose: &PoseState) -> Option<(AirKind, Takeoff)> {
 }
 
 /// Copy the placer's current per-foot position into `AnimationState` so
-/// the pose layer samples a coherent foot xy this frame. Planted position
-/// mirrors too, primarily for debug overlays that still read it.
+/// the pose layer samples coherent foot channels this frame. Planted
+/// position mirrors too, primarily for debug overlays that still read it.
 fn mirror_placer_into_state(state: &mut AnimationState, placer: &FootPlacer) {
     copy_placer_foot(&mut state.left, &placer.left);
     copy_placer_foot(&mut state.right, &placer.right);
@@ -568,6 +596,7 @@ fn copy_placer_foot(foot: &mut FootState, placer: &PlacerFoot) {
     foot.position = placer.position;
     foot.planted_position = placer.planted_position;
     foot.up = placer.up;
+    foot.forward = placer.forward;
 }
 
 /// Map `ArmState` (+ current `PoseState`) to an `UpperState` variant.
@@ -637,7 +666,12 @@ fn next_pose_state(
     let moving = speed > idle_threshold || target.direction.magnitude_squared() > 0.001;
 
     let mapped = match player.locomotion {
-        LocomotionState::Grounded => {
+        // CoyoteTime exists to bridge one-frame ground-contact losses
+        // (seams, lips). Treat it as grounded: flicking to Airborne here
+        // would suspend the foot placer and splice a spurious Landing on
+        // every blip. The fall pose starts only when the grace period
+        // genuinely expires into Airborne.
+        LocomotionState::Grounded | LocomotionState::CoyoteTime(_) => {
             let gait = if target.crouch {
                 Gait::Crouch { walking: moving }
             } else if !moving {
@@ -682,16 +716,6 @@ fn next_pose_state(
             };
             PoseState::Airborne { kind, takeoff }
         }
-        LocomotionState::CoyoteTime(_) => {
-            let takeoff = Takeoff {
-                facing,
-                air_speed: player.air_speed,
-            };
-            PoseState::Airborne {
-                kind: AirKind::Fall,
-                takeoff,
-            }
-        }
     };
 
     // Splice Landing on the Airborne-ish → Grounded edge. Uses the prior
@@ -711,4 +735,32 @@ fn next_pose_state(
     }
 
     mapped
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// One-frame ground-contact losses (seams) put locomotion in
+    /// CoyoteTime; the pose must stay Grounded — flicking to Airborne
+    /// suspends the placer and splices a spurious Landing on return.
+    #[test]
+    fn coyote_time_keeps_grounded_pose() {
+        let mut player = PlayerState::default();
+        player.locomotion = LocomotionState::CoyoteTime(0.1);
+        let mut target = PlayerTargetState::default();
+        target.direction = Vector3::new(0.0, 0.0, 1.0);
+
+        let next = next_pose_state(
+            PoseState::Grounded { gait: Gait::Walk },
+            &player,
+            &target,
+            2.0,
+            0.1,
+            Vector3::new(0.0, 0.0, 1.0),
+            0.0,
+        );
+
+        assert!(matches!(next, PoseState::Grounded { gait: Gait::Walk }));
+    }
 }

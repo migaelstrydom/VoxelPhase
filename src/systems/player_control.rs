@@ -57,7 +57,7 @@ impl<'a> System<'a> for PlayerControlSystem {
             mut rotations,
             mut velocities,
             mut velocity_driven,
-            mut _debug_lines,
+            mut debug_lines,
             mut debug_overlays,
         ) = data;
         let dt = time.delta_seconds();
@@ -78,6 +78,26 @@ impl<'a> System<'a> for PlayerControlSystem {
             let is_grounded = controller.is_grounded();
             let move_dir = target.direction;
             let player_body = rb.0;
+
+            // Locomotion diagnostics: when the pose appears stuck in a
+            // fall while the capsule rests on the ground, these show
+            // whether grounding contact events or the sleep system are
+            // the culprit.
+            debug_lines.add(
+                "Player/Locomotion",
+                match state.locomotion {
+                    LocomotionState::Grounded => "Grounded".to_string(),
+                    LocomotionState::CoyoteTime(t) => format!("Coyote({t:.2})"),
+                    LocomotionState::Launching { .. } => "Launching".to_string(),
+                    LocomotionState::Airborne { .. } => "Airborne".to_string(),
+                },
+            );
+            debug_lines.add("Player/Grounded", format!("{is_grounded}"));
+            debug_lines.add(
+                "Player/Sleeping",
+                format!("{}", physics_res.world.is_sleeping(player_body)),
+            );
+            debug_lines.add("Player/VelY", format!("{:+.3}", vel.0.y));
             let horizontal_speed = (vel.0.x * vel.0.x + vel.0.z * vel.0.z).sqrt();
 
             // Tick all input-grace timers once per frame before use.

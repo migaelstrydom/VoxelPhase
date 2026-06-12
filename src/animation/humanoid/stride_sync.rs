@@ -27,13 +27,25 @@ pub const LEFT_PHASE: f32 = 0.0;
 /// Phase offset for the right foot/hand — opposite side of the cycle.
 pub const RIGHT_PHASE: f32 = PI;
 
+/// Maximum rate the stride phase may move at, in rad/s. Must exceed the
+/// fastest legitimate phase speed (`π / min_step_duration` ≈ 26 rad/s)
+/// so normal swings track exactly; anything faster is a tracking
+/// discontinuity being smoothed.
+const PHASE_SLEW_RATE: f32 = 35.0;
+
 /// Derive the current stride phase from the placer's per-foot state.
 ///
 /// `prev_phase` is returned when no foot is currently stepping so the
 /// phase doesn't snap to zero at idle, or in the single-frame window
 /// where both feet completed their steps on the same tick.
-pub fn phase_from_placer(placer: &FootPlacer, prev_phase: f32) -> f32 {
-    match (placer.left.phase, placer.right.phase) {
+///
+/// The raw target is discontinuous when swings overlap (flight phases
+/// at running speed): tracking switches feet mid-swing and the phase
+/// jumps, which snapped the arms visibly. The returned phase therefore
+/// chases the target at a bounded rate — continuous always, exact
+/// whenever the gait is clean.
+pub fn phase_from_placer(placer: &FootPlacer, prev_phase: f32, dt: f32) -> f32 {
+    let target = match (placer.left.phase, placer.right.phase) {
         (FootPhase::Stepping { t, duration, .. }, _) => {
             let u = (t / duration.max(1e-4)).clamp(0.0, 1.0);
             (PI + PI * u).rem_euclid(TAU)
@@ -42,8 +54,16 @@ pub fn phase_from_placer(placer: &FootPlacer, prev_phase: f32) -> f32 {
             let u = (t / duration.max(1e-4)).clamp(0.0, 1.0);
             (PI * u).rem_euclid(TAU)
         }
-        _ => prev_phase,
+        _ => return prev_phase,
+    };
+
+    // Shortest signed angular error, then a rate-limited step toward it.
+    let mut err = (target - prev_phase).rem_euclid(TAU);
+    if err > PI {
+        err -= TAU;
     }
+    let max_step = PHASE_SLEW_RATE * dt.max(0.0);
+    (prev_phase + err.clamp(-max_step, max_step)).rem_euclid(TAU)
 }
 
 /// Update hand position from arm gait cycle.

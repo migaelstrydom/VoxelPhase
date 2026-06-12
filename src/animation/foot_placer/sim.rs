@@ -1,0 +1,224 @@
+//! Shared scenario simulator for trace and invariant tests. Drives
+//! the placer with synthetic body motion over an analytic terrain
+//! height field, recording one snapshot per display frame.
+//!
+//! Test-only module (`#[cfg(test)]` in `mod.rs`).
+
+use nalgebra::{Point3, Vector2, Vector3};
+
+use super::config::FootPlacerConfig;
+use super::placer::{angle_diff, facing_from_yaw, FootPlacer, FootSide, PlacerCtx, PlacerFoot};
+
+pub const HIP_WIDTH: f32 = 0.12;
+pub const LEG_LENGTH: f32 = 0.5;
+pub const STANDING_HEIGHT: f32 = 0.425;
+
+/// Per-gait knobs the animator sources from the active `GaitPreset`.
+#[derive(Clone, Copy)]
+pub struct GaitParams {
+    pub stride_gain: f32,
+    pub step_height: f32,
+}
+
+impl GaitParams {
+    pub fn walk() -> Self {
+        Self {
+            stride_gain: 0.4,
+            step_height: 0.15,
+        }
+    }
+
+    pub fn crouch() -> Self {
+        Self {
+            stride_gain: 0.7,
+            step_height: 0.06,
+        }
+    }
+}
+
+/// Per-frame body inputs supplied by a scenario. `intent` is the
+/// player-requested direction (may be non-zero while velocity is
+/// still zero — that's the anticipation case).
+pub struct Input {
+    pub velocity: Vector3<f32>,
+    pub yaw: f32,
+    pub intent: Vector3<f32>,
+}
+
+impl Input {
+    /// Moving with intent matching velocity (the common case).
+    pub fn moving(velocity: Vector3<f32>, yaw: f32) -> Self {
+        Self {
+            velocity,
+            yaw,
+            intent: velocity,
+        }
+    }
+
+    pub fn still() -> Self {
+        Self {
+            velocity: Vector3::zeros(),
+            yaw: 0.0,
+            intent: Vector3::zeros(),
+        }
+    }
+}
+
+/// Snapshot of placer + body state at a frame boundary.
+pub struct Frame {
+    pub time: f32,
+    pub pelvis: Point3<f32>,
+    pub velocity: Vector3<f32>,
+    pub yaw: f32,
+    pub gait_phase: f32,
+    pub left: PlacerFoot,
+    pub right: PlacerFoot,
+}
+
+/// Run a scenario at a fixed display rate with walk-gait parameters.
+pub fn simulate(
+    frames: usize,
+    fps: f32,
+    height: impl Fn(f32, f32) -> f32,
+    input: impl Fn(usize) -> Input,
+) -> Vec<Frame> {
+    simulate_gait(frames, fps, GaitParams::walk(), height, input)
+}
+
+/// Run a scenario at a fixed display rate with explicit gait parameters.
+pub fn simulate_gait(
+    frames: usize,
+    fps: f32,
+    gait: GaitParams,
+    height: impl Fn(f32, f32) -> f32,
+    input: impl Fn(usize) -> Input,
+) -> Vec<Frame> {
+    simulate_var_dt(frames, |_| 1.0 / fps, gait, height, input)
+}
+
+/// Run a scenario with a per-frame display dt (jittered frame times).
+pub fn simulate_var_dt(
+    frames: usize,
+    dt_of: impl Fn(usize) -> f32,
+    gait: GaitParams,
+    height: impl Fn(f32, f32) -> f32,
+    input: impl Fn(usize) -> Input,
+) -> Vec<Frame> {
+    simulate_with_suspend(frames, dt_of, gait, height, input, |_| false)
+}
+
+/// Run a scenario with per-frame dt and a per-frame placer suspension
+/// flag — models airborne blips (terrain-seam contact loss, small hops)
+/// where the animator suspends the placer for a frame or two.
+/// Integrates the pelvis from per-frame velocity, derives per-foot
+/// ground contacts / normals from `height`, ticks the placer, snapshots
+/// each frame.
+pub fn simulate_with_suspend(
+    frames: usize,
+    dt_of: impl Fn(usize) -> f32,
+    gait: GaitParams,
+    height: impl Fn(f32, f32) -> f32,
+    input: impl Fn(usize) -> Input,
+    suspend: impl Fn(usize) -> bool,
+) -> Vec<Frame> {
+    let cfg = FootPlacerConfig::default();
+
+    let mut pelvis_xz = Vector2::new(0.0, 0.0);
+    let init_yaw = input(0).yaw;
+    let init_facing = facing_from_yaw(init_yaw);
+    let foot_y0 = height(0.0, 0.0);
+    let mut placer = FootPlacer::new(
+        Point3::new(0.0, foot_y0 + STANDING_HEIGHT, 0.0),
+        init_facing,
+        HIP_WIDTH,
+        foot_y0,
+    );
+    let mut last_yaw = init_yaw;
+    let mut time = 0.0;
+    let mut out = Vec::with_capacity(frames);
+
+    for f in 0..frames {
+        let dt = dt_of(f);
+        let Input {
+            velocity,
+            yaw,
+            intent,
+        } = input(f);
+        let yaw_rate = angle_diff(yaw, last_yaw) / dt;
+        last_yaw = yaw;
+        time += dt;
+
+        pelvis_xz.x += velocity.x * dt;
+        pelvis_xz.y += velocity.z * dt;
+        let pelvis = Point3::new(
+            pelvis_xz.x,
+            height(pelvis_xz.x, pelvis_xz.y) + STANDING_HEIGHT,
+            pelvis_xz.y,
+        );
+
+        // Probes aim at each foot's anchor (landing target while
+        // stepping), matching the game's probe configuration.
+        let probe = |p: Point3<f32>| {
+            let y = height(p.x, p.z);
+            (Some(Point3::new(p.x, y, p.z)), normal_at(&height, p.x, p.z))
+        };
+        let (left_ground, left_ground_normal) = probe(placer.left.probe_anchor());
+        let (right_ground, right_ground_normal) = probe(placer.right.probe_anchor());
+
+        placer.set_suspended(suspend(f));
+
+        let ctx = PlacerCtx {
+            dt,
+            pelvis,
+            velocity,
+            intent_direction: intent,
+            yaw,
+            yaw_rate,
+            hip_width: HIP_WIDTH,
+            leg_length: LEG_LENGTH,
+            standing_height: STANDING_HEIGHT,
+            foot_y_fallback: pelvis.y - STANDING_HEIGHT,
+            step_height: gait.step_height,
+            stride_gain: gait.stride_gain,
+            left_ground_normal,
+            right_ground_normal,
+            left_ground,
+            right_ground,
+            config: &cfg,
+        };
+        placer.tick(&ctx);
+
+        out.push(Frame {
+            time,
+            pelvis,
+            velocity,
+            yaw,
+            gait_phase: placer.gait_phase(),
+            left: placer.left.clone(),
+            right: placer.right.clone(),
+        });
+    }
+    out
+}
+
+/// Terrain normal from central differences of the height field.
+fn normal_at(height: &impl Fn(f32, f32) -> f32, x: f32, z: f32) -> Vector3<f32> {
+    let e = 0.05;
+    let dx = (height(x + e, z) - height(x - e, z)) / (2.0 * e);
+    let dz = (height(x, z + e) - height(x, z - e)) / (2.0 * e);
+    Vector3::new(-dx, 1.0, -dz).normalize()
+}
+
+/// Takeoff events (side + frame index) extracted from a recording.
+pub fn takeoffs(frames: &[Frame]) -> Vec<(FootSide, usize)> {
+    let mut events = Vec::new();
+    for (i, pair) in frames.windows(2).enumerate() {
+        if pair[0].left.is_planted() && pair[1].left.is_stepping() {
+            events.push((FootSide::Left, i + 1));
+        }
+        if pair[0].right.is_planted() && pair[1].right.is_stepping() {
+            events.push((FootSide::Right, i + 1));
+        }
+    }
+    events
+}

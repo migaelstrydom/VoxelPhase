@@ -10,13 +10,8 @@ use crate::rendering::Colour;
 /// stay on `CharacterRigConfig`.
 #[derive(Clone, Copy, Debug)]
 pub struct GaitPreset {
-    /// How far forward the foot reaches per full cycle.
-    pub stride_length: f32,
     /// Peak foot lift during swing.
     pub step_height: f32,
-    /// Stride-wheel advance multiplier. Currently unused (foot-plant sync
-    /// is driven entirely by `stride_length`); kept for future tuning.
-    pub frequency_mul: f32,
     /// Forward/backward swing amplitude for the arms.
     pub arm_swing_amplitude: f32,
     /// Maximum shoulder twist angle in radians.
@@ -34,9 +29,10 @@ pub struct GaitPreset {
     /// it). Values below 1 preserve the divergent component of the LIP
     /// pendulum, so the body passes over the planted foot and continues.
     /// Lower = longer, more committed strides; higher = shorter, more
-    /// controlled strides. Step trigger scales with the same quantity so
-    /// the planted foot travels symmetrically from `+gain·v/ω` ahead to
-    /// `-gain·v/ω` behind the hip before the next step fires.
+    /// controlled strides. Step trigger and gait cadence derive from the
+    /// same quantity (`GaitTiming`): the planted foot travels
+    /// symmetrically from `+gain·v/ω` ahead to `-gain·v/ω` behind the
+    /// hip per step, so hip travel per cycle is `4·gain·v/ω`.
     pub stride_gain: f32,
 }
 
@@ -101,8 +97,6 @@ pub struct CharacterRigConfig {
     pub idle_threshold: f32,
     /// Height of the step arc when foot is swinging.
     pub step_height: f32,
-    /// Total stride length (distance covered in one full gait cycle).
-    pub stride_length: f32,
     /// Pelvis height as fraction of leg length (1.0 = fully extended).
     pub standing_height_ratio: f32,
 
@@ -201,7 +195,6 @@ impl Default for CharacterRigConfig {
             // Gait parameters
             idle_threshold: 0.1,
             step_height: 0.15,
-            stride_length: 0.4,
             standing_height_ratio: 0.85,
 
             // Upper body animation
@@ -210,8 +203,11 @@ impl Default for CharacterRigConfig {
             head_tilt_factor: 0.01,
             head_bob_amplitude: 0.02,
 
-            // Probe parameters
-            probe_length_factor: 1.3,
+            // Probe parameters. Foot probes aim from the hip at the
+            // swing's landing target; the length must cover targets a
+            // full stride ahead and below the feet (downhill landings),
+            // not just the standing hip→ground distance.
+            probe_length_factor: 1.8,
 
             // Colors - metallic blue
             body_colour: Colour::new(0.2, 0.4, 0.85, 1.0),
@@ -223,31 +219,25 @@ impl Default for CharacterRigConfig {
 
             gait_presets: GaitPresets {
                 walk: GaitPreset {
-                    stride_length: 0.4,
                     step_height: 0.15,
-                    frequency_mul: 1.0,
                     arm_swing_amplitude: 0.3,
                     shoulder_twist_max: 0.15,
                     head_bob_amplitude: 0.02,
                     pelvis_crouch_offset: 0.0,
                     torso_pitch: 0.08,
-                    stride_gain: 0.2,
+                    stride_gain: 0.4,
                 },
                 sprint: GaitPreset {
-                    stride_length: 0.4 * 1.25,
                     step_height: 0.15 * 1.2,
-                    frequency_mul: 1.35,
                     arm_swing_amplitude: 0.3 * 1.2,
                     shoulder_twist_max: 0.15 * 1.3,
                     head_bob_amplitude: 0.02 * 1.4,
                     pelvis_crouch_offset: 0.0,
                     torso_pitch: 0.20,
-                    stride_gain: 0.15,
+                    stride_gain: 0.3,
                 },
                 crouch_walk: GaitPreset {
-                    stride_length: 0.4 * 0.5,
                     step_height: 0.15 * 0.4,
-                    frequency_mul: 0.75,
                     arm_swing_amplitude: 0.3 * 0.3,
                     shoulder_twist_max: 0.15 * 0.4,
                     head_bob_amplitude: 0.02 * 0.3,
@@ -256,9 +246,7 @@ impl Default for CharacterRigConfig {
                     stride_gain: 0.7,
                 },
                 crouch_idle: GaitPreset {
-                    stride_length: 0.4 * 0.5,
                     step_height: 0.15 * 0.4,
-                    frequency_mul: 0.75,
                     arm_swing_amplitude: 0.3 * 0.3,
                     shoulder_twist_max: 0.15 * 0.4,
                     head_bob_amplitude: 0.02 * 0.3,

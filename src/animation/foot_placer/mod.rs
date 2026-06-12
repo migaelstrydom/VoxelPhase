@@ -1,15 +1,29 @@
 //! Capture-point–based procedural foot placement.
 //!
-//! See `docs/FOOT_PLACEMENT_PLAN.md`. Stage 1: module is wired into
-//! `CharacterAnimator` and ticks each frame, but foot xz is still
-//! produced by `PoseState::Grounded::sample`. This module only visualises
-//! where steps *would* fire so the capture-point math can be tuned
-//! against real gameplay before it becomes authoritative.
+//! See `docs/FOOT_PLACEMENT_PLAN.md`. The placer owns foot xz (and y
+//! via probes) for all grounded states. It runs internally substepped
+//! so step sequencing is frame-rate independent — see `placer.rs` for
+//! the component diagram.
 
 mod capture_point;
+mod clock;
 mod config;
 mod placer;
+mod recorder;
 mod swing;
+mod timing;
+
+#[cfg(test)]
+mod invariants;
+#[cfg(test)]
+mod replay;
+#[cfg(test)]
+mod scenarios;
+#[cfg(test)]
+mod sim;
+#[cfg(test)]
+mod trace;
 
 pub use config::FootPlacerConfig;
 pub use placer::{FootPhase, FootPlacer, FootSide, PlacerCtx, PlacerFoot};
+pub use recorder::PlacerRecorder;

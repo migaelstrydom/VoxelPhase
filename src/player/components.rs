@@ -275,9 +275,15 @@ impl LocomotionState {
                 AirSteering::Locked { velocity, .. } => locked(*velocity),
                 AirSteering::Responsive => steered(ground_speed, ground_accel),
             },
+            // Coyote time bridges one-frame ground-contact losses (terrain
+            // seams) as well as real ledge walk-offs, so it must keep
+            // ground handling. Steering with the air model here injects a
+            // velocity perturbation at the seam-crossing rate — strong
+            // enough to entrain gait timing. `clamp_up` still cancels any
+            // upward velocity so a walk-off starts falling immediately.
             LocomotionState::CoyoteTime(_) => MovementRule {
                 clamp_up: true,
-                ..steered(air_speed, air_accel)
+                ..steered(ground_speed, ground_accel)
             },
             LocomotionState::Airborne { steering, .. } => match steering {
                 AirSteering::Locked { velocity, .. } => locked(*velocity),
