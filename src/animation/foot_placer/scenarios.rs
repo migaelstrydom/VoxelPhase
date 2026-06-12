@@ -114,6 +114,22 @@ pub fn all() -> Vec<Scenario> {
             input: walk_2ms_after_pause,
         },
         Scenario {
+            name: "steep_up",
+            frames: 120,
+            fps: 30.0,
+            gait: GaitParams::walk(),
+            height: incline_45,
+            input: walk_2ms_after_pause,
+        },
+        Scenario {
+            name: "steep_down_run",
+            frames: 120,
+            fps: 30.0,
+            gait: GaitParams::walk(),
+            height: decline_45,
+            input: run_ramp_5ms,
+        },
+        Scenario {
             name: "rough",
             frames: 120,
             fps: 30.0,
@@ -170,6 +186,17 @@ pub fn incline_20(_x: f32, z: f32) -> f32 {
 /// 20% grade falling along +z.
 pub fn decline_20(_x: f32, z: f32) -> f32 {
     -0.2 * z
+}
+
+/// 45% grade rising along +z — the steep-scramble regime where the
+/// reach budget must shrink with slope.
+pub fn incline_45(_x: f32, z: f32) -> f32 {
+    0.45 * z
+}
+
+/// 45% grade falling along +z.
+pub fn decline_45(_x: f32, z: f32) -> f32 {
+    -0.45 * z
 }
 
 /// Bumpy ground: ±~8 cm undulations at sub-metre wavelengths.

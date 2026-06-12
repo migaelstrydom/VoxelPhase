@@ -539,8 +539,17 @@ tests pass, capture the real input stream and replay it offline:
 3. `record_replay_round_trip` (always-on test) pins the loop bit-exactly
    without the game.
 
-Caveat: the replay assumes the default `FootPlacerConfig`; mirror any
-config tuning into `replay.rs` before trusting the divergence number.
+Caveats:
+- The replay assumes the default `FootPlacerConfig`; mirror any config
+  tuning into `replay.rs` before trusting the divergence number.
+- A recording is only *closed-loop faithful* to the code that made it:
+  probe contacts were aimed at that placer's anchors. Replaying through
+  materially changed placer code feeds it terrain sampled at the wrong
+  spots — exact on flat/uniform-slope ground (plane extrapolation), but
+  distorting on curved terrain. Use recordings to diagnose and to
+  validate *small* changes; after a behavioural change on non-flat
+  terrain, validate with the synthetic scenarios and a fresh in-game
+  recording.
 
 ### Gotchas already hit (don't re-burn these)
 
@@ -566,10 +575,20 @@ config tuning into `replay.rs` before trusting the divergence number.
 
 ### Known-open follow-ups
 
-- **Slope-scramble validation.** The phase-authority + catch-up stack is
-  validated on flat-ground recordings; sloped scrambling (frequent in
-  play) additionally stresses the reach geometry and probe behaviour.
-  Needs one in-game recording on slopes as acceptance data.
+- **Slope handling (landed, needs in-game acceptance).** The
+  slope-scramble recording showed plants landing beyond the leg on
+  descents (planted overruns to +0.30 m, swings to +0.40 m) because the
+  reach budget assumed flat ground. Fixes: `slope_aware_reach_budget`
+  solves `r² + (v₀ + g·r)² = ext²` for the downhill stance endpoint
+  (worst |slope| under either foot, from the probe normals — stride
+  shortens and cadence rises on any grade, both directions), and the
+  overstretch opening gate uses full 3D radial speed (the xz-only gate
+  was blind to vertical separation). `steep_up` / `steep_down_run`
+  (45%) scenarios joined the registry and the stretch invariant
+  (`steep_down` fails at 0.642 m vs the 0.615 m limit without the
+  slope-aware budget). Sprinting down 45% now reads as bounding (long
+  flights, brief contacts) — physically right, but confirm it looks
+  good in game.
 - **Pelvis planner (Stage 5).** Pelvis is still a passive physics output; biomechanical rise/fall/sway not yet derived from support state.
 - **Torso-yaw decoupling (Stage 5.5).** Visible torso yaw is still pinned to input yaw while feet step discretely.
 - **In-game probe misses on deep drop-offs.** A swing landing more than ~`0.39 m` below the feet exceeds the probe length (`probe_length_factor` = 1.8) and falls back to the flat pelvis-relative height. Walking off a cliff edge transitions to Airborne anyway, so this has no visible window so far.

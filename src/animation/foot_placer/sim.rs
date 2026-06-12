@@ -134,6 +134,7 @@ pub fn simulate_with_suspend(
         foot_y0,
     );
     let mut last_yaw = init_yaw;
+    let mut prev_pelvis_y = foot_y0 + STANDING_HEIGHT;
     let mut time = 0.0;
     let mut out = Vec::with_capacity(frames);
 
@@ -155,6 +156,11 @@ pub fn simulate_with_suspend(
             height(pelvis_xz.x, pelvis_xz.y) + STANDING_HEIGHT,
             pelvis_xz.y,
         );
+        // The pelvis follows the terrain, so the placer must see the
+        // implied vertical velocity — the game's physics velocity has
+        // it, and the overstretch opening gate reads it on slopes.
+        let velocity = Vector3::new(velocity.x, (pelvis.y - prev_pelvis_y) / dt, velocity.z);
+        prev_pelvis_y = pelvis.y;
 
         // Probes aim at each foot's anchor (landing target while
         // stepping), matching the game's probe configuration.

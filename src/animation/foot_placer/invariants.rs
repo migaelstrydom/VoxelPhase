@@ -316,6 +316,23 @@ fn legs_never_overstretch() {
             Input::moving(Vector3::new(0.0, 0.0, 2.0), 0.0)
         }
     });
+    let steep_up = simulate(150, 60.0, scenarios::incline_45, |f| {
+        if f < 15 {
+            Input::still()
+        } else {
+            Input::moving(Vector3::new(0.0, 0.0, 2.0), 0.0)
+        }
+    });
+    // Game-accel sprint down a 45% grade — the slope-scramble regime
+    // where the flat reach budget let plants land beyond the leg.
+    let steep_down = simulate(180, 60.0, scenarios::decline_45, |f| {
+        if f < 15 {
+            Input::still()
+        } else {
+            let speed = (40.0 * (f - 15) as f32 / 60.0).min(5.0);
+            Input::moving(Vector3::new(0.0, 0.0, speed), 0.0)
+        }
+    });
 
     let cfg = FootPlacerConfig::default();
     let max_ext = sim::LEG_LENGTH * cfg.max_leg_stretch_ratio;
@@ -324,6 +341,8 @@ fn legs_never_overstretch() {
         ("reversal", &reversal, 0),
         ("slide", &slide, 24),
         ("incline", &incline, 0),
+        ("steep_up", &steep_up, 0),
+        ("steep_down", &steep_down, 0),
     ] {
         assert_stretch_within(name, frames, max_ext, skip);
     }

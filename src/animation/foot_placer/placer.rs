@@ -334,7 +334,18 @@ impl FootPlacer {
         };
         let moving = has_intent || speed > cfg.moving_speed_threshold;
 
-        let max_reach = horizontal_reach_budget(ctx);
+        // The reach budget shrinks with terrain slope: the downhill
+        // stance endpoint sits `slope · r` below the rest vertical, so
+        // plants and cadence must assume the worst endpoint or the
+        // planner aims landings the leg cannot reach (seen as straight-
+        // leg extensions descending, knees-up scrambling ascending, and
+        // overstretch re-pacing the gait into hops).
+        let travel = if speed > cfg.moving_speed_threshold {
+            Vector2::new(horizontal_velocity.x, horizontal_velocity.z) / speed
+        } else {
+            Vector2::new(facing.x, facing.z)
+        };
+        let max_reach = slope_aware_reach_budget(ctx, travel);
         let timing = GaitTiming::derive(
             gait_speed,
             ctx.standing_height,
@@ -413,7 +424,11 @@ impl FootPlacer {
                 let hip = hip_position(foot.side, ctx, facing);
                 let away = hip - foot.planted_position;
                 let distance = away.norm().max(1e-4);
-                let radial_speed = (away.x * ctx.velocity.x + away.z * ctx.velocity.z) / distance;
+                // Full 3D radial speed: on slopes the hip moves away
+                // from a planted foot vertically as much as
+                // horizontally, and an xz-only opening gate is blind
+                // to that half of the motion.
+                let radial_speed = away.dot(&ctx.velocity) / distance;
                 if radial_speed > 0.0 && distance >= max_leg_extension(ctx) {
                     self.clock
                         .request_release(foot.side, ReleaseKind::Overstretch);
@@ -888,6 +903,38 @@ fn horizontal_reach_budget(ctx: &PlacerCtx<'_>) -> f32 {
     let ext = max_leg_extension(ctx);
     let vertical = (ctx.pelvis.y - ctx.foot_y_fallback).max(0.0);
     (ext * ext - vertical * vertical).max(0.0).sqrt()
+}
+
+/// Reach budget shrunk for terrain slope along the travel direction.
+/// A stance endpoint at horizontal distance `r` on ground dropping `g`
+/// per metre sits `v₀ + g·r` below the hip, so the leg constraint is
+/// `r² + (v₀ + g·r)² = ext²` — solved for `r` (positive root). One
+/// stance endpoint is always the downhill one regardless of travel
+/// direction, so the worst |slope| under either foot binds. `g = 0`
+/// reduces to `horizontal_reach_budget`.
+fn slope_aware_reach_budget(ctx: &PlacerCtx<'_>, travel: Vector2<f32>) -> f32 {
+    let ext = max_leg_extension(ctx);
+    let v0 = (ctx.pelvis.y - ctx.foot_y_fallback).max(0.0);
+    let g = terrain_slope_along(ctx, travel);
+    let a = 1.0 + g * g;
+    let b = v0 * g;
+    let c = v0 * v0 - ext * ext;
+    let disc = (b * b - a * c).max(0.0);
+    ((disc.sqrt() - b) / a).max(0.0)
+}
+
+/// Worst height change per metre of horizontal travel under either
+/// foot, from the probe ground normals: `|n·t̂| / n.y` for travel
+/// direction `t̂`. Zero when no usable contact (flat assumption).
+fn terrain_slope_along(ctx: &PlacerCtx<'_>, travel: Vector2<f32>) -> f32 {
+    let mut worst = 0.0f32;
+    for normal in [ctx.left_ground_normal, ctx.right_ground_normal] {
+        if normal.y > 0.2 {
+            let slope = (normal.x * travel.x + normal.z * travel.y) / normal.y;
+            worst = worst.max(slope.abs());
+        }
+    }
+    worst
 }
 
 /// This foot's hip joint, approximated as the pelvis plus the lateral
