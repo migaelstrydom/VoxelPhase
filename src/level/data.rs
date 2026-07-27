@@ -7,8 +7,8 @@
 use serde::Deserialize;
 
 use crate::app::spawnables::{
-    BeachBallDef, BoxDef, BoxWallDef, CapsuleDef, CrateDef, DodecahedronDef, DolosDef, DominoDef,
-    FencePostDef, GlowingOrbDef, HeavyCrateDef, HexPrismDef, HoneycombWallDef, HouseDef,
+    BananaDef, BeachBallDef, BoxDef, BoxWallDef, CapsuleDef, CrateDef, DodecahedronDef, DolosDef,
+    DominoDef, FencePostDef, GlowingOrbDef, HeavyCrateDef, HexPrismDef, HoneycombWallDef, HouseDef,
     IcosahedronDef, JackDef, JengaDef, MenhirDef, OctahedronDef, PendulumDef, PlankBridgeDef,
     PlankDef, PlayWheelDef, PyramidDef, SeesawDef, Spawnable, StackDef, StackItemDef, TableDef,
     TempleDef, TetrahedronDef, TowerDef, TrampolineDef, TrilithonDef, VoussoirArchDef,
@@ -296,6 +296,24 @@ pub enum BoxStyle {
 /// 3. Add a conversion arm in `to_spawnable()`.
 #[derive(Deserialize)]
 pub enum LevelObject {
+    /// Curved fruit: swept mesh, capsule-chain collider, very low friction.
+    Banana {
+        pos: (f32, f32, f32),
+        #[serde(default = "BananaDef::default_length")]
+        length: f32,
+        #[serde(default = "BananaDef::default_thickness")]
+        thickness: f32,
+        #[serde(default = "BananaDef::default_curvature")]
+        curvature: f32,
+        #[serde(default = "BananaDef::default_ripeness")]
+        ripeness: f32,
+        #[serde(default = "BananaDef::default_density")]
+        density: f32,
+        #[serde(default = "BananaDef::default_restitution")]
+        restitution: f32,
+        #[serde(default = "BananaDef::default_friction")]
+        friction: f32,
+    },
     BeachBall {
         pos: (f32, f32, f32),
     },
@@ -694,6 +712,26 @@ impl LevelObject {
     /// load time, not per frame.
     pub fn to_spawnable(&self) -> Box<dyn Spawnable> {
         match self {
+            LevelObject::Banana {
+                pos,
+                length,
+                thickness,
+                curvature,
+                ripeness,
+                density,
+                restitution,
+                friction,
+            } => Box::new(BananaDef {
+                pos: *pos,
+                length: *length,
+                thickness: *thickness,
+                curvature: *curvature,
+                ripeness: *ripeness,
+                density: *density,
+                restitution: *restitution,
+                friction: *friction,
+            }),
+
             LevelObject::BeachBall { pos } => Box::new(BeachBallDef { pos: *pos }),
 
             LevelObject::GlowingOrb { pos, colour, glow } => Box::new(GlowingOrbDef {

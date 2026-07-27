@@ -1,3 +1,4 @@
+mod banana;
 mod beach_ball;
 mod box_object;
 mod capsule;
@@ -30,6 +31,7 @@ mod trilithon;
 mod voussoir_arch;
 mod wall;
 
+pub use banana::BananaDef;
 pub use beach_ball::BeachBallDef;
 pub use box_object::{BoxDef, CrateDef, HeavyCrateDef, PlankDef};
 pub use capsule::CapsuleDef;

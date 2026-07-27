@@ -437,3 +437,4 @@ Optional components:
 | Multi-entity | `pyramid.rs` | Grid of independent bodies from one spawnable |
 | Compound body | `table.rs` | Multiple colliders on one body + fracture |
 | Box-based | `box_object.rs` | `cuboid_model` + `ColliderDesc::box_shape` |
+| Swept curved mesh | `banana.rs` | Parametric surface + capsule-chain compound collider |
