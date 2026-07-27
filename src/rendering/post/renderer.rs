@@ -50,7 +50,25 @@ pub struct PostProcessConfig {
     pub bloom_intensity: f32,
 
     /// Linear exposure multiplier applied before the filmic curve.
+    ///
+    /// Below 1.0 because the test scene is built from light-coloured surfaces
+    /// (bright grass, near-white stone) that otherwise sit in the shoulder of
+    /// the filmic curve, washing the whole frame out. This is a display
+    /// setting: it dims the scene and the glow together, and deliberately does
+    /// not change which pixels pass the bloom threshold — that test is on
+    /// pre-exposure scene radiance.
     pub exposure: f32,
+
+    /// How strongly the tonemap preserves hue, in [0, 1].
+    ///
+    /// 0 is the per-channel ACES curve, which desaturates bright colours
+    /// towards white by design. 1 curves luminance alone and rescales chroma to
+    /// match, so a saturated emissive surface keeps its colour instead of
+    /// bleaching. Intermediate values blend the two.
+    ///
+    /// Shared by every stage that resolves HDR — composite, bloom overlay and
+    /// the water surface — so they cannot disagree about how a colour resolves.
+    pub hue_preservation: f32,
 }
 
 impl Default for PostProcessConfig {
@@ -61,7 +79,8 @@ impl Default for PostProcessConfig {
             bloom_threshold: 1.3,
             bloom_knee: 0.4,
             bloom_intensity: 0.7,
-            exposure: 1.0,
+            exposure: 0.7,
+            hue_preservation: 1.0,
         }
     }
 }
@@ -339,7 +358,12 @@ impl PostProcessRenderer {
 
     /// Push-constant payload shared by the composite and bloom overlay stages.
     fn tuning_params(&self) -> [f32; 4] {
-        [self.config.bloom_intensity, self.config.exposure, 0.0, 0.0]
+        [
+            self.config.bloom_intensity,
+            self.config.exposure,
+            self.config.hue_preservation,
+            0.0,
+        ]
     }
 
     /// Record one fullscreen pass: begin render pass, bind, draw 3 vertices, end.

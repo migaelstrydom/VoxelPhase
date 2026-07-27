@@ -6,23 +6,53 @@ High-level roadmap for the game's lighting system. Each stage below is a self-co
 
 - Directional sun light (one), sourced from `SkyRenderer` so shaded geometry and
   the visible sun disc agree. Colour, intensity and ambient live in `SceneLighting`.
+- Point lights (`src/lighting/`): a `PointLight` component, a `LightCollector`
+  that picks the frame's most relevant lights, and an `ActiveLights` resource
+  uploaded to a uniform buffer at set 0, binding 1.
 - Blinn-Phong diffuse + specular with Schlick Fresnel, shared via
-  `shader/lighting.glsl`. Per-material roughness / metallic / emissive / rim
-  (`SurfaceFinish`, `Emission`) delivered as fragment push constants.
+  `shader/lighting.glsl` and applied to sun and point lights alike. Per-material
+  roughness / metallic / emissive / rim (`SurfaceFinish`, `Emission`) delivered
+  as fragment push constants.
 - HDR scene target (`R16G16B16A16_SFLOAT`) resolved by `src/rendering/post/`:
-  bright pass → separable blur → ACES tonemap composite, with the bloom itself
-  added in a final additive pass after all transparent geometry.
+  bright pass → separable blur → tonemap composite, with the bloom itself screen
+  blended in a final pass after all transparent geometry.
 - Procedural sky (`sky.vert/frag`).
-- No shadows, no point lights, no AO.
+- No shadows, no AO.
 
-**Stage status:** 1 not started · **2 done** · 3 not started · **4 done** ·
+**Stage status:** 1 not started · **2 done** · **3 done** · **4 done** ·
 5–7 not started.
+
+Known gaps from stage 3. The 16-light cap is *global per frame*, not per
+fragment: when more than sixteen lights are relevant the collector drops whole
+lights rather than degrading gracefully, and a light crossing the cap boundary
+will pop. Neither is worth handling until scenes routinely carry more than
+sixteen lights; clustered shading is the upgrade path, and the component, the
+collector and the BRDF all survive that change — only the upload and the shader
+loop are replaced. Point lights cast no shadows, so they light through walls.
+Only `triangle.frag` reads them, which covers terrain and models; water,
+particles, fire and sky are unlit by them. `Emission` (a surface that looks
+bright) and `PointLight` (a thing that lights its surroundings) are deliberately
+separate concerns, so an object that should do both carries both and their
+colours are kept in step by hand.
 
 Known gaps from stage 4: only the opaque pass is HDR. Water, particles, fire and
 the overlay render after the composite, straight onto the LDR swapchain, so they
-do not *generate* bloom and are not tonemapped (water applies the ACES curve
-itself to stay consistent). Moving the transparent pass into the HDR target
-would need a separate copy of the opaque result for water refraction to sample.
+do not *generate* bloom and are not tonemapped (water resolves HDR itself, using
+the same exposure and curve as the composite to stay consistent). Moving the
+transparent pass into the HDR target would need a separate copy of the opaque
+result for water refraction to sample.
+
+Also from stage 4: the tonemap can preserve hue instead of desaturating towards
+white, on a strength dial (`PostProcessConfig::hue_preservation`, 0 = per-channel
+ACES, 1 = fully hue-preserving). Saturated emissive surfaces keep their colour
+where per-channel ACES bleaches them. The trade is that a hue-preserved colour
+never bleaches to white however bright it gets, which is not how film behaves —
+dialling back towards 0 is what buys the filmic look back. Emissive brightness
+(`Emission::strength`) is expressed as luminance rather than as a multiplier on
+colour, so one number means the same brightness at any hue and is directly
+comparable against the bloom threshold. `PointLight::intensity` follows the
+same convention, so a light's colour and its cast brightness can be tuned
+independently.
 
 Because the bloom overlay runs last, halos are drawn over transparent geometry —
 correct for water, but it also means bright halos tint the debug text overlay.
@@ -47,7 +77,9 @@ Scope is a shader-local change plus material-data plumbing.
 
 ### Stage 3 — Point Lights (Small Fixed Cap)
 
-Support a modest number of point lights (position, color, range, intensity) — e.g. torches, fire, the glowing orb. Each shaded surface sums contributions from the N nearest lights, with N capped (4–8) for simplicity. No clustered / Forward+ machinery at this stage; a flat per-object light list is sufficient for a platformer.
+Support a modest number of point lights (position, color, range, intensity) — e.g. torches, fire, the glowing orb. No clustered / Forward+ machinery at this stage.
+
+A single global per-frame light set is used rather than a per-object list: a terrain chunk spans many lights, so choosing lights per object gives neighbouring chunks different light sets and a visible discontinuity at the seam. One capped, scored, deterministically ordered array is uploaded per frame and every lit fragment loops over it, bounded by the live count.
 
 Spotlights can slot into the same infrastructure later if needed.
 

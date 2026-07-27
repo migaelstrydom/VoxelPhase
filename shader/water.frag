@@ -23,7 +23,7 @@ layout(push_constant) uniform FragPushConstants {
     layout(offset = 128) vec4 cameraPos;
     layout(offset = 144) vec4 sunDir;
     layout(offset = 160) vec4 projParams;    // (near, far, time, unused)
-    layout(offset = 176) vec4 screenParams;  // (width, height, unused, unused)
+    layout(offset = 176) vec4 screenParams;  // (width, height, hue preservation, exposure)
 } fpc;
 
 layout(location = 0) out vec4 outColor;
@@ -183,6 +183,8 @@ void main() {
 
     // The water pass draws onto the swapchain, which already holds the
     // tonemapped scene, but `colorSampler` is the raw HDR scene target. Apply
-    // the same curve here so refracted terrain matches the surrounding pixels.
-    outColor = vec4(tonemapACES(color), 1.0);
+    // the same exposure and curve the composite pass used, or refracted terrain
+    // resolves differently from the terrain beside it and the water reads as a
+    // brightness seam rather than a surface.
+    outColor = vec4(tonemapScene(color * fpc.screenParams.w, fpc.screenParams.z), 1.0);
 }

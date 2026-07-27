@@ -21,6 +21,7 @@ use nalgebra::{Matrix4, Vector3};
 use crate::core::device::ManagedDevice;
 use crate::core::error::{BufferOperation, EngineError, EngineResult};
 use crate::core::vulkan_context::find_memorytype_index;
+use crate::lighting::{ActiveLight, ActiveLights, PointLight, MAX_ACTIVE_LIGHTS};
 use crate::rendering::colour::Colour;
 use crate::rendering::deletion_queue::DeletionQueue;
 use crate::rendering::vertex::Vertex;
@@ -47,6 +48,100 @@ pub struct SceneUbo {
 
     /// rgb = linear ambient fill colour, w unused.
     pub ambient_colour: [f32; 4],
+}
+
+/// A single point light as the GPU sees it.
+///
+/// Two `vec4`s, which is exactly std140's array-element stride for this data —
+/// no per-element padding is needed. Layout must match `PointLight` in
+/// shader/lights.glsl.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[repr(C)]
+pub struct GpuPointLight {
+    /// xyz = world position, w = range (distance at which contribution is zero).
+    pub position_range: [f32; 4],
+
+    /// rgb = linear colour (authored magnitude), w = scale bringing that
+    /// colour to the authored intensity luminance. `shadePoint` in
+    /// shader/lighting.glsl multiplies the two, so it is agnostic to which
+    /// convention produced `w`.
+    pub colour_intensity: [f32; 4],
+}
+
+impl GpuPointLight {
+    /// Pack a collected light. Alpha of the colour is dropped; the light array
+    /// has no use for it.
+    ///
+    /// The intensity-to-scale conversion (`PointLight::radiance_scale`)
+    /// happens here, at the CPU/GPU boundary, mirroring how
+    /// `Material::surface_params` converts `Emission::strength`. `ActiveLight`
+    /// itself keeps carrying the authored `colour` and `intensity` unchanged.
+    fn from_active(light: &ActiveLight) -> Self {
+        Self {
+            position_range: [
+                light.position.x,
+                light.position.y,
+                light.position.z,
+                light.range,
+            ],
+            colour_intensity: [
+                light.colour.r,
+                light.colour.g,
+                light.colour.b,
+                PointLight::new(light.colour, light.intensity, light.range).radiance_scale(),
+            ],
+        }
+    }
+}
+
+/// Uniform buffer object for the per-frame point light set (set 0, binding 1).
+///
+/// Layout must match the `LightUbo` block in shader/lights.glsl. std140 aligns
+/// the array to 16 bytes, so the `u32` count needs an explicit 12-byte tail
+/// before `lights` begins — see the layout assertions in this module's tests.
+#[derive(Clone, Copy, Debug)]
+#[repr(C)]
+pub struct LightUbo {
+    /// Number of entries in `lights` that are live. The shader loop is bounded
+    /// by this rather than by `MAX_ACTIVE_LIGHTS`.
+    pub count: u32,
+
+    /// Padding to push `lights` to the 16-byte alignment std140 requires for
+    /// an array. Never read by the shader.
+    pub _padding: [u32; 3],
+
+    /// The light array. Entries at or beyond `count` are zeroed rather than
+    /// stale, so a shader that ignores `count` dims rather than corrupts.
+    pub lights: [GpuPointLight; MAX_ACTIVE_LIGHTS],
+}
+
+impl LightUbo {
+    /// Pack the collected light set for upload.
+    ///
+    /// Pure — no Vulkan involved — so the packing can be tested without a
+    /// device. Lights beyond `MAX_ACTIVE_LIGHTS` cannot occur (the collector
+    /// caps at that), but are truncated defensively rather than panicking.
+    pub fn from_active_lights(active: &ActiveLights) -> Self {
+        let mut ubo = Self::default();
+        let lights = active.lights();
+        let count = lights.len().min(MAX_ACTIVE_LIGHTS);
+
+        for (slot, light) in ubo.lights.iter_mut().zip(&lights[..count]) {
+            *slot = GpuPointLight::from_active(light);
+        }
+        ubo.count = count as u32;
+        ubo
+    }
+}
+
+impl Default for LightUbo {
+    fn default() -> Self {
+        Self {
+            count: 0,
+            _padding: [0; 3],
+            lights: [GpuPointLight::default(); MAX_ACTIVE_LIGHTS],
+        }
+    }
 }
 
 /// Per-frame lighting environment shared by every lit surface.
@@ -221,6 +316,7 @@ pub struct FrameData {
     pub vertex_buffer: ManagedBuffer,
     pub index_buffer: ManagedBuffer,
     pub scene_ubo_buffer: ManagedBuffer,
+    pub light_ubo_buffer: ManagedBuffer,
     device: Arc<ManagedDevice>,
     /// Buffers pending deletion (deferred until GPU is done with them).
     buffer_deletion_queue: DeletionQueue<ManagedBuffer>,
@@ -243,6 +339,7 @@ impl FrameData {
         let initial_vertex_size = mem::size_of::<Vertex>() as u64 * 1024;
         let initial_index_size = mem::size_of::<u32>() as u64 * 4096;
         let ubo_size = mem::size_of::<SceneUbo>() as u64;
+        let light_ubo_size = mem::size_of::<LightUbo>() as u64;
 
         let vertex_buffer = ManagedBuffer::new(
             Arc::clone(&device),
@@ -265,10 +362,30 @@ impl FrameData {
             vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
         )?;
 
+        let light_ubo_buffer = ManagedBuffer::new(
+            Arc::clone(&device),
+            light_ubo_size,
+            vk::BufferUsageFlags::UNIFORM_BUFFER,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+        )?;
+
+        // Vulkan does not guarantee zeroed memory on allocation. Write a zeroed
+        // `LightUbo` immediately so any renderer client that draws lit geometry
+        // before its first `update_light_ubo` call reads `count = 0` rather than
+        // whatever bytes the host-visible page happened to hold — an
+        // uninitialised count could otherwise drive a near-unbounded shader loop.
+        unsafe {
+            let ptr = light_ubo_buffer.map_memory(0, vk::MemoryMapFlags::empty())?;
+            let slice = std::slice::from_raw_parts_mut(ptr as *mut LightUbo, 1);
+            slice[0] = LightUbo::default();
+            light_ubo_buffer.unmap_memory();
+        }
+
         Ok(Self {
             vertex_buffer,
             index_buffer,
             scene_ubo_buffer,
+            light_ubo_buffer,
             device,
             buffer_deletion_queue: DeletionQueue::new(Self::FRAMES_IN_FLIGHT),
             frame_number: 0,
@@ -432,5 +549,188 @@ impl FrameData {
         }
 
         Ok(())
+    }
+
+    /// Upload the frame's point light set.
+    ///
+    /// Separate from the scene UBO because the two have different update
+    /// triggers: the scene block changes whenever the camera moves, the light
+    /// block only when the collected set changes.
+    pub fn update_light_ubo(&mut self, active: &ActiveLights) -> EngineResult<()> {
+        let ubo = LightUbo::from_active_lights(active);
+
+        unsafe {
+            let ptr = self
+                .light_ubo_buffer
+                .map_memory(0, vk::MemoryMapFlags::empty())?;
+            let slice = std::slice::from_raw_parts_mut(ptr as *mut LightUbo, 1);
+            slice[0] = ubo;
+            self.light_ubo_buffer.unmap_memory();
+        }
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use nalgebra::Vector3;
+
+    use crate::lighting::{LightCandidate, LightCollector, LightId, PointLight};
+
+    /// Build an `ActiveLights` holding `n` distinguishable lights by running the
+    /// real collector, so the tests exercise the same path the renderer does.
+    fn active_lights(n: usize) -> ActiveLights {
+        let candidates: Vec<_> = (0..n)
+            .map(|i| {
+                LightCandidate::new(
+                    LightId(i as u32),
+                    Vector3::new(i as f32, 0.0, 0.0),
+                    PointLight::new(Colour::rgb(1.0, 0.5, 0.25), 2.0, 100.0),
+                )
+            })
+            .collect();
+
+        let mut active = ActiveLights::default();
+        LightCollector::default().collect(Vector3::zeros(), candidates, &mut active);
+        active
+    }
+
+    #[test]
+    fn gpu_point_light_is_two_vec4s() {
+        assert_eq!(mem::size_of::<GpuPointLight>(), 32);
+        assert_eq!(mem::align_of::<GpuPointLight>(), 4);
+    }
+
+    #[test]
+    fn light_array_starts_at_a_std140_aligned_offset() {
+        // std140 requires an array of vec4-sized elements to begin on a 16-byte
+        // boundary. The count occupies the first 4 bytes, so the padding must
+        // carry it to 16 — if this fails the whole array is shifted and every
+        // light reads garbage.
+        let ubo = LightUbo::default();
+        let base = &ubo as *const LightUbo as usize;
+        let lights = &ubo.lights as *const _ as usize;
+        assert_eq!(lights - base, 16);
+    }
+
+    #[test]
+    fn light_ubo_size_matches_std140_expectation() {
+        // 16-byte prologue + MAX_ACTIVE_LIGHTS * 32.
+        assert_eq!(
+            mem::size_of::<LightUbo>(),
+            16 + MAX_ACTIVE_LIGHTS * 32,
+            "LightUbo size drifted from the std140 layout the shader assumes"
+        );
+    }
+
+    #[test]
+    fn packs_empty_light_set() {
+        let ubo = LightUbo::from_active_lights(&ActiveLights::default());
+        assert_eq!(ubo.count, 0);
+        assert!(ubo.lights.iter().all(|l| *l == GpuPointLight::default()));
+    }
+
+    #[test]
+    fn packs_partial_fill_with_a_zeroed_tail() {
+        let active = active_lights(3);
+        let ubo = LightUbo::from_active_lights(&active);
+
+        assert_eq!(ubo.count, 3);
+        for (slot, light) in ubo.lights.iter().zip(active.lights()) {
+            assert_eq!(slot.position_range[3], light.range);
+        }
+        // The tail is defined, not leftover garbage.
+        assert!(ubo.lights[3..]
+            .iter()
+            .all(|l| *l == GpuPointLight::default()));
+    }
+
+    #[test]
+    fn packs_a_full_set() {
+        let active = active_lights(MAX_ACTIVE_LIGHTS);
+        let ubo = LightUbo::from_active_lights(&active);
+
+        assert_eq!(ubo.count, MAX_ACTIVE_LIGHTS as u32);
+        // The authored intensity (2.0) is luminance, not the packed scale, so
+        // check the property that matters: colour * scale has that luminance.
+        assert!(ubo.lights.iter().all(|l| {
+            let packed = l.colour_intensity;
+            let radiance = Colour::new(
+                packed[0] * packed[3],
+                packed[1] * packed[3],
+                packed[2] * packed[3],
+                1.0,
+            );
+            (radiance.luminance() - 2.0).abs() < 1e-4
+        }));
+    }
+
+    #[test]
+    fn packs_position_and_colour_into_the_right_lanes() {
+        let light = PointLight::new(Colour::rgb(0.1, 0.2, 0.3), 4.0, 12.0)
+            .with_offset(Vector3::new(0.0, 5.0, 0.0));
+        let mut active = ActiveLights::default();
+        LightCollector::default().collect(
+            Vector3::zeros(),
+            vec![LightCandidate::new(
+                LightId(0),
+                Vector3::new(1.0, 0.0, -2.0),
+                light,
+            )],
+            &mut active,
+        );
+
+        let ubo = LightUbo::from_active_lights(&active);
+        assert_eq!(ubo.count, 1);
+        // World position is entity + offset, range in w.
+        assert_eq!(ubo.lights[0].position_range, [1.0, 5.0, -2.0, 12.0]);
+        // Colour lanes carry the authored magnitude unchanged; w is the scale
+        // that brings colour * w to the authored intensity (4.0) luminance,
+        // not the intensity itself.
+        let packed = ubo.lights[0].colour_intensity;
+        assert_eq!(&packed[0..3], &[0.1, 0.2, 0.3]);
+        let radiance = Colour::new(
+            packed[0] * packed[3],
+            packed[1] * packed[3],
+            packed[2] * packed[3],
+            1.0,
+        );
+        assert!((radiance.luminance() - 4.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn glsl_light_count_matches_the_rust_constant() {
+        // The build consumes pre-compiled .spv and never reads the GLSL, so
+        // nothing else would catch a drift here. A mismatch silently corrupts
+        // the tail of the light array at runtime.
+        let source = include_str!("../../shader/lights.glsl");
+        let declared = source
+            .lines()
+            .find_map(|line| {
+                let line = line.trim();
+                let rest = line.strip_prefix("const int MAX_ACTIVE_LIGHTS")?;
+                let value = rest.split('=').nth(1)?;
+                value
+                    .trim()
+                    .trim_end_matches(';')
+                    .trim()
+                    .parse::<usize>()
+                    .ok()
+            })
+            .expect(
+                "shader/lights.glsl must declare `const int MAX_ACTIVE_LIGHTS = <n>;` \
+                 on a single line so this check can parse it",
+            );
+
+        assert_eq!(
+            declared, MAX_ACTIVE_LIGHTS,
+            "shader/lights.glsl declares MAX_ACTIVE_LIGHTS = {} but Rust has {}. \
+             Update shader/lights.glsl to match, then recompile the shaders \
+             (see CLAUDE.md) — the .spv in the tree is stale until you do.",
+            declared, MAX_ACTIVE_LIGHTS
+        );
     }
 }

@@ -305,7 +305,8 @@ pub enum LevelObject {
         /// Surface and glow tint. Defaults to cyan.
         #[serde(default)]
         colour: Option<(f32, f32, f32)>,
-        /// Emissive strength multiplier.
+        /// Emitted luminance. Hue-independent: the same value is the same
+        /// brightness for any `colour`, and blooms above the bloom threshold.
         #[serde(default)]
         glow: Option<f32>,
     },

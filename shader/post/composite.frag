@@ -18,12 +18,13 @@ layout(location = 0) out vec4 outColor;
 layout(set = 0, binding = 0) uniform sampler2D sceneHdr;
 
 layout(push_constant) uniform CompositeParams {
-    /// x = bloom intensity (unused here), y = exposure, zw unused.
+    /// x = bloom intensity (unused here), y = exposure,
+    /// z = hue preservation strength, w unused.
     vec4 params;
 } push;
 
 void main() {
     vec3 scene = texture(sceneHdr, inUv).rgb * push.params.y;
 
-    outColor = vec4(tonemapACES(scene), 1.0);
+    outColor = vec4(tonemapScene(scene, push.params.z), 1.0);
 }

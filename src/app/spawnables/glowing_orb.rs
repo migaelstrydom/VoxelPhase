@@ -17,6 +17,7 @@ use crate::components::{
 };
 use crate::core::error::EngineResult;
 use crate::geometry::{generate_sphere_indices, generate_sphere_vertices};
+use crate::lighting::PointLight;
 use crate::model::{MeshPrimitive, Model, ModelPart};
 use crate::physics::{ColliderDesc, RigidBodyDesc};
 use crate::rendering::colour::Colour;
@@ -35,14 +36,40 @@ const DEFAULT_COLOUR: Colour = Colour {
     a: 1.0,
 };
 
-/// Base emissive strength. Deliberately above 1.0: the scene renders to an HDR
-/// target, so this is the headroom the bloom bright-pass keys off. Below the
-/// post-processing bloom threshold the orb is merely bright, not luminous.
-const DEFAULT_GLOW: f32 = 2.5;
+/// Base emissive luminance. Deliberately above the bloom threshold (1.3): the
+/// scene renders to an HDR target, so this is the headroom the bright pass keys
+/// off. Below the threshold the orb is merely bright, not luminous.
+///
+/// Because `Emission::strength` is luminance rather than a colour multiplier,
+/// this number means the same brightness whatever `colour` is set to.
+const DEFAULT_GLOW: f32 = 1.71;
 
 /// Silhouette brightening. The dominant "magical volume" cue at this stage.
-const RIM_STRENGTH: f32 = 1.6;
+///
+/// Re-derived now that the rim term reads normalised emissive colour
+/// (luminance-consistent across hues) instead of raw emissive.rgb: per-orb
+/// preservation of the old look would need 0.64 / 0.40 / 0.43 across the
+/// three orb colours in use, and no single value preserves all three — this
+/// change cannot preserve appearance, since the old per-hue inconsistency was
+/// the defect being fixed. 0.5 is the middle of that range; needs a human eye
+/// afterwards.
+const RIM_STRENGTH: f32 = 0.5;
 const RIM_POWER: f32 = 2.5;
+
+/// How far the orb's light reaches. Beyond this its contribution is exactly
+/// zero, and the collector stops considering it relevant.
+const LIGHT_RANGE: f32 = 8.0;
+
+/// Brightness of the light the orb casts, as luminance. Larger than
+/// `sun_intensity` because inverse-square falloff has already more than
+/// halved it a metre out; the sun has no such divisor.
+///
+/// Re-derived for the luminance convention from the old multiplier (1.5): the
+/// three orb colours in use have luminance 0.683 / 0.545 / 0.457, so
+/// preserving each individually would need 1.025 / 0.818 / 0.686. No single
+/// value preserves all three — that inconsistency was the bug — so this is
+/// the middle of that range, 0.85, as a starting point pending a look.
+const LIGHT_INTENSITY: f32 = 0.85;
 
 #[derive(Deserialize)]
 pub struct GlowingOrbDef {
@@ -52,7 +79,8 @@ pub struct GlowingOrbDef {
     #[serde(default)]
     pub colour: Option<(f32, f32, f32)>,
 
-    /// Emissive strength multiplier. Defaults to `DEFAULT_GLOW`.
+    /// Emitted luminance, independent of hue — above the bloom threshold the
+    /// orb glows, below it merely looks bright. Defaults to `DEFAULT_GLOW`.
     #[serde(default)]
     pub glow: Option<f32>,
 }
@@ -139,6 +167,11 @@ impl Spawnable for GlowingOrbDef {
             .with(RigidBodyComponent(body_handle))
             .with(ModelInstance::new(model))
             .with(Renderable)
+            // The light sits at the orb's centre, with no offset: for a sphere
+            // that is where the glow physically originates, and it means the
+            // orb cannot light its own surface (the light direction is the
+            // exact opposite of every surface normal, so n·l is zero).
+            .with(PointLight::new(base, LIGHT_INTENSITY, LIGHT_RANGE))
             .build()]
     }
 }

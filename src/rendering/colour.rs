@@ -67,6 +67,15 @@ impl Colour {
         }
     }
 
+    /// Perceptual brightness of this colour (Rec. 709 primaries).
+    ///
+    /// Matches `luminance()` in shader/tonemap.glsl, which is what the bloom
+    /// bright pass thresholds on — so a radiance whose luminance exceeds the
+    /// threshold is exactly the radiance that blooms.
+    pub fn luminance(self) -> f32 {
+        0.2126 * self.r + 0.7152 * self.g + 0.0722 * self.b
+    }
+
     /// Convert to a Vector4 for shader upload.
     pub fn to_vec4(self) -> Vector4<f32> {
         Vector4::new(self.r, self.g, self.b, self.a)

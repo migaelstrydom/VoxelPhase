@@ -51,10 +51,11 @@ impl DescriptorManager {
         texture_layout: vk::DescriptorSetLayout,
         initial_texture_capacity: u32,
     ) -> EngineResult<Self> {
-        // Create UBO pool (fixed size, single descriptor set)
+        // Create UBO pool. One descriptor set holding two uniform buffer
+        // descriptors: the scene block (binding 0) and the light set (binding 1).
         let ubo_pool_sizes = [vk::DescriptorPoolSize::default()
             .ty(vk::DescriptorType::UNIFORM_BUFFER)
-            .descriptor_count(1)];
+            .descriptor_count(2)];
 
         let ubo_pool_info = vk::DescriptorPoolCreateInfo::default()
             .max_sets(1)
@@ -121,8 +122,21 @@ impl DescriptorManager {
         }
     }
 
-    /// Update the scene UBO descriptor set to point to the given buffer.
+    /// Update the scene UBO descriptor (set 0, binding 0) to point at a buffer.
     pub fn update_scene_ubo(&self, buffer: &ManagedBuffer, size: vk::DeviceSize) {
+        self.write_ubo_binding(0, buffer, size);
+    }
+
+    /// Update the light UBO descriptor (set 0, binding 1) to point at a buffer.
+    pub fn update_light_ubo(&self, buffer: &ManagedBuffer, size: vk::DeviceSize) {
+        self.write_ubo_binding(1, buffer, size);
+    }
+
+    /// Point one binding of the scene descriptor set at a uniform buffer.
+    ///
+    /// Descriptor writes only rebind the buffer; per-frame *contents* are
+    /// written through the mapped buffer, so this runs once at startup.
+    fn write_ubo_binding(&self, binding: u32, buffer: &ManagedBuffer, size: vk::DeviceSize) {
         let buffer_info = [vk::DescriptorBufferInfo::default()
             .buffer(buffer.buffer)
             .offset(0)
@@ -130,7 +144,7 @@ impl DescriptorManager {
 
         let write = [vk::WriteDescriptorSet::default()
             .dst_set(self.scene_ubo_set)
-            .dst_binding(0)
+            .dst_binding(binding)
             .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
             .buffer_info(&buffer_info)];
 

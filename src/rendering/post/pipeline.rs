@@ -20,8 +20,13 @@ pub const POST_PUSH_CONSTANT_SIZE: u32 = 16;
 enum BlendMode {
     /// Overwrite the target.
     Replace,
-    /// Add to what is already there.
-    Additive,
+    /// Screen blend: `dst + src * (1 - dst)`.
+    ///
+    /// Used where both operands are already tonemapped and in [0, 1]. Unlike an
+    /// additive blend it cannot exceed 1.0, so a bright source over a bright
+    /// target rolls off instead of clipping every channel to white — which
+    /// destroys hue, turning a coloured glow into a white core.
+    Screen,
 }
 
 /// Render passes, pipelines and descriptor layouts for post-processing.
@@ -100,7 +105,7 @@ impl PostPipelines {
             bloom_overlay_pass,
             bloom_overlay_layout,
             ShaderManager::load_post_bloom_overlay(&device)?,
-            BlendMode::Additive,
+            BlendMode::Screen,
         )?;
 
         Ok(Self {
@@ -318,12 +323,13 @@ impl PostPipelines {
                 color_write_mask: vk::ColorComponentFlags::RGBA,
                 ..Default::default()
             },
-            BlendMode::Additive => vk::PipelineColorBlendAttachmentState {
+            // src * (1 - dst) + dst * 1, on colour and alpha alike.
+            BlendMode::Screen => vk::PipelineColorBlendAttachmentState {
                 blend_enable: vk::TRUE,
-                src_color_blend_factor: vk::BlendFactor::ONE,
+                src_color_blend_factor: vk::BlendFactor::ONE_MINUS_DST_COLOR,
                 dst_color_blend_factor: vk::BlendFactor::ONE,
                 color_blend_op: vk::BlendOp::ADD,
-                src_alpha_blend_factor: vk::BlendFactor::ONE,
+                src_alpha_blend_factor: vk::BlendFactor::ONE_MINUS_DST_ALPHA,
                 dst_alpha_blend_factor: vk::BlendFactor::ONE,
                 alpha_blend_op: vk::BlendOp::ADD,
                 color_write_mask: vk::ColorComponentFlags::RGBA,

@@ -6,6 +6,7 @@
 #include "scene.glsl"
 #include "material.glsl"
 #include "lighting.glsl"
+#include "lights.glsl"
 
 layout(location = 0) in vec4 inColor;
 layout(location = 1) in vec2 inTexCoord;
@@ -41,12 +42,26 @@ void main() {
                   + shadeAmbient(surface, scene.ambient_colour.rgb)
                   + materialEmissive();
 
+    // Bounded by the live light count, not just MAX_ACTIVE_LIGHTS, to skip
+    // shading unused slots. But also clamped to MAX_ACTIVE_LIGHTS: `count` comes
+    // from an external UBO write, and a renderer client that never calls
+    // update_lights (e.g. bench_viewer) or a stale .spv with a mismatched
+    // buffer size would otherwise let a garbage/oversized count drive an
+    // unbounded loop that reads past the light array — a GPU hang.
+    uint active_light_count = min(light_set.count, uint(MAX_ACTIVE_LIGHTS));
+    for (uint i = 0u; i < active_light_count; ++i) {
+        litColor += shadePoint(surface, light_set.lights[i], inWorldPos);
+    }
+
     // Rim light reads as a glowing silhouette; tinted by the emissive colour so
-    // it stays coherent with the object's own glow.
+    // it stays coherent with the object's own glow. Deliberately uses the
+    // normalised emissive (materialEmissive()) rather than raw material.emissive.rgb,
+    // so rim brightness is proportional to emitted luminance and stays
+    // consistent across hues, rather than to the authored colour's magnitude.
     float rim_strength = materialRimStrength();
     if (rim_strength > 0.0) {
         float rim = fresnelRim(surface.normal, surface.view_dir, materialRimPower());
-        litColor += material.emissive.rgb * rim * rim_strength;
+        litColor += materialEmissive() * rim * rim_strength;
     }
 
     outColor = vec4(litColor, texColor.a * inColor.a);

@@ -45,16 +45,29 @@ impl Default for SurfaceFinish {
 
 /// Light a surface radiates on its own, regardless of incoming light.
 ///
-/// Emissive surfaces bloom, but do not yet illuminate their surroundings —
-/// that requires point lights (see docs/LIGHTING_PLAN.md stage 3).
+/// Emissive surfaces bloom; illuminating their surroundings is a separate
+/// concern owned by `PointLight` (see `src/lighting/`). The two are deliberately
+/// independent — a glowing sign need not light the street — so an object that
+/// should do both carries both, and their colours are kept in step by hand.
 #[derive(Clone, Copy, Debug)]
 pub struct Emission {
-    /// Linear colour of the emitted light.
+    /// Linear colour of the emitted light. Sets the hue only; how bright the
+    /// surface glows is `strength` alone.
     pub colour: Colour,
 
-    /// Multiplier on `colour`. The scene target is floating point, so values
-    /// above 1.0 are preserved and drive the post-processing bloom rather than
-    /// clipping.
+    /// Emitted brightness, as luminance.
+    ///
+    /// Deliberately *not* a plain multiplier on `colour`. Multiplying would make
+    /// the same number mean different brightness at every hue, because a
+    /// saturated blue carries far less luminance than a yellow of the same
+    /// magnitude — so a red gem and a cyan orb given the same value would glow
+    /// differently, and only one of them might cross the bloom threshold.
+    /// Expressed as luminance, the number means the same thing at any hue and
+    /// is directly comparable to `PostProcessConfig::bloom_threshold`: above it
+    /// the surface blooms, below it the surface is merely bright.
+    ///
+    /// The scene target is floating point, so values above 1.0 are preserved
+    /// rather than clipped.
     pub strength: f32,
 
     /// Extra emissive brightening towards the silhouette, where a curved
@@ -74,13 +87,34 @@ impl Emission {
         rim_power: 3.0,
     };
 
-    /// Uniform glow in the given colour, with no rim enhancement.
+    /// Uniform glow in the given colour at the given luminance, with no rim
+    /// enhancement.
     #[allow(dead_code)]
     pub fn glow(colour: Colour, strength: f32) -> Self {
         Self {
             colour,
             strength,
             ..Self::NONE
+        }
+    }
+
+    /// Scalar the shader multiplies `colour` by to reach `strength` luminance.
+    ///
+    /// Folding the hue normalisation into this scalar rather than into the
+    /// packed colour keeps `colour` available to the shader at its authored
+    /// magnitude. The rim term (shader/triangle.frag) reads the normalised
+    /// product instead, via `materialEmissive()`, so its brightness stays
+    /// proportional to emitted luminance rather than to the authored colour's
+    /// magnitude.
+    ///
+    /// A colour with no luminance (black) cannot be scaled to any brightness,
+    /// so it emits nothing.
+    fn radiance_scale(&self) -> f32 {
+        let luminance = self.colour.luminance();
+        if luminance <= f32::EPSILON {
+            0.0
+        } else {
+            self.strength / luminance
         }
     }
 }
@@ -152,7 +186,7 @@ impl Material {
                 self.emission.colour.r,
                 self.emission.colour.g,
                 self.emission.colour.b,
-                self.emission.strength,
+                self.emission.radiance_scale(),
             ],
             surface: [
                 self.finish.roughness,

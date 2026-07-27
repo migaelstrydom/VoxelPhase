@@ -351,13 +351,21 @@ impl GraphicsPipeline {
     fn create_ubo_descriptor_layout(
         device: &ManagedDevice,
     ) -> EngineResult<vk::DescriptorSetLayout> {
-        // The vertex stage reads the matrices; the fragment stage reads the
-        // camera position and lighting from the same block.
-        let bindings = [vk::DescriptorSetLayoutBinding::default()
-            .binding(0)
-            .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
-            .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)];
+        // Binding 0: the vertex stage reads the matrices; the fragment stage
+        // reads the camera position and sun lighting from the same block.
+        // Binding 1: the per-frame point light set, fragment stage only.
+        let bindings = [
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(0)
+                .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT),
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(1)
+                .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+        ];
 
         let create_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
 

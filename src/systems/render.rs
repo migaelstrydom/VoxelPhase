@@ -4,6 +4,7 @@ use crate::components::{
 };
 use crate::debug::{DebugConfig, DebugLines, DebugOverlays};
 use crate::fire::components::OnFire;
+use crate::lighting::ActiveLights;
 use crate::model::Transform;
 use crate::particles::ParticlePool;
 use crate::rendering::debug_render::{
@@ -85,6 +86,7 @@ impl<'a> System<'a> for RenderSystem {
         ReadExpect<'a, super::PhysicsResource>,
         Read<'a, FrameStart>,
         Read<'a, DebugConfig>,
+        Read<'a, ActiveLights>,
     );
 
     fn run(&mut self, data: Self::SystemData) {
@@ -112,6 +114,7 @@ impl<'a> System<'a> for RenderSystem {
             physics_resource,
             frame_start,
             debug_config,
+            active_lights,
         ) = data;
 
         let camera = camera_components.join().next();
@@ -187,6 +190,11 @@ impl<'a> System<'a> for RenderSystem {
                 if let Err(e) = renderer.update_scene(&view_matrix, &proj_matrix, &camera_world_pos)
                 {
                     log::error!("RenderSystem: Failed to update scene UBO: {}", e);
+                    return;
+                }
+
+                if let Err(e) = renderer.update_lights(&active_lights) {
+                    log::error!("RenderSystem: Failed to update light UBO: {}", e);
                     return;
                 }
 

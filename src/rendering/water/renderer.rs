@@ -81,6 +81,8 @@ impl WaterRenderer {
         time: f32,
         screen_width: f32,
         screen_height: f32,
+        hue_preservation: f32,
+        exposure: f32,
     ) -> EngineResult<()> {
         let (vertices, indices) = Self::generate_mesh(flow_grid, wave_grid);
         if indices.is_empty() {
@@ -163,8 +165,10 @@ impl WaterRenderer {
                 0.0, // padding
                 screen_width,
                 screen_height,
-                0.0, // padding
-                0.0, // padding
+                // Both must match the composite pass, or refracted scene colour
+                // resolves differently from the pixels beside it.
+                hue_preservation,
+                exposure,
             ];
 
             self.device.device.cmd_push_constants(

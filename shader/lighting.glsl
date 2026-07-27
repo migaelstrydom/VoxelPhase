@@ -32,6 +32,19 @@ struct DirectionalLight {
     float intensity;
 };
 
+/// A local light with a position and a finite reach.
+///
+/// Declared here beside `DirectionalLight` rather than in lights.glsl so that
+/// this header keeps its no-uniform-declarations property: lights.glsl owns the
+/// uniform block that arrays these, and includes this file for the type. Layout
+/// must match `GpuPointLight` in src/rendering/frame.rs.
+struct PointLight {
+    /// xyz = world position, w = range (contribution is zero at and beyond it).
+    vec4 position_range;
+    /// rgb = linear colour, w = intensity multiplier.
+    vec4 colour_intensity;
+};
+
 /// Roughness below this would produce an aliasing-prone specular spike.
 const float MIN_ROUGHNESS = 0.03;
 
@@ -55,14 +68,18 @@ vec3 specularF0(vec3 albedo, float metallic) {
     return mix(DIELECTRIC_F0, albedo, metallic);
 }
 
-/// Diffuse plus specular response to a single directional light.
-vec3 shadeDirectional(SurfaceSample surface, DirectionalLight light) {
-    float n_dot_l = max(dot(surface.normal, light.direction), 0.0);
+/// Diffuse plus specular response to light of the given radiance arriving from
+/// `light_dir` (normalized, pointing from the surface towards the light).
+///
+/// The shared core of every light type: directional and point lights differ
+/// only in how they derive `light_dir` and `radiance`.
+vec3 shadeLight(SurfaceSample surface, vec3 light_dir, vec3 radiance) {
+    float n_dot_l = max(dot(surface.normal, light_dir), 0.0);
     if (n_dot_l <= 0.0) {
         return vec3(0.0);
     }
 
-    vec3 half_vector = normalize(light.direction + surface.view_dir);
+    vec3 half_vector = normalize(light_dir + surface.view_dir);
     float n_dot_h = max(dot(surface.normal, half_vector), 0.0);
     float h_dot_v = max(dot(half_vector, surface.view_dir), 0.0);
 
@@ -75,7 +92,53 @@ vec3 shadeDirectional(SurfaceSample surface, DirectionalLight light) {
     vec3 fresnel = fresnelSchlick(specularF0(surface.albedo, surface.metallic), h_dot_v);
     vec3 specular = fresnel * normalisation * pow(n_dot_h, power);
 
-    return light.colour * light.intensity * n_dot_l * (diffuse + specular);
+    return radiance * n_dot_l * (diffuse + specular);
+}
+
+/// Diffuse plus specular response to a single directional light.
+vec3 shadeDirectional(SurfaceSample surface, DirectionalLight light) {
+    return shadeLight(surface, light.direction, light.colour * light.intensity);
+}
+
+/// Distance falloff for a point light, in [0, 1].
+///
+/// Inverse square, windowed so it decays smoothly to exactly zero at `range`.
+/// The window is what lets a light drop out of the collector's set, or cross its
+/// own range, without popping — an unwindowed inverse square never reaches zero.
+///
+/// This is the only implementation of the curve. `LightCollector` on the CPU
+/// selects lights by camera distance and does not evaluate falloff, so there is
+/// no second copy to keep in step.
+float pointAttenuation(float dist, float range) {
+    if (dist >= range || range <= 0.0) {
+        return 0.0;
+    }
+    float ratio = dist / range;
+    float window = max(1.0 - ratio * ratio * ratio * ratio, 0.0);
+    return (window * window) / (1.0 + dist * dist);
+}
+
+/// Diffuse plus specular response to a single point light.
+///
+/// Returns black outside the light's range. The range test is a squared-distance
+/// compare before any of the BRDF work, so out-of-range lights cost almost
+/// nothing — and the branch is coherent across a tile, since neighbouring
+/// fragments share a light's reach.
+vec3 shadePoint(SurfaceSample surface, PointLight light, vec3 world_pos) {
+    vec3 to_light = light.position_range.xyz - world_pos;
+    float dist_sq = dot(to_light, to_light);
+    float range = light.position_range.w;
+
+    if (dist_sq >= range * range || dist_sq <= 0.0) {
+        return vec3(0.0);
+    }
+
+    float dist = sqrt(dist_sq);
+    vec3 light_dir = to_light / dist;
+    vec3 radiance = light.colour_intensity.rgb * light.colour_intensity.w
+                  * pointAttenuation(dist, range);
+
+    return shadeLight(surface, light_dir, radiance);
 }
 
 /// Uniform ambient fill. Metals take no diffuse ambient.

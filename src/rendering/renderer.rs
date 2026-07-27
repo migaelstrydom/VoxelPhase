@@ -15,10 +15,11 @@ use winit::window::Window;
 use crate::core::error::EngineResult;
 use crate::core::vulkan_context::VulkanContext;
 use crate::fire::renderer::{ActiveFire, FireRenderer};
+use crate::lighting::ActiveLights;
 use crate::model::{Model, Transform};
 use crate::particles::{ParticlePool, ParticleRenderer};
 use crate::rendering::descriptors::DescriptorManager;
-use crate::rendering::frame::{FrameData, SceneLighting, SceneUbo};
+use crate::rendering::frame::{FrameData, LightUbo, SceneLighting, SceneUbo};
 use crate::rendering::material::{MaterialManager, SurfaceParams, SURFACE_PARAMS_OFFSET};
 use crate::rendering::overlay::OverlayRenderer;
 use crate::rendering::pipeline::{GraphicsPipeline, GraphicsPipelineConfig};
@@ -120,10 +121,14 @@ impl Renderer {
             100, // initial texture descriptor capacity
         )?);
 
-        // Initialize the UBO descriptor
+        // Initialize the UBO descriptors
         descriptors.update_scene_ubo(
             &frame_data.scene_ubo_buffer,
             std::mem::size_of::<SceneUbo>() as vk::DeviceSize,
+        );
+        descriptors.update_light_ubo(
+            &frame_data.light_ubo_buffer,
+            std::mem::size_of::<LightUbo>() as vk::DeviceSize,
         );
 
         // Create overlay renderer for debug text (transparent pass)
@@ -252,6 +257,14 @@ impl Renderer {
         };
         self.frame_data
             .update_scene_ubo(view, proj, camera_pos, &lighting)
+    }
+
+    /// Upload the frame's point light set.
+    ///
+    /// Call once per frame alongside `update_scene`. The buffer is already
+    /// bound to set 0, binding 1; this only refreshes its contents.
+    pub fn update_lights(&mut self, active: &ActiveLights) -> EngineResult<()> {
+        self.frame_data.update_light_ubo(active)
     }
 
     /// Mutable access to the scene lighting environment (sun colour, ambient,
@@ -662,6 +675,8 @@ impl Renderer {
             time,
             extent.width as f32,
             extent.height as f32,
+            self.post_process.config.hue_preservation,
+            self.post_process.config.exposure,
         )
     }
 
