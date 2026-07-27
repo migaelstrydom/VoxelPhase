@@ -12,6 +12,7 @@ use ash::vk;
 
 use crate::core::device::ManagedDevice;
 use crate::core::error::{EngineError, EngineResult};
+use crate::rendering::material::SurfaceParams;
 use crate::rendering::shaders::ShaderManager;
 use crate::rendering::vertex::Vertex;
 
@@ -215,7 +216,12 @@ impl Drop for PipelineFactory {
 
 /// Configuration for creating a [`GraphicsPipeline`].
 pub struct GraphicsPipelineConfig {
-    pub color_format: vk::Format,
+    /// Format of the offscreen target the opaque pass renders into. Floating
+    /// point, so emissive surfaces can carry radiance above 1.0 through to the
+    /// post-processing resolve.
+    pub scene_color_format: vk::Format,
+    /// Format of the swapchain images the transparent pass renders into.
+    pub swapchain_format: vk::Format,
     pub depth_format: vk::Format,
     pub extent: vk::Extent2D,
 }
@@ -259,7 +265,8 @@ impl GraphicsPipeline {
 
         // Push constant ranges:
         // - Vertex: mat4 model (offset 0, 64 bytes)
-        // - Fragment: vec4 colorOverride (offset 64, 16 bytes)
+        // - Fragment: vec4 colourOverride (offset 64, 16 bytes)
+        //             SurfaceParams (offset 80, 32 bytes)
         let push_constant_ranges = [
             vk::PushConstantRange {
                 stage_flags: vk::ShaderStageFlags::VERTEX,
@@ -269,7 +276,7 @@ impl GraphicsPipeline {
             vk::PushConstantRange {
                 stage_flags: vk::ShaderStageFlags::FRAGMENT,
                 offset: 64,
-                size: 16,
+                size: 16 + std::mem::size_of::<SurfaceParams>() as u32,
             },
         ];
 
@@ -287,7 +294,7 @@ impl GraphicsPipeline {
         let renderpass = Self::create_render_pass(&device, config)?;
         let transparent_renderpass = Self::create_transparent_render_pass(
             &device,
-            config.color_format,
+            config.swapchain_format,
             config.depth_format,
         )?;
 
@@ -344,11 +351,13 @@ impl GraphicsPipeline {
     fn create_ubo_descriptor_layout(
         device: &ManagedDevice,
     ) -> EngineResult<vk::DescriptorSetLayout> {
+        // The vertex stage reads the matrices; the fragment stage reads the
+        // camera position and lighting from the same block.
         let bindings = [vk::DescriptorSetLayoutBinding::default()
             .binding(0)
             .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
             .descriptor_count(1)
-            .stage_flags(vk::ShaderStageFlags::VERTEX)];
+            .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)];
 
         let create_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
 
@@ -381,20 +390,21 @@ impl GraphicsPipeline {
 
     /// Render pass for opaque geometry (sky, terrain, models, debug overlays).
     ///
-    /// Writes to the offscreen `ColorTarget` and depth buffer. The color attachment
-    /// transitions to `TRANSFER_SRC_OPTIMAL` at the end, ready to be blitted to
-    /// the swapchain image and sampled as a texture for water refraction.
+    /// Writes to the offscreen HDR `ColorTarget` and depth buffer. The color
+    /// attachment transitions to `SHADER_READ_ONLY_OPTIMAL` at the end, ready to
+    /// be sampled by the post-processing resolve and by the water shader for
+    /// refraction.
     fn create_render_pass(
         device: &ManagedDevice,
         config: &GraphicsPipelineConfig,
     ) -> EngineResult<vk::RenderPass> {
         let attachments = [
             vk::AttachmentDescription {
-                format: config.color_format,
+                format: config.scene_color_format,
                 samples: vk::SampleCountFlags::TYPE_1,
                 load_op: vk::AttachmentLoadOp::CLEAR,
                 store_op: vk::AttachmentStoreOp::STORE,
-                final_layout: vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                final_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
                 ..Default::default()
             },
             vk::AttachmentDescription {
@@ -461,7 +471,9 @@ impl GraphicsPipeline {
                 load_op: vk::AttachmentLoadOp::LOAD,
                 store_op: vk::AttachmentStoreOp::STORE,
                 initial_layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
-                final_layout: vk::ImageLayout::PRESENT_SRC_KHR,
+                // Stays a colour attachment: the bloom overlay pass runs after
+                // this one and is what finally transitions to PRESENT_SRC_KHR.
+                final_layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
                 ..Default::default()
             },
             vk::AttachmentDescription {

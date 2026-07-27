@@ -13,7 +13,7 @@ Level(
         ],
         features: [
             //TerrainRoughness(frequency: 0.1, amplitude: 3.0, octaves: 3, seed: 42),
-            Crater(center: (-10.0, -1.0), radius: 20.0, depth: 5.0),
+            Crater(center: (-10.0, 10.0), radius: 10.0, depth: 5.0),
             // Cliff(
             //     from: (-40.0, -60.0),
             //     to: (40.0, -60.0),
@@ -66,13 +66,18 @@ Level(
         ocean_level: None,
         bodies: [
             Pool(
-                seed: (-10.0, -1.5),
+                seed: (-10.0, 10.0),
                 surface_level: -1.5,
             ),
         ],
     )),
 
     objects: [
+        // Lighting/material test subjects. Same physics as BeachBall.
+        GlowingOrb(pos: (0.0, 0.5, -2.0)),
+        GlowingOrb(pos: (0.0, 0.5, 3.0), colour: Some((1.0, 0.45, 0.15)), glow: Some(4.0)),
+        GlowingOrb(pos: (-2.0, 0.5, 2.0), colour: Some((0.8, 0.3, 1.0)), glow: Some(1.6)),
+
         // BeachBall(pos: (3.0, 5.0, 2.0)),
         // BeachBall(pos: (-2.0, 4.0, -1.0)),
         // BeachBall(pos: (1.0, 6.0, 4.0)),

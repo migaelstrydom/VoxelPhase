@@ -18,16 +18,22 @@ use crate::fire::renderer::{ActiveFire, FireRenderer};
 use crate::model::{Model, Transform};
 use crate::particles::{ParticlePool, ParticleRenderer};
 use crate::rendering::descriptors::DescriptorManager;
-use crate::rendering::frame::{FrameData, SceneUbo};
-use crate::rendering::material::MaterialManager;
+use crate::rendering::frame::{FrameData, SceneLighting, SceneUbo};
+use crate::rendering::material::{MaterialManager, SurfaceParams, SURFACE_PARAMS_OFFSET};
 use crate::rendering::overlay::OverlayRenderer;
 use crate::rendering::pipeline::{GraphicsPipeline, GraphicsPipelineConfig};
+use crate::rendering::post::PostProcessRenderer;
 use crate::rendering::sky::SkyRenderer;
 use crate::rendering::swapchain::{SurfaceInfo, Swapchain};
 use crate::rendering::vertex::Vertex;
 use crate::rendering::water::WaterRenderer;
 use crate::resources::textures::{TextureHandle, TextureManager};
 use crate::water::{WaterGrid, WaveGrid};
+
+/// Format of the offscreen scene target. Floating point so that emissive
+/// surfaces can carry radiance above 1.0 into the post-processing resolve,
+/// where tonemapping brings it back into the displayable range.
+const SCENE_HDR_FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
 
 /// The main renderer that orchestrates frame rendering.
 ///
@@ -44,8 +50,12 @@ pub struct Renderer {
     pub sky_renderer: SkyRenderer,
     pub water_renderer: WaterRenderer,
     pub fire_renderer: FireRenderer,
+    /// HDR resolve: tonemapping and bloom between the opaque and transparent passes.
+    pub post_process: PostProcessRenderer,
     /// Active fire instances with their GPU resources. Keyed by entity index.
     pub active_fires: Vec<(specs::Entity, ActiveFire)>,
+    /// Scene lighting environment uploaded to the scene UBO each frame.
+    lighting: SceneLighting,
     /// When true, backfaces are rendered in wireframe with `wireframe_color`.
     pub debug_wireframe_backfaces: bool,
     /// The solid color used for wireframe backface rendering (RGBA, 0-1).
@@ -64,11 +74,12 @@ impl Renderer {
         let surface_info = SurfaceInfo::new(&vulkan_context, window)?;
 
         // Save format before moving surface_info
-        let color_format = surface_info.format.format;
+        let swapchain_format = surface_info.format.format;
 
         // Create pipeline first (we need the render pass for swapchain framebuffers)
         let pipeline_config = GraphicsPipelineConfig {
-            color_format,
+            scene_color_format: SCENE_HDR_FORMAT,
+            swapchain_format,
             depth_format: vk::Format::D16_UNORM,
             extent: vk::Extent2D {
                 width: window_width,
@@ -84,8 +95,18 @@ impl Renderer {
             surface_info,
             pipeline.renderpass,
             pipeline.transparent_renderpass,
+            SCENE_HDR_FORMAT,
             window_width,
             window_height,
+        )?;
+
+        // Post-processing resolves the HDR scene target onto the swapchain.
+        let post_process = PostProcessRenderer::new(
+            &vulkan_context,
+            swapchain.color_target.view,
+            &swapchain.image_views,
+            swapchain.extent,
+            swapchain_format,
         )?;
 
         // Create frame data (vertex/index/UBO buffers)
@@ -146,8 +167,10 @@ impl Renderer {
             sky_renderer,
             water_renderer,
             fire_renderer,
+            post_process,
             active_fires: Vec::new(),
-            debug_wireframe_backfaces: true,
+            lighting: SceneLighting::default(),
+            debug_wireframe_backfaces: false,
             wireframe_color: [0.0, 0.0, 0.0, 1.0],
         })
     }
@@ -212,10 +235,29 @@ impl Renderer {
         }
     }
 
-    /// Update per-frame scene data (view/projection matrices).
+    /// Update per-frame scene data (camera and lighting).
     /// Call this once at the start of each frame, before any draw calls.
-    pub fn update_scene(&mut self, view: &Matrix4<f32>, proj: &Matrix4<f32>) -> EngineResult<()> {
-        self.frame_data.update_scene_ubo(view, proj)
+    ///
+    /// The sun direction is taken from the sky renderer so that shaded geometry
+    /// and the visible sun disc always agree.
+    pub fn update_scene(
+        &mut self,
+        view: &Matrix4<f32>,
+        proj: &Matrix4<f32>,
+        camera_pos: &Vector3<f32>,
+    ) -> EngineResult<()> {
+        let lighting = SceneLighting {
+            sun_direction: self.sky_renderer.sun_direction(),
+            ..self.lighting
+        };
+        self.frame_data
+            .update_scene_ubo(view, proj, camera_pos, &lighting)
+    }
+
+    /// Mutable access to the scene lighting environment (sun colour, ambient,
+    /// intensity). The sun *direction* is owned by the sky renderer.
+    pub fn lighting_mut(&mut self) -> &mut SceneLighting {
+        &mut self.lighting
     }
 
     /// Update sky renderer with delta time for cloud animation.
@@ -279,6 +321,7 @@ impl Renderer {
             // Draw each primitive in this part
             for primitive in &part.primitives {
                 let texture = material_manager.get_effective_texture(primitive.material);
+                let surface = material_manager.get_surface_params(primitive.material);
 
                 self.draw_mesh_with_texture(
                     cb,
@@ -286,6 +329,7 @@ impl Renderer {
                     &primitive.indices,
                     &final_transform,
                     texture,
+                    surface,
                     texture_manager,
                 )?;
             }
@@ -316,6 +360,7 @@ impl Renderer {
             indices,
             world_transform,
             white_texture,
+            SurfaceParams::MATTE,
             texture_manager,
             self.pipeline.opaque,
             true,
@@ -344,13 +389,14 @@ impl Renderer {
             indices,
             world_transform,
             white_texture,
+            SurfaceParams::MATTE,
             texture_manager,
             self.pipeline.transparent,
             false,
         )
     }
 
-    /// Draw a mesh with a specific texture handle.
+    /// Draw a mesh with a specific texture handle and lighting parameters.
     ///
     /// This is a lower-level method used by draw_model and terrain rendering.
     pub fn draw_mesh_with_texture(
@@ -360,6 +406,7 @@ impl Renderer {
         indices: &[u32],
         model: &Matrix4<f32>,
         texture: &TextureHandle,
+        surface: SurfaceParams,
         texture_manager: &TextureManager,
     ) -> EngineResult<()> {
         self.draw_mesh_internal(
@@ -368,6 +415,7 @@ impl Renderer {
             indices,
             model,
             texture,
+            surface,
             texture_manager,
             self.pipeline.opaque,
             true,
@@ -382,6 +430,7 @@ impl Renderer {
         indices: &[u32],
         model: &Matrix4<f32>,
         texture: &TextureHandle,
+        surface: SurfaceParams,
         texture_manager: &TextureManager,
         pipeline: vk::Pipeline,
         wireframe_overlay: bool,
@@ -443,6 +492,15 @@ impl Renderer {
                 vk::ShaderStageFlags::FRAGMENT,
                 64,
                 override_bytes,
+            );
+
+            // Push this draw's lighting parameters
+            self.vulkan_context.device().cmd_push_constants(
+                cb,
+                self.pipeline.layout,
+                vk::ShaderStageFlags::FRAGMENT,
+                SURFACE_PARAMS_OFFSET,
+                surface.as_bytes(),
             );
 
             // Get texture descriptor set
@@ -526,125 +584,26 @@ impl Renderer {
     ///
     /// Must be called after all opaque geometry is drawn and before
     /// water, particles, or overlay rendering.
-    /// End the opaque render pass, blit the result to the swapchain image,
-    /// transition the color target for sampling, and begin the transparent render pass.
+    /// End the opaque render pass, resolve the HDR scene onto the swapchain
+    /// image (tonemap + bloom), and begin the transparent render pass.
+    ///
+    /// Must be called after all opaque geometry is drawn and before water,
+    /// particles, or overlay rendering.
+    ///
+    /// The opaque render pass leaves the HDR colour target in
+    /// `SHADER_READ_ONLY_OPTIMAL`, and the composite pass leaves the swapchain
+    /// image in `COLOR_ATTACHMENT_OPTIMAL`, so no manual barriers are needed
+    /// between the three passes.
     pub fn begin_transparent_pass(&self, cb: vk::CommandBuffer, image_index: u32) {
         let device = self.vulkan_context.device();
         let extent = self.swapchain.extent;
-        let src_image = self.swapchain.color_target.image;
-        let dst_image = self.swapchain.swapchain_images[image_index as usize];
 
         unsafe {
-            // End opaque render pass. Color target is now TRANSFER_SRC_OPTIMAL.
             device.cmd_end_render_pass(cb);
 
-            // Transition swapchain image: UNDEFINED → TRANSFER_DST_OPTIMAL.
-            let barrier_to_dst = vk::ImageMemoryBarrier::default()
-                .image(dst_image)
-                .old_layout(vk::ImageLayout::UNDEFINED)
-                .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
-                .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE)
-                .subresource_range(
-                    vk::ImageSubresourceRange::default()
-                        .aspect_mask(vk::ImageAspectFlags::COLOR)
-                        .level_count(1)
-                        .layer_count(1),
-                );
+            self.post_process.resolve(cb, image_index, extent);
 
-            device.cmd_pipeline_barrier(
-                cb,
-                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-                vk::PipelineStageFlags::TRANSFER,
-                vk::DependencyFlags::empty(),
-                &[],
-                &[],
-                &[barrier_to_dst],
-            );
-
-            // Blit offscreen color target → swapchain image.
-            let region = vk::ImageBlit {
-                src_subresource: vk::ImageSubresourceLayers {
-                    aspect_mask: vk::ImageAspectFlags::COLOR,
-                    mip_level: 0,
-                    base_array_layer: 0,
-                    layer_count: 1,
-                },
-                src_offsets: [
-                    vk::Offset3D { x: 0, y: 0, z: 0 },
-                    vk::Offset3D {
-                        x: extent.width as i32,
-                        y: extent.height as i32,
-                        z: 1,
-                    },
-                ],
-                dst_subresource: vk::ImageSubresourceLayers {
-                    aspect_mask: vk::ImageAspectFlags::COLOR,
-                    mip_level: 0,
-                    base_array_layer: 0,
-                    layer_count: 1,
-                },
-                dst_offsets: [
-                    vk::Offset3D { x: 0, y: 0, z: 0 },
-                    vk::Offset3D {
-                        x: extent.width as i32,
-                        y: extent.height as i32,
-                        z: 1,
-                    },
-                ],
-            };
-
-            device.cmd_blit_image(
-                cb,
-                src_image,
-                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-                dst_image,
-                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-                &[region],
-                vk::Filter::NEAREST,
-            );
-
-            // Transition swapchain image: TRANSFER_DST → COLOR_ATTACHMENT_OPTIMAL
-            // (ready for the transparent render pass to composite on top).
-            let barrier_to_color = vk::ImageMemoryBarrier::default()
-                .image(dst_image)
-                .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
-                .new_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-                .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
-                .dst_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
-                .subresource_range(
-                    vk::ImageSubresourceRange::default()
-                        .aspect_mask(vk::ImageAspectFlags::COLOR)
-                        .level_count(1)
-                        .layer_count(1),
-                );
-
-            // Transition color target: TRANSFER_SRC → SHADER_READ_ONLY_OPTIMAL
-            // (ready to be sampled by the water shader for refraction).
-            let barrier_to_read = vk::ImageMemoryBarrier::default()
-                .image(src_image)
-                .old_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
-                .new_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                .src_access_mask(vk::AccessFlags::TRANSFER_READ)
-                .dst_access_mask(vk::AccessFlags::SHADER_READ)
-                .subresource_range(
-                    vk::ImageSubresourceRange::default()
-                        .aspect_mask(vk::ImageAspectFlags::COLOR)
-                        .level_count(1)
-                        .layer_count(1),
-                );
-
-            device.cmd_pipeline_barrier(
-                cb,
-                vk::PipelineStageFlags::TRANSFER,
-                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
-                    | vk::PipelineStageFlags::FRAGMENT_SHADER,
-                vk::DependencyFlags::empty(),
-                &[],
-                &[],
-                &[barrier_to_color, barrier_to_read],
-            );
-
-            // Begin transparent render pass (loads existing color + depth).
+            // Begin transparent render pass (loads composited colour + depth).
             let render_pass_begin = vk::RenderPassBeginInfo::default()
                 .render_pass(self.pipeline.transparent_renderpass)
                 .framebuffer(self.swapchain.transparent_framebuffers[image_index as usize])
@@ -860,6 +819,12 @@ impl Renderer {
         unsafe {
             self.vulkan_context.device().cmd_end_render_pass(cb);
         }
+
+        // Bloom goes on last so transparent surfaces cannot paint over a halo
+        // that belongs in front of them. This also transitions the swapchain
+        // image to PRESENT_SRC_KHR.
+        self.post_process
+            .apply_bloom(cb, image_index, self.swapchain.extent);
 
         self.swapchain.draw_command_buffer.end()?;
 

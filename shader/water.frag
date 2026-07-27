@@ -1,6 +1,9 @@
 #version 450
 #extension GL_ARB_separate_shader_objects : enable
 #extension GL_ARB_shading_language_420pack : enable
+#extension GL_GOOGLE_include_directive : require
+
+#include "tonemap.glsl"
 
 // --- Tuning constants ---
 const float REFRACTION_STRENGTH = 0.01;
@@ -178,5 +181,8 @@ void main() {
     float foamFactor = 1.0 - smoothstep(0.0, 0.3, opticalDepth);
     color = mix(color, vec3(0.9, 0.95, 1.0), foamFactor * 0.6);
 
-    outColor = vec4(color, 1.0);
+    // The water pass draws onto the swapchain, which already holds the
+    // tonemapped scene, but `colorSampler` is the raw HDR scene target. Apply
+    // the same curve here so refracted terrain matches the surrounding pixels.
+    outColor = vec4(tonemapACES(color), 1.0);
 }

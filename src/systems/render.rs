@@ -9,7 +9,7 @@ use crate::particles::ParticlePool;
 use crate::rendering::debug_render::{
     render_debug_overlays_opaque, render_debug_overlays_transparent,
 };
-use crate::rendering::material::MaterialManager;
+use crate::rendering::material::{MaterialManager, SurfaceParams};
 use crate::rendering::renderer::Renderer;
 use crate::resources::textures::TextureManager;
 use crate::terrain::TerrainManager;
@@ -179,7 +179,13 @@ impl<'a> System<'a> for RenderSystem {
                 renderer.begin_opaque_pass(draw_cb);
 
                 // Update per-frame scene data (view/projection) once
-                if let Err(e) = renderer.update_scene(&view_matrix, &proj_matrix) {
+                let camera_world_pos = Vector3::new(
+                    camera_data.position.x,
+                    camera_data.position.y,
+                    camera_data.position.z,
+                );
+                if let Err(e) = renderer.update_scene(&view_matrix, &proj_matrix, &camera_world_pos)
+                {
                     log::error!("RenderSystem: Failed to update scene UBO: {}", e);
                     return;
                 }
@@ -206,6 +212,7 @@ impl<'a> System<'a> for RenderSystem {
                             terrain_manager.render_indices(),
                             &identity,
                             texture,
+                            SurfaceParams::MATTE,
                             &texture_manager,
                         ) {
                             log::error!("RenderSystem: Failed to draw terrain: {}", e);

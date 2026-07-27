@@ -10,6 +10,7 @@ pub mod frame;
 pub mod material;
 pub mod overlay;
 pub mod pipeline;
+pub mod post;
 pub mod renderer;
 pub mod shaders;
 pub mod sky;

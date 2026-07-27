@@ -31,6 +31,15 @@ mod bytecode {
     /// Water rendering shaders
     pub const WATER_VERTEX: &[u8] = include_bytes!("../../shader/water.vert.spv");
     pub const WATER_FRAGMENT: &[u8] = include_bytes!("../../shader/water.frag.spv");
+
+    /// Post-processing shaders (HDR resolve, bloom)
+    pub const POST_FULLSCREEN_VERTEX: &[u8] =
+        include_bytes!("../../shader/post/fullscreen.vert.spv");
+    pub const POST_BRIGHT_PASS: &[u8] = include_bytes!("../../shader/post/bright_pass.frag.spv");
+    pub const POST_BLUR: &[u8] = include_bytes!("../../shader/post/blur.frag.spv");
+    pub const POST_COMPOSITE: &[u8] = include_bytes!("../../shader/post/composite.frag.spv");
+    pub const POST_BLOOM_OVERLAY: &[u8] =
+        include_bytes!("../../shader/post/bloom_overlay.frag.spv");
 }
 
 /// Centralized shader loading and management.
@@ -48,6 +57,36 @@ impl ShaderManager {
     /// Load the main 3D fragment shader.
     pub fn load_main_fragment(device: &ManagedDevice) -> EngineResult<vk::ShaderModule> {
         Self::load_shader(device, bytecode::MAIN_FRAGMENT, ShaderStage::Fragment)
+    }
+
+    /// Load the shared fullscreen-triangle vertex shader used by every
+    /// post-processing stage.
+    pub fn load_post_fullscreen_vertex(device: &ManagedDevice) -> EngineResult<vk::ShaderModule> {
+        Self::load_shader(
+            device,
+            bytecode::POST_FULLSCREEN_VERTEX,
+            ShaderStage::Vertex,
+        )
+    }
+
+    /// Load the bloom bright-pass fragment shader.
+    pub fn load_post_bright_pass(device: &ManagedDevice) -> EngineResult<vk::ShaderModule> {
+        Self::load_shader(device, bytecode::POST_BRIGHT_PASS, ShaderStage::Fragment)
+    }
+
+    /// Load the separable blur fragment shader.
+    pub fn load_post_blur(device: &ManagedDevice) -> EngineResult<vk::ShaderModule> {
+        Self::load_shader(device, bytecode::POST_BLUR, ShaderStage::Fragment)
+    }
+
+    /// Load the tonemap/bloom composite fragment shader.
+    pub fn load_post_composite(device: &ManagedDevice) -> EngineResult<vk::ShaderModule> {
+        Self::load_shader(device, bytecode::POST_COMPOSITE, ShaderStage::Fragment)
+    }
+
+    /// Load the fragment shader that blends bloom over the finished frame.
+    pub fn load_post_bloom_overlay(device: &ManagedDevice) -> EngineResult<vk::ShaderModule> {
+        Self::load_shader(device, bytecode::POST_BLOOM_OVERLAY, ShaderStage::Fragment)
     }
 
     /// Load the overlay vertex shader.

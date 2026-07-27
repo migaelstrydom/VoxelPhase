@@ -8,10 +8,10 @@ use serde::Deserialize;
 
 use crate::app::spawnables::{
     BeachBallDef, BoxDef, BoxWallDef, CapsuleDef, CrateDef, DodecahedronDef, DolosDef, DominoDef,
-    FencePostDef, HeavyCrateDef, HexPrismDef, HoneycombWallDef, HouseDef, IcosahedronDef, JackDef,
-    JengaDef, MenhirDef, OctahedronDef, PendulumDef, PlankBridgeDef, PlankDef, PlayWheelDef,
-    PyramidDef, SeesawDef, Spawnable, StackDef, StackItemDef, TableDef, TempleDef, TetrahedronDef,
-    TowerDef, TrampolineDef, TrilithonDef, VoussoirArchDef,
+    FencePostDef, GlowingOrbDef, HeavyCrateDef, HexPrismDef, HoneycombWallDef, HouseDef,
+    IcosahedronDef, JackDef, JengaDef, MenhirDef, OctahedronDef, PendulumDef, PlankBridgeDef,
+    PlankDef, PlayWheelDef, PyramidDef, SeesawDef, Spawnable, StackDef, StackItemDef, TableDef,
+    TempleDef, TetrahedronDef, TowerDef, TrampolineDef, TrilithonDef, VoussoirArchDef,
 };
 
 /// Top-level level description.
@@ -298,6 +298,16 @@ pub enum BoxStyle {
 pub enum LevelObject {
     BeachBall {
         pos: (f32, f32, f32),
+    },
+    /// Self-illuminated sphere with beach-ball physics. Subject for lighting work.
+    GlowingOrb {
+        pos: (f32, f32, f32),
+        /// Surface and glow tint. Defaults to cyan.
+        #[serde(default)]
+        colour: Option<(f32, f32, f32)>,
+        /// Emissive strength multiplier.
+        #[serde(default)]
+        glow: Option<f32>,
     },
     /// Raw box with full control over dimensions, appearance, and physics.
     Box {
@@ -684,6 +694,12 @@ impl LevelObject {
     pub fn to_spawnable(&self) -> Box<dyn Spawnable> {
         match self {
             LevelObject::BeachBall { pos } => Box::new(BeachBallDef { pos: *pos }),
+
+            LevelObject::GlowingOrb { pos, colour, glow } => Box::new(GlowingOrbDef {
+                pos: *pos,
+                colour: *colour,
+                glow: *glow,
+            }),
 
             LevelObject::Box {
                 pos,

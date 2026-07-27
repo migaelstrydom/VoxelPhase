@@ -300,4 +300,28 @@ mod tests {
             _ => panic!("Expected Box"),
         }
     }
+
+    /// Every level shipped in `levels/` must parse and validate. Guards against
+    /// a `LevelObject` variant changing shape without its authored uses being
+    /// updated.
+    #[test]
+    fn shipped_levels_parse_and_validate() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("levels");
+        let mut checked = 0;
+
+        for entry in std::fs::read_dir(&dir).expect("levels directory should exist") {
+            let path = entry.expect("readable dir entry").path();
+            if path.extension().and_then(|e| e.to_str()) != Some("ron") {
+                continue;
+            }
+
+            let level = load_level(&path)
+                .unwrap_or_else(|e| panic!("{} failed to load: {:?}", path.display(), e));
+            validate(&level)
+                .unwrap_or_else(|e| panic!("{} failed validation: {:?}", path.display(), e));
+            checked += 1;
+        }
+
+        assert!(checked > 0, "no level files found in {}", dir.display());
+    }
 }

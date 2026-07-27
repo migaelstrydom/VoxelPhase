@@ -409,8 +409,9 @@ pub struct Swapchain {
     pub opaque_framebuffer: vk::Framebuffer,
     /// Per-swapchain-image framebuffers for the transparent render pass.
     pub transparent_framebuffers: Vec<vk::Framebuffer>,
-    /// Offscreen color render target for the opaque pass. Blitted to the swapchain
-    /// image between passes, then sampled by the water shader for refraction.
+    /// Offscreen HDR colour render target for the opaque pass. Resolved to the
+    /// swapchain image by the post-processing chain between passes, and sampled
+    /// by the water shader for refraction.
     pub color_target: ColorTarget,
     /// Depth buffer shared by both render passes.
     pub depth_buffer: DepthBuffer,
@@ -478,6 +479,7 @@ impl Swapchain {
         surface_info: SurfaceInfo,
         renderpass: vk::RenderPass,
         transparent_renderpass: vk::RenderPass,
+        scene_color_format: vk::Format,
         window_width: u32,
         window_height: u32,
     ) -> EngineResult<Self> {
@@ -585,8 +587,10 @@ impl Swapchain {
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|e| EngineError::Swapchain(format!("create image views: {:?}", e)))?;
 
-            // Create offscreen color target and depth buffer
-            let color_target = ColorTarget::new(&vulkan_context, extent, format.format)?;
+            // Create offscreen color target and depth buffer. The colour target
+            // is HDR, not the swapchain format: the post-processing resolve
+            // tonemaps it down to the displayable range.
+            let color_target = ColorTarget::new(&vulkan_context, extent, scene_color_format)?;
             let depth_buffer = DepthBuffer::new(&vulkan_context, extent, vk::Format::D16_UNORM)?;
 
             // Opaque framebuffer: renders to offscreen color target + depth.

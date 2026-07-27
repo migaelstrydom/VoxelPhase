@@ -328,10 +328,12 @@ fn run_with_scenario<S: PhysicsBenchScenario>(scenario: &S) -> EngineResult<()> 
                 let camera = state.orbit.to_camera(aspect);
                 let view = camera.get_view_matrix();
                 let proj = camera.get_projection_matrix();
+                let camera_pos =
+                    Vector3::new(camera.position.x, camera.position.y, camera.position.z);
 
                 match renderer.begin_frame() {
                     Ok((cb, present_index)) => {
-                        if let Err(e) = renderer.update_scene(&view, &proj) {
+                        if let Err(e) = renderer.update_scene(&view, &proj, &camera_pos) {
                             log::error!("Failed to update scene: {}", e);
                             return;
                         }

@@ -16,21 +16,66 @@ use std::mem;
 use std::sync::Arc;
 
 use ash::vk;
-use nalgebra::Matrix4;
+use nalgebra::{Matrix4, Vector3};
 
 use crate::core::device::ManagedDevice;
 use crate::core::error::{BufferOperation, EngineError, EngineResult};
 use crate::core::vulkan_context::find_memorytype_index;
+use crate::rendering::colour::Colour;
 use crate::rendering::deletion_queue::DeletionQueue;
 use crate::rendering::vertex::Vertex;
 
 /// Uniform buffer object for per-frame scene data.
 /// Model matrix is now passed via push constants per draw call.
+///
+/// Layout must match the `SceneUbo` block in shader/scene.glsl. All members
+/// after the matrices are vec4-sized so std140 alignment needs no padding.
 #[derive(Clone, Debug, Copy)]
 #[repr(C)]
 pub struct SceneUbo {
     pub view: Matrix4<f32>,
     pub proj: Matrix4<f32>,
+
+    /// xyz = camera world position, w unused. Needed for specular response.
+    pub camera_pos: [f32; 4],
+
+    /// xyz = normalized direction from surface towards the sun, w = intensity.
+    pub sun_direction: [f32; 4],
+
+    /// rgb = linear sun colour, w unused.
+    pub sun_colour: [f32; 4],
+
+    /// rgb = linear ambient fill colour, w unused.
+    pub ambient_colour: [f32; 4],
+}
+
+/// Per-frame lighting environment shared by every lit surface.
+#[derive(Clone, Copy, Debug)]
+pub struct SceneLighting {
+    /// Normalized direction from a surface towards the sun.
+    pub sun_direction: Vector3<f32>,
+
+    /// Linear sun colour.
+    pub sun_colour: Colour,
+
+    /// Sun brightness multiplier.
+    pub sun_intensity: f32,
+
+    /// Linear ambient fill applied to all surfaces.
+    pub ambient_colour: Colour,
+}
+
+impl Default for SceneLighting {
+    fn default() -> Self {
+        Self {
+            sun_direction: Vector3::new(0.5, 0.7, 0.5).normalize(),
+            sun_colour: Colour::new(1.0, 0.97, 0.9, 1.0),
+            // Chosen so that ambient + sun on a matte surface reproduces the
+            // brightness of the pre-BRDF shader (0.3 ambient + 0.7 diffuse).
+            sun_intensity: 0.7,
+            ambient_colour: Colour::new(0.3, 0.33, 0.4, 1.0),
+        }
+    }
 }
 
 /// A GPU buffer with RAII memory management.
@@ -348,16 +393,33 @@ impl FrameData {
         Ok(draw_info)
     }
 
-    /// Update the scene uniform buffer with per-frame data (view/projection).
+    /// Update the scene uniform buffer with per-frame camera and lighting data.
     /// Call this once per frame, not per draw call.
     pub fn update_scene_ubo(
         &mut self,
         view: &Matrix4<f32>,
         proj: &Matrix4<f32>,
+        camera_pos: &Vector3<f32>,
+        lighting: &SceneLighting,
     ) -> EngineResult<()> {
+        let sun = lighting.sun_direction.normalize();
         let ubo = SceneUbo {
             view: *view,
             proj: *proj,
+            camera_pos: [camera_pos.x, camera_pos.y, camera_pos.z, 0.0],
+            sun_direction: [sun.x, sun.y, sun.z, lighting.sun_intensity],
+            sun_colour: [
+                lighting.sun_colour.r,
+                lighting.sun_colour.g,
+                lighting.sun_colour.b,
+                0.0,
+            ],
+            ambient_colour: [
+                lighting.ambient_colour.r,
+                lighting.ambient_colour.g,
+                lighting.ambient_colour.b,
+                0.0,
+            ],
         };
 
         unsafe {

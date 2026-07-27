@@ -1,6 +1,11 @@
 #version 450
 #extension GL_ARB_separate_shader_objects : enable
 #extension GL_ARB_shading_language_420pack : enable
+#extension GL_GOOGLE_include_directive : require
+
+#include "scene.glsl"
+#include "material.glsl"
+#include "lighting.glsl"
 
 layout(location = 0) in vec4 inColor;
 layout(location = 1) in vec2 inTexCoord;
@@ -11,35 +16,38 @@ layout(location = 0) out vec4 outColor;
 
 layout(set = 1, binding = 0) uniform sampler2D texSampler;
 
-// For wireframe debugging overlay
-layout(push_constant) uniform PushConstants {
-    layout(offset = 64) vec4 colorOverride;
-} push;
-
 void main() {
-    if (push.colorOverride.a > 0.0) {
-        outColor = push.colorOverride;
+    if (material.colour_override.a > 0.0) {
+        outColor = material.colour_override;
         return;
     }
-    // Use interpolated normal for smooth shading
-    // Check if normal is non-zero before normalizing to avoid undefined behavior
-    vec3 normal = length(inNormal) > 0.001 ? normalize(inNormal) : vec3(0.0, 1.0, 0.0);
 
-    // Light direction: direction FROM surface TO light (sun coming from above and slightly offset)
-    vec3 lightDir = normalize(vec3(-0.2, 1.0, -0.3));
-
-    // Simple diffuse lighting with ambient
-    float ambient = 0.3;  // Increased from 0.5 for brighter base lighting
-    float diffuse = max(dot(normal, lightDir), 0.0);
-    float lighting = ambient + (1.0 - ambient) * diffuse;
-
-    // Sample texture and apply lighting
     vec4 texColor = texture(texSampler, inTexCoord);
-    vec3 litColor = texColor.rgb * inColor.rgb * lighting;
 
-    // Apply brightness boost
-    float brightness = 1.0;  // Brightness multiplier
-    litColor *= brightness;
+    SurfaceSample surface;
+    surface.albedo = texColor.rgb * inColor.rgb;
+    // Degenerate normals occur on some generated meshes; fall back to straight up.
+    surface.normal = length(inNormal) > 0.001 ? normalize(inNormal) : vec3(0.0, 1.0, 0.0);
+    surface.view_dir = normalize(scene.camera_pos.xyz - inWorldPos);
+    surface.roughness = materialRoughness();
+    surface.metallic = materialMetallic();
+
+    DirectionalLight sun;
+    sun.direction = scene.sun_direction.xyz;
+    sun.colour = scene.sun_colour.rgb;
+    sun.intensity = scene.sun_direction.w;
+
+    vec3 litColor = shadeDirectional(surface, sun)
+                  + shadeAmbient(surface, scene.ambient_colour.rgb)
+                  + materialEmissive();
+
+    // Rim light reads as a glowing silhouette; tinted by the emissive colour so
+    // it stays coherent with the object's own glow.
+    float rim_strength = materialRimStrength();
+    if (rim_strength > 0.0) {
+        float rim = fresnelRim(surface.normal, surface.view_dir, materialRimPower());
+        litColor += material.emissive.rgb * rim * rim_strength;
+    }
 
     outColor = vec4(litColor, texColor.a * inColor.a);
 }
