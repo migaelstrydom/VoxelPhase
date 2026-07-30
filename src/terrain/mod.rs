@@ -19,7 +19,7 @@ mod voxel;
 
 pub use chunk::{ChunkCoord, CHUNK_VOXELS};
 pub use chunk_grid::ChunkGrid;
-pub use manager::TerrainManager;
+pub use manager::{TerrainManager, UpdateTimings};
 
 // Voxel types for terrain modification
 pub use voxel::DurabilityConfig;

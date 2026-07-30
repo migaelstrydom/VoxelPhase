@@ -68,4 +68,4 @@ pub use solver::{
 };
 pub use static_geometry::StaticGeometry;
 pub use stepping::{FixedTimestep, SequentialStepper, Stepper};
-pub use world::{BodyProbeHit, PhysicsWorld};
+pub use world::{BodyProbeHit, PhysicsConfig, PhysicsWorld};

@@ -1,0 +1,16 @@
+// Committed mesh-integrity baselines, read by `level_check`.
+//
+// Terrain is not perfectly watertight: ambiguous marching-cubes configurations
+// in the cave noise leave a handful of open edges. These are pre-existing and
+// not seam-related — stage 1 confirmed the count barely moves when the chunk
+// size is quartered. The check is therefore relative: an error only when the
+// count rises meaningfully above the figure recorded here.
+//
+// Re-commit these numbers when terrain generation or meshing changes on purpose.
+// Measured on branch level-segments-stage-1-5.
+(
+    entries: [
+        (level: "test_arena.level.ron", triangles: 191116, open_edges: 218),
+        (level: "test_empty_terrain.level.ron", triangles: 98948, open_edges: 22),
+    ],
+)
