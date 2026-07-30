@@ -1,8 +1,20 @@
 //! Procedural terrain generation using composable features.
+//!
+//! Generation writes into a [`ChunkGrid`], which allocates chunks on demand, so
+//! the cost of a level is set by the volume its features actually fill rather
+//! than by the bounding box they sit in.
+//!
+//! # Coordinates
+//!
+//! Every position here is **grid-local**, and every noise function is sampled at
+//! a grid-local position from a feature-local seed. That is what makes a
+//! generated region identical wherever the grid is later placed; sampling world
+//! position instead would silently change terrain whenever it moved.
 
 use nalgebra::Point3;
 
-use super::svo::SparseVoxelOctree;
+use super::chunk::{ChunkCoord, CHUNK_VOXELS};
+use super::chunk_grid::ChunkGrid;
 use super::voxel::{DurabilityConfig, Voxel, VoxelMaterial, INDESTRUCTIBLE};
 use crate::collision::AABB;
 use crate::level::{
@@ -11,63 +23,164 @@ use crate::level::{
 };
 use crate::utils::noise::{fbm_2d_periodic, fbm_3d};
 
-/// Generate terrain into an SVO from a `Terrain` description.
+/// Generate terrain into a chunk grid from a `Terrain` description.
+///
+/// `bounds` is the grid-local extent to generate within; features are clipped
+/// to it and nothing outside is written.
 pub fn generate_terrain(
-    svo: &mut SparseVoxelOctree,
+    grid: &mut ChunkGrid,
     terrain: &Terrain,
     durability: &DurabilityConfig,
+    bounds: &AABB,
 ) {
-    let bounds = *svo.bounds();
-    let floor_y = bounds.min.y;
-    let step = svo.min_voxel_size();
+    let step = grid.voxel_size();
 
-    svo.fill(Voxel::air());
+    generate_heightfield(grid, terrain, durability, bounds, step);
 
-    // Pass 1: heightfield — fill columns based on feature-driven height.
-    let mut x = bounds.min.x;
-    while x < bounds.max.x {
-        let mut z = bounds.min.z;
-        while z < bounds.max.z {
-            let height = height_at(x, z, terrain);
-
-            let top_voxel_y =
-                bounds.min.y + (((height - bounds.min.y) / step).ceil() - 1.0).max(0.0) * step;
-
-            let mut y = bounds.min.y;
-            while y < height {
-                let depth = top_voxel_y - y;
-                let material = material_at_depth(depth, &terrain.material_layers);
-                let hp = durability.health_at(y, top_voxel_y, floor_y);
-                let mut voxel = Voxel::solid(material, hp);
-                // Topmost voxel: encode the sub-voxel surface offset as an SDF
-                // density so marching cubes lands the triangle at y = height
-                // instead of at the midpoint between solid and air corners.
-                if y + step > height {
-                    voxel.density = ((height - y) / step).clamp(f32::MIN_POSITIVE, 1.0);
-                }
-                svo.set(Point3::new(x, y, z), voxel);
-                y += step;
-            }
-
-            // Matching partial-air voxel directly above the surface so the MC
-            // edge interpolates to exactly y = height.
-            if y > bounds.min.y && y < bounds.max.y {
-                let air = Voxel {
-                    density: ((height - y) / step).clamp(-1.0, 0.0),
-                    material: VoxelMaterial::Air,
-                    health: 0,
-                };
-                svo.set(Point3::new(x, y, z), air);
-            }
-
-            z += step;
-        }
-        x += step;
-    }
-
-    // Pass 2: volumetric features — place or carve voxels in 3D.
+    // Pass 2: volumetric features — place or carve voxels in 3D. Each feature
+    // derives its own iteration box, so only the chunks it overlaps are visited.
     for volume in &terrain.volumes {
-        apply_volume(svo, volume, terrain, durability, &bounds, step);
+        apply_volume(grid, volume, terrain, durability, bounds, step);
+    }
+}
+
+/// Inclusive-exclusive voxel index range covering a coordinate span.
+///
+/// Sample index `i` on an axis denotes grid-local position `i * step`, so the
+/// voxel lattice is anchored to the grid origin and stays aligned between chunks
+/// regardless of where the authored bounds happen to fall.
+fn index_range(min: f32, max: f32, step: f32) -> (i32, i32) {
+    ((min / step).floor() as i32, (max / step).ceil() as i32)
+}
+
+/// Pass 1: heightfield — fill columns based on feature-driven height.
+///
+/// Walks one chunk column at a time. Heights are evaluated once per voxel
+/// column and reused for every chunk in that column, and each chunk is resolved
+/// once rather than per voxel write.
+fn generate_heightfield(
+    grid: &mut ChunkGrid,
+    terrain: &Terrain,
+    durability: &DurabilityConfig,
+    bounds: &AABB,
+    step: f32,
+) {
+    let floor_y = bounds.min.y;
+    let n = CHUNK_VOXELS as i32;
+
+    let (ix0, ix1) = index_range(bounds.min.x, bounds.max.x, step);
+    let (iy0, iy1) = index_range(bounds.min.y, bounds.max.y, step);
+    let (iz0, iz1) = index_range(bounds.min.z, bounds.max.z, step);
+
+    let chunk_x = (div_floor(ix0, n), div_floor(ix1 - 1, n));
+    let chunk_z = (div_floor(iz0, n), div_floor(iz1 - 1, n));
+
+    // Per voxel column within one chunk column: surface height and the index of
+    // the topmost solid voxel.
+    let mut heights: Vec<f32> = Vec::new();
+    let mut tops: Vec<i32> = Vec::new();
+
+    for cx in chunk_x.0..=chunk_x.1 {
+        let xs = (cx * n).max(ix0);
+        let xe = ((cx + 1) * n).min(ix1);
+        if xs >= xe {
+            continue;
+        }
+
+        for cz in chunk_z.0..=chunk_z.1 {
+            let zs = (cz * n).max(iz0);
+            let ze = ((cz + 1) * n).min(iz1);
+            if zs >= ze {
+                continue;
+            }
+
+            // Evaluate the heightfield once for this chunk column.
+            heights.clear();
+            tops.clear();
+            let mut top_index = iy0;
+            for ix in xs..xe {
+                for iz in zs..ze {
+                    let height = height_at(ix as f32 * step, iz as f32 * step, terrain);
+                    // Topmost solid voxel: the last index strictly below `height`.
+                    let top = (((height / step).ceil() as i32) - 1).max(iy0);
+                    heights.push(height);
+                    tops.push(top);
+                    top_index = top_index.max(top + 1);
+                }
+            }
+
+            // Only the chunks between the floor and the highest surface (plus the
+            // partial-air voxel above it) hold anything.
+            let cy_lo = div_floor(iy0, n);
+            let cy_hi = div_floor(top_index.min(iy1 - 1), n);
+
+            for cy in cy_lo..=cy_hi {
+                let ys = (cy * n).max(iy0);
+                let ye = ((cy + 1) * n).min(iy1);
+                if ys >= ye {
+                    continue;
+                }
+
+                let chunk = grid.chunk_or_insert(ChunkCoord::new(cx, cy, cz));
+                let mut column = 0usize;
+                for ix in xs..xe {
+                    let x = ix as f32 * step;
+                    for iz in zs..ze {
+                        let z = iz as f32 * step;
+                        let height = heights[column];
+                        let top = tops[column];
+                        column += 1;
+
+                        let top_voxel_y = top as f32 * step;
+                        // Index of the partial-air voxel capping this column,
+                        // present only where the column has at least one solid
+                        // voxel and the cap still lies inside the bounds.
+                        let air_index = (top_voxel_y < height && top + 1 < iy1).then_some(top + 1);
+
+                        for iy in ys..ye.min(top + 2) {
+                            let y = iy as f32 * step;
+                            if y < height {
+                                let depth = top_voxel_y - y;
+                                let material = material_at_depth(depth, &terrain.material_layers);
+                                let hp = durability.health_at(y, top_voxel_y, floor_y);
+                                let mut voxel = Voxel::solid(material, hp);
+                                // Topmost voxel: encode the sub-voxel surface offset
+                                // as an SDF density so marching cubes lands the
+                                // triangle at y = height instead of at the midpoint
+                                // between solid and air corners.
+                                if y + step > height {
+                                    voxel.density =
+                                        ((height - y) / step).clamp(f32::MIN_POSITIVE, 1.0);
+                                }
+                                chunk.set_voxel(Point3::new(x, y, z), voxel);
+                            } else if air_index == Some(iy) {
+                                // Matching partial-air voxel directly above the
+                                // surface so the MC edge interpolates to exactly
+                                // y = height.
+                                chunk.set_voxel(
+                                    Point3::new(x, y, z),
+                                    Voxel {
+                                        density: ((height - y) / step).clamp(-1.0, 0.0),
+                                        material: VoxelMaterial::Air,
+                                        health: 0,
+                                    },
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Floor division for signed integers (`i32::div_floor` is unstable).
+fn div_floor(a: i32, b: i32) -> i32 {
+    let q = a / b;
+    if (a % b != 0) && ((a < 0) != (b < 0)) {
+        q - 1
+    } else {
+        q
     }
 }
 
@@ -263,7 +376,7 @@ fn contribute(feature: &TerrainFeature, x: f32, z: f32, current_h: f32) -> f32 {
 /// when the new density is greater than what's already there — so features
 /// layer correctly and never clobber deeper geometry.
 fn union_solid(
-    svo: &mut SparseVoxelOctree,
+    grid: &mut ChunkGrid,
     pos: Point3<f32>,
     sdf: f32,
     step: f32,
@@ -271,7 +384,7 @@ fn union_solid(
     health: u8,
 ) {
     let new_density = (-sdf / step).clamp(-1.0, 1.0);
-    let existing = svo.get(pos);
+    let existing = grid.get(pos);
     if new_density <= existing.density {
         return;
     }
@@ -280,7 +393,7 @@ fn union_solid(
     } else {
         (VoxelMaterial::Air, 0)
     };
-    svo.set(
+    grid.set(
         pos,
         Voxel {
             density: new_density,
@@ -296,9 +409,9 @@ fn union_solid(
 /// the region being removed). Uses CSG subtraction semantics so existing
 /// solids outside the carve are preserved, and voxels near the cut get a
 /// smooth partial density for MC to interpolate.
-fn carve_with_sdf(svo: &mut SparseVoxelOctree, pos: Point3<f32>, sdf_carve: f32, step: f32) {
+fn carve_with_sdf(grid: &mut ChunkGrid, pos: Point3<f32>, sdf_carve: f32, step: f32) {
     let carve_density = (sdf_carve / step).clamp(-1.0, 1.0);
-    let existing = svo.get(pos);
+    let existing = grid.get(pos);
     let new_density = existing.density.min(carve_density);
     if new_density >= existing.density {
         return;
@@ -308,7 +421,7 @@ fn carve_with_sdf(svo: &mut SparseVoxelOctree, pos: Point3<f32>, sdf_carve: f32,
     } else {
         (VoxelMaterial::Air, 0)
     };
-    svo.set(
+    grid.set(
         pos,
         Voxel {
             density: new_density,
@@ -320,7 +433,7 @@ fn carve_with_sdf(svo: &mut SparseVoxelOctree, pos: Point3<f32>, sdf_carve: f32,
 
 /// Apply a single volumetric feature to the SVO.
 fn apply_volume(
-    svo: &mut SparseVoxelOctree,
+    grid: &mut ChunkGrid,
     volume: &VolumeFeature,
     terrain: &Terrain,
     durability: &DurabilityConfig,
@@ -335,7 +448,7 @@ fn apply_volume(
             edge_noise,
         } => {
             apply_island(
-                svo, cx, cy, cz, hx, hy, hz, edge_noise, layers, durability, bounds, step,
+                grid, cx, cy, cz, hx, hy, hz, edge_noise, layers, durability, bounds, step,
             );
         }
 
@@ -345,7 +458,7 @@ fn apply_volume(
             radius,
         } => {
             apply_pillar(
-                svo, cx, cz, height, radius, layers, durability, bounds, step,
+                grid, cx, cz, height, radius, layers, durability, bounds, step,
             );
         }
 
@@ -356,7 +469,7 @@ fn apply_volume(
             radius,
             depth,
         } => {
-            apply_tunnel(svo, cx, cz, dx, dz, length, radius, depth, bounds, step);
+            apply_tunnel(grid, cx, cz, dx, dz, length, radius, depth, bounds, step);
         }
 
         VolumeFeature::Arch {
@@ -366,7 +479,7 @@ fn apply_volume(
             thickness,
         } => {
             apply_arch(
-                svo, fx, fy, fz, tx, ty, tz, radius, thickness, layers, durability, bounds, step,
+                grid, fx, fy, fz, tx, ty, tz, radius, thickness, layers, durability, bounds, step,
             );
         }
 
@@ -385,7 +498,7 @@ fn apply_volume(
                 material_layers
             };
             apply_caves(
-                svo,
+                grid,
                 terrain,
                 frequency,
                 octaves,
@@ -410,7 +523,7 @@ fn apply_volume(
             noise_seed,
         } => {
             apply_overhang(
-                svo, fx, fz, tx, tz, height, depth, thickness, dx, dz, noise, noise_seed, layers,
+                grid, fx, fz, tx, tz, height, depth, thickness, dx, dz, noise, noise_seed, layers,
                 durability, bounds, step,
             );
         }
@@ -419,7 +532,7 @@ fn apply_volume(
 
 /// Floating solid mass — a rounded box with optional noisy edges.
 fn apply_island(
-    svo: &mut SparseVoxelOctree,
+    grid: &mut ChunkGrid,
     cx: f32,
     cy: f32,
     cz: f32,
@@ -473,7 +586,7 @@ fn apply_island(
                 let depth = (-sd).max(0.0);
                 let material = material_at_depth(depth, layers);
                 let hp = durability.health_at(y, cy + hy, bounds.min.y);
-                union_solid(svo, Point3::new(x, y, z), sd, step, material, hp);
+                union_solid(grid, Point3::new(x, y, z), sd, step, material, hp);
 
                 z += step;
             }
@@ -485,7 +598,7 @@ fn apply_island(
 
 /// Vertical column rising from the heightfield surface.
 fn apply_pillar(
-    svo: &mut SparseVoxelOctree,
+    grid: &mut ChunkGrid,
     cx: f32,
     cz: f32,
     height: f32,
@@ -521,7 +634,7 @@ fn apply_pillar(
                 let depth = (top_y - y).max(0.0);
                 let material = material_at_depth(depth, layers);
                 let hp = durability.health_at(y, top_y, bounds.min.y);
-                union_solid(svo, Point3::new(x, y, z), sd, step, material, hp);
+                union_solid(grid, Point3::new(x, y, z), sd, step, material, hp);
                 y += step;
             }
 
@@ -533,7 +646,7 @@ fn apply_pillar(
 
 /// Horizontal bore that carves a cylindrical tunnel through existing terrain.
 fn apply_tunnel(
-    svo: &mut SparseVoxelOctree,
+    grid: &mut ChunkGrid,
     cx: f32,
     cz: f32,
     dx: f32,
@@ -591,7 +704,7 @@ fn apply_tunnel(
                 let dy = y - depth;
                 let dist = (perp_xz * perp_xz + dy * dy).sqrt();
                 let sd = dist - radius;
-                carve_with_sdf(svo, Point3::new(x, y, z), sd, step);
+                carve_with_sdf(grid, Point3::new(x, y, z), sd, step);
 
                 z += step;
             }
@@ -603,7 +716,7 @@ fn apply_tunnel(
 
 /// Curved bridge (circular arc) between two 3D points.
 fn apply_arch(
-    svo: &mut SparseVoxelOctree,
+    grid: &mut ChunkGrid,
     fx: f32,
     fy: f32,
     fz: f32,
@@ -684,7 +797,7 @@ fn apply_arch(
 
                 let material = material_at_depth(0.5, layers);
                 let hp = durability.health_at(y, arc_y + half_t, bounds.min.y);
-                union_solid(svo, Point3::new(x, y, z), sd, step, material, hp);
+                union_solid(grid, Point3::new(x, y, z), sd, step, material, hp);
 
                 z += step;
             }
@@ -701,7 +814,7 @@ fn apply_arch(
 /// organic, weathered look.
 #[allow(clippy::too_many_arguments)]
 fn apply_overhang(
-    svo: &mut SparseVoxelOctree,
+    grid: &mut ChunkGrid,
     fx: f32,
     fz: f32,
     tx: f32,
@@ -801,7 +914,7 @@ fn apply_overhang(
                 let depth_in_lip = (top_y - y).max(0.0);
                 let material = material_at_depth(depth_in_lip, layers);
                 let hp = durability.health_at(y, top_y, bounds.min.y);
-                union_solid(svo, Point3::new(x, y, z), sd, step, material, hp);
+                union_solid(grid, Point3::new(x, y, z), sd, step, material, hp);
                 y += step;
             }
 
@@ -820,7 +933,7 @@ fn apply_overhang(
 /// up surface materials using cave-specific layers and assigns health based
 /// on material type and depth from the cave wall.
 fn apply_caves(
-    svo: &mut SparseVoxelOctree,
+    grid: &mut ChunkGrid,
     terrain: &Terrain,
     frequency: f32,
     octaves: u32,
@@ -869,7 +982,7 @@ fn apply_caves(
                     continue;
                 }
 
-                if svo.get(Point3::new(x, y, z)).density <= 0.0 {
+                if grid.get(Point3::new(x, y, z)).density <= 0.0 {
                     y += step;
                     continue;
                 }
@@ -923,7 +1036,7 @@ fn apply_caves(
                 // gradients aren't true distances, but at unit step this gives
                 // a reasonable smooth cave wall for MC interpolation.
                 let sdf_carve = threshold - noise;
-                carve_with_sdf(svo, Point3::new(x, y, z), sdf_carve, step);
+                carve_with_sdf(grid, Point3::new(x, y, z), sdf_carve, step);
 
                 y += step;
             }
@@ -934,7 +1047,7 @@ fn apply_caves(
 
     // Pass B: reassign materials and health on cave-exposed surfaces.
     fixup_cave_materials(
-        svo,
+        grid,
         &terrain.material_layers,
         cave_layers,
         min_x,
@@ -955,7 +1068,7 @@ fn apply_caves(
 /// those voxels keep the terrain's material layers. Only after passing through
 /// an underground air gap (a cave) do we switch to cave layers.
 fn fixup_cave_materials(
-    svo: &mut SparseVoxelOctree,
+    grid: &mut ChunkGrid,
     terrain_layers: &[MaterialLayer],
     cave_layers: &[MaterialLayer],
     min_x: f32,
@@ -979,7 +1092,7 @@ fn fixup_cave_materials(
 
             let mut y = max_y - step;
             while y >= min_y {
-                let voxel = svo.get(Point3::new(x, y, z));
+                let voxel = grid.get(Point3::new(x, y, z));
                 if voxel.density > 0.0 {
                     if !in_solid {
                         depth_below_surface = 0.0;
@@ -998,7 +1111,7 @@ fn fixup_cave_materials(
                     };
                     if voxel.material != material || voxel.health != health {
                         // Preserve the SDF density while updating material/health.
-                        svo.set(
+                        grid.set(
                             Point3::new(x, y, z),
                             Voxel {
                                 density: voxel.density,

@@ -48,16 +48,26 @@ impl MarchingCubes {
         Self { iso_level: 0.0 }
     }
 
-    /// Generate mesh from a 3D grid of voxels.
+    /// Generate mesh for a sub-range of cells within a sample grid.
     ///
-    /// The grid should be indexed as `grid[x][y][z]`.
-    /// `origin` is the world position of grid[0][0][0].
-    /// `cell_size` is the distance between grid points.
-    pub fn generate(
+    /// The grid is indexed as `grid[x][y][z]`, and the world position of
+    /// `grid[x][y][z]` is `lattice_origin + (first_sample + (x, y, z)) * cell_size`.
+    /// Expressing positions as a multiple of the *global* sample index — rather
+    /// than as an offset from a per-block origin — makes vertex positions
+    /// bit-identical between blocks that share a sample plane, so meshes from
+    /// neighbouring chunks join without a seam.
+    ///
+    /// Only cells with index in `cell_lo[a] .. cell_hi[a]` (per axis) are
+    /// emitted; the remaining samples still participate as gradient neighbours,
+    /// which keeps normals continuous across a block boundary.
+    pub fn generate_range(
         &self,
         grid: &[Vec<Vec<Voxel>>],
-        origin: Point3<f32>,
+        lattice_origin: Point3<f32>,
+        first_sample: [i32; 3],
         cell_size: f32,
+        cell_lo: [usize; 3],
+        cell_hi: [usize; 3],
     ) -> MarchingCubesMesh {
         let mut mesh = MarchingCubesMesh::new();
 
@@ -74,11 +84,25 @@ impl MarchingCubes {
             return mesh;
         }
 
-        // Process each cell in the grid
-        for x in 0..size_x - 1 {
-            for y in 0..size_y - 1 {
-                for z in 0..size_z - 1 {
-                    self.process_cell(grid, x, y, z, origin, cell_size, &mut mesh);
+        let hi = [
+            cell_hi[0].min(size_x - 1),
+            cell_hi[1].min(size_y - 1),
+            cell_hi[2].min(size_z - 1),
+        ];
+
+        for x in cell_lo[0]..hi[0] {
+            for y in cell_lo[1]..hi[1] {
+                for z in cell_lo[2]..hi[2] {
+                    self.process_cell(
+                        grid,
+                        x,
+                        y,
+                        z,
+                        lattice_origin,
+                        first_sample,
+                        cell_size,
+                        &mut mesh,
+                    );
                 }
             }
         }
@@ -86,16 +110,26 @@ impl MarchingCubes {
         mesh
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn process_cell(
         &self,
         grid: &[Vec<Vec<Voxel>>],
         x: usize,
         y: usize,
         z: usize,
-        origin: Point3<f32>,
+        lattice_origin: Point3<f32>,
+        first_sample: [i32; 3],
         cell_size: f32,
         mesh: &mut MarchingCubesMesh,
     ) {
+        // World position of a sample, expressed from its global lattice index.
+        let sample_pos = |ix: usize, iy: usize, iz: usize| {
+            Point3::new(
+                lattice_origin.x + (first_sample[0] + ix as i32) as f32 * cell_size,
+                lattice_origin.y + (first_sample[1] + iy as i32) as f32 * cell_size,
+                lattice_origin.z + (first_sample[2] + iz as i32) as f32 * cell_size,
+            )
+        };
         // Get the 8 corner voxels of this cell
         let corners = [
             &grid[x][y][z],
@@ -110,46 +144,14 @@ impl MarchingCubes {
 
         // Compute corner positions
         let positions = [
-            Point3::new(
-                origin.x + x as f32 * cell_size,
-                origin.y + y as f32 * cell_size,
-                origin.z + z as f32 * cell_size,
-            ),
-            Point3::new(
-                origin.x + (x + 1) as f32 * cell_size,
-                origin.y + y as f32 * cell_size,
-                origin.z + z as f32 * cell_size,
-            ),
-            Point3::new(
-                origin.x + (x + 1) as f32 * cell_size,
-                origin.y + y as f32 * cell_size,
-                origin.z + (z + 1) as f32 * cell_size,
-            ),
-            Point3::new(
-                origin.x + x as f32 * cell_size,
-                origin.y + y as f32 * cell_size,
-                origin.z + (z + 1) as f32 * cell_size,
-            ),
-            Point3::new(
-                origin.x + x as f32 * cell_size,
-                origin.y + (y + 1) as f32 * cell_size,
-                origin.z + z as f32 * cell_size,
-            ),
-            Point3::new(
-                origin.x + (x + 1) as f32 * cell_size,
-                origin.y + (y + 1) as f32 * cell_size,
-                origin.z + z as f32 * cell_size,
-            ),
-            Point3::new(
-                origin.x + (x + 1) as f32 * cell_size,
-                origin.y + (y + 1) as f32 * cell_size,
-                origin.z + (z + 1) as f32 * cell_size,
-            ),
-            Point3::new(
-                origin.x + x as f32 * cell_size,
-                origin.y + (y + 1) as f32 * cell_size,
-                origin.z + (z + 1) as f32 * cell_size,
-            ),
+            sample_pos(x, y, z),
+            sample_pos(x + 1, y, z),
+            sample_pos(x + 1, y, z + 1),
+            sample_pos(x, y, z + 1),
+            sample_pos(x, y + 1, z),
+            sample_pos(x + 1, y + 1, z),
+            sample_pos(x + 1, y + 1, z + 1),
+            sample_pos(x, y + 1, z + 1),
         ];
 
         // Compute cube index based on which corners are inside the surface
@@ -630,7 +632,14 @@ mod tests {
             }
         }
         let mc = MarchingCubes::new();
-        let mesh = mc.generate(&grid, Point3::origin(), 1.0);
+        let mesh = mc.generate_range(
+            &grid,
+            Point3::origin(),
+            [0, 0, 0],
+            1.0,
+            [0, 0, 0],
+            [usize::MAX; 3],
+        );
         assert!(!mesh.normals.is_empty(), "mesh should have normals");
         for (i, n) in mesh.normals.iter().enumerate() {
             assert!(n.y > 0.9, "normal {i} should point up, got {:?}", n);
@@ -655,7 +664,14 @@ mod tests {
             }
         }
         let mc = MarchingCubes::new();
-        let mesh = mc.generate(&grid, Point3::origin(), 1.0);
+        let mesh = mc.generate_range(
+            &grid,
+            Point3::origin(),
+            [0, 0, 0],
+            1.0,
+            [0, 0, 0],
+            [usize::MAX; 3],
+        );
         assert!(!mesh.normals.is_empty());
         // Expect triangles on the crater floor (y transition 3->4) to have upward normals.
         for (i, (p, n)) in mesh.positions.iter().zip(mesh.normals.iter()).enumerate() {
@@ -682,7 +698,14 @@ mod tests {
             }
         }
         let mc = MarchingCubes::new();
-        let mesh = mc.generate(&grid, Point3::origin(), 1.0);
+        let mesh = mc.generate_range(
+            &grid,
+            Point3::origin(),
+            [0, 0, 0],
+            1.0,
+            [0, 0, 0],
+            [usize::MAX; 3],
+        );
         assert!(!mesh.normals.is_empty(), "mesh should have normals");
         for (i, n) in mesh.normals.iter().enumerate() {
             assert!(n.y > 0.9, "normal {i} should point up, got {:?}", n);

@@ -80,23 +80,6 @@ impl SparseVoxelOctree {
         }
     }
 
-    /// Get the world bounds of this SVO.
-    pub fn bounds(&self) -> &AABB {
-        &self.bounds
-    }
-
-    /// Get the minimum voxel size (at max depth).
-    pub fn min_voxel_size(&self) -> f32 {
-        let size = self.bounds.size();
-        let divisions = (1 << self.max_depth) as f32;
-        size.x.min(size.y).min(size.z) / divisions
-    }
-
-    /// Get the voxel size at maximum depth.
-    pub fn voxel_size(&self) -> f32 {
-        self.bounds.size().x / (1 << self.max_depth) as f32
-    }
-
     /// Get the voxel at a world position.
     pub fn get(&self, position: Point3<f32>) -> Voxel {
         if !self.bounds.contains_point(position) {
@@ -290,8 +273,32 @@ impl SparseVoxelOctree {
     }
 
     /// Fill the entire SVO with a uniform voxel.
+    #[allow(dead_code)]
     pub fn fill(&mut self, voxel: Voxel) {
         self.root = SvoNode::Leaf(voxel);
+    }
+
+    /// Whether the tree holds no data at all: a single plain-air leaf.
+    ///
+    /// Deliberately stricter than "no solid voxels" — a partial-air voxel
+    /// carries the sub-voxel surface offset that marching cubes interpolates
+    /// against, so a tree holding those still has data worth keeping.
+    pub fn is_empty_air(&self) -> bool {
+        matches!(&self.root, SvoNode::Leaf(v) if *v == Voxel::air())
+    }
+
+    /// Whether any voxel in the tree is solid.
+    ///
+    /// Marching cubes treats `density > 0` as inside, so a tree without one can
+    /// never produce a triangle from its own samples.
+    pub fn has_solid(&self) -> bool {
+        fn walk(node: &SvoNode) -> bool {
+            match node {
+                SvoNode::Leaf(v) => v.density > 0.0,
+                SvoNode::Interior { children } => children.iter().any(walk),
+            }
+        }
+        walk(&self.root)
     }
 }
 

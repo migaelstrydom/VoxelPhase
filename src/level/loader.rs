@@ -45,36 +45,40 @@ pub fn load_level(path: &Path) -> Result<Level, LevelError> {
 
 /// Validate level data for consistency.
 fn validate(level: &Level) -> Result<(), LevelError> {
-    if level.world_size <= 0.0 {
-        return Err(LevelError::Validation("world_size must be positive".into()));
-    }
-
-    if level.voxel_size <= 0.0 {
+    let voxel_size = level.terrain.voxel_size;
+    if voxel_size <= 0.0 {
         return Err(LevelError::Validation("voxel_size must be positive".into()));
     }
 
-    let ratio = level.world_size / level.voxel_size;
-    if ratio < 1.0 || ratio.log2().fract().abs() > f32::EPSILON {
+    let bounds = level.terrain.bounds.to_aabb();
+    let size = bounds.size();
+    if size.x <= 0.0 || size.y <= 0.0 || size.z <= 0.0 {
         return Err(LevelError::Validation(format!(
-            "world_size / voxel_size must be a power of two, got {} / {} = {}",
-            level.world_size, level.voxel_size, ratio
+            "terrain bounds must have positive extent on every axis, got {:?} to {:?}",
+            bounds.min, bounds.max
         )));
     }
 
-    let depth = level.octree_depth();
-    if depth < 2 || depth > 10 {
+    // Chunks are allocated on demand, so a generous extent is cheap — but an
+    // extent measured in thousands of voxels per axis still means a very long
+    // heightfield pass, which is worth flagging as an authoring mistake.
+    let max_voxels = (size.x / voxel_size)
+        .max(size.y / voxel_size)
+        .max(size.z / voxel_size);
+    if max_voxels > 4096.0 {
         return Err(LevelError::Validation(format!(
-            "computed octree depth {} is out of range [2, 10]",
-            depth
+            "terrain bounds span {:.0} voxels on its longest axis at voxel_size {}; \
+             limit is 4096",
+            max_voxels, voxel_size
         )));
     }
 
-    let half = level.world_size;
     let (px, py, pz) = level.player_spawn;
-    if px.abs() > half || py.abs() > half || pz.abs() > half {
+    let spawn = nalgebra::Point3::new(px, py, pz);
+    if !bounds.contains_point(spawn) {
         return Err(LevelError::Validation(format!(
-            "player_spawn ({}, {}, {}) is outside world bounds (±{})",
-            px, py, pz, half
+            "player_spawn ({}, {}, {}) is outside terrain bounds {:?} to {:?}",
+            px, py, pz, bounds.min, bounds.max
         )));
     }
 
@@ -98,9 +102,9 @@ mod tests {
         let ron = r#"
             Level(
                 name: "Test",
-                world_size: 64.0,
-                voxel_size: 1.0,
                 terrain: Terrain(
+                    voxel_size: 1.0,
+                    bounds: (min: (-64.0, -32.0, -64.0), max: (64.0, 32.0, 64.0)),
                     base_height: 0.0,
                     features: [
                         Hill(center: (5.0, 5.0), radius: 10.0, height: 3.0),
@@ -118,7 +122,7 @@ mod tests {
         validate(&level).expect("Validation failed");
 
         assert_eq!(level.name, "Test");
-        assert_eq!(level.octree_depth(), 6); // log2(64/1) = 6
+        assert_eq!(level.terrain.voxel_size, 1.0);
         assert_eq!(level.objects.len(), 2);
         assert!(level.terrain.volumes.is_empty());
     }
@@ -128,9 +132,9 @@ mod tests {
         let ron = r#"
             Level(
                 name: "Full Test",
-                world_size: 32.0,
-                voxel_size: 0.5,
                 terrain: Terrain(
+                    voxel_size: 0.5,
+                    bounds: (min: (-32.0, -16.0, -32.0), max: (32.0, 16.0, 32.0)),
                     base_height: -2.0,
                     material_layers: [
                         (depth: 1.0, material: Grass),
@@ -194,21 +198,26 @@ mod tests {
         validate(&level).expect("Validation failed");
 
         assert_eq!(level.name, "Full Test");
-        assert_eq!(level.octree_depth(), 6); // log2(32/0.5) = 6
+        assert_eq!(level.terrain.voxel_size, 0.5);
         assert_eq!(level.terrain.features.len(), 5);
         assert_eq!(level.terrain.volumes.len(), 2);
         assert_eq!(level.terrain.material_layers.len(), 3);
         assert_eq!(level.objects.len(), 9);
     }
 
+    /// A level with an inverted or degenerate extent generates nothing and is
+    /// almost certainly an authoring slip.
     #[test]
-    fn reject_invalid_world_size() {
+    fn reject_degenerate_bounds() {
         let ron = r#"
             Level(
                 name: "Bad",
-                world_size: 0.0,
-                voxel_size: 1.0,
-                terrain: Terrain(base_height: 0.0, features: []),
+                terrain: Terrain(
+                    voxel_size: 1.0,
+                    bounds: (min: (0.0, 0.0, 0.0), max: (0.0, 16.0, 16.0)),
+                    base_height: 0.0,
+                    features: [],
+                ),
                 player_spawn: (0.0, 0.0, 0.0),
                 objects: [],
             )
@@ -218,13 +227,37 @@ mod tests {
     }
 
     #[test]
-    fn reject_non_power_of_two_ratio() {
+    fn reject_non_positive_voxel_size() {
         let ron = r#"
             Level(
                 name: "Bad",
-                world_size: 30.0,
-                voxel_size: 1.0,
-                terrain: Terrain(base_height: 0.0, features: []),
+                terrain: Terrain(
+                    voxel_size: 0.0,
+                    bounds: (min: (-16.0, -16.0, -16.0), max: (16.0, 16.0, 16.0)),
+                    base_height: 0.0,
+                    features: [],
+                ),
+                player_spawn: (0.0, 0.0, 0.0),
+                objects: [],
+            )
+        "#;
+        let level: Level = ron::from_str(ron).expect("parse");
+        assert!(validate(&level).is_err());
+    }
+
+    /// An extent that would need millions of voxels per axis is a mistake, not
+    /// an ambition — the heightfield pass still walks every column.
+    #[test]
+    fn reject_absurdly_large_bounds() {
+        let ron = r#"
+            Level(
+                name: "Bad",
+                terrain: Terrain(
+                    voxel_size: 0.25,
+                    bounds: (min: (-4096.0, -16.0, -16.0), max: (4096.0, 16.0, 16.0)),
+                    base_height: 0.0,
+                    features: [],
+                ),
                 player_spawn: (0.0, 0.0, 0.0),
                 objects: [],
             )
@@ -238,9 +271,12 @@ mod tests {
         let ron = r#"
             Level(
                 name: "Bad",
-                world_size: 16.0,
-                voxel_size: 1.0,
-                terrain: Terrain(base_height: 0.0, features: []),
+                terrain: Terrain(
+                    voxel_size: 1.0,
+                    bounds: (min: (-16.0, -16.0, -16.0), max: (16.0, 16.0, 16.0)),
+                    base_height: 0.0,
+                    features: [],
+                ),
                 player_spawn: (100.0, 0.0, 0.0),
                 objects: [],
             )
@@ -256,11 +292,10 @@ mod tests {
     }
 
     #[test]
-    fn load_grenade_gauntlet_from_file() {
-        let level = load_level(std::path::Path::new("levels/grenade_gauntlet.level.ron"))
-            .expect("Failed to load grenade_gauntlet");
-        assert_eq!(level.name, "Grenade Gauntlet");
-        assert_eq!(level.octree_depth(), 6);
+    fn test_arena_declares_metre_voxels() {
+        let level = load_level(std::path::Path::new("levels/test_arena.level.ron"))
+            .expect("Failed to load test_arena");
+        assert_eq!(level.terrain.voxel_size, 1.0);
         assert!(!level.objects.is_empty());
         assert!(!level.terrain.volumes.is_empty());
     }
@@ -270,9 +305,12 @@ mod tests {
         let ron = r#"
             Level(
                 name: "Defaults",
-                world_size: 64.0,
-                voxel_size: 1.0,
-                terrain: Terrain(base_height: 0.0, features: []),
+                terrain: Terrain(
+                    voxel_size: 1.0,
+                    bounds: (min: (-64.0, -32.0, -64.0), max: (64.0, 32.0, 64.0)),
+                    base_height: 0.0,
+                    features: [],
+                ),
                 player_spawn: (0.0, 0.0, 0.0),
                 objects: [
                     Box(

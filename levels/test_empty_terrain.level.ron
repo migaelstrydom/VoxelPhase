@@ -1,10 +1,12 @@
-// Test arena — reproduces the original hardcoded scene.
+// Minimal terrain fixture: one crater, no objects.
 Level(
-    name: "Test Arena",
-    world_size: 64.0,
-    voxel_size: 1.0,
+    name: "Test Empty Terrain",
 
     terrain: Terrain(
+        voxel_size: 1.0,
+        // Chunks are 32 voxels on a side; keeping bounds on that lattice avoids
+        // partially-filled edge chunks.
+        bounds: (min: (-64.0, -32.0, -64.0), max: (64.0, 32.0, 64.0)),
         base_height: 0.0,
         material_layers: [
             (depth: 1.0,  material: Grass),

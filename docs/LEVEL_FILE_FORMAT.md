@@ -1,5 +1,11 @@
 # Level File Format Design
 
+> **Partly superseded.** `docs/LEVEL_SEGMENTS_PLAN.md` replaces the single-cube world model.
+> As of stage 1, `Level` no longer has `world_size`/`voxel_size` and there is no derived
+> octree depth: `Terrain` carries an explicit `voxel_size` plus a `bounds` extent, and
+> storage is a sparse grid of fixed-size chunks. Everything below about **object and
+> spawnable syntax** still applies; the world-sizing and octree-depth sections do not.
+
 ## Motivation
 
 The engine currently defines levels procedurally in Rust code (`App::new()`, `TerrainGenerator::generate_simple_hills`). This makes iteration slow (recompile per change) and collaborative design impractical. A declarative level file format decouples level content from engine code, enabling:
@@ -59,10 +65,12 @@ A catalogue of level concepts that play to the engine's strengths: destructible 
 // levels/test_arena.level.ron
 Level(
     name: "Test Arena",
-    world_size: 64.0,        // SVO cube half-size
-    voxel_size: 1.0,         // loader computes octree_depth = log2(world_size / voxel_size)
 
     terrain: Terrain(
+        voxel_size: 1.0,     // used directly; chunk depth is fixed by the chunk definition
+        // Region terrain is generated within. Chunks are allocated on demand,
+        // so an extent larger than the content costs storage only where filled.
+        bounds: (min: (-64.0, -32.0, -64.0), max: (64.0, 32.0, 64.0)),
         base_height: 0.0,
         material_layers: [
             (depth: 1.0,  material: Grass),
@@ -168,9 +176,7 @@ use serde::Deserialize;
 #[derive(Deserialize)]
 pub struct Level {
     pub name: String,
-    pub world_size: f32,
-    pub voxel_size: f32,         // octree depth computed: log2(world_size / voxel_size)
-    pub terrain: Terrain,
+    pub terrain: Terrain,        // carries voxel_size and bounds
     pub player_spawn: (f32, f32, f32),
     pub objects: Vec<LevelObject>,
 }
@@ -315,8 +321,8 @@ pub fn load_level(path: &Path) -> Result<Level, LevelError> {
 }
 
 fn validate(level: &Level) -> Result<(), LevelError> {
-    // world_size > 0, voxel_size > 0, voxel_size is power-of-two divisor of world_size,
-    // player_spawn inside bounds, etc.
+    // voxel_size > 0, positive extent on every axis, a voxels-per-axis ceiling,
+    // player_spawn inside terrain bounds, etc.
 }
 ```
 
@@ -441,6 +447,12 @@ Terrain creation moves into `spawn_level` since the level file now specifies wor
 - Edit-save-see loop in ~1 second.
 
 ## Implementation Plan
+
+> **Historical — completed, and describing a superseded design.** These steps record how the
+> level system was originally built. They still reference `world_size`, `voxel_size` on
+> `Level`, and `Level::octree_depth()`, none of which exist any more. Read this section for
+> the reasoning behind the *object and spawnable* design only; for anything about world
+> sizing, octree depth or terrain storage, see `docs/LEVEL_SEGMENTS_PLAN.md`.
 
 ### Step 1: Add dependencies and create `src/level/data.rs`
 

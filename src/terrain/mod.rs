@@ -8,6 +8,8 @@
 //! - Procedural terrain generation
 
 mod adjacency;
+mod chunk;
+mod chunk_grid;
 pub mod generation;
 mod manager;
 mod marching_cubes;
@@ -15,6 +17,8 @@ mod mesh_octree;
 pub(crate) mod svo;
 mod voxel;
 
+pub use chunk::{ChunkCoord, CHUNK_VOXELS};
+pub use chunk_grid::ChunkGrid;
 pub use manager::TerrainManager;
 
 // Voxel types for terrain modification

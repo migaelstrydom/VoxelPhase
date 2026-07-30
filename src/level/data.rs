@@ -4,7 +4,10 @@
 //! engine dependencies — only `serde::Deserialize` — so the format can evolve
 //! independently of the runtime.
 
+use nalgebra::Point3;
 use serde::Deserialize;
+
+use crate::collision::AABB;
 
 use crate::app::spawnables::{
     BananaDef, BeachBallDef, BoxDef, BoxWallDef, CapsuleDef, CrateDef, DodecahedronDef, DolosDef,
@@ -18,11 +21,6 @@ use crate::app::spawnables::{
 #[derive(Deserialize)]
 pub struct Level {
     pub name: String,
-    /// Half-size of the cubic SVO world bounds.
-    pub world_size: f32,
-    /// Size of the smallest voxel. Octree depth is computed as
-    /// `log2(world_size / voxel_size)`.
-    pub voxel_size: f32,
     pub terrain: Terrain,
     pub player_spawn: (f32, f32, f32),
     pub objects: Vec<LevelObject>,
@@ -32,16 +30,31 @@ pub struct Level {
     pub water: Option<WaterConfig>,
 }
 
-impl Level {
-    /// Compute the octree depth required for the configured world and voxel sizes.
-    pub fn octree_depth(&self) -> u32 {
-        (self.world_size / self.voxel_size).log2() as u32
+/// An axis-aligned box, authored as two corners.
+#[derive(Deserialize, Clone, Copy)]
+pub struct Extent {
+    pub min: (f32, f32, f32),
+    pub max: (f32, f32, f32),
+}
+
+impl Extent {
+    pub fn to_aabb(self) -> AABB {
+        AABB::new(
+            Point3::new(self.min.0, self.min.1, self.min.2),
+            Point3::new(self.max.0, self.max.1, self.max.2),
+        )
     }
 }
 
 /// Terrain description: a heightfield plus optional volumetric features.
 #[derive(Deserialize)]
 pub struct Terrain {
+    /// Edge length of one voxel, in world units. Used directly — chunk depth is
+    /// fixed by the chunk definition, so this is not scaled by any extent.
+    pub voxel_size: f32,
+    /// The region terrain is generated within. Chunks are allocated on demand,
+    /// so an extent larger than the content costs storage only where filled.
+    pub bounds: Extent,
     /// Base surface height before any features are applied.
     pub base_height: f32,
     /// Material layering by depth below the surface.

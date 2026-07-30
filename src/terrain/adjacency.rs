@@ -26,6 +26,8 @@
 //! This makes adjacency cost proportional to the modification size, not
 //! the total mesh size (~1–2 ms vs ~16 ms for a 10K-triangle terrain).
 
+use std::hash::Hash;
+
 use nalgebra::Point3;
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
@@ -70,32 +72,37 @@ impl Edge {
 /// `neighbors[1]` = neighbor across edge v1→v2
 /// `neighbors[2]` = neighbor across edge v2→v0
 #[derive(Debug, Clone, Copy)]
-pub struct TriangleNeighbors {
-    pub neighbors: [Option<TriangleRef>; 3],
+pub struct TriangleNeighbors<R> {
+    pub neighbors: [Option<R>; 3],
 }
 
-/// Triangle adjacency map built from a `MeshOctree`.
+/// Triangle adjacency map over an arbitrary triangle identifier `R`.
 ///
-/// Maps each triangle (identified by `TriangleRef`) to its up-to-three
-/// edge-sharing neighbors. The edge map persists across updates so that
-/// incremental region updates only touch affected edges.
-pub struct AdjacencyMap {
+/// Maps each triangle to its up-to-three edge-sharing neighbors. The edge map
+/// persists across updates so that incremental region updates only touch
+/// affected edges.
+///
+/// The identifier is a type parameter because adjacency has to span chunk
+/// boundaries: triangles meeting at a chunk seam live in different mesh
+/// octrees, so the terrain uses a chunk-qualified reference while the octree's
+/// own `TriangleRef` remains sufficient in single-octree tests.
+pub struct AdjacencyMap<R = TriangleRef> {
     /// Per-triangle neighbor lookup.
-    adjacency: FxHashMap<TriangleRef, TriangleNeighbors>,
+    adjacency: FxHashMap<R, TriangleNeighbors<R>>,
 
     /// Persistent edge map. Updated surgically during incremental rebuilds.
     /// SmallVec<[_; 2]> keeps manifold edges (the common case) inline.
-    edge_map: FxHashMap<Edge, SmallVec<[(TriangleRef, u8); 2]>>,
+    edge_map: FxHashMap<Edge, SmallVec<[(R, u8); 2]>>,
 
     /// Reusable triangle collection buffer (used by full `rebuild`).
     #[allow(dead_code)]
-    triangle_buf: Vec<(TriangleRef, [Point3<f32>; 3])>,
+    triangle_buf: Vec<(R, [Point3<f32>; 3])>,
 
     /// Cached inverse cell size for quantization.
     inv_cell: f64,
 }
 
-impl AdjacencyMap {
+impl<R: Copy + Eq + Hash> AdjacencyMap<R> {
     /// Create an empty adjacency map.
     pub fn new() -> Self {
         Self {
@@ -120,53 +127,6 @@ impl AdjacencyMap {
         ]
     }
 
-    /// Full rebuild of the adjacency map from the entire `MeshOctree`.
-    ///
-    /// Prefer `update_region` for incremental terrain modifications.
-    /// This method is retained for testing and as a correctness baseline.
-    #[allow(dead_code)]
-    pub fn rebuild(&mut self, octree: &MeshOctree, tolerance: f32) {
-        self.inv_cell = 1.0 / tolerance as f64;
-
-        self.triangle_buf.clear();
-        octree.collect_all_triangles_into(&mut self.triangle_buf);
-
-        self.edge_map.clear();
-
-        for (tri_ref, positions) in &self.triangle_buf {
-            let edges = self.triangle_edges(positions);
-            for (edge_idx, edge) in edges.iter().enumerate() {
-                self.edge_map
-                    .entry(*edge)
-                    .or_default()
-                    .push((*tri_ref, edge_idx as u8));
-            }
-        }
-
-        self.adjacency.clear();
-
-        for entries in self.edge_map.values() {
-            if entries.len() == 2 {
-                let (ref_a, edge_a) = entries[0];
-                let (ref_b, edge_b) = entries[1];
-
-                self.adjacency
-                    .entry(ref_a)
-                    .or_insert(TriangleNeighbors {
-                        neighbors: [None; 3],
-                    })
-                    .neighbors[edge_a as usize] = Some(ref_b);
-
-                self.adjacency
-                    .entry(ref_b)
-                    .or_insert(TriangleNeighbors {
-                        neighbors: [None; 3],
-                    })
-                    .neighbors[edge_b as usize] = Some(ref_a);
-            }
-        }
-    }
-
     /// Incrementally update adjacency for a modified region.
     ///
     /// `old_triangles` are the triangles that existed in the region before
@@ -177,8 +137,8 @@ impl AdjacencyMap {
     /// outside the region are untouched.
     pub fn update_region(
         &mut self,
-        old_triangles: &[(TriangleRef, [Point3<f32>; 3])],
-        new_triangles: &[(TriangleRef, [Point3<f32>; 3])],
+        old_triangles: &[(R, [Point3<f32>; 3])],
+        new_triangles: &[(R, [Point3<f32>; 3])],
         tolerance: f32,
     ) {
         self.inv_cell = 1.0 / tolerance as f64;
@@ -249,7 +209,7 @@ impl AdjacencyMap {
 
     /// Look up the neighbors of a triangle.
     #[allow(dead_code)]
-    pub fn neighbors(&self, tri: &TriangleRef) -> Option<&TriangleNeighbors> {
+    pub fn neighbors(&self, tri: &R) -> Option<&TriangleNeighbors<R>> {
         self.adjacency.get(tri)
     }
 
@@ -284,6 +244,58 @@ impl AdjacencyMap {
         // Each manifold edge is shared, so: boundary = 3*T - 2*manifold.
         let manifold = self.manifold_edge_count();
         3 * total_triangles - 2 * manifold
+    }
+}
+
+impl AdjacencyMap<TriangleRef> {
+    /// Full rebuild of the adjacency map from the entire `MeshOctree`.
+    ///
+    /// Prefer `update_region` for incremental terrain modifications. This is a
+    /// correctness baseline for a single octree, and only meaningful when the
+    /// map is keyed by that octree's own `TriangleRef`.
+    #[allow(dead_code)]
+    pub fn rebuild(&mut self, octree: &MeshOctree, tolerance: f32) {
+        self.inv_cell = 1.0 / tolerance as f64;
+
+        self.triangle_buf.clear();
+        octree.collect_all_triangles_into(&mut self.triangle_buf);
+
+        self.edge_map.clear();
+
+        let buf = std::mem::take(&mut self.triangle_buf);
+        for (tri_ref, positions) in &buf {
+            let edges = self.triangle_edges(positions);
+            for (edge_idx, edge) in edges.iter().enumerate() {
+                self.edge_map
+                    .entry(*edge)
+                    .or_default()
+                    .push((*tri_ref, edge_idx as u8));
+            }
+        }
+        self.triangle_buf = buf;
+
+        self.adjacency.clear();
+
+        for entries in self.edge_map.values() {
+            if entries.len() == 2 {
+                let (ref_a, edge_a) = entries[0];
+                let (ref_b, edge_b) = entries[1];
+
+                self.adjacency
+                    .entry(ref_a)
+                    .or_insert(TriangleNeighbors {
+                        neighbors: [None; 3],
+                    })
+                    .neighbors[edge_a as usize] = Some(ref_b);
+
+                self.adjacency
+                    .entry(ref_b)
+                    .or_insert(TriangleNeighbors {
+                        neighbors: [None; 3],
+                    })
+                    .neighbors[edge_b as usize] = Some(ref_a);
+            }
+        }
     }
 }
 
@@ -436,19 +448,17 @@ mod tests {
         adj.rebuild(&octree, 1e-4);
         assert_eq!(adj.manifold_edge_count(), 2); // T0-T1 and T1-T2
 
-        // Now simulate removing T1 (the middle triangle) from a region.
-        // Region covers only T1's area.
-        let dirty_region = AABB::new(Point3::new(0.9, -0.1, -0.1), Point3::new(2.1, 0.1, 0.1));
-
-        // Collect old triangles in the dirty region.
-        let mut old_tris = Vec::new();
-        octree.collect_triangles_in_region(&dirty_region, &mut old_tris);
-
-        // All 3 triangles intersect this region (they all have vertices
-        // in the y=0 range). Let's use a tighter region that only catches T1.
-        old_tris.clear();
-        let tight_region = AABB::new(Point3::new(1.1, -0.1, -0.1), Point3::new(1.9, 0.5, 0.1));
-        octree.collect_triangles_in_region(&tight_region, &mut old_tris);
+        // Now simulate removing T1 (the middle triangle). Pick it out by its
+        // distinguishing vertex (2,0,0), which only T1 and T2 share — and T2 is
+        // excluded because it also owns (3,0,0).
+        let mut all_tris = Vec::new();
+        octree.collect_all_triangles_into(&mut all_tris);
+        let old_tris: Vec<_> = all_tris
+            .iter()
+            .filter(|(_, p)| p.iter().any(|v| v.x == 2.0) && !p.iter().any(|v| v.x == 3.0))
+            .copied()
+            .collect();
+        assert_eq!(old_tris.len(), 1, "expected to isolate T1");
 
         // Remove T1 from the octree (simulate clear).
         // For this test, we'll just do the adjacency update with old=[T1], new=[].

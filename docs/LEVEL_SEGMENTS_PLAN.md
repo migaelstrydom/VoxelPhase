@@ -105,6 +105,26 @@ express the structure as a spawnable instead.
 `level_check` warns when two segments abut over a face with differing voxel size, since
 that is the configuration where a visible crack is possible.
 
+**Known limitation: welded joins are not implemented, and the exception above is currently
+theoretical.** Marching cubes samples a one-voxel halo around each chunk, and an unallocated
+region reads as air. Within one grid that is correct — air is genuinely what lies outside the
+world. Across two segments it is wrong: the neighbour's solid voxels are right there but
+invisible to the query, so the boundary chunk emits a **cap surface** sealing a join that
+should be open. That cap is real geometry, and it reaches physics through `query_region` as
+triangles a body would collide with.
+
+The fix is **cross-segment halo sampling**: when meshing a boundary chunk, read the halo from
+the adjoining segment instead of assuming air. Rule 1 already requires equal resolution and
+Rule 2 keeps the lattices aligned, so the sample points genuinely coincide — the rules
+happen to have been written to permit it.
+
+This is *not* a blocker for segments generally. Where segments join at an anchor with a gap —
+the normal case, and all of islands, corridors, hubs and doorways — the shell chunk sits in
+empty space, emits nothing, and is dropped by `prune_vacant`. Stage 2 may ship with
+gap-joined segments only. Cross-segment sampling is separate later work, needed solely for
+welded joins such as a spiral tower's continuous central column. Until it exists, express
+those as spawnables.
+
 ### Rule 2 — Placement rotation is restricted to 90° yaw multiples
 
 Arbitrary yaw rotates a segment's voxel grid against the world, which turns AABB queries
@@ -131,11 +151,22 @@ nothing in this plan depends on it.)
 Two segments overlapping at different resolutions has no well-defined meaning: neither
 grid is authoritative.
 
-The check is at **chunk granularity, not bounding box**: no two segments may own allocated
-chunks whose world extents overlap. Comparing whole-segment AABBs is both too strict — two
-interlocking L-shaped segments have overlapping AABBs while contending for nothing — and
-too coarse to describe the actual resource. `level_check` rejects chunk contention as an
-error, not a warning.
+The check is at **chunk granularity, not bounding box**: no two segments may own chunks
+*containing solid voxels* whose world extents overlap. Comparing whole-segment AABBs is both
+too strict — two interlocking L-shaped segments have overlapping AABBs while contending for
+nothing — and too coarse to describe the actual resource. `level_check` rejects chunk
+contention as an error, not a warning.
+
+**The "containing solid voxels" qualifier is load-bearing, not pedantry.** Stage 1
+established that a chunk's minimum faces are meshed by its negative-side neighbour, so
+`ChunkGrid::allocate_seam_neighbours()` allocates a shell of empty chunks below and behind
+every solid one. A segment's *allocated* extent therefore bulges a full chunk — 32 m at 1 m
+voxels — past its real content in −X, −Y and −Z. Two islands separated by a 6 m jump gap,
+which is exactly what a platformer author writes, have shells reaching well into each
+other's space. Checked against allocated or derived bounds, that is a rejected level for no
+reason; checked against solid-voxel ownership, it is correct. `ChunkGrid` already exposes
+`has_solid()` and `coords()`, so the check is easy — it simply has to be written the right
+way round the first time.
 
 Segment bounds are **derived from allocated chunks and therefore tight**, not declared
 columns of infinite height. This matters more than it sounds: a floating island at y=30
@@ -375,7 +406,7 @@ design; the briefs hold the perishable detail.
 | Stage | Deliverable | Why here |
 |-------|-------------|----------|
 | 1 | Chunked terrain, one implicit whole-world segment | Behaviourally identical to today, so it is independently testable. Establishes Chunk/ChunkGrid/TerrainWorld. |
-| 1.5 | `level_check` + schematic export (SVG, no Vulkan) | Pulled ahead of segments so every later stage has automated acceptance instead of visual guesswork. |
+| 1.5 | `level_check` + schematic export (SVG, no Vulkan) + terrain-update timing instrumentation | Pulled ahead of segments so every later stage has automated acceptance instead of visual guesswork. |
 | 2 | N segments, local frames, anchor graph, placement | The authoring payoff. Generalises stage 1's single segment. Anchors defined as named local frames per "Mobile geometry" above. |
 | 3 | Traversal primitives — swept `Path` first, then `Platform`, `Staircase`, `Shaft` — plus gameplay entities (checkpoint, goal, hazard, pickup, trigger) | Needs segments to be worth authoring against. Gameplay entities land here because without them no level can be finished, and stage 4 has nothing meaningful to look at. |
 | 4 | `level_viewer` binary with offscreen render-to-PNG | Last because it is the most expensive and `level_check` covers correctness. |
@@ -442,6 +473,27 @@ not omissions:
   at several transforms — delivers most of the value without the format becoming an
   expression language. Add parameters only when a concrete level demands them.
 - **Per-chunk draw calls, LOD, format versioning.** Deferrable and non-structural.
+
+## Known performance debt
+
+Terrain destruction is perceptibly sluggish after stage 1, confirmed in play, and it was
+already close to the limit before. Two costs contribute and they behave very differently as
+levels grow:
+
+- **Remeshing** is whole-chunk since stage 1 removed sub-region rebuild (deviation 2). A
+  grenade dirties ~8 chunks at ~1.1 ms each. Cost is O(chunks dirtied) — roughly constant
+  regardless of level size.
+- **Render buffer concatenation** rebuilds every vertex in the level on any change (573 k on
+  `test_arena`) and re-uploads. Cost is O(total level triangles) — it grows precisely as this
+  project succeeds in making levels bigger. This predates stage 1.
+
+Which dominates is unmeasured, and the two imply different fixes: per-chunk GPU buffers and
+draw calls for the second, sub-chunk dirty regions or a smaller `CHUNK_VOXELS` for the first.
+Note stage 1 rejected `CHUNK_VOXELS = 16` on *storage* grounds, which is the wrong metric for
+this question — 16 would cut per-chunk remesh work eightfold.
+
+Stage 1.5 adds the timers; the fix is deferred until after stage 4. Treat the O(level size)
+term as a tripwire: if it dominates, it must be fixed before levels get large, not after.
 
 ## Open questions
 

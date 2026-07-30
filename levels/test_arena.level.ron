@@ -1,10 +1,15 @@
 // Test arena — reproduces the original hardcoded scene.
 Level(
     name: "Test Arena",
-    world_size: 256.0,
-    voxel_size: 1.0,
 
     terrain: Terrain(
+        // Genuine 1 m voxels: chunk depth is fixed by the chunk definition, so
+        // this is no longer halved by a world-size derivation.
+        voxel_size: 1.0,
+        // Sized to the content: objects sit within x -35..40, z -35..15, the
+        // cave region reaches x -95, and the overhang runs along z = -60.
+        // Chunks are 32 voxels on a side, so bounds land on that lattice.
+        bounds: (min: (-128.0, -32.0, -96.0), max: (64.0, 32.0, 64.0)),
         base_height: 0.0,
         material_layers: [
             (depth: 1.0,  material: Grass),

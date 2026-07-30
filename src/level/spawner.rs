@@ -4,13 +4,11 @@ use nalgebra::Point3;
 use specs::World;
 
 use crate::app::spawnables::MaterialCtx;
-use crate::collision::AABB;
 use crate::core::error::EngineResult;
 use crate::level::data::{Level, WaterBody};
 use crate::rendering::material::{MaterialId, MaterialManagerBuilder};
 use crate::resources::textures::TextureManager;
-use crate::terrain::svo::SparseVoxelOctree;
-use crate::terrain::{generate_terrain, DurabilityConfig, TerrainManager};
+use crate::terrain::{generate_terrain, ChunkGrid, DurabilityConfig, TerrainManager};
 use crate::water::{WaterGrid, WaterGridConfig, WaterProperties, WaveGrid, WaveGridConfig};
 
 /// Pre-created materials for all objects in a level.
@@ -51,25 +49,23 @@ pub fn create_level_materials(
     Ok(LevelMaterials { per_object })
 }
 
-/// Create the terrain SVO and TerrainManager from the level description.
+/// Create the terrain chunk grid and TerrainManager from the level description.
+///
+/// Stage 1 has a single implicit segment covering the whole level, so the grid's
+/// local frame is the world frame. Placing several grids at different origins is
+/// what stage 2 generalises.
 pub fn create_level_terrain(
     level: &Level,
     texture_manager: &TextureManager,
 ) -> EngineResult<TerrainManager> {
     log::info!("Generating terrain for '{}'...", level.name);
 
-    let half_size = level.world_size;
-    let depth = level.octree_depth();
-    let bounds = AABB::new(
-        Point3::new(-half_size, -half_size, -half_size),
-        Point3::new(half_size, half_size, half_size),
-    );
-
-    let mut svo = SparseVoxelOctree::new(bounds, depth);
+    let bounds = level.terrain.bounds.to_aabb();
+    let mut grid = ChunkGrid::new(Point3::origin(), level.terrain.voxel_size);
     let durability = DurabilityConfig::default();
-    generate_terrain(&mut svo, &level.terrain, &durability);
+    generate_terrain(&mut grid, &level.terrain, &durability, &bounds);
 
-    let terrain_manager = TerrainManager::from_svo(svo, texture_manager)?;
+    let terrain_manager = TerrainManager::from_grid(grid, texture_manager)?;
     log::info!(
         "Terrain generated: {} triangles in {} mesh leaves",
         terrain_manager.triangle_count(),
@@ -110,12 +106,14 @@ pub fn create_level_water(
     let water_config = level.water.as_ref()?;
     let properties = WaterProperties::default();
 
-    let half_size = level.world_size;
-    let cell_size = level.voxel_size * WATER_GRID_SCALE as f32;
-    let origin = nalgebra::Vector3::new(-half_size, 0.0, -half_size);
+    // Stage 1 keeps water on one world-space grid spanning the terrain's
+    // footprint. Per-segment water is a stage 2 question.
+    let bounds = level.terrain.bounds.to_aabb();
+    let cell_size = level.terrain.voxel_size * WATER_GRID_SCALE as f32;
+    let origin = nalgebra::Vector3::new(bounds.min.x, 0.0, bounds.min.z);
 
-    let grid_width = (2.0 * half_size / cell_size).ceil() as usize;
-    let grid_depth = grid_width;
+    let grid_width = ((bounds.max.x - bounds.min.x) / cell_size).ceil() as usize;
+    let grid_depth = ((bounds.max.z - bounds.min.z) / cell_size).ceil() as usize;
 
     let flow_config = WaterGridConfig {
         cell_size,
