@@ -717,7 +717,93 @@ pub enum LevelObject {
     },
 }
 
+/// Where a level object is authored, as far as validation and schematics are
+/// concerned.
+///
+/// Spawnables vary enormously in what they build, but every one of them is
+/// placed either at an explicit point or by being dropped onto the terrain.
+/// That distinction is the only thing an offline check can act on: a free
+/// object's height is authored and can therefore be wrong, whereas an anchored
+/// one's is derived and cannot.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ObjectPlacement {
+    /// Authored at an explicit position.
+    Free(Point3<f32>),
+    /// Authored in (x, z) only; the spawner resolves the height from the
+    /// terrain surface.
+    TerrainAnchored { x: f32, z: f32 },
+}
+
+impl ObjectPlacement {
+    /// Horizontal position, which both forms have.
+    pub fn xz(&self) -> (f32, f32) {
+        match self {
+            ObjectPlacement::Free(p) => (p.x, p.z),
+            ObjectPlacement::TerrainAnchored { x, z } => (*x, *z),
+        }
+    }
+}
+
+/// An object's variant name and authored placement.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ObjectInfo {
+    /// The RON variant name, e.g. `"BeachBall"`.
+    pub kind: &'static str,
+    pub placement: ObjectPlacement,
+}
+
 impl LevelObject {
+    /// Variant name and authored placement, for validation and schematics.
+    ///
+    /// Deliberately exhaustive rather than derived: adding a spawnable should
+    /// force a decision about whether it is free-standing or terrain-anchored,
+    /// because getting that wrong silently mis-validates every level using it.
+    pub fn describe(&self) -> ObjectInfo {
+        use ObjectPlacement::{Free, TerrainAnchored};
+
+        let point = |p: &(f32, f32, f32)| Free(Point3::new(p.0, p.1, p.2));
+        let anchored = |p: &(f32, f32)| TerrainAnchored { x: p.0, z: p.1 };
+
+        let (kind, placement) = match self {
+            LevelObject::Banana { pos, .. } => ("Banana", point(pos)),
+            LevelObject::BeachBall { pos } => ("BeachBall", point(pos)),
+            LevelObject::GlowingOrb { pos, .. } => ("GlowingOrb", point(pos)),
+            LevelObject::Box { pos, .. } => ("Box", point(pos)),
+            LevelObject::Plank { pos, .. } => ("Plank", point(pos)),
+            LevelObject::Crate { pos, .. } => ("Crate", point(pos)),
+            LevelObject::HeavyCrate { pos, .. } => ("HeavyCrate", point(pos)),
+            LevelObject::Stack { base, .. } => ("Stack", point(base)),
+            LevelObject::Tower { base, .. } => ("Tower", point(base)),
+            LevelObject::BoxWall { base, .. } => ("BoxWall", point(base)),
+            LevelObject::House { pos, .. } => ("House", point(pos)),
+            LevelObject::Capsule { pos, .. } => ("Capsule", point(pos)),
+            LevelObject::Menhir { pos, .. } => ("Menhir", anchored(pos)),
+            LevelObject::FencePost { pos, .. } => ("FencePost", anchored(pos)),
+            LevelObject::Pendulum { pos, .. } => ("Pendulum", anchored(pos)),
+            LevelObject::PlayWheel { pos, .. } => ("PlayWheel", anchored(pos)),
+            LevelObject::Seesaw { pos, .. } => ("Seesaw", anchored(pos)),
+            LevelObject::Tetrahedron { pos, .. } => ("Tetrahedron", point(pos)),
+            LevelObject::Octahedron { pos, .. } => ("Octahedron", point(pos)),
+            LevelObject::Dodecahedron { pos, .. } => ("Dodecahedron", point(pos)),
+            LevelObject::HexPrism { pos, .. } => ("HexPrism", point(pos)),
+            LevelObject::HoneycombWall { base, .. } => ("HoneycombWall", point(base)),
+            LevelObject::Icosahedron { pos, .. } => ("Icosahedron", point(pos)),
+            LevelObject::Trampoline { pos, .. } => ("Trampoline", point(pos)),
+            LevelObject::Table { pos, .. } => ("Table", point(pos)),
+            LevelObject::Pyramid { base, .. } => ("Pyramid", point(base)),
+            LevelObject::Dolos { pos, .. } => ("Dolos", point(pos)),
+            LevelObject::Domino { base, .. } => ("Domino", point(base)),
+            LevelObject::VoussoirArch { base, .. } => ("VoussoirArch", point(base)),
+            LevelObject::Jack { pos, .. } => ("Jack", point(pos)),
+            LevelObject::Jenga { base, .. } => ("Jenga", point(base)),
+            LevelObject::PlankBridge { pos, .. } => ("PlankBridge", point(pos)),
+            LevelObject::Trilithon { pos, .. } => ("Trilithon", point(pos)),
+            LevelObject::Temple { pos, .. } => ("Temple", point(pos)),
+        };
+
+        ObjectInfo { kind, placement }
+    }
+
     /// Convert this level object into a boxed [`Spawnable`].
     ///
     /// This bridges the RON deserialization format (named-field enum variants)

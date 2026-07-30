@@ -29,7 +29,7 @@
 
 use nalgebra::{Point3, Vector3};
 use rustc_hash::FxHashMap;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use super::adjacency::AdjacencyMap;
 use super::chunk::{ChunkCoord, ChunkTriangleRef, CHUNK_VOXELS};
@@ -46,6 +46,34 @@ use crate::sensing::{ProbeHit, ProbeTarget};
 /// Fraction of a voxel used as the vertex-matching tolerance when linking
 /// triangles into the adjacency map.
 const ADJACENCY_TOLERANCE_FACTOR: f32 = 0.01;
+
+/// Wall-clock breakdown of one `TerrainManager::update()` that did work.
+///
+/// The three phases scale differently, which is the whole reason they are timed
+/// apart: `remesh` and `adjacency` are O(chunks dirtied) and roughly constant as
+/// a level grows, whereas `concat` rebuilds every vertex in the level and is
+/// therefore O(total triangles).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct UpdateTimings {
+    /// How many chunks were remeshed.
+    pub chunks_dirtied: usize,
+    /// Marching cubes over the dirty chunks, plus the vacant-chunk prune.
+    /// Excludes the adjacency patching measured separately.
+    pub remesh: Duration,
+    /// Incremental adjacency patching for the remeshed triangles.
+    pub adjacency: Duration,
+    /// Rebuilding the concatenated render vertex/index buffers.
+    pub concat: Duration,
+    /// Total triangles in the level after the update.
+    pub triangles: usize,
+}
+
+impl UpdateTimings {
+    /// Sum of the measured phases.
+    pub fn total(&self) -> Duration {
+        self.remesh + self.adjacency + self.concat
+    }
+}
 
 /// Unified terrain manager handling storage, collision, and rendering.
 pub struct TerrainManager {
@@ -72,6 +100,10 @@ pub struct TerrainManager {
     /// Cached mesh statistics, refreshed on each update.
     triangle_count: usize,
     leaf_count: usize,
+
+    /// Timing breakdown of the most recent `update()` that had work to do.
+    /// Retained across idle frames so it can still be read after the event.
+    last_update: Option<UpdateTimings>,
 }
 
 impl TerrainManager {
@@ -129,7 +161,19 @@ impl TerrainManager {
             bounds,
             triangle_count: 0,
             leaf_count: 0,
+            last_update: None,
         }
+    }
+
+    /// Create a meshed manager with no texture, for tools that have no Vulkan
+    /// device — `level_check` and offline analysis.
+    ///
+    /// Equivalent to [`Self::from_grid`] minus the noise texture, which only
+    /// affects rendering.
+    pub fn from_grid_headless(grid: ChunkGrid) -> Self {
+        let mut manager = Self::from_grid_unmeshed(grid);
+        manager.update();
+        manager
     }
 
     /// Damage voxels within a sphere, reducing their health.
@@ -183,10 +227,10 @@ impl TerrainManager {
         }
 
         let t0 = Instant::now();
-        let mut adjacency_elapsed = std::time::Duration::ZERO;
+        let mut adjacency = Duration::ZERO;
 
         for coord in &dirty {
-            adjacency_elapsed += self.remesh_chunk(*coord);
+            adjacency += self.remesh_chunk(*coord);
             self.rebuilt_regions
                 .push(self.grid.chunk_world_bounds(*coord));
         }
@@ -194,20 +238,40 @@ impl TerrainManager {
         // A chunk allocated purely to own a seam cell may have produced nothing.
         self.grid.prune_vacant();
 
+        let remesh = t0.elapsed() - adjacency;
+
         let t1 = Instant::now();
         self.refresh_caches();
-        let cache_time = t1.elapsed();
+        let concat = t1.elapsed();
+
+        let timings = UpdateTimings {
+            chunks_dirtied: dirty.len(),
+            remesh,
+            adjacency,
+            concat,
+            triangles: self.triangle_count,
+        };
+        self.last_update = Some(timings);
 
         log::debug!(
-            "Terrain updated: {} chunks remeshed of {}, {} triangles in {} leaves, {:?} adjacency, {:?} render data, {:?} total",
-            dirty.len(),
+            "Terrain updated: {} chunks remeshed of {}, {} triangles in {} leaves, {:?} remesh, {:?} adjacency, {:?} render data, {:?} total",
+            timings.chunks_dirtied,
             self.grid.chunk_count(),
             self.triangle_count,
             self.leaf_count,
-            adjacency_elapsed,
-            cache_time,
-            t0.elapsed()
+            remesh,
+            adjacency,
+            concat,
+            timings.total(),
         );
+    }
+
+    /// Timing breakdown of the most recent `update()` that had work to do.
+    ///
+    /// `None` until terrain has been meshed at least once. Retained rather than
+    /// cleared on idle frames, so the numbers survive long enough to be read.
+    pub fn last_update_timings(&self) -> Option<UpdateTimings> {
+        self.last_update
     }
 
     /// Rebuild one chunk's mesh and patch adjacency. Returns adjacency time.
@@ -562,6 +626,15 @@ impl TerrainManager {
         &self.adjacency
     }
 
+    /// Number of mesh edges belonging to exactly one triangle.
+    ///
+    /// A closed surface has none. Terrain is closed wherever it is meshed, so a
+    /// non-zero count means either a crack — including one at a chunk seam — or
+    /// an ambiguous marching-cubes configuration that failed to close.
+    pub fn open_edge_count(&self) -> usize {
+        self.adjacency.boundary_edge_count(self.triangle_count)
+    }
+
     // === Statistics ===
 
     /// Get the total triangle count.
@@ -578,6 +651,20 @@ impl TerrainManager {
     #[allow(dead_code)]
     pub fn chunk_count(&self) -> usize {
         self.grid.chunk_count()
+    }
+
+    /// Number of allocated chunks holding at least one solid voxel.
+    ///
+    /// The rest exist only to own the marching-cubes cells that close their
+    /// neighbours' minimum faces, so `chunk_count()` on its own overstates how
+    /// much content a level has — see `ChunkGrid::allocate_seam_neighbours`.
+    pub fn solid_chunk_count(&self) -> usize {
+        self.grid.chunks().filter(|c| c.has_solid()).count()
+    }
+
+    /// Edge length of one chunk, in world units.
+    pub fn chunk_extent(&self) -> f32 {
+        self.grid.chunk_extent()
     }
 }
 
@@ -936,6 +1023,70 @@ mod tests {
             "flat terrain surfaced at {h}, expected {}",
             level.terrain.base_height
         );
+    }
+
+    /// Measure where the cost of a terrain rebuild actually goes.
+    ///
+    /// Ignored by default because it takes seconds and is a measurement rather
+    /// than an assertion. Run it in release when the answer matters:
+    ///
+    /// ```bash
+    /// cargo test --release --lib -- --ignored --nocapture grenade_update_cost
+    /// ```
+    ///
+    /// The point is which term dominates: remesh is O(chunks dirtied) and stays
+    /// put as levels grow, whereas the render buffer concatenation is O(total
+    /// level triangles) and grows with them.
+    #[test]
+    #[ignore]
+    fn grenade_update_cost_split() {
+        use crate::terrain::generation::generate_terrain;
+        use crate::terrain::voxel::DurabilityConfig;
+
+        let level = crate::level::load_level(std::path::Path::new("levels/test_arena.level.ron"))
+            .expect("test_arena should load");
+        let bounds = level.terrain.bounds.to_aabb();
+        let mut grid = ChunkGrid::new(Point3::origin(), level.terrain.voxel_size);
+        generate_terrain(
+            &mut grid,
+            &level.terrain,
+            &DurabilityConfig::default(),
+            &bounds,
+        );
+
+        let mut manager = TerrainManager::from_grid_unmeshed(grid);
+        manager.update();
+        println!(
+            "test_arena: {} chunks, {} triangles, {} vertices",
+            manager.chunk_count(),
+            manager.triangle_count(),
+            manager.render_vertices().len()
+        );
+
+        // Explosion defaults: a 2.5 m crater at full voxel damage.
+        for (i, centre) in [
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(16.0, 0.0, 16.0),
+            Point3::new(-20.0, 0.0, 8.0),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            manager.damage_sphere(centre, 2.5, 255);
+            manager.update();
+            let t = manager
+                .last_update_timings()
+                .expect("an update that destroyed voxels should be timed");
+            let ms = |d: Duration| d.as_secs_f64() * 1000.0;
+            println!(
+                "grenade {i} at {centre:?}: {} chunks dirtied | remesh {:.2} ms | adjacency {:.2} ms | concat {:.2} ms | total {:.2} ms",
+                t.chunks_dirtied,
+                ms(t.remesh),
+                ms(t.adjacency),
+                ms(t.concat),
+                ms(t.total())
+            );
+        }
     }
 
     #[test]

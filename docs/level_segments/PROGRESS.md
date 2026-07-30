@@ -202,3 +202,182 @@ Assumptions about segments that are baked in, and where:
 - **Chunk contention (Rule 4) is unchecked.** Two grids overlapping would silently produce
   duplicate geometry in `query_region` — exactly the duplicate-contact failure the ownership
   rule avoids within a grid. `ChunkGrid::coords()` gives the allocated set for the check.
+
+---
+
+## Stage 1.5 — level_check, schematic export, timing
+
+**Landed** on branch `level-segments-stage-1-5`. `cargo build`, `cargo test` (568 + 2 pass) and
+`cargo test --release --features bench_harness` (609 + 2 pass) are all green. Both shipped
+levels pass `level_check` with exit code 0 and no warnings.
+
+### What landed
+
+New library module `src/level_check/` — everything runs headlessly, so the checks are
+testable and the binary is a thin CLI:
+
+- `report.rs` — `Severity`, `Finding`, `Section`, `Report`. The checks never print; the
+  binary formats and the tests assert against the same structure.
+- `runner.rs` — `build_terrain` (generate + mesh with no graphics device) and `check_level`,
+  which assembles the statistics, mesh-integrity, placement and reach output.
+- `placement.rs` — player spawn and object placement checks.
+- `reach.rs` — `JumpEnvelope::derive(&PlayerConfig, gravity)`.
+- `baseline.rs` — committed open-edge baselines and the comparison policy.
+- `svg.rs` — the two-panel schematic.
+
+New binary `src/bin/level_check.rs`; new data file `levels/mesh_baselines.ron`.
+
+Terrain changes:
+
+- `TerrainManager::from_grid_headless` — meshes without a `TextureManager`, which is what
+  lets any tool or test build real terrain.
+- `TerrainManager::open_edge_count`, `solid_chunk_count`, `chunk_extent` — accessors the
+  check needs; `boundary_edge_count` lost its `#[allow(dead_code)]`.
+- `UpdateTimings` + `TerrainManager::last_update_timings()`, reported through `DebugLog` by
+  `TerrainUpdateSystem`.
+- `LevelObject::describe() -> ObjectInfo { kind, placement }` in `level/data.rs`, with
+  `ObjectPlacement::{Free, TerrainAnchored}`.
+- `PhysicsConfig` is now re-exported from `physics` (it was only reachable via the private
+  `physics::world` module).
+
+### The measured timing split — this is the deliverable
+
+`cargo test --release --lib -- --ignored --nocapture grenade_update_cost` on `test_arena`
+(114 chunks, 191 116 triangles, 573 348 vertices), explosion defaults (2.5 m crater):
+
+| Grenade | Chunks dirtied | Remesh | Adjacency | Buffer concat | Total |
+|---------|----------------|--------|-----------|---------------|-------|
+| at a chunk corner (0, 0, 0) | 8 | **18.5 ms** | 6.2 ms | 6.3 ms | 31.0 ms |
+| mid-chunk (16, 0, 16) | 2 | 4.5 ms | 1.4 ms | 3.7 ms | 9.6 ms |
+| mid-chunk (−20, 0, 8) | 2 | 5.1 ms | 2.4 ms | 3.3 ms | 10.8 ms |
+
+**Remesh dominates today, not buffer concatenation.** At the current level size the
+O(chunks dirtied) terms (remesh + adjacency) are 60–80 % of the cost and the O(level size)
+term is 20–35 %. Two consequences:
+
+1. The first fix should be per-chunk cost — a smaller `CHUNK_VOXELS`, or sub-chunk dirty
+   regions. Stage 1 rejected `CHUNK_VOXELS = 16` on storage grounds; on *this* metric it
+   would cut per-chunk remesh work eightfold — a whole-chunk remesh meshes all
+   `CHUNK_VOXELS³` cells regardless of how little changed. It would also raise the
+   chunks-dirtied count, so the net win is well under 8×, but a fixed-radius blast touches a
+   bounded number of chunks either way while the per-chunk cost falls with the cube.
+2. **The tripwire has not tripped yet, but it is close.** Concatenation costs ~1.1 ms per
+   100 k vertices. It overtakes an 8-chunk remesh at roughly 1.7 M vertices — about 3× the
+   current arena. A level three times the size of `test_arena` is not ambitious, so per-chunk
+   GPU buffers will be needed before levels grow much, exactly as the plan predicted.
+
+Worth knowing: **a grenade dirties 2 chunks or 8, depending only on where it lands.**
+`damage_sphere` marks every chunk in the (radius + voxel) AABB, so a blast near a chunk
+corner touches all eight. That 4× swing in cost is a placement accident, and sub-chunk dirty
+regions would remove it.
+
+### Open-edge baselines — committed
+
+`levels/mesh_baselines.ron`, keyed by level file name and read from the level's own
+directory (so it is found by path, not by working directory):
+
+| Level | Triangles | Open edges |
+|-------|-----------|------------|
+| `test_arena.level.ron` | 191 116 | 218 |
+| `test_empty_terrain.level.ron` | 98 948 | 22 |
+
+Both reproduce stage 1's measurements exactly. The policy: an error above
+`baseline * 1.25` (with an absolute floor of +8 so small baselines are not hair-triggered),
+a warning if the count falls more than 25 % below (the baseline has gone stale and stops
+catching regressions), and a warning if a level has no committed figure at all.
+
+### Chunk split — stage 1's estimate was optimistic
+
+Stage 1 said "roughly half" of `test_arena`'s chunks are seam shell. Measured:
+**32 of 114 hold solid voxels; 82 are shell** — 72 %, not 50 %. `test_empty_terrain` is
+16 solid of 66. The shell is proportionally larger than expected because a chunk is 32 m and
+both levels are broad and thin, so nearly every solid chunk contributes three new face
+neighbours and their edge/corner partners. This matters for stage 2's Rule 4 check: an
+allocated-extent test would be wrong by a *lot*, not by a little.
+
+### Deviations from the brief
+
+1. **The checks live in the library (`src/level_check/`), not in the binary.** The brief put
+   `level_check` in `src/bin/level_check.rs`. Four of the required tests are tests *of the
+   checks*, and a bin's test target cannot be reached from the library's. The binary is
+   argument parsing and formatting only, ~150 lines.
+
+2. **Not registered in `Cargo.toml`.** The brief asked for it "alongside `bench_viewer`" —
+   but `bench_viewer` is not declared either; both are picked up by cargo's `src/bin`
+   autodiscovery. Adding one explicit `[[bin]]` and leaving the other implicit would have
+   been worse than consistency.
+
+3. **"Object in rock" needs a burial margin.** A centre that merely reads as solid flags
+   half a level, because objects are routinely authored resting exactly on the surface.
+   The rule is: solid at the point *and* solid half a voxel above it. That distinguishes
+   buried from resting, and — because the point itself must be solid — leaves an object
+   sitting inside a cave alone. There is a test for the resting case specifically.
+
+4. **The player-spawn fall limit is not derived.** The brief says "within a fall the player
+   could survive". There is no fall-damage system, so nothing to derive from; the check uses
+   a documented 20 m constant, and what it actually catches is a spawn over a void. Revisit
+   if fall damage lands.
+
+5. **Objects are numbered in the schematic, not labelled.** Named labels overlapped
+   unreadably where objects cluster (which is everywhere in `test_arena`). Markers carry an
+   index and a key below the panels resolves them, with coordinates — which also makes the
+   picture answer "where is object 17" without opening the RON.
+
+6. **`levels/*.ron` is no longer synonymous with "a level".** `mesh_baselines.ron` lives
+   there too, so `shipped_levels_parse_and_validate` now matches `*.level.ron` rather than
+   any `.ron`.
+
+### The schematic
+
+Committed at `docs/level_segments/arena.svg` (45 KB, renders in any browser). Two panels
+over one shared horizontal scale:
+
+- **Plan** — surface height as a shaded heightmap (quantised to 24 shades and run-length
+  merged along each row, which is what keeps the file small), chunk lattice as faint white
+  lines, numbered object markers coloured by whether their height is authored or resolved
+  from terrain, a green diamond for the spawn, axis ticks on the chunk lattice, a scale bar
+  and a ramp legend.
+- **Elevation** — the terrain's vertical envelope along z, split at columns with no terrain
+  so a void reads as a gap. Objects at their authored height, `y = 0` marked.
+
+On `test_arena` it reads correctly: the overhang along z = −60 is the pale slab, the crater
+is the dark disc, the three cave mouths are the notches in the elevation band, and the
+object cluster sits around the origin.
+
+Note the plan is drawn over the *derived* bounds, so `test_arena` shows an empty strip from
+x = −160 to −128 — that is the seam shell, and it is honest rather than a bug.
+
+Styling is inline on every shape rather than in the `<style>` block: viewers with partial
+CSS support (PyMuPDF, some SVG-to-PNG converters) filled every shape black otherwise.
+Only fonts are left to CSS.
+
+### Not done
+
+- No gap-vs-reach validation. There is nothing to measure gaps between until stage 2 has
+  anchors; the reach envelope is reported but nothing is validated against it.
+- No performance fix, as instructed. `CHUNK_VOXELS` is untouched.
+
+### For stage 2
+
+- **`check_level` takes one `Level` and one `TerrainManager`.** With segments it becomes
+  per-segment stats plus whole-level checks. The sections are already a `Vec`, so N terrain
+  sections is natural; `Report` needs no change. Placement checks take a point and ask the
+  terrain about it, so they generalise as soon as `TerrainWorld` answers `is_mesh_solid_at`
+  and `mesh_surface_heights_at` across segments.
+- **Rule 4 (chunk contention) is the obvious next check**, and it belongs in `level_check`
+  as an error. `ChunkGrid::coords()` plus `Chunk::has_solid()` — now surfaced as
+  `TerrainManager::solid_chunk_count()` — give the data; the check must compare
+  *solid-chunk* world extents, never allocated or derived bounds. The 72 % shell figure
+  above is why.
+- **Anchor gap validation should compare against `JumpEnvelope`,** which is already derived
+  from live tuning and exposes `max_flat_range()` and `max_apex()`. Apply a margin: the
+  figures are point-mass and optimistic.
+- **The schematic is single-frame.** `HeightField::sample` walks one `TerrainManager`, and
+  the plan/elevation projections assume one world-space lattice. With segments it wants a
+  per-segment sample loop into a shared world-space field, plus segment outlines and names
+  drawn over the plan — that outline is probably the single most useful thing the picture
+  could gain in stage 2.
+- **The open-edge baseline is per level file, not per segment.** If a segment is instanced
+  twice the count doubles, which is correct but means baselines must be re-committed
+  whenever placement changes. Consider moving to per-segment-definition counts if that
+  becomes annoying.

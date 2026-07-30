@@ -238,7 +238,6 @@ impl<R: Copy + Eq + Hash> AdjacencyMap<R> {
     }
 
     /// Count boundary edges (edges with only one triangle).
-    #[allow(dead_code)]
     pub fn boundary_edge_count(&self, total_triangles: usize) -> usize {
         // Total edges in the mesh = 3 * triangles.
         // Each manifold edge is shared, so: boundary = 3*T - 2*manifold.
@@ -362,6 +361,56 @@ mod tests {
         adj.rebuild(&octree, 1e-4);
         assert_eq!(adj.manifold_edge_count(), 1);
         assert_eq!(adj.boundary_edge_count(2), 4);
+    }
+
+    /// Open-edge counting is what `level_check` reports mesh integrity from, so
+    /// it is checked against hand-built meshes whose boundary is countable by
+    /// eye: a lone triangle has three open edges, a fan of three triangles
+    /// sharing two interior edges has 3*3 - 2*2 = 5, and a closed tetrahedron
+    /// has none.
+    #[test]
+    fn boundary_edges_counted_on_hand_built_meshes() {
+        let bounds = AABB::new(
+            Point3::new(-10.0, -10.0, -10.0),
+            Point3::new(10.0, 10.0, 10.0),
+        );
+
+        let count = |triangles: &[[(f32, f32, f32); 3]]| {
+            let mut octree = MeshOctree::new(bounds);
+            for [a, b, c] in triangles {
+                octree.insert_test_triangle(
+                    &test_vertex(a.0, a.1, a.2),
+                    &test_vertex(b.0, b.1, b.2),
+                    &test_vertex(c.0, c.1, c.2),
+                );
+            }
+            octree.rebuild_neighbor_refs();
+            let mut adj = AdjacencyMap::new();
+            adj.rebuild(&octree, 1e-4);
+            adj.boundary_edge_count(triangles.len())
+        };
+
+        let lone = [[(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0)]];
+        assert_eq!(count(&lone), 3, "lone triangle");
+
+        // Three triangles fanning from the origin, each sharing one edge with
+        // the next: two interior edges, five on the boundary.
+        let fan = [
+            [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (1.0, 1.0, 0.0)],
+            [(0.0, 0.0, 0.0), (1.0, 1.0, 0.0), (0.0, 1.0, 0.0)],
+            [(0.0, 0.0, 0.0), (0.0, 1.0, 0.0), (-1.0, 0.0, 0.0)],
+        ];
+        assert_eq!(count(&fan), 5, "triangle fan");
+
+        // A closed tetrahedron: every edge is shared by exactly two faces.
+        let (p, q, r, t) = (
+            (0.0, 0.0, 0.0),
+            (2.0, 0.0, 0.0),
+            (1.0, 2.0, 0.0),
+            (1.0, 0.7, 2.0),
+        );
+        let tetra = [[p, q, r], [p, q, t], [q, r, t], [r, p, t]];
+        assert_eq!(count(&tetra), 0, "closed tetrahedron");
     }
 
     #[test]
