@@ -4,7 +4,7 @@ use specs::{Entities, Join, Read, ReadStorage, System, Write, WriteStorage};
 
 use crate::components::{ModelInstance, RigidBodyComponent, TerrainAnchored};
 use crate::systems::PhysicsResource;
-use crate::terrain::TerrainManager;
+use crate::terrain::TerrainWorld;
 
 /// Checks terrain solidity under each anchored body and removes constraints
 /// when the terrain is gone. Optionally swaps the collider to its full-size
@@ -18,7 +18,7 @@ impl<'a> System<'a> for TerrainAnchorSystem {
         ReadStorage<'a, RigidBodyComponent>,
         WriteStorage<'a, ModelInstance>,
         Write<'a, PhysicsResource>,
-        Option<Read<'a, TerrainManager>>,
+        Option<Read<'a, TerrainWorld>>,
     );
 
     fn run(

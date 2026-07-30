@@ -12,11 +12,14 @@
 //!
 //! # Coordinate frames
 //!
-//! Everything in this module is **grid-local**. The grid's `origin` is where
-//! local `(0, 0, 0)` sits in world space; callers convert at the boundary. Today
-//! there is exactly one grid and its origin is the world origin, but keeping the
-//! frames distinct is what lets a later stage place several grids independently
-//! without their contents changing.
+//! Everything in this module is **grid-local** — the grid has no idea where it
+//! sits in the world. Placement belongs to the owning [`Segment`], which carries
+//! a [`SegmentFrame`] and converts at every query boundary. That split is what
+//! lets the same grid contents be placed anywhere without changing: generation
+//! never sees a world coordinate, so moving a segment cannot move its terrain.
+//!
+//! [`Segment`]: super::segment::Segment
+//! [`SegmentFrame`]: super::frame::SegmentFrame
 
 use nalgebra::{Point3, Vector3};
 use rustc_hash::FxHashMap;
@@ -31,30 +34,21 @@ pub struct ChunkGrid {
     /// Allocated chunks, keyed by lattice coordinate. Absent means all-air.
     chunks: FxHashMap<ChunkCoord, Chunk>,
 
-    /// World position of grid-local `(0, 0, 0)`.
-    origin: Point3<f32>,
-
     /// Edge length of one voxel, in world units.
     voxel_size: f32,
 }
 
 impl ChunkGrid {
-    /// Create an empty grid whose local origin sits at `origin` in world space.
-    pub fn new(origin: Point3<f32>, voxel_size: f32) -> Self {
+    /// Create an empty grid at the given voxel resolution.
+    pub fn new(voxel_size: f32) -> Self {
         assert!(voxel_size > 0.0, "voxel_size must be positive");
         Self {
             chunks: FxHashMap::default(),
-            origin,
             voxel_size,
         }
     }
 
-    // === Frame and resolution ===
-
-    /// World position of grid-local `(0, 0, 0)`.
-    pub fn origin(&self) -> Point3<f32> {
-        self.origin
-    }
+    // === Resolution ===
 
     /// Edge length of one voxel, in world units.
     pub fn voxel_size(&self) -> f32 {
@@ -64,26 +58,6 @@ impl ChunkGrid {
     /// Edge length of one chunk, in world units.
     pub fn chunk_extent(&self) -> f32 {
         CHUNK_VOXELS as f32 * self.voxel_size
-    }
-
-    /// Convert a world position into this grid's local frame.
-    pub fn to_local(&self, world: Point3<f32>) -> Point3<f32> {
-        world - self.origin.coords
-    }
-
-    /// Convert a grid-local position into world space.
-    pub fn to_world(&self, local: Point3<f32>) -> Point3<f32> {
-        local + self.origin.coords
-    }
-
-    /// Convert a grid-local AABB into world space.
-    pub fn aabb_to_world(&self, local: &AABB) -> AABB {
-        AABB::new(self.to_world(local.min), self.to_world(local.max))
-    }
-
-    /// Convert a world AABB into this grid's local frame.
-    pub fn aabb_to_local(&self, world: &AABB) -> AABB {
-        AABB::new(self.to_local(world.min), self.to_local(world.max))
     }
 
     // === Coordinate conversion ===
@@ -111,11 +85,6 @@ impl ChunkGrid {
             coord.z as f32 * extent,
         );
         AABB::new(min, min + Vector3::new(extent, extent, extent))
-    }
-
-    /// World-space bounds of a chunk coordinate.
-    pub fn chunk_world_bounds(&self, coord: ChunkCoord) -> AABB {
-        self.aabb_to_world(&self.chunk_bounds(coord))
     }
 
     /// Grid-local position of a chunk's minimum corner, in voxel lattice indices.
@@ -230,15 +199,37 @@ impl ChunkGrid {
         self.chunks.retain(|_, chunk| !chunk.is_vacant());
     }
 
-    /// World-space union of all allocated chunk bounds.
+    /// Coordinates of the allocated chunks holding at least one solid voxel.
+    ///
+    /// This is the set Rule 4's contention check compares between segments: the
+    /// allocated set includes an empty seam shell reaching a full chunk past the
+    /// real content, so checking allocation instead would reject every
+    /// legitimately adjacent pair of segments.
+    pub fn solid_coords(&self) -> Vec<ChunkCoord> {
+        let mut coords: Vec<ChunkCoord> = self
+            .chunks
+            .iter()
+            .filter(|(_, chunk)| chunk.has_solid())
+            .map(|(coord, _)| *coord)
+            .collect();
+        coords.sort_unstable();
+        coords
+    }
+
+    /// Grid-local union of all allocated chunk bounds.
     ///
     /// Bounds are derived from what is allocated, so they stay tight rather than
     /// reserving space the terrain never filled. Returns `None` for an empty grid.
-    pub fn allocated_world_bounds(&self) -> Option<AABB> {
-        let mut iter = self.chunks.keys();
-        let first = self.chunk_world_bounds(*iter.next()?);
+    pub fn allocated_bounds(&self) -> Option<AABB> {
+        self.bounds_of(self.chunks.keys().copied())
+    }
+
+    /// Grid-local union of the bounds of the given chunk coordinates.
+    pub fn bounds_of(&self, coords: impl IntoIterator<Item = ChunkCoord>) -> Option<AABB> {
+        let mut iter = coords.into_iter();
+        let first = self.chunk_bounds(iter.next()?);
         Some(iter.fold(first, |acc, coord| {
-            let b = self.chunk_world_bounds(*coord);
+            let b = self.chunk_bounds(coord);
             AABB::new(
                 Point3::new(
                     acc.min.x.min(b.min.x),
@@ -260,7 +251,7 @@ mod tests {
     use super::*;
 
     fn grid(voxel_size: f32) -> ChunkGrid {
-        ChunkGrid::new(Point3::origin(), voxel_size)
+        ChunkGrid::new(voxel_size)
     }
 
     #[test]
@@ -323,15 +314,6 @@ mod tests {
     }
 
     #[test]
-    fn world_local_round_trip_with_offset_origin() {
-        let g = ChunkGrid::new(Point3::new(10.0, -4.0, 2.5), 1.0);
-        let world = Point3::new(-7.0, 3.0, 11.0);
-        let local = g.to_local(world);
-        assert_eq!(g.to_world(local), world);
-        assert_eq!(local, Point3::new(-17.0, 7.0, 8.5));
-    }
-
-    #[test]
     fn coords_in_covers_the_query_box() {
         let g = grid(1.0);
         let aabb = AABB::new(Point3::new(-33.0, 0.0, 0.0), Point3::new(1.0, 1.0, 1.0));
@@ -372,6 +354,22 @@ mod tests {
         assert_eq!(g.chunk_count(), 8);
         assert!(g.chunk(ChunkCoord::new(-1, -1, -1)).is_some());
         assert!(g.chunk(ChunkCoord::new(1, 0, 0)).is_none());
+    }
+
+    /// The seam shell is allocated but empty, so `solid_coords` must be a
+    /// strict subset of `coords` — that difference is the whole reason Rule 4
+    /// checks solid ownership rather than allocation.
+    #[test]
+    fn solid_coords_excludes_the_seam_shell() {
+        let mut g = grid(1.0);
+        g.set(
+            Point3::new(4.0, 4.0, 4.0),
+            Voxel::solid(crate::terrain::voxel::VoxelMaterial::Rock, 1),
+        );
+        g.allocate_seam_neighbours();
+
+        assert_eq!(g.chunk_count(), 8);
+        assert_eq!(g.solid_coords(), vec![ChunkCoord::new(0, 0, 0)]);
     }
 
     #[test]

@@ -10,7 +10,7 @@ use crate::particles::config::ParticleEffectConfig;
 use crate::particles::{Particle, ParticleConfig, ParticlePool};
 use crate::rendering::Colour;
 use crate::systems::PhysicsResource;
-use crate::terrain::TerrainManager;
+use crate::terrain::TerrainWorld;
 use crate::time::Time;
 use crate::water::{BodySnapshot, SplashEvent, WakeEvent, WaterGrid, WaveBodyCoupler, WaveGrid};
 
@@ -75,7 +75,7 @@ impl<'a> System<'a> for WaterSystem {
         Option<Write<'a, WaterGrid>>,
         Option<Write<'a, WaveGrid>>,
         Option<Write<'a, WaveBodyCoupler>>,
-        Option<Read<'a, TerrainManager>>,
+        Option<Read<'a, TerrainWorld>>,
         Read<'a, Time>,
         Read<'a, PhysicsResource>,
         ReadStorage<'a, RigidBodyComponent>,

@@ -1,69 +1,222 @@
 // Test arena — reproduces the original hardcoded scene.
+//
+// One segment named "main", placed at the world origin with no rotation, so
+// every authored coordinate is also a world coordinate and this level renders
+// exactly as it did before segments existed.
 Level(
     name: "Test Arena",
 
-    terrain: Terrain(
-        // Genuine 1 m voxels: chunk depth is fixed by the chunk definition, so
-        // this is no longer halved by a world-size derivation.
-        voxel_size: 1.0,
-        // Sized to the content: objects sit within x -35..40, z -35..15, the
-        // cave region reaches x -95, and the overhang runs along z = -60.
-        // Chunks are 32 voxels on a side, so bounds land on that lattice.
-        bounds: (min: (-128.0, -32.0, -96.0), max: (64.0, 32.0, 64.0)),
-        base_height: 0.0,
-        material_layers: [
-            (depth: 1.0,  material: Grass),
-            (depth: 4.0,  material: Dirt),
-            (depth: 999.0, material: Rock),
-        ],
-        features: [
-            //TerrainRoughness(frequency: 0.1, amplitude: 3.0, octaves: 3, seed: 42),
-            Crater(center: (-10.0, 10.0), radius: 10.0, depth: 5.0),
-            // Cliff(
-            //     from: (-40.0, -60.0),
-            //     to: (40.0, -60.0),
-            //     low_height: 0.0,
-            //     high_height: 8.0,
-            //     high_side: (0.0, -1.0),
-            //     steepness: 10.0,
-            //     end_falloff: 0.0,
-            //     roughness: 5.0,
-            // ),
-        ],
-        volumes: [
-            Caves(
-                frequency: 0.08,
-                octaves: 4,
-                seed: 77,
-                depth_curve: [
-                    (depth: 0.0,  threshold: 0.95),
-                    (depth: 3.0,  threshold: 0.45),
-                    (depth: 10.0, threshold: 0.50),
-                    (depth: 20.0, threshold: 1.0),
-                ],
-                region: Some(CaveRegion(
-                    center: (-50.0, -15.0, -1.0),
-                    radius: 30.0,
-                    falloff: 15.0,
-                )),
+    segments: [
+        (
+            name: "main",
+
+            terrain: Terrain(
+                // Genuine 1 m voxels: chunk depth is fixed by the chunk definition, so
+                // this is no longer halved by a world-size derivation.
+                voxel_size: 1.0,
+                // Sized to the content: objects sit within x -35..40, z -35..15, the
+                // cave region reaches x -95, and the overhang runs along z = -60.
+                // Chunks are 32 voxels on a side, so bounds land on that lattice.
+                bounds: (min: (-128.0, -32.0, -96.0), max: (64.0, 32.0, 64.0)),
+                base_height: 0.0,
                 material_layers: [
-                    (depth: 0.5,  material: Ite),
-                    (depth: 3.0,  material: Limestone),
-                    (depth: 999.0, material: Slate),
+                    (depth: 1.0,  material: Grass),
+                    (depth: 4.0,  material: Dirt),
+                    (depth: 999.0, material: Rock),
                 ],
-                floor_bias: 0.15,
+                features: [
+                    //TerrainRoughness(frequency: 0.1, amplitude: 3.0, octaves: 3, seed: 42),
+                    Crater(center: (-10.0, 10.0), radius: 10.0, depth: 5.0),
+                    // Cliff(
+                    //     from: (-40.0, -60.0),
+                    //     to: (40.0, -60.0),
+                    //     low_height: 0.0,
+                    //     high_height: 8.0,
+                    //     high_side: (0.0, -1.0),
+                    //     steepness: 10.0,
+                    //     end_falloff: 0.0,
+                    //     roughness: 5.0,
+                    // ),
+                ],
+                volumes: [
+                    Caves(
+                        frequency: 0.08,
+                        octaves: 4,
+                        seed: 77,
+                        depth_curve: [
+                            (depth: 0.0,  threshold: 0.95),
+                            (depth: 3.0,  threshold: 0.45),
+                            (depth: 10.0, threshold: 0.50),
+                            (depth: 20.0, threshold: 1.0),
+                        ],
+                        region: Some(CaveRegion(
+                            center: (-50.0, -15.0, -1.0),
+                            radius: 30.0,
+                            falloff: 15.0,
+                        )),
+                        material_layers: [
+                            (depth: 0.5,  material: Ite),
+                            (depth: 3.0,  material: Limestone),
+                            (depth: 999.0, material: Slate),
+                        ],
+                        floor_bias: 0.15,
+                    ),
+                    Overhang(
+                        from: (-30.0, -60.0),
+                        to: (30.0, -60.0),
+                        height: 8.0,
+                        depth: 6.0,
+                        thickness: 3.0,
+                        direction: (0.0, 1.0),
+                        noise: 1.5,
+                    ),
+                ],
             ),
-            Overhang(
-                from: (-30.0, -60.0),
-                to: (30.0, -60.0),
-                height: 8.0,
-                depth: 6.0,
-                thickness: 3.0,
-                direction: (0.0, 1.0),
-                noise: 1.5,
-            ),
-        ],
-    ),
+
+            objects: [
+                // Lighting/material test subjects. Same physics as BeachBall.
+                // `glow` is emitted luminance, so the same number is the same
+                // brightness at any hue and blooms above the 1.3 threshold.
+                GlowingOrb(pos: (0.0, 0.5, -2.0)),
+                GlowingOrb(pos: (0.0, 0.5, 3.0), colour: Some((1.0, 0.45, 0.15)), glow: Some(2.18)),
+                GlowingOrb(pos: (-2.0, 0.5, 2.0), colour: Some((0.8, 0.3, 1.0)), glow: Some(1.71)),
+
+                Banana(pos: (2.0, 1.0, -1.0)),
+                Banana(pos: (3.2, 1.0, -1.6), ripeness: 0.05, curvature: 1.1),
+                Banana(pos: (0.8, 1.0, -2.2), ripeness: 0.95, length: 0.7),
+
+                // BeachBall(pos: (3.0, 5.0, 2.0)),
+                // BeachBall(pos: (-2.0, 4.0, -1.0)),
+                // BeachBall(pos: (1.0, 6.0, 4.0)),
+                // BeachBall(pos: (-4.0, 3.0, -3.0)),
+                // BeachBall(pos: (2.0, 5.0, 0.0)),
+                // // Capsule(pos: (0.0, 5.0, 0.0), half_height: 5.0, radius: 0.5),
+                // Box(pos: (3.0, 1.0, 3.0), half_extents: (0.5, 0.5, 0.5), density: 200.0),
+                // Plank(pos: (3.0, 0.0, 3.0), length: 3.0, width: 3.0),
+                // Capsule(pos: (3.0, 3.0, 6.0), half_height: 3.0, radius: 0.5, density: 800.0),
+
+                // Table(
+                //     pos: (3.0, 1.5, -2.0),
+                //     density: 500.0,
+                // ),
+
+                // Trampoline(
+                //     pos: (4.0, 0.0, -8.0),
+                // ),
+
+                // Pyramid(
+                //     base: (10.0, 0.0, 5.0),
+                //     block_half_extents: (0.4, 0.25, 0.4),
+                //     base_width: 5,
+                // ),
+
+                Tetrahedron(pos: (30.0, 3.0, -26.0), size: 1.5),
+                Box(pos: (30.0, 3.0, -28.0), half_extents: (0.5, 0.5, 0.5), density: 200.0),
+                Octahedron(pos: (30.0, 3.0, -30.0), size: 1.5),
+                Dodecahedron(pos: (30.0, 3.0, -32.0), size: 0.8),
+                Icosahedron(pos: (30.0, 3.0, -34.0), size: 1.2),
+
+                HoneycombWall(
+                    base: (6.0, 0.0, -6.0),
+                    columns: 5,
+                    rows: 4,
+                    radius: 0.4,
+                    half_height: 0.25,
+                ),
+
+                Domino(
+                    base: (10.0, 0.0, -4.0),
+                    direction: (0.0, -1.0),
+                    count: 10,
+                    spacing: 0.4,
+                ),
+
+                // Stacked boxes (was 5 boxes at x=0, z=2)
+                // Tower(
+                //     base: (0.0, -1.5, 2.0),
+                //     box_half_extents: (0.5, 0.5, 0.5),
+                //     count: 5,
+                // ),
+
+                // House(
+                //     pos: (10.0, 2.0, -10.0),
+                //     half_extents: (1.0, 1.0, 1.0),
+                // ),
+
+                Temple(
+                    pos: (30.0, 0.0, -30.0),
+                ),
+
+                // Box(pos: (3.0, 0.0, -6.0), half_extents: (10.0, 0.5, 10.0), density: 2000.0),
+                Tetrahedron(pos: (3.0, 1.0, -6.0), size: 1.5),
+
+                VoussoirArch(
+                    base: (15.0, 0.0, 8.0),
+                    inner_radius: 10.0,
+                    thickness: 5.0,
+                    depth: 3.2,
+                    num_voussoirs: 15,
+                    abutment_height: 0.5,
+                    friction: 0.9,
+                ),
+
+                Jenga(
+                    base: (6.0, 0.0, -10.0),
+                    layers: 7,
+                ),
+
+                PlankBridge(
+                    pos: (8.0, 0.0, 10.0),
+                    length: 10.0,
+                ),
+
+                FencePost(
+                    pos: (5.0, -13.0),
+                    half_height: 1.0,
+                    radius: 0.2,
+                ),
+
+                PlayWheel(
+                    pos: (5.0, -16.0),
+                    radius: 2.0,
+                    hub_height: 0.4,
+                ),
+
+                Seesaw(
+                    pos: (5.0, -19.0),
+                    beam_half_length: 4.0,
+                    beam_half_width: 0.4,
+                    beam_half_thickness: 0.1,
+                    fulcrum_height: 0.5,
+                ),
+
+                Menhir(
+                    pos: (15.0, 0.0),
+                    half_height: 2.0,
+                    bottom_radius: 0.8,
+                    top_radius: 0.5,
+                ),
+
+                Trilithon(
+                    pos: (15.0, 0.0, -5.0),
+                ),
+
+                Pendulum(
+                    pos: (15.0, -10.0),
+                ),
+
+                Jack(pos: (5.0, 0.0, 0.0), length: 1.0, thickness: 0.2),
+                Jack(pos: (0.0, 0.0, 0.0), length: 1.0, thickness: 0.2),
+
+                Dolos(pos: (-5.0, 0.0, 0.0)),
+                Dolos(pos: (-7.0, 0.0, 0.0), shank_length: 2.0, fluke_length: 1.4, thickness: 0.6),
+            ],
+        ),
+    ],
+
+    placements: [
+        Root(segment: "main", origin: (0.0, 0.0, 0.0), yaw: 0.0),
+    ],
 
     player_spawn: (3.0, 1.0, 0.0),
 
@@ -76,143 +229,4 @@ Level(
             ),
         ],
     )),
-
-    objects: [
-        // Lighting/material test subjects. Same physics as BeachBall.
-        // `glow` is emitted luminance, so the same number is the same
-        // brightness at any hue and blooms above the 1.3 threshold.
-        GlowingOrb(pos: (0.0, 0.5, -2.0)),
-        GlowingOrb(pos: (0.0, 0.5, 3.0), colour: Some((1.0, 0.45, 0.15)), glow: Some(2.18)),
-        GlowingOrb(pos: (-2.0, 0.5, 2.0), colour: Some((0.8, 0.3, 1.0)), glow: Some(1.71)),
-
-        Banana(pos: (2.0, 1.0, -1.0)),
-        Banana(pos: (3.2, 1.0, -1.6), ripeness: 0.05, curvature: 1.1),
-        Banana(pos: (0.8, 1.0, -2.2), ripeness: 0.95, length: 0.7),
-
-        // BeachBall(pos: (3.0, 5.0, 2.0)),
-        // BeachBall(pos: (-2.0, 4.0, -1.0)),
-        // BeachBall(pos: (1.0, 6.0, 4.0)),
-        // BeachBall(pos: (-4.0, 3.0, -3.0)),
-        // BeachBall(pos: (2.0, 5.0, 0.0)),
-        // // Capsule(pos: (0.0, 5.0, 0.0), half_height: 5.0, radius: 0.5),
-        // Box(pos: (3.0, 1.0, 3.0), half_extents: (0.5, 0.5, 0.5), density: 200.0),
-        // Plank(pos: (3.0, 0.0, 3.0), length: 3.0, width: 3.0),
-        // Capsule(pos: (3.0, 3.0, 6.0), half_height: 3.0, radius: 0.5, density: 800.0),
-
-        // Table(
-        //     pos: (3.0, 1.5, -2.0),
-        //     density: 500.0,
-        // ),
-
-        // Trampoline(
-        //     pos: (4.0, 0.0, -8.0),
-        // ),
-
-        // Pyramid(
-        //     base: (10.0, 0.0, 5.0),
-        //     block_half_extents: (0.4, 0.25, 0.4),
-        //     base_width: 5,
-        // ),
-
-        Tetrahedron(pos: (30.0, 3.0, -26.0), size: 1.5),
-        Box(pos: (30.0, 3.0, -28.0), half_extents: (0.5, 0.5, 0.5), density: 200.0),
-        Octahedron(pos: (30.0, 3.0, -30.0), size: 1.5),
-        Dodecahedron(pos: (30.0, 3.0, -32.0), size: 0.8),
-        Icosahedron(pos: (30.0, 3.0, -34.0), size: 1.2),
-
-        HoneycombWall(
-            base: (6.0, 0.0, -6.0),
-            columns: 5,
-            rows: 4,
-            radius: 0.4,
-            half_height: 0.25,
-        ),
-
-        Domino(
-            base: (10.0, 0.0, -4.0),
-            direction: (0.0, -1.0),
-            count: 10,
-            spacing: 0.4,
-        ),
-
-        // Stacked boxes (was 5 boxes at x=0, z=2)
-        // Tower(
-        //     base: (0.0, -1.5, 2.0),
-        //     box_half_extents: (0.5, 0.5, 0.5),
-        //     count: 5,
-        // ),
-
-        // House(
-        //     pos: (10.0, 2.0, -10.0),
-        //     half_extents: (1.0, 1.0, 1.0),
-        // ),
-
-        Temple(
-            pos: (30.0, 0.0, -30.0),
-        ),
-
-        // Box(pos: (3.0, 0.0, -6.0), half_extents: (10.0, 0.5, 10.0), density: 2000.0),
-        Tetrahedron(pos: (3.0, 1.0, -6.0), size: 1.5),
-
-        VoussoirArch(
-            base: (15.0, 0.0, 8.0),
-            inner_radius: 10.0,
-            thickness: 5.0,
-            depth: 3.2,
-            num_voussoirs: 15,
-            abutment_height: 0.5,
-            friction: 0.9,
-        ),
-
-        Jenga(
-            base: (6.0, 0.0, -10.0),
-            layers: 7,
-        ),
-
-        PlankBridge(
-            pos: (8.0, 0.0, 10.0),
-            length: 10.0,
-        ),
-
-        FencePost(
-            pos: (5.0, -13.0),
-            half_height: 1.0,
-            radius: 0.2,
-        ),
-
-        PlayWheel(
-            pos: (5.0, -16.0),
-            radius: 2.0,
-            hub_height: 0.4,
-        ),
-
-        Seesaw(
-            pos: (5.0, -19.0),
-            beam_half_length: 4.0,
-            beam_half_width: 0.4,
-            beam_half_thickness: 0.1,
-            fulcrum_height: 0.5,
-        ),
-
-        Menhir(
-            pos: (15.0, 0.0),
-            half_height: 2.0,
-            bottom_radius: 0.8,
-            top_radius: 0.5,
-        ),
-
-        Trilithon(
-            pos: (15.0, 0.0, -5.0),
-        ),
-
-        Pendulum(
-            pos: (15.0, -10.0),
-        ),
-
-        Jack(pos: (5.0, 0.0, 0.0), length: 1.0, thickness: 0.2),
-        Jack(pos: (0.0, 0.0, 0.0), length: 1.0, thickness: 0.2),
-
-        Dolos(pos: (-5.0, 0.0, 0.0)),
-        Dolos(pos: (-7.0, 0.0, 0.0), shank_length: 2.0, fluke_length: 1.4, thickness: 0.6),
-    ],
 )

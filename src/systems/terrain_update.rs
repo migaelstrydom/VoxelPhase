@@ -3,7 +3,7 @@
 use specs::{System, Write};
 
 use crate::debug::DebugLog;
-use crate::terrain::{TerrainManager, UpdateTimings};
+use crate::terrain::{TerrainWorld, UpdateTimings};
 
 /// System that updates terrain mesh and collision data if terrain was modified.
 ///
@@ -17,7 +17,7 @@ use crate::terrain::{TerrainManager, UpdateTimings};
 pub struct TerrainUpdateSystem;
 
 impl<'a> System<'a> for TerrainUpdateSystem {
-    type SystemData = (Option<Write<'a, TerrainManager>>, Write<'a, DebugLog>);
+    type SystemData = (Option<Write<'a, TerrainWorld>>, Write<'a, DebugLog>);
 
     fn run(&mut self, (terrain_manager_opt, mut debug_log): Self::SystemData) {
         let Some(mut terrain_manager) = terrain_manager_opt else {

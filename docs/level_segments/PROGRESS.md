@@ -381,3 +381,261 @@ Only fonts are left to CSS.
   twice the count doubles, which is correct but means baselines must be re-committed
   whenever placement changes. Consider moving to per-segment-definition counts if that
   becomes annoying.
+
+---
+
+## Stage 2 — segments, anchors, placement
+
+**Landed** on branch `level-segments-stage-2`. `cargo build`, `cargo test` (611 + 2 pass) and
+`cargo test --release --features bench_harness` (652 + 2 pass) are all green. All three
+levels pass `level_check` with exit code 0 and no findings.
+
+### What landed
+
+New in `src/terrain/`:
+
+- `frame.rs` — `SegmentFrame`: a translation plus a yaw in whole quarter turns, with
+  `to_local`/`to_world`, exact AABB conversion, `compose` and `inverse`.
+- `anchor.rs` — `Anchor` (a named local frame), `outward`, and `mate`, which solves for the
+  child segment frame that puts two anchors `gap` apart facing each other.
+- `segment.rs` — `Segment`: name + frame + `ChunkGrid` + adjacency + anchors + lifecycle
+  state. Owns everything that used to be the per-grid half of `TerrainManager`.
+- `world.rs` — `TerrainWorld`, replacing `TerrainManager`. Same public query surface,
+  fanned out across segments.
+
+New in `src/level/`:
+
+- `placement.rs` — `resolve_placements`, `world_anchor`, and `PlacementError` with a
+  message per failure mode.
+- `data.rs` gains `SegmentDef`, `AnchorDef`, `Placement`, `Connection`, `Level::frames`,
+  and `LevelObject::place_in`.
+- `loader.rs` resolves placement at load and lifts objects and the spawn into world space.
+- `spawner.rs` gains `build_segments`.
+
+New in `src/level_check/`:
+
+- `segments.rs` — per-segment statistics, the Rule 4 contention check, the connection and
+  gap-vs-reach checks, and `Crossing` (which jump a gap demands).
+- `svg.rs` reworked: segment outlines and names, anchor arrows, connection links carrying
+  their gap, de-conflicted labels, and a content-fitted elevation range.
+
+New level: `levels/test_segments.level.ron` — "Harbour Ascent", four segments.
+
+### The anchor facing convention
+
+**An anchor's local `+X` points outward, out of the segment.** Mating is therefore a 180°
+relative yaw, with `gap` separating the two origins along the parent's outward direction.
+
+```text
+       segment "plaza"                    segment "tower"
+  ┌───────────────────────┐   gap   ┌───────────────────────┐
+  │              exit_east│         │entry                  │
+  │                    ●──┼──▶ +X   │  +X ◀──●              │
+  └───────────────────────┘         └───────────────────────┘
+```
+
+A quarter turn maps local `+X` onto world `−Z` (nalgebra's rotation sense about `+Y`), so
+the face table is: `+x` → yaw 0, `−z` → yaw 90, `−x` → yaw 180, `+z` → yaw 270. If a
+segment lands *inside* its neighbour, its anchor is facing inward. The diagram and the
+table are in `src/terrain/anchor.rs` and `docs/LEVEL_FILE_FORMAT.md`.
+
+### Non-identity frames — what actually broke
+
+The brief said to expect the seam tests to find something at the first non-zero origin.
+**They did not.** Every seam, watertightness and duplicate-triangle test passes unchanged
+at a non-zero origin and at all four yaws, first time. That is a direct dividend of stage
+1 keeping generation and meshing entirely grid-local: there was no world coordinate left
+in the meshing path for a frame to disturb.
+
+What did need care, and would all have been *silent* rather than loud:
+
+1. **Ray direction.** `ray_cast_all` converted the origin into local space but the
+   direction has to be rotated too, and the resulting hit **normal** rotated back. Under a
+   pure translation this is invisible, which is exactly why it survived stage 1.
+2. **Render normals.** Baking the frame into vertex positions is obvious; baking it into
+   vertex normals is not. A rotated segment shaded with unrotated normals lights from the
+   wrong direction and looks plausible. There is a test.
+3. **AABB corner ordering.** `AABB::new` does not sort its corners, so transforming
+   `min`/`max` under a quarter turn and handing the results straight to `AABB::new`
+   produces an inside-out box that silently matches nothing. Both `SegmentFrame` AABB
+   conversions re-span from the two transformed corners.
+
+### Deviations from the brief
+
+1. **`ChunkGrid` lost its origin; the frame moved up to `Segment`.** The brief left the
+   split open; the plan's architecture diagram puts the frame on the segment, and that is
+   the cleaner line — `ChunkGrid` is now purely "voxels in one frame at one resolution"
+   and has no idea where it is. `chunk_world_bounds` and `allocated_world_bounds` became
+   local (`chunk_bounds`, `allocated_bounds`) with `Segment` doing the conversion.
+
+2. **Objects moved into segments and are authored segment-locally.** The brief did not ask
+   for this, but leaving objects in one flat world-space list would have kept the original
+   problem — "absolute coordinates do not compose" — alive in the half of the format an
+   author touches most. `load_level` resolves placement and then rewrites object positions
+   and `player_spawn` into world coordinates, so every downstream consumer
+   (`level_check::placement`, the schematic, the spawner) is unchanged.
+
+   **Limitation, deliberate:** only the *placement* is transformed. Half-extents, row
+   directions and column layouts are authored in the spawnable's own axes, so an object in
+   a yaw-90 segment keeps its world orientation. `PlankBridge` carries an explicit `yaw`
+   and is the one exception. Teaching all 34 spawnables about orientation is real work that
+   belongs with stage 3's gameplay entities, not here. Documented in `place_in` and in the
+   format doc; `test_segments` puts only yaw-invariant objects in its rotated segments.
+
+3. **`player_spawn` is authored in the root segment's local frame.** Everything else in a
+   segment-based format is local, and the plan says the spawn eventually becomes "the
+   checkpoint in the root segment". With the root at the origin it is identical to before.
+
+4. **`placements` is a level-level list, not a field on each segment.** A `place:` field
+   per segment would make over-determination *unrepresentable*, which sounds good until you
+   notice the brief requires it to be a detectable error. A list of edges also reads better
+   next to `connections`, since the two are the same kind of thing with different powers.
+
+5. **Adjacency is per-segment, not level-wide.** Stage 1 flagged that positional matching
+   would link triangles across a segment join wherever geometry coincides, and asked for a
+   deliberate decision. The decision: **do not link across segments.** Segments are the unit
+   of load and unload, so a level-wide map would have to be rebuilt whenever one came or
+   went; and with welded joins out of scope there is no coincident geometry to link anyway.
+   Matching is now done in *segment-local* positions, which is also more robust — two
+   segments' local coordinates can collide numerically while their world positions are far
+   apart.
+
+6. **`TerrainWorld::voxel_size()` is the finest voxel size in the level**, and
+   `chunk_extent()` is gone from the world API (it is per segment now, reported per segment
+   by `level_check`). Callers use `voxel_size` as a step or a tolerance, so the finest is
+   the conservative answer.
+
+7. **The schematic dropped the chunk lattice.** With per-segment resolutions there is no
+   single lattice to draw, and per-segment lattices would clutter the picture that segment
+   outlines now carry. Axis ticks are computed from a round-number step fitted to the span
+   instead of from the chunk extent, which also makes them read as round numbers.
+
+8. **Welded joins are rejected at load**, as instructed — `Join(..., weld: true)` produces
+   `PlacementError::WeldNotImplemented` naming the segment and explaining the cap-surface
+   reason. No cap surface is ever emitted.
+
+### `test_segments.level.ron` — "Harbour Ascent"
+
+Four segments, chained, with a loop closed by an assertion:
+
+```text
+  start_beach ──5 m──▶ shoal_run ──6 m──▶ cliff_terrace ──5 m──▶ summit_arena
+                           │                     ▲
+                           └────── 6 m ──────────┘   (Connect, not a placement)
+```
+
+| Segment | Voxel | Derived frame | Solid chunks | Triangles |
+|---------|-------|---------------|--------------|-----------|
+| `start_beach` (root) | 1.0 m | (0, 0, 0) yaw 0 | 18 | 51 664 |
+| `shoal_run` | 1.0 m | (101, 0, 16) yaw 0 | 8 | 29 084 |
+| `cliff_terrace` | 0.5 m | (109, 4, 10) **yaw 90** | 18 | 73 288 |
+| `summit_arena` | 0.5 m | (109, 8, −43) **yaw 90** | 18 | 59 768 |
+
+Every gap is inside the 7.14 m standing-jump range. The terraces climb in 2 m steps,
+inside the 2.50 m apex. `cliff_terrace` at 0.5 m sits next to `shoal_run` at 1.0 m, which
+Rule 1 permits because the join is a gap. The second `shoal_run` ↔ `cliff_terrace` link is
+the whole reason placement and connectivity are separate: it closes a loop, so it derives
+nothing and is checked instead — `level_check` reports it as `measured 6.0 m`, exactly the
+declared gap, because quarter-turn placement is exact rather than approximate.
+
+Mesh baseline committed: 213 804 triangles, 310 open edges.
+
+### The ported levels are byte-identical
+
+`test_arena` and `test_empty_terrain` reproduce their stage 1.5 figures exactly:
+
+| Level | Chunks | Solid | Triangles | Vertices | Open edges |
+|-------|--------|-------|-----------|----------|------------|
+| `test_arena` | 114 | 32 | 191 116 | 573 348 | 218 |
+| `test_empty_terrain` | 66 | 16 | 98 948 | 296 844 | 22 |
+
+That equivalence is the regression test that the frame maths is identity-correct before it
+is trusted at non-zero origins, exactly as the brief asked.
+
+### Performance — measured, not touched
+
+`cargo test --release --lib -- --ignored --nocapture grenade_update_cost` on `test_arena`,
+after the segment layer:
+
+| Grenade | Chunks dirtied | Remesh | Adjacency | Concat | Total |
+|---------|----------------|--------|-----------|--------|-------|
+| corner (0, 0, 0) | 8 | 18.4 ms | 6.1 ms | 6.9 ms | 31.4 ms |
+| mid-chunk (16, 0, 16) | 2 | 4.6 ms | 1.4 ms | 4.2 ms | 10.2 ms |
+| mid-chunk (−20, 0, 8) | 2 | 5.1 ms | 2.3 ms | 3.8 ms | 11.2 ms |
+
+Within noise of stage 1.5's figures, so the segment broadphase and the per-segment
+transform cost nothing measurable at this level size. **No performance fix was made**, as
+instructed. The tripwire from stage 1.5 still stands: concatenation overtakes an 8-chunk
+remesh at roughly 1.7 M vertices, and `test_segments` is already at 641 412.
+
+One structural note for whoever does fix it: `Segment::append_render_data` is now the only
+place the frame is baked into vertices, and `TerrainWorld` owns the single concatenated
+buffer. Per-segment GPU buffers are therefore a change to two functions plus the renderer,
+not a redesign.
+
+### The schematic
+
+Committed at `docs/level_segments/segments.svg` (118 KB) and `docs/level_segments/arena.svg`
+(44 KB, regenerated). Reading `segments.svg`:
+
+- The four segments read as four outlined, named boxes: `start_beach` bottom-left with its
+  tidal bowl as the dark disc, `shoal_run` to its right with two darker bites, then the
+  three terraces of `cliff_terrace` stepping up, then `summit_arena` at the top with its
+  crater and wall.
+- The chain reads in order because the join links are drawn between the actual anchor
+  positions and carry their gap in metres. The purple assertion link next to the orange
+  join between `shoal_run` and `cliff_terrace` is visibly the second route.
+- Anchor arrows point out of their segments, which makes a mis-facing anchor obvious.
+
+Both stage 1.5 flaws are fixed:
+
+1. **Label collisions.** All plan-panel text now shares one reservation grid, claimed in
+   decreasing order of importance (gap figures, then anchor names, then object indices). A
+   label that would overprint is dropped; the marker stays and the key below carries the
+   exact coordinates. `test_arena`'s object cluster is now readable.
+2. **Elevation squash.** The vertical range is fitted to the sampled terrain plus authored
+   object heights, padded 12 %, with a 16 m floor so a flat level is not magnified into
+   fake mountains. `test_arena` went from a −64..32 range to −14..10 and its cave mouths
+   and overhang are now legible rather than a strip.
+
+### What a human should check with `cargo run`
+
+**The game window cannot be launched from the agent shell**, so this was not done. Please
+run `cargo run` (which loads `test_arena`) and look at exactly these four things:
+
+1. **Nothing moved.** The arena should look identical to before this branch — same terrain,
+   same objects resting on the same surfaces. The port to a single segment at the origin is
+   supposed to be a no-op.
+2. **Shading.** Terrain normals now pass through the segment frame. At yaw 0 that is the
+   identity, so any change in shading is a bug in the vertex path, not a subtlety.
+3. **Grenade a hillside.** Destruction routes through the segment broadphase now. Craters
+   should appear where thrown and the terrain should re-mesh without cracks.
+4. **Then** change the level path in `src/main.rs` to `levels/test_segments.level.ron` and
+   walk the route: beach → shoals → terraces → arena. Every gap is authored inside the
+   standing-jump range, so if any of them cannot be crossed the reach model is optimistic
+   in a way `level_check` cannot see.
+
+### For stage 3
+
+- **Traversal primitives belong inside `SegmentDef`, in segment-local coordinates**, as a
+  list alongside `objects` and `anchors`. Follow `LevelObject::place_in`'s split: resolve
+  the *placement* at load, keep generation local. Unlike the 34 legacy spawnables these are
+  new types, so give them a real orientation from the start — `SegmentFrame::rotation()`
+  returns a `UnitQuaternion` that agrees exactly with the integer rotation, so a primitive
+  that stores a quaternion composes correctly under a rotated segment and does not inherit
+  the object-orientation limitation recorded above.
+- **Anchors are already the right primitive for a motion-path waypoint.** `Anchor` is a
+  named `SegmentFrame`, not a point, so a `Path` can reference `segment.anchor` and get an
+  orientation as well as a position. `world_anchor(level, &level.frames, "seg.anchor")`
+  resolves one.
+- **Gameplay entities should be per-segment too**, and `player_spawn` should become "the
+  checkpoint in the root segment" — it is already authored in that frame, so the migration
+  is a rename plus a lookup.
+- **`Crossing::for_gap`** (`src/level_check/segments.rs`) already answers "which jump does
+  this gap need". A traversal primitive that spans a gap should be checked the same way,
+  and a gap bridged only by a primitive should stop being reported as a jump.
+- **`SegmentState` exists and is always `Active`.** Nothing schedules on it yet. It is
+  there so streaming and per-segment reset are a scheduling change rather than a redesign.
+- **The open-edge baseline is still per level file.** `test_segments` at 310 is the sum of
+  four segments; if a segment definition is ever instanced twice the number doubles, which
+  is correct but means the baseline must be re-committed whenever placement changes.

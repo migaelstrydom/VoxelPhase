@@ -1,10 +1,10 @@
 # Level File Format Design
 
 > **Partly superseded.** `docs/LEVEL_SEGMENTS_PLAN.md` replaces the single-cube world model.
-> As of stage 1, `Level` no longer has `world_size`/`voxel_size` and there is no derived
-> octree depth: `Terrain` carries an explicit `voxel_size` plus a `bounds` extent, and
-> storage is a sparse grid of fixed-size chunks. Everything below about **object and
-> spawnable syntax** still applies; the world-sizing and octree-depth sections do not.
+> As of stage 2 a level is a list of **segments** joined by an **anchor** graph — see
+> "Segments, anchors and placement" below, which is the authoritative description of the
+> top level of the format. Everything about **object and spawnable syntax** still applies,
+> now scoped inside a segment; the old world-sizing and octree-depth sections are gone.
 
 ## Motivation
 
@@ -59,102 +59,204 @@ A catalogue of level concepts that play to the engine's strengths: destructible 
 
 **Dependency**: `ron = "0.8"` + `serde = { features = ["derive"] }`.
 
+## Segments, anchors and placement
+
+A level is **N segments**. Each segment owns a coordinate frame, its own voxel resolution,
+its terrain, its named anchors and its objects — and every coordinate inside it is
+**segment-local**. Nothing but the placement root is authored in world coordinates.
+
+### Placement is a tree; connectivity is a graph
+
+- **`placements`** derive transforms. Exactly one `Root`, then one `Join` per remaining
+  segment. A segment with two placements is over-determined, one with none is an orphan,
+  and a loop is a cycle — all three are errors at load.
+- **`connections`** derive nothing. They *assert* that two anchors meet, and `level_check`
+  verifies it. Any relationship that would close a loop — a shortcut back to an earlier
+  area, a second bridge across a chasm — belongs here, because two placement paths around
+  a loop would disagree about where a segment is.
+
+### The anchor facing convention
+
+**An anchor's local `+X` points outward, out of the segment.**
+
+```text
+       segment "plaza"                    segment "tower"
+  ┌───────────────────────┐   gap   ┌───────────────────────┐
+  │                       │◀──────▶ │                       │
+  │              exit_east│         │entry                  │
+  │                    ●──┼──▶ +X   │  +X ◀──●              │
+  │                       │         │                       │
+  └───────────────────────┘         └───────────────────────┘
+```
+
+Mating two anchors is a **180° relative yaw**: the child's anchor is turned to face back
+at the parent's, and the two origins are separated by `gap` metres along the parent's
+outward direction. So:
+
+| Face of the segment | Outward direction | Anchor `yaw` |
+|---------------------|-------------------|--------------|
+| `+x` (east)         | `+X`              | `0`          |
+| `-z` (north)        | `−Z`              | `90`         |
+| `-x` (west)         | `−X`              | `180`        |
+| `+z` (south)        | `+Z`              | `270`        |
+
+A quarter turn maps local `+X` onto world `−Z`, which is why the north face is 90 and not
+270. **If a segment lands inside its neighbour instead of beside it, its anchor is facing
+inward** — that is the mistake everyone makes first.
+
+### Rotation is quarter turns only
+
+Every `yaw` in the format — segment and anchor alike — must be a multiple of 90°. Anything
+else is rejected at load with the offending segment or anchor named. Pitch and roll are not
+supported; slanted geometry is expressed *within* a segment via terrain features.
+
+### Welded joins are not implemented
+
+`Join` accepts `weld: true`, and **rejects it at load**. Marching cubes samples a one-voxel
+halo and an unallocated neighbour reads as air, so a welded boundary chunk emits a cap
+surface sealing a join that should be open — real geometry that reaches physics. Use a gap,
+or express the continuous structure as a spawnable. Cross-segment halo sampling is separate
+future work.
+
+### What is world-space and what is not
+
+| Authored in | Field |
+|-------------|-------|
+| World       | `Root(origin:, yaw:)` — the one absolute transform in the file |
+| Root-local  | `player_spawn` |
+| Segment-local | `terrain.bounds`, all terrain features, `anchors[].pos`, all `objects` |
+
+`load_level` resolves the tree and rewrites objects and the spawn into world coordinates.
+Terrain extents stay local, because generation is local — that is what makes a segment
+produce identical geometry wherever it is placed.
+
+**Limitation:** placing a segment at a non-zero yaw rotates its *terrain*, and moves its
+objects to the right place, but does **not** rotate object geometry. Half-extents, row
+directions and column layouts are authored in the spawnable's own axes. `PlankBridge`,
+which carries an explicit `yaw`, is the one exception. Author direction-sensitive objects
+in a segment with zero yaw.
+
 ## Level File Structure
 
 ```ron
-// levels/test_arena.level.ron
+// levels/example.level.ron
 Level(
-    name: "Test Arena",
+    name: "Example",
 
-    terrain: Terrain(
-        voxel_size: 1.0,     // used directly; chunk depth is fixed by the chunk definition
-        // Region terrain is generated within. Chunks are allocated on demand,
-        // so an extent larger than the content costs storage only where filled.
-        bounds: (min: (-64.0, -32.0, -64.0), max: (64.0, 32.0, 64.0)),
-        base_height: 0.0,
-        material_layers: [
-            (depth: 1.0,  material: Grass),
-            (depth: 4.0,  material: Dirt),
-            (depth: 999.0, material: Rock),
-        ],
+    segments: [
+        (
+            name: "plaza",
 
-        // Heightfield features — modify surface height at each (x, z) column
-        features: [
-            Hill(center: (10.0, 15.0), radius: 8.0, height: 5.0),
-            Hill(center: (-8.0, -5.0), radius: 12.0, height: 3.0),
-            Crater(center: (0.0, 0.0), radius: 6.0, depth: 3.0),
-            Plateau(min: (-20.0, -20.0), max: (-10.0, -10.0), height: 8.0),
-            Wall(from: (5.0, -10.0), to: (5.0, 10.0), height: 6.0, thickness: 2.0),
-            Ramp(from: (10.0, 5.0), to: (18.0, 5.0), start_height: 0.0, end_height: 8.0, width: 4.0),
-            TerrainRoughness(frequency: 0.1, amplitude: 0.5, octaves: 3, seed: 42),
-        ],
+            terrain: Terrain(
+                voxel_size: 1.0,     // used directly; chunk depth is fixed by the chunk definition
+                // Region terrain is generated within, in SEGMENT-LOCAL coordinates.
+                // Chunks are allocated on demand, so an extent larger than the
+                // content costs storage only where filled.
+                bounds: (min: (0.0, -32.0, 0.0), max: (96.0, 32.0, 96.0)),
+                base_height: 0.0,
+                material_layers: [
+                    (depth: 1.0,  material: Grass),
+                    (depth: 4.0,  material: Dirt),
+                    (depth: 999.0, material: Rock),
+                ],
 
-        // Volumetric features — place or carve voxels in 3D (evaluated after heightfield)
-        volumes: [
-            Island(center: (20.0, 15.0, 0.0), half_extents: (6.0, 2.0, 6.0), edge_noise: 0.3),
-            Arch(from: (10.0, 8.0, 0.0), to: (20.0, 8.0, 0.0), radius: 3.0, thickness: 1.5),
-            Pillar(center: (5.0, 0.0), height: 12.0, radius: 2.0),
-            Tunnel(center: (0.0, -15.0), direction: (1.0, 0.0), length: 12.0, radius: 2.5, depth: 2.0),
-        ],
-    ),
+                // Heightfield features — modify surface height at each (x, z) column
+                features: [
+                    Hill(center: (10.0, 15.0), radius: 8.0, height: 5.0),
+                    Crater(center: (34.0, 34.0), radius: 6.0, depth: 3.0),
+                    Plateau(min: (86.0, 34.0), max: (96.0, 62.0), height: 4.0),
+                    Wall(from: (5.0, 10.0), to: (5.0, 30.0), height: 6.0, thickness: 2.0),
+                    Ramp(from: (58.0, 48.0), to: (88.0, 48.0), start_height: 0.0, end_height: 4.0, width: 26.0),
+                    TerrainRoughness(frequency: 0.1, amplitude: 0.5, octaves: 3, seed: 42),
+                ],
 
-    player_spawn: (0.0, 3.0, -15.0),
+                // Volumetric features — place or carve voxels in 3D (evaluated after heightfield)
+                volumes: [
+                    Island(center: (20.0, 15.0, 40.0), half_extents: (6.0, 2.0, 6.0), edge_noise: 0.3),
+                    Arch(from: (10.0, 8.0, 40.0), to: (20.0, 8.0, 40.0), radius: 3.0, thickness: 1.5),
+                    Pillar(center: (5.0, 40.0), height: 12.0, radius: 2.0),
+                    Tunnel(center: (0.0, 15.0), direction: (1.0, 0.0), length: 12.0, radius: 2.5, depth: 2.0),
+                ],
+            ),
 
-    objects: [
-        // Beach balls
-        BeachBall(pos: (3.0, 5.0, 2.0)),
-        BeachBall(pos: (-2.0, 5.0, 4.0)),
+            // Named local frames. `yaw` defaults to 0, which faces out along +X.
+            anchors: [
+                (name: "exit_east", pos: (96.0, 4.0, 48.0), yaw: 0.0),
+            ],
 
-        // Raw box with full control over appearance and physics
-        Box(
-            pos: (5.0, 1.0, 0.0),
-            half_extents: (0.5, 0.5, 0.5),
-            style: WoodenCrate,
-            density: 50.0,
-            restitution: 0.2,
-            friction: 0.6,
-        ),
+            // Objects, in segment-local coordinates.
+            objects: [
+                BeachBall(pos: (3.0, 5.0, 2.0)),
 
-        // Named types — bundled defaults for appearance + physics
-        Plank(pos: (8.0, 4.0, 0.0), length: 4.0, width: 1.0),
-        Crate(pos: (10.0, 1.0, 3.0), size: 1.0),
-        HeavyCrate(pos: (12.0, 1.0, 3.0), size: 1.0),
+                // Raw box with full control over appearance and physics
+                Box(
+                    pos: (5.0, 1.0, 0.0),
+                    half_extents: (0.5, 0.5, 0.5),
+                    style: WoodenCrate,
+                    density: 50.0,
+                    restitution: 0.2,
+                    friction: 0.6,
+                ),
 
-        // Vertical stack — auto-computes Y positions bottom-up from base
-        Stack(
-            base: (12.0, 0.0, 5.0),
-            items: [
-                Crate(size: 2.0),
-                Crate(size: 2.0),
-                Crate(size: 1.0),
+                // Named types — bundled defaults for appearance + physics
+                Plank(pos: (8.0, 4.0, 0.0), length: 4.0, width: 1.0),
+                Crate(pos: (10.0, 1.0, 3.0), size: 1.0),
+                HeavyCrate(pos: (12.0, 1.0, 3.0), size: 1.0),
+
+                // Vertical stack — auto-computes Y positions bottom-up from base
+                Stack(
+                    base: (12.0, 0.0, 5.0),
+                    items: [Crate(size: 2.0), Crate(size: 2.0), Crate(size: 1.0)],
+                ),
+
+                // Tower — shorthand for N identical boxes stacked
+                Tower(base: (5.0, 0.0, 8.0), box_half_extents: (0.5, 0.5, 0.5), count: 6, density: 40.0),
+
+                // Wall of boxes — grid arrangement
+                BoxWall(
+                    base: (15.0, 0.0, 0.0),
+                    box_half_extents: (1.0, 0.5, 0.5),
+                    columns: 4,
+                    rows: 3,
+                    density: 50.0,
+                    // Alternating row offset for brick-like pattern
+                    stagger: true,
+                ),
+
+                // Prefab structures
+                House(pos: (0.0, 10.0, 5.0), half_extents: (2.0, 1.5, 2.0)),
             ],
         ),
 
-        // Tower — shorthand for N identical boxes stacked
-        Tower(
-            base: (-5.0, 0.0, 8.0),
-            box_half_extents: (0.5, 0.5, 0.5),
-            count: 6,
-            density: 40.0,
-        ),
-
-        // Wall of boxes — grid arrangement
-        BoxWall(
-            base: (15.0, 0.0, 0.0),
-            box_half_extents: (1.0, 0.5, 0.5),
-            columns: 4,
-            rows: 3,
-            density: 50.0,
-            // Alternating row offset for brick-like pattern
-            stagger: true,
-        ),
-
-        // Prefab structures
-        House(
-            pos: (0.0, 10.0, 5.0),
-            half_extents: (2.0, 1.5, 2.0),
+        (
+            name: "tower",
+            terrain: Terrain(
+                // A different resolution from its neighbour is fine: the join is a
+                // gap, so nothing has to mesh across it.
+                voxel_size: 0.5,
+                bounds: (min: (0.0, -16.0, 0.0), max: (48.0, 24.0, 48.0)),
+                base_height: 2.0,
+                features: [],
+            ),
+            anchors: [
+                // On the -x face, facing back toward the plaza.
+                (name: "entry", pos: (0.0, 2.0, 24.0), yaw: 180.0),
+            ],
         ),
     ],
+
+    placements: [
+        Root(segment: "plaza", origin: (0.0, 0.0, 0.0), yaw: 0.0),
+        Join(segment: "tower", anchor: "entry", to: "plaza.exit_east", gap: 6.0),
+    ],
+
+    // Assertions: two anchors meet, but nothing is derived from it.
+    connections: [
+        // (from: "tower.back_door", to: "plaza.side_gate", gap: 5.0),
+    ],
+
+    // In the ROOT segment's local frame.
+    player_spawn: (30.0, 3.0, 62.0),
 )
 ```
 
@@ -163,9 +265,10 @@ Level(
 ```
 src/level/
 ├── mod.rs              // re-exports
-├── data.rs             // serde structs (pure data, no engine deps)
-├── loader.rs           // RON parsing, validation
-└── spawner.rs          // data → ECS entities + terrain
+├── data.rs             // serde structs
+├── loader.rs           // RON parsing, validation, placement resolution
+├── placement.rs        // placement tree → one SegmentFrame per segment
+└── spawner.rs          // data → segments, ECS entities, water
 ```
 
 ### `data.rs` — Pure Data Structs
@@ -176,9 +279,49 @@ use serde::Deserialize;
 #[derive(Deserialize)]
 pub struct Level {
     pub name: String,
-    pub terrain: Terrain,        // carries voxel_size and bounds
+    pub segments: Vec<SegmentDef>,
+    pub placements: Vec<Placement>,
+    #[serde(default)]
+    pub connections: Vec<Connection>,
+    /// In the root segment's local frame; rewritten to world by `load_level`.
     pub player_spawn: (f32, f32, f32),
+    #[serde(default)]
+    pub water: Option<WaterConfig>,
+    /// Derived: one world frame per segment, filled in by `load_level`.
+    #[serde(skip)]
+    pub frames: Vec<SegmentFrame>,
+}
+
+#[derive(Deserialize)]
+pub struct SegmentDef {
+    pub name: String,
+    pub terrain: Terrain,        // carries voxel_size and bounds, segment-local
+    #[serde(default)]
+    pub anchors: Vec<AnchorDef>,
+    #[serde(default)]
     pub objects: Vec<LevelObject>,
+}
+
+#[derive(Deserialize)]
+pub struct AnchorDef {
+    pub name: String,
+    pub pos: (f32, f32, f32),
+    /// Multiple of 90°. 0 faces out along local +X.
+    #[serde(default)]
+    pub yaw: f32,
+}
+
+#[derive(Deserialize)]
+pub enum Placement {
+    Root { segment: String, origin: (f32, f32, f32), yaw: f32 },
+    Join { segment: String, anchor: String, to: String, gap: f32, weld: bool },
+}
+
+#[derive(Deserialize)]
+pub struct Connection {
+    pub from: String,   // "segment.anchor"
+    pub to: String,     // "segment.anchor"
+    pub gap: f32,
 }
 
 #[derive(Deserialize)]
@@ -423,7 +566,9 @@ let level = load_level(Path::new("levels/test_arena.level.ron"))?;
 spawn_level(&mut world, &level, &materials);
 ```
 
-Terrain creation moves into `spawn_level` since the level file now specifies world size and voxel size (octree depth is computed).
+Terrain creation moves into the level module: `build_segments` generates each segment's grid at
+its own resolution and places it at the frame the placement tree derived, and `TerrainWorld`
+owns the result.
 
 ## Roadmap
 
@@ -575,6 +720,11 @@ Write `levels/grenade_gauntlet.level.ron` using the example from this doc. Test 
 **Verify**: playable level with platforms, gaps, crate walls, floating island, and a goal point.
 
 ## Example: Obstacle Course Level
+
+> **Historical — pre-segments syntax.** This sketch predates stage 2 and uses the old
+> single-terrain top level (`world_size`, one `terrain`, one flat `objects` list). It is kept
+> because the *level design* it illustrates is still the point. For a current, working
+> multi-segment example see `levels/test_segments.level.ron`.
 
 To illustrate how this format makes level design practical, here's a sketch of the "grenade jumping" concept from our brainstorm:
 

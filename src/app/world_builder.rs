@@ -27,7 +27,7 @@ use crate::resources::manager::ResourceManager;
 use crate::resources::textures::TextureManager;
 use crate::sensing::{ContactCandidates, SensorSet};
 use crate::systems::{FrameStart, PhysicsResource};
-use crate::terrain::TerrainManager;
+use crate::terrain::TerrainWorld;
 use crate::time::Time;
 
 /// Builds and configures the ECS World with all components and resources
@@ -94,7 +94,7 @@ impl WorldBuilder {
         self
     }
 
-    pub fn with_terrain(mut self, terrain_manager: TerrainManager) -> Self {
+    pub fn with_terrain(mut self, terrain_manager: TerrainWorld) -> Self {
         self.world.insert(terrain_manager);
         self
     }

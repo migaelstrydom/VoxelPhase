@@ -28,7 +28,7 @@ use crate::rendering::colour::Colour;
 use crate::rendering::material::{Material, MaterialId};
 use crate::rendering::vertex::Vertex;
 use crate::systems::PhysicsResource;
-use crate::terrain::TerrainManager;
+use crate::terrain::TerrainWorld;
 use crate::utils::noise::fbm_2d_periodic;
 
 const TEXTURE_SIZE: u32 = 256;
@@ -90,7 +90,7 @@ impl Spawnable for MenhirDef {
         let material = materials[0];
 
         let surface_y = {
-            let terrain = world.read_resource::<TerrainManager>();
+            let terrain = world.read_resource::<TerrainWorld>();
             terrain.mesh_surface_height_at(self.pos.0, self.pos.1)
         };
 

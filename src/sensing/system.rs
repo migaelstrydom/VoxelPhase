@@ -8,7 +8,7 @@ use specs::{Entities, Join, Read, System, Write, WriteStorage};
 use super::probe::{ContactCandidate, ContactCandidates, ProbeTarget, SensorSet};
 use crate::debug::DebugOverlays;
 use crate::systems::PhysicsResource;
-use crate::terrain::TerrainManager;
+use crate::terrain::TerrainWorld;
 
 /// System that executes terrain and rigid body probes.
 ///
@@ -18,7 +18,7 @@ pub struct SensorProbeSystem;
 
 impl<'a> System<'a> for SensorProbeSystem {
     type SystemData = (
-        Option<Read<'a, TerrainManager>>,
+        Option<Read<'a, TerrainWorld>>,
         Option<Read<'a, PhysicsResource>>,
         Entities<'a>,
         WriteStorage<'a, SensorSet>,

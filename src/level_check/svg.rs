@@ -2,8 +2,9 @@
 //!
 //! ```text
 //!   ┌──────────────────────────────┐   top-down (xz): surface height as a
-//!   │  plan          ▓▓▒▒░░        │   shaded heightmap, objects as markers,
-//!   │                ▓▓▓▒▒         │   chunk lattice as a faint grid
+//!   │  plan   ┌────────┐  ┌─────┐  │   shaded heightmap, one outlined box per
+//!   │         │ plaza ▓│╌╌│tower│  │   segment, anchors as arrows, connections
+//!   │         └────────┘  └─────┘  │   as dashed links carrying their gap
 //!   ├──────────────────────────────┤
 //!   │  elevation    ▁▂▄▆█▆▄▂▁      │   (xy): the vertical envelope of the
 //!   └──────────────────────────────┘   terrain, projected along z
@@ -11,13 +12,17 @@
 //!
 //! The audience is someone who cannot run the game and wants to know whether a
 //! level is roughly what they intended, so legibility beats fidelity: labelled
-//! axes, a scale bar and a legend matter more than shading quality.
+//! axes, a scale bar and a legend matter more than shading quality. In
+//! particular the picture has to answer *what connects to what, in what order* —
+//! which is the question the RON is worst at.
 
 use std::fmt::Write as _;
 use std::path::Path;
 
-use crate::level::{Level, ObjectPlacement};
-use crate::terrain::TerrainManager;
+use nalgebra::Point3;
+
+use crate::level::{world_anchor, Level, ObjectPlacement, Placement};
+use crate::terrain::{outward, SegmentFrame, TerrainWorld};
 
 /// Target number of heightmap samples along the longest horizontal axis.
 ///
@@ -34,6 +39,17 @@ const PLAN_WIDTH_PX: f32 = 900.0;
 
 /// Height of the elevation panel, in pixels.
 const ELEVATION_HEIGHT_PX: f32 = 260.0;
+
+/// Smallest vertical world span the elevation panel will show.
+///
+/// The panel fits its range to the terrain rather than to the derived bounds,
+/// which for a flat level would otherwise squash 10 m of content into a strip of
+/// a 96 m range. The floor stops the opposite failure: a perfectly flat level
+/// magnified until its noise looks like mountains.
+const MIN_ELEVATION_SPAN: f32 = 16.0;
+
+/// Fraction of the fitted vertical range added as headroom above and below.
+const ELEVATION_PADDING: f32 = 0.12;
 
 const MARGIN: f32 = 60.0;
 const PANEL_GAP: f32 = 70.0;
@@ -59,7 +75,13 @@ struct HeightField {
 }
 
 impl HeightField {
-    fn sample(terrain: &TerrainManager) -> Self {
+    /// Sample the whole level on one world-space lattice.
+    ///
+    /// Deliberately not per-segment: `TerrainWorld` already answers a
+    /// world-space column query by fanning out over segments, and one shared
+    /// lattice is what keeps the plan a single readable picture when segments
+    /// sit at different resolutions.
+    fn sample(terrain: &TerrainWorld) -> Self {
         let bounds = terrain.bounds();
         let size = bounds.size();
 
@@ -130,6 +152,42 @@ impl HeightField {
     }
 }
 
+/// The vertical world range the elevation panel draws, fitted to content.
+struct VerticalRange {
+    lo: f32,
+    hi: f32,
+}
+
+impl VerticalRange {
+    /// Fit to the sampled terrain and the authored object heights, padded, with
+    /// a floor so a flat level is not magnified absurdly.
+    fn fit(field: &HeightField, object_heights: &[f32]) -> Self {
+        let mut lo = field.min;
+        let mut hi = field.max;
+        for y in object_heights {
+            lo = lo.min(*y);
+            hi = hi.max(*y);
+        }
+        // y = 0 is drawn as a reference line, so it has to be in range.
+        lo = lo.min(0.0);
+        hi = hi.max(0.0);
+
+        let pad = (hi - lo) * ELEVATION_PADDING;
+        let (mut lo, mut hi) = (lo - pad, hi + pad);
+
+        let short = MIN_ELEVATION_SPAN - (hi - lo);
+        if short > 0.0 {
+            lo -= short / 2.0;
+            hi += short / 2.0;
+        }
+        Self { lo, hi }
+    }
+
+    fn span(&self) -> f32 {
+        self.hi - self.lo
+    }
+}
+
 /// Colour of a shade index: dark green low ground through brown to pale rock.
 fn shade_colour(step: usize) -> String {
     let t = step as f32 / (SHADE_STEPS - 1) as f32;
@@ -156,11 +214,7 @@ fn shade_colour(step: usize) -> String {
 }
 
 /// Write a two-panel schematic of `level` to `path`.
-pub fn write_schematic(
-    level: &Level,
-    terrain: &TerrainManager,
-    path: &Path,
-) -> std::io::Result<()> {
+pub fn write_schematic(level: &Level, terrain: &TerrainWorld, path: &Path) -> std::io::Result<()> {
     let svg = render(level, terrain);
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
@@ -170,10 +224,19 @@ pub fn write_schematic(
     std::fs::write(path, svg)
 }
 
-fn render(level: &Level, terrain: &TerrainManager) -> String {
+fn render(level: &Level, terrain: &TerrainWorld) -> String {
     let field = HeightField::sample(terrain);
     let bounds = terrain.bounds();
     let size = bounds.size();
+
+    let object_heights: Vec<f32> = level
+        .objects()
+        .filter_map(|(_, o)| match o.describe().placement {
+            ObjectPlacement::Free(p) => Some(p.y),
+            ObjectPlacement::TerrainAnchored { .. } => None,
+        })
+        .collect();
+    let vertical = VerticalRange::fit(&field, &object_heights);
 
     // One scale for both panels so horizontal distances read the same in each.
     let scale = PLAN_WIDTH_PX / size.x;
@@ -183,7 +246,7 @@ fn render(level: &Level, terrain: &TerrainManager) -> String {
     let elev_top = plan_top + plan_h + PANEL_GAP;
     let key_top = elev_top + ELEVATION_HEIGHT_PX + PANEL_GAP;
     let doc_w = PLAN_WIDTH_PX + 2.0 * MARGIN;
-    let doc_h = key_top + key_height(level.objects.len()) + MARGIN;
+    let doc_h = key_top + key_height(level.object_count()) + MARGIN;
 
     let mut s = String::with_capacity(1 << 16);
     let _ = write!(
@@ -195,14 +258,16 @@ fn render(level: &Level, terrain: &TerrainManager) -> String {
   .panel {{ font-size: 14px; font-weight: 600; }}
   .axis {{ font-size: 11px; fill: #555; }}
   .marker {{ font-size: 10px; fill: #111; }}
+  .segname {{ font-size: 12px; font-weight: 600; fill: #123; }}
 </style>
 <rect width="100%" height="100%" fill="#f6f5f2"/>
 <text class="title" x="{MARGIN:.0}" y="{:.0}">{}</text>
-<text class="axis" x="{MARGIN:.0}" y="{:.0}">{} triangles · voxel {:.2} m · bounds ({:.0}, {:.0}, {:.0}) .. ({:.0}, {:.0}, {:.0}) · sample {:.2} m</text>
+<text class="axis" x="{MARGIN:.0}" y="{:.0}">{} segments · {} triangles · finest voxel {:.2} m · bounds ({:.0}, {:.0}, {:.0}) .. ({:.0}, {:.0}, {:.0}) · sample {:.2} m</text>
 "##,
         MARGIN - 18.0,
         escape(&level.name),
         MARGIN,
+        terrain.segments().len(),
         terrain.triangle_count(),
         terrain.voxel_size(),
         bounds.min.x,
@@ -215,7 +280,7 @@ fn render(level: &Level, terrain: &TerrainManager) -> String {
     );
 
     plan_view(&mut s, level, terrain, &field, plan_top, scale);
-    elevation_view(&mut s, level, terrain, &field, elev_top, scale);
+    elevation_view(&mut s, level, terrain, &field, &vertical, elev_top, scale);
     object_key(&mut s, level, key_top);
 
     s.push_str("</svg>\n");
@@ -242,7 +307,7 @@ fn object_key(s: &mut String, level: &Level, top: f32) {
         s,
         "<text class=\"panel\" x=\"{MARGIN:.0}\" y=\"{top:.0}\">Objects</text>"
     );
-    if level.objects.is_empty() {
+    if level.object_count() == 0 {
         let _ = writeln!(
             s,
             "<text class=\"axis\" x=\"{MARGIN:.0}\" y=\"{:.0}\">none</text>",
@@ -251,10 +316,10 @@ fn object_key(s: &mut String, level: &Level, top: f32) {
         return;
     }
 
-    let rows = key_rows(level.objects.len());
+    let rows = key_rows(level.object_count());
     let column_width = PLAN_WIDTH_PX / KEY_COLUMNS as f32;
 
-    for (index, object) in level.objects.iter().enumerate() {
+    for (index, (segment, object)) in level.objects().enumerate() {
         let info = object.describe();
         let position = match info.placement {
             ObjectPlacement::Free(p) => format!("({:.1}, {:.1}, {:.1})", p.x, p.y, p.z),
@@ -266,19 +331,50 @@ fn object_key(s: &mut String, level: &Level, top: f32) {
         let y = top + 18.0 + (index % rows) as f32 * KEY_ROW_HEIGHT;
         let _ = writeln!(
             s,
-            "<text class=\"axis\" x=\"{x:.1}\" y=\"{y:.1}\">{}. {} {}</text>",
+            "<text class=\"axis\" x=\"{x:.1}\" y=\"{y:.1}\">{}. {} {} [{}]</text>",
             index + 1,
             escape(info.kind),
-            position
+            position,
+            escape(&level.segments[segment].name),
         );
     }
 }
 
-/// Top-down panel: heightmap, chunk lattice, objects, spawn, scale bar.
+/// Reserves screen space so that labels in a crowded region do not overprint
+/// each other.
+///
+/// The densest part of a level is the part an author most wants to read, so
+/// dropping a colliding label is better than drawing it: the marker still shows
+/// the position, and the key below carries the exact coordinates.
+struct LabelSpace {
+    cell_w: f32,
+    cell_h: f32,
+    taken: std::collections::HashSet<(i32, i32)>,
+}
+
+impl LabelSpace {
+    fn new(cell_w: f32, cell_h: f32) -> Self {
+        Self {
+            cell_w,
+            cell_h,
+            taken: std::collections::HashSet::new(),
+        }
+    }
+
+    /// Claim the cell at a pixel position, returning false if it was taken.
+    fn claim(&mut self, x: f32, y: f32) -> bool {
+        self.taken.insert((
+            (x / self.cell_w).floor() as i32,
+            (y / self.cell_h).floor() as i32,
+        ))
+    }
+}
+
+/// Top-down panel: heightmap, segment outlines, anchors, connections, objects.
 fn plan_view(
     s: &mut String,
     level: &Level,
-    terrain: &TerrainManager,
+    terrain: &TerrainWorld,
     field: &HeightField,
     top: f32,
     scale: f32,
@@ -335,39 +431,49 @@ fn plan_view(
         }
     }
 
-    // Chunk lattice. Derived bounds are chunk-aligned, so stepping from the
-    // minimum corner lands exactly on the chunk boundaries.
-    let extent = terrain.chunk_extent();
-    let mut x = bounds.min.x;
-    while x <= bounds.max.x + 0.01 {
+    // Segment outlines over their solid extent, so the picture shows the areas
+    // a level is built from rather than one undifferentiated heightmap.
+    for segment in terrain.segments() {
+        let Some(extent) = segment.solid_bounds() else {
+            continue;
+        };
+        let (x0, z0) = (px(extent.min.x), pz(extent.min.z));
+        let (x1, z1) = (px(extent.max.x), pz(extent.max.z));
         let _ = writeln!(
             s,
-            "<line stroke=\"#ffffff\" stroke-opacity=\"0.35\" stroke-width=\"0.7\" x1=\"{:.1}\" y1=\"{:.1}\" x2=\"{:.1}\" y2=\"{:.1}\"/>",
-            px(x),
-            top,
-            px(x),
-            top + height
+            "<rect x=\"{x0:.1}\" y=\"{z0:.1}\" width=\"{:.1}\" height=\"{:.1}\" fill=\"none\" \
+             stroke=\"#1a3552\" stroke-width=\"1.6\" stroke-dasharray=\"6 3\"/>\n\
+             <text class=\"segname\" x=\"{:.1}\" y=\"{:.1}\">{}</text>",
+            x1 - x0,
+            z1 - z0,
+            x0 + 5.0,
+            z0 + 14.0,
+            escape(segment.name()),
         );
-        x += extent;
     }
-    let mut z = bounds.min.z;
-    while z <= bounds.max.z + 0.01 {
-        let _ = writeln!(
-            s,
-            "<line stroke=\"#ffffff\" stroke-opacity=\"0.35\" stroke-width=\"0.7\" x1=\"{:.1}\" y1=\"{:.1}\" x2=\"{:.1}\" y2=\"{:.1}\"/>",
-            MARGIN,
-            pz(z),
-            MARGIN + size.x * scale,
-            pz(z)
-        );
-        z += extent;
+
+    // Every piece of text in this panel shares one reservation grid, claimed in
+    // decreasing order of importance: a gap figure matters more than an anchor
+    // name, which matters more than an object's index (the key below carries
+    // that anyway).
+    let mut labels = LabelSpace::new(30.0, 12.0);
+
+    connection_links(s, level, &px, &pz, &mut labels);
+
+    for segment in terrain.segments() {
+        for anchor in segment.anchors() {
+            let world = anchor.world_frame(segment.frame());
+            // The segment name is already printed on its outline, so the anchor
+            // carries only its own name.
+            anchor_marker(s, &px, &pz, &world, anchor.name(), scale, &mut labels);
+        }
     }
 
     // Objects, numbered against the key below the panels.
-    for (index, object) in level.objects.iter().enumerate() {
+    for (index, (_, object)) in level.objects().enumerate() {
         let info = object.describe();
         let (x, z) = info.placement.xz();
-        object_marker(s, px(x), pz(z), index, &info.placement);
+        object_marker(s, px(x), pz(z), index, &info.placement, &mut labels);
     }
 
     // Player spawn.
@@ -383,11 +489,12 @@ fn plan_view(
         height
     );
 
+    let step = tick_step(size.x.max(size.z));
     axis_ticks(
         s,
         bounds.min.x,
         bounds.max.x,
-        terrain.chunk_extent(),
+        step,
         |v| (px(v), top + height + 14.0),
         ("x", (MARGIN + size.x * scale + 16.0, top + height + 14.0)),
     );
@@ -395,37 +502,135 @@ fn plan_view(
         s,
         bounds.min.z,
         bounds.max.z,
-        terrain.chunk_extent(),
+        step,
         |v| (MARGIN - 14.0, pz(v) + 3.0),
         ("z", (MARGIN - 14.0, top - 8.0)),
     );
 
     scale_bar(s, MARGIN, top + height + 34.0, scale);
-    legend(s, MARGIN + 300.0, top + height + 34.0, field);
+    legend(s, MARGIN + 190.0, top + height + 34.0, field);
+}
+
+/// Dashed links between connected anchors, labelled with their gap.
+///
+/// Placement joins and asserted connections are drawn differently, because the
+/// difference is the thing a reader most needs: a join determines where an area
+/// *is*, an assertion only claims that two areas meet.
+fn connection_links(
+    s: &mut String,
+    level: &Level,
+    px: &impl Fn(f32) -> f32,
+    pz: &impl Fn(f32) -> f32,
+    labels: &mut LabelSpace,
+) {
+    let joins = level.placements.iter().filter_map(|p| match p {
+        Placement::Root { .. } => None,
+        Placement::Join {
+            segment,
+            anchor,
+            to,
+            gap,
+            ..
+        } => Some((to.clone(), format!("{segment}.{anchor}"), *gap, true)),
+    });
+    let asserted = level
+        .connections
+        .iter()
+        .map(|c| (c.from.clone(), c.to.clone(), c.gap, false));
+
+    for (from, to, gap, is_join) in joins.chain(asserted) {
+        let (Ok(a), Ok(b)) = (
+            world_anchor(level, &level.frames, &from),
+            world_anchor(level, &level.frames, &to),
+        ) else {
+            continue;
+        };
+        let (colour, dash) = if is_join {
+            ("#c1440e", "5 3")
+        } else {
+            ("#6a3fa0", "2 4")
+        };
+        let (x0, y0) = (px(a.origin().x), pz(a.origin().z));
+        let (x1, y1) = (px(b.origin().x), pz(b.origin().z));
+        let _ = writeln!(
+            s,
+            "<line x1=\"{x0:.1}\" y1=\"{y0:.1}\" x2=\"{x1:.1}\" y2=\"{y1:.1}\" stroke=\"{colour}\" \
+             stroke-width=\"1.6\" stroke-dasharray=\"{dash}\"/>",
+        );
+
+        let (lx, ly) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0 - 5.0);
+        if labels.claim(lx, ly) {
+            let _ = writeln!(
+                s,
+                "<text class=\"marker\" x=\"{lx:.1}\" y=\"{ly:.1}\" text-anchor=\"middle\" fill=\"{colour}\">{gap:.1} m</text>",
+            );
+        }
+    }
+}
+
+/// A small arrow at an anchor, pointing the way the anchor faces.
+fn anchor_marker(
+    s: &mut String,
+    px: &impl Fn(f32) -> f32,
+    pz: &impl Fn(f32) -> f32,
+    world: &SegmentFrame,
+    label: &str,
+    scale: f32,
+    labels: &mut LabelSpace,
+) {
+    let o = world.origin();
+    let dir = outward(world);
+    // A fixed pixel length, so the arrow stays visible at any level size.
+    let length = 12.0 / scale;
+    let tip = Point3::new(o.x + dir.x * length, o.y, o.z + dir.z * length);
+
+    let _ = writeln!(
+        s,
+        "<line x1=\"{:.1}\" y1=\"{:.1}\" x2=\"{:.1}\" y2=\"{:.1}\" stroke=\"#1a3552\" stroke-width=\"1.4\"/>\n\
+         <circle cx=\"{:.1}\" cy=\"{:.1}\" r=\"2.6\" fill=\"#1a3552\"/>",
+        px(o.x),
+        pz(o.z),
+        px(tip.x),
+        pz(tip.z),
+        px(o.x),
+        pz(o.z),
+    );
+
+    let (lx, ly) = (px(o.x) + 5.0, pz(o.z) + 12.0);
+    if labels.claim(lx, ly) {
+        let _ = writeln!(
+            s,
+            "<text class=\"marker\" x=\"{lx:.1}\" y=\"{ly:.1}\" fill=\"#1a3552\">{}</text>",
+            escape(label),
+        );
+    }
 }
 
 /// Elevation panel: the terrain's vertical envelope projected along z.
 fn elevation_view(
     s: &mut String,
     level: &Level,
-    terrain: &TerrainManager,
+    terrain: &TerrainWorld,
     field: &HeightField,
+    vertical: &VerticalRange,
     top: f32,
     scale: f32,
 ) {
     let bounds = terrain.bounds();
     let size = bounds.size();
-    let vscale = ELEVATION_HEIGHT_PX / size.y;
+    let vscale = ELEVATION_HEIGHT_PX / vertical.span();
 
     let px = |x: f32| MARGIN + (x - bounds.min.x) * scale;
-    let py = |y: f32| top + (bounds.max.y - y) * vscale;
+    let py = |y: f32| top + (vertical.hi - y) * vscale;
 
     let _ = writeln!(
         s,
-        "<text class=\"panel\" x=\"{:.0}\" y=\"{:.0}\">Elevation — terrain envelope along z (+x right, +y up)</text>\n\
+        "<text class=\"panel\" x=\"{:.0}\" y=\"{:.0}\">Elevation — terrain envelope along z (+x right, +y up), y from {:.0} to {:.0} m, fitted to content</text>\n\
          <rect x=\"{:.1}\" y=\"{:.1}\" width=\"{:.1}\" height=\"{:.1}\" fill=\"#e8e6e1\"/>",
         MARGIN,
         top - 10.0,
+        vertical.lo,
+        vertical.hi,
         MARGIN,
         top,
         size.x * scale,
@@ -474,9 +679,27 @@ fn elevation_view(
         py(0.0) + 3.0
     );
 
+    // Segment extents as boxes, so a stacked or elevated area reads as one.
+    for segment in terrain.segments() {
+        let Some(extent) = segment.solid_bounds() else {
+            continue;
+        };
+        let y_top = py(extent.max.y.min(vertical.hi));
+        let y_bottom = py(extent.min.y.max(vertical.lo));
+        let _ = writeln!(
+            s,
+            "<rect x=\"{:.1}\" y=\"{y_top:.1}\" width=\"{:.1}\" height=\"{:.1}\" fill=\"none\" \
+             stroke=\"#1a3552\" stroke-width=\"1.0\" stroke-dasharray=\"6 3\" stroke-opacity=\"0.7\"/>",
+            px(extent.min.x),
+            px(extent.max.x) - px(extent.min.x),
+            (y_bottom - y_top).max(1.0),
+        );
+    }
+
     // Objects at their authored height. An anchored object has no authored
     // height, so it is drawn at the surface it will be dropped onto.
-    for (index, object) in level.objects.iter().enumerate() {
+    let mut labels = LabelSpace::new(16.0, 12.0);
+    for (index, (_, object)) in level.objects().enumerate() {
         let info = object.describe();
         let (x, y) = match info.placement {
             ObjectPlacement::Free(p) => (p.x, p.y),
@@ -484,7 +707,7 @@ fn elevation_view(
                 (x, terrain.approx_surface_height_at(x, z).unwrap_or(0.0))
             }
         };
-        object_marker(s, px(x), py(y), index, &info.placement);
+        object_marker(s, px(x), py(y), index, &info.placement, &mut labels);
     }
 
     let (sx, sy, _) = level.player_spawn;
@@ -503,7 +726,7 @@ fn elevation_view(
         s,
         bounds.min.x,
         bounds.max.x,
-        terrain.chunk_extent(),
+        tick_step(size.x),
         |v| (px(v), top + ELEVATION_HEIGHT_PX + 14.0),
         (
             "x",
@@ -515,29 +738,51 @@ fn elevation_view(
     );
     axis_ticks(
         s,
-        bounds.min.y,
-        bounds.max.y,
-        terrain.chunk_extent(),
+        vertical.lo,
+        vertical.hi,
+        tick_step(vertical.span()),
         |v| (MARGIN - 14.0, py(v) + 3.0),
         ("y", (MARGIN - 14.0, top - 8.0)),
     );
 }
 
+/// A round tick spacing giving no more than a dozen ticks across a span.
+fn tick_step(span: f32) -> f32 {
+    [
+        1.0_f32, 2.0, 5.0, 10.0, 20.0, 25.0, 50.0, 100.0, 200.0, 500.0,
+    ]
+    .into_iter()
+    .find(|step| span / step <= 12.0)
+    .unwrap_or(1000.0)
+}
+
 /// A numbered dot for one object. Colour distinguishes an authored height from
 /// one the spawner will resolve from the terrain.
-fn object_marker(s: &mut String, x: f32, y: f32, index: usize, placement: &ObjectPlacement) {
+fn object_marker(
+    s: &mut String,
+    x: f32,
+    y: f32,
+    index: usize,
+    placement: &ObjectPlacement,
+    labels: &mut LabelSpace,
+) {
     let fill = match placement {
         ObjectPlacement::Free(_) => "#c1440e",
         ObjectPlacement::TerrainAnchored { .. } => "#1c6ea4",
     };
     let _ = writeln!(
         s,
-        "<circle cx=\"{x:.1}\" cy=\"{y:.1}\" r=\"3.2\" fill=\"{fill}\" stroke=\"#fff\" stroke-width=\"0.8\"/>\n\
-         <text class=\"marker\" x=\"{:.1}\" y=\"{:.1}\">{}</text>",
-        x + 4.5,
-        y - 3.5,
-        index + 1
+        "<circle cx=\"{x:.1}\" cy=\"{y:.1}\" r=\"3.2\" fill=\"{fill}\" stroke=\"#fff\" stroke-width=\"0.8\"/>"
     );
+    if labels.claim(x + 4.5, y - 3.5) {
+        let _ = writeln!(
+            s,
+            "<text class=\"marker\" x=\"{:.1}\" y=\"{:.1}\">{}</text>",
+            x + 4.5,
+            y - 3.5,
+            index + 1
+        );
+    }
 }
 
 /// Split a sampled profile into runs of consecutive columns that have terrain,
@@ -585,7 +830,9 @@ fn axis_ticks(
     place: impl Fn(f32) -> (f32, f32),
     label: (&str, (f32, f32)),
 ) {
-    let mut v = from;
+    // Start at the first round multiple inside the range, so ticks read as
+    // round numbers rather than as offsets from an arbitrary corner.
+    let mut v = (from / step).ceil() * step;
     while v <= to + 0.01 {
         let (x, y) = place(v);
         let _ = writeln!(
@@ -625,13 +872,17 @@ fn legend(s: &mut String, x: f32, y: f32, field: &HeightField) {
     let _ = writeln!(
         s,
         "<circle cx=\"{:.1}\" cy=\"{:.1}\" r=\"3.2\" fill=\"#c1440e\"/><text class=\"axis\" x=\"{:.1}\" y=\"{:.1}\">object</text>\n\
-         <circle cx=\"{:.1}\" cy=\"{:.1}\" r=\"3.2\" fill=\"#1c6ea4\"/><text class=\"axis\" x=\"{:.1}\" y=\"{:.1}\">terrain-anchored</text>",
+         <circle cx=\"{:.1}\" cy=\"{:.1}\" r=\"3.2\" fill=\"#1c6ea4\"/><text class=\"axis\" x=\"{:.1}\" y=\"{:.1}\">anchored</text>\n\
+         <line x1=\"{:.1}\" y1=\"{:.1}\" x2=\"{:.1}\" y2=\"{:.1}\" stroke=\"#c1440e\" stroke-width=\"1.6\" stroke-dasharray=\"5 3\"/><text class=\"axis\" x=\"{:.1}\" y=\"{:.1}\">join</text>\n\
+         <line x1=\"{:.1}\" y1=\"{:.1}\" x2=\"{:.1}\" y2=\"{:.1}\" stroke=\"#6a3fa0\" stroke-width=\"1.6\" stroke-dasharray=\"2 4\"/><text class=\"axis\" x=\"{:.1}\" y=\"{:.1}\">assertion</text>",
         x, y, x + 7.0, y + 4.0,
-        x + 70.0, y, x + 77.0, y + 4.0
+        x + 55.0, y, x + 62.0, y + 4.0,
+        x + 130.0, y, x + 150.0, y, x + 154.0, y + 4.0,
+        x + 185.0, y, x + 205.0, y, x + 209.0, y + 4.0,
     );
 
     // The height ramp itself, as a strip of its own shades.
-    let strip_x = x + 300.0;
+    let strip_x = x + 390.0;
     for step in 0..SHADE_STEPS {
         let _ = writeln!(
             s,
@@ -667,6 +918,19 @@ fn escape(text: &str) -> String {
 mod tests {
     use super::*;
 
+    fn flat_field(min: f32, max: f32) -> HeightField {
+        HeightField {
+            cell: 1.0,
+            nx: 1,
+            nz: 1,
+            origin_x: 0.0,
+            origin_z: 0.0,
+            heights: vec![Some(max)],
+            min,
+            max,
+        }
+    }
+
     #[test]
     fn shade_ramp_spans_dark_to_pale() {
         assert_eq!(shade_colour(0), "#2e4a34");
@@ -676,5 +940,50 @@ mod tests {
     #[test]
     fn text_is_escaped() {
         assert_eq!(escape("a & b <c>"), "a &amp; b &lt;c&gt;");
+    }
+
+    /// The elevation panel used to span the whole derived y range, squashing a
+    /// 10 m-thick level into a strip of a 96 m box. It must fit the content.
+    #[test]
+    fn elevation_range_fits_content_not_bounds() {
+        let range = VerticalRange::fit(&flat_field(-2.0, 8.0), &[]);
+        assert!(range.span() < 20.0, "span {} is not fitted", range.span());
+        assert!(range.lo <= -2.0 && range.hi >= 8.0);
+    }
+
+    /// A perfectly flat level must not be magnified until its noise looks like
+    /// terrain.
+    #[test]
+    fn a_flat_level_gets_a_minimum_vertical_span() {
+        let range = VerticalRange::fit(&flat_field(0.0, 0.0), &[]);
+        assert!((range.span() - MIN_ELEVATION_SPAN).abs() < 1e-3);
+    }
+
+    /// An object well above the terrain still has to be inside the panel.
+    #[test]
+    fn elevation_range_includes_authored_object_heights() {
+        let range = VerticalRange::fit(&flat_field(0.0, 2.0), &[40.0]);
+        assert!(range.hi >= 40.0, "hi {} excludes the object", range.hi);
+    }
+
+    /// Two markers in the same spot must not both draw a number.
+    #[test]
+    fn colliding_labels_are_dropped() {
+        let mut space = LabelSpace::new(16.0, 12.0);
+        assert!(space.claim(100.0, 100.0));
+        assert!(!space.claim(102.0, 103.0));
+        assert!(space.claim(200.0, 100.0));
+    }
+
+    #[test]
+    fn tick_step_keeps_the_axis_readable() {
+        for span in [10.0_f32, 64.0, 192.0, 400.0, 2000.0] {
+            let step = tick_step(span);
+            assert!(
+                span / step <= 12.0,
+                "span {span} with step {step} gives {} ticks",
+                span / step
+            );
+        }
     }
 }

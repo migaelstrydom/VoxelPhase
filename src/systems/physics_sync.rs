@@ -16,7 +16,7 @@ use crate::physics::{
     PhysicsImpulseQueue, PhysicsWorld, RigidBodyHandle, SequentialStepper, Stepper,
     SubstepForceProvider,
 };
-use crate::terrain::TerrainManager;
+use crate::terrain::TerrainWorld;
 use crate::time::Time;
 use crate::water::buoyancy::BuoyancyForceProvider;
 use crate::water::{WaterGrid, WaterSleepTracker, WaveGrid};
@@ -145,7 +145,7 @@ impl PhysicsSyncSystem {
 impl<'a> System<'a> for PhysicsSyncSystem {
     type SystemData = (
         Write<'a, PhysicsResource>,
-        Option<Read<'a, TerrainManager>>,
+        Option<Read<'a, TerrainWorld>>,
         Read<'a, Time>,
         WriteStorage<'a, Position>,
         WriteStorage<'a, Velocity>,

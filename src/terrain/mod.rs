@@ -1,25 +1,33 @@
 //! Terrain system with destructible voxel-based terrain.
 //!
 //! This module provides:
-//! - Sparse Voxel Octree (SVO) for terrain data storage
+//! - Sparse Voxel Octree (SVO) for voxel storage within a chunk
 //! - Marching Cubes mesh generation for smooth rendering
 //! - Adaptive Mesh Octree for efficient rendering and collision queries
-//! - TerrainManager for unified terrain handling
+//! - Segments: independently placed chunk grids with their own frame,
+//!   resolution and named anchors
+//! - TerrainWorld: the engine-facing, world-space view across all segments
 //! - Procedural terrain generation
 
 mod adjacency;
+mod anchor;
 mod chunk;
 mod chunk_grid;
+mod frame;
 pub mod generation;
-mod manager;
 mod marching_cubes;
 mod mesh_octree;
+mod segment;
 pub(crate) mod svo;
 mod voxel;
+mod world;
 
+pub use anchor::{mate, outward, Anchor};
 pub use chunk::{ChunkCoord, CHUNK_VOXELS};
 pub use chunk_grid::ChunkGrid;
-pub use manager::{TerrainManager, UpdateTimings};
+pub use frame::{SegmentFrame, YAW_STEP_DEGREES};
+pub use segment::{Segment, SegmentState};
+pub use world::{TerrainWorld, UpdateTimings};
 
 // Voxel types for terrain modification
 pub use voxel::DurabilityConfig;

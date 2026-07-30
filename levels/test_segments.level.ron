@@ -1,0 +1,196 @@
+// Harbour Ascent — the multi-segment fixture.
+//
+// Four areas, each authored entirely in its own local frame, chained by anchor
+// joins. Nothing here is positioned in world coordinates except the root.
+//
+//     start_beach ──5 m──▶ shoal_run ──6 m──▶ cliff_terrace ──5 m──▶ summit_arena
+//                              │                    ▲
+//                              └────── 6 m ─────────┘   (assertion, not a placement)
+//
+// The second shoal_run ↔ cliff_terrace link is the reason placement and
+// connectivity are separate: it closes a loop, so it cannot also derive a
+// transform. It is declared under `connections` and `level_check` verifies that
+// the two anchors really do end up 6 m apart facing each other.
+//
+// Anchor facing: an anchor's local +X points OUT of its segment. A quarter turn
+// maps local +X onto world −Z, so an anchor on a segment's −z face has yaw 90.
+//
+// Resolutions differ deliberately: the two ground segments run 1 m voxels, the
+// climb and the arena run 0.5 m. Rule 1 permits that because the segments are
+// gap-joined, not welded.
+Level(
+    name: "Harbour Ascent",
+
+    segments: [
+        // ── Root. A wide beach with a tidal bowl, ramping up to a launch ledge
+        //    on its east face. 1 m voxels over 96 x 96, three chunks square.
+        (
+            name: "start_beach",
+
+            terrain: Terrain(
+                voxel_size: 1.0,
+                bounds: (min: (0.0, -16.0, 0.0), max: (96.0, 16.0, 96.0)),
+                base_height: 0.0,
+                material_layers: [
+                    (depth: 1.0,   material: Grass),
+                    (depth: 4.0,   material: Dirt),
+                    (depth: 999.0, material: Rock),
+                ],
+                features: [
+                    TerrainRoughness(frequency: 0.05, amplitude: 0.8, octaves: 3, seed: 11),
+                    // The tidal bowl. Deep enough to read as a feature, shallow
+                    // enough to walk out of.
+                    Crater(center: (34.0, 34.0), radius: 16.0, depth: 4.0),
+                    // Ramp up to the launch ledge, then the ledge itself.
+                    Ramp(
+                        from: (58.0, 48.0),
+                        to: (88.0, 48.0),
+                        start_height: 0.0,
+                        end_height: 4.0,
+                        width: 26.0,
+                    ),
+                    Plateau(min: (86.0, 34.0), max: (96.0, 62.0), height: 4.0),
+                ],
+            ),
+
+            anchors: [
+                // On the +x face, facing out along +X.
+                (name: "east_ledge", pos: (96.0, 4.0, 48.0), yaw: 0.0),
+            ],
+
+            objects: [
+                Menhir(pos: (20.0, 70.0)),
+                FencePost(pos: (24.0, 70.0)),
+                Crate(pos: (62.0, 1.0, 48.0), size: 0.5),
+                Crate(pos: (64.0, 1.0, 49.0), size: 0.5),
+                BeachBall(pos: (34.0, 2.0, 34.0)),
+            ],
+        ),
+
+        // ── A run of raised shoals. Entered from the west, and leaving north on
+        //    two separate ledges — the high one carries the placement, the low
+        //    one is the second route back into the climb.
+        (
+            name: "shoal_run",
+
+            terrain: Terrain(
+                voxel_size: 1.0,
+                bounds: (min: (0.0, -16.0, 0.0), max: (64.0, 16.0, 64.0)),
+                base_height: 4.0,
+                material_layers: [
+                    (depth: 1.0,   material: Grass),
+                    (depth: 999.0, material: Rock),
+                ],
+                features: [
+                    TerrainRoughness(frequency: 0.07, amplitude: 0.6, octaves: 3, seed: 23),
+                    // Two bites out of the middle, so crossing the shoal is a
+                    // route rather than a walk.
+                    Crater(center: (24.0, 40.0), radius: 10.0, depth: 7.0),
+                    Crater(center: (48.0, 34.0), radius: 8.0, depth: 7.0),
+                    // The two north ledges, both at local y = 6.
+                    Plateau(min: (20.0, 0.0), max: (44.0, 12.0), height: 6.0),
+                    Plateau(min: (46.0, 0.0), max: (58.0, 10.0), height: 6.0),
+                ],
+            ),
+
+            anchors: [
+                // −x face, facing out along −X.
+                (name: "west_landing", pos: (0.0, 4.0, 32.0), yaw: 180.0),
+                // −z face: a quarter turn puts local +X on world −Z.
+                (name: "north_ledge", pos: (32.0, 6.0, 0.0), yaw: 90.0),
+                (name: "north_low", pos: (48.0, 6.0, 0.0), yaw: 90.0),
+            ],
+
+            objects: [
+                Crate(pos: (32.0, 7.0, 6.0), size: 0.5),
+                Jack(pos: (48.0, 7.0, 5.0), length: 1.0, thickness: 0.2),
+            ],
+        ),
+
+        // ── The climb. Half-metre voxels for the terrace edges, and a quarter
+        //    turn relative to the shoals, so the level actually turns a corner.
+        //    Terraces rise in 2 m steps — inside the 2.5 m jump apex.
+        (
+            name: "cliff_terrace",
+
+            terrain: Terrain(
+                voxel_size: 0.5,
+                bounds: (min: (0.0, -16.0, 0.0), max: (48.0, 24.0, 48.0)),
+                base_height: 2.0,
+                material_layers: [
+                    (depth: 0.5,   material: Grass),
+                    (depth: 999.0, material: Slate),
+                ],
+                features: [
+                    TerrainRoughness(frequency: 0.12, amplitude: 0.4, octaves: 3, seed: 37),
+                    Plateau(min: (12.0, 8.0), max: (24.0, 40.0), height: 4.0),
+                    Plateau(min: (26.0, 8.0), max: (36.0, 40.0), height: 6.0),
+                    Plateau(min: (38.0, 10.0), max: (48.0, 38.0), height: 8.0),
+                ],
+            ),
+
+            anchors: [
+                // −x face. Both entries face out along −X, back toward the shoals.
+                (name: "entry", pos: (0.0, 2.0, 24.0), yaw: 180.0),
+                (name: "east_low", pos: (0.0, 2.0, 40.0), yaw: 180.0),
+                // +x face, at the top of the terraces.
+                (name: "top_exit", pos: (48.0, 8.0, 24.0), yaw: 0.0),
+            ],
+
+            objects: [
+                Crate(pos: (18.0, 5.0, 24.0), size: 0.5),
+                Crate(pos: (31.0, 7.0, 24.0), size: 0.5),
+                BeachBall(pos: (43.0, 9.5, 24.0)),
+            ],
+        ),
+
+        // ── The set piece at the top: a shallow bowl arena with a few things to
+        //    knock over.
+        (
+            name: "summit_arena",
+
+            terrain: Terrain(
+                voxel_size: 0.5,
+                bounds: (min: (0.0, -8.0, 0.0), max: (48.0, 24.0, 48.0)),
+                base_height: 4.0,
+                material_layers: [
+                    (depth: 0.5,   material: Grass),
+                    (depth: 999.0, material: Slate),
+                ],
+                features: [
+                    TerrainRoughness(frequency: 0.1, amplitude: 0.5, octaves: 3, seed: 53),
+                    Crater(center: (26.0, 24.0), radius: 14.0, depth: 2.5),
+                    Wall(from: (44.0, 6.0), to: (44.0, 42.0), height: 3.0, thickness: 3.0),
+                ],
+            ),
+
+            anchors: [
+                (name: "arena_entry", pos: (0.0, 4.0, 24.0), yaw: 180.0),
+            ],
+
+            objects: [
+                Tower(base: (26.0, 3.0, 24.0), box_half_extents: (0.4, 0.4, 0.4), count: 5),
+                GlowingOrb(pos: (22.0, 4.0, 20.0), colour: Some((1.0, 0.45, 0.15)), glow: Some(2.18)),
+                Crate(pos: (30.0, 4.0, 28.0), size: 0.5),
+                Dolos(pos: (18.0, 4.0, 30.0)),
+            ],
+        ),
+    ],
+
+    // Exactly one root; one join per remaining segment. Each join says
+    // "my anchor mates with theirs, this far apart" — no absolute coordinates.
+    placements: [
+        Root(segment: "start_beach", origin: (0.0, 0.0, 0.0), yaw: 0.0),
+        Join(segment: "shoal_run",     anchor: "west_landing", to: "start_beach.east_ledge", gap: 5.0),
+        Join(segment: "cliff_terrace", anchor: "entry",        to: "shoal_run.north_ledge",  gap: 6.0),
+        Join(segment: "summit_arena",  anchor: "arena_entry",  to: "cliff_terrace.top_exit", gap: 5.0),
+    ],
+
+    // The loop-closing second route. Derives nothing; checked, not followed.
+    connections: [
+        (from: "shoal_run.north_low", to: "cliff_terrace.east_low", gap: 6.0),
+    ],
+
+    // Authored in the root segment's local frame.
+    player_spawn: (30.0, 2.0, 62.0),
+)

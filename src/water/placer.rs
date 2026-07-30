@@ -5,7 +5,7 @@
 
 use std::collections::VecDeque;
 
-use crate::terrain::TerrainManager;
+use crate::terrain::TerrainWorld;
 
 use super::WaterGrid;
 
@@ -17,7 +17,7 @@ use super::WaterGrid;
 /// Floor levels are resolved via `WaterGrid` sampled floor admission helpers.
 pub fn fill_pool(
     grid: &mut WaterGrid,
-    terrain: &TerrainManager,
+    terrain: &TerrainWorld,
     seed: (f32, f32),
     surface_level: f32,
 ) {
@@ -102,7 +102,7 @@ pub fn fill_pool(
 /// extends the flood-fill into shore cells where MC smoothing dips below the water.
 fn is_pool_cell(
     grid: &WaterGrid,
-    terrain: &TerrainManager,
+    terrain: &TerrainWorld,
     i: usize,
     j: usize,
     surface_level: f32,
