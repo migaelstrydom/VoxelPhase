@@ -6,9 +6,12 @@ use specs::World;
 use crate::app::spawnables::MaterialCtx;
 use crate::core::error::EngineResult;
 use crate::level::data::{Level, WaterBody};
+use crate::level::placement::{local_frame, PlacementError};
 use crate::rendering::material::{MaterialId, MaterialManagerBuilder};
 use crate::resources::textures::TextureManager;
-use crate::terrain::{generate_terrain, ChunkGrid, DurabilityConfig, TerrainManager};
+use crate::terrain::{
+    generate_terrain, Anchor, ChunkGrid, DurabilityConfig, Segment, TerrainWorld,
+};
 use crate::water::{WaterGrid, WaterGridConfig, WaterProperties, WaveGrid, WaveGridConfig};
 
 /// Pre-created materials for all objects in a level.
@@ -39,8 +42,8 @@ pub fn create_level_materials(
         materials: material_builder,
     };
 
-    let mut per_object = Vec::with_capacity(level.objects.len());
-    for obj in &level.objects {
+    let mut per_object = Vec::with_capacity(level.object_count());
+    for (_, obj) in level.objects() {
         let spawnable = obj.to_spawnable();
         let mats = spawnable.create_materials(&mut ctx)?;
         per_object.push(mats);
@@ -49,30 +52,64 @@ pub fn create_level_materials(
     Ok(LevelMaterials { per_object })
 }
 
-/// Create the terrain chunk grid and TerrainManager from the level description.
+/// Generate every segment's terrain and place it at its resolved frame.
 ///
-/// Stage 1 has a single implicit segment covering the whole level, so the grid's
-/// local frame is the world frame. Placing several grids at different origins is
-/// what stage 2 generalises.
+/// Generation is entirely segment-local — the frame is only ever applied to
+/// query results — so the same segment definition produces identical geometry
+/// wherever it is placed.
+///
+/// `level` must have been through [`load_level`], which fills in `frames`.
+///
+/// [`load_level`]: crate::level::load_level
+pub fn build_segments(level: &Level) -> Result<Vec<Segment>, PlacementError> {
+    let durability = DurabilityConfig::default();
+    let mut segments = Vec::with_capacity(level.segments.len());
+
+    for (index, def) in level.segments.iter().enumerate() {
+        let bounds = def.terrain.bounds.to_aabb();
+        let mut grid = ChunkGrid::new(def.terrain.voxel_size);
+        generate_terrain(&mut grid, &def.terrain, &durability, &bounds);
+
+        let anchors = def
+            .anchors
+            .iter()
+            .map(|a| Ok(Anchor::new(a.name.clone(), local_frame(&def.name, a)?)))
+            .collect::<Result<Vec<_>, PlacementError>>()?;
+
+        segments.push(Segment::new(
+            def.name.clone(),
+            level.frame(index),
+            grid,
+            anchors,
+        ));
+    }
+
+    Ok(segments)
+}
+
+/// Build the level's `TerrainWorld`: every segment generated, placed and meshed.
 pub fn create_level_terrain(
     level: &Level,
     texture_manager: &TextureManager,
-) -> EngineResult<TerrainManager> {
-    log::info!("Generating terrain for '{}'...", level.name);
-
-    let bounds = level.terrain.bounds.to_aabb();
-    let mut grid = ChunkGrid::new(Point3::origin(), level.terrain.voxel_size);
-    let durability = DurabilityConfig::default();
-    generate_terrain(&mut grid, &level.terrain, &durability, &bounds);
-
-    let terrain_manager = TerrainManager::from_grid(grid, texture_manager)?;
+) -> EngineResult<TerrainWorld> {
     log::info!(
-        "Terrain generated: {} triangles in {} mesh leaves",
-        terrain_manager.triangle_count(),
-        terrain_manager.leaf_count()
+        "Generating terrain for '{}' ({} segments)...",
+        level.name,
+        level.segments.len()
     );
 
-    Ok(terrain_manager)
+    let segments = build_segments(level).map_err(|e| {
+        crate::core::error::EngineError::InvalidState(format!("level placement failed: {e}"))
+    })?;
+
+    let terrain = TerrainWorld::from_segments(segments, texture_manager)?;
+    log::info!(
+        "Terrain generated: {} triangles in {} mesh leaves",
+        terrain.triangle_count(),
+        terrain.leaf_count()
+    );
+
+    Ok(terrain)
 }
 
 /// Spawn the player and all objects described in the level file.
@@ -87,7 +124,7 @@ pub fn spawn_level_objects(
     let (px, py, pz) = level.player_spawn;
     let player_entity = crate::app::spawners::spawn_player(world, Point3::new(px, py, pz));
 
-    for (obj, mats) in level.objects.iter().zip(&materials.per_object) {
+    for ((_, obj), mats) in level.objects().zip(&materials.per_object) {
         obj.to_spawnable().spawn(world, mats);
     }
 
@@ -99,17 +136,15 @@ pub fn spawn_level_objects(
 /// Returns both the coarse flow grid and the fine wave grid. Pool extents are
 /// determined by flood-filling from each body's seed point through terrain
 /// that is air at the target surface level.
-pub fn create_level_water(
-    level: &Level,
-    terrain: &TerrainManager,
-) -> Option<(WaterGrid, WaveGrid)> {
+pub fn create_level_water(level: &Level, terrain: &TerrainWorld) -> Option<(WaterGrid, WaveGrid)> {
     let water_config = level.water.as_ref()?;
     let properties = WaterProperties::default();
 
-    // Stage 1 keeps water on one world-space grid spanning the terrain's
-    // footprint. Per-segment water is a stage 2 question.
-    let bounds = level.terrain.bounds.to_aabb();
-    let cell_size = level.terrain.voxel_size * WATER_GRID_SCALE as f32;
+    // One world-space grid spanning the union of every segment, derived from the
+    // placed terrain rather than from any single segment's authored extent.
+    // Per-segment water grids are deferred; see the plan's open questions.
+    let bounds = *terrain.bounds();
+    let cell_size = terrain.voxel_size() * WATER_GRID_SCALE as f32;
     let origin = nalgebra::Vector3::new(bounds.min.x, 0.0, bounds.min.z);
 
     let grid_width = ((bounds.max.x - bounds.min.x) / cell_size).ceil() as usize;

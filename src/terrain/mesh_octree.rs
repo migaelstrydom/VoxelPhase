@@ -782,6 +782,23 @@ impl MeshOctree {
         }
     }
 
+    /// Count render vertices, without building the render buffer.
+    ///
+    /// Leaves store their own vertices unshared, so this is the same figure
+    /// `get_render_data` would produce — just without the allocation, which
+    /// matters because statistics are refreshed on every terrain update.
+    pub fn vertex_count(&self) -> usize {
+        Self::count_vertices(&self.root)
+    }
+
+    fn count_vertices(node: &MeshNode) -> usize {
+        match &node.content {
+            MeshNodeContent::Empty => 0,
+            MeshNodeContent::Leaf(leaf) => leaf.vertices.len(),
+            MeshNodeContent::Interior(children) => children.iter().map(Self::count_vertices).sum(),
+        }
+    }
+
     /// Count leaf nodes.
     pub fn leaf_count(&self) -> usize {
         Self::count_leaves(&self.root)

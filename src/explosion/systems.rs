@@ -7,7 +7,7 @@ use super::components::Explosion;
 use crate::components::{Position, Velocity};
 use crate::particles::ParticleEmitter;
 use crate::physics::{PhysicsImpulse, PhysicsImpulseQueue};
-use crate::terrain::TerrainManager;
+use crate::terrain::TerrainWorld;
 
 /// System that processes explosion events.
 ///
@@ -20,7 +20,7 @@ pub struct ExplosionSystem;
 impl<'a> System<'a> for ExplosionSystem {
     type SystemData = (
         Entities<'a>,
-        Option<Write<'a, TerrainManager>>,
+        Option<Write<'a, TerrainWorld>>,
         WriteStorage<'a, Explosion>,
         ReadStorage<'a, Position>,
         WriteStorage<'a, Velocity>,

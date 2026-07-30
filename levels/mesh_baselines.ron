@@ -7,10 +7,16 @@
 // count rises meaningfully above the figure recorded here.
 //
 // Re-commit these numbers when terrain generation or meshing changes on purpose.
-// Measured on branch level-segments-stage-1-5.
+// The count is per level *file*, not per segment definition: a segment
+// instanced twice contributes twice. Re-commit when placement changes.
+//
+// Measured on branch level-segments-stage-1-5, and reproduced unchanged on
+// level-segments-stage-2 — which is the regression test that the segment frame
+// maths is identity-correct for a single segment at the origin.
 (
     entries: [
         (level: "test_arena.level.ron", triangles: 191116, open_edges: 218),
         (level: "test_empty_terrain.level.ron", triangles: 98948, open_edges: 22),
+        (level: "test_segments.level.ron", triangles: 213804, open_edges: 310),
     ],
 )

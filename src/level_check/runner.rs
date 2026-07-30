@@ -1,13 +1,14 @@
 //! Runs every check over one level and collects the result.
 //!
 //! ```text
-//!   level.ron ──load──▶ Level ──generate──▶ ChunkGrid ──mesh──▶ TerrainManager
-//!                         │                                          │
-//!                         └──────────────┬───────────────────────────┘
-//!                                        ▼
-//!                          statistics · mesh integrity · placement · reach
-//!                                        ▼
-//!                                      Report
+//!   level.ron ──load──▶ Level ──build_segments──▶ TerrainWorld
+//!                         │                             │
+//!                         └───────────────┬─────────────┘
+//!                                         ▼
+//!    per-segment stats · totals · mesh integrity · Rule 4 contention ·
+//!    connections and reach · spawn and object placement
+//!                                         ▼
+//!                                       Report
 //! ```
 //!
 //! No Vulkan and no ECS: terrain is built through the headless constructor, so
@@ -15,49 +16,46 @@
 
 use std::path::Path;
 
-use nalgebra::Point3;
-
 use crate::collision::AABB;
-use crate::level::Level;
+use crate::level::{build_segments, Level};
 use crate::physics::PhysicsConfig;
 use crate::player::PlayerConfig;
-use crate::terrain::{generate_terrain, ChunkGrid, DurabilityConfig, TerrainManager};
+use crate::terrain::TerrainWorld;
 
 use super::baseline::{BaselineVerdict, Baselines};
 use super::placement;
 use super::reach::{JumpEnvelope, OPTIMISM_CAVEAT};
 use super::report::{Report, Section};
+use super::segments;
 
 /// Generate and mesh a level's terrain without a graphics device.
 ///
 /// Mirrors `level::create_level_terrain` minus the noise texture, which is
 /// purely a rendering concern.
-pub fn build_terrain(level: &Level) -> TerrainManager {
-    let bounds = level.terrain.bounds.to_aabb();
-    let mut grid = ChunkGrid::new(Point3::origin(), level.terrain.voxel_size);
-    generate_terrain(
-        &mut grid,
-        &level.terrain,
-        &DurabilityConfig::default(),
-        &bounds,
-    );
-    TerrainManager::from_grid_headless(grid)
+pub fn build_terrain(level: &Level) -> TerrainWorld {
+    let segments = build_segments(level).expect("a loaded level has resolved placements");
+    TerrainWorld::from_segments_headless(segments)
 }
 
 /// Check a level's terrain, placements and reach envelope.
 ///
 /// `level_path` is used only to locate the committed mesh baselines; pass the
 /// path the level was loaded from.
-pub fn check_level(level: &Level, level_path: &Path, terrain: &TerrainManager) -> Report {
+pub fn check_level(level: &Level, level_path: &Path, terrain: &TerrainWorld) -> Report {
     let mut report = Report::default();
 
     report.push_section(level_section(level));
-    report.push_section(terrain_section(level, terrain));
+    report.push_section(segments::segment_section(terrain));
+    report.push_section(terrain_section(terrain));
 
     let integrity = mesh_integrity(level_path, terrain, &mut report);
     report.push_section(integrity);
     report.push_section(reach_section());
 
+    let connections = segments::check_connections(level, &mut report);
+    report.push_section(connections);
+
+    segments::check_contention(terrain, &mut report);
     placement::check_player_spawn(level, terrain, &mut report);
     placement::check_objects(level, terrain, &mut report);
 
@@ -69,7 +67,20 @@ fn level_section(level: &Level) -> Section {
     let (x, y, z) = level.player_spawn;
     section
         .row("Name", &level.name)
-        .row("Objects", level.objects.len().to_string())
+        .row("Segments", level.segments.len().to_string())
+        .row("Objects", level.object_count().to_string())
+        .row(
+            "Connections",
+            format!(
+                "{} placement joins + {} assertions",
+                level
+                    .placements
+                    .iter()
+                    .filter(|p| !matches!(p, crate::level::Placement::Root { .. }))
+                    .count(),
+                level.connections.len()
+            ),
+        )
         .row("Player spawn", format!("({x:.1}, {y:.1}, {z:.1})"))
         .row(
             "Water bodies",
@@ -82,19 +93,17 @@ fn level_section(level: &Level) -> Section {
     section
 }
 
-fn terrain_section(level: &Level, terrain: &TerrainManager) -> Section {
-    let authored = level.terrain.bounds.to_aabb();
-    let derived = *terrain.bounds();
-
+fn terrain_section(terrain: &TerrainWorld) -> Section {
     let total = terrain.chunk_count();
     let solid = terrain.solid_chunk_count();
 
     let mut section = Section::new("Terrain");
     section
-        .row("Voxel size", format!("{:.3} m", terrain.voxel_size()))
-        .row("Chunk extent", format!("{:.1} m", terrain.chunk_extent()))
-        .row("Authored bounds", format_aabb(&authored))
-        .row("Derived bounds", format_aabb(&derived))
+        .row(
+            "Finest voxel size",
+            format!("{:.3} m", terrain.voxel_size()),
+        )
+        .row("Derived bounds", format_aabb(terrain.bounds()))
         .row(
             "Chunks",
             format!(
@@ -119,7 +128,7 @@ fn terrain_section(level: &Level, terrain: &TerrainManager) -> Section {
 /// Count open edges and compare against the committed baseline.
 ///
 /// Findings go straight onto `report`; the returned section is the numbers.
-fn mesh_integrity(level_path: &Path, terrain: &TerrainManager, report: &mut Report) -> Section {
+fn mesh_integrity(level_path: &Path, terrain: &TerrainWorld, report: &mut Report) -> Section {
     let open = terrain.open_edge_count();
     let triangles = terrain.triangle_count();
 
@@ -220,20 +229,27 @@ mod tests {
             r#"
             Level(
                 name: "Synthetic",
-                terrain: Terrain(
-                    voxel_size: 1.0,
-                    bounds: (min: (-32.0, -32.0, -32.0), max: (32.0, 32.0, 32.0)),
-                    base_height: 0.0,
-                    features: [],
-                ),
+                segments: [(
+                    name: "main",
+                    terrain: Terrain(
+                        voxel_size: 1.0,
+                        bounds: (min: (-32.0, -32.0, -32.0), max: (32.0, 32.0, 32.0)),
+                        base_height: 0.0,
+                        features: [],
+                    ),
+                    objects: [
+                        Crate(pos: (4.0, {object_y}, 4.0), size: 0.5),
+                    ],
+                )],
+                placements: [Root(segment: "main")],
                 player_spawn: (0.0, 2.0, 0.0),
-                objects: [
-                    Crate(pos: (4.0, {object_y}, 4.0), size: 0.5),
-                ],
             )
             "#
         );
-        ron::from_str(&ron).expect("synthetic level should parse")
+        let mut level: Level = ron::from_str(&ron).expect("synthetic level should parse");
+        level.frames =
+            crate::level::resolve_placements(&level).expect("synthetic placement should resolve");
+        level
     }
 
     /// Path in a directory holding no baseline file, so baselines contribute a

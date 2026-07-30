@@ -13,7 +13,7 @@ use crate::rendering::debug_render::{
 use crate::rendering::material::{MaterialManager, SurfaceParams};
 use crate::rendering::renderer::Renderer;
 use crate::resources::textures::TextureManager;
-use crate::terrain::TerrainManager;
+use crate::terrain::TerrainWorld;
 use crate::water::{WaterGrid, WaveGrid};
 use nalgebra::{Matrix4, Vector3};
 use specs::{
@@ -71,7 +71,7 @@ impl<'a> System<'a> for RenderSystem {
         Write<'a, DebugLines>,
         Read<'a, DebugOverlays>,
         Read<'a, ParticlePool>,
-        Option<Read<'a, TerrainManager>>,
+        Option<Read<'a, TerrainWorld>>,
         Option<Read<'a, WaterGrid>>,
         Option<Read<'a, WaveGrid>>,
         ReadStorage<'a, ModelInstance>,

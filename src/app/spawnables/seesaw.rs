@@ -21,7 +21,7 @@ use crate::core::error::EngineResult;
 use crate::physics::{ColliderDesc, ConstraintKind, RigidBodyDesc};
 use crate::rendering::material::{Material, MaterialId};
 use crate::systems::PhysicsResource;
-use crate::terrain::TerrainManager;
+use crate::terrain::TerrainWorld;
 use crate::utils::noise::fbm_2d_periodic;
 
 const TEXTURE_SIZE: u32 = 128;
@@ -117,7 +117,7 @@ impl Spawnable for SeesawDef {
         let fulcrum_mat = materials[2];
 
         let surface_y = {
-            let terrain = world.read_resource::<TerrainManager>();
+            let terrain = world.read_resource::<TerrainWorld>();
             terrain.mesh_surface_height_at(self.pos.0, self.pos.1)
         };
 

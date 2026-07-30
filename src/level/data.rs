@@ -1,13 +1,26 @@
 //! Pure data types for level file deserialization.
 //!
-//! These structs map directly to the RON level file format. They carry no
-//! engine dependencies — only `serde::Deserialize` — so the format can evolve
-//! independently of the runtime.
+//! These structs map directly to the RON level file format.
+//!
+//! # Coordinate frames
+//!
+//! A level is a set of **segments**, each authored entirely in its own local
+//! frame. `Terrain` extents, anchors and objects are all segment-local as
+//! written, and `player_spawn` is local to the root segment.
+//!
+//! [`load_level`] resolves the placement tree and then **rewrites the
+//! world-space quantities in place**: `Level::frames` is filled in, and every
+//! object position and the player spawn are lifted into world coordinates.
+//! Terrain extents are deliberately *not* rewritten — generation is local, which
+//! is what makes a segment relocatable.
+//!
+//! [`load_level`]: super::loader::load_level
 
 use nalgebra::Point3;
 use serde::Deserialize;
 
 use crate::collision::AABB;
+use crate::terrain::SegmentFrame;
 
 use crate::app::spawnables::{
     BananaDef, BeachBallDef, BoxDef, BoxWallDef, CapsuleDef, CrateDef, DodecahedronDef, DolosDef,
@@ -21,13 +34,145 @@ use crate::app::spawnables::{
 #[derive(Deserialize)]
 pub struct Level {
     pub name: String,
-    pub terrain: Terrain,
+
+    /// The areas the level is built from, in declaration order.
+    pub segments: Vec<SegmentDef>,
+
+    /// How segments are positioned. Exactly one entry must be a `Root`; every
+    /// other segment needs exactly one `Join`.
+    pub placements: Vec<Placement>,
+
+    /// Anchor pairs that meet but derive nothing — the shortcut back to an
+    /// earlier area, the second bridge across a chasm. Assertions, checked by
+    /// `level_check`, never used to place anything.
+    #[serde(default)]
+    pub connections: Vec<Connection>,
+
+    /// Authored in the root segment's local frame; rewritten to world
+    /// coordinates by `load_level`.
     pub player_spawn: (f32, f32, f32),
-    pub objects: Vec<LevelObject>,
 
     /// Water configuration. If omitted, no water system is created.
     #[serde(default)]
     pub water: Option<WaterConfig>,
+
+    /// World frame of each segment, parallel to `segments`.
+    ///
+    /// Derived from `placements` by `load_level`; empty on a `Level` that was
+    /// deserialized directly without going through the loader.
+    #[serde(skip)]
+    pub frames: Vec<SegmentFrame>,
+}
+
+impl Level {
+    /// Every object in the level, paired with the index of its owning segment.
+    pub fn objects(&self) -> impl Iterator<Item = (usize, &LevelObject)> {
+        self.segments
+            .iter()
+            .enumerate()
+            .flat_map(|(i, s)| s.objects.iter().map(move |o| (i, o)))
+    }
+
+    /// Total object count across every segment.
+    pub fn object_count(&self) -> usize {
+        self.segments.iter().map(|s| s.objects.len()).sum()
+    }
+
+    /// Index of a segment by name.
+    pub fn segment_index(&self, name: &str) -> Option<usize> {
+        self.segments.iter().position(|s| s.name == name)
+    }
+
+    /// World frame of a segment, once placement has been resolved.
+    pub fn frame(&self, index: usize) -> SegmentFrame {
+        self.frames
+            .get(index)
+            .copied()
+            .unwrap_or_else(SegmentFrame::identity)
+    }
+}
+
+/// One authored area: a coordinate frame's worth of terrain, anchors and
+/// objects, all in that frame's local coordinates.
+#[derive(Deserialize)]
+pub struct SegmentDef {
+    /// Unique within the level. Anchors are referred to as `segment.anchor`.
+    pub name: String,
+    /// Terrain generated in this segment's local frame.
+    pub terrain: Terrain,
+    /// Named local frames, for joining segments to each other.
+    #[serde(default)]
+    pub anchors: Vec<AnchorDef>,
+    /// Objects authored in this segment's local frame.
+    #[serde(default)]
+    pub objects: Vec<LevelObject>,
+}
+
+/// A named local frame within a segment.
+///
+/// The anchor's local `+X` points **outward**, out of the segment — see
+/// `terrain::anchor` for the diagram. `yaw` must be a multiple of 90°.
+#[derive(Deserialize)]
+pub struct AnchorDef {
+    pub name: String,
+    /// Segment-local position.
+    pub pos: (f32, f32, f32),
+    /// Segment-local yaw in degrees, a multiple of 90°. Defaults to 0, which
+    /// faces outward along local `+X`.
+    #[serde(default)]
+    pub yaw: f32,
+}
+
+/// How one segment gets its world frame.
+///
+/// Placement is a spanning tree: exactly one `Root`, and one `Join` per
+/// remaining segment. Two placements for the same segment is over-determined
+/// and rejected; none is an orphan and rejected; a loop is a cycle and rejected.
+/// Anything else that connects two anchors is a [`Connection`], not a placement.
+#[derive(Deserialize)]
+pub enum Placement {
+    /// The one segment placed at an explicit world transform.
+    Root {
+        segment: String,
+        #[serde(default)]
+        origin: (f32, f32, f32),
+        /// World yaw in degrees, a multiple of 90°.
+        #[serde(default)]
+        yaw: f32,
+    },
+    /// Snap this segment's `anchor` onto an already-placed `to` anchor,
+    /// separated by `gap` metres.
+    Join {
+        segment: String,
+        /// Anchor on `segment`.
+        anchor: String,
+        /// The anchor to mate with, as `segment.anchor`.
+        to: String,
+        /// Separation along the parent anchor's outward direction, in metres.
+        gap: f32,
+        /// Request continuous terrain across the join rather than a gap.
+        ///
+        /// **Not implemented** — rejected at load. Marching cubes reads an
+        /// unallocated neighbour as air, so a welded boundary chunk emits a cap
+        /// surface sealing the join. Cross-segment halo sampling is separate
+        /// work; until it exists, express continuous structures as spawnables.
+        #[serde(default)]
+        weld: bool,
+    },
+}
+
+/// An assertion that two anchors meet, deriving nothing.
+///
+/// `level_check` verifies the two anchors really do end up `gap` apart and
+/// facing each other, and measures `gap` against the player's jump reach.
+#[derive(Deserialize)]
+pub struct Connection {
+    /// `segment.anchor`.
+    pub from: String,
+    /// `segment.anchor`.
+    pub to: String,
+    /// Expected separation in metres.
+    pub gap: f32,
 }
 
 /// An axis-aligned box, authored as two corners.
@@ -802,6 +947,74 @@ impl LevelObject {
         };
 
         ObjectInfo { kind, placement }
+    }
+
+    /// Rewrite this object's authored position from segment-local coordinates
+    /// into world coordinates.
+    ///
+    /// Only the *placement* is transformed. A spawnable's own geometry —
+    /// half-extents, row directions, column layouts — is authored in the
+    /// spawnable's own axes and is left alone, so an object in a segment placed
+    /// at a non-zero yaw keeps its world orientation rather than turning with
+    /// the segment. The exception is [`LevelObject::PlankBridge`], which carries
+    /// an explicit `yaw` and therefore can turn.
+    ///
+    /// This is a deliberate limitation, not an oversight: rotating arbitrary
+    /// spawnables would mean teaching every one of them about orientation, which
+    /// belongs with the gameplay-entity work rather than here. Author
+    /// direction-sensitive objects in a segment with zero yaw.
+    pub fn place_in(&mut self, frame: &SegmentFrame) {
+        let p3 = |t: &mut (f32, f32, f32)| {
+            let w = frame.to_world(Point3::new(t.0, t.1, t.2));
+            *t = (w.x, w.y, w.z);
+        };
+        // Terrain-anchored objects carry (x, z) only; the height is resolved
+        // from the surface. A yaw about +Y never mixes y into x or z, so
+        // sending 0 through and keeping the horizontal result is exact.
+        let p2 = |t: &mut (f32, f32)| {
+            let w = frame.to_world(Point3::new(t.0, 0.0, t.1));
+            *t = (w.x, w.z);
+        };
+
+        match self {
+            LevelObject::Banana { pos, .. } => p3(pos),
+            LevelObject::BeachBall { pos } => p3(pos),
+            LevelObject::GlowingOrb { pos, .. } => p3(pos),
+            LevelObject::Box { pos, .. } => p3(pos),
+            LevelObject::Plank { pos, .. } => p3(pos),
+            LevelObject::Crate { pos, .. } => p3(pos),
+            LevelObject::HeavyCrate { pos, .. } => p3(pos),
+            LevelObject::Stack { base, .. } => p3(base),
+            LevelObject::Tower { base, .. } => p3(base),
+            LevelObject::BoxWall { base, .. } => p3(base),
+            LevelObject::House { pos, .. } => p3(pos),
+            LevelObject::Capsule { pos, .. } => p3(pos),
+            LevelObject::Menhir { pos, .. } => p2(pos),
+            LevelObject::FencePost { pos, .. } => p2(pos),
+            LevelObject::Pendulum { pos, .. } => p2(pos),
+            LevelObject::PlayWheel { pos, .. } => p2(pos),
+            LevelObject::Seesaw { pos, .. } => p2(pos),
+            LevelObject::Tetrahedron { pos, .. } => p3(pos),
+            LevelObject::Octahedron { pos, .. } => p3(pos),
+            LevelObject::Dodecahedron { pos, .. } => p3(pos),
+            LevelObject::HexPrism { pos, .. } => p3(pos),
+            LevelObject::HoneycombWall { base, .. } => p3(base),
+            LevelObject::Icosahedron { pos, .. } => p3(pos),
+            LevelObject::Trampoline { pos, .. } => p3(pos),
+            LevelObject::Table { pos, .. } => p3(pos),
+            LevelObject::Pyramid { base, .. } => p3(base),
+            LevelObject::Dolos { pos, .. } => p3(pos),
+            LevelObject::Domino { base, .. } => p3(base),
+            LevelObject::VoussoirArch { base, .. } => p3(base),
+            LevelObject::Jack { pos, .. } => p3(pos),
+            LevelObject::Jenga { base, .. } => p3(base),
+            LevelObject::PlankBridge { pos, yaw, .. } => {
+                p3(pos);
+                *yaw += frame.yaw_degrees().to_radians();
+            }
+            LevelObject::Trilithon { pos, .. } => p3(pos),
+            LevelObject::Temple { pos, .. } => p3(pos),
+        }
     }
 
     /// Convert this level object into a boxed [`Spawnable`].

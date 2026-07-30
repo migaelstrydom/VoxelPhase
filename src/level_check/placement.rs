@@ -7,7 +7,7 @@
 use nalgebra::Point3;
 
 use crate::level::{Level, ObjectPlacement};
-use crate::terrain::TerrainManager;
+use crate::terrain::TerrainWorld;
 
 use super::report::Report;
 
@@ -34,7 +34,7 @@ pub const OBJECT_DROP_LIMIT: f32 = 50.0;
 const BURIAL_MARGIN_VOXELS: f32 = 0.5;
 
 /// Check the player spawn: not inside rock, and with ground beneath it.
-pub fn check_player_spawn(level: &Level, terrain: &TerrainManager, report: &mut Report) {
+pub fn check_player_spawn(level: &Level, terrain: &TerrainWorld, report: &mut Report) {
     let (x, y, z) = level.player_spawn;
     let spawn = Point3::new(x, y, z);
 
@@ -69,16 +69,20 @@ pub fn check_player_spawn(level: &Level, terrain: &TerrainManager, report: &mut 
 ///
 /// Terrain-anchored objects are skipped: their height is resolved from the
 /// surface at spawn time, so it cannot be authored wrongly.
-pub fn check_objects(level: &Level, terrain: &TerrainManager, report: &mut Report) {
-    for (index, object) in level.objects.iter().enumerate() {
+pub fn check_objects(level: &Level, terrain: &TerrainWorld, report: &mut Report) {
+    for (index, (segment, object)) in level.objects().enumerate() {
         let info = object.describe();
         let ObjectPlacement::Free(pos) = info.placement else {
             continue;
         };
         let kind = info.kind;
         let at = format!(
-            "{kind} #{index} at ({:.1}, {:.1}, {:.1})",
-            pos.x, pos.y, pos.z
+            "{kind} #{} in '{}' at ({:.1}, {:.1}, {:.1})",
+            index + 1,
+            level.segments[segment].name,
+            pos.x,
+            pos.y,
+            pos.z
         );
 
         if is_buried(terrain, pos) {
@@ -102,13 +106,13 @@ pub fn check_objects(level: &Level, terrain: &TerrainManager, report: &mut Repor
 }
 
 /// Whether a point is meaningfully inside rock rather than resting on it.
-fn is_buried(terrain: &TerrainManager, p: Point3<f32>) -> bool {
+fn is_buried(terrain: &TerrainWorld, p: Point3<f32>) -> bool {
     let margin = terrain.voxel_size() * BURIAL_MARGIN_VOXELS;
     terrain.is_mesh_solid_at(p.x, p.y, p.z) && terrain.is_mesh_solid_at(p.x, p.y + margin, p.z)
 }
 
 /// Height of the highest upward-facing terrain surface below a point.
-fn surface_below(terrain: &TerrainManager, p: Point3<f32>) -> Option<f32> {
+fn surface_below(terrain: &TerrainWorld, p: Point3<f32>) -> Option<f32> {
     terrain
         .mesh_surface_heights_at(p.x, p.z)
         .into_iter()
