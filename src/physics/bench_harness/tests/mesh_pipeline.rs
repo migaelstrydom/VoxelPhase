@@ -223,3 +223,35 @@ fn sphere_in_bowl_settles_without_falling_through() {
     assert_tail_min_contacts(&run, 1.0, 2);
     assert_settled(&run, 1.0, 0.02, f32::MAX);
 }
+
+// ── Mesh pipeline: convex hull vs step edge ─────────────────────────
+
+#[test]
+fn menhir_topples_onto_step_without_falling_through() {
+    let scenario = MenhirTopplesOntoStepScenario::new();
+    let cfg = BenchRunConfig {
+        duration: 6.0,
+        ..BenchRunConfig::default()
+    };
+    let run = run_scenario(&scenario, cfg);
+    write_exports(&run, "menhir_topples_onto_step");
+
+    assert!(!run.samples.is_empty());
+
+    // Lying on its side on the lower level, the stone's center sits at least
+    // top_radius above the floor. Anything below the floor means the hull
+    // sank through the terrain at the step edge.
+    let min_y = run
+        .samples
+        .iter()
+        .map(|s| s.y)
+        .fold(f32::INFINITY, f32::min);
+    let final_y = run.samples.last().unwrap().y;
+    eprintln!("menhir_topples_onto_step min_y={min_y:.4} final_y={final_y:.4}");
+
+    assert_above_floor(&run, scenario.lower_level_y());
+    assert!(
+        final_y > scenario.lower_level_y() + 0.2,
+        "stone sank through the step edge: final_y={final_y:.4}"
+    );
+}
