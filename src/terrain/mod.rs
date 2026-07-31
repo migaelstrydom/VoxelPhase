@@ -14,6 +14,7 @@ mod anchor;
 mod chunk;
 mod chunk_grid;
 mod csg;
+pub use csg::SURFACE_BAND;
 mod frame;
 pub mod generation;
 mod marching_cubes;

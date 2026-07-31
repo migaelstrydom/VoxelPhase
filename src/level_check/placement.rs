@@ -7,7 +7,7 @@
 use nalgebra::Point3;
 
 use crate::level::{Level, ObjectPlacement, Orientable};
-use crate::terrain::TerrainWorld;
+use crate::terrain::{TerrainWorld, SURFACE_BAND};
 
 use super::report::Report;
 
@@ -112,11 +112,20 @@ fn is_buried(terrain: &TerrainWorld, p: Point3<f32>) -> bool {
 }
 
 /// Height of the highest upward-facing terrain surface below a point.
+///
+/// "Below" is generous by one surface band, because meshing nudges a surface
+/// that lands exactly on a lattice plane onto the solid side of it (see
+/// `terrain::csg::SURFACE_BAND`). An object authored to rest at `y = 0` on
+/// ground authored at `y = 0` therefore sits a fraction of a voxel *under* the
+/// meshed surface, and a strict `h <= p.y` would report solid ground as a void.
+/// Authoring around that epsilon is the wrong way round — the tolerance belongs
+/// here, in the check.
 fn surface_below(terrain: &TerrainWorld, p: Point3<f32>) -> Option<f32> {
+    let tolerance = terrain.voxel_size() * SURFACE_BAND;
     terrain
         .mesh_surface_heights_at(p.x, p.z)
         .into_iter()
-        .find(|h| *h <= p.y)
+        .find(|h| *h <= p.y + tolerance)
 }
 
 /// Warn about objects that keep their world orientation while their segment

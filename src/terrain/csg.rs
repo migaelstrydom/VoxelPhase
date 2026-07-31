@@ -35,7 +35,7 @@ use super::voxel::{Voxel, VoxelMaterial};
 /// The cost is that a coincident surface sits up to this fraction of a voxel
 /// proud of its authored position — half a centimetre at metre voxels, and
 /// nowhere else.
-const SURFACE_BAND: f32 = 0.01;
+pub const SURFACE_BAND: f32 = 0.01;
 
 /// Move a signed distance out of the degenerate band, into the solid.
 fn debias(distance: f32, step: f32) -> f32 {
