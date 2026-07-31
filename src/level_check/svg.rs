@@ -21,7 +21,7 @@ use std::path::Path;
 
 use nalgebra::Point3;
 
-use crate::level::{world_anchor, Level, ObjectPlacement, Placement};
+use crate::level::{world_anchor, Level, ObjectPlacement, Placement, VolumeFeature};
 use crate::terrain::{outward, SegmentFrame, TerrainWorld};
 
 /// Target number of heightmap samples along the longest horizontal axis.
@@ -262,12 +262,12 @@ fn render(level: &Level, terrain: &TerrainWorld) -> String {
 </style>
 <rect width="100%" height="100%" fill="#f6f5f2"/>
 <text class="title" x="{MARGIN:.0}" y="{:.0}">{}</text>
-<text class="axis" x="{MARGIN:.0}" y="{:.0}">{} segments · {} triangles · finest voxel {:.2} m · bounds ({:.0}, {:.0}, {:.0}) .. ({:.0}, {:.0}, {:.0}) · sample {:.2} m</text>
+<text class="axis" x="{MARGIN:.0}" y="{:.0}">{}{} triangles · finest voxel {:.2} m · bounds ({:.0}, {:.0}, {:.0}) .. ({:.0}, {:.0}, {:.0}) · sample {:.2} m</text>
 "##,
         MARGIN - 18.0,
         escape(&level.name),
         MARGIN,
-        terrain.segments().len(),
+        plural(terrain.segments().len(), "segment"),
         terrain.triangle_count(),
         terrain.voxel_size(),
         bounds.min.x,
@@ -368,6 +368,44 @@ impl LabelSpace {
             (y / self.cell_h).floor() as i32,
         ))
     }
+
+    /// Claim every cell a piece of text would cover, returning false unless all
+    /// of them were free.
+    ///
+    /// A single cell is not enough for a name: at 30 px per cell, two anchors
+    /// facing each other across a 5 m join land in *different* cells and their
+    /// text still overprints, which is how `east_ledge` and `west_landing`
+    /// became `east_ledgelanding`. That arrangement recurs at every join, so it
+    /// is the one worth reserving properly for.
+    fn claim_text(&mut self, x: f32, y: f32, text: &str) -> bool {
+        let width = text.chars().count() as f32 * TEXT_CHAR_WIDTH;
+        let row = (y / self.cell_h).floor() as i32;
+        let first = (x / self.cell_w).floor() as i32;
+        let last = ((x + width) / self.cell_w).floor() as i32;
+        if (first..=last).any(|c| self.taken.contains(&(c, row))) {
+            return false;
+        }
+        for c in first..=last {
+            self.taken.insert((c, row));
+        }
+        true
+    }
+}
+
+/// Nominal advance width of one character at the marker font size.
+///
+/// The renderer is a browser and the font is whatever it has, so this is an
+/// estimate — but a generous estimate is exactly right here, since reserving
+/// slightly too much drops a label and reserving too little overprints two.
+const TEXT_CHAR_WIDTH: f32 = 5.6;
+
+/// `"1 segment"`, `"4 segments"`.
+fn plural(n: usize, noun: &str) -> String {
+    if n == 1 {
+        format!("{n} {noun} · ")
+    } else {
+        format!("{n} {noun}s · ")
+    }
 }
 
 /// Top-down panel: heightmap, segment outlines, anchors, connections, objects.
@@ -452,6 +490,10 @@ fn plan_view(
         );
     }
 
+    // The route, over the heightmap and under the labels: it is the thing a
+    // reader is looking for, and nothing else in the picture is this colour.
+    route_overlay(s, level, &px, &pz, scale);
+
     // Every piece of text in this panel shares one reservation grid, claimed in
     // decreasing order of importance: a gap figure matters more than an anchor
     // name, which matters more than an object's index (the key below carries
@@ -511,6 +553,147 @@ fn plan_view(
     legend(s, MARGIN + 190.0, top + height + 34.0, field);
 }
 
+/// The traversal primitives, drawn as the route they are.
+///
+/// This is the one thing the plan panel could not previously show: a level
+/// shaped only by heightfields reads as a heightmap, and a reader has to open
+/// the RON to find out where the author intended the player to *go*. A deck
+/// drawn at its real width, in a colour nothing else uses, means the route can
+/// be traced with a finger.
+///
+/// Everything is drawn in world space, so a primitive in a quarter-turned
+/// segment appears turned — which also makes this a visual check on the
+/// orientation work.
+fn route_overlay(
+    s: &mut String,
+    level: &Level,
+    px: &impl Fn(f32) -> f32,
+    pz: &impl Fn(f32) -> f32,
+    scale: f32,
+) {
+    for (index, segment) in level.segments.iter().enumerate() {
+        let frame = level.frame(index);
+        let world = |x: f32, z: f32| {
+            let w = frame.to_world(Point3::new(x, 0.0, z));
+            (px(w.x), pz(w.z))
+        };
+
+        for volume in &segment.terrain.volumes {
+            match volume {
+                VolumeFeature::Path { points, width, .. } => {
+                    let pts: Vec<String> = points
+                        .iter()
+                        .map(|p| {
+                            let (x, y) = world(p.0, p.2);
+                            format!("{x:.1},{y:.1}")
+                        })
+                        .collect();
+                    // Stroked at the deck's real width, with a thin centreline
+                    // over it so a narrow path is still visible at any scale.
+                    let _ = writeln!(
+                        s,
+                        "<polyline points=\"{}\" fill=\"none\" stroke=\"{ROUTE_FILL}\" \
+                         stroke-width=\"{:.1}\" stroke-linejoin=\"round\" \
+                         stroke-linecap=\"round\" opacity=\"0.75\"/>\n\
+                         <polyline points=\"{}\" fill=\"none\" stroke=\"{ROUTE_LINE}\" \
+                         stroke-width=\"1.2\" stroke-linejoin=\"round\"/>",
+                        pts.join(" "),
+                        (width * scale).max(2.0),
+                        pts.join(" "),
+                    );
+                }
+
+                VolumeFeature::Platform {
+                    center,
+                    half_extents,
+                    ..
+                } => {
+                    // A quarter turn swaps the half-extents with the axes, so
+                    // the rectangle is spanned from its transformed corners
+                    // rather than assumed to keep its authored ones.
+                    let (ax, az) = world(center.0 - half_extents.0, center.2 - half_extents.1);
+                    let (bx, bz) = world(center.0 + half_extents.0, center.2 + half_extents.1);
+                    let _ = writeln!(
+                        s,
+                        "<rect x=\"{:.1}\" y=\"{:.1}\" width=\"{:.1}\" height=\"{:.1}\" \
+                         fill=\"{ROUTE_FILL}\" fill-opacity=\"0.75\" stroke=\"{ROUTE_LINE}\" \
+                         stroke-width=\"1.2\"/>",
+                        ax.min(bx),
+                        az.min(bz),
+                        (bx - ax).abs(),
+                        (bz - az).abs(),
+                    );
+                }
+
+                VolumeFeature::Staircase {
+                    from,
+                    to,
+                    width,
+                    steps,
+                    ..
+                } => {
+                    let (ax, az) = world(from.0, from.2);
+                    let (bx, bz) = world(to.0, to.2);
+                    let _ = writeln!(
+                        s,
+                        "<line x1=\"{ax:.1}\" y1=\"{az:.1}\" x2=\"{bx:.1}\" y2=\"{bz:.1}\" \
+                         stroke=\"{ROUTE_FILL}\" stroke-width=\"{:.1}\" opacity=\"0.75\"/>",
+                        (width * scale).max(2.0),
+                    );
+                    // One tick per riser: what distinguishes a flight from a
+                    // ramp in the picture is that you can count the steps.
+                    let (nx, nz) = ((bz - az), -(bx - ax));
+                    let len = (nx * nx + nz * nz).sqrt().max(1e-3);
+                    let half = (width * scale).max(2.0) * 0.5;
+                    for i in 0..=*steps {
+                        let t = i as f32 / (*steps).max(1) as f32;
+                        let (cx, cz) = (ax + (bx - ax) * t, az + (bz - az) * t);
+                        let _ = writeln!(
+                            s,
+                            "<line x1=\"{:.1}\" y1=\"{:.1}\" x2=\"{:.1}\" y2=\"{:.1}\" \
+                             stroke=\"{ROUTE_LINE}\" stroke-width=\"1\"/>",
+                            cx - nx / len * half,
+                            cz - nz / len * half,
+                            cx + nx / len * half,
+                            cz + nz / len * half,
+                        );
+                    }
+                }
+
+                VolumeFeature::Shaft {
+                    center,
+                    radius,
+                    ledge,
+                    ..
+                } => {
+                    let (cx, cz) = world(center.0, center.1);
+                    let _ = writeln!(
+                        s,
+                        "<circle cx=\"{cx:.1}\" cy=\"{cz:.1}\" r=\"{:.1}\" fill=\"#f6f5f2\" \
+                         stroke=\"{ROUTE_LINE}\" stroke-width=\"1.2\" stroke-dasharray=\"3 2\"/>",
+                        (radius * scale).max(3.0),
+                    );
+                    if let Some(l) = ledge {
+                        let _ = writeln!(
+                            s,
+                            "<circle cx=\"{cx:.1}\" cy=\"{cz:.1}\" r=\"{:.1}\" fill=\"none\" \
+                             stroke=\"{ROUTE_FILL}\" stroke-width=\"{:.1}\" opacity=\"0.75\"/>",
+                            ((radius - l.width * 0.5) * scale).max(2.0),
+                            (l.width * scale).max(2.0),
+                        );
+                    }
+                }
+
+                _ => {}
+            }
+        }
+    }
+}
+
+/// Fill for a walkable surface, and the line that outlines it.
+const ROUTE_FILL: &str = "#c9a227";
+const ROUTE_LINE: &str = "#6b4f00";
+
 /// Dashed links between connected anchors, labelled with their gap.
 ///
 /// Placement joins and asserted connections are drawn differently, because the
@@ -559,7 +742,8 @@ fn connection_links(
         );
 
         let (lx, ly) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0 - 5.0);
-        if labels.claim(lx, ly) {
+        let text = format!("{gap:.1} m");
+        if labels.claim_text(lx - text.len() as f32 * TEXT_CHAR_WIDTH * 0.5, ly, &text) {
             let _ = writeln!(
                 s,
                 "<text class=\"marker\" x=\"{lx:.1}\" y=\"{ly:.1}\" text-anchor=\"middle\" fill=\"{colour}\">{gap:.1} m</text>",
@@ -596,11 +780,42 @@ fn anchor_marker(
         pz(o.z),
     );
 
-    let (lx, ly) = (px(o.x) + 5.0, pz(o.z) + 12.0);
-    if labels.claim(lx, ly) {
+    // Put the name on the side the anchor faces. Two anchors mated across a
+    // join face each other, so their labels go to opposite sides of the gap and
+    // stop competing for the same strip of page — which is the arrangement that
+    // used to print `east_ledge` and `west_landing` on top of each other as
+    // `east_ledgelanding`, and it recurs at every single join.
+    let (ax, az) = (px(o.x), pz(o.z));
+    let (tx, tz) = (px(tip.x), pz(tip.z));
+    let (out_x, out_z) = (tx - ax, tz - az);
+    let anchored_end = if out_x < -0.5 { "end" } else { "start" };
+    let dx = if out_x < -0.5 { -7.0 } else { 7.0 };
+    // The row is chosen from the facing too, not only the side. Two mated
+    // anchors are a few metres apart and their names are sixty pixels long, so
+    // putting them on opposite *sides* of a join still overlaps; putting them
+    // on opposite sides of the link *line* cannot. The offsets are more than
+    // one row apart from each other and from the gap figure at the midpoint, so
+    // the three never compete for a cell.
+    let faces_negative = out_x < -0.5 || out_z > 0.5;
+    let lx = ax + dx;
+    let reserve_x = if anchored_end == "end" {
+        lx - label.chars().count() as f32 * TEXT_CHAR_WIDTH
+    } else {
+        lx
+    };
+
+    // Preferred row first, then the other side. Two anchors on the same face of
+    // one segment are far enough apart to read but not far enough for two
+    // names, and falling back beats dropping one of a pair.
+    let preferred = if faces_negative { 20.0 } else { -20.0 };
+    let ly = [az + preferred, az - preferred]
+        .into_iter()
+        .find(|&y| labels.claim_text(reserve_x, y, label));
+    if let Some(ly) = ly {
         let _ = writeln!(
             s,
-            "<text class=\"marker\" x=\"{lx:.1}\" y=\"{ly:.1}\" fill=\"#1a3552\">{}</text>",
+            "<text class=\"marker\" x=\"{lx:.1}\" y=\"{ly:.1}\" text-anchor=\"{anchored_end}\" \
+             fill=\"#1a3552\">{}</text>",
             escape(label),
         );
     }
@@ -874,15 +1089,17 @@ fn legend(s: &mut String, x: f32, y: f32, field: &HeightField) {
         "<circle cx=\"{:.1}\" cy=\"{:.1}\" r=\"3.2\" fill=\"#c1440e\"/><text class=\"axis\" x=\"{:.1}\" y=\"{:.1}\">object</text>\n\
          <circle cx=\"{:.1}\" cy=\"{:.1}\" r=\"3.2\" fill=\"#1c6ea4\"/><text class=\"axis\" x=\"{:.1}\" y=\"{:.1}\">anchored</text>\n\
          <line x1=\"{:.1}\" y1=\"{:.1}\" x2=\"{:.1}\" y2=\"{:.1}\" stroke=\"#c1440e\" stroke-width=\"1.6\" stroke-dasharray=\"5 3\"/><text class=\"axis\" x=\"{:.1}\" y=\"{:.1}\">join</text>\n\
-         <line x1=\"{:.1}\" y1=\"{:.1}\" x2=\"{:.1}\" y2=\"{:.1}\" stroke=\"#6a3fa0\" stroke-width=\"1.6\" stroke-dasharray=\"2 4\"/><text class=\"axis\" x=\"{:.1}\" y=\"{:.1}\">assertion</text>",
+         <line x1=\"{:.1}\" y1=\"{:.1}\" x2=\"{:.1}\" y2=\"{:.1}\" stroke=\"#6a3fa0\" stroke-width=\"1.6\" stroke-dasharray=\"2 4\"/><text class=\"axis\" x=\"{:.1}\" y=\"{:.1}\">assertion</text>\n\
+         <line x1=\"{:.1}\" y1=\"{:.1}\" x2=\"{:.1}\" y2=\"{:.1}\" stroke=\"{ROUTE_FILL}\" stroke-width=\"6\" opacity=\"0.75\"/><text class=\"axis\" x=\"{:.1}\" y=\"{:.1}\">route</text>",
         x, y, x + 7.0, y + 4.0,
         x + 55.0, y, x + 62.0, y + 4.0,
         x + 130.0, y, x + 150.0, y, x + 154.0, y + 4.0,
         x + 185.0, y, x + 205.0, y, x + 209.0, y + 4.0,
+        x + 262.0, y, x + 282.0, y, x + 286.0, y + 4.0,
     );
 
     // The height ramp itself, as a strip of its own shades.
-    let strip_x = x + 390.0;
+    let strip_x = x + 470.0;
     for step in 0..SHADE_STEPS {
         let _ = writeln!(
             s,

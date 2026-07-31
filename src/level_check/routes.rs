@@ -15,6 +15,7 @@
 
 use nalgebra::Point3;
 
+use crate::collision::AABB;
 use crate::level::{Level, TraversalInfo};
 use crate::physics::PhysicsConfig;
 use crate::player::PlayerConfig;
@@ -24,13 +25,15 @@ use crate::terrain::SegmentFrame;
 use super::reach::{Footprint, JumpEnvelope};
 use super::report::{Report, Section};
 
-/// How many voxels a dimension needs to span before it reads as what it is.
+/// How many voxels a primitive's narrowest dimension has to span.
 ///
-/// Two is the minimum for a surface to exist at all — one sample inside and
-/// one outside. Three is where a deck stops being a single row of cells and
-/// starts having an interior, which is what makes its edges read as edges
-/// instead of as the voxel lattice.
-const MIN_VOXELS_ACROSS: f32 = 3.0;
+/// Two, because two is what it takes for the primitive to have an *interior*:
+/// one lattice sample inside and one outside, which is the minimum the density
+/// encoding needs to place both of a deck's faces where they were authored.
+/// Below that the primitive's thickness is decided by the lattice rather than
+/// by the author, and it is decided differently at every resolution — which is
+/// exactly how a route becomes resolution-dependent.
+const MIN_VOXELS_ACROSS: f32 = 2.0;
 
 /// Report every traversal primitive in the level and check what it asks of the
 /// player and of its segment's resolution.
@@ -162,7 +165,20 @@ fn check_resolution(name: &str, info: &TraversalInfo, voxel: f32, report: &mut R
 /// transforming the world point into each one's local frame — exact under
 /// quarter-turn placement — rather than by transforming the geometry out.
 pub struct RouteMap {
-    placed: Vec<(SegmentFrame, RoutePlan)>,
+    placed: Vec<PlacedRoute>,
+}
+
+/// One primitive, with everything needed to ask about it in world space.
+struct PlacedRoute {
+    frame: SegmentFrame,
+    /// The owning segment's authored extent, in its own local frame.
+    ///
+    /// Generation clips every feature to this, so a deck reaching past it does
+    /// not exist however it was authored. Without the same clip here the check
+    /// would confidently report a gap as bridged by geometry that was never
+    /// written — the worst kind of wrong, because it silences a real finding.
+    local_bounds: AABB,
+    plan: RoutePlan,
 }
 
 /// Vertical spacing of the probe when asking whether a deck stands at a point.
@@ -183,9 +199,14 @@ impl RouteMap {
         let mut placed = Vec::new();
         for (index, segment) in level.segments.iter().enumerate() {
             let frame = level.frame(index);
+            let local_bounds = segment.terrain.bounds.to_aabb();
             for volume in &segment.terrain.volumes {
                 if let Some(plan) = route_plan(volume) {
-                    placed.push((frame, plan));
+                    placed.push(PlacedRoute {
+                        frame,
+                        local_bounds,
+                        plan,
+                    });
                 }
             }
         }
@@ -200,11 +221,15 @@ impl RouteMap {
     /// within `window` metres above or below it.
     pub fn covers(&self, world: Point3<f32>, window: f32) -> bool {
         let steps = (window / PROBE_STEP).ceil() as i32;
-        for (frame, plan) in &self.placed {
-            for solid in plan.walkable() {
+        for route in &self.placed {
+            for solid in route.plan.walkable() {
                 for i in -steps..=steps {
                     let probe = Point3::new(world.x, world.y + i as f32 * PROBE_STEP, world.z);
-                    if solid.sample(frame.to_local(probe)).distance <= 0.0 {
+                    let local = route.frame.to_local(probe);
+                    if !contains(&route.local_bounds, local) {
+                        continue;
+                    }
+                    if solid.sample(local).distance <= 0.0 {
                         return true;
                     }
                 }
@@ -234,6 +259,16 @@ impl RouteMap {
     }
 }
 
+/// Whether a local point lies inside a segment's authored extent.
+fn contains(bounds: &AABB, p: Point3<f32>) -> bool {
+    p.x >= bounds.min.x
+        && p.x <= bounds.max.x
+        && p.y >= bounds.min.y
+        && p.y <= bounds.max.y
+        && p.z >= bounds.min.z
+        && p.z <= bounds.max.z
+}
+
 /// Vertical reach either side of an anchor within which a deck still counts as
 /// continuing that ledge.
 ///
@@ -258,6 +293,12 @@ mod tests {
     /// reported as a jump and nothing is flagged; the bridged case has to change
     /// the *classification*, not merely silence a warning.
     fn two_islands(volumes: &str) -> Level {
+        two_islands_bounded(volumes, 44.0)
+    }
+
+    /// As above, but with the root segment's authored extent under the
+    /// author's control, so the clipping generation applies can be exercised.
+    fn two_islands_bounded(volumes: &str, max_x: f32) -> Level {
         let ron = format!(
             r#"Level(
                 name: "Bridged islands",
@@ -266,7 +307,7 @@ mod tests {
                         name: "a",
                         terrain: Terrain(
                             voxel_size: 0.5,
-                            bounds: (min: (0.0, -8.0, 0.0), max: (32.0, 16.0, 32.0)),
+                            bounds: (min: (0.0, -8.0, 0.0), max: ({max_x}, 16.0, 32.0)),
                             base_height: 0.0,
                             features: [],
                             volumes: [{volumes}],
@@ -367,6 +408,33 @@ mod tests {
         );
     }
 
+    /// A deck authored past its segment's extent is clipped away by
+    /// generation, so it must not be allowed to claim a crossing either. This
+    /// is the one failure mode that would make the check actively harmful:
+    /// silencing a real jump with geometry that was never written.
+    #[test]
+    fn a_path_running_past_its_segments_bounds_does_not_bridge() {
+        const DECK: &str = r#"Path(
+            points: [(28.0, 0.0, 16.0), (42.0, 0.0, 16.0)],
+            width: 3.0,
+            thickness: 1.0,
+        )"#;
+
+        // The gap runs from x = 32 to x = 38. With the segment authored out to
+        // 44 the deck exists and bridges it.
+        assert!(
+            crossing_row(&two_islands_bounded(DECK, 44.0)).contains(Crossing::Walk.describe()),
+            "the deck inside its bounds failed to bridge"
+        );
+        // With the segment ending at 34 the same deck is generated only as far
+        // as 34, and the crossing is a jump again.
+        let clipped = crossing_row(&two_islands_bounded(DECK, 34.0));
+        assert!(
+            clipped.contains("standing jump"),
+            "a deck clipped away by its segment's bounds still claimed the crossing: {clipped}"
+        );
+    }
+
     /// A deck the player physically cannot stand on.
     #[test]
     fn a_path_narrower_than_the_player_is_an_error() {
@@ -415,7 +483,7 @@ mod tests {
             .iter()
             .find(|w| w.contains("read as authored"))
             .unwrap_or_else(|| panic!("no resolution warning: {warnings:?}"));
-        // 0.6 m over three voxels needs 0.20 m voxels; the segment runs 0.5.
-        assert!(hit.contains("0.20 m voxels"), "{hit}");
+        // 0.6 m over two voxels needs 0.30 m voxels; the segment runs 0.5.
+        assert!(hit.contains("0.30 m voxels"), "{hit}");
     }
 }

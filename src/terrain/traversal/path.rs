@@ -34,6 +34,9 @@ use super::solid::{above, below, Sample, TraversalSolid};
 /// the two open ends of the whole path overhang their waypoints by a
 /// half-width, so author the endpoints where the deck should meet what it
 /// joins, not half a deck short of it.
+/// How much of a rounded deck's half-thickness goes into its edge radius.
+const ROUNDED_EDGE_FRACTION: f32 = 0.6;
+
 pub struct PathSolid {
     /// Waypoints in segment-local coordinates; `y` is the walking surface.
     points: Vec<Point3<f32>>,
@@ -65,6 +68,14 @@ impl PathSolid {
         })
     }
 
+    /// Radius the deck's long edges are rounded to.
+    ///
+    /// A fraction rather than the full half-extent, so a rounded deck keeps a
+    /// flat strip down the middle to walk on instead of becoming a log.
+    fn corner_radius(&self) -> f32 {
+        self.half_width.min(self.thickness * 0.5) * ROUNDED_EDGE_FRACTION
+    }
+
     /// Signed distance within one leg's cross-section.
     ///
     /// `lateral` is the unsigned distance from the leg's centreline in the
@@ -78,17 +89,18 @@ impl PathSolid {
                 .max(below(v, 0.0))
                 .max(above(v, -self.thickness)),
 
-            // A flat top over a semi-elliptical underside — a stone bridge or
-            // a ledge weathered out of a cliff. The ellipse is scaled to a
-            // distance by its smaller semi-axis, which keeps the field's
-            // gradient at or below 1 so the density never overstates how close
-            // the surface is.
+            // The same deck with its four long edges rounded off: a stone
+            // bridge, or a ledge weathered out of a cliff. This is the exact
+            // rounded-box distance, not a shaped approximation, and that
+            // matters — a profile built by intersecting an ellipse with a
+            // half-space meets the top plane tangentially, and a knife edge
+            // that fine is where marching cubes cracks.
             PathProfile::Rounded => {
-                let u = lateral / self.half_width;
-                let w = v / self.thickness;
-                let scale = self.half_width.min(self.thickness);
-                let ellipse = ((u * u + w * w).sqrt() - 1.0) * scale;
-                ellipse.max(below(v, 0.0))
+                let r = self.corner_radius();
+                let qu = lateral - (self.half_width - r);
+                let qv = (v + self.thickness * 0.5).abs() - (self.thickness * 0.5 - r);
+                let outside = (qu.max(0.0).powi(2) + qv.max(0.0).powi(2)).sqrt();
+                outside + qu.max(qv).min(0.0) - r
             }
         }
     }

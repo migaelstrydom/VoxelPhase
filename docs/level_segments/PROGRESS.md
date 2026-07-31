@@ -639,3 +639,278 @@ run `cargo run` (which loads `test_arena`) and look at exactly these four things
 - **The open-edge baseline is still per level file.** `test_segments` at 310 is the sum of
   four segments; if a segment definition is ever instanced twice the number doubles, which
   is correct but means the baseline must be re-committed whenever placement changes.
+
+---
+
+## Stage 3 — traversal primitives
+
+**Landed** on branch `level-segments-stage-3`. `cargo build`, `cargo test` (634 + 2 pass)
+and `cargo test --release --features bench_harness` (677 pass) are green. All three levels
+pass `level_check` with exit code 0 and no findings.
+
+One pre-existing test fails under `bench_harness`:
+`physics::bench_harness::tests::terrain_step::pop_replay_captured_pose_resolves_without_teleporting`.
+It fails identically on `main` with this branch stashed — it is the open menhir/step
+fall-through issue, untouched here.
+
+### What landed
+
+New `src/terrain/traversal/` — the primitives, one file each:
+
+- `solid.rs` — the `TraversalSolid` trait (`sample` + `bounds`, and nothing else), the
+  `rasterise`/`excavate` writers, and the half-space helpers the primitives are built
+  from.
+- `path.rs`, `platform.rs`, `staircase.rs`, `shaft.rs` — one signed-distance function
+  each.
+- `feature.rs` — `route_plan(&VolumeFeature) -> Option<RoutePlan>`, the single place that
+  decides what a primitive *is*. Generation rasterises the plan and `level_check` reads
+  the same plan, so the check cannot disagree with the geometry about where a deck is.
+
+New `src/terrain/csg.rs` — `union_solid`, `carve_with_sdf` and `index_range` lifted out of
+`generation.rs`, which is what lets a new primitive be a distance function rather than
+another triple-nested loop.
+
+New `src/level_check/routes.rs` — the four checks plus `RouteMap`.
+
+New `src/app/spawnables/shared/orientation.rs` — `Yaw`.
+
+Format: `VolumeFeature::{Path, Platform, Staircase, Shaft}`, `PathProfile`, `ShaftLedge`,
+`VoxelMaterial(Id)::Sand`, `yaw` on eleven `LevelObject` variants, and
+`LevelObject::orientability()`.
+
+### The primitives read as authored — and here is what made that true
+
+Two things, both of which were nearly-invisible bugs until measured:
+
+1. **Sample on the lattice.** The existing volume features iterate `while x < max { x +=
+   step }` from an arbitrary clipped minimum, so their samples sit at whatever sub-voxel
+   offset the bounds happened to land on. A chunk stores one voxel per lattice cell, so
+   the field is evaluated at one position and stored at another, and the sub-voxel offset
+   the density encodes is wrong by exactly that difference. `rasterise` walks integer
+   indices instead. This is the difference between a deck landing at 12.000 and at
+   12.0 ± half a voxel.
+
+2. **Never let a surface pass exactly through a sample.** This is the finding of the
+   stage. Marching cubes degenerates when a lattice sample sits exactly on the
+   iso-surface: two edges of the same cell interpolate to the same point, the triangle
+   between them has zero area, and its edges match no neighbour. Noisy terrain almost
+   never hits that case. **A route is made of round numbers and hits it constantly** — a
+   deck at y = 12 with 0.5 m voxels hits it along its entire length, and a deck on a 1-in-4
+   slope hits it every two metres. Before the fix, a single sloped `Path` produced *896
+   open edges out of 3544 triangles*; the same path offset by 6 cm produced zero.
+   `solid.rs` now pushes any sample within 1 % of a voxel of the surface onto the inside
+   of it (`SURFACE_BAND`). Ties go the same way for solids and for voids, which is also
+   what stops a shaft sunk to exactly the height of the slab it pierces keeping a
+   one-plane lid over its mouth.
+
+   **Worth knowing:** the heightfield pass has the same exposure. `test_arena`'s surfaces
+   are noisy enough that it does not bite, but a perfectly flat authored plateau at an
+   integer height is the same configuration.
+
+Two smaller ones:
+
+3. **A staircase is a union of *overlapping* boxes**, each running from its own tread's
+   near edge to the head of the flight — not abutting boxes, and not a piecewise-constant
+   height. Abutting boxes have a zero-distance plane at every shared face, which reads as
+   neither solid nor air and cracks the mesh along every riser. A piecewise height puts
+   each riser wherever the densities either side happen to interpolate to, which is
+   exactly what would make the step rise uncheckable. The overlap only works one way
+   round, so a flight authored downward is normalised to an ascending one.
+
+4. **`Path`'s `Rounded` profile is an exact rounded-box distance**, not an ellipse
+   intersected with a half-space. The ellipse version meets the top plane tangentially,
+   and the knife edge that produces is not something to hand marching cubes.
+
+### Deviations from the brief
+
+1. **Traversal primitives are `VolumeFeature` variants, as instructed — but stage 2's
+   handoff said to put them in `SegmentDef` alongside `objects`.** The brief overrides,
+   and it is right: terrain features are already segment-local, so nothing was gained by
+   a second list.
+
+2. **`level_check`'s resolution threshold is 2 voxels, not 3.** Three was tried first and
+   is unusable: it demands a 3 m deck thickness at 1 m voxels, and — once the staircase
+   rise was folded in — a rise no player could climb. Two is the defensible number
+   anyway: two samples is what it takes for a primitive to have an *interior*, one inside
+   and one outside, which is the minimum the density encoding needs to place both faces.
+   The rise and tread run are excluded from the resolution check entirely; they are the
+   step *pattern*, and a one-metre riser at one-metre voxels is a perfectly good
+   single-voxel step.
+
+3. **The player's collider dimensions moved into `PlayerConfig`.** They were hardcoded at
+   the spawn site (`ColliderDesc::capsule(0.5, 0.25)`). The brief asks for the width
+   minimum to be derived "in the spirit of `reach.rs`", and there was nothing to derive it
+   *from*. `Footprint::derive` now gives `fits` (one diameter — an error below it) and
+   `walkable` (two — a warning), and retuning the player retunes what levels are validated
+   against.
+
+4. **`PlankBridge.yaw` changed from radians to degrees.** Every other yaw in the format —
+   anchors, placements, and now eleven objects — is in degrees. No shipped level set it.
+
+5. **Twelve spawnables turn with their segment; six do not.** See the audit below. The
+   brief allows `level_check` to warn where a spawnable "genuinely cannot be oriented";
+   the six left are ones that *can* be, and were not, for budget. That distinction is
+   recorded in the code as `Orientable::Fixed` rather than hidden, and it warns.
+
+### The spawnable orientation audit
+
+`LevelObject::orientability()` is the authoritative list and is an exhaustive match, so a
+new spawnable has to be classified rather than defaulting to "fine".
+
+**Turns with its segment (12).** `Box`, `Plank`, `Stack`, `Tower`, `BoxWall`,
+`HoneycombWall`, `Trampoline`, `Table`, `Dolos`, `Trilithon`, `PlankBridge`, and `Domino`
+— which rotates its `direction` vector rather than carrying a yaw, since it already
+carried its axis explicitly.
+
+**Nothing to do (16).** `BeachBall`, `GlowingOrb`, `Crate`, `HeavyCrate`, `Capsule`,
+`Menhir`, `FencePost`, `PlayWheel`, `Tetrahedron`, `Octahedron`, `Dodecahedron`,
+`Icosahedron`, `HexPrism`, `Jack`, `Pyramid`, `Jenga`. Spheres, cubes, bodies of
+revolution about the vertical, and regular solids whose resting pose is arbitrary anyway.
+`Pyramid` and `Jenga` are the two judgement calls: a quarter turn maps each onto an
+equally valid instance of itself.
+
+**Directional and still fixed (6).** `Banana`, `House`, `Pendulum`, `Seesaw`,
+`VoussoirArch`, `Temple`. Each builds internal structure that a body rotation does not
+cover: `Pendulum` and `Seesaw` create **world-anchored** constraints
+(`ConstraintKind::world_hinge` / `world_fixed` / `world_ball_joint`, where
+`local_anchor_a` is a world position), and the rest lay out many bodies along an axis.
+
+**A generic decorator was considered and rejected**, and the reason is worth recording
+because it will look attractive again: a wrapper that rotated every entity a spawnable
+returned, about a pivot, would have covered all 34 at once. It cannot, because of those
+world-anchored constraints — rotating the bodies leaves the anchors behind, and a pendulum
+would tear itself apart. Per-spawnable yaw is the only correct route without first making
+joint anchors body-local.
+
+### Cross-segment bridging does not work, and this is the important finding
+
+**A gap between two segments cannot be bridged by a traversal primitive today.** The
+check for it is built and tested; the *level* cannot be authored. Two rules collide:
+
+- Generation clips every feature to its segment's `terrain.bounds`, so a deck cannot reach
+  into the gap unless the bounds are extended to cover it.
+- Extending the bounds puts solid voxels in a new chunk, and Rule 4 rejects two segments
+  owning solid chunks whose world extents overlap.
+
+A chunk is 32 m at 1 m voxels and 16 m at 0.5 m. Every join in `test_segments` is 5–6 m,
+so a bridging deck and the far segment's first chunk *always* overlap, whatever the deck
+does. Concretely: `shoal_run.north_low ↔ cliff_terrace.east_low` is 6 m and cannot be
+bridged, and neither can any of the three placement joins.
+
+Three ways out, for whoever picks this up:
+
+1. **Sub-chunk contention granularity.** Compare solid-voxel extents rather than
+   solid-chunk extents when two chunks overlap. Rule 4's own rationale — "checked against
+   allocated or derived bounds it is a rejected level for no reason" — applies one level
+   down.
+2. **Cross-segment halo sampling** (the welded-join work), which makes the question moot.
+3. **A bridge is its own segment.** Clean within today's rules, but it turns one join into
+   two and the reach check then measures the two halves, not the crossing.
+
+`RouteMap` clips to `terrain.bounds` exactly as generation does, so the check does **not**
+claim a bridge that was never written — there is a test for that specifically
+(`a_path_running_past_its_segments_bounds_does_not_bridge`). The bridged-gap behaviour is
+tested against a synthetic level whose bounds do cover the deck.
+
+### Open edges rose 3.8×, and it is not the primitives
+
+`test_segments` went from 310 open edges to 1174, and the baseline is re-committed. This
+was measured rather than assumed, by ablation:
+
+| Level variant | Open edges | of triangles |
+|---------------|------------|--------------|
+| No traversal primitives at all | 310 | 213 804 |
+| All primitives, as shipped | 1174 | 223 800 |
+| `cliff_terrace`'s `Path` lifted into free air | 390 | 226 072 |
+| …and made straight, with no turns | 390 | 226 024 |
+
+**A primitive standing in free air contributes zero open edges.** Turns contribute
+essentially nothing. Every one of the 864 comes from the cells where a deck *meets
+terrain* — unioning two independently-encoded density fields produces ambiguous
+marching-cubes configurations along the join. That is the same mechanism behind the cave
+figures in the existing baselines and predates this stage; what is new is that a route is
+*supposed* to meet the ground it crosses, so a level built from primitives meets it a
+great deal more often. It wants a mesh-quality pass. It is not a defect in the primitives,
+and the numbers above are the evidence.
+
+### `test_segments.level.ron` — extended
+
+Every primitive appears, at both of the level's voxel resolutions, including a `Path` in a
+quarter-turned segment:
+
+| Segment | Voxel | Yaw | Primitives |
+|---------|-------|-----|-----------|
+| `start_beach` | 1.0 m | 0 | two `Platform` stepping stones 6 m apart across the tidal bowl; a 3-step `Staircase` up to the launch ledge |
+| `shoal_run` | 1.0 m | 0 | one `Path` — five waypoints, over both craters, turning and climbing to the north ledge |
+| `cliff_terrace` | 0.5 m | **90** | one `Path`, `Rounded` profile, zigzagging up the three terraces |
+| `summit_arena` | 0.5 m | **90** | a `Shaft` with a helical `ledge` (7 m bore, 6 m pitch — 1.5 m per quarter turn); a `Platform` perch |
+
+Mesh baseline re-committed: 223 800 triangles, 1174 open edges.
+
+### The schematic
+
+Both flaws the brief named are fixed, and the routes are drawn.
+
+- **`east_ledgelanding`.** `LabelSpace` reserved one 30 px cell per label while a name is
+  ~60 px wide, so two anchors mated across a join landed in *different* cells and still
+  overprinted. `claim_text` now reserves every cell a label covers. That alone was not
+  enough: two mated anchors are ~15 px apart and their names are 60 px long, so putting
+  them on opposite *sides* of the join still overlapped. The row is now chosen from the
+  anchor's facing as well, which puts mated anchors on opposite sides of the link *line*,
+  where they cannot collide. Seven of `test_segments`' eight anchor names are drawn, none
+  overprinting (was: two drawn, overprinting). The eighth is `north_low`, 16 m from
+  `north_ledge` on the same face — a fallback row is tried before a label is dropped.
+- **"1 segments"** — pluralised.
+- **Routes.** `route_overlay` draws each primitive in world space, in a colour nothing
+  else in the picture uses: a `Path` stroked at its real deck width with a centreline over
+  it, a `Platform` as a filled rectangle spanned from its *transformed* corners, a
+  `Staircase` with one tick per riser so the steps can be counted, and a `Shaft` as its
+  bore ring with the ledge annulus around it. The intended route through `segments.svg`
+  can now be traced with a finger without opening the RON — and because it is drawn in
+  world space, `cliff_terrace`'s zigzag visibly runs along world −Z, which makes the
+  picture a check on the orientation work too.
+
+### What a human should check with `cargo run`
+
+**The game window cannot be launched from the agent shell.** Change the level path in
+`src/main.rs` to `levels/test_segments.level.ron` and walk the route. The open question is
+whether the primitives are *pleasant*, which no headless check answers. Specifically:
+
+1. **The `shoal_run` catwalk.** 3 m wide, 1.5 m above the ground it crosses. Does a 3 m
+   deck feel like a walkway or like a tightrope? The check's minimum is 1 m; if 3 m feels
+   thin, `WALKABLE_WIDTH_IN_DIAMETERS` in `reach.rs` is the number to raise.
+2. **Its climbing legs.** The deck rises 1 m over 8 m and then 1.5 m over 12 m. Does the
+   player walk up a shallow slope smoothly, or catch on the voxel steps of it?
+3. **The `start_beach` staircase**, 1 m per step over a 16 m run. Can it be walked up
+   without jumping? There is no step-up assist in the controller, so this is the one that
+   most likely needs a smaller rise — if it does, halve it and the check will still pass.
+4. **The two `Platform` stepping stones** in the tidal bowl, 6 m apart. Inside the 7.14 m
+   standing jump on paper; the reach model is point-mass, so this is the direct test of
+   how much margin it really needs. Also: can you climb *back onto* one after missing?
+5. **The `summit_arena` shaft.** 2.5 m ledge, 1.5 m gained per quarter turn. Descending a
+   spiral is the case where a voxel ledge most easily feels like a series of trips. Does
+   the outer wall keep you on it, or do you fall off the inner edge?
+6. **`cliff_terrace`'s `Rounded` path**, in a quarter-turned segment. Two things: does the
+   rounded edge read as a ledge rather than as a pipe, and does the whole thing sit where
+   the schematic says it does.
+7. **Grenade a deck.** Primitives are ordinary voxels, so they should crater and remesh
+   like terrain. A `Path` blown in half mid-span is the interesting case.
+
+### For stage 4 — what the viewer must show that the SVG cannot
+
+- **Whether a deck reads as a deck.** The whole sub-voxel-SDF argument is about edges, and
+  a plan view draws the authored polyline, not the mesh. The one picture that would settle
+  the resolution threshold is a `Path` of the same width at 1.0 / 0.5 / 0.25 m voxels,
+  side by side, from a low angle.
+- **The seams where a route meets terrain.** That is where all 864 new open edges are, and
+  they are invisible in plan. A shot along a deck's line of contact with the ground, plus
+  an open-edge overlay, is the fastest way to know whether they are cosmetic or holes.
+- **Undersides.** Everything the schematic shows is from above. A `Path`'s `Rounded`
+  profile, a `Platform`'s thickness and a `Shaft`'s ledge are all things you only see from
+  below or from inside.
+- **A rotated segment from inside it.** The orientation tests compare sampled columns,
+  which proves position and shape but says nothing about *shading* — stage 2 recorded that
+  a rotated segment lit with unrotated normals looks plausible.
+- **What `Orientable::Fixed` actually costs.** A `House` or a `Temple` in a quarter-turned
+  segment, rendered, is the cheapest way to decide whether the remaining six are worth
+  doing.

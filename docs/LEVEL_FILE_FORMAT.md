@@ -130,11 +130,20 @@ future work.
 Terrain extents stay local, because generation is local — that is what makes a segment
 produce identical geometry wherever it is placed.
 
-**Limitation:** placing a segment at a non-zero yaw rotates its *terrain*, and moves its
-objects to the right place, but does **not** rotate object geometry. Half-extents, row
-directions and column layouts are authored in the spawnable's own axes. `PlankBridge`,
-which carries an explicit `yaw`, is the one exception. Author direction-sensitive objects
-in a segment with zero yaw.
+Placing a segment at a non-zero yaw rotates its terrain, moves its objects, **and** turns
+the objects that carry a `yaw` of their own. An object's `yaw` is authored relative to its
+segment, in degrees, and the segment's turn is added to it at load.
+
+Three classes of object, from `LevelObject::orientability()`:
+
+| Class | Objects | Behaviour under a rotated segment |
+|-------|---------|-----------------------------------|
+| **Turns** | `Box`, `Plank`, `Stack`, `Tower`, `BoxWall`, `HoneycombWall`, `Trampoline`, `Table`, `Dolos`, `Trilithon`, `PlankBridge`, `Domino` | Turns with the segment. `Domino` rotates its `direction` vector instead of taking a `yaw`. |
+| **Symmetric** | `BeachBall`, `GlowingOrb`, `Crate`, `HeavyCrate`, `Capsule`, `Menhir`, `FencePost`, `PlayWheel`, the regular solids, `HexPrism`, `Jack`, `Pyramid`, `Jenga` | Nothing to do — a quarter turn changes nothing observable. |
+| **Fixed** | `Banana`, `House`, `Pendulum`, `Seesaw`, `VoussoirArch`, `Temple` | **Keeps its world orientation while the segment turns around it.** `level_check` warns; author these in an unrotated segment. |
+
+`PlankBridge.yaw` is in **degrees**, like every other yaw in the format. It was radians
+before stage 3.
 
 ## Level File Structure
 
@@ -528,6 +537,43 @@ After the heightfield is filled, volumetric features directly set or clear voxel
 | **Arch** | Curved bridge between two 3D points | from/to (xyz), radius, thickness |
 | **Pillar** | Vertical column rising from the heightfield surface | center (xz), height, radius |
 | **Tunnel** | Horizontal bore that carves through existing terrain | center (xz), direction, length, radius, depth |
+
+### Pass 2b: Traversal primitives
+
+Volume features too, but a different kind of thing: everything above shapes *landscape*,
+these shape a *route*. Each takes a `material` (default `Rock`) and a `thickness`
+(default 1.0), and each puts its **walking surface at the authored `y`** rather than its
+centre — so a deck at `y: 6.0` is a deck you stand on at 6 m.
+
+| Feature | Effect | Parameters |
+|---------|--------|------------|
+| **Path** | A deck of constant width swept along a polyline: catwalk, bridge, cliff ledge, spiral ramp | points (xyz, ≥2), width, thickness, profile (`Flat`/`Rounded`), material |
+| **Platform** | Free-standing slab — the atom of a jump sequence | center (xyz, y = surface), half_extents (x, z), thickness, material |
+| **Staircase** | Discrete treads between two heights | from/to (xyz), width, steps, thickness, material |
+| **Shaft** | Vertical bore, optionally with a helical ledge down its wall | center (xz), from_y, to_y, radius, ledge, material |
+
+`Path` is the one to reach for first. Waypoints carry their own heights, so a route that
+climbs while it turns is one `Path` rather than a construction of many, and each leg is
+capped with a half-round of the deck's own half-width — which is what carries the outside
+of a corner without the author placing anything there. The cost is that the two open ends
+overhang their waypoints by a half-width, so author an endpoint where the deck should
+*meet* what it joins, not half a deck short of it.
+
+A `Shaft`'s `ledge` is `Some((width:, thickness:, pitch:, start_angle:))`. `width` is
+measured inward from the bore wall; `pitch` is the height gained per full turn and sets
+how steep the descent is.
+
+Two things `level_check` will tell you off for, both worth knowing before you author:
+
+- **A deck narrower than about 1 m** is under two player-collider diameters and has no
+  margin either side; under 0.5 m the player does not fit at all.
+- **Any dimension under two voxels** of its segment's resolution cannot be placed by the
+  density encoding, and comes out at whatever the lattice decides — differently at every
+  resolution. A 1.5 m deck needs 0.75 m voxels or finer.
+
+A gap between two anchors that a `Path` or `Platform` spans is reported as a **walk**
+rather than a jump. Note that generation clips every feature to its segment's
+`terrain.bounds`, so a deck reaching past them does not exist, and the check knows that.
 
 **Island** is the key primitive for platformer levels — it places a disconnected chunk of terrain at any position in space. The `edge_noise` parameter controls how rough the edges are (0.0 = smooth box, 1.0 = very craggy). Multiple islands at different heights create the classic floating-island platformer layout.
 

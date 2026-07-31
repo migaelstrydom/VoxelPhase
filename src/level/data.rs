@@ -583,16 +583,16 @@ impl VolumeFeature {
                 ..
             } => {
                 let steps = (*steps).max(1) as f32;
-                let run = ((to.0 - from.0).powi(2) + (to.2 - from.2).powi(2)).sqrt() / steps;
-                let rise = (to.1 - from.1).abs() / steps;
                 TraversalInfo {
                     kind: "Staircase",
-                    // A tread shorter than it is wide is still walkable, but a
-                    // tread or a rise finer than the voxel size is not
-                    // representable at all, so both count as detail.
-                    finest_detail: width.min(*thickness).min(run).min(rise.max(f32::EPSILON)),
+                    // Width and thickness only. The rise and the tread run are
+                    // the *pattern*, not the resolution: a one-metre riser at
+                    // one-metre voxels is a perfectly good single-voxel step,
+                    // and folding it in here would demand a rise no player
+                    // could climb.
+                    finest_detail: width.min(*thickness),
                     walkable_width: Some(*width),
-                    step_rise: Some(rise),
+                    step_rise: Some((to.1 - from.1).abs() / steps),
                 }
             }
 
