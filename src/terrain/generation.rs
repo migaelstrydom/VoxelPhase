@@ -15,7 +15,7 @@ use nalgebra::Point3;
 
 use super::chunk::{ChunkCoord, CHUNK_VOXELS};
 use super::chunk_grid::ChunkGrid;
-use super::csg::{carve_with_sdf, index_range, union_solid};
+use super::csg::{carve_with_sdf, debias_height, index_range, union_solid};
 use super::traversal::{excavate, rasterise, route_plan, RoutePart};
 use super::voxel::{DurabilityConfig, Voxel, VoxelMaterial, INDESTRUCTIBLE};
 use crate::collision::AABB;
@@ -93,7 +93,12 @@ fn generate_heightfield(
             let mut top_index = iy0;
             for ix in xs..xe {
                 for iz in zs..ze {
-                    let height = height_at(ix as f32 * step, iz as f32 * step, terrain);
+                    // Debiased before anything is derived from it: an authored
+                    // height that lands exactly on a lattice plane degenerates
+                    // marching cubes, and the column's indices below must
+                    // describe the height actually encoded.
+                    let height =
+                        debias_height(height_at(ix as f32 * step, iz as f32 * step, terrain), step);
                     // Topmost solid voxel: the last index strictly below `height`.
                     let top = (((height / step).ceil() as i32) - 1).max(iy0);
                     heights.push(height);

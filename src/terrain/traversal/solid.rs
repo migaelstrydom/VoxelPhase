@@ -43,37 +43,6 @@ pub trait TraversalSolid {
     fn bounds(&self, voxel_size: f32) -> AABB;
 }
 
-/// How close to the iso-surface a lattice sample is allowed to land, as a
-/// fraction of a voxel.
-///
-/// Marching cubes degenerates when a surface passes exactly through a sample:
-/// two edges of the same cell then interpolate to the same point, and the
-/// triangle between them has zero area and an edge no neighbour can match. A
-/// route is *made* of round numbers — a deck at y = 12, a tread every metre —
-/// so unlike noisy terrain it hits that case constantly, and a swept deck on a
-/// gentle slope hits it periodically all the way along.
-///
-/// Samples inside this band are therefore pushed to the *inside* of the
-/// primitive: a point exactly on a primitive's surface belongs to it, whether
-/// that primitive is a deck or a bore. Ties going the same way for both is what
-/// stops a shaft sunk to exactly the height of the slab it pierces from keeping
-/// a one-plane lid over its mouth.
-///
-/// The cost is that a coincident surface sits up to this fraction of a voxel
-/// proud of its authored position — half a centimetre at metre voxels, and
-/// nowhere else.
-const SURFACE_BAND: f32 = 0.01;
-
-/// Move a sample out of the degenerate band, into the primitive.
-fn debias(distance: f32, step: f32) -> f32 {
-    let band = SURFACE_BAND * step;
-    if distance.abs() < band {
-        -band
-    } else {
-        distance
-    }
-}
-
 /// Add a traversal primitive to the grid.
 ///
 /// Samples strictly **on the voxel lattice** (`i * voxel_size`). That is not
@@ -93,14 +62,7 @@ pub fn rasterise(
     let floor_y = clip.min.y;
     for_each_lattice_point(solid, clip, step, |p, sample| {
         let health = durability.health_at(p.y, sample.surface_y, floor_y);
-        union_solid(
-            grid,
-            p,
-            debias(sample.distance, step),
-            step,
-            material,
-            health,
-        );
+        union_solid(grid, p, sample.distance, step, material, health);
     });
 }
 
@@ -108,7 +70,7 @@ pub fn rasterise(
 pub fn excavate(grid: &mut ChunkGrid, solid: &dyn TraversalSolid, clip: &AABB) {
     let step = grid.voxel_size();
     for_each_lattice_point(solid, clip, step, |p, sample| {
-        carve_with_sdf(grid, p, debias(sample.distance, step), step);
+        carve_with_sdf(grid, p, sample.distance, step);
     });
 }
 
