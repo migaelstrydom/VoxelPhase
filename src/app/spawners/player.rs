@@ -12,8 +12,10 @@ use crate::systems::PhysicsResource;
 
 /// Spawns the player entity with all required components.
 pub fn spawn_player(world: &mut World, initial_pos: nalgebra::Point3<f32>) -> Entity {
-    let player_config = world.read_resource::<PlayerConfig>();
-    drop(player_config);
+    let (collider_half_height, collider_radius) = {
+        let config = world.read_resource::<PlayerConfig>();
+        (config.collider_half_height, config.collider_radius)
+    };
 
     let rig_config = CharacterRigConfig::default();
     // let body_radius = rig_config.body_radius;
@@ -33,7 +35,7 @@ pub fn spawn_player(world: &mut World, initial_pos: nalgebra::Point3<f32>) -> En
         // grabbed. The local up axis is body-Y — the KeepUpright constraint
         // holds that aligned with world up, so contact normals pointing up
         // resolve to "floor" and horizontal normals resolve to "wall".
-        let collider_desc = ColliderDesc::capsule(0.5, 0.25)
+        let collider_desc = ColliderDesc::capsule(collider_half_height, collider_radius)
             .density(800.0)
             .restitution(0.0)
             .friction_model(FrictionModel::AxisBiased {

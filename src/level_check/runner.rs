@@ -26,6 +26,7 @@ use super::baseline::{BaselineVerdict, Baselines};
 use super::placement;
 use super::reach::{JumpEnvelope, OPTIMISM_CAVEAT};
 use super::report::{Report, Section};
+use super::routes;
 use super::segments;
 
 /// Generate and mesh a level's terrain without a graphics device.
@@ -51,6 +52,9 @@ pub fn check_level(level: &Level, level_path: &Path, terrain: &TerrainWorld) -> 
     let integrity = mesh_integrity(level_path, terrain, &mut report);
     report.push_section(integrity);
     report.push_section(reach_section());
+
+    let routes = routes::route_section(level, &mut report);
+    report.push_section(routes);
 
     let connections = segments::check_connections(level, &mut report);
     report.push_section(connections);

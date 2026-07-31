@@ -524,6 +524,102 @@ fn default_route_material() -> VoxelMaterialId {
     VoxelMaterialId::Rock
 }
 
+/// What a traversal primitive claims, in the terms an offline check can act on.
+///
+/// The mirror of [`LevelObject::describe`]: the primitives vary in shape, but
+/// every check `level_check` runs over them reduces to one of these four
+/// numbers, and keeping the reduction next to the format stops the check and
+/// the generator drifting apart about what a "width" is.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TraversalInfo {
+    /// The RON variant name, e.g. `"Path"`.
+    pub kind: &'static str,
+    /// The narrowest authored dimension, in metres. Decides whether the
+    /// primitive can read cleanly at its segment's voxel resolution.
+    pub finest_detail: f32,
+    /// Width of the surface the player walks on, where the primitive has one.
+    pub walkable_width: Option<f32>,
+    /// Height gained in a single move, where the primitive asks the player to
+    /// climb — a staircase's rise per step.
+    pub step_rise: Option<f32>,
+}
+
+impl VolumeFeature {
+    /// Describe this feature if it is a traversal primitive.
+    ///
+    /// `None` for the landscape features: they shape ground, and nothing here
+    /// is meaningful for them.
+    pub fn traversal_info(&self) -> Option<TraversalInfo> {
+        let info = match self {
+            VolumeFeature::Path {
+                width, thickness, ..
+            } => TraversalInfo {
+                kind: "Path",
+                finest_detail: width.min(*thickness),
+                walkable_width: Some(*width),
+                step_rise: None,
+            },
+
+            VolumeFeature::Platform {
+                half_extents,
+                thickness,
+                ..
+            } => {
+                let (x, z) = (half_extents.0 * 2.0, half_extents.1 * 2.0);
+                TraversalInfo {
+                    kind: "Platform",
+                    finest_detail: x.min(z).min(*thickness),
+                    walkable_width: Some(x.min(z)),
+                    step_rise: None,
+                }
+            }
+
+            VolumeFeature::Staircase {
+                from,
+                to,
+                width,
+                steps,
+                thickness,
+                ..
+            } => {
+                let steps = (*steps).max(1) as f32;
+                let run = ((to.0 - from.0).powi(2) + (to.2 - from.2).powi(2)).sqrt() / steps;
+                let rise = (to.1 - from.1).abs() / steps;
+                TraversalInfo {
+                    kind: "Staircase",
+                    // A tread shorter than it is wide is still walkable, but a
+                    // tread or a rise finer than the voxel size is not
+                    // representable at all, so both count as detail.
+                    finest_detail: width.min(*thickness).min(run).min(rise.max(f32::EPSILON)),
+                    walkable_width: Some(*width),
+                    step_rise: Some(rise),
+                }
+            }
+
+            VolumeFeature::Shaft { radius, ledge, .. } => {
+                let bore = radius * 2.0;
+                match ledge {
+                    Some(l) => TraversalInfo {
+                        kind: "Shaft",
+                        finest_detail: bore.min(l.width).min(l.thickness),
+                        walkable_width: Some(l.width),
+                        step_rise: None,
+                    },
+                    None => TraversalInfo {
+                        kind: "Shaft",
+                        finest_detail: bore,
+                        walkable_width: None,
+                        step_rise: None,
+                    },
+                }
+            }
+
+            _ => return None,
+        };
+        Some(info)
+    }
+}
+
 /// Cross-section of a swept [`VolumeFeature::Path`].
 #[derive(Deserialize, Clone, Copy, Default, Debug, PartialEq, Eq)]
 pub enum PathProfile {

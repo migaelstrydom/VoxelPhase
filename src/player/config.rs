@@ -42,6 +42,15 @@ pub struct PlayerConfig {
     /// Higher = snappier turns when unloaded. When holding a heavy object,
     /// the constraint reaction torque limits the actual turn rate regardless.
     pub turn_aggression: f32,
+
+    /// Radius of the player's capsule collider.
+    ///
+    /// Lives here rather than at the spawn site because it is not only a
+    /// physics number: it is the width of the thing that has to fit on a ledge,
+    /// and `level_check` derives a route's minimum width from it.
+    pub collider_radius: f32,
+    /// Half the height of the capsule's cylindrical section, excluding caps.
+    pub collider_half_height: f32,
 }
 
 impl Default for PlayerConfig {
@@ -62,6 +71,8 @@ impl Default for PlayerConfig {
             long_jump_air_lock_duration: 2.0,
             ground_grace_period: 0.08,
             turn_aggression: 10.0,
+            collider_radius: 0.25,
+            collider_half_height: 0.5,
         }
     }
 }

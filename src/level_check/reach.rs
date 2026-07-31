@@ -99,6 +99,36 @@ impl JumpEnvelope {
     }
 }
 
+/// How many collider diameters wide a route has to be to walk along.
+///
+/// One diameter is the width at which the player merely *fits*; a deck that
+/// narrow is a tightrope, and there is no ledge detection to help. Two leaves
+/// half a body either side of the centreline, which is the point at which a
+/// catwalk stops being a stunt.
+const WALKABLE_WIDTH_IN_DIAMETERS: f32 = 2.0;
+
+/// What the player has to be able to stand on, derived from their collider.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Footprint {
+    /// The player's collider radius.
+    pub radius: f32,
+    /// The narrowest deck the player physically fits on.
+    pub fits: f32,
+    /// The narrowest deck they can be asked to walk along.
+    pub walkable: f32,
+}
+
+impl Footprint {
+    pub fn derive(player: &PlayerConfig) -> Self {
+        let diameter = player.collider_radius * 2.0;
+        Self {
+            radius: player.collider_radius,
+            fits: diameter,
+            walkable: diameter * WALKABLE_WIDTH_IN_DIAMETERS,
+        }
+    }
+}
+
 /// Caveat printed alongside the envelope, so nobody authors to the limit.
 pub const OPTIMISM_CAVEAT: &str =
     "Point-mass figures: perfect input, flat launch and landing, no collider size, \
