@@ -15,6 +15,8 @@ use nalgebra::Point3;
 
 use super::chunk::{ChunkCoord, CHUNK_VOXELS};
 use super::chunk_grid::ChunkGrid;
+use super::csg::{carve_with_sdf, index_range, union_solid};
+use super::traversal::{excavate, rasterise, route_plan, RoutePart};
 use super::voxel::{DurabilityConfig, Voxel, VoxelMaterial, INDESTRUCTIBLE};
 use crate::collision::AABB;
 use crate::level::{
@@ -42,15 +44,6 @@ pub fn generate_terrain(
     for volume in &terrain.volumes {
         apply_volume(grid, volume, terrain, durability, bounds, step);
     }
-}
-
-/// Inclusive-exclusive voxel index range covering a coordinate span.
-///
-/// Sample index `i` on an axis denotes grid-local position `i * step`, so the
-/// voxel lattice is anchored to the grid origin and stays aligned between chunks
-/// regardless of where the authored bounds happen to fall.
-fn index_range(min: f32, max: f32, step: f32) -> (i32, i32) {
-    ((min / step).floor() as i32, (max / step).ceil() as i32)
 }
 
 /// Pass 1: heightfield — fill columns based on feature-driven height.
@@ -369,68 +362,6 @@ fn contribute(feature: &TerrainFeature, x: f32, z: f32, current_h: f32) -> f32 {
 // Pass 2: volumetric features
 // ---------------------------------------------------------------------------
 
-/// Union a solid into the SVO using SDF-style density.
-///
-/// Writes a smoothly-varying density based on the signed distance `sdf`
-/// (negative inside the solid, positive outside). Voxels are only updated
-/// when the new density is greater than what's already there — so features
-/// layer correctly and never clobber deeper geometry.
-fn union_solid(
-    grid: &mut ChunkGrid,
-    pos: Point3<f32>,
-    sdf: f32,
-    step: f32,
-    material: VoxelMaterial,
-    health: u8,
-) {
-    let new_density = (-sdf / step).clamp(-1.0, 1.0);
-    let existing = grid.get(pos);
-    if new_density <= existing.density {
-        return;
-    }
-    let (mat, hp) = if new_density > 0.0 {
-        (material, health)
-    } else {
-        (VoxelMaterial::Air, 0)
-    };
-    grid.set(
-        pos,
-        Voxel {
-            density: new_density,
-            material: mat,
-            health: hp,
-        },
-    );
-}
-
-/// Carve a volume out of the SVO using SDF-style density.
-///
-/// `sdf_carve` is the signed distance to the carve surface (negative inside
-/// the region being removed). Uses CSG subtraction semantics so existing
-/// solids outside the carve are preserved, and voxels near the cut get a
-/// smooth partial density for MC to interpolate.
-fn carve_with_sdf(grid: &mut ChunkGrid, pos: Point3<f32>, sdf_carve: f32, step: f32) {
-    let carve_density = (sdf_carve / step).clamp(-1.0, 1.0);
-    let existing = grid.get(pos);
-    let new_density = existing.density.min(carve_density);
-    if new_density >= existing.density {
-        return;
-    }
-    let (mat, hp) = if new_density > 0.0 {
-        (existing.material, existing.health)
-    } else {
-        (VoxelMaterial::Air, 0)
-    };
-    grid.set(
-        pos,
-        Voxel {
-            density: new_density,
-            material: mat,
-            health: hp,
-        },
-    );
-}
-
 /// Apply a single volumetric feature to the SVO.
 fn apply_volume(
     grid: &mut ChunkGrid,
@@ -440,6 +371,22 @@ fn apply_volume(
     bounds: &AABB,
     step: f32,
 ) {
+    // Traversal primitives are all one shape: a signed-distance field written
+    // through the shared rasteriser. They carry their own material rather than
+    // layering by depth, because a route reads as built rather than as ground.
+    if let Some(plan) = route_plan(volume) {
+        let material = to_voxel_material(plan.material);
+        for part in &plan.parts {
+            match part {
+                RoutePart::Void(solid) => excavate(grid, solid.as_ref(), bounds),
+                RoutePart::Solid(solid) => {
+                    rasterise(grid, solid.as_ref(), material, durability, bounds)
+                }
+            }
+        }
+        return;
+    }
+
     let layers = &terrain.material_layers;
     match *volume {
         VolumeFeature::Island {
@@ -527,6 +474,12 @@ fn apply_volume(
                 durability, bounds, step,
             );
         }
+
+        // Traversal primitives are handled above, before the match.
+        VolumeFeature::Path { .. }
+        | VolumeFeature::Platform { .. }
+        | VolumeFeature::Staircase { .. }
+        | VolumeFeature::Shaft { .. } => {}
     }
 }
 
@@ -1194,6 +1147,7 @@ fn to_voxel_material(id: VoxelMaterialId) -> VoxelMaterial {
         VoxelMaterialId::Ite => VoxelMaterial::Ite,
         VoxelMaterialId::Limestone => VoxelMaterial::Limestone,
         VoxelMaterialId::Slate => VoxelMaterial::Slate,
+        VoxelMaterialId::Sand => VoxelMaterial::Sand,
     }
 }
 

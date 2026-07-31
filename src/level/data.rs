@@ -229,6 +229,7 @@ pub enum VoxelMaterialId {
     Ite,
     Limestone,
     Slate,
+    Sand,
 }
 
 /// Heightfield features operate on 2D (xz) coordinates, modifying the terrain
@@ -424,10 +425,131 @@ pub enum VolumeFeature {
         #[serde(default = "default_overhang_seed")]
         noise_seed: u32,
     },
+
+    // --- Traversal primitives ---------------------------------------------
+    //
+    // Everything above shapes landscape. Everything below shapes a *route*:
+    // deliberate, walkable geometry authored against the player's reach. They
+    // are volume features rather than a category of their own because that
+    // gets them segment-local generation, destructibility, physics through
+    // `StaticGeometry` and rendering for free — see
+    // `terrain::traversal` for the fields themselves.
+    /// A walkable deck swept along a polyline: catwalk, bridge, cliff ledge,
+    /// spiral ramp. Waypoints carry their own heights, so a route that climbs
+    /// while it turns is one `Path` rather than a construction of many.
+    Path {
+        /// Waypoints in segment-local coordinates. At least two. Each `y` is
+        /// the **walking surface**, not the middle of the deck.
+        points: Vec<(f32, f32, f32)>,
+        /// Full width of the deck.
+        width: f32,
+        /// How far the deck extends below its walking surface.
+        #[serde(default = "default_deck_thickness")]
+        thickness: f32,
+        /// Cross-section shape.
+        #[serde(default)]
+        profile: PathProfile,
+        #[serde(default = "default_route_material")]
+        material: VoxelMaterialId,
+    },
+
+    /// A free-standing slab at a height — the atom of a jump sequence.
+    Platform {
+        /// Centre of the walking surface; its `y` is the surface height.
+        center: (f32, f32, f32),
+        /// Half-extents of the deck along local x and z.
+        half_extents: (f32, f32),
+        /// How far the slab extends below its walking surface.
+        #[serde(default = "default_deck_thickness")]
+        thickness: f32,
+        #[serde(default = "default_route_material")]
+        material: VoxelMaterialId,
+    },
+
+    /// Discrete steps between two heights.
+    ///
+    /// Not a ramp: the rise per step is what the player has to clear, and that
+    /// is a number `level_check` can hold against the jump apex.
+    Staircase {
+        /// Foot of the flight: the level the first riser rises *from*.
+        from: (f32, f32, f32),
+        /// Head of the flight: the surface level of the last tread. Only its
+        /// height and horizontal position are used; the run is the horizontal
+        /// distance between the two.
+        to: (f32, f32, f32),
+        /// Full width of the treads.
+        width: f32,
+        /// Number of treads. The rise per step is `(to.y - from.y) / steps`.
+        steps: u32,
+        /// How far the flight extends below the lower of the two ends.
+        #[serde(default = "default_deck_thickness")]
+        thickness: f32,
+        #[serde(default = "default_route_material")]
+        material: VoxelMaterialId,
+    },
+
+    /// A vertical bore, for a tower or a descent, with an optional helical
+    /// ledge spiralling down its wall.
+    Shaft {
+        /// Bore centre in local (x, z).
+        center: (f32, f32),
+        /// Bottom of the bore.
+        from_y: f32,
+        /// Top of the bore.
+        to_y: f32,
+        /// Bore radius.
+        radius: f32,
+        /// The route down the inside. Without one the shaft is a hole.
+        #[serde(default)]
+        ledge: Option<ShaftLedge>,
+        #[serde(default = "default_route_material")]
+        material: VoxelMaterialId,
+    },
 }
 
 fn default_overhang_seed() -> u32 {
     99
+}
+
+/// Deck thickness used when a traversal primitive does not state one.
+///
+/// Thick enough to read as a structure from below at 0.5 m voxels rather than
+/// as a floating sheet.
+fn default_deck_thickness() -> f32 {
+    1.0
+}
+
+/// Material used when a traversal primitive does not state one.
+fn default_route_material() -> VoxelMaterialId {
+    VoxelMaterialId::Rock
+}
+
+/// Cross-section of a swept [`VolumeFeature::Path`].
+#[derive(Deserialize, Clone, Copy, Default, Debug, PartialEq, Eq)]
+pub enum PathProfile {
+    /// Rectangular: square edges, the read of a built catwalk.
+    #[default]
+    Flat,
+    /// Flat walking surface over a semi-elliptical underside: the read of a
+    /// stone bridge, or of a ledge weathered out of a cliff.
+    Rounded,
+}
+
+/// The helical ledge running down the inside of a [`VolumeFeature::Shaft`].
+#[derive(Deserialize, Clone, Copy)]
+pub struct ShaftLedge {
+    /// Walkable width, measured inward from the bore wall. Must not exceed the
+    /// bore radius.
+    pub width: f32,
+    /// Vertical thickness of the ledge slab.
+    pub thickness: f32,
+    /// Height gained per full turn. Sets how steep the descent is: at a 6 m
+    /// bore radius, a 4 m pitch is a gentle spiral and a 12 m pitch is a
+    /// scramble.
+    pub pitch: f32,
+    /// Local yaw in degrees at which the helix passes through `from_y`.
+    #[serde(default)]
+    pub start_angle: f32,
 }
 
 /// Visual style for box textures.
