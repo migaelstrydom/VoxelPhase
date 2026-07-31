@@ -7,6 +7,7 @@ use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
 use super::shared::models::{build_convex_hull, convex_solid_model, SolidFace};
+use super::shared::orientation::Yaw;
 use super::shared::textures::*;
 use super::{MaterialCtx, Spawnable};
 use crate::components::{
@@ -119,9 +120,12 @@ impl Spawnable for HexPrismDef {
 pub struct HoneycombWallDef {
     /// World position of the bottom-center of the wall.
     pub base: (f32, f32, f32),
-    /// Number of columns.
+    /// Number of columns along the wall's own `+X`.
     #[serde(default = "HoneycombWallDef::default_columns")]
     pub columns: u32,
+    /// Rotation about `+Y`, in degrees — which way the wall faces.
+    #[serde(default)]
+    pub yaw: f32,
     /// Number of rows.
     #[serde(default = "HoneycombWallDef::default_rows")]
     pub rows: u32,
@@ -177,6 +181,7 @@ impl Spawnable for HoneycombWallDef {
 
         let total_width = (self.columns - 1) as f32 * col_spacing;
         let x_start = self.base.0 - total_width * 0.5;
+        let yaw = Yaw::degrees(self.yaw);
 
         let mut entities = Vec::with_capacity(self.total_cells());
         let mut mat_idx = 0;
@@ -187,8 +192,10 @@ impl Spawnable for HoneycombWallDef {
 
             for col in 0..self.columns {
                 let x = x_start + col as f32 * col_spacing + x_offset;
-                let z = self.base.2;
-                let pos = Point3::new(x, y, z);
+                let pos = yaw.place(
+                    self.base,
+                    Vector3::new(x - self.base.0, y - self.base.1, 0.0),
+                );
 
                 let model = convex_solid_model(&vertices, &faces, materials[mat_idx]);
 
@@ -196,6 +203,7 @@ impl Spawnable for HoneycombWallDef {
                     let mut physics = world.write_resource::<PhysicsResource>();
                     let body_desc = RigidBodyDesc::dynamic()
                         .position(pos)
+                        .rotation(yaw.rotation())
                         .gravity_scale(1.0)
                         .linear_damping(0.01)
                         .angular_damping(0.005);
@@ -215,7 +223,7 @@ impl Spawnable for HoneycombWallDef {
                         .create_entity()
                         .with(Position(Vector3::new(pos.x, pos.y, pos.z)))
                         .with(Velocity(Vector3::zeros()))
-                        .with(Orientation::default())
+                        .with(Orientation(yaw.rotation()))
                         .with(RigidBodyComponent(body_handle))
                         .with(ModelInstance::new(model))
                         .with(Renderable)

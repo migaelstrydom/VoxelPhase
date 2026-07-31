@@ -6,7 +6,7 @@
 
 use nalgebra::Point3;
 
-use crate::level::{Level, ObjectPlacement};
+use crate::level::{Level, ObjectPlacement, Orientable};
 use crate::terrain::TerrainWorld;
 
 use super::report::Report;
@@ -117,4 +117,35 @@ fn surface_below(terrain: &TerrainWorld, p: Point3<f32>) -> Option<f32> {
         .mesh_surface_heights_at(p.x, p.z)
         .into_iter()
         .find(|h| *h <= p.y)
+}
+
+/// Warn about objects that keep their world orientation while their segment
+/// turns around them.
+///
+/// The trap this makes visible: an object is authored segment-locally, so an
+/// author reasonably expects a wall drawn along the segment's `+X` to still run
+/// along it after the segment is placed at a quarter turn. For the spawnables
+/// that do not yet carry a yaw, it does not — and nothing else in the pipeline
+/// would say so.
+pub fn check_object_orientation(level: &Level, report: &mut Report) {
+    for (index, object) in level.objects() {
+        let frame = level.frame(index);
+        if frame.quarter_turns() == 0 {
+            continue;
+        }
+        if object.orientability() != Orientable::Fixed {
+            continue;
+        }
+        report.warn(
+            "objects",
+            format!(
+                "{} in segment '{}' has a meaningful horizontal axis but no yaw, so it keeps \
+                 its world orientation while the segment turns {:.0}° around it; author it in \
+                 an unrotated segment until it gains one",
+                object.describe().kind,
+                level.segments[index].name,
+                frame.yaw_degrees(),
+            ),
+        );
+    }
 }

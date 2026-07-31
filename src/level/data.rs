@@ -708,6 +708,9 @@ pub enum LevelObject {
     Box {
         pos: (f32, f32, f32),
         half_extents: (f32, f32, f32),
+        /// Rotation about `+Y` in degrees, within the segment's frame.
+        #[serde(default)]
+        yaw: f32,
         #[serde(default)]
         style: BoxStyle,
         #[serde(default = "BoxDef::default_density")]
@@ -722,6 +725,9 @@ pub enum LevelObject {
         pos: (f32, f32, f32),
         length: f32,
         width: f32,
+        /// Rotation about `+Y` in degrees, within the segment's frame.
+        #[serde(default)]
+        yaw: f32,
     },
     /// Standard crate. Defaults: style=WoodenCrate, density=50.
     Crate {
@@ -738,12 +744,20 @@ pub enum LevelObject {
     Stack {
         base: (f32, f32, f32),
         items: Vec<StackItem>,
+        /// Rotation about `+Y` in degrees, applied to every item that has an
+        /// axis (the planks).
+        #[serde(default)]
+        yaw: f32,
     },
     /// Shorthand for N identical boxes stacked vertically.
     Tower {
         base: (f32, f32, f32),
         box_half_extents: (f32, f32, f32),
         count: u32,
+        /// Rotation about `+Y` in degrees. Meaningful whenever the boxes are
+        /// not cubes.
+        #[serde(default)]
+        yaw: f32,
         #[serde(default = "TowerDef::default_density")]
         density: f32,
     },
@@ -753,6 +767,9 @@ pub enum LevelObject {
         box_half_extents: (f32, f32, f32),
         columns: u32,
         rows: u32,
+        /// Rotation about `+Y` in degrees — which way the wall faces.
+        #[serde(default)]
+        yaw: f32,
         #[serde(default = "BoxWallDef::default_density")]
         density: f32,
         #[serde(default)]
@@ -897,6 +914,9 @@ pub enum LevelObject {
         base: (f32, f32, f32),
         #[serde(default = "HoneycombWallDef::default_columns")]
         columns: u32,
+        /// Rotation about `+Y` in degrees — which way the wall faces.
+        #[serde(default)]
+        yaw: f32,
         #[serde(default = "HoneycombWallDef::default_rows")]
         rows: u32,
         #[serde(default = "HexPrismDef::default_radius")]
@@ -921,6 +941,9 @@ pub enum LevelObject {
     /// Trampoline — bouncy pad on four short legs.
     Trampoline {
         pos: (f32, f32, f32),
+        /// Rotation about `+Y` in degrees, within the segment's frame.
+        #[serde(default)]
+        yaw: f32,
         #[serde(default = "TrampolineDef::default_pad_half_extents")]
         pad_half_extents: (f32, f32, f32),
         #[serde(default = "TrampolineDef::default_leg_half_extents")]
@@ -933,6 +956,9 @@ pub enum LevelObject {
     /// Table — compound body (top slab + 4 legs).
     Table {
         pos: (f32, f32, f32),
+        /// Rotation about `+Y` in degrees, within the segment's frame.
+        #[serde(default)]
+        yaw: f32,
         /// Half-extents of the table top (x, y_thickness, z).
         #[serde(default = "TableDef::default_top_half_extents")]
         top_half_extents: (f32, f32, f32),
@@ -959,6 +985,9 @@ pub enum LevelObject {
     /// perpendicular flukes, one at each end.
     Dolos {
         pos: (f32, f32, f32),
+        /// Rotation about `+Y` in degrees, within the segment's frame.
+        #[serde(default)]
+        yaw: f32,
         #[serde(default = "DolosDef::default_shank_length")]
         shank_length: f32,
         #[serde(default = "DolosDef::default_fluke_length")]
@@ -1053,6 +1082,9 @@ pub enum LevelObject {
     /// Neolithic trilithon — two uprights with a lintel.
     Trilithon {
         pos: (f32, f32, f32),
+        /// Rotation about `+Y` in degrees — which way the doorway faces.
+        #[serde(default)]
+        yaw: f32,
         #[serde(default = "TrilithonDef::default_upright_half_height")]
         upright_half_height: f32,
         #[serde(default = "TrilithonDef::default_upright_half_width")]
@@ -1105,6 +1137,20 @@ impl ObjectPlacement {
             ObjectPlacement::TerrainAnchored { x, z } => (*x, *z),
         }
     }
+}
+
+/// How an object responds to the yaw of the segment it is authored in.
+///
+/// See [`LevelObject::orientability`] for the audit this encodes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Orientable {
+    /// A quarter turn changes nothing observable.
+    Symmetric,
+    /// Carries a yaw, which the segment's turn is added to.
+    Turns,
+    /// Has a meaningful axis but no yaw yet: it keeps its world orientation
+    /// while its segment turns around it.
+    Fixed,
 }
 
 /// An object's variant name and authored placement.
@@ -1167,20 +1213,88 @@ impl LevelObject {
         ObjectInfo { kind, placement }
     }
 
-    /// Rewrite this object's authored position from segment-local coordinates
-    /// into world coordinates.
+    /// Whether this object's *shape* follows its segment's yaw, not just its
+    /// position.
     ///
-    /// Only the *placement* is transformed. A spawnable's own geometry —
-    /// half-extents, row directions, column layouts — is authored in the
-    /// spawnable's own axes and is left alone, so an object in a segment placed
-    /// at a non-zero yaw keeps its world orientation rather than turning with
-    /// the segment. The exception is [`LevelObject::PlankBridge`], which carries
-    /// an explicit `yaw` and therefore can turn.
+    /// The audit behind [`Self::place_in`], written out rather than inferred.
+    /// Three answers, and the enum makes the difference explicit because it is
+    /// the difference between "nothing to do" and "not done yet":
     ///
-    /// This is a deliberate limitation, not an oversight: rotating arbitrary
-    /// spawnables would mean teaching every one of them about orientation, which
-    /// belongs with the gameplay-entity work rather than here. Author
-    /// direction-sensitive objects in a segment with zero yaw.
+    /// - [`Orientable::Symmetric`] — a sphere, a cube, a vertical post, a
+    ///   regular solid. A quarter turn changes nothing observable, so there is
+    ///   no work and never will be.
+    /// - [`Orientable::Turns`] — carries a `yaw` that `place_in` adds the
+    ///   segment's turn to.
+    /// - [`Orientable::Fixed`] — has a meaningful axis and does **not** yet
+    ///   carry a yaw. `level_check` warns when one is placed in a rotated
+    ///   segment; it will keep its world orientation while the segment turns
+    ///   around it.
+    pub fn orientability(&self) -> Orientable {
+        use Orientable::{Fixed, Symmetric, Turns};
+        match self {
+            // Turned by their own yaw.
+            LevelObject::Box { .. }
+            | LevelObject::Plank { .. }
+            | LevelObject::Stack { .. }
+            | LevelObject::Tower { .. }
+            | LevelObject::BoxWall { .. }
+            | LevelObject::HoneycombWall { .. }
+            | LevelObject::Trampoline { .. }
+            | LevelObject::Table { .. }
+            | LevelObject::Dolos { .. }
+            | LevelObject::Trilithon { .. }
+            | LevelObject::PlankBridge { .. }
+            // Domino carries its axis as a vector, which place_in rotates.
+            | LevelObject::Domino { .. } => Turns,
+
+            // No observable orientation: spheres, cubes, bodies of revolution
+            // about the vertical, and regular solids whose resting pose is
+            // arbitrary anyway.
+            LevelObject::BeachBall { .. }
+            | LevelObject::GlowingOrb { .. }
+            | LevelObject::Crate { .. }
+            | LevelObject::HeavyCrate { .. }
+            | LevelObject::Capsule { .. }
+            | LevelObject::Menhir { .. }
+            | LevelObject::FencePost { .. }
+            | LevelObject::PlayWheel { .. }
+            | LevelObject::Tetrahedron { .. }
+            | LevelObject::Octahedron { .. }
+            | LevelObject::Dodecahedron { .. }
+            | LevelObject::Icosahedron { .. }
+            | LevelObject::HexPrism { .. }
+            | LevelObject::Jack { .. }
+            // Square-based and layer-alternating: a quarter turn maps each of
+            // these onto an equally valid instance of itself.
+            | LevelObject::Pyramid { .. }
+            | LevelObject::Jenga { .. } => Symmetric,
+
+            // Genuinely directional, not yet turnable. Each builds internal
+            // structure from more than a body rotation — a swing plane, a
+            // colonnade, an arch — so each is its own piece of work rather
+            // than one more `yaw` field.
+            LevelObject::Banana { .. }
+            | LevelObject::House { .. }
+            | LevelObject::Pendulum { .. }
+            | LevelObject::Seesaw { .. }
+            | LevelObject::VoussoirArch { .. }
+            | LevelObject::Temple { .. } => Fixed,
+        }
+    }
+
+    /// Rewrite this object's authored placement from segment-local coordinates
+    /// into world coordinates: position, and orientation where the spawnable
+    /// has one.
+    ///
+    /// An object with a meaningful horizontal axis carries a `yaw` in degrees,
+    /// authored relative to its segment; placing the segment adds the segment's
+    /// own yaw to it. An object without one — a sphere, a cube, a vertical post
+    /// — is unaffected, correctly.
+    ///
+    /// **Not every direction-sensitive spawnable has been given a `yaw` yet.**
+    /// [`Self::turns_with_its_segment`] is the authoritative list, and
+    /// `level_check` warns when one that has not is placed in a rotated
+    /// segment, so what is left reads as a known gap rather than as silence.
     pub fn place_in(&mut self, frame: &SegmentFrame) {
         let p3 = |t: &mut (f32, f32, f32)| {
             let w = frame.to_world(Point3::new(t.0, t.1, t.2));
@@ -1193,18 +1307,40 @@ impl LevelObject {
             let w = frame.to_world(Point3::new(t.0, 0.0, t.1));
             *t = (w.x, w.z);
         };
+        // The segment's own quarter turn, in the degrees the object fields use.
+        let turn = frame.yaw_degrees();
+        let dir = |t: &mut (f32, f32)| {
+            // A quarter turn about +Y maps (x, z) to (z, -x).
+            let v = frame.to_world(Point3::new(t.0, 0.0, t.1)) - frame.to_world(Point3::origin());
+            *t = (v.x, v.z);
+        };
 
         match self {
             LevelObject::Banana { pos, .. } => p3(pos),
             LevelObject::BeachBall { pos } => p3(pos),
             LevelObject::GlowingOrb { pos, .. } => p3(pos),
-            LevelObject::Box { pos, .. } => p3(pos),
-            LevelObject::Plank { pos, .. } => p3(pos),
+            LevelObject::Box { pos, yaw, .. } => {
+                p3(pos);
+                *yaw += turn;
+            }
+            LevelObject::Plank { pos, yaw, .. } => {
+                p3(pos);
+                *yaw += turn;
+            }
             LevelObject::Crate { pos, .. } => p3(pos),
             LevelObject::HeavyCrate { pos, .. } => p3(pos),
-            LevelObject::Stack { base, .. } => p3(base),
-            LevelObject::Tower { base, .. } => p3(base),
-            LevelObject::BoxWall { base, .. } => p3(base),
+            LevelObject::Stack { base, yaw, .. } => {
+                p3(base);
+                *yaw += turn;
+            }
+            LevelObject::Tower { base, yaw, .. } => {
+                p3(base);
+                *yaw += turn;
+            }
+            LevelObject::BoxWall { base, yaw, .. } => {
+                p3(base);
+                *yaw += turn;
+            }
             LevelObject::House { pos, .. } => p3(pos),
             LevelObject::Capsule { pos, .. } => p3(pos),
             LevelObject::Menhir { pos, .. } => p2(pos),
@@ -1216,21 +1352,43 @@ impl LevelObject {
             LevelObject::Octahedron { pos, .. } => p3(pos),
             LevelObject::Dodecahedron { pos, .. } => p3(pos),
             LevelObject::HexPrism { pos, .. } => p3(pos),
-            LevelObject::HoneycombWall { base, .. } => p3(base),
+            LevelObject::HoneycombWall { base, yaw, .. } => {
+                p3(base);
+                *yaw += turn;
+            }
             LevelObject::Icosahedron { pos, .. } => p3(pos),
-            LevelObject::Trampoline { pos, .. } => p3(pos),
-            LevelObject::Table { pos, .. } => p3(pos),
+            LevelObject::Trampoline { pos, yaw, .. } => {
+                p3(pos);
+                *yaw += turn;
+            }
+            LevelObject::Table { pos, yaw, .. } => {
+                p3(pos);
+                *yaw += turn;
+            }
             LevelObject::Pyramid { base, .. } => p3(base),
-            LevelObject::Dolos { pos, .. } => p3(pos),
-            LevelObject::Domino { base, .. } => p3(base),
+            LevelObject::Dolos { pos, yaw, .. } => {
+                p3(pos);
+                *yaw += turn;
+            }
+            LevelObject::Domino {
+                base, direction, ..
+            } => {
+                p3(base);
+                // The row already carries its axis as a vector, so it needs
+                // rotating rather than a yaw of its own.
+                dir(direction);
+            }
             LevelObject::VoussoirArch { base, .. } => p3(base),
             LevelObject::Jack { pos, .. } => p3(pos),
             LevelObject::Jenga { base, .. } => p3(base),
             LevelObject::PlankBridge { pos, yaw, .. } => {
                 p3(pos);
-                *yaw += frame.yaw_degrees().to_radians();
+                *yaw += turn;
             }
-            LevelObject::Trilithon { pos, .. } => p3(pos),
+            LevelObject::Trilithon { pos, yaw, .. } => {
+                p3(pos);
+                *yaw += turn;
+            }
             LevelObject::Temple { pos, .. } => p3(pos),
         }
     }
@@ -1273,6 +1431,7 @@ impl LevelObject {
             LevelObject::Box {
                 pos,
                 half_extents,
+                yaw,
                 style,
                 density,
                 restitution,
@@ -1280,16 +1439,23 @@ impl LevelObject {
             } => Box::new(BoxDef {
                 pos: *pos,
                 half_extents: *half_extents,
+                yaw: *yaw,
                 style: *style,
                 density: *density,
                 restitution: *restitution,
                 friction: *friction,
             }),
 
-            LevelObject::Plank { pos, length, width } => Box::new(PlankDef {
+            LevelObject::Plank {
+                pos,
+                length,
+                width,
+                yaw,
+            } => Box::new(PlankDef {
                 pos: *pos,
                 length: *length,
                 width: *width,
+                yaw: *yaw,
             }),
 
             LevelObject::Crate { pos, size } => Box::new(CrateDef {
@@ -1302,8 +1468,9 @@ impl LevelObject {
                 size: *size,
             }),
 
-            LevelObject::Stack { base, items } => Box::new(StackDef {
+            LevelObject::Stack { base, items, yaw } => Box::new(StackDef {
                 base: *base,
+                yaw: *yaw,
                 items: items
                     .iter()
                     .map(|item| match item {
@@ -1329,11 +1496,13 @@ impl LevelObject {
                 base,
                 box_half_extents,
                 count,
+                yaw,
                 density,
             } => Box::new(TowerDef {
                 base: *base,
                 box_half_extents: *box_half_extents,
                 count: *count,
+                yaw: *yaw,
                 density: *density,
             }),
 
@@ -1342,6 +1511,7 @@ impl LevelObject {
                 box_half_extents,
                 columns,
                 rows,
+                yaw,
                 density,
                 stagger,
             } => Box::new(BoxWallDef {
@@ -1349,6 +1519,7 @@ impl LevelObject {
                 box_half_extents: *box_half_extents,
                 columns: *columns,
                 rows: *rows,
+                yaw: *yaw,
                 density: *density,
                 stagger: *stagger,
             }),
@@ -1506,6 +1677,7 @@ impl LevelObject {
 
             LevelObject::HoneycombWall {
                 base,
+                yaw,
                 columns,
                 rows,
                 radius,
@@ -1513,6 +1685,7 @@ impl LevelObject {
                 density,
             } => Box::new(HoneycombWallDef {
                 base: *base,
+                yaw: *yaw,
                 columns: *columns,
                 rows: *rows,
                 radius: *radius,
@@ -1536,12 +1709,14 @@ impl LevelObject {
 
             LevelObject::Trampoline {
                 pos,
+                yaw,
                 pad_half_extents,
                 leg_half_extents,
                 density,
                 restitution,
             } => Box::new(TrampolineDef {
                 pos: *pos,
+                yaw: *yaw,
                 pad_half_extents: *pad_half_extents,
                 leg_half_extents: *leg_half_extents,
                 density: *density,
@@ -1550,6 +1725,7 @@ impl LevelObject {
 
             LevelObject::Table {
                 pos,
+                yaw,
                 top_half_extents,
                 leg_half_extents,
                 density,
@@ -1557,6 +1733,7 @@ impl LevelObject {
                 friction,
             } => Box::new(TableDef {
                 pos: *pos,
+                yaw: *yaw,
                 top_half_extents: *top_half_extents,
                 leg_half_extents: *leg_half_extents,
                 density: *density,
@@ -1578,6 +1755,7 @@ impl LevelObject {
 
             LevelObject::Dolos {
                 pos,
+                yaw,
                 shank_length,
                 fluke_length,
                 thickness,
@@ -1586,6 +1764,7 @@ impl LevelObject {
                 friction,
             } => Box::new(DolosDef {
                 pos: *pos,
+                yaw: *yaw,
                 shank_length: *shank_length,
                 fluke_length: *fluke_length,
                 thickness: *thickness,
@@ -1684,6 +1863,7 @@ impl LevelObject {
 
             LevelObject::Trilithon {
                 pos,
+                yaw,
                 upright_half_height,
                 upright_half_width,
                 upright_half_depth,
@@ -1693,6 +1873,7 @@ impl LevelObject {
                 density,
             } => Box::new(TrilithonDef {
                 pos: *pos,
+                yaw: *yaw,
                 upright_half_height: *upright_half_height,
                 upright_half_width: *upright_half_width,
                 upright_half_depth: *upright_half_depth,
@@ -1782,6 +1963,106 @@ mod tests {
         assert!(
             parse_result.is_err(),
             "WaterConfig should reject runtime tuning fields from level data"
+        );
+    }
+}
+
+#[cfg(test)]
+mod orientation_tests {
+    use super::*;
+    use crate::terrain::SegmentFrame;
+
+    /// An object with a meaningful axis must turn with its segment, not merely
+    /// move with it. A wall drawn along a segment's `+X` that keeps facing
+    /// world `+X` after a quarter turn is the exact trap this closes.
+    #[test]
+    fn an_oriented_object_turns_with_a_yaw_90_segment() {
+        let frame = SegmentFrame::new(Point3::new(100.0, 0.0, 0.0), 1);
+
+        let mut wall = LevelObject::BoxWall {
+            base: (10.0, 0.0, 4.0),
+            box_half_extents: (0.5, 0.5, 0.25),
+            columns: 6,
+            rows: 3,
+            yaw: 0.0,
+            density: 50.0,
+            stagger: false,
+        };
+        wall.place_in(&frame);
+
+        let LevelObject::BoxWall { base, yaw, .. } = wall else {
+            unreachable!()
+        };
+        // A quarter turn maps local +X onto world −Z.
+        let expected = frame.to_world(Point3::new(10.0, 0.0, 4.0));
+        assert!(
+            (Point3::new(base.0, base.1, base.2) - expected).norm() < 1e-4,
+            "base moved to {base:?}, expected {expected:?}"
+        );
+        assert!((yaw - 90.0).abs() < 1e-4, "yaw is {yaw}, expected 90");
+    }
+
+    /// A yaw-invariant object gets no phantom rotation and no warning.
+    #[test]
+    fn a_symmetric_object_needs_no_orientation() {
+        let ball = LevelObject::BeachBall {
+            pos: (1.0, 2.0, 3.0),
+        };
+        assert_eq!(ball.orientability(), Orientable::Symmetric);
+    }
+
+    /// A domino row carries its axis as a vector, so the vector is what has to
+    /// turn — there is no yaw field to add to.
+    #[test]
+    fn a_domino_rows_direction_is_rotated() {
+        let mut row = LevelObject::Domino {
+            base: (0.0, 0.0, 0.0),
+            direction: (1.0, 0.0),
+            count: 5,
+            spacing: 0.4,
+            half_extents: (0.05, 0.3, 0.15),
+            density: 50.0,
+        };
+        row.place_in(&SegmentFrame::new(Point3::origin(), 1));
+        let LevelObject::Domino { direction, .. } = row else {
+            unreachable!()
+        };
+        assert!(
+            (direction.0).abs() < 1e-5 && (direction.1 + 1.0).abs() < 1e-5,
+            "direction turned to {direction:?}, expected (0, -1)"
+        );
+    }
+
+    /// The audit has to cover every variant: a new spawnable must be classified
+    /// rather than silently defaulting to "fine".
+    #[test]
+    fn every_object_kind_is_classified() {
+        // `orientability` is an exhaustive match, so this is really a check
+        // that the three classes are all populated and none is empty by
+        // accident.
+        let kinds = [
+            LevelObject::BeachBall {
+                pos: (0.0, 0.0, 0.0),
+            }
+            .orientability(),
+            LevelObject::Plank {
+                pos: (0.0, 0.0, 0.0),
+                length: 1.0,
+                width: 1.0,
+                yaw: 0.0,
+            }
+            .orientability(),
+            LevelObject::Temple {
+                pos: (0.0, 0.0, 0.0),
+                column_height: 1.0,
+                front_columns: 4,
+                side_columns: 6,
+            }
+            .orientability(),
+        ];
+        assert_eq!(
+            kinds,
+            [Orientable::Symmetric, Orientable::Turns, Orientable::Fixed]
         );
     }
 }

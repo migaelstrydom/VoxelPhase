@@ -1,11 +1,12 @@
 //! BoxWall spawnable — grid of boxes, optionally staggered.
 
-use nalgebra::{Point3, Vector3};
+use nalgebra::Vector3;
 use serde::Deserialize;
 use specs::Entity;
 
 use super::box_object::create_box_material_for_style;
 use super::shared::models::cuboid_model;
+use super::shared::orientation::Yaw;
 use super::{MaterialCtx, Spawnable};
 use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
@@ -23,8 +24,14 @@ use specs::{Builder, WorldExt};
 pub struct BoxWallDef {
     pub base: (f32, f32, f32),
     pub box_half_extents: (f32, f32, f32),
+    /// Number of boxes along the wall's own `+X`.
     pub columns: u32,
+    /// Number of courses stacked upward.
     pub rows: u32,
+    /// Rotation about `+Y`, in degrees. The one field that decides which way
+    /// the wall faces.
+    #[serde(default)]
+    pub yaw: f32,
     #[serde(default = "BoxWallDef::default_density")]
     pub density: f32,
     #[serde(default)]
@@ -63,6 +70,10 @@ impl Spawnable for BoxWallDef {
         );
         let box_w = he.x * 2.0;
         let box_h = he.y * 2.0;
+        // The wall is authored running along its own +X. Yaw turns the whole
+        // course of it, so a wall in a quarter-turned segment faces the way the
+        // segment does rather than keeping its world orientation.
+        let yaw = Yaw::degrees(self.yaw);
 
         let mut entities = Vec::with_capacity(self.material_count());
         let mut mat_idx = 0;
@@ -78,13 +89,17 @@ impl Spawnable for BoxWallDef {
 
             for col in 0..self.columns {
                 let x = start_x + col as f32 * box_w;
-                let pos = Point3::new(x, y, self.base.2);
+                let pos = yaw.place(
+                    self.base,
+                    Vector3::new(x - self.base.0, y - self.base.1, 0.0),
+                );
                 let model = cuboid_model(he, materials[mat_idx]);
 
                 let body_handle = {
                     let mut physics = world.write_resource::<PhysicsResource>();
                     let body_desc = RigidBodyDesc::dynamic()
                         .position(pos)
+                        .rotation(yaw.rotation())
                         .gravity_scale(1.0)
                         .linear_damping(0.01)
                         .angular_damping(0.005);
@@ -104,7 +119,7 @@ impl Spawnable for BoxWallDef {
                         .create_entity()
                         .with(Position(Vector3::new(pos.x, pos.y, pos.z)))
                         .with(Velocity(Vector3::zeros()))
-                        .with(Orientation::default())
+                        .with(Orientation(yaw.rotation()))
                         .with(RigidBodyComponent(body_handle))
                         .with(ModelInstance::new(model))
                         .with(Renderable)

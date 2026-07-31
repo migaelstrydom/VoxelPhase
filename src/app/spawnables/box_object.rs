@@ -7,6 +7,7 @@ use serde::Deserialize;
 use specs::{Entity, World};
 
 use super::shared::models::cuboid_model;
+use super::shared::orientation::Yaw;
 use super::shared::textures::*;
 use super::{MaterialCtx, Spawnable};
 use crate::components::{
@@ -71,10 +72,12 @@ pub fn create_box_material_for_style(
 // ---------------------------------------------------------------------------
 
 /// Spawn a box entity with physics and optional flammability.
+#[allow(clippy::too_many_arguments)]
 fn spawn_box_entity(
     world: &mut World,
     pos: Point3<f32>,
     half_extents: Vector3<f32>,
+    yaw: Yaw,
     material: MaterialId,
     density: f32,
     restitution: f32,
@@ -88,6 +91,7 @@ fn spawn_box_entity(
 
         let body_desc = RigidBodyDesc::dynamic()
             .position(pos)
+            .rotation(yaw.rotation())
             .gravity_scale(1.0)
             .linear_damping(0.01)
             .angular_damping(0.005);
@@ -108,7 +112,7 @@ fn spawn_box_entity(
         .create_entity()
         .with(Position(Vector3::new(pos.x, pos.y, pos.z)))
         .with(Velocity(Vector3::zeros()))
-        .with(Orientation::default())
+        .with(Orientation(yaw.rotation()))
         .with(RigidBodyComponent(body_handle))
         .with(ModelInstance::new(model))
         .with(Renderable);
@@ -128,6 +132,10 @@ fn spawn_box_entity(
 pub struct BoxDef {
     pub pos: (f32, f32, f32),
     pub half_extents: (f32, f32, f32),
+    /// Rotation about `+Y`, in degrees. Meaningful for any box that is not a
+    /// cube; a rotated segment adds its own yaw to this.
+    #[serde(default)]
+    pub yaw: f32,
     #[serde(default)]
     pub style: BoxStyle,
     #[serde(default = "BoxDef::default_density")]
@@ -173,6 +181,7 @@ impl Spawnable for BoxDef {
             world,
             Point3::new(self.pos.0, self.pos.1, self.pos.2),
             he,
+            Yaw::degrees(self.yaw),
             materials[0],
             self.density,
             self.restitution,
@@ -212,6 +221,7 @@ impl Spawnable for CrateDef {
             world,
             Point3::new(self.pos.0, self.pos.1, self.pos.2),
             he,
+            Yaw::default(),
             materials[0],
             50.0,
             0.2,
@@ -250,6 +260,7 @@ impl Spawnable for HeavyCrateDef {
             world,
             Point3::new(self.pos.0, self.pos.1, self.pos.2),
             he,
+            Yaw::default(),
             materials[0],
             150.0,
             0.2,
@@ -266,8 +277,13 @@ impl Spawnable for HeavyCrateDef {
 #[derive(Deserialize)]
 pub struct PlankDef {
     pub pos: (f32, f32, f32),
+    /// Extent along the plank's own `+X` before yaw.
     pub length: f32,
+    /// Extent along its own `+Z`.
     pub width: f32,
+    /// Rotation about `+Y`, in degrees.
+    #[serde(default)]
+    pub yaw: f32,
 }
 
 impl Spawnable for PlankDef {
@@ -289,6 +305,7 @@ impl Spawnable for PlankDef {
             world,
             Point3::new(self.pos.0, self.pos.1, self.pos.2),
             he,
+            Yaw::degrees(self.yaw),
             materials[0],
             500.0,
             0.2,

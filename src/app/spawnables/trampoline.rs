@@ -9,6 +9,7 @@ use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
 use super::shared::models::multi_material_compound_cuboid_model;
+use super::shared::orientation::Yaw;
 use super::shared::textures::*;
 use super::spawnable::{MaterialCtx, Spawnable};
 use crate::components::{
@@ -24,6 +25,9 @@ const TEXTURE_SIZE: u32 = 128;
 #[derive(Deserialize)]
 pub struct TrampolineDef {
     pub pos: (f32, f32, f32),
+    /// Rotation about `+Y`, in degrees. A rotated segment adds its own yaw.
+    #[serde(default)]
+    pub yaw: f32,
     /// Half-extents of the bouncy pad (x, y_thickness, z).
     #[serde(default = "TrampolineDef::default_pad_half_extents")]
     pub pad_half_extents: (f32, f32, f32),
@@ -130,6 +134,7 @@ impl Spawnable for TrampolineDef {
 
             let body_desc = RigidBodyDesc::dynamic()
                 .position(initial_pos)
+                .rotation(Yaw::degrees(self.yaw).rotation())
                 .gravity_scale(1.0)
                 .linear_damping(0.01)
                 .angular_damping(0.005);
@@ -169,7 +174,7 @@ impl Spawnable for TrampolineDef {
                 initial_pos.z,
             )))
             .with(Velocity(Vector3::zeros()))
-            .with(Orientation::default())
+            .with(Orientation(Yaw::degrees(self.yaw).rotation()))
             .with(RigidBodyComponent(body_handle))
             .with(ModelInstance::new(model))
             .with(Renderable)

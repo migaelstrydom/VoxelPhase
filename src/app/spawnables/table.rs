@@ -5,6 +5,7 @@ use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
 use super::shared::models::compound_cuboid_model;
+use super::shared::orientation::Yaw;
 use super::shared::textures::*;
 use super::{MaterialCtx, Spawnable};
 use crate::components::{
@@ -22,6 +23,9 @@ const TEXTURE_SIZE: u32 = 128;
 #[derive(Deserialize)]
 pub struct TableDef {
     pub pos: (f32, f32, f32),
+    /// Rotation about `+Y`, in degrees. A rotated segment adds its own yaw.
+    #[serde(default)]
+    pub yaw: f32,
     #[serde(default = "TableDef::default_top_half_extents")]
     pub top_half_extents: (f32, f32, f32),
     #[serde(default = "TableDef::default_leg_half_extents")]
@@ -119,6 +123,7 @@ impl Spawnable for TableDef {
 
             let body_desc = RigidBodyDesc::dynamic()
                 .position(initial_pos)
+                .rotation(Yaw::degrees(self.yaw).rotation())
                 .gravity_scale(1.0)
                 .linear_damping(0.01)
                 .angular_damping(0.005);
@@ -186,7 +191,7 @@ impl Spawnable for TableDef {
                 initial_pos.z,
             )))
             .with(Velocity(Vector3::zeros()))
-            .with(Orientation::default())
+            .with(Orientation(Yaw::degrees(self.yaw).rotation()))
             .with(RigidBodyComponent(body_handle))
             .with(ModelInstance::new(model))
             .with(Renderable)

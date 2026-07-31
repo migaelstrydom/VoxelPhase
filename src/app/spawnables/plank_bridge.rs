@@ -10,6 +10,7 @@ use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
 use super::shared::models::multi_material_rotated_compound_cuboid_model;
+use super::shared::orientation::Yaw;
 use super::shared::textures::*;
 use super::spawnable::{MaterialCtx, Spawnable};
 use crate::components::{
@@ -45,7 +46,10 @@ pub struct PlankBridgeDef {
     pub plank_half_extents: (f32, f32, f32),
     #[serde(default = "PlankBridgeDef::default_density")]
     pub density: f32,
-    /// Yaw angle (radians) of the bridge around Y. 0 = bridge runs along Z.
+    /// Rotation about `+Y`, in degrees. 0 = the bridge runs along Z.
+    ///
+    /// Degrees rather than radians so it matches every other yaw in the level
+    /// format — anchors, placements and the other oriented spawnables.
     #[serde(default)]
     pub yaw: f32,
     /// Impulse threshold for fracture joints.
@@ -205,11 +209,7 @@ impl Spawnable for PlankBridgeDef {
         }
         let model = multi_material_rotated_compound_cuboid_model(&boxes);
 
-        let orientation = if self.yaw.abs() > 1e-6 {
-            UnitQuaternion::from_axis_angle(&Vector3::y_axis(), self.yaw)
-        } else {
-            UnitQuaternion::identity()
-        };
+        let orientation = Yaw::degrees(self.yaw).rotation();
 
         // Physics compound body.
         let body_handle = {

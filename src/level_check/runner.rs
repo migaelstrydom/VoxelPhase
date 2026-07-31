@@ -62,6 +62,7 @@ pub fn check_level(level: &Level, level_path: &Path, terrain: &TerrainWorld) -> 
     segments::check_contention(terrain, &mut report);
     placement::check_player_spawn(level, terrain, &mut report);
     placement::check_objects(level, terrain, &mut report);
+    placement::check_object_orientation(level, &mut report);
 
     report
 }
