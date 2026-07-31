@@ -234,12 +234,23 @@ machinery in `TerrainManager` maps onto per-chunk dirty flags.
 
 ---
 
-## Gameplay entities
+## Gameplay entities — unscheduled
+
+**Status: cut from stage 3 before it ran, and not currently scheduled.** The analysis below
+still holds, and nothing in the architecture blocks it — stage 2 established the per-segment
+list pattern these would slot into. What is missing is a *decision*: the game's respawn and
+progression model is an open design question, and encoding a guess at it in the level format
+would be expensive to undo. Settle the design first, then this becomes a small stage.
+
+The one claim below that experience has softened: this was called a prerequisite for judging
+stages 2 onward. It was not. `level_check`'s derived jump envelope and the schematic turned
+out to be enough to judge a level's *traversability* without anything to finish, and stage 2
+was validated by walking its route.
 
 The current format describes terrain and objects plus a single `player_spawn`. That is a
 *terrain* format, not a level format: there is no goal, no checkpoint, no hazard, no
-collectible, no trigger. A level nobody can finish cannot be evaluated, which makes this a
-prerequisite for judging stages 2 onward rather than a nice-to-have.
+collectible, no trigger. A level nobody can finish cannot be *completed*, so this remains
+necessary before the game is a game.
 
 The shape that fits segments is a **segment-local volume or marker** primitive — a named
 region or point, in segment-local coordinates, carrying a role:
@@ -408,8 +419,10 @@ design; the briefs hold the perishable detail.
 | 1 | Chunked terrain, one implicit whole-world segment | Behaviourally identical to today, so it is independently testable. Establishes Chunk/ChunkGrid/TerrainWorld. |
 | 1.5 | `level_check` + schematic export (SVG, no Vulkan) + terrain-update timing instrumentation | Pulled ahead of segments so every later stage has automated acceptance instead of visual guesswork. |
 | 2 | N segments, local frames, anchor graph, placement | The authoring payoff. Generalises stage 1's single segment. Anchors defined as named local frames per "Mobile geometry" above. |
-| 3 | Traversal primitives — swept `Path` first, then `Platform`, `Staircase`, `Shaft` — plus gameplay entities (checkpoint, goal, hazard, pickup, trigger) | Needs segments to be worth authoring against. Gameplay entities land here because without them no level can be finished, and stage 4 has nothing meaningful to look at. |
+| 3 | Traversal primitives — swept `Path` first, then `Platform`, `Staircase`, `Shaft` — plus the object-orientation debt stage 2 left | Needs segments to be worth authoring against. Terrain can currently only be shaped into landscape; these are what a route is made of. |
 | 4 | `level_viewer` binary with offscreen render-to-PNG | Last because it is the most expensive and `level_check` covers correctness. |
+| — | Gameplay entities (checkpoint, goal, hazard, pickup, trigger) | **Unscheduled.** Originally stage 3, cut before it ran. The argument for them stands — no level can be *finished* without them — but the game's respawn and progression model is an open design question, and encoding a guess at it in the level format would be expensive to undo. Nothing blocks them: stage 2 established the per-segment list pattern, so they can be added whenever the design is settled. |
+| — | Visual identity — materials, biomes, props, foliage, lighting variety | **Unscheduled.** The reason authored areas read as terrain rather than as places. Best done after stage 4, so the viewer can show the result while it is being tuned. |
 | — | Mobile geometry (kinematic platforms) | **Out of scope.** Deferred indefinitely; see "Mobile geometry" above for the constraint it places on anchors. |
 
 Stage 1 deliberately introduces the chunk grid with a **single implicit segment** covering
