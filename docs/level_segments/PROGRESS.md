@@ -914,3 +914,109 @@ whether the primitives are *pleasant*, which no headless check answers. Specific
 - **What `Orientable::Fixed` actually costs.** A `House` or a `Temple` in a quarter-turned
   segment, rendered, is the cheapest way to decide whether the remaining six are worth
   doing.
+
+---
+
+## Follow-up: the heightfield had the same degeneracy — and so did everything else
+
+Stage 3 fixed sample-on-the-surface degeneracy for the traversal primitives only, and
+noted that the heightfield pass had the same exposure. It did. So did every other
+volumetric feature, and so did the cave carve. It was one bug wearing three different
+explanations.
+
+### Reproduction
+
+New tests in `src/terrain/world.rs` generate a small terrain description and assert
+`open_edge_count() == 0`. Measured before any fix:
+
+| Configuration | Voxels | Open edges | Triangles |
+| --- | --- | --- | --- |
+| Flat `base_height: 8.0` | 1.0 m, 0.5 m, 2.0 m | **0** | — |
+| `TerrainFeature::Plateau` at y = 8 | 1.0 m | **144** | 1820 |
+| `TerrainFeature::Cliff`, shelves at y = 4 and y = 8 | 1.0 m | **172** | 1940 |
+| `VolumeFeature::Overhang`, top at y = 10, 2 m thick | 0.5 m | **144** | 6832 |
+
+The flat case passing is the informative one, and it is worth stating because it is why
+this stayed hidden. A surface coincident with a lattice plane *everywhere* is not a crack:
+every sample in the plane reads the same, the whole plane resolves to one side, and the
+mesh closes. The degeneracy needs a **boundary** — a plateau edge, a cliff shelf running
+out, an overhang face — where cells with a zero-density sample sit next to cells without
+one. That is why authored features crack and a featureless test plane does not, and why
+"flat terrain meshes fine" was never evidence of anything.
+
+### The fix
+
+`SURFACE_BAND` and its debias moved from `src/terrain/traversal/solid.rs` into
+`src/terrain/csg.rs`, and are now applied **inside `union_solid` and `carve_with_sdf`
+themselves** rather than at one call site. That is the whole change for volumetric
+features: every feature that writes a density — island, pillar, arch, overhang, tunnel,
+caves, and the traversal primitives — is debiased on identical terms, with one constant,
+and a new one cannot be written that forgets to be.
+
+The heightfield needed its own entry point because it does not go through those writes: it
+derives a column's topmost solid index and its partial-air cap from the height, so
+debiasing each distance separately would leave those indices describing a surface that is
+no longer there. `debias_height` nudges the height once, before anything is derived from
+it — the same constant, the same direction, applied to the surface rather than to the
+sample.
+
+### Cliff and Overhang: both affected
+
+Both were tested rather than assumed, and both cracked. `Cliff` runs through `height_at`,
+so it is fixed by `debias_height`; its two shelves are authored heights and land on the
+lattice exactly as squarely as a plateau does. `Overhang` writes a slab through
+`union_solid`, so it is fixed there; both its top face and its underside (top minus an
+authored thickness) are round numbers.
+
+### Baselines: all three fell to zero
+
+| Level | Open edges before | After | Triangles before | After |
+| --- | --- | --- | --- | --- |
+| `test_arena` | 218 | **0** | 191116 | 193828 |
+| `test_empty_terrain` | 22 | **0** | 98948 | 100276 |
+| `test_segments` | 1174 | **0** | 223800 | 224756 |
+
+Re-committed in `levels/mesh_baselines.ron`.
+
+### What surprised me
+
+**The two "known separate issues" were this issue.** Both were explicitly scoped out of
+this work, and both closed anyway.
+
+- The cave open edges (218 and 22) were attributed to cave noise finding ambiguous
+  marching-cubes configurations. They were not. `carve_with_sdf` encodes
+  `threshold - noise` as a density, and wherever the noise equals its threshold that is a
+  density of exactly zero — the same degeneracy, arriving through a noise field instead of
+  through a round number. Noise does not protect you when the surface is *defined* as a
+  level set of that noise.
+- `test_segments`' 1174 was attributed to unioning two independently-encoded density
+  fields where a deck meets terrain. Also not it. A deck is authored at a round height, so
+  its own encoded surface sits on the lattice; the join was where the boundary condition
+  above was met, not where two encodings disagreed. Whether a genuine two-field ambiguity
+  exists underneath is now unmeasurable at these levels, because there is nothing left to
+  measure.
+
+Triangle counts rose ~1 % everywhere. That is the degenerate cells now resolving to real
+triangles rather than to zero-area ones, which is the fix working, not geometry moving.
+
+### One side effect worth a decision
+
+`level_check` on `test_arena` now emits **11 new warnings** of the form
+`HoneycombWall #12 in 'main' at (6.0, 0.0, -6.0) has no terrain beneath it`. Nothing is
+broken — all three levels still exit 0 — but the cause should be understood rather than
+silenced.
+
+`test_arena` has `base_height: 0.0` and authors objects at `y = 0.0`. The debias raises a
+coincident surface by 1 % of a voxel, so the surface is now at y = 0.01 and
+`surface_below` — which takes the first mesh height `<= p.y` — finds nothing under an
+object sitting at exactly 0.0. The objects are 1 cm buried; physics resolves that on the
+first step.
+
+This is the documented cost of the band, and it now lands on authored content rather than
+only on the mesh. The direction was kept consistent with `solid.rs` (a point exactly on a
+surface belongs to the solid) rather than inverted to make the warning go away, because
+inverting it for the heightfield alone would put two directions in one meshing path — the
+thing the constant was consolidated to prevent. The alternatives, if the warnings are
+judged not worth living with, are to give `surface_below` a tolerance of one band, or to
+author `test_arena`'s objects a hair above zero. `level_check`'s checks were out of scope
+here, so neither was done.

@@ -15,6 +15,58 @@ use nalgebra::Point3;
 use super::chunk_grid::ChunkGrid;
 use super::voxel::{Voxel, VoxelMaterial};
 
+/// How close to the iso-surface a lattice sample is allowed to land, as a
+/// fraction of a voxel.
+///
+/// Marching cubes degenerates when a surface passes exactly through a sample:
+/// two edges of the same cell then interpolate to the same point, and the
+/// triangle between them has zero area and an edge no neighbour can match.
+/// Authored geometry is *made* of round numbers — a deck at y = 12, a plateau
+/// at y = 8, a tread every metre — so unlike noisy terrain it hits that case
+/// constantly, and a swept surface on a gentle slope hits it periodically all
+/// the way along.
+///
+/// Samples inside this band are therefore pushed to the *inside* of the solid:
+/// a point exactly on a surface belongs to it, whether that surface is a deck,
+/// a plateau or a bore. Ties going the same way for both is what stops a shaft
+/// sunk to exactly the height of the slab it pierces from keeping a one-plane
+/// lid over its mouth.
+///
+/// The cost is that a coincident surface sits up to this fraction of a voxel
+/// proud of its authored position — half a centimetre at metre voxels, and
+/// nowhere else.
+const SURFACE_BAND: f32 = 0.01;
+
+/// Move a signed distance out of the degenerate band, into the solid.
+fn debias(distance: f32, step: f32) -> f32 {
+    let band = SURFACE_BAND * step;
+    if distance.abs() < band {
+        -band
+    } else {
+        distance
+    }
+}
+
+/// Move an authored surface height out of the degenerate band, onto the inside
+/// of the solid below it.
+///
+/// The heightfield's counterpart to the debias [`union_solid`] applies. A
+/// column samples the distance `y - height` at every lattice plane, so nudging
+/// the height once is that same correction applied to whichever sample would
+/// have landed in the band — and doing it to the height rather than to each
+/// distance keeps the indices a column derives from it (the topmost solid
+/// voxel, the partial-air cap above it) consistent with the surface they
+/// describe.
+pub(super) fn debias_height(height: f32, step: f32) -> f32 {
+    let band = SURFACE_BAND * step;
+    let plane = (height / step).round() * step;
+    if (height - plane).abs() < band {
+        plane + band
+    } else {
+        height
+    }
+}
+
 /// Inclusive-exclusive voxel index range covering a coordinate span.
 ///
 /// Sample index `i` on an axis denotes grid-local position `i * step`, so the
@@ -30,6 +82,9 @@ pub(super) fn index_range(min: f32, max: f32, step: f32) -> (i32, i32) {
 /// (negative inside the solid, positive outside). Voxels are only updated when
 /// the new density is greater than what is already there — so features layer
 /// correctly and never clobber deeper geometry.
+///
+/// The distance is debiased before it is encoded, so no feature can leave a
+/// sample sitting exactly on its own surface. See [`SURFACE_BAND`].
 pub(super) fn union_solid(
     grid: &mut ChunkGrid,
     pos: Point3<f32>,
@@ -38,7 +93,7 @@ pub(super) fn union_solid(
     material: VoxelMaterial,
     health: u8,
 ) {
-    let new_density = (-sdf / step).clamp(-1.0, 1.0);
+    let new_density = (-debias(sdf, step) / step).clamp(-1.0, 1.0);
     let existing = grid.get(pos);
     if new_density <= existing.density {
         return;
@@ -64,8 +119,11 @@ pub(super) fn union_solid(
 /// region being removed). Uses CSG subtraction semantics so existing solids
 /// outside the carve are preserved, and voxels near the cut get a smooth
 /// partial density for marching cubes to interpolate.
+///
+/// Debiased on the same terms as [`union_solid`], and in the same direction: a
+/// sample exactly on the carve surface is inside the region being removed.
 pub(super) fn carve_with_sdf(grid: &mut ChunkGrid, pos: Point3<f32>, sdf_carve: f32, step: f32) {
-    let carve_density = (sdf_carve / step).clamp(-1.0, 1.0);
+    let carve_density = (debias(sdf_carve, step) / step).clamp(-1.0, 1.0);
     let existing = grid.get(pos);
     let new_density = existing.density.min(carve_density);
     if new_density >= existing.density {

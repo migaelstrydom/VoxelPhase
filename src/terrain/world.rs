@@ -605,6 +605,7 @@ impl ProbeTarget for TerrainWorld {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::level::{TerrainFeature, VolumeFeature};
     use crate::terrain::chunk::CHUNK_VOXELS;
     use crate::terrain::chunk_grid::ChunkGrid;
     use crate::terrain::frame::SegmentFrame;
@@ -1021,6 +1022,127 @@ mod tests {
                 .sum::<usize>()
         );
         assert!(world.bounds().max.x >= 40.0);
+    }
+
+    // -----------------------------------------------------------------------
+    // Authored surfaces on the voxel lattice
+    // -----------------------------------------------------------------------
+
+    /// A terrain description with nothing in it but a flat surface, generated
+    /// within a box big enough that its own walls close the mesh.
+    fn flat_terrain(voxel_size: f32, base_height: f32) -> crate::level::Terrain {
+        crate::level::Terrain {
+            voxel_size,
+            bounds: crate::level::Extent {
+                min: (0.0, 0.0, 0.0),
+                max: (16.0, 16.0, 16.0),
+            },
+            base_height,
+            material_layers: Vec::new(),
+            features: Vec::new(),
+            volumes: Vec::new(),
+        }
+    }
+
+    /// Generate and mesh a terrain description at the origin.
+    fn meshed(terrain: &crate::level::Terrain) -> TerrainWorld {
+        use crate::terrain::generation::generate_terrain;
+        use crate::terrain::voxel::DurabilityConfig;
+
+        let mut grid = ChunkGrid::new(terrain.voxel_size);
+        generate_terrain(
+            &mut grid,
+            terrain,
+            &DurabilityConfig::default(),
+            &terrain.bounds.to_aabb(),
+        );
+        world_of(SegmentFrame::identity(), grid)
+    }
+
+    fn assert_watertight(label: &str, world: &TerrainWorld) {
+        assert!(world.triangle_count() > 0, "{label}: meshed to nothing");
+        assert_eq!(
+            world.open_edge_count(),
+            0,
+            "{label}: {} open edges in {} triangles",
+            world.open_edge_count(),
+            world.triangle_count()
+        );
+    }
+
+    /// A flat surface authored at a height the voxel lattice hits exactly is the
+    /// worst case for marching cubes: the iso-surface passes through a whole
+    /// plane of lattice samples at once, and every cell along it degenerates.
+    /// Noisy terrain never lines up like that; an authored one does nothing else.
+    #[test]
+    fn flat_terrain_on_the_lattice_is_watertight() {
+        for (voxel_size, base_height) in [(1.0_f32, 8.0_f32), (0.5, 8.0), (0.5, 8.5), (2.0, 8.0)] {
+            let world = meshed(&flat_terrain(voxel_size, base_height));
+            assert_watertight(
+                &format!("base_height {base_height} at {voxel_size} m voxels"),
+                &world,
+            );
+        }
+    }
+
+    /// The same exposure reached through a feature rather than `base_height`:
+    /// `Plateau` sets an absolute height, so an authored round number lands on
+    /// the lattice just as squarely.
+    #[test]
+    fn plateau_on_the_lattice_is_watertight() {
+        for voxel_size in [1.0_f32, 0.5] {
+            let mut terrain = flat_terrain(voxel_size, 4.0);
+            terrain.features.push(TerrainFeature::Plateau {
+                min: (4.0, 4.0),
+                max: (12.0, 12.0),
+                height: 8.0,
+            });
+            let world = meshed(&terrain);
+            assert_watertight(&format!("plateau at {voxel_size} m voxels"), &world);
+        }
+    }
+
+    /// A cliff is two flat shelves joined by a sigmoid. Both shelves are
+    /// authored heights, so both are exposed wherever they fall on the lattice.
+    #[test]
+    fn cliff_shelves_on_the_lattice_are_watertight() {
+        for voxel_size in [1.0_f32, 0.5] {
+            let mut terrain = flat_terrain(voxel_size, 4.0);
+            terrain.features.push(TerrainFeature::Cliff {
+                from: (0.0, 8.0),
+                to: (16.0, 8.0),
+                low_height: 4.0,
+                high_height: 8.0,
+                high_side: (0.0, 1.0),
+                steepness: 2.0,
+                end_falloff: 0.0,
+                roughness: 0.0,
+                roughness_seed: 0,
+            });
+            let world = meshed(&terrain);
+            assert_watertight(&format!("cliff at {voxel_size} m voxels"), &world);
+        }
+    }
+
+    /// An overhang is a volumetric slab with an authored top face and a
+    /// thickness that puts its underside on a round number too.
+    #[test]
+    fn overhang_faces_on_the_lattice_are_watertight() {
+        for voxel_size in [1.0_f32, 0.5] {
+            let mut terrain = flat_terrain(voxel_size, 4.0);
+            terrain.volumes.push(VolumeFeature::Overhang {
+                from: (4.0, 8.0),
+                to: (12.0, 8.0),
+                height: 10.0,
+                depth: 4.0,
+                thickness: 2.0,
+                direction: (0.0, 1.0),
+                noise: 0.0,
+                noise_seed: 0,
+            });
+            let world = meshed(&terrain);
+            assert_watertight(&format!("overhang at {voxel_size} m voxels"), &world);
+        }
     }
 
     /// End-to-end over the primary fixture: the level generates, meshes, and
