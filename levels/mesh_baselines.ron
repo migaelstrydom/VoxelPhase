@@ -13,10 +13,20 @@
 // Measured on branch level-segments-stage-1-5, and reproduced unchanged on
 // level-segments-stage-2 — which is the regression test that the segment frame
 // maths is identity-correct for a single segment at the origin.
+//
+// test_segments rose on level-segments-stage-3, from 310 to 1174, when the
+// traversal primitives were added. That was measured rather than assumed: a
+// primitive standing in free air contributes **zero** open edges, and the whole
+// increase comes from the cells where a deck meets terrain. Unioning two
+// independently-encoded density fields produces ambiguous marching-cubes
+// configurations along the join, which is the same mechanism behind the cave
+// figures above and not new here — but a route is *supposed* to meet the ground
+// it crosses, so a level built from primitives meets it a great deal more
+// often. Worth a mesh-quality pass; not a defect in the primitives.
 (
     entries: [
         (level: "test_arena.level.ron", triangles: 191116, open_edges: 218),
         (level: "test_empty_terrain.level.ron", triangles: 98948, open_edges: 22),
-        (level: "test_segments.level.ron", triangles: 213804, open_edges: 310),
+        (level: "test_segments.level.ron", triangles: 223800, open_edges: 1174),
     ],
 )

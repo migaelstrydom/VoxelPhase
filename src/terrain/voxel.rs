@@ -15,6 +15,9 @@ pub enum VoxelMaterial {
     Limestone = 5,
     /// Dark layered deep-cave rock.
     Slate = 6,
+    /// Loose pale grain — beaches, and the readable surface for a route laid
+    /// over ground of a different colour.
+    Sand = 7,
 }
 
 impl VoxelMaterial {
@@ -28,6 +31,7 @@ impl VoxelMaterial {
             VoxelMaterial::Ite => [0.55, 0.50, 0.35, 1.0],
             VoxelMaterial::Limestone => [0.75, 0.73, 0.68, 1.0],
             VoxelMaterial::Slate => [0.30, 0.32, 0.35, 1.0],
+            VoxelMaterial::Sand => [0.84, 0.76, 0.55, 1.0],
         }
     }
 
@@ -41,6 +45,7 @@ impl VoxelMaterial {
             VoxelMaterial::Rock => 5,
             VoxelMaterial::Limestone => 4,
             VoxelMaterial::Slate => 8,
+            VoxelMaterial::Sand => 1,
         }
     }
 }

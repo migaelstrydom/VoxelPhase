@@ -51,6 +51,36 @@ Level(
                     ),
                     Plateau(min: (86.0, 34.0), max: (96.0, 62.0), height: 4.0),
                 ],
+
+                // Traversal primitives at 1 m voxels. Everything here is
+                // authored against the beach's own frame.
+                volumes: [
+                    // Two stepping stones out into the tidal bowl, so the bowl
+                    // is crossed rather than waded. 6 m apart, well inside the
+                    // 7.1 m standing jump.
+                    Platform(
+                        center: (28.0, 1.5, 34.0),
+                        half_extents: (2.5, 2.5),
+                        thickness: 2.0,
+                        material: Sand,
+                    ),
+                    Platform(
+                        center: (40.0, 1.5, 34.0),
+                        half_extents: (2.5, 2.5),
+                        thickness: 2.0,
+                        material: Sand,
+                    ),
+                    // A flight up onto the launch ledge as an alternative to
+                    // the ramp: 1 m per step, comfortably walkable.
+                    Staircase(
+                        from: (70.0, 1.0, 62.0),
+                        to: (86.0, 4.0, 62.0),
+                        width: 4.0,
+                        steps: 3,
+                        thickness: 2.0,
+                        material: Rock,
+                    ),
+                ],
             ),
 
             anchors: [
@@ -91,6 +121,27 @@ Level(
                     Plateau(min: (20.0, 0.0), max: (44.0, 12.0), height: 6.0),
                     Plateau(min: (46.0, 0.0), max: (58.0, 10.0), height: 6.0),
                 ],
+
+                volumes: [
+                    // The catwalk: a single Path from the west landing, over
+                    // both craters, climbing to the north ledge. One feature,
+                    // three legs, two of them turning and climbing — which is
+                    // the whole argument for a swept polyline over a pile of
+                    // platforms.
+                    Path(
+                        points: [
+                            (4.0,  4.5, 32.0),
+                            (24.0, 4.5, 32.0),
+                            (40.0, 5.5, 24.0),
+                            (48.0, 6.0, 12.0),
+                            (48.0, 6.0, 4.0),
+                        ],
+                        width: 3.0,
+                        thickness: 2.0,
+                        profile: Flat,
+                        material: Sand,
+                    ),
+                ],
             ),
 
             anchors: [
@@ -127,6 +178,30 @@ Level(
                     Plateau(min: (26.0, 8.0), max: (36.0, 40.0), height: 6.0),
                     Plateau(min: (38.0, 10.0), max: (48.0, 38.0), height: 8.0),
                 ],
+
+                // This segment is placed at a quarter turn, so these are the
+                // primitives that prove local authoring survives rotation: a
+                // ramp drawn along local +X comes out running along world −Z.
+                volumes: [
+                    // A rounded ledge ramping up the three terraces without a
+                    // jump, so the climb has a walking route as well as a
+                    // jumping one. 0.5 m voxels make the 2.5 m deck read
+                    // cleanly.
+                    Path(
+                        points: [
+                            (4.0,  2.5, 30.0),
+                            (18.0, 4.5, 30.0),
+                            (24.0, 4.5, 20.0),
+                            (32.0, 6.5, 20.0),
+                            (36.0, 6.5, 28.0),
+                            (46.0, 8.5, 28.0),
+                        ],
+                        width: 2.5,
+                        thickness: 1.5,
+                        profile: Rounded,
+                        material: Sand,
+                    ),
+                ],
             ),
 
             anchors: [
@@ -161,6 +236,34 @@ Level(
                     TerrainRoughness(frequency: 0.1, amplitude: 0.5, octaves: 3, seed: 53),
                     Crater(center: (26.0, 24.0), radius: 14.0, depth: 2.5),
                     Wall(from: (44.0, 6.0), to: (44.0, 42.0), height: 3.0, thickness: 3.0),
+                ],
+
+                volumes: [
+                    // The set piece: a bore sunk through the arena floor with a
+                    // helical ledge running down it. A 6 m pitch over a 7 m
+                    // bore is a gentle spiral — each quarter turn gains 1.5 m,
+                    // inside the 2.5 m apex even if the player misses a step.
+                    Shaft(
+                        center: (12.0, 12.0),
+                        from_y: -6.0,
+                        to_y: 4.5,
+                        radius: 7.0,
+                        ledge: Some((
+                            width: 2.5,
+                            thickness: 1.0,
+                            pitch: 6.0,
+                            start_angle: 0.0,
+                        )),
+                        material: Slate,
+                    ),
+                    // A perch overlooking the bore, reached by a jump from the
+                    // arena rim.
+                    Platform(
+                        center: (12.0, 6.5, 26.0),
+                        half_extents: (3.0, 3.0),
+                        thickness: 1.5,
+                        material: Rock,
+                    ),
                 ],
             ),
 

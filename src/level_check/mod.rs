@@ -7,13 +7,15 @@ pub mod baseline;
 pub mod placement;
 pub mod reach;
 pub mod report;
+pub mod routes;
 pub mod runner;
 pub mod segments;
 pub mod svg;
 
 pub use baseline::{BaselineVerdict, Baselines};
-pub use reach::{JumpArc, JumpEnvelope};
+pub use reach::{Footprint, JumpArc, JumpEnvelope};
 pub use report::{Finding, Report, Section, Severity};
+pub use routes::RouteMap;
 pub use runner::{build_terrain, check_level};
 pub use segments::Crossing;
 pub use svg::write_schematic;

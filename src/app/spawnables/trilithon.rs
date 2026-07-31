@@ -13,6 +13,7 @@ use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
 use super::shared::models::{build_convex_hull, convex_solid_model, SolidFace};
+use super::shared::orientation::Yaw;
 use super::shared::textures::Rgb;
 use super::{MaterialCtx, Spawnable};
 use crate::components::{
@@ -29,6 +30,9 @@ const TEXTURE_SIZE: u32 = 256;
 #[derive(Deserialize)]
 pub struct TrilithonDef {
     pub pos: (f32, f32, f32),
+    /// Rotation about `+Y`, in degrees — which way the doorway faces.
+    #[serde(default)]
+    pub yaw: f32,
     /// Half-height of each upright stone.
     #[serde(default = "TrilithonDef::default_upright_half_height")]
     pub upright_half_height: f32,
@@ -104,8 +108,12 @@ impl Spawnable for TrilithonDef {
         let x_offset = self.gap / 2.0 + self.upright_half_width;
         let upright_y = base.y + self.upright_half_height;
 
-        let left_pos = Point3::new(base.x - x_offset, upright_y, base.z);
-        let right_pos = Point3::new(base.x + x_offset, upright_y, base.z);
+        // The trilithon's opening faces along its own ±Z, so yaw is what puts
+        // the doorway where the author meant it.
+        let yaw = Yaw::degrees(self.yaw);
+        let origin = (base.x, base.y, base.z);
+        let left_pos = yaw.place(origin, Vector3::new(-x_offset, upright_y - base.y, 0.0));
+        let right_pos = yaw.place(origin, Vector3::new(x_offset, upright_y - base.y, 0.0));
 
         let lintel_half_x = x_offset + self.upright_half_width + self.lintel_overhang;
         let lintel_he = Vector3::new(
@@ -114,7 +122,7 @@ impl Spawnable for TrilithonDef {
             self.upright_half_depth,
         );
         let lintel_y = base.y + self.upright_half_height * 2.0 + self.lintel_half_thickness;
-        let lintel_pos = Point3::new(base.x, lintel_y, base.z);
+        let lintel_pos = yaw.place(origin, Vector3::new(0.0, lintel_y - base.y, 0.0));
 
         // Each stone gets a different seed for unique distortion.
         let faces = cuboid_faces();
@@ -137,6 +145,7 @@ impl Spawnable for TrilithonDef {
             let left_body = physics.world.create_body(
                 RigidBodyDesc::dynamic()
                     .position(left_pos)
+                    .rotation(yaw.rotation())
                     .linear_damping(0.01)
                     .angular_damping(0.005),
             );
@@ -151,6 +160,7 @@ impl Spawnable for TrilithonDef {
             let right_body = physics.world.create_body(
                 RigidBodyDesc::dynamic()
                     .position(right_pos)
+                    .rotation(yaw.rotation())
                     .linear_damping(0.01)
                     .angular_damping(0.005),
             );
@@ -165,6 +175,7 @@ impl Spawnable for TrilithonDef {
             let lintel_body = physics.world.create_body(
                 RigidBodyDesc::dynamic()
                     .position(lintel_pos)
+                    .rotation(yaw.rotation())
                     .linear_damping(0.01)
                     .angular_damping(0.005),
             );
@@ -179,12 +190,13 @@ impl Spawnable for TrilithonDef {
             (left_body, right_body, lintel_body)
         };
 
-        let spawn_entity = |world: &mut World, pos: Point3<f32>, body, model| -> Entity {
+        let rotation = yaw.rotation();
+        let spawn_entity = move |world: &mut World, pos: Point3<f32>, body, model| -> Entity {
             world
                 .create_entity()
                 .with(Position(Vector3::new(pos.x, pos.y, pos.z)))
                 .with(Velocity(Vector3::zeros()))
-                .with(Orientation::default())
+                .with(Orientation(rotation))
                 .with(RigidBodyComponent(body))
                 .with(ModelInstance::new(model))
                 .with(Renderable)

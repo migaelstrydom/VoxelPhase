@@ -10,6 +10,7 @@ use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
 use super::shared::models::compound_cuboid_model;
+use super::shared::orientation::Yaw;
 use super::shared::textures::Rgb;
 use super::{MaterialCtx, Spawnable};
 use crate::components::{
@@ -26,6 +27,9 @@ const TEXTURE_SIZE: u32 = 128;
 #[derive(Deserialize)]
 pub struct DolosDef {
     pub pos: (f32, f32, f32),
+    /// Rotation about `+Y`, in degrees. A rotated segment adds its own yaw.
+    #[serde(default)]
+    pub yaw: f32,
     /// End-to-end length of the central shank.
     #[serde(default = "DolosDef::default_shank_length")]
     pub shank_length: f32,
@@ -111,6 +115,7 @@ impl Spawnable for DolosDef {
 
             let body_desc = RigidBodyDesc::dynamic()
                 .position(initial_pos)
+                .rotation(Yaw::degrees(self.yaw).rotation())
                 .gravity_scale(1.0)
                 .linear_damping(0.01)
                 .angular_damping(0.02);
@@ -139,7 +144,7 @@ impl Spawnable for DolosDef {
                 initial_pos.z,
             )))
             .with(Velocity(Vector3::zeros()))
-            .with(Orientation::default())
+            .with(Orientation(Yaw::degrees(self.yaw).rotation()))
             .with(RigidBodyComponent(body_handle))
             .with(ModelInstance::new(model))
             .with(Renderable)

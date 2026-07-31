@@ -15,6 +15,10 @@ use crate::rendering::material::MaterialId;
 pub struct StackDef {
     pub base: (f32, f32, f32),
     pub items: Vec<StackItemDef>,
+    /// Rotation about `+Y`, in degrees. The stack is vertical, so this reaches
+    /// only the items that have an axis of their own — the planks.
+    #[serde(default)]
+    pub yaw: f32,
 }
 
 /// Items that can appear inside a Stack.
@@ -133,6 +137,7 @@ impl Spawnable for StackDef {
                         pos,
                         length: *length,
                         width: *width,
+                        yaw: self.yaw,
                     };
                     def.spawn(world, slice)
                 }

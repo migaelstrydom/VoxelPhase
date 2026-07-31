@@ -16,9 +16,11 @@ use crate::level::{world_anchor, Connection, Level, Placement};
 use crate::physics::PhysicsConfig;
 use crate::player::PlayerConfig;
 use crate::terrain::{outward, Segment, TerrainWorld};
+use nalgebra::Point3;
 
 use super::reach::JumpEnvelope;
 use super::report::{Report, Section};
+use super::routes::{bridge_window, RouteMap};
 
 /// How far a measured anchor separation may drift from its declared gap.
 ///
@@ -30,6 +32,8 @@ const GAP_TOLERANCE: f32 = 0.01;
 /// Which move a gap demands of the player.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Crossing {
+    /// Bridged by a traversal primitive — the player walks across.
+    Walk,
     /// Within the standing jump — the safe default.
     Standing,
     /// Needs the flat long-jump arc.
@@ -54,8 +58,28 @@ impl Crossing {
         }
     }
 
+    /// The crossing a gap demands once the level's routes are taken into
+    /// account.
+    ///
+    /// A `Path` or `Platform` running the whole way across turns a jump into a
+    /// walk. Without this, bridging a chasm makes the report worse rather than
+    /// better, and an author learns to stop reading it.
+    pub fn for_gap_over(
+        gap: f32,
+        from: Point3<f32>,
+        to: Point3<f32>,
+        envelope: &JumpEnvelope,
+        routes: &RouteMap,
+    ) -> Self {
+        if routes.spans(from, to, bridge_window(envelope)) {
+            return Crossing::Walk;
+        }
+        Crossing::for_gap(gap, envelope)
+    }
+
     pub fn describe(&self) -> &'static str {
         match self {
+            Crossing::Walk => "walk — bridged by a traversal primitive",
             Crossing::Standing => "standing jump",
             Crossing::LongJump => "long jump",
             Crossing::SprintJump => "sprint jump with a run-up",
@@ -190,6 +214,7 @@ fn overlaps(a: &crate::collision::AABB, b: &crate::collision::AABB) -> bool {
 /// verify that declared connections actually hold.
 pub fn check_connections(level: &Level, report: &mut Report) -> Section {
     let envelope = JumpEnvelope::derive(&PlayerConfig::default(), PhysicsConfig::default().gravity);
+    let routes = RouteMap::build(level);
     let links = collect_links(level);
 
     let mut section = Section::new("Connections");
@@ -217,7 +242,8 @@ pub fn check_connections(level: &Level, report: &mut Report) -> Section {
         };
 
         let measured = (to.origin() - from.origin()).norm();
-        let crossing = Crossing::for_gap(link.gap, &envelope);
+        let crossing =
+            Crossing::for_gap_over(link.gap, from.origin(), to.origin(), &envelope, &routes);
         section.row(
             format!("{} ↔ {}", link.from, link.to),
             format!(
@@ -239,7 +265,7 @@ pub fn check_connections(level: &Level, report: &mut Report) -> Section {
                     envelope.max_flat_range()
                 ),
             ),
-            Crossing::Standing => {}
+            Crossing::Walk | Crossing::Standing => {}
             other => report.warn(
                 "connections",
                 format!(
