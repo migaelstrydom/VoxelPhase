@@ -79,13 +79,13 @@ impl<'a> System<'a> for RollerLocomotionSystem {
                 continue;
             };
 
-            let Some(body) = physics_res.world.body_mut(rb.0) else {
-                continue;
-            };
-
             // Rolling toward `direction` means spinning about the axis to its
             // left: up × direction.
             let axis = Vector3::y().cross(&direction);
+
+            let Some(body) = physics_res.world.body(rb.0) else {
+                continue;
+            };
 
             // Only the component of spin that drives this direction counts
             // toward the cap. A roller already spinning the other way is
@@ -96,7 +96,13 @@ impl<'a> System<'a> for RollerLocomotionSystem {
                 continue;
             }
 
-            body.apply_angular_impulse(axis * roller.torque * dt);
+            // Goes through the world rather than the body so the creature wakes
+            // itself. A roller spawns asleep — it is placed at rest — and would
+            // otherwise stay that way, spinning up a velocity the integrator
+            // ignores, until something bumped it awake.
+            physics_res
+                .world
+                .apply_angular_impulse(rb.0, axis * roller.torque * dt);
         }
     }
 }

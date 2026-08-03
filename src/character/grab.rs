@@ -218,9 +218,7 @@ pub fn throw(
     throw_impulse: f32,
 ) {
     physics.remove_constraint(constraint_handle);
-    if let Some(body) = physics.body_mut(target_body) {
-        body.apply_impulse(facing * throw_impulse);
-    }
+    physics.apply_impulse(target_body, facing * throw_impulse);
 }
 
 /// Check if a held body still exists in the physics world.

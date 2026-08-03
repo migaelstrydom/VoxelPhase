@@ -259,6 +259,42 @@ impl PhysicsWorld {
         self.sleep_manager.wake_body(handle);
     }
 
+    /// Apply an instantaneous linear impulse to one body, waking it.
+    ///
+    /// Prefer this over `body_mut(h).apply_impulse(..)`. The body-level methods
+    /// know nothing about the sleep manager, so an impulse applied through them
+    /// lands on a sleeping body's velocity and is then ignored — the body sits
+    /// there accumulating speed it never uses until something else wakes it.
+    /// Waking belongs with the impulse, not with the caller's memory.
+    ///
+    /// Returns false if the handle refers to no body.
+    pub fn apply_impulse(&mut self, handle: RigidBodyHandle, impulse: Vector3<f32>) -> bool {
+        let Some(body) = self.body_mut(handle) else {
+            return false;
+        };
+        body.apply_impulse(impulse);
+        self.wake_body(handle);
+        true
+    }
+
+    /// Apply an instantaneous angular impulse to one body, waking it.
+    ///
+    /// See [`apply_impulse`](Self::apply_impulse) for why this exists.
+    ///
+    /// Returns false if the handle refers to no body.
+    pub fn apply_angular_impulse(
+        &mut self,
+        handle: RigidBodyHandle,
+        angular_impulse: Vector3<f32>,
+    ) -> bool {
+        let Some(body) = self.body_mut(handle) else {
+            return false;
+        };
+        body.apply_angular_impulse(angular_impulse);
+        self.wake_body(handle);
+        true
+    }
+
     /// Apply one-shot impulses to all dynamic bodies.
     fn apply_impulses(&mut self, impulses: &[PhysicsImpulse]) {
         for (idx, body) in self.bodies.iter_mut() {
@@ -1283,5 +1319,59 @@ use super::pipeline::manifold::ManifoldFrameStats;
 impl PhysicsWorld {
     pub fn manifold_frame_stats(&self) -> ManifoldFrameStats {
         self.manifold_cache.frame_stats()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A body placed at rest, which `create_body` starts asleep.
+    ///
+    /// The collider is not incidental: mass and inertia come from it, and the
+    /// body-level impulse methods no-op on a body with neither.
+    fn sleeping_body(world: &mut PhysicsWorld) -> RigidBodyHandle {
+        let handle = world.create_body(RigidBodyDesc::dynamic().position(Point3::origin()));
+        world.attach_collider(handle, ColliderDesc::sphere(0.5).density(1000.0));
+        assert!(
+            world.is_sleeping(handle),
+            "a body placed at rest is expected to start asleep — the rest of \
+             this test is meaningless otherwise"
+        );
+        handle
+    }
+
+    #[test]
+    fn applying_an_angular_impulse_wakes_the_body() {
+        let mut world = PhysicsWorld::new(PhysicsConfig::default());
+        let handle = sleeping_body(&mut world);
+
+        world.apply_angular_impulse(handle, Vector3::new(0.0, 0.0, 50.0));
+
+        assert!(
+            !world.is_sleeping(handle),
+            "a driven body must wake, or it accumulates spin the integrator ignores"
+        );
+        assert!(world.body(handle).unwrap().angular_velocity().magnitude() > 0.0);
+    }
+
+    #[test]
+    fn applying_a_linear_impulse_wakes_the_body() {
+        let mut world = PhysicsWorld::new(PhysicsConfig::default());
+        let handle = sleeping_body(&mut world);
+
+        world.apply_impulse(handle, Vector3::new(0.0, 0.0, 50.0));
+
+        assert!(!world.is_sleeping(handle));
+    }
+
+    #[test]
+    fn impulses_to_a_removed_body_report_failure_rather_than_panicking() {
+        let mut world = PhysicsWorld::new(PhysicsConfig::default());
+        let handle = sleeping_body(&mut world);
+        world.remove_body(handle);
+
+        assert!(!world.apply_impulse(handle, Vector3::z()));
+        assert!(!world.apply_angular_impulse(handle, Vector3::z()));
     }
 }
