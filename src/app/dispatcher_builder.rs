@@ -2,7 +2,7 @@ use specs::{Dispatcher, DispatcherBuilder};
 
 use crate::animation::{AnimationProbeConfigSystem, CharacterAnimationSystem};
 use crate::character::ContactGroundingSystem;
-use crate::creature::{BrainSystem, PerceptionSystem};
+use crate::creature::{BrainSystem, PerceptionSystem, RollerLocomotionSystem};
 use crate::damage::{
     BlastDamageSystem, BurnDamageSystem, DamageApplySystem, DeathSystem, ImpactDamageSystem,
 };
@@ -35,6 +35,9 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
         // is reacting to on screen.
         .with(PerceptionSystem, "perception", &["input_actions"])
         .with(BrainSystem, "brain", &["perception"])
+        // Rolling creatures consume the same intent the walk FSM does, just
+        // as torque instead of velocity. Must land before physics_sync.
+        .with(RollerLocomotionSystem, "roller_locomotion", &["brain"])
         .with(
             CharacterControlSystem,
             "character_control",
@@ -44,7 +47,7 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
         .with(
             PhysicsSyncSystem::default(),
             "physics_sync",
-            &["character_control"],
+            &["character_control", "roller_locomotion"],
         )
         // Compound body fracture (uses solver impulses from this frame)
         .with(FractureSystem, "fracture", &["physics_sync"])

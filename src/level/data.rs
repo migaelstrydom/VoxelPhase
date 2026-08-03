@@ -22,6 +22,7 @@ use serde::Deserialize;
 use crate::collision::AABB;
 use crate::terrain::SegmentFrame;
 
+use crate::app::creatures::RollerDef;
 use crate::app::spawnables::{
     BananaDef, BeachBallDef, BoxDef, BoxWallDef, CapsuleDef, CrateDef, DodecahedronDef, DolosDef,
     DominoDef, FencePostDef, GlowingOrbDef, HeavyCrateDef, HexPrismDef, HoneycombWallDef, HouseDef,
@@ -816,6 +817,24 @@ pub enum LevelObject {
         #[serde(default = "FencePostDef::default_density")]
         density: f32,
     },
+    /// Roller — a rolling boulder creature that hunts the player.
+    ///
+    /// Not a prop: it carries a brain and hit points, and it will come after
+    /// whoever placed it. See `src/app/creatures/`.
+    Roller {
+        /// Position (x, z). Y is determined by terrain surface height.
+        pos: (f32, f32),
+        #[serde(default = "RollerDef::default_radius")]
+        radius: f32,
+        #[serde(default = "RollerDef::default_speed")]
+        speed: f32,
+        #[serde(default = "RollerDef::default_health")]
+        health: f32,
+        #[serde(default = "RollerDef::default_sight_range")]
+        sight_range: f32,
+        #[serde(default)]
+        relentless: bool,
+    },
     /// Pendulum — terrain-anchored frame with a swinging ball.
     Pendulum {
         /// Position (x, z). Y is determined by terrain surface height.
@@ -1188,6 +1207,7 @@ impl LevelObject {
             LevelObject::Capsule { pos, .. } => ("Capsule", point(pos)),
             LevelObject::Menhir { pos, .. } => ("Menhir", anchored(pos)),
             LevelObject::FencePost { pos, .. } => ("FencePost", anchored(pos)),
+            LevelObject::Roller { pos, .. } => ("Roller", anchored(pos)),
             LevelObject::Pendulum { pos, .. } => ("Pendulum", anchored(pos)),
             LevelObject::PlayWheel { pos, .. } => ("PlayWheel", anchored(pos)),
             LevelObject::Seesaw { pos, .. } => ("Seesaw", anchored(pos)),
@@ -1257,6 +1277,7 @@ impl LevelObject {
             | LevelObject::Capsule { .. }
             | LevelObject::Menhir { .. }
             | LevelObject::FencePost { .. }
+            | LevelObject::Roller { .. }
             | LevelObject::PlayWheel { .. }
             | LevelObject::Tetrahedron { .. }
             | LevelObject::Octahedron { .. }
@@ -1345,6 +1366,7 @@ impl LevelObject {
             LevelObject::Capsule { pos, .. } => p3(pos),
             LevelObject::Menhir { pos, .. } => p2(pos),
             LevelObject::FencePost { pos, .. } => p2(pos),
+            LevelObject::Roller { pos, .. } => p2(pos),
             LevelObject::Pendulum { pos, .. } => p2(pos),
             LevelObject::PlayWheel { pos, .. } => p2(pos),
             LevelObject::Seesaw { pos, .. } => p2(pos),
@@ -1569,6 +1591,22 @@ impl LevelObject {
                 half_height: *half_height,
                 radius: *radius,
                 density: *density,
+            }),
+
+            LevelObject::Roller {
+                pos,
+                radius,
+                speed,
+                health,
+                sight_range,
+                relentless,
+            } => Box::new(RollerDef {
+                pos: *pos,
+                radius: *radius,
+                speed: *speed,
+                health: *health,
+                sight_range: *sight_range,
+                relentless: *relentless,
             }),
 
             LevelObject::Pendulum {

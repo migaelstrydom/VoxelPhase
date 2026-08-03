@@ -176,6 +176,17 @@ Level(
                     radius: 0.2,
                 ),
 
+                // Two rollers, far enough out that they have to notice you and
+                // close the distance rather than starting in your face.
+                Roller(pos: (18.0, 14.0)),
+                Roller(
+                    pos: (-16.0, 16.0),
+                    radius: 0.9,
+                    speed: 3.5,
+                    health: 140.0,
+                    relentless: true,
+                ),
+
                 PlayWheel(
                     pos: (5.0, -16.0),
                     radius: 2.0,

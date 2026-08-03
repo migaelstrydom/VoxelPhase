@@ -21,7 +21,9 @@
 
 mod brain;
 mod perception;
+mod roller;
 pub mod steering;
 
 pub use brain::{Behaviour, Brain, BrainSystem};
 pub use perception::{PerceivedTarget, Perception, PerceptionSystem};
+pub use roller::{Roller, RollerLocomotionSystem};
