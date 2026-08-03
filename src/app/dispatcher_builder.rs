@@ -147,7 +147,14 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
 
 #[cfg(test)]
 mod tests {
+    use specs::WorldExt;
+
     use super::*;
+    use crate::app::world_builder::WorldBuilder;
+    use crate::character::CharacterIntent;
+    use crate::creature::{Brain, Perception, Roller};
+    use crate::damage::Health;
+    use crate::projectile::GrenadeCooldown;
 
     #[test]
     fn dependency_graph_is_valid() {
@@ -155,5 +162,51 @@ mod tests {
         // does not exist, which is otherwise only discovered by launching the
         // game. Cheap insurance whenever the graph is edited.
         let _ = build_dispatcher();
+    }
+
+    /// Every component a system reads must have storage in the world before
+    /// anything is spawned, or the first entity carrying it panics on insert.
+    ///
+    /// `App` gets that by calling `Dispatcher::setup` before spawning the
+    /// level; this asserts the same call covers the world `WorldBuilder`
+    /// produces. Without it, a component reaching the world only through a
+    /// system is a launch-time panic that no test sees — which is exactly how
+    /// `Roller` shipped unregistered.
+    #[test]
+    fn dispatcher_setup_registers_every_system_component() {
+        let mut world = WorldBuilder::new()
+            .with_default_resources()
+            .build()
+            .unwrap();
+        let mut dispatcher = build_dispatcher();
+
+        dispatcher.setup(&mut world);
+
+        // Spot-check the creature stack: these reach the world only via
+        // `app::creatures`, so they are the ones most likely to be forgotten.
+        world.write_storage::<Roller>();
+        world.write_storage::<Brain>();
+        world.write_storage::<Perception>();
+        world.write_storage::<Health>();
+        world.write_storage::<CharacterIntent>();
+    }
+
+    /// The world must survive being built and set up twice over — a cheap
+    /// guard against `setup` clobbering resources `WorldBuilder` inserted.
+    #[test]
+    fn setup_preserves_resources_inserted_by_the_world_builder() {
+        let mut world = WorldBuilder::new()
+            .with_default_resources()
+            .build()
+            .unwrap();
+        world.write_resource::<GrenadeCooldown>().remaining = 42.0;
+
+        build_dispatcher().setup(&mut world);
+
+        assert_eq!(
+            world.read_resource::<GrenadeCooldown>().remaining,
+            42.0,
+            "setup must fill gaps, not overwrite what init already configured"
+        );
     }
 }

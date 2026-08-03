@@ -107,11 +107,22 @@ impl<'a, 'b> App<'a, 'b> {
             ));
         }
 
+        // Build and set up the dispatcher *before* spawning anything.
+        //
+        // `setup` registers the storage for every component any system touches,
+        // so a new component reaching the world only through a system needs no
+        // entry in `WorldBuilder::register_components`. Without this, forgetting
+        // that entry is a panic at spawn time that no test catches — it only
+        // shows up when the game is launched with the right level.
+        //
+        // Components that no system reads (spawner-only marker data) still need
+        // registering by hand, but that is a much smaller and more obvious set.
+        let mut dispatcher = build_dispatcher();
+        dispatcher.setup(&mut world);
+
         // Spawn level objects (player + all objects from the level file)
         let player_entity = spawn_level_objects(&mut world, &level, &level_materials);
         spawn_camera(&mut world, player_entity, window_width, window_height);
-
-        let dispatcher = build_dispatcher();
 
         Ok(Self {
             event_loop: Some(event_loop),
