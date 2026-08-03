@@ -26,6 +26,7 @@ use rustc_hash::FxHashMap;
 
 use super::chunk::{Chunk, ChunkCoord, CHUNK_VOXELS};
 use super::voxel::Voxel;
+use super::voxel_block::{VoxelBlock, VoxelSource};
 use crate::collision::AABB;
 
 /// A sparse grid of fixed-size voxel chunks sharing one coordinate frame and
@@ -116,6 +117,24 @@ impl ChunkGrid {
         match self.chunks.get(&self.coord_at(local)) {
             Some(chunk) => chunk.voxel_at(local),
             None => Voxel::air(),
+        }
+    }
+
+    /// Bulk-read a whole block of samples, one chunk at a time.
+    ///
+    /// Each chunk fills only the half-open box it owns. Chunks meet on shared
+    /// sample planes, and the half-open split is what `coord_at`'s floor does,
+    /// so every sample is written by exactly the chunk `get` would have asked.
+    fn fill_block_from_chunks(&self, block: &mut VoxelBlock) {
+        let bounds = block.lattice().bounds();
+        for coord in self.coords_in(&bounds) {
+            let Some(chunk) = self.chunks.get(&coord) else {
+                continue;
+            };
+            let owned = block
+                .lattice()
+                .indices_in_half_open(&self.chunk_bounds(coord));
+            chunk.fill_block(block, &owned);
         }
     }
 
@@ -246,12 +265,67 @@ impl ChunkGrid {
     }
 }
 
+impl VoxelSource for ChunkGrid {
+    fn fill_block(&self, block: &mut VoxelBlock) {
+        self.fill_block_from_chunks(block);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn grid(voxel_size: f32) -> ChunkGrid {
         ChunkGrid::new(voxel_size)
+    }
+
+    /// The bulk path exists purely for speed, so it has to be indistinguishable
+    /// from the per-point one — including on the sample planes where chunks
+    /// meet, which is where a half-open/closed mix-up would show up.
+    #[test]
+    fn bulk_fill_matches_point_queries() {
+        use super::super::voxel::VoxelMaterial;
+        use super::super::voxel_block::SampleLattice;
+
+        let voxel_size = 0.5;
+        let mut g = grid(voxel_size);
+
+        // Straddle the chunk joins at local 0 and 16, and leave one chunk
+        // entirely unallocated so the "reads as air" path is covered too.
+        let mut material = 0u8;
+        let mut local = -2.0;
+        while local < 20.0 {
+            let mut y = -2.0;
+            while y < 20.0 {
+                material = material.wrapping_add(1);
+                let voxel = if material % 3 == 0 {
+                    Voxel::air()
+                } else {
+                    Voxel::solid(VoxelMaterial::Rock, material.max(1))
+                };
+                g.set(Point3::new(local, y, local), voxel);
+                y += voxel_size;
+            }
+            local += voxel_size;
+        }
+
+        let lattice = SampleLattice::new(Point3::origin(), [-4, -4, -4], voxel_size, [48; 3]);
+        let mut block = VoxelBlock::air(lattice);
+        g.fill_block(&mut block);
+
+        let [nx, ny, nz] = block.dims();
+        for x in 0..nx {
+            for y in 0..ny {
+                for z in 0..nz {
+                    let pos = lattice.position(x, y, z);
+                    assert_eq!(
+                        block.get(x, y, z),
+                        g.get(pos),
+                        "sample ({x},{y},{z}) at {pos:?}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

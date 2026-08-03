@@ -19,10 +19,12 @@ mod frame;
 pub mod generation;
 mod marching_cubes;
 mod mesh_octree;
+mod render_cache;
 mod segment;
 pub(crate) mod svo;
 pub mod traversal;
 mod voxel;
+mod voxel_block;
 mod world;
 
 pub use anchor::{mate, outward, Anchor};

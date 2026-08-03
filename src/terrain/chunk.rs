@@ -26,6 +26,7 @@ use nalgebra::Point3;
 use super::mesh_octree::{MeshOctree, TriangleRef};
 use super::svo::SparseVoxelOctree;
 use super::voxel::Voxel;
+use super::voxel_block::{BlockRange, VoxelBlock};
 use crate::collision::AABB;
 
 /// Edge length of a chunk in voxels. A chunk holds `CHUNK_VOXELS³` voxels.
@@ -109,6 +110,12 @@ impl Chunk {
     /// Voxel at a grid-local position. Positions outside the chunk read as air.
     pub fn voxel_at(&self, local: Point3<f32>) -> Voxel {
         self.svo.get(local)
+    }
+
+    /// Bulk-read this chunk's voxels into the samples of `block` inside
+    /// `within`. See `SparseVoxelOctree::fill_block`.
+    pub fn fill_block(&self, block: &mut VoxelBlock, within: &BlockRange) {
+        self.svo.fill_block(block, within);
     }
 
     /// Write a voxel at a grid-local position, marking the chunk dirty.

@@ -27,7 +27,8 @@ use super::anchor::Anchor;
 use super::chunk::{ChunkCoord, ChunkTriangleRef, CHUNK_VOXELS};
 use super::chunk_grid::ChunkGrid;
 use super::frame::SegmentFrame;
-use super::mesh_octree::{MeshOctree, TriangleRef};
+use super::mesh_octree::{MeshBuildTimings, MeshOctree, TriangleRef};
+use super::render_cache::{build_chunk_render_data, ChunkRenderCache};
 use super::voxel::Voxel;
 use crate::collision::ray_triangle::RayHit;
 use crate::collision::{Triangle, AABB};
@@ -57,8 +58,41 @@ pub enum SegmentState {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SegmentTimings {
     pub chunks_dirtied: usize,
+    /// Everything from sampling voxels to owning the new octree. `build` and
+    /// `collect` are sub-phases of this, so they do not add to it.
     pub remesh: Duration,
+    /// Mesh construction inside `remesh`, split by phase.
+    pub build: MeshBuildTimings,
+    /// Walking the old and new octrees to list their triangles for adjacency.
+    pub collect: Duration,
     pub adjacency: Duration,
+}
+
+/// Wall-clock breakdown of one render-buffer concatenation.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ConcatTimings {
+    /// Walking each chunk's mesh octree to collect its vertices and indices.
+    pub mesh_walk: Duration,
+    /// Lifting vertices into world space and appending them.
+    pub transform: Duration,
+    /// Rebasing chunk-local indices onto the concatenated vertex buffer.
+    pub rebase: Duration,
+}
+
+impl ConcatTimings {
+    pub fn add(&mut self, other: &Self) {
+        self.mesh_walk += other.mesh_walk;
+        self.transform += other.transform;
+        self.rebase += other.rebase;
+    }
+}
+
+/// Time spent rebuilding one chunk, split by phase.
+#[derive(Debug, Clone, Copy, Default)]
+struct ChunkRemeshTimings {
+    build: MeshBuildTimings,
+    collect: Duration,
+    adjacency: Duration,
 }
 
 /// An independently placed chunk grid with a name, a frame and named anchors.
@@ -79,6 +113,10 @@ pub struct Segment {
     /// rebuilt whenever one came or went. Welded joins are not implemented, so
     /// no two segments have coincident geometry to link across anyway.
     adjacency: AdjacencyMap<ChunkTriangleRef>,
+
+    /// Each chunk's render geometry in world space, so a terrain edit only
+    /// rebuilds what it dirtied. Kept current by [`Self::remesh_chunk`].
+    render_cache: ChunkRenderCache,
 
     /// Named local frames within this segment.
     anchors: Vec<Anchor>,
@@ -118,6 +156,7 @@ impl Segment {
             frame,
             grid,
             adjacency: AdjacencyMap::new(),
+            render_cache: ChunkRenderCache::new(),
             anchors,
             state: SegmentState::Active,
             bounds,
@@ -234,47 +273,56 @@ impl Segment {
 
         let t0 = Instant::now();
         let mut adjacency = Duration::ZERO;
+        let mut build = MeshBuildTimings::default();
+        let mut collect = Duration::ZERO;
 
         for coord in &dirty {
-            adjacency += self.remesh_chunk(*coord);
+            let chunk = self.remesh_chunk(*coord);
+            adjacency += chunk.adjacency;
+            collect += chunk.collect;
+            build.add(&chunk.build);
             rebuilt.push(self.frame.aabb_to_world(&self.grid.chunk_bounds(*coord)));
         }
 
         // A chunk allocated purely to own a seam cell may have produced nothing.
         self.grid.prune_vacant();
+        let grid = &self.grid;
+        self.render_cache
+            .retain_coords(|coord| grid.chunk(coord).is_some());
         self.refresh_stats();
 
         Some(SegmentTimings {
             chunks_dirtied: dirty.len(),
             remesh: t0.elapsed() - adjacency,
+            build,
+            collect,
             adjacency,
         })
     }
 
-    /// Rebuild one chunk's mesh and patch adjacency. Returns adjacency time.
-    fn remesh_chunk(&mut self, coord: ChunkCoord) -> Duration {
+    /// Rebuild one chunk's mesh and patch adjacency.
+    fn remesh_chunk(&mut self, coord: ChunkCoord) -> ChunkRemeshTimings {
         let local_bounds = self.grid.chunk_bounds(coord);
         let first_sample = self.grid.first_sample(coord);
         let voxel_size = self.grid.voxel_size();
 
         let mut mesh = MeshOctree::new(local_bounds);
-        {
-            let grid = &self.grid;
-            mesh.generate_block(
-                Point3::origin(),
-                first_sample,
-                CHUNK_VOXELS as usize,
-                voxel_size,
-                |local| grid.get(local),
-            );
-        }
+        let build = mesh.generate_block(
+            Point3::origin(),
+            first_sample,
+            CHUNK_VOXELS as usize,
+            voxel_size,
+            &self.grid,
+        );
 
+        let t_collect = Instant::now();
         let mut old_tris = Vec::new();
         if let Some(chunk) = self.grid.chunk(coord) {
             chunk.mesh().collect_all_triangles_into(&mut old_tris);
         }
         let mut new_tris = Vec::new();
         mesh.collect_all_triangles_into(&mut new_tris);
+        let collect = t_collect.elapsed();
 
         let t = Instant::now();
         let old_refs = qualify(coord, &old_tris);
@@ -284,11 +332,18 @@ impl Segment {
             &new_refs,
             voxel_size * ADJACENCY_TOLERANCE_FACTOR,
         );
-        let elapsed = t.elapsed();
+        let adjacency = t.elapsed();
 
-        self.grid.chunk_or_insert(coord).replace_mesh(mesh);
+        let chunk = self.grid.chunk_or_insert(coord);
+        chunk.replace_mesh(mesh);
+        let data = build_chunk_render_data(chunk, &self.frame);
+        self.render_cache.insert(coord, data);
 
-        elapsed
+        ChunkRemeshTimings {
+            build,
+            collect,
+            adjacency,
+        }
     }
 
     /// Recompute cached bounds and mesh statistics.
@@ -417,16 +472,40 @@ impl Segment {
     ///
     /// The frame is baked in here, at mesh-collection time, so everything
     /// downstream of the terrain stays world-space and untouched.
-    pub fn append_render_data(&self, vertices: &mut Vec<Vertex>, indices: &mut Vec<u32>) {
+    pub fn append_render_data(
+        &self,
+        vertices: &mut Vec<Vertex>,
+        indices: &mut Vec<u32>,
+    ) -> ConcatTimings {
+        let mut timings = ConcatTimings::default();
         for coord in self.grid.coords() {
             let Some(chunk) = self.grid.chunk(coord) else {
                 continue;
             };
-            let (v, i) = chunk.mesh().get_render_data();
+
+            // A miss means the chunk has never been remeshed, so build it here
+            // rather than silently omit its geometry.
+            let t_walk = Instant::now();
+            let built;
+            let data = match self.render_cache.get(coord) {
+                Some(cached) => cached,
+                None => {
+                    built = build_chunk_render_data(chunk, &self.frame);
+                    &built
+                }
+            };
+            timings.mesh_walk += t_walk.elapsed();
+
+            let t_copy = Instant::now();
             let base = vertices.len() as u32;
-            vertices.extend(v.into_iter().map(|vert| self.to_world_vertex(vert)));
-            indices.extend(i.into_iter().map(|idx| idx + base));
+            vertices.extend_from_slice(&data.vertices);
+            timings.transform += t_copy.elapsed();
+
+            let t_indices = Instant::now();
+            indices.extend(data.indices.iter().map(|idx| idx + base));
+            timings.rebase += t_indices.elapsed();
         }
+        timings
     }
 
     /// As [`Self::append_render_data`], but only the chunks' geometry that

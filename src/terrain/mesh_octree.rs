@@ -16,12 +16,14 @@
 //! vertex. This ensures no duplicates while the intersection references ensure
 //! complete query results.
 
+use std::time::{Duration, Instant};
+
 use rustc_hash::FxHashSet;
 
 use nalgebra::{Point3, Vector3};
 
 use super::marching_cubes::MarchingCubes;
-use super::voxel::Voxel;
+use super::voxel_block::{SampleLattice, VoxelBlock, VoxelSource};
 use crate::collision::{Triangle, AABB};
 use crate::rendering::vertex::Vertex;
 
@@ -137,6 +139,42 @@ impl MeshNode {
     }
 }
 
+/// Wall-clock breakdown of one `MeshOctree::generate_block()`.
+///
+/// The four phases have genuinely different shapes: `sample` and
+/// `marching_cubes` are O(cells³) and fixed per chunk, whereas `insert` and
+/// `neighbor_refs` are O(triangles produced) and therefore vary with how much
+/// surface the chunk happens to contain.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct MeshBuildTimings {
+    /// Allocating the padded sample grid, before any voxel is read.
+    pub grid_alloc: Duration,
+    /// Filling the padded voxel sample grid via the caller's sampler.
+    pub sample: Duration,
+    /// Marching cubes over the owned cell range, including vertex conversion.
+    pub marching_cubes: Duration,
+    /// Inserting the emitted triangles into the octree.
+    pub insert: Duration,
+    /// The full neighbour-reference rebuild that follows insertion.
+    pub neighbor_refs: Duration,
+}
+
+impl MeshBuildTimings {
+    /// Sum of the measured phases.
+    pub fn total(&self) -> Duration {
+        self.grid_alloc + self.sample + self.marching_cubes + self.insert + self.neighbor_refs
+    }
+
+    /// Accumulate another block's timings into this one.
+    pub fn add(&mut self, other: &Self) {
+        self.grid_alloc += other.grid_alloc;
+        self.sample += other.sample;
+        self.marching_cubes += other.marching_cubes;
+        self.insert += other.insert;
+        self.neighbor_refs += other.neighbor_refs;
+    }
+}
+
 /// Adaptive mesh octree for terrain rendering and collision.
 pub struct MeshOctree {
     /// Root node of the octree.
@@ -166,16 +204,15 @@ impl MeshOctree {
     /// normals — use central differences at every owned cell corner, exactly as
     /// they would if the whole grid were meshed in one pass. Those extra cells
     /// are sampled but not emitted; they belong to the neighbouring blocks.
-    pub fn generate_block<F>(
+    pub fn generate_block<S: VoxelSource>(
         &mut self,
         lattice_origin: Point3<f32>,
         first_sample: [i32; 3],
         cells: usize,
         voxel_size: f32,
-        sample_voxel: F,
-    ) where
-        F: Fn(Point3<f32>) -> Voxel,
-    {
+        source: &S,
+    ) -> MeshBuildTimings {
+        let mut timings = MeshBuildTimings::default();
         self.root = MeshNode::empty(self.bounds);
 
         // One halo sample on each side: indices first_sample-1 ..= first_sample+cells+1.
@@ -185,31 +222,26 @@ impl MeshOctree {
             first_sample[1] - 1,
             first_sample[2] - 1,
         ];
-
-        let mut grid = vec![vec![vec![Voxel::air(); samples]; samples]; samples];
-        for (x, plane) in grid.iter_mut().enumerate() {
-            for (y, column) in plane.iter_mut().enumerate() {
-                for (z, slot) in column.iter_mut().enumerate() {
-                    let pos = Point3::new(
-                        lattice_origin.x + (base[0] + x as i32) as f32 * voxel_size,
-                        lattice_origin.y + (base[1] + y as i32) as f32 * voxel_size,
-                        lattice_origin.z + (base[2] + z as i32) as f32 * voxel_size,
-                    );
-                    *slot = sample_voxel(pos);
-                }
-            }
-        }
-
-        // Emit only the cells this block owns — grid cell indices 1..=cells.
-        let marching_cubes = MarchingCubes::new();
-        let mesh = marching_cubes.generate_range(
-            &grid,
+        let lattice = SampleLattice::new(
             lattice_origin,
             base,
             voxel_size,
-            [1, 1, 1],
-            [cells + 1, cells + 1, cells + 1],
+            [samples, samples, samples],
         );
+
+        let t_alloc = Instant::now();
+        let mut grid = VoxelBlock::air(lattice);
+        timings.grid_alloc = t_alloc.elapsed();
+
+        let t_sample = Instant::now();
+        source.fill_block(&mut grid);
+        timings.sample = t_sample.elapsed();
+
+        // Emit only the cells this block owns — grid cell indices 1..=cells.
+        let t_mc = Instant::now();
+        let marching_cubes = MarchingCubes::new();
+        let mesh =
+            marching_cubes.generate_range(&grid, [1, 1, 1], [cells + 1, cells + 1, cells + 1]);
 
         // Convert to vertices and insert into octree
         let vertices: Vec<Vertex> = mesh
@@ -228,8 +260,10 @@ impl MeshOctree {
                 normal: mesh.normals[i],
             })
             .collect();
+        timings.marching_cubes = t_mc.elapsed();
 
         // Insert triangles
+        let t_insert = Instant::now();
         for tri_idx in (0..mesh.indices.len()).step_by(3) {
             let i0 = mesh.indices[tri_idx] as usize;
             let i1 = mesh.indices[tri_idx + 1] as usize;
@@ -260,9 +294,15 @@ impl MeshOctree {
             }
         }
 
+        timings.insert = t_insert.elapsed();
+
         // Neighbour refs make queries return triangles that merely overlap a
         // leaf. The whole block was just rebuilt, so this is a full rebuild.
+        let t_refs = Instant::now();
         self.rebuild_neighbor_refs();
+        timings.neighbor_refs = t_refs.elapsed();
+
+        timings
     }
 
     /// Insert a triangle into the octree (associated function).

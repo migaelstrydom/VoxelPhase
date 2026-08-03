@@ -31,7 +31,8 @@ use rustc_hash::FxHashMap;
 use std::time::{Duration, Instant};
 
 use super::chunk::ChunkTriangleRef;
-use super::segment::Segment;
+use super::mesh_octree::MeshBuildTimings;
+use super::segment::{ConcatTimings, Segment};
 use crate::collision::ray_triangle::{ray_triangle, RayHit};
 use crate::collision::{MeshPatch, PatchTriangle, AABB};
 use crate::core::error::EngineResult;
@@ -39,6 +40,23 @@ use crate::physics::StaticGeometry;
 use crate::rendering::vertex::Vertex;
 use crate::resources::textures::{TextureHandle, TextureManager};
 use crate::sensing::{ProbeHit, ProbeTarget};
+
+/// Headroom left in the concatenated render buffers, as a fraction (1/N) of the
+/// level's current size, so that terrain edits do not reallocate them.
+const RENDER_BUFFER_SLACK_DIVISOR: usize = 8;
+
+/// Make room for `needed` items, overshooting only when the buffer is actually
+/// too small.
+///
+/// The guard matters as much as the slack: asking for `needed + slack` every
+/// time would reallocate on every call, since the request keeps creeping past
+/// whatever capacity the previous one settled on.
+fn reserve_with_slack<T>(buffer: &mut Vec<T>, needed: usize) {
+    debug_assert!(buffer.is_empty(), "capacity math assumes a cleared buffer");
+    if buffer.capacity() < needed {
+        buffer.reserve(needed + needed / RENDER_BUFFER_SLACK_DIVISOR);
+    }
+}
 
 /// Voxel size reported for a level with no segments, so that callers using it
 /// as a step size still get a usable number.
@@ -67,10 +85,17 @@ pub struct UpdateTimings {
     /// Marching cubes over the dirty chunks, plus the vacant-chunk prune.
     /// Excludes the adjacency patching measured separately.
     pub remesh: Duration,
+    /// Mesh construction within `remesh`, split by phase. A sub-breakdown of
+    /// `remesh`, so these do not add to the total separately.
+    pub build: MeshBuildTimings,
+    /// Listing old and new triangles for the adjacency diff, within `remesh`.
+    pub collect: Duration,
     /// Incremental adjacency patching for the remeshed triangles.
     pub adjacency: Duration,
     /// Rebuilding the concatenated render vertex/index buffers.
     pub concat: Duration,
+    /// Sub-breakdown of `concat`, which these do not add to separately.
+    pub concat_split: ConcatTimings,
     /// Total triangles in the level after the update.
     pub triangles: usize,
 }
@@ -198,6 +223,8 @@ impl TerrainWorld {
         let mut chunks_dirtied = 0;
         let mut remesh = Duration::ZERO;
         let mut adjacency = Duration::ZERO;
+        let mut build = MeshBuildTimings::default();
+        let mut collect = Duration::ZERO;
 
         let mut rebuilt = Vec::new();
         for segment in &mut self.segments {
@@ -205,6 +232,8 @@ impl TerrainWorld {
                 chunks_dirtied += t.chunks_dirtied;
                 remesh += t.remesh;
                 adjacency += t.adjacency;
+                collect += t.collect;
+                build.add(&t.build);
             }
         }
         self.rebuilt_regions = rebuilt;
@@ -214,13 +243,16 @@ impl TerrainWorld {
         }
 
         let t1 = Instant::now();
-        self.refresh_caches();
+        let concat_split = self.refresh_caches();
         let concat = t1.elapsed();
 
         let timings = UpdateTimings {
             chunks_dirtied,
             remesh,
+            build,
+            collect,
             adjacency,
+            concat_split,
             concat,
             triangles: self.triangle_count(),
         };
@@ -247,13 +279,31 @@ impl TerrainWorld {
     }
 
     /// Rebuild the concatenated render buffers and the level bounds.
-    fn refresh_caches(&mut self) {
+    fn refresh_caches(&mut self) -> ConcatTimings {
+        let mut timings = ConcatTimings::default();
         self.render_vertices.clear();
         self.render_indices.clear();
+
+        // Sized up front, with slack, from the stats each segment refreshed
+        // while remeshing.
+        //
+        // The slack is the point. Reserving exactly leaves capacity equal to the
+        // level's vertex count, and destruction *adds* geometry — so the first
+        // edit after load overflows by a hair and pays a grow-and-copy of a
+        // tens-of-megabytes buffer into freshly mapped pages. That lands on the
+        // first grenade the player throws, which is exactly when it is most
+        // visible. Slack moves it to load time, where nobody is watching.
+        let vertices: usize = self.segments.iter().map(Segment::vertex_count).sum();
+        let triangles: usize = self.segments.iter().map(Segment::triangle_count).sum();
+        reserve_with_slack(&mut self.render_vertices, vertices);
+        reserve_with_slack(&mut self.render_indices, triangles * 3);
+
         for segment in &self.segments {
-            segment.append_render_data(&mut self.render_vertices, &mut self.render_indices);
+            let t = segment.append_render_data(&mut self.render_vertices, &mut self.render_indices);
+            timings.add(&t);
         }
         self.bounds = union_bounds(&self.segments);
+        timings
     }
 
     // === Bounds and resolution ===
@@ -1244,6 +1294,12 @@ mod tests {
             Point3::new(0.0, 0.0, 0.0),
             Point3::new(16.0, 0.0, 16.0),
             Point3::new(-20.0, 0.0, 8.0),
+            // Two more wide craters. Grenade 0 used to cost several times these
+            // because the concat buffers reallocated on the first edit after
+            // load; keeping later same-size craters here is what makes that kind
+            // of regression visible as an outlier rather than the norm.
+            Point3::new(32.0, 0.0, 0.0),
+            Point3::new(0.0, 0.0, 32.0),
         ]
         .into_iter()
         .enumerate()
@@ -1261,6 +1317,21 @@ mod tests {
                 ms(t.adjacency),
                 ms(t.concat),
                 ms(t.total())
+            );
+            println!(
+                "    remesh split: grid alloc {:.2} | sample {:.2} | marching cubes {:.2} | octree insert {:.2} | neighbour refs {:.2} | collect {:.2} ms",
+                ms(t.build.grid_alloc),
+                ms(t.build.sample),
+                ms(t.build.marching_cubes),
+                ms(t.build.insert),
+                ms(t.build.neighbor_refs),
+                ms(t.collect),
+            );
+            println!(
+                "    concat split: mesh walk {:.2} | world transform {:.2} | index rebase {:.2} ms",
+                ms(t.concat_split.mesh_walk),
+                ms(t.concat_split.transform),
+                ms(t.concat_split.rebase),
             );
         }
     }

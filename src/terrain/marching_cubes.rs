@@ -5,7 +5,7 @@
 
 use nalgebra::{Point3, Vector3};
 
-use super::voxel::Voxel;
+use super::voxel_block::VoxelBlock;
 
 /// Result of marching cubes mesh generation.
 pub struct MarchingCubesMesh {
@@ -48,61 +48,40 @@ impl MarchingCubes {
         Self { iso_level: 0.0 }
     }
 
-    /// Generate mesh for a sub-range of cells within a sample grid.
+    /// Generate mesh for a sub-range of cells within a sample block.
     ///
-    /// The grid is indexed as `grid[x][y][z]`, and the world position of
-    /// `grid[x][y][z]` is `lattice_origin + (first_sample + (x, y, z)) * cell_size`.
-    /// Expressing positions as a multiple of the *global* sample index — rather
-    /// than as an offset from a per-block origin — makes vertex positions
-    /// bit-identical between blocks that share a sample plane, so meshes from
-    /// neighbouring chunks join without a seam.
+    /// The block's lattice supplies both the samples and their positions, and
+    /// those positions come from a *global* sample index rather than an offset
+    /// from a per-block origin. That makes vertex positions bit-identical
+    /// between blocks sharing a sample plane, so meshes from neighbouring
+    /// chunks join without a seam.
     ///
     /// Only cells with index in `cell_lo[a] .. cell_hi[a]` (per axis) are
     /// emitted; the remaining samples still participate as gradient neighbours,
     /// which keeps normals continuous across a block boundary.
     pub fn generate_range(
         &self,
-        grid: &[Vec<Vec<Voxel>>],
-        lattice_origin: Point3<f32>,
-        first_sample: [i32; 3],
-        cell_size: f32,
+        grid: &VoxelBlock,
         cell_lo: [usize; 3],
         cell_hi: [usize; 3],
     ) -> MarchingCubesMesh {
         let mut mesh = MarchingCubesMesh::new();
 
-        let size_x = grid.len();
-        if size_x < 2 {
-            return mesh;
-        }
-        let size_y = grid[0].len();
-        if size_y < 2 {
-            return mesh;
-        }
-        let size_z = grid[0][0].len();
-        if size_z < 2 {
+        let size = grid.dims();
+        if size.iter().any(|&n| n < 2) {
             return mesh;
         }
 
         let hi = [
-            cell_hi[0].min(size_x - 1),
-            cell_hi[1].min(size_y - 1),
-            cell_hi[2].min(size_z - 1),
+            cell_hi[0].min(size[0] - 1),
+            cell_hi[1].min(size[1] - 1),
+            cell_hi[2].min(size[2] - 1),
         ];
 
         for x in cell_lo[0]..hi[0] {
             for y in cell_lo[1]..hi[1] {
                 for z in cell_lo[2]..hi[2] {
-                    self.process_cell(
-                        grid,
-                        x,
-                        y,
-                        z,
-                        lattice_origin,
-                        first_sample,
-                        cell_size,
-                        &mut mesh,
-                    );
+                    self.process_cell(grid, x, y, z, &mut mesh);
                 }
             }
         }
@@ -110,36 +89,27 @@ impl MarchingCubes {
         mesh
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn process_cell(
         &self,
-        grid: &[Vec<Vec<Voxel>>],
+        grid: &VoxelBlock,
         x: usize,
         y: usize,
         z: usize,
-        lattice_origin: Point3<f32>,
-        first_sample: [i32; 3],
-        cell_size: f32,
         mesh: &mut MarchingCubesMesh,
     ) {
-        // World position of a sample, expressed from its global lattice index.
-        let sample_pos = |ix: usize, iy: usize, iz: usize| {
-            Point3::new(
-                lattice_origin.x + (first_sample[0] + ix as i32) as f32 * cell_size,
-                lattice_origin.y + (first_sample[1] + iy as i32) as f32 * cell_size,
-                lattice_origin.z + (first_sample[2] + iz as i32) as f32 * cell_size,
-            )
-        };
+        // Sample positions come from the lattice, which derives them from the
+        // global sample index so shared planes agree between blocks.
+        let sample_pos = |ix, iy, iz| grid.lattice().position(ix, iy, iz);
         // Get the 8 corner voxels of this cell
         let corners = [
-            &grid[x][y][z],
-            &grid[x + 1][y][z],
-            &grid[x + 1][y][z + 1],
-            &grid[x][y][z + 1],
-            &grid[x][y + 1][z],
-            &grid[x + 1][y + 1][z],
-            &grid[x + 1][y + 1][z + 1],
-            &grid[x][y + 1][z + 1],
+            grid.get(x, y, z),
+            grid.get(x + 1, y, z),
+            grid.get(x + 1, y, z + 1),
+            grid.get(x, y, z + 1),
+            grid.get(x, y + 1, z),
+            grid.get(x + 1, y + 1, z),
+            grid.get(x + 1, y + 1, z + 1),
+            grid.get(x, y + 1, z + 1),
         ];
 
         // Compute corner positions
@@ -188,7 +158,7 @@ impl MarchingCubes {
         ];
         let mut corner_gradients = [Vector3::zeros(); 8];
         for (i, (cx, cy, cz)) in corner_indices.iter().enumerate() {
-            corner_gradients[i] = sample_gradient(grid, *cx, *cy, *cz, cell_size);
+            corner_gradients[i] = sample_gradient(grid, *cx, *cy, *cz);
         }
 
         // Interpolate vertices, colors, and normals on edges
@@ -241,18 +211,11 @@ impl MarchingCubes {
 
 /// Central-difference gradient of the density field at grid index (x,y,z).
 /// Falls back to forward/backward differences at the grid boundary.
-fn sample_gradient(
-    grid: &[Vec<Vec<Voxel>>],
-    x: usize,
-    y: usize,
-    z: usize,
-    cell_size: f32,
-) -> Vector3<f32> {
-    let size_x = grid.len();
-    let size_y = grid[0].len();
-    let size_z = grid[0][0].len();
+fn sample_gradient(grid: &VoxelBlock, x: usize, y: usize, z: usize) -> Vector3<f32> {
+    let [size_x, size_y, size_z] = grid.dims();
+    let cell_size = grid.lattice().spacing();
 
-    let d = |cx: usize, cy: usize, cz: usize| grid[cx][cy][cz].density;
+    let d = |cx: usize, cy: usize, cz: usize| grid.get(cx, cy, cz).density;
 
     let dx = if x == 0 {
         (d(x + 1, y, z) - d(x, y, z)) / cell_size
@@ -605,7 +568,13 @@ const TRI_TABLE: [[i8; 16]; 256] = [
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::terrain::voxel::VoxelMaterial;
+    use crate::terrain::voxel::{Voxel, VoxelMaterial};
+    use crate::terrain::voxel_block::{BlockRange, SampleLattice};
+
+    /// An all-air block of `n³` unit-spaced samples with its origin at zero.
+    fn block(n: usize) -> VoxelBlock {
+        VoxelBlock::air(SampleLattice::new(Point3::origin(), [0, 0, 0], 1.0, [n; 3]))
+    }
 
     fn voxel(density: f32) -> Voxel {
         Voxel {
@@ -622,24 +591,18 @@ mod tests {
     #[test]
     fn flat_terrain_normals_point_up() {
         // 4x4x4 grid with the bottom half solid and the top half air.
-        let mut grid = vec![vec![vec![voxel(-1.0); 4]; 4]; 4];
+        let mut grid = block(4);
+        grid.fill(&BlockRange::new([0..4, 0..4, 0..4]), voxel(-1.0));
         for x in 0..4 {
             for z in 0..4 {
-                grid[x][0][z] = voxel(1.0);
-                grid[x][1][z] = voxel(1.0);
-                grid[x][2][z] = voxel(0.0); // partial-air voxel on the surface
-                grid[x][3][z] = voxel(-1.0);
+                grid.set(x, 0, z, voxel(1.0));
+                grid.set(x, 1, z, voxel(1.0));
+                grid.set(x, 2, z, voxel(0.0)); // partial-air voxel on the surface
+                grid.set(x, 3, z, voxel(-1.0));
             }
         }
         let mc = MarchingCubes::new();
-        let mesh = mc.generate_range(
-            &grid,
-            Point3::origin(),
-            [0, 0, 0],
-            1.0,
-            [0, 0, 0],
-            [usize::MAX; 3],
-        );
+        let mesh = mc.generate_range(&grid, [0, 0, 0], [usize::MAX; 3]);
         assert!(!mesh.normals.is_empty(), "mesh should have normals");
         for (i, n) in mesh.normals.iter().enumerate() {
             assert!(n.y > 0.9, "normal {i} should point up, got {:?}", n);
@@ -654,24 +617,18 @@ mod tests {
         //   y=4..6: destroyed solid              density=-1
         //   y=7: original partial-air voxel      density=0 (surface material)
         //   y=8: air above original surface      density=-1
-        let mut grid = vec![vec![vec![voxel(-1.0); 9]; 9]; 9];
+        let mut grid = block(9);
+        grid.fill(&BlockRange::new([0..9, 0..9, 0..9]), voxel(-1.0));
         for x in 0..9 {
             for z in 0..9 {
                 for y in 0..=3 {
-                    grid[x][y][z] = voxel(1.0);
+                    grid.set(x, y, z, voxel(1.0));
                 }
-                grid[x][7][z] = voxel(0.0);
+                grid.set(x, 7, z, voxel(0.0));
             }
         }
         let mc = MarchingCubes::new();
-        let mesh = mc.generate_range(
-            &grid,
-            Point3::origin(),
-            [0, 0, 0],
-            1.0,
-            [0, 0, 0],
-            [usize::MAX; 3],
-        );
+        let mesh = mc.generate_range(&grid, [0, 0, 0], [usize::MAX; 3]);
         assert!(!mesh.normals.is_empty());
         // Expect triangles on the crater floor (y transition 3->4) to have upward normals.
         for (i, (p, n)) in mesh.positions.iter().zip(mesh.normals.iter()).enumerate() {
@@ -689,23 +646,17 @@ mod tests {
     #[test]
     fn flat_terrain_binary_density_normals_point_up() {
         // Pre-fix style: no partial-air voxel, just binary +1/-1.
-        let mut grid = vec![vec![vec![voxel(-1.0); 4]; 4]; 4];
+        let mut grid = block(4);
+        grid.fill(&BlockRange::new([0..4, 0..4, 0..4]), voxel(-1.0));
         for x in 0..4 {
             for z in 0..4 {
-                grid[x][0][z] = voxel(1.0);
-                grid[x][1][z] = voxel(1.0);
+                grid.set(x, 0, z, voxel(1.0));
+                grid.set(x, 1, z, voxel(1.0));
                 // y=2, y=3 remain air
             }
         }
         let mc = MarchingCubes::new();
-        let mesh = mc.generate_range(
-            &grid,
-            Point3::origin(),
-            [0, 0, 0],
-            1.0,
-            [0, 0, 0],
-            [usize::MAX; 3],
-        );
+        let mesh = mc.generate_range(&grid, [0, 0, 0], [usize::MAX; 3]);
         assert!(!mesh.normals.is_empty(), "mesh should have normals");
         for (i, n) in mesh.normals.iter().enumerate() {
             assert!(n.y > 0.9, "normal {i} should point up, got {:?}", n);

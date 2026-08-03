@@ -8,6 +8,7 @@
 use nalgebra::Point3;
 
 use super::voxel::Voxel;
+use super::voxel_block::{BlockRange, VoxelBlock};
 use crate::collision::AABB;
 
 /// A node in the Sparse Voxel Octree.
@@ -107,6 +108,84 @@ impl SparseVoxelOctree {
                 let octant = octant_index(node_bounds, position);
                 let child_bounds = child_bounds(node_bounds, octant);
                 self.get_recursive(&children[octant], &child_bounds, position, depth + 1)
+            }
+        }
+    }
+
+    /// Fill the samples of `block` that lie in `within` from this octree.
+    ///
+    /// Equivalent to calling `get` for each of those samples, but proportional
+    /// to the number of octree *nodes* the block touches rather than to the
+    /// number of samples: uniform regions are single leaves here, and each one
+    /// becomes a contiguous fill instead of thousands of descents.
+    ///
+    /// Samples outside this octree's bounds are left untouched, matching `get`
+    /// returning air for them only because the caller starts the block as air.
+    pub fn fill_block(&self, block: &mut VoxelBlock, within: &BlockRange) {
+        // `get` rejects anything outside the bounds *inclusively*, before any
+        // octant test runs; every deeper split below is then half-open, exactly
+        // as `octant_index` decides it.
+        let covered = block
+            .lattice()
+            .indices_in_closed(&self.bounds)
+            .intersect(within);
+
+        self.fill_recursive(&self.root, &self.bounds, &covered, 0, block);
+    }
+
+    fn fill_recursive(
+        &self,
+        node: &SvoNode,
+        node_bounds: &AABB,
+        range: &BlockRange,
+        depth: u32,
+        block: &mut VoxelBlock,
+    ) {
+        if range.is_empty() {
+            return;
+        }
+
+        match node {
+            SvoNode::Leaf(voxel) => block.fill(range, *voxel),
+            SvoNode::Interior { children } => {
+                if depth >= self.max_depth {
+                    // Mirrors `get_recursive`: too deep to trust, reads as air.
+                    block.fill(range, Voxel::air());
+                    return;
+                }
+
+                // Split each axis where `octant_index` would: below the centre
+                // goes low, at or above it goes high.
+                let center = node_bounds.center();
+                let split = [0, 1, 2].map(|axis| {
+                    let r = range.axis(axis);
+                    block
+                        .lattice()
+                        .first_index_at_least(axis, center[axis])
+                        .clamp(r.start, r.end)
+                });
+
+                for octant in 0..8 {
+                    let half = |axis: usize, bit: usize| {
+                        let r = range.axis(axis);
+                        if octant & bit == 0 {
+                            r.start..split[axis]
+                        } else {
+                            split[axis]..r.end
+                        }
+                    };
+                    let child_range = BlockRange::new([half(0, 1), half(1, 2), half(2, 4)]);
+                    if child_range.is_empty() {
+                        continue;
+                    }
+                    self.fill_recursive(
+                        &children[octant],
+                        &child_bounds(node_bounds, octant),
+                        &child_range,
+                        depth + 1,
+                        block,
+                    );
+                }
             }
         }
     }
