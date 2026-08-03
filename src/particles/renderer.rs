@@ -102,6 +102,7 @@ impl ParticleRenderer {
         for (i, particle) in pool.iter().take(particle_count).enumerate() {
             let base_index = (i * 4) as u32;
             let life_normalized = particle.normalized_age();
+            let motion = particle.velocity * particle.stretch;
 
             // Create 4 vertices for this particle's billboard
             for corner in &corners {
@@ -111,6 +112,7 @@ impl ParticleRenderer {
                     size: particle.size,
                     color: particle.color,
                     life: life_normalized,
+                    motion,
                 });
             }
 

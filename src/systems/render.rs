@@ -1,6 +1,7 @@
 use crate::animation::CharacterAnimator;
 use crate::components::{
-    CameraComponent, ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Rotation,
+    CameraComponent, MaterialModulation, ModelInstance, Orientation, Position, Renderable,
+    RigidBodyComponent, Rotation,
 };
 use crate::debug::{DebugConfig, DebugLines, DebugOverlays};
 use crate::fire::components::OnFire;
@@ -10,7 +11,7 @@ use crate::particles::ParticlePool;
 use crate::rendering::debug_render::{
     render_debug_overlays_opaque, render_debug_overlays_transparent,
 };
-use crate::rendering::material::{MaterialManager, SurfaceParams};
+use crate::rendering::material::{MaterialManager, SurfaceModulation, SurfaceParams};
 use crate::rendering::renderer::Renderer;
 use crate::resources::textures::TextureManager;
 use crate::terrain::TerrainWorld;
@@ -75,6 +76,7 @@ impl<'a> System<'a> for RenderSystem {
         Option<Read<'a, WaterGrid>>,
         Option<Read<'a, WaveGrid>>,
         ReadStorage<'a, ModelInstance>,
+        ReadStorage<'a, MaterialModulation>,
         ReadStorage<'a, Position>,
         ReadStorage<'a, Rotation>,
         ReadStorage<'a, Orientation>,
@@ -103,6 +105,7 @@ impl<'a> System<'a> for RenderSystem {
             water_grid_opt,
             wave_grid_opt,
             model_instances,
+            material_modulations,
             positions,
             rotations,
             orientations,
@@ -247,6 +250,11 @@ impl<'a> System<'a> for RenderSystem {
                     let part_transforms: Vec<Transform> =
                         vec![Transform::default(); model_instance.model.parts.len()];
 
+                    let modulation = material_modulations
+                        .get(entity)
+                        .map(|m| m.0)
+                        .unwrap_or(SurfaceModulation::IDENTITY);
+
                     if let Err(e) = renderer.draw_model(
                         draw_cb,
                         &model_instance.model,
@@ -254,6 +262,7 @@ impl<'a> System<'a> for RenderSystem {
                         &part_transforms,
                         &material_manager,
                         &texture_manager,
+                        modulation,
                     ) {
                         log::error!("RenderSystem: Failed to draw model: {}", e);
                     }

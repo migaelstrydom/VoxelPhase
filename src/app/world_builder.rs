@@ -3,8 +3,8 @@ use specs::{World, WorldExt};
 use crate::animation::{AnimationDebugConfig, CharacterAnimator};
 use crate::camera::{CameraConfig, FollowTarget};
 use crate::components::{
-    CameraComponent, ModelInstance, Orientation, Position, Renderable, RigidBodyComponent,
-    Rotation, TerrainAnchored, Velocity, VelocityDriven,
+    CameraComponent, MaterialModulation, ModelInstance, Orientation, Position, Renderable,
+    RigidBodyComponent, Rotation, TerrainAnchored, Velocity, VelocityDriven,
 };
 use crate::core::error::EngineResult;
 use crate::debug::{DebugConfig, DebugLines, DebugLog, DebugOverlays};
@@ -71,6 +71,7 @@ impl WorldBuilder {
         world.register::<CompoundFracture>();
         world.register::<TerrainAnchored>();
         world.register::<PointLight>();
+        world.register::<MaterialModulation>();
         world.register::<FireLight>();
     }
 

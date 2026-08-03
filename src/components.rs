@@ -7,6 +7,7 @@ use crate::model::Model;
 use crate::physics::constraint::ConstraintHandle;
 use crate::physics::{ColliderDesc, RigidBodyHandle};
 use crate::rendering::camera::Camera;
+use crate::rendering::material::SurfaceModulation;
 
 // Physics Components
 #[derive(Component, Debug, Clone, Copy)]
@@ -89,6 +90,16 @@ impl ModelInstance {
 #[derive(Component, Debug, Default)]
 #[storage(DenseVecStorage)]
 pub struct Renderable;
+
+/// Per-instance override of the surface parameters of the entity's model.
+///
+/// Materials are shared between every instance of a model, so anything that
+/// varies per entity and per frame — a grenade heating up as it flies — cannot
+/// live in the material. This component carries that variation and is folded in
+/// at draw time. An entity without one draws its materials exactly as authored.
+#[derive(Component, Debug, Default, Clone, Copy)]
+#[storage(DenseVecStorage)]
+pub struct MaterialModulation(pub SurfaceModulation);
 
 /// Anchors an entity to a fixed world-space position via physics constraints.
 ///

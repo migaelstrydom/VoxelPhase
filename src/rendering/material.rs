@@ -198,6 +198,43 @@ impl Material {
     }
 }
 
+/// Per-instance adjustment applied on top of a material's authored parameters.
+///
+/// Materials are shared: every grenade in flight draws from the same
+/// `Material`, so a material cannot hold state that differs between instances.
+/// This carries the part of a surface that *does* differ — how hot this
+/// particular object is right now — and is folded into the pushed
+/// [`SurfaceParams`] at draw time, leaving the material itself untouched.
+///
+/// Kept deliberately narrow: only what an animator needs to drive per frame.
+#[derive(Clone, Copy, Debug)]
+pub struct SurfaceModulation {
+    /// Multiplier on the material's emissive luminance. 1.0 draws the surface
+    /// exactly as authored; above 1.0 pushes it further past the bloom
+    /// threshold, and 0.0 puts the glow out entirely.
+    pub emissive_scale: f32,
+}
+
+impl SurfaceModulation {
+    /// Draw the material exactly as authored.
+    pub const IDENTITY: Self = Self {
+        emissive_scale: 1.0,
+    };
+
+    /// Scale the material's emissive luminance.
+    pub const fn emissive(scale: f32) -> Self {
+        Self {
+            emissive_scale: scale,
+        }
+    }
+}
+
+impl Default for SurfaceModulation {
+    fn default() -> Self {
+        Self::IDENTITY
+    }
+}
+
 /// GPU-facing material parameters, pushed per draw call.
 ///
 /// Layout must match the `MaterialPushConstants` block in shader/material.glsl,
@@ -223,6 +260,18 @@ impl SurfaceParams {
         emissive: [0.0, 0.0, 0.0, 0.0],
         surface: [1.0, 0.0, 0.0, 3.0],
     };
+
+    /// Apply a per-instance modulation to these parameters.
+    ///
+    /// The emissive scale lands on `emissive.w` — the CPU-side radiance scale —
+    /// rather than on the colour, so the hue normalisation established by
+    /// `Emission::radiance_scale` survives and the result still means "this
+    /// luminance, whatever the hue". The rim term reads the same product, so
+    /// the silhouette glow brightens in step with the surface.
+    pub fn modulated(mut self, modulation: SurfaceModulation) -> Self {
+        self.emissive[3] *= modulation.emissive_scale;
+        self
+    }
 
     /// View as raw bytes for `cmd_push_constants`.
     pub fn as_bytes(&self) -> &[u8] {

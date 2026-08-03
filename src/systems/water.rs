@@ -263,6 +263,7 @@ fn spawn_splash_particles(splash: &SplashEvent, config: &ParticleConfig, pool: &
             max_life: lifetime,
             gravity_scale: cfg.gravity_scale(),
             drag: cfg.drag(),
+            stretch: 0.0,
         });
     }
 
@@ -293,6 +294,7 @@ fn spawn_splash_particles(splash: &SplashEvent, config: &ParticleConfig, pool: &
             max_life: lifetime,
             gravity_scale: 0.1,
             drag: 1.5,
+            stretch: 0.0,
         });
     }
 }
@@ -358,6 +360,7 @@ fn spawn_wake_particles(wake: &WakeEvent, pool: &mut ParticlePool) {
             max_life: lifetime,
             gravity_scale: 0.8,
             drag: 0.5,
+            stretch: 0.0,
         });
     }
 }

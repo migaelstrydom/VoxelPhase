@@ -18,7 +18,7 @@ use crate::level::{
     spawn_level_objects,
 };
 use crate::projectile::{build_grenade_model, GrenadeMaterials, GrenadeModelResource};
-use crate::rendering::material::{Material, MaterialManagerBuilder};
+use crate::rendering::material::{Emission, Material, MaterialManagerBuilder, SurfaceFinish};
 use crate::rendering::renderer::Renderer;
 use crate::rendering::Colour;
 use crate::resources::manager::ResourceManager;
@@ -70,9 +70,7 @@ impl<'a, 'b> App<'a, 'b> {
                 reason: format!("Failed to create fallback texture: {}", e),
             })?;
 
-        let grenade_materials = GrenadeMaterials {
-            body: material_builder.register(Material::coloured(Colour::new(0.2, 0.25, 0.2, 1.0))),
-        };
+        let grenade_materials = Self::create_grenade_materials(&mut material_builder);
 
         let level_materials =
             create_level_materials(&level, &texture_manager, &mut material_builder)?;
@@ -162,13 +160,63 @@ impl<'a, 'b> App<'a, 'b> {
         Ok((vulkan_context, renderer, resource_manager, texture_manager))
     }
 
+    /// Register the three surfaces of a grenade.
+    ///
+    /// Authored for a grenade *at rest*: `GrenadeVisualSystem` scales all three
+    /// emissions together as it heats up, so these are the coolest each surface
+    /// ever looks. Only the core starts above the bloom threshold
+    /// (`PostProcessConfig::bloom_threshold`), which is what makes the fissures
+    /// bleed light while the shell around them stays dark rock.
+    fn create_grenade_materials(builder: &mut MaterialManagerBuilder) -> GrenadeMaterials {
+        GrenadeMaterials {
+            crust: builder.register(
+                Material::coloured(Colour::rgb(0.11, 0.10, 0.11))
+                    .with_finish(SurfaceFinish {
+                        roughness: 0.30,
+                        metallic: 0.85,
+                    })
+                    // Barely alight — enough that a resting grenade is not a
+                    // dead lump, and it has somewhere to go when heated.
+                    .with_emission(Emission {
+                        colour: Colour::rgb(1.0, 0.25, 0.05),
+                        strength: 0.06,
+                        rim_strength: 0.4,
+                        rim_power: 4.0,
+                    }),
+            ),
+            ember: builder.register(
+                Material::coloured(Colour::rgb(0.55, 0.20, 0.06))
+                    .with_finish(SurfaceFinish {
+                        roughness: 0.55,
+                        metallic: 0.2,
+                    })
+                    .with_emission(Emission {
+                        colour: Colour::rgb(1.0, 0.38, 0.08),
+                        strength: 0.85,
+                        rim_strength: 0.7,
+                        rim_power: 3.0,
+                    }),
+            ),
+            core: builder.register(
+                Material::coloured(Colour::rgb(1.0, 0.82, 0.45))
+                    .with_finish(SurfaceFinish::MATTE)
+                    .with_emission(Emission {
+                        colour: Colour::rgb(1.0, 0.55, 0.15),
+                        strength: 4.5,
+                        rim_strength: 1.8,
+                        rim_power: 2.0,
+                    }),
+            ),
+        }
+    }
+
     fn create_grenade_model(grenade_materials: &GrenadeMaterials) -> Arc<crate::model::Model> {
         use crate::projectile::GrenadeConfig;
 
         let grenade_config = GrenadeConfig::default();
         let grenade_model = Arc::new(build_grenade_model(
             grenade_config.radius,
-            Colour::new(1.0, 0.7, 0.1, 1.0),
+            Colour::rgb(1.0, 0.82, 0.45),
             grenade_materials,
         ));
         log::info!("Grenade model built");

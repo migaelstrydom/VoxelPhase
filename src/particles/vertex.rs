@@ -21,6 +21,10 @@ pub struct ParticleVertex {
     pub color: Vector4<f32>,
     /// Normalized lifetime (0.0 = just born, 1.0 = about to die).
     pub life: f32,
+    /// World-space smear vector: how far the particle moves in the time its
+    /// billboard is stretched over. Zero draws a round particle; otherwise the
+    /// quad is drawn as a capsule-ish streak along this direction.
+    pub motion: Vector3<f32>,
 }
 
 impl ParticleVertex {
@@ -34,7 +38,7 @@ impl ParticleVertex {
     }
 
     /// Get the Vulkan attribute descriptions for this vertex format.
-    pub fn attribute_descriptions() -> [vk::VertexInputAttributeDescription; 5] {
+    pub fn attribute_descriptions() -> [vk::VertexInputAttributeDescription; 6] {
         [
             // Center position (location 0) - vec3
             vk::VertexInputAttributeDescription {
@@ -75,6 +79,17 @@ impl ParticleVertex {
                     + mem::size_of::<Vector2<f32>>()
                     + mem::size_of::<f32>()
                     + mem::size_of::<Vector4<f32>>()) as u32,
+            },
+            // Motion smear (location 5) - vec3
+            vk::VertexInputAttributeDescription {
+                binding: 0,
+                location: 5,
+                format: vk::Format::R32G32B32_SFLOAT,
+                offset: (mem::size_of::<Vector3<f32>>()
+                    + mem::size_of::<Vector2<f32>>()
+                    + mem::size_of::<f32>()
+                    + mem::size_of::<Vector4<f32>>()
+                    + mem::size_of::<f32>()) as u32,
             },
         ]
     }

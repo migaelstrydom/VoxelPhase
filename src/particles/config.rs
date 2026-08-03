@@ -24,6 +24,11 @@ pub trait ParticleEffectConfig {
     fn gravity_scale(&self) -> f32;
     /// Air drag coefficient.
     fn drag(&self) -> f32;
+    /// Seconds of motion the billboard is smeared over. Defaults to round
+    /// particles; effects that read as fast-moving override it.
+    fn stretch(&self) -> f32 {
+        0.0
+    }
 }
 
 /// Configuration for explosion flash particles.
@@ -238,6 +243,10 @@ impl Default for SparksConfig {
 }
 
 impl ParticleEffectConfig for SparksConfig {
+    fn stretch(&self) -> f32 {
+        0.02
+    }
+
     fn min_lifetime(&self) -> f32 {
         self.min_lifetime
     }
@@ -331,6 +340,79 @@ impl ParticleEffectConfig for WaterSplashConfig {
     }
 }
 
+/// Configuration for ember trail particles.
+///
+/// Tuned to hang in the air rather than fly: an ember shed by a moving object
+/// already carries a share of that object's velocity, so its own launch speed
+/// only needs to scatter it off the path. Heavy drag then parks it, which is
+/// what turns a stream of embers into a tail that stays where it was laid.
+#[derive(Debug, Clone)]
+pub struct EmberTrailConfig {
+    pub min_lifetime: f32,
+    pub max_lifetime: f32,
+    pub min_size: f32,
+    pub max_size: f32,
+    pub min_speed: f32,
+    pub max_speed: f32,
+    pub start_color: Vector4<f32>,
+    pub end_color: Vector4<f32>,
+    /// Upward drift, as a negative gravity scale — hot embers rise as they cool.
+    pub buoyancy: f32,
+}
+
+impl Default for EmberTrailConfig {
+    fn default() -> Self {
+        Self {
+            min_lifetime: 0.25,
+            max_lifetime: 0.8,
+            min_size: 0.025,
+            max_size: 0.075,
+            min_speed: 0.3,
+            max_speed: 1.6,
+            start_color: Vector4::new(1.0, 0.72, 0.30, 1.0), // Yellow-hot
+            end_color: Vector4::new(0.75, 0.08, 0.0, 0.0),   // Fading deep red
+            buoyancy: -0.25,
+        }
+    }
+}
+
+impl ParticleEffectConfig for EmberTrailConfig {
+    fn stretch(&self) -> f32 {
+        0.05
+    }
+
+    fn min_lifetime(&self) -> f32 {
+        self.min_lifetime
+    }
+    fn max_lifetime(&self) -> f32 {
+        self.max_lifetime
+    }
+    fn min_size(&self) -> f32 {
+        self.min_size
+    }
+    fn max_size(&self) -> f32 {
+        self.max_size
+    }
+    fn min_speed(&self) -> f32 {
+        self.min_speed
+    }
+    fn max_speed(&self) -> f32 {
+        self.max_speed
+    }
+    fn start_color(&self) -> Vector4<f32> {
+        self.start_color
+    }
+    fn end_color(&self) -> Vector4<f32> {
+        self.end_color
+    }
+    fn gravity_scale(&self) -> f32 {
+        self.buoyancy
+    }
+    fn drag(&self) -> f32 {
+        1.4
+    }
+}
+
 /// Combined configuration resource for all particle effects.
 #[derive(Debug, Clone, Default)]
 pub struct ParticleConfig {
@@ -339,6 +421,7 @@ pub struct ParticleConfig {
     pub debris: DebrisConfig,
     pub sparks: SparksConfig,
     pub splash: WaterSplashConfig,
+    pub ember_trail: EmberTrailConfig,
     pub gravity: f32,
 }
 
@@ -350,6 +433,7 @@ impl ParticleConfig {
             debris: DebrisConfig::default(),
             sparks: SparksConfig::default(),
             splash: WaterSplashConfig::default(),
+            ember_trail: EmberTrailConfig::default(),
             gravity: 9.81,
         }
     }

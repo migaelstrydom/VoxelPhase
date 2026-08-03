@@ -25,6 +25,13 @@ pub struct Particle {
     pub gravity_scale: f32,
     /// Drag coefficient for air resistance.
     pub drag: f32,
+    /// Seconds of the particle's own motion its billboard is smeared over.
+    ///
+    /// 0 draws a round particle. Above that the billboard stretches along the
+    /// direction of travel by `velocity * stretch`, which is what turns a fast
+    /// stream of embers into streaks instead of a dotted line. Kept as a time
+    /// rather than a length so a particle that slows down rounds off by itself.
+    pub stretch: f32,
 }
 
 impl Particle {

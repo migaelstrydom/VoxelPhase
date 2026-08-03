@@ -1,5 +1,6 @@
 //! Particle emitter components for spawning effects.
 
+use nalgebra::Vector3;
 use specs::{Component, VecStorage};
 
 /// Types of particle effects available.
@@ -15,6 +16,8 @@ pub enum ParticleEffectType {
     Sparks,
     /// Radial splash from a body impacting water.
     WaterSplash,
+    /// Cooling embers shed by a hot object, for comet-tail trails.
+    EmberTrail,
 }
 
 /// Component for entities that emit particles.
@@ -35,6 +38,15 @@ pub struct ParticleEmitter {
     pub initial_burst: u32,
     /// Whether the initial burst has been spawned.
     pub burst_spawned: bool,
+    /// Fraction of the emitting entity's velocity each particle is born with.
+    ///
+    /// A trail shed by a fast body wants some of that motion, or the particles
+    /// appear to be flung backwards out of it. 0 leaves them at rest in world
+    /// space, 1 has them keep pace with the emitter.
+    pub velocity_inheritance: f32,
+    /// Where this emitter spawned from last frame, used to spread continuous
+    /// spawns along the path travelled since. `None` until the first update.
+    pub last_position: Option<Vector3<f32>>,
 }
 
 impl ParticleEmitter {
@@ -48,7 +60,15 @@ impl ParticleEmitter {
             active: true,
             initial_burst: 0,
             burst_spawned: false,
+            velocity_inheritance: 0.0,
+            last_position: None,
         }
+    }
+
+    /// Set the fraction of the emitter's own velocity that particles inherit.
+    pub fn with_velocity_inheritance(mut self, fraction: f32) -> Self {
+        self.velocity_inheritance = fraction;
+        self
     }
 
     /// Set the spawn rate (particles per second).
@@ -97,6 +117,15 @@ impl ParticleEmitter {
             .with_burst(30)
             .with_spawn_rate(50.0)
             .with_lifetime(0.5)
+    }
+
+    /// Create an ember trail emitter.
+    ///
+    /// Runs indefinitely at a rate its owner sets each frame — a trail should
+    /// thin out when the object it trails from slows down — so no rate or
+    /// lifetime is fixed here.
+    pub fn ember_trail() -> Self {
+        Self::new(ParticleEffectType::EmberTrail).with_velocity_inheritance(0.25)
     }
 
     /// Create a water splash emitter.

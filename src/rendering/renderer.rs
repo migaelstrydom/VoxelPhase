@@ -20,7 +20,9 @@ use crate::model::{Model, Transform};
 use crate::particles::{ParticlePool, ParticleRenderer};
 use crate::rendering::descriptors::DescriptorManager;
 use crate::rendering::frame::{FrameData, LightUbo, SceneLighting, SceneUbo};
-use crate::rendering::material::{MaterialManager, SurfaceParams, SURFACE_PARAMS_OFFSET};
+use crate::rendering::material::{
+    MaterialManager, SurfaceModulation, SurfaceParams, SURFACE_PARAMS_OFFSET,
+};
 use crate::rendering::overlay::OverlayRenderer;
 use crate::rendering::pipeline::{GraphicsPipeline, GraphicsPipelineConfig};
 use crate::rendering::post::PostProcessRenderer;
@@ -319,6 +321,7 @@ impl Renderer {
         part_transforms: &[Transform],
         material_manager: &MaterialManager,
         texture_manager: &TextureManager,
+        modulation: SurfaceModulation,
     ) -> EngineResult<()> {
         for (part_idx, part) in model.parts.iter().enumerate() {
             // Get the animated/modified transform for this part
@@ -334,7 +337,9 @@ impl Renderer {
             // Draw each primitive in this part
             for primitive in &part.primitives {
                 let texture = material_manager.get_effective_texture(primitive.material);
-                let surface = material_manager.get_surface_params(primitive.material);
+                let surface = material_manager
+                    .get_surface_params(primitive.material)
+                    .modulated(modulation);
 
                 self.draw_mesh_with_texture(
                     cb,

@@ -8,7 +8,9 @@ use crate::fracture::FractureSystem;
 use crate::input::InputActionSystem;
 use crate::lighting::LightCollectionSystem;
 use crate::particles::{ParticleSpawnSystem, ParticleUpdateSystem};
-use crate::projectile::{GrenadeSpawnSystem, LifetimeSystem, ProjectileImpactDetectionSystem};
+use crate::projectile::{
+    GrenadeSpawnSystem, GrenadeVisualSystem, LifetimeSystem, ProjectileImpactDetectionSystem,
+};
 use crate::sensing::SensorProbeSystem;
 use crate::systems::{
     CameraControlSystem, PhysicsSyncSystem, PlayerControlSystem, PlayerInputSystem, RenderSystem,
@@ -53,6 +55,13 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
         // Projectiles and explosions
         .with(GrenadeSpawnSystem, "grenade_spawn", &["camera_control"])
         .with(LifetimeSystem, "lifetime", &["grenade_spawn"])
+        // Grenade glow tracks velocity, so it runs after physics has synced it
+        // and before lights are collected for the frame.
+        .with(
+            GrenadeVisualSystem::default(),
+            "grenade_visuals",
+            &["lifetime"],
+        )
         .with(
             ProjectileImpactDetectionSystem,
             "projectile_impact_detection",
@@ -72,7 +81,12 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
         // Water simulation (after terrain update so dirty_regions are visible)
         .with(WaterSystem, "water", &["terrain_update"])
         // Particles
-        .with(ParticleSpawnSystem, "particle_spawn", &["explosion"])
+        .with(
+            ParticleSpawnSystem,
+            "particle_spawn",
+            // Grenade visuals set their trail's spawn rate for the frame.
+            &["explosion", "grenade_visuals"],
+        )
         .with(ParticleUpdateSystem, "particle_update", &["particle_spawn"])
         // Per-frame point light selection. Must see the final camera position
         // and every light attached this frame, so it runs after both the camera
@@ -81,7 +95,7 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
         .with(
             LightCollectionSystem::default(),
             "light_collection",
-            &["camera_control", "fire_light"],
+            &["camera_control", "fire_light", "grenade_visuals"],
         )
         // Rendering (thread-local)
         .with_thread_local(RenderSystem::default())

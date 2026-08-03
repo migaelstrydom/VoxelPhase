@@ -67,6 +67,18 @@ impl Colour {
         }
     }
 
+    /// Blend towards `other`, component-wise. `t` is clamped to [0, 1], so
+    /// callers can hand over an unbounded ramp without banding past the ends.
+    pub fn lerp(self, other: Self, t: f32) -> Self {
+        let t = t.clamp(0.0, 1.0);
+        Self {
+            r: self.r + (other.r - self.r) * t,
+            g: self.g + (other.g - self.g) * t,
+            b: self.b + (other.b - self.b) * t,
+            a: self.a + (other.a - self.a) * t,
+        }
+    }
+
     /// Perceptual brightness of this colour (Rec. 709 primaries).
     ///
     /// Matches `luminance()` in shader/tonemap.glsl, which is what the bloom
