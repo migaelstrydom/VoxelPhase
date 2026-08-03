@@ -9,6 +9,7 @@ use crate::components::{
     RigidBodyComponent, Rotation, TerrainAnchored, Velocity, VelocityDriven,
 };
 use crate::core::error::EngineResult;
+use crate::creature::{Brain, Perception};
 use crate::damage::{DamageQueue, Dead, Health, LastVelocity, Ragdoll};
 use crate::debug::{DebugConfig, DebugLines, DebugLog, DebugOverlays};
 use crate::explosion::Explosion;
@@ -63,6 +64,8 @@ impl WorldBuilder {
         world.register::<Dead>();
         world.register::<Ragdoll>();
         world.register::<LastVelocity>();
+        world.register::<Brain>();
+        world.register::<Perception>();
         world.register::<CharacterAnimator>();
         world.register::<FollowTarget>();
         world.register::<SensorSet>();

@@ -2,6 +2,7 @@ use specs::{Dispatcher, DispatcherBuilder};
 
 use crate::animation::{AnimationProbeConfigSystem, CharacterAnimationSystem};
 use crate::character::ContactGroundingSystem;
+use crate::creature::{BrainSystem, PerceptionSystem};
 use crate::damage::{
     BlastDamageSystem, BurnDamageSystem, DamageApplySystem, DeathSystem, ImpactDamageSystem,
 };
@@ -27,10 +28,17 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
         // === Phase 1: Input processing ===
         .with(InputActionSystem, "input_actions", &[])
         .with(PlayerInputSystem, "player_input", &["input_actions"])
+        // Creature AI fills the same intent the keyboard does, so it belongs in
+        // the input phase alongside PlayerInputSystem — both must land before
+        // character_control consumes intent. Perception reads last frame's
+        // synced positions, which is the same one-frame-old world the player
+        // is reacting to on screen.
+        .with(PerceptionSystem, "perception", &["input_actions"])
+        .with(BrainSystem, "brain", &["perception"])
         .with(
             CharacterControlSystem,
             "character_control",
-            &["player_input"],
+            &["player_input", "brain"],
         )
         // Physics engine (buoyancy forces computed per-substep internally)
         .with(

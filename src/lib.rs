@@ -5,6 +5,7 @@ pub mod character;
 pub mod collision;
 pub mod components;
 pub mod core;
+pub mod creature;
 pub mod damage;
 pub mod debug;
 pub mod explosion;
