@@ -1,7 +1,7 @@
 use nalgebra::{Point3, Vector3};
 use specs::{Component, DenseVecStorage, Entities, Join, Read, ReadStorage, System, WriteStorage};
 
-use crate::components::{Position, Rotation};
+use crate::components::{Position, Rotation, Velocity};
 use crate::damage::Dead;
 use crate::player::Player;
 use crate::terrain::TerrainWorld;
@@ -14,6 +14,11 @@ use crate::time::Time;
 /// ranges and fine enough that a creature cannot see through a wall — the
 /// thinnest terrain feature is a voxel, and voxels are larger than this.
 const LOS_STEP: f32 = 0.5;
+
+/// Planar speed below which a creature without a [`Rotation`] is treated as
+/// having no facing at all. Slower than this, the velocity direction is noise
+/// and would make the sight cone jitter around a stationary creature.
+const MIN_FACING_SPEED: f32 = 0.3;
 
 /// What a creature can currently sense.
 ///
@@ -90,12 +95,23 @@ impl<'a> System<'a> for PerceptionSystem {
         ReadStorage<'a, Player>,
         ReadStorage<'a, Position>,
         ReadStorage<'a, Rotation>,
+        ReadStorage<'a, Velocity>,
         ReadStorage<'a, Dead>,
         WriteStorage<'a, Perception>,
     );
 
     fn run(&mut self, data: Self::SystemData) {
-        let (entities, time, terrain, players, positions, rotations, deads, mut perceptions) = data;
+        let (
+            entities,
+            time,
+            terrain,
+            players,
+            positions,
+            rotations,
+            velocities,
+            deads,
+            mut perceptions,
+        ) = data;
         let dt = time.delta_seconds();
 
         // A dead player stops being a threat, so creatures lose interest
@@ -106,10 +122,11 @@ impl<'a> System<'a> for PerceptionSystem {
                 .map(|(entity, _, pos, _)| (entity, Point3::from(pos.0)))
                 .collect();
 
-        for (pos, rot, perception, _) in (&positions, &rotations, &mut perceptions, !&deads).join()
+        for (entity, pos, perception, _) in
+            (&entities, &positions, &mut perceptions, !&deads).join()
         {
             let eye = Point3::from(pos.0);
-            let facing = Vector3::new(rot.0.sin(), 0.0, rot.0.cos());
+            let facing = facing_of(entity, &rotations, &velocities);
 
             let perceived = candidates
                 .iter()
@@ -151,6 +168,28 @@ impl<'a> System<'a> for PerceptionSystem {
     }
 }
 
+/// Which way a creature is looking, or `None` when it has no front.
+///
+/// [`Rotation`] is the authored yaw of a character that turns to face where it
+/// walks, so it is preferred wherever it exists. A creature without one is not
+/// facing world +Z — it has no facing at all, and a body like a rolling boulder
+/// never will. For those, the direction of travel stands in: what a sphere is
+/// bearing down on is the closest thing it has to a gaze. A creature that is
+/// neither rigged nor moving falls through to `None` and senses all round,
+/// which is the honest answer rather than an arbitrary one.
+fn facing_of(
+    entity: specs::Entity,
+    rotations: &ReadStorage<Rotation>,
+    velocities: &ReadStorage<Velocity>,
+) -> Option<Vector3<f32>> {
+    if let Some(rot) = rotations.get(entity) {
+        return Some(Vector3::new(rot.0.sin(), 0.0, rot.0.cos()));
+    }
+    velocities
+        .get(entity)
+        .and_then(|vel| Vector3::new(vel.0.x, 0.0, vel.0.z).try_normalize(MIN_FACING_SPEED))
+}
+
 /// Whether a target at `target_pos` can be sensed from `eye`.
 ///
 /// Hearing is checked first and ignores both facing and cover: a target close
@@ -158,7 +197,7 @@ impl<'a> System<'a> for PerceptionSystem {
 fn perceivable(
     perception: &Perception,
     eye: Point3<f32>,
-    facing: Vector3<f32>,
+    facing: Option<Vector3<f32>>,
     target_pos: Point3<f32>,
     offset: Vector3<f32>,
     distance: f32,
@@ -173,8 +212,11 @@ fn perceivable(
     let Some(direction) = offset.try_normalize(1e-4) else {
         return true;
     };
-    if direction.dot(&facing) < perception.sight_cone_cos {
-        return false;
+    // No facing means no blind side: the cone check simply does not apply.
+    if let Some(facing) = facing {
+        if direction.dot(&facing) < perception.sight_cone_cos {
+            return false;
+        }
     }
     has_line_of_sight(eye, target_pos, terrain)
 }
@@ -203,4 +245,114 @@ fn has_line_of_sight(from: Point3<f32>, to: Point3<f32>, terrain: Option<&Terrai
         travelled += LOS_STEP;
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use specs::{Builder, World, WorldExt};
+
+    /// Runs `PerceptionSystem` once over a world holding a player and one
+    /// creature, and reports whether the creature acquired a target.
+    fn perceives_player(creature_has_rotation: bool, creature_velocity: Vector3<f32>) -> bool {
+        use specs::RunNow;
+
+        let mut world = World::new();
+        world.register::<Player>();
+        world.register::<Position>();
+        world.register::<Rotation>();
+        world.register::<Velocity>();
+        world.register::<Dead>();
+        world.register::<Perception>();
+        world.insert(Time::new());
+
+        world
+            .create_entity()
+            .with(Player)
+            .with(Position(Vector3::new(0.0, 0.0, 10.0)))
+            .build();
+
+        let mut builder = world
+            .create_entity()
+            .with(Position(Vector3::zeros()))
+            .with(Velocity(creature_velocity))
+            .with(Perception::ground_creature(25.0));
+        if creature_has_rotation {
+            builder = builder.with(Rotation(0.0));
+        }
+        let creature = builder.build();
+
+        PerceptionSystem.run_now(&world);
+
+        let sees = world
+            .read_storage::<Perception>()
+            .get(creature)
+            .expect("creature keeps its perception")
+            .sees_target();
+        sees
+    }
+
+    #[test]
+    fn a_creature_without_a_rotation_still_perceives() {
+        // The roller has no `Rotation` — that component is written by the walk
+        // FSM and never synced from physics. Requiring it in the join silently
+        // excluded every non-humanoid creature from sensing at all, leaving a
+        // fully wired brain permanently Idle.
+        assert!(
+            perceives_player(false, Vector3::zeros()),
+            "a creature with no facing must sense all round, not sense nothing"
+        );
+    }
+
+    #[test]
+    fn a_rigged_creature_still_uses_its_yaw_cone() {
+        // Facing +Z with the player at +Z: inside the cone.
+        assert!(perceives_player(true, Vector3::zeros()));
+    }
+
+    #[test]
+    fn a_rigged_creature_is_blind_behind_itself() {
+        let mut world = World::new();
+        world.register::<Player>();
+        world.register::<Position>();
+        world.register::<Rotation>();
+        world.register::<Velocity>();
+        world.register::<Dead>();
+        world.register::<Perception>();
+        world.insert(Time::new());
+
+        world
+            .create_entity()
+            .with(Player)
+            .with(Position(Vector3::new(0.0, 0.0, 10.0)))
+            .build();
+
+        // Facing away from the player, and far enough that hearing cannot
+        // stand in for sight.
+        let creature = world
+            .create_entity()
+            .with(Position(Vector3::zeros()))
+            .with(Rotation(std::f32::consts::PI))
+            .with(Perception::ground_creature(25.0))
+            .build();
+
+        use specs::RunNow;
+        PerceptionSystem.run_now(&world);
+
+        assert!(!world
+            .read_storage::<Perception>()
+            .get(creature)
+            .unwrap()
+            .sees_target());
+    }
+
+    #[test]
+    fn a_moving_creature_faces_where_it_travels() {
+        // Rolling away from the player at speed: the player is behind it.
+        assert!(
+            !perceives_player(false, Vector3::new(0.0, 0.0, -5.0)),
+            "direction of travel should stand in for a gaze once moving"
+        );
+        assert!(perceives_player(false, Vector3::new(0.0, 0.0, 5.0)));
+    }
 }

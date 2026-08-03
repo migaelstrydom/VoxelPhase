@@ -1,11 +1,14 @@
 use nalgebra::{Point3, Vector3};
-use specs::{Component, DenseVecStorage, Entities, Join, Read, ReadStorage, System, WriteStorage};
+use specs::{
+    Component, DenseVecStorage, Entities, Join, Read, ReadStorage, System, Write, WriteStorage,
+};
 
 use super::perception::Perception;
 use super::steering;
 use crate::character::CharacterIntent;
 use crate::components::Position;
 use crate::damage::{Dead, Health};
+use crate::debug::DebugLog;
 use crate::time::Time;
 
 /// What a creature is doing right now.
@@ -105,12 +108,25 @@ impl<'a> System<'a> for BrainSystem {
         ReadStorage<'a, Dead>,
         WriteStorage<'a, Brain>,
         WriteStorage<'a, CharacterIntent>,
+        Write<'a, DebugLog>,
     );
 
     fn run(&mut self, data: Self::SystemData) {
-        let (entities, time, perceptions, positions, healths, deads, mut brains, mut intents) =
-            data;
+        let (
+            entities,
+            time,
+            perceptions,
+            positions,
+            healths,
+            deads,
+            mut brains,
+            mut intents,
+            mut debug_log,
+        ) = data;
         let dt = time.delta_seconds();
+
+        let mut awake = 0;
+        let mut total = 0;
 
         for (entity, perception, pos, brain, intent, _) in (
             &entities,
@@ -128,7 +144,27 @@ impl<'a> System<'a> for BrainSystem {
 
             brain.behaviour = next_behaviour(brain, perception, me, health_fraction, dt);
             *intent = intent_for(brain, perception, me);
+
+            total += 1;
+            if !matches!(brain.behaviour, Behaviour::Idle) {
+                awake += 1;
+            }
+            debug_log.add(
+                format!("Creature/{}/Behaviour", entity.id()),
+                format!(
+                    "{:?} target={} intent={:.2}",
+                    brain.behaviour,
+                    match perception.target {
+                        Some(t) if t.visible => "visible".to_string(),
+                        Some(t) => format!("remembered {:.1}s", t.since_seen),
+                        None => "none".to_string(),
+                    },
+                    intent.direction.magnitude()
+                ),
+            );
         }
+
+        debug_log.add("Creature/Count", format!("{} ({} active)", total, awake));
     }
 }
 
