@@ -1,13 +1,13 @@
 //! What the player can actually reach, derived from tuning rather than quoted.
 //!
-//! Every figure here comes from [`PlayerConfig`] and the physics gravity at
+//! Every figure here comes from [`LocomotionConfig`] and the physics gravity at
 //! runtime. Retuning the player therefore retunes what levels are validated
 //! against, which is the whole point — a hardcoded jump table goes stale the
 //! first time anyone touches `jump_speed` and then quietly lies.
 
 use nalgebra::Vector3;
 
-use crate::player::PlayerConfig;
+use crate::character::LocomotionConfig;
 
 /// One ballistic launch, as a point mass.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -57,7 +57,7 @@ impl JumpEnvelope {
     ///
     /// `gravity` is the physics world's acceleration vector; only its magnitude
     /// is used.
-    pub fn derive(player: &PlayerConfig, gravity: Vector3<f32>) -> Self {
+    pub fn derive(player: &LocomotionConfig, gravity: Vector3<f32>) -> Self {
         let g = gravity.magnitude();
         assert!(g > 0.0, "jump reach is undefined without gravity");
 
@@ -119,7 +119,7 @@ pub struct Footprint {
 }
 
 impl Footprint {
-    pub fn derive(player: &PlayerConfig) -> Self {
+    pub fn derive(player: &LocomotionConfig) -> Self {
         let diameter = player.collider_radius * 2.0;
         Self {
             radius: player.collider_radius,
@@ -144,7 +144,7 @@ mod tests {
     /// back to the old numbers.
     #[test]
     fn derived_reach_matches_hand_computation() {
-        let player = PlayerConfig::default();
+        let player = LocomotionConfig::default();
         let envelope = JumpEnvelope::derive(&player, Vector3::new(0.0, -9.81, 0.0));
 
         // Standing: v = 7.0 m/s, g = 9.81 => apex 7²/(2g), airtime 2*7/g,
@@ -174,7 +174,7 @@ mod tests {
     /// has to respond to tuning, which a table of constants would not.
     #[test]
     fn reach_scales_with_gravity() {
-        let player = PlayerConfig::default();
+        let player = LocomotionConfig::default();
         let normal = JumpEnvelope::derive(&player, Vector3::new(0.0, -9.81, 0.0));
         let moon = JumpEnvelope::derive(&player, Vector3::new(0.0, -9.81 / 2.0, 0.0));
 

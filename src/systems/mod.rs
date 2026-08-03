@@ -1,6 +1,6 @@
 mod camera;
+mod character_control;
 mod physics_sync;
-mod player_control;
 mod player_input;
 mod render;
 mod terrain_anchor;
@@ -8,8 +8,8 @@ mod terrain_update;
 mod water;
 
 pub use camera::CameraControlSystem;
+pub use character_control::CharacterControlSystem;
 pub use physics_sync::{PhysicsResource, PhysicsSyncSystem};
-pub use player_control::PlayerControlSystem;
 pub use player_input::PlayerInputSystem;
 pub use render::{FrameStart, RenderSystem};
 pub use terrain_anchor::TerrainAnchorSystem;

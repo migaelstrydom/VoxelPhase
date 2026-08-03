@@ -1,7 +1,7 @@
 //! Lower-body / core pose state machine.
 //!
 //! `PoseState` is the authoritative FSM for feet, pelvis, head-tilt, and
-//! head-bob. It reads `PlayerState` via the driver (see
+//! head-bob. It reads `CharacterState` via the driver (see
 //! `CharacterAnimator::update`) and emits a `PoseFragment`. Upper-body
 //! channels (hands, shoulder twist) are produced by `UpperState`.
 
@@ -171,7 +171,7 @@ pub struct SampleCtx<'a> {
 impl PoseState {
     /// Advance FSM-internal timers. Launching and Landing own a `t`
     /// counter that the driver reads to detect completion; the driver
-    /// handles the actual transition out (so the mapping from PlayerState
+    /// handles the actual transition out (so the mapping from CharacterState
     /// lives in one place).
     pub fn tick(self, ctx: &TickCtx<'_>) -> Self {
         match self {
@@ -191,7 +191,7 @@ impl PoseState {
 
     /// Whether this state's built-in timer has finished. Used by the
     /// driver to decide when Launching/Landing should yield to the
-    /// PlayerState mapping.
+    /// CharacterState mapping.
     pub fn timer_expired(&self) -> bool {
         match *self {
             PoseState::Launching { kind, t, .. } => t >= kind.launch_duration(),

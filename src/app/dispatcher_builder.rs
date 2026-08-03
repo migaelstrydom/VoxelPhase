@@ -1,6 +1,7 @@
 use specs::{Dispatcher, DispatcherBuilder};
 
 use crate::animation::{AnimationProbeConfigSystem, CharacterAnimationSystem};
+use crate::character::ContactGroundingSystem;
 use crate::explosion::ExplosionSystem;
 use crate::fire::light::FireLightSystem;
 use crate::fire::systems::{FireCleanupSystem, FireIgnitionSystem};
@@ -13,8 +14,8 @@ use crate::projectile::{
 };
 use crate::sensing::SensorProbeSystem;
 use crate::systems::{
-    CameraControlSystem, PhysicsSyncSystem, PlayerControlSystem, PlayerInputSystem, RenderSystem,
-    TerrainAnchorSystem, TerrainUpdateSystem, WaterSystem,
+    CameraControlSystem, CharacterControlSystem, PhysicsSyncSystem, PlayerInputSystem,
+    RenderSystem, TerrainAnchorSystem, TerrainUpdateSystem, WaterSystem,
 };
 
 /// Builds the system dispatcher with proper dependency ordering.
@@ -23,12 +24,16 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
         // === Phase 1: Input processing ===
         .with(InputActionSystem, "input_actions", &[])
         .with(PlayerInputSystem, "player_input", &["input_actions"])
-        .with(PlayerControlSystem, "player_control", &["player_input"])
+        .with(
+            CharacterControlSystem,
+            "character_control",
+            &["player_input"],
+        )
         // Physics engine (buoyancy forces computed per-substep internally)
         .with(
             PhysicsSyncSystem::default(),
             "physics_sync",
-            &["player_control"],
+            &["character_control"],
         )
         // Compound body fracture (uses solver impulses from this frame)
         .with(FractureSystem, "fracture", &["physics_sync"])
@@ -50,6 +55,15 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
             CharacterAnimationSystem,
             "character_animation",
             &["sensor_probe"],
+        )
+        // Grounding for characters with no skeleton to probe with. Runs after
+        // physics for the same reason the animator does — both write
+        // `Grounding` from this frame's contacts, and `character_control`
+        // reads it at the top of the next frame.
+        .with(
+            ContactGroundingSystem,
+            "contact_grounding",
+            &["physics_sync"],
         )
         .with(CameraControlSystem, "camera_control", &["physics_sync"])
         // Projectiles and explosions

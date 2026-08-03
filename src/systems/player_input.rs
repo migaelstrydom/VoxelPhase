@@ -1,6 +1,7 @@
+use crate::character::CharacterIntent;
 use crate::components::{CameraComponent, Position};
 use crate::input::GameplayActions;
-use crate::player::{Player, PlayerTargetState};
+use crate::player::Player;
 use nalgebra::Vector3;
 use specs::{Join, ReadExpect, ReadStorage, System, WriteStorage};
 
@@ -15,7 +16,7 @@ impl<'a> System<'a> for PlayerInputSystem {
         ReadStorage<'a, Player>,
         ReadStorage<'a, Position>,
         ReadStorage<'a, CameraComponent>,
-        WriteStorage<'a, PlayerTargetState>,
+        WriteStorage<'a, CharacterIntent>,
     );
 
     fn run(&mut self, data: Self::SystemData) {

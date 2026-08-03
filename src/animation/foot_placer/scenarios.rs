@@ -260,7 +260,7 @@ fn run_ramp_5ms(f: usize) -> Input {
     }
 }
 
-/// Game-faithful start: `PlayerConfig::ground_accel` is 40 m/s², so a
+/// Game-faithful start: `LocomotionConfig::ground_accel` is 40 m/s², so a
 /// standing start hits the 5 m/s gait speed in 0.125 s — faster than
 /// half a gait cycle.
 fn run_hard_accel_5ms(f: usize) -> Input {

@@ -15,10 +15,10 @@
 
 use nalgebra::Point3;
 
+use crate::character::LocomotionConfig;
 use crate::collision::AABB;
 use crate::level::{Level, TraversalInfo};
 use crate::physics::PhysicsConfig;
-use crate::player::PlayerConfig;
 use crate::terrain::traversal::{route_plan, RoutePlan};
 use crate::terrain::SegmentFrame;
 
@@ -38,7 +38,7 @@ const MIN_VOXELS_ACROSS: f32 = 2.0;
 /// Report every traversal primitive in the level and check what it asks of the
 /// player and of its segment's resolution.
 pub fn route_section(level: &Level, report: &mut Report) -> Section {
-    let player = PlayerConfig::default();
+    let player = LocomotionConfig::default();
     let footprint = Footprint::derive(&player);
     let envelope = JumpEnvelope::derive(&player, PhysicsConfig::default().gravity);
 

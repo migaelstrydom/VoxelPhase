@@ -14,8 +14,8 @@ use super::humanoid::stride_sync;
 use super::humanoid::upper_state::{UpperSampleCtx, UpperState, UpperTickCtx};
 use super::pose::{Crossfade, Linear, PoseFragment};
 use super::state::{AnimationState, FootState};
-use crate::player::grab::GrabConfig;
-use crate::player::{AirSteering, ArmState, LocomotionState, PlayerState, PlayerTargetState};
+use crate::character::grab::GrabConfig;
+use crate::character::{AirSteering, ArmState, CharacterIntent, CharacterState, LocomotionState};
 use crate::rendering::vertex::Vertex;
 use crate::sensing::{ContactCandidate, Probe};
 
@@ -169,8 +169,8 @@ impl CharacterAnimator {
         pelvis_position: Point3<f32>,
         yaw: f32,
         velocity: Vector3<f32>,
-        player_state: &PlayerState,
-        target: &PlayerTargetState,
+        character_state: &CharacterState,
+        target: &CharacterIntent,
         grab_config: &GrabConfig,
         contacts: &[ContactCandidate],
     ) {
@@ -198,10 +198,10 @@ impl CharacterAnimator {
             .map(|c| c.y)
             .unwrap_or(pelvis_position.y - self.config.standing_height() - FOOT_HEIGHT);
 
-        // Map PlayerState → next PoseState variant.
+        // Map CharacterState → next PoseState variant.
         let new_pose = next_pose_state(
             self.pose_state,
-            player_state,
+            character_state,
             target,
             speed,
             self.config.idle_threshold,
@@ -239,7 +239,7 @@ impl CharacterAnimator {
 
         // Pick the upper variant alongside the new pose variant so Idle-vs-
         // airborne gating sees the just-computed pose.
-        let new_upper = map_upper_state(&player_state.arm, new_pose);
+        let new_upper = map_upper_state(&character_state.arm, new_pose);
 
         let pose_sample_ctx = SampleCtx {
             rig: &self.config,
@@ -308,7 +308,7 @@ impl CharacterAnimator {
         pelvis_position: Point3<f32>,
         yaw: f32,
         velocity: Vector3<f32>,
-        target: &PlayerTargetState,
+        target: &CharacterIntent,
         next_pose: &PoseState,
     ) {
         let yaw_rate = if dt > 0.0 {
@@ -440,6 +440,24 @@ impl CharacterAnimator {
     /// Whether the character has any ground contact.
     pub fn is_grounded(&self) -> bool {
         self.state.is_grounded
+    }
+
+    /// Ground normal under whichever foot is planted, or `None` when airborne.
+    ///
+    /// With both feet down the two normals are averaged, so a character
+    /// straddling a ridge reports the bisector rather than picking a side.
+    pub fn ground_normal(&self) -> Option<Vector3<f32>> {
+        if !self.state.is_grounded {
+            return None;
+        }
+        let sum = [
+            self.state.left.ground_normal,
+            self.state.right.ground_normal,
+        ]
+        .into_iter()
+        .flatten()
+        .sum::<Vector3<f32>>();
+        Some(sum.try_normalize(1e-6).unwrap_or_else(Vector3::y))
     }
 
     /// Get mesh vertices and indices for rendering.
@@ -631,8 +649,8 @@ fn map_upper_state(arm: &ArmState, pose: PoseState) -> UpperState {
 /// impact y baked into any fresh `Landing` splice.
 fn next_pose_state(
     current: PoseState,
-    player: &PlayerState,
-    target: &PlayerTargetState,
+    character: &CharacterState,
+    target: &CharacterIntent,
     speed: f32,
     idle_threshold: f32,
     facing: Vector3<f32>,
@@ -641,7 +659,7 @@ fn next_pose_state(
     // Launching: hold for the full anticipation window unless physics
     // reports an early touchdown (rare — e.g. hit ceiling, dropped back).
     if let PoseState::Launching { kind, takeoff, t } = current {
-        if matches!(player.locomotion, LocomotionState::Grounded) {
+        if matches!(character.locomotion, LocomotionState::Grounded) {
             return PoseState::Landing {
                 kind,
                 t: 0.0,
@@ -665,7 +683,7 @@ fn next_pose_state(
 
     let moving = speed > idle_threshold || target.direction.magnitude_squared() > 0.001;
 
-    let mapped = match player.locomotion {
+    let mapped = match character.locomotion {
         // CoyoteTime exists to bridge one-frame ground-contact losses
         // (seams, lips). Treat it as grounded: flicking to Airborne here
         // would suspend the foot placer and splice a spurious Landing on
@@ -690,7 +708,7 @@ fn next_pose_state(
             };
             let takeoff = Takeoff {
                 facing,
-                air_speed: player.air_speed,
+                air_speed: character.air_speed,
             };
             PoseState::Launching {
                 kind,
@@ -711,7 +729,7 @@ fn next_pose_state(
                 }
                 _ => Takeoff {
                     facing,
-                    air_speed: player.air_speed,
+                    air_speed: character.air_speed,
                 },
             };
             PoseState::Airborne { kind, takeoff }
@@ -746,14 +764,14 @@ mod tests {
     /// suspends the placer and splices a spurious Landing on return.
     #[test]
     fn coyote_time_keeps_grounded_pose() {
-        let mut player = PlayerState::default();
-        player.locomotion = LocomotionState::CoyoteTime(0.1);
-        let mut target = PlayerTargetState::default();
+        let mut character = CharacterState::default();
+        character.locomotion = LocomotionState::CoyoteTime(0.1);
+        let mut target = CharacterIntent::default();
         target.direction = Vector3::new(0.0, 0.0, 1.0);
 
         let next = next_pose_state(
             PoseState::Grounded { gait: Gait::Walk },
-            &player,
+            &character,
             &target,
             2.0,
             0.1,

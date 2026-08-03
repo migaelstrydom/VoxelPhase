@@ -7,10 +7,10 @@ use specs::{Entities, Join, Read, ReadExpect, ReadStorage, System, Write, WriteS
 use super::animator::CharacterAnimator;
 use super::debug_config::AnimationDebugConfig;
 use super::foot_placer::{FootPhase, FootPlacer};
+use crate::character::grab::GrabConfig;
+use crate::character::{CharacterIntent, CharacterState, Grounding};
 use crate::components::{Position, Rotation, Velocity};
 use crate::debug::{DebugLines, DebugOverlays};
-use crate::player::grab::GrabConfig;
-use crate::player::{Player, PlayerState, PlayerTargetState};
 use crate::rendering::Colour;
 use crate::sensing::{ContactCandidates, SensorSet};
 use crate::time::Time;
@@ -24,20 +24,14 @@ pub struct AnimationProbeConfigSystem;
 impl<'a> System<'a> for AnimationProbeConfigSystem {
     type SystemData = (
         Entities<'a>,
-        ReadStorage<'a, Player>,
         ReadStorage<'a, Position>,
         ReadStorage<'a, Rotation>,
         ReadStorage<'a, CharacterAnimator>,
         WriteStorage<'a, SensorSet>,
     );
 
-    fn run(
-        &mut self,
-        (entities, players, positions, rotations, animators, mut sensors): Self::SystemData,
-    ) {
-        for (entity, _player, pos, rot, animator) in
-            (&entities, &players, &positions, &rotations, &animators).join()
-        {
+    fn run(&mut self, (entities, positions, rotations, animators, mut sensors): Self::SystemData) {
+        for (entity, pos, rot, animator) in (&entities, &positions, &rotations, &animators).join() {
             let pelvis_pos = nalgebra::Point3::new(pos.0.x, pos.0.y, pos.0.z);
             let yaw = rot.0;
 
@@ -60,14 +54,14 @@ impl<'a> System<'a> for CharacterAnimationSystem {
         ReadExpect<'a, GrabConfig>,
         ReadExpect<'a, AnimationDebugConfig>,
         Entities<'a>,
-        ReadStorage<'a, Player>,
-        ReadStorage<'a, PlayerState>,
+        ReadStorage<'a, CharacterState>,
         ReadStorage<'a, Position>,
         ReadStorage<'a, Rotation>,
         ReadStorage<'a, Velocity>,
-        ReadStorage<'a, PlayerTargetState>,
+        ReadStorage<'a, CharacterIntent>,
         ReadStorage<'a, ContactCandidates>,
         WriteStorage<'a, CharacterAnimator>,
+        WriteStorage<'a, Grounding>,
         Write<'a, DebugLines>,
         Write<'a, DebugOverlays>,
     );
@@ -78,29 +72,29 @@ impl<'a> System<'a> for CharacterAnimationSystem {
             grab_config,
             debug_config,
             entities,
-            players,
-            player_states,
+            character_states,
             positions,
             rotations,
             velocities,
-            target_states,
+            intents,
             candidates,
             mut animators,
+            mut groundings,
             mut _debug_lines,
             mut debug_overlays,
         ) = data;
 
         let dt = time.delta_seconds();
 
-        for (entity, _player, player_state, pos, rot, vel, target, animator) in (
+        for (entity, character_state, pos, rot, vel, target, animator, grounding) in (
             &entities,
-            &players,
-            &player_states,
+            &character_states,
             &positions,
             &rotations,
             &velocities,
-            &target_states,
+            &intents,
             &mut animators,
+            &mut groundings,
         )
             .join()
         {
@@ -118,11 +112,19 @@ impl<'a> System<'a> for CharacterAnimationSystem {
                 pelvis_pos,
                 yaw,
                 velocity,
-                player_state,
+                character_state,
                 target,
                 &grab_config,
                 contacts,
             );
+
+            // Publish the probe-derived grounding for `CharacterControlSystem`,
+            // which must not depend on the animator. Foot probes are the better
+            // source here — they see the ledge the sole is over.
+            *grounding = match animator.ground_normal() {
+                Some(normal) => Grounding::on(normal),
+                None => Grounding::airborne(),
+            };
 
             if debug_config.foot_placer_overlay {
                 draw_foot_placer_overlay(&animator.foot_placer, &mut debug_overlays);

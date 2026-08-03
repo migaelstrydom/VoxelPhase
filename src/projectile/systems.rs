@@ -12,13 +12,14 @@ use specs::{
 use super::components::{Grenade, Lifetime, Projectile};
 use super::config::GrenadeConfig;
 use crate::camera::FollowTarget;
+use crate::character::CharacterIntent;
 use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
 };
 use crate::explosion::Explosion;
 use crate::model::Model;
 use crate::physics::{ColliderDesc, ContactEvent, RigidBodyDesc, RigidBodyHandle};
-use crate::player::{Player, PlayerTargetState};
+use crate::player::Player;
 use crate::systems::PhysicsResource;
 use crate::time::Time;
 
@@ -76,7 +77,7 @@ impl<'a> System<'a> for GrenadeSpawnSystem {
         Write<'a, GrenadeCooldown>,
         Read<'a, GrenadeModelResource>,
         ReadStorage<'a, Player>,
-        ReadStorage<'a, PlayerTargetState>,
+        ReadStorage<'a, CharacterIntent>,
         ReadStorage<'a, Position>,
         ReadStorage<'a, FollowTarget>,
         Read<'a, LazyUpdate>,

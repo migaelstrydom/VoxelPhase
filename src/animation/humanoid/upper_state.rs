@@ -12,8 +12,8 @@ use super::stride_sync;
 use crate::animation::config::{CharacterRigConfig, GaitPreset};
 use crate::animation::pose::{Cycle, CycleKind, HandsPose, PoseFragment};
 use crate::animation::state::{AnimationState, HandState};
+use crate::character::grab::GrabConfig;
 use crate::physics::{ConstraintHandle, RigidBodyHandle};
-use crate::player::grab::GrabConfig;
 
 /// Reference horizontal speed used to scale the LongJump reach-forward
 /// magnitude. Chosen as a nominal walk speed — the rig config does not
@@ -105,7 +105,7 @@ impl UpperSampleCtx<'_> {
 
 impl UpperState {
     /// Advance any FSM-internal timers. `Reaching::elapsed` is authored
-    /// by the grab system on `PlayerState` — the driver re-syncs each
+    /// by the grab system on `CharacterState` — the driver re-syncs each
     /// frame — so no variant currently owns a timer here.
     #[allow(clippy::needless_pass_by_value)]
     pub fn tick(self, _ctx: &UpperTickCtx) -> Self {

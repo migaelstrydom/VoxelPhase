@@ -1,6 +1,7 @@
 pub mod animation;
 pub mod app;
 pub mod camera;
+pub mod character;
 pub mod collision;
 pub mod components;
 pub mod core;

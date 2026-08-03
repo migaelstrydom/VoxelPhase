@@ -2,6 +2,8 @@ use specs::{World, WorldExt};
 
 use crate::animation::{AnimationDebugConfig, CharacterAnimator};
 use crate::camera::{CameraConfig, FollowTarget};
+use crate::character::grab::GrabConfig;
+use crate::character::{CharacterIntent, CharacterState, Grounding, LocomotionConfig};
 use crate::components::{
     CameraComponent, MaterialModulation, ModelInstance, Orientation, Position, Renderable,
     RigidBodyComponent, Rotation, TerrainAnchored, Velocity, VelocityDriven,
@@ -16,8 +18,7 @@ use crate::input::{GameplayActions, InputState};
 use crate::lighting::{ActiveLights, PointLight};
 use crate::particles::{ParticleConfig, ParticleEmitter, ParticlePool};
 use crate::physics::PhysicsImpulseQueue;
-use crate::player::grab::GrabConfig;
-use crate::player::{Player, PlayerConfig, PlayerState, PlayerTargetState};
+use crate::player::Player;
 use crate::projectile::{
     Grenade, GrenadeConfig, GrenadeCooldown, GrenadeModelResource, Lifetime, Projectile,
 };
@@ -53,8 +54,10 @@ impl WorldBuilder {
         world.register::<Renderable>();
         world.register::<CameraComponent>();
         world.register::<Player>();
-        world.register::<PlayerTargetState>();
-        world.register::<PlayerState>();
+        world.register::<CharacterIntent>();
+        world.register::<CharacterState>();
+        world.register::<LocomotionConfig>();
+        world.register::<Grounding>();
         world.register::<CharacterAnimator>();
         world.register::<FollowTarget>();
         world.register::<SensorSet>();
@@ -109,7 +112,6 @@ impl WorldBuilder {
         self.world.insert(Time::new());
         self.world.insert(InputState::new());
         self.world.insert(GameplayActions::default());
-        self.world.insert(PlayerConfig::default());
         self.world.insert(GrabConfig::default());
         self.world.insert(CameraConfig::default());
         self.world.insert(DebugConfig::default());

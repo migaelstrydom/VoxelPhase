@@ -1,19 +1,24 @@
-use crate::animation::CharacterAnimator;
+use crate::character::grab::{self, GrabConfig};
+use crate::character::{
+    ArmState, CharacterIntent, CharacterState, Grounding, LocomotionConfig, LocomotionInput,
+    LocomotionState, MovementRule,
+};
 use crate::components::{Position, RigidBodyComponent, Rotation, Velocity, VelocityDriven};
 use crate::debug::DebugOverlays;
-use crate::player::grab::{self, GrabConfig};
-use crate::player::{
-    ArmState, LocomotionInput, LocomotionState, MovementRule, Player, PlayerConfig, PlayerState,
-    PlayerTargetState,
-};
 use crate::rendering::colour::Colour;
 use crate::systems::PhysicsResource;
 use crate::time::Time;
 use nalgebra::{Point3, Vector3};
 use specs::{Join, Read, ReadExpect, ReadStorage, System, Write, WriteStorage};
 
-/// Owns all `PlayerState` transitions (locomotion and arm) and applies physics
-/// effects. Reads `PlayerTargetState` (intent) as input.
+/// Owns all `CharacterState` transitions (locomotion and arm) and applies
+/// physics effects. Reads `CharacterIntent` as input and `Grounding` as the
+/// world's answer.
+///
+/// This system is deliberately blind to *who* it is driving: it joins on the
+/// locomotion components alone, so the player and every AI creature carrying
+/// them go through exactly the same FSM, coyote time, jump buffering and
+/// grabbing. Whoever fills the intent decides the behaviour.
 ///
 /// Locomotion FSM:
 ///   Grounded ──(jump)──────────► Launching ──(!is_grounded)──► Airborne
@@ -21,18 +26,17 @@ use specs::{Join, Read, ReadExpect, ReadStorage, System, Write, WriteStorage};
 ///   CoyoteTime ──(jump)──────────────────────────────────────► Airborne
 ///   CoyoteTime ──(is_grounded)──► Grounded
 ///   Airborne ──(is_grounded)────► Grounded
-pub struct PlayerControlSystem;
+pub struct CharacterControlSystem;
 
-impl<'a> System<'a> for PlayerControlSystem {
+impl<'a> System<'a> for CharacterControlSystem {
     type SystemData = (
         Read<'a, Time>,
-        ReadExpect<'a, PlayerConfig>,
         ReadExpect<'a, GrabConfig>,
         Write<'a, PhysicsResource>,
-        ReadStorage<'a, Player>,
-        WriteStorage<'a, PlayerTargetState>,
-        WriteStorage<'a, PlayerState>,
-        ReadStorage<'a, CharacterAnimator>,
+        WriteStorage<'a, CharacterIntent>,
+        WriteStorage<'a, CharacterState>,
+        ReadStorage<'a, LocomotionConfig>,
+        ReadStorage<'a, Grounding>,
         ReadStorage<'a, Position>,
         ReadStorage<'a, RigidBodyComponent>,
         WriteStorage<'a, Rotation>,
@@ -44,13 +48,12 @@ impl<'a> System<'a> for PlayerControlSystem {
     fn run(&mut self, data: Self::SystemData) {
         let (
             time,
-            config,
             grab_config,
             mut physics_res,
-            players,
-            mut player_targets,
-            mut player_states,
-            controllers,
+            mut intents,
+            mut character_states,
+            configs,
+            groundings,
             positions,
             rigid_bodies,
             mut rotations,
@@ -60,11 +63,11 @@ impl<'a> System<'a> for PlayerControlSystem {
         ) = data;
         let dt = time.delta_seconds();
 
-        for (_player, target, state, controller, pos, rb, rotation, vel, vd) in (
-            &players,
-            &mut player_targets,
-            &mut player_states,
-            &controllers,
+        for (target, state, config, grounding, pos, rb, rotation, vel, vd) in (
+            &mut intents,
+            &mut character_states,
+            &configs,
+            &groundings,
             &positions,
             &rigid_bodies,
             &mut rotations,
@@ -73,9 +76,9 @@ impl<'a> System<'a> for PlayerControlSystem {
         )
             .join()
         {
-            let is_grounded = controller.is_grounded();
+            let is_grounded = grounding.is_grounded;
             let move_dir = target.direction;
-            let player_body = rb.0;
+            let character_body = rb.0;
 
             let horizontal_speed = (vel.0.x * vel.0.x + vel.0.z * vel.0.z).sqrt();
 
@@ -101,7 +104,7 @@ impl<'a> System<'a> for PlayerControlSystem {
                 horizontal_speed,
                 move_dir,
                 long_jump_armed: state.crouch_buffer.active(),
-                config: &config,
+                config,
             });
             state.locomotion = outcome.next_state;
             if let Some(vy) = outcome.set_vy {
@@ -132,11 +135,11 @@ impl<'a> System<'a> for PlayerControlSystem {
 
             // Compute ground speed AFTER lockout tick + landing so a long-jump
             // landing frame already sees crouch suppressed.
-            let ground_speed = resolve_ground_speed(target, &config, &state.crouch_lockout);
+            let ground_speed = resolve_ground_speed(target, config, &state.crouch_lockout);
 
             // --- Yaw drive (physics body → Rotation, input → angular velocity) ---
             let current_yaw = {
-                let body = physics_res.world.body(player_body);
+                let body = physics_res.world.body(character_body);
                 body.map(|b| {
                     let forward = b.rotation() * Vector3::z();
                     forward.x.atan2(forward.z)
@@ -168,7 +171,7 @@ impl<'a> System<'a> for PlayerControlSystem {
 
             // --- Arm state transitions ---
             let facing = facing_from_rotation(rotation.0);
-            let player_pos = Point3::new(pos.0.x, pos.0.y, pos.0.z);
+            let character_pos = Point3::new(pos.0.x, pos.0.y, pos.0.z);
 
             let was_holding = matches!(state.arm, ArmState::Holding { .. });
             state.arm = match state.arm {
@@ -176,9 +179,9 @@ impl<'a> System<'a> for PlayerControlSystem {
                     if target.grab_just_pressed {
                         grab::begin_reach(
                             &physics_res.world,
-                            player_pos,
+                            character_pos,
                             facing,
-                            player_body,
+                            character_body,
                             &grab_config,
                         )
                     } else {
@@ -196,7 +199,7 @@ impl<'a> System<'a> for PlayerControlSystem {
                             if target.grab_held {
                                 grab::finalize_grab(
                                     &mut physics_res.world,
-                                    player_body,
+                                    character_body,
                                     body,
                                     hit_point,
                                     &grab_config,
@@ -239,7 +242,7 @@ impl<'a> System<'a> for PlayerControlSystem {
                     } else {
                         let new_height = grab::update_lift(
                             &mut physics_res.world,
-                            player_body,
+                            character_body,
                             target_body,
                             constraint,
                             dt,
@@ -265,7 +268,7 @@ impl<'a> System<'a> for PlayerControlSystem {
                 draw_grab_debug(
                     &mut debug_overlays,
                     &state.arm,
-                    player_pos,
+                    character_pos,
                     facing,
                     &grab_config,
                     &physics_res.world,
@@ -278,16 +281,16 @@ impl<'a> System<'a> for PlayerControlSystem {
 fn draw_grab_debug(
     overlays: &mut DebugOverlays,
     arm: &ArmState,
-    player_pos: Point3<f32>,
+    character_pos: Point3<f32>,
     facing: Vector3<f32>,
     config: &GrabConfig,
     physics: &crate::physics::PhysicsWorld,
 ) {
-    let probe_end = player_pos + facing * config.grab_range;
-    let hold_point = grab::desired_hold_point(player_pos, facing, config);
+    let probe_end = character_pos + facing * config.grab_range;
+    let hold_point = grab::desired_hold_point(character_pos, facing, config);
 
-    // Probe ray (cyan line from player to max grab range)
-    overlays.add_line_with_radius(player_pos, probe_end, 0.01, Colour::rgb(0.0, 0.8, 0.8));
+    // Probe ray (cyan line from character to max grab range)
+    overlays.add_line_with_radius(character_pos, probe_end, 0.01, Colour::rgb(0.0, 0.8, 0.8));
 
     // Hold point (where the object is pulled toward)
     overlays.add_sphere(hold_point, 0.05, Colour::YELLOW);
@@ -317,10 +320,10 @@ fn draw_grab_debug(
                     ..
                 } = &c.kind
                 {
-                    // Hold point on player body (magenta)
-                    if let Some(player) = physics.body(*body_a) {
-                        let r_a = player.rotation() * local_anchor_a;
-                        let hold = player.position() + r_a;
+                    // Hold point on holder body (magenta)
+                    if let Some(holder) = physics.body(*body_a) {
+                        let r_a = holder.rotation() * local_anchor_a;
+                        let hold = holder.position() + r_a;
                         overlays.add_sphere(hold, 0.06, Colour::rgb(1.0, 0.0, 1.0));
 
                         // Grab point on held body (green)
@@ -342,9 +345,9 @@ fn draw_grab_debug(
 /// except while the crouch lockout is active (post-long-jump recovery), in
 /// which case crouch is ignored so holding Ctrl doesn't brake the player.
 fn resolve_ground_speed(
-    target: &PlayerTargetState,
-    config: &PlayerConfig,
-    crouch_lockout: &crate::player::Timer,
+    target: &CharacterIntent,
+    config: &LocomotionConfig,
+    crouch_lockout: &crate::character::Timer,
 ) -> f32 {
     let crouch_active = target.crouch && !crouch_lockout.active();
     let mul = if crouch_active {

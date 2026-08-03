@@ -16,10 +16,10 @@
 
 use std::path::Path;
 
+use crate::character::LocomotionConfig;
 use crate::collision::AABB;
 use crate::level::{build_segments, Level};
 use crate::physics::PhysicsConfig;
-use crate::player::PlayerConfig;
 use crate::terrain::TerrainWorld;
 
 use super::baseline::{BaselineVerdict, Baselines};
@@ -196,7 +196,10 @@ fn mesh_integrity(level_path: &Path, terrain: &TerrainWorld, report: &mut Report
 }
 
 fn reach_section() -> Section {
-    let envelope = JumpEnvelope::derive(&PlayerConfig::default(), PhysicsConfig::default().gravity);
+    let envelope = JumpEnvelope::derive(
+        &LocomotionConfig::default(),
+        PhysicsConfig::default().gravity,
+    );
 
     let mut section = Section::new("Player reach");
     for arc in envelope.arcs() {
@@ -209,7 +212,7 @@ fn reach_section() -> Section {
         );
     }
     section.note(OPTIMISM_CAVEAT);
-    section.note("Derived from PlayerConfig and PhysicsConfig::gravity at runtime.");
+    section.note("Derived from LocomotionConfig and PhysicsConfig::gravity at runtime.");
     section
 }
 

@@ -1,7 +1,14 @@
-/// Configuration for player movement physics.
-/// This is an ECS resource that can be tuned without code changes.
-#[derive(Debug, Clone)]
-pub struct PlayerConfig {
+use specs::{Component, DenseVecStorage};
+
+/// Movement tuning for one character.
+///
+/// This is a per-entity component rather than a global resource: a scuttling
+/// creature and a lumbering one want different speeds and body sizes, and both
+/// go through the same `CharacterControlSystem`. Named constructors below are
+/// the presets; `Default` is the player.
+#[derive(Component, Debug, Clone)]
+#[storage(DenseVecStorage)]
+pub struct LocomotionConfig {
     /// Movement speed when on the ground (neutral gait).
     pub walk_speed: f32,
     /// Multiplier applied to `walk_speed` when sprint is held.
@@ -53,8 +60,10 @@ pub struct PlayerConfig {
     pub collider_half_height: f32,
 }
 
-impl Default for PlayerConfig {
-    fn default() -> Self {
+impl LocomotionConfig {
+    /// The player's movement envelope. `level_check` derives reachability from
+    /// this, so changing it changes which routes a level is asserted to have.
+    pub fn player() -> Self {
         Self {
             walk_speed: 5.0,
             sprint_speed_mul: 1.6,
@@ -74,5 +83,26 @@ impl Default for PlayerConfig {
             collider_radius: 0.25,
             collider_half_height: 0.5,
         }
+    }
+
+    /// A ground creature that walks but never sprints, crouches, or long-jumps.
+    /// Brains do not emit those intents, so the multipliers are inert; the
+    /// numbers that matter are `walk_speed`, `ground_accel` and the body size.
+    pub fn creature(walk_speed: f32, radius: f32, half_height: f32) -> Self {
+        Self {
+            walk_speed,
+            ground_accel: walk_speed * 6.0,
+            jump_speed: 5.0,
+            turn_aggression: 6.0,
+            collider_radius: radius,
+            collider_half_height: half_height,
+            ..Self::player()
+        }
+    }
+}
+
+impl Default for LocomotionConfig {
+    fn default() -> Self {
+        Self::player()
     }
 }

@@ -2,20 +2,20 @@ use nalgebra::{UnitVector3, Vector3};
 use specs::{Builder, Entity, World, WorldExt};
 
 use crate::animation::{CharacterAnimator, CharacterRigConfig};
+use crate::character::{CharacterIntent, CharacterState, Grounding, LocomotionConfig};
 use crate::components::{
     Orientation, Position, Renderable, RigidBodyComponent, Rotation, Velocity, VelocityDriven,
 };
 use crate::physics::{ColliderDesc, ConstraintKind, FrictionModel, RigidBodyDesc};
-use crate::player::{Player, PlayerConfig, PlayerState, PlayerTargetState};
+use crate::player::Player;
 use crate::sensing::{ContactCandidates, SensorSet};
 use crate::systems::PhysicsResource;
 
 /// Spawns the player entity with all required components.
 pub fn spawn_player(world: &mut World, initial_pos: nalgebra::Point3<f32>) -> Entity {
-    let (collider_half_height, collider_radius) = {
-        let config = world.read_resource::<PlayerConfig>();
-        (config.collider_half_height, config.collider_radius)
-    };
+    let locomotion = LocomotionConfig::player();
+    let (collider_half_height, collider_radius) =
+        (locomotion.collider_half_height, locomotion.collider_radius);
 
     let rig_config = CharacterRigConfig::default();
     // let body_radius = rig_config.body_radius;
@@ -64,8 +64,10 @@ pub fn spawn_player(world: &mut World, initial_pos: nalgebra::Point3<f32>) -> En
     world
         .create_entity()
         .with(Player)
-        .with(PlayerTargetState::default())
-        .with(PlayerState::default())
+        .with(CharacterIntent::default())
+        .with(CharacterState::default())
+        .with(locomotion)
+        .with(Grounding::default())
         .with(animator)
         .with(Position(Vector3::new(
             initial_pos.x,

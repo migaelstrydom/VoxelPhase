@@ -12,9 +12,9 @@
 //! 3. **Do the asserted connections hold?** A `Connect` derives nothing, so
 //!    unlike a join it can be wrong, and nothing else would notice.
 
+use crate::character::LocomotionConfig;
 use crate::level::{world_anchor, Connection, Level, Placement};
 use crate::physics::PhysicsConfig;
-use crate::player::PlayerConfig;
 use crate::terrain::{outward, Segment, TerrainWorld};
 use nalgebra::Point3;
 
@@ -213,7 +213,10 @@ fn overlaps(a: &crate::collision::AABB, b: &crate::collision::AABB) -> bool {
 /// Report every anchor link, check its gap against the player's reach, and
 /// verify that declared connections actually hold.
 pub fn check_connections(level: &Level, report: &mut Report) -> Section {
-    let envelope = JumpEnvelope::derive(&PlayerConfig::default(), PhysicsConfig::default().gravity);
+    let envelope = JumpEnvelope::derive(
+        &LocomotionConfig::default(),
+        PhysicsConfig::default().gravity,
+    );
     let routes = RouteMap::build(level);
     let links = collect_links(level);
 
@@ -496,8 +499,10 @@ mod tests {
 
     #[test]
     fn crossing_classification_follows_the_envelope() {
-        let envelope =
-            JumpEnvelope::derive(&PlayerConfig::default(), PhysicsConfig::default().gravity);
+        let envelope = JumpEnvelope::derive(
+            &LocomotionConfig::default(),
+            PhysicsConfig::default().gravity,
+        );
         assert_eq!(Crossing::for_gap(1.0, &envelope), Crossing::Standing);
         assert_eq!(
             Crossing::for_gap(envelope.sprint.flat_range + 1.0, &envelope),

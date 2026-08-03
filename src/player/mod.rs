@@ -1,9 +1,7 @@
-mod components;
-mod config;
-pub mod grab;
+//! The player: a marker on the one character the camera follows and the
+//! keyboard drives. All of the locomotion machinery lives in
+//! [`crate::character`], which the player shares with AI creatures.
 
-pub use components::{
-    AirSteering, ArmState, LocomotionInput, LocomotionOutcome, LocomotionState, MovementRule,
-    Player, PlayerState, PlayerTargetState, Timer,
-};
-pub use config::PlayerConfig;
+mod components;
+
+pub use components::Player;
