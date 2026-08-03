@@ -9,13 +9,16 @@ use crate::physics::contact_event::ContactEvent;
 use crate::physics::handle::RigidBodyHandle;
 use crate::physics::static_geometry::StaticGeometry;
 
+use super::ownership::NarrowphaseOwnership;
+
 /// Mutable state passed to the CCD strategy each substep.
 pub struct CcdContext<'a> {
     pub bodies: &'a mut Arena<RigidBody>,
     pub colliders: &'a Arena<Collider>,
     pub contact_events: &'a mut Vec<ContactEvent>,
-    /// Bodies already handled by the narrowphase (excluded from CCD).
-    pub narrowphase_handled: &'a FxHashSet<RigidBodyHandle>,
+    /// Bodies the narrowphase currently owns (excluded from CCD while its
+    /// frame-start manifold still describes them).
+    pub narrowphase_ownership: &'a NarrowphaseOwnership,
     /// Currently sleeping bodies (excluded from CCD).
     pub sleeping: Option<&'a FxHashSet<RigidBodyHandle>>,
     /// Body positions/rotations captured before position integration.
@@ -24,8 +27,12 @@ pub struct CcdContext<'a> {
     pub contact_margin: f32,
     /// Shared restitution velocity threshold from PhysicsConfig.
     pub restitution_velocity_threshold: f32,
-    /// CCD activation threshold from PhysicsConfig.
+    /// Per-substep CCD activation threshold from PhysicsConfig.
     pub ccd_threshold: f32,
+    /// Frame-level CCD activation threshold from PhysicsConfig.
+    pub ccd_frame_coverage: f32,
+    /// Substeps this frame, as declared to `update_contacts()`.
+    pub substeps_per_frame: u32,
 }
 
 /// Continuous collision detection strategy.
@@ -35,6 +42,15 @@ pub struct CcdContext<'a> {
 /// - **Speculative**: add speculative contacts without clamping.
 /// - **None**: disable CCD entirely.
 pub trait CcdStrategy: Send + Sync {
+    /// Called once per frame, before any substep. Strategies that cache
+    /// per-frame state (such as static-geometry queries) reset it here.
+    ///
+    /// `substeps` is how many `run()` calls this frame will make, letting a
+    /// strategy size lookahead to the frame rather than assume a fixed count.
+    fn begin_frame(&mut self, substeps: u32) {
+        let _ = substeps;
+    }
+
     /// Run CCD for one substep. Returns the number of corrections applied.
     fn run(
         &mut self,

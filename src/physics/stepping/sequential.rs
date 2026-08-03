@@ -40,7 +40,7 @@ impl Stepper for SequentialStepper {
         }
 
         let dt = self.timestep.fixed_dt();
-        world.update_contacts(dt, static_geometry, impulses, debug_lines);
+        world.update_contacts(dt, substeps, static_geometry, impulses, debug_lines);
         for _ in 0..substeps {
             world.substep(dt, static_geometry, force_providers);
         }

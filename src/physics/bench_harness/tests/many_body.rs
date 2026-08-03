@@ -100,7 +100,7 @@ fn grenade_like_impulses_keep_states_finite() {
             Vec::new()
         };
 
-        world.update_contacts(fixed_dt, &geometry, &impulses, &mut debug_lines);
+        world.update_contacts(fixed_dt, 1, &geometry, &impulses, &mut debug_lines);
         debug_lines.clear();
         world.substep(fixed_dt, &geometry, &[]);
 
@@ -214,7 +214,13 @@ fn large_sphere_sliding_into_low_box_does_not_end_intersecting() {
     let substeps_per_frame = (frame_dt / fixed_dt).round() as usize;
     let num_frames = (4.0 / frame_dt) as usize;
     for _ in 0..num_frames {
-        world.update_contacts(fixed_dt, &geometry, &[], &mut debug_lines);
+        world.update_contacts(
+            fixed_dt,
+            substeps_per_frame as u32,
+            &geometry,
+            &[],
+            &mut debug_lines,
+        );
         debug_lines.clear();
         for _ in 0..substeps_per_frame {
             world.substep(fixed_dt, &geometry, &[]);
@@ -292,7 +298,13 @@ fn box_stack_settles_without_overlap() {
     let mut tail_samples = 0usize;
 
     for step_idx in 0..num_frames {
-        world.update_contacts(fixed_dt, &geometry, &[], &mut debug_lines);
+        world.update_contacts(
+            fixed_dt,
+            substeps_per_frame as u32,
+            &geometry,
+            &[],
+            &mut debug_lines,
+        );
         debug_lines.clear();
         for _ in 0..substeps_per_frame {
             world.substep(fixed_dt, &geometry, &[]);

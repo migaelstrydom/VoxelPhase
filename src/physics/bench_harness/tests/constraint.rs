@@ -38,7 +38,7 @@ fn keep_upright_kills_angular_velocity_in_free_fall() {
     let mut debug_lines = DebugLines::default();
 
     // Single frame: update_contacts + 4 substeps
-    world.update_contacts(dt, &geometry, &[], &mut debug_lines);
+    world.update_contacts(dt, 4, &geometry, &[], &mut debug_lines);
     for _ in 0..4 {
         world.substep(dt, &geometry, &[]);
     }
@@ -79,7 +79,7 @@ fn keep_upright_sphere_rests_on_ground() {
 
     // Run for 2 seconds
     for _ in 0..120 {
-        world.update_contacts(dt, &geometry, &[], &mut debug_lines);
+        world.update_contacts(dt, 4, &geometry, &[], &mut debug_lines);
         debug_lines.clear();
         for _ in 0..4 {
             world.substep(dt, &geometry, &[]);
@@ -135,7 +135,7 @@ fn keep_upright_capsule_with_velocity_zeroing() {
     // Phase 1: settle (30 frames = 0.5s)
     for frame in 0..30 {
         world.set_body_velocity_drive(body, Vector3::zeros(), Vector3::zeros(), 500.0, 500.0);
-        world.update_contacts(dt, &geometry, &[], &mut debug_lines);
+        world.update_contacts(dt, substeps as u32, &geometry, &[], &mut debug_lines);
         debug_lines.clear();
         for _ in 0..substeps {
             world.substep(dt, &geometry, &[]);
@@ -157,7 +157,7 @@ fn keep_upright_capsule_with_velocity_zeroing() {
     let forward_vel = Vector3::new(3.0, 0.0, 0.0);
     for _frame in 0..15 {
         world.set_body_velocity_drive(body, forward_vel, Vector3::zeros(), 500.0, 500.0);
-        world.update_contacts(dt, &geometry, &[], &mut debug_lines);
+        world.update_contacts(dt, substeps as u32, &geometry, &[], &mut debug_lines);
         debug_lines.clear();
         for _ in 0..substeps {
             world.substep(dt, &geometry, &[]);
@@ -176,7 +176,7 @@ fn keep_upright_capsule_with_velocity_zeroing() {
     // Phase 3: stop and observe (120 frames = 2s)
     for frame in 0..120 {
         world.set_body_velocity_drive(body, Vector3::zeros(), Vector3::zeros(), 500.0, 500.0);
-        world.update_contacts(dt, &geometry, &[], &mut debug_lines);
+        world.update_contacts(dt, substeps as u32, &geometry, &[], &mut debug_lines);
         debug_lines.clear();
         for _ in 0..substeps {
             world.substep(dt, &geometry, &[]);
@@ -396,7 +396,13 @@ fn hinge_axis_no_drift_zero_gravity() {
             continue;
         }
 
-        world.update_contacts(fixed_dt, scenario.geometry(), &[], &mut debug_lines);
+        world.update_contacts(
+            fixed_dt,
+            substeps as u32,
+            scenario.geometry(),
+            &[],
+            &mut debug_lines,
+        );
         debug_lines.clear();
         for _ in 0..substeps {
             world.substep(fixed_dt, scenario.geometry(), &[]);
@@ -511,7 +517,7 @@ fn breakable_fixed_joint_breaks_cleanly() {
 
     // Simulate 3 seconds — enough for sphere to fall, impact, and settle.
     for frame in 0..180 {
-        world.update_contacts(dt, &geometry, &[], &mut debug_lines);
+        world.update_contacts(dt, substeps as u32, &geometry, &[], &mut debug_lines);
         debug_lines.clear();
         for _ in 0..substeps {
             world.substep(dt, &geometry, &[]);

@@ -5,7 +5,7 @@ use nalgebra::{Isometry3, Matrix3, Point3, UnitQuaternion, Vector3};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::body::{BodyType, RigidBody, RigidBodyDesc};
-use super::ccd::{CcdContext, CcdStrategy, SweepClampCcd};
+use super::ccd::{CcdContext, CcdStrategy, NarrowphaseOwnership, SweepClampCcd};
 use super::collider::{Collider, ColliderDesc, ColliderShape};
 use super::constraint::types::Constraint;
 use super::constraint::ConstraintHandle;
@@ -45,11 +45,29 @@ pub struct PhysicsConfig {
     /// receive velocity-only correction (depth=0); actual penetrations get
     /// position correction.
     pub contact_margin: f32,
-    /// CCD activation threshold. A body requires CCD when:
-    /// `|linear_velocity| * dt > radius * ccd_threshold`.
+    /// Per-substep CCD activation threshold. A body requires CCD when:
+    /// `|linear_velocity| * substep_dt > radius * ccd_threshold`.
     /// Below this, the narrowphase handles contacts; above, CCD sweeps
-    /// prevent tunneling.
+    /// prevent tunneling. Also partitions speculative contact generation,
+    /// which covers the band below this threshold.
+    ///
+    /// See `ccd_frame_coverage` for the frame-level gate that catches bodies
+    /// slow enough to pass this test yet fast enough to outrun the
+    /// once-per-frame narrowphase.
     pub ccd_threshold: f32,
+    /// Frame-level CCD activation, as a multiple of the collider radius.
+    ///
+    /// The narrowphase samples once per frame, so what it can miss is set by
+    /// travel over the *whole* frame, not one substep. Two consecutive frame
+    /// samples of a sphere of radius `r` still bracket any plane between them
+    /// while the frame travel stays under `2r`; above that a surface can pass
+    /// between samples undetected. The default sits below that limit for
+    /// slack, since the bracketing argument is exact only for planes and
+    /// degrades on small or angled triangles.
+    ///
+    /// Independent of `ccd_threshold`, which is per-substep: a body activates
+    /// CCD if *either* gate trips.
+    pub ccd_frame_coverage: f32,
     /// Frames without a narrowphase refresh before a manifold point is pruned.
     pub manifold_max_age: u8,
     /// When true, sort manifold output contacts for deterministic solver ordering.
@@ -81,6 +99,7 @@ impl Default for PhysicsConfig {
             restitution_velocity_threshold: 0.3,
             contact_margin: 0.02,
             ccd_threshold: 0.5,
+            ccd_frame_coverage: 1.5,
             manifold_max_age: 3,
             deterministic_contact_ordering: false,
             normal_smoothing: NormalSmoothingConfig::default(),
@@ -132,8 +151,13 @@ pub struct PhysicsWorld {
     cached_active_manifolds: Vec<SolverManifold>,
     /// All solver manifolds (including sleeping) for sleep state bookkeeping.
     cached_all_manifolds: Vec<SolverManifold>,
-    /// Bodies with static narrowphase contacts, excluded from CCD.
-    cached_narrowphase_handled: FxHashSet<RigidBodyHandle>,
+    /// Bodies with static narrowphase contacts, excluded from CCD until they
+    /// integrate away from the position the contacts were generated at.
+    narrowphase_ownership: NarrowphaseOwnership,
+    /// Substeps the caller will run for the current frame, as declared to
+    /// `update_contacts()`. Sizes the frame-level CCD gate and the CCD query
+    /// cache's lookahead.
+    substeps_this_frame: u32,
     /// SAT axis cache for OBB-OBB dynamic pair early-out.
     sat_cache_map: SatCacheMap,
     /// GJK warm-start cache for wildcard dynamic pairs.
@@ -198,7 +222,8 @@ impl PhysicsWorld {
             ccd: Some(ccd),
             cached_active_manifolds: Vec::new(),
             cached_all_manifolds: Vec::new(),
-            cached_narrowphase_handled: FxHashSet::default(),
+            narrowphase_ownership: NarrowphaseOwnership::new(),
+            substeps_this_frame: 1,
             sat_cache_map: SatCacheMap::new(),
             gjk_cache_map: GjkCacheMap::new(),
             narrowphase_work_buffer: NarrowphaseWorkBuffer::new(),
@@ -489,7 +514,10 @@ impl PhysicsWorld {
 
     /// Run narrowphase contact generation and manifold cache update.
     ///
-    /// Call once before a series of `substep()` calls. This performs:
+    /// Call once before a series of `substep()` calls. `substeps` is how many
+    /// `substep()` calls will follow; contacts generated here must cover that
+    /// whole span, so CCD sizes its activation gate and query cache from it.
+    /// This performs:
     /// 1. Sleep bookkeeping
     /// 2. One-shot impulse application
     /// 3. Narrowphase contact generation (static + dynamic)
@@ -500,12 +528,14 @@ impl PhysicsWorld {
     pub fn update_contacts(
         &mut self,
         dt: f32,
+        substeps: u32,
         static_geometry: &dyn StaticGeometry,
         impulses: &[PhysicsImpulse],
         debug_lines: &mut DebugLines,
     ) {
         let _ = debug_lines;
 
+        self.substeps_this_frame = substeps.max(1);
         self.frame_index = self.frame_index.wrapping_add(1);
         self.sleep_manager.sync_bodies(&self.bodies);
         self.sleep_manager.apply_wake_events(&[], &self.bodies);
@@ -580,14 +610,19 @@ impl PhysicsWorld {
             &self.last_contacts,
         );
 
-        // Cache narrowphase-handled set for CCD exclusion
-        self.cached_narrowphase_handled.clear();
-        self.cached_narrowphase_handled.extend(
-            active_manifolds
-                .iter()
-                .filter(|m| m.header.body_a.is_none())
-                .map(|m| m.header.body_b),
-        );
+        // Record narrowphase ownership for CCD exclusion, anchored at the
+        // position each manifold was generated at so ownership can expire as
+        // the body integrates away from it across substeps.
+        self.narrowphase_ownership.clear();
+        for manifold in active_manifolds
+            .iter()
+            .filter(|m| m.header.body_a.is_none())
+        {
+            let handle = manifold.header.body_b;
+            if let Some(body) = self.bodies.get(handle.0) {
+                self.narrowphase_ownership.insert(handle, body.position());
+            }
+        }
 
         self.cached_active_manifolds = active_manifolds;
         self.cached_all_manifolds = solver_manifolds;
@@ -610,6 +645,12 @@ impl PhysicsWorld {
         );
 
         self.solver.prepare(&self.bodies, &self.constraints, dt);
+
+        // Static geometry is fixed for the frame; let CCD reset the query
+        // cache it reuses across this frame's substeps.
+        if let Some(ccd) = self.ccd.as_mut() {
+            ccd.begin_frame(self.substeps_this_frame);
+        }
     }
 
     /// Solve velocity constraints and integrate positions using cached manifolds.
@@ -701,23 +742,25 @@ impl PhysicsWorld {
         integrate_bodies(&mut self.bodies, dt, sleeping_snapshot.as_ref());
 
         // CCD pass (fast bodies only, excluding narrowphase-managed bodies)
-        let narrowphase_handled = std::mem::take(&mut self.cached_narrowphase_handled);
+        let narrowphase_ownership = std::mem::take(&mut self.narrowphase_ownership);
         if let Some(mut ccd) = self.ccd.take() {
             let mut ctx = CcdContext {
                 bodies: &mut self.bodies,
                 colliders: &self.colliders,
                 contact_events: &mut self.last_contacts,
-                narrowphase_handled: &narrowphase_handled,
+                narrowphase_ownership: &narrowphase_ownership,
                 sleeping: sleeping_snapshot.as_ref(),
                 pre_states: &pre_states,
                 contact_margin: self.config.contact_margin,
                 restitution_velocity_threshold: self.config.restitution_velocity_threshold,
                 ccd_threshold: self.config.ccd_threshold,
+                ccd_frame_coverage: self.config.ccd_frame_coverage,
+                substeps_per_frame: self.substeps_this_frame,
             };
             let _ccd_count = ccd.run(&mut ctx, dt, static_geometry);
             self.ccd = Some(ccd);
         }
-        self.cached_narrowphase_handled = narrowphase_handled;
+        self.narrowphase_ownership = narrowphase_ownership;
 
         let all_manifolds = std::mem::take(&mut self.cached_all_manifolds);
         self.sleep_manager

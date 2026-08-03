@@ -200,7 +200,7 @@ fn sphere_pushing_box_no_jitter() {
         );
 
         // Narrowphase once per frame, then multiple substeps (matches game).
-        world.update_contacts(fixed_dt, &geometry, &[], &mut debug_lines);
+        world.update_contacts(fixed_dt, substeps as u32, &geometry, &[], &mut debug_lines);
         debug_lines.clear();
 
         for _ in 0..substeps {
@@ -336,7 +336,7 @@ fn velocity_driven_sphere_against_wall_no_bounce() {
             500.0,
         );
 
-        world.update_contacts(fixed_dt, &geometry, &[], &mut debug_lines);
+        world.update_contacts(fixed_dt, substeps as u32, &geometry, &[], &mut debug_lines);
         debug_lines.clear();
         for _ in 0..substeps {
             world.substep(fixed_dt, &geometry, &[]);

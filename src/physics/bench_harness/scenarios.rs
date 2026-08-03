@@ -2536,3 +2536,157 @@ impl PhysicsBenchScenario for HingeAxisNoDriftZeroGravityScenario {
         &self.geometry
     }
 }
+
+/// Fast sphere skimming the floor into a wall.
+///
+/// The sphere starts resting on the floor, so the narrowphase generates static
+/// floor contacts for it at frame start. It then travels fast enough to need
+/// CCD, horizontally into the wall at x=0.
+///
+/// This is the grenade "bounce off the ground, then pass through the next
+/// surface" case: narrowphase ownership established at frame start must not
+/// suppress CCD for the rest of the frame, or the sphere tunnels through the
+/// wall. The floor contact must also not be treated as a CCD hit, or the
+/// sphere is clamped back to its substep-start position and frozen.
+#[derive(Debug, Clone)]
+pub struct GrazingSphereWallCcdScenario {
+    /// Sphere radius. Grenade-sized.
+    pub radius: f32,
+    /// Horizontal speed toward the wall, well above the CCD activation gate.
+    pub speed: f32,
+    /// Distance from the wall the sphere starts at.
+    pub start_x: f32,
+    geometry: WallAndFloorGeometry,
+}
+
+impl GrazingSphereWallCcdScenario {
+    pub fn new() -> Self {
+        Self {
+            radius: 0.2,
+            speed: 60.0,
+            start_x: 4.5,
+            geometry: WallAndFloorGeometry::new(10.0, 4.0),
+        }
+    }
+}
+
+impl Default for GrazingSphereWallCcdScenario {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PhysicsBenchScenario for GrazingSphereWallCcdScenario {
+    fn name(&self) -> &'static str {
+        "grazing_sphere_wall_ccd"
+    }
+
+    fn restitution(&self) -> f32 {
+        0.2
+    }
+
+    fn build_world(&self) -> PhysicsWorld {
+        let mut config = PhysicsConfig::default();
+        config.sleep.enabled = false;
+        PhysicsWorld::new(config)
+    }
+
+    fn setup(&self, world: &mut PhysicsWorld) -> RigidBodyHandle {
+        let body = world.create_body(
+            RigidBodyDesc::dynamic()
+                .position(Point3::new(self.start_x, self.radius, 0.0))
+                .linear_velocity(Vector3::new(-self.speed, 0.0, 0.0)),
+        );
+        let _ = world.attach_collider(
+            body,
+            ColliderDesc::sphere(self.radius)
+                .density(1000.0)
+                .restitution(0.2)
+                .friction(0.4),
+        );
+        body
+    }
+
+    fn geometry(&self) -> &dyn StaticGeometry {
+        &self.geometry
+    }
+}
+
+/// Grenade-speed sphere against a wall, at a frame long enough to outrun the
+/// narrowphase.
+///
+/// Uses the real grenade parameters: radius 0.2, 20 m/s. At a 1/240 substep
+/// that is 0.083 m of travel per substep, below the per-substep CCD gate of
+/// `radius * ccd_threshold` = 0.1 m — so this body never activates CCD on the
+/// per-substep test. Over 8 substeps it covers 0.67 m per frame while the
+/// narrowphase, which samples once per frame, reaches only ~0.3 m ahead of the
+/// frame-start centre. Only the frame-level gate catches it.
+#[derive(Debug, Clone)]
+pub struct GrenadeSpeedWallCcdScenario {
+    /// Sphere radius, matching `GrenadeConfig::radius`.
+    pub radius: f32,
+    /// Throw speed, matching `GrenadeConfig::throw_speed`.
+    pub speed: f32,
+    /// Distance from the wall the sphere starts at.
+    pub start_x: f32,
+    geometry: WallAndFloorGeometry,
+}
+
+impl GrenadeSpeedWallCcdScenario {
+    pub fn new() -> Self {
+        Self {
+            radius: 0.2,
+            speed: 20.0,
+            start_x: 5.0,
+            geometry: WallAndFloorGeometry::new(10.0, 4.0),
+        }
+    }
+}
+
+impl Default for GrenadeSpeedWallCcdScenario {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PhysicsBenchScenario for GrenadeSpeedWallCcdScenario {
+    fn name(&self) -> &'static str {
+        "grenade_speed_wall_ccd"
+    }
+
+    fn restitution(&self) -> f32 {
+        0.2
+    }
+
+    fn build_world(&self) -> PhysicsWorld {
+        let mut config = PhysicsConfig::default();
+        config.sleep.enabled = false;
+        config.gravity = Vector3::zeros();
+        PhysicsWorld::new(config)
+    }
+
+    fn setup(&self, world: &mut PhysicsWorld) -> RigidBodyHandle {
+        let body = world.create_body(
+            RigidBodyDesc::dynamic()
+                .position(Point3::new(self.start_x, 2.0, 0.0))
+                .linear_velocity(Vector3::new(-self.speed, 0.0, 0.0)),
+        );
+        let _ = world.attach_collider(
+            body,
+            ColliderDesc::sphere(self.radius)
+                .density(1000.0)
+                .restitution(0.2)
+                .friction(0.4),
+        );
+        body
+    }
+
+    fn geometry(&self) -> &dyn StaticGeometry {
+        &self.geometry
+    }
+
+    fn frame_dt(&self, _frame_idx: u64) -> f32 {
+        // 8 substeps of 1/240 per frame: a 30 fps frame, or a hitch at 60.
+        8.0 / 240.0
+    }
+}

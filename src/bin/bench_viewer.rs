@@ -464,9 +464,13 @@ fn step_physics<S: PhysicsBenchScenario>(state: &mut ViewerState, real_dt: f32, 
 
     // Contact generation once per frame
     let impulses = scenario.external_impulses(state.sim_time);
-    state
-        .world
-        .update_contacts(fixed_dt, scenario.geometry(), &impulses, &mut debug_lines);
+    state.world.update_contacts(
+        fixed_dt,
+        substeps,
+        scenario.geometry(),
+        &impulses,
+        &mut debug_lines,
+    );
 
     for _ in 0..substeps {
         state.world.substep(fixed_dt, scenario.geometry(), &[]);

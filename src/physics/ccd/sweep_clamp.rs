@@ -1,9 +1,12 @@
 /// Sweep-and-clamp CCD: sweep bounding sphere, clamp body to hit, solve contacts.
 ///
-/// A body requires CCD when `|linear_velocity| * dt > radius * ccd_threshold`
-/// AND the narrowphase did not already generate static contacts for it.
-/// Bodies with narrowphase contacts are managed by the solver — CCD only
-/// catches bodies in free flight that might skip past geometry entirely.
+/// A body requires CCD when it outruns contact generation — either across one
+/// substep (`ccd_threshold`) or across the whole frame (`ccd_frame_coverage`,
+/// since the narrowphase samples only once per frame) — AND the narrowphase
+/// does not currently own it. Bodies with fresh
+/// narrowphase contacts are managed by the solver — CCD only catches bodies in
+/// free flight that might skip past geometry entirely. That ownership expires
+/// once the body outruns its frame-start manifold; see `NarrowphaseOwnership`.
 use nalgebra::{Point3, UnitQuaternion, Vector3};
 use smallvec::{smallvec, SmallVec};
 
@@ -15,18 +18,24 @@ use crate::collision::obb::Obb;
 use crate::collision::shape_view::ShapeView;
 use crate::physics::collider::{ColliderMaterial, ColliderShape};
 use crate::physics::contact_event::{ContactEvent, ContactSource};
-use crate::physics::handle::RigidBodyHandle;
+use crate::physics::handle::{ColliderHandle, RigidBodyHandle};
 use crate::physics::pipeline::pair::{PairHeader, SolverContact, SolverManifold};
 use crate::physics::solver::ccd::solve_contacts;
 use crate::physics::static_geometry::StaticGeometry;
 
+use super::patch_cache::SweptPatchCache;
 use super::strategy::{CcdContext, CcdStrategy};
 
-pub struct SweepClampCcd;
+pub struct SweepClampCcd {
+    /// Static-geometry queries reused across the substeps of a frame.
+    patch_cache: SweptPatchCache,
+}
 
 impl SweepClampCcd {
     pub fn new() -> Self {
-        Self
+        Self {
+            patch_cache: SweptPatchCache::new(),
+        }
     }
 }
 
@@ -37,6 +46,10 @@ impl Default for SweepClampCcd {
 }
 
 impl CcdStrategy for SweepClampCcd {
+    fn begin_frame(&mut self, substeps: u32) {
+        self.patch_cache.begin_frame(substeps);
+    }
+
     fn run(
         &mut self,
         ctx: &mut CcdContext<'_>,
@@ -59,9 +72,6 @@ impl CcdStrategy for SweepClampCcd {
             })
             .flat_map(|(idx, body)| {
                 let handle = RigidBodyHandle(idx);
-                if ctx.narrowphase_handled.contains(&handle) {
-                    return SmallVec::<[CcdCandidate; 4]>::new();
-                }
                 let speed = body.linear_velocity().magnitude();
                 let &(pre_pos, pre_rot) = match ctx.pre_states.get(&idx) {
                     Some(s) => s,
@@ -76,7 +86,21 @@ impl CcdStrategy for SweepClampCcd {
                         continue;
                     };
                     let radius = collider.shape().bounding_radius();
-                    if speed * dt <= radius * ctx.ccd_threshold {
+                    let ccd_travel = radius * ctx.ccd_threshold;
+                    // Two independent ways to outrun contact generation: a
+                    // single substep long enough to skip past geometry, or a
+                    // whole frame of travel that the once-per-frame
+                    // narrowphase cannot bracket.
+                    let frame_travel = speed * dt * ctx.substeps_per_frame as f32;
+                    let needs_ccd =
+                        speed * dt > ccd_travel || frame_travel > radius * ctx.ccd_frame_coverage;
+                    if !needs_ccd {
+                        continue;
+                    }
+                    // The solver owns this body only while its frame-start
+                    // manifold still describes where the body is. Released once
+                    // it has drifted a CCD travel window away from that anchor.
+                    if ctx.narrowphase_ownership.owns(handle, post_pos, ccd_travel) {
                         continue;
                     }
                     let pre_center = Point3::from(
@@ -93,7 +117,9 @@ impl CcdStrategy for SweepClampCcd {
                     );
                     out.push(CcdCandidate {
                         body_handle: handle,
+                        collider_handle: *collider_handle,
                         radius,
+                        min_approach: ctx.contact_margin,
                         shape: collider.shape().clone(),
                         material: *collider.material(),
                         pre_body_pos: pre_pos,
@@ -109,20 +135,24 @@ impl CcdStrategy for SweepClampCcd {
 
         for candidate in &candidates {
             let hit = match &candidate.shape {
-                ColliderShape::Sphere { .. } => sweep_sphere_against_static(
-                    candidate.pre_center,
-                    candidate.post_center,
-                    candidate.radius,
-                    static_geometry,
-                ),
-                _ => sweep_shape_against_static(candidate, static_geometry).or_else(|| {
-                    sweep_sphere_against_static(
-                        candidate.pre_center,
-                        candidate.post_center,
-                        candidate.radius,
+                ColliderShape::Sphere { .. } => {
+                    sweep_sphere_against_static(candidate, static_geometry, &mut self.patch_cache)
+                }
+                _ => {
+                    let shape_hit = sweep_shape_against_static(
+                        candidate,
                         static_geometry,
-                    )
-                }),
+                        &mut self.patch_cache,
+                    );
+                    match shape_hit {
+                        Some(h) => Some(h),
+                        None => sweep_sphere_against_static(
+                            candidate,
+                            static_geometry,
+                            &mut self.patch_cache,
+                        ),
+                    }
+                }
             };
             let Some(hit) = hit else {
                 continue;
@@ -168,6 +198,7 @@ impl CcdStrategy for SweepClampCcd {
                 }
                 ColliderShape::Box { half_extents } => box_ccd_solver_contacts(
                     candidate,
+                    &mut self.patch_cache,
                     *half_extents,
                     hit_pos,
                     hit_rot,
@@ -214,7 +245,12 @@ impl CcdStrategy for SweepClampCcd {
 /// Data collected for a body that needs CCD sweeping.
 struct CcdCandidate {
     body_handle: RigidBodyHandle,
+    /// Identifies this candidate's cached sweep region.
+    collider_handle: ColliderHandle,
     radius: f32,
+    /// Minimum travel into a surface for a hit to count as tunnelling rather
+    /// than a graze along a surface the solver already handles.
+    min_approach: f32,
     shape: ColliderShape,
     material: ColliderMaterial,
     pre_body_pos: Point3<f32>,
@@ -231,6 +267,7 @@ struct CcdCandidate {
 /// mesh-aware manifold pipeline for accurate contact normals.
 fn box_ccd_solver_contacts(
     candidate: &CcdCandidate,
+    patch_cache: &mut SweptPatchCache,
     half_extents: Vector3<f32>,
     hit_pos: Point3<f32>,
     rotation: UnitQuaternion<f32>,
@@ -252,12 +289,7 @@ fn box_ccd_solver_contacts(
         .collect();
 
     if contacts.is_empty() {
-        if let Some(hit) = sweep_sphere_against_static(
-            candidate.pre_center,
-            candidate.post_center,
-            candidate.radius,
-            static_geometry,
-        ) {
+        if let Some(hit) = sweep_sphere_against_static(candidate, static_geometry, patch_cache) {
             contacts.push(cold_solver_contact(
                 hit.point,
                 hit.normal,
@@ -295,6 +327,22 @@ fn cold_solver_contact(
     }
 }
 
+/// Whether a swept hit is a genuine tunnelling threat rather than a graze.
+///
+/// A body travelling along a surface it is already touching reports a hit at
+/// `t≈0` with a normal it is barely moving into. Clamping to such a hit would
+/// teleport the body back to its substep-start position and re-solve friction
+/// the solver already owns. Only hits the body drives into far enough to pass
+/// through during this substep count — the same travel window that activates
+/// CCD in the first place, measured along the hit normal.
+fn is_tunnelling_hit(
+    displacement: &Vector3<f32>,
+    normal: &Vector3<f32>,
+    min_approach: f32,
+) -> bool {
+    -displacement.dot(normal) > min_approach
+}
+
 /// Sweep a convex shape against static geometry using GJK raycast.
 ///
 /// Uses the actual shape (not bounding sphere) for a tighter TOI estimate.
@@ -302,10 +350,12 @@ fn cold_solver_contact(
 fn sweep_shape_against_static(
     candidate: &CcdCandidate,
     static_geometry: &dyn StaticGeometry,
+    patch_cache: &mut SweptPatchCache,
 ) -> Option<crate::collision::continuous::SweptContact> {
     let start = candidate.pre_center;
     let end = candidate.post_center;
     let radius = candidate.radius;
+    let min_approach = candidate.min_approach;
 
     let query = crate::collision::AABB::new(
         Point3::new(
@@ -319,9 +369,14 @@ fn sweep_shape_against_static(
             start.z.max(end.z) + radius,
         ),
     );
-    let patch = static_geometry.query_region(&query);
-
     let displacement = end - start;
+    let triangles = patch_cache.triangles(
+        candidate.collider_handle,
+        &query,
+        &displacement,
+        static_geometry,
+    );
+
     let shape_view = ShapeView {
         center: start,
         rotation: candidate.pre_rot,
@@ -330,9 +385,12 @@ fn sweep_shape_against_static(
 
     let mut earliest: Option<crate::collision::continuous::SweptContact> = None;
 
-    for pt in &patch.triangles {
-        let hit = gjk_raycast(&shape_view, &pt.triangle, displacement, Vector3::zeros());
+    for triangle in triangles {
+        let hit = gjk_raycast(&shape_view, triangle, displacement, Vector3::zeros());
         if let Some(h) = hit {
+            if !is_tunnelling_hit(&displacement, &h.normal, min_approach) {
+                continue;
+            }
             if earliest.is_none() || h.t < earliest.as_ref().unwrap().t {
                 earliest = Some(crate::collision::continuous::SweptContact::new(
                     h.t, h.point, h.normal,
@@ -349,11 +407,14 @@ fn sweep_shape_against_static(
 /// Builds the enclosing AABB, queries the region, and returns the earliest
 /// swept contact along the path.
 fn sweep_sphere_against_static(
-    start: Point3<f32>,
-    end: Point3<f32>,
-    radius: f32,
+    candidate: &CcdCandidate,
     static_geometry: &dyn StaticGeometry,
+    patch_cache: &mut SweptPatchCache,
 ) -> Option<crate::collision::continuous::SweptContact> {
+    let start = candidate.pre_center;
+    let end = candidate.post_center;
+    let radius = candidate.radius;
+    let min_approach = candidate.min_approach;
     let query = crate::collision::AABB::new(
         Point3::new(
             start.x.min(end.x) - radius,
@@ -366,13 +427,22 @@ fn sweep_sphere_against_static(
             start.z.max(end.z) + radius,
         ),
     );
-    let patch = static_geometry.query_region(&query);
+    let displacement = end - start;
+    let triangles = patch_cache.triangles(
+        candidate.collider_handle,
+        &query,
+        &displacement,
+        static_geometry,
+    );
 
     let mut earliest: Option<crate::collision::continuous::SweptContact> = None;
-    for pt in &patch.triangles {
+    for triangle in triangles {
         if let Some(contact) =
-            crate::collision::continuous::swept_sphere_triangle(start, end, radius, &pt.triangle)
+            crate::collision::continuous::swept_sphere_triangle(start, end, radius, triangle)
         {
+            if !is_tunnelling_hit(&displacement, &contact.normal, min_approach) {
+                continue;
+            }
             if earliest.is_none() || contact.t < earliest.as_ref().unwrap().t {
                 earliest = Some(contact);
             }

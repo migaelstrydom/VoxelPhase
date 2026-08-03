@@ -175,6 +175,7 @@ pub fn run_scenario<S: PhysicsBenchScenario>(scenario: &S, cfg: BenchRunConfig) 
         let impulses = scenario.external_impulses(sim_time);
         world.update_contacts(
             cfg.fixed_dt,
+            substeps,
             scenario.geometry(),
             &impulses,
             &mut debug_lines,

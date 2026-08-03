@@ -561,6 +561,25 @@ impl StaticGeometry for TerrainWorld {
 
         MeshPatch { triangles }
     }
+
+    /// Adjacency-free variant: collects triangles straight from the segments,
+    /// skipping the `ref_to_index` map and per-triangle neighbour resolution
+    /// that `query_region` needs.
+    fn query_region_triangles(&self, aabb: &AABB) -> Vec<crate::collision::Triangle> {
+        let mut triangles = Vec::new();
+        for segment in self.segments.iter() {
+            if !segment.bounds().intersects(aabb) {
+                continue;
+            }
+            triangles.extend(
+                segment
+                    .query_region(aabb)
+                    .into_iter()
+                    .map(|(_, triangle)| triangle),
+            );
+        }
+        triangles
+    }
 }
 
 impl ProbeTarget for TerrainWorld {
