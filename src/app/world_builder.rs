@@ -9,6 +9,7 @@ use crate::components::{
     RigidBodyComponent, Rotation, TerrainAnchored, Velocity, VelocityDriven,
 };
 use crate::core::error::EngineResult;
+use crate::damage::{DamageQueue, Dead, Health, LastVelocity, Ragdoll};
 use crate::debug::{DebugConfig, DebugLines, DebugLog, DebugOverlays};
 use crate::explosion::Explosion;
 use crate::fire::components::{Flammable, OnFire};
@@ -58,6 +59,10 @@ impl WorldBuilder {
         world.register::<CharacterState>();
         world.register::<LocomotionConfig>();
         world.register::<Grounding>();
+        world.register::<Health>();
+        world.register::<Dead>();
+        world.register::<Ragdoll>();
+        world.register::<LastVelocity>();
         world.register::<CharacterAnimator>();
         world.register::<FollowTarget>();
         world.register::<SensorSet>();
@@ -127,6 +132,7 @@ impl WorldBuilder {
         self.world.insert(FrameStart::default());
         self.world.insert(PhysicsImpulseQueue::default());
         self.world.insert(ActiveLights::default());
+        self.world.insert(DamageQueue::default());
         self
     }
 

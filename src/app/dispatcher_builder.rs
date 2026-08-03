@@ -2,6 +2,9 @@ use specs::{Dispatcher, DispatcherBuilder};
 
 use crate::animation::{AnimationProbeConfigSystem, CharacterAnimationSystem};
 use crate::character::ContactGroundingSystem;
+use crate::damage::{
+    BlastDamageSystem, BurnDamageSystem, DamageApplySystem, DeathSystem, ImpactDamageSystem,
+};
 use crate::explosion::ExplosionSystem;
 use crate::fire::light::FireLightSystem;
 use crate::fire::systems::{FireCleanupSystem, FireIgnitionSystem};
@@ -90,6 +93,21 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
         .with(FireCleanupSystem, "fire_cleanup", &["fire_ignition"])
         // Firelight tracks OnFire, so it must settle before lights are collected.
         .with(FireLightSystem, "fire_light", &["fire_cleanup"])
+        // Damage. Each source runs after whatever produces the thing that
+        // hurts: the blast reader must see explosions before
+        // `world.maintain()` deletes them, and the burn reader must see this
+        // frame's ignitions and burn-outs. Apply then drains all three at
+        // once, so a frame's blast, burn and impact land together and only one
+        // can be the killing blow.
+        .with(BlastDamageSystem, "blast_damage", &["explosion"])
+        .with(BurnDamageSystem, "burn_damage", &["fire_cleanup"])
+        .with(ImpactDamageSystem, "impact_damage", &["physics_sync"])
+        .with(
+            DamageApplySystem,
+            "damage_apply",
+            &["blast_damage", "burn_damage", "impact_damage"],
+        )
+        .with(DeathSystem, "death", &["damage_apply"])
         .with(TerrainAnchorSystem, "terrain_anchor", &["explosion"])
         .with(TerrainUpdateSystem, "terrain_update", &["explosion"])
         // Water simulation (after terrain update so dirty_regions are visible)

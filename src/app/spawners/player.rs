@@ -6,6 +6,7 @@ use crate::character::{CharacterIntent, CharacterState, Grounding, LocomotionCon
 use crate::components::{
     Orientation, Position, Renderable, RigidBodyComponent, Rotation, Velocity, VelocityDriven,
 };
+use crate::damage::{Health, Ragdoll};
 use crate::physics::{ColliderDesc, ConstraintKind, FrictionModel, RigidBodyDesc};
 use crate::player::Player;
 use crate::sensing::{ContactCandidates, SensorSet};
@@ -21,7 +22,7 @@ pub fn spawn_player(world: &mut World, initial_pos: nalgebra::Point3<f32>) -> En
     // let body_radius = rig_config.body_radius;
     let animator = CharacterAnimator::new(rig_config, initial_pos);
 
-    let body_handle = {
+    let (body_handle, upright_handle) = {
         let mut physics = world.write_resource::<PhysicsResource>();
         let body_desc = RigidBodyDesc::dynamic()
             .position(initial_pos)
@@ -51,14 +52,16 @@ pub fn spawn_player(world: &mut World, initial_pos: nalgebra::Point3<f32>) -> En
             .body_mut(body_handle)
             .unwrap()
             .scale_local_inertia(Vector3::new(1.0, 50.0, 1.0));
-        physics
+        // Held so `DeathSystem` can release it. Without that the corpse stays
+        // rigidly upright, which reads as a bug rather than a death.
+        let upright_handle = physics
             .world
             .create_constraint(ConstraintKind::KeepUpright {
                 body: body_handle,
                 target_up: nalgebra::UnitVector3::new_normalize(Vector3::new(0.0, 1.0, 0.0)),
                 compliance: 0.0,
             });
-        body_handle
+        (body_handle, upright_handle)
     };
 
     world
@@ -68,6 +71,10 @@ pub fn spawn_player(world: &mut World, initial_pos: nalgebra::Point3<f32>) -> En
         .with(CharacterState::default())
         .with(locomotion)
         .with(Grounding::default())
+        // The player's corpse is never despawned — death should be a state to
+        // recover from, not an entity disappearing out from under the camera.
+        .with(Health::persistent(100.0))
+        .with(Ragdoll::new(vec![upright_handle]))
         .with(animator)
         .with(Position(Vector3::new(
             initial_pos.x,
