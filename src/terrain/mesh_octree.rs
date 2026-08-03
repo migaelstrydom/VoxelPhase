@@ -16,7 +16,7 @@
 //! vertex. This ensures no duplicates while the intersection references ensure
 //! complete query results.
 
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 use nalgebra::{Point3, Vector3};
 
@@ -453,7 +453,7 @@ impl MeshOctree {
     /// Returns `(TriangleRef, Triangle)` pairs. The `TriangleRef` identifies
     /// each triangle within the octree and can be used for adjacency lookups.
     pub fn query_aabb(&self, query: &AABB) -> Vec<(TriangleRef, Triangle)> {
-        let mut seen = HashSet::new();
+        let mut seen = FxHashSet::default();
         let mut triangles = Vec::new();
         self.query_aabb_recursive(&self.root, 0, 0, query, &mut seen, &mut triangles);
         triangles
@@ -465,7 +465,7 @@ impl MeshOctree {
         depth: u8,
         path: u64,
         query: &AABB,
-        seen: &mut HashSet<(u64, u8, u32)>,
+        seen: &mut FxHashSet<(u64, u8, u32)>,
         out: &mut Vec<(TriangleRef, Triangle)>,
     ) {
         if !node.bounds.intersects(query) {
@@ -475,26 +475,28 @@ impl MeshOctree {
         match &node.content {
             MeshNodeContent::Empty => {}
             MeshNodeContent::Leaf(leaf) => {
-                // Add owned triangles
+                // Add owned triangles.
+                //
+                // `seen` exists only to stop a triangle reported through two
+                // leaves from being emitted twice, so it is consulted for
+                // emitted triangles rather than for tested ones: a leaf holds
+                // up to MAX_TRIANGLES_PER_LEAF triangles and a typical query
+                // keeps a couple, so hashing before the AABB test costs far
+                // more than the dedup saves.
                 for tri in 0..leaf.owned_triangle_count() {
-                    let key = (path, depth, tri as u32);
-                    if seen.insert(key) {
-                        let aabb = leaf.triangle_aabb(tri);
-                        if query.intersects(&aabb) {
-                            let tri_ref = TriangleRef::new(path, depth, tri as u32);
-                            out.push((tri_ref, leaf.to_collision_triangle(tri)));
-                        }
+                    let aabb = leaf.triangle_aabb(tri);
+                    if query.intersects(&aabb) && seen.insert((path, depth, tri as u32)) {
+                        let tri_ref = TriangleRef::new(path, depth, tri as u32);
+                        out.push((tri_ref, leaf.to_collision_triangle(tri)));
                     }
                 }
 
                 // Add neighbor triangles
                 for tri_ref in &leaf.neighbor_refs {
-                    let key = (tri_ref.path, tri_ref.depth, tri_ref.triangle_index);
-                    if seen.insert(key) {
-                        if let Some(triangle) = self.resolve_triangle_ref(tri_ref) {
-                            if query.intersects(&triangle.aabb()) {
-                                out.push((*tri_ref, triangle));
-                            }
+                    if let Some(triangle) = self.resolve_triangle_ref(tri_ref) {
+                        let key = (tri_ref.path, tri_ref.depth, tri_ref.triangle_index);
+                        if query.intersects(&triangle.aabb()) && seen.insert(key) {
+                            out.push((*tri_ref, triangle));
                         }
                     }
                 }
@@ -540,7 +542,7 @@ impl MeshOctree {
         let inv_dir = Vector3::new(1.0 / direction.x, 1.0 / direction.y, 1.0 / direction.z);
         let mut best: Option<crate::collision::RayHit> = None;
         let mut best_t = max_t;
-        let mut seen = HashSet::new();
+        let mut seen = FxHashSet::default();
         self.ray_cast_recursive(
             &self.root,
             0,
@@ -564,7 +566,7 @@ impl MeshOctree {
     ) -> Vec<crate::collision::RayHit> {
         let inv_dir = Vector3::new(1.0 / direction.x, 1.0 / direction.y, 1.0 / direction.z);
         let mut hits = Vec::new();
-        let mut seen = HashSet::new();
+        let mut seen = FxHashSet::default();
         self.ray_cast_all_recursive(
             &self.root, 0, 0, origin, direction, inv_dir, max_t, &mut hits, &mut seen,
         );
@@ -581,7 +583,7 @@ impl MeshOctree {
         inv_dir: Vector3<f32>,
         best_t: &mut f32,
         best: &mut Option<crate::collision::RayHit>,
-        seen: &mut HashSet<(u64, u8, u32)>,
+        seen: &mut FxHashSet<(u64, u8, u32)>,
     ) {
         if !node.bounds.intersects_ray(origin, inv_dir, *best_t) {
             return;
@@ -626,7 +628,7 @@ impl MeshOctree {
         inv_dir: Vector3<f32>,
         max_t: f32,
         hits: &mut Vec<crate::collision::RayHit>,
-        seen: &mut HashSet<(u64, u8, u32)>,
+        seen: &mut FxHashSet<(u64, u8, u32)>,
     ) {
         if !node.bounds.intersects_ray(origin, inv_dir, max_t) {
             return;
@@ -667,17 +669,22 @@ impl MeshOctree {
         origin: Point3<f32>,
         direction: Vector3<f32>,
         max_t: f32,
-        seen: &mut HashSet<(u64, u8, u32)>,
+        seen: &mut FxHashSet<(u64, u8, u32)>,
         mut on_hit: impl FnMut(crate::collision::RayHit),
     ) {
         use crate::collision::ray_triangle::ray_triangle;
 
         // Test owned triangles.
+        //
+        // The `seen` set exists only to stop a triangle reported through two
+        // leaves from being emitted twice, so it is consulted for hits rather
+        // than for tests: a miss can never produce a duplicate, and re-testing
+        // the handful of duplicated triangles is cheaper than hashing every
+        // triangle the ray passes.
         for tri in 0..leaf.owned_triangle_count() {
-            let key = (path, depth, tri as u32);
-            if seen.insert(key) {
-                let triangle = leaf.to_collision_triangle(tri);
-                if let Some(hit) = ray_triangle(origin, direction, &triangle, max_t) {
+            let triangle = leaf.to_collision_triangle(tri);
+            if let Some(hit) = ray_triangle(origin, direction, &triangle, max_t) {
+                if seen.insert((path, depth, tri as u32)) {
                     on_hit(hit);
                 }
             }
@@ -685,12 +692,13 @@ impl MeshOctree {
 
         // Test neighbor triangles.
         for tri_ref in &leaf.neighbor_refs {
-            let key = (tri_ref.path, tri_ref.depth, tri_ref.triangle_index);
-            if seen.insert(key) {
-                if let Some(triangle) = self.resolve_triangle_ref(tri_ref) {
-                    if let Some(hit) = ray_triangle(origin, direction, &triangle, max_t) {
-                        on_hit(hit);
-                    }
+            let Some(triangle) = self.resolve_triangle_ref(tri_ref) else {
+                continue;
+            };
+            if let Some(hit) = ray_triangle(origin, direction, &triangle, max_t) {
+                let key = (tri_ref.path, tri_ref.depth, tri_ref.triangle_index);
+                if seen.insert(key) {
+                    on_hit(hit);
                 }
             }
         }
