@@ -408,6 +408,15 @@ needs a bench scenario, not just an implementation.
 
 ## Staging
 
+> **Status, 2026-07-31: stages 1–3 are complete and merged to `main`.** The segmenting
+> project delivered what it set out to: levels that are not one cube, authored by snapping
+> areas together, with mechanical validation. Stage 4 (the viewer) is **deferred behind
+> structure work** — see `docs/TERRAIN_REPRESENTATION_PLAN.md`, which is the live document
+> from here. Playing stage 3 showed that voxel traversal primitives cannot produce walkable
+> routes, because marching cubes cannot represent a sharp edge at any resolution; that
+> supersedes the priority order below. The running record of what each stage actually landed
+> is `docs/level_segments/PROGRESS.md`.
+
 Stage briefs live in `docs/level_segments/` and are written **just in time** — one at a
 time, immediately before that stage runs, once the preceding stage has landed. Briefs
 written far ahead encode guesses about APIs that earlier stages will actually decide, and
@@ -420,7 +429,8 @@ design; the briefs hold the perishable detail.
 | 1.5 | `level_check` + schematic export (SVG, no Vulkan) + terrain-update timing instrumentation | Pulled ahead of segments so every later stage has automated acceptance instead of visual guesswork. |
 | 2 | N segments, local frames, anchor graph, placement | The authoring payoff. Generalises stage 1's single segment. Anchors defined as named local frames per "Mobile geometry" above. |
 | 3 | Traversal primitives — swept `Path` first, then `Platform`, `Staircase`, `Shaft` — plus the object-orientation debt stage 2 left | Needs segments to be worth authoring against. Terrain can currently only be shaped into landscape; these are what a route is made of. |
-| 4 | `level_viewer` binary with offscreen render-to-PNG | Last because it is the most expensive and `level_check` covers correctness. |
+| 4 | `level_viewer` binary with offscreen render-to-PNG | **Deferred behind structure work.** Its job was to close the feedback loop, but playing stage 3 closed it well enough by hand, while routes are unwalkable *today*. Still wanted; see `TERRAIN_REPRESENTATION_PLAN.md` for what it most needs to show. |
+| — | Structure: static compound bodies for walkable geometry | **The live next piece.** See `docs/TERRAIN_REPRESENTATION_PLAN.md`. Needs no engine work; starts with a one-`Steps` spike. |
 | — | Gameplay entities (checkpoint, goal, hazard, pickup, trigger) | **Unscheduled.** Originally stage 3, cut before it ran. The argument for them stands — no level can be *finished* without them — but the game's respawn and progression model is an open design question, and encoding a guess at it in the level format would be expensive to undo. Nothing blocks them: stage 2 established the per-segment list pattern, so they can be added whenever the design is settled. |
 | — | Visual identity — materials, biomes, props, foliage, lighting variety | **Unscheduled.** The reason authored areas read as terrain rather than as places. Best done after stage 4, so the viewer can show the result while it is being tuned. |
 | — | Mobile geometry (kinematic platforms) | **Out of scope.** Deferred indefinitely; see "Mobile geometry" above for the constraint it places on anchors. |

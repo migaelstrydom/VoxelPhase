@@ -1020,3 +1020,53 @@ thing the constant was consolidated to prevent. The alternatives, if the warning
 judged not worth living with, are to give `surface_below` a tolerance of one band, or to
 author `test_arena`'s objects a hair above zero. `level_check`'s checks were out of scope
 here, so neither was done.
+
+**Resolved:** `surface_below` was given a one-band tolerance reusing `terrain::SURFACE_BAND`
+(commit `3319a4d`). The tolerance belongs in the check rather than in authored content —
+authoring around an implementation epsilon would put the trap in every future level. All
+three levels now report 0 errors and 0 warnings.
+
+---
+
+## Stage 3 played — and what it changed
+
+Stage 3 merged (`45d012d`) and the route in `test_segments` was played by hand. Verbatim
+findings, in the order of the check list it shipped with:
+
+1. A 3 m deck width feels fine.
+2. The player walks up a sloped deck fine, **but it looks lumpy.**
+3. **The staircase cannot be walked up without jumping**, and the risers are not vertical —
+   marching cubes tilts them.
+4. The two stepping stones sit right at the limit of a standing jump. Reachable once
+   ledge-grab exists. You can only climb back on from beside the bowl, not from below.
+5. **The spiral ledge looks bumpy.** Walkable downward.
+6. The quarter-turned segment looks jagged. It is exactly where the schematic says it is.
+7. A deck survives a grenade that craters the ground beneath it, leaving it floating.
+
+Findings 2, 3, 5 and 6 share one cause, and it is **not** resolution: marching cubes cannot
+represent a sharp edge or corner at *any* voxel size, because each vertex is interpolated
+along a cell edge. A riser falling between two sample planes comes out as a slope, and at
+double resolution it comes out as a smaller slope. Stage 3's sub-voxel work got surfaces to
+land at the right height; nothing in that approach can make them land at the right angle.
+
+**The conclusion: voxel traversal primitives were built on the wrong side of a line.** They
+keep their value as *landscape* shaping — a mesa, a natural ledge — but the walkable route
+wants to be static compound rigid bodies instead. That analysis, the agreed role split
+(landscape / structure / clutter), why "structure" is a spawnable rather than a new object
+category, the `route_plan()` generalisation it needs, dual contouring as the medium-term voxel
+option, and the spike to run first, are all written up in **`docs/TERRAIN_REPRESENTATION_PLAN.md`**.
+
+Nothing from stage 3 is wasted: the marching-cubes fixes, `csg.rs`, `RoutePlan`/`RouteMap`,
+the orientation work on twelve spawnables, and `Footprint` in `PlayerConfig` are all
+independent of which side of that line a route ends up on.
+
+### Outstanding at the point this was written down
+
+- **`test_segments`' route wants re-authoring** once structure exists. Its staircase cannot
+  be walked, so it currently documents a defect.
+- **Cross-segment bridging is impossible** — generation clips features to segment bounds, and
+  extending the bounds trips Rule 4's solid-chunk contention. Three candidate fixes are in the
+  stage 3 notes above; sub-chunk contention granularity is the most promising.
+- **Welded joins** remain unimplemented and rejected at load.
+- **Terrain-destruction latency** — measured, unfixed, remesh-dominated.
+- ~~Mesh-quality pass~~ — **closed.** It was the surface degeneracy, not a separate mechanism.
