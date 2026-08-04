@@ -19,7 +19,7 @@ use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
 };
 use crate::core::error::EngineResult;
-use crate::creature::{Brain, Perception, Roller};
+use crate::creature::{AlertTelegraph, Brain, Perception, Roller};
 use crate::damage::Health;
 use crate::fire::components::Flammable;
 use crate::geometry::{generate_sphere_indices, generate_sphere_vertices};
@@ -39,6 +39,11 @@ const TEXTURE_SIZE: u32 = 256;
 /// grazing blast.
 const DENSITY: f32 = 2400.0;
 
+/// Contact friction. High, because friction is what turns drive torque into
+/// travel — a slick roller would spin in place. Shared with `Roller::new`,
+/// which derives the traction limit on its drive torque from it.
+const FRICTION: f32 = 1.2;
+
 /// A rolling boulder creature.
 ///
 /// Position is `(x, z)` — the spawn height is taken from the terrain, since a
@@ -55,6 +60,11 @@ pub struct RollerDef {
     /// terrifying downhill.
     #[serde(default = "RollerDef::default_speed")]
     pub speed: f32,
+    /// Seconds to reach `speed` from rest on the flat. Lower is more
+    /// aggressive; below roughly `speed / (friction * g)` the ground cannot
+    /// transmit the extra torque and the value stops having an effect.
+    #[serde(default = "RollerDef::default_spin_up_time")]
+    pub spin_up_time: f32,
     #[serde(default = "RollerDef::default_health")]
     pub health: f32,
     /// How far it can see. Hearing range is close and fixed.
@@ -71,6 +81,9 @@ impl RollerDef {
     }
     pub fn default_speed() -> f32 {
         4.5
+    }
+    pub fn default_spin_up_time() -> f32 {
+        0.7
     }
     pub fn default_health() -> f32 {
         80.0
@@ -135,9 +148,7 @@ impl Spawnable for RollerDef {
                 body_handle,
                 ColliderDesc::sphere(self.radius)
                     .density(DENSITY)
-                    // High friction is what makes torque become travel. With a
-                    // slick sphere the creature would spin in place.
-                    .friction(1.2)
+                    .friction(FRICTION)
                     .restitution(0.1),
             );
             body_handle
@@ -167,8 +178,17 @@ impl Spawnable for RollerDef {
             // reads it. Neither knows about the other.
             .with(CharacterIntent::default())
             .with(Perception::ground_creature(self.sight_range))
+            // A sphere has no face to pull, so the alert beat is expressed
+            // as a hop and a shiver instead.
+            .with(AlertTelegraph::ground_creature())
             .with(brain)
-            .with(Roller::new(self.radius, self.mass(), self.speed))
+            .with(Roller::new(
+                self.radius,
+                self.mass(),
+                self.speed,
+                self.spin_up_time,
+                FRICTION,
+            ))
             // Stone takes blast and impact badly but barely notices fire.
             .with(
                 Health::new(self.health, 8.0)

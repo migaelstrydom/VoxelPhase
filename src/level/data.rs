@@ -828,6 +828,8 @@ pub enum LevelObject {
         radius: f32,
         #[serde(default = "RollerDef::default_speed")]
         speed: f32,
+        #[serde(default = "RollerDef::default_spin_up_time")]
+        spin_up_time: f32,
         #[serde(default = "RollerDef::default_health")]
         health: f32,
         #[serde(default = "RollerDef::default_sight_range")]
@@ -1597,6 +1599,7 @@ impl LevelObject {
                 pos,
                 radius,
                 speed,
+                spin_up_time,
                 health,
                 sight_range,
                 relentless,
@@ -1604,6 +1607,7 @@ impl LevelObject {
                 pos: *pos,
                 radius: *radius,
                 speed: *speed,
+                spin_up_time: *spin_up_time,
                 health: *health,
                 sight_range: *sight_range,
                 relentless: *relentless,

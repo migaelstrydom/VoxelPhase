@@ -19,11 +19,13 @@
 //! The definitions of individual creatures — geometry, materials, physics —
 //! live in `crate::app::creatures`, mirroring the spawnables library.
 
+mod alert_telegraph;
 mod brain;
 mod perception;
 mod roller;
 pub mod steering;
 
+pub use alert_telegraph::{AlertTelegraph, AlertTelegraphSystem};
 pub use brain::{Behaviour, Brain, BrainSystem};
 pub use perception::{PerceivedTarget, Perception, PerceptionSystem};
 pub use roller::{Roller, RollerLocomotionSystem};
