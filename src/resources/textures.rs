@@ -5,9 +5,9 @@ use crate::core::error::{EngineError, EngineResult, ImageOperation};
 use crate::rendering::colour::Colour;
 use crate::rendering::descriptors::DescriptorManager;
 use crate::rendering::texture::ManagedTexture;
+use crate::resources::texture_registry::{ReleaseOutcome, TextureRegistry};
 use crate::utils::noise::fbm_2d_periodic;
 use std::{
-    collections::HashMap,
     path::Path,
     sync::{Arc, Mutex},
 };
@@ -18,12 +18,14 @@ use super::transfer_service::TransferService;
 
 /// Handle to a texture that automatically manages its lifecycle.
 ///
-/// Uses strong references to ensure proper cleanup order - when the last handle
-/// is dropped, the texture and its descriptor set are automatically cleaned up.
-#[derive(Clone)]
+/// Cloning a handle takes another reference to the same texture. When the last
+/// handle is dropped, the texture and its descriptor set are cleaned up.
 pub struct TextureHandle {
+    /// The texture, kept alive for as long as this handle exists.
     texture: Arc<ManagedTexture>,
+    /// Registry id of the texture, used for retain and release bookkeeping.
     id: u64,
+    /// Shared manager state that counts the live handles to this texture.
     manager: Arc<Mutex<TextureManagerInner>>,
 }
 
@@ -39,9 +41,30 @@ impl TextureHandle {
     }
 }
 
+impl Clone for TextureHandle {
+    fn clone(&self) -> Self {
+        // The retain must land before the new handle exists. A count that lags
+        // behind the live handles lets a later release free a texture another
+        // handle still uses, so a poisoned lock panics here rather than hand
+        // back an untracked handle.
+        self.manager
+            .lock()
+            .expect("texture manager mutex poisoned")
+            .retain_texture(self.id);
+
+        Self {
+            texture: Arc::clone(&self.texture),
+            id: self.id,
+            manager: Arc::clone(&self.manager),
+        }
+    }
+}
+
 impl Drop for TextureHandle {
     fn drop(&mut self) {
-        // Automatically clean up when the last handle is dropped
+        // A skipped release only leaks a texture, so this stays silent where
+        // the retain in `clone` panics. Unwinding out of a drop would turn a
+        // poisoned lock into an abort.
         if let Ok(mut manager) = self.manager.lock() {
             manager.release_texture(self.id);
         }
@@ -58,24 +81,29 @@ impl std::fmt::Debug for TextureHandle {
 }
 
 struct TextureManagerInner {
-    textures: HashMap<u64, Arc<ManagedTexture>>,
-    descriptor_sets: HashMap<u64, vk::DescriptorSet>, // texture_id -> descriptor_set
+    /// Live textures and their handle counts.
+    registry: TextureRegistry,
+    /// Source of the descriptor sets bound to those textures.
     descriptor_manager: Arc<DescriptorManager>,
-    next_id: u64,
 }
 
 impl TextureManagerInner {
+    fn retain_texture(&mut self, id: u64) {
+        self.registry.retain(id);
+    }
+
+    /// Drop one handle to a texture, freeing its GPU resources if it was the last.
     fn release_texture(&mut self, id: u64) {
-        // Clean up descriptor set immediately
-        if let Some(descriptor_set) = self.descriptor_sets.remove(&id) {
+        let ReleaseOutcome::Released { descriptor_set } = self.registry.release(id) else {
+            return;
+        };
+
+        if let Some(descriptor_set) = descriptor_set {
             let _ = self.descriptor_manager.free_texture_set(descriptor_set);
             log::debug!("Freed descriptor set for texture {}", id);
         }
 
-        // Remove texture - Arc will handle cleanup when ref count reaches 0
-        if self.textures.remove(&id).is_some() {
-            log::debug!("Released texture {}", id);
-        }
+        log::debug!("Released texture {}", id);
     }
 }
 
@@ -521,13 +549,30 @@ impl TextureManager {
 
         Ok(Self {
             inner: Arc::new(Mutex::new(TextureManagerInner {
-                textures: HashMap::new(),
-                descriptor_sets: HashMap::new(),
+                registry: TextureRegistry::new(),
                 descriptor_manager,
-                next_id: 0,
             })),
             texture_factory,
         })
+    }
+
+    /// Number of textures with at least one live handle.
+    pub fn live_texture_count(&self) -> usize {
+        self.inner.lock().unwrap().registry.len()
+    }
+
+    /// Take ownership of a freshly created texture and return the first handle to it.
+    fn register(&self, texture: ManagedTexture) -> TextureHandle {
+        let texture = Arc::new(texture);
+
+        let mut inner = self.inner.lock().unwrap();
+        let id = inner.registry.insert(Arc::clone(&texture));
+
+        TextureHandle {
+            texture,
+            id,
+            manager: Arc::clone(&self.inner),
+        }
     }
 
     /// Get or create a descriptor set for a texture
@@ -539,7 +584,7 @@ impl TextureManager {
         let texture_id = texture_handle.id();
 
         // Check if we already have a descriptor set for this texture
-        if let Some(&descriptor_set) = inner.descriptor_sets.get(&texture_id) {
+        if let Some(descriptor_set) = inner.registry.descriptor_set(texture_id) {
             return Ok(descriptor_set);
         }
 
@@ -555,7 +600,9 @@ impl TextureManager {
         );
 
         // Track the descriptor set
-        inner.descriptor_sets.insert(texture_id, descriptor_set);
+        inner
+            .registry
+            .set_descriptor_set(texture_id, descriptor_set);
 
         log::debug!(
             "Allocated and updated descriptor set for texture {}",
@@ -570,19 +617,9 @@ impl TextureManager {
     /// The texture and its descriptor set will be automatically cleaned up
     /// when the last handle is dropped - no manual cleanup required!
     pub fn load_texture<P: AsRef<Path>>(&self, path: P) -> EngineResult<TextureHandle> {
-        let texture = Arc::new(self.texture_factory.create_from_file(&path, None)?);
+        let texture = self.texture_factory.create_from_file(&path, None)?;
 
-        let mut inner = self.inner.lock().unwrap();
-        let id = inner.next_id;
-        inner.next_id += 1;
-
-        inner.textures.insert(id, texture.clone());
-
-        Ok(TextureHandle {
-            texture,
-            id,
-            manager: Arc::clone(&self.inner),
-        })
+        Ok(self.register(texture))
     }
 
     /// Create a texture from raw RGBA pixel data.
@@ -593,26 +630,19 @@ impl TextureManager {
         rgba_data: &[u8],
         generate_mipmaps: bool,
     ) -> EngineResult<TextureHandle> {
-        let texture = Arc::new(self.texture_factory.create_from_rgba(
+        let texture =
+            self.texture_factory
+                .create_from_rgba(width, height, rgba_data, generate_mipmaps)?;
+        let handle = self.register(texture);
+
+        log::debug!(
+            "Created RGBA texture {}x{} (id={})",
             width,
             height,
-            rgba_data,
-            generate_mipmaps,
-        )?);
+            handle.id()
+        );
 
-        let mut inner = self.inner.lock().unwrap();
-        let id = inner.next_id;
-        inner.next_id += 1;
-
-        inner.textures.insert(id, texture.clone());
-
-        log::debug!("Created RGBA texture {}x{} (id={})", width, height, id);
-
-        Ok(TextureHandle {
-            texture,
-            id,
-            manager: Arc::clone(&self.inner),
-        })
+        Ok(handle)
     }
 
     /// Create a procedural noise texture.
@@ -626,45 +656,31 @@ impl TextureManager {
         scale: f32,
         seed: u32,
     ) -> EngineResult<TextureHandle> {
-        let texture = Arc::new(
-            self.texture_factory
-                .create_noise_texture(width, height, octaves, scale, seed)?,
+        let texture = self
+            .texture_factory
+            .create_noise_texture(width, height, octaves, scale, seed)?;
+        let handle = self.register(texture);
+
+        log::debug!(
+            "Created noise texture {}x{} (id={})",
+            width,
+            height,
+            handle.id()
         );
 
-        let mut inner = self.inner.lock().unwrap();
-        let id = inner.next_id;
-        inner.next_id += 1;
-
-        inner.textures.insert(id, texture.clone());
-
-        log::debug!("Created noise texture {}x{} (id={})", width, height, id);
-
-        Ok(TextureHandle {
-            texture,
-            id,
-            manager: Arc::clone(&self.inner),
-        })
+        Ok(handle)
     }
 
     /// Create a 1x1 solid colour texture.
     ///
     /// Useful for fallback textures or when materials don't need textures.
     pub fn create_solid_colour(&self, colour: Colour) -> EngineResult<TextureHandle> {
-        let texture = Arc::new(self.texture_factory.create_solid_colour(colour)?);
+        let texture = self.texture_factory.create_solid_colour(colour)?;
+        let handle = self.register(texture);
 
-        let mut inner = self.inner.lock().unwrap();
-        let id = inner.next_id;
-        inner.next_id += 1;
+        log::debug!("Created solid colour texture (id={})", handle.id());
 
-        inner.textures.insert(id, texture.clone());
-
-        log::debug!("Created solid colour texture (id={})", id);
-
-        Ok(TextureHandle {
-            texture,
-            id,
-            manager: Arc::clone(&self.inner),
-        })
+        Ok(handle)
     }
 }
 

@@ -97,11 +97,7 @@ impl VisualBench {
         self.renderer.render_sky(cb, &view, &projection)?;
 
         // Destructured so the draw can hold `&mut renderer` while the texture
-        // reference borrows the material manager. Deliberately references
-        // rather than clones: `TextureHandle::drop` releases the texture and
-        // its descriptor set whether or not other handles remain, so a cloned
-        // handle going out of scope mid-frame would free a descriptor set the
-        // command buffer still has bound.
+        // reference borrows the material manager.
         let Self {
             renderer,
             texture_manager,
