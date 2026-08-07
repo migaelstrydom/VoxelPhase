@@ -234,6 +234,8 @@ impl CcdStrategy for SweepClampCcd {
                 std::slice::from_mut(&mut ccd_manifold),
                 ctx.restitution_velocity_threshold,
             );
+            ctx.impacts
+                .record_solved(std::slice::from_ref(&ccd_manifold));
 
             corrections += 1;
         }

@@ -14,6 +14,6 @@ pub use config::GrenadeConfig;
 pub use model::{build_grenade_model, GrenadeMaterials};
 pub use systems::{
     GrenadeCooldown, GrenadeModelResource, GrenadeSpawnSystem, LifetimeSystem,
-    ProjectileImpactDetectionSystem,
+    ProjectileDetonationSystem,
 };
 pub use visuals::{GrenadeVisualSystem, GrenadeVisuals};

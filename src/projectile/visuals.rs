@@ -285,7 +285,7 @@ mod tests {
 
         let entity = world
             .create_entity()
-            .with(Grenade::new())
+            .with(Grenade::default())
             .with(Velocity(Vector3::new(0.0, 0.0, 20.0)))
             .build();
 

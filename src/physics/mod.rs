@@ -44,6 +44,7 @@ mod debug;
 mod force_provider;
 pub mod grounding;
 mod handle;
+mod impact;
 mod impulses;
 mod math;
 mod narrowphase;
@@ -61,6 +62,7 @@ pub use constraint::{Constraint, ConstraintHandle, ConstraintKind};
 pub use contact_event::{ContactEvent, ContactSource};
 pub use force_provider::{ForceContext, ForceOutput, SubstepForceProvider};
 pub use handle::{ColliderHandle, RigidBodyHandle};
+pub use impact::{BodyImpact, ImpactLedger};
 pub use impulses::{PhysicsImpulse, PhysicsImpulseQueue};
 pub use solver::{
     ConstraintSolver, IdentityConditioner, ManifoldConditioner, ManifoldConditions, PgsNgsConfig,

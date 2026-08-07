@@ -1,6 +1,5 @@
 //! Projectile-related ECS systems.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use nalgebra::{Point3, Vector3};
@@ -18,7 +17,7 @@ use crate::components::{
 };
 use crate::explosion::Explosion;
 use crate::model::Model;
-use crate::physics::{ColliderDesc, ContactEvent, RigidBodyDesc, RigidBodyHandle};
+use crate::physics::{ColliderDesc, RigidBodyDesc};
 use crate::player::Player;
 use crate::systems::PhysicsResource;
 use crate::time::Time;
@@ -195,7 +194,7 @@ impl<'a> System<'a> for GrenadeSpawnSystem {
             .with(Orientation::default())
             .with(RigidBodyComponent(body_handle))
             .with(Projectile)
-            .with(Grenade::new())
+            .with(Grenade::new(config.fuse_time, config.arm_delay))
             .with(Lifetime::new(config.max_lifetime))
             .with(ModelInstance::new(model))
             .with(Renderable)
@@ -206,68 +205,71 @@ impl<'a> System<'a> for GrenadeSpawnSystem {
     }
 }
 
-/// System that detects projectile impacts with terrain and triggers explosions.
-pub struct ProjectileImpactDetectionSystem;
+/// System that burns grenade fuses and detonates grenades on hard impacts.
+///
+/// Detonation has two triggers. The fuse always fires, so a grenade that comes
+/// to rest still goes off. Impact detonation fires early when the frame's
+/// normal impulse exceeds what it would take to arrest the grenade from
+/// `detonation_impact_speed`, which is what makes a direct throw explode on
+/// contact while a bounce off a menhir merely bounces.
+pub struct ProjectileDetonationSystem;
 
-impl<'a> System<'a> for ProjectileImpactDetectionSystem {
+impl<'a> System<'a> for ProjectileDetonationSystem {
     type SystemData = (
         Entities<'a>,
         Write<'a, PhysicsResource>,
+        ReadExpect<'a, Time>,
+        Read<'a, GrenadeConfig>,
         ReadStorage<'a, Projectile>,
-        ReadStorage<'a, Grenade>,
+        WriteStorage<'a, Grenade>,
         ReadStorage<'a, RigidBodyComponent>,
         Read<'a, LazyUpdate>,
     );
 
     fn run(&mut self, data: Self::SystemData) {
-        let (entities, mut physics, projectiles, grenades, bodies, lazy) = data;
+        let (entities, mut physics, time, config, projectiles, mut grenades, bodies, lazy) = data;
+        let delta = time.delta_seconds();
 
-        // Collect grenades that should explode
-        let mut explosions: Vec<(Entity, Point3<f32>)> = Vec::new();
-        let mut best_static_contacts: HashMap<RigidBodyHandle, (f32, Point3<f32>)> = HashMap::new();
+        let mut detonations: Vec<(Entity, Point3<f32>)> = Vec::new();
 
-        for contact in physics.world.contact_events() {
-            if !contact_is_static(contact) {
+        for (entity, _, grenade, body) in (&entities, &projectiles, &mut grenades, &bodies).join() {
+            grenade.tick(delta);
+
+            let Some(rigid_body) = physics.world.body(body.0) else {
+                continue;
+            };
+            let centre = rigid_body.position();
+
+            if grenade.fuse_expired() {
+                detonations.push((entity, centre));
                 continue;
             }
-            if contact.normal.magnitude_squared() <= 1e-8 {
+
+            if !grenade.is_armed() {
                 continue;
             }
-            let entry = best_static_contacts
-                .entry(contact.body_b)
-                .or_insert((contact.depth, contact.point));
-            if contact.depth > entry.0 {
-                *entry = (contact.depth, contact.point);
+
+            // The impulse that would arrest this grenade from the configured
+            // speed. Deriving it from mass keeps the tunable speed-like even if
+            // the collider's size or density changes.
+            let threshold = rigid_body.mass() * config.detonation_impact_speed;
+            if let Some(impact) = physics.world.impacts().get(body.0) {
+                if impact.total_impulse >= threshold {
+                    detonations.push((entity, impact.point));
+                }
             }
         }
 
-        for (entity, _, grenade, body) in (&entities, &projectiles, &grenades, &bodies).join() {
-            if !grenade.armed {
-                continue;
-            }
-
-            if let Some((_, point)) = best_static_contacts.get(&body.0) {
-                explosions.push((entity, point.clone()));
-            }
-        }
-
-        // Create explosion entities and delete grenades
-        for (entity, pos) in explosions {
-            // Create explosion entity
+        for (entity, position) in detonations {
             lazy.create_entity(&entities)
-                .with(Explosion::new(pos))
+                .with(Explosion::new(position))
                 .build();
 
             if let Some(body) = bodies.get(entity) {
                 let _ = physics.world.remove_body(body.0);
             }
 
-            // Delete the grenade
             let _ = entities.delete(entity);
         }
     }
-}
-
-fn contact_is_static(contact: &ContactEvent) -> bool {
-    contact.body_a.is_none()
 }

@@ -16,7 +16,7 @@ use crate::input::InputActionSystem;
 use crate::lighting::LightCollectionSystem;
 use crate::particles::{ParticleSpawnSystem, ParticleUpdateSystem};
 use crate::projectile::{
-    GrenadeSpawnSystem, GrenadeVisualSystem, LifetimeSystem, ProjectileImpactDetectionSystem,
+    GrenadeSpawnSystem, GrenadeVisualSystem, LifetimeSystem, ProjectileDetonationSystem,
 };
 use crate::sensing::SensorProbeSystem;
 use crate::systems::{
@@ -94,15 +94,11 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
             &["lifetime"],
         )
         .with(
-            ProjectileImpactDetectionSystem,
-            "projectile_impact_detection",
+            ProjectileDetonationSystem,
+            "projectile_detonation",
             &["lifetime"],
         )
-        .with(
-            ExplosionSystem,
-            "explosion",
-            &["projectile_impact_detection"],
-        )
+        .with(ExplosionSystem, "explosion", &["projectile_detonation"])
         .with(FireIgnitionSystem, "fire_ignition", &["explosion"])
         .with(FireCleanupSystem, "fire_cleanup", &["fire_ignition"])
         // Firelight tracks OnFire, so it must settle before lights are collected.

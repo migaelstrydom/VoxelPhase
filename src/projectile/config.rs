@@ -14,7 +14,22 @@ pub struct GrenadeConfig {
     /// Gravity applied to grenades.
     pub gravity: f32,
     /// Maximum time before grenade despawns if it doesn't explode (seconds).
+    ///
+    /// A backstop only: the fuse normally detonates the grenade well before
+    /// this.
     pub max_lifetime: f32,
+    /// Seconds the fuse burns before the grenade detonates on its own.
+    pub fuse_time: f32,
+    /// Seconds after the throw before impact detonation arms.
+    pub arm_delay: f32,
+    /// How hard an impact must be to detonate the grenade, expressed as the
+    /// head-on approach speed (m/s) that would produce it.
+    ///
+    /// Compared against the normal impulse the solver delivered over the frame,
+    /// scaled by the grenade's mass — the impulse needed to arrest the grenade
+    /// from this speed. Glancing blows, slow rolls and yielding surfaces stay
+    /// below it; a direct throw at `throw_speed` clears it comfortably.
+    pub detonation_impact_speed: f32,
     /// Cooldown between throws (seconds).
     pub cooldown: f32,
     /// Base upward angle offset for throws (radians). Added to throw direction.
@@ -31,6 +46,9 @@ impl Default for GrenadeConfig {
             radius: 0.2,
             gravity: 9.81,
             max_lifetime: 10.0,
+            fuse_time: 2.5,
+            arm_delay: 0.15,
+            detonation_impact_speed: 6.0,
             cooldown: 0.01,
             upward_offset: 0.1,
             pitch_influence: 0.5,

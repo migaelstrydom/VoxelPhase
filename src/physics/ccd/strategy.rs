@@ -7,6 +7,7 @@ use crate::physics::body::RigidBody;
 use crate::physics::collider::Collider;
 use crate::physics::contact_event::ContactEvent;
 use crate::physics::handle::RigidBodyHandle;
+use crate::physics::impact::ImpactLedger;
 use crate::physics::static_geometry::StaticGeometry;
 
 use super::ownership::NarrowphaseOwnership;
@@ -16,6 +17,8 @@ pub struct CcdContext<'a> {
     pub bodies: &'a mut Arena<RigidBody>,
     pub colliders: &'a Arena<Collider>,
     pub contact_events: &'a mut Vec<ContactEvent>,
+    /// Post-solve impulse ledger, fed by the CCD solve pass.
+    pub impacts: &'a mut ImpactLedger,
     /// Bodies the narrowphase currently owns (excluded from CCD while its
     /// frame-start manifold still describes them).
     pub narrowphase_ownership: &'a NarrowphaseOwnership,

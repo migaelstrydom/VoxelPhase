@@ -14,6 +14,7 @@ use super::debug::{PhysicsDebugConfig, PhysicsDebugger};
 use super::force_provider::{ForceContext, ForceOutput, SubstepForceProvider};
 use super::grounding::{GroundingConfig, GroundingDetector};
 use super::handle::{ColliderHandle, RigidBodyHandle};
+use super::impact::ImpactLedger;
 use super::impulses::PhysicsImpulse;
 use super::narrowphase::{
     generate_dynamic_contacts, generate_static_contacts, GjkCacheMap, NarrowphaseWorkBuffer,
@@ -124,6 +125,8 @@ pub struct PhysicsWorld {
     colliders: Arena<Collider>,
     manifold_cache: ManifoldCache,
     last_contacts: Vec<ContactEvent>,
+    /// Normal impulses delivered to each body this frame.
+    impacts: ImpactLedger,
     debugger: PhysicsDebugger,
     frame_index: u64,
     sleep_manager: SleepManager,
@@ -210,6 +213,7 @@ impl PhysicsWorld {
             colliders: Arena::new(),
             manifold_cache,
             last_contacts: Vec::new(),
+            impacts: ImpactLedger::default(),
             debugger,
             frame_index: 0,
             sleep_manager,
@@ -619,6 +623,7 @@ impl PhysicsWorld {
             .merge(&raw_manifolds, self.config.deterministic_contact_ordering);
 
         self.last_contacts.clear();
+        self.impacts.clear();
         for manifold in &solver_manifolds {
             for contact in &manifold.contacts {
                 self.last_contacts.push(ContactEvent::from_solver(
@@ -731,6 +736,7 @@ impl PhysicsWorld {
             &self.constraints,
             dt,
         );
+        self.impacts.record_solved(&self.cached_active_manifolds);
         self.debugger
             .update_post_solve(&self.bodies, &self.cached_active_manifolds);
 
@@ -784,6 +790,7 @@ impl PhysicsWorld {
                 bodies: &mut self.bodies,
                 colliders: &self.colliders,
                 contact_events: &mut self.last_contacts,
+                impacts: &mut self.impacts,
                 narrowphase_ownership: &narrowphase_ownership,
                 sleeping: sleeping_snapshot.as_ref(),
                 pre_states: &pre_states,
@@ -807,6 +814,15 @@ impl PhysicsWorld {
     /// Contacts generated in the most recent step.
     pub fn contact_events(&self) -> &[ContactEvent] {
         &self.last_contacts
+    }
+
+    /// Normal impulses delivered to each body over the current frame.
+    ///
+    /// Unlike `contact_events`, these are post-solve, so they describe how much
+    /// momentum each contact actually transferred rather than merely that a
+    /// contact occurred.
+    pub fn impacts(&self) -> &ImpactLedger {
+        &self.impacts
     }
 
     /// Get access to the rigid bodies arena.
