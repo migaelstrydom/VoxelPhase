@@ -52,10 +52,16 @@ impl DescriptorManager {
         initial_texture_capacity: u32,
     ) -> EngineResult<Self> {
         // Create UBO pool. One descriptor set holding two uniform buffer
-        // descriptors: the scene block (binding 0) and the light set (binding 1).
-        let ubo_pool_sizes = [vk::DescriptorPoolSize::default()
-            .ty(vk::DescriptorType::UNIFORM_BUFFER)
-            .descriptor_count(2)];
+        // descriptors — the scene block (binding 0) and the light set
+        // (binding 1) — plus the sun shadow map (binding 2).
+        let ubo_pool_sizes = [
+            vk::DescriptorPoolSize::default()
+                .ty(vk::DescriptorType::UNIFORM_BUFFER)
+                .descriptor_count(2),
+            vk::DescriptorPoolSize::default()
+                .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .descriptor_count(1),
+        ];
 
         let ubo_pool_info = vk::DescriptorPoolCreateInfo::default()
             .max_sets(1)
@@ -130,6 +136,30 @@ impl DescriptorManager {
     /// Update the light UBO descriptor (set 0, binding 1) to point at a buffer.
     pub fn update_light_ubo(&self, buffer: &ManagedBuffer, size: vk::DeviceSize) {
         self.write_ubo_binding(1, buffer, size);
+    }
+
+    /// Point the shadow map descriptor (set 0, binding 2) at a depth image.
+    ///
+    /// `layout` is the layout the image is in when it is sampled, which for a
+    /// depth attachment is not the colour path's `SHADER_READ_ONLY_OPTIMAL`.
+    ///
+    /// No sampler is supplied: the binding carries an immutable one, declared
+    /// in the descriptor set layout, and a sampler written here would be
+    /// ignored.
+    pub fn update_shadow_map(&self, image_view: vk::ImageView, layout: vk::ImageLayout) {
+        let image_info = [vk::DescriptorImageInfo::default()
+            .image_layout(layout)
+            .image_view(image_view)];
+
+        let write = [vk::WriteDescriptorSet::default()
+            .dst_set(self.scene_ubo_set)
+            .dst_binding(2)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .image_info(&image_info)];
+
+        unsafe {
+            self.device.device.update_descriptor_sets(&write, &[]);
+        }
     }
 
     /// Point one binding of the scene descriptor set at a uniform buffer.

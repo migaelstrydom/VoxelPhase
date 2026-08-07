@@ -8,6 +8,7 @@ use crate::rendering::colour::Colour;
 use crate::rendering::frame::SceneLighting;
 use crate::rendering::material::{MaterialManager, SurfaceParams};
 use crate::rendering::post::PostProcessConfig;
+use crate::rendering::shadow::ShadowVolume;
 use crate::rendering::vertex::Vertex;
 use crate::resources::textures::{TextureHandle, TextureManager};
 
@@ -76,6 +77,13 @@ pub struct SceneEnvironment {
     /// Tonemap and bloom settings. Part of the environment because a shot that
     /// is judging emissive materials needs to pin the exposure it judged them at.
     pub post: PostProcessConfig,
+
+    /// How the sun's shadow map is framed and biased.
+    ///
+    /// `resolution` is ignored: the map is allocated once when the bench's
+    /// renderer is built, so a shot cannot resize it. Everything else — extent,
+    /// strength, bias — takes effect per shot.
+    pub shadow: ShadowVolume,
 }
 
 impl SceneEnvironment {
@@ -106,6 +114,20 @@ impl SceneEnvironment {
     /// get. Saturated content is far more sensitive to this than muted content.
     pub fn with_hue_preservation(mut self, value: f32) -> Self {
         self.post.hue_preservation = value;
+        self
+    }
+
+    /// Frame the sun's shadow map differently for this shot — a smaller radius
+    /// to see the texel budget concentrated, a different bias to hunt acne.
+    pub fn with_shadow_volume(mut self, volume: ShadowVolume) -> Self {
+        self.shadow = volume;
+        self
+    }
+
+    /// Turn the sun's shadows off, for a before-and-after against a shot that
+    /// leaves them on.
+    pub fn without_shadows(mut self) -> Self {
+        self.shadow.strength = 0.0;
         self
     }
 

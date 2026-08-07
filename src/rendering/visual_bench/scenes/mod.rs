@@ -6,6 +6,7 @@ pub mod material_grid;
 pub mod palette;
 pub mod props;
 pub mod registry;
+pub mod shadows;
 pub mod sun_sweep;
 
 pub use grade_sweep::GradeSweep;
@@ -13,4 +14,5 @@ pub use material_grid::MaterialGrid;
 pub use palette::Palette;
 pub use props::Props;
 pub use registry::{all_scenes, find_scene};
+pub use shadows::Shadows;
 pub use sun_sweep::SunSweep;

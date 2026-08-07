@@ -8,6 +8,7 @@
 #include "lighting.glsl"
 #include "lights.glsl"
 #include "environment.glsl"
+#include "shadow.glsl"
 
 layout(location = 0) in vec4 inColor;
 layout(location = 1) in vec2 inTexCoord;
@@ -39,10 +40,15 @@ void main() {
     sun.colour = scene.sun_colour.rgb;
     sun.intensity = scene.sun_direction.w;
 
+    // Only the sun is shadowed. The sky's contribution arrives from the whole
+    // hemisphere, so blocking it needs occlusion the shadow map cannot express;
+    // that is what ambient occlusion will be for.
+    float sun_visibility = 1.0 - sunShadow(inWorldPos, surface.normal, sun.direction);
+
     // The sky supplies both hemisphere irradiance and the reflection a glossy
     // or metallic surface shows. `ambient_colour` remains on top as an author's
     // fill for lifting a scene without moving the sky.
-    vec3 litColor = shadeDirectional(surface, sun)
+    vec3 litColor = shadeDirectional(surface, sun) * sun_visibility
                   + shadeEnvironment(surface, sun.direction)
                   + shadeAmbient(surface, scene.ambient_colour.rgb)
                   + materialEmissive();

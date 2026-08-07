@@ -1,22 +1,33 @@
 # Visual work — where things stand
 
-Written 2026-08-07, at the end of the session that landed environment lighting.
+Written 2026-08-07, updated at the end of the session that landed sun shadows.
 Read this, then `VISUAL_DIRECTION.md` for the backlog and `LIGHTING_PLAN.md` for
-shadows and occlusion.
+occlusion.
 
 ## Start here
 
-**Sun shadows.** `LIGHTING_PLAN.md` stages 1 and 5–7. This is the single
-highest-value change left and everything below is secondary to it.
+**Look at the game and confirm the shadows.** The bench has no marching-cubes
+terrain in it, and terrain shadowing itself under a low sun is where depth-map
+bias fails if it is going to. The two dials are `ShadowVolume`'s
+`normal_offset_texels` (receiver side; raise it if surfaces stripe themselves)
+and `DEPTH_BIAS_SLOPE` in `shadow/pipeline.rs` (caster side). Raising either too
+far detaches a shadow from the thing casting it, which is the failure that
+undoes the whole feature — the `shadows` bench scene exists to show both edges
+of that trade at once.
 
-The renderer has no shadows and no ambient occlusion of any kind. Nothing
-occludes anything, so illumination is even everywhere and every object floats
-above ground it has no relationship to. The owner described the result as "lit
-by a hospital light", which is exactly right: uniform light with no shadow
-structure is what that looks like.
+**Then: ambient occlusion.** `LIGHTING_PLAN.md` stage 1. Shadows resolve the sun
+but nothing occludes the *sky*, which is now a real fill light arriving from the
+whole hemisphere. Creases, undersides and the ground next to a wall all still
+receive full sky. It is the same complaint one level down, and it is what the
+honest discounts in `environment.glsl` (`SKY_IRRADIANCE_FACTOR`,
+`GROUND_ALBEDO`) are standing in for.
 
-Two dials were tried against that complaint and both were largely dead ends —
-don't repeat them:
+A useful cheap follow-up now that shadows exist: a **black point in the grade**
+(`VISUAL_DIRECTION.md` §6.1). There is finally something in the frame that
+*should* be dark, so the anchor has something to anchor.
+
+Two dials were tried against the original "lit by a hospital light" complaint
+and both were largely dead ends — don't repeat them:
 
 - **Tonemap hue preservation barely does anything** at the current light level.
   Bleaching only happens on the tonemap's shoulder and almost nothing reaches
@@ -26,11 +37,13 @@ don't repeat them:
   frame instead of separating key from fill. Worth maybe one line of default
   change, not worth a project.
 
-A useful cheap follow-up once shadows exist: a **black point in the grade**
-(§6.1). Nothing currently renders below about mid-grey, so the frame has no
-anchor even where it should be dark.
-
 ## What changed this session
+
+Sun shadow mapping — `LIGHTING_PLAN.md` stage 6, which has the design notes.
+`src/rendering/shadow/`, a `shadows` bench scene, and shadow framing exposed on
+`SceneEnvironment` so a scene can retune or disable it.
+
+## What changed the session before
 
 Commits `026bb72` through `91cc129`.
 
@@ -47,6 +60,18 @@ Commits `026bb72` through `91cc129`.
   other handle.
 
 ## Traps worth not re-breaking
+
+**A comparison sampler has to be immutable in the descriptor set layout.** Metal
+takes the comparison function from the sampler state, not from a descriptor
+write, so MoltenVK reports `mutableComparisonSamplers = FALSE` and rejects one
+written at runtime. This is why `ShadowMap` is built *before* `GraphicsPipeline`
+in `Renderer::new` — the layout is built around the sampler. The descriptor
+write then supplies only the image view.
+
+**Judge shadow bias at a low sun, never a high one.** At 60° everything looks
+fine at any bias; the whole trade only becomes visible near the horizon, where
+one shadow texel covers a long stretch of ground. That is why the `shadows`
+scene sweeps the sun down to 7° instead of stopping somewhere flattering.
 
 **Never let a shader resolve its own HDR.** `sky.frag` used to apply a Reinhard
 curve and a gamma encode before writing into the linear HDR target. Its output
@@ -87,6 +112,7 @@ dominates the sky. That dial, not `SUN_DISC_WIDENING`, is the one to reach for.
 ```bash
 cargo run --bin visual_bench -- --list
 cargo run --bin visual_bench -- palette --out /tmp/palette.png --columns 2
+cargo run --bin visual_bench -- shadows --out /tmp/shadows.png --columns 3
 ```
 
 Scenes live in `src/rendering/visual_bench/scenes/`, registered in

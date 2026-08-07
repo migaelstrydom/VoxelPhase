@@ -224,6 +224,13 @@ pub struct GraphicsPipelineConfig {
     pub swapchain_format: vk::Format,
     pub depth_format: vk::Format,
     pub extent: vk::Extent2D,
+    /// The comparison sampler the shadow map is read through.
+    ///
+    /// Baked into the scene descriptor set layout as an immutable sampler.
+    /// Metal — and so MoltenVK — cannot take a comparison function from a
+    /// descriptor write, only from the layout, so this is not merely an
+    /// optimisation: writing one at runtime fails on macOS.
+    pub shadow_sampler: vk::Sampler,
 }
 
 /// Immutable graphics pipeline configuration and state.
@@ -254,7 +261,8 @@ impl GraphicsPipeline {
     /// Create a new graphics pipeline with the given configuration.
     pub fn new(device: Arc<ManagedDevice>, config: &GraphicsPipelineConfig) -> EngineResult<Self> {
         // Create descriptor set layouts
-        let scene_ubo_descriptor_set_layout = Self::create_ubo_descriptor_layout(&device)?;
+        let scene_ubo_descriptor_set_layout =
+            Self::create_ubo_descriptor_layout(&device, config.shadow_sampler)?;
         let sampler_descriptor_set_layout = Self::create_sampler_descriptor_layout(&device)?;
 
         // Create pipeline layout with push constants for per-object data
@@ -350,10 +358,14 @@ impl GraphicsPipeline {
 
     fn create_ubo_descriptor_layout(
         device: &ManagedDevice,
+        shadow_sampler: vk::Sampler,
     ) -> EngineResult<vk::DescriptorSetLayout> {
         // Binding 0: the vertex stage reads the matrices; the fragment stage
         // reads the camera position and sun lighting from the same block.
         // Binding 1: the per-frame point light set, fragment stage only.
+        // Binding 2: the sun shadow map, sampled through an immutable
+        // comparison sampler (see `GraphicsPipelineConfig::shadow_sampler`).
+        let immutable_shadow_sampler = [shadow_sampler];
         let bindings = [
             vk::DescriptorSetLayoutBinding::default()
                 .binding(0)
@@ -365,6 +377,13 @@ impl GraphicsPipeline {
                 .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
                 .descriptor_count(1)
                 .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(2)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .stage_flags(vk::ShaderStageFlags::FRAGMENT)
+                // Sets descriptor_count from the slice length, so it must come
+                // after any explicit count rather than before it.
+                .immutable_samplers(&immutable_shadow_sampler),
         ];
 
         let create_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);

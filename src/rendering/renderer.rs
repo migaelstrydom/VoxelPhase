@@ -25,13 +25,15 @@ use crate::lighting::ActiveLights;
 use crate::model::{Model, Transform};
 use crate::particles::{ParticlePool, ParticleRenderer};
 use crate::rendering::descriptors::DescriptorManager;
-use crate::rendering::frame::{FrameData, LightUbo, SceneLighting, SceneUbo};
+use crate::rendering::frame::{DrawInfo, FrameData, LightUbo, SceneLighting, SceneUbo};
 use crate::rendering::material::{
     MaterialManager, SurfaceModulation, SurfaceParams, SURFACE_PARAMS_OFFSET,
 };
 use crate::rendering::overlay::OverlayRenderer;
 use crate::rendering::pipeline::{GraphicsPipeline, GraphicsPipelineConfig};
 use crate::rendering::post::PostProcessRenderer;
+use crate::rendering::shadow::map::SHADOW_SAMPLED_LAYOUT;
+use crate::rendering::shadow::{ShadowMap, ShadowRenderer, ShadowVolume};
 use crate::rendering::sky::SkyRenderer;
 use crate::rendering::target::frame_targets::DEPTH_FORMAT;
 use crate::rendering::target::{
@@ -46,6 +48,58 @@ use crate::water::{WaterGrid, WaveGrid};
 /// surfaces can carry radiance above 1.0 into the post-processing resolve,
 /// where tonemapping brings it back into the displayable range.
 const SCENE_HDR_FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
+
+/// Which of the frame's two geometry passes a draw belongs to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DrawPass {
+    /// Depth-tested, depth-writing, no blending. Into the HDR scene target.
+    Opaque,
+    /// Alpha blended, no depth write. Into the composited output image.
+    Transparent,
+}
+
+/// How a mesh draw participates in the frame beyond issuing its own triangles.
+///
+/// Grouped rather than passed as loose flags so that adding a pass does not
+/// grow the signature of every draw entry point.
+#[derive(Clone, Copy, Debug)]
+struct DrawOptions {
+    pass: DrawPass,
+    /// Whether the debug backface wireframe is drawn over this mesh, when the
+    /// renderer has that mode on.
+    wireframe_overlay: bool,
+    /// Whether the mesh is also recorded into the sun shadow pass.
+    casts_shadow: bool,
+}
+
+impl DrawOptions {
+    /// Ordinary solid geometry: terrain, props, characters.
+    const OPAQUE: Self = Self {
+        pass: DrawPass::Opaque,
+        wireframe_overlay: true,
+        casts_shadow: true,
+    };
+
+    /// Blended geometry. Casts nothing: a shadow map stores one depth per
+    /// texel and has no way to express partial occlusion, so a translucent
+    /// caster would throw the solid shadow it visibly does not have.
+    const TRANSPARENT: Self = Self {
+        pass: DrawPass::Transparent,
+        wireframe_overlay: false,
+        casts_shadow: false,
+    };
+}
+
+/// The world-space direction the camera looks along, recovered from its view
+/// matrix.
+///
+/// A right-handed view matrix's third row is the camera's backward axis, so
+/// negating it gives forward. Taken from the matrix rather than plumbed through
+/// separately, so the shadow pass cannot end up aimed at a different frame than
+/// the one being drawn.
+fn camera_forward(view: &Matrix4<f32>) -> Vector3<f32> {
+    -Vector3::new(view[(2, 0)], view[(2, 1)], view[(2, 2)])
+}
 
 /// The main renderer that orchestrates frame rendering.
 ///
@@ -68,6 +122,8 @@ pub struct Renderer {
     pub fire_renderer: FireRenderer,
     /// HDR resolve: tonemapping and bloom between the opaque and transparent passes.
     pub post_process: PostProcessRenderer,
+    /// Sun shadow map, filled from the same draws the opaque pass issues.
+    pub shadow: ShadowRenderer,
     /// Active fire instances with their GPU resources. Keyed by entity index.
     pub active_fires: Vec<(specs::Entity, ActiveFire)>,
     /// Scene lighting environment uploaded to the scene UBO each frame.
@@ -117,13 +173,19 @@ impl Renderer {
     ) -> EngineResult<Self> {
         let extent = output.extent();
 
-        // The pipeline comes first: its render passes are what the framebuffers
+        // The shadow map comes before the pipeline, which needs its comparison
+        // sampler to build the scene descriptor set layout around.
+        let shadow_volume = ShadowVolume::default();
+        let shadow_map = ShadowMap::new(&vulkan_context, shadow_volume.resolution)?;
+
+        // The pipeline comes next: its render passes are what the framebuffers
         // in `FrameTargets` are built against.
         let pipeline_config = GraphicsPipelineConfig {
             scene_color_format: SCENE_HDR_FORMAT,
             swapchain_format: output.format(),
             depth_format: DEPTH_FORMAT,
             extent,
+            shadow_sampler: shadow_map.sampler,
         };
 
         let pipeline = GraphicsPipeline::new(Arc::clone(&vulkan_context.device), &pipeline_config)?;
@@ -146,6 +208,11 @@ impl Renderer {
             output.final_layout(),
         )?;
 
+        // The shadow pass shares the geometry pipeline's layout, so it can
+        // replay the same draw calls with the same push constants.
+        let shadow =
+            ShadowRenderer::new(&vulkan_context, shadow_map, pipeline.layout, shadow_volume)?;
+
         // Create frame data (vertex/index/UBO buffers)
         let frame_data = FrameData::new(Arc::clone(&vulkan_context.device))?;
 
@@ -166,6 +233,7 @@ impl Renderer {
             &frame_data.light_ubo_buffer,
             std::mem::size_of::<LightUbo>() as vk::DeviceSize,
         );
+        descriptors.update_shadow_map(shadow.map().view, SHADOW_SAMPLED_LAYOUT);
 
         // Create overlay renderer for debug text (transparent pass)
         let overlay = OverlayRenderer::new(
@@ -210,6 +278,7 @@ impl Renderer {
             water_renderer,
             fire_renderer,
             post_process,
+            shadow,
             active_fires: Vec::new(),
             lighting: SceneLighting::default(),
             debug_wireframe_backfaces: false,
@@ -241,6 +310,11 @@ impl Renderer {
         let frame = self.output.acquire(&self.targets.sync)?;
         let image_index = frame.index;
         self.current_frame = Some(frame);
+
+        // The shadow pass records into its own command buffer, filled by the
+        // same draw calls that fill the geometry one. Opening it here means a
+        // caller cannot forget to.
+        self.shadow.begin_frame()?;
 
         // Begin command buffer recording
         self.targets
@@ -289,18 +363,28 @@ impl Renderer {
     ///
     /// The sun direction is taken from the sky renderer so that shaded geometry
     /// and the visible sun disc always agree.
+    ///
+    /// Also aims the shadow pass, which needs the same camera and sun. Doing it
+    /// here rather than in `begin_frame` costs nothing — the light matrix is
+    /// uniform data, and casters are transformed by it at draw time, not when
+    /// they were recorded.
     pub fn update_scene(
         &mut self,
         view: &Matrix4<f32>,
         proj: &Matrix4<f32>,
         camera_pos: &Vector3<f32>,
     ) -> EngineResult<()> {
+        let sun_direction = self.sky_renderer.sun_direction();
         let lighting = SceneLighting {
-            sun_direction: self.sky_renderer.sun_direction(),
+            sun_direction,
             ..self.lighting
         };
+
+        self.shadow
+            .aim(camera_pos, &camera_forward(view), &sun_direction);
+
         self.frame_data
-            .update_scene_ubo(view, proj, camera_pos, &lighting)
+            .update_scene_ubo(view, proj, camera_pos, &lighting, &self.shadow.uniforms())
     }
 
     /// Upload the frame's point light set.
@@ -422,8 +506,7 @@ impl Renderer {
             white_texture,
             SurfaceParams::MATTE,
             texture_manager,
-            self.pipeline.opaque,
-            true,
+            DrawOptions::OPAQUE,
         )
     }
 
@@ -451,8 +534,7 @@ impl Renderer {
             white_texture,
             SurfaceParams::MATTE,
             texture_manager,
-            self.pipeline.transparent,
-            false,
+            DrawOptions::TRANSPARENT,
         )
     }
 
@@ -477,9 +559,24 @@ impl Renderer {
             texture,
             surface,
             texture_manager,
-            self.pipeline.opaque,
-            true,
+            DrawOptions::OPAQUE,
         )
+    }
+
+    /// Record a mesh into the sun shadow pass.
+    ///
+    /// The mesh data is already in this frame's vertex and index buffers — the
+    /// geometry draw that owns it put it there — so this costs one more draw
+    /// call and no extra upload.
+    fn record_shadow_caster(&self, model: &Matrix4<f32>, draw_info: &DrawInfo) {
+        self.shadow.record_caster(
+            self.vulkan_context.device(),
+            model,
+            draw_info,
+            self.frame_data.vertex_buffer.buffer,
+            self.frame_data.index_buffer.buffer,
+            self.descriptors.scene_ubo_set,
+        );
     }
 
     /// Record a mesh draw call with the specified pipeline.
@@ -492,8 +589,7 @@ impl Renderer {
         texture: &TextureHandle,
         surface: SurfaceParams,
         texture_manager: &TextureManager,
-        pipeline: vk::Pipeline,
-        wireframe_overlay: bool,
+        options: DrawOptions,
     ) -> EngineResult<()> {
         if vertices.is_empty() || indices.is_empty() {
             return Ok(());
@@ -501,6 +597,15 @@ impl Renderer {
 
         // Append mesh data to frame buffers and get draw offsets
         let draw_info = self.frame_data.append_mesh_data(vertices, indices)?;
+
+        if options.casts_shadow {
+            self.record_shadow_caster(model, &draw_info);
+        }
+
+        let pipeline = match options.pass {
+            DrawPass::Opaque => self.pipeline.opaque,
+            DrawPass::Transparent => self.pipeline.transparent,
+        };
 
         unsafe {
             self.vulkan_context.device().cmd_bind_pipeline(
@@ -607,7 +712,7 @@ impl Renderer {
             );
 
             // Wireframe backface pass: re-draw with wireframe pipeline and solid colour
-            if wireframe_overlay && self.debug_wireframe_backfaces {
+            if options.wireframe_overlay && self.debug_wireframe_backfaces {
                 self.vulkan_context.device().cmd_bind_pipeline(
                     cb,
                     vk::PipelineBindPoint::GRAPHICS,
@@ -892,6 +997,10 @@ impl Renderer {
 
         self.targets.draw_command_buffer.end()?;
 
+        // Closes the pass that has been collecting casters alongside every
+        // opaque draw this frame.
+        self.shadow.end_frame()?;
+
         // Only a swapchain acquire produces semaphores to synchronize against;
         // an engine-owned image is ready the moment it is asked for, and the
         // draw fence alone orders one frame against the next.
@@ -899,10 +1008,16 @@ impl Renderer {
         let signal: Vec<vk::Semaphore> = frame.signal.into_iter().collect();
         let wait_stages = vec![vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT; wait.len()];
 
+        // The shadow map goes first: the geometry pass samples it, and the
+        // ordering plus the shadow pass's own external dependency are what make
+        // that read see this frame's contents rather than the last one's.
         self.vulkan_context
             .command_buffer_manager
-            .submit_recorded_graphics_commands_async(
-                &self.targets.draw_command_buffer,
+            .submit_recorded_graphics_batch_async(
+                &[
+                    self.shadow.command_buffer(),
+                    &self.targets.draw_command_buffer,
+                ],
                 self.targets.sync.draw_fence,
                 &wait,
                 &signal,

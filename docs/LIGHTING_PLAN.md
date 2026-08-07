@@ -17,10 +17,11 @@ High-level roadmap for the game's lighting system. Each stage below is a self-co
   bright pass → separable blur → tonemap composite, with the bloom itself screen
   blended in a final pass after all transparent geometry.
 - Procedural sky (`sky.vert/frag`).
-- No shadows, no AO.
+- A single orthographic sun shadow map (`src/rendering/shadow/`), sampled by
+  `triangle.frag` through a comparison sampler with a 3x3 PCF kernel. No AO.
 
 **Stage status:** 1 not started · **2 done** · **3 done** · **4 done** ·
-5–7 not started.
+5 skipped (superseded by 6) · **6 done** · 7 not started.
 
 Known gaps from stage 3. The 16-light cap is *global per frame*, not per
 fragment: when more than sixteen lights are relevant the collector drops whole
@@ -100,6 +101,31 @@ Optional / skippable: if we go straight to Stage 6, we can omit this. The reason
 Render the scene from the sun's point of view into a depth texture; in the main pass, transform each shaded fragment into light space and compare depths to decide if it's shadowed. Covers all casters and receivers — player, props, terrain, moving platforms — and handles self-shadowing naturally.
 
 One shadow map (no cascades) is the baseline. Expect blocky edges and limited coverage area; those are acceptable starting points. Filtering (PCF) can be added as a small follow-up.
+
+**Done.** `src/rendering/shadow/` — a `ShadowVolume` (how the light's box is
+framed), a `ShadowMap` (image, comparison sampler, depth-only pass), a
+`ShadowPipeline` and a `ShadowRenderer` that ties them together. 2048², D32,
+3x3 PCF, receiver-side normal offset plus slope-scaled depth bias, texel-snapped
+so edges do not crawl. Judge it on the `shadows` bench scene, whose last tile is
+the same frame with shadows off.
+
+How it gets its casters is the part worth knowing. Callers issue draws one at a
+time into an already-open geometry pass, so there is no point at which the
+frame's geometry is known up front and no list to replay. Instead
+`Renderer::draw_mesh_internal` records each opaque draw into a *second* command
+buffer as well, which is submitted ahead of the geometry one. Both reference the
+same vertex and index buffers, so a caster costs one extra draw call and no
+extra upload, and no draw entry point changed signature. The alternative —
+sampling last frame's map — lags visibly on anything that moves.
+
+Known gaps. Only `triangle.frag` reads the map, so water, particles, fire and
+the sky are unshadowed; water in particular takes the full sun wherever it sits.
+The volume is a fixed box around the camera, so a caster outside it throws
+nothing and its shadow pops in at the boundary — the edge fade in `shadow.glsl`
+softens that but does not remove it. That is what stage 7 fixes. Transparent
+draws deliberately cast nothing: a depth map stores one depth per texel and
+cannot express partial occlusion, so a translucent caster would throw a solid
+shadow it visibly does not have.
 
 ### Stage 7 — Cascaded Shadow Maps (CSM)
 

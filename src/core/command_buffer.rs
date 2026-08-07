@@ -251,32 +251,6 @@ impl CommandBufferManager {
         Ok(())
     }
 
-    fn submit_recorded_commands_async_internal(
-        &self,
-        buffer: &ManagedCommandBuffer,
-        queue: vk::Queue,
-        fence: vk::Fence,
-        wait_semaphores: &[vk::Semaphore],
-        signal_semaphores: &[vk::Semaphore],
-        wait_dst_stage_mask: &[vk::PipelineStageFlags],
-    ) -> EngineResult<()> {
-        unsafe {
-            let raw_buffer = buffer.raw();
-            let command_buffers_slice = std::slice::from_ref(&raw_buffer);
-            let submit_info = vk::SubmitInfo::default()
-                .wait_semaphores(wait_semaphores)
-                .wait_dst_stage_mask(wait_dst_stage_mask)
-                .command_buffers(command_buffers_slice)
-                .signal_semaphores(signal_semaphores);
-
-            self.device
-                .device
-                .queue_submit(queue, &[submit_info], fence)
-                .command_context("submit recorded commands")?;
-        }
-        Ok(())
-    }
-
     pub fn submit_transfer_commands_async<F: FnOnce(&Device, vk::CommandBuffer)>(
         &self,
         buffer: &ManagedCommandBuffer,
@@ -305,13 +279,43 @@ impl CommandBufferManager {
         signal_semaphores: &[vk::Semaphore],
         wait_dst_stage_mask: &[vk::PipelineStageFlags],
     ) -> EngineResult<()> {
-        self.submit_recorded_commands_async_internal(
-            buffer,
-            self.graphics_queue,
+        self.submit_recorded_graphics_batch_async(
+            &[buffer],
             fence,
             wait_semaphores,
             signal_semaphores,
             wait_dst_stage_mask,
         )
+    }
+
+    /// Submit several already-recorded graphics command buffers as one batch.
+    ///
+    /// They execute in the order given, which is how a frame's prepasses are
+    /// ordered against the pass that consumes them. Ordering alone is not a
+    /// memory dependency, so the buffers must still carry barriers (or render
+    /// pass dependencies) for anything one writes and the next reads.
+    pub fn submit_recorded_graphics_batch_async(
+        &self,
+        buffers: &[&ManagedCommandBuffer],
+        fence: vk::Fence,
+        wait_semaphores: &[vk::Semaphore],
+        signal_semaphores: &[vk::Semaphore],
+        wait_dst_stage_mask: &[vk::PipelineStageFlags],
+    ) -> EngineResult<()> {
+        let raw: Vec<vk::CommandBuffer> = buffers.iter().map(|b| b.raw()).collect();
+
+        let submit_info = vk::SubmitInfo::default()
+            .wait_semaphores(wait_semaphores)
+            .wait_dst_stage_mask(wait_dst_stage_mask)
+            .command_buffers(&raw)
+            .signal_semaphores(signal_semaphores);
+
+        unsafe {
+            self.device
+                .device
+                .queue_submit(self.graphics_queue, &[submit_info], fence)
+                .command_context("submit recorded commands")?;
+        }
+        Ok(())
     }
 }

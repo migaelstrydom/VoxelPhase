@@ -37,6 +37,10 @@ pub struct SceneUbo {
     pub view: Matrix4<f32>,
     pub proj: Matrix4<f32>,
 
+    /// World space to the sun's clip space, for shadow map lookups. Produced by
+    /// `ShadowVolume::light_view_proj`.
+    pub light_view_proj: Matrix4<f32>,
+
     /// xyz = camera world position, w unused. Needed for specular response.
     pub camera_pos: [f32; 4],
 
@@ -48,6 +52,11 @@ pub struct SceneUbo {
 
     /// rgb = linear ambient fill colour, w unused.
     pub ambient_colour: [f32; 4],
+
+    /// Shadow lookup constants, from `ShadowRenderer::shader_params`:
+    /// x = one shadow texel in UV, y = normal offset in world units,
+    /// z = strength (0 leaves everything lit), w unused.
+    pub shadow_params: [f32; 4],
 }
 
 /// A single point light as the GPU sees it.
@@ -140,6 +149,30 @@ impl Default for LightUbo {
             count: 0,
             _padding: [0; 3],
             lights: [GpuPointLight::default(); MAX_ACTIVE_LIGHTS],
+        }
+    }
+}
+
+/// The shadow map's view of the frame, as the scene UBO carries it.
+///
+/// Kept as plain data so `FrameData` stays independent of the pass that
+/// produces it; `ShadowRenderer` fills one in each frame.
+#[derive(Clone, Copy, Debug)]
+pub struct ShadowUniforms {
+    /// World space to the sun's clip space.
+    pub light_view_proj: Matrix4<f32>,
+
+    /// See `SceneUbo::shadow_params`.
+    pub params: [f32; 4],
+}
+
+impl Default for ShadowUniforms {
+    /// No shadows: strength zero, which the shader reads as fully lit. This is
+    /// what a renderer client that never runs the pass gets.
+    fn default() -> Self {
+        Self {
+            light_view_proj: Matrix4::identity(),
+            params: [0.0; 4],
         }
     }
 }
@@ -528,11 +561,13 @@ impl FrameData {
         proj: &Matrix4<f32>,
         camera_pos: &Vector3<f32>,
         lighting: &SceneLighting,
+        shadow: &ShadowUniforms,
     ) -> EngineResult<()> {
         let sun = lighting.sun_direction.normalize();
         let ubo = SceneUbo {
             view: *view,
             proj: *proj,
+            light_view_proj: shadow.light_view_proj,
             camera_pos: [camera_pos.x, camera_pos.y, camera_pos.z, 0.0],
             sun_direction: [sun.x, sun.y, sun.z, lighting.sun_intensity],
             sun_colour: [
@@ -547,6 +582,7 @@ impl FrameData {
                 lighting.ambient_colour.b,
                 0.0,
             ],
+            shadow_params: shadow.params,
         };
 
         unsafe {
@@ -606,6 +642,51 @@ mod tests {
         let mut active = ActiveLights::default();
         LightCollector::default().collect(Vector3::zeros(), candidates, &mut active);
         active
+    }
+
+    #[test]
+    fn scene_ubo_matches_the_glsl_block() {
+        // The build consumes pre-compiled .spv and never reads the GLSL, so a
+        // member added on one side and not the other produces no error — every
+        // field past the mismatch silently reads the wrong bytes. Both sides
+        // are all-vec4-aligned by construction, so comparing the std140 size
+        // the declaration implies against the Rust struct catches that.
+        let source = include_str!("../../shader/scene.glsl");
+        let block = source
+            .split_once("uniform SceneUbo {")
+            .and_then(|(_, rest)| rest.split_once('}'))
+            .map(|(body, _)| body)
+            .expect("shader/scene.glsl must declare a `uniform SceneUbo { ... }` block");
+
+        let declared: usize = block
+            .lines()
+            .filter_map(|line| {
+                let line = line.trim();
+                if line.starts_with("//") || line.starts_with("///") {
+                    return None;
+                }
+                match line.split_whitespace().next()? {
+                    "mat4" => Some(64),
+                    "vec4" => Some(16),
+                    other => panic!(
+                        "shader/scene.glsl declares a `{}` member. Only mat4 and vec4 are \
+                         allowed here — anything smaller has std140 padding rules this check \
+                         (and the Rust struct) does not model.",
+                        other
+                    ),
+                }
+            })
+            .sum();
+
+        assert_eq!(
+            declared,
+            mem::size_of::<SceneUbo>(),
+            "shader/scene.glsl's SceneUbo block is {} bytes but Rust's is {}. Bring them back \
+             into step, then recompile the shaders (see CLAUDE.md) — the .spv in the tree is \
+             stale until you do.",
+            declared,
+            mem::size_of::<SceneUbo>()
+        );
     }
 
     #[test]

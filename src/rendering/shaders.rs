@@ -24,6 +24,10 @@ mod bytecode {
     pub const PARTICLE_VERTEX: &[u8] = include_bytes!("../../shader/particle.vert.spv");
     pub const PARTICLE_FRAGMENT: &[u8] = include_bytes!("../../shader/particle.frag.spv");
 
+    /// Sun shadow map pass (depth only)
+    pub const SHADOW_VERTEX: &[u8] = include_bytes!("../../shader/shadow.vert.spv");
+    pub const SHADOW_FRAGMENT: &[u8] = include_bytes!("../../shader/shadow.frag.spv");
+
     /// Sky rendering shaders
     pub const SKY_VERTEX: &[u8] = include_bytes!("../../shader/sky.vert.spv");
     pub const SKY_FRAGMENT: &[u8] = include_bytes!("../../shader/sky.frag.spv");
@@ -57,6 +61,16 @@ impl ShaderManager {
     /// Load the main 3D fragment shader.
     pub fn load_main_fragment(device: &ManagedDevice) -> EngineResult<vk::ShaderModule> {
         Self::load_shader(device, bytecode::MAIN_FRAGMENT, ShaderStage::Fragment)
+    }
+
+    /// Load the shadow map vertex shader.
+    pub fn load_shadow_vertex(device: &ManagedDevice) -> EngineResult<vk::ShaderModule> {
+        Self::load_shader(device, bytecode::SHADOW_VERTEX, ShaderStage::Vertex)
+    }
+
+    /// Load the shadow map fragment shader (writes nothing; see shadow.frag).
+    pub fn load_shadow_fragment(device: &ManagedDevice) -> EngineResult<vk::ShaderModule> {
+        Self::load_shader(device, bytecode::SHADOW_FRAGMENT, ShaderStage::Fragment)
     }
 
     /// Load the shared fullscreen-triangle vertex shader used by every

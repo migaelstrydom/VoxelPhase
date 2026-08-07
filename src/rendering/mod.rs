@@ -13,6 +13,7 @@ pub mod pipeline;
 pub mod post;
 pub mod renderer;
 pub mod shaders;
+pub mod shadow;
 pub mod sky;
 pub mod target;
 pub mod texture;

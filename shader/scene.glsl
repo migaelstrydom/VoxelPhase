@@ -9,6 +9,8 @@
 layout(set = 0, binding = 0) uniform SceneUbo {
     mat4 view;
     mat4 proj;
+    /// World space to the sun's clip space, for shadow map lookups.
+    mat4 light_view_proj;
     /// xyz = camera world position, w unused.
     vec4 camera_pos;
     /// xyz = normalized direction from surface towards the sun, w = intensity.
@@ -17,6 +19,9 @@ layout(set = 0, binding = 0) uniform SceneUbo {
     vec4 sun_colour;
     /// rgb = linear ambient fill colour, w unused.
     vec4 ambient_colour;
+    /// x = one shadow map texel in UV, y = normal offset in world units,
+    /// z = shadow strength (0 leaves everything lit), w unused.
+    vec4 shadow_params;
 } scene;
 
 #endif // SCENE_GLSL

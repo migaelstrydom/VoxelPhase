@@ -87,6 +87,12 @@ impl VisualBench {
         *self.renderer.lighting_mut() = shot.environment.lighting;
         self.renderer.post_process.config = shot.environment.post;
 
+        // The map was allocated at the renderer's resolution and cannot be
+        // resized per shot, so that one field stays as built.
+        let resolution = self.renderer.shadow.volume.resolution;
+        self.renderer.shadow.volume = shot.environment.shadow;
+        self.renderer.shadow.volume.resolution = resolution;
+
         let (cb, image_index) = self.renderer.begin_frame()?;
 
         self.renderer.begin_opaque_pass(cb);
