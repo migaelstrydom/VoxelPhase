@@ -4,16 +4,24 @@ use nalgebra::Vector3;
 use specs::{Component, VecStorage};
 
 /// Types of particle effects available.
+///
+/// Each names one [`ParticleSpec`](super::spec::ParticleSpec) in
+/// [`ParticleConfig`](super::config::ParticleConfig); the tuning lives there,
+/// not here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParticleEffectType {
-    /// Bright, short-lived explosion flash.
-    ExplosionFlash,
-    /// Slow-rising, fading smoke clouds.
-    Smoke,
+    /// The blinding first instant of a detonation.
+    BlastCore,
+    /// The rolling ball of fire that cools into smoke.
+    Fireball,
+    /// The low ring of dust thrown outward along the ground.
+    BlastDust,
+    /// Burning fragments thrown clear of a blast.
+    Embers,
     /// Physics-affected debris chunks.
     Debris,
-    /// Fast, small, bright trailing sparks.
-    Sparks,
+    /// Slow-rising, fading smoke clouds.
+    Smoke,
     /// Radial splash from a body impacting water.
     WaterSplash,
     /// Cooling embers shed by a hot object, for comet-tail trails.
@@ -38,6 +46,17 @@ pub struct ParticleEmitter {
     pub initial_burst: u32,
     /// Whether the initial burst has been spawned.
     pub burst_spawned: bool,
+    /// Seconds still to wait before this emitter does anything at all.
+    ///
+    /// What lets one event be choreographed out of several emitters: the fire
+    /// of an explosion goes up immediately, the smoke column that replaces it
+    /// starts a quarter of a second later. Its own `lifetime` does not begin
+    /// running until the delay has elapsed, so a delayed emitter still gets the
+    /// full run it was authored with.
+    pub delay: f32,
+    /// Spatial scale applied to every particle this emitter spawns — sizes,
+    /// speeds and spawn spread. See [`ParticleSpec::sample`](super::spec::ParticleSpec::sample).
+    pub scale: f32,
     /// Fraction of the emitting entity's velocity each particle is born with.
     ///
     /// A trail shed by a fast body wants some of that motion, or the particles
@@ -60,6 +79,8 @@ impl ParticleEmitter {
             active: true,
             initial_burst: 0,
             burst_spawned: false,
+            delay: 0.0,
+            scale: 1.0,
             velocity_inheritance: 0.0,
             last_position: None,
         }
@@ -89,19 +110,30 @@ impl ParticleEmitter {
         self
     }
 
-    /// Create an explosion flash emitter.
-    pub fn explosion_flash() -> Self {
-        Self::new(ParticleEffectType::ExplosionFlash)
-            .with_burst(20)
-            .with_lifetime(0.3)
+    /// Hold this emitter back for `seconds` before it starts.
+    pub fn with_delay(mut self, seconds: f32) -> Self {
+        self.delay = seconds;
+        self
     }
 
-    /// Create a smoke emitter.
-    pub fn smoke() -> Self {
-        Self::new(ParticleEffectType::Smoke)
-            .with_spawn_rate(30.0)
-            .with_burst(10)
-            .with_lifetime(2.0)
+    /// Scale every particle this emitter spawns.
+    pub fn with_scale(mut self, scale: f32) -> Self {
+        self.scale = scale;
+        self
+    }
+
+    /// Tick the emitter's delay down by `dt`, reporting whether it may spawn
+    /// this frame.
+    ///
+    /// A frame longer than the remaining delay still only starts the emitter;
+    /// the leftover is discarded rather than credited to the effect, which
+    /// keeps a hitching frame from firing a burst early.
+    pub fn tick_delay(&mut self, dt: f32) -> bool {
+        if self.delay <= 0.0 {
+            return true;
+        }
+        self.delay -= dt;
+        false
     }
 
     /// Create a debris emitter.
@@ -111,12 +143,12 @@ impl ParticleEmitter {
             .with_lifetime(0.1) // Short - just spawns the burst
     }
 
-    /// Create a sparks emitter.
-    pub fn sparks() -> Self {
-        Self::new(ParticleEffectType::Sparks)
-            .with_burst(30)
-            .with_spawn_rate(50.0)
-            .with_lifetime(0.5)
+    /// Create a smoke emitter.
+    pub fn smoke() -> Self {
+        Self::new(ParticleEffectType::Smoke)
+            .with_spawn_rate(20.0)
+            .with_burst(8)
+            .with_lifetime(1.0)
     }
 
     /// Create an ember trail emitter.
@@ -133,5 +165,40 @@ impl ParticleEmitter {
         Self::new(ParticleEffectType::WaterSplash)
             .with_burst(25)
             .with_lifetime(0.2)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_undelayed_emitter_may_spawn_from_its_first_frame() {
+        let mut emitter = ParticleEmitter::new(ParticleEffectType::Fireball);
+        assert!(emitter.tick_delay(1.0 / 60.0));
+    }
+
+    #[test]
+    fn a_delayed_emitter_waits_then_runs() {
+        let delay = 0.1;
+        let mut emitter = ParticleEmitter::new(ParticleEffectType::Smoke).with_delay(delay);
+
+        let dt = 1.0 / 60.0;
+        let mut frames_waited = 0;
+        while !emitter.tick_delay(dt) {
+            frames_waited += 1;
+            assert!(frames_waited < 100, "emitter never started");
+        }
+
+        // It waits the delay out, to within the frame it cannot subdivide.
+        let expected = (delay / dt).ceil() as i32;
+        assert!(
+            (frames_waited - expected).abs() <= 1,
+            "waited {frames_waited} frames, expected about {expected}"
+        );
+        assert!(
+            emitter.tick_delay(dt),
+            "emitter stopped again after starting"
+        );
     }
 }

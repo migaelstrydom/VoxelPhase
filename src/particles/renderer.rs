@@ -5,14 +5,14 @@
 use std::sync::Arc;
 
 use ash::vk;
-use nalgebra::{Matrix4, Vector2};
+use nalgebra::{Matrix4, Vector2, Vector4};
 
 use crate::core::device::ManagedDevice;
 use crate::core::error::EngineResult;
 use crate::core::vulkan_context::VulkanContext;
 use crate::rendering::frame::ManagedBuffer;
 
-use super::particle::ParticlePool;
+use super::particle::{Particle, ParticlePool};
 use super::pipeline::ParticlePipeline;
 use super::vertex::ParticleVertex;
 
@@ -28,6 +28,9 @@ pub struct ParticleRenderer {
     pipeline: ParticlePipeline,
     vertex_buffer: ManagedBuffer,
     index_buffer: ManagedBuffer,
+    /// Particle indices ordered far-to-near for this frame, kept between
+    /// frames so the sort does not allocate every time.
+    draw_order: Vec<(f32, usize)>,
 }
 
 impl ParticleRenderer {
@@ -64,6 +67,7 @@ impl ParticleRenderer {
             pipeline,
             vertex_buffer,
             index_buffer,
+            draw_order: Vec::with_capacity(MAX_PARTICLES),
         })
     }
 
@@ -85,7 +89,9 @@ impl ParticleRenderer {
             return Ok(());
         }
 
-        let particle_count = pool.count().min(MAX_PARTICLES);
+        let particles = pool.particles();
+        self.sort_far_to_near(particles, view_matrix);
+        let particle_count = self.draw_order.len();
 
         // Generate billboard vertices for each particle
         let mut vertices = Vec::with_capacity(particle_count * 4);
@@ -99,20 +105,29 @@ impl ParticleRenderer {
             Vector2::new(-1.0, 1.0),  // Top-left
         ];
 
-        for (i, particle) in pool.iter().take(particle_count).enumerate() {
+        for (i, &(_, particle_index)) in self.draw_order.iter().enumerate() {
+            let particle = &particles[particle_index];
             let base_index = (i * 4) as u32;
             let life_normalized = particle.normalized_age();
             let motion = particle.velocity * particle.stretch;
+            let shape = Vector4::new(
+                particle.angle,
+                particle.additive,
+                particle.billow,
+                particle.seed,
+            );
+            let size = particle.drawn_size();
 
             // Create 4 vertices for this particle's billboard
             for corner in &corners {
                 vertices.push(ParticleVertex {
                     center: particle.position,
                     corner: *corner,
-                    size: particle.size,
-                    color: particle.color,
+                    size,
+                    color: particle.colour,
                     life: life_normalized,
                     motion,
+                    shape,
                 });
             }
 
@@ -193,6 +208,43 @@ impl ParticleRenderer {
         }
 
         Ok(())
+    }
+
+    /// Fill `draw_order` with particle indices, furthest from the camera first.
+    ///
+    /// Blended particles composite in draw order, so an unsorted pool lets a
+    /// near smoke puff be drawn before a far one and darken it — visible as
+    /// patches of a cloud flickering as the camera moves. Sorting by view depth
+    /// is O(n log n) on a few thousand floats, which is cheaper than any of the
+    /// alternatives that avoid the problem in the blend state.
+    ///
+    /// The pool is capped at [`MAX_PARTICLES`] here rather than at spawn time,
+    /// so an overfull pool drops its most distant particles — the ones covering
+    /// the fewest pixels — instead of an arbitrary slice of them.
+    fn sort_far_to_near(&mut self, particles: &[Particle], view_matrix: &Matrix4<f32>) {
+        // Third row of the view matrix: the only part needed to get view-space
+        // z, and the translation term is shared by every particle so it cannot
+        // change the ordering.
+        let forward = view_matrix.row(2);
+
+        self.draw_order.clear();
+        self.draw_order
+            .extend(particles.iter().enumerate().map(|(index, particle)| {
+                let position = particle.position;
+                let depth =
+                    forward[0] * position.x + forward[1] * position.y + forward[2] * position.z;
+                (depth, index)
+            }));
+
+        // View space looks down -z, so the furthest particles have the smallest
+        // depth and must be drawn first.
+        self.draw_order
+            .sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+        if self.draw_order.len() > MAX_PARTICLES {
+            let excess = self.draw_order.len() - MAX_PARTICLES;
+            self.draw_order.drain(..excess);
+        }
     }
 }
 

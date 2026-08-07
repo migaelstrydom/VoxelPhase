@@ -1,11 +1,11 @@
 //! Explosion-related ECS systems.
 
 use nalgebra::Vector3;
-use specs::{Builder, Entities, Join, Read, ReadStorage, System, Write, WriteStorage};
+use specs::{Entities, Join, Read, ReadStorage, System, Write, WriteStorage};
 
 use super::components::Explosion;
+use super::visuals::ExplosionVisuals;
 use crate::components::{Position, Velocity};
-use crate::particles::ParticleEmitter;
 use crate::physics::{PhysicsImpulse, PhysicsImpulseQueue};
 use crate::terrain::TerrainWorld;
 
@@ -14,8 +14,20 @@ use crate::terrain::TerrainWorld;
 /// For each unprocessed explosion:
 /// 1. Carves a crater in the terrain using modify_sphere
 /// 2. Applies knockback force to nearby entities with Velocity
-/// 3. Marks the explosion as processed for cleanup
-pub struct ExplosionSystem;
+/// 3. Hands the blast to [`ExplosionVisuals`], which owns its own timing
+/// 4. Marks the explosion as processed for cleanup
+#[derive(Default)]
+pub struct ExplosionSystem {
+    visuals: ExplosionVisuals,
+}
+
+impl ExplosionSystem {
+    /// Use a non-default look.
+    #[allow(dead_code)]
+    pub fn new(visuals: ExplosionVisuals) -> Self {
+        Self { visuals }
+    }
+}
 
 impl<'a> System<'a> for ExplosionSystem {
     type SystemData = (
@@ -96,33 +108,11 @@ impl<'a> System<'a> for ExplosionSystem {
             impulse_queue.push(PhysicsImpulse::radial(center, blast_radius, force, 0.5));
         }
 
-        // Spawn particle emitters at explosion locations
-        for &(_, center, _, _, _, _) in &explosion_data {
-            let pos = Position(center.coords);
-
-            // Flash - bright, short-lived burst
-            lazy.create_entity(&entities)
-                .with(pos.clone())
-                .with(ParticleEmitter::explosion_flash())
-                .build();
-
-            // Smoke - rising, long-lived
-            lazy.create_entity(&entities)
-                .with(pos.clone())
-                .with(ParticleEmitter::smoke())
-                .build();
-
-            // Debris - physics chunks
-            lazy.create_entity(&entities)
-                .with(pos.clone())
-                .with(ParticleEmitter::debris())
-                .build();
-
-            // Sparks - fast, bright trails
-            lazy.create_entity(&entities)
-                .with(pos)
-                .with(ParticleEmitter::sparks())
-                .build();
+        // Hand each blast to the visuals, which stages it out over the next
+        // few seconds. The blast radius drives the scale, since it is the
+        // extent the player is actually being told about.
+        for &(_, center, _, blast_radius, _, _) in &explosion_data {
+            self.visuals.spawn(&entities, &lazy, center, blast_radius);
         }
 
         // Mark explosions as processed

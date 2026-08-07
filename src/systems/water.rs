@@ -6,8 +6,7 @@ use specs::{Join, LendJoin, Read, ReadStorage, System, Write};
 
 use crate::components::{Position, RigidBodyComponent, Velocity, VelocityDriven};
 use crate::debug::{DebugLines, DebugOverlays};
-use crate::particles::config::ParticleEffectConfig;
-use crate::particles::{Particle, ParticleConfig, ParticlePool};
+use crate::particles::{ColourRamp, Particle, ParticleConfig, ParticlePool};
 use crate::rendering::Colour;
 use crate::systems::PhysicsResource;
 use crate::terrain::TerrainWorld;
@@ -245,26 +244,19 @@ fn spawn_splash_particles(splash: &SplashEvent, config: &ParticleConfig, pool: &
         let sin_e = elevation.sin();
         let dir = Vector3::new(theta.cos() * cos_e, sin_e, theta.sin() * cos_e);
 
-        let speed = rng.gen_range(cfg.min_speed()..cfg.max_speed()) * speed_scale;
-        let lifetime = rng.gen_range(cfg.min_lifetime()..cfg.max_lifetime());
-        let size = rng.gen_range(cfg.min_size()..cfg.max_size());
+        let speed = cfg.speed.sample(&mut rng) * speed_scale;
+        let lifetime = cfg.lifetime.sample(&mut rng);
+        let size = cfg.size.sample(&mut rng);
 
-        let start_color = Vector4::new(0.85, 0.92, 1.0, 0.95);
-        let end_color = Vector4::new(0.7, 0.85, 1.0, 0.0);
+        let ramp = ColourRamp::fade(
+            Vector4::new(0.85, 0.92, 1.0, 0.95),
+            Vector4::new(0.7, 0.85, 1.0, 0.0),
+        );
 
-        pool.spawn(Particle {
-            position: pos,
-            velocity: dir * speed,
-            color: start_color,
-            start_color,
-            end_color,
-            size,
-            life: lifetime,
-            max_life: lifetime,
-            gravity_scale: cfg.gravity_scale(),
-            drag: cfg.drag(),
-            stretch: 0.0,
-        });
+        pool.spawn(
+            Particle::new(pos, dir * speed, size, lifetime, ramp)
+                .with_dynamics(cfg.gravity_scale, cfg.drag),
+        );
     }
 
     // --- Tier 2: Mist (slow, lingering, near surface) ---
@@ -280,22 +272,12 @@ fn spawn_splash_particles(splash: &SplashEvent, config: &ParticleConfig, pool: &
         let lifetime = rng.gen_range(0.6..1.2);
         let size = rng.gen_range(0.15..0.35);
 
-        let start_color = Vector4::new(0.8, 0.9, 1.0, 0.5);
-        let end_color = Vector4::new(0.85, 0.93, 1.0, 0.0);
+        let ramp = ColourRamp::fade(
+            Vector4::new(0.8, 0.9, 1.0, 0.5),
+            Vector4::new(0.85, 0.93, 1.0, 0.0),
+        );
 
-        pool.spawn(Particle {
-            position: pos,
-            velocity: dir * speed,
-            color: start_color,
-            start_color,
-            end_color,
-            size,
-            life: lifetime,
-            max_life: lifetime,
-            gravity_scale: 0.1,
-            drag: 1.5,
-            stretch: 0.0,
-        });
+        pool.spawn(Particle::new(pos, dir * speed, size, lifetime, ramp).with_dynamics(0.1, 1.5));
     }
 }
 
@@ -341,27 +323,19 @@ fn spawn_wake_particles(wake: &WakeEvent, pool: &mut ParticlePool) {
         let lifetime = rng.gen_range(0.3..0.6);
         let size = rng.gen_range(0.04..0.12);
 
-        let start_color = Vector4::new(0.85, 0.92, 1.0, 0.7);
-        let end_color = Vector4::new(0.8, 0.9, 1.0, 0.0);
+        let ramp = ColourRamp::fade(
+            Vector4::new(0.85, 0.92, 1.0, 0.7),
+            Vector4::new(0.8, 0.9, 1.0, 0.0),
+        );
 
         // Offset spawn position randomly around the wake point.
         let lateral_offset = right * rng.gen_range(-1.0..1.0) * wake.radius * 0.5
             + fwd * rng.gen_range(-0.3..0.3) * wake.radius;
         let spawn_pos = pos + lateral_offset;
 
-        pool.spawn(Particle {
-            position: spawn_pos,
-            velocity: dir * speed,
-            color: start_color,
-            start_color,
-            end_color,
-            size,
-            life: lifetime,
-            max_life: lifetime,
-            gravity_scale: 0.8,
-            drag: 0.5,
-            stretch: 0.0,
-        });
+        pool.spawn(
+            Particle::new(spawn_pos, dir * speed, size, lifetime, ramp).with_dynamics(0.8, 0.5),
+        );
     }
 }
 

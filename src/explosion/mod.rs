@@ -5,6 +5,8 @@
 
 mod components;
 pub mod systems;
+pub mod visuals;
 
 pub use components::Explosion;
 pub use systems::ExplosionSystem;
+pub use visuals::{BlastLight, BlastLightSpec, BlastLightSystem, ExplosionVisuals, Stage};

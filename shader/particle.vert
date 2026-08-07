@@ -9,6 +9,7 @@ layout(location = 2) in float inSize;     // Particle size
 layout(location = 3) in vec4 inColor;     // RGBA color
 layout(location = 4) in float inLife;     // Normalized lifetime
 layout(location = 5) in vec3 inMotion;    // World-space smear vector (0 = round)
+layout(location = 6) in vec4 inShape;     // (rotation, additive, billow, seed)
 
 // Push constants for matrices
 layout(push_constant) uniform PushConstants {
@@ -20,6 +21,7 @@ layout(push_constant) uniform PushConstants {
 layout(location = 0) out vec4 fragColor;
 layout(location = 1) out float fragLife;
 layout(location = 2) out vec2 fragUV;
+layout(location = 3) out vec4 fragShape;
 
 void main() {
     // Transform center to view space
@@ -56,4 +58,5 @@ void main() {
     fragColor = inColor;
     fragLife = inLife;
     fragUV = inCorner * 0.5 + 0.5;  // Convert -1..1 to 0..1
+    fragShape = inShape;
 }

@@ -1,7 +1,8 @@
 //! Particle rendering pipeline.
 //!
 //! Creates a graphics pipeline configured for particle system rendering
-//! with additive alpha blending, depth testing (read-only), and billboard geometry.
+//! with premultiplied alpha blending, depth testing (read-only), and billboard
+//! geometry.
 
 use std::sync::Arc;
 
@@ -16,7 +17,7 @@ use super::vertex::ParticleVertex;
 /// Graphics pipeline for particle rendering.
 ///
 /// Configured for particle effects with:
-/// - Alpha blending for proper color mixing (works for smoke/debris)
+/// - Premultiplied alpha blending (per-particle glow vs. occlusion)
 /// - Depth test enabled (particles occluded by geometry)
 /// - Depth write disabled (particles don't occlude each other)
 /// - No backface culling (billboards visible from all angles)
@@ -110,15 +111,18 @@ impl ParticlePipeline {
             .depth_write_enable(false)
             .depth_compare_op(vk::CompareOp::LESS_OR_EQUAL);
 
-        // Alpha blending for proper color mixing
-        // src_color = particle_color * src_alpha
-        // dst_color = existing_color * (1 - src_alpha)
-        // result = src_color + dst_color (alpha blend)
-        // This works better for smoke/debris. For bright fire/sparks effects,
-        // use brighter colors or consider a separate additive pipeline.
+        // Premultiplied alpha:
+        //   result = src_color + dst_color * (1 - src_alpha)
+        //
+        // The fragment shader premultiplies, which makes this one blend state
+        // cover both compositing modes a particle system needs. A fragment
+        // emitting alpha 0 adds its colour without attenuating the scene
+        // (fire, sparks); one emitting its full coverage attenuates and
+        // replaces it (smoke, dust); anything between cross-fades. Two
+        // pipelines and two sorted draws would buy nothing over it.
         let color_blend_attachment = vk::PipelineColorBlendAttachmentState {
             blend_enable: vk::TRUE,
-            src_color_blend_factor: vk::BlendFactor::SRC_ALPHA,
+            src_color_blend_factor: vk::BlendFactor::ONE,
             dst_color_blend_factor: vk::BlendFactor::ONE_MINUS_SRC_ALPHA,
             color_blend_op: vk::BlendOp::ADD,
             src_alpha_blend_factor: vk::BlendFactor::ONE,

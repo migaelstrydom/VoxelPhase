@@ -8,7 +8,7 @@ use crate::creature::{
 use crate::damage::{
     BlastDamageSystem, BurnDamageSystem, DamageApplySystem, DeathSystem, ImpactDamageSystem,
 };
-use crate::explosion::ExplosionSystem;
+use crate::explosion::{BlastLightSystem, ExplosionSystem};
 use crate::fire::light::FireLightSystem;
 use crate::fire::systems::{FireCleanupSystem, FireIgnitionSystem};
 use crate::fracture::FractureSystem;
@@ -98,7 +98,15 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
             "projectile_detonation",
             &["lifetime"],
         )
-        .with(ExplosionSystem, "explosion", &["projectile_detonation"])
+        .with(
+            ExplosionSystem::default(),
+            "explosion",
+            &["projectile_detonation"],
+        )
+        // The blast flash is the brightest light in the game and the shortest
+        // lived, so it must be updated after explosions create it and before
+        // the frame's lights are chosen.
+        .with(BlastLightSystem, "blast_light", &["explosion"])
         .with(FireIgnitionSystem, "fire_ignition", &["explosion"])
         .with(FireCleanupSystem, "fire_cleanup", &["fire_ignition"])
         // Firelight tracks OnFire, so it must settle before lights are collected.
@@ -137,7 +145,12 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
         .with(
             LightCollectionSystem::default(),
             "light_collection",
-            &["camera_control", "fire_light", "grenade_visuals"],
+            &[
+                "camera_control",
+                "fire_light",
+                "grenade_visuals",
+                "blast_light",
+            ],
         )
         // Rendering (thread-local)
         .with_thread_local(RenderSystem::default())
