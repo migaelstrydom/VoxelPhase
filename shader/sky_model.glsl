@@ -73,10 +73,13 @@ vec3 skyScattering(vec3 ray_dir, vec3 sun_dir) {
     float sun_dot = dot(ray_dir, sun_dir);
     float sun_height = sun_dir.y;
 
-    float horizon_factor = pow(1.0 - abs(ray_dir.y), 4.0);
+    // The exponent controls how tightly the pale band hugs the horizon. Low
+    // values bleed it far up the dome and leave the whole sky milky, which also
+    // washes out everything the sky lights.
+    float horizon_factor = pow(1.0 - abs(ray_dir.y), 6.0);
 
-    vec3 zenith_colour = vec3(0.3, 0.6, 1.0);
-    vec3 horizon_colour = vec3(0.6, 0.8, 0.95);
+    vec3 zenith_colour = vec3(0.16, 0.38, 0.92);
+    vec3 horizon_colour = vec3(0.55, 0.76, 0.95);
     vec3 sunset_colour = vec3(1.0, 0.6, 0.3);
 
     float sun_influence = max(0.0, sun_height);
@@ -112,7 +115,7 @@ vec3 horizonHaze(vec3 ray_dir, vec3 sun_dir) {
                                  normalize(vec3(sun_dir.x, 0.0, sun_dir.z))));
     haze_colour = mix(haze_colour, vec3(1.0, 0.95, 0.85), bearing * 0.3);
 
-    return haze_colour * horizon_factor * 0.15;
+    return haze_colour * horizon_factor * 0.08;
 }
 
 /// Sky radiance along a direction, excluding the solar disc.

@@ -90,6 +90,25 @@ impl SceneEnvironment {
         self
     }
 
+    /// Tint of the sun's own light, independent of the sky's.
+    ///
+    /// The two together are what give a frame its colour separation: a key and
+    /// a fill of the same hue light a surface evenly and read as flat.
+    pub fn with_sun_colour(mut self, colour: Colour) -> Self {
+        self.lighting.sun_colour = colour;
+        self
+    }
+
+    /// How strongly the tonemap holds hue as a colour brightens.
+    ///
+    /// 0 is the per-channel filmic curve, which bleaches bright colours towards
+    /// white; 1 keeps chroma and lets them stay saturated however bright they
+    /// get. Saturated content is far more sensitive to this than muted content.
+    pub fn with_hue_preservation(mut self, value: f32) -> Self {
+        self.post.hue_preservation = value;
+        self
+    }
+
     pub fn with_point_light(mut self, light: ActiveLight) -> Self {
         self.point_lights.push(light);
         self
