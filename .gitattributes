@@ -1,0 +1,16 @@
+# Normalise all text to LF in the repository and in the working tree.
+#
+# The tree previously held a mix of CRLF and LF, which turned any edit made by
+# a tool that rewrites a whole file into a diff spanning every line. Pinning
+# eol=lf (rather than leaving it native) keeps the working tree consistent on
+# Windows checkouts too, so the mix cannot reappear.
+* text=auto eol=lf
+
+# Compiled shaders and other assets are binary; never touch their bytes.
+*.spv binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.ttf binary
+*.otf binary
+*.bin binary
