@@ -1,9 +1,24 @@
 //! Roller — a living boulder that hunts by rolling.
 //!
 //! The first creature, chosen because it needs no skeleton. It reuses the
-//! brain, perception, steering and damage layers wholesale and adds only a
-//! rolling body, so the question it answers is whether the combat loop is fun —
-//! not whether the gait tuning is right.
+//! brain, perception and steering layers wholesale and adds only a rolling
+//! body.
+//!
+//! **A roller cannot be killed.** It has no `Health` and no `Flammable`, so
+//! nothing in `crate::damage` touches it. You deal with one by outrunning it or
+//! by blowing a hole in the ground and stranding it — and since explosion
+//! knockback is applied to `Velocity` independently of damage, a grenade is
+//! still the tool for the job, just as a way to *move* the creature rather than
+//! to destroy it.
+//!
+//! That is a deliberate design choice, not an unfinished one. It play-tests
+//! better than the alternative: trapping a roller uses the terrain destruction
+//! the game is built around, where shooting it until it pops uses none of it.
+//! It also avoids committing to a death model — corpses, ragdolls, respawns —
+//! before there is a reason to prefer one.
+//!
+//! The consequence to keep in mind is that rollers are permanent. Nothing
+//! despawns them, so a level's population only ever grows.
 
 use std::sync::Arc;
 
@@ -20,8 +35,6 @@ use crate::components::{
 };
 use crate::core::error::EngineResult;
 use crate::creature::{AlertTelegraph, Brain, Perception, Roller};
-use crate::damage::Health;
-use crate::fire::components::Flammable;
 use crate::geometry::{generate_sphere_indices, generate_sphere_vertices};
 use crate::model::{MeshPrimitive, Model, ModelPart};
 use crate::physics::{ColliderDesc, RigidBodyDesc};
@@ -65,14 +78,9 @@ pub struct RollerDef {
     /// transmit the extra torque and the value stops having an effect.
     #[serde(default = "RollerDef::default_spin_up_time")]
     pub spin_up_time: f32,
-    #[serde(default = "RollerDef::default_health")]
-    pub health: f32,
     /// How far it can see. Hearing range is close and fixed.
     #[serde(default = "RollerDef::default_sight_range")]
     pub sight_range: f32,
-    /// When true the roller never breaks off, however badly hurt.
-    #[serde(default)]
-    pub relentless: bool,
 }
 
 impl RollerDef {
@@ -84,9 +92,6 @@ impl RollerDef {
     }
     pub fn default_spin_up_time() -> f32 {
         0.7
-    }
-    pub fn default_health() -> f32 {
-        80.0
     }
     pub fn default_sight_range() -> f32 {
         25.0
@@ -154,17 +159,13 @@ impl Spawnable for RollerDef {
             body_handle
         };
 
-        let brain = {
-            // Attack at the point of contact: a roller's attack is running
-            // into you, so its range is the sum of the two bodies' radii plus
-            // a little slack.
-            let brain = Brain::hunter(self.radius + 0.9);
-            if self.relentless {
-                brain.relentless()
-            } else {
-                brain
-            }
-        };
+        // Attack at the point of contact: a roller's attack is running into
+        // you, so its range is the sum of the two bodies' radii plus a little
+        // slack. Relentless because a roller has no health to break off over —
+        // `next_behaviour` would reach the same conclusion from a missing
+        // `Health`, but saying it here means the intent survives someone later
+        // giving rollers health back.
+        let brain = Brain::hunter(self.radius + 0.9).relentless();
 
         vec![world
             .create_entity()
@@ -189,18 +190,6 @@ impl Spawnable for RollerDef {
                 self.spin_up_time,
                 FRICTION,
             ))
-            // Stone takes blast and impact badly but barely notices fire.
-            .with(
-                Health::new(self.health, 8.0)
-                    .with_burn_resistance(0.25)
-                    .with_impact_tolerance(18.0),
-            )
-            // Flammable anyway: a burning boulder chasing you is worth the
-            // one line, and the fuel is low so it goes out.
-            .with(Flammable {
-                fuel: 6.0,
-                ignition_threshold: 0.4,
-            })
             .build()]
     }
 }

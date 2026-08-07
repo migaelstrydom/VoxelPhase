@@ -830,12 +830,8 @@ pub enum LevelObject {
         speed: f32,
         #[serde(default = "RollerDef::default_spin_up_time")]
         spin_up_time: f32,
-        #[serde(default = "RollerDef::default_health")]
-        health: f32,
         #[serde(default = "RollerDef::default_sight_range")]
         sight_range: f32,
-        #[serde(default)]
-        relentless: bool,
     },
     /// Pendulum — terrain-anchored frame with a swinging ball.
     Pendulum {
@@ -1600,17 +1596,13 @@ impl LevelObject {
                 radius,
                 speed,
                 spin_up_time,
-                health,
                 sight_range,
-                relentless,
             } => Box::new(RollerDef {
                 pos: *pos,
                 radius: *radius,
                 speed: *speed,
                 spin_up_time: *spin_up_time,
-                health: *health,
                 sight_range: *sight_range,
-                relentless: *relentless,
             }),
 
             LevelObject::Pendulum {

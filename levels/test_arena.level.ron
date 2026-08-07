@@ -183,8 +183,6 @@ Level(
                     pos: (-16.0, 16.0),
                     radius: 0.9,
                     speed: 3.5,
-                    health: 140.0,
-                    relentless: true,
                 ),
 
                 PlayWheel(
