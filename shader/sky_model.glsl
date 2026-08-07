@@ -36,11 +36,22 @@ const float SKY_RADIANCE_SCALE = 1.2;
 
 /// Radiance of the solar disc itself.
 ///
-/// Far above any exposure the scene will use, which is the point: the sun
-/// reads as a source rather than a white circle because it clears the bloom
-/// threshold by a wide margin and the bloom filter spreads it. Chasing that
-/// look by growing the disc instead just produces a big flat blob.
-const float SUN_DISC_RADIANCE = 80.0;
+/// Above any exposure the scene will use, which is the point: the sun reads as
+/// a source rather than a white circle because it clears the bloom threshold
+/// and the bloom filter spreads it. Chasing that look by growing the disc
+/// instead just produces a big flat blob.
+///
+/// This is the dial for the sun's *apparent* size, far more than the disc
+/// radius below is. Bloom spreads brightness, so overdriving the radiance
+/// inflates the glow around the sun until it dominates the sky.
+const float SUN_DISC_RADIANCE = 24.0;
+
+/// How much wider than life the disc is drawn.
+///
+/// The real sun is about half a degree across, which at normal fields of view
+/// is a few pixels and shimmers as the camera turns. A little larger holds
+/// together; much larger stops reading as a disc at all.
+const float SUN_DISC_WIDENING = 2.0;
 
 float rayleighPhase(float cos_theta) {
     return (3.0 / (16.0 * SKY_PI)) * (1.0 + cos_theta * cos_theta);
@@ -115,14 +126,11 @@ vec3 skyRadiance(vec3 ray_dir, vec3 sun_dir) {
 }
 
 /// The solar disc and the glow around it, for the sky pass only.
-///
-/// The disc is drawn a little wider than the real sun so that it survives at
-/// modest resolutions; the surrounding falloff carries the apparent size.
 vec3 sunDiscRadiance(vec3 ray_dir, vec3 sun_dir) {
     float cos_angle = clamp(dot(ray_dir, sun_dir), -1.0, 1.0);
     float angle = acos(cos_angle);
 
-    float disc_radius = SUN_ANGULAR_RADIUS * 3.0;
+    float disc_radius = SUN_ANGULAR_RADIUS * SUN_DISC_WIDENING;
     float soft_edge = SUN_ANGULAR_RADIUS * 0.5;
 
     float disc = 1.0 - smoothstep(disc_radius - soft_edge, disc_radius, angle);
