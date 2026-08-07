@@ -1,10 +1,16 @@
 //! Main renderer that orchestrates all rendering components.
 //!
-//! The Renderer is now a thin orchestration layer that delegates to:
+//! The Renderer is a thin orchestration layer that delegates to:
 //! - `GraphicsPipeline` - immutable pipeline state
-//! - `Swapchain` - presentation and synchronization
+//! - `FrameOutput` - where finished frames go (a window, or an image)
+//! - `FrameTargets` - what frames are drawn into, plus synchronization
 //! - `FrameData` - per-frame mutable buffers
 //! - `DescriptorManager` - descriptor set management
+//!
+//! The renderer holds its output behind the `FrameOutput` trait, so it has no
+//! idea whether it is driving a window or filling an image for readback. That
+//! is what lets the visual bench exercise the real pipeline and the real
+//! shaders rather than a stand-in.
 
 use std::sync::Arc;
 
@@ -12,7 +18,7 @@ use ash::vk;
 use nalgebra::{Matrix4, Vector3};
 use winit::window::Window;
 
-use crate::core::error::EngineResult;
+use crate::core::error::{EngineError, EngineResult};
 use crate::core::vulkan_context::VulkanContext;
 use crate::fire::renderer::{ActiveFire, FireRenderer};
 use crate::lighting::ActiveLights;
@@ -27,7 +33,10 @@ use crate::rendering::overlay::OverlayRenderer;
 use crate::rendering::pipeline::{GraphicsPipeline, GraphicsPipelineConfig};
 use crate::rendering::post::PostProcessRenderer;
 use crate::rendering::sky::SkyRenderer;
-use crate::rendering::swapchain::{SurfaceInfo, Swapchain};
+use crate::rendering::target::frame_targets::DEPTH_FORMAT;
+use crate::rendering::target::{
+    AcquiredFrame, FrameOutput, FrameTargets, OffscreenOutput, SurfaceInfo, SwapchainOutput,
+};
 use crate::rendering::vertex::Vertex;
 use crate::rendering::water::WaterRenderer;
 use crate::resources::textures::{TextureHandle, TextureManager};
@@ -40,11 +49,15 @@ const SCENE_HDR_FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
 
 /// The main renderer that orchestrates frame rendering.
 ///
-/// This is a thin layer that coordinates the pipeline, swapchain, frame data,
-/// and descriptor management to render frames.
+/// This is a thin layer that coordinates the pipeline, output, frame targets,
+/// frame data and descriptor management to render frames.
 pub struct Renderer {
     pub pipeline: GraphicsPipeline,
-    pub swapchain: Swapchain,
+    /// Where finished frames go. Boxed rather than generic so that a caller
+    /// choosing between a window and an offscreen image at runtime does not
+    /// force the choice through every type that holds a renderer.
+    pub output: Box<dyn FrameOutput>,
+    pub targets: FrameTargets,
     pub frame_data: FrameData,
     pub descriptors: Arc<DescriptorManager>,
     pub vulkan_context: Arc<VulkanContext>,
@@ -63,53 +76,74 @@ pub struct Renderer {
     pub debug_wireframe_backfaces: bool,
     /// The solid color used for wireframe backface rendering (RGBA, 0-1).
     pub wireframe_color: [f32; 4],
+    /// The output image this frame is being rendered into, between
+    /// `begin_frame` and `end_frame`.
+    current_frame: Option<AcquiredFrame>,
 }
 
 impl Renderer {
-    /// Create a new renderer.
-    pub fn new(
+    /// Create a renderer that presents to a window.
+    pub fn for_window(
         vulkan_context: Arc<VulkanContext>,
         window: &Window,
         window_width: u32,
         window_height: u32,
     ) -> EngineResult<Self> {
-        // Create surface and query its format (done once)
         let surface_info = SurfaceInfo::new(&vulkan_context, window)?;
+        let output =
+            SwapchainOutput::new(&vulkan_context, surface_info, window_width, window_height)?;
 
-        // Save format before moving surface_info
-        let swapchain_format = surface_info.format.format;
+        Self::new(vulkan_context, Box::new(output))
+    }
 
-        // Create pipeline first (we need the render pass for swapchain framebuffers)
+    /// Create a renderer that draws into an engine-owned image, for readback.
+    ///
+    /// The returned renderer is identical to the windowed one in every respect
+    /// that affects pixels — same pipeline, same shaders, same post chain — so
+    /// what it produces can be trusted as what the game would show.
+    pub fn offscreen(
+        vulkan_context: Arc<VulkanContext>,
+        width: u32,
+        height: u32,
+    ) -> EngineResult<Self> {
+        let output = OffscreenOutput::new(Arc::clone(&vulkan_context), width, height)?;
+        Self::new(vulkan_context, Box::new(output))
+    }
+
+    /// Create a renderer over an already-built output.
+    pub fn new(
+        vulkan_context: Arc<VulkanContext>,
+        output: Box<dyn FrameOutput>,
+    ) -> EngineResult<Self> {
+        let extent = output.extent();
+
+        // The pipeline comes first: its render passes are what the framebuffers
+        // in `FrameTargets` are built against.
         let pipeline_config = GraphicsPipelineConfig {
             scene_color_format: SCENE_HDR_FORMAT,
-            swapchain_format,
-            depth_format: vk::Format::D16_UNORM,
-            extent: vk::Extent2D {
-                width: window_width,
-                height: window_height,
-            },
+            swapchain_format: output.format(),
+            depth_format: DEPTH_FORMAT,
+            extent,
         };
 
         let pipeline = GraphicsPipeline::new(Arc::clone(&vulkan_context.device), &pipeline_config)?;
 
-        // Create swapchain with the existing surface info
-        let swapchain = Swapchain::new(
-            Arc::clone(&vulkan_context),
-            surface_info,
+        let targets = FrameTargets::new(
+            &vulkan_context,
+            output.as_ref(),
             pipeline.renderpass,
             pipeline.transparent_renderpass,
             SCENE_HDR_FORMAT,
-            window_width,
-            window_height,
         )?;
 
-        // Post-processing resolves the HDR scene target onto the swapchain.
+        // Post-processing resolves the HDR scene target onto the output image.
         let post_process = PostProcessRenderer::new(
             &vulkan_context,
-            swapchain.color_target.view,
-            &swapchain.image_views,
-            swapchain.extent,
-            swapchain_format,
+            targets.color_target.view,
+            output.image_views(),
+            extent,
+            output.format(),
+            output.final_layout(),
         )?;
 
         // Create frame data (vertex/index/UBO buffers)
@@ -137,8 +171,8 @@ impl Renderer {
         let overlay = OverlayRenderer::new(
             Arc::clone(&vulkan_context),
             pipeline.transparent_renderpass,
-            window_width,
-            window_height,
+            extent.width,
+            extent.height,
         )?;
 
         // Create particle renderer (transparent pass)
@@ -152,20 +186,21 @@ impl Renderer {
         let water_renderer = WaterRenderer::new(
             Arc::clone(&vulkan_context),
             pipeline.transparent_renderpass,
-            swapchain.depth_buffer.view,
-            swapchain.color_target.view,
+            targets.depth_buffer.view,
+            targets.color_target.view,
         )?;
 
         // Create fire renderer with shared sim pool
         let fire_renderer = FireRenderer::new(
             Arc::clone(&vulkan_context.device),
             pipeline.transparent_renderpass,
-            swapchain.depth_buffer.view,
+            targets.depth_buffer.view,
         )?;
 
         Ok(Self {
             pipeline,
-            swapchain,
+            output,
+            targets,
             frame_data,
             descriptors,
             vulkan_context,
@@ -179,7 +214,13 @@ impl Renderer {
             lighting: SceneLighting::default(),
             debug_wireframe_backfaces: false,
             wireframe_color: [0.0, 0.0, 0.0, 1.0],
+            current_frame: None,
         })
+    }
+
+    /// The extent every pass renders at.
+    pub fn extent(&self) -> vk::Extent2D {
+        self.targets.extent
     }
 
     /// Get the descriptor manager (for creating texture managers)
@@ -187,25 +228,26 @@ impl Renderer {
         Arc::clone(&self.descriptors)
     }
 
-    /// Begin a new frame: wait for previous frame, acquire swapchain image,
+    /// Begin a new frame: wait for the previous frame, acquire an output image,
     /// start the command buffer. Call `begin_opaque_pass()` after any pre-pass
     /// compute work (e.g. fire simulation) is recorded.
     pub fn begin_frame(&mut self) -> EngineResult<(vk::CommandBuffer, u32)> {
         // Wait for previous frame to complete
-        self.swapchain.sync.wait_and_reset()?;
+        self.targets.sync.wait_and_reset()?;
 
         // Now that the GPU is done with previous frames, flush deferred deletions
         self.frame_data.begin_frame();
 
-        // Acquire next swapchain image
-        let image_index = self.swapchain.acquire_next_image()?;
+        let frame = self.output.acquire(&self.targets.sync)?;
+        let image_index = frame.index;
+        self.current_frame = Some(frame);
 
         // Begin command buffer recording
-        self.swapchain
+        self.targets
             .draw_command_buffer
             .begin(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)?;
 
-        let cb = self.swapchain.draw_command_buffer.raw();
+        let cb = self.targets.draw_command_buffer.raw();
 
         Ok((cb, image_index))
     }
@@ -229,8 +271,8 @@ impl Renderer {
 
         let render_pass_begin = vk::RenderPassBeginInfo::default()
             .render_pass(self.pipeline.renderpass)
-            .framebuffer(self.swapchain.opaque_framebuffer)
-            .render_area(self.swapchain.extent.into())
+            .framebuffer(self.targets.opaque_framebuffer)
+            .render_area(self.targets.extent.into())
             .clear_values(&clear_values);
 
         unsafe {
@@ -291,7 +333,7 @@ impl Renderer {
         view_matrix: &Matrix4<f32>,
         proj_matrix: &Matrix4<f32>,
     ) -> EngineResult<()> {
-        let extent = self.swapchain.extent;
+        let extent = self.targets.extent;
         let viewport = vk::Viewport {
             x: 0.0,
             y: 0.0,
@@ -471,12 +513,12 @@ impl Renderer {
             let viewports = [vk::Viewport {
                 x: 0.0,
                 y: 0.0,
-                width: self.swapchain.extent.width as f32,
-                height: self.swapchain.extent.height as f32,
+                width: self.targets.extent.width as f32,
+                height: self.targets.extent.height as f32,
                 min_depth: 0.0,
                 max_depth: 1.0,
             }];
-            let scissors = [self.swapchain.extent.into()];
+            let scissors = [self.targets.extent.into()];
 
             self.vulkan_context
                 .device()
@@ -598,23 +640,19 @@ impl Renderer {
         Ok(())
     }
 
-    /// Transition from subpass 0 (opaque) to subpass 1 (transparent).
-    ///
-    /// Must be called after all opaque geometry is drawn and before
-    /// water, particles, or overlay rendering.
-    /// End the opaque render pass, resolve the HDR scene onto the swapchain
-    /// image (tonemap + bloom), and begin the transparent render pass.
+    /// End the opaque render pass, resolve the HDR scene onto the output image
+    /// (tonemap + bloom), and begin the transparent render pass.
     ///
     /// Must be called after all opaque geometry is drawn and before water,
     /// particles, or overlay rendering.
     ///
     /// The opaque render pass leaves the HDR colour target in
-    /// `SHADER_READ_ONLY_OPTIMAL`, and the composite pass leaves the swapchain
+    /// `SHADER_READ_ONLY_OPTIMAL`, and the composite pass leaves the output
     /// image in `COLOR_ATTACHMENT_OPTIMAL`, so no manual barriers are needed
     /// between the three passes.
     pub fn begin_transparent_pass(&self, cb: vk::CommandBuffer, image_index: u32) {
         let device = self.vulkan_context.device();
-        let extent = self.swapchain.extent;
+        let extent = self.targets.extent;
 
         unsafe {
             device.cmd_end_render_pass(cb);
@@ -624,7 +662,7 @@ impl Renderer {
             // Begin transparent render pass (loads composited colour + depth).
             let render_pass_begin = vk::RenderPassBeginInfo::default()
                 .render_pass(self.pipeline.transparent_renderpass)
-                .framebuffer(self.swapchain.transparent_framebuffers[image_index as usize])
+                .framebuffer(self.targets.transparent_framebuffers[image_index as usize])
                 .render_area(extent.into());
 
             device.cmd_begin_render_pass(cb, &render_pass_begin, vk::SubpassContents::INLINE);
@@ -644,7 +682,7 @@ impl Renderer {
         camera_pos: &Vector3<f32>,
         time: f32,
     ) -> EngineResult<()> {
-        let extent = self.swapchain.extent;
+        let extent = self.targets.extent;
         let viewport = vk::Viewport {
             x: 0.0,
             y: 0.0,
@@ -668,7 +706,7 @@ impl Renderer {
         }
 
         let sun_dir = self.sky_renderer.sun_direction();
-        let extent = self.swapchain.extent;
+        let extent = self.targets.extent;
         self.water_renderer.render(
             cb,
             flow_grid,
@@ -709,7 +747,7 @@ impl Renderer {
             return;
         }
 
-        let extent = self.swapchain.extent;
+        let extent = self.targets.extent;
         let viewport = vk::Viewport {
             x: 0.0,
             y: 0.0,
@@ -773,7 +811,7 @@ impl Renderer {
         view_matrix: &Matrix4<f32>,
         proj_matrix: &Matrix4<f32>,
     ) -> EngineResult<()> {
-        let extent = self.swapchain.extent;
+        let extent = self.targets.extent;
         let viewport = vk::Viewport {
             x: 0.0,
             y: 0.0,
@@ -808,7 +846,7 @@ impl Renderer {
         cb: vk::CommandBuffer,
         entries: impl Iterator<Item = (&'a str, &'a str)>,
     ) -> EngineResult<()> {
-        let extent = self.swapchain.extent;
+        let extent = self.targets.extent;
         let viewport = vk::Viewport {
             x: 0.0,
             y: 0.0,
@@ -834,38 +872,55 @@ impl Renderer {
         self.overlay.render_debug_lines(cb, entries)
     }
 
-    /// End the frame: finish transparent render pass, submit commands, present.
-    pub fn end_frame(&self, cb: vk::CommandBuffer, image_index: u32) -> EngineResult<()> {
+    /// End the frame: finish the transparent render pass, submit, and hand the
+    /// image to the output.
+    pub fn end_frame(&mut self, cb: vk::CommandBuffer, image_index: u32) -> EngineResult<()> {
+        let frame = self
+            .current_frame
+            .take()
+            .ok_or_else(|| EngineError::Swapchain("end_frame without begin_frame".to_string()))?;
+
         unsafe {
             self.vulkan_context.device().cmd_end_render_pass(cb);
         }
 
         // Bloom goes on last so transparent surfaces cannot paint over a halo
-        // that belongs in front of them. This also transitions the swapchain
-        // image to PRESENT_SRC_KHR.
+        // that belongs in front of them. This is also the pass that transitions
+        // the output image into the layout its consumer expects.
         self.post_process
-            .apply_bloom(cb, image_index, self.swapchain.extent);
+            .apply_bloom(cb, image_index, self.targets.extent);
 
-        self.swapchain.draw_command_buffer.end()?;
+        self.targets.draw_command_buffer.end()?;
 
-        // Submit command buffer
+        // Only a swapchain acquire produces semaphores to synchronize against;
+        // an engine-owned image is ready the moment it is asked for, and the
+        // draw fence alone orders one frame against the next.
+        let wait: Vec<vk::Semaphore> = frame.wait.into_iter().collect();
+        let signal: Vec<vk::Semaphore> = frame.signal.into_iter().collect();
+        let wait_stages = vec![vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT; wait.len()];
+
         self.vulkan_context
             .command_buffer_manager
             .submit_recorded_graphics_commands_async(
-                &self.swapchain.draw_command_buffer,
-                self.swapchain.sync.draw_fence,
-                &[self.swapchain.sync.present_complete],
-                &[self.swapchain.sync.rendering_complete],
-                &[vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT],
+                &self.targets.draw_command_buffer,
+                self.targets.sync.draw_fence,
+                &wait,
+                &signal,
+                &wait_stages,
             )?;
 
-        // Present
-        self.swapchain.present(
-            image_index,
+        self.output.release(
+            &frame,
             self.vulkan_context.command_buffer_manager.graphics_queue,
-        )?;
+        )
+    }
 
-        Ok(())
+    /// Block until the frame submitted by `end_frame` has finished on the GPU.
+    ///
+    /// Only meaningful for outputs that are read back rather than presented;
+    /// the windowed path lets the next `begin_frame` do the waiting.
+    pub fn wait_for_frame(&self) -> EngineResult<()> {
+        self.targets.sync.wait()
     }
 }
 

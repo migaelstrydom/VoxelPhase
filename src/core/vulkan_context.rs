@@ -18,7 +18,38 @@ pub struct VulkanContext {
 }
 
 impl VulkanContext {
+    /// Create a context able to present to the given window's display.
     pub fn new(window: &impl HasDisplayHandle) -> EngineResult<Self> {
+        let display_handle = window
+            .display_handle()
+            .map_err(|e| EngineError::Window(format!("failed to get display handle: {:?}", e)))?;
+        let surface_extensions = ash_window::enumerate_required_extensions(display_handle.as_raw())
+            .map_err(|e| {
+                EngineError::InstanceCreation(format!(
+                    "failed to enumerate required extensions: {:?}",
+                    e
+                ))
+            })?
+            .to_vec();
+
+        Self::create(surface_extensions)
+    }
+
+    /// Create a context with no connection to a windowing system.
+    ///
+    /// Everything the renderer needs works without a surface — the surface
+    /// extensions exist only so a swapchain can be created later, and an
+    /// offscreen output never creates one. This is what lets the visual bench
+    /// run from a shell with no display attached.
+    pub fn headless() -> EngineResult<Self> {
+        // `ManagedDevice` always enables VK_KHR_swapchain, which is only valid
+        // if VK_KHR_surface is enabled on the instance. Nothing here creates a
+        // surface, but the extension has to be present for the device to be
+        // built the same way it is for a window.
+        Self::create(vec![ash::khr::surface::NAME.as_ptr()])
+    }
+
+    fn create(mut extension_names: Vec<*const c_char>) -> EngineResult<Self> {
         let entry = Entry::linked();
         let app_name = c"VulkanTriangle";
         let layer_names = [c"VK_LAYER_KHRONOS_validation"];
@@ -26,18 +57,6 @@ impl VulkanContext {
             .iter()
             .map(|raw_name| raw_name.as_ptr())
             .collect();
-        let display_handle = window
-            .display_handle()
-            .map_err(|e| EngineError::Window(format!("failed to get display handle: {:?}", e)))?;
-        let mut extension_names =
-            ash_window::enumerate_required_extensions(display_handle.as_raw())
-                .map_err(|e| {
-                    EngineError::InstanceCreation(format!(
-                        "failed to enumerate required extensions: {:?}",
-                        e
-                    ))
-                })?
-                .to_vec();
         extension_names.push(ash::ext::debug_utils::NAME.as_ptr());
         #[cfg(any(target_os = "macos", target_os = "ios"))]
         {

@@ -104,7 +104,7 @@ pub struct PostProcessRenderer {
     /// Samples `pong` (used when blurring pong → ping).
     pong_set: vk::DescriptorSet,
 
-    /// One per swapchain image, compatible with the composite render pass.
+    /// One per output image, compatible with the composite render pass.
     composite_framebuffers: Vec<vk::Framebuffer>,
 
     pub config: PostProcessConfig,
@@ -112,16 +112,23 @@ pub struct PostProcessRenderer {
 
 impl PostProcessRenderer {
     /// `scene_view` must be the HDR colour target the opaque pass writes to;
-    /// `swapchain_views` are the images the composite resolves into.
+    /// `output_views` are the images the composite resolves into, and
+    /// `output_final_layout` the layout the frame's last pass leaves them in.
     pub fn new(
         vulkan_context: &VulkanContext,
         scene_view: vk::ImageView,
-        swapchain_views: &[vk::ImageView],
+        output_views: &[vk::ImageView],
         screen_extent: vk::Extent2D,
-        swapchain_format: vk::Format,
+        output_format: vk::Format,
+        output_final_layout: vk::ImageLayout,
     ) -> EngineResult<Self> {
         let device = Arc::clone(&vulkan_context.device);
-        let pipelines = PostPipelines::new(Arc::clone(&device), BLOOM_FORMAT, swapchain_format)?;
+        let pipelines = PostPipelines::new(
+            Arc::clone(&device),
+            BLOOM_FORMAT,
+            output_format,
+            output_final_layout,
+        )?;
 
         let bloom_extent = vk::Extent2D {
             width: (screen_extent.width / BLOOM_DOWNSCALE).max(1),
@@ -159,7 +166,7 @@ impl PostProcessRenderer {
         Self::write_set(&device, ping_set, 0, sampler, ping.view);
         Self::write_set(&device, pong_set, 0, sampler, pong.view);
 
-        let composite_framebuffers = swapchain_views
+        let composite_framebuffers = output_views
             .iter()
             .map(|view| {
                 let create_info = vk::FramebufferCreateInfo::default()

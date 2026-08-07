@@ -1,0 +1,156 @@
+//! Laying rendered shots out as a labelled contact sheet.
+//!
+//! A sweep is only useful if its cells can be compared side by side, which
+//! means one image rather than a directory of them.
+
+use image::{Rgba, RgbaImage};
+
+/// Height of the caption strip under each tile, in pixels.
+const LABEL_STRIP: u32 = 22;
+
+/// Gap between tiles.
+const GUTTER: u32 = 6;
+
+/// Sheet background, and the caption strip behind the text.
+const BACKGROUND: Rgba<u8> = Rgba([18, 18, 20, 255]);
+
+/// Caption colour. Deliberately not pure white — it should read as chrome, not
+/// as part of the render.
+const LABEL_COLOUR: Rgba<u8> = Rgba([190, 195, 205, 255]);
+
+/// Compose labelled tiles into a grid, wrapping at `columns`.
+///
+/// All tiles are assumed to be the same size; the first one sets the cell size
+/// and any that differ are clipped to it.
+pub fn contact_sheet(tiles: &[(String, RgbaImage)], columns: u32) -> RgbaImage {
+    if tiles.is_empty() {
+        return RgbaImage::new(1, 1);
+    }
+
+    let columns = columns.max(1);
+    let tile_width = tiles[0].1.width();
+    let tile_height = tiles[0].1.height();
+    let rows = (tiles.len() as u32).div_ceil(columns);
+
+    let cell_width = tile_width + GUTTER;
+    let cell_height = tile_height + LABEL_STRIP + GUTTER;
+
+    let mut sheet = RgbaImage::from_pixel(
+        columns * cell_width + GUTTER,
+        rows * cell_height + GUTTER,
+        BACKGROUND,
+    );
+
+    for (index, (label, tile)) in tiles.iter().enumerate() {
+        let column = index as u32 % columns;
+        let row = index as u32 / columns;
+        let x0 = GUTTER + column * cell_width;
+        let y0 = GUTTER + row * cell_height;
+
+        for y in 0..tile_height.min(tile.height()) {
+            for x in 0..tile_width.min(tile.width()) {
+                sheet.put_pixel(x0 + x, y0 + y, *tile.get_pixel(x, y));
+            }
+        }
+
+        draw_label(&mut sheet, label, x0 + 2, y0 + tile_height + 6);
+    }
+
+    sheet
+}
+
+/// Width of one character cell in the built-in font, including its spacing.
+const GLYPH_ADVANCE: u32 = 6;
+
+/// Draw a caption with a minimal built-in 5x7 font.
+///
+/// Self-contained rather than pulling in a text-rendering crate: captions are
+/// short, and the alternative is a font dependency and an asset to ship for the
+/// sake of a few words of chrome.
+fn draw_label(sheet: &mut RgbaImage, text: &str, x: u32, y: u32) {
+    for (index, character) in text.chars().enumerate() {
+        let glyph_x = x + index as u32 * GLYPH_ADVANCE;
+        if glyph_x + 5 >= sheet.width() {
+            return;
+        }
+        draw_glyph(sheet, character, glyph_x, y);
+    }
+}
+
+fn draw_glyph(sheet: &mut RgbaImage, character: char, x: u32, y: u32) {
+    let Some(rows) = glyph(character) else {
+        return;
+    };
+
+    for (row_index, row) in rows.iter().enumerate() {
+        for column in 0..5u32 {
+            // Bit 4 is the leftmost column.
+            if row & (1 << (4 - column)) != 0 {
+                let px = x + column;
+                let py = y + row_index as u32;
+                if px < sheet.width() && py < sheet.height() {
+                    sheet.put_pixel(px, py, LABEL_COLOUR);
+                }
+            }
+        }
+    }
+}
+
+/// A 5x7 bitmap per supported character, one byte per row.
+///
+/// Covers digits, lower-case letters and the punctuation labels actually use.
+/// Anything else renders as blank, which is a caption problem rather than a
+/// crash.
+fn glyph(character: char) -> Option<[u8; 7]> {
+    let bits = match character.to_ascii_lowercase() {
+        '0' => [0x0E, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0E],
+        '1' => [0x04, 0x0C, 0x04, 0x04, 0x04, 0x04, 0x0E],
+        '2' => [0x0E, 0x11, 0x01, 0x02, 0x04, 0x08, 0x1F],
+        '3' => [0x1F, 0x02, 0x04, 0x02, 0x01, 0x11, 0x0E],
+        '4' => [0x02, 0x06, 0x0A, 0x12, 0x1F, 0x02, 0x02],
+        '5' => [0x1F, 0x10, 0x1E, 0x01, 0x01, 0x11, 0x0E],
+        '6' => [0x06, 0x08, 0x10, 0x1E, 0x11, 0x11, 0x0E],
+        '7' => [0x1F, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08],
+        '8' => [0x0E, 0x11, 0x11, 0x0E, 0x11, 0x11, 0x0E],
+        '9' => [0x0E, 0x11, 0x11, 0x0F, 0x01, 0x02, 0x0C],
+        'a' => [0x00, 0x0E, 0x01, 0x0F, 0x11, 0x13, 0x0D],
+        'b' => [0x10, 0x10, 0x16, 0x19, 0x11, 0x11, 0x1E],
+        'c' => [0x00, 0x00, 0x0E, 0x11, 0x10, 0x11, 0x0E],
+        'd' => [0x01, 0x01, 0x0D, 0x13, 0x11, 0x11, 0x0F],
+        'e' => [0x00, 0x00, 0x0E, 0x11, 0x1F, 0x10, 0x0E],
+        'f' => [0x06, 0x09, 0x08, 0x1C, 0x08, 0x08, 0x08],
+        'g' => [0x00, 0x0F, 0x11, 0x11, 0x0F, 0x01, 0x0E],
+        'h' => [0x10, 0x10, 0x16, 0x19, 0x11, 0x11, 0x11],
+        'i' => [0x04, 0x00, 0x0C, 0x04, 0x04, 0x04, 0x0E],
+        'j' => [0x02, 0x00, 0x06, 0x02, 0x02, 0x12, 0x0C],
+        'k' => [0x10, 0x10, 0x12, 0x14, 0x18, 0x14, 0x12],
+        'l' => [0x0C, 0x04, 0x04, 0x04, 0x04, 0x04, 0x0E],
+        'm' => [0x00, 0x00, 0x1A, 0x15, 0x15, 0x15, 0x15],
+        'n' => [0x00, 0x00, 0x16, 0x19, 0x11, 0x11, 0x11],
+        'o' => [0x00, 0x00, 0x0E, 0x11, 0x11, 0x11, 0x0E],
+        'p' => [0x00, 0x1E, 0x11, 0x11, 0x1E, 0x10, 0x10],
+        'q' => [0x00, 0x0D, 0x13, 0x13, 0x0D, 0x01, 0x01],
+        'r' => [0x00, 0x00, 0x16, 0x19, 0x10, 0x10, 0x10],
+        's' => [0x00, 0x00, 0x0F, 0x10, 0x0E, 0x01, 0x1E],
+        't' => [0x08, 0x08, 0x1C, 0x08, 0x08, 0x09, 0x06],
+        'u' => [0x00, 0x00, 0x11, 0x11, 0x11, 0x13, 0x0D],
+        'v' => [0x00, 0x00, 0x11, 0x11, 0x11, 0x0A, 0x04],
+        'w' => [0x00, 0x00, 0x11, 0x15, 0x15, 0x15, 0x0A],
+        'x' => [0x00, 0x00, 0x11, 0x0A, 0x04, 0x0A, 0x11],
+        'y' => [0x00, 0x11, 0x11, 0x0F, 0x01, 0x11, 0x0E],
+        'z' => [0x00, 0x00, 0x1F, 0x02, 0x04, 0x08, 0x1F],
+        '.' => [0x00, 0x00, 0x00, 0x00, 0x00, 0x0C, 0x0C],
+        ',' => [0x00, 0x00, 0x00, 0x00, 0x0C, 0x04, 0x08],
+        '-' => [0x00, 0x00, 0x00, 0x1F, 0x00, 0x00, 0x00],
+        '_' => [0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1F],
+        '=' => [0x00, 0x00, 0x1F, 0x00, 0x1F, 0x00, 0x00],
+        '/' => [0x01, 0x02, 0x02, 0x04, 0x08, 0x08, 0x10],
+        ':' => [0x00, 0x0C, 0x0C, 0x00, 0x0C, 0x0C, 0x00],
+        '(' => [0x02, 0x04, 0x08, 0x08, 0x08, 0x04, 0x02],
+        ')' => [0x08, 0x04, 0x02, 0x02, 0x02, 0x04, 0x08],
+        ' ' => [0x00; 7],
+        _ => return None,
+    };
+
+    Some(bits)
+}

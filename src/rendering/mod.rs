@@ -14,9 +14,10 @@ pub mod post;
 pub mod renderer;
 pub mod shaders;
 pub mod sky;
-pub mod swapchain;
+pub mod target;
 pub mod texture;
 pub mod vertex;
+pub mod visual_bench;
 pub mod water;
 
 // Re-export commonly used types

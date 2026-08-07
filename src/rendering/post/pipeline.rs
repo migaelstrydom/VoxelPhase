@@ -59,14 +59,19 @@ pub struct PostPipelines {
 }
 
 impl PostPipelines {
+    /// `output_format` is the format of the images the finished frame lands in,
+    /// and `output_final_layout` the layout the last stage must leave them in —
+    /// ready to present for a swapchain, ready to copy for an offscreen image.
     pub fn new(
         device: Arc<ManagedDevice>,
         bloom_format: vk::Format,
-        swapchain_format: vk::Format,
+        output_format: vk::Format,
+        output_final_layout: vk::ImageLayout,
     ) -> EngineResult<Self> {
         let offscreen_pass = Self::create_offscreen_pass(&device, bloom_format)?;
-        let composite_pass = Self::create_composite_pass(&device, swapchain_format)?;
-        let bloom_overlay_pass = Self::create_bloom_overlay_pass(&device, swapchain_format)?;
+        let composite_pass = Self::create_composite_pass(&device, output_format)?;
+        let bloom_overlay_pass =
+            Self::create_bloom_overlay_pass(&device, output_format, output_final_layout)?;
 
         // Every stage samples exactly one texture.
         let single_sampler_layout = Self::create_sampler_layout(&device, 1)?;
@@ -144,7 +149,7 @@ impl PostPipelines {
         Self::create_single_attachment_pass(device, attachment, "post offscreen")
     }
 
-    /// Writes the tonemapped result into a swapchain image, leaving it in
+    /// Writes the tonemapped result into an output image, leaving it in
     /// `COLOR_ATTACHMENT_OPTIMAL` for the transparent pass that follows.
     fn create_composite_pass(
         device: &ManagedDevice,
@@ -163,11 +168,17 @@ impl PostPipelines {
         Self::create_single_attachment_pass(device, attachment, "post composite")
     }
 
-    /// Blends bloom onto the completed frame and hands it to the presentation
-    /// engine. Loads existing contents rather than discarding them.
+    /// Blends bloom onto the completed frame, and leaves the image in whatever
+    /// layout its consumer needs. Loads existing contents rather than
+    /// discarding them.
+    ///
+    /// This is the last pass of the frame, so it owns the transition to
+    /// `final_layout` — `PRESENT_SRC_KHR` when a presentation engine takes the
+    /// image next, `TRANSFER_SRC_OPTIMAL` when readback does.
     fn create_bloom_overlay_pass(
         device: &ManagedDevice,
         format: vk::Format,
+        final_layout: vk::ImageLayout,
     ) -> EngineResult<vk::RenderPass> {
         let attachment = vk::AttachmentDescription {
             format,
@@ -175,7 +186,7 @@ impl PostPipelines {
             load_op: vk::AttachmentLoadOp::LOAD,
             store_op: vk::AttachmentStoreOp::STORE,
             initial_layout: vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
-            final_layout: vk::ImageLayout::PRESENT_SRC_KHR,
+            final_layout,
             ..Default::default()
         };
 

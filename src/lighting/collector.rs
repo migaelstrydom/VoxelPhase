@@ -79,6 +79,17 @@ pub struct ActiveLights {
 }
 
 impl ActiveLights {
+    /// Build a light set directly, bypassing the collector.
+    ///
+    /// For callers that already know exactly which lights they want — the
+    /// visual bench authors its lights by hand rather than gathering them from
+    /// a world. Truncated to [`MAX_ACTIVE_LIGHTS`], since anything beyond that
+    /// would be silently dropped by the shader anyway.
+    pub fn from_lights(mut lights: Vec<ActiveLight>) -> Self {
+        lights.truncate(MAX_ACTIVE_LIGHTS);
+        Self { lights }
+    }
+
     /// The active lights, most relevant first. Never longer than
     /// [`MAX_ACTIVE_LIGHTS`].
     pub fn lights(&self) -> &[ActiveLight] {

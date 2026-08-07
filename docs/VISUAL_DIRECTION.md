@@ -1,0 +1,312 @@
+# Visual Direction
+
+An idea backlog, not a plan. Nothing here is committed to or scheduled. Each
+entry records the intent and the trap, because the trap is the part that gets
+forgotten between the conversation and the attempt. Implementation approach is
+deliberately left to whoever picks the item up.
+
+Lighting infrastructure items (ambient occlusion, sun shadows) live in
+[LIGHTING_PLAN.md](LIGHTING_PLAN.md) and are only cross-referenced here — this
+doc is about the *look*, that one is about the pipeline.
+
+## The target look
+
+Crisp, shiny, exaggerated realism. The reference point is Astro Bot: objects
+read as injection-moulded plastic and painted metal, lit like a studio product
+shot, with saturated colour and hard clean highlights. "Too realistic" for a
+whimsical platformer, on purpose.
+
+Where we diverge: this game exists to show off its physics engine. So the look
+should not merely be pretty, it should make the simulation *legible* — you
+should be able to see that a thing is heavy, that a surface is slippery, that a
+crate is resting rather than floating. Every idea below is judged against both
+goals, and the ones that serve both come first.
+
+## Tooling
+
+`cargo run --bin visual_bench -- <scene>` renders scenes headlessly through the
+real pipeline and writes a labelled PNG contact sheet. It is the feedback loop
+for everything in this document: it needs no window, and its *sweep* scenes
+render a whole parameter ladder as one image, which is how material and lighting
+values actually get chosen.
+
+Scenes live in `src/rendering/visual_bench/scenes/`. Add one there and register
+it in `registry.rs`. Determinism is a hard requirement — fixed camera, fixed
+sun, fixed geometry — or before/after comparison is worthless.
+
+## Current state
+
+- Blinn-Phong diffuse + specular, Schlick Fresnel, per-material roughness /
+  metallic / emissive / rim (`shader/lighting.glsl`, `shader/material.glsl`).
+- One directional sun, up to 16 point lights, flat constant ambient colour.
+- HDR target, ACES tonemap with a hue-preservation dial, bloom.
+- Procedural sky with atmospheric scattering.
+- **No shadows. No ambient occlusion. No environment reflection of any kind.**
+
+That last line is the single biggest reason the render doesn't look like the
+reference. A surface reads as shiny because it reflects its surroundings, not
+because it has a tight specular highlight. Right now a surface can only be
+bright where a light happens to be; everywhere else it falls back to flat
+ambient, which is a matte grey lie.
+
+The `material_grid` bench scene makes this concrete, and it is worth running
+before starting §1 so the improvement is measurable:
+
+- **Roughness barely reads.** Across a 0.05 → 1.0 sweep a dielectric sphere
+  changes only by the size of one small highlight dot. A "polished" surface and
+  a matte one are nearly indistinguishable, because the specular lobe covers a
+  few pixels and there is nothing else for gloss to show up in.
+- **At roughness 0.05 the highlight almost vanishes**, making the mirror end of
+  the sweep look *less* shiny than the middle. The lobe has narrowed below a
+  pixel; with an environment term it would be showing a sharp reflection of the
+  sky instead.
+- **Metals are black.** A metal has no diffuse response and takes no ambient, so
+  with nothing to reflect it renders as a black disc with one bright spot. Metal
+  is not a usable material in this renderer today.
+
+---
+
+## 1. Environment lighting — the plastic look
+
+The highest value-per-effort cluster in this document. All three items are
+changes to the shared lighting headers: no new render passes, no new resources,
+and they improve terrain, props, grenades, explosions and the player character
+simultaneously.
+
+### 1.1 Specular environment reflection
+
+Reflect the view vector about the surface normal and evaluate the sky along it,
+weighted by Fresnel and blurred toward the sky's average colour as roughness
+rises. Grazing angles on every object pick up a bright sky-coloured sheen.
+
+Leans on: the sky already being an **analytic function** rather than a texture,
+so this needs no cubemap, no probe capture and no extra pass — just the sky
+colour evaluation factored into a header both shaders can include.
+
+Likely to go wrong: the sky function is not cheap, and this evaluates it for
+every lit fragment. If that bites, the mitigation is a coarse precomputed
+representation (a handful of spherical-harmonic coefficients, or a small
+cubemap refreshed when the sun moves) behind the same interface. Also, the
+reflection knows nothing about occlusion — a surface deep inside a cave will
+reflect open sky. AO is the mitigation, which is one reason these want doing
+near each other.
+
+### 1.2 Hemisphere ambient
+
+Replace the flat constant ambient with a blend between sky colour from above
+and a ground-bounce colour from below, chosen by the normal's vertical
+component. Upward faces go cool and skylit, downward faces go warm and earthy.
+
+Small change, disproportionate effect: it is what stops unlit surfaces reading
+as flat grey, and it gives shape to everything the sun doesn't reach.
+
+Likely to go wrong: nothing much. Worth doing even if 1.1 is deferred.
+
+### 1.3 Clearcoat
+
+A second specular lobe at a fixed low roughness layered over the base one, so a
+surface can be a rough coloured diffuse underneath with a hard glassy glaze on
+top. This is *the* toy-plastic ingredient — it's what separates painted plastic
+from bare plastic, and lacquered wood from raw wood.
+
+Likely to go wrong: it costs a material parameter and it is easy to apply
+globally as a cheap gloss boost, which makes everything look uniformly wet.
+Clearcoat is a statement that a surface has been *coated*; things that haven't
+been — rock, dirt, cloth, chalk — must not have it, or the contrast that makes
+it valuable disappears.
+
+---
+
+## 2. Material identity as physics readout
+
+The strongest idea available to us, and the one no other game has, because no
+other game is built around this particular showpiece.
+
+Let surface appearance **encode physical parameters**, so the player learns to
+predict the simulation by looking at it:
+
+| Physics property | Reads as |
+|---|---|
+| High restitution | Deep saturated rubber, broad soft highlight, heavy clearcoat |
+| High density | Dark, faintly metallic, tight highlight, low-frequency surface detail |
+| Low friction | Near-mirror chrome or ice, roughness near zero |
+| High friction | Chalky matte, visible grit, no clearcoat |
+| Fracturable | Glazed ceramic outside, raw matte interior revealed on the fracture faces |
+
+The mechanism that matters: derive a spawnable's `SurfaceFinish` from its
+collider material rather than authoring the two independently. Visual variety
+then comes for free with every new object, and the two can never drift out of
+agreement.
+
+Companion item: **per-instance variation.** A small hash-driven jitter on albedo
+and roughness, so a pile of identical crates stops looking cloned. Physics debris
+piles are exactly where cloning is most visible.
+
+Likely to go wrong: the mapping is a lossy projection of many physics parameters
+onto few visual ones, and it will sometimes fight art direction — a level may
+want a black rubber ball and a black steel ball to look different despite the
+table saying otherwise. Treat the derivation as a *default* that authored
+material data can override, not as a law.
+
+Also worth knowing: this only pays off if the material palette is legible in the
+first place, which means resisting the urge to give every prop a unique bespoke
+finish. Few, distinct, memorable finishes beat many similar ones.
+
+---
+
+## 3. Grounding — shadows and occlusion
+
+Cross-reference, not new work: [LIGHTING_PLAN.md](LIGHTING_PLAN.md) Stage 1
+(baked terrain AO, designed in [BAKED_AO_DESIGN.md](BAKED_AO_DESIGN.md)) and
+Stages 5–7 (blob shadow, sun shadow map, cascades).
+
+Recorded here because their *visual* importance is easy to underrate relative to
+the flashier items. Nothing reads as a solid object in a real place without a
+shadow anchoring it to the ground, and no stack of physics debris has weight
+without darkening in the crevices where the pieces meet. Between them they are
+worth more than every terrain and sky item in this document.
+
+Two additions to what the lighting plan already covers:
+
+- **Contact hardening.** A shadow that is sharp where the caster touches the
+  ground and softens with separation. Cheap to approximate, and it is what
+  communicates *how far above the floor* a tumbling object is — directly
+  valuable for a physics showcase, and for judging a jump.
+- **Screen-space contact shadows / AO for dynamic bodies.** Baked terrain AO
+  covers the static world, but the moving objects are the point of this game.
+  Some runtime term is needed for the occlusion *between* dynamic bodies, and
+  between a body and the ground it is resting on.
+
+---
+
+## 4. Terrain
+
+The problem is not that the noise texture is simple. It is that the material
+doesn't respond to the geometry, so a cliff and a floor are the same substance
+at different angles.
+
+### 4.1 Geometry-driven material variation
+
+Triplanar projection, with the material selected and blended by properties of the
+surface itself: slope picks the substance (rock on cliffs, growth on flats),
+curvature drives cavity darkening in concavities and wear on convex ridges.
+
+Leans on: the fact that the terrain is generated, so slope and curvature are
+already available or cheaply derivable at mesh time.
+
+Likely to go wrong: blend thresholds tuned against one piece of terrain look
+wrong on the next. The blend wants to be smooth and its parameters want to be
+authorable per level rather than hard-coded.
+
+### 4.2 Detail normals at close range
+
+Microstructure on the marching-cubes surface so it has something for the new
+environment specular to catch. Without this, item 1.1 makes terrain look like
+smooth polished plastic, which is exactly wrong for rock.
+
+### 4.3 Fresh destruction reveals interior material
+
+Terrain carved out by an explosion should expose a different material to the
+weathered outer surface — bright raw rock inside the crater against dull
+weathered rock outside.
+
+This is close to free: the destruction system already knows what it just carved.
+It is a large amount of storytelling for one material parameter, it makes every
+grenade permanently legible in the level afterwards, and it is squarely on the
+physics-showcase theme.
+
+Likely to go wrong: needs some notion of "age" if fresh damage should weather
+over time, and it must survive the chunk re-mesh that destruction already
+triggers. Simplest version — permanent, binary, never weathers — is probably
+enough and should be tried first.
+
+---
+
+## 5. Sky and atmosphere
+
+### 5.1 The sun
+
+It lacks lustre because a bright disc is not a sun. Three things fix it:
+
+- Push the disc's radiance far above the bloom threshold and let **bloom** do the
+  work, rather than trying to make the disc itself look bright.
+- **Limb darkening** across the disc, so it has a surface rather than being a
+  flat circle.
+- A **streak or anamorphic flare** in the bloom pass.
+
+Likely to go wrong: a radiance high enough to look right may misbehave in the
+tonemap or blow out the bright pass for everything else on screen. The bloom
+threshold and the sun radiance are one tuning problem, not two.
+
+### 5.2 Clouds
+
+Layered scrolling noise on the sky dome with a strong forward-scattering silver
+lining where the sun is behind them. The silver lining is the part that makes
+clouds read as whimsical rather than as flat grey shapes — it is not an optional
+polish detail, it is the effect.
+
+Likely to go wrong: clouds are a well-known time sink and it is easy to end up
+raymarching volumetrics. The cheap layered version is very probably enough for a
+platformer where the camera rarely looks up for long.
+
+### 5.3 Aerial perspective
+
+Fade distant geometry toward the sky colour along the view ray. Costs almost
+nothing and is one of the strongest "this is a modern renderer" signals there
+is, because it is what makes *distance* legible — without it, a far cliff and a
+near one are equally crisp and the eye can't order them.
+
+---
+
+## 6. Full-frame post
+
+### 6.1 Grade and crispness
+
+A colour grade (lift/gamma/gain, or a LUT) to lock the palette, a light sharpen,
+a subtle vignette, and chromatic aberration confined to the frame edges. Grade
+plus sharpen is most of what "crisp" actually means in practice.
+
+Likely to go wrong: a grade is a global multiplier on every decision made
+elsewhere, so it wants to be settled *before* materials are hand-tuned, or every
+material gets tuned twice.
+
+### 6.2 Simulation-reactive post
+
+The genuinely on-theme category. Post-processing that responds to the physics
+rather than sitting statically on top of it:
+
+- Radial blur and a slight FOV punch scaled by player speed.
+- A chromatic-aberration pulse and shake on heavy impacts, driven by the same
+  impulse magnitude the physics engine already computes.
+- Brief desaturation and recovery on the explosion flash, riding the blast light
+  that already exists.
+
+Leans on: the physics engine already knowing all of these quantities precisely.
+The hook is the impulse, which the grenade detonation rule already reads.
+
+Likely to go wrong: every one of these is nausea-adjacent and all of them want
+to be subtler than first instinct suggests, and individually disableable.
+
+### 6.3 Deliberately not doing
+
+- **Depth of field** — hurts platformers, where you need to read the whole frame.
+- **Heavy motion blur** — fights the crispness that is the entire target look.
+- **Film grain** — same reason, more so.
+
+---
+
+## Suggested ordering
+
+Not a schedule, just the order that maximises visible change per unit of work.
+
+1. **Environment lighting** (§1) — one session, no new passes, transforms every
+   pixel on screen including the existing work that already looks good.
+2. **Sun shadows** (§3 / lighting plan stages 5–6).
+3. **Material identity from physics** (§2).
+4. **Ambient occlusion** (§3 / lighting plan stage 1, plus dynamic-body AO).
+5. **Terrain** (§4).
+6. **Sky, sun, clouds, aerial perspective** (§5).
+7. **Grade and reactive post** (§6).
+
+Item 1 is first because everything downstream is tuned against the lighting
+environment, and doing it late means re-tuning all of it.

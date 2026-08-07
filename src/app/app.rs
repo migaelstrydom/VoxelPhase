@@ -161,7 +161,7 @@ impl<'a, 'b> App<'a, 'b> {
     )> {
         let vulkan_context = Arc::new(VulkanContext::new(window)?);
 
-        let renderer = Renderer::new(Arc::clone(&vulkan_context), window, width, height)
+        let renderer = Renderer::for_window(Arc::clone(&vulkan_context), window, width, height)
             .map_err(|e| EngineError::InvalidState(format!("Failed to create renderer: {}", e)))?;
 
         let resource_manager = ResourceManager::new(Arc::clone(&vulkan_context))?;

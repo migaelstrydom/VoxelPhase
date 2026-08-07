@@ -223,7 +223,7 @@ fn run_with_scenario<S: PhysicsBenchScenario>(scenario: &S) -> EngineResult<()> 
         .map_err(|e| voxel_phase::core::error::EngineError::Window(format!("{}", e)))?;
 
     let vulkan_context = Arc::new(VulkanContext::new(&window)?);
-    let mut renderer = Renderer::new(Arc::clone(&vulkan_context), &window, width, height)?;
+    let mut renderer = Renderer::for_window(Arc::clone(&vulkan_context), &window, width, height)?;
 
     let resource_manager = ResourceManager::new(Arc::clone(&vulkan_context))?;
     let descriptor_manager = renderer.descriptor_manager();
