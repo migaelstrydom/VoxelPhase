@@ -7,6 +7,7 @@
 #include "material.glsl"
 #include "lighting.glsl"
 #include "lights.glsl"
+#include "environment.glsl"
 
 layout(location = 0) in vec4 inColor;
 layout(location = 1) in vec2 inTexCoord;
@@ -38,7 +39,11 @@ void main() {
     sun.colour = scene.sun_colour.rgb;
     sun.intensity = scene.sun_direction.w;
 
+    // The sky supplies both hemisphere irradiance and the reflection a glossy
+    // or metallic surface shows. `ambient_colour` remains on top as an author's
+    // fill for lifting a scene without moving the sky.
     vec3 litColor = shadeDirectional(surface, sun)
+                  + shadeEnvironment(surface, sun.direction)
                   + shadeAmbient(surface, scene.ambient_colour.rgb)
                   + materialEmissive();
 

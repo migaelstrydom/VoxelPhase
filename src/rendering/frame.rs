@@ -165,10 +165,15 @@ impl Default for SceneLighting {
         Self {
             sun_direction: Vector3::new(0.5, 0.7, 0.5).normalize(),
             sun_colour: Colour::new(1.0, 0.97, 0.9, 1.0),
-            // Chosen so that ambient + sun on a matte surface reproduces the
-            // brightness of the pre-BRDF shader (0.3 ambient + 0.7 diffuse).
-            sun_intensity: 0.7,
-            ambient_colour: Colour::new(0.3, 0.33, 0.4, 1.0),
+            // Well above the fill the sky provides, so the sun reads as a key
+            // light: it is the ratio between the two that gives a surface its
+            // modelling, and a sun that merely matches the sky renders flat.
+            sun_intensity: 2.6,
+            // Near black on purpose. Sky and ground irradiance are what fill
+            // unlit surfaces now, and they do it directionally; this remains as
+            // an author's dial for lifting a scene without moving the sky, and
+            // as a floor stopping anything reaching pure black.
+            ambient_colour: Colour::new(0.03, 0.035, 0.045, 1.0),
         }
     }
 }

@@ -64,6 +64,32 @@ before starting §1 so the improvement is measurable:
   with nothing to reflect it renders as a black disc with one bright spot. Metal
   is not a usable material in this renderer today.
 
+### Since resolved by §1.1 and §1.2
+
+All three symptoms above are fixed. The sweep now reads monotonically from
+mirror to matte, and metals show a sky-and-ground reflection with a horizon in
+it. Two things had to change beyond adding the environment terms:
+
+- **The sky was resolving its own HDR.** `sky.frag` applied a Reinhard curve and
+  a gamma encode before writing into the linear HDR target, so its output could
+  never exceed 1.0 and, after exposure, never reached the bloom threshold. The
+  sun *could not* bloom however bright it was authored — which is the whole of
+  why it "lacked lustre". It now writes linear radiance and lets the post chain
+  resolve, as everything else does.
+- **The sun needed angular size.** A directional light is a point at infinity,
+  so its highlight narrows without limit and below a pixel it disappears — the
+  reason polished looked flatter than satin. `SUN_SPECULAR_ROUGHNESS_FLOOR`
+  gives it a minimum lobe width, set much wider than the real sun on purpose.
+
+Balance is now sun-dominant: the sky supplies fill at `SKY_RADIANCE_SCALE`, the
+sun keys well above it, and the flat ambient constant is nearly zero because the
+sky does that job with direction. `SKY_RADIANCE_SCALE` sets the sky's on-screen
+brightness *and* the fill it casts, and cannot be split — a mirror has to agree
+with the sky next to it. Tune the ratio with sun intensity.
+
+Still true after §1: nothing casts a shadow, so objects float; the ground and
+sky sit at similar values with no aerial perspective between them.
+
 ---
 
 ## 1. Environment lighting — the plastic look

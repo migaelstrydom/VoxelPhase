@@ -1,6 +1,9 @@
 #version 450
 #extension GL_ARB_separate_shader_objects : enable
 #extension GL_ARB_shading_language_420pack : enable
+#extension GL_GOOGLE_include_directive : require
+
+#include "sky_model.glsl"
 
 layout(location = 0) in vec2 fragClipPos;
 layout(location = 0) out vec4 outColor;
@@ -10,13 +13,6 @@ layout(push_constant) uniform PushConstants {
     vec4 sun_direction; // xyz = normalized sun direction, w = time
     vec4 tan_fov;       // x = tan(fov/2)*aspect, y = tan(fov/2)
 } pc;
-
-// Constants
-const float PI = 3.14159265359;
-const vec3 RAYLEIGH_COEFF = vec3(5.8e-6, 13.5e-6, 33.1e-6);
-
-// Sun angular radius in radians (about 0.53 degrees, or 0.00925 radians)
-const float SUN_ANGULAR_RADIUS = 0.00925;
 
 // Noise functions for clouds
 float hash(vec2 p) {
@@ -50,18 +46,6 @@ float fbm(vec2 p, int octaves) {
     return value;
 }
 
-// Rayleigh phase function
-float rayleighPhase(float cosTheta) {
-    return (3.0 / (16.0 * PI)) * (1.0 + cosTheta * cosTheta);
-}
-
-// Henyey-Greenstein phase function for Mie scattering
-float miePhase(float cosTheta, float g) {
-    float g2 = g * g;
-    float denom = 1.0 + g2 - 2.0 * g * cosTheta;
-    return (1.0 / (4.0 * PI)) * (1.0 - g2) / (denom * sqrt(denom));
-}
-
 // Compute world-space ray direction per-fragment
 vec3 computeRayDir(vec2 clipPos) {
     // Construct view-space ray direction from clip position
@@ -80,70 +64,6 @@ vec3 computeRayDir(vec2 clipPos) {
     vec3 worldDir = mat3(pc.inv_view) * viewDir;
 
     return normalize(worldDir);
-}
-
-// Simplified atmospheric scattering
-vec3 atmosphericScattering(vec3 rayDir, vec3 sunDir) {
-    float sunDot = dot(rayDir, sunDir);
-    float sunHeight = sunDir.y;
-
-    float horizonFactor = 1.0 - abs(rayDir.y);
-    horizonFactor = pow(horizonFactor, 4.0);
-
-    vec3 zenithColor = vec3(0.3, 0.6, 1.0);
-    vec3 horizonColor = vec3(0.6, 0.8, 0.95);
-
-    float sunInfluence = max(0.0, sunHeight);
-
-    vec3 sunsetColor = vec3(1.0, 0.6, 0.3);
-    float sunsetFactor = smoothstep(0.0, 0.2, sunHeight) * (1.0 - smoothstep(0.2, 0.5, sunHeight));
-    sunsetFactor *= horizonFactor;
-
-    float rayleigh = rayleighPhase(sunDot);
-    vec3 rayleighColor = RAYLEIGH_COEFF * rayleigh * 3000.0;
-
-    float mie = miePhase(sunDot, 0.76);
-    vec3 mieColor = vec3(1.0, 0.95, 0.85) * mie * 0.03 * max(0.0, sunHeight + 0.1);
-
-    vec3 skyColor = mix(zenithColor, horizonColor, horizonFactor);
-    skyColor = mix(skyColor, sunsetColor, sunsetFactor * 0.5);
-    skyColor += rayleighColor * sunInfluence;
-    skyColor += mieColor;
-    skyColor *= 1.0 + 0.2 * sunInfluence;
-
-    float belowHorizon = smoothstep(0.0, -0.1, rayDir.y);
-    skyColor = mix(skyColor, vec3(0.15, 0.2, 0.25), belowHorizon);
-
-    return skyColor;
-}
-
-// Sun disk with glow - using angular distance for correct shape
-vec3 renderSun(vec3 rayDir, vec3 sunDir) {
-    // Calculate angular distance to sun (in radians)
-    float cosAngle = clamp(dot(rayDir, sunDir), -1.0, 1.0);
-    float angle = acos(cosAngle);
-
-    // Sun disk using angular distance (sun is about 0.5 degrees radius)
-    float sunRadius = SUN_ANGULAR_RADIUS * 3.0; // Make it slightly larger for visibility
-    float sunSoftEdge = SUN_ANGULAR_RADIUS * 0.5;
-    float sunDisk = 1.0 - smoothstep(sunRadius - sunSoftEdge, sunRadius, angle);
-    vec3 sunColor = vec3(1.0, 0.95, 0.85) * sunDisk * 5.0;
-
-    // Inner glow
-    float innerGlowRadius = sunRadius * 3.0;
-    float innerGlow = 1.0 - smoothstep(sunRadius, innerGlowRadius, angle);
-    sunColor += vec3(1.0, 0.8, 0.5) * innerGlow * 0.8;
-
-    // Outer glow (corona)
-    float outerGlowRadius = sunRadius * 10.0;
-    float outerGlow = 1.0 - smoothstep(sunRadius, outerGlowRadius, angle);
-    sunColor += vec3(1.0, 0.6, 0.3) * outerGlow * 0.3;
-
-    // Soft atmospheric glow
-    float atmosphericGlow = pow(max(0.0, cosAngle), 8.0);
-    sunColor += vec3(1.0, 0.7, 0.4) * atmosphericGlow * 0.15 * max(0.0, sunDir.y + 0.2);
-
-    return sunColor;
 }
 
 // Wispy cirrus clouds
@@ -193,40 +113,24 @@ vec3 renderClouds(vec3 rayDir, vec3 sunDir, float time) {
 
     cloudColor *= 0.95 + 0.15 * sunHeight;
 
-    return cloudColor * density;
-}
-
-// Horizon haze
-vec3 horizonHaze(vec3 rayDir, vec3 sunDir) {
-    float horizonFactor = 1.0 - abs(rayDir.y);
-    horizonFactor = pow(horizonFactor, 12.0);
-
-    vec3 hazeColor = vec3(0.85, 0.9, 0.95);
-
-    float sunDot = max(0.0, dot(normalize(vec3(rayDir.x, 0.0, rayDir.z)),
-                                normalize(vec3(sunDir.x, 0.0, sunDir.z))));
-    hazeColor = mix(hazeColor, vec3(1.0, 0.95, 0.85), sunDot * 0.3);
-
-    return hazeColor * horizonFactor * 0.15;
+    // Scaled alongside the sky so cloud and sky brightness stay in proportion.
+    return cloudColor * density * SKY_RADIANCE_SCALE;
 }
 
 void main() {
-    // Compute ray direction per-fragment (no interpolation artifacts)
+    // Computed per fragment rather than interpolated, so the sun stays circular
+    // at the edges of a wide field of view.
     vec3 rayDir = computeRayDir(fragClipPos);
     vec3 sunDir = normalize(pc.sun_direction.xyz);
     float time = pc.sun_direction.w;
-    vec3 color = atmosphericScattering(rayDir, sunDir);
-    color += horizonHaze(rayDir, sunDir);
-    color += renderSun(rayDir, sunDir);
+
+    vec3 color = skyRadiance(rayDir, sunDir) + sunDiscRadiance(rayDir, sunDir);
 
     vec3 clouds = renderClouds(rayDir, sunDir, time);
     color = mix(color, color + clouds, min(1.0, length(clouds)));
 
-    // Tone mapping
-    color = color / (1.0 + color);
-
-    // Gamma correction
-    color = pow(color, vec3(1.0 / 2.2));
-
+    // Written as linear radiance. The post chain owns exposure and tonemapping;
+    // resolving here would both double-tonemap and clamp the sun below the
+    // bloom threshold, which is what stops it reading as a light source.
     outColor = vec4(color, 1.0);
 }

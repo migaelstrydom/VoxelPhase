@@ -95,8 +95,23 @@ vec3 shadeLight(SurfaceSample surface, vec3 light_dir, vec3 radiance) {
     return radiance * n_dot_l * (diffuse + specular);
 }
 
+/// Smallest specular lobe the sun is allowed to produce.
+///
+/// A directional light is a point at infinity, so its highlight can narrow
+/// without limit — and on a polished surface it narrows below one pixel and
+/// disappears, making a mirror look flatter than a satin finish next to it. A
+/// real source has angular size and cannot focus tighter than that.
+///
+/// Set far wider than the sun's true half-degree, which is deliberate: a
+/// broad, soft key highlight is what reads as moulded plastic under studio
+/// lighting, and a physically-sized one is a hard speck. The environment
+/// reflection keeps the surface's true roughness, so a mirror still mirrors —
+/// this only widens the sun's own highlight.
+const float SUN_SPECULAR_ROUGHNESS_FLOOR = 0.08;
+
 /// Diffuse plus specular response to a single directional light.
 vec3 shadeDirectional(SurfaceSample surface, DirectionalLight light) {
+    surface.roughness = max(surface.roughness, SUN_SPECULAR_ROUGHNESS_FLOOR);
     return shadeLight(surface, light.direction, light.colour * light.intensity);
 }
 
