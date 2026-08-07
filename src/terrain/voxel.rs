@@ -26,7 +26,10 @@ impl VoxelMaterial {
         match self {
             VoxelMaterial::Air => [0.0, 0.0, 0.0, 0.0],
             VoxelMaterial::Rock => [0.5, 0.5, 0.5, 1.0],
-            VoxelMaterial::Grass => [0.3, 0.7, 0.2, 1.0],
+            // Deep enough to sit below the props standing on it. A light green
+            // reads as a bright slab under a sunlit sky and flattens the frame,
+            // because terrain fills more of it than anything else does.
+            VoxelMaterial::Grass => [0.19, 0.40, 0.14, 1.0],
             VoxelMaterial::Dirt => [0.5, 0.3, 0.1, 1.0],
             VoxelMaterial::Ite => [0.55, 0.50, 0.35, 1.0],
             VoxelMaterial::Limestone => [0.75, 0.73, 0.68, 1.0],

@@ -35,6 +35,6 @@ pub use segment::{Segment, SegmentState};
 pub use world::{TerrainWorld, UpdateTimings};
 
 // Voxel types for terrain modification
-pub use voxel::DurabilityConfig;
+pub use voxel::{DurabilityConfig, VoxelMaterial};
 
 pub use generation::generate_terrain;

@@ -16,6 +16,7 @@ use crate::rendering::colour::Colour;
 use crate::rendering::material::SurfaceParams;
 use crate::rendering::vertex::Vertex;
 use crate::rendering::visual_bench::scene::SceneMesh;
+use crate::terrain::VoxelMaterial;
 
 const SEGMENTS: u32 = 40;
 const RINGS: u32 = 28;
@@ -24,8 +25,15 @@ const RINGS: u32 = 28;
 /// camera that uses it, so the frame is dominated by the brightest albedo.
 const GROUND_HALF_EXTENT: f32 = 60.0;
 
-/// Terrain green, at the saturation and value the level content uses.
-const GRASS: Colour = Colour::new(0.42, 0.82, 0.30, 1.0);
+/// Terrain green, taken from the voxel material rather than copied.
+///
+/// A hand-written stand-in drifted lighter than the real thing once already,
+/// which defeats the purpose of a scene whose whole job is to be honest about
+/// what the game's albedos do under the lighting.
+fn grass() -> Colour {
+    let [r, g, b, a] = VoxelMaterial::Grass.color();
+    Colour::new(r, g, b, a)
+}
 
 /// The full arrangement: ground plus a spread of the palette's worst offenders.
 pub fn arrangement() -> Vec<SceneMesh> {
@@ -83,7 +91,7 @@ pub fn arrangement() -> Vec<SceneMesh> {
 /// colour sits behind it.
 pub fn ground() -> SceneMesh {
     let e = GROUND_HALF_EXTENT;
-    let colour = GRASS.to_vec4();
+    let colour = grass().to_vec4();
     let normal = Vector3::new(0.0, 1.0, 0.0);
 
     let corners = [
