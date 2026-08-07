@@ -87,6 +87,25 @@ sky does that job with direction. `SKY_RADIANCE_SCALE` sets the sky's on-screen
 brightness *and* the fill it casts, and cannot be split — a mirror has to agree
 with the sky next to it. Tune the ratio with sun intensity.
 
+**Absolute light level is pinned by the content, not by taste.** The first
+balance attempt raised total illumination on a sunlit surface from about 1.0 to
+about 2.4 and looked fine on every bench scene — then washed the game out
+completely. Level albedos are saturated primaries already close to full value,
+authored against the old dim lighting, so extra illumination pushes them onto
+the tonemap's shoulder and they go pale and electric instead of bright. Contrast
+now comes from the key-to-fill *ratio* (about 5:1) while the absolute level
+stays near where it was. Raising it means re-authoring albedos, which is a
+deliberate project, not a side effect.
+
+This is the "everything downstream is tuned against the lighting environment"
+warning below, and content is downstream too.
+
+**The bench scenes were the reason this was missed.** They were built from
+muted, mid-value albedos — a comfortable place for a renderer to sit and a
+misleading one to tune in. `palette` exists to fix that: saturated level colours
+on bright terrain, which is where clipping and oversaturation actually show up.
+Judge any exposure or tonemap change there first.
+
 Still true after §1: nothing casts a shadow, so objects float; the ground and
 sky sit at similar values with no aerial perspective between them.
 

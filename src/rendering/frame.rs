@@ -165,10 +165,15 @@ impl Default for SceneLighting {
         Self {
             sun_direction: Vector3::new(0.5, 0.7, 0.5).normalize(),
             sun_colour: Colour::new(1.0, 0.97, 0.9, 1.0),
-            // Well above the fill the sky provides, so the sun reads as a key
-            // light: it is the ratio between the two that gives a surface its
-            // modelling, and a sun that merely matches the sky renders flat.
-            sun_intensity: 2.6,
+            // Roughly five times the fill the sky provides, so the sun reads as
+            // a key light — it is the ratio between them that gives a surface
+            // its modelling, and a sun that merely matches the fill renders
+            // flat. The absolute level is held near where it was before the sky
+            // became a light source, because level content is authored against
+            // it: the albedos in use are saturated and already close to full
+            // value, so raising total illumination pushes them up the tonemap's
+            // shoulder and they go pale and electric rather than bright.
+            sun_intensity: 1.2,
             // Near black on purpose. Sky and ground irradiance are what fill
             // unlit surfaces now, and they do it directionally; this remains as
             // an author's dial for lifting a scene without moving the sky, and

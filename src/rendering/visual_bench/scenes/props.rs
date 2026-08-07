@@ -156,7 +156,7 @@ fn ground() -> SceneMesh {
         })
         .collect();
 
-    SceneMesh::new(vertices, vec![0, 1, 2, 0, 2, 3])
+    SceneMesh::new(vertices, vec![0, 2, 1, 0, 3, 2])
         .with_transform(Matrix4::identity())
         .with_surface(SurfaceParams::MATTE)
 }

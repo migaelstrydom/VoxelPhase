@@ -30,6 +30,18 @@
 /// Revisit this when ambient occlusion lands; it is doing that job by proxy.
 const float GROUND_ALBEDO = 0.25;
 
+/// How much of the sky hemisphere a diffuse surface actually sees.
+///
+/// The same discount as `GROUND_ALBEDO` and for the same reason: nothing in the
+/// scene occludes the sky yet, so taking the full hemisphere would light every
+/// surface as though it stood alone on an open plain. It also keeps the fill
+/// well below the sun, which is what gives a surface its modelling — a fill
+/// that rivals the key renders flat however physically defensible it is.
+///
+/// Diffuse only. A mirror still reflects the sky at full strength, so a glossy
+/// surface and the sky behind it continue to agree.
+const float SKY_IRRADIANCE_FACTOR = 0.4;
+
 /// The sky as it looks to a surface that reflects the entire hemisphere at
 /// once: the zenith colour above, the nadir colour below, blended by elevation.
 ///
@@ -54,7 +66,7 @@ vec3 skyDomeAverage(vec3 dir, vec3 sun_dir) {
 /// produces is doing the work a flat ambient constant cannot — it tells you
 /// which way a surface faces even where no direct light reaches it.
 vec3 environmentIrradiance(vec3 normal, vec3 sun_dir) {
-    vec3 sky = skyRadiance(vec3(0.0, 1.0, 0.0), sun_dir);
+    vec3 sky = skyRadiance(vec3(0.0, 1.0, 0.0), sun_dir) * SKY_IRRADIANCE_FACTOR;
     vec3 ground = skyRadiance(vec3(0.0, -1.0, 0.0), sun_dir) * GROUND_ALBEDO;
 
     float upward = normal.y * 0.5 + 0.5;
