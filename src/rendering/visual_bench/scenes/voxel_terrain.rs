@@ -185,8 +185,9 @@ pub fn build() -> TerrainTableau {
     segment.update(&mut rebuilt);
 
     // The crater goes in through the destruction path rather than through the
-    // generator, because that is the path a grenade takes and it authors voxels
-    // differently: a binary carve to air rather than a signed distance.
+    // generator, because that is the path a grenade takes. Both encode a cut as
+    // a signed distance now, but through different code, and `craters` is the
+    // sheet that sweeps this one properly.
     segment.damage_sphere(CRATER, CRATER_RADIUS, u8::MAX);
     rebuilt.clear();
     segment.update(&mut rebuilt);
