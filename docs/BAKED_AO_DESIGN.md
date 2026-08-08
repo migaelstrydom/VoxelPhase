@@ -62,7 +62,7 @@ an open flat plane reads as unoccluded.
   ChunkGrid ──fill_block──▶ OcclusionGrid │
         (separate, half-res, wider halo)  │
                 │                         │
-                │  binary occupancy       │
+                │  occupancy ramp         │
                 ▼                         │
            separable blur                 │
                 │                         │
@@ -104,7 +104,7 @@ offset:
 | binary | **0.320** |
 | density ramp | **0.040** |
 
-Against a usable range of `1 - B ≈ 0.68`, the binary figure is roughly half the
+Against the usable range `C - B ≈ 0.34`, the binary figure is roughly half the
 effect's entire dynamic range appearing as soft mottling on open ground, at the
 grid's own spacing. `the_field_barely_ripples_as_a_plane_moves_between_samples`
 bounds it at 0.06 in the final AO value.
@@ -125,7 +125,7 @@ point is the distance-weighted fraction of its neighbourhood that is solid.
 
 ```
     O = blurred_occupancy(p + n * NORMAL_OFFSET)      // trilinear
-   ao = 1 - AO_STRENGTH * saturate((O - B) / (1 - B))
+   ao = 1 - AO_STRENGTH * saturate((O - B) / (C - B))
 ```
 
 `B` is the value the same kernel and the same offset produce above an **infinite
@@ -133,11 +133,22 @@ flat half-space**. Subtracting it is what makes flat ground read as `ao = 1.0`
 rather than as a uniform grey — a plane is half-solid, so an uncalibrated blur
 reports ~50 % occlusion on the most open surface in the game.
 
-`B` must be *derived from the kernel*, not hand-tuned, or changing `R` silently
-re-tints the whole world. Compute it numerically at construction from the kernel
-weights and the offset (a few dozen multiplies, once), and assert against it in
-a test. `AO_STRENGTH` then means exactly one thing: how dark a fully enclosed
-crease goes.
+`C` is the value at the reference **fully occluded** point: the base of a wall
+meeting a floor, a 90° inside corner. **This second calibration point was
+missing from the first version of this doc and it is why the first working bake
+was almost invisible.** The obvious normaliser is `1 - B`, the range up to a
+completely solid neighbourhood — but a *surface* point never approaches that.
+Measured: open ground reads ~0.48, a hard inside corner ~0.81. The reachable
+range is `0.34` against the `0.53` being divided by, so every crease in the game
+came out about 1.6× too faint. Deriving `C` the same way `B` is derived also
+makes `AO_STRENGTH` mean what it claims: how dark a floor-meets-wall corner
+goes. Anything more enclosed clamps to it.
+
+Both `B` and `C` must be *derived from the kernel*, not hand-tuned, or changing
+`R` silently re-tints the whole world. Both are computed numerically at
+construction from the kernel weights and the offset, and both are cheap: `B` is
+a 1D problem because a half-space varies on one axis, and `C` is 2D because a
+corner is invariant along its own axis.
 
 ### Why not ray marching
 
@@ -354,8 +365,17 @@ the output alpha, so the overload is real and would have to be unpicked first.
 ## Shader integration
 
 `triangle.vert` passes the attribute through. `triangle.frag` applies it to the
-environment terms in `shadeEnvironment` — the diffuse irradiance at full
-strength, the specular reflection at reduced strength.
+diffuse irradiance at full strength and the specular reflection at half, in
+`shadeEnvironment` — **and to `shadeAmbient`**, which the first version of this
+doc did not say.
+
+Occluding ambient turned out to be half of why the effect was visible at all.
+Ambient is an author's stand-in for light arriving from everywhere, and it was
+raised specifically to open up the sun's shadows; leaving it unoccluded puts a
+floor under every crease at exactly that level, and AO has almost nothing left
+to darken. It is also the term that costs nothing to occlude: it is a flat add,
+so occluding it darkens creases without touching the level on open ground that
+`VISUAL_HANDOFF.md` says the level albedos pin.
 
 Specular wants its own treatment because a mirror in a crevice still reflects
 whatever is in front of it; fully occluding it reads as dirt rather than as
@@ -456,9 +476,10 @@ risk is taken.
    function of position, so reading it once per emitted vertex in
    `generate_block` gets the same answer and leaves marching cubes unaware that
    occlusion exists.
-3. **Consume it in the shader.** `triangle.vert` / `triangle.frag`, recompile
-   SPIR-V, plus a `terrain_ao` bench scene whose last tile is the same frame
-   with AO off.
+3. ~~**Consume it in the shader.**~~ **Done.** `triangle.vert` passes it,
+   `SurfaceSample` carries it, `shadeEnvironment` and `shadeAmbient` apply it.
+   `terrain_ao` shoots each subject with and without. Two calibration bugs had
+   to be fixed first — see below.
 4. **Rebalance the environment discounts.** Separate, optional, judged on
    `palette`.
 
