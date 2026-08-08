@@ -72,7 +72,7 @@ impl ShadowPipeline {
             stride: mem::size_of::<Vertex>() as u32,
             input_rate: vk::VertexInputRate::VERTEX,
         }];
-        let attribute_descriptions = Vertex::get_attribute_descriptions();
+        let attribute_descriptions = Vertex::depth_only_attribute_descriptions();
 
         let vertex_input_state = vk::PipelineVertexInputStateCreateInfo::default()
             .vertex_binding_descriptions(&binding_descriptions)

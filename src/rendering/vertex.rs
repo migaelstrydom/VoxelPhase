@@ -18,6 +18,26 @@ pub struct Vertex {
 impl Vertex {
     /// Get the Vulkan vertex attribute descriptions for this vertex format.
     pub fn get_attribute_descriptions() -> [vk::VertexInputAttributeDescription; 5] {
+        let [pos, color, tex_coords, normal] = Self::depth_only_attribute_descriptions();
+        [
+            pos,
+            color,
+            tex_coords,
+            normal,
+            // Ambient occlusion (location 4) - float
+            vk::VertexInputAttributeDescription {
+                location: 4,
+                binding: 0,
+                format: vk::Format::R32_SFLOAT,
+                offset: mem::offset_of!(Vertex, ao) as u32,
+            },
+        ]
+    }
+
+    /// The attributes a depth-only pass consumes. `shadow.vert` writes no
+    /// colour, so it declares no ambient occlusion input; handing the shadow
+    /// pipeline the full set makes the validator flag location 4 as unconsumed.
+    pub fn depth_only_attribute_descriptions() -> [vk::VertexInputAttributeDescription; 4] {
         [
             // Position (location 0) - vec3
             vk::VertexInputAttributeDescription {
@@ -46,13 +66,6 @@ impl Vertex {
                 binding: 0,
                 format: vk::Format::R32G32B32_SFLOAT,
                 offset: mem::offset_of!(Vertex, normal) as u32,
-            },
-            // Ambient occlusion (location 4) - float
-            vk::VertexInputAttributeDescription {
-                location: 4,
-                binding: 0,
-                format: vk::Format::R32_SFLOAT,
-                offset: mem::offset_of!(Vertex, ao) as u32,
             },
         ]
     }
