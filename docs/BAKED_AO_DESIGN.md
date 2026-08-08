@@ -240,6 +240,18 @@ grenade 0: 8 chunks dirtied | remesh 13.3 ms | adjacency 6.3 | concat 0.8 | tota
 **0.67 ms per chunk — inside the budget, and now the largest single phase.** A
 grenade goes from ~14.9 ms to ~20.5 ms, about +37 %.
 
+**That number was measured while the reach bug was live, and it flattered the
+result.** `test_arena` is at 1.0 m voxels, so those settings were buying a 4 m
+kernel on a cheap half-resolution grid. Fixing the scale forces voxel resolution
+at that voxel size — eight times the samples over a smaller volume — and the
+honest figure at a 1.0 m reach is **1.03 ms per chunk, a ~23.1 ms grenade**. A
+1.5 m reach costs 1.47 ms per chunk and ~27.7 ms.
+
+So cost scales roughly with `(chunk + 2 * reach / voxel_size)³`, and `reach` is
+now the single dial that moves it. Levels with coarse voxels pay the most,
+because a fixed reach in metres buys fewer voxels of halo before the grid has to
+refine.
+
 Two things in the cost model above are wrong, and the split says so:
 
 - **Half resolution does not make the fill cheaper.** `SparseVoxelOctree::fill_block`
@@ -419,15 +431,32 @@ All on the AO baker, not in a global config struct.
 
 | Name | Start | Meaning |
 |---|---|---|
-| `resolution_divisor` | 2 | Grid spacing as a multiple of `voxel_size`. |
-| `blur_radius` | 2 cells | Kernel reach; drives the halo. |
-| `normal_offset` | ~1 voxel | How far off the surface the field is read. |
-| `strength` | 0.7 | Darkness of a fully enclosed crease. The only aesthetic dial. |
+| `reach` | 1.0 **metre** | Radius of the occlusion kernel. |
+| `normal_offset` | 1 voxel | How far off the surface the field is read. |
+| `strength` | 0.7 | How dark a floor-meets-wall corner goes. |
 
-`blur_radius` and `normal_offset` determine the halo, and the halo determines
-correctness — they are not free to tune at runtime. Deriving the halo from them
-in one place, rather than writing both numbers down twice, is what stops the two
-drifting apart.
+Everything else — grid spacing, blur radius in cells, halo — is *derived* from
+these and the level's voxel size in `OcclusionSettings::resolve`.
+
+**`reach` is in metres, and that is the whole point.** It was in grid cells,
+which made the effect's size a property of the level's voxel size rather than of
+the world. The visual bench meshes at 0.25 m voxels and `test_arena` declares
+1.0, so the same settings produced a 1 m kernel in the bench and a 4 m one in
+the game: the sheet showed almost nothing while the game bled darkness metres
+across open sunlit ground and read as broad streaks. How far one surface shades
+another is a fact about the world, not about how finely it happens to be
+sampled. `the_bake_does_not_follow_the_voxel_size` is the guard.
+
+The derivation has one real decision in it. The coarse (half-resolution) grid is
+taken only when `reach` still spans at least two of its cells; otherwise the
+grid drops to voxel resolution. A one-cell kernel at half resolution barely
+smooths the surface quantisation — ripple 0.170 against 0.040 at two cells —
+so when the reach is small relative to the voxels, the answer is a finer grid
+rather than a narrower kernel. At voxel resolution the ripple is 0.02–0.04 at
+every radius, because the density ramp then spans a whole cell.
+
+`reach` and `normal_offset` determine the halo, and the halo determines
+correctness — they are not free to tune at runtime.
 
 ## Tests
 

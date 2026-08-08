@@ -73,50 +73,115 @@ const CORNER_PHASE_STEPS: usize = 8;
 
 /// How the occlusion field is built and read.
 ///
-/// `blur_radius` and `normal_offset` between them determine the halo, and the
-/// halo determines correctness, so both live here and the halo is derived from
-/// them in exactly one place ([`OcclusionSettings::halo`]).
+/// **Reach is in metres, deliberately.** It was in grid cells, and that made
+/// the effect's size a property of the level's voxel size rather than of the
+/// world: the visual bench meshes at 0.25 m voxels and `test_arena` declares
+/// 1.0, so identical settings produced a 1 m kernel in the bench and a 4 m one
+/// in the game. The bench showed almost nothing while the game bled darkness
+/// several metres across open ground and read as broad streaks. How far one
+/// surface shades another is a fact about the world, not about how finely it
+/// happens to be sampled.
+///
+/// Everything resolution-dependent is derived from `reach` and the voxel size
+/// in [`OcclusionSettings::resolve`], so there is one place where the two can
+/// disagree and it has the voxel size in hand.
 #[derive(Debug, Clone, Copy)]
 pub struct OcclusionSettings {
-    /// Grid spacing as a multiple of the voxel size. Occlusion is
-    /// low-frequency, so it does not need the mesh's resolution and the cube of
-    /// the saving is what keeps the bake affordable.
-    pub resolution_divisor: usize,
-    /// Blur kernel reach, in grid cells.
-    pub blur_radius: usize,
-    /// How far off the surface the field is read, in voxels. Reading exactly on
-    /// the surface would report the half-solid value everywhere; stepping out
-    /// along the normal is what recovers the directionality a blur otherwise
-    /// throws away.
+    /// Radius of the occlusion kernel, **in metres**. Together with `strength`,
+    /// the aesthetic dial: how far away a surface can be and still shade this
+    /// one.
+    pub reach: f32,
+    /// How far off the surface the field is read, in **voxels**.
+    ///
+    /// In voxels rather than metres because, unlike `reach`, this exists to
+    /// escape the surface's own discretisation: the occupancy ramp spans a
+    /// voxel either side of the surface, and reading inside that band reports
+    /// the half-solid value no matter what the geometry is. Its job is to get
+    /// clear of the band, so the band's units are the right ones.
     pub normal_offset: f32,
-    /// How dark a fully enclosed crease goes. The only aesthetic dial.
+    /// How dark a floor-meets-wall corner goes. See [`fully_occluded_excess`].
     pub strength: f32,
 }
 
 impl Default for OcclusionSettings {
     fn default() -> Self {
         Self {
-            resolution_divisor: 2,
-            blur_radius: 2,
+            reach: 1.0,
             normal_offset: 1.0,
             strength: 0.7,
         }
     }
 }
 
-impl OcclusionSettings {
-    /// The read offset in grid cells rather than voxels.
-    fn offset_cells(&self) -> f32 {
-        self.normal_offset / self.resolution_divisor as f32
-    }
+/// Grid spacing to prefer, as a multiple of the voxel size, when the reach is
+/// wide enough to still resolve on it.
+///
+/// Occlusion is low-frequency, so it does not need the mesh's resolution, and
+/// the cube of the saving is real. Not more than 2: density saturates one voxel
+/// out, so a cell wider than two voxels loses the sub-voxel surface position
+/// that keeps flat ground from mottling — measured, at divisor 4 the phase
+/// ripple is four times worse than at 2.
+const PREFERRED_DIVISOR: usize = 2;
 
+/// Fewest kernel cells the blur is allowed, before dropping to a finer grid.
+///
+/// A one-cell kernel barely smooths the surface's quantisation: the phase
+/// ripple goes from 0.040 to 0.170. When the reach is too small to buy two
+/// cells at the preferred spacing, the answer is a finer grid, not a narrower
+/// kernel.
+const MIN_BLUR_CELLS: usize = 2;
+
+/// [`OcclusionSettings`] resolved against a particular voxel size.
+///
+/// Nothing outside this struct converts between metres, voxels and cells.
+#[derive(Debug, Clone, Copy)]
+struct Resolution {
+    /// Grid spacing as a multiple of the voxel size.
+    divisor: usize,
+    /// Distance between adjacent grid samples, in world units.
+    spacing: f32,
+    /// Blur kernel reach, in grid cells.
+    blur_radius: usize,
+    /// Read offset along the normal, in grid cells.
+    offset_cells: f32,
+}
+
+impl OcclusionSettings {
+    fn resolve(&self, voxel_size: f32) -> Resolution {
+        // Take the coarse grid only if the reach still spans enough of its
+        // cells to be a kernel rather than a step function.
+        let coarse_would_resolve =
+            self.reach >= MIN_BLUR_CELLS as f32 * PREFERRED_DIVISOR as f32 * voxel_size;
+        let divisor = if coarse_would_resolve {
+            PREFERRED_DIVISOR
+        } else {
+            1
+        };
+
+        let spacing = divisor as f32 * voxel_size;
+        let blur_radius = (self.reach / spacing).round().max(1.0) as usize;
+
+        // Capped at half the kernel, so the read cannot step so far off the
+        // surface that it lands outside the neighbourhood being measured.
+        let offset_cells = (self.normal_offset / divisor as f32).min(blur_radius as f32 / 2.0);
+
+        Resolution {
+            divisor,
+            spacing,
+            blur_radius,
+            offset_cells,
+        }
+    }
+}
+
+impl Resolution {
     /// Samples of halo needed on each side of the owned region.
     ///
     /// Three things stack: the blur consumes `blur_radius` samples at every
     /// boundary, a read may land `offset_cells` outside the owned region, and
     /// trilinear interpolation needs the sample beyond the one it lands in.
     fn halo(&self) -> usize {
-        self.blur_radius + self.offset_cells().ceil() as usize + 1
+        self.blur_radius + self.offset_cells.ceil() as usize + 1
     }
 }
 
@@ -157,8 +222,8 @@ impl OcclusionGrid {
         source: &S,
         settings: &OcclusionSettings,
     ) -> Self {
-        let divisor = settings.resolution_divisor;
-        assert!(divisor > 0, "resolution divisor must be positive");
+        let resolved = settings.resolve(voxel_size);
+        let divisor = resolved.divisor;
         assert!(
             cells.is_multiple_of(divisor),
             "block of {cells} cells does not divide by the occlusion divisor {divisor}"
@@ -168,8 +233,8 @@ impl OcclusionGrid {
             "first sample {first_sample:?} is off the occlusion lattice (divisor {divisor})"
         );
 
-        let halo = settings.halo();
-        let spacing = divisor as f32 * voxel_size;
+        let halo = resolved.halo();
+        let spacing = resolved.spacing;
         // The owned cells span `cells` voxels, which is `cells / divisor`
         // coarse cells, and therefore one more sample than that.
         let owned = cells / divisor + 1;
@@ -180,19 +245,18 @@ impl OcclusionGrid {
         let mut block = VoxelBlock::air(lattice);
         source.fill_block(&mut block);
 
-        let kernel = gaussian_kernel(settings.blur_radius);
+        let kernel = gaussian_kernel(resolved.blur_radius);
         let field = blurred_occupancy(&block, &kernel);
-        let baseline = flat_baseline(&kernel, settings.offset_cells(), divisor);
+        let baseline = flat_baseline(&kernel, resolved.offset_cells, divisor);
 
         Self {
             lattice,
             field,
-            invalid_margin: settings.blur_radius,
-            normal_offset: settings.normal_offset * voxel_size,
+            invalid_margin: resolved.blur_radius,
+            normal_offset: resolved.offset_cells * resolved.spacing,
             strength: settings.strength,
             baseline,
-            full_excess: fully_occluded_excess(&kernel, settings.offset_cells(), divisor)
-                - baseline,
+            full_excess: fully_occluded_excess(&kernel, resolved.offset_cells, divisor) - baseline,
         }
     }
 
@@ -429,16 +493,16 @@ mod tests {
     /// Encoded into density exactly as `csg::union_solid` does, so the tests
     /// exercise the sub-voxel information the real terrain carries rather than
     /// a binary field that would hide the very ripple they exist to bound.
-    struct Depth<F>(F);
+    struct Depth2<F>(F, f32);
 
-    impl<F: Fn(Point3<f32>) -> f32> VoxelSource for Depth<F> {
+    impl<F: Fn(Point3<f32>) -> f32> VoxelSource for Depth2<F> {
         fn fill_block(&self, block: &mut VoxelBlock) {
             let dims = block.dims();
             for x in 0..dims[0] {
                 for y in 0..dims[1] {
                     for z in 0..dims[2] {
                         let depth = (self.0)(block.lattice().position(x, y, z));
-                        let density = (depth / VOXEL_SIZE).clamp(-1.0, 1.0);
+                        let density = (depth / self.1).clamp(-1.0, 1.0);
                         if density > 0.0 {
                             let mut voxel = Voxel::solid(VoxelMaterial::Rock, 10);
                             voxel.density = density;
@@ -462,12 +526,21 @@ mod tests {
         depth: F,
         settings: OcclusionSettings,
     ) -> OcclusionGrid {
+        bake_at(depth, VOXEL_SIZE, CELLS, settings)
+    }
+
+    fn bake_at<F: Fn(Point3<f32>) -> f32>(
+        depth: F,
+        voxel_size: f32,
+        cells: usize,
+        settings: OcclusionSettings,
+    ) -> OcclusionGrid {
         OcclusionGrid::build(
             Point3::origin(),
             [0, 0, 0],
-            CELLS,
-            VOXEL_SIZE,
-            &Depth(depth),
+            cells,
+            voxel_size,
+            &Depth2(depth, voxel_size),
             &settings,
         )
     }
@@ -502,7 +575,7 @@ mod tests {
     /// soft mottling across open ground at the grid's own spacing.
     #[test]
     fn the_field_barely_ripples_as_a_plane_moves_between_samples() {
-        let spacing = OcclusionSettings::default().resolution_divisor as f32 * VOXEL_SIZE;
+        let spacing = OcclusionSettings::default().resolve(VOXEL_SIZE).spacing;
         let readings: Vec<f32> = (0..8)
             .map(|step| {
                 let height = 4.0 + step as f32 * spacing / 8.0;
@@ -604,6 +677,32 @@ mod tests {
         }
     }
 
+    /// The bug that made the game and the bench disagree: reach used to be
+    /// expressed in grid cells, so a level meshed at 1.0 m voxels got a kernel
+    /// four times wider than one meshed at 0.25 m. In the bench the effect was
+    /// nearly invisible; in the game it bled darkness metres across open ground.
+    /// The same world geometry has to shade the same way however finely it is
+    /// sampled.
+    #[test]
+    fn the_bake_does_not_follow_the_voxel_size() {
+        let settings = OcclusionSettings::default();
+        let corner = |p: Point3<f32>| (4.0 - p.y).max(4.0 - p.x);
+
+        // Same world span, so the two grids cover the same cube of world.
+        let fine = bake_at(corner, 0.25, 32, settings);
+        let coarse = bake_at(corner, 0.5, 16, settings);
+
+        for distance in [0.3, 0.8, 1.5, 2.5] {
+            let at = Point3::new(4.0 + distance, 4.0, 4.0);
+            let a = fine.occlusion(at, Vector3::y());
+            let b = coarse.occlusion(at, Vector3::y());
+            assert!(
+                (a - b).abs() < 0.12,
+                "{distance} m from the wall: {a} at 0.25 m voxels, {b} at 0.5 m"
+            );
+        }
+    }
+
     #[test]
     fn rebaking_is_deterministic() {
         let point = Point3::new(4.2, 4.0, 5.1);
@@ -616,18 +715,49 @@ mod tests {
     /// The baseline exists to be derived, not typed in. If it stops tracking
     /// the kernel, flat ground stops reading as open.
     #[test]
-    fn the_baseline_tracks_the_blur_radius() {
-        let baseline_of = |radius| {
+    fn the_baseline_tracks_the_reach() {
+        let baseline_of = |reach| {
             let settings = OcclusionSettings {
-                blur_radius: radius,
+                reach,
                 ..OcclusionSettings::default()
             };
             bake_with(ground(4.0), settings).baseline()
         };
-        assert!(baseline_of(1) != baseline_of(3));
-        for radius in 1..=3 {
-            let b = baseline_of(radius);
+        assert!(baseline_of(0.5) != baseline_of(2.0));
+        for reach in [0.5, 1.0, 1.5, 2.0] {
+            let b = baseline_of(reach);
             assert!((0.0..1.0).contains(&b), "baseline {b} is not a fraction");
+        }
+    }
+
+    /// The resolution is derived from the reach and the voxel size, and the
+    /// derivation is what keeps the two ends of the trade honest: a coarse grid
+    /// where the reach can afford it, a fine one where it cannot.
+    #[test]
+    fn the_grid_coarsens_only_when_the_reach_can_carry_it() {
+        let settings = OcclusionSettings::default();
+
+        // Bench scale: 1.5 m of reach is six 0.25 m voxels, plenty for a
+        // two-cell kernel on the coarse grid.
+        let fine_world = settings.resolve(0.25);
+        assert_eq!(fine_world.divisor, PREFERRED_DIVISOR);
+        assert!(fine_world.blur_radius >= MIN_BLUR_CELLS);
+
+        // Game scale: at 1.0 m voxels the coarse grid's cells are 2 m, and 1.5 m
+        // of reach would not even fill one. Drop to the voxel grid instead.
+        let coarse_world = settings.resolve(1.0);
+        assert_eq!(coarse_world.divisor, 1);
+        assert!(coarse_world.blur_radius >= 1);
+
+        // Either way the kernel is about as wide as it was asked to be.
+        for voxel_size in [0.125, 0.25, 0.5, 1.0, 2.0] {
+            let r = settings.resolve(voxel_size);
+            let metres = r.blur_radius as f32 * r.spacing;
+            assert!(
+                (metres - settings.reach).abs() <= voxel_size * r.divisor as f32,
+                "{voxel_size} m voxels gave a {metres} m kernel for a {} m reach",
+                settings.reach
+            );
         }
     }
 }
