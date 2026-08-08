@@ -92,6 +92,17 @@ written at runtime. This is why `ShadowMap` is built *before* `GraphicsPipeline`
 in `Renderer::new` — the layout is built around the sampler. The descriptor
 write then supplies only the image view.
 
+**Anything with a spatial scale must be authored in metres, not in voxels or
+cells.** Ambient occlusion's reach was in grid cells, so its size followed the
+level's voxel size instead of the world. `visual_bench`'s terrain meshes at
+0.25 m voxels and `test_arena` declares 1.0, so the same settings gave a 1 m
+kernel on the bench and a 4 m one in the game — the sheet showed almost nothing
+while the game bled darkness metres across open ground. **This is the third time
+the bench has misled, and the first time it misled by running a different effect
+from the game rather than by being too flattering.** When a bench scene and the
+game disagree about how strong something is, suspect a scale that is tied to the
+discretisation before suspecting the shading.
+
 **What a PCF kernel costs is its footprint in metres, not its tap count.**
 `(2 * pcf_radius + 1) * texel_world_size`. Anything thinner than that dissolves.
 Reaching further makes texels bigger and filtering wider takes more of them, so
