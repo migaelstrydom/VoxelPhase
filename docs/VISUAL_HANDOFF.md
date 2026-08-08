@@ -83,6 +83,60 @@ Commits `026bb72` through `91cc129`.
   released unconditionally, so any clone freed the texture out from under every
   other handle.
 
+## Shelved: crease-aware normals (branch `creases`)
+
+Branch `creases` (`8710058`, `51d5bf7`) fixes spurious darkness on flat terrain
+and is **deliberately not merged**. Read this before rebuilding it from scratch,
+and before spending another session chasing the symptom.
+
+**The bug is real and diagnosed.** Marching cubes takes each vertex normal from
+the density gradient, which reaches exactly one voxel. On a smooth surface that
+is the best estimator available — a flat plane meshes at *exactly* 0.000° off
+vertical, better than face-normal averaging. But across a crease it returns the
+blend of both sides. Measured on a flat plot ending in a cliff, 1 m voxels: the
+lip ring reads 26.8° off vertical, corners 35.5°, interior 0.000°. At a 34° sun
+that swings diffuse `n·l` from 0.87 to 0.13, and past grazing at the corners it
+clamps to zero and geometrically flat ground renders black.
+
+Reproduce it with `levels/test_empty_small.level.ron` — a bare 16 m flat plot,
+no craters needed. The corner nearest the sun is fully lit, the far one dark.
+
+**Why it is shelved.** ~11 ms per grenade blast, against the ~22 ms remesh it
+follows — it partly undoes the destruction-cost work that got a blast from
+31.9 ms to 14.9 ms. And the correction makes triangles near a crease read as
+flat shaded, which is its own visual cost. The owner's call, 2026-08-08: the
+darkness reads acceptably as scorch marks, and neither the frame time nor the
+faceting is worth buying that off.
+
+**If it is ever revived**, the calibration facts that took the longest to find:
+
+- **The threshold is ~35°, not 50°.** Dihedral angles in MC terrain are bimodal:
+  bulk under 10°, thin tail to 30°, cluster at 40–50°, and *nothing above 45.3°*
+  because MC turns a 90° rim in two 45° steps. A 50° threshold sits above the
+  only crease in the level and detects nothing at all.
+- **Per-triangle edge tests are insufficient.** They miss corners where a crease
+  passes through the vertex fan without creasing an edge of *that* triangle —
+  112 of 358 smeared vertices survived, in a ring one triangle back from the
+  rim. Needs a welded crease-*corner* set built in a first pass.
+- **The threshold must be a ramp, not a step**, or every triangle touching a
+  crease reads as flat shaded. Evaluate the ramp in cosine space; ~130k edge
+  tests per terrain update is far too many `acos` calls.
+- **The cost is adjacency probes, not the maths.** The segment-wide adjacency
+  map is ~194k triangles, so every probe is a cache miss. Caching each
+  triangle's neighbours once into an array parallel to the region took it from
+  14.5 ms to 11 ms — worth more than every other optimisation combined.
+- **Corrections belong at render-cache build time**, never written into the
+  octree, so the octree stays the pristine gradient source and a stale
+  correction cannot survive.
+
+**This is not novel work.** It is Blender's Auto Smooth / 3ds Max smoothing
+groups: split normals by dihedral angle. The literature's *proper* fix is Dual
+Contouring (Ju et al. 2002) or Extended Marching Cubes (Kobbelt et al. 2001),
+which recover sharp features in the **geometry** rather than patching the
+shading — and would cost nothing per frame, because the mesher would simply
+produce the right thing. That is the direction to go if this ever becomes worth
+solving properly; it is a mesher rewrite, and it would touch collision and AO.
+
 ## Traps worth not re-breaking
 
 **A comparison sampler has to be immutable in the descriptor set layout.** Metal
