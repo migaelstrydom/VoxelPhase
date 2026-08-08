@@ -76,10 +76,15 @@ vec3 skyScattering(vec3 ray_dir, vec3 sun_dir) {
     // The exponent controls how tightly the pale band hugs the horizon. Low
     // values bleed it far up the dome and leave the whole sky milky, which also
     // washes out everything the sky lights.
-    float horizon_factor = pow(1.0 - abs(ray_dir.y), 6.0);
+    float horizon_factor = pow(1.0 - abs(ray_dir.y), 8.0);
 
     vec3 zenith_colour = vec3(0.16, 0.38, 0.92);
-    vec3 horizon_colour = vec3(0.55, 0.76, 0.95);
+    // Saturated rather than pale. A gameplay camera looks along the horizon
+    // almost all the time, so this band is most of the sky that is ever on
+    // screen, and a washed-out one gives the greens and reds in front of it
+    // nothing to sit against. It also has to stay darker than sunlit ground for
+    // the ground to read as lit.
+    vec3 horizon_colour = vec3(0.40, 0.66, 0.96);
     vec3 sunset_colour = vec3(1.0, 0.6, 0.3);
 
     float sun_influence = max(0.0, sun_height);
@@ -115,7 +120,7 @@ vec3 horizonHaze(vec3 ray_dir, vec3 sun_dir) {
                                  normalize(vec3(sun_dir.x, 0.0, sun_dir.z))));
     haze_colour = mix(haze_colour, vec3(1.0, 0.95, 0.85), bearing * 0.3);
 
-    return haze_colour * horizon_factor * 0.08;
+    return haze_colour * horizon_factor * 0.05;
 }
 
 /// Sky radiance along a direction, excluding the solar disc.

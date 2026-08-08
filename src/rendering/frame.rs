@@ -198,7 +198,14 @@ impl Default for SceneLighting {
     fn default() -> Self {
         Self {
             sun_direction: Vector3::new(0.5, 0.7, 0.5).normalize(),
-            sun_colour: Colour::new(1.0, 0.97, 0.9, 1.0),
+            // Warm, because the split between a warm key and a cool fill is
+            // what reads as sunlight. A near-white sun and a near-neutral fill
+            // differ only in brightness, so a shadow becomes a darker copy of
+            // the surface rather than a differently-lit one, and the frame sits
+            // at one temperature throughout. Tinting the whole image warm does
+            // not achieve this and only casts it yellow — the warmth has to be
+            // on the key alone, against a fill pulled the other way.
+            sun_colour: Colour::new(1.0, 0.89, 0.70, 1.0),
             // Roughly five times the fill the sky provides, so the sun reads as
             // a key light — it is the ratio between them that gives a surface
             // its modelling, and a sun that merely matches the fill renders
@@ -207,7 +214,14 @@ impl Default for SceneLighting {
             // it: the albedos in use are saturated and already close to full
             // value, so raising total illumination pushes them up the tonemap's
             // shoulder and they go pale and electric rather than bright.
-            sun_intensity: 1.2,
+            // Carries a 1.08 factor compensating the luminance the warm sun
+            // tint gives away. Tinting warm means pulling green and blue down,
+            // not pushing red up — red is already at 1.0 — so an uncompensated
+            // tint darkens every lit surface and the frame reads cooler overall
+            // rather than warmer, which is the opposite of the intent. The
+            // compensation keeps lit luminance where the level albedos were
+            // authored against it, so only the hue moves.
+            sun_intensity: 1.3,
             // The dial that sets how dark a shadow goes. Sky and ground
             // irradiance fill unlit surfaces directionally; this is the flat
             // term on top, and being flat is exactly why it is the right dial
@@ -216,8 +230,12 @@ impl Default for SceneLighting {
             // absolute light level on lit content (which is pinned by the
             // albedos the levels are authored with). Raising the sky fill
             // instead would narrow the key-to-fill ratio and flatten the
-            // modelling. Skewed towards blue: shadowed surfaces are lit by sky.
-            ambient_colour: Colour::new(0.065, 0.076, 0.098, 1.0),
+            // modelling. Skewed hard towards blue, and held at roughly the
+            // luminance it had before, so the change is in hue and not in how
+            // open the shadows are — this is the cool half of the warm-key /
+            // cool-fill split, and a merely slightly-blue fill does not read as
+            // one against a warm sun.
+            ambient_colour: Colour::new(0.045, 0.070, 0.125, 1.0),
         }
     }
 }

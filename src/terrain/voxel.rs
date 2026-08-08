@@ -29,7 +29,13 @@ impl VoxelMaterial {
             // Deep enough to sit below the props standing on it. A light green
             // reads as a bright slab under a sunlit sky and flattens the frame,
             // because terrain fills more of it than anything else does.
-            VoxelMaterial::Grass => [0.19, 0.40, 0.14, 1.0],
+            // A yellow-green rather than a pure green, at the luminance and
+            // saturation the pure green had — only the hue moves, by about 15
+            // degrees towards yellow. Vegetation lit by a warm sun reads yellow
+            // long before it reads green, and a green sitting on the primary is
+            // the one hue that cannot warm up: the sun's tint has no red
+            // headroom left to give it.
+            VoxelMaterial::Grass => [0.24, 0.39, 0.12, 1.0],
             VoxelMaterial::Dirt => [0.5, 0.3, 0.1, 1.0],
             VoxelMaterial::Ite => [0.55, 0.50, 0.35, 1.0],
             VoxelMaterial::Limestone => [0.75, 0.73, 0.68, 1.0],
