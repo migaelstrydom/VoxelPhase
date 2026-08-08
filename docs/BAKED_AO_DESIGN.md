@@ -1,182 +1,402 @@
 # Baked Ambient Occlusion — Design Doc
 
-Stage 1 of the [Lighting Plan](LIGHTING_PLAN.md). Adds a per-vertex occlusion factor to terrain meshes, computed at mesh-generation time by sampling the voxel density field in a neighborhood around each vertex. The factor darkens the ambient lighting term in the fragment shader, making crevices, corners, and concavities read visually without any runtime cost.
+Stage 1 of the [Lighting Plan](LIGHTING_PLAN.md). A per-vertex occlusion factor
+baked into terrain meshes at mesh-generation time, attenuating the *environment*
+lighting terms so that creases, undersides and the ground beside a wall stop
+receiving the full sky.
 
-## Goals
+This doc replaces an earlier version that specified hemisphere ray marching
+against the SVO. That version was never implemented; its own cost model arrived
+at 20–100 ms per region rebuild, which is not affordable inside the destruction
+budget. The technique here is different and the reason is entirely performance —
+see [Why not ray marching](#why-not-ray-marching).
 
-- Visible darkening in terrain recesses (under ledges, inside dips, between close surfaces).
-- Smooth, flicker-free output — no banding, no chunk-boundary seams.
-- Zero runtime cost after bake; results baked into the vertex buffer.
-- Incremental: recomputable per affected region when terrain is edited.
-- No impact on the physics engine or collision geometry.
+A second, more ambitious attempt also exists and was abandoned: branch `sdf-ao`
+built a true Euclidean SDF (fast-sweeping) into a GPU atlas and cone-traced it
+per fragment. Its lessons are recorded in [Traps](#traps-carried-over-from-the-sdf-attempt);
+the branch itself no longer applies, since it integrates against a
+`TerrainManager` and a `triangle.frag` that the chunked-terrain and lighting
+reworks have both since replaced.
+
+## What this has to achieve
+
+The specific gap, stated precisely, because it determines what AO multiplies.
+
+The sun is occluded — there is a shadow map. The **sky is not**, and since
+`shader/environment.glsl` landed the sky is a real fill light arriving from the
+whole hemisphere. `SKY_IRRADIANCE_FACTOR` (0.4) and `GROUND_ALBEDO` (0.25) are
+flat global discounts standing in for that missing occlusion; both carry a
+comment saying so. AO is what lets those become honest.
+
+So: **AO attenuates the environment terms only.** It never touches the sun or
+the point lights. Direct light already has an occluder that knows the actual
+geometry, and stacking AO on top of it double-darkens exactly where the shadow
+map is already correct.
 
 ## Non-goals
 
-- Dynamic / moving-object AO (that's SSAO or similar runtime effects, out of scope for this stage).
-- Global illumination or bounced light.
-- AO on non-terrain meshes (player, props). Those can get runtime AO later if needed; for now terrain carries the bulk of the visual impact.
+- **AO on props, the player, or any dynamic body.** Terrain is static and can be
+  baked; a tumbling crate cannot. Occlusion between moving bodies and the ground
+  they rest on is the screen-space item in `VISUAL_DIRECTION.md` §3, and it is a
+  different feature with a different mechanism.
+- **Long-range occlusion.** This darkens crevices at a scale of a few voxels. A
+  valley floor does not get darker for being in a valley.
+- **Bent normals**, directional occlusion, or anything that makes AO a function
+  of the incoming direction. One scalar.
+- **A reusable distance field.** That was the other branch. If soft shadows or
+  GI ever want one, they can propose it on their own merits.
 
-## Background: AO techniques considered
+## Approach: a blurred occupancy field
 
-Three options were weighed:
+Build a small scalar field over each chunk holding *how solid the neighbourhood
+is*, sample it slightly off the surface along the normal, and calibrate so that
+an open flat plane reads as unoccluded.
 
-**1. Minecraft-style per-corner AO.** For blocky voxels, each mesh vertex sits at a voxel corner and AO is computed from the occupancy of the 3 neighbor voxels diagonally adjacent. Cheap, iconic look — but our mesh comes from marching cubes with smooth surfaces, not axis-aligned quads. Vertices don't sit on voxel corners; they sit on interpolated edge crossings. This technique doesn't apply.
-
-**2. SDF cone-trace AO (Iñigo Quilez).** For a true signed distance field, AO at point `p` with normal `n` can be approximated by sampling the SDF at a few points along the normal and comparing expected-vs-actual distance:
-
-```
-ao = 1 - k * Σᵢ (dᵢ - sdf(p + n·dᵢ)) * falloff(i)
-```
-
-Elegant and fast (5–8 samples). **The problem**: our underlying field is a voxel *density* field, not a true SDF. Density is signed and roughly linear near the surface, but far from the surface it does not equal Euclidean distance. Using it as an SDF produces noisy / wrong AO away from the surface.
-
-**3. Hemisphere ray sampling against the voxel grid.** Cast N short rays from each vertex into the hemisphere oriented by its normal; each ray that finds occupied voxels within a radius contributes to occlusion. General-purpose, works correctly because it queries actual occupancy rather than trusting density as distance. More expensive than cone tracing, but parallelizable and well-bounded.
-
-**Chosen: hemisphere ray sampling**, with short rays (local AO only). The extra cost is acceptable given that mesh generation is already the expensive step in terrain updates, and it produces correct results for our non-SDF field.
-
-A future refinement could swap to cone-tracing if we ever store a real distance field alongside density.
-
-## Approach
-
-### Per-vertex algorithm
-
-For each terrain vertex `v` with smoothed normal `n`:
-
-1. Generate `N` sample directions `dᵢ` in a cosine-weighted hemisphere oriented by `n`. `N = 16` as a starting point.
-2. For each `dᵢ`, march from `v + n·ε` along `dᵢ` up to a maximum distance `R` (the AO radius), stepping in increments no larger than one voxel.
-3. At each step, query the SVO for the density at that point. If density > iso_level, mark this ray as occluded and record the hit distance `tᵢ`.
-4. Each occluded ray contributes `smoothstep(R, 0, tᵢ)` to occlusion — closer hits darken more.
-5. Sum contributions, divide by `N`, clamp to `[0, 1]`. Store `ao = 1 - occlusion` as the vertex attribute.
-
-The `ε` bias along the normal avoids self-hits from the vertex's own surface. The cosine weighting matches the physical integral being approximated (ambient light arrives weighted by `N·L`).
-
-### Sample directions
-
-Precompute a fixed table of `N` hemisphere directions in tangent space (cosine-weighted, stratified to avoid clumping). At each vertex, transform the table into world space using `n` and an arbitrary tangent basis. A fixed table means all vertices sample identical *relative* directions, which keeps the result deterministic and avoids stochastic flicker between rebuilds of the same region.
-
-### AO radius
-
-A radius of ~2–3 voxel cell sizes captures local crevices without bleeding into unrelated geometry. This should be a tunable parameter on the AO baker, not hardcoded.
-
-### Normals used
-
-Marching cubes already produces per-vertex normals from the density gradient. Those are appropriate for AO — they define the hemisphere orientation. `NormalSmoother` / `NormalClusterer` are physics-only and not part of this path.
-
-## Integration into the codebase
-
-### New component: `AoBaker`
-
-Lives in `src/terrain/ao_baker.rs`. Responsibilities:
-
-- Owns the hemisphere sample-direction table.
-- Owns AO config (radius, sample count).
-- Exposes `bake(mesh: &mut MarchingCubesMesh, sdf: &impl DensitySource)` which iterates mesh vertices and writes occlusion values.
-
-`DensitySource` is a trait abstracting "give me the density at this world-space point". The SVO (`src/terrain/svo.rs`) implements it. Keeping this behind a trait means the baker can be exercised in tests against analytic density fields (plane, sphere, corner) without bringing up a full SVO.
-
-### Vertex format change
-
-Add `ao: f32` to `Vertex` in `src/rendering/vertex.rs`. Update:
-
-- `Vertex` struct definition.
-- `get_attribute_descriptions()` to add a new `VkVertexInputAttributeDescription` at the next location.
-- The conversion from `MarchingCubesMesh` to `Vertex` in `MeshOctree::generate_from_voxels()` (`src/terrain/mesh_octree.rs` around line 210).
-- Add an `ao: Vec<f32>` field to `MarchingCubesMesh` so it can carry occlusion from the baker through to vertex construction.
-
-### Pipeline order
-
-Mesh generation becomes:
-
-```
-SVO sample → MarchingCubes::generate → AoBaker::bake → Vertex conversion → octree insert
+```text
+  VoxelBlock (MC's padded sample grid, unchanged)
+        │
+        │  generate_block already fills this
+        ▼
+  MarchingCubes ──────────────────────────┐
+                                          │  positions, normals, colours
+  ChunkGrid ──fill_block──▶ OcclusionGrid │
+        (separate, half-res, wider halo)  │
+                │                         │
+                │  binary occupancy       │
+                ▼                         │
+           separable blur                 │
+                │                         │
+                ▼                         ▼
+        sample(pos + n·offset) ───────▶ Vertex.ao
 ```
 
-The AO bake is a distinct step, not folded into marching cubes. This keeps MC focused on geometry and makes the AO stage independently testable, swappable, and skippable (for e.g. the bench viewer if we don't want the cost there).
+Three steps.
 
-### Shader changes
+**1. Occupancy.** Each sample of the occlusion grid is `1.0` if its voxel's
+density is above the iso level, `0.0` otherwise. Binary, deliberately.
 
-`shader/triangle.vert`: pass `inAo` through as a new vertex input and forward to the fragment shader.
+This is the single most important decision in the doc and it is the one the SDF
+branch spent 4,000 lines avoiding. Voxel density is *not* a distance: its
+gradient magnitude depends on how the terrain generator, the CSG ops and the
+destruction path each happened to author it. Any formula that reads a magnitude
+off the density field inherits that arbitrariness and will behave differently on
+generated terrain than on a grenade crater. A binary test reads only the sign,
+which is the one thing the field is guaranteed to mean. The smoothing that
+density-weighting would have bought comes from the blur instead, where its
+kernel is explicit and tunable.
 
-`shader/triangle.frag`: the current shader computes `ambient + diffuse * NdotL`. Change to `ambient * ao + diffuse * NdotL`. Direct-light contribution is not modified — AO only attenuates the ambient term, matching its physical meaning.
+**2. Blur.** Convolve the occupancy field with a small separable kernel of
+radius `R` grid cells — three 1D passes, `x` then `y` then `z`. The result at a
+point is the distance-weighted fraction of its neighbourhood that is solid.
 
-A stronger, non-physical variant (also slightly attenuating direct light by AO) is a common stylization trick and can be exposed as a material knob later if we want deeper crevices.
+**3. Calibrate and read.** For a mesh vertex at `p` with normal `n`:
 
-### Incremental rebuild
+```
+    O = blurred_occupancy(p + n * NORMAL_OFFSET)      // trilinear
+   ao = 1 - AO_STRENGTH * saturate((O - B) / (1 - B))
+```
 
-`TerrainManager::update()` marks dirty AABBs and rebuilds affected regions. Two concerns:
+`B` is the value the same kernel and the same offset produce above an **infinite
+flat half-space**. Subtracting it is what makes flat ground read as `ao = 1.0`
+rather than as a uniform grey — a plane is half-solid, so an uncalibrated blur
+reports ~50 % occlusion on the most open surface in the game.
 
-1. **AO radius extension.** Editing a voxel at `p` affects AO on vertices within radius `R` of `p`. The regeneration region must be expanded by `R` before mesh generation, otherwise vertices just outside the edited region keep stale AO values.
-2. **Chunk-boundary sampling.** When baking AO for a vertex near a chunk boundary, rays must sample the density field across that boundary. Since the `DensitySource` is the SVO (a single global structure), this is automatic — no chunk-local density copies required.
+`B` must be *derived from the kernel*, not hand-tuned, or changing `R` silently
+re-tints the whole world. Compute it numerically at construction from the kernel
+weights and the offset (a few dozen multiplies, once), and assert against it in
+a test. `AO_STRENGTH` then means exactly one thing: how dark a fully enclosed
+crease goes.
 
-## Performance
+### Why not ray marching
 
-### Cost model
+Per-vertex hemisphere marching is `N` rays × `S` steps of *field queries per
+vertex*, and a chunk emits thousands of vertices. The old doc's own numbers:
+~100 queries per vertex, 2k–10k vertices, 20–100 ms per region.
 
-Per vertex: `N` rays × `S` steps each = `N·S` density queries.
+A blur is `O(grid)` and independent of vertex count. Concretely, at the sizes
+below: ~12k grid samples × 3 passes × 5 taps ≈ 180k multiply-adds, plus one
+trilinear read per emitted vertex. That is two orders of magnitude less work,
+and it is *flat* — a chunk full of intricate surface costs the same as an empty
+one, which is the property that keeps a grenade's worst case bounded.
 
-With `N = 16`, `R = 3·cell_size`, step = `0.5·cell_size` → `S ≈ 6`. That's ~100 SVO queries per vertex.
+It is also smooth and deterministic by construction. Stochastic ray sets are the
+usual source of AO that shimmers when a chunk is rebuilt; a fixed convolution
+has nothing to shimmer.
 
-### Back-of-envelope for terrain chunks
+What it gives up: a blur is isotropic, so it cannot tell a wall one voxel to the
+side from a ceiling one voxel above. For crevice darkening at this scale that
+distinction is not visible, and the normal offset recovers most of the
+directionality that matters.
 
-Terrain vertex counts per region depend on surface complexity, but a ballpark for a typical updated region is 2k–10k vertices. At 100 queries per vertex:
+## Resolution, halo, and the cost
 
-- 2k vertices → 200k queries.
-- 10k vertices → 1M queries.
+This is the section that answers "what does it do to remesh time", so the
+numbers are spelled out.
 
-SVO point queries are O(log depth) — a handful of pointer chases. Call it 100ns per query conservatively. Then:
+### Do not widen the marching-cubes block
 
-- 2k vertices → ~20 ms.
-- 10k vertices → ~100 ms.
+The tempting implementation is to widen `MeshOctree::generate_block`'s existing
+padded grid — it already holds the voxels, so AO could read them for free. It is
+the wrong move. That grid is at full voxel resolution with a 1-sample halo:
+`cells + 3` = **35³ = 42,875 samples** for a 32-voxel chunk. Widening its halo
+to cover an AO reach of ~5 voxels takes it to 43³ = 79,507, nearly doubling the
+`sample` phase — which is the fill from the SVO, and one of the phases the
+destruction-cost work already fought to bring down.
 
-### Where this lands
+### Use a separate, coarser grid instead
 
-Mesh generation currently runs synchronously on the main thread in `TerrainUpdateSystem`. Adding 20–100 ms per region update on top of existing MC cost is likely to produce visible hitches during terrain edits.
+AO is low-frequency. Build it on its own lattice at **half voxel resolution**
+(`spacing = 2 * voxel_size`), which needs a far smaller grid even with a
+generous halo:
 
-Mitigations, in order of preference:
+| | full-res MC block | half-res AO grid |
+|---|---|---|
+| owned samples per axis | 33 | 17 |
+| halo per side | 1 | 3 |
+| total per axis | 35 | 23 |
+| **samples** | **42,875** | **12,167** |
 
-**1. Rayon over vertices.** Ray sampling is embarrassingly parallel — each vertex is independent. Parallelizing the bake across cores should give near-linear speedup and cut wall-clock time by ~4–8× on typical hardware. This is the cheapest fix and should be done from the start.
+The AO grid is ~28 % of the existing block's sample count, and the MC block is
+untouched. The added work per chunk is one extra `fill_block` over 12k samples,
+three blur passes, and one trilinear read per vertex.
 
-**2. Reduce sample count.** `N = 8` with a good stratified distribution is often indistinguishable from `N = 16` for short-radius AO. Halves the cost.
+`SparseVoxelOctree::fill_block` is already resolution-agnostic — it works off
+`SampleLattice` positions via `first_index_at_least` and has no assumption that
+spacing equals `voxel_size`. Nothing in the SVO or `ChunkGrid` needs to change.
 
-**3. Coarse sampling, trilinear interpolation.** Bake AO on a regular grid at lower resolution than vertex density (say, one AO sample per voxel cell), then look up per-vertex AO by trilinear interpolation into that grid. Amortizes cost across vertices that share neighborhoods. Adds complexity; defer until measured to be necessary.
+Halo of 3 half-cells = 6 voxels covers `NORMAL_OFFSET` (~1 voxel) plus the blur
+radius (`R = 2` half-cells = 4 voxels) with a cell to spare.
 
-**4. Background-thread mesh generation.** The bigger architectural win is moving all mesh generation (MC + AO bake) off the main thread. That's a broader refactor beyond this stage's scope, but AO's cost strengthens the case for it.
+### Measure it, don't trust this table
 
-**5. Early-exit on ray marching.** As soon as a ray finds a hit, stop stepping. Already implied by step 3 of the algorithm; worth being explicit.
+Add `ambient_occlusion: Duration` to `MeshBuildTimings` (`mesh_octree.rs:149`)
+alongside `grid_alloc` / `sample` / `marching_cubes` / `insert` /
+`neighbor_refs`, and include it in `total()` and `add()`. It then flows through
+`ChunkRemeshTimings` and `SegmentTimings` to the existing debug output for free.
 
-Starting point: rayon + `N = 16`, measure, and drop to `N = 8` or add interpolation only if the measurement says we need to.
+**Budget: ≤ 1 ms per chunk remesh.** For reference, a grenade currently costs
+~14.9 ms across all the chunks it touches.
 
-### Memory
+If it comes in over budget, the levers in order:
 
-`f32` per vertex × typical terrain vertex count (low millions) → a few MB. Negligible.
+1. **Drop the blur radius.** `R = 1` instead of 2 shrinks the halo to 2 and the
+   grid to 21³, and halves the tap count. Costs crispness in the falloff.
+2. **Quarter resolution.** `spacing = 4 * voxel_size`. Grid drops to ~11³. AO
+   becomes visibly blobby; probably the point at which it stops being worth it.
+3. **Skip chunks with no surface.** A chunk that emitted no triangles needs no
+   AO grid at all. Cheap guard, should be in from the start.
 
-### Runtime shader cost
+Note lever 3 is free and should not wait for a measurement.
 
-One extra attribute read and one multiply in the fragment shader. Unmeasurable.
+### Alignment is what keeps seams out
 
-## Testing
+The half-res lattice must be anchored to **global even sample indices**, not to
+the chunk. `ChunkGrid::first_sample(coord)` returns `coord * CHUNK_VOXELS`, and
+`CHUNK_VOXELS = 32` is even, so `base = first_sample / 2` at `spacing =
+2 * voxel_size` lands every chunk's grid on the same global lattice.
 
-- **Unit tests against analytic density fields** (`src/terrain/ao_baker.rs` test module):
-  - Flat plane: AO should be near 1.0 everywhere except at edges.
-  - Inside corner (two perpendicular planes meeting): AO should darken predictably toward the corner line.
-  - Sphere: AO should be ~1.0 on the outside, ~0 on the inside.
-  - Two close parallel planes: AO should darken on inner faces, scaling with gap distance.
-- **Determinism test**: baking the same mesh twice produces bit-identical AO values.
-- **Incremental test**: bake a region, edit voxels outside the AO radius, rebake only the edit region, check AO at distant-vertex is unchanged.
-- **Visual smoke test**: load a saved level, eyeball the terrain for expected crevice darkening. Add a debug overlay that renders AO as grayscale (via the existing `DebugLines`/`DebugOverlays` plumbing or a shader toggle).
+That matters because `SampleLattice` derives positions from the *global* index
+(`voxel_block.rs:33`) — the same property that already makes marching cubes
+seam-free between chunks. Two chunks evaluating AO for the same world position
+therefore read the same lattice points from the same voxel data and get
+bit-identical results. Seams do not need to be blended away; they need to not
+exist, and this is how.
 
-## Open questions / future work
+**A read must never be clamped to the grid.** Clamping at the boundary is
+precisely what produced the visible seams on the `sdf-ao` branch, and it does so
+silently. The halo is sized so that no legal read can fall outside; encode that
+as a `debug_assert!` on the sample path, not a `clamp`. If it ever fires, the
+halo is wrong and that is the bug to fix.
 
-- **AO for non-terrain meshes.** The player and other props use separate meshes. They can either bake AO at import time (if static) or rely on SSAO / cheap runtime AO later. Deferred.
-- **Coupling AO to sky color.** Once we have a hemisphere sky term (sky color above, ground color below), the "ambient" being attenuated should come from the sky hemisphere in the direction the surface faces. AO extends naturally to this — the hemisphere rays that miss geometry sample the sky instead of a constant. Optional future upgrade.
-- **Bent normals.** A richer variant stores the average unoccluded direction alongside AO; used to sample IBL or sky more accurately. Overkill for now.
-- **Dynamic terrain during destruction.** The destructibles system performs frequent local edits; AO rebake cost there could matter more than during authoring-time edits. Worth profiling once destruction lands.
+## From the lattice to the vertex
 
-## Rollout
+Marching cubes emits **unwelded** vertices — three per triangle, no sharing
+(`marching_cubes.rs:200`). Computing AO per emitted vertex would be ~3× redundant
+and, worse, would let two duplicates of the same position disagree and crack.
 
-1. Implement `AoBaker` with `DensitySource` trait + unit tests against analytic fields.
-2. Add `ao: f32` to `Vertex`; plumb through marching cubes output and mesh octree conversion.
-3. Parallelize the bake with rayon.
-4. Update `triangle.vert` / `triangle.frag`.
-5. Wire AO radius into dirty-region expansion in `TerrainManager::update()`.
-6. Recompile shaders, visual smoke test, measure per-region bake time, tune `N` / radius.
+Neither happens here, because AO is a pure function of position: the trilinear
+read at a given world point returns one value regardless of which vertex asked.
+
+The natural insertion point mirrors the code that already exists for normals.
+`process_cell` interpolates a normal along each crossed edge from the two
+corners' gradients:
+
+```rust
+let grad = corner_gradients[v0].lerp(&corner_gradients[v1], t);
+```
+
+AO slots in beside it as `edge_ao[i]`, either as the same lerp between two
+corner lookups or as a single trilinear read at `edge_vertices[i]`. Prefer the
+single read at the final vertex position plus normal offset — it is one lookup
+instead of two and it is the position the shading actually happens at.
+
+`MarchingCubesMesh` gains a parallel `ao: Vec<f32>`, matching its existing
+`positions` / `normals` / `colors` layout.
+
+## Storage
+
+Add `ao: f32` to `Vertex` (`src/rendering/vertex.rs`) at location 4,
+`R32_SFLOAT` — **and narrow `pos` from `Vector4` to `Vector3` in the same
+change.**
+
+`pos.w` is `1.0` at all 84 construction sites, and both `triangle.vert:8` and
+`shadow.vert:15` already declare the attribute as `in vec3 inPosition` and
+rebuild `vec4(inPosition, 1.0)` themselves. The fourth component is uploaded
+every frame and read by nothing. Reclaiming it pays for the AO float exactly:
+
+```
+   before:  Vector4 pos (16) + Vector4 colour (16) + Vector2 uv (8) + Vector3 normal (12)             = 52
+   after:   Vector3 pos (12) + Vector4 colour (16) + Vector2 uv (8) + Vector3 normal (12) + f32 ao (4) = 52
+```
+
+So AO costs nothing per vertex, and nothing on the terrain buffer that is
+currently re-uploaded every frame (`project_terrain_perframe_upload`). No shader
+edit is needed either — they already read `vec3`. Only the attribute format
+(`R32G32B32A32_SFLOAT` → `R32G32B32_SFLOAT`) and the offsets after it change in
+`get_attribute_descriptions`.
+
+The remaining cost is 84 struct literals across 29 files. Accept it: removing a
+field makes every literal fail to compile, so the compiler enumerates the work
+and no site can be silently missed — and every one of those literals currently
+writes a trailing `1.0` that is being deleted anyway.
+
+Non-terrain meshes carry `ao: 1.0` and are unaffected, which is also the correct
+default: no occlusion.
+
+Packing AO into `color.w` was considered and rejected. It saves no space now
+that `pos.w` pays for the field, and `triangle.frag:78` feeds `inColor.a` into
+the output alpha, so the overload is real and would have to be unpicked first.
+
+## Shader integration
+
+`triangle.vert` passes the attribute through. `triangle.frag` applies it to the
+environment terms in `shadeEnvironment` — the diffuse irradiance at full
+strength, the specular reflection at reduced strength.
+
+Specular wants its own treatment because a mirror in a crevice still reflects
+whatever is in front of it; fully occluding it reads as dirt rather than as
+shade. Either a mild `mix(1.0, ao, 0.5)`, or Lagarde's horizon-based specular
+occlusion if the simple version reads wrong on the metals in `material_grid`.
+Start simple.
+
+**Do not retune `SKY_IRRADIANCE_FACTOR` or `GROUND_ALBEDO` in the same change.**
+Both exist to fake this occlusion and both should eventually rise toward 1.0 now
+that it is computed. But raising them raises the absolute light level, and per
+`VISUAL_HANDOFF.md` that level is pinned by content: the level albedos are
+saturated primaries authored against the current lighting, and pushing them up
+the tonemap's shoulder washes the game out. Land AO with the discounts
+unchanged — the frame gets slightly darker, only in creases — then judge the
+rebalance separately, on `palette`, as its own change.
+
+## Rebuilds and destruction
+
+A chunk's AO is baked from voxels within its halo, so editing a voxel changes
+the AO of vertices up to the halo distance away — including in the *neighbouring*
+chunk when the edit is near a boundary.
+
+The existing dirty-chunk logic already handles this, and it is worth being clear
+why rather than assuming it. `damage_sphere` marks every chunk the sphere
+touches, and a chunk whose mesh is rebuilt rebuilds its AO grid from current
+voxel data. The gap is an edit *just inside* chunk A near the boundary with B:
+A is dirtied, B is not, and B holds vertices within the AO halo of the edit.
+
+Confirm this against the adjacency/dirty-marking path before implementing, and
+if the halo does reach further than the dirty set, expand the dirty region by
+the AO halo (6 voxels) rather than trying to patch AO in place. This is the
+"AO radius extension" concern the previous version of this doc raised, and it
+remains correct even though everything around it changed.
+
+Fresh craters getting correct AO is not a nice-to-have: it is most of the value.
+A grenade that carves a hollow and leaves it flatly lit looks like a decal.
+
+## Parameters
+
+All on the AO baker, not in a global config struct.
+
+| Name | Start | Meaning |
+|---|---|---|
+| `resolution_divisor` | 2 | Grid spacing as a multiple of `voxel_size`. |
+| `blur_radius` | 2 cells | Kernel reach; drives the halo. |
+| `normal_offset` | ~1 voxel | How far off the surface the field is read. |
+| `strength` | 0.7 | Darkness of a fully enclosed crease. The only aesthetic dial. |
+
+`blur_radius` and `normal_offset` determine the halo, and the halo determines
+correctness — they are not free to tune at runtime. Deriving the halo from them
+in one place, rather than writing both numbers down twice, is what stops the two
+drifting apart.
+
+## Tests
+
+Pure-Rust, against analytic voxel fields, in the baker's module:
+
+- **`flat_ground_is_unoccluded`** — the calibration test. A half-space reads
+  `ao ≈ 1.0`. If `B` is wrong, this is what catches it, and its failure mode
+  (everything uniformly grey) is otherwise easy to mistake for correct output.
+- **`enclosed_point_reaches_full_strength`** — fully surrounded reads
+  `ao ≈ 1 - strength`.
+- **`inside_corner_darkens_toward_the_crease`** — two perpendicular planes;
+  monotonic darkening approaching the line.
+- **`convex_edge_is_not_darkened`** — the outside of a corner stays at 1.0.
+  Guards against a sign error that would invert the whole effect.
+- **`neighbouring_chunks_agree_on_a_shared_vertex`** — the seam invariant. Mesh
+  two adjacent chunks; a vertex on the shared plane gets bit-identical AO from
+  both. This is the test the `sdf-ao` branch did not have.
+- **`no_read_falls_outside_the_grid`** — exercise a surface at the chunk
+  boundary with the `debug_assert` armed.
+- **`rebaking_is_deterministic`** — same voxels twice, identical output.
+- **`a_crater_darkens_after_damage`** — regression against AO going stale.
+
+## Staging
+
+Four steps, ordered so the performance question is answered before any visual
+risk is taken.
+
+1. **`src/terrain/ao.rs` — `OcclusionGrid`, standalone.** Build from a
+   `VoxelSource` at a given resolution, separable blur, calibrated trilinear
+   sample. No integration, no rendering change. All the tests above except the
+   last three.
+2. **Bake it, store it, measure it.** Wire into `generate_block`, add
+   `MeshBuildTimings::ambient_occlusion`, add `ao` to `Vertex` and
+   `MarchingCubesMesh`. The shader still ignores it, so **nothing looks
+   different and the whole cost is visible on the timing overlay.** This is the
+   checkpoint: if the number is bad, only two files' worth of work is at risk.
+3. **Consume it in the shader.** `triangle.vert` / `triangle.frag`, recompile
+   SPIR-V, plus a `terrain_ao` bench scene whose last tile is the same frame
+   with AO off.
+4. **Rebalance the environment discounts.** Separate, optional, judged on
+   `palette`.
+
+### A prerequisite for step 3
+
+`visual_bench` has **no marching-cubes terrain scene**. Every existing scene is
+props and primitives on a flat slab, which means terrain AO would be
+unfalsifiable from an agent shell — and the bench has already misled twice by
+being too flattering (see `VISUAL_HANDOFF.md`). A scene with real generated
+terrain, a crevice, an overhang and a fresh crater is part of step 3, not a
+follow-up to it.
+
+## Traps carried over from the SDF attempt
+
+Recorded because they cost a whole branch, and because most of them are
+technique-independent.
+
+**Seams were shipped as a known defect and never fixed.** Cone samples were
+clamped to the current leaf and the bake had no halo, both documented as
+"follow-up". A feature whose known defect is visible seams across the whole world
+does not survive first contact. The halo is not an optimisation to defer; it is
+the correctness condition. Here it is sized up front and asserted.
+
+**AO silently vanished over large areas.** Chunks were mesh-octree leaves, which
+subdivide by triangle count — a large flat low-triangle region became one leaf
+too big for its atlas slot and was logged-and-skipped. Flat ground, where AO's
+absence is most obvious. The fix, structurally, is to bind AO to the fixed
+32³-voxel chunk lattice rather than to anything adaptive, which the chunked
+terrain rework has since made the natural choice anyway.
+
+**A single hand-tuned strength constant with no calibration.** `k = 1.6`,
+"tuned by eye". With no baseline subtraction there is no value of `k` that makes
+both flat ground and a crevice correct. Calibrate, then tune.
+
+**The first real-level run was a crash, not a picture.** Nothing about the
+approach was validated before a large amount of GPU residency machinery existed
+to support it. Step 1 above is standalone and testable for exactly this reason.

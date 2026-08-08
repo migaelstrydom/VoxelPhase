@@ -9,6 +9,8 @@ pub mod registry;
 pub mod shadow_tuning;
 pub mod shadows;
 pub mod sun_sweep;
+pub mod terrain_forms;
+pub mod voxel_terrain;
 
 pub use grade_sweep::GradeSweep;
 pub use material_grid::MaterialGrid;
@@ -18,3 +20,4 @@ pub use registry::{all_scenes, find_scene};
 pub use shadow_tuning::ShadowTuning;
 pub use shadows::Shadows;
 pub use sun_sweep::SunSweep;
+pub use terrain_forms::TerrainForms;
