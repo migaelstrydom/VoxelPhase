@@ -23,6 +23,7 @@
 
 use nalgebra::Point3;
 
+use super::csg::carve_density;
 use super::mesh_octree::{MeshOctree, TriangleRef};
 use super::svo::SparseVoxelOctree;
 use super::voxel::Voxel;
@@ -124,20 +125,63 @@ impl Chunk {
         self.dirty = true;
     }
 
-    /// Damage voxels within a sphere. Returns true if any voxel was destroyed.
+    /// Damage voxels within a sphere, cutting the density field with the
+    /// sphere's signed distance. Returns true if any voxel changed.
+    ///
+    /// The cut is a distance, not a flag, and that is the whole point. Writing
+    /// whole air voxels at a saturated -1.0 leaves a step in the density field
+    /// beside the crater on ground that is geometrically flat; marching cubes
+    /// takes its normals from that field's gradient and reads the step as a
+    /// slope, tilting the normals of flat ground for about two voxels around
+    /// every blast. Carving by distance is what `csg::carve_with_sdf` already
+    /// does for generated caves and overhangs — see [`carve_density`].
     pub fn damage_sphere(&mut self, center: Point3<f32>, radius: f32, damage: u8) -> bool {
-        let mut any_destroyed = false;
-        self.svo.modify_sphere(center, radius, |_pos, voxel| {
-            let after = voxel.apply_damage(damage);
-            if after.material != voxel.material {
-                any_destroyed = true;
+        let step = self.voxel_size();
+        let mut changed = false;
+
+        self.svo.modify_sphere(center, radius, |sample, voxel| {
+            // Where the cut falls relative to this sample, as a density. The
+            // sphere is the volume being removed, so its signed distance is
+            // negative inside it.
+            let cut = carve_density((sample - center).magnitude() - radius, step);
+            let carved = voxel.density.min(cut);
+            if carved >= voxel.density {
+                // The cell meets the sphere but the sample does not: the blast
+                // reaches no part of the field this voxel carries.
+                return voxel;
             }
-            after
+
+            // Durability decides whether the cut lands at all. Bedrock and
+            // anything that outlasts this damage keeps its geometry intact.
+            if voxel.apply_damage(damage).material == voxel.material {
+                return voxel;
+            }
+
+            changed = true;
+            if carved > 0.0 {
+                // The cut surface passes between this sample and the air: the
+                // voxel is eroded, not removed, and keeps what it is made of.
+                Voxel {
+                    density: carved,
+                    ..voxel
+                }
+            } else {
+                Voxel {
+                    density: carved,
+                    ..Voxel::air()
+                }
+            }
         });
-        if any_destroyed {
+
+        if changed {
             self.dirty = true;
         }
-        any_destroyed
+        changed
+    }
+
+    /// Edge length of one voxel, derived from the bounds this chunk covers.
+    fn voxel_size(&self) -> f32 {
+        (self.bounds.max.x - self.bounds.min.x) / CHUNK_VOXELS as f32
     }
 
     /// Whether this chunk holds any solid voxel.

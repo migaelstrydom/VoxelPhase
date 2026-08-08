@@ -113,6 +113,23 @@ pub(super) fn union_solid(
     );
 }
 
+/// Density a sample takes from a carve surface `sdf_carve` away from it,
+/// negative inside the region being removed.
+///
+/// Combine it with a sample's existing density using `min`, which is CSG
+/// subtraction: the result is solid only where the old solid was and the carve
+/// is not.
+///
+/// Separate from [`carve_with_sdf`] because the runtime destruction path
+/// (`Chunk::damage_sphere`) carves the same way but writes through the chunk's
+/// octree rather than the grid, and the two must encode a cut identically. When
+/// they did not, craters left a step in the density field that marching cubes
+/// read as a slope, tilting the normals of flat ground for two voxels around
+/// every blast.
+pub(super) fn carve_density(sdf_carve: f32, step: f32) -> f32 {
+    (debias(sdf_carve, step) / step).clamp(-1.0, 1.0)
+}
+
 /// Carve a volume out of the grid using SDF-style density.
 ///
 /// `sdf_carve` is the signed distance to the carve surface (negative inside the
@@ -123,9 +140,8 @@ pub(super) fn union_solid(
 /// Debiased on the same terms as [`union_solid`], and in the same direction: a
 /// sample exactly on the carve surface is inside the region being removed.
 pub(super) fn carve_with_sdf(grid: &mut ChunkGrid, pos: Point3<f32>, sdf_carve: f32, step: f32) {
-    let carve_density = (debias(sdf_carve, step) / step).clamp(-1.0, 1.0);
     let existing = grid.get(pos);
-    let new_density = existing.density.min(carve_density);
+    let new_density = existing.density.min(carve_density(sdf_carve, step));
     if new_density >= existing.density {
         return;
     }

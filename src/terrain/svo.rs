@@ -250,7 +250,14 @@ impl SparseVoxelOctree {
     }
 
     /// Modify voxels within a sphere (for explosions, digging).
-    /// Calls the modifier function for each voxel in the sphere.
+    ///
+    /// The modifier is called for every voxel whose *cell* meets the sphere,
+    /// which is a looser set than the voxels the sphere actually reaches. It
+    /// receives the **lattice sample position** the voxel stands for — the
+    /// minimum corner of its cell, since `fill_block` gives a leaf every sample
+    /// in its half-open range — so a modifier that carves by distance measures
+    /// from the point the mesher will read, and can decline the cells the cut
+    /// misses.
     pub fn modify_sphere<F>(&mut self, center: Point3<f32>, radius: f32, mut modifier: F)
     where
         F: FnMut(Point3<f32>, Voxel) -> Voxel,
@@ -294,28 +301,20 @@ impl SparseVoxelOctree {
         if depth >= max_depth {
             // At max depth, modify this voxel
             if let SvoNode::Leaf(voxel) = node {
-                let node_center = node_bounds.center();
-                *voxel = modifier(node_center, *voxel);
+                *voxel = modifier(node_bounds.min, *voxel);
             }
             return;
         }
 
-        // Check if sphere completely contains this node
-        let node_center = node_bounds.center();
-        let node_radius = node_bounds.half_extents().magnitude();
-        let dist_to_center = (node_center - center).magnitude();
-
-        if dist_to_center + node_radius <= radius {
-            if let SvoNode::Leaf(voxel) = node {
-                // Uniform leaf fully inside sphere — modify directly.
-                *voxel = modifier(node_center, *voxel);
-                return;
-            }
-            // Interior node fully inside sphere — fall through to recursive
-            // case so the modifier sees each leaf's actual voxel data. This
-            // ensures callers that track changes (e.g. any_destroyed) observe
-            // every solid→air transition.
-        }
+        // A node the sphere completely contains still recurses to max depth,
+        // even when it is a uniform leaf that one call could rewrite whole.
+        // The modifier is per-sample: it may encode each sample's distance to
+        // the cut, and one answer cannot stand for a subtree of samples that
+        // are at different distances. Callers that track changes (e.g.
+        // any_destroyed) likewise need to see every leaf's actual voxel data.
+        //
+        // The carved interior is uniform once written, so `try_collapse` on the
+        // way out restores the compact representation this gives up going in.
 
         // Need to subdivide and recurse
         if let SvoNode::Leaf(leaf_voxel) = node {

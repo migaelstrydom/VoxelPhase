@@ -78,7 +78,21 @@ pub struct Voxel {
 }
 
 impl Voxel {
-    /// Create an air voxel.
+    /// Create an air voxel: empty space, a full voxel away from any surface.
+    ///
+    /// The saturated `-1.0` is right for *empty* space and wrong for *freshly
+    /// cut* space, and the difference is not cosmetic. Density is a signed
+    /// distance to the surface in voxels ([`Voxel::density`]), so a sample
+    /// beside a fresh cut carries how far the cut is from it — a fraction —
+    /// while this carries "nothing near". Stamping this into a carved region
+    /// puts a step in the field where the geometry is smooth, and marching
+    /// cubes reads the gradient of that step as a slope.
+    ///
+    /// So this constructor is not the thing to change. Callers that remove
+    /// solid must compute the distance to the surface they are cutting with —
+    /// `csg::carve_density` — and pass it in, as `Chunk::damage_sphere` and
+    /// `csg::carve_with_sdf` both do. Air that was always air is what this is
+    /// for, and for that the value is correct.
     pub fn air() -> Self {
         Self {
             density: -1.0,
@@ -98,6 +112,10 @@ impl Voxel {
 
     /// Apply damage, returning the updated voxel. Indestructible voxels are unaffected.
     /// If health reaches zero the voxel becomes air.
+    ///
+    /// This answers *whether* a voxel survives, not *what shape* is left: the
+    /// air it returns is saturated, and a caller cutting a surface through the
+    /// field must write the carved density itself. See [`Voxel::air`].
     pub fn apply_damage(mut self, damage: u8) -> Self {
         if self.health == INDESTRUCTIBLE || self.health == 0 {
             return self;

@@ -677,6 +677,7 @@ mod tests {
     use crate::level::{TerrainFeature, VolumeFeature};
     use crate::terrain::chunk::CHUNK_VOXELS;
     use crate::terrain::chunk_grid::ChunkGrid;
+    use crate::terrain::csg::union_solid;
     use crate::terrain::frame::SegmentFrame;
     use crate::terrain::voxel::{Voxel, VoxelMaterial};
     use crate::terrain::Anchor;
@@ -684,15 +685,43 @@ mod tests {
     /// A solid slab from `min` to `max` inclusive, in **segment-local**
     /// coordinates. Authoring locally is the point: the same grid contents get
     /// placed at several frames, which is what relocatability means.
+    /// Signed distance to an axis-aligned box, negative inside it.
+    fn box_sdf(p: Point3<f32>, min: Point3<f32>, max: Point3<f32>) -> f32 {
+        let centre = nalgebra::center(&min, &max);
+        let half = (max - min) * 0.5;
+        let q = (p - centre).abs() - half;
+        q.map(|c| c.max(0.0)).magnitude() + q.max().min(0.0)
+    }
+
     fn slab_grid(voxel_size: f32, min: Point3<f32>, max: Point3<f32>) -> ChunkGrid {
         let mut grid = ChunkGrid::new(voxel_size);
-        let mut x = min.x;
-        while x <= max.x {
-            let mut y = min.y;
-            while y <= max.y {
-                let mut z = min.z;
-                while z <= max.z {
-                    grid.set(Point3::new(x, y, z), Voxel::solid(VoxelMaterial::Rock, 1));
+
+        // Written through `union_solid`, at its signed distance, and sampled one
+        // voxel beyond every face so the samples just outside the slab carry
+        // their distance to it too.
+        //
+        // Filling whole solid voxels instead is the mistake the destruction path
+        // used to make in the other direction: a field of saturated densities
+        // holds no sub-voxel surface position, and both marching cubes and the
+        // occlusion bake read that position. A slab authored that way meshes
+        // half a voxel out and bakes as though its flat top were partly
+        // enclosed, which is why the occlusion assertions against it used to
+        // need such loose floors.
+        let mut x = min.x - voxel_size;
+        while x <= max.x + voxel_size {
+            let mut y = min.y - voxel_size;
+            while y <= max.y + voxel_size {
+                let mut z = min.z - voxel_size;
+                while z <= max.z + voxel_size {
+                    let p = Point3::new(x, y, z);
+                    union_solid(
+                        &mut grid,
+                        p,
+                        box_sdf(p, min, max),
+                        voxel_size,
+                        VoxelMaterial::Rock,
+                        1,
+                    );
                     z += voxel_size;
                 }
                 y += voxel_size;
@@ -1068,14 +1097,13 @@ mod tests {
                 .fold(f32::MAX, f32::min)
         };
 
-        // Not ~1.0, because `slab_grid` writes whole solid voxels at density
-        // 1.0 rather than the signed distances `csg::union_solid` authors, and
-        // occlusion reads that magnitude to locate the surface within a cell.
-        // Generated terrain reads higher on ground this flat; a hand-built slab
-        // is the worst case for it, which is why the floor here is loose.
+        // Tight, and it is allowed to be: `slab_grid` authors the slab through
+        // `union_solid` at its signed distance, so the flat top carries the
+        // sub-voxel surface position the occlusion bake reads. This floor was
+        // 0.8 while the helper filled whole solid voxels instead.
         let before = over_the_crater(&world);
         assert!(
-            before > 0.8,
+            before > 0.99,
             "flat ground over the crater site started at {before}, not open"
         );
 
@@ -1087,6 +1115,89 @@ mod tests {
             after < before - 0.05,
             "the crater bakes at {after}, barely darker than the {before} it replaced"
         );
+    }
+
+    /// Ground beside a crater is flat, and its normals have to say so.
+    ///
+    /// The artefact this guards: destruction used to write whole air voxels at
+    /// a saturated -1.0, which put a step into the density field horizontally,
+    /// beside the crater, on ground that is geometrically flat. Marching cubes
+    /// derives its normals from that field's gradient, so it read the step as a
+    /// slope: vertices whose heights agreed to within a centimetre carried
+    /// normals tilted by up to 36 degrees, and the terrain shader duly shaded
+    /// flat ground as though it fell away into the hole.
+    ///
+    /// Both voxel sizes, because the contaminated band was about two voxels
+    /// wide *in voxels* and therefore four times wider in metres at the game's
+    /// 1 m voxels than at the visual bench's 0.25 m. That scaling is why the
+    /// bench sheets looked clean while the game did not, and why a single-scale
+    /// test could have passed with the bug still in.
+    #[test]
+    fn flat_ground_beside_a_crater_keeps_its_normals() {
+        use crate::terrain::generation::generate_terrain;
+        use crate::terrain::voxel::DurabilityConfig;
+        use crate::terrain::{ChunkGrid, SegmentFrame};
+
+        const BLAST_RADIUS: f32 = 4.0;
+
+        for voxel_size in [1.0_f32, 0.5, 0.25] {
+            let terrain = crate::level::Terrain {
+                voxel_size,
+                bounds: crate::level::Extent {
+                    min: (-24.0, -12.0, -24.0),
+                    max: (24.0, 12.0, 24.0),
+                },
+                base_height: 0.0,
+                material_layers: Vec::new(),
+                features: Vec::new(),
+                volumes: Vec::new(),
+            };
+            let mut grid = ChunkGrid::new(voxel_size);
+            generate_terrain(
+                &mut grid,
+                &terrain,
+                &DurabilityConfig::default(),
+                &terrain.bounds.to_aabb(),
+            );
+            let mut world = world_of(SegmentFrame::identity(), grid);
+
+            let ground_height = world
+                .render_vertices()
+                .iter()
+                .map(|v| v.pos.y)
+                .fold(f32::MIN, f32::max);
+
+            world.damage_sphere(Point3::new(0.0, 0.0, 0.0), BLAST_RADIUS, 255);
+            world.update();
+
+            // Undisturbed ground: level with the original surface, and clear of
+            // the rim, whose curve is a real slope that a smooth normal should
+            // follow. The cut reaches about a voxel past the blast radius.
+            let mut worst: Option<&Vertex> = None;
+            for v in world.render_vertices() {
+                let radius = (v.pos.x * v.pos.x + v.pos.z * v.pos.z).sqrt();
+                if (v.pos.y - ground_height).abs() > 0.01
+                    || radius < BLAST_RADIUS + 2.0 * voxel_size
+                    || radius > 16.0
+                {
+                    continue;
+                }
+                if worst.is_none_or(|w| v.normal.y < w.normal.y) {
+                    worst = Some(v);
+                }
+            }
+
+            let worst = worst.expect("no flat ground was found around the crater");
+            assert!(
+                worst.normal.y > 0.99,
+                "at {voxel_size} m voxels, flat ground {:.2} m from a {BLAST_RADIUS} m crater \
+                 carries a normal tilted {:.1} degrees off vertical ({:?} at {:?})",
+                (worst.pos.x * worst.pos.x + worst.pos.z * worst.pos.z).sqrt(),
+                worst.normal.y.acos().to_degrees(),
+                worst.normal,
+                worst.pos,
+            );
+        }
     }
 
     /// Two segments placed side by side answer as one world: each query reaches
@@ -1164,6 +1275,7 @@ mod tests {
     fn meshed(terrain: &crate::level::Terrain) -> TerrainWorld {
         use crate::terrain::generation::generate_terrain;
         use crate::terrain::voxel::DurabilityConfig;
+        use crate::terrain::{ChunkGrid, SegmentFrame};
 
         let mut grid = ChunkGrid::new(terrain.voxel_size);
         generate_terrain(
@@ -1267,6 +1379,7 @@ mod tests {
     fn test_arena_generates_sparsely_at_its_declared_voxel_size() {
         use crate::terrain::generation::generate_terrain;
         use crate::terrain::voxel::DurabilityConfig;
+        use crate::terrain::{ChunkGrid, SegmentFrame};
 
         let level = crate::level::load_level(std::path::Path::new("levels/test_arena.level.ron"))
             .expect("test_arena should load");
