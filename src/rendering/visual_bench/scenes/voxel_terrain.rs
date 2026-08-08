@@ -151,6 +151,20 @@ impl TerrainTableau {
         SceneMesh::new(self.vertices.clone(), self.indices.clone())
             .with_surface(SurfaceParams::MATTE)
     }
+
+    /// The same geometry with every vertex reading as fully open to the sky.
+    ///
+    /// The control for any AO comparison. Neutralising the bake in the vertex
+    /// data rather than in the shader means the two tiles go down the same
+    /// pipeline with the same shaders, so nothing but the occlusion term
+    /// differs between them.
+    pub fn mesh_without_occlusion(&self) -> SceneMesh {
+        let mut vertices = self.vertices.clone();
+        for vertex in &mut vertices {
+            vertex.ao = 1.0;
+        }
+        SceneMesh::new(vertices, self.indices.clone()).with_surface(SurfaceParams::MATTE)
+    }
 }
 
 /// Generate, mesh and damage the plot, returning its world-space geometry.

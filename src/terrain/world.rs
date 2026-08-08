@@ -1068,9 +1068,14 @@ mod tests {
                 .fold(f32::MAX, f32::min)
         };
 
+        // Not ~1.0, because `slab_grid` writes whole solid voxels at density
+        // 1.0 rather than the signed distances `csg::union_solid` authors, and
+        // occlusion reads that magnitude to locate the surface within a cell.
+        // Generated terrain reads higher on ground this flat; a hand-built slab
+        // is the worst case for it, which is why the floor here is loose.
         let before = over_the_crater(&world);
         assert!(
-            before > 0.9,
+            before > 0.8,
             "flat ground over the crater site started at {before}, not open"
         );
 

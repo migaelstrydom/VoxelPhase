@@ -66,6 +66,11 @@ fn occupancy(density: f32) -> f32 {
 /// baseline is the mean over that phase, and the residual is the ripple.
 const BASELINE_PHASE_STEPS: usize = 32;
 
+/// Sub-cell positions averaged over on each of the two axes when deriving the
+/// fully-occluded reference. Fewer than [`BASELINE_PHASE_STEPS`] because the
+/// cost is the square of it and the reference is one number, not a field.
+const CORNER_PHASE_STEPS: usize = 8;
+
 /// How the occlusion field is built and read.
 ///
 /// `blur_radius` and `normal_offset` between them determine the halo, and the
@@ -131,6 +136,9 @@ pub struct OcclusionGrid {
     /// Blurred occupancy above an infinite flat half-space. Subtracting it is
     /// what makes open ground read as unoccluded instead of as uniform grey.
     baseline: f32,
+    /// How far above [`Self::baseline`] a reading has to sit to count as fully
+    /// occluded. See [`fully_occluded_excess`].
+    full_excess: f32,
 }
 
 impl OcclusionGrid {
@@ -174,6 +182,7 @@ impl OcclusionGrid {
 
         let kernel = gaussian_kernel(settings.blur_radius);
         let field = blurred_occupancy(&block, &kernel);
+        let baseline = flat_baseline(&kernel, settings.offset_cells(), divisor);
 
         Self {
             lattice,
@@ -181,7 +190,9 @@ impl OcclusionGrid {
             invalid_margin: settings.blur_radius,
             normal_offset: settings.normal_offset * voxel_size,
             strength: settings.strength,
-            baseline: flat_baseline(&kernel, settings.offset_cells(), divisor),
+            baseline,
+            full_excess: fully_occluded_excess(&kernel, settings.offset_cells(), divisor)
+                - baseline,
         }
     }
 
@@ -189,7 +200,7 @@ impl OcclusionGrid {
     /// enclosed point reaches `1.0 - strength`.
     pub fn occlusion(&self, position: Point3<f32>, normal: Vector3<f32>) -> f32 {
         let occupancy = self.sample(position + normal * self.normal_offset);
-        let excess = (occupancy - self.baseline) / (1.0 - self.baseline);
+        let excess = (occupancy - self.baseline) / self.full_excess;
         1.0 - self.strength * excess.clamp(0.0, 1.0)
     }
 
@@ -349,6 +360,59 @@ fn flat_baseline(kernel: &[f32], offset_cells: f32, divisor: usize) -> f32 {
     total / BASELINE_PHASE_STEPS as f32
 }
 
+/// Blurred occupancy at the reference *fully occluded* surface point: the base
+/// of a wall meeting a floor, a 90° inside corner.
+///
+/// This is the upper calibration point, and leaving it out was the reason the
+/// first working version of this bake was almost invisible. The obvious
+/// normaliser is `1 - baseline` — the range up to a completely solid
+/// neighbourhood — but a *surface* point never approaches that. A point on open
+/// ground reads about 0.48 here and a hard inside corner about 0.81, so the
+/// reachable range is a third of the range being divided by, and every crease
+/// in the game came out about 1.6× too faint.
+///
+/// A 90° corner is a choice, not a derivation, but it is a concrete and common
+/// one: it is a floor meeting a wall, and it means `strength` says what it
+/// claims — how dark that corner goes. Anything more enclosed clamps to it.
+///
+/// The configuration is invariant along the corner's own axis, so the taps on
+/// that axis sum to one and drop out, leaving a 2D sum. Both in-plane phases are
+/// averaged over for the same reason [`flat_baseline`] averages over one.
+fn fully_occluded_excess(kernel: &[f32], offset_cells: f32, divisor: usize) -> f32 {
+    let radius = (kernel.len() / 2) as isize;
+    let phases = CORNER_PHASE_STEPS as f32;
+    let mut total = 0.0;
+
+    for across in 0..CORNER_PHASE_STEPS {
+        for along in 0..CORNER_PHASE_STEPS {
+            // The floor is at height `up` and the wall face at `side`, each
+            // offset within the cell it falls in.
+            let up = across as f32 / phases;
+            let side = along as f32 / phases;
+            let read_height = up + offset_cells;
+
+            // Solid below the floor or beyond the wall, so depth is whichever
+            // of the two the point is further inside — the union of the pair.
+            let depth = |x: f32, y: f32| (up - y).max(side - x);
+
+            let mut sum = 0.0;
+            for (tap_x, wx) in kernel.iter().enumerate() {
+                for (tap_y, wy) in kernel.iter().enumerate() {
+                    let x = side + (tap_x as isize - radius) as f32;
+                    let y = read_height.floor() + (tap_y as isize - radius) as f32;
+                    let lower = occupancy(depth(x, y) * divisor as f32);
+                    let upper = occupancy(depth(x, y + 1.0) * divisor as f32);
+                    let t = read_height - read_height.floor();
+                    sum += wx * wy * (lower + (upper - lower) * t);
+                }
+            }
+            total += sum;
+        }
+    }
+
+    total / (phases * phases)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -464,6 +528,24 @@ mod tests {
             (ao - (1.0 - settings.strength)).abs() < 1e-4,
             "fully enclosed read {ao}, expected {}",
             1.0 - settings.strength
+        );
+    }
+
+    /// The reachable end of the scale, and the one that decides whether any of
+    /// this is visible. A solid neighbourhood is not something a *surface* point
+    /// can have; the base of a wall is, and `strength` is defined against it.
+    /// Calibrating against the unreachable end instead left every crease in the
+    /// game about 1.6x too faint to see.
+    #[test]
+    fn a_wall_meeting_a_floor_reaches_most_of_the_strength() {
+        let settings = OcclusionSettings::default();
+        let grid = bake_with(|p| (4.0 - p.y).max(4.0 - p.x), settings);
+        let ao = grid.occlusion(Point3::new(4.02, 4.0, 4.0), Vector3::y());
+
+        let full = 1.0 - settings.strength;
+        assert!(
+            ao < full + 0.15 * settings.strength,
+            "the base of a wall read {ao}, nowhere near the {full} that full strength means"
         );
     }
 

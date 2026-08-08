@@ -14,6 +14,7 @@ layout(location = 0) in vec4 inColor;
 layout(location = 1) in vec2 inTexCoord;
 layout(location = 2) in vec3 inWorldPos;
 layout(location = 3) in vec3 inNormal;
+layout(location = 4) in float inAo;
 
 layout(location = 0) out vec4 outColor;
 
@@ -34,6 +35,7 @@ void main() {
     surface.view_dir = normalize(scene.camera_pos.xyz - inWorldPos);
     surface.roughness = materialRoughness();
     surface.metallic = materialMetallic();
+    surface.occlusion = inAo;
 
     DirectionalLight sun;
     sun.direction = scene.sun_direction.xyz;
@@ -42,7 +44,8 @@ void main() {
 
     // Only the sun is shadowed. The sky's contribution arrives from the whole
     // hemisphere, so blocking it needs occlusion the shadow map cannot express;
-    // that is what ambient occlusion will be for.
+    // that is what `surface.occlusion` carries, baked per vertex by
+    // `terrain::ao` and applied inside shadeEnvironment.
     float sun_visibility = 1.0 - sunShadow(inWorldPos, surface.normal, sun.direction);
 
     // The sky supplies both hemisphere irradiance and the reflection a glossy

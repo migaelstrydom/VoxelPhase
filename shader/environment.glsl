@@ -117,7 +117,15 @@ vec3 shadeEnvironment(SurfaceSample surface, vec3 sun_dir) {
     vec2 brdf = environmentBrdf(surface.roughness, n_dot_v);
     vec3 specular = radiance * (f0 * brdf.x + brdf.y);
 
-    return diffuse + specular;
+    // Diffuse takes occlusion at full strength: irradiance really does arrive
+    // from the whole hemisphere, and a crease really does see less of it.
+    //
+    // Specular takes it at half. A glossy surface in a crevice still reflects
+    // whatever is in front of it, so occluding the reflection fully reads as
+    // dirt rather than as shade. Half is the simple version; if it looks wrong
+    // on the metals in `material_grid`, horizon-based specular occlusion is the
+    // principled replacement.
+    return diffuse * surface.occlusion + specular * mix(1.0, surface.occlusion, 0.5);
 }
 
 #endif // ENVIRONMENT_GLSL

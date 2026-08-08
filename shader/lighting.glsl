@@ -20,6 +20,12 @@ struct SurfaceSample {
     float roughness;
     /// 0 = dielectric (white highlight), 1 = metal (tinted highlight, no diffuse).
     float metallic;
+    /// Baked ambient occlusion: 1 = fully open to the sky, lower = shaded by
+    /// nearby geometry. Applied to the terms that stand in for light arriving
+    /// from everywhere — sky irradiance, its reflection, and the ambient fill.
+    /// The sun has a shadow map and point lights have their own falloff, so
+    /// neither is occluded again here.
+    float occlusion;
 };
 
 /// An infinitely distant light such as the sun.
@@ -157,8 +163,14 @@ vec3 shadePoint(SurfaceSample surface, PointLight light, vec3 world_pos) {
 }
 
 /// Uniform ambient fill. Metals take no diffuse ambient.
+///
+/// Occluded, like the sky irradiance it sits alongside. Ambient is an author's
+/// stand-in for light arriving from everywhere, so a crease that cannot see the
+/// sky cannot see this either. Leaving it unoccluded would put a floor under
+/// every crease at exactly the fill level that was raised to open the sun's
+/// shadows, and AO would have almost nothing left to darken.
 vec3 shadeAmbient(SurfaceSample surface, vec3 ambient_colour) {
-    return surface.albedo * (1.0 - surface.metallic) * ambient_colour;
+    return surface.albedo * (1.0 - surface.metallic) * ambient_colour * surface.occlusion;
 }
 
 /// Grazing-angle brightening, 0 facing the camera and 1 at the silhouette.
