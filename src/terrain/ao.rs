@@ -1,0 +1,551 @@
+//! Baked ambient occlusion from a blurred occupancy field.
+//!
+//! See `docs/BAKED_AO_DESIGN.md`. In short: build a coarse scalar field holding
+//! *how solid the neighbourhood is*, read it slightly off the surface along the
+//! normal, and calibrate so open flat ground reads as unoccluded.
+//!
+//! ```text
+//!   VoxelSource ──fill_block──▶ VoxelBlock (own lattice, coarser, wider halo)
+//!                                    │
+//!                                    │  occupancy ramp across the surface
+//!                                    ▼
+//!                              separable blur (x, then y, then z)
+//!                                    │
+//!                                    ▼
+//!            occlusion(p, n) ──▶ trilinear read at p + n·offset, calibrated
+//! ```
+//!
+//! Three properties this leans on, each of which is load-bearing:
+//!
+//! - **Occupancy is a ramp across the surface, not a binary test.** See
+//!   [`occupancy`]. A binary test quantises the surface to the occlusion
+//!   lattice, which is coarser than the mesh, and flat ground then ripples by
+//!   more than a third of the field's whole range depending on where it happens
+//!   to fall between samples. Reading the density as the clamped signed
+//!   distance it already is takes that ripple to ~4%.
+//! - **The lattice is anchored to global indices**, exactly as `SampleLattice`
+//!   already anchors the marching-cubes grid. Two blocks evaluating occlusion
+//!   for the same world position therefore read the same lattice points and get
+//!   bit-identical answers, so seams cannot exist rather than being blended out.
+//! - **No read is ever clamped.** The halo is sized from the parameters that
+//!   determine reach, and an out-of-range read is a `debug_assert`, not a
+//!   `clamp`. Clamping is what produced the visible seams on the abandoned
+//!   `sdf-ao` branch, and it did so silently.
+
+use nalgebra::{Point3, Vector3};
+
+use super::voxel_block::{SampleLattice, VoxelBlock, VoxelSource};
+
+/// How solid a lattice sample's neighbourhood is, from its density.
+///
+/// `csg::union_solid` writes `density = clamp(-sdf / voxel_size, -1, 1)`, so
+/// density is the signed distance to the surface *in voxels*, saturating one
+/// voxel out. Reading it as such gives the surface's position to sub-voxel
+/// precision, which is what keeps flat ground from rippling — see the module
+/// docs and `the_field_barely_ripples_as_a_plane_moves_between_samples`.
+///
+/// This deliberately trusts density's magnitude, which
+/// `docs/BAKED_AO_DESIGN.md` originally argued against. The argument was
+/// against assuming an *arbitrary* scale; the scale here is neither arbitrary
+/// nor assumed — it is written down in `csg.rs`, and marching cubes already
+/// trusts exactly the same linear model when it places a vertex along an edge.
+/// AO agreeing with the mesh about where the surface is matters more than
+/// either agreeing with the ideal surface.
+///
+/// The destruction path is the weak case: `apply_damage` returns a whole air
+/// voxel at `-1.0` rather than a partial distance, so a fresh crater's surface
+/// carries no sub-voxel offset. The mesh has the same limitation from the same
+/// cause, so AO and geometry still agree — which is the property that matters.
+fn occupancy(density: f32) -> f32 {
+    (0.5 + 0.5 * density).clamp(0.0, 1.0)
+}
+
+/// Sub-cell positions of the flat plane averaged over when deriving the
+/// baseline. The blurred field is discrete, so the value above flat ground
+/// depends slightly on where the ground falls between lattice samples; the
+/// baseline is the mean over that phase, and the residual is the ripple.
+const BASELINE_PHASE_STEPS: usize = 32;
+
+/// How the occlusion field is built and read.
+///
+/// `blur_radius` and `normal_offset` between them determine the halo, and the
+/// halo determines correctness, so both live here and the halo is derived from
+/// them in exactly one place ([`OcclusionSettings::halo`]).
+#[derive(Debug, Clone, Copy)]
+pub struct OcclusionSettings {
+    /// Grid spacing as a multiple of the voxel size. Occlusion is
+    /// low-frequency, so it does not need the mesh's resolution and the cube of
+    /// the saving is what keeps the bake affordable.
+    pub resolution_divisor: usize,
+    /// Blur kernel reach, in grid cells.
+    pub blur_radius: usize,
+    /// How far off the surface the field is read, in voxels. Reading exactly on
+    /// the surface would report the half-solid value everywhere; stepping out
+    /// along the normal is what recovers the directionality a blur otherwise
+    /// throws away.
+    pub normal_offset: f32,
+    /// How dark a fully enclosed crease goes. The only aesthetic dial.
+    pub strength: f32,
+}
+
+impl Default for OcclusionSettings {
+    fn default() -> Self {
+        Self {
+            resolution_divisor: 2,
+            blur_radius: 2,
+            normal_offset: 1.0,
+            strength: 0.7,
+        }
+    }
+}
+
+impl OcclusionSettings {
+    /// The read offset in grid cells rather than voxels.
+    fn offset_cells(&self) -> f32 {
+        self.normal_offset / self.resolution_divisor as f32
+    }
+
+    /// Samples of halo needed on each side of the owned region.
+    ///
+    /// Three things stack: the blur consumes `blur_radius` samples at every
+    /// boundary, a read may land `offset_cells` outside the owned region, and
+    /// trilinear interpolation needs the sample beyond the one it lands in.
+    fn halo(&self) -> usize {
+        self.blur_radius + self.offset_cells().ceil() as usize + 1
+    }
+}
+
+/// A blurred occupancy field covering one block, plus the calibration that
+/// turns a reading into an occlusion factor.
+pub struct OcclusionGrid {
+    lattice: SampleLattice,
+    /// Blurred occupancy, indexed `(x * dims[1] + y) * dims[2] + z` to match
+    /// [`VoxelBlock`]'s layout.
+    field: Vec<f32>,
+    /// Samples at each boundary whose blurred value read outside the grid and
+    /// is therefore meaningless. Reads must stay inside this inset.
+    invalid_margin: usize,
+    /// Read offset along the normal, in world units.
+    normal_offset: f32,
+    strength: f32,
+    /// Blurred occupancy above an infinite flat half-space. Subtracting it is
+    /// what makes open ground read as unoccluded instead of as uniform grey.
+    baseline: f32,
+}
+
+impl OcclusionGrid {
+    /// Bake the field for a block of `cells` marching-cubes cells whose first
+    /// cell corner is at sample index `first_sample`, matching
+    /// `MeshOctree::generate_block`'s framing of the same region.
+    ///
+    /// The coarse lattice is anchored by dividing the global sample index, so
+    /// both must be divisible by `resolution_divisor` for neighbouring blocks
+    /// to land on one shared lattice.
+    pub fn build<S: VoxelSource>(
+        lattice_origin: Point3<f32>,
+        first_sample: [i32; 3],
+        cells: usize,
+        voxel_size: f32,
+        source: &S,
+        settings: &OcclusionSettings,
+    ) -> Self {
+        let divisor = settings.resolution_divisor;
+        assert!(divisor > 0, "resolution divisor must be positive");
+        assert!(
+            cells.is_multiple_of(divisor),
+            "block of {cells} cells does not divide by the occlusion divisor {divisor}"
+        );
+        assert!(
+            first_sample.iter().all(|i| i % divisor as i32 == 0),
+            "first sample {first_sample:?} is off the occlusion lattice (divisor {divisor})"
+        );
+
+        let halo = settings.halo();
+        let spacing = divisor as f32 * voxel_size;
+        // The owned cells span `cells` voxels, which is `cells / divisor`
+        // coarse cells, and therefore one more sample than that.
+        let owned = cells / divisor + 1;
+        let dims = owned + 2 * halo;
+        let base = first_sample.map(|i| i / divisor as i32 - halo as i32);
+
+        let lattice = SampleLattice::new(lattice_origin, base, spacing, [dims; 3]);
+        let mut block = VoxelBlock::air(lattice);
+        source.fill_block(&mut block);
+
+        let kernel = gaussian_kernel(settings.blur_radius);
+        let field = blurred_occupancy(&block, &kernel);
+
+        Self {
+            lattice,
+            field,
+            invalid_margin: settings.blur_radius,
+            normal_offset: settings.normal_offset * voxel_size,
+            strength: settings.strength,
+            baseline: flat_baseline(&kernel, settings.offset_cells(), divisor),
+        }
+    }
+
+    /// Occlusion factor for a surface point: `1.0` is fully open, and a fully
+    /// enclosed point reaches `1.0 - strength`.
+    pub fn occlusion(&self, position: Point3<f32>, normal: Vector3<f32>) -> f32 {
+        let occupancy = self.sample(position + normal * self.normal_offset);
+        let excess = (occupancy - self.baseline) / (1.0 - self.baseline);
+        1.0 - self.strength * excess.clamp(0.0, 1.0)
+    }
+
+    /// Blurred occupancy at a world position, trilinearly interpolated.
+    fn sample(&self, position: Point3<f32>) -> f32 {
+        let dims = self.lattice.dims();
+        let mut cell = [0usize; 3];
+        let mut frac = [0f32; 3];
+
+        for axis in 0..3 {
+            let local =
+                (position[axis] - self.lattice.axis_position(axis, 0)) / self.lattice.spacing();
+            let floor = local.floor();
+            debug_assert!(
+                floor >= self.invalid_margin as f32
+                    && floor + 1.0 < (dims[axis] - self.invalid_margin) as f32,
+                "occlusion read at {position:?} falls outside the valid grid on axis {axis}; \
+                 the halo is too small for the settings that produced it"
+            );
+            let clamped = (floor as isize).clamp(0, dims[axis] as isize - 2) as usize;
+            cell[axis] = clamped;
+            frac[axis] = (local - clamped as f32).clamp(0.0, 1.0);
+        }
+
+        let corner = |dx: usize, dy: usize, dz: usize| {
+            self.field[((cell[0] + dx) * dims[1] + cell[1] + dy) * dims[2] + cell[2] + dz]
+        };
+        let lerp = |a: f32, b: f32, t: f32| a + (b - a) * t;
+
+        let y0 = lerp(
+            lerp(corner(0, 0, 0), corner(0, 0, 1), frac[2]),
+            lerp(corner(0, 1, 0), corner(0, 1, 1), frac[2]),
+            frac[1],
+        );
+        let y1 = lerp(
+            lerp(corner(1, 0, 0), corner(1, 0, 1), frac[2]),
+            lerp(corner(1, 1, 0), corner(1, 1, 1), frac[2]),
+            frac[1],
+        );
+        lerp(y0, y1, frac[0])
+    }
+
+    /// Blurred occupancy above flat ground, for tests and diagnostics.
+    pub fn baseline(&self) -> f32 {
+        self.baseline
+    }
+}
+
+/// A normalised Gaussian kernel of `2 * radius + 1` taps.
+///
+/// Sigma is half the radius, which puts the outermost tap two standard
+/// deviations out — far enough that truncating it costs little, near enough
+/// that the kernel is not mostly zeros.
+fn gaussian_kernel(radius: usize) -> Vec<f32> {
+    if radius == 0 {
+        return vec![1.0];
+    }
+    let sigma = radius as f32 / 2.0;
+    let mut weights: Vec<f32> = (0..=2 * radius)
+        .map(|i| {
+            let d = i as f32 - radius as f32;
+            (-(d * d) / (2.0 * sigma * sigma)).exp()
+        })
+        .collect();
+    let total: f32 = weights.iter().sum();
+    for w in &mut weights {
+        *w /= total;
+    }
+    weights
+}
+
+/// Occupancy over the block, convolved with `kernel` on each axis in turn.
+///
+/// Taps that fall outside the block are clamped to its edge. That only affects
+/// samples within the kernel radius of a boundary, which is exactly the region
+/// [`OcclusionGrid::invalid_margin`] forbids reading.
+fn blurred_occupancy(block: &VoxelBlock, kernel: &[f32]) -> Vec<f32> {
+    let dims = block.dims();
+    let mut front = Vec::with_capacity(dims[0] * dims[1] * dims[2]);
+    for x in 0..dims[0] {
+        for y in 0..dims[1] {
+            for z in 0..dims[2] {
+                front.push(occupancy(block.get(x, y, z).density));
+            }
+        }
+    }
+
+    let mut back = vec![0.0; front.len()];
+    for axis in 0..3 {
+        blur_axis(&front, &mut back, dims, axis, kernel);
+        std::mem::swap(&mut front, &mut back);
+    }
+    front
+}
+
+/// One separable blur pass along `axis`.
+fn blur_axis(src: &[f32], dst: &mut [f32], dims: [usize; 3], axis: usize, kernel: &[f32]) {
+    let stride = match axis {
+        0 => (dims[1] * dims[2]) as isize,
+        1 => dims[2] as isize,
+        _ => 1,
+    };
+    let extent = dims[axis] as isize;
+    let radius = (kernel.len() / 2) as isize;
+
+    for x in 0..dims[0] {
+        for y in 0..dims[1] {
+            for z in 0..dims[2] {
+                let index = ((x * dims[1] + y) * dims[2] + z) as isize;
+                let along = [x, y, z][axis] as isize;
+                let mut total = 0.0;
+                for (tap, weight) in kernel.iter().enumerate() {
+                    let at = (along + tap as isize - radius).clamp(0, extent - 1);
+                    total += weight * src[(index + (at - along) * stride) as usize];
+                }
+                dst[index as usize] = total;
+            }
+        }
+    }
+}
+
+/// Blurred occupancy `offset_cells` above an infinite flat half-space.
+///
+/// Derived from the kernel rather than tuned, so changing the blur radius
+/// cannot silently re-tint the world. A separable blur of a field that varies
+/// on one axis only is a 1D blur on that axis, so this is a 1D problem.
+///
+/// The plane's position between lattice samples changes the answer slightly, so
+/// the result is the mean over that phase. What is left over is a small ripple
+/// across flat ground, which the tests bound.
+fn flat_baseline(kernel: &[f32], offset_cells: f32, divisor: usize) -> f32 {
+    let radius = (kernel.len() / 2) as isize;
+    // Enough samples either side that every tap of every read is a genuine
+    // half-space value rather than an edge effect.
+    let reach = radius + offset_cells.ceil() as isize + 2;
+
+    let mut total = 0.0;
+    for step in 0..BASELINE_PHASE_STEPS {
+        let surface = step as f32 / BASELINE_PHASE_STEPS as f32;
+        // Positions are in cells, and density measures voxels, so the signed
+        // distance from a sample to the plane scales by the divisor.
+        let at = |i: isize| occupancy((surface - i as f32) * divisor as f32);
+        let blurred = |i: isize| {
+            kernel
+                .iter()
+                .enumerate()
+                .map(|(tap, w)| w * at(i + tap as isize - radius))
+                .sum::<f32>()
+        };
+
+        let read = surface + offset_cells;
+        let floor = read.floor();
+        debug_assert!(floor + 1.0 <= reach as f32);
+        total += blurred(floor as isize)
+            + (blurred(floor as isize + 1) - blurred(floor as isize)) * (read - floor);
+    }
+    total / BASELINE_PHASE_STEPS as f32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::terrain::voxel::{Voxel, VoxelMaterial};
+
+    const VOXEL_SIZE: f32 = 0.25;
+    const CELLS: usize = 32;
+    /// World-space extent of the block the tests bake, `[0, SPAN]` on each axis.
+    const SPAN: f32 = CELLS as f32 * VOXEL_SIZE;
+
+    /// A voxel field defined by depth below the surface, in world units:
+    /// positive inside the solid, negative in the air.
+    ///
+    /// Encoded into density exactly as `csg::union_solid` does, so the tests
+    /// exercise the sub-voxel information the real terrain carries rather than
+    /// a binary field that would hide the very ripple they exist to bound.
+    struct Depth<F>(F);
+
+    impl<F: Fn(Point3<f32>) -> f32> VoxelSource for Depth<F> {
+        fn fill_block(&self, block: &mut VoxelBlock) {
+            let dims = block.dims();
+            for x in 0..dims[0] {
+                for y in 0..dims[1] {
+                    for z in 0..dims[2] {
+                        let depth = (self.0)(block.lattice().position(x, y, z));
+                        let density = (depth / VOXEL_SIZE).clamp(-1.0, 1.0);
+                        if density > 0.0 {
+                            let mut voxel = Voxel::solid(VoxelMaterial::Rock, 10);
+                            voxel.density = density;
+                            block.set(x, y, z, voxel);
+                        } else {
+                            let mut voxel = Voxel::air();
+                            voxel.density = density;
+                            block.set(x, y, z, voxel);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn bake<F: Fn(Point3<f32>) -> f32>(depth: F) -> OcclusionGrid {
+        bake_with(depth, OcclusionSettings::default())
+    }
+
+    fn bake_with<F: Fn(Point3<f32>) -> f32>(
+        depth: F,
+        settings: OcclusionSettings,
+    ) -> OcclusionGrid {
+        OcclusionGrid::build(
+            Point3::origin(),
+            [0, 0, 0],
+            CELLS,
+            VOXEL_SIZE,
+            &Depth(depth),
+            &settings,
+        )
+    }
+
+    /// Ground at `height`, as a depth field.
+    fn ground(height: f32) -> impl Fn(Point3<f32>) -> f32 {
+        move |p| height - p.y
+    }
+
+    /// The calibration test. Its failure mode — everything a uniform grey — is
+    /// otherwise easy to mistake for working output.
+    #[test]
+    fn flat_ground_is_unoccluded() {
+        // Several heights, including ones that fall between coarse lattice
+        // samples, because the baseline is a mean over that phase and the
+        // ripple around it is what this bounds.
+        for height in [3.5, 3.6, 3.75, 3.9, 4.0] {
+            let grid = bake(ground(height));
+            for (x, z) in [(2.0, 2.0), (4.0, 5.5), (6.0, 3.0)] {
+                let ao = grid.occlusion(Point3::new(x, height, z), Vector3::y());
+                assert!(
+                    (ao - 1.0).abs() < 0.05,
+                    "flat ground at y={height} read {ao}, expected ~1.0"
+                );
+            }
+        }
+    }
+
+    /// The bound on the artefact that binary occupancy produced: the occlusion
+    /// lattice is coarser than the mesh, so a plane's position between its
+    /// samples must not change how bright the plane is. Failure here reads as
+    /// soft mottling across open ground at the grid's own spacing.
+    #[test]
+    fn the_field_barely_ripples_as_a_plane_moves_between_samples() {
+        let spacing = OcclusionSettings::default().resolution_divisor as f32 * VOXEL_SIZE;
+        let readings: Vec<f32> = (0..8)
+            .map(|step| {
+                let height = 4.0 + step as f32 * spacing / 8.0;
+                bake(ground(height)).occlusion(Point3::new(4.0, height, 4.0), Vector3::y())
+            })
+            .collect();
+
+        let low = readings.iter().cloned().fold(f32::MAX, f32::min);
+        let high = readings.iter().cloned().fold(f32::MIN, f32::max);
+        assert!(
+            high - low < 0.06,
+            "flat ground varies by {:.3} over one grid cell of phase: {readings:?}",
+            high - low
+        );
+    }
+
+    #[test]
+    fn enclosed_point_reaches_full_strength() {
+        let settings = OcclusionSettings::default();
+        let grid = bake_with(|_| 10.0, settings);
+        let ao = grid.occlusion(Point3::new(4.0, 4.0, 4.0), Vector3::y());
+        assert!(
+            (ao - (1.0 - settings.strength)).abs() < 1e-4,
+            "fully enclosed read {ao}, expected {}",
+            1.0 - settings.strength
+        );
+    }
+
+    #[test]
+    fn inside_corner_darkens_toward_the_crease() {
+        // Floor at y=4 meeting a wall at x=4, solid in -x. The crease runs
+        // along z at (4, 4).
+        let grid = bake(|p| (4.0 - p.y).max(4.0 - p.x));
+
+        let floor_ao = |x: f32| grid.occlusion(Point3::new(x, 4.0, 4.0), Vector3::y());
+        let readings: Vec<f32> = [7.0, 6.0, 5.0, 4.6, 4.3]
+            .iter()
+            .map(|&x| floor_ao(x))
+            .collect();
+
+        for pair in readings.windows(2) {
+            assert!(
+                pair[1] < pair[0] + 1e-4,
+                "occlusion should not lighten approaching the crease: {readings:?}"
+            );
+        }
+        assert!(
+            readings[0] - readings[readings.len() - 1] > 0.1,
+            "the crease barely darkened at all: {readings:?}"
+        );
+    }
+
+    /// Guards the sign. Inverted, this whole feature brightens creases and
+    /// darkens the open ground between them.
+    #[test]
+    fn convex_edge_is_not_darkened() {
+        // The outside of the same corner: solid only where both hold.
+        let grid = bake(|p| (4.0 - p.y).min(4.0 - p.x));
+
+        for x in [3.9, 3.7, 3.4, 3.0] {
+            let ao = grid.occlusion(Point3::new(x, 4.0, 4.0), Vector3::y());
+            assert!(
+                ao > 0.95,
+                "convex ground near an outside edge read {ao} at x={x}"
+            );
+        }
+    }
+
+    /// The halo is sized so no legal read leaves the grid. With debug
+    /// assertions armed, a surface hard against the block boundary is where
+    /// that would first fail.
+    #[test]
+    fn no_read_falls_outside_the_grid() {
+        let grid = bake(ground(4.0));
+        for corner in [0.0, SPAN] {
+            for other in [0.0, SPAN] {
+                grid.occlusion(Point3::new(corner, 4.0, other), Vector3::y());
+                grid.occlusion(Point3::new(corner, 0.0, other), -Vector3::y());
+                grid.occlusion(Point3::new(corner, SPAN, other), Vector3::y());
+            }
+        }
+    }
+
+    #[test]
+    fn rebaking_is_deterministic() {
+        let point = Point3::new(4.2, 4.0, 5.1);
+        let corner = |p: Point3<f32>| (4.0 - p.y).max(4.0 - p.x);
+        let first = bake(corner).occlusion(point, Vector3::y());
+        let second = bake(corner).occlusion(point, Vector3::y());
+        assert_eq!(first, second);
+    }
+
+    /// The baseline exists to be derived, not typed in. If it stops tracking
+    /// the kernel, flat ground stops reading as open.
+    #[test]
+    fn the_baseline_tracks_the_blur_radius() {
+        let baseline_of = |radius| {
+            let settings = OcclusionSettings {
+                blur_radius: radius,
+                ..OcclusionSettings::default()
+            };
+            bake_with(ground(4.0), settings).baseline()
+        };
+        assert!(baseline_of(1) != baseline_of(3));
+        for radius in 1..=3 {
+            let b = baseline_of(radius);
+            assert!((0.0..1.0).contains(&b), "baseline {b} is not a fraction");
+        }
+    }
+}

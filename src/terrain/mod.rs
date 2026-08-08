@@ -11,6 +11,7 @@
 
 mod adjacency;
 mod anchor;
+pub mod ao;
 mod chunk;
 mod chunk_grid;
 mod csg;

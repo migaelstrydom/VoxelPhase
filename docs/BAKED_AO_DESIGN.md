@@ -72,18 +72,50 @@ an open flat plane reads as unoccluded.
 
 Three steps.
 
-**1. Occupancy.** Each sample of the occlusion grid is `1.0` if its voxel's
-density is above the iso level, `0.0` otherwise. Binary, deliberately.
+**1. Occupancy.** Each sample of the occlusion grid is a ramp across the
+surface:
 
-This is the single most important decision in the doc and it is the one the SDF
-branch spent 4,000 lines avoiding. Voxel density is *not* a distance: its
-gradient magnitude depends on how the terrain generator, the CSG ops and the
-destruction path each happened to author it. Any formula that reads a magnitude
-off the density field inherits that arbitrariness and will behave differently on
-generated terrain than on a grenade crater. A binary test reads only the sign,
-which is the one thing the field is guaranteed to mean. The smoothing that
-density-weighting would have bought comes from the blur instead, where its
-kernel is explicit and tunable.
+```
+   occupancy = saturate(0.5 + 0.5 * density)
+```
+
+**This replaces the binary test the first version of this doc specified.** That
+version was wrong, and step 1 caught it — the record is kept here because the
+reasoning behind it is still half right and would otherwise be re-derived.
+
+The original argument was that density is not a distance, that its gradient
+magnitude depends on how the generator, the CSG ops and the destruction path
+each happened to author it, and that only its *sign* is guaranteed to mean
+anything. The first half of that is a real hazard. The conclusion was not:
+`csg::union_solid` writes `clamp(-sdf / voxel_size, -1, 1)`, so density is the
+signed distance to the surface in voxels, saturating one voxel out. The scale is
+neither arbitrary nor assumed; it is written down. And marching cubes already
+trusts precisely the same linear model every time it places a vertex along an
+edge with `lerp_t(d0, d1, iso)`.
+
+What a binary test costs is severe, because occupancy is evaluated on a lattice
+*coarser than the mesh*. Reading only the sign quantises the surface to that
+coarse lattice, so a flat plane's brightness depends on where it happens to fall
+between samples. Measured over one cell of phase, at `R = 2` and a half-cell
+offset:
+
+| occupancy | range of the blurred read across one cell of phase |
+|---|---|
+| binary | **0.320** |
+| density ramp | **0.040** |
+
+Against a usable range of `1 - B ≈ 0.68`, the binary figure is roughly half the
+effect's entire dynamic range appearing as soft mottling on open ground, at the
+grid's own spacing. `the_field_barely_ripples_as_a_plane_moves_between_samples`
+bounds it at 0.06 in the final AO value.
+
+The destruction path is the weak case and worth being clear about:
+`Voxel::apply_damage` returns a whole `Voxel::air()` at `-1.0` rather than a
+partial distance, so a fresh crater's surface carries no sub-voxel offset. The
+mesh has that same limitation from that same cause, so AO and geometry still
+agree about where the surface is — which is the property that actually matters.
+If crater AO ever looks quantised, the fix is in `apply_damage`, and it fixes
+the mesh at the same time.
 
 **2. Blur.** Convolve the occupancy field with a small separable kernel of
 radius `R` grid cells — three 1D passes, `x` then `y` then `z`. The result at a
@@ -152,12 +184,18 @@ generous halo:
 | | full-res MC block | half-res AO grid |
 |---|---|---|
 | owned samples per axis | 33 | 17 |
-| halo per side | 1 | 3 |
-| total per axis | 35 | 23 |
-| **samples** | **42,875** | **12,167** |
+| halo per side | 1 | 4 |
+| total per axis | 35 | 25 |
+| **samples** | **42,875** | **15,625** |
 
-The AO grid is ~28 % of the existing block's sample count, and the MC block is
-untouched. The added work per chunk is one extra `fill_block` over 12k samples,
+The AO grid is ~36 % of the existing block's sample count, and the MC block is
+untouched.
+
+The halo of 4 is derived rather than chosen (`OcclusionSettings::halo`): the
+blur consumes `blur_radius = 2` samples at every boundary, a read may land
+`ceil(offset_cells) = 1` outside the owned region, and trilinear interpolation
+needs the sample beyond the one it lands in. An earlier draft of this table said
+3, by forgetting the last of those. The added work per chunk is one extra `fill_block` over 12k samples,
 three blur passes, and one trilinear read per vertex.
 
 `SparseVoxelOctree::fill_block` is already resolution-agnostic — it works off
@@ -179,10 +217,19 @@ alongside `grid_alloc` / `sample` / `marching_cubes` / `insert` /
 
 If it comes in over budget, the levers in order:
 
-1. **Drop the blur radius.** `R = 1` instead of 2 shrinks the halo to 2 and the
-   grid to 21³, and halves the tap count. Costs crispness in the falloff.
-2. **Quarter resolution.** `spacing = 4 * voxel_size`. Grid drops to ~11³. AO
-   becomes visibly blobby; probably the point at which it stops being worth it.
+1. **Drop the blur radius.** `R = 1` instead of 2 shrinks the halo to 3 and the
+   grid to 23³, and cuts the tap count from 5 to 3 per axis. It costs more than
+   crispness, though: the phase ripple rises from 0.040 to 0.170, because a
+   narrower kernel does less to smooth the surface's quantisation. Treat `R = 1`
+   as the floor and check the ripple test, not just the timing.
+2. ~~**Quarter resolution.**~~ **Not available — measured, not guessed.**
+   `resolution_divisor = 4` was the obvious next lever and it does not work.
+   Density saturates one *voxel* out, so the sub-voxel information that keeps
+   the field stable spans a quarter of a cell at that spacing instead of half of
+   one, and the phase ripple goes to 0.162 at `R = 2` — four times worse than
+   half resolution, and worse than dropping the blur radius. It is not that AO
+   gets blobby; it is that flat ground starts to mottle. Half resolution is the
+   floor.
 3. **Skip chunks with no surface.** A chunk that emitted no triangles needs no
    AO grid at all. Cheap guard, should be in from the start.
 
@@ -343,6 +390,11 @@ Pure-Rust, against analytic voxel fields, in the baker's module:
   both. This is the test the `sdf-ao` branch did not have.
 - **`no_read_falls_outside_the_grid`** — exercise a surface at the chunk
   boundary with the `debug_assert` armed.
+- **`the_field_barely_ripples_as_a_plane_moves_between_samples`** — the bound on
+  the artefact that sank the binary occupancy above. Ground at eight sub-cell
+  heights must not vary by more than 0.06 in AO.
+- **`the_baseline_tracks_the_blur_radius`** — the baseline is derived, not typed
+  in; if it stops tracking the kernel, flat ground stops reading as open.
 - **`rebaking_is_deterministic`** — same voxels twice, identical output.
 - **`a_crater_darkens_after_damage`** — regression against AO going stale.
 
@@ -351,10 +403,11 @@ Pure-Rust, against analytic voxel fields, in the baker's module:
 Four steps, ordered so the performance question is answered before any visual
 risk is taken.
 
-1. **`src/terrain/ao.rs` — `OcclusionGrid`, standalone.** Build from a
-   `VoxelSource` at a given resolution, separable blur, calibrated trilinear
-   sample. No integration, no rendering change. All the tests above except the
-   last three.
+1. ~~**`src/terrain/ao.rs` — `OcclusionGrid`, standalone.**~~ **Done.** Builds
+   from a `VoxelSource`, separable blur, calibrated trilinear read, eight tests.
+   It earned its place as a separate step immediately: the binary-occupancy
+   decision above failed its own calibration test on the first run, and was
+   replaced before anything depended on it.
 2. **Bake it, store it, measure it.** Wire into `generate_block`, add
    `MeshBuildTimings::ambient_occlusion`, add `ao` to `Vertex` and
    `MarchingCubesMesh`. The shader still ignores it, so **nothing looks
