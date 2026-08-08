@@ -10,7 +10,7 @@
 use std::f32::consts::TAU;
 use std::sync::Arc;
 
-use nalgebra::{Point3, Vector2, Vector3, Vector4};
+use nalgebra::{Point3, Vector2, Vector3};
 use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
@@ -210,16 +210,18 @@ fn generate_barrel_mesh(half_height: f32, radius: f32, segments: u32) -> (Vec<Ve
         let u = i as f32 / segments as f32;
 
         vertices.push(Vertex {
-            pos: Vector4::new(cos_a * radius, -half_height, sin_a * radius, 1.0),
+            pos: Vector3::new(cos_a * radius, -half_height, sin_a * radius),
             color: colour_vec,
             tex_coords: Vector2::new(u, 1.0),
             normal,
+            ao: 1.0,
         });
         vertices.push(Vertex {
-            pos: Vector4::new(cos_a * radius, half_height, sin_a * radius, 1.0),
+            pos: Vector3::new(cos_a * radius, half_height, sin_a * radius),
             color: colour_vec,
             tex_coords: Vector2::new(u, 0.0),
             normal,
+            ao: 1.0,
         });
     }
 
@@ -244,18 +246,20 @@ fn generate_cap_meshes(half_height: f32, radius: f32, segments: u32) -> (Vec<Ver
     // Top cap
     let top_center = vertices.len() as u32;
     vertices.push(Vertex {
-        pos: Vector4::new(0.0, half_height, 0.0, 1.0),
+        pos: Vector3::new(0.0, half_height, 0.0),
         color: colour_vec,
         tex_coords: Vector2::new(0.5, 0.5),
         normal: Vector3::y(),
+        ao: 1.0,
     });
     for i in 0..segments {
         let angle = i as f32 * TAU / segments as f32;
         vertices.push(Vertex {
-            pos: Vector4::new(angle.cos() * radius, half_height, angle.sin() * radius, 1.0),
+            pos: Vector3::new(angle.cos() * radius, half_height, angle.sin() * radius),
             color: colour_vec,
             tex_coords: Vector2::new(0.5 + angle.cos() * 0.5, 0.5 + angle.sin() * 0.5),
             normal: Vector3::y(),
+            ao: 1.0,
         });
     }
     for i in 0..segments {
@@ -267,23 +271,20 @@ fn generate_cap_meshes(half_height: f32, radius: f32, segments: u32) -> (Vec<Ver
     // Bottom cap
     let bot_center = vertices.len() as u32;
     vertices.push(Vertex {
-        pos: Vector4::new(0.0, -half_height, 0.0, 1.0),
+        pos: Vector3::new(0.0, -half_height, 0.0),
         color: colour_vec,
         tex_coords: Vector2::new(0.5, 0.5),
         normal: -Vector3::y(),
+        ao: 1.0,
     });
     for i in 0..segments {
         let angle = i as f32 * TAU / segments as f32;
         vertices.push(Vertex {
-            pos: Vector4::new(
-                angle.cos() * radius,
-                -half_height,
-                angle.sin() * radius,
-                1.0,
-            ),
+            pos: Vector3::new(angle.cos() * radius, -half_height, angle.sin() * radius),
             color: colour_vec,
             tex_coords: Vector2::new(0.5 + angle.cos() * 0.5, 0.5 - angle.sin() * 0.5),
             normal: -Vector3::y(),
+            ao: 1.0,
         });
     }
     for i in 0..segments {

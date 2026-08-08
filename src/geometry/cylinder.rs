@@ -4,7 +4,7 @@
 
 use std::f32::consts::TAU;
 
-use nalgebra::{Point3, Vector2, Vector3, Vector4};
+use nalgebra::{Point3, Vector2, Vector3};
 
 use crate::rendering::colour::Colour;
 use crate::rendering::vertex::Vertex;
@@ -54,19 +54,21 @@ pub fn generate_cylinder(
         // Bottom cap vertex
         let bottom_pos = start + offset;
         vertices.push(Vertex {
-            pos: Vector4::new(bottom_pos.x, bottom_pos.y, bottom_pos.z, 1.0),
+            pos: Vector3::new(bottom_pos.x, bottom_pos.y, bottom_pos.z),
             color: colour_vec,
             tex_coords: Vector2::new(i as f32 / segments as f32, 0.0),
             normal,
+            ao: 1.0,
         });
 
         // Top cap vertex
         let top_pos = end + offset;
         vertices.push(Vertex {
-            pos: Vector4::new(top_pos.x, top_pos.y, top_pos.z, 1.0),
+            pos: Vector3::new(top_pos.x, top_pos.y, top_pos.z),
             color: colour_vec,
             tex_coords: Vector2::new(i as f32 / segments as f32, 1.0),
             normal,
+            ao: 1.0,
         });
     }
 
@@ -128,17 +130,19 @@ pub fn generate_capped_cylinder(
 
         // Bottom ring
         vertices.push(Vertex {
-            pos: Vector4::new(cos_a * radius, -half_height, sin_a * radius, 1.0),
+            pos: Vector3::new(cos_a * radius, -half_height, sin_a * radius),
             color: colour_vec,
             tex_coords: Vector2::new(u, 1.0),
             normal,
+            ao: 1.0,
         });
         // Top ring
         vertices.push(Vertex {
-            pos: Vector4::new(cos_a * radius, half_height, sin_a * radius, 1.0),
+            pos: Vector3::new(cos_a * radius, half_height, sin_a * radius),
             color: colour_vec,
             tex_coords: Vector2::new(u, 0.0),
             normal,
+            ao: 1.0,
         });
     }
 
@@ -153,18 +157,20 @@ pub fn generate_capped_cylinder(
     // --- Top cap ---
     let top_center = vertices.len() as u32;
     vertices.push(Vertex {
-        pos: Vector4::new(0.0, half_height, 0.0, 1.0),
+        pos: Vector3::new(0.0, half_height, 0.0),
         color: colour_vec,
         tex_coords: Vector2::new(0.5, 0.5),
         normal: Vector3::y(),
+        ao: 1.0,
     });
     for i in 0..segments {
         let angle = i as f32 * TAU / segments as f32;
         vertices.push(Vertex {
-            pos: Vector4::new(angle.cos() * radius, half_height, angle.sin() * radius, 1.0),
+            pos: Vector3::new(angle.cos() * radius, half_height, angle.sin() * radius),
             color: colour_vec,
             tex_coords: Vector2::new(0.5 + angle.cos() * 0.5, 0.5 + angle.sin() * 0.5),
             normal: Vector3::y(),
+            ao: 1.0,
         });
     }
     for i in 0..segments {
@@ -176,23 +182,20 @@ pub fn generate_capped_cylinder(
     // --- Bottom cap ---
     let bot_center = vertices.len() as u32;
     vertices.push(Vertex {
-        pos: Vector4::new(0.0, -half_height, 0.0, 1.0),
+        pos: Vector3::new(0.0, -half_height, 0.0),
         color: colour_vec,
         tex_coords: Vector2::new(0.5, 0.5),
         normal: -Vector3::y(),
+        ao: 1.0,
     });
     for i in 0..segments {
         let angle = i as f32 * TAU / segments as f32;
         vertices.push(Vertex {
-            pos: Vector4::new(
-                angle.cos() * radius,
-                -half_height,
-                angle.sin() * radius,
-                1.0,
-            ),
+            pos: Vector3::new(angle.cos() * radius, -half_height, angle.sin() * radius),
             color: colour_vec,
             tex_coords: Vector2::new(0.5 + angle.cos() * 0.5, 0.5 - angle.sin() * 0.5),
             normal: -Vector3::y(),
+            ao: 1.0,
         });
     }
     for i in 0..segments {

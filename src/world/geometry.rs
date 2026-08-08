@@ -1,4 +1,4 @@
-use nalgebra::{Vector2, Vector3, Vector4};
+use nalgebra::{Vector2, Vector3};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
@@ -138,10 +138,11 @@ impl LandscapeLoader {
             .iter()
             .zip(normals.iter())
             .map(|(pos, normal)| Vertex {
-                pos: Vector4::new(pos.x, pos.y, pos.z, 1.0),
+                pos: Vector3::new(pos.x, pos.y, pos.z),
                 color: colour_vec,
                 tex_coords: Vector2::new(0.0, 0.0),
                 normal: *normal,
+                ao: 1.0,
             })
             .collect();
 
@@ -162,28 +163,32 @@ impl LandscapeLoader {
         Model::flat(vec![ModelPart::new(vec![MeshPrimitive {
             vertices: vec![
                 Vertex {
-                    pos: Vector4::new(-size, y_level, -size, 1.0),
+                    pos: Vector3::new(-size, y_level, -size),
                     color: colour_vec,
                     tex_coords: Vector2::new(0.0, 0.0),
                     normal: up_normal,
+                    ao: 1.0,
                 },
                 Vertex {
-                    pos: Vector4::new(-size, y_level, size, 1.0),
+                    pos: Vector3::new(-size, y_level, size),
                     color: colour_vec,
                     tex_coords: Vector2::new(0.0, 1.0),
                     normal: up_normal,
+                    ao: 1.0,
                 },
                 Vertex {
-                    pos: Vector4::new(size, y_level, -size, 1.0),
+                    pos: Vector3::new(size, y_level, -size),
                     color: colour_vec,
                     tex_coords: Vector2::new(1.0, 0.0),
                     normal: up_normal,
+                    ao: 1.0,
                 },
                 Vertex {
-                    pos: Vector4::new(size, y_level, size, 1.0),
+                    pos: Vector3::new(size, y_level, size),
                     color: colour_vec,
                     tex_coords: Vector2::new(1.0, 1.0),
                     normal: up_normal,
+                    ao: 1.0,
                 },
             ],
             indices: vec![0, 1, 2, 2, 1, 3],
@@ -394,10 +399,11 @@ impl LandscapeLoader {
                                     .unwrap_or_else(|| Vector3::new(0.0, 1.0, 0.0)); // Default upward normal if not specified
 
                                 let new_vertex = Vertex {
-                                    pos: Vector4::new(pos3d.x, pos3d.y, pos3d.z, 1.0),
+                                    pos: Vector3::new(pos3d.x, pos3d.y, pos3d.z),
                                     color: colour_vec,
                                     tex_coords: tex_coords_2d,
                                     normal: normal3d,
+                                    ao: 1.0,
                                 };
                                 final_vertices.push(new_vertex);
                                 let new_idx = (final_vertices.len() - 1) as u32;

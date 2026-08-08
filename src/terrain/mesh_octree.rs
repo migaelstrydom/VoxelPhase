@@ -22,6 +22,7 @@ use rustc_hash::FxHashSet;
 
 use nalgebra::{Point3, Vector3};
 
+use super::ao::{OcclusionGrid, OcclusionSettings};
 use super::marching_cubes::MarchingCubes;
 use super::voxel_block::{SampleLattice, VoxelBlock, VoxelSource};
 use crate::collision::{Triangle, AABB};
@@ -141,8 +142,8 @@ impl MeshNode {
 
 /// Wall-clock breakdown of one `MeshOctree::generate_block()`.
 ///
-/// The four phases have genuinely different shapes: `sample` and
-/// `marching_cubes` are O(cells³) and fixed per chunk, whereas `insert` and
+/// The phases have genuinely different shapes: `sample`, `marching_cubes` and
+/// `ambient_occlusion` are O(cells³) and fixed per chunk, whereas `insert` and
 /// `neighbor_refs` are O(triangles produced) and therefore vary with how much
 /// surface the chunk happens to contain.
 #[derive(Debug, Clone, Copy, Default)]
@@ -153,6 +154,9 @@ pub struct MeshBuildTimings {
     pub sample: Duration,
     /// Marching cubes over the owned cell range, including vertex conversion.
     pub marching_cubes: Duration,
+    /// Baking the occlusion field and reading it once per emitted vertex. Zero
+    /// for a block that emitted no surface.
+    pub ambient_occlusion: Duration,
     /// Inserting the emitted triangles into the octree.
     pub insert: Duration,
     /// The full neighbour-reference rebuild that follows insertion.
@@ -162,7 +166,12 @@ pub struct MeshBuildTimings {
 impl MeshBuildTimings {
     /// Sum of the measured phases.
     pub fn total(&self) -> Duration {
-        self.grid_alloc + self.sample + self.marching_cubes + self.insert + self.neighbor_refs
+        self.grid_alloc
+            + self.sample
+            + self.marching_cubes
+            + self.ambient_occlusion
+            + self.insert
+            + self.neighbor_refs
     }
 
     /// Accumulate another block's timings into this one.
@@ -170,6 +179,7 @@ impl MeshBuildTimings {
         self.grid_alloc += other.grid_alloc;
         self.sample += other.sample;
         self.marching_cubes += other.marching_cubes;
+        self.ambient_occlusion += other.ambient_occlusion;
         self.insert += other.insert;
         self.neighbor_refs += other.neighbor_refs;
     }
@@ -244,12 +254,12 @@ impl MeshOctree {
             marching_cubes.generate_range(&grid, [1, 1, 1], [cells + 1, cells + 1, cells + 1]);
 
         // Convert to vertices and insert into octree
-        let vertices: Vec<Vertex> = mesh
+        let mut vertices: Vec<Vertex> = mesh
             .positions
             .iter()
             .enumerate()
             .map(|(i, pos)| Vertex {
-                pos: nalgebra::Vector4::new(pos.x, pos.y, pos.z, 1.0),
+                pos: nalgebra::Vector3::new(pos.x, pos.y, pos.z),
                 color: nalgebra::Vector4::new(
                     mesh.colors[i][0],
                     mesh.colors[i][1],
@@ -258,9 +268,30 @@ impl MeshOctree {
                 ),
                 tex_coords: nalgebra::Vector2::new(pos.x * 0.1, pos.z * 0.1),
                 normal: mesh.normals[i],
+                ao: 1.0,
             })
             .collect();
         timings.marching_cubes = t_mc.elapsed();
+
+        // A block that emitted no surface needs no occlusion field, and skipping
+        // it costs nothing to check. Empty blocks are common enough — open sky
+        // above the terrain, solid rock below it — for this to matter.
+        if !vertices.is_empty() {
+            let t_ao = Instant::now();
+            let settings = OcclusionSettings::default();
+            let occlusion = OcclusionGrid::build(
+                lattice_origin,
+                first_sample,
+                cells,
+                voxel_size,
+                source,
+                &settings,
+            );
+            for vertex in &mut vertices {
+                vertex.ao = occlusion.occlusion(Point3::from(vertex.pos), vertex.normal);
+            }
+            timings.ambient_occlusion = t_ao.elapsed();
+        }
 
         // Insert triangles
         let t_insert = Instant::now();
@@ -1029,10 +1060,11 @@ mod tests {
 
     fn test_vertex(x: f32, y: f32, z: f32) -> Vertex {
         Vertex {
-            pos: nalgebra::Vector4::new(x, y, z, 1.0),
+            pos: nalgebra::Vector3::new(x, y, z),
             color: nalgebra::Vector4::new(1.0, 1.0, 1.0, 1.0),
             tex_coords: nalgebra::Vector2::new(0.0, 0.0),
             normal: nalgebra::Vector3::new(0.0, 1.0, 0.0),
+            ao: 1.0,
         }
     }
 

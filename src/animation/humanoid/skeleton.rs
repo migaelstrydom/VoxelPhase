@@ -2,7 +2,7 @@
 //!
 //! Pure geometry and math, no animation state.
 
-use nalgebra::{Point3, Vector2, Vector3, Vector4};
+use nalgebra::{Point3, Vector2, Vector3};
 
 use crate::animation::config::CharacterRigConfig;
 use crate::animation::pose::PoseFragment;
@@ -684,12 +684,7 @@ fn add_sphere_to_mesh(
     let sphere_indices = generate_sphere_indices(segments, segments);
 
     for mut vert in sphere_verts {
-        vert.pos = Vector4::new(
-            vert.pos.x + center.x,
-            vert.pos.y + center.y,
-            vert.pos.z + center.z,
-            1.0,
-        );
+        vert.pos += center.coords;
         vertices.push(vert);
     }
     indices.extend(sphere_indices.iter().map(|i| i + base_index));
@@ -736,10 +731,9 @@ fn add_foot_capsule_to_mesh(
     let centre = position + axis * FOOT_ANKLE_FORWARD_OFFSET;
 
     for mut vert in caps_verts {
-        let local = Vector3::new(vert.pos.x, vert.pos.y, vert.pos.z);
+        let local = vert.pos;
         let rotated = up * local.x + axis * local.y + lateral * local.z;
-        let world = centre + rotated;
-        vert.pos = Vector4::new(world.x, world.y, world.z, 1.0);
+        vert.pos = (centre + rotated).coords;
         // Rotate the vertex normal with the same basis so lighting
         // reflects the horizontal orientation.
         let n = vert.normal;

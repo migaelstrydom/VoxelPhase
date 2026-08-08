@@ -9,7 +9,7 @@
 use std::f32::consts::TAU;
 use std::sync::Arc;
 
-use nalgebra::{Point3, UnitVector3, Vector2, Vector3, Vector4};
+use nalgebra::{Point3, UnitVector3, Vector2, Vector3};
 use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
@@ -272,10 +272,11 @@ fn generate_disc_mesh(
 
     // Center vertex
     vertices.push(Vertex {
-        pos: Vector4::new(0.0, y, 0.0, 1.0),
+        pos: Vector3::new(0.0, y, 0.0),
         color: colour_vec,
         tex_coords: Vector2::new(0.5, 0.5),
         normal,
+        ao: 1.0,
     });
 
     for i in 0..segments {
@@ -288,10 +289,11 @@ fn generate_disc_mesh(
             0.5 - sin_a * 0.5
         };
         vertices.push(Vertex {
-            pos: Vector4::new(cos_a * radius, y, sin_a * radius, 1.0),
+            pos: Vector3::new(cos_a * radius, y, sin_a * radius),
             color: colour_vec,
             tex_coords: Vector2::new(0.5 + cos_a * 0.5, uv_y),
             normal,
+            ao: 1.0,
         });
     }
 
@@ -322,16 +324,18 @@ fn generate_rim_mesh(half_thickness: f32, radius: f32, segments: u32) -> (Vec<Ve
         let u = i as f32 / segments as f32;
 
         vertices.push(Vertex {
-            pos: Vector4::new(cos_a * radius, -half_thickness, sin_a * radius, 1.0),
+            pos: Vector3::new(cos_a * radius, -half_thickness, sin_a * radius),
             color: colour_vec,
             tex_coords: Vector2::new(u, 1.0),
             normal,
+            ao: 1.0,
         });
         vertices.push(Vertex {
-            pos: Vector4::new(cos_a * radius, half_thickness, sin_a * radius, 1.0),
+            pos: Vector3::new(cos_a * radius, half_thickness, sin_a * radius),
             color: colour_vec,
             tex_coords: Vector2::new(u, 0.0),
             normal,
+            ao: 1.0,
         });
     }
 

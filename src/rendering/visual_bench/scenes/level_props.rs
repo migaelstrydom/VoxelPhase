@@ -6,7 +6,7 @@
 //! geometry and identical albedos, and any difference between their sheets is
 //! the thing under test rather than the props.
 
-use nalgebra::{Matrix4, Vector2, Vector3, Vector4};
+use nalgebra::{Matrix4, Vector2, Vector3};
 
 use crate::geometry::{
     generate_cube_indices, generate_cube_vertices, generate_sphere_indices,
@@ -104,10 +104,11 @@ pub fn ground() -> SceneMesh {
     let vertices: Vec<Vertex> = corners
         .iter()
         .map(|(position, uv)| Vertex {
-            pos: Vector4::new(position.x, position.y, position.z, 1.0),
+            pos: Vector3::new(position.x, position.y, position.z),
             color: colour,
             tex_coords: Vector2::new(uv[0], uv[1]),
             normal,
+            ao: 1.0,
         })
         .collect();
 

@@ -8,7 +8,7 @@
 //! [`DebugOverlays`]. Tessellation into renderable vertices is deferred
 //! to these render functions, keeping the data model allocation-free.
 
-use nalgebra::{Matrix4, Vector2, Vector4};
+use nalgebra::{Matrix4, Vector2, Vector3};
 
 use crate::core::error::EngineResult;
 use crate::debug::{DebugOverlays, DebugShape};
@@ -107,22 +107,25 @@ fn tessellate(shape: &DebugShape) -> (Vec<Vertex>, Vec<u32>, Matrix4<f32>) {
 
             let tri_verts = vec![
                 Vertex {
-                    pos: Vector4::new(v0.x, v0.y, v0.z, 1.0),
+                    pos: Vector3::new(v0.x, v0.y, v0.z),
                     color: colour_vec,
                     tex_coords: Vector2::new(0.0, 0.0),
                     normal,
+                    ao: 1.0,
                 },
                 Vertex {
-                    pos: Vector4::new(v1.x, v1.y, v1.z, 1.0),
+                    pos: Vector3::new(v1.x, v1.y, v1.z),
                     color: colour_vec,
                     tex_coords: Vector2::new(1.0, 0.0),
                     normal,
+                    ao: 1.0,
                 },
                 Vertex {
-                    pos: Vector4::new(v2.x, v2.y, v2.z, 1.0),
+                    pos: Vector3::new(v2.x, v2.y, v2.z),
                     color: colour_vec,
                     tex_coords: Vector2::new(0.0, 1.0),
                     normal,
+                    ao: 1.0,
                 },
             ];
             (tri_verts, vec![0, 1, 2], Matrix4::identity())

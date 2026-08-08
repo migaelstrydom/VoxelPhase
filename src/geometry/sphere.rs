@@ -46,10 +46,11 @@ pub fn generate_sphere_vertices(
             let v = ring as f32 / rings as f32;
 
             vertices.push(Vertex {
-                pos: Vector4::new(position.x, position.y, position.z, 1.0),
+                pos: Vector3::new(position.x, position.y, position.z),
                 color: colour_vec,
                 tex_coords: Vector2::new(u, v),
                 normal,
+                ao: 1.0,
             });
         }
     }
@@ -184,10 +185,11 @@ pub fn generate_magic_sphere_vertices(
             let (r, g, b) = hsv_to_rgb(final_hue, saturation, value.min(1.0));
 
             vertices.push(Vertex {
-                pos: Vector4::new(position.x, position.y, position.z, 1.0),
+                pos: Vector3::new(position.x, position.y, position.z),
                 color: Vector4::new(r, g, b, 1.0),
                 tex_coords: Vector2::new(u, v),
                 normal,
+                ao: 1.0,
             });
         }
     }

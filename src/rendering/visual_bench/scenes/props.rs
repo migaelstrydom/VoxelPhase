@@ -5,7 +5,7 @@
 //! Sweeps answer "what does this parameter do"; this answers "does the frame
 //! look right".
 
-use nalgebra::{Matrix4, Point3, Vector3, Vector4};
+use nalgebra::{Matrix4, Point3, Vector3};
 
 use crate::core::error::EngineResult;
 use crate::geometry::{
@@ -149,10 +149,11 @@ fn ground() -> SceneMesh {
     let vertices: Vec<Vertex> = corners
         .iter()
         .map(|(position, uv)| Vertex {
-            pos: Vector4::new(position.x, position.y, position.z, 1.0),
+            pos: Vector3::new(position.x, position.y, position.z),
             color: colour,
             tex_coords: nalgebra::Vector2::new(uv[0], uv[1]),
             normal,
+            ao: 1.0,
         })
         .collect();
 

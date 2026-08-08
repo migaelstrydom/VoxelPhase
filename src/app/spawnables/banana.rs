@@ -3,7 +3,7 @@
 use std::f32::consts::TAU;
 use std::sync::Arc;
 
-use nalgebra::{Point3, UnitQuaternion, Vector2, Vector3, Vector4};
+use nalgebra::{Point3, UnitQuaternion, Vector2, Vector3};
 use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
@@ -349,10 +349,11 @@ impl BananaShape {
                 let theta = u * TAU;
                 let pos = self.surface(t, theta);
                 vertices.push(Vertex {
-                    pos: Vector4::new(pos.x, pos.y, pos.z, 1.0),
+                    pos: Vector3::new(pos.x, pos.y, pos.z),
                     color: Colour::WHITE.to_vec4(),
                     tex_coords: Vector2::new(u, Self::texture_v(t)),
                     normal: self.normal(t, theta),
+                    ao: 1.0,
                 });
             }
         }
@@ -386,10 +387,11 @@ impl BananaShape {
         let centre = self.centreline(t);
         let centre_index = vertices.len() as u32;
         vertices.push(Vertex {
-            pos: Vector4::new(centre.x, centre.y, centre.z, 1.0),
+            pos: Vector3::new(centre.x, centre.y, centre.z),
             color: Colour::WHITE.to_vec4(),
             tex_coords: Vector2::new(0.5, Self::texture_v(t)),
             normal: outward,
+            ao: 1.0,
         });
 
         let rim_start = vertices.len() as u32;
@@ -397,10 +399,11 @@ impl BananaShape {
             let u = seg as f32 / RADIAL_SEGMENTS as f32;
             let pos = self.surface(t, u * TAU);
             vertices.push(Vertex {
-                pos: Vector4::new(pos.x, pos.y, pos.z, 1.0),
+                pos: Vector3::new(pos.x, pos.y, pos.z),
                 color: Colour::WHITE.to_vec4(),
                 tex_coords: Vector2::new(u, Self::texture_v(t)),
                 normal: outward,
+                ao: 1.0,
             });
         }
 

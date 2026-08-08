@@ -6,7 +6,7 @@
 
 use std::f32::consts::{PI, TAU};
 
-use nalgebra::{Vector2, Vector3, Vector4};
+use nalgebra::{Vector2, Vector3};
 
 use crate::rendering::colour::Colour;
 use crate::rendering::vertex::Vertex;
@@ -105,10 +105,11 @@ pub fn generate_capsule(
             let u = seg as f32 / segments as f32;
 
             vertices.push(Vertex {
-                pos: Vector4::new(px, y, pz, 1.0),
+                pos: Vector3::new(px, y, pz),
                 color: colour_vec,
                 tex_coords: Vector2::new(u, v_coord),
                 normal,
+                ao: 1.0,
             });
         }
     }

@@ -11,7 +11,7 @@
 use std::f32::consts::{FRAC_PI_2, TAU};
 use std::sync::Arc;
 
-use nalgebra::{Point3, Vector2, Vector3, Vector4};
+use nalgebra::{Point3, Vector2, Vector3};
 use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
@@ -227,10 +227,11 @@ fn build_egg_mesh(egg: &EggParams, material: MaterialId) -> Arc<Model> {
     // South pole (bottom).
     let south = 0u32;
     vertices.push(Vertex {
-        pos: Vector4::new(0.0, -egg.half_height, 0.0, 1.0),
+        pos: Vector3::new(0.0, -egg.half_height, 0.0),
         color: colour_vec,
         tex_coords: Vector2::new(0.5, 1.0),
         normal: -Vector3::y(),
+        ao: 1.0,
     });
 
     // Latitude rings from south to north.
@@ -252,10 +253,11 @@ fn build_egg_mesh(egg: &EggParams, material: MaterialId) -> Arc<Model> {
             let u_coord = si as f32 / n as f32;
 
             vertices.push(Vertex {
-                pos: Vector4::new(pos.x, pos.y, pos.z, 1.0),
+                pos: Vector3::new(pos.x, pos.y, pos.z),
                 color: colour_vec,
                 tex_coords: Vector2::new(u_coord, v_coord),
                 normal,
+                ao: 1.0,
             });
         }
     }
@@ -263,10 +265,11 @@ fn build_egg_mesh(egg: &EggParams, material: MaterialId) -> Arc<Model> {
     // North pole (top).
     let north = vertices.len() as u32;
     vertices.push(Vertex {
-        pos: Vector4::new(0.0, egg.half_height, 0.0, 1.0),
+        pos: Vector3::new(0.0, egg.half_height, 0.0),
         color: colour_vec,
         tex_coords: Vector2::new(0.5, 0.0),
         normal: Vector3::y(),
+        ao: 1.0,
     });
 
     let rv = |ri: usize, si: usize| -> u32 { ring_base + (ri * verts_per_ring + si) as u32 };

@@ -206,10 +206,11 @@ pub fn convex_solid_model(
 
         for (j, v) in ordered.iter().enumerate() {
             mesh_verts.push(Vertex {
-                pos: Vector4::new(v.x, v.y, v.z, 1.0),
+                pos: Vector3::new(v.x, v.y, v.z),
                 color: color_v4,
                 tex_coords: face_uvs[j],
                 normal,
+                ao: 1.0,
             });
         }
 

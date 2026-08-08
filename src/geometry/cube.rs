@@ -2,7 +2,7 @@
 //!
 //! Generates axis-aligned box meshes with per-face normals.
 
-use nalgebra::{Vector2, Vector3, Vector4};
+use nalgebra::{Vector2, Vector3};
 
 use crate::rendering::colour::Colour;
 use crate::rendering::vertex::Vertex;
@@ -95,10 +95,11 @@ pub fn generate_cube_vertices(half_extents: Vector3<f32>, colour: Colour) -> Vec
     for (normal, corners) in &faces {
         for (i, pos) in corners.iter().enumerate() {
             vertices.push(Vertex {
-                pos: Vector4::new(pos.x, pos.y, pos.z, 1.0),
+                pos: Vector3::new(pos.x, pos.y, pos.z),
                 color: c,
                 tex_coords: uvs[i],
                 normal: *normal,
+                ao: 1.0,
             });
         }
     }

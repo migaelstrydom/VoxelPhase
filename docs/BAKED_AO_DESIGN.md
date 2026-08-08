@@ -212,8 +212,45 @@ alongside `grid_alloc` / `sample` / `marching_cubes` / `insert` /
 `neighbor_refs`, and include it in `total()` and `add()`. It then flows through
 `ChunkRemeshTimings` and `SegmentTimings` to the existing debug output for free.
 
-**Budget: ≤ 1 ms per chunk remesh.** For reference, a grenade currently costs
-~14.9 ms across all the chunks it touches.
+**Budget: ≤ 1 ms per chunk remesh.** For reference, a grenade cost ~14.9 ms
+across all the chunks it touches before AO.
+
+### What it actually cost
+
+Measured on `test_arena` with `grenade_update_cost_split` (release, `--ignored`),
+after step 2:
+
+```
+grenade 0: 8 chunks dirtied | remesh 13.3 ms | adjacency 6.3 | concat 0.8 | total 20.5 ms
+  remesh split: grid alloc 0.04 | sample 2.84 | marching cubes 2.14
+              | ambient occlusion 5.40 | octree insert 1.07 | neighbour refs 1.09
+```
+
+**0.67 ms per chunk — inside the budget, and now the largest single phase.** A
+grenade goes from ~14.9 ms to ~20.5 ms, about +37 %.
+
+Two things in the cost model above are wrong, and the split says so:
+
+- **Half resolution does not make the fill cheaper.** `SparseVoxelOctree::fill_block`
+  says in its own doc comment that it is proportional to the octree *nodes* a
+  block touches rather than to its samples, and it means it. Measured per
+  sample: 8.4 ns for the marching-cubes block, 44 ns for the occlusion grid —
+  five times worse, which is what you get when the same tree walk is amortised
+  over eight times fewer samples. Coarsening saves the blur, the memory and the
+  per-vertex reads, but not the fill.
+- **The occlusion grid's fill is therefore a bigger job than the MC block's**,
+  despite having 36 % of the samples, because what matters is the *volume* it
+  covers: 50 voxels per axis against the MC block's 34, which is 3.2× the space
+  and so roughly 3.2× the nodes. **Two thirds of that volume is halo.**
+
+The parts that are proportional to samples came in exactly as predicted and are
+not where the money goes: the blur is ~0.20 ms and the per-vertex trilinear
+reads are ~10 ns each, ~0.06 ms for a 6,000-vertex chunk. Rewriting the blur to
+hoist its bounds checks out of the inner loop changed the total by nothing
+measurable, which is the expected outcome once the split is read properly.
+
+So the lever, if this needs to get cheaper, is **the halo's volume** — not the
+resolution, and not the blur. Nothing else on the list is worth trying first.
 
 If it comes in over budget, the levers in order:
 
@@ -408,11 +445,17 @@ risk is taken.
    It earned its place as a separate step immediately: the binary-occupancy
    decision above failed its own calibration test on the first run, and was
    replaced before anything depended on it.
-2. **Bake it, store it, measure it.** Wire into `generate_block`, add
-   `MeshBuildTimings::ambient_occlusion`, add `ao` to `Vertex` and
-   `MarchingCubesMesh`. The shader still ignores it, so **nothing looks
-   different and the whole cost is visible on the timing overlay.** This is the
-   checkpoint: if the number is bad, only two files' worth of work is at risk.
+2. ~~**Bake it, store it, measure it.**~~ **Done.** Wired into `generate_block`
+   after marching cubes, skipping blocks that emitted no surface;
+   `MeshBuildTimings::ambient_occlusion`; `ao` on `Vertex` with `pos` narrowed
+   to `Vector3` to pay for it. The shader still ignores it, so nothing looks
+   different and the whole cost is on the timing overlay. See the measurement
+   above.
+
+   `MarchingCubesMesh` did *not* gain a parallel `ao: Vec<f32>`. AO is a pure
+   function of position, so reading it once per emitted vertex in
+   `generate_block` gets the same answer and leaves marching cubes unaware that
+   occlusion exists.
 3. **Consume it in the shader.** `triangle.vert` / `triangle.frag`, recompile
    SPIR-V, plus a `terrain_ao` bench scene whose last tile is the same frame
    with AO off.

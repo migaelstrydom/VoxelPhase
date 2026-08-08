@@ -611,31 +611,35 @@ fn fluted_column_model(
 
         // Bottom-left (base, angle_a).
         verts.push(Vertex {
-            pos: Vector4::new(base_radius * cos_a, oy, base_radius * sin_a, 1.0),
+            pos: Vector3::new(base_radius * cos_a, oy, base_radius * sin_a),
             color: white,
             tex_coords: Vector2::new(u_a, 0.0),
             normal: na,
+            ao: 1.0,
         });
         // Bottom-right (base, angle_b).
         verts.push(Vertex {
-            pos: Vector4::new(base_radius * cos_b, oy, base_radius * sin_b, 1.0),
+            pos: Vector3::new(base_radius * cos_b, oy, base_radius * sin_b),
             color: white,
             tex_coords: Vector2::new(u_b, 0.0),
             normal: nb,
+            ao: 1.0,
         });
         // Top-right (capital, angle_b).
         verts.push(Vertex {
-            pos: Vector4::new(top_radius * cos_b, height + oy, top_radius * sin_b, 1.0),
+            pos: Vector3::new(top_radius * cos_b, height + oy, top_radius * sin_b),
             color: white,
             tex_coords: Vector2::new(u_b, 1.0),
             normal: nb,
+            ao: 1.0,
         });
         // Top-left (capital, angle_a).
         verts.push(Vertex {
-            pos: Vector4::new(top_radius * cos_a, height + oy, top_radius * sin_a, 1.0),
+            pos: Vector3::new(top_radius * cos_a, height + oy, top_radius * sin_a),
             color: white,
             tex_coords: Vector2::new(u_a, 1.0),
             normal: na,
+            ao: 1.0,
         });
 
         indices.extend_from_slice(&[
@@ -655,10 +659,11 @@ fn fluted_column_model(
         let angle = i as f32 * angle_step;
         let (c, s) = (angle.cos(), angle.sin());
         verts.push(Vertex {
-            pos: Vector4::new(base_radius * c, oy, base_radius * s, 1.0),
+            pos: Vector3::new(base_radius * c, oy, base_radius * s),
             color: white,
             tex_coords: Vector2::new(0.5 + 0.5 * c, 0.5 + 0.5 * s),
             normal: down,
+            ao: 1.0,
         });
     }
     for i in 1..(n as u32 - 1) {
@@ -672,10 +677,11 @@ fn fluted_column_model(
         let angle = i as f32 * angle_step;
         let (c, s) = (angle.cos(), angle.sin());
         verts.push(Vertex {
-            pos: Vector4::new(top_radius * c, height + oy, top_radius * s, 1.0),
+            pos: Vector3::new(top_radius * c, height + oy, top_radius * s),
             color: white,
             tex_coords: Vector2::new(0.5 + 0.5 * c, 0.5 + 0.5 * s),
             normal: up,
+            ao: 1.0,
         });
     }
     for i in 1..(n as u32 - 1) {

@@ -307,10 +307,11 @@ mod tests {
 
     fn test_vertex(x: f32, y: f32, z: f32) -> Vertex {
         Vertex {
-            pos: nalgebra::Vector4::new(x, y, z, 1.0),
+            pos: nalgebra::Vector3::new(x, y, z),
             color: nalgebra::Vector4::new(1.0, 1.0, 1.0, 1.0),
             tex_coords: nalgebra::Vector2::new(0.0, 0.0),
             normal: nalgebra::Vector3::new(0.0, 1.0, 0.0),
+            ao: 1.0,
         }
     }
 

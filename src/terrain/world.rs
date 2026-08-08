@@ -1042,6 +1042,48 @@ mod tests {
         }
     }
 
+    /// Ambient occlusion is baked into the mesh, so destruction has to rebake
+    /// it. The failure this guards is a fresh crater lit exactly like the flat
+    /// ground it was cut from, which reads as a decal rather than a hollow.
+    #[test]
+    fn a_crater_darkens_after_damage() {
+        let mut world = world_of(
+            SegmentFrame::identity(),
+            slab_grid(
+                0.5,
+                Point3::new(-8.0, 0.0, -8.0),
+                Point3::new(8.0, 4.0, 8.0),
+            ),
+        );
+
+        // Only the column over the crater: the slab's own rim is legitimately
+        // occluded and would drown the signal being measured. The whole column
+        // is solid before the blast, so the only surface in it is the flat top.
+        let over_the_crater = |world: &TerrainWorld| {
+            world
+                .render_vertices()
+                .iter()
+                .filter(|v| v.pos.x * v.pos.x + v.pos.z * v.pos.z < 4.0 && v.pos.y > 0.5)
+                .map(|v| v.ao)
+                .fold(f32::MAX, f32::min)
+        };
+
+        let before = over_the_crater(&world);
+        assert!(
+            before > 0.9,
+            "flat ground over the crater site started at {before}, not open"
+        );
+
+        world.damage_sphere(Point3::new(0.0, 4.0, 0.0), 3.0, 255);
+        world.update();
+
+        let after = over_the_crater(&world);
+        assert!(
+            after < before - 0.05,
+            "the crater bakes at {after}, barely darker than the {before} it replaced"
+        );
+    }
+
     /// Two segments placed side by side answer as one world: each query reaches
     /// whichever segment owns the point, and neither leaks into the other.
     #[test]
@@ -1319,10 +1361,11 @@ mod tests {
                 ms(t.total())
             );
             println!(
-                "    remesh split: grid alloc {:.2} | sample {:.2} | marching cubes {:.2} | octree insert {:.2} | neighbour refs {:.2} | collect {:.2} ms",
+                "    remesh split: grid alloc {:.2} | sample {:.2} | marching cubes {:.2} | ambient occlusion {:.2} | octree insert {:.2} | neighbour refs {:.2} | collect {:.2} ms",
                 ms(t.build.grid_alloc),
                 ms(t.build.sample),
                 ms(t.build.marching_cubes),
+                ms(t.build.ambient_occlusion),
                 ms(t.build.insert),
                 ms(t.build.neighbor_refs),
                 ms(t.collect),

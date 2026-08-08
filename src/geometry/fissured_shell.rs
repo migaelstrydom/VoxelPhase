@@ -20,7 +20,7 @@
 
 use std::f32::consts::{PI, TAU};
 
-use nalgebra::{Vector2, Vector3, Vector4};
+use nalgebra::{Vector2, Vector3};
 
 use crate::rendering::colour::Colour;
 use crate::rendering::vertex::Vertex;
@@ -175,13 +175,14 @@ fn build_vertices(config: &FissuredShellConfig) -> Vec<Vertex> {
             let colour = config.crust_colour.lerp(config.ember_colour, heat);
 
             vertices.push(Vertex {
-                pos: Vector4::new(position.x, position.y, position.z, 1.0),
+                pos: Vector3::new(position.x, position.y, position.z),
                 color: colour.to_vec4(),
                 tex_coords: Vector2::new(
                     segment as f32 / config.segments as f32,
                     ring as f32 / config.rings as f32,
                 ),
                 normal: direction,
+                ao: 1.0,
             });
         }
     }
