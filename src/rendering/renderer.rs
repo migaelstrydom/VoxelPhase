@@ -33,7 +33,7 @@ use crate::rendering::overlay::OverlayRenderer;
 use crate::rendering::pipeline::{GraphicsPipeline, GraphicsPipelineConfig};
 use crate::rendering::post::PostProcessRenderer;
 use crate::rendering::shadow::map::SHADOW_SAMPLED_LAYOUT;
-use crate::rendering::shadow::{ShadowMap, ShadowRenderer, ShadowVolume};
+use crate::rendering::shadow::{ShadowMap, ShadowRenderer, ShadowVolume, ViewFrustum};
 use crate::rendering::sky::SkyRenderer;
 use crate::rendering::target::frame_targets::DEPTH_FORMAT;
 use crate::rendering::target::{
@@ -100,6 +100,13 @@ impl DrawOptions {
 fn camera_forward(view: &Matrix4<f32>) -> Vector3<f32> {
     -Vector3::new(view[(2, 0)], view[(2, 1)], view[(2, 2)])
 }
+
+// The shadow pass also needs the *shape* of the view cone, which
+// `ViewFrustum::from_projection` recovers from the projection matrix on the
+// same principle as `camera_forward` above: taking both from the matrices the
+// frame is drawn with means the shadow box cannot end up fitted to a different
+// camera than the one being rendered. It lives beside the type it builds
+// because that is where it is unit-tested against the matrix convention.
 
 /// The main renderer that orchestrates frame rendering.
 ///
@@ -380,8 +387,12 @@ impl Renderer {
             ..self.lighting
         };
 
-        self.shadow
-            .aim(camera_pos, &camera_forward(view), &sun_direction);
+        self.shadow.aim(
+            &ViewFrustum::from_projection(proj),
+            camera_pos,
+            &camera_forward(view),
+            &sun_direction,
+        );
 
         self.frame_data
             .update_scene_ubo(view, proj, camera_pos, &lighting, &self.shadow.uniforms())

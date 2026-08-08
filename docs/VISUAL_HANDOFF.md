@@ -1,19 +1,29 @@
 # Visual work — where things stand
 
-Written 2026-08-07, updated at the end of the session that landed sun shadows.
-Read this, then `VISUAL_DIRECTION.md` for the backlog and `LIGHTING_PLAN.md` for
-occlusion.
+Written 2026-08-07, updated at the end of the session that softened, lifted and
+re-framed the sun shadows. Read this, then `VISUAL_DIRECTION.md` for the backlog
+and `LIGHTING_PLAN.md` for occlusion.
 
 ## Start here
 
-**Look at the game and confirm the shadows.** The bench has no marching-cubes
-terrain in it, and terrain shadowing itself under a low sun is where depth-map
-bias fails if it is going to. The two dials are `ShadowVolume`'s
-`normal_offset_texels` (receiver side; raise it if surfaces stripe themselves)
-and `DEPTH_BIAS_SLOPE` in `shadow/pipeline.rs` (caster side). Raising either too
-far detaches a shadow from the thing casting it, which is the failure that
-undoes the whole feature — the `shadows` bench scene exists to show both edges
-of that trade at once.
+**Look at the game and confirm the shadows again.** One screenshot has been
+checked since the shadow work and it caught a real regression (see the kernel
+footprint trap below); the fix for it — 4096² — has *not* been seen in the game
+yet. What to look at: whether a limb or a fence post still casts something with
+shape in it, and whether terrain stripes itself under a low sun. The bench has
+no marching-cubes terrain, so that second one is unfalsifiable from here. The
+bias dials are `ShadowVolume`'s `normal_offset_texels` (receiver side; raise it
+if surfaces stripe themselves) and `DEPTH_BIAS_SLOPE` in `shadow/pipeline.rs`
+(caster side). Raising either too far detaches a shadow from its caster, which
+is the failure that undoes the whole feature — the `shadows` scene shows both
+edges of that trade at once.
+
+**Perf is not currently a constraint on the shadow pass**, which is why 4096²
+was affordable. The game runs 30 FPS / 20ms on the desktop display (refresh
+capped) and 60 FPS / 9ms on the laptop. Worth re-checking after the resolution
+bump, since it quadrupled the shadow pass's fill. Note the engine has no GPU
+timestamp queries, so nothing here can be attributed to the GPU from an agent
+shell — the CPU ms in the overlay is only half the picture.
 
 **Then: ambient occlusion.** `LIGHTING_PLAN.md` stage 1. Shadows resolve the sun
 but nothing occludes the *sky*, which is now a real fill light arriving from the
@@ -39,9 +49,23 @@ and both were largely dead ends — don't repeat them:
 
 ## What changed this session
 
-Sun shadow mapping — `LIGHTING_PLAN.md` stage 6, which has the design notes.
-`src/rendering/shadow/`, a `shadows` bench scene, and shadow framing exposed on
-`SceneEnvironment` so a scene can retune or disable it.
+The verdict on the shadows that landed last session was "a bit like lighting on
+the moon": too dark, too hard-edged, too short. Three changes, which only read
+as fixed together — `LIGHTING_PLAN.md` stage 6 has the detail.
+
+- **Softer.** `pcf_radius` 1 → 2 (3x3 → 5x5 taps), and moved out of the shader
+  into uniform data so it can be swept.
+- **Lifted.** `SceneLighting::ambient_colour` 0.03/0.035/0.045 → mean 0.080. A
+  shadowed ground pixel gains ~41% in linear terms, a lit one ~2%.
+- **Longer.** The light's box is fitted to the view frustum instead of being a
+  fixed 24m square parked ahead of the camera. `ShadowVolume::shadow_distance`
+  (45m) is the dial; `radius` and `focus_distance` are gone.
+- **Sharper, to pay for the first two.** `resolution` 2048 → 4096. The first
+  three changes together tripled the PCF kernel's world footprint and erased
+  every thin caster in the game; this buys the definition back. 67MB of D32.
+- A `shadow_tuning` bench scene ladders fill against softness so both can be
+  retuned without touching code, and `shadows` gained a picket row so the sheet
+  can no longer hide a filter that erases thin casters.
 
 ## What changed the session before
 
@@ -67,6 +91,37 @@ write, so MoltenVK reports `mutableComparisonSamplers = FALSE` and rejects one
 written at runtime. This is why `ShadowMap` is built *before* `GraphicsPipeline`
 in `Renderer::new` — the layout is built around the sampler. The descriptor
 write then supplies only the image view.
+
+**What a PCF kernel costs is its footprint in metres, not its tap count.**
+`(2 * pcf_radius + 1) * texel_world_size`. Anything thinner than that dissolves.
+Reaching further makes texels bigger and filtering wider takes more of them, so
+the two compound: going to a 45m box *and* a 5x5 kernel took it from 7cm to
+19cm, which erased a character's limbs and a row of fence posts in the game
+while the bench cheerfully reported no problem — its subjects were a 1.8m
+sphere, a table and a slab, all far wider than any plausible kernel. This is the
+second time the bench has misled by being too flattering. `resolution` is the
+only dial that narrows the footprint without giving up reach or softness, and it
+costs quadratically. Check the picket row in `shadows` before believing any
+change to reach, radius or resolution.
+
+**A shadow map fitted to the frustum must be fitted with a sphere.** The
+tempting tighter fit — a box around the frustum's eight corners — shrinks and
+grows as the camera turns. The texel snapping that stops shadow edges crawling
+quantises the box centre to a grid whose spacing comes from the radius, so a
+radius that breathes resizes the grid every frame and reintroduces exactly the
+crawl the snapping was for. A sphere's radius depends only on the frustum's
+shape and the slice distance, never on orientation.
+`the_fitted_radius_does_not_change_as_the_camera_rotates` in `volume.rs` is the
+guard; do not "optimise" it away.
+
+**Lift shadows with ambient, not with the sky or the sun.** Ambient is a flat
+addition, so it lifts a shadowed surface hard and a lit one barely — it opens
+the shadows without moving the absolute light level that the level albedos pin
+(see below). Raising `SKY_IRRADIANCE_FACTOR` narrows the ~5:1 key-to-fill ratio
+and flattens the modelling on everything, lit surfaces included.
+`ShadowVolume::strength` is available as a trim but is a cheat: it is light
+leaking through a solid occluder, and it flattens the shadow interior rather
+than lifting it.
 
 **Judge shadow bias at a low sun, never a high one.** At 60° everything looks
 fine at any bias; the whole trade only becomes visible near the horizon, where
@@ -113,7 +168,20 @@ dominates the sky. That dial, not `SUN_DISC_WIDENING`, is the one to reach for.
 cargo run --bin visual_bench -- --list
 cargo run --bin visual_bench -- palette --out /tmp/palette.png --columns 2
 cargo run --bin visual_bench -- shadows --out /tmp/shadows.png --columns 3
+cargo run --bin visual_bench -- shadow_tuning --out /tmp/tuning.png --columns 3
 ```
+
+The two shadow sheets answer different questions and are shot at different sun
+elevations on purpose. `shadows` sweeps the sun down to 7° and asks whether the
+shadow is in the *right place* — bias only fails near the horizon. Its last tile
+is the same frame with shadows off. `shadow_tuning` sits at 35° and asks whether
+it *looks like* a shadow, laddering fill level (rows) against PCF radius
+(columns); near the horizon the sun contributes so little that everything is
+fill already and the fill ladder has nothing to act on.
+
+On both sheets, **read the picket row first**. Everything else in the
+arrangement is large enough to survive any filter; the pickets are the only
+thing that tells you whether a change has quietly erased thin casters.
 
 Scenes live in `src/rendering/visual_bench/scenes/`, registered in
 `registry.rs`. Sweeps (a parameter ladder as one sheet) are the reason the tool

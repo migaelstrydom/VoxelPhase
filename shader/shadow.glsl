@@ -15,9 +15,14 @@
 // filtering, which is where most of the softness below comes from.
 layout(set = 0, binding = 2) uniform sampler2DShadow shadow_map;
 
-/// Half-width of the PCF kernel, in texels. 1 gives the 3x3 taps that, with
-/// hardware comparison filtering, cover a 4x4 texel footprint.
-const int SHADOW_PCF_RADIUS = 1;
+/// Largest PCF kernel half-width the loop below will honour.
+///
+/// The radius itself arrives as uniform data (`shadow_params.w`) so that a
+/// bench sweep can ladder it against the ambient fill without a recompile —
+/// softness and shadow depth are judged together, not one at a time. This
+/// constant is what keeps the cost bounded despite that: the loop is dynamic,
+/// but never wider than 9x9.
+const int SHADOW_PCF_MAX_RADIUS = 4;
 
 /// Slope scaling applied to the normal offset.
 ///
@@ -62,14 +67,15 @@ float sunShadow(vec3 world_pos, vec3 normal, vec3 light_dir) {
     }
 
     float texel = scene.shadow_params.x;
+    int radius = clamp(int(scene.shadow_params.w + 0.5), 0, SHADOW_PCF_MAX_RADIUS);
     float occlusion = 0.0;
-    for (int y = -SHADOW_PCF_RADIUS; y <= SHADOW_PCF_RADIUS; ++y) {
-        for (int x = -SHADOW_PCF_RADIUS; x <= SHADOW_PCF_RADIUS; ++x) {
+    for (int y = -radius; y <= radius; ++y) {
+        for (int x = -radius; x <= radius; ++x) {
             vec2 tap = uv + vec2(x, y) * texel;
             occlusion += 1.0 - texture(shadow_map, vec3(tap, ndc.z));
         }
     }
-    float taps = float((2 * SHADOW_PCF_RADIUS + 1) * (2 * SHADOW_PCF_RADIUS + 1));
+    float taps = float((2 * radius + 1) * (2 * radius + 1));
     occlusion /= taps;
 
     // Distance from the centre of the map in UV, as a fraction of its half

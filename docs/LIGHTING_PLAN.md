@@ -102,12 +102,70 @@ Render the scene from the sun's point of view into a depth texture; in the main 
 
 One shadow map (no cascades) is the baseline. Expect blocky edges and limited coverage area; those are acceptable starting points. Filtering (PCF) can be added as a small follow-up.
 
-**Done.** `src/rendering/shadow/` — a `ShadowVolume` (how the light's box is
-framed), a `ShadowMap` (image, comparison sampler, depth-only pass), a
-`ShadowPipeline` and a `ShadowRenderer` that ties them together. 2048², D32,
-3x3 PCF, receiver-side normal offset plus slope-scaled depth bias, texel-snapped
+**Done.** `src/rendering/shadow/` — a `ShadowVolume` (authored settings: reach,
+bias, softness), a `ViewFrustum` and the `ShadowFraming` that resolves one
+against the other, a `ShadowMap` (image, comparison sampler, depth-only pass), a
+`ShadowPipeline` and a `ShadowRenderer` that ties them together. 4096², D32,
+5x5 PCF, receiver-side normal offset plus slope-scaled depth bias, texel-snapped
 so edges do not crawl. Judge it on the `shadows` bench scene, whose last tile is
-the same frame with shadows off.
+the same frame with shadows off, and retune it on `shadow_tuning`.
+
+**Framed to the view frustum.** The box was originally a fixed 24m-radius square
+parked 12m ahead of the camera, which spent texels behind the viewer and outside
+the view cone and had to guess at the camera's field of view. It is now fitted
+to the bounding sphere of the frustum slice from the near plane out to
+`ShadowVolume::shadow_distance`, with the fov and aspect recovered from the
+projection matrix (`ViewFrustum::from_projection`) so no draw signature changed.
+
+A *sphere* specifically, and this is the load-bearing part: its radius depends
+only on the frustum's shape and the slice distance, so it is constant while the
+camera turns and only its centre moves. A box fitted tightly to the frustum's
+corners would be smaller, but it would breathe with camera orientation, and the
+snap grid in `light_view_proj` is sized from the radius — a grid that resizes
+every frame makes every shadow edge crawl, which is the whole artifact snapping
+exists to prevent. `the_fitted_radius_does_not_change_as_the_camera_rotates`
+guards this.
+
+What it bought, honestly: at equal texel density the guaranteed-coverage
+distance goes from roughly 26m to 28m, because the old hand-set radius was
+already a decent guess and the box is still square in the light's frame. The
+real win is that `shadow_distance` is now a single meaningful dial with a
+guarantee behind it — everything within it receives, whichever way the camera
+faces — instead of two numbers tuned against an assumed fov. The shipped default
+is 45m, which fits a ~77m box and reaches ~1.7x further than the old framing.
+`normal_offset_texels` is expressed in texels precisely so that trade does not
+silently re-tune the bias, and the `shadows` sheet confirms contact survives it
+down to a 7° sun.
+
+**The PCF kernel's world footprint is the number that matters**, and it is the
+one this stage got wrong first. It is `(2 * pcf_radius + 1) * texel_world_size`,
+and *any* caster thinner than it dissolves into a smear. Widening the box and
+widening the kernel both inflate it, and doing both at once nearly tripled it —
+7cm to 19cm — which erased the character's limbs and every fence post in the
+game while the bench, whose subjects were all half a metre or more across,
+reported that everything was fine. The map went to 4096² (1.9cm/texel, 9.4cm
+footprint, 67MB of D32) to buy the definition back; that is the only dial that
+narrows the footprint without giving up reach or softness, and its cost is
+quadratic. The `shadows` scene now includes a row of 12cm pickets so this
+failure has something to show up on.
+
+**How dark, how soft.** Two dials, deliberately separate from the bias ones:
+
+- `SceneLighting::ambient_colour` sets how dark a shadow goes. It is a *flat*
+  addition, so it lifts a shadowed surface hard and a sunlit one barely — which
+  is why it is the right dial and `SKY_IRRADIANCE_FACTOR` is not. Raising the
+  sky fill would narrow the ~5:1 key-to-fill ratio and flatten every surface in
+  the frame; raising `sun_intensity` would move the absolute light level, which
+  the level albedos pin (see `VISUAL_HANDOFF.md`). Measured on the `shadows`
+  sheet, going from mean 0.037 to 0.080 lifts a shadowed ground pixel by ~41% in
+  linear terms while moving the lit ground by ~2%.
+- `ShadowVolume::pcf_radius` sets the edge softness, and is uniform data
+  (`shadow_params.w`) rather than a shader constant so the bench can ladder it
+  against the fill level without a recompile. `SHADOW_PCF_MAX_RADIUS` in
+  `shadow.glsl` bounds the dynamic loop at 9x9.
+
+`ShadowVolume::strength` remains as a final trim, but it is a cheat — light
+leaking through a solid occluder — and should not be the main dial.
 
 How it gets its casters is the part worth knowing. Callers issue draws one at a
 time into an already-open geometry pass, so there is no point at which the
@@ -120,9 +178,12 @@ sampling last frame's map — lags visibly on anything that moves.
 
 Known gaps. Only `triangle.frag` reads the map, so water, particles, fire and
 the sky are unshadowed; water in particular takes the full sun wherever it sits.
-The volume is a fixed box around the camera, so a caster outside it throws
-nothing and its shadow pops in at the boundary — the edge fade in `shadow.glsl`
-softens that but does not remove it. That is what stage 7 fixes. Transparent
+The volume covers one frustum
+slice, so a caster beyond `shadow_distance` throws nothing and its shadow pops
+in at the boundary — the edge fade in `shadow.glsl` softens that but does not
+remove it, and pushing the distance out only trades it for coarser texels
+everywhere. That is what stage 7 fixes: the frustum fit here is the same
+geometry a cascade split needs, applied once instead of per slice. Transparent
 draws deliberately cast nothing: a depth map stores one depth per texel and
 cannot express partial occlusion, so a translucent caster would throw a solid
 shadow it visibly does not have.

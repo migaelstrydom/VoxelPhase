@@ -55,7 +55,8 @@ pub struct SceneUbo {
 
     /// Shadow lookup constants, from `ShadowRenderer::shader_params`:
     /// x = one shadow texel in UV, y = normal offset in world units,
-    /// z = strength (0 leaves everything lit), w unused.
+    /// z = strength (0 leaves everything lit), w = PCF kernel half-width in
+    /// texels.
     pub shadow_params: [f32; 4],
 }
 
@@ -207,11 +208,16 @@ impl Default for SceneLighting {
             // value, so raising total illumination pushes them up the tonemap's
             // shoulder and they go pale and electric rather than bright.
             sun_intensity: 1.2,
-            // Near black on purpose. Sky and ground irradiance are what fill
-            // unlit surfaces now, and they do it directionally; this remains as
-            // an author's dial for lifting a scene without moving the sky, and
-            // as a floor stopping anything reaching pure black.
-            ambient_colour: Colour::new(0.03, 0.035, 0.045, 1.0),
+            // The dial that sets how dark a shadow goes. Sky and ground
+            // irradiance fill unlit surfaces directionally; this is the flat
+            // term on top, and being flat is exactly why it is the right dial
+            // for the job — a fixed addition lifts a shadowed surface hard and
+            // a sunlit one barely, so it opens the shadows without moving the
+            // absolute light level on lit content (which is pinned by the
+            // albedos the levels are authored with). Raising the sky fill
+            // instead would narrow the key-to-fill ratio and flatten the
+            // modelling. Skewed towards blue: shadowed surfaces are lit by sky.
+            ambient_colour: Colour::new(0.065, 0.076, 0.098, 1.0),
         }
     }
 }

@@ -5,7 +5,7 @@
 
 use crate::rendering::visual_bench::scene::VisualScene;
 use crate::rendering::visual_bench::scenes::{
-    GradeSweep, MaterialGrid, Palette, Props, Shadows, SunSweep,
+    GradeSweep, MaterialGrid, Palette, Props, ShadowTuning, Shadows, SunSweep,
 };
 
 /// Every scene, in the order `--list` prints them.
@@ -15,6 +15,7 @@ pub fn all_scenes() -> Vec<Box<dyn VisualScene>> {
         Box::new(MaterialGrid),
         Box::new(Palette),
         Box::new(Props),
+        Box::new(ShadowTuning),
         Box::new(Shadows),
         Box::new(SunSweep),
     ]

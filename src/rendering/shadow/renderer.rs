@@ -27,9 +27,10 @@ use crate::core::command_buffer::ManagedCommandBuffer;
 use crate::core::error::EngineResult;
 use crate::core::vulkan_context::VulkanContext;
 use crate::rendering::frame::{DrawInfo, ShadowUniforms};
+use crate::rendering::shadow::frustum::ViewFrustum;
 use crate::rendering::shadow::map::ShadowMap;
 use crate::rendering::shadow::pipeline::ShadowPipeline;
-use crate::rendering::shadow::volume::ShadowVolume;
+use crate::rendering::shadow::volume::{ShadowFraming, ShadowVolume};
 
 /// Renders the frame's casters from the sun's point of view into a depth map.
 pub struct ShadowRenderer {
@@ -46,7 +47,11 @@ pub struct ShadowRenderer {
     pipeline: ShadowPipeline,
     command_buffer: ManagedCommandBuffer,
     layout: vk::PipelineLayout,
-    /// Set once per frame by `begin_frame`, read back into the scene UBO.
+    /// The volume resolved against the frame's camera, set by [`Self::aim`].
+    /// Everything the shader is told about the map comes from here, so the
+    /// lookup can never disagree with the box the casters were rendered into.
+    framing: ShadowFraming,
+    /// Set once per frame by [`Self::aim`], read back into the scene UBO.
     light_view_proj: Matrix4<f32>,
 }
 
@@ -76,6 +81,9 @@ impl ShadowRenderer {
             pipeline,
             command_buffer,
             layout,
+            // A stand-in until the first `aim`, so the uniforms are never
+            // read from an unfitted volume.
+            framing: volume.fit(&ViewFrustum::default()),
             light_view_proj: Matrix4::identity(),
         })
     }
@@ -90,8 +98,13 @@ impl ShadowRenderer {
         &self.command_buffer
     }
 
+    /// How the map is currently framed. Valid from the first [`Self::aim`].
+    pub fn framing(&self) -> &ShadowFraming {
+        &self.framing
+    }
+
     /// Shadow parameters for the scene UBO: PCF tap spacing, receiver-side
-    /// normal offset, and strength.
+    /// normal offset, strength, and PCF kernel half-width.
     fn shader_params(&self) -> [f32; 4] {
         let strength = if self.enabled {
             self.volume.strength
@@ -99,10 +112,10 @@ impl ShadowRenderer {
             0.0
         };
         [
-            self.volume.texel_uv_size(),
-            self.volume.normal_offset(),
+            self.framing.texel_uv_size(),
+            self.framing.normal_offset(),
             strength,
-            0.0,
+            self.volume.pcf_radius as f32,
         ]
     }
 
@@ -126,14 +139,22 @@ impl ShadowRenderer {
     /// Only affects uniform data, never the command buffer, so it may run
     /// after casters have already been recorded — they are transformed by the
     /// matrix at draw time, not at record time.
+    ///
+    /// The box is fitted to `frustum` rather than held at a fixed size, so the
+    /// map covers what the camera can actually see. Re-fitting every frame is
+    /// arithmetic and picks up a scene changing the volume between shots; the
+    /// fit depends only on the frustum's *shape*, so the radius it produces
+    /// holds still while the camera turns.
     pub fn aim(
         &mut self,
+        frustum: &ViewFrustum,
         camera_pos: &Vector3<f32>,
         camera_forward: &Vector3<f32>,
         sun_direction: &Vector3<f32>,
     ) {
+        self.framing = self.volume.fit(frustum);
         self.light_view_proj =
-            self.volume
+            self.framing
                 .light_view_proj(camera_pos, camera_forward, sun_direction);
     }
 

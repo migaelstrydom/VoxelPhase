@@ -6,6 +6,7 @@ pub mod material_grid;
 pub mod palette;
 pub mod props;
 pub mod registry;
+pub mod shadow_tuning;
 pub mod shadows;
 pub mod sun_sweep;
 
@@ -14,5 +15,6 @@ pub use material_grid::MaterialGrid;
 pub use palette::Palette;
 pub use props::Props;
 pub use registry::{all_scenes, find_scene};
+pub use shadow_tuning::ShadowTuning;
 pub use shadows::Shadows;
 pub use sun_sweep::SunSweep;

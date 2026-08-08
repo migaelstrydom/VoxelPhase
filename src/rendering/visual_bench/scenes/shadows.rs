@@ -38,6 +38,14 @@ const GROUND_HALF_EXTENT: f32 = 40.0;
 /// Sun elevations to sweep, in degrees above the horizon.
 const ELEVATIONS: [f32; 5] = [60.0, 40.0, 25.0, 14.0, 7.0];
 
+/// The picket row: thin casters, spaced so their shadows are separate objects
+/// while the filter can still resolve them and merge into one smear when it
+/// cannot. The gap between shadows is the thing being read.
+const PICKET_COUNT: usize = 6;
+const PICKET_WIDTH: f32 = 0.06;
+const PICKET_HEIGHT: f32 = 0.85;
+const PICKET_SPACING: f32 = 0.55;
+
 pub struct Shadows;
 
 impl VisualScene for Shadows {
@@ -50,10 +58,7 @@ impl VisualScene for Shadows {
     }
 
     fn shots(&self, _ctx: &SceneContext) -> EngineResult<Vec<SceneShot>> {
-        // Close enough to read a contact edge, high enough to see the shadows
-        // lie across the ground rather than hide behind their casters.
-        let camera =
-            SceneCamera::looking_at(Point3::new(-5.5, 4.0, 8.5), Point3::new(0.0, 0.6, 0.0));
+        let camera = camera();
 
         let mut shots: Vec<SceneShot> = ELEVATIONS
             .iter()
@@ -78,9 +83,19 @@ impl VisualScene for Shadows {
     }
 }
 
+/// Where this sheet is shot from: close enough to read a contact edge, high
+/// enough to see the shadows lie across the ground rather than hide behind
+/// their casters.
+///
+/// Shared with `shadow_tuning`, which ladders the softness and fill dials over
+/// the same arrangement — two sheets of the same subject compare directly.
+pub fn camera() -> SceneCamera {
+    SceneCamera::looking_at(Point3::new(-5.5, 4.0, 8.5), Point3::new(0.0, 0.6, 0.0))
+}
+
 /// Direction from a surface towards a sun at the given elevation, kept on a
 /// fixed azimuth so shadows fall the same way across the whole sheet.
-fn sun_at(elevation_degrees: f32) -> Vector3<f32> {
+pub fn sun_at(elevation_degrees: f32) -> Vector3<f32> {
     let elevation = elevation_degrees.to_radians();
     let azimuth = (-35.0f32).to_radians();
     Vector3::new(
@@ -96,11 +111,20 @@ fn sun_at(elevation_degrees: f32) -> Vector3<f32> {
 /// the detachment test (its shadow is far from its geometry, so peter-panning
 /// shows as a gap); the leaning slab is the acne test, since a surface nearly
 /// edge-on to the light is where slope bias earns its keep.
-fn arrangement() -> Vec<SceneMesh> {
+///
+/// The picket row is the *definition* test, and it is the one that catches what
+/// the others cannot. Every shape above is large: half a metre or more across,
+/// so its shadow survives any plausible filter and any plausible texel size.
+/// Real frames are full of things that are not — a character's forearm, a fence
+/// post, a railing. Those are the first casters to dissolve when the PCF
+/// kernel's *world* footprint grows, and a sheet without them will happily
+/// report that a filter which erases them looks fine. The pickets are sized
+/// like a limb (12cm) precisely so the sheet stops being flattering.
+pub fn arrangement() -> Vec<SceneMesh> {
     let sphere_indices = generate_sphere_indices(SEGMENTS, RINGS);
     let matte = SurfaceParams::MATTE;
 
-    vec![
+    let mut meshes = vec![
         ground(),
         SceneMesh::new(
             generate_sphere_vertices(0.9, SEGMENTS, RINGS, Colour::new(0.75, 0.25, 0.2, 1.0)),
@@ -133,7 +157,28 @@ fn arrangement() -> Vec<SceneMesh> {
                 * Matrix4::from_axis_angle(&Vector3::z_axis(), -0.9),
         )
         .with_surface(matte),
-    ]
+    ];
+
+    meshes.extend((0..PICKET_COUNT).map(|i| {
+        let x = -4.6 + i as f32 * PICKET_SPACING;
+        picket(Vector3::new(x, PICKET_HEIGHT, -3.4))
+    }));
+
+    meshes
+}
+
+/// One thin post. Twelve centimetres across — about a forearm, and well under
+/// the width of a 5x5 kernel over 3.8cm texels, which is the point.
+fn picket(position: Vector3<f32>) -> SceneMesh {
+    SceneMesh::new(
+        generate_cube_vertices(
+            Vector3::new(PICKET_WIDTH, PICKET_HEIGHT, PICKET_WIDTH),
+            Colour::new(0.62, 0.64, 0.68, 1.0),
+        ),
+        generate_cube_indices(),
+    )
+    .at(position)
+    .with_surface(SurfaceParams::MATTE)
 }
 
 fn leg(position: Vector3<f32>) -> SceneMesh {
