@@ -59,6 +59,26 @@ impl AABB {
         )
     }
 
+    /// The smallest AABB containing both this one and `other`.
+    ///
+    /// Bounding a shape's whole path over a timestep is the union of its bounds
+    /// at each end, which is what continuous collision detection needs before it
+    /// can ask which shapes are worth sweeping against each other.
+    pub fn merged(&self, other: &AABB) -> AABB {
+        AABB::new(
+            Point3::new(
+                self.min.x.min(other.min.x),
+                self.min.y.min(other.min.y),
+                self.min.z.min(other.min.z),
+            ),
+            Point3::new(
+                self.max.x.max(other.max.x),
+                self.max.y.max(other.max.y),
+                self.max.z.max(other.max.z),
+            ),
+        )
+    }
+
     /// Check if this AABB intersects another AABB.
     pub fn intersects(&self, other: &AABB) -> bool {
         self.min.x <= other.max.x
@@ -142,6 +162,16 @@ impl Default for AABB {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn merged_covers_both_inputs() {
+        let a = AABB::new(Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 1.0, 1.0));
+        let b = AABB::new(Point3::new(-2.0, 0.5, 3.0), Point3::new(-1.0, 2.0, 4.0));
+        let merged = a.merged(&b);
+        assert_eq!(merged.min, Point3::new(-2.0, 0.0, 0.0));
+        assert_eq!(merged.max, Point3::new(1.0, 2.0, 4.0));
+        assert_eq!(merged.merged(&a), merged);
+    }
 
     #[test]
     fn test_aabb_intersection() {

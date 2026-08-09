@@ -89,7 +89,6 @@ fn grenade_speed_sphere_does_not_tunnel_through_wall() {
 /// The pendulum bug: CCD only sweeps against static geometry, so a thin
 /// *dynamic* obstacle is invisible to it. At grenade speed the once-per-frame
 /// narrowphase cannot close the gap either, and the sphere passes through.
-#[ignore = "red until ccd/dynamic_sweep.rs lands: CCD does not sweep against dynamic bodies"]
 #[test]
 fn grenade_speed_sphere_does_not_tunnel_through_dynamic_slab() {
     let scenario = SphereThroughDynamicSlabScenario::new();
@@ -109,7 +108,6 @@ fn grenade_speed_sphere_does_not_tunnel_through_dynamic_slab() {
 
 /// Passing through and stopping short are both failures, and the min_x bound
 /// alone cannot tell them apart. The sphere must actually be turned around.
-#[ignore = "red until ccd/dynamic_sweep.rs lands: CCD does not sweep against dynamic bodies"]
 #[test]
 fn grenade_speed_sphere_rebounds_off_dynamic_slab() {
     let scenario = SphereThroughDynamicSlabScenario::new();

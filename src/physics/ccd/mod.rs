@@ -1,4 +1,5 @@
 mod candidate;
+mod dynamic_sweep;
 mod ownership;
 mod patch_cache;
 mod static_sweep;

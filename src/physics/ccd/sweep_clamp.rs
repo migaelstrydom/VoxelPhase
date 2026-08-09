@@ -30,6 +30,7 @@ use crate::physics::solver::ccd::solve_contacts;
 use crate::physics::static_geometry::StaticGeometry;
 
 use super::candidate::{collect_candidates, CcdCandidate};
+use super::dynamic_sweep::DynamicSweep;
 use super::patch_cache::SweptPatchCache;
 use super::static_sweep::{sweep_against_static, sweep_sphere_against_static};
 use super::strategy::{CcdContext, CcdStrategy};
@@ -38,12 +39,18 @@ use super::swept_impact::{cold_solver_contact, SweptImpact};
 pub struct SweepClampCcd {
     /// Static-geometry queries reused across the substeps of a frame.
     patch_cache: SweptPatchCache,
+    /// Body-vs-body sweeping, holding its own broadphase scratch.
+    dynamic: DynamicSweep,
+    /// Impacts found this substep, as `(candidate index, impact)`.
+    impacts: Vec<(usize, SweptImpact)>,
 }
 
 impl SweepClampCcd {
     pub fn new() -> Self {
         Self {
             patch_cache: SweptPatchCache::new(),
+            dynamic: DynamicSweep::new(),
+            impacts: Vec::new(),
         }
     }
 }
@@ -67,12 +74,23 @@ impl CcdStrategy for SweepClampCcd {
     ) -> u32 {
         let mut corrections = 0u32;
 
-        for candidate in &collect_candidates(ctx, dt) {
-            let Some(impact) =
+        let candidates = collect_candidates(ctx, dt);
+        self.impacts.clear();
+        for (index, candidate) in candidates.iter().enumerate() {
+            if let Some(impact) =
                 sweep_against_static(candidate, static_geometry, &mut self.patch_cache)
-            else {
-                continue;
-            };
+            {
+                self.impacts.push((index, impact));
+            }
+        }
+        self.dynamic
+            .impacts_into(ctx, &candidates, &mut self.impacts);
+
+        // Moved out so the resolve loop can borrow `self` mutably; handed
+        // back at the end so its capacity survives to the next substep.
+        let mut impacts = std::mem::take(&mut self.impacts);
+        for (index, impact) in impacts.drain(..) {
+            let candidate = &candidates[index];
 
             let clamped_pos = self.clamp_to_impact(ctx, candidate, &impact);
             let contacts = self.impact_contacts(
@@ -103,6 +121,7 @@ impl CcdStrategy for SweepClampCcd {
 
             corrections += 1;
         }
+        self.impacts = impacts;
 
         corrections
     }
@@ -121,11 +140,14 @@ impl SweepClampCcd {
     ) -> Point3<f32> {
         let mut position = candidate.body_position_at(impact.toi);
 
-        // The sweep used the bounding sphere, which for a box stops the
-        // candidate a sphere's radius from the surface rather than a face's.
-        // Push the surplus back out along the normal so the box lands on its
-        // own face instead of hovering.
-        if let ColliderShape::Box { half_extents } = &candidate.shape {
+        // The terrain sweep falls back to the bounding sphere, which for a box
+        // stops the candidate a sphere's radius from the surface rather than a
+        // face's. Push the surplus back out along the normal so the box lands
+        // on its own face instead of hovering. Body sweeps use the real shape
+        // throughout, so there is no surplus to undo.
+        if let (ColliderShape::Box { half_extents }, None) =
+            (&candidate.shape, impact.header.body_a)
+        {
             let obb = Obb::new(
                 candidate.center_at(impact.toi),
                 impact.clamped_rotation,
@@ -155,8 +177,10 @@ impl SweepClampCcd {
         static_geometry: &dyn StaticGeometry,
         contact_margin: f32,
     ) -> SmallVec<[SolverContact; 4]> {
-        match &candidate.shape {
-            ColliderShape::Box { half_extents } => self.box_impact_contacts(
+        match (&candidate.shape, impact.header.body_a) {
+            // Terrain only: the refinement below asks the static geometry for a
+            // patch, which a body impact has no equivalent of.
+            (ColliderShape::Box { half_extents }, None) => self.box_impact_contacts(
                 candidate,
                 impact,
                 *half_extents,
