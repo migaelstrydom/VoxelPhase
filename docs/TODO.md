@@ -44,3 +44,70 @@ Key considerations:
 - **Edge-edge with seam filtering.** Internal edges between coplanar faces must be skipped in edge-edge testing. The seam filter's `ContactEdge` classification provides the Gauss map normals needed for filtering.
 - **Coplanar merging still valuable.** The seam filter's triangle-pair merging reduces contact count and suppresses internal-edge artifacts. The per-face SAT operates on the merged `ContactFace` polygons (3–6 vertices), not raw triangles.
 - **OBB needs the same fix.** `obb_patch_manifold` has the identical bug (proven by the OBB replay test).
+
+---
+
+## Speculative contacts: the band beneath CCD is not covered
+
+A pair closing faster than the discrete contact margin but slower than CCD's
+activation gates can interpenetrate by up to a full collider radius before
+anything notices. NGS then pushes them apart over roughly 50 ms, so it reads as
+a soft or spongy impact rather than a tunnel — nothing passes through — but the
+overlap is visible and the impulse arrives late.
+
+**Only one body needs to be moving**, and the speeds are ordinary. For a 0.2 m
+sphere at 60 Hz the window is roughly 10–18 m/s. Below it the discrete margin
+copes; above it CCD engages and works. Grenades at 20 m/s sit above the window.
+The window's position scales with collider radius and with frame rate, so it
+moves under you: the same throw can be fine at 30 Hz and wrong at 60.
+
+Red regression tests, currently `#[ignore]`d:
+`ccd.rs::spheres_closing_in_the_speculative_band_do_not_interpenetrate` and
+`ccd.rs::boxes_closing_in_the_speculative_band_do_not_interpenetrate`. Bench
+scenario: `speculative_band_approach`.
+
+### Root cause
+
+Three compounding faults, all in the discrete narrowphase — CCD itself is
+correct here.
+
+1. **The broadphase bounds colliders where they are, not where they are going.**
+   `generate_dynamic_contacts` builds AABBs from the instantaneous pose, so a
+   pair 0.2 m apart closing at 0.4 m per frame is never paired and the
+   speculative branch is not reached at all. Speculative contacts can only fire
+   for pairs already nearly touching, which is exactly when they are not needed.
+2. **The prediction horizon is one substep, but generation is once per frame.**
+   `sphere_sphere_speculative` sweeps over the substep `dt` and the result is
+   then reused for every substep of the frame, so it looks an eighth of the way
+   ahead that it must cover.
+3. **The band's ceiling and CCD's floor are in different units.**
+   `SpeculativeConfig::ccd_threshold` is substep travel; `ccd_frame_coverage` is
+   frame travel. The claim that speculative contacts cover the band below CCD
+   was never checkable, and does not hold.
+
+Only sphere-sphere has a speculative path at all. Every other shape pair has
+nothing, so a box in the band simply overlaps.
+
+### Approach
+
+Fix all three — bound over the frame's travel, predict over the frame, and
+express both gates in frame travel with the speculative ceiling set to
+`ccd_frame_coverage` so the two mechanisms meet. Replace the sphere-sphere
+special case with `gjk_raycast` over the pair's relative motion, which is
+shape-agnostic and is what `ccd/dynamic_sweep.rs` already uses.
+
+That alone is **not sufficient**, and landing it alone is worse than the
+current state. The pair then meets and stops 0.6 m apart instead of 0.4 m,
+because a zero-depth contact tells the solver to arrest approach *now* rather
+than on arrival. Bodies halting in mid-air is a worse failure than bodies
+briefly overlapping.
+
+The missing piece is in the solver: a speculative contact must carry its
+separation so the normal constraint permits approach velocity up to
+`separation / dt` and arrests only beyond it. That is a change to what the
+solver reads out of a `SolverContact`, and it needs its own design pass —
+`warm_start_depth_slop` and the `MARGIN_PULL_BIAS` handling in the normal
+constraint are the neighbouring concerns.
+
+Both tests assert two bounds — not interpenetrating *and* not stopping short.
+The first alone is satisfied by the mid-air stall and passes the broken fix.
