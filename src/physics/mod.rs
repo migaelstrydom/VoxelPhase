@@ -36,6 +36,7 @@
 
 pub mod bench_harness;
 mod body;
+mod broadphase;
 pub mod ccd;
 mod collider;
 pub mod constraint;

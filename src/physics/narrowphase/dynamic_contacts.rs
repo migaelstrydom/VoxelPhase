@@ -10,7 +10,6 @@ use crate::collision::continuous::swept_sphere_sphere;
 use crate::collision::discrete::gjk::GjkCache;
 use crate::collision::dispatch;
 use crate::collision::sat::SatCache;
-use crate::collision::AABB;
 use crate::physics::body::RigidBody;
 use crate::physics::collider::{Collider, ColliderMaterial, ColliderShape};
 use crate::physics::handle::{ColliderHandle, RigidBodyHandle};
@@ -127,13 +126,12 @@ pub fn generate_dynamic_contacts(
         return;
     }
 
-    sweep_and_prune_into(
-        &buf.states,
-        contact_margin,
-        &mut buf.bounds,
-        &mut buf.sorted_indices,
-        &mut buf.pairs,
-    );
+    buf.bounds.reserve(buf.states.len());
+    buf.bounds
+        .extend(buf.states.iter().map(|s| s.bounds(contact_margin)));
+    let states = &buf.states;
+    buf.broadphase
+        .pairs_into(&buf.bounds, |i| states[i].is_mobile(), &mut buf.pairs);
 
     for pair_idx in 0..buf.pairs.len() {
         let (i, j) = buf.pairs[pair_idx];
@@ -234,66 +232,6 @@ fn requires_gjk_fallback(a: &ColliderShape, b: &ColliderShape) -> bool {
             | (ColliderShape::Capsule { .. }, ColliderShape::Box { .. })
             | (ColliderShape::Capsule { .. }, ColliderShape::Capsule { .. })
     )
-}
-
-/// Sort-and-sweep broadphase, writing candidate pairs into pre-allocated buffers.
-fn sweep_and_prune_into(
-    states: &[ColliderState],
-    margin: f32,
-    bounds: &mut Vec<AABB>,
-    sorted: &mut Vec<usize>,
-    pairs: &mut Vec<(usize, usize)>,
-) {
-    let sweep_axis = pick_sweep_axis(states);
-
-    bounds.reserve(states.len());
-    bounds.extend(states.iter().map(|s| s.bounds(margin)));
-
-    sorted.extend(0..states.len());
-    sorted
-        .sort_unstable_by(|&a, &b| bounds[a].min[sweep_axis].total_cmp(&bounds[b].min[sweep_axis]));
-
-    for ii in 0..sorted.len() {
-        let i = sorted[ii];
-        let i_max = bounds[i].max[sweep_axis];
-
-        for jj in (ii + 1)..sorted.len() {
-            let j = sorted[jj];
-
-            if bounds[j].min[sweep_axis] > i_max {
-                break;
-            }
-
-            if !states[i].is_mobile() && !states[j].is_mobile() {
-                continue;
-            }
-
-            if bounds[i].intersects(&bounds[j]) {
-                pairs.push((i, j));
-            }
-        }
-    }
-}
-
-/// Pick the axis (0=x, 1=y, 2=z) with the greatest positional spread.
-fn pick_sweep_axis(states: &[ColliderState]) -> usize {
-    let mut min = [f32::MAX; 3];
-    let mut max = [f32::MIN; 3];
-    for s in states {
-        let c = [s.center.x, s.center.y, s.center.z];
-        for axis in 0..3 {
-            min[axis] = min[axis].min(c[axis]);
-            max[axis] = max[axis].max(c[axis]);
-        }
-    }
-    let spread = [max[0] - min[0], max[1] - min[1], max[2] - min[2]];
-    if spread[0] >= spread[1] && spread[0] >= spread[2] {
-        0
-    } else if spread[1] >= spread[2] {
-        1
-    } else {
-        2
-    }
 }
 
 /// Build a `PairHeader` from two collider states with combined material.

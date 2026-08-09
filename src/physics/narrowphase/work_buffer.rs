@@ -3,6 +3,7 @@
 use rustc_hash::FxHashSet;
 
 use crate::collision::AABB;
+use crate::physics::broadphase::SweepAndPrune;
 use crate::physics::handle::ColliderHandle;
 use crate::physics::pipeline::pair::PairManifold;
 
@@ -23,7 +24,8 @@ pub struct NarrowphaseWorkBuffer {
     pub(super) manifolds: Vec<PairManifold>,
     pub(super) states: Vec<ColliderState>,
     pub(super) bounds: Vec<AABB>,
-    pub(super) sorted_indices: Vec<usize>,
+    /// Pair culling over `bounds`, holding its own sort scratch.
+    pub(super) broadphase: SweepAndPrune,
     pub(super) pairs: Vec<(usize, usize)>,
     pub(super) active_sat_pairs: FxHashSet<(ColliderHandle, ColliderHandle)>,
     pub(super) active_gjk_pairs: FxHashSet<(ColliderHandle, ColliderHandle)>,
@@ -35,7 +37,7 @@ impl NarrowphaseWorkBuffer {
             manifolds: Vec::new(),
             states: Vec::new(),
             bounds: Vec::new(),
-            sorted_indices: Vec::new(),
+            broadphase: SweepAndPrune::new(),
             pairs: Vec::new(),
             active_sat_pairs: FxHashSet::default(),
             active_gjk_pairs: FxHashSet::default(),
@@ -54,7 +56,6 @@ impl NarrowphaseWorkBuffer {
     pub(super) fn clear_pair_scratch(&mut self) {
         self.states.clear();
         self.bounds.clear();
-        self.sorted_indices.clear();
         self.pairs.clear();
         self.active_sat_pairs.clear();
         self.active_gjk_pairs.clear();
