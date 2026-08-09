@@ -1,7 +1,8 @@
 use super::super::framework::{run_scenario, BenchRunConfig};
 use super::super::scenarios::{
     GrazingSphereWallCcdScenario, GrenadeSpeedWallCcdScenario, HighSpeedSphereCcdScenario,
-    SphereThroughDynamicSlabScenario,
+    SphereIntoDynamicCornerScenario, SphereThroughDynamicSlabScenario,
+    SphereThroughTwoSlabsScenario,
 };
 use super::assertions::*;
 use super::write_exports;
@@ -122,5 +123,50 @@ fn grenade_speed_sphere_rebounds_off_dynamic_slab() {
         last.x > scenario.radius,
         "sphere should end up back on the near side of the slab: x={}",
         last.x
+    );
+}
+
+/// A candidate can find more than one impact in a substep, but it can only be
+/// clamped to one of them. It must be the earliest, or the sphere is placed
+/// past the obstacle it should have stopped at.
+#[test]
+fn sphere_stops_at_the_nearer_of_two_slabs() {
+    let scenario = SphereThroughTwoSlabsScenario::new();
+    let cfg = BenchRunConfig {
+        duration: 0.5,
+        ..BenchRunConfig::default()
+    };
+    let run = run_scenario(&scenario, cfg);
+    write_exports(&run, "sphere_through_two_slabs");
+
+    let min_x = run.samples.iter().map(|s| s.x).fold(f32::MAX, f32::min);
+    assert!(
+        min_x > scenario.near_slab_far_face_x(),
+        "sphere passed the near slab: min_x={min_x}"
+    );
+}
+
+/// An oblique impact on a dynamic obstacle. The sphere approaches two crossing
+/// slabs along their bisector, so it drives into neither face head-on, and must
+/// still be stopped by the one it reaches first.
+#[test]
+fn sphere_does_not_tunnel_into_a_dynamic_corner() {
+    let scenario = SphereIntoDynamicCornerScenario::new();
+    let cfg = BenchRunConfig {
+        duration: 0.5,
+        ..BenchRunConfig::default()
+    };
+    let run = run_scenario(&scenario, cfg);
+    write_exports(&run, "sphere_into_dynamic_corner");
+
+    let min_x = run.samples.iter().map(|s| s.x).fold(f32::MAX, f32::min);
+    let min_y = run.samples.iter().map(|s| s.y).fold(f32::MAX, f32::min);
+    assert!(
+        min_x > scenario.far_face(),
+        "sphere passed through the wall: min_x={min_x}"
+    );
+    assert!(
+        min_y > scenario.far_face(),
+        "sphere passed through the floor: min_y={min_y}"
     );
 }

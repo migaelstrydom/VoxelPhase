@@ -2930,3 +2930,193 @@ impl PhysicsBenchScenario for SphereThroughDynamicSlabScenario {
         8.0 / 240.0
     }
 }
+
+/// A sphere fired at two thin dynamic slabs standing one behind the other,
+/// close enough that a single frame's travel spans both.
+///
+/// The sphere can only be stopped once. If the impacts are resolved in the
+/// order the broadphase happened to emit them, the far slab's later time of
+/// impact wins and the sphere is placed *past* the near slab it should have
+/// bounced off, with both impulses applied.
+#[derive(Debug, Clone)]
+pub struct SphereThroughTwoSlabsScenario {
+    pub radius: f32,
+    pub speed: f32,
+    pub start_x: f32,
+    pub slab_half_extents: Vector3<f32>,
+    /// X of the slab the sphere reaches first.
+    pub near_slab_x: f32,
+    /// X of the slab behind it.
+    pub far_slab_x: f32,
+    geometry: EmptyGeometry,
+}
+
+impl SphereThroughTwoSlabsScenario {
+    pub fn new() -> Self {
+        Self {
+            radius: 0.2,
+            speed: 20.0,
+            start_x: 3.0,
+            slab_half_extents: Vector3::new(0.06, 1.0, 0.06),
+            near_slab_x: 0.0,
+            far_slab_x: -0.18,
+            geometry: EmptyGeometry,
+        }
+    }
+
+    /// Far face of the near slab: the plane the sphere must never cross.
+    pub fn near_slab_far_face_x(&self) -> f32 {
+        self.near_slab_x - self.slab_half_extents.x
+    }
+}
+
+impl Default for SphereThroughTwoSlabsScenario {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PhysicsBenchScenario for SphereThroughTwoSlabsScenario {
+    fn name(&self) -> &'static str {
+        "sphere_through_two_slabs"
+    }
+
+    fn restitution(&self) -> f32 {
+        0.2
+    }
+
+    fn build_world(&self) -> PhysicsWorld {
+        let mut config = PhysicsConfig::default();
+        config.sleep.enabled = false;
+        config.gravity = Vector3::zeros();
+        PhysicsWorld::new(config)
+    }
+
+    fn setup(&self, world: &mut PhysicsWorld) -> RigidBodyHandle {
+        for x in [self.near_slab_x, self.far_slab_x] {
+            let slab =
+                world.create_body(RigidBodyDesc::dynamic().position(Point3::new(x, 0.0, 0.0)));
+            let _ = world.attach_collider(
+                slab,
+                ColliderDesc::box_shape(self.slab_half_extents)
+                    .density(50000.0)
+                    .restitution(0.2)
+                    .friction(0.4),
+            );
+        }
+
+        let sphere = world.create_body(
+            RigidBodyDesc::dynamic()
+                .position(Point3::new(self.start_x, 0.0, 0.0))
+                .linear_velocity(Vector3::new(-self.speed, 0.0, 0.0)),
+        );
+        let _ = world.attach_collider(
+            sphere,
+            ColliderDesc::sphere(self.radius)
+                .density(1000.0)
+                .restitution(0.2)
+                .friction(0.4),
+        );
+        sphere
+    }
+
+    fn geometry(&self) -> &dyn StaticGeometry {
+        &self.geometry
+    }
+
+    fn frame_dt(&self, _frame_idx: u64) -> f32 {
+        8.0 / 240.0
+    }
+}
+
+/// A sphere fired diagonally into two overlapping dynamic slabs.
+///
+/// The slabs form a wall and a floor crossing at the origin, so the sphere
+/// arrives at an angle to both and to neither's face normal. It covers the
+/// oblique case the head-on scenarios do not: the swept normal is not aligned
+/// with the motion, and the clamp has to place the sphere against a face it is
+/// sliding along as much as driving into.
+#[derive(Debug, Clone)]
+pub struct SphereIntoDynamicCornerScenario {
+    pub radius: f32,
+    pub speed: f32,
+    pub slab_half_thickness: f32,
+    geometry: EmptyGeometry,
+}
+
+impl SphereIntoDynamicCornerScenario {
+    pub fn new() -> Self {
+        Self {
+            radius: 0.2,
+            speed: 20.0,
+            slab_half_thickness: 0.06,
+            geometry: EmptyGeometry,
+        }
+    }
+
+    /// The far face of either slab: neither may be crossed.
+    pub fn far_face(&self) -> f32 {
+        -self.slab_half_thickness
+    }
+}
+
+impl Default for SphereIntoDynamicCornerScenario {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PhysicsBenchScenario for SphereIntoDynamicCornerScenario {
+    fn name(&self) -> &'static str {
+        "sphere_into_dynamic_corner"
+    }
+
+    fn restitution(&self) -> f32 {
+        0.2
+    }
+
+    fn build_world(&self) -> PhysicsWorld {
+        let mut config = PhysicsConfig::default();
+        config.sleep.enabled = false;
+        config.gravity = Vector3::zeros();
+        PhysicsWorld::new(config)
+    }
+
+    fn setup(&self, world: &mut PhysicsWorld) -> RigidBodyHandle {
+        let t = self.slab_half_thickness;
+        // A wall in the YZ plane and a floor in the XZ plane, meeting at the
+        // origin. The sphere arrives along their bisector.
+        for half in [Vector3::new(t, 1.0, 1.0), Vector3::new(1.0, t, 1.0)] {
+            let slab = world.create_body(RigidBodyDesc::dynamic().position(Point3::origin()));
+            let _ = world.attach_collider(
+                slab,
+                ColliderDesc::box_shape(half)
+                    .density(50000.0)
+                    .restitution(0.2)
+                    .friction(0.4),
+            );
+        }
+
+        let sphere = world.create_body(
+            RigidBodyDesc::dynamic()
+                .position(Point3::new(2.0, 2.0, 0.0))
+                .linear_velocity(Vector3::new(-self.speed, -self.speed, 0.0)),
+        );
+        let _ = world.attach_collider(
+            sphere,
+            ColliderDesc::sphere(self.radius)
+                .density(1000.0)
+                .restitution(0.2)
+                .friction(0.4),
+        );
+        sphere
+    }
+
+    fn geometry(&self) -> &dyn StaticGeometry {
+        &self.geometry
+    }
+
+    fn frame_dt(&self, _frame_idx: u64) -> f32 {
+        8.0 / 240.0
+    }
+}

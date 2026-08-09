@@ -85,6 +85,7 @@ impl CcdStrategy for SweepClampCcd {
         }
         self.dynamic
             .impacts_into(ctx, &candidates, &mut self.impacts);
+        retain_earliest_per_candidate(&mut self.impacts, candidates.len());
 
         // Moved out so the resolve loop can borrow `self` mutably; handed
         // back at the end so its capacity survives to the next substep.
@@ -253,4 +254,92 @@ fn single_point_contact(impact: &SweptImpact) -> SolverContact {
         0.0,
         FeatureId::SINGLE,
     )
+}
+
+/// Keep only each candidate's earliest impact, in time-of-impact order.
+///
+/// A candidate can find several impacts in one substep — the terrain sweep and
+/// the body sweep are independent, and one sweep can meet two obstacles. But a
+/// body can only be rewound to one point in time. Clamping it more than once
+/// leaves it wherever the last impact happened to put it, which for any impact
+/// but the earliest is somewhere it never reached, and applies an impulse for
+/// a collision that never happened.
+///
+/// This does mean a candidate that genuinely meets two obstacles at once — the
+/// inside of a corner — resolves against one of them per substep, and needs the
+/// next substep for the other. Sorting earliest-first is what makes that
+/// harmless: the obstacle it would have reached first is the one it stops on.
+///
+/// Reaching the multi-impact case at all is harder than it sounds, and no
+/// scenario in the bench harness manages it. Two obstacles in a line cannot
+/// both be hit, since reaching the second means already being inside the first,
+/// and at a substep of 1/240 a sweep is short enough that anything else has to
+/// be arranged very deliberately. This is a guard on an invariant — a body can
+/// be rewound to one time, not several — rather than a repair of an observed
+/// fault.
+fn retain_earliest_per_candidate(impacts: &mut Vec<(usize, SweptImpact)>, candidate_count: usize) {
+    if impacts.len() < 2 {
+        return;
+    }
+    impacts.sort_by(|(_, a), (_, b)| a.toi.total_cmp(&b.toi));
+
+    let mut resolved = vec![false; candidate_count];
+    impacts.retain(|(index, _)| !std::mem::replace(&mut resolved[*index], true));
+}
+
+#[cfg(test)]
+mod tests {
+    use nalgebra::UnitQuaternion;
+
+    use crate::physics::handle::RigidBodyHandle;
+    use crate::physics::pipeline::pair::PairHeader;
+
+    use super::*;
+
+    fn body(idx: usize) -> RigidBodyHandle {
+        RigidBodyHandle(generational_arena::Index::from_raw_parts(idx, 0))
+    }
+
+    fn impact(candidate: usize, toi: f32) -> (usize, SweptImpact) {
+        (
+            candidate,
+            SweptImpact {
+                header: PairHeader {
+                    body_a: None,
+                    body_b: body(candidate),
+                    collider_a: None,
+                    collider_b: None,
+                    restitution: 0.0,
+                    friction: 0.0,
+                },
+                toi,
+                point: Point3::origin(),
+                normal: Vector3::y(),
+                clamped: body(candidate),
+                clamped_rotation: UnitQuaternion::identity(),
+            },
+        )
+    }
+
+    fn survivors(mut impacts: Vec<(usize, SweptImpact)>, count: usize) -> Vec<(usize, f32)> {
+        retain_earliest_per_candidate(&mut impacts, count);
+        impacts.into_iter().map(|(i, im)| (i, im.toi)).collect()
+    }
+
+    #[test]
+    fn a_candidate_keeps_only_its_earliest_impact() {
+        let impacts = vec![impact(0, 0.8), impact(0, 0.2), impact(0, 0.5)];
+        assert_eq!(survivors(impacts, 1), vec![(0, 0.2)]);
+    }
+
+    #[test]
+    fn distinct_candidates_all_survive_in_time_order() {
+        let impacts = vec![impact(1, 0.9), impact(0, 0.1), impact(2, 0.5)];
+        assert_eq!(survivors(impacts, 3), vec![(0, 0.1), (2, 0.5), (1, 0.9)]);
+    }
+
+    #[test]
+    fn a_lone_impact_is_left_alone() {
+        assert_eq!(survivors(vec![impact(0, 0.4)], 1), vec![(0, 0.4)]);
+    }
 }
