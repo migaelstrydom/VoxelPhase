@@ -197,6 +197,82 @@ Also worth knowing: this only pays off if the material palette is legible in the
 first place, which means resisting the urge to give every prop a unique bespoke
 finish. Few, distinct, memorable finishes beat many similar ones.
 
+### Landed 2026-08-09: the derivation and most of the wiring
+
+`PhysicalSurface` (`src/rendering/physical_finish.rs`) maps friction,
+restitution and density onto roughness and metallic. Friction sets the base
+roughness, restitution pulls it towards gloss, density alone decides metal.
+`physics_finish` on the visual bench shoots one sphere per archetype using the
+real derivation and prints the numbers under each tile.
+
+`src/app/spawnables/shared/finish.rs` is the seam that stops the two drifting:
+a spawnable declares one `PhysicalSurface`, the collider takes
+`with_physical_surface` and the material takes `with_derived_finish`. Around
+twenty spawnables use it — the box family, the primitives, dolos, menhir,
+trilithon, table, jack, jenga, domino, banana, fence post, hex prism, beach
+ball, pendulum.
+
+Three things learned by doing it, none of them obvious from the table above:
+
+- **Bounce has to override grip, not average with it.** The two both want to own
+  roughness. Averaging put a rubber ball and satin wood within 0.05 roughness of
+  each other, which is invisible; letting restitution win separates them, and
+  it is the cue a player acts on anyway.
+- **The "broad soft highlight" for rubber is not available.** That is clearcoat
+  (§1.3), and without it the only rubber cue is gloss — hence
+  `ELASTIC_GLOSS_ROUGHNESS` at 0.18 rather than the mid-roughness the table
+  implies. Revisit this when clearcoat lands.
+- **Game densities are gameplay values, not physical ones.** A crate is
+  50 kg/m³ and a "heavy" crate 150, a tenth of real timber, so nothing in the
+  box family can ever read as metal however metallic its texture is. Props that
+  were authored with real densities (menhir 2700, dolos 2400, pendulum frame
+  7800, jack 7800) read correctly. Fixing the box family means changing physics
+  a level is tuned against, and is a separate decision.
+
+The multi-part structures followed the same day: play wheel, plank bridge,
+seesaw, voussoir arch, house and temple. Only **trampoline** is deliberately
+unwired — its bed carries the high restitution, so the derivation would make
+canvas glossy, and that is the one case where the mapping is literally correct
+and visually wrong.
+
+Wiring them turned up a fourth instance of the same theme, and the sharpest one:
+
+- **A whole structure usually shares one collider material.** House stone,
+  brick and slate are all 1800 / 0.7 / 0.1, so all three render identically at
+  roughness 0.56, and the temple was the same until marble was split out.
+
+The temple split is worth reading before doing the same to the house, because
+what stopped it was not taste:
+
+- Marble is now its own surface (2700 / 0.4 / 0.05, roughness **0.36**) against
+  the stylobate's rubble (2400 / 1.5 / 0.05, roughness **0.96**). Columns,
+  entablature, pediments and roof are marble; only the steps are rubble.
+- **The roof pitch puts a hard floor under how slick marble can be.** The roof
+  panels are sloped slabs held by friction alone, so a panel needs
+  `mu >= pediment_h / eave_dist`. The pediment used to be `half_w / PHI`, which
+  approached a 31.7° roof demanding mu >= 0.62 — steeper than the friction angle
+  of stone, and enough to pin marble at satin.
+- **The proportion was the bug.** Doric gables are shallow: the Parthenon's is
+  about 0.22 of its half-width, roughly 13°, where `half_w / PHI` is 0.618. The
+  golden ratio was being applied to the one dimension the Greeks did not apply
+  it to, which made the temple read gothic *and* created the physics problem.
+  `DORIC_PEDIMENT_RATIO` = 0.22 fixes both: the roof now needs only mu >= 0.22
+  at any width, so marble sits at a real dressed-stone 0.4 and renders polished.
+- Real temples do not need joints for this, which is why none were added. Their
+  roofs were **timber rafters carrying small overlapping tiles**, not stone
+  slabs, and their iron clamps in lead resist spreading rather than sliding.
+  Three tests in `temple.rs` hold the invariant, including one asserting the
+  gable stays under 15°.
+- **The arch's abutments land in the half-metal band** at metallic 0.16, because
+  their density is doubled for stability rather than because they are metal.
+  Masonry at 4000 kg/m³ is a gameplay value crossing a threshold set for real
+  ones. It is subtle enough to leave, but it is the failure the narrow band was
+  supposed to make rare, and a second offender would mean density is the wrong
+  metal signal in a game whose densities are tuned rather than measured.
+
+Still open here: **per-instance variation**, the fracturable row of the table
+(interior material on fracture faces), and the trampoline.
+
 ---
 
 ## 3. Grounding — shadows and occlusion

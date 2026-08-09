@@ -6,6 +6,17 @@ and `LIGHTING_PLAN.md` for occlusion.
 
 ## Start here
 
+**Look at the props in the game.** Every spawnable that was wired on 2026-08-09
+now takes its roughness and metallic from its collider (`VISUAL_DIRECTION.md`
+§2), and no bench scene builds real spawnables, so the sheet cannot show it. The
+things to check: whether the pendulum's steel frame and the jack read as metal
+rather than as grey plastic, whether the beach ball reads glossier than a crate,
+and whether anything has gone *too* shiny — the box family sits at friction 0.6,
+which lands mid-roughness, and there are a lot of boxes in a level.
+
+`cargo run --bin visual_bench -- physics_finish --columns 3` shows the mapping
+itself on spheres, which is where to retune it if the game says it is wrong.
+
 **Look at the game and confirm the shadows again.** One screenshot has been
 checked since the shadow work and it caught a real regression (see the kernel
 footprint trap below); the fix for it — 4096² — has *not* been seen in the game
