@@ -23,7 +23,7 @@ impl Default for BenchRunConfig {
         Self {
             fixed_dt: 1.0 / 240.0,
             duration: 8.0,
-            max_substeps_per_frame: 8,
+            max_substeps_per_frame: 12,
         }
     }
 }

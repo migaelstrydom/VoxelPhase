@@ -8,6 +8,7 @@ mod many_body;
 mod mesh_pipeline;
 mod solver;
 mod stability;
+mod substep_budget;
 mod wall_slide;
 mod wobble;
 
