@@ -13,7 +13,7 @@ use smallvec::{smallvec, SmallVec};
 use crate::collision::contact::FeatureId;
 use crate::collision::continuous::gjk_raycast;
 use crate::collision::mesh::obb_patch::obb_patch_manifold;
-use crate::collision::mesh::seam_filter::filter_patch;
+use crate::collision::mesh::seam_filter::{filter_patch, COPLANAR_DOT};
 use crate::collision::obb::Obb;
 use crate::collision::shape_view::ShapeView;
 use crate::physics::collider::{ColliderMaterial, ColliderShape};
@@ -281,7 +281,7 @@ fn box_ccd_solver_contacts(
     let margin = Vector3::new(contact_margin, contact_margin, contact_margin);
     let query = crate::collision::AABB::new(aabb_min - margin, aabb_max + margin);
     let patch = static_geometry.query_region(&query);
-    let filtered = filter_patch(&patch, 0.98);
+    let filtered = filter_patch(&patch, COPLANAR_DOT);
     let manifold = obb_patch_manifold(&obb, &filtered, contact_margin);
 
     let mut contacts: SmallVec<[SolverContact; 4]> = manifold

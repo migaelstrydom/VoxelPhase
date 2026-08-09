@@ -19,6 +19,13 @@ use crate::collision::contact::FeatureId;
 use crate::collision::mesh_patch::MeshPatch;
 use crate::collision::triangle::Triangle;
 
+/// Cosine threshold above which two neighbouring faces count as coplanar and
+/// may merge. Shared by every production caller of [`filter_patch`] so the
+/// discrete narrowphase and the CCD sweep agree on what a seam is — they
+/// generate contacts against the same surfaces and must not disagree about
+/// which of them are creases.
+pub const COPLANAR_DOT: f32 = 0.98;
+
 /// A MeshPatch after seam filtering: contact faces (triangles or merged
 /// quads) and boundary/crease edges only.
 #[derive(Debug, Clone)]

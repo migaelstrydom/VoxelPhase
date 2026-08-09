@@ -17,8 +17,8 @@ use super::handle::{ColliderHandle, RigidBodyHandle};
 use super::impact::ImpactLedger;
 use super::impulses::PhysicsImpulse;
 use super::narrowphase::{
-    generate_dynamic_contacts, generate_static_contacts, GjkCacheMap, NarrowphaseWorkBuffer,
-    SatCacheMap,
+    generate_dynamic_contacts, generate_static_contacts, GjkCacheMap, NarrowphaseConfig,
+    NarrowphaseWorkBuffer, SatCacheMap, SpeculativeConfig,
 };
 use super::pipeline::integration::{integrate_bodies, integrate_forces};
 use super::pipeline::manifold::ManifoldCache;
@@ -91,6 +91,24 @@ pub struct PhysicsConfig {
     pub sleep: SleepManagerConfig,
     /// Debug rendering configuration.
     pub debug: PhysicsDebugConfig,
+}
+
+impl PhysicsConfig {
+    /// Project the narrowphase's slice of this config.
+    ///
+    /// Built fresh each frame rather than stored, so the narrowphase can never
+    /// drift out of step with a `PhysicsConfig` mutated between frames.
+    pub fn narrowphase(&self) -> NarrowphaseConfig {
+        NarrowphaseConfig {
+            contact_margin: self.contact_margin,
+            speculative: SpeculativeConfig {
+                enabled: self.enable_speculative_contacts,
+                min_speed: self.speculative_min_speed,
+                margin_multiplier: self.speculative_margin_multiplier,
+                ccd_threshold: self.ccd_threshold,
+            },
+        }
+    }
 }
 
 impl Default for PhysicsConfig {
@@ -588,39 +606,35 @@ impl PhysicsWorld {
         // Apply one-shot impulses and persistent force fields
         self.apply_impulses(impulses);
 
-        // Narrowphase contact generation
-        let mut raw_manifolds = generate_static_contacts(
+        // Narrowphase contact generation. Both passes append to one buffer,
+        // static first, so the caller owns the reset rather than either pass.
+        let narrowphase_config = self.config.narrowphase();
+        self.narrowphase_work_buffer.begin_frame();
+        generate_static_contacts(
             &self.bodies,
             &self.colliders,
             static_geometry,
-            self.config.contact_margin,
+            &narrowphase_config,
             dt,
-            self.config.ccd_threshold,
-            self.config.enable_speculative_contacts,
-            self.config.speculative_min_speed,
-            self.config.speculative_margin_multiplier,
             sleeping_snapshot.as_ref(),
+            &mut self.narrowphase_work_buffer,
         );
         generate_dynamic_contacts(
             &self.bodies,
             &self.colliders,
-            self.config.contact_margin,
+            &narrowphase_config,
             dt,
-            self.config.ccd_threshold,
-            self.config.enable_speculative_contacts,
-            self.config.speculative_min_speed,
-            self.config.speculative_margin_multiplier,
             sleeping_snapshot.as_ref(),
             &mut self.sat_cache_map,
             &mut self.gjk_cache_map,
             &mut self.narrowphase_work_buffer,
         );
-        raw_manifolds.extend_from_slice(self.narrowphase_work_buffer.manifolds());
+        let raw_manifolds = self.narrowphase_work_buffer.manifolds();
 
         // Merge with manifold cache (populates warm-start impulses)
         let solver_manifolds = self
             .manifold_cache
-            .merge(&raw_manifolds, self.config.deterministic_contact_ordering);
+            .merge(raw_manifolds, self.config.deterministic_contact_ordering);
 
         self.last_contacts.clear();
         self.impacts.clear();
