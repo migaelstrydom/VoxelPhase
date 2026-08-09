@@ -38,16 +38,49 @@ pub enum AirSteering {
     },
 }
 
+impl AirSteering {
+    /// Advance a committed lock by `dt`, lapsing to `Responsive` on expiry.
+    ///
+    /// Every state that can carry a lock must call this. A state that holds a
+    /// `Locked` without decaying it pins the character to the committed
+    /// velocity for as long as that state lasts.
+    pub fn decayed(self, dt: f32) -> Self {
+        match self {
+            AirSteering::Locked {
+                velocity,
+                remaining,
+            } => {
+                let r = remaining - dt;
+                if r <= 0.0 {
+                    AirSteering::Responsive
+                } else {
+                    AirSteering::Locked {
+                        velocity,
+                        remaining: r,
+                    }
+                }
+            }
+            AirSteering::Responsive => AirSteering::Responsive,
+        }
+    }
+}
+
 /// Locomotion layer — how the character is moving through the world.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LocomotionState {
     /// On the ground. Direct X/Z control, can jump.
     Grounded,
     /// Jump initiated but still in contact with ground. Holds the template
-    /// for the air state it will transition into when `!is_grounded`.
+    /// for the air state it will transition into.
+    ///
+    /// `remaining` bounds the wait. Leaving the ground is the normal exit, but
+    /// it cannot be the *only* one: this state snaps a committed velocity and
+    /// handles no input, so a grounding signal that never goes false would
+    /// strand the character here with the controls dead.
     Launching {
         steering: AirSteering,
         allow_cutoff: bool,
+        remaining: f32,
     },
     /// Just walked off an edge. Air steering, Y clamped, can coyote-jump.
     /// The f32 is the remaining grace time.
@@ -129,6 +162,7 @@ impl LocomotionState {
                             remaining: cfg.long_jump_air_lock_duration,
                         },
                         allow_cutoff: false,
+                        remaining: cfg.launch_window,
                     };
                     out.set_vy = Some(cfg.jump_speed * cfg.long_jump_vertical_mul);
                     out.set_air_speed = Some(speed);
@@ -137,6 +171,7 @@ impl LocomotionState {
                     out.next_state = LocomotionState::Launching {
                         steering: AirSteering::Responsive,
                         allow_cutoff: true,
+                        remaining: cfg.launch_window,
                     };
                     out.set_vy = Some(cfg.jump_speed);
                     out.set_air_speed = Some(input.horizontal_speed.max(cfg.walk_speed));
@@ -149,13 +184,26 @@ impl LocomotionState {
             LocomotionState::Launching {
                 steering,
                 allow_cutoff,
+                remaining,
             } => {
-                if !input.is_grounded {
-                    out.next_state = LocomotionState::Airborne {
+                let steering = steering.decayed(input.dt);
+                let r = remaining - input.dt;
+                // The window expiring while still grounded is a jump that never
+                // got off the floor. Going airborne anyway is right: the next
+                // tick sees `is_grounded` and drops straight back to Grounded,
+                // which restores control. Staying here would not.
+                out.next_state = if !input.is_grounded || r <= 0.0 {
+                    LocomotionState::Airborne {
                         steering,
                         allow_cutoff,
-                    };
-                }
+                    }
+                } else {
+                    LocomotionState::Launching {
+                        steering,
+                        allow_cutoff,
+                        remaining: r,
+                    }
+                };
             }
             LocomotionState::CoyoteTime(remaining) => {
                 if input.jump_pressed {
@@ -186,26 +234,8 @@ impl LocomotionState {
                 if input.is_grounded {
                     out.next_state = LocomotionState::Grounded;
                 } else {
-                    // Decay any locked-steering timer; lapse to Responsive on expiry.
-                    let next_steering = match steering {
-                        AirSteering::Locked {
-                            velocity,
-                            remaining,
-                        } => {
-                            let r = remaining - input.dt;
-                            if r <= 0.0 {
-                                AirSteering::Responsive
-                            } else {
-                                AirSteering::Locked {
-                                    velocity,
-                                    remaining: r,
-                                }
-                            }
-                        }
-                        AirSteering::Responsive => AirSteering::Responsive,
-                    };
                     out.next_state = LocomotionState::Airborne {
-                        steering: next_steering,
+                        steering: steering.decayed(input.dt),
                         allow_cutoff,
                     };
                 }
@@ -413,5 +443,153 @@ impl Default for CharacterIntent {
             throw: false,
             throw_grenade: false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const DT: f32 = 1.0 / 60.0;
+
+    fn input<'a>(
+        config: &'a LocomotionConfig,
+        is_grounded: bool,
+        move_dir: Vector3<f32>,
+    ) -> LocomotionInput<'a> {
+        LocomotionInput {
+            dt: DT,
+            is_grounded,
+            jump_pressed: false,
+            horizontal_speed: 0.0,
+            move_dir,
+            long_jump_armed: false,
+            config,
+        }
+    }
+
+    fn long_jump(config: &LocomotionConfig) -> LocomotionState {
+        let dir = Vector3::new(1.0, 0.0, 0.0);
+        let mut start = input(config, true, dir);
+        start.jump_pressed = true;
+        start.long_jump_armed = true;
+        let out = LocomotionState::Grounded.tick(&start);
+        assert!(matches!(out.next_state, LocomotionState::Launching { .. }));
+        out.next_state
+    }
+
+    /// A long jump that never reports leaving the ground used to be an
+    /// absorbing state: `Launching` exited only on `!is_grounded`, so a
+    /// grounding source stuck true pinned the character there forever. That
+    /// state snaps horizontal velocity to the committed vector and handles no
+    /// jump input, which is a total loss of control — the flat long-jump arc
+    /// keeps the feet inside foot-probe range, so this is reachable in play.
+    #[test]
+    fn launching_cannot_be_held_by_grounding_that_never_goes_false() {
+        let config = LocomotionConfig::player();
+        let mut state = long_jump(&config);
+
+        // Two full seconds of "still grounded" — far past any launch window.
+        for _ in 0..120 {
+            state = state
+                .tick(&input(&config, true, Vector3::zeros()))
+                .next_state;
+        }
+
+        assert!(
+            !matches!(state, LocomotionState::Launching { .. }),
+            "launch must time out even while grounding reports contact"
+        );
+    }
+
+    /// Timing out into `Airborne` while still grounded is not a dead end:
+    /// the very next tick lands, which is what restores input control.
+    #[test]
+    fn a_launch_that_never_left_the_ground_lands_again() {
+        let config = LocomotionConfig::player();
+        let mut state = long_jump(&config);
+
+        for _ in 0..120 {
+            state = state
+                .tick(&input(&config, true, Vector3::zeros()))
+                .next_state;
+        }
+
+        assert_eq!(state, LocomotionState::Grounded);
+    }
+
+    /// The steering lock is a duration, not a state: time spent in `Launching`
+    /// has to count against it. Only `Airborne` used to decay it.
+    #[test]
+    fn the_committed_steering_lock_decays_during_launch() {
+        let config = LocomotionConfig::player();
+        let state = long_jump(&config);
+
+        let after = state
+            .tick(&input(&config, true, Vector3::zeros()))
+            .next_state;
+
+        match after {
+            LocomotionState::Launching {
+                steering: AirSteering::Locked { remaining, .. },
+                ..
+            } => assert!(
+                remaining < config.long_jump_air_lock_duration,
+                "lock did not decay: {remaining}"
+            ),
+            other => panic!("expected a still-locked launch, got {other:?}"),
+        }
+    }
+
+    /// While locked, the rule snaps (infinite accel) to the committed velocity
+    /// and ignores input — that is the mechanism by which a stuck launch reads
+    /// as "keeps moving in a fixed direction, keys do nothing".
+    #[test]
+    fn a_locked_launch_ignores_the_movement_input() {
+        let config = LocomotionConfig::player();
+        let state = long_jump(&config);
+
+        let rule = state.movement_rule(Vector3::new(-1.0, 0.0, 0.0), 5.0, 40.0, 5.0, 8.0);
+
+        assert!(rule.accel.is_infinite());
+        assert!(rule.target.x > 0.0, "target follows takeoff, not input");
+    }
+
+    /// A plain jump is `Responsive`, so the launch window is the only thing
+    /// holding it — and it must still let go.
+    #[test]
+    fn a_plain_jump_also_times_out_of_launch() {
+        let config = LocomotionConfig::player();
+        let mut start = input(&config, true, Vector3::zeros());
+        start.jump_pressed = true;
+        let mut state = LocomotionState::Grounded.tick(&start).next_state;
+
+        for _ in 0..60 {
+            state = state
+                .tick(&input(&config, true, Vector3::zeros()))
+                .next_state;
+        }
+
+        assert_eq!(state, LocomotionState::Grounded);
+    }
+
+    /// The normal path is unchanged: leaving the ground promotes to Airborne
+    /// on the first ungrounded tick, carrying the lock across.
+    #[test]
+    fn leaving_the_ground_still_promotes_a_launch_immediately() {
+        let config = LocomotionConfig::player();
+        let state = long_jump(&config);
+
+        let after = state
+            .tick(&input(&config, false, Vector3::zeros()))
+            .next_state;
+
+        assert!(matches!(
+            after,
+            LocomotionState::Airborne {
+                steering: AirSteering::Locked { .. },
+                ..
+            }
+        ));
     }
 }

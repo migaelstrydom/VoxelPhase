@@ -45,6 +45,15 @@ pub struct LocomotionConfig {
     /// Grace period after leaving ground where the character still behaves as grounded (seconds).
     /// Prevents ramp launches and enables coyote-time jumping.
     pub ground_grace_period: f32,
+    /// How long a jump may stay in `Launching` before it becomes airborne
+    /// regardless of what grounding reports (seconds).
+    ///
+    /// Still reporting ground contact for a frame or two after takeoff is
+    /// normal — a flat long jump skims within foot-probe range. Ground contact
+    /// must not be able to *hold* the character in launch, though: `Launching`
+    /// snaps a committed velocity and ignores input, so a grounding source
+    /// stuck true would freeze control permanently.
+    pub launch_window: f32,
     /// Proportional gain for the yaw angular velocity drive.
     /// Higher = snappier turns when unloaded. When holding a heavy object,
     /// the constraint reaction torque limits the actual turn rate regardless.
@@ -79,6 +88,7 @@ impl LocomotionConfig {
             long_jump_crouch_lockout: 1.0,
             long_jump_air_lock_duration: 2.0,
             ground_grace_period: 0.08,
+            launch_window: 0.2,
             turn_aggression: 10.0,
             collider_radius: 0.25,
             collider_half_height: 0.5,
