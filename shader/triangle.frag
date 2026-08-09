@@ -10,6 +10,7 @@
 #include "environment.glsl"
 #include "shadow.glsl"
 #include "triplanar.glsl"
+#include "surface_character.glsl"
 
 layout(location = 0) in vec4 inColor;
 layout(location = 1) in vec2 inTexCoord;
@@ -33,8 +34,15 @@ void main() {
     // Terrain has no texture coordinates worth sampling — marching cubes emits
     // no parameterisation — so it is textured by world position instead. Meshes
     // with authored UVs push a zero scale and take the cheaper path.
+    //
+    // The same flag decides what the location-2 channel means. A world-textured
+    // mesh has no use for its UVs, so terrain sends per-vertex surface
+    // character there instead and takes its roughness from the material it is
+    // actually made of, rather than from the one value the draw could push.
     float triplanar_scale = materialTriplanarScale();
-    vec4 texColor = triplanar_scale > 0.0
+    bool textured_by_world = triplanar_scale > 0.0;
+
+    vec4 texColor = textured_by_world
         ? triplanarSample(
             texSampler,
             inWorldPos,
@@ -47,7 +55,9 @@ void main() {
     surface.albedo = texColor.rgb * inColor.rgb;
     surface.normal = normal;
     surface.view_dir = normalize(scene.camera_pos.xyz - inWorldPos);
-    surface.roughness = materialRoughness();
+    surface.roughness = textured_by_world
+        ? roughnessFromHardness(inTexCoord.x)
+        : materialRoughness();
     surface.metallic = materialMetallic();
     surface.occlusion = inAo;
 

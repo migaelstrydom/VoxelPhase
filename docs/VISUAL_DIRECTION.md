@@ -500,6 +500,45 @@ same `PhysicalSurface` the props use. That means terrain friction becoming
 per-material in the physics engine, which is a physics change with gameplay
 consequences, and should not be smuggled in as part of a rendering item.
 
+#### Landed
+
+`VoxelMaterial::hardness()` normalises toughness to 0–1 through
+`t / (t + 4)`, marching cubes carries it per vertex from the same corner the
+colour comes from, and `shader/surface_character.glsl` maps it to roughness
+between 1.0 (chalk) and 0.45 (dense stone). The bench sheet is
+`terrain_finish`: a shallow dish blown through a stack of all seven
+destructible layers plus bedrock, so every material is exposed at once.
+
+Three things worth carrying forward.
+
+- **Indestructible is the limit of the curve, not a special case.** A saturating
+  `t / (t + k)` puts bedrock at exactly 1.0 as toughness grows without bound,
+  which means there is no branch to keep in step and no way for a new material
+  to land outside the range the shader expects.
+- **No new vertex attribute was needed.** §4.1 left terrain's texture
+  coordinates dead — a world-projected mesh never reads them — so hardness went
+  in that channel, and the projection scale the shader already branches on picks
+  which meaning applies. The vertex stayed at 52 bytes, which matters because
+  terrain buffers are the largest mesh in the game and are re-uploaded every
+  frame.
+- **The claim above — that this "delivers chalky-versus-slick immediately" — was
+  optimistic.** Measured against a control with the map flattened, it changes
+  34 % of the dish's pixels by a mean of 2.2/255, concentrated correctly on the
+  hard rings and rising monotonically inwards. But pushing the hard endpoint
+  from 0.45 all the way to 0.10 moves the image by only a further 1.8/255: the
+  dial is near-saturated. A dielectric reflects about 4 % of a fairly uniform
+  sky, and a broad smooth surface gives one narrow band where the sun's
+  half-vector lines up, so there is very little for a tighter lobe to catch.
+  Roughness on its own is not yet a legible readout. §4.2 is what supplies the
+  microstructure it needs, which makes this enabling work first and a visible
+  feature second — the ordering was right for the wrong reason.
+
+A trap found on the way, now documented at `MaterialLayer::depth`: layer depths
+are *boundaries*, not thicknesses, and anything below the deepest one falls
+through to a built-in default ladder. Equal depths silently make every layer
+after the first unreachable, and a gap above the bedrock puts a ring of the
+wrong material in the middle of a crater.
+
 ### 4.4 Slope zoning
 
 Blend between materials by the normal's vertical component: growth on flats,
@@ -572,10 +611,12 @@ merits and with its own perf budget, not attached to §4.1.
 
 1. ~~**4.1 triplanar**~~ — landed. Prerequisite, and a defect fix, but nearly
    invisible alone, exactly as predicted.
-2. **4.3 per-fragment roughness from toughness** — carries the pipeline change
-   4.2 also needs, and delivers chalky-versus-slick immediately.
-3. **4.2 detail normals with variance-coupled roughness** — the core; the largest
-   visible change in this section.
+2. ~~**4.3 per-fragment roughness from toughness**~~ — landed. Carries the
+   per-fragment surface data 4.2 also needs. It was expected to deliver
+   chalky-versus-slick on its own and does not; see the measurement above.
+3. **4.2 detail normals with variance-coupled roughness** — next, and now the
+   item both landed pieces are waiting on: the core, the largest visible change
+   in this section, and what finally makes 4.3's roughness legible.
 4. **4.5 grass sheen** — small, independent, can be slotted anywhere.
 5. **4.4 slope zoning** — on top of a surface system that already works.
 6. **4.6 fresh destruction** — last, because it is a modulation of everything

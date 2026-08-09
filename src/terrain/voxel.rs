@@ -16,6 +16,12 @@
 //! could not see. Toughness-by-material is both legible — the colour is the
 //! durability — and immune to that class of bug.
 
+/// Toughness that maps to half hardness. Sits just above the mid-range
+/// materials so that the destructible ladder spends most of its span on the
+/// soft half, where the visible difference between chalk and stone is, rather
+/// than crowding against the indestructible ceiling.
+const HARDNESS_MIDPOINT: f32 = 4.0;
+
 /// Material type for a voxel, determining its properties and appearance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[repr(u8)]
@@ -95,6 +101,32 @@ impl VoxelMaterial {
         self.toughness().is_none()
     }
 
+    /// How hard this material is to break, on a 0-to-1 scale: 0 is the softest
+    /// thing that can exist and 1 is unbreakable.
+    ///
+    /// This is what the renderer shades from, so that a surface's finish is a
+    /// readout of the number destruction actually spends against — soft
+    /// materials read chalky, hard ones read dense and glinty, and a player can
+    /// tell before firing whether a wall will go.
+    ///
+    /// `t / (t + HARDNESS_MIDPOINT)` rather than a linear rescale, for two
+    /// reasons. It is bounded, so a level that authors a toughness far outside
+    /// the current range still lands somewhere sensible instead of clipping.
+    /// And [`Bedrock`](VoxelMaterial::Bedrock) is the curve's limit as toughness
+    /// grows without bound rather than a special case bolted on: infinitely
+    /// tough is exactly what indestructible means.
+    ///
+    /// Deliberately compressive at the top. Toughness is a gameplay-tuned
+    /// number rather than a measured one, so the mapping stays coarse and
+    /// monotonic: only large toughness differences produce visible ones, and
+    /// retuning a material's difficulty cannot quietly restyle the level.
+    pub fn hardness(&self) -> f32 {
+        match self.toughness() {
+            Some(toughness) => toughness / (toughness + HARDNESS_MIDPOINT),
+            None => 1.0,
+        }
+    }
+
     /// Check if this material is solid (should be collided with).
     pub fn is_solid(&self) -> bool {
         !matches!(self, VoxelMaterial::Air)
@@ -154,5 +186,83 @@ impl Voxel {
 impl Default for Voxel {
     fn default() -> Self {
         Self::air()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const DESTRUCTIBLE: [VoxelMaterial; 7] = [
+        VoxelMaterial::Grass,
+        VoxelMaterial::Sand,
+        VoxelMaterial::Dirt,
+        VoxelMaterial::Ite,
+        VoxelMaterial::Limestone,
+        VoxelMaterial::Rock,
+        VoxelMaterial::Slate,
+    ];
+
+    /// The whole point of shading from hardness is that a harder surface never
+    /// looks softer than an easier one. Anything non-monotonic would make the
+    /// finish an unreliable readout, which is worse than not having it.
+    #[test]
+    fn hardness_never_falls_as_toughness_rises() {
+        let mut ranked = DESTRUCTIBLE;
+        ranked.sort_by(|a, b| {
+            a.toughness()
+                .unwrap()
+                .partial_cmp(&b.toughness().unwrap())
+                .unwrap()
+        });
+
+        for pair in ranked.windows(2) {
+            assert!(
+                pair[0].hardness() <= pair[1].hardness(),
+                "{:?} ({}) reads harder than {:?} ({})",
+                pair[0],
+                pair[0].hardness(),
+                pair[1],
+                pair[1].hardness()
+            );
+        }
+    }
+
+    /// Hardness is consumed as a 0-to-1 shading parameter, and a value outside
+    /// that range would drive roughness past its own limits.
+    #[test]
+    fn hardness_stays_within_the_unit_range() {
+        for material in DESTRUCTIBLE {
+            let hardness = material.hardness();
+            assert!(
+                (0.0..=1.0).contains(&hardness),
+                "{material:?} has hardness {hardness}"
+            );
+        }
+        assert_eq!(VoxelMaterial::Air.hardness(), 0.0);
+    }
+
+    /// Indestructible is the limit of the same curve, not a separate branch in
+    /// disguise: bedrock must sit above every material that can be broken.
+    #[test]
+    fn nothing_destructible_reads_as_hard_as_bedrock() {
+        let hardest = DESTRUCTIBLE
+            .iter()
+            .map(|m| m.hardness())
+            .fold(0.0f32, f32::max);
+
+        assert!(
+            hardest < VoxelMaterial::Bedrock.hardness(),
+            "the toughest destructible material reads {hardest}, at the bedrock ceiling"
+        );
+    }
+
+    /// Coarse and monotonic is the requirement, but a ladder whose rungs are
+    /// indistinguishable would be a readout the player cannot read. Grass and
+    /// rock are three tiers apart and must look clearly different.
+    #[test]
+    fn the_ends_of_the_destructible_ladder_are_far_apart() {
+        let spread = VoxelMaterial::Rock.hardness() - VoxelMaterial::Grass.hardness();
+        assert!(spread > 0.3, "grass to rock spans only {spread}");
     }
 }

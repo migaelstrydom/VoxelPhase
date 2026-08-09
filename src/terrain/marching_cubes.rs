@@ -15,6 +15,10 @@ pub struct MarchingCubesMesh {
     pub normals: Vec<Vector3<f32>>,
     /// Vertex colors (from material).
     pub colors: Vec<[f32; 4]>,
+    /// Per-vertex `VoxelMaterial::hardness`, taken from the same corner the
+    /// colour is, so a vertex's finish and its colour always describe the same
+    /// material.
+    pub hardness: Vec<f32>,
     /// Triangle indices.
     pub indices: Vec<u32>,
 }
@@ -26,6 +30,7 @@ impl MarchingCubesMesh {
             positions: Vec::new(),
             normals: Vec::new(),
             colors: Vec::new(),
+            hardness: Vec::new(),
             indices: Vec::new(),
         }
     }
@@ -164,6 +169,7 @@ impl MarchingCubes {
         // Interpolate vertices, colors, and normals on edges
         let mut edge_vertices = [Point3::origin(); 12];
         let mut edge_colors = [[0.0f32; 4]; 12];
+        let mut edge_hardness = [0.0f32; 12];
         let mut edge_normals = [Vector3::zeros(); 12];
 
         for i in 0..12 {
@@ -180,6 +186,7 @@ impl MarchingCubes {
                 // (e.g. destroyed voxels or grid-aligned heightfields).
                 let solid_corner = if d0 > self.iso_level { v0 } else { v1 };
                 edge_colors[i] = corners[solid_corner].material.color();
+                edge_hardness[i] = corners[solid_corner].material.hardness();
                 let grad = corner_gradients[v0].lerp(&corner_gradients[v1], t);
                 let n = -grad;
                 edge_normals[i] = if n.magnitude_squared() > 1e-10 {
@@ -201,6 +208,7 @@ impl MarchingCubes {
                 let edge = triangles[i + j] as usize;
                 mesh.positions.push(edge_vertices[edge]);
                 mesh.colors.push(edge_colors[edge]);
+                mesh.hardness.push(edge_hardness[edge]);
                 mesh.normals.push(edge_normals[edge]);
                 mesh.indices.push(base_index + (i + j) as u32);
             }

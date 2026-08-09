@@ -229,7 +229,10 @@ fn default_bedrock_thickness() -> f32 {
 /// Maps a depth range below the terrain surface to a voxel material.
 #[derive(Deserialize)]
 pub struct MaterialLayer {
-    /// Maximum depth (from surface) at which this material appears.
+    /// Maximum depth (from surface) at which this material appears — the
+    /// layer's lower boundary, not its thickness. The first layer deeper than a
+    /// sample wins, so a list whose depths do not increase leaves every layer
+    /// after the first unreachable, silently.
     pub depth: f32,
     pub material: VoxelMaterialId,
 }

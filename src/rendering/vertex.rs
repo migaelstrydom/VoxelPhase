@@ -7,12 +7,34 @@ use std::mem;
 pub struct Vertex {
     pub pos: Vector3<f32>,
     pub color: Vector4<f32>,
+    /// Where on the diffuse texture this vertex sits — *unless* the draw
+    /// carries a `TriplanarProjection`, in which case the mesh is textured by
+    /// world position and this channel carries surface character instead. See
+    /// [`surface_character`].
     pub tex_coords: Vector2<f32>,
     pub normal: Vector3<f32>,
     /// Baked ambient occlusion: `1.0` is fully open, lower is in shade from
     /// nearby geometry. Only terrain bakes it (`terrain::ao`); everything else
     /// carries `1.0`, which is both the neutral value and the honest one.
     pub ao: f32,
+}
+
+/// Pack per-vertex surface character into the texture-coordinate channel.
+///
+/// A triplanar-projected mesh derives its texture coordinates from world
+/// position, so its authored UVs are dead payload — terrain spends them on
+/// `VoxelMaterial::hardness` instead, which the fragment shader turns into
+/// roughness. The two meanings never overlap: the draw's projection scale picks
+/// one, and it is the same flag the shader already branches on to decide how to
+/// sample.
+///
+/// Sharing the channel rather than adding an attribute is not just thrift.
+/// Terrain vertex buffers are re-uploaded every frame and are the largest mesh
+/// in the game, so a wider vertex costs bandwidth on exactly the geometry that
+/// can least afford it — the same reasoning that made ambient occlusion narrow
+/// `pos` instead of growing the struct.
+pub fn surface_character(hardness: f32) -> Vector2<f32> {
+    Vector2::new(hardness, 0.0)
 }
 
 impl Vertex {

@@ -12,6 +12,7 @@ pub mod shadow_tuning;
 pub mod shadows;
 pub mod sun_sweep;
 pub mod terrain_ao;
+pub mod terrain_finish;
 pub mod terrain_forms;
 pub mod voxel_terrain;
 
@@ -26,4 +27,5 @@ pub use shadow_tuning::ShadowTuning;
 pub use shadows::Shadows;
 pub use sun_sweep::SunSweep;
 pub use terrain_ao::TerrainAo;
+pub use terrain_finish::TerrainFinish;
 pub use terrain_forms::TerrainForms;

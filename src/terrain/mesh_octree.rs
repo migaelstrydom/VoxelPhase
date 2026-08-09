@@ -26,7 +26,7 @@ use super::ao::{OcclusionGrid, OcclusionSettings};
 use super::marching_cubes::MarchingCubes;
 use super::voxel_block::{SampleLattice, VoxelBlock, VoxelSource};
 use crate::collision::{Triangle, AABB};
-use crate::rendering::vertex::Vertex;
+use crate::rendering::vertex::{self, Vertex};
 
 /// Maximum triangles per leaf before splitting.
 pub const MAX_TRIANGLES_PER_LEAF: usize = 100;
@@ -266,7 +266,7 @@ impl MeshOctree {
                     mesh.colors[i][2],
                     mesh.colors[i][3],
                 ),
-                tex_coords: nalgebra::Vector2::new(pos.x * 0.1, pos.z * 0.1),
+                tex_coords: vertex::surface_character(mesh.hardness[i]),
                 normal: mesh.normals[i],
                 ao: 1.0,
             })
