@@ -3120,3 +3120,90 @@ impl PhysicsBenchScenario for SphereIntoDynamicCornerScenario {
         8.0 / 240.0
     }
 }
+
+/// Two shapes closing inside the speculative band: fast enough to step past the
+/// contact margin in a substep, too slow for either CCD gate to fire.
+///
+/// The band is narrow and frame-rate dependent. At 60 Hz a 0.2 m sphere at
+/// 12 m/s travels 0.05 m per substep — past the 0.04 m margin gate — while its
+/// 0.2 m frame travel stays under the 0.3 m frame-coverage gate. Speculative
+/// contacts are the only mechanism covering it.
+#[derive(Debug, Clone)]
+pub struct SpeculativeBandApproachScenario {
+    pub radius: f32,
+    pub speed: f32,
+    pub start_x: f32,
+    /// When set, the pair is boxes rather than spheres.
+    pub boxes: bool,
+    geometry: EmptyGeometry,
+}
+
+impl SpeculativeBandApproachScenario {
+    pub fn spheres() -> Self {
+        Self {
+            radius: 0.2,
+            speed: 12.0,
+            start_x: 1.5,
+            boxes: false,
+            geometry: EmptyGeometry,
+        }
+    }
+
+    pub fn boxes() -> Self {
+        Self {
+            boxes: true,
+            ..Self::spheres()
+        }
+    }
+
+    /// Closest the two centres may come: the shapes must not interpenetrate.
+    pub fn min_separation(&self) -> f32 {
+        2.0 * self.radius
+    }
+}
+
+impl PhysicsBenchScenario for SpeculativeBandApproachScenario {
+    fn name(&self) -> &'static str {
+        "speculative_band_approach"
+    }
+
+    fn restitution(&self) -> f32 {
+        0.0
+    }
+
+    fn build_world(&self) -> PhysicsWorld {
+        let mut config = PhysicsConfig::default();
+        config.sleep.enabled = false;
+        config.gravity = Vector3::zeros();
+        PhysicsWorld::new(config)
+    }
+
+    fn setup(&self, world: &mut PhysicsWorld) -> RigidBodyHandle {
+        let mut spawn = |x: f32, vx: f32| {
+            let body = world.create_body(
+                RigidBodyDesc::dynamic()
+                    .position(Point3::new(x, 0.0, 0.0))
+                    .linear_velocity(Vector3::new(vx, 0.0, 0.0)),
+            );
+            let shape = if self.boxes {
+                ColliderDesc::box_shape(Vector3::repeat(self.radius))
+            } else {
+                ColliderDesc::sphere(self.radius)
+            };
+            let _ =
+                world.attach_collider(body, shape.density(1000.0).restitution(0.0).friction(0.4));
+            body
+        };
+        spawn(-self.start_x, self.speed);
+        spawn(self.start_x, -self.speed)
+    }
+
+    fn geometry(&self) -> &dyn StaticGeometry {
+        &self.geometry
+    }
+
+    fn frame_dt(&self, _frame_idx: u64) -> f32 {
+        // 4 substeps of 1/240: a 60 fps frame.
+        4.0 / 240.0
+    }
+}

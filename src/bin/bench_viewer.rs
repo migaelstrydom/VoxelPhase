@@ -111,6 +111,7 @@ const SCENARIO_NAMES: &[&str] = &[
     "sphere_through_dynamic_slab",
     "sphere_through_two_slabs",
     "sphere_into_dynamic_corner",
+    "speculative_band_approach",
     "box_on_static_platform",
     "box_on_plank",
     "sliding_sphere",
@@ -147,6 +148,9 @@ fn run_viewer(name: &str) -> EngineResult<()> {
         }
         "sphere_through_two_slabs" => run_with_scenario(&SphereThroughTwoSlabsScenario::new()),
         "sphere_into_dynamic_corner" => run_with_scenario(&SphereIntoDynamicCornerScenario::new()),
+        "speculative_band_approach" => {
+            run_with_scenario(&SpeculativeBandApproachScenario::spheres())
+        }
         "box_on_static_platform" => run_with_scenario(&BoxOnStaticPlatformScenario::new(0.0)),
         "box_on_plank" => run_with_scenario(&BoxOnPlankScenario::new()),
         "sliding_sphere" => run_with_scenario(&SlidingSphereScenario::new()),

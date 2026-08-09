@@ -1,8 +1,8 @@
 use super::super::framework::{run_scenario, BenchRunConfig};
 use super::super::scenarios::{
     GrazingSphereWallCcdScenario, GrenadeSpeedWallCcdScenario, HighSpeedSphereCcdScenario,
-    SphereIntoDynamicCornerScenario, SphereThroughDynamicSlabScenario,
-    SphereThroughTwoSlabsScenario,
+    SpeculativeBandApproachScenario, SphereIntoDynamicCornerScenario,
+    SphereThroughDynamicSlabScenario, SphereThroughTwoSlabsScenario,
 };
 use super::assertions::*;
 use super::write_exports;
@@ -168,5 +168,69 @@ fn sphere_does_not_tunnel_into_a_dynamic_corner() {
     assert!(
         min_y > scenario.far_face(),
         "sphere passed through the floor: min_y={min_y}"
+    );
+}
+
+/// The speculative band, isolated: too fast for the discrete margin, too slow
+/// for either CCD gate. The pair must still be stopped without overlapping.
+#[ignore = "red: speculative contacts are gated, sized and paired on a substep, but generated once per frame — see the doc on assert_band_pair_separates"]
+#[test]
+fn spheres_closing_in_the_speculative_band_do_not_interpenetrate() {
+    assert_band_pair_separates(SpeculativeBandApproachScenario::spheres(), "spec_spheres");
+}
+
+/// The same band, with boxes. Nothing about the gap is sphere-specific.
+#[ignore = "red: speculative contacts are gated, sized and paired on a substep, but generated once per frame — see the doc on assert_band_pair_separates"]
+#[test]
+fn boxes_closing_in_the_speculative_band_do_not_interpenetrate() {
+    assert_band_pair_separates(SpeculativeBandApproachScenario::boxes(), "spec_boxes");
+}
+
+/// Both band tests are red, for three compounding reasons found by walking the
+/// pair through the pipeline. None is a CCD defect; all three are in the
+/// discrete narrowphase's handling of the band beneath CCD.
+///
+/// 1. The narrowphase broadphase bounds each collider where it *is*. A pair
+///    0.2 m apart and closing at 0.4 m per frame is never paired at all, so the
+///    speculative branch is not reached. Speculative contacts can therefore
+///    only fire for pairs already nearly touching — precisely when they are not
+///    needed. Bounding over the frame's travel fixes this.
+///
+/// 2. The prediction horizon is one substep while generation is once per frame,
+///    so it looks 1/8th of the way ahead it must cover.
+///
+/// 3. The band's ceiling is `ccd_threshold` in substep units while CCD's frame
+///    gate is `ccd_frame_coverage` in frame units. The two are not comparable,
+///    so the claim that speculative contacts cover the band below CCD could
+///    never be checked. For a 0.2 m sphere at 60 Hz there is a real gap at
+///    around 12 m/s where neither mechanism fires.
+///
+/// Fixing all three makes the pair meet — and then stop 0.6 m apart instead of
+/// 0.4 m, because a zero-depth contact tells the solver to arrest approach
+/// *now* rather than on arrival. A correct speculative contact has to carry its
+/// separation so the solver permits approach up to `gap / dt`. That is a change
+/// to what the solver reads out of a contact, which is why this is left red
+/// rather than half-fixed: bodies halting in mid-air are worse than bodies
+/// briefly overlapping, and the second assertion below is what catches it.
+fn assert_band_pair_separates(scenario: SpeculativeBandApproachScenario, stem: &str) {
+    let cfg = BenchRunConfig {
+        duration: 0.5,
+        ..BenchRunConfig::default()
+    };
+    let run = run_scenario(&scenario, cfg);
+    write_exports(&run, stem);
+
+    // The pair meets when the tracked body reaches half the separation. It must
+    // get there — stopping short is as wrong as overshooting, and a test that
+    // only bounds one side is satisfied by bodies halting in mid-air.
+    let contact_x = scenario.min_separation() * 0.5;
+    let min_x = run.samples.iter().map(|s| s.x).fold(f32::MAX, f32::min);
+    assert!(
+        min_x > contact_x - 0.05,
+        "pair interpenetrated: tracked body reached x={min_x}, contact at {contact_x}"
+    );
+    assert!(
+        min_x < contact_x + 0.05,
+        "pair stopped short of contact: tracked body stalled at x={min_x}, contact at {contact_x}"
     );
 }
