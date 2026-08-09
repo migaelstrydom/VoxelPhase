@@ -10,6 +10,7 @@
 
 use nalgebra::{Point3, Vector3};
 
+use crate::collision::discrete::epa::epa_penetration;
 use crate::collision::discrete::gjk::{gjk_query, GjkResult};
 use crate::collision::support::ConvexSupport;
 
@@ -51,27 +52,39 @@ pub fn gjk_raycast(
     displacement_a: Vector3<f32>,
     displacement_b: Vector3<f32>,
 ) -> Option<GjkRaycastHit> {
-    // Check if already overlapping at t=0.
-    let result = gjk_query(a, b);
-    match &result {
-        GjkResult::Intersecting { .. } => {
-            // Already overlapping — return t=0 with a best-effort normal.
-            let normal = estimate_separation_normal(a, b);
-            let center_b = estimate_center_point(b);
+    // Already touching or overlapping at t=0: there is no march to run, so the
+    // witness has to come from the query itself. Both branches below must
+    // report a point on B's *surface* — a caller that gets B's centre instead
+    // solves the contact metres from where the shapes meet, which for a large
+    // obstacle sends the impulse almost entirely into torque.
+    match gjk_query(a, b) {
+        GjkResult::Intersecting { simplex } => {
+            // GJK stops as soon as it encloses the origin and keeps no witness,
+            // so expand the simplex to recover the surface points.
+            let penetration = epa_penetration(a, b, 0.0, &simplex);
             return Some(GjkRaycastHit {
                 t: 0.0,
-                normal,
-                point: center_b,
+                // EPA reports A toward B; this result is oriented B toward A.
+                normal: -penetration.normal,
+                point: penetration.witness_b,
             });
         }
-        GjkResult::Separated { distance, .. } => {
-            if *distance < DISTANCE_TOLERANCE {
-                let normal = estimate_separation_normal(a, b);
-                let center_b = estimate_center_point(b);
+        GjkResult::Separated {
+            distance,
+            closest_a,
+            closest_b,
+        } => {
+            if distance < DISTANCE_TOLERANCE {
+                let delta = closest_a - closest_b;
+                let normal = if delta.magnitude_squared() > 1e-10 {
+                    delta.normalize()
+                } else {
+                    estimate_separation_normal(a, b)
+                };
                 return Some(GjkRaycastHit {
                     t: 0.0,
                     normal,
-                    point: center_b,
+                    point: closest_b,
                 });
             }
         }
@@ -433,6 +446,66 @@ mod tests {
         let h = hit.unwrap();
         // Distance = 8, rel speed = 10, t ≈ 0.8.
         assert!((h.t - 0.8).abs() < 0.02, "TOI should be ~0.8, got {}", h.t,);
+    }
+
+    /// A contact reported at the centre of a large obstacle is worse than no
+    /// contact at all: the solver applies the impulse metres from where the
+    /// shapes actually touch, and anything reading the contact point — the
+    /// grenade detonation rule, for one — places the event inside the obstacle.
+    ///
+    /// The t=0 path is where this bites, since it has no march to derive a
+    /// witness from. Measured against a temple step: a 0.12 m sphere sunk into
+    /// a 12 x 0.5 x 18 m box, whose centre is nine metres from the impact.
+    ///
+    /// Depths run from grazing to deep, because the shallow end is where the
+    /// direction is hardest to recover — at true tangency EPA has no penetration
+    /// to expand and cannot orient the normal at all. That case is left
+    /// unhandled: a hit that shallow carries no impulse worth placing, and
+    /// `is_tunnelling_hit` discards it if the direction does come back reversed.
+    #[test]
+    fn a_contact_at_time_zero_lands_on_the_obstacle_surface() {
+        let step = Obb::new(
+            Point3::new(0.0, 0.0, 0.0),
+            UnitQuaternion::identity(),
+            Vector3::new(6.0, 0.25, 9.0),
+        );
+        let face_y = 0.25;
+
+        for depth in [0.001, 0.02, 0.08, 0.11] {
+            let sphere = SupportSphere {
+                center: Point3::new(2.0, face_y + 0.12 - depth, -3.0),
+                radius: 0.12,
+            };
+
+            let hit = gjk_raycast(
+                &sphere,
+                &step,
+                Vector3::new(0.0, -0.5, 0.0),
+                Vector3::zeros(),
+            )
+            .unwrap_or_else(|| panic!("depth {depth}: should report a contact"));
+
+            assert!(
+                hit.t < 1e-6,
+                "depth {depth}: TOI should be ~0, got {}",
+                hit.t
+            );
+            assert!(
+                (hit.point.y - face_y).abs() < 1e-3,
+                "depth {depth}: contact should sit on the top face at y={face_y}, got {:?}",
+                hit.point,
+            );
+            assert!(
+                (hit.point.x - 2.0).abs() < 1e-3 && (hit.point.z + 3.0).abs() < 1e-3,
+                "depth {depth}: contact drifted away from the sphere, got {:?}",
+                hit.point,
+            );
+            assert!(
+                hit.normal.y > 0.99,
+                "depth {depth}: normal should point out of the top face, got {:?}",
+                hit.normal,
+            );
+        }
     }
 
     // --- Rotated OBB approaching ---
