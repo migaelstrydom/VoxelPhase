@@ -61,6 +61,7 @@ use crate::rendering::visual_bench::scene::{
     SceneCamera, SceneContext, SceneEnvironment, SceneShot, VisualScene,
 };
 use crate::rendering::visual_bench::scenes::voxel_terrain;
+use crate::terrain::surface;
 
 /// Sun elevation for the whole sheet, in degrees.
 ///
@@ -91,7 +92,7 @@ impl VisualScene for TerrainForms {
         "Real marching-cubes terrain: crevice, overhang, ridge, crater, slope sweep, thin spires."
     }
 
-    fn shots(&self, _ctx: &SceneContext) -> EngineResult<Vec<SceneShot>> {
+    fn shots(&self, ctx: &SceneContext) -> EngineResult<Vec<SceneShot>> {
         let framings = [
             // Off to the +x side rather than square on. The pillar and the arch
             // share an x, so any camera looking along z stacks one behind the
@@ -145,13 +146,14 @@ impl VisualScene for TerrainForms {
         ];
 
         let tableau = voxel_terrain::build();
+        let surface_texture = surface::create_surface_texture(ctx.textures)?;
 
         Ok(framings
             .into_iter()
             .map(|(label, eye, target)| {
                 SceneShot::new(label, SceneCamera::looking_at(eye, target))
                     .with_environment(environment())
-                    .with_mesh(tableau.mesh())
+                    .with_mesh(tableau.mesh(&surface_texture))
             })
             .collect())
     }

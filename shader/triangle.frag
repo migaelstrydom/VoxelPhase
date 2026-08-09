@@ -9,6 +9,7 @@
 #include "lights.glsl"
 #include "environment.glsl"
 #include "shadow.glsl"
+#include "triplanar.glsl"
 
 layout(location = 0) in vec4 inColor;
 layout(location = 1) in vec2 inTexCoord;
@@ -26,12 +27,25 @@ void main() {
         return;
     }
 
-    vec4 texColor = texture(texSampler, inTexCoord);
+    // Degenerate normals occur on some generated meshes; fall back to straight up.
+    vec3 normal = length(inNormal) > 0.001 ? normalize(inNormal) : vec3(0.0, 1.0, 0.0);
+
+    // Terrain has no texture coordinates worth sampling — marching cubes emits
+    // no parameterisation — so it is textured by world position instead. Meshes
+    // with authored UVs push a zero scale and take the cheaper path.
+    float triplanar_scale = materialTriplanarScale();
+    vec4 texColor = triplanar_scale > 0.0
+        ? triplanarSample(
+            texSampler,
+            inWorldPos,
+            normal,
+            triplanar_scale,
+            materialTriplanarSharpness())
+        : texture(texSampler, inTexCoord);
 
     SurfaceSample surface;
     surface.albedo = texColor.rgb * inColor.rgb;
-    // Degenerate normals occur on some generated meshes; fall back to straight up.
-    surface.normal = length(inNormal) > 0.001 ? normalize(inNormal) : vec3(0.0, 1.0, 0.0);
+    surface.normal = normal;
     surface.view_dir = normalize(scene.camera_pos.xyz - inWorldPos);
     surface.roughness = materialRoughness();
     surface.metallic = materialMetallic();

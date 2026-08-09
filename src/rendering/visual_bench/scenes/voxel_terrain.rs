@@ -52,10 +52,10 @@ use crate::collision::AABB;
 use crate::level::{
     Extent, MaterialLayer, Terrain, TerrainFeature, VolumeFeature, VoxelMaterialId,
 };
-use crate::rendering::material::SurfaceParams;
 use crate::rendering::vertex::Vertex;
 use crate::rendering::visual_bench::scene::SceneMesh;
-use crate::terrain::{generate_terrain, BlastConfig, ChunkGrid, Segment, SegmentFrame};
+use crate::resources::textures::TextureHandle;
+use crate::terrain::{generate_terrain, surface, BlastConfig, ChunkGrid, Segment, SegmentFrame};
 
 /// Edge length of one voxel, in metres.
 ///
@@ -143,13 +143,16 @@ pub struct TerrainTableau {
 }
 
 impl TerrainTableau {
-    /// Wrap the geometry as a matte drawable at the origin.
+    /// Wrap the geometry as a drawable at the origin, shaded and textured
+    /// exactly as the game shades and textures terrain.
     ///
     /// Takes `&self` and copies, because a sheet draws the same plot from
-    /// several cameras and meshing it once per shot is pure waste.
-    pub fn mesh(&self) -> SceneMesh {
+    /// several cameras and meshing it once per shot is pure waste. The surface
+    /// texture is passed in rather than created here for the same reason.
+    pub fn mesh(&self, surface_texture: &TextureHandle) -> SceneMesh {
         SceneMesh::new(self.vertices.clone(), self.indices.clone())
-            .with_surface(SurfaceParams::MATTE)
+            .with_surface(surface::surface_params())
+            .with_texture(surface_texture.clone())
     }
 
     /// The same geometry with every vertex reading as fully open to the sky.
@@ -158,12 +161,14 @@ impl TerrainTableau {
     /// data rather than in the shader means the two tiles go down the same
     /// pipeline with the same shaders, so nothing but the occlusion term
     /// differs between them.
-    pub fn mesh_without_occlusion(&self) -> SceneMesh {
+    pub fn mesh_without_occlusion(&self, surface_texture: &TextureHandle) -> SceneMesh {
         let mut vertices = self.vertices.clone();
         for vertex in &mut vertices {
             vertex.ao = 1.0;
         }
-        SceneMesh::new(vertices, self.indices.clone()).with_surface(SurfaceParams::MATTE)
+        SceneMesh::new(vertices, self.indices.clone())
+            .with_surface(surface::surface_params())
+            .with_texture(surface_texture.clone())
     }
 }
 

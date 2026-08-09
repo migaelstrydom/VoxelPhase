@@ -40,17 +40,40 @@ sun, fixed geometry — or before/after comparison is worthless.
   metallic / emissive / rim (`shader/lighting.glsl`, `shader/material.glsl`).
 - One directional sun, up to 16 point lights, flat constant ambient colour.
 - HDR target, ACES tonemap with a hue-preservation dial, bloom.
-- Procedural sky with atmospheric scattering.
-- **No shadows. No ambient occlusion. No environment reflection of any kind.**
+- Procedural sky with atmospheric scattering, written as linear HDR radiance.
+- Sky-based environment lighting: hemisphere irradiance plus a specular sky
+  reflection on a split-sum BRDF fit (`shader/environment.glsl`, §1.1 and §1.2).
+- A single uncascaded sun shadow map (`src/rendering/shadow/`, lighting plan
+  stage 6). Only the sun is shadowed — the sky's contribution arrives from the
+  whole hemisphere and needs occlusion a shadow map cannot express.
+- Baked per-vertex ambient occlusion on terrain (`src/terrain/ao.rs`), consumed
+  by `shadeEnvironment` and `shadeAmbient`.
+- Surface finish derived from collider physics on most spawnables (§2).
 
-That last line is the single biggest reason the render doesn't look like the
+### What is still missing
+
+- **No clearcoat** (§1.3), which is why rubber has no cue but gloss.
+- **No occlusion on or between dynamic bodies.** The AO bake covers terrain
+  only; every other vertex carries 1.0, which is the neutral value and the
+  honest one. The moving objects are the point of this game, and they are the
+  ones with no contact darkening.
+- **One shadow cascade**, so the map's resolution is spread across the whole
+  frustum fit (lighting plan stage 7).
+- **Terrain has no surface structure at all** — see §4.
+
+### How it looked before §1, and what fixed it
+
+Retained because it is the measurement that justified the work, and because two
+of the fixes are easy to re-break.
+
+The renderer had no shadows, no ambient occlusion and no environment reflection
+of any kind, which was the single biggest reason it did not look like the
 reference. A surface reads as shiny because it reflects its surroundings, not
-because it has a tight specular highlight. Right now a surface can only be
-bright where a light happens to be; everywhere else it falls back to flat
-ambient, which is a matte grey lie.
+because it has a tight specular highlight; with nothing to reflect, a surface
+could only be bright where a light happened to be, and everywhere else fell back
+to flat ambient, which is a matte grey lie.
 
-The `material_grid` bench scene makes this concrete, and it is worth running
-before starting §1 so the improvement is measurable:
+The `material_grid` bench scene made it concrete:
 
 - **Roughness barely reads.** Across a 0.05 → 1.0 sweep a dielectric sphere
   changes only by the size of one small highlight dot. A "polished" surface and
@@ -61,12 +84,10 @@ before starting §1 so the improvement is measurable:
   pixel; with an environment term it would be showing a sharp reflection of the
   sky instead.
 - **Metals are black.** A metal has no diffuse response and takes no ambient, so
-  with nothing to reflect it renders as a black disc with one bright spot. Metal
-  is not a usable material in this renderer today.
+  with nothing to reflect it rendered as a black disc with one bright spot.
+  Metal was not a usable material.
 
-### Since resolved by §1.1 and §1.2
-
-All three symptoms above are fixed. The sweep now reads monotonically from
+**§1.1 and §1.2 resolved all three.** The sweep now reads monotonically from
 mirror to matte, and metals show a sky-and-ground reflection with a horizon in
 it. Two things had to change beyond adding the environment terms:
 
@@ -106,12 +127,16 @@ misleading one to tune in. `palette` exists to fix that: saturated level colours
 on bright terrain, which is where clipping and oversaturation actually show up.
 Judge any exposure or tonemap change there first.
 
-Still true after §1: nothing casts a shadow, so objects float; the ground and
-sky sit at similar values with no aerial perspective between them.
+The sun shadow map and the terrain AO bake have since closed the grounding half
+of this. What remains from the same family: dynamic bodies neither receive nor
+cast occlusion onto each other, and the ground and sky still sit at similar
+values with no aerial perspective between them (§5.3).
 
 ---
 
 ## 1. Environment lighting — the plastic look
+
+**1.1 and 1.2 have landed; 1.3 is the only item outstanding.**
 
 The highest value-per-effort cluster in this document. All three items are
 changes to the shared lighting headers: no new render passes, no new resources,
@@ -281,6 +306,11 @@ Cross-reference, not new work: [LIGHTING_PLAN.md](LIGHTING_PLAN.md) Stage 1
 (baked terrain AO, designed in [BAKED_AO_DESIGN.md](BAKED_AO_DESIGN.md)) and
 Stages 5–7 (blob shadow, sun shadow map, cascades).
 
+Stage 1 and Stage 6 have landed, and Stage 5 was skipped as superseded. What is
+left from the lighting plan is Stage 7 (cascades); what is left here is the two
+items below, and the second of them is now the largest grounding gap in the
+renderer.
+
 Recorded here because their *visual* importance is easy to underrate relative to
 the flashier items. Nothing reads as a solid object in a real place without a
 shadow anchoring it to the ground, and no stack of physics debris has weight
@@ -302,44 +332,254 @@ Two additions to what the lighting plan already covers:
 
 ## 4. Terrain
 
-The problem is not that the noise texture is simple. It is that the material
-doesn't respond to the geometry, so a cliff and a floor are the same substance
-at different angles.
+### The register terrain is aiming at
 
-### 4.1 Geometry-driven material variation
+Terrain is **exaggerated realism**, not the moulded plastic the props are heading
+towards. Real materials behaving characteristically, pushed past life: grass
+that is aggressively green and visibly furry, rock with a glint and a legible
+grain, chalk that is chalkier than chalk. The props can read as manufactured
+because they are; a hillside cannot, and giving it a manufactured finish is how
+terrain ends up looking like a mould of a landscape rather than a landscape.
 
-Triplanar projection, with the material selected and blended by properties of the
-surface itself: slope picks the substance (rock on cliffs, growth on flats),
-curvature drives cavity darkening in concavities and wear on convex ridges.
+This is a correction to how §4 was originally written. The first draft asked for
+cavity darkening, wear on ridges, and weathered-versus-fresh rock — the
+vocabulary of accumulated history, borrowed from photoreal naturalism. Terrain
+should look like a *material*, not like a material's biography. Where an item
+below survives from that draft, it survives on different grounds.
 
-Leans on: the fact that the terrain is generated, so slope and curvature are
-already available or cheaply derivable at mesh time.
+### What terrain actually does today
 
-Likely to go wrong: blend thresholds tuned against one piece of terrain look
-wrong on the next. The blend wants to be smooth and its parameters want to be
-authorable per level rather than hard-coded.
+Worth stating precisely, because two of these are easy to get wrong from memory:
 
-### 4.2 Detail normals at close range
+- **Albedo is a flat constant per material.** `VoxelMaterial::color()`
+  (`src/terrain/voxel.rs`) returns one RGB per material; marching cubes copies it
+  from the solid corner of each edge and interpolates. Rock is 0.5 grey
+  everywhere.
+- **There is a texture, and it does very little.** `TerrainWorld::from_segments`
+  generates a 512² five-octave noise texture and binds it. Its values are
+  remapped to **[0.85, 1.0]** greyscale — a ±7.5 % multiplier on albedo, and
+  nothing else. It modulates no normal and no roughness.
+- **Its projection is top-down only.** Terrain vertices carry
+  `tex_coords = (pos.x * 0.1, pos.z * 0.1)` (`src/terrain/mesh_octree.rs`), so on
+  a vertical face the texture is smeared into infinite vertical streaks. This is
+  a live defect, not a future concern; it has gone unnoticed because the
+  modulation is too faint to see either way.
+- **Roughness and metallic are per-draw.** They arrive as a fragment push
+  constant (`shader/material.glsl`), so the entire terrain mesh has exactly one
+  roughness. Every prop in the game now varies its finish; the world does not.
+- **The only physics signal terrain carries is toughness.** `VoxelMaterial` has
+  colour and `toughness()` and nothing else — no friction, no restitution, no
+  density. Grass 1, sand 1, dirt 2, ite 3, limestone 4, rock 5, slate 8, bedrock
+  indestructible.
 
-Microstructure on the marching-cubes surface so it has something for the new
-environment specular to catch. Without this, item 1.1 makes terrain look like
-smooth polished plastic, which is exactly wrong for rock.
+So the summary line "the material doesn't respond to the geometry" was true but
+aimed low. The deeper problem is that terrain has no surface *structure* at all:
+one flat colour, one gloss, and a faint grey wash projected from above.
 
-### 4.3 Fresh destruction reveals interior material
+### The central idea
 
-Terrain carved out by an explosion should expose a different material to the
-weathered outer surface — bright raw rock inside the crater against dull
-weathered rock outside.
+**Perceived roughness and BRDF roughness are different channels, and terrain is
+missing the one that matters.** A rock glints because thousands of micro-facets
+each catch the sun at a different angle. That is normal detail. The roughness
+scalar cannot produce it — roughness is the statistical summary of detail you
+have chosen *not* to model, so turning it up removes glint rather than adding it.
 
-This is close to free: the destruction system already knows what it just carved.
-It is a large amount of storytelling for one material parameter, it makes every
-grenade permanently legible in the level afterwards, and it is squarely on the
+Three channels contribute to a surface reading as rough, very unequally:
+
+| Channel | What it buys | Status |
+|---|---|---|
+| Albedo variation | Weakest; reads as dirt rather than as texture | The noise texture, at ±7.5 % grey |
+| **Normal detail** | Glint, grit, legible grain — the whole effect | **Does not exist** |
+| Roughness variation | Chalky versus slick, as a class | One value for all terrain |
+
+Detail normals are therefore the core of §4, not a polish pass appended to it,
+and everything else here is either their delivery mechanism or a modulation of
+them.
+
+### 4.1 Triplanar projection
+
+Project world position along all three axes, sample each, blend by the squared
+normal components. Prerequisite for every other item in this section: it is the
+only way to get a coherent surface parameterisation onto an isosurface that has
+no UVs and that gets re-meshed by every grenade.
+
+Leans on: nothing new. The sampling point is world position, which the fragment
+shader already has.
+
+Likely to go wrong: it triples texture sampling cost on the largest mesh in the
+game, and the blend exponent is a real tuning parameter — too low and the three
+projections ghost against each other, too high and the transition bands narrow
+into visible seams on 45° faces.
+
+Worth noting that this is a fix, not a feature. Landing it alone will make cliffs
+stop streaking and will otherwise look almost identical, because the thing being
+projected is a ±7.5 % grey wash. Judge it on cliffs, and do not expect it to
+justify itself on its own.
+
+#### Landed
+
+`TriplanarProjection` (`src/rendering/triplanar.rs`) rides in `SurfaceParams`
+as a scale and a blend sharpness; a zero scale means the mesh has its own UVs
+and `triangle.frag` samples them as before, so nothing but terrain changed
+path. The sampling is `shader/triplanar.glsl`. Terrain's own view of its
+appearance — the noise texture's parameters and the projection it is addressed
+by — moved to `src/terrain/surface.rs`, which the game and the bench now both
+call, because the bench was drawing terrain untextured and so could not have
+shown this defect at all.
+
+Three things learned:
+
+- **The scale had to match the UV it replaced** (0.1 repeats per world unit,
+  which is the Y plane of the projection), or the change would have silently
+  re-scaled every level's floor while claiming to only fix cliffs. Guarded by a
+  test.
+- **The defect was invisible at the authored contrast.** A ±7.5 % grey wash
+  hides its own smearing; the streaks only become obvious with the noise
+  temporarily amplified, which is how the before/after was confirmed. Any future
+  judgement of terrain surface work should amplify first and restore after.
+- **Push constants are nearly full.** The projection took the range to 120 bytes
+  of the 128 Vulkan guarantees, so §4.2 and §4.3 have 8 bytes left and the next
+  parameter after that needs a different delivery. A test now asserts the
+  budget rather than leaving it to fail at pipeline creation on whichever device
+  sits at the minimum.
+
+### 4.2 Detail normals, coupled to roughness
+
+Perturb the shading normal with procedural high-frequency detail delivered
+through the triplanar projection, so terrain has microstructure for the sun and
+the §1.1 environment specular to break up against. This is what "rocky glint"
+and "visible roughness" actually are.
+
+**The coupling is the design, and it is not optional.** High-frequency normals
+under a narrow specular lobe produce specular aliasing — sparkle that crawls and
+fireflies as the camera moves, which is the single most legible symptom of a
+cheap renderer and fights the crispness the whole document is chasing. The fix
+is to treat normal detail and roughness as the same parameter at two scales:
+where normal variance within a pixel is high, roughness rises to absorb it
+(Toksvig / LEAN-style filtered normals). Detail that has shrunk below a pixel
+stops being geometry and becomes gloss.
+
+That coupling also solves distance for free — a cliff glints up close and goes
+correctly matte far away with no hand-authored LOD fade — which is the reason to
+build it as one system rather than landing detail normals and tuning roughness
+after. Tuned separately, the two will be re-tuned against each other forever.
+
+Likely to go wrong, beyond the aliasing: the detail has to be derived in the
+fragment shader rather than baked into vertices. Terrain vertex buffers are 52
+bytes per vertex and re-uploaded every frame, so new vertex attributes cost
+bandwidth on the biggest mesh in the game — see the per-frame upload item in
+TODO.md, which this would make worse.
+
+### 4.3 Surface character from toughness
+
+Derive terrain's finish from `VoxelMaterial::toughness()` the way a prop's finish
+is derived from its collider (§2), so the same rule holds in the world as on the
+objects: what you can see predicts what will happen.
+
+Soft, low-toughness materials read chalky and matte with soft-edged detail; hard,
+high-toughness rock reads dense, tight-grained and glinty; bedrock reads slick
+and near-black, which it already half does by colour alone.
+
+This is the strongest item in §4 on the project's own terms. Destruction is the
+showpiece, toughness is the parameter that decides how destruction goes, and a
+player currently **cannot see it** — grass and rock differ by a flat colour
+somebody chose. Being able to look at a wall and know whether a grenade goes
+through it is worth more than any amount of surface grit.
+
+Requires per-fragment roughness, which means moving roughness off the push
+constant for the terrain path. That is a pipeline change rather than a shader
+tweak, and it is the enabling work for §4.2 as well.
+
+Likely to go wrong: toughness is a gameplay-tuned number, not a measured one, so
+the same trap §2 hit with box densities applies — a level that retunes toughness
+silently retunes the look. Keep the mapping monotonic and coarse, so that only
+large toughness differences produce visible ones.
+
+If a richer derivation is wanted later, the move is to give `VoxelMaterial` the
+same `PhysicalSurface` the props use. That means terrain friction becoming
+per-material in the physics engine, which is a physics change with gameplay
+consequences, and should not be smuggled in as part of a rendering item.
+
+### 4.4 Slope zoning
+
+Blend between materials by the normal's vertical component: growth on flats,
+bare substrate on steep faces.
+
+**Slope modulates finish, it does not choose substance.** The voxel material
+stays the authority on what a thing is, because it is what destruction spends
+energy against — a grass voxel rendered as rock on a steep face would be a
+surface lying about its own physics, which is the exact failure §2 exists to
+prevent. Slope says "nothing settles here, so you see the bare material",
+which is both true and consistent with a fresh crater wall.
+
+Likely to go wrong, and this one is specific: **the normal being thresholded is
+least accurate exactly where the threshold matters.** Gradient normals are exact
+on smooth ground and smeared at rims and creases (see the crease-normal
+reference), so a tight slope threshold puts a band of the wrong finish around
+every cliff edge and crater rim, tracking the smear rather than the geometry. The
+blend has to be wide enough to hide that, which limits how crisp the zoning can
+be.
+
+Second, hand-authored levels mottle. `Voxel::solid` writes density ±1 with no
+sub-voxel offset, the quantised regime that already mottles baked AO; the same
+quantisation mottles the normal, so slope blending will mottle on hand-built
+terrain and be clean on generated terrain.
+
+### 4.5 Grass sheen
+
+Not a roughness item at all, and separable from everything above. Fur reads as
+fur through **sheen and backscatter**: grass lights up when the sun is behind it,
+with a bright soft rim instead of a highlight. That is a diffuse-side BRDF term,
+cheap, and it is most of what makes grass look furry rather than look like green
+paint.
+
+Worth keeping distinct precisely because it is the one item here that no amount
+of normal detail or roughness tuning will produce.
+
+### 4.6 Fresh destruction reads as fresh
+
+Terrain carved by an explosion exposes a different surface to the one outside the
+crater. Kept from the original draft, but not as weathering: the interior is
+simply a **different face of the same material** — unbroken grain, sharper
+detail, cleaner colour — rather than an aged exterior versus a fresh interior.
+No notion of age, no weathering over time, permanent and binary.
+
+Close to free, since the destruction system already knows what it carved. Large
+storytelling return for one material parameter, it makes every grenade
+permanently legible in the level afterwards, and it is squarely on the
 physics-showcase theme.
 
-Likely to go wrong: needs some notion of "age" if fresh damage should weather
-over time, and it must survive the chunk re-mesh that destruction already
-triggers. Simplest version — permanent, binary, never weathers — is probably
-enough and should be tried first.
+Likely to go wrong: it must survive the chunk re-mesh that destruction already
+triggers, which means the interior flag lives in the voxel data rather than in
+the mesh.
+
+### Cut: curvature-driven cavity darkening and ridge wear
+
+Dropped from the original §4.1 rather than deferred, for three independent
+reasons. It is the naturalism item, and terrain's register is material rather
+than history. Baked AO already does cavity darkening, and does it properly
+instead of by proxy. And it is the expensive one: curvature is not available in
+the fragment shader, so it would need baking at remesh time, and remesh time is
+the constraint that shaped the entire AO design — a grenade is already at
+roughly 23 ms with AO enabled.
+
+The only part with independent value is the *convex* half — wear on ridge crests,
+which AO cannot express because it saturates at "fully open" and cannot tell flat
+ground from a crest. If that turns out to be missed, it comes back on its own
+merits and with its own perf budget, not attached to §4.1.
+
+### Ordering within §4
+
+1. ~~**4.1 triplanar**~~ — landed. Prerequisite, and a defect fix, but nearly
+   invisible alone, exactly as predicted.
+2. **4.3 per-fragment roughness from toughness** — carries the pipeline change
+   4.2 also needs, and delivers chalky-versus-slick immediately.
+3. **4.2 detail normals with variance-coupled roughness** — the core; the largest
+   visible change in this section.
+4. **4.5 grass sheen** — small, independent, can be slotted anywhere.
+5. **4.4 slope zoning** — on top of a surface system that already works.
+6. **4.6 fresh destruction** — last, because it is a modulation of everything
+   above.
 
 ---
 
@@ -420,14 +660,14 @@ to be subtler than first instinct suggests, and individually disableable.
 
 Not a schedule, just the order that maximises visible change per unit of work.
 
-1. **Environment lighting** (§1) — one session, no new passes, transforms every
-   pixel on screen including the existing work that already looks good.
-2. **Sun shadows** (§3 / lighting plan stages 5–6).
-3. **Material identity from physics** (§2).
-4. **Ambient occlusion** (§3 / lighting plan stage 1, plus dynamic-body AO).
+1. ~~**Environment lighting** (§1)~~ — done but for clearcoat (§1.3). Was first
+   because everything downstream is tuned against the lighting environment, and
+   doing it late means re-tuning all of it.
+2. ~~**Sun shadows** (§3 / lighting plan stages 5–6)~~ — done, uncascaded.
+3. ~~**Material identity from physics** (§2)~~ — done but for per-instance
+   variation, fracture interiors and the trampoline.
+4. **Ambient occlusion** (§3) — terrain bake done; **dynamic-body occlusion is
+   what remains**, and it is the larger half.
 5. **Terrain** (§4).
 6. **Sky, sun, clouds, aerial perspective** (§5).
 7. **Grade and reactive post** (§6).
-
-Item 1 is first because everything downstream is tuned against the lighting
-environment, and doing it late means re-tuning all of it.

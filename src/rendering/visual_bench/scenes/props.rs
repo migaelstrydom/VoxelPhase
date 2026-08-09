@@ -85,16 +85,19 @@ fn arrangement() -> Vec<SceneMesh> {
     let polished = SurfaceParams {
         emissive: [0.0, 0.0, 0.0, 0.0],
         surface: [0.15, 0.0, 0.0, 3.0],
+        ..SurfaceParams::MATTE
     };
     let matte = SurfaceParams::MATTE;
     let metal = SurfaceParams {
         emissive: [0.0, 0.0, 0.0, 0.0],
         surface: [0.25, 1.0, 0.0, 3.0],
+        ..SurfaceParams::MATTE
     };
     // Bright enough to cross the default bloom threshold of 1.3.
     let glowing = SurfaceParams {
         emissive: [0.2, 0.9, 1.0, 3.0],
         surface: [0.2, 0.0, 0.8, 2.5],
+        ..SurfaceParams::MATTE
     };
 
     vec![

@@ -23,6 +23,7 @@ mod marching_cubes;
 mod mesh_octree;
 mod render_cache;
 mod segment;
+pub mod surface;
 pub(crate) mod svo;
 pub mod traversal;
 mod voxel;

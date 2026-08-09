@@ -1,4 +1,5 @@
 use crate::rendering::colour::Colour;
+use crate::rendering::triplanar::TriplanarProjection;
 use crate::resources::textures::TextureHandle;
 
 /// Index into MaterialManager's materials array.
@@ -143,6 +144,10 @@ pub struct Material {
 
     /// Self-illumination.
     pub emission: Emission,
+
+    /// How the diffuse texture is addressed. Disabled by default, which uses
+    /// the mesh's own vertex texture coordinates.
+    pub projection: TriplanarProjection,
 }
 
 impl Material {
@@ -153,6 +158,7 @@ impl Material {
             diffuse_texture: None,
             finish: SurfaceFinish::default(),
             emission: Emission::default(),
+            projection: TriplanarProjection::default(),
         }
     }
 
@@ -164,6 +170,7 @@ impl Material {
             diffuse_texture: Some(texture),
             finish: SurfaceFinish::default(),
             emission: Emission::default(),
+            projection: TriplanarProjection::default(),
         }
     }
 
@@ -176,6 +183,13 @@ impl Material {
     /// Set the self-illumination.
     pub fn with_emission(mut self, emission: Emission) -> Self {
         self.emission = emission;
+        self
+    }
+
+    /// Texture this material by world position rather than by vertex UVs.
+    #[allow(dead_code)]
+    pub fn with_projection(mut self, projection: TriplanarProjection) -> Self {
+        self.projection = projection;
         self
     }
 
@@ -194,6 +208,7 @@ impl Material {
                 self.emission.rim_strength,
                 self.emission.rim_power,
             ],
+            projection: self.projection.packed(),
         }
     }
 }
@@ -247,6 +262,11 @@ pub struct SurfaceParams {
 
     /// x = roughness, y = metallic, z = rim strength, w = rim power.
     pub surface: [f32; 4],
+
+    /// x = triplanar scale in texture repeats per world unit, y = blend
+    /// sharpness. A zero scale means the fragment shader samples the mesh's
+    /// vertex texture coordinates instead.
+    pub projection: [f32; 2],
 }
 
 /// Byte offset of `SurfaceParams` within the fragment push-constant range.
@@ -259,7 +279,14 @@ impl SurfaceParams {
     pub const MATTE: Self = Self {
         emissive: [0.0, 0.0, 0.0, 0.0],
         surface: [1.0, 0.0, 0.0, 3.0],
+        projection: [0.0, 0.0],
     };
+
+    /// Texture by world position rather than by the mesh's vertex UVs.
+    pub fn with_projection(mut self, projection: TriplanarProjection) -> Self {
+        self.projection = projection.packed();
+        self
+    }
 
     /// Apply a per-instance modulation to these parameters.
     ///
@@ -346,5 +373,39 @@ impl MaterialManager {
     /// Get the packed lighting parameters for a material.
     pub fn get_surface_params(&self, id: MaterialId) -> SurfaceParams {
         self.get(id).surface_params()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Vulkan only guarantees 128 bytes of push constants, and this pipeline
+    /// spends them on a 64-byte model matrix, a 16-byte colour override and
+    /// then these parameters. Growing `SurfaceParams` past the remainder does
+    /// not fail at compile time — it fails at pipeline creation, on whichever
+    /// device happens to sit at the minimum.
+    #[test]
+    fn surface_params_fit_the_guaranteed_push_constant_budget() {
+        const GUARANTEED_BUDGET: usize = 128;
+        let used = SURFACE_PARAMS_OFFSET as usize + std::mem::size_of::<SurfaceParams>();
+        assert!(
+            used <= GUARANTEED_BUDGET,
+            "push constants use {used} bytes of a guaranteed {GUARANTEED_BUDGET}"
+        );
+    }
+
+    #[test]
+    fn a_material_textures_by_its_uvs_unless_told_otherwise() {
+        let params = Material::coloured(Colour::WHITE).surface_params();
+        assert_eq!(params.projection[0], 0.0);
+    }
+
+    #[test]
+    fn a_projection_survives_the_trip_into_the_push_constant() {
+        let params = Material::coloured(Colour::WHITE)
+            .with_projection(TriplanarProjection::TERRAIN)
+            .surface_params();
+        assert_eq!(params.projection, TriplanarProjection::TERRAIN.packed());
     }
 }

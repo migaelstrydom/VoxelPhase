@@ -18,12 +18,20 @@ layout(push_constant) uniform MaterialPushConstants {
     vec4 emissive;
     /// x = roughness, y = metallic, z = rim strength, w = rim power.
     vec4 surface;
+    /// x = triplanar scale in texture repeats per world unit, y = blend
+    /// sharpness. A zero scale means this mesh carries its own texture
+    /// coordinates and they should be sampled instead.
+    vec2 projection;
 } material;
 
 float materialRoughness() { return material.surface.x; }
 float materialMetallic()  { return material.surface.y; }
 float materialRimStrength() { return material.surface.z; }
 float materialRimPower()    { return material.surface.w; }
+
+/// Zero when the mesh is textured by its own vertex texture coordinates.
+float materialTriplanarScale()     { return material.projection.x; }
+float materialTriplanarSharpness() { return material.projection.y; }
 
 /// Emissive radiance added independently of incoming light.
 ///

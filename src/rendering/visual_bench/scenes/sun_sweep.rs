@@ -52,6 +52,7 @@ impl VisualScene for SunSweep {
         let surface = SurfaceParams {
             emissive: [0.0, 0.0, 0.0, 0.0],
             surface: [0.35, 0.0, 0.0, 3.0],
+            ..SurfaceParams::MATTE
         };
 
         Ok(ELEVATIONS

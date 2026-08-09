@@ -42,6 +42,7 @@ pub fn arrangement() -> Vec<SceneMesh> {
     let glossy = SurfaceParams {
         emissive: [0.0, 0.0, 0.0, 0.0],
         surface: [0.2, 0.0, 0.0, 3.0],
+        ..SurfaceParams::MATTE
     };
 
     let block = |half: f32, colour: Colour, position: Vector3<f32>, surface: SurfaceParams| {

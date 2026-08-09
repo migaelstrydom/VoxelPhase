@@ -274,7 +274,7 @@ impl GraphicsPipeline {
         // Push constant ranges:
         // - Vertex: mat4 model (offset 0, 64 bytes)
         // - Fragment: vec4 colourOverride (offset 64, 16 bytes)
-        //             SurfaceParams (offset 80, 32 bytes)
+        //             SurfaceParams (offset SURFACE_PARAMS_OFFSET)
         let push_constant_ranges = [
             vk::PushConstantRange {
                 stage_flags: vk::ShaderStageFlags::VERTEX,

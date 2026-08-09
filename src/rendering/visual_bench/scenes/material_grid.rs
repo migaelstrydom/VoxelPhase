@@ -65,6 +65,7 @@ impl VisualScene for MaterialGrid {
                 let surface = SurfaceParams {
                     emissive: [0.0, 0.0, 0.0, 0.0],
                     surface: [roughness, metallic, 0.0, 3.0],
+                    ..SurfaceParams::MATTE
                 };
 
                 let label = format!("rough {:.2}  metal {:.0}", roughness, metallic);

@@ -12,10 +12,10 @@ use crate::particles::ParticlePool;
 use crate::rendering::debug_render::{
     render_debug_overlays_opaque, render_debug_overlays_transparent,
 };
-use crate::rendering::material::{MaterialManager, SurfaceModulation, SurfaceParams};
+use crate::rendering::material::{MaterialManager, SurfaceModulation};
 use crate::rendering::renderer::Renderer;
 use crate::resources::textures::TextureManager;
-use crate::terrain::TerrainWorld;
+use crate::terrain::{self, TerrainWorld};
 use crate::water::{WaterGrid, WaveGrid};
 use nalgebra::{Matrix4, Vector3};
 use specs::{
@@ -223,7 +223,7 @@ impl<'a> System<'a> for RenderSystem {
                                 terrain_manager.render_indices(),
                                 &identity,
                                 texture,
-                                SurfaceParams::MATTE,
+                                terrain::surface::surface_params(),
                                 &texture_manager,
                             ) {
                                 log::error!("RenderSystem: Failed to draw terrain: {}", e);

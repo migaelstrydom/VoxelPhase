@@ -47,13 +47,13 @@ use nalgebra::{Point3, Vector3};
 use crate::core::error::EngineResult;
 use crate::level::{Extent, MaterialLayer, Terrain, VoxelMaterialId};
 use crate::rendering::colour::Colour;
-use crate::rendering::material::SurfaceParams;
 use crate::rendering::vertex::Vertex;
 use crate::rendering::visual_bench::scene::{
     SceneCamera, SceneContext, SceneEnvironment, SceneMesh, SceneShot, VisualScene,
 };
 use crate::rendering::visual_bench::scenes::voxel_terrain;
-use crate::terrain::{generate_terrain, BlastConfig, ChunkGrid, Segment, SegmentFrame};
+use crate::resources::textures::TextureHandle;
+use crate::terrain::{generate_terrain, surface, BlastConfig, ChunkGrid, Segment, SegmentFrame};
 
 /// Matches `terrain_forms` and `terrain_ao`, so all three read together.
 const SUN_ELEVATION: f32 = 34.0;
@@ -138,15 +138,17 @@ impl VisualScene for Craters {
         "Blast craters swept across voxel size and arrangement. Use --columns 4; rows are voxel sizes."
     }
 
-    fn shots(&self, _ctx: &SceneContext) -> EngineResult<Vec<SceneShot>> {
+    fn shots(&self, ctx: &SceneContext) -> EngineResult<Vec<SceneShot>> {
         let environment = SceneEnvironment::default()
             .with_sun(sun_direction())
             .with_ambient(Colour::rgb(0.34, 0.38, 0.44));
 
+        let surface_texture = surface::create_surface_texture(ctx.textures)?;
+
         let mut shots = Vec::new();
         for voxel_size in VOXEL_SIZES {
             for arrangement in &ARRANGEMENTS {
-                let mesh = blasted_plot(voxel_size, arrangement.blasts);
+                let mesh = blasted_plot(voxel_size, arrangement.blasts, &surface_texture);
                 shots.push(
                     SceneShot::new(
                         format!("{} @ {voxel_size} m", arrangement.label),
@@ -185,7 +187,7 @@ fn sun_direction() -> Vector3<f32> {
 /// The blasts go in through `damage_sphere` rather than through the generator's
 /// carve, because that is the path a grenade takes and the two encode a cut
 /// through different code.
-fn blasted_plot(voxel_size: f32, blasts: &[Blast]) -> SceneMesh {
+fn blasted_plot(voxel_size: f32, blasts: &[Blast], surface_texture: &TextureHandle) -> SceneMesh {
     let terrain = Terrain {
         voxel_size,
         bounds: Extent {
@@ -235,5 +237,7 @@ fn blasted_plot(voxel_size: f32, blasts: &[Blast]) -> SceneMesh {
     let mut indices: Vec<u32> = Vec::new();
     segment.append_render_data(&mut vertices, &mut indices);
 
-    SceneMesh::new(vertices, indices).with_surface(SurfaceParams::MATTE)
+    SceneMesh::new(vertices, indices)
+        .with_surface(surface::surface_params())
+        .with_texture(surface_texture.clone())
 }

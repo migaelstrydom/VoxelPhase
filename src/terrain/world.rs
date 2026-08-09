@@ -34,6 +34,7 @@ use super::blast::BlastConfig;
 use super::chunk::ChunkTriangleRef;
 use super::mesh_octree::MeshBuildTimings;
 use super::segment::{ConcatTimings, Segment};
+use super::surface;
 use crate::collision::ray_triangle::{ray_triangle, RayHit};
 use crate::collision::{MeshPatch, PatchTriangle, AABB};
 use crate::core::error::EngineResult;
@@ -141,8 +142,8 @@ impl TerrainWorld {
         segments: Vec<Segment>,
         texture_manager: &TextureManager,
     ) -> EngineResult<Self> {
-        let texture = texture_manager.create_noise_texture(512, 512, 5, 20.0, 42)?;
-        log::info!("Generated terrain noise texture (512x512, 5 octaves, scale 20.0)");
+        let texture = surface::create_surface_texture(texture_manager)?;
+        log::info!("Generated terrain surface texture");
 
         let mut world = Self::unmeshed(segments);
         world.texture = Some(texture);

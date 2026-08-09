@@ -18,6 +18,7 @@ pub mod shadow;
 pub mod sky;
 pub mod target;
 pub mod texture;
+pub mod triplanar;
 pub mod vertex;
 pub mod visual_bench;
 pub mod water;

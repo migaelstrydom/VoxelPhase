@@ -47,6 +47,7 @@ use crate::rendering::visual_bench::scene::{
     SceneCamera, SceneContext, SceneEnvironment, SceneShot, VisualScene,
 };
 use crate::rendering::visual_bench::scenes::voxel_terrain;
+use crate::terrain::surface;
 
 /// Matches `terrain_forms`, so the two sheets are directly comparable.
 const SUN_ELEVATION: f32 = 34.0;
@@ -63,7 +64,7 @@ impl VisualScene for TerrainAo {
         "Baked ambient occlusion on real terrain, each subject with it and without. Use --columns 2."
     }
 
-    fn shots(&self, _ctx: &SceneContext) -> EngineResult<Vec<SceneShot>> {
+    fn shots(&self, ctx: &SceneContext) -> EngineResult<Vec<SceneShot>> {
         let framings = [
             (
                 "crevice",
@@ -88,6 +89,7 @@ impl VisualScene for TerrainAo {
         ];
 
         let tableau = voxel_terrain::build();
+        let surface_texture = surface::create_surface_texture(ctx.textures)?;
 
         Ok(framings
             .into_iter()
@@ -96,10 +98,10 @@ impl VisualScene for TerrainAo {
                 [
                     SceneShot::new(label, camera)
                         .with_environment(environment())
-                        .with_mesh(tableau.mesh()),
+                        .with_mesh(tableau.mesh(&surface_texture)),
                     SceneShot::new(format!("{label} — AO off"), camera)
                         .with_environment(environment())
-                        .with_mesh(tableau.mesh_without_occlusion()),
+                        .with_mesh(tableau.mesh_without_occlusion(&surface_texture)),
                 ]
             })
             .collect())
