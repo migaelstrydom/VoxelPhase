@@ -55,6 +55,17 @@ impl EventHandler {
                 ..
             } => Self::handle_mouse_button(button, state, window, world),
 
+            // Focus loss strands anything currently held: the matching release
+            // is delivered to whoever took focus, never to us.
+            Event::WindowEvent {
+                event: WindowEvent::Focused(false),
+                ..
+            } => {
+                let mut input = world.write_resource::<InputState>();
+                input.release_all();
+                EventResult::Continue
+            }
+
             Event::DeviceEvent {
                 event: DeviceEvent::MouseMotion { delta },
                 ..
@@ -174,5 +185,11 @@ pub fn set_mouse_captured(window: &Window, world: &mut World, captured: bool) {
     window.set_cursor_visible(!captured);
 
     let mut input = world.write_resource::<InputState>();
+    if !captured {
+        // Releasing the cursor hands the next events to the desktop, so treat
+        // it the same as losing focus rather than leaving the player holding
+        // whatever they had down at the time.
+        input.release_all();
+    }
     input.set_mouse_captured(captured);
 }
