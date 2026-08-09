@@ -118,14 +118,33 @@ pub fn gjk_raycast(
         let result = gjk_query(&shifted_a, &shifted_b);
 
         match result {
-            GjkResult::Intersecting { .. } => {
-                // Shapes are now overlapping at time `t`.
-                let normal = if last_normal.magnitude_squared() > 1e-10 {
+            GjkResult::Intersecting { simplex } => {
+                // Advancement overshot into overlap. Expand the simplex rather
+                // than guessing: `support(-normal)` returns the shape's extreme
+                // vertex in that direction, which on anything long or tall is
+                // nowhere near where the two actually met.
+                let penetration = epa_penetration(&shifted_a, &shifted_b, 0.0, &simplex);
+
+                // EPA recovers the axis the shapes must separate along, but not
+                // which way along it — the sign depends on how its polytope was
+                // seeded, and comes back inverted often enough to matter. The
+                // direction advancement was travelling picks the hemisphere.
+                let approach = if last_normal.magnitude_squared() > 1e-10 {
                     last_normal.normalize()
                 } else {
                     estimate_separation_normal(&shifted_a, &shifted_b)
                 };
-                let point = shifted_b.support(-normal);
+                let axis = -penetration.normal;
+                let normal = if axis.dot(&approach) < 0.0 {
+                    -axis
+                } else {
+                    axis
+                };
+
+                // Midway between the witnesses: unlike either witness alone,
+                // this does not move if EPA labelled the shapes the other way
+                // round, and at these depths the two are almost coincident.
+                let point = nalgebra::center(&penetration.witness_a, &penetration.witness_b);
                 return Some(GjkRaycastHit { t, normal, point });
             }
             GjkResult::Separated {
@@ -506,6 +525,50 @@ mod tests {
                 hit.normal,
             );
         }
+    }
+
+    /// The same demand as the t=0 case, for the branch that reaches contact by
+    /// marching: when advancement overshoots into overlap, the hit must be
+    /// reported where the shapes met.
+    ///
+    /// The displacement here is large enough to overshoot in one step, and the
+    /// target is tall, so a contact point taken from a support query lands on a
+    /// far corner metres from the sphere.
+    #[test]
+    fn a_contact_found_by_marching_lands_between_the_shapes() {
+        let pillar = Obb::new(
+            Point3::origin(),
+            UnitQuaternion::identity(),
+            Vector3::new(0.5, 3.0, 0.5),
+        );
+        let sphere = SupportSphere {
+            center: Point3::new(2.0, 1.5, 0.3),
+            radius: 0.2,
+        };
+
+        let hit = gjk_raycast(
+            &sphere,
+            &pillar,
+            Vector3::new(-3.0, 0.0, 0.0),
+            Vector3::zeros(),
+        )
+        .expect("should hit the pillar");
+
+        assert!(
+            (hit.point.y - 1.5).abs() < 0.25,
+            "contact should be level with the sphere, got {:?}",
+            hit.point,
+        );
+        assert!(
+            (hit.point.x - 0.5).abs() < 0.25 && (hit.point.z - 0.3).abs() < 0.25,
+            "contact should be on the near face beside the sphere, got {:?}",
+            hit.point,
+        );
+        assert!(
+            hit.normal.x > 0.9,
+            "normal should point out of the near face, got {:?}",
+            hit.normal,
+        );
     }
 
     // --- Rotated OBB approaching ---

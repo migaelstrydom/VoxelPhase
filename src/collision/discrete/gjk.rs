@@ -18,6 +18,10 @@ const TOLERANCE: f32 = 1e-6;
 /// Tolerance for degenerate simplex detection (near-zero magnitude).
 const DEGENERATE_TOLERANCE: f32 = 1e-10;
 
+/// Smallest tetrahedron volume, as a fraction of its edge lengths cubed, that
+/// can be trusted to answer which side of a face the origin lies on.
+const DEGENERATE_VOLUME_RATIO: f32 = 1e-5;
+
 /// Result of a GJK query between two convex shapes.
 #[derive(Debug)]
 pub enum GjkResult {
@@ -367,9 +371,29 @@ fn process_tetrahedron_simplex(simplex: &mut GjkSimplex, v: &mut Vector3<f32>) -
     let in_front_acd = acd.dot(&ao) > 0.0;
     let in_front_adb = adb.dot(&ao) > 0.0;
 
-    if !in_front_abc && !in_front_acd && !in_front_adb {
+    // A tetrahedron with no volume encloses nothing, and cannot be asked where
+    // the origin lies relative to its faces: all three normals above are cross
+    // products of near-parallel edges, so each `in_front` test decides on noise
+    // and reads false wherever the origin actually is. Taking that as
+    // containment reports an intersection between shapes metres apart.
+    //
+    // Support points go near-coplanar whenever a shape has many similar facets
+    // — a 20-sided prism does it readily — so this is reached in ordinary play,
+    // not just in contrived configurations.
+    let volume6 = abc.dot(&ad).abs();
+    let scale = ab.norm().max(ac.norm()).max(ad.norm());
+    let has_volume = volume6 > DEGENERATE_VOLUME_RATIO * scale * scale * scale;
+
+    if has_volume && !in_front_abc && !in_front_acd && !in_front_adb {
         return true;
     }
+
+    // Flat: no face is trustworthy, so measure all three and keep the nearest.
+    // Reducing to a triangle also matters for progress — the caller pushes a
+    // vertex per iteration and a simplex left at four has nowhere to put it.
+    let consider_abc = in_front_abc || !has_volume;
+    let consider_acd = in_front_acd || !has_volume;
+    let consider_adb = in_front_adb || !has_volume;
 
     // Find the closest face and reduce to that triangle.
     // We test each visible face and pick the closest.
@@ -377,9 +401,8 @@ fn process_tetrahedron_simplex(simplex: &mut GjkSimplex, v: &mut Vector3<f32>) -
     let mut best_v = *v;
     let mut best_simplex = simplex.clone();
 
-    if in_front_abc {
+    if consider_abc {
         let mut s = GjkSimplex::new();
-        s.vertices[0] = simplex.vertices[0 /* placeholder */];
         // Rearrange: face ABC -> [C, B, A] so newest is at index 2.
         s.vertices[0] = simplex.vertices[1]; // C
         s.vertices[1] = simplex.vertices[2]; // B
@@ -395,7 +418,7 @@ fn process_tetrahedron_simplex(simplex: &mut GjkSimplex, v: &mut Vector3<f32>) -
         }
     }
 
-    if in_front_acd {
+    if consider_acd {
         let mut s = GjkSimplex::new();
         s.vertices[0] = simplex.vertices[0]; // D
         s.vertices[1] = simplex.vertices[1]; // C
@@ -411,7 +434,7 @@ fn process_tetrahedron_simplex(simplex: &mut GjkSimplex, v: &mut Vector3<f32>) -
         }
     }
 
-    if in_front_adb {
+    if consider_adb {
         let mut s = GjkSimplex::new();
         s.vertices[0] = simplex.vertices[2]; // B
         s.vertices[1] = simplex.vertices[0]; // D
@@ -419,11 +442,22 @@ fn process_tetrahedron_simplex(simplex: &mut GjkSimplex, v: &mut Vector3<f32>) -
         s.count = 3;
         let mut sv = Vector3::zeros();
         process_triangle_simplex(&mut s, &mut sv);
-        let dsq = sv.magnitude_squared();
-        if dsq < best_dist_sq {
+        // Last face considered, so `best_dist_sq` needs no further update.
+        if sv.magnitude_squared() < best_dist_sq {
             best_v = sv;
             best_simplex = s;
         }
+    }
+
+    // Returning false promises the caller a simplex it can push onto, so it
+    // must have been reduced to a face. Nothing is selected above if every
+    // candidate's distance came back NaN, which a fully degenerate face can
+    // produce; fall back to the newest face so the search still makes progress.
+    if best_simplex.count > 3 {
+        best_simplex.vertices[0] = simplex.vertices[1]; // C
+        best_simplex.vertices[1] = simplex.vertices[2]; // B
+        best_simplex.vertices[2] = simplex.vertices[3]; // A
+        best_simplex.count = 3;
     }
 
     *simplex = best_simplex;
@@ -570,12 +604,104 @@ fn closest_on_triangle(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::collision::convex_hull::{ConvexHull, HullFace};
     use crate::collision::obb::Obb;
+    use crate::collision::shape_view::ShapeView;
     use crate::collision::support::SupportSphere;
+    use crate::physics::ColliderShape;
     use nalgebra::UnitQuaternion;
 
     fn approx_eq(a: f32, b: f32, tol: f32) -> bool {
         (a - b).abs() < tol
+    }
+
+    /// A prism with many similar side facets, which is what drives support
+    /// points near-coplanar. `sides` at 20 matches a temple column.
+    fn faceted_prism(sides: usize, base_r: f32, top_r: f32, half_height: f32) -> ConvexHull {
+        let step = std::f32::consts::TAU / sides as f32;
+        let mut v: Vec<Vector3<f32>> = Vec::new();
+        for i in 0..sides {
+            let a = i as f32 * step;
+            v.push(Vector3::new(
+                base_r * a.cos(),
+                -half_height,
+                base_r * a.sin(),
+            ));
+        }
+        for i in 0..sides {
+            let a = i as f32 * step;
+            v.push(Vector3::new(top_r * a.cos(), half_height, top_r * a.sin()));
+        }
+
+        let mut rings: Vec<(Vec<usize>, usize)> = vec![
+            ((0..sides).rev().collect(), sides),
+            ((sides..2 * sides).collect(), 0),
+        ];
+        for i in 0..sides {
+            let j = (i + 1) % sides;
+            rings.push((vec![i, j, sides + j, sides + i], (i + sides / 2) % sides));
+        }
+
+        let faces = rings
+            .into_iter()
+            .map(|(idx, opposite)| {
+                let (p, q, r) = (v[idx[0]], v[idx[1]], v[idx[2]]);
+                let raw = (q - p).cross(&(r - p));
+                let flip = raw.dot(&(p - v[opposite])) < 0.0;
+                let mut vertex_indices: smallvec::SmallVec<[u16; 6]> =
+                    idx.iter().map(|&i| i as u16).collect();
+                if flip {
+                    vertex_indices[1..].reverse();
+                }
+                HullFace {
+                    vertex_indices,
+                    normal: if flip {
+                        -raw.normalize()
+                    } else {
+                        raw.normalize()
+                    },
+                }
+            })
+            .collect();
+
+        ConvexHull::new(v, faces)
+    }
+
+    /// The configuration measured from a grenade approaching a temple column:
+    /// a 0.2 m sphere just over a metre clear of a 20-sided tapered prism.
+    ///
+    /// Reported as intersecting, this became a CCD contact at t=0, and the
+    /// clamp rewound the grenade to the start of its substep every substep —
+    /// pinning it in mid-air until its fuse ran out.
+    #[test]
+    fn a_sphere_clear_of_a_faceted_prism_is_separated() {
+        let prism = faceted_prism(20, 0.5, 0.41, 3.0);
+        let view = ShapeView {
+            center: Point3::new(0.0, 3.0, 0.0),
+            rotation: UnitQuaternion::identity(),
+            shape: &ColliderShape::ConvexHull {
+                hull: std::sync::Arc::new(prism),
+            },
+        };
+
+        // Walk the sphere in, so a single unlucky position cannot pass by luck.
+        let mut x = 1.9;
+        while x > 1.25 {
+            let sphere = SupportSphere {
+                center: Point3::new(x, 1.75, 0.3),
+                radius: 0.2,
+            };
+            match gjk_query(&sphere, &view) {
+                GjkResult::Separated { distance, .. } => assert!(
+                    distance > 0.4,
+                    "x={x}: distance {distance} is far short of the true gap",
+                ),
+                GjkResult::Intersecting { .. } => {
+                    panic!("x={x}: reported as intersecting while clearly apart")
+                }
+            }
+            x -= 0.0007;
+        }
     }
 
     // --- Separated spheres ---
