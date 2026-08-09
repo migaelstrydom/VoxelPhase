@@ -1,4 +1,20 @@
 //! Voxel types and materials.
+//!
+//! # Durability
+//!
+//! What a voxel is made of is the only thing that decides how hard it is to
+//! remove. There is no per-voxel health: [`VoxelMaterial::toughness`] is a pure
+//! function, evaluated when a blast asks, so nothing can go stale against the
+//! geometry the player has since carved. Depth plays no part — terrain that
+//! should resist is authored out of material that resists, in the level's
+//! `material_layers`.
+//!
+//! An earlier scheme stored a health byte per voxel and raised it with depth
+//! below the surface. It was baked at generation and never re-derived, so it
+//! drifted from the geometry as soon as anything was destroyed, and it made two
+//! voxels of visibly identical rock behave differently for reasons the player
+//! could not see. Toughness-by-material is both legible — the colour is the
+//! durability — and immune to that class of bug.
 
 /// Material type for a voxel, determining its properties and appearance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -18,6 +34,10 @@ pub enum VoxelMaterial {
     /// Loose pale grain — beaches, and the readable surface for a route laid
     /// over ground of a different colour.
     Sand = 7,
+    /// The floor of the world. Indestructible, and the only material that is —
+    /// it exists to stop the player digging out of the level, which is a
+    /// property of the world's extent rather than of any rock.
+    Bedrock = 8,
 }
 
 impl VoxelMaterial {
@@ -41,26 +61,45 @@ impl VoxelMaterial {
             VoxelMaterial::Limestone => [0.75, 0.73, 0.68, 1.0],
             VoxelMaterial::Slate => [0.30, 0.32, 0.35, 1.0],
             VoxelMaterial::Sand => [0.84, 0.76, 0.55, 1.0],
+            // Near-black, and deliberately unlike every other rock: a player who
+            // reaches it should be able to see that this one is different before
+            // spending a charge on it.
+            VoxelMaterial::Bedrock => [0.10, 0.10, 0.12, 1.0],
         }
     }
 
-    /// Base health for this material before depth modifiers.
-    pub fn base_health(&self) -> u8 {
+    /// Budget a blast must spend to remove one voxel of this material.
+    ///
+    /// `None` means indestructible: no charge removes it, however large. Only
+    /// [`Bedrock`](VoxelMaterial::Bedrock) is, and it is the world's floor
+    /// rather than a durability tier — every other material yields to a big
+    /// enough charge, and to a small enough charge repeated.
+    ///
+    /// Air costs nothing because there is nothing there to take.
+    pub fn toughness(&self) -> Option<f32> {
         match self {
-            VoxelMaterial::Air => 0,
-            VoxelMaterial::Grass => 1,
-            VoxelMaterial::Dirt => 2,
-            VoxelMaterial::Ite => 3,
-            VoxelMaterial::Rock => 5,
-            VoxelMaterial::Limestone => 4,
-            VoxelMaterial::Slate => 8,
-            VoxelMaterial::Sand => 1,
+            VoxelMaterial::Air => Some(0.0),
+            VoxelMaterial::Grass => Some(1.0),
+            VoxelMaterial::Sand => Some(1.0),
+            VoxelMaterial::Dirt => Some(2.0),
+            VoxelMaterial::Ite => Some(3.0),
+            VoxelMaterial::Limestone => Some(4.0),
+            VoxelMaterial::Rock => Some(5.0),
+            VoxelMaterial::Slate => Some(8.0),
+            VoxelMaterial::Bedrock => None,
         }
+    }
+
+    /// Whether no charge can remove this material.
+    pub fn is_indestructible(&self) -> bool {
+        self.toughness().is_none()
+    }
+
+    /// Check if this material is solid (should be collided with).
+    pub fn is_solid(&self) -> bool {
+        !matches!(self, VoxelMaterial::Air)
     }
 }
-
-/// Health value indicating this voxel cannot be destroyed.
-pub const INDESTRUCTIBLE: u8 = u8::MAX;
 
 /// A single voxel with density and material.
 /// Density is used for smooth surface extraction (Marching Cubes).
@@ -73,8 +112,6 @@ pub struct Voxel {
     pub density: f32,
     /// Material type of this voxel.
     pub material: VoxelMaterial,
-    /// Remaining hit points. 0 = already destroyed (air), 255 = indestructible.
-    pub health: u8,
 }
 
 impl Voxel {
@@ -90,98 +127,32 @@ impl Voxel {
     ///
     /// So this constructor is not the thing to change. Callers that remove
     /// solid must compute the distance to the surface they are cutting with —
-    /// `csg::carve_density` — and pass it in, as `Chunk::damage_sphere` and
+    /// `csg::carve_density` — and pass it in, as `Chunk::carve_sphere` and
     /// `csg::carve_with_sdf` both do. Air that was always air is what this is
     /// for, and for that the value is correct.
     pub fn air() -> Self {
         Self {
             density: -1.0,
             material: VoxelMaterial::Air,
-            health: 0,
         }
     }
 
-    /// Create a solid voxel with explicit health.
-    pub fn solid(material: VoxelMaterial, health: u8) -> Self {
+    /// Create a solid voxel of the given material.
+    pub fn solid(material: VoxelMaterial) -> Self {
         Self {
             density: 1.0,
             material,
-            health,
         }
     }
 
-    /// Apply damage, returning the updated voxel. Indestructible voxels are unaffected.
-    /// If health reaches zero the voxel becomes air.
-    ///
-    /// This answers *whether* a voxel survives, not *what shape* is left: the
-    /// air it returns is saturated, and a caller cutting a surface through the
-    /// field must write the carved density itself. See [`Voxel::air`].
-    pub fn apply_damage(mut self, damage: u8) -> Self {
-        if self.health == INDESTRUCTIBLE || self.health == 0 {
-            return self;
-        }
-        if damage >= self.health {
-            return Self::air();
-        }
-        self.health -= damage;
-        self
+    /// Whether this voxel is inside the surface and made of something.
+    pub fn is_solid(&self) -> bool {
+        self.density > 0.0 && self.material.is_solid()
     }
 }
 
 impl Default for Voxel {
     fn default() -> Self {
         Self::air()
-    }
-}
-
-/// Controls how voxel health scales with depth below the terrain surface.
-pub struct DurabilityConfig {
-    /// Health added per unit of depth below the surface.
-    /// Surface voxels always start at 1 HP, so at depth `d` the health is
-    /// `1 + (d * health_per_depth) as u8`, capped at 254.
-    pub health_per_depth: f32,
-
-    /// Thickness (in world units) of the indestructible bedrock layer at the
-    /// bottom of the terrain bounds.
-    pub bedrock_thickness: f32,
-}
-
-impl Default for DurabilityConfig {
-    fn default() -> Self {
-        Self {
-            health_per_depth: 3.0,
-            bedrock_thickness: 2.0,
-        }
-    }
-}
-
-impl DurabilityConfig {
-    /// Compute health for a voxel at the given y coordinate.
-    ///
-    /// `surface_y` is the terrain surface height at this column.
-    /// `floor_y` is the bottom of the world bounds.
-    pub fn health_at(&self, y: f32, surface_y: f32, floor_y: f32) -> u8 {
-        if y <= floor_y + self.bedrock_thickness {
-            return INDESTRUCTIBLE;
-        }
-        let depth = (surface_y - y).max(0.0);
-        let hp = 1.0 + depth * self.health_per_depth;
-        (hp as u8).min(INDESTRUCTIBLE - 1)
-    }
-}
-
-#[cfg(test)]
-impl Voxel {
-    /// Check if this voxel is considered solid (inside the surface).
-    pub(crate) fn is_solid(&self) -> bool {
-        self.density > 0.0 && self.material.is_solid()
-    }
-}
-
-#[cfg(test)]
-impl VoxelMaterial {
-    /// Check if this material is solid (should be collided with).
-    pub fn is_solid(&self) -> bool {
-        !matches!(self, VoxelMaterial::Air)
     }
 }

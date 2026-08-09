@@ -301,7 +301,7 @@ mod tests {
                 let voxel = if material % 3 == 0 {
                     Voxel::air()
                 } else {
-                    Voxel::solid(VoxelMaterial::Rock, material.max(1))
+                    Voxel::solid(VoxelMaterial::Rock)
                 };
                 g.set(Point3::new(local, y, local), voxel);
                 y += voxel_size;
@@ -405,7 +405,7 @@ mod tests {
 
         g.set(
             Point3::new(-1.0, -1.0, -1.0),
-            Voxel::solid(crate::terrain::voxel::VoxelMaterial::Rock, 1),
+            Voxel::solid(crate::terrain::voxel::VoxelMaterial::Rock),
         );
         assert_eq!(g.chunk_count(), 1);
         assert!(g.chunk(ChunkCoord::new(-1, -1, -1)).is_some());
@@ -420,7 +420,7 @@ mod tests {
         let mut g = grid(1.0);
         g.set(
             Point3::new(4.0, 4.0, 4.0),
-            Voxel::solid(crate::terrain::voxel::VoxelMaterial::Rock, 1),
+            Voxel::solid(crate::terrain::voxel::VoxelMaterial::Rock),
         );
         g.allocate_seam_neighbours();
 
@@ -438,7 +438,7 @@ mod tests {
         let mut g = grid(1.0);
         g.set(
             Point3::new(4.0, 4.0, 4.0),
-            Voxel::solid(crate::terrain::voxel::VoxelMaterial::Rock, 1),
+            Voxel::solid(crate::terrain::voxel::VoxelMaterial::Rock),
         );
         g.allocate_seam_neighbours();
 
@@ -451,7 +451,7 @@ mod tests {
         let mut g = grid(1.0);
         g.set(
             Point3::new(4.0, 4.0, 4.0),
-            Voxel::solid(crate::terrain::voxel::VoxelMaterial::Rock, 1),
+            Voxel::solid(crate::terrain::voxel::VoxelMaterial::Rock),
         );
         g.allocate_seam_neighbours();
         g.prune_vacant();

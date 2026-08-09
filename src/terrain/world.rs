@@ -30,6 +30,7 @@ use nalgebra::{Point3, Vector3};
 use rustc_hash::FxHashMap;
 use std::time::{Duration, Instant};
 
+use super::blast::BlastConfig;
 use super::chunk::ChunkTriangleRef;
 use super::mesh_octree::MeshBuildTimings;
 use super::segment::{ConcatTimings, Segment};
@@ -200,14 +201,19 @@ impl TerrainWorld {
 
     // === Modification ===
 
-    /// Damage voxels within a world-space sphere, reducing their health.
+    /// Detonate a charge at a world-space point.
     ///
-    /// Routed to every segment the sphere touches, so an explosion straddling a
-    /// join affects both sides.
-    pub fn damage_sphere(&mut self, center: Point3<f32>, radius: f32, damage: u8) {
+    /// Routed to every segment within the charge's maximum reach, so an
+    /// explosion straddling a join affects both sides. Each segment resolves the
+    /// budget against its own material, which is what lets a charge cut deep
+    /// into one segment's sand and barely mark the granite next to it.
+    pub fn detonate(&mut self, center: Point3<f32>, config: &BlastConfig) {
         for segment in &mut self.segments {
-            if segment.bounds().intersects_sphere(center, radius) {
-                segment.damage_sphere(center, radius, damage);
+            if segment
+                .bounds()
+                .intersects_sphere(center, config.max_radius)
+            {
+                segment.detonate(center, config);
             }
         }
     }
@@ -681,6 +687,7 @@ mod tests {
     use crate::terrain::frame::SegmentFrame;
     use crate::terrain::voxel::{Voxel, VoxelMaterial};
     use crate::terrain::Anchor;
+    use crate::terrain::BlastConfig;
 
     /// A solid slab from `min` to `max` inclusive, in **segment-local**
     /// coordinates. Authoring locally is the point: the same grid contents get
@@ -720,7 +727,6 @@ mod tests {
                         box_sdf(p, min, max),
                         voxel_size,
                         VoxelMaterial::Rock,
-                        1,
                     );
                     z += voxel_size;
                 }
@@ -803,7 +809,7 @@ mod tests {
             let mut grid = ChunkGrid::new(voxel_size);
             grid.set(
                 Point3::new(half, half, half),
-                Voxel::solid(VoxelMaterial::Rock, 1),
+                Voxel::solid(VoxelMaterial::Rock),
             );
             let world = world_of(SegmentFrame::identity(), grid);
 
@@ -1059,7 +1065,7 @@ mod tests {
             let before = world.triangle_count();
 
             let centre = frame.to_world(Point3::new(0.0, 2.0, 0.0));
-            world.damage_sphere(centre, 3.0, 255);
+            world.detonate(centre, &BlastConfig::fixed_radius(3.0));
             world.update();
 
             assert!(!world.dirty_regions().is_empty(), "{label}");
@@ -1107,7 +1113,7 @@ mod tests {
             "flat ground over the crater site started at {before}, not open"
         );
 
-        world.damage_sphere(Point3::new(0.0, 4.0, 0.0), 3.0, 255);
+        world.detonate(Point3::new(0.0, 4.0, 0.0), &BlastConfig::fixed_radius(3.0));
         world.update();
 
         let after = over_the_crater(&world);
@@ -1135,13 +1141,13 @@ mod tests {
     #[test]
     fn flat_ground_beside_a_crater_keeps_its_normals() {
         use crate::terrain::generation::generate_terrain;
-        use crate::terrain::voxel::DurabilityConfig;
         use crate::terrain::{ChunkGrid, SegmentFrame};
 
         const BLAST_RADIUS: f32 = 4.0;
 
         for voxel_size in [1.0_f32, 0.5, 0.25] {
             let terrain = crate::level::Terrain {
+                bedrock_thickness: 0.0,
                 voxel_size,
                 bounds: crate::level::Extent {
                     min: (-24.0, -12.0, -24.0),
@@ -1153,12 +1159,7 @@ mod tests {
                 volumes: Vec::new(),
             };
             let mut grid = ChunkGrid::new(voxel_size);
-            generate_terrain(
-                &mut grid,
-                &terrain,
-                &DurabilityConfig::default(),
-                &terrain.bounds.to_aabb(),
-            );
+            generate_terrain(&mut grid, &terrain, &terrain.bounds.to_aabb());
             let mut world = world_of(SegmentFrame::identity(), grid);
 
             let ground_height = world
@@ -1167,7 +1168,10 @@ mod tests {
                 .map(|v| v.pos.y)
                 .fold(f32::MIN, f32::max);
 
-            world.damage_sphere(Point3::new(0.0, 0.0, 0.0), BLAST_RADIUS, 255);
+            world.detonate(
+                Point3::new(0.0, 0.0, 0.0),
+                &BlastConfig::fixed_radius(BLAST_RADIUS),
+            );
             world.update();
 
             // Undisturbed ground: level with the original surface, and clear of
@@ -1259,6 +1263,7 @@ mod tests {
     /// within a box big enough that its own walls close the mesh.
     fn flat_terrain(voxel_size: f32, base_height: f32) -> crate::level::Terrain {
         crate::level::Terrain {
+            bedrock_thickness: 0.0,
             voxel_size,
             bounds: crate::level::Extent {
                 min: (0.0, 0.0, 0.0),
@@ -1274,16 +1279,10 @@ mod tests {
     /// Generate and mesh a terrain description at the origin.
     fn meshed(terrain: &crate::level::Terrain) -> TerrainWorld {
         use crate::terrain::generation::generate_terrain;
-        use crate::terrain::voxel::DurabilityConfig;
         use crate::terrain::{ChunkGrid, SegmentFrame};
 
         let mut grid = ChunkGrid::new(terrain.voxel_size);
-        generate_terrain(
-            &mut grid,
-            terrain,
-            &DurabilityConfig::default(),
-            &terrain.bounds.to_aabb(),
-        );
+        generate_terrain(&mut grid, terrain, &terrain.bounds.to_aabb());
         world_of(SegmentFrame::identity(), grid)
     }
 
@@ -1378,7 +1377,6 @@ mod tests {
     #[test]
     fn test_arena_generates_sparsely_at_its_declared_voxel_size() {
         use crate::terrain::generation::generate_terrain;
-        use crate::terrain::voxel::DurabilityConfig;
         use crate::terrain::{ChunkGrid, SegmentFrame};
 
         let level = crate::level::load_level(std::path::Path::new("levels/test_arena.level.ron"))
@@ -1387,7 +1385,7 @@ mod tests {
         let bounds = terrain.bounds.to_aabb();
 
         let mut grid = ChunkGrid::new(terrain.voxel_size);
-        generate_terrain(&mut grid, terrain, &DurabilityConfig::default(), &bounds);
+        generate_terrain(&mut grid, terrain, &bounds);
         let world = world_of(SegmentFrame::identity(), grid);
 
         assert_eq!(world.voxel_size(), terrain.voxel_size);
@@ -1402,7 +1400,7 @@ mod tests {
                 Point3::new(bounds.max.x, bounds.max.y + extra_height, bounds.max.z),
             );
             let mut g = ChunkGrid::new(terrain.voxel_size);
-            generate_terrain(&mut g, terrain, &DurabilityConfig::default(), &extent);
+            generate_terrain(&mut g, terrain, &extent);
             g.chunk_count()
         };
         let headroom = 4.0 * CHUNK_VOXELS as f32 * terrain.voxel_size;
@@ -1464,7 +1462,7 @@ mod tests {
         .into_iter()
         .enumerate()
         {
-            world.damage_sphere(centre, 2.5, 255);
+            world.detonate(centre, &BlastConfig::fixed_radius(2.5));
             world.update();
             let t = world
                 .last_update_timings()

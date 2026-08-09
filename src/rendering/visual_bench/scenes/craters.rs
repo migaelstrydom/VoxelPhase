@@ -53,7 +53,7 @@ use crate::rendering::visual_bench::scene::{
     SceneCamera, SceneContext, SceneEnvironment, SceneMesh, SceneShot, VisualScene,
 };
 use crate::rendering::visual_bench::scenes::voxel_terrain;
-use crate::terrain::{generate_terrain, ChunkGrid, DurabilityConfig, Segment, SegmentFrame};
+use crate::terrain::{generate_terrain, BlastConfig, ChunkGrid, Segment, SegmentFrame};
 
 /// Matches `terrain_forms` and `terrain_ao`, so all three read together.
 const SUN_ELEVATION: f32 = 34.0;
@@ -207,17 +207,13 @@ fn blasted_plot(voxel_size: f32, blasts: &[Blast]) -> SceneMesh {
                 material: VoxelMaterialId::Rock,
             },
         ],
+        bedrock_thickness: 0.0,
         features: Vec::new(),
         volumes: Vec::new(),
     };
 
     let mut grid = ChunkGrid::new(voxel_size);
-    generate_terrain(
-        &mut grid,
-        &terrain,
-        &DurabilityConfig::default(),
-        &terrain.bounds.to_aabb(),
-    );
+    generate_terrain(&mut grid, &terrain, &terrain.bounds.to_aabb());
 
     let mut segment = Segment::new("craters", SegmentFrame::identity(), grid, Vec::new());
     let mut rebuilt = Vec::new();
@@ -227,7 +223,10 @@ fn blasted_plot(voxel_size: f32, blasts: &[Blast]) -> SceneMesh {
     // arrive in a fight: the second grenade cuts a field the first already
     // wrote, and carving both before meshing once would skip that.
     for blast in blasts {
-        segment.damage_sphere(ORIGIN + blast.offset, blast.radius, u8::MAX);
+        segment.detonate(
+            ORIGIN + blast.offset,
+            &BlastConfig::fixed_radius(blast.radius),
+        );
         rebuilt.clear();
         segment.update(&mut rebuilt);
     }

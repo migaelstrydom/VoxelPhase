@@ -9,9 +9,7 @@ use crate::level::data::{Level, WaterBody};
 use crate::level::placement::{local_frame, PlacementError};
 use crate::rendering::material::{MaterialId, MaterialManagerBuilder};
 use crate::resources::textures::TextureManager;
-use crate::terrain::{
-    generate_terrain, Anchor, ChunkGrid, DurabilityConfig, Segment, TerrainWorld,
-};
+use crate::terrain::{generate_terrain, Anchor, ChunkGrid, Segment, TerrainWorld};
 use crate::water::{WaterGrid, WaterGridConfig, WaterProperties, WaveGrid, WaveGridConfig};
 
 /// Pre-created materials for all objects in a level.
@@ -62,13 +60,12 @@ pub fn create_level_materials(
 ///
 /// [`load_level`]: crate::level::load_level
 pub fn build_segments(level: &Level) -> Result<Vec<Segment>, PlacementError> {
-    let durability = DurabilityConfig::default();
     let mut segments = Vec::with_capacity(level.segments.len());
 
     for (index, def) in level.segments.iter().enumerate() {
         let bounds = def.terrain.bounds.to_aabb();
         let mut grid = ChunkGrid::new(def.terrain.voxel_size);
-        generate_terrain(&mut grid, &def.terrain, &durability, &bounds);
+        generate_terrain(&mut grid, &def.terrain, &bounds);
 
         let anchors = def
             .anchors

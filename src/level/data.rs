@@ -206,11 +206,24 @@ pub struct Terrain {
     /// Material layering by depth below the surface.
     #[serde(default)]
     pub material_layers: Vec<MaterialLayer>,
+    /// Thickness of the indestructible bedrock band at the bottom of `bounds`.
+    ///
+    /// The floor of the world rather than a durability tier: it exists so the
+    /// player cannot dig out of the level. Everything above it yields to a big
+    /// enough charge. Zero leaves the level open at the bottom.
+    #[serde(default = "default_bedrock_thickness")]
+    pub bedrock_thickness: f32,
     /// Heightfield features — modify surface height at each (x, z) column.
     pub features: Vec<TerrainFeature>,
     /// Volumetric features — place or carve voxels in 3D (evaluated after heightfield).
     #[serde(default)]
     pub volumes: Vec<VolumeFeature>,
+}
+
+/// Two voxels of bedrock at a 1.0 voxel size — enough that a charge cannot
+/// reach through it from above.
+fn default_bedrock_thickness() -> f32 {
+    2.0
 }
 
 /// Maps a depth range below the terrain surface to a voxel material.

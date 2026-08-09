@@ -584,7 +584,6 @@ mod tests {
             } else {
                 VoxelMaterial::Air
             },
-            health: 0,
         }
     }
 

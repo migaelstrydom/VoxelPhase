@@ -24,6 +24,7 @@ use std::time::{Duration, Instant};
 
 use super::adjacency::AdjacencyMap;
 use super::anchor::Anchor;
+use super::blast::{self, BlastConfig};
 use super::chunk::{ChunkCoord, ChunkTriangleRef, CHUNK_VOXELS};
 use super::chunk_grid::ChunkGrid;
 use super::frame::SegmentFrame;
@@ -228,11 +229,20 @@ impl Segment {
 
     // === Modification ===
 
-    /// Damage voxels within a world-space sphere. Returns true if any chunk was
+    /// Detonate a charge at a world-space point. Returns true if any chunk was
     /// marked dirty.
-    pub fn damage_sphere(&mut self, center: Point3<f32>, radius: f32, damage: u8) -> bool {
+    ///
+    /// How far the cut reaches is the charge's budget against what it is digging
+    /// through — see [`blast::effective_radius`]. The radius is resolved across
+    /// the whole grid before anything is carved, so a blast on a chunk boundary
+    /// spends one budget rather than one per chunk.
+    pub fn detonate(&mut self, center: Point3<f32>, config: &BlastConfig) -> bool {
         let local_center = self.frame.to_local(center);
         let voxel_size = self.grid.voxel_size();
+
+        let Some(radius) = blast::effective_radius(&self.grid, local_center, config) else {
+            return false;
+        };
 
         // A changed voxel affects the marching-cubes cells on both sides of its
         // sample, so the neighbouring chunk across a seam has to remesh too.
@@ -243,7 +253,7 @@ impl Segment {
         let mut any_destroyed = false;
         for coord in &coords {
             if let Some(chunk) = self.grid.chunk_mut(*coord) {
-                any_destroyed |= chunk.damage_sphere(local_center, radius, damage);
+                any_destroyed |= chunk.carve_sphere(local_center, radius);
             }
         }
 

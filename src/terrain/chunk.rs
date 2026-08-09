@@ -125,8 +125,11 @@ impl Chunk {
         self.dirty = true;
     }
 
-    /// Damage voxels within a sphere, cutting the density field with the
-    /// sphere's signed distance. Returns true if any voxel changed.
+    /// Cut a sphere out of the density field. Returns true if any voxel changed.
+    ///
+    /// How large the sphere is, is not this function's business — `blast`
+    /// decides that from the charge's budget and what it is digging through.
+    /// This carves whatever radius it is handed.
     ///
     /// The cut is a distance, not a flag, and that is the whole point. Writing
     /// whole air voxels at a saturated -1.0 leaves a step in the density field
@@ -135,7 +138,7 @@ impl Chunk {
     /// slope, tilting the normals of flat ground for about two voxels around
     /// every blast. Carving by distance is what `csg::carve_with_sdf` already
     /// does for generated caves and overhangs — see [`carve_density`].
-    pub fn damage_sphere(&mut self, center: Point3<f32>, radius: f32, damage: u8) -> bool {
+    pub fn carve_sphere(&mut self, center: Point3<f32>, radius: f32) -> bool {
         let step = self.voxel_size();
         let mut changed = false;
 
@@ -151,9 +154,9 @@ impl Chunk {
                 return voxel;
             }
 
-            // Durability decides whether the cut lands at all. Bedrock and
-            // anything that outlasts this damage keeps its geometry intact.
-            if voxel.apply_damage(damage).material == voxel.material {
+            // The world's floor is not something a charge can spend its way
+            // through, however much it carries.
+            if voxel.material.is_indestructible() {
                 return voxel;
             }
 
@@ -214,5 +217,48 @@ impl Chunk {
 
     pub fn mark_dirty(&mut self) {
         self.dirty = true;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::terrain::voxel::VoxelMaterial;
+
+    fn chunk_of(material: VoxelMaterial) -> Chunk {
+        let extent = CHUNK_VOXELS as f32;
+        let bounds = AABB::new(Point3::origin(), Point3::new(extent, extent, extent));
+        let mut chunk = Chunk::new(ChunkCoord::new(0, 0, 0), bounds);
+        let centre = bounds.center();
+        chunk
+            .svo
+            .modify_sphere(centre, extent, |_, _| Voxel::solid(material));
+        chunk
+    }
+
+    #[test]
+    fn carving_removes_solid_and_marks_the_chunk_dirty() {
+        let mut chunk = chunk_of(VoxelMaterial::Rock);
+        let centre = chunk.bounds.center();
+        chunk.replace_mesh(MeshOctree::new(*chunk.bounds()));
+
+        assert!(chunk.carve_sphere(centre, 4.0));
+        assert_eq!(chunk.voxel_at(centre).material, VoxelMaterial::Air);
+        assert!(chunk.is_dirty());
+    }
+
+    /// The world's floor is the one thing no charge gets through, so a cut that
+    /// covers it must leave it exactly as it was.
+    #[test]
+    fn bedrock_survives_any_cut() {
+        let mut chunk = chunk_of(VoxelMaterial::Bedrock);
+        let centre = chunk.bounds.center();
+        chunk.replace_mesh(MeshOctree::new(*chunk.bounds()));
+
+        assert!(!chunk.carve_sphere(centre, 8.0));
+        let voxel = chunk.voxel_at(centre);
+        assert_eq!(voxel.material, VoxelMaterial::Bedrock);
+        assert!(voxel.density > 0.0);
+        assert!(!chunk.is_dirty());
     }
 }

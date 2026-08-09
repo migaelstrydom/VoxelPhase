@@ -12,6 +12,7 @@
 mod adjacency;
 mod anchor;
 pub mod ao;
+pub mod blast;
 mod chunk;
 mod chunk_grid;
 mod csg;
@@ -36,6 +37,7 @@ pub use segment::{Segment, SegmentState};
 pub use world::{TerrainWorld, UpdateTimings};
 
 // Voxel types for terrain modification
-pub use voxel::{DurabilityConfig, VoxelMaterial};
+pub use blast::BlastConfig;
+pub use voxel::VoxelMaterial;
 
 pub use generation::generate_terrain;

@@ -7,7 +7,7 @@ use crate::collision::AABB;
 
 use super::super::chunk_grid::ChunkGrid;
 use super::super::csg::{carve_with_sdf, index_range, union_solid};
-use super::super::voxel::{DurabilityConfig, VoxelMaterial};
+use super::super::voxel::VoxelMaterial;
 
 /// One evaluation of a traversal primitive's field.
 pub struct Sample {
@@ -55,14 +55,12 @@ pub fn rasterise(
     grid: &mut ChunkGrid,
     solid: &dyn TraversalSolid,
     material: VoxelMaterial,
-    durability: &DurabilityConfig,
     clip: &AABB,
 ) {
     let step = grid.voxel_size();
-    let floor_y = clip.min.y;
     for_each_lattice_point(solid, clip, step, |p, sample| {
-        let health = durability.health_at(p.y, sample.surface_y, floor_y);
-        union_solid(grid, p, sample.distance, step, material, health);
+        let _ = sample.surface_y;
+        union_solid(grid, p, sample.distance, step, material);
     });
 }
 

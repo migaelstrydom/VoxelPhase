@@ -55,7 +55,7 @@ use crate::level::{
 use crate::rendering::material::SurfaceParams;
 use crate::rendering::vertex::Vertex;
 use crate::rendering::visual_bench::scene::SceneMesh;
-use crate::terrain::{generate_terrain, ChunkGrid, DurabilityConfig, Segment, SegmentFrame};
+use crate::terrain::{generate_terrain, BlastConfig, ChunkGrid, Segment, SegmentFrame};
 
 /// Edge length of one voxel, in metres.
 ///
@@ -175,10 +175,9 @@ impl TerrainTableau {
 pub fn build() -> TerrainTableau {
     let terrain = description();
     let bounds = terrain.bounds.to_aabb();
-    let durability = DurabilityConfig::default();
 
     let mut grid = ChunkGrid::new(terrain.voxel_size);
-    generate_terrain(&mut grid, &terrain, &durability, &bounds);
+    generate_terrain(&mut grid, &terrain, &bounds);
 
     let mut segment = Segment::new("visual_bench", SegmentFrame::identity(), grid, Vec::new());
     let mut rebuilt: Vec<AABB> = Vec::new();
@@ -188,7 +187,7 @@ pub fn build() -> TerrainTableau {
     // generator, because that is the path a grenade takes. Both encode a cut as
     // a signed distance now, but through different code, and `craters` is the
     // sheet that sweeps this one properly.
-    segment.damage_sphere(CRATER, CRATER_RADIUS, u8::MAX);
+    segment.detonate(CRATER, &BlastConfig::fixed_radius(CRATER_RADIUS));
     rebuilt.clear();
     segment.update(&mut rebuilt);
 
@@ -226,6 +225,7 @@ fn description() -> Terrain {
                 material: VoxelMaterialId::Rock,
             },
         ],
+        bedrock_thickness: 0.0,
         features: vec![
             cliff(),
             TerrainFeature::TerrainRoughness {

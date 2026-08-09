@@ -3,6 +3,8 @@
 use nalgebra::Point3;
 use specs::{Component, VecStorage};
 
+use crate::terrain::BlastConfig;
+
 /// Component representing an explosion event.
 ///
 /// When an explosion is created (e.g., from a grenade detonation),
@@ -15,14 +17,14 @@ use specs::{Component, VecStorage};
 pub struct Explosion {
     /// Center point of the explosion in world space.
     pub center: Point3<f32>,
-    /// Radius for terrain destruction (crater size).
-    pub crater_radius: f32,
+    /// How this charge converts into removed terrain. The crater's size is not
+    /// fixed here — it falls out of what the charge can afford to cut through,
+    /// so the same grenade scoops sand and dents granite.
+    pub blast: BlastConfig,
     /// Radius for knockback effect (can be larger than crater).
     pub blast_radius: f32,
     /// Force magnitude for knockback.
     pub force: f32,
-    /// Damage dealt to terrain voxels within the crater radius.
-    pub terrain_damage: u8,
     /// Whether this explosion has been processed.
     pub processed: bool,
 }
@@ -32,10 +34,9 @@ impl Explosion {
     pub fn new(center: Point3<f32>) -> Self {
         Self {
             center,
-            crater_radius: 2.5,
+            blast: BlastConfig::default(),
             blast_radius: 5.0,
             force: 1000.0,
-            terrain_damage: 1,
             processed: false,
         }
     }

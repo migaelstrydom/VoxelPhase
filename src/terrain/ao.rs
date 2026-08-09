@@ -504,7 +504,7 @@ mod tests {
                         let depth = (self.0)(block.lattice().position(x, y, z));
                         let density = (depth / self.1).clamp(-1.0, 1.0);
                         if density > 0.0 {
-                            let mut voxel = Voxel::solid(VoxelMaterial::Rock, 10);
+                            let mut voxel = Voxel::solid(VoxelMaterial::Rock);
                             voxel.density = density;
                             block.set(x, y, z, voxel);
                         } else {

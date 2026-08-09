@@ -91,24 +91,22 @@ pub(super) fn union_solid(
     sdf: f32,
     step: f32,
     material: VoxelMaterial,
-    health: u8,
 ) {
     let new_density = (-debias(sdf, step) / step).clamp(-1.0, 1.0);
     let existing = grid.get(pos);
     if new_density <= existing.density {
         return;
     }
-    let (mat, hp) = if new_density > 0.0 {
-        (material, health)
+    let mat = if new_density > 0.0 {
+        material
     } else {
-        (VoxelMaterial::Air, 0)
+        VoxelMaterial::Air
     };
     grid.set(
         pos,
         Voxel {
             density: new_density,
             material: mat,
-            health: hp,
         },
     );
 }
@@ -145,17 +143,16 @@ pub(super) fn carve_with_sdf(grid: &mut ChunkGrid, pos: Point3<f32>, sdf_carve: 
     if new_density >= existing.density {
         return;
     }
-    let (mat, hp) = if new_density > 0.0 {
-        (existing.material, existing.health)
+    let mat = if new_density > 0.0 {
+        existing.material
     } else {
-        (VoxelMaterial::Air, 0)
+        VoxelMaterial::Air
     };
     grid.set(
         pos,
         Voxel {
             density: new_density,
             material: mat,
-            health: hp,
         },
     );
 }

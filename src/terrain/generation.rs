@@ -17,7 +17,7 @@ use super::chunk::{ChunkCoord, CHUNK_VOXELS};
 use super::chunk_grid::ChunkGrid;
 use super::csg::{carve_with_sdf, debias_height, index_range, union_solid};
 use super::traversal::{excavate, rasterise, route_plan, RoutePart};
-use super::voxel::{DurabilityConfig, Voxel, VoxelMaterial, INDESTRUCTIBLE};
+use super::voxel::{Voxel, VoxelMaterial};
 use crate::collision::AABB;
 use crate::level::{
     CaveDepthPoint, CaveRegion, MaterialLayer, Terrain, TerrainFeature, VolumeFeature,
@@ -29,20 +29,15 @@ use crate::utils::noise::{fbm_2d_periodic, fbm_3d};
 ///
 /// `bounds` is the grid-local extent to generate within; features are clipped
 /// to it and nothing outside is written.
-pub fn generate_terrain(
-    grid: &mut ChunkGrid,
-    terrain: &Terrain,
-    durability: &DurabilityConfig,
-    bounds: &AABB,
-) {
+pub fn generate_terrain(grid: &mut ChunkGrid, terrain: &Terrain, bounds: &AABB) {
     let step = grid.voxel_size();
 
-    generate_heightfield(grid, terrain, durability, bounds, step);
+    generate_heightfield(grid, terrain, bounds, step);
 
     // Pass 2: volumetric features — place or carve voxels in 3D. Each feature
     // derives its own iteration box, so only the chunks it overlaps are visited.
     for volume in &terrain.volumes {
-        apply_volume(grid, volume, terrain, durability, bounds, step);
+        apply_volume(grid, volume, terrain, bounds, step);
     }
 }
 
@@ -51,13 +46,7 @@ pub fn generate_terrain(
 /// Walks one chunk column at a time. Heights are evaluated once per voxel
 /// column and reused for every chunk in that column, and each chunk is resolved
 /// once rather than per voxel write.
-fn generate_heightfield(
-    grid: &mut ChunkGrid,
-    terrain: &Terrain,
-    durability: &DurabilityConfig,
-    bounds: &AABB,
-    step: f32,
-) {
+fn generate_heightfield(grid: &mut ChunkGrid, terrain: &Terrain, bounds: &AABB, step: f32) {
     let floor_y = bounds.min.y;
     let n = CHUNK_VOXELS as i32;
 
@@ -139,9 +128,12 @@ fn generate_heightfield(
                             let y = iy as f32 * step;
                             if y < height {
                                 let depth = top_voxel_y - y;
-                                let material = material_at_depth(depth, &terrain.material_layers);
-                                let hp = durability.health_at(y, top_voxel_y, floor_y);
-                                let mut voxel = Voxel::solid(material, hp);
+                                let material = if y <= floor_y + terrain.bedrock_thickness {
+                                    VoxelMaterial::Bedrock
+                                } else {
+                                    material_at_depth(depth, &terrain.material_layers)
+                                };
+                                let mut voxel = Voxel::solid(material);
                                 // Topmost voxel: encode the sub-voxel surface offset
                                 // as an SDF density so marching cubes lands the
                                 // triangle at y = height instead of at the midpoint
@@ -160,7 +152,6 @@ fn generate_heightfield(
                                     Voxel {
                                         density: ((height - y) / step).clamp(-1.0, 0.0),
                                         material: VoxelMaterial::Air,
-                                        health: 0,
                                     },
                                 );
                             }
@@ -372,7 +363,6 @@ fn apply_volume(
     grid: &mut ChunkGrid,
     volume: &VolumeFeature,
     terrain: &Terrain,
-    durability: &DurabilityConfig,
     bounds: &AABB,
     step: f32,
 ) {
@@ -384,9 +374,7 @@ fn apply_volume(
         for part in &plan.parts {
             match part {
                 RoutePart::Void(solid) => excavate(grid, solid.as_ref(), bounds),
-                RoutePart::Solid(solid) => {
-                    rasterise(grid, solid.as_ref(), material, durability, bounds)
-                }
+                RoutePart::Solid(solid) => rasterise(grid, solid.as_ref(), material, bounds),
             }
         }
         return;
@@ -400,7 +388,7 @@ fn apply_volume(
             edge_noise,
         } => {
             apply_island(
-                grid, cx, cy, cz, hx, hy, hz, edge_noise, layers, durability, bounds, step,
+                grid, cx, cy, cz, hx, hy, hz, edge_noise, layers, bounds, step,
             );
         }
 
@@ -409,9 +397,7 @@ fn apply_volume(
             height,
             radius,
         } => {
-            apply_pillar(
-                grid, cx, cz, height, radius, layers, durability, bounds, step,
-            );
+            apply_pillar(grid, cx, cz, height, radius, layers, bounds, step);
         }
 
         VolumeFeature::Tunnel {
@@ -431,7 +417,7 @@ fn apply_volume(
             thickness,
         } => {
             apply_arch(
-                grid, fx, fy, fz, tx, ty, tz, radius, thickness, layers, durability, bounds, step,
+                grid, fx, fy, fz, tx, ty, tz, radius, thickness, layers, bounds, step,
             );
         }
 
@@ -476,7 +462,7 @@ fn apply_volume(
         } => {
             apply_overhang(
                 grid, fx, fz, tx, tz, height, depth, thickness, dx, dz, noise, noise_seed, layers,
-                durability, bounds, step,
+                bounds, step,
             );
         }
 
@@ -499,7 +485,6 @@ fn apply_island(
     hz: f32,
     edge_noise: f32,
     layers: &[MaterialLayer],
-    durability: &DurabilityConfig,
     bounds: &AABB,
     step: f32,
 ) {
@@ -543,8 +528,7 @@ fn apply_island(
 
                 let depth = (-sd).max(0.0);
                 let material = material_at_depth(depth, layers);
-                let hp = durability.health_at(y, cy + hy, bounds.min.y);
-                union_solid(grid, Point3::new(x, y, z), sd, step, material, hp);
+                union_solid(grid, Point3::new(x, y, z), sd, step, material);
 
                 z += step;
             }
@@ -562,7 +546,6 @@ fn apply_pillar(
     height: f32,
     radius: f32,
     layers: &[MaterialLayer],
-    durability: &DurabilityConfig,
     bounds: &AABB,
     step: f32,
 ) {
@@ -591,8 +574,7 @@ fn apply_pillar(
                 let sd = radial_sd.max(top_sd);
                 let depth = (top_y - y).max(0.0);
                 let material = material_at_depth(depth, layers);
-                let hp = durability.health_at(y, top_y, bounds.min.y);
-                union_solid(grid, Point3::new(x, y, z), sd, step, material, hp);
+                union_solid(grid, Point3::new(x, y, z), sd, step, material);
                 y += step;
             }
 
@@ -684,7 +666,6 @@ fn apply_arch(
     radius: f32,
     thickness: f32,
     layers: &[MaterialLayer],
-    durability: &DurabilityConfig,
     bounds: &AABB,
     step: f32,
 ) {
@@ -754,8 +735,7 @@ fn apply_arch(
                 let sd = perp_h.max(dy) - half_t;
 
                 let material = material_at_depth(0.5, layers);
-                let hp = durability.health_at(y, arc_y + half_t, bounds.min.y);
-                union_solid(grid, Point3::new(x, y, z), sd, step, material, hp);
+                union_solid(grid, Point3::new(x, y, z), sd, step, material);
 
                 z += step;
             }
@@ -785,7 +765,6 @@ fn apply_overhang(
     noise: f32,
     noise_seed: u32,
     layers: &[MaterialLayer],
-    durability: &DurabilityConfig,
     bounds: &AABB,
     step: f32,
 ) {
@@ -871,8 +850,7 @@ fn apply_overhang(
                 let sd = (y - mid_y).abs() - half_thick;
                 let depth_in_lip = (top_y - y).max(0.0);
                 let material = material_at_depth(depth_in_lip, layers);
-                let hp = durability.health_at(y, top_y, bounds.min.y);
-                union_solid(grid, Point3::new(x, y, z), sd, step, material, hp);
+                union_solid(grid, Point3::new(x, y, z), sd, step, material);
                 y += step;
             }
 
@@ -888,7 +866,7 @@ fn apply_overhang(
 /// evaluates 3D FBM noise, and carves to air if the noise exceeds the
 /// depth-curve threshold. When a `CaveRegion` is specified, the threshold
 /// fades toward 1.0 (no carving) outside the region. After carving, fixes
-/// up surface materials using cave-specific layers and assigns health based
+/// up surface materials using cave-specific layers based
 /// on material type and depth from the cave wall.
 fn apply_caves(
     grid: &mut ChunkGrid,
@@ -1003,7 +981,7 @@ fn apply_caves(
         x += step;
     }
 
-    // Pass B: reassign materials and health on cave-exposed surfaces.
+    // Pass B: reassign materials on cave-exposed surfaces.
     fixup_cave_materials(
         grid,
         &terrain.material_layers,
@@ -1019,8 +997,7 @@ fn apply_caves(
 }
 
 /// After cave carving, reassign materials on newly-exposed underground surfaces
-/// using cave-specific layers, and set health based on material type and depth
-/// from the cave wall.
+/// using cave-specific layers.
 ///
 /// The first solid run from the top of each column is the terrain surface —
 /// those voxels keep the terrain's material layers. Only after passing through
@@ -1062,19 +1039,15 @@ fn fixup_cave_materials(
                         terrain_layers
                     };
                     let material = material_at_depth(depth_below_surface, layers);
-                    let health = if seen_underground_air {
-                        material_health(material, depth_below_surface)
-                    } else {
-                        voxel.health
-                    };
-                    if voxel.material != material || voxel.health != health {
-                        // Preserve the SDF density while updating material/health.
+                    // The world's floor is not a surface to re-skin: a cave that
+                    // reaches bedrock must not turn it into ordinary rock.
+                    if voxel.material != material && !voxel.material.is_indestructible() {
+                        // Preserve the SDF density while updating the material.
                         grid.set(
                             Point3::new(x, y, z),
                             Voxel {
                                 density: voxel.density,
                                 material,
-                                health,
                             },
                         );
                     }
@@ -1091,18 +1064,6 @@ fn fixup_cave_materials(
         }
         x += step;
     }
-}
-
-/// Compute voxel health from material base health and depth from the nearest
-/// exposed surface. Surface voxels get the material's base health; deeper
-/// voxels get progressively more, capped at 254.
-fn material_health(material: VoxelMaterial, depth_from_surface: f32) -> u8 {
-    let base = material.base_health();
-    if base == 0 {
-        return 0;
-    }
-    let depth_bonus = (depth_from_surface * 0.5) as u8;
-    base.saturating_add(depth_bonus).min(INDESTRUCTIBLE - 1)
 }
 
 /// Linearly interpolate the carve threshold from a depth curve.

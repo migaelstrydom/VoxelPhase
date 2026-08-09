@@ -299,7 +299,7 @@ mod tests {
     fn fill_writes_only_the_requested_box() {
         let l = lattice(4);
         let mut block = VoxelBlock::air(l);
-        let solid = Voxel::solid(VoxelMaterial::Rock, 10);
+        let solid = Voxel::solid(VoxelMaterial::Rock);
         block.fill(&BlockRange::new([1..3, 1..3, 1..3]), solid);
 
         assert_eq!(block.get(1, 1, 1).density, solid.density);

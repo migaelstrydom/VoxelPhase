@@ -55,16 +55,7 @@ impl<'a> System<'a> for ExplosionSystem {
         let explosion_data: Vec<_> = (&entities, &explosions)
             .join()
             .filter(|(_, e)| !e.processed)
-            .map(|(entity, e)| {
-                (
-                    entity,
-                    e.center,
-                    e.crater_radius,
-                    e.blast_radius,
-                    e.force,
-                    e.terrain_damage,
-                )
-            })
+            .map(|(entity, e)| (entity, e.center, e.blast, e.blast_radius, e.force))
             .collect();
 
         if explosion_data.is_empty() {
@@ -73,13 +64,13 @@ impl<'a> System<'a> for ExplosionSystem {
 
         // Process terrain destruction
         if let Some(ref mut terrain_manager) = terrain_manager_opt {
-            for &(_, center, crater_radius, _, _, terrain_damage) in &explosion_data {
-                terrain_manager.damage_sphere(center, crater_radius, terrain_damage);
+            for &(_, center, blast, _, _) in &explosion_data {
+                terrain_manager.detonate(center, &blast);
             }
         }
 
         // Apply knockback to entities with velocity
-        for &(_, center, _, blast_radius, force, _) in &explosion_data {
+        for &(_, center, _, blast_radius, force) in &explosion_data {
             let center_vec = center.coords;
 
             for (pos, vel) in (&positions, &mut velocities).join() {
@@ -104,19 +95,19 @@ impl<'a> System<'a> for ExplosionSystem {
         }
 
         // Queue physics impulses for rigid bodies (applied by physics system)
-        for &(_, center, _, blast_radius, force, _) in &explosion_data {
+        for &(_, center, _, blast_radius, force) in &explosion_data {
             impulse_queue.push(PhysicsImpulse::radial(center, blast_radius, force, 0.5));
         }
 
         // Hand each blast to the visuals, which stages it out over the next
         // few seconds. The blast radius drives the scale, since it is the
         // extent the player is actually being told about.
-        for &(_, center, _, blast_radius, _, _) in &explosion_data {
+        for &(_, center, _, blast_radius, _) in &explosion_data {
             self.visuals.spawn(&entities, &lazy, center, blast_radius);
         }
 
         // Mark explosions as processed
-        for (entity, _, _, _, _, _) in explosion_data {
+        for (entity, _, _, _, _) in explosion_data {
             if let Some(explosion) = explosions.get_mut(entity) {
                 explosion.processed = true;
             }
