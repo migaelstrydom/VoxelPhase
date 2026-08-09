@@ -29,7 +29,7 @@ use crate::physics::pipeline::pair::{SolverContact, SolverManifold};
 use crate::physics::solver::ccd::solve_contacts;
 use crate::physics::static_geometry::StaticGeometry;
 
-use super::candidate::{collect_candidates, CcdCandidate};
+use super::candidate::{collect_candidates_into, CcdCandidate};
 use super::dynamic_sweep::DynamicSweep;
 use super::patch_cache::SweptPatchCache;
 use super::static_sweep::{sweep_against_static, sweep_sphere_against_static};
@@ -43,6 +43,9 @@ pub struct SweepClampCcd {
     dynamic: DynamicSweep,
     /// Impacts found this substep, as `(candidate index, impact)`.
     impacts: Vec<(usize, SweptImpact)>,
+    /// Candidates collected this substep. Held across substeps for its
+    /// capacity only; the contents are rebuilt every time.
+    candidates: Vec<CcdCandidate>,
 }
 
 impl SweepClampCcd {
@@ -51,6 +54,7 @@ impl SweepClampCcd {
             patch_cache: SweptPatchCache::new(),
             dynamic: DynamicSweep::new(),
             impacts: Vec::new(),
+            candidates: Vec::new(),
         }
     }
 }
@@ -74,7 +78,8 @@ impl CcdStrategy for SweepClampCcd {
     ) -> u32 {
         let mut corrections = 0u32;
 
-        let candidates = collect_candidates(ctx, dt);
+        let mut candidates = std::mem::take(&mut self.candidates);
+        collect_candidates_into(ctx, dt, &mut candidates);
         self.impacts.clear();
         for (index, candidate) in candidates.iter().enumerate() {
             if let Some(impact) =
@@ -123,6 +128,7 @@ impl CcdStrategy for SweepClampCcd {
             corrections += 1;
         }
         self.impacts = impacts;
+        self.candidates = candidates;
 
         corrections
     }

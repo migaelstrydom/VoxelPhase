@@ -3207,3 +3207,85 @@ impl PhysicsBenchScenario for SpeculativeBandApproachScenario {
         4.0 / 240.0
     }
 }
+
+/// A grid of resting boxes with fast projectiles crossing it.
+///
+/// The shape of world CCD costs the most in: many colliders that are not
+/// candidates, and a handful that are. Every collider becomes a sweep entry
+/// each substep a candidate exists, so this is where that price shows up.
+#[derive(Debug, Clone)]
+pub struct CcdStressScenario {
+    pub grid_size: usize,
+    pub projectiles: usize,
+    pub speed: f32,
+    geometry: FlatQuadGeometry,
+}
+
+impl CcdStressScenario {
+    pub fn new(grid_size: usize, projectiles: usize) -> Self {
+        Self {
+            grid_size,
+            projectiles,
+            speed: 25.0,
+            geometry: FlatQuadGeometry::new(40.0),
+        }
+    }
+}
+
+impl PhysicsBenchScenario for CcdStressScenario {
+    fn name(&self) -> &'static str {
+        "ccd_stress"
+    }
+
+    fn restitution(&self) -> f32 {
+        0.2
+    }
+
+    fn setup(&self, world: &mut PhysicsWorld) -> RigidBodyHandle {
+        let half = 0.4;
+        let spacing = 1.2;
+        let offset = (self.grid_size as f32 - 1.0) * spacing * 0.5;
+        for ix in 0..self.grid_size {
+            for iz in 0..self.grid_size {
+                let body = world.create_body(RigidBodyDesc::dynamic().position(Point3::new(
+                    ix as f32 * spacing - offset,
+                    half,
+                    iz as f32 * spacing - offset,
+                )));
+                let _ = world.attach_collider(
+                    body,
+                    ColliderDesc::box_shape(Vector3::repeat(half))
+                        .density(500.0)
+                        .restitution(0.2)
+                        .friction(0.5),
+                );
+            }
+        }
+
+        let mut tracked = None;
+        for i in 0..self.projectiles {
+            let body = world.create_body(
+                RigidBodyDesc::dynamic()
+                    .position(Point3::new(offset + 6.0, 0.6 + i as f32 * 0.35, 0.0))
+                    .linear_velocity(Vector3::new(-self.speed, 0.0, 0.0)),
+            );
+            let _ = world.attach_collider(
+                body,
+                ColliderDesc::sphere(0.2)
+                    .density(1000.0)
+                    .restitution(0.2)
+                    .friction(0.4),
+            );
+            tracked.get_or_insert(body);
+        }
+        tracked.expect("stress scenario needs at least one projectile")
+    }
+
+    fn geometry(&self) -> &dyn StaticGeometry {
+        &self.geometry
+    }
+
+    fn frame_dt(&self, _frame_idx: u64) -> f32 {
+        8.0 / 240.0
+    }
+}

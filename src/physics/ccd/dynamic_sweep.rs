@@ -11,6 +11,7 @@
 //! enough to stop the pass-through, which is what CCD is for.
 
 use nalgebra::{Point3, UnitQuaternion, Vector3};
+use rustc_hash::FxHashMap;
 
 use crate::collision::continuous::gjk_raycast;
 use crate::collision::shape_view::ShapeView;
@@ -77,6 +78,9 @@ pub(super) struct DynamicSweep {
     bounds: Vec<AABB>,
     pairs: Vec<(usize, usize)>,
     broadphase: SweepAndPrune,
+    /// Candidate index by collider, so marking entries is a lookup rather than
+    /// a scan of the candidate list per collider in the world.
+    candidate_index: FxHashMap<ColliderHandle, usize>,
 }
 
 impl DynamicSweep {
@@ -97,11 +101,16 @@ impl DynamicSweep {
         self.entries.clear();
         self.bounds.clear();
         self.pairs.clear();
+        self.candidate_index.clear();
         if candidates.is_empty() {
             return;
         }
+        for (index, candidate) in candidates.iter().enumerate() {
+            self.candidate_index
+                .insert(candidate.collider_handle, index);
+        }
 
-        self.collect_entries(ctx, candidates);
+        self.collect_entries(ctx);
         if self.entries.len() < 2 {
             return;
         }
@@ -168,7 +177,7 @@ impl DynamicSweep {
     }
 
     /// Snapshot every collider in the world, marking the swept ones.
-    fn collect_entries(&mut self, ctx: &CcdContext<'_>, candidates: &[CcdCandidate]) {
+    fn collect_entries(&mut self, ctx: &CcdContext<'_>) {
         for (idx, body) in ctx.bodies.iter() {
             let handle = RigidBodyHandle(idx);
             // A body absent from `pre_states` was not integrated this substep,
@@ -195,9 +204,7 @@ impl DynamicSweep {
                     pre_center: center_at(pre_pos, pre_rot),
                     post_center: center_at(post_pos, post_rot),
                     pre_rot,
-                    candidate: candidates
-                        .iter()
-                        .position(|c| c.collider_handle == *collider_handle),
+                    candidate: self.candidate_index.get(collider_handle).copied(),
                 });
             }
         }
@@ -209,6 +216,24 @@ impl DynamicSweep {
 /// The raycast freezes the target at its substep-start pose and gives the swept
 /// side the pair's *relative* displacement, so the time of impact is the one
 /// the pair actually experiences.
+///
+/// # Rotation is not swept
+///
+/// Both shapes hold their substep-start orientation for the whole sweep. Only
+/// translation is continuous; `gjk_raycast` marches a ray through configuration
+/// space, and a rotating support function does not give it one. The swept
+/// side's rotation is interpolated afterwards, to place it at the clamp, but it
+/// took no part in finding the time of impact.
+///
+/// This is exact for the case CCD exists to catch — something small and fast
+/// travelling in roughly a straight line — because over one substep a
+/// projectile's orientation barely changes and its own spin cannot move its
+/// surface far compared to its translation. It degrades for a long shape
+/// whipping about its own axis: the tip of a swinging bat covers ground by
+/// rotating, and a sweep that sees only the bat's centre of mass moving will
+/// miss a ball the tip would have struck. Conservative advancement against a
+/// motion bound that includes angular velocity is the standard remedy, and is
+/// what to reach for if a fast rotating body starts passing through things.
 fn sweep_pair(
     candidate: &CcdCandidate,
     swept: &SweepEntry,
