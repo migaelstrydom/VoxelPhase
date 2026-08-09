@@ -5,7 +5,9 @@ use nalgebra::{Isometry3, Matrix3, Point3, UnitQuaternion, Vector3};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::body::{BodyType, RigidBody, RigidBodyDesc};
-use super::ccd::{CcdContext, CcdStrategy, NarrowphaseOwnership, SweepClampCcd};
+use super::ccd::{
+    pair_separation, CcdContext, CcdStrategy, ContactPairKey, NarrowphaseOwnership, SweepClampCcd,
+};
 use super::collider::{Collider, ColliderDesc, ColliderShape};
 use super::constraint::types::Constraint;
 use super::constraint::ConstraintHandle;
@@ -666,16 +668,16 @@ impl PhysicsWorld {
         );
 
         // Record narrowphase ownership for CCD exclusion, anchored at the
-        // position each manifold was generated at so ownership can expire as
-        // the body integrates away from it across substeps.
+        // separation each manifold was generated at so ownership can expire as
+        // the pair integrates away from it across substeps.
         self.narrowphase_ownership.clear();
-        for manifold in active_manifolds
-            .iter()
-            .filter(|m| m.header.body_a.is_none())
-        {
-            let handle = manifold.header.body_b;
-            if let Some(body) = self.bodies.get(handle.0) {
-                self.narrowphase_ownership.insert(handle, body.position());
+        for manifold in active_manifolds.iter() {
+            let header = &manifold.header;
+            let Some(key) = ContactPairKey::from_header(header) else {
+                continue;
+            };
+            if let Some(separation) = pair_separation(&self.bodies, header.body_a, header.body_b) {
+                self.narrowphase_ownership.insert(key, separation);
             }
         }
 

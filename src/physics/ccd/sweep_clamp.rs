@@ -3,10 +3,11 @@
 /// A body requires CCD when it outruns contact generation — either across one
 /// substep (`ccd_threshold`) or across the whole frame (`ccd_frame_coverage`,
 /// since the narrowphase samples only once per frame) — AND the narrowphase
-/// does not currently own it. Bodies with fresh
-/// narrowphase contacts are managed by the solver — CCD only catches bodies in
-/// free flight that might skip past geometry entirely. That ownership expires
-/// once the body outruns its frame-start manifold; see `NarrowphaseOwnership`.
+/// does not currently own the pair being swept. A pair with fresh narrowphase
+/// contacts is the solver's to resolve; CCD only catches motion that would skip
+/// past geometry entirely. Ownership is per pair, so a body resting on the
+/// floor is still swept against everything else, and expires once the pair
+/// outruns its frame-start manifold; see `NarrowphaseOwnership`.
 use nalgebra::{Point3, UnitQuaternion, Vector3};
 use smallvec::{smallvec, SmallVec};
 
@@ -23,6 +24,7 @@ use crate::physics::pipeline::pair::{PairHeader, SolverContact, SolverManifold};
 use crate::physics::solver::ccd::solve_contacts;
 use crate::physics::static_geometry::StaticGeometry;
 
+use super::ownership::ContactPairKey;
 use super::patch_cache::SweptPatchCache;
 use super::strategy::{CcdContext, CcdStrategy};
 
@@ -97,10 +99,16 @@ impl CcdStrategy for SweepClampCcd {
                     if !needs_ccd {
                         continue;
                     }
-                    // The solver owns this body only while its frame-start
-                    // manifold still describes where the body is. Released once
-                    // it has drifted a CCD travel window away from that anchor.
-                    if ctx.narrowphase_ownership.owns(handle, post_pos, ccd_travel) {
+                    // The solver owns this collider's contact with the terrain
+                    // only while its frame-start manifold still describes where
+                    // the collider is. Released once it has drifted a CCD travel
+                    // window away from that anchor. Ownership of any *other*
+                    // pair this collider is in says nothing about the terrain.
+                    let terrain_pair = ContactPairKey::against_static(*collider_handle);
+                    if ctx
+                        .narrowphase_ownership
+                        .owns(terrain_pair, post_pos.coords, ccd_travel)
+                    {
                         continue;
                     }
                     let pre_center = Point3::from(
