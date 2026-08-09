@@ -108,6 +108,7 @@ const SCENARIO_NAMES: &[&str] = &[
     "box_grid",
     "high_speed_sphere_ccd",
     "sphere_on_static_body",
+    "sphere_through_dynamic_slab",
     "box_on_static_platform",
     "box_on_plank",
     "sliding_sphere",
@@ -139,6 +140,9 @@ fn run_viewer(name: &str) -> EngineResult<()> {
         "box_grid" => run_with_scenario(&BoxGridScenario::new(4)),
         "high_speed_sphere_ccd" => run_with_scenario(&HighSpeedSphereCcdScenario::new()),
         "sphere_on_static_body" => run_with_scenario(&SphereOnStaticBodyScenario::new(0.2)),
+        "sphere_through_dynamic_slab" => {
+            run_with_scenario(&SphereThroughDynamicSlabScenario::new())
+        }
         "box_on_static_platform" => run_with_scenario(&BoxOnStaticPlatformScenario::new(0.0)),
         "box_on_plank" => run_with_scenario(&BoxOnPlankScenario::new()),
         "sliding_sphere" => run_with_scenario(&SlidingSphereScenario::new()),

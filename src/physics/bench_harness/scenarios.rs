@@ -2827,3 +2827,106 @@ impl PhysicsBenchScenario for BoxOnStaticPlatformScenario {
         &self.geometry
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Scenarios: CCD against dynamic bodies
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// A grenade-speed sphere fired at a thin dynamic slab, in an empty world.
+///
+/// This is the pendulum arm reduced to its essentials. The slab is dynamic, so
+/// it is invisible to a CCD stage that only sweeps against `StaticGeometry`,
+/// and the once-per-frame narrowphase is the sphere's only other chance to see
+/// it. At 20 m/s the sphere covers 0.67 m per 30 Hz frame while the detection
+/// window is barely 0.28 m wide, so discrete detection cannot close the gap:
+/// the sphere passes clean through.
+///
+/// The slab is made heavy rather than static because a static slab would be
+/// caught by a fix that only widened CCD to static *bodies*. It must be an
+/// ordinary dynamic body for this to test what it claims to.
+#[derive(Debug, Clone)]
+pub struct SphereThroughDynamicSlabScenario {
+    /// Sphere radius, matching `GrenadeConfig::radius`.
+    pub radius: f32,
+    /// Throw speed, matching `GrenadeConfig::throw_speed`.
+    pub speed: f32,
+    /// Distance from the slab the sphere starts at.
+    pub start_x: f32,
+    /// Half-extents of the slab. Thin along the sphere's line of travel.
+    pub slab_half_extents: Vector3<f32>,
+    geometry: EmptyGeometry,
+}
+
+impl SphereThroughDynamicSlabScenario {
+    pub fn new() -> Self {
+        Self {
+            radius: 0.2,
+            speed: 20.0,
+            start_x: 3.0,
+            slab_half_extents: Vector3::new(0.06, 1.0, 0.06),
+            geometry: EmptyGeometry,
+        }
+    }
+
+    /// Far face of the slab: the plane the sphere must never cross.
+    pub fn far_face_x(&self) -> f32 {
+        -self.slab_half_extents.x
+    }
+}
+
+impl Default for SphereThroughDynamicSlabScenario {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PhysicsBenchScenario for SphereThroughDynamicSlabScenario {
+    fn name(&self) -> &'static str {
+        "sphere_through_dynamic_slab"
+    }
+
+    fn restitution(&self) -> f32 {
+        0.2
+    }
+
+    fn build_world(&self) -> PhysicsWorld {
+        let mut config = PhysicsConfig::default();
+        config.sleep.enabled = false;
+        config.gravity = Vector3::zeros();
+        PhysicsWorld::new(config)
+    }
+
+    fn setup(&self, world: &mut PhysicsWorld) -> RigidBodyHandle {
+        let slab = world.create_body(RigidBodyDesc::dynamic().position(Point3::origin()));
+        let _ = world.attach_collider(
+            slab,
+            ColliderDesc::box_shape(self.slab_half_extents)
+                .density(50000.0)
+                .restitution(0.2)
+                .friction(0.4),
+        );
+
+        let sphere = world.create_body(
+            RigidBodyDesc::dynamic()
+                .position(Point3::new(self.start_x, 0.0, 0.0))
+                .linear_velocity(Vector3::new(-self.speed, 0.0, 0.0)),
+        );
+        let _ = world.attach_collider(
+            sphere,
+            ColliderDesc::sphere(self.radius)
+                .density(1000.0)
+                .restitution(0.2)
+                .friction(0.4),
+        );
+        sphere
+    }
+
+    fn geometry(&self) -> &dyn StaticGeometry {
+        &self.geometry
+    }
+
+    fn frame_dt(&self, _frame_idx: u64) -> f32 {
+        // 8 substeps of 1/240 per frame: a 30 fps frame, or a hitch at 60.
+        8.0 / 240.0
+    }
+}

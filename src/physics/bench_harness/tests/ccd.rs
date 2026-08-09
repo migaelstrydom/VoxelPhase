@@ -1,6 +1,7 @@
 use super::super::framework::{run_scenario, BenchRunConfig};
 use super::super::scenarios::{
     GrazingSphereWallCcdScenario, GrenadeSpeedWallCcdScenario, HighSpeedSphereCcdScenario,
+    SphereThroughDynamicSlabScenario,
 };
 use super::assertions::*;
 use super::write_exports;
@@ -82,5 +83,46 @@ fn grenade_speed_sphere_does_not_tunnel_through_wall() {
     assert!(
         min_x > -scenario.radius,
         "grenade tunnelled through the wall at x=0: min_x={min_x}"
+    );
+}
+
+/// The pendulum bug: CCD only sweeps against static geometry, so a thin
+/// *dynamic* obstacle is invisible to it. At grenade speed the once-per-frame
+/// narrowphase cannot close the gap either, and the sphere passes through.
+#[ignore = "red until ccd/dynamic_sweep.rs lands: CCD does not sweep against dynamic bodies"]
+#[test]
+fn grenade_speed_sphere_does_not_tunnel_through_dynamic_slab() {
+    let scenario = SphereThroughDynamicSlabScenario::new();
+    let cfg = BenchRunConfig {
+        duration: 0.5,
+        ..BenchRunConfig::default()
+    };
+    let run = run_scenario(&scenario, cfg);
+    write_exports(&run, "sphere_through_dynamic_slab");
+
+    let min_x = run.samples.iter().map(|s| s.x).fold(f32::MAX, f32::min);
+    assert!(
+        min_x > scenario.far_face_x(),
+        "sphere tunnelled through the dynamic slab: min_x={min_x}"
+    );
+}
+
+/// Passing through and stopping short are both failures, and the min_x bound
+/// alone cannot tell them apart. The sphere must actually be turned around.
+#[ignore = "red until ccd/dynamic_sweep.rs lands: CCD does not sweep against dynamic bodies"]
+#[test]
+fn grenade_speed_sphere_rebounds_off_dynamic_slab() {
+    let scenario = SphereThroughDynamicSlabScenario::new();
+    let cfg = BenchRunConfig {
+        duration: 0.5,
+        ..BenchRunConfig::default()
+    };
+    let run = run_scenario(&scenario, cfg);
+
+    let last = run.samples.last().unwrap();
+    assert!(
+        last.x > scenario.radius,
+        "sphere should end up back on the near side of the slab: x={}",
+        last.x
     );
 }
