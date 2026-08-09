@@ -49,4 +49,64 @@ vec4 triplanarSample(
     return x_plane * weights.x + y_plane * weights.y + z_plane * weights.z;
 }
 
+/// What one sample of the packed surface field yields.
+struct TriplanarSurface {
+    /// Albedo wash, from the field's R channel.
+    float wash;
+    /// Geometric normal perturbed by the field's detail normal, in world space.
+    vec3 normal;
+};
+
+/// Sample the packed surface field: albedo wash and detail normal in one pass.
+///
+/// The field stores the wash in R and a tangent-space detail normal's xy in GB
+/// (`src/terrain/surface.rs`), so this costs the same three texture reads as
+/// `triplanarSample` and returns both. Adding a second texture for the normals
+/// would have tripled the sample count on the largest mesh in the game.
+///
+/// Detail normals are combined by the *whiteout* blend rather than by averaging
+/// three world-space normals. Averaging flattens: where two planes both
+/// contribute, their perturbations partly cancel and a 45° surface ends up
+/// visibly smoother than the flat ground beside it. Whiteout adds each plane's
+/// tangent-space slope to the geometric normal before the blend, so slopes
+/// accumulate instead of competing.
+///
+/// `strength` scales the perturbation. Zero returns the geometric normal
+/// exactly, which is what a material with no microstructure should get.
+TriplanarSurface triplanarSurface(
+    sampler2D tex,
+    vec3 world_pos,
+    vec3 normal,
+    float scale,
+    float sharpness,
+    float strength
+) {
+    vec3 weights = triplanarWeights(normal, sharpness);
+    vec3 projected = world_pos * scale;
+
+    vec4 x_plane = texture(tex, projected.zy);
+    vec4 y_plane = texture(tex, projected.xz);
+    vec4 z_plane = texture(tex, projected.xy);
+
+    TriplanarSurface result;
+    result.wash = x_plane.r * weights.x + y_plane.r * weights.y + z_plane.r * weights.z;
+
+    // Decode each plane's tangent-space slope. The mip chain averages these
+    // towards zero as the texture minifies, which is what fades the detail out
+    // with distance — no explicit LOD blend is needed.
+    vec2 slope_x = (x_plane.gb * 2.0 - 1.0) * strength;
+    vec2 slope_y = (y_plane.gb * 2.0 - 1.0) * strength;
+    vec2 slope_z = (z_plane.gb * 2.0 - 1.0) * strength;
+
+    // Each plane's uv axes map to the world axes it is addressed by, matching
+    // the swizzles the samples were taken with above.
+    vec3 detail_x = vec3(slope_x + normal.zy, normal.x).zyx;
+    vec3 detail_y = vec3(slope_y + normal.xz, normal.y).xzy;
+    vec3 detail_z = vec3(slope_z + normal.xy, normal.z).xyz;
+
+    result.normal = normalize(
+        detail_x * weights.x + detail_y * weights.y + detail_z * weights.z);
+    return result;
+}
+
 #endif // TRIPLANAR_GLSL

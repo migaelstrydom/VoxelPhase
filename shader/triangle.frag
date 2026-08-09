@@ -42,24 +42,45 @@ void main() {
     float triplanar_scale = materialTriplanarScale();
     bool textured_by_world = triplanar_scale > 0.0;
 
-    vec4 texColor = textured_by_world
-        ? triplanarSample(
+    // Terrain's albedo, shading normal and roughness all come out of one packed
+    // texture read; a UV-textured mesh takes the single-sample path and keeps
+    // its geometric normal and its authored finish.
+    vec3 albedo_wash;
+    float texture_alpha;
+
+    if (textured_by_world) {
+        float hardness = inTexCoord.x;
+        TriplanarSurface field = triplanarSurface(
             texSampler,
             inWorldPos,
             normal,
             triplanar_scale,
-            materialTriplanarSharpness())
-        : texture(texSampler, inTexCoord);
+            materialTriplanarSharpness(),
+            reliefFromHardness(hardness));
+
+        albedo_wash = vec3(field.wash);
+        texture_alpha = 1.0;
+        normal = field.normal;
+    } else {
+        vec4 texColor = texture(texSampler, inTexCoord);
+        albedo_wash = texColor.rgb;
+        texture_alpha = texColor.a;
+    }
 
     SurfaceSample surface;
-    surface.albedo = texColor.rgb * inColor.rgb;
+    surface.albedo = albedo_wash * inColor.rgb;
     surface.normal = normal;
     surface.view_dir = normalize(scene.camera_pos.xyz - inWorldPos);
-    surface.roughness = textured_by_world
-        ? roughnessFromHardness(inTexCoord.x)
-        : materialRoughness();
     surface.metallic = materialMetallic();
     surface.occlusion = inAo;
+
+    // Roughness last, because the filtering reads the shading normal that the
+    // detail perturbation has already been folded into. Applied to every
+    // surface, not just terrain: geometric curvature aliases a tight highlight
+    // just as detail normals do.
+    surface.roughness = filteredRoughness(
+        textured_by_world ? roughnessFromHardness(inTexCoord.x) : materialRoughness(),
+        surface.normal);
 
     DirectionalLight sun;
     sun.direction = scene.sun_direction.xyz;
@@ -102,5 +123,5 @@ void main() {
         litColor += materialEmissive() * rim * rim_strength;
     }
 
-    outColor = vec4(litColor, texColor.a * inColor.a);
+    outColor = vec4(litColor, texture_alpha * inColor.a);
 }

@@ -64,6 +64,42 @@ float specularPower(float roughness) {
     return max(2.0 / r4 - 2.0, 1.0);
 }
 
+/// How strongly normal variation within a pixel widens the specular lobe.
+/// Raising it trades sparkle for a duller surface; 0 disables the filtering.
+const float SPECULAR_AA_STRENGTH = 0.5;
+
+/// Ceiling on that widening, so a silhouette — where the normal swings almost
+/// discontinuously between neighbouring pixels — cannot drive a surface to
+/// fully matte and put a dull rim around every object.
+const float SPECULAR_AA_CEILING = 0.18;
+
+/// Roughness widened to cover the normal variation inside one pixel.
+///
+/// A surface with detail finer than the pixel it is drawn into cannot be
+/// shaded honestly by one normal: the true response is the average over the
+/// normals the pixel contains, and using a single sample of it produces the
+/// crawling sparkle that is the most legible symptom of a cheap renderer.
+/// Rather than supersampling, the variation is folded into roughness — detail
+/// that has shrunk below a pixel stops being geometry and becomes gloss.
+///
+/// The variance is measured from screen-space derivatives of the final shading
+/// normal, which means it covers detail normals and the geometry's own
+/// curvature at once, and it costs nothing to maintain: a distant cliff goes
+/// correctly matte with no authored LOD fade. A texture-space equivalent
+/// (Toksvig, LEAN) would filter the map more accurately but only the map, and
+/// would need the detail normal stored unnormalised through the mip chain.
+float filteredRoughness(float roughness, vec3 normal) {
+    vec3 variation_x = dFdx(normal);
+    vec3 variation_y = dFdy(normal);
+    float variance = SPECULAR_AA_STRENGTH
+        * (dot(variation_x, variation_x) + dot(variation_y, variation_y));
+
+    // Roughness is perceptual; the widening is additive in the BRDF's own
+    // squared parameter, so it has to be applied there and converted back.
+    float alpha = roughness * roughness;
+    return sqrt(clamp(alpha + min(variance, SPECULAR_AA_CEILING), 0.0, 1.0));
+}
+
 /// Schlick's approximation of the Fresnel reflectance curve.
 vec3 fresnelSchlick(vec3 f0, float cos_theta) {
     return f0 + (1.0 - f0) * pow(clamp(1.0 - cos_theta, 0.0, 1.0), 5.0);

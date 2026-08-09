@@ -59,7 +59,9 @@ sun, fixed geometry — or before/after comparison is worthless.
   ones with no contact darkening.
 - **One shadow cascade**, so the map's resolution is spread across the whole
   frustum fit (lighting plan stage 7).
-- **Terrain has no surface structure at all** — see §4.
+- **Terrain's surface structure stops at the material level** — triplanar
+  projection, detail normals and a physics-derived finish have landed (§4.1-4.3);
+  slope zoning, grass sheen and fresh-cut destruction have not.
 
 ### How it looked before §1, and what fixed it
 
@@ -470,6 +472,44 @@ bytes per vertex and re-uploaded every frame, so new vertex attributes cost
 bandwidth on the biggest mesh in the game — see the per-frame upload item in
 TODO.md, which this would make worse.
 
+#### Landed
+
+The detail normal is packed into the surface texture's spare channels — R holds
+the albedo wash it always held, GB hold a tangent-space normal derived from the
+same height field — so the three triplanar samples terrain already paid for now
+deliver both. **The whole feature costs no additional texture reads.** Relief
+strength comes from §4.3's hardness, so chalk is rounded and rock is sharp, and
+roughness is widened by the screen-space variance of the final shading normal
+(`filteredRoughness` in `shader/lighting.glsl`).
+
+- **Value noise cannot be differentiated.** The first attempt reused the
+  engine's existing fbm and printed the lattice across every surface as
+  axis-aligned banding. Value noise interpolates a random *value* per lattice
+  point, which forces every lattice line to be an extremum, so its slope field
+  is full of structure the value field hides. Gradient noise was added alongside
+  it (`perlin_2d_periodic`) rather than replacing it, because terrain generation
+  is built on the old one and swapping its field would reshape every level.
+  Quintic fade rather than smoothstep, for the same reason: smoothstep's second
+  derivative is discontinuous and creases the normals.
+- **Whiteout blending, not averaging.** Averaging three world-space perturbed
+  normals lets the planes cancel where two of them contribute, so a 45° surface
+  comes out visibly smoother than the flat ground beside it.
+- **The specular filtering earns its place.** It cuts pixel-to-pixel contrast on
+  a rocky crater floor by about 15%, and touches almost nothing else — 0.1% of
+  the pixels on the prop sheet, confined to silhouettes, where the ceiling keeps
+  it from putting a dull rim around every object. The distance ladder in the new
+  `terrain_detail` sheet goes grain → gloss → smooth with no authored fade.
+- **A still frame cannot prove the aliasing is gone.** Crawling is a property of
+  motion. The far tiles being speckle-free is necessary evidence, not
+  sufficient; the sufficient test needs the game window.
+
+**Exposed, not caused: flat ground is faintly terraced.** The bands are present
+with the detail strength zeroed, so they are the generator's — sub-voxel height
+variation quantised against a coarse lattice — but the relief makes them
+legible. Worth its own investigation in terrain generation rather than a
+rendering patch, and worth knowing about before §4.4, whose slope threshold
+would track the same artifact.
+
 ### 4.3 Surface character from toughness
 
 Derive terrain's finish from `VoxelMaterial::toughness()` the way a prop's finish
@@ -614,10 +654,12 @@ merits and with its own perf budget, not attached to §4.1.
 2. ~~**4.3 per-fragment roughness from toughness**~~ — landed. Carries the
    per-fragment surface data 4.2 also needs. It was expected to deliver
    chalky-versus-slick on its own and does not; see the measurement above.
-3. **4.2 detail normals with variance-coupled roughness** — next, and now the
-   item both landed pieces are waiting on: the core, the largest visible change
-   in this section, and what finally makes 4.3's roughness legible.
-4. **4.5 grass sheen** — small, independent, can be slotted anywhere.
+3. ~~**4.2 detail normals with variance-coupled roughness**~~ — landed, and it
+   was the core: by far the largest visible change in this section, and the
+   thing that finally made 4.3's roughness legible.
+4. **4.5 grass sheen** — next by default: small, independent, and now the most
+   obvious remaining gap, since grass currently reads as textured ground rather
+   than as anything furry.
 5. **4.4 slope zoning** — on top of a surface system that already works.
 6. **4.6 fresh destruction** — last, because it is a modulation of everything
    above.

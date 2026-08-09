@@ -4,13 +4,43 @@
 //! that the game and the visual bench cannot disagree about what terrain looks
 //! like — the bench exists to predict the game, and it can only do that if both
 //! ask the same place.
+//!
+//! # The surface field
+//!
+//! One texture carries two things, because terrain samples it three times (once
+//! per triplanar axis) and those samples are the expensive part of drawing the
+//! largest mesh in the game. Adding a second texture for detail normals would
+//! have doubled that cost; packing them into the channels the wash was not
+//! using costs nothing at all.
+//!
+//! ```text
+//!   fbm height field h(u,v)
+//!        ├── value ─────────────▶ R    albedo wash, 0.85 … 1.0
+//!        └── central difference ─▶ GB   detail normal xy, tangent space
+//!                                  A    unused
+//! ```
+//!
+//! Both come from the same height field on purpose: the wash is that field's
+//! low-frequency content and the detail normal is its slope, so the light and
+//! dark of a surface always agree with the bumps on it rather than being two
+//! unrelated patterns laid over each other.
+//!
+//! The normal is stored at a fixed reference amplitude and scaled per fragment
+//! by the material's hardness (`shader/surface_character.glsl`), which is how
+//! chalk ends up softer-featured than rock without a second texture.
 
 use crate::core::error::EngineResult;
 use crate::rendering::material::SurfaceParams;
 use crate::rendering::triplanar::TriplanarProjection;
 use crate::resources::textures::{TextureHandle, TextureManager};
+use crate::utils::noise::fbm_perlin_2d_periodic;
 
-/// Edge length of the noise texture, in texels.
+/// Edge length of the surface texture, in texels.
+///
+/// At the projection scale terrain uses, one repeat covers 10 m, so this is
+/// roughly 2 cm per texel — fine enough that the field's highest octave is
+/// genuine close-range microstructure rather than something that reads as
+/// large-scale mottling.
 const NOISE_RESOLUTION: u32 = 512;
 
 /// Layers of fractal noise. More octaves add finer detail at a lower amplitude.
@@ -23,18 +53,93 @@ const NOISE_SCALE: f32 = 20.0;
 /// Fixed so that terrain looks the same in every run and on the bench.
 const NOISE_SEED: u32 = 42;
 
-/// Generate the procedural noise texture terrain samples for surface variation.
+/// Darkest the albedo wash goes. A narrow band around white, because this
+/// modulates the vertex colours rather than replacing them.
+const WASH_FLOOR: f32 = 0.85;
+
+/// Height of the microrelief the stored normal describes, relative to the
+/// spacing of the texels it is measured across.
 ///
-/// Greyscale, and mapped to a narrow band around white, so it modulates albedo
-/// only slightly — it is a wash over the vertex colours, not a material.
+/// This is the one number that decides how pronounced the detail is at full
+/// strength. It was chosen by measuring the tilt it produces rather than by
+/// eye — see `the_detail_normals_tilt_by_a_useful_amount`, which fails if a
+/// change to the noise quietly flattens the surface or turns it into gravel.
+const RELIEF: f32 = 14.0;
+
+/// Generate the packed surface field terrain samples.
+///
+/// See the module documentation for the channel layout. Mipmapped, which is
+/// what makes the detail fade with distance: averaging the stored normal xy
+/// towards zero is exactly the statement that the bumps have shrunk below what
+/// a pixel can resolve.
 pub fn create_surface_texture(textures: &TextureManager) -> EngineResult<TextureHandle> {
-    textures.create_noise_texture(
-        NOISE_RESOLUTION,
-        NOISE_RESOLUTION,
+    let resolution = NOISE_RESOLUTION as usize;
+    let mut rgba = Vec::with_capacity(resolution * resolution * 4);
+
+    for y in 0..NOISE_RESOLUTION {
+        for x in 0..NOISE_RESOLUTION {
+            let height = sample_height(x, y);
+            let (normal_x, normal_y) = detail_normal(x, y);
+
+            rgba.push(encode_unit(WASH_FLOOR + height * (1.0 - WASH_FLOOR)));
+            rgba.push(encode_signed(normal_x));
+            rgba.push(encode_signed(normal_y));
+            rgba.push(255);
+        }
+    }
+
+    textures.create_from_rgba(NOISE_RESOLUTION, NOISE_RESOLUTION, &rgba, true)
+}
+
+/// The height field, sampled at a texel. Wraps, so the texture tiles.
+///
+/// Gradient noise rather than the value noise the rest of the engine uses: this
+/// field is differentiated to produce the detail normal, and value noise has an
+/// extremum at every lattice point, so its slope field prints the lattice as
+/// axis-aligned banding. It is invisible in the wash and unmissable in the
+/// relief.
+fn sample_height(x: u32, y: u32) -> f32 {
+    let to_noise = NOISE_SCALE / NOISE_RESOLUTION as f32;
+    fbm_perlin_2d_periodic(
+        (x % NOISE_RESOLUTION) as f32 * to_noise,
+        (y % NOISE_RESOLUTION) as f32 * to_noise,
         NOISE_OCTAVES,
-        NOISE_SCALE,
+        0.5,
+        2.0,
         NOISE_SEED,
+        Some(NOISE_SCALE as i32),
     )
+}
+
+/// Tangent-space xy of the surface normal at a texel.
+///
+/// A central difference across neighbouring texels, wrapped so that the derived
+/// normals tile as seamlessly as the height does — a one-sided difference at
+/// the edge would put a visible ridge along every repeat. The z component is
+/// not stored: it is positive by construction and the shader reconstructs it.
+fn detail_normal(x: u32, y: u32) -> (f32, f32) {
+    let last = NOISE_RESOLUTION - 1;
+    let left = sample_height(if x == 0 { last } else { x - 1 }, y);
+    let right = sample_height(if x == last { 0 } else { x + 1 }, y);
+    let down = sample_height(x, if y == 0 { last } else { y - 1 });
+    let up = sample_height(x, if y == last { 0 } else { y + 1 });
+
+    let slope_x = (right - left) * 0.5 * RELIEF;
+    let slope_y = (up - down) * 0.5 * RELIEF;
+
+    // Slope points uphill; a surface normal leans away from it.
+    let length = (slope_x * slope_x + slope_y * slope_y + 1.0).sqrt();
+    (-slope_x / length, -slope_y / length)
+}
+
+/// Encode a 0-to-1 value into a byte.
+fn encode_unit(value: f32) -> u8 {
+    (value.clamp(0.0, 1.0) * 255.0) as u8
+}
+
+/// Encode a -1-to-1 value into a byte, as the shader's `value * 2 - 1` expects.
+fn encode_signed(value: f32) -> u8 {
+    encode_unit(value * 0.5 + 0.5)
 }
 
 /// The shading parameters terrain is drawn with.
@@ -62,5 +167,68 @@ mod tests {
             surface_params().projection,
             TriplanarProjection::TERRAIN.packed()
         );
+    }
+
+    /// The amount of relief is the whole visible effect of detail normals, and
+    /// it is easy to lose by accident: a change to the octave count or the
+    /// resolution alters the slope between neighbouring texels without touching
+    /// anything that looks like a strength dial. Too flat and the surface has
+    /// no microstructure for a highlight to break up against; too steep and it
+    /// reads as gravel and aliases.
+    #[test]
+    fn the_detail_normals_tilt_by_a_useful_amount() {
+        let mut total_tilt = 0.0;
+        let mut samples = 0;
+
+        for y in (0..NOISE_RESOLUTION).step_by(7) {
+            for x in (0..NOISE_RESOLUTION).step_by(7) {
+                let (nx, ny) = detail_normal(x, y);
+                total_tilt += (nx * nx + ny * ny).sqrt().asin().to_degrees();
+                samples += 1;
+            }
+        }
+
+        let mean_tilt = total_tilt / samples as f32;
+        assert!(
+            (8.0..30.0).contains(&mean_tilt),
+            "detail normals tilt by a mean of {mean_tilt}°"
+        );
+    }
+
+    /// The stored xy must describe a normal that can be completed by a positive
+    /// z, or the shader's reconstruction takes the square root of a negative
+    /// number and the surface turns inside out.
+    #[test]
+    fn the_stored_normal_always_has_a_reconstructable_z() {
+        for y in (0..NOISE_RESOLUTION).step_by(13) {
+            for x in (0..NOISE_RESOLUTION).step_by(13) {
+                let (nx, ny) = detail_normal(x, y);
+                let planar = nx * nx + ny * ny;
+                assert!(planar < 1.0, "normal at ({x}, {y}) has no z left: {planar}");
+            }
+        }
+    }
+
+    /// The texture tiles, so its detail normals have to tile too. Wrapping the
+    /// central difference is what makes the seam invisible, and a one-sided
+    /// difference at the edge would put a ridge along every repeat — at 10 m
+    /// per repeat, a ridge every 10 m across the whole level.
+    #[test]
+    fn the_detail_normals_wrap_at_the_texture_edge() {
+        let last = NOISE_RESOLUTION - 1;
+        for y in (0..NOISE_RESOLUTION).step_by(29) {
+            let (left_x, left_y) = detail_normal(0, y);
+            let (wrapped_x, wrapped_y) = detail_normal(NOISE_RESOLUTION, y);
+            assert!((left_x - wrapped_x).abs() < 1e-6, "x seam at row {y}");
+            assert!((left_y - wrapped_y).abs() < 1e-6, "y seam at row {y}");
+
+            // The edge texels are neighbours once the texture repeats, so their
+            // normals must be close rather than identical.
+            let (right_x, _) = detail_normal(last, y);
+            assert!(
+                (left_x - right_x).abs() < 0.6,
+                "row {y} jumps across the repeat: {left_x} to {right_x}"
+            );
+        }
     }
 }

@@ -28,4 +28,26 @@ float roughnessFromHardness(float hardness) {
     return mix(CHALK_ROUGHNESS, STONE_ROUGHNESS, clamp(hardness, 0.0, 1.0));
 }
 
+/// Detail-normal strength of the softest material.
+///
+/// Not zero. Soft ground is not smooth — sand and loose earth have plenty of
+/// relief — but its relief is rounded, and a weaker perturbation of the same
+/// height field is what rounded reads as.
+const float CHALK_RELIEF = 0.55;
+
+/// Detail-normal strength of an indestructible surface. Full strength: dense
+/// rock is where the tight, sharp-edged grain belongs, and it is the material
+/// whose roughness is low enough for that grain to catch a highlight.
+const float STONE_RELIEF = 1.0;
+
+/// How strongly a terrain surface of this hardness shows its microstructure.
+///
+/// The pairing with `roughnessFromHardness` is the point: hard materials get a
+/// tighter specular lobe *and* more surface for it to break up against, which
+/// is what "rocky glint" is. Either alone reads as wrong — a tight lobe on a
+/// smooth surface is plastic, and relief under a fully rough lobe is invisible.
+float reliefFromHardness(float hardness) {
+    return mix(CHALK_RELIEF, STONE_RELIEF, clamp(hardness, 0.0, 1.0));
+}
+
 #endif // SURFACE_CHARACTER_GLSL

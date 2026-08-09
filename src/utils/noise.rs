@@ -228,3 +228,140 @@ mod tests {
         );
     }
 }
+
+/// Quintic fade (6t⁵ - 15t⁴ + 10t³).
+///
+/// Used instead of [`smoothstep`] wherever a field will be *differentiated*.
+/// Smoothstep's own derivative is continuous but its second derivative is not,
+/// so a normal map derived from it creases along every lattice line. Quintic is
+/// flat to second order at both ends and leaves no such seam.
+fn quintic(t: f32) -> f32 {
+    t * t * t * (t * (t * 6.0 - 15.0) + 10.0)
+}
+
+/// Unit gradient vector for a lattice point, wrapped to `period` if given.
+fn gradient_2d_periodic(x: i32, y: i32, seed: u32, period: Option<i32>) -> (f32, f32) {
+    let angle = hash_2d_periodic(x, y, seed, period) * std::f32::consts::TAU;
+    (angle.cos(), angle.sin())
+}
+
+/// Generate 2D *gradient* (Perlin) noise, periodic if a period is given.
+///
+/// Value noise interpolates a random value per lattice point, which forces
+/// every lattice line to be an extremum of the field and makes its derivative
+/// vanish there. That is invisible in the value itself and glaring in its
+/// slope: a normal map built from value noise prints the lattice as
+/// axis-aligned banding. Gradient noise interpolates a random *slope* per
+/// lattice point and is zero-valued at the lattice instead, which leaves no
+/// preferred direction for a derivative to pick up.
+///
+/// Returned in `[0, 1]` to match [`noise_2d_periodic`], so the two are
+/// interchangeable at call sites.
+pub fn perlin_2d_periodic(x: f32, y: f32, seed: u32, period: Option<i32>) -> f32 {
+    let xi = x.floor();
+    let yi = y.floor();
+    let xf = x - xi;
+    let yf = y - yi;
+    let (xi, yi) = (xi as i32, yi as i32);
+
+    let corner = |dx: i32, dy: i32| {
+        let (gx, gy) = gradient_2d_periodic(xi + dx, yi + dy, seed, period);
+        gx * (xf - dx as f32) + gy * (yf - dy as f32)
+    };
+
+    let u = quintic(xf);
+    let v = quintic(yf);
+    let bottom = lerp(corner(0, 0), corner(1, 0), u);
+    let top = lerp(corner(0, 1), corner(1, 1), u);
+    let value = lerp(bottom, top, v);
+
+    // 2D gradient noise is bounded by ±√2/2; centre it on 0.5.
+    (value * std::f32::consts::SQRT_2 * 0.5 + 0.5).clamp(0.0, 1.0)
+}
+
+/// Fractional Brownian Motion over [`perlin_2d_periodic`].
+///
+/// Mirrors [`fbm_2d_periodic`] exactly, including how the period scales with
+/// each octave's frequency so that every octave tiles. Kept separate rather
+/// than switching the existing function's noise source, because terrain
+/// generation is built on that one and changing its field would reshape every
+/// level.
+pub fn fbm_perlin_2d_periodic(
+    x: f32,
+    y: f32,
+    octaves: u32,
+    persistence: f32,
+    lacunarity: f32,
+    seed: u32,
+    period: Option<i32>,
+) -> f32 {
+    let mut total = 0.0;
+    let mut amplitude = 1.0;
+    let mut frequency = 1.0;
+    let mut max_value = 0.0;
+
+    for i in 0..octaves {
+        let octave_period = period.map(|p| (p as f32 * frequency) as i32);
+        total +=
+            perlin_2d_periodic(x * frequency, y * frequency, seed + i, octave_period) * amplitude;
+        max_value += amplitude;
+        amplitude *= persistence;
+        frequency *= lacunarity;
+    }
+
+    total / max_value
+}
+
+#[cfg(test)]
+mod gradient_noise_tests {
+    use super::*;
+
+    /// The whole reason this exists: it will be differentiated, so it must tile
+    /// without a seam or a normal map built from it puts a ridge along every
+    /// repeat.
+    #[test]
+    fn gradient_noise_tiles_at_its_period() {
+        let period = 8;
+        for step in 0..40 {
+            let x = step as f32 * 0.2;
+            let y = step as f32 * 0.13;
+            let inside = perlin_2d_periodic(x, y, 7, Some(period));
+            let wrapped = perlin_2d_periodic(x + period as f32, y, 7, Some(period));
+            assert!(
+                (inside - wrapped).abs() < 1e-5,
+                "seam at ({x}, {y}): {inside} vs {wrapped}"
+            );
+        }
+    }
+
+    /// Gradient noise is zero at every lattice point by construction. A field
+    /// that is *extremal* there instead — value noise — is what prints the
+    /// lattice into a derived normal map.
+    #[test]
+    fn gradient_noise_is_neutral_on_the_lattice() {
+        for x in 0..6 {
+            for y in 0..6 {
+                let at_lattice = perlin_2d_periodic(x as f32, y as f32, 3, None);
+                assert!(
+                    (at_lattice - 0.5).abs() < 1e-5,
+                    "lattice point ({x}, {y}) is {at_lattice}, not neutral"
+                );
+            }
+        }
+    }
+
+    /// Stays inside the unit range its callers assume, and actually uses it —
+    /// a field collapsed near 0.5 would produce no relief at all.
+    #[test]
+    fn gradient_noise_spans_a_useful_part_of_the_unit_range() {
+        let mut low: f32 = 1.0;
+        let mut high: f32 = 0.0;
+        for step in 0..4000 {
+            let value = perlin_2d_periodic(step as f32 * 0.137, step as f32 * 0.081, 11, None);
+            assert!((0.0..=1.0).contains(&value), "out of range: {value}");
+            low = low.min(value);
+            high = high.max(value);
+        }
+        assert!(high - low > 0.6, "only spans {low}..{high}");
+    }
+}
