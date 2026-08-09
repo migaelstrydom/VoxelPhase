@@ -8,6 +8,7 @@ use nalgebra::{Point3, Vector3};
 use serde::Deserialize;
 use specs::Entity;
 
+use super::shared::finish::{ColliderSurface, MaterialSurface};
 use super::shared::models::cuboid_model;
 use super::shared::textures::*;
 use super::{MaterialCtx, Spawnable};
@@ -17,6 +18,7 @@ use crate::components::{
 use crate::core::error::EngineResult;
 use crate::physics::{ColliderDesc, RigidBodyDesc};
 use crate::rendering::material::{Material, MaterialId, MaterialManagerBuilder};
+use crate::rendering::physical_finish::PhysicalSurface;
 use crate::resources::textures::TextureManager;
 use crate::systems::PhysicsResource;
 use crate::utils::noise::fbm_2d_periodic;
@@ -39,6 +41,17 @@ impl PyramidDef {
     pub fn default_density() -> f32 {
         1800.0
     }
+
+    /// The one declaration of this object's physics. The collider takes the
+    /// coefficients and the material takes the finish they imply, so the two
+    /// cannot drift apart.
+    fn surface(&self) -> PhysicalSurface {
+        PhysicalSurface {
+            restitution: 0.15,
+            friction: 0.7,
+            density: self.density,
+        }
+    }
 }
 
 impl PyramidDef {
@@ -56,7 +69,11 @@ impl Spawnable for PyramidDef {
         let count = self.total_blocks();
         let mut mats = Vec::with_capacity(count);
         for _ in 0..count {
-            mats.push(create_sandstone_material(ctx.textures, ctx.materials)?);
+            mats.push(create_sandstone_material(
+                self.surface(),
+                ctx.textures,
+                ctx.materials,
+            )?);
         }
         Ok(mats)
     }
@@ -99,10 +116,7 @@ impl Spawnable for PyramidDef {
                         let body_handle = physics.world.create_body(body_desc);
                         physics.world.attach_collider(
                             body_handle,
-                            ColliderDesc::box_shape(he)
-                                .density(self.density)
-                                .restitution(0.15)
-                                .friction(0.7),
+                            ColliderDesc::box_shape(he).with_physical_surface(self.surface()),
                         );
                         body_handle
                     };
@@ -133,12 +147,13 @@ impl Spawnable for PyramidDef {
 // ---------------------------------------------------------------------------
 
 fn create_sandstone_material(
+    surface: PhysicalSurface,
     texture_manager: &TextureManager,
     material_builder: &mut MaterialManagerBuilder,
 ) -> EngineResult<MaterialId> {
     let pixels = generate_sandstone();
     let texture = texture_manager.create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &pixels, true)?;
-    let material = Material::textured(texture);
+    let material = Material::textured(texture).with_derived_finish(surface);
     Ok(material_builder.register(material))
 }
 

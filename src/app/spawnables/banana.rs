@@ -7,6 +7,7 @@ use nalgebra::{Point3, UnitQuaternion, Vector2, Vector3};
 use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
+use super::shared::finish::{ColliderSurface, MaterialSurface};
 use super::shared::textures::Rgb;
 use super::{MaterialCtx, Spawnable};
 use crate::components::{
@@ -17,6 +18,7 @@ use crate::model::{MeshPrimitive, Model, ModelPart};
 use crate::physics::{ColliderDesc, RigidBodyDesc};
 use crate::rendering::colour::Colour;
 use crate::rendering::material::{Material, MaterialId};
+use crate::rendering::physical_finish::PhysicalSurface;
 use crate::rendering::vertex::Vertex;
 use crate::systems::PhysicsResource;
 use crate::utils::noise::fbm_2d_periodic;
@@ -123,6 +125,17 @@ impl BananaDef {
             curvature: self.curvature.clamp(0.05, 3.0),
         }
     }
+
+    /// The one declaration of this object's physics. The collider takes the
+    /// coefficients and the material takes the finish they imply, so the two
+    /// cannot drift apart.
+    fn surface(&self) -> PhysicalSurface {
+        PhysicalSurface {
+            restitution: self.restitution,
+            friction: self.friction,
+            density: self.density,
+        }
+    }
 }
 
 impl Spawnable for BananaDef {
@@ -135,7 +148,9 @@ impl Spawnable for BananaDef {
         let texture = ctx
             .textures
             .create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &pixels, true)?;
-        Ok(vec![ctx.materials.register(Material::textured(texture))])
+        Ok(vec![ctx.materials.register(
+            Material::textured(texture).with_derived_finish(self.surface()),
+        )])
     }
 
     fn spawn(&self, world: &mut World, materials: &[MaterialId]) -> Vec<Entity> {
@@ -167,9 +182,7 @@ impl Spawnable for BananaDef {
                     ColliderDesc::capsule(segment.half_height, segment.radius)
                         .offset_translation(segment.centre)
                         .offset_rotation(segment.rotation)
-                        .density(self.density)
-                        .restitution(self.restitution)
-                        .friction(self.friction),
+                        .with_physical_surface(self.surface()),
                 );
             }
 

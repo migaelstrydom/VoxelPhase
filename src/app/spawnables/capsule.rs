@@ -6,6 +6,7 @@ use nalgebra::{Point3, Vector3};
 use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
+use super::shared::finish::{ColliderSurface, MaterialSurface};
 use super::shared::textures::hue_to_rgb;
 use super::{MaterialCtx, Spawnable};
 use crate::components::{
@@ -17,6 +18,7 @@ use crate::model::{MeshPrimitive, Model, ModelPart};
 use crate::physics::{ColliderDesc, RigidBodyDesc};
 use crate::rendering::colour::Colour;
 use crate::rendering::material::{Material, MaterialId};
+use crate::rendering::physical_finish::PhysicalSurface;
 use crate::systems::PhysicsResource;
 use crate::utils::noise::fbm_2d_periodic;
 
@@ -47,6 +49,17 @@ impl CapsuleDef {
     pub fn default_friction() -> f32 {
         0.6
     }
+
+    /// The one declaration of this object's physics. The collider takes the
+    /// coefficients and the material takes the finish they imply, so the two
+    /// cannot drift apart.
+    fn surface(&self) -> PhysicalSurface {
+        PhysicalSurface {
+            restitution: self.restitution,
+            friction: self.friction,
+            density: self.density,
+        }
+    }
 }
 
 impl Spawnable for CapsuleDef {
@@ -59,7 +72,7 @@ impl Spawnable for CapsuleDef {
         let texture = ctx
             .textures
             .create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &pixels, true)?;
-        let material = Material::textured(texture);
+        let material = Material::textured(texture).with_derived_finish(self.surface());
         Ok(vec![ctx.materials.register(material)])
     }
 
@@ -93,9 +106,7 @@ impl Spawnable for CapsuleDef {
             let body_handle = physics.world.create_body(body_desc);
 
             let collider_desc = ColliderDesc::capsule(self.half_height, self.radius)
-                .density(self.density)
-                .restitution(self.restitution)
-                .friction(self.friction);
+                .with_physical_surface(self.surface());
 
             physics.world.attach_collider(body_handle, collider_desc);
 

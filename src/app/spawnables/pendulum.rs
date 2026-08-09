@@ -13,6 +13,7 @@ use nalgebra::{Point3, Vector3};
 use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
+use super::shared::finish::{ColliderSurface, MaterialSurface};
 use super::shared::models::multi_material_compound_cuboid_model;
 use super::shared::textures::Rgb;
 use super::{MaterialCtx, Spawnable};
@@ -25,9 +26,13 @@ use crate::model::{MeshPrimitive, Model, ModelPart};
 use crate::physics::{ColliderDesc, ConstraintKind, RigidBodyDesc};
 use crate::rendering::colour::Colour;
 use crate::rendering::material::{Material, MaterialId};
+use crate::rendering::physical_finish::PhysicalSurface;
 use crate::systems::PhysicsResource;
 use crate::terrain::TerrainWorld;
 use crate::utils::noise::fbm_2d_periodic;
+
+/// Steel, in kg/m3. The frame is the anchor the whole toy swings from.
+const FRAME_DENSITY: f32 = 7800.0;
 
 const TEXTURE_SIZE: u32 = 128;
 const SPHERE_SEGMENTS: u32 = 24;
@@ -75,6 +80,26 @@ impl PendulumDef {
 }
 
 impl PendulumDef {
+    /// The steel frame: dense enough to stay put while the bob swings, and
+    /// dense enough that the derived finish reads as metal.
+    fn frame_surface(&self) -> PhysicalSurface {
+        PhysicalSurface {
+            restitution: 0.1,
+            friction: 0.5,
+            density: FRAME_DENSITY,
+        }
+    }
+
+    /// The bob. Its density is a level's choice, so how metallic it looks is
+    /// too — a heavier bob arrives looking heavier.
+    fn ball_surface(&self) -> PhysicalSurface {
+        PhysicalSurface {
+            restitution: 0.4,
+            friction: 0.6,
+            density: self.ball_density,
+        }
+    }
+
     /// Half-extents of the vertical post.
     fn post_half_extents(&self) -> Vector3<f32> {
         Vector3::new(0.08, self.frame_height / 2.0, 0.08)
@@ -129,19 +154,25 @@ impl Spawnable for PendulumDef {
         let frame_tex =
             ctx.textures
                 .create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &frame_pixels, true)?;
-        let frame_mat = ctx.materials.register(Material::textured(frame_tex));
+        let frame_mat = ctx
+            .materials
+            .register(Material::textured(frame_tex).with_derived_finish(self.frame_surface()));
 
         let ball_pixels = generate_beach_ball_texture(seed.wrapping_add(10));
         let ball_tex =
             ctx.textures
                 .create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &ball_pixels, true)?;
-        let ball_mat = ctx.materials.register(Material::textured(ball_tex));
+        let ball_mat = ctx
+            .materials
+            .register(Material::textured(ball_tex).with_derived_finish(self.ball_surface()));
 
         let rope_pixels = generate_painted_wood(seed.wrapping_add(20), Rgb::new(0.55, 0.40, 0.25));
         let rope_tex =
             ctx.textures
                 .create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &rope_pixels, true)?;
-        let rope_mat = ctx.materials.register(Material::textured(rope_tex));
+        let rope_mat = ctx
+            .materials
+            .register(Material::textured(rope_tex).with_derived_finish(self.frame_surface()));
 
         Ok(vec![frame_mat, ball_mat, rope_mat])
     }
@@ -199,17 +230,13 @@ impl Spawnable for PendulumDef {
             physics.world.attach_collider(
                 body,
                 ColliderDesc::box_shape(self.post_half_extents())
-                    .density(7800.0)
-                    .restitution(0.1)
-                    .friction(0.5)
+                    .with_physical_surface(self.frame_surface())
                     .offset_translation(self.post_center_from_base() - com),
             );
             physics.world.attach_collider(
                 body,
                 ColliderDesc::box_shape(self.arm_half_extents())
-                    .density(7800.0)
-                    .restitution(0.1)
-                    .friction(0.5)
+                    .with_physical_surface(self.frame_surface())
                     .offset_translation(self.arm_center_from_base() - com),
             );
 
@@ -267,10 +294,7 @@ impl Spawnable for PendulumDef {
 
             physics.world.attach_collider(
                 body,
-                ColliderDesc::sphere(self.ball_radius)
-                    .density(self.ball_density)
-                    .restitution(0.4)
-                    .friction(0.6),
+                ColliderDesc::sphere(self.ball_radius).with_physical_surface(self.ball_surface()),
             );
 
             let constraint = physics

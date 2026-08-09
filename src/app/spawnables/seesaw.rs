@@ -11,6 +11,7 @@ use nalgebra::{Point3, UnitQuaternion, UnitVector3, Vector3};
 use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
+use super::shared::finish::{ColliderSurface, MaterialSurface};
 use super::shared::models::{build_convex_hull, convex_solid_model, SolidFace};
 use super::shared::textures::Rgb;
 use super::{MaterialCtx, Spawnable};
@@ -20,6 +21,7 @@ use crate::components::{
 use crate::core::error::EngineResult;
 use crate::physics::{ColliderDesc, ConstraintKind, RigidBodyDesc};
 use crate::rendering::material::{Material, MaterialId};
+use crate::rendering::physical_finish::PhysicalSurface;
 use crate::systems::PhysicsResource;
 use crate::terrain::TerrainWorld;
 use crate::utils::noise::fbm_2d_periodic;
@@ -79,6 +81,25 @@ impl SeesawDef {
     fn seat_x_offset(&self) -> f32 {
         self.beam_half_length - self.beam_half_width - 0.05
     }
+
+    /// The beam and its seats/backrests. Declared once so the collider and
+    /// the wood it's rendered with cannot disagree about how it behaves.
+    fn beam_surface(&self) -> PhysicalSurface {
+        PhysicalSurface {
+            restitution: 0.1,
+            friction: 0.6,
+            density: self.density,
+        }
+    }
+
+    /// The fulcrum: denser than the beam so it stays put underneath it.
+    fn fulcrum_surface(&self) -> PhysicalSurface {
+        PhysicalSurface {
+            restitution: 0.1,
+            friction: 0.6,
+            density: self.density * 1.5,
+        }
+    }
 }
 
 impl Spawnable for SeesawDef {
@@ -93,20 +114,26 @@ impl Spawnable for SeesawDef {
         let beam_tex =
             ctx.textures
                 .create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &beam_pixels, true)?;
-        let beam_mat = ctx.materials.register(Material::textured(beam_tex));
+        let beam_mat = ctx
+            .materials
+            .register(Material::textured(beam_tex).with_derived_finish(self.beam_surface()));
 
         let seat_pixels = generate_painted_wood(seed.wrapping_add(1), Rgb::new(0.80, 0.20, 0.20));
         let seat_tex =
             ctx.textures
                 .create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &seat_pixels, true)?;
-        let seat_mat = ctx.materials.register(Material::textured(seat_tex));
+        let seat_mat = ctx
+            .materials
+            .register(Material::textured(seat_tex).with_derived_finish(self.beam_surface()));
 
         let fulcrum_pixels =
             generate_painted_wood(seed.wrapping_add(2), Rgb::new(0.25, 0.55, 0.80));
         let fulcrum_tex =
             ctx.textures
                 .create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &fulcrum_pixels, true)?;
-        let fulcrum_mat = ctx.materials.register(Material::textured(fulcrum_tex));
+        let fulcrum_mat = ctx
+            .materials
+            .register(Material::textured(fulcrum_tex).with_derived_finish(self.fulcrum_surface()));
 
         Ok(vec![beam_mat, seat_mat, fulcrum_mat])
     }
@@ -179,8 +206,7 @@ impl Spawnable for SeesawDef {
                     .angular_damping(0.01),
             );
 
-            let mat =
-                |desc: ColliderDesc| desc.density(self.density).restitution(0.1).friction(0.6);
+            let mat = |desc: ColliderDesc| desc.with_physical_surface(self.beam_surface());
 
             // Beam plank
             physics
@@ -289,9 +315,7 @@ impl Spawnable for SeesawDef {
             physics.world.attach_collider(
                 body,
                 ColliderDesc::convex_hull(Arc::new(fulcrum_hull))
-                    .density(self.density * 1.5)
-                    .restitution(0.1)
-                    .friction(0.6),
+                    .with_physical_surface(self.fulcrum_surface()),
             );
 
             // Single Fixed constraint replaces AnchorPoint + KeepUpright.

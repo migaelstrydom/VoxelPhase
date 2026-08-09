@@ -8,6 +8,7 @@ use nalgebra::{Point3, UnitQuaternion, Vector3};
 use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
+use super::shared::finish::{ColliderSurface, MaterialSurface};
 use super::shared::models::{build_convex_hull, convex_solid_model, cuboid_model, SolidFace};
 use super::shared::textures::*;
 use super::{MaterialCtx, Spawnable};
@@ -18,6 +19,7 @@ use crate::core::error::EngineResult;
 use crate::fire::components::Flammable;
 use crate::physics::{ColliderDesc, RigidBodyDesc};
 use crate::rendering::material::{Material, MaterialId};
+use crate::rendering::physical_finish::PhysicalSurface;
 use crate::systems::PhysicsResource;
 use crate::utils::noise::fbm_2d_periodic;
 
@@ -28,6 +30,14 @@ const MATERIAL_COUNT: usize = 3;
 const MAT_STONE: usize = 0;
 const MAT_BRICK: usize = 1;
 const MAT_SLATE: usize = 2;
+
+/// Masonry and timber physics for every piece of the house. Stone, brick and
+/// slate all behave the same here, so one surface covers the whole building.
+const SURFACE: PhysicalSurface = PhysicalSurface {
+    restitution: 0.1,
+    friction: 0.7,
+    density: 1800.0,
+};
 
 #[derive(Deserialize)]
 pub struct HouseDef {
@@ -42,9 +52,9 @@ impl Spawnable for HouseDef {
 
     fn create_materials(&self, ctx: &mut MaterialCtx) -> EngineResult<Vec<MaterialId>> {
         Ok(vec![
-            create_stone_material(ctx.textures, ctx.materials)?,
-            create_brick_material(ctx.textures, ctx.materials)?,
-            create_slate_material(ctx.textures, ctx.materials)?,
+            create_stone_material(ctx.textures, ctx.materials, SURFACE)?,
+            create_brick_material(ctx.textures, ctx.materials, SURFACE)?,
+            create_slate_material(ctx.textures, ctx.materials, SURFACE)?,
         ])
     }
 
@@ -85,9 +95,6 @@ impl Spawnable for HouseDef {
 
         // Spawn helpers ---------------------------------------------------
 
-        let density = 1800.0;
-        let friction = 0.7;
-
         let spawn_box = |world: &mut World,
                          entities: &mut Vec<Entity>,
                          pos: Point3<f32>,
@@ -105,10 +112,7 @@ impl Spawnable for HouseDef {
                 let body_handle = physics.world.create_body(body_desc);
                 physics.world.attach_collider(
                     body_handle,
-                    ColliderDesc::box_shape(he)
-                        .density(density)
-                        .restitution(0.1)
-                        .friction(friction),
+                    ColliderDesc::box_shape(he).with_physical_surface(SURFACE),
                 );
                 body_handle
             };
@@ -145,10 +149,7 @@ impl Spawnable for HouseDef {
                 let body_handle = physics.world.create_body(body_desc);
                 physics.world.attach_collider(
                     body_handle,
-                    ColliderDesc::box_shape(he)
-                        .density(density)
-                        .restitution(0.1)
-                        .friction(friction),
+                    ColliderDesc::box_shape(he).with_physical_surface(SURFACE),
                 );
                 body_handle
             };
@@ -189,10 +190,7 @@ impl Spawnable for HouseDef {
                 let body_handle = physics.world.create_body(body_desc);
                 physics.world.attach_collider(
                     body_handle,
-                    ColliderDesc::convex_hull(hull)
-                        .density(density)
-                        .restitution(0.1)
-                        .friction(friction),
+                    ColliderDesc::convex_hull(hull).with_physical_surface(SURFACE),
                 );
                 body_handle
             };
@@ -440,28 +438,31 @@ fn gable_geometry(
 fn create_stone_material(
     textures: &crate::resources::textures::TextureManager,
     materials: &mut crate::rendering::material::MaterialManagerBuilder,
+    surface: PhysicalSurface,
 ) -> EngineResult<MaterialId> {
     let pixels = generate_stone_texture();
     let texture = textures.create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &pixels, true)?;
-    Ok(materials.register(Material::textured(texture)))
+    Ok(materials.register(Material::textured(texture).with_derived_finish(surface)))
 }
 
 fn create_brick_material(
     textures: &crate::resources::textures::TextureManager,
     materials: &mut crate::rendering::material::MaterialManagerBuilder,
+    surface: PhysicalSurface,
 ) -> EngineResult<MaterialId> {
     let pixels = generate_brick_texture();
     let texture = textures.create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &pixels, true)?;
-    Ok(materials.register(Material::textured(texture)))
+    Ok(materials.register(Material::textured(texture).with_derived_finish(surface)))
 }
 
 fn create_slate_material(
     textures: &crate::resources::textures::TextureManager,
     materials: &mut crate::rendering::material::MaterialManagerBuilder,
+    surface: PhysicalSurface,
 ) -> EngineResult<MaterialId> {
     let pixels = generate_slate_texture();
     let texture = textures.create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &pixels, true)?;
-    Ok(materials.register(Material::textured(texture)))
+    Ok(materials.register(Material::textured(texture).with_derived_finish(surface)))
 }
 
 /// Warm grey stone with fine grain noise and chisel-edge darkening.

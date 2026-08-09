@@ -4,7 +4,10 @@ use serde::Deserialize;
 use specs::Entity;
 
 use super::beach_ball::BeachBallDef;
-use super::box_object::{create_box_material_for_style, CrateDef, HeavyCrateDef, PlankDef};
+use super::box_object::{
+    create_box_material_for_style, CrateDef, HeavyCrateDef, PlankDef, CRATE_SURFACE,
+    HEAVY_CRATE_SURFACE, PLANK_SURFACE,
+};
 use super::capsule::CapsuleDef;
 use super::{MaterialCtx, Spawnable};
 use crate::core::error::EngineResult;
@@ -71,6 +74,7 @@ impl Spawnable for StackDef {
                 StackItemDef::Crate { .. } => {
                     mats.push(create_box_material_for_style(
                         BoxStyle::WoodenCrate,
+                        CRATE_SURFACE,
                         ctx.textures,
                         ctx.materials,
                     )?);
@@ -78,6 +82,7 @@ impl Spawnable for StackDef {
                 StackItemDef::HeavyCrate { .. } => {
                     mats.push(create_box_material_for_style(
                         BoxStyle::Metal,
+                        HEAVY_CRATE_SURFACE,
                         ctx.textures,
                         ctx.materials,
                     )?);
@@ -85,6 +90,7 @@ impl Spawnable for StackDef {
                 StackItemDef::Plank { .. } => {
                     mats.push(create_box_material_for_style(
                         BoxStyle::WoodenCrate,
+                        PLANK_SURFACE,
                         ctx.textures,
                         ctx.materials,
                     )?);

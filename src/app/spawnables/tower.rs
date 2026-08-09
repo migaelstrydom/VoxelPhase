@@ -4,7 +4,8 @@ use nalgebra::{Point3, Vector3};
 use serde::Deserialize;
 use specs::Entity;
 
-use super::box_object::create_box_material_for_style;
+use super::box_object::{crate_surface_at, create_box_material_for_style};
+use super::shared::finish::ColliderSurface;
 use super::shared::models::cuboid_model;
 use super::shared::orientation::Yaw;
 use super::{MaterialCtx, Spawnable};
@@ -48,6 +49,7 @@ impl Spawnable for TowerDef {
         for _ in 0..self.count {
             mats.push(create_box_material_for_style(
                 BoxStyle::Random,
+                crate_surface_at(self.density),
                 ctx.textures,
                 ctx.materials,
             )?);
@@ -82,9 +84,7 @@ impl Spawnable for TowerDef {
                 physics.world.attach_collider(
                     body_handle,
                     ColliderDesc::box_shape(he)
-                        .density(self.density)
-                        .restitution(0.2)
-                        .friction(0.6),
+                        .with_physical_surface(crate_surface_at(self.density)),
                 );
                 body_handle
             };

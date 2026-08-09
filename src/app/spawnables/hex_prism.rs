@@ -6,6 +6,7 @@ use nalgebra::{Point3, Vector3};
 use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
+use super::shared::finish::{ColliderSurface, MaterialSurface};
 use super::shared::models::{build_convex_hull, convex_solid_model, SolidFace};
 use super::shared::orientation::Yaw;
 use super::shared::textures::*;
@@ -16,6 +17,7 @@ use crate::components::{
 use crate::core::error::EngineResult;
 use crate::physics::{ColliderDesc, RigidBodyDesc};
 use crate::rendering::material::{Material, MaterialId, MaterialManagerBuilder};
+use crate::rendering::physical_finish::PhysicalSurface;
 use crate::resources::textures::TextureManager;
 use crate::systems::PhysicsResource;
 use crate::utils::noise::fbm_2d_periodic;
@@ -55,6 +57,15 @@ impl HexPrismDef {
     pub fn default_friction() -> f32 {
         0.6
     }
+
+    /// The one declaration of this prism's physics, shading included.
+    fn surface(&self) -> PhysicalSurface {
+        PhysicalSurface {
+            restitution: self.restitution,
+            friction: self.friction,
+            density: self.density,
+        }
+    }
 }
 
 impl Spawnable for HexPrismDef {
@@ -63,7 +74,7 @@ impl Spawnable for HexPrismDef {
     }
 
     fn create_materials(&self, ctx: &mut MaterialCtx) -> EngineResult<Vec<MaterialId>> {
-        let mat = create_honeycomb_material(ctx.textures, ctx.materials)?;
+        let mat = create_honeycomb_material(self.surface(), ctx.textures, ctx.materials)?;
         Ok(vec![mat])
     }
 
@@ -86,10 +97,8 @@ impl Spawnable for HexPrismDef {
 
             let body_handle = physics.world.create_body(body_desc);
 
-            let collider_desc = ColliderDesc::convex_hull(hull)
-                .density(self.density)
-                .restitution(self.restitution)
-                .friction(self.friction);
+            let collider_desc =
+                ColliderDesc::convex_hull(hull).with_physical_surface(self.surface());
 
             physics.world.attach_collider(body_handle, collider_desc);
 
@@ -150,6 +159,16 @@ impl HoneycombWallDef {
     fn total_cells(&self) -> usize {
         (self.columns * self.rows) as usize
     }
+
+    /// Cells in a wall sit a little grippier and deader than a loose prism, so
+    /// the wall holds its course instead of shedding cells.
+    fn surface(&self) -> PhysicalSurface {
+        PhysicalSurface {
+            restitution: 0.15,
+            friction: 0.7,
+            density: self.density,
+        }
+    }
 }
 
 impl Spawnable for HoneycombWallDef {
@@ -161,7 +180,11 @@ impl Spawnable for HoneycombWallDef {
         let count = self.total_cells();
         let mut mats = Vec::with_capacity(count);
         for _ in 0..count {
-            mats.push(create_honeycomb_material(ctx.textures, ctx.materials)?);
+            mats.push(create_honeycomb_material(
+                self.surface(),
+                ctx.textures,
+                ctx.materials,
+            )?);
         }
         Ok(mats)
     }
@@ -211,9 +234,7 @@ impl Spawnable for HoneycombWallDef {
                     physics.world.attach_collider(
                         body_handle,
                         ColliderDesc::convex_hull(hull.clone())
-                            .density(self.density)
-                            .restitution(0.15)
-                            .friction(0.7),
+                            .with_physical_surface(self.surface()),
                     );
                     body_handle
                 };
@@ -349,12 +370,13 @@ fn hex_prism_geometry_z(radius: f32, half_depth: f32) -> (Vec<Vector3<f32>>, Vec
 // ---------------------------------------------------------------------------
 
 fn create_honeycomb_material(
+    surface: PhysicalSurface,
     texture_manager: &TextureManager,
     material_builder: &mut MaterialManagerBuilder,
 ) -> EngineResult<MaterialId> {
     let pixels = generate_honeycomb_texture();
     let texture = texture_manager.create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &pixels, true)?;
-    let material = Material::textured(texture);
+    let material = Material::textured(texture).with_derived_finish(surface);
     Ok(material_builder.register(material))
 }
 

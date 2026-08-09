@@ -9,6 +9,7 @@ use nalgebra::{Point3, Vector3};
 use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
+use super::shared::finish::{ColliderSurface, MaterialSurface};
 use super::shared::models::compound_cuboid_model;
 use super::shared::orientation::Yaw;
 use super::shared::textures::Rgb;
@@ -19,6 +20,7 @@ use crate::components::{
 use crate::core::error::EngineResult;
 use crate::physics::{ColliderDesc, RigidBodyDesc};
 use crate::rendering::material::{Material, MaterialId};
+use crate::rendering::physical_finish::PhysicalSurface;
 use crate::systems::PhysicsResource;
 use crate::utils::noise::fbm_2d_periodic;
 
@@ -68,6 +70,17 @@ impl DolosDef {
     pub fn default_friction() -> f32 {
         0.8
     }
+
+    /// The one declaration of this object's physics. The collider takes the
+    /// coefficients and the material takes the finish they imply, so the two
+    /// cannot drift apart.
+    fn surface(&self) -> PhysicalSurface {
+        PhysicalSurface {
+            restitution: self.restitution,
+            friction: self.friction,
+            density: self.density,
+        }
+    }
 }
 
 impl Spawnable for DolosDef {
@@ -80,7 +93,9 @@ impl Spawnable for DolosDef {
         let texture = ctx
             .textures
             .create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &pixels, true)?;
-        Ok(vec![ctx.materials.register(Material::textured(texture))])
+        Ok(vec![ctx.materials.register(
+            Material::textured(texture).with_derived_finish(self.surface()),
+        )])
     }
 
     fn spawn(&self, world: &mut World, materials: &[MaterialId]) -> Vec<Entity> {
@@ -127,9 +142,7 @@ impl Spawnable for DolosDef {
                     body_handle,
                     ColliderDesc::box_shape(half_extents)
                         .offset_translation(offset)
-                        .density(self.density)
-                        .restitution(self.restitution)
-                        .friction(self.friction),
+                        .with_physical_surface(self.surface()),
                 );
             }
 

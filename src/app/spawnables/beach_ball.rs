@@ -15,13 +15,23 @@ use crate::geometry::{generate_magic_sphere_vertices, generate_sphere_indices, M
 use crate::model::{MeshPrimitive, Model, ModelPart};
 use crate::physics::{ColliderDesc, RigidBodyDesc};
 use crate::rendering::material::{Material, MaterialId};
+use crate::rendering::physical_finish::PhysicalSurface;
 use crate::systems::PhysicsResource;
 
+use super::shared::finish::{ColliderSurface, MaterialSurface};
 use super::shared::textures::rand_range;
 
 const RADIUS: f32 = 0.5;
 const SEGMENTS: u32 = 32;
 const RINGS: u32 = 24;
+
+/// Light and lively. Declared once so the collider and the material cannot
+/// disagree about how bouncy the ball is.
+const SURFACE: PhysicalSurface = PhysicalSurface {
+    restitution: 0.6,
+    friction: 0.5,
+    density: 100.0,
+};
 
 #[derive(Deserialize)]
 pub struct BeachBallDef {
@@ -37,7 +47,7 @@ impl Spawnable for BeachBallDef {
         let texture = ctx
             .textures
             .create_solid_colour(crate::rendering::colour::Colour::new(1.0, 1.0, 1.0, 1.0))?;
-        let material = Material::textured(texture);
+        let material = Material::textured(texture).with_derived_finish(SURFACE);
         Ok(vec![ctx.materials.register(material)])
     }
 
@@ -73,10 +83,7 @@ impl Spawnable for BeachBallDef {
 
             let body_handle = physics.world.create_body(body_desc);
 
-            let collider_desc = ColliderDesc::sphere(RADIUS)
-                .density(100.0)
-                .restitution(0.6)
-                .friction(0.5);
+            let collider_desc = ColliderDesc::sphere(RADIUS).with_physical_surface(SURFACE);
 
             physics.world.attach_collider(body_handle, collider_desc);
 

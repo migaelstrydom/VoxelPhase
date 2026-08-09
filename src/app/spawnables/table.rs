@@ -4,6 +4,7 @@ use nalgebra::{Point3, Vector3};
 use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
+use super::shared::finish::{ColliderSurface, MaterialSurface};
 use super::shared::models::compound_cuboid_model;
 use super::shared::orientation::Yaw;
 use super::shared::textures::*;
@@ -15,6 +16,7 @@ use crate::core::error::EngineResult;
 use crate::fracture::{CompoundFracture, FractureJoint};
 use crate::physics::{ColliderDesc, RigidBodyDesc};
 use crate::rendering::material::{Material, MaterialId};
+use crate::rendering::physical_finish::PhysicalSurface;
 use crate::systems::PhysicsResource;
 use crate::utils::noise::fbm_2d_periodic;
 
@@ -54,6 +56,17 @@ impl TableDef {
     pub fn default_friction() -> f32 {
         0.5
     }
+
+    /// The one declaration of this object's physics. The collider takes the
+    /// coefficients and the material takes the finish they imply, so the two
+    /// cannot drift apart.
+    fn surface(&self) -> PhysicalSurface {
+        PhysicalSurface {
+            restitution: self.restitution,
+            friction: self.friction,
+            density: self.density,
+        }
+    }
 }
 
 impl TableDef {
@@ -88,7 +101,7 @@ impl Spawnable for TableDef {
         let texture = ctx
             .textures
             .create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &pixels, true)?;
-        let material = Material::textured(texture);
+        let material = Material::textured(texture).with_derived_finish(self.surface());
         Ok(vec![ctx.materials.register(material)])
     }
 
@@ -134,9 +147,7 @@ impl Spawnable for TableDef {
                 body_handle,
                 ColliderDesc::box_shape(top_he)
                     .offset_translation(Vector3::new(0.0, top_y, 0.0))
-                    .density(self.density)
-                    .restitution(self.restitution)
-                    .friction(self.friction),
+                    .with_physical_surface(self.surface()),
             );
 
             for &pos in &leg_positions {
@@ -144,9 +155,7 @@ impl Spawnable for TableDef {
                     body_handle,
                     ColliderDesc::box_shape(leg_he)
                         .offset_translation(pos)
-                        .density(self.density)
-                        .restitution(self.restitution)
-                        .friction(self.friction),
+                        .with_physical_surface(self.surface()),
                 );
             }
 

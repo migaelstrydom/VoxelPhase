@@ -14,6 +14,7 @@ use nalgebra::{Point3, Vector2, Vector3};
 use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
+use super::shared::finish::{ColliderSurface, MaterialSurface};
 use super::shared::textures::Rgb;
 use super::{MaterialCtx, Spawnable};
 use crate::components::{
@@ -24,6 +25,7 @@ use crate::model::{MeshPrimitive, Model, ModelPart};
 use crate::physics::{ColliderDesc, ConstraintKind, RigidBodyDesc};
 use crate::rendering::colour::Colour;
 use crate::rendering::material::{Material, MaterialId};
+use crate::rendering::physical_finish::PhysicalSurface;
 use crate::rendering::vertex::Vertex;
 use crate::systems::PhysicsResource;
 use crate::terrain::TerrainWorld;
@@ -56,6 +58,17 @@ impl FencePostDef {
     pub fn default_density() -> f32 {
         800.0
     }
+
+    /// The one declaration of this object's physics. The collider takes the
+    /// coefficients and the material takes the finish they imply, so the two
+    /// cannot drift apart.
+    fn surface(&self) -> PhysicalSurface {
+        PhysicalSurface {
+            restitution: 0.1,
+            friction: 0.7,
+            density: self.density,
+        }
+    }
 }
 
 impl Spawnable for FencePostDef {
@@ -70,13 +83,17 @@ impl Spawnable for FencePostDef {
         let bark_tex =
             ctx.textures
                 .create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &bark_pixels, true)?;
-        let bark_mat = ctx.materials.register(Material::textured(bark_tex));
+        let bark_mat = ctx
+            .materials
+            .register(Material::textured(bark_tex).with_derived_finish(self.surface()));
 
         let cross_pixels = generate_cross_section_texture(seed);
         let cross_tex =
             ctx.textures
                 .create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &cross_pixels, true)?;
-        let cross_mat = ctx.materials.register(Material::textured(cross_tex));
+        let cross_mat = ctx
+            .materials
+            .register(Material::textured(cross_tex).with_derived_finish(self.surface()));
 
         Ok(vec![bark_mat, cross_mat])
     }
@@ -126,16 +143,12 @@ impl Spawnable for FencePostDef {
         let collider_offset_y = self.half_height - exposed_half_height;
 
         let anchored_collider = ColliderDesc::capsule(exposed_half_height, self.radius)
-            .density(self.density)
-            .restitution(0.1)
-            .friction(0.7)
+            .with_physical_surface(self.surface())
             .offset_translation(Vector3::new(0.0, collider_offset_y, 0.0));
 
         // Full-size collider for when the post is freed.
         let released_collider = ColliderDesc::capsule(self.half_height, self.radius)
-            .density(self.density)
-            .restitution(0.1)
-            .friction(0.7);
+            .with_physical_surface(self.surface());
 
         let (body_handle, anchor_handle, upright_handle) = {
             let mut physics = world.write_resource::<PhysicsResource>();

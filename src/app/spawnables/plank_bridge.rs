@@ -9,6 +9,7 @@ use nalgebra::{Point3, UnitQuaternion, Vector3};
 use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
+use super::shared::finish::{ColliderSurface, MaterialSurface};
 use super::shared::models::multi_material_rotated_compound_cuboid_model;
 use super::shared::orientation::Yaw;
 use super::shared::textures::*;
@@ -20,6 +21,7 @@ use crate::core::error::EngineResult;
 use crate::fracture::{CompoundFracture, FractureJoint};
 use crate::physics::{ColliderDesc, RigidBodyDesc};
 use crate::rendering::material::{Material, MaterialId};
+use crate::rendering::physical_finish::PhysicalSurface;
 use crate::systems::PhysicsResource;
 use crate::utils::noise::fbm_2d_periodic;
 
@@ -98,7 +100,23 @@ impl PlankBridgeDef {
     fn child_count(&self) -> usize {
         2 + self.plank_count as usize
     }
+
+    /// The one declaration of the bridge's timber physics. Beams and planks
+    /// share it, so the collider and the wood they're rendered with cannot
+    /// disagree about how bouncy or grippy this bridge is.
+    fn surface(&self) -> PhysicalSurface {
+        PhysicalSurface {
+            restitution: RESTITUTION,
+            friction: FRICTION,
+            density: self.density,
+        }
+    }
 }
+
+/// Restitution of the bridge's timber colliders. Wood, not rubber.
+const RESTITUTION: f32 = 0.05;
+/// Friction of the bridge's timber colliders.
+const FRICTION: f32 = 0.7;
 
 impl Spawnable for PlankBridgeDef {
     fn material_count(&self) -> usize {
@@ -110,13 +128,17 @@ impl Spawnable for PlankBridgeDef {
         let beam_tex =
             ctx.textures
                 .create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &beam_pixels, true)?;
-        let beam_mat = ctx.materials.register(Material::textured(beam_tex));
+        let beam_mat = ctx
+            .materials
+            .register(Material::textured(beam_tex).with_derived_finish(self.surface()));
 
         let plank_pixels = generate_plank_wood();
         let plank_tex =
             ctx.textures
                 .create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &plank_pixels, true)?;
-        let plank_mat = ctx.materials.register(Material::textured(plank_tex));
+        let plank_mat = ctx
+            .materials
+            .register(Material::textured(plank_tex).with_derived_finish(self.surface()));
 
         Ok(vec![beam_mat, plank_mat])
     }
@@ -230,9 +252,7 @@ impl Spawnable for PlankBridgeDef {
                     body_handle,
                     ColliderDesc::box_shape(beam_he)
                         .offset_translation(offset)
-                        .density(self.density)
-                        .restitution(0.05)
-                        .friction(0.7),
+                        .with_physical_surface(self.surface()),
                 );
             }
 
@@ -243,9 +263,7 @@ impl Spawnable for PlankBridgeDef {
                     ColliderDesc::box_shape(varied_he)
                         .offset_translation(offset)
                         .offset_rotation(rotation)
-                        .density(self.density)
-                        .restitution(0.05)
-                        .friction(0.7),
+                        .with_physical_surface(self.surface()),
                 );
             }
 

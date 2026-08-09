@@ -6,6 +6,7 @@ use nalgebra::{Point3, Vector3};
 use serde::Deserialize;
 use specs::{Entity, World};
 
+use super::shared::finish::{ColliderSurface, MaterialSurface};
 use super::shared::models::cuboid_model;
 use super::shared::orientation::Yaw;
 use super::shared::textures::*;
@@ -18,6 +19,7 @@ use crate::fire::components::Flammable;
 use crate::level::BoxStyle;
 use crate::physics::{ColliderDesc, RigidBodyDesc};
 use crate::rendering::material::{Material, MaterialId, MaterialManagerBuilder};
+use crate::rendering::physical_finish::PhysicalSurface;
 use crate::resources::textures::TextureManager;
 use crate::systems::PhysicsResource;
 use crate::utils::noise::fbm_2d_periodic;
@@ -25,6 +27,44 @@ use crate::utils::noise::fbm_2d_periodic;
 use specs::{Builder, WorldExt};
 
 const TEXTURE_SIZE: u32 = 128;
+
+/// Every box in the family shares this feel; only density separates them.
+/// Densities here are gameplay values rather than physical ones — a crate at
+/// 50 kg/m3 is a tenth of real timber — which is why none of them reads as
+/// metal however metallic its texture looks.
+const CRATE_RESTITUTION: f32 = 0.2;
+const CRATE_FRICTION: f32 = 0.6;
+
+/// A light wooden crate.
+pub const CRATE_SURFACE: PhysicalSurface = PhysicalSurface {
+    restitution: CRATE_RESTITUTION,
+    friction: CRATE_FRICTION,
+    density: 50.0,
+};
+
+/// The same crate, three times the mass.
+pub const HEAVY_CRATE_SURFACE: PhysicalSurface = PhysicalSurface {
+    restitution: CRATE_RESTITUTION,
+    friction: CRATE_FRICTION,
+    density: 150.0,
+};
+
+/// Solid timber, and the heaviest of the family.
+pub const PLANK_SURFACE: PhysicalSurface = PhysicalSurface {
+    restitution: CRATE_RESTITUTION,
+    friction: CRATE_FRICTION,
+    density: 500.0,
+};
+
+/// The crate feel at a caller-chosen density, for the spawnables that build
+/// walls and towers out of boxes and let a level set how heavy they are.
+pub const fn crate_surface_at(density: f32) -> PhysicalSurface {
+    PhysicalSurface {
+        restitution: CRATE_RESTITUTION,
+        friction: CRATE_FRICTION,
+        density,
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Box styles — procedural texture generation
@@ -58,12 +98,13 @@ fn generate_pixels_for_style(style: BoxStyle) -> Vec<u8> {
 /// Creates a single box material for the given style.
 pub fn create_box_material_for_style(
     style: BoxStyle,
+    surface: PhysicalSurface,
     texture_manager: &TextureManager,
     material_builder: &mut MaterialManagerBuilder,
 ) -> EngineResult<MaterialId> {
     let pixels = generate_pixels_for_style(style);
     let texture = texture_manager.create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &pixels, true)?;
-    let material = Material::textured(texture);
+    let material = Material::textured(texture).with_derived_finish(surface);
     Ok(material_builder.register(material))
 }
 
@@ -72,16 +113,13 @@ pub fn create_box_material_for_style(
 // ---------------------------------------------------------------------------
 
 /// Spawn a box entity with physics and optional flammability.
-#[allow(clippy::too_many_arguments)]
 fn spawn_box_entity(
     world: &mut World,
     pos: Point3<f32>,
     half_extents: Vector3<f32>,
     yaw: Yaw,
     material: MaterialId,
-    density: f32,
-    restitution: f32,
-    friction: f32,
+    surface: PhysicalSurface,
     flammable: bool,
 ) -> Entity {
     let model = cuboid_model(half_extents, material);
@@ -98,10 +136,7 @@ fn spawn_box_entity(
 
         let body_handle = physics.world.create_body(body_desc);
 
-        let collider_desc = ColliderDesc::box_shape(half_extents)
-            .density(density)
-            .restitution(restitution)
-            .friction(friction);
+        let collider_desc = ColliderDesc::box_shape(half_extents).with_physical_surface(surface);
 
         physics.world.attach_collider(body_handle, collider_desc);
 
@@ -156,6 +191,15 @@ impl BoxDef {
     pub fn default_friction() -> f32 {
         0.6
     }
+
+    /// The one declaration of this box's physics, shading included.
+    fn surface(&self) -> PhysicalSurface {
+        PhysicalSurface {
+            restitution: self.restitution,
+            friction: self.friction,
+            density: self.density,
+        }
+    }
 }
 
 impl Spawnable for BoxDef {
@@ -166,6 +210,7 @@ impl Spawnable for BoxDef {
     fn create_materials(&self, ctx: &mut MaterialCtx) -> EngineResult<Vec<MaterialId>> {
         Ok(vec![create_box_material_for_style(
             self.style,
+            self.surface(),
             ctx.textures,
             ctx.materials,
         )?])
@@ -183,9 +228,7 @@ impl Spawnable for BoxDef {
             he,
             Yaw::degrees(self.yaw),
             materials[0],
-            self.density,
-            self.restitution,
-            self.friction,
+            self.surface(),
             true,
         )]
     }
@@ -210,6 +253,7 @@ impl Spawnable for CrateDef {
     fn create_materials(&self, ctx: &mut MaterialCtx) -> EngineResult<Vec<MaterialId>> {
         Ok(vec![create_box_material_for_style(
             BoxStyle::WoodenCrate,
+            CRATE_SURFACE,
             ctx.textures,
             ctx.materials,
         )?])
@@ -223,9 +267,7 @@ impl Spawnable for CrateDef {
             he,
             Yaw::default(),
             materials[0],
-            50.0,
-            0.2,
-            0.6,
+            CRATE_SURFACE,
             true,
         )]
     }
@@ -249,6 +291,7 @@ impl Spawnable for HeavyCrateDef {
     fn create_materials(&self, ctx: &mut MaterialCtx) -> EngineResult<Vec<MaterialId>> {
         Ok(vec![create_box_material_for_style(
             BoxStyle::Metal,
+            HEAVY_CRATE_SURFACE,
             ctx.textures,
             ctx.materials,
         )?])
@@ -262,9 +305,7 @@ impl Spawnable for HeavyCrateDef {
             he,
             Yaw::default(),
             materials[0],
-            150.0,
-            0.2,
-            0.6,
+            HEAVY_CRATE_SURFACE,
             true,
         )]
     }
@@ -294,6 +335,7 @@ impl Spawnable for PlankDef {
     fn create_materials(&self, ctx: &mut MaterialCtx) -> EngineResult<Vec<MaterialId>> {
         Ok(vec![create_box_material_for_style(
             BoxStyle::WoodenCrate,
+            PLANK_SURFACE,
             ctx.textures,
             ctx.materials,
         )?])
@@ -307,9 +349,7 @@ impl Spawnable for PlankDef {
             he,
             Yaw::degrees(self.yaw),
             materials[0],
-            500.0,
-            0.2,
-            0.6,
+            PLANK_SURFACE,
             true,
         )]
     }

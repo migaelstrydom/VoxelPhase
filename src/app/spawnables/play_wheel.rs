@@ -13,6 +13,7 @@ use nalgebra::{Point3, UnitVector3, Vector2, Vector3};
 use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
+use super::shared::finish::{ColliderSurface, MaterialSurface};
 use super::shared::models::{build_convex_hull, SolidFace};
 use super::shared::textures::Rgb;
 use super::{MaterialCtx, Spawnable};
@@ -24,6 +25,7 @@ use crate::model::{MeshPrimitive, Model, ModelPart};
 use crate::physics::{ColliderDesc, ConstraintKind, RigidBodyDesc};
 use crate::rendering::colour::Colour;
 use crate::rendering::material::{Material, MaterialId};
+use crate::rendering::physical_finish::PhysicalSurface;
 use crate::rendering::vertex::Vertex;
 use crate::systems::PhysicsResource;
 use crate::terrain::TerrainWorld;
@@ -32,6 +34,12 @@ use crate::utils::noise::fbm_2d_periodic;
 const TEXTURE_SIZE: u32 = 256;
 const MESH_SEGMENTS: u32 = 32;
 const NUM_COLOUR_SEGMENTS: u32 = 6;
+
+/// Restitution of the wheel's collider. Low bounce — it's meant to spin
+/// freely, not bounce off the ground.
+const RESTITUTION: f32 = 0.2;
+/// Friction of the wheel's collider.
+const FRICTION: f32 = 0.5;
 
 #[derive(Deserialize)]
 pub struct PlayWheelDef {
@@ -61,6 +69,17 @@ impl PlayWheelDef {
     pub fn default_hub_height() -> f32 {
         0.4
     }
+
+    /// The one declaration of this wheel's physics. The collider takes the
+    /// coefficients and the material takes the finish they imply, so the two
+    /// cannot drift apart.
+    fn surface(&self) -> PhysicalSurface {
+        PhysicalSurface {
+            restitution: RESTITUTION,
+            friction: FRICTION,
+            density: self.density,
+        }
+    }
 }
 
 impl Spawnable for PlayWheelDef {
@@ -75,19 +94,25 @@ impl Spawnable for PlayWheelDef {
         let top_tex =
             ctx.textures
                 .create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &top_pixels, true)?;
-        let top_mat = ctx.materials.register(Material::textured(top_tex));
+        let top_mat = ctx
+            .materials
+            .register(Material::textured(top_tex).with_derived_finish(self.surface()));
 
         let bot_pixels = generate_wheel_face_texture(seed, true);
         let bot_tex =
             ctx.textures
                 .create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &bot_pixels, true)?;
-        let bot_mat = ctx.materials.register(Material::textured(bot_tex));
+        let bot_mat = ctx
+            .materials
+            .register(Material::textured(bot_tex).with_derived_finish(self.surface()));
 
         let rim_pixels = generate_rim_texture(seed);
         let rim_tex =
             ctx.textures
                 .create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &rim_pixels, true)?;
-        let rim_mat = ctx.materials.register(Material::textured(rim_tex));
+        let rim_mat = ctx
+            .materials
+            .register(Material::textured(rim_tex).with_derived_finish(self.surface()));
 
         Ok(vec![top_mat, bot_mat, rim_mat])
     }
@@ -135,10 +160,8 @@ impl Spawnable for PlayWheelDef {
         let model = Arc::new(Model::flat(parts));
 
         let hull = build_disc_hull(self.radius, half_thickness);
-        let collider = ColliderDesc::convex_hull(Arc::new(hull))
-            .density(self.density)
-            .restitution(0.2)
-            .friction(0.5);
+        let collider =
+            ColliderDesc::convex_hull(Arc::new(hull)).with_physical_surface(self.surface());
 
         let (body_handle, anchor_handle, upright_handle) = {
             let mut physics = world.write_resource::<PhysicsResource>();
