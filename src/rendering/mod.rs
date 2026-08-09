@@ -9,6 +9,7 @@ pub mod descriptors;
 pub mod frame;
 pub mod material;
 pub mod overlay;
+pub mod physical_finish;
 pub mod pipeline;
 pub mod post;
 pub mod renderer;
