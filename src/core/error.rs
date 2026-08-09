@@ -24,6 +24,14 @@ pub enum EngineError {
     /// Swapchain creation or acquisition failed
     Swapchain(String),
 
+    /// The swapchain no longer matches the surface and must be rebuilt.
+    ///
+    /// Separate from `Swapchain` because it is an expected outcome of a resize
+    /// or display change, not a failure: the frame is skipped and the next one
+    /// proceeds. Folding it into the generic variant is what lets a routine
+    /// window event look like a fatal render error.
+    SwapchainOutOfDate,
+
     /// Buffer creation or operation failed
     Buffer {
         operation: BufferOperation,
@@ -120,6 +128,7 @@ impl fmt::Display for EngineError {
             Self::DeviceCreation(msg) => write!(f, "Device creation failed: {}", msg),
             Self::Surface(msg) => write!(f, "Surface error: {}", msg),
             Self::Swapchain(msg) => write!(f, "Swapchain error: {}", msg),
+            Self::SwapchainOutOfDate => write!(f, "Swapchain out of date"),
             Self::Buffer {
                 operation,
                 size,

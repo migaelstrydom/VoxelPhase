@@ -3,6 +3,7 @@ use crate::components::{
     CameraComponent, MaterialModulation, ModelInstance, Orientation, Position, Renderable,
     RigidBodyComponent, Rotation,
 };
+use crate::core::error::{EngineError, EngineResult};
 use crate::debug::{DebugConfig, DebugLines, DebugOverlays};
 use crate::fire::components::OnFire;
 use crate::lighting::ActiveLights;
@@ -178,211 +179,228 @@ impl<'a> System<'a> for RenderSystem {
 
         match begin_frame_result {
             Ok((draw_cb, present_index)) => {
-                // Run fire simulation compute passes before the render pass
-                renderer.simulate_fire(draw_cb, time.delta_seconds(), time.total_seconds());
+                // Recording the frame is separated from ending it. Anything in
+                // here may bail out, but `end_frame` must still run either way:
+                // its submit is what re-signals the draw fence and hands the
+                // swapchain image back to be presented. A bare `return` from
+                // the middle strands both and freezes rendering for good.
+                let recorded = (|| -> EngineResult<()> {
+                    // Run fire simulation compute passes before the render pass
+                    renderer.simulate_fire(draw_cb, time.delta_seconds(), time.total_seconds());
 
-                // Begin the opaque render pass
-                renderer.begin_opaque_pass(draw_cb);
+                    // Begin the opaque render pass
+                    renderer.begin_opaque_pass(draw_cb);
 
-                // Update per-frame scene data (view/projection) once
-                let camera_world_pos = Vector3::new(
-                    camera_data.position.x,
-                    camera_data.position.y,
-                    camera_data.position.z,
-                );
-                if let Err(e) = renderer.update_scene(&view_matrix, &proj_matrix, &camera_world_pos)
-                {
-                    log::error!("RenderSystem: Failed to update scene UBO: {}", e);
-                    return;
-                }
+                    // Update per-frame scene data (view/projection) once
+                    let camera_world_pos = Vector3::new(
+                        camera_data.position.x,
+                        camera_data.position.y,
+                        camera_data.position.z,
+                    );
+                    renderer.update_scene(&view_matrix, &proj_matrix, &camera_world_pos)?;
 
-                if let Err(e) = renderer.update_lights(&active_lights) {
-                    log::error!("RenderSystem: Failed to update light UBO: {}", e);
-                    return;
-                }
+                    renderer.update_lights(&active_lights)?;
 
-                // Update and render sky (before any geometry)
-                renderer.update_sky(time.delta_seconds());
-                if let Err(e) = renderer.render_sky(draw_cb, &view_matrix, &proj_matrix) {
-                    log::error!("RenderSystem: Failed to render sky: {}", e);
-                }
+                    // Update and render sky (before any geometry)
+                    renderer.update_sky(time.delta_seconds());
+                    if let Err(e) = renderer.render_sky(draw_cb, &view_matrix, &proj_matrix) {
+                        log::error!("RenderSystem: Failed to render sky: {}", e);
+                    }
 
-                // Draw terrain
-                if let Some(ref terrain_manager) = terrain_manager_opt {
-                    if terrain_manager.has_geometry() {
-                        let identity = Matrix4::identity();
+                    // Draw terrain
+                    if let Some(ref terrain_manager) = terrain_manager_opt {
+                        if terrain_manager.has_geometry() {
+                            let identity = Matrix4::identity();
 
-                        // Use terrain's texture if set, otherwise fallback to white
-                        let texture = terrain_manager
-                            .texture()
-                            .unwrap_or(material_manager.fallback_texture());
+                            // Use terrain's texture if set, otherwise fallback to white
+                            let texture = terrain_manager
+                                .texture()
+                                .unwrap_or(material_manager.fallback_texture());
 
-                        if let Err(e) = renderer.draw_mesh_with_texture(
-                            draw_cb,
-                            terrain_manager.render_vertices(),
-                            terrain_manager.render_indices(),
-                            &identity,
-                            texture,
-                            SurfaceParams::MATTE,
-                            &texture_manager,
-                        ) {
-                            log::error!("RenderSystem: Failed to draw terrain: {}", e);
+                            if let Err(e) = renderer.draw_mesh_with_texture(
+                                draw_cb,
+                                terrain_manager.render_vertices(),
+                                terrain_manager.render_indices(),
+                                &identity,
+                                texture,
+                                SurfaceParams::MATTE,
+                                &texture_manager,
+                            ) {
+                                log::error!("RenderSystem: Failed to draw terrain: {}", e);
+                            }
                         }
                     }
-                }
 
-                // Draw all model instances (grenades, beach balls, etc.)
-                for (entity, model_instance, pos, _renderable) in
-                    (&entities, &model_instances, &positions, &renderables).join()
-                {
-                    // Prefer 3D orientation (quaternion) if available, fall back to Y-axis rotation
-                    let rotation_matrix = if let Some(orient) = orientations.get(entity) {
-                        orient.0.to_homogeneous()
-                    } else if let Some(rot) = rotations.get(entity) {
-                        Matrix4::from_axis_angle(&Vector3::y_axis(), rot.0)
-                    } else {
-                        Matrix4::identity()
-                    };
+                    // Draw all model instances (grenades, beach balls, etc.)
+                    for (entity, model_instance, pos, _renderable) in
+                        (&entities, &model_instances, &positions, &renderables).join()
+                    {
+                        // Prefer 3D orientation (quaternion) if available, fall back to Y-axis rotation
+                        let rotation_matrix = if let Some(orient) = orientations.get(entity) {
+                            orient.0.to_homogeneous()
+                        } else if let Some(rot) = rotations.get(entity) {
+                            Matrix4::from_axis_angle(&Vector3::y_axis(), rot.0)
+                        } else {
+                            Matrix4::identity()
+                        };
 
-                    let world_matrix = Matrix4::new_translation(&pos.0) * rotation_matrix;
+                        let world_matrix = Matrix4::new_translation(&pos.0) * rotation_matrix;
 
-                    // No animation, use identity transforms
-                    let part_transforms: Vec<Transform> =
-                        vec![Transform::default(); model_instance.model.parts.len()];
+                        // No animation, use identity transforms
+                        let part_transforms: Vec<Transform> =
+                            vec![Transform::default(); model_instance.model.parts.len()];
 
-                    let modulation = material_modulations
-                        .get(entity)
-                        .map(|m| m.0)
-                        .unwrap_or(SurfaceModulation::IDENTITY);
+                        let modulation = material_modulations
+                            .get(entity)
+                            .map(|m| m.0)
+                            .unwrap_or(SurfaceModulation::IDENTITY);
 
-                    if let Err(e) = renderer.draw_model(
+                        if let Err(e) = renderer.draw_model(
+                            draw_cb,
+                            &model_instance.model,
+                            &world_matrix,
+                            &part_transforms,
+                            &material_manager,
+                            &texture_manager,
+                            modulation,
+                        ) {
+                            log::error!("RenderSystem: Failed to draw model: {}", e);
+                        }
+                    }
+
+                    // Draw all biped controllers
+                    // Note: Characters use world-space vertex positions
+                    // (skeleton positions are already in world coords), so we use identity transform.
+                    for (controller, _pos, _rot, _renderable) in
+                        (&mut biped_controllers, &positions, &rotations, &renderables).join()
+                    {
+                        let identity = Matrix4::identity();
+
+                        // Get mesh from the controller (regenerates if dirty)
+                        let (vertices, indices) = controller.mesh();
+
+                        if let Err(e) = renderer.draw_procedural_mesh(
+                            draw_cb,
+                            vertices,
+                            indices,
+                            &identity,
+                            &material_manager,
+                            &texture_manager,
+                        ) {
+                            log::error!("RenderSystem: Failed to draw biped character: {}", e);
+                        }
+                    }
+
+                    // Render opaque debug overlay shapes (spheres, lines)
+                    if let Err(e) = render_debug_overlays_opaque(
+                        &mut renderer,
                         draw_cb,
-                        &model_instance.model,
-                        &world_matrix,
-                        &part_transforms,
+                        &debug_overlays,
                         &material_manager,
                         &texture_manager,
-                        modulation,
                     ) {
-                        log::error!("RenderSystem: Failed to draw model: {}", e);
+                        log::error!("RenderSystem: Failed to draw debug overlays: {}", e);
                     }
-                }
 
-                // Draw all biped controllers
-                // Note: Characters use world-space vertex positions
-                // (skeleton positions are already in world coords), so we use identity transform.
-                for (controller, _pos, _rot, _renderable) in
-                    (&mut biped_controllers, &positions, &rotations, &renderables).join()
-                {
-                    let identity = Matrix4::identity();
+                    // End opaque pass, blit to swapchain, begin transparent pass.
+                    renderer.begin_transparent_pass(draw_cb, present_index);
 
-                    // Get mesh from the controller (regenerates if dirty)
-                    let (vertices, indices) = controller.mesh();
+                    // Render water surface (after geometry, before particles)
+                    if let (Some(ref water_grid), Some(ref wave_grid)) =
+                        (&water_grid_opt, &wave_grid_opt)
+                    {
+                        let camera_pos = Vector3::new(
+                            camera_data.position.x,
+                            camera_data.position.y,
+                            camera_data.position.z,
+                        );
+                        if let Err(e) = renderer.render_water(
+                            draw_cb,
+                            water_grid,
+                            wave_grid,
+                            &view_matrix,
+                            &proj_matrix,
+                            &camera_pos,
+                            time.total_seconds(),
+                        ) {
+                            log::error!("RenderSystem: Failed to render water: {}", e);
+                        }
+                    }
 
-                    if let Err(e) = renderer.draw_procedural_mesh(
+                    // Render fire volumes (after water, before particles)
+                    {
+                        let camera_pos = Vector3::new(
+                            camera_data.position.x,
+                            camera_data.position.y,
+                            camera_data.position.z,
+                        );
+                        renderer.render_fire(draw_cb, &view_matrix, &proj_matrix, &camera_pos);
+                    }
+
+                    // Render transparent debug overlay shapes (triangles)
+                    if let Err(e) = render_debug_overlays_transparent(
+                        &mut renderer,
                         draw_cb,
-                        vertices,
-                        indices,
-                        &identity,
+                        &debug_overlays,
                         &material_manager,
                         &texture_manager,
                     ) {
-                        log::error!("RenderSystem: Failed to draw biped character: {}", e);
+                        log::error!(
+                            "RenderSystem: Failed to draw transparent debug overlays: {}",
+                            e
+                        );
                     }
-                }
 
-                // Render opaque debug overlay shapes (spheres, lines)
-                if let Err(e) = render_debug_overlays_opaque(
-                    &mut renderer,
-                    draw_cb,
-                    &debug_overlays,
-                    &material_manager,
-                    &texture_manager,
-                ) {
-                    log::error!("RenderSystem: Failed to draw debug overlays: {}", e);
-                }
-
-                // End opaque pass, blit to swapchain, begin transparent pass.
-                renderer.begin_transparent_pass(draw_cb, present_index);
-
-                // Render water surface (after geometry, before particles)
-                if let (Some(ref water_grid), Some(ref wave_grid)) =
-                    (&water_grid_opt, &wave_grid_opt)
-                {
-                    let camera_pos = Vector3::new(
-                        camera_data.position.x,
-                        camera_data.position.y,
-                        camera_data.position.z,
-                    );
-                    if let Err(e) = renderer.render_water(
+                    // Render particles (after models, before overlay)
+                    if let Err(e) = renderer.render_particles(
                         draw_cb,
-                        water_grid,
-                        wave_grid,
+                        &particle_pool,
                         &view_matrix,
                         &proj_matrix,
-                        &camera_pos,
-                        time.total_seconds(),
                     ) {
-                        log::error!("RenderSystem: Failed to render water: {}", e);
+                        log::error!("RenderSystem: Failed to render particles: {}", e);
                     }
+
+                    // Add FPS and fire count to debug lines
+                    if debug_config.show_fps {
+                        let fps = 1.0 / time.delta_seconds();
+                        debug_lines.add("FPS", format!("{:.0}", fps));
+                    }
+                    if debug_config.show_cpu_ms {
+                        debug_lines.add("CPU ms", format!("{:.2}", self.cpu_ms_ema));
+                    }
+                    // if !renderer.active_fires.is_empty() {
+                    //     let fire_count = renderer.active_fires.len();
+                    //     let mut slot_counts = [0usize; crate::fire::renderer::SIM_POOL_SIZE];
+                    //     for (_, f) in &renderer.active_fires {
+                    //         slot_counts[f.sim_slot] += 1;
+                    //     }
+                    //     let active_slots = slot_counts.iter().filter(|&&c| c > 0).count();
+                    //     debug_lines.add("Fires", format!("{} ({} slots)", fire_count, active_slots));
+                    // }
+
+                    // Render debug overlay (cleared in app.rs after all systems complete)
+                    if let Err(e) = renderer.render_overlay(draw_cb, debug_lines.iter()) {
+                        log::error!("RenderSystem: Failed to render overlay: {}", e);
+                    }
+
+                    Ok(())
+                })();
+
+                if let Err(e) = recorded {
+                    log::error!("RenderSystem: frame recording aborted: {}", e);
                 }
 
-                // Render fire volumes (after water, before particles)
-                {
-                    let camera_pos = Vector3::new(
-                        camera_data.position.x,
-                        camera_data.position.y,
-                        camera_data.position.z,
-                    );
-                    renderer.render_fire(draw_cb, &view_matrix, &proj_matrix, &camera_pos);
-                }
-
-                // Render transparent debug overlay shapes (triangles)
-                if let Err(e) = render_debug_overlays_transparent(
-                    &mut renderer,
-                    draw_cb,
-                    &debug_overlays,
-                    &material_manager,
-                    &texture_manager,
-                ) {
-                    log::error!(
-                        "RenderSystem: Failed to draw transparent debug overlays: {}",
-                        e
-                    );
-                }
-
-                // Render particles (after models, before overlay)
-                if let Err(e) =
-                    renderer.render_particles(draw_cb, &particle_pool, &view_matrix, &proj_matrix)
-                {
-                    log::error!("RenderSystem: Failed to render particles: {}", e);
-                }
-
-                // Add FPS and fire count to debug lines
-                if debug_config.show_fps {
-                    let fps = 1.0 / time.delta_seconds();
-                    debug_lines.add("FPS", format!("{:.0}", fps));
-                }
-                if debug_config.show_cpu_ms {
-                    debug_lines.add("CPU ms", format!("{:.2}", self.cpu_ms_ema));
-                }
-                // if !renderer.active_fires.is_empty() {
-                //     let fire_count = renderer.active_fires.len();
-                //     let mut slot_counts = [0usize; crate::fire::renderer::SIM_POOL_SIZE];
-                //     for (_, f) in &renderer.active_fires {
-                //         slot_counts[f.sim_slot] += 1;
-                //     }
-                //     let active_slots = slot_counts.iter().filter(|&&c| c > 0).count();
-                //     debug_lines.add("Fires", format!("{} ({} slots)", fire_count, active_slots));
-                // }
-
-                // Render debug overlay (cleared in app.rs after all systems complete)
-                if let Err(e) = renderer.render_overlay(draw_cb, debug_lines.iter()) {
-                    log::error!("RenderSystem: Failed to render overlay: {}", e);
-                }
-
-                if let Err(e) = renderer.end_frame(draw_cb, present_index) {
-                    log::error!("RenderSystem: Failed to end_frame: {}", e);
+                // Runs whether or not recording completed.
+                match renderer.end_frame(draw_cb, present_index) {
+                    Ok(()) => {}
+                    // A resize or display change invalidated the swapchain
+                    // mid-frame. Expected, and recovered by the rebuild on the
+                    // next acquire — not worth an error line.
+                    Err(EngineError::SwapchainOutOfDate) => {
+                        log::debug!("RenderSystem: swapchain out of date on present");
+                    }
+                    Err(e) => log::error!("RenderSystem: Failed to end_frame: {}", e),
                 }
 
                 if let Some(start) = frame_start.0 {
@@ -396,6 +414,9 @@ impl<'a> System<'a> for RenderSystem {
                         self.cpu_ms_ema * (1.0 - alpha) + cpu_ms * alpha
                     };
                 }
+            }
+            Err(EngineError::SwapchainOutOfDate) => {
+                log::debug!("RenderSystem: swapchain out of date on acquire, skipping frame");
             }
             Err(e) => {
                 log::error!("RenderSystem: Failed to begin_frame: {}", e);

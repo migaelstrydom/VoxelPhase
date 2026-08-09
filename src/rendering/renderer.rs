@@ -308,15 +308,24 @@ impl Renderer {
     /// start the command buffer. Call `begin_opaque_pass()` after any pre-pass
     /// compute work (e.g. fire simulation) is recorded.
     pub fn begin_frame(&mut self) -> EngineResult<(vk::CommandBuffer, u32)> {
-        // Wait for previous frame to complete
-        self.targets.sync.wait_and_reset()?;
+        // Wait for previous frame to complete. The fence is *not* reset here —
+        // `end_frame` resets it immediately before the submit that re-signals
+        // it, so a frame abandoned in between leaves it signalled rather than
+        // stranding every later frame on a signal that never arrives.
+        self.targets.sync.wait()?;
 
         // Now that the GPU is done with previous frames, flush deferred deletions
         self.frame_data.begin_frame();
 
-        let frame = self.output.acquire(&self.targets.sync)?;
-        let image_index = frame.index;
-        self.current_frame = Some(frame);
+        // Everything fallible that costs nothing to redo goes first, so the
+        // acquire is the last step that can fail. An acquired swapchain image
+        // has to be handed back by a present; if a later step in here failed we
+        // would be holding one with no way to return it, and after a few frames
+        // the acquire would block on an exhausted pool.
+        //
+        // Both command buffers may still be recording from a frame that was
+        // abandoned mid-flight. `begin` implicitly resets them (the pool is
+        // created with RESET_COMMAND_BUFFER), so that state is self-healing.
 
         // The shadow pass records into its own command buffer, filled by the
         // same draw calls that fill the geometry one. Opening it here means a
@@ -327,6 +336,10 @@ impl Renderer {
         self.targets
             .draw_command_buffer
             .begin(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)?;
+
+        let frame = self.output.acquire(&self.targets.sync)?;
+        let image_index = frame.index;
+        self.current_frame = Some(frame);
 
         let cb = self.targets.draw_command_buffer.raw();
 
@@ -1018,6 +1031,8 @@ impl Renderer {
         let wait: Vec<vk::Semaphore> = frame.wait.into_iter().collect();
         let signal: Vec<vk::Semaphore> = frame.signal.into_iter().collect();
         let wait_stages = vec![vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT; wait.len()];
+
+        self.targets.sync.reset()?;
 
         // The shadow map goes first: the geometry pass samples it, and the
         // ordering plus the shadow pass's own external dependency are what make

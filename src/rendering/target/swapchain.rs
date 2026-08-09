@@ -233,15 +233,21 @@ impl FrameOutput for SwapchainOutput {
 
     fn acquire(&self, sync: &FrameSync) -> EngineResult<AcquiredFrame> {
         unsafe {
-            let (index, _suboptimal) = self
-                .loader
-                .acquire_next_image(
-                    self.handle,
-                    u64::MAX,
-                    sync.present_complete,
-                    vk::Fence::null(),
-                )
-                .map_err(|e| EngineError::Swapchain(format!("acquire image: {:?}", e)))?;
+            // A suboptimal image still presents correctly, so it is drawn to
+            // rather than discarded; only an outright out-of-date swapchain
+            // needs the frame skipped.
+            let (index, _suboptimal) = match self.loader.acquire_next_image(
+                self.handle,
+                u64::MAX,
+                sync.present_complete,
+                vk::Fence::null(),
+            ) {
+                Ok(pair) => pair,
+                Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
+                    return Err(EngineError::SwapchainOutOfDate)
+                }
+                Err(e) => return Err(EngineError::Swapchain(format!("acquire image: {:?}", e))),
+            };
 
             Ok(AcquiredFrame {
                 index,
@@ -262,9 +268,13 @@ impl FrameOutput for SwapchainOutput {
             .image_indices(&indices);
 
         unsafe {
-            self.loader
-                .queue_present(queue, &present_info)
-                .map_err(|e| EngineError::Swapchain(format!("present: {:?}", e)))?;
+            match self.loader.queue_present(queue, &present_info) {
+                Ok(_) => {}
+                Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
+                    return Err(EngineError::SwapchainOutOfDate)
+                }
+                Err(e) => return Err(EngineError::Swapchain(format!("present: {:?}", e))),
+            }
         }
 
         Ok(())
