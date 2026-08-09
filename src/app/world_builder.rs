@@ -10,7 +10,7 @@ use crate::components::{
 };
 use crate::core::error::EngineResult;
 use crate::creature::{Brain, Perception, Roller};
-use crate::damage::{DamageQueue, Dead, Health, LastVelocity, Ragdoll};
+use crate::damage::{DamageConfig, DamageQueue, Dead, Health, LastVelocity, Ragdoll};
 use crate::debug::{DebugConfig, DebugLines, DebugLog, DebugOverlays};
 use crate::explosion::Explosion;
 use crate::fire::components::{Flammable, OnFire};
@@ -128,6 +128,7 @@ impl WorldBuilder {
         self.world.insert(DebugLines::default());
         self.world.insert(DebugLog::default());
         self.world.insert(DebugOverlays::default());
+        self.world.insert(DamageConfig::default());
         self.world.insert(GrenadeConfig::default());
         self.world.insert(GrenadeCooldown::default());
         self.world.insert(ParticleConfig::new());

@@ -18,12 +18,14 @@
 //! the queue and changing nothing else.
 
 mod apply;
+mod config;
 mod death;
 mod event;
 mod health;
 mod sources;
 
 pub use apply::DamageApplySystem;
+pub use config::DamageConfig;
 pub use death::{DeathSystem, Ragdoll};
 pub use event::{DamageEvent, DamageKind, DamageQueue};
 pub use health::{Dead, Health};
