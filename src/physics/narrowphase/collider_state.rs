@@ -20,9 +20,23 @@ pub(super) struct ColliderState {
     pub velocity: Vector3<f32>,
     pub material: ColliderMaterial,
     pub is_sleeping: bool,
+    /// Whether the owning body is static. Static bodies take part in contacts
+    /// but never initiate them.
+    pub is_static: bool,
 }
 
 impl ColliderState {
+    /// Whether this collider can move during the coming step.
+    ///
+    /// Static bodies never move; sleeping bodies will not until something wakes
+    /// them, and are not integrated meanwhile. A pair in which neither side can
+    /// move cannot produce a contact that did not already exist, so the
+    /// broadphase skips it — the same reasoning by which the static-geometry
+    /// pass skips sleeping bodies outright.
+    pub fn is_mobile(&self) -> bool {
+        !self.is_static && !self.is_sleeping
+    }
+
     /// World-space AABB of this collider, expanded by `margin`.
     ///
     /// Delegates to [`ShapeView::query_aabb`], which bounds boxes and capsules
@@ -45,7 +59,12 @@ impl ColliderState {
     }
 }
 
-/// Snapshot every collider eligible for dynamic pair contacts.
+/// Snapshot every collider eligible for pair contacts.
+///
+/// Static bodies are included. They are distinct from the static *geometry*
+/// that `StaticGeometry` supplies — a static body is an ordinary collider that
+/// happens to have infinite mass, and dynamic bodies must be able to rest on
+/// one. Being immobile, they can only ever be the passive side of a pair.
 pub(super) fn collect_collider_states_into(
     states: &mut Vec<ColliderState>,
     bodies: &Arena<RigidBody>,
@@ -53,9 +72,6 @@ pub(super) fn collect_collider_states_into(
     sleeping: Option<&FxHashSet<RigidBodyHandle>>,
 ) {
     for (idx, body) in bodies.iter() {
-        if body.is_static() {
-            continue;
-        }
         let body_handle = RigidBodyHandle(idx);
         let is_sleeping = sleeping.map(|s| s.contains(&body_handle)).unwrap_or(false);
 
@@ -73,6 +89,7 @@ pub(super) fn collect_collider_states_into(
                 velocity: body.linear_velocity(),
                 material: *collider.material(),
                 is_sleeping,
+                is_static: body.is_static(),
             });
         }
     }
@@ -94,7 +111,21 @@ mod tests {
             velocity: Vector3::zeros(),
             material: ColliderMaterial::default(),
             is_sleeping: false,
+            is_static: false,
         }
+    }
+
+    #[test]
+    fn static_and_sleeping_colliders_are_immobile() {
+        let mut state = slab();
+        assert!(state.is_mobile());
+
+        state.is_static = true;
+        assert!(!state.is_mobile());
+
+        state.is_static = false;
+        state.is_sleeping = true;
+        assert!(!state.is_mobile());
     }
 
     /// The pendulum-arm case: an axis-aligned slab must not be bounded by its

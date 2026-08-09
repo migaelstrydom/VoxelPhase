@@ -2690,3 +2690,140 @@ impl PhysicsBenchScenario for GrenadeSpeedWallCcdScenario {
         8.0 / 240.0
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Scenarios: static rigid bodies
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Dynamic sphere dropped onto a static rigid body, with no terrain at all.
+///
+/// A static body is not level geometry — it is an ordinary collider of infinite
+/// mass, and must therefore be reachable through the body-vs-body narrowphase.
+/// `EmptyGeometry` removes every other means of support, so the sphere comes to
+/// rest only if the static body is genuinely solid.
+#[derive(Debug, Clone)]
+pub struct SphereOnStaticBodyScenario {
+    pub restitution: f32,
+    /// Top surface of the static platform.
+    pub platform_top: f32,
+    geometry: EmptyGeometry,
+}
+
+impl SphereOnStaticBodyScenario {
+    pub fn new(restitution: f32) -> Self {
+        Self {
+            restitution,
+            platform_top: 1.0,
+            geometry: EmptyGeometry,
+        }
+    }
+}
+
+impl PhysicsBenchScenario for SphereOnStaticBodyScenario {
+    fn name(&self) -> &'static str {
+        "sphere_on_static_body"
+    }
+
+    fn restitution(&self) -> f32 {
+        self.restitution
+    }
+
+    fn setup(&self, world: &mut PhysicsWorld) -> RigidBodyHandle {
+        let platform_half = Vector3::new(2.0, 0.5, 2.0);
+        let platform = world.create_body(RigidBodyDesc::static_body().position(Point3::new(
+            0.0,
+            self.platform_top - platform_half.y,
+            0.0,
+        )));
+        let _ = world.attach_collider(
+            platform,
+            ColliderDesc::box_shape(platform_half)
+                .density(1000.0)
+                .restitution(self.restitution)
+                .friction(0.5),
+        );
+
+        let radius = 0.4;
+        let sphere = world.create_body(RigidBodyDesc::dynamic().position(Point3::new(
+            0.0,
+            self.platform_top + 1.5,
+            0.0,
+        )));
+        let _ = world.attach_collider(
+            sphere,
+            ColliderDesc::sphere(radius)
+                .density(1000.0)
+                .restitution(self.restitution)
+                .friction(0.5),
+        );
+
+        sphere
+    }
+
+    fn geometry(&self) -> &dyn StaticGeometry {
+        &self.geometry
+    }
+}
+
+/// Dynamic box resting on a static body that is itself resting on terrain.
+///
+/// Shock propagation must treat the static body as ground rather than as a
+/// stackable node, or the box is ordered as if its support were itself
+/// supported and the stack solves in the wrong sequence.
+#[derive(Debug, Clone)]
+pub struct BoxOnStaticPlatformScenario {
+    pub restitution: f32,
+    geometry: FlatQuadGeometry,
+}
+
+impl BoxOnStaticPlatformScenario {
+    pub fn new(restitution: f32) -> Self {
+        Self {
+            restitution,
+            geometry: FlatQuadGeometry::new(20.0),
+        }
+    }
+}
+
+impl PhysicsBenchScenario for BoxOnStaticPlatformScenario {
+    fn name(&self) -> &'static str {
+        "box_on_static_platform"
+    }
+
+    fn restitution(&self) -> f32 {
+        self.restitution
+    }
+
+    fn setup(&self, world: &mut PhysicsWorld) -> RigidBodyHandle {
+        let platform_half = Vector3::new(2.0, 0.5, 2.0);
+        let platform =
+            world.create_body(RigidBodyDesc::static_body().position(Point3::new(0.0, 0.5, 0.0)));
+        let _ = world.attach_collider(
+            platform,
+            ColliderDesc::box_shape(platform_half)
+                .density(1000.0)
+                .restitution(self.restitution)
+                .friction(0.6),
+        );
+
+        let box_half = Vector3::new(0.4, 0.4, 0.4);
+        let body = world.create_body(RigidBodyDesc::dynamic().position(Point3::new(
+            0.0,
+            1.0 + box_half.y + 0.01,
+            0.0,
+        )));
+        let _ = world.attach_collider(
+            body,
+            ColliderDesc::box_shape(box_half)
+                .density(1000.0)
+                .restitution(self.restitution)
+                .friction(0.6),
+        );
+
+        body
+    }
+
+    fn geometry(&self) -> &dyn StaticGeometry {
+        &self.geometry
+    }
+}

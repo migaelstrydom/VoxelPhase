@@ -1,4 +1,4 @@
-//! Unified narrowphase contact generation for all dynamic-vs-dynamic collider pairs.
+//! Unified narrowphase contact generation for all body-vs-body collider pairs.
 
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -95,7 +95,12 @@ impl GjkCacheMap {
     }
 }
 
-/// Generate contacts between all pairs of non-static colliders.
+/// Generate contacts between all pairs of body colliders.
+///
+/// Covers dynamic, kinematic and static bodies alike; a static body is an
+/// ordinary collider of infinite mass, and only pairs where *neither* side can
+/// move are skipped. Static level *geometry* is a separate concern, handled by
+/// [`generate_static_contacts`](super::generate_static_contacts).
 ///
 /// Uses sort-and-sweep broadphase on the axis of greatest positional spread
 /// to prune pairs before narrowphase dispatch. Manifolds are appended to `buf`,
@@ -259,7 +264,7 @@ fn sweep_and_prune_into(
                 break;
             }
 
-            if states[i].is_sleeping && states[j].is_sleeping {
+            if !states[i].is_mobile() && !states[j].is_mobile() {
                 continue;
             }
 

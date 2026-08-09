@@ -49,6 +49,19 @@ impl RigidBodyDesc {
         Self::default()
     }
 
+    /// A body that never moves and is never moved.
+    ///
+    /// Distinct from the static *geometry* supplied by `StaticGeometry`: this
+    /// is an ordinary collider that happens to have infinite mass, so it takes
+    /// part in the body-vs-body narrowphase and can support dynamic bodies.
+    /// Use it for immovable props; use `StaticGeometry` for the level itself.
+    pub fn static_body() -> Self {
+        Self {
+            body_type: BodyType::Static,
+            ..Self::default()
+        }
+    }
+
     pub fn position(mut self, position: Point3<f32>) -> Self {
         self.position = position;
         self

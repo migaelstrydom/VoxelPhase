@@ -165,11 +165,30 @@ impl ContactGraph {
         for manifold in manifolds {
             let header = &manifold.header;
 
-            if header.body_a.is_none() {
-                // body_b touches static geometry → depth 0
-                if !self.depth.contains_key(&header.body_b) {
-                    self.depth.insert(header.body_b, 0);
-                    self.bfs_queue.push_back(header.body_b);
+            // Anything immovable is ground: static geometry (no body_a) and
+            // static bodies alike. A static body must seed depth 0 rather than
+            // become a node, or a stack resting on one would be ordered as if
+            // its base were itself supported by something. Shape-type ordering
+            // can place a static body on either side, so check both.
+            let is_ground = |handle: Option<RigidBodyHandle>| match handle {
+                None => true,
+                Some(h) => bodies.get(h.0).is_some_and(|b| b.is_static()),
+            };
+            let ground_a = is_ground(header.body_a);
+            let ground_b = is_ground(Some(header.body_b));
+
+            if ground_a || ground_b {
+                let supported = if ground_a {
+                    Some(header.body_b)
+                } else {
+                    header.body_a
+                };
+                // Both sides immovable: nothing to order.
+                if let Some(handle) = supported.filter(|_| ground_a != ground_b) {
+                    if !self.depth.contains_key(&handle) {
+                        self.depth.insert(handle, 0);
+                        self.bfs_queue.push_back(handle);
+                    }
                 }
                 continue;
             }
