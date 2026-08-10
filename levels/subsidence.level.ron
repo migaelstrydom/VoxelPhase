@@ -1,0 +1,315 @@
+// Subsidence — an abandoned bench quarry that the ground gave way beneath.
+//
+// Designed against what this engine is actually good at, rather than against a
+// wishlist:
+//
+//   * Marching cubes cannot make a sharp riser, so nothing here asks the player
+//     to walk up authored steps. Every climb is a 2 m bench-to-bench hop, which
+//     is inside the 2.5 m standing-jump apex in both directions — the descent is
+//     never one-way.
+//   * Segments join across gaps, not welds, so the gaps are the fiction: the
+//     plain has calved. `spoil_block` is *meant* to hang detached in the void.
+//   * Rectangles are the honest primitive for a `Plateau`, so the level is a
+//     quarry, where rectangular benches are what the ground is supposed to look
+//     like. The blobby parts — the sump, the pillars, the undercroft — are the
+//     parts the quarrymen didn't cut.
+//
+//     spoil_block ◀──5 m── pit_rim ──5 m──▶ undercroft
+//        (north)            (root)            (east)
+//
+// The arc: you crest a rise on the plain, the quarry opens in front of you, you
+// work down five benches to a flooded sump, and the pit's east wall is broken
+// open onto an adit that runs into a lit chamber under the butte.
+Level(
+    name: "Subsidence",
+
+    segments: [
+        // ── Root. Plain to the west, quarry cut into the east half, its floor
+        //    broken open on the +x face. 1 m voxels: this is landscape, and
+        //    landscape is the one thing marching cubes is right about.
+        (
+            name: "pit_rim",
+
+            terrain: Terrain(
+                voxel_size: 1.0,
+                bounds: (min: (0.0, -32.0, 0.0), max: (96.0, 32.0, 96.0)),
+                base_height: 12.0,
+                material_layers: [
+                    (depth: 1.0,   material: Grass),
+                    (depth: 3.0,   material: Dirt),
+                    (depth: 999.0, material: Rock),
+                ],
+
+                // Roughness first, so the benches laid over it come out flat.
+                // A quarry bench that undulates is a quarry bench nobody cut.
+                features: [
+                    TerrainRoughness(frequency: 0.05, amplitude: 1.0, octaves: 3, seed: 17),
+
+                    // The rise you come over. The quarry is hidden behind it
+                    // from the spawn, so the pit is a reveal rather than a view.
+                    Hill(center: (16.0, 76.0), radius: 22.0, height: 6.0),
+
+                    // A cut pad under the gate. Roughness leaves the plain a
+                    // quarter of a metre off round numbers, and stacked masonry
+                    // wants a flat footing rather than a nominal one.
+                    Plateau(min: (40.0, 40.0), max: (48.0, 48.0), height: 11.5),
+
+                    // Five benches, 6 m wide, 2 m apart. Nested rectangles
+                    // applied outward-in; each one sets an absolute height, so
+                    // the last to mention a column wins.
+                    Plateau(min: (48.0, 18.0), max: (108.0, 78.0), height: 10.0),
+                    Plateau(min: (54.0, 24.0), max: (102.0, 72.0), height:  8.0),
+                    Plateau(min: (60.0, 30.0), max: ( 96.0, 66.0), height:  6.0),
+                    Plateau(min: (66.0, 36.0), max: ( 90.0, 60.0), height:  4.0),
+                    // The floor. Runs off the +x bound on purpose: that opening
+                    // is the adit mouth, and the anchor sits in it.
+                    Plateau(min: (70.0, 40.0), max: (108.0, 56.0), height:  2.0),
+
+                    // The sump, 4 m below the floor and flooded to within half a
+                    // metre of it.
+                    Plateau(min: (74.0, 44.0), max: ( 84.0, 54.0), height: -2.0),
+
+                    // The haul road: one continuous walk from rim to floor, cut
+                    // diagonally across the benches. 8 m of drop over 30 m of
+                    // run is about 15°, which the player walks without jumping.
+                    // Everything else in the pit is a hop; this is the way down
+                    // for anyone carrying something.
+                    Ramp(
+                        from: (50.0, 26.0),
+                        to: (72.0, 44.0),
+                        start_height: 10.0,
+                        end_height: 2.0,
+                        width: 9.0,
+                    ),
+                ],
+
+                volumes: [
+                    // Two columns the quarrymen left standing. Both are solid
+                    // terrain, so both come down to a grenade — the tall one
+                    // overtops the rim and is the level's landmark.
+                    Pillar(center: (74.0, 62.0), height: 18.0, radius: 3.0),
+                    Pillar(center: (88.0, 46.0), height: 12.0, radius: 2.5),
+
+                ],
+            ),
+
+            anchors: [
+                // In the broken-open east wall, on the quarry floor.
+                (name: "adit", pos: (96.0, 2.0, 48.0), yaw: 0.0),
+                // −z face at plain level. A quarter turn maps local +X to −Z.
+                (name: "north_rim", pos: (48.0, 12.0, 0.0), yaw: 90.0),
+            ],
+
+            objects: [
+                // --- The plain -------------------------------------------
+                Menhir(pos: (20.0, 30.0)),
+                Menhir(pos: (26.0, 35.0)),
+                FencePost(pos: (34.0, 24.0)),
+                FencePost(pos: (38.0, 28.0)),
+                FencePost(pos: (42.0, 32.0)),
+                Trilithon(pos: (30.0, 12.0, 52.0), yaw: 90.0),
+                // The gate you walk through just as the pit opens up. Its only
+                // job is to frame the reveal.
+                VoussoirArch(base: (44.0, 11.5, 44.0)),
+
+                // --- The benches -----------------------------------------
+                // Dressed blocks stacked at the rim, still waiting on a cart.
+                BoxWall(
+                    base: (58.0, 10.0, 22.0),
+                    box_half_extents: (1.0, 0.5, 0.5),
+                    columns: 5,
+                    rows: 3,
+                    density: 400.0,
+                    stagger: true,
+                ),
+                Stack(
+                    base: (66.0, 8.0, 28.0),
+                    items: [Crate(size: 1.0), Crate(size: 1.0), Crate(size: 0.6)],
+                ),
+                Tower(base: (72.0, 6.0, 34.0), box_half_extents: (0.5, 0.5, 0.5), count: 6),
+                Domino(base: (62.0, 6.0, 62.0), direction: (1.0, 0.0), count: 12),
+                Jenga(base: (84.0, 4.0, 38.0)),
+
+                // On top of the tall pillar, 18 m up: past any jump, past the
+                // trampoline, and with no route to it. The pillar is terrain,
+                // so the way up is to take the way up down — one grenade at the
+                // base and the whole column comes over. The level's one thing
+                // that can only be solved by breaking something.
+                Stack(
+                    base: (74.0, 18.0, 62.0),
+                    items: [Crate(size: 0.6), Crate(size: 0.6)],
+                ),
+                GlowingOrb(pos: (76.0, 18.5, 60.0), colour: Some((0.4, 1.0, 0.6)), glow: Some(2.6)),
+
+                // --- The floor and the sump -------------------------------
+                Trampoline(pos: (72.0, 2.0, 50.0)),
+                Dolos(pos: (80.0, 2.0, 40.0)),
+                BeachBall(pos: (79.0, 3.0, 49.0)),
+                Crate(pos: (77.0, 2.0, 46.0), size: 0.5),
+                GlowingOrb(pos: (74.0, 2.5, 52.0), colour: Some((1.0, 0.45, 0.15)), glow: Some(2.2)),
+                // Marks the adit mouth from the far rim.
+                GlowingOrb(pos: (93.0, 2.5, 48.0), colour: Some((0.4, 0.7, 1.0)), glow: Some(2.0)),
+            ],
+        ),
+
+        // ── A slab of the old plain that broke off and did not fall. Half-metre
+        //    voxels, because it is small and read close up. The only way on is a
+        //    5 m leap from the north rim, and the only way back is the same leap
+        //    or the trampoline.
+        (
+            name: "spoil_block",
+
+            terrain: Terrain(
+                voxel_size: 0.5,
+                bounds: (min: (0.0, -16.0, 0.0), max: (32.0, 16.0, 32.0)),
+                base_height: 6.0,
+                material_layers: [
+                    (depth: 0.5,   material: Grass),
+                    (depth: 999.0, material: Rock),
+                ],
+                features: [
+                    TerrainRoughness(frequency: 0.08, amplitude: 0.5, octaves: 3, seed: 61),
+                    // A shallow dish, so the block holds what is on it instead
+                    // of shedding it over the edge.
+                    Crater(center: (16.0, 16.0), radius: 11.0, depth: 1.5),
+                    // Flat footing for the trilithon, for the same reason as the
+                    // gate pad: the dish floor is nowhere near a round number.
+                    Plateau(min: (11.0, 11.0), max: (21.0, 21.0), height: 4.3),
+                ],
+            ),
+
+            anchors: [
+                // The broken face, pointing back at the rim it came off.
+                (name: "break_face", pos: (0.0, 6.0, 16.0), yaw: 180.0),
+            ],
+
+            objects: [
+                Trilithon(pos: (16.0, 4.3, 16.0), yaw: 0.0),
+                GlowingOrb(pos: (16.0, 5.5, 16.0), colour: Some((1.0, 0.85, 0.5)), glow: Some(2.4)),
+                Menhir(pos: (9.0, 10.0)),
+                Menhir(pos: (23.0, 22.0)),
+                // The ride home.
+                Trampoline(pos: (24.0, 6.0, 8.0)),
+            ],
+        ),
+
+        // ── Under the butte east of the quarry. An adit at floor level runs in
+        //    to a chamber with a light well punched through its roof — the one
+        //    place in the level lit from above rather than by the sun on open
+        //    ground.
+        (
+            name: "undercroft",
+
+            terrain: Terrain(
+                voxel_size: 0.5,
+                bounds: (min: (0.0, -16.0, 0.0), max: (64.0, 32.0, 64.0)),
+                base_height: 22.0,
+                material_layers: [
+                    (depth: 1.0,   material: Grass),
+                    (depth: 4.0,   material: Dirt),
+                    (depth: 999.0, material: Rock),
+                ],
+                features: [
+                    TerrainRoughness(frequency: 0.06, amplitude: 1.2, octaves: 3, seed: 83),
+                ],
+
+                volumes: [
+                    // The adit. Its west end runs past the bound, so the bore
+                    // opens on the face the player jumps to.
+                    Tunnel(
+                        center: (16.0, 32.0),
+                        direction: (1.0, 0.0),
+                        length: 40.0,
+                        radius: 4.0,
+                        depth: 8.0,
+                    ),
+
+                    // The chamber. Carved rather than authored, because a cave
+                    // is exactly the case where marching cubes' blobbiness is
+                    // the correct answer.
+                    Caves(
+                        frequency: 0.07,
+                        octaves: 4,
+                        seed: 91,
+                        depth_curve: [
+                            (depth: 0.0,  threshold: 0.98),
+                            (depth: 6.0,  threshold: 0.75),
+                            (depth: 12.0, threshold: 0.30),
+                            (depth: 18.0, threshold: 0.35),
+                            (depth: 24.0, threshold: 0.95),
+                        ],
+                        region: Some(CaveRegion(
+                            center: (44.0, 8.0, 32.0),
+                            radius: 14.0,
+                            falloff: 8.0,
+                        )),
+                        material_layers: [
+                            (depth: 0.5,   material: Ite),
+                            (depth: 3.0,   material: Limestone),
+                            (depth: 999.0, material: Slate),
+                        ],
+                        floor_bias: 0.2,
+                    ),
+
+                    // The light well: a bore straight up out of the chamber roof
+                    // and through the top of the butte. No ledge — it is a hole
+                    // for the sun, not a route.
+                    Shaft(
+                        center: (44.0, 32.0),
+                        from_y: 6.0,
+                        to_y: 24.0,
+                        radius: 5.0,
+                        ledge: None,
+                        material: Limestone,
+                    ),
+
+                    // A plinth under the light well, added after the carve so
+                    // the caves do not eat it.
+                    Island(
+                        center: (44.0, 4.0, 32.0),
+                        half_extents: (8.0, 2.0, 8.0),
+                        edge_noise: 0.4,
+                    ),
+                ],
+            ),
+
+            anchors: [
+                // The adit mouth on the −x face, facing back at the quarry.
+                (name: "adit_mouth", pos: (0.0, 4.0, 32.0), yaw: 180.0),
+            ],
+
+            objects: [
+                // Nothing terrain-anchored in here: Menhir and FencePost resolve
+                // their height from the *heightfield*, which in this segment is
+                // the top of the butte, 18 m over the chamber roof.
+                Temple(pos: (44.0, 6.0, 32.0), column_height: 3.5, front_columns: 4, side_columns: 4),
+                GlowingOrb(pos: (36.0, 7.0, 28.0), colour: Some((0.8, 0.3, 1.0)), glow: Some(2.1)),
+                GlowingOrb(pos: (52.0, 7.0, 36.0), colour: Some((0.8, 0.3, 1.0)), glow: Some(2.1)),
+                Crate(pos: (24.0, 4.5, 31.0), size: 0.6),
+                Crate(pos: (26.0, 4.5, 33.0), size: 0.6),
+                Jack(pos: (30.0, 4.5, 32.0), length: 1.0, thickness: 0.2),
+                HeavyCrate(pos: (56.0, 4.0, 30.0), size: 0.8),
+            ],
+        ),
+    ],
+
+    placements: [
+        Root(segment: "pit_rim", origin: (0.0, 0.0, 0.0), yaw: 0.0),
+        Join(segment: "undercroft",  anchor: "adit_mouth", to: "pit_rim.adit",       gap: 5.0),
+        Join(segment: "spoil_block", anchor: "break_face", to: "pit_rim.north_rim",  gap: 5.0),
+    ],
+
+    connections: [],
+
+    // The far side of the rise, so the quarry is not visible until you crest it.
+    player_spawn: (12.0, 13.5, 40.0),
+
+    water: Some((
+        ocean_level: None,
+        bodies: [
+            // Seeded in the sump. The floor around it sits at y = 2, so the fill
+            // is contained by the bench itself rather than by a wall.
+            Pool(seed: (79.0, 49.0), surface_level: 1.5),
+        ],
+    )),
+)

@@ -19,10 +19,29 @@
 // Zero is now the expectation rather than a tolerance. `level_check` still
 // permits a small absolute rise before it errors, so a rise recorded here is a
 // real regression — read it as one.
+//
+// `subsidence` is the exception, and its 26 is recorded as a **known defect,
+// not an accepted tolerance**. Bisected by segment and then by feature:
+//
+//     plain heightfield, 0.5 m voxels, 64 x 64      4
+//       + Tunnel                                   +0
+//       + Caves                                   +10
+//       + Shaft                                    -1
+//       + Island                                   +9
+//     pit_rim (1 m voxels, Plateaus/Ramp/Pillar)    4
+//     spoil_block                                   0
+//
+// The floor of 4 comes from a bare noisy heightfield with no volumes at all, so
+// the residual is scale-dependent rather than feature-specific — the three test
+// levels read zero because they are smaller, not because the class is closed.
+// Nudging every authored surface off the voxel lattice changed nothing (26 →
+// 27), so this is not the lattice-coincidence bug above. Do not treat this
+// entry as permission to add more; drive it to zero and delete it.
 (
     entries: [
         (level: "test_arena.level.ron", triangles: 193828, open_edges: 0),
         (level: "test_empty_terrain.level.ron", triangles: 100276, open_edges: 0),
         (level: "test_segments.level.ron", triangles: 224756, open_edges: 0),
+        (level: "subsidence.level.ron", triangles: 301284, open_edges: 26),
     ],
 )
