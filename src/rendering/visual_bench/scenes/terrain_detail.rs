@@ -40,7 +40,7 @@
 //! cargo run --bin visual_bench -- terrain_detail --out /tmp/terrain_detail.png --columns 4
 //! ```
 
-use nalgebra::{Point3, Vector3};
+use nalgebra::Vector3;
 
 use crate::core::error::EngineResult;
 use crate::rendering::colour::Colour;

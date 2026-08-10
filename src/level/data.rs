@@ -379,6 +379,8 @@ pub enum VolumeFeature {
     /// Vertical column rising from the heightfield surface.
     Pillar {
         center: (f32, f32),
+        /// Absolute Y of the column's top, **not** its length. A pillar on a
+        /// bench at y = 6 given `height: 12` stands 6 m tall, not 12.
         height: f32,
         radius: f32,
     },

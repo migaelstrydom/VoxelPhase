@@ -7,7 +7,7 @@
 use nalgebra::Point3;
 
 use crate::level::{Level, ObjectPlacement, Orientable};
-use crate::terrain::{TerrainWorld, SURFACE_BAND};
+use crate::terrain::TerrainWorld;
 
 use super::report::Report;
 
@@ -32,6 +32,22 @@ pub const OBJECT_DROP_LIMIT: f32 = 50.0;
 /// point as well distinguishes buried from resting, and — because the point
 /// itself must be solid too — leaves an object sitting inside a cave alone.
 const BURIAL_MARGIN_VOXELS: f32 = 0.5;
+
+/// How far above a point the ground may still count as being "below" it, as a
+/// fraction of a voxel.
+///
+/// A surface authored exactly on a lattice plane is meshed a `SURFACE_BAND`
+/// fraction of a voxel proud of where it was authored, and the bands *stack*:
+/// a plinth unioned onto a carved floor is debiased once per write, so the
+/// offset at a given column is some small multiple of the band that no caller
+/// can predict. Expressing the tolerance as a multiple of the band therefore
+/// puts the commonest case there is — an object authored flush with the ground
+/// it stands on — permanently on a knife edge, resolved by float rounding.
+///
+/// A tenth of a voxel is an order of magnitude clear of any plausible stack and
+/// still three orders below the thing this check exists to catch, which is an
+/// object hanging over a void.
+const SURFACE_TOLERANCE_VOXELS: f32 = 0.1;
 
 /// Check the player spawn: not inside rock, and with ground beneath it.
 pub fn check_player_spawn(level: &Level, terrain: &TerrainWorld, report: &mut Report) {
@@ -107,21 +123,26 @@ pub fn check_objects(level: &Level, terrain: &TerrainWorld, report: &mut Report)
 
 /// Whether a point is meaningfully inside rock rather than resting on it.
 fn is_buried(terrain: &TerrainWorld, p: Point3<f32>) -> bool {
-    let margin = terrain.voxel_size() * BURIAL_MARGIN_VOXELS;
+    let margin = terrain.voxel_size_at(p) * BURIAL_MARGIN_VOXELS;
     terrain.is_mesh_solid_at(p.x, p.y, p.z) && terrain.is_mesh_solid_at(p.x, p.y + margin, p.z)
 }
 
 /// Height of the highest upward-facing terrain surface below a point.
 ///
-/// "Below" is generous by one surface band, because meshing nudges a surface
-/// that lands exactly on a lattice plane onto the solid side of it (see
+/// "Below" is generous by a fraction of a voxel, because meshing nudges a
+/// surface that lands exactly on a lattice plane onto the solid side of it (see
 /// `terrain::csg::SURFACE_BAND`). An object authored to rest at `y = 0` on
 /// ground authored at `y = 0` therefore sits a fraction of a voxel *under* the
 /// meshed surface, and a strict `h <= p.y` would report solid ground as a void.
 /// Authoring around that epsilon is the wrong way round — the tolerance belongs
 /// here, in the check.
+///
+/// The offset is a fraction of the resolution of the segment the object is *in*,
+/// so the tolerance has to be too. Taking the world's finest instead makes it
+/// too small everywhere but the finest segment, and an object resting on a
+/// coarse bench is then reported as floating over a void.
 fn surface_below(terrain: &TerrainWorld, p: Point3<f32>) -> Option<f32> {
-    let tolerance = terrain.voxel_size() * SURFACE_BAND;
+    let tolerance = terrain.voxel_size_at(p) * SURFACE_TOLERANCE_VOXELS;
     terrain
         .mesh_surface_heights_at(p.x, p.z)
         .into_iter()

@@ -336,6 +336,26 @@ impl TerrainWorld {
             .unwrap_or(DEFAULT_VOXEL_SIZE)
     }
 
+    /// Voxel size of the segment containing a world position.
+    ///
+    /// Falls back to the world's finest resolution where no segment claims the
+    /// point, which is the conservative answer: a smaller step never merges two
+    /// cells into one.
+    ///
+    /// Anything reasoning about where a *surface* sits relative to its authored
+    /// height wants this rather than [`Self::voxel_size`]: both the meshing
+    /// tolerances and the surface band are fractions of the local resolution,
+    /// and the world's finest is the wrong scale everywhere but the finest
+    /// segment.
+    pub fn voxel_size_at(&self, world: Point3<f32>) -> f32 {
+        self.segments
+            .iter()
+            .filter(|s| s.bounds().contains_point(world))
+            .map(Segment::voxel_size)
+            .reduce(f32::max)
+            .unwrap_or_else(|| self.voxel_size())
+    }
+
     // === Voxel queries ===
 
     /// Whether the voxel at a world-space position is solid (density > 0).
@@ -393,11 +413,19 @@ impl TerrainWorld {
     /// immediate. Only near the surface — where marching cubes interpolation
     /// differs from the voxel grid — does this fall back to a ray parity test
     /// against the actual triangle mesh.
+    ///
+    /// The neighbourhood is stepped at the resolution of the segment the point
+    /// is *in*, not the world's finest. `density_at` is a voxel lookup and so is
+    /// constant across a cell: stepping a 1 m segment by a 0.5 m neighbour from
+    /// another segment can land back in the same cell, agree with itself, and
+    /// take the fast path within half a voxel of the surface — reporting solid
+    /// up to half a voxel above ground that the mesh puts exactly where it was
+    /// authored.
     pub fn is_mesh_solid_at(&self, x: f32, y: f32, z: f32) -> bool {
         let pos = Point3::new(x, y, z);
         let center_solid = self.density_at(pos) > 0.0;
 
-        let vs = self.voxel_size();
+        let vs = self.voxel_size_at(pos);
         let all_agree = NEIGHBOR_OFFSETS.iter().all(|offset| {
             let neighbor = pos + offset * vs;
             (self.density_at(neighbor) > 0.0) == center_solid
@@ -765,6 +793,55 @@ mod tests {
             ("yaw 180", SegmentFrame::new(o, 2)),
             ("yaw 270", SegmentFrame::new(o, 3)),
         ]
+    }
+
+    /// A coarse segment's solidity must not be reported at the resolution of a
+    /// finer segment somewhere else in the level.
+    ///
+    /// `density_at` is a voxel lookup and so is constant across a cell. Stepping
+    /// the 6-neighbour probe by the world's *finest* voxel size lands back in
+    /// the same cell of a coarser segment, the neighbourhood agrees with itself,
+    /// and the fast path answers at voxel granularity — reporting solid up to
+    /// half a voxel above ground the mesh puts exactly where it was authored.
+    /// Everything that asks "is this point in rock" then reads high, which shows
+    /// up as objects authored to rest on a bench being rejected as buried.
+    #[test]
+    fn solidity_is_probed_at_the_local_segments_resolution() {
+        let coarse = Segment::new(
+            "coarse",
+            SegmentFrame::identity(),
+            slab_grid(1.0, Point3::new(0.0, 0.0, 0.0), Point3::new(8.0, 4.0, 8.0)),
+            Vec::new(),
+        );
+        // Only here to drag the world's finest resolution below the coarse
+        // segment's. Placed well clear of it.
+        let fine = Segment::new(
+            "fine",
+            SegmentFrame::new(Point3::new(100.0, 0.0, 0.0), 0),
+            slab_grid(0.5, Point3::new(0.0, 0.0, 0.0), Point3::new(4.0, 2.0, 4.0)),
+            Vec::new(),
+        );
+        let world = TerrainWorld::from_segments_headless(vec![coarse, fine]);
+        assert_eq!(world.voxel_size(), 0.5, "the fine segment sets the floor");
+
+        let top = world
+            .mesh_surface_heights_at(4.0, 4.0)
+            .first()
+            .copied()
+            .expect("the coarse slab has a top surface");
+        assert!(
+            (top - 4.0).abs() < 0.05,
+            "the mesh puts the slab top at its authored height, not {top}"
+        );
+
+        assert!(
+            world.is_mesh_solid_at(4.0, top - 0.5, 4.0),
+            "inside the slab"
+        );
+        assert!(
+            !world.is_mesh_solid_at(4.0, top + 0.2, 4.0),
+            "0.2 m above a surface at {top} is air, not rock"
+        );
     }
 
     #[test]
