@@ -106,6 +106,20 @@ impl TempleDef {
     pub fn default_side_columns() -> u32 {
         9
     }
+
+    /// Half-extents of the ground the temple stands on, in `(x, z)`.
+    ///
+    /// The bottom step, which is the widest thing it puts on the terrain.
+    /// Exposed because everything here is derived from `column_height` through
+    /// ratios that belong in one place: a validator that wants to know how much
+    /// ground the temple covers should ask rather than re-derive.
+    pub fn ground_half_extents(&self) -> (f32, f32) {
+        let lay = TempleLayout::from_def(self);
+        (
+            lay.half_w + lay.col_base_r + lay.step_margin,
+            lay.half_l + lay.col_base_r + lay.step_margin,
+        )
+    }
 }
 
 /// All measurements derived from column_height using classical Doric ratios

@@ -22,6 +22,8 @@ use serde::Deserialize;
 use crate::collision::AABB;
 use crate::terrain::SegmentFrame;
 
+use super::footprint::{Footprint, Support};
+
 use crate::app::creatures::RollerDef;
 use crate::app::spawnables::{
     BananaDef, BeachBallDef, BoxDef, BoxWallDef, CapsuleDef, CrateDef, DodecahedronDef, DolosDef,
@@ -29,6 +31,7 @@ use crate::app::spawnables::{
     IcosahedronDef, JackDef, JengaDef, MenhirDef, OctahedronDef, PendulumDef, PlankBridgeDef,
     PlankDef, PlayWheelDef, PyramidDef, SeesawDef, Spawnable, StackDef, StackItemDef, TableDef,
     TempleDef, TetrahedronDef, TowerDef, TrampolineDef, TrilithonDef, VoussoirArchDef,
+    BEACH_BALL_RADIUS,
 };
 
 /// Top-level level description.
@@ -1147,6 +1150,26 @@ pub enum LevelObject {
     },
 }
 
+/// How much ground a stack covers, taken from its widest item.
+///
+/// The bottom item is what actually touches the terrain, but the ones above it
+/// are what fall off if the ground steps away — and an author who stacks a long
+/// plank on a small crate means the plank to be over solid ground. The widest is
+/// therefore the honest answer, and it is the conservative one.
+fn stack_ground_half_extents(items: &[StackItem]) -> (f32, f32) {
+    items
+        .iter()
+        .map(|item| match item {
+            StackItem::Crate { size } | StackItem::HeavyCrate { size } => (*size, *size),
+            StackItem::Plank { length, width } => (length * 0.5, width * 0.5),
+            StackItem::BeachBall => (BEACH_BALL_RADIUS, BEACH_BALL_RADIUS),
+            StackItem::Capsule { radius, .. } => (*radius, *radius),
+        })
+        .fold((0.0_f32, 0.0_f32), |acc, (x, z)| {
+            (acc.0.max(x), acc.1.max(z))
+        })
+}
+
 /// Where a level object is authored, as far as validation and schematics are
 /// concerned.
 ///
@@ -1194,6 +1217,10 @@ pub struct ObjectInfo {
     /// The RON variant name, e.g. `"BeachBall"`.
     pub kind: &'static str,
     pub placement: ObjectPlacement,
+    /// The ground it covers, not just the point it was authored at.
+    pub footprint: Footprint,
+    /// Whether that ground is expected to be continuous under it.
+    pub support: Support,
 }
 
 impl LevelObject {
@@ -1246,7 +1273,219 @@ impl LevelObject {
             LevelObject::Temple { pos, .. } => ("Temple", point(pos)),
         };
 
-        ObjectInfo { kind, placement }
+        ObjectInfo {
+            kind,
+            placement,
+            footprint: self.footprint(),
+            support: self.support(),
+        }
+    }
+
+    /// How much ground this object covers, in its own axes.
+    ///
+    /// Exhaustive for the same reason [`Self::describe`] is, and the stakes are
+    /// the same: an object given a point footprint it does not deserve is
+    /// validated at one corner, which is the failure this exists to end.
+    ///
+    /// Two rules keep the answers honest. It describes what touches the
+    /// **ground**, so a pendulum's overhead arm and a temple's roof overhang do
+    /// not count. And it is measured from the authored point, which is not
+    /// always the middle — [`Footprint::Rect::offset`] carries the difference.
+    ///
+    /// Approximation is fine and intended. Anything within a voxel of a point
+    /// is [`Footprint::Point`], and a shape whose corners do not matter gets a
+    /// disc. The check downstream reports drops of a metre and more.
+    pub fn footprint(&self) -> Footprint {
+        use Footprint::{Disc, Point, Rect};
+
+        // Objects built as a grid of parts run `n` cells either side of the
+        // authored point, so the half-extent is the cell half-extent times the
+        // count, not times the count less one.
+        let grid_half = |count: u32, cell_half: f32| count as f32 * cell_half;
+
+        let rect = |half_x: f32, half_z: f32, yaw: f32| Rect {
+            offset: (0.0, 0.0),
+            half: (half_x, half_z),
+            yaw,
+        };
+
+        match self {
+            // Loose props: a fruit, a ball, a die. Every one of them is within
+            // a voxel of the point it was authored at.
+            LevelObject::Banana { length, .. } => Disc {
+                radius: length * 0.5,
+            },
+            LevelObject::BeachBall { .. } => Point,
+            LevelObject::GlowingOrb { .. } => Point,
+            LevelObject::Capsule { radius, .. } => Disc { radius: *radius },
+            LevelObject::Tetrahedron { size, .. } => Disc { radius: *size },
+            LevelObject::Octahedron { size, .. } => Disc { radius: *size },
+            LevelObject::Dodecahedron { size, .. } => Disc { radius: *size },
+            LevelObject::Icosahedron { size, .. } => Disc { radius: *size },
+            LevelObject::HexPrism { radius, .. } => Disc { radius: *radius },
+            LevelObject::Jack { length, .. } => Disc {
+                radius: length * 0.5,
+            },
+            // Three perpendicular bars; the shank is the longest of them.
+            LevelObject::Dolos { shank_length, .. } => Disc {
+                radius: shank_length * 0.5,
+            },
+
+            // Single boxes. `size` on the crates is a half-extent.
+            LevelObject::Box {
+                half_extents, yaw, ..
+            } => rect(half_extents.0, half_extents.2, *yaw),
+            LevelObject::Plank {
+                length, width, yaw, ..
+            } => rect(length * 0.5, width * 0.5, *yaw),
+            LevelObject::Crate { size, .. } => rect(*size, *size, 0.0),
+            LevelObject::HeavyCrate { size, .. } => rect(*size, *size, 0.0),
+            LevelObject::House { half_extents, .. } => rect(half_extents.0, half_extents.2, 0.0),
+
+            // Assemblies that stand on one patch of ground.
+            LevelObject::Stack { items, yaw, .. } => {
+                let (half_x, half_z) = stack_ground_half_extents(items);
+                rect(half_x, half_z, *yaw)
+            }
+            LevelObject::Tower {
+                box_half_extents,
+                yaw,
+                ..
+            } => rect(box_half_extents.0, box_half_extents.2, *yaw),
+            LevelObject::BoxWall {
+                box_half_extents,
+                columns,
+                yaw,
+                ..
+            } => rect(
+                grid_half(*columns, box_half_extents.0),
+                box_half_extents.2,
+                *yaw,
+            ),
+            LevelObject::HoneycombWall {
+                columns,
+                radius,
+                half_height,
+                yaw,
+                ..
+            } => {
+                // Pointy-topped hex tiling: centres are sqrt(3) * radius apart
+                // along the wall's own +X, and the prism axis is Z.
+                let cell_half = radius * 3.0_f32.sqrt() * 0.5;
+                rect(grid_half(*columns, cell_half), *half_height, *yaw)
+            }
+            LevelObject::Pyramid {
+                block_half_extents,
+                base_width,
+                ..
+            } => rect(
+                grid_half(*base_width, block_half_extents.0),
+                grid_half(*base_width, block_half_extents.2),
+                0.0,
+            ),
+            LevelObject::Jenga {
+                block_half_length, ..
+            } => rect(*block_half_length, *block_half_length, 0.0),
+            LevelObject::Trampoline {
+                pad_half_extents,
+                yaw,
+                ..
+            } => rect(pad_half_extents.0, pad_half_extents.2, *yaw),
+            LevelObject::Table {
+                top_half_extents,
+                yaw,
+                ..
+            } => rect(top_half_extents.0, top_half_extents.2, *yaw),
+            LevelObject::VoussoirArch {
+                inner_radius,
+                thickness,
+                depth,
+                ..
+            } => rect(inner_radius + thickness, depth * 0.5, 0.0),
+            LevelObject::Trilithon {
+                gap,
+                upright_half_width,
+                upright_half_depth,
+                lintel_overhang,
+                yaw,
+                ..
+            } => rect(
+                gap * 0.5 + upright_half_width * 2.0 + lintel_overhang,
+                *upright_half_depth,
+                *yaw,
+            ),
+            LevelObject::Temple {
+                pos,
+                column_height,
+                front_columns,
+                side_columns,
+            } => {
+                let def = TempleDef {
+                    pos: *pos,
+                    column_height: *column_height,
+                    front_columns: *front_columns,
+                    side_columns: *side_columns,
+                };
+                let (half_x, half_z) = def.ground_half_extents();
+                rect(half_x, half_z, 0.0)
+            }
+
+            // A domino row is authored at its *first* block and extends one way
+            // from there. Blocks are turned so their thin axis — local +Z —
+            // points along the row, which is the axis they topple along.
+            LevelObject::Domino {
+                direction,
+                count,
+                spacing,
+                half_extents,
+                ..
+            } => {
+                let span = count.saturating_sub(1) as f32 * spacing;
+                Rect {
+                    offset: (0.0, span * 0.5),
+                    half: (half_extents.0, span * 0.5 + half_extents.2),
+                    yaw: direction.0.atan2(direction.1).to_degrees(),
+                }
+            }
+
+            // The bridge runs along its own +Z; the beams straddle +X.
+            LevelObject::PlankBridge {
+                length,
+                beam_spacing,
+                beam_half_extents,
+                yaw,
+                ..
+            } => rect(beam_spacing * 0.5 + beam_half_extents.0, length * 0.5, *yaw),
+
+            // Terrain-anchored: the height is derived, so placement cannot be
+            // authored wrongly and the footprint is never validated. Recorded
+            // truthfully anyway, for anything that draws the level rather than
+            // checks it.
+            LevelObject::Menhir { bottom_radius, .. } => Disc {
+                radius: *bottom_radius,
+            },
+            LevelObject::FencePost { radius, .. } => Disc { radius: *radius },
+            LevelObject::Roller { radius, .. } => Disc { radius: *radius },
+            LevelObject::PlayWheel { radius, .. } => Disc { radius: *radius },
+            // Both stand on a single post or fulcrum; what reaches out sideways
+            // is overhead and touches nothing.
+            LevelObject::Pendulum { .. } => Point,
+            LevelObject::Seesaw { .. } => Point,
+        }
+    }
+
+    /// Whether the ground under this object is expected to be continuous.
+    ///
+    /// A short list on purpose. Marking something [`Support::Spanning`] silences
+    /// the footprint check for it, so the bar is that having nothing underneath
+    /// is the object's *purpose* rather than a shape it happens to tolerate.
+    pub fn support(&self) -> Support {
+        match self {
+            // The one thing in the library authored to cross a gap. Reporting
+            // the void under its middle would be reporting that it works.
+            LevelObject::PlankBridge { .. } => Support::Spanning,
+            _ => Support::Bedded,
+        }
     }
 
     /// Whether this object's *shape* follows its segment's yaw, not just its

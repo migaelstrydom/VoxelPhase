@@ -13,7 +13,7 @@ pub mod segments;
 pub mod svg;
 
 pub use baseline::{BaselineVerdict, Baselines};
-pub use reach::{Footprint, JumpArc, JumpEnvelope};
+pub use reach::{JumpArc, JumpEnvelope, Stance};
 pub use report::{Finding, Report, Section, Severity};
 pub use routes::RouteMap;
 pub use runner::{build_terrain, check_level};

@@ -142,8 +142,14 @@ Level(
                 GlowingOrb(pos: (76.0, 18.5, 60.0), colour: Some((0.4, 1.0, 0.6)), glow: Some(2.6)),
 
                 // --- The floor and the sump -------------------------------
-                Trampoline(pos: (72.0, 2.0, 50.0)),
-                Dolos(pos: (80.0, 2.0, 40.0)),
+                // Both were authored at a point that sits on the bench while
+                // most of the object does not: the trampoline's four-metre pad
+                // reached over the sump lip, the dolos into the toe of the haul
+                // road. The shelf between the ramp and the sump is only about
+                // as wide as the pad, so the trampoline moves to the open floor
+                // by the adit, where it also earns its keep as the way back up.
+                Trampoline(pos: (89.0, 2.0, 52.0)),
+                Dolos(pos: (80.0, 2.0, 41.5)),
                 BeachBall(pos: (79.0, 3.0, 49.0)),
                 Crate(pos: (77.0, 2.0, 46.0), size: 0.5),
                 GlowingOrb(pos: (74.0, 2.5, 52.0), colour: Some((1.0, 0.45, 0.15)), glow: Some(2.2)),

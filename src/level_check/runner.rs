@@ -328,6 +328,114 @@ mod tests {
         assert!(errors.is_empty(), "surface placement flagged: {errors:?}");
     }
 
+    /// A flat plain with a raised half, and one object straddling the join.
+    ///
+    /// The step runs along `x = 0`: everything at positive x is 4 m up. An
+    /// object authored at the origin therefore has good ground under the point
+    /// it declares and a four-metre drop under whatever reaches the other way,
+    /// which is precisely the case a single-point check cannot see.
+    fn stepped_level(objects: &str) -> Level {
+        let ron = format!(
+            r#"
+            Level(
+                name: "Stepped",
+                segments: [(
+                    name: "main",
+                    terrain: Terrain(
+                        voxel_size: 1.0,
+                        bounds: (min: (-32.0, -32.0, -32.0), max: (32.0, 32.0, 32.0)),
+                        base_height: 0.0,
+                        features: [
+                            Plateau(min: (0.0, -32.0), max: (32.0, 32.0), height: 4.0),
+                        ],
+                    ),
+                    objects: [{objects}],
+                )],
+                placements: [Root(segment: "main")],
+                player_spawn: (-8.0, 2.0, 0.0),
+            )
+            "#
+        );
+        let mut level: Level = ron::from_str(&ron).expect("stepped level should parse");
+        level.frames =
+            crate::level::resolve_placements(&level).expect("stepped placement should resolve");
+        level
+    }
+
+    /// The bug this whole footprint model exists for. A domino row is authored
+    /// at its *first* block; the rest of it is wherever `direction` leads, and
+    /// before footprints that ground was never asked about.
+    #[test]
+    fn a_row_running_off_a_step_is_reported_even_though_its_first_block_is_fine() {
+        let warnings = findings_of(
+            &stepped_level(
+                "Domino(base: (2.0, 4.0, 0.0), direction: (-1.0, 0.0), count: 12, spacing: 0.7)",
+            ),
+            Severity::Warning,
+        );
+        let step = warnings.iter().find(|w| w.contains("steps by"));
+        assert!(
+            step.is_some(),
+            "a row walking off a 4 m step went unreported: {warnings:?}"
+        );
+        assert!(
+            step.unwrap().contains("Domino"),
+            "wrong object named: {step:?}"
+        );
+    }
+
+    /// The same row laid the other way stays on the upper bench, and must be
+    /// silent. A check that cannot tell these two apart is just noise.
+    #[test]
+    fn the_same_row_laid_along_the_bench_is_silent() {
+        let warnings = findings_of(
+            &stepped_level(
+                "Domino(base: (2.0, 4.0, 0.0), direction: (0.0, 1.0), count: 12, spacing: 0.7)",
+            ),
+            Severity::Warning,
+        );
+        let placement: Vec<_> = warnings
+            .iter()
+            .filter(|w| !w.contains("baseline"))
+            .collect();
+        assert!(placement.is_empty(), "unexpected warnings: {placement:?}");
+    }
+
+    /// A bridge is authored to have nothing under its middle. Reporting that
+    /// would be reporting that it works, so `Support::Spanning` opts it out.
+    #[test]
+    fn a_bridge_is_allowed_to_have_nothing_under_it() {
+        let warnings = findings_of(
+            &stepped_level("PlankBridge(pos: (0.0, 4.5, 0.0), length: 12.0, yaw: 90.0)"),
+            Severity::Warning,
+        );
+        let placement: Vec<_> = warnings
+            .iter()
+            .filter(|w| !w.contains("baseline"))
+            .collect();
+        assert!(
+            placement.is_empty(),
+            "a spanning object was checked as bedded: {placement:?}"
+        );
+    }
+
+    /// One stray solid sample is more likely a doubled surface on a mesh with
+    /// open edges than an object in a bank — measured, on a crate standing in
+    /// an open cave. Only a whole side's worth counts.
+    #[test]
+    fn an_object_hard_against_a_riser_is_reported_as_embedded() {
+        let warnings = findings_of(
+            &stepped_level("Box(pos: (-1.5, 0.0, 0.0), half_extents: (3.0, 0.5, 3.0))"),
+            Severity::Warning,
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("runs into solid terrain")),
+            "a box half inside the riser went unreported: {warnings:?}"
+        );
+    }
+
     /// Both shipped levels must pass. If this fails, either a level or the
     /// check is wrong — and the report says which.
     #[test]

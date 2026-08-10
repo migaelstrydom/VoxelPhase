@@ -6,7 +6,7 @@
 
 use nalgebra::Point3;
 
-use crate::level::{Level, ObjectPlacement, Orientable};
+use crate::level::{Footprint, Level, ObjectPlacement, Orientable, Support};
 use crate::terrain::TerrainWorld;
 
 use super::report::Report;
@@ -48,6 +48,35 @@ const BURIAL_MARGIN_VOXELS: f32 = 0.5;
 /// still three orders below the thing this check exists to catch, which is an
 /// object hanging over a void.
 const SURFACE_TOLERANCE_VOXELS: f32 = 0.1;
+
+/// How far the ground may step across an object's footprint before it is worth
+/// a warning, in metres.
+///
+/// A rigid object sits at one height, so ground that falls away under part of
+/// it leaves that part in the air by however far it fell. Terrain roughness
+/// moves a surface by a few tens of centimetres and beds an object in rather
+/// than lifting it, which is normal authoring and must stay quiet. Half a metre
+/// is above that and well below the two-metre bench drop that started this: it
+/// is the height at which "it is sitting on uneven ground" turns into "one end
+/// of it is floating".
+const FOOTPRINT_STEP_LIMIT: f32 = 0.5;
+
+/// What share of an object's footprint has to read solid before the object is
+/// called embedded in the terrain.
+///
+/// An object genuinely driven into a rise has a whole side of it in the rock,
+/// which is a quarter of a square grid of samples or a quadrant of a disc. One
+/// or two isolated points is a different thing, and measurably so: on a mesh
+/// with open edges, a column whose surface is emitted *twice* inverts the ray
+/// parity test and reads solid all the way up. Sampling a crate standing in an
+/// open cave found exactly two such points among sixteen, both of them the two
+/// with a doubled surface height, while every neighbour at the same height read
+/// clear.
+///
+/// So the threshold is not a fudge factor for a noisy check — it is the
+/// difference between a shape intersecting terrain and the mesh being locally
+/// broken, and the second is what the open-edge count is for.
+const BURIED_FOOTPRINT_SHARE: f32 = 0.25;
 
 /// Check the player spawn: not inside rock, and with ground beneath it.
 pub fn check_player_spawn(level: &Level, terrain: &TerrainWorld, report: &mut Report) {
@@ -118,6 +147,90 @@ pub fn check_objects(level: &Level, terrain: &TerrainWorld, report: &mut Report)
             }
             None => report.warn("objects", format!("{at} has no terrain beneath it")),
         }
+
+        check_footprint(terrain, pos, info.footprint, info.support, &at, report);
+    }
+}
+
+/// Check the ground across everything the object covers, not just under the
+/// point it was authored at.
+///
+/// The failure this exists for: an object long enough to cross a terrain
+/// feature is authored at one end, that end is over good ground, and the check
+/// passes while most of the object hangs in the air. A twelve-block domino row
+/// authored on one quarry bench and running onto the next reads as perfect and
+/// leaves eight blocks two metres up.
+///
+/// It reports the *spread* of ground under the footprint rather than the gap to
+/// the object's base, which means it needs no view on where an object's bottom
+/// is — a question the placement point does not answer, since some objects are
+/// authored at their base and others at their centre.
+fn check_footprint(
+    terrain: &TerrainWorld,
+    pos: Point3<f32>,
+    footprint: Footprint,
+    support: Support,
+    at: &str,
+    report: &mut Report,
+) {
+    if support == Support::Spanning {
+        return;
+    }
+
+    let step = terrain.voxel_size_at(pos);
+    if !footprint.spans_more_than(step) {
+        return;
+    }
+
+    let mut lowest = f32::MAX;
+    let mut highest = f32::MIN;
+    let mut unsupported = 0;
+    let mut buried = 0;
+
+    let samples = footprint.samples((pos.x, pos.z), step);
+    for (x, z) in &samples {
+        let p = Point3::new(*x, pos.y, *z);
+        if is_buried(terrain, p) {
+            buried += 1;
+            continue;
+        }
+        match surface_below(terrain, p) {
+            Some(h) => {
+                lowest = lowest.min(h);
+                highest = highest.max(h);
+            }
+            None => unsupported += 1,
+        }
+    }
+
+    // Warnings rather than errors throughout, and deliberately: a footprint is
+    // an approximation of the object's shape, sampled coarsely. The authored
+    // point is exact and keeps its errors; what is inferred from a disc laid
+    // over a dolos should not be able to fail a level on its own.
+    let total = samples.len();
+    if buried as f32 >= total as f32 * BURIED_FOOTPRINT_SHARE {
+        report.warn(
+            "objects",
+            format!("{at} runs into solid terrain across {buried} of the {total} points it covers"),
+        );
+    }
+    if unsupported > 0 {
+        report.warn(
+            "objects",
+            format!("{at} has no terrain beneath {unsupported} of the {total} points it covers"),
+        );
+    }
+    if lowest <= highest && highest - lowest > FOOTPRINT_STEP_LIMIT {
+        report.warn(
+            "objects",
+            format!(
+                "{at} covers ground that steps by {:.1} m ({:.1} m to {:.1} m), so part of it \
+                 will not be resting on anything",
+                highest - lowest,
+                lowest,
+                highest
+            ),
+        );
     }
 }
 

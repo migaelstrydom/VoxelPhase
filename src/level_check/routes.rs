@@ -22,7 +22,7 @@ use crate::physics::PhysicsConfig;
 use crate::terrain::traversal::{route_plan, RoutePlan};
 use crate::terrain::SegmentFrame;
 
-use super::reach::{Footprint, JumpEnvelope};
+use super::reach::{JumpEnvelope, Stance};
 use super::report::{Report, Section};
 
 /// How many voxels a primitive's narrowest dimension has to span.
@@ -39,7 +39,7 @@ const MIN_VOXELS_ACROSS: f32 = 2.0;
 /// player and of its segment's resolution.
 pub fn route_section(level: &Level, report: &mut Report) -> Section {
     let player = LocomotionConfig::default();
-    let footprint = Footprint::derive(&player);
+    let stance = Stance::derive(&player);
     let envelope = JumpEnvelope::derive(&player, PhysicsConfig::default().gravity);
 
     let mut section = Section::new("Traversal primitives");
@@ -69,7 +69,7 @@ pub fn route_section(level: &Level, report: &mut Report) -> Section {
                 ),
             );
 
-            check_width(&name, &info, &footprint, report);
+            check_width(&name, &info, &stance, report);
             check_rise(&name, &info, &envelope, report);
             check_resolution(&name, &info, voxel, report);
         }
@@ -86,26 +86,26 @@ pub fn route_section(level: &Level, report: &mut Report) -> Section {
 }
 
 /// A deck the player cannot stand on is a level bug however good it looks.
-fn check_width(name: &str, info: &TraversalInfo, footprint: &Footprint, report: &mut Report) {
+fn check_width(name: &str, info: &TraversalInfo, stance: &Stance, report: &mut Report) {
     let Some(width) = info.walkable_width else {
         return;
     };
-    if width < footprint.fits {
+    if width < stance.fits {
         report.error(
             "routes",
             format!(
                 "{name}: the {} is {width:.2} m wide, narrower than the player's \
                  {:.2} m collider — they cannot stand on it",
-                info.kind, footprint.fits
+                info.kind, stance.fits
             ),
         );
-    } else if width < footprint.walkable {
+    } else if width < stance.walkable {
         report.warn(
             "routes",
             format!(
                 "{name}: the {} is {width:.2} m wide against a {:.2} m walkable minimum; \
                  the player fits but has no margin either side",
-                info.kind, footprint.walkable
+                info.kind, stance.walkable
             ),
         );
     }

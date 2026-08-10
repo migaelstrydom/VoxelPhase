@@ -21,7 +21,10 @@ use crate::systems::PhysicsResource;
 use super::shared::finish::{ColliderSurface, MaterialSurface};
 use super::shared::textures::rand_range;
 
-const RADIUS: f32 = 0.5;
+/// The ball's one dimension. Public because a beach ball is a stack item, and
+/// working out how much ground a stack covers means knowing how wide its
+/// widest item is.
+pub const RADIUS: f32 = 0.5;
 const SEGMENTS: u32 = 32;
 const RINGS: u32 = 24;
 

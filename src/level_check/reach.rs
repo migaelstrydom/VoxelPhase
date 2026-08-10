@@ -108,8 +108,13 @@ impl JumpEnvelope {
 const WALKABLE_WIDTH_IN_DIAMETERS: f32 = 2.0;
 
 /// What the player has to be able to stand on, derived from their collider.
+///
+/// Named for the player's side of the question deliberately. `Footprint` is
+/// the ground a *level object* covers, in `level::footprint`; this is how much
+/// ground the *player* needs under them, which is the same measurement asked
+/// from the other end and would be a confusing thing to share a name with.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Footprint {
+pub struct Stance {
     /// The player's collider radius.
     pub radius: f32,
     /// The narrowest deck the player physically fits on.
@@ -118,7 +123,7 @@ pub struct Footprint {
     pub walkable: f32,
 }
 
-impl Footprint {
+impl Stance {
     pub fn derive(player: &LocomotionConfig) -> Self {
         let diameter = player.collider_radius * 2.0;
         Self {
