@@ -121,11 +121,23 @@ pub fn spawn_level_objects(
     let (px, py, pz) = level.player_spawn;
     let player_entity = crate::app::spawners::spawn_player(world, Point3::new(px, py, pz));
 
+    spawn_objects(world, level, materials);
+
+    player_entity
+}
+
+/// Spawn the level's objects and nothing else.
+///
+/// Split out for the tools that want to *look* at a level rather than play it:
+/// a viewer has no use for a player, and spawning one would drag in the
+/// animation and control chain for something that is never stepped.
+///
+/// Terrain-anchored objects read `TerrainWorld` out of the world as they spawn,
+/// so it has to be in place before this is called.
+pub fn spawn_objects(world: &mut World, level: &Level, materials: &LevelMaterials) {
     for ((_, obj), mats) in level.objects().zip(&materials.per_object) {
         obj.to_spawnable().spawn(world, mats);
     }
-
-    player_entity
 }
 
 /// Create the water grids from the level's water configuration, if present.

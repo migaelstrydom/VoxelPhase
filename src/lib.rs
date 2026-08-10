@@ -15,6 +15,7 @@ pub mod geometry;
 pub mod input;
 pub mod level;
 pub mod level_check;
+pub mod level_viewer;
 pub mod lighting;
 pub mod model;
 pub mod particles;
