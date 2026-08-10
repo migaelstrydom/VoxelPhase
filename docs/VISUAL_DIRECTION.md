@@ -503,12 +503,13 @@ roughness is widened by the screen-space variance of the final shading normal
   motion. The far tiles being speckle-free is necessary evidence, not
   sufficient; the sufficient test needs the game window.
 
-**Exposed, not caused: flat ground is faintly terraced.** The bands are present
-with the detail strength zeroed, so they are the generator's — sub-voxel height
-variation quantised against a coarse lattice — but the relief makes them
-legible. Worth its own investigation in terrain generation rather than a
-rendering patch, and worth knowing about before §4.4, whose slope threshold
-would track the same artifact.
+**Exposed, not caused: sloped ground is faintly terraced.** The bands survive
+zeroing the detail strength, so they are the generator's rather than the
+renderer's; the relief only makes them legible. Genuinely flat ground is clean —
+it is *slopes* that band, which is the signature of a surface stepping between
+lattice planes rather than of general mottling. Tracked in
+[TODO.md](TODO.md#terraced-slopes-in-generated-terrain). Worth knowing about
+before §4.4, whose slope threshold would track the same artifact.
 
 ### 4.3 Surface character from toughness
 

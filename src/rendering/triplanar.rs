@@ -8,22 +8,11 @@
 //!
 //! The CPU side of that decision is this component; the sampling itself is
 //! `shader/triplanar.glsl`.
-
-/// How sharply a surface commits to the axis plane it most nearly faces.
-///
-/// The blend weight of each plane is its normal component raised to this power.
-/// Too low and all three projections ghost through each other on any slope,
-/// which reads as a smeared double image; too high and the transition narrows
-/// until the change of projection is visible as a seam on 45-degree faces.
-const DEFAULT_SHARPNESS: f32 = 4.0;
-
-/// Texture repeats per world unit for terrain.
-///
-/// Deliberately equal to the scale of the top-down UV that terrain vertices
-/// already carried (`pos.xz * 0.1`), so that switching to the projection leaves
-/// flat ground looking exactly as it did and changes only the steep faces the
-/// old projection was smearing.
-const TERRAIN_SCALE: f32 = 0.1;
+//!
+//! This component describes *how* to project and holds no opinion about what
+//! any particular surface should look like. The values terrain projects at live
+//! with terrain, in `src/terrain/surface.rs`, alongside the rest of its
+//! appearance.
 
 /// How a mesh's texture is addressed: by its own vertex texture coordinates, or
 /// by world position projected along the three axis planes.
@@ -47,11 +36,16 @@ impl TriplanarProjection {
         sharpness: 0.0,
     };
 
-    /// The projection terrain is textured by.
-    pub const TERRAIN: Self = Self {
-        scale: TERRAIN_SCALE,
-        sharpness: DEFAULT_SHARPNESS,
-    };
+    /// Project at `scale` texture repeats per world unit.
+    ///
+    /// `sharpness` decides how quickly a surface commits to the axis plane it
+    /// most nearly faces: too low and all three projections ghost through each
+    /// other on a slope, which reads as a smeared double image; too high and
+    /// the transition narrows until the change of projection shows as a seam on
+    /// 45-degree faces.
+    pub const fn new(scale: f32, sharpness: f32) -> Self {
+        Self { scale, sharpness }
+    }
 
     /// Whether this projection replaces the mesh's texture coordinates.
     pub fn is_enabled(&self) -> bool {
@@ -82,11 +76,8 @@ mod tests {
     }
 
     #[test]
-    fn terrain_projects_at_the_scale_of_the_uvs_it_replaces() {
-        // Terrain vertices carried `tex_coords = pos.xz * 0.1`, which is the
-        // Y-plane of this projection. Matching it is what keeps flat ground
-        // unchanged, so a drift here is a silent change to every level's floor.
-        assert_eq!(TriplanarProjection::TERRAIN.scale, 0.1);
-        assert!(TriplanarProjection::TERRAIN.is_enabled());
+    fn any_positive_scale_replaces_the_meshs_texture_coordinates() {
+        assert!(TriplanarProjection::new(0.1, 4.0).is_enabled());
+        assert_eq!(TriplanarProjection::new(0.1, 4.0).packed(), [0.1, 4.0]);
     }
 }

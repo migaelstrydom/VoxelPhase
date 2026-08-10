@@ -28,6 +28,22 @@
 //! The normal is stored at a fixed reference amplitude and scaled per fragment
 //! by the material's hardness (`shader/surface_character.glsl`), which is how
 //! chalk ends up softer-featured than rock without a second texture.
+//!
+//! # Where the rest of the dials are
+//!
+//! Everything terrain's appearance is tuned by that can be decided on the CPU
+//! is in this file. Three sets of numbers deliberately are not, because they
+//! belong to something else and moving them here would be filing them under the
+//! wrong owner:
+//!
+//! | Dial | Lives in | Why not here |
+//! |---|---|---|
+//! | Roughness and relief per hardness | `shader/surface_character.glsl` | Evaluated per fragment. Reaching them from the CPU means spending push-constant budget or a UBO on values that never change at runtime. |
+//! | Specular anti-aliasing strength and ceiling | `shader/lighting.glsl` | Applies to every surface in the game, not just terrain. |
+//! | Material colour, and the toughness-to-hardness curve | `src/terrain/voxel.rs` | Material identity, which destruction reads too. A renderer must not be the thing that defines what rock *is*. |
+//!
+//! Changing anything in the two shader files needs `glslc` re-run; see
+//! CLAUDE.md for the command.
 
 use crate::core::error::EngineResult;
 use crate::rendering::material::SurfaceParams;
@@ -56,6 +72,22 @@ const NOISE_SEED: u32 = 42;
 /// Darkest the albedo wash goes. A narrow band around white, because this
 /// modulates the vertex colours rather than replacing them.
 const WASH_FLOOR: f32 = 0.85;
+
+/// Texture repeats per world unit — one repeat every 10 m.
+///
+/// Deliberately equal to the scale of the top-down UV that terrain vertices
+/// already carried (`pos.xz * 0.1`), so that switching to a projection left
+/// flat ground looking exactly as it did and changed only the steep faces the
+/// old projection was smearing. A drift here is a silent change to the floor of
+/// every level.
+///
+/// It also sets how coarse the detail normals are: at this scale a texel covers
+/// about 2 cm of world, and the field's finest octave is a few centimetres
+/// across.
+const PROJECTION_SCALE: f32 = 0.1;
+
+/// How sharply a surface commits to the axis plane it most nearly faces.
+const BLEND_SHARPNESS: f32 = 4.0;
 
 /// Height of the microrelief the stored normal describes, relative to the
 /// spacing of the texels it is measured across.
@@ -154,7 +186,8 @@ fn encode_signed(value: f32) -> u8 {
 /// of zero hardness would take, so the params remain the honest fallback rather
 /// than a number that is quietly ignored.
 pub fn surface_params() -> SurfaceParams {
-    SurfaceParams::MATTE.with_projection(TriplanarProjection::TERRAIN)
+    SurfaceParams::MATTE
+        .with_projection(TriplanarProjection::new(PROJECTION_SCALE, BLEND_SHARPNESS))
 }
 
 #[cfg(test)]
@@ -163,10 +196,19 @@ mod tests {
 
     #[test]
     fn terrain_is_textured_by_world_position() {
+        assert!(TriplanarProjection::new(PROJECTION_SCALE, BLEND_SHARPNESS).is_enabled());
         assert_eq!(
             surface_params().projection,
-            TriplanarProjection::TERRAIN.packed()
+            [PROJECTION_SCALE, BLEND_SHARPNESS]
         );
+    }
+
+    /// Terrain vertices used to carry `tex_coords = pos.xz * 0.1`, which is the
+    /// Y plane of this projection. Matching it is what kept flat ground looking
+    /// unchanged when the projection replaced those UVs.
+    #[test]
+    fn the_projection_matches_the_uvs_it_replaced() {
+        assert_eq!(PROJECTION_SCALE, 0.1);
     }
 
     /// The amount of relief is the whole visible effect of detail normals, and

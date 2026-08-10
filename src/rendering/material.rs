@@ -404,8 +404,11 @@ mod tests {
     #[test]
     fn a_projection_survives_the_trip_into_the_push_constant() {
         let params = Material::coloured(Colour::WHITE)
-            .with_projection(TriplanarProjection::TERRAIN)
+            .with_projection(TriplanarProjection::new(0.1, 4.0))
             .surface_params();
-        assert_eq!(params.projection, TriplanarProjection::TERRAIN.packed());
+        assert_eq!(
+            params.projection,
+            TriplanarProjection::new(0.1, 4.0).packed()
+        );
     }
 }

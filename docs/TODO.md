@@ -111,3 +111,42 @@ constraint are the neighbouring concerns.
 
 Both tests assert two bounds — not interpenetrating *and* not stopping short.
 The first alone is satisfied by the mid-air stall and passes the broken fix.
+
+---
+
+## Terraced slopes in generated terrain
+
+Sloped ground carries faint terraces — bands running along the contours, spaced
+like the voxel lattice. Flat ground is clean, which is the diagnostic detail: a
+surface at constant height has nothing to step between, so this is the surface
+stepping between lattice planes rather than the general mottling that a
+quantised density field would produce everywhere.
+
+Long-standing and previously invisible. It surfaced when terrain gained detail
+normals (VISUAL_DIRECTION.md §4.2), which give the eye enough surface structure
+to read the banding; it is *not* caused by them, and survives setting the detail
+strength to zero.
+
+### Suspected cause, unverified
+
+`generate_terrain` writes an exact sub-voxel density for the topmost solid voxel
+of each column and its air cap, so the *vertical* crossing lands on the true
+surface height. Neighbouring columns of differing height still carry saturated
+±1 densities, so marching cubes' *horizontal* edges interpolate between
+saturated endpoints and land on the lattice rather than on the surface. On flat
+ground neighbouring columns agree and nothing steps; on a slope every column
+boundary is a potential step.
+
+If that is right, the fix is to give the samples flanking a surface crossing a
+signed distance to the *surface* rather than to the top of their own column —
+the same principle as the carve path, which already computes a real distance
+(`csg::carve_density`, and the note on `Voxel::air`).
+
+### Why it matters beyond looks
+
+§4.4 slope zoning thresholds on the surface normal, and this artifact lives in
+the normal. A zoning band tracking terraces instead of geometry would be much
+harder to diagnose once the two are layered.
+
+Reproduce with `cargo run --bin visual_bench -- terrain_forms` and look at the
+open ground in the `slope sweep` tile.
