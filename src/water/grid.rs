@@ -90,6 +90,19 @@ impl WaterGrid {
     /// Must be greater than `MIN_VOLUME` to prevent flicker at the shoreline.
     const REWET_VOLUME: f32 = 5e-2;
 
+    /// Upper bound on the per-step equalization fraction `flow_rate * dt`.
+    ///
+    /// Flow equalization is explicit diffusion on a surface heightfield, which
+    /// is stable only while the fraction of the head difference moved per step,
+    /// summed over the four neighbours, stays below 1/2. A cell that exceeds it
+    /// overshoots past its neighbours every step, and the error alternates sign
+    /// and grows — a checkerboard of spikes rather than a settling pool.
+    ///
+    /// Clamping trades speed for stability: at frame times long enough to
+    /// breach the bound, water levels slower than `flow_rate` asks for instead
+    /// of exploding.
+    const MAX_FLOW_ALPHA: f32 = 0.125;
+
     /// Create a new water grid from geometry configuration and physical properties.
     pub fn new(config: WaterGridConfig, properties: &WaterProperties) -> Self {
         let total = config.dims.0 * config.dims.1;
@@ -378,6 +391,9 @@ impl WaterGrid {
 
         let mut max_delta: f32 = 0.0;
 
+        // Fraction of a head difference moved per step, clamped for stability.
+        let alpha = (self.flow_rate * dt).min(Self::MAX_FLOW_ALPHA);
+
         // Flow equalization: for each cell with water, compute the target
         // equalization level with all lower neighbors and distribute flow.
         for j in 0..self.dims.1 {
@@ -428,7 +444,9 @@ impl WaterGrid {
 
                     let delta_h = h_self - h_neighbor;
                     if delta_h > 0.0 {
-                        let demand = delta_h * self.flow_rate * dt;
+                        // A head difference is a height; the cell's footprint
+                        // turns the fraction of it we move into a volume.
+                        let demand = delta_h * self.cell_area * alpha;
                         demands[k] = demand;
                         total_demand += demand;
                     }
@@ -822,6 +840,76 @@ mod tests {
         assert!(
             surface < 1.0,
             "Center surface should drain toward ocean_level=0, got {surface}"
+        );
+    }
+
+    /// Build a flat pool with one cell nudged up, and report the surface spread
+    /// across the interior after `frames` steps at 60 Hz.
+    ///
+    /// A stable flow grid erases the nudge; an unstable one amplifies it into a
+    /// checkerboard that saturates at a large spread.
+    fn perturbed_pool_spread(
+        cell_size: f32,
+        flow_rate: f32,
+        nudge: f32,
+        frames: usize,
+    ) -> (f32, f32) {
+        let dims = (16, 16);
+        let mut grid = make_grid_with_flow_rate(dims, cell_size, None, flow_rate);
+        let area = cell_size * cell_size;
+
+        for j in 0..dims.1 {
+            for i in 0..dims.0 {
+                let extra = if (i, j) == (8, 8) { nudge } else { 0.0 };
+                grid.add_water(i, j, (1.0 + extra) * area, 0.0);
+            }
+        }
+
+        let spread = |grid: &WaterGrid| {
+            let mut lo = f32::MAX;
+            let mut hi = f32::MIN;
+            for j in 1..dims.1 - 1 {
+                for i in 1..dims.0 - 1 {
+                    let h = grid.cell(i, j).surface_level(area);
+                    lo = lo.min(h);
+                    hi = hi.max(h);
+                }
+            }
+            hi - lo
+        };
+
+        let initial = spread(&grid);
+        for _ in 0..frames {
+            grid.step(1.0 / 60.0, flat_floor);
+        }
+        (initial, spread(&grid))
+    }
+
+    #[test]
+    fn flow_equalization_is_cell_size_independent() {
+        // The same physical perturbation must decay at any grid resolution.
+        // Before flow_rate carried units of 1/s, the transfer was a height
+        // rather than a volume, so stability scaled with 1/cell_area and a 1m
+        // grid diverged where a 4m grid settled.
+        let flow_rate = WaterProperties::default().flow_rate;
+
+        for cell_size in [0.5, 1.0, 2.0, 4.0] {
+            let (initial, final_spread) = perturbed_pool_spread(cell_size, flow_rate, 0.01, 120);
+            assert!(
+                final_spread < initial,
+                "cell_size {cell_size}: spread grew from {initial} to {final_spread}"
+            );
+        }
+    }
+
+    #[test]
+    fn excessive_flow_rate_is_clamped_not_unstable() {
+        // An absurd rate must saturate at the stability bound rather than
+        // producing a growing checkerboard.
+        let (initial, final_spread) = perturbed_pool_spread(1.0, 1000.0, 0.01, 120);
+        assert!(
+            final_spread < initial,
+            "clamped flow diverged: {initial} -> {final_spread}"
         );
     }
 

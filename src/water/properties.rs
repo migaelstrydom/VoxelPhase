@@ -10,8 +10,13 @@
 /// game. Grid geometry (dims, origin, cell size) is configured separately
 /// in [`super::WaterGridConfig`] and [`super::WaveGridConfig`].
 pub struct WaterProperties {
-    /// Flow equalization rate multiplier. Higher = faster leveling between
-    /// neighboring cells in the coarse flow grid.
+    /// Flow equalization rate in 1/s: the fraction of the head difference
+    /// between two neighbouring flow cells that moves across their shared edge
+    /// per second. Higher = faster leveling.
+    ///
+    /// Independent of cell size — the grid scales the transfer by cell area.
+    /// Values above `1 / dt * 0.125` are clamped by the flow grid for
+    /// stability, so ~7 is the practical ceiling at 60 Hz.
     pub flow_rate: f32,
 
     /// Surface level difference below which the flow simulation is considered
@@ -34,7 +39,7 @@ pub struct WaterProperties {
 impl Default for WaterProperties {
     fn default() -> Self {
         Self {
-            flow_rate: 30.0,
+            flow_rate: 4.0,
             settle_epsilon: 0.001,
             fluid_density: 1000.0,
             wave_speed: 2.0,
