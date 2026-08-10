@@ -5,7 +5,7 @@ use specs::World;
 
 use crate::app::spawnables::MaterialCtx;
 use crate::core::error::EngineResult;
-use crate::level::data::{Level, WaterBody};
+use crate::level::data::{Level, WaterBody, WaterConfig};
 use crate::level::placement::{local_frame, PlacementError};
 use crate::rendering::material::{MaterialId, MaterialManagerBuilder};
 use crate::resources::textures::TextureManager;
@@ -140,6 +140,44 @@ pub fn spawn_objects(world: &mut World, level: &Level, materials: &LevelMaterial
     }
 }
 
+/// Flow-grid cell size for a level's water, in world units.
+///
+/// The grid is one world-space sheet at a single resolution, so it has to
+/// commit to one voxel size — but the honest input is the resolution of the
+/// terrain the water *sits in*, not the finest resolution anywhere in the
+/// level. A level whose water pools in a coarse segment should not be
+/// simulated at the resolution of some unrelated fine segment across the map:
+/// that costs cells with no gain, since the floor it samples is no finer.
+///
+/// Segments carrying water are found through each body's seed. An ocean covers
+/// everything, so it takes the world's finest and no per-body query applies.
+/// Where several bodies disagree, the finest of them wins: it is the only
+/// choice that resolves every pool's floor.
+fn water_cell_size(water_config: &WaterConfig, terrain: &TerrainWorld) -> f32 {
+    if water_config.ocean_level.is_some() {
+        return resolve_water_cell_size(std::iter::empty(), terrain.voxel_size());
+    }
+
+    let body_voxel_sizes = water_config.bodies.iter().map(|body| match body {
+        WaterBody::Pool {
+            seed,
+            surface_level,
+        } => terrain.voxel_size_at(Point3::new(seed.0, *surface_level, seed.1)),
+    });
+
+    resolve_water_cell_size(body_voxel_sizes, terrain.voxel_size())
+}
+
+/// Pick a cell size from the voxel sizes of the segments holding water.
+///
+/// Falls back to `world_finest` when no body reports one — an ocean, or a
+/// config with no bodies at all.
+fn resolve_water_cell_size(body_voxel_sizes: impl Iterator<Item = f32>, world_finest: f32) -> f32 {
+    let voxel_size = body_voxel_sizes.reduce(f32::min).unwrap_or(world_finest);
+
+    voxel_size * WATER_GRID_SCALE as f32
+}
+
 /// Create the water grids from the level's water configuration, if present.
 ///
 /// Returns both the coarse flow grid and the fine wave grid. Pool extents are
@@ -153,7 +191,7 @@ pub fn create_level_water(level: &Level, terrain: &TerrainWorld) -> Option<(Wate
     // placed terrain rather than from any single segment's authored extent.
     // Per-segment water grids are deferred; see the plan's open questions.
     let bounds = *terrain.bounds();
-    let cell_size = terrain.voxel_size() * WATER_GRID_SCALE as f32;
+    let cell_size = water_cell_size(water_config, terrain);
     let origin = nalgebra::Vector3::new(bounds.min.x, 0.0, bounds.min.z);
 
     let grid_width = ((bounds.max.x - bounds.min.x) / cell_size).ceil() as usize;
@@ -205,4 +243,33 @@ pub fn create_level_water(level: &Level, terrain: &TerrainWorld) -> Option<(Wate
     );
 
     Some((flow_grid, wave_grid))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cell_size_follows_the_segment_holding_the_water() {
+        // A pool in a 1.0-voxel segment gets 2 m cells even where the level
+        // also contains a 0.5-voxel segment elsewhere.
+        assert_eq!(resolve_water_cell_size([1.0].into_iter(), 0.5), 2.0);
+    }
+
+    #[test]
+    fn several_bodies_take_the_finest_of_them() {
+        // The grid is one sheet at one resolution, so it must resolve the
+        // finest floor any of its pools sits on.
+        assert_eq!(
+            resolve_water_cell_size([2.0, 0.5, 1.0].into_iter(), 0.25),
+            1.0
+        );
+    }
+
+    #[test]
+    fn no_bodies_falls_back_to_the_world_finest() {
+        // An ocean covers every segment, so the conservative choice is the only
+        // one that resolves all of them.
+        assert_eq!(resolve_water_cell_size(std::iter::empty(), 0.5), 1.0);
+    }
 }
