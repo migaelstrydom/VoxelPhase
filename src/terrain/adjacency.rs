@@ -244,6 +244,46 @@ impl<R: Copy + Eq + Hash> AdjacencyMap<R> {
         let manifold = self.manifold_edge_count();
         3 * total_triangles - 2 * manifold
     }
+
+    /// Every edge not shared by exactly two triangles, as segment-local
+    /// endpoints and the number of triangles that claim it.
+    ///
+    /// `boundary_edge_count` collapses two distinct defects into one number: a
+    /// hole (one triangle) and a seam where the surface passes through itself
+    /// (three or more). This reports them apart, and says where they are.
+    pub fn defective_edges(&self) -> Vec<DefectiveEdge> {
+        let cell = if self.inv_cell == 0.0 {
+            0.0
+        } else {
+            1.0 / self.inv_cell
+        };
+        let point = |q: QuantizedPos| {
+            Point3::new(
+                (q.0 as f64 * cell) as f32,
+                (q.1 as f64 * cell) as f32,
+                (q.2 as f64 * cell) as f32,
+            )
+        };
+
+        self.edge_map
+            .iter()
+            .filter(|(_, entries)| entries.len() != 2)
+            .map(|(edge, entries)| DefectiveEdge {
+                from: point(edge.0),
+                to: point(edge.1),
+                triangles: entries.len(),
+            })
+            .collect()
+    }
+}
+
+/// An edge that is not shared by exactly two triangles.
+#[derive(Debug, Clone, Copy)]
+pub struct DefectiveEdge {
+    pub from: Point3<f32>,
+    pub to: Point3<f32>,
+    /// Triangles claiming the edge: 1 is a hole, 3+ is a non-manifold seam.
+    pub triangles: usize,
 }
 
 impl AdjacencyMap<TriangleRef> {

@@ -22,7 +22,7 @@
 use nalgebra::{Point3, Vector3};
 use std::time::{Duration, Instant};
 
-use super::adjacency::AdjacencyMap;
+use super::adjacency::{AdjacencyMap, DefectiveEdge};
 use super::anchor::Anchor;
 use super::blast::{self, BlastConfig};
 use super::chunk::{ChunkCoord, ChunkTriangleRef, CHUNK_VOXELS};
@@ -576,6 +576,23 @@ impl Segment {
     /// segment. A closed surface has none.
     pub fn open_edge_count(&self) -> usize {
         self.adjacency.boundary_edge_count(self.triangle_count)
+    }
+
+    /// Edges not shared by exactly two triangles, lifted into world space.
+    ///
+    /// The count these explain is `open_edge_count`, but each one carries a
+    /// position and a triangle count, so a hole can be told from a
+    /// self-intersecting seam and either can be looked at.
+    pub fn defective_edges(&self) -> Vec<DefectiveEdge> {
+        self.adjacency
+            .defective_edges()
+            .into_iter()
+            .map(|mut edge| {
+                edge.from = self.frame.to_world(edge.from);
+                edge.to = self.frame.to_world(edge.to);
+                edge
+            })
+            .collect()
     }
 
     #[cfg(test)]

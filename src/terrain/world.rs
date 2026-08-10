@@ -30,6 +30,7 @@ use nalgebra::{Point3, Vector3};
 use rustc_hash::FxHashMap;
 use std::time::{Duration, Instant};
 
+use super::adjacency::DefectiveEdge;
 use super::blast::BlastConfig;
 use super::chunk::ChunkTriangleRef;
 use super::mesh_octree::MeshBuildTimings;
@@ -557,6 +558,21 @@ impl TerrainWorld {
     /// an ambiguous marching-cubes configuration that failed to close.
     pub fn open_edge_count(&self) -> usize {
         self.segments.iter().map(Segment::open_edge_count).sum()
+    }
+
+    /// Every defective edge in the world, tagged with the segment it came from.
+    ///
+    /// The counterpart to `open_edge_count`: the same defects, located.
+    pub fn defective_edges(&self) -> Vec<(&str, DefectiveEdge)> {
+        self.segments
+            .iter()
+            .flat_map(|segment| {
+                segment
+                    .defective_edges()
+                    .into_iter()
+                    .map(move |edge| (segment.name(), edge))
+            })
+            .collect()
     }
 
     pub fn triangle_count(&self) -> usize {

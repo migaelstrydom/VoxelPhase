@@ -5,43 +5,31 @@
 // meshing changes on purpose. The count is per level *file*, not per segment
 // definition: a segment instanced twice contributes twice.
 //
-// All three levels read **zero** open edges as of the heightfield-degeneracy
-// fix. Every figure recorded before it — 218, 22 and 1174 — came from lattice
-// samples landing exactly on an iso-surface, which turns out to be one bug and
-// not the three separate ones they were attributed to. The cave counts were not
-// cave noise finding an ambiguous marching-cubes case; they were
-// `carve_with_sdf` encoding a density of exactly zero wherever the noise
-// equalled its threshold. The test_segments figure was not the deck-meets-
-// terrain union either: a deck is authored at a round height, so its own
-// encoded surface sat on the lattice. Debiasing both density writes closed all
-// of them.
+// Every level reads **zero** open edges, and zero is the rule rather than a
+// tolerance. `level_check` still permits a small absolute rise before it
+// errors, so a rise recorded here is a real regression — read it as one.
 //
-// Zero is now the expectation rather than a tolerance. `level_check` still
-// permits a small absolute rise before it errors, so a rise recorded here is a
-// real regression — read it as one.
+// Two separate causes have been closed. The first was lattice coincidence: a
+// sample landing exactly on an iso-surface, which `carve_with_sdf` encoded as a
+// density of exactly zero. Debiasing the density writes fixed 218, 22 and 1174
+// counts that had been attributed to three different bugs.
 //
-// `subsidence` is the exception, and its 26 is recorded as a **known defect,
-// not an accepted tolerance**. Bisected by segment and then by feature:
+// The second was `subsidence`'s residual 26, and it was not a meshing failure
+// at all — the surface was watertight to within an ULP. Two marching-cubes
+// cells sharing a lattice edge disagreed about the vertex on it, in the last
+// bit, for two reasons: the edge table handed them the endpoints in opposite
+// orders, and the interpolation was written `a·(1 - t) + b·t`, which rounds
+// even the components that are equal at both ends. Vertex matching snaps
+// positions to a grid, so a sub-micron disagreement is invisible until it
+// straddles a snapping boundary — which is why the count was small,
+// scale-dependent, and immune to nudging authored surfaces off the lattice.
+// Both are now pinned by tests in `marching_cubes.rs`.
 //
-//     plain heightfield, 0.5 m voxels, 64 x 64      4
-//       + Tunnel                                   +0
-//       + Caves                                   +10
-//       + Shaft                                    -1
-//       + Island                                   +9
-//     pit_rim (1 m voxels, Plateaus/Ramp/Pillar)    4
-//     spoil_block                                   0
-//
-// The floor of 4 comes from a bare noisy heightfield with no volumes at all, so
-// the residual is scale-dependent rather than feature-specific — the three test
-// levels read zero because they are smaller, not because the class is closed.
-// Nudging every authored surface off the voxel lattice changed nothing (26 →
-// 27), so this is not the lattice-coincidence bug above. Do not treat this
-// entry as permission to add more; drive it to zero and delete it.
 (
     entries: [
         (level: "test_arena.level.ron", triangles: 193828, open_edges: 0),
         (level: "test_empty_terrain.level.ron", triangles: 100276, open_edges: 0),
         (level: "test_segments.level.ron", triangles: 224756, open_edges: 0),
-        (level: "subsidence.level.ron", triangles: 301284, open_edges: 26),
+        (level: "subsidence.level.ron", triangles: 301292, open_edges: 0),
     ],
 )

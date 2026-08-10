@@ -178,8 +178,7 @@ impl MarchingCubes {
                 let d0 = corners[v0].density;
                 let d1 = corners[v1].density;
                 let t = lerp_t(d0, d1, self.iso_level);
-                edge_vertices[i] =
-                    Point3::from(positions[v0].coords.lerp(&positions[v1].coords, t));
+                edge_vertices[i] = edge_point(positions[v0], positions[v1], t);
                 // Colour comes from the solid side only. Blending toward the
                 // air corner pulls the vertex colour toward transparent black,
                 // which darkens exposed surfaces where t is close to 0 or 1
@@ -252,6 +251,17 @@ fn sample_gradient(grid: &VoxelBlock, x: usize, y: usize, z: usize) -> Vector3<f
     Vector3::new(dx, dy, dz)
 }
 
+/// Position of the iso-crossing a fraction `t` along the lattice edge `a`–`b`.
+///
+/// Written as `a + (b - a) * t` rather than the textbook `a·(1 - t) + b·t`
+/// because a lattice edge runs along one axis: the other two components are
+/// equal at both ends, and only this form returns them unchanged. The textbook
+/// form rounds them off the lattice by an ULP, which is enough to stop two
+/// cells sharing the edge from agreeing on the vertex.
+fn edge_point(a: Point3<f32>, b: Point3<f32>, t: f32) -> Point3<f32> {
+    a + (b - a) * t
+}
+
 /// Interpolation parameter for an MC edge crossing the iso-surface.
 fn lerp_t(d0: f32, d1: f32, iso_level: f32) -> f32 {
     let t = if (d1 - d0).abs() > 1e-6 {
@@ -268,16 +278,27 @@ impl Default for MarchingCubes {
     }
 }
 
-/// Edge connections: which two corners each edge connects.
+/// Edge connections: which two corners each edge connects, always ordered so
+/// the edge runs along the positive axis.
+///
+/// The order is load-bearing, not cosmetic. Two cells sharing a lattice edge
+/// name it by different local corner indices, and the conventional table
+/// (which walks each cube face as a loop) hands them the pair in opposite
+/// directions. `lerp(a, b, t)` and `lerp(b, a, 1 - t)` are equal in exact
+/// arithmetic and differ by an ULP in `f32`, so the two cells would place the
+/// same surface vertex a few microns apart — enough to break vertex matching
+/// and open a hole in an otherwise watertight mesh. Orienting every edge the
+/// same way makes both cells evaluate the identical expression and agree bit
+/// for bit.
 const EDGE_CONNECTIONS: [(usize, usize); 12] = [
     (0, 1),
     (1, 2),
-    (2, 3),
-    (3, 0),
+    (3, 2),
+    (0, 3),
     (4, 5),
     (5, 6),
-    (6, 7),
-    (7, 4),
+    (7, 6),
+    (4, 7),
     (0, 4),
     (1, 5),
     (2, 6),
@@ -668,5 +689,94 @@ mod tests {
         for (i, n) in mesh.normals.iter().enumerate() {
             assert!(n.y > 0.9, "normal {i} should point up, got {:?}", n);
         }
+    }
+
+    /// Corner offsets within a cell, in the order `process_cell` samples them.
+    const CORNER_OFFSETS: [(i32, i32, i32); 8] = [
+        (0, 0, 0),
+        (1, 0, 0),
+        (1, 0, 1),
+        (0, 0, 1),
+        (0, 1, 0),
+        (1, 1, 0),
+        (1, 1, 1),
+        (0, 1, 1),
+    ];
+
+    /// Two cells sharing a lattice edge only agree on the vertex if they
+    /// interpolate it in the same direction, which holds exactly when every
+    /// edge in the table runs along a positive axis.
+    #[test]
+    fn every_edge_runs_along_a_positive_axis() {
+        for (i, (v0, v1)) in EDGE_CONNECTIONS.iter().enumerate() {
+            let a = CORNER_OFFSETS[*v0];
+            let b = CORNER_OFFSETS[*v1];
+            let delta = (b.0 - a.0, b.1 - a.1, b.2 - a.2);
+            assert!(
+                matches!(delta, (1, 0, 0) | (0, 1, 0) | (0, 0, 1)),
+                "edge {i} runs {delta:?}, which is not a positive unit axis"
+            );
+        }
+    }
+
+    /// The components that do not vary along a lattice edge must come back
+    /// bit-identical, or the vertex drifts off the shared plane.
+    #[test]
+    fn interpolation_leaves_the_constant_components_exact() {
+        let a = Point3::new(149.0, 11.5, 51.0);
+        let b = Point3::new(149.5, 11.5, 51.0);
+        for step in 0..=100 {
+            let p = edge_point(a, b, step as f32 / 100.0);
+            assert_eq!(p.y, 11.5, "y drifted at t = {step}/100");
+            assert_eq!(p.z, 51.0, "z drifted at t = {step}/100");
+        }
+    }
+
+    /// A closed surface must mesh watertight: every edge shared by exactly two
+    /// triangles, matched on exact positions rather than a tolerance.
+    ///
+    /// The tolerance is the point. Vertex matching downstream snaps positions
+    /// to a grid, so a sub-micron disagreement between two cells is invisible
+    /// until it happens to straddle a snapping boundary — and then it opens a
+    /// hole somewhere unrelated to the change that caused it.
+    #[test]
+    fn a_closed_surface_meshes_watertight_on_exact_positions() {
+        let n = 16;
+        let mut grid = block(n);
+        let centre = Point3::new(7.5, 7.5, 7.5);
+        for x in 0..n {
+            for y in 0..n {
+                for z in 0..n {
+                    // An off-lattice radius and an irrational-ish warp keep the
+                    // crossings away from the round values a symmetric field
+                    // would produce.
+                    let p = Point3::new(x as f32, y as f32, z as f32);
+                    let d = (p - centre).magnitude();
+                    let warp = 0.37 * (p.x * 0.7).sin() * (p.z * 1.3).cos();
+                    grid.set(x, y, z, voxel(5.3 + warp - d));
+                }
+            }
+        }
+
+        let mc = MarchingCubes::new();
+        let mesh = mc.generate_range(&grid, [0, 0, 0], [usize::MAX; 3]);
+        assert!(!mesh.positions.is_empty(), "the sphere should mesh");
+
+        let key = |p: Point3<f32>| (p.x.to_bits(), p.y.to_bits(), p.z.to_bits());
+        let mut edges: std::collections::HashMap<_, usize> = std::collections::HashMap::new();
+        for tri in mesh.indices.chunks(3) {
+            let p: Vec<_> = tri
+                .iter()
+                .map(|i| key(mesh.positions[*i as usize]))
+                .collect();
+            for i in 0..3 {
+                let (a, b) = (p[i], p[(i + 1) % 3]);
+                let edge = if a <= b { (a, b) } else { (b, a) };
+                *edges.entry(edge).or_default() += 1;
+            }
+        }
+
+        let open = edges.values().filter(|count| **count != 2).count();
+        assert_eq!(open, 0, "{open} of {} edges are not shared", edges.len());
     }
 }

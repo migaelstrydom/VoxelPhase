@@ -3,6 +3,7 @@
 //! ```bash
 //! cargo run --bin level_check -- levels/test_arena.level.ron
 //! cargo run --bin level_check -- levels/test_arena.level.ron --svg out/arena.svg
+//! cargo run --bin level_check -- levels/test_arena.level.ron --mesh-edges
 //! ```
 //!
 //! Loads a level, generates and meshes its terrain, and reports statistics,
@@ -16,13 +17,16 @@ use std::process::ExitCode;
 
 use voxel_phase::level::load_level;
 use voxel_phase::level_check::{build_terrain, check_level, write_schematic, Report, Severity};
+use voxel_phase::terrain::TerrainWorld;
 
-const USAGE: &str = "usage: level_check <level.ron> [--svg <out.svg>]";
+const USAGE: &str = "usage: level_check <level.ron> [--svg <out.svg>] [--mesh-edges]";
 
 /// Parsed command line.
 struct Args {
     level: PathBuf,
     svg: Option<PathBuf>,
+    /// List every edge behind the open-edge count, with its position.
+    mesh_edges: bool,
 }
 
 fn main() -> ExitCode {
@@ -47,6 +51,7 @@ fn main() -> ExitCode {
 fn parse_args(args: impl Iterator<Item = String>) -> Result<Args, String> {
     let mut level = None;
     let mut svg = None;
+    let mut mesh_edges = false;
     let mut args = args.peekable();
 
     while let Some(arg) = args.next() {
@@ -56,6 +61,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Args, String> {
                     args.next().ok_or("--svg needs an output path")?,
                 ));
             }
+            "--mesh-edges" => mesh_edges = true,
             "-h" | "--help" => return Err(USAGE.to_string()),
             other if other.starts_with('-') => return Err(format!("unknown option {other}")),
             other => {
@@ -69,6 +75,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Args, String> {
     Ok(Args {
         level: level.ok_or("no level file given")?,
         svg,
+        mesh_edges,
     })
 }
 
@@ -83,6 +90,10 @@ fn run(args: &Args) -> Result<bool, String> {
     let report = check_level(&level, &args.level, &terrain);
     print_report(&args.level, &report, build_time);
 
+    if args.mesh_edges {
+        print_defective_edges(&terrain);
+    }
+
     if let Some(path) = &args.svg {
         write_schematic(&level, &terrain, path)
             .map_err(|e| format!("could not write {}: {e}", path.display()))?;
@@ -90,6 +101,41 @@ fn run(args: &Args) -> Result<bool, String> {
     }
 
     Ok(report.passed())
+}
+
+/// List the edges behind the open-edge count.
+///
+/// The count alone cannot distinguish a hole in the surface from a place where
+/// the surface passes through itself, and cannot say where either is. Grouping
+/// by position makes clusters — the shape a real crack takes — obvious.
+fn print_defective_edges(terrain: &TerrainWorld) {
+    let edges = terrain.defective_edges();
+
+    println!("\nDefective edges ({})", edges.len());
+    if edges.is_empty() {
+        return;
+    }
+
+    let holes = edges.iter().filter(|(_, e)| e.triangles == 1).count();
+    println!(
+        "  {holes} hole edge(s) (1 triangle), {} non-manifold (3+)",
+        edges.len() - holes
+    );
+
+    let mut sorted = edges;
+    sorted.sort_by(|(sa, a), (sb, b)| {
+        sa.cmp(sb).then_with(|| {
+            (a.from.x, a.from.y, a.from.z)
+                .partial_cmp(&(b.from.x, b.from.y, b.from.z))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+    });
+    for (segment, edge) in &sorted {
+        println!(
+            "  {segment:<14} {:>3} tri  ({:8.3},{:8.3},{:8.3}) -> ({:8.3},{:8.3},{:8.3})",
+            edge.triangles, edge.from.x, edge.from.y, edge.from.z, edge.to.x, edge.to.y, edge.to.z
+        );
+    }
 }
 
 fn print_report(level_path: &Path, report: &Report, build_time: std::time::Duration) {
