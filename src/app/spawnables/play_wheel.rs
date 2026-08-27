@@ -191,6 +191,7 @@ impl Spawnable for PlayWheelDef {
                     body: body_handle,
                     target_up: UnitVector3::new_normalize(Vector3::y()),
                     compliance: 0.0,
+                    max_impulse: f32::INFINITY,
                 });
 
             (body_handle, anchor_handle, upright_handle)

@@ -60,6 +60,7 @@ pub fn spawn_player(world: &mut World, initial_pos: nalgebra::Point3<f32>) -> En
                 body: body_handle,
                 target_up: nalgebra::UnitVector3::new_normalize(Vector3::new(0.0, 1.0, 0.0)),
                 compliance: 0.0,
+                max_impulse: f32::INFINITY,
             });
         (body_handle, upright_handle)
     };

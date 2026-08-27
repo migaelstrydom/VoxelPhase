@@ -22,6 +22,36 @@ pub enum ConstraintKind {
         /// Angular compliance (0 = perfectly rigid, >0 = soft).
         /// Folded into effective mass as `1 / (J·M⁻¹·Jᵀ + compliance/dt²)`.
         compliance: f32,
+        /// Bound on the angular impulse each row may accumulate, matching the
+        /// `max_impulse` convention of the other constraint kinds.
+        /// `f32::INFINITY` means unlimited authority: the body is held upright
+        /// no matter what load is placed on it.
+        ///
+        /// A finite bound models an attitude control system with a real
+        /// actuator behind it — a thruster-stabilised platform tips under an
+        /// off-centre load and rights itself only if it has authority to
+        /// spare. Righting rate is linear in this value, so it works well as a
+        /// tuning dial, but it is *not* calibrated in N·m: the solver clamps
+        /// accumulated impulse once per frame while warm-starting re-applies it
+        /// each substep, so realised torque also depends on substep count and
+        /// `warm_start_scale`. Tune by feel against a reference load.
+        ///
+        /// A finite bound also forces velocity-level solving: hard projection
+        /// and NGS position correction both bypass impulse bounds, so they are
+        /// disabled when authority is limited. See `keep_upright::expand`.
+        ///
+        /// UNSTABLE — prefer `f32::INFINITY` for now. A bound low enough to
+        /// actually saturate injects energy rather than bleeding it: the row
+        /// re-applies a frame's accumulated impulse once per substep via
+        /// warm-starting, and unlike an unbounded row it cannot undo the
+        /// over-application on the next iteration. Measured divergence to
+        /// ±47 rad/s on a 52 kg·m² body at bounds of 50–200. Fixing it means
+        /// decrementing `accumulated_impulse` on warm start, which is shared
+        /// with contacts and every other joint.
+        ///
+        /// Note that `RigidBodyDesc`'s default `angular_damping` of 0.05 will
+        /// dominate small bounds — check it before concluding a dial is dead.
+        max_impulse: f32,
     },
 
     /// Locks all 6 DOF between two bodies (or body to world). Equivalent

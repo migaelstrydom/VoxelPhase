@@ -35,6 +35,7 @@ pub fn expand_constraints(
                 body,
                 target_up,
                 compliance,
+                max_impulse,
             } => {
                 let Some(rigid_body) = bodies.get(body.0) else {
                     continue;
@@ -44,6 +45,7 @@ pub fn expand_constraints(
                     *body,
                     target_up,
                     *compliance,
+                    *max_impulse,
                     dt,
                     beta,
                     index,
@@ -209,6 +211,13 @@ pub fn write_back_constraints(constraints: &mut Arena<Constraint>, rows: &[Const
 /// A constraint is breakable when its rows have finite impulse bounds
 /// (max_impulse < f32::MAX). When any row's accumulated impulse reaches the
 /// bound, the joint cannot provide enough force and is permanently deactivated.
+///
+/// `KeepUpright` is exempt. Its bound is the authority of an attitude
+/// controller, not the failure load of a joint: a thruster-stabilised platform
+/// that saturates while righting an off-centre load is working exactly as
+/// intended, and must keep trying on the next frame. Without this exemption a
+/// bounded KeepUpright deactivates on its first saturated frame and never
+/// rights anything again.
 pub fn check_constraint_breakage(constraints: &mut Arena<Constraint>, rows: &[ConstraintRow]) {
     const SATURATION_THRESHOLD: f32 = 0.999;
 
@@ -219,6 +228,9 @@ pub fn check_constraint_breakage(constraints: &mut Arena<Constraint>, rows: &[Co
         }
         if row.accumulated_impulse.abs() >= max_bound * SATURATION_THRESHOLD {
             if let Some(constraint) = constraints.get_mut(row.constraint_index) {
+                if matches!(constraint.kind, ConstraintKind::KeepUpright { .. }) {
+                    continue;
+                }
                 constraint.active = false;
             }
         }

@@ -1087,6 +1087,7 @@ impl PhysicsBenchScenario for KeepUprightScenario {
             body,
             target_up: UnitVector3::new_normalize(Vector3::y()),
             compliance: self.compliance,
+            max_impulse: f32::INFINITY,
         });
 
         body

@@ -34,11 +34,18 @@ fn perpendicular_basis(target_up: &UnitVector3<f32>) -> (Vector3<f32>, Vector3<f
 /// Expand a KeepUpright constraint into two solver rows.
 ///
 /// `beta` is the position correction factor (from `PositionCorrectionConfig::correction_factor`).
+///
+/// `max_impulse` bounds the angular impulse each row may accumulate. A finite
+/// bound rules out `Enforcement::HardProjection`, which rewrites velocity
+/// directly and would spend unlimited impulse doing it; the rows fall back to
+/// iterative solving, where the bound is honoured. `PositionCorrectionSolver`
+/// skips its NGS pass for bounded constraints for the same reason.
 pub fn expand(
     body: &RigidBody,
     body_handle: RigidBodyHandle,
     target_up: &UnitVector3<f32>,
     compliance: f32,
+    max_impulse: f32,
     dt: f32,
     beta: f32,
     constraint_index: generational_arena::Index,
@@ -61,7 +68,7 @@ pub fn expand(
     let bias_1 = -(beta / dt) * error_1;
     let bias_2 = -(beta / dt) * error_2;
 
-    let enforcement = if compliance > 0.0 {
+    let enforcement = if compliance > 0.0 || max_impulse.is_finite() {
         Enforcement::Iterative
     } else {
         Enforcement::HardProjection
@@ -82,7 +89,7 @@ pub fn expand(
             perp1,
             bias_1,
             compliance_term,
-            f32::MAX,
+            max_impulse,
             CorrectionMode::PositionAndVelocity,
             enforcement,
             &RowParams {
@@ -97,7 +104,7 @@ pub fn expand(
             perp2,
             bias_2,
             compliance_term,
-            f32::MAX,
+            max_impulse,
             CorrectionMode::PositionAndVelocity,
             enforcement,
             &RowParams {

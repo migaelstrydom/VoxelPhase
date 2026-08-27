@@ -606,15 +606,22 @@ fn correct_constraint_angular_drift(
                 body,
                 target_up,
                 compliance,
+                max_impulse,
             } => {
-                let angular_factor = correction_factor / (1.0 + compliance);
-                correct_upright_angular_drift(
-                    bodies,
-                    body.0,
-                    target_up,
-                    angular_factor,
-                    transforms,
-                );
+                // NGS rotates the body directly, with no impulse to bound, so
+                // it would right a torque-limited platform for free. Bodies
+                // with a finite budget recover through the velocity rows alone
+                // — which is the point: limited authority may not recover.
+                if !max_impulse.is_finite() {
+                    let angular_factor = correction_factor / (1.0 + compliance);
+                    correct_upright_angular_drift(
+                        bodies,
+                        body.0,
+                        target_up,
+                        angular_factor,
+                        transforms,
+                    );
+                }
             }
 
             ConstraintKind::Fixed {

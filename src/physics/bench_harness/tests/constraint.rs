@@ -31,6 +31,7 @@ fn keep_upright_kills_angular_velocity_in_free_fall() {
         body,
         target_up: UnitVector3::new_normalize(Vector3::y()),
         compliance: 0.0,
+        max_impulse: f32::INFINITY,
     });
 
     use crate::debug::DebugLines;
@@ -48,6 +49,48 @@ fn keep_upright_kills_angular_velocity_in_free_fall() {
     assert!(
         ang_speed < 0.01,
         "constraint should kill angular velocity immediately: {ang_speed:.4}"
+    );
+}
+
+/// A bounded KeepUpright must keep righting after its rows saturate.
+///
+/// `check_constraint_breakage` deactivates any constraint whose finite-bound
+/// rows saturate, which is right for joints and wrong for an attitude
+/// controller. Without the KeepUpright exemption this constraint dies on its
+/// first frame and the spin survives, decaying only through angular damping.
+#[test]
+fn keep_upright_bounded_survives_saturation() {
+    let geometry = FlatQuadGeometry::new(8.0);
+    let mut config = PhysicsConfig::default();
+    config.sleep.enabled = false;
+    let mut world = PhysicsWorld::new(config);
+
+    let desc = RigidBodyDesc::dynamic()
+        .position(Point3::new(0.0, 50.0, 0.0)) // free fall, no ground contact
+        .angular_velocity(Vector3::new(5.0, 0.0, 0.0));
+    let body = world.create_body(desc);
+    let _ = world.attach_collider(body, ColliderDesc::sphere(0.5).density(1000.0));
+    let _ = world.create_constraint(ConstraintKind::KeepUpright {
+        body,
+        target_up: UnitVector3::new_normalize(Vector3::y()),
+        compliance: 0.0,
+        max_impulse: 400.0,
+    });
+
+    let dt = 1.0 / 240.0;
+    let mut debug_lines = DebugLines::default();
+    for _ in 0..30 {
+        world.update_contacts(dt, 4, &geometry, &[], &mut debug_lines);
+        for _ in 0..4 {
+            world.substep(dt, &geometry, &[]);
+        }
+    }
+
+    let ang_speed = world.body(body).unwrap().angular_velocity().magnitude();
+    eprintln!("bounded keep-upright ang_speed after 30 frames: {ang_speed:.6}");
+    assert!(
+        ang_speed < 0.5,
+        "bounded constraint should stay active and right the body: {ang_speed:.4}"
     );
 }
 
@@ -71,6 +114,7 @@ fn keep_upright_sphere_rests_on_ground() {
         body,
         target_up: UnitVector3::new_normalize(Vector3::y()),
         compliance: 0.0,
+        max_impulse: f32::INFINITY,
     });
 
     use crate::debug::DebugLines;
@@ -125,6 +169,7 @@ fn keep_upright_capsule_with_velocity_zeroing() {
         body,
         target_up: UnitVector3::new_normalize(Vector3::y()),
         compliance: 0.0,
+        max_impulse: f32::INFINITY,
     });
 
     use crate::debug::DebugLines;
