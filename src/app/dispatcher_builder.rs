@@ -15,6 +15,7 @@ use crate::fracture::FractureSystem;
 use crate::input::InputActionSystem;
 use crate::lighting::LightCollectionSystem;
 use crate::particles::{ParticleSpawnSystem, ParticleUpdateSystem};
+use crate::platform::MovingPlatformSystem;
 use crate::projectile::{
     GrenadeSpawnSystem, GrenadeVisualSystem, LifetimeSystem, ProjectileDetonationSystem,
 };
@@ -46,11 +47,20 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
             "character_control",
             &["player_input", "brain"],
         )
+        // Platform motors state their intent as a velocity, exactly as the
+        // character systems do, and must land before physics_sync turns it
+        // into a drive target.
+        .with(MovingPlatformSystem, "moving_platform", &["input_actions"])
         // Physics engine (buoyancy forces computed per-substep internally)
         .with(
             PhysicsSyncSystem::default(),
             "physics_sync",
-            &["character_control", "roller_locomotion", "alert_telegraph"],
+            &[
+                "character_control",
+                "roller_locomotion",
+                "alert_telegraph",
+                "moving_platform",
+            ],
         )
         // Compound body fracture (uses solver impulses from this frame)
         .with(FractureSystem, "fracture", &["physics_sync"])

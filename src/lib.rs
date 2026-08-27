@@ -20,6 +20,7 @@ pub mod lighting;
 pub mod model;
 pub mod particles;
 pub mod physics;
+pub mod platform;
 pub mod player;
 pub mod projectile;
 pub mod rendering;

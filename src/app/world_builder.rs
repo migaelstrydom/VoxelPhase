@@ -20,6 +20,7 @@ use crate::input::{GameplayActions, InputState};
 use crate::lighting::{ActiveLights, PointLight};
 use crate::particles::{ParticleConfig, ParticleEmitter, ParticlePool};
 use crate::physics::PhysicsImpulseQueue;
+use crate::platform::MovingPlatform;
 use crate::player::Player;
 use crate::projectile::{
     Grenade, GrenadeConfig, GrenadeCooldown, GrenadeModelResource, Lifetime, Projectile,
@@ -77,6 +78,7 @@ impl WorldBuilder {
         world.register::<ContactCandidates>();
         world.register::<RigidBodyComponent>();
         world.register::<VelocityDriven>();
+        world.register::<MovingPlatform>();
         world.register::<Grenade>();
         world.register::<Lifetime>();
         world.register::<Projectile>();

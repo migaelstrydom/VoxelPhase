@@ -1,0 +1,154 @@
+//! A powered platform that shuttles between two world points under its own
+//! motor.
+//!
+//! Nothing anchors it to the world. It is a heavy dynamic box with two pieces
+//! of machinery bolted on:
+//!
+//! ```text
+//!   MovingPlatformSystem ──► Velocity ──► VelocityDriven ──► solver
+//!        (aim at endpoint)    (intent)      (motor, capped
+//!                                            acceleration)
+//!   KeepUpright ─────────────────────────► solver
+//!         (rigid attitude, unlimited authority)
+//! ```
+//!
+//! The motor commands speed and never position, but it commands it *toward* the
+//! endpoint it is currently running to, so displacement is transient: shove the
+//! platform sideways with a grenade and it converges back on to its route as it
+//! travels. Gravity stays switched on, so a platform that loses its
+//! `VelocityDriven` component — the same trick `DeathSystem` uses on the player
+//! — stops being a platform and becomes a falling box.
+
+use nalgebra::{Point3, UnitVector3, Vector3};
+use serde::Deserialize;
+use specs::{Builder, Entity, World, WorldExt};
+
+use super::box_object::create_box_material_for_style;
+use super::shared::finish::ColliderSurface;
+use super::shared::models::cuboid_model;
+use super::{MaterialCtx, Spawnable};
+use crate::components::{
+    ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity, VelocityDriven,
+};
+use crate::core::error::EngineResult;
+use crate::level::BoxStyle;
+use crate::physics::constraint::ConstraintKind;
+use crate::physics::{ColliderDesc, RigidBodyDesc};
+use crate::platform::MovingPlatform;
+use crate::rendering::material::MaterialId;
+use crate::rendering::physical_finish::PhysicalSurface;
+use crate::systems::PhysicsResource;
+
+/// Heavy enough that a player walking on to it barely registers, light enough
+/// that a grenade still means something.
+const PLATFORM_SURFACE: PhysicalSurface = PhysicalSurface {
+    restitution: 0.1,
+    friction: 0.9,
+    density: 300.0,
+};
+
+/// Acceleration budget of the motor, in m/s². Must clear gravity with room to
+/// spare or the platform sags on every upward leg; the lower this is, the more
+/// a heavy load drags the patrol off its cruise speed.
+const MOTOR_MAX_ACCEL: f32 = 40.0;
+
+#[derive(Deserialize)]
+pub struct MovingPlatformDef {
+    /// One end of the shuttle, in world space. The platform spawns here.
+    pub from: (f32, f32, f32),
+    /// The other end, in world space.
+    pub to: (f32, f32, f32),
+    #[serde(default = "MovingPlatformDef::default_half_extents")]
+    pub half_extents: (f32, f32, f32),
+    /// Cruise speed, in m/s.
+    #[serde(default = "MovingPlatformDef::default_speed")]
+    pub speed: f32,
+}
+
+impl MovingPlatformDef {
+    pub fn default_half_extents() -> (f32, f32, f32) {
+        (2.0, 0.3, 2.0)
+    }
+    pub fn default_speed() -> f32 {
+        2.0
+    }
+}
+
+impl Spawnable for MovingPlatformDef {
+    fn material_count(&self) -> usize {
+        1
+    }
+
+    fn create_materials(&self, ctx: &mut MaterialCtx) -> EngineResult<Vec<MaterialId>> {
+        Ok(vec![create_box_material_for_style(
+            BoxStyle::Warning,
+            PLATFORM_SURFACE,
+            ctx.textures,
+            ctx.materials,
+        )?])
+    }
+
+    fn spawn(&self, world: &mut World, materials: &[MaterialId]) -> Vec<Entity> {
+        let from = Vector3::new(self.from.0, self.from.1, self.from.2);
+        let to = Vector3::new(self.to.0, self.to.1, self.to.2);
+        let pos = Point3::from(from);
+        let half_extents = Vector3::new(
+            self.half_extents.0,
+            self.half_extents.1,
+            self.half_extents.2,
+        );
+        let model = cuboid_model(half_extents, materials[0]);
+
+        let body_handle = {
+            let mut physics = world.write_resource::<PhysicsResource>();
+
+            // Damping is left at zero: the motor already sets the speed, and
+            // damping would only fight it. Gravity stays on so an unpowered
+            // platform falls.
+            let body_desc = RigidBodyDesc::dynamic()
+                .position(pos)
+                .gravity_scale(1.0)
+                .linear_damping(0.0)
+                .angular_damping(0.05);
+
+            let body_handle = physics.world.create_body(body_desc);
+            physics.world.attach_collider(
+                body_handle,
+                ColliderDesc::box_shape(half_extents).with_physical_surface(PLATFORM_SURFACE),
+            );
+
+            // Rigid attitude with unlimited authority — the proven path. A
+            // finite `max_impulse` would buy tipping-under-load, but bounded
+            // rows are unstable when they saturate; see the field docs on
+            // `ConstraintKind::KeepUpright`.
+            let _ = physics
+                .world
+                .create_constraint(ConstraintKind::KeepUpright {
+                    body: body_handle,
+                    target_up: UnitVector3::new_normalize(Vector3::y()),
+                    compliance: 0.0,
+                    max_impulse: f32::INFINITY,
+                });
+
+            body_handle
+        };
+
+        let platform = MovingPlatform::new(from, to, self.speed);
+
+        vec![world
+            .create_entity()
+            .with(Position(from))
+            .with(Velocity(Vector3::zeros()))
+            .with(Orientation(nalgebra::UnitQuaternion::identity()))
+            .with(RigidBodyComponent(body_handle))
+            .with(VelocityDriven {
+                max_accel: MOTOR_MAX_ACCEL,
+                angular_velocity: Vector3::zeros(),
+                angular_max_accel: 0.0,
+            })
+            .with(platform)
+            .with(ModelInstance::new(model))
+            .with(Renderable)
+            .build()]
+    }
+}

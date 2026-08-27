@@ -6,6 +6,7 @@ mod constraint;
 mod dynamic_pairs;
 mod many_body;
 mod mesh_pipeline;
+mod moving_platform;
 mod solver;
 mod stability;
 mod static_bodies;

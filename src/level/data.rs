@@ -28,10 +28,10 @@ use crate::app::creatures::RollerDef;
 use crate::app::spawnables::{
     BananaDef, BeachBallDef, BoxDef, BoxWallDef, CapsuleDef, CrateDef, DodecahedronDef, DolosDef,
     DominoDef, FencePostDef, GlowingOrbDef, HeavyCrateDef, HexPrismDef, HoneycombWallDef, HouseDef,
-    IcosahedronDef, JackDef, JengaDef, MenhirDef, OctahedronDef, PendulumDef, PlankBridgeDef,
-    PlankDef, PlayWheelDef, PyramidDef, SeesawDef, Spawnable, StackDef, StackItemDef, TableDef,
-    TempleDef, TetrahedronDef, TowerDef, TrampolineDef, TrilithonDef, VoussoirArchDef,
-    BEACH_BALL_RADIUS,
+    IcosahedronDef, JackDef, JengaDef, MenhirDef, MovingPlatformDef, OctahedronDef, PendulumDef,
+    PlankBridgeDef, PlankDef, PlayWheelDef, PyramidDef, SeesawDef, Spawnable, StackDef,
+    StackItemDef, TableDef, TempleDef, TetrahedronDef, TowerDef, TrampolineDef, TrilithonDef,
+    VoussoirArchDef, BEACH_BALL_RADIUS,
 };
 
 /// Top-level level description.
@@ -869,6 +869,20 @@ pub enum LevelObject {
         #[serde(default = "PendulumDef::default_ball_density")]
         ball_density: f32,
     },
+    /// Powered platform shuttling between two authored points under its own
+    /// motor. Unanchored: a blast can shove it off its route and it flies back,
+    /// but stripping its drive drops it out of the sky for good.
+    MovingPlatform {
+        /// Where the platform spawns and the end it returns to. Explicit Y —
+        /// the travel is authored, not derived from the ground under it.
+        from: (f32, f32, f32),
+        /// The far end of the run.
+        to: (f32, f32, f32),
+        #[serde(default = "MovingPlatformDef::default_half_extents")]
+        half_extents: (f32, f32, f32),
+        #[serde(default = "MovingPlatformDef::default_speed")]
+        speed: f32,
+    },
     /// Spinning playground wheel anchored to terrain. Spins freely around Y.
     PlayWheel {
         /// Position (x, z). Y is determined by terrain surface height.
@@ -1252,6 +1266,7 @@ impl LevelObject {
             LevelObject::FencePost { pos, .. } => ("FencePost", anchored(pos)),
             LevelObject::Roller { pos, .. } => ("Roller", anchored(pos)),
             LevelObject::Pendulum { pos, .. } => ("Pendulum", anchored(pos)),
+            LevelObject::MovingPlatform { from, .. } => ("MovingPlatform", point(from)),
             LevelObject::PlayWheel { pos, .. } => ("PlayWheel", anchored(pos)),
             LevelObject::Seesaw { pos, .. } => ("Seesaw", anchored(pos)),
             LevelObject::Tetrahedron { pos, .. } => ("Tetrahedron", point(pos)),
@@ -1467,6 +1482,12 @@ impl LevelObject {
             LevelObject::FencePost { radius, .. } => Disc { radius: *radius },
             LevelObject::Roller { radius, .. } => Disc { radius: *radius },
             LevelObject::PlayWheel { radius, .. } => Disc { radius: *radius },
+            // The deck at its spawn point. A platform spends most of its life
+            // away from there, but the footprint is about what it is placed
+            // over.
+            LevelObject::MovingPlatform { half_extents, .. } => {
+                rect(half_extents.0, half_extents.2, 0.0)
+            }
             // Both stand on a single post or fulcrum; what reaches out sideways
             // is overhead and touches nothing.
             LevelObject::Pendulum { .. } => Point,
@@ -1553,6 +1574,10 @@ impl LevelObject {
             | LevelObject::House { .. }
             | LevelObject::Pendulum { .. }
             | LevelObject::Seesaw { .. }
+            // Its patrol axis is authored in world space, so a turned segment
+            // would rotate the deck's footprint but not the direction it
+            // travels. Turning it means turning `axis` too.
+            | LevelObject::MovingPlatform { .. }
             | LevelObject::VoussoirArch { .. }
             | LevelObject::Temple { .. } => Fixed,
         }
@@ -1623,6 +1648,10 @@ impl LevelObject {
             LevelObject::FencePost { pos, .. } => p2(pos),
             LevelObject::Roller { pos, .. } => p2(pos),
             LevelObject::Pendulum { pos, .. } => p2(pos),
+            LevelObject::MovingPlatform { from, to, .. } => {
+                p3(from);
+                p3(to);
+            }
             LevelObject::PlayWheel { pos, .. } => p2(pos),
             LevelObject::Seesaw { pos, .. } => p2(pos),
             LevelObject::Tetrahedron { pos, .. } => p3(pos),
@@ -1876,6 +1905,18 @@ impl LevelObject {
                 rope_length: *rope_length,
                 ball_radius: *ball_radius,
                 ball_density: *ball_density,
+            }),
+
+            LevelObject::MovingPlatform {
+                from,
+                to,
+                half_extents,
+                speed,
+            } => Box::new(MovingPlatformDef {
+                from: *from,
+                to: *to,
+                half_extents: *half_extents,
+                speed: *speed,
             }),
 
             LevelObject::PlayWheel {
