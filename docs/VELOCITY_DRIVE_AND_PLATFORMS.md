@@ -115,12 +115,15 @@ The "hover" is not a bug and not a special case. It is the player's drive target
 holding the last velocity it measured, while `body.rs:455` bleeds gravity into
 that target one substep at a time until it goes negative.
 
-**What is genuinely untested:** a *horizontal* platform. There, `x` and `z` are
+**A *horizontal* platform does not carry at all.** There, `x` and `z` are
 overwritten toward the walk target (zero when idle) at `ground_accel`, so the
-drive really would brake against the carry. The vertical case is safe precisely
-because it is the one axis gameplay does not touch. This is a prediction, not a
-measurement — `levels/test_arena.level.ron` now carries a horizontal run at
-z = −18 to settle it.
+drive brakes against the carry. The vertical case is safe precisely because it
+is the one axis gameplay does not touch. This was a prediction; the
+`horizontal_lift_carry` acceptance test now measures it. A deck running at
+3 m/s under an idle passenger leaves them at **0.00 m/s in world space**: the
+platform slides out from under them in under a second and they fall off the
+back. `levels/test_arena.level.ron` carries a horizontal run at z = −18 to see
+it in play.
 
 ---
 
@@ -249,7 +252,14 @@ platform for as long as it keeps doing so. It never loses ground permanently.
 
 **Not implemented**
 - Any reaction from a driven body onto what it is standing on.
-- Horizontal-platform carry (see §2) — authored and awaiting play-test.
+- Horizontal-platform carry (see §2) — measured, and it does not work: the
+  passenger is braked to a standstill and dropped off the back.
+
+**Characterised**
+- All eight scenarios in §7 R12 now exist as acceptance tests
+  (`src/physics/bench_harness/tests/traction_drive.rs`), pinning current
+  behaviour — including the two defects this document names, so that fixing
+  them is visible as a sign change rather than a mystery.
 
 The platform's route is now a servo rather than a heading: cruise along the leg
 at `speed`, plus a proportional correction across it. That closes the gravity
@@ -261,7 +271,8 @@ correction leaves it standing at that over `route_gain`, measured at 10 mm.
 
 ## 6. Where a fix would live
 
-Recorded for later; no code yet.
+Recorded for later; no code yet. The requirements this has to satisfy are in
+§7.
 
 The minimal honest change is to make the drive **spend its impulse against the
 supporting body** rather than against the world: when a driven body is in
@@ -278,3 +289,132 @@ ground they are trying to walk on, so walking would stop working entirely.
 Note the interaction with `sensing/probe` and grounding: whatever receives the
 reaction must be the body actually supporting the character, which is
 information the probe already computes.
+
+---
+
+## 7. Design requirements
+
+Requirements for the replacement mechanism. No code yet; this is the contract
+any design must satisfy.
+
+**R1 — Conservation.** Every impulse a drive applies to a body applies an equal
+and opposite impulse to a declared reaction partner, at the point of
+application. Momentum must not appear from nowhere, because that is the single
+fact from which every defect in §3 and §4 follows. Walking `+X` at the platform's
+`+Z` edge must torque the platform `−Y`, not `+Y`.
+
+**R2 — Infinite-mass partners absorb silently.** When the reaction partner is
+static or kinematic, the full impulse lands on the driven body and the reaction
+is discarded. This is not an exception to R1 but its limiting case, and it is
+what makes walking on terrain work at all. A player walking on the world's
+terrain accelerates exactly as they do today.
+
+**R3 — Declared reaction partner.** Each drive states what it pushes against —
+the contacts supporting it, or an implicit medium — rather than the engine
+inferring it. A character's authority comes from the ground it stands on, but a
+platform's motor is a thruster burning an infinite fuel supply against the air:
+both are honest, and the difference is a property of the entity, not a second
+code path. A lift carrying a player does not recoil, because its reaction goes
+into the medium; the player it carries still recoils onto the lift.
+
+**R4 — Support-relative targets.** The drive target is expressed in the frame of
+its reaction partner, not in world space. A world-space target fights any carry
+it does not happen to ignore, and the only reason the vertical lift works today
+is that gameplay never writes the `y` axis. "Walk at 5 m/s across the platform"
+must produce the same gait whether the platform is still, rising, or running
+horizontally at 4 m/s.
+
+**R5 — Command and measurement are separate channels.** Gameplay writes a drive
+intent; the engine reports a measured velocity; neither reads back the other's
+output as its own input. The present `Velocity` component is both at once, so
+every gameplay write is an edit to a measurement and the correctness of the ride
+depends on which axes are left alone. `CharacterControlSystem` should never need
+to know what the body's current `y` velocity is in order to leave it intact.
+
+**R6 — No privileged coordinates.** The drive's basis is derived from the
+contact normals it acts through, falling back to the gravity direction when
+unsupported. Hard-coded x/z is ad-hoc and breaks the moment gravity is not `−Y`.
+A character standing on a wall in a rotated-gravity region walks along that wall
+with no special case anywhere.
+
+Variable gravity is long-term, so the fallback reads the world's single
+`PhysicsConfig::gravity` through an accessor — the normalise-with-fallback
+already open-coded at `world.rs:688`, lifted to a method. What R6 forbids is a
+literal `Vector3::y()` or an `x`/`z` pair in the drive code; a global source for
+the direction is fine, and per-body gravity later becomes a change to that one
+accessor rather than to anything downstream of it.
+
+**R7 — Authority bounded by the contact.** A drive acting through a contact may
+not exceed the tangential impulse that contact can transmit (`μ·N`). Unbounded
+`max_accel` is the mechanism by which the drive pays friction's bill from an
+infinite account. Ice gives poor traction and a heavy crate is pushed at a speed
+set by the mass ratio, both without an authored number.
+
+**R8 — Remaining cheats are named, bounded, and opt-in.** Any non-conservative
+authority that survives — air control, yaw in mid-air — lives in one clearly
+named place with an explicit budget, per entity. A platformer needs these, and
+the failure mode is not their existence but their being the unmarked default
+scattered across `is_velocity_driven` branches. Air steering is a declared
+allowance on the player, not a property of every driven body.
+
+**R9 — Reaction distributes over all supports.** The reaction is spread across
+every supporting contact, weighted by normal impulse and applied at each contact
+point. A character standing across two crates, or bridging a platform and the
+terrain, has no single support body to nominate. Standing with one foot on a
+platform edge and one on terrain torques the platform by that share only.
+
+**R10 — Linear and angular use one mechanism.** The angular drive obeys R1–R9
+identically to the linear drive. Fixing only the linear channel rebuilds the
+same pump in the yaw channel. Turning while standing on a free-spinning
+turntable spins the turntable the other way.
+
+**R11 — The engine's drive-aware surface does not grow.** Count the places in
+`src/physics/` that know a body is velocity-driven; after this work that count
+must be no higher, and each survivor must be justified in a comment naming the
+instability it prevents. Special cases are acceptable where they earn their
+keep, but they are a budget rather than a free resource — an unbudgeted one
+becomes the `is_velocity_driven` scatter already visible in `water/coupling.rs`.
+Today's surface is `RigidBody::velocity_drive` and its target shift, the
+warm-start persistence rule and the restitution suppression in
+`pipeline/solver.rs` (both added by `84a49b1` precisely to stabilise driven
+bodies), and the drive application in `integrate_forces`.
+
+*Aspiration, not a requirement:* express the drive as constraint rows solved in
+the existing PGS loop, which would give R1, R7 and R9 by construction and let
+most of that surface be deleted. This is where the design should aim, but a
+pre-solve application that hits R1–R10 by other means also satisfies R11 — and
+there is prior evidence the solver-native route is harder than it looks, since
+the current `integrate_forces` formulation was itself arrived at after
+instabilities. Treat "how" as open; R12 is what decides it.
+
+**R12 — Acceptance tests are written first.** Each behaviour below becomes a
+bench-harness scenario, passing against the current implementation where it
+already works, before the mechanism changes underneath it. The current
+behaviour is only partly understood and partly accidental, so without them a
+regression is indistinguishable from a correction. Include at least:
+
+| Scenario | Assertion |
+|---|---|
+| Vertical lift carry | passenger rides at platform speed, no slip |
+| Reversal hover | passenger goes ballistic, platform catches them |
+| Horizontal lift carry | passenger holds station on a platform running at speed |
+| Cruise under load | platform holds authored speed against gravity and a passenger |
+| Edge walk | platform yaws **opposite** to the walker (the sign in §3) |
+| Crate push | push speed follows the mass ratio, no jitter |
+| Stack stability | driven body resting on a stack does not excite it |
+| Driven body at rest | no jitter or restitution popping against ground or wall (what `84a49b1`'s solver special cases protect) |
+
+---
+
+## 8. Deferred: the effort parameter
+
+R6 and R7 change how the game feels: once the drive acts in the contact tangent
+plane under a traction bound, walking uphill costs speed and walking downhill
+gains it. Whether that is wanted is not yet decided, and the requirements above
+stand either way.
+
+If it needs correcting, the correction is an **effort** parameter rather than a
+return to privileged coordinates: the character pushes harder up a slope and
+brakes down one, as a deliberate, named authority on top of an honest drive.
+That keeps the physics conservative and puts the feel adjustment where it can be
+seen and tuned.

@@ -11,6 +11,7 @@ mod solver;
 mod stability;
 mod static_bodies;
 mod substep_budget;
+mod traction_drive;
 mod wall_slide;
 mod wobble;
 
