@@ -13,8 +13,9 @@ use super::constraint::types::Constraint;
 use super::constraint::ConstraintHandle;
 use super::contact_event::{ContactEvent, ContactSource};
 use super::debug::{PhysicsDebugConfig, PhysicsDebugger};
+use super::drive::{SupportConfig, SupportResolver, SupportSets};
 use super::force_provider::{ForceContext, ForceOutput, SubstepForceProvider};
-use super::grounding::{GroundingConfig, GroundingDetector};
+use super::grounding::GroundingDetector;
 use super::handle::{ColliderHandle, RigidBodyHandle};
 use super::impact::ImpactLedger;
 use super::impulses::PhysicsImpulse;
@@ -79,8 +80,8 @@ pub struct PhysicsConfig {
     pub deterministic_contact_ordering: bool,
     /// Configuration for smoothing matched contact normals.
     pub normal_smoothing: NormalSmoothingConfig,
-    /// Configuration for grounded detection.
-    pub grounding: GroundingConfig,
+    /// Configuration for what counts as a contact holding a body up.
+    pub support: SupportConfig,
     /// Allow warm-start when raw depth exceeds this (can be negative).
     pub warm_start_depth_slop: f32,
     /// Enable speculative contacts to close the CCD activation gap.
@@ -134,7 +135,7 @@ impl Default for PhysicsConfig {
             manifold_max_age: 3,
             deterministic_contact_ordering: false,
             normal_smoothing: NormalSmoothingConfig::default(),
-            grounding: GroundingConfig::default(),
+            support: SupportConfig::default(),
             warm_start_depth_slop: 0.02,
             enable_speculative_contacts: true,
             speculative_min_speed: 1.0,
@@ -160,12 +161,10 @@ pub struct PhysicsWorld {
     debugger: PhysicsDebugger,
     frame_index: u64,
     sleep_manager: SleepManager,
+    /// Classifies contacts into per-body Support Sets.
+    support_resolver: SupportResolver,
+    /// Projects Support Sets to the grounded set, carrying sleeping bodies.
     grounding_detector: GroundingDetector,
-    /// Grounded set from the previous `grounded_handles` call. Sleeping
-    /// bodies produce no contact events, so their support state is
-    /// carried over from when they were last awake — sleep freezes a
-    /// body in place, which must include its groundedness.
-    last_grounded: FxHashSet<RigidBodyHandle>,
     /// User-defined constraints (persistent across frames).
     constraints: Arena<Constraint>,
     /// Constraint solver (velocity + position correction for contacts and joints).
@@ -235,7 +234,8 @@ impl PhysicsWorld {
             config.normal_smoothing,
         );
         let sleep_manager = SleepManager::new(config.sleep);
-        let grounding_detector = GroundingDetector::new(config.grounding);
+        let support_resolver = SupportResolver::new(config.support);
+        let grounding_detector = GroundingDetector::new();
         let debugger = PhysicsDebugger::new(config.debug.clone());
         Self {
             config,
@@ -247,8 +247,8 @@ impl PhysicsWorld {
             debugger,
             frame_index: 0,
             sleep_manager,
+            support_resolver,
             grounding_detector,
-            last_grounded: FxHashSet::default(),
             constraints: Arena::new(),
             solver,
             conditioner,
@@ -903,26 +903,21 @@ impl PhysicsWorld {
         }
     }
 
-    /// Bodies grounded by static contacts in the most recent step.
+    /// Bodies something held up in the most recent step.
     ///
-    /// Sleeping bodies are carried over from their last awake support
-    /// state: they generate no contact events, but they haven't moved
-    /// either — without the carry-over, a body falling asleep while
-    /// resting on the floor would read as airborne.
+    /// The boolean projection of `support_sets`, plus the carry-over that
+    /// keeps a sleeping body standing on the floor it fell asleep on.
     pub fn grounded_handles(&mut self) -> FxHashSet<RigidBodyHandle> {
-        let mut grounded: FxHashSet<RigidBodyHandle> = self
-            .grounding_detector
-            .grounded_bodies(self.contact_events())
-            .into_iter()
-            .filter_map(|(handle, grounded)| grounded.then_some(handle))
-            .collect();
-        for handle in self.sleep_manager.sleeping_snapshot() {
-            if self.last_grounded.contains(&handle) {
-                grounded.insert(handle);
-            }
-        }
-        self.last_grounded = grounded.clone();
-        grounded
+        let supports = self.support_sets();
+        let sleeping = self.sleep_manager.sleeping_snapshot();
+        self.grounding_detector
+            .grounded_bodies(&supports, &sleeping)
+    }
+
+    /// Which contacts hold each body up, from the most recent step.
+    pub fn support_sets(&self) -> SupportSets {
+        self.support_resolver
+            .resolve(&self.cached_all_manifolds, self.config.gravity_direction())
     }
 
     // === Internal Methods ===

@@ -1025,14 +1025,49 @@ that second blast is gone and the queued impulse is the whole of it. Grenade
 jumping is weaker until the loop is either deleted or moved onto the impulse
 channel where it belongs; the choice is a feel decision, not a mechanism one.
 
-**Stage 2 — Support set.** `SupportResolver` and `SupportSet`; `GroundingDetector`
-reimplemented on top of it against `gravity_direction()`. R6 for
-contact-derived grounding. Still no change to how the drive is applied.
+**Stage 2 — Support set. Landed.** `SupportResolver`, `SupportSet`,
+`SupportContact` and `SupportSets` in `physics/drive/support.rs`;
+`GroundingDetector` is now the boolean projection of the Support Set, resolved
+against `gravity_direction()`. R6 for contact-derived grounding. Nothing about
+how the drive is applied moved, and no acceptance test did either.
+
+Three things about the reimplementation are worth recording, because none is
+visible from the stage's one-line description:
+
+- **The set is side-symmetric, and today's grounding was not.** A manifold
+  normal points from A toward B, and the old detector credited only B. Which
+  collider lands in which slot is decided by `shape_type_rank`, so a crate
+  resting on a crate read as grounded or airborne depending on shape order.
+  `SupportResolver` gives A the reaction normal and B the contact normal, and
+  both get an answer. This adds grounding where the geometry always supported
+  it; it removes none.
+- **The crevice case is a promotion, not a second rule.** The old detector had
+  two clauses — any normal within the cone, *or* the depth-weighted mean of
+  every normal within the cone — and the second is what keeps a body wedged
+  between two steep walls from reading as airborne. It survives as a rule about
+  set membership rather than about a boolean: if no contact qualifies alone but
+  the group's mean does, the whole group is the support set. `mean_normal` is
+  then always the mean of the contacts actually in the set, so the axis a jump
+  leaves along and the contacts it pushes off never disagree.
+- **Classification reads `raw_normal`.** Normal smoothing exists to stabilise
+  impulses across a faceted surface; letting it feed the classification would
+  let a wall average into a floor.
+
+The sleeping carry-over moved out of `PhysicsWorld` into `GroundingDetector`
+with the `last_grounded` set it needs, which is the whole of what that type now
+owns — `PhysicsWorld` holds the resolver, since the drive is its primary
+consumer and grounding is the projection.
 
 This stage covers `ContactGroundingSystem`'s consumers — rollers, drones,
 anything without an animator. Bringing the player on is Stage 2c, which is a
 behaviour change rather than a reimplementation and is sequenced separately for
 that reason.
+
+`SupportSet::relative_speed` (§6.6) is **not** here. It needs a normal-impulse
+weight per contact, and the impulses are live only inside the substep where
+Stage 5 resolves; resolving it now would mean either a weight field R9 says
+must not exist or a second resolve pass. It arrives with the consumer that
+needs it.
 
 **Stage 2b — Non-support grip.** Retire `FrictionModel::AxisBiased` (§6.7): the
 player's collider becomes `Isotropic(0.8)`, `Actuator` gains `non_support_grip`,
