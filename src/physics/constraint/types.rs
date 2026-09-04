@@ -148,6 +148,30 @@ pub enum ConstraintKind {
         /// objects droop under gravity.
         angular_max_impulse: f32,
     },
+
+    /// A medium-anchored drive: world-anchored motor rows that push the body
+    /// toward a target velocity against nothing at all.
+    ///
+    /// The honest form of a platform's motor, a thruster or a rotor — the
+    /// reaction goes into the world, and the entity says so through
+    /// `ReactionAnchor::Medium`. Produces 3 linear rows (X, Y, Z) + 3 angular
+    /// rows = 6 total. Owned by `PhysicsWorld::set_body_drive`, which is the
+    /// only thing that may create, update or retire one: a body carrying both
+    /// this and a support drive would get twice the authority its actuator
+    /// declares.
+    MediumDrive {
+        /// The driven body.
+        body: RigidBodyHandle,
+        /// Target linear velocity, in world space.
+        linear_target: Vector3<f32>,
+        /// Target angular velocity, in world space.
+        angular_target: Vector3<f32>,
+        /// Linear acceleration budget, in m/s². Bounds each linear row at the
+        /// impulse that changes the body's velocity by `max_accel · dt`.
+        max_accel: f32,
+        /// Angular acceleration budget, in rad/s².
+        angular_max_accel: f32,
+    },
 }
 
 impl ConstraintKind {
@@ -242,6 +266,7 @@ impl ConstraintKind {
             ConstraintKind::Fixed { .. } => 6,
             ConstraintKind::Hinge { .. } => 5,
             ConstraintKind::FollowPoint { .. } => 6,
+            ConstraintKind::MediumDrive { .. } => crate::physics::drive::medium::ROW_COUNT,
         }
     }
 
@@ -257,6 +282,7 @@ impl ConstraintKind {
             ConstraintKind::FollowPoint { body_a, body_b, .. } => {
                 *body_a == handle || *body_b == handle
             }
+            ConstraintKind::MediumDrive { body, .. } => *body == handle,
         }
     }
 
@@ -279,6 +305,7 @@ impl ConstraintKind {
             ConstraintKind::FollowPoint { body_a, body_b, .. } => {
                 smallvec::smallvec![*body_a, *body_b]
             }
+            ConstraintKind::MediumDrive { body, .. } => smallvec::smallvec![*body],
         }
     }
 }

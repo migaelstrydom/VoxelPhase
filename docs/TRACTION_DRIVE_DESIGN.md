@@ -284,7 +284,8 @@ classDiagram
         +Vector3 linear_target
         +Vector3 angular_target
         +ReactionAnchor anchor
-        +DriveAuthority authority
+        +f32 max_accel
+        +f32 angular_max_accel
     }
     class ReactionAnchor {
         <<enum>>
@@ -609,6 +610,48 @@ passenger still recoils onto the lift, exactly as R3 requires. Both are honest;
 the difference is one enum variant on the entity, not a second code path in the
 engine.
 
+#### As built (Stage 4)
+
+`ConstraintKind::MediumDrive` in the arena, expanded by `physics/drive/medium.rs`
+through two new row primitives (`drive_linear_axis`, `drive_angular_axis`) that
+are the ordinary lock rows with a velocity target instead of a position error.
+Four things about the built shape go beyond the paragraphs above:
+
+- **The angular rows are unconditional.** The plan said "up to three more when
+  the angular target is non-zero"; the builder always emits six. A zero angular
+  target is a command to *hold still*, not the absence of a command — it is
+  what today's angular velocity drive does with the same zero — and a
+  conditional row count would make the constraint's warm-impulse slots change
+  shape frame to frame. An actuator declaring no angular authority gets rows
+  bounded at zero, which say the same thing and cost the solve nothing.
+- **The bound is the actuator's declaration converted to an impulse**, per row:
+  `max_accel · dt · m_eff`, where `m_eff` is the row's own effective mass
+  (`1/inv_mass` for a linear row through the centre of mass, `1/(e·I⁻¹·e)` for
+  an angular one). So a row may move the body's velocity along its axis by at
+  most `max_accel · dt` per substep, which is the same units the `Actuator`
+  states and the reason its number means something.
+- **The bound is a ceiling, not a delivery guarantee.** Rows are expanded once
+  per frame and the accumulated impulse carries across the frame's substeps, so
+  a row pinned at its bound realises `warm_start_scale` — 0.6 — of the declared
+  acceleration from the second substep on. This is the effect already documented
+  on `ConstraintKind::KeepUpright::max_impulse`, in the same solver and for the
+  same reason. A platform with acceleration to spare never reaches its bound
+  outside the first frames of spin-up, so nothing shipped notices; a motor
+  deliberately tuned to saturate would.
+- **`MediumDrive` joins `KeepUpright` in the breakage exemption.** A motor at
+  full throttle saturates its rows by design, and `check_constraint_breakage`
+  would otherwise deactivate the constraint permanently the first time a
+  platform was asked for all the acceleration it has.
+
+**The overlap the stage exists to prevent is unrepresentable, not merely
+absent.** `RigidBody` no longer carries `velocity_drive` and
+`angular_velocity_drive`; it carries one `Option<BodyDrive>`, whose two variants
+are the support chase and a handle to the medium rows. `PhysicsWorld::set_body_drive`
+is the only writer, it takes the anchor in the command, and establishing either
+form retires the other — the medium rows are removed from the arena rather than
+forgotten. A body cannot hold both, so it cannot get twice the authority its
+actuator declares.
+
 ### 6.5 Ordering inside the substep
 
 The traction budget is `μ·N`, and `N` is not known until the normal rows are
@@ -903,8 +946,8 @@ to ask whether it is driven, because a drive is now indistinguishable from any
 other contact impulse. This is R11 restated as a type-level property.
 
 **Sleeping is the exception, and it is an expected survivor rather than an
-oversight.** `set_body_velocity_drive` wakes the body on every call
-(`world.rs:523`), and that wake is load-bearing: `EnergyTracker::update_body`
+oversight.** `set_body_drive` wakes the body on every call, and that wake is
+load-bearing: `EnergyTracker::update_body`
 (`sleep/energy.rs:29`) is purely velocity-based with no drive awareness, so a
 driven body with a saturated bound and near-zero velocity — a character walking
 into a wall, or leaning on a crate too heavy to move — falls below both
@@ -943,7 +986,7 @@ needs as a trait and lets the caller supply it.
 |---|---|---|
 | R1 Conservation | §6.1 tangential row via `apply_impulse_pair` at the contact point | construction |
 | R2 Infinite-mass partners | `inv_mass == 0` on the partner | mechanism yes; **"accelerates as today" reworded** — R2 keeps its mechanism claim, and the magnitude is restored by `drive_gain` rather than promised by R7, §11 |
-| R3 Declared reaction partner | `Actuator::anchor`, `ReactionAnchor` §6.4 | declaration |
+| R3 Declared reaction partner | `Actuator::anchor`, `ReactionAnchor` §6.4 | declaration; **half delivered** by Stage 4 — the Medium anchor is real rows in the solver and platforms use it, while the Support anchor is still today's pre-solve chase until Stage 5. The two are exclusive by construction (§6.4) rather than by discipline |
 | R4 Support-relative targets | row solves *relative* velocity §6.1 | **per contact, not per body** — a bridging body has no single anchor frame and its world speed is an outcome, §6.1 |
 | R5 Command ≠ measurement | `DriveIntent` / `BodyMotion` split §3, §7 | type system |
 | R6 No privileged coordinates | Contact Frame §6.1; `gravity_direction()` §6.6; `AxisBiased` leaves the drive path §6.7 | **bound delivered** by Stage 2b — the player's grip is decided against gravity, and no body-local axis survives in the friction path. Stage 2c took the last world-Y out of the grounding projection with it: the normal a character reads is the Support Set's, not a second cone against `normal.y`. The basis waits on the tangential row itself (Stage 5) |
@@ -975,6 +1018,15 @@ behaviour, not a proof — it is exactly what the `driven body at rest` and
 `stack stability` acceptance tests exist to check. **If either special case must
 survive, it survives with a comment naming the instability it prevents, and the
 count is still lower than today.**
+
+Stage 4 is neutral on the count too. `RigidBody::velocity_drive` and
+`angular_velocity_drive` became one `Option<BodyDrive>` — two fields to one,
+with the medium half holding a `ConstraintHandle` instead of a target — so the
+body still carries drive state and still carries exactly one site's worth of it.
+What Stage 5 deletes is the `Support` variant and the `integrate_forces`
+application behind it, leaving `Medium`, which is a handle to rows the solver
+treats like any other. `ConstraintKind::MediumDrive` is not a sixth site: no
+drive code branches on it, and the solver cannot tell its rows from a hinge's.
 
 §6.7 is neutral on this count rather than a saving. `FrictionModel::AxisBiased`
 is not in `src/physics/`'s drive surface — it is a collider material, and no
@@ -1303,15 +1355,70 @@ Two things Stage 5 should know about the seam:
   correct with a non-zero target, since the budget is a bound on impulse and
   says nothing about what the row was aiming at.
 
-**Stage 4 — Medium anchor.** Platforms move to `ReactionAnchor::Medium`,
-expanded as world-anchored `ConstraintRow`s. Platforms **drop `VelocityDriven`
-at this stage**; the field survives in the engine for the player until Stage 5.
-A platform carrying both a velocity drive and a medium row toward the same
-target would get roughly twice the authority its actuator declares, and the
-row's bounds would stop meaning anything — so the two must never overlap on one
-body. `cruise under load`, `vertical lift carry` and `horizontal lift carry`
-must hold. This is the lower-risk half of the change and it is independently
-verifiable, so it goes first.
+**Stage 4 — Medium anchor. Landed.** Platforms are `ReactionAnchor::Medium`
+and their motors are six world-anchored motor rows in the constraint arena
+(`ConstraintKind::MediumDrive`, expanded by `physics/drive/medium.rs`). The
+support drive underneath them is gone: `RigidBody` carries one
+`Option<BodyDrive>` whose two variants are the pre-solve chase and a handle to
+the medium rows, and `PhysicsWorld::set_body_drive` — the single entry point,
+which takes the anchor in the command — retires one when it establishes the
+other. The overlap the stage exists to prevent is therefore unrepresentable
+rather than merely avoided. §6.4 records the built shape.
+
+`DriveCommand` and `ReactionAnchor` moved down into `physics::drive::command`,
+where the engine dispatches on them; `crate::drive` re-exports the anchor so the
+ECS side reads unchanged. `resolve_drive` now returns a `DriveCommand` rather
+than a `DriveTarget` of its own — the two structs differed only by the anchor,
+and one command crossing the seam is the shape §5 draws.
+
+**One number moved, and it is the one the mechanism was always going to move.**
+`cruise under load` measured 1.8365 m/s against an authored 2.0 and now measures
+1.9992; `vertical lift carry` climbs at 1.9992 where it climbed at 1.83. That
+shortfall was exactly one frame of gravity, and it was an artefact of the
+pre-solve chase: the drive ran ahead of the solve in `integrate_forces` and then
+had gravity folded into its target so it would not fight it, which left the
+frame's fall standing. A motor row is solved *alongside* gravity, so there is
+nothing left over to absorb — which is precisely what §3 means by "a drive
+solved alongside gravity's velocity does not need the target shift". Both tests
+were rewritten to assert the authored speed instead, at the same tolerance;
+`lift_holds_cruise_speed_against_gravity` in the platform bench moved with them,
+for the same reason and to exactly 2.0000. The passenger's weight still costs
+the lift nothing, which is what those tests are really about.
+
+`horizontal lift carry` prints its Stage 0 numbers to the digit — platform
+3.0000, passenger 0.0000, drift 12.7907, falls off the back — so it is still the
+characterisation §9 says it must remain until Stage 5. `edge walk`, `crate
+push`, `stack stability` and `driven body at rest` are unchanged to the digit
+too; the only other movement is `reversal hover`'s gap, 0.8159 riding and 1.4057
+at the peak against Stage 0's 0.80 and 1.45, which is the same faster lift
+throwing its passenger a little differently.
+
+Four things Stage 5 should know:
+
+- **A row's bound is a ceiling on accumulated impulse, not a promise of
+  delivery.** A row held at its bound across a frame realises `warm_start_scale`
+  — 0.6 — of the acceleration its actuator declares, because the accumulated
+  impulse persists across the frame's substeps and is re-applied at each
+  substep's warm start. This is the effect already documented on
+  `ConstraintKind::KeepUpright::max_impulse`, and `a_motor_weaker_than_gravity_cannot_hold_the_lift_up`
+  measures it: a 2.45 m/s² motor realises 1.48. Nothing shipped saturates, so
+  nothing shipped notices. If Stage 5 ever bounds something that is *meant* to
+  sit at its limit, this is the trap.
+- **`MediumDrive` had to join `KeepUpright` in the breakage exemption.** A motor
+  at full throttle saturates by design, and `check_constraint_breakage` would
+  otherwise deactivate it permanently on the first frame a platform was asked
+  for everything it had. That is a five-line change with a very quiet failure
+  mode, and any future bounded-by-design constraint needs the same thought.
+- **A body that loses its `Actuator` keeps its drive.** `DeathSystem` removes
+  the component and restores the non-support grip, but nothing clears the drive
+  in the engine — true before this stage for a stale velocity target, and now
+  also true for a stale set of motor rows. No entity in the game is both medium
+  and mortal, so this is a hole rather than a bug; it belongs in Stage 7's audit
+  alongside the other survivors, or to a `clear_body_drive` on the world.
+- **Nothing here was play-tested.** The lift no longer sags a frame of gravity
+  below its authored speed, which is a small feel change in the direction of
+  "the platform does what the level author wrote". Riding one is the check, and
+  the game window cannot be launched from an agent shell.
 
 **Stage 5 — Traction.** `TractionPlanner` feeds real targets, carrying the
 commanded spin per contact (§6.1); delete `RigidBody::velocity_drive`, the target

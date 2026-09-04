@@ -13,7 +13,7 @@ use super::super::geometry::FlatQuadGeometry;
 use crate::debug::DebugLines;
 use crate::physics::constraint::ConstraintKind;
 use crate::physics::world::PhysicsConfig;
-use crate::physics::{ColliderDesc, PhysicsWorld, RigidBodyDesc, RigidBodyHandle};
+use crate::physics::{ColliderDesc, DriveCommand, PhysicsWorld, RigidBodyDesc, RigidBodyHandle};
 use crate::platform::MovingPlatform;
 
 const HALF_EXTENTS: Vector3<f32> = Vector3::new(2.0, 0.3, 2.0);
@@ -59,18 +59,40 @@ fn run_frame(
     geometry: &FlatQuadGeometry,
     debug_lines: &mut DebugLines,
 ) {
+    run_frame_with_motor(
+        world,
+        body,
+        platform,
+        geometry,
+        debug_lines,
+        MOTOR_MAX_ACCEL,
+    );
+}
+
+/// The same frame with a motor of a stated size, for the scenarios that ask
+/// what the actuator's declared authority actually buys.
+fn run_frame_with_motor(
+    world: &mut PhysicsWorld,
+    body: RigidBodyHandle,
+    platform: &mut MovingPlatform,
+    geometry: &FlatQuadGeometry,
+    debug_lines: &mut DebugLines,
+    max_accel: f32,
+) {
     let dt = 1.0 / 240.0;
     let position = {
         let p = world.body(body).unwrap().position();
         Vector3::new(p.x, p.y, p.z)
     };
     platform.update_heading(&position);
-    let _ = world.set_body_velocity_drive(
+    let _ = world.set_body_drive(
         body,
-        platform.target_velocity(&position),
-        Vector3::zeros(),
-        MOTOR_MAX_ACCEL,
-        0.0,
+        &DriveCommand::medium(
+            platform.target_velocity(&position),
+            Vector3::zeros(),
+            max_accel,
+            0.0,
+        ),
     );
 
     world.update_contacts(dt, 4, geometry, &[], debug_lines);
@@ -201,20 +223,19 @@ fn platform_returns_to_its_route_after_a_shove() {
     );
 }
 
-/// The motor climbs at cruise speed less one frame of gravity.
+/// The motor climbs at its authored cruise speed against gravity.
 ///
-/// The drive target is refreshed once per frame while gravity is integrated
-/// once per substep, so a climbing lift settles a predictable `g · frame_dt`
-/// below its authored speed — about 8% at 2 m/s. That sag is the servo working,
-/// not failing; what this test guards is that it stays *bounded*. Drop
-/// `MOTOR_MAX_ACCEL` below gravity and the lift sinks instead, which shows up
-/// here immediately.
+/// Under the medium anchor the motor is a solver row rather than a pre-solve
+/// chase, so it is solved alongside the weight it is lifting instead of ahead
+/// of it. There is nothing left over to absorb, and the lift simply holds its
+/// speed. Before Stage 4 it settled a frame of gravity short — 1.8365 against
+/// an authored 2.0 — because the drive ran first and then had gravity folded
+/// into its target so it would not fight it.
 #[test]
 fn lift_holds_cruise_speed_against_gravity() {
     let geometry = FlatQuadGeometry::new(64.0);
     let mut config = PhysicsConfig::default();
     config.sleep.enabled = false;
-    let gravity = config.gravity.norm();
     let mut world = PhysicsWorld::new(config);
 
     let speed = 2.0;
@@ -231,13 +252,80 @@ fn lift_holds_cruise_speed_against_gravity() {
         run_frame(&mut world, body, &mut platform, &geometry, &mut debug_lines);
     }
 
-    let gravity_sag = gravity * 4.0 / 240.0; // one frame of substeps
-    let expected = speed - gravity_sag;
     let climb = world.body(body).unwrap().linear_velocity().y;
-    eprintln!("lift climb speed: {climb:.4} (target {speed:.1}, expected {expected:.4})");
+    eprintln!("lift climb speed: {climb:.4} (authored {speed:.1})");
     assert!(
-        (climb - expected).abs() < 0.02,
-        "climb should be cruise speed less one frame of gravity: \
-         {climb:.4} vs {expected:.4}"
+        (climb - speed).abs() < 0.02,
+        "climb should be the authored cruise speed: {climb:.4} vs {speed:.4}"
+    );
+}
+
+/// A motor may spend no more than the acceleration its actuator declares.
+///
+/// The medium rows' bounds are the whole of the actuator's authority, so a lift
+/// whose motor is weaker than gravity cannot hold itself up however hard the
+/// route servo asks it to climb: it sinks, and the acceleration it does produce
+/// stays under the ceiling it declared. A row whose bound had stopped meaning
+/// anything — a body carrying both a support drive and a medium row, say —
+/// would climb regardless, so this is the check that the declaration is the
+/// only authority in play.
+///
+/// The ceiling is what the bound guarantees, not a promise of delivery. A row
+/// held at its bound across a whole frame realises `warm_start_scale` of it,
+/// because the solver clamps the accumulated impulse and then re-applies that
+/// clamped value at the top of each later substep — the same effect the docs on
+/// `ConstraintKind::KeepUpright::max_impulse` describe. An ordinary platform
+/// never notices: at 40 m/s² against a 9.81 m/s² world the rows are nowhere
+/// near their bounds outside the first few frames of spin-up.
+#[test]
+fn a_motor_weaker_than_gravity_cannot_hold_the_lift_up() {
+    let geometry = FlatQuadGeometry::new(64.0);
+    let mut config = PhysicsConfig::default();
+    config.sleep.enabled = false;
+    let gravity = config.gravity.norm();
+    let mut world = PhysicsWorld::new(config);
+
+    let motor = gravity * 0.25;
+    let (body, mut platform) = spawn_platform(
+        &mut world,
+        Vector3::new(0.0, 40.0, 0.0),
+        Vector3::new(0.0, 90.0, 0.0),
+        2.0,
+    );
+    let mut debug_lines = DebugLines::default();
+
+    let start = world.body(body).unwrap().linear_velocity().y;
+    let frames = 60;
+    for _ in 0..frames {
+        run_frame_with_motor(
+            &mut world,
+            body,
+            &mut platform,
+            &geometry,
+            &mut debug_lines,
+            motor,
+        );
+    }
+
+    let fall = world.body(body).unwrap().linear_velocity().y;
+    let elapsed = frames as f32 * 4.0 / 240.0;
+    let realised = gravity - (start - fall) / elapsed;
+    eprintln!(
+        "underpowered lift: motor={motor:.2} m/s² realised={realised:.2} m/s² \
+         fall={fall:.4} m/s after {elapsed:.2}s"
+    );
+
+    assert!(
+        fall < start - 1.0,
+        "an underpowered lift should be sinking, not climbing: {fall:.4} m/s"
+    );
+    assert!(
+        realised <= motor + 1e-2,
+        "a motor may not spend more than the {motor:.2} m/s² it declares: \
+         realised {realised:.2} m/s²"
+    );
+    assert!(
+        realised > 0.0,
+        "the motor should still be pushing what it has: realised {realised:.2} m/s²"
     );
 }

@@ -4,16 +4,19 @@ use generational_arena::Arena;
 use nalgebra::{Isometry3, Matrix3, Point3, UnitQuaternion, UnitVector3, Vector3};
 use rustc_hash::FxHashMap;
 
-use super::body::{BodyType, RigidBody, RigidBodyDesc};
+use super::body::{BodyDrive, BodyType, RigidBody, RigidBodyDesc};
 use super::ccd::{
     pair_separation, CcdContext, CcdStrategy, ContactPairKey, NarrowphaseOwnership, SweepClampCcd,
 };
 use super::collider::{Collider, ColliderDesc, ColliderShape};
 use super::constraint::types::Constraint;
-use super::constraint::ConstraintHandle;
+use super::constraint::{ConstraintHandle, ConstraintKind};
 use super::contact_event::{ContactEvent, ContactSource};
 use super::debug::{PhysicsDebugConfig, PhysicsDebugger};
-use super::drive::{stamp_non_support_grip, SupportConfig, SupportResolver, SupportSets};
+use super::drive::{
+    stamp_non_support_grip, DriveCommand, ReactionAnchor, SupportConfig, SupportResolver,
+    SupportSets,
+};
 use super::force_provider::{ForceContext, ForceOutput, SubstepForceProvider};
 use super::grounding::{GroundedBodies, GroundingDetector};
 use super::handle::{ColliderHandle, RigidBodyHandle};
@@ -488,7 +491,7 @@ impl PhysicsWorld {
     ///
     /// Directly overwrites the body's velocity. Suitable for one-shot pushes
     /// or initial conditions. For per-frame velocity control (player character,
-    /// moving platforms), use `set_body_velocity_drive` instead.
+    /// moving platforms), use `set_body_drive` instead.
     #[allow(unused)]
     pub fn set_body_velocity(
         &mut self,
@@ -508,30 +511,101 @@ impl PhysicsWorld {
         true
     }
 
-    /// Set a per-substep velocity drive on a non-static body.
+    /// Push one frame's drive command into a non-static body.
     ///
-    /// Instead of directly overwriting the body's velocity, this sets a drive
-    /// that accelerates toward `linear` each substep during force integration.
-    /// The solver can then oppose the drive via contact impulses, allowing
-    /// smooth pushing of heavy objects at a speed determined by mass ratio.
-    pub fn set_body_velocity_drive(
-        &mut self,
-        handle: RigidBodyHandle,
-        linear: Vector3<f32>,
-        angular: Vector3<f32>,
-        max_accel: f32,
-        angular_max_accel: f32,
-    ) -> bool {
-        let Some(body) = self.bodies.get_mut(handle.0) else {
+    /// The single entry point for driving a body, and the reason a body can
+    /// never hold two drives at once: the command's `anchor` decides which
+    /// delivery path this call establishes, and establishing one retires the
+    /// other. A body carrying both a support drive and medium rows toward the
+    /// same target would get roughly twice the authority its actuator
+    /// declares, and the rows' bounds would stop meaning anything.
+    ///
+    /// - `ReactionAnchor::Support` sets a per-substep velocity chase applied
+    ///   during force integration, so the solver can oppose it through contact
+    ///   impulses and reach equilibrium against a heavy load.
+    /// - `ReactionAnchor::Medium` maintains world-anchored motor rows in the
+    ///   constraint arena, solved alongside gravity and every contact.
+    ///
+    /// Wakes the body either way. The wake is load-bearing rather than
+    /// incidental: `EnergyTracker` is purely velocity-based, so a driven body
+    /// with a saturated bound and near-zero velocity — a character walking
+    /// into a wall — would otherwise sleep and stop being solved, and stay
+    /// asleep after the command changed.
+    pub fn set_body_drive(&mut self, handle: RigidBodyHandle, command: &DriveCommand) -> bool {
+        let Some(body) = self.bodies.get(handle.0) else {
             return false;
         };
         if body.is_static() {
             return false;
         }
-        body.set_velocity_drive(linear, max_accel);
-        body.set_angular_velocity_drive(angular, angular_max_accel);
+
+        match command.anchor {
+            ReactionAnchor::Support => {
+                self.retire_medium_drive(handle);
+                let Some(body) = self.bodies.get_mut(handle.0) else {
+                    return false;
+                };
+                body.set_support_drive(
+                    command.linear_target,
+                    command.max_accel,
+                    command.angular_target,
+                    command.angular_max_accel,
+                );
+            }
+            ReactionAnchor::Medium => self.set_medium_drive(handle, command),
+        }
+
         self.sleep_manager.wake_body(handle);
         true
+    }
+
+    /// Create or update the motor rows behind a medium-anchored drive.
+    ///
+    /// Updating in place rather than recreating keeps the constraint's
+    /// warm-start impulses, which is what stops a platform re-converging on
+    /// its target from scratch every frame.
+    fn set_medium_drive(&mut self, handle: RigidBodyHandle, command: &DriveCommand) {
+        let kind = ConstraintKind::MediumDrive {
+            body: handle,
+            linear_target: command.linear_target,
+            angular_target: command.angular_target,
+            max_accel: command.max_accel,
+            angular_max_accel: command.angular_max_accel,
+        };
+
+        let existing = self
+            .bodies
+            .get(handle.0)
+            .and_then(|body| body.medium_drive())
+            .filter(|c| self.constraints.contains(c.0));
+
+        match existing {
+            Some(constraint) => {
+                if let Some(stored) = self.constraints.get_mut(constraint.0) {
+                    stored.kind = kind;
+                    stored.active = true;
+                }
+            }
+            None => {
+                let constraint = self.create_constraint(kind);
+                if let Some(body) = self.bodies.get_mut(handle.0) {
+                    body.set_medium_drive(constraint);
+                }
+            }
+        }
+    }
+
+    /// Drop the motor rows behind a body's medium drive, if it has any.
+    ///
+    /// Leaves the body undriven: whatever replaces the drive is the caller's
+    /// business, and nothing else in the engine may own this constraint.
+    fn retire_medium_drive(&mut self, handle: RigidBodyHandle) {
+        let Some(body) = self.bodies.get_mut(handle.0) else {
+            return;
+        };
+        if let Some(BodyDrive::Medium(constraint)) = body.take_drive() {
+            self.constraints.remove(constraint.0);
+        }
     }
 
     /// Set what fraction of a contact's tangential budget a body may draw
@@ -1436,5 +1510,121 @@ mod tests {
 
         assert!(!world.apply_impulse(handle, Vector3::z()));
         assert!(!world.apply_angular_impulse(handle, Vector3::z()));
+    }
+
+    /// The number of motor rows a medium drive on `handle` currently owns.
+    fn medium_rows(world: &PhysicsWorld, handle: RigidBodyHandle) -> usize {
+        world
+            .body(handle)
+            .unwrap()
+            .medium_drive()
+            .and_then(|c| world.constraint(c))
+            .map_or(0, |c| c.kind.row_count())
+    }
+
+    #[test]
+    fn a_medium_anchor_puts_its_command_in_the_constraint_arena() {
+        let mut world = PhysicsWorld::new(PhysicsConfig::default());
+        let handle = sleeping_body(&mut world);
+
+        assert!(world.set_body_drive(
+            handle,
+            &DriveCommand::medium(Vector3::y() * 2.0, Vector3::zeros(), 40.0, 0.0),
+        ));
+
+        assert_eq!(medium_rows(&world, handle), 6);
+        assert!(
+            !world.is_sleeping(handle),
+            "a driven body must wake, or its rows are never solved"
+        );
+    }
+
+    #[test]
+    fn a_second_command_updates_the_rows_rather_than_growing_them() {
+        let mut world = PhysicsWorld::new(PhysicsConfig::default());
+        let handle = sleeping_body(&mut world);
+
+        world.set_body_drive(
+            handle,
+            &DriveCommand::medium(Vector3::y() * 2.0, Vector3::zeros(), 40.0, 0.0),
+        );
+        let first = world.body(handle).unwrap().medium_drive().unwrap();
+        world.set_body_drive(
+            handle,
+            &DriveCommand::medium(Vector3::y() * -2.0, Vector3::zeros(), 40.0, 0.0),
+        );
+
+        assert_eq!(
+            world.body(handle).unwrap().medium_drive(),
+            Some(first),
+            "the rows are updated in place so their warm-start impulses survive"
+        );
+        assert_eq!(world.constraints.len(), 1);
+        assert!(matches!(
+            world.constraint(first).unwrap().kind,
+            ConstraintKind::MediumDrive { linear_target, .. } if linear_target.y == -2.0
+        ));
+    }
+
+    /// The exclusivity the whole stage turns on: a body carrying both a support
+    /// drive and medium rows toward the same target would get roughly twice the
+    /// authority its actuator declares, and the rows' bounds would stop meaning
+    /// anything. `BodyDrive` makes that unrepresentable; this is the check that
+    /// the world's entry point maintains it in both directions.
+    #[test]
+    fn a_body_may_hold_only_one_drive_at_a_time() {
+        let mut world = PhysicsWorld::new(PhysicsConfig::default());
+        let handle = sleeping_body(&mut world);
+
+        world.set_body_drive(
+            handle,
+            &DriveCommand::medium(Vector3::y() * 2.0, Vector3::zeros(), 40.0, 0.0),
+        );
+        world.set_body_drive(
+            handle,
+            &DriveCommand::support(Vector3::x() * 5.0, Vector3::zeros(), 40.0, 0.0),
+        );
+
+        assert_eq!(
+            medium_rows(&world, handle),
+            0,
+            "taking the support anchor must retire the motor rows"
+        );
+        assert!(
+            world.constraints.is_empty(),
+            "and retire them from the arena, not merely forget them"
+        );
+
+        world.set_body_drive(
+            handle,
+            &DriveCommand::medium(Vector3::y() * 2.0, Vector3::zeros(), 40.0, 0.0),
+        );
+        assert_eq!(medium_rows(&world, handle), 6);
+    }
+
+    #[test]
+    fn removing_a_body_takes_its_motor_rows_with_it() {
+        let mut world = PhysicsWorld::new(PhysicsConfig::default());
+        let handle = sleeping_body(&mut world);
+
+        world.set_body_drive(
+            handle,
+            &DriveCommand::medium(Vector3::y() * 2.0, Vector3::zeros(), 40.0, 0.0),
+        );
+        world.remove_body(handle);
+
+        assert!(world.constraints.is_empty());
+    }
+
+    #[test]
+    fn a_static_body_takes_no_drive_at_all() {
+        let mut world = PhysicsWorld::new(PhysicsConfig::default());
+        let handle = world.create_body(RigidBodyDesc::static_body().position(Point3::origin()));
+
+        assert!(!world.set_body_drive(
+            handle,
+            &DriveCommand::medium(Vector3::y(), Vector3::zeros(), 40.0, 0.0),
+        ));
+        assert!(world.constraints.is_empty());
     }
 }

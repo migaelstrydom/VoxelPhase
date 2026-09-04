@@ -11,24 +11,12 @@
 //! Allowance whatever the state machine calls it, and until the Support Set
 //! exists no jump has support to push off.
 
-use nalgebra::{UnitVector3, Vector3};
+use nalgebra::UnitVector3;
 
 use crate::drive::components::{Actuator, DriveIntent, NormalVerbs};
+use crate::physics::DriveCommand;
 
-/// What the engine is asked to drive toward this frame.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct DriveTarget {
-    /// Target linear velocity, in world space.
-    pub linear: Vector3<f32>,
-    /// Target angular velocity, in world space.
-    pub angular: Vector3<f32>,
-    /// Linear acceleration budget, in m/s².
-    pub max_accel: f32,
-    /// Angular acceleration budget, in rad/s².
-    pub angular_max_accel: f32,
-}
-
-/// Fold one frame's command into a drive target.
+/// Fold one frame's command into a drive command.
 ///
 /// `support_normal` is the axis the discrete verbs act along. Until the
 /// Support Set lands it is the world's up, read from gravity; `None` — a world
@@ -39,7 +27,7 @@ pub fn resolve_drive(
     verbs: NormalVerbs,
     actuator: &Actuator,
     support_normal: Option<UnitVector3<f32>>,
-) -> DriveTarget {
+) -> DriveCommand {
     let mut linear = intent.linear_target;
 
     if let Some(normal) = support_normal.filter(|_| !verbs.is_inert()) {
@@ -55,9 +43,10 @@ pub fn resolve_drive(
         linear += normal * (along - current);
     }
 
-    DriveTarget {
-        linear,
-        angular: intent.angular_target,
+    DriveCommand {
+        anchor: actuator.anchor,
+        linear_target: linear,
+        angular_target: intent.angular_target,
         max_accel: actuator.max_accel,
         angular_max_accel: actuator.angular_max_accel,
     }
@@ -67,6 +56,8 @@ pub fn resolve_drive(
 mod tests {
     use super::*;
     use crate::drive::components::NormalProjection;
+    use crate::physics::ReactionAnchor;
+    use nalgebra::Vector3;
 
     fn up() -> Option<UnitVector3<f32>> {
         Some(UnitVector3::new_normalize(Vector3::y()))
@@ -88,7 +79,7 @@ mod tests {
             &Actuator::character(),
             up(),
         );
-        assert_eq!(target.linear, intent.linear_target);
+        assert_eq!(target.linear_target, intent.linear_target);
     }
 
     #[test]
@@ -97,7 +88,7 @@ mod tests {
         intent.jump(7.0);
         let verbs = intent.take_normal_verbs();
         let target = resolve_drive(&intent, verbs, &Actuator::character(), up());
-        assert_eq!(target.linear, Vector3::new(5.0, 7.0, 0.0));
+        assert_eq!(target.linear_target, Vector3::new(5.0, 7.0, 0.0));
     }
 
     #[test]
@@ -117,7 +108,7 @@ mod tests {
         intent.cut_normal(0.5);
         let verbs = intent.take_normal_verbs();
         let target = resolve_drive(&intent, verbs, &Actuator::character(), up());
-        assert_eq!(target.linear.y, 2.5);
+        assert_eq!(target.linear_target.y, 2.5);
     }
 
     #[test]
@@ -131,7 +122,7 @@ mod tests {
             },
         };
         let target = resolve_drive(&intent, verbs, &Actuator::character(), up());
-        assert_eq!(target.linear.y, -2.0);
+        assert_eq!(target.linear_target.y, -2.0);
     }
 
     #[test]
@@ -150,13 +141,13 @@ mod tests {
 
         assert_eq!(
             resolve_drive(&rising, rising_verbs, &Actuator::character(), up())
-                .linear
+                .linear_target
                 .y,
             0.0
         );
         assert_eq!(
             resolve_drive(&falling, verbs, &Actuator::character(), up())
-                .linear
+                .linear_target
                 .y,
             -2.0
         );
@@ -169,8 +160,8 @@ mod tests {
         intent.jump(7.0);
         let verbs = intent.take_normal_verbs();
         let target = resolve_drive(&intent, verbs, &Actuator::character(), Some(normal));
-        assert!((target.linear.magnitude() - 7.0).abs() < 1e-5);
-        assert!((target.linear.dot(&normal) - 7.0).abs() < 1e-5);
+        assert!((target.linear_target.magnitude() - 7.0).abs() < 1e-5);
+        assert!((target.linear_target.dot(&normal) - 7.0).abs() < 1e-5);
     }
 
     #[test]
@@ -179,7 +170,26 @@ mod tests {
         intent.jump(7.0);
         let verbs = intent.take_normal_verbs();
         let target = resolve_drive(&intent, verbs, &Actuator::character(), None);
-        assert_eq!(target.linear, Vector3::new(5.0, -2.0, 0.0));
+        assert_eq!(target.linear_target, Vector3::new(5.0, -2.0, 0.0));
+    }
+
+    #[test]
+    fn the_actuator_supplies_the_reaction_anchor() {
+        let character = resolve_drive(
+            &DriveIntent::default(),
+            NormalVerbs::default(),
+            &Actuator::character(),
+            up(),
+        );
+        let platform = resolve_drive(
+            &DriveIntent::default(),
+            NormalVerbs::default(),
+            &Actuator::medium(40.0, 0.0),
+            up(),
+        );
+
+        assert_eq!(character.anchor, ReactionAnchor::Support);
+        assert_eq!(platform.anchor, ReactionAnchor::Medium);
     }
 
     #[test]

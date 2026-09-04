@@ -62,7 +62,10 @@ pub use ccd::{CcdStrategy, SweepClampCcd};
 pub use collider::{Collider, ColliderDesc, ColliderMaterial, ColliderShape, FrictionModel};
 pub use constraint::{Constraint, ConstraintHandle, ConstraintKind};
 pub use contact_event::{ContactEvent, ContactSource};
-pub use drive::{SupportConfig, SupportContact, SupportResolver, SupportSet, SupportSets};
+pub use drive::{
+    DriveCommand, ReactionAnchor, SupportConfig, SupportContact, SupportResolver, SupportSet,
+    SupportSets,
+};
 pub use force_provider::{ForceContext, ForceOutput, SubstepForceProvider};
 pub use handle::{ColliderHandle, RigidBodyHandle};
 pub use impact::{BodyImpact, ImpactLedger};

@@ -99,6 +99,70 @@ pub fn lock_linear_axis(
     }
 }
 
+/// Drive one world-space axis of a body's linear velocity toward a target.
+///
+/// The world-anchored motor row: the reaction lands on nothing, which is what
+/// a medium anchor declares. `bias` carries the negated target, so solving
+/// `J·v + bias = 0` drives `v·axis` to the target, and `max_impulse` is the
+/// authority the actuator declared.
+///
+/// Jacobians: `lin_jac_b = axis`, no angular term — the row acts through the
+/// centre of mass and so induces no torque.
+/// Metadata: `VelocityOnly` (a velocity target has no position error to
+/// correct), `Linear`, `Iterative`.
+pub fn drive_linear_axis(
+    side: &BodySide,
+    axis: Vector3<f32>,
+    bias: f32,
+    max_impulse: f32,
+    params: &RowParams,
+) -> ConstraintRow {
+    let zeros = Vector3::zeros();
+
+    ConstraintRow {
+        body_a: None,
+        body_b: side.handle,
+        lin_jac_a: zeros,
+        ang_jac_a: zeros,
+        lin_jac_b: axis,
+        ang_jac_b: zeros,
+        effective_mass_inv: 1.0 / side.inv_mass,
+        bias,
+        accumulated_impulse: params.warm_impulse,
+        bounds: (-max_impulse, max_impulse),
+        constraint_index: params.constraint_index,
+        row_index: params.row_index,
+        correction_mode: CorrectionMode::VelocityOnly,
+        row_kind: RowKind::Linear,
+        enforcement: Enforcement::Iterative,
+    }
+}
+
+/// Drive one world-space axis of a body's angular velocity toward a target.
+///
+/// The angular half of [`drive_linear_axis`], with the same conventions: the
+/// world is the other side of the row, `bias` is the negated target spin, and
+/// `max_impulse` is the declared authority.
+pub fn drive_angular_axis(
+    side: &BodySide,
+    axis: Vector3<f32>,
+    bias: f32,
+    max_impulse: f32,
+    params: &RowParams,
+) -> ConstraintRow {
+    lock_angular_axis(
+        &BodySide::world(),
+        side,
+        axis,
+        bias,
+        0.0,
+        max_impulse,
+        CorrectionMode::VelocityOnly,
+        Enforcement::Iterative,
+        params,
+    )
+}
+
 /// Lock relative orientation around one world-space axis.
 ///
 /// Produces a single angular constraint row. For one-body constraints the

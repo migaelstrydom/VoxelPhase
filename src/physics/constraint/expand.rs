@@ -9,6 +9,7 @@ use super::hinge;
 use super::keep_upright;
 use super::types::{Constraint, ConstraintKind, ConstraintRow};
 use crate::physics::body::RigidBody;
+use crate::physics::drive::medium;
 
 /// Expand all active constraints into solver-ready rows.
 ///
@@ -188,6 +189,30 @@ pub fn expand_constraints(
                 );
                 rows.extend(expanded);
             }
+
+            ConstraintKind::MediumDrive {
+                body,
+                linear_target,
+                angular_target,
+                max_accel,
+                angular_max_accel,
+            } => {
+                let Some(rigid_body) = bodies.get(body.0) else {
+                    continue;
+                };
+                let expanded = medium::expand(
+                    rigid_body,
+                    *body,
+                    linear_target,
+                    angular_target,
+                    *max_accel,
+                    *angular_max_accel,
+                    dt,
+                    index,
+                    &constraint.warm_impulses,
+                );
+                rows.extend(expanded);
+            }
         }
     }
 }
@@ -212,12 +237,13 @@ pub fn write_back_constraints(constraints: &mut Arena<Constraint>, rows: &[Const
 /// (max_impulse < f32::MAX). When any row's accumulated impulse reaches the
 /// bound, the joint cannot provide enough force and is permanently deactivated.
 ///
-/// `KeepUpright` is exempt. Its bound is the authority of an attitude
-/// controller, not the failure load of a joint: a thruster-stabilised platform
-/// that saturates while righting an off-centre load is working exactly as
-/// intended, and must keep trying on the next frame. Without this exemption a
-/// bounded KeepUpright deactivates on its first saturated frame and never
-/// rights anything again.
+/// `KeepUpright` and `MediumDrive` are exempt. Their bounds are the authority
+/// of an actuator, not the failure load of a joint: a thruster-stabilised
+/// platform that saturates while righting an off-centre load is working
+/// exactly as intended, and a motor at full throttle is a motor, not a broken
+/// one. Without this exemption a bounded KeepUpright deactivates on its first
+/// saturated frame and never rights anything again, and a platform stops dead
+/// the first time it is asked for all the acceleration it has.
 pub fn check_constraint_breakage(constraints: &mut Arena<Constraint>, rows: &[ConstraintRow]) {
     const SATURATION_THRESHOLD: f32 = 0.999;
 
@@ -228,7 +254,10 @@ pub fn check_constraint_breakage(constraints: &mut Arena<Constraint>, rows: &[Co
         }
         if row.accumulated_impulse.abs() >= max_bound * SATURATION_THRESHOLD {
             if let Some(constraint) = constraints.get_mut(row.constraint_index) {
-                if matches!(constraint.kind, ConstraintKind::KeepUpright { .. }) {
+                if matches!(
+                    constraint.kind,
+                    ConstraintKind::KeepUpright { .. } | ConstraintKind::MediumDrive { .. }
+                ) {
                     continue;
                 }
                 constraint.active = false;

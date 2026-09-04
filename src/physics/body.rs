@@ -2,6 +2,7 @@
 
 use nalgebra::{Matrix3, Point3, UnitQuaternion, Vector3};
 
+use super::constraint::types::ConstraintHandle;
 use super::handle::ColliderHandle;
 use super::math::{integrate_orientation, transform_inertia_tensor};
 
@@ -104,12 +105,39 @@ impl RigidBodyDesc {
 /// the drive applies a clamped acceleration toward a target each substep.
 /// The solver then applies contact impulses on top, allowing equilibrium
 /// when pushing heavy objects.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct VelocityDrive {
     /// Target velocity the body accelerates toward.
     pub target: Vector3<f32>,
     /// Maximum acceleration magnitude (units/s²).
     pub max_accel: f32,
+}
+
+/// What a body's actuator pushes against, and the engine state that delivers
+/// it.
+///
+/// One field, two variants, and that is the point: a body may not both chase a
+/// velocity target before the solve and carry a world-anchored motor row
+/// through it. Overlapping the two would hand the body roughly twice the
+/// authority its actuator declares and leave the row's bounds meaning nothing,
+/// so the overlap is made unrepresentable rather than merely avoided.
+/// `PhysicsWorld::set_body_drive` is the only writer.
+#[derive(Debug, Clone)]
+pub enum BodyDrive {
+    /// Reaction goes into whatever holds the body up. Applied during force
+    /// integration as a bounded chase toward the target — the pre-solve form
+    /// the traction drive replaces.
+    Support {
+        /// Linear target and its acceleration budget.
+        linear: VelocityDrive,
+        /// Angular target and its acceleration budget.
+        angular: VelocityDrive,
+    },
+    /// Reaction goes into the world. The command itself lives in the
+    /// constraint arena as world-anchored motor rows; this is the handle to
+    /// them, so the drive can be retired with the body or replaced by a
+    /// support drive.
+    Medium(ConstraintHandle),
 }
 
 /// A rigid body in the physics simulation.
@@ -154,10 +182,9 @@ pub struct RigidBody {
     // Attached colliders
     colliders: Vec<ColliderHandle>,
 
-    /// Optional per-substep linear velocity drive for externally controlled bodies.
-    velocity_drive: Option<VelocityDrive>,
-    /// Optional per-substep angular velocity drive.
-    angular_velocity_drive: Option<VelocityDrive>,
+    /// How this body converts a drive command into momentum, if it is driven
+    /// at all. Exactly one form at a time — see [`BodyDrive`].
+    drive: Option<BodyDrive>,
     /// Fraction of the tangential budget this body may draw at contacts that
     /// are not holding it up. `1.0` — the default — grips everything it
     /// touches equally.
@@ -189,8 +216,7 @@ impl RigidBody {
             linear_drag_coeff: 0.0,
             angular_drag_coeff: 0.0,
             colliders: Vec::new(),
-            velocity_drive: None,
-            angular_velocity_drive: None,
+            drive: None,
             non_support_grip: 1.0,
         }
     }
@@ -280,19 +306,66 @@ impl RigidBody {
         self.angular_velocity = velocity;
     }
 
-    /// Set a velocity drive that accelerates toward `target` each substep.
+    /// Drive this body toward `linear` and `angular` with the reaction landing
+    /// on whatever holds it up.
     ///
-    /// The drive is applied during force integration, before the solver.
-    /// This replaces direct velocity setting for externally controlled bodies
-    /// (player, moving platforms) so that the solver can properly oppose the
-    /// drive when pushing heavy objects.
-    pub fn set_velocity_drive(&mut self, target: Vector3<f32>, max_accel: f32) {
-        self.velocity_drive = Some(VelocityDrive { target, max_accel });
+    /// The drive is applied during force integration, before the solver, so
+    /// the solver can oppose it via contact impulses and reach equilibrium
+    /// when pushing heavy objects. Replaces any drive the body already had.
+    pub(crate) fn set_support_drive(
+        &mut self,
+        linear: Vector3<f32>,
+        max_accel: f32,
+        angular: Vector3<f32>,
+        angular_max_accel: f32,
+    ) {
+        self.drive = Some(BodyDrive::Support {
+            linear: VelocityDrive {
+                target: linear,
+                max_accel,
+            },
+            angular: VelocityDrive {
+                target: angular,
+                max_accel: angular_max_accel,
+            },
+        });
     }
 
-    /// Set an angular velocity drive that accelerates toward `target` each substep.
-    pub fn set_angular_velocity_drive(&mut self, target: Vector3<f32>, max_accel: f32) {
-        self.angular_velocity_drive = Some(VelocityDrive { target, max_accel });
+    /// Record that this body's drive is delivered by the medium rows behind
+    /// `constraint`. Replaces any drive the body already had.
+    pub(crate) fn set_medium_drive(&mut self, constraint: ConstraintHandle) {
+        self.drive = Some(BodyDrive::Medium(constraint));
+    }
+
+    /// Take this body out of service, returning whatever drive it had so the
+    /// caller can retire the state that backs it.
+    pub(crate) fn take_drive(&mut self) -> Option<BodyDrive> {
+        self.drive.take()
+    }
+
+    /// The linear half of a support-anchored drive, if that is what this body
+    /// has. A medium anchor answers `None` — its command is solver rows.
+    fn support_drive(&self) -> Option<VelocityDrive> {
+        match &self.drive {
+            Some(BodyDrive::Support { linear, .. }) => Some(*linear),
+            _ => None,
+        }
+    }
+
+    /// The angular half of a support-anchored drive.
+    fn support_angular_drive(&self) -> Option<VelocityDrive> {
+        match &self.drive {
+            Some(BodyDrive::Support { angular, .. }) => Some(*angular),
+            _ => None,
+        }
+    }
+
+    /// The rows this body's drive is delivered by, if it has a medium anchor.
+    pub fn medium_drive(&self) -> Option<ConstraintHandle> {
+        match self.drive {
+            Some(BodyDrive::Medium(handle)) => Some(handle),
+            _ => None,
+        }
     }
 
     /// What this body may draw at a contact outside its Support Set, as a
@@ -416,8 +489,10 @@ impl RigidBody {
             return;
         }
 
-        // Apply velocity drive first, against the clean previous-substep velocity.
-        if let Some(drive) = &self.velocity_drive {
+        // Apply velocity drive first, against the clean previous-substep
+        // velocity. A medium-anchored drive is a set of solver rows and has
+        // nothing to do here.
+        if let Some(drive) = self.support_drive() {
             let delta = drive.target - self.linear_velocity;
             let delta_mag = delta.magnitude();
             let max_delta = drive.max_accel * dt;
@@ -439,7 +514,7 @@ impl RigidBody {
         }
 
         // Apply angular velocity drive (same pattern as linear drive).
-        if let Some(drive) = &self.angular_velocity_drive {
+        if let Some(drive) = self.support_angular_drive() {
             let delta = drive.target - self.angular_velocity;
             let delta_mag = delta.magnitude();
             let max_delta = drive.max_accel * dt;
@@ -472,11 +547,9 @@ impl RigidBody {
         // drag, torques, gyroscopic correction) so drives don't fight these
         // effects across substeps. Damping is excluded — it's a resistive effect
         // that drives should actively overcome.
-        if let Some(drive) = &mut self.velocity_drive {
-            drive.target += self.linear_velocity - vel_after_drive;
-        }
-        if let Some(drive) = &mut self.angular_velocity_drive {
-            drive.target += self.angular_velocity - ang_vel_after_drive;
+        if let Some(BodyDrive::Support { linear, angular }) = &mut self.drive {
+            linear.target += self.linear_velocity - vel_after_drive;
+            angular.target += self.angular_velocity - ang_vel_after_drive;
         }
 
         // Apply damping after target shift — drives fight damping intentionally.
@@ -540,7 +613,7 @@ mod tests {
         let mut body = dynamic_body();
         body.set_linear_velocity(Vector3::new(0.0, 0.0, 0.0));
         // Drive targets zero on all axes with high max_accel.
-        body.set_velocity_drive(Vector3::new(0.0, 0.0, 0.0), 5000.0);
+        body.set_support_drive(Vector3::zeros(), 5000.0, Vector3::zeros(), 5000.0);
 
         let gravity = Vector3::new(0.0, -9.81, 0.0);
         let dt = 1.0 / 240.0;
@@ -566,7 +639,7 @@ mod tests {
         let mut body = dynamic_body();
         body.set_linear_velocity(Vector3::zeros());
         // Target is 10 m/s but max_accel limits how fast we get there
-        body.set_velocity_drive(Vector3::new(10.0, 0.0, 0.0), 50.0);
+        body.set_support_drive(Vector3::new(10.0, 0.0, 0.0), 50.0, Vector3::zeros(), 50.0);
 
         let dt = 1.0 / 240.0;
         body.integrate_forces(dt, Vector3::zeros());

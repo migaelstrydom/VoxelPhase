@@ -8,7 +8,7 @@ use crate::debug::DebugLines;
 use crate::physics::constraint::ConstraintKind;
 use crate::physics::stepping::FixedTimestep;
 use crate::physics::world::PhysicsConfig;
-use crate::physics::{ColliderDesc, ConstraintHandle, PhysicsWorld, RigidBodyDesc};
+use crate::physics::{ColliderDesc, ConstraintHandle, DriveCommand, PhysicsWorld, RigidBodyDesc};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Constraint system validation tests
@@ -179,7 +179,10 @@ fn keep_upright_capsule_with_velocity_zeroing() {
 
     // Phase 1: settle (30 frames = 0.5s)
     for frame in 0..30 {
-        world.set_body_velocity_drive(body, Vector3::zeros(), Vector3::zeros(), 500.0, 500.0);
+        world.set_body_drive(
+            body,
+            &DriveCommand::support(Vector3::zeros(), Vector3::zeros(), 500.0, 500.0),
+        );
         world.update_contacts(dt, substeps as u32, &geometry, &[], &mut debug_lines);
         debug_lines.clear();
         for _ in 0..substeps {
@@ -201,7 +204,10 @@ fn keep_upright_capsule_with_velocity_zeroing() {
     // Phase 2: move forward briefly (15 frames = 0.25s)
     let forward_vel = Vector3::new(3.0, 0.0, 0.0);
     for _frame in 0..15 {
-        world.set_body_velocity_drive(body, forward_vel, Vector3::zeros(), 500.0, 500.0);
+        world.set_body_drive(
+            body,
+            &DriveCommand::support(forward_vel, Vector3::zeros(), 500.0, 500.0),
+        );
         world.update_contacts(dt, substeps as u32, &geometry, &[], &mut debug_lines);
         debug_lines.clear();
         for _ in 0..substeps {
@@ -220,7 +226,10 @@ fn keep_upright_capsule_with_velocity_zeroing() {
 
     // Phase 3: stop and observe (120 frames = 2s)
     for frame in 0..120 {
-        world.set_body_velocity_drive(body, Vector3::zeros(), Vector3::zeros(), 500.0, 500.0);
+        world.set_body_drive(
+            body,
+            &DriveCommand::support(Vector3::zeros(), Vector3::zeros(), 500.0, 500.0),
+        );
         world.update_contacts(dt, substeps as u32, &geometry, &[], &mut debug_lines);
         debug_lines.clear();
         for _ in 0..substeps {

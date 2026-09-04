@@ -16,21 +16,7 @@
 use nalgebra::Vector3;
 use specs::{Component, DenseVecStorage};
 
-/// Where the equal-and-opposite half of a drive impulse lands.
-///
-/// A declaration about the entity, not a branch in the engine: whoever spawns
-/// the body states what its motor pushes against, and the drive is honest
-/// about it either way.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ReactionAnchor {
-    /// Reaction goes into whatever the body is standing on, at the contact
-    /// points. A character.
-    #[default]
-    Support,
-    /// Reaction goes into the world — an inexhaustible reservoir. A thruster,
-    /// a rotor, a magnetically levitated lift.
-    Medium,
-}
+use crate::physics::ReactionAnchor;
 
 /// A projection allowance: what a jump verb does to the velocity component
 /// along the support normal.

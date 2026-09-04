@@ -28,7 +28,8 @@ use crate::debug::DebugLines;
 use crate::physics::constraint::ConstraintKind;
 use crate::physics::world::PhysicsConfig;
 use crate::physics::{
-    ColliderDesc, FrictionModel, PhysicsWorld, RigidBodyDesc, RigidBodyHandle, StaticGeometry,
+    ColliderDesc, DriveCommand, FrictionModel, PhysicsWorld, RigidBodyDesc, RigidBodyHandle,
+    StaticGeometry,
 };
 use crate::platform::MovingPlatform;
 
@@ -153,7 +154,10 @@ impl Walker {
             measured.y,
             move_toward(measured.z, target_planar.z, max_delta),
         );
-        let _ = world.set_body_velocity_drive(self.body, target, Vector3::zeros(), 500.0, 500.0);
+        let _ = world.set_body_drive(
+            self.body,
+            &DriveCommand::support(target, Vector3::zeros(), 500.0, 500.0),
+        );
     }
 }
 
@@ -219,12 +223,14 @@ impl Platform {
     fn drive(&mut self, world: &mut PhysicsWorld) {
         let position = position_of(world, self.body);
         self.route.update_heading(&position);
-        let _ = world.set_body_velocity_drive(
+        let _ = world.set_body_drive(
             self.body,
-            self.route.target_velocity(&position),
-            Vector3::zeros(),
-            MOTOR_MAX_ACCEL,
-            0.0,
+            &DriveCommand::medium(
+                self.route.target_velocity(&position),
+                Vector3::zeros(),
+                MOTOR_MAX_ACCEL,
+                0.0,
+            ),
         );
     }
 }
@@ -486,19 +492,24 @@ fn horizontal_lift_carry() {
 // 4. Cruise under load — authored speed against gravity and a passenger
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// **Specification.** A loaded lift climbs at its authored speed less one frame
-/// of gravity, exactly as the unloaded one does.
+/// **Specification.** A loaded lift climbs at its authored speed: a lift is a
+/// thruster, and a thruster does not care what it carries.
 ///
-/// The passenger's weight costs the platform nothing today because the motor is
-/// reactionless: the load's contact impulse is never folded into the drive
-/// target, only gravity is. After Stage 4 the motor becomes a medium-anchored
-/// row and this must still hold — a lift is a thruster, and a thruster does not
-/// care what it carries.
+/// The passenger's weight costs the platform nothing under either mechanism —
+/// the medium anchor's reaction goes into the world, so a 131 kg load is not
+/// something the motor has to argue with.
+///
+/// The *shortfall* did move at Stage 4, and it moved to zero. Before the medium
+/// anchor the lift held 1.8365 m/s against an authored 2.0, one frame of gravity
+/// short: the drive ran ahead of the solve in `integrate_forces` and then had
+/// gravity folded into its target so it would not fight it, which left the
+/// frame's fall standing. A motor row is solved *alongside* gravity rather than
+/// before it, so there is nothing left over to absorb and the lift simply holds
+/// its speed.
 #[test]
 fn cruise_under_load() {
     let geometry = FlatQuadGeometry::new(64.0);
     let mut world = bench_world();
-    let gravity = world.config().gravity.norm();
     let mut debug = DebugLines::default();
 
     let speed = 2.0;
@@ -517,18 +528,13 @@ fn cruise_under_load() {
         advance(&mut world, &geometry, &mut debug);
     }
 
-    let expected = speed - gravity * FRAME_DT;
     let climb = linear_velocity_of(&world, platform.body).y;
     let load = walker.mass(&world);
-    eprintln!(
-        "cruise under load: climb={climb:.4} expected={expected:.4} \
-         passenger_mass={load:.1}kg"
-    );
+    eprintln!("cruise under load: climb={climb:.4} authored={speed:.4} passenger_mass={load:.1}kg");
 
     assert!(
-        (climb - expected).abs() < 0.05,
-        "loaded lift should hold cruise speed less one frame of gravity: \
-         {climb:.4} vs {expected:.4}"
+        (climb - speed).abs() < 0.05,
+        "loaded lift should hold its authored cruise speed: {climb:.4} vs {speed:.4}"
     );
 }
 

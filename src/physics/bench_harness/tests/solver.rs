@@ -9,7 +9,7 @@ use super::assertions::*;
 use super::write_exports;
 use crate::debug::DebugLines;
 use crate::physics::world::PhysicsConfig;
-use crate::physics::{ColliderDesc, PhysicsWorld, RigidBodyDesc};
+use crate::physics::{ColliderDesc, DriveCommand, PhysicsWorld, RigidBodyDesc};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Solver stability validation tests
@@ -191,12 +191,14 @@ fn sphere_pushing_box_no_jitter() {
         // Drive sphere velocity per frame (matches game loop).
         let sb = world.body(sphere_handle).unwrap();
         let vel = *sb.linear_velocity();
-        world.set_body_velocity_drive(
+        world.set_body_drive(
             sphere_handle,
-            Vector3::new(push_speed_x, vel.y, push_speed_z),
-            Vector3::zeros(),
-            500.0,
-            500.0,
+            &DriveCommand::support(
+                Vector3::new(push_speed_x, vel.y, push_speed_z),
+                Vector3::zeros(),
+                500.0,
+                500.0,
+            ),
         );
 
         // Narrowphase once per frame, then multiple substeps (matches game).
@@ -328,12 +330,14 @@ fn velocity_driven_sphere_against_wall_no_bounce() {
         let sb = world.body(sphere).unwrap();
         let vel_y = sb.linear_velocity().y;
         // Drive toward the wall (negative X)
-        world.set_body_velocity_drive(
+        world.set_body_drive(
             sphere,
-            Vector3::new(-drive_speed, vel_y, 0.0),
-            Vector3::zeros(),
-            500.0,
-            500.0,
+            &DriveCommand::support(
+                Vector3::new(-drive_speed, vel_y, 0.0),
+                Vector3::zeros(),
+                500.0,
+                500.0,
+            ),
         );
 
         world.update_contacts(fixed_dt, substeps as u32, &geometry, &[], &mut debug_lines);

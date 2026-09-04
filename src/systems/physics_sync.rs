@@ -103,6 +103,10 @@ impl PhysicsSyncSystem {
     /// The discrete verbs are consumed here — on gameplay's side of the seam,
     /// so the physics world never writes back into an ECS component and
     /// `DriveIntent` stays write-only from gameplay's side.
+    ///
+    /// The `Actuator`'s anchor rides along in the command, and the engine
+    /// picks the delivery path from it: a character's reaction goes into what
+    /// holds it up, a platform's into the world.
     fn push_drive_intent(
         physics: &mut PhysicsWorld,
         intents: &mut WriteStorage<DriveIntent>,
@@ -120,15 +124,9 @@ impl PhysicsSyncSystem {
                 resolve_drive(intent, verbs, actuator, support_normal),
             ));
         }
-        for (handle, non_support_grip, target) in updates {
+        for (handle, non_support_grip, command) in updates {
             let _ = physics.set_body_non_support_grip(handle, non_support_grip);
-            let _ = physics.set_body_velocity_drive(
-                handle,
-                target.linear,
-                target.angular,
-                target.max_accel,
-                target.angular_max_accel,
-            );
+            let _ = physics.set_body_drive(handle, &command);
         }
     }
 
