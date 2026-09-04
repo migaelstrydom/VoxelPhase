@@ -257,13 +257,7 @@ fn sweep_pair(
     // takes the A slot. There is no appeal to `shape_type_rank`: that exists to
     // match the canonical shape ordering the *discrete* dispatch imposes on its
     // normals, and this normal did not come from the dispatch.
-    let (restitution, friction) = ColliderMaterial::combine_at(
-        &target.material,
-        &swept.material,
-        &hit.normal,
-        &target.pre_rot,
-        &rotation,
-    );
+    let (restitution, friction) = ColliderMaterial::combine(&target.material, &swept.material);
 
     Some(SweptImpact {
         header: PairHeader {

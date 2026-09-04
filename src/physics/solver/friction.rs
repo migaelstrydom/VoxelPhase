@@ -12,13 +12,20 @@ use super::diagnostics::log_impulse_torque_diag;
 use super::impulse::{apply_impulse_pair, compute_tangent_basis};
 use super::normal::MIN_EFFECTIVE_INV_MASS;
 
+/// The tangential coefficient in force at one contact: the pair's combined
+/// friction, scaled by what its participants are allowed to draw there.
+fn tangential_coefficient(header: &PairHeader, contact: &SolverContact) -> f32 {
+    header.friction * contact.tangential_scale
+}
+
 pub(crate) fn solve_friction_impulse(
     bodies: &mut Arena<RigidBody>,
     header: &PairHeader,
     contact: &mut SolverContact,
     shock_scales: (f32, f32),
 ) {
-    if contact.accumulated_normal_impulse <= 0.0 || header.friction <= 0.0 {
+    let mu = tangential_coefficient(header, contact);
+    if contact.accumulated_normal_impulse <= 0.0 || mu <= 0.0 {
         contact.accumulated_friction_impulse_ws = Vector3::zeros();
         return;
     }
@@ -50,7 +57,7 @@ pub(crate) fn solve_friction_impulse(
     let mut new_t1 = curr_t1 + delta_t1;
     let mut new_t2 = curr_t2 + delta_t2;
 
-    let max_friction = header.friction * contact.accumulated_normal_impulse;
+    let max_friction = mu * contact.accumulated_normal_impulse;
     let mag = (new_t1 * new_t1 + new_t2 * new_t2).sqrt();
     if mag > max_friction {
         let scale = max_friction / mag;
@@ -74,22 +81,24 @@ pub(crate) fn solve_friction_impulse(
 /// Enforce a shared friction budget across all contacts in a manifold.
 ///
 /// After per-contact friction solve, the total friction effort (sum of individual
-/// friction impulse magnitudes) must not exceed `mu * sum(lambda_n)`. If it does,
-/// all contacts' friction impulses are scaled down proportionally. This prevents
-/// individual contacts from each maxing out their friction cones and producing
-/// oscillating net torque.
+/// friction impulse magnitudes) must not exceed the sum of the per-contact
+/// budgets `mu_i * lambda_n_i`. If it does, all contacts' friction impulses are
+/// scaled down proportionally. This prevents individual contacts from each
+/// maxing out their friction cones and producing oscillating net torque.
 pub(crate) fn manifold_friction_projection(
     bodies: &mut Arena<RigidBody>,
     header: &PairHeader,
     contacts: &mut SmallVec<[SolverContact; 4]>,
     shock_scales: (f32, f32),
 ) {
-    let total_normal: f32 = contacts.iter().map(|c| c.accumulated_normal_impulse).sum();
-    if total_normal <= 0.0 || header.friction <= 0.0 {
+    let budget: f32 = contacts
+        .iter()
+        .map(|c| tangential_coefficient(header, c) * c.accumulated_normal_impulse.max(0.0))
+        .sum();
+    if budget <= 0.0 {
         return;
     }
 
-    let budget = header.friction * total_normal;
     let total_friction_mag: f32 = contacts
         .iter()
         .map(|c| c.accumulated_friction_impulse_ws.magnitude())

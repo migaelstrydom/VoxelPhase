@@ -13,7 +13,7 @@ use super::constraint::types::Constraint;
 use super::constraint::ConstraintHandle;
 use super::contact_event::{ContactEvent, ContactSource};
 use super::debug::{PhysicsDebugConfig, PhysicsDebugger};
-use super::drive::{SupportConfig, SupportResolver, SupportSets};
+use super::drive::{stamp_non_support_grip, SupportConfig, SupportResolver, SupportSets};
 use super::force_provider::{ForceContext, ForceOutput, SubstepForceProvider};
 use super::grounding::GroundingDetector;
 use super::handle::{ColliderHandle, RigidBodyHandle};
@@ -534,6 +534,21 @@ impl PhysicsWorld {
         true
     }
 
+    /// Set what fraction of a contact's tangential budget a body may draw
+    /// where that contact is not holding it up.
+    ///
+    /// The actuator's declaration, pushed down each frame. `1.0` — the default
+    /// — grips everything the body touches equally; a character sets it near
+    /// zero so jumps along vertical surfaces are not grabbed. It scales only
+    /// this body's own share, so nothing it leans on inherits the tuning.
+    pub fn set_body_non_support_grip(&mut self, handle: RigidBodyHandle, grip: f32) -> bool {
+        let Some(body) = self.bodies.get_mut(handle.0) else {
+            return false;
+        };
+        body.set_non_support_grip(grip);
+        true
+    }
+
     // === Collider Management ===
 
     /// Attach a collider to a rigid body.
@@ -710,6 +725,16 @@ impl PhysicsWorld {
             gravity_dir,
             &mut self.manifold_conditions,
         );
+
+        // A body's grip at the contacts that are not holding it up is decided
+        // once, here, from the same slice the solver is about to read: the
+        // Support Set names contacts by position in it, and the conditioner has
+        // already finished reordering it.
+        let supports = self.support_resolver.resolve(
+            &self.cached_active_manifolds,
+            self.config.gravity_direction(),
+        );
+        stamp_non_support_grip(&self.bodies, &supports, &mut self.cached_active_manifolds);
 
         self.solver.prepare(&self.bodies, &self.constraints, dt);
 

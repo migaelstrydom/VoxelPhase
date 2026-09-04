@@ -53,5 +53,6 @@ pub(super) fn cold_solver_contact(
         warm_friction_impulse_ws: Vector3::zeros(),
         accumulated_normal_impulse: 0.0,
         accumulated_friction_impulse_ws: Vector3::zeros(),
+        tangential_scale: 1.0,
     }
 }

@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use nalgebra::{Isometry3, Matrix3, Point3, UnitQuaternion, UnitVector3, Vector3};
+use nalgebra::{Isometry3, Matrix3, Point3, UnitQuaternion, Vector3};
 
 use super::math::{box_inertia_tensor, capsule_inertia_tensor, sphere_inertia_tensor};
 use crate::collision::ConvexHull;
@@ -86,67 +86,22 @@ impl ColliderShape {
 
 /// Friction law used when resolving a contact.
 ///
-/// Friction is evaluated per manifold, parameterized by the world-space contact
-/// normal and the collider's world-space orientation. The default `Isotropic`
-/// variant ignores both — it is a single scalar and costs a field load.
-///
-/// `AxisBiased` lets a collider advertise different friction for contacts along
-/// its local "up" axis versus contacts perpendicular to it. Typical use: a
-/// player capsule with grippy floor contacts but near-zero friction on walls so
-/// it can slide up and along vertical surfaces without being dragged down.
+/// One variant today: a single scalar per material. It stays an enum because a
+/// material may yet want a law of its own — a genuinely anisotropic surface, a
+/// speed-dependent coefficient — but a character's grip is not one of those.
+/// What a *body* is allowed to draw at a contact belongs to its actuator's
+/// non-support grip (`physics/drive/grip.rs`), not to the surface it touches.
 #[derive(Debug, Clone, Copy)]
 pub enum FrictionModel {
     /// Constant friction coefficient regardless of contact normal.
     Isotropic(f32),
-    /// Friction depends on the angle between the contact normal and a local up axis.
-    ///
-    /// Let `c = |n_world · (rot * local_up)|`. We lerp smoothly between the
-    /// `wall` and `floor` values: below `cos_wall` we return `wall`; above
-    /// `cos_floor` we return `floor`; in between a smoothstep blend. Choosing
-    /// `cos_wall < cos_floor` defines the transition band (e.g. 45°..60°).
-    AxisBiased {
-        /// Friction for contacts whose normal aligns with local_up (floors).
-        floor: f32,
-        /// Friction for contacts whose normal is perpendicular to local_up (walls).
-        wall: f32,
-        /// Collider-local up axis (e.g. `Y` for an upright capsule).
-        local_up: UnitVector3<f32>,
-        /// Cosine of the most-tilted angle still treated as "floor" (upper band edge).
-        cos_floor: f32,
-        /// Cosine of the least-tilted angle still treated as "wall" (lower band edge).
-        cos_wall: f32,
-    },
 }
 
 impl FrictionModel {
-    /// Evaluate friction at a specific contact.
-    ///
-    /// `normal_world` is the contact normal in world space. Its sign does not
-    /// matter — we use the absolute alignment with the local up axis.
-    /// `rot_world` is the collider's world-space orientation (used only by
-    /// orientation-dependent variants).
-    pub fn evaluate(&self, normal_world: &Vector3<f32>, rot_world: &UnitQuaternion<f32>) -> f32 {
+    /// The coefficient this law yields at a contact.
+    pub fn coefficient(&self) -> f32 {
         match self {
             FrictionModel::Isotropic(mu) => *mu,
-            FrictionModel::AxisBiased {
-                floor,
-                wall,
-                local_up,
-                cos_floor,
-                cos_wall,
-            } => {
-                let up_world = rot_world * local_up.into_inner();
-                let c = normal_world.dot(&up_world).abs();
-                if c >= *cos_floor {
-                    *floor
-                } else if c <= *cos_wall {
-                    *wall
-                } else {
-                    let t = (c - cos_wall) / (cos_floor - cos_wall);
-                    let s = t * t * (3.0 - 2.0 * t);
-                    wall + (floor - wall) * s
-                }
-            }
         }
     }
 
@@ -166,26 +121,16 @@ pub struct ColliderMaterial {
 }
 
 impl ColliderMaterial {
-    /// Evaluate this material's friction at a specific contact normal.
-    pub fn friction_at(&self, normal_world: &Vector3<f32>, rot_world: &UnitQuaternion<f32>) -> f32 {
-        self.friction.evaluate(normal_world, rot_world)
+    /// This material's friction coefficient.
+    pub fn friction(&self) -> f32 {
+        self.friction.coefficient()
     }
 
-    /// Combine two materials at a specific contact: average restitution,
-    /// geometric mean friction. Each side sees the contact normal from its own
-    /// perspective; AxisBiased uses the absolute alignment with local up so
-    /// both sides evaluate against the same world-space normal without flipping.
-    pub fn combine_at(
-        a: &Self,
-        b: &Self,
-        normal_world: &Vector3<f32>,
-        rot_a: &UnitQuaternion<f32>,
-        rot_b: &UnitQuaternion<f32>,
-    ) -> (f32, f32) {
+    /// Combine two materials at a contact: average restitution, geometric mean
+    /// friction.
+    pub fn combine(a: &Self, b: &Self) -> (f32, f32) {
         let restitution = (a.restitution + b.restitution) * 0.5;
-        let fa = a.friction_at(normal_world, rot_a);
-        let fb = b.friction_at(normal_world, rot_b);
-        (restitution, (fa * fb).sqrt())
+        (restitution, (a.friction() * b.friction()).sqrt())
     }
 }
 

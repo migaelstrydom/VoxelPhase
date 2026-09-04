@@ -48,7 +48,7 @@ pub(super) fn sweep_against_static(
             // out of the manifold cache. See `cold_solver_contact`.
             collider_b: None,
             restitution: candidate.material.restitution,
-            friction: candidate.material.friction_at(&hit.normal, &rotation),
+            friction: candidate.material.friction(),
         },
         toi: hit.t,
         point: hit.point,

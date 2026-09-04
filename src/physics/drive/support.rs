@@ -45,9 +45,34 @@ impl Default for SupportConfig {
     }
 }
 
+/// Where a contact sits in the manifold slice it was classified from.
+///
+/// The identity a Support Set is queried by: membership is "the resolver put
+/// *this* contact in the set", not a re-derivation of the rule that put it
+/// there. Only meaningful against the same slice the set was resolved from,
+/// which is why nothing outside one step's solve holds one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ContactSite {
+    /// Index of the manifold within the slice.
+    pub manifold: u32,
+    /// Index of the contact within that manifold.
+    pub contact: u32,
+}
+
+impl ContactSite {
+    pub fn new(manifold: usize, contact: usize) -> Self {
+        Self {
+            manifold: manifold as u32,
+            contact: contact as u32,
+        }
+    }
+}
+
 /// One contact that supports a body.
 #[derive(Clone, Copy, Debug)]
 pub struct SupportContact {
+    /// Where this contact came from in the manifolds it was resolved from.
+    pub site: ContactSite,
     /// Contact point in world space.
     pub point: Point3<f32>,
     /// Unit normal, oriented out of the support and into the supported body.
@@ -89,6 +114,12 @@ impl SupportSet {
     /// True when nothing holds this body up.
     pub fn is_empty(&self) -> bool {
         self.contacts.is_empty()
+    }
+
+    /// True when the contact at `site` is one of the contacts holding this
+    /// body up.
+    pub fn holds(&self, site: ContactSite) -> bool {
+        self.contacts.iter().any(|contact| contact.site == site)
     }
 }
 
@@ -149,9 +180,10 @@ impl SupportResolver {
         let up = -down.into_inner();
 
         let mut builders: FxHashMap<RigidBodyHandle, SupportBuilder> = FxHashMap::default();
-        for manifold in manifolds {
+        for (manifold_index, manifold) in manifolds.iter().enumerate() {
             let header = &manifold.header;
-            for contact in &manifold.contacts {
+            for (contact_index, contact) in manifold.contacts.iter().enumerate() {
+                let site = ContactSite::new(manifold_index, contact_index);
                 let normal = contact.raw_normal;
                 if normal.magnitude_squared() <= 1e-8 {
                     continue;
@@ -162,6 +194,7 @@ impl SupportResolver {
                 // and A along its opposite.
                 builders.entry(header.body_b).or_default().add(
                     SupportContact {
+                        site,
                         point: contact.point,
                         normal,
                         partner: header.body_a,
@@ -171,6 +204,7 @@ impl SupportResolver {
                 if let Some(body_a) = header.body_a {
                     builders.entry(body_a).or_default().add(
                         SupportContact {
+                            site,
                             point: contact.point,
                             normal: -normal,
                             partner: Some(header.body_b),
@@ -255,7 +289,7 @@ fn normalised_mean(sum: Vector3<f32>, weight_sum: f32) -> Option<Vector3<f32>> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use generational_arena::Index;
     use nalgebra::Point3;
 
@@ -272,7 +306,7 @@ mod tests {
     }
 
     /// A manifold whose contacts all share one normal, pointing from `a` to `b`.
-    fn manifold(
+    pub(crate) fn manifold(
         a: Option<RigidBodyHandle>,
         b: RigidBodyHandle,
         normals: &[Vector3<f32>],
@@ -299,6 +333,7 @@ mod tests {
                     warm_friction_impulse_ws: Vector3::zeros(),
                     accumulated_normal_impulse: 0.0,
                     accumulated_friction_impulse_ws: Vector3::zeros(),
+                    tangential_scale: 1.0,
                 })
                 .collect(),
         }

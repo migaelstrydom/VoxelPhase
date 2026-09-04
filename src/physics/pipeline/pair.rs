@@ -71,6 +71,14 @@ pub struct SolverContact {
     pub accumulated_normal_impulse: f32,
     /// Friction impulse accumulated by the solver this step, in world space.
     pub accumulated_friction_impulse_ws: Vector3<f32>,
+    /// Scale on this contact's tangential budget, `1.0` for an ordinary
+    /// contact.
+    ///
+    /// Carries the non-support grip of the bodies this contact touches: a body
+    /// may scale the budget it draws at a contact that is not holding it up.
+    /// The contact's own `μ` is untouched — this says what the participants
+    /// are allowed to draw against it.
+    pub tangential_scale: f32,
 }
 
 /// A solver-ready manifold: pair metadata plus per-contact working data.

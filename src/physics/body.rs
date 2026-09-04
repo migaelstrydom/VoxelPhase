@@ -158,6 +158,15 @@ pub struct RigidBody {
     velocity_drive: Option<VelocityDrive>,
     /// Optional per-substep angular velocity drive.
     angular_velocity_drive: Option<VelocityDrive>,
+    /// Fraction of the tangential budget this body may draw at contacts that
+    /// are not holding it up. `1.0` — the default — grips everything it
+    /// touches equally.
+    ///
+    /// The actuator's declaration, not the material's: it scales what *this*
+    /// body draws and leaves the contact's own coefficient alone, so a crate
+    /// the body leans on keeps its own grip. A character sets it near zero so
+    /// jumps along vertical surfaces are not grabbed.
+    non_support_grip: f32,
 }
 
 impl RigidBody {
@@ -182,6 +191,7 @@ impl RigidBody {
             colliders: Vec::new(),
             velocity_drive: None,
             angular_velocity_drive: None,
+            non_support_grip: 1.0,
         }
     }
 
@@ -283,6 +293,16 @@ impl RigidBody {
     /// Set an angular velocity drive that accelerates toward `target` each substep.
     pub fn set_angular_velocity_drive(&mut self, target: Vector3<f32>, max_accel: f32) {
         self.angular_velocity_drive = Some(VelocityDrive { target, max_accel });
+    }
+
+    /// What this body may draw at a contact outside its Support Set, as a
+    /// fraction of the tangential budget. Clamped to `[0, 1]`.
+    pub fn set_non_support_grip(&mut self, grip: f32) {
+        self.non_support_grip = grip.clamp(0.0, 1.0);
+    }
+
+    pub fn non_support_grip(&self) -> f32 {
+        self.non_support_grip
     }
 
     /// Scale the diagonal elements of the local inertia tensor.

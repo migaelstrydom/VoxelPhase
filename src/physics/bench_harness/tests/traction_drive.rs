@@ -83,7 +83,8 @@ struct Walker {
 }
 
 impl Walker {
-    /// Spawn the player's body: capsule, floor-biased friction, held upright.
+    /// Spawn the player's body: capsule, held upright, gripping only what
+    /// holds it up.
     fn spawn(world: &mut PhysicsWorld, feet_at: Vector3<f32>) -> Self {
         let config = LocomotionConfig::player();
         // `ColliderShape::Capsule::half_height` spans the caps too, so the
@@ -101,14 +102,11 @@ impl Walker {
             ColliderDesc::capsule(config.collider_half_height, config.collider_radius)
                 .density(800.0)
                 .restitution(0.0)
-                .friction_model(FrictionModel::AxisBiased {
-                    floor: 0.8,
-                    wall: 0.0,
-                    local_up: UnitVector3::new_normalize(Vector3::y()),
-                    cos_floor: (45.0f32.to_radians()).cos(),
-                    cos_wall: (75.0f32.to_radians()).cos(),
-                }),
+                .friction_model(FrictionModel::Isotropic(0.8)),
         );
+        // The player's actuator declaration, replayed by hand: nothing that is
+        // not holding them up may drag them.
+        world.set_body_non_support_grip(body, 0.0);
         world
             .body_mut(body)
             .unwrap()

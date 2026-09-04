@@ -46,7 +46,6 @@ impl MaterialSurface for Material {
 mod tests {
     use super::*;
     use crate::physics::FrictionModel;
-    use nalgebra::{UnitQuaternion, Vector3};
 
     const RUBBER: PhysicalSurface = PhysicalSurface {
         restitution: 0.6,
@@ -60,11 +59,7 @@ mod tests {
 
         assert_eq!(desc.density, RUBBER.density);
         assert_eq!(desc.material.restitution, RUBBER.restitution);
-        assert_eq!(
-            desc.material
-                .friction_at(&Vector3::y(), &UnitQuaternion::identity()),
-            RUBBER.friction
-        );
+        assert_eq!(desc.material.friction(), RUBBER.friction);
         assert!(matches!(
             desc.material.friction,
             FrictionModel::Isotropic(_)

@@ -136,6 +136,7 @@ mod tests {
             warm_friction_impulse_ws: Vector3::zeros(),
             accumulated_normal_impulse: impulse,
             accumulated_friction_impulse_ws: Vector3::zeros(),
+            tangential_scale: 1.0,
         }
     }
 

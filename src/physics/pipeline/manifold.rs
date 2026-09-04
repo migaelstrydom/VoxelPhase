@@ -253,6 +253,7 @@ impl ManifoldCache {
                     warm_friction_impulse_ws: warm_friction_ws,
                     accumulated_normal_impulse: 0.0,
                     accumulated_friction_impulse_ws: Vector3::zeros(),
+                    tangential_scale: 1.0,
                 });
             }
 
@@ -457,6 +458,7 @@ fn pair_to_solver_cold(pair: &PairManifold) -> SolverManifold {
             warm_friction_impulse_ws: Vector3::zeros(),
             accumulated_normal_impulse: 0.0,
             accumulated_friction_impulse_ws: Vector3::zeros(),
+            tangential_scale: 1.0,
         })
         .collect();
     SolverManifold {
@@ -639,6 +641,7 @@ mod tests {
                 warm_friction_impulse_ws: Vector3::zeros(),
                 accumulated_normal_impulse: 7.0,
                 accumulated_friction_impulse_ws: Vector3::new(0.7, 0.0, 0.0),
+                tangential_scale: 1.0,
             },
             SolverContact {
                 point: Point3::new(-0.98, 0.0, 0.0),
@@ -651,6 +654,7 @@ mod tests {
                 warm_friction_impulse_ws: Vector3::zeros(),
                 accumulated_normal_impulse: 9.0,
                 accumulated_friction_impulse_ws: Vector3::new(0.9, 0.0, 0.0),
+                tangential_scale: 1.0,
             },
         ]);
         let solved = SolverManifold {

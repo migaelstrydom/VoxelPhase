@@ -393,7 +393,7 @@ The consequences are not incremental; they are the requirements:
 | applied to a partner whose `inv_mass` is 0 when static or kinematic | **R2** silent absorption *as a mechanism*, with no code path of its own. R2's further claim that the player then accelerates "exactly as today" is not delivered by the row and is not achievable as worded; the magnitude is restored deliberately by the Drive Gain instead — §11 |
 | expressed in **relative** velocity, per contact | **R4** support-relative targets — but *per contact*, not per body. See below: a body bridging two supports has no single anchor frame, and its world speed becomes an emergent outcome rather than a commanded one |
 | bounded by `μ_drive·N` | **R7** authority bounded by the contact. Ice has low `μ`; mass ratio governs a crate push because the solver already computes it. **The absolute magnitude is the project's largest open risk — §10.1** |
-| solved per contact, in the **Contact Frame** | **R6** for the drive's *basis* and, once §6.7 lands, for its *bound* too: the player's `μ` stops coming from `FrictionModel::AxisBiased` and its body-local up axis. No `x`, no `z`, no `Vector3::y()` anywhere in the drive path |
+| solved per contact, in the **Contact Frame** | **R6** for the drive's *basis* and, since §6.7 landed, for its *bound* too: the player's `μ` no longer comes from `FrictionModel::AxisBiased` and its body-local up axis. No `x`, no `z`, no `Vector3::y()` anywhere in the drive path |
 | one of several contacts, each independently bounded by its own `N` | **R9** distribution over supports, with no weighting term of any kind — see below |
 
 #### The per-contact target must carry the commanded spin
@@ -805,12 +805,22 @@ the tangential bound is read live inside the solve loop, so membership is known
 by the time a budget is needed. A contact's `μ` is unchanged; what changes is
 what *this* body is allowed to draw against it.
 
+As built (Stage 2b), the budget scale is stamped onto each contact once per
+frame between the Support Set and the solve rather than looked up from inside
+the solve loop — `SolverContact::tangential_scale`, the same shape the
+conditioner's shock scales already have. Membership is an identity, not a
+second reading of the classification rule: a `ContactSite` names a contact's
+position in the manifold slice the set was resolved from, and `SupportSet::holds`
+answers whether the resolver put that contact in the set. Where two bodies each
+scale the same row their factors multiply, which is the only composition that
+leaves the ordinary case — everything gripping at `1.0` — an identity.
+
 What this buys, in the terms the rest of the document uses:
 
 | | Under `AxisBiased` | Under non-support grip |
 |---|---|---|
 | R6's bound | false — body-local up in the drive path | **discharged** |
-| Ragdoll | carries a standing body's friction model | irrelevant — no constraint precondition |
+| Ragdoll | carries a standing body's friction model | irrelevant — no constraint precondition, and `DeathSystem` returns the body to full grip when it takes the actuator away |
 | Crate the player leans on | inherits jump tuning through the combine | unaffected |
 | Magnetic boots (§7) | `μ = 0`, impossible | `non_support_grip: 1.0` |
 | Grip on ice | free | free — the collider's own `μ`, unwrapped |
@@ -819,6 +829,14 @@ One consequence reaches outside §6. With no controller hack occupying the
 player's friction field, **the collider's own `μ` is a real material
 coefficient**, and the drive can be bounded by it directly. D1 (§11) needs no
 second coefficient to read.
+
+A second reaches further than expected. `AxisBiased` was the only friction law
+that depended on the contact normal or on a collider's orientation, so retiring
+it retires the plumbing that carried them: `ColliderMaterial::friction()` and
+`combine()` take no contact, and the two "pick a representative normal for this
+manifold" helpers in the narrowphase are gone. `FrictionModel` stays an enum —
+a material may yet want a law of its own — but a character's grip is no longer
+one of the things it can be asked for.
 
 ---
 
@@ -840,13 +858,13 @@ them modifies `TangentialSolver`, `PgsNgsSolver` or `RigidBody`. Contrast the
 present design, where every new driven-body behaviour has meant another
 `is_velocity_driven` branch.
 
-The wall example turns on §6.7 rather than on the anchor abstraction. The
-player's `FrictionModel::AxisBiased` sets `wall: 0.0` (`spawners/player.rs:44`),
-and since the traction budget draws `μ` from the contact, a wall anchor bounded
-by that material transmits exactly nothing — the extension point open, the bound
-closing it. §6.7 makes the zero a property of the actuator, where a character
-meant to grip walls sets it to one, instead of a property of every contact the
-player makes.
+The wall example turned on §6.7 rather than on the anchor abstraction. The
+player's `FrictionModel::AxisBiased` set `wall: 0.0`, and since the traction
+budget draws `μ` from the contact, a wall anchor bounded by that material would
+have transmitted exactly nothing — the extension point open, the bound closing
+it. §6.7 has landed, and the zero is now a property of the actuator, where a
+character meant to grip walls sets `non_support_grip: 1.0`, instead of a
+property of every contact the player makes.
 
 **Liskov.** After this work a driven body *is* an ordinary rigid body through
 the whole solve: nothing in `integrate_forces`, `integrate_bodies` or CCD needs
@@ -897,7 +915,7 @@ needs as a trait and lets the caller supply it.
 | R3 Declared reaction partner | `Actuator::anchor`, `ReactionAnchor` §6.4 | declaration |
 | R4 Support-relative targets | row solves *relative* velocity §6.1 | **per contact, not per body** — a bridging body has no single anchor frame and its world speed is an outcome, §6.1 |
 | R5 Command ≠ measurement | `DriveIntent` / `BodyMotion` split §3, §7 | type system |
-| R6 No privileged coordinates | Contact Frame §6.1; `gravity_direction()` §6.6; `AxisBiased` leaves the drive path §6.7 | **basis and bound both** — construction, delivered by Stage 2b |
+| R6 No privileged coordinates | Contact Frame §6.1; `gravity_direction()` §6.6; `AxisBiased` leaves the drive path §6.7 | **bound delivered** by Stage 2b — the player's grip is decided against gravity, and no body-local axis survives in the friction path. The basis waits on the tangential row itself (Stage 5) |
 | R7 Authority bounded by contact | `μ_drive·N` row bounds §6.1 | construction; magnitude chosen — `drive_gain: 5.0`, with its ledger in §11 |
 | R8 Cheats named and bounded | `Allowance` + `AllowanceApplier`, single module; `drive_gain` named and instrumented alongside it §11 | discipline, one file — the ledger is the whole airborne controller (§6.3), unsupported jumps (D2a), and one scalar per actuator |
 | R9 Distribution over supports | per-contact `μ·N` bound alone, no weighting term §6.1 | construction |
@@ -929,12 +947,13 @@ count is still lower than today.**
 
 §6.7 is neutral on this count rather than a saving. `FrictionModel::AxisBiased`
 is not in `src/physics/`'s drive surface — it is a collider material, and no
-drive code branches on it — so retiring it removes no site. Reading
-`non_support_grip` inside the tangential bound adds one, and it is a per-contact
-budget scale rather than a body-is-driven test: it applies uniformly to grip and
-drive, and asks only whether a contact is in the Support Set the solver already
-built. It is a parameter, not a branch, and it should be justified as one in
-Stage 7's audit.
+drive code branches on it — so retiring it removes no site. As built it adds
+two: `RigidBody::non_support_grip`, pushed down each frame beside the drive
+target, and the scale the tangential bound multiplies in. Neither is a
+body-is-driven test — the first is a scalar every body has and the second
+applies uniformly to grip and drive, asking only whether a contact is in the
+Support Set the solver already built. They are parameters, not branches, and
+they should be justified as such in Stage 7's audit.
 
 ---
 
@@ -1069,23 +1088,75 @@ Stage 5 resolves; resolving it now would mean either a weight field R9 says
 must not exist or a second resolve pass. It arrives with the consumer that
 needs it.
 
-**Stage 2b — Non-support grip.** Retire `FrictionModel::AxisBiased` (§6.7): the
-player's collider becomes `Isotropic(0.8)`, `Actuator` gains `non_support_grip`,
-and the tangential bound scales by it at contacts outside the Support Set. R6's
-bound lands here. It rides on Stage 2 because it needs the Support Set and
-nothing else — in particular it does **not** need the drive to be solver-native,
-so it is verifiable against the current engine.
+**Stage 2b — Non-support grip. Landed.** `FrictionModel::AxisBiased` is gone.
+The player's capsule carries `Isotropic(0.8)`, `Actuator` carries
+`non_support_grip: 0.0`, and `physics/drive/grip.rs` scales each contact's
+tangential budget by the grip of the bodies it touches wherever that contact is
+not holding them up. R6's bound lands here; the basis still waits on Stage 5.
 
-`driven body at rest` is the direct check: it holds a driven body against a wall
-and a floor and asserts the wall contact transmits no drive, which is today
-`wall: 0.0` doing the work and afterwards `non_support_grip` doing it. If that
-scenario's numbers do not move, the substitution is exact. Two second-order
-effects have no test and want a play-test: wall-adjacent jumps, which is the
-behaviour the hack was written for, and anything the player leans on, which
-previously inherited the hack through the material combine and now does not.
+`driven body at rest` was the check, and every number it prints is unchanged —
+`x=0.2621`, worst speed, vertical and drift all `0.0000` — as is every other
+number the eight acceptance scenarios print. The substitution is exact.
 
-It must land before Stage 5, because it decides what `μ` the traction budget
-reads.
+Five things about how it was built are worth carrying forward:
+
+- **Membership is an identity, not a re-reading of the rule.** A `ContactSite`
+  is a contact's position in the manifold slice a Support Set was resolved
+  from, and `SupportSet::holds` answers whether the resolver put *that* contact
+  in the set. The alternative — asking a second time whether this normal stands
+  within the floor cone — would have put the classification in two places and
+  let them drift. The price is that a site is only meaningful against the slice
+  it came from, so the resolve and the stamp happen back to back, after the
+  conditioner has finished reordering. That is a second resolve per frame — the
+  stamp reads the *active* manifolds the solver will see, while `support_sets()`
+  and grounding still read all of them, sleeping pairs included — and the two
+  cannot share a slice without changing what grounding means. Stage 5 owns one
+  resolve per substep and should collapse them.
+- **The scale is stamped, not looked up.** §6.7 imagined the bound reading
+  membership live inside the solve loop; the built version writes
+  `SolverContact::tangential_scale` once per frame, which is the shape the
+  conditioner's shock scales already have and which costs the solve nothing.
+  The manifold-wide friction projection generalises with it: its budget is now
+  the sum of the per-contact budgets `μ_i·λ_i` rather than `μ·Σλ`, which is the
+  same number whenever the scales are equal and the honest one when they are
+  not.
+- **The grip lives on `RigidBody` and is pushed each frame from the
+  `Actuator`.** A side table on `PhysicsWorld` keyed by handle would have kept
+  `RigidBody` clean, but the value is read once per contact per frame in the
+  hot path and it is a property of the body in the same sense `gravity_scale`
+  is. Stage 7 should still look at it: it is the one piece of actuator state
+  that now lives inside the engine. Because it outlives the component,
+  `DeathSystem` restores it to `1.0` when it takes the actuator away — a corpse
+  that kept a jumper's wall grip would be the ragdoll bug §6.7 claims to have
+  fixed, only quieter.
+- **The transition band became a step.** `AxisBiased` blended between `floor`
+  and `wall` across 45°–75°; the Support Set is a hard 60° cone
+  (`SupportConfig::min_support_cosine`). A contact 50° off vertical used to get
+  about 0.75 of the player's 0.8 and now gets all of it; one at 70° used to get
+  a little and now gets nothing. Nothing in the scenarios stands on a slope
+  that steep, so this is untested rather than unchanged.
+- **Retiring the variant retired more than the variant.** `AxisBiased` was the
+  only friction law that read the contact normal or a collider's orientation,
+  so with it gone `ColliderMaterial::friction()`/`combine()` take no contact
+  and the two "representative normal for this manifold" helpers in the
+  narrowphase — which existed solely to choose a normal to evaluate friction at
+  — are deleted. Every surviving material is `Isotropic`, so no friction
+  coefficient anywhere changed value; the acceptance numbers confirm it.
+
+Two gaps, both deliberate:
+
+- **CCD contacts are not stamped.** A swept impact is built during a substep,
+  after the frame's stamp, and it is not in any manifold slice a Support Set
+  was resolved from — so it keeps `tangential_scale = 1.0`. Under `AxisBiased`
+  a swept *wall* impact evaluated to zero friction; now it grips. It is one
+  substep's impulse on a body fast enough to tunnel, and classifying it would
+  mean re-deriving the floor cone in the CCD path, which is the mistake the
+  first point above avoids. If a fast wall-slide reads as sticky, this is why.
+- **The two second-order effects still have no test.** Wall-adjacent jumps —
+  the behaviour the hack was written for — and anything the player leans on,
+  which used to inherit the tuning through the material combine and now does
+  not. Both want a play-test; neither is expressible in the bench harness,
+  which has no jump verb.
 
 **Stage 2c — One grounding source.** Delete the `!&animators` filter from
 `ContactGroundingSystem` and the `Grounding` write at `animation/systems.rs:124`,

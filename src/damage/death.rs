@@ -83,7 +83,14 @@ impl<'a> System<'a> for DeathSystem {
                 if let Some(intent) = intents.get_mut(entity) {
                     *intent = CharacterIntent::default();
                 }
-                actuators.remove(entity);
+                // Out of service means gripping like any other body: the
+                // actuator's non-support grip is tuning for a character that
+                // jumps, and a corpse does not.
+                if actuators.remove(entity).is_some() {
+                    if let Some(rb) = rigid_bodies.get(entity) {
+                        physics_res.world.set_body_non_support_grip(rb.0, 1.0);
+                    }
+                }
             }
 
             dead.elapsed += dt;

@@ -119,10 +119,12 @@ impl PhysicsSyncSystem {
             let verbs = intent.take_normal_verbs();
             updates.push((
                 body.0,
+                actuator.non_support_grip,
                 resolve_drive(intent, verbs, actuator, support_normal),
             ));
         }
-        for (handle, target) in updates {
+        for (handle, non_support_grip, target) in updates {
+            let _ = physics.set_body_non_support_grip(handle, non_support_grip);
             let _ = physics.set_body_velocity_drive(
                 handle,
                 target.linear,

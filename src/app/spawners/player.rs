@@ -31,22 +31,15 @@ pub fn spawn_player(world: &mut World, initial_pos: nalgebra::Point3<f32>) -> En
             .linear_damping(0.0)
             .angular_damping(0.95);
         let body_handle = physics.world.create_body(body_desc);
-        // Floor friction keeps the player planted on slopes and lets moving
-        // surfaces (play-wheels, platforms) drag them tangentially. Wall
-        // friction stays near zero so jumps along vertical surfaces don't get
-        // grabbed. The local up axis is body-Y — the KeepUpright constraint
-        // holds that aligned with world up, so contact normals pointing up
-        // resolve to "floor" and horizontal normals resolve to "wall".
+        // A real material coefficient: it keeps the player planted on slopes
+        // and lets moving surfaces (play-wheels, platforms) drag them
+        // tangentially, and it means the same thing to whatever the player
+        // leans on. Which contacts the player is allowed to draw it at is the
+        // actuator's business — see `non_support_grip` below.
         let collider_desc = ColliderDesc::capsule(collider_half_height, collider_radius)
             .density(800.0)
             .restitution(0.0)
-            .friction_model(FrictionModel::AxisBiased {
-                floor: 0.8,
-                wall: 0.0,
-                local_up: UnitVector3::new_normalize(Vector3::y()),
-                cos_floor: (45.0f32.to_radians()).cos(),
-                cos_wall: (75.0f32.to_radians()).cos(),
-            });
+            .friction_model(FrictionModel::Isotropic(0.8));
         physics.world.attach_collider(body_handle, collider_desc);
         physics
             .world
@@ -59,7 +52,7 @@ pub fn spawn_player(world: &mut World, initial_pos: nalgebra::Point3<f32>) -> En
             .world
             .create_constraint(ConstraintKind::KeepUpright {
                 body: body_handle,
-                target_up: nalgebra::UnitVector3::new_normalize(Vector3::new(0.0, 1.0, 0.0)),
+                target_up: UnitVector3::new_normalize(Vector3::new(0.0, 1.0, 0.0)),
                 compliance: 0.0,
                 max_impulse: f32::INFINITY,
             });
@@ -90,7 +83,9 @@ pub fn spawn_player(world: &mut World, initial_pos: nalgebra::Point3<f32>) -> En
         .with(SensorSet::default())
         .with(ContactCandidates::default())
         .with(RigidBodyComponent(body_handle))
-        .with(Actuator::character())
+        // Grip nothing that is not holding them up, so jumps along vertical
+        // surfaces are not grabbed.
+        .with(Actuator::character().with_non_support_grip(0.0))
         .with(DriveIntent::default())
         .with(BodyMotion::default())
         .build()

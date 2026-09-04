@@ -164,6 +164,16 @@ pub struct Actuator {
     /// Maximum angular acceleration toward the target angular velocity,
     /// in rad/s².
     pub angular_max_accel: f32,
+    /// Fraction of a contact's tangential budget this body may draw where that
+    /// contact is not in its Support Set. `1.0` grips everything it touches
+    /// equally; near zero is a body that only holds onto what holds it up.
+    ///
+    /// A property of the actuator rather than of the collider material, so it
+    /// scales what this body draws and leaves the surface's own friction
+    /// alone: whatever the body leans on keeps its grip against everything
+    /// else. A character sets it near zero so jumps along vertical surfaces
+    /// are not grabbed; magnetic boots would set it to 1.0.
+    pub non_support_grip: f32,
 }
 
 impl Default for Actuator {
@@ -172,6 +182,7 @@ impl Default for Actuator {
             anchor: ReactionAnchor::Support,
             max_accel: 500.0,
             angular_max_accel: 500.0,
+            non_support_grip: 1.0,
         }
     }
 }
@@ -188,7 +199,15 @@ impl Actuator {
             anchor: ReactionAnchor::Medium,
             max_accel,
             angular_max_accel,
+            ..Self::default()
         }
+    }
+
+    /// Declare how much of a contact's tangential budget this body draws where
+    /// the contact does not hold it up.
+    pub fn with_non_support_grip(mut self, grip: f32) -> Self {
+        self.non_support_grip = grip;
+        self
     }
 }
 
