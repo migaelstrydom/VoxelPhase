@@ -1,4 +1,8 @@
-//! Friction impulse resolution for contact constraints.
+//! Tangential impulse resolution for contact constraints.
+//!
+//! The row drives the relative tangential velocity at a contact toward a target
+//! under the `mu * N` traction budget. Friction is the case where that target is
+//! zero.
 
 use generational_arena::Arena;
 use nalgebra::Vector3;
@@ -18,10 +22,26 @@ fn tangential_coefficient(header: &PairHeader, contact: &SolverContact) -> f32 {
     header.friction * contact.tangential_scale
 }
 
+/// The velocity error one tangential row corrects: how far the relative motion
+/// at the contact is from what the drive asks for, measured along one tangent.
+///
+/// The subtraction happens in world space, before the projection onto the
+/// tangent. `target.dot(t) - relative.dot(t)` is the same expression in algebra
+/// and a different one in floating point — with a zero target only this form
+/// reproduces the plain `-(v_rel . t)` friction row bit for bit. Pinned by
+/// `tangential_error_is_not_reassociated`.
+fn tangential_error(target: &Vector3<f32>, relative: &Vector3<f32>, tangent: &Vector3<f32>) -> f32 {
+    (target - relative).dot(tangent)
+}
+
+/// Solve one contact's tangential row toward `target_relative_velocity`, the
+/// Target Relative Velocity the drive asks for at this point. Zero is ordinary
+/// friction.
 pub(crate) fn solve_friction_impulse(
     bodies: &mut Arena<RigidBody>,
     header: &PairHeader,
     contact: &mut SolverContact,
+    target_relative_velocity: &Vector3<f32>,
     shock_scales: (f32, f32),
 ) {
     let mu = tangential_coefficient(header, contact);
@@ -51,8 +71,8 @@ pub(crate) fn solve_friction_impulse(
     let curr_t1 = contact.accumulated_friction_impulse_ws.dot(&t1);
     let curr_t2 = contact.accumulated_friction_impulse_ws.dot(&t2);
 
-    let delta_t1 = -rel_vel.dot(&t1) / effective_mass_t1;
-    let delta_t2 = -rel_vel.dot(&t2) / effective_mass_t2;
+    let delta_t1 = tangential_error(target_relative_velocity, &rel_vel, &t1) / effective_mass_t1;
+    let delta_t2 = tangential_error(target_relative_velocity, &rel_vel, &t2) / effective_mass_t2;
 
     let mut new_t1 = curr_t1 + delta_t1;
     let mut new_t2 = curr_t2 + delta_t2;
@@ -116,5 +136,59 @@ pub(crate) fn manifold_friction_projection(
         if delta.magnitude_squared() > 1e-20 {
             apply_impulse_pair(bodies, header, contact.point, delta, shock_scales);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use nalgebra::Vector3;
+
+    use super::tangential_error;
+
+    /// With a zero target the row must be the plain friction row it replaced,
+    /// bit for bit — `to_bits` rather than `==`, so a result that drifts by one
+    /// ulp is caught where a tolerance would hide it.
+    #[test]
+    fn a_zero_target_is_the_plain_friction_row() {
+        let tangent = Vector3::new(-0.749082, 0.48637468, 0.44979537);
+        let cases = [
+            Vector3::new(3.25, -1.5, 0.75),
+            Vector3::new(-7.125, 0.03125, 2.5),
+            Vector3::new(1.0e-7, 4.6692016, -9.0e6),
+        ];
+
+        for relative in cases {
+            let generalised = tangential_error(&Vector3::zeros(), &relative, &tangent);
+            assert_eq!(generalised.to_bits(), (-relative.dot(&tangent)).to_bits());
+        }
+    }
+
+    /// The one place the two forms part company: a tangential error of exactly
+    /// zero comes back positive here and negative from `-(v_rel . t)`, because
+    /// `0.0 - 0.0` is `+0.0`. The solver adds the result to an accumulator and
+    /// bounds it, so the sign alone changes nothing — recorded because it is the
+    /// single exception to the test above.
+    #[test]
+    fn only_the_sign_of_zero_differs() {
+        let tangent = Vector3::new(1.0, 0.0, 0.0);
+        let relative = Vector3::new(0.0, 1.0, 0.0);
+
+        let generalised = tangential_error(&Vector3::zeros(), &relative, &tangent);
+        assert_eq!(generalised, 0.0);
+        assert!(!generalised.is_sign_negative());
+        assert!((-relative.dot(&tangent)).is_sign_negative());
+    }
+
+    /// The one trap in the generalisation: `(target - relative) . t` and
+    /// `target . t - relative . t` are the same in algebra and not in floating
+    /// point. These operands separate them, so reassociating the row fails here.
+    #[test]
+    fn tangential_error_is_not_reassociated() {
+        let target = Vector3::new(2.5019093, 7.944276, 5.513714);
+        let relative = Vector3::new(2.5013597, 7.9438763, 5.514461);
+        let tangent = Vector3::new(-0.749082, 0.48637468, 0.44979537);
+
+        let reassociated = target.dot(&tangent) - relative.dot(&tangent);
+        assert_ne!(tangential_error(&target, &relative, &tangent), reassociated);
     }
 }

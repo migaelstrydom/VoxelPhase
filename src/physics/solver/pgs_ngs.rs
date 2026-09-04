@@ -212,6 +212,7 @@ impl ConstraintSolver for PgsNgsSolver {
                         bodies,
                         &manifold.header,
                         &mut manifold.contacts[ci],
+                        &Vector3::zeros(),
                         shock,
                     );
                 }

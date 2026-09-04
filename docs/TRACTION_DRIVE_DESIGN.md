@@ -1270,14 +1270,38 @@ Two loose ends, both small and both honest:
   938 and the eight acceptance scenarios print unchanged numbers, which is the
   most the bench can prove about a stage whose risk was never numeric.
 
-**Stage 3 — Tangential row.** Generalise `solve_friction_impulse` to take a
-target, with every call site passing zero. A pure refactor, and the stage's
-entire value is that any movement in the bench numbers means a real bug — so pin
-the expression form rather than trusting the algebra: the generalised row must
-compute `(v_target - v_rel).dot(&t)` without reassociating into
-`v_target.dot(&t) - v_rel.dot(&t)`. With `v_target = 0` the first form is
-bit-identical to today's `-(v_rel · t)` except for the sign of zero; the second
-is not guaranteed to be.
+**Stage 3 — Tangential row. Landed.** `solve_friction_impulse` takes a
+`target_relative_velocity`, and both call sites — the PGS iteration and the CCD
+contact solve — pass zero. The eight acceptance scenarios print numbers
+identical to the digit, `cargo test --lib` is green at 944, and nothing else in
+the engine knows the parameter exists yet.
+
+The expression form is pinned in a function of its own,
+`friction::tangential_error(target, relative, tangent)`, rather than left inline
+where a later tidy-up could reassociate it. Its two tests are the stage's real
+deliverable: one asserts the zero-target row reproduces `-(v_rel · t)` bit for
+bit via `to_bits`, the other feeds operands chosen so that
+`target·t − relative·t` differs from `(target − relative)·t` in the last bit, so
+a reassociation fails a test rather than moving a bench number quietly.
+
+Two things Stage 5 should know about the seam:
+
+- **The sign-of-zero exception is real, and it is on the other side from what
+  the plan predicted.** §9 said the generalised form was bit-identical "except
+  for the sign of zero"; the direction is that a zero error now comes back
+  `+0.0` where `-(v_rel · t)` gave `-0.0`, because `0.0 - 0.0` is `+0.0` and the
+  subtraction happens per component before the projection. The result is added
+  to an accumulator and then bounded, so no downstream value can distinguish
+  them — which the acceptance numbers confirm. It is pinned by its own test
+  (`only_the_sign_of_zero_differs`) so that a future change to the row has to
+  decide about it deliberately.
+- **The target is a per-contact vector already, passed by reference.** Nothing
+  about the signature assumes it is the same at every contact of a manifold, so
+  §6.1's `v_target_linear + ω_target × r_contact` fits without another change of
+  shape. `manifold_friction_projection` is untouched and still projects the
+  *magnitudes* of the accumulated impulses against the summed budget; that stays
+  correct with a non-zero target, since the budget is a bound on impulse and
+  says nothing about what the row was aiming at.
 
 **Stage 4 — Medium anchor.** Platforms move to `ReactionAnchor::Medium`,
 expanded as world-anchored `ConstraintRow`s. Platforms **drop `VelocityDriven`

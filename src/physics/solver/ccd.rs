@@ -1,6 +1,7 @@
 //! Contact solving for transient CCD contacts (no warm-starting).
 
 use generational_arena::Arena;
+use nalgebra::Vector3;
 
 use crate::physics::body::RigidBody;
 use crate::physics::pipeline::pair::SolverManifold;
@@ -31,7 +32,7 @@ pub(crate) fn solve_contacts(
                 false,
                 no_shock,
             );
-            solve_friction_impulse(bodies, header, contact, no_shock);
+            solve_friction_impulse(bodies, header, contact, &Vector3::zeros(), no_shock);
         }
     }
 }
