@@ -7,14 +7,10 @@ use specs::{Component, DenseVecStorage};
 /// `CharacterAnimator`. Grounding is a locomotion fact, not an animation fact —
 /// a creature with no skeleton still needs to know it can jump.
 ///
-/// Two writers, one per kind of character:
-///
-/// - `CharacterAnimationSystem` for rigged humanoids. It already derives this
-///   from the foot probes, which is the more accurate source: probes see the
-///   ledge the sole is over, not just where the capsule happens to touch.
-/// - `ContactGroundingSystem` for everything else, from physics contact
-///   normals. Skipped for entities that have an animator, so the probe-derived
-///   value is never overwritten by the coarser one.
+/// One writer, for every kind of character: `ContactGroundingSystem`, which
+/// projects the Support Set the physics engine already resolved. A rigged
+/// humanoid and a roller get the same answer from the same contacts — the foot
+/// probes measure where the ground is, never whether the character is on it.
 #[derive(Component, Debug, Clone, Default)]
 #[storage(DenseVecStorage)]
 pub struct Grounding {

@@ -121,12 +121,38 @@ pub fn simulate_with_suspend(
     input: impl Fn(usize) -> Input,
     suspend: impl Fn(usize) -> bool,
 ) -> Vec<Frame> {
+    simulate_over(
+        frames,
+        dt_of,
+        gait,
+        |x, z| Some(height(x, z)),
+        input,
+        suspend,
+    )
+}
+
+/// Run a scenario over terrain that need not be everywhere: `terrain`
+/// returns `None` where a probe would find nothing — a pit, a ledge, the
+/// far side of a gap. The pelvis is scripted, so it walks out over the
+/// void; the feet may not follow it there.
+pub fn simulate_over(
+    frames: usize,
+    dt_of: impl Fn(usize) -> f32,
+    gait: GaitParams,
+    terrain: impl Fn(f32, f32) -> Option<f32>,
+    input: impl Fn(usize) -> Input,
+    suspend: impl Fn(usize) -> bool,
+) -> Vec<Frame> {
     let cfg = FootPlacerConfig::default();
 
     let mut pelvis_xz = Vector2::new(0.0, 0.0);
     let init_yaw = input(0).yaw;
     let init_facing = facing_from_yaw(init_yaw);
-    let foot_y0 = height(0.0, 0.0);
+    let foot_y0 = terrain(0.0, 0.0).expect("the scenario must start on ground");
+    // The pelvis walks on regardless of what is under it — a capsule
+    // resting on a ledge is still held up when its centre passes the
+    // edge — so ground height falls back to the last surface it knew.
+    let mut last_ground_y = foot_y0;
     let mut placer = FootPlacer::new(
         Point3::new(0.0, foot_y0 + STANDING_HEIGHT, 0.0),
         init_facing,
@@ -151,11 +177,8 @@ pub fn simulate_with_suspend(
 
         pelvis_xz.x += velocity.x * dt;
         pelvis_xz.y += velocity.z * dt;
-        let pelvis = Point3::new(
-            pelvis_xz.x,
-            height(pelvis_xz.x, pelvis_xz.y) + STANDING_HEIGHT,
-            pelvis_xz.y,
-        );
+        last_ground_y = terrain(pelvis_xz.x, pelvis_xz.y).unwrap_or(last_ground_y);
+        let pelvis = Point3::new(pelvis_xz.x, last_ground_y + STANDING_HEIGHT, pelvis_xz.y);
         // The pelvis follows the terrain, so the placer must see the
         // implied vertical velocity — the game's physics velocity has
         // it, and the overstretch opening gate reads it on slopes.
@@ -164,9 +187,12 @@ pub fn simulate_with_suspend(
 
         // Probes aim at each foot's anchor (landing target while
         // stepping), matching the game's probe configuration.
-        let probe = |p: Point3<f32>| {
-            let y = height(p.x, p.z);
-            (Some(Point3::new(p.x, y, p.z)), normal_at(&height, p.x, p.z))
+        let probe = |p: Point3<f32>| match terrain(p.x, p.z) {
+            Some(y) => (
+                Some(Point3::new(p.x, y, p.z)),
+                normal_at(&terrain, p.x, p.z),
+            ),
+            None => (None, Vector3::y()),
         };
         let (left_ground, left_ground_normal) = probe(placer.left.probe_anchor());
         let (right_ground, right_ground_normal) = probe(placer.right.probe_anchor());
@@ -207,11 +233,17 @@ pub fn simulate_with_suspend(
     out
 }
 
-/// Terrain normal from central differences of the height field.
-fn normal_at(height: &impl Fn(f32, f32) -> f32, x: f32, z: f32) -> Vector3<f32> {
+/// Terrain normal from central differences of the height field. Samples
+/// that fall in a void hold the centre height, so the normal at a ledge
+/// lip is the lip's own rather than a cliff face.
+fn normal_at(terrain: &impl Fn(f32, f32) -> Option<f32>, x: f32, z: f32) -> Vector3<f32> {
     let e = 0.05;
-    let dx = (height(x + e, z) - height(x - e, z)) / (2.0 * e);
-    let dz = (height(x, z + e) - height(x, z - e)) / (2.0 * e);
+    let Some(centre) = terrain(x, z) else {
+        return Vector3::y();
+    };
+    let at = |x: f32, z: f32| terrain(x, z).unwrap_or(centre);
+    let dx = (at(x + e, z) - at(x - e, z)) / (2.0 * e);
+    let dz = (at(x, z + e) - at(x, z - e)) / (2.0 * e);
     Vector3::new(-dx, 1.0, -dz).normalize()
 }
 

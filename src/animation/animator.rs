@@ -169,6 +169,7 @@ impl CharacterAnimator {
         pelvis_position: Point3<f32>,
         yaw: f32,
         velocity: Vector3<f32>,
+        is_grounded: bool,
         character_state: &CharacterState,
         target: &CharacterIntent,
         grab_config: &GrabConfig,
@@ -180,9 +181,12 @@ impl CharacterAnimator {
         self.state.facing = facing;
         self.state.pelvis_position = pelvis_position;
         self.process_contacts(contacts);
-        let has_ground_contact =
-            self.state.left.ground_contact.is_some() || self.state.right.ground_contact.is_some();
-        self.state.is_grounded = has_ground_contact;
+        // Support is decided by the contacts the physics engine solved, not by
+        // where the gait happened to aim a probe — see
+        // `docs/TRACTION_DRIVE_DESIGN.md` §6.6. The probes below remain the
+        // rangefinder: how high the ground is under a landing target, and
+        // which way it faces.
+        self.state.is_grounded = is_grounded;
 
         // Snapshot the foot-centre y for a potential Landing splice this
         // frame. `foot.position.y` now represents the foot centre (sole
@@ -437,27 +441,10 @@ impl CharacterAnimator {
         }
     }
 
-    /// Whether the character has any ground contact.
+    /// Whether something is holding the character up, as the Support Set
+    /// resolved it this frame.
     pub fn is_grounded(&self) -> bool {
         self.state.is_grounded
-    }
-
-    /// Ground normal under whichever foot is planted, or `None` when airborne.
-    ///
-    /// With both feet down the two normals are averaged, so a character
-    /// straddling a ridge reports the bisector rather than picking a side.
-    pub fn ground_normal(&self) -> Option<Vector3<f32>> {
-        if !self.state.is_grounded {
-            return None;
-        }
-        let sum = [
-            self.state.left.ground_normal,
-            self.state.right.ground_normal,
-        ]
-        .into_iter()
-        .flatten()
-        .sum::<Vector3<f32>>();
-        Some(sum.try_normalize(1e-6).unwrap_or_else(Vector3::y))
     }
 
     /// Get mesh vertices and indices for rendering.

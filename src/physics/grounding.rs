@@ -1,24 +1,31 @@
-//! Grounding: the boolean projection of the Support Set.
+//! Grounding: the projection of the Support Set a character reads.
 //!
-//! A body is grounded when something holds it up. That question is answered
-//! once, by `SupportResolver`, from the contacts the step already produced;
-//! this module adds only the carry-over that keeps a sleeping body standing on
-//! the floor it fell asleep on.
+//! A body is grounded when something holds it up, and the axis it is held
+//! along is the mean of the normals doing the holding. Both answers are
+//! produced once, by `SupportResolver`, from the contacts the step already
+//! produced; this module adds only the carry-over that keeps a sleeping body
+//! standing on the floor it fell asleep on.
 
-use rustc_hash::FxHashSet;
+use nalgebra::Vector3;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::physics::drive::SupportSets;
 use crate::physics::RigidBodyHandle;
 
-/// Projects Support Sets to a grounded set, across steps.
+/// Every grounded body of one step, with the normal holding it up.
+pub type GroundedBodies = FxHashMap<RigidBodyHandle, Vector3<f32>>;
+
+/// Projects Support Sets to the grounded bodies and their support normals,
+/// across steps.
 #[derive(Default)]
 pub struct GroundingDetector {
-    /// The grounded set from the previous step.
+    /// The grounded bodies from the previous step, with their normals.
     ///
     /// Sleeping bodies generate no contacts, but they haven't moved either —
     /// without the carry-over, a body falling asleep while resting on the
-    /// floor would read as airborne.
-    last_grounded: FxHashSet<RigidBodyHandle>,
+    /// floor would read as airborne. The normal is carried with it: the floor
+    /// it fell asleep on has not tilted either.
+    last_grounded: GroundedBodies,
 }
 
 impl GroundingDetector {
@@ -26,16 +33,19 @@ impl GroundingDetector {
         Self::default()
     }
 
-    /// Bodies that are grounded this step.
+    /// Bodies that are grounded this step, each with its support normal.
     pub fn grounded_bodies(
         &mut self,
         supports: &SupportSets,
         sleeping: &FxHashSet<RigidBodyHandle>,
-    ) -> FxHashSet<RigidBodyHandle> {
-        let mut grounded: FxHashSet<RigidBodyHandle> = supports.supported_bodies().collect();
+    ) -> GroundedBodies {
+        let mut grounded: GroundedBodies = supports
+            .supported_bodies()
+            .filter_map(|handle| supports.get(handle).map(|set| (handle, set.mean_normal())))
+            .collect();
         for handle in sleeping {
-            if self.last_grounded.contains(handle) {
-                grounded.insert(*handle);
+            if let Some(normal) = self.last_grounded.get(handle) {
+                grounded.entry(*handle).or_insert(*normal);
             }
         }
         self.last_grounded = grounded.clone();
@@ -66,16 +76,16 @@ mod tests {
 
     /// One frame: contacts once, then a single substep, as the game loop does,
     /// ending with the grounding read the game also performs every frame.
-    fn step(world: &mut PhysicsWorld, floor: &FlatQuadGeometry) -> FxHashSet<RigidBodyHandle> {
+    fn step(world: &mut PhysicsWorld, floor: &FlatQuadGeometry) -> GroundedBodies {
         let mut debug = DebugLines::default();
         world.update_contacts(DT, 1, floor, &[], &mut debug);
         world.substep(DT, floor, &[]);
-        world.grounded_handles()
+        world.grounded_bodies()
     }
 
-    fn run(world: &mut PhysicsWorld, frames: u32) -> FxHashSet<RigidBodyHandle> {
+    fn run(world: &mut PhysicsWorld, frames: u32) -> GroundedBodies {
         let floor = FlatQuadGeometry::new(20.0);
-        let mut grounded = FxHashSet::default();
+        let mut grounded = GroundedBodies::default();
         for _ in 0..frames {
             grounded = step(world, &floor);
         }
@@ -85,25 +95,25 @@ mod tests {
     #[test]
     fn a_body_resting_on_the_floor_is_grounded() {
         let (mut world, body) = sphere_over_a_floor(PhysicsConfig::default(), 1.0);
-        assert!(run(&mut world, 120).contains(&body));
+        assert!(run(&mut world, 120).contains_key(&body));
     }
 
     #[test]
     fn a_body_in_free_air_is_not_grounded() {
         let (mut world, body) = sphere_over_a_floor(PhysicsConfig::default(), 8.0);
-        assert!(!run(&mut world, 10).contains(&body));
+        assert!(!run(&mut world, 10).contains_key(&body));
     }
 
     #[test]
     fn a_body_that_falls_asleep_on_the_floor_stays_grounded() {
         let (mut world, body) = sphere_over_a_floor(PhysicsConfig::default(), 1.0);
-        assert!(run(&mut world, 120).contains(&body));
+        assert!(run(&mut world, 120).contains_key(&body));
         assert!(world.is_sleeping(body), "the sphere should have settled");
 
         let floor = FlatQuadGeometry::new(20.0);
         for _ in 0..120 {
             assert!(
-                step(&mut world, &floor).contains(&body),
+                step(&mut world, &floor).contains_key(&body),
                 "the floor did not move, so neither should the answer"
             );
         }
@@ -116,6 +126,6 @@ mod tests {
         let mut config = PhysicsConfig::default();
         config.gravity = Vector3::new(-9.81, 0.0, 0.0);
         let (mut world, body) = sphere_over_a_floor(config, 0.5);
-        assert!(!run(&mut world, 60).contains(&body));
+        assert!(!run(&mut world, 60).contains_key(&body));
     }
 }

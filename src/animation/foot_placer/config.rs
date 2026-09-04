@@ -113,6 +113,14 @@ pub struct FootPlacerConfig {
     /// Exponential rate (per second) at which an in-flight foot target
     /// chases the latest stance target before the retarget cutoff.
     pub swing_retarget_rate: f32,
+    /// Exponential rate (per second) at which a landing target with no
+    /// ground under it retreats toward the foot's takeoff position.
+    /// Used as `1 - exp(-rate * dt)`, so it is dt-independent. It matches
+    /// `swing_retarget_rate`: an illegal target must be corrected at
+    /// least as fast as a stale one, and even the shortest swing has to
+    /// arrive close to the takeoff position before the plant refusal
+    /// snaps it the rest of the way.
+    pub unsupported_retreat_rate: f32,
     /// Duty factor at very low speed. Values above `0.5` mean the stance
     /// windows overlap, so at least one foot can remain planted.
     pub slow_duty_factor: f32,
@@ -149,6 +157,7 @@ impl Default for FootPlacerConfig {
             min_stance_fraction: 0.6,
             overstretch_hard_margin: 0.03,
             swing_retarget_rate: 30.0,
+            unsupported_retreat_rate: 30.0,
             slow_duty_factor: 0.62,
             fast_duty_factor: 0.38,
             duty_froude_start: 0.25,

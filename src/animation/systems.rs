@@ -60,8 +60,8 @@ impl<'a> System<'a> for CharacterAnimationSystem {
         ReadStorage<'a, Velocity>,
         ReadStorage<'a, CharacterIntent>,
         ReadStorage<'a, ContactCandidates>,
+        ReadStorage<'a, Grounding>,
         WriteStorage<'a, CharacterAnimator>,
-        WriteStorage<'a, Grounding>,
         Write<'a, DebugLines>,
         Write<'a, DebugOverlays>,
     );
@@ -78,23 +78,23 @@ impl<'a> System<'a> for CharacterAnimationSystem {
             velocities,
             intents,
             candidates,
+            groundings,
             mut animators,
-            mut groundings,
             mut _debug_lines,
             mut debug_overlays,
         ) = data;
 
         let dt = time.delta_seconds();
 
-        for (entity, character_state, pos, rot, vel, target, animator, grounding) in (
+        for (entity, character_state, pos, rot, vel, target, grounding, animator) in (
             &entities,
             &character_states,
             &positions,
             &rotations,
             &velocities,
             &intents,
+            &groundings,
             &mut animators,
-            &mut groundings,
         )
             .join()
         {
@@ -112,19 +112,12 @@ impl<'a> System<'a> for CharacterAnimationSystem {
                 pelvis_pos,
                 yaw,
                 velocity,
+                grounding.is_grounded,
                 character_state,
                 target,
                 &grab_config,
                 contacts,
             );
-
-            // Publish the probe-derived grounding for `CharacterControlSystem`,
-            // which must not depend on the animator. Foot probes are the better
-            // source here — they see the ledge the sole is over.
-            *grounding = match animator.ground_normal() {
-                Some(normal) => Grounding::on(normal),
-                None => Grounding::airborne(),
-            };
 
             if debug_config.foot_placer_overlay {
                 draw_foot_placer_overlay(&animator.foot_placer, &mut debug_overlays);

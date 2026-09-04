@@ -14,6 +14,7 @@
 
 mod components;
 mod config;
+mod forgiveness;
 pub mod grab;
 mod grounding;
 mod grounding_system;
@@ -23,5 +24,6 @@ pub use components::{
     LocomotionState, MovementRule, Timer,
 };
 pub use config::LocomotionConfig;
+pub use forgiveness::GroundForgiveness;
 pub use grounding::Grounding;
 pub use grounding_system::ContactGroundingSystem;

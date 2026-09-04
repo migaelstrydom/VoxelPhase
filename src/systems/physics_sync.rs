@@ -6,16 +6,13 @@
 //! 2. Syncs physics state back to ECS components
 
 use nalgebra::{Point3, Vector3};
-use rustc_hash::FxHashSet;
 use specs::{Join, Read, ReadStorage, System, Write, WriteStorage};
 
-use crate::animation::CharacterAnimator;
 use crate::components::{Orientation, Position, RigidBodyComponent, Velocity};
 use crate::debug::{DebugLines, DebugLog, DebugOverlays};
 use crate::drive::{resolve_drive, Actuator, BodyMotion, DriveIntent};
 use crate::physics::{
-    PhysicsImpulseQueue, PhysicsWorld, RigidBodyHandle, SequentialStepper, Stepper,
-    SubstepForceProvider,
+    PhysicsImpulseQueue, PhysicsWorld, SequentialStepper, Stepper, SubstepForceProvider,
 };
 use crate::terrain::TerrainWorld;
 use crate::time::Time;
@@ -168,16 +165,6 @@ impl PhysicsSyncSystem {
             }
         }
     }
-
-    fn apply_grounded_state(
-        grounded_handles: &FxHashSet<RigidBodyHandle>,
-        bodies: &ReadStorage<RigidBodyComponent>,
-        controllers: &mut WriteStorage<CharacterAnimator>,
-    ) {
-        for (body, controller) in (bodies, controllers).join() {
-            controller.state.is_grounded = grounded_handles.contains(&body.0);
-        }
-    }
 }
 
 impl<'a> System<'a> for PhysicsSyncSystem {
@@ -192,7 +179,6 @@ impl<'a> System<'a> for PhysicsSyncSystem {
         WriteStorage<'a, DriveIntent>,
         ReadStorage<'a, Actuator>,
         WriteStorage<'a, BodyMotion>,
-        WriteStorage<'a, CharacterAnimator>,
         Write<'a, DebugLines>,
         Write<'a, DebugLog>,
         Write<'a, DebugOverlays>,
@@ -214,7 +200,6 @@ impl<'a> System<'a> for PhysicsSyncSystem {
             mut drive_intents,
             actuators,
             mut body_motions,
-            mut controllers,
             mut debug_lines,
             mut debug_log,
             mut debug_overlays,
@@ -310,8 +295,6 @@ impl<'a> System<'a> for PhysicsSyncSystem {
             }
         }
 
-        let grounded_handles = physics.world.grounded_handles();
-
         // Debug visualization and logging
         physics.world.debugger().add_contact_overlays(
             physics.world.contact_events(),
@@ -369,7 +352,5 @@ impl<'a> System<'a> for PhysicsSyncSystem {
         );
 
         Self::pull_body_motion(&physics.world, &mut body_motions, &bodies);
-
-        Self::apply_grounded_state(&grounded_handles, &bodies, &mut controllers);
     }
 }

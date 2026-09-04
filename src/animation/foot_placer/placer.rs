@@ -100,6 +100,12 @@ pub struct PlacerFoot {
     /// Gates re-releases so a foot landing mid-turn cannot be lifted
     /// again after a single frame of contact.
     pub since_plant: f32,
+    /// True once this swing's landing target has been pulled back for
+    /// want of ground under it. A shortened step is never re-extended
+    /// within the same swing: the target sits at the edge of the ground
+    /// the probe can find, and chasing the ideal outward again would
+    /// oscillate the foot across that edge every frame.
+    pub landing_shortened: bool,
 }
 
 impl PlacerFoot {
@@ -116,6 +122,7 @@ impl PlacerFoot {
             takeoff_up: Vector3::y(),
             pre_lift: 0.0,
             since_plant: LONG_AGO,
+            landing_shortened: false,
         }
     }
 
@@ -743,6 +750,7 @@ fn start_step(
 
     foot.takeoff_up = foot.up;
     foot.pre_lift = 0.0;
+    foot.landing_shortened = false;
     foot.phase = FootPhase::Stepping {
         from: foot.planted_position,
         to,
@@ -760,6 +768,10 @@ fn start_step(
 /// mid-swing don't land the foot somewhere stale. The landing *height*
 /// chases the probed terrain for the whole swing — a vertical
 /// correction cannot skate, but a stale height pops at plant.
+///
+/// A target the landing probe finds no ground under is illegal, and it
+/// takes precedence over both: the step shortens toward its takeoff
+/// point until the probe finds a surface again.
 fn advance_stepping(
     foot: &mut PlacerFoot,
     ideal: Point3<f32>,
@@ -782,11 +794,16 @@ fn advance_stepping(
         return;
     };
 
+    let landing = floor_sample(ctx, foot.side);
     let new_t = t + ctx.dt;
     if new_t >= duration {
+        // A target the probe still finds no ground under is refused
+        // outright: the retreat below is a smooth approach to the
+        // takeoff position, and this is the guarantee it converges on.
+        let plant_at = if landing.is_some() { to } else { from };
         foot.phase = FootPhase::Planted;
-        foot.position = to;
-        foot.planted_position = to;
+        foot.position = plant_at;
+        foot.planted_position = plant_at;
         foot.forward = to_forward;
         // The turn-trigger reference must be the orientation the foot
         // actually landed with, not the yaw at takeoff — during a fast
@@ -800,7 +817,18 @@ fn advance_stepping(
 
     let u = new_t / duration;
     let alpha = 1.0 - (-ctx.config.swing_retarget_rate * ctx.dt).exp();
-    if u < ctx.config.swing_retarget_until_fraction {
+    if landing.is_none() {
+        // The probe aims at the landing target, so no floor sample means
+        // there is no ground under where this foot is about to plant —
+        // a hole, a ledge, or a wall face. That is not a legal target,
+        // and nothing downstream will notice: grounding comes from the
+        // capsule's contacts now, so a foot planted in mid-air simply
+        // stays there. The step shortens instead, retreating toward the
+        // takeoff position, which is on ground by construction.
+        let retreat = 1.0 - (-ctx.config.unsupported_retreat_rate * ctx.dt).exp();
+        to = lerp_point(to, from, retreat);
+        foot.landing_shortened = true;
+    } else if !foot.landing_shortened && u < ctx.config.swing_retarget_until_fraction {
         let remaining = duration - new_t;
         let desired_to = Point3::new(
             ideal.x + ctx.velocity.x * remaining,
@@ -808,10 +836,12 @@ fn advance_stepping(
             ideal.z + ctx.velocity.z * remaining,
         );
         to = lerp_point(to, desired_to, alpha);
+    }
+    if u < ctx.config.swing_retarget_until_fraction {
         to_forward = swing_forward(to_forward, normalise_facing(facing), alpha);
     }
 
-    if let Some((contact, normal)) = floor_sample(ctx, foot.side) {
+    if let Some((contact, normal)) = landing {
         // The swinging foot's probe aims at the landing target, so its
         // contact (extrapolated along the floor plane to the target xz)
         // is the best live estimate of the plant height. Chase it so
@@ -840,7 +870,7 @@ fn advance_stepping(
     // Obstacle clearance: a riser or bump between the endpoints must
     // push the foot over it, not let the arc cut through. Faded at the
     // endpoints so takeoff and plant stay exactly on the surface.
-    if let Some((contact, normal)) = floor_sample(ctx, foot.side) {
+    if let Some((contact, normal)) = landing {
         let surface_y = floor_height_at(contact, normal, foot.position.x, foot.position.z);
         let bell = (std::f32::consts::PI * u).sin();
         let min_y = surface_y + ctx.config.swing_obstacle_clearance * bell;

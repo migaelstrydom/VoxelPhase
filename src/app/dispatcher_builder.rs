@@ -78,19 +78,18 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
             "sensor_probe",
             &["animation_probe_config"],
         )
-        .with(
-            CharacterAnimationSystem,
-            "character_animation",
-            &["sensor_probe"],
-        )
-        // Grounding for characters with no skeleton to probe with. Runs after
-        // physics for the same reason the animator does — both write
-        // `Grounding` from this frame's contacts, and `character_control`
-        // reads it at the top of the next frame.
+        // The one writer of `Grounding`, for every character. Runs after
+        // physics, on this frame's contacts; the animator reads it in the same
+        // frame and `character_control` at the top of the next.
         .with(
             ContactGroundingSystem,
             "contact_grounding",
             &["physics_sync"],
+        )
+        .with(
+            CharacterAnimationSystem,
+            "character_animation",
+            &["sensor_probe", "contact_grounding"],
         )
         .with(CameraControlSystem, "camera_control", &["physics_sync"])
         // Projectiles and explosions

@@ -2,7 +2,7 @@
 
 use generational_arena::Arena;
 use nalgebra::{Isometry3, Matrix3, Point3, UnitQuaternion, UnitVector3, Vector3};
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 
 use super::body::{BodyType, RigidBody, RigidBodyDesc};
 use super::ccd::{
@@ -15,7 +15,7 @@ use super::contact_event::{ContactEvent, ContactSource};
 use super::debug::{PhysicsDebugConfig, PhysicsDebugger};
 use super::drive::{stamp_non_support_grip, SupportConfig, SupportResolver, SupportSets};
 use super::force_provider::{ForceContext, ForceOutput, SubstepForceProvider};
-use super::grounding::GroundingDetector;
+use super::grounding::{GroundedBodies, GroundingDetector};
 use super::handle::{ColliderHandle, RigidBodyHandle};
 use super::impact::ImpactLedger;
 use super::impulses::PhysicsImpulse;
@@ -928,11 +928,12 @@ impl PhysicsWorld {
         }
     }
 
-    /// Bodies something held up in the most recent step.
+    /// Bodies something held up in the most recent step, each with the normal
+    /// holding it up.
     ///
-    /// The boolean projection of `support_sets`, plus the carry-over that
-    /// keeps a sleeping body standing on the floor it fell asleep on.
-    pub fn grounded_handles(&mut self) -> FxHashSet<RigidBodyHandle> {
+    /// The projection of `support_sets` a character reads, plus the carry-over
+    /// that keeps a sleeping body standing on the floor it fell asleep on.
+    pub fn grounded_bodies(&mut self) -> GroundedBodies {
         let supports = self.support_sets();
         let sleeping = self.sleep_manager.sleeping_snapshot();
         self.grounding_detector

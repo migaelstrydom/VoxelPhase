@@ -98,7 +98,9 @@ pub struct AnimationState {
     /// Current facing direction (horizontal, normalized).
     pub facing: Vector3<f32>,
 
-    /// Whether the character has any ground contact.
+    /// Whether something is holding the character up, taken from the
+    /// `Grounding` component — the Support Set's answer, not the probes'.
+    /// Animation reads support; it no longer decides it.
     pub is_grounded: bool,
 }
 

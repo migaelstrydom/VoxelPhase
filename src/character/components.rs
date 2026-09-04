@@ -2,6 +2,7 @@ use nalgebra::{Point3, Vector3};
 use specs::{Component, DenseVecStorage};
 
 use super::config::LocomotionConfig;
+use super::forgiveness::GroundForgiveness;
 use crate::physics::RigidBodyHandle;
 
 /// Countdown timer for input-grace windows (jump buffer, crouch buffer, lockouts).
@@ -364,6 +365,9 @@ pub struct CharacterState {
     pub crouch_buffer: Timer,
     /// Post-long-jump crouch suppression: while active, held Ctrl is ignored.
     pub crouch_lockout: Timer,
+    /// Holds grounding true briefly after contact is lost, so the chatter of a
+    /// real contact set does not reach the state machine.
+    pub ground_forgiveness: GroundForgiveness,
 }
 
 impl Default for CharacterState {
@@ -375,6 +379,7 @@ impl Default for CharacterState {
             jump_buffer: Timer::default(),
             crouch_buffer: Timer::default(),
             crouch_lockout: Timer::default(),
+            ground_forgiveness: GroundForgiveness::default(),
         }
     }
 }

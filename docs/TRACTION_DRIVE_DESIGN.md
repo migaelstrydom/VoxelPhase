@@ -735,6 +735,37 @@ sensors would leave, and it is budgeted rather than incidental.
 R6 holds for the drive, and for grounding, which now has one contact-derived
 source for every body.
 
+#### As built (Stage 2c)
+
+`ContactGroundingSystem` is the only writer of `Grounding`, for every body that
+has one, and `CharacterAnimator` takes `is_grounded` from that component. Three
+things about the built shape go beyond the paragraphs above:
+
+- **The normal is a projection too, not just the boolean.** The old system
+  derived its normal from a second classification — a 50° cone against
+  `normal.y`, over raw contact events — beside the Support Set's 60° cone
+  against gravity. `GroundingDetector` now projects to *body → support normal*
+  and the sleeping carry-over carries the normal with it, so the last world-Y
+  test on the grounding path is gone and one body cannot be grounded by one
+  rule and normalled by another.
+- **The animator had a second grounding writer, and it also went.**
+  `PhysicsSyncSystem::apply_grounded_state` wrote `animator.state.is_grounded`
+  from `grounded_handles`, which `CharacterAnimator::update` then overwrote
+  from the probes a few systems later. With the component as the source, that
+  writer is deleted and `PhysicsSyncSystem` no longer touches
+  `CharacterAnimator` at all.
+- **Ordering had to move.** `character_animation` now depends on
+  `contact_grounding`, so the animator reads this frame's answer rather than
+  last frame's. `CharacterControlSystem` still reads it at the top of the next
+  frame — that is the ordinary staleness described above, unchanged.
+
+The forgiveness that the probes' reach supplied by accident is now
+`GroundForgiveness` (`character/forgiveness.rs`) with
+`LocomotionConfig::ground_forgiveness_window`, applied in
+`CharacterControlSystem` between the component and the FSM. It only ever
+extends a `true`, so it cannot ground an airborne character, and a consumed
+jump cancels it — see Stage 2c in §9 for why that cancel is load-bearing.
+
 **Support-relative speed is another projection of the same thing, and naming it
 here is what keeps `carrier_velocity` dead.** §6.1 removed that field from
 `BodyMotion` because a single `Option<Vector3>` over a structural set is where
@@ -915,7 +946,7 @@ needs as a trait and lets the caller supply it.
 | R3 Declared reaction partner | `Actuator::anchor`, `ReactionAnchor` §6.4 | declaration |
 | R4 Support-relative targets | row solves *relative* velocity §6.1 | **per contact, not per body** — a bridging body has no single anchor frame and its world speed is an outcome, §6.1 |
 | R5 Command ≠ measurement | `DriveIntent` / `BodyMotion` split §3, §7 | type system |
-| R6 No privileged coordinates | Contact Frame §6.1; `gravity_direction()` §6.6; `AxisBiased` leaves the drive path §6.7 | **bound delivered** by Stage 2b — the player's grip is decided against gravity, and no body-local axis survives in the friction path. The basis waits on the tangential row itself (Stage 5) |
+| R6 No privileged coordinates | Contact Frame §6.1; `gravity_direction()` §6.6; `AxisBiased` leaves the drive path §6.7 | **bound delivered** by Stage 2b — the player's grip is decided against gravity, and no body-local axis survives in the friction path. Stage 2c took the last world-Y out of the grounding projection with it: the normal a character reads is the Support Set's, not a second cone against `normal.y`. The basis waits on the tangential row itself (Stage 5) |
 | R7 Authority bounded by contact | `μ_drive·N` row bounds §6.1 | construction; magnitude chosen — `drive_gain: 5.0`, with its ledger in §11 |
 | R8 Cheats named and bounded | `Allowance` + `AllowanceApplier`, single module; `drive_gain` named and instrumented alongside it §11 | discipline, one file — the ledger is the whole airborne controller (§6.3), unsupported jumps (D2a), and one scalar per actuator |
 | R9 Distribution over supports | per-contact `μ·N` bound alone, no weighting term §6.1 | construction |
@@ -1158,38 +1189,86 @@ Two gaps, both deliberate:
   not. Both want a play-test; neither is expressible in the bench harness,
   which has no jump verb.
 
-**Stage 2c — One grounding source.** Delete the `!&animators` filter from
-`ContactGroundingSystem` and the `Grounding` write at `animation/systems.rs:124`,
-so every body's grounding comes from the Support Set (§6.6). `CharacterAnimator`
-takes `is_grounded` from the component instead of deriving it at
-`animator.rs:185`; the probes stay, as a rangefinder for landing height and
-normal.
+**Stage 2c — One grounding source. Landed.** `ContactGroundingSystem` is the
+only writer of `Grounding` and writes it for every body that has one; the
+`Grounding` write in `animation/systems.rs` is gone, and `CharacterAnimator`
+takes `is_grounded` from the component. The animation→physics loop is cut: a
+foot placement decision no longer reaches the FSM, the jump verbs or the drive.
+The probes remain, aimed by the gait as before, as the rangefinder for landing
+height and normal. §6.6 records what the built shape added beyond the plan —
+chiefly that grounding's *normal* is now a projection of the Support Set too,
+so the last world-Y classification on that path is gone.
 
-This is the stage that cuts the animation→physics loop, and it is the one stage
-whose risk is entirely about feel rather than about numbers. Three work items
-come with it, and none of them is optional:
+All three work items landed with it.
 
-- **A step whose landing target has no ground is illegal.** The foot placer must
-  shorten or re-aim it. Today the character flipping to airborne supplies this
-  behaviour implicitly; afterwards nothing does. `foot_placer/sim.rs` and the
-  invariants harness cover this offline, so it is testable before it is playable.
-- **Grounding needs an explicit forgiveness window.** Contact grounding chatters
-  where reach-based grounding was smooth — descending stairs, crossing MC terrain
-  — because a capsule genuinely loses contact between footfalls. The leniency
-  that `probe_length` supplied by accident becomes a named hysteresis or coyote
-  window on the FSM side. `ContactGroundingSystem` already carries support
-  forward for sleeping bodies, so the shape exists.
-- **Head tilt and stride read the new answer.** Anything keyed on
-  `Grounding`/`is_grounded` transitions sees a different transition rate.
+**The illegal landing target.** A swing whose landing probe finds no floor
+retreats its target toward the takeoff position — which is on ground by
+construction — and, if the probe still finds nothing when the swing ends, the
+plant is refused and the foot returns to where it left. The exponential retreat
+is the smooth approach; the refusal is the guarantee it converges on. Two
+things were learned building it. First, a foot that has been shortened must not
+chase its ideal outward again within the same swing (`PlacerFoot::landing_shortened`):
+the probe aims at the target, so a target that retreats onto solid ground
+immediately reads as legal again, and without the latch the foot oscillates
+across the ledge lip every frame. Second, one exponential rate is not enough on
+its own — at the shortest swing durations a 12/s retreat still planted 14 cm
+past the edge, which is why the rate matches `swing_retarget_rate` and the
+plant refusal backs it. Walking off a ledge at 1.5 m/s now plants within 2 cm
+of the edge and never beyond it (`steps_never_plant_where_there_is_no_ground`),
+and a companion test asserts no step over ordinary terrain is ever shortened.
+`sim.rs` gained `simulate_over`, which takes terrain as `Option<f32>` so a
+scenario can contain a hole; every existing scenario runs through it unchanged.
 
-Rollers and drones already run on contact grounding, so if the contact set were
-too noisy to stand on, that would be visible before this stage rather than
-during it.
+One consequence is worth knowing about before it is diagnosed as a bug: the
+probe reaches `1.8 · leg_length` from the hip, so ground more than about half a
+metre below the foot plane is *not* found, and a step off a tall drop now
+shortens rather than reaching for the floor below. That is the rule behaving as
+written. Whether it reads as careful or as timid is a play-test.
 
-Sequencing is free: this stage touches grounding and animation, Stage 2b touches
-the tangential bound, and neither reads the other's output. It should land before
-Stage 5 all the same, so that the drive and the FSM are agreed about support
-before the drive starts being bounded by it.
+**The forgiveness window.** `GroundForgiveness` (`character/forgiveness.rs`) is
+a scalar of state on `CharacterState`, spent in `CharacterControlSystem`
+between the component and the FSM, with `LocomotionConfig::ground_forgiveness_window`
+at **0.08 s** — the same as `ground_grace_period`, for want of a measured
+value. It only ever extends a `true`, so it cannot ground a character who never
+landed.
+
+Two things about it are not obvious and both bite:
+
+- **A consumed jump cancels the window.** Left armed, a jump's takeoff contact
+  is forgiven into the air; and since `Launching` exits on `!is_grounded` or
+  after `launch_window` (0.2 s), a window longer than that would hand
+  `Airborne` a grounded reading and land the character on nothing. The cancel
+  removes the whole class rather than relying on the two numbers staying
+  ordered, but the ordering constraint is documented on the config field
+  anyway.
+- **It stacks *ahead* of `ground_grace_period`.** A real walk-off now spends
+  0.08 s in `Grounded` before 0.08 s of `CoyoteTime`, so ground handling after
+  an edge has doubled — and `Grounded`, unlike `CoyoteTime`, does not clamp a
+  rising velocity, which is precisely what `ground_grace_period` was written to
+  prevent. Walking off a ramp keeps its rise for a frame or five. This is the
+  one thing in the stage that is a deliberate feel change rather than a
+  correction, and it is the first thing to look at if walk-offs feel floaty.
+
+**Head tilt and stride were checked, and nothing was keyed on grounding.**
+`compute_head_tilt` reads velocity magnitude and stride phase comes from the
+placer's step events; neither has ever seen `is_grounded`. The only consumer of
+a grounding *transition* in animation is the pose FSM, and it reads
+`CharacterState`, which now sits behind two absorbers: the forgiveness window,
+and `next_pose_state` already treating `CoyoteTime` as grounded. A chatter that
+outlives the window still will not splice a spurious `Landing`.
+
+Two loose ends, both small and both honest:
+
+- `AnimationState::is_grounded` is now written from the component and read by
+  nothing. Its only consumer was `CharacterAnimator::ground_normal`, which
+  existed to write `Grounding` and is deleted. It is kept as the animator's
+  record of support behind the existing `is_grounded()` accessor; a later
+  cleanup can decide whether animation needs to know at all.
+- **Nothing here was play-tested.** The window length, the ledge behaviour and
+  the doubled walk-off grace are all feel questions, and the offline harnesses
+  can only say that the rules do what they say. `cargo test --lib` is green at
+  938 and the eight acceptance scenarios print unchanged numbers, which is the
+  most the bench can prove about a stage whose risk was never numeric.
 
 **Stage 3 — Tangential row.** Generalise `solve_friction_impulse` to take a
 target, with every call site passing zero. A pure refactor, and the stage's

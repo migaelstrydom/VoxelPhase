@@ -1,68 +1,38 @@
-use nalgebra::Vector3;
 use specs::{Join, ReadStorage, System, Write, WriteStorage};
 
 use super::grounding::Grounding;
-use crate::animation::CharacterAnimator;
 use crate::components::RigidBodyComponent;
 use crate::systems::PhysicsResource;
 
-/// Cosine of the steepest slope that still counts as ground. A contact normal
-/// within 50 degrees of world up is something you can stand on; anything
-/// steeper is a wall you are pressed against.
-const COS_MAX_GROUND_SLOPE: f32 = 0.642; // cos(50 degrees)
-
-/// Derives [`Grounding`] from physics contacts for characters that have no
-/// skeleton to probe with.
+/// Derives [`Grounding`] from physics contacts, for every body that has one.
 ///
-/// Rigged humanoids are deliberately skipped: `CharacterAnimationSystem` writes
-/// their grounding from the foot probes, which resolve ledges and steps far
-/// better than a capsule's contact set does. This system is the fallback for
-/// everything else — rollers, drones on the ground, anything without an
-/// animator.
+/// The Support Set is the single source of support in the engine, so this is
+/// the only writer of `Grounding`: a rigged humanoid's answer comes from the
+/// same contacts a roller's does. Foot probes remain a rangefinder for the
+/// animator — where the ground is, and which way it faces at a landing target
+/// nothing is touching yet — and no longer decide whether the character is on
+/// it. See `docs/TRACTION_DRIVE_DESIGN.md` §6.6.
+///
+/// Contact grounding is truthful and chattery where reach-based grounding was
+/// lenient and smooth; the forgiveness that costs is restored deliberately, by
+/// `GroundForgiveness` on the FSM side.
 pub struct ContactGroundingSystem;
 
 impl<'a> System<'a> for ContactGroundingSystem {
     type SystemData = (
         Write<'a, PhysicsResource>,
         ReadStorage<'a, RigidBodyComponent>,
-        ReadStorage<'a, CharacterAnimator>,
         WriteStorage<'a, Grounding>,
     );
 
     fn run(&mut self, data: Self::SystemData) {
-        let (mut physics_res, rigid_bodies, animators, mut groundings) = data;
+        let (mut physics_res, rigid_bodies, mut groundings) = data;
 
-        let grounded = physics_res.world.grounded_handles();
+        let grounded = physics_res.world.grounded_bodies();
 
-        // Steepest upward-facing contact normal per body, so a character
-        // wedged between a wall and the floor reports the floor.
-        let mut normals: Vec<(crate::physics::RigidBodyHandle, Vector3<f32>)> = Vec::new();
-        for event in physics_res.world.contact_events() {
-            // `normal` points from body_a to body_b, so for the character to be
-            // the one being held up it must be body_b and the normal must point
-            // up. Contacts against static geometry have no body_a.
-            if event.normal.y > COS_MAX_GROUND_SLOPE {
-                normals.push((event.body_b, event.normal));
-            }
-            if let Some(body_a) = event.body_a {
-                if -event.normal.y > COS_MAX_GROUND_SLOPE {
-                    normals.push((body_a, -event.normal));
-                }
-            }
-        }
-
-        for (rb, _, grounding) in (&rigid_bodies, !&animators, &mut groundings).join() {
-            let best = normals
-                .iter()
-                .filter(|(handle, _)| *handle == rb.0)
-                .map(|(_, n)| *n)
-                .max_by(|a, b| a.y.total_cmp(&b.y));
-
-            *grounding = match best {
-                Some(normal) => Grounding::on(normal),
-                // A body resting still enough to sleep stops emitting contact
-                // events, but `grounded_handles` carries its support forward.
-                None if grounded.contains(&rb.0) => Grounding::on(Vector3::y()),
+        for (rb, grounding) in (&rigid_bodies, &mut groundings).join() {
+            *grounding = match grounded.get(&rb.0) {
+                Some(normal) => Grounding::on(*normal),
                 None => Grounding::airborne(),
             };
         }

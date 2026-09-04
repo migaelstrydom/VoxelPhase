@@ -11,8 +11,8 @@ use super::config::FootPlacerConfig;
 use super::placer::{facing_from_yaw, planar_distance, FootPhase, FootSide, PlacerFoot};
 use super::scenarios;
 use super::sim::{
-    self, simulate, simulate_gait, simulate_var_dt, simulate_with_suspend, takeoffs, Frame,
-    GaitParams, Input,
+    self, simulate, simulate_gait, simulate_over, simulate_var_dt, simulate_with_suspend, takeoffs,
+    Frame, GaitParams, Input,
 };
 
 /// Walk at 1 m/s: duty > 0.5, so one foot must always be planted.
@@ -879,6 +879,85 @@ fn seam_blip_does_not_break_gait() {
         max / min.max(1.0) <= 1.7,
         "galloping after seam blip (frames): {gaps:?}"
     );
+}
+
+/// Walking off a ledge: no foot may plant where the landing probe found
+/// no ground.
+///
+/// Grounding used to come from those probes, so a step aimed past an
+/// edge turned the character airborne and the placer suspended itself.
+/// Support now comes from the capsule's contacts, which are still on the
+/// ledge, so nothing upstream vetoes the step any more — the placer must
+/// refuse the target itself and shorten the step.
+#[test]
+fn steps_never_plant_where_there_is_no_ground() {
+    const LEDGE_Z: f32 = 1.0;
+    let terrain = |_x: f32, z: f32| (z < LEDGE_Z).then_some(0.0);
+    let frames = simulate_over(
+        120,
+        |_| 1.0 / 60.0,
+        GaitParams::walk(),
+        terrain,
+        |f| {
+            if f < 15 {
+                Input::still()
+            } else {
+                Input::moving(Vector3::new(0.0, 0.0, 1.5), 0.0)
+            }
+        },
+        |_| false,
+    );
+
+    let mut worst = f32::NEG_INFINITY;
+    for (i, s) in frames.iter().enumerate() {
+        for foot in [&s.left, &s.right] {
+            if !foot.is_planted() {
+                continue;
+            }
+            worst = worst.max(foot.planted_position.z);
+            assert!(
+                foot.planted_position.z < LEDGE_Z + 0.02,
+                "foot planted {:.3} m past the ledge at frame {i}",
+                foot.planted_position.z - LEDGE_Z
+            );
+        }
+    }
+    // The pelvis walks well past the edge, so an unshortened gait would
+    // have planted far out over the void — the assertion above is only
+    // meaningful because the body got there.
+    let last = frames.last().unwrap();
+    assert!(
+        last.pelvis.z > LEDGE_Z + 0.5,
+        "the body never reached the ledge ({:.2} m)",
+        last.pelvis.z
+    );
+    assert!(worst.is_finite(), "no foot was ever planted");
+}
+
+/// The shortening rule must not disturb ordinary walking: over terrain
+/// that is everywhere, no step is ever marked shortened.
+#[test]
+fn steps_over_solid_ground_are_never_shortened() {
+    let frames = simulate_over(
+        180,
+        |_| 1.0 / 60.0,
+        GaitParams::walk(),
+        |x, z| Some(scenarios::rough(x, z)),
+        |f| {
+            if f < 20 {
+                Input::still()
+            } else {
+                Input::moving(Vector3::new(0.0, 0.0, 2.0), 0.0)
+            }
+        },
+        |_| false,
+    );
+    for (i, s) in frames.iter().enumerate() {
+        assert!(
+            !s.left.landing_shortened && !s.right.landing_shortened,
+            "a step was shortened over solid ground at frame {i}"
+        );
+    }
 }
 
 // === Shared assertion helpers ===

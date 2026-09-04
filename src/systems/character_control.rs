@@ -90,7 +90,15 @@ impl<'a> System<'a> for CharacterControlSystem {
         )
             .join()
         {
-            let is_grounded = grounding.is_grounded;
+            // Grounding is one contact-derived answer for every body, and a
+            // contact set chatters where a probe's reach did not: a walking
+            // capsule leaves the floor between footfalls. The forgiveness
+            // window is where that leniency now lives, named and tunable.
+            let is_grounded = state.ground_forgiveness.observe(
+                grounding.is_grounded,
+                dt,
+                config.ground_forgiveness_window,
+            );
             let move_dir = target.direction;
             let character_body = rb.0;
 
@@ -135,6 +143,10 @@ impl<'a> System<'a> for CharacterControlSystem {
 
             if outcome.consumed_jump {
                 state.jump_buffer.clear();
+                // Leaving the ground on purpose is not a loss of support to
+                // forgive. Left armed, the window would report the takeoff
+                // contact into the air.
+                state.ground_forgiveness.cancel();
                 // Tap-then-land (buffered jump, button already released): apply
                 // cutoff up-front so the hop is short. Skip committed maneuvers.
                 if !target.jump_held && state.locomotion.allows_jump_cutoff() {
@@ -566,6 +578,81 @@ mod tests {
         // The continuous channel never learns about the jump: it still carries
         // the measured fall forward, and the verb overrides it downstream.
         assert_eq!(drive.linear_target.y, -0.5);
+    }
+
+    fn set_grounding(world: &World, entity: Entity, grounding: Grounding) {
+        let _ = world
+            .write_storage::<Grounding>()
+            .insert(entity, grounding)
+            .expect("the character keeps its grounding");
+    }
+
+    fn set_forgiveness_window(world: &World, entity: Entity, window: f32) {
+        world
+            .write_storage::<LocomotionConfig>()
+            .get_mut(entity)
+            .unwrap()
+            .ground_forgiveness_window = window;
+    }
+
+    fn locomotion_of(world: &World, entity: Entity) -> LocomotionState {
+        world
+            .read_storage::<CharacterState>()
+            .get(entity)
+            .unwrap()
+            .locomotion
+    }
+
+    #[test]
+    fn a_frame_without_contact_does_not_leave_the_ground() {
+        // What the forgiveness window is for: a walking capsule loses its
+        // contacts between footfalls, and the state machine must not read
+        // that as walking off a ledge.
+        let (world, entity) = character_world(true);
+        CharacterControlSystem.run_now(&world);
+        set_grounding(&world, entity, Grounding::airborne());
+
+        CharacterControlSystem.run_now(&world);
+
+        assert_eq!(locomotion_of(&world, entity), LocomotionState::Grounded);
+    }
+
+    #[test]
+    fn without_a_window_the_same_frame_is_a_walk_off() {
+        // The same input with the window closed, so the test above is
+        // measuring the window rather than something else.
+        let (world, entity) = character_world(true);
+        set_forgiveness_window(&world, entity, 0.0);
+        CharacterControlSystem.run_now(&world);
+        set_grounding(&world, entity, Grounding::airborne());
+
+        CharacterControlSystem.run_now(&world);
+
+        assert!(matches!(
+            locomotion_of(&world, entity),
+            LocomotionState::CoyoteTime(_)
+        ));
+    }
+
+    #[test]
+    fn a_jump_spends_no_forgiveness_on_the_way_up() {
+        // Leaving on purpose is not a loss of support: the window must not
+        // hold a jump in `Launching`, or report ground once it is airborne.
+        let (world, entity) = character_world(true);
+        press_jump(&world, entity);
+        CharacterControlSystem.run_now(&world);
+        assert!(matches!(
+            locomotion_of(&world, entity),
+            LocomotionState::Launching { .. }
+        ));
+
+        set_grounding(&world, entity, Grounding::airborne());
+        CharacterControlSystem.run_now(&world);
+
+        assert!(matches!(
+            locomotion_of(&world, entity),
+            LocomotionState::Airborne { .. }
+        ));
     }
 
     #[test]

@@ -45,6 +45,17 @@ pub struct LocomotionConfig {
     /// Grace period after leaving ground where the character still behaves as grounded (seconds).
     /// Prevents ramp launches and enables coyote-time jumping.
     pub ground_grace_period: f32,
+    /// How long the state machine keeps believing in support after the
+    /// contacts stop reporting it (seconds).
+    ///
+    /// Grounding is a contact answer, and a walking capsule genuinely leaves
+    /// the floor between footfalls — this window absorbs that chatter, in
+    /// place of the reach-based leniency the foot probes used to supply by
+    /// accident. It stacks *ahead* of `ground_grace_period` on a real
+    /// walk-off, so the total ground handling after an edge is the sum of the
+    /// two, and it must stay well under `launch_window` or a jump would still
+    /// read as grounded once `Launching` expires.
+    pub ground_forgiveness_window: f32,
     /// How long a jump may stay in `Launching` before it becomes airborne
     /// regardless of what grounding reports (seconds).
     ///
@@ -88,6 +99,7 @@ impl LocomotionConfig {
             long_jump_crouch_lockout: 1.0,
             long_jump_air_lock_duration: 2.0,
             ground_grace_period: 0.08,
+            ground_forgiveness_window: 0.08,
             launch_window: 0.2,
             turn_aggression: 10.0,
             collider_radius: 0.25,
