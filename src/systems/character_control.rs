@@ -3,8 +3,9 @@ use crate::character::{
     ArmState, CharacterIntent, CharacterState, Grounding, LocomotionConfig, LocomotionInput,
     LocomotionState, MovementRule,
 };
-use crate::components::{Position, RigidBodyComponent, Rotation, Velocity, VelocityDriven};
+use crate::components::{Position, RigidBodyComponent, Rotation};
 use crate::debug::DebugOverlays;
+use crate::drive::{Actuator, BodyMotion, DriveIntent};
 use crate::rendering::colour::Colour;
 use crate::systems::PhysicsResource;
 use crate::time::Time;
@@ -40,8 +41,9 @@ impl<'a> System<'a> for CharacterControlSystem {
         ReadStorage<'a, Position>,
         ReadStorage<'a, RigidBodyComponent>,
         WriteStorage<'a, Rotation>,
-        WriteStorage<'a, Velocity>,
-        WriteStorage<'a, VelocityDriven>,
+        WriteStorage<'a, DriveIntent>,
+        ReadStorage<'a, Actuator>,
+        ReadStorage<'a, BodyMotion>,
         Write<'a, DebugOverlays>,
     );
 
@@ -57,13 +59,24 @@ impl<'a> System<'a> for CharacterControlSystem {
             positions,
             rigid_bodies,
             mut rotations,
-            mut velocities,
-            mut velocity_driven,
+            mut drive_intents,
+            actuators,
+            body_motions,
             mut debug_overlays,
         ) = data;
         let dt = time.delta_seconds();
 
-        for (target, state, config, grounding, pos, rb, rotation, vel, vd) in (
+        // The axis the vertical verbs and the gait's speed measure are taken
+        // along. A world with no gravity has no up, and then every axis is a
+        // walking axis.
+        let up = physics_res
+            .world
+            .config()
+            .gravity_direction()
+            .map(|down| -down.into_inner())
+            .unwrap_or_else(Vector3::zeros);
+
+        for (target, state, config, grounding, pos, rb, rotation, drive, motion, _) in (
             &mut intents,
             &mut character_states,
             &configs,
@@ -71,8 +84,9 @@ impl<'a> System<'a> for CharacterControlSystem {
             &positions,
             &rigid_bodies,
             &mut rotations,
-            &mut velocities,
-            &mut velocity_driven,
+            &mut drive_intents,
+            &body_motions,
+            &actuators,
         )
             .join()
         {
@@ -80,7 +94,7 @@ impl<'a> System<'a> for CharacterControlSystem {
             let move_dir = target.direction;
             let character_body = rb.0;
 
-            let horizontal_speed = (vel.0.x * vel.0.x + vel.0.z * vel.0.z).sqrt();
+            let horizontal_speed = motion.speed_across(&up);
 
             // Tick all input-grace timers once per frame before use.
             state.jump_buffer.tick(dt);
@@ -108,7 +122,7 @@ impl<'a> System<'a> for CharacterControlSystem {
             });
             state.locomotion = outcome.next_state;
             if let Some(vy) = outcome.set_vy {
-                vel.0.y = vy;
+                drive.jump(vy);
             }
             if let Some(air) = outcome.set_air_speed {
                 state.air_speed = air;
@@ -124,13 +138,15 @@ impl<'a> System<'a> for CharacterControlSystem {
                 // Tap-then-land (buffered jump, button already released): apply
                 // cutoff up-front so the hop is short. Skip committed maneuvers.
                 if !target.jump_held && state.locomotion.allows_jump_cutoff() {
-                    vel.0.y *= config.jump_cutoff_factor;
+                    drive.cut_normal(config.jump_cutoff_factor);
                 }
             }
 
-            // Variable-height jump: cut upward velocity on early release.
-            if target.jump_released && state.locomotion.allows_jump_cutoff() && vel.0.y > 0.0 {
-                vel.0.y *= config.jump_cutoff_factor;
+            // Variable-height jump: cut upward velocity on early release. The
+            // cut acts on a rise only, so there is nothing to test here — a
+            // falling character has no jump left to shorten.
+            if target.jump_released && state.locomotion.allows_jump_cutoff() {
+                drive.cut_normal(config.jump_cutoff_factor);
             }
 
             // Compute ground speed AFTER lockout tick + landing so a long-jump
@@ -151,14 +167,15 @@ impl<'a> System<'a> for CharacterControlSystem {
             if move_dir.magnitude() > 0.001 {
                 let target_yaw = -move_dir.z.atan2(move_dir.x) + std::f32::consts::PI / 2.0;
                 let yaw_error = wrap_angle(target_yaw - current_yaw);
-                vd.angular_velocity = Vector3::new(0.0, yaw_error * config.turn_aggression, 0.0);
+                drive.angular_target = Vector3::new(0.0, yaw_error * config.turn_aggression, 0.0);
             } else {
-                vd.angular_velocity = Vector3::zeros();
+                drive.angular_target = Vector3::zeros();
             }
 
             // --- Apply the movement rule for the resolved locomotion state ---
             apply_movement_rule(
-                vel,
+                drive,
+                motion.linear,
                 state.locomotion.movement_rule(
                     move_dir,
                     ground_speed,
@@ -360,20 +377,32 @@ fn resolve_ground_speed(
     config.walk_speed * mul
 }
 
-/// Apply a `MovementRule` to a velocity: steer planar velocity toward the
-/// rule's target at `accel` (infinite = snap), and optionally cancel any
-/// positive y component.
-fn apply_movement_rule(vel: &mut Velocity, rule: MovementRule, dt: f32) {
+/// Turn a `MovementRule` into a linear drive target: steer the planar axes
+/// from where the body actually is toward the rule's target at `accel`
+/// (infinite = snap), and optionally cancel any rise.
+///
+/// The vertical axis is not this system's to command. The target carries the
+/// measured value forward unchanged, so the drive asks for no vertical
+/// authority at all and gravity keeps the axis to itself — only a jump verb
+/// says otherwise.
+fn apply_movement_rule(
+    drive: &mut DriveIntent,
+    measured: Vector3<f32>,
+    rule: MovementRule,
+    dt: f32,
+) {
+    let mut steered = measured;
     if rule.accel.is_infinite() {
-        vel.0.x = rule.target.x;
-        vel.0.z = rule.target.z;
+        steered.x = rule.target.x;
+        steered.z = rule.target.z;
     } else {
         let max_delta = rule.accel * dt;
-        vel.0.x = move_toward(vel.0.x, rule.target.x, max_delta);
-        vel.0.z = move_toward(vel.0.z, rule.target.z, max_delta);
+        steered.x = move_toward(measured.x, rule.target.x, max_delta);
+        steered.z = move_toward(measured.z, rule.target.z, max_delta);
     }
-    if rule.clamp_up && vel.0.y > 0.0 {
-        vel.0.y = 0.0;
+    drive.linear_target = steered;
+    if rule.clamp_up {
+        drive.clamp_normal_rise();
     }
 }
 
@@ -402,4 +431,154 @@ fn wrap_angle(angle: f32) -> f32 {
         a += 2.0 * pi;
     }
     a
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::character::Grounding;
+    use crate::components::Orientation;
+    use crate::physics::RigidBodyDesc;
+    use specs::{Builder, Entity, RunNow, World, WorldExt};
+
+    /// The gait rule the FSM hands to the driver while walking east.
+    fn walk_east(accel: f32) -> MovementRule {
+        MovementRule {
+            target: Vector3::new(5.0, 0.0, 0.0),
+            accel,
+            clamp_up: false,
+        }
+    }
+
+    #[test]
+    fn steering_starts_from_the_measured_velocity() {
+        let mut drive = DriveIntent::default();
+        let measured = Vector3::new(1.0, -3.0, 0.0);
+        apply_movement_rule(&mut drive, measured, walk_east(40.0), 1.0 / 60.0);
+        assert!((drive.linear_target.x - (1.0 + 40.0 / 60.0)).abs() < 1e-6);
+        assert_eq!(drive.linear_target.z, 0.0);
+    }
+
+    #[test]
+    fn the_vertical_axis_is_carried_through_uncommanded() {
+        // Gravity owns this axis. The drive asks for exactly what physics
+        // already produced, so it neither helps nor fights the fall.
+        let mut drive = DriveIntent::default();
+        let measured = Vector3::new(1.0, -3.0, 2.0);
+        apply_movement_rule(&mut drive, measured, walk_east(40.0), 1.0 / 60.0);
+        assert_eq!(drive.linear_target.y, -3.0);
+    }
+
+    #[test]
+    fn a_committed_maneuver_snaps_the_plane_and_still_leaves_the_fall_alone() {
+        let mut drive = DriveIntent::default();
+        let measured = Vector3::new(1.0, -3.0, 2.0);
+        apply_movement_rule(&mut drive, measured, walk_east(f32::INFINITY), 1.0 / 60.0);
+        assert_eq!(drive.linear_target, Vector3::new(5.0, -3.0, 0.0));
+    }
+
+    #[test]
+    fn a_walk_off_asks_for_the_rise_to_be_cancelled() {
+        let mut drive = DriveIntent::default();
+        let rule = MovementRule {
+            clamp_up: true,
+            ..walk_east(40.0)
+        };
+        apply_movement_rule(&mut drive, Vector3::new(1.0, 2.0, 0.0), rule, 1.0 / 60.0);
+        // The verb is a command, not an edit: the target still carries the
+        // measured rise, and the projection is what cancels it.
+        assert_eq!(drive.linear_target.y, 2.0);
+        assert!(drive.normal_projection.clamp_positive);
+    }
+
+    /// A world holding one grounded character, with everything
+    /// `CharacterControlSystem` reads present.
+    fn character_world(actuated: bool) -> (World, Entity) {
+        let mut world = World::new();
+        world.register::<CharacterIntent>();
+        world.register::<CharacterState>();
+        world.register::<LocomotionConfig>();
+        world.register::<Grounding>();
+        world.register::<Position>();
+        world.register::<RigidBodyComponent>();
+        world.register::<Rotation>();
+        world.register::<DriveIntent>();
+        world.register::<Actuator>();
+        world.register::<BodyMotion>();
+        world.register::<Orientation>();
+        world.insert(Time::new());
+        world.insert(GrabConfig::default());
+        world.insert(DebugOverlays::default());
+
+        let mut physics = PhysicsResource::default();
+        let body = physics.world.create_body(RigidBodyDesc::dynamic());
+        world.insert(physics);
+
+        let mut builder = world
+            .create_entity()
+            .with(CharacterIntent::default())
+            .with(CharacterState::default())
+            .with(LocomotionConfig::player())
+            .with(Grounding::on(Vector3::y()))
+            .with(Position(Vector3::zeros()))
+            .with(RigidBodyComponent(body))
+            .with(Rotation(0.0))
+            .with(DriveIntent::default())
+            .with(BodyMotion::default());
+        if actuated {
+            builder = builder.with(Actuator::character());
+        }
+        let entity = builder.build();
+        (world, entity)
+    }
+
+    fn press_jump(world: &World, entity: Entity) {
+        world
+            .write_storage::<CharacterIntent>()
+            .get_mut(entity)
+            .unwrap()
+            .jump = true;
+    }
+
+    fn intent_of(world: &World, entity: Entity) -> DriveIntent {
+        world
+            .read_storage::<DriveIntent>()
+            .get(entity)
+            .expect("the character keeps its drive intent")
+            .clone()
+    }
+
+    #[test]
+    fn a_jump_travels_as_a_verb_and_not_as_a_velocity() {
+        let (world, entity) = character_world(true);
+        world
+            .write_storage::<BodyMotion>()
+            .get_mut(entity)
+            .unwrap()
+            .linear = Vector3::new(0.0, -0.5, 0.0);
+        press_jump(&world, entity);
+
+        CharacterControlSystem.run_now(&world);
+
+        let drive = intent_of(&world, entity);
+        let config = LocomotionConfig::player();
+        assert_eq!(drive.normal_impulse, Some(config.jump_speed));
+        // The continuous channel never learns about the jump: it still carries
+        // the measured fall forward, and the verb overrides it downstream.
+        assert_eq!(drive.linear_target.y, -0.5);
+    }
+
+    #[test]
+    fn an_unactuated_body_is_not_driven() {
+        // What `DeathSystem` relies on: take the actuator away and the FSM
+        // stops writing commands, without the entity losing anything else.
+        let (world, entity) = character_world(false);
+        press_jump(&world, entity);
+
+        CharacterControlSystem.run_now(&world);
+
+        let drive = intent_of(&world, entity);
+        assert_eq!(drive.normal_impulse, None);
+        assert_eq!(drive.linear_target, Vector3::zeros());
+    }
 }

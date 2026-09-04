@@ -4,8 +4,9 @@ use nalgebra::{Point3, Vector3, Vector4};
 use rand::Rng;
 use specs::{Join, LendJoin, Read, ReadStorage, System, Write};
 
-use crate::components::{Position, RigidBodyComponent, Velocity, VelocityDriven};
+use crate::components::{Position, RigidBodyComponent, Velocity};
 use crate::debug::{DebugLines, DebugOverlays};
+use crate::drive::Actuator;
 use crate::particles::{ColourRamp, Particle, ParticleConfig, ParticlePool};
 use crate::rendering::Colour;
 use crate::systems::PhysicsResource;
@@ -80,7 +81,7 @@ impl<'a> System<'a> for WaterSystem {
         ReadStorage<'a, RigidBodyComponent>,
         ReadStorage<'a, Position>,
         ReadStorage<'a, Velocity>,
-        ReadStorage<'a, VelocityDriven>,
+        ReadStorage<'a, Actuator>,
         Write<'a, DebugOverlays>,
         Write<'a, DebugLines>,
         Write<'a, ParticlePool>,
@@ -349,12 +350,11 @@ fn build_body_snapshots(
     bodies: &ReadStorage<RigidBodyComponent>,
     positions: &ReadStorage<Position>,
     velocities: &ReadStorage<Velocity>,
-    velocity_driven: &ReadStorage<VelocityDriven>,
+    actuators: &ReadStorage<Actuator>,
 ) -> Vec<BodySnapshot> {
     let mut snapshots = Vec::new();
 
-    for (body_comp, pos, vel, vd) in (bodies, positions, velocities, velocity_driven.maybe()).join()
-    {
+    for (body_comp, pos, vel, vd) in (bodies, positions, velocities, actuators.maybe()).join() {
         let is_velocity_driven: bool = vd.is_some();
         let Some(rb) = physics.world.body(body_comp.0) else {
             continue;

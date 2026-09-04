@@ -4,7 +4,8 @@ use specs::{
 
 use super::health::{Dead, Health};
 use crate::character::CharacterIntent;
-use crate::components::{RigidBodyComponent, VelocityDriven};
+use crate::components::RigidBodyComponent;
+use crate::drive::Actuator;
 use crate::physics::ConstraintHandle;
 use crate::systems::PhysicsResource;
 use crate::time::Time;
@@ -45,7 +46,7 @@ impl<'a> System<'a> for DeathSystem {
         WriteStorage<'a, Ragdoll>,
         WriteStorage<'a, CharacterIntent>,
         ReadStorage<'a, RigidBodyComponent>,
-        WriteStorage<'a, VelocityDriven>,
+        WriteStorage<'a, Actuator>,
     );
 
     fn run(&mut self, data: Self::SystemData) {
@@ -58,7 +59,7 @@ impl<'a> System<'a> for DeathSystem {
             mut ragdolls,
             mut intents,
             rigid_bodies,
-            mut velocity_driven,
+            mut actuators,
         ) = data;
         let dt = time.delta_seconds();
 
@@ -82,7 +83,7 @@ impl<'a> System<'a> for DeathSystem {
                 if let Some(intent) = intents.get_mut(entity) {
                     *intent = CharacterIntent::default();
                 }
-                velocity_driven.remove(entity);
+                actuators.remove(entity);
             }
 
             dead.elapsed += dt;

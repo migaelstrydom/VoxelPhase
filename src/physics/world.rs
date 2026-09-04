@@ -1,7 +1,7 @@
 //! Physics world containing all simulation state.
 
 use generational_arena::Arena;
-use nalgebra::{Isometry3, Matrix3, Point3, UnitQuaternion, Vector3};
+use nalgebra::{Isometry3, Matrix3, Point3, UnitQuaternion, UnitVector3, Vector3};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::body::{BodyType, RigidBody, RigidBodyDesc};
@@ -96,6 +96,16 @@ pub struct PhysicsConfig {
 }
 
 impl PhysicsConfig {
+    /// The world's down direction: gravity, normalised.
+    ///
+    /// `None` in a world with no gravity, where "down" is not a question the
+    /// configuration can answer. Callers that need an up axis — the drive's
+    /// stand-in for a support normal until the Support Set exists — read it
+    /// here rather than writing a literal `Vector3::y()`.
+    pub fn gravity_direction(&self) -> Option<UnitVector3<f32>> {
+        UnitVector3::try_new(self.gravity, 1e-6)
+    }
+
     /// Project the narrowphase's slice of this config.
     ///
     /// Built fresh each frame rather than stored, so the narrowphase can never

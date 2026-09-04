@@ -143,7 +143,7 @@ fn keep_upright_sphere_rests_on_ground() {
 }
 
 /// Simulates game-loop conditions: capsule on ground with angular velocity
-/// zeroed each frame (as VelocityDriven does for the player).
+/// zeroed each frame (as the player's velocity drive does).
 #[test]
 fn keep_upright_capsule_with_velocity_zeroing() {
     let geometry = FlatGridGeometry::new(8.0, 1.0);

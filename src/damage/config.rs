@@ -3,7 +3,7 @@
 /// Death is off by default. The mechanic exists end-to-end — damage sources,
 /// health, ragdoll, corpse despawn — but nothing downstream of it does: there
 /// is no respawn, no death feedback, and no way back. A dead player is a live
-/// entity that has silently lost `VelocityDriven`, which drops it out of
+/// entity that has silently lost its `Actuator`, which drops it out of
 /// `CharacterControlSystem` and reads, from behind the keyboard, as the
 /// controls locking up.
 ///

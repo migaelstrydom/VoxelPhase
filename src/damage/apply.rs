@@ -83,7 +83,7 @@ mod tests {
 
     /// Death is switched off until it has been designed. Nothing downstream of
     /// it exists — no respawn, no feedback — and a dead player silently loses
-    /// `VelocityDriven`, which drops it out of `CharacterControlSystem` and
+    /// its `Actuator`, which drops it out of `CharacterControlSystem` and
     /// reads as the controls locking up.
     #[test]
     fn a_fatal_hit_does_not_kill_while_deaths_are_disabled() {

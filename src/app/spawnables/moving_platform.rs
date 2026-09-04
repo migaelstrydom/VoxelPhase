@@ -5,7 +5,7 @@
 //! of machinery bolted on:
 //!
 //! ```text
-//!   MovingPlatformSystem ──► Velocity ──► VelocityDriven ──► solver
+//!   MovingPlatformSystem ──► DriveIntent ──► Actuator ──► solver
 //!        (aim at endpoint)    (intent)      (motor, capped
 //!                                            acceleration)
 //!   KeepUpright ─────────────────────────► solver
@@ -16,7 +16,7 @@
 //! endpoint it is currently running to, so displacement is transient: shove the
 //! platform sideways with a grenade and it converges back on to its route as it
 //! travels. Gravity stays switched on, so a platform that loses its
-//! `VelocityDriven` component — the same trick `DeathSystem` uses on the player
+//! `Actuator` component — the same trick `DeathSystem` uses on the player
 //! — stops being a platform and becomes a falling box.
 
 use nalgebra::{Point3, UnitVector3, Vector3};
@@ -28,9 +28,10 @@ use super::shared::finish::ColliderSurface;
 use super::shared::models::cuboid_model;
 use super::{MaterialCtx, Spawnable};
 use crate::components::{
-    ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity, VelocityDriven,
+    ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
 };
 use crate::core::error::EngineResult;
+use crate::drive::{Actuator, BodyMotion, DriveIntent};
 use crate::level::BoxStyle;
 use crate::physics::constraint::ConstraintKind;
 use crate::physics::{ColliderDesc, RigidBodyDesc};
@@ -141,11 +142,9 @@ impl Spawnable for MovingPlatformDef {
             .with(Velocity(Vector3::zeros()))
             .with(Orientation(nalgebra::UnitQuaternion::identity()))
             .with(RigidBodyComponent(body_handle))
-            .with(VelocityDriven {
-                max_accel: MOTOR_MAX_ACCEL,
-                angular_velocity: Vector3::zeros(),
-                angular_max_accel: 0.0,
-            })
+            .with(Actuator::medium(MOTOR_MAX_ACCEL, 0.0))
+            .with(DriveIntent::default())
+            .with(BodyMotion::default())
             .with(platform)
             .with(ModelInstance::new(model))
             .with(Renderable)

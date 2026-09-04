@@ -4,9 +4,10 @@ use specs::{Builder, Entity, World, WorldExt};
 use crate::animation::{CharacterAnimator, CharacterRigConfig};
 use crate::character::{CharacterIntent, CharacterState, Grounding, LocomotionConfig};
 use crate::components::{
-    Orientation, Position, Renderable, RigidBodyComponent, Rotation, Velocity, VelocityDriven,
+    Orientation, Position, Renderable, RigidBodyComponent, Rotation, Velocity,
 };
 use crate::damage::{Health, Ragdoll};
+use crate::drive::{Actuator, BodyMotion, DriveIntent};
 use crate::physics::{ColliderDesc, ConstraintKind, FrictionModel, RigidBodyDesc};
 use crate::player::Player;
 use crate::sensing::{ContactCandidates, SensorSet};
@@ -89,6 +90,8 @@ pub fn spawn_player(world: &mut World, initial_pos: nalgebra::Point3<f32>) -> En
         .with(SensorSet::default())
         .with(ContactCandidates::default())
         .with(RigidBodyComponent(body_handle))
-        .with(VelocityDriven::default())
+        .with(Actuator::character())
+        .with(DriveIntent::default())
+        .with(BodyMotion::default())
         .build()
 }

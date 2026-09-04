@@ -10,8 +10,9 @@ use rustc_hash::FxHashSet;
 use specs::{Join, Read, ReadStorage, System, Write, WriteStorage};
 
 use crate::animation::CharacterAnimator;
-use crate::components::{Orientation, Position, RigidBodyComponent, Velocity, VelocityDriven};
+use crate::components::{Orientation, Position, RigidBodyComponent, Velocity};
 use crate::debug::{DebugLines, DebugLog, DebugOverlays};
+use crate::drive::{resolve_drive, Actuator, BodyMotion, DriveIntent};
 use crate::physics::{
     PhysicsImpulseQueue, PhysicsWorld, RigidBodyHandle, SequentialStepper, Stepper,
     SubstepForceProvider,
@@ -100,25 +101,35 @@ impl PhysicsSyncSystem {
         }
     }
 
-    fn sync_velocity_driven_from_ecs(
+    /// Push this frame's command down into the engine.
+    ///
+    /// The discrete verbs are consumed here — on gameplay's side of the seam,
+    /// so the physics world never writes back into an ECS component and
+    /// `DriveIntent` stays write-only from gameplay's side.
+    fn push_drive_intent(
         physics: &mut PhysicsWorld,
-        velocities: &WriteStorage<Velocity>,
+        intents: &mut WriteStorage<DriveIntent>,
+        actuators: &ReadStorage<Actuator>,
         bodies: &ReadStorage<RigidBodyComponent>,
-        velocity_driven: &ReadStorage<VelocityDriven>,
     ) {
+        let support_normal = physics.config().gravity_direction().map(|down| -down);
+
         let mut updates = Vec::new();
-        for (vel, body, vd) in ((&*velocities), bodies, velocity_driven).join() {
+        for (intent, actuator, body) in (intents, actuators, bodies).join() {
+            let verbs = intent.take_normal_verbs();
             updates.push((
                 body.0,
-                vel.0,
-                vd.angular_velocity,
-                vd.max_accel,
-                vd.angular_max_accel,
+                resolve_drive(intent, verbs, actuator, support_normal),
             ));
         }
-        for (handle, vel, angular, max_accel, angular_max_accel) in updates {
-            let _ =
-                physics.set_body_velocity_drive(handle, vel, angular, max_accel, angular_max_accel);
+        for (handle, target) in updates {
+            let _ = physics.set_body_velocity_drive(
+                handle,
+                target.linear,
+                target.angular,
+                target.max_accel,
+                target.angular_max_accel,
+            );
         }
     }
 
@@ -134,6 +145,24 @@ impl PhysicsSyncSystem {
                 pos.0 = Vector3::new(rb.position().x, rb.position().y, rb.position().z);
                 vel.0 = rb.linear_velocity();
                 orient.0 = rb.rotation();
+            }
+        }
+    }
+
+    /// Pull the measurement channel up out of the engine.
+    ///
+    /// Separate from `sync_physics_to_ecs` because it is a different channel,
+    /// not a different field: `BodyMotion` is what a drive's commander reads
+    /// to decide what to command next, and nothing writes to it but this.
+    fn pull_body_motion(
+        physics: &PhysicsWorld,
+        motions: &mut WriteStorage<BodyMotion>,
+        bodies: &ReadStorage<RigidBodyComponent>,
+    ) {
+        for (motion, body) in (motions, bodies).join() {
+            if let Some(rb) = physics.body(body.0) {
+                motion.linear = rb.linear_velocity();
+                motion.angular = rb.angular_velocity();
             }
         }
     }
@@ -158,7 +187,9 @@ impl<'a> System<'a> for PhysicsSyncSystem {
         WriteStorage<'a, Velocity>,
         WriteStorage<'a, Orientation>,
         ReadStorage<'a, RigidBodyComponent>,
-        ReadStorage<'a, VelocityDriven>,
+        WriteStorage<'a, DriveIntent>,
+        ReadStorage<'a, Actuator>,
+        WriteStorage<'a, BodyMotion>,
         WriteStorage<'a, CharacterAnimator>,
         Write<'a, DebugLines>,
         Write<'a, DebugLog>,
@@ -178,7 +209,9 @@ impl<'a> System<'a> for PhysicsSyncSystem {
             mut velocities,
             mut orientations,
             bodies,
-            velocity_driven,
+            mut drive_intents,
+            actuators,
+            mut body_motions,
             mut controllers,
             mut debug_lines,
             mut debug_log,
@@ -199,13 +232,8 @@ impl<'a> System<'a> for PhysicsSyncSystem {
             &bodies,
         );
 
-        // Sync velocity-driven dynamic bodies (player, platforms, etc.)
-        Self::sync_velocity_driven_from_ecs(
-            &mut physics.world,
-            &velocities,
-            &bodies,
-            &velocity_driven,
-        );
+        // Push the drive command for actuated bodies (player, platforms, etc.)
+        Self::push_drive_intent(&mut physics.world, &mut drive_intents, &actuators, &bodies);
 
         let impulses: Vec<_> = impulse_queue.drain().collect();
 
@@ -337,6 +365,8 @@ impl<'a> System<'a> for PhysicsSyncSystem {
             &mut orientations,
             &bodies,
         );
+
+        Self::pull_body_motion(&physics.world, &mut body_motions, &bodies);
 
         Self::apply_grounded_state(&grounded_handles, &bodies, &mut controllers);
     }

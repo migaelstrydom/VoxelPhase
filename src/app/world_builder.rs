@@ -6,12 +6,13 @@ use crate::character::grab::GrabConfig;
 use crate::character::{CharacterIntent, CharacterState, Grounding, LocomotionConfig};
 use crate::components::{
     CameraComponent, MaterialModulation, ModelInstance, Orientation, Position, Renderable,
-    RigidBodyComponent, Rotation, TerrainAnchored, Velocity, VelocityDriven,
+    RigidBodyComponent, Rotation, TerrainAnchored, Velocity,
 };
 use crate::core::error::EngineResult;
 use crate::creature::{AlertTelegraph, Brain, Perception, Roller};
 use crate::damage::{DamageConfig, DamageQueue, Dead, Health, LastVelocity, Ragdoll};
 use crate::debug::{DebugConfig, DebugLines, DebugLog, DebugOverlays};
+use crate::drive::{Actuator, BodyMotion, DriveIntent};
 use crate::explosion::Explosion;
 use crate::fire::components::{Flammable, OnFire};
 use crate::fire::light::FireLight;
@@ -77,7 +78,9 @@ impl WorldBuilder {
         world.register::<SensorSet>();
         world.register::<ContactCandidates>();
         world.register::<RigidBodyComponent>();
-        world.register::<VelocityDriven>();
+        world.register::<Actuator>();
+        world.register::<DriveIntent>();
+        world.register::<BodyMotion>();
         world.register::<MovingPlatform>();
         world.register::<Grenade>();
         world.register::<Lifetime>();

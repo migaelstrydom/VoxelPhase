@@ -19,7 +19,7 @@ pub const DEFAULT_ROUTE_GAIN: f32 = 10.0;
 /// A platform that shuttles between two fixed world points under its own power.
 ///
 /// The platform is an ordinary dynamic body with no anchor to the world. Its
-/// motor is a velocity drive (see [`crate::components::VelocityDriven`]), so it
+/// motor is a velocity drive (see [`crate::drive::Actuator`]), so it
 /// commands *speed* and never position — but the speed it commands is aimed at
 /// the endpoint it is currently travelling to, recomputed from wherever the
 /// platform actually is:
