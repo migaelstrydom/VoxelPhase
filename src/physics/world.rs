@@ -1105,8 +1105,14 @@ impl PhysicsWorld {
     pub fn grounded_bodies(&mut self) -> GroundedBodies {
         let supports = self.support_sets();
         let sleeping = self.sleep_manager.sleeping_snapshot();
+        let bodies = &self.bodies;
         self.grounding_detector
-            .grounded_bodies(&supports, &sleeping)
+            .grounded_bodies(&supports, &sleeping, |handle, point| {
+                bodies
+                    .get(handle.0)
+                    .map(|body| body.velocity_at(point))
+                    .unwrap_or_else(Vector3::zeros)
+            })
     }
 
     /// What a body's allowance has conjured, since the world was created.

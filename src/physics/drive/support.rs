@@ -111,6 +111,35 @@ impl SupportSet {
         self.mean_normal
     }
 
+    /// Velocity of the surface holding this body up, averaged over the
+    /// contacts doing the holding.
+    ///
+    /// `velocity_at` answers "how fast is *that* body's material moving at
+    /// this point"; a contact with no partner is static geometry, which
+    /// contributes a genuine zero rather than being skipped — a foot with one
+    /// contact on a platform and one on the floor beside it is being held by
+    /// something that is half still.
+    ///
+    /// This is the frame a gait is walked in. Standing still on a moving
+    /// platform means matching this velocity, not holding a world position.
+    pub fn surface_velocity(
+        &self,
+        velocity_at: impl Fn(RigidBodyHandle, Point3<f32>) -> Vector3<f32>,
+    ) -> Vector3<f32> {
+        if self.contacts.is_empty() {
+            return Vector3::zeros();
+        }
+        let total: Vector3<f32> = self
+            .contacts
+            .iter()
+            .map(|contact| match contact.partner {
+                Some(partner) => velocity_at(partner, contact.point),
+                None => Vector3::zeros(),
+            })
+            .sum();
+        total / self.contacts.len() as f32
+    }
+
     /// True when nothing holds this body up.
     pub fn is_empty(&self) -> bool {
         self.contacts.is_empty()
@@ -354,6 +383,51 @@ pub(crate) mod tests {
         assert_eq!(set.contacts().len(), 1);
         assert_eq!(set.mean_normal(), Vector3::y());
         assert!(sets.is_supported(body));
+    }
+
+    /// Static geometry is not moving, so neither is what stands on it.
+    #[test]
+    fn ground_that_is_nobodys_body_carries_nothing() {
+        let body = handle(1);
+        let sets = resolve(&[manifold(None, body, &[Vector3::y()])]);
+        let set = sets.get(body).unwrap();
+        assert_eq!(
+            set.surface_velocity(|_, _| Vector3::new(9.0, 9.0, 9.0)),
+            Vector3::zeros(),
+            "a contact with no partner has no body to ask"
+        );
+    }
+
+    #[test]
+    fn a_platform_carries_what_stands_on_it_at_its_own_speed() {
+        let platform = handle(7);
+        let body = handle(1);
+        let sets = resolve(&[manifold(Some(platform), body, &[Vector3::y()])]);
+        let set = sets.get(body).unwrap();
+        assert_eq!(
+            set.surface_velocity(|handle, _| {
+                assert_eq!(handle, platform, "only the supporting body is asked");
+                Vector3::new(3.0, 0.0, 0.0)
+            }),
+            Vector3::new(3.0, 0.0, 0.0)
+        );
+    }
+
+    /// One foot on the platform and one on the floor beside it: the character
+    /// is being held by something that is half still, and averaging says so.
+    #[test]
+    fn straddling_a_platform_and_the_floor_averages_the_two() {
+        let platform = handle(7);
+        let body = handle(1);
+        let sets = resolve(&[
+            manifold(Some(platform), body, &[Vector3::y()]),
+            manifold(None, body, &[Vector3::y()]),
+        ]);
+        let set = sets.get(body).unwrap();
+        assert_eq!(
+            set.surface_velocity(|_, _| Vector3::new(4.0, 0.0, 0.0)),
+            Vector3::new(2.0, 0.0, 0.0)
+        );
     }
 
     #[test]

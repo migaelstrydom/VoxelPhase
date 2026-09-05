@@ -27,3 +27,4 @@ mod trace;
 pub use config::FootPlacerConfig;
 pub use placer::{FootPhase, FootPlacer, FootSide, PlacerCtx, PlacerFoot};
 pub use recorder::PlacerRecorder;
+pub use timing::GaitTiming;

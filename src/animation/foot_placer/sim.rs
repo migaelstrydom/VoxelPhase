@@ -203,6 +203,8 @@ pub fn simulate_over(
             dt,
             pelvis,
             velocity,
+            // The offline sim walks on static ground.
+            support_velocity: Vector3::zeros(),
             intent_direction: intent,
             yaw,
             yaw_rate,

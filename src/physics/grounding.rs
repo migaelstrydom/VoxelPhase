@@ -6,25 +6,48 @@
 //! produced; this module adds only the carry-over that keeps a sleeping body
 //! standing on the floor it fell asleep on.
 
-use nalgebra::Vector3;
+use nalgebra::{Point3, Vector3};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::physics::drive::SupportSets;
 use crate::physics::RigidBodyHandle;
 
-/// Every grounded body of one step, with the normal holding it up.
-pub type GroundedBodies = FxHashMap<RigidBodyHandle, Vector3<f32>>;
+/// What is holding one body up.
+#[derive(Clone, Copy, Debug)]
+pub struct Support {
+    /// Mean of the normals doing the holding: the body's local up.
+    pub normal: Vector3<f32>,
+    /// Velocity of the surface at those contacts. Zero for static geometry,
+    /// the platform's own motion for a body riding one.
+    ///
+    /// It travels with the normal because everything standing on something
+    /// needs both: the axis to stand along, and the frame to stand still in.
+    pub surface_velocity: Vector3<f32>,
+}
+
+impl Support {
+    pub fn new(normal: Vector3<f32>, surface_velocity: Vector3<f32>) -> Self {
+        Self {
+            normal,
+            surface_velocity,
+        }
+    }
+}
+
+/// Every grounded body of one step, with what holds each up.
+pub type GroundedBodies = FxHashMap<RigidBodyHandle, Support>;
 
 /// Projects Support Sets to the grounded bodies and their support normals,
 /// across steps.
 #[derive(Default)]
 pub struct GroundingDetector {
-    /// The grounded bodies from the previous step, with their normals.
+    /// The grounded bodies from the previous step, with what held them up.
     ///
     /// Sleeping bodies generate no contacts, but they haven't moved either —
     /// without the carry-over, a body falling asleep while resting on the
-    /// floor would read as airborne. The normal is carried with it: the floor
-    /// it fell asleep on has not tilted either.
+    /// floor would read as airborne. The support is carried with it: the floor
+    /// it fell asleep on has not tilted, and nothing that carries a sleeping
+    /// body is going anywhere either.
     last_grounded: GroundedBodies,
 }
 
@@ -33,19 +56,32 @@ impl GroundingDetector {
         Self::default()
     }
 
-    /// Bodies that are grounded this step, each with its support normal.
+    /// Bodies that are grounded this step, each with what holds it up.
+    ///
+    /// `velocity_at` answers how fast a supporting body's material is moving
+    /// at a contact point; the detector never reaches into the body arena
+    /// itself, so a caller with a different notion of "how fast is that
+    /// surface" can supply it.
     pub fn grounded_bodies(
         &mut self,
         supports: &SupportSets,
         sleeping: &FxHashSet<RigidBodyHandle>,
+        velocity_at: impl Fn(RigidBodyHandle, Point3<f32>) -> Vector3<f32>,
     ) -> GroundedBodies {
         let mut grounded: GroundedBodies = supports
             .supported_bodies()
-            .filter_map(|handle| supports.get(handle).map(|set| (handle, set.mean_normal())))
+            .filter_map(|handle| {
+                supports.get(handle).map(|set| {
+                    (
+                        handle,
+                        Support::new(set.mean_normal(), set.surface_velocity(&velocity_at)),
+                    )
+                })
+            })
             .collect();
         for handle in sleeping {
-            if let Some(normal) = self.last_grounded.get(handle) {
-                grounded.entry(*handle).or_insert(*normal);
+            if let Some(support) = self.last_grounded.get(handle) {
+                grounded.entry(*handle).or_insert(*support);
             }
         }
         self.last_grounded = grounded.clone();

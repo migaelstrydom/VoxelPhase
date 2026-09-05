@@ -9,18 +9,32 @@ use specs::{Component, VecStorage};
 use super::config::{CharacterRigConfig, GaitPreset};
 use super::foot_placer::{FootPlacer, PlacerCtx, PlacerFoot, PlacerRecorder};
 use super::humanoid::pose_state::{AirKind, Gait, PoseState, SampleCtx, Takeoff, TickCtx};
-use super::humanoid::skeleton::{generate_character_mesh, Skeleton, FOOT_HEIGHT};
+use super::humanoid::skeleton::{generate_character_mesh, Skeleton};
 use super::humanoid::stride_sync;
 use super::humanoid::upper_state::{UpperSampleCtx, UpperState, UpperTickCtx};
 use super::pose::{Crossfade, Linear, PoseFragment};
 use super::state::{AnimationState, FootState};
 use crate::character::grab::GrabConfig;
-use crate::character::{AirSteering, ArmState, CharacterIntent, CharacterState, LocomotionState};
+use crate::character::{
+    AirSteering, ArmState, CharacterIntent, CharacterState, Grounding, LocomotionState,
+};
 use crate::rendering::vertex::Vertex;
 use crate::sensing::{ContactCandidate, Probe};
 
 /// Duration of the crossfade when either FSM changes variant kind.
 const TRANSITION_BLEND_DURATION: f32 = 0.1;
+
+/// How long the animator keeps animating in a lost surface's frame, in
+/// seconds.
+///
+/// Contact grounding chatters: a walking capsule leaves the floor between
+/// footfalls, and that frame is not the frame the character stepped off the
+/// platform. Without the memory the gait's frame of reference would flicker
+/// between the platform's and the world's at footfall rate, which is a
+/// perturbation at exactly the frequency of the gait it is perturbing. Short
+/// enough that a real departure — a jump, a walk-off — is animated against the
+/// world within a few frames.
+const SUPPORT_MEMORY: f32 = 0.15;
 
 /// Probe tags used by the character animator.
 pub mod probe_tags {
@@ -61,23 +75,58 @@ pub struct CharacterAnimator {
     /// the `PLACER_REC` env var). Feeds the offline replay harness.
     recorder: Option<PlacerRecorder>,
 
+    /// Velocity of the surface last seen holding the character up, and how
+    /// long ago that was. See `SUPPORT_MEMORY`.
+    support_velocity: Vector3<f32>,
+    support_age: f32,
+
+    /// How far the rig's pelvis hangs below the physics body's origin.
+    ///
+    /// The two are not the same point and never were: the body is a capsule
+    /// whose centre rides half its height above the floor, while the rig's
+    /// pelvis belongs one `standing_height` above the soles — which is less,
+    /// because a standing character has bent knees. Feeding the body's origin
+    /// straight in as the pelvis stretches every leg to its full length before
+    /// a single step is taken, and a leg with no bend left in it can only
+    /// answer a stride by dragging its foot. See `pelvis_for`.
+    body_to_pelvis: f32,
+
     // Mesh caching
     cached_vertices: Vec<Vertex>,
     cached_indices: Vec<u32>,
 }
 
 impl CharacterAnimator {
-    /// Create a new character animator at the given position.
-    pub fn new(config: CharacterRigConfig, pelvis_position: Point3<f32>) -> Self {
+    /// Create a new character animator for a body at `body_position` whose
+    /// origin rides `ground_clearance` above the surface it rests on — for a
+    /// capsule collider, its half height.
+    ///
+    /// The clearance is what lets the animator place the pelvis where the rig
+    /// expects it rather than where the physics body's origin happens to be.
+    pub fn new(
+        config: CharacterRigConfig,
+        body_position: Point3<f32>,
+        ground_clearance: f32,
+        yaw: f32,
+    ) -> Self {
+        // A rig taller than the body rides is not something an offset can
+        // fix — raising the pelvis to suit would put the feet below the floor
+        // — so that case keeps the origin and the old behaviour.
+        let body_to_pelvis = (ground_clearance - config.standing_height()).max(0.0);
+        let pelvis_position = body_position - Vector3::y() * body_to_pelvis;
         let leg_length = config.leg_length();
-        let facing = Vector3::new(0.0, 0.0, 1.0);
+        // The rest pose is built facing the way the character does. Placing
+        // the first stance along a fixed axis leaves a character that spawns
+        // facing anywhere else standing with its feet across its own path,
+        // and it walks the first half-second out of that.
+        let facing = Vector3::new(yaw.sin(), 0.0, yaw.cos());
 
         let state = AnimationState::new(pelvis_position, leg_length);
         let skeleton = Skeleton::new(&config, pelvis_position, facing);
-        let foot_centre_y = pelvis_position.y - config.standing_height() - FOOT_HEIGHT;
+        let foot_centre_y = pelvis_position.y - config.standing_height();
         let foot_placer = FootPlacer::new(pelvis_position, facing, config.hip_width, foot_centre_y);
         let recorder =
-            PlacerRecorder::from_env(pelvis_position, 0.0, config.hip_width, foot_centre_y);
+            PlacerRecorder::from_env(pelvis_position, yaw, config.hip_width, foot_centre_y);
 
         Self {
             config,
@@ -88,11 +137,23 @@ impl CharacterAnimator {
             pose_crossfade: None,
             upper_crossfade: None,
             foot_placer,
-            last_yaw: 0.0,
+            last_yaw: yaw,
             recorder,
+            support_velocity: Vector3::zeros(),
+            support_age: SUPPORT_MEMORY,
+            body_to_pelvis,
             cached_vertices: Vec::new(),
             cached_indices: Vec::new(),
         }
+    }
+
+    /// Where the rig's pelvis belongs, given where the physics body is.
+    ///
+    /// The seam between the body the physics engine moves and the skeleton
+    /// drawn around it. Everything that hands this animator a position hands
+    /// it a body position and goes through here.
+    pub fn pelvis_for(&self, body_position: Point3<f32>) -> Point3<f32> {
+        body_position - Vector3::y() * self.body_to_pelvis
     }
 
     /// Configure probes for the next frame based on current animation state.
@@ -143,6 +204,18 @@ impl CharacterAnimator {
     /// Configure a single foot probe: a ray from the hip through the
     /// aim point. Falls back to straight down when the aim point is
     /// degenerate (at the hip itself).
+    ///
+    /// A probe must always outreach the point it is aimed at. The placer
+    /// reads "no ground under the landing target" as "that target is
+    /// illegal" and shortens the step toward the takeoff position, never
+    /// re-extending it within the swing — so a target beyond the probe's
+    /// range does not merely go unmeasured, it cancels the stride. At
+    /// speed the target is projected a whole swing's worth of hip travel
+    /// ahead, which outruns any fixed multiple of leg length: the foot
+    /// then lands behind the hip, overstretches within a frame or two of
+    /// contact, and the emergency release paces the gait instead of the
+    /// clock. `standing_height` past the target is the margin for ground
+    /// that falls away below it.
     fn configure_foot_probe(
         &self,
         tag: u32,
@@ -150,7 +223,8 @@ impl CharacterAnimator {
         aim: Point3<f32>,
         length: f32,
     ) -> Probe {
-        let direction = (aim - hip_position)
+        let to_aim = aim - hip_position;
+        let direction = to_aim
             .try_normalize(1e-4)
             .unwrap_or_else(|| Vector3::new(0.0, -1.0, 0.0));
 
@@ -158,7 +232,7 @@ impl CharacterAnimator {
             tag,
             origin: hip_position,
             direction,
-            length,
+            length: length.max(to_aim.magnitude() + self.config.standing_height()),
         }
     }
 
@@ -169,12 +243,20 @@ impl CharacterAnimator {
         pelvis_position: Point3<f32>,
         yaw: f32,
         velocity: Vector3<f32>,
-        is_grounded: bool,
+        grounding: &Grounding,
         character_state: &CharacterState,
         target: &CharacterIntent,
         grab_config: &GrabConfig,
         contacts: &[ContactCandidate],
     ) {
+        // Everything below the neck is animated in the frame of whatever is
+        // holding the character up. A body riding a platform has the
+        // platform's velocity and is nonetheless standing still: it should
+        // read as idle, its arms should not swing, and its feet should stay
+        // where they were put. Nothing carries an airborne character, so this
+        // is the world frame the moment support is lost.
+        let support_velocity = self.observe_support(grounding, dt);
+        let velocity = velocity - support_velocity;
         let speed = Vector3::new(velocity.x, 0.0, velocity.z).magnitude();
         let facing = Vector3::new(yaw.sin(), 0.0, yaw.cos());
 
@@ -186,21 +268,22 @@ impl CharacterAnimator {
         // `docs/TRACTION_DRIVE_DESIGN.md` §6.6. The probes below remain the
         // rangefinder: how high the ground is under a landing target, and
         // which way it faces.
-        self.state.is_grounded = is_grounded;
+        self.state.is_grounded = grounding.is_grounded;
 
         // Snapshot the foot-centre y for a potential Landing splice this
         // frame. `foot.position.y` now represents the foot centre (sole
         // is one radius below), so probe contact is the correct value
         // directly. Fallback estimates the terrain surface as
-        // `pelvis - standing_height - FOOT_HEIGHT` — i.e. one full foot
-        // below the pelvis-relative ankle height used by the rest rig.
+        // `pelvis - standing_height`, which is where the foot centre sits
+        // at rest: `standing_height` is measured pelvis-to-foot-centre,
+        // and a planted foot's centre tracks the surface itself.
         let landing_ground_y = self
             .state
             .left
             .ground_contact
             .or(self.state.right.ground_contact)
             .map(|c| c.y)
-            .unwrap_or(pelvis_position.y - self.config.standing_height() - FOOT_HEIGHT);
+            .unwrap_or(pelvis_position.y - self.config.standing_height());
 
         // Map CharacterState → next PoseState variant.
         let new_pose = next_pose_state(
@@ -216,7 +299,15 @@ impl CharacterAnimator {
         // Tick the foot placer before sampling so the pose layer reads a
         // current foot position. Airborne states suspend the placer; feet
         // come from the airborne/landing samplers in those cases.
-        self.tick_foot_placer(dt, pelvis_position, yaw, velocity, target, &new_pose);
+        self.tick_foot_placer(
+            dt,
+            pelvis_position,
+            yaw,
+            velocity,
+            support_velocity,
+            target,
+            &new_pose,
+        );
         mirror_placer_into_state(&mut self.state, &self.foot_placer);
 
         // Stride phase is derived directly from the placer's stepping
@@ -302,16 +393,34 @@ impl CharacterAnimator {
             .apply_fragment(&fragment, &self.state, &self.config);
     }
 
+    /// Track the surface the character is standing on, holding the last one
+    /// through the chatter of a contact set. Returns the frame this update's
+    /// animation is expressed in.
+    fn observe_support(&mut self, grounding: &Grounding, dt: f32) -> Vector3<f32> {
+        if grounding.is_grounded {
+            self.support_velocity = grounding.surface_velocity;
+            self.support_age = 0.0;
+        } else {
+            self.support_age += dt;
+            if self.support_age >= SUPPORT_MEMORY {
+                self.support_velocity = Vector3::zeros();
+            }
+        }
+        self.support_velocity
+    }
+
     /// Advance the procedural foot placer. Runs before pose sampling;
     /// its output is mirrored into `AnimationState` and read by the
     /// grounded pose samplers. Suspends while airborne so feet don't
     /// step against a body that isn't on the ground.
+    #[allow(clippy::too_many_arguments)]
     fn tick_foot_placer(
         &mut self,
         dt: f32,
         pelvis_position: Point3<f32>,
         yaw: f32,
         velocity: Vector3<f32>,
+        support_velocity: Vector3<f32>,
         target: &CharacterIntent,
         next_pose: &PoseState,
     ) {
@@ -341,11 +450,15 @@ impl CharacterAnimator {
             .map(|p| p.stride_gain)
             .unwrap_or(self.config.gait_presets.walk.stride_gain);
         // Fallback foot-centre y used by the placer when no probe hit is
-        // available. Matches the rest-rig terrain level: one full foot
-        // below the pelvis-relative ankle height, so the sole sits at
-        // pelvis-standing_height-(3/2)·FOOT_HEIGHT — i.e. submerged by a
-        // radius as intended.
-        let foot_centre_y = pelvis_position.y - self.config.standing_height() - FOOT_HEIGHT;
+        // available: the rest-rig terrain level. `standing_height` is the
+        // pelvis-to-foot-centre distance and a planted foot's centre sits
+        // on the surface — the sole one radius under it, which is the
+        // half-submerged look the rig is drawn for — so the two agree and
+        // a foot that loses its probe does not step down by a foot's
+        // thickness. It is also the rest vertical the leg's reach budget
+        // is measured against, so a wrong value here mis-sizes every
+        // stride the planner aims.
+        let foot_centre_y = pelvis_position.y - self.config.standing_height();
         let left_ground_normal = self.state.left.ground_normal.unwrap_or_else(Vector3::y);
         let right_ground_normal = self.state.right.ground_normal.unwrap_or_else(Vector3::y);
         let left_ground = self.state.left.ground_contact;
@@ -355,6 +468,7 @@ impl CharacterAnimator {
             dt,
             pelvis: pelvis_position,
             velocity,
+            support_velocity,
             intent_direction: target.direction,
             yaw,
             yaw_rate,
@@ -767,5 +881,66 @@ mod tests {
         );
 
         assert!(matches!(next, PoseState::Grounded { gait: Gait::Walk }));
+    }
+
+    /// A capsule's centre rides half its height up; the rig's pelvis belongs
+    /// one `standing_height` above the soles, which is less. The animator owns
+    /// the difference, and getting it wrong costs the legs every millimetre of
+    /// bend they have.
+    #[test]
+    fn the_pelvis_hangs_below_the_body_by_the_knee_bend_it_needs() {
+        let config = CharacterRigConfig::default();
+        let standing = config.standing_height();
+        let clearance = 0.5;
+        let animator =
+            CharacterAnimator::new(config, Point3::new(0.0, clearance, 0.0), clearance, 0.0);
+
+        let pelvis = animator.pelvis_for(Point3::new(4.0, clearance, -2.0));
+        assert_eq!((pelvis.x, pelvis.z), (4.0, -2.0), "only height is adjusted");
+        assert!(
+            (pelvis.y - standing).abs() < 1e-6,
+            "a body resting on y=0 should put the pelvis at its standing height, got {}",
+            pelvis.y
+        );
+    }
+
+    /// A body whose origin rides lower than the rig is tall has no offset to
+    /// give: lifting the pelvis to suit would put the feet under the floor.
+    #[test]
+    fn a_body_that_rides_low_keeps_its_own_origin() {
+        let config = CharacterRigConfig::default();
+        let clearance = config.standing_height() * 0.5;
+        let animator = CharacterAnimator::new(config, Point3::origin(), clearance, 0.0);
+        assert_eq!(animator.pelvis_for(Point3::origin()), Point3::origin());
+    }
+
+    /// The surface a character stands on is the frame its gait is measured in,
+    /// and a contact set that chatters must not flick that frame back and
+    /// forth at footfall rate.
+    #[test]
+    fn a_lost_surface_is_remembered_for_a_moment_and_then_forgotten() {
+        let mut animator =
+            CharacterAnimator::new(CharacterRigConfig::default(), Point3::origin(), 0.5, 0.0);
+        let platform = Grounding::on(Vector3::y()).carried_by(Vector3::new(3.0, 0.0, 0.0));
+        let dt = 1.0 / 60.0;
+
+        assert_eq!(
+            animator.observe_support(&platform, dt),
+            Vector3::new(3.0, 0.0, 0.0)
+        );
+        assert_eq!(
+            animator.observe_support(&Grounding::airborne(), dt),
+            Vector3::new(3.0, 0.0, 0.0),
+            "one frame between footfalls is not stepping off the platform"
+        );
+
+        for _ in 0..(SUPPORT_MEMORY / dt) as usize + 1 {
+            animator.observe_support(&Grounding::airborne(), dt);
+        }
+        assert_eq!(
+            animator.observe_support(&Grounding::airborne(), dt),
+            Vector3::zeros(),
+            "nothing is carrying a character who has been in the air this long"
+        );
     }
 }

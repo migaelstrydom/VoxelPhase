@@ -32,7 +32,7 @@ impl<'a> System<'a> for ContactGroundingSystem {
 
         for (rb, grounding) in (&rigid_bodies, &mut groundings).join() {
             *grounding = match grounded.get(&rb.0) {
-                Some(normal) => Grounding::on(*normal),
+                Some(support) => Grounding::on(support.normal).carried_by(support.surface_velocity),
                 None => Grounding::airborne(),
             };
         }

@@ -158,7 +158,15 @@ impl PlacerFoot {
 pub struct PlacerCtx<'a> {
     pub dt: f32,
     pub pelvis: Point3<f32>,
+    /// Pelvis velocity *relative to the surface being stood on*, which is the
+    /// only frame a gait means anything in: a character riding a platform at
+    /// 3 m/s is standing still, and its feet should behave that way.
     pub velocity: Vector3<f32>,
+    /// Velocity of that surface itself, in world space. Planted anchors and
+    /// committed landing targets are carried along by it each substep, so a
+    /// foot stays on the plank it was put down on rather than on the patch of
+    /// world the plank happened to be over.
+    pub support_velocity: Vector3<f32>,
     /// Player-requested movement direction before physics velocity has
     /// necessarily caught up. Used for anticipatory start steps.
     pub intent_direction: Vector3<f32>,
@@ -226,6 +234,13 @@ pub struct FootPlacer {
     prev_pelvis: Point3<f32>,
     /// Previous frame's yaw, for substep input interpolation.
     prev_yaw: f32,
+    /// Cadence the last substep was planned against. Read-only output:
+    /// it is what the gait *intended* — trigger distance, duty factor,
+    /// swing duration — as opposed to what the feet were observed doing.
+    /// Debug overlays and the offline animation viewer compare the two.
+    /// `None` until the first tick, since the timing is derived from
+    /// context the placer does not have at construction.
+    last_timing: Option<GaitTiming>,
 }
 
 /// Saturation value for the placer's event-age timers (`since_takeoff`,
@@ -246,6 +261,7 @@ impl FootPlacer {
             was_moving: false,
             prev_pelvis: pelvis,
             prev_yaw: yaw_from_facing(facing),
+            last_timing: None,
         }
     }
 
@@ -268,6 +284,14 @@ impl FootPlacer {
     /// Gait phase in `[0, 1)`, for debug output.
     pub fn gait_phase(&self) -> f32 {
         self.clock.phase()
+    }
+
+    /// The cadence the most recent substep was planned against, or
+    /// `None` before the first tick. Measuring a gait against this is
+    /// how a viewer tells "the feet are doing something odd" from "the
+    /// feet are doing exactly what they were asked to".
+    pub fn timing(&self) -> Option<GaitTiming> {
+        self.last_timing
     }
 
     /// Advance the placer by one frame. Internally splits the frame
@@ -320,6 +344,10 @@ impl FootPlacer {
     fn substep(&mut self, ctx: &PlacerCtx<'_>) {
         let cfg = ctx.config;
         let facing = facing_from_yaw(ctx.yaw);
+        // Before anything reads a foot: everything the placer holds in world
+        // space belongs to the surface, not to the world.
+        carry_feet(&mut self.left, ctx);
+        carry_feet(&mut self.right, ctx);
         self.since_takeoff = (self.since_takeoff + ctx.dt).min(LONG_AGO);
         for foot in [&mut self.left, &mut self.right] {
             if foot.is_planted() {
@@ -361,6 +389,7 @@ impl FootPlacer {
             max_reach,
             cfg,
         );
+        self.last_timing = Some(timing);
         // Ideal targets for both feet from the capture point, clamped to
         // the horizontal reach budget the leg can actually cover.
         let cp = capture_point_xz(ctx.pelvis, horizontal_velocity, ctx.standing_height);
@@ -795,6 +824,13 @@ fn advance_stepping(
     };
 
     let landing = floor_sample(ctx, foot.side);
+    let under_hip = foot_position_from_stance(
+        ctx.pelvis,
+        facing,
+        ctx.hip_width,
+        ctx.foot_y_fallback,
+        foot.side,
+    );
     let new_t = t + ctx.dt;
     if new_t >= duration {
         // A target the probe still finds no ground under is refused
@@ -823,10 +859,15 @@ fn advance_stepping(
         // a hole, a ledge, or a wall face. That is not a legal target,
         // and nothing downstream will notice: grounding comes from the
         // capsule's contacts now, so a foot planted in mid-air simply
-        // stays there. The step shortens instead, retreating toward the
-        // takeoff position, which is on ground by construction.
+        // stays there. The step retreats instead, to the neutral stance
+        // under the hip: whatever is holding the body up is under there,
+        // and unlike the takeoff position it is somewhere the leg can
+        // still reach. Retreating to the takeoff point is right only
+        // while the body stays over it — walk off a ledge with both feet
+        // mid-swing and it recedes at walking pace, leaving the legs
+        // trailing at full stretch until the airborne pose takes over.
         let retreat = 1.0 - (-ctx.config.unsupported_retreat_rate * ctx.dt).exp();
-        to = lerp_point(to, from, retreat);
+        to = lerp_point(to, under_hip, retreat);
         foot.landing_shortened = true;
     } else if !foot.landing_shortened && u < ctx.config.swing_retarget_until_fraction {
         let remaining = duration - new_t;
@@ -882,6 +923,29 @@ fn advance_stepping(
     foot.pre_lift = 0.0;
 }
 
+/// Move everything this foot holds in world space along with the surface
+/// under it.
+///
+/// A planted anchor is a promise about a *place on the ground*, and so is a
+/// committed landing target. On static terrain the two are the same thing and
+/// this is a no-op; on a moving platform, a lift, or a crate falling out from
+/// under the character they are not, and without this the foot is left behind
+/// by the floor it is standing on — the leg stretches until the overstretch
+/// release fires, which reads as feet stuck to the world.
+fn carry_feet(foot: &mut PlacerFoot, ctx: &PlacerCtx<'_>) {
+    let carry = ctx.support_velocity * ctx.dt;
+    if carry == Vector3::zeros() {
+        return;
+    }
+    foot.planted_position += carry;
+    foot.position += carry;
+    foot.ideal_xz += carry;
+    if let FootPhase::Stepping { from, to, .. } = &mut foot.phase {
+        *from += carry;
+        *to += carry;
+    }
+}
+
 /// Terrain contact + normal for the given foot, when the probe has hit
 /// floor-like geometry (upward-facing normal). Wall hits are not
 /// landing surfaces and must not steer foot heights.
@@ -917,20 +981,24 @@ fn plant_ahead_distance(timing: &GaitTiming) -> f32 {
     timing.duty_factor * timing.trigger_threshold
 }
 
-/// Maximum hip→foot distance the leg may reach, in metres.
+/// Hip→foot distance at which the overstretch release fires, in metres.
+/// The emergency limit, not the planning one — see `plant_reach`.
 fn max_leg_extension(ctx: &PlacerCtx<'_>) -> f32 {
     ctx.leg_length * ctx.config.max_leg_stretch_ratio
 }
 
+/// Hip→foot distance the planner aims plants within, in metres. Sits
+/// below `max_leg_extension` so an ordinary stride leaves the release
+/// something to be an emergency about.
+fn plant_reach(ctx: &PlacerCtx<'_>) -> f32 {
+    ctx.leg_length * ctx.config.plant_reach_ratio
+}
+
 /// Horizontal stride budget: how far from the hip a foot may aim to
-/// plant. Pythagoras on `max_leg_extension`, using the *actual* rest
-/// vertical from pelvis to foot centre (`pelvis.y − foot_y_fallback`,
-/// i.e. standing height plus the foot's own height) — not the bare
-/// `standing_height`. With the bare value the budget overstated the
-/// reach by ~30%, so the planner aimed plants the stretch release would
-/// veto, and overstretch ended up pacing the gait at speed.
+/// plant. Pythagoras on `plant_reach`, against the *actual* rest
+/// vertical from pelvis to foot centre (`pelvis.y − foot_y_fallback`).
 fn horizontal_reach_budget(ctx: &PlacerCtx<'_>) -> f32 {
-    let ext = max_leg_extension(ctx);
+    let ext = plant_reach(ctx);
     let vertical = (ctx.pelvis.y - ctx.foot_y_fallback).max(0.0);
     (ext * ext - vertical * vertical).max(0.0).sqrt()
 }
@@ -943,7 +1011,7 @@ fn horizontal_reach_budget(ctx: &PlacerCtx<'_>) -> f32 {
 /// direction, so the worst |slope| under either foot binds. `g = 0`
 /// reduces to `horizontal_reach_budget`.
 fn slope_aware_reach_budget(ctx: &PlacerCtx<'_>, travel: Vector2<f32>) -> f32 {
-    let ext = max_leg_extension(ctx);
+    let ext = plant_reach(ctx);
     let v0 = (ctx.pelvis.y - ctx.foot_y_fallback).max(0.0);
     let g = terrain_slope_along(ctx, travel);
     let a = 1.0 + g * g;
@@ -1136,4 +1204,102 @@ pub(crate) fn angle_diff(b: f32, a: f32) -> f32 {
         d += two_pi;
     }
     d
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const HIP_WIDTH: f32 = 0.12;
+    const LEG_LENGTH: f32 = 0.5;
+    const STANDING_HEIGHT: f32 = 0.425;
+
+    /// A character standing on something that is itself moving: the body has
+    /// the surface's velocity, so its velocity *relative to the surface* — the
+    /// only one the placer is given — is zero.
+    fn riding(
+        pelvis: Point3<f32>,
+        support_velocity: Vector3<f32>,
+        config: &FootPlacerConfig,
+    ) -> PlacerCtx<'_> {
+        PlacerCtx {
+            dt: 1.0 / 60.0,
+            pelvis,
+            velocity: Vector3::zeros(),
+            support_velocity,
+            intent_direction: Vector3::zeros(),
+            yaw: 0.0,
+            yaw_rate: 0.0,
+            hip_width: HIP_WIDTH,
+            leg_length: LEG_LENGTH,
+            standing_height: STANDING_HEIGHT,
+            foot_y_fallback: pelvis.y - STANDING_HEIGHT,
+            step_height: 0.15,
+            stride_gain: 0.4,
+            left_ground_normal: Vector3::y(),
+            right_ground_normal: Vector3::y(),
+            left_ground: None,
+            right_ground: None,
+            config,
+        }
+    }
+
+    /// The sticky-feet case on a moving platform: the anchors are promises
+    /// about a place on the floor, and the floor is going somewhere.
+    #[test]
+    fn a_planted_foot_travels_with_the_surface_under_it() {
+        let config = FootPlacerConfig::default();
+        let platform = Vector3::new(3.0, 0.0, 0.0);
+        let mut pelvis = Point3::new(0.0, STANDING_HEIGHT, 0.0);
+        let mut placer = FootPlacer::new(pelvis, Vector3::z(), HIP_WIDTH, 0.0);
+        let start = placer.left.planted_position;
+
+        let dt = 1.0 / 60.0;
+        let frames = 60;
+        for _ in 0..frames {
+            // Carried along with the platform, exactly as friction carries the
+            // capsule in game.
+            pelvis += platform * dt;
+            placer.tick(&riding(pelvis, platform, &config));
+        }
+
+        let travelled = platform * (frames as f32 * dt);
+        let drift = placer.left.planted_position - (start + travelled);
+        assert!(
+            drift.magnitude() < 1e-3,
+            "the foot slid {:.0} mm across a platform it was standing still on",
+            drift.magnitude() * 1000.0
+        );
+        assert!(
+            placer.left.is_planted() && placer.right.is_planted(),
+            "standing still on a moving floor is standing still: nothing should step"
+        );
+    }
+
+    /// The same run with the carrying left out is the bug itself: the anchor
+    /// holds a world position and the leg is dragged off it.
+    #[test]
+    fn without_the_carry_the_body_walks_away_from_its_own_feet() {
+        let config = FootPlacerConfig::default();
+        let platform = Vector3::new(3.0, 0.0, 0.0);
+        let mut pelvis = Point3::new(0.0, STANDING_HEIGHT, 0.0);
+        let mut placer = FootPlacer::new(pelvis, Vector3::z(), HIP_WIDTH, 0.0);
+        let start = placer.left.planted_position;
+
+        let dt = 1.0 / 60.0;
+        for _ in 0..30 {
+            pelvis += platform * dt;
+            placer.tick(&riding(pelvis, Vector3::zeros(), &config));
+        }
+
+        let drift = (placer.left.planted_position - start).magnitude();
+        assert!(
+            drift < 1.0,
+            "sanity: the anchor cannot have travelled further than the platform"
+        );
+        assert!(
+            (pelvis.x - placer.left.planted_position.x).abs() > 0.2,
+            "with no carry the hip must run away from the anchor — that is the defect"
+        );
+    }
 }

@@ -43,13 +43,21 @@ pub struct FootPlacerConfig {
     /// Ceiling on a swing's duration. Also the duration of idle settle
     /// steps, where the cycle-derived swing time diverges.
     pub max_step_duration: f32,
-    /// Maximum hip→foot distance as a fraction of leg length. Values
-    /// slightly above 1.0 allow for heel/toe extension. Drives two
-    /// guards: the horizontal stride budget for ideal targets (via
-    /// Pythagoras with `standing_height`), and the overstretch release
-    /// that forces a planted foot to step when the hip has slid too far
-    /// from it (landing slides, uncommanded pushes).
+    /// Hip→foot distance at which the overstretch release fires, as a
+    /// fraction of leg length. Slightly above 1.0: heel and toe buy a
+    /// little past the bones, and the release is an emergency valve for
+    /// landing slides and uncommanded pushes, not a routine event.
     pub max_leg_stretch_ratio: f32,
+    /// Hip→foot distance the *planner* may aim a plant at, as a fraction
+    /// of leg length.
+    ///
+    /// Deliberately a different number from `max_leg_stretch_ratio`.
+    /// Planning against the emergency limit means every scheduled stance
+    /// ends at the emergency limit — the leg reaches its stretch on an
+    /// ordinary stride, the knee locks, and the foot is dragged along a
+    /// straight line while the rig draws a leg longer than its bones.
+    /// The valve needs headroom above the plan to be a valve at all.
+    pub plant_reach_ratio: f32,
     /// Minimum time between any two takeoffs while moving, as a
     /// fraction of the current swing duration. Without this, two feet
     /// that hit their release conditions together (e.g. both planted at
@@ -142,9 +150,10 @@ impl Default for FootPlacerConfig {
             k_yaw: 0.01,
             k_turn_trigger: 0.5,
             turn_step_trigger_angle: 0.65,
-            min_step_duration: 0.12,
+            min_step_duration: 0.09,
             max_step_duration: 0.4,
             max_leg_stretch_ratio: 1.15,
+            plant_reach_ratio: 1.05,
             takeoff_stagger_fraction: 0.4,
             settle_trigger: 0.05,
             ankle_slerp_rate: 18.0,

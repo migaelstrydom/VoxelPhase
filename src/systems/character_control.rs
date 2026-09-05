@@ -94,11 +94,11 @@ impl<'a> System<'a> for CharacterControlSystem {
             // contact set chatters where a probe's reach did not: a walking
             // capsule leaves the floor between footfalls. The forgiveness
             // window is where that leniency now lives, named and tunable.
-            let is_grounded = state.ground_forgiveness.observe(
-                grounding.is_grounded,
-                dt,
-                config.ground_forgiveness_window,
-            );
+            let support =
+                state
+                    .ground_forgiveness
+                    .observe(grounding, dt, config.ground_forgiveness_window);
+            let is_grounded = support.is_grounded;
             let move_dir = target.direction;
             let character_body = rb.0;
 
@@ -185,15 +185,22 @@ impl<'a> System<'a> for CharacterControlSystem {
             }
 
             // --- Apply the movement rule for the resolved locomotion state ---
-            apply_movement_rule(
-                drive,
-                state.locomotion.movement_rule(
-                    move_dir,
-                    ground_speed,
-                    state.air_speed,
-                    config.air_steer_speed,
-                ),
+            //
+            // The rule states a speed relative to whatever is holding the
+            // character up, because that is what a walk is: asking for 0 m/s
+            // while standing on a moving platform is asking to be dragged off
+            // the back of it. On static ground the two frames are the same and
+            // this adds nothing.
+            let mut rule = state.locomotion.movement_rule(
+                move_dir,
+                ground_speed,
+                state.air_speed,
+                config.air_steer_speed,
             );
+            if is_grounded {
+                rule.target += across(support.surface_velocity, &up);
+            }
+            apply_movement_rule(drive, rule);
 
             // --- Arm state transitions ---
             let facing = facing_from_rotation(rotation.0);
@@ -370,7 +377,7 @@ fn draw_grab_debug(
 /// Resolve effective ground speed from gait intent. Crouch wins over sprint,
 /// except while the crouch lockout is active (post-long-jump recovery), in
 /// which case crouch is ignored so holding Ctrl doesn't brake the player.
-fn resolve_ground_speed(
+pub fn resolve_ground_speed(
     target: &CharacterIntent,
     config: &LocomotionConfig,
     crouch_lockout: &crate::character::Timer,
@@ -416,6 +423,13 @@ fn apply_movement_rule(drive: &mut DriveIntent, rule: MovementRule) {
     if rule.clamp_up {
         drive.clamp_normal_rise();
     }
+}
+
+/// The part of `velocity` that lies across `up` — the plane a gait is walked
+/// in. Zero `up` (a world with no gravity) leaves the velocity untouched,
+/// which is the same answer every other planar term gives there.
+fn across(velocity: Vector3<f32>, up: &Vector3<f32>) -> Vector3<f32> {
+    velocity - up * velocity.dot(up)
 }
 
 /// Convert a Y-axis rotation angle to a facing direction vector (unit, XZ plane).
@@ -597,6 +611,58 @@ mod tests {
             .write_storage::<Grounding>()
             .insert(entity, grounding)
             .expect("the character keeps its grounding");
+    }
+
+    /// The passenger case, end to end: no input, standing on a deck running
+    /// east. Asking for a world-frame standstill would have the drive brake
+    /// against the platform until the character slid off the back of it.
+    #[test]
+    fn an_idle_passenger_is_commanded_to_ride_the_deck() {
+        let (world, entity) = character_world(true);
+        let deck = Vector3::new(3.0, 0.0, 0.0);
+        set_grounding(&world, entity, Grounding::on(Vector3::y()).carried_by(deck));
+
+        CharacterControlSystem.run_now(&world);
+
+        assert_eq!(intent_of(&world, entity).linear_target, deck);
+    }
+
+    /// And walking on it is walking *on it*: the gait's speed is added to the
+    /// deck's, so the same stick input produces the same gait wherever it is
+    /// walked.
+    #[test]
+    fn a_walk_on_a_moving_deck_is_the_walk_plus_the_deck() {
+        let (world, entity) = character_world(true);
+        let deck = Vector3::new(3.0, 0.0, 0.0);
+        set_grounding(&world, entity, Grounding::on(Vector3::y()).carried_by(deck));
+        world
+            .write_storage::<CharacterIntent>()
+            .get_mut(entity)
+            .unwrap()
+            .direction = Vector3::new(0.0, 0.0, 1.0);
+
+        CharacterControlSystem.run_now(&world);
+
+        let walk = LocomotionConfig::player().walk_speed;
+        let target = intent_of(&world, entity).linear_target;
+        assert!((target - Vector3::new(3.0, 0.0, walk)).magnitude() < 1e-4);
+    }
+
+    /// Nothing carries an airborne character. A deck's velocity reaching a
+    /// jump would be free momentum granted every frame of the flight.
+    #[test]
+    fn a_character_with_nothing_under_it_is_carried_by_nothing() {
+        let (world, entity) = character_world(true);
+        set_forgiveness_window(&world, entity, 0.0);
+        set_grounding(
+            &world,
+            entity,
+            Grounding::airborne().carried_by(Vector3::new(3.0, 0.0, 0.0)),
+        );
+
+        CharacterControlSystem.run_now(&world);
+
+        assert_eq!(intent_of(&world, entity).linear_target, Vector3::zeros());
     }
 
     fn set_forgiveness_window(world: &World, entity: Entity, window: f32) {

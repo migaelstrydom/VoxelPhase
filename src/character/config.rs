@@ -80,7 +80,10 @@ pub struct LocomotionConfig {
     /// physics number: it is the width of the thing that has to fit on a ledge,
     /// and `level_check` derives a route's minimum width from it.
     pub collider_radius: f32,
-    /// Half the height of the capsule's cylindrical section, excluding caps.
+    /// Half the capsule's total height, caps included — so a resting capsule's
+    /// centre sits exactly this far above the surface. That makes it the
+    /// character's ground clearance, which is what the animator needs to place
+    /// a rig below it (see `CharacterAnimator::pelvis_for`).
     pub collider_half_height: f32,
 }
 

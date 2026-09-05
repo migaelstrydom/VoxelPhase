@@ -278,6 +278,17 @@ impl RigidBody {
         self.angular_velocity
     }
 
+    /// Velocity of the material point of this body that is currently at
+    /// `world_point`.
+    ///
+    /// Linear velocity plus the spin about the centre. A point on a rotating
+    /// platform moves even when the platform's centre does not, which is the
+    /// whole reason anything standing on it has to ask per point rather than
+    /// per body.
+    pub fn velocity_at(&self, world_point: Point3<f32>) -> Vector3<f32> {
+        self.linear_velocity + self.angular_velocity.cross(&(world_point - self.position))
+    }
+
     pub fn kinetic_energy(&self) -> f32 {
         if self.inv_mass == 0.0 {
             return 0.0;

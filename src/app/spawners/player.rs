@@ -25,10 +25,16 @@ pub fn spawn_player(world: &mut World, initial_pos: nalgebra::Point3<f32>) -> En
     // acceleration the old reactionless yaw drive was bounded by, so a turn
     // costs what it always did.
     const TURN_AUTHORITY: f32 = 500.0;
+    /// Facing the player spawns with, matching the `Rotation` below.
+    const INITIAL_YAW: f32 = 0.0;
 
     let rig_config = CharacterRigConfig::default();
     // let body_radius = rig_config.body_radius;
-    let animator = CharacterAnimator::new(rig_config, initial_pos);
+    // The capsule's centre rides half its height above the floor; the rig's
+    // pelvis belongs lower than that, on bent knees. The animator owns the
+    // difference.
+    let animator =
+        CharacterAnimator::new(rig_config, initial_pos, collider_half_height, INITIAL_YAW);
 
     let (body_handle, upright_handle) = {
         let mut physics = world.write_resource::<PhysicsResource>();

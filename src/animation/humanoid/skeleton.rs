@@ -172,8 +172,17 @@ impl Skeleton {
             Some(feet) => (feet.left, feet.right),
             None => (state.left.position, state.right.position),
         };
-        self.left_foot = left_foot;
-        self.right_foot = right_foot;
+        // Whatever animation asks for, a leg is as long as it is. Nothing
+        // upstream refuses an unreachable foot — the placer's overstretch
+        // release is a request to step, not a veto — so without this the
+        // skeleton draws the leg to wherever the foot was asked for and the
+        // limb visibly separates. It happens for a handful of frames at every
+        // edge case that outruns the gait: walking off a ledge with a foot
+        // mid-swing, a landing slide, ground dropping away underfoot.
+        // Clamping turns those into a leg trailing at full stretch, which is
+        // what a leg does.
+        self.left_foot = within_reach(self.left_hip, left_foot, config.leg_length());
+        self.right_foot = within_reach(self.right_hip, right_foot, config.leg_length());
         self.left_foot_forward = state.left.forward;
         self.right_foot_forward = state.right.forward;
         self.left_foot_up = state.left.up;
@@ -418,6 +427,21 @@ fn solve_arm_ik(
     let elbow_offset =
         forward * (angle.cos() * upper_length) + bend_dir_orth * (angle.sin() * upper_length);
     shoulder + elbow_offset
+}
+
+/// `target` pulled back on to the sphere the limb can actually reach.
+///
+/// A hair under the full length, so the IK solver is never handed a perfectly
+/// straight chain it has to pick a knee plane for.
+fn within_reach(joint: Point3<f32>, target: Point3<f32>, length: f32) -> Point3<f32> {
+    const REACHABLE: f32 = 0.999;
+    let offset = target - joint;
+    let distance = offset.magnitude();
+    let limit = length * REACHABLE;
+    if distance <= limit {
+        return target;
+    }
+    joint + offset * (limit / distance.max(1e-6))
 }
 
 #[inline]
@@ -765,4 +789,31 @@ fn add_cylinder_to_mesh(
 
     vertices.extend(cylinder_verts);
     indices.extend(cylinder_indices.iter().map(|i| i + base_index));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Nothing upstream refuses an unreachable foot, so this is the last place
+    /// a leg can be kept the length it is.
+    #[test]
+    fn a_foot_within_reach_is_left_exactly_where_it_was_asked_for() {
+        let hip = Point3::new(1.0, 1.0, 0.0);
+        let foot = Point3::new(1.2, 0.6, 0.1);
+        assert_eq!(within_reach(hip, foot, 0.5), foot);
+    }
+
+    #[test]
+    fn an_unreachable_foot_is_pulled_on_to_the_leg_without_turning_it() {
+        let hip = Point3::new(0.0, 1.0, 0.0);
+        let foot = Point3::new(0.0, -1.0, 0.0);
+        let clamped = within_reach(hip, foot, 0.5);
+
+        let reach = (clamped - hip).magnitude();
+        assert!(reach <= 0.5, "leg drawn {reach} long against a 0.5 m leg");
+        assert!(reach > 0.49, "and not shortened further than it had to be");
+        let direction = (clamped - hip).normalize().dot(&(foot - hip).normalize());
+        assert!(direction > 0.999, "the leg still points at the target");
+    }
 }

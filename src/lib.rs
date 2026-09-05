@@ -1,3 +1,4 @@
+pub mod anim_viewer;
 pub mod animation;
 pub mod app;
 pub mod camera;

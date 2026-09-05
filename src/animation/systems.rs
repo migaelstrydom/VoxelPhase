@@ -32,7 +32,8 @@ impl<'a> System<'a> for AnimationProbeConfigSystem {
 
     fn run(&mut self, (entities, positions, rotations, animators, mut sensors): Self::SystemData) {
         for (entity, pos, rot, animator) in (&entities, &positions, &rotations, &animators).join() {
-            let pelvis_pos = nalgebra::Point3::new(pos.0.x, pos.0.y, pos.0.z);
+            let body_pos = nalgebra::Point3::new(pos.0.x, pos.0.y, pos.0.z);
+            let pelvis_pos = animator.pelvis_for(body_pos);
             let yaw = rot.0;
 
             let probes = animator.configure_probes(pelvis_pos, yaw);
@@ -98,7 +99,8 @@ impl<'a> System<'a> for CharacterAnimationSystem {
         )
             .join()
         {
-            let pelvis_pos = nalgebra::Point3::new(pos.0.x, pos.0.y, pos.0.z);
+            let body_pos = nalgebra::Point3::new(pos.0.x, pos.0.y, pos.0.z);
+            let pelvis_pos = animator.pelvis_for(body_pos);
             let yaw = rot.0;
 
             let contacts = candidates
@@ -112,7 +114,7 @@ impl<'a> System<'a> for CharacterAnimationSystem {
                 pelvis_pos,
                 yaw,
                 velocity,
-                grounding.is_grounded,
+                grounding,
                 character_state,
                 target,
                 &grab_config,

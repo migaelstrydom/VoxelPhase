@@ -11,7 +11,7 @@ use specs::{Component, DenseVecStorage};
 /// projects the Support Set the physics engine already resolved. A rigged
 /// humanoid and a roller get the same answer from the same contacts — the foot
 /// probes measure where the ground is, never whether the character is on it.
-#[derive(Component, Debug, Clone, Default)]
+#[derive(Component, Debug, Clone, Copy, Default, PartialEq)]
 #[storage(DenseVecStorage)]
 pub struct Grounding {
     /// True when the character has support beneath it this frame.
@@ -19,6 +19,15 @@ pub struct Grounding {
     /// Surface normal of the supporting contact, if there is one. Points away
     /// from the ground, toward the character.
     pub normal: Option<Vector3<f32>>,
+    /// Velocity of the surface holding the character up. Zero on static
+    /// terrain, the platform's own motion while riding one.
+    ///
+    /// This is the frame locomotion is expressed in: a gait's speed, and the
+    /// world position a planted foot holds, are both measured against the
+    /// thing being stood on rather than against the world. Without it a
+    /// character on a moving platform walks on the spot while the floor slides
+    /// out from under its feet.
+    pub surface_velocity: Vector3<f32>,
 }
 
 impl Grounding {
@@ -26,6 +35,7 @@ impl Grounding {
         Self {
             is_grounded: false,
             normal: None,
+            surface_velocity: Vector3::zeros(),
         }
     }
 
@@ -33,7 +43,14 @@ impl Grounding {
         Self {
             is_grounded: true,
             normal: Some(normal),
+            surface_velocity: Vector3::zeros(),
         }
+    }
+
+    /// The same support, carried by a surface that is itself moving.
+    pub fn carried_by(mut self, surface_velocity: Vector3<f32>) -> Self {
+        self.surface_velocity = surface_velocity;
+        self
     }
 
     /// Ground normal, falling back to world up when unsupported or unknown.

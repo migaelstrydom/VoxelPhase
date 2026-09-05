@@ -184,6 +184,9 @@ fn replay_frames(
             dt: fr.dt,
             pelvis: fr.pelvis,
             velocity: fr.velocity,
+            // Recordings predate moving supports; a replayed frame stands on
+            // ground that is going nowhere.
+            support_velocity: Vector3::zeros(),
             intent_direction: fr.intent_direction,
             yaw: fr.yaw,
             yaw_rate: fr.yaw_rate,
@@ -347,6 +350,7 @@ fn record_replay_round_trip() {
             dt,
             pelvis,
             velocity,
+            support_velocity: Vector3::zeros(),
             intent_direction: Vector3::new(0.0, 0.0, 1.0),
             yaw: 0.1 * (1.7 * t).sin(),
             yaw_rate: 0.17 * (1.7 * t).cos(),
