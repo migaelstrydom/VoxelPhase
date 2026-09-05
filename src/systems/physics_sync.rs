@@ -113,15 +113,13 @@ impl PhysicsSyncSystem {
         actuators: &ReadStorage<Actuator>,
         bodies: &ReadStorage<RigidBodyComponent>,
     ) {
-        let support_normal = physics.config().gravity_direction().map(|down| -down);
-
         let mut updates = Vec::new();
         for (intent, actuator, body) in (intents, actuators, bodies).join() {
             let verbs = intent.take_normal_verbs();
             updates.push((
                 body.0,
                 actuator.non_support_grip,
-                resolve_drive(intent, verbs, actuator, support_normal),
+                resolve_drive(intent, verbs, actuator),
             ));
         }
         for (handle, non_support_grip, command) in updates {
@@ -186,6 +184,44 @@ impl PhysicsSyncSystem {
                     borrowed_weights,
                     usage.saturation() * 100.0,
                     usage.driving_frames,
+                ),
+            );
+        }
+    }
+
+    /// Report what each granted actuator has conjured.
+    ///
+    /// The other half of R8's obligation. An allowance does not borrow against
+    /// a contact the way the drive gain does — it invents momentum outright —
+    /// so what it spends is counted as it is spent, and the two kinds of jump
+    /// are reported separately: decision D2a's whole cost is that the same
+    /// player action is conservative or not depending on a one-frame timing,
+    /// and `conjured` is how often that actually happened.
+    fn log_allowance_usage(
+        physics: &PhysicsWorld,
+        actuators: &ReadStorage<Actuator>,
+        bodies: &ReadStorage<RigidBodyComponent>,
+        debug_log: &mut DebugLog,
+    ) {
+        for (actuator, body) in (actuators, bodies).join() {
+            if actuator.allowance.is_none() {
+                continue;
+            }
+            let Some(usage) = physics.allowance_usage(body.0) else {
+                continue;
+            };
+            let key = format!("Physics/Allowance/{}", body.0 .0.into_raw_parts().0);
+            debug_log.add(
+                key,
+                format!(
+                    "steer {:.0} N·s, shaping {:.0} N·s, yaw {:.0} N·m·s, jumps {} \
+                     ({} conjured, {:.0} N·s)",
+                    usage.steer_impulse,
+                    usage.shaping_impulse,
+                    usage.yaw_impulse,
+                    usage.supported_jumps + usage.unsupported_jumps,
+                    usage.unsupported_jumps,
+                    usage.jump_impulse,
                 ),
             );
         }
@@ -367,6 +403,7 @@ impl<'a> System<'a> for PhysicsSyncSystem {
             &mut debug_overlays,
         );
         Self::log_traction_usage(&physics.world, &actuators, &bodies, &mut debug_log);
+        Self::log_allowance_usage(&physics.world, &actuators, &bodies, &mut debug_log);
         physics.world.debugger().write_debug_log(
             &mut debug_log,
             physics.world.config().contact_margin,

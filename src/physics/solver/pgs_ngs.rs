@@ -20,6 +20,7 @@ use super::constraint_row::{solve_constraint_row, warm_start_constraint_row};
 use super::friction::{manifold_friction_projection, solve_friction_impulse};
 use super::normal::solve_normal_impulse;
 use super::position_correction::{self, PositionCorrectionConfig};
+use super::torsional::solve_torsional_impulse;
 use super::warm_start::{effective_solver_iterations, warm_start_contact};
 use super::ConstraintSolver;
 
@@ -209,6 +210,17 @@ impl ConstraintSolver for PgsNgsSolver {
                 // Per-contact friction solve
                 for ci in 0..manifold.contacts.len() {
                     solve_friction_impulse(
+                        bodies,
+                        &manifold.header,
+                        &mut manifold.contacts[ci],
+                        shock,
+                    );
+                }
+
+                // Per-contact torsional solve. Inert unless a body driving
+                // through the contact declared a patch for it to bear on.
+                for ci in 0..manifold.contacts.len() {
+                    solve_torsional_impulse(
                         bodies,
                         &manifold.header,
                         &mut manifold.contacts[ci],

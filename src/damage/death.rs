@@ -83,12 +83,17 @@ impl<'a> System<'a> for DeathSystem {
                 if let Some(intent) = intents.get_mut(entity) {
                     *intent = CharacterIntent::default();
                 }
-                // Out of service means gripping like any other body: the
-                // actuator's non-support grip is tuning for a character that
-                // jumps, and a corpse does not.
+                // Out of service means gripping like any other body and
+                // conjuring nothing: the actuator's non-support grip and its
+                // allowance are tuning for a character that jumps, and a corpse
+                // does not. The allowance is the urgent half — nothing else
+                // stops driving it, because the sync only pushes commands for
+                // entities that still have an actuator, so a corpse would keep
+                // steering and turning itself out of a budget nobody was
+                // watching.
                 if actuators.remove(entity).is_some() {
                     if let Some(rb) = rigid_bodies.get(entity) {
-                        physics_res.world.set_body_non_support_grip(rb.0, 1.0);
+                        physics_res.world.clear_body_drive(rb.0);
                     }
                 }
             }

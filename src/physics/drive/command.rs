@@ -9,6 +9,87 @@
 
 use nalgebra::Vector3;
 
+use super::allowance::AllowanceCommand;
+
+/// A projection allowance: what a jump verb does to the velocity component
+/// along the support normal.
+///
+/// Jump shaping cannot be expressed as an impulse. "Cut the jump in half" is
+/// proportional to the velocity it acts on, so the same verb is a different
+/// impulse at every point on the arc — a fixed impulse would under-cut a fast
+/// jump and reverse a slow one. Hence a projection: a scale, then an optional
+/// clamp, applied in that order.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct NormalProjection {
+    /// Multiplier on a *rising* normal component. `1.0` is the identity.
+    ///
+    /// Only a component that points up the support normal is scaled. Cutting
+    /// a fall short is not a verb anyone has: the same multiplier applied to
+    /// downward motion would read as a parachute.
+    pub scale: f32,
+    /// When true, a rising normal component is zeroed after scaling — a
+    /// walk-off starts falling immediately rather than lifting off the ramp.
+    pub clamp_positive: bool,
+}
+
+impl Default for NormalProjection {
+    fn default() -> Self {
+        Self {
+            scale: 1.0,
+            clamp_positive: false,
+        }
+    }
+}
+
+impl NormalProjection {
+    /// True when this projection would leave the normal component untouched.
+    pub fn is_identity(&self) -> bool {
+        self.scale == 1.0 && !self.clamp_positive
+    }
+
+    /// Compose another scaling into this projection.
+    ///
+    /// Two verbs can fire on one frame — a buffered tap-jump applies the
+    /// cutoff up front and the release edge applies it again — and the
+    /// composition of two scalings is their product.
+    pub fn scale_by(&mut self, factor: f32) {
+        self.scale *= factor;
+    }
+
+    /// Apply this projection to one speed along the support normal.
+    pub fn applied_to(&self, along: f32) -> f32 {
+        if along <= 0.0 {
+            return along;
+        }
+        if self.clamp_positive {
+            return 0.0;
+        }
+        along * self.scale
+    }
+}
+
+/// The discrete half of one frame's command: the edge-triggered verbs that act
+/// along the support normal.
+///
+/// Consumed once, on the frame they are set. `DriveIntent::take_normal_verbs`
+/// takes them on gameplay's side of the seam, so the physics world never
+/// writes back into an ECS component.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct NormalVerbs {
+    /// A jump: the speed to establish along the support normal.
+    pub impulse: Option<f32>,
+    /// Jump shaping, applied after the jump.
+    pub projection: NormalProjection,
+}
+
+impl NormalVerbs {
+    /// True when these verbs would leave the body untouched — the ordinary
+    /// case, every frame nobody presses jump.
+    pub fn is_inert(&self) -> bool {
+        self.impulse.is_none() && self.projection.is_identity()
+    }
+}
+
 /// Where the equal-and-opposite half of a drive impulse lands.
 ///
 /// A declaration about the entity, not a branch in the engine: whoever spawns
@@ -52,6 +133,18 @@ pub struct DriveCommand {
     /// bounded by `max_accel` instead, with no contact to be honest or
     /// dishonest about.
     pub drive_gain: f32,
+    /// Radius of the contact patch this body's supports stand for.
+    ///
+    /// The engine cannot derive it: a `SolverContact` is a point, and a
+    /// manifold's several points already resist spin through their own
+    /// tangential rows. So the entity declares it, and the torsional row is
+    /// inert — `μ·N·0` — for everything that does not. See
+    /// `docs/TRACTION_DRIVE_DESIGN.md` §6.2.
+    pub patch_radius: f32,
+    /// The non-conservative half of the command: what this body may conjure
+    /// where no contact can deliver it, and what it is asking to spend that on
+    /// this frame.
+    pub allowance: AllowanceCommand,
 }
 
 impl DriveCommand {
@@ -69,6 +162,8 @@ impl DriveCommand {
             max_accel,
             angular_max_accel,
             drive_gain: 1.0,
+            patch_radius: 0.0,
+            allowance: AllowanceCommand::default(),
         }
     }
 
@@ -92,6 +187,49 @@ impl DriveCommand {
             max_accel,
             angular_max_accel,
             drive_gain: 1.0,
+            patch_radius: 0.0,
+            allowance: AllowanceCommand::default(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A projection acts on a rise only. Cutting a fall short is not a verb
+    /// anyone has, and the same multiplier applied downward reads as a
+    /// parachute.
+    #[test]
+    fn a_projection_shapes_a_rise_and_leaves_a_fall_alone() {
+        let cut = NormalProjection {
+            scale: 0.45,
+            clamp_positive: false,
+        };
+        assert_eq!(cut.applied_to(10.0), 4.5);
+        assert_eq!(cut.applied_to(-10.0), -10.0);
+    }
+
+    /// The walk-off verb: cancel the rise outright, whatever it was scaled by.
+    #[test]
+    fn a_clamp_cancels_a_rise_entirely() {
+        let walk_off = NormalProjection {
+            scale: 0.45,
+            clamp_positive: true,
+        };
+        assert_eq!(walk_off.applied_to(10.0), 0.0);
+        assert_eq!(walk_off.applied_to(-10.0), -10.0);
+        assert!(!walk_off.is_identity());
+    }
+
+    /// Two verbs on one frame compose as a product, which is what two
+    /// unguarded `v *= factor` call sites did.
+    #[test]
+    fn two_scalings_compose_as_a_product() {
+        let mut projection = NormalProjection::default();
+        assert!(projection.is_identity());
+        projection.scale_by(0.5);
+        projection.scale_by(0.5);
+        assert_eq!(projection.applied_to(8.0), 2.0);
     }
 }

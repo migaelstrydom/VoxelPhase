@@ -4,8 +4,10 @@
 //! ```text
 //!   SupportSets ──┐
 //!                 ├──► TractionPlanner ──► SolverContact::traction
-//!   bodies ───────┘                          ├── target  (relative velocity, B − A)
-//!                                            └── gain    (multiplier on μ·N)
+//!   bodies ───────┘                          ├── target       (relative velocity, B − A)
+//!                                            ├── target_spin  (relative spin about the normal)
+//!                                            ├── patch_radius (the third term of μ·N·r)
+//!                                            └── gain         (multiplier on μ·N)
 //! ```
 //!
 //! A drive is friction with a non-zero target. The planner is the whole of the
@@ -49,6 +51,14 @@ pub struct TractionRow {
     /// measures it: the velocity of body B at the contact point minus that of
     /// body A.
     pub target: Vector3<f32>,
+    /// Relative spin about the contact normal the torsional row drives
+    /// toward, in the same sense the solver measures it: B's angular velocity
+    /// minus A's, projected onto the normal.
+    pub target_spin: f32,
+    /// Radius of the contact patch this contact stands for, in metres. The
+    /// third term of the torsional bound `μ·N·r`, and zero unless a body
+    /// driving through this contact declared one — see §6.2.
+    pub patch_radius: f32,
     /// Multiplier on this contact's tangential budget for the bodies driving
     /// through it. `1.0` is the honest `μ·N`.
     pub gain: f32,
@@ -64,6 +74,8 @@ impl Default for TractionRow {
     fn default() -> Self {
         Self {
             target: Vector3::zeros(),
+            target_spin: 0.0,
+            patch_radius: 0.0,
             gain: 1.0,
             borrowed_impulse: 0.0,
             saturated: false,
@@ -75,7 +87,10 @@ impl TractionRow {
     /// True when this row is plain friction — no drive is aiming it and no
     /// body is spending more than the surface honestly permits.
     pub fn is_passive(&self) -> bool {
-        self.target == Vector3::zeros() && self.gain == 1.0
+        self.target == Vector3::zeros()
+            && self.target_spin == 0.0
+            && self.patch_radius == 0.0
+            && self.gain == 1.0
     }
 }
 
@@ -107,13 +122,17 @@ impl TractionPlanner {
                 // Relative velocity is measured B minus A, so B's command
                 // enters with its own sign and A's with the opposite one.
                 if let Some(drive) = driving_at(bodies, supports, body_b, site, contact.point) {
-                    row.target += drive.0;
-                    row.gain *= drive.1;
+                    row.target += drive.target;
+                    row.target_spin += drive.spin.dot(&contact.normal);
+                    row.patch_radius = row.patch_radius.max(drive.patch_radius);
+                    row.gain *= drive.gain;
                 }
                 if let Some(body_a) = body_a {
                     if let Some(drive) = driving_at(bodies, supports, body_a, site, contact.point) {
-                        row.target -= drive.0;
-                        row.gain *= drive.1;
+                        row.target -= drive.target;
+                        row.target_spin -= drive.spin.dot(&contact.normal);
+                        row.patch_radius = row.patch_radius.max(drive.patch_radius);
+                        row.gain *= drive.gain;
                     }
                 }
 
@@ -123,8 +142,20 @@ impl TractionPlanner {
     }
 }
 
-/// What one body asks of one contact: the velocity it wants at that point
-/// relative to its support, and the gain it draws the budget at.
+/// What one body asks of one contact.
+struct ContactDrive {
+    /// Velocity it wants at that point, relative to its support.
+    target: Vector3<f32>,
+    /// Spin it wants about its support, whose projection onto the contact
+    /// normal is what the torsional row drives toward.
+    spin: Vector3<f32>,
+    /// Radius of the patch it declared its supports stand for.
+    patch_radius: f32,
+    /// Gain it draws the tangential budget at.
+    gain: f32,
+}
+
+/// What one body asks of one contact.
 ///
 /// `None` unless the body carries a support-anchored command *and* this
 /// contact is one of the contacts holding it up.
@@ -134,17 +165,19 @@ fn driving_at(
     handle: RigidBodyHandle,
     site: ContactSite,
     point: nalgebra::Point3<f32>,
-) -> Option<(Vector3<f32>, f32)> {
+) -> Option<ContactDrive> {
     if !supports.get(handle).is_some_and(|set| set.holds(site)) {
         return None;
     }
     let body = bodies.get(handle.0)?;
     let drive = body.support_drive()?;
     let arm = point - body.position();
-    Some((
-        drive.linear_target + drive.angular_target.cross(&arm),
-        drive.gain,
-    ))
+    Some(ContactDrive {
+        target: drive.linear_target + drive.angular_target.cross(&arm),
+        spin: drive.angular_target,
+        patch_radius: drive.patch_radius,
+        gain: drive.gain,
+    })
 }
 
 #[cfg(test)]
@@ -176,6 +209,7 @@ mod tests {
             linear_target: linear,
             angular_target: Vector3::zeros(),
             gain: 1.0,
+            patch_radius: 0.0,
         }
     }
 
@@ -262,9 +296,8 @@ mod tests {
             .get_mut(walker.0)
             .unwrap()
             .set_support_drive(SupportDrive {
-                linear_target: Vector3::zeros(),
                 angular_target: Vector3::new(0.0, 2.0, 0.0),
-                gain: 1.0,
+                ..walking(Vector3::zeros())
             });
 
         let mut manifolds = vec![manifold(None, walker, &[Vector3::y(), Vector3::y()])];
@@ -286,9 +319,8 @@ mod tests {
             .get_mut(walker.0)
             .unwrap()
             .set_support_drive(SupportDrive {
-                linear_target: Vector3::new(5.0, 0.0, 0.0),
-                angular_target: Vector3::zeros(),
                 gain: 5.0,
+                ..walking(Vector3::new(5.0, 0.0, 0.0))
             });
 
         let mut manifolds = vec![manifold(None, walker, &[Vector3::y(), Vector3::x()])];

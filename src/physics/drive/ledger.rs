@@ -1,4 +1,4 @@
-//! What the drive gain actually spent, per body, per frame.
+//! What the design's two sanctioned cheats actually spent, per body.
 //!
 //! `Actuator::drive_gain` is a named cheat (`docs/TRACTION_DRIVE_DESIGN.md`
 //! §11): above `1.0` a body pushes harder through a contact than that
@@ -15,6 +15,13 @@
 //! Both quantities are already in hand where the bound is computed, so this
 //! costs the solve nothing: the rows record, the ledger sums, and nothing
 //! reads any of it back into the simulation.
+//!
+//! [`AllowanceLedger`] is the same obligation discharged for the other cheat.
+//! An allowance conjures momentum outright rather than borrowing against a
+//! contact, so what it spends is counted as it is spent, and the two kinds of
+//! jump are counted separately: decision D2a's whole cost is that the same
+//! player action is conservative or not depending on a one-frame timing, and
+//! the only way to know how often that happens is to count it.
 
 use rustc_hash::FxHashMap;
 
@@ -132,6 +139,82 @@ impl TractionLedger {
     /// What one body has spent its gain on, if it has ever used one.
     pub fn usage(&self, handle: RigidBodyHandle) -> Option<&TractionUsage> {
         self.entries.get(&handle)
+    }
+}
+
+/// One body's use of its allowance.
+///
+/// Impulses accumulate for the life of the world rather than per frame: an
+/// allowance's interesting quantity is how much momentum it has conjured in
+/// total, and the counts beside it say what for.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct AllowanceUsage {
+    /// Linear impulse conjured to steer the body through the air, in N·s.
+    pub steer_impulse: f32,
+    /// Linear impulse conjured by jumps the Support Set could not deliver,
+    /// in N·s.
+    pub jump_impulse: f32,
+    /// Linear impulse removed from the body by jump shaping, in N·s.
+    pub shaping_impulse: f32,
+    /// Angular impulse conjured about the support axis, in N·m·s.
+    pub yaw_impulse: f32,
+    /// Jumps delivered through the Support Set as an impulse exchange.
+    ///
+    /// Not an allowance at all — counted here because it is the denominator
+    /// the next field only means anything against.
+    pub supported_jumps: u32,
+    /// Jumps conjured out of the budget instead, because nothing was holding
+    /// the body up when it asked (D2a).
+    pub unsupported_jumps: u32,
+}
+
+impl AllowanceUsage {
+    /// Fraction of this body's jumps that were conjured rather than pushed
+    /// off something, in `0..=1`.
+    ///
+    /// The number D2a asks to be watched: staleness makes it small and
+    /// mundane, and a structural sensor disagreement would make it large.
+    pub fn conjured_jump_share(&self) -> f32 {
+        let total = self.supported_jumps + self.unsupported_jumps;
+        if total == 0 {
+            return 0.0;
+        }
+        self.unsupported_jumps as f32 / total as f32
+    }
+}
+
+/// Per-body allowance accounting.
+#[derive(Clone, Debug, Default)]
+pub struct AllowanceLedger {
+    entries: FxHashMap<RigidBodyHandle, AllowanceUsage>,
+}
+
+impl AllowanceLedger {
+    pub fn record_steer(&mut self, body: RigidBodyHandle, impulse: f32) {
+        self.entries.entry(body).or_default().steer_impulse += impulse;
+    }
+
+    pub fn record_shaping(&mut self, body: RigidBodyHandle, impulse: f32) {
+        self.entries.entry(body).or_default().shaping_impulse += impulse;
+    }
+
+    pub fn record_yaw(&mut self, body: RigidBodyHandle, impulse: f32) {
+        self.entries.entry(body).or_default().yaw_impulse += impulse;
+    }
+
+    pub fn record_supported_jump(&mut self, body: RigidBodyHandle) {
+        self.entries.entry(body).or_default().supported_jumps += 1;
+    }
+
+    pub fn record_unsupported_jump(&mut self, body: RigidBodyHandle, impulse: f32) {
+        let usage = self.entries.entry(body).or_default();
+        usage.unsupported_jumps += 1;
+        usage.jump_impulse += impulse;
+    }
+
+    /// What one body has conjured, if it has ever conjured anything.
+    pub fn usage(&self, body: RigidBodyHandle) -> Option<&AllowanceUsage> {
+        self.entries.get(&body)
     }
 }
 

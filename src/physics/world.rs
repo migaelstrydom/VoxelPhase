@@ -14,8 +14,9 @@ use super::constraint::{ConstraintHandle, ConstraintKind};
 use super::contact_event::{ContactEvent, ContactSource};
 use super::debug::{PhysicsDebugConfig, PhysicsDebugger};
 use super::drive::{
-    stamp_non_support_grip, DriveCommand, ReactionAnchor, SupportConfig, SupportResolver,
-    SupportSets, TractionLedger, TractionPlanner, TractionUsage,
+    apply_allowances, stamp_non_support_grip, AllowanceCommand, AllowanceLedger, AllowanceUsage,
+    DriveCommand, ReactionAnchor, SupportConfig, SupportResolver, SupportSets, TractionLedger,
+    TractionPlanner, TractionUsage,
 };
 use super::force_provider::{ForceContext, ForceOutput, SubstepForceProvider};
 use super::grounding::{GroundedBodies, GroundingDetector};
@@ -176,6 +177,8 @@ pub struct PhysicsWorld {
     frame_supports: SupportSets,
     /// What the drive gain spent, per body. Instrumentation only.
     traction_ledger: TractionLedger,
+    /// What each body's allowance has conjured, per `physics::drive::allowance`.
+    allowance_ledger: AllowanceLedger,
     /// Projects Support Sets to the grounded set, carrying sleeping bodies.
     grounding_detector: GroundingDetector,
     /// User-defined constraints (persistent across frames).
@@ -203,6 +206,9 @@ pub struct PhysicsWorld {
     /// `update_contacts()`. Sizes the frame-level CCD gate and the CCD query
     /// cache's lookahead.
     substeps_this_frame: u32,
+    /// Substeps run since the frame's contacts were updated, so the
+    /// edge-triggered half of a drive command fires exactly once per frame.
+    substeps_taken: u32,
     /// SAT axis cache for OBB-OBB dynamic pair early-out.
     sat_cache_map: SatCacheMap,
     /// GJK warm-start cache for wildcard dynamic pairs.
@@ -264,6 +270,7 @@ impl PhysicsWorld {
             traction_planner: TractionPlanner,
             frame_supports: SupportSets::default(),
             traction_ledger: TractionLedger::default(),
+            allowance_ledger: AllowanceLedger::default(),
             grounding_detector,
             constraints: Arena::new(),
             solver,
@@ -274,6 +281,7 @@ impl PhysicsWorld {
             cached_all_manifolds: Vec::new(),
             narrowphase_ownership: NarrowphaseOwnership::new(),
             substeps_this_frame: 1,
+            substeps_taken: 0,
             sat_cache_map: SatCacheMap::new(),
             gjk_cache_map: GjkCacheMap::new(),
             narrowphase_work_buffer: NarrowphaseWorkBuffer::new(),
@@ -563,12 +571,35 @@ impl PhysicsWorld {
                     linear_target: command.linear_target,
                     angular_target: command.angular_target,
                     gain: command.drive_gain,
+                    patch_radius: command.patch_radius,
                 });
             }
             ReactionAnchor::Medium => self.set_medium_drive(handle, command),
         }
 
+        if let Some(body) = self.bodies.get_mut(handle.0) {
+            body.set_allowance_command(command.allowance);
+        }
+
         self.sleep_manager.wake_body(handle);
+        true
+    }
+
+    /// Take a body out of service: no drive, no allowance, honest grip.
+    ///
+    /// The counterpart to `set_body_drive`, for when the thing that was
+    /// commanding a body stops existing. Without it a corpse keeps whatever it
+    /// was last asked for — a stale target its contacts still answer, and,
+    /// worse, an allowance that has no contact to answer to at all and would
+    /// go on steering and turning the body for as long as it lay there.
+    pub fn clear_body_drive(&mut self, handle: RigidBodyHandle) -> bool {
+        self.retire_medium_drive(handle);
+        let Some(body) = self.bodies.get_mut(handle.0) else {
+            return false;
+        };
+        body.take_drive();
+        body.set_allowance_command(AllowanceCommand::default());
+        body.set_non_support_grip(1.0);
         true
     }
 
@@ -836,6 +867,7 @@ impl PhysicsWorld {
             &mut self.cached_active_manifolds,
         );
         self.traction_ledger.open_frame();
+        self.substeps_taken = 0;
 
         self.solver.prepare(&self.bodies, &self.constraints, dt);
 
@@ -850,11 +882,13 @@ impl PhysicsWorld {
     ///
     /// Call one or more times after `update_contacts()`. Each call performs:
     /// 1. Integrate forces (gravity) into velocities
-    /// 2. Solve velocity constraints (warm-start + sequential impulses)
-    /// 3. Write solved impulses back to manifold cache
-    /// 4. Integrate positions
-    /// 5. CCD pass (fast bodies only)
-    /// 6. Update sleep states
+    /// 2. Spend the frame's allowances, where a body has authority no contact
+    ///    could bound
+    /// 3. Solve velocity constraints (warm-start + sequential impulses)
+    /// 4. Write solved impulses back to manifold cache
+    /// 5. Integrate positions
+    /// 6. CCD pass (fast bodies only)
+    /// 7. Update sleep states
     pub fn substep(
         &mut self,
         dt: f32,
@@ -879,6 +913,20 @@ impl PhysicsWorld {
             self.config.gravity,
             sleeping_snapshot.as_ref(),
         );
+
+        // Non-conservative authority, spent before the solve so that whatever
+        // it conjures is still answerable to every contact and constraint. The
+        // edge-triggered verbs fire on the frame's first substep only: a jump
+        // repeated per substep would be as strong as the frame rate is slow.
+        apply_allowances(
+            &mut self.bodies,
+            &self.frame_supports,
+            self.config.gravity_direction().map(|down| -down),
+            dt,
+            self.substeps_taken == 0,
+            &mut self.allowance_ledger,
+        );
+        self.substeps_taken += 1;
 
         // Solve velocity constraints + position correction
         self.solver.solve(
@@ -1044,6 +1092,14 @@ impl PhysicsWorld {
         let sleeping = self.sleep_manager.sleeping_snapshot();
         self.grounding_detector
             .grounded_bodies(&supports, &sleeping)
+    }
+
+    /// What a body's allowance has conjured, since the world was created.
+    ///
+    /// `None` for every body that has never spent one — which is every body
+    /// without an actuator that declared an allowance.
+    pub fn allowance_usage(&self, handle: RigidBodyHandle) -> Option<&AllowanceUsage> {
+        self.allowance_ledger.usage(handle)
     }
 
     /// What a body's drive gain spent, over the most recent frame.

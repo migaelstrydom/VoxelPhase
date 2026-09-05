@@ -129,19 +129,23 @@ pub struct LocomotionOutcome {
 }
 
 /// Horizontal movement rule for the current locomotion state. Every state
-/// collapses to "steer toward a planar target velocity at some accel, and
-/// optionally cancel upward vy." Set `accel = f32::INFINITY` to snap.
+/// collapses to "ask for a planar target velocity, say whether the body may
+/// be steered toward it while nothing holds it up, and optionally cancel
+/// upward vy."
 pub struct MovementRule {
     /// Planar target velocity (y unused; gravity owns vertical).
     pub target: Vector3<f32>,
-    /// Units/s² toward the target. Infinity = snap instantly (committed lock).
+    /// Rate the body may be steered toward `target` at while unsupported, in
+    /// m/s². Spent against the actuator's allowance and no further.
     ///
     /// Nothing reads it while a character is supported: the traction rows ramp
     /// the body toward the target at the contact's own `μ·N`, so how quickly a
     /// walk starts is a property of the surface rather than a number the
-    /// controller counts out. It is kept for the airborne authority, which has
-    /// no contact to be bounded by and must state its own rate.
-    pub accel: f32,
+    /// controller counts out. `None` is a state that wants no air authority at
+    /// all — a committed long jump, whose arc is ballistic and stays that way
+    /// because nothing corrects it, which is what snapping to the committed
+    /// velocity every frame used to achieve the long way round.
+    pub steer_accel: Option<f32>,
     /// True for the CoyoteTime walk-off state: cancel positive vy so the
     /// character doesn't suddenly rise off a ramp at the edge.
     pub clamp_up: bool,
@@ -278,48 +282,50 @@ impl LocomotionState {
 
     /// Compute this tick's movement rule. `ground_speed` is the gait-resolved
     /// speed; `air_speed` is the latched takeoff cap. Planar target is
-    /// `move_dir * speed` for steered states; for locked steering it's the
-    /// committed velocity and `accel` is infinity (snap).
+    /// `move_dir * speed` for steered states; for locked steering it is the
+    /// committed velocity, with no authority to steer it anywhere else.
     pub fn movement_rule(
         &self,
         move_dir: Vector3<f32>,
         ground_speed: f32,
-        ground_accel: f32,
         air_speed: f32,
         air_accel: f32,
     ) -> MovementRule {
-        // Common helper: steered-toward-input rule with given speed/accel.
-        let steered = |speed: f32, accel: f32| MovementRule {
+        // Common helper: steered-toward-input rule at the given speed. The
+        // rate is the airborne one whatever the state, because it is only ever
+        // spent while nothing is holding the character up.
+        let steered = |speed: f32| MovementRule {
             target: Vector3::new(move_dir.x * speed, 0.0, move_dir.z * speed),
-            accel,
+            steer_accel: Some(air_accel),
             clamp_up: false,
         };
-        // Common helper: locked (snap) rule from a committed planar velocity.
+        // Common helper: locked rule from a committed planar velocity. It asks
+        // for no steering at all, which is what keeps the arc committed.
         let locked = |velocity: Vector3<f32>| MovementRule {
             target: velocity,
-            accel: f32::INFINITY,
+            steer_accel: None,
             clamp_up: false,
         };
 
         match self {
-            LocomotionState::Grounded => steered(ground_speed, ground_accel),
+            LocomotionState::Grounded => steered(ground_speed),
             LocomotionState::Launching { steering, .. } => match steering {
                 AirSteering::Locked { velocity, .. } => locked(*velocity),
-                AirSteering::Responsive => steered(ground_speed, ground_accel),
+                AirSteering::Responsive => steered(ground_speed),
             },
             // Coyote time bridges one-frame ground-contact losses (terrain
-            // seams) as well as real ledge walk-offs, so it must keep
-            // ground handling. Steering with the air model here injects a
-            // velocity perturbation at the seam-crossing rate — strong
-            // enough to entrain gait timing. `clamp_up` still cancels any
-            // upward velocity so a walk-off starts falling immediately.
+            // seams) as well as real ledge walk-offs, so it keeps the ground
+            // speed: asking for the airborne cap here injects a velocity
+            // perturbation at the seam-crossing rate, strong enough to entrain
+            // gait timing. `clamp_up` cancels any upward velocity so a walk-off
+            // starts falling immediately.
             LocomotionState::CoyoteTime(_) => MovementRule {
                 clamp_up: true,
-                ..steered(ground_speed, ground_accel)
+                ..steered(ground_speed)
             },
             LocomotionState::Airborne { steering, .. } => match steering {
                 AirSteering::Locked { velocity, .. } => locked(*velocity),
-                AirSteering::Responsive => steered(air_speed, air_accel),
+                AirSteering::Responsive => steered(air_speed),
             },
         }
     }
@@ -552,17 +558,17 @@ mod tests {
         }
     }
 
-    /// While locked, the rule snaps (infinite accel) to the committed velocity
-    /// and ignores input — that is the mechanism by which a stuck launch reads
-    /// as "keeps moving in a fixed direction, keys do nothing".
+    /// While locked, the rule asks for no steering authority at all and keeps
+    /// the committed velocity — that is the mechanism by which a stuck launch
+    /// reads as "keeps moving in a fixed direction, keys do nothing".
     #[test]
     fn a_locked_launch_ignores_the_movement_input() {
         let config = LocomotionConfig::player();
         let state = long_jump(&config);
 
-        let rule = state.movement_rule(Vector3::new(-1.0, 0.0, 0.0), 5.0, 40.0, 5.0, 8.0);
+        let rule = state.movement_rule(Vector3::new(-1.0, 0.0, 0.0), 5.0, 5.0, 8.0);
 
-        assert!(rule.accel.is_infinite());
+        assert_eq!(rule.steer_accel, None);
         assert!(rule.target.x > 0.0, "target follows takeoff, not input");
     }
 

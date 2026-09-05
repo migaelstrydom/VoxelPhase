@@ -334,6 +334,7 @@ pub(crate) mod tests {
                     warm_friction_impulse_ws: Vector3::zeros(),
                     accumulated_normal_impulse: 0.0,
                     accumulated_friction_impulse_ws: Vector3::zeros(),
+                    accumulated_torsional_impulse: 0.0,
                     tangential_scale: 1.0,
                     traction: TractionRow::default(),
                 })

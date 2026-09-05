@@ -7,7 +7,7 @@ use crate::components::{
     Orientation, Position, Renderable, RigidBodyComponent, Rotation, Velocity,
 };
 use crate::damage::{Health, Ragdoll};
-use crate::drive::{Actuator, BodyMotion, DriveIntent};
+use crate::drive::{Actuator, Allowance, BodyMotion, DriveIntent};
 use crate::physics::{ColliderDesc, ConstraintKind, FrictionModel, RigidBodyDesc};
 use crate::player::Player;
 use crate::sensing::{ContactCandidates, SensorSet};
@@ -18,6 +18,13 @@ pub fn spawn_player(world: &mut World, initial_pos: nalgebra::Point3<f32>) -> En
     let locomotion = LocomotionConfig::player();
     let (collider_half_height, collider_radius) =
         (locomotion.collider_half_height, locomotion.collider_radius);
+    let (air_steer_speed, jump_speed) = (locomotion.air_steer_speed, locomotion.jump_speed);
+    // The yaw allowance's ceiling, in rad/s². A capsule's supports are a point
+    // and a torsional row bounded by `μ·N·r` therefore has nothing to bear on
+    // (§6.2), so this is the whole of the player's angular authority. It is the
+    // acceleration the old reactionless yaw drive was bounded by, so a turn
+    // costs what it always did.
+    const TURN_AUTHORITY: f32 = 500.0;
 
     let rig_config = CharacterRigConfig::default();
     // let body_radius = rig_config.body_radius;
@@ -89,10 +96,19 @@ pub fn spawn_player(world: &mut World, initial_pos: nalgebra::Point3<f32>) -> En
         // a cartoon: an honest 0.8 against gravity caps acceleration at
         // 7.85 m/s², which was measured in the old engine and is far too slow
         // to play. See `Actuator::drive_gain`.
+        // The airborne half of the same character. Nothing is holding the
+        // player up mid-jump, so every scrap of air steering, jump shaping and
+        // turning is momentum the world did not have — granted here, by name,
+        // with a ceiling on each. See `Actuator::allowance`.
         .with(
             Actuator::character()
                 .with_non_support_grip(0.0)
-                .with_drive_gain(5.0),
+                .with_drive_gain(5.0)
+                .with_allowance(Allowance::character(
+                    air_steer_speed,
+                    TURN_AUTHORITY,
+                    jump_speed,
+                )),
         )
         .with(DriveIntent::default())
         .with(BodyMotion::default())

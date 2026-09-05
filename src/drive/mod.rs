@@ -8,6 +8,6 @@
 pub mod components;
 pub mod translate;
 
-pub use crate::physics::ReactionAnchor;
-pub use components::{Actuator, BodyMotion, DriveIntent, NormalProjection, NormalVerbs};
+pub use crate::physics::{Allowance, NormalProjection, NormalVerbs, ReactionAnchor};
+pub use components::{Actuator, BodyMotion, DriveIntent};
 pub use translate::resolve_drive;

@@ -32,8 +32,8 @@ use crate::debug::DebugLines;
 use crate::physics::constraint::ConstraintKind;
 use crate::physics::world::PhysicsConfig;
 use crate::physics::{
-    ColliderDesc, DriveCommand, FrictionModel, PhysicsWorld, RigidBodyDesc, RigidBodyHandle,
-    StaticGeometry,
+    Allowance, ColliderDesc, DriveCommand, FrictionModel, NormalVerbs, PhysicsWorld, RigidBodyDesc,
+    RigidBodyHandle, StaticGeometry,
 };
 use crate::platform::MovingPlatform;
 
@@ -54,6 +54,11 @@ const MOTOR_MAX_ACCEL: f32 = 40.0;
 /// around and the reason that value is a specification rather than an
 /// accident.
 const WALKER_DRIVE_GAIN: f32 = 5.0;
+
+/// The player's yaw allowance, in rad/s² (`spawners/player.rs`). A capsule's
+/// supports are a point, so no torsional row can turn it (§6.2) and this is
+/// the whole of its angular authority.
+const YAW_AUTHORITY: f32 = 500.0;
 
 /// A world with sleeping disabled — a sleeping body stops answering the drive,
 /// which turns every one of these measurements into noise.
@@ -94,6 +99,9 @@ struct Walker {
     config: LocomotionConfig,
     /// Unit walk direction in the XZ plane; zero means "stand still".
     intent: Vector3<f32>,
+    /// The airborne authority this character was granted, or `None` for one
+    /// that was granted none.
+    allowance: Option<Allowance>,
 }
 
 impl Walker {
@@ -132,15 +140,29 @@ impl Walker {
             max_impulse: f32::INFINITY,
         });
 
+        let allowance = Some(Allowance::character(
+            config.air_steer_speed,
+            YAW_AUTHORITY,
+            config.jump_speed,
+        ));
+
         Self {
             body,
             config,
             intent: Vector3::zeros(),
+            allowance,
         }
     }
 
     fn walking(mut self, direction: Vector3<f32>) -> Self {
         self.intent = direction.normalize();
+        self
+    }
+
+    /// The same character with no non-conservative authority at all — a body
+    /// whose actuator was never granted an allowance.
+    fn ungranted(mut self) -> Self {
+        self.allowance = None;
         self
     }
 
@@ -150,6 +172,7 @@ impl Walker {
             body: self.body,
             config: self.config.clone(),
             intent: Vector3::zeros(),
+            allowance: self.allowance,
         }
     }
 
@@ -159,12 +182,26 @@ impl Walker {
 
     /// `CharacterControlSystem` then `PhysicsSyncSystem`, once per frame.
     fn drive(&self, world: &mut PhysicsWorld) {
+        self.drive_with(world, NormalVerbs::default());
+    }
+
+    /// The same, on a frame where a discrete verb fired.
+    fn drive_with(&self, world: &mut PhysicsWorld, verbs: NormalVerbs) {
         let target = self.intent * self.config.walk_speed;
-        let _ = world.set_body_drive(
-            self.body,
-            &DriveCommand::support(target, Vector3::zeros(), 500.0, 500.0)
-                .with_drive_gain(WALKER_DRIVE_GAIN),
-        );
+        let mut command = DriveCommand::support(target, Vector3::zeros(), 500.0, 500.0)
+            .with_drive_gain(WALKER_DRIVE_GAIN);
+        command.allowance.budget = self.allowance;
+        command.allowance.verbs = verbs;
+        command.allowance.steer_accel = Some(self.config.air_steer_speed);
+        let _ = world.set_body_drive(self.body, &command);
+    }
+
+    /// The jump verb, as `CharacterControlSystem` issues it.
+    fn jump(&self) -> NormalVerbs {
+        NormalVerbs {
+            impulse: Some(self.config.jump_speed),
+            ..Default::default()
+        }
     }
 }
 
@@ -930,4 +967,431 @@ fn a_slope_a_character_can_walk_up_is_one_it_can_stand_on() {
         "a character should climb a {slope_degrees:.0}° slope: advanced {:.4} m",
         climbed_z - start_z
     );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 10-14. The airborne half: jumping, jump shaping and air steering
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// The bench had no jump verb until Stage 6, which is why several of the
+// design's claims about jumping went untested for five stages. These five
+// scenarios are that gap closed. All of them are specifications.
+
+/// Run one jump and report what it did: the peak height above the takeoff
+/// point, and the velocity on the frame the verb fired.
+struct JumpArc {
+    peak_rise: f32,
+    takeoff_velocity: Vector3<f32>,
+}
+
+/// Settle a walker on `geometry`, jump, and follow the arc to its apex.
+fn take_off(
+    world: &mut PhysicsWorld,
+    geometry: &dyn StaticGeometry,
+    walker: &Walker,
+    verbs: NormalVerbs,
+) -> JumpArc {
+    let mut debug = DebugLines::default();
+    for _ in 0..60 {
+        walker.drive(world);
+        advance(world, geometry, &mut debug);
+    }
+
+    let start = position_of(world, walker.body);
+    walker.drive_with(world, verbs);
+    advance(world, geometry, &mut debug);
+    let takeoff_velocity = linear_velocity_of(world, walker.body);
+
+    let mut peak_rise = position_of(world, walker.body).y - start.y;
+    for _ in 0..120 {
+        walker.drive(world);
+        advance(world, geometry, &mut debug);
+        peak_rise = peak_rise.max(position_of(world, walker.body).y - start.y);
+    }
+
+    JumpArc {
+        peak_rise,
+        takeoff_velocity,
+    }
+}
+
+/// **Specification.** A jump from flat ground leaves at the speed it asked for
+/// and reaches the height that speed implies.
+///
+/// The verb is a *speed along the support normal*, not an impulse added to
+/// whatever the body was doing, so the same press is the same jump whether the
+/// character was walking, standing or settling onto the floor.
+#[test]
+fn a_jump_from_flat_ground_reaches_the_height_its_speed_implies() {
+    let geometry = FlatQuadGeometry::new(64.0);
+    let mut world = bench_world();
+    let walker = Walker::spawn(&mut world, Vector3::new(0.0, 0.02, 0.0));
+    let jump_speed = walker.config.jump_speed;
+
+    let arc = take_off(&mut world, &geometry, &walker, walker.jump());
+    let gravity = -world.config().gravity.y;
+    let ballistic_rise = jump_speed * jump_speed / (2.0 * gravity);
+
+    eprintln!(
+        "flat jump: takeoff vy={:.4} (asked {jump_speed:.1}) peak rise={:.4} m \
+         (ballistic {ballistic_rise:.4})",
+        arc.takeoff_velocity.y, arc.peak_rise
+    );
+
+    assert!(
+        (arc.takeoff_velocity.y - jump_speed).abs() < 0.5,
+        "a jump should leave at the speed it asked for: {:.4} vs {jump_speed:.1}",
+        arc.takeoff_velocity.y
+    );
+    assert!(
+        (arc.peak_rise - ballistic_rise).abs() < 0.2,
+        "and rise as ballistics say it must: {:.4} vs {ballistic_rise:.4}",
+        arc.peak_rise
+    );
+}
+
+/// **Specification.** Jumping off a deck pushes the deck down (R1).
+///
+/// The whole content of §6.3: a jump is delivered through the Support Set as
+/// an impulse exchange at the contact points, so the reaction lands on whatever
+/// was holding the jumper up, at the mass ratio and nowhere else. The deck is
+/// unpowered and weightless-in-gravity on purpose — a motorised lift absorbs
+/// the whole kick inside the frame it arrives, which says something about the
+/// motor rather than about the jump.
+#[test]
+fn a_jump_off_a_deck_pushes_the_deck_down() {
+    let kick = |jumping: bool| {
+        let geometry = FlatQuadGeometry::new(64.0);
+        let mut world = bench_world();
+        let mut debug = DebugLines::default();
+        let deck = Platform::spawn_body(&mut world, Vector3::new(0.0, 6.0, 0.0), 0.0);
+        let deck_y = position_of(&world, deck).y + PLATFORM_HALF_EXTENTS.y;
+        let walker = Walker::spawn(&mut world, Vector3::new(0.0, deck_y + 0.02, 0.0));
+
+        for _ in 0..60 {
+            walker.drive(&mut world);
+            advance(&mut world, &geometry, &mut debug);
+        }
+
+        let before = linear_velocity_of(&world, deck).y;
+        if jumping {
+            walker.drive_with(&mut world, walker.jump());
+        } else {
+            walker.drive(&mut world);
+        }
+        advance(&mut world, &geometry, &mut debug);
+        let after = linear_velocity_of(&world, deck).y;
+        let ratio = world.body(walker.body).unwrap().mass() / world.body(deck).unwrap().mass();
+        (before - after, ratio)
+    };
+
+    let (control, _) = kick(false);
+    let (jumped, mass_ratio) = kick(true);
+    let predicted = 7.0 * mass_ratio;
+    eprintln!(
+        "jump off a deck: deck slowed {jumped:.4} m/s, control {control:.4}, \
+         mass ratio predicts {predicted:.4}"
+    );
+
+    assert!(
+        (jumped - control - predicted).abs() < 0.1 * predicted,
+        "the deck should take the jump's reaction at the mass ratio: \
+         {:.4} m/s against {predicted:.4}",
+        jumped - control
+    );
+}
+
+/// **Specification.** A jump leaves along the support normal, so a jump from a
+/// slope gains a direction it did not have (§10.2).
+///
+/// Recorded as a specification because it is the mechanism working, not an
+/// accident: the risk §10.2 names is a feel question about whether the game
+/// wants it, and the answer to that is a play-test, not this assertion.
+#[test]
+fn a_jump_from_a_slope_leaves_along_the_slope() {
+    let slope_degrees: f32 = 30.0;
+    let run = 10.0;
+    let tangent = slope_degrees.to_radians().tan();
+    let geometry = RampGeometry::new(8.0, run, run * tangent);
+    let start_z = 5.0;
+
+    let mut world = bench_world();
+    let walker = Walker::spawn(
+        &mut world,
+        Vector3::new(0.0, start_z * tangent + 0.02, start_z),
+    );
+    let jump_speed = walker.config.jump_speed;
+    let arc = take_off(&mut world, &geometry, &walker, walker.jump());
+
+    let radians = slope_degrees.to_radians();
+    let expected_lateral = jump_speed * radians.sin();
+    let gravity = -world.config().gravity.y;
+    let flat_rise = jump_speed * jump_speed / (2.0 * gravity);
+
+    eprintln!(
+        "slope jump at {slope_degrees:.0}°: takeoff v=({:.4}, {:.4}, {:.4}) \
+         lateral expected {expected_lateral:.4}, peak rise {:.4} m (flat {flat_rise:.4})",
+        arc.takeoff_velocity.x, arc.takeoff_velocity.y, arc.takeoff_velocity.z, arc.peak_rise
+    );
+
+    // The ramp climbs toward +Z, so its normal — and the jump — leans toward −Z.
+    assert!(
+        (-arc.takeoff_velocity.z - expected_lateral).abs() < 0.6,
+        "a slope jump should leave downhill at {expected_lateral:.4} m/s: got {:.4}",
+        -arc.takeoff_velocity.z
+    );
+    assert!(
+        arc.peak_rise < flat_rise * radians.cos().powi(2) + 0.2,
+        "and lose the height that costs: rose {:.4} m against {flat_rise:.4} on the flat",
+        arc.peak_rise
+    );
+}
+
+/// **Specification.** A jump the Support Set cannot deliver is conjured out of
+/// the allowance instead of being swallowed — decision D2a — and a body with
+/// no allowance gets nothing.
+///
+/// This is the coyote jump, the stale-grounding jump and every other
+/// unsupported one, under the single rule D2a states them as. The ledger is
+/// part of the assertion: R8's requirement is that the cheat be counted, and a
+/// silently conservative-or-not jump is exactly what D2a asks to be watched.
+#[test]
+fn a_jump_with_no_support_is_conjured_out_of_the_allowance() {
+    let airborne = |granted: bool| {
+        let geometry = FlatQuadGeometry::new(64.0);
+        let mut world = bench_world();
+        let mut debug = DebugLines::default();
+        let mut walker = Walker::spawn(&mut world, Vector3::new(0.0, 20.0, 0.0));
+        if !granted {
+            walker = walker.ungranted();
+        }
+
+        // Fall clear of the floor for a quarter of a second, then ask.
+        for _ in 0..15 {
+            walker.drive(&mut world);
+            advance(&mut world, &geometry, &mut debug);
+        }
+        let before = linear_velocity_of(&world, walker.body).y;
+        walker.drive_with(&mut world, walker.jump());
+        advance(&mut world, &geometry, &mut debug);
+        let after = linear_velocity_of(&world, walker.body).y;
+        let usage = world
+            .allowance_usage(walker.body)
+            .map(|usage| (usage.unsupported_jumps, usage.supported_jumps))
+            .unwrap_or((0, 0));
+        (before, after, usage)
+    };
+
+    let (fell, granted, granted_jumps) = airborne(true);
+    let (_, ungranted, ungranted_jumps) = airborne(false);
+    eprintln!(
+        "unsupported jump: falling at {fell:.4} m/s, granted leaves at {granted:.4}, \
+         ungranted at {ungranted:.4}; ledger {granted_jumps:?} vs {ungranted_jumps:?}"
+    );
+
+    assert!(
+        granted > 6.5,
+        "an allowance should deliver the jump the contacts could not: {granted:.4} m/s"
+    );
+    assert_eq!(
+        granted_jumps,
+        (1, 0),
+        "and it should be counted as conjured, not pushed off something"
+    );
+    assert!(
+        ungranted < fell,
+        "a body with no allowance keeps falling: {ungranted:.4} against {fell:.4} m/s"
+    );
+    assert_eq!(ungranted_jumps, (0, 0), "and spends nothing");
+}
+
+/// **Specification.** Air steering is authority the allowance grants and
+/// bounds: an airborne character accelerates across the fall at its declared
+/// rate and stops at the speed it asked for.
+#[test]
+fn air_steering_ramps_at_its_budget_and_no_further() {
+    let geometry = FlatQuadGeometry::new(64.0);
+    let mut world = bench_world();
+    let mut debug = DebugLines::default();
+    let walker = Walker::spawn(&mut world, Vector3::new(0.0, 40.0, 0.0))
+        .walking(Vector3::new(1.0, 0.0, 0.0));
+    let rate = walker.config.air_steer_speed;
+    let walk_speed = walker.config.walk_speed;
+
+    let mut after_half_a_second = 0.0;
+    for frame in 0..120 {
+        walker.drive(&mut world);
+        advance(&mut world, &geometry, &mut debug);
+        if frame == 29 {
+            after_half_a_second = linear_velocity_of(&world, walker.body).x;
+        }
+    }
+    let settled = linear_velocity_of(&world, walker.body).x;
+
+    eprintln!(
+        "air steering: {after_half_a_second:.4} m/s after 0.5 s at {rate:.1} m/s², \
+         settled at {settled:.4} against a {walk_speed:.1} m/s target"
+    );
+
+    assert!(
+        (after_half_a_second - rate * 0.5).abs() < 0.3,
+        "air steering should ramp at its declared rate: {after_half_a_second:.4} m/s \
+         against {:.4}",
+        rate * 0.5
+    );
+    assert!(
+        (settled - walk_speed).abs() < 0.05,
+        "and stop at the speed it was asked for: {settled:.4} against {walk_speed:.1}"
+    );
+}
+
+/// **Specification.** A body that declares a contact patch turns on it, and one
+/// that does not cannot (R10, §6.2).
+///
+/// The torsional row is the angular projection of the same mechanism as the
+/// tangential one, and this is the whole of what it is good for: a body whose
+/// supports really are wider than the single point standing for them. Note
+/// what it is *not* needed for — a manifold with several contacts already
+/// yaws under its own tangential rows, at their own lever arms, which is why
+/// this scenario uses a sphere. A capsule declares nothing, has one contact,
+/// and turns with its allowance instead; that is every character in the game.
+#[test]
+fn a_declared_contact_patch_is_what_a_torsional_row_turns_on() {
+    let turned = |patch_radius: f32| {
+        let geometry = FlatQuadGeometry::new(64.0);
+        let mut world = bench_world();
+        let mut debug = DebugLines::default();
+
+        // A sphere, so the contact really is a point: `ω × r` at a contact
+        // directly below the centre has no component about the vertical, so
+        // the tangential rows supply no yaw at all and whatever turns this
+        // body came from the torsional one.
+        let body = world.create_body(
+            RigidBodyDesc::dynamic()
+                .position(Point3::new(0.0, 0.501, 0.0))
+                .gravity_scale(1.0)
+                .linear_damping(0.0)
+                .angular_damping(0.0),
+        );
+        let _ = world.attach_collider(
+            body,
+            ColliderDesc::sphere(0.5)
+                .density(200.0)
+                .restitution(0.0)
+                .friction(0.8),
+        );
+
+        for _ in 0..120 {
+            let mut command =
+                DriveCommand::support(Vector3::zeros(), Vector3::new(0.0, 2.0, 0.0), 500.0, 500.0);
+            command.patch_radius = patch_radius;
+            let _ = world.set_body_drive(body, &command);
+            advance(&mut world, &geometry, &mut debug);
+        }
+        world.body(body).unwrap().angular_velocity().y
+    };
+
+    let (declared, undeclared) = (turned(0.3), turned(0.0));
+    eprintln!(
+        "torsional row: a 0.3 m patch reached {declared:.4} rad/s, a point contact \
+         {undeclared:.4} rad/s (both commanded 2.0)"
+    );
+
+    assert!(
+        declared > 0.5,
+        "a declared patch should be turned by its torsional rows: {declared:.4} rad/s"
+    );
+    assert!(
+        undeclared.abs() < 0.05,
+        "and a point contact should have nothing to turn on: {undeclared:.4} rad/s"
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 16. What a slope costs — the deferred Effort question, measured
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// **Specification, and the answer to a deferred question.**
+///
+/// Traction and grip share one budget (R7), so §10.3 anticipated that "walking
+/// uphill will cost speed" and the requirements left a seam for an **Effort**
+/// authority to bias the drive and pay that cost back. That was a prediction.
+/// This measures it, and the prediction is wrong in its cause.
+///
+/// A slope *does* cost pace, by `cos θ` — but **uphill and downhill cost the
+/// same**, to three decimal places, which is the whole finding. Gravity is not
+/// what is taking it. What is taking it is that the gait states its target as
+/// a horizontal vector while a tangential row can only deliver the part of it
+/// that lies in the contact's own plane, and the in-plane part of a horizontal
+/// `v` on a `θ` slope is `v·cos θ`. The shared budget never binds: a contact
+/// carries `N = m·g·cos θ`, so the drive has `μ·gain·m·g·cos θ` against a pull
+/// of `m·g·sin θ`, and that stays positive to `tan θ = 4`, i.e. 76° — outside
+/// the 60° cone that decides whether a surface is a support at all.
+///
+/// So an Effort authority is not needed, and would be the wrong shape: there
+/// is no lost work to pay back, only a command stated in the wrong frame. If
+/// the game wants full pace on a slope the correction is conservative and
+/// free — state the gait's target in the support's tangent plane rather than
+/// in world XZ, which is the `MovementRule::target` convention §8's R6 row
+/// already flags. That is a feel decision and a play-test, not a mechanism.
+#[test]
+fn a_slope_costs_a_walker_the_same_uphill_as_down() {
+    let sample = |slope_degrees: f32, heading: Vector3<f32>| {
+        let run = 30.0;
+        let tangent = slope_degrees.to_radians().tan();
+        let geometry = RampGeometry::new(20.0, run, run * tangent);
+        let mut world = bench_world();
+        let mut debug = DebugLines::default();
+
+        // Start where the walker has ramp ahead of it: three seconds at walk
+        // speed is fifteen metres, and a sample taken off the end of the ramp
+        // would be a sample of flat ground.
+        let start_z = if heading.z < 0.0 { run - 2.0 } else { 2.0 };
+        let walker = Walker::spawn(
+            &mut world,
+            Vector3::new(0.0, start_z * tangent + 0.02, start_z),
+        )
+        .walking(heading);
+
+        // Two seconds to reach a steady state, then measure over one more.
+        for _ in 0..120 {
+            walker.drive(&mut world);
+            advance(&mut world, &geometry, &mut debug);
+        }
+        let from = position_of(&world, walker.body);
+        for _ in 0..60 {
+            walker.drive(&mut world);
+            advance(&mut world, &geometry, &mut debug);
+        }
+        (position_of(&world, walker.body) - from).magnitude()
+    };
+
+    let walk_speed = LocomotionConfig::player().walk_speed;
+    eprintln!("slope cost (fraction of {walk_speed:.1} m/s held, measured over 1 s):");
+    for slope_degrees in [0.0_f32, 10.0, 20.0, 30.0, 40.0, 50.0] {
+        let uphill = sample(slope_degrees, Vector3::z()) / walk_speed;
+        let across = sample(slope_degrees, Vector3::x()) / walk_speed;
+        let downhill = sample(slope_degrees, -Vector3::z()) / walk_speed;
+        let projection = slope_degrees.to_radians().cos();
+        eprintln!(
+            "  {slope_degrees:>4.0}°  uphill {uphill:.3}  across {across:.3}  \
+             downhill {downhill:.3}  (cos θ = {projection:.3})"
+        );
+
+        assert!(
+            (uphill - downhill).abs() < 0.02,
+            "gravity should cost a slope nothing the drive cannot afford: \
+             {slope_degrees:.0}° uphill {uphill:.3} against downhill {downhill:.3}"
+        );
+        assert!(
+            (uphill - projection).abs() < 0.02,
+            "and what it does cost should be the projection of a horizontal \
+             command: {slope_degrees:.0}° held {uphill:.3} against cos θ {projection:.3}"
+        );
+        assert!(
+            across > 0.98,
+            "a heading already in the tangent plane should cost nothing: \
+             {slope_degrees:.0}° held {across:.3}"
+        );
+    }
 }

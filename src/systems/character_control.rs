@@ -190,7 +190,6 @@ impl<'a> System<'a> for CharacterControlSystem {
                 state.locomotion.movement_rule(
                     move_dir,
                     ground_speed,
-                    config.ground_accel,
                     state.air_speed,
                     config.air_steer_speed,
                 ),
@@ -407,8 +406,13 @@ fn resolve_ground_speed(
 /// itself was the read-modify-write R5 exists to remove, and with the target
 /// now support-relative it would also be the wrong quantity: an idle passenger
 /// on a running deck asks for zero and is carried.
+///
+/// The rate travels with it for the one case the contacts cannot answer: with
+/// nothing underneath, the same target is chased out of the actuator's
+/// allowance instead, at this rate and no faster.
 fn apply_movement_rule(drive: &mut DriveIntent, rule: MovementRule) {
     drive.linear_target = rule.target;
+    drive.steer_accel = rule.steer_accel;
     if rule.clamp_up {
         drive.clamp_normal_rise();
     }
@@ -441,10 +445,10 @@ mod tests {
     use specs::{Builder, Entity, RunNow, World, WorldExt};
 
     /// The gait rule the FSM hands to the driver while walking east.
-    fn walk_east(accel: f32) -> MovementRule {
+    fn walk_east(steer_accel: f32) -> MovementRule {
         MovementRule {
             target: Vector3::new(5.0, 0.0, 0.0),
-            accel,
+            steer_accel: Some(steer_accel),
             clamp_up: false,
         }
     }
@@ -455,8 +459,26 @@ mod tests {
     #[test]
     fn the_gaits_target_is_commanded_as_it_stands() {
         let mut drive = DriveIntent::default();
-        apply_movement_rule(&mut drive, walk_east(40.0));
+        apply_movement_rule(&mut drive, walk_east(8.0));
         assert_eq!(drive.linear_target, Vector3::new(5.0, 0.0, 0.0));
+    }
+
+    /// The rate rides along with the target for the airborne case, and a
+    /// committed arc asks for none.
+    #[test]
+    fn the_steering_rate_crosses_with_the_target() {
+        let mut drive = DriveIntent::default();
+        apply_movement_rule(&mut drive, walk_east(8.0));
+        assert_eq!(drive.steer_accel, Some(8.0));
+
+        apply_movement_rule(
+            &mut drive,
+            MovementRule {
+                steer_accel: None,
+                ..walk_east(8.0)
+            },
+        );
+        assert_eq!(drive.steer_accel, None);
     }
 
     /// The target is support-relative, so a zero is "hold station on whatever
@@ -469,7 +491,7 @@ mod tests {
             &mut drive,
             MovementRule {
                 target: Vector3::zeros(),
-                ..walk_east(40.0)
+                ..walk_east(8.0)
             },
         );
         assert_eq!(drive.linear_target, Vector3::zeros());
@@ -482,7 +504,7 @@ mod tests {
             &mut drive,
             MovementRule {
                 clamp_up: true,
-                ..walk_east(40.0)
+                ..walk_east(8.0)
             },
         );
         // The verb is a command, not an edit: the projection is what cancels

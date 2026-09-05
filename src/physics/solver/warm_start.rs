@@ -37,6 +37,7 @@ pub(crate) fn warm_start_contact(
     };
 
     contact.accumulated_friction_impulse_ws = friction_ws;
+    contact.accumulated_torsional_impulse = 0.0;
 
     if scale <= 0.0 {
         return;

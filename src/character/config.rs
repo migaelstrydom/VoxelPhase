@@ -15,11 +15,15 @@ pub struct LocomotionConfig {
     pub sprint_speed_mul: f32,
     /// Multiplier applied to `walk_speed` when crouch is held (wins over sprint).
     pub crouch_speed_mul: f32,
-    /// How quickly horizontal velocity steers toward input direction while airborne (units/s)
+    /// How quickly horizontal velocity steers toward the input direction
+    /// while airborne, in m/s².
+    ///
+    /// The airborne half of the character's authority, spent out of the
+    /// actuator's `Allowance` because no contact is there to bound it. There
+    /// is no ground counterpart: with a foot on the floor the ramp toward the
+    /// gait's speed is the traction budget at the contact, which is a property
+    /// of the surface rather than a number the controller counts out.
     pub air_steer_speed: f32,
-    /// Ground acceleration used to ramp horizontal velocity toward the gait
-    /// target speed. Higher = snappier; lower = more momentum.
-    pub ground_accel: f32,
     /// Upward velocity applied when jumping
     pub jump_speed: f32,
     /// Multiplier applied to upward velocity when jump is released early while
@@ -89,7 +93,6 @@ impl LocomotionConfig {
             sprint_speed_mul: 1.6,
             crouch_speed_mul: 0.4,
             air_steer_speed: 8.0,
-            ground_accel: 40.0,
             jump_speed: 7.0,
             jump_cutoff_factor: 0.45,
             jump_buffer_window: 0.12,
@@ -109,11 +112,10 @@ impl LocomotionConfig {
 
     /// A ground creature that walks but never sprints, crouches, or long-jumps.
     /// Brains do not emit those intents, so the multipliers are inert; the
-    /// numbers that matter are `walk_speed`, `ground_accel` and the body size.
+    /// numbers that matter are `walk_speed` and the body size.
     pub fn creature(walk_speed: f32, radius: f32, half_height: f32) -> Self {
         Self {
             walk_speed,
-            ground_accel: walk_speed * 6.0,
             jump_speed: 5.0,
             turn_aggression: 6.0,
             collider_radius: radius,

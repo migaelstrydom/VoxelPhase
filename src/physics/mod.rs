@@ -63,8 +63,8 @@ pub use collider::{Collider, ColliderDesc, ColliderMaterial, ColliderShape, Fric
 pub use constraint::{Constraint, ConstraintHandle, ConstraintKind};
 pub use contact_event::{ContactEvent, ContactSource};
 pub use drive::{
-    DriveCommand, ReactionAnchor, SupportConfig, SupportContact, SupportResolver, SupportSet,
-    SupportSets,
+    Allowance, AllowanceCommand, AllowanceUsage, DriveCommand, NormalProjection, NormalVerbs,
+    ReactionAnchor, SupportConfig, SupportContact, SupportResolver, SupportSet, SupportSets,
 };
 pub use force_provider::{ForceContext, ForceOutput, SubstepForceProvider};
 pub use handle::{ColliderHandle, RigidBodyHandle};

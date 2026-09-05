@@ -16,53 +16,7 @@
 use nalgebra::Vector3;
 use specs::{Component, DenseVecStorage};
 
-use crate::physics::ReactionAnchor;
-
-/// A projection allowance: what a jump verb does to the velocity component
-/// along the support normal.
-///
-/// Jump shaping cannot be expressed as an impulse. "Cut the jump in half" is
-/// proportional to the velocity it acts on, so the same verb is a different
-/// impulse at every point on the arc — a fixed impulse would under-cut a fast
-/// jump and reverse a slow one. Hence a projection: a scale, then an optional
-/// clamp, applied in that order.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct NormalProjection {
-    /// Multiplier on a *rising* normal component. `1.0` is the identity.
-    ///
-    /// Only a component that points up the support normal is scaled. Cutting
-    /// a fall short is not a verb anyone has: the same multiplier applied to
-    /// downward motion would read as a parachute.
-    pub scale: f32,
-    /// When true, a rising normal component is zeroed after scaling — a
-    /// walk-off starts falling immediately rather than lifting off the ramp.
-    pub clamp_positive: bool,
-}
-
-impl Default for NormalProjection {
-    fn default() -> Self {
-        Self {
-            scale: 1.0,
-            clamp_positive: false,
-        }
-    }
-}
-
-impl NormalProjection {
-    /// True when this projection would leave the normal component untouched.
-    pub fn is_identity(&self) -> bool {
-        self.scale == 1.0 && !self.clamp_positive
-    }
-
-    /// Compose another scaling into this projection.
-    ///
-    /// Two verbs can fire on one frame — a buffered tap-jump applies the
-    /// cutoff up front and the release edge applies it again — and the
-    /// composition of two scalings is their product.
-    pub fn scale_by(&mut self, factor: f32) {
-        self.scale *= factor;
-    }
-}
+use crate::physics::{Allowance, AllowanceCommand, NormalProjection, NormalVerbs, ReactionAnchor};
 
 /// The command channel: what gameplay wants this body to do.
 ///
@@ -81,6 +35,15 @@ pub struct DriveIntent {
     /// Discrete: jump shaping along the support normal. Consumed once,
     /// alongside `normal_impulse`.
     pub normal_projection: NormalProjection,
+    /// Rate at which this frame's `linear_target` may be steered toward while
+    /// nothing holds the body up, in m/s².
+    ///
+    /// Only ever spent against the actuator's allowance, and only while the
+    /// body is unsupported: with a contact underneath, the ramp toward the
+    /// target is the traction budget and this says nothing. `None` asks for no
+    /// steering at all — a committed long jump, whose arc is ballistic and
+    /// wants no correcting.
+    pub steer_accel: Option<f32>,
 }
 
 impl DriveIntent {
@@ -114,23 +77,6 @@ impl DriveIntent {
     }
 }
 
-/// The discrete half of one frame's command, once taken.
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
-pub struct NormalVerbs {
-    /// A jump: the speed to establish along the support normal.
-    pub impulse: Option<f32>,
-    /// Jump shaping, applied after the jump.
-    pub projection: NormalProjection,
-}
-
-impl NormalVerbs {
-    /// True when these verbs would leave the drive target untouched — the
-    /// ordinary case, every frame nobody presses jump.
-    pub fn is_inert(&self) -> bool {
-        self.impulse.is_none() && self.projection.is_identity()
-    }
-}
-
 /// The declaration channel: how this body converts intent into momentum.
 ///
 /// A property of the entity. Removing it takes the body out of service — it
@@ -146,9 +92,14 @@ pub struct Actuator {
     /// so cannot yet act on the distinction.
     pub anchor: ReactionAnchor,
     /// Maximum linear acceleration toward the target velocity, in m/s².
+    ///
+    /// A **medium** anchor's authority: it is the bound on the motor rows that
+    /// push against the world. A support anchor is bounded by its contacts
+    /// instead — `μ · drive_gain · N` at each of them — and reads neither this
+    /// nor the angular one.
     pub max_accel: f32,
     /// Maximum angular acceleration toward the target angular velocity,
-    /// in rad/s².
+    /// in rad/s². A medium anchor's authority; see [`Actuator::max_accel`].
     pub angular_max_accel: f32,
     /// Fraction of a contact's tangential budget this body may draw where that
     /// contact is not in its Support Set. `1.0` grips everything it touches
@@ -181,6 +132,25 @@ pub struct Actuator {
     /// `PhysicsWorld::traction_usage`. See `docs/TRACTION_DRIVE_DESIGN.md`
     /// §11, decision D1.
     pub drive_gain: f32,
+    /// Radius of the contact patch this body's supports stand for, in metres.
+    ///
+    /// The third term of a torsional row's `μ·N·r` bound, and the one the
+    /// engine cannot derive: a contact is a point, and the several contacts of
+    /// a wide manifold already resist spin through their own tangential rows.
+    /// So it is declared, by the only thing that knows — a turntable or a
+    /// tracked vehicle sets it, a capsule leaves it at zero and turns with its
+    /// allowance instead (§6.2).
+    pub support_patch_radius: f32,
+    /// What this body may conjure where no contact can deliver it: air
+    /// steering, turning on the spot, and a jump with nothing underneath.
+    ///
+    /// `None` — the default — is a body with no non-conservative authority at
+    /// all, which is every crate and prop in the game and every character
+    /// whose actuator has been taken away. The design's second sanctioned
+    /// cheat, opt-in and bounded per entity by construction; what it spends is
+    /// measured by `PhysicsWorld::allowance_usage`. See
+    /// `docs/TRACTION_DRIVE_DESIGN.md` §6.3 and R8.
+    pub allowance: Option<Allowance>,
 }
 
 impl Default for Actuator {
@@ -191,6 +161,8 @@ impl Default for Actuator {
             angular_max_accel: 500.0,
             non_support_grip: 1.0,
             drive_gain: 1.0,
+            support_patch_radius: 0.0,
+            allowance: None,
         }
     }
 }
@@ -225,6 +197,37 @@ impl Actuator {
     pub fn with_drive_gain(mut self, gain: f32) -> Self {
         self.drive_gain = gain;
         self
+    }
+
+    /// Declare how wide a patch this body's supports stand for, so its
+    /// torsional row has something to bear on.
+    pub fn with_patch_radius(mut self, radius: f32) -> Self {
+        self.support_patch_radius = radius;
+        self
+    }
+
+    /// Grant this body a budget of non-conservative authority.
+    ///
+    /// Read [`Actuator::allowance`] first: everything spent through it is
+    /// momentum the world did not have.
+    pub fn with_allowance(mut self, allowance: Allowance) -> Self {
+        self.allowance = Some(allowance);
+        self
+    }
+
+    /// The allowance half of one frame's command: this body's budget, the
+    /// verbs it is spending this frame, and the rate it asked to be steered
+    /// at.
+    pub fn allowance_command(
+        &self,
+        verbs: NormalVerbs,
+        steer_accel: Option<f32>,
+    ) -> AllowanceCommand {
+        AllowanceCommand {
+            budget: self.allowance,
+            verbs,
+            steer_accel,
+        }
     }
 }
 

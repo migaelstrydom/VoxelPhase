@@ -259,6 +259,8 @@ classDiagram
         +Vector3 linear_target
         +Vector3 angular_target
         +Option~f32~ normal_impulse
+        +NormalProjection normal_projection
+        +Option~f32~ steer_accel
     }
     class Actuator {
         <<ECS component — declaration>>
@@ -267,6 +269,7 @@ classDiagram
         +f32 angular_max_accel
         +f32 drive_gain
         +f32 non_support_grip
+        +f32 support_patch_radius
         +Option~Allowance~ allowance
     }
     class BodyMotion {
@@ -275,8 +278,9 @@ classDiagram
         +Vector3 angular
     }
     class Allowance {
-        +f32 air_accel_budget
-        +f32 air_yaw_budget
+        +f32 air_accel
+        +f32 yaw_accel
+        +f32 unsupported_jump_speed
     }
 
     class DriveCommand {
@@ -313,6 +317,7 @@ classDiagram
     class TangentTarget {
         +Vector3 target_rel_velocity
         +f32 target_spin
+        +f32 patch_radius
     }
     class TangentialSolver {
         <<solver::tangential>>
@@ -328,7 +333,7 @@ classDiagram
     }
     class AllowanceApplier {
         <<physics::drive::allowance>>
-        +apply(body, command, SupportSet, dt)
+        +apply_allowances(bodies, SupportSets, up, dt, first_substep, ledger)
     }
     class PgsNgsSolver
     class ConstraintRow
@@ -524,6 +529,32 @@ R10 is therefore true in its anti-goal (there is no second reactionless pump)
 and false in its literal reading (one mechanism does not cover both channels for
 the player). The traceability table records it that way.
 
+**As built (Stage 6), with one correction and one narrowing.** The row is
+`solver/torsional.rs`, bounded by `μ · tangential_scale · gain · N · r`, with
+`r` on `TractionRow::patch_radius` and written there by the planner from
+`Actuator::support_patch_radius`. The first bullet above is answered by
+*declaration* rather than by derivation: the entity that knows its supports are
+wider than the points standing for them says so, and everything that does not —
+every character, every crate — leaves it at zero and has an inert row that
+costs an early return.
+
+The narrowing is that the row's remaining use is smaller than "wide-contact
+bodies" suggests, and the bench found it rather than the argument. A manifold
+with several contacts **already yaws under its own tangential rows**, at their
+own lever arms: the first attempt at the acceptance scenario drove a box on the
+floor to the commanded 2.0 rad/s with the patch radius at *zero*. So the
+torsional row is not needed wherever the contacts are genuinely spread — it
+would count the same friction twice — and what it is for is a support that is
+really one point standing for a patch. The scenario uses a sphere, where
+`ω × r` at a contact directly below the centre has no component about the
+vertical and the tangential rows supply no yaw at all: 1.9992 rad/s with a
+0.3 m patch declared, 0.0000 without.
+
+Nothing in the game declares one. That is the design working as §6.2 predicted,
+one step further along: the player's ground yaw is the allowance, and the row
+exists so that the first body which genuinely spins on a patch does not need a
+new mechanism.
+
 ### 6.3 The impulse channel — jumping
 
 A tangential row is tangential by construction, so it cannot express a jump. The
@@ -609,6 +640,40 @@ drive authority of any kind, and every scrap of air control, jump shaping and
 mid-air yaw is Allowance. R8's budget is not a garnish on this design; it is the
 whole airborne half of the character controller, and it should be scoped that
 way from the start.
+
+#### As built (Stage 6)
+
+`physics/drive/allowance.rs` is the module, `Allowance` is the budget, and
+`apply_allowances` spends it once per substep between `integrate_forces` and the
+solve — early enough that everything it conjures is still answerable to every
+contact and constraint the solve is about to run.
+
+Four differences from the plan above, all in the same direction: less is decided
+on gameplay's side of the seam than §6.3 imagined.
+
+- **The verbs cross the seam as verbs.** §6.3 has `resolve_drive` folding the
+  jump into the normal component of a target. It cannot: only the engine knows,
+  at the moment the frame is solved, whether anything is holding the body up —
+  and that decides both which normal the jump leaves along and whether it is an
+  impulse exchange or an allowance. `DriveCommand` therefore carries an
+  `AllowanceCommand` — budget, verbs, steering rate — and `resolve_drive` is
+  reduced to putting one entity's frame into one struct. `crate::drive` no
+  longer reads gravity at all.
+- **A jump establishes a speed rather than adding one.** `normal_impulse` is
+  documented as a speed, and the delivery makes it one: the impulse is
+  `m · (asked − current)` along the axis, never negative. So the same press is
+  the same jump whether the character was walking, standing, or settling onto
+  the floor — and a jump is never a brake on a body already leaving faster.
+- **A supported jump is split equally across the supporting contacts** and
+  applied at each of them, with the opposite half on each partner. The
+  acceptance scenario measures the reaction at the mass ratio: a 131 kg walker
+  leaving a 2880 kg deck at 7 m/s pushes it down 0.337 m/s against the 0.318
+  the ratio predicts, the difference being the frame's own settling.
+- **A budget of zero is no jump, not a jump clamped to a standstill.** The first
+  build read `speed.min(ceiling)` and then compared it to the falling body's
+  current speed, which conjured an impulse *up to a standstill* for a body with
+  no allowance at all. Caught by the D2a scenario's ungranted half, which is
+  why that half exists.
 
 ### 6.4 The medium anchor
 
@@ -1015,9 +1080,9 @@ needs as a trait and lets the caller supply it.
 | R5 Command ≠ measurement | `DriveIntent` / `BodyMotion` split §3, §7 | type system |
 | R6 No privileged coordinates | Contact Frame §6.1; `gravity_direction()` §6.6; `AxisBiased` leaves the drive path §6.7 | **delivered** — the bound at Stage 2b, the grounding normal at Stage 2c, and the basis at Stage 5: the drive is solved in each contact's own tangent plane and nothing in the path names an axis. What remains outside it is the gait: `MovementRule::target` is still built in world XZ, which is a controller convention rather than a drive one |
 | R7 Authority bounded by contact | `μ_drive·N` row bounds §6.1 | construction, landed at Stage 5; magnitude chosen — `drive_gain: 5.0`, with its ledger in §11. `crate push` is the demonstration: a walker who could punt a 768 kg box to 4.70 m/s now moves it by the mass ratio, because 5× the tangential force is still less than the crate's own friction |
-| R8 Cheats named and bounded | `Allowance` + `AllowanceApplier`, single module; `drive_gain` named and instrumented alongside it §11 | discipline, one file — the ledger is the whole airborne controller (§6.3), unsupported jumps (D2a), and one scalar per actuator. `drive_gain`'s half landed at Stage 5 with `TractionLedger`; the Allowance half is Stage 6, and until it lands an airborne character has no authority at all |
+| R8 Cheats named and bounded | `Allowance` + `apply_allowances`, single module; `drive_gain` named and instrumented alongside it §11 | discipline, one file — **delivered**. `drive_gain`'s half landed at Stage 5 with `TractionLedger`; the Allowance half landed at Stage 6 as `physics/drive/allowance.rs` and `AllowanceLedger`. Three ceilings per entity (`air_accel`, `yaw_accel`, `unsupported_jump_speed`), opt-in through `Option<Allowance>`, and every impulse conjured is counted and printed. What it covers is the whole airborne controller (§6.3), unsupported jumps (D2a) and all of ground yaw (§6.2) |
 | R9 Distribution over supports | per-contact `μ·N` bound alone, no weighting term §6.1 | construction |
-| R10 Linear and angular unified | torsional row §6.2 | **form only** — ground yaw is an Allowance in practice, §6.2. Stage 5 delivered the angular *target* into the per-contact tangential row as `ω_target × r_contact`, which is a well-posedness term for a distributed drive rather than a yaw drive |
+| R10 Linear and angular unified | torsional row §6.2 | **form only, and narrower than it looked** — the row exists (`solver/torsional.rs`, Stage 6) and drives relative spin about the normal under `μ·N·r`, but `r` is a *declaration* (`Actuator::support_patch_radius`) and nothing in the game makes one. Two things reduce it further: Stage 5's `ω_target × r_contact` term already carries the angular target into the tangential rows, and Stage 6 measured that a manifold with several contacts yaws on those rows alone — so the torsional row is for a single contact standing for a patch, and nothing else. Ground yaw for a character is an Allowance, §6.2 |
 | R11 Surface does not grow | see below | measured, gated |
 | R12 Tests first | §9 stage 0 | process |
 
@@ -1670,10 +1735,172 @@ one.
   along (§10.2) are all feel questions, and the game window cannot be launched
   from an agent shell.
 
-**Stage 6 — Torsional row and allowances.** R8 and R10. Scope the allowance work
-as the airborne character controller in full (§6.3), not as a garnish. Play-test
-for feel; this is where the deferred **Effort** question (requirements §8) gets
-answered with data instead of prediction.
+**Stage 6 — Torsional row and allowances. Landed.** The airborne half of the
+character exists again. `physics/drive/allowance.rs` holds the whole of the
+design's second sanctioned cheat — one module, one budget type, one entry point
+— and `solver/torsional.rs` holds R10's angular projection of the tangential
+row. `AllowanceLedger` counts what the first spends, `Actuator::allowance` is
+where a body is granted any of it, and `Option<Allowance>` being `None` is the
+default that every crate, prop and corpse in the game keeps.
+
+**No acceptance number moved.** The nine scenarios print what they printed at
+Stage 5, to the digit, and three of them (`reversal hover` 0.8200/1.4084,
+`driven body at rest` x=0.2574, `crate push` overtake 0.0181) print numbers that
+differ from the ones §9 recorded at Stage 5 and did so **before this stage** —
+checked against a clean tree. Those three were stale in the document, not moved
+by the work. `cargo test --lib` is green at 978 (964 before) and the bench
+harness at 1055, with the pre-existing
+`ccd::sphere_does_not_tunnel_into_a_dynamic_corner` failure untouched.
+
+One number in a *bench rig* did move, and it is the stage working: the slope
+scenario's walker now climbs 6.8909 m in three seconds where it climbed 5.9589.
+The rig gained the allowance the player has, and its yaw budget holds the
+capsule's spin at the zero the command asks for; without it the capsule yawed
+freely under asymmetric contact friction and wasted the difference. Confirmed by
+running the same scenario with `Walker::ungranted()`, which prints 5.9589 again.
+
+#### The shape that landed
+
+- **Seven new scenarios**, because the harness had no jump verb and several of
+  the design's claims about jumping had gone five stages untested. A jump from
+  flat ground (leaves at 6.8658 m/s having asked for 7.0 — one frame of gravity
+  — and rises 2.5038 m against a ballistic 2.4975); a jump off a deck (the deck
+  takes 0.337 m/s against the 0.318 the mass ratio predicts); a jump from a 30°
+  slope (§10.2, numbers in that section); an unsupported jump with and without a
+  budget (D2a); air steering; the torsional row; and the slope census that
+  answers Effort. `Walker` gained `drive_with`, `jump`, `ungranted` and an
+  allowance; nothing else in the rig changed.
+- **The verbs cross the seam as verbs.** This is the stage's one structural
+  change to the seam and §6.3 records it: `resolve_drive` no longer folds a jump
+  into the target and no longer reads gravity, because the axis a jump leaves
+  along and the choice between delivering it through the contacts or conjuring
+  it are both facts only the engine has. `NormalVerbs` and `NormalProjection`
+  moved down into `physics::drive::command` beside `DriveCommand`, the way
+  `ReactionAnchor` did at Stage 4, and `crate::drive` re-exports them.
+- **Allowances are spent between `integrate_forces` and the solve**, once per
+  substep, with the edge-triggered half gated to the frame's first substep by a
+  `substeps_taken` counter on the world. Before the solve, because momentum
+  conjured there is still answerable to every contact and constraint; a jump
+  applied after the solve would be a body teleporting out of its own floor.
+- **The torsional row's `r` is declared, not derived** —
+  `Actuator::support_patch_radius`, defaulting to zero, so the row early-returns
+  for everything currently in the game. §6.2 carries why, and what the bench
+  found about wide manifolds.
+
+#### Judgement calls
+
+**`LocomotionConfig::ground_accel` is deleted, and `MovementRule::accel` became
+`steer_accel: Option<f32>`.** Stage 5 left all three carried with no reader and
+asked Stage 6 to decide. The answer is that there is no such thing as a ground
+acceleration any more: the ramp from standstill to walk speed is the traction
+budget at the contact, which is a property of the surface, and a second number
+naming the same thing could only ever be the *slower* of the two. `air_steer_speed`
+is the one that survives, because the airborne authority genuinely has no
+contact to be bounded by and must state its own rate — it is now read, crosses
+in `DriveIntent::steer_accel`, and is clamped by `Allowance::air_accel` on the
+way in. The measured result is exactly the declared rate: 4.0000 m/s after half
+a second at 8 m/s², settling at the commanded 5.0.
+
+`f32::INFINITY` left the type with it. A locked long jump used to mean "snap the
+planar velocity to the committed value every frame at infinite acceleration",
+which under a ballistic arc is a no-op dressed as an authority; it is now
+`steer_accel: None`, which is the same outcome stated as what it is — a
+committed arc asks for no correction and keeps its momentum because nothing
+takes it away.
+
+**The yaw allowance fires whether the body is supported or not.** §5's sketch
+has `air_yaw_budget`; the built field is `yaw_accel` with no "air" in the name,
+because §6.2's conclusion is that a capsule's ground yaw has nowhere else to
+come from either. This restores the turning that has been inert since Stage 5,
+at the acceleration the old pre-solve chase was bounded by (500 rad/s², named
+`TURN_AUTHORITY` at the spawner), so a turn should cost what it always did. It
+is non-conservative — turning on a platform does not torque the platform — which
+was equally true of the old drive and is now named and counted rather than
+assumed.
+
+**`DeathSystem` clears the drive.** Stage 4 and Stage 5 both recorded "a body
+that loses its `Actuator` keeps its drive" as a Stage 7 item. It stopped being
+deferrable here: the sync only pushes commands for entities that still have an
+actuator, so a corpse would have kept a *continuous* allowance nothing was
+watching and gone on steering and turning itself where it lay. `PhysicsWorld::clear_body_drive`
+is the counterpart to `set_body_drive` — no drive, no allowance, honest grip —
+and `DeathSystem` calls it where it used to restore the grip alone.
+
+**Nothing gates the projection on being airborne.** A jump cutoff is a
+projection of the body's own velocity and is non-conservative wherever it
+happens, so it requires an allowance and nothing else. Gating it on the Support
+Set as well would mean a cutoff pressed on the same frame as a takeoff — the
+buffered tap-jump, which is a real input — silently doing nothing.
+
+#### The Effort question, answered with data
+
+Requirements §8 deferred **Effort**: a named authority biasing the drive to
+compensate for slope, reserved because §10.3 predicted that a shared traction
+budget would make walking uphill cost speed. The prediction is right about the
+symptom and wrong about the cause, and the difference decides the answer.
+
+Fraction of the 5 m/s walk speed a character actually holds, measured over one
+second after two seconds of settling, on ramps inside the support cone:
+
+| Slope | Uphill | Across | Downhill | `cos θ` |
+|---|---|---|---|---|
+| 0° | 1.000 | 1.000 | 1.000 | 1.000 |
+| 10° | 0.984 | 1.000 | 0.985 | 0.985 |
+| 20° | 0.939 | 1.000 | 0.940 | 0.940 |
+| 30° | 0.865 | 1.000 | 0.866 | 0.866 |
+| 40° | 0.765 | 1.000 | 0.766 | 0.766 |
+| 50° | 0.641 | 1.000 | 0.644 | 0.643 |
+
+**Uphill and downhill cost the same, to three decimals.** That is the whole
+finding: gravity is taking none of it. What is taking it is that the gait states
+its target as a horizontal vector while a tangential row can only deliver the
+part of that vector lying in the contact's own plane, and the in-plane part of a
+horizontal `v` on a `θ` slope is `v·cos θ`. A heading already in the tangent
+plane — across the slope — costs exactly nothing at any angle, which is the
+control that proves it.
+
+The budget never binds, and the arithmetic says why: a supporting contact
+carries `N = m·g·cos θ`, so the drive has `μ·gain·m·g·cos θ` against a pull of
+`m·g·sin θ`, and the difference stays positive until `tan θ = μ·gain = 4`, i.e.
+**76°** — outside the 60° cone that decides whether a surface is a support at
+all. There is no slope a character can stand on where it runs out of traction to
+climb it.
+
+**So Effort is not needed, and would be the wrong shape.** There is no lost work
+to pay back; there is a command stated in the wrong frame. If the game wants
+full pace on a slope, the correction is conservative and free: state the gait's
+target in the support's tangent plane rather than in world XZ, which is the
+`MovementRule::target` convention §8's R6 row has flagged since Stage 5. That is
+one place, it needs no new authority, and it is a feel decision — a character
+who walks a 50° slope at the same pace as flat ground may read as floaty. It is
+**not taken here**, and `a_slope_costs_a_walker_the_same_uphill_as_down` is the
+scenario that would change if it is. The seam Effort was holding open can close.
+
+#### What Stage 7 needs to know
+
+- **The drive surface in `src/physics/` grew by three sites and lost one
+  deferral.** `RigidBody::allowance` (one `AllowanceCommand`, default inert),
+  `TractionRow::target_spin`/`patch_radius`, `SolverContact::accumulated_torsional_impulse`,
+  and `PhysicsWorld::substeps_taken`. None is a body-is-driven test; all four
+  are parameters with inert defaults, and the torsional pair costs an early
+  return per contact. Against that, `clear_body_drive` closes the "a corpse
+  keeps its drive" hole Stages 4 and 5 both left you.
+- **`Actuator::max_accel` and `angular_max_accel` are the medium anchor's
+  alone.** A support anchor is bounded by its contacts and by its allowance and
+  reads neither. They are documented that way rather than split into a second
+  component, but a Stage 7 audit could reasonably ask whether `Actuator` wants
+  to be two types.
+- **The torsional row has no in-game caller.** It is tested end to end through
+  the bench and inert everywhere else. If Stage 7's audit counts it as surface
+  that cannot be justified by a consumer, the honest answer is that it is R10's
+  only literal delivery and §6.2 argues for keeping it — but the audit should
+  make that call knowingly rather than find it by accident.
+- **Nothing here was play-tested**, and this stage has more feel in it than any
+  since Stage 1. Jump height and the arc off a slope (§10.2), turning at
+  500 rad/s² with no reaction, air steering at 8 m/s², the doubled walk-off
+  handling Stage 2c left, and the slope pace above are all questions the bench
+  can only answer numerically. The game window cannot be launched from an agent
+  shell.
 
 **Stage 7 — Surface audit.** Count the drive-aware sites in `src/physics/`;
 delete the `pipeline/solver.rs` special cases if the tests permit. Relocate
@@ -1755,6 +1982,21 @@ literal `Vector3::y()`, and the blend does not need one.
 
 Migael's decision: accepted for now. After implementation, will playtest and
 decide on further tuning.
+
+**Measured at Stage 6, and the estimate above was pessimistic about the angle
+and right about the cost.** `cos_floor` is gone — it went with
+`FrictionModel::AxisBiased` at Stage 2b — and what decides whether a surface is
+a support is `SupportConfig::min_support_cosine`, a 60° cone. So the worst case
+is steeper than §10.2 assumed. On a 30° ramp, a 7 m/s jump leaves at
+`(0.0000, 5.9425, −3.4718)`: 3.47 m/s of downhill speed the player never asked
+for against a predicted `7·sin 30° = 3.50`, and an apex of 1.887 m against
+2.498 m on the flat — 76% of the height, which is `cos² 30°` to the digit. At
+the 60° limit it would be a quarter of the height and 6.06 m/s sideways.
+
+Whether that reads as "slopes are slopes" or as "the jump button stopped
+working near a hill" is still a play-test, and the correction §10.2 describes
+is still available and still legal. `a_jump_from_a_slope_leaves_along_the_slope`
+is the scenario that would change if it is taken.
 
 ### 10.3 Everything else
 
@@ -2103,6 +2345,15 @@ rather than taken now: it is only worth doing if the allowance's jump traffic
 turns out to be more than occasional, and the instrumentation §11 asks of
 `drive_gain` should count this too.
 
+**It does, from Stage 6.** `AllowanceUsage` counts `supported_jumps` and
+`unsupported_jumps` separately and reports the second as a share of the two —
+`conjured_jump_share`, printed to `DebugLog` beside the traction ledger. That
+number is the whole of D2a's cost made watchable: it is what says whether the
+allowance is catching a frame boundary occasionally, as D2b was supposed to
+leave it, or whether something structural is still leading the contacts. Nobody
+has played the game with it on yet, so the number it settles at is unknown; if
+it is not small, the dispatcher edge held in reserve above is the next move.
+
 #### Delivery
 
 The two halves land at different stages, and the order is forced by neither —
@@ -2110,7 +2361,7 @@ they are independent, and each is useful alone.
 
 | Half | Stage | What lands |
 |---|---|---|
-| **D2a** | Stage 1 | The jump verbs get their homes (§6.3). An unsupported jump — coyote, stale grounding, any other — is an Allowance. The sync always consumes, so `Option::take` is unconditional. |
+| **D2a** | Stage 1, delivered Stage 6 | The jump verbs get their homes (§6.3). An unsupported jump — coyote, stale grounding, any other — is an Allowance. The sync always consumes, so `Option::take` is unconditional. Stage 1 gave them a home in the target; Stage 6 gave them the two deliveries the rule is actually about, and the choice between them belongs to the engine because only the engine knows what is holding the body up. |
 | **D2b** | Stage 2c | One contact-derived grounding source; the animation→physics loop is cut (§6.6). |
 
 D2a is what unblocks Stage 1, because that is where gameplay stops writing

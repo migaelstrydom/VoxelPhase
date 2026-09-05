@@ -72,6 +72,13 @@ pub struct SolverContact {
     pub accumulated_normal_impulse: f32,
     /// Friction impulse accumulated by the solver this step, in world space.
     pub accumulated_friction_impulse_ws: Vector3<f32>,
+    /// Torsional impulse accumulated by the solver this substep, about the
+    /// contact normal.
+    ///
+    /// Not warm-started and not cached across substeps: the row is bounded by
+    /// `μ·N·r`, and `r` is zero for every contact the game currently produces,
+    /// so there is nothing to carry and nothing to gain by carrying it.
+    pub accumulated_torsional_impulse: f32,
     /// Scale on this contact's tangential budget, `1.0` for an ordinary
     /// contact.
     ///

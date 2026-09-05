@@ -3,6 +3,8 @@
 use nalgebra::{Matrix3, Point3, UnitQuaternion, Vector3};
 
 use super::constraint::types::ConstraintHandle;
+use super::drive::allowance::AllowanceCommand;
+use super::drive::command::NormalVerbs;
 use super::handle::ColliderHandle;
 use super::math::{integrate_orientation, transform_inertia_tensor};
 
@@ -117,6 +119,14 @@ pub struct SupportDrive {
     /// the body pushes harder than the surface honestly permits; see
     /// `Actuator::drive_gain` and `docs/TRACTION_DRIVE_DESIGN.md` §11.
     pub gain: f32,
+    /// Radius of the contact patch this body's supports stand for, in metres.
+    ///
+    /// The bound on a torsional row is `μ·N·r`, and `r` is the one term the
+    /// engine cannot derive: a contact is a point, and a manifold's several
+    /// points already resist spin through their own tangential rows. So the
+    /// entity declares it, and a body that does not — every character, every
+    /// crate — has an inert torsional row. See §6.2.
+    pub patch_radius: f32,
 }
 
 /// What a body's actuator pushes against, and the engine state that delivers
@@ -195,6 +205,13 @@ pub struct RigidBody {
     /// the body leans on keeps its own grip. A character sets it near zero so
     /// jumps along vertical surfaces are not grabbed.
     non_support_grip: f32,
+    /// What this body may conjure where no contact can deliver it, and what it
+    /// has been asked to spend that on this frame.
+    ///
+    /// The default grants nothing, which is what every body in the world has
+    /// unless an actuator declared otherwise. See
+    /// [`crate::physics::drive::allowance`].
+    allowance: AllowanceCommand,
 }
 
 impl RigidBody {
@@ -219,6 +236,7 @@ impl RigidBody {
             colliders: Vec::new(),
             drive: None,
             non_support_grip: 1.0,
+            allowance: AllowanceCommand::default(),
         }
     }
 
@@ -357,6 +375,23 @@ impl RigidBody {
 
     pub fn non_support_grip(&self) -> f32 {
         self.non_support_grip
+    }
+
+    /// Record this frame's non-conservative authority and what it is to be
+    /// spent on. Replaces whatever the previous frame left.
+    pub(crate) fn set_allowance_command(&mut self, command: AllowanceCommand) {
+        self.allowance = command;
+    }
+
+    /// What this body may conjure, and what it has been asked to conjure.
+    pub(crate) fn allowance_command(&self) -> AllowanceCommand {
+        self.allowance
+    }
+
+    /// Consume the frame's edge-triggered verbs, leaving the continuous half
+    /// of the allowance in place.
+    pub(crate) fn take_drive_verbs(&mut self) -> NormalVerbs {
+        self.allowance.take_verbs()
     }
 
     /// Scale the diagonal elements of the local inertia tensor.
@@ -566,6 +601,7 @@ mod tests {
             linear_target: Vector3::new(10.0, 0.0, 0.0),
             angular_target: Vector3::new(0.0, 3.0, 0.0),
             gain: 5.0,
+            patch_radius: 0.0,
         });
 
         let gravity = Vector3::new(0.0, -9.81, 0.0);
