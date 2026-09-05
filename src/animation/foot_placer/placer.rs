@@ -528,7 +528,8 @@ impl FootPlacer {
                     )
                 })
                 .unwrap_or(ctx.foot_y_fallback);
-            sync_planted_y(foot, y);
+            let hip = hip_position(foot.side, ctx, facing);
+            sync_planted_y(foot, y, hip, max_leg_extension(ctx));
         }
 
         // Ease each foot's up-axis toward its phase-dependent target.
@@ -824,6 +825,7 @@ fn advance_stepping(
     };
 
     let landing = floor_sample(ctx, foot.side);
+    let reach = max_leg_extension(ctx);
     let under_hip = foot_position_from_stance(
         ctx.pelvis,
         facing,
@@ -833,21 +835,32 @@ fn advance_stepping(
     );
     let new_t = t + ctx.dt;
     if new_t >= duration {
-        // A target the probe still finds no ground under is refused
-        // outright: the retreat below is a smooth approach to the
-        // takeoff position, and this is the guarantee it converges on.
-        let plant_at = if landing.is_some() { to } else { from };
-        foot.phase = FootPhase::Planted;
-        foot.position = plant_at;
-        foot.planted_position = plant_at;
-        foot.forward = to_forward;
-        // The turn-trigger reference must be the orientation the foot
-        // actually landed with, not the yaw at takeoff — during a fast
-        // turn the body sweeps a large angle mid-swing, and a stale
-        // reference would re-release the foot on the next substep.
-        foot.planted_yaw = yaw_from_facing(to_forward);
-        foot.pre_lift = 0.0;
-        foot.since_plant = 0.0;
+        match plantable(from, to, landing, ctx, foot.side, facing) {
+            Some(plant_at) => {
+                foot.phase = FootPhase::Planted;
+                foot.position = plant_at;
+                foot.planted_position = plant_at;
+                foot.forward = to_forward;
+                // The turn-trigger reference must be the orientation the
+                // foot actually landed with, not the yaw at takeoff —
+                // during a fast turn the body sweeps a large angle
+                // mid-swing, and a stale reference would re-release the
+                // foot on the next substep.
+                foot.planted_yaw = yaw_from_facing(to_forward);
+                foot.pre_lift = 0.0;
+                foot.since_plant = 0.0;
+            }
+            None => hold_swing(
+                foot,
+                from,
+                to,
+                under_hip,
+                from_forward,
+                to_forward,
+                duration,
+                ctx,
+            ),
+        }
         return;
     }
 
@@ -888,7 +901,16 @@ fn advance_stepping(
         // is the best live estimate of the plant height. Chase it so
         // the arc arrives at the surface instead of teleporting there
         // at plant.
-        let landing_y = floor_height_at(contact, normal, to.x, to.z);
+        // No deeper than a leg below the hip. The probe goes on finding a
+        // surface when the one underfoot is falling away — the crate on
+        // its way down, or the floor it used to sit on — and a swing
+        // that chases it is reaching for a landing the leg cannot make.
+        // The bound is the hip's own height rather than the reach left
+        // over after the horizontal stride, because at plant time the
+        // hip will have travelled out to meet the target; it is a floor
+        // under a runaway, not a stride budget.
+        let hip = hip_position(foot.side, ctx, facing);
+        let landing_y = floor_height_at(contact, normal, to.x, to.z).max(hip.y - reach);
         to.y += (landing_y - to.y) * alpha;
         // Stepping up: lift the apex enough to clear the higher landing
         // by a full step height, not just the lerp baseline's midpoint.
@@ -964,13 +986,102 @@ fn floor_height_at(contact: Point3<f32>, normal: Vector3<f32>, x: f32, z: f32) -
     contact.y - (normal.x * (x - contact.x) + normal.z * (z - contact.z)) / normal.y.max(0.6)
 }
 
-/// Pull a planted foot's y to the current terrain surface. No-op while
-/// the foot is mid-step — the swing arc owns y during that window.
-fn sync_planted_y(foot: &mut PlacerFoot, foot_y: f32) {
-    if foot.is_planted() {
-        foot.position.y = foot_y;
-        foot.planted_position.y = foot_y;
+/// Where a completing swing may put its foot down, if anywhere.
+///
+/// Two things decide it. The height is the ground the probe actually
+/// found, not the arc's chase toward it: the chase is there so the swing
+/// arrives at the surface instead of teleporting to it, and when it has
+/// not converged by the end of the swing the ground is still the answer
+/// and the half-way point is not. With no ground under the target at
+/// all, the takeoff point stands in — it was on a surface by
+/// construction.
+///
+/// Then the leg has to be able to get there. A foot cannot plant beyond
+/// its own bones, and the case that matters is walking off a block: the
+/// probe finds ground a metre down, which is real ground and entirely
+/// out of reach, and planting on it anchors a foot the body sails away
+/// from. That is the straight leg trailing behind a character who has
+/// just stepped off an edge. `None` says so, and the swing goes on.
+fn plantable(
+    from: Point3<f32>,
+    to: Point3<f32>,
+    landing: Option<(Point3<f32>, Vector3<f32>)>,
+    ctx: &PlacerCtx<'_>,
+    side: FootSide,
+    facing: Vector3<f32>,
+) -> Option<Point3<f32>> {
+    let plant_at = match landing {
+        Some((contact, normal)) => {
+            Point3::new(to.x, floor_height_at(contact, normal, to.x, to.z), to.z)
+        }
+        None => from,
+    };
+    let hip = hip_position(side, ctx, facing);
+    ((plant_at - hip).magnitude() <= max_leg_extension(ctx)).then_some(plant_at)
+}
+
+/// Hold a swing that has run out of anywhere to land.
+///
+/// The arc stays at its far end — so the rendered foot is its target and
+/// nothing pops — while the target itself retreats under the hip at the
+/// same rate an illegal one does. A leg with nowhere to put its foot
+/// gathers under the body, which is both what a falling character's legs
+/// do and the pose the airborne sampler is about to blend to.
+#[allow(clippy::too_many_arguments)]
+fn hold_swing(
+    foot: &mut PlacerFoot,
+    from: Point3<f32>,
+    to: Point3<f32>,
+    under_hip: Point3<f32>,
+    from_forward: Vector3<f32>,
+    to_forward: Vector3<f32>,
+    duration: f32,
+    ctx: &PlacerCtx<'_>,
+) {
+    let retreat = 1.0 - (-ctx.config.unsupported_retreat_rate * ctx.dt).exp();
+    let to = lerp_point(to, under_hip, retreat);
+    foot.phase = FootPhase::Stepping {
+        from,
+        to,
+        from_forward,
+        to_forward,
+        t: (duration - ctx.dt).max(0.0),
+        duration,
+        peak_lift: 0.0,
+    };
+    foot.position = to;
+    foot.landing_shortened = true;
+}
+
+/// Pull a planted foot's y to the current terrain surface, as far down
+/// as the leg goes. No-op while the foot is mid-step — the swing arc
+/// owns y during that window.
+///
+/// The reach limit is what stops a foot from following a floor that is
+/// leaving. When a crate is knocked out from under a standing character
+/// the probe keeps finding a surface — the crate, on its way down, or
+/// the ground it was standing on — and without a limit the planted foot
+/// chases it, so the character is drawn with one leg stretched to twice
+/// its length reaching after the floor. The leg simply runs out instead,
+/// and the foot hangs at the bottom of it.
+fn sync_planted_y(foot: &mut PlacerFoot, foot_y: f32, hip: Point3<f32>, reach: f32) {
+    if !foot.is_planted() {
+        return;
     }
+    let lowest = lowest_reachable_y(hip, foot.planted_position, reach);
+    let y = foot_y.max(lowest);
+    foot.position.y = y;
+    foot.planted_position.y = y;
+}
+
+/// The lowest y a foot at this xz can be held at and still be attached
+/// to a leg of length `reach`. Where the hip is already further than
+/// that horizontally the leg has nothing left to spend on height, so the
+/// answer is the hip's own level.
+fn lowest_reachable_y(hip: Point3<f32>, foot: Point3<f32>, reach: f32) -> f32 {
+    let across = Vector2::new(foot.x - hip.x, foot.z - hip.z).magnitude();
+    let drop = (reach * reach - across * across).max(0.0).sqrt();
+    hip.y - drop
 }
 
 /// Distance ahead of the hip a foot plants at — the half-span of a
@@ -1300,6 +1411,138 @@ mod tests {
         assert!(
             (pelvis.x - placer.left.planted_position.x).abs() > 0.2,
             "with no carry the hip must run away from the anchor — that is the defect"
+        );
+    }
+
+    /// A floor that leaves. The crate the character is standing on is knocked
+    /// away, the probe goes on finding a surface — the crate on its way down,
+    /// or the ground it used to sit on — and the planted foot chased it: one
+    /// leg drawn at twice its length, reaching after the floor, which is the
+    /// sticky foot the collapsing-box case complains about.
+    #[test]
+    fn a_planted_foot_does_not_follow_a_floor_out_of_reach() {
+        let config = FootPlacerConfig::default();
+        let pelvis = Point3::new(0.0, STANDING_HEIGHT, 0.0);
+        let mut placer = FootPlacer::new(pelvis, Vector3::z(), HIP_WIDTH, 0.0);
+
+        let mut floor = 0.0;
+        for _ in 0..30 {
+            floor -= 0.1;
+            let mut ctx = riding(pelvis, Vector3::zeros(), &config);
+            ctx.left_ground = Some(Point3::new(0.0, floor, 0.0));
+            ctx.right_ground = Some(Point3::new(0.0, floor, 0.0));
+            ctx.foot_y_fallback = floor;
+            placer.tick(&ctx);
+        }
+
+        let ctx = riding(pelvis, Vector3::zeros(), &config);
+        for foot in [&placer.left, &placer.right] {
+            let hip = hip_position(foot.side, &ctx, Vector3::z());
+            let reach = (foot.planted_position - hip).magnitude();
+            assert!(
+                reach <= max_leg_extension(&ctx) + 1e-3,
+                "the foot chased the floor {:.0} mm down to {:.0}% of the leg",
+                (0.0 - foot.planted_position.y) * 1000.0,
+                reach / LEG_LENGTH * 100.0
+            );
+        }
+    }
+
+    /// The height a completing swing plants at is the ground the probe found,
+    /// not the arc's half-finished chase toward it. Walking off a block the
+    /// chase has a frame or two to cover most of a metre, and planting where
+    /// it got to leaves a foot standing in mid-air.
+    #[test]
+    fn a_plant_takes_the_grounds_height_and_not_the_arcs() {
+        let config = FootPlacerConfig::default();
+        let pelvis = Point3::new(0.0, STANDING_HEIGHT, 0.0);
+        let ctx = riding(pelvis, Vector3::zeros(), &config);
+        let from = Point3::new(-0.2, 0.0, HIP_WIDTH);
+        let to = Point3::new(0.2, 0.18, HIP_WIDTH);
+        let ground = Point3::new(0.2, 0.0, HIP_WIDTH);
+
+        let plant = plantable(
+            from,
+            to,
+            Some((ground, Vector3::y())),
+            &ctx,
+            FootSide::Right,
+            Vector3::z(),
+        )
+        .expect("ground under the target and within reach");
+
+        assert!(
+            (plant.y - ground.y).abs() < 1e-6,
+            "planted at {:.3} m, mid-arc, rather than on the floor at {:.3} m",
+            plant.y,
+            ground.y
+        );
+    }
+
+    /// And a leg cannot plant beyond its own bones. Walking off a block the
+    /// probe finds the ground a metre down — real ground, entirely out of
+    /// reach — and anchoring a foot there leaves a straight leg trailing
+    /// behind a character who has already stepped off the edge.
+    #[test]
+    fn a_swing_refuses_a_landing_the_leg_cannot_reach() {
+        let config = FootPlacerConfig::default();
+        let pelvis = Point3::new(0.0, STANDING_HEIGHT, 0.0);
+        let ctx = riding(pelvis, Vector3::zeros(), &config);
+        let from = Point3::new(-0.2, 0.0, HIP_WIDTH);
+        let to = Point3::new(0.3, 0.0, HIP_WIDTH);
+        let below = Point3::new(0.3, -1.0, HIP_WIDTH);
+
+        assert!(
+            plantable(
+                from,
+                to,
+                Some((below, Vector3::y())),
+                &ctx,
+                FootSide::Right,
+                Vector3::z(),
+            )
+            .is_none(),
+            "a foot planted a metre below the hip is a leg the rig cannot draw"
+        );
+    }
+
+    /// A swing with nowhere to land keeps swinging, and what it swings toward
+    /// is the stance under the hip: a falling character's legs gather under
+    /// him, and that is also the pose the airborne sampler is about to blend
+    /// to, so nothing has to be unwound when it does.
+    #[test]
+    fn a_swing_with_nowhere_to_land_gathers_under_the_hip() {
+        let config = FootPlacerConfig::default();
+        let pelvis = Point3::new(0.0, STANDING_HEIGHT, 0.0);
+        let ctx = riding(pelvis, Vector3::zeros(), &config);
+        let facing = Vector3::z();
+        let under_hip = foot_position_from_stance(
+            pelvis,
+            facing,
+            HIP_WIDTH,
+            ctx.foot_y_fallback,
+            FootSide::Right,
+        );
+        let mut foot = PlacerFoot::new(FootSide::Right, Point3::new(-0.6, 0.0, HIP_WIDTH), facing);
+        let far = Point3::new(0.6, 0.0, HIP_WIDTH);
+        foot.phase = FootPhase::Stepping {
+            from: Point3::new(-0.6, 0.0, HIP_WIDTH),
+            to: far,
+            from_forward: facing,
+            to_forward: facing,
+            t: 0.2,
+            duration: 0.2,
+            peak_lift: 0.0,
+        };
+
+        let before = (far - under_hip).magnitude();
+        advance_stepping(&mut foot, far, &ctx, facing);
+
+        assert!(!foot.is_planted(), "there was nowhere to plant");
+        let after = (foot.position - under_hip).magnitude();
+        assert!(
+            after < before,
+            "the foot must close on the stance under the hip, not hold its target"
         );
     }
 }

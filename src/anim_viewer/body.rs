@@ -164,9 +164,13 @@ impl Body {
             self.state.air_speed,
             self.config.air_steer_speed,
         );
-        // The gait's speed is relative to the floor, as it is in
-        // `CharacterControlSystem`: standing still on a platform means matching
-        // it, not holding a world position.
+        // The gait's speed is relative to the floor: standing still on a
+        // platform means matching it, not holding a world position. The game
+        // says so at the contact rather than here — a traction row drives the
+        // relative velocity across it, so `CharacterControlSystem` states the
+        // same thing by leaving the target alone. This body has no contacts to
+        // say it at, so it adds the deck itself and arrives at the velocity the
+        // engine would have produced, which is all the animator is given.
         if self.grounded {
             rule.target += Vector3::new(support_velocity.x, 0.0, support_velocity.z);
         }

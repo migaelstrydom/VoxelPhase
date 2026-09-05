@@ -1243,6 +1243,16 @@ pub struct BodyProbeHit {
     pub hit: ProbeHit,
 }
 
+/// Probes see every solid thing the world holds, static bodies included.
+///
+/// A foot probe asks "how high is the ground under here, and which way does
+/// it face". A level's floor is as often a spawned body as it is terrain — the
+/// deck of a platform, the steps of a temple — and whether that body happens
+/// to be able to move is nothing to do with whether a foot can stand on it. A
+/// probe that skipped static bodies would report no ground under a character
+/// plainly standing on one, and the placer reads no ground as a ledge: it
+/// shortens the step and lands the foot behind the hip, which is a foot
+/// dragging.
 impl ProbeTarget for PhysicsWorld {
     fn raycast(
         &self,
@@ -1254,9 +1264,6 @@ impl ProbeTarget for PhysicsWorld {
         let mut earliest: Option<ProbeHit> = None;
 
         for (_idx, body) in self.bodies.iter() {
-            if body.is_static() {
-                continue;
-            }
             let body_pos = body.position();
             let body_rot = body.rotation();
 
@@ -1743,5 +1750,60 @@ mod tests {
             &DriveCommand::medium(Vector3::y(), Vector3::zeros(), 40.0, 0.0),
         ));
         assert!(world.constraints.is_empty());
+    }
+
+    /// The floor a character walks on is as often a spawned body as it is
+    /// terrain, and a foot probe has to find it: the right height, facing up.
+    /// A stepped stylobate is the shape that matters — the collider is offset
+    /// from the body it belongs to, which is where a probe that took the
+    /// body's own position for the collider's would go wrong.
+    #[test]
+    fn a_foot_probe_finds_the_top_of_a_spawned_floor() {
+        let mut world = PhysicsWorld::new(PhysicsConfig::default());
+        let slab =
+            world.create_body(RigidBodyDesc::dynamic().position(Point3::new(12.0, 3.0, -7.0)));
+        world.attach_collider(
+            slab,
+            ColliderDesc::box_shape(Vector3::new(6.0, 0.15, 6.0))
+                .offset_translation(Vector3::new(0.0, 0.4, 0.0)),
+        );
+        let top = 3.0 + 0.4 + 0.15;
+
+        for step in 0..16 {
+            let x = 12.0 - 2.0 + step as f32 * 0.137;
+            let z = -7.0 + step as f32 * 0.311;
+            let origin = Point3::new(x, top + 0.35, z);
+            let hit = ProbeTarget::raycast(&world, origin, -Vector3::y(), 1.2)
+                .expect("a probe over the slab must find it");
+            assert!(
+                (hit.point.y - top).abs() < 1e-3,
+                "probe found the floor at {:.4} m, not {top:.4} m",
+                hit.point.y
+            );
+            assert!(
+                hit.normal.y > 0.99,
+                "the top of a slab faces up; got {:?}",
+                hit.normal
+            );
+        }
+    }
+
+    /// And whether that body can move is nothing to do with whether a foot can
+    /// stand on it. Skipping static bodies reports no ground under a character
+    /// plainly standing on one, which the foot placer reads as a ledge.
+    #[test]
+    fn a_probe_sees_a_floor_that_cannot_move() {
+        let mut world = PhysicsWorld::new(PhysicsConfig::default());
+        let plinth =
+            world.create_body(RigidBodyDesc::static_body().position(Point3::new(0.0, 1.0, 0.0)));
+        world.attach_collider(plinth, ColliderDesc::box_shape(Vector3::new(2.0, 0.5, 2.0)));
+
+        let hit = ProbeTarget::raycast(&world, Point3::new(0.3, 2.0, -0.4), -Vector3::y(), 1.0)
+            .expect("a static floor is still a floor");
+        assert!(
+            (hit.point.y - 1.5).abs() < 1e-3,
+            "found it at {:.4} m",
+            hit.point.y
+        );
     }
 }

@@ -189,15 +189,28 @@ impl<'a> System<'a> for CharacterControlSystem {
             // The rule states a speed relative to whatever is holding the
             // character up, because that is what a walk is: asking for 0 m/s
             // while standing on a moving platform is asking to be dragged off
-            // the back of it. On static ground the two frames are the same and
-            // this adds nothing.
+            // the back of it.
+            //
+            // At a supporting contact that frame costs nothing to state: the
+            // traction row drives the *relative* velocity across the contact,
+            // so the target is already read in the support's frame and adding
+            // the platform's velocity here would hand the character the deck
+            // twice — a passenger who walks off on his own.
+            //
+            // The one case that does need it stated is the forgiveness
+            // window. There the contacts are gone and the same target is
+            // chased out of the actuator's allowance instead, which is a
+            // world-frame chase with no support left to be relative to. A
+            // walker on a platform is in that window at every footfall, and
+            // aiming him at a world standstill for it drags him off the back
+            // a few centimetres at a time.
             let mut rule = state.locomotion.movement_rule(
                 move_dir,
                 ground_speed,
                 state.air_speed,
                 config.air_steer_speed,
             );
-            if is_grounded {
+            if is_grounded && !grounding.is_grounded {
                 rule.target += across(support.surface_velocity, &up);
             }
             apply_movement_rule(drive, rule);
@@ -614,24 +627,27 @@ mod tests {
     }
 
     /// The passenger case, end to end: no input, standing on a deck running
-    /// east. Asking for a world-frame standstill would have the drive brake
-    /// against the platform until the character slid off the back of it.
+    /// east. The target is already read in the deck's frame at the contact
+    /// that holds him up, so "ride it" is stated by asking for nothing.
+    /// Handing him the deck's velocity here as well would command him to walk
+    /// off along the platform under his own steam, which is what a second
+    /// helping of the same number looks like on screen.
     #[test]
-    fn an_idle_passenger_is_commanded_to_ride_the_deck() {
+    fn an_idle_passenger_asks_for_nothing_and_rides_the_deck() {
         let (world, entity) = character_world(true);
         let deck = Vector3::new(3.0, 0.0, 0.0);
         set_grounding(&world, entity, Grounding::on(Vector3::y()).carried_by(deck));
 
         CharacterControlSystem.run_now(&world);
 
-        assert_eq!(intent_of(&world, entity).linear_target, deck);
+        assert_eq!(intent_of(&world, entity).linear_target, Vector3::zeros());
     }
 
-    /// And walking on it is walking *on it*: the gait's speed is added to the
-    /// deck's, so the same stick input produces the same gait wherever it is
-    /// walked.
+    /// And walking on it is walking *on it*: the same stick input asks for the
+    /// same speed wherever it is walked, because the contact reads it against
+    /// the floor either way.
     #[test]
-    fn a_walk_on_a_moving_deck_is_the_walk_plus_the_deck() {
+    fn a_walk_on_a_moving_deck_asks_for_the_same_walk() {
         let (world, entity) = character_world(true);
         let deck = Vector3::new(3.0, 0.0, 0.0);
         set_grounding(&world, entity, Grounding::on(Vector3::y()).carried_by(deck));
@@ -645,7 +661,25 @@ mod tests {
 
         let walk = LocomotionConfig::player().walk_speed;
         let target = intent_of(&world, entity).linear_target;
-        assert!((target - Vector3::new(3.0, 0.0, walk)).magnitude() < 1e-4);
+        assert!((target - Vector3::new(0.0, 0.0, walk)).magnitude() < 1e-4);
+    }
+
+    /// Between footfalls the contacts go, the forgiveness window keeps the
+    /// character grounded, and the drive falls back to chasing the target in
+    /// the world. That chase is the one place the deck has to be named: aimed
+    /// at a world standstill instead, a rider loses a little ground every step
+    /// until he is off the back of the platform.
+    #[test]
+    fn a_rider_between_footfalls_is_still_carried() {
+        let (world, entity) = character_world(true);
+        let deck = Vector3::new(3.0, 0.0, 0.0);
+        set_grounding(&world, entity, Grounding::on(Vector3::y()).carried_by(deck));
+        CharacterControlSystem.run_now(&world);
+
+        set_grounding(&world, entity, Grounding::airborne());
+        CharacterControlSystem.run_now(&world);
+
+        assert_eq!(intent_of(&world, entity).linear_target, deck);
     }
 
     /// Nothing carries an airborne character. A deck's velocity reaching a

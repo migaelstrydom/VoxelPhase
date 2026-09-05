@@ -138,6 +138,7 @@ pub fn write_csv(take: &Take, path: &Path) -> EngineResult<()> {
         let _ = write!(
             out,
             ",{s}_planted,{s}_x,{s}_y,{s}_z,\
+             {s}_want_x,{s}_want_y,{s}_want_z,\
              {s}_anchor_x,{s}_anchor_z,{s}_ideal_x,{s}_ideal_z,{s}_hip_x,{s}_hip_y,{s}_hip_z,\
              {s}_extension,{s}_overreach,{s}_since_plant,{s}_pre_lift"
         );
@@ -177,12 +178,15 @@ pub fn write_csv(take: &Take, path: &Path) -> EngineResult<()> {
             let foot = frame.foot(side);
             let _ = write!(
                 out,
-                ",{},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},\
-                 {:.4},{:.4},{:.4},{:.4},{:.4}",
+                ",{},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4},\
+                 {:.4},{:.4},{:.4},{:.4},{:.4},{:.4},{:.4}",
                 foot.planted as u8,
                 foot.rendered.x,
                 foot.rendered.y,
                 foot.rendered.z,
+                foot.requested.x,
+                foot.requested.y,
+                foot.requested.z,
                 foot.anchor.x,
                 foot.anchor.z,
                 foot.ideal.x,
