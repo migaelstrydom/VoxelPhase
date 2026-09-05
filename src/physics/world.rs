@@ -552,7 +552,15 @@ impl PhysicsWorld {
     /// incidental: `EnergyTracker` is purely velocity-based, so a driven body
     /// with a saturated bound and near-zero velocity — a character walking
     /// into a wall — would otherwise sleep and stop being solved, and stay
-    /// asleep after the command changed.
+    /// asleep after the command changed. A sleeping body discards any impulse
+    /// aimed at it, so the player would freeze against the wall and stay
+    /// frozen after releasing the stick.
+    ///
+    /// That makes this one of R11's three surviving drive-aware sites, and the
+    /// only one the design expected to keep. Sleep is the exception because it
+    /// is the one subsystem that reasons about a body's *future* from its
+    /// present velocity, and a drive is exactly the thing that invalidates
+    /// that inference.
     pub fn set_body_drive(&mut self, handle: RigidBodyHandle, command: &DriveCommand) -> bool {
         let Some(body) = self.bodies.get(handle.0) else {
             return false;
@@ -608,6 +616,13 @@ impl PhysicsWorld {
     /// Updating in place rather than recreating keeps the constraint's
     /// warm-start impulses, which is what stops a platform re-converging on
     /// its target from scratch every frame.
+    ///
+    /// This and its two counterparts — `retire_medium_drive` and
+    /// `clear_body_drive` — are R11's third surviving drive-aware site: the
+    /// lifetime of the constraint a `BodyDrive::Medium` names. It survives
+    /// because the rows outlive the frame that asked for them and something
+    /// has to own them; nothing downstream is aware of them, since the solver
+    /// cannot tell a `MediumDrive` row from a hinge's.
     fn set_medium_drive(&mut self, handle: RigidBodyHandle, command: &DriveCommand) {
         let kind = ConstraintKind::MediumDrive {
             body: handle,

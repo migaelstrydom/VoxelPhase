@@ -1,6 +1,6 @@
 # Traction Drive — Design
 
-Design for the mechanism that replaces `VelocityDriven`. The requirements it
+Design for the mechanism that replaced `VelocityDriven`. The requirements it
 must satisfy are R1–R12 in
 [`VELOCITY_DRIVE_AND_PLATFORMS.md`](VELOCITY_DRIVE_AND_PLATFORMS.md) §7; that
 document also records why the present mechanism behaves as it does. This one
@@ -26,6 +26,16 @@ measured decision, and grounding has one source with a named allowance for what
 that still strands. §11 records each with the alternatives it was chosen over,
 because both are questions about how the game should feel rather than about
 whether the mechanism is correct.
+
+> **Status: delivered.** All eight stages have landed, R1–R12 are discharged,
+> and §9 is a record of what was built rather than a plan for building it. Every
+> prediction below that has since been measured says so and says what the
+> measurement was; where a prediction came out backwards, the original reasoning
+> is kept beside the correction rather than rewritten, because the reasoning is
+> what a later reader needs. **Nothing in any of it has been play-tested** — the
+> game window cannot be launched from an agent shell, so every stage verified
+> offline and every stage left feel questions behind. §9 opens with the
+> consolidated list.
 
 ---
 
@@ -56,9 +66,10 @@ codebase are marked *(existing)*.
 
 ---
 
-## 2. Existing architecture — engine level
+## 2. The architecture this replaced — engine level
 
-What runs today, per frame.
+What ran per frame before this design. Kept because §3 is only legible against
+it, and because the two faults it names are the whole reason for the work.
 
 ```mermaid
 flowchart TB
@@ -110,7 +121,7 @@ Two structural faults, both visible in the diagram:
    reaction (R1), nothing bounds it (R7), and the solver's contact impulses land
    afterwards where the target shift can no longer see them.
 
-## 3. Proposed architecture — engine level
+## 3. The architecture that replaced it — engine level
 
 ```mermaid
 flowchart TB
@@ -179,7 +190,7 @@ What changed:
 
 ---
 
-## 4. Existing architecture — component level
+## 4. The components this replaced — component level
 
 ```mermaid
 classDiagram
@@ -248,7 +259,7 @@ the target shift, the warm-start persistence rule, the restitution suppression),
 plus `integrate_forces` itself, plus the leak into `water/coupling.rs`. That is
 the surface R11 caps.
 
-## 5. Proposed architecture — component level
+## 5. The components that replaced them
 
 ```mermaid
 classDiagram
@@ -912,8 +923,12 @@ The successor is `SupportSet::relative_speed(body)`: the driven body's velocity
 measured against its supports, weighted by normal impulse for exactly the
 averaging job the drive path refuses to do. It is a query on the Support Set,
 computed where the contacts already are, and it is not a component. Naming it
-now matters, because Stage 1 will otherwise grow `carrier_velocity` back the
-first time an animator notices the sprinting passenger.
+now matters, because Stage 1 would otherwise grow `carrier_velocity` back the
+first time an animator noticed the sprinting passenger. It did not: no such
+field exists anywhere in the tree at the end of the work. `relative_speed`
+itself is still unbuilt — Stage 2 explains why it has to wait for the substep
+where the normal impulses are live — and it arrives with the consumer that needs
+it.
 
 ### 6.7 Non-support grip replaces `FrictionModel::AxisBiased`
 
@@ -1029,10 +1044,12 @@ it. §6.7 has landed, and the zero is now a property of the actuator, where a
 character meant to grip walls sets `non_support_grip: 1.0`, instead of a
 property of every contact the player makes.
 
-**Liskov.** After this work a driven body *is* an ordinary rigid body through
-the whole solve: nothing in `integrate_forces`, `integrate_bodies` or CCD needs
-to ask whether it is driven, because a drive is now indistinguishable from any
-other contact impulse. This is R11 restated as a type-level property.
+**Liskov.** A driven body *is* an ordinary rigid body through the whole solve:
+nothing in `integrate_forces`, `integrate_bodies` or CCD asks whether it is
+driven, because a drive is indistinguishable from any other contact impulse.
+This is R11 restated as a type-level property, and Stage 7 measured it — three
+sites in general engine code know a body is driven, and all three are about
+storing or retiring the command rather than about solving it.
 
 **Sleeping is the exception, and it is an expected survivor rather than an
 oversight.** `set_body_drive` wakes the body on every call, and that wake is
@@ -1045,16 +1062,23 @@ being solved, and by the engine's own warning at `world.rs:288-292` any impulse
 aimed at it is discarded. The player would freeze against the wall and stay
 frozen after releasing the stick.
 
-`push_drive_intent` therefore inherits the wake, and its condition is "does this
-entity have a non-trivial `DriveIntent`" — a body-is-driven test living in the
-sleep path. It gets the comment R11 asks for, naming that failure.
+`set_body_drive` therefore carries the wake, and it has the comment R11 asks
+for, naming that failure. Its condition turned out to be cheaper than this
+paragraph expected: the test lives on gameplay's side as the ECS join in
+`push_drive_intent` — an entity with both a `DriveIntent` and an `Actuator` — so
+what crosses into `src/physics/` is a command, not a question, and the wake is
+unconditional on the far side of the seam.
 
-One apparent instance is not one. `water/coupling.rs:224` gates a wake — a
+One apparent instance is not one. `water/coupling.rs` gates a wake — a
 self-propelled thing pushes water behind it — which is a gameplay and VFX
-categorisation, not a physics special case. It **relocates** to "does this entity
-have an `Actuator`"; it does not disappear. It also lives in `src/water/`, and
+categorisation, not a physics special case. It **relocated** to "does this entity
+have an `Actuator`", and did not disappear. It also lives in `src/water/`, and
 R11 counts sites in `src/physics/`, so it was never inside the budget it might
-otherwise be credited against.
+otherwise be credited against. The value moved to the `Actuator` join when
+`VelocityDriven` was deleted at Stage 1; Stage 7 finished the relocation by
+renaming the field it lands in from `is_velocity_driven` to `is_self_propelled`,
+so that the flag names the gameplay category it gates rather than an engine
+mechanism it no longer has any relationship to.
 
 **Interface segregation.** `CharacterControlSystem` takes `DriveIntent`
 (write) and `BodyMotion` (read) and cannot express "edit the measurement".
@@ -1083,41 +1107,63 @@ needs as a trait and lets the caller supply it.
 | R8 Cheats named and bounded | `Allowance` + `apply_allowances`, single module; `drive_gain` named and instrumented alongside it §11 | discipline, one file — **delivered**. `drive_gain`'s half landed at Stage 5 with `TractionLedger`; the Allowance half landed at Stage 6 as `physics/drive/allowance.rs` and `AllowanceLedger`. Three ceilings per entity (`air_accel`, `yaw_accel`, `unsupported_jump_speed`), opt-in through `Option<Allowance>`, and every impulse conjured is counted and printed. What it covers is the whole airborne controller (§6.3), unsupported jumps (D2a) and all of ground yaw (§6.2) |
 | R9 Distribution over supports | per-contact `μ·N` bound alone, no weighting term §6.1 | construction |
 | R10 Linear and angular unified | torsional row §6.2 | **form only, and narrower than it looked** — the row exists (`solver/torsional.rs`, Stage 6) and drives relative spin about the normal under `μ·N·r`, but `r` is a *declaration* (`Actuator::support_patch_radius`) and nothing in the game makes one. Two things reduce it further: Stage 5's `ω_target × r_contact` term already carries the angular target into the tangential rows, and Stage 6 measured that a manifold with several contacts yaws on those rows alone — so the torsional row is for a single contact standing for a patch, and nothing else. Ground yaw for a character is an Allowance, §6.2 |
-| R11 Surface does not grow | see below | measured, gated |
+| R11 Surface does not grow | see below | **delivered** — audited at Stage 7. Six sites before, **three** after, each justified in a comment where it lives; the surviving parameters are enumerated in `physics::drive`'s module doc |
 | R12 Tests first | §9 stage 0 | process |
 
-**R11 in detail.** Today's surface, from the requirements: `RigidBody::velocity_drive`,
-the target shift, the warm-start persistence rule, the restitution suppression,
-and the `integrate_forces` application. The requirements list five; there are
-**six**. The sixth is the sleep wake at `world.rs:523` (§7), which the
-requirements' own inventory misses — so the count to beat is higher than R11
-states, and the sixth is the one site this design expects to keep.
+**R11 in detail.** The surface this design started from, per the requirements:
+`RigidBody::velocity_drive`, the target shift, the warm-start persistence rule,
+the restitution suppression, and the `integrate_forces` application. The
+requirements list five; there were **six**. The sixth is the sleep wake in
+`set_body_drive` (§7), which the requirements' own inventory misses — so the
+count to beat was higher than R11 states, and the sixth is the one site this
+design always expected to keep.
 
 The `water/coupling.rs` flag is outside that scope and is a relocation, not a
 deletion (§7).
 
-As of Stage 5 the target shift and the `integrate_forces` application are
-deleted, and `RigidBody`'s drive state is one `Option<BodyDrive>` whose support
-variant is a command the planner reads rather than an effect the body applies —
-plus `non_support_grip`, which §6.7 already counted. The
-warm-start and restitution special cases in `pipeline/solver.rs` exist because a
-pre-solve drive re-asserts approach velocity every substep, keeping persisted
-contacts permanently above `restitution_velocity_threshold`. A body whose
-velocity changes *only* through solved impulses does not do that, so the
-expectation is that both can be deleted too. That expectation is a claim about
-behaviour, not a proof — it is exactly what the `driven body at rest` and
-`stack stability` acceptance tests exist to check. **If either special case must
-survive, it survives with a comment naming the instability it prevents, and the
-count is still lower than today.**
+**The count after: three, audited at Stage 7.** The counting rule is R11's own
+words — a place that can tell a driven body from an undriven one — applied to
+general engine code, which is where all six of the originals lived and where
+scatter is the thing R11 exists to prevent. `src/physics/drive/` is the
+mechanism and is drive-aware end to end by construction; counting its lines
+would make the number measure the module's size rather than the engine's
+contamination, and would score modularity as a cost.
+
+| Site | Fate |
+|---|---|
+| `RigidBody::velocity_drive` / `angular_velocity_drive` | **survives** as one `Option<BodyDrive>` (Stage 4). A command has to be stored between the frame that writes it and the plan that reads it, and the body is what both are about. `Some` and `None` behave identically everywhere outside `physics::drive` |
+| the target shift | **deleted**, Stage 5 |
+| the `integrate_forces` application | **deleted**, Stage 5 |
+| the warm-start persistence rule | **deleted**, Stage 7 |
+| the restitution suppression | **deleted**, Stage 7 |
+| the sleep wake (`set_body_drive`) | **survives**, as this design always expected. `EnergyTracker` is velocity-based, so a saturated row reads as stillness and a character leaning on a wall would sleep and stop being solved |
+| the medium-drive lifetime | **new**, Stage 4. `set_medium_drive` / `retire_medium_drive` / `clear_body_drive` own the constraint handle a `BodyDrive::Medium` names. Nothing downstream is aware of it — the solver cannot tell a `MediumDrive` row from a hinge's |
+
+The two deletions were the stage's open question, and the tests permitted them.
+Both existed because a pre-solve drive re-asserted approach velocity every
+substep, keeping persisted contacts permanently above
+`restitution_velocity_threshold`; a body whose velocity changes *only* through
+solved impulses does not do that. `driven body at rest` and `stack stability`
+were the named checks and both print exactly what they printed before, as do the
+other seven acceptance scenarios.
+
+**What survives besides the three are parameters, not tests**, and they are
+enumerated in `physics::drive`'s module doc so the whole surface can be read in
+one place: `RigidBody::non_support_grip` and `RigidBody::allowance`,
+`SolverContact::traction` and `accumulated_torsional_impulse`, and
+`PhysicsWorld::substeps_taken`. Every body and every contact carries them, the
+solver reads them unconditionally, and their defaults are inert — none can
+answer "is this body driven?" without being told.
 
 Stage 4 is neutral on the count too. `RigidBody::velocity_drive` and
 `angular_velocity_drive` became one `Option<BodyDrive>` — two fields to one,
 with the medium half holding a `ConstraintHandle` instead of a target — so the
 body still carries drive state and still carries exactly one site's worth of it.
-What Stage 5 deletes is the `Support` variant and the `integrate_forces`
+What Stage 5 deleted is the `Support` variant's effect and the `integrate_forces`
 application behind it, leaving `Medium`, which is a handle to rows the solver
-treats like any other. `ConstraintKind::MediumDrive` is not a sixth site: no
-drive code branches on it, and the solver cannot tell its rows from a hinge's.
+treats like any other. `ConstraintKind::MediumDrive` is not a site of its own:
+no drive code branches on it, and the solver cannot tell its rows from a
+hinge's. What the handle *did* add is the lifetime that owns it, counted above.
 
 §6.7 is neutral on this count rather than a saving. `FrictionModel::AxisBiased`
 is not in `src/physics/`'s drive surface — it is a collider material, and no
@@ -1127,14 +1173,88 @@ target, and the scale the tangential bound multiplies in. Neither is a
 body-is-driven test — the first is a scalar every body has and the second
 applies uniformly to grip and drive, asking only whether a contact is in the
 Support Set the solver already built. They are parameters, not branches, and
-they should be justified as such in Stage 7's audit.
+Stage 7's audit justified them as such.
 
 ---
 
 ## 9. Delivery plan
 
-Sequenced so that each stage is independently verifiable and no stage leaves
-the game unplayable.
+Sequenced so that each stage was independently verifiable. The intent that no
+stage leave the game unplayable held everywhere but once, and the exception is
+recorded where it happened: between Stage 5 and Stage 6 the player could neither
+jump nor steer in the air, because the contact-bounded drive had landed and the
+allowances that carry the airborne half had not.
+
+Every stage below has landed. What follows the stage entries is the record; what
+follows *here* is what the whole design leaves behind.
+
+### What remains outstanding
+
+**Everything on this list is a feel question or a pre-existing defect. None of
+it is a known mechanism fault**, and none of it blocks anything.
+
+**Nothing in this work has ever been played.** The game window cannot be
+launched from an agent shell, so eight stages verified through the bench harness
+and the unit tests and nothing else. The bench can say the rules do what they
+say; it cannot say whether the character is fun. In rough order of how likely
+each is to be noticed:
+
+- **The character cannot slip.** `drive_gain: 5.0` is a property of the driving
+  body, not of the target, so an actuated body grips at its gain wherever its
+  supports are — a player standing on ice does not slide (Stage 5, §11's
+  ledger). If it reads as glued, the fix is a lower gain, not a conditional one.
+- **A jump off a slope leaves along the slope**, losing `cos²θ` of its height
+  and gaining lateral speed nobody asked for — 76% of the height and 3.47 m/s
+  sideways on a 30° ramp (§10.2). If that reads as "the jump button stopped
+  working near a hill", the correction is a documented blend of the support
+  normal toward `−gravity_direction`, which R6 explicitly sanctions.
+- **Walking a slope costs `cos θ` of pace**, and the fix is conservative and
+  free: state `MovementRule::target` in the support's tangent plane instead of
+  world XZ (Stage 6's Effort finding). That is also R6's last open gap. Whether
+  a character who walks a 50° slope at flat-ground pace reads as floaty is the
+  question that decides it.
+- **Ground control after a walk-off has doubled** — 0.08 s of `Grounded` ahead
+  of 0.08 s of `CoyoteTime`, and `Grounded` does not clamp a rising velocity
+  (Stage 2c). The first thing to look at if walk-offs feel floaty.
+- **Turning is 500 rad/s² of non-conservative allowance** and air steering is
+  8 m/s² (Stage 6). Both are the numbers the old drive was bounded by, so a turn
+  should cost what it always did — but "should" is the operative word.
+- **Responsiveness is now a property of what the character stands on** (§10.1).
+  Intended, and nothing has been played on ice.
+- **Grenade jumping is weaker.** `ExplosionSystem`'s ECS-side knockback used to
+  leak into the next frame's drive target on top of the impulse the same
+  explosion queued; `Velocity` is measurement-only now, so the second blast is
+  gone (Stage 1). Deleting the loop or moving it onto the impulse channel is a
+  feel decision nobody has made.
+- **A fast wall-slide may read as sticky.** CCD contacts are built mid-substep
+  and carry no grip stamp, so a swept wall impact grips where `AxisBiased` gave
+  it zero friction (Stage 2b).
+- **`conjured_jump_share` has never been observed in play.** It is D2a's cost
+  made watchable, and if it is not small the next move is the dispatcher edge
+  §11 holds in reserve — deriving `Grounding` before `CharacterControlSystem`
+  rather than after.
+- **Whether `SupportConfig::min_support_cosine` should be 60°** is a
+  level-design question, and every level holds real area in the band it decides
+  (Stage 5's census).
+
+Four behaviours have no scenario covering them, named so they are recognised
+rather than debugged: a character driving hard *across* a slope it is also
+sliding down (where the friction cone clamp rotates a commanded impulse rather
+than shortening an opposing one, §10.3); a driver beating a bracer, since only
+the drive carries the gain (§11); a crate light enough to put the gain back in
+charge of `crate push`'s answer (§11); and a character walking on a stack rather
+than standing beside one.
+
+One loose end is cosmetic: `AnimationState::is_grounded` is written from the
+component and read by nothing since Stage 2c deleted its only consumer. A later
+cleanup can decide whether animation needs to know at all.
+
+And one failure is not this design's: **`ccd::sphere_does_not_tunnel_into_a_dynamic_corner`
+fails on this branch and failed before Stage 0.** Every stage from 6 onward has
+run the bench harness with it red and left it alone. It wants its own
+investigation.
+
+### The stages
 
 **Stage 0 — Acceptance tests (R12, blocking). Landed.** All eight scenarios
 from the requirements table live in
@@ -1902,11 +2022,94 @@ scenario that would change if it is. The seam Effort was holding open can close.
   can only answer numerically. The game window cannot be launched from an agent
   shell.
 
-**Stage 7 — Surface audit.** Count the drive-aware sites in `src/physics/`;
-delete the `pipeline/solver.rs` special cases if the tests permit. Relocate
-`BuoyancyBody::is_velocity_driven` to an `Actuator` test — it is a wake gate, not
-a physics special case, and it was never in the R11 budget. Justify every
-survivor in a comment. R11.
+**Stage 7 — Surface audit. Landed.** **Six drive-aware sites before, three
+after.** The two the stage was sent to try — the warm-start persistence rule in
+`solver/pgs_ngs.rs` and the restitution suppression in `solver/normal.rs`, both
+added by `84a49b1` to stabilise driven bodies — are deleted, and
+`solve_normal_impulse` lost the `is_persisted` argument that carried the second
+of them. What survives is `RigidBody::drive`, the sleep wake in
+`set_body_drive`, and the medium-drive lifetime; each carries a comment where it
+lives naming why, and `physics::drive`'s module doc carries the whole ledger so
+the surface can be read in one place rather than reconstructed from a grep. §8's
+R11 entry has the table.
+
+**No acceptance number moved.** All nine print to the digit what they printed at
+Stage 6, including the two the deletions were gated on — `driven body at rest`
+still settles at x = 0.2574 with identically zero velocity, and `stack stability`
+still shows 0.0000 m of lateral drift and 0.0149 m/s worst box speed. One number
+in a *tenth* scenario did move and it is reported rather than tuned away:
+`a_jump_from_a_slope_leaves_along_the_slope` takes off at
+`(0.0000, 5.9180, −3.5142)` where it took off at `(0.0000, 5.9425, −3.4718)`,
+same speed to four digits and a slightly different direction, and peaks at
+1.8725 m rather than 1.8874 m. It is the warm-start rule alone — restoring that
+one branch and nothing else reproduces the old numbers exactly, so the
+restitution deletion moves nothing anywhere in the suite. A capsule settling on
+a ramp is now a hair's breadth from where it used to be when it jumps, and it
+leaves along that hair's breadth of support normal. It is inside the scenario's
+tolerances and it is the only difference the whole suite shows.
+`cargo test --lib` is green at 978 and the bench harness at 1055, with the
+pre-existing `ccd::sphere_does_not_tunnel_into_a_dynamic_corner` failure
+untouched.
+
+**The counting rule, stated because the number is meaningless without it.** R11
+asks for the places that can tell a driven body from an undriven one, and all
+six of the originals were in general engine code — body, world, solver. That is
+what the count is of. `src/physics/drive/` is the mechanism, drive-aware end to
+end by construction; counting its lines would measure the module's size rather
+than the engine's contamination and would score the modularity R11 wanted as a
+cost. Parameters are counted separately and not as sites: `non_support_grip`,
+`allowance`, `SolverContact::traction`, `accumulated_torsional_impulse` and
+`substeps_taken` are read on every body and every contact without asking whose
+they are, and their defaults are inert.
+
+**`is_velocity_driven` is retired.** The flag §7 said would relocate rather than
+disappear had already moved to an `Actuator` join when `VelocityDriven` was
+deleted at Stage 1 — `src/systems/water.rs` has been reading `actuators.maybe()`
+since then. What was left was a name asserting a mechanism that no longer
+existed anywhere in the codebase, so `BodySnapshot::is_velocity_driven` is now
+`is_self_propelled`, documented as the gameplay categorisation it is: a thing
+that moves under its own power pushes water behind it, and a drifting log does
+not. With that the string `is_velocity_driven` appears nowhere in the tree.
+
+#### Judgement calls on the items earlier stages flagged
+
+**`Actuator` stays one type.** Stage 6 asked whether it wants to be two, since
+`max_accel` and `angular_max_accel` are the medium anchor's alone and a support
+anchor reads neither. It does not, and the reason is §7's own open/closed
+argument: `ReactionAnchor` is the extension point, and moving the anchor into
+the component's *type* would make every new anchor kind a new component, so
+every system joining on actuated entities would have to enumerate them — which
+is the "is this body a character?" branch the design exists to remove. The cost
+of one type is two fields a character leaves at their defaults, the same shape
+as `allowance: None` on every crate in the game. The reasoning is recorded on
+the type.
+
+**The torsional row is kept, knowingly.** Stage 6 asked the audit to make this
+call rather than find it by accident: the row has no in-game caller, because
+nothing declares a `support_patch_radius`. It stays. It is R10's only literal
+delivery — the requirement that linear and angular authority share one
+formulation — it is covered end to end by
+`a_declared_contact_patch_is_what_a_torsional_row_turns_on`, and it is a
+parameter rather than a branch: its cost where nobody wants it is one comparison
+against a zero radius per contact per iteration. Deleting it would leave R10
+satisfied by argument alone and re-deriving it for the first turntable would be
+strictly more work than keeping it. The reasoning is on the module.
+
+**`Actuator::anchor`'s doc comment was still saying the engine had one delivery
+path.** Written at Stage 1, true then, false since Stage 4. Corrected — the two
+paths are exclusive by construction and `set_body_drive` retires one when it
+installs the other.
+
+**Nothing was found that earlier stages had not already flagged.** The two
+lifetime holes Stages 4 and 5 left for this audit — a corpse keeping its drive,
+and a corpse keeping its allowance — were both closed at Stage 6 by
+`clear_body_drive`, and the audit confirms there is no third. Stage 2b's
+unstamped CCD contacts and Stage 2's absent `SupportSet::relative_speed` are
+deliberate gaps with no consumer rather than surface, and neither is a
+body-is-driven test; they stay as recorded.
+
+**Nothing here was play-tested either**, and this stage adds the last entry to a
+list every stage since 2b has been adding to. See the delivery note above.
 
 ---
 
@@ -2032,19 +2235,27 @@ acceptance scenarios notices, including the two that saturate their rows for
 nearly every frame; a character driving hard *across* a slope it is also
 sliding down is where it would show, and no scenario covers that.
 
-**Traction and grip share one budget.** They must — that is R7 — but it means a
-character accelerating hard has less grip against a slope, and walking uphill
-will cost speed. This is the *intended* physics and the reason the requirements
-already anticipate an **Effort** parameter. It is a feel decision, deferred, and
-the architecture leaves it as a bias on the target rather than a return to
-privileged axes.
+**Traction and grip share one budget.** They must — that is R7 — and the
+prediction was that a character accelerating hard would have less grip against a
+slope, so walking uphill would cost speed and an **Effort** parameter would be
+wanted. **Measured at Stage 6, and the symptom is real while the cause is not
+this one.** Uphill and downhill cost exactly the same, to three decimals; the
+budget never binds until 76°, outside the cone that decides whether a surface is
+standable at all. What costs the speed is a gait target stated in world XZ
+against a row that can only deliver its in-plane part. Effort is not needed and
+would be the wrong shape; §9's Stage 6 entry carries the census and the
+arithmetic.
 
 **The solver-native route has bitten before.** The current `integrate_forces`
 formulation was itself arrived at after instabilities, so "put it in the solver"
-is not automatically safer for having a nicer diagram. The mitigation is Stage
-3: the row generalisation ships as a no-op refactor with the target pinned to
-zero, so if the solve is going to destabilise, it does so behind a
-single-commit revert — before any behaviour depends on it.
+is not automatically safer for having a nicer diagram. The mitigation was Stage
+3: the row generalisation shipped as a no-op refactor with the target pinned to
+zero, behind a single-commit revert, before any behaviour depended on it. **It
+did not bite.** Stage 3 was bit-identical but for a sign of zero, Stage 5 turned
+the target on with no instability the acceptance scenarios could see, and Stage
+7 then deleted the two solver special cases the *old* pre-solve formulation had
+needed — which is the risk resolving in the opposite direction from the one this
+paragraph feared.
 
 ---
 
@@ -2201,9 +2412,16 @@ carries three obligations into implementation:
   gain is above one. A body at the honest bound prints nothing. It reads, for a
   walker leaning on a crate it cannot move, "gain 5.0 borrowed 4108 N (3.2 body
   weights), saturated 98% of 299 frames".
-- **Audited with the allowances.** Stage 7 counts drive-aware sites; the gain
-  belongs in the same ledger as R8's budgets, because it is the same kind of
-  claim about where authority comes from.
+- **Audited with the allowances.** *Landed at Stage 7.* The gain belongs in the
+  same ledger as R8's budgets, because it is the same kind of claim about where
+  authority comes from, and it is counted there: `Actuator::drive_gain` and
+  `Actuator::allowance` are both parameters on the declaration channel with
+  inert defaults, both are instrumented, and neither is one of the three
+  drive-aware sites §8's R11 entry counts. What the audit found about the gain
+  specifically is that it is confined to exactly one multiplication —
+  `honest_tangential_coefficient(...) * contact.traction.gain` in
+  `solver/friction.rs` — with the honest coefficient kept as its own function
+  beside it so the difference is computable where the clamp happens.
 
 #### The ledger — what 5.0 costs
 

@@ -354,8 +354,12 @@ fn build_body_snapshots(
 ) -> Vec<BodySnapshot> {
     let mut snapshots = Vec::new();
 
-    for (body_comp, pos, vel, vd) in (bodies, positions, velocities, actuators.maybe()).join() {
-        let is_velocity_driven: bool = vd.is_some();
+    for (body_comp, pos, vel, actuator) in (bodies, positions, velocities, actuators.maybe()).join()
+    {
+        // An `Actuator` is what declares that a body moves under its own
+        // power, so it is also what answers the wake question. Nothing here
+        // asks the engine whether a body is driven.
+        let is_self_propelled = actuator.is_some();
         let Some(rb) = physics.world.body(body_comp.0) else {
             continue;
         };
@@ -383,7 +387,7 @@ fn build_body_snapshots(
             velocity: vel.0,
             footprint_radius,
             mass: rb.mass(),
-            is_velocity_driven,
+            is_self_propelled,
         });
     }
 

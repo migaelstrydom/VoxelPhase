@@ -128,11 +128,6 @@ impl ConstraintSolver for PgsNgsSolver {
 
         // Phase 1: Capture pre-solve normal velocities and warm-start scales.
         //
-        // Persisted contacts (warm_normal_impulse > 0) always get warm-started
-        // regardless of approach velocity. This prevents velocity-driven bodies
-        // (e.g. player characters) from having warm-start disabled every frame
-        // due to their externally-set velocity exceeding the threshold.
-        //
         // Pre-solve extraction uses identity shock scales — we need the real
         // relative velocity for restitution decisions, not the shock-adjusted one.
         let no_shock = (1.0, 1.0);
@@ -145,10 +140,7 @@ impl ConstraintSolver for PgsNgsSolver {
                         let vn = BodyPairState::extract(bodies, &m.header, c.point, no_shock)
                             .map(|s| s.relative_normal_velocity(c.point, &c.normal))
                             .unwrap_or(0.0);
-                        let is_persisted = c.warm_normal_impulse > 0.0;
-                        let warm_scale = if is_persisted {
-                            self.config.warm_start_scale
-                        } else if vn.abs() > self.config.restitution_velocity_threshold {
+                        let warm_scale = if vn.abs() > self.config.restitution_velocity_threshold {
                             0.0
                         } else {
                             self.config.warm_start_scale
@@ -194,14 +186,12 @@ impl ConstraintSolver for PgsNgsSolver {
                 };
                 for _ in 0..normal_passes {
                     for ci in 0..manifold.contacts.len() {
-                        let is_persisted = manifold.contacts[ci].warm_normal_impulse > 0.0;
                         solve_normal_impulse(
                             bodies,
                             &manifold.header,
                             &mut manifold.contacts[ci],
                             self.config.restitution_velocity_threshold,
                             pre_solve[mi][ci].0,
-                            is_persisted,
                             shock,
                         );
                     }

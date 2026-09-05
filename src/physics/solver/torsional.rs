@@ -20,6 +20,16 @@
 //!
 //! See `docs/TRACTION_DRIVE_DESIGN.md` §6.2, which concludes from the same
 //! three facts that the player's ground yaw is an Allowance and not this row.
+//!
+//! **Nothing in the game declares a patch radius, and the row is kept anyway.**
+//! Stage 7's audit weighed deleting it as surface with no consumer and did not:
+//! it is R10's only literal delivery — the requirement that linear and angular
+//! authority share one formulation — it is covered end to end by
+//! `a_declared_contact_patch_is_what_a_torsional_row_turns_on`, and it is a
+//! parameter rather than a drive-aware branch. Its cost where nobody wants it
+//! is one comparison against a zero radius per contact per iteration. Deleting
+//! it would leave the requirement satisfied by argument alone, and re-deriving
+//! it for the first turntable would be strictly more work than keeping it.
 
 use generational_arena::Arena;
 

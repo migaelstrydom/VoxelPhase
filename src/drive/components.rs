@@ -82,14 +82,25 @@ impl DriveIntent {
 /// A property of the entity. Removing it takes the body out of service — it
 /// keeps its mass and its colliders and simply stops being driven, which is
 /// how a corpse stops walking.
+///
+/// **One type, not one per anchor.** `max_accel` and `angular_max_accel` are a
+/// medium anchor's alone and a support anchor's fields are meaningless to a
+/// platform, so a split is tempting. It is not taken: `ReactionAnchor` is the
+/// design's extension point (§7, open/closed), and putting the anchor in the
+/// component's *type* would make every new anchor kind a new component — so
+/// every system that joins on actuated entities would have to enumerate them,
+/// which is the "is this body a character?" branch the whole design exists to
+/// remove. The cost of one type is a few fields left at their defaults, which
+/// is the same shape as `allowance: None` on every crate in the game.
 #[derive(Component, Debug, Clone)]
 #[storage(DenseVecStorage)]
 pub struct Actuator {
     /// The declared recipient of every reaction impulse this drive applies.
     ///
-    /// Recorded from the start so an entity is never ambiguous about what it
-    /// pushes against, though today's engine has only one delivery path and
-    /// so cannot yet act on the distinction.
+    /// The engine picks the delivery path from it, and the two are exclusive
+    /// by construction: a support anchor gets tangential rows at the contacts
+    /// holding it up, a medium anchor gets world-anchored motor rows, and
+    /// `PhysicsWorld::set_body_drive` retires one when it installs the other.
     pub anchor: ReactionAnchor,
     /// Maximum linear acceleration toward the target velocity, in m/s².
     ///

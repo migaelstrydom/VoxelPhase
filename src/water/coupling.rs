@@ -59,8 +59,15 @@ pub struct BodySnapshot {
     /// Mass of the body (kg). Used to scale wave injection — light objects
     /// create smaller disturbances, preventing feedback-driven bouncing.
     pub mass: f32,
-    /// Whether this body is velocity-driven (player/platform).
-    pub is_velocity_driven: bool,
+    /// Whether this body moves under its own power — a character, a lift —
+    /// rather than being carried by the physics it is in.
+    ///
+    /// Gates the wake in [`WaveBodyCoupler::update`]: a self-propelled
+    /// thing pushes water behind it, and a drifting log does not. That is a
+    /// gameplay and VFX categorisation, not a physics special case, so its
+    /// source is the entity carrying an `Actuator` — see
+    /// `docs/TRACTION_DRIVE_DESIGN.md` §7.
+    pub is_self_propelled: bool,
 }
 
 /// Per-body persistent state for tracking submersion transitions.
@@ -219,9 +226,9 @@ impl WaveBodyCoupler {
                 }
             }
 
-            // 3. Wake: velocity-driven body moving horizontally through water.
+            // 3. Wake: self-propelled body moving horizontally through water.
             //    Uses displacement injection behind the body.
-            if body.is_velocity_driven {
+            if body.is_self_propelled {
                 let horizontal_vel = nalgebra::Vector3::new(body.velocity.x, 0.0, body.velocity.z);
                 let h_speed = horizontal_vel.magnitude();
                 if h_speed > self.config.wake_speed_threshold {
@@ -382,7 +389,7 @@ mod tests {
             velocity: Vector3::new(0.0, -5.0, 0.0),
             footprint_radius: 0.5,
             mass: 20.0,
-            is_velocity_driven: false,
+            is_self_propelled: false,
         };
         coupler.update(&[body_above], &mut wave_grid, &flow_grid);
         assert!(
@@ -397,7 +404,7 @@ mod tests {
             velocity: Vector3::new(0.0, -5.0, 0.0),
             footprint_radius: 0.5,
             mass: 20.0,
-            is_velocity_driven: false,
+            is_self_propelled: false,
         };
         coupler.update(&[body_entering], &mut wave_grid, &flow_grid);
 
@@ -421,7 +428,7 @@ mod tests {
             velocity: Vector3::new(0.0, 0.5, 0.0),
             footprint_radius: 0.5,
             mass: 20.0,
-            is_velocity_driven: false,
+            is_self_propelled: false,
         };
         coupler.update(&[body], &mut wave_grid, &flow_grid);
         let energy_after_first = total_wave_energy(&wave_grid);
@@ -433,7 +440,7 @@ mod tests {
             velocity: Vector3::new(0.0, -0.3, 0.0),
             footprint_radius: 0.5,
             mass: 20.0,
-            is_velocity_driven: false,
+            is_self_propelled: false,
         };
         coupler.update(&[body], &mut wave_grid, &flow_grid);
         let energy_after_second = total_wave_energy(&wave_grid);
@@ -457,7 +464,7 @@ mod tests {
             velocity: Vector3::zeros(),
             footprint_radius: 0.5,
             mass: 20.0,
-            is_velocity_driven: true,
+            is_self_propelled: true,
         };
         coupler.update(&[body], &mut wave_grid, &flow_grid);
 
@@ -468,7 +475,7 @@ mod tests {
             velocity: Vector3::new(3.0, 0.0, 0.0),
             footprint_radius: 0.5,
             mass: 20.0,
-            is_velocity_driven: true,
+            is_self_propelled: true,
         };
         coupler.update(&[body], &mut wave_grid, &flow_grid);
 
@@ -491,7 +498,7 @@ mod tests {
             velocity: Vector3::new(0.0, -2.0, 0.0),
             footprint_radius: 0.5,
             mass: 20.0,
-            is_velocity_driven: false,
+            is_self_propelled: false,
         };
 
         // Two frames above water.
@@ -516,7 +523,7 @@ mod tests {
             velocity: Vector3::zeros(),
             footprint_radius: 0.5,
             mass: 20.0,
-            is_velocity_driven: false,
+            is_self_propelled: false,
         };
         coupler.update(&[body], &mut wave_grid, &flow_grid);
         assert!(coupler.body_states.contains_key(&42));

@@ -195,6 +195,14 @@ pub struct RigidBody {
 
     /// How this body converts a drive command into momentum, if it is driven
     /// at all. Exactly one form at a time — see [`BodyDrive`].
+    ///
+    /// One of R11's three surviving drive-aware sites, and the one the other
+    /// two exist to service. It survives because a command has to be stored
+    /// between the frame that writes it and the plan that reads it, and the
+    /// body is what both of them are about. Nothing in `integrate_forces`,
+    /// `integrate_bodies` or CCD reads it: `Some` and `None` behave
+    /// identically everywhere except in `physics::drive`, which is what makes
+    /// a driven body an ordinary rigid body through the whole solve.
     drive: Option<BodyDrive>,
     /// Fraction of the tangential budget this body may draw at contacts that
     /// are not holding it up. `1.0` — the default — grips everything it

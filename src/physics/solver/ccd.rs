@@ -27,7 +27,6 @@ pub(crate) fn solve_contacts(
                 contact,
                 restitution_velocity_threshold,
                 pre_solve_vn,
-                false,
                 no_shock,
             );
             // A swept contact is built mid-substep, after the frame's plan,

@@ -22,7 +22,6 @@ pub(crate) fn solve_normal_impulse(
     contact: &mut SolverContact,
     restitution_velocity_threshold: f32,
     pre_solve_vn: f32,
-    is_persisted: bool,
     shock_scales: (f32, f32),
 ) {
     let Some(state) = BodyPairState::extract(bodies, header, contact.point, shock_scales) else {
@@ -83,17 +82,10 @@ pub(crate) fn solve_normal_impulse(
         return;
     }
 
-    // Persisted contacts suppress restitution: the high approach velocity
-    // is from an external velocity drive, not a new impact.
-    let restitution = if is_persisted {
-        0.0
-    } else {
-        let speed = pre_solve_vn.abs();
-        let restitution_scale = ((speed - restitution_velocity_threshold)
-            / restitution_velocity_threshold)
-            .clamp(0.0, 1.0);
-        header.restitution * restitution_scale
-    };
+    let speed = pre_solve_vn.abs();
+    let restitution_scale =
+        ((speed - restitution_velocity_threshold) / restitution_velocity_threshold).clamp(0.0, 1.0);
+    let restitution = header.restitution * restitution_scale;
     let restitution_velocity = if pre_solve_vn < 0.0 {
         restitution * pre_solve_vn
     } else {

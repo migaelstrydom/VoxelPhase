@@ -94,6 +94,10 @@ pub struct SolverContact {
     /// Default — every contact of every undriven body, and every contact CCD
     /// builds mid-substep — is ordinary friction: hold still, at the honest
     /// `μ·N`.
+    ///
+    /// A parameter and not a drive-aware branch (R11): the solver reads it on
+    /// every contact without asking whose it is, and a contact with the default
+    /// row solves exactly as it did before the drive existed.
     pub traction: TractionRow,
 }
 
