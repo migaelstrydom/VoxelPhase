@@ -447,6 +447,30 @@ needs only the contact set and the target, and the bound is read live inside the
 solve loop from `contact.accumulated_normal_impulse`, exactly as
 `solve_friction_impulse` does today.
 
+#### As built (Stage 5)
+
+`TractionPlanner` (`physics/drive/plan.rs`) stamps a `TractionRow` — a target
+and a gain — onto each `SolverContact` once per frame, from the same manifold
+slice the Support Set was resolved from, and `solve_friction_impulse` reads it
+where Stage 3 had it take a parameter. Three details go beyond the paragraphs
+above:
+
+- **The bound is `μ · tangential_scale · gain`,** and the gain applies to every
+  row at a driven body's supports regardless of what that row is aiming at.
+  §11's D1 predicted the gain would touch the drive and leave grip honest; it
+  cannot, because a released stick commands zero *relative velocity across the
+  support*, which is a brake rather than an absence of command. §11's ledger
+  records what that costs.
+- **Two driven bodies at one supporting contact sum their targets and multiply
+  their gains.** The composition matters only in a degenerate case and is
+  chosen so the ordinary one — a single driven body, everything else at
+  `gain: 1.0` — is an identity, which is the same rule §6.7's grip scales
+  compose by.
+- **The row's sign is the driven body's slot.** Relative velocity is measured
+  B minus A, so a command enters positively from B and negatively from A. This
+  is what makes `edge walk` come out negative without anything in the drive path
+  knowing which body is a character.
+
 #### R4 is per-contact, and that is the honest reading
 
 R4 asks for targets in the frame of the reaction partner. R9 asks for a body
@@ -986,14 +1010,14 @@ needs as a trait and lets the caller supply it.
 |---|---|---|
 | R1 Conservation | §6.1 tangential row via `apply_impulse_pair` at the contact point | construction |
 | R2 Infinite-mass partners | `inv_mass == 0` on the partner | mechanism yes; **"accelerates as today" reworded** — R2 keeps its mechanism claim, and the magnitude is restored by `drive_gain` rather than promised by R7, §11 |
-| R3 Declared reaction partner | `Actuator::anchor`, `ReactionAnchor` §6.4 | declaration; **half delivered** by Stage 4 — the Medium anchor is real rows in the solver and platforms use it, while the Support anchor is still today's pre-solve chase until Stage 5. The two are exclusive by construction (§6.4) rather than by discipline |
+| R3 Declared reaction partner | `Actuator::anchor`, `ReactionAnchor` §6.4 | declaration; **delivered** — the Medium anchor is world-anchored motor rows (Stage 4) and the Support anchor is tangential rows at the contacts holding the body up (Stage 5). The two are exclusive by construction (§6.4) rather than by discipline |
 | R4 Support-relative targets | row solves *relative* velocity §6.1 | **per contact, not per body** — a bridging body has no single anchor frame and its world speed is an outcome, §6.1 |
 | R5 Command ≠ measurement | `DriveIntent` / `BodyMotion` split §3, §7 | type system |
-| R6 No privileged coordinates | Contact Frame §6.1; `gravity_direction()` §6.6; `AxisBiased` leaves the drive path §6.7 | **bound delivered** by Stage 2b — the player's grip is decided against gravity, and no body-local axis survives in the friction path. Stage 2c took the last world-Y out of the grounding projection with it: the normal a character reads is the Support Set's, not a second cone against `normal.y`. The basis waits on the tangential row itself (Stage 5) |
-| R7 Authority bounded by contact | `μ_drive·N` row bounds §6.1 | construction; magnitude chosen — `drive_gain: 5.0`, with its ledger in §11 |
-| R8 Cheats named and bounded | `Allowance` + `AllowanceApplier`, single module; `drive_gain` named and instrumented alongside it §11 | discipline, one file — the ledger is the whole airborne controller (§6.3), unsupported jumps (D2a), and one scalar per actuator |
+| R6 No privileged coordinates | Contact Frame §6.1; `gravity_direction()` §6.6; `AxisBiased` leaves the drive path §6.7 | **delivered** — the bound at Stage 2b, the grounding normal at Stage 2c, and the basis at Stage 5: the drive is solved in each contact's own tangent plane and nothing in the path names an axis. What remains outside it is the gait: `MovementRule::target` is still built in world XZ, which is a controller convention rather than a drive one |
+| R7 Authority bounded by contact | `μ_drive·N` row bounds §6.1 | construction, landed at Stage 5; magnitude chosen — `drive_gain: 5.0`, with its ledger in §11. `crate push` is the demonstration: a walker who could punt a 768 kg box to 4.70 m/s now moves it by the mass ratio, because 5× the tangential force is still less than the crate's own friction |
+| R8 Cheats named and bounded | `Allowance` + `AllowanceApplier`, single module; `drive_gain` named and instrumented alongside it §11 | discipline, one file — the ledger is the whole airborne controller (§6.3), unsupported jumps (D2a), and one scalar per actuator. `drive_gain`'s half landed at Stage 5 with `TractionLedger`; the Allowance half is Stage 6, and until it lands an airborne character has no authority at all |
 | R9 Distribution over supports | per-contact `μ·N` bound alone, no weighting term §6.1 | construction |
-| R10 Linear and angular unified | torsional row §6.2 | **form only** — ground yaw is an Allowance in practice, §6.2 |
+| R10 Linear and angular unified | torsional row §6.2 | **form only** — ground yaw is an Allowance in practice, §6.2. Stage 5 delivered the angular *target* into the per-contact tangential row as `ω_target × r_contact`, which is a well-posedness term for a distributed drive rather than a yaw drive |
 | R11 Surface does not grow | see below | measured, gated |
 | R12 Tests first | §9 stage 0 | process |
 
@@ -1007,8 +1031,10 @@ states, and the sixth is the one site this design expects to keep.
 The `water/coupling.rs` flag is outside that scope and is a relocation, not a
 deletion (§7).
 
-After this design: `RigidBody` carries no drive state at all; the target shift
-and the `integrate_forces` application are deleted along with it. The
+As of Stage 5 the target shift and the `integrate_forces` application are
+deleted, and `RigidBody`'s drive state is one `Option<BodyDrive>` whose support
+variant is a command the planner reads rather than an effect the body applies —
+plus `non_support_grip`, which §6.7 already counted. The
 warm-start and restitution special cases in `pipeline/solver.rs` exist because a
 pre-solve drive re-asserts approach velocity every substep, keeping persisted
 contacts permanently above `restitution_velocity_threshold`. A body whose
@@ -1420,24 +1446,229 @@ Four things Stage 5 should know:
   "the platform does what the level author wrote". Riding one is the check, and
   the game window cannot be launched from an agent shell.
 
-**Stage 5 — Traction.** `TractionPlanner` feeds real targets, carrying the
-commanded spin per contact (§6.1); delete `RigidBody::velocity_drive`, the target
-shift, and the `integrate_forces` application. `Actuator::drive_gain` lands here
-at 5.0 for the player (§11), along with the instrumentation §11 requires of it.
-`edge walk` flips sign. This is the risk-bearing stage, the first at which a
-traction bound governs real behaviour, and by the time it arrives it is the
-shortest possible diff.
+**Stage 5 — Traction. Landed.** A drive is friction with a non-zero target, and
+it is now literally that. `TractionPlanner` (`physics/drive/plan.rs`) writes a
+`TractionRow` onto every contact once per frame — a target relative velocity and
+a budget multiplier — and `solve_friction_impulse` reads it where it used to
+read a hard-coded zero. `RigidBody` carries a `SupportDrive` (two
+support-relative targets and a gain) and nothing else; `integrate_forces` no
+longer knows what a drive is, and the target shift is gone with it. The player's
+actuator declares `drive_gain: 5.0`, and what that gain spends is measured per
+body by `TractionLedger` and printed to `DebugLog`.
 
-Two checks belong to this stage rather than to play-testing, both from §11's
-ledger: `stack stability` under a body with 5× tangential authority, and whether
-any level holds slopes in the 39°–76° band where standing and walking limits
-diverge — `cos_floor` is the dial if one does.
+`edge walk` flips sign — `+0.41128 rad/s` at Stage 0, `−0.12183` now.
+`horizontal lift carry` inverts too: the passenger rides at 2.9993 m/s under a
+deck running at 2.9988 and drifts 0.0005 m, where it used to be braked to a
+standstill and dropped off the back after 12.79 m. Both are specifications now.
+`cargo test --lib` is green at 964 and the bench harness at 1034, with the
+pre-existing `ccd::sphere_does_not_tunnel_into_a_dynamic_corner` failure
+untouched.
 
-*Why this order.* Platforms have no drive other than `VelocityDriven`
-(`moving_platform.rs:144`). Deleting it before they have a medium anchor stops
-every platform in the game and turns three of the eight Stage 0 tests red for
-reasons unrelated to what the stage changed — which is exactly the signal Stage
-0 exists to protect.
+*Why this order.* Platforms had no drive other than the support chase
+(`moving_platform.rs:144`). Deleting it before they had a medium anchor would
+have stopped every platform in the game and turned three of the eight Stage 0
+tests red for reasons unrelated to what the stage changed — exactly the signal
+Stage 0 exists to protect.
+
+#### The shape that landed
+
+- **The row is stamped, not passed.** Stage 3 gave `solve_friction_impulse` a
+  `target_relative_velocity` parameter; the parameter is gone and the target
+  lives on the contact, because the planner needs to write a *different* target
+  per contact and the solver already had `&mut SolverContact` in hand. This is
+  the same shape `tangential_scale` took at Stage 2b, for the same reason, and
+  it means the CCD contact solve needs no argument of its own: a swept contact
+  is built mid-substep, after the frame's plan, so it carries the default —
+  hold still, honest budget — and that is the right answer for it.
+- **The bound is `μ · tangential_scale · gain`,** with the honest coefficient
+  kept as its own function beside it so the difference between the two is
+  computable where the clamp happens. That difference *is* the instrumentation.
+- **The target's sign comes from the driven body's slot.** The solver measures
+  relative velocity as B minus A, so a command enters positively when its body
+  is B and negatively when it is A. Two driven bodies sharing one supporting
+  contact sum their targets and multiply their gains — the same composition the
+  grip stamp uses, and the only one that leaves the ordinary case an identity.
+- **One Support Set per frame, held on the world.** Stage 2b asked Stage 5 to
+  collapse its two resolves into one per substep. It went the other way: the
+  frame's resolve is now stored as `PhysicsWorld::frame_supports` and *three*
+  consumers share it — the grip stamp, the traction plan and the gain ledger —
+  because a `ContactSite` is only meaningful against the slice it came from and
+  all three want the same slice. The second resolve (`support_sets()`, over all
+  manifolds including sleeping pairs, feeding grounding) is still there and
+  still means something different. Resolving per substep would cost a hash map
+  per substep to move contact points by millimetres; it is not obviously worth
+  it and nothing measured says it is.
+
+#### Judgement calls
+
+**The gain is not conditional on the target, and this diverges from §11.** §11
+says "grip is not scaled — a standing character on ice slides at the honest
+`μ`", and its ledger predicts that standing and walking limits diverge at
+`atan(0.8) ≈ 39°` and `atan(4.0) ≈ 76°`. As built they do not. The gain is a
+property of the body driving through a contact, not of the target it happens to
+be asking for, so it applies to every tangential row at that body's supports
+including the ones whose target is zero.
+
+The alternative — gain the row only when the commanded target is non-zero — was
+considered and rejected. A released stick commands zero *relative to the
+support*, which is a brake, and gating on the target would have cut braking
+authority by five while leaving acceleration at full. §10.1's measurement is
+the reason that is unacceptable: the play-test that rejected 7.85 m/s² rejected
+it as a *pace*, and a character that starts in 0.13 s and stops in 0.64 s is
+not the character that measurement approved. It would also have put a hidden
+branch — "is this target zero?" — in the middle of the one row the whole design
+exists to keep uniform.
+
+What that costs is exactly what §11's ledger listed on the other side, so the
+ledger is updated rather than contradicted:
+
+- Standing and walking limits coincide at `atan(4.0) ≈ 76°`, so "walk up a
+  slope you cannot stand on" does not happen. What decides whether a slope is
+  walkable at all is now `SupportConfig::min_support_cosine` — the 60° cone
+  that says whether a contact holds the body up. (§11's reference to
+  `cos_floor` on the player spawner is stale: that field went with
+  `FrictionModel::AxisBiased` at Stage 2b.)
+- An actuated body's own grip at its feet is scaled with its drive. A player
+  standing on ice does not slide. Everything without an actuator — every crate,
+  prop and corpse — grips honestly, and so does an actuated body at contacts
+  outside its Support Set, so ice still reads as ice for everything the player
+  interacts with and the *relative* legibility of surfaces survives intact for
+  the player too.
+
+This is a feel decision and it wants a play-test. If a player who cannot slide
+reads as glued, the honest fix is a lower `drive_gain`, not a conditional one.
+
+**The movement rule stopped steering from the measurement, and `ground_accel`
+stopped reaching the ground.** `apply_movement_rule` commanded
+`move_toward(measured, target, ground_accel · dt)` in world space. Both halves
+had to go. World space, because R4's whole content is that a target is stated
+relative to the support — without that change `horizontal lift carry` inverts to
+nothing, since an idle passenger would still be asking to come to rest against
+the world. And the rate limit, because the ramp from standstill to walk speed is
+now the traction budget: rate-limiting the *command* on top would have imposed
+whichever of the two was slower and hidden the surface behind a constant.
+
+So `LocomotionConfig::ground_accel` no longer has a reader while a character is
+supported. It is not deleted and `MovementRule::accel` is not deleted, because
+the airborne authority Stage 6 builds has no contact to be bounded by and must
+state its own rate — but until then the field is carried, documented, and read
+by nothing. The 40 m/s² it holds is now expressed by `drive_gain: 5.0` against
+a `μ` of 0.8, which is the duplication D1 chose knowingly.
+
+#### Surprises
+
+**`horizontal lift carry` never had a passenger on the deck.** The Stage 0 rig
+spawned the walker at the world origin while the platform's *route* started at
+x = −20, so the passenger stood in mid-air 20 m from the lift, fell 10 m, and
+lay on the floor while the platform ran overhead. The 12.79 m of "drift" it
+recorded was the platform's own travel. The characterisation was therefore true
+of nothing, and the scenario had to be fixed before its inversion could mean
+anything. Fixed, it inverts cleanly. Two lessons: a scenario that measures a
+*difference* between two bodies can pass while one of them is absent, and the
+`still_aboard` flag it printed was saying so all along.
+
+**`crate push` inverted the other way from §11's prediction.** §11's ledger
+said the mass-ratio comparison stays a characterisation permanently, because at
+5× the walker transmits five times the tangential force and the outcome is not
+the mass ratio. The mechanism is right and the conclusion is backwards: the
+walker's feet can supply at most `0.8 · 5 · 131 · 9.81 ≈ 5.1 kN`, and the
+768 kg crate's own friction against the ground resists `0.8 · 768 · 9.81 ≈
+6.0 kN`. There is no sustained push at all. What the crate gets is the inelastic
+transfer of the walker's momentum on contact, which *is* the mass ratio: 0.7069
+against a predicted 0.7281, the shortfall being the crate's friction bleeding
+speed away on the same frame it arrives. The assertion is a specification now,
+bounded above by momentum conservation and below at 85% of the mass ratio. What
+the gain actually did here is visible in the ledger instead — 4108 N borrowed,
+3.2 body weights, rows saturated in 98% of frames.
+
+**A free sphere spins its drive away.** A traction row drives *contact-point*
+velocity, and a ball satisfies that by rolling on the spot: it is a wheel
+spinning its tyres, and it is correct. Two long-standing bench scenarios —
+`solver::sphere_pushing_box_no_jitter` and
+`solver::velocity_driven_sphere_against_wall_no_bounce` — drove a free sphere
+and had characterised the old reactionless drive, so both went red. Both were
+rewritten rather than tuned: the spheres now have their rotational inertia
+scaled up, which is the bench's way of saying what the player's `KeepUpright`
+constraint says, and the wall sphere's restitution dropped from 0.5 to 0.0 so
+that a *real* rebound cannot be confused with the solver artefact the test
+hunts. `sphere_pushing_box`'s push-efficiency floor was replaced outright: a
+15.7 kg sphere cannot move a 500 kg box under a contact-bounded drive, and
+asserting that it can was asserting the reactionless pump back. It now measures
+what its name says — a driven body against an immovable load must go quiet, and
+it does, to `0.0000 m/s` and `0.0000 m` of gap movement.
+
+**Stage 4's warm-start trap does not bite here.** The warning was that a
+constraint row pinned at its bound realises `warm_start_scale` — 0.6 — of its
+declared authority from the second substep on, because its accumulated impulse
+persists across the frame's substeps. A traction row is a *contact* row, and
+`warm_start_contact` resets `accumulated_friction_impulse_ws` at the top of
+every substep to the previous frame's cached impulse times 0.6, then lets the
+iteration re-converge. So the 0.6 scales the seed, not the ceiling, and a
+saturated traction row delivers its full `μ·N` every substep. `crate push`
+saturating 98% of frames with the walker still holding station is that working.
+
+#### The two §11 checks
+
+**(a) `stack stability` under 5× tangential authority: no effect, and slightly
+quieter.** Lateral drift `0.0000 m` as before; worst box speed fell from
+`0.0400 m/s` to `0.0149 m/s`. The gain multiplies a bound that an idle
+character never approaches — a body already at its target asks the row for
+nothing — so the extra authority is never spent. What improved is separate and
+is the point of the stage: the old drive re-asserted a velocity ahead of the
+solve every substep and some of that leaked into the stack, and there is now
+nothing to leak.
+
+**(b) Slopes in the 39°–76° band: every level has them, and the band no longer
+means what §11 thought.** An area-weighted census of upward-facing collision
+triangles gives, as a fraction of standable area: `subsidence` 13.9%,
+`test_arena` 7.5%, `test_segments` 10.9%, `test_empty_terrain` 3.4%,
+`test_empty_small` 23.5% (a small level that is mostly wall). These are real
+surfaces, not seam artefacts — `test_arena` alone has 197 m² within a degree of
+45°.
+
+Because the gain is unconditional, the divergence the band was drawn around
+does not exist, so the answer is not "turn `cos_floor` down". A ninth acceptance
+scenario measures it directly on a 50° ramp: an idle character holds station to
+within 0.07 m over three seconds, and a walking one climbs 5.96 m in the same
+time. Both limits are `atan(4.0) ≈ 76°`, and the operative dial is
+`SupportConfig::min_support_cosine` at 60°, which decides whether a slope is a
+support at all rather than whether it can be climbed. Whether 60° is the right
+number for this game is a level-design question and a play-test, not a physics
+one.
+
+#### What Stage 6 needs to know
+
+- **The airborne character has no authority at all, and this is the design
+  working.** `solve_friction_impulse` early-returns on a contact with no normal
+  impulse, so a body with no supports has no rows and no drive. Every jump verb
+  therefore lands on nothing: `DriveIntent::normal_impulse` still sets the
+  normal component of a target that the tangential rows project straight out,
+  and air steering writes a target no row reads. **Between this stage and Stage
+  6 the player cannot jump and cannot steer in the air.** §6.3 says outright
+  that the whole airborne half is Allowance and §9 assigns Allowances to Stage
+  6, so this is sequencing rather than breakage — but it does contradict §9's
+  claim that no stage leaves the game unplayable, and it is stated here rather
+  than discovered.
+- **`MovementRule::accel` and `LocomotionConfig::ground_accel`/`air_steer_speed`
+  are waiting for you.** They are the rate the airborne allowance should spend,
+  and they currently have no reader.
+- **The torsional row has no target yet.** `SupportDrive::angular_target`
+  reaches the planner and is folded into each contact's target as
+  `ω_target × r_contact` — which is §6.1's well-posedness term and is load
+  bearing, since two supporting contacts handed the same vector would otherwise
+  pin the body's spin between them. What it is *not* is a yaw drive: §6.2's
+  conclusion stands, and the player's yaw still comes from nowhere until the
+  allowance arrives.
+- **`DeathSystem` still does not clear the drive.** Stage 4 recorded this for
+  the medium rows; it is now also true of a stale support command and its gain.
+  A corpse keeps whatever it was last asked for. Nothing observes it today
+  because the corpse's contacts still hold it up and the command it kept is
+  whatever the FSM last wrote, but it belongs in Stage 7's audit or to a
+  `clear_body_drive` on the world.
+- **Nothing here was play-tested.** The gain's unconditional grip, the loss of
+  a controller-side acceleration ramp, and the direction a jump leaves a slope
+  along (§10.2) are all feel questions, and the game window cannot be launched
+  from an agent shell.
 
 **Stage 6 — Torsional row and allowances.** R8 and R10. Scope the allowance work
 as the airborne character controller in full (§6.3), not as a garnish. Play-test
@@ -1495,6 +1726,14 @@ That resolves §10.1 from a risk into a cost. The character is a cartoon by
 decision, `drive_gain: 5.0` is where the decision lives, and §11 records what it
 buys and what it costs.
 
+**As built (Stage 5), the cliff did not arrive.** The bench measures the walker
+reaching 4.9988 m/s across a hovering platform and 2 m/s up a 50° slope, and
+`ground_accel` no longer reaches the movement rule at all — the ramp is the
+contact's own budget, and 40 m/s² is now expressed as `0.8 × 5` rather than as
+a number the controller counts out. The second consequence in this section is
+live and untested: responsiveness is now a property of what the character is
+standing on, and nothing has been played on ice.
+
 ### 10.2 Jumping gains a direction it did not have
 
 The same species as the cliff above: a magnitude consequence the form of the
@@ -1542,11 +1781,14 @@ invisible, and the `crate push` jitter assertion is the check.
 
 **The friction cone clamp becomes direction-dependent.** §6.1 writes the row as
 a scalar per tangent, but the existing solve computes `delta_t1` and `delta_t2`
-separately and then clamps the pair jointly to one cone (`friction.rs:47-59`).
-With a non-zero target the clamp no longer merely shortens an opposing impulse —
-it rotates a commanded one. "Unchanged in cost" is true; "unchanged in
-behaviour" holds only for `v_target = 0`, which is the Stage 3 invariant and not
-a general claim.
+separately and then clamps the pair jointly to one cone (`friction.rs`). With a
+non-zero target the clamp no longer merely shortens an opposing impulse — it
+rotates a commanded one. "Unchanged in cost" is true; "unchanged in behaviour"
+holds only for `v_target = 0`, which is the Stage 3 invariant and not a general
+claim. Stage 5 shipped with the clamp unchanged and nothing in the nine
+acceptance scenarios notices, including the two that saturate their rows for
+nearly every frame; a character driving hard *across* a slope it is also
+sliding down is where it would show, and no scenario covers that.
 
 **Traction and grip share one budget.** They must — that is R7 — but it means a
 character accelerating hard has less grip against a slope, and walking uphill
@@ -1709,12 +1951,14 @@ carries three obligations into implementation:
   to 1.0, with a doc comment stating that it is not a friction coefficient and
   pointing here. Every entity that is a cartoon says so on its own actuator; an
   NPC that should feel heavy simply does not set it.
-- **Instrumented at runtime.** The tangential solve knows both bounds, so it can
-  report the impulse it applied beyond what `drive_gain: 1.0` would have
-  permitted. A `DebugLog` entry per driven body — borrowed impulse per second,
-  and the fraction of frames the rows ran saturated — turns "we cheat" into a
-  number somebody can watch. This is cheap: both quantities are already in hand
-  where the bound is computed.
+- **Instrumented at runtime.** *Landed at Stage 5.* The tangential row records
+  the impulse it carried beyond what `drive_gain: 1.0` would have permitted and
+  whether it finished at its bound; `TractionLedger` sums that per body per
+  frame, and `PhysicsSyncSystem` prints borrowed force (in newtons and in body
+  weights) with the saturated fraction to `DebugLog` for every actuator whose
+  gain is above one. A body at the honest bound prints nothing. It reads, for a
+  walker leaning on a crate it cannot move, "gain 5.0 borrowed 4108 N (3.2 body
+  weights), saturated 98% of 299 frames".
 - **Audited with the allowances.** Stage 7 counts drive-aware sites; the gain
   belongs in the same ledger as R8's budgets, because it is the same kind of
   claim about where authority comes from.
@@ -1725,28 +1969,49 @@ These follow from `μ_drive > μ_grip` itself, so no construction escapes them.
 They are what "deliberate" means: each is a consequence somebody chose, not one
 the engine sprang.
 
-- **You can walk up a slope you cannot stand on.** Grip is `μ`, drive is `5μ`,
-  so the standing limit is `atan(0.8) ≈ 39°` and the walking limit is
-  `atan(4.0) ≈ 76°`. Stop moving and you slide; start moving and you climb. This
-  is legible platformer behaviour and is **accepted**, with one check owed at
-  Stage 5: if levels hold slopes in the 39°–76° band, `cos_floor`
-  (`spawners/player.rs:46`, currently 45°) decides whether they are supports at
-  all, and that is the dial for the anomaly rather than the gain.
-- **`crate push` is permanently a characterisation.** The requirement's
-  assertion, "push speed follows the mass ratio", is only honest when
-  `μ_drive == μ_grip`. At 5× the player transmits five times the tangential force
-  through the same contact, so the outcome is no longer the mass ratio the
-  requirement names. The scenario keeps its specification half — the crate never
-  outruns the walker, which is a conservation claim and survives any gain — and
-  its mass-ratio half stays a recorded number.
+- ~~**You can walk up a slope you cannot stand on.**~~ **Predicted, and it does
+  not happen.** The reasoning was that grip stays `μ` while drive becomes `5μ`,
+  giving a standing limit of `atan(0.8) ≈ 39°` against a walking limit of
+  `atan(4.0) ≈ 76°`. Stage 5 found the premise unbuildable: a released stick
+  commands *zero relative velocity across the support*, which is a brake and not
+  the absence of a drive, so gating the gain on a non-zero target would have cut
+  braking authority by five while leaving acceleration whole — which is the
+  curling stone §10.1 measured and rejected, arriving through the back door. The
+  gain is therefore a property of the driving body, both limits are
+  `atan(4.0) ≈ 76°`, and the dial that decides whether a slope is walkable is
+  `SupportConfig::min_support_cosine` — a 60° cone — rather than the player's
+  `cos_floor`, which went with `AxisBiased` at Stage 2b. §9's Stage 5 entry
+  carries the census: every level holds real area in the old band, and a bench
+  scenario measures a 50° slope being both stood on and climbed.
+- **An actuated body grips at its gain, and that is the price of the above.**
+  A player standing on ice does not slide. Nothing without an actuator is
+  affected — every crate, prop and corpse grips honestly — and neither is an
+  actuated body at contacts outside its Support Set, so a surface still reads as
+  its material for everything the player pushes, leans on or drops. What is lost
+  is the character's own honest slip, and that is a feel question nobody has
+  played yet. If it reads as glued, the fix is a lower gain, not a conditional
+  one.
+- ~~**`crate push` is permanently a characterisation.**~~ **Predicted, and it
+  came out the other way.** The reasoning — at 5× the player transmits five
+  times the tangential force, so the outcome is not the mass ratio — is sound
+  about the mechanism and wrong about the arithmetic. Five times the walker's
+  traction is `≈ 5.1 kN`; the 768 kg crate's own friction against the ground
+  resists `≈ 6.0 kN`. There is no sustained push at all, so what the crate
+  receives is the inelastic transfer of the walker's momentum, which *is* the
+  mass ratio: 0.7069 measured against 0.7281 predicted, the shortfall being the
+  crate's friction acting on the same frame. The scenario is a specification on
+  both halves now. A lighter crate would put the gain back in charge of the
+  answer, and no scenario covers one.
 - **A driver beats a bracer.** A character can push harder than it can resist
   being pushed, since only the drive carries the gain. Two characters shoving
   each other is decided by who is moving, not by mass. No scenario covers this;
   it is named here so it is recognised rather than debugged.
-- **Stack stability sees 5× the shove.** A driven body leaning on a stack has
-  five times the tangential authority the honest bound would give. The
-  `stack stability` scenario is the check, and it is the one place the gain could
-  turn a feel decision into an instability.
+- **Stack stability sees 5× the shove — and does not notice.** Checked at
+  Stage 5: lateral drift `0.0000 m` as before, worst box speed down from
+  `0.0400 m/s` to `0.0149 m/s`. The gain multiplies a bound an idle character
+  never approaches, since a body already at its target asks the row for nothing;
+  the improvement is the old pre-solve drive no longer leaking a re-asserted
+  velocity into the stack. A character *walking* on a stack is not covered.
 
 #### What Stage 0 does with this
 

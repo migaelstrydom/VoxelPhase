@@ -135,6 +135,12 @@ pub struct MovementRule {
     /// Planar target velocity (y unused; gravity owns vertical).
     pub target: Vector3<f32>,
     /// Units/s² toward the target. Infinity = snap instantly (committed lock).
+    ///
+    /// Nothing reads it while a character is supported: the traction rows ramp
+    /// the body toward the target at the contact's own `μ·N`, so how quickly a
+    /// walk starts is a property of the surface rather than a number the
+    /// controller counts out. It is kept for the airborne authority, which has
+    /// no contact to be bounded by and must state its own rate.
     pub accel: f32,
     /// True for the CoyoteTime walk-off state: cancel positive vy so the
     /// character doesn't suddenly rise off a ramp at the edge.

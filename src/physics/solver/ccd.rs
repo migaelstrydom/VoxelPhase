@@ -1,10 +1,8 @@
 //! Contact solving for transient CCD contacts (no warm-starting).
 
-use generational_arena::Arena;
-use nalgebra::Vector3;
-
 use crate::physics::body::RigidBody;
 use crate::physics::pipeline::pair::SolverManifold;
+use generational_arena::Arena;
 
 use super::body_pair::BodyPairState;
 use super::friction::solve_friction_impulse;
@@ -32,7 +30,9 @@ pub(crate) fn solve_contacts(
                 false,
                 no_shock,
             );
-            solve_friction_impulse(bodies, header, contact, &Vector3::zeros(), no_shock);
+            // A swept contact is built mid-substep, after the frame's plan,
+            // so its traction row is the default: hold still, honest budget.
+            solve_friction_impulse(bodies, header, contact, no_shock);
         }
     }
 }

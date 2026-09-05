@@ -25,6 +25,7 @@ use nalgebra::{Point3, Vector3};
 use smallvec::SmallVec;
 
 use crate::collision::contact::FeatureId;
+use crate::physics::drive::plan::TractionRow;
 use crate::physics::handle::ColliderHandle;
 use crate::physics::pipeline::normal_smoothing::{NormalSmoother, NormalSmoothingConfig};
 use crate::physics::pipeline::pair::{PairManifold, SolverContact, SolverManifold};
@@ -254,6 +255,7 @@ impl ManifoldCache {
                     accumulated_normal_impulse: 0.0,
                     accumulated_friction_impulse_ws: Vector3::zeros(),
                     tangential_scale: 1.0,
+                    traction: TractionRow::default(),
                 });
             }
 
@@ -459,6 +461,7 @@ fn pair_to_solver_cold(pair: &PairManifold) -> SolverManifold {
             accumulated_normal_impulse: 0.0,
             accumulated_friction_impulse_ws: Vector3::zeros(),
             tangential_scale: 1.0,
+            traction: TractionRow::default(),
         })
         .collect();
     SolverManifold {
@@ -642,6 +645,7 @@ mod tests {
                 accumulated_normal_impulse: 7.0,
                 accumulated_friction_impulse_ws: Vector3::new(0.7, 0.0, 0.0),
                 tangential_scale: 1.0,
+                traction: TractionRow::default(),
             },
             SolverContact {
                 point: Point3::new(-0.98, 0.0, 0.0),
@@ -655,6 +659,7 @@ mod tests {
                 accumulated_normal_impulse: 9.0,
                 accumulated_friction_impulse_ws: Vector3::new(0.9, 0.0, 0.0),
                 tangential_scale: 1.0,
+                traction: TractionRow::default(),
             },
         ]);
         let solved = SolverManifold {

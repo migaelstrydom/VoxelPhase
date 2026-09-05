@@ -115,6 +115,7 @@ mod tests {
     use crate::collision::contact::FeatureId;
     use crate::debug::DebugLines;
     use crate::physics::bench_harness::geometry::FlatQuadGeometry;
+    use crate::physics::drive::plan::TractionRow;
     use crate::physics::pipeline::pair::{PairHeader, SolverContact};
     use crate::physics::stepping::{SequentialStepper, Stepper};
     use crate::physics::{ColliderDesc, PhysicsConfig, PhysicsWorld, RigidBodyDesc};
@@ -137,6 +138,7 @@ mod tests {
             accumulated_normal_impulse: impulse,
             accumulated_friction_impulse_ws: Vector3::zeros(),
             tangential_scale: 1.0,
+            traction: TractionRow::default(),
         }
     }
 

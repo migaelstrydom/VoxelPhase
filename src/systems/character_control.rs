@@ -187,7 +187,6 @@ impl<'a> System<'a> for CharacterControlSystem {
             // --- Apply the movement rule for the resolved locomotion state ---
             apply_movement_rule(
                 drive,
-                motion.linear,
                 state.locomotion.movement_rule(
                     move_dir,
                     ground_speed,
@@ -195,7 +194,6 @@ impl<'a> System<'a> for CharacterControlSystem {
                     state.air_speed,
                     config.air_steer_speed,
                 ),
-                dt,
             );
 
             // --- Arm state transitions ---
@@ -397,22 +395,20 @@ fn resolve_ground_speed(
 /// measured value forward unchanged, so the drive asks for no vertical
 /// authority at all and gravity keeps the axis to itself — only a jump verb
 /// says otherwise.
-fn apply_movement_rule(
-    drive: &mut DriveIntent,
-    measured: Vector3<f32>,
-    rule: MovementRule,
-    dt: f32,
-) {
-    let mut steered = measured;
-    if rule.accel.is_infinite() {
-        steered.x = rule.target.x;
-        steered.z = rule.target.z;
-    } else {
-        let max_delta = rule.accel * dt;
-        steered.x = move_toward(measured.x, rule.target.x, max_delta);
-        steered.z = move_toward(measured.z, rule.target.z, max_delta);
-    }
-    drive.linear_target = steered;
+/// Command the movement rule's target, as a velocity **relative to whatever is
+/// holding the character up**.
+///
+/// The rule's target goes down untouched. It is not blended with the measured
+/// velocity and it is not rate-limited here, because both jobs moved into the
+/// engine: the tangential row at each supporting contact drives relative
+/// velocity toward this target under the contact's own `μ·N`, so the ramp from
+/// standstill to walk speed is the traction budget rather than a number this
+/// system counts out. Reading the measurement to steer a target back toward
+/// itself was the read-modify-write R5 exists to remove, and with the target
+/// now support-relative it would also be the wrong quantity: an idle passenger
+/// on a running deck asks for zero and is carried.
+fn apply_movement_rule(drive: &mut DriveIntent, rule: MovementRule) {
+    drive.linear_target = rule.target;
     if rule.clamp_up {
         drive.clamp_normal_rise();
     }
@@ -421,15 +417,6 @@ fn apply_movement_rule(
 /// Convert a Y-axis rotation angle to a facing direction vector (unit, XZ plane).
 fn facing_from_rotation(rotation_y: f32) -> Vector3<f32> {
     Vector3::new(rotation_y.sin(), 0.0, rotation_y.cos())
-}
-
-fn move_toward(current: f32, target: f32, max_delta: f32) -> f32 {
-    let diff = target - current;
-    if diff.abs() <= max_delta {
-        target
-    } else {
-        current + diff.signum() * max_delta
-    }
 }
 
 /// Wrap an angle to the range [-π, π].
@@ -462,44 +449,45 @@ mod tests {
         }
     }
 
+    /// The gait's target goes down as commanded. Under the traction drive the
+    /// ramp toward it is the contact's own budget, so there is nothing for this
+    /// system to steer from and no measurement it needs to read.
     #[test]
-    fn steering_starts_from_the_measured_velocity() {
+    fn the_gaits_target_is_commanded_as_it_stands() {
         let mut drive = DriveIntent::default();
-        let measured = Vector3::new(1.0, -3.0, 0.0);
-        apply_movement_rule(&mut drive, measured, walk_east(40.0), 1.0 / 60.0);
-        assert!((drive.linear_target.x - (1.0 + 40.0 / 60.0)).abs() < 1e-6);
-        assert_eq!(drive.linear_target.z, 0.0);
+        apply_movement_rule(&mut drive, walk_east(40.0));
+        assert_eq!(drive.linear_target, Vector3::new(5.0, 0.0, 0.0));
     }
 
+    /// The target is support-relative, so a zero is "hold station on whatever
+    /// I am standing on" rather than "come to rest in the world". That is the
+    /// whole of R4, and it is why an idle passenger rides a moving deck.
     #[test]
-    fn the_vertical_axis_is_carried_through_uncommanded() {
-        // Gravity owns this axis. The drive asks for exactly what physics
-        // already produced, so it neither helps nor fights the fall.
+    fn a_released_stick_asks_to_hold_station_on_the_support() {
         let mut drive = DriveIntent::default();
-        let measured = Vector3::new(1.0, -3.0, 2.0);
-        apply_movement_rule(&mut drive, measured, walk_east(40.0), 1.0 / 60.0);
-        assert_eq!(drive.linear_target.y, -3.0);
-    }
-
-    #[test]
-    fn a_committed_maneuver_snaps_the_plane_and_still_leaves_the_fall_alone() {
-        let mut drive = DriveIntent::default();
-        let measured = Vector3::new(1.0, -3.0, 2.0);
-        apply_movement_rule(&mut drive, measured, walk_east(f32::INFINITY), 1.0 / 60.0);
-        assert_eq!(drive.linear_target, Vector3::new(5.0, -3.0, 0.0));
+        apply_movement_rule(
+            &mut drive,
+            MovementRule {
+                target: Vector3::zeros(),
+                ..walk_east(40.0)
+            },
+        );
+        assert_eq!(drive.linear_target, Vector3::zeros());
     }
 
     #[test]
     fn a_walk_off_asks_for_the_rise_to_be_cancelled() {
         let mut drive = DriveIntent::default();
-        let rule = MovementRule {
-            clamp_up: true,
-            ..walk_east(40.0)
-        };
-        apply_movement_rule(&mut drive, Vector3::new(1.0, 2.0, 0.0), rule, 1.0 / 60.0);
-        // The verb is a command, not an edit: the target still carries the
-        // measured rise, and the projection is what cancels it.
-        assert_eq!(drive.linear_target.y, 2.0);
+        apply_movement_rule(
+            &mut drive,
+            MovementRule {
+                clamp_up: true,
+                ..walk_east(40.0)
+            },
+        );
+        // The verb is a command, not an edit: the projection is what cancels
+        // the rise, and the planar target is untouched by it.
+        assert_eq!(drive.linear_target.x, 5.0);
         assert!(drive.normal_projection.clamp_positive);
     }
 
@@ -575,9 +563,11 @@ mod tests {
         let drive = intent_of(&world, entity);
         let config = LocomotionConfig::player();
         assert_eq!(drive.normal_impulse, Some(config.jump_speed));
-        // The continuous channel never learns about the jump: it still carries
-        // the measured fall forward, and the verb overrides it downstream.
-        assert_eq!(drive.linear_target.y, -0.5);
+        // The continuous channel never learns about the jump. It no longer
+        // carries the measured fall either: the target is the gait's planar
+        // ask, stated relative to the support, and the vertical axis belongs
+        // to gravity and to the verb.
+        assert_eq!(drive.linear_target.y, 0.0);
     }
 
     fn set_grounding(world: &World, entity: Entity, grounding: Grounding) {

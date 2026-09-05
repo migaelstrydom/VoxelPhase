@@ -16,9 +16,25 @@ use super::diagnostics::log_impulse_torque_diag;
 use super::impulse::{apply_impulse_pair, compute_tangent_basis};
 use super::normal::MIN_EFFECTIVE_INV_MASS;
 
-/// The tangential coefficient in force at one contact: the pair's combined
-/// friction, scaled by what its participants are allowed to draw there.
+/// What one contact's tangential row may spend, before the normal impulse it
+/// is multiplied by: the pair's combined friction, scaled by what its
+/// participants are allowed to draw there, then by the gain a body driving
+/// through it declared.
+///
+/// The gain is the design's one sanctioned scalar cheat (§11): above `1.0` a
+/// body pushes harder than the surface honestly permits. It reaches only the
+/// contacts holding that body up, because that is where the planner put a
+/// target — a driven body's other contacts keep the honest bound.
 fn tangential_coefficient(header: &PairHeader, contact: &SolverContact) -> f32 {
+    honest_tangential_coefficient(header, contact) * contact.traction.gain
+}
+
+/// The same coefficient as the surface would give with no drive gain at all —
+/// the bound a body with `drive_gain: 1.0` would have had.
+///
+/// Kept as its own function because the difference between the two is what the
+/// gain borrowed, which §11 requires be measurable rather than asserted.
+fn honest_tangential_coefficient(header: &PairHeader, contact: &SolverContact) -> f32 {
     header.friction * contact.tangential_scale
 }
 
@@ -34,19 +50,25 @@ fn tangential_error(target: &Vector3<f32>, relative: &Vector3<f32>, tangent: &Ve
     (target - relative).dot(tangent)
 }
 
-/// Solve one contact's tangential row toward `target_relative_velocity`, the
-/// Target Relative Velocity the drive asks for at this point. Zero is ordinary
-/// friction.
+/// Solve one contact's tangential row toward the Target Relative Velocity the
+/// drive asks for at this point. Zero — the default the planner leaves on
+/// every contact nothing is driving through — is ordinary friction.
+///
+/// The early return on an unloaded contact is what makes "no load, no drive"
+/// true: an airborne body has no normal impulse anywhere, so it has no drive
+/// authority of any kind.
 pub(crate) fn solve_friction_impulse(
     bodies: &mut Arena<RigidBody>,
     header: &PairHeader,
     contact: &mut SolverContact,
-    target_relative_velocity: &Vector3<f32>,
     shock_scales: (f32, f32),
 ) {
+    let target_relative_velocity = &contact.traction.target;
     let mu = tangential_coefficient(header, contact);
     if contact.accumulated_normal_impulse <= 0.0 || mu <= 0.0 {
         contact.accumulated_friction_impulse_ws = Vector3::zeros();
+        contact.traction.borrowed_impulse = 0.0;
+        contact.traction.saturated = false;
         return;
     }
 
@@ -79,11 +101,20 @@ pub(crate) fn solve_friction_impulse(
 
     let max_friction = mu * contact.accumulated_normal_impulse;
     let mag = (new_t1 * new_t1 + new_t2 * new_t2).sqrt();
-    if mag > max_friction {
+    let saturated = mag > max_friction;
+    if saturated {
         let scale = max_friction / mag;
         new_t1 *= scale;
         new_t2 *= scale;
     }
+
+    // What the gain bought, measured rather than assumed (§11). The row's
+    // honest ceiling is the same bound without the gain; anything the
+    // accumulator holds above it came from somewhere the surface did not.
+    let honest_max =
+        honest_tangential_coefficient(header, contact) * contact.accumulated_normal_impulse;
+    contact.traction.borrowed_impulse = (mag.min(max_friction) - honest_max).max(0.0);
+    contact.traction.saturated = saturated;
 
     let applied_t1 = new_t1 - curr_t1;
     let applied_t2 = new_t2 - curr_t2;

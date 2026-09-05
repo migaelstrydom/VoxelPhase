@@ -8,6 +8,7 @@ use smallvec::SmallVec;
 
 use crate::collision::contact::ContactManifold;
 use crate::collision::contact::FeatureId;
+use crate::physics::drive::plan::TractionRow;
 use crate::physics::handle::{ColliderHandle, RigidBodyHandle};
 
 /// Metadata shared by all contacts in a collider pair manifold.
@@ -79,6 +80,14 @@ pub struct SolverContact {
     /// The contact's own `μ` is untouched — this says what the participants
     /// are allowed to draw against it.
     pub tangential_scale: f32,
+    /// What the drive asks of this contact's tangential row: the relative
+    /// velocity to aim for, and the multiplier on the budget spent getting
+    /// there.
+    ///
+    /// Default — every contact of every undriven body, and every contact CCD
+    /// builds mid-substep — is ordinary friction: hold still, at the honest
+    /// `μ·N`.
+    pub traction: TractionRow,
 }
 
 /// A solver-ready manifold: pair metadata plus per-contact working data.

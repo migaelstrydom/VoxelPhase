@@ -3,6 +3,7 @@
 use nalgebra::{Point3, UnitQuaternion, Vector3};
 
 use crate::collision::contact::FeatureId;
+use crate::physics::drive::plan::TractionRow;
 use crate::physics::handle::RigidBodyHandle;
 use crate::physics::pipeline::pair::{PairHeader, SolverContact};
 
@@ -54,5 +55,6 @@ pub(super) fn cold_solver_contact(
         accumulated_normal_impulse: 0.0,
         accumulated_friction_impulse_ws: Vector3::zeros(),
         tangential_scale: 1.0,
+        traction: TractionRow::default(),
     }
 }

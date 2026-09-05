@@ -160,6 +160,27 @@ pub struct Actuator {
     /// else. A character sets it near zero so jumps along vertical surfaces
     /// are not grabbed; magnetic boots would set it to 1.0.
     pub non_support_grip: f32,
+    /// Factor separating this body's drive budget from the grip of the
+    /// contacts it drives through. Default `1.0`.
+    ///
+    /// **This is not a coefficient of friction and does not model one.** No
+    /// friction formulation supplies it: a real surface bounds acceleration at
+    /// `μ·g`, which for this project's terrain is about 7.85 m/s² — close to
+    /// the honest number for a person, and far too slow to play. Above `1.0`
+    /// the body pushes harder through a contact than that contact permits,
+    /// which buys cartoon responsiveness at the cost of honesty about what `μ`
+    /// means. The player is `5.0`; an NPC that should feel heavy leaves it
+    /// alone.
+    ///
+    /// It is one of the design's two sanctioned cheats and it is confined to
+    /// this scalar: the drive remains a real impulse exchange at a real
+    /// contact, with the correct torque arm, distributed across supports and
+    /// silently absorbed by infinite-mass partners. Because it multiplies, one
+    /// surface's response relative to another survives exactly — ice still
+    /// reads as ice. What it spends is measured per body by
+    /// `PhysicsWorld::traction_usage`. See `docs/TRACTION_DRIVE_DESIGN.md`
+    /// §11, decision D1.
+    pub drive_gain: f32,
 }
 
 impl Default for Actuator {
@@ -169,6 +190,7 @@ impl Default for Actuator {
             max_accel: 500.0,
             angular_max_accel: 500.0,
             non_support_grip: 1.0,
+            drive_gain: 1.0,
         }
     }
 }
@@ -193,6 +215,15 @@ impl Actuator {
     /// the contact does not hold it up.
     pub fn with_non_support_grip(mut self, grip: f32) -> Self {
         self.non_support_grip = grip;
+        self
+    }
+
+    /// Declare how much harder than its surfaces permit this body may push.
+    ///
+    /// Read [`Actuator::drive_gain`] before raising it: anything above `1.0`
+    /// is a deliberate departure from what the contact could deliver.
+    pub fn with_drive_gain(mut self, gain: f32) -> Self {
+        self.drive_gain = gain;
         self
     }
 }

@@ -29,6 +29,10 @@ pub enum ReactionAnchor {
 ///
 /// Produced from the gameplay channels (`DriveIntent` + `Actuator`) by
 /// `crate::drive::resolve_drive`, and consumed by `PhysicsWorld::set_body_drive`.
+///
+/// The targets are stated **relative to the anchor**: a medium anchor's world
+/// is at rest, so its target is a world velocity, while a support anchor's is
+/// a velocity across whatever holds the body up.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct DriveCommand {
     /// The declared recipient of every reaction impulse this drive applies.
@@ -41,6 +45,13 @@ pub struct DriveCommand {
     pub max_accel: f32,
     /// Angular acceleration budget, in rad/s².
     pub angular_max_accel: f32,
+    /// Factor separating the drive's tangential budget from the contact's own
+    /// grip, for a support anchor. `1.0` drives exactly as hard as it grips.
+    ///
+    /// A medium anchor ignores it: its rows push against the world and are
+    /// bounded by `max_accel` instead, with no contact to be honest or
+    /// dishonest about.
+    pub drive_gain: f32,
 }
 
 impl DriveCommand {
@@ -57,7 +68,14 @@ impl DriveCommand {
             angular_target,
             max_accel,
             angular_max_accel,
+            drive_gain: 1.0,
         }
+    }
+
+    /// Declare how much harder than the surface permits this drive may push.
+    pub fn with_drive_gain(mut self, gain: f32) -> Self {
+        self.drive_gain = gain;
+        self
     }
 
     /// A command whose reaction goes into the world.
@@ -73,6 +91,7 @@ impl DriveCommand {
             angular_target,
             max_accel,
             angular_max_accel,
+            drive_gain: 1.0,
         }
     }
 }

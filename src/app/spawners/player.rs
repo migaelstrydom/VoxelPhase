@@ -84,8 +84,16 @@ pub fn spawn_player(world: &mut World, initial_pos: nalgebra::Point3<f32>) -> En
         .with(ContactCandidates::default())
         .with(RigidBodyComponent(body_handle))
         // Grip nothing that is not holding them up, so jumps along vertical
-        // surfaces are not grabbed.
-        .with(Actuator::character().with_non_support_grip(0.0))
+        // surfaces are not grabbed; and push five times harder through the
+        // contacts that do. The gain is the game's decision that the player is
+        // a cartoon: an honest 0.8 against gravity caps acceleration at
+        // 7.85 m/s², which was measured in the old engine and is far too slow
+        // to play. See `Actuator::drive_gain`.
+        .with(
+            Actuator::character()
+                .with_non_support_grip(0.0)
+                .with_drive_gain(5.0),
+        )
         .with(DriveIntent::default())
         .with(BodyMotion::default())
         .build()

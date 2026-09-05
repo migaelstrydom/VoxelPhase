@@ -146,6 +146,51 @@ impl PhysicsSyncSystem {
         }
     }
 
+    /// Report what each gained actuator borrowed from its contacts.
+    ///
+    /// `Actuator::drive_gain` above `1.0` lets a body push harder through a
+    /// contact than that contact's friction permits (§11, decision D1). The
+    /// decision is settled; the obligation it came with is that the cheat be
+    /// watchable rather than merely admitted, so every driven body that has
+    /// one reports the force it borrowed and how often its rows ran out of
+    /// budget. A body driving at the honest bound prints nothing.
+    fn log_traction_usage(
+        physics: &PhysicsWorld,
+        actuators: &ReadStorage<Actuator>,
+        bodies: &ReadStorage<RigidBodyComponent>,
+        debug_log: &mut DebugLog,
+    ) {
+        for (actuator, body) in (actuators, bodies).join() {
+            if actuator.drive_gain <= 1.0 {
+                continue;
+            }
+            let Some(usage) = physics.traction_usage(body.0) else {
+                continue;
+            };
+            let weight = physics
+                .body(body.0)
+                .map(|rb| rb.mass() * physics.config().gravity.magnitude())
+                .unwrap_or(0.0);
+            let borrowed_weights = if weight > 0.0 {
+                usage.borrowed_force / weight
+            } else {
+                0.0
+            };
+            let key = format!("Physics/Traction/{}", body.0 .0.into_raw_parts().0);
+            debug_log.add(
+                key,
+                format!(
+                    "gain {:.1} borrowed {:.0} N ({:.2} body weights), saturated {:.0}% of {} frames",
+                    actuator.drive_gain,
+                    usage.borrowed_force,
+                    borrowed_weights,
+                    usage.saturation() * 100.0,
+                    usage.driving_frames,
+                ),
+            );
+        }
+    }
+
     /// Pull the measurement channel up out of the engine.
     ///
     /// Separate from `sync_physics_to_ecs` because it is a different channel,
@@ -321,6 +366,7 @@ impl<'a> System<'a> for PhysicsSyncSystem {
             physics.world.colliders_arena(),
             &mut debug_overlays,
         );
+        Self::log_traction_usage(&physics.world, &actuators, &bodies, &mut debug_log);
         physics.world.debugger().write_debug_log(
             &mut debug_log,
             physics.world.config().contact_margin,

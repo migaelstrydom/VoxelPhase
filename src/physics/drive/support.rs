@@ -295,6 +295,7 @@ pub(crate) mod tests {
 
     use super::*;
     use crate::collision::contact::FeatureId;
+    use crate::physics::drive::plan::TractionRow;
     use crate::physics::pipeline::pair::{PairHeader, SolverContact};
 
     fn handle(raw: usize) -> RigidBodyHandle {
@@ -334,6 +335,7 @@ pub(crate) mod tests {
                     accumulated_normal_impulse: 0.0,
                     accumulated_friction_impulse_ws: Vector3::zeros(),
                     tangential_scale: 1.0,
+                    traction: TractionRow::default(),
                 })
                 .collect(),
         }

@@ -4,7 +4,7 @@ use generational_arena::Arena;
 use nalgebra::{Isometry3, Matrix3, Point3, UnitQuaternion, UnitVector3, Vector3};
 use rustc_hash::FxHashMap;
 
-use super::body::{BodyDrive, BodyType, RigidBody, RigidBodyDesc};
+use super::body::{BodyDrive, BodyType, RigidBody, RigidBodyDesc, SupportDrive};
 use super::ccd::{
     pair_separation, CcdContext, CcdStrategy, ContactPairKey, NarrowphaseOwnership, SweepClampCcd,
 };
@@ -15,7 +15,7 @@ use super::contact_event::{ContactEvent, ContactSource};
 use super::debug::{PhysicsDebugConfig, PhysicsDebugger};
 use super::drive::{
     stamp_non_support_grip, DriveCommand, ReactionAnchor, SupportConfig, SupportResolver,
-    SupportSets,
+    SupportSets, TractionLedger, TractionPlanner, TractionUsage,
 };
 use super::force_provider::{ForceContext, ForceOutput, SubstepForceProvider};
 use super::grounding::{GroundedBodies, GroundingDetector};
@@ -166,6 +166,16 @@ pub struct PhysicsWorld {
     sleep_manager: SleepManager,
     /// Classifies contacts into per-body Support Sets.
     support_resolver: SupportResolver,
+    /// Turns support-anchored commands into per-contact tangential targets.
+    traction_planner: TractionPlanner,
+    /// The Support Sets the frame's active manifolds were classified into.
+    ///
+    /// Held for the frame because three things read the same classification —
+    /// the grip stamp, the traction plan and the gain ledger — and a
+    /// `ContactSite` is only meaningful against the slice it came from.
+    frame_supports: SupportSets,
+    /// What the drive gain spent, per body. Instrumentation only.
+    traction_ledger: TractionLedger,
     /// Projects Support Sets to the grounded set, carrying sleeping bodies.
     grounding_detector: GroundingDetector,
     /// User-defined constraints (persistent across frames).
@@ -251,6 +261,9 @@ impl PhysicsWorld {
             frame_index: 0,
             sleep_manager,
             support_resolver,
+            traction_planner: TractionPlanner,
+            frame_supports: SupportSets::default(),
+            traction_ledger: TractionLedger::default(),
             grounding_detector,
             constraints: Arena::new(),
             solver,
@@ -520,9 +533,10 @@ impl PhysicsWorld {
     /// same target would get roughly twice the authority its actuator
     /// declares, and the rows' bounds would stop meaning anything.
     ///
-    /// - `ReactionAnchor::Support` sets a per-substep velocity chase applied
-    ///   during force integration, so the solver can oppose it through contact
-    ///   impulses and reach equilibrium against a heavy load.
+    /// - `ReactionAnchor::Support` records a support-relative target, which
+    ///   the traction planner turns into a target for the tangential row at
+    ///   each contact holding the body up. The reaction lands on the support,
+    ///   and the authority is the contact's own `μ·N`.
     /// - `ReactionAnchor::Medium` maintains world-anchored motor rows in the
     ///   constraint arena, solved alongside gravity and every contact.
     ///
@@ -545,12 +559,11 @@ impl PhysicsWorld {
                 let Some(body) = self.bodies.get_mut(handle.0) else {
                     return false;
                 };
-                body.set_support_drive(
-                    command.linear_target,
-                    command.max_accel,
-                    command.angular_target,
-                    command.angular_max_accel,
-                );
+                body.set_support_drive(SupportDrive {
+                    linear_target: command.linear_target,
+                    angular_target: command.angular_target,
+                    gain: command.drive_gain,
+                });
             }
             ReactionAnchor::Medium => self.set_medium_drive(handle, command),
         }
@@ -800,15 +813,29 @@ impl PhysicsWorld {
             &mut self.manifold_conditions,
         );
 
-        // A body's grip at the contacts that are not holding it up is decided
-        // once, here, from the same slice the solver is about to read: the
-        // Support Set names contacts by position in it, and the conditioner has
-        // already finished reordering it.
-        let supports = self.support_resolver.resolve(
+        // What a body may draw at each contact, and what it is driving that
+        // contact toward, are both decided once, here, from the same slice the
+        // solver is about to read: a Support Set names contacts by position in
+        // it, and the conditioner has already finished reordering it.
+        self.frame_supports = self.support_resolver.resolve(
             &self.cached_active_manifolds,
             self.config.gravity_direction(),
         );
-        stamp_non_support_grip(&self.bodies, &supports, &mut self.cached_active_manifolds);
+        stamp_non_support_grip(
+            &self.bodies,
+            &self.frame_supports,
+            &mut self.cached_active_manifolds,
+        );
+
+        // A drive is friction with a non-zero target, and this is where the
+        // target is written: at the contacts holding a driven body up, in the
+        // same slice the grip was just stamped on.
+        self.traction_planner.plan(
+            &self.bodies,
+            &self.frame_supports,
+            &mut self.cached_active_manifolds,
+        );
+        self.traction_ledger.open_frame();
 
         self.solver.prepare(&self.bodies, &self.constraints, dt);
 
@@ -862,6 +889,11 @@ impl PhysicsWorld {
             dt,
         );
         self.impacts.record_solved(&self.cached_active_manifolds);
+        self.traction_ledger.record_substep(
+            &self.cached_active_manifolds,
+            &self.frame_supports,
+            dt,
+        );
         self.debugger
             .update_post_solve(&self.bodies, &self.cached_active_manifolds);
 
@@ -1012,6 +1044,14 @@ impl PhysicsWorld {
         let sleeping = self.sleep_manager.sleeping_snapshot();
         self.grounding_detector
             .grounded_bodies(&supports, &sleeping)
+    }
+
+    /// What a body's drive gain spent, over the most recent frame.
+    ///
+    /// `None` for every body driving at the honest `μ·N`, which is every body
+    /// that has not declared a gain above `1.0`.
+    pub fn traction_usage(&self, handle: RigidBodyHandle) -> Option<&TractionUsage> {
+        self.traction_ledger.usage(handle)
     }
 
     /// Which contacts hold each body up, from the most recent step.

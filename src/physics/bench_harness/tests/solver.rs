@@ -131,8 +131,28 @@ fn box_on_plank_no_rotational_jitter() {
     assert_settled(&run, 3.0, 0.005, 0.005);
 }
 
-// ── Sphere pushing a box across flat ground ────────────────────────
+// ── Driven sphere against a box it cannot move ─────────────────────
 
+/// A driven body pressed against a load too heavy to shift must go quiet
+/// rather than buzz at the contact boundary.
+///
+/// The scenario is unchanged and its meaning is not: 15.7 kg of driven sphere
+/// against a 500 kg box whose own friction against the ground resists nearly
+/// 3 kN. What changed at Stage 5 is who wins. The old drive restored the
+/// sphere's commanded velocity from outside the solve every substep, so it
+/// plowed the box along and the thing worth asserting was that the plowing was
+/// smooth — hence the old push-efficiency floor. A contact-bounded drive
+/// cannot move this box at all, so efficiency is now zero by construction and
+/// asserting a floor on it would be asserting the reactionless pump back.
+///
+/// The failure mode the test exists for survives intact and is what it now
+/// measures directly: a driven body held against an immovable load must not
+/// oscillate.
+///
+/// The sphere's rotational inertia is scaled up so it cannot spin its drive
+/// away. A traction row drives *contact-point* velocity, and a free sphere
+/// satisfies that by rolling on the spot — correct physics, and the reason the
+/// player is a capsule held upright rather than a ball.
 #[test]
 fn sphere_pushing_box_no_jitter() {
     let geometry = FlatQuadGeometry::new(50.0);
@@ -172,6 +192,10 @@ fn sphere_pushing_box_no_jitter() {
             .restitution(0.0)
             .friction(0.3),
     );
+    world
+        .body_mut(sphere_handle)
+        .unwrap()
+        .scale_local_inertia(Vector3::repeat(1000.0));
 
     let fixed_dt = 1.0 / 240.0;
     let frame_dt = 1.0f32 / 60.0;
@@ -274,22 +298,42 @@ fn sphere_pushing_box_no_jitter() {
         contact_frames.len(),
     );
 
-    // The sphere should transfer a meaningful fraction of its
-    // commanded velocity to forward motion.
+    let tail = &frame_avg_vx[warmup_frames..];
+    let worst_vx = tail.iter().fold(0.0f32, |a, &b| a.max(b.abs()));
+    let gap_tail = &gap_samples[warmup_frames * substeps..];
+    let gap_range = gap_tail.iter().fold(f32::NEG_INFINITY, |a, &b| a.max(b))
+        - gap_tail.iter().fold(f32::INFINITY, |a, &b| a.min(b));
+    eprintln!("sphere_pushing_box: worst_vx={worst_vx:.4} gap_range={gap_range:.4}");
+
     assert!(
-        efficiency > 0.30,
-        "sphere push efficiency too low: {efficiency:.3} (avg_vx={overall_avg:.3}, \
-         push_speed={push_speed}). The solver is absorbing the velocity override, \
-         causing back-and-forth jitter at the contact boundary.",
+        worst_vx < 0.05,
+        "a driven body against an immovable load should hold still, not buzz \
+         back and forth: worst frame speed {worst_vx:.4} m/s"
+    );
+    assert!(
+        gap_range < 0.05,
+        "the contact should stay put: the gap moved {gap_range:.4} m"
     );
 }
 
-/// A velocity-driven sphere pushed against a static wall should reach a steady
-/// resting contact — not oscillate due to restitution firing on persisted contacts.
+/// A driven sphere pushed against a static wall should reach a steady resting
+/// contact — not oscillate.
 ///
-/// Regression test: without persisted-contact restitution suppression, the solver
-/// treats every frame as a new high-speed impact (because the drive resets approach
-/// velocity above the threshold), causing repeated bouncing.
+/// Regression test: without persisted-contact restitution suppression, the
+/// solver treated every frame as a new high-speed impact, because the old
+/// drive re-asserted approach velocity above the threshold from outside the
+/// solve, and the body bounced repeatedly. Stage 5 removed the cause; whether
+/// the suppression itself can go is Stage 7's question, and this scenario is
+/// one of the two that answers it.
+///
+/// Two properties of the body moved at Stage 5, and both are the scenario
+/// saying what it means rather than tuning around a result. Restitution is
+/// `0.0`, matching the player's capsule: a bouncy body driven at a wall is
+/// *supposed* to bounce, so leaving it at `0.5` would have made a real
+/// rebound indistinguishable from the solver artefact this test hunts. And
+/// the rotational inertia is scaled up so the sphere cannot spin its drive
+/// away at the floor contact, which a free ball does — see
+/// `sphere_pushing_box_no_jitter`.
 #[test]
 fn velocity_driven_sphere_against_wall_no_bounce() {
     use super::super::geometry::WallAndFloorGeometry;
@@ -313,9 +357,13 @@ fn velocity_driven_sphere_against_wall_no_bounce() {
         sphere,
         ColliderDesc::sphere(radius)
             .density(50.0)
-            .restitution(0.5)
+            .restitution(0.0)
             .friction(0.3),
     );
+    world
+        .body_mut(sphere)
+        .unwrap()
+        .scale_local_inertia(Vector3::repeat(1000.0));
 
     let fixed_dt: f32 = 1.0 / 240.0;
     let frame_dt: f32 = 1.0 / 60.0;

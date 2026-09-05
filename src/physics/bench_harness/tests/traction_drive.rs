@@ -1,28 +1,32 @@
-//! Stage 0 acceptance tests for the traction drive (docs/TRACTION_DRIVE_DESIGN.md §9).
+//! Acceptance tests for the traction drive (docs/TRACTION_DRIVE_DESIGN.md §9).
 //!
-//! These eight scenarios pin down what `VelocityDriven` does *today*, before
-//! the mechanism underneath it is replaced. The current behaviour is only
-//! partly understood and partly accidental, so without them a regression and a
-//! correction are indistinguishable.
+//! Written at Stage 0 against the old reactionless drive, so that a regression
+//! and a correction could be told apart while it was replaced. Stage 5
+//! replaced it: a drive is now friction with a non-zero target, solved at the
+//! contacts holding a body up, and three of these read the other way round
+//! than they did.
 //!
 //! Two kinds of assertion live here and the difference matters:
 //!
 //! - **Specification** — this must remain true through every later stage.
-//! - **Characterisation** — this is what the engine does now. Some of these
-//!   record behaviour the design intends to *change* (`edge_walk`'s sign is
-//!   the headline), and others are numbers that depend on decision D1 (§11).
-//!   A characterisation failing is a signal to read the design, not a bug.
+//! - **Characterisation** — this is what the engine does now, recorded rather
+//!   than required. A characterisation failing is a signal to read the design,
+//!   not a bug.
+//!
+//! `horizontal lift carry`, `edge walk` and `crate push` were characterisations
+//! of the old mechanism, asserted in their broken form on purpose. All three
+//! are specifications now, and each carries the number it used to print
+//! alongside the one it prints today.
 //!
 //! Every test drives the real `PhysicsWorld` directly, replaying the two ECS
 //! systems that feed it — `CharacterControlSystem` writing the walk rule into
-//! `Velocity`, and `MovingPlatformSystem` overwriting all three axes — by hand
-//! in dispatcher order. That keeps the ECS out of the harness while exercising
-//! exactly the round trip §2 of the design describes: last frame's *measured*
-//! velocity, partially overwritten, handed back down as this frame's target.
+//! `DriveIntent`, and `MovingPlatformSystem` writing the route servo's target —
+//! by hand in dispatcher order. That keeps the ECS out of the harness while
+//! exercising the seam the design is about.
 
 use nalgebra::{Point3, UnitVector3, Vector3};
 
-use super::super::geometry::{FlatQuadGeometry, WallAndFloorGeometry};
+use super::super::geometry::{FlatQuadGeometry, RampGeometry, WallAndFloorGeometry};
 use crate::character::LocomotionConfig;
 use crate::debug::DebugLines;
 use crate::physics::constraint::ConstraintKind;
@@ -43,6 +47,13 @@ const PLATFORM_HALF_EXTENTS: Vector3<f32> = Vector3::new(2.0, 0.3, 2.0);
 /// The platform motor's acceleration budget (`VelocityDriven::max_accel` on a
 /// platform entity).
 const MOTOR_MAX_ACCEL: f32 = 40.0;
+
+/// The player's declared drive gain (§11, decision D1). The honest bound on
+/// this project's terrain is `0.8 · g = 7.85 m/s²`; five times it is 39.2,
+/// which is the 40 m/s² `LocomotionConfig::ground_accel` the game was tuned
+/// around and the reason that value is a specification rather than an
+/// accident.
+const WALKER_DRIVE_GAIN: f32 = 5.0;
 
 /// A world with sleeping disabled — a sleeping body stops answering the drive,
 /// which turns every one of these measurements into noise.
@@ -74,8 +85,10 @@ fn advance(world: &mut PhysicsWorld, geometry: &dyn StaticGeometry, debug: &mut 
 // ═══════════════════════════════════════════════════════════════════════════
 
 /// A character body driven the way `CharacterControlSystem` drives the player:
-/// the measured velocity is read back, `x` and `z` are steered toward the gait
-/// target at `ground_accel`, and `y` is left exactly as physics left it.
+/// the gait's planar target goes down as a velocity **relative to whatever is
+/// holding the character up**, at the player's declared drive gain. Nothing is
+/// read back and nothing is rate-limited here — the traction rows ramp the
+/// body toward the target at the contact's own budget.
 struct Walker {
     body: RigidBodyHandle,
     config: LocomotionConfig,
@@ -146,27 +159,12 @@ impl Walker {
 
     /// `CharacterControlSystem` then `PhysicsSyncSystem`, once per frame.
     fn drive(&self, world: &mut PhysicsWorld) {
-        let measured = linear_velocity_of(world, self.body);
-        let target_planar = self.intent * self.config.walk_speed;
-        let max_delta = self.config.ground_accel * FRAME_DT;
-        let target = Vector3::new(
-            move_toward(measured.x, target_planar.x, max_delta),
-            measured.y,
-            move_toward(measured.z, target_planar.z, max_delta),
-        );
+        let target = self.intent * self.config.walk_speed;
         let _ = world.set_body_drive(
             self.body,
-            &DriveCommand::support(target, Vector3::zeros(), 500.0, 500.0),
+            &DriveCommand::support(target, Vector3::zeros(), 500.0, 500.0)
+                .with_drive_gain(WALKER_DRIVE_GAIN),
         );
-    }
-}
-
-fn move_toward(current: f32, target: f32, max_delta: f32) -> f32 {
-    let diff = target - current;
-    if diff.abs() <= max_delta {
-        target
-    } else {
-        current + diff.signum() * max_delta
     }
 }
 
@@ -266,10 +264,11 @@ fn spawn_crate(
 /// **Specification.** A passenger standing on a climbing lift rides it: the two
 /// bodies hold the same vertical speed and the gap between them does not open.
 ///
-/// This works today for the reason §2 of the requirements gives — the walk rule
-/// never writes `y`, so the drive target's vertical component is "keep doing
-/// what you are already doing", and the drive ratifies the carry instead of
-/// braking it.
+/// Nothing in the drive is involved: a tangential row is tangential by
+/// construction, so a vertical carry on a level deck is the normal row and the
+/// passenger's weight, exactly as it would be for a crate. The scenario earns
+/// its place by saying so — whatever the drive does to the horizontal axes, it
+/// must not reach this one.
 #[test]
 fn vertical_lift_carry() {
     let geometry = FlatQuadGeometry::new(64.0);
@@ -331,13 +330,15 @@ fn vertical_lift_carry() {
 // ═══════════════════════════════════════════════════════════════════════════
 
 /// **Specification.** When the lift reverses at the top, the passenger keeps
-/// rising — their drive target still asserts the velocity it last measured —
-/// and the platform catches them on the way back down.
+/// rising and the platform catches them on the way back down.
 ///
-/// The hover is not a bug. It is the drive target holding the last measured
-/// velocity while `integrate_forces` bleeds gravity into it one substep at a
-/// time. What must remain true is that it *ends*: the passenger comes back down
-/// and lands on the deck rather than sailing away.
+/// The hover is not a bug and its cause is now the plain one: the deck stops
+/// pushing up, the passenger is briefly a projectile, and gravity brings them
+/// back. Under the old drive it was an artefact instead — the target held the
+/// last measured velocity while force integration bled gravity into it a
+/// substep at a time — which is why the gap it opens moved slightly at Stage 4
+/// and again here. What must remain true is that it *ends*: the passenger comes
+/// back down and lands on the deck rather than sailing away.
 #[test]
 fn reversal_hover() {
     let geometry = FlatQuadGeometry::new(64.0);
@@ -411,28 +412,36 @@ fn reversal_hover() {
 // 3. Horizontal lift carry — passenger holds station on a running platform
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// **Characterisation.** The case §2 of the requirements calls untested: on a
-/// horizontal run, the walk rule *does* write the axes the carry acts on, so an
-/// idle passenger's drive target is steered toward zero world velocity at
-/// `ground_accel` while friction drags them along with the deck.
+/// **Specification, inverted at Stage 5.** An idle passenger on a horizontal
+/// run is carried by the deck and holds station on it.
 ///
-/// This test records who wins. It is the one number in Stage 0 that nobody
-/// currently knows, and R4 is the requirement that will change it: after the
-/// traction drive, "stand still" means still *relative to the deck*.
+/// Stage 0 recorded the opposite, and the inversion is the whole of R4. Under
+/// the old drive the walk rule wrote the two axes the carry acts on, steering
+/// the passenger's target toward zero *world* velocity at 40 m/s² while
+/// friction tried to drag them along; the deck slid out from under them in
+/// under a second and dropped them off the back, 12.79 m of drift. The target
+/// is now stated relative to whatever holds the body up, so "stand still"
+/// means still *relative to the deck*: an idle passenger asks for zero across
+/// the surface they are on, the tangential rows deliver exactly that, and the
+/// drift is 0.0005 m instead of 12.79.
+///
+/// One thing had to be fixed before the inversion could mean anything. The
+/// Stage 0 rig spawned the passenger at the world origin while the platform's
+/// route *started* at x = −20, so the passenger was never on the deck at all —
+/// it fell 10 m and lay on the floor while the platform ran away overhead, and
+/// the drift it recorded was the platform's own travel. The passenger now
+/// spawns over the deck.
 #[test]
 fn horizontal_lift_carry() {
     let geometry = FlatQuadGeometry::new(64.0);
     let mut world = bench_world();
     let mut debug = DebugLines::default();
 
-    let mut platform = Platform::spawn(
-        &mut world,
-        Vector3::new(-20.0, 10.0, 0.0),
-        Vector3::new(20.0, 10.0, 0.0),
-        3.0,
-    );
+    let start = Vector3::new(-20.0, 10.0, 0.0);
+    let mut platform = Platform::spawn(&mut world, start, Vector3::new(20.0, 10.0, 0.0), 3.0);
     let deck = platform.deck_y(&world);
-    let walker = Walker::spawn(&mut world, Vector3::new(0.0, deck + 0.02, 0.0));
+    // Over the deck, not over where the deck's route happens to be centred.
+    let walker = Walker::spawn(&mut world, Vector3::new(start.x, deck + 0.02, start.z));
 
     for _ in 0..30 {
         platform.drive(&mut world);
@@ -458,31 +467,18 @@ fn horizontal_lift_carry() {
          drift={worst_drift:.4} still_aboard={on_deck}"
     );
 
-    // The answer, recorded: the passenger is not carried at all. The walk rule
-    // writes the two axes the carry acts on, steering the drive target to zero
-    // *world* velocity at 40 m/s², so the deck slides out from under a standing
-    // passenger in under a second and drops them off the back.
-    //
-    // This is what R4 (support-relative targets) exists to fix: after the
-    // traction drive, "stand still" means still relative to the deck, and this
-    // test inverts into the specification its name claims — drift near zero and
-    // `still_aboard` true.
     assert!(
-        walker_speed.abs() < 1.0,
-        "characterisation: the passenger is braked to a standstill in world \
-         space rather than carried ({walker_speed:.4} m/s against a deck \
-         running at {platform_speed:.4})"
+        (walker_speed - platform_speed).abs() < 0.05,
+        "the passenger should be carried at the deck's speed: {walker_speed:.4} \
+         against a deck running at {platform_speed:.4}"
     );
     assert!(
-        worst_drift > 2.0,
-        "characterisation: the passenger should be left behind by the deck. \
-         Drift {worst_drift:.4} m — if this now fails because the drift went to \
-         zero, R4 has landed and this test becomes a specification."
+        worst_drift < 0.05,
+        "the passenger should hold station on the deck: drift {worst_drift:.4} m"
     );
     assert!(
-        !on_deck,
-        "characterisation: the passenger falls off the back of a running \
-         platform (y = {:.3}, deck {:.3})",
+        on_deck,
+        "the passenger should still be aboard (y = {:.3}, deck {:.3})",
         position_of(&world, walker.body).y,
         platform.deck_y(&world)
     );
@@ -542,20 +538,28 @@ fn cruise_under_load() {
 // 5. Edge walk — which way does the platform yaw?
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// **Characterisation, and the one the design exists to overturn.** A character
-/// walking `+X` along the `+Z` edge of a free-yawing platform should torque it
-/// `−Y`: the platform is what pushes the walker, so the reaction recoils it the
-/// other way (requirements R1).
+/// **Specification, inverted at Stage 5 — the one the design exists to
+/// overturn.** A character walking `+X` along the `+Z` edge of a free-yawing
+/// platform torques it `−Y`: the platform is what pushes the walker, so the
+/// reaction recoils it the other way (requirements R1).
 ///
-/// Today the drive is reactionless, so the walker behaves as a conveyor belt —
-/// friction drags the deck *forwards* with them — and the platform yaws `+Y`.
-/// This test asserts the wrong sign on purpose. When Stage 5 lands, it flips,
-/// and this assertion is rewritten as a specification.
+/// Stage 0 measured `+0.41128 rad/s` — the wrong sign, asserted on purpose.
+/// The old drive was reactionless, so nothing but ordinary friction touched
+/// the deck and the walker behaved as a conveyor belt, dragging it *forwards*.
+/// The drive is now an impulse exchange at the contact points, so the reaction
+/// lands where the feet are: `+X` at `+Z` gives `r × F` along `−Y`, and the
+/// platform yaws `−0.12183 rad/s` away from the walker.
+///
+/// The magnitude is not the specification and should not be pinned. It is set
+/// by how much tangential impulse the walk actually needs, which is a
+/// transient — a body already at walk speed asks the row for nothing — and by
+/// the platform's yaw inertia. The *sign* is the conservation claim, and it is
+/// what R1 buys.
 ///
 /// The platform hovers (`gravity_scale = 0`, no route servo) so that nothing
-/// but the walker's friction touches its yaw.
+/// but the walker's own contact touches its yaw.
 #[test]
-fn edge_walk_yaws_the_platform_with_the_walker() {
+fn edge_walk_yaws_the_platform_against_the_walker() {
     let geometry = FlatQuadGeometry::new(64.0);
     let mut world = bench_world();
     let mut debug = DebugLines::default();
@@ -599,11 +603,10 @@ fn edge_walk_yaws_the_platform_with_the_walker() {
         "the walker should actually be walking: vx = {walker_speed:.4}"
     );
     assert!(
-        peak_yaw > 0.0,
-        "characterisation: the reactionless drive drags the deck along with the \
-         walker, yawing it +Y. Conservation demands −Y — if this now fails with \
-         a negative yaw, the traction drive has landed and this assertion should \
-         be inverted into a specification. Measured {peak_yaw:.5} rad/s"
+        peak_yaw < 0.0,
+        "walking +X at the +Z edge must recoil the platform −Y: the walker \
+         pushes off the deck and the deck is pushed the other way. Measured \
+         {peak_yaw:.5} rad/s"
     );
 }
 
@@ -611,15 +614,24 @@ fn edge_walk_yaws_the_platform_with_the_walker() {
 // 6. Crate push — how fast does a pushed crate go?
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// **Characterisation (gated on D1).** A driven character walks into a crate
-/// and pushes it. The requirement wants push speed to follow the mass ratio;
-/// that claim is only honest once the drive is bounded by the contact, and
-/// today it is not — the drive restores the character's velocity from an
-/// infinite account every substep, so the crate is pushed at close to walk
-/// speed regardless of how heavy it is.
+/// **Specification as of Stage 5.** A driven character walks into a crate and
+/// pushes it. The requirement wants push speed to follow the mass ratio, and
+/// once the drive is bounded by the contact it does.
 ///
-/// What this records is the *current* answer plus the absence of jitter, which
-/// is the half of the assertion that must survive D1 either way.
+/// Stage 0 measured a *punt*: 4.70 m/s on a 768 kg box, 6.5× the mass-ratio
+/// speed and near the walker's own 5.0. The drive was reactionless, restoring
+/// the walker's velocity from an infinite account every substep, so mass did
+/// not enter into it.
+///
+/// §11's ledger predicted this stayed a characterisation, on the grounds that
+/// `drive_gain: 5.0` lets the walker transmit five times the tangential force.
+/// It does — and it is still not enough to shove this crate. The walker's feet
+/// can supply at most `0.8 · 5 · m_w · g ≈ 5.1 kN`, while the crate's own
+/// friction against the ground resists `0.8 · m_c · g ≈ 6.0 kN`. So there is
+/// no sustained push at all: what the crate gets is the inelastic transfer of
+/// the walker's momentum at the moment of contact, which *is* the mass ratio.
+/// The prediction was right about the mechanism and wrong about which side of
+/// the crate's own friction 5× lands on.
 #[test]
 fn crate_push() {
     let geometry = FlatQuadGeometry::new(64.0);
@@ -653,6 +665,30 @@ fn crate_push() {
         peak_overtake = peak_overtake.max(push - linear_velocity_of(&world, walker.body).x);
     }
 
+    // The gain's ledger (§11): a walker leaning on a crate it cannot move
+    // saturates its rows, and the impulse beyond the honest bound is exactly
+    // what the instrumentation exists to make watchable.
+    let usage = world
+        .traction_usage(walker.body)
+        .copied()
+        .expect("a gained actuator reports what it borrowed");
+    eprintln!(
+        "crate push: borrowed {:.0} N over {} driving frames, saturated {:.0}%",
+        usage.borrowed_force,
+        usage.driving_frames,
+        usage.saturation() * 100.0
+    );
+    assert!(
+        usage.borrowed_force > 0.0,
+        "a walker driving at 5x should be recorded borrowing impulse"
+    );
+    assert!(
+        usage.saturation() > 0.5,
+        "a walker leaning on an immovable crate runs its rows at the bound: \
+         saturated {:.0}% of frames",
+        usage.saturation() * 100.0
+    );
+
     eprintln!(
         "crate push: walker={walker_mass:.1}kg crate={crate_mass:.1}kg \
          peak={peak_push:.4} walk_speed={:.1} mass_ratio_speed={mass_ratio_speed:.4} \
@@ -667,19 +703,19 @@ fn crate_push() {
         "the crate should never outrun the walker: overtook by \
          {peak_overtake:.4} m/s"
     );
-    // Characterisation (gated on D1, §11). The crate is not pushed, it is
-    // *punted*: one contact throws a 768 kg box to nearly the walker's own
-    // walk speed, because the reactionless drive restores the walker's
-    // velocity from an infinite account every substep. Mass ratio does not
-    // enter into it.
-    //
-    // Under a contact-bounded drive this peak drops toward
-    // `mass_ratio_speed`. What that number becomes is exactly what D1 decides,
-    // so this assertion is promoted or rewritten then — not before.
+    // The punt is gone. The peak is the inelastic transfer and nothing more:
+    // never above it, because momentum is conserved, and close below it,
+    // because the crate's own friction starts bleeding the speed away on the
+    // same frame it receives it. Measured 0.7069 against 0.7281.
     assert!(
-        peak_push > 3.0 * mass_ratio_speed,
-        "characterisation: the punt should far exceed the mass-ratio speed. \
-         peak {peak_push:.4} vs mass-ratio {mass_ratio_speed:.4}"
+        peak_push <= mass_ratio_speed * 1.02,
+        "the crate cannot receive more than the walker's momentum: peak \
+         {peak_push:.4} vs mass-ratio {mass_ratio_speed:.4}"
+    );
+    assert!(
+        peak_push > mass_ratio_speed * 0.85,
+        "push speed should follow the mass ratio: peak {peak_push:.4} vs \
+         mass-ratio {mass_ratio_speed:.4}"
     );
 }
 
@@ -756,8 +792,14 @@ fn stack_stability_under_a_driven_body() {
 ///
 /// This is what the warm-start persistence rule and the restitution suppression
 /// added by `84a49b1` exist to protect, and it is the test that says whether
-/// they can go when the drive stops re-asserting approach velocity every
-/// substep.
+/// they can go now that the drive has stopped re-asserting approach velocity
+/// every substep. It is quiet to the digit either way, which is Stage 7's cue
+/// to try deleting them.
+///
+/// The resting position moved 5 mm closer to the wall at Stage 5 — x = 0.2574
+/// against 0.2621 — because the body is now held there by a tangential row at
+/// its feet rather than by a velocity re-asserted ahead of the solve, and the
+/// two balance against the wall's normal row at slightly different depths.
 #[test]
 fn driven_body_at_rest_against_wall_and_floor() {
     let geometry = WallAndFloorGeometry::new(32.0, 6.0);
@@ -810,5 +852,82 @@ fn driven_body_at_rest_against_wall_and_floor() {
         worst_offset < 0.05,
         "a body driven into a wall should hold station: drift \
          {worst_offset:.4} m"
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 9. Slope limits — where standing ends and where walking ends
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// **Specification, and §11's second Stage 5 check.** A character stands on and
+/// walks up a 50° slope, and both limits are the same number.
+///
+/// §11's ledger predicted the two would diverge: grip at `μ = 0.8` gives a
+/// standing limit of `atan(0.8) ≈ 39°` while a drive at `5μ` gives a walking
+/// limit of `atan(4.0) ≈ 76°`, so a character would slide when idle and climb
+/// when moving. As built they do not diverge, because the gain is a property
+/// of the body driving through a contact rather than of the target it happens
+/// to be asking for: a released stick commands *zero relative velocity across
+/// the support*, which is a brake, and a brake at the honest bound is a fifth
+/// of the authority the same body has when accelerating. Both limits are
+/// therefore `atan(4.0) ≈ 76°`, and what actually decides whether a slope is
+/// walkable is `SupportConfig::min_support_cosine` — the 60° cone that says
+/// whether the contact holds the body up at all.
+///
+/// 50° is chosen to sit inside the 39°–76° band the ledger names and inside
+/// the 60° support cone. Every level in `levels/` holds real area there.
+#[test]
+fn a_slope_a_character_can_walk_up_is_one_it_can_stand_on() {
+    // run 10, rise 10·tan(50°): a 50° ramp climbing toward +Z.
+    let slope_degrees: f32 = 50.0;
+    let run = 10.0;
+    let geometry = RampGeometry::new(8.0, run, run * slope_degrees.to_radians().tan());
+    let mut debug = DebugLines::default();
+
+    let start_z = 5.0;
+    let surface_y = |z: f32| z * slope_degrees.to_radians().tan();
+
+    // Standing: the stick is released, which asks for zero velocity across the
+    // slope. If grip were the honest 0.8 the character would slide.
+    let mut world = bench_world();
+    let idle = Walker::spawn(
+        &mut world,
+        Vector3::new(0.0, surface_y(start_z) + 0.02, start_z),
+    );
+    for _ in 0..180 {
+        idle.drive(&mut world);
+        advance(&mut world, &geometry, &mut debug);
+    }
+    let stood_z = position_of(&world, idle.body).z;
+
+    // Walking uphill from the same place.
+    let mut world = bench_world();
+    let climber = Walker::spawn(
+        &mut world,
+        Vector3::new(0.0, surface_y(start_z) + 0.02, start_z),
+    )
+    .walking(Vector3::z());
+    for _ in 0..180 {
+        climber.drive(&mut world);
+        advance(&mut world, &geometry, &mut debug);
+    }
+    let climbed_z = position_of(&world, climber.body).z;
+
+    eprintln!(
+        "slope limits at {slope_degrees:.0}°: idle drifted {:.4} m, walker advanced {:.4} m",
+        stood_z - start_z,
+        climbed_z - start_z
+    );
+
+    assert!(
+        (stood_z - start_z).abs() < 0.2,
+        "an idle character should hold its place on a {slope_degrees:.0}° slope: \
+         moved {:.4} m",
+        stood_z - start_z
+    );
+    assert!(
+        climbed_z > start_z + 1.0,
+        "a character should climb a {slope_degrees:.0}° slope: advanced {:.4} m",
+        climbed_z - start_z
     );
 }
