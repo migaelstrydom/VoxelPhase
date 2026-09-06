@@ -53,13 +53,17 @@ impl DescriptorManager {
     ) -> EngineResult<Self> {
         // Create UBO pool. One descriptor set holding two uniform buffer
         // descriptors — the scene block (binding 0) and the light set
-        // (binding 1) — plus the sun shadow map (binding 2).
+        // (binding 1) — plus the sun shadow map (binding 2) and the frame's
+        // surface table (binding 3).
         let ubo_pool_sizes = [
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::UNIFORM_BUFFER)
                 .descriptor_count(2),
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .descriptor_count(1),
+            vk::DescriptorPoolSize::default()
+                .ty(vk::DescriptorType::STORAGE_BUFFER)
                 .descriptor_count(1),
         ];
 
@@ -136,6 +140,28 @@ impl DescriptorManager {
     /// Update the light UBO descriptor (set 0, binding 1) to point at a buffer.
     pub fn update_light_ubo(&self, buffer: &ManagedBuffer, size: vk::DeviceSize) {
         self.write_ubo_binding(1, buffer, size);
+    }
+
+    /// Point the surface table descriptor (set 0, binding 3) at a buffer.
+    ///
+    /// Written once at startup. The table is sized for the worst frame and
+    /// never reallocated, precisely so this descriptor never has to be
+    /// rewritten while a frame is in flight.
+    pub fn update_surface_table(&self, buffer: &ManagedBuffer, size: vk::DeviceSize) {
+        let buffer_info = [vk::DescriptorBufferInfo::default()
+            .buffer(buffer.buffer)
+            .offset(0)
+            .range(size)];
+
+        let write = [vk::WriteDescriptorSet::default()
+            .dst_set(self.scene_ubo_set)
+            .dst_binding(3)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .buffer_info(&buffer_info)];
+
+        unsafe {
+            self.device.device.update_descriptor_sets(&write, &[]);
+        }
     }
 
     /// Point the shadow map descriptor (set 0, binding 2) at a depth image.

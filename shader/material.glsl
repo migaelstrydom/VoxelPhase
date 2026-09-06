@@ -1,8 +1,14 @@
-// Per-draw surface material parameters, delivered via fragment push constants.
+// Per-draw surface material parameters.
 //
-// Layout must match `SurfaceParams` in src/rendering/material.rs, and the
-// declared offset must match the fragment push-constant range in
-// src/rendering/pipeline.rs.
+// Only an index travels in the push constants; the parameters themselves live
+// in the frame's surface table, a storage buffer at set 0, binding 3. Push
+// constants are guaranteed to be only 128 bytes and the model matrix plus the
+// colour override already spend 80 of them, which left no room for the
+// material system to grow. See src/rendering/surface_buffer.rs.
+//
+// The `GpuSurface` layout must match the struct of that name in
+// src/rendering/material.rs, and the push-constant offset must match the
+// fragment range in src/rendering/pipeline.rs.
 
 #ifndef MATERIAL_GLSL
 #define MATERIAL_GLSL
@@ -10,6 +16,15 @@
 layout(push_constant) uniform MaterialPushConstants {
     /// Flat colour replacing all shading when a > 0 (debug wireframe overlay).
     layout(offset = 64) vec4 colour_override;
+    /// Which entry of the surface table this draw shades with.
+    uint surface_index;
+} material;
+
+/// One surface's shading parameters. Three vec4s exactly: std430 rounds a
+/// struct's stride up to its alignment, so a layout that is not a multiple of
+/// 16 bytes would silently read every entry after the first from the wrong
+/// offset.
+struct GpuSurface {
     /// rgb = linear emissive colour, at its authored magnitude,
     /// w = scale bringing that colour to the authored emissive luminance.
     /// Use materialEmissive() rather than reading rgb directly — every
@@ -20,23 +35,35 @@ layout(push_constant) uniform MaterialPushConstants {
     vec4 surface;
     /// x = triplanar scale in texture repeats per world unit, y = blend
     /// sharpness. A zero scale means this mesh carries its own texture
-    /// coordinates and they should be sampled instead.
-    vec2 projection;
-} material;
+    /// coordinates and they should be sampled instead. zw are spare.
+    vec4 projection;
+};
 
-float materialRoughness() { return material.surface.x; }
-float materialMetallic()  { return material.surface.y; }
-float materialRimStrength() { return material.surface.z; }
-float materialRimPower()    { return material.surface.w; }
+layout(std430, set = 0, binding = 3) readonly buffer SurfaceTable {
+    GpuSurface surfaces[];
+} surface_table;
+
+/// This draw's surface parameters.
+GpuSurface materialSurface() {
+    return surface_table.surfaces[material.surface_index];
+}
+
+float materialRoughness() { return materialSurface().surface.x; }
+float materialMetallic()  { return materialSurface().surface.y; }
+float materialRimStrength() { return materialSurface().surface.z; }
+float materialRimPower()    { return materialSurface().surface.w; }
 
 /// Zero when the mesh is textured by its own vertex texture coordinates.
-float materialTriplanarScale()     { return material.projection.x; }
-float materialTriplanarSharpness() { return material.projection.y; }
+float materialTriplanarScale()     { return materialSurface().projection.x; }
+float materialTriplanarSharpness() { return materialSurface().projection.y; }
 
 /// Emissive radiance added independently of incoming light.
 ///
 /// The scale is computed CPU-side (`Emission::radiance_scale`) so that this
 /// product always has the authored luminance, whatever the hue.
-vec3 materialEmissive() { return material.emissive.rgb * material.emissive.w; }
+vec3 materialEmissive() {
+    GpuSurface s = materialSurface();
+    return s.emissive.rgb * s.emissive.w;
+}
 
 #endif // MATERIAL_GLSL

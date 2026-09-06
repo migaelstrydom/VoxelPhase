@@ -193,7 +193,7 @@ impl Material {
         self
     }
 
-    /// Pack this material's lighting parameters for the fragment push constant.
+    /// This material's shading parameters, for the frame's surface table.
     pub fn surface_params(&self) -> SurfaceParams {
         SurfaceParams {
             emissive: [
@@ -250,14 +250,20 @@ impl Default for SurfaceModulation {
     }
 }
 
-/// GPU-facing material parameters, pushed per draw call.
+/// GPU-facing surface parameters, one entry in the frame's surface table.
 ///
-/// Layout must match the `MaterialPushConstants` block in shader/material.glsl,
-/// which declares it at byte offset `SURFACE_PARAMS_OFFSET`.
-#[derive(Clone, Copy, Debug)]
+/// Layout must match the `GpuSurface` struct in shader/material.glsl. Three
+/// `vec4`s exactly: std430 aligns a struct to its largest member, so anything
+/// that is not a multiple of 16 bytes here would be padded to one on the GPU
+/// and every entry after the first would be read from the wrong offset.
+///
+/// The trailing pair in `projection` is deliberate headroom. It is what the
+/// old push-constant layout had no room for, and what per-material surface
+/// detail is written into.
+#[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(C)]
-pub struct SurfaceParams {
-    /// rgb = emissive colour, w = emissive strength.
+pub struct GpuSurface {
+    /// rgb = emissive colour, w = emissive radiance scale.
     pub emissive: [f32; 4],
 
     /// x = roughness, y = metallic, z = rim strength, w = rim power.
@@ -265,13 +271,31 @@ pub struct SurfaceParams {
 
     /// x = triplanar scale in texture repeats per world unit, y = blend
     /// sharpness. A zero scale means the fragment shader samples the mesh's
-    /// vertex texture coordinates instead.
-    pub projection: [f32; 2],
+    /// vertex texture coordinates instead. zw are spare.
+    pub projection: [f32; 4],
 }
 
-/// Byte offset of `SurfaceParams` within the fragment push-constant range.
-/// Follows the 64-byte vertex model matrix and the 16-byte colour override.
-pub const SURFACE_PARAMS_OFFSET: u32 = 80;
+impl GpuSurface {
+    /// Parameters for an unlit-looking matte surface, used where no material
+    /// is available (debug overlays, procedural meshes).
+    pub const MATTE: Self = Self {
+        emissive: [0.0, 0.0, 0.0, 0.0],
+        surface: [1.0, 0.0, 0.0, 3.0],
+        projection: [0.0, 0.0, 0.0, 0.0],
+    };
+}
+
+/// A surface's shading parameters, as the CPU describes them.
+///
+/// Kept distinct from [`GpuSurface`] so that call sites read in terms of the
+/// dials they are setting rather than in terms of packed vectors, and so that
+/// the GPU layout can be repacked without touching them.
+#[derive(Clone, Copy, Debug)]
+pub struct SurfaceParams {
+    pub emissive: [f32; 4],
+    pub surface: [f32; 4],
+    pub projection: [f32; 2],
+}
 
 impl SurfaceParams {
     /// Parameters for an unlit-looking matte surface, used where no material
@@ -300,16 +324,19 @@ impl SurfaceParams {
         self
     }
 
-    /// View as raw bytes for `cmd_push_constants`.
-    pub fn as_bytes(&self) -> &[u8] {
-        unsafe {
-            std::slice::from_raw_parts(
-                self as *const Self as *const u8,
-                std::mem::size_of::<Self>(),
-            )
+    /// Pack for the surface table.
+    pub fn to_gpu(self) -> GpuSurface {
+        GpuSurface {
+            emissive: self.emissive,
+            surface: self.surface,
+            projection: [self.projection[0], self.projection[1], 0.0, 0.0],
         }
     }
 }
+
+/// Byte offset of the surface index within the fragment push-constant range.
+/// Follows the 64-byte vertex model matrix and the 16-byte colour override.
+pub const SURFACE_INDEX_OFFSET: u32 = 80;
 
 /// Mutable builder for registering materials during initialization.
 pub struct MaterialManagerBuilder {
@@ -380,19 +407,26 @@ impl MaterialManager {
 mod tests {
     use super::*;
 
-    /// Vulkan only guarantees 128 bytes of push constants, and this pipeline
-    /// spends them on a 64-byte model matrix, a 16-byte colour override and
-    /// then these parameters. Growing `SurfaceParams` past the remainder does
-    /// not fail at compile time — it fails at pipeline creation, on whichever
-    /// device happens to sit at the minimum.
+    /// Vulkan only guarantees 128 bytes of push constants. The surface index
+    /// exists precisely so that this budget stops being the material system's
+    /// ceiling — but the model matrix, the colour override and the index still
+    /// have to fit inside it.
     #[test]
-    fn surface_params_fit_the_guaranteed_push_constant_budget() {
+    fn the_push_constants_fit_the_guaranteed_budget() {
         const GUARANTEED_BUDGET: usize = 128;
-        let used = SURFACE_PARAMS_OFFSET as usize + std::mem::size_of::<SurfaceParams>();
+        let used = SURFACE_INDEX_OFFSET as usize + std::mem::size_of::<u32>();
         assert!(
             used <= GUARANTEED_BUDGET,
             "push constants use {used} bytes of a guaranteed {GUARANTEED_BUDGET}"
         );
+    }
+
+    /// The point of the move: there is now room to grow. A material dial added
+    /// later must land in the surface table, never back in the push constants.
+    #[test]
+    fn the_surface_table_carries_the_parameters_not_the_push_constants() {
+        assert_eq!(std::mem::size_of::<SurfaceParams>() > 4, true);
+        assert_eq!(std::mem::size_of::<GpuSurface>(), 48);
     }
 
     #[test]

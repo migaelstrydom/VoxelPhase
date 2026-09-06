@@ -27,7 +27,7 @@ use crate::particles::{ParticlePool, ParticleRenderer};
 use crate::rendering::descriptors::DescriptorManager;
 use crate::rendering::frame::{DrawInfo, FrameData, LightUbo, SceneLighting, SceneUbo};
 use crate::rendering::material::{
-    MaterialManager, SurfaceModulation, SurfaceParams, SURFACE_PARAMS_OFFSET,
+    MaterialManager, SurfaceModulation, SurfaceParams, SURFACE_INDEX_OFFSET,
 };
 use crate::rendering::overlay::OverlayRenderer;
 use crate::rendering::pipeline::{GraphicsPipeline, GraphicsPipelineConfig};
@@ -35,6 +35,7 @@ use crate::rendering::post::PostProcessRenderer;
 use crate::rendering::shadow::map::SHADOW_SAMPLED_LAYOUT;
 use crate::rendering::shadow::{ShadowMap, ShadowRenderer, ShadowVolume, ViewFrustum};
 use crate::rendering::sky::SkyRenderer;
+use crate::rendering::surface_buffer::SurfaceBuffer;
 use crate::rendering::target::frame_targets::DEPTH_FORMAT;
 use crate::rendering::target::{
     AcquiredFrame, FrameOutput, FrameTargets, OffscreenOutput, SurfaceInfo, SwapchainOutput,
@@ -120,6 +121,9 @@ pub struct Renderer {
     pub output: Box<dyn FrameOutput>,
     pub targets: FrameTargets,
     pub frame_data: FrameData,
+    /// This frame's surface parameters, one entry per draw. Bound to the scene
+    /// descriptor set; draws carry only an index into it.
+    surfaces: SurfaceBuffer,
     pub descriptors: Arc<DescriptorManager>,
     pub vulkan_context: Arc<VulkanContext>,
     pub overlay: OverlayRenderer,
@@ -223,6 +227,9 @@ impl Renderer {
         // Create frame data (vertex/index/UBO buffers)
         let frame_data = FrameData::new(Arc::clone(&vulkan_context.device))?;
 
+        // The table every draw's shading parameters go into.
+        let surfaces = SurfaceBuffer::new(Arc::clone(&vulkan_context.device))?;
+
         // Create descriptor manager
         let descriptors = Arc::new(DescriptorManager::new(
             Arc::clone(&vulkan_context.device),
@@ -241,6 +248,7 @@ impl Renderer {
             std::mem::size_of::<LightUbo>() as vk::DeviceSize,
         );
         descriptors.update_shadow_map(shadow.map().view, SHADOW_SAMPLED_LAYOUT);
+        descriptors.update_surface_table(surfaces.buffer(), SurfaceBuffer::SIZE);
 
         // Create overlay renderer for debug text (transparent pass)
         let overlay = OverlayRenderer::new(
@@ -277,6 +285,7 @@ impl Renderer {
             output,
             targets,
             frame_data,
+            surfaces,
             descriptors,
             vulkan_context,
             overlay,
@@ -316,6 +325,7 @@ impl Renderer {
 
         // Now that the GPU is done with previous frames, flush deferred deletions
         self.frame_data.begin_frame();
+        self.surfaces.begin_frame();
 
         // Everything fallible that costs nothing to redo goes first, so the
         // acquire is the last step that can fail. An acquired swapchain image
@@ -622,6 +632,9 @@ impl Renderer {
         // Append mesh data to frame buffers and get draw offsets
         let draw_info = self.frame_data.append_mesh_data(vertices, indices)?;
 
+        // Park this draw's shading parameters in the frame's surface table.
+        let surface_index = self.surfaces.push(surface.to_gpu());
+
         if options.casts_shadow {
             self.record_shadow_caster(model, &draw_info);
         }
@@ -683,13 +696,15 @@ impl Renderer {
                 override_bytes,
             );
 
-            // Push this draw's lighting parameters
+            // Push where this draw's parameters landed in the surface table.
+            // The parameters themselves went into the table above; only this
+            // index travels through the push constants.
             self.vulkan_context.device().cmd_push_constants(
                 cb,
                 self.pipeline.layout,
                 vk::ShaderStageFlags::FRAGMENT,
-                SURFACE_PARAMS_OFFSET,
-                surface.as_bytes(),
+                SURFACE_INDEX_OFFSET,
+                &surface_index.as_bytes(),
             );
 
             // Get texture descriptor set

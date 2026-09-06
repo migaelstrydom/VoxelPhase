@@ -16,6 +16,7 @@ pub mod renderer;
 pub mod shaders;
 pub mod shadow;
 pub mod sky;
+pub mod surface_buffer;
 pub mod target;
 pub mod texture;
 pub mod triplanar;

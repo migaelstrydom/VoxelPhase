@@ -220,14 +220,15 @@ Level(
                 Dolos(pos: (-5.0, 1.0, 0.0)),
                 Dolos(pos: (-7.0, 1.0, 0.0), shank_length: 2.0, fluke_length: 1.4, thickness: 0.6),
 
-                // Horizontal run for testing whether a passenger is carried
-                // sideways. Ground is flat at y = 0 here, and the deck is
-                // 0.3 half-thick, so y = 0.8 leaves a 0.5 m gap underneath —
-                // low enough to step on to, high enough that a scrape reads as
-                // a bug rather than as terrain.
                 MovingPlatform(
                     from: (-4.0, 0.8, -18.0),
                     to: (-14.0, 0.8, -18.0),
+                    speed: 2.0,
+                ),
+
+                MovingPlatform(
+                    from: (-4.0, 0.5, -24.0),
+                    to: (-14.0, 3.0, -24.0),
                     speed: 2.0,
                 ),
             ],

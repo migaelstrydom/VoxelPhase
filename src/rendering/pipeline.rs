@@ -12,7 +12,6 @@ use ash::vk;
 
 use crate::core::device::ManagedDevice;
 use crate::core::error::{EngineError, EngineResult};
-use crate::rendering::material::SurfaceParams;
 use crate::rendering::shaders::ShaderManager;
 use crate::rendering::vertex::Vertex;
 
@@ -274,7 +273,10 @@ impl GraphicsPipeline {
         // Push constant ranges:
         // - Vertex: mat4 model (offset 0, 64 bytes)
         // - Fragment: vec4 colourOverride (offset 64, 16 bytes)
-        //             SurfaceParams (offset SURFACE_PARAMS_OFFSET)
+        //             uint surfaceIndex (offset SURFACE_INDEX_OFFSET, 4 bytes)
+        //
+        // The parameters themselves live in the surface table (set 0, binding
+        // 3); only the index travels here. See `rendering::surface_buffer`.
         let push_constant_ranges = [
             vk::PushConstantRange {
                 stage_flags: vk::ShaderStageFlags::VERTEX,
@@ -284,7 +286,7 @@ impl GraphicsPipeline {
             vk::PushConstantRange {
                 stage_flags: vk::ShaderStageFlags::FRAGMENT,
                 offset: 64,
-                size: 16 + std::mem::size_of::<SurfaceParams>() as u32,
+                size: 16 + std::mem::size_of::<u32>() as u32,
             },
         ];
 
@@ -365,6 +367,9 @@ impl GraphicsPipeline {
         // Binding 1: the per-frame point light set, fragment stage only.
         // Binding 2: the sun shadow map, sampled through an immutable
         // comparison sampler (see `GraphicsPipelineConfig::shadow_sampler`).
+        // Binding 3: the frame's surface table, indexed by the push constant.
+        //   A storage buffer rather than a uniform one because it is sized for
+        //   the worst frame rather than for a fixed small count.
         let immutable_shadow_sampler = [shadow_sampler];
         let bindings = [
             vk::DescriptorSetLayoutBinding::default()
@@ -384,6 +389,11 @@ impl GraphicsPipeline {
                 // Sets descriptor_count from the slice length, so it must come
                 // after any explicit count rather than before it.
                 .immutable_samplers(&immutable_shadow_sampler),
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(3)
+                .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::FRAGMENT),
         ];
 
         let create_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
