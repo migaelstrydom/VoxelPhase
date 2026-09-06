@@ -3087,10 +3087,15 @@ impl PhysicsBenchScenario for SphereIntoDynamicCornerScenario {
         let t = self.slab_half_thickness;
         // A wall in the YZ plane and a floor in the XZ plane, meeting at the
         // origin. The sphere arrives along their bisector.
+        //
+        // Both are colliders on one body. They cross, so as two bodies they
+        // would start deeply interpenetrating and the solver's first job would
+        // be to shove them out of each other -- and out of the sphere's path,
+        // leaving nothing at the origin for it to hit.
+        let corner = world.create_body(RigidBodyDesc::dynamic().position(Point3::origin()));
         for half in [Vector3::new(t, 1.0, 1.0), Vector3::new(1.0, t, 1.0)] {
-            let slab = world.create_body(RigidBodyDesc::dynamic().position(Point3::origin()));
             let _ = world.attach_collider(
-                slab,
+                corner,
                 ColliderDesc::box_shape(half)
                     .density(50000.0)
                     .restitution(0.2)

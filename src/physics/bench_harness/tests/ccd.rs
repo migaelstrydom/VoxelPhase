@@ -169,6 +169,14 @@ fn sphere_does_not_tunnel_into_a_dynamic_corner() {
         min_y > scenario.far_face(),
         "sphere passed through the floor: min_y={min_y}"
     );
+
+    // Bounding only the far side is satisfied by a sphere that never arrives.
+    // It must actually reach the corner: contact is at radius from both faces.
+    let reach = scenario.slab_half_thickness + scenario.radius + 0.05;
+    assert!(
+        min_x < reach && min_y < reach,
+        "sphere never reached the corner: min_x={min_x}, min_y={min_y}"
+    );
 }
 
 /// The speculative band, isolated: too fast for the discrete margin, too slow
