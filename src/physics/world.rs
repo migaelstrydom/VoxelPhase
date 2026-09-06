@@ -1349,34 +1349,22 @@ fn ray_vs_obb(
     let local_start: Vector3<f32> = inv_rot * (origin - obb.center);
     let local_dir: Vector3<f32> = inv_rot * (end - origin);
 
-    let t = obb_slab_entry(local_start, local_dir, half_extents)?;
+    let entry = obb_slab_entry(local_start, local_dir, half_extents)?;
 
-    let hit_point = origin + (end - origin) * t;
-    let closest = obb.closest_point(hit_point);
-    let to_ray = hit_point - closest;
-    let len = to_ray.norm();
-    let normal = if len < 1e-6 {
-        // Ray hit exactly on the surface — derive normal from the slab axis.
-        let local_hit = inv_rot * (hit_point - obb.center);
-        let mut best_axis = 0;
-        let mut best_dist = f32::MAX;
-        for i in 0..3 {
-            let dist = (local_hit[i].abs() - half_extents[i]).abs();
-            if dist < best_dist {
-                best_dist = dist;
-                best_axis = i;
-            }
-        }
-        let mut n = Vector3::zeros();
-        n[best_axis] = local_hit[best_axis].signum();
-        obb.rotation * n
-    } else {
-        to_ray / len
-    };
+    // The normal is the face the slab test entered through, not something
+    // recovered from the hit point. A hit point sits *on* the surface, so the
+    // vector from it to its own closest surface point is float noise: asking
+    // that noise which way the face points answers with a direction that is
+    // near-horizontal about as often as not. On a floor, that reads to the
+    // foot placer as a wall — no ground under a character plainly standing on
+    // one — on roughly half the frames, at random.
+    let mut local_normal = Vector3::zeros();
+    local_normal[entry.axis] = entry.side;
+
     Some(ProbeHit {
-        t,
-        point: closest,
-        normal,
+        t: entry.t,
+        point: origin + (end - origin) * entry.t,
+        normal: obb.rotation * local_normal,
     })
 }
 
@@ -1532,14 +1520,33 @@ fn ray_vs_convex_hull(
     })
 }
 
+/// Where a ray entered a box, in the box's own space.
+struct SlabEntry {
+    /// Entry time along the ray, in [0, 1].
+    t: f32,
+    /// Local axis of the face entered through (0 = x, 1 = y, 2 = z).
+    axis: usize,
+    /// Which side of that axis: +1 or -1.
+    side: f32,
+}
+
 /// Ray-vs-AABB slab test in local space.
 ///
-/// Returns the first entry time t ∈ (0, 1] where the ray enters the box.
-/// Returns None if the ray misses the box, is parallel to a slab it doesn't
-/// overlap, or if the origin is already inside the box (treated as overlap).
-fn obb_slab_entry(start: Vector3<f32>, dir: Vector3<f32>, half: Vector3<f32>) -> Option<f32> {
+/// Returns the first entry time t ∈ (0, 1] where the ray enters the box, and
+/// the face it entered through. Returns None if the ray misses the box, is
+/// parallel to a slab it doesn't overlap, or if the origin is already inside
+/// the box (treated as overlap).
+///
+/// The face comes out of the test itself: whichever slab was the last to be
+/// entered is the one the ray came in through. That is the only thing that
+/// knows the answer exactly. Reconstructing it afterwards from the hit point
+/// means asking which face a point already lying *on* a face is nearest to,
+/// and the answer is decided by float error.
+fn obb_slab_entry(start: Vector3<f32>, dir: Vector3<f32>, half: Vector3<f32>) -> Option<SlabEntry> {
     let mut t_enter = f32::NEG_INFINITY;
     let mut t_exit = f32::INFINITY;
+    let mut axis = 0;
+    let mut side = 1.0;
 
     for i in 0..3 {
         if dir[i].abs() < 1e-8 {
@@ -1552,7 +1559,12 @@ fn obb_slab_entry(start: Vector3<f32>, dir: Vector3<f32>, half: Vector3<f32>) ->
             let t1 = (-half[i] - start[i]) * inv;
             let t2 = (half[i] - start[i]) * inv;
             let (t_near, t_far) = if t1 <= t2 { (t1, t2) } else { (t2, t1) };
-            t_enter = t_enter.max(t_near);
+            if t_near > t_enter {
+                t_enter = t_near;
+                axis = i;
+                // The face met first is the one on the side the ray came from.
+                side = if dir[i] > 0.0 { -1.0 } else { 1.0 };
+            }
             t_exit = t_exit.min(t_far);
         }
     }
@@ -1563,7 +1575,11 @@ fn obb_slab_entry(start: Vector3<f32>, dir: Vector3<f32>, half: Vector3<f32>) ->
     // t_enter < 0: origin is inside the expanded box — skip (treat as overlap)
     // t_enter > 1: box is beyond probe end
     if t_enter >= 0.0 && t_enter <= 1.0 {
-        Some(t_enter)
+        Some(SlabEntry {
+            t: t_enter,
+            axis,
+            side,
+        })
     } else {
         None
     }
@@ -1804,6 +1820,89 @@ mod tests {
             (hit.point.y - 1.5).abs() < 1e-3,
             "found it at {:.4} m",
             hit.point.y
+        );
+    }
+    /// A foot probe onto the top of a spawned floor must report a floor, from
+    /// wherever it is cast.
+    ///
+    /// This is the shape of a real probe — a ray from the hip toward a point
+    /// near the foot, not a vertical drop — onto the shape of a real floor: a
+    /// temple's stylobate, three nested boxes on one dynamic body, tilted by
+    /// the fraction of a degree that settling leaves behind.
+    ///
+    /// The tilt is the whole test. Against an axis-aligned box a hit point
+    /// lands on its own closest surface point and any way of recovering the
+    /// normal looks right. Rotate the box by a thousandth of a radian and the
+    /// two disagree by more than float noise, so a normal recovered from the
+    /// hit point starts answering with the nearest *side* face. On a recording
+    /// of a character walking on a temple, 168 of 362 hits on the floor came
+    /// back as walls, and the foot placer reads a wall underfoot as no ground
+    /// at all: it shortens the step, plants the foot behind the hip, and the
+    /// foot drags.
+    #[test]
+    fn a_probe_onto_a_spawned_floor_always_finds_a_floor() {
+        const TOP: f32 = 1.0;
+        const STANDING_HEIGHT: f32 = 0.425;
+
+        let mut world = PhysicsWorld::new(PhysicsConfig::default());
+        // The stylobate of `spawnables::temple` at its default size: three
+        // steps, each wider than the one above it.
+        let step_h = 1.0 / 3.0;
+        let settled = UnitQuaternion::from_euler_angles(0.0009, 0.0004, -0.0006);
+        let body = world.create_body(
+            RigidBodyDesc::dynamic()
+                .position(Point3::new(30.0, TOP / 2.0, -30.0))
+                .rotation(settled),
+        );
+        for step in 0..3 {
+            let grow = (2 - step) as f32 * 0.367;
+            let offset = step as f32 * step_h + step_h / 2.0 - TOP / 2.0;
+            world.attach_collider(
+                body,
+                ColliderDesc::box_shape(Vector3::new(8.67 + grow, step_h / 2.0, 13.26 + grow))
+                    .offset_translation(Vector3::new(0.0, offset, 0.0)),
+            );
+        }
+
+        let mut walls = 0;
+        let mut casts = 0;
+        let mut first: Option<(Point3<f32>, Vector3<f32>)> = None;
+        for step_x in 0..40 {
+            for step_z in 0..40 {
+                for turn in 0..8 {
+                    let hip = Point3::new(
+                        24.0 + step_x as f32 * 0.25,
+                        TOP + STANDING_HEIGHT,
+                        -36.0 + step_z as f32 * 0.3,
+                    );
+                    let yaw = turn as f32 * std::f32::consts::TAU / 8.0;
+                    // Probes aim at the placer's anchor: a foot's own ground,
+                    // up to a stride away, and reach a standing height past it.
+                    let aim = hip
+                        + Vector3::new(yaw.sin(), 0.0, yaw.cos()) * (0.05 + step_x as f32 * 0.02)
+                        - Vector3::y() * STANDING_HEIGHT;
+                    let to_aim = aim - hip;
+                    let length = to_aim.magnitude() + STANDING_HEIGHT;
+
+                    casts += 1;
+                    let hit = ProbeTarget::raycast(&world, hip, to_aim.normalize(), length)
+                        .unwrap_or_else(|| panic!("no ground under a hip at {hip}"));
+                    if hit.normal.y <= 0.6 {
+                        walls += 1;
+                        first.get_or_insert((hip, hit.normal));
+                    }
+                }
+            }
+        }
+
+        assert_eq!(
+            walls,
+            0,
+            "{walls} of {casts} probes onto a floor came back as a wall, first \
+             {:?} from a hip at {:?} — the placer discards any normal under 0.6 \
+             as not a floor",
+            first.map(|f| f.1),
+            first.map(|f| f.0),
         );
     }
 }
