@@ -14,6 +14,10 @@
 #define MATERIAL_GLSL
 
 layout(push_constant) uniform MaterialPushConstants {
+    /// The draw's model matrix, shared with the vertex stage. The fragment
+    /// stage reads its rotation to carry an object-space grain perturbation
+    /// into world space.
+    layout(offset = 0) mat4 model;
     /// Flat colour replacing all shading when a > 0 (debug wireframe overlay).
     layout(offset = 64) vec4 colour_override;
     /// Which entry of the surface table this draw shades with.
@@ -44,6 +48,13 @@ struct GpuSurface {
 layout(std430, set = 0, binding = 3) readonly buffer SurfaceTable {
     GpuSurface surfaces[];
 } surface_table;
+
+/// The rotation (and scale) taking this draw's model space into world space.
+///
+/// Uses `mat3(model)` rather than its inverse transpose, matching what the
+/// vertex shader does to normals: exact for uniform scaling, and the meshes
+/// this is applied to are uniformly scaled.
+mat3 materialModelToWorld() { return mat3(material.model); }
 
 /// This draw's surface parameters.
 GpuSurface materialSurface() {

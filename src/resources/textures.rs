@@ -543,6 +543,17 @@ impl Clone for TextureFactory {
 pub struct TextureManager {
     inner: Arc<Mutex<TextureManagerInner>>,
     texture_factory: TextureFactory,
+    /// Textures the engine binds to a global descriptor slot and must keep
+    /// alive for as long as it can draw.
+    ///
+    /// A `TextureHandle` frees its descriptor set when the last one drops, so a
+    /// texture bound into the scene descriptor set and then dropped leaves that
+    /// binding pointing at freed resources. Holding the handle here is what
+    /// says "this one outlives every material".
+    ///
+    /// Shared across clones of the manager, so a resident texture lives as long
+    /// as any clone can still draw with it.
+    resident: Arc<Mutex<Vec<TextureHandle>>>,
 }
 
 impl TextureManager {
@@ -559,7 +570,16 @@ impl TextureManager {
                 descriptor_manager,
             })),
             texture_factory,
+            resident: Arc::new(Mutex::new(Vec::new())),
         })
+    }
+
+    /// Keep a texture alive for the lifetime of this manager.
+    ///
+    /// For textures bound to a global descriptor slot rather than owned by a
+    /// material — see [`Self::resident`].
+    pub fn keep_resident(&self, texture: TextureHandle) {
+        self.resident.lock().unwrap().push(texture);
     }
 
     /// Number of textures with at least one live handle.

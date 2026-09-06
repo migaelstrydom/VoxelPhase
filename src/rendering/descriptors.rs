@@ -54,14 +54,14 @@ impl DescriptorManager {
         // Create UBO pool. One descriptor set holding two uniform buffer
         // descriptors — the scene block (binding 0) and the light set
         // (binding 1) — plus the sun shadow map (binding 2) and the frame's
-        // surface table (binding 3).
+        // surface table (binding 3) and the shared grain texture (binding 4).
         let ubo_pool_sizes = [
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::UNIFORM_BUFFER)
                 .descriptor_count(2),
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .descriptor_count(1),
+                .descriptor_count(2),
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::STORAGE_BUFFER)
                 .descriptor_count(1),
@@ -158,6 +158,28 @@ impl DescriptorManager {
             .dst_binding(3)
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
             .buffer_info(&buffer_info)];
+
+        unsafe {
+            self.device.device.update_descriptor_sets(&write, &[]);
+        }
+    }
+
+    /// Point the grain descriptor (set 0, binding 4) at the shared grain texture.
+    ///
+    /// Written once at startup. The fragment shader statically samples this
+    /// binding, so it must be valid before any draw, whether or not a material
+    /// asks for grain — see `ResourceManager::create_texture_manager`.
+    pub fn update_grain_texture(&self, image_view: vk::ImageView, sampler: vk::Sampler) {
+        let image_info = [vk::DescriptorImageInfo::default()
+            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
+            .image_view(image_view)
+            .sampler(sampler)];
+
+        let write = [vk::WriteDescriptorSet::default()
+            .dst_set(self.scene_ubo_set)
+            .dst_binding(4)
+            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+            .image_info(&image_info)];
 
         unsafe {
             self.device.device.update_descriptor_sets(&write, &[]);

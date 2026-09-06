@@ -1,4 +1,5 @@
 use crate::rendering::colour::Colour;
+use crate::rendering::grain::GrainSpec;
 use crate::rendering::surface_source::SurfaceSource;
 use crate::rendering::triplanar::TriplanarProjection;
 use crate::resources::textures::TextureHandle;
@@ -149,6 +150,15 @@ pub struct Material {
     /// How the diffuse texture is addressed. Disabled by default, which uses
     /// the mesh's own vertex texture coordinates.
     pub projection: TriplanarProjection,
+
+    /// The microstructure this surface shows under a highlight. None by
+    /// default: grain on everything costs the surfaces that need it their
+    /// contrast against the ones that do not.
+    pub grain: GrainSpec,
+
+    /// Which shading inputs this material asks for. Set by the grain builders
+    /// rather than by hand; a material that says nothing takes `PLAIN`.
+    pub source: SurfaceSource,
 }
 
 impl Material {
@@ -160,6 +170,8 @@ impl Material {
             finish: SurfaceFinish::default(),
             emission: Emission::default(),
             projection: TriplanarProjection::default(),
+            grain: GrainSpec::NONE,
+            source: SurfaceSource::PLAIN,
         }
     }
 
@@ -172,12 +184,34 @@ impl Material {
             finish: SurfaceFinish::default(),
             emission: Emission::default(),
             projection: TriplanarProjection::default(),
+            grain: GrainSpec::NONE,
+            source: SurfaceSource::PLAIN,
         }
     }
 
     /// Set the specular response.
     pub fn with_finish(mut self, finish: SurfaceFinish) -> Self {
         self.finish = finish;
+        self
+    }
+
+    /// Give this material a microstructure, projected from the object's own
+    /// frame so that it stays put when the object moves.
+    pub fn with_grain(mut self, grain: GrainSpec) -> Self {
+        self.grain = grain;
+        if grain.is_enabled() {
+            self.source = self.source.with(SurfaceSource::GRAIN_OBJECT_SPACE);
+        }
+        self
+    }
+
+    /// Give this material a microstructure addressed by its texture
+    /// coordinates, for grain with a direction the mesh knows — wood fibre.
+    pub fn with_uv_grain(mut self, grain: GrainSpec) -> Self {
+        self.grain = grain;
+        if grain.is_enabled() {
+            self.source = self.source.with(SurfaceSource::GRAIN_BY_UV);
+        }
         self
     }
 
@@ -210,7 +244,8 @@ impl Material {
                 self.emission.rim_power,
             ],
             projection: self.projection.packed(),
-            source: SurfaceSource::PLAIN,
+            source: self.source,
+            grain: self.grain,
         }
     }
 }
@@ -303,6 +338,9 @@ pub struct SurfaceParams {
 
     /// Which shading inputs this surface asks for.
     pub source: SurfaceSource,
+
+    /// The microstructure this surface shows under a highlight.
+    pub grain: GrainSpec,
 }
 
 impl SurfaceParams {
@@ -313,7 +351,31 @@ impl SurfaceParams {
         surface: [1.0, 0.0, 0.0, 3.0],
         projection: [0.0, 0.0],
         source: SurfaceSource::PLAIN,
+        grain: GrainSpec::NONE,
     };
+
+    /// Give this surface a microstructure, projected from the object's own
+    /// frame so that it stays put when the object moves.
+    ///
+    /// A grain with no scale or no strength is left off rather than costing a
+    /// texture read that changes nothing.
+    pub fn with_grain(mut self, grain: GrainSpec) -> Self {
+        self.grain = grain;
+        if grain.is_enabled() {
+            self.source = self.source.with(SurfaceSource::GRAIN_OBJECT_SPACE);
+        }
+        self
+    }
+
+    /// Give this surface a microstructure addressed by its own texture
+    /// coordinates, for grain with a direction the mesh already knows.
+    pub fn with_uv_grain(mut self, grain: GrainSpec) -> Self {
+        self.grain = grain;
+        if grain.is_enabled() {
+            self.source = self.source.with(SurfaceSource::GRAIN_BY_UV);
+        }
+        self
+    }
 
     /// Select this surface's shading inputs.
     pub fn with_source(mut self, source: SurfaceSource) -> Self {
@@ -344,8 +406,13 @@ impl SurfaceParams {
         GpuSurface {
             emissive: self.emissive,
             surface: self.surface,
-            projection: [self.projection[0], self.projection[1], 0.0, 0.0],
-            control: [self.source.0, 0, 0, 0],
+            projection: [
+                self.projection[0],
+                self.projection[1],
+                self.grain.scale,
+                self.grain.strength,
+            ],
+            control: [self.source.0, self.grain.layer.index(), 0, 0],
         }
     }
 }

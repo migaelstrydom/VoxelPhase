@@ -50,6 +50,15 @@ use crate::water::{WaterGrid, WaveGrid};
 /// where tonemapping brings it back into the displayable range.
 const SCENE_HDR_FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
 
+/// Stages the geometry pipeline's single push-constant range covers.
+///
+/// One range spanning both stages, so every `cmd_push_constants` into this
+/// layout must name both — Vulkan requires a push to cover every stage of every
+/// range it overlaps, whichever stage actually reads the bytes.
+pub const PUSH_CONSTANT_STAGES: vk::ShaderStageFlags = vk::ShaderStageFlags::from_raw(
+    vk::ShaderStageFlags::VERTEX.as_raw() | vk::ShaderStageFlags::FRAGMENT.as_raw(),
+);
+
 /// Which of the frame's two geometry passes a draw belongs to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DrawPass {
@@ -677,7 +686,11 @@ impl Renderer {
             self.vulkan_context.device().cmd_push_constants(
                 cb,
                 self.pipeline.layout,
-                vk::ShaderStageFlags::VERTEX,
+                // The range is declared for both stages — the fragment shader
+                // reads the model rotation to place an object-space grain — so
+                // the push must name both, even though only the vertex stage
+                // uses it here.
+                PUSH_CONSTANT_STAGES,
                 0,
                 model_bytes,
             );
@@ -691,7 +704,7 @@ impl Renderer {
             self.vulkan_context.device().cmd_push_constants(
                 cb,
                 self.pipeline.layout,
-                vk::ShaderStageFlags::FRAGMENT,
+                PUSH_CONSTANT_STAGES,
                 64,
                 override_bytes,
             );
@@ -702,7 +715,7 @@ impl Renderer {
             self.vulkan_context.device().cmd_push_constants(
                 cb,
                 self.pipeline.layout,
-                vk::ShaderStageFlags::FRAGMENT,
+                PUSH_CONSTANT_STAGES,
                 SURFACE_INDEX_OFFSET,
                 &surface_index.as_bytes(),
             );
@@ -765,7 +778,7 @@ impl Renderer {
                 self.vulkan_context.device().cmd_push_constants(
                     cb,
                     self.pipeline.layout,
-                    vk::ShaderStageFlags::FRAGMENT,
+                    PUSH_CONSTANT_STAGES,
                     64,
                     color_bytes,
                 );

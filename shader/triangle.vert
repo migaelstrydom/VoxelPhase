@@ -16,6 +16,17 @@ layout(location = 1) out vec2 outTexCoord;
 layout(location = 2) out vec3 outWorldPos;
 layout(location = 3) out vec3 outNormal;
 layout(location = 4) out float outAo;
+/// The vertex in the model's own frame.
+///
+/// Grain is projected from here rather than from world position, because a prop
+/// moves: a world-projected microstructure swims across the surface of a
+/// toppling menhir. Terrain gets away with world space only because it is
+/// static, and it uses a different path anyway.
+layout(location = 5) out vec3 outModelPos;
+/// The vertex normal in the model's own frame, for the same reason: the plane
+/// an object-space projection picks must be fixed to the object, not to the
+/// world.
+layout(location = 6) out vec3 outModelNormal;
 
 // Per-object data (updated per draw call via push constants)
 layout(push_constant) uniform PushConstants {
@@ -33,4 +44,6 @@ void main() {
     // For now, using mat3(model) and normalizing in fragment shader (works for uniform scaling)
     outNormal = mat3(push.model) * inNormal;
     outAo = inAo;
+    outModelPos = inPosition;
+    outModelNormal = inNormal;
 }

@@ -12,6 +12,7 @@ use ash::vk;
 
 use crate::core::device::ManagedDevice;
 use crate::core::error::{EngineError, EngineResult};
+use crate::rendering::material::SURFACE_INDEX_OFFSET;
 use crate::rendering::shaders::ShaderManager;
 use crate::rendering::vertex::Vertex;
 
@@ -270,25 +271,22 @@ impl GraphicsPipeline {
             sampler_descriptor_set_layout,
         ];
 
-        // Push constant ranges:
-        // - Vertex: mat4 model (offset 0, 64 bytes)
-        // - Fragment: vec4 colourOverride (offset 64, 16 bytes)
-        //             uint surfaceIndex (offset SURFACE_INDEX_OFFSET, 4 bytes)
+        // Push constants, one range covering both stages:
+        // - mat4 model            (offset  0, 64 bytes) — vertex, and fragment,
+        //     which reads its rotation to place an object-space grain
+        // - vec4 colourOverride   (offset 64, 16 bytes) — fragment
+        // - uint surfaceIndex     (offset 80,  4 bytes) — fragment
+        //
+        // A single range rather than one per stage: two ranges may not declare
+        // the same stage, and the fragment block now starts at offset 0.
         //
         // The parameters themselves live in the surface table (set 0, binding
         // 3); only the index travels here. See `rendering::surface_buffer`.
-        let push_constant_ranges = [
-            vk::PushConstantRange {
-                stage_flags: vk::ShaderStageFlags::VERTEX,
-                offset: 0,
-                size: 64,
-            },
-            vk::PushConstantRange {
-                stage_flags: vk::ShaderStageFlags::FRAGMENT,
-                offset: 64,
-                size: 16 + std::mem::size_of::<u32>() as u32,
-            },
-        ];
+        let push_constant_ranges = [vk::PushConstantRange {
+            stage_flags: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+            offset: 0,
+            size: SURFACE_INDEX_OFFSET + std::mem::size_of::<u32>() as u32,
+        }];
 
         let pipeline_layout_create_info = vk::PipelineLayoutCreateInfo::default()
             .set_layouts(&set_layouts)
@@ -370,6 +368,8 @@ impl GraphicsPipeline {
         // Binding 3: the frame's surface table, indexed by the push constant.
         //   A storage buffer rather than a uniform one because it is sized for
         //   the worst frame rather than for a fixed small count.
+        // Binding 4: the shared grain texture, one microstructure atlas for
+        //   every material in the scene rather than one per material.
         let immutable_shadow_sampler = [shadow_sampler];
         let bindings = [
             vk::DescriptorSetLayoutBinding::default()
@@ -392,6 +392,11 @@ impl GraphicsPipeline {
             vk::DescriptorSetLayoutBinding::default()
                 .binding(3)
                 .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(4)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 .descriptor_count(1)
                 .stage_flags(vk::ShaderStageFlags::FRAGMENT),
         ];

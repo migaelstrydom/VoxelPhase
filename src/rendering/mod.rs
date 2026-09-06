@@ -7,6 +7,7 @@ pub mod debug_render;
 pub mod deletion_queue;
 pub mod descriptors;
 pub mod frame;
+pub mod grain;
 pub mod material;
 pub mod overlay;
 pub mod physical_finish;

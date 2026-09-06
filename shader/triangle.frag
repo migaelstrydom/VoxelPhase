@@ -12,16 +12,29 @@
 #include "triplanar.glsl"
 #include "surface_character.glsl"
 #include "surface_source.glsl"
+#include "grain.glsl"
 
 layout(location = 0) in vec4 inColor;
 layout(location = 1) in vec2 inTexCoord;
 layout(location = 2) in vec3 inWorldPos;
 layout(location = 3) in vec3 inNormal;
 layout(location = 4) in float inAo;
+layout(location = 5) in vec3 inModelPos;
+layout(location = 6) in vec3 inModelNormal;
 
 layout(location = 0) out vec4 outColor;
 
 layout(set = 1, binding = 0) uniform sampler2D texSampler;
+
+/// The shared grain atlas: RG is stone microstructure, BA is wood fibre, both
+/// as tangent-space slopes. One texture for every material in the scene — see
+/// src/rendering/grain.rs.
+layout(set = 0, binding = 4) uniform sampler2D grainSampler;
+
+/// How sharply an object-space grain commits to the axis plane it most nearly
+/// faces. Matches terrain's blend: low enough that a 45-degree face does not
+/// show a seam, high enough that the three projections do not ghost.
+const float GRAIN_BLEND_SHARPNESS = 4.0;
 
 void main() {
     if (material.colour_override.a > 0.0) {
@@ -74,6 +87,32 @@ void main() {
         vec4 texColor = texture(texSampler, inTexCoord);
         albedo_wash = texColor.rgb;
         texture_alpha = texColor.a;
+    }
+
+    // Grain: microstructure from the shared atlas, for surfaces whose albedo
+    // did not already carry a detail normal of its own. Terrain's arrives with
+    // its albedo in one packed read and never reaches here.
+    if (sourceHas(source, SOURCE_GRAIN_ANY)) {
+        if (sourceHas(source, SOURCE_GRAIN_BY_UV)) {
+            normal = grainByUv(
+                grainSampler,
+                normal,
+                inTexCoord,
+                materialGrainLayer(),
+                materialGrainScale(),
+                materialGrainStrength());
+        } else {
+            normal = grainObjectSpace(
+                grainSampler,
+                normal,
+                materialModelToWorld(),
+                inModelPos,
+                inModelNormal,
+                materialGrainLayer(),
+                materialGrainScale(),
+                materialGrainStrength(),
+                GRAIN_BLEND_SHARPNESS);
+        }
     }
 
     SurfaceSample surface;

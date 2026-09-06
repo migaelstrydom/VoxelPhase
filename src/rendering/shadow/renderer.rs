@@ -193,7 +193,11 @@ impl ShadowRenderer {
             device.cmd_push_constants(
                 cb,
                 self.layout,
-                vk::ShaderStageFlags::VERTEX,
+                // The geometry layout declares one range spanning both stages
+                // — the fragment shader reads the model rotation to place an
+                // object-space grain — so the push must name both, even though
+                // the shadow pass has no fragment shader that reads it.
+                crate::rendering::renderer::PUSH_CONSTANT_STAGES,
                 0,
                 model_bytes,
             );
