@@ -11,6 +11,7 @@
 #include "shadow.glsl"
 #include "triplanar.glsl"
 #include "surface_character.glsl"
+#include "surface_source.glsl"
 
 layout(location = 0) in vec4 inColor;
 layout(location = 1) in vec2 inTexCoord;
@@ -31,32 +32,40 @@ void main() {
     // Degenerate normals occur on some generated meshes; fall back to straight up.
     vec3 normal = length(inNormal) > 0.001 ? normalize(inNormal) : vec3(0.0, 1.0, 0.0);
 
+    uint source = materialSource();
+
     // Terrain has no texture coordinates worth sampling — marching cubes emits
     // no parameterisation — so it is textured by world position instead. Meshes
-    // with authored UVs push a zero scale and take the cheaper path.
+    // with authored UVs take the cheaper single-sample path.
     //
-    // The same flag decides what the location-2 channel means. A world-textured
-    // mesh has no use for its UVs, so terrain sends per-vertex surface
-    // character there instead and takes its roughness from the material it is
-    // actually made of, rather than from the one value the draw could push.
-    float triplanar_scale = materialTriplanarScale();
-    bool textured_by_world = triplanar_scale > 0.0;
+    // Each of these decisions is now its own bit. They all used to hang off
+    // whether the triplanar scale was positive, which is why nothing but
+    // terrain could have a detail normal: asking for one meant asking for
+    // world-projected albedo and terrain's roughness model with it.
+    bool albedo_triplanar = sourceHas(source, SOURCE_ALBEDO_TRIPLANAR);
 
-    // Terrain's albedo, shading normal and roughness all come out of one packed
-    // texture read; a UV-textured mesh takes the single-sample path and keeps
-    // its geometric normal and its authored finish.
+    // A world-textured mesh has no use for its UVs, so terrain sends per-vertex
+    // surface character through that channel instead.
+    float character = sourceHas(source, SOURCE_CHARACTER_IN_TEXCOORD) ? inTexCoord.x : 0.0;
+
     vec3 albedo_wash;
     float texture_alpha;
 
-    if (textured_by_world) {
-        float hardness = inTexCoord.x;
+    if (albedo_triplanar) {
+        // Terrain's albedo and its detail normal come out of one packed texture
+        // read; the relief strength is per-material hardness rather than a
+        // single authored number, which is how chalk stays softer than rock.
+        float relief = sourceHas(source, SOURCE_RELIEF_FROM_CHARACTER)
+            ? reliefFromHardness(character)
+            : materialGrainStrength();
+
         TriplanarSurface field = triplanarSurface(
             texSampler,
             inWorldPos,
             normal,
-            triplanar_scale,
+            materialTriplanarScale(),
             materialTriplanarSharpness(),
-            reliefFromHardness(hardness));
+            relief);
 
         albedo_wash = vec3(field.wash);
         texture_alpha = 1.0;
@@ -78,8 +87,13 @@ void main() {
     // detail perturbation has already been folded into. Applied to every
     // surface, not just terrain: geometric curvature aliases a tight highlight
     // just as detail normals do.
+    //
+    // A terrain chunk carries many materials but a draw carries one finish, so
+    // terrain derives roughness per fragment from character instead.
     surface.roughness = filteredRoughness(
-        textured_by_world ? roughnessFromHardness(inTexCoord.x) : materialRoughness(),
+        sourceHas(source, SOURCE_ROUGHNESS_FROM_CHARACTER)
+            ? roughnessFromHardness(character)
+            : materialRoughness(),
         surface.normal);
 
     DirectionalLight sun;

@@ -1,4 +1,5 @@
 use crate::rendering::colour::Colour;
+use crate::rendering::surface_source::SurfaceSource;
 use crate::rendering::triplanar::TriplanarProjection;
 use crate::resources::textures::TextureHandle;
 
@@ -209,6 +210,7 @@ impl Material {
                 self.emission.rim_power,
             ],
             projection: self.projection.packed(),
+            source: SurfaceSource::PLAIN,
         }
     }
 }
@@ -269,10 +271,12 @@ pub struct GpuSurface {
     /// x = roughness, y = metallic, z = rim strength, w = rim power.
     pub surface: [f32; 4],
 
-    /// x = triplanar scale in texture repeats per world unit, y = blend
-    /// sharpness. A zero scale means the fragment shader samples the mesh's
-    /// vertex texture coordinates instead. zw are spare.
+    /// x = albedo triplanar scale in texture repeats per world unit,
+    /// y = blend sharpness, z = grain scale, w = grain strength.
     pub projection: [f32; 4],
+
+    /// x = [`SurfaceSource`] flags, y = grain index, zw spare.
+    pub control: [u32; 4],
 }
 
 impl GpuSurface {
@@ -282,6 +286,7 @@ impl GpuSurface {
         emissive: [0.0, 0.0, 0.0, 0.0],
         surface: [1.0, 0.0, 0.0, 3.0],
         projection: [0.0, 0.0, 0.0, 0.0],
+        control: [0, 0, 0, 0],
     };
 }
 
@@ -295,6 +300,9 @@ pub struct SurfaceParams {
     pub emissive: [f32; 4],
     pub surface: [f32; 4],
     pub projection: [f32; 2],
+
+    /// Which shading inputs this surface asks for.
+    pub source: SurfaceSource,
 }
 
 impl SurfaceParams {
@@ -304,7 +312,14 @@ impl SurfaceParams {
         emissive: [0.0, 0.0, 0.0, 0.0],
         surface: [1.0, 0.0, 0.0, 3.0],
         projection: [0.0, 0.0],
+        source: SurfaceSource::PLAIN,
     };
+
+    /// Select this surface's shading inputs.
+    pub fn with_source(mut self, source: SurfaceSource) -> Self {
+        self.source = source;
+        self
+    }
 
     /// Texture by world position rather than by the mesh's vertex UVs.
     pub fn with_projection(mut self, projection: TriplanarProjection) -> Self {
@@ -330,6 +345,7 @@ impl SurfaceParams {
             emissive: self.emissive,
             surface: self.surface,
             projection: [self.projection[0], self.projection[1], 0.0, 0.0],
+            control: [self.source.0, 0, 0, 0],
         }
     }
 }
@@ -426,7 +442,7 @@ mod tests {
     #[test]
     fn the_surface_table_carries_the_parameters_not_the_push_constants() {
         assert_eq!(std::mem::size_of::<SurfaceParams>() > 4, true);
-        assert_eq!(std::mem::size_of::<GpuSurface>(), 48);
+        assert_eq!(std::mem::size_of::<GpuSurface>(), 64);
     }
 
     #[test]

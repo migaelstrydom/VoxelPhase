@@ -33,10 +33,12 @@ struct GpuSurface {
     vec4 emissive;
     /// x = roughness, y = metallic, z = rim strength, w = rim power.
     vec4 surface;
-    /// x = triplanar scale in texture repeats per world unit, y = blend
-    /// sharpness. A zero scale means this mesh carries its own texture
-    /// coordinates and they should be sampled instead. zw are spare.
+    /// x = albedo triplanar scale in texture repeats per world unit,
+    /// y = blend sharpness, z = grain scale, w = grain strength.
     vec4 projection;
+    /// x = SurfaceSource flags (see surface_source.glsl), y = grain index,
+    /// zw spare.
+    uvec4 control;
 };
 
 layout(std430, set = 0, binding = 3) readonly buffer SurfaceTable {
@@ -53,9 +55,16 @@ float materialMetallic()  { return materialSurface().surface.y; }
 float materialRimStrength() { return materialSurface().surface.z; }
 float materialRimPower()    { return materialSurface().surface.w; }
 
-/// Zero when the mesh is textured by its own vertex texture coordinates.
 float materialTriplanarScale()     { return materialSurface().projection.x; }
 float materialTriplanarSharpness() { return materialSurface().projection.y; }
+float materialGrainScale()         { return materialSurface().projection.z; }
+float materialGrainStrength()      { return materialSurface().projection.w; }
+
+/// Which shading inputs this surface asks for. See surface_source.glsl.
+uint materialSource() { return materialSurface().control.x; }
+
+/// Which layer of the grain atlas this surface's microstructure comes from.
+uint materialGrainLayer() { return materialSurface().control.y; }
 
 /// Emissive radiance added independently of incoming light.
 ///

@@ -47,6 +47,7 @@
 
 use crate::core::error::EngineResult;
 use crate::rendering::material::SurfaceParams;
+use crate::rendering::surface_source::SurfaceSource;
 use crate::rendering::triplanar::TriplanarProjection;
 use crate::resources::texture_encoding::TextureEncoding;
 use crate::resources::textures::{TextureHandle, TextureManager};
@@ -215,6 +216,7 @@ fn encode_signed(value: f32) -> u8 {
 pub fn surface_params() -> SurfaceParams {
     SurfaceParams::MATTE
         .with_projection(TriplanarProjection::new(PROJECTION_SCALE, BLEND_SHARPNESS))
+        .with_source(SurfaceSource::TERRAIN)
 }
 
 #[cfg(test)]

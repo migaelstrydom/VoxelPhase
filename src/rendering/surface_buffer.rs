@@ -40,7 +40,7 @@ use crate::rendering::material::GpuSurface;
 ///
 /// Sized well past any plausible frame — the heaviest scenes in the game record
 /// draws in the low thousands — because the cost of being generous is
-/// `CAPACITY * 48` bytes of host-visible memory and the cost of being tight is a
+/// `CAPACITY * 64` bytes of host-visible memory and the cost of being tight is a
 /// mis-shaded draw.
 pub const CAPACITY: u32 = 65536;
 
@@ -173,11 +173,11 @@ mod tests {
     /// The layout contract with the shader. std430 aligns a struct to its
     /// largest member, so a 40-byte struct of vec4s would be padded to a stride
     /// of 48 on the GPU and read back misaligned from entry one onwards — the
-    /// classic silent version of this bug. `GpuSurface` is three vec4s so that
+    /// classic silent version of this bug. `GpuSurface` is whole vec4s so that
     /// its Rust size and its std430 stride are the same number.
     #[test]
     fn the_gpu_struct_matches_its_std430_stride() {
-        assert_eq!(std::mem::size_of::<GpuSurface>(), 48);
+        assert_eq!(std::mem::size_of::<GpuSurface>(), 64);
         assert_eq!(std::mem::align_of::<GpuSurface>() % 4, 0);
     }
 
