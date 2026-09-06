@@ -491,15 +491,26 @@ impl CharacterAnimator {
         }
     }
 
-    /// Write the placer recording, when one is being kept.
+    /// Start recording placer input, or stop and write what was kept.
     ///
-    /// Nothing happens without `PLACER_REC` set. The recording is a ring of
-    /// the last few seconds, so this is meant to be pressed *after* seeing
-    /// the thing worth looking at rather than before.
-    pub fn dump_recording(&self) {
-        if let Some(recorder) = &self.recorder {
-            recorder.dump_and_report();
+    /// Nothing happens without `PLACER_REC` set. Recording keeps a ring of the
+    /// last few seconds, so it can be started well before the thing worth
+    /// looking at and stopped just after it.
+    pub fn toggle_recording(&mut self) {
+        if let Some(recorder) = &mut self.recorder {
+            if recorder.is_armed() {
+                recorder.dump_and_report();
+                recorder.set_armed(false);
+            } else {
+                recorder.set_armed(true);
+                eprintln!("PlacerRecorder: recording");
+            }
         }
+    }
+
+    /// What the recorder is doing and what it costs, for the debug overlay.
+    pub fn recording_status(&self) -> Option<String> {
+        self.recorder.as_ref().map(|recorder| recorder.status())
     }
 
     /// Mirror fragment channels into `AnimationState` so next-frame probes

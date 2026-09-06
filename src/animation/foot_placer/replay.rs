@@ -384,7 +384,8 @@ fn record_replay_round_trip() {
     let _ = std::fs::remove_file(&path);
 }
 
-/// The ring keeps the *last* window of play, which is the whole point of it:
+/// A disarmed recorder keeps nothing, and the ring keeps the *last* window of
+/// play, which is the whole point of it:
 /// the artefact is at the end of the run, and the walk to it is not worth
 /// writing to disk sixty times a second on the chance that it might be.
 #[test]
@@ -401,6 +402,9 @@ fn a_recording_holds_the_last_window_and_forgets_the_rest() {
     let mut placer = FootPlacer::new(pelvis, facing_from_yaw(0.0), HIP_WIDTH, 0.0);
     // One second of window against ten seconds of play.
     let mut recorder = PlacerRecorder::new(&path, 1.0, pelvis, 0.0, HIP_WIDTH, 0.0);
+    // The first second is played with the recorder offered but not armed,
+    // which is how the game starts.
+    recorder.set_armed(false);
 
     let mut walked = pelvis;
     for i in 0..600usize {
@@ -427,7 +431,14 @@ fn a_recording_holds_the_last_window_and_forgets_the_rest() {
         };
         placer.tick(&ctx);
         recorder.record(false, "walk", &ctx, &placer);
-        let _ = i;
+        if i == 59 {
+            assert_eq!(
+                recorder.recorded_seconds(),
+                0.0,
+                "a disarmed recorder kept ticks"
+            );
+            recorder.set_armed(true);
+        }
     }
 
     // The window is a promise about the *least* history kept — the ring is

@@ -153,13 +153,14 @@ pub fn clear_frame_state(world: &mut World) {
         )
     };
 
-    // F4 writes the foot placer's recording, which is otherwise kept only in
-    // memory. It is the key you press once the feet have just done the thing
-    // you want explained — the ring already holds the run-up to it.
+    // F4 starts the foot placer's recording, and writes it on the next press.
+    // Recording keeps a ring in memory, so the second press is the one to make
+    // once the feet have just done the thing you want explained — the run-up
+    // to it is already held.
     if should_write_recording {
-        let animators = world.read_storage::<CharacterAnimator>();
-        for animator in animators.join() {
-            animator.dump_recording();
+        let mut animators = world.write_storage::<CharacterAnimator>();
+        for animator in (&mut animators).join() {
+            animator.toggle_recording();
         }
     }
 

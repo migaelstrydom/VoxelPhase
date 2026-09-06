@@ -6,9 +6,15 @@
 //! `FootPlacer`, reproducing in-game behaviour deterministically offline —
 //! the bridge between "looks wrong in game" and a debuggable trace.
 //!
-//! Nothing is written while the game runs. A tick costs one push into a
-//! preallocated ring holding the last `PLACER_REC_SECONDS` of play, and the
-//! file is written once, when asked for. This is not an optimisation: a
+//! Nothing is written while the game runs, and nothing is kept until asked
+//! for. `PLACER_REC` only offers the recorder; F4 arms it, and F4 again writes
+//! the file. A tick then costs one push into a preallocated ring holding the
+//! last `PLACER_REC_SECONDS` of play.
+//!
+//! Arming from a key rather than from the environment keeps the walk to the
+//! artefact at full speed, and makes the recorder's cost measurable: it is
+//! reported per tick on the debug overlay, so "recording slows the game down"
+//! is a number rather than an impression. This is not an optimisation: a
 //! recorder that appends to a file sixty times a second puts that file under
 //! whatever is watching the directory — a sync daemon, an indexer, a backup —
 //! and the cost lands on the machine rather than on the frame, as a slowdown
@@ -18,7 +24,7 @@
 //! anyone to guess when to start.
 //!
 //! ```bash
-//! PLACER_REC=/tmp/temple.csv cargo run    # play; press F4 to write the file
+//! PLACER_REC=/tmp/temple.csv cargo run    # play; F4 to start, F4 to write
 //! ```
 //!
 //! Float fields are written with `Display`, which round-trips `f32`
@@ -29,6 +35,7 @@ use std::env;
 use std::fmt::Write as _;
 use std::fs;
 use std::path::Path;
+use std::time::Instant;
 
 use nalgebra::{Point3, Vector3};
 
@@ -104,6 +111,15 @@ pub struct PlacerRecorder {
     init: Init,
     ticks: VecDeque<RecordedTick>,
     capacity: usize,
+    /// Whether ticks are being kept. Off until asked for: a recorder that
+    /// starts with the process records the walk to the artefact and charges
+    /// the whole session for it.
+    armed: bool,
+    /// Wall-clock nanoseconds spent inside [`PlacerRecorder::record`] since
+    /// arming, and the number of ticks that took. Reported on screen, so a
+    /// claim that recording costs frames can be checked rather than argued.
+    spent_nanos: u128,
+    recorded: u64,
 }
 
 impl PlacerRecorder {
@@ -134,20 +150,17 @@ impl PlacerRecorder {
             }
         }
         eprintln!(
-            "PlacerRecorder: keeping the last {window:.0} s of placer input; \
-             press F4 to write {path}"
+            "PlacerRecorder: press F4 to start keeping the last {window:.0} s \
+             of placer input, F4 again to write {path}"
         );
-        Some(Self::new(
-            path,
-            window,
-            init_pelvis,
-            init_yaw,
-            hip_width,
-            init_foot_y,
-        ))
+        let mut recorder = Self::new(path, window, init_pelvis, init_yaw, hip_width, init_foot_y);
+        recorder.set_armed(false);
+        Some(recorder)
     }
 
     /// A recorder writing to `path`, keeping `window` seconds of history.
+    /// Armed: constructing one directly is a decision to record. The in-game
+    /// recorder starts disarmed, because there the decision is a keypress.
     pub fn new(
         path: impl Into<String>,
         window: f32,
@@ -167,7 +180,43 @@ impl PlacerRecorder {
             },
             ticks: VecDeque::with_capacity(capacity),
             capacity,
+            armed: true,
+            spent_nanos: 0,
+            recorded: 0,
         }
+    }
+
+    /// Start or stop keeping ticks. Arming clears the ring and the cost
+    /// counters, so each recording is its own measurement.
+    pub fn set_armed(&mut self, armed: bool) {
+        if armed {
+            self.ticks.clear();
+            self.spent_nanos = 0;
+            self.recorded = 0;
+        }
+        self.armed = armed;
+    }
+
+    pub fn is_armed(&self) -> bool {
+        self.armed
+    }
+
+    /// One line for the debug overlay: what the recorder is doing, and what
+    /// it costs per frame.
+    pub fn status(&self) -> String {
+        if !self.armed {
+            return format!("idle (F4 to record {})", self.path);
+        }
+        let micros_per_tick = if self.recorded == 0 {
+            0.0
+        } else {
+            self.spent_nanos as f64 / self.recorded as f64 / 1000.0
+        };
+        format!(
+            "recording {:.1} s, {} ticks, {micros_per_tick:.1} us/tick",
+            self.recorded_seconds(),
+            self.recorded
+        )
     }
 
     /// Append one tick, dropping the oldest once the window is full. Call
@@ -182,6 +231,10 @@ impl PlacerRecorder {
         ctx: &PlacerCtx<'_>,
         placer: &FootPlacer,
     ) {
+        if !self.armed {
+            return;
+        }
+        let started = Instant::now();
         if self.ticks.len() == self.capacity {
             self.ticks.pop_front();
         }
@@ -210,6 +263,8 @@ impl PlacerRecorder {
             right_planted: placer.right.is_planted(),
             gait_phase: placer.gait_phase(),
         });
+        self.spent_nanos += started.elapsed().as_nanos();
+        self.recorded += 1;
     }
 
     /// Seconds of play currently held.

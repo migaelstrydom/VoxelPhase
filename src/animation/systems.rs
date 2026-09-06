@@ -81,7 +81,7 @@ impl<'a> System<'a> for CharacterAnimationSystem {
             candidates,
             groundings,
             mut animators,
-            mut _debug_lines,
+            mut debug_lines,
             mut debug_overlays,
         ) = data;
 
@@ -120,6 +120,10 @@ impl<'a> System<'a> for CharacterAnimationSystem {
                 &grab_config,
                 contacts,
             );
+
+            if let Some(status) = animator.recording_status() {
+                debug_lines.add("Placer rec", status);
+            }
 
             if debug_config.foot_placer_overlay {
                 draw_foot_placer_overlay(&animator.foot_placer, &mut debug_overlays);
