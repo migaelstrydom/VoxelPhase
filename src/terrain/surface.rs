@@ -48,6 +48,7 @@
 use crate::core::error::EngineResult;
 use crate::rendering::material::SurfaceParams;
 use crate::rendering::triplanar::TriplanarProjection;
+use crate::resources::texture_encoding::TextureEncoding;
 use crate::resources::textures::{TextureHandle, TextureManager};
 use crate::utils::noise::fbm_perlin_2d_periodic;
 
@@ -71,6 +72,11 @@ const NOISE_SEED: u32 = 42;
 
 /// Darkest the albedo wash goes. A narrow band around white, because this
 /// modulates the vertex colours rather than replacing them.
+///
+/// Reaches the shader as written: the field is a data texture (see
+/// `create_surface_texture`), so no transfer function stands between this
+/// number and the multiply. Widening the band is the one dial for terrain's
+/// large-scale mottling.
 const WASH_FLOOR: f32 = 0.85;
 
 /// Texture repeats per world unit — one repeat every 10 m.
@@ -98,6 +104,15 @@ const BLEND_SHARPNESS: f32 = 4.0;
 /// change to the noise quietly flattens the surface or turns it into gravel.
 const RELIEF: f32 = 14.0;
 
+/// How the field's bytes are sampled.
+///
+/// Linear, and not negotiable: two of the three channels are a tangent-space
+/// normal. An sRGB view would put a 2.4-power curve between what
+/// `detail_normal` computes and what the shader reads, which is not a tuning
+/// difference — it is a constant lean on every texel, because the byte that
+/// means "flat" stops decoding to zero.
+const FIELD_ENCODING: TextureEncoding = TextureEncoding::Linear;
+
 /// Generate the packed surface field terrain samples.
 ///
 /// See the module documentation for the channel layout. Mipmapped, which is
@@ -120,7 +135,19 @@ pub fn create_surface_texture(textures: &TextureManager) -> EngineResult<Texture
         }
     }
 
-    textures.create_from_rgba(NOISE_RESOLUTION, NOISE_RESOLUTION, &rgba, true)
+    // A *data* texture, not a colour one. Two of its three channels are a
+    // tangent-space normal, and an sRGB transfer function on the way in would
+    // bend them through a 2.4-power curve: the byte 128 that means "no slope"
+    // would arrive as 0.216, decoding to a permanent -0.57 lean on every texel
+    // in the field. The wash rides along in the same texture and is therefore
+    // authored at the value the shader should receive.
+    textures.create_encoded_from_rgba(
+        NOISE_RESOLUTION,
+        NOISE_RESOLUTION,
+        &rgba,
+        true,
+        FIELD_ENCODING,
+    )
 }
 
 /// The height field, sampled at a texel. Wraps, so the texture tiles.
@@ -193,6 +220,28 @@ pub fn surface_params() -> SurfaceParams {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The field is sampled as data, never as colour. Flipping this back is a
+    /// one-word change with no compile error and no obvious symptom — terrain
+    /// simply acquires a fixed lean and a wash darker than the one authored
+    /// here — so the choice is asserted rather than left to the call site.
+    #[test]
+    fn the_surface_field_is_sampled_as_data_not_colour() {
+        assert_eq!(FIELD_ENCODING, TextureEncoding::Linear);
+    }
+
+    /// The encoding fix is only complete if the flat case is actually flat: the
+    /// byte written for zero slope must come back as zero slope after the
+    /// shader's `value * 2 - 1`.
+    #[test]
+    fn a_texel_with_no_slope_decodes_to_no_slope() {
+        let encoded = encode_signed(0.0);
+        let decoded = (encoded as f32 / 255.0) * 2.0 - 1.0;
+        assert!(
+            decoded.abs() < 0.01,
+            "a flat texel decodes to a slope of {decoded}"
+        );
+    }
 
     #[test]
     fn terrain_is_textured_by_world_position() {

@@ -5,6 +5,7 @@ use crate::core::error::{EngineError, EngineResult, ImageOperation};
 use crate::rendering::colour::Colour;
 use crate::rendering::descriptors::DescriptorManager;
 use crate::rendering::texture::ManagedTexture;
+use crate::resources::texture_encoding::TextureEncoding;
 use crate::resources::texture_registry::{ReleaseOutcome, TextureRegistry};
 use crate::utils::noise::fbm_2d_periodic;
 use std::{
@@ -337,13 +338,18 @@ impl TextureFactory {
     /// - `width, height`: Texture dimensions
     /// - `rgba_data`: Raw pixel data in RGBA8 format (length must be `width * height * 4`)
     /// - `generate_mipmaps`: Whether to generate a mip chain
+    /// - `encoding`: Whether the bytes are colour or measurements. Getting this
+    ///   wrong is silent; see [`TextureEncoding`].
     pub fn create_from_rgba(
         &self,
         width: u32,
         height: u32,
         rgba_data: &[u8],
         generate_mipmaps: bool,
+        encoding: TextureEncoding,
     ) -> EngineResult<ManagedTexture> {
+        let format = encoding.rgba8_format();
+
         assert_eq!(
             rgba_data.len(),
             (width * height * 4) as usize,
@@ -386,7 +392,7 @@ impl TextureFactory {
             width,
             height,
             mip_levels,
-            vk::Format::R8G8B8A8_SRGB,
+            format,
             vk::ImageTiling::OPTIMAL,
             vk::ImageUsageFlags::TRANSFER_DST
                 | vk::ImageUsageFlags::TRANSFER_SRC
@@ -403,7 +409,7 @@ impl TextureFactory {
 
         self.transfer_service.transition_image_layout(
             texture.image,
-            vk::Format::R8G8B8A8_SRGB,
+            format,
             vk::ImageLayout::UNDEFINED,
             vk::ImageLayout::TRANSFER_DST_OPTIMAL,
             mip_levels,
@@ -419,7 +425,7 @@ impl TextureFactory {
         if generate_mipmaps {
             self.transfer_service.generate_mipmaps(
                 texture.image,
-                vk::Format::R8G8B8A8_SRGB,
+                format,
                 width,
                 height,
                 mip_levels,
@@ -427,7 +433,7 @@ impl TextureFactory {
         } else {
             self.transfer_service.transition_image_layout(
                 texture.image,
-                vk::Format::R8G8B8A8_SRGB,
+                format,
                 vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                 vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
                 mip_levels,
@@ -622,7 +628,12 @@ impl TextureManager {
         Ok(self.register(texture))
     }
 
-    /// Create a texture from raw RGBA pixel data.
+    /// Create a colour texture from raw sRGB-encoded RGBA pixel data.
+    ///
+    /// The overwhelmingly common case, and the one every hand-authored albedo
+    /// wants. A texture whose channels carry measurements rather than light —
+    /// normals, masks, packed fields — must use
+    /// [`create_data_from_rgba`](Self::create_data_from_rgba) instead.
     pub fn create_from_rgba(
         &self,
         width: u32,
@@ -630,13 +641,57 @@ impl TextureManager {
         rgba_data: &[u8],
         generate_mipmaps: bool,
     ) -> EngineResult<TextureHandle> {
-        let texture =
-            self.texture_factory
-                .create_from_rgba(width, height, rgba_data, generate_mipmaps)?;
+        self.create_encoded_from_rgba(
+            width,
+            height,
+            rgba_data,
+            generate_mipmaps,
+            TextureEncoding::Srgb,
+        )
+    }
+
+    /// Create a data texture from raw RGBA pixel data, sampled without any
+    /// transfer function.
+    ///
+    /// For tangent-space normals, masks, and packed fields. What the CPU writes
+    /// is what the shader reads.
+    pub fn create_data_from_rgba(
+        &self,
+        width: u32,
+        height: u32,
+        rgba_data: &[u8],
+        generate_mipmaps: bool,
+    ) -> EngineResult<TextureHandle> {
+        self.create_encoded_from_rgba(
+            width,
+            height,
+            rgba_data,
+            generate_mipmaps,
+            TextureEncoding::Linear,
+        )
+    }
+
+    /// Create a texture from raw RGBA pixel data under an explicit encoding.
+    pub fn create_encoded_from_rgba(
+        &self,
+        width: u32,
+        height: u32,
+        rgba_data: &[u8],
+        generate_mipmaps: bool,
+        encoding: TextureEncoding,
+    ) -> EngineResult<TextureHandle> {
+        let texture = self.texture_factory.create_from_rgba(
+            width,
+            height,
+            rgba_data,
+            generate_mipmaps,
+            encoding,
+        )?;
         let handle = self.register(texture);
 
         log::debug!(
-            "Created RGBA texture {}x{} (id={})",
+            "Created {:?} RGBA texture {}x{} (id={})",
+            encoding,
             width,
             height,
             handle.id()
