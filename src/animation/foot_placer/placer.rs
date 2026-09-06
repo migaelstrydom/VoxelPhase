@@ -85,7 +85,8 @@ pub struct PlacerFoot {
     /// "flat, neutral stance".
     pub up: Vector3<f32>,
     /// Current toe direction. Planted feet keep their landing direction
-    /// instead of rotating with the hips every frame.
+    /// instead of rotating with the hips every frame; suspended feet,
+    /// having no landing to keep, chase the body's heading.
     pub forward: Vector3<f32>,
     /// Up-axis captured at the moment of step-off. Used as the source
     /// pose during the early takeoff-ease portion of the swing — the
@@ -211,9 +212,10 @@ pub struct PlacerCtx<'a> {
 pub struct FootPlacer {
     pub left: PlacerFoot,
     pub right: PlacerFoot,
-    /// Whether the placer is currently suspended (airborne). When
-    /// suspended, `tick` is a no-op; the placer resumes from whatever
-    /// state it was in.
+    /// Whether the placer is currently suspended (airborne). While
+    /// suspended, `tick` advances nothing but the drawn foot axes, which
+    /// relax toward the body's heading and a flat sole; the placer
+    /// resumes from whatever state it was in.
     suspended: bool,
     /// Whether the next `tick` is the first after resuming from suspend.
     /// Used to re-plant feet at neutral stance under the current pelvis
@@ -299,6 +301,7 @@ impl FootPlacer {
     /// plant/lift sequencing cannot alias inside a long display frame.
     pub fn tick(&mut self, ctx: &PlacerCtx<'_>) {
         if self.suspended {
+            self.relax_feet_toward_body(ctx);
             return;
         }
 
@@ -614,6 +617,34 @@ impl FootPlacer {
             (true, false) => Some(FootSide::Left),
             (false, true) => Some(FootSide::Right),
             (false, false) => None,
+        }
+    }
+
+    /// Relax the drawn foot axes toward the body while suspended.
+    ///
+    /// A planted foot deliberately keeps the direction it landed in, but
+    /// a suspended one has no landing to keep: the pose layer hangs its
+    /// position off the hips, so axes frozen at takeoff read as feet that
+    /// refuse to follow the body through a mid-air turn — and a jump
+    /// taken mid-step strands whatever part of that step's turn had not
+    /// happened yet. Chasing the body's own heading covers both: the toes
+    /// track a turn in progress and finish one the takeoff interrupted.
+    /// Heading is chased in yaw rather than across the vectors, because
+    /// an about-face in mid-air passes through the antipodal case a
+    /// vector lerp has no answer for.
+    ///
+    /// Only the drawn axes move here — phase, anchors and plant
+    /// references are exactly the state suspension exists to preserve.
+    /// `takeoff_up` follows the sole so a swing resumed after a short
+    /// airborne blip eases on from what was last drawn.
+    fn relax_feet_toward_body(&mut self, ctx: &PlacerCtx<'_>) {
+        self.prev_yaw = ctx.yaw;
+        let alpha = 1.0 - (-ctx.config.ankle_slerp_rate * ctx.dt).exp();
+        for foot in [&mut self.left, &mut self.right] {
+            let toe = yaw_from_facing(foot.forward);
+            foot.forward = facing_from_yaw(toe + angle_diff(ctx.yaw, toe) * alpha);
+            foot.up = lerp_unit(foot.up, Vector3::y(), alpha);
+            foot.takeoff_up = foot.up;
         }
     }
 
@@ -1364,6 +1395,97 @@ mod tests {
             left_ground: None,
             right_ground: None,
             config,
+        }
+    }
+
+    /// Suspend the placer and hold it there for `frames`, driving yaw
+    /// from `yaw`. Returns nothing: the feet are read off the placer.
+    fn hang(
+        placer: &mut FootPlacer,
+        config: &FootPlacerConfig,
+        frames: u32,
+        yaw: impl Fn(u32) -> f32,
+    ) {
+        let pelvis = Point3::new(0.0, STANDING_HEIGHT, 0.0);
+        for i in 1..=frames {
+            let mut ctx = riding(pelvis, Vector3::zeros(), config);
+            ctx.yaw = yaw(i);
+            placer.tick(&ctx);
+        }
+    }
+
+    /// How far a foot's toe points off the body's heading, in degrees.
+    fn toe_offset_degrees(foot: &PlacerFoot, yaw: f32) -> f32 {
+        angle_diff(yaw_from_facing(foot.forward), yaw).to_degrees()
+    }
+
+    /// Turning in mid-air: the feet hang off the hips, so their toes have
+    /// to come round with them. Frozen takeoff axes read as boots nailed
+    /// to a compass bearing while the body spins.
+    #[test]
+    fn suspended_feet_turn_their_toes_with_the_body() {
+        let config = FootPlacerConfig::default();
+        let pelvis = Point3::new(0.0, STANDING_HEIGHT, 0.0);
+        let mut placer = FootPlacer::new(pelvis, Vector3::z(), HIP_WIDTH, 0.0);
+        placer.set_suspended(true);
+
+        let turn = std::f32::consts::FRAC_PI_2;
+        let frames = 30;
+        hang(&mut placer, &config, frames, |i| {
+            turn * i as f32 / frames as f32
+        });
+
+        // Mid-turn the toes trail the body by the chase's own lag, but
+        // they must be most of the way round, not still at takeoff.
+        for foot in [&placer.left, &placer.right] {
+            let off = toe_offset_degrees(foot, turn);
+            assert!(
+                off.abs() < 20.0,
+                "{:?} toe trails a turning body by {:.1} degrees",
+                foot.side,
+                off
+            );
+        }
+
+        // Held heading: the lag is a lag, not an offset the feet keep.
+        hang(&mut placer, &config, 30, |_| turn);
+        for foot in [&placer.left, &placer.right] {
+            let off = toe_offset_degrees(foot, turn);
+            assert!(
+                off.abs() < 1.0,
+                "{:?} toe settled {:.1} degrees off a body that stopped turning",
+                foot.side,
+                off
+            );
+        }
+    }
+
+    /// Jumping out of a step: the swing that was rotating the foot is
+    /// frozen by the suspend, so the half-turned toe has nothing left to
+    /// finish it. It must still come round to the body.
+    #[test]
+    fn a_jump_taken_mid_step_still_finishes_the_turn() {
+        let config = FootPlacerConfig::default();
+        let pelvis = Point3::new(0.0, STANDING_HEIGHT, 0.0);
+        let mut placer = FootPlacer::new(pelvis, Vector3::z(), HIP_WIDTH, 0.0);
+
+        // Caught halfway through a quarter-turn step.
+        let half_turned = facing_from_yaw(std::f32::consts::FRAC_PI_4);
+        placer.left.forward = half_turned;
+        placer.right.forward = half_turned;
+        placer.set_suspended(true);
+
+        let yaw = std::f32::consts::FRAC_PI_2;
+        hang(&mut placer, &config, 30, |_| yaw);
+
+        for foot in [&placer.left, &placer.right] {
+            let off = toe_offset_degrees(foot, yaw);
+            assert!(
+                off.abs() < 1.0,
+                "{:?} toe stayed {:.1} degrees short: the jump kept the step's turn",
+                foot.side,
+                off
+            );
         }
     }
 
