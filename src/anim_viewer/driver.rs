@@ -59,6 +59,12 @@ pub struct Run<'a> {
     /// `Body::ride_height`; overridable so the tool can answer "what would this
     /// gait look like if the body rode where the rig expects it to?".
     pub ride_height: f32,
+    /// Display rate to run at. The placer substeps internally, so this is not
+    /// meant to change what a gait does — which is exactly why it is worth
+    /// being able to turn: a heavy scene is a slow scene, and a gait that only
+    /// holds together at 60 Hz will come apart in the one place the game has
+    /// the most to draw.
+    pub frame_rate: f32,
     /// How the ground itself moves. `Still` for the static catalogue.
     pub support: SupportMotion,
     pub capture: MeshCapture,
@@ -66,7 +72,7 @@ pub struct Run<'a> {
 
 /// Run one scenario to the end of its script.
 pub fn run(spec: &Run<'_>) -> Take {
-    let dt = 1.0 / FRAME_RATE;
+    let dt = 1.0 / spec.frame_rate.max(1.0);
     let grab_config = GrabConfig::default();
     let mut body = Body::standing_at(
         spec.ground,

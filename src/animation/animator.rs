@@ -491,6 +491,17 @@ impl CharacterAnimator {
         }
     }
 
+    /// Write the placer recording, when one is being kept.
+    ///
+    /// Nothing happens without `PLACER_REC` set. The recording is a ring of
+    /// the last few seconds, so this is meant to be pressed *after* seeing
+    /// the thing worth looking at rather than before.
+    pub fn dump_recording(&self) {
+        if let Some(recorder) = &self.recorder {
+            recorder.dump_and_report();
+        }
+    }
+
     /// Mirror fragment channels into `AnimationState` so next-frame probes
     /// and any external readers see a coherent snapshot.
     fn apply_fragment_to_state(&mut self, fragment: &PoseFragment) {

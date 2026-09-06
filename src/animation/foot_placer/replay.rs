@@ -1,8 +1,8 @@
 //! Replay an in-game `PlacerRecorder` recording through a fresh placer.
 //!
 //! ```bash
-//! PLACER_REC=scratch/recordings/run_ne.csv cargo run            # record in game
-//! PLACER_REC_CSV=scratch/recordings/run_ne.csv \
+//! PLACER_REC=/tmp/run_ne.csv cargo run                          # play, then F4
+//! PLACER_REC_CSV=/tmp/run_ne.csv \
 //!     cargo test --lib foot_placer::replay -- --ignored --nocapture
 //! ```
 //!
@@ -326,7 +326,9 @@ fn record_replay_round_trip() {
 
     let config = FootPlacerConfig::default();
     let mut placer = FootPlacer::new(init_pelvis, facing_from_yaw(0.0), HIP_WIDTH, 0.0);
-    let mut recorder = PlacerRecorder::create(&path, init_pelvis, 0.0, HIP_WIDTH, 0.0).unwrap();
+    // A window comfortably longer than the run, so the ring keeps all of it:
+    // a round trip that silently dropped its first frames would prove nothing.
+    let mut recorder = PlacerRecorder::new(&path, 60.0, init_pelvis, 0.0, HIP_WIDTH, 0.0);
 
     // Accelerating straight run with a gentle weave, a mid-run suspension
     // window (probes lost), and per-frame dt wobble — exercises the
@@ -378,6 +380,73 @@ fn record_replay_round_trip() {
     assert_eq!(
         max_div, 0.0,
         "replay diverged {max_div} m at frame {frame}: recording misses a placer input"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+/// The ring keeps the *last* window of play, which is the whole point of it:
+/// the artefact is at the end of the run, and the walk to it is not worth
+/// writing to disk sixty times a second on the chance that it might be.
+#[test]
+fn a_recording_holds_the_last_window_and_forgets_the_rest() {
+    use super::recorder::PlacerRecorder;
+
+    const HIP_WIDTH: f32 = 0.12;
+    let dt = 1.0 / 60.0;
+    let pelvis = Point3::new(0.0, 0.425, 0.0);
+    let path = std::env::temp_dir().join("voxel_phase_placer_window.csv");
+    let path = path.to_str().unwrap().to_owned();
+
+    let config = FootPlacerConfig::default();
+    let mut placer = FootPlacer::new(pelvis, facing_from_yaw(0.0), HIP_WIDTH, 0.0);
+    // One second of window against ten seconds of play.
+    let mut recorder = PlacerRecorder::new(&path, 1.0, pelvis, 0.0, HIP_WIDTH, 0.0);
+
+    let mut walked = pelvis;
+    for i in 0..600usize {
+        walked.z += dt;
+        let ctx = PlacerCtx {
+            dt,
+            pelvis: walked,
+            velocity: Vector3::new(0.0, 0.0, 1.0),
+            support_velocity: Vector3::zeros(),
+            intent_direction: Vector3::new(0.0, 0.0, 1.0),
+            yaw: 0.0,
+            yaw_rate: 0.0,
+            hip_width: HIP_WIDTH,
+            leg_length: 0.5,
+            standing_height: 0.425,
+            foot_y_fallback: 0.0,
+            step_height: 0.15,
+            stride_gain: 0.4,
+            left_ground_normal: Vector3::y(),
+            right_ground_normal: Vector3::y(),
+            left_ground: Some(Point3::new(walked.x, 0.0, walked.z)),
+            right_ground: Some(Point3::new(walked.x, 0.0, walked.z)),
+            config: &config,
+        };
+        placer.tick(&ctx);
+        recorder.record(false, "walk", &ctx, &placer);
+        let _ = i;
+    }
+
+    // The window is a promise about the *least* history kept — the ring is
+    // sized in ticks against a rate no display exceeds — so a 60 Hz run keeps
+    // more than the second asked for, and nothing like the ten it ran for.
+    let seconds = recorder.recorded_seconds();
+    assert!(
+        (1.0..4.0).contains(&seconds),
+        "ten seconds of play left {seconds:.1} s in a one-second window"
+    );
+    recorder.dump().expect("the recording must write");
+
+    let text = std::fs::read_to_string(&path).unwrap();
+    let (_, frames) = parse_recording(&text);
+    assert!(!frames.is_empty(), "the window kept nothing");
+    let last = frames.last().unwrap();
+    assert!(
+        (last.pelvis.z - walked.z).abs() < 1e-4,
+        "the window must end at the last tick, not the first"
     );
     let _ = std::fs::remove_file(&path);
 }

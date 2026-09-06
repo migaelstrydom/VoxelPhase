@@ -28,7 +28,7 @@ use std::path::PathBuf;
 
 use voxel_phase::anim_viewer::{
     analyse_take, catalogue, report, run, select, strip, summary_line, write_csv, Angle, Body,
-    FilmConfig, MeshCapture, Run, Scenario, Take,
+    FilmConfig, MeshCapture, Run, Scenario, Take, FRAME_RATE,
 };
 use voxel_phase::animation::CharacterRigConfig;
 use voxel_phase::character::LocomotionConfig;
@@ -62,6 +62,8 @@ struct Options {
     detail: bool,
     /// Override the pelvis ride height, in metres. Defaults to the game's own.
     ride: Option<f32>,
+    /// Display rate to run the scenario at. Defaults to `FRAME_RATE`.
+    fps: Option<f32>,
     /// Override the character's walk speed, in m/s. Defaults to the game's own.
     /// Sprint and crouch multipliers still apply on top.
     speed: Option<f32>,
@@ -164,6 +166,7 @@ fn record(scenario: &Scenario, options: &Options, capture_meshes: bool) -> Take 
             .unwrap_or_else(|| Body::ride_height(&locomotion)),
         locomotion,
         start: scenario.start,
+        frame_rate: options.fps.unwrap_or(FRAME_RATE),
         support: scenario.support,
         capture: if capture_meshes {
             MeshCapture::Every(CAPTURE_STRIDE)
@@ -227,6 +230,7 @@ fn parse_args() -> Result<Option<Options>, String> {
     let mut to = 1.0;
     let mut detail = false;
     let mut ride = None;
+    let mut fps = None;
     let mut speed = None;
 
     let mut args = std::env::args().skip(1);
@@ -244,6 +248,7 @@ fn parse_args() -> Result<Option<Options>, String> {
             "--no-markers" => markers = false,
             "--detail" => detail = true,
             "--ride" => ride = Some(parse_f32(&mut args, "--ride")?),
+            "--fps" => fps = Some(parse_f32(&mut args, "--fps")?),
             "--speed" => speed = Some(parse_f32(&mut args, "--speed")?),
             "--out" => out = Some(PathBuf::from(next(&mut args, "--out")?)),
             "--csv" => csv = Some(PathBuf::from(next(&mut args, "--csv")?)),
@@ -290,6 +295,7 @@ fn parse_args() -> Result<Option<Options>, String> {
         to,
         detail,
         ride,
+        fps,
         speed,
     }))
 }
@@ -334,6 +340,7 @@ fn print_usage() {
         LocomotionConfig::player().walk_speed
     );
     println!("  --ride <m>         pelvis height above ground while supported");
+    println!("  --fps <hz>         display rate to run at (default 60)");
     println!("                     (default: the game's, i.e. the capsule's resting centre)");
     println!("  --csv <path>       write every recorded frame as CSV");
     println!("  --out <path>       output image (default /tmp/anim_<scenario>.png)");

@@ -5,8 +5,9 @@ use winit::{
     window::{CursorGrabMode, Window},
 };
 
-use specs::{World, WorldExt};
+use specs::{Join, World, WorldExt};
 
+use crate::animation::CharacterAnimator;
 use crate::debug::{DebugLines, DebugLog, DebugOverlays};
 use crate::input::InputState;
 
@@ -144,10 +145,23 @@ impl EventHandler {
 pub fn clear_frame_state(world: &mut World) {
     use winit::keyboard::KeyCode;
 
-    let should_print_debug = {
+    let (should_print_debug, should_write_recording) = {
         let input = world.read_resource::<InputState>();
-        input.is_key_just_pressed(KeyCode::F3)
+        (
+            input.is_key_just_pressed(KeyCode::F3),
+            input.is_key_just_pressed(KeyCode::F4),
+        )
     };
+
+    // F4 writes the foot placer's recording, which is otherwise kept only in
+    // memory. It is the key you press once the feet have just done the thing
+    // you want explained — the ring already holds the run-up to it.
+    if should_write_recording {
+        let animators = world.read_storage::<CharacterAnimator>();
+        for animator in animators.join() {
+            animator.dump_recording();
+        }
+    }
 
     {
         let mut debug_log = world.write_resource::<DebugLog>();
