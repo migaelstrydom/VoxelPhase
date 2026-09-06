@@ -895,6 +895,7 @@ fn advance_stepping(
         to_forward = swing_forward(to_forward, normalise_facing(facing), alpha);
     }
 
+    let hip = hip_position(foot.side, ctx, facing);
     if let Some((contact, normal)) = landing {
         // The swinging foot's probe aims at the landing target, so its
         // contact (extrapolated along the floor plane to the target xz)
@@ -909,7 +910,6 @@ fn advance_stepping(
         // over after the horizontal stride, because at plant time the
         // hip will have travelled out to meet the target; it is a floor
         // under a runaway, not a stride budget.
-        let hip = hip_position(foot.side, ctx, facing);
         let landing_y = floor_height_at(contact, normal, to.x, to.z).max(hip.y - reach);
         to.y += (landing_y - to.y) * alpha;
         // Stepping up: lift the apex enough to clear the higher landing
@@ -919,6 +919,18 @@ fn advance_stepping(
             peak_lift = peak_lift.max(ctx.step_height + 0.5 * rise);
         }
     }
+
+    // A floor that falls away stops answering probes — the crate on its way
+    // down, the ledge that just collapsed — so the bound above needs a partner
+    // that does not depend on a hit. The target keeps the height the floor
+    // used to be at while the hip drops past it, and a foot above its own hip
+    // is not a step at all.
+    //
+    // Only the ceiling is unconditional. The floor under the target stays
+    // inside the `landing` case: without a hit there is no evidence the
+    // ground is close, and pulling the target up to meet the leg makes a
+    // plant on a steep descent pop.
+    to.y = to.y.min(hip.y);
 
     foot.phase = FootPhase::Stepping {
         from,

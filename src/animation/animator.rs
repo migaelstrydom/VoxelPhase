@@ -349,6 +349,7 @@ impl CharacterAnimator {
             self.pose_state.transition_key(),
             new_pose.transition_key(),
             pelvis_position,
+            self.config.leg_length(),
             || self.pose_state.sample(&pose_sample_ctx),
         );
         begin_crossfade_if_changed(
@@ -356,6 +357,7 @@ impl CharacterAnimator {
             self.upper_state.transition_key(),
             new_upper.transition_key(),
             pelvis_position,
+            self.config.leg_length(),
             || {
                 let ctx = build_upper_ctx(&self.pose_state, &self.config, &self.state, grab_config);
                 self.upper_state.sample(&ctx)
@@ -605,12 +607,14 @@ fn begin_crossfade_if_changed<K: PartialEq, F: FnOnce() -> PoseFragment>(
     old_key: K,
     new_key: K,
     pelvis: Point3<f32>,
+    reach: f32,
     sample_from: F,
 ) {
     if old_key != new_key {
         *slot = Some(Crossfade {
             from: sample_from(),
             from_pelvis: pelvis,
+            reach,
             to_duration: TRANSITION_BLEND_DURATION,
             elapsed: 0.0,
             policy: Linear,

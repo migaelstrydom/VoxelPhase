@@ -30,10 +30,15 @@ use super::script::Script;
 use super::support::{Carried, SupportMotion};
 use super::take::{CapturedMesh, FootSample, FrameSample, Take, TimingSample};
 
-/// Display rate the scenarios run at. Fixed rather than jittered: a gait
-/// measured against a moving frame time is measuring two things at once, and
-/// frame-rate independence already has its own tests in the placer.
-pub const FRAME_RATE: f32 = 60.0;
+/// Display rate the scenarios run at, matching the rate the game is locked to
+/// by the display it runs on. The placer substeps and is frame-rate
+/// independent, but the transitions around it are not — a landing or a takeoff
+/// costs two to three times as much reach at 30 Hz as at 60 — so a harness
+/// running faster than the game grades work that will not ship.
+///
+/// Fixed rather than jittered: a gait measured against a moving frame time is
+/// measuring two things at once. Use `--fps` to vary it deliberately.
+pub const FRAME_RATE: f32 = 30.0;
 
 /// How often to capture a drawable character mesh.
 #[derive(Clone, Copy, Debug)]

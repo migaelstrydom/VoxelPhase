@@ -9,7 +9,7 @@ use nalgebra::{Point3, Vector2, Vector3};
 
 use super::stride_sync;
 use crate::animation::config::{CharacterRigConfig, GaitPreset};
-use crate::animation::pose::{Cycle, CycleKind, FeetPose, PoseFragment};
+use crate::animation::pose::{Cycle, CycleKind, FeetPose, FootAnchor, PoseFragment};
 use crate::animation::state::AnimationState;
 
 /// Gait preset inside `PoseState::Grounded`.
@@ -212,7 +212,7 @@ impl PoseState {
                 }
             }
             PoseState::Launching { kind, t, .. } => sample_launching(ctx, *kind, *t),
-            PoseState::Landing { kind, t, ground_y } => sample_landing(ctx, *kind, *t, *ground_y),
+            PoseState::Landing { kind, t, .. } => sample_landing(ctx, *kind, *t),
             PoseState::Airborne { kind, takeoff } => sample_airborne(ctx, *kind, *takeoff),
         }
     }
@@ -255,6 +255,7 @@ fn sample_idle(ctx: &SampleCtx<'_>, preset: Option<&GaitPreset>) -> PoseFragment
     let feet = FeetPose {
         left: anim.left.position,
         right: anim.right.position,
+        anchor: FootAnchor::World,
     };
 
     let pelvis_offset = preset
@@ -297,6 +298,7 @@ fn sample_walking(ctx: &SampleCtx<'_>, preset: &GaitPreset) -> PoseFragment {
     let feet = FeetPose {
         left: anim.left.position,
         right: anim.right.position,
+        anchor: FootAnchor::World,
     };
 
     let head_tilt = stride_sync::compute_head_tilt(ctx.velocity, facing, rig.head_tilt_factor);
@@ -363,6 +365,7 @@ fn sample_airborne(ctx: &SampleCtx<'_>, kind: AirKind, takeoff: Takeoff) -> Pose
             anim.pelvis_position.y - hang_distance,
             right_hip.z + foot_push.z,
         ),
+        anchor: FootAnchor::Hips,
     };
 
     PoseFragment {
@@ -398,6 +401,7 @@ fn sample_launching(ctx: &SampleCtx<'_>, kind: AirKind, t: f32) -> PoseFragment 
     let feet = FeetPose {
         left: Point3::new(left_hip.x, pelvis.y - hang, left_hip.z),
         right: Point3::new(right_hip.x, pelvis.y - hang, right_hip.z),
+        anchor: FootAnchor::Hips,
     };
 
     PoseFragment {
@@ -412,24 +416,29 @@ fn sample_launching(ctx: &SampleCtx<'_>, kind: AirKind, t: f32) -> PoseFragment 
 }
 
 /// Landing (follow-through) pose. Pelvis squashes at t=0 and recovers by
-/// t=duration. Feet stay planted at the touchdown position.
-fn sample_landing(ctx: &SampleCtx<'_>, kind: AirKind, t: f32, ground_y: f32) -> PoseFragment {
-    let rig = ctx.rig;
+/// t=duration. Feet stay where the placer put them — the touchdown plane the
+/// state carries is a record of where the body landed, not a floor to pin feet
+/// to: a body still falling (a floor collapsing under it) leaves that plane
+/// above its own hips within a few frames.
+fn sample_landing(ctx: &SampleCtx<'_>, kind: AirKind, t: f32) -> PoseFragment {
     let anim = ctx.anim;
     let duration = kind.landing_duration().max(1e-4);
     // Decaying profile: 1 at t=0, 0 at t=duration.
     let decay = 1.0 - (t / duration).clamp(0.0, 1.0);
     let squash = kind.landing_squash_depth() * decay;
 
-    // Feet track hips in x/z but stay pinned to the impact ground y —
-    // so a horizontally-moving body just bends the knees instead of
-    // stretching the legs.
-    let right = anim.facing.cross(&Vector3::y());
-    let left_hip = anim.pelvis_position - right * rig.hip_width;
-    let right_hip = anim.pelvis_position + right * rig.hip_width;
+    // Feet come from `FootPlacer`, as they do standing and walking: the
+    // placer is live the moment the body is grounded again, and it is what
+    // knows where the ground is and which foot is holding the body up.
+    // Dragging them under the hips instead — which is what a landing pose
+    // that generates its own feet must do — slides both of them along the
+    // floor for the whole follow-through, and a landing taken at speed is
+    // exactly when the hips travel furthest. The squash belongs to the
+    // pelvis, and is applied there.
     let feet = FeetPose {
-        left: Point3::new(left_hip.x, ground_y, left_hip.z),
-        right: Point3::new(right_hip.x, ground_y, right_hip.z),
+        left: anim.left.position,
+        right: anim.right.position,
+        anchor: FootAnchor::World,
     };
 
     PoseFragment {
