@@ -140,7 +140,8 @@ pub fn write_csv(take: &Take, path: &Path) -> EngineResult<()> {
             ",{s}_planted,{s}_x,{s}_y,{s}_z,\
              {s}_want_x,{s}_want_y,{s}_want_z,\
              {s}_anchor_x,{s}_anchor_z,{s}_ideal_x,{s}_ideal_z,{s}_hip_x,{s}_hip_y,{s}_hip_z,\
-             {s}_extension,{s}_overreach,{s}_since_plant,{s}_pre_lift"
+             {s}_extension,{s}_overreach,{s}_since_plant,{s}_pre_lift,\
+             {s}_shortened,{s}_probe_y"
         );
     }
     out.push('\n');
@@ -199,6 +200,18 @@ pub fn write_csv(take: &Take, path: &Path) -> EngineResult<()> {
                 foot.since_plant.min(999.0),
                 foot.pre_lift
             );
+            // The probe's own answer, blank where it found nothing: a swing
+            // that shortened is a swing that gave up on a landing, and which
+            // of the two it gave up on — no ground, or ground out of reach —
+            // is the difference between two quite different defects.
+            match foot.probe {
+                Some(hit) => {
+                    let _ = write!(out, ",{},{:.4}", foot.landing_shortened as u8, hit.y);
+                }
+                None => {
+                    let _ = write!(out, ",{},", foot.landing_shortened as u8);
+                }
+            }
         }
         out.push('\n');
     }

@@ -49,6 +49,18 @@ const SLIP_FAIL: f32 = 0.03;
 /// How far the left/right takeoff split may sit from half a cycle.
 const SPLIT_TOLERANCE: f32 = 0.15;
 
+/// Speed below which the body counts as standing, for the settle window.
+const REST_SPEED: f32 = 0.15;
+/// Shortest run of standing frames a settle can be judged over. A settle step
+/// takes at most `max_step_duration`, so a tail longer than one is long enough
+/// for a foot that intends to come home to have arrived.
+const REST_TAIL: f32 = 0.5;
+/// How far a foot may end up from where the placer says it should stand once
+/// the body has stopped. `settle_trigger` is 50 mm, so a foot that took its
+/// settle steps sits inside that; these are the distances that mean it did not.
+const SETTLE_WARN: f32 = 0.07;
+const SETTLE_FAIL: f32 = 0.14;
+
 /// A contiguous run of frames in one phase.
 #[derive(Clone, Copy, Debug)]
 pub struct Interval {
@@ -108,6 +120,17 @@ pub struct FootMetrics {
     /// Peak horizontal speed of the foot during swing, over mean body speed.
     /// A foot that dwells and then snaps carries a high ratio.
     pub swing_speed_ratio: f32,
+
+    /// Closest this foot came to its own ideal stance position once the body
+    /// had come to rest, in metres. `None` when the window never stands still
+    /// long enough to ask.
+    ///
+    /// At rest the capture point collapses onto the pelvis, so the ideal *is*
+    /// the neutral stance and this is simply how far from standing the foot
+    /// ended up. The minimum over the window rather than the last frame: a
+    /// foot may be mid-settle-step when the take ends, and a foot that shuffles
+    /// away again after arriving has still shown it can get home.
+    pub settle_offset: Option<f32>,
 }
 
 /// What both feet did together.
@@ -381,7 +404,39 @@ fn foot_metrics(
         overreach_max,
         overreach_fraction,
         swing_speed_ratio,
+        settle_offset: settle_offset(frames, side),
     }
+}
+
+/// Closest the foot came to its ideal over the window's trailing run of
+/// standing frames.
+///
+/// Measured on the surface so a foot settling on a moving platform is judged
+/// against the deck it is standing on rather than against the world.
+fn settle_offset(frames: &[&FrameSample], side: Side) -> Option<f32> {
+    let start = rest_tail_start(frames)?;
+    frames[start..]
+        .iter()
+        .map(|f| {
+            (f.on_surface(f.foot(side).rendered) - f.on_surface(f.foot(side).ideal)).magnitude()
+        })
+        .fold(f32::MAX, f32::min)
+        .into()
+}
+
+/// First frame of the window's trailing run of grounded, standing frames, if
+/// that run lasted at least `REST_TAIL`.
+fn rest_tail_start(frames: &[&FrameSample]) -> Option<usize> {
+    let mut seconds = 0.0;
+    let mut start = None;
+    for (index, frame) in frames.iter().enumerate().rev() {
+        if !frame.grounded || frame.horizontal_speed() >= REST_SPEED {
+            break;
+        }
+        seconds += frame.dt;
+        start = Some(index);
+    }
+    start.filter(|_| seconds >= REST_TAIL)
 }
 
 /// Turn the checks on a set of measurements.
@@ -407,6 +462,23 @@ fn judge(m: &GaitMetrics) -> Vec<Check> {
             headroom * 100.0
         ),
     });
+
+    // Asked before the standing early-out below, because a window that ends
+    // at rest is exactly the one this judges: whether the feet came home once
+    // there was no travel left to carry them there.
+    for foot in [&m.left, &m.right] {
+        if let Some(offset) = foot.settle_offset {
+            checks.push(Check {
+                name: "settle",
+                verdict: Verdict::above(offset, SETTLE_WARN, SETTLE_FAIL),
+                detail: format!(
+                    "{}: standing still, the foot got no closer than {:.0} mm to its stance",
+                    foot.side.label(),
+                    offset * 1000.0
+                ),
+            });
+        }
+    }
 
     // Nothing below means anything for a character that never walked.
     if m.mean_speed < 0.2 {

@@ -10,7 +10,7 @@
 
 use nalgebra::Vector3;
 
-use super::ground::{Drop, Flat, Ground, Ledge, Slope, SlopeOnset, Stairs, Undulating};
+use super::ground::{Drop, Flat, Ground, Ledge, Slab, Slope, SlopeOnset, Stairs, Undulating};
 use super::script::{Beat, Script};
 use super::support::SupportMotion;
 
@@ -34,6 +34,7 @@ pub struct Scenario {
 pub fn catalogue() -> Vec<Scenario> {
     let mut out = steady_gaits();
     out.extend(transitions());
+    out.extend(settling());
     out.extend(slopes());
     out.extend(broken_ground());
     out.extend(moving_ground());
@@ -203,6 +204,93 @@ fn transitions() -> Vec<Scenario> {
     ]
 }
 
+/// Coming to a halt, and the sudden reversals that leave the feet where the
+/// body no longer is.
+///
+/// A gait tested only while it accelerates is tested at its easiest: intent
+/// and travel agree, and every foot is aimed where the body is already going.
+/// The frames worth watching are the ones where the body has stopped and the
+/// feet have not — where the only thing left to pull a foot under its hip is
+/// the settle trigger.
+///
+/// `off_axis_stop` is the same run held at 40 degrees to the world axes and
+/// started away from the origin, because every other scenario travels along
+/// +x from (0, 0) and an error that is a component of the ideal target would
+/// hide there. It is framed by the same side camera as the rest, which now
+/// looks across the path rather than square to it; the numbers are unaffected.
+fn settling() -> Vec<Scenario> {
+    let diagonal = Vector3::new(0.77, 0.0, 0.64);
+
+    vec![
+        Scenario {
+            name: "run_stop",
+            description: "Sprint, then let go of the stick. The feet have to walk themselves \
+                          back under the hips with no travel left to carry them.",
+            ground: Box::new(Flat::at(0.0)),
+            script: Script::new()
+                .then(Beat::stand(0.3))
+                .then(Beat::run(3.0))
+                .then(Beat::stand(2.5)),
+            start: (0.0, 0.0),
+            speed: None,
+            support: SupportMotion::Still,
+        },
+        Scenario {
+            name: "land_run_stop",
+            description: "Jump, land, sprint away, stop. The stop is entered from a replanted \
+                          stance rather than from a rhythm the placer built itself.",
+            ground: Box::new(Flat::at(0.0)),
+            script: Script::new()
+                .then(Beat::walk(0.6))
+                .then(Beat::jump(1.2))
+                .then(Beat::run(2.0))
+                .then(Beat::stand(2.5)),
+            start: (0.0, 0.0),
+            speed: None,
+            support: SupportMotion::Still,
+        },
+        Scenario {
+            name: "about_face",
+            description: "Walking one way, then the other, with nothing in between. Travel \
+                          reverses under feet that are planted for the old direction.",
+            ground: Box::new(Flat::at(0.0)),
+            script: Script::new()
+                .then(Beat::walk(2.0))
+                .then(Beat::walk(2.5).towards(-Vector3::x()).named("back"))
+                .then(Beat::stand(1.5)),
+            start: (0.0, 0.0),
+            speed: None,
+            support: SupportMotion::Still,
+        },
+        Scenario {
+            name: "run_about_face",
+            description: "The same reversal at a sprint, where the stance is longest and the \
+                          body takes furthest to turn around.",
+            ground: Box::new(Flat::at(0.0)),
+            script: Script::new()
+                .then(Beat::run(2.0))
+                .then(Beat::run(2.5).towards(-Vector3::x()).named("back"))
+                .then(Beat::stand(2.0)),
+            start: (0.0, 0.0),
+            speed: None,
+            support: SupportMotion::Still,
+        },
+        Scenario {
+            name: "off_axis_stop",
+            description: "Run to a halt on a diagonal, well away from the origin: the same \
+                          test as run_stop with nothing axis-aligned to flatter it.",
+            ground: Box::new(Flat::at(0.0)),
+            script: Script::new()
+                .then(Beat::stand(0.3))
+                .then(Beat::run(3.0).towards(diagonal))
+                .then(Beat::stand(2.5)),
+            start: (12.0, -7.0),
+            speed: None,
+            support: SupportMotion::Still,
+        },
+    ]
+}
+
 /// The same gaits on inclines. Slope is where the leg's reach budget shrinks,
 /// so it is where a gait that is already close to its limit tips over it.
 fn slopes() -> Vec<Scenario> {
@@ -293,6 +381,31 @@ fn broken_ground() -> Vec<Scenario> {
             script: Script::new().then(Beat::stand(0.4)).then(Beat::walk(5.0)),
             start: (0.0, 0.0),
             speed: None,
+            support: SupportMotion::Still,
+        },
+        Scenario {
+            name: "stylobate",
+            description: "Walking across a floor that is a spawned body rather than terrain, \
+                          out toward its rim. What the probes find past the edge is a box's \
+                          answer, not a height field's.",
+            ground: Box::new(Slab::new("stylobate", (0.0, 0.0), (3.0, 2.5), 0.25)),
+            script: Script::new().then(Beat::stand(0.3)).then(Beat::walk(4.0)),
+            start: (-2.5, 0.0),
+            speed: Some(2.0),
+            support: SupportMotion::Still,
+        },
+        Scenario {
+            name: "stylobate_stop",
+            description: "The same floor, walked to within a stride of the rim and stopped on. \
+                          Both reports in one take: feet that drag along the edge, and feet \
+                          that never come back under the hips afterwards.",
+            ground: Box::new(Slab::new("stylobate", (0.0, 0.0), (3.0, 2.5), 0.25)),
+            script: Script::new()
+                .then(Beat::stand(0.3))
+                .then(Beat::walk(1.5))
+                .then(Beat::stand(2.5)),
+            start: (0.2, 0.0),
+            speed: Some(2.0),
             support: SupportMotion::Still,
         },
         Scenario {
