@@ -108,7 +108,9 @@ struct Init {
 /// and writes them out on demand.
 pub struct PlacerRecorder {
     path: String,
-    init: Init,
+    /// Where the character was built. Only used for a recording that somehow
+    /// holds no ticks at all; see [`PlacerRecorder::init`].
+    spawn: Init,
     ticks: VecDeque<RecordedTick>,
     capacity: usize,
     /// Whether ticks are being kept. Off until asked for: a recorder that
@@ -172,7 +174,7 @@ impl PlacerRecorder {
         let capacity = ((window.max(0.1) * ASSUMED_TICK_RATE) as usize).max(1);
         Self {
             path: path.into(),
-            init: Init {
+            spawn: Init {
                 pelvis: init_pelvis,
                 yaw: init_yaw,
                 hip_width,
@@ -267,6 +269,25 @@ impl PlacerRecorder {
         self.recorded += 1;
     }
 
+    /// The state a replayed `FootPlacer` should start in: the oldest tick the
+    /// ring still holds, not the one the process started with.
+    ///
+    /// A ring forgets its own beginning. Writing the construction state into a
+    /// recording whose first tick is a minute and a hundred metres later puts
+    /// the replayed placer's feet somewhere the recording never was, and every
+    /// frame after that is measured against a rig that started wrong.
+    fn init(&self) -> Init {
+        match self.ticks.front() {
+            Some(first) => Init {
+                pelvis: first.pelvis,
+                yaw: first.yaw,
+                hip_width: first.hip_width,
+                foot_y: first.foot_y_fallback,
+            },
+            None => self.spawn,
+        }
+    }
+
     /// Seconds of play currently held.
     pub fn recorded_seconds(&self) -> f32 {
         self.ticks.iter().map(|tick| tick.dt).sum()
@@ -275,16 +296,12 @@ impl PlacerRecorder {
     /// Write everything held to the recorder's path. The ring is left alone,
     /// so pressing the key twice writes two supersets rather than a fragment.
     pub fn dump(&self) -> std::io::Result<usize> {
+        let init = self.init();
         let mut out = String::with_capacity(self.ticks.len() * 400);
         let _ = writeln!(
             out,
             "# init,{},{},{},{},{},{}",
-            self.init.pelvis.x,
-            self.init.pelvis.y,
-            self.init.pelvis.z,
-            self.init.yaw,
-            self.init.hip_width,
-            self.init.foot_y
+            init.pelvis.x, init.pelvis.y, init.pelvis.z, init.yaw, init.hip_width, init.foot_y
         );
         let _ = writeln!(out, "{RECORDING_HEADER}");
         for tick in &self.ticks {
