@@ -9,7 +9,6 @@ use nalgebra::{Point3, Vector3};
 use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
-use super::shared::finish::{ColliderSurface, MaterialSurface};
 use super::shared::models::compound_cuboid_model;
 use super::shared::orientation::Yaw;
 use super::shared::textures::Rgb;
@@ -19,8 +18,9 @@ use crate::components::{
 };
 use crate::core::error::EngineResult;
 use crate::physics::{ColliderDesc, RigidBodyDesc};
-use crate::rendering::material::{Material, MaterialId};
+use crate::rendering::material::MaterialId;
 use crate::rendering::physical_finish::PhysicalSurface;
+use crate::rendering::substance::{self, ColliderSubstance, Substance};
 use crate::systems::PhysicsResource;
 use crate::utils::noise::fbm_2d_periodic;
 
@@ -71,15 +71,19 @@ impl DolosDef {
         0.8
     }
 
-    /// The one declaration of this object's physics. The collider takes the
-    /// coefficients and the material takes the finish they imply, so the two
+    /// The one declaration of what this object is made of. The collider takes
+    /// the coefficients and the material takes the finish and grain, so the two
     /// cannot drift apart.
-    fn surface(&self) -> PhysicalSurface {
-        PhysicalSurface {
+    ///
+    /// Cast concrete, but with every coefficient left authored: a dolos exists
+    /// to be tuned, and how it grips and bounces is the point of placing one.
+    /// Only its appearance comes from the library.
+    fn substance(&self) -> Substance {
+        substance::CONCRETE.with_physics(PhysicalSurface {
             restitution: self.restitution,
             friction: self.friction,
             density: self.density,
-        }
+        })
     }
 }
 
@@ -93,9 +97,9 @@ impl Spawnable for DolosDef {
         let texture = ctx
             .textures
             .create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &pixels, true)?;
-        Ok(vec![ctx.materials.register(
-            Material::textured(texture).with_derived_finish(self.surface()),
-        )])
+        Ok(vec![ctx
+            .materials
+            .register(self.substance().material(texture))])
     }
 
     fn spawn(&self, world: &mut World, materials: &[MaterialId]) -> Vec<Entity> {
@@ -142,7 +146,7 @@ impl Spawnable for DolosDef {
                     body_handle,
                     ColliderDesc::box_shape(half_extents)
                         .offset_translation(offset)
-                        .with_physical_surface(self.surface()),
+                        .of(&self.substance()),
                 );
             }
 

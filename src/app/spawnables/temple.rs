@@ -9,7 +9,6 @@ use nalgebra::{Point3, UnitQuaternion, Vector2, Vector3, Vector4};
 use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
-use super::shared::finish::{ColliderSurface, MaterialSurface};
 use super::shared::models::{
     build_convex_hull, compound_cuboid_model, convex_solid_model, cuboid_model, SolidFace,
 };
@@ -22,8 +21,8 @@ use crate::core::error::EngineResult;
 use crate::fracture::{CompoundFracture, FractureJoint};
 use crate::model::{MeshPrimitive, Model, ModelPart};
 use crate::physics::{ColliderDesc, RigidBodyDesc};
-use crate::rendering::material::{Material, MaterialId};
-use crate::rendering::physical_finish::PhysicalSurface;
+use crate::rendering::material::MaterialId;
+use crate::rendering::substance::{self, ColliderSubstance, Substance};
 use crate::rendering::vertex::Vertex;
 use crate::systems::PhysicsResource;
 use crate::utils::noise::fbm_2d_periodic;
@@ -42,7 +41,7 @@ const COLUMN_SIDES: u32 = 20;
 /// `half_w / PHI` gave a triangle nearly three times too tall, which read as
 /// gothic rather than Greek and put the roof panels above the friction angle of
 /// stone. Raising it steepens the roof and raises the friction every marble
-/// joint needs; see [`MARBLE_SURFACE`].
+/// joint needs; see [`MARBLE`].
 const DORIC_PEDIMENT_RATIO: f32 = 0.22;
 
 const MAT_STONE: usize = 0;
@@ -50,21 +49,24 @@ const MAT_MARBLE: usize = 1;
 const MAT_FLUTED: usize = 2;
 const MATERIAL_COUNT: usize = 3;
 
-/// Rough quarried stone, used for the stylobate the temple stands on. Its
-/// friction is well above anything real masonry offers — it is the value that
-/// keeps a stack of loose blocks standing, and it is why the steps read as
-/// chalk.
-const RUBBLE_SURFACE: PhysicalSurface = PhysicalSurface {
-    restitution: 0.05,
-    friction: 1.5,
-    density: 2400.0,
-};
+/// Rough quarried stone, used for the stylobate the temple stands on.
+///
+/// Sandstone's appearance over authored physics. The friction is well above
+/// anything real masonry offers — it is the value that keeps a stack of loose
+/// blocks standing, and it stays exactly where it was because a stack of steps
+/// depends on it.
+///
+/// It used to also be why the steps read as chalk, the finish being derived
+/// from it. That link is gone: a surface may now be grippy without being
+/// chalky, so the steps read as the rough stone they are rather than as the
+/// roughest thing the renderer can draw.
+const RUBBLE: Substance = substance::SANDSTONE.with_coefficients(0.05, 1.5, 2400.0);
 
 /// Dressed marble: the columns, the entablature, the pediments and the roof.
-/// Denser and slicker than the rubble it rests on, which is both true of the
-/// material and the whole reason it looks different — the finish is derived
-/// from these numbers, so marble reading polished and the steps reading chalky
-/// is one decision rather than two.
+/// Denser and slicker than the rubble it rests on, which is true of the
+/// material and is now stated twice on purpose — once in these coefficients and
+/// once in the substance's authored finish. They agree because marble is both
+/// slick and polished, not because one is computed from the other.
 ///
 /// **The roof pitch is the floor under this friction.** The panels are sloped
 /// slabs held by friction alone, so one needs `mu >= pediment_h / eave_dist` to
@@ -75,11 +77,7 @@ const RUBBLE_SURFACE: PhysicalSurface = PhysicalSurface {
 /// Steepening the gable raises that floor fast. At the old `half_w / PHI` pitch
 /// the roof approached 31.7° and demanded mu >= 0.62, which forced marble to
 /// render as satin; the shallow Doric gable is what lets it be polished.
-const MARBLE_SURFACE: PhysicalSurface = PhysicalSurface {
-    restitution: 0.05,
-    friction: 0.4,
-    density: 2700.0,
-};
+const MARBLE: Substance = substance::MARBLE.with_coefficients(0.05, 0.4, 2700.0);
 
 #[derive(Deserialize)]
 pub struct TempleDef {
@@ -199,9 +197,9 @@ impl Spawnable for TempleDef {
 
     fn create_materials(&self, ctx: &mut MaterialCtx) -> EngineResult<Vec<MaterialId>> {
         Ok(vec![
-            create_temple_stone_material(ctx.textures, ctx.materials, RUBBLE_SURFACE)?,
-            create_marble_material(ctx.textures, ctx.materials, MARBLE_SURFACE)?,
-            create_fluted_marble_material(ctx.textures, ctx.materials, MARBLE_SURFACE)?,
+            create_temple_stone_material(ctx.textures, ctx.materials)?,
+            create_marble_material(ctx.textures, ctx.materials)?,
+            create_fluted_marble_material(ctx.textures, ctx.materials)?,
         ])
     }
 
@@ -226,7 +224,7 @@ impl Spawnable for TempleDef {
                          pos: Point3<f32>,
                          he: Vector3<f32>,
                          mat: MaterialId,
-                         surface: PhysicalSurface| {
+                         substance: &Substance| {
             let model = cuboid_model(he, mat);
             let body_handle = {
                 let mut physics = world.write_resource::<PhysicsResource>();
@@ -236,10 +234,9 @@ impl Spawnable for TempleDef {
                         .linear_damping(0.01)
                         .angular_damping(0.005),
                 );
-                physics.world.attach_collider(
-                    bh,
-                    ColliderDesc::box_shape(he).with_physical_surface(surface),
-                );
+                physics
+                    .world
+                    .attach_collider(bh, ColliderDesc::box_shape(he).of(substance));
                 bh
             };
             entities.push(
@@ -261,7 +258,7 @@ impl Spawnable for TempleDef {
                                  he: Vector3<f32>,
                                  rot: UnitQuaternion<f32>,
                                  mat: MaterialId,
-                                 surface: PhysicalSurface| {
+                                 substance: &Substance| {
             let model = cuboid_model(he, mat);
             let body_handle = {
                 let mut physics = world.write_resource::<PhysicsResource>();
@@ -272,10 +269,9 @@ impl Spawnable for TempleDef {
                         .linear_damping(0.01)
                         .angular_damping(0.005),
                 );
-                physics.world.attach_collider(
-                    bh,
-                    ColliderDesc::box_shape(he).with_physical_surface(surface),
-                );
+                physics
+                    .world
+                    .attach_collider(bh, ColliderDesc::box_shape(he).of(substance));
                 bh
             };
             entities.push(
@@ -296,7 +292,7 @@ impl Spawnable for TempleDef {
                           world_verts: &[Vector3<f32>],
                           faces: &[SolidFace],
                           mat: MaterialId,
-                          surface: PhysicalSurface| {
+                          substance: &Substance| {
             let centroid =
                 world_verts.iter().copied().sum::<Vector3<f32>>() / world_verts.len() as f32;
             let local: Vec<_> = world_verts.iter().map(|v| v - centroid).collect();
@@ -311,10 +307,9 @@ impl Spawnable for TempleDef {
                         .linear_damping(0.01)
                         .angular_damping(0.005),
                 );
-                physics.world.attach_collider(
-                    bh,
-                    ColliderDesc::convex_hull(hull).with_physical_surface(surface),
-                );
+                physics
+                    .world
+                    .attach_collider(bh, ColliderDesc::convex_hull(hull).of(substance));
                 bh
             };
             entities.push(
@@ -366,7 +361,7 @@ impl Spawnable for TempleDef {
                     bh,
                     ColliderDesc::box_shape(*he)
                         .offset_translation(*offset)
-                        .with_physical_surface(RUBBLE_SURFACE),
+                        .of(&RUBBLE),
                 );
             }
             bh
@@ -459,10 +454,9 @@ impl Spawnable for TempleDef {
                         .linear_damping(0.01)
                         .angular_damping(0.005),
                 );
-                physics.world.attach_collider(
-                    bh,
-                    ColliderDesc::convex_hull(hull).with_physical_surface(MARBLE_SURFACE),
-                );
+                physics
+                    .world
+                    .attach_collider(bh, ColliderDesc::convex_hull(hull).of(&MARBLE));
                 bh
             };
 
@@ -495,7 +489,7 @@ impl Spawnable for TempleDef {
                 Point3::new(px, entab_cy, pz + z_sign * lay.half_l),
                 Vector3::new(fb_hw, entab_hh, beam_depth),
                 marble,
-                MARBLE_SURFACE,
+                &MARBLE,
             );
         }
 
@@ -507,7 +501,7 @@ impl Spawnable for TempleDef {
                 Point3::new(px + x_sign * lay.half_w, entab_cy, pz),
                 Vector3::new(beam_depth, entab_hh, side_hl),
                 marble,
-                MARBLE_SURFACE,
+                &MARBLE,
             );
         }
 
@@ -523,7 +517,7 @@ impl Spawnable for TempleDef {
             let z_outer = pz + z_sign * (lay.half_l + beam_depth);
             let z_inner = pz + z_sign * (lay.half_l - beam_depth);
             let (verts, faces) = gable_geometry(px, ped_base, ped_peak, ped_hw, z_outer, z_inner);
-            spawn_hull(world, &mut entities, &verts, &faces, marble, MARBLE_SURFACE);
+            spawn_hull(world, &mut entities, &verts, &faces, marble, &MARBLE);
         }
 
         // =================================================================
@@ -550,7 +544,7 @@ impl Spawnable for TempleDef {
                 roof_he,
                 rot,
                 marble,
-                MARBLE_SURFACE,
+                &MARBLE,
             );
         }
 
@@ -795,31 +789,28 @@ fn gable_geometry(
 fn create_temple_stone_material(
     textures: &crate::resources::textures::TextureManager,
     materials: &mut crate::rendering::material::MaterialManagerBuilder,
-    surface: PhysicalSurface,
 ) -> EngineResult<MaterialId> {
     let pixels = generate_temple_stone_texture();
     let texture = textures.create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &pixels, true)?;
-    Ok(materials.register(Material::textured(texture).with_derived_finish(surface)))
+    Ok(materials.register(RUBBLE.material(texture)))
 }
 
 fn create_marble_material(
     textures: &crate::resources::textures::TextureManager,
     materials: &mut crate::rendering::material::MaterialManagerBuilder,
-    surface: PhysicalSurface,
 ) -> EngineResult<MaterialId> {
     let pixels = generate_marble_texture();
     let texture = textures.create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &pixels, true)?;
-    Ok(materials.register(Material::textured(texture).with_derived_finish(surface)))
+    Ok(materials.register(MARBLE.material(texture)))
 }
 
 fn create_fluted_marble_material(
     textures: &crate::resources::textures::TextureManager,
     materials: &mut crate::rendering::material::MaterialManagerBuilder,
-    surface: PhysicalSurface,
 ) -> EngineResult<MaterialId> {
     let pixels = generate_fluted_marble_texture();
     let texture = textures.create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &pixels, true)?;
-    Ok(materials.register(Material::textured(texture).with_derived_finish(surface)))
+    Ok(materials.register(MARBLE.material(texture)))
 }
 
 /// Light grey stone for the stylobate platform.
@@ -994,11 +985,11 @@ mod tests {
         for front_columns in 2..=24 {
             let needed = roof_slope(&layout_for(front_columns));
             assert!(
-                MARBLE_SURFACE.friction > needed * 1.2,
+                MARBLE.physics.friction > needed * 1.2,
                 "a {}-column temple's roof needs mu >= {:.3} and marble offers {:.3}",
                 front_columns,
                 needed,
-                MARBLE_SURFACE.friction
+                MARBLE.physics.friction
             );
         }
     }

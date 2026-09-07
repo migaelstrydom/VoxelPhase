@@ -10,7 +10,6 @@ use nalgebra::{Point3, Vector3};
 use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
-use super::shared::finish::{ColliderSurface, MaterialSurface};
 use super::shared::models::{build_convex_hull, convex_solid_model, cuboid_model, SolidFace};
 use super::shared::textures::*;
 use super::{MaterialCtx, Spawnable};
@@ -19,8 +18,8 @@ use crate::components::{
 };
 use crate::core::error::EngineResult;
 use crate::physics::{ColliderDesc, RigidBodyDesc};
-use crate::rendering::material::{Material, MaterialId, MaterialManagerBuilder};
-use crate::rendering::physical_finish::PhysicalSurface;
+use crate::rendering::material::{MaterialId, MaterialManagerBuilder};
+use crate::rendering::substance::{self, ColliderSubstance, Substance};
 use crate::resources::textures::TextureManager;
 use crate::systems::PhysicsResource;
 use crate::utils::noise::fbm_2d_periodic;
@@ -79,24 +78,20 @@ impl VoussoirArchDef {
         self.num_voussoirs as usize + 2
     }
 
-    /// The voussoirs. Declared once so the collider and the limestone they're
-    /// rendered with cannot disagree about how it behaves.
-    fn voussoir_surface(&self) -> PhysicalSurface {
-        PhysicalSurface {
-            restitution: 0.05,
-            friction: self.friction,
-            density: self.density,
-        }
+    /// The voussoirs: dressed limestone, with the friction and density a level
+    /// authors. Declared once so the collider and the stone they are rendered
+    /// with cannot disagree about what they are.
+    fn voussoir_substance(&self) -> Substance {
+        substance::LIMESTONE
+            .with_density(self.density)
+            .with_friction(self.friction)
     }
 
-    /// The abutment pillars: twice the voussoirs' density so they stay put
-    /// under the arch's thrust.
-    fn abutment_surface(&self) -> PhysicalSurface {
-        PhysicalSurface {
-            restitution: 0.05,
-            friction: self.friction,
-            density: self.density * 2.0,
-        }
+    /// The abutment pillars: the same stone at twice the density, so they stay
+    /// put under the arch's thrust. Twice as heavy and identical to look at,
+    /// which is the separation the substance library exists to allow.
+    fn abutment_substance(&self) -> Substance {
+        self.voussoir_substance().with_density(self.density * 2.0)
     }
 }
 
@@ -112,14 +107,14 @@ impl Spawnable for VoussoirArchDef {
             mats.push(create_limestone_material(
                 ctx.textures,
                 ctx.materials,
-                self.voussoir_surface(),
+                &self.voussoir_substance(),
             )?);
         }
         for _ in 0..2 {
             mats.push(create_limestone_material(
                 ctx.textures,
                 ctx.materials,
-                self.abutment_surface(),
+                &self.abutment_substance(),
             )?);
         }
         Ok(mats)
@@ -168,7 +163,7 @@ impl Spawnable for VoussoirArchDef {
                 let body_handle = physics.world.create_body(body_desc);
                 physics.world.attach_collider(
                     body_handle,
-                    ColliderDesc::convex_hull(hull).with_physical_surface(self.voussoir_surface()),
+                    ColliderDesc::convex_hull(hull).of(&self.voussoir_substance()),
                 );
                 body_handle
             };
@@ -209,8 +204,7 @@ impl Spawnable for VoussoirArchDef {
                 let body_handle = physics.world.create_body(body_desc);
                 physics.world.attach_collider(
                     body_handle,
-                    ColliderDesc::box_shape(abutment_he)
-                        .with_physical_surface(self.abutment_surface()),
+                    ColliderDesc::box_shape(abutment_he).of(&self.abutment_substance()),
                 );
                 body_handle
             };
@@ -311,11 +305,11 @@ fn voussoir_geometry(
 fn create_limestone_material(
     texture_manager: &TextureManager,
     material_builder: &mut MaterialManagerBuilder,
-    surface: PhysicalSurface,
+    substance: &Substance,
 ) -> EngineResult<MaterialId> {
     let pixels = generate_limestone_texture();
     let texture = texture_manager.create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &pixels, true)?;
-    let material = Material::textured(texture).with_derived_finish(surface);
+    let material = substance.material(texture);
     Ok(material_builder.register(material))
 }
 

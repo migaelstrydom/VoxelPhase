@@ -184,13 +184,13 @@ impl GrainSpec {
     }
 
     /// Same grain at a different strength.
-    pub fn with_strength(mut self, strength: f32) -> Self {
+    pub const fn with_strength(mut self, strength: f32) -> Self {
         self.strength = strength;
         self
     }
 
     /// Same grain at a different scale.
-    pub fn with_scale(mut self, scale: f32) -> Self {
+    pub const fn with_scale(mut self, scale: f32) -> Self {
         self.scale = scale;
         self
     }

@@ -12,7 +12,6 @@ use nalgebra::{Point3, Vector3};
 use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
-use super::shared::finish::{ColliderSurface, MaterialSurface};
 use super::shared::models::{build_convex_hull, convex_solid_model, SolidFace};
 use super::shared::orientation::Yaw;
 use super::shared::textures::Rgb;
@@ -22,8 +21,8 @@ use crate::components::{
 };
 use crate::core::error::EngineResult;
 use crate::physics::{ColliderDesc, RigidBodyDesc};
-use crate::rendering::material::{Material, MaterialId};
-use crate::rendering::physical_finish::PhysicalSurface;
+use crate::rendering::material::MaterialId;
+use crate::rendering::substance::{self, ColliderSubstance, Substance};
 use crate::systems::PhysicsResource;
 use crate::utils::noise::fbm_2d_periodic;
 
@@ -81,15 +80,13 @@ impl TrilithonDef {
         2700.0
     }
 
-    /// The one declaration of this object's physics. The collider takes the
-    /// coefficients and the material takes the finish they imply, so the two
+    /// The one declaration of what this object is made of. The collider takes
+    /// the coefficients and the material takes the finish and grain, so the two
     /// cannot drift apart.
-    fn surface(&self) -> PhysicalSurface {
-        PhysicalSurface {
-            restitution: 0.05,
-            friction: 0.9,
-            density: self.density,
-        }
+    ///
+    /// Granite, with the density left authored per instance.
+    fn substance(&self) -> Substance {
+        substance::GRANITE.with_density(self.density)
     }
 }
 
@@ -104,9 +101,9 @@ impl Spawnable for TrilithonDef {
         let texture = ctx
             .textures
             .create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &pixels, true)?;
-        Ok(vec![ctx.materials.register(
-            Material::textured(texture).with_derived_finish(self.surface()),
-        )])
+        Ok(vec![ctx
+            .materials
+            .register(self.substance().material(texture))])
     }
 
     fn spawn(&self, world: &mut World, materials: &[MaterialId]) -> Vec<Entity> {
@@ -166,7 +163,7 @@ impl Spawnable for TrilithonDef {
             );
             physics.world.attach_collider(
                 left_body,
-                ColliderDesc::convex_hull(left_hull).with_physical_surface(self.surface()),
+                ColliderDesc::convex_hull(left_hull).of(&self.substance()),
             );
 
             let right_body = physics.world.create_body(
@@ -178,7 +175,7 @@ impl Spawnable for TrilithonDef {
             );
             physics.world.attach_collider(
                 right_body,
-                ColliderDesc::convex_hull(right_hull).with_physical_surface(self.surface()),
+                ColliderDesc::convex_hull(right_hull).of(&self.substance()),
             );
 
             let lintel_body = physics.world.create_body(
@@ -190,7 +187,7 @@ impl Spawnable for TrilithonDef {
             );
             physics.world.attach_collider(
                 lintel_body,
-                ColliderDesc::convex_hull(lintel_hull).with_physical_surface(self.surface()),
+                ColliderDesc::convex_hull(lintel_hull).of(&self.substance()),
             );
 
             (left_body, right_body, lintel_body)

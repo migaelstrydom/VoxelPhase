@@ -14,7 +14,6 @@ use nalgebra::{Point3, Vector2, Vector3};
 use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
-use super::shared::finish::{ColliderSurface, MaterialSurface};
 use super::shared::textures::Rgb;
 use super::{MaterialCtx, Spawnable};
 use crate::components::{
@@ -24,8 +23,8 @@ use crate::core::error::EngineResult;
 use crate::model::{MeshPrimitive, Model, ModelPart};
 use crate::physics::{ColliderDesc, ConstraintKind, RigidBodyDesc};
 use crate::rendering::colour::Colour;
-use crate::rendering::material::{Material, MaterialId};
-use crate::rendering::physical_finish::PhysicalSurface;
+use crate::rendering::material::MaterialId;
+use crate::rendering::substance::{self, ColliderSubstance, Substance};
 use crate::rendering::vertex::Vertex;
 use crate::systems::PhysicsResource;
 use crate::terrain::TerrainWorld;
@@ -59,15 +58,15 @@ impl FencePostDef {
         800.0
     }
 
-    /// The one declaration of this object's physics. The collider takes the
-    /// coefficients and the material takes the finish they imply, so the two
+    /// The one declaration of what this object is made of. The collider takes
+    /// the coefficients and the material takes the finish and grain, so the two
     /// cannot drift apart.
-    fn surface(&self) -> PhysicalSurface {
-        PhysicalSurface {
-            restitution: 0.1,
-            friction: 0.7,
-            density: self.density,
-        }
+    ///
+    /// Pine: a fence post is a softwood stake, and its grain runs along the
+    /// post rather than being projected from the world — which the substance
+    /// knows and the call site does not have to.
+    fn substance(&self) -> Substance {
+        substance::PINE.with_density(self.density)
     }
 }
 
@@ -83,17 +82,13 @@ impl Spawnable for FencePostDef {
         let bark_tex =
             ctx.textures
                 .create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &bark_pixels, true)?;
-        let bark_mat = ctx
-            .materials
-            .register(Material::textured(bark_tex).with_derived_finish(self.surface()));
+        let bark_mat = ctx.materials.register(self.substance().material(bark_tex));
 
         let cross_pixels = generate_cross_section_texture(seed);
         let cross_tex =
             ctx.textures
                 .create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &cross_pixels, true)?;
-        let cross_mat = ctx
-            .materials
-            .register(Material::textured(cross_tex).with_derived_finish(self.surface()));
+        let cross_mat = ctx.materials.register(self.substance().material(cross_tex));
 
         Ok(vec![bark_mat, cross_mat])
     }
@@ -143,12 +138,12 @@ impl Spawnable for FencePostDef {
         let collider_offset_y = self.half_height - exposed_half_height;
 
         let anchored_collider = ColliderDesc::capsule(exposed_half_height, self.radius)
-            .with_physical_surface(self.surface())
+            .of(&self.substance())
             .offset_translation(Vector3::new(0.0, collider_offset_y, 0.0));
 
         // Full-size collider for when the post is freed.
-        let released_collider = ColliderDesc::capsule(self.half_height, self.radius)
-            .with_physical_surface(self.surface());
+        let released_collider =
+            ColliderDesc::capsule(self.half_height, self.radius).of(&self.substance());
 
         let (body_handle, anchor_handle, upright_handle) = {
             let mut physics = world.write_resource::<PhysicsResource>();

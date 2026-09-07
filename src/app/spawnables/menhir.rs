@@ -15,7 +15,6 @@ use nalgebra::{Point3, Vector2, Vector3};
 use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
-use super::shared::finish::{ColliderSurface, MaterialSurface};
 use super::shared::models::{build_convex_hull, SolidFace};
 use super::shared::textures::Rgb;
 use super::{MaterialCtx, Spawnable};
@@ -26,8 +25,8 @@ use crate::core::error::EngineResult;
 use crate::model::{MeshPrimitive, Model, ModelPart};
 use crate::physics::{ColliderDesc, ConstraintKind, RigidBodyDesc};
 use crate::rendering::colour::Colour;
-use crate::rendering::material::{Material, MaterialId};
-use crate::rendering::physical_finish::PhysicalSurface;
+use crate::rendering::material::MaterialId;
+use crate::rendering::substance::{self, ColliderSubstance, Substance};
 use crate::rendering::vertex::Vertex;
 use crate::systems::PhysicsResource;
 use crate::terrain::TerrainWorld;
@@ -73,15 +72,14 @@ impl MenhirDef {
         2700.0
     }
 
-    /// The one declaration of this object's physics. The collider takes the
-    /// coefficients and the material takes the finish they imply, so the two
+    /// The one declaration of what this object is made of. The collider takes
+    /// the coefficients and the material takes the finish and grain, so the two
     /// cannot drift apart.
-    fn surface(&self) -> PhysicalSurface {
-        PhysicalSurface {
-            restitution: 0.1,
-            friction: 0.8,
-            density: self.density,
-        }
+    ///
+    /// The density stays authored per instance — a level may want a heavier
+    /// stone — while everything about how granite looks comes from the library.
+    fn substance(&self) -> Substance {
+        substance::GRANITE.with_density(self.density)
     }
 }
 
@@ -96,9 +94,9 @@ impl Spawnable for MenhirDef {
         let texture = ctx
             .textures
             .create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &pixels, true)?;
-        Ok(vec![ctx.materials.register(
-            Material::textured(texture).with_derived_finish(self.surface()),
-        )])
+        Ok(vec![ctx
+            .materials
+            .register(self.substance().material(texture))])
     }
 
     fn spawn(&self, world: &mut World, materials: &[MaterialId]) -> Vec<Entity> {
@@ -132,11 +130,10 @@ impl Spawnable for MenhirDef {
         let collider_offset_y = self.half_height - exposed_half_height;
 
         let anchored_collider = ColliderDesc::convex_hull(hull.clone())
-            .with_physical_surface(self.surface())
+            .of(&self.substance())
             .offset_translation(Vector3::new(0.0, collider_offset_y, 0.0));
 
-        let released_collider =
-            ColliderDesc::convex_hull(hull).with_physical_surface(self.surface());
+        let released_collider = ColliderDesc::convex_hull(hull).of(&self.substance());
 
         let (body_handle, anchor_handle, upright_handle) = {
             let mut physics = world.write_resource::<PhysicsResource>();
