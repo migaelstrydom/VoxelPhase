@@ -171,8 +171,12 @@ impl ShadowFraming {
         sun_direction: &Vector3<f32>,
     ) -> Matrix4<f32> {
         let sun = normalize_or(sun_direction, &Vector3::y());
-        let forward = flatten_forward(camera_forward, &sun);
+        let forward = normalize_or(camera_forward, &-Vector3::z());
 
+        // The centre of the slice the camera can actually see. It is used whole:
+        // the box has to be placed where the visible geometry projects on the
+        // map, and how much of the offset lies along the light versus across it
+        // is decided by the projection below, not here.
         let centre_world = camera_pos + forward * self.forward_offset;
 
         // Orientation alone: an eye at the origin looking along the light, so
@@ -210,20 +214,6 @@ fn normalize_or(v: &Vector3<f32>, fallback: &Vector3<f32>) -> Vector3<f32> {
     }
 }
 
-/// The camera's heading, projected off the sun axis and normalized.
-///
-/// Only the component perpendicular to the light moves the box across the map;
-/// the component along it just slides the box within its own depth, wasting
-/// coverage. Since the box is square in the light's own frame, dropping that
-/// component leaves the covered region of the map identical. Looking straight
-/// down the sun leaves nothing to project, so any perpendicular direction will
-/// do.
-fn flatten_forward(camera_forward: &Vector3<f32>, sun: &Vector3<f32>) -> Vector3<f32> {
-    let forward = normalize_or(camera_forward, &-Vector3::z());
-    let flattened = forward - sun * forward.dot(sun);
-    normalize_or(&flattened, &perpendicular(sun))
-}
-
 /// An up vector that is not parallel to the light.
 fn stable_up(sun: &Vector3<f32>) -> Vector3<f32> {
     if sun.y.abs() > 0.99 {
@@ -231,16 +221,6 @@ fn stable_up(sun: &Vector3<f32>) -> Vector3<f32> {
     } else {
         Vector3::y()
     }
-}
-
-/// Any unit vector perpendicular to `v`.
-fn perpendicular(v: &Vector3<f32>) -> Vector3<f32> {
-    let axis = if v.x.abs() < 0.9 {
-        Vector3::x()
-    } else {
-        Vector3::y()
-    };
-    normalize_or(&v.cross(&axis), &Vector3::x())
 }
 
 /// Symmetric orthographic projection with Vulkan's conventions: depth in
@@ -315,22 +295,57 @@ mod tests {
     }
 
     #[test]
-    fn the_centre_ignores_camera_pitch_along_the_light() {
-        // Tilting the camera up and down under an overhead sun moves the box
-        // only in the plane the shadow map covers — pitch would otherwise spend
-        // coverage sliding the box through its own depth.
+    fn the_map_follows_the_camera_as_it_pitches_towards_the_light() {
+        // Pitching down under an overhead sun pulls the visible ground in
+        // towards the camera, and the map has to come with it. Placing the box
+        // by a direction that had been re-normalized after the light axis was
+        // projected out of it left the box out at full reach while the visible
+        // ground sat under the camera, which pushed everything the player could
+        // see into the shader's edge fade.
         let f = framing();
         let sun = Vector3::new(0.0, 1.0, 0.0);
-        let level = f.light_view_proj(&Vector3::zeros(), &Vector3::new(0.0, 0.0, -1.0), &sun);
-        let pitched = f.light_view_proj(
-            &Vector3::zeros(),
-            &Vector3::new(0.0, -1.0, -1.0).normalize(),
-            &sun,
-        );
+        let camera = Vector3::zeros();
 
-        let probe = Vector3::new(2.0, 0.0, -8.0);
-        let delta = project(&level, probe).xy() - project(&pitched, probe).xy();
-        assert!(delta.norm() < 1e-4, "centre moved by {}", delta.norm());
+        for pitch_degrees in [0.0f32, 30.0, 60.0, 85.0] {
+            let pitch = pitch_degrees.to_radians();
+            let forward = Vector3::new(0.0, -pitch.sin(), -pitch.cos());
+            let m = f.light_view_proj(&camera, &forward, &sun);
+            let centre = camera + forward * f.forward_offset();
+            let ndc = project(&m, centre);
+
+            let tolerance = f.texel_world_size() / f.radius();
+            assert!(
+                ndc.x.abs() < tolerance && ndc.y.abs() < tolerance,
+                "at {pitch_degrees}° the slice centre landed at {ndc}"
+            );
+        }
+    }
+
+    #[test]
+    fn looking_straight_down_the_light_still_covers_what_is_in_front() {
+        // The degenerate heading: nothing of the camera's forward axis lies
+        // across the light at all. The visible slice still has to be on the
+        // map, comfortably inside the shader's edge fade rather than at the
+        // border.
+        const FADE_START: f32 = 0.85;
+
+        let f = framing();
+        let sun = Vector3::new(0.0, 1.0, 0.0);
+        let camera = Vector3::new(0.0, 30.0, 0.0);
+        let m = f.light_view_proj(&camera, &-sun, &sun);
+
+        // The far face of the visible slice, which is the worst case for
+        // coverage, sampled around its rim.
+        let depth = f.volume().shadow_distance;
+        for angle in [0.0f32, 1.2, 2.5, 3.9, 5.1] {
+            let corner = camera
+                + (-sun) * depth
+                + Vector3::new(angle.cos(), 0.0, angle.sin())
+                    * (ViewFrustum::default().tan_half_y * depth);
+            let ndc = project(&m, corner);
+            let edge = ndc.x.abs().max(ndc.y.abs());
+            assert!(edge < FADE_START, "the visible slice reached edge {edge}");
+        }
     }
 
     #[test]
