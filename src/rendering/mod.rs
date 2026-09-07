@@ -10,6 +10,7 @@ pub mod frame;
 pub mod grain;
 pub mod material;
 pub mod overlay;
+pub mod pattern;
 pub mod physical_finish;
 pub mod pipeline;
 pub mod post;

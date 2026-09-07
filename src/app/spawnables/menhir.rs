@@ -16,7 +16,6 @@ use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
 use super::shared::models::{build_convex_hull, SolidFace};
-use super::shared::textures::Rgb;
 use super::{MaterialCtx, Spawnable};
 use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, TerrainAnchored, Velocity,
@@ -26,11 +25,11 @@ use crate::model::{MeshPrimitive, Model, ModelPart};
 use crate::physics::{ColliderDesc, ConstraintKind, RigidBodyDesc};
 use crate::rendering::colour::Colour;
 use crate::rendering::material::MaterialId;
+use crate::rendering::pattern;
 use crate::rendering::substance::{self, ColliderSubstance, Substance};
 use crate::rendering::vertex::Vertex;
 use crate::systems::PhysicsResource;
 use crate::terrain::TerrainWorld;
-use crate::utils::noise::fbm_2d_periodic;
 
 const TEXTURE_SIZE: u32 = 256;
 /// Longitude segments (around the equator).
@@ -89,14 +88,15 @@ impl Spawnable for MenhirDef {
     }
 
     fn create_materials(&self, ctx: &mut MaterialCtx) -> EngineResult<Vec<MaterialId>> {
+        // A seed per stone, so two menhirs in a level are not the same rock
+        // twice — which is also what keeps them out of each other's cache entry.
         let seed = rand::random::<u32>();
-        let pixels = generate_stone_texture(seed);
-        let texture = ctx
-            .textures
-            .create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &pixels, true)?;
-        Ok(vec![ctx
-            .materials
-            .register(self.substance().material(texture))])
+        Ok(vec![ctx.patterned(
+            &self.substance(),
+            &pattern::STONE,
+            seed,
+            TEXTURE_SIZE,
+        )?])
     }
 
     fn spawn(&self, world: &mut World, materials: &[MaterialId]) -> Vec<Entity> {
@@ -375,81 +375,3 @@ fn build_egg_hull(egg: &EggParams) -> crate::collision::ConvexHull {
 // ---------------------------------------------------------------------------
 // Texture generation
 // ---------------------------------------------------------------------------
-
-/// Procedural grey stone texture with visible grain, veins, and patches.
-fn generate_stone_texture(seed: u32) -> Vec<u8> {
-    let size = TEXTURE_SIZE;
-    let mut pixels = Vec::with_capacity((size * size * 4) as usize);
-
-    let base_grey = Rgb::new(0.58, 0.56, 0.54);
-    let light_grey = Rgb::new(0.72, 0.70, 0.68);
-    let dark_grey = Rgb::new(0.38, 0.36, 0.34);
-    let vein_colour = Rgb::new(0.32, 0.30, 0.29);
-
-    for y in 0..size {
-        for x in 0..size {
-            let u = x as f32 / size as f32;
-            let v = y as f32 / size as f32;
-
-            // Broad colour variation — large blotchy regions.
-            let broad = fbm_2d_periodic(u * 3.0, v * 3.0, 3, 0.5, 2.0, seed, Some(3));
-            let t = (broad * 0.5 + 0.5).clamp(0.0, 1.0);
-            let mut colour = light_grey.lerp(base_grey, t);
-
-            // Medium undulation — gives a bumpy, weathered look.
-            let mid = fbm_2d_periodic(
-                u * 8.0,
-                v * 8.0,
-                3,
-                0.5,
-                2.0,
-                seed.wrapping_add(10),
-                Some(8),
-            );
-            colour = colour.scale(0.85 + mid * 0.15);
-
-            // Dark patches — lichen or mineral deposits.
-            let patch = fbm_2d_periodic(
-                u * 4.0,
-                v * 4.0,
-                2,
-                0.5,
-                2.0,
-                seed.wrapping_add(20),
-                Some(4),
-            );
-            if patch > 0.15 {
-                let pt = ((patch - 0.15) / 0.4).clamp(0.0, 0.5);
-                colour = colour.lerp(dark_grey, pt);
-            }
-
-            // Thin veins / cracks — high-frequency ridgeline pattern.
-            let vein_raw = fbm_2d_periodic(
-                u * 14.0,
-                v * 14.0,
-                3,
-                0.6,
-                2.0,
-                seed.wrapping_add(40),
-                Some(14),
-            );
-            let vein_strength = (1.0 - (vein_raw * 4.0).abs()).max(0.0);
-            colour = colour.lerp(vein_colour, vein_strength * 0.6);
-
-            // Fine grain — mineral speckle.
-            let fine = fbm_2d_periodic(
-                u * 24.0,
-                v * 24.0,
-                2,
-                0.5,
-                2.0,
-                seed.wrapping_add(30),
-                Some(24),
-            );
-            colour = colour.scale(0.90 + fine * 0.10);
-
-            colour.write_rgba(&mut pixels);
-        }
-    }
-    pixels
-}

@@ -9,7 +9,6 @@ use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
 use super::shared::models::{build_convex_hull, convex_solid_model, cuboid_model, SolidFace};
-use super::shared::textures::*;
 use super::{MaterialCtx, Spawnable};
 use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
@@ -18,9 +17,9 @@ use crate::core::error::EngineResult;
 use crate::fire::components::Flammable;
 use crate::physics::{ColliderDesc, RigidBodyDesc};
 use crate::rendering::material::MaterialId;
+use crate::rendering::pattern;
 use crate::rendering::substance::{self, ColliderSubstance, Substance};
 use crate::systems::PhysicsResource;
-use crate::utils::noise::fbm_2d_periodic;
 
 const TEXTURE_SIZE: u32 = 128;
 
@@ -40,6 +39,12 @@ const WALL: Substance = substance::GRANITE;
 const DETAIL: Substance = substance::BRICK;
 const ROOF: Substance = substance::SLATE;
 
+/// Fixed, so every house is built of the same stone and one texture serves the
+/// whole street.
+const WALL_SEED: u32 = 11;
+const DETAIL_SEED: u32 = 22;
+const ROOF_SEED: u32 = 33;
+
 #[derive(Deserialize)]
 pub struct HouseDef {
     pub pos: (f32, f32, f32),
@@ -53,9 +58,9 @@ impl Spawnable for HouseDef {
 
     fn create_materials(&self, ctx: &mut MaterialCtx) -> EngineResult<Vec<MaterialId>> {
         Ok(vec![
-            create_stone_material(ctx.textures, ctx.materials)?,
-            create_brick_material(ctx.textures, ctx.materials)?,
-            create_slate_material(ctx.textures, ctx.materials)?,
+            ctx.patterned(&WALL, &pattern::STONE, WALL_SEED, TEXTURE_SIZE)?,
+            ctx.patterned(&DETAIL, &pattern::DRESSED_STONE, DETAIL_SEED, TEXTURE_SIZE)?,
+            ctx.patterned(&ROOF, &pattern::SLATE, ROOF_SEED, TEXTURE_SIZE)?,
         ])
     }
 
@@ -432,178 +437,3 @@ fn gable_geometry(
 // ---------------------------------------------------------------------------
 // Procedural textures
 // ---------------------------------------------------------------------------
-
-fn create_stone_material(
-    textures: &crate::resources::textures::TextureManager,
-    materials: &mut crate::rendering::material::MaterialManagerBuilder,
-) -> EngineResult<MaterialId> {
-    let pixels = generate_stone_texture();
-    let texture = textures.create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &pixels, true)?;
-    Ok(materials.register(WALL.material(texture)))
-}
-
-fn create_brick_material(
-    textures: &crate::resources::textures::TextureManager,
-    materials: &mut crate::rendering::material::MaterialManagerBuilder,
-) -> EngineResult<MaterialId> {
-    let pixels = generate_brick_texture();
-    let texture = textures.create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &pixels, true)?;
-    Ok(materials.register(DETAIL.material(texture)))
-}
-
-fn create_slate_material(
-    textures: &crate::resources::textures::TextureManager,
-    materials: &mut crate::rendering::material::MaterialManagerBuilder,
-) -> EngineResult<MaterialId> {
-    let pixels = generate_slate_texture();
-    let texture = textures.create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &pixels, true)?;
-    Ok(materials.register(ROOF.material(texture)))
-}
-
-/// Warm grey stone with fine grain noise and chisel-edge darkening.
-fn generate_stone_texture() -> Vec<u8> {
-    let size = TEXTURE_SIZE;
-    let mut pixels = Vec::with_capacity((size * size * 4) as usize);
-
-    let base = Rgb::new(0.76, 0.73, 0.66);
-    let dark = Rgb::new(0.56, 0.53, 0.46);
-
-    let seed_grain = rand_u32();
-    let seed_vein = rand_u32();
-
-    for y in 0..size {
-        for x in 0..size {
-            let u = x as f32 / size as f32;
-            let v = y as f32 / size as f32;
-
-            let grain = fbm_2d_periodic(u * 16.0, v * 16.0, 3, 0.5, 2.0, seed_grain, Some(16));
-            let mut c = base.scale(0.90 + grain * 0.10);
-
-            let vein = fbm_2d_periodic(u * 4.0, v * 8.0, 3, 0.6, 2.0, seed_vein, Some(8));
-            let vein_band = ((vein - 0.45).abs() < 0.03) as u8 as f32;
-            c = c.lerp(dark, vein_band * 0.18);
-
-            let edge = border_band(u, v, 0.06);
-            c = c.scale(1.0 - edge * 0.22);
-            c = c.scale(edge_vignette(u, v));
-
-            c.write_rgba(&mut pixels);
-        }
-    }
-    pixels
-}
-
-/// Red-brown brick with running bond mortar pattern.
-fn generate_brick_texture() -> Vec<u8> {
-    let size = TEXTURE_SIZE;
-    let mut pixels = Vec::with_capacity((size * size * 4) as usize);
-
-    let mortar = Rgb::new(0.72, 0.70, 0.65);
-    let seed_grain = rand_u32();
-
-    let brick_rows = 6.0_f32;
-    let bricks_per_row = 3.0_f32;
-    let mortar_w = 0.035_f32;
-
-    for y in 0..size {
-        for x in 0..size {
-            let u = x as f32 / size as f32;
-            let v = y as f32 / size as f32;
-
-            let row_v = v * brick_rows;
-            let row_idx = row_v.floor() as i32;
-            let frac_v = row_v.fract();
-
-            // Running bond: offset every other row.
-            let offset_u = if row_idx % 2 == 0 {
-                u
-            } else {
-                u + 0.5 / bricks_per_row
-            };
-            let brick_u = offset_u * bricks_per_row;
-            let col_idx = brick_u.floor() as i32;
-            let frac_u = brick_u.fract();
-
-            // Is this pixel in a mortar joint?
-            let h_mortar = frac_v < mortar_w || frac_v > (1.0 - mortar_w);
-            let v_mortar = frac_u < mortar_w * bricks_per_row / brick_rows
-                || frac_u > (1.0 - mortar_w * bricks_per_row / brick_rows);
-
-            if h_mortar || v_mortar {
-                let grain = fbm_2d_periodic(u * 20.0, v * 20.0, 2, 0.4, 2.0, seed_grain, Some(20));
-                let c = mortar.scale(0.95 + grain * 0.05);
-                c.write_rgba(&mut pixels);
-            } else {
-                // Per-brick colour variation from hash.
-                let h = hash_pair(row_idx, col_idx);
-                let hue_shift = ((h & 0xFF) as f32 / 255.0 - 0.5) * 0.06;
-                let val_shift = (((h >> 8) & 0xFF) as f32 / 255.0 - 0.5) * 0.08;
-
-                let base = Rgb::new(0.62 + hue_shift, 0.32 + hue_shift * 0.4, 0.22);
-                let grain = fbm_2d_periodic(u * 24.0, v * 24.0, 3, 0.5, 2.0, seed_grain, Some(24));
-                let c = base.scale(0.88 + grain * 0.12 + val_shift);
-
-                c.write_rgba(&mut pixels);
-            }
-        }
-    }
-    pixels
-}
-
-/// Dark grey-blue slate with horizontal layering.
-fn generate_slate_texture() -> Vec<u8> {
-    let size = TEXTURE_SIZE;
-    let mut pixels = Vec::with_capacity((size * size * 4) as usize);
-
-    let base = Rgb::new(0.32, 0.34, 0.38);
-    let highlight = Rgb::new(0.42, 0.44, 0.48);
-
-    let seed_layer = rand_u32();
-    let seed_grain = rand_u32();
-
-    let num_layers = 10.0_f32;
-
-    for y in 0..size {
-        for x in 0..size {
-            let u = x as f32 / size as f32;
-            let v = y as f32 / size as f32;
-
-            // Horizontal slate layers.
-            let layer_v = v * num_layers;
-            let frac_v = layer_v.fract();
-            let layer_idx = layer_v.floor() as i32;
-
-            // Slight variation per layer.
-            let layer_hash = hash_pair(layer_idx, 0);
-            let layer_shift = ((layer_hash & 0xFF) as f32 / 255.0 - 0.5) * 0.06;
-
-            let mut c = Rgb::new(
-                base.r + layer_shift,
-                base.g + layer_shift,
-                base.b + layer_shift * 0.5,
-            );
-
-            // Fine grain.
-            let grain = fbm_2d_periodic(u * 20.0, v * 20.0, 3, 0.5, 2.0, seed_grain, Some(20));
-            c = c.scale(0.92 + grain * 0.08);
-
-            // Layer edge lines — subtle dark lines at boundaries.
-            let edge_dist = frac_v.min(1.0 - frac_v);
-            if edge_dist < 0.06 {
-                let t = 1.0 - (edge_dist / 0.06);
-                c = c.scale(1.0 - t * 0.15);
-            }
-
-            // Occasional light streak.
-            let streak = fbm_2d_periodic(u * 3.0, v * 1.0, 2, 0.5, 2.0, seed_layer, Some(3));
-            if streak > 0.65 {
-                let t = (streak - 0.65) / 0.35;
-                c = c.lerp(highlight, t * 0.25);
-            }
-
-            c = c.scale(edge_vignette(u, v));
-            c.write_rgba(&mut pixels);
-        }
-    }
-    pixels
-}

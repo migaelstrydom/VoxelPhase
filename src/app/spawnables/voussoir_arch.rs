@@ -11,20 +11,23 @@ use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
 use super::shared::models::{build_convex_hull, convex_solid_model, cuboid_model, SolidFace};
-use super::shared::textures::*;
 use super::{MaterialCtx, Spawnable};
 use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
 };
 use crate::core::error::EngineResult;
 use crate::physics::{ColliderDesc, RigidBodyDesc};
-use crate::rendering::material::{MaterialId, MaterialManagerBuilder};
+use crate::rendering::material::MaterialId;
+use crate::rendering::pattern;
 use crate::rendering::substance::{self, ColliderSubstance, Substance};
-use crate::resources::textures::TextureManager;
 use crate::systems::PhysicsResource;
-use crate::utils::noise::fbm_2d_periodic;
 
 const TEXTURE_SIZE: u32 = 128;
+
+/// Fixed, and shared by every piece of the arch. Dressed stone from one quarry
+/// should look like dressed stone from one quarry, and a shared seed is what
+/// lets fourteen pieces share one baked texture.
+const LIMESTONE_SEED: u32 = 77;
 
 #[derive(Deserialize)]
 pub struct VoussoirArchDef {
@@ -103,18 +106,26 @@ impl Spawnable for VoussoirArchDef {
     fn create_materials(&self, ctx: &mut MaterialCtx) -> EngineResult<Vec<MaterialId>> {
         let count = self.total_pieces();
         let mut mats = Vec::with_capacity(count);
+
+        // One material per piece, but one *texture* for all of them: the
+        // voussoirs and the abutments are the same dressed limestone, and a
+        // twelve-stone arch used to bake and upload twelve identical tiles.
+        // The pieces differ in density, which the cache key rightly ignores —
+        // a heavier stone is not a different-looking one.
         for _ in 0..self.num_voussoirs as usize {
-            mats.push(create_limestone_material(
-                ctx.textures,
-                ctx.materials,
+            mats.push(ctx.patterned(
                 &self.voussoir_substance(),
+                &pattern::DRESSED_STONE,
+                LIMESTONE_SEED,
+                TEXTURE_SIZE,
             )?);
         }
         for _ in 0..2 {
-            mats.push(create_limestone_material(
-                ctx.textures,
-                ctx.materials,
+            mats.push(ctx.patterned(
                 &self.abutment_substance(),
+                &pattern::DRESSED_STONE,
+                LIMESTONE_SEED,
+                TEXTURE_SIZE,
             )?);
         }
         Ok(mats)
@@ -301,72 +312,3 @@ fn voussoir_geometry(
 // ---------------------------------------------------------------------------
 // Limestone texture generation
 // ---------------------------------------------------------------------------
-
-fn create_limestone_material(
-    texture_manager: &TextureManager,
-    material_builder: &mut MaterialManagerBuilder,
-    substance: &Substance,
-) -> EngineResult<MaterialId> {
-    let pixels = generate_limestone_texture();
-    let texture = texture_manager.create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &pixels, true)?;
-    let material = substance.material(texture);
-    Ok(material_builder.register(material))
-}
-
-/// Procedural limestone: warm grey-beige base with fine grain noise,
-/// subtle veining, and chisel-edge darkening at borders.
-fn generate_limestone_texture() -> Vec<u8> {
-    let size = TEXTURE_SIZE;
-    let mut pixels = Vec::with_capacity((size * size * 4) as usize);
-
-    let warmth = rand_range(-0.03, 0.03);
-    let base = Rgb::new(0.78 + warmth, 0.75 + warmth * 0.9, 0.68 + warmth * 0.7);
-    let dark = Rgb::new(0.58, 0.55, 0.48);
-    let highlight = Rgb::new(0.90, 0.87, 0.82);
-
-    let seed_grain = rand_u32();
-    let seed_vein = rand_u32();
-    let seed_pit = rand_u32();
-
-    let spec_cx = rand_range(0.25, 0.45);
-    let spec_cy = rand_range(0.25, 0.40);
-
-    for y in 0..size {
-        for x in 0..size {
-            let u = x as f32 / size as f32;
-            let v = y as f32 / size as f32;
-
-            // Fine grain noise — sandy limestone texture.
-            let grain = fbm_2d_periodic(u * 16.0, v * 16.0, 3, 0.5, 2.0, seed_grain, Some(16));
-            let grain_factor = 0.90 + grain * 0.10;
-
-            // Thin darker veining streaks.
-            let vein = fbm_2d_periodic(u * 4.0, v * 8.0, 3, 0.6, 2.0, seed_vein, Some(8));
-            let vein_band = ((vein - 0.45).abs() < 0.03) as u8 as f32;
-
-            let mut c = base.scale(grain_factor);
-            c = c.lerp(dark, vein_band * 0.20);
-
-            // Broad specular highlight — polished stone sheen.
-            let du = u - spec_cx;
-            let dv = v - spec_cy;
-            let spec = (1.0 - ((du * du + dv * dv) * 6.0).min(1.0)).powi(4);
-            c = c.lerp(highlight, spec * 0.30);
-
-            // Erosion pitting — small dark spots.
-            let pit = fbm_2d_periodic(u * 20.0, v * 20.0, 2, 0.4, 2.0, seed_pit, Some(20));
-            if pit > 0.60 {
-                let d = (pit - 0.60) / 0.40;
-                c = c.scale(1.0 - d * 0.20);
-            }
-
-            // Chisel-cut edge darkening.
-            let edge = border_band(u, v, 0.06);
-            c = c.scale(1.0 - edge * 0.25);
-
-            c = c.scale(edge_vignette(u, v));
-            c.write_rgba(&mut pixels);
-        }
-    }
-    pixels
-}

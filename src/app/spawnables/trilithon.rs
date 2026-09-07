@@ -14,7 +14,6 @@ use specs::{Builder, Entity, World, WorldExt};
 
 use super::shared::models::{build_convex_hull, convex_solid_model, SolidFace};
 use super::shared::orientation::Yaw;
-use super::shared::textures::Rgb;
 use super::{MaterialCtx, Spawnable};
 use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
@@ -22,9 +21,9 @@ use crate::components::{
 use crate::core::error::EngineResult;
 use crate::physics::{ColliderDesc, RigidBodyDesc};
 use crate::rendering::material::MaterialId;
+use crate::rendering::pattern;
 use crate::rendering::substance::{self, ColliderSubstance, Substance};
 use crate::systems::PhysicsResource;
-use crate::utils::noise::fbm_2d_periodic;
 
 const TEXTURE_SIZE: u32 = 256;
 
@@ -96,14 +95,15 @@ impl Spawnable for TrilithonDef {
     }
 
     fn create_materials(&self, ctx: &mut MaterialCtx) -> EngineResult<Vec<MaterialId>> {
+        // A seed per stone, so the three blocks of one trilithon are cut from
+        // visibly different rock.
         let seed = rand::random::<u32>();
-        let pixels = generate_standing_stone_texture(seed);
-        let texture = ctx
-            .textures
-            .create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &pixels, true)?;
-        Ok(vec![ctx
-            .materials
-            .register(self.substance().material(texture))])
+        Ok(vec![ctx.patterned(
+            &self.substance(),
+            &pattern::STONE,
+            seed,
+            TEXTURE_SIZE,
+        )?])
     }
 
     fn spawn(&self, world: &mut World, materials: &[MaterialId]) -> Vec<Entity> {
@@ -324,90 +324,3 @@ fn hash_float(seed: u32, channel: u32) -> f32 {
 // ---------------------------------------------------------------------------
 // Texture generation
 // ---------------------------------------------------------------------------
-
-/// Cold grey standing stone texture with subtle grain, weathering stains,
-/// and sparse lichen.
-fn generate_standing_stone_texture(seed: u32) -> Vec<u8> {
-    let size = TEXTURE_SIZE;
-    let mut pixels = Vec::with_capacity((size * size * 4) as usize);
-
-    let light_stone = Rgb::new(0.64, 0.63, 0.62);
-    let mid_stone = Rgb::new(0.50, 0.49, 0.48);
-    let dark_stone = Rgb::new(0.34, 0.33, 0.33);
-    let quartz_light = Rgb::new(0.72, 0.71, 0.68);
-    let dark_grain = Rgb::new(0.30, 0.29, 0.28);
-    let lichen = Rgb::new(0.46, 0.50, 0.38);
-
-    for y in 0..size {
-        for x in 0..size {
-            let u = x as f32 / size as f32;
-            let v = y as f32 / size as f32;
-
-            let broad = fbm_2d_periodic(u * 2.0, v * 2.0, 2, 0.5, 2.0, seed, Some(2));
-            let t_base = (broad * 0.5 + 0.5).clamp(0.0, 1.0);
-            let mut colour = light_stone.lerp(mid_stone, t_base);
-
-            let rough = fbm_2d_periodic(
-                u * 8.0,
-                v * 8.0,
-                3,
-                0.5,
-                2.0,
-                seed.wrapping_add(10),
-                Some(8),
-            );
-            colour = colour.scale(0.88 + rough * 0.12);
-
-            let grain = fbm_2d_periodic(
-                u * 28.0,
-                v * 28.0,
-                2,
-                0.6,
-                2.0,
-                seed.wrapping_add(20),
-                Some(28),
-            );
-            if grain > 0.28 {
-                let t = ((grain - 0.28) / 0.4).clamp(0.0, 0.4);
-                colour = colour.lerp(quartz_light, t);
-            } else if grain < -0.2 {
-                let t = ((-0.2 - grain) / 0.3).clamp(0.0, 0.35);
-                colour = colour.lerp(dark_grain, t);
-            }
-
-            let streak_warp = fbm_2d_periodic(
-                u * 4.0,
-                v * 1.0,
-                2,
-                0.4,
-                2.0,
-                seed.wrapping_add(30),
-                Some(4),
-            );
-            let streak = ((u * 10.0 + streak_warp * 1.0).sin() * 0.5 + 0.5).powi(6);
-            colour = colour.lerp(dark_stone, streak * v * 0.25);
-
-            let lichen_noise = fbm_2d_periodic(
-                u * 5.0,
-                v * 5.0,
-                3,
-                0.55,
-                2.0,
-                seed.wrapping_add(40),
-                Some(5),
-            );
-            if lichen_noise > 0.32 {
-                let t = ((lichen_noise - 0.32) / 0.35).clamp(0.0, 0.45);
-                colour = colour.lerp(lichen, t);
-            }
-
-            let eu = (0.5 - (u - 0.5).abs()) * 2.0;
-            let ev = (0.5 - (v - 0.5).abs()) * 2.0;
-            let edge = eu.min(ev).clamp(0.0, 1.0);
-            colour = colour.scale(0.93 + edge * 0.07);
-
-            colour.write_rgba(&mut pixels);
-        }
-    }
-    pixels
-}

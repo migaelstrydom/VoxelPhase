@@ -11,7 +11,6 @@ use specs::{Builder, Entity, World, WorldExt};
 
 use super::shared::models::compound_cuboid_model;
 use super::shared::orientation::Yaw;
-use super::shared::textures::Rgb;
 use super::{MaterialCtx, Spawnable};
 use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
@@ -19,10 +18,10 @@ use crate::components::{
 use crate::core::error::EngineResult;
 use crate::physics::{ColliderDesc, RigidBodyDesc};
 use crate::rendering::material::MaterialId;
+use crate::rendering::pattern;
 use crate::rendering::physical_finish::PhysicalSurface;
 use crate::rendering::substance::{self, ColliderSubstance, Substance};
 use crate::systems::PhysicsResource;
-use crate::utils::noise::fbm_2d_periodic;
 
 const TEXTURE_SIZE: u32 = 128;
 
@@ -93,13 +92,12 @@ impl Spawnable for DolosDef {
     }
 
     fn create_materials(&self, ctx: &mut MaterialCtx) -> EngineResult<Vec<MaterialId>> {
-        let pixels = generate_concrete_texture(rand::random::<u32>());
-        let texture = ctx
-            .textures
-            .create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &pixels, true)?;
-        Ok(vec![ctx
-            .materials
-            .register(self.substance().material(texture))])
+        Ok(vec![ctx.patterned(
+            &self.substance(),
+            &pattern::CONCRETE,
+            rand::random::<u32>(),
+            TEXTURE_SIZE,
+        )?])
     }
 
     fn spawn(&self, world: &mut World, materials: &[MaterialId]) -> Vec<Entity> {
@@ -167,53 +165,4 @@ impl Spawnable for DolosDef {
             .with(Renderable)
             .build()]
     }
-}
-
-/// Weathered grey concrete with aggregate speckle and subtle blotching.
-fn generate_concrete_texture(seed: u32) -> Vec<u8> {
-    let size = TEXTURE_SIZE;
-    let mut pixels = Vec::with_capacity((size * size * 4) as usize);
-
-    let base = Rgb::new(0.62, 0.62, 0.60);
-    let dark = Rgb::new(0.42, 0.42, 0.40);
-    let light = Rgb::new(0.78, 0.78, 0.76);
-
-    for y in 0..size {
-        for x in 0..size {
-            let u = x as f32 / size as f32;
-            let v = y as f32 / size as f32;
-
-            let blotch = fbm_2d_periodic(u * 4.0, v * 4.0, 3, 0.5, 2.0, seed, Some(4));
-            let t = (blotch * 0.5 + 0.5).clamp(0.0, 1.0);
-            let mut colour = base.lerp(light, t * 0.4);
-
-            let stain = fbm_2d_periodic(
-                u * 2.5,
-                v * 2.5,
-                2,
-                0.5,
-                2.0,
-                seed.wrapping_add(17),
-                Some(3),
-            );
-            if stain > 0.2 {
-                let st = ((stain - 0.2) / 0.5).clamp(0.0, 0.6);
-                colour = colour.lerp(dark, st);
-            }
-
-            let aggregate = fbm_2d_periodic(
-                u * 32.0,
-                v * 32.0,
-                2,
-                0.5,
-                2.0,
-                seed.wrapping_add(29),
-                Some(32),
-            );
-            colour = colour.scale(0.90 + aggregate * 0.10);
-
-            colour.write_rgba(&mut pixels);
-        }
-    }
-    pixels
 }

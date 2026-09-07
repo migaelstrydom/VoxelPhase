@@ -12,7 +12,6 @@ use specs::{Builder, Entity, World, WorldExt};
 use super::shared::models::{
     build_convex_hull, compound_cuboid_model, convex_solid_model, cuboid_model, SolidFace,
 };
-use super::shared::textures::*;
 use super::{MaterialCtx, Spawnable};
 use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
@@ -22,10 +21,10 @@ use crate::fracture::{CompoundFracture, FractureJoint};
 use crate::model::{MeshPrimitive, Model, ModelPart};
 use crate::physics::{ColliderDesc, RigidBodyDesc};
 use crate::rendering::material::MaterialId;
+use crate::rendering::pattern;
 use crate::rendering::substance::{self, ColliderSubstance, Substance};
 use crate::rendering::vertex::Vertex;
 use crate::systems::PhysicsResource;
-use crate::utils::noise::fbm_2d_periodic;
 
 const TEXTURE_SIZE: u32 = 128;
 const PHI: f32 = 1.618034;
@@ -47,6 +46,15 @@ const DORIC_PEDIMENT_RATIO: f32 = 0.22;
 const MAT_STONE: usize = 0;
 const MAT_MARBLE: usize = 1;
 const MAT_FLUTED: usize = 2;
+
+/// Seeds for the three baked surfaces. Fixed rather than random so that a
+/// temple looks the same every run, and so that the many pieces cut from one
+/// material share one texture rather than baking a near-identical tile each.
+const STONE_SEED: u32 = 101;
+const MARBLE_SEED: u32 = 202;
+/// The flutes are the same marble, differently cut — a separate seed is what
+/// keeps a column's shaft from repeating its own capital's markings.
+const FLUTED_SEED: u32 = 303;
 const MATERIAL_COUNT: usize = 3;
 
 /// Rough quarried stone, used for the stylobate the temple stands on.
@@ -197,9 +205,12 @@ impl Spawnable for TempleDef {
 
     fn create_materials(&self, ctx: &mut MaterialCtx) -> EngineResult<Vec<MaterialId>> {
         Ok(vec![
-            create_temple_stone_material(ctx.textures, ctx.materials)?,
-            create_marble_material(ctx.textures, ctx.materials)?,
-            create_fluted_marble_material(ctx.textures, ctx.materials)?,
+            // Fixed seeds: every temple in a level should be built of the
+            // same quarry's stone, and a shared seed is also what lets the
+            // seven columns share one baked texture instead of seven.
+            ctx.patterned(&RUBBLE, &pattern::STONE, STONE_SEED, TEXTURE_SIZE)?,
+            ctx.patterned(&MARBLE, &pattern::MARBLE, MARBLE_SEED, TEXTURE_SIZE)?,
+            ctx.patterned(&MARBLE, &pattern::MARBLE, FLUTED_SEED, TEXTURE_SIZE)?,
         ])
     }
 
@@ -785,178 +796,6 @@ fn gable_geometry(
 // ---------------------------------------------------------------------------
 // Procedural textures
 // ---------------------------------------------------------------------------
-
-fn create_temple_stone_material(
-    textures: &crate::resources::textures::TextureManager,
-    materials: &mut crate::rendering::material::MaterialManagerBuilder,
-) -> EngineResult<MaterialId> {
-    let pixels = generate_temple_stone_texture();
-    let texture = textures.create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &pixels, true)?;
-    Ok(materials.register(RUBBLE.material(texture)))
-}
-
-fn create_marble_material(
-    textures: &crate::resources::textures::TextureManager,
-    materials: &mut crate::rendering::material::MaterialManagerBuilder,
-) -> EngineResult<MaterialId> {
-    let pixels = generate_marble_texture();
-    let texture = textures.create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &pixels, true)?;
-    Ok(materials.register(MARBLE.material(texture)))
-}
-
-fn create_fluted_marble_material(
-    textures: &crate::resources::textures::TextureManager,
-    materials: &mut crate::rendering::material::MaterialManagerBuilder,
-) -> EngineResult<MaterialId> {
-    let pixels = generate_fluted_marble_texture();
-    let texture = textures.create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &pixels, true)?;
-    Ok(materials.register(MARBLE.material(texture)))
-}
-
-/// Light grey stone for the stylobate platform.
-fn generate_temple_stone_texture() -> Vec<u8> {
-    let size = TEXTURE_SIZE;
-    let mut pixels = Vec::with_capacity((size * size * 4) as usize);
-
-    let base = Rgb::new(0.80, 0.78, 0.74);
-    let seed_grain = rand_u32();
-
-    for y in 0..size {
-        for x in 0..size {
-            let u = x as f32 / size as f32;
-            let v = y as f32 / size as f32;
-
-            let grain = fbm_2d_periodic(u * 16.0, v * 16.0, 3, 0.5, 2.0, seed_grain, Some(16));
-            let mut c = base.scale(0.92 + grain * 0.08);
-
-            let edge = border_band(u, v, 0.04);
-            c = c.scale(1.0 - edge * 0.18);
-            c = c.scale(edge_vignette(u, v));
-
-            c.write_rgba(&mut pixels);
-        }
-    }
-    pixels
-}
-
-/// Warm Pentelic marble — cream-white with subtle grey-blue veining.
-fn generate_marble_texture() -> Vec<u8> {
-    let size = TEXTURE_SIZE;
-    let mut pixels = Vec::with_capacity((size * size * 4) as usize);
-
-    let base = Rgb::new(0.94, 0.92, 0.88);
-    let vein_color = Rgb::new(0.72, 0.74, 0.78);
-
-    let seed_grain = rand_u32();
-    let seed_vein1 = rand_u32();
-    let seed_vein2 = rand_u32();
-
-    for y in 0..size {
-        for x in 0..size {
-            let u = x as f32 / size as f32;
-            let v = y as f32 / size as f32;
-
-            let grain = fbm_2d_periodic(u * 20.0, v * 20.0, 3, 0.5, 2.0, seed_grain, Some(20));
-            let mut c = base.scale(0.96 + grain * 0.04);
-
-            let vein1 = fbm_2d_periodic(
-                u * 3.0 + v * 2.0,
-                v * 5.0 - u * 1.5,
-                4,
-                0.6,
-                2.0,
-                seed_vein1,
-                Some(5),
-            );
-            let vein_band1 = ((vein1 - 0.48).abs() < 0.025) as u8 as f32;
-            c = c.lerp(vein_color, vein_band1 * 0.30);
-
-            let vein2 = fbm_2d_periodic(
-                u * 6.0 - v * 3.0,
-                v * 8.0 + u * 2.0,
-                3,
-                0.5,
-                2.0,
-                seed_vein2,
-                Some(8),
-            );
-            let vein_band2 = ((vein2 - 0.50).abs() < 0.015) as u8 as f32;
-            c = c.lerp(vein_color, vein_band2 * 0.18);
-
-            let warmth = fbm_2d_periodic(u * 2.0, v * 2.0, 2, 0.4, 2.0, seed_grain + 7, Some(2));
-            c = Rgb::new(
-                c.r + (warmth - 0.5) * 0.03,
-                c.g + (warmth - 0.5) * 0.02,
-                c.b,
-            );
-
-            c = c.scale(edge_vignette(u, v));
-            c.write_rgba(&mut pixels);
-        }
-    }
-    pixels
-}
-
-/// Fluted Doric marble — 20 vertical concave channels with sharp arrises.
-///
-/// U wraps around the column (one full revolution = one texture width).
-/// Each flute occupies 1/20 of the U range. A cosine profile darkens the
-/// groove centres and highlights the sharp ridges between flutes.
-/// The marble base colour and subtle veining show through underneath.
-fn generate_fluted_marble_texture() -> Vec<u8> {
-    let size = TEXTURE_SIZE;
-    let mut pixels = Vec::with_capacity((size * size * 4) as usize);
-
-    let base = Rgb::new(0.94, 0.92, 0.88);
-    let vein_color = Rgb::new(0.72, 0.74, 0.78);
-    let flute_shadow = Rgb::new(0.78, 0.76, 0.72);
-
-    let num_flutes = COLUMN_SIDES as f32;
-    let seed_grain = rand_u32();
-    let seed_vein = rand_u32();
-
-    for y in 0..size {
-        for x in 0..size {
-            let u = x as f32 / size as f32;
-            let v = y as f32 / size as f32;
-
-            // Marble base with grain.
-            let grain = fbm_2d_periodic(u * 20.0, v * 20.0, 3, 0.5, 2.0, seed_grain, Some(20));
-            let mut c = base.scale(0.96 + grain * 0.04);
-
-            // Subtle veining (lighter than flat marble — fluting is the star).
-            let vein = fbm_2d_periodic(
-                u * 4.0 + v * 2.0,
-                v * 6.0 - u * 1.5,
-                3,
-                0.6,
-                2.0,
-                seed_vein,
-                Some(6),
-            );
-            let vein_band = ((vein - 0.48).abs() < 0.02) as u8 as f32;
-            c = c.lerp(vein_color, vein_band * 0.15);
-
-            // Flute concavity: cosine profile per flute channel.
-            // frac is 0 at left arris, 0.5 at groove centre, 1 at right arris.
-            let flute_u = u * num_flutes;
-            let frac = flute_u.fract();
-            // depth: 0 at arrises, 1 at groove centre.
-            let depth = (1.0 - (std::f32::consts::TAU * frac).cos()) * 0.5;
-            c = c.lerp(flute_shadow, depth * 0.35);
-
-            // Arris highlight — bright line at the ridge between flutes.
-            let arris_dist = frac.min(1.0 - frac);
-            if arris_dist < 0.06 {
-                let t = 1.0 - arris_dist / 0.06;
-                c = c.scale(1.0 + t * 0.08);
-            }
-
-            c.write_rgba(&mut pixels);
-        }
-    }
-    pixels
-}
 
 #[cfg(test)]
 mod tests {

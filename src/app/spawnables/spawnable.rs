@@ -4,6 +4,8 @@ use specs::{Entity, World};
 
 use crate::core::error::EngineResult;
 use crate::rendering::material::{MaterialId, MaterialManagerBuilder};
+use crate::rendering::pattern::{Pattern, TextureCache};
+use crate::rendering::substance::Substance;
 use crate::resources::textures::TextureManager;
 
 /// Resources available during the material-creation phase.
@@ -13,6 +15,40 @@ use crate::resources::textures::TextureManager;
 pub struct MaterialCtx<'a> {
     pub textures: &'a TextureManager,
     pub materials: &'a mut MaterialManagerBuilder,
+
+    /// Baked pattern textures, shared across every object in the level load.
+    ///
+    /// Lives here rather than per spawnable because the sharing that matters is
+    /// *between* objects: a level's twenty menhirs asked for the same stone
+    /// twenty times, and nothing was in a position to notice.
+    pub textures_cache: &'a mut TextureCache,
+}
+
+impl MaterialCtx<'_> {
+    /// Register a material whose texture is a pattern baked over a substance's
+    /// palette, reusing an identical texture if one has already been made.
+    ///
+    /// The path a spawnable should take unless it needs something the pattern
+    /// library cannot express. It ties the three libraries together in one
+    /// call: the substance decides the palette, finish and grain, the pattern
+    /// decides the markings, and the cache decides whether any work is needed.
+    pub fn patterned(
+        &mut self,
+        substance: &Substance,
+        pattern: &Pattern,
+        seed: u32,
+        size: u32,
+    ) -> EngineResult<MaterialId> {
+        let texture = self.textures_cache.get_or_bake(
+            self.textures,
+            pattern,
+            &substance.palette,
+            seed,
+            size,
+        )?;
+
+        Ok(self.materials.register(substance.material(texture)))
+    }
 }
 
 /// A level object that can be spawned into the ECS world.

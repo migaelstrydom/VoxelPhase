@@ -8,6 +8,7 @@ use crate::core::error::EngineResult;
 use crate::level::data::{Level, WaterBody, WaterConfig};
 use crate::level::placement::{local_frame, PlacementError};
 use crate::rendering::material::{MaterialId, MaterialManagerBuilder};
+use crate::rendering::pattern::TextureCache;
 use crate::resources::textures::TextureManager;
 use crate::terrain::{generate_terrain, Anchor, ChunkGrid, Segment, TerrainWorld};
 use crate::water::{WaterGrid, WaterGridConfig, WaterProperties, WaveGrid, WaveGridConfig};
@@ -35,9 +36,13 @@ pub fn create_level_materials(
     texture_manager: &TextureManager,
     material_builder: &mut MaterialManagerBuilder,
 ) -> EngineResult<LevelMaterials> {
+    // One cache for the whole level, so objects that ask for the same surface
+    // get the same texture rather than each baking their own.
+    let mut textures_cache = TextureCache::new();
     let mut ctx = MaterialCtx {
         textures: texture_manager,
         materials: material_builder,
+        textures_cache: &mut textures_cache,
     };
 
     let mut per_object = Vec::with_capacity(level.object_count());
@@ -46,6 +51,9 @@ pub fn create_level_materials(
         let mats = spawnable.create_materials(&mut ctx)?;
         per_object.push(mats);
     }
+
+    let (baked, shared) = textures_cache.stats();
+    log::info!("level textures: {baked} baked, {shared} shared from the cache");
 
     Ok(LevelMaterials { per_object })
 }
