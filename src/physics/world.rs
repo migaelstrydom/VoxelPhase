@@ -1139,6 +1139,65 @@ impl PhysicsWorld {
 
     // === Internal Methods ===
 
+    /// Move a body's origin onto the centre of mass of its colliders, leaving
+    /// every collider where it is in the world.
+    ///
+    /// The body origin *is* the centre of mass everywhere else in the engine:
+    /// gravity is applied there, contact arms are measured from it, and the
+    /// body spins about it. A compound whose colliders are laid out around the
+    /// origin satisfies that by construction, but detaching colliders (fracture)
+    /// leaves the survivors clustered off to one side. The body then swings
+    /// about a phantom pivot metres away and carries the Steiner inertia of an
+    /// arm that no longer exists. Re-centring restores the invariant.
+    ///
+    /// Linear velocity is corrected so the new origin keeps the velocity that
+    /// point of the body actually had, and mass properties are recomputed
+    /// against the new offsets.
+    pub fn recenter_on_colliders(&mut self, body_handle: RigidBodyHandle) {
+        let Some(body) = self.bodies.get(body_handle.0) else {
+            return;
+        };
+        if body.is_static() {
+            return;
+        }
+
+        let collider_handles: Vec<_> = body.colliders().to_vec();
+        let mut total_mass = 0.0f32;
+        let mut weighted = Vector3::zeros();
+        for ch in &collider_handles {
+            if let Some(collider) = self.colliders.get(ch.0) {
+                let m = collider.mass();
+                total_mass += m;
+                weighted += collider.offset().translation.vector * m;
+            }
+        }
+        if total_mass <= 0.0 {
+            return;
+        }
+
+        let local_com = weighted / total_mass;
+        const RECENTER_EPSILON: f32 = 1e-4;
+        if local_com.norm_squared() < RECENTER_EPSILON * RECENTER_EPSILON {
+            return;
+        }
+
+        for ch in &collider_handles {
+            if let Some(collider) = self.colliders.get_mut(ch.0) {
+                collider.shift_offset(-local_com);
+            }
+        }
+
+        if let Some(body) = self.bodies.get_mut(body_handle.0) {
+            let world_shift = body.rotation() * local_com;
+            let angular = body.angular_velocity();
+            let linear = body.linear_velocity();
+            body.set_position(body.position() + world_shift);
+            body.set_linear_velocity(linear + angular.cross(&world_shift));
+        }
+
+        self.recompute_mass_properties(body_handle);
+    }
+
     fn recompute_mass_properties(&mut self, body_handle: RigidBodyHandle) {
         let Some(body) = self.bodies.get(body_handle.0) else {
             return;
@@ -1903,6 +1962,74 @@ mod tests {
              as not a floor",
             first.map(|f| f.1),
             first.map(|f| f.0),
+        );
+    }
+
+    /// The fracture remnant case: a compound loses every child but one, and
+    /// the survivor sits far from the body origin.
+    #[test]
+    fn recentring_moves_the_origin_onto_the_lone_survivor() {
+        let mut world = PhysicsWorld::new(PhysicsConfig::default());
+        let handle = world.create_body(RigidBodyDesc::dynamic().position(Point3::origin()));
+        let near = world
+            .attach_collider(
+                handle,
+                ColliderDesc::box_shape(Vector3::new(0.5, 0.1, 0.4))
+                    .offset_translation(Vector3::new(0.0, 0.0, 0.0))
+                    .density(500.0),
+            )
+            .unwrap();
+        world.attach_collider(
+            handle,
+            ColliderDesc::box_shape(Vector3::new(0.5, 0.1, 0.4))
+                .offset_translation(Vector3::new(0.0, 0.0, 4.0))
+                .density(500.0),
+        );
+
+        world.detach_collider(handle, near);
+        world.recenter_on_colliders(handle);
+
+        let body = world.body(handle).unwrap();
+        assert!(
+            (body.position() - Point3::new(0.0, 0.0, 4.0)).norm() < 1e-4,
+            "the origin must land on the survivor, not stay at the vanished compound's centre: {:?}",
+            body.position()
+        );
+        let survivor_offset = world
+            .collider(*body.colliders().first().unwrap())
+            .unwrap()
+            .offset()
+            .translation
+            .vector;
+        assert!(
+            survivor_offset.norm() < 1e-4,
+            "the survivor must not move in the world: offset {:?}",
+            survivor_offset
+        );
+
+        // The phantom arm's Steiner inertia is gone: the same angular impulse
+        // now spins the plank far faster than it did about the old origin.
+        world.apply_angular_impulse(handle, Vector3::new(10.0, 0.0, 0.0));
+        let recentred_spin = world.body(handle).unwrap().angular_velocity().magnitude();
+
+        let mut stale = PhysicsWorld::new(PhysicsConfig::default());
+        let stale_handle = stale.create_body(RigidBodyDesc::dynamic().position(Point3::origin()));
+        stale.attach_collider(
+            stale_handle,
+            ColliderDesc::box_shape(Vector3::new(0.5, 0.1, 0.4))
+                .offset_translation(Vector3::new(0.0, 0.0, 4.0))
+                .density(500.0),
+        );
+        stale.apply_angular_impulse(stale_handle, Vector3::new(10.0, 0.0, 0.0));
+        let stale_spin = stale
+            .body(stale_handle)
+            .unwrap()
+            .angular_velocity()
+            .magnitude();
+
+        assert!(
+            recentred_spin > stale_spin * 10.0,
+            "recentred spin {recentred_spin} should dwarf the off-origin body's {stale_spin}"
         );
     }
 }

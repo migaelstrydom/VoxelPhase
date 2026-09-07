@@ -281,6 +281,14 @@ impl Collider {
         &self.offset
     }
 
+    /// Shift this collider's local offset by `delta`, expressed in the body
+    /// frame. Used when a body re-centres its origin on its colliders' centre
+    /// of mass: the body moves, every collider moves the opposite way, and the
+    /// collider stays where it is in the world.
+    pub(crate) fn shift_offset(&mut self, delta: Vector3<f32>) {
+        self.offset.translation.vector += delta;
+    }
+
     /// Compose the body transform with this collider's local offset.
     pub fn world_transform(
         &self,

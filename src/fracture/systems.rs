@@ -182,6 +182,12 @@ impl<'a> System<'a> for FractureSystem {
                 physics.world.detach_collider(trigger.body_handle, *ch);
             }
 
+            // The survivors are no longer laid out around the body origin, so
+            // move the origin onto them. Without this the remnant spins about
+            // the vanished compound's centre — a plank pivoting on a phantom
+            // axle metres away, too sluggish to push straight.
+            physics.world.recenter_on_colliders(trigger.body_handle);
+
             // Spawn each split-off child as an independent body.
             for group in &split_groups {
                 for info in group {
