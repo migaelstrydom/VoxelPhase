@@ -1,67 +1,8 @@
 //! What a heart critter is made of.
 
-use crate::animation::rig::FootShape;
+use crate::animation::rig::{DroopConfig, FootShape};
 use crate::animation::{FootPlacerConfig, LegRigDims};
 use crate::rendering::colour::Colour;
-
-/// A floppy ear.
-#[derive(Clone, Copy, Debug)]
-pub struct EarConfig {
-    /// Bones in the chain. Two is a hinge, four is a noodle.
-    pub segments: usize,
-    /// Root-to-tip length when the ear is held straight.
-    pub length: f32,
-    /// Radius where the ear meets the head.
-    pub root_radius: f32,
-    /// Radius at the tip.
-    pub tip_radius: f32,
-    /// How far the ear leans out to the side at rest, as a fraction of
-    /// its length. Zero stands it straight up.
-    pub splay: f32,
-    /// Total bend from root to tip at rest, in radians, away from the
-    /// root direction and downward.
-    ///
-    /// This, not gravity, is what makes an ear floppy-looking while it is
-    /// standing still. A straight rest shape reads as a horn however
-    /// loosely it is simulated.
-    pub curl: f32,
-    /// How hard gravity pulls on the ear, relative to the world's. Below
-    /// 1 makes a lighter, springier ear that lags the body more than it
-    /// droops.
-    pub weight: f32,
-    /// Fraction of its velocity the ear sheds each step. Higher is more
-    /// sluggish; at zero it swings forever.
-    pub damping: f32,
-    /// How hard the ear is pulled back toward its rest shape, in 1/s².
-    ///
-    /// This, not the bones, is what makes an ear an ear: a chain with only
-    /// gravity on it hangs straight down and lies flat against the head.
-    /// Raise it for a stiff ear that barely moves, lower it for one that
-    /// swings about and takes its time coming back.
-    pub shape_stiffness: f32,
-    /// Backward lean of the rest pose, as a fraction of ear length.
-    /// Positive sweeps the ears back off the face.
-    pub sweep_back: f32,
-    pub colour: Colour,
-}
-
-impl Default for EarConfig {
-    fn default() -> Self {
-        Self {
-            segments: 5,
-            length: 0.23,
-            root_radius: 0.032,
-            tip_radius: 0.01,
-            splay: 0.14,
-            curl: 1.15,
-            weight: 0.55,
-            damping: 0.08,
-            shape_stiffness: 200.0,
-            sweep_back: 0.2,
-            colour: Colour::new(0.98, 0.85, 0.30, 1.0),
-        }
-    }
-}
 
 /// The whole critter: a heart on two legs, with ears.
 ///
@@ -110,7 +51,8 @@ pub struct CritterRigConfig {
     /// the surface, not enough to read as a separate object.
     pub mark_relief: f32,
 
-    pub ear: EarConfig,
+    /// The floppy ears hanging off the top of the heart.
+    pub ear: DroopConfig,
 
     /// Pelvis height above the foot centres at rest, as a fraction of leg
     /// length. Under 1 because a standing leg keeps some bend.
@@ -215,7 +157,7 @@ impl Default for CritterRigConfig {
             mark_scale: 0.52,
             mark_relief: 0.004,
 
-            ear: EarConfig::default(),
+            ear: DroopConfig::default(),
 
             standing_height_ratio: 0.85,
             step_height: 0.05,

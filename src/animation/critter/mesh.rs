@@ -5,12 +5,11 @@
 
 use nalgebra::Vector3;
 
-use crate::animation::rig::RigMesh;
+use crate::animation::rig::{DroopSide, RigMesh};
 use crate::geometry::{generate_heart, HeartSpec};
 use crate::rendering::vertex::Vertex;
 
 use super::config::CritterRigConfig;
-use super::ears::EarSide;
 use super::skeleton::CritterSkeleton;
 
 pub fn generate_critter_mesh(
@@ -84,7 +83,7 @@ fn add_legs(mesh: &mut RigMesh, skeleton: &CritterSkeleton, config: &CritterRigC
 
 /// Both ears, tapering to a rounded tip.
 fn add_ears(mesh: &mut RigMesh, skeleton: &CritterSkeleton, config: &CritterRigConfig) {
-    for side in EarSide::BOTH {
+    for side in DroopSide::BOTH {
         let joints = skeleton.ears.joints(side);
         for (node, pair) in joints.windows(2).enumerate() {
             mesh.rod(

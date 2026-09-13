@@ -1,7 +1,7 @@
 //! Where every part of a heart critter is this frame.
 //!
 //! ```text
-//!   pelvis ──stub──► torso centre ──► ear anchors ──► Ears
+//!   pelvis ──stub──► torso centre ──► ear anchors ──► DroopPair
 //!     │
 //!     ├── hip L ──► Leg L ──► foot L
 //!     └── hip R ──► Leg R ──► foot R
@@ -12,12 +12,11 @@
 
 use nalgebra::{Point3, Vector3};
 
-use crate::animation::rig::{right_vector, Frame, Leg};
+use crate::animation::rig::{right_vector, DroopPair, Frame, Leg};
 use crate::animation::FootSide;
 use crate::skeleton::fabrik::FABRIKSolver;
 
 use super::config::CritterRigConfig;
-use super::ears::Ears;
 
 /// Where an ear meets the head, in the torso's local frame, as fractions
 /// of the heart's own width and height. The lobes of a heart are the only
@@ -50,7 +49,7 @@ pub struct CritterSkeleton {
     pub facing: Vector3<f32>,
     /// Left leg, then right.
     pub legs: [Leg; 2],
-    pub ears: Ears,
+    pub ears: DroopPair,
 
     solver: FABRIKSolver,
 }
@@ -73,7 +72,7 @@ impl CritterSkeleton {
 
         let torso = pelvis + Vector3::y() * config.torso_rise();
         let frame = Frame::upright(torso, facing);
-        let ears = Ears::new(config.ear, ear_anchors(config), &frame);
+        let ears = DroopPair::new(config.ear, ear_anchors(config), &frame);
 
         Self {
             pelvis,
