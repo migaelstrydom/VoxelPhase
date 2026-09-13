@@ -21,6 +21,7 @@ mod foot_placer;
 pub mod humanoid;
 mod legged;
 mod pose;
+pub mod rig;
 mod state;
 mod systems;
 

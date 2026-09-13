@@ -6,35 +6,18 @@ use nalgebra::{Point3, Vector2, Vector3};
 
 use crate::animation::config::CharacterRigConfig;
 use crate::animation::pose::PoseFragment;
+use crate::animation::rig::{right_vector, solve_knee, within_reach, FootShape, RigMesh};
 use crate::animation::state::AnimationState;
-use crate::{
-    geometry::{
-        generate_capsule, generate_cylinder, generate_sphere_indices, generate_sphere_vertices,
-    },
-    rendering::{colour::Colour, vertex::Vertex},
-    skeleton::fabrik::{FABRIKSolver, IKChain, IKTarget},
-};
+use crate::rendering::vertex::Vertex;
+use crate::skeleton::fabrik::FABRIKSolver;
 
 /// Visible foot dimensions. Independent from `foot_radius` (which keeps
 /// its physics / gait meaning).
-///
-/// Convention: `foot.position` is the foot *centre* — the capsule is
-/// drawn centred on this point, so the sole ends up one
-/// `FOOT_CAPSULE_RADIUS` below it. When the placer tracks per-foot
-/// terrain contact, the sole sits one radius below the ground (the
-/// half-submerged look we want).
-pub const FOOT_CAPSULE_RADIUS: f32 = 0.035;
-/// Half of the capsule axis length (distance from centre to hemisphere
-/// endcap centre along the foot's forward axis).
-pub const FOOT_CAPSULE_HALF_LENGTH: f32 = 0.075;
-/// Vertical thickness of the rendered foot (top tangent to bottom
-/// tangent). Useful for converting a terrain-surface y to a foot-centre
-/// y — the foot centre sits `FOOT_HEIGHT / 2` above the sole.
-pub const FOOT_HEIGHT: f32 = 2.0 * FOOT_CAPSULE_RADIUS;
-/// Forward shift of the capsule centre from the ankle so the heel is
-/// shorter than the toe. Toe extent = half_length + offset; heel extent
-/// = half_length - offset.
-pub const FOOT_ANKLE_FORWARD_OFFSET: f32 = 0.02;
+pub const FOOT_SHAPE: FootShape = FootShape {
+    radius: 0.035,
+    half_length: 0.075,
+    ankle_forward_offset: 0.02,
+};
 
 /// Joint positions for a humanoid skeleton.
 ///
@@ -268,7 +251,7 @@ impl Skeleton {
         let right_bend = (facing + right * 0.2).normalize();
 
         // Left leg IK
-        self.left_knee = solve_leg_ik(
+        self.left_knee = solve_knee(
             &mut self.ik_solver,
             self.left_hip,
             self.left_foot,
@@ -279,7 +262,7 @@ impl Skeleton {
         );
 
         // Right leg IK
-        self.right_knee = solve_leg_ik(
+        self.right_knee = solve_knee(
             &mut self.ik_solver,
             self.right_hip,
             self.right_foot,
@@ -318,72 +301,6 @@ impl Skeleton {
             right_bend,
         );
     }
-}
-
-/// Solve IK for a single leg and return the knee position.
-fn solve_leg_ik(
-    solver: &mut FABRIKSolver,
-    hip: Point3<f32>,
-    foot: Point3<f32>,
-    current_knee: Point3<f32>,
-    upper_length: f32,
-    lower_length: f32,
-    bend_dir: Vector3<f32>,
-) -> Point3<f32> {
-    // Create temporary position array for FABRIK
-    let mut positions = vec![hip, current_knee, foot];
-    let chain = IKChain::new(vec![0, 1, 2], &positions);
-    let target = IKTarget::new(foot);
-
-    solver.solve(&mut positions, &chain, &target, true);
-
-    // Apply knee bend bias and constrain
-    let mut knee = positions[1] + bend_dir * 0.05;
-    constrain_knee(&mut knee, &hip, &foot, upper_length, lower_length, bend_dir);
-
-    knee
-}
-
-/// Constrain knee position to maintain bone lengths.
-fn constrain_knee(
-    knee: &mut Point3<f32>,
-    hip: &Point3<f32>,
-    foot: &Point3<f32>,
-    upper: f32,
-    lower: f32,
-    bend_dir: Vector3<f32>,
-) {
-    let hip_to_foot = foot - hip;
-    let dist = hip_to_foot.magnitude();
-
-    if dist < 0.001 {
-        // Foot at hip - put knee forward
-        *knee = *hip + bend_dir * upper;
-        return;
-    }
-
-    // Clamp distance to valid range
-    let dist = dist.clamp(0.01, upper + lower - 0.01);
-
-    // Law of cosines to find knee angle
-    let cos_angle =
-        ((upper * upper + dist * dist - lower * lower) / (2.0 * upper * dist)).clamp(-1.0, 1.0);
-    let angle = cos_angle.acos();
-
-    // Direction from hip to foot
-    let forward = hip_to_foot.normalize();
-
-    // Compute orthogonal bend direction
-    let bend_axis = forward.cross(&bend_dir);
-    let bend_dir_orth = if bend_axis.magnitude() > 0.01 {
-        bend_axis.cross(&forward).normalize()
-    } else {
-        Vector3::y()
-    };
-
-    // Position knee using law of cosines result
-    let knee_offset = forward * (angle.cos() * upper) + bend_dir_orth * (angle.sin() * upper);
-    *knee = hip + knee_offset;
 }
 
 /// Solve IK for an arm and return the elbow position.
@@ -429,391 +346,86 @@ fn solve_arm_ik(
     shoulder + elbow_offset
 }
 
-/// `target` pulled back on to the sphere the limb can actually reach.
-///
-/// A hair under the full length, so the IK solver is never handed a perfectly
-/// straight chain it has to pick a knee plane for.
-fn within_reach(joint: Point3<f32>, target: Point3<f32>, length: f32) -> Point3<f32> {
-    const REACHABLE: f32 = 0.999;
-    let offset = target - joint;
-    let distance = offset.magnitude();
-    let limit = length * REACHABLE;
-    if distance <= limit {
-        return target;
-    }
-    joint + offset * (limit / distance.max(1e-6))
-}
-
-#[inline]
-fn right_vector(facing: Vector3<f32>) -> Vector3<f32> {
-    facing.cross(&Vector3::y()).normalize()
-}
-
 /// Generate a simple mesh for the humanoid skeleton.
 pub fn generate_character_mesh(
     skeleton: &Skeleton,
     config: &CharacterRigConfig,
 ) -> (Vec<Vertex>, Vec<u32>) {
-    let mut vertices = Vec::new();
-    let mut indices = Vec::new();
+    let mut mesh = RigMesh::new(config.mesh_segments);
 
-    let segments = config.mesh_segments;
     let leg_rod_radius = config.knee_radius * 0.5;
     let arm_rod_radius = config.elbow_radius * 0.5;
 
-    // === Lower body cylinders ===
-    // Upper legs (hip to knee)
-    add_cylinder_to_mesh(
-        &mut vertices,
-        &mut indices,
-        skeleton.left_hip,
-        skeleton.left_knee,
-        leg_rod_radius,
-        segments,
-        config.leg_colour,
-    );
-    add_cylinder_to_mesh(
-        &mut vertices,
-        &mut indices,
-        skeleton.right_hip,
-        skeleton.right_knee,
-        leg_rod_radius,
-        segments,
-        config.leg_colour,
-    );
-    // Lower legs (knee to foot)
-    add_cylinder_to_mesh(
-        &mut vertices,
-        &mut indices,
-        skeleton.left_knee,
-        skeleton.left_foot,
-        leg_rod_radius,
-        segments,
-        config.leg_colour,
-    );
-    add_cylinder_to_mesh(
-        &mut vertices,
-        &mut indices,
-        skeleton.right_knee,
-        skeleton.right_foot,
-        leg_rod_radius,
-        segments,
-        config.leg_colour,
-    );
-
-    // === Upper body cylinders ===
-    // Torso (pelvis to chest)
-    add_cylinder_to_mesh(
-        &mut vertices,
-        &mut indices,
+    // === Bones ===
+    // Both sides of each segment before moving down the limb, so the
+    // mesh is laid out the way the rig reads.
+    for (upper, lower) in [
+        (skeleton.left_hip, skeleton.left_knee),
+        (skeleton.right_hip, skeleton.right_knee),
+        (skeleton.left_knee, skeleton.left_foot),
+        (skeleton.right_knee, skeleton.right_foot),
+    ] {
+        mesh.rod(upper, lower, leg_rod_radius, config.leg_colour);
+    }
+    mesh.rod(
         skeleton.pelvis,
         skeleton.chest,
         config.torso_radius,
-        segments,
         config.body_colour,
     );
-    // Neck (chest to neck)
-    add_cylinder_to_mesh(
-        &mut vertices,
-        &mut indices,
+    mesh.rod(
         skeleton.chest,
         skeleton.neck,
         config.torso_radius * 0.5,
-        segments,
         config.body_colour,
     );
-    // Upper arms (shoulder to elbow)
-    add_cylinder_to_mesh(
-        &mut vertices,
-        &mut indices,
-        skeleton.left_shoulder,
-        skeleton.left_elbow,
-        arm_rod_radius,
-        segments,
-        config.leg_colour,
-    );
-    add_cylinder_to_mesh(
-        &mut vertices,
-        &mut indices,
-        skeleton.right_shoulder,
-        skeleton.right_elbow,
-        arm_rod_radius,
-        segments,
-        config.leg_colour,
-    );
-    // Lower arms (elbow to hand)
-    add_cylinder_to_mesh(
-        &mut vertices,
-        &mut indices,
-        skeleton.left_elbow,
-        skeleton.left_hand,
-        arm_rod_radius,
-        segments,
-        config.leg_colour,
-    );
-    add_cylinder_to_mesh(
-        &mut vertices,
-        &mut indices,
-        skeleton.right_elbow,
-        skeleton.right_hand,
-        arm_rod_radius,
-        segments,
-        config.leg_colour,
-    );
+    for (upper, lower) in [
+        (skeleton.left_shoulder, skeleton.left_elbow),
+        (skeleton.right_shoulder, skeleton.right_elbow),
+        (skeleton.left_elbow, skeleton.left_hand),
+        (skeleton.right_elbow, skeleton.right_hand),
+    ] {
+        mesh.rod(upper, lower, arm_rod_radius, config.leg_colour);
+    }
 
-    // === Lower body spheres ===
-    add_sphere_to_mesh(
-        &mut vertices,
-        &mut indices,
-        skeleton.pelvis,
-        config.pelvis_radius,
-        segments,
-        config.body_colour,
-    );
-    add_sphere_to_mesh(
-        &mut vertices,
-        &mut indices,
-        skeleton.left_knee,
-        config.knee_radius,
-        segments,
-        config.leg_colour,
-    );
-    add_sphere_to_mesh(
-        &mut vertices,
-        &mut indices,
-        skeleton.right_knee,
-        config.knee_radius,
-        segments,
-        config.leg_colour,
-    );
-    add_foot_capsule_to_mesh(
-        &mut vertices,
-        &mut indices,
+    // === Lower body joints ===
+    mesh.sphere(skeleton.pelvis, config.pelvis_radius, config.body_colour);
+    mesh.sphere(skeleton.left_knee, config.knee_radius, config.leg_colour);
+    mesh.sphere(skeleton.right_knee, config.knee_radius, config.leg_colour);
+    mesh.foot(
+        FOOT_SHAPE,
         skeleton.left_foot,
         skeleton.left_foot_forward,
         skeleton.left_foot_up,
-        segments,
         config.foot_colour,
     );
-    add_foot_capsule_to_mesh(
-        &mut vertices,
-        &mut indices,
+    mesh.foot(
+        FOOT_SHAPE,
         skeleton.right_foot,
         skeleton.right_foot_forward,
         skeleton.right_foot_up,
-        segments,
         config.foot_colour,
     );
-    add_sphere_to_mesh(
-        &mut vertices,
-        &mut indices,
-        skeleton.left_hip,
-        config.hip_radius,
-        segments,
-        config.hip_colour,
-    );
-    add_sphere_to_mesh(
-        &mut vertices,
-        &mut indices,
-        skeleton.right_hip,
-        config.hip_radius,
-        segments,
-        config.hip_colour,
-    );
+    mesh.sphere(skeleton.left_hip, config.hip_radius, config.hip_colour);
+    mesh.sphere(skeleton.right_hip, config.hip_radius, config.hip_colour);
 
-    // === Upper body spheres ===
-    // Chest
-    add_sphere_to_mesh(
-        &mut vertices,
-        &mut indices,
-        skeleton.chest,
-        config.torso_radius,
-        segments,
-        config.body_colour,
-    );
-    // Shoulders
-    add_sphere_to_mesh(
-        &mut vertices,
-        &mut indices,
+    // === Upper body joints ===
+    mesh.sphere(skeleton.chest, config.torso_radius, config.body_colour);
+    mesh.sphere(
         skeleton.left_shoulder,
         config.shoulder_radius,
-        segments,
         config.leg_colour,
     );
-    add_sphere_to_mesh(
-        &mut vertices,
-        &mut indices,
+    mesh.sphere(
         skeleton.right_shoulder,
         config.shoulder_radius,
-        segments,
         config.leg_colour,
     );
-    // Elbows
-    add_sphere_to_mesh(
-        &mut vertices,
-        &mut indices,
-        skeleton.left_elbow,
-        config.elbow_radius,
-        segments,
-        config.leg_colour,
-    );
-    add_sphere_to_mesh(
-        &mut vertices,
-        &mut indices,
-        skeleton.right_elbow,
-        config.elbow_radius,
-        segments,
-        config.leg_colour,
-    );
-    // Hands
-    add_sphere_to_mesh(
-        &mut vertices,
-        &mut indices,
-        skeleton.left_hand,
-        config.hand_radius,
-        segments,
-        config.foot_colour,
-    );
-    add_sphere_to_mesh(
-        &mut vertices,
-        &mut indices,
-        skeleton.right_hand,
-        config.hand_radius,
-        segments,
-        config.foot_colour,
-    );
-    // Head
-    add_sphere_to_mesh(
-        &mut vertices,
-        &mut indices,
-        skeleton.head,
-        config.head_radius,
-        segments,
-        config.head_colour,
-    );
+    mesh.sphere(skeleton.left_elbow, config.elbow_radius, config.leg_colour);
+    mesh.sphere(skeleton.right_elbow, config.elbow_radius, config.leg_colour);
+    mesh.sphere(skeleton.left_hand, config.hand_radius, config.foot_colour);
+    mesh.sphere(skeleton.right_hand, config.hand_radius, config.foot_colour);
+    mesh.sphere(skeleton.head, config.head_radius, config.head_colour);
 
-    (vertices, indices)
-}
-
-fn add_sphere_to_mesh(
-    vertices: &mut Vec<Vertex>,
-    indices: &mut Vec<u32>,
-    center: Point3<f32>,
-    radius: f32,
-    segments: u32,
-    colour: crate::rendering::Colour,
-) {
-    let base_index = vertices.len() as u32;
-    let sphere_verts = generate_sphere_vertices(radius, segments, segments, colour);
-    let sphere_indices = generate_sphere_indices(segments, segments);
-
-    for mut vert in sphere_verts {
-        vert.pos += center.coords;
-        vertices.push(vert);
-    }
-    indices.extend(sphere_indices.iter().map(|i| i + base_index));
-}
-
-/// Add a horizontal foot capsule centred on `position`. When `position`
-/// tracks the per-foot terrain contact, the sole ends up one
-/// `FOOT_CAPSULE_RADIUS` below the ground — i.e. the foot is half-
-/// submerged while planted, which reads better on a stylised voxel
-/// character than a capsule balanced exactly on the surface.
-fn add_foot_capsule_to_mesh(
-    vertices: &mut Vec<Vertex>,
-    indices: &mut Vec<u32>,
-    position: Point3<f32>,
-    forward: Vector3<f32>,
-    foot_up: Vector3<f32>,
-    segments: u32,
-    colour: Colour,
-) {
-    let base_index = vertices.len() as u32;
-    let (caps_verts, caps_indices) = generate_capsule(
-        FOOT_CAPSULE_HALF_LENGTH,
-        FOOT_CAPSULE_RADIUS,
-        segments,
-        (segments / 2).max(4),
-        colour,
-    );
-
-    // Right-handed basis: local Y → `axis` (toe direction, in the ground
-    // plane), local X → `up` (sole normal), local Z → lateral. Build from
-    // `foot_up` so a tilted foot tips its toe along the slope instead of
-    // staying horizontal.
-    let up = foot_up.try_normalize(1e-4).unwrap_or_else(Vector3::y);
-    let forward_h = project_to_horizontal(forward);
-    let lateral = up.cross(&forward_h).try_normalize(1e-4).unwrap_or_else(|| {
-        // Foot up is already aligned with the intended forward (nearly
-        // vertical foot). Fall back to facing-cross-Y lateral.
-        Vector3::y().cross(&forward_h).normalize()
-    });
-    let axis = lateral.cross(&up).normalize();
-
-    // Centred on `position` and shifted forward so the toe sticks out
-    // further than the heel.
-    let centre = position + axis * FOOT_ANKLE_FORWARD_OFFSET;
-
-    for mut vert in caps_verts {
-        let local = vert.pos;
-        let rotated = up * local.x + axis * local.y + lateral * local.z;
-        vert.pos = (centre + rotated).coords;
-        // Rotate the vertex normal with the same basis so lighting
-        // reflects the horizontal orientation.
-        let n = vert.normal;
-        vert.normal = up * n.x + axis * n.y + lateral * n.z;
-        vertices.push(vert);
-    }
-    indices.extend(caps_indices.iter().map(|i| i + base_index));
-}
-
-fn project_to_horizontal(v: Vector3<f32>) -> Vector3<f32> {
-    let planar = Vector3::new(v.x, 0.0, v.z);
-    planar
-        .try_normalize(1e-4)
-        .unwrap_or_else(|| Vector3::new(0.0, 0.0, 1.0))
-}
-
-fn add_cylinder_to_mesh(
-    vertices: &mut Vec<Vertex>,
-    indices: &mut Vec<u32>,
-    start: Point3<f32>,
-    end: Point3<f32>,
-    radius: f32,
-    segments: u32,
-    colour: Colour,
-) {
-    let base_index = vertices.len() as u32;
-    let (cylinder_verts, cylinder_indices) =
-        generate_cylinder(start, end, radius, segments, colour);
-
-    vertices.extend(cylinder_verts);
-    indices.extend(cylinder_indices.iter().map(|i| i + base_index));
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Nothing upstream refuses an unreachable foot, so this is the last place
-    /// a leg can be kept the length it is.
-    #[test]
-    fn a_foot_within_reach_is_left_exactly_where_it_was_asked_for() {
-        let hip = Point3::new(1.0, 1.0, 0.0);
-        let foot = Point3::new(1.2, 0.6, 0.1);
-        assert_eq!(within_reach(hip, foot, 0.5), foot);
-    }
-
-    #[test]
-    fn an_unreachable_foot_is_pulled_on_to_the_leg_without_turning_it() {
-        let hip = Point3::new(0.0, 1.0, 0.0);
-        let foot = Point3::new(0.0, -1.0, 0.0);
-        let clamped = within_reach(hip, foot, 0.5);
-
-        let reach = (clamped - hip).magnitude();
-        assert!(reach <= 0.5, "leg drawn {reach} long against a 0.5 m leg");
-        assert!(reach > 0.49, "and not shortened further than it had to be");
-        let direction = (clamped - hip).normalize().dot(&(foot - hip).normalize());
-        assert!(direction > 0.999, "the leg still points at the target");
-    }
+    mesh.into_parts()
 }
