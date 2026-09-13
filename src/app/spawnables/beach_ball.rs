@@ -19,7 +19,8 @@ use crate::rendering::physical_finish::PhysicalSurface;
 use crate::systems::PhysicsResource;
 
 use super::shared::finish::{ColliderSurface, MaterialSurface};
-use super::shared::textures::rand_range;
+use super::shared::textures::seed_from_position;
+use super::shared::textures::TextureRng;
 
 /// The ball's one dimension. Public because a beach ball is a stack item, and
 /// working out how much ground a stack covers means knowing how wide its
@@ -58,13 +59,14 @@ impl Spawnable for BeachBallDef {
         let initial_pos = Point3::new(self.pos.0, self.pos.1, self.pos.2);
         let material = materials[0];
 
+        let rng = &mut TextureRng::new(seed_from_position(self.pos, 0));
         let config = MagicSphereConfig {
-            base_hue: rand::random::<f32>(),
-            spiral_frequency: rand_range(2.0, 5.0),
-            spiral_tightness: rand_range(1.5, 4.0),
-            accent_hue_offset: rand_range(0.2, 0.45),
-            color_variation: rand_range(0.1, 0.35),
-            glow_intensity: rand_range(0.85, 1.15),
+            base_hue: rng.unit(),
+            spiral_frequency: rng.range(2.0, 5.0),
+            spiral_tightness: rng.range(1.5, 4.0),
+            accent_hue_offset: rng.range(0.2, 0.45),
+            color_variation: rng.range(0.1, 0.35),
+            glow_intensity: rng.range(0.85, 1.15),
         };
 
         let parts = vec![ModelPart::new(vec![MeshPrimitive {

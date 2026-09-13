@@ -10,6 +10,8 @@ use specs::{Builder, Entity, World, WorldExt};
 
 use super::shared::finish::{ColliderSurface, MaterialSurface};
 use super::shared::models::cuboid_model;
+use super::shared::textures::seed_from_position;
+use super::shared::textures::TextureRng;
 use super::shared::textures::*;
 use super::{MaterialCtx, Spawnable};
 use crate::components::{
@@ -89,9 +91,10 @@ impl Spawnable for JengaDef {
     fn create_materials(&self, ctx: &mut MaterialCtx) -> EngineResult<Vec<MaterialId>> {
         let count = self.total_blocks();
         let mut mats = Vec::with_capacity(count);
-        for _ in 0..count {
+        for block in 0..count {
             mats.push(create_jenga_wood_material(
                 self.surface(),
+                seed_from_position(self.base, block as u32),
                 ctx.textures,
                 ctx.materials,
             )?);
@@ -176,10 +179,11 @@ impl Spawnable for JengaDef {
 
 fn create_jenga_wood_material(
     surface: PhysicalSurface,
+    seed: u32,
     texture_manager: &TextureManager,
     material_builder: &mut MaterialManagerBuilder,
 ) -> EngineResult<MaterialId> {
-    let pixels = generate_jenga_wood_texture();
+    let pixels = generate_jenga_wood_texture(seed);
     let texture = texture_manager.create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &pixels, true)?;
     let material = Material::textured(texture).with_derived_finish(surface);
     Ok(material_builder.register(material))
@@ -187,21 +191,22 @@ fn create_jenga_wood_material(
 
 /// Procedural pale wood: light birch/maple base with horizontal grain lines
 /// and subtle knot features — the classic Jenga block look.
-fn generate_jenga_wood_texture() -> Vec<u8> {
+fn generate_jenga_wood_texture(seed: u32) -> Vec<u8> {
+    let rng = &mut TextureRng::new(seed);
     let size = TEXTURE_SIZE;
     let mut pixels = Vec::with_capacity((size * size * 4) as usize);
 
-    let warmth = rand_range(-0.02, 0.02);
+    let warmth = rng.range(-0.02, 0.02);
     let base = Rgb::new(0.88 + warmth, 0.78 + warmth * 0.8, 0.62 + warmth * 0.6);
     let grain_dark = Rgb::new(0.72, 0.60, 0.44);
 
-    let seed_grain = rand_u32();
-    let seed_fine = rand_u32();
-    let seed_knot = rand_u32();
+    let seed_grain = rng.u32();
+    let seed_fine = rng.u32();
+    let seed_knot = rng.u32();
 
-    let knot_u = rand_range(0.2, 0.8);
-    let knot_v = rand_range(0.3, 0.7);
-    let has_knot = rand_range(0.0, 1.0) > 0.7;
+    let knot_u = rng.range(0.2, 0.8);
+    let knot_v = rng.range(0.3, 0.7);
+    let has_knot = rng.range(0.0, 1.0) > 0.7;
 
     for y in 0..size {
         for x in 0..size {

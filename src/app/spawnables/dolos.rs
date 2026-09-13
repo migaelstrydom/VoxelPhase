@@ -11,6 +11,7 @@ use specs::{Builder, Entity, World, WorldExt};
 
 use super::shared::models::compound_cuboid_model;
 use super::shared::orientation::Yaw;
+use super::shared::textures::seed_from_position;
 use super::{MaterialCtx, Spawnable};
 use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
@@ -95,7 +96,7 @@ impl Spawnable for DolosDef {
         Ok(vec![ctx.patterned(
             &self.substance(),
             &pattern::CONCRETE,
-            rand::random::<u32>(),
+            seed_from_position(self.pos, 0),
             TEXTURE_SIZE,
         )?])
     }

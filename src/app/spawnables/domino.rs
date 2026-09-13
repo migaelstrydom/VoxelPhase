@@ -22,6 +22,8 @@ use crate::resources::textures::TextureManager;
 use crate::systems::PhysicsResource;
 use crate::utils::noise::fbm_2d_periodic;
 
+use super::shared::textures::seed_from_position;
+use super::shared::textures::TextureRng;
 use specs::{Builder, WorldExt};
 
 const TEXTURE_SIZE: u32 = 128;
@@ -79,6 +81,7 @@ impl Spawnable for DominoDef {
             mats.push(create_domino_material(
                 i,
                 self.count,
+                seed_from_position(self.base, i),
                 self.surface(),
                 ctx.textures,
                 ctx.materials,
@@ -155,11 +158,12 @@ impl Spawnable for DominoDef {
 fn create_domino_material(
     index: u32,
     total: u32,
+    seed: u32,
     surface: PhysicalSurface,
     texture_manager: &TextureManager,
     material_builder: &mut MaterialManagerBuilder,
 ) -> EngineResult<MaterialId> {
-    let pixels = generate_domino_tile(index, total);
+    let pixels = generate_domino_tile(index, total, seed);
     let texture = texture_manager.create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &pixels, true)?;
     let material = Material::textured(texture).with_derived_finish(surface);
     Ok(material_builder.register(material))
@@ -167,18 +171,19 @@ fn create_domino_material(
 
 /// Procedural domino tile: ivory/cream body with a coloured centre stripe
 /// and pip dots. Each domino in the row gets a different pip count and hue.
-fn generate_domino_tile(index: u32, total: u32) -> Vec<u8> {
+fn generate_domino_tile(index: u32, total: u32, seed: u32) -> Vec<u8> {
+    let rng = &mut TextureRng::new(seed);
     let size = TEXTURE_SIZE;
     let mut pixels = Vec::with_capacity((size * size * 4) as usize);
 
-    let seed = rand_u32();
+    let seed = rng.u32();
 
     // Ivory base with subtle per-tile warmth variation
-    let warmth = rand_range(-0.02, 0.02);
+    let warmth = rng.range(-0.02, 0.02);
     let base = Rgb::new(0.92 + warmth, 0.90 + warmth, 0.85 + warmth);
 
     // Each domino gets a unique accent hue spread evenly around the colour wheel
-    let hue = (index as f32 / total.max(1) as f32) * 6.0 + rand_range(0.0, 0.5);
+    let hue = (index as f32 / total.max(1) as f32) * 6.0 + rng.range(0.0, 0.5);
     let accent = hue_to_rgb(hue, 0.55, 0.75);
 
     // Pip count: 1–6 based on position in the row

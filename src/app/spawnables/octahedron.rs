@@ -9,6 +9,8 @@ use specs::{Builder, Entity, World, WorldExt};
 use super::shared::finish::{ColliderSurface, MaterialSurface};
 use super::shared::models::{build_convex_hull, convex_solid_model, SolidFace};
 use super::shared::textures::hue_to_rgb;
+use super::shared::textures::seed_from_position;
+use super::shared::textures::TextureRng;
 use super::{MaterialCtx, Spawnable};
 use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
@@ -68,7 +70,7 @@ impl Spawnable for OctahedronDef {
     }
 
     fn create_materials(&self, ctx: &mut MaterialCtx) -> EngineResult<Vec<MaterialId>> {
-        let pixels = generate_metallic_texture();
+        let pixels = generate_metallic_texture(seed_from_position(self.pos, 0));
         let texture = ctx
             .textures
             .create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &pixels, true)?;
@@ -179,13 +181,14 @@ fn octahedron_geometry(edge: f32) -> (Vec<Vector3<f32>>, Vec<SolidFace>) {
 }
 
 /// Procedural metallic/brushed texture.
-fn generate_metallic_texture() -> Vec<u8> {
+fn generate_metallic_texture(seed: u32) -> Vec<u8> {
+    let rng = &mut TextureRng::new(seed);
     let size = TEXTURE_SIZE;
     let mut pixels = Vec::with_capacity((size * size * 4) as usize);
 
-    let tint = rand::random::<f32>() * 6.0;
+    let tint = rng.unit() * 6.0;
     let base = hue_to_rgb(tint, 0.20, 0.70);
-    let seed = rand::random::<u32>();
+    let seed = rng.u32();
 
     for y in 0..size {
         for x in 0..size {

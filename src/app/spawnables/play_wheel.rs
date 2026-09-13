@@ -15,6 +15,7 @@ use specs::{Builder, Entity, World, WorldExt};
 
 use super::shared::finish::{ColliderSurface, MaterialSurface};
 use super::shared::models::{build_convex_hull, SolidFace};
+use super::shared::textures::seed_from_ground;
 use super::shared::textures::Rgb;
 use super::{MaterialCtx, Spawnable};
 use crate::components::{
@@ -88,7 +89,7 @@ impl Spawnable for PlayWheelDef {
     }
 
     fn create_materials(&self, ctx: &mut MaterialCtx) -> EngineResult<Vec<MaterialId>> {
-        let seed = rand::random::<u32>();
+        let seed = seed_from_ground(self.pos, 0);
 
         let top_pixels = generate_wheel_face_texture(seed, false);
         let top_tex =

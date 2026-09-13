@@ -10,6 +10,8 @@ use specs::{Builder, Entity, World, WorldExt};
 
 use super::shared::models::multi_material_compound_cuboid_model;
 use super::shared::orientation::Yaw;
+use super::shared::textures::seed_from_position;
+use super::shared::textures::TextureRng;
 use super::shared::textures::*;
 use super::spawnable::{MaterialCtx, Spawnable};
 use crate::components::{
@@ -86,13 +88,13 @@ impl Spawnable for TrampolineDef {
 
     fn create_materials(&self, ctx: &mut MaterialCtx) -> EngineResult<Vec<MaterialId>> {
         // [0] = fabric pad, [1] = metal legs
-        let fabric_pixels = generate_trampoline_fabric();
+        let fabric_pixels = generate_trampoline_fabric(seed_from_position(self.pos, 0));
         let fabric_tex =
             ctx.textures
                 .create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &fabric_pixels, true)?;
         let fabric_mat = ctx.materials.register(Material::textured(fabric_tex));
 
-        let metal_pixels = generate_leg_metal();
+        let metal_pixels = generate_leg_metal(seed_from_position(self.pos, 1));
         let metal_tex =
             ctx.textures
                 .create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &metal_pixels, true)?;
@@ -187,12 +189,13 @@ impl Spawnable for TrampolineDef {
 // ---------------------------------------------------------------------------
 
 /// Generates a brushed steel texture for the trampoline legs.
-fn generate_leg_metal() -> Vec<u8> {
+fn generate_leg_metal(seed: u32) -> Vec<u8> {
+    let rng = &mut TextureRng::new(seed);
     let size = TEXTURE_SIZE;
     let mut pixels = Vec::with_capacity((size * size * 4) as usize);
 
     let base = Rgb::new(0.55, 0.57, 0.62);
-    let seed = rand_u32();
+    let seed = rng.u32();
 
     for y in 0..size {
         for x in 0..size {
@@ -221,15 +224,16 @@ fn generate_leg_metal() -> Vec<u8> {
 
 /// Generates a woven fabric texture with bold concentric target rings
 /// and a cross-hatch weave pattern.
-fn generate_trampoline_fabric() -> Vec<u8> {
+fn generate_trampoline_fabric(seed: u32) -> Vec<u8> {
+    let rng = &mut TextureRng::new(seed);
     let size = TEXTURE_SIZE;
     let mut pixels = Vec::with_capacity((size * size * 4) as usize);
 
     // Pick a vibrant base colour for the fabric
-    let hue = rand_range(0.0, 6.0);
+    let hue = rng.range(0.0, 6.0);
     let base = hue_to_rgb(hue, 0.70, 0.85);
     let accent = hue_to_rgb((hue + 3.0) % 6.0, 0.65, 0.90);
-    let seed = rand_u32();
+    let seed = rng.u32();
 
     for y in 0..size {
         for x in 0..size {

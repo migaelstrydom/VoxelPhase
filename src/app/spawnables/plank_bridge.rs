@@ -12,6 +12,8 @@ use specs::{Builder, Entity, World, WorldExt};
 use super::shared::finish::{ColliderSurface, MaterialSurface};
 use super::shared::models::multi_material_rotated_compound_cuboid_model;
 use super::shared::orientation::Yaw;
+use super::shared::textures::seed_from_position;
+use super::shared::textures::TextureRng;
 use super::shared::textures::*;
 use super::spawnable::{MaterialCtx, Spawnable};
 use crate::components::{
@@ -124,7 +126,7 @@ impl Spawnable for PlankBridgeDef {
     }
 
     fn create_materials(&self, ctx: &mut MaterialCtx) -> EngineResult<Vec<MaterialId>> {
-        let beam_pixels = generate_beam_wood();
+        let beam_pixels = generate_beam_wood(seed_from_position(self.pos, 0));
         let beam_tex =
             ctx.textures
                 .create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &beam_pixels, true)?;
@@ -132,7 +134,7 @@ impl Spawnable for PlankBridgeDef {
             .materials
             .register(Material::textured(beam_tex).with_derived_finish(self.surface()));
 
-        let plank_pixels = generate_plank_wood();
+        let plank_pixels = generate_plank_wood(seed_from_position(self.pos, 1));
         let plank_tex =
             ctx.textures
                 .create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &plank_pixels, true)?;
@@ -165,7 +167,7 @@ impl Spawnable for PlankBridgeDef {
         let base_spacing = usable_length / (self.plank_count as f32);
         let start_z = -usable_length / 2.0;
 
-        let seed = rand_u32();
+        let seed = seed_from_position(self.pos, 2);
         let min_gap = 0.02;
 
         // Pre-compute per-plank randomised properties.
@@ -320,12 +322,13 @@ fn pseudo_range(hash: u32, channel: u32) -> f32 {
 // ---------------------------------------------------------------------------
 
 /// Weathered beam wood — dark, knotty, with prominent grain.
-fn generate_beam_wood() -> Vec<u8> {
+fn generate_beam_wood(seed: u32) -> Vec<u8> {
+    let rng = &mut TextureRng::new(seed);
     let size = TEXTURE_SIZE;
     let mut pixels = Vec::with_capacity((size * size * 4) as usize);
 
     let base = Rgb::new(0.35, 0.24, 0.14);
-    let seed = rand_u32();
+    let seed = rng.u32();
 
     for y in 0..size {
         for x in 0..size {
@@ -359,14 +362,15 @@ fn generate_beam_wood() -> Vec<u8> {
 }
 
 /// Lighter plank wood — varied, with saw marks and nail holes.
-fn generate_plank_wood() -> Vec<u8> {
+fn generate_plank_wood(seed: u32) -> Vec<u8> {
+    let rng = &mut TextureRng::new(seed);
     let size = TEXTURE_SIZE;
     let mut pixels = Vec::with_capacity((size * size * 4) as usize);
 
     // Randomly pick between lighter wood tones for variety.
-    let warmth = rand_range(-0.03, 0.03);
+    let warmth = rng.range(-0.03, 0.03);
     let base = Rgb::new(0.52 + warmth, 0.38 + warmth * 0.7, 0.22 + warmth * 0.4);
-    let seed = rand_u32();
+    let seed = rng.u32();
 
     for y in 0..size {
         for x in 0..size {

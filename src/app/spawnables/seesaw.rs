@@ -13,6 +13,7 @@ use specs::{Builder, Entity, World, WorldExt};
 
 use super::shared::finish::{ColliderSurface, MaterialSurface};
 use super::shared::models::{build_convex_hull, convex_solid_model, SolidFace};
+use super::shared::textures::seed_from_ground;
 use super::shared::textures::Rgb;
 use super::{MaterialCtx, Spawnable};
 use crate::components::{
@@ -108,7 +109,7 @@ impl Spawnable for SeesawDef {
     }
 
     fn create_materials(&self, ctx: &mut MaterialCtx) -> EngineResult<Vec<MaterialId>> {
-        let seed = rand::random::<u32>();
+        let seed = seed_from_ground(self.pos, 0);
 
         let beam_pixels = generate_painted_wood(seed, Rgb::new(0.85, 0.65, 0.15));
         let beam_tex =

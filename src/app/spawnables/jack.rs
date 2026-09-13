@@ -22,6 +22,8 @@ use crate::rendering::physical_finish::PhysicalSurface;
 use crate::systems::PhysicsResource;
 
 use super::shared::textures::hue_to_rgb;
+use super::shared::textures::seed_from_position;
+use super::shared::textures::TextureRng;
 use crate::utils::noise::fbm_2d_periodic;
 
 const TEXTURE_SIZE: u32 = 128;
@@ -79,7 +81,7 @@ impl Spawnable for JackDef {
     }
 
     fn create_materials(&self, ctx: &mut MaterialCtx) -> EngineResult<Vec<MaterialId>> {
-        let pixels = generate_jack_metal(rand::random::<u32>());
+        let pixels = generate_jack_metal(seed_from_position(self.pos, 0));
         let texture = ctx
             .textures
             .create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &pixels, true)?;
@@ -149,7 +151,7 @@ fn generate_jack_metal(seed: u32) -> Vec<u8> {
     let mut pixels = Vec::with_capacity((size * size * 4) as usize);
 
     // Random tint — brassy, steely, or copperish.
-    let hue = rand::random::<f32>() * 6.0;
+    let hue = TextureRng::new(seed).unit() * 6.0;
     let base = hue_to_rgb(hue, 0.25, 0.78);
 
     for y in 0..size {

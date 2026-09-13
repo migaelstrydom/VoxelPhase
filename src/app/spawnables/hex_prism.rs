@@ -9,6 +9,8 @@ use specs::{Builder, Entity, World, WorldExt};
 use super::shared::finish::{ColliderSurface, MaterialSurface};
 use super::shared::models::{build_convex_hull, convex_solid_model, SolidFace};
 use super::shared::orientation::Yaw;
+use super::shared::textures::seed_from_position;
+use super::shared::textures::TextureRng;
 use super::shared::textures::*;
 use super::{MaterialCtx, Spawnable};
 use crate::components::{
@@ -74,7 +76,12 @@ impl Spawnable for HexPrismDef {
     }
 
     fn create_materials(&self, ctx: &mut MaterialCtx) -> EngineResult<Vec<MaterialId>> {
-        let mat = create_honeycomb_material(self.surface(), ctx.textures, ctx.materials)?;
+        let mat = create_honeycomb_material(
+            self.surface(),
+            seed_from_position(self.pos, 0),
+            ctx.textures,
+            ctx.materials,
+        )?;
         Ok(vec![mat])
     }
 
@@ -179,9 +186,10 @@ impl Spawnable for HoneycombWallDef {
     fn create_materials(&self, ctx: &mut MaterialCtx) -> EngineResult<Vec<MaterialId>> {
         let count = self.total_cells();
         let mut mats = Vec::with_capacity(count);
-        for _ in 0..count {
+        for cell in 0..count {
             mats.push(create_honeycomb_material(
                 self.surface(),
+                seed_from_position(self.base, cell as u32),
                 ctx.textures,
                 ctx.materials,
             )?);
@@ -371,10 +379,11 @@ fn hex_prism_geometry_z(radius: f32, half_depth: f32) -> (Vec<Vector3<f32>>, Vec
 
 fn create_honeycomb_material(
     surface: PhysicalSurface,
+    seed: u32,
     texture_manager: &TextureManager,
     material_builder: &mut MaterialManagerBuilder,
 ) -> EngineResult<MaterialId> {
-    let pixels = generate_honeycomb_texture();
+    let pixels = generate_honeycomb_texture(seed);
     let texture = texture_manager.create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &pixels, true)?;
     let material = Material::textured(texture).with_derived_finish(surface);
     Ok(material_builder.register(material))
@@ -382,24 +391,25 @@ fn create_honeycomb_material(
 
 /// Procedural honeycomb texture: golden amber with glistening honey sheen,
 /// inspired by Banjo-Kazooie's collectible honeycombs.
-fn generate_honeycomb_texture() -> Vec<u8> {
+fn generate_honeycomb_texture(seed: u32) -> Vec<u8> {
+    let rng = &mut TextureRng::new(seed);
     let size = TEXTURE_SIZE;
     let mut pixels = Vec::with_capacity((size * size * 4) as usize);
 
     // Golden amber base with per-cell warmth variation.
-    let warmth = rand_range(-0.04, 0.04);
+    let warmth = rng.range(-0.04, 0.04);
     let base = Rgb::new(0.92 + warmth, 0.72 + warmth * 0.5, 0.15 + warmth * 0.2);
     let dark = Rgb::new(0.70, 0.50, 0.08);
     let highlight = Rgb::new(1.0, 0.92, 0.50);
     let glisten = Rgb::new(1.0, 0.98, 0.85);
 
-    let seed_wax = rand_u32();
-    let seed_cell = rand_u32();
-    let seed_glisten = rand_u32();
+    let seed_wax = rng.u32();
+    let seed_cell = rng.u32();
+    let seed_glisten = rng.u32();
 
     // Randomize the main specular highlight position per cell.
-    let spec_cx = rand_range(0.25, 0.45);
-    let spec_cy = rand_range(0.25, 0.45);
+    let spec_cx = rng.range(0.25, 0.45);
+    let spec_cy = rng.range(0.25, 0.45);
 
     for y in 0..size {
         for x in 0..size {

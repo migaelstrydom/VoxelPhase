@@ -8,6 +8,7 @@ use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
 use super::shared::finish::{ColliderSurface, MaterialSurface};
+use super::shared::textures::seed_from_position;
 use super::shared::textures::Rgb;
 use super::{MaterialCtx, Spawnable};
 use crate::components::{
@@ -144,7 +145,10 @@ impl Spawnable for BananaDef {
     }
 
     fn create_materials(&self, ctx: &mut MaterialCtx) -> EngineResult<Vec<MaterialId>> {
-        let pixels = generate_peel_texture(self.ripeness.clamp(0.0, 1.0), rand::random::<u32>());
+        let pixels = generate_peel_texture(
+            self.ripeness.clamp(0.0, 1.0),
+            seed_from_position(self.pos, 0),
+        );
         let texture = ctx
             .textures
             .create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &pixels, true)?;

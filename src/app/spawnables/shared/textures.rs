@@ -112,14 +112,10 @@ pub fn seed_from_position(position: (f32, f32, f32), index: u32) -> u32 {
     seed
 }
 
-/// Picks a random value in `[lo, hi]`.
-pub fn rand_range(lo: f32, hi: f32) -> f32 {
-    lo + rand::random::<f32>() * (hi - lo)
-}
-
-/// Returns a random `u32`.
-pub fn rand_u32() -> u32 {
-    rand::random::<u32>()
+/// [`seed_from_position`] for the spawnables authored as a ground position,
+/// whose height the terrain decides.
+pub fn seed_from_ground(position: (f32, f32), index: u32) -> u32 {
+    seed_from_position((position.0, 0.0, position.1), index)
 }
 
 /// Convert hue (0–6), saturation, value to [`Rgb`].
@@ -217,4 +213,82 @@ pub fn hash_pair(a: i32, b: i32) -> u32 {
         .wrapping_add((b as u32).wrapping_mul(668265263));
     n = (n ^ (n >> 13)).wrapping_mul(1274126177);
     n ^ (n >> 16)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::path::Path;
+
+    #[test]
+    fn a_seed_is_all_the_stream_depends_on() {
+        let draw = |seed| {
+            let mut rng = TextureRng::new(seed);
+            (0..8).map(|_| rng.u32()).collect::<Vec<_>>()
+        };
+        assert_eq!(draw(7), draw(7));
+        assert_ne!(draw(7), draw(8));
+        assert_ne!(draw(0), draw(1), "a zero seed must not collapse the stream");
+    }
+
+    #[test]
+    fn a_position_is_a_stable_identity() {
+        assert_eq!(
+            seed_from_position((3.0, 1.5, -2.0), 0),
+            seed_from_position((3.0, 1.5, -2.0), 0)
+        );
+        assert_ne!(
+            seed_from_position((3.0, 1.5, -2.0), 0),
+            seed_from_position((3.0, 1.5, -2.1), 0)
+        );
+        assert_ne!(
+            seed_from_position((3.0, 1.5, -2.0), 0),
+            seed_from_position((3.0, 1.5, -2.0), 1)
+        );
+        assert_eq!(
+            seed_from_ground((3.0, -2.0), 4),
+            seed_from_position((3.0, 0.0, -2.0), 4)
+        );
+    }
+
+    /// The invariant the whole module exists to hold, guarded at the source.
+    ///
+    /// A procedural texture that draws from the global `rand` is not a function
+    /// of the object it belongs to — it is a function of how many textures were
+    /// baked before it. The symptom is a level that repaints itself when an
+    /// unrelated object is added to the file, which is invisible to every other
+    /// test here because nothing else asserts on a rendered colour.
+    ///
+    /// One global draw put back into any spawnable brings the whole class of
+    /// bug back, so the check is on the sources rather than on any one texture.
+    #[test]
+    fn no_spawnable_draws_from_the_global_rand() {
+        let mut offenders = Vec::new();
+        for dir in ["src/app/spawnables", "src/app/creatures"] {
+            visit(Path::new(dir), &mut offenders);
+        }
+        assert!(
+            offenders.is_empty(),
+            "these draw from the global rand instead of a seeded TextureRng: {offenders:?}"
+        );
+    }
+
+    fn visit(dir: &Path, offenders: &mut Vec<String>) {
+        let entries =
+            fs::read_dir(dir).expect("spawnable sources are readable from the crate root");
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                visit(&path, offenders);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                let source = fs::read_to_string(&path).expect("source file is readable");
+                // Spelled in two halves so this file is not its own offender.
+                let needle = ["rand", "::random"].concat();
+                if source.contains(&needle) {
+                    offenders.push(path.display().to_string());
+                }
+            }
+        }
+    }
 }

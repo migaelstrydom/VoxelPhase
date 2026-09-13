@@ -9,6 +9,8 @@ use specs::{Builder, Entity, World, WorldExt};
 use super::shared::finish::{ColliderSurface, MaterialSurface};
 use super::shared::models::{build_convex_hull, convex_solid_model, SolidFace};
 use super::shared::textures::hue_to_rgb;
+use super::shared::textures::seed_from_position;
+use super::shared::textures::TextureRng;
 use super::{MaterialCtx, Spawnable};
 use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
@@ -68,7 +70,7 @@ impl Spawnable for IcosahedronDef {
     }
 
     fn create_materials(&self, ctx: &mut MaterialCtx) -> EngineResult<Vec<MaterialId>> {
-        let pixels = generate_jade_texture();
+        let pixels = generate_jade_texture(seed_from_position(self.pos, 0));
         let texture = ctx
             .textures
             .create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &pixels, true)?;
@@ -239,13 +241,14 @@ fn icosahedron_geometry(edge: f32) -> (Vec<Vector3<f32>>, Vec<SolidFace>) {
 }
 
 /// Procedural jade/stone texture.
-fn generate_jade_texture() -> Vec<u8> {
+fn generate_jade_texture(seed: u32) -> Vec<u8> {
+    let rng = &mut TextureRng::new(seed);
     let size = TEXTURE_SIZE;
     let mut pixels = Vec::with_capacity((size * size * 4) as usize);
 
-    let hue = 1.5 + (rand::random::<f32>() - 0.5) * 1.0; // green-ish range
+    let hue = 1.5 + (rng.unit() - 0.5) * 1.0; // green-ish range
     let base = hue_to_rgb(hue, 0.35, 0.65);
-    let seed = rand::random::<u32>();
+    let seed = rng.u32();
 
     for y in 0..size {
         for x in 0..size {

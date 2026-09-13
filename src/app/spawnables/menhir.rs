@@ -16,6 +16,7 @@ use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
 use super::shared::models::{build_convex_hull, SolidFace};
+use super::shared::textures::seed_from_ground;
 use super::{MaterialCtx, Spawnable};
 use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, TerrainAnchored, Velocity,
@@ -90,7 +91,7 @@ impl Spawnable for MenhirDef {
     fn create_materials(&self, ctx: &mut MaterialCtx) -> EngineResult<Vec<MaterialId>> {
         // A seed per stone, so two menhirs in a level are not the same rock
         // twice — which is also what keeps them out of each other's cache entry.
-        let seed = rand::random::<u32>();
+        let seed = seed_from_ground(self.pos, 0);
         Ok(vec![ctx.patterned(
             &self.substance(),
             &pattern::STONE,

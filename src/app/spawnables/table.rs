@@ -7,6 +7,8 @@ use specs::{Builder, Entity, World, WorldExt};
 use super::shared::finish::{ColliderSurface, MaterialSurface};
 use super::shared::models::compound_cuboid_model;
 use super::shared::orientation::Yaw;
+use super::shared::textures::seed_from_position;
+use super::shared::textures::TextureRng;
 use super::shared::textures::*;
 use super::{MaterialCtx, Spawnable};
 use crate::components::{
@@ -97,7 +99,7 @@ impl Spawnable for TableDef {
     }
 
     fn create_materials(&self, ctx: &mut MaterialCtx) -> EngineResult<Vec<MaterialId>> {
-        let pixels = generate_table_wood();
+        let pixels = generate_table_wood(seed_from_position(self.pos, 0));
         let texture = ctx
             .textures
             .create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &pixels, true)?;
@@ -213,21 +215,22 @@ impl Spawnable for TableDef {
 // Procedural polished wood texture
 // ---------------------------------------------------------------------------
 
-fn generate_table_wood() -> Vec<u8> {
+fn generate_table_wood(seed: u32) -> Vec<u8> {
+    let rng = &mut TextureRng::new(seed);
     let size = TEXTURE_SIZE;
     let mut pixels = Vec::with_capacity((size * size * 4) as usize);
 
-    let tone = rand::random::<u32>() % 3;
+    let tone = rng.pick(3);
     let base = match tone {
         0 => Rgb::new(0.55, 0.38, 0.20),
         1 => Rgb::new(0.35, 0.22, 0.12),
         _ => Rgb::new(0.68, 0.52, 0.28),
     };
 
-    let hue_offset = rand_range(-0.04, 0.04);
-    let seed_grain = rand_u32();
-    let seed_rings = rand_u32();
-    let seed_knots = rand_u32();
+    let hue_offset = rng.range(-0.04, 0.04);
+    let seed_grain = rng.u32();
+    let seed_rings = rng.u32();
+    let seed_knots = rng.u32();
 
     for y in 0..size {
         for x in 0..size {

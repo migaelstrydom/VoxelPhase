@@ -14,6 +14,7 @@ use specs::{Builder, Entity, World, WorldExt};
 
 use super::shared::models::{build_convex_hull, convex_solid_model, SolidFace};
 use super::shared::orientation::Yaw;
+use super::shared::textures::seed_from_position;
 use super::{MaterialCtx, Spawnable};
 use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
@@ -97,7 +98,7 @@ impl Spawnable for TrilithonDef {
     fn create_materials(&self, ctx: &mut MaterialCtx) -> EngineResult<Vec<MaterialId>> {
         // A seed per stone, so the three blocks of one trilithon are cut from
         // visibly different rock.
-        let seed = rand::random::<u32>();
+        let seed = seed_from_position(self.pos, 0);
         Ok(vec![ctx.patterned(
             &self.substance(),
             &pattern::STONE,
@@ -109,7 +110,7 @@ impl Spawnable for TrilithonDef {
     fn spawn(&self, world: &mut World, materials: &[MaterialId]) -> Vec<Entity> {
         let material = materials[0];
         let base = Point3::new(self.pos.0, self.pos.1, self.pos.2);
-        let seed = rand::random::<u32>();
+        let seed = seed_from_position(self.pos, 1);
 
         let upright_he = Vector3::new(
             self.upright_half_width,

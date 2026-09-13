@@ -8,6 +8,8 @@ use specs::{Builder, Entity, World, WorldExt};
 
 use super::shared::finish::{ColliderSurface, MaterialSurface};
 use super::shared::textures::hue_to_rgb;
+use super::shared::textures::seed_from_position;
+use super::shared::textures::TextureRng;
 use super::{MaterialCtx, Spawnable};
 use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
@@ -68,7 +70,7 @@ impl Spawnable for CapsuleDef {
     }
 
     fn create_materials(&self, ctx: &mut MaterialCtx) -> EngineResult<Vec<MaterialId>> {
-        let pixels = generate_pill_texture();
+        let pixels = generate_pill_texture(seed_from_position(self.pos, 0));
         let texture = ctx
             .textures
             .create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &pixels, true)?;
@@ -130,15 +132,16 @@ impl Spawnable for CapsuleDef {
 }
 
 /// Generate a two-tone pill/medicine capsule texture.
-fn generate_pill_texture() -> Vec<u8> {
+fn generate_pill_texture(seed: u32) -> Vec<u8> {
+    let rng = &mut TextureRng::new(seed);
     let size = TEXTURE_SIZE;
     let mut pixels = Vec::with_capacity((size * size * 4) as usize);
 
-    let hue_a = rand::random::<f32>() * 6.0;
+    let hue_a = rng.unit() * 6.0;
     let hue_b = (hue_a + 3.0) % 6.0;
     let colour_a = hue_to_rgb(hue_a, 0.55, 0.85);
     let colour_b = hue_to_rgb(hue_b, 0.55, 0.85);
-    let seed = rand::random::<u32>();
+    let seed = rng.u32();
 
     for y in 0..size {
         for x in 0..size {

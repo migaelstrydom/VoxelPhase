@@ -14,6 +14,7 @@ use nalgebra::{Point3, Vector2, Vector3};
 use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
+use super::shared::textures::seed_from_ground;
 use super::shared::textures::Rgb;
 use super::{MaterialCtx, Spawnable};
 use crate::components::{
@@ -76,7 +77,7 @@ impl Spawnable for FencePostDef {
     }
 
     fn create_materials(&self, ctx: &mut MaterialCtx) -> EngineResult<Vec<MaterialId>> {
-        let seed = rand::random::<u32>();
+        let seed = seed_from_ground(self.pos, 0);
 
         let bark_pixels = generate_bark_texture(seed);
         let bark_tex =

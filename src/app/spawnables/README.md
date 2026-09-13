@@ -181,8 +181,13 @@ barrel + caps).
 ### Shared helpers (`shared/textures.rs`)
 
 - `Rgb` — colour struct with `scale(f32)`, `lerp(other, t)`, `write_rgba(&mut Vec<u8>)`.
-- `rand_range(lo, hi)` — random `f32` in range.
-- `rand_u32()` — random u32 for seeding.
+- `TextureRng::new(seed)` — a texture's own source of variation. `range(lo, hi)`,
+  `unit()`, `u32()`, `pick(n)`, `flip()`. Never draw from the global `rand`: a
+  texture that does is a function of how many textures were baked before it, so
+  adding an object to a level silently repaints everything after it.
+- `seed_from_position(pos, index)` / `seed_from_ground(pos, index)` — the stable
+  identity to seed with. `index` separates several textures baked for one
+  object, such as the blocks of a stack.
 - `hue_to_rgb(h, s, v)` — HSV to RGB. `h` is in 0..6 (not 0..360).
 - `edge_vignette(u, v)` — subtle darkening at texture edges.
 - `border_band(u, v, width)` — darkening band at a given inset distance.

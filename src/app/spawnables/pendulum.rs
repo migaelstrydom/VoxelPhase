@@ -15,6 +15,7 @@ use specs::{Builder, Entity, World, WorldExt};
 
 use super::shared::finish::{ColliderSurface, MaterialSurface};
 use super::shared::models::multi_material_compound_cuboid_model;
+use super::shared::textures::seed_from_ground;
 use super::shared::textures::Rgb;
 use super::{MaterialCtx, Spawnable};
 use crate::components::{
@@ -148,7 +149,7 @@ impl Spawnable for PendulumDef {
     }
 
     fn create_materials(&self, ctx: &mut MaterialCtx) -> EngineResult<Vec<MaterialId>> {
-        let seed = rand::random::<u32>();
+        let seed = seed_from_ground(self.pos, 0);
 
         let frame_pixels = generate_painted_wood(seed, Rgb::new(0.20, 0.55, 0.85));
         let frame_tex =

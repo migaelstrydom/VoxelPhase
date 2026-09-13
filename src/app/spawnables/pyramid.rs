@@ -23,6 +23,8 @@ use crate::resources::textures::TextureManager;
 use crate::systems::PhysicsResource;
 use crate::utils::noise::fbm_2d_periodic;
 
+use super::shared::textures::seed_from_position;
+use super::shared::textures::TextureRng;
 use specs::{Builder, WorldExt};
 
 const TEXTURE_SIZE: u32 = 128;
@@ -68,9 +70,10 @@ impl Spawnable for PyramidDef {
     fn create_materials(&self, ctx: &mut MaterialCtx) -> EngineResult<Vec<MaterialId>> {
         let count = self.total_blocks();
         let mut mats = Vec::with_capacity(count);
-        for _ in 0..count {
+        for block in 0..count {
             mats.push(create_sandstone_material(
                 self.surface(),
+                seed_from_position(self.base, block as u32),
                 ctx.textures,
                 ctx.materials,
             )?);
@@ -148,10 +151,11 @@ impl Spawnable for PyramidDef {
 
 fn create_sandstone_material(
     surface: PhysicalSurface,
+    seed: u32,
     texture_manager: &TextureManager,
     material_builder: &mut MaterialManagerBuilder,
 ) -> EngineResult<MaterialId> {
-    let pixels = generate_sandstone();
+    let pixels = generate_sandstone(seed);
     let texture = texture_manager.create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &pixels, true)?;
     let material = Material::textured(texture).with_derived_finish(surface);
     Ok(material_builder.register(material))
@@ -159,17 +163,18 @@ fn create_sandstone_material(
 
 /// Procedural sandstone: warm sandy base with horizontal sediment bands,
 /// fine grain noise, and subtle erosion pitting.
-fn generate_sandstone() -> Vec<u8> {
+fn generate_sandstone(seed: u32) -> Vec<u8> {
+    let rng = &mut TextureRng::new(seed);
     let size = TEXTURE_SIZE;
     let mut pixels = Vec::with_capacity((size * size * 4) as usize);
 
-    let warmth = rand_range(-0.03, 0.03);
+    let warmth = rng.range(-0.03, 0.03);
     let base = Rgb::new(0.82 + warmth, 0.72 + warmth * 0.8, 0.55 + warmth * 0.5);
     let dark_band = Rgb::new(0.68, 0.58, 0.42);
 
-    let seed_grain = rand_u32();
-    let seed_sediment = rand_u32();
-    let seed_erosion = rand_u32();
+    let seed_grain = rng.u32();
+    let seed_sediment = rng.u32();
+    let seed_erosion = rng.u32();
 
     for y in 0..size {
         for x in 0..size {

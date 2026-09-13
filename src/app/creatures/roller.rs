@@ -26,7 +26,7 @@ use nalgebra::{Point3, Vector3};
 use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
-use crate::app::spawnables::shared::textures::{hash_pair, rand_u32, Rgb};
+use crate::app::spawnables::shared::textures::{hash_pair, seed_from_ground, Rgb};
 use crate::app::spawnables::MaterialCtx;
 use crate::app::spawnables::Spawnable;
 use crate::character::CharacterIntent;
@@ -109,7 +109,7 @@ impl Spawnable for RollerDef {
     }
 
     fn create_materials(&self, ctx: &mut MaterialCtx) -> EngineResult<Vec<MaterialId>> {
-        let pixels = generate_hide_texture(rand_u32());
+        let pixels = generate_hide_texture(seed_from_ground(self.pos, 0));
         let texture = ctx
             .textures
             .create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &pixels, true)?;
