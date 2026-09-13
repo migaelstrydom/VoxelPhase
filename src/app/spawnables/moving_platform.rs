@@ -41,12 +41,18 @@ use crate::rendering::material::MaterialId;
 use crate::rendering::physical_finish::PhysicalSurface;
 use crate::systems::PhysicsResource;
 
-/// Heavy enough that a player walking on to it barely registers, light enough
-/// that a grenade still means something.
+/// The deck's material, and the home of the default density.
+///
+/// Light enough that the world can argue with it. Mass is the only thing that
+/// decides how a platform meets an obstacle, and it decides both halves at
+/// once: the motor can deliver `mass · MOTOR_MAX_ACCEL` of push, and a blast
+/// moves the deck by `impulse / mass`. A heavy deck therefore bulldozes props
+/// *and* shrugs off grenades, and there is no tuning of the motor that
+/// separates the two — only the mass does.
 const PLATFORM_SURFACE: PhysicalSurface = PhysicalSurface {
     restitution: 0.1,
     friction: 0.9,
-    density: 300.0,
+    density: 30.0,
 };
 
 /// Acceleration budget of the motor, in m/s². Must clear gravity with room to
@@ -73,6 +79,19 @@ pub struct MovingPlatformDef {
     /// swings about a third of that past its waypoint. Author clearance for it.
     #[serde(default = "MovingPlatformDef::default_spin_up")]
     pub spin_up: f32,
+    /// Deck density in kg/m³, which with `half_extents` is the platform's mass
+    /// and so the whole of how it meets the world.
+    ///
+    /// At the default extents the deck is 3.2 m³, so 30 is about 96 kg: a
+    /// prop-sized thing a grenade throws several metres per second. Raise it
+    /// for a platform that ignores what it runs into — 300 is nearly a tonne,
+    /// which pushes with 38 kN and answers a point-blank grenade with 3 cm/s.
+    ///
+    /// Above 3000 the derived finish starts reading as metal, which is
+    /// `PhysicalSurface`'s deliberate doing rather than something to work
+    /// around: a deck that dense really is a slab of steel.
+    #[serde(default = "MovingPlatformDef::default_density")]
+    pub density: f32,
     /// How far the deck tips under a player on its edge, and how fast the ring
     /// that follows dies. Omit for a deck that does not move at all.
     #[serde(default = "MovingPlatformDef::default_suspension")]
@@ -81,7 +100,7 @@ pub struct MovingPlatformDef {
 
 impl MovingPlatformDef {
     pub fn default_half_extents() -> (f32, f32, f32) {
-        (2.0, 0.3, 2.0)
+        (2.0, 0.1, 2.0)
     }
     /// Both motion defaults are `SeekMotion`'s own, deliberately rather than
     /// literals here. A second copy of a default is a trap: it looks
@@ -99,6 +118,20 @@ impl MovingPlatformDef {
     pub fn default_suspension() -> DeckSuspension {
         DeckSuspension::PLATFORM_DECK
     }
+    pub fn default_density() -> f32 {
+        PLATFORM_SURFACE.density
+    }
+
+    /// The deck's material with this platform's density substituted in.
+    ///
+    /// Used for the collider *and* the material, so a deck heavy enough to
+    /// read as metal looks like what it collides as.
+    fn surface(&self) -> PhysicalSurface {
+        PhysicalSurface {
+            density: self.density,
+            ..PLATFORM_SURFACE
+        }
+    }
 }
 
 impl Spawnable for MovingPlatformDef {
@@ -109,7 +142,7 @@ impl Spawnable for MovingPlatformDef {
     fn create_materials(&self, ctx: &mut MaterialCtx) -> EngineResult<Vec<MaterialId>> {
         Ok(vec![create_box_material_for_style(
             BoxStyle::Warning,
-            PLATFORM_SURFACE,
+            self.surface(),
             ctx.textures,
             ctx.materials,
         )?])
@@ -148,7 +181,7 @@ impl Spawnable for MovingPlatformDef {
             let body_handle = physics.world.create_body(body_desc);
             physics.world.attach_collider(
                 body_handle,
-                ColliderDesc::box_shape(half_extents).with_physical_surface(PLATFORM_SURFACE),
+                ColliderDesc::box_shape(half_extents).with_physical_surface(self.surface()),
             );
 
             // Attitude with unlimited authority, soft by as much as the

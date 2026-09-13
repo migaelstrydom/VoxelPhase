@@ -889,6 +889,11 @@ pub enum LevelObject {
         /// corners. See `MovingPlatformDef::spin_up`.
         #[serde(default = "MovingPlatformDef::default_spin_up")]
         spin_up: f32,
+        /// Deck density in kg/m³. With `half_extents` this is the mass, which
+        /// decides both how hard the platform pushes and how much a blast
+        /// moves it. See `MovingPlatformDef::density`.
+        #[serde(default = "MovingPlatformDef::default_density")]
+        density: f32,
         /// How far the deck tips under a player on its edge, and how fast the
         /// ring that follows dies away.
         #[serde(default = "MovingPlatformDef::default_suspension")]
@@ -1934,6 +1939,7 @@ impl LevelObject {
                 half_extents,
                 speed,
                 spin_up,
+                density,
                 suspension,
             } => Box::new(MovingPlatformDef {
                 waypoints: waypoints.clone(),
@@ -1941,6 +1947,7 @@ impl LevelObject {
                 half_extents: *half_extents,
                 speed: *speed,
                 spin_up: *spin_up,
+                density: *density,
                 suspension: *suspension,
             }),
 
@@ -2306,7 +2313,8 @@ mod tests {
     fn a_platform_carries_its_authored_motion_out_of_the_level_file() {
         let authored: LevelObject = ron::from_str(
             "MovingPlatform(waypoints: [(0.0, 1.0, 0.0), (8.0, 1.0, 0.0)], \
-             speed: 4.0, spin_up: 1.5, suspension: (tilt_degrees: 6.0, damping: 0.2))",
+             speed: 4.0, spin_up: 1.5, density: 500.0, half_extents: (3.0, 0.5, 1.0), \
+             suspension: (tilt_degrees: 6.0, damping: 0.2))",
         )
         .expect("MovingPlatform should parse");
 
@@ -2314,9 +2322,10 @@ mod tests {
             waypoints,
             speed,
             spin_up,
+            density,
+            half_extents,
             suspension,
             looping,
-            ..
         } = authored
         else {
             panic!("parsed as the wrong object");
@@ -2324,6 +2333,8 @@ mod tests {
         assert_eq!(waypoints.len(), 2);
         assert_eq!(speed, 4.0);
         assert_eq!(spin_up, 1.5);
+        assert_eq!(density, 500.0);
+        assert_eq!(half_extents, (3.0, 0.5, 1.0));
         assert_eq!(looping, RouteLoop::Shuttle);
         assert_eq!(suspension.tilt_degrees, 6.0);
         assert_eq!(suspension.damping, 0.2);
@@ -2344,12 +2355,16 @@ mod tests {
         let LevelObject::MovingPlatform {
             speed,
             spin_up,
+            density,
+            half_extents,
             suspension,
             ..
         } = authored
         else {
             panic!("parsed as the wrong object");
         };
+        assert_eq!(density, MovingPlatformDef::default_density());
+        assert_eq!(half_extents, MovingPlatformDef::default_half_extents());
         let motion = SeekMotion::default();
         assert_eq!(spin_up, motion.tau);
         assert_eq!(speed, motion.speed);

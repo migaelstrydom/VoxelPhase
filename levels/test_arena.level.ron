@@ -226,6 +226,7 @@ Level(
                         (-14.0, 0.8, -18.0),
                     ],
                     speed: 2.0,
+                    spin_up: 2.5,
                 ),
 
                 MovingPlatform(
