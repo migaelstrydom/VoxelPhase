@@ -1,6 +1,8 @@
 //! The scene library, and the registry the CLI looks names up in.
 
 pub mod craters;
+pub mod critter;
+pub mod critter_walk;
 pub mod grade_sweep;
 pub mod level_props;
 pub mod material_grid;
@@ -19,6 +21,8 @@ pub mod terrain_forms;
 pub mod voxel_terrain;
 
 pub use craters::Craters;
+pub use critter::Critter;
+pub use critter_walk::CritterWalk;
 pub use grade_sweep::GradeSweep;
 pub use material_grid::MaterialGrid;
 pub use palette::Palette;

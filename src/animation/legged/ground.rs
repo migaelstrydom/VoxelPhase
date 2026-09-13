@@ -52,7 +52,7 @@ pub fn resolve(contacts: &[ContactCandidate]) -> (FootGround, FootGround) {
             probe_tags::FOOT_RIGHT => &mut right,
             _ => continue,
         };
-        if best.map_or(true, |b| contact.distance < b.distance) {
+        if best.is_none_or(|b| contact.distance < b.distance) {
             *best = Some(contact);
         }
     }

@@ -41,6 +41,44 @@ impl FootShape {
     }
 }
 
+/// An orthonormal frame to place a part in.
+///
+/// Parts that are generated in their own local space — a heart, a shell, a
+/// cube — are built once around the origin and then placed. `right`, `up`
+/// and `forward` are local X, Y and Z.
+#[derive(Clone, Copy, Debug)]
+pub struct Frame {
+    pub origin: Point3<f32>,
+    pub right: Vector3<f32>,
+    pub up: Vector3<f32>,
+    pub forward: Vector3<f32>,
+}
+
+impl Frame {
+    /// A frame standing upright at `origin`, facing `facing`.
+    pub fn upright(origin: Point3<f32>, facing: Vector3<f32>) -> Self {
+        let forward = project_to_horizontal(facing);
+        Self {
+            origin,
+            right: right_vector(forward),
+            up: Vector3::y(),
+            forward,
+        }
+    }
+
+    /// Rotate a local direction into world space.
+    #[inline]
+    pub fn direction(&self, local: Vector3<f32>) -> Vector3<f32> {
+        self.right * local.x + self.up * local.y + self.forward * local.z
+    }
+
+    /// Place a local position in world space.
+    #[inline]
+    pub fn point(&self, local: Vector3<f32>) -> Point3<f32> {
+        self.origin + self.direction(local)
+    }
+}
+
 /// An accumulating triangle mesh for one rig.
 pub struct RigMesh {
     vertices: Vec<Vertex>,
@@ -122,6 +160,17 @@ impl RigMesh {
             // reflects the orientation.
             let n = vert.normal;
             vert.normal = up * n.x + axis * n.y + lateral * n.z;
+            self.vertices.push(vert);
+        }
+        self.indices.extend(indices.iter().map(|i| i + base));
+    }
+
+    /// Add a part generated in its own local space, placed in `frame`.
+    pub fn part(&mut self, verts: Vec<Vertex>, indices: Vec<u32>, frame: &Frame) {
+        let base = self.vertices.len() as u32;
+        for mut vert in verts {
+            vert.pos = frame.point(vert.pos).coords;
+            vert.normal = frame.direction(vert.normal);
             self.vertices.push(vert);
         }
         self.indices.extend(indices.iter().map(|i| i + base));

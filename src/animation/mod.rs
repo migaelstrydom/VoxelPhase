@@ -16,6 +16,7 @@
 
 mod animator;
 mod config;
+pub mod critter;
 mod debug_config;
 mod foot_placer;
 pub mod humanoid;

@@ -4,4 +4,4 @@ mod leg;
 mod mesh;
 
 pub use leg::{solve_knee, within_reach, Leg};
-pub use mesh::{project_to_horizontal, right_vector, FootShape, RigMesh};
+pub use mesh::{project_to_horizontal, right_vector, FootShape, Frame, RigMesh};
