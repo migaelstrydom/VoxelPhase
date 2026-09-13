@@ -44,7 +44,7 @@ const CONSTRAINT_POSITION_BETA: f32 = 0.2;
 const RIGID_ANGULAR_DAMPING: f32 = 0.05;
 
 /// How a deck answers a load standing on it.
-#[derive(Debug, Clone, Copy, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
 pub struct DeckSuspension {
     /// How far the deck tips, in degrees, with [`REFERENCE_LOAD_KG`] standing
     /// on its edge. Zero is a rigid deck.
@@ -80,6 +80,19 @@ impl DeckSuspension {
         damping: 0.0,
     };
 
+    /// What a moving platform's deck is built with, and the one place the
+    /// numbers live — `MovingPlatformDef`'s serde default delegates here rather
+    /// than repeating them.
+    ///
+    /// Enough give that a player landing on the edge visibly throws the deck
+    /// (about 5° at the peak of the swing, against the 2° they hold it at
+    /// standing still) and enough damping that it has settled by the time they
+    /// have crossed it.
+    pub const PLATFORM_DECK: Self = Self {
+        tilt_degrees: 2.0,
+        damping: 0.5,
+    };
+
     /// Whether this suspension does anything at all.
     pub fn is_rigid(&self) -> bool {
         self.tilt_degrees <= 0.0
@@ -110,15 +123,10 @@ impl DeckSuspension {
     }
 }
 
-impl Default for DeckSuspension {
-    fn default() -> Self {
-        Self::RIGID
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::spawnables::MovingPlatformDef;
     use crate::physics::solver::PgsNgsConfig;
 
     /// The deflection formula is only right for the beta the solver actually
@@ -130,6 +138,27 @@ mod tests {
             PgsNgsConfig::default().constraint_position_beta,
             CONSTRAINT_POSITION_BETA
         );
+    }
+
+    /// The platform's deck tuning must be the constant, not a copy of it.
+    ///
+    /// A second copy of a default is inert in the worst way: it looks
+    /// authoritative, it is the one a reader edits, and the game never reads
+    /// it. `MovingPlatformDef::default_spin_up` had exactly this bug.
+    #[test]
+    fn the_platform_default_is_the_named_constant() {
+        assert_eq!(
+            MovingPlatformDef::default_suspension(),
+            DeckSuspension::PLATFORM_DECK
+        );
+    }
+
+    /// The two named tunings must stay distinguishable: a platform deck that
+    /// had quietly become rigid would pass every other test in this file.
+    #[test]
+    fn a_platform_deck_is_not_a_rigid_one() {
+        assert!(DeckSuspension::RIGID.is_rigid());
+        assert!(!DeckSuspension::PLATFORM_DECK.is_rigid());
     }
 
     #[test]

@@ -96,14 +96,8 @@ impl MovingPlatformDef {
     pub fn default_spin_up() -> f32 {
         SeekMotion::default().tau
     }
-    /// Enough give that a player landing on the edge visibly throws the deck
-    /// — about 5° at the peak of the swing — and enough damping that it has
-    /// settled by the time they have crossed it.
     pub fn default_suspension() -> DeckSuspension {
-        DeckSuspension {
-            tilt_degrees: 2.0,
-            damping: 0.5,
-        }
+        DeckSuspension::PLATFORM_DECK
     }
 }
 

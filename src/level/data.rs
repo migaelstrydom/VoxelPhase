@@ -2296,7 +2296,7 @@ pub enum WaterBody {
 #[cfg(test)]
 mod tests {
     use crate::app::spawnables::MovingPlatformDef;
-    use crate::platform::SeekMotion;
+    use crate::platform::{DeckSuspension, SeekMotion};
 
     /// A dial is only a dial if it survives the trip from the level file to
     /// the component. `spin_up` reaches `MovingPlatformDef` but is consumed by
@@ -2306,7 +2306,7 @@ mod tests {
     fn a_platform_carries_its_authored_motion_out_of_the_level_file() {
         let authored: LevelObject = ron::from_str(
             "MovingPlatform(waypoints: [(0.0, 1.0, 0.0), (8.0, 1.0, 0.0)], \
-             speed: 4.0, spin_up: 1.5)",
+             speed: 4.0, spin_up: 1.5, suspension: (tilt_degrees: 6.0, damping: 0.2))",
         )
         .expect("MovingPlatform should parse");
 
@@ -2314,6 +2314,7 @@ mod tests {
             waypoints,
             speed,
             spin_up,
+            suspension,
             looping,
             ..
         } = authored
@@ -2324,6 +2325,8 @@ mod tests {
         assert_eq!(speed, 4.0);
         assert_eq!(spin_up, 1.5);
         assert_eq!(looping, RouteLoop::Shuttle);
+        assert_eq!(suspension.tilt_degrees, 6.0);
+        assert_eq!(suspension.damping, 0.2);
     }
 
     /// Omitting the motion falls back to `SeekMotion`'s defaults, not to a
@@ -2338,7 +2341,13 @@ mod tests {
             ron::from_str("MovingPlatform(waypoints: [(0.0, 1.0, 0.0), (8.0, 1.0, 0.0)])")
                 .expect("MovingPlatform should parse");
 
-        let LevelObject::MovingPlatform { speed, spin_up, .. } = authored else {
+        let LevelObject::MovingPlatform {
+            speed,
+            spin_up,
+            suspension,
+            ..
+        } = authored
+        else {
             panic!("parsed as the wrong object");
         };
         let motion = SeekMotion::default();
@@ -2346,6 +2355,7 @@ mod tests {
         assert_eq!(speed, motion.speed);
         assert_eq!(MovingPlatformDef::default_spin_up(), motion.tau);
         assert_eq!(MovingPlatformDef::default_speed(), motion.speed);
+        assert_eq!(suspension, DeckSuspension::PLATFORM_DECK);
     }
 
     use super::*;
