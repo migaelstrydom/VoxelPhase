@@ -668,3 +668,62 @@ fn pendulum_ball_joint_settles() {
         last.y,
     );
 }
+
+/// A bounded KeepUpright must right a spinning body and then hold it still,
+/// at bounds well below the one the saturation test uses.
+///
+/// Two defects once made this diverge to the spin cap at every bound in this
+/// range: the row warm start credited the accumulator with impulse it had
+/// scaled away, so the clamp worked off a stale number, and the tilt error
+/// was projected on to the row's own axis instead of the axis of rotation,
+/// so the velocity bias pushed a quarter turn out of phase. Hard projection
+/// masked both for infinite authority. Free fall keeps the ground out of it.
+#[test]
+fn keep_upright_bounded_rights_and_holds_still() {
+    let geometry = FlatQuadGeometry::new(8.0);
+    for bound in [50.0_f32, 100.0, 200.0] {
+        let mut config = PhysicsConfig::default();
+        config.sleep.enabled = false;
+        let mut world = PhysicsWorld::new(config);
+        let desc = RigidBodyDesc::dynamic()
+            .position(Point3::new(0.0, 5000.0, 0.0))
+            .angular_velocity(Vector3::new(5.0, 0.0, 0.0));
+        let body = world.create_body(desc);
+        let _ = world.attach_collider(body, ColliderDesc::sphere(0.5).density(1000.0));
+        let _ = world.create_constraint(ConstraintKind::KeepUpright {
+            body,
+            target_up: UnitVector3::new_normalize(Vector3::y()),
+            compliance: 0.0,
+            max_impulse: bound,
+        });
+
+        let dt = 1.0 / 240.0;
+        let mut debug_lines = DebugLines::default();
+        let mut peak_after_righting = 0.0f32;
+        for frame in 0..1200 {
+            world.update_contacts(dt, 4, &geometry, &[], &mut debug_lines);
+            for _ in 0..4 {
+                world.substep(dt, &geometry, &[]);
+            }
+            if frame >= 200 {
+                let speed = world.body(body).unwrap().angular_velocity().magnitude();
+                peak_after_righting = peak_after_righting.max(speed);
+            }
+        }
+
+        let up = world.body(body).unwrap().rotation() * Vector3::y();
+        eprintln!(
+            "bound {bound}: peak spin after righting {peak_after_righting:.4}, up.y {:.4}",
+            up.y
+        );
+        assert!(
+            peak_after_righting < 0.05,
+            "bound {bound}: spin should stay dead once righted, peaked at {peak_after_righting:.4}"
+        );
+        assert!(
+            up.y > 0.999,
+            "bound {bound}: body should end upright, up.y = {:.4}",
+            up.y
+        );
+    }
+}

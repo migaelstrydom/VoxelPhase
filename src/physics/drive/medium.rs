@@ -23,14 +23,12 @@
 //!   body's velocity along its axis by `max_accel · dt` — no more, whether the
 //!   load is a passenger, a crate, or nothing at all.
 //!
-//! The bound is a ceiling on the accumulated impulse, not a promise of what a
-//! saturated row delivers. Rows are expanded once per frame and the accumulated
-//! impulse carries across the frame's substeps, so a row pinned at its bound
-//! realises `warm_start_scale` of the declared acceleration from the second
-//! substep on — the same effect the docs on
-//! `ConstraintKind::KeepUpright::max_impulse` describe, and for the same
-//! reason. A platform with acceleration to spare never reaches its bound
-//! outside the first frames of spin-up and so never sees it.
+//! The bound is per substep: rows are expanded once per frame, but the
+//! accumulated impulse is rescaled by the warm start at the top of every
+//! substep, so a row pinned at its bound delivers exactly `max_accel · dt`
+//! per substep and the declared acceleration over the frame. A platform with
+//! acceleration to spare never reaches its bound outside the first frames of
+//! spin-up and so never sees it.
 
 use nalgebra::Vector3;
 use smallvec::SmallVec;

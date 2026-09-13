@@ -54,10 +54,16 @@ pub fn expand(
     let local_up = body.rotation() * Vector3::y();
     let (perp1, perp2) = perpendicular_basis(target_up);
 
-    // Tilt errors: project local_up onto each perpendicular axis.
-    // For small angles, sin(θ) ≈ θ.
-    let error_1 = local_up.dot(&perp1);
-    let error_2 = local_up.dot(&perp2);
+    // The tilt as a rotation vector: its direction is the axis the body has
+    // rotated about, its magnitude sin(θ). Each row reads the component about
+    // its own axis. Projecting `local_up` itself onto the axes would pair each
+    // row with the tilt the *other* axis produces — a quarter-turn phase error
+    // that reads as a restoring term while hard projection holds the attitude
+    // and as a pump the moment a finite bound leaves the velocity rows in
+    // charge.
+    let tilt = local_up.cross(target_up);
+    let error_1 = tilt.dot(&perp1);
+    let error_2 = tilt.dot(&perp2);
 
     let compliance_term = if compliance > 0.0 {
         compliance / (dt * dt)

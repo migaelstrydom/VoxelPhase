@@ -30,24 +30,14 @@ pub enum ConstraintKind {
         /// A finite bound models an attitude control system with a real
         /// actuator behind it — a thruster-stabilised platform tips under an
         /// off-centre load and rights itself only if it has authority to
-        /// spare. Righting rate is linear in this value, so it works well as a
-        /// tuning dial, but it is *not* calibrated in N·m: the solver clamps
-        /// accumulated impulse once per frame while warm-starting re-applies it
-        /// each substep, so realised torque also depends on substep count and
-        /// `warm_start_scale`. Tune by feel against a reference load.
+        /// spare. It is the impulse each row may deliver per substep, so
+        /// realised torque is `max_impulse / substep_dt` at saturation.
+        /// Righting rate is linear in this value; tune by feel against a
+        /// reference load.
         ///
         /// A finite bound also forces velocity-level solving: hard projection
         /// and NGS position correction both bypass impulse bounds, so they are
         /// disabled when authority is limited. See `keep_upright::expand`.
-        ///
-        /// UNSTABLE — prefer `f32::INFINITY` for now. A bound low enough to
-        /// actually saturate injects energy rather than bleeding it: the row
-        /// re-applies a frame's accumulated impulse once per substep via
-        /// warm-starting, and unlike an unbounded row it cannot undo the
-        /// over-application on the next iteration. Measured divergence to
-        /// ±47 rad/s on a 52 kg·m² body at bounds of 50–200. Fixing it means
-        /// decrementing `accumulated_impulse` on warm start, which is shared
-        /// with contacts and every other joint.
         ///
         /// Note that `RigidBodyDesc`'s default `angular_damping` of 0.05 will
         /// dominate small bounds — check it before concluding a dial is dead.

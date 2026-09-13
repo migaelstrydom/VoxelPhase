@@ -67,13 +67,19 @@ pub fn solve_constraint_row(bodies: &mut Arena<RigidBody>, row: &mut ConstraintR
 }
 
 /// Warm-start a constraint row by applying its cached impulse scaled by a factor.
+///
+/// The accumulator is reset to what was actually applied, matching the contact
+/// warm start. Leaving it at the full cached value credits the row with impulse
+/// the body never received. An unbounded row corrects that on its next solve;
+/// a row at its bound cannot, so its clamp works off a stale number and the
+/// impulse it delivers per substep stops meaning what the bound says.
 pub fn warm_start_constraint_row(
     bodies: &mut Arena<RigidBody>,
     row: &mut ConstraintRow,
     scale: f32,
 ) {
-    let impulse = row.accumulated_impulse * scale;
-    if impulse.abs() > 1e-12 {
-        apply_constraint_impulse(bodies, row, impulse);
+    row.accumulated_impulse *= scale;
+    if row.accumulated_impulse.abs() > 1e-12 {
+        apply_constraint_impulse(bodies, row, row.accumulated_impulse);
     }
 }
