@@ -13,6 +13,49 @@ pub const HIP_WIDTH: f32 = 0.12;
 pub const LEG_LENGTH: f32 = 0.5;
 pub const STANDING_HEIGHT: f32 = 0.425;
 
+/// The rig a scenario is walked on.
+///
+/// The placer is rig-independent by design — the player, the heart
+/// critter and the peeper all walk on the same one — so the harness has
+/// to be too. Anything measured on one set of proportions and not the
+/// others is measuring the proportions.
+#[derive(Clone, Copy, Debug)]
+pub struct RigDims {
+    pub hip_width: f32,
+    pub leg_length: f32,
+    pub standing_height: f32,
+}
+
+impl RigDims {
+    /// The player's proportions, which every pre-existing scenario was
+    /// written against.
+    pub fn player() -> Self {
+        Self {
+            hip_width: HIP_WIDTH,
+            leg_length: LEG_LENGTH,
+            standing_height: STANDING_HEIGHT,
+        }
+    }
+
+    /// A peeper: twice the leg, half the hip separation. Kept in step
+    /// with `PeeperRigConfig::default` rather than guessed.
+    pub fn peeper() -> Self {
+        let config = crate::animation::peeper::PeeperRigConfig::default();
+        let dims = config.leg_dims();
+        Self {
+            hip_width: dims.hip_width,
+            leg_length: dims.leg_length,
+            standing_height: dims.standing_height,
+        }
+    }
+}
+
+impl Default for RigDims {
+    fn default() -> Self {
+        Self::player()
+    }
+}
+
 /// Per-gait knobs the animator sources from the active `GaitPreset`.
 #[derive(Clone, Copy)]
 pub struct GaitParams {
@@ -25,6 +68,17 @@ impl GaitParams {
         Self {
             stride_gain: 0.4,
             step_height: 0.15,
+        }
+    }
+
+    /// A peeper's: a longer stride and a higher-lifted foot than the
+    /// player's walk. Sourced from `PeeperRigConfig::default` rather than
+    /// written out again.
+    pub fn peeper() -> Self {
+        let config = crate::animation::peeper::PeeperRigConfig::default();
+        Self {
+            stride_gain: config.stride_gain,
+            step_height: config.step_height,
         }
     }
 
@@ -71,6 +125,9 @@ pub struct Frame {
     pub velocity: Vector3<f32>,
     pub yaw: f32,
     pub gait_phase: f32,
+    /// The cadence the placer planned this frame, which is what a
+    /// measured gait has to be judged against.
+    pub timing: Option<super::timing::GaitTiming>,
     pub left: PlacerFoot,
     pub right: PlacerFoot,
 }
@@ -143,7 +200,37 @@ pub fn simulate_over(
     input: impl Fn(usize) -> Input,
     suspend: impl Fn(usize) -> bool,
 ) -> Vec<Frame> {
-    let cfg = FootPlacerConfig::default();
+    simulate_rig(
+        RigDims::player(),
+        FootPlacerConfig::default(),
+        frames,
+        dt_of,
+        gait,
+        terrain,
+        input,
+        suspend,
+    )
+}
+
+/// The full form: a scenario over arbitrary terrain, on an arbitrary rig,
+/// under an arbitrary placer config. Everything above is this with the
+/// player's proportions filled in.
+#[allow(clippy::too_many_arguments)]
+pub fn simulate_rig(
+    dims: RigDims,
+    cfg: FootPlacerConfig,
+    frames: usize,
+    dt_of: impl Fn(usize) -> f32,
+    gait: GaitParams,
+    terrain: impl Fn(f32, f32) -> Option<f32>,
+    input: impl Fn(usize) -> Input,
+    suspend: impl Fn(usize) -> bool,
+) -> Vec<Frame> {
+    let RigDims {
+        hip_width,
+        leg_length,
+        standing_height,
+    } = dims;
 
     let mut pelvis_xz = Vector2::new(0.0, 0.0);
     let init_yaw = input(0).yaw;
@@ -154,13 +241,13 @@ pub fn simulate_over(
     // edge — so ground height falls back to the last surface it knew.
     let mut last_ground_y = foot_y0;
     let mut placer = FootPlacer::new(
-        Point3::new(0.0, foot_y0 + STANDING_HEIGHT, 0.0),
+        Point3::new(0.0, foot_y0 + standing_height, 0.0),
         init_facing,
-        HIP_WIDTH,
+        hip_width,
         foot_y0,
     );
     let mut last_yaw = init_yaw;
-    let mut prev_pelvis_y = foot_y0 + STANDING_HEIGHT;
+    let mut prev_pelvis_y = foot_y0 + standing_height;
     let mut time = 0.0;
     let mut out = Vec::with_capacity(frames);
 
@@ -178,7 +265,7 @@ pub fn simulate_over(
         pelvis_xz.x += velocity.x * dt;
         pelvis_xz.y += velocity.z * dt;
         last_ground_y = terrain(pelvis_xz.x, pelvis_xz.y).unwrap_or(last_ground_y);
-        let pelvis = Point3::new(pelvis_xz.x, last_ground_y + STANDING_HEIGHT, pelvis_xz.y);
+        let pelvis = Point3::new(pelvis_xz.x, last_ground_y + standing_height, pelvis_xz.y);
         // The pelvis follows the terrain, so the placer must see the
         // implied vertical velocity — the game's physics velocity has
         // it, and the overstretch opening gate reads it on slopes.
@@ -208,10 +295,10 @@ pub fn simulate_over(
             intent_direction: intent,
             yaw,
             yaw_rate,
-            hip_width: HIP_WIDTH,
-            leg_length: LEG_LENGTH,
-            standing_height: STANDING_HEIGHT,
-            foot_y_fallback: pelvis.y - STANDING_HEIGHT,
+            hip_width,
+            leg_length,
+            standing_height,
+            foot_y_fallback: pelvis.y - standing_height,
             step_height: gait.step_height,
             stride_gain: gait.stride_gain,
             left_ground_normal,
@@ -228,6 +315,7 @@ pub fn simulate_over(
             velocity,
             yaw,
             gait_phase: placer.gait_phase(),
+            timing: placer.timing(),
             left: placer.left.clone(),
             right: placer.right.clone(),
         });

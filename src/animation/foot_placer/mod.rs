@@ -14,6 +14,8 @@ mod swing;
 mod timing;
 
 #[cfg(test)]
+mod chase;
+#[cfg(test)]
 mod invariants;
 #[cfg(test)]
 mod replay;
