@@ -40,8 +40,8 @@ use crate::rendering::material::GpuSurface;
 ///
 /// Sized well past any plausible frame — the heaviest scenes in the game record
 /// draws in the low thousands — because the cost of being generous is
-/// `CAPACITY * 64` bytes of host-visible memory and the cost of being tight is a
-/// mis-shaded draw.
+/// `CAPACITY * size_of::<GpuSurface>()` bytes of host-visible memory and the
+/// cost of being tight is a mis-shaded draw.
 pub const CAPACITY: u32 = 65536;
 
 /// Index of one surface within the frame's table, pushed per draw.
@@ -177,7 +177,7 @@ mod tests {
     /// its Rust size and its std430 stride are the same number.
     #[test]
     fn the_gpu_struct_matches_its_std430_stride() {
-        assert_eq!(std::mem::size_of::<GpuSurface>(), 64);
+        assert_eq!(std::mem::size_of::<GpuSurface>(), 80);
         assert_eq!(std::mem::align_of::<GpuSurface>() % 4, 0);
     }
 

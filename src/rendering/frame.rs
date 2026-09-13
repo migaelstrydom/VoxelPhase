@@ -488,6 +488,38 @@ impl FrameData {
     ///
     /// If buffers need to be resized, the old buffers are queued for deferred
     /// deletion to avoid destroying them while the GPU may still be using them.
+    /// Copy what the frame has already written into a buffer that has just
+    /// been grown to replace it.
+    ///
+    /// Not every draw is recorded where it is issued. Blended geometry is held
+    /// back and recorded after the last append (see `rendering::transparency`),
+    /// so a deferred draw binds whichever buffer the frame *ends* with — while
+    /// the draws recorded earlier bind whichever buffer was current then.
+    /// Growing the buffer without carrying its contents leaves those two
+    /// disagreeing: every mesh appended before the growth is intact in the old
+    /// buffer and absent from the new one, so the deferred draws read whatever
+    /// the fresh allocation happens to contain. What that looks like is
+    /// transparent objects silently vanishing once a scene grows past the
+    /// buffer's size — which is exactly how it was found.
+    ///
+    /// Both buffers are host-visible and coherent, so this is a plain memcpy,
+    /// and it runs only on a growth, which doubles.
+    fn carry_over(from: &ManagedBuffer, to: &ManagedBuffer, used_bytes: usize) -> EngineResult<()> {
+        if used_bytes == 0 {
+            return Ok(());
+        }
+
+        unsafe {
+            let src = from.map_memory(0, vk::MemoryMapFlags::empty())?;
+            let dst = to.map_memory(0, vk::MemoryMapFlags::empty())?;
+            std::ptr::copy_nonoverlapping(src as *const u8, dst as *mut u8, used_bytes);
+            to.unmap_memory();
+            from.unmap_memory();
+        }
+
+        Ok(())
+    }
+
     pub fn append_mesh_data(
         &mut self,
         vertices: &[Vertex],
@@ -514,6 +546,11 @@ impl FrameData {
             )?;
             // Swap in new buffer, queue old one for deferred deletion
             let old_buffer = mem::replace(&mut self.vertex_buffer, new_buffer);
+            Self::carry_over(
+                &old_buffer,
+                &self.vertex_buffer,
+                self.current_vertex_count as usize * mem::size_of::<Vertex>(),
+            )?;
             self.buffer_deletion_queue
                 .queue(old_buffer, self.frame_number);
             log::debug!("Vertex buffer resized: {} -> {} bytes", old_size, new_size);
@@ -532,6 +569,11 @@ impl FrameData {
             )?;
             // Swap in new buffer, queue old one for deferred deletion
             let old_buffer = mem::replace(&mut self.index_buffer, new_buffer);
+            Self::carry_over(
+                &old_buffer,
+                &self.index_buffer,
+                self.current_index_count as usize * mem::size_of::<u32>(),
+            )?;
             self.buffer_deletion_queue
                 .queue(old_buffer, self.frame_number);
             log::debug!("Index buffer resized: {} -> {} bytes", old_size, new_size);

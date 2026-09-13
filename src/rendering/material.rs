@@ -1,6 +1,7 @@
 use crate::rendering::colour::Colour;
 use crate::rendering::grain::GrainSpec;
 use crate::rendering::surface_source::SurfaceSource;
+use crate::rendering::transparency::Transparency;
 use crate::rendering::triplanar::TriplanarProjection;
 use crate::resources::textures::TextureHandle;
 
@@ -159,6 +160,11 @@ pub struct Material {
     /// Which shading inputs this material asks for. Set by the grain builders
     /// rather than by hand; a material that says nothing takes `PLAIN`.
     pub source: SurfaceSource,
+
+    /// How much light passes through the surface. Opaque by default, and the
+    /// one dial that decides which of the frame's two geometry passes a draw
+    /// belongs to — see `rendering::transparency`.
+    pub transparency: Transparency,
 }
 
 impl Material {
@@ -172,6 +178,7 @@ impl Material {
             projection: TriplanarProjection::default(),
             grain: GrainSpec::NONE,
             source: SurfaceSource::PLAIN,
+            transparency: Transparency::OPAQUE,
         }
     }
 
@@ -186,6 +193,7 @@ impl Material {
             projection: TriplanarProjection::default(),
             grain: GrainSpec::NONE,
             source: SurfaceSource::PLAIN,
+            transparency: Transparency::OPAQUE,
         }
     }
 
@@ -212,6 +220,15 @@ impl Material {
         if grain.is_enabled() {
             self.source = self.source.with(SurfaceSource::GRAIN_BY_UV);
         }
+        self
+    }
+
+    /// Let light through this surface.
+    ///
+    /// Moves the material into the sorted blended pass; see
+    /// [`Transparency::is_blended`].
+    pub fn with_transparency(mut self, transparency: Transparency) -> Self {
+        self.transparency = transparency;
         self
     }
 
@@ -246,6 +263,7 @@ impl Material {
             projection: self.projection.packed(),
             source: self.source,
             grain: self.grain,
+            transparency: self.transparency,
         }
     }
 }
@@ -289,14 +307,14 @@ impl Default for SurfaceModulation {
 
 /// GPU-facing surface parameters, one entry in the frame's surface table.
 ///
-/// Layout must match the `GpuSurface` struct in shader/material.glsl. Three
+/// Layout must match the `GpuSurface` struct in shader/material.glsl. Whole
 /// `vec4`s exactly: std430 aligns a struct to its largest member, so anything
 /// that is not a multiple of 16 bytes here would be padded to one on the GPU
 /// and every entry after the first would be read from the wrong offset.
 ///
-/// The trailing pair in `projection` is deliberate headroom. It is what the
-/// old push-constant layout had no room for, and what per-material surface
-/// detail is written into.
+/// The spare slots are deliberate headroom. They are what the old
+/// push-constant layout had no room for, and what per-material surface detail
+/// is written into.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[repr(C)]
 pub struct GpuSurface {
@@ -312,6 +330,10 @@ pub struct GpuSurface {
 
     /// x = [`SurfaceSource`] flags, y = grain index, zw spare.
     pub control: [u32; 4],
+
+    /// x = head-on opacity, y = reflectance at normal incidence, zw spare.
+    /// See [`Transparency`].
+    pub optics: [f32; 4],
 }
 
 impl GpuSurface {
@@ -322,6 +344,7 @@ impl GpuSurface {
         surface: [1.0, 0.0, 0.0, 3.0],
         projection: [0.0, 0.0, 0.0, 0.0],
         control: [0, 0, 0, 0],
+        optics: [1.0, 0.04, 0.0, 0.0],
     };
 }
 
@@ -341,6 +364,10 @@ pub struct SurfaceParams {
 
     /// The microstructure this surface shows under a highlight.
     pub grain: GrainSpec,
+
+    /// How much light passes through. Decides which geometry pass the draw
+    /// carrying these parameters is recorded into.
+    pub transparency: Transparency,
 }
 
 impl SurfaceParams {
@@ -352,6 +379,7 @@ impl SurfaceParams {
         projection: [0.0, 0.0],
         source: SurfaceSource::PLAIN,
         grain: GrainSpec::NONE,
+        transparency: Transparency::OPAQUE,
     };
 
     /// Give this surface a microstructure, projected from the object's own
@@ -374,6 +402,13 @@ impl SurfaceParams {
         if grain.is_enabled() {
             self.source = self.source.with(SurfaceSource::GRAIN_BY_UV);
         }
+        self
+    }
+
+    /// Let light through this surface, moving its draw into the sorted
+    /// blended pass.
+    pub fn with_transparency(mut self, transparency: Transparency) -> Self {
+        self.transparency = transparency;
         self
     }
 
@@ -413,6 +448,12 @@ impl SurfaceParams {
                 self.grain.strength,
             ],
             control: [self.source.0, self.grain.layer.index(), 0, 0],
+            optics: [
+                self.transparency.opacity,
+                self.transparency.reflectance(),
+                0.0,
+                0.0,
+            ],
         }
     }
 }
@@ -509,7 +550,7 @@ mod tests {
     #[test]
     fn the_surface_table_carries_the_parameters_not_the_push_constants() {
         assert_eq!(std::mem::size_of::<SurfaceParams>() > 4, true);
-        assert_eq!(std::mem::size_of::<GpuSurface>(), 64);
+        assert_eq!(std::mem::size_of::<GpuSurface>(), 80);
     }
 
     #[test]

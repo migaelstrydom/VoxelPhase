@@ -244,6 +244,14 @@ pub struct GraphicsPipeline {
     pub wireframe_backface: vk::Pipeline,
     /// Alpha-blended pipeline for transparent geometry (no cull, no depth write).
     pub transparent: vk::Pipeline,
+    /// Blended scene geometry, back faces only (front-face culled).
+    ///
+    /// The first of the two draws every blended mesh takes. Recorded into the
+    /// HDR scene pass rather than the post-tonemap one, so glass is exposed
+    /// and bloomed with the rest of the scene instead of being pasted on after.
+    pub scene_blended_back: vk::Pipeline,
+    /// Blended scene geometry, front faces only. The second of the two draws.
+    pub scene_blended_front: vk::Pipeline,
     /// Pipeline layout shared by all standard geometry variants.
     pub layout: vk::PipelineLayout,
     /// Render pass for opaque geometry.
@@ -331,6 +339,30 @@ impl GraphicsPipeline {
             },
         )?;
 
+        // Blended scene geometry, drawn as two passes over the same mesh.
+        // Within one draw the rasteriser has no ordering to offer — a mesh's
+        // own far and near faces arrive in index order — so the far half is
+        // separated out by culling and recorded first. Exact for a convex
+        // shape, which is what an ice cube is.
+        let blended_scene_config = |cull_mode| PipelineVariantConfig {
+            polygon_mode: vk::PolygonMode::FILL,
+            cull_mode,
+            depth_write: false,
+            blend_mode: BlendMode::Alpha,
+        };
+
+        let scene_blended_back = factory.create(
+            renderpass,
+            layout,
+            &blended_scene_config(vk::CullModeFlags::FRONT),
+        )?;
+
+        let scene_blended_front = factory.create(
+            renderpass,
+            layout,
+            &blended_scene_config(vk::CullModeFlags::BACK),
+        )?;
+
         let transparent = factory.create(
             transparent_renderpass,
             layout,
@@ -346,6 +378,8 @@ impl GraphicsPipeline {
             opaque,
             wireframe_backface,
             transparent,
+            scene_blended_back,
+            scene_blended_front,
             layout,
             renderpass,
             transparent_renderpass,
@@ -580,6 +614,12 @@ impl Drop for GraphicsPipeline {
                 .device
                 .destroy_pipeline(self.wireframe_backface, None);
             self.device.device.destroy_pipeline(self.transparent, None);
+            self.device
+                .device
+                .destroy_pipeline(self.scene_blended_back, None);
+            self.device
+                .device
+                .destroy_pipeline(self.scene_blended_front, None);
             self.device
                 .device
                 .destroy_pipeline_layout(self.layout, None);

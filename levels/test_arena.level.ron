@@ -81,6 +81,12 @@ Level(
                 GlowingOrb(pos: (0.0, 0.5, 3.0), colour: Some((1.0, 0.45, 0.15)), glow: Some(2.18)),
                 GlowingOrb(pos: (-2.0, 0.5, 2.0), colour: Some((0.8, 0.3, 1.0)), glow: Some(1.71)),
 
+                // Ice: the transmissive material. Three in a row at different
+                // depths, so the back-to-front sort has something to sort.
+                IceCube(pos: (5.0, 0.36, 4.2), size: 0.35),
+                IceCube(pos: (6.1, 0.36, 5.2), size: 0.35, yaw: 25.0),
+                IceCube(pos: (5.5, 1.08, 4.7), size: 0.35, yaw: -15.0),
+
                 Banana(pos: (2.0, 1.0, -1.0)),
                 Banana(pos: (3.2, 1.0, -1.6), ripeness: 0.05, curvature: 1.1),
                 Banana(pos: (0.8, 1.0, -2.2), ripeness: 0.95, length: 0.7),

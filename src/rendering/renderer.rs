@@ -40,6 +40,7 @@ use crate::rendering::target::frame_targets::DEPTH_FORMAT;
 use crate::rendering::target::{
     AcquiredFrame, FrameOutput, FrameTargets, OffscreenOutput, SurfaceInfo, SwapchainOutput,
 };
+use crate::rendering::transparency::{BlendedDraw, MeshBounds, TransparentQueue};
 use crate::rendering::vertex::Vertex;
 use crate::rendering::water::WaterRenderer;
 use crate::resources::textures::{TextureHandle, TextureManager};
@@ -59,13 +60,23 @@ pub const PUSH_CONSTANT_STAGES: vk::ShaderStageFlags = vk::ShaderStageFlags::fro
     vk::ShaderStageFlags::VERTEX.as_raw() | vk::ShaderStageFlags::FRAGMENT.as_raw(),
 );
 
-/// Which of the frame's two geometry passes a draw belongs to.
+/// Which of the frame's geometry passes a draw belongs to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DrawPass {
     /// Depth-tested, depth-writing, no blending. Into the HDR scene target.
     Opaque,
-    /// Alpha blended, no depth write. Into the composited output image.
-    Transparent,
+    /// Alpha blended, no depth write, into the HDR scene target after every
+    /// opaque draw. Held back and sorted rather than recorded where it is
+    /// issued; see `rendering::transparency`.
+    ///
+    /// Not a pass a caller asks for — a draw lands here because its *material*
+    /// lets light through, which is the only thing that can decide it. The
+    /// alternative would let a spawnable declare ice and still be drawn opaque
+    /// by a call site that forgot.
+    SceneBlended,
+    /// Alpha blended, no depth write. Into the composited output image, after
+    /// tonemapping, where debug overlays and particles live.
+    Overlay,
 }
 
 /// How a mesh draw participates in the frame beyond issuing its own triangles.
@@ -84,17 +95,22 @@ struct DrawOptions {
 
 impl DrawOptions {
     /// Ordinary solid geometry: terrain, props, characters.
+    ///
+    /// `casts_shadow` is what the *pass* asks for; a surface that lets light
+    /// through overrides it, because it cannot throw the solid shadow a
+    /// shadow map is only able to store. See `draw_mesh_internal`.
     const OPAQUE: Self = Self {
         pass: DrawPass::Opaque,
         wireframe_overlay: true,
         casts_shadow: true,
     };
 
-    /// Blended geometry. Casts nothing: a shadow map stores one depth per
-    /// texel and has no way to express partial occlusion, so a translucent
-    /// caster would throw the solid shadow it visibly does not have.
-    const TRANSPARENT: Self = Self {
-        pass: DrawPass::Transparent,
+    /// Debug overlay geometry, composited after tonemapping. Casts nothing:
+    /// a shadow map stores one depth per texel and has no way to express
+    /// partial occlusion, and a debug shape has no business in the scene's
+    /// lighting anyway.
+    const OVERLAY: Self = Self {
+        pass: DrawPass::Overlay,
         wireframe_overlay: false,
         casts_shadow: false,
     };
@@ -146,6 +162,13 @@ pub struct Renderer {
     pub shadow: ShadowRenderer,
     /// Active fire instances with their GPU resources. Keyed by entity index.
     pub active_fires: Vec<(specs::Entity, ActiveFire)>,
+    /// Blended scene draws held back for the sorted flush at the end of the
+    /// opaque pass.
+    transparent_queue: TransparentQueue,
+    /// Where the camera is this frame, as `update_scene` was told. Held
+    /// because sorting blended draws needs it and a draw call has no reason
+    /// to be handed it again.
+    camera_pos: Vector3<f32>,
     /// Scene lighting environment uploaded to the scene UBO each frame.
     lighting: SceneLighting,
     /// When true, backfaces are rendered in wireframe with `wireframe_color`.
@@ -305,6 +328,8 @@ impl Renderer {
             post_process,
             shadow,
             active_fires: Vec::new(),
+            transparent_queue: TransparentQueue::new(),
+            camera_pos: Vector3::zeros(),
             lighting: SceneLighting::default(),
             debug_wireframe_backfaces: false,
             wireframe_color: [0.0, 0.0, 0.0, 1.0],
@@ -335,6 +360,9 @@ impl Renderer {
         // Now that the GPU is done with previous frames, flush deferred deletions
         self.frame_data.begin_frame();
         self.surfaces.begin_frame();
+        // Must be rewound with the buffers it indexes into: a held-over entry
+        // would point at geometry that is about to be overwritten.
+        self.transparent_queue.begin_frame();
 
         // Everything fallible that costs nothing to redo goes first, so the
         // acquire is the last step that can fail. An acquired swapchain image
@@ -413,6 +441,8 @@ impl Renderer {
         proj: &Matrix4<f32>,
         camera_pos: &Vector3<f32>,
     ) -> EngineResult<()> {
+        self.camera_pos = *camera_pos;
+
         let sun_direction = self.sky_renderer.sun_direction();
         let lighting = SceneLighting {
             sun_direction,
@@ -577,7 +607,7 @@ impl Renderer {
             white_texture,
             SurfaceParams::MATTE,
             texture_manager,
-            DrawOptions::TRANSPARENT,
+            DrawOptions::OVERLAY,
         )
     }
 
@@ -622,7 +652,14 @@ impl Renderer {
         );
     }
 
-    /// Record a mesh draw call with the specified pipeline.
+    /// Commit a mesh to the frame and record it, or hold it back.
+    ///
+    /// Everything a draw needs is committed here either way — the geometry
+    /// into the frame's buffers, the shading parameters into its surface
+    /// table, the caster into the shadow pass — because all three are
+    /// order-independent. Only the *recording* of the colour draw depends on
+    /// what else the frame contains, and only for blended surfaces, so only
+    /// that part is deferred.
     fn draw_mesh_internal(
         &mut self,
         cb: vk::CommandBuffer,
@@ -644,21 +681,90 @@ impl Renderer {
         // Park this draw's shading parameters in the frame's surface table.
         let surface_index = self.surfaces.push(surface.to_gpu());
 
-        if options.casts_shadow {
+        // A shadow map stores one depth per texel and has no way to express
+        // partial occlusion, so a transmissive caster can only throw a fully
+        // solid shadow. On a block of ice that is worse than no shadow at
+        // all: it puts a hard black bite out of whatever stands behind it,
+        // through something the eye can see straight through.
+        if options.casts_shadow && !surface.transparency.is_blended() {
             self.record_shadow_caster(model, &draw_info);
         }
 
-        let pipeline = match options.pass {
-            DrawPass::Opaque => self.pipeline.opaque,
-            DrawPass::Transparent => self.pipeline.transparent,
+        let texture_set = texture_manager
+            .get_or_create_descriptor_set(texture)
+            .map_err(|e| crate::core::error::EngineError::Texture {
+                path: None,
+                reason: format!("descriptor set creation: {}", e),
+            })?;
+
+        let blended = BlendedDraw::new(*model, draw_info, surface_index, texture_set);
+
+        // A material that lets light through overrides the scene pass it was
+        // asked for. The call site does not know what it is drawing — a model
+        // carries whatever material its spawnable gave it — so the decision
+        // belongs to the surface.
+        let pass = match options.pass {
+            DrawPass::Opaque if surface.transparency.is_blended() => DrawPass::SceneBlended,
+            other => other,
         };
 
+        match pass {
+            DrawPass::SceneBlended => {
+                self.transparent_queue
+                    .push(blended.sorted_from(&self.camera_pos, &MeshBounds::of(vertices)));
+            }
+            DrawPass::Opaque => {
+                self.record_geometry_draw(cb, self.pipeline.opaque, &blended);
+                self.record_wireframe_overlay(cb, &blended, options);
+            }
+            DrawPass::Overlay => {
+                self.record_geometry_draw(cb, self.pipeline.transparent, &blended);
+                self.record_wireframe_overlay(cb, &blended, options);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Record the frame's blended geometry, farthest first.
+    ///
+    /// Call once, after the last opaque draw and before the opaque pass ends —
+    /// these draws go into the HDR scene target, so that glass is exposed,
+    /// tonemapped and bloomed with everything behind it rather than pasted on
+    /// after the resolve.
+    ///
+    /// Each mesh is recorded twice, back faces then front faces. Sorting can
+    /// only order whole draws, and a closed mesh contains its own far and near
+    /// surfaces; splitting them by cull mode is what puts those two in order.
+    fn flush_blended_geometry(&mut self, cb: vk::CommandBuffer) {
+        if self.transparent_queue.is_empty() {
+            return;
+        }
+
+        // Taken out of the queue so the recording loop is not holding a borrow
+        // of `self` through calls that need `&self` for the device.
+        let draws: Vec<BlendedDraw> = self.transparent_queue.sorted().to_vec();
+        for draw in &draws {
+            self.record_geometry_draw(cb, self.pipeline.scene_blended_back, draw);
+            self.record_geometry_draw(cb, self.pipeline.scene_blended_front, draw);
+        }
+    }
+
+    /// Bind the given pipeline and issue one mesh's draw call.
+    ///
+    /// The shared tail of every geometry draw, whichever pass and whenever it
+    /// was decided: state that varies per draw is pushed here, and nothing
+    /// about it depends on when the draw was committed.
+    fn record_geometry_draw(
+        &self,
+        cb: vk::CommandBuffer,
+        pipeline: vk::Pipeline,
+        draw: &BlendedDraw,
+    ) {
+        let device = self.vulkan_context.device();
+
         unsafe {
-            self.vulkan_context.device().cmd_bind_pipeline(
-                cb,
-                vk::PipelineBindPoint::GRAPHICS,
-                pipeline,
-            );
+            device.cmd_bind_pipeline(cb, vk::PipelineBindPoint::GRAPHICS, pipeline);
 
             // Set dynamic state
             let viewports = [vk::Viewport {
@@ -671,19 +777,15 @@ impl Renderer {
             }];
             let scissors = [self.targets.extent.into()];
 
-            self.vulkan_context
-                .device()
-                .cmd_set_viewport(cb, 0, &viewports);
-            self.vulkan_context
-                .device()
-                .cmd_set_scissor(cb, 0, &scissors);
+            device.cmd_set_viewport(cb, 0, &viewports);
+            device.cmd_set_scissor(cb, 0, &scissors);
 
             // Push model matrix (per-draw data)
             let model_bytes: &[u8] = std::slice::from_raw_parts(
-                model.as_ptr() as *const u8,
+                draw.model.as_ptr() as *const u8,
                 std::mem::size_of::<Matrix4<f32>>(),
             );
-            self.vulkan_context.device().cmd_push_constants(
+            device.cmd_push_constants(
                 cb,
                 self.pipeline.layout,
                 // The range is declared for both stages — the fragment shader
@@ -701,7 +803,7 @@ impl Renderer {
                 no_override.as_ptr() as *const u8,
                 std::mem::size_of::<[f32; 4]>(),
             );
-            self.vulkan_context.device().cmd_push_constants(
+            device.cmd_push_constants(
                 cb,
                 self.pipeline.layout,
                 PUSH_CONSTANT_STAGES,
@@ -712,25 +814,17 @@ impl Renderer {
             // Push where this draw's parameters landed in the surface table.
             // The parameters themselves went into the table above; only this
             // index travels through the push constants.
-            self.vulkan_context.device().cmd_push_constants(
+            device.cmd_push_constants(
                 cb,
                 self.pipeline.layout,
                 PUSH_CONSTANT_STAGES,
                 SURFACE_INDEX_OFFSET,
-                &surface_index.as_bytes(),
+                &draw.surface_index.as_bytes(),
             );
 
-            // Get texture descriptor set
-            let texture_set = texture_manager
-                .get_or_create_descriptor_set(texture)
-                .map_err(|e| crate::core::error::EngineError::Texture {
-                    path: None,
-                    reason: format!("descriptor set creation: {}", e),
-                })?;
-
             // Bind descriptor sets
-            let descriptor_sets = [self.descriptors.scene_ubo_set, texture_set];
-            self.vulkan_context.device().cmd_bind_descriptor_sets(
+            let descriptor_sets = [self.descriptors.scene_ubo_set, draw.texture_set];
+            device.cmd_bind_descriptor_sets(
                 cb,
                 vk::PipelineBindPoint::GRAPHICS,
                 self.pipeline.layout,
@@ -740,74 +834,88 @@ impl Renderer {
             );
 
             // Bind vertex and index buffers
-            self.vulkan_context.device().cmd_bind_vertex_buffers(
-                cb,
-                0,
-                &[self.frame_data.vertex_buffer.buffer],
-                &[0],
-            );
-            self.vulkan_context.device().cmd_bind_index_buffer(
+            device.cmd_bind_vertex_buffers(cb, 0, &[self.frame_data.vertex_buffer.buffer], &[0]);
+            device.cmd_bind_index_buffer(
                 cb,
                 self.frame_data.index_buffer.buffer,
                 0,
                 vk::IndexType::UINT32,
             );
 
-            // Draw
-            self.vulkan_context.device().cmd_draw_indexed(
+            device.cmd_draw_indexed(
                 cb,
-                draw_info.index_count,
+                draw.draw.index_count,
                 1,
-                draw_info.first_index,
-                draw_info.vertex_offset,
+                draw.draw.first_index,
+                draw.draw.vertex_offset,
                 0,
             );
-
-            // Wireframe backface pass: re-draw with wireframe pipeline and solid colour
-            if options.wireframe_overlay && self.debug_wireframe_backfaces {
-                self.vulkan_context.device().cmd_bind_pipeline(
-                    cb,
-                    vk::PipelineBindPoint::GRAPHICS,
-                    self.pipeline.wireframe_backface,
-                );
-
-                let color_bytes: &[u8] = std::slice::from_raw_parts(
-                    self.wireframe_color.as_ptr() as *const u8,
-                    std::mem::size_of::<[f32; 4]>(),
-                );
-                self.vulkan_context.device().cmd_push_constants(
-                    cb,
-                    self.pipeline.layout,
-                    PUSH_CONSTANT_STAGES,
-                    64,
-                    color_bytes,
-                );
-
-                self.vulkan_context.device().cmd_draw_indexed(
-                    cb,
-                    draw_info.index_count,
-                    1,
-                    draw_info.first_index,
-                    draw_info.vertex_offset,
-                    0,
-                );
-            }
         }
-
-        Ok(())
     }
 
+    /// Re-draw a mesh's backfaces in wireframe, when that debug mode is on.
+    ///
+    /// Follows the mesh's own draw and reuses everything it just bound, so
+    /// only the pipeline and the colour override change.
+    fn record_wireframe_overlay(
+        &self,
+        cb: vk::CommandBuffer,
+        draw: &BlendedDraw,
+        options: DrawOptions,
+    ) {
+        if !options.wireframe_overlay || !self.debug_wireframe_backfaces {
+            return;
+        }
+
+        let device = self.vulkan_context.device();
+
+        unsafe {
+            device.cmd_bind_pipeline(
+                cb,
+                vk::PipelineBindPoint::GRAPHICS,
+                self.pipeline.wireframe_backface,
+            );
+
+            let color_bytes: &[u8] = std::slice::from_raw_parts(
+                self.wireframe_color.as_ptr() as *const u8,
+                std::mem::size_of::<[f32; 4]>(),
+            );
+            device.cmd_push_constants(
+                cb,
+                self.pipeline.layout,
+                PUSH_CONSTANT_STAGES,
+                64,
+                color_bytes,
+            );
+
+            device.cmd_draw_indexed(
+                cb,
+                draw.draw.index_count,
+                1,
+                draw.draw.first_index,
+                draw.draw.vertex_offset,
+                0,
+            );
+        }
+    }
     /// End the opaque render pass, resolve the HDR scene onto the output image
     /// (tonemap + bloom), and begin the transparent render pass.
     ///
     /// Must be called after all opaque geometry is drawn and before water,
     /// particles, or overlay rendering.
     ///
+    /// The frame's blended scene geometry is recorded here, on the way out of
+    /// the opaque pass: it belongs to the HDR target, and this is the one
+    /// point every caller already passes through on leaving it, so no call
+    /// site has to remember to flush the queue itself.
+    ///
     /// The opaque render pass leaves the HDR colour target in
     /// `SHADER_READ_ONLY_OPTIMAL`, and the composite pass leaves the output
     /// image in `COLOR_ATTACHMENT_OPTIMAL`, so no manual barriers are needed
     /// between the three passes.
-    pub fn begin_transparent_pass(&self, cb: vk::CommandBuffer, image_index: u32) {
+    pub fn begin_transparent_pass(&mut self, cb: vk::CommandBuffer, image_index: u32) {
+        self.flush_blended_geometry(cb);
+
         let device = self.vulkan_context.device();
         let extent = self.targets.extent;
 

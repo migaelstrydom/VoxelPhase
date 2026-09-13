@@ -13,6 +13,7 @@
 #include "surface_character.glsl"
 #include "surface_source.glsl"
 #include "grain.glsl"
+#include "transparency.glsl"
 
 layout(location = 0) in vec4 inColor;
 layout(location = 1) in vec2 inTexCoord;
@@ -115,10 +116,25 @@ void main() {
         }
     }
 
+    vec3 view_dir = normalize(scene.camera_pos.xyz - inWorldPos);
+
+    // A transmissive surface is drawn from both sides — the far half of a
+    // block of ice is as visible as the near half — so a fragment here may be
+    // a back face, whose outward normal points away from the camera. Shade it
+    // from the side it is being seen from.
+    //
+    // Deliberately conditional on the material rather than applied to
+    // everything: opaque geometry never shows a back face (it is culled), so
+    // a normal pointing away from the camera there means a mesh with its
+    // winding or its normals wrong, and quietly flipping it would hide that.
+    if (materialOpacity() < 1.0 && dot(normal, view_dir) < 0.0) {
+        normal = -normal;
+    }
+
     SurfaceSample surface;
     surface.albedo = albedo_wash * inColor.rgb;
     surface.normal = normal;
-    surface.view_dir = normalize(scene.camera_pos.xyz - inWorldPos);
+    surface.view_dir = view_dir;
     surface.metallic = materialMetallic();
     surface.occlusion = inAo;
 
@@ -146,10 +162,16 @@ void main() {
     // `terrain::ao` and applied inside shadeEnvironment.
     float sun_visibility = 1.0 - sunShadow(inWorldPos, surface.normal, sun.direction);
 
+    // The sun's two lobes are kept apart only so that a transmissive surface
+    // can let its highlight hold the pixel; an opaque surface sums them again
+    // immediately and the split costs it nothing.
+    LightResponse sun_response = respondToDirectional(surface, sun);
+    vec3 sun_specular = sun_response.specular * sun_visibility;
+
     // The sky supplies both hemisphere irradiance and the reflection a glossy
     // or metallic surface shows. `ambient_colour` remains on top as an author's
     // fill for lifting a scene without moving the sky.
-    vec3 litColor = shadeDirectional(surface, sun) * sun_visibility
+    vec3 litColor = totalResponse(sun_response) * sun_visibility
                   + shadeEnvironment(surface, sun.direction)
                   + shadeAmbient(surface, scene.ambient_colour.rgb)
                   + materialEmissive();
@@ -176,5 +198,16 @@ void main() {
         litColor += materialEmissive() * rim * rim_strength;
     }
 
-    outColor = vec4(litColor, texture_alpha * inColor.a);
+    // Coverage: how much of this pixel the surface claims. An opaque material
+    // claims all of it and the two rules below collapse to the authored alpha,
+    // which is why there is no branch here — a transmissive material is not a
+    // different shading path, only a different number.
+    float coverage = glassCoverage(
+        materialOpacity(), materialReflectance(), surface.normal, surface.view_dir);
+
+    // A highlight is light that bounced off the front and never went through,
+    // so it survives however clear the body of the surface is.
+    coverage = max(coverage, highlightCoverage(sun_specular));
+
+    outColor = vec4(litColor, texture_alpha * inColor.a * coverage);
 }

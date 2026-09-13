@@ -24,7 +24,7 @@ layout(push_constant) uniform MaterialPushConstants {
     uint surface_index;
 } material;
 
-/// One surface's shading parameters. Three vec4s exactly: std430 rounds a
+/// One surface's shading parameters. Whole vec4s exactly: std430 rounds a
 /// struct's stride up to its alignment, so a layout that is not a multiple of
 /// 16 bytes would silently read every entry after the first from the wrong
 /// offset.
@@ -43,6 +43,10 @@ struct GpuSurface {
     /// x = SurfaceSource flags (see surface_source.glsl), y = grain index,
     /// zw spare.
     uvec4 control;
+    /// x = opacity viewed head-on (1 = opaque), y = reflectance at normal
+    /// incidence, derived from the material's refractive index. zw spare.
+    /// See src/rendering/transparency/optics.rs.
+    vec4 optics;
 };
 
 layout(std430, set = 0, binding = 3) readonly buffer SurfaceTable {
@@ -76,6 +80,13 @@ uint materialSource() { return materialSurface().control.x; }
 
 /// Which layer of the grain atlas this surface's microstructure comes from.
 uint materialGrainLayer() { return materialSurface().control.y; }
+
+/// Fraction of the pixel this surface claims when viewed head-on, before the
+/// Fresnel gain at grazing angles. 1 for everything but glass and ice.
+float materialOpacity() { return materialSurface().optics.x; }
+
+/// This surface's reflectance at normal incidence, from its refractive index.
+float materialReflectance() { return materialSurface().optics.y; }
 
 /// Emissive radiance added independently of incoming light.
 ///

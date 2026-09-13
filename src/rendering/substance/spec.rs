@@ -28,6 +28,7 @@ use crate::rendering::grain::GrainSpec;
 use crate::rendering::material::{Material, SurfaceFinish};
 use crate::rendering::physical_finish::PhysicalSurface;
 use crate::rendering::substance::palette::Palette;
+use crate::rendering::transparency::Transparency;
 use crate::resources::textures::TextureHandle;
 
 /// A named material: how it behaves, how it looks, and what it is made of.
@@ -57,6 +58,11 @@ pub struct Substance {
 
     /// The colours a procedural texture for this substance draws from.
     pub palette: Palette,
+
+    /// How much light passes through. Opaque for everything the library
+    /// declares but ice, and the field that decides which geometry pass an
+    /// object made of this substance is drawn in.
+    pub transparency: Transparency,
 }
 
 impl Substance {
@@ -74,6 +80,7 @@ impl Substance {
             grain: GrainSpec::NONE,
             grain_by_uv: false,
             palette,
+            transparency: Transparency::OPAQUE,
         }
     }
 
@@ -153,12 +160,17 @@ impl Substance {
         self.shade(Material::textured(texture))
     }
 
-    /// Apply this substance's finish and grain to an existing material.
+    /// Apply this substance's finish, grain and transparency to an existing
+    /// material.
     ///
     /// The one place the choice between the two grain addressing modes is made,
-    /// so a spawnable never has to remember that timber is the odd one.
+    /// so a spawnable never has to remember that timber is the odd one — and
+    /// the one place transparency reaches a material, so an object made of ice
+    /// cannot be built opaque by a spawnable that did not think about it.
     pub fn shade(&self, material: Material) -> Material {
-        let material = material.with_finish(self.finish);
+        let material = material
+            .with_finish(self.finish)
+            .with_transparency(self.transparency);
         if self.grain_by_uv {
             material.with_uv_grain(self.grain)
         } else {

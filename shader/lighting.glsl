@@ -110,15 +110,37 @@ vec3 specularF0(vec3 albedo, float metallic) {
     return mix(DIELECTRIC_F0, albedo, metallic);
 }
 
-/// Diffuse plus specular response to light of the given radiance arriving from
+/// A surface's response to one light, with the two lobes kept apart.
+///
+/// Split because they mean physically different things and one caller needs to
+/// tell them apart: light scattered back out of the body of a *transparent*
+/// surface is attenuated by how much of it got in, while light reflected off
+/// the interface never entered at all. Everything else sums them immediately
+/// and never sees the difference.
+struct LightResponse {
+    /// Light that entered the surface and scattered back out.
+    vec3 diffuse;
+    /// Light mirrored off the interface.
+    vec3 specular;
+};
+
+vec3 totalResponse(LightResponse response) {
+    return response.diffuse + response.specular;
+}
+
+/// Diffuse and specular response to light of the given radiance arriving from
 /// `light_dir` (normalized, pointing from the surface towards the light).
 ///
 /// The shared core of every light type: directional and point lights differ
 /// only in how they derive `light_dir` and `radiance`.
-vec3 shadeLight(SurfaceSample surface, vec3 light_dir, vec3 radiance) {
+LightResponse respondToLight(SurfaceSample surface, vec3 light_dir, vec3 radiance) {
+    LightResponse response;
+    response.diffuse = vec3(0.0);
+    response.specular = vec3(0.0);
+
     float n_dot_l = max(dot(surface.normal, light_dir), 0.0);
     if (n_dot_l <= 0.0) {
-        return vec3(0.0);
+        return response;
     }
 
     vec3 half_vector = normalize(light_dir + surface.view_dir);
@@ -134,7 +156,15 @@ vec3 shadeLight(SurfaceSample surface, vec3 light_dir, vec3 radiance) {
     vec3 fresnel = fresnelSchlick(specularF0(surface.albedo, surface.metallic), h_dot_v);
     vec3 specular = fresnel * normalisation * pow(n_dot_h, power);
 
-    return radiance * n_dot_l * (diffuse + specular);
+    vec3 irradiance = radiance * n_dot_l;
+    response.diffuse = irradiance * diffuse;
+    response.specular = irradiance * specular;
+    return response;
+}
+
+/// Total response to light of the given radiance. The common case.
+vec3 shadeLight(SurfaceSample surface, vec3 light_dir, vec3 radiance) {
+    return totalResponse(respondToLight(surface, light_dir, radiance));
 }
 
 /// Smallest specular lobe the sun is allowed to produce.
@@ -151,10 +181,15 @@ vec3 shadeLight(SurfaceSample surface, vec3 light_dir, vec3 radiance) {
 /// this only widens the sun's own highlight.
 const float SUN_SPECULAR_ROUGHNESS_FLOOR = 0.08;
 
+/// Response to a single directional light, with the two lobes kept apart.
+LightResponse respondToDirectional(SurfaceSample surface, DirectionalLight light) {
+    surface.roughness = max(surface.roughness, SUN_SPECULAR_ROUGHNESS_FLOOR);
+    return respondToLight(surface, light.direction, light.colour * light.intensity);
+}
+
 /// Diffuse plus specular response to a single directional light.
 vec3 shadeDirectional(SurfaceSample surface, DirectionalLight light) {
-    surface.roughness = max(surface.roughness, SUN_SPECULAR_ROUGHNESS_FLOOR);
-    return shadeLight(surface, light.direction, light.colour * light.intensity);
+    return totalResponse(respondToDirectional(surface, light));
 }
 
 /// Distance falloff for a point light, in [0, 1].

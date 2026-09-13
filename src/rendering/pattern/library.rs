@@ -255,6 +255,53 @@ pub const SLATE: Pattern = Pattern {
     ],
 };
 
+/// Frozen water: what is *inside* the block rather than on its face.
+///
+/// The only pattern here that is not a surface. Everything else describes a
+/// face a finger could run along; ice is clear, so what the eye reads is the
+/// trapped air and the fracture planes some depth behind it. That makes the
+/// recipe unusually sparse — a near-uniform tile with a few features in it —
+/// and it has to be, because this texture is seen through its own Fresnel
+/// coverage and anything busy turns to grey haze.
+pub const ICE: Pattern = Pattern {
+    name: "ice",
+    layers: &[
+        // Density variation through the block: where it is clearer and where
+        // it has gone milky. Broad and gentle, or it reads as dirt.
+        Layer::Wash {
+            scale: 2.0,
+            octaves: 2,
+            towards: Slot::Light,
+            amount: 0.35,
+        },
+        // Fracture planes. Sharp and bright rather than dark — a crack inside
+        // ice is an air gap, and an air gap reflects.
+        Layer::Vein {
+            scale: 5.0,
+            octaves: 2,
+            sharpness: 14.0,
+            amount: 0.6,
+            towards: Slot::Light,
+        },
+        // Clouded cores where the freeze trapped air, towards the accent's
+        // deeper blue. The thing that gives the block a visible inside.
+        Layer::Patch {
+            scale: 3.0,
+            octaves: 2,
+            threshold: 0.56,
+            span: 0.2,
+            amount: 0.45,
+            towards: Slot::Accent,
+        },
+        // Frozen-in bubbles. Fine, faint, and the only high frequency here.
+        Layer::Shade {
+            scale: 18.0,
+            octaves: 2,
+            amount: 0.04,
+        },
+    ],
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -268,6 +315,7 @@ mod tests {
         MARBLE,
         CONCRETE,
         SLATE,
+        ICE,
     ];
 
     /// Names key the texture cache. Two patterns sharing one would have the

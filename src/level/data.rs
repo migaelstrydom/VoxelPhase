@@ -28,10 +28,10 @@ use crate::app::creatures::{HeartCritterDef, PeeperDef, RollerDef};
 use crate::app::spawnables::{
     BananaDef, BeachBallDef, BoxDef, BoxWallDef, CapsuleDef, CrateDef, DodecahedronDef, DolosDef,
     DominoDef, FencePostDef, GlowingOrbDef, HeavyCrateDef, HexPrismDef, HoneycombWallDef, HouseDef,
-    IcosahedronDef, JackDef, JengaDef, MenhirDef, MovingPlatformDef, OctahedronDef, PendulumDef,
-    PlankBridgeDef, PlankDef, PlayWheelDef, PyramidDef, SeesawDef, Spawnable, StackDef,
-    StackItemDef, TableDef, TempleDef, TetrahedronDef, TowerDef, TrampolineDef, TrilithonDef,
-    VoussoirArchDef, BEACH_BALL_RADIUS,
+    IceCubeDef, IcosahedronDef, JackDef, JengaDef, MenhirDef, MovingPlatformDef, OctahedronDef,
+    PendulumDef, PlankBridgeDef, PlankDef, PlayWheelDef, PyramidDef, SeesawDef, Spawnable,
+    StackDef, StackItemDef, TableDef, TempleDef, TetrahedronDef, TowerDef, TrampolineDef,
+    TrilithonDef, VoussoirArchDef, BEACH_BALL_RADIUS,
 };
 use crate::platform::{DeckSuspension, RouteLoop};
 
@@ -763,6 +763,16 @@ pub enum LevelObject {
         pos: (f32, f32, f32),
         size: f32,
     },
+    /// Block of ice: bevelled, see-through, light and very slippery.
+    IceCube {
+        pos: (f32, f32, f32),
+        /// Cube half-extent, before its edges are cut back.
+        #[serde(default = "IceCubeDef::default_size")]
+        size: f32,
+        /// Rotation about `+Y`, in degrees.
+        #[serde(default)]
+        yaw: f32,
+    },
     /// Vertical stack — auto-computes Y positions bottom-up from base.
     Stack {
         base: (f32, f32, f32),
@@ -1300,6 +1310,7 @@ impl LevelObject {
             LevelObject::Plank { pos, .. } => ("Plank", point(pos)),
             LevelObject::Crate { pos, .. } => ("Crate", point(pos)),
             LevelObject::HeavyCrate { pos, .. } => ("HeavyCrate", point(pos)),
+            LevelObject::IceCube { pos, .. } => ("IceCube", point(pos)),
             LevelObject::Stack { base, .. } => ("Stack", point(base)),
             LevelObject::Tower { base, .. } => ("Tower", point(base)),
             LevelObject::BoxWall { base, .. } => ("BoxWall", point(base)),
@@ -1409,6 +1420,7 @@ impl LevelObject {
             } => rect(length * 0.5, width * 0.5, *yaw),
             LevelObject::Crate { size, .. } => rect(*size, *size, 0.0),
             LevelObject::HeavyCrate { size, .. } => rect(*size, *size, 0.0),
+            LevelObject::IceCube { size, yaw, .. } => rect(*size, *size, *yaw),
             LevelObject::House { half_extents, .. } => rect(half_extents.0, half_extents.2, 0.0),
 
             // Assemblies that stand on one patch of ground.
@@ -1590,6 +1602,7 @@ impl LevelObject {
         match self {
             // Turned by their own yaw.
             LevelObject::Box { .. }
+            | LevelObject::IceCube { .. }
             | LevelObject::Plank { .. }
             | LevelObject::Stack { .. }
             | LevelObject::Tower { .. }
@@ -1687,6 +1700,10 @@ impl LevelObject {
                 *yaw += turn;
             }
             LevelObject::Plank { pos, yaw, .. } => {
+                p3(pos);
+                *yaw += turn;
+            }
+            LevelObject::IceCube { pos, yaw, .. } => {
                 p3(pos);
                 *yaw += turn;
             }
@@ -1832,6 +1849,12 @@ impl LevelObject {
             LevelObject::Crate { pos, size } => Box::new(CrateDef {
                 pos: *pos,
                 size: *size,
+            }),
+
+            LevelObject::IceCube { pos, size, yaw } => Box::new(IceCubeDef {
+                pos: *pos,
+                size: *size,
+                yaw: *yaw,
             }),
 
             LevelObject::HeavyCrate { pos, size } => Box::new(HeavyCrateDef {

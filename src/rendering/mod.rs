@@ -23,6 +23,7 @@ pub mod surface_buffer;
 pub mod surface_source;
 pub mod target;
 pub mod texture;
+pub mod transparency;
 pub mod triplanar;
 pub mod vertex;
 pub mod visual_bench;

@@ -208,6 +208,38 @@ For example, the house uses 3 materials (stone, brick, slate) shared across 18
 physics bodies. Don't create a separate material per body — it wastes texture
 memory and produces inconsistent visuals.
 
+### See-through materials
+
+A material that lets light through is declared once, on its substance:
+
+```rust
+pub const ICE: Substance = Substance {
+    // ...
+    transparency: Transparency::ICE,   // opacity 0.18, refractive index 1.31
+};
+```
+
+Nothing else has to change. The material's transparency is what routes its
+draws into the sorted blended pass (`src/rendering/transparency/`), so a
+spawnable built the ordinary way — `ctx.patterned(&substance, ...)`, or
+`substance.material(texture)` — comes out transparent wherever it is drawn, and
+no call site can forget. `IceCubeDef` is the worked example.
+
+Two things behave differently for a blended object, both of them deliberate:
+
+- **It casts no shadow.** A shadow map stores one depth per texel, so a
+  transmissive caster could only throw a solid shadow — a hard black bite out
+  of whatever stands behind something you can see straight through.
+- **Both of its sides are drawn**, so its mesh must be closed and every
+  triangle wound outwards. On an opaque object a single inside-out triangle is
+  invisible (it is culled); here it is not. Worth a test when you build the
+  mesh by hand — see `ice_cube.rs`.
+
+Sorting is per draw, by distance to the mesh's centre, plus a back-faces-then-
+front-faces split within each mesh. That is exact for a convex shape. Two
+blended objects that interpenetrate, or a concave blended mesh, will still
+composite wrong where they cross.
+
 ### Texture creation pattern
 
 ```rust

@@ -23,6 +23,7 @@ use crate::rendering::material::SurfaceFinish;
 use crate::rendering::physical_finish::PhysicalSurface;
 use crate::rendering::substance::palette::Palette;
 use crate::rendering::substance::spec::Substance;
+use crate::rendering::transparency::Transparency;
 
 /// Build a stone-family substance. They differ only in the four numbers that
 /// follow, and spelling each one out in full would bury that.
@@ -49,6 +50,7 @@ const fn stone(
         grain,
         grain_by_uv: false,
         palette: Palette::from_base_const(base, spread),
+        transparency: Transparency::OPAQUE,
     }
 }
 
@@ -129,6 +131,7 @@ pub const BRICK: Substance = Substance {
     grain_by_uv: false,
     palette: Palette::from_base_const(Colour::new(0.55, 0.27, 0.20, 1.0), 0.2)
         .with_accent(Colour::new(0.72, 0.70, 0.66, 1.0)),
+    transparency: Transparency::OPAQUE,
 };
 
 /// Split roofing stone: dark, dense, and the smoothest of the stones because a
@@ -166,6 +169,7 @@ const fn timber(
         grain: GrainSpec::WOOD,
         grain_by_uv: true,
         palette: Palette::from_base_const(base, 0.22).with_accent(accent),
+        transparency: Transparency::OPAQUE,
     }
 }
 
@@ -206,6 +210,7 @@ pub const STEEL: Substance = Substance {
     grain: GrainSpec::DRESSED_STONE.with_strength(0.2),
     grain_by_uv: false,
     palette: Palette::from_base_const(Colour::new(0.62, 0.64, 0.67, 1.0), 0.18),
+    transparency: Transparency::OPAQUE,
 };
 
 /// Bouncy and grippy, and deliberately smooth: bounce reads as a coated,
@@ -224,6 +229,7 @@ pub const RUBBER: Substance = Substance {
     grain: GrainSpec::NONE,
     grain_by_uv: false,
     palette: Palette::from_base_const(Colour::new(0.22, 0.22, 0.24, 1.0), 0.25),
+    transparency: Transparency::OPAQUE,
 };
 
 /// Moulded plastic: the bright toy props. Smooth on purpose — the visual
@@ -242,6 +248,44 @@ pub const PLASTIC: Substance = Substance {
     grain: GrainSpec::NONE,
     grain_by_uv: false,
     palette: Palette::from_base_const(Colour::new(0.8, 0.8, 0.82, 1.0), 0.2),
+    transparency: Transparency::OPAQUE,
+};
+
+/// Frozen water. The library's first transmissive substance, and the one that
+/// motivated the blended pass.
+///
+/// The physics is as unusual as the optics. Ice is barely denser than water
+/// and less than half as dense as the lightest stone, so a block of it is
+/// startlingly light for its size; and its friction is the lowest number in
+/// the library by a wide margin, which is the entire reason to want one. The
+/// restitution is deliberately not bouncy — ice is brittle, not springy.
+///
+/// The finish is the polished end of the library, paired with a faint stone
+/// grain. Deliberately not *the* smoothest: at a roughness below about 0.1 the
+/// sun's highlight narrows to a speck barely a degree wide, and on a block
+/// whose shine is supposed to come from a dozen narrow bevels that means no
+/// highlight lands on any of them. Ice is glassy, not a mirror. The grain is
+/// fine and weak for the same reason it is there at all — frost on the
+/// surface, not the crystal structure of a rock.
+pub const ICE: Substance = Substance {
+    name: "ice",
+    physics: PhysicalSurface {
+        restitution: 0.15,
+        friction: 0.06,
+        density: 917.0,
+    },
+    finish: SurfaceFinish {
+        roughness: 0.14,
+        metallic: 0.0,
+    },
+    grain: GrainSpec::DRESSED_STONE.with_scale(1.1).with_strength(0.1),
+    grain_by_uv: false,
+    // Pale blue-white, and an accent that goes *deeper* blue rather than
+    // darker grey: what a thick part of a block of ice looks like is more of
+    // the same colour, not a shadow.
+    palette: Palette::from_base_const(Colour::new(0.60, 0.79, 0.92, 1.0), 0.16)
+        .with_accent(Colour::new(0.26, 0.55, 0.78, 1.0)),
+    transparency: Transparency::ICE,
 };
 
 #[cfg(test)]
@@ -252,7 +296,7 @@ mod tests {
     /// all of them.
     const ALL: &[Substance] = &[
         GRANITE, LIMESTONE, MARBLE, SANDSTONE, CONCRETE, BRICK, SLATE, OAK, PINE, STEEL, RUBBER,
-        PLASTIC,
+        PLASTIC, ICE,
     ];
 
     #[test]
@@ -362,5 +406,40 @@ mod tests {
     fn marble_is_the_polished_stone_and_sandstone_the_rough_one() {
         assert!(MARBLE.finish.roughness < GRANITE.finish.roughness);
         assert!(GRANITE.finish.roughness < SANDSTONE.finish.roughness);
+    }
+
+    /// Ice is the only substance you can see through, and the check that
+    /// nothing else has quietly acquired transparency it did not mean to — a
+    /// stray opacity would move that material into the sorted pass and change
+    /// how every object made of it is drawn.
+    #[test]
+    fn ice_is_the_only_thing_light_gets_through() {
+        for substance in ALL {
+            assert_eq!(
+                substance.transparency.is_blended(),
+                substance.name == "ice",
+                "{} disagrees about whether light passes through it",
+                substance.name
+            );
+        }
+    }
+
+    /// The property that makes an ice cube worth spawning: it is the
+    /// slipperiest thing in the game, by a margin nothing can close by
+    /// accident.
+    #[test]
+    fn nothing_grips_less_than_ice() {
+        for substance in ALL {
+            if substance.name == "ice" {
+                continue;
+            }
+            assert!(
+                substance.physics.friction > ICE.physics.friction * 3.0,
+                "{} ({}) is within reach of ice ({})",
+                substance.name,
+                substance.physics.friction,
+                ICE.physics.friction
+            );
+        }
     }
 }
