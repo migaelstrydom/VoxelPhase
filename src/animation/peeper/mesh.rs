@@ -23,7 +23,7 @@ use super::skeleton::PeeperSkeleton;
 /// so it is seated in the eye rather than floating off it.
 const IRIS_SEAT: f32 = 0.78;
 /// The same for the pupil, which rides on the iris.
-const PUPIL_SEAT: f32 = 0.94;
+const PUPIL_SEAT: f32 = 1.1;
 
 pub fn generate_peeper_mesh(
     skeleton: &PeeperSkeleton,
