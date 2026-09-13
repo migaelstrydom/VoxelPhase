@@ -83,17 +83,18 @@ impl MovingPlatformDef {
     pub fn default_half_extents() -> (f32, f32, f32) {
         (2.0, 0.3, 2.0)
     }
+    /// Both motion defaults are `SeekMotion`'s own, deliberately rather than
+    /// literals here. A second copy of a default is a trap: it looks
+    /// authoritative, it is the one a reader reaches for first, and changing
+    /// the other has no effect on anything the game spawns.
     pub fn default_speed() -> f32 {
-        2.0
+        SeekMotion::default().speed
     }
     pub fn default_looping() -> RouteLoop {
         RouteLoop::Shuttle
     }
-    /// Enough lag to read as a deceleration into a turn without the platform
-    /// wandering far off the line the author drew: half a metre of corner at
-    /// the default cruise speed, and 15 cm of overshoot at a turnaround.
     pub fn default_spin_up() -> f32 {
-        0.25
+        SeekMotion::default().tau
     }
     /// Enough give that a player landing on the edge visibly throws the deck
     /// — about 5° at the peak of the swing — and enough damping that it has

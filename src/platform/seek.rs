@@ -44,6 +44,13 @@ pub struct SeekMotion {
 }
 
 impl Default for SeekMotion {
+    /// The one place a platform's motion defaults live.
+    ///
+    /// `tau` is enough lag to read as a deceleration into a turn without the
+    /// platform wandering far off the line the author drew: half a metre of
+    /// corner at the default cruise speed, and 15 cm of overshoot at a
+    /// turnaround. `MovingPlatformDef`'s serde defaults delegate here rather
+    /// than repeating the numbers.
     fn default() -> Self {
         Self {
             speed: 2.0,

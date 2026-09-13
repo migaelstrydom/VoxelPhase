@@ -2295,6 +2295,59 @@ pub enum WaterBody {
 
 #[cfg(test)]
 mod tests {
+    use crate::app::spawnables::MovingPlatformDef;
+    use crate::platform::SeekMotion;
+
+    /// A dial is only a dial if it survives the trip from the level file to
+    /// the component. `spin_up` reaches `MovingPlatformDef` but is consumed by
+    /// `spawn`, which needs a world; parsing is the half that can be checked
+    /// here, and it is the half that silently drops an unknown field.
+    #[test]
+    fn a_platform_carries_its_authored_motion_out_of_the_level_file() {
+        let authored: LevelObject = ron::from_str(
+            "MovingPlatform(waypoints: [(0.0, 1.0, 0.0), (8.0, 1.0, 0.0)], \
+             speed: 4.0, spin_up: 1.5)",
+        )
+        .expect("MovingPlatform should parse");
+
+        let LevelObject::MovingPlatform {
+            waypoints,
+            speed,
+            spin_up,
+            looping,
+            ..
+        } = authored
+        else {
+            panic!("parsed as the wrong object");
+        };
+        assert_eq!(waypoints.len(), 2);
+        assert_eq!(speed, 4.0);
+        assert_eq!(spin_up, 1.5);
+        assert_eq!(looping, RouteLoop::Shuttle);
+    }
+
+    /// Omitting the motion falls back to `SeekMotion`'s defaults, not to a
+    /// second copy of them.
+    ///
+    /// Two sources of truth for one default is worse than a wrong default: the
+    /// copy that looks authoritative is the one a reader edits, and editing it
+    /// changes nothing the game spawns.
+    #[test]
+    fn an_unauthored_platform_falls_back_to_the_motion_model_defaults() {
+        let authored: LevelObject =
+            ron::from_str("MovingPlatform(waypoints: [(0.0, 1.0, 0.0), (8.0, 1.0, 0.0)])")
+                .expect("MovingPlatform should parse");
+
+        let LevelObject::MovingPlatform { speed, spin_up, .. } = authored else {
+            panic!("parsed as the wrong object");
+        };
+        let motion = SeekMotion::default();
+        assert_eq!(spin_up, motion.tau);
+        assert_eq!(speed, motion.speed);
+        assert_eq!(MovingPlatformDef::default_spin_up(), motion.tau);
+        assert_eq!(MovingPlatformDef::default_speed(), motion.speed);
+    }
+
     use super::*;
 
     #[test]
