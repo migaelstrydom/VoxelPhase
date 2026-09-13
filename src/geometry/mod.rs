@@ -6,6 +6,7 @@
 mod capsule;
 mod cube;
 mod cylinder;
+mod dome;
 mod fissured_shell;
 mod heart;
 mod sphere;
@@ -13,6 +14,7 @@ mod sphere;
 pub use capsule::generate_capsule;
 pub use cube::{generate_cube_indices, generate_cube_vertices};
 pub use cylinder::{generate_capped_cylinder, generate_cylinder};
+pub use dome::{generate_dome, DomeSpec};
 pub use fissured_shell::{
     generate_fissured_shell, FissureBand, FissuredShell, FissuredShellConfig,
 };
