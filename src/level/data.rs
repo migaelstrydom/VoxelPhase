@@ -33,6 +33,7 @@ use crate::app::spawnables::{
     StackItemDef, TableDef, TempleDef, TetrahedronDef, TowerDef, TrampolineDef, TrilithonDef,
     VoussoirArchDef, BEACH_BALL_RADIUS,
 };
+use crate::platform::DeckSuspension;
 
 /// Top-level level description.
 #[derive(Deserialize)]
@@ -882,6 +883,10 @@ pub enum LevelObject {
         half_extents: (f32, f32, f32),
         #[serde(default = "MovingPlatformDef::default_speed")]
         speed: f32,
+        /// How far the deck tips under a player on its edge, and how fast the
+        /// ring that follows dies away.
+        #[serde(default = "MovingPlatformDef::default_suspension")]
+        suspension: DeckSuspension,
     },
     /// Spinning playground wheel anchored to terrain. Spins freely around Y.
     PlayWheel {
@@ -1912,11 +1917,13 @@ impl LevelObject {
                 to,
                 half_extents,
                 speed,
+                suspension,
             } => Box::new(MovingPlatformDef {
                 from: *from,
                 to: *to,
                 half_extents: *half_extents,
                 speed: *speed,
+                suspension: *suspension,
             }),
 
             LevelObject::PlayWheel {

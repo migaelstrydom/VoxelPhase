@@ -8,8 +8,8 @@
 //!   MovingPlatformSystem ──► DriveIntent ──► Actuator ──► solver
 //!        (aim at endpoint)    (intent)      (motor, capped
 //!                                            acceleration)
-//!   KeepUpright ─────────────────────────► solver
-//!         (rigid attitude, unlimited authority)
+//!   DeckSuspension ──► KeepUpright ─────► solver
+//!    (tilt, damping)     (attitude, soft or rigid)
 //! ```
 //!
 //! The motor commands speed and never position, but it commands it *toward* the
@@ -35,7 +35,7 @@ use crate::drive::{Actuator, BodyMotion, DriveIntent};
 use crate::level::BoxStyle;
 use crate::physics::constraint::ConstraintKind;
 use crate::physics::{ColliderDesc, RigidBodyDesc};
-use crate::platform::MovingPlatform;
+use crate::platform::{DeckSuspension, MovingPlatform};
 use crate::rendering::material::MaterialId;
 use crate::rendering::physical_finish::PhysicalSurface;
 use crate::systems::PhysicsResource;
@@ -64,6 +64,10 @@ pub struct MovingPlatformDef {
     /// Cruise speed, in m/s.
     #[serde(default = "MovingPlatformDef::default_speed")]
     pub speed: f32,
+    /// How far the deck tips under a player on its edge, and how fast the ring
+    /// that follows dies. Omit for a deck that does not move at all.
+    #[serde(default = "MovingPlatformDef::default_suspension")]
+    pub suspension: DeckSuspension,
 }
 
 impl MovingPlatformDef {
@@ -72,6 +76,15 @@ impl MovingPlatformDef {
     }
     pub fn default_speed() -> f32 {
         2.0
+    }
+    /// Enough give that a player landing on the edge visibly throws the deck
+    /// — about 5° at the peak of the swing — and enough damping that it has
+    /// settled by the time they have crossed it.
+    pub fn default_suspension() -> DeckSuspension {
+        DeckSuspension {
+            tilt_degrees: 2.0,
+            damping: 0.5,
+        }
     }
 }
 
@@ -99,18 +112,21 @@ impl Spawnable for MovingPlatformDef {
             self.half_extents.2,
         );
         let model = cuboid_model(half_extents, materials[0]);
+        let tuning = self.suspension.tune(&half_extents);
 
         let body_handle = {
             let mut physics = world.write_resource::<PhysicsResource>();
 
-            // Damping is left at zero: the motor already sets the speed, and
-            // damping would only fight it. Gravity stays on so an unpowered
-            // platform falls.
+            // Linear damping is left at zero: the motor already sets the
+            // speed, and damping would only fight it. Angular damping is the
+            // suspension's, and damps only the wobble — the motor drives
+            // through the centre of mass and has no angular authority to lose.
+            // Gravity stays on so an unpowered platform falls.
             let body_desc = RigidBodyDesc::dynamic()
                 .position(pos)
                 .gravity_scale(1.0)
                 .linear_damping(0.0)
-                .angular_damping(0.05);
+                .angular_damping(tuning.angular_damping);
 
             let body_handle = physics.world.create_body(body_desc);
             physics.world.attach_collider(
@@ -118,16 +134,15 @@ impl Spawnable for MovingPlatformDef {
                 ColliderDesc::box_shape(half_extents).with_physical_surface(PLATFORM_SURFACE),
             );
 
-            // Rigid attitude with unlimited authority — the proven path. A
-            // finite `max_impulse` would buy tipping-under-load, but bounded
-            // rows are unstable when they saturate; see the field docs on
-            // `ConstraintKind::KeepUpright`.
+            // Attitude with unlimited authority, soft by as much as the
+            // suspension asks for. The deck always ends up level; the
+            // compliance is how long it argues about it first.
             let _ = physics
                 .world
                 .create_constraint(ConstraintKind::KeepUpright {
                     body: body_handle,
                     target_up: UnitVector3::new_normalize(Vector3::y()),
-                    compliance: 0.0,
+                    compliance: tuning.compliance,
                     max_impulse: f32::INFINITY,
                 });
 

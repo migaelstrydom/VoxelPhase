@@ -14,24 +14,38 @@ use crate::debug::DebugLines;
 use crate::physics::constraint::ConstraintKind;
 use crate::physics::world::PhysicsConfig;
 use crate::physics::{ColliderDesc, DriveCommand, PhysicsWorld, RigidBodyDesc, RigidBodyHandle};
-use crate::platform::MovingPlatform;
+use crate::platform::{DeckSuspension, MovingPlatform, REFERENCE_LOAD_KG};
 
 const HALF_EXTENTS: Vector3<f32> = Vector3::new(2.0, 0.3, 2.0);
 const MOTOR_MAX_ACCEL: f32 = 40.0;
 
-/// Build a platform at `from`, shuttling to `to`.
+/// Build a rigid-decked platform at `from`, shuttling to `to`.
 fn spawn_platform(
     world: &mut PhysicsWorld,
     from: Vector3<f32>,
     to: Vector3<f32>,
     speed: f32,
 ) -> (RigidBodyHandle, MovingPlatform) {
+    spawn_platform_with_suspension(world, from, to, speed, DeckSuspension::RIGID)
+}
+
+/// The same platform with a stated deck suspension. Mirrors what
+/// `MovingPlatformDef::spawn` builds, including routing both of the
+/// suspension's outputs to the places that consume them.
+fn spawn_platform_with_suspension(
+    world: &mut PhysicsWorld,
+    from: Vector3<f32>,
+    to: Vector3<f32>,
+    speed: f32,
+    suspension: DeckSuspension,
+) -> (RigidBodyHandle, MovingPlatform) {
+    let tuning = suspension.tune(&HALF_EXTENTS);
     let body = world.create_body(
         RigidBodyDesc::dynamic()
             .position(Point3::from(from))
             .gravity_scale(1.0)
             .linear_damping(0.0)
-            .angular_damping(0.05),
+            .angular_damping(tuning.angular_damping),
     );
     let _ = world.attach_collider(
         body,
@@ -42,12 +56,23 @@ fn spawn_platform(
     let _ = world.create_constraint(ConstraintKind::KeepUpright {
         body,
         target_up: UnitVector3::new_normalize(Vector3::y()),
-        compliance: 0.0,
+        compliance: tuning.compliance,
         max_impulse: f32::INFINITY,
     });
 
     let platform = MovingPlatform::new(from, to, speed);
     (body, platform)
+}
+
+/// How far the deck leans out of level, in degrees, signed so that a load on
+/// the +x edge reads positive.
+///
+/// A deck whose +x edge has dropped has its normal tilted towards +x — away
+/// from the raised side, not towards it — so the sign comes straight off the
+/// cross product with no negation.
+fn deck_tilt_degrees(world: &PhysicsWorld, body: RigidBodyHandle) -> f32 {
+    let up = world.body(body).unwrap().rotation() * Vector3::y();
+    up.cross(&Vector3::y()).z.asin().to_degrees()
 }
 
 /// One frame: patrol logic, then drive sync, then substeps. Mirrors the
@@ -270,13 +295,10 @@ fn lift_holds_cruise_speed_against_gravity() {
 /// would climb regardless, so this is the check that the declaration is the
 /// only authority in play.
 ///
-/// The ceiling is what the bound guarantees, not a promise of delivery. A row
-/// held at its bound across a whole frame realises `warm_start_scale` of it,
-/// because the solver clamps the accumulated impulse and then re-applies that
-/// clamped value at the top of each later substep — the same effect the docs on
-/// `ConstraintKind::KeepUpright::max_impulse` describe. An ordinary platform
-/// never notices: at 40 m/s² against a 9.81 m/s² world the rows are nowhere
-/// near their bounds outside the first few frames of spin-up.
+/// The bound is per substep, so a row pinned at it delivers the declared
+/// acceleration over the frame. An ordinary platform never finds out: at
+/// 40 m/s² against a 9.81 m/s² world the rows are nowhere near their bounds
+/// outside the first few frames of spin-up.
 #[test]
 fn a_motor_weaker_than_gravity_cannot_hold_the_lift_up() {
     let geometry = FlatQuadGeometry::new(64.0);
@@ -327,5 +349,247 @@ fn a_motor_weaker_than_gravity_cannot_hold_the_lift_up() {
     assert!(
         realised > 0.0,
         "the motor should still be pushing what it has: realised {realised:.2} m/s²"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Deck suspension
+// ---------------------------------------------------------------------------
+
+/// The authored tilt is a promise about degrees, and this is where it is kept.
+///
+/// `DeckSuspension` converts degrees to a compliance through the solver's
+/// position-correction beta, so the number only survives the round trip if that
+/// conversion matches what the rows actually do. Torque is applied directly
+/// rather than by standing a body on the deck: what is under test is the
+/// spring, not the contact.
+#[test]
+fn the_deck_tips_by_its_authored_angle_under_the_reference_load() {
+    let geometry = FlatQuadGeometry::new(40.0);
+
+    for tilt_degrees in [1.0_f32, 2.0, 4.0] {
+        let mut config = PhysicsConfig::default();
+        config.sleep.enabled = false;
+        let mut world = PhysicsWorld::new(config);
+        let at = Vector3::new(0.0, 20.0, 0.0);
+        let (body, mut platform) = spawn_platform_with_suspension(
+            &mut world,
+            at,
+            at,
+            0.0,
+            DeckSuspension {
+                tilt_degrees,
+                damping: 0.5,
+            },
+        );
+
+        // The reference load standing on the +x edge, as a torque about z.
+        let lever_arm = HALF_EXTENTS.x;
+        let torque = Vector3::new(0.0, 0.0, -REFERENCE_LOAD_KG * 9.81 * lever_arm);
+        let dt = 1.0 / 240.0;
+        let mut debug_lines = DebugLines::default();
+        for _ in 0..1200 {
+            let position = {
+                let p = world.body(body).unwrap().position();
+                Vector3::new(p.x, p.y, p.z)
+            };
+            platform.update_heading(&position);
+            let _ = world.set_body_drive(
+                body,
+                &DriveCommand::medium(
+                    platform.target_velocity(&position),
+                    Vector3::zeros(),
+                    MOTOR_MAX_ACCEL,
+                    0.0,
+                ),
+            );
+            world.update_contacts(dt, 4, &geometry, &[], &mut debug_lines);
+            for _ in 0..4 {
+                world.substep(dt, &geometry, &[]);
+                world
+                    .body_mut(body)
+                    .unwrap()
+                    .apply_angular_impulse(torque * dt);
+            }
+        }
+
+        let settled = deck_tilt_degrees(&world, body);
+        assert!(
+            (settled - tilt_degrees).abs() < 0.15,
+            "authored {tilt_degrees} deg, deck settled at {settled:.3}"
+        );
+    }
+}
+
+/// A rigid deck is still rigid. The suspension is opt-in, and a platform that
+/// did not ask for give must not acquire any.
+#[test]
+fn a_rigid_deck_does_not_tip() {
+    let geometry = FlatQuadGeometry::new(40.0);
+    let mut config = PhysicsConfig::default();
+    config.sleep.enabled = false;
+    let mut world = PhysicsWorld::new(config);
+    let at = Vector3::new(0.0, 20.0, 0.0);
+    let (body, mut platform) = spawn_platform(&mut world, at, at, 0.0);
+
+    let torque = Vector3::new(0.0, 0.0, -REFERENCE_LOAD_KG * 9.81 * HALF_EXTENTS.x);
+    let dt = 1.0 / 240.0;
+    let mut debug_lines = DebugLines::default();
+    for _ in 0..600 {
+        let position = {
+            let p = world.body(body).unwrap().position();
+            Vector3::new(p.x, p.y, p.z)
+        };
+        platform.update_heading(&position);
+        let _ = world.set_body_drive(
+            body,
+            &DriveCommand::medium(
+                platform.target_velocity(&position),
+                Vector3::zeros(),
+                MOTOR_MAX_ACCEL,
+                0.0,
+            ),
+        );
+        world.update_contacts(dt, 4, &geometry, &[], &mut debug_lines);
+        for _ in 0..4 {
+            world.substep(dt, &geometry, &[]);
+            world
+                .body_mut(body)
+                .unwrap()
+                .apply_angular_impulse(torque * dt);
+        }
+    }
+
+    let settled = deck_tilt_degrees(&world, body).abs();
+    assert!(settled < 0.05, "rigid deck leaned {settled:.4} deg");
+}
+
+/// What the player is meant to see: land on the edge and the deck swings well
+/// past where standing there would hold it, then rings back to level.
+///
+/// The peak matters as much as the settle. A deck that only sagged to its
+/// static tilt would be a suspension the player never notices, and a deck that
+/// never came back would be a platform that had stopped working.
+#[test]
+fn a_landing_rings_the_deck_and_then_dies_away() {
+    let geometry = FlatQuadGeometry::new(40.0);
+    let mut config = PhysicsConfig::default();
+    config.sleep.enabled = false;
+    let mut world = PhysicsWorld::new(config);
+    let at = Vector3::new(0.0, 20.0, 0.0);
+    let suspension = DeckSuspension {
+        tilt_degrees: 2.0,
+        damping: 0.5,
+    };
+    let (body, mut platform) = spawn_platform_with_suspension(&mut world, at, at, 0.0, suspension);
+
+    // The reference load arriving on the +x edge at jump speed.
+    world
+        .body_mut(body)
+        .unwrap()
+        .apply_angular_impulse(Vector3::new(
+            0.0,
+            0.0,
+            -REFERENCE_LOAD_KG * 7.0 * HALF_EXTENTS.x,
+        ));
+
+    let dt = 1.0 / 240.0;
+    let mut debug_lines = DebugLines::default();
+    let mut peak = 0.0f32;
+    let mut peak_frame = 0;
+    let mut settled_by = None;
+    for frame in 0..600 {
+        let position = {
+            let p = world.body(body).unwrap().position();
+            Vector3::new(p.x, p.y, p.z)
+        };
+        platform.update_heading(&position);
+        let _ = world.set_body_drive(
+            body,
+            &DriveCommand::medium(
+                platform.target_velocity(&position),
+                Vector3::zeros(),
+                MOTOR_MAX_ACCEL,
+                0.0,
+            ),
+        );
+        world.update_contacts(dt, 4, &geometry, &[], &mut debug_lines);
+        for _ in 0..4 {
+            world.substep(dt, &geometry, &[]);
+        }
+
+        let tilt = deck_tilt_degrees(&world, body).abs();
+        if tilt > peak {
+            peak = tilt;
+            peak_frame = frame;
+        }
+        if tilt > 0.1 {
+            settled_by = None;
+        } else if settled_by.is_none() {
+            settled_by = Some(frame);
+        }
+    }
+
+    let settled_at = settled_by.map(|f| f as f32 * dt);
+    eprintln!(
+        "landing: peak {peak:.2} deg at {:.2}s, level again by {settled_at:?}",
+        peak_frame as f32 * dt
+    );
+    assert!(
+        peak > 3.0 * suspension.tilt_degrees,
+        "a landing should throw the deck well past its standing tilt, peaked at {peak:.2} deg"
+    );
+    assert!(
+        peak < 15.0,
+        "a landing should wobble the deck, not capsize it: {peak:.2} deg"
+    );
+    let settled_at = settled_at.expect("deck should come back to level");
+    assert!(
+        settled_at < 2.0,
+        "the ring should be over quickly, still swinging at {settled_at:.2}s"
+    );
+}
+
+/// The suspension must not cost the platform its day job. A deck that rings
+/// still has to shuttle, and the angular damping it brings must not be felt by
+/// a motor that only ever pushes through the centre of mass.
+#[test]
+fn a_wobbling_deck_still_runs_its_route() {
+    let geometry = FlatQuadGeometry::new(80.0);
+    let mut config = PhysicsConfig::default();
+    config.sleep.enabled = false;
+    let mut world = PhysicsWorld::new(config);
+    let from = Vector3::new(0.0, 20.0, 0.0);
+    let to = Vector3::new(10.0, 20.0, 0.0);
+    let (body, mut platform) = spawn_platform_with_suspension(
+        &mut world,
+        from,
+        to,
+        2.0,
+        DeckSuspension {
+            tilt_degrees: 2.0,
+            damping: 0.5,
+        },
+    );
+
+    let dt = 1.0 / 240.0;
+    let mut debug_lines = DebugLines::default();
+    let mut reached_far_end = false;
+    for _ in 0..2400 {
+        run_frame(&mut world, body, &mut platform, &geometry, &mut debug_lines);
+        let p = world.body(body).unwrap().position();
+        if (p.x - to.x).abs() < 0.3 {
+            reached_far_end = true;
+        }
+    }
+
+    assert!(
+        reached_far_end,
+        "platform never reached the far end of its route"
+    );
+    let tilt = deck_tilt_degrees(&world, body).abs();
+    assert!(
+        tilt < 0.5,
+        "a platform running its route should stay level, leaning {tilt:.3} deg"
     );
 }

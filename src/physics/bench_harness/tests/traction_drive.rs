@@ -35,7 +35,7 @@ use crate::physics::{
     Allowance, ColliderDesc, DriveCommand, FrictionModel, NormalVerbs, PhysicsWorld, RigidBodyDesc,
     RigidBodyHandle, StaticGeometry,
 };
-use crate::platform::MovingPlatform;
+use crate::platform::{DeckSuspension, MovingPlatform, REFERENCE_LOAD_KG};
 
 /// One render frame, matching the game's fixed step budget.
 const FRAME_DT: f32 = 1.0 / 60.0;
@@ -226,12 +226,22 @@ impl Platform {
         at: Vector3<f32>,
         gravity_scale: f32,
     ) -> RigidBodyHandle {
+        Self::spawn_body_with_suspension(world, at, gravity_scale, DeckSuspension::RIGID)
+    }
+
+    fn spawn_body_with_suspension(
+        world: &mut PhysicsWorld,
+        at: Vector3<f32>,
+        gravity_scale: f32,
+        suspension: DeckSuspension,
+    ) -> RigidBodyHandle {
+        let tuning = suspension.tune(&PLATFORM_HALF_EXTENTS);
         let body = world.create_body(
             RigidBodyDesc::dynamic()
                 .position(Point3::from(at))
                 .gravity_scale(gravity_scale)
                 .linear_damping(0.0)
-                .angular_damping(0.05),
+                .angular_damping(tuning.angular_damping),
         );
         let _ = world.attach_collider(
             body,
@@ -239,12 +249,12 @@ impl Platform {
                 .density(300.0)
                 .friction(0.9),
         );
-        // Tilt is locked; yaw is deliberately free, which is what makes the
-        // edge-walk sign observable at all.
+        // Tilt is held, as softly as the suspension asks; yaw is deliberately
+        // free, which is what makes the edge-walk sign observable at all.
         let _ = world.create_constraint(ConstraintKind::KeepUpright {
             body,
             target_up: UnitVector3::new_normalize(Vector3::y()),
-            compliance: 0.0,
+            compliance: tuning.compliance,
             max_impulse: f32::INFINITY,
         });
         body
@@ -1394,4 +1404,96 @@ fn a_slope_costs_a_walker_the_same_uphill_as_down() {
              {slope_degrees:.0}° held {across:.3}"
         );
     }
+}
+
+/// A passenger rides out the wobble their own landing caused.
+///
+/// The deck suspension gives the platform a real tilt, and a tilt is a slope:
+/// the thing it must not do is decant the player over the side, or throw them
+/// off it. The walker stands still and the deck is kicked as hard as a landing
+/// kicks it, which is the worst case — a walker with the stick forward has
+/// traction to argue with, one standing still has only friction.
+#[test]
+fn a_passenger_rides_out_the_deck_wobble() {
+    let geometry = FlatQuadGeometry::new(64.0);
+    let mut world = bench_world();
+    let mut debug = DebugLines::default();
+
+    let platform_centre = Vector3::new(0.0, 5.0, 0.0);
+    let platform = Platform::spawn_body_with_suspension(
+        &mut world,
+        platform_centre,
+        0.0,
+        DeckSuspension {
+            tilt_degrees: 2.0,
+            damping: 0.5,
+        },
+    );
+    let deck = platform_centre.y + PLATFORM_HALF_EXTENTS.y;
+
+    // Standing out towards the +X edge, where the swing is largest.
+    let start = Vector3::new(1.5, deck + 0.02, 0.0);
+    let walker = Walker::spawn(&mut world, start).standing();
+    for _ in 0..60 {
+        walker.drive(&mut world);
+        advance(&mut world, &geometry, &mut debug);
+    }
+
+    // Everything is measured in the deck's own frame, rotation included. Two
+    // things would otherwise be read as the passenger failing: the platform is
+    // unpowered here and sinks under their weight for the whole run, and a
+    // deck tilted by 6° drops its +X edge 0.17 m below its centre. A passenger
+    // riding either of those perfectly is doing exactly what they should.
+    let on_deck = |world: &PhysicsWorld| {
+        let body = world.body(platform).unwrap();
+        body.rotation().inverse() * (position_of(world, walker.body) - body.position().coords)
+    };
+    let settled = on_deck(&world);
+
+    // The kick their landing would have delivered.
+    world
+        .body_mut(platform)
+        .unwrap()
+        .apply_angular_impulse(Vector3::new(
+            0.0,
+            0.0,
+            -REFERENCE_LOAD_KG * 7.0 * PLATFORM_HALF_EXTENTS.x,
+        ));
+
+    let mut max_drift = 0.0f32;
+    let mut max_lift = 0.0f32;
+    let mut max_sink = 0.0f32;
+    for _ in 0..480 {
+        walker.drive(&mut world);
+        advance(&mut world, &geometry, &mut debug);
+        let p = on_deck(&world);
+        max_drift = max_drift.max((p - settled).xz().magnitude());
+        max_lift = max_lift.max(p.y - settled.y);
+        max_sink = max_sink.max(settled.y - p.y);
+    }
+
+    let end = on_deck(&world);
+    eprintln!(
+        "wobble ride: drift {max_drift:.3} m, lift {max_lift:.3} m, sink \
+         {max_sink:.3} m, ended {:.3} m above the deck centre",
+        end.y
+    );
+
+    assert!(
+        max_sink < 0.1,
+        "the passenger should stay on top of the deck, not sink {max_sink:.3} m into it"
+    );
+    assert!(
+        (end.y - settled.y).abs() < 0.05,
+        "the passenger should end where they started on the deck, {:.3} m off",
+        end.y - settled.y
+    );
+    assert!(
+        max_drift < 0.5,
+        "a wobble should not decant the passenger over the side: drifted {max_drift:.3} m"
+    );
+    assert!(
+        max_lift < 0.3,
+        "a wobble should not launch the passenger: lifted {max_lift:.3} m"
+    );
 }
