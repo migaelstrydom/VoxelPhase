@@ -41,13 +41,15 @@ pub const STONE: Pattern = Pattern {
             amount: 0.5,
             towards: Slot::Dark,
         },
-        // Thin cracks and veins.
+        // The odd hairline crack. Thin and faint on purpose: at any width
+        // worth noticing these stop reading as cracks in a rock and start
+        // reading as a net thrown over it.
         Layer::Vein {
-            scale: 14.0,
-            octaves: 3,
-            sharpness: 6.0,
-            amount: 0.6,
-            towards: Slot::Accent,
+            scale: 9.0,
+            octaves: 2,
+            sharpness: 18.0,
+            amount: 0.18,
+            towards: Slot::Dark,
         },
         // Mineral speckle. Last, so it sits on everything above it.
         Layer::Shade {
@@ -86,6 +88,75 @@ pub const DRESSED_STONE: Pattern = Pattern {
             scale: 28.0,
             octaves: 2,
             amount: 0.08,
+        },
+    ],
+};
+
+/// Dressed stone that has stood outside for a few centuries.
+///
+/// [`DRESSED_STONE`] is what the mason handed over; this is what the weather
+/// gave back. The difference is structure at every scale — staining in broad
+/// discrete regions, cracks running across the face, and chipped pitting —
+/// because a surface whose only variation is a fine speckle reads as uniform
+/// roughness however much of it there is.
+pub const WEATHERED_STONE: Pattern = Pattern {
+    name: "weathered_stone",
+    layers: &[
+        // Broad tonal variation, stronger than dressed stone's: sunlight and
+        // rain do not fade a wall evenly.
+        Layer::Wash {
+            scale: 2.0,
+            octaves: 3,
+            towards: Slot::Light,
+            amount: 0.9,
+        },
+        // Erosion relief — where the face has worn hollow.
+        Layer::Shade {
+            scale: 6.0,
+            octaves: 3,
+            amount: 0.16,
+        },
+        // Damp staining, in regions large enough to see across a courtyard.
+        Layer::Patch {
+            scale: 2.5,
+            octaves: 3,
+            threshold: 0.52,
+            span: 0.24,
+            amount: 0.3,
+            towards: Slot::Dark,
+        },
+        // The cracks. Few per face and thin, so they read as fractures in the
+        // block rather than as a pattern printed on it.
+        Layer::Vein {
+            scale: 6.0,
+            octaves: 3,
+            sharpness: 45.0,
+            amount: 0.6,
+            towards: Slot::Accent,
+        },
+        // A second, finer set at another frequency, so the cracks branch and
+        // cross instead of running as one family of parallel lines.
+        Layer::Vein {
+            scale: 11.0,
+            octaves: 2,
+            sharpness: 60.0,
+            amount: 0.35,
+            towards: Slot::Dark,
+        },
+        // Pitting: small, scattered, and dark. A high threshold over a narrow
+        // span is what makes these discrete chips rather than more mottling.
+        Layer::Patch {
+            scale: 30.0,
+            octaves: 2,
+            threshold: 0.72,
+            span: 0.05,
+            amount: 0.45,
+            towards: Slot::Dark,
+        },
+        Layer::Shade {
+            scale: 26.0,
+            octaves: 2,
+            amount: 0.06,
         },
     ],
 };
@@ -190,7 +261,14 @@ mod tests {
     use crate::rendering::colour::Colour;
     use crate::rendering::substance::Palette;
 
-    const ALL: &[Pattern] = &[STONE, DRESSED_STONE, MARBLE, CONCRETE, SLATE];
+    const ALL: &[Pattern] = &[
+        STONE,
+        DRESSED_STONE,
+        WEATHERED_STONE,
+        MARBLE,
+        CONCRETE,
+        SLATE,
+    ];
 
     /// Names key the texture cache. Two patterns sharing one would have the
     /// cache hand out the wrong texture, silently and only sometimes.
@@ -233,6 +311,39 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The arch asked for weathered stone because dressed stone had no
+    /// structure to see. Measured as the fraction of the tile the cracks and
+    /// pits darken well below its own average — a dark tail a fine speckle
+    /// never reaches, however much of it there is.
+    #[test]
+    fn weathered_stone_is_more_broken_than_dressed() {
+        let palette = Palette::from_base(Colour::new(0.72, 0.69, 0.61, 1.0), 0.16);
+
+        let broken = |pattern: &Pattern| {
+            let samples: Vec<f32> = (0..4096)
+                .map(|step| {
+                    let u = (step % 64) as f32 / 64.0;
+                    let v = (step / 64) as f32 / 64.0;
+                    pattern.sample(u, v, &palette, 77).r
+                })
+                .collect();
+
+            let mean = samples.iter().sum::<f32>() / samples.len() as f32;
+            let dark = samples.iter().filter(|&&r| r < mean - 0.1).count();
+            dark as f32 / samples.len() as f32
+        };
+
+        // Cracks are thin on purpose, so the fraction is small in absolute
+        // terms; what matters is that dressed stone's is near zero.
+        assert!(
+            broken(&WEATHERED_STONE) > 0.01
+                && broken(&WEATHERED_STONE) > broken(&DRESSED_STONE) * 5.0,
+            "weathered {} vs dressed {}",
+            broken(&WEATHERED_STONE),
+            broken(&DRESSED_STONE)
+        );
     }
 
     /// Marble's character is its veining, and a veinless marble is just a pale

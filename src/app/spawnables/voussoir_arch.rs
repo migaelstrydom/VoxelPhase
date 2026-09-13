@@ -22,12 +22,19 @@ use crate::rendering::pattern;
 use crate::rendering::substance::{self, ColliderSubstance, Substance};
 use crate::systems::PhysicsResource;
 
-const TEXTURE_SIZE: u32 = 128;
+const TEXTURE_SIZE: u32 = 256;
 
-/// Fixed, and shared by every piece of the arch. Dressed stone from one quarry
-/// should look like dressed stone from one quarry, and a shared seed is what
-/// lets fourteen pieces share one baked texture.
+/// Base seed for the arch's stone. Dressed stone from one quarry should look
+/// like dressed stone from one quarry.
 const LIMESTONE_SEED: u32 = 77;
+
+/// How many distinct blocks the arch is cut from.
+///
+/// One seed for every piece would be fourteen baked textures; one seed for all
+/// of them is the same photograph fourteen times, which is what an arch of
+/// identical stones looks like. A few variants cycled around the ring buys the
+/// difference for the cost of a few tiles.
+const STONE_VARIANTS: u32 = 3;
 
 #[derive(Deserialize)]
 pub struct VoussoirArchDef {
@@ -107,24 +114,24 @@ impl Spawnable for VoussoirArchDef {
         let count = self.total_pieces();
         let mut mats = Vec::with_capacity(count);
 
-        // One material per piece, but one *texture* for all of them: the
-        // voussoirs and the abutments are the same dressed limestone, and a
-        // twelve-stone arch used to bake and upload twelve identical tiles.
+        // One material per piece, drawing on `STONE_VARIANTS` textures: the
+        // voussoirs and the abutments are the same weathered limestone, so
+        // the cache hands the same tile to every piece that shares a variant.
         // The pieces differ in density, which the cache key rightly ignores —
         // a heavier stone is not a different-looking one.
-        for _ in 0..self.num_voussoirs as usize {
+        for i in 0..self.num_voussoirs as usize {
             mats.push(ctx.patterned(
                 &self.voussoir_substance(),
-                &pattern::DRESSED_STONE,
-                LIMESTONE_SEED,
+                &pattern::WEATHERED_STONE,
+                stone_seed(i as u32),
                 TEXTURE_SIZE,
             )?);
         }
-        for _ in 0..2 {
+        for i in 0..2 {
             mats.push(ctx.patterned(
                 &self.abutment_substance(),
-                &pattern::DRESSED_STONE,
-                LIMESTONE_SEED,
+                &pattern::WEATHERED_STONE,
+                stone_seed(self.num_voussoirs + i),
                 TEXTURE_SIZE,
             )?);
         }
@@ -235,6 +242,11 @@ impl Spawnable for VoussoirArchDef {
 
         entities
     }
+}
+
+/// The stone a given piece was cut from, cycling around the ring.
+fn stone_seed(piece: u32) -> u32 {
+    LIMESTONE_SEED.wrapping_add(piece % STONE_VARIANTS)
 }
 
 // ---------------------------------------------------------------------------
