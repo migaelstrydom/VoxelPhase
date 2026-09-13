@@ -217,7 +217,7 @@ impl Platform {
         let body = Self::spawn_body(world, from, 1.0);
         Self {
             body,
-            route: MovingPlatform::new(from, to, speed),
+            route: MovingPlatform::shuttle(from, to, speed),
         }
     }
 
@@ -271,7 +271,7 @@ impl Platform {
         let _ = world.set_body_drive(
             self.body,
             &DriveCommand::medium(
-                self.route.target_velocity(&position),
+                self.route.target_velocity(&position, FRAME_DT),
                 Vector3::zeros(),
                 MOTOR_MAX_ACCEL,
                 0.0,
@@ -409,15 +409,15 @@ fn reversal_hover() {
     let riding_gap = position_of(&world, walker.body).y - position_of(&world, platform.body).y;
 
     // Run to the reversal and past it.
-    let mut heading = platform.route.heading;
+    let mut heading = platform.route.target_index();
     let mut frames_to_reversal = 0;
-    while platform.route.heading == heading && frames_to_reversal < 600 {
+    while platform.route.target_index() == heading && frames_to_reversal < 600 {
         platform.drive(&mut world);
         walker.drive(&mut world);
         advance(&mut world, &geometry, &mut debug);
         frames_to_reversal += 1;
     }
-    heading = platform.route.heading;
+    heading = platform.route.target_index();
     assert!(frames_to_reversal < 600, "lift never reached its endpoint");
 
     let mut peak_gap = riding_gap;

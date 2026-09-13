@@ -33,7 +33,7 @@ use crate::app::spawnables::{
     StackItemDef, TableDef, TempleDef, TetrahedronDef, TowerDef, TrampolineDef, TrilithonDef,
     VoussoirArchDef, BEACH_BALL_RADIUS,
 };
-use crate::platform::DeckSuspension;
+use crate::platform::{DeckSuspension, RouteLoop};
 
 /// Top-level level description.
 #[derive(Deserialize)]
@@ -874,15 +874,21 @@ pub enum LevelObject {
     /// motor. Unanchored: a blast can shove it off its route and it flies back,
     /// but stripping its drive drops it out of the sky for good.
     MovingPlatform {
-        /// Where the platform spawns and the end it returns to. Explicit Y —
-        /// the travel is authored, not derived from the ground under it.
-        from: (f32, f32, f32),
-        /// The far end of the run.
-        to: (f32, f32, f32),
+        /// The patrol, in order. The platform spawns on the first. Explicit Y —
+        /// the travel is authored, not derived from the ground under it. Two
+        /// waypoints is a shuttle; more than two corner at each one.
+        waypoints: Vec<(f32, f32, f32)>,
+        /// Turn around at the end of the list, or wrap and go again.
+        #[serde(default = "MovingPlatformDef::default_looping")]
+        looping: RouteLoop,
         #[serde(default = "MovingPlatformDef::default_half_extents")]
         half_extents: (f32, f32, f32),
         #[serde(default = "MovingPlatformDef::default_speed")]
         speed: f32,
+        /// Spin-up time in seconds, and with it how tightly the platform
+        /// corners. See `MovingPlatformDef::spin_up`.
+        #[serde(default = "MovingPlatformDef::default_spin_up")]
+        spin_up: f32,
         /// How far the deck tips under a player on its edge, and how fast the
         /// ring that follows dies away.
         #[serde(default = "MovingPlatformDef::default_suspension")]
@@ -1271,7 +1277,16 @@ impl LevelObject {
             LevelObject::FencePost { pos, .. } => ("FencePost", anchored(pos)),
             LevelObject::Roller { pos, .. } => ("Roller", anchored(pos)),
             LevelObject::Pendulum { pos, .. } => ("Pendulum", anchored(pos)),
-            LevelObject::MovingPlatform { from, .. } => ("MovingPlatform", point(from)),
+            LevelObject::MovingPlatform { waypoints, .. } => (
+                "MovingPlatform",
+                // The deck at its spawn point, which is the first waypoint. A
+                // platform spends most of its life away from there, but the
+                // footprint is about what it is placed on.
+                // An empty list is degenerate and the platform will not move;
+                // reporting the origin keeps `describe` total rather than
+                // making every caller handle a case a level should not author.
+                waypoints.first().map_or(Free(Point3::origin()), point),
+            ),
             LevelObject::PlayWheel { pos, .. } => ("PlayWheel", anchored(pos)),
             LevelObject::Seesaw { pos, .. } => ("Seesaw", anchored(pos)),
             LevelObject::Tetrahedron { pos, .. } => ("Tetrahedron", point(pos)),
@@ -1653,9 +1668,10 @@ impl LevelObject {
             LevelObject::FencePost { pos, .. } => p2(pos),
             LevelObject::Roller { pos, .. } => p2(pos),
             LevelObject::Pendulum { pos, .. } => p2(pos),
-            LevelObject::MovingPlatform { from, to, .. } => {
-                p3(from);
-                p3(to);
+            LevelObject::MovingPlatform { waypoints, .. } => {
+                for waypoint in waypoints.iter_mut() {
+                    p3(waypoint);
+                }
             }
             LevelObject::PlayWheel { pos, .. } => p2(pos),
             LevelObject::Seesaw { pos, .. } => p2(pos),
@@ -1913,16 +1929,18 @@ impl LevelObject {
             }),
 
             LevelObject::MovingPlatform {
-                from,
-                to,
+                waypoints,
+                looping,
                 half_extents,
                 speed,
+                spin_up,
                 suspension,
             } => Box::new(MovingPlatformDef {
-                from: *from,
-                to: *to,
+                waypoints: waypoints.clone(),
+                looping: *looping,
                 half_extents: *half_extents,
                 speed: *speed,
+                spin_up: *spin_up,
                 suspension: *suspension,
             }),
 

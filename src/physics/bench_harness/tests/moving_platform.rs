@@ -14,10 +14,18 @@ use crate::debug::DebugLines;
 use crate::physics::constraint::ConstraintKind;
 use crate::physics::world::PhysicsConfig;
 use crate::physics::{ColliderDesc, DriveCommand, PhysicsWorld, RigidBodyDesc, RigidBodyHandle};
-use crate::platform::{DeckSuspension, MovingPlatform, REFERENCE_LOAD_KG};
+use crate::platform::{DeckSuspension, MovingPlatform, RouteLoop, SeekMotion, REFERENCE_LOAD_KG};
 
 const HALF_EXTENTS: Vector3<f32> = Vector3::new(2.0, 0.3, 2.0);
 const MOTOR_MAX_ACCEL: f32 = 40.0;
+const SUBSTEPS: u32 = 4;
+const SUBSTEP_DT: f32 = 1.0 / 240.0;
+/// One frame of wall-clock, which is what the dispatcher hands
+/// `MovingPlatformSystem`. The motion model carries state between frames and is
+/// advanced once per frame, so giving it a substep's length instead would run
+/// it at a quarter speed — a four-fold error in every time constant, visible
+/// only as a platform that corners four times more widely than authored.
+const FRAME_DT: f32 = SUBSTEP_DT * SUBSTEPS as f32;
 
 /// Build a rigid-decked platform at `from`, shuttling to `to`.
 fn spawn_platform(
@@ -60,7 +68,7 @@ fn spawn_platform_with_suspension(
         max_impulse: f32::INFINITY,
     });
 
-    let platform = MovingPlatform::new(from, to, speed);
+    let platform = MovingPlatform::shuttle(from, to, speed);
     (body, platform)
 }
 
@@ -104,7 +112,6 @@ fn run_frame_with_motor(
     debug_lines: &mut DebugLines,
     max_accel: f32,
 ) {
-    let dt = 1.0 / 240.0;
     let position = {
         let p = world.body(body).unwrap().position();
         Vector3::new(p.x, p.y, p.z)
@@ -113,16 +120,16 @@ fn run_frame_with_motor(
     let _ = world.set_body_drive(
         body,
         &DriveCommand::medium(
-            platform.target_velocity(&position),
+            platform.target_velocity(&position, FRAME_DT),
             Vector3::zeros(),
             max_accel,
             0.0,
         ),
     );
 
-    world.update_contacts(dt, 4, geometry, &[], debug_lines);
-    for _ in 0..4 {
-        world.substep(dt, geometry, &[]);
+    world.update_contacts(SUBSTEP_DT, SUBSTEPS, geometry, &[], debug_lines);
+    for _ in 0..SUBSTEPS {
+        world.substep(SUBSTEP_DT, geometry, &[]);
     }
 }
 
@@ -142,7 +149,7 @@ fn lift_shuttles_between_endpoints() {
     let mut highest: f32 = from.y;
     let mut lowest: f32 = from.y;
     let mut reversals = 0;
-    let mut last_heading = platform.heading;
+    let mut last_leg = platform.route.target_index();
 
     // 8 s: at 2 m/s over 8 m of travel, that is several full sweeps.
     for _ in 0..1920 {
@@ -150,9 +157,9 @@ fn lift_shuttles_between_endpoints() {
         let y = world.body(body).unwrap().position().y;
         highest = highest.max(y);
         lowest = lowest.min(y);
-        if platform.heading != last_heading {
+        if platform.route.target_index() != last_leg {
             reversals += 1;
-            last_heading = platform.heading;
+            last_leg = platform.route.target_index();
         }
     }
 
@@ -162,9 +169,11 @@ fn lift_shuttles_between_endpoints() {
         from.y, to.y
     );
 
-    // Arriving is turning around within `arrival_radius`, so the endpoint
-    // itself need not be touched exactly.
-    let slack = platform.arrival_radius;
+    // Arriving is crossing the endpoint's plane, and the motion model then
+    // swings about `0.31 · speed · tau` past it before coming back. The
+    // endpoint is therefore reached and a little exceeded, never fallen short
+    // of; the slack is for the sampling, not for the model.
+    let slack = 0.05;
     assert!(
         highest >= to.y - slack,
         "lift should reach the top of its travel: {highest:.3} < {:.3}",
@@ -272,7 +281,10 @@ fn lift_holds_cruise_speed_against_gravity() {
     );
     let mut debug_lines = DebugLines::default();
 
-    // Half a second to spin up, then sample.
+    // Spin up, then sample. The motion model reaches cruise on a time
+    // constant, so this has to clear several of them — at the default 0.25 s
+    // that is about 0.75 s, and sampling at half a second would catch the lift
+    // still on its way up. Two seconds is eight time constants.
     for _ in 0..120 {
         run_frame(&mut world, body, &mut platform, &geometry, &mut debug_lines);
     }
@@ -397,7 +409,7 @@ fn the_deck_tips_by_its_authored_angle_under_the_reference_load() {
             let _ = world.set_body_drive(
                 body,
                 &DriveCommand::medium(
-                    platform.target_velocity(&position),
+                    platform.target_velocity(&position, FRAME_DT),
                     Vector3::zeros(),
                     MOTOR_MAX_ACCEL,
                     0.0,
@@ -444,7 +456,7 @@ fn a_rigid_deck_does_not_tip() {
         let _ = world.set_body_drive(
             body,
             &DriveCommand::medium(
-                platform.target_velocity(&position),
+                platform.target_velocity(&position, FRAME_DT),
                 Vector3::zeros(),
                 MOTOR_MAX_ACCEL,
                 0.0,
@@ -507,7 +519,7 @@ fn a_landing_rings_the_deck_and_then_dies_away() {
         let _ = world.set_body_drive(
             body,
             &DriveCommand::medium(
-                platform.target_velocity(&position),
+                platform.target_velocity(&position, FRAME_DT),
                 Vector3::zeros(),
                 MOTOR_MAX_ACCEL,
                 0.0,
@@ -592,4 +604,270 @@ fn a_wobbling_deck_still_runs_its_route() {
         tilt < 0.5,
         "a platform running its route should stay level, leaning {tilt:.3} deg"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Routes and cornering
+// ---------------------------------------------------------------------------
+
+/// Build a platform on an arbitrary route.
+fn spawn_route(
+    world: &mut PhysicsWorld,
+    waypoints: Vec<Vector3<f32>>,
+    looping: RouteLoop,
+    motion: SeekMotion,
+) -> (RigidBodyHandle, MovingPlatform) {
+    let start = waypoints[0];
+    let (body, _) = spawn_platform(world, start, start, motion.speed);
+    (body, MovingPlatform::new(waypoints, looping, motion))
+}
+
+/// A platform with more than two waypoints visits all of them, in order, and
+/// goes round again.
+#[test]
+fn a_circuit_visits_every_waypoint_in_order() {
+    let geometry = FlatQuadGeometry::new(128.0);
+    let mut config = PhysicsConfig::default();
+    config.sleep.enabled = false;
+    let mut world = PhysicsWorld::new(config);
+
+    let corners = vec![
+        Vector3::new(0.0, 20.0, 0.0),
+        Vector3::new(12.0, 20.0, 0.0),
+        Vector3::new(12.0, 20.0, 12.0),
+        Vector3::new(0.0, 20.0, 12.0),
+    ];
+    let (body, mut platform) = spawn_route(
+        &mut world,
+        corners.clone(),
+        RouteLoop::Circuit,
+        SeekMotion {
+            speed: 3.0,
+            tau: 0.25,
+        },
+    );
+
+    let mut debug_lines = DebugLines::default();
+    let mut visited = vec![platform.target_index()];
+    for _ in 0..7200 {
+        run_frame(&mut world, body, &mut platform, &geometry, &mut debug_lines);
+        if *visited.last().unwrap() != platform.target_index() {
+            visited.push(platform.target_index());
+        }
+    }
+
+    eprintln!("circuit visited {visited:?}");
+    assert!(
+        visited.len() > 6,
+        "a circuit should keep going round: only {} legs in 30 s",
+        visited.len()
+    );
+    assert!(
+        visited.windows(2).all(|w| w[1] == (w[0] + 1) % 4),
+        "waypoints should be visited in order, got {visited:?}"
+    );
+}
+
+/// The point of the whole model: the commanded velocity is continuous, so a
+/// turnaround is a deceleration and an acceleration rather than an inversion.
+///
+/// Measured as the largest single-frame change in the platform's velocity
+/// across a full reversal. The old model stepped its target from `+speed` to
+/// `−speed` in one frame and the motor chased at its full 40 m/s² budget; this
+/// one asks for a change no larger than thrust × frame.
+#[test]
+fn a_turnaround_eases_through_zero_rather_than_inverting() {
+    let geometry = FlatQuadGeometry::new(64.0);
+    let mut config = PhysicsConfig::default();
+    config.sleep.enabled = false;
+    let mut world = PhysicsWorld::new(config);
+
+    let motion = SeekMotion {
+        speed: 2.0,
+        tau: 0.25,
+    };
+    let from = Vector3::new(0.0, 20.0, 0.0);
+    let to = Vector3::new(8.0, 20.0, 0.0);
+    let (body, mut platform) = spawn_route(&mut world, vec![from, to], RouteLoop::Shuttle, motion);
+
+    let mut debug_lines = DebugLines::default();
+    let mut previous = world.body(body).unwrap().linear_velocity();
+    let mut biggest_step = 0.0f32;
+    let mut reversed = false;
+    let mut furthest = from.x;
+
+    // Long enough to spin up, run the leg, and turn around.
+    for _ in 0..2400 {
+        run_frame(&mut world, body, &mut platform, &geometry, &mut debug_lines);
+        let velocity = world.body(body).unwrap().linear_velocity();
+        furthest = furthest.max(world.body(body).unwrap().position().x);
+        if platform.target_index() == 0 {
+            reversed = true;
+            biggest_step = biggest_step.max((velocity - previous).magnitude());
+        }
+        previous = velocity;
+    }
+
+    assert!(reversed, "platform never turned around");
+
+    // What the old model demanded: an inverted target, chased at the motor's
+    // whole budget. The body can still outpace the command's own rate of
+    // change, because it is closing tracking lag at the same time, so the
+    // meaningful claim is not `thrust · dt` — it is that the turn no longer
+    // saturates the motor.
+    let motor_budget = MOTOR_MAX_ACCEL * FRAME_DT;
+    let overshoot = furthest - to.x;
+    let predicted_overshoot = 0.31 * motion.speed * motion.tau;
+    eprintln!(
+        "turnaround: biggest velocity step {biggest_step:.4} m/s (the motor \
+         could do {motor_budget:.4}), overshot the endpoint by {overshoot:.3} m \
+         against a predicted {predicted_overshoot:.3}"
+    );
+    assert!(
+        biggest_step < motor_budget * 0.5,
+        "the turnaround should ease, not invert: stepped {biggest_step:.4} m/s \
+         of an available {motor_budget:.4}"
+    );
+
+    // `0.31 · speed · tau` is what `SeekMotion::tau` tells authors to leave
+    // clearance for, so it is worth holding the model to it.
+    assert!(
+        (overshoot - predicted_overshoot).abs() < 0.2 * predicted_overshoot,
+        "the overshoot should match the documented {predicted_overshoot:.3} m, \
+         measured {overshoot:.3} m"
+    );
+}
+
+/// A gentle bend should barely be felt, and a hard corner should be visible.
+/// One mechanism, and the difference between them is the turn angle alone.
+#[test]
+fn a_slight_bend_costs_less_speed_than_a_hard_corner() {
+    let geometry = FlatQuadGeometry::new(256.0);
+
+    let corner_speed = |turn: Vector3<f32>| {
+        let mut config = PhysicsConfig::default();
+        config.sleep.enabled = false;
+        let mut world = PhysicsWorld::new(config);
+        let motion = SeekMotion {
+            speed: 3.0,
+            tau: 0.25,
+        };
+        let waypoints = vec![
+            Vector3::new(0.0, 20.0, 0.0),
+            Vector3::new(20.0, 20.0, 0.0),
+            Vector3::new(20.0, 20.0, 0.0) + turn,
+        ];
+        let (body, mut platform) = spawn_route(&mut world, waypoints, RouteLoop::Shuttle, motion);
+
+        let mut debug_lines = DebugLines::default();
+        let mut slowest = f32::MAX;
+        for _ in 0..3600 {
+            run_frame(&mut world, body, &mut platform, &geometry, &mut debug_lines);
+            // Only once it is on the second leg, i.e. taking the corner.
+            if platform.target_index() == 2 {
+                slowest = slowest.min(world.body(body).unwrap().linear_velocity().magnitude());
+            }
+        }
+        slowest
+    };
+
+    // A 10 degree bend, and a square corner, both 20 m along.
+    let bend = corner_speed(Vector3::new(19.7, 0.0, 3.47));
+    let square = corner_speed(Vector3::new(0.0, 0.0, 20.0));
+
+    eprintln!(
+        "slowest through a 10 deg bend: {bend:.3} m/s; through a square corner: {square:.3} m/s"
+    );
+    assert!(
+        bend > 2.7,
+        "a slight bend should barely cost any speed: dropped to {bend:.3} of 3.0"
+    );
+    assert!(
+        square < bend - 0.3,
+        "a square corner should cost visibly more than a bend: {square:.3} vs {bend:.3}"
+    );
+}
+
+/// Knocked off course, the platform returns to the waypoint it was already
+/// heading for — it does not skip ahead, and it does not go backwards to find
+/// its place again.
+///
+/// There is no schedule to fall out of step with, so this needs no recovery
+/// rule: the thrust points at the target waypoint from wherever the platform
+/// actually is. The hard case is being knocked *forwards*, which an earlier
+/// design would have answered by reversing until it was behind an imaginary
+/// pacer.
+#[test]
+fn a_platform_knocked_off_course_resumes_the_waypoint_it_was_heading_for() {
+    let geometry = FlatQuadGeometry::new(256.0);
+
+    for shove in [
+        Vector3::new(0.0, 0.0, 14.0),  // sideways
+        Vector3::new(-14.0, 0.0, 0.0), // backwards
+        Vector3::new(14.0, 0.0, 0.0),  // forwards, but not past the waypoint
+    ] {
+        let mut config = PhysicsConfig::default();
+        config.sleep.enabled = false;
+        let mut world = PhysicsWorld::new(config);
+
+        let from = Vector3::new(0.0, 20.0, 0.0);
+        let to = Vector3::new(40.0, 20.0, 0.0);
+        let (body, mut platform) = spawn_route(
+            &mut world,
+            vec![from, to],
+            RouteLoop::Shuttle,
+            SeekMotion {
+                speed: 2.0,
+                tau: 0.25,
+            },
+        );
+
+        let mut debug_lines = DebugLines::default();
+        for _ in 0..240 {
+            run_frame(&mut world, body, &mut platform, &geometry, &mut debug_lines);
+        }
+        let heading_for = platform.target_index();
+
+        // The blast.
+        {
+            let body_mut = world.body_mut(body).unwrap();
+            let velocity = body_mut.linear_velocity();
+            body_mut.set_linear_velocity(velocity + shove);
+        }
+
+        let mut went_backwards_past_the_start = false;
+        for _ in 0..2400 {
+            run_frame(&mut world, body, &mut platform, &geometry, &mut debug_lines);
+            let p = world.body(body).unwrap().position();
+            if p.x < from.x - 1.0 {
+                went_backwards_past_the_start = true;
+            }
+            if platform.target_index() != heading_for {
+                break;
+            }
+        }
+
+        let p = world.body(body).unwrap().position();
+        let off_route = (p.z - from.z).abs();
+        eprintln!(
+            "shove {shove:?}: ended at ({:.2}, {:.2}, {:.2}), off-route {off_route:.3} m",
+            p.x, p.y, p.z
+        );
+
+        assert!(
+            !went_backwards_past_the_start,
+            "shove {shove:?}: the platform should fly at its waypoint, never \
+             reverse down its own route to find its place"
+        );
+        assert!(
+            platform.target_index() != heading_for,
+            "shove {shove:?}: the platform should still reach the waypoint it \
+             was heading for"
+        );
+        assert!(
+            off_route < 0.5,
+            "shove {shove:?}: the platform should be back on its line by the \
+             time it arrives, {off_route:.3} m off"
+        );
+    }
 }

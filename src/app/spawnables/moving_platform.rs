@@ -1,4 +1,4 @@
-//! A powered platform that shuttles between two world points under its own
+//! A powered platform that patrols a route of world points under its own
 //! motor.
 //!
 //! Nothing anchors it to the world. It is a heavy dynamic box with two pieces
@@ -6,18 +6,19 @@
 //!
 //! ```text
 //!   MovingPlatformSystem ──► DriveIntent ──► Actuator ──► solver
-//!        (aim at endpoint)    (intent)      (motor, capped
-//!                                            acceleration)
+//!    (thrust at the next     (intent)       (motor, capped
+//!     waypoint, plus drag)                   acceleration)
 //!   DeckSuspension ──► KeepUpright ─────► solver
 //!    (tilt, damping)     (attitude, soft or rigid)
 //! ```
 //!
 //! The motor commands speed and never position, but it commands it *toward* the
-//! endpoint it is currently running to, so displacement is transient: shove the
-//! platform sideways with a grenade and it converges back on to its route as it
-//! travels. Gravity stays switched on, so a platform that loses its
-//! `Actuator` component — the same trick `DeathSystem` uses on the player
-//! — stops being a platform and becomes a falling box.
+//! waypoint it is currently running to, recomputed from wherever the platform
+//! actually is, so displacement is transient: shove it with a grenade and it
+//! flies back at the same waypoint it was already heading for. Gravity stays
+//! switched on, so a platform that loses its `Actuator` component — the same
+//! trick `DeathSystem` uses on the player — stops being a platform and becomes
+//! a falling box.
 
 use nalgebra::{Point3, UnitVector3, Vector3};
 use serde::Deserialize;
@@ -35,7 +36,7 @@ use crate::drive::{Actuator, BodyMotion, DriveIntent};
 use crate::level::BoxStyle;
 use crate::physics::constraint::ConstraintKind;
 use crate::physics::{ColliderDesc, RigidBodyDesc};
-use crate::platform::{DeckSuspension, MovingPlatform};
+use crate::platform::{DeckSuspension, MovingPlatform, RouteLoop, SeekMotion};
 use crate::rendering::material::MaterialId;
 use crate::rendering::physical_finish::PhysicalSurface;
 use crate::systems::PhysicsResource;
@@ -55,15 +56,23 @@ const MOTOR_MAX_ACCEL: f32 = 40.0;
 
 #[derive(Deserialize)]
 pub struct MovingPlatformDef {
-    /// One end of the shuttle, in world space. The platform spawns here.
-    pub from: (f32, f32, f32),
-    /// The other end, in world space.
-    pub to: (f32, f32, f32),
+    /// The patrol, in world space. The platform spawns on the first waypoint
+    /// and heads for the second. Two waypoints is the shuttle it used to be;
+    /// more than two corner at each one.
+    pub waypoints: Vec<(f32, f32, f32)>,
+    /// What happens at the end of the list: turn around, or wrap and go again.
+    #[serde(default = "MovingPlatformDef::default_looping")]
+    pub looping: RouteLoop,
     #[serde(default = "MovingPlatformDef::default_half_extents")]
     pub half_extents: (f32, f32, f32),
     /// Cruise speed, in m/s.
     #[serde(default = "MovingPlatformDef::default_speed")]
     pub speed: f32,
+    /// Spin-up time in seconds, and with it how tightly the platform corners:
+    /// a corner is rounded over about `speed · spin_up`, and a turnaround
+    /// swings about a third of that past its waypoint. Author clearance for it.
+    #[serde(default = "MovingPlatformDef::default_spin_up")]
+    pub spin_up: f32,
     /// How far the deck tips under a player on its edge, and how fast the ring
     /// that follows dies. Omit for a deck that does not move at all.
     #[serde(default = "MovingPlatformDef::default_suspension")]
@@ -76,6 +85,15 @@ impl MovingPlatformDef {
     }
     pub fn default_speed() -> f32 {
         2.0
+    }
+    pub fn default_looping() -> RouteLoop {
+        RouteLoop::Shuttle
+    }
+    /// Enough lag to read as a deceleration into a turn without the platform
+    /// wandering far off the line the author drew: half a metre of corner at
+    /// the default cruise speed, and 15 cm of overshoot at a turnaround.
+    pub fn default_spin_up() -> f32 {
+        0.25
     }
     /// Enough give that a player landing on the edge visibly throws the deck
     /// — about 5° at the peak of the swing — and enough damping that it has
@@ -103,8 +121,12 @@ impl Spawnable for MovingPlatformDef {
     }
 
     fn spawn(&self, world: &mut World, materials: &[MaterialId]) -> Vec<Entity> {
-        let from = Vector3::new(self.from.0, self.from.1, self.from.2);
-        let to = Vector3::new(self.to.0, self.to.1, self.to.2);
+        let waypoints: Vec<Vector3<f32>> = self
+            .waypoints
+            .iter()
+            .map(|&(x, y, z)| Vector3::new(x, y, z))
+            .collect();
+        let from = waypoints.first().copied().unwrap_or_else(Vector3::zeros);
         let pos = Point3::from(from);
         let half_extents = Vector3::new(
             self.half_extents.0,
@@ -149,7 +171,14 @@ impl Spawnable for MovingPlatformDef {
             body_handle
         };
 
-        let platform = MovingPlatform::new(from, to, self.speed);
+        let platform = MovingPlatform::new(
+            waypoints,
+            self.looping,
+            SeekMotion {
+                speed: self.speed,
+                tau: self.spin_up,
+            },
+        );
 
         vec![world
             .create_entity()

@@ -221,15 +221,32 @@ Level(
                 Dolos(pos: (-7.0, 1.0, 0.0), shank_length: 2.0, fluke_length: 1.4, thickness: 0.6),
 
                 MovingPlatform(
-                    from: (-4.0, 0.8, -18.0),
-                    to: (-14.0, 0.8, -18.0),
+                    waypoints: [
+                        (-4.0, 0.8, -18.0),
+                        (-14.0, 0.8, -18.0),
+                    ],
                     speed: 2.0,
                 ),
 
                 MovingPlatform(
-                    from: (-4.0, 0.5, -24.0),
-                    to: (-14.0, 3.0, -24.0),
+                    waypoints: [
+                        (-4.0, 0.5, -24.0),
+                        (-14.0, 3.0, -24.0),
+                    ],
                     speed: 2.0,
+                ),
+
+                // A cornering patrol: a rectangle walked as a circuit, so
+                // every waypoint is a turn rather than a turnaround.
+                MovingPlatform(
+                    waypoints: [
+                        (-4.0, 1.5, -30.0),
+                        (-14.0, 1.5, -30.0),
+                        (-14.0, 3.5, -36.0),
+                        (-4.0, 3.5, -36.0),
+                    ],
+                    looping: Circuit,
+                    speed: 2.5,
                 ),
             ],
         ),

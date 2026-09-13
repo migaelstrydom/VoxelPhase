@@ -1,10 +1,11 @@
 //! Drives moving platforms along their patrol.
 
-use specs::{Join, ReadStorage, System, WriteStorage};
+use specs::{Join, ReadExpect, ReadStorage, System, WriteStorage};
 
 use crate::components::Position;
 use crate::drive::{Actuator, DriveIntent};
 use crate::platform::components::MovingPlatform;
+use crate::time::Time;
 
 /// Turns each platform's shuttle state into a drive command.
 ///
@@ -21,14 +22,16 @@ impl<'a> System<'a> for MovingPlatformSystem {
         ReadStorage<'a, Position>,
         WriteStorage<'a, DriveIntent>,
         ReadStorage<'a, Actuator>,
+        ReadExpect<'a, Time>,
     );
 
-    fn run(&mut self, (mut platforms, positions, mut intents, actuators): Self::SystemData) {
+    fn run(&mut self, (mut platforms, positions, mut intents, actuators, time): Self::SystemData) {
+        let dt = time.delta_seconds();
         for (platform, position, intent, _) in
             (&mut platforms, &positions, &mut intents, &actuators).join()
         {
             platform.update_heading(&position.0);
-            intent.linear_target = platform.target_velocity(&position.0);
+            intent.linear_target = platform.target_velocity(&position.0, dt);
         }
     }
 }
