@@ -24,7 +24,7 @@ use crate::terrain::SegmentFrame;
 
 use super::footprint::{Footprint, Support};
 
-use crate::app::creatures::RollerDef;
+use crate::app::creatures::{HeartCritterDef, RollerDef};
 use crate::app::spawnables::{
     BananaDef, BeachBallDef, BoxDef, BoxWallDef, CapsuleDef, CrateDef, DodecahedronDef, DolosDef,
     DominoDef, FencePostDef, GlowingOrbDef, HeavyCrateDef, HexPrismDef, HoneycombWallDef, HouseDef,
@@ -855,6 +855,18 @@ pub enum LevelObject {
         #[serde(default = "RollerDef::default_sight_range")]
         sight_range: f32,
     },
+    /// Heart critter — a small creature that runs from the player and
+    /// restores hit points to whoever catches it. See `src/app/creatures/`.
+    HeartCritter {
+        /// Position (x, z). Y is determined by terrain surface height.
+        pos: (f32, f32),
+        #[serde(default = "HeartCritterDef::default_speed")]
+        speed: f32,
+        #[serde(default = "HeartCritterDef::default_flee_range")]
+        flee_range: f32,
+        #[serde(default = "HeartCritterDef::default_reward")]
+        reward: f32,
+    },
     /// Pendulum — terrain-anchored frame with a swinging ball.
     Pendulum {
         /// Position (x, z). Y is determined by terrain surface height.
@@ -1281,6 +1293,7 @@ impl LevelObject {
             LevelObject::Menhir { pos, .. } => ("Menhir", anchored(pos)),
             LevelObject::FencePost { pos, .. } => ("FencePost", anchored(pos)),
             LevelObject::Roller { pos, .. } => ("Roller", anchored(pos)),
+            LevelObject::HeartCritter { pos, .. } => ("HeartCritter", anchored(pos)),
             LevelObject::Pendulum { pos, .. } => ("Pendulum", anchored(pos)),
             LevelObject::MovingPlatform { waypoints, .. } => (
                 "MovingPlatform",
@@ -1506,6 +1519,9 @@ impl LevelObject {
             },
             LevelObject::FencePost { radius, .. } => Disc { radius: *radius },
             LevelObject::Roller { radius, .. } => Disc { radius: *radius },
+            // Small and it moves off immediately; the footprint is only
+            // ever about what it is standing on at spawn.
+            LevelObject::HeartCritter { .. } => Disc { radius: 0.15 },
             LevelObject::PlayWheel { radius, .. } => Disc { radius: *radius },
             // The deck at its spawn point. A platform spends most of its life
             // away from there, but the footprint is about what it is placed
@@ -1579,6 +1595,7 @@ impl LevelObject {
             | LevelObject::Menhir { .. }
             | LevelObject::FencePost { .. }
             | LevelObject::Roller { .. }
+            | LevelObject::HeartCritter { .. }
             | LevelObject::PlayWheel { .. }
             | LevelObject::Tetrahedron { .. }
             | LevelObject::Octahedron { .. }
@@ -1672,6 +1689,7 @@ impl LevelObject {
             LevelObject::Menhir { pos, .. } => p2(pos),
             LevelObject::FencePost { pos, .. } => p2(pos),
             LevelObject::Roller { pos, .. } => p2(pos),
+            LevelObject::HeartCritter { pos, .. } => p2(pos),
             LevelObject::Pendulum { pos, .. } => p2(pos),
             LevelObject::MovingPlatform { waypoints, .. } => {
                 for waypoint in waypoints.iter_mut() {
@@ -1915,6 +1933,18 @@ impl LevelObject {
                 speed: *speed,
                 spin_up_time: *spin_up_time,
                 sight_range: *sight_range,
+            }),
+
+            LevelObject::HeartCritter {
+                pos,
+                speed,
+                flee_range,
+                reward,
+            } => Box::new(HeartCritterDef {
+                pos: *pos,
+                speed: *speed,
+                flee_range: *flee_range,
+                reward: *reward,
             }),
 
             LevelObject::Pendulum {

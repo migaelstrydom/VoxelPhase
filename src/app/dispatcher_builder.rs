@@ -1,9 +1,10 @@
 use specs::{Dispatcher, DispatcherBuilder};
 
+use crate::animation::critter::{CritterAnimationSystem, CritterProbeConfigSystem};
 use crate::animation::{AnimationProbeConfigSystem, CharacterAnimationSystem};
 use crate::character::ContactGroundingSystem;
 use crate::creature::{
-    AlertTelegraphSystem, BrainSystem, PerceptionSystem, RollerLocomotionSystem,
+    AlertTelegraphSystem, BrainSystem, CollectionSystem, PerceptionSystem, RollerLocomotionSystem,
 };
 use crate::damage::{
     BlastDamageSystem, BurnDamageSystem, DamageApplySystem, DeathSystem, ImpactDamageSystem,
@@ -73,10 +74,18 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
             "animation_probe_config",
             &["physics_sync"],
         )
+        // Critters aim their own foot probes from the same seam, into the
+        // same sensor set the humanoid uses. Both must land before the
+        // probes are fired.
+        .with(
+            CritterProbeConfigSystem,
+            "critter_probe_config",
+            &["physics_sync"],
+        )
         .with(
             SensorProbeSystem,
             "sensor_probe",
-            &["animation_probe_config"],
+            &["animation_probe_config", "critter_probe_config"],
         )
         // The one writer of `Grounding`, for every character. Runs after
         // physics, on this frame's contacts; the animator reads it in the same
@@ -91,6 +100,14 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
             "character_animation",
             &["sensor_probe", "contact_grounding"],
         )
+        .with(
+            CritterAnimationSystem,
+            "critter_animation",
+            &["sensor_probe", "contact_grounding"],
+        )
+        // Catching happens on this frame's synced positions, so a critter
+        // caught at a sprint is caught where the player saw it.
+        .with(CollectionSystem, "collection", &["physics_sync"])
         .with(CameraControlSystem, "camera_control", &["physics_sync"])
         // Projectiles and explosions
         .with(GrenadeSpawnSystem, "grenade_spawn", &["camera_control"])

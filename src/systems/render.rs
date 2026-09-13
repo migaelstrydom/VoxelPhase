@@ -1,3 +1,4 @@
+use crate::animation::critter::CritterAnimator;
 use crate::animation::CharacterAnimator;
 use crate::components::{
     CameraComponent, MaterialModulation, ModelInstance, Orientation, Position, Renderable,
@@ -14,6 +15,7 @@ use crate::rendering::debug_render::{
 };
 use crate::rendering::material::{MaterialManager, SurfaceModulation};
 use crate::rendering::renderer::Renderer;
+use crate::rendering::vertex::Vertex;
 use crate::resources::textures::TextureManager;
 use crate::terrain::{self, TerrainWorld};
 use crate::water::{WaterGrid, WaveGrid};
@@ -84,6 +86,7 @@ impl<'a> System<'a> for RenderSystem {
         ReadStorage<'a, Renderable>,
         ReadStorage<'a, CameraComponent>,
         WriteStorage<'a, CharacterAnimator>,
+        WriteStorage<'a, CritterAnimator>,
         ReadStorage<'a, OnFire>,
         ReadStorage<'a, RigidBodyComponent>,
         ReadExpect<'a, super::PhysicsResource>,
@@ -113,6 +116,7 @@ impl<'a> System<'a> for RenderSystem {
             renderables,
             camera_components,
             mut biped_controllers,
+            mut critter_animators,
             on_fires,
             rigid_bodies,
             physics_resource,
@@ -268,17 +272,25 @@ impl<'a> System<'a> for RenderSystem {
                         }
                     }
 
-                    // Draw all biped controllers
-                    // Note: Characters use world-space vertex positions
-                    // (skeleton positions are already in world coords), so we use identity transform.
+                    // Draw every procedurally-rigged character.
+                    //
+                    // Their vertices are already in world space — a rig
+                    // poses its own joints there — so the transform is
+                    // identity and the only thing that differs between rigs
+                    // is which storage the mesh comes out of.
+                    let identity = Matrix4::identity();
+                    let mut rig_meshes: Vec<(&[Vertex], &[u32])> = Vec::new();
                     for (controller, _pos, _rot, _renderable) in
                         (&mut biped_controllers, &positions, &rotations, &renderables).join()
                     {
-                        let identity = Matrix4::identity();
-
-                        // Get mesh from the controller (regenerates if dirty)
-                        let (vertices, indices) = controller.mesh();
-
+                        rig_meshes.push(controller.mesh());
+                    }
+                    for (animator, _pos, _rot, _renderable) in
+                        (&mut critter_animators, &positions, &rotations, &renderables).join()
+                    {
+                        rig_meshes.push(animator.mesh());
+                    }
+                    for (vertices, indices) in rig_meshes {
                         if let Err(e) = renderer.draw_procedural_mesh(
                             draw_cb,
                             vertices,
@@ -287,7 +299,7 @@ impl<'a> System<'a> for RenderSystem {
                             &material_manager,
                             &texture_manager,
                         ) {
-                            log::error!("RenderSystem: Failed to draw biped character: {}", e);
+                            log::error!("RenderSystem: Failed to draw a rigged character: {}", e);
                         }
                     }
 

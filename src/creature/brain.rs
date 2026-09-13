@@ -1,4 +1,5 @@
 use nalgebra::{Point3, Vector3};
+use rand::Rng;
 use specs::{
     Component, DenseVecStorage, Entities, Join, Read, ReadStorage, System, Write, WriteStorage,
 };
@@ -35,14 +36,42 @@ pub enum Behaviour {
     },
     /// Target lost. Heads to where it was last perceived, then gives up.
     Searching { last_known: Point3<f32> },
-    /// Badly hurt. Runs away and does not come back.
+    /// Badly hurt, or frightened. Runs away.
     Fleeing,
+    /// Nothing to react to, so it mills about. `heading` is held for
+    /// `remaining` seconds and then nudged, which reads as an animal
+    /// pottering rather than as one teleporting its mind every frame.
+    Wandering {
+        heading: Vector3<f32>,
+        remaining: f32,
+    },
 }
 
 impl Default for Behaviour {
     fn default() -> Self {
         Self::Idle
     }
+}
+
+/// What a creature does about what it senses.
+///
+/// The two dispositions want opposite things from the same perception, and
+/// separating them here keeps each transition table short enough to read.
+/// A hunter's is unchanged from when it was the only one.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Temperament {
+    /// Closes on what it senses, circles at contact range, and breaks off
+    /// only when badly hurt.
+    Hunter,
+    /// Runs from what it senses and mills about when it senses nothing.
+    /// Never attacks, and rejoins the world once the fright has passed —
+    /// a hunter's flight is terminal, a skittish creature's is a mood.
+    Skittish {
+        /// Distance within which a sensed target is frightening. Beyond
+        /// it the creature carries on wandering, which is what lets a
+        /// player creep up rather than being spotted across a valley.
+        flee_range: f32,
+    },
 }
 
 /// Drives one creature's decisions.
@@ -55,6 +84,7 @@ impl Default for Behaviour {
 #[storage(DenseVecStorage)]
 pub struct Brain {
     pub behaviour: Behaviour,
+    pub temperament: Temperament,
 
     /// Distance at which the creature stops closing and starts attacking.
     pub attack_range: f32,
@@ -69,6 +99,11 @@ pub struct Brain {
     pub strafe_interval: f32,
     /// How close to a last known position counts as having searched it.
     pub search_arrival_radius: f32,
+    /// Seconds a wandering creature holds a heading before nudging it.
+    pub wander_interval: f32,
+    /// Largest nudge to a wandering heading, in radians. A quarter turn
+    /// wanders; a half turn dithers on the spot.
+    pub wander_turn: f32,
 }
 
 impl Brain {
@@ -77,11 +112,14 @@ impl Brain {
     pub fn hunter(attack_range: f32) -> Self {
         Self {
             behaviour: Behaviour::default(),
+            temperament: Temperament::Hunter,
             attack_range,
             alert_duration: 0.6,
             flee_health_fraction: 0.2,
             strafe_interval: 1.5,
             search_arrival_radius: 1.5,
+            wander_interval: 1.2,
+            wander_turn: std::f32::consts::FRAC_PI_2,
         }
     }
 
@@ -89,6 +127,20 @@ impl Brain {
     pub fn relentless(mut self) -> Self {
         self.flee_health_fraction = 0.0;
         self
+    }
+
+    /// A creature that wanders until something comes within `flee_range`,
+    /// then runs. It has no attack, so `attack_range` is meaningless to it.
+    pub fn skittish(flee_range: f32) -> Self {
+        Self {
+            behaviour: Behaviour::Wandering {
+                heading: Vector3::zeros(),
+                remaining: 0.0,
+            },
+            temperament: Temperament::Skittish { flee_range },
+            attack_range: 0.0,
+            ..Self::hunter(0.0)
+        }
     }
 }
 
@@ -171,6 +223,70 @@ impl<'a> System<'a> for BrainSystem {
 /// Decide this frame's behaviour. Pure, so the transition table is testable
 /// without a world.
 fn next_behaviour(
+    brain: &Brain,
+    perception: &Perception,
+    me: Point3<f32>,
+    health_fraction: f32,
+    dt: f32,
+) -> Behaviour {
+    match brain.temperament {
+        Temperament::Hunter => hunter_behaviour(brain, perception, me, health_fraction, dt),
+        Temperament::Skittish { flee_range } => {
+            skittish_behaviour(brain, perception, flee_range, dt)
+        }
+    }
+}
+
+/// A creature that wanders, and runs from whatever it notices nearby.
+///
+/// Flight is not terminal here: once the fright is out of range or out of
+/// memory the creature goes back to pottering. A hunter that has broken
+/// off is finished for good, which is a different thing entirely.
+fn skittish_behaviour(
+    brain: &Brain,
+    perception: &Perception,
+    flee_range: f32,
+    dt: f32,
+) -> Behaviour {
+    let frightened = perception
+        .target
+        .is_some_and(|target| target.distance <= flee_range);
+    if frightened {
+        return Behaviour::Fleeing;
+    }
+
+    match brain.behaviour {
+        Behaviour::Wandering { heading, remaining } if remaining - dt > 0.0 => {
+            Behaviour::Wandering {
+                heading,
+                remaining: remaining - dt,
+            }
+        }
+        // Either the heading has run its course or the creature has just
+        // stopped running. Either way, pick a new one.
+        Behaviour::Wandering { heading, .. } => Behaviour::Wandering {
+            heading: nudge(heading, brain.wander_turn),
+            remaining: brain.wander_interval,
+        },
+        _ => Behaviour::Wandering {
+            heading: nudge(Vector3::zeros(), std::f32::consts::PI),
+            remaining: brain.wander_interval,
+        },
+    }
+}
+
+/// Turn a heading by up to `max_turn` radians either way. A zero heading
+/// is replaced outright, which is how a creature picks its first one.
+fn nudge(heading: Vector3<f32>, max_turn: f32) -> Vector3<f32> {
+    let mut rng = rand::thread_rng();
+    let angle = match heading.try_normalize(1e-4) {
+        Some(current) => current.z.atan2(current.x) + rng.gen_range(-max_turn..max_turn),
+        None => rng.gen_range(-std::f32::consts::PI..std::f32::consts::PI),
+    };
+    Vector3::new(angle.cos(), 0.0, angle.sin())
+}
+
+fn hunter_behaviour(
     brain: &Brain,
     perception: &Perception,
     me: Point3<f32>,
@@ -262,6 +378,8 @@ fn next_behaviour(
 
         (Behaviour::Idle, Some(_)) => Behaviour::Idle,
         (Behaviour::Fleeing, _) => Behaviour::Fleeing,
+        // A hunter never wanders; if it somehow got there, it stops.
+        (Behaviour::Wandering { .. }, _) => Behaviour::Idle,
     }
 }
 
@@ -307,6 +425,8 @@ fn intent_for(brain: &Brain, perception: &Perception, me: Point3<f32>) -> Charac
             .target
             .map(|t| steering::flee(me, t.position))
             .unwrap_or_else(Vector3::zeros),
+
+        Behaviour::Wandering { heading, .. } => heading,
     };
 
     CharacterIntent {

@@ -15,6 +15,8 @@
 //! a prefab; what the creature *does* comes from the generic systems in
 //! [`crate::creature`] that read the components it attached.
 
+mod heart_critter;
 mod roller;
 
+pub use heart_critter::HeartCritterDef;
 pub use roller::RollerDef;

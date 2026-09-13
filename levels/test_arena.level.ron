@@ -185,6 +185,12 @@ Level(
                     speed: 3.5,
                 ),
 
+                // Three heart critters, spread out so catching one means
+                // committing to a chase away from the others.
+                HeartCritter(pos: (2.0, -12.0)),
+                HeartCritter(pos: (-4.0, -8.0)),
+                HeartCritter(pos: (11.0, 4.0), speed: 5.0, flee_range: 9.0),
+
                 PlayWheel(
                     pos: (5.0, -16.0),
                     radius: 2.0,

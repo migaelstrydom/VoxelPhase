@@ -34,6 +34,7 @@ use image::RgbaImage;
 use nalgebra::{Matrix4, Vector3};
 use specs::{Join, World, WorldExt};
 
+use crate::animation::critter::CritterAnimator;
 use crate::app::world_builder::WorldBuilder;
 use crate::components::{ModelInstance, Orientation, Position, Renderable, Rotation};
 use crate::core::error::{EngineError, EngineResult};
@@ -194,33 +195,70 @@ impl LevelViewer {
     /// Part transforms are the identity throughout: those are animation's job,
     /// and nothing here is animated.
     fn draw_objects(&mut self, cb: ash::vk::CommandBuffer) -> EngineResult<()> {
-        let entities = self.world.entities();
-        let models = self.world.read_storage::<ModelInstance>();
-        let positions = self.world.read_storage::<Position>();
-        let renderables = self.world.read_storage::<Renderable>();
-        let orientations = self.world.read_storage::<Orientation>();
-        let rotations = self.world.read_storage::<Rotation>();
+        {
+            let entities = self.world.entities();
+            let models = self.world.read_storage::<ModelInstance>();
+            let positions = self.world.read_storage::<Position>();
+            let renderables = self.world.read_storage::<Renderable>();
+            let orientations = self.world.read_storage::<Orientation>();
+            let rotations = self.world.read_storage::<Rotation>();
 
-        for (entity, model, position, _) in (&entities, &models, &positions, &renderables).join() {
-            let rotation = if let Some(orientation) = orientations.get(entity) {
-                orientation.0.to_homogeneous()
-            } else if let Some(rotation) = rotations.get(entity) {
-                Matrix4::from_axis_angle(&Vector3::y_axis(), rotation.0)
-            } else {
-                Matrix4::identity()
-            };
+            for (entity, model, position, _) in
+                (&entities, &models, &positions, &renderables).join()
+            {
+                let rotation = if let Some(orientation) = orientations.get(entity) {
+                    orientation.0.to_homogeneous()
+                } else if let Some(rotation) = rotations.get(entity) {
+                    Matrix4::from_axis_angle(&Vector3::y_axis(), rotation.0)
+                } else {
+                    Matrix4::identity()
+                };
 
-            let world_matrix = Matrix4::new_translation(&position.0) * rotation;
-            let part_transforms = vec![Transform::default(); model.model.parts.len()];
+                let world_matrix = Matrix4::new_translation(&position.0) * rotation;
+                let part_transforms = vec![Transform::default(); model.model.parts.len()];
 
-            self.renderer.draw_model(
+                self.renderer.draw_model(
+                    cb,
+                    &model.model,
+                    &world_matrix,
+                    &part_transforms,
+                    &self.material_manager,
+                    &self.texture_manager,
+                    SurfaceModulation::IDENTITY,
+                )?;
+            }
+        }
+
+        self.draw_rigs(cb)
+    }
+
+    /// Draw the procedurally-rigged creatures, which carry no model.
+    ///
+    /// Their pose is whatever the rig was built at, since nothing here
+    /// animates — but a critter standing in its rest pose is still the
+    /// difference between an author seeing where their creatures landed
+    /// and seeing an empty field.
+    fn draw_rigs(&mut self, cb: ash::vk::CommandBuffer) -> EngineResult<()> {
+        let mut meshes = Vec::new();
+        {
+            let entities = self.world.entities();
+            let renderables = self.world.read_storage::<Renderable>();
+            let mut animators = self.world.write_storage::<CritterAnimator>();
+
+            for (_, animator, _) in (&entities, &mut animators, &renderables).join() {
+                let (vertices, indices) = animator.mesh();
+                meshes.push((vertices.to_vec(), indices.to_vec()));
+            }
+        }
+
+        for (vertices, indices) in meshes {
+            self.renderer.draw_procedural_mesh(
                 cb,
-                &model.model,
-                &world_matrix,
-                &part_transforms,
+                &vertices,
+                &indices,
+                &Matrix4::identity(),
                 &self.material_manager,
                 &self.texture_manager,
-                SurfaceModulation::IDENTITY,
             )?;
         }
 

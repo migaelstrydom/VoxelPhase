@@ -21,11 +21,13 @@
 
 mod alert_telegraph;
 mod brain;
+mod collectable;
 mod perception;
 mod roller;
 pub mod steering;
 
 pub use alert_telegraph::{AlertTelegraph, AlertTelegraphSystem};
-pub use brain::{Behaviour, Brain, BrainSystem};
+pub use brain::{Behaviour, Brain, BrainSystem, Temperament};
+pub use collectable::{Collectable, CollectionSystem, Reward};
 pub use perception::{PerceivedTarget, Perception, PerceptionSystem};
 pub use roller::{Roller, RollerLocomotionSystem};

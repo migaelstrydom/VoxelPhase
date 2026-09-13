@@ -1,5 +1,6 @@
 use specs::{World, WorldExt};
 
+use crate::animation::critter::CritterAnimator;
 use crate::animation::{AnimationDebugConfig, CharacterAnimator};
 use crate::camera::{CameraConfig, FollowTarget};
 use crate::character::grab::GrabConfig;
@@ -9,7 +10,7 @@ use crate::components::{
     RigidBodyComponent, Rotation, TerrainAnchored, Velocity,
 };
 use crate::core::error::EngineResult;
-use crate::creature::{AlertTelegraph, Brain, Perception, Roller};
+use crate::creature::{AlertTelegraph, Brain, Collectable, Perception, Roller};
 use crate::damage::{DamageConfig, DamageQueue, Dead, Health, LastVelocity, Ragdoll};
 use crate::debug::{DebugConfig, DebugLines, DebugLog, DebugOverlays};
 use crate::drive::{Actuator, BodyMotion, DriveIntent};
@@ -74,6 +75,8 @@ impl WorldBuilder {
         // level with a creature in it was spawned.
         world.register::<AlertTelegraph>();
         world.register::<CharacterAnimator>();
+        world.register::<CritterAnimator>();
+        world.register::<Collectable>();
         world.register::<FollowTarget>();
         world.register::<SensorSet>();
         world.register::<ContactCandidates>();
