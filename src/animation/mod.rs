@@ -21,6 +21,7 @@ mod debug_config;
 mod foot_placer;
 pub mod humanoid;
 mod legged;
+pub mod peeper;
 mod pose;
 pub mod rig;
 mod state;

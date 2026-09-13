@@ -1,4 +1,5 @@
 use crate::animation::critter::CritterAnimator;
+use crate::animation::peeper::PeeperAnimator;
 use crate::animation::CharacterAnimator;
 use crate::components::{
     CameraComponent, MaterialModulation, ModelInstance, Orientation, Position, Renderable,
@@ -20,9 +21,25 @@ use crate::resources::textures::TextureManager;
 use crate::terrain::{self, TerrainWorld};
 use crate::water::{WaterGrid, WaveGrid};
 use nalgebra::{Matrix4, Vector3};
+use specs::shred::ResourceId;
 use specs::{
-    Entities, Join, Read, ReadExpect, ReadStorage, System, Write, WriteExpect, WriteStorage,
+    Entities, Join, Read, ReadExpect, ReadStorage, System, SystemData, World, Write, WriteExpect,
+    WriteStorage,
 };
+
+/// Every procedurally-rigged character in the world.
+///
+/// Grouped rather than listed alongside the rest of the system's data
+/// because each new rig is one more storage, and the flat tuple is already
+/// at the limit specs implements. Each of these draws the same way — a
+/// world-space mesh the animator regenerates — so the group also says
+/// something true about them.
+#[derive(SystemData)]
+pub struct RigAnimators<'a> {
+    humanoid: WriteStorage<'a, CharacterAnimator>,
+    critter: WriteStorage<'a, CritterAnimator>,
+    peeper: WriteStorage<'a, PeeperAnimator>,
+}
 
 #[derive(Default)]
 pub struct RenderSystem {
@@ -85,8 +102,7 @@ impl<'a> System<'a> for RenderSystem {
         ReadStorage<'a, Orientation>,
         ReadStorage<'a, Renderable>,
         ReadStorage<'a, CameraComponent>,
-        WriteStorage<'a, CharacterAnimator>,
-        WriteStorage<'a, CritterAnimator>,
+        RigAnimators<'a>,
         ReadStorage<'a, OnFire>,
         ReadStorage<'a, RigidBodyComponent>,
         ReadExpect<'a, super::PhysicsResource>,
@@ -115,8 +131,7 @@ impl<'a> System<'a> for RenderSystem {
             orientations,
             renderables,
             camera_components,
-            mut biped_controllers,
-            mut critter_animators,
+            mut rigs,
             on_fires,
             rigid_bodies,
             physics_resource,
@@ -281,12 +296,17 @@ impl<'a> System<'a> for RenderSystem {
                     let identity = Matrix4::identity();
                     let mut rig_meshes: Vec<(&[Vertex], &[u32])> = Vec::new();
                     for (controller, _pos, _rot, _renderable) in
-                        (&mut biped_controllers, &positions, &rotations, &renderables).join()
+                        (&mut rigs.humanoid, &positions, &rotations, &renderables).join()
                     {
                         rig_meshes.push(controller.mesh());
                     }
                     for (animator, _pos, _rot, _renderable) in
-                        (&mut critter_animators, &positions, &rotations, &renderables).join()
+                        (&mut rigs.critter, &positions, &rotations, &renderables).join()
+                    {
+                        rig_meshes.push(animator.mesh());
+                    }
+                    for (animator, _pos, _rot, _renderable) in
+                        (&mut rigs.peeper, &positions, &rotations, &renderables).join()
                     {
                         rig_meshes.push(animator.mesh());
                     }

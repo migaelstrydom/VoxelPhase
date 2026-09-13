@@ -187,9 +187,16 @@ Level(
 
                 // Three heart critters, spread out so catching one means
                 // committing to a chase away from the others.
-                HeartCritter(pos: (2.0, -12.0)),
-                HeartCritter(pos: (-4.0, -8.0)),
-                HeartCritter(pos: (11.0, 4.0), speed: 5.0, flee_range: 9.0),
+                HeartCritter(pos: (2.0, -12.0), speed: 1.0),
+                HeartCritter(pos: (-4.0, -8.0), speed: 1.0),
+                HeartCritter(pos: (11.0, 4.0), speed: 1.0, flee_range: 9.0),
+
+                // Two peepers, posted well apart and far out. Standing
+                // still with their eyes shut is the point: they are meant
+                // to be walked up on before they are fought, so neither is
+                // put anywhere the player has to pass.
+                Peeper(pos: (-18.0, -14.0)),
+                Peeper(pos: (20.0, -6.0), speed: 4.0, health: 40.0),
 
                 PlayWheel(
                     pos: (5.0, -16.0),

@@ -35,6 +35,7 @@ use nalgebra::{Matrix4, Vector3};
 use specs::{Join, World, WorldExt};
 
 use crate::animation::critter::CritterAnimator;
+use crate::animation::peeper::PeeperAnimator;
 use crate::app::world_builder::WorldBuilder;
 use crate::components::{ModelInstance, Orientation, Position, Renderable, Rotation};
 use crate::core::error::{EngineError, EngineResult};
@@ -243,9 +244,14 @@ impl LevelViewer {
         {
             let entities = self.world.entities();
             let renderables = self.world.read_storage::<Renderable>();
-            let mut animators = self.world.write_storage::<CritterAnimator>();
+            let mut critters = self.world.write_storage::<CritterAnimator>();
+            let mut peepers = self.world.write_storage::<PeeperAnimator>();
 
-            for (_, animator, _) in (&entities, &mut animators, &renderables).join() {
+            for (_, animator, _) in (&entities, &mut critters, &renderables).join() {
+                let (vertices, indices) = animator.mesh();
+                meshes.push((vertices.to_vec(), indices.to_vec()));
+            }
+            for (_, animator, _) in (&entities, &mut peepers, &renderables).join() {
                 let (vertices, indices) = animator.mesh();
                 meshes.push((vertices.to_vec(), indices.to_vec()));
             }

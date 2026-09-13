@@ -8,6 +8,10 @@ pub enum DamageKind {
     Blast,
     /// Being on fire, applied continuously while `OnFire` is present.
     Burn,
+    /// A creature's close-range blow. Separate from `Impact` because
+    /// nothing physical happened: no collision, no velocity change, and
+    /// armour against being thrown into a wall should not help here.
+    Melee,
     /// A sudden change in velocity: falling, being crushed, being thrown into
     /// a wall. One mechanism covers all three.
     Impact,

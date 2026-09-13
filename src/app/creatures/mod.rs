@@ -16,7 +16,9 @@
 //! [`crate::creature`] that read the components it attached.
 
 mod heart_critter;
+mod peeper;
 mod roller;
 
 pub use heart_critter::HeartCritterDef;
+pub use peeper::PeeperDef;
 pub use roller::RollerDef;

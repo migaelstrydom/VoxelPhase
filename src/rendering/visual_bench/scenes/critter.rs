@@ -14,10 +14,7 @@ use crate::rendering::vertex::Vertex;
 use crate::rendering::visual_bench::scene::{
     SceneCamera, SceneContext, SceneEnvironment, SceneMesh, SceneShot, VisualScene,
 };
-use crate::sensing::{ContactCandidate, Probe};
-
-/// Half-width of the ground plane.
-const GROUND_HALF_EXTENT: f32 = 4.0;
+use crate::rendering::visual_bench::scenes::flat_ground::{ground, probe_flat_ground};
 
 /// Seconds of settling to run before the shot, so the ears hang where
 /// they would hang rather than where they were built.
@@ -135,50 +132,4 @@ impl Walker {
         let (vertices, indices) = self.animator.mesh();
         (vertices.to_vec(), indices.to_vec())
     }
-}
-
-/// Answer each probe against the plane `y = 0`.
-fn probe_flat_ground(probes: &[Probe]) -> Vec<ContactCandidate> {
-    probes
-        .iter()
-        .filter_map(|probe| {
-            if probe.direction.y >= -1e-4 {
-                return None;
-            }
-            let distance = -probe.origin.y / probe.direction.y;
-            (distance <= probe.length).then(|| ContactCandidate {
-                tag: probe.tag,
-                point: probe.origin + probe.direction * distance,
-                normal: Vector3::y(),
-                distance,
-            })
-        })
-        .collect()
-}
-
-/// A matte quad for the critter to stand on.
-pub fn ground() -> SceneMesh {
-    let e = GROUND_HALF_EXTENT;
-    let colour = Colour::new(0.3, 0.33, 0.31, 1.0).to_vec4();
-    let normal = Vector3::new(0.0, 1.0, 0.0);
-
-    let corners = [
-        (Vector3::new(-e, 0.0, -e), [0.0, 0.0]),
-        (Vector3::new(e, 0.0, -e), [1.0, 0.0]),
-        (Vector3::new(e, 0.0, e), [1.0, 1.0]),
-        (Vector3::new(-e, 0.0, e), [0.0, 1.0]),
-    ];
-
-    let vertices: Vec<Vertex> = corners
-        .iter()
-        .map(|(position, uv)| Vertex {
-            pos: *position,
-            color: colour,
-            tex_coords: nalgebra::Vector2::new(uv[0], uv[1]),
-            normal,
-            ao: 1.0,
-        })
-        .collect();
-
-    SceneMesh::new(vertices, vec![0, 1, 2, 0, 2, 3])
 }

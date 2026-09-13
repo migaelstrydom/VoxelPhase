@@ -1,6 +1,7 @@
 use specs::{World, WorldExt};
 
 use crate::animation::critter::CritterAnimator;
+use crate::animation::peeper::PeeperAnimator;
 use crate::animation::{AnimationDebugConfig, CharacterAnimator};
 use crate::camera::{CameraConfig, FollowTarget};
 use crate::character::grab::GrabConfig;
@@ -10,7 +11,7 @@ use crate::components::{
     RigidBodyComponent, Rotation, TerrainAnchored, Velocity,
 };
 use crate::core::error::EngineResult;
-use crate::creature::{AlertTelegraph, Brain, Collectable, Perception, Roller};
+use crate::creature::{AlertTelegraph, Brain, Collectable, MeleeAttack, Perception, Roller};
 use crate::damage::{DamageConfig, DamageQueue, Dead, Health, LastVelocity, Ragdoll};
 use crate::debug::{DebugConfig, DebugLines, DebugLog, DebugOverlays};
 use crate::drive::{Actuator, BodyMotion, DriveIntent};
@@ -70,12 +71,14 @@ impl WorldBuilder {
         world.register::<Brain>();
         world.register::<Perception>();
         world.register::<Roller>();
+        world.register::<MeleeAttack>();
         // Only ever registered by `AlertTelegraphSystem`'s setup before now,
         // which meant a world built without a dispatcher panicked the moment a
         // level with a creature in it was spawned.
         world.register::<AlertTelegraph>();
         world.register::<CharacterAnimator>();
         world.register::<CritterAnimator>();
+        world.register::<PeeperAnimator>();
         world.register::<Collectable>();
         world.register::<FollowTarget>();
         world.register::<SensorSet>();

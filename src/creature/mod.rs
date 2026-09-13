@@ -22,6 +22,7 @@
 mod alert_telegraph;
 mod brain;
 mod collectable;
+mod melee;
 mod perception;
 mod roller;
 pub mod steering;
@@ -29,5 +30,6 @@ pub mod steering;
 pub use alert_telegraph::{AlertTelegraph, AlertTelegraphSystem};
 pub use brain::{Behaviour, Brain, BrainSystem, Temperament};
 pub use collectable::{Collectable, CollectionSystem, Reward};
+pub use melee::{MeleeAttack, MeleeAttackSystem, StrikePhase};
 pub use perception::{PerceivedTarget, Perception, PerceptionSystem};
 pub use roller::{Roller, RollerLocomotionSystem};

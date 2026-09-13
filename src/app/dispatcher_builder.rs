@@ -1,10 +1,12 @@
 use specs::{Dispatcher, DispatcherBuilder};
 
 use crate::animation::critter::{CritterAnimationSystem, CritterProbeConfigSystem};
+use crate::animation::peeper::{PeeperAnimationSystem, PeeperProbeConfigSystem};
 use crate::animation::{AnimationProbeConfigSystem, CharacterAnimationSystem};
 use crate::character::ContactGroundingSystem;
 use crate::creature::{
-    AlertTelegraphSystem, BrainSystem, CollectionSystem, PerceptionSystem, RollerLocomotionSystem,
+    AlertTelegraphSystem, BrainSystem, CollectionSystem, MeleeAttackSystem, PerceptionSystem,
+    RollerLocomotionSystem,
 };
 use crate::damage::{
     BlastDamageSystem, BurnDamageSystem, DamageApplySystem, DeathSystem, ImpactDamageSystem,
@@ -41,6 +43,9 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
         .with(BrainSystem, "brain", &["perception"])
         // Rolling creatures consume the same intent the walk FSM does, just
         // as torque instead of velocity. Must land before physics_sync.
+        // A swing is decided by the brain and timed here, so the blow it
+        // throws is in the queue before `damage_apply` drains it.
+        .with(MeleeAttackSystem, "melee_attack", &["brain"])
         .with(AlertTelegraphSystem, "alert_telegraph", &["brain"])
         .with(RollerLocomotionSystem, "roller_locomotion", &["brain"])
         .with(
@@ -83,9 +88,18 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
             &["physics_sync"],
         )
         .with(
+            PeeperProbeConfigSystem,
+            "peeper_probe_config",
+            &["physics_sync"],
+        )
+        .with(
             SensorProbeSystem,
             "sensor_probe",
-            &["animation_probe_config", "critter_probe_config"],
+            &[
+                "animation_probe_config",
+                "critter_probe_config",
+                "peeper_probe_config",
+            ],
         )
         // The one writer of `Grounding`, for every character. Runs after
         // physics, on this frame's contacts; the animator reads it in the same
@@ -104,6 +118,13 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
             CritterAnimationSystem,
             "critter_animation",
             &["sensor_probe", "contact_grounding"],
+        )
+        // A peeper's eye and neck are posed from what the brain and the
+        // swing decided earlier in the frame, so this also runs after both.
+        .with(
+            PeeperAnimationSystem,
+            "peeper_animation",
+            &["sensor_probe", "contact_grounding", "melee_attack"],
         )
         // Catching happens on this frame's synced positions, so a critter
         // caught at a sprint is caught where the player saw it.
@@ -149,7 +170,12 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
         .with(
             DamageApplySystem,
             "damage_apply",
-            &["blast_damage", "burn_damage", "impact_damage"],
+            &[
+                "blast_damage",
+                "burn_damage",
+                "impact_damage",
+                "melee_attack",
+            ],
         )
         .with(DeathSystem, "death", &["damage_apply"])
         .with(TerrainAnchorSystem, "terrain_anchor", &["explosion"])

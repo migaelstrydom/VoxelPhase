@@ -24,7 +24,7 @@ use crate::terrain::SegmentFrame;
 
 use super::footprint::{Footprint, Support};
 
-use crate::app::creatures::{HeartCritterDef, RollerDef};
+use crate::app::creatures::{HeartCritterDef, PeeperDef, RollerDef};
 use crate::app::spawnables::{
     BananaDef, BeachBallDef, BoxDef, BoxWallDef, CapsuleDef, CrateDef, DodecahedronDef, DolosDef,
     DominoDef, FencePostDef, GlowingOrbDef, HeavyCrateDef, HexPrismDef, HoneycombWallDef, HouseDef,
@@ -867,6 +867,21 @@ pub enum LevelObject {
         #[serde(default = "HeartCritterDef::default_reward")]
         reward: f32,
     },
+    /// Peeper — a one-eyed stalker on stilts that pecks at whoever it
+    /// notices. Fragile and killable, unlike the roller.
+    /// See `src/app/creatures/`.
+    Peeper {
+        /// Position (x, z). Y is determined by terrain surface height.
+        pos: (f32, f32),
+        #[serde(default = "PeeperDef::default_speed")]
+        speed: f32,
+        #[serde(default = "PeeperDef::default_sight_range")]
+        sight_range: f32,
+        #[serde(default = "PeeperDef::default_peck_damage")]
+        peck_damage: f32,
+        #[serde(default = "PeeperDef::default_health")]
+        health: f32,
+    },
     /// Pendulum — terrain-anchored frame with a swinging ball.
     Pendulum {
         /// Position (x, z). Y is determined by terrain surface height.
@@ -1294,6 +1309,7 @@ impl LevelObject {
             LevelObject::FencePost { pos, .. } => ("FencePost", anchored(pos)),
             LevelObject::Roller { pos, .. } => ("Roller", anchored(pos)),
             LevelObject::HeartCritter { pos, .. } => ("HeartCritter", anchored(pos)),
+            LevelObject::Peeper { pos, .. } => ("Peeper", anchored(pos)),
             LevelObject::Pendulum { pos, .. } => ("Pendulum", anchored(pos)),
             LevelObject::MovingPlatform { waypoints, .. } => (
                 "MovingPlatform",
@@ -1522,6 +1538,9 @@ impl LevelObject {
             // Small and it moves off immediately; the footprint is only
             // ever about what it is standing on at spawn.
             LevelObject::HeartCritter { .. } => Disc { radius: 0.15 },
+            // All legs: what it stands on is a stance barely wider than
+            // its own haunch, whatever the eye on top of it measures.
+            LevelObject::Peeper { .. } => Disc { radius: 0.25 },
             LevelObject::PlayWheel { radius, .. } => Disc { radius: *radius },
             // The deck at its spawn point. A platform spends most of its life
             // away from there, but the footprint is about what it is placed
@@ -1596,6 +1615,7 @@ impl LevelObject {
             | LevelObject::FencePost { .. }
             | LevelObject::Roller { .. }
             | LevelObject::HeartCritter { .. }
+            | LevelObject::Peeper { .. }
             | LevelObject::PlayWheel { .. }
             | LevelObject::Tetrahedron { .. }
             | LevelObject::Octahedron { .. }
@@ -1690,6 +1710,7 @@ impl LevelObject {
             LevelObject::FencePost { pos, .. } => p2(pos),
             LevelObject::Roller { pos, .. } => p2(pos),
             LevelObject::HeartCritter { pos, .. } => p2(pos),
+            LevelObject::Peeper { pos, .. } => p2(pos),
             LevelObject::Pendulum { pos, .. } => p2(pos),
             LevelObject::MovingPlatform { waypoints, .. } => {
                 for waypoint in waypoints.iter_mut() {
@@ -1945,6 +1966,20 @@ impl LevelObject {
                 speed: *speed,
                 flee_range: *flee_range,
                 reward: *reward,
+            }),
+
+            LevelObject::Peeper {
+                pos,
+                speed,
+                sight_range,
+                peck_damage,
+                health,
+            } => Box::new(PeeperDef {
+                pos: *pos,
+                speed: *speed,
+                sight_range: *sight_range,
+                peck_damage: *peck_damage,
+                health: *health,
             }),
 
             LevelObject::Pendulum {

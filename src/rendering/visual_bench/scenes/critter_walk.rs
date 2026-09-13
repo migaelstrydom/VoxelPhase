@@ -15,7 +15,8 @@ use crate::rendering::visual_bench::scene::{
     SceneCamera, SceneContext, SceneEnvironment, SceneMesh, SceneShot, VisualScene,
 };
 
-use super::critter::{ground, Walker};
+use super::critter::Walker;
+use super::flat_ground::ground;
 
 /// Seconds of standing before the walk, so the ears start settled.
 const SETTLE_SECONDS: f32 = 0.6;
