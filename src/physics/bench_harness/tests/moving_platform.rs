@@ -392,6 +392,7 @@ fn the_deck_tips_by_its_authored_angle_under_the_reference_load() {
             DeckSuspension {
                 tilt_degrees,
                 damping: 0.5,
+                yaw_resistance: DeckSuspension::default_yaw_resistance(),
             },
         );
 
@@ -492,6 +493,7 @@ fn a_landing_rings_the_deck_and_then_dies_away() {
     let suspension = DeckSuspension {
         tilt_degrees: 2.0,
         damping: 0.5,
+        yaw_resistance: DeckSuspension::default_yaw_resistance(),
     };
     let (body, mut platform) = spawn_platform_with_suspension(&mut world, at, at, 0.0, suspension);
 
@@ -581,6 +583,7 @@ fn a_wobbling_deck_still_runs_its_route() {
         DeckSuspension {
             tilt_degrees: 2.0,
             damping: 0.5,
+            yaw_resistance: DeckSuspension::default_yaw_resistance(),
         },
     );
 

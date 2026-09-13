@@ -7,7 +7,8 @@
 //!
 //! ```text
 //!   DeckSuspension ──tune(half_extents)──► DeckTuning ─┬─► KeepUpright.compliance
-//!   (tilt, damping)                                    └─► RigidBody.angular_damping
+//!   (tilt, damping, yaw)                               ├─► RigidBody.angular_damping
+//!                                                      └─► RigidBody.scale_local_inertia
 //! ```
 //!
 //! The tilt is authored in degrees under a stated reference load, which is the
@@ -38,6 +39,15 @@ pub const REFERENCE_LOAD_KG: f32 = 209.0;
 /// in the game quietly detune.
 const CONSTRAINT_POSITION_BETA: f32 = 0.2;
 
+/// A deck that spins around its own yaw axis exactly as its mass and shape
+/// say it should. The neutral value of [`DeckSuspension::yaw_resistance`], and
+/// the multiplier a rigid deck asks for.
+pub const NEUTRAL_YAW_RESISTANCE: f32 = 1.0;
+
+/// The floor on [`DeckSuspension::yaw_resistance`]. Zero would divide by a zero
+/// inertia; anything this small already spins on the lightest touch.
+const MIN_YAW_RESISTANCE: f32 = 0.01;
+
 /// Angular damping for a deck with no suspension. Matches `RigidBodyDesc`'s
 /// default: a rigid deck has no ring to damp, so the number only has to be
 /// harmless.
@@ -61,6 +71,20 @@ pub struct DeckSuspension {
     /// measured on the default deck, and shift with its size and weight, so
     /// treat them as a feel dial rather than a clock.
     pub damping: f32,
+    /// How much harder than its own shape says the deck is to turn about its
+    /// up axis. 1 is the honest value; 50 is about what the player capsule
+    /// uses, and reads as a deck that simply does not yaw.
+    ///
+    /// Yaw is the one rotation `KeepUpright` leaves free, so nothing else
+    /// opposes it. A light deck is easy to spin — resistance goes as the deck's
+    /// mass — and a platform that has been slewed round by a passenger walking
+    /// its edge, or by a crate clipping one corner, arrives at its next
+    /// waypoint facing somewhere else. This is the dial that buys that back
+    /// without welding the deck to the world: it multiplies the yaw term of the
+    /// inertia tensor only, so the tilt ring above is untouched and the platform
+    /// still gives a little when shoved.
+    #[serde(default = "DeckSuspension::default_yaw_resistance")]
+    pub yaw_resistance: f32,
 }
 
 /// The suspension in the terms the physics engine takes it: a compliance for
@@ -71,6 +95,10 @@ pub struct DeckTuning {
     pub compliance: f32,
     /// Hand to `RigidBodyDesc::angular_damping`.
     pub angular_damping: f32,
+    /// Hand to `RigidBody::scale_local_inertia` as the y component, with 1 on
+    /// the other two, *after* the collider is attached — the tensor it scales
+    /// does not exist until then.
+    pub yaw_inertia_scale: f32,
 }
 
 impl DeckSuspension {
@@ -78,6 +106,7 @@ impl DeckSuspension {
     pub const RIGID: Self = Self {
         tilt_degrees: 0.0,
         damping: 0.0,
+        yaw_resistance: NEUTRAL_YAW_RESISTANCE,
     };
 
     /// What a moving platform's deck is built with, and the one place the
@@ -91,7 +120,13 @@ impl DeckSuspension {
     pub const PLATFORM_DECK: Self = Self {
         tilt_degrees: 2.0,
         damping: 0.5,
+        yaw_resistance: NEUTRAL_YAW_RESISTANCE,
     };
+
+    /// The neutral yaw resistance, for a level file that does not mention it.
+    pub fn default_yaw_resistance() -> f32 {
+        NEUTRAL_YAW_RESISTANCE
+    }
 
     /// Whether this suspension does anything at all.
     pub fn is_rigid(&self) -> bool {
@@ -109,6 +144,7 @@ impl DeckSuspension {
             return DeckTuning {
                 compliance: 0.0,
                 angular_damping: RIGID_ANGULAR_DAMPING,
+                yaw_inertia_scale: self.yaw_inertia_scale(),
             };
         }
 
@@ -119,7 +155,12 @@ impl DeckSuspension {
         DeckTuning {
             compliance: CONSTRAINT_POSITION_BETA * tilt / reference_torque,
             angular_damping: self.damping.clamp(0.0, 1.0),
+            yaw_inertia_scale: self.yaw_inertia_scale(),
         }
+    }
+
+    fn yaw_inertia_scale(&self) -> f32 {
+        self.yaw_resistance.max(MIN_YAW_RESISTANCE)
     }
 }
 
@@ -174,6 +215,7 @@ mod tests {
         let suspension = DeckSuspension {
             tilt_degrees: 2.0,
             damping: 0.5,
+            yaw_resistance: DeckSuspension::default_yaw_resistance(),
         };
         let narrow = suspension.tune(&Vector3::new(1.0, 0.3, 1.0));
         let wide = suspension.tune(&Vector3::new(4.0, 0.3, 4.0));
@@ -192,6 +234,7 @@ mod tests {
         let suspension = DeckSuspension {
             tilt_degrees: 2.0,
             damping: 0.0,
+            yaw_resistance: DeckSuspension::default_yaw_resistance(),
         };
         let long_x = suspension.tune(&Vector3::new(4.0, 0.3, 1.0));
         let long_z = suspension.tune(&Vector3::new(1.0, 0.3, 4.0));
@@ -199,6 +242,61 @@ mod tests {
         // Height is not a lever at all.
         let tall = suspension.tune(&Vector3::new(4.0, 9.0, 1.0));
         assert_eq!(tall.compliance, long_x.compliance);
+    }
+
+    /// The yaw dial multiplies the deck's own yaw inertia and leaves the tilt
+    /// ring alone — that separation is the whole point of it.
+    #[test]
+    fn yaw_resistance_scales_only_the_yaw_inertia() {
+        let half_extents = Vector3::new(2.0, 0.1, 2.0);
+        let neutral = DeckSuspension::PLATFORM_DECK.tune(&half_extents);
+        let stiff = DeckSuspension {
+            yaw_resistance: 20.0,
+            ..DeckSuspension::PLATFORM_DECK
+        }
+        .tune(&half_extents);
+
+        assert_eq!(neutral.yaw_inertia_scale, 1.0);
+        assert_eq!(stiff.yaw_inertia_scale, 20.0);
+        assert_eq!(stiff.compliance, neutral.compliance);
+        assert_eq!(stiff.angular_damping, neutral.angular_damping);
+    }
+
+    /// Yaw resistance is independent of whether the deck tips at all, so a
+    /// rigid deck still gets to say how hard it is to slew.
+    #[test]
+    fn a_rigid_deck_still_carries_its_yaw_resistance() {
+        let tuning = DeckSuspension {
+            yaw_resistance: 6.0,
+            ..DeckSuspension::RIGID
+        }
+        .tune(&Vector3::new(2.0, 0.1, 2.0));
+        assert_eq!(tuning.compliance, 0.0);
+        assert_eq!(tuning.yaw_inertia_scale, 6.0);
+    }
+
+    /// Zero would invert to an infinite inverse inertia and spin the deck out
+    /// of the world on the first contact.
+    #[test]
+    fn yaw_resistance_never_reaches_zero() {
+        let tuning = DeckSuspension {
+            yaw_resistance: 0.0,
+            ..DeckSuspension::PLATFORM_DECK
+        }
+        .tune(&Vector3::new(2.0, 0.1, 2.0));
+        assert!(tuning.yaw_inertia_scale >= MIN_YAW_RESISTANCE);
+    }
+
+    /// The dial has to survive the level file, and a level written before it
+    /// existed has to keep loading.
+    #[test]
+    fn the_level_file_can_author_the_yaw_resistance() {
+        let authored: DeckSuspension =
+            ron::from_str("(tilt_degrees: 2.0, damping: 0.5, yaw_resistance: 12.0)").unwrap();
+        assert_eq!(authored.yaw_resistance, 12.0);
+
+        let silent: DeckSuspension = ron::from_str("(tilt_degrees: 2.0, damping: 0.5)").unwrap();
+        assert_eq!(silent.yaw_resistance, NEUTRAL_YAW_RESISTANCE);
     }
 
     /// Twice the tilt is twice the give. The spring is linear and the dial
@@ -209,11 +307,13 @@ mod tests {
         let soft = DeckSuspension {
             tilt_degrees: 4.0,
             damping: 0.0,
+            yaw_resistance: DeckSuspension::default_yaw_resistance(),
         }
         .tune(&half_extents);
         let stiff = DeckSuspension {
             tilt_degrees: 2.0,
             damping: 0.0,
+            yaw_resistance: DeckSuspension::default_yaw_resistance(),
         }
         .tune(&half_extents);
         assert!((soft.compliance / stiff.compliance - 2.0).abs() < 1e-5);

@@ -9,7 +9,8 @@
 //!    (thrust at the next     (intent)       (motor, capped
 //!     waypoint, plus drag)                   acceleration)
 //!   DeckSuspension ──► KeepUpright ─────► solver
-//!    (tilt, damping)     (attitude, soft or rigid)
+//!    (tilt, damping,     (attitude, soft or rigid)
+//!     yaw)    └────────► body inertia
 //! ```
 //!
 //! The motor commands speed and never position, but it commands it *toward* the
@@ -100,7 +101,7 @@ pub struct MovingPlatformDef {
 
 impl MovingPlatformDef {
     pub fn default_half_extents() -> (f32, f32, f32) {
-        (2.0, 0.1, 2.0)
+        (2.0, 0.2, 2.0)
     }
     /// Both motion defaults are `SeekMotion`'s own, deliberately rather than
     /// literals here. A second copy of a default is a trap: it looks
@@ -183,6 +184,14 @@ impl Spawnable for MovingPlatformDef {
                 body_handle,
                 ColliderDesc::box_shape(half_extents).with_physical_surface(self.surface()),
             );
+
+            // Yaw is the axis `KeepUpright` leaves free, so the only thing
+            // opposing a slew is the deck's own inertia. Scaling it here rather
+            // than constraining it keeps the platform shovable: it still turns,
+            // just by as much less as the suspension asks.
+            if let Some(body) = physics.world.body_mut(body_handle) {
+                body.scale_local_inertia(Vector3::new(1.0, tuning.yaw_inertia_scale, 1.0));
+            }
 
             // Attitude with unlimited authority, soft by as much as the
             // suspension asks for. The deck always ends up level; the

@@ -249,6 +249,11 @@ impl Platform {
                 .density(300.0)
                 .friction(0.9),
         );
+        // Mirrors what `MovingPlatformDef::spawn` does, and for the same
+        // reason: the tensor to scale does not exist until the collider is on.
+        if let Some(body) = world.body_mut(body) {
+            body.scale_local_inertia(Vector3::new(1.0, tuning.yaw_inertia_scale, 1.0));
+        }
         // Tilt is held, as softly as the suspension asks; yaw is deliberately
         // free, which is what makes the edge-walk sign observable at all.
         let _ = world.create_constraint(ConstraintKind::KeepUpright {
@@ -654,6 +659,71 @@ fn edge_walk_yaws_the_platform_against_the_walker() {
         "walking +X at the +Z edge must recoil the platform −Y: the walker \
          pushes off the deck and the deck is pushed the other way. Measured \
          {peak_yaw:.5} rad/s"
+    );
+}
+
+/// Yaw resistance slows the slew without welding it shut.
+///
+/// The dial exists because `KeepUpright` leaves yaw free and nothing else
+/// opposes it, so a light deck is turned by whoever walks across it. What it
+/// must not do is become a lock: the recoil above is real physics, and a
+/// platform that answered a shove with nothing at all would read as scenery.
+/// So the assertion is on both halves — much smaller, and still there, and
+/// still the right way round.
+#[test]
+fn yaw_resistance_slows_the_edge_walk_slew_without_stopping_it() {
+    let peak_yaw = |yaw_resistance: f32| {
+        let geometry = FlatQuadGeometry::new(64.0);
+        let mut world = bench_world();
+        let mut debug = DebugLines::default();
+
+        let platform_centre = Vector3::new(0.0, 5.0, 0.0);
+        let platform = Platform::spawn_body_with_suspension(
+            &mut world,
+            platform_centre,
+            0.0,
+            DeckSuspension {
+                yaw_resistance,
+                ..DeckSuspension::RIGID
+            },
+        );
+        let deck = platform_centre.y + PLATFORM_HALF_EXTENTS.y;
+
+        let walker = Walker::spawn(
+            &mut world,
+            Vector3::new(-1.5, deck + 0.02, PLATFORM_HALF_EXTENTS.z - 0.4),
+        )
+        .walking(Vector3::x());
+
+        let idle = walker.standing();
+        for _ in 0..30 {
+            idle.drive(&mut world);
+            advance(&mut world, &geometry, &mut debug);
+        }
+
+        let mut peak: f32 = 0.0;
+        for _ in 0..120 {
+            walker.drive(&mut world);
+            advance(&mut world, &geometry, &mut debug);
+            let yaw = world.body(platform).unwrap().angular_velocity().y;
+            if yaw.abs() > peak.abs() {
+                peak = yaw;
+            }
+        }
+        peak
+    };
+
+    let free = peak_yaw(1.0);
+    let stiff = peak_yaw(20.0);
+    eprintln!("edge walk yaw: free={free:.5} rad/s, 20x resistance={stiff:.5} rad/s");
+
+    assert!(
+        stiff < 0.0,
+        "the recoil must survive the dial, sign and all: {stiff:.5} rad/s"
+    );
+    assert!(
+        stiff.abs() < free.abs() * 0.5,
+        "20x the yaw inertia should more than halve the slew: {stiff:.5} against {free:.5}"
     );
 }
 
@@ -1427,6 +1497,7 @@ fn a_passenger_rides_out_the_deck_wobble() {
         DeckSuspension {
             tilt_degrees: 2.0,
             damping: 0.5,
+            yaw_resistance: DeckSuspension::default_yaw_resistance(),
         },
     );
     let deck = platform_centre.y + PLATFORM_HALF_EXTENTS.y;
