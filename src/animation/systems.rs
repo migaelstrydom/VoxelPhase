@@ -126,7 +126,7 @@ impl<'a> System<'a> for CharacterAnimationSystem {
             }
 
             if debug_config.foot_placer_overlay {
-                draw_foot_placer_overlay(&animator.foot_placer, &mut debug_overlays);
+                draw_foot_placer_overlay(animator.foot_placer(), &mut debug_overlays);
             }
         }
     }

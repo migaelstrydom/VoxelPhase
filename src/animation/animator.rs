@@ -7,11 +7,12 @@ use nalgebra::{Point3, Vector3};
 use specs::{Component, VecStorage};
 
 use super::config::{CharacterRigConfig, GaitPreset};
-use super::foot_placer::{FootPlacer, PlacerCtx, PlacerFoot, PlacerRecorder};
+use super::foot_placer::{FootPlacer, FootSide, PlacerFoot};
 use super::humanoid::pose_state::{AirKind, Gait, PoseState, SampleCtx, Takeoff, TickCtx};
 use super::humanoid::skeleton::{generate_character_mesh, Skeleton};
 use super::humanoid::stride_sync;
 use super::humanoid::upper_state::{UpperSampleCtx, UpperState, UpperTickCtx};
+use super::legged::{LeggedLocomotion, LocomotionCtx};
 use super::pose::{Crossfade, Linear, PoseFragment};
 use super::state::{AnimationState, FootState};
 use crate::character::grab::GrabConfig;
@@ -23,24 +24,6 @@ use crate::sensing::{ContactCandidate, Probe};
 
 /// Duration of the crossfade when either FSM changes variant kind.
 const TRANSITION_BLEND_DURATION: f32 = 0.1;
-
-/// How long the animator keeps animating in a lost surface's frame, in
-/// seconds.
-///
-/// Contact grounding chatters: a walking capsule leaves the floor between
-/// footfalls, and that frame is not the frame the character stepped off the
-/// platform. Without the memory the gait's frame of reference would flicker
-/// between the platform's and the world's at footfall rate, which is a
-/// perturbation at exactly the frequency of the gait it is perturbing. Short
-/// enough that a real departure — a jump, a walk-off — is animated against the
-/// world within a few frames.
-const SUPPORT_MEMORY: f32 = 0.15;
-
-/// Probe tags used by the character animator.
-pub mod probe_tags {
-    pub const FOOT_LEFT: u32 = 0;
-    pub const FOOT_RIGHT: u32 = 1;
-}
 
 /// The character animation driver.
 ///
@@ -66,30 +49,10 @@ pub struct CharacterAnimator {
     /// Active blend for the upper-body FSM.
     upper_crossfade: Option<Crossfade<Linear>>,
 
-    /// Procedural foot placer (Stage 1: ticked for debug/tuning only,
-    /// not yet driving skeleton foot positions).
-    pub foot_placer: FootPlacer,
-    /// Previous-frame yaw, used to derive yaw rate for `FootPlacer`.
-    last_yaw: f32,
-    /// Optional input/output recorder for the foot placer (enabled via
-    /// the `PLACER_REC` env var). Feeds the offline replay harness.
-    recorder: Option<PlacerRecorder>,
-
-    /// Velocity of the surface last seen holding the character up, and how
-    /// long ago that was. See `SUPPORT_MEMORY`.
-    support_velocity: Vector3<f32>,
-    support_age: f32,
-
-    /// How far the rig's pelvis hangs below the physics body's origin.
-    ///
-    /// The two are not the same point and never were: the body is a capsule
-    /// whose centre rides half its height above the floor, while the rig's
-    /// pelvis belongs one `standing_height` above the soles — which is less,
-    /// because a standing character has bent knees. Feeding the body's origin
-    /// straight in as the pelvis stretches every leg to its full length before
-    /// a single step is taken, and a leg with no bend left in it can only
-    /// answer a stride by dragging its foot. See `pelvis_for`.
-    body_to_pelvis: f32,
+    /// Feet, probes and the support frame. Shared with every other
+    /// two-legged rig; the humanoid on top of it is what this animator
+    /// adds.
+    pub locomotion: LeggedLocomotion,
 
     // Mesh caching
     cached_vertices: Vec<Vertex>,
@@ -109,24 +72,22 @@ impl CharacterAnimator {
         ground_clearance: f32,
         yaw: f32,
     ) -> Self {
-        // A rig taller than the body rides is not something an offset can
-        // fix — raising the pelvis to suit would put the feet below the floor
-        // — so that case keeps the origin and the old behaviour.
-        let body_to_pelvis = (ground_clearance - config.standing_height()).max(0.0);
-        let pelvis_position = body_position - Vector3::y() * body_to_pelvis;
-        let leg_length = config.leg_length();
+        let locomotion = LeggedLocomotion::new(
+            config.leg_dims(),
+            config.foot_placer,
+            body_position,
+            ground_clearance,
+            yaw,
+        );
+        let pelvis_position = locomotion.pelvis_for(body_position);
         // The rest pose is built facing the way the character does. Placing
         // the first stance along a fixed axis leaves a character that spawns
         // facing anywhere else standing with its feet across its own path,
         // and it walks the first half-second out of that.
         let facing = Vector3::new(yaw.sin(), 0.0, yaw.cos());
 
-        let state = AnimationState::new(pelvis_position, leg_length);
+        let state = AnimationState::new(pelvis_position, config.leg_length());
         let skeleton = Skeleton::new(&config, pelvis_position, facing);
-        let foot_centre_y = pelvis_position.y - config.standing_height();
-        let foot_placer = FootPlacer::new(pelvis_position, facing, config.hip_width, foot_centre_y);
-        let recorder =
-            PlacerRecorder::from_env(pelvis_position, yaw, config.hip_width, foot_centre_y);
 
         Self {
             config,
@@ -136,104 +97,31 @@ impl CharacterAnimator {
             upper_state: UpperState::Swinging,
             pose_crossfade: None,
             upper_crossfade: None,
-            foot_placer,
-            last_yaw: yaw,
-            recorder,
-            support_velocity: Vector3::zeros(),
-            support_age: SUPPORT_MEMORY,
-            body_to_pelvis,
+            locomotion,
             cached_vertices: Vec::new(),
             cached_indices: Vec::new(),
         }
     }
 
     /// Where the rig's pelvis belongs, given where the physics body is.
-    ///
-    /// The seam between the body the physics engine moves and the skeleton
-    /// drawn around it. Everything that hands this animator a position hands
-    /// it a body position and goes through here.
     pub fn pelvis_for(&self, body_position: Point3<f32>) -> Point3<f32> {
-        body_position - Vector3::y() * self.body_to_pelvis
+        self.locomotion.pelvis_for(body_position)
     }
 
-    /// Configure probes for the next frame based on current animation state.
+    /// The foot placer driving the legs.
+    pub fn foot_placer(&self) -> &FootPlacer {
+        self.locomotion.placer()
+    }
+
+    /// Configure foot probes for the next frame. While the placer is
+    /// suspended (airborne) the probes aim at the feet the airborne
+    /// sampler is drawing, since the placer has no anchors to offer.
     pub fn configure_probes(&self, pelvis_position: Point3<f32>, yaw: f32) -> Vec<Probe> {
-        let facing = Vector3::new(yaw.sin(), 0.0, yaw.cos());
-        let right = facing.cross(&Vector3::y());
-        let left_hip_offset = -right * self.config.hip_width;
-        let right_hip_offset = right * self.config.hip_width;
-
-        let probe_length = self.config.probe_length();
-
-        let mut probes = Vec::with_capacity(2);
-
-        // Each foot's probe aims at the placer's probe anchor — the
-        // committed landing target while stepping (so the swing reads
-        // the terrain height where it will plant, not where the foot
-        // currently hangs), the planted anchor otherwise (so planted
-        // feet track the surface directly beneath them). While the
-        // placer is suspended (airborne), aim at the visible foot from
-        // the airborne sampler instead.
-        let left_aim = if self.foot_placer.is_suspended() {
-            self.state.left.position
-        } else {
-            self.foot_placer.left.probe_anchor()
-        };
-        probes.push(self.configure_foot_probe(
-            probe_tags::FOOT_LEFT,
-            pelvis_position + left_hip_offset,
-            left_aim,
-            probe_length,
-        ));
-
-        let right_aim = if self.foot_placer.is_suspended() {
-            self.state.right.position
-        } else {
-            self.foot_placer.right.probe_anchor()
-        };
-        probes.push(self.configure_foot_probe(
-            probe_tags::FOOT_RIGHT,
-            pelvis_position + right_hip_offset,
-            right_aim,
-            probe_length,
-        ));
-
-        probes
-    }
-
-    /// Configure a single foot probe: a ray from the hip through the
-    /// aim point. Falls back to straight down when the aim point is
-    /// degenerate (at the hip itself).
-    ///
-    /// A probe must always outreach the point it is aimed at. The placer
-    /// reads "no ground under the landing target" as "that target is
-    /// illegal" and shortens the step toward the takeoff position, never
-    /// re-extending it within the swing — so a target beyond the probe's
-    /// range does not merely go unmeasured, it cancels the stride. At
-    /// speed the target is projected a whole swing's worth of hip travel
-    /// ahead, which outruns any fixed multiple of leg length: the foot
-    /// then lands behind the hip, overstretches within a frame or two of
-    /// contact, and the emergency release paces the gait instead of the
-    /// clock. `standing_height` past the target is the margin for ground
-    /// that falls away below it.
-    fn configure_foot_probe(
-        &self,
-        tag: u32,
-        hip_position: Point3<f32>,
-        aim: Point3<f32>,
-        length: f32,
-    ) -> Probe {
-        let to_aim = aim - hip_position;
-        let direction = to_aim
-            .try_normalize(1e-4)
-            .unwrap_or_else(|| Vector3::new(0.0, -1.0, 0.0));
-
-        Probe {
-            tag,
-            origin: hip_position,
-            direction,
-            length: length.max(to_aim.magnitude() + self.config.standing_height()),
-        }
+        self.locomotion.configure_probes(
+            pelvis_position,
+            yaw,
+            [self.state.left.position, self.state.right.position],
+        )
     }
 
     /// Process probe results and update animation.
@@ -255,14 +143,16 @@ impl CharacterAnimator {
         // read as idle, its arms should not swing, and its feet should stay
         // where they were put. Nothing carries an airborne character, so this
         // is the world frame the moment support is lost.
-        let support_velocity = self.observe_support(grounding, dt);
+        let support_velocity = self.locomotion.observe_support(grounding, dt);
         let velocity = velocity - support_velocity;
         let speed = Vector3::new(velocity.x, 0.0, velocity.z).magnitude();
         let facing = Vector3::new(yaw.sin(), 0.0, yaw.cos());
 
         self.state.facing = facing;
         self.state.pelvis_position = pelvis_position;
-        self.process_contacts(contacts);
+        self.locomotion.process_contacts(contacts);
+        self.state.left.normal = self.locomotion.ground(FootSide::Left).normal_or_up();
+        self.state.right.normal = self.locomotion.ground(FootSide::Right).normal_or_up();
         // Support is decided by the contacts the physics engine solved, not by
         // where the gait happened to aim a probe — see
         // `docs/TRACTION_DRIVE_DESIGN.md` §6.6. The probes below remain the
@@ -271,19 +161,9 @@ impl CharacterAnimator {
         self.state.is_grounded = grounding.is_grounded;
 
         // Snapshot the foot-centre y for a potential Landing splice this
-        // frame. `foot.position.y` now represents the foot centre (sole
-        // is one radius below), so probe contact is the correct value
-        // directly. Fallback estimates the terrain surface as
-        // `pelvis - standing_height`, which is where the foot centre sits
-        // at rest: `standing_height` is measured pelvis-to-foot-centre,
-        // and a planted foot's centre tracks the surface itself.
-        let landing_ground_y = self
-            .state
-            .left
-            .ground_contact
-            .or(self.state.right.ground_contact)
-            .map(|c| c.y)
-            .unwrap_or(pelvis_position.y - self.config.standing_height());
+        // frame. `foot.position.y` represents the foot centre (sole is one
+        // radius below), so a probe contact is the correct value directly.
+        let landing_ground_y = self.locomotion.ground_height(pelvis_position);
 
         // Map CharacterState → next PoseState variant.
         let new_pose = next_pose_state(
@@ -299,7 +179,7 @@ impl CharacterAnimator {
         // Tick the foot placer before sampling so the pose layer reads a
         // current foot position. Airborne states suspend the placer; feet
         // come from the airborne/landing samplers in those cases.
-        self.tick_foot_placer(
+        self.tick_locomotion(
             dt,
             pelvis_position,
             yaw,
@@ -308,7 +188,7 @@ impl CharacterAnimator {
             target,
             &new_pose,
         );
-        mirror_placer_into_state(&mut self.state, &self.foot_placer);
+        mirror_placer_into_state(&mut self.state, self.locomotion.placer());
 
         // Stride phase is derived directly from the placer's stepping
         // state — arm swing / shoulder twist / head bob lock to real
@@ -316,7 +196,7 @@ impl CharacterAnimator {
         // feet planted) the phase holds, so arms coast instead of
         // snapping to rest.
         self.state.stride_phase =
-            stride_sync::phase_from_placer(&self.foot_placer, self.state.stride_phase, dt);
+            stride_sync::phase_from_placer(self.locomotion.placer(), self.state.stride_phase, dt);
 
         // Stride activity snaps to 1 while anything is stepping and
         // decays exponentially to 0 once both feet are planted. Upper
@@ -324,7 +204,8 @@ impl CharacterAnimator {
         // scaled by it so the rest→swing→rest transition is continuous
         // — matters most on slope slides where gait can flicker between
         // Idle and Walk even though the body is clearly moving.
-        let stepping = !self.foot_placer.left.is_planted() || !self.foot_placer.right.is_planted();
+        let placer = self.locomotion.placer();
+        let stepping = !placer.left.is_planted() || !placer.right.is_planted();
         if stepping {
             self.state.stride_activity = 1.0;
         } else {
@@ -395,28 +276,12 @@ impl CharacterAnimator {
             .apply_fragment(&fragment, &self.state, &self.config);
     }
 
-    /// Track the surface the character is standing on, holding the last one
-    /// through the chatter of a contact set. Returns the frame this update's
-    /// animation is expressed in.
-    fn observe_support(&mut self, grounding: &Grounding, dt: f32) -> Vector3<f32> {
-        if grounding.is_grounded {
-            self.support_velocity = grounding.surface_velocity;
-            self.support_age = 0.0;
-        } else {
-            self.support_age += dt;
-            if self.support_age >= SUPPORT_MEMORY {
-                self.support_velocity = Vector3::zeros();
-            }
-        }
-        self.support_velocity
-    }
-
-    /// Advance the procedural foot placer. Runs before pose sampling;
-    /// its output is mirrored into `AnimationState` and read by the
-    /// grounded pose samplers. Suspends while airborne so feet don't
-    /// step against a body that isn't on the ground.
+    /// Advance legged locomotion. Runs before pose sampling; its output is
+    /// mirrored into `AnimationState` and read by the grounded pose
+    /// samplers. Airborne states suspend stepping so feet don't step
+    /// against a body that isn't on the ground.
     #[allow(clippy::too_many_arguments)]
-    fn tick_foot_placer(
+    fn tick_locomotion(
         &mut self,
         dt: f32,
         pelvis_position: Point3<f32>,
@@ -426,18 +291,10 @@ impl CharacterAnimator {
         target: &CharacterIntent,
         next_pose: &PoseState,
     ) {
-        let yaw_rate = if dt > 0.0 {
-            shortest_angle_diff(yaw, self.last_yaw) / dt
-        } else {
-            0.0
-        };
-        self.last_yaw = yaw;
-
         let airborne = matches!(
             next_pose,
             PoseState::Launching { .. } | PoseState::Airborne { .. }
         );
-        self.foot_placer.set_suspended(airborne);
 
         let preset = gait_preset_for(next_pose, &self.config);
         let step_height = preset
@@ -451,68 +308,29 @@ impl CharacterAnimator {
         let stride_gain = preset
             .map(|p| p.stride_gain)
             .unwrap_or(self.config.gait_presets.walk.stride_gain);
-        // Fallback foot-centre y used by the placer when no probe hit is
-        // available: the rest-rig terrain level. `standing_height` is the
-        // pelvis-to-foot-centre distance and a planted foot's centre sits
-        // on the surface — the sole one radius under it, which is the
-        // half-submerged look the rig is drawn for — so the two agree and
-        // a foot that loses its probe does not step down by a foot's
-        // thickness. It is also the rest vertical the leg's reach budget
-        // is measured against, so a wrong value here mis-sizes every
-        // stride the planner aims.
-        let foot_centre_y = pelvis_position.y - self.config.standing_height();
-        let left_ground_normal = self.state.left.ground_normal.unwrap_or_else(Vector3::y);
-        let right_ground_normal = self.state.right.ground_normal.unwrap_or_else(Vector3::y);
-        let left_ground = self.state.left.ground_contact;
-        let right_ground = self.state.right.ground_contact;
 
-        let ctx = PlacerCtx {
+        self.locomotion.tick(&LocomotionCtx {
             dt,
             pelvis: pelvis_position,
+            yaw,
             velocity,
             support_velocity,
             intent_direction: target.direction,
-            yaw,
-            yaw_rate,
-            hip_width: self.config.hip_width,
-            leg_length: self.config.leg_length(),
-            standing_height: self.config.standing_height(),
-            foot_y_fallback: foot_centre_y,
+            airborne,
             step_height,
             stride_gain,
-            left_ground_normal,
-            right_ground_normal,
-            left_ground,
-            right_ground,
-            config: &self.config.foot_placer,
-        };
-        self.foot_placer.tick(&ctx);
-
-        if let Some(recorder) = &mut self.recorder {
-            recorder.record(airborne, pose_tag(next_pose), &ctx, &self.foot_placer);
-        }
+            pose_tag: pose_tag(next_pose),
+        });
     }
 
     /// Start recording placer input, or stop and write what was kept.
-    ///
-    /// Nothing happens without `PLACER_REC` set. Recording keeps a ring of the
-    /// last few seconds, so it can be started well before the thing worth
-    /// looking at and stopped just after it.
     pub fn toggle_recording(&mut self) {
-        if let Some(recorder) = &mut self.recorder {
-            if recorder.is_armed() {
-                recorder.dump_and_report();
-                recorder.set_armed(false);
-            } else {
-                recorder.set_armed(true);
-                eprintln!("PlacerRecorder: recording");
-            }
-        }
+        self.locomotion.toggle_recording();
     }
 
     /// What the recorder is doing and what it costs, for the debug overlay.
     pub fn recording_status(&self) -> Option<String> {
-        self.recorder.as_ref().map(|recorder| recorder.status())
+        self.locomotion.recording_status()
     }
 
     /// Mirror fragment channels into `AnimationState` so next-frame probes
@@ -534,48 +352,6 @@ impl CharacterAnimator {
         }
         if let Some(bob) = fragment.head_bob {
             self.state.head_bob = bob;
-        }
-    }
-
-    /// Process contact candidates from probes.
-    fn process_contacts(&mut self, contacts: &[ContactCandidate]) {
-        // Clear previous contacts
-        self.state.left.ground_contact = None;
-        self.state.left.ground_normal = None;
-        self.state.right.ground_contact = None;
-        self.state.right.ground_normal = None;
-
-        // Find best contact for each foot (closest)
-        let mut best_left: Option<&ContactCandidate> = None;
-        let mut best_right: Option<&ContactCandidate> = None;
-
-        for contact in contacts {
-            match contact.tag {
-                probe_tags::FOOT_LEFT => {
-                    if best_left.map_or(true, |b| contact.distance < b.distance) {
-                        best_left = Some(contact);
-                    }
-                }
-                probe_tags::FOOT_RIGHT => {
-                    if best_right.map_or(true, |b| contact.distance < b.distance) {
-                        best_right = Some(contact);
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        // Store contacts in state. `normal` mirrors `ground_normal` so
-        // downstream readers see a coherent snapshot.
-        if let Some(contact) = best_left {
-            self.state.left.ground_contact = Some(contact.point);
-            self.state.left.ground_normal = Some(contact.normal);
-            self.state.left.normal = contact.normal;
-        }
-        if let Some(contact) = best_right {
-            self.state.right.ground_contact = Some(contact.point);
-            self.state.right.ground_normal = Some(contact.normal);
-            self.state.right.normal = contact.normal;
         }
     }
 
@@ -643,19 +419,6 @@ fn build_upper_ctx<'a>(
         torso_pitch,
         airborne: airborne_ctx_for(pose),
     }
-}
-
-/// Shortest signed angle difference `b - a`, wrapped into `(-PI, PI]`.
-#[inline]
-fn shortest_angle_diff(b: f32, a: f32) -> f32 {
-    let two_pi = std::f32::consts::TAU;
-    let mut d = (b - a) % two_pi;
-    if d > std::f32::consts::PI {
-        d -= two_pi;
-    } else if d < -std::f32::consts::PI {
-        d += two_pi;
-    }
-    d
 }
 
 /// Advance a crossfade (if any) and return the fragment the driver should
@@ -938,35 +701,5 @@ mod tests {
         let clearance = config.standing_height() * 0.5;
         let animator = CharacterAnimator::new(config, Point3::origin(), clearance, 0.0);
         assert_eq!(animator.pelvis_for(Point3::origin()), Point3::origin());
-    }
-
-    /// The surface a character stands on is the frame its gait is measured in,
-    /// and a contact set that chatters must not flick that frame back and
-    /// forth at footfall rate.
-    #[test]
-    fn a_lost_surface_is_remembered_for_a_moment_and_then_forgotten() {
-        let mut animator =
-            CharacterAnimator::new(CharacterRigConfig::default(), Point3::origin(), 0.5, 0.0);
-        let platform = Grounding::on(Vector3::y()).carried_by(Vector3::new(3.0, 0.0, 0.0));
-        let dt = 1.0 / 60.0;
-
-        assert_eq!(
-            animator.observe_support(&platform, dt),
-            Vector3::new(3.0, 0.0, 0.0)
-        );
-        assert_eq!(
-            animator.observe_support(&Grounding::airborne(), dt),
-            Vector3::new(3.0, 0.0, 0.0),
-            "one frame between footfalls is not stepping off the platform"
-        );
-
-        for _ in 0..(SUPPORT_MEMORY / dt) as usize + 1 {
-            animator.observe_support(&Grounding::airborne(), dt);
-        }
-        assert_eq!(
-            animator.observe_support(&Grounding::airborne(), dt),
-            Vector3::zeros(),
-            "nothing is carrying a character who has been in the air this long"
-        );
     }
 }

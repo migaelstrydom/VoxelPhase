@@ -13,7 +13,8 @@ pub struct FootState {
     pub position: Point3<f32>,
     /// World-space position when planted.
     pub planted_position: Point3<f32>,
-    /// Ground surface normal at contact point.
+    /// Ground surface normal under the foot, mirrored from the probe
+    /// reading legged locomotion resolved this frame.
     pub normal: Vector3<f32>,
     /// Horizontal forward direction of the foot (toe points here). The
     /// driver mirrors the body's facing into this each frame; per-foot
@@ -23,11 +24,6 @@ pub struct FootState {
     /// slerped orientation each frame. Matches world Y for a flat stance
     /// on level ground.
     pub up: Vector3<f32>,
-
-    /// Most recent ground contact point from probe (if any).
-    pub ground_contact: Option<Point3<f32>>,
-    /// Ground normal from probe.
-    pub ground_normal: Option<Vector3<f32>>,
 }
 
 impl FootState {
@@ -39,8 +35,6 @@ impl FootState {
             normal: Vector3::y(),
             forward: Vector3::new(0.0, 0.0, 1.0),
             up: Vector3::y(),
-            ground_contact: None,
-            ground_normal: None,
         }
     }
 }

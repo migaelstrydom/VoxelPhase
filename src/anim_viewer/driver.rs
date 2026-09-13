@@ -221,7 +221,7 @@ fn sample(
 ) -> FrameSample {
     use crate::animation::probe_tags;
 
-    let placer = &animator.foot_placer;
+    let placer = animator.foot_placer();
     let skeleton = &animator.skeleton;
 
     let state = &animator.state;

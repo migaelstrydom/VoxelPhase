@@ -3,6 +3,7 @@
 //! All tuning parameters in one place.
 
 use super::foot_placer::FootPlacerConfig;
+use super::legged::LegRigDims;
 use crate::rendering::Colour;
 
 /// Per-gait animation parameters. Values that differ between Walk / Sprint /
@@ -160,6 +161,20 @@ impl CharacterRigConfig {
     #[inline]
     pub fn probe_length(&self) -> f32 {
         self.leg_length() * self.probe_length_factor
+    }
+
+    /// The subset of this rig the gait is planned against.
+    ///
+    /// A derived view, not a second copy: the numbers live here and are
+    /// read through this whenever locomotion needs them.
+    #[inline]
+    pub fn leg_dims(&self) -> LegRigDims {
+        LegRigDims {
+            hip_width: self.hip_width,
+            leg_length: self.leg_length(),
+            standing_height: self.standing_height(),
+            probe_length: self.probe_length(),
+        }
     }
 }
 

@@ -8,20 +8,27 @@
 //!
 //! The animator is the single source of truth for character animation.
 //! Generic systems (probes, collision) have no knowledge of the rig.
+//!
+//! Below the animator, `legged` is the part that is not about humanoids at
+//! all: feet, probes, and the frame they are measured in. Any two-legged
+//! thing can own a `LeggedLocomotion` and draw whatever rig it likes around
+//! the feet that come out of it.
 
 mod animator;
 mod config;
 mod debug_config;
 mod foot_placer;
 pub mod humanoid;
+mod legged;
 mod pose;
 mod state;
 mod systems;
 
-pub use animator::{probe_tags, CharacterAnimator};
+pub use animator::CharacterAnimator;
 pub use config::CharacterRigConfig;
 pub use debug_config::AnimationDebugConfig;
 pub use foot_placer::{FootPhase, FootPlacer, FootPlacerConfig, FootSide, GaitTiming, PlacerFoot};
+pub use legged::{probe_tags, FootGround, LegRigDims, LeggedLocomotion, LocomotionCtx};
 pub use pose::{
     BlendPolicy, Crossfade, Cycle, CycleKind, FeetPose, HandsPose, Linear, PoseFragment,
 };
