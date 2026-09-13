@@ -4,7 +4,7 @@ use specs::{
     Component, DenseVecStorage, Entities, Join, Read, ReadStorage, System, Write, WriteStorage,
 };
 
-use super::perception::Perception;
+use super::perception::{PerceivedTarget, Perception};
 use super::steering;
 use crate::character::CharacterIntent;
 use crate::components::Position;
@@ -36,8 +36,10 @@ pub enum Behaviour {
     },
     /// Target lost. Heads to where it was last perceived, then gives up.
     Searching { last_known: Point3<f32> },
-    /// Badly hurt, or frightened. Runs away.
-    Fleeing,
+    /// Badly hurt, or frightened. Runs away. `calm` counts the seconds since
+    /// it last perceived whatever routed it; a rout that has nothing left to
+    /// run from ends.
+    Fleeing { calm: f32 },
     /// Nothing to react to, so it mills about. `heading` is held for
     /// `remaining` seconds and then nudged, which reads as an animal
     /// pottering rather than as one teleporting its mind every frame.
@@ -64,14 +66,66 @@ pub enum Temperament {
     /// only when badly hurt.
     Hunter,
     /// Runs from what it senses and mills about when it senses nothing.
-    /// Never attacks, and rejoins the world once the fright has passed —
-    /// a hunter's flight is terminal, a skittish creature's is a mood.
+    /// Never attacks, and rejoins the world as soon as the fright is out of
+    /// range — where a hunter's rout has to be outrun first.
     Skittish {
         /// Distance within which a sensed target is frightening. Beyond
         /// it the creature carries on wandering, which is what lets a
         /// player creep up rather than being spotted across a valley.
         flee_range: f32,
     },
+}
+
+/// Seconds of lost sight a committed creature tolerates before it gives up
+/// chasing and starts searching.
+///
+/// Sight is not a steady signal: a target crossing behind a rock, a rise in
+/// the ground, or the edge of the vision cone drops out for a frame at a time
+/// and comes straight back. Reacting to every one of those is what makes a
+/// creature lurch between charging and casting about.
+const SIGHT_LOSS_GRACE: f32 = 0.75;
+
+/// Seconds without perceiving anything before a routed creature calms down
+/// and rejoins the world.
+const ROUT_RECOVERY: f32 = 4.0;
+
+/// How far past its attack range a target must get before an attacking
+/// creature resumes the chase, as a multiple of that range.
+///
+/// Without this the transition is a bare threshold sitting in the middle of
+/// the standoff band, and a target drifting across it flips the creature
+/// between closing in and backing off every frame — from outside, a creature
+/// that cannot make its mind up.
+const ATTACK_RELEASE: f32 = 1.25;
+
+/// Half-width of the standoff band, as a fraction of attack range.
+///
+/// Scaled rather than absolute because a fixed band means something very
+/// different to a boulder that attacks from a metre and a creature that
+/// attacks from five. It must stay inside `ATTACK_RELEASE`, or a creature can
+/// settle at a distance its own brain calls out of range.
+const STANDOFF_BAND_FRACTION: f32 = 0.15;
+
+/// What a creature knows about its own injuries.
+///
+/// Two readings of the same `Health`, because breaking off needs both: how
+/// badly hurt it is, and whether that hurt is fresh.
+#[derive(Debug, Clone, Copy)]
+struct Wounds {
+    /// Remaining hit points as a 0..1 fraction.
+    fraction: f32,
+    /// Cumulative damage absorbed.
+    taken: f32,
+}
+
+impl Wounds {
+    /// What something that cannot be hurt reports.
+    fn unhurt() -> Self {
+        Self {
+            fraction: 1.0,
+            taken: 0.0,
+        }
+    }
 }
 
 /// Drives one creature's decisions.
@@ -104,6 +158,18 @@ pub struct Brain {
     /// Largest nudge to a wandering heading, in radians. A quarter turn
     /// wanders; a half turn dithers on the spot.
     pub wander_turn: f32,
+
+    /// `Health::taken` seen last frame.
+    ///
+    /// Breaking off is triggered by *being hurt while badly injured*, not by
+    /// *being badly injured*. The difference is the whole reason a rout can
+    /// end: a creature that ran away is still under the threshold when it
+    /// calms down, so a level trigger would send it straight back into
+    /// flight the moment it laid eyes on anyone. Cumulative damage is what
+    /// the edge is measured against rather than remaining hit points,
+    /// because hit points stop falling at the death floor while the blows
+    /// keep coming. Written by `BrainSystem`.
+    pub previous_damage_taken: f32,
 }
 
 impl Brain {
@@ -120,7 +186,15 @@ impl Brain {
             search_arrival_radius: 1.5,
             wander_interval: 1.2,
             wander_turn: std::f32::consts::FRAC_PI_2,
+            previous_damage_taken: 0.0,
         }
+    }
+
+    /// Whether a fresh injury is enough to break this creature off.
+    fn breaks_off_at(&self, health: Wounds) -> bool {
+        self.flee_health_fraction > 0.0
+            && health.fraction <= self.flee_health_fraction
+            && health.taken > self.previous_damage_taken
     }
 
     /// A creature that never breaks off, however hurt it gets.
@@ -192,9 +266,13 @@ impl<'a> System<'a> for BrainSystem {
         {
             let me = Point3::from(pos.0);
             // Something with no `Health` cannot be hurt, so it never flees.
-            let health_fraction = healths.get(entity).map_or(1.0, |h| h.fraction());
+            let wounds = healths.get(entity).map_or(Wounds::unhurt(), |h| Wounds {
+                fraction: h.fraction(),
+                taken: h.taken,
+            });
 
-            brain.behaviour = next_behaviour(brain, perception, me, health_fraction, dt);
+            brain.behaviour = next_behaviour(brain, perception, me, wounds, dt);
+            brain.previous_damage_taken = wounds.taken;
             *intent = intent_for(brain, perception, me);
 
             total += 1;
@@ -226,11 +304,11 @@ fn next_behaviour(
     brain: &Brain,
     perception: &Perception,
     me: Point3<f32>,
-    health_fraction: f32,
+    wounds: Wounds,
     dt: f32,
 ) -> Behaviour {
     match brain.temperament {
-        Temperament::Hunter => hunter_behaviour(brain, perception, me, health_fraction, dt),
+        Temperament::Hunter => hunter_behaviour(brain, perception, me, wounds, dt),
         Temperament::Skittish { flee_range } => {
             skittish_behaviour(brain, perception, flee_range, dt)
         }
@@ -239,9 +317,9 @@ fn next_behaviour(
 
 /// A creature that wanders, and runs from whatever it notices nearby.
 ///
-/// Flight is not terminal here: once the fright is out of range or out of
-/// memory the creature goes back to pottering. A hunter that has broken
-/// off is finished for good, which is a different thing entirely.
+/// Flight ends here as soon as the fright is out of range or out of memory,
+/// with no clock to run down. A hunter's rout is the slower thing: it has to
+/// stay shaken for `ROUT_RECOVERY` before it will face anyone again.
 fn skittish_behaviour(
     brain: &Brain,
     perception: &Perception,
@@ -252,7 +330,7 @@ fn skittish_behaviour(
         .target
         .is_some_and(|target| target.distance <= flee_range);
     if frightened {
-        return Behaviour::Fleeing;
+        return Behaviour::Fleeing { calm: 0.0 };
     }
 
     match brain.behaviour {
@@ -290,15 +368,28 @@ fn hunter_behaviour(
     brain: &Brain,
     perception: &Perception,
     me: Point3<f32>,
-    health_fraction: f32,
+    wounds: Wounds,
     dt: f32,
 ) -> Behaviour {
-    // Fleeing is terminal: a creature that has broken off does not rejoin.
-    if matches!(brain.behaviour, Behaviour::Fleeing) {
-        return Behaviour::Fleeing;
+    // A rout runs until the creature has shaken the thing that caused it.
+    // Then it stands down — hurt, wary, and able to be come upon again.
+    // The clock is carried rather than read off `since_seen` because a
+    // creature can be routed by something it never saw, and a target it has
+    // no memory of would otherwise count as shaken on the first frame.
+    if let Behaviour::Fleeing { calm } = brain.behaviour {
+        let calm = if perception.sees_target() {
+            0.0
+        } else {
+            calm + dt
+        };
+        return if calm >= ROUT_RECOVERY {
+            Behaviour::Idle
+        } else {
+            Behaviour::Fleeing { calm }
+        };
     }
-    if brain.flee_health_fraction > 0.0 && health_fraction <= brain.flee_health_fraction {
-        return Behaviour::Fleeing;
+    if brain.breaks_off_at(wounds) {
+        return Behaviour::Fleeing { calm: 0.0 };
     }
 
     match (brain.behaviour, perception.target) {
@@ -311,7 +402,7 @@ fn hunter_behaviour(
         },
 
         (Behaviour::Alerted { remaining }, Some(target)) => {
-            if !target.visible {
+            if !still_engaged(target) {
                 Behaviour::Searching {
                     last_known: target.position,
                 }
@@ -325,7 +416,7 @@ fn hunter_behaviour(
         }
 
         (Behaviour::Chasing, Some(target)) => {
-            if !target.visible {
+            if !still_engaged(target) {
                 Behaviour::Searching {
                     last_known: target.position,
                 }
@@ -346,11 +437,11 @@ fn hunter_behaviour(
             },
             Some(target),
         ) => {
-            if !target.visible {
+            if !still_engaged(target) {
                 Behaviour::Searching {
                     last_known: target.position,
                 }
-            } else if target.distance > brain.attack_range {
+            } else if target.distance > brain.attack_range * ATTACK_RELEASE {
                 Behaviour::Chasing
             } else if remaining - dt <= 0.0 {
                 Behaviour::Attacking {
@@ -377,10 +468,19 @@ fn hunter_behaviour(
         }
 
         (Behaviour::Idle, Some(_)) => Behaviour::Idle,
-        (Behaviour::Fleeing, _) => Behaviour::Fleeing,
+        (Behaviour::Fleeing { calm }, _) => Behaviour::Fleeing { calm },
         // A hunter never wanders; if it somehow got there, it stops.
         (Behaviour::Wandering { .. }, _) => Behaviour::Idle,
     }
+}
+
+/// Whether a creature that has already committed still counts the target as
+/// in front of it.
+///
+/// Deliberately more generous than `visible`: acquiring a target needs a clear
+/// sighting, but holding one only needs to have had a recent one.
+fn still_engaged(target: PerceivedTarget) -> bool {
+    target.visible || target.since_seen < SIGHT_LOSS_GRACE
 }
 
 /// Translate a behaviour into the intent that expresses it.
@@ -411,7 +511,12 @@ fn intent_for(brain: &Brain, perception: &Perception, me: Point3<f32>) -> Charac
                 // instead of shouldering into the player and pushing them.
                 steering::blend(&[
                     (
-                        steering::keep_distance(me, t.position, brain.attack_range, 0.3),
+                        steering::keep_distance(
+                            me,
+                            t.position,
+                            brain.attack_range,
+                            brain.attack_range * STANDOFF_BAND_FRACTION,
+                        ),
                         1.0,
                     ),
                     (steering::strafe(me, t.position, strafe_clockwise), 1.0),
@@ -419,9 +524,20 @@ fn intent_for(brain: &Brain, perception: &Perception, me: Point3<f32>) -> Charac
             })
             .unwrap_or_else(Vector3::zeros),
 
-        Behaviour::Searching { last_known } => steering::seek(me, last_known),
+        Behaviour::Searching { last_known } => {
+            // Having arrived, stand and look rather than walk on. Seeking a
+            // point it is already standing on sends the creature over it and
+            // back again, which from outside reads as one that has lost
+            // interest and is pacing away from the player it was chasing.
+            let offset = Vector3::new(last_known.x - me.x, 0.0, last_known.z - me.z);
+            if offset.magnitude() <= brain.search_arrival_radius {
+                Vector3::zeros()
+            } else {
+                steering::seek(me, last_known)
+            }
+        }
 
-        Behaviour::Fleeing => perception
+        Behaviour::Fleeing { .. } => perception
             .target
             .map(|t| steering::flee(me, t.position))
             .unwrap_or_else(Vector3::zeros),
@@ -434,7 +550,7 @@ fn intent_for(brain: &Brain, perception: &Perception, me: Point3<f32>) -> Charac
         // Reuse the player's own gait modifiers rather than inventing a
         // creature-only speed channel: a fleeing creature sprints, a wary one
         // moves at crouch speed.
-        sprint: matches!(brain.behaviour, Behaviour::Fleeing),
+        sprint: matches!(brain.behaviour, Behaviour::Fleeing { .. }),
         crouch: matches!(brain.behaviour, Behaviour::Alerted { .. }),
         ..CharacterIntent::default()
     }
@@ -453,13 +569,23 @@ mod tests {
     }
 
     fn perception_of(position: Point3<f32>, distance: f32, visible: bool) -> Perception {
+        lost_perception_of(position, distance, if visible { 0.0 } else { 1.0 }, visible)
+    }
+
+    /// A perception whose target was last seen `since_seen` seconds ago.
+    fn lost_perception_of(
+        position: Point3<f32>,
+        distance: f32,
+        since_seen: f32,
+        visible: bool,
+    ) -> Perception {
         Perception {
             target: Some(PerceivedTarget {
                 entity: an_entity(),
                 position,
                 distance,
                 visible,
-                since_seen: if visible { 0.0 } else { 1.0 },
+                since_seen,
             }),
             ..Perception::ground_creature(20.0)
         }
@@ -467,6 +593,19 @@ mod tests {
 
     fn origin() -> Point3<f32> {
         Point3::origin()
+    }
+
+    /// A creature nothing has touched.
+    fn unhurt() -> Wounds {
+        Wounds::unhurt()
+    }
+
+    /// A creature just hit down to `fraction` of its hit points.
+    fn wounded_to(fraction: f32) -> Wounds {
+        Wounds {
+            fraction,
+            taken: 10.0,
+        }
     }
 
     fn brain_in(behaviour: Behaviour) -> Brain {
@@ -481,7 +620,7 @@ mod tests {
         let brain = brain_in(Behaviour::Idle);
         let seen = perception_of(Point3::new(0.0, 0.0, 10.0), 10.0, true);
 
-        let next = next_behaviour(&brain, &seen, origin(), 1.0, 0.016);
+        let next = next_behaviour(&brain, &seen, origin(), unhurt(), 0.016);
         assert!(
             matches!(next, Behaviour::Alerted { .. }),
             "first contact must telegraph, not charge instantly"
@@ -494,7 +633,7 @@ mod tests {
         let seen = perception_of(Point3::new(0.0, 0.0, 10.0), 10.0, true);
 
         assert_eq!(
-            next_behaviour(&brain, &seen, origin(), 1.0, 0.016),
+            next_behaviour(&brain, &seen, origin(), unhurt(), 0.016),
             Behaviour::Chasing
         );
     }
@@ -505,9 +644,28 @@ mod tests {
         let close = perception_of(Point3::new(0.0, 0.0, 1.0), 1.0, true);
 
         assert!(matches!(
-            next_behaviour(&brain, &close, origin(), 1.0, 0.016),
+            next_behaviour(&brain, &close, origin(), unhurt(), 0.016),
             Behaviour::Attacking { .. }
         ));
+    }
+
+    #[test]
+    fn a_target_barely_out_of_range_does_not_resume_the_chase() {
+        let brain = brain_in(Behaviour::Attacking {
+            strafe_clockwise: true,
+            remaining: 1.0,
+        });
+        // Just outside attack range, but well inside the release margin —
+        // the distance a circling creature crosses constantly.
+        let drifting = perception_of(Point3::new(0.0, 0.0, 2.2), 2.2, true);
+
+        assert!(
+            matches!(
+                next_behaviour(&brain, &drifting, origin(), unhurt(), 0.016),
+                Behaviour::Attacking { .. }
+            ),
+            "a target drifting across the attack threshold must not flip the behaviour"
+        );
     }
 
     #[test]
@@ -519,7 +677,7 @@ mod tests {
         let far = perception_of(Point3::new(0.0, 0.0, 9.0), 9.0, true);
 
         assert_eq!(
-            next_behaviour(&brain, &far, origin(), 1.0, 0.016),
+            next_behaviour(&brain, &far, origin(), unhurt(), 0.016),
             Behaviour::Chasing
         );
     }
@@ -531,7 +689,7 @@ mod tests {
         let lost = perception_of(last_seen_at, 5.0, false);
 
         assert_eq!(
-            next_behaviour(&brain, &lost, origin(), 1.0, 0.016),
+            next_behaviour(&brain, &lost, origin(), unhurt(), 0.016),
             Behaviour::Searching {
                 last_known: last_seen_at
             },
@@ -547,7 +705,7 @@ mod tests {
         let forgotten = Perception::ground_creature(20.0);
 
         assert_eq!(
-            next_behaviour(&brain, &forgotten, origin(), 1.0, 0.016),
+            next_behaviour(&brain, &forgotten, origin(), unhurt(), 0.016),
             Behaviour::Idle
         );
     }
@@ -561,7 +719,7 @@ mod tests {
         let close = perception_of(Point3::new(0.0, 0.0, 1.0), 1.0, true);
 
         assert_eq!(
-            next_behaviour(&brain, &close, origin(), 1.0, 0.016),
+            next_behaviour(&brain, &close, origin(), unhurt(), 0.016),
             Behaviour::Attacking {
                 strafe_clockwise: false,
                 remaining: brain.strafe_interval
@@ -576,20 +734,156 @@ mod tests {
         let close = perception_of(Point3::new(0.0, 0.0, 1.0), 1.0, true);
 
         assert_eq!(
-            next_behaviour(&brain, &close, origin(), 0.1, 0.016),
-            Behaviour::Fleeing
+            next_behaviour(&brain, &close, origin(), wounded_to(0.1), 0.016),
+            Behaviour::Fleeing { calm: 0.0 }
+        );
+    }
+
+    /// Hit points stop falling at the death floor while the blows keep
+    /// landing, so a rout triggered by remaining health could only ever fire
+    /// once per creature.
+    #[test]
+    fn a_creature_parked_at_the_death_floor_can_still_be_routed_again() {
+        let brain = Brain {
+            behaviour: Behaviour::Chasing,
+            previous_damage_taken: 400.0,
+            ..Brain::hunter(2.0)
+        };
+        let close = perception_of(Point3::new(0.0, 0.0, 1.0), 1.0, true);
+        let floored = Wounds {
+            fraction: 1.0 / 55.0,
+            taken: 900.0,
+        };
+
+        assert_eq!(
+            next_behaviour(&brain, &close, origin(), floored, 0.016),
+            Behaviour::Fleeing { calm: 0.0 },
+            "another grenade on a creature already at the floor must still rout it"
         );
     }
 
     #[test]
-    fn fleeing_is_terminal_even_after_healing() {
-        let brain = brain_in(Behaviour::Fleeing);
+    fn a_rout_holds_while_the_thing_that_caused_it_is_still_there() {
+        let brain = brain_in(Behaviour::Fleeing { calm: 3.0 });
         let close = perception_of(Point3::new(0.0, 0.0, 1.0), 1.0, true);
 
         assert_eq!(
-            next_behaviour(&brain, &close, origin(), 1.0, 0.016),
-            Behaviour::Fleeing,
-            "a creature that has broken off must not rejoin the fight"
+            next_behaviour(&brain, &close, origin(), unhurt(), 0.016),
+            Behaviour::Fleeing { calm: 0.0 },
+            "a creature must not turn and fight while it can still see what routed it"
+        );
+    }
+
+    /// A grenade can arrive from somewhere the creature never looked. The
+    /// recovery clock has to be carried rather than read off how long the
+    /// target has been out of sight, or a rout with nothing to run from is
+    /// over on the frame it began.
+    #[test]
+    fn a_rout_holds_even_when_nothing_was_ever_perceived() {
+        let brain = brain_in(Behaviour::Fleeing { calm: 0.0 });
+        let blind = Perception::ground_creature(20.0);
+
+        assert_eq!(
+            next_behaviour(&brain, &blind, origin(), wounded_to(0.1), 0.016),
+            Behaviour::Fleeing { calm: 0.016 },
+            "being hurt by something unseen must still send a creature running"
+        );
+    }
+
+    #[test]
+    fn a_rout_ends_once_the_creature_has_shaken_its_pursuer() {
+        let brain = brain_in(Behaviour::Fleeing {
+            calm: ROUT_RECOVERY - 0.01,
+        });
+        let long_lost = lost_perception_of(Point3::new(0.0, 0.0, 30.0), 30.0, 2.0, false);
+
+        assert_eq!(
+            next_behaviour(&brain, &long_lost, origin(), wounded_to(0.1), 0.016),
+            Behaviour::Idle,
+            "a creature that got away must calm down, hurt or not"
+        );
+    }
+
+    #[test]
+    fn calming_down_does_not_send_a_hurt_creature_straight_back_into_flight() {
+        // Still under the flee threshold, but nothing has hurt it since.
+        let brain = Brain {
+            behaviour: Behaviour::Idle,
+            previous_damage_taken: 50.0,
+            ..Brain::hunter(2.0)
+        };
+        let seen = perception_of(Point3::new(0.0, 0.0, 10.0), 10.0, true);
+        let standing_wound = Wounds {
+            fraction: 0.1,
+            taken: 50.0,
+        };
+
+        assert!(
+            matches!(
+                next_behaviour(&brain, &seen, origin(), standing_wound, 0.016),
+                Behaviour::Alerted { .. }
+            ),
+            "being hurt is what breaks a creature off, not still being hurt"
+        );
+    }
+
+    #[test]
+    fn a_fresh_wound_routs_a_creature_that_had_already_calmed_down() {
+        let brain = Brain {
+            behaviour: Behaviour::Chasing,
+            previous_damage_taken: 50.0,
+            ..Brain::hunter(2.0)
+        };
+        let seen = perception_of(Point3::new(0.0, 0.0, 10.0), 10.0, true);
+        let fresh_wound = Wounds {
+            fraction: 0.05,
+            taken: 55.0,
+        };
+
+        assert_eq!(
+            next_behaviour(&brain, &seen, origin(), fresh_wound, 0.016),
+            Behaviour::Fleeing { calm: 0.0 },
+            "a second grenade must rout it again"
+        );
+    }
+
+    #[test]
+    fn a_blink_of_lost_sight_does_not_break_a_chase() {
+        let brain = brain_in(Behaviour::Chasing);
+        let blinked = lost_perception_of(Point3::new(0.0, 0.0, 10.0), 10.0, 0.1, false);
+
+        assert_eq!(
+            next_behaviour(&brain, &blinked, origin(), unhurt(), 0.016),
+            Behaviour::Chasing,
+            "a target crossing behind cover for a frame must not stop the chase"
+        );
+    }
+
+    #[test]
+    fn losing_sight_for_good_still_ends_the_chase() {
+        let brain = brain_in(Behaviour::Chasing);
+        let gone = lost_perception_of(Point3::new(0.0, 0.0, 10.0), 10.0, SIGHT_LOSS_GRACE, false);
+
+        assert!(
+            matches!(
+                next_behaviour(&brain, &gone, origin(), unhurt(), 0.016),
+                Behaviour::Searching { .. }
+            ),
+            "the grace period must expire, or a creature chases a target it has lost"
+        );
+    }
+
+    #[test]
+    fn a_creature_that_has_reached_the_last_known_position_holds_still() {
+        let brain = brain_in(Behaviour::Searching {
+            last_known: Point3::new(0.0, 0.0, 0.5),
+        });
+        let gone = lost_perception_of(Point3::new(0.0, 0.0, 0.5), 0.5, 2.0, false);
+
+        assert_eq!(
+            intent_for(&brain, &gone, origin()).direction,
+            Vector3::zeros(),
+            "seeking a point it is standing on walks the creature over it and back"
         );
     }
 
@@ -602,7 +896,7 @@ mod tests {
         let close = perception_of(Point3::new(0.0, 0.0, 1.0), 1.0, true);
 
         assert!(matches!(
-            next_behaviour(&brain, &close, origin(), 0.01, 0.016),
+            next_behaviour(&brain, &close, origin(), wounded_to(0.01), 0.016),
             Behaviour::Attacking { .. }
         ));
     }
@@ -619,7 +913,7 @@ mod tests {
 
     #[test]
     fn a_fleeing_creature_sprints_away() {
-        let brain = brain_in(Behaviour::Fleeing);
+        let brain = brain_in(Behaviour::Fleeing { calm: 0.0 });
         let seen = perception_of(Point3::new(0.0, 0.0, 10.0), 10.0, true);
 
         let intent = intent_for(&brain, &seen, origin());

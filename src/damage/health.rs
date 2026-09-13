@@ -24,6 +24,14 @@ pub struct Health {
     /// Speed change (m/s) a body can absorb in one frame before it starts
     /// taking impact damage. Above this, damage scales with the excess.
     pub impact_tolerance: f32,
+    /// Total damage absorbed over this entity's life, counting blows larger
+    /// than the hit points they landed on.
+    ///
+    /// Monotone, which `current` is not: with deaths disabled a hit that would
+    /// have been fatal leaves `current` floored where it already was, so an
+    /// observer watching hit points alone cannot tell a fresh wound from a
+    /// standing one. This can.
+    pub taken: f32,
 }
 
 impl Health {
@@ -36,6 +44,7 @@ impl Health {
             corpse_lifetime: Some(corpse_lifetime),
             burn_resistance: 1.0,
             impact_tolerance: 12.0,
+            taken: 0.0,
         }
     }
 
@@ -77,6 +86,7 @@ impl Health {
         if self.is_dead() {
             return false;
         }
+        self.taken += amount;
         self.current = (self.current - amount).max(0.0);
         self.is_dead()
     }
@@ -112,6 +122,18 @@ mod tests {
             !health.apply(100.0),
             "further damage to a corpse must not re-trigger death effects"
         );
+    }
+
+    /// The whole point of the counter: something parked at the death floor
+    /// still has to be able to report that it was hit again.
+    #[test]
+    fn damage_taken_counts_blows_that_hit_points_cannot_show() {
+        let mut health = Health::new(10.0, 5.0);
+        health.apply(4.0);
+        assert_eq!(health.taken, 4.0);
+
+        health.apply(4.0);
+        assert_eq!(health.taken, 8.0, "a second wound adds to the first");
     }
 
     #[test]
