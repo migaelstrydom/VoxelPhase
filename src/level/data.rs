@@ -672,7 +672,7 @@ pub struct ShaftLedge {
 }
 
 /// Visual style for box textures.
-#[derive(Deserialize, Clone, Copy, Default)]
+#[derive(Debug, Deserialize, Clone, Copy, Default)]
 pub enum BoxStyle {
     WoodenCrate,
     Cardboard,

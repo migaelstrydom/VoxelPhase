@@ -56,6 +56,15 @@ const PLATFORM_SURFACE: PhysicalSurface = PhysicalSurface {
     density: 30.0,
 };
 
+/// Every platform wears the same stripes.
+///
+/// The texture seed is a constant rather than something derived per platform
+/// because a platform is equipment, not scenery: a player learns that a
+/// yellow-and-black deck is a thing that carries them, and three decks with
+/// three different looks teaches them nothing. The variety the seed buys is for
+/// crates.
+const PLATFORM_TEXTURE_SEED: u32 = 0;
+
 /// Acceleration budget of the motor, in m/s². Must clear gravity with room to
 /// spare or the platform sags on every upward leg; the lower this is, the more
 /// a heavy load drags the patrol off its cruise speed.
@@ -144,6 +153,7 @@ impl Spawnable for MovingPlatformDef {
         Ok(vec![create_box_material_for_style(
             BoxStyle::Warning,
             self.surface(),
+            PLATFORM_TEXTURE_SEED,
             ctx.textures,
             ctx.materials,
         )?])

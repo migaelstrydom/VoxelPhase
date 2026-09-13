@@ -8,6 +8,7 @@ use super::box_object::{crate_surface_at, create_box_material_for_style};
 use super::shared::finish::ColliderSurface;
 use super::shared::models::cuboid_model;
 use super::shared::orientation::Yaw;
+use super::shared::textures::seed_from_position;
 use super::{MaterialCtx, Spawnable};
 use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
@@ -46,10 +47,11 @@ impl Spawnable for TowerDef {
 
     fn create_materials(&self, ctx: &mut MaterialCtx) -> EngineResult<Vec<MaterialId>> {
         let mut mats = Vec::with_capacity(self.count as usize);
-        for _ in 0..self.count {
+        for block in 0..self.count {
             mats.push(create_box_material_for_style(
                 BoxStyle::Random,
                 crate_surface_at(self.density),
+                seed_from_position(self.base, block),
                 ctx.textures,
                 ctx.materials,
             )?);

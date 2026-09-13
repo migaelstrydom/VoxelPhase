@@ -37,6 +37,81 @@ impl Rgb {
     }
 }
 
+/// A texture's own source of variation, drawn from a seed rather than from the
+/// process.
+///
+/// Procedural textures want variety — a wall of identical crates reads as a
+/// tiling error — but the variety has to be a property of the *object*, not of
+/// how many other objects happened to be built first. Drawing from the global
+/// `rand` means every texture in a level shifts when an unrelated object is
+/// added to the file, which is a level that cannot be authored: the platform
+/// you tuned to look like a hazard stripe comes back blue.
+///
+/// So the caller supplies a seed it can derive from something stable — a spawn
+/// position, an index within a stack, a constant for equipment that should all
+/// match — and the whole texture follows from it.
+///
+/// The generator is a 32-bit xorshift. It is not statistically remarkable and
+/// does not need to be: it decides a hue nudge and a noise seed.
+pub struct TextureRng {
+    state: u32,
+}
+
+impl TextureRng {
+    /// A generator seeded by `seed`. Any seed is usable; zero is folded away
+    /// rather than left to produce an all-zero stream.
+    pub fn new(seed: u32) -> Self {
+        Self {
+            state: seed ^ 0x9e37_79b9,
+        }
+    }
+
+    /// The next value in the stream.
+    pub fn u32(&mut self) -> u32 {
+        self.state ^= self.state << 13;
+        self.state ^= self.state >> 17;
+        self.state ^= self.state << 5;
+        self.state
+    }
+
+    /// A value in `[0, 1)`.
+    pub fn unit(&mut self) -> f32 {
+        self.u32() as f32 / u32::MAX as f32
+    }
+
+    /// A value in `[lo, hi)`.
+    pub fn range(&mut self, lo: f32, hi: f32) -> f32 {
+        lo + self.unit() * (hi - lo)
+    }
+
+    /// One of `n` choices.
+    pub fn pick(&mut self, n: u32) -> u32 {
+        self.u32() % n.max(1)
+    }
+
+    /// A coin flip.
+    pub fn flip(&mut self) -> bool {
+        self.u32() & 1 == 1
+    }
+}
+
+/// A [`TextureRng`] seed derived from a world position.
+///
+/// The natural stable identity for a level object: two crates in different
+/// places differ, the same crate looks the same every time the level is
+/// loaded, and adding an object elsewhere in the file changes neither. Mix in
+/// an `index` to separate several textures baked at one position, such as the
+/// blocks of a wall.
+pub fn seed_from_position(position: (f32, f32, f32), index: u32) -> u32 {
+    let (x, y, z) = position;
+    let mut seed = index.wrapping_mul(0x27d4_eb2d);
+    for bits in [x.to_bits(), y.to_bits(), z.to_bits()] {
+        seed = (seed ^ bits).wrapping_mul(0x85eb_ca6b);
+        seed ^= seed >> 13;
+    }
+    seed
+}
+
 /// Picks a random value in `[lo, hi]`.
 pub fn rand_range(lo: f32, hi: f32) -> f32 {
     lo + rand::random::<f32>() * (hi - lo)

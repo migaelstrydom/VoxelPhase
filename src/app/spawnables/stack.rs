@@ -9,6 +9,7 @@ use super::box_object::{
     HEAVY_CRATE_SURFACE, PLANK_SURFACE,
 };
 use super::capsule::CapsuleDef;
+use super::shared::textures::seed_from_position;
 use super::{MaterialCtx, Spawnable};
 use crate::core::error::EngineResult;
 use crate::level::BoxStyle;
@@ -69,12 +70,14 @@ impl Spawnable for StackDef {
 
     fn create_materials(&self, ctx: &mut MaterialCtx) -> EngineResult<Vec<MaterialId>> {
         let mut mats = Vec::new();
-        for item in &self.items {
+        for (index, item) in self.items.iter().enumerate() {
+            let seed = seed_from_position(self.base, index as u32);
             match item {
                 StackItemDef::Crate { .. } => {
                     mats.push(create_box_material_for_style(
                         BoxStyle::WoodenCrate,
                         CRATE_SURFACE,
+                        seed,
                         ctx.textures,
                         ctx.materials,
                     )?);
@@ -83,6 +86,7 @@ impl Spawnable for StackDef {
                     mats.push(create_box_material_for_style(
                         BoxStyle::Metal,
                         HEAVY_CRATE_SURFACE,
+                        seed,
                         ctx.textures,
                         ctx.materials,
                     )?);
@@ -91,6 +95,7 @@ impl Spawnable for StackDef {
                     mats.push(create_box_material_for_style(
                         BoxStyle::WoodenCrate,
                         PLANK_SURFACE,
+                        seed,
                         ctx.textures,
                         ctx.materials,
                     )?);

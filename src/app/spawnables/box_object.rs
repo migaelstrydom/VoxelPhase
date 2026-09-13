@@ -70,39 +70,47 @@ pub const fn crate_surface_at(density: f32) -> PhysicalSurface {
 // Box styles — procedural texture generation
 // ---------------------------------------------------------------------------
 
-/// Generate texture pixels for a specific box style.
-fn generate_pixels_for_style(style: BoxStyle) -> Vec<u8> {
+/// Generate texture pixels for a specific box style, varied by `seed`.
+///
+/// A pure function of its two arguments. The same style and seed give the same
+/// pixels in any level, in any order, however many other objects were built
+/// first — which is what lets a level author rely on what a box looks like.
+fn generate_pixels_for_style(style: BoxStyle, seed: u32) -> Vec<u8> {
+    let rng = &mut TextureRng::new(seed);
     match style {
-        BoxStyle::WoodenCrate => generate_wooden_crate(),
-        BoxStyle::Cardboard => generate_cardboard_box(),
-        BoxStyle::Metal => generate_metal_container(),
-        BoxStyle::Gift => generate_gift_box(),
-        BoxStyle::Stone => generate_stone_block(),
-        BoxStyle::Brick => generate_brick_block(),
-        BoxStyle::Warning => generate_warning_box(),
-        BoxStyle::Random => {
-            let pick = rand::random::<u32>() % 7;
-            match pick {
-                0 => generate_wooden_crate(),
-                1 => generate_cardboard_box(),
-                2 => generate_metal_container(),
-                3 => generate_gift_box(),
-                4 => generate_stone_block(),
-                5 => generate_brick_block(),
-                _ => generate_warning_box(),
-            }
-        }
+        BoxStyle::WoodenCrate => generate_wooden_crate(rng),
+        BoxStyle::Cardboard => generate_cardboard_box(rng),
+        BoxStyle::Metal => generate_metal_container(rng),
+        BoxStyle::Gift => generate_gift_box(rng),
+        BoxStyle::Stone => generate_stone_block(rng),
+        BoxStyle::Brick => generate_brick_block(rng),
+        BoxStyle::Warning => generate_warning_box(rng),
+        BoxStyle::Random => match rng.pick(7) {
+            0 => generate_wooden_crate(rng),
+            1 => generate_cardboard_box(rng),
+            2 => generate_metal_container(rng),
+            3 => generate_gift_box(rng),
+            4 => generate_stone_block(rng),
+            5 => generate_brick_block(rng),
+            _ => generate_warning_box(rng),
+        },
     }
 }
 
 /// Creates a single box material for the given style.
+///
+/// `seed` picks which of the style's variations this box gets. Derive it from
+/// something stable about the object — where it spawns, its index in a stack —
+/// so the same level file always produces the same level. A constant is the
+/// right answer for equipment that should all match.
 pub fn create_box_material_for_style(
     style: BoxStyle,
     surface: PhysicalSurface,
+    seed: u32,
     texture_manager: &TextureManager,
     material_builder: &mut MaterialManagerBuilder,
 ) -> EngineResult<MaterialId> {
-    let pixels = generate_pixels_for_style(style);
+    let pixels = generate_pixels_for_style(style, seed);
     let texture = texture_manager.create_from_rgba(TEXTURE_SIZE, TEXTURE_SIZE, &pixels, true)?;
     let material = Material::textured(texture).with_derived_finish(surface);
     Ok(material_builder.register(material))
@@ -211,6 +219,7 @@ impl Spawnable for BoxDef {
         Ok(vec![create_box_material_for_style(
             self.style,
             self.surface(),
+            seed_from_position(self.pos, 0),
             ctx.textures,
             ctx.materials,
         )?])
@@ -254,6 +263,7 @@ impl Spawnable for CrateDef {
         Ok(vec![create_box_material_for_style(
             BoxStyle::WoodenCrate,
             CRATE_SURFACE,
+            seed_from_position(self.pos, 0),
             ctx.textures,
             ctx.materials,
         )?])
@@ -292,6 +302,7 @@ impl Spawnable for HeavyCrateDef {
         Ok(vec![create_box_material_for_style(
             BoxStyle::Metal,
             HEAVY_CRATE_SURFACE,
+            seed_from_position(self.pos, 0),
             ctx.textures,
             ctx.materials,
         )?])
@@ -336,6 +347,7 @@ impl Spawnable for PlankDef {
         Ok(vec![create_box_material_for_style(
             BoxStyle::WoodenCrate,
             PLANK_SURFACE,
+            seed_from_position(self.pos, 0),
             ctx.textures,
             ctx.materials,
         )?])
@@ -359,14 +371,14 @@ impl Spawnable for PlankDef {
 // Texture generators (moved from old box_entity.rs)
 // ---------------------------------------------------------------------------
 
-fn generate_wooden_crate() -> Vec<u8> {
+fn generate_wooden_crate(rng: &mut TextureRng) -> Vec<u8> {
     let size = TEXTURE_SIZE;
     let mut pixels = Vec::with_capacity((size * size * 4) as usize);
 
-    let hue = rand_range(-0.06, 0.06);
+    let hue = rng.range(-0.06, 0.06);
     let base = Rgb::new(0.62 + hue, 0.44 + hue * 0.5, 0.25);
-    let seed_a = rand_u32();
-    let seed_b = rand_u32();
+    let seed_a = rng.u32();
+    let seed_b = rng.u32();
 
     for y in 0..size {
         for x in 0..size {
@@ -395,16 +407,16 @@ fn generate_wooden_crate() -> Vec<u8> {
     pixels
 }
 
-fn generate_cardboard_box() -> Vec<u8> {
+fn generate_cardboard_box(rng: &mut TextureRng) -> Vec<u8> {
     let size = TEXTURE_SIZE;
     let mut pixels = Vec::with_capacity((size * size * 4) as usize);
 
-    let warmth = rand_range(-0.04, 0.04);
+    let warmth = rng.range(-0.04, 0.04);
     let base = Rgb::new(0.76 + warmth, 0.65 + warmth, 0.48);
     let tape = Rgb::new(0.72, 0.62, 0.42);
-    let seed = rand_u32();
+    let seed = rng.u32();
 
-    let tape_horizontal = rand::random::<bool>();
+    let tape_horizontal = rng.flip();
 
     for y in 0..size {
         for x in 0..size {
@@ -436,17 +448,17 @@ fn generate_cardboard_box() -> Vec<u8> {
     pixels
 }
 
-fn generate_metal_container() -> Vec<u8> {
+fn generate_metal_container(rng: &mut TextureRng) -> Vec<u8> {
     let size = TEXTURE_SIZE;
     let mut pixels = Vec::with_capacity((size * size * 4) as usize);
 
-    let tint = rand::random::<u32>() % 3;
+    let tint = rng.pick(3);
     let base = match tint {
         0 => Rgb::new(0.52, 0.55, 0.62),
         1 => Rgb::new(0.50, 0.58, 0.52),
         _ => Rgb::new(0.58, 0.55, 0.50),
     };
-    let seed = rand_u32();
+    let seed = rng.u32();
 
     for y in 0..size {
         for x in 0..size {
@@ -471,14 +483,14 @@ fn generate_metal_container() -> Vec<u8> {
     pixels
 }
 
-fn generate_gift_box() -> Vec<u8> {
+fn generate_gift_box(rng: &mut TextureRng) -> Vec<u8> {
     let size = TEXTURE_SIZE;
     let mut pixels = Vec::with_capacity((size * size * 4) as usize);
 
-    let hue = rand_range(0.0, 6.0);
+    let hue = rng.range(0.0, 6.0);
     let base = hue_to_rgb(hue, 0.65, 0.85);
     let ribbon = Rgb::new(0.95, 0.92, 0.55);
-    let seed = rand_u32();
+    let seed = rng.u32();
 
     for y in 0..size {
         for x in 0..size {
@@ -510,13 +522,13 @@ fn generate_gift_box() -> Vec<u8> {
     pixels
 }
 
-fn generate_stone_block() -> Vec<u8> {
+fn generate_stone_block(rng: &mut TextureRng) -> Vec<u8> {
     let size = TEXTURE_SIZE;
     let mut pixels = Vec::with_capacity((size * size * 4) as usize);
 
-    let warmth = rand_range(-0.05, 0.05);
+    let warmth = rng.range(-0.05, 0.05);
     let base = Rgb::new(0.58 + warmth, 0.56 + warmth, 0.54 + warmth);
-    let seed = rand_u32();
+    let seed = rng.u32();
 
     for y in 0..size {
         for x in 0..size {
@@ -542,14 +554,14 @@ fn generate_stone_block() -> Vec<u8> {
     pixels
 }
 
-fn generate_brick_block() -> Vec<u8> {
+fn generate_brick_block(rng: &mut TextureRng) -> Vec<u8> {
     let size = TEXTURE_SIZE;
     let mut pixels = Vec::with_capacity((size * size * 4) as usize);
 
-    let hue = rand_range(-0.04, 0.04);
+    let hue = rng.range(-0.04, 0.04);
     let brick_colour = Rgb::new(0.72 + hue, 0.38 + hue * 0.3, 0.28);
     let mortar = Rgb::new(0.78, 0.75, 0.68);
-    let seed = rand_u32();
+    let seed = rng.u32();
 
     let rows = 4;
     let cols = 3;
@@ -593,18 +605,17 @@ fn generate_brick_block() -> Vec<u8> {
     pixels
 }
 
-fn generate_warning_box() -> Vec<u8> {
+fn generate_warning_box(rng: &mut TextureRng) -> Vec<u8> {
     let size = TEXTURE_SIZE;
     let mut pixels = Vec::with_capacity((size * size * 4) as usize);
 
-    let pair = rand::random::<u32>() % 3;
-    let (colour_a, colour_b) = match pair {
-        0 => (Rgb::new(0.90, 0.75, 0.15), Rgb::new(0.20, 0.20, 0.20)),
-        1 => (Rgb::new(0.85, 0.25, 0.20), Rgb::new(0.90, 0.90, 0.85)),
-        _ => (Rgb::new(0.25, 0.50, 0.80), Rgb::new(0.90, 0.90, 0.85)),
-    };
-    let seed = rand_u32();
-    let num_stripes = rand_range(4.0, 8.0).round();
+    // Hazard yellow on black, and only that. The colourway is what the style
+    // *means* — a blue stripe is not a warning — so it is not a thing to vary.
+    // What varies with the seed is the wear and how coarse the stripes are.
+    let colour_a = Rgb::new(0.90, 0.75, 0.15);
+    let colour_b = Rgb::new(0.20, 0.20, 0.20);
+    let seed = rng.u32();
+    let num_stripes = rng.range(4.0, 8.0).round();
 
     for y in 0..size {
         for x in 0..size {
@@ -626,4 +637,82 @@ fn generate_warning_box() -> Vec<u8> {
         }
     }
     pixels
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The property the whole seed exists for. Before it, every generator drew
+    /// from the global `rand`, so a level's textures depended on how many
+    /// objects had been baked before them — three platforms asking for the same
+    /// hazard stripe came back yellow, red and blue, and adding an unrelated
+    /// object to the level file reshuffled which got which.
+    #[test]
+    fn a_style_and_a_seed_are_all_a_box_texture_depends_on() {
+        for style in [
+            BoxStyle::WoodenCrate,
+            BoxStyle::Cardboard,
+            BoxStyle::Metal,
+            BoxStyle::Gift,
+            BoxStyle::Stone,
+            BoxStyle::Brick,
+            BoxStyle::Warning,
+            BoxStyle::Random,
+        ] {
+            let first = generate_pixels_for_style(style, 12345);
+            // Bake something else in between: under the old scheme this is
+            // exactly what moved the stream on and changed the answer.
+            let _ = generate_pixels_for_style(BoxStyle::Gift, 999);
+            let again = generate_pixels_for_style(style, 12345);
+            assert_eq!(first, again, "{style:?} is not a function of its seed");
+        }
+    }
+
+    /// And the seed must actually do something, or every crate in a wall would
+    /// be the same crate.
+    #[test]
+    fn a_different_seed_is_a_different_box() {
+        let a = generate_pixels_for_style(BoxStyle::WoodenCrate, 1);
+        let b = generate_pixels_for_style(BoxStyle::WoodenCrate, 2);
+        assert_ne!(a, b);
+    }
+
+    /// A warning stripe is yellow and black at every seed. The style names a
+    /// meaning rather than a look, and the two colourways it used to also pick
+    /// from — red on white, blue on white — do not carry that meaning.
+    #[test]
+    fn a_warning_box_is_hazard_yellow_whatever_its_seed() {
+        for seed in [0, 1, 7, 4242, u32::MAX] {
+            let pixels = generate_pixels_for_style(BoxStyle::Warning, seed);
+            let brightest_blue = pixels
+                .chunks_exact(4)
+                .map(|px| px[2])
+                .max()
+                .expect("texture is not empty");
+            assert!(
+                brightest_blue < 128,
+                "seed {seed} produced a texture with blue in it ({brightest_blue}), \
+                 which means a colourway other than hazard yellow"
+            );
+        }
+    }
+
+    /// Two objects in different places differ; the same object is itself again
+    /// on the next load, whatever else the level gained in between.
+    #[test]
+    fn a_position_seeds_a_box_by_where_it_is() {
+        assert_eq!(
+            seed_from_position((1.0, 2.0, 3.0), 0),
+            seed_from_position((1.0, 2.0, 3.0), 0)
+        );
+        assert_ne!(
+            seed_from_position((1.0, 2.0, 3.0), 0),
+            seed_from_position((1.0, 2.0, 4.0), 0)
+        );
+        assert_ne!(
+            seed_from_position((1.0, 2.0, 3.0), 0),
+            seed_from_position((1.0, 2.0, 3.0), 1)
+        );
+    }
 }
