@@ -340,6 +340,15 @@ impl LeggedLocomotion {
     pub fn recording_status(&self) -> Option<String> {
         self.recorder.as_ref().map(|recorder| recorder.status())
     }
+
+    /// Whether this rig is currently keeping ticks. Every rig owns a
+    /// recorder, so a caller that shares one line of screen between them
+    /// needs to know which one is the live one.
+    pub fn is_recording(&self) -> bool {
+        self.recorder
+            .as_ref()
+            .is_some_and(|recorder| recorder.is_armed())
+    }
 }
 
 /// Shortest signed angle difference `b - a`, wrapped into `(-PI, PI]`.

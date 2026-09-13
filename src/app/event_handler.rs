@@ -5,9 +5,9 @@ use winit::{
     window::{CursorGrabMode, Window},
 };
 
-use specs::{Join, World, WorldExt};
+use specs::{World, WorldExt};
 
-use crate::animation::CharacterAnimator;
+use super::placer_recording::toggle_nearest_recording;
 use crate::debug::{DebugLines, DebugLog, DebugOverlays};
 use crate::input::InputState;
 
@@ -158,10 +158,7 @@ pub fn clear_frame_state(world: &mut World) {
     // once the feet have just done the thing you want explained — the run-up
     // to it is already held.
     if should_write_recording {
-        let mut animators = world.write_storage::<CharacterAnimator>();
-        for animator in (&mut animators).join() {
-            animator.toggle_recording();
-        }
+        toggle_nearest_recording(world);
     }
 
     {

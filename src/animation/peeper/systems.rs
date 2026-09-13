@@ -9,11 +9,12 @@
 //! The animator never sees a `Brain`, so the same rig can be posed by a
 //! bench harness that has none.
 
-use specs::{Entities, Join, Read, ReadStorage, System, WriteStorage};
+use specs::{Entities, Join, Read, ReadStorage, System, Write, WriteStorage};
 
 use crate::character::{CharacterIntent, Grounding};
 use crate::components::{Position, Rotation, Velocity};
 use crate::creature::{Behaviour, Brain, MeleeAttack};
+use crate::debug::DebugLines;
 use crate::sensing::{ContactCandidates, SensorSet};
 use crate::time::Time;
 
@@ -58,6 +59,7 @@ impl<'a> System<'a> for PeeperAnimationSystem {
         ReadStorage<'a, Brain>,
         ReadStorage<'a, MeleeAttack>,
         WriteStorage<'a, PeeperAnimator>,
+        Write<'a, DebugLines>,
     );
 
     fn run(&mut self, data: Self::SystemData) {
@@ -73,6 +75,7 @@ impl<'a> System<'a> for PeeperAnimationSystem {
             brains,
             attacks,
             mut animators,
+            mut debug_lines,
         ) = data;
 
         let dt = time.delta_seconds();
@@ -112,6 +115,15 @@ impl<'a> System<'a> for PeeperAnimationSystem {
                 contacts,
                 mood,
             );
+
+            // Every peeper owns a recorder but only one can be armed, so
+            // the idle ones stay off the screen rather than taking turns
+            // overwriting the line.
+            if animator.locomotion.is_recording() {
+                if let Some(status) = animator.locomotion.recording_status() {
+                    debug_lines.add("Peeper rec", status);
+                }
+            }
         }
     }
 }
