@@ -52,10 +52,18 @@ fn apply_constraint_impulse(bodies: &mut Arena<RigidBody>, row: &ConstraintRow, 
 }
 
 /// Solve one constraint row: compute impulse, clamp, apply to bodies.
+///
+/// A rigid row (`softness == 0`) converges where `J·v + bias` is zero, which
+/// is to say where the error is gone. A soft row carries its accumulated
+/// impulse into the residual, so it converges where the impulse balances the
+/// softness instead — a spring, whose steady deflection under a constant load
+/// `tau` is `compliance · tau / beta`. Without this term the softness would
+/// only slow the row's convergence, and it would still end up rigid.
 pub fn solve_constraint_row(bodies: &mut Arena<RigidBody>, row: &mut ConstraintRow) {
     let cdot = jacobian_dot_velocity(bodies, row);
 
-    let lambda = row.effective_mass_inv * -(cdot + row.bias);
+    let lambda =
+        row.effective_mass_inv * -(cdot + row.bias + row.softness * row.accumulated_impulse);
 
     let old_accumulated = row.accumulated_impulse;
     row.accumulated_impulse = (old_accumulated + lambda).clamp(row.bounds.0, row.bounds.1);

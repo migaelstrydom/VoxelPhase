@@ -608,20 +608,22 @@ fn correct_constraint_angular_drift(
                 compliance,
                 max_impulse,
             } => {
-                // NGS rotates the body directly, with no impulse to bound, so
-                // it would right a torque-limited platform for free. Bodies
-                // with a finite budget recover through the velocity rows alone
-                // — which is the point: limited authority may not recover.
-                if !max_impulse.is_finite() {
-                    let angular_factor = correction_factor / (1.0 + compliance);
-                    correct_upright_angular_drift(
-                        bodies,
-                        body.0,
-                        target_up,
-                        angular_factor,
-                        transforms,
-                    );
+                // NGS rotates the body directly, with no impulse to bound and
+                // no softness to answer to, so it would right a torque-limited
+                // platform for free and stand a compliant one up against its
+                // own spring. Either way the velocity rows are the whole story
+                // — which is the point: limited authority may not recover, and
+                // a spring is supposed to hold a deflection.
+                if max_impulse.is_finite() || *compliance > 0.0 {
+                    continue;
                 }
+                correct_upright_angular_drift(
+                    bodies,
+                    body.0,
+                    target_up,
+                    correction_factor,
+                    transforms,
+                );
             }
 
             ConstraintKind::Fixed {

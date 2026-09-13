@@ -19,8 +19,17 @@ pub enum ConstraintKind {
         body: RigidBodyHandle,
         /// Target up direction (world-space, typically +Y).
         target_up: UnitVector3<f32>,
-        /// Angular compliance (0 = perfectly rigid, >0 = soft).
-        /// Folded into effective mass as `1 / (J·M⁻¹·Jᵀ + compliance/dt²)`.
+        /// Angular compliance, in rad per N·m (0 = perfectly rigid).
+        ///
+        /// A real spring: the body settles where the torque on it balances the
+        /// row, leaning `compliance · torque / constraint_position_beta` out of
+        /// true and ringing back when the load comes off. Compliance also rules
+        /// out `Enforcement::HardProjection` and the NGS position pass, both of
+        /// which would stand the body up regardless and leave the spring with
+        /// nothing to do.
+        ///
+        /// `platform::DeckSuspension` authors this end of it in degrees under a
+        /// stated load, which is the form the number is meaningful in.
         compliance: f32,
         /// Bound on the angular impulse each row may accumulate, matching the
         /// `max_impulse` convention of the other constraint kinds.
@@ -379,6 +388,15 @@ pub struct ConstraintRow {
     pub effective_mass_inv: f32,
     /// Velocity bias (position correction or motor target).
     pub bias: f32,
+    /// Softness: `compliance / dt²`, the same term that softens
+    /// `effective_mass_inv`. Zero for a rigid row.
+    ///
+    /// It appears a second time in the solve, multiplying the accumulated
+    /// impulse, and that is what makes a compliant row a spring: the row
+    /// settles where its impulse balances the softness term rather than
+    /// driving the error to zero. Softening the effective mass alone only
+    /// slows convergence down — the row still ends up rigid, just later.
+    pub softness: f32,
     /// Accumulated impulse for warm-start and clamping.
     pub accumulated_impulse: f32,
     /// Impulse bounds (min, max).
