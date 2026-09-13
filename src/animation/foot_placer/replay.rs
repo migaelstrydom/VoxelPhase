@@ -161,15 +161,33 @@ fn parse_recording(text: &str) -> (InitLine, Vec<RecFrame>) {
     (init, frames)
 }
 
+/// How far a replayed foot may sit from the recorded one before the replay
+/// is judged to have taken a different decision rather than a rounding one.
+const DIVERGENCE_TOLERANCE: f32 = 1e-3;
+
+/// What a replay did against the recording it was fed.
+///
+/// The *first* frame to part company is the one that matters: divergence
+/// compounds, so a large maximum says nothing about where the two placers
+/// stopped agreeing.
+pub struct Divergence {
+    /// Largest planar gap between a replayed foot and the recorded one.
+    pub max: f32,
+    /// Frame the maximum occurred on.
+    pub max_frame: usize,
+    /// First frame past [`DIVERGENCE_TOLERANCE`], if any.
+    pub first_frame: Option<usize>,
+}
+
 /// Feed the recorded input stream through a fresh placer. Calls
-/// `per_frame` after each tick and returns the max planar divergence
-/// between replayed and recorded foot positions, with its frame index.
+/// `per_frame` after each tick and reports how far the replay drifted from
+/// what the game recorded.
 fn replay_frames(
     init: &InitLine,
     frames: &[RecFrame],
     config: &FootPlacerConfig,
     mut per_frame: impl FnMut(usize, &FootPlacer),
-) -> (f32, usize) {
+) -> Divergence {
     let mut placer = FootPlacer::new(
         init.pelvis,
         facing_from_yaw(init.yaw),
@@ -178,6 +196,7 @@ fn replay_frames(
     );
     let mut max_div = 0.0f32;
     let mut max_div_frame = 0usize;
+    let mut first_div_frame = None;
     for (i, fr) in frames.iter().enumerate() {
         placer.set_suspended(fr.suspended);
         let ctx = PlacerCtx {
@@ -210,9 +229,16 @@ fn replay_frames(
             max_div = div;
             max_div_frame = i;
         }
+        if first_div_frame.is_none() && div > DIVERGENCE_TOLERANCE {
+            first_div_frame = Some(i);
+        }
         per_frame(i, &placer);
     }
-    (max_div, max_div_frame)
+    Divergence {
+        max: max_div,
+        max_frame: max_div_frame,
+        first_frame: first_div_frame,
+    }
 }
 
 /// Replay the recording at `PLACER_REC_CSV` and export a plot-ready trace.
@@ -234,12 +260,13 @@ fn replay_recording() {
     let mut csv = String::new();
     csv.push_str(
         "time,pelvis_x,pelvis_y,pelvis_z,vel_x,vel_z,yaw,gait_phase,\
-         l_step,l_x,l_y,l_z,l_terrain,l_planted_x,l_planted_y,l_planted_z,l_ideal_x,l_ideal_z,\
-         r_step,r_x,r_y,r_z,r_terrain,r_planted_x,r_planted_y,r_planted_z,r_ideal_x,r_ideal_z\n",
+         duty_factor,cycle_distance,swing_duration,\
+         l_step,l_x,l_y,l_z,l_terrain,l_planted_x,l_planted_y,l_planted_z,l_ideal_x,l_ideal_z,l_held,\
+         r_step,r_x,r_y,r_z,r_terrain,r_planted_x,r_planted_y,r_planted_z,r_ideal_x,r_ideal_z,r_held\n",
     );
 
     let mut time = 0.0f32;
-    let (max_div, max_div_frame) = replay_frames(&init, &frames, &config, |i, placer| {
+    let divergence = replay_frames(&init, &frames, &config, |i, placer| {
         let fr = &frames[i];
         time += fr.dt;
         let l = &placer.left;
@@ -248,11 +275,16 @@ fn replay_recording() {
         // contacts; NaN (a plot gap) when the probe missed.
         let l_terrain = fr.left_ground.map_or(f32::NAN, |g| g.y);
         let r_terrain = fr.right_ground.map_or(f32::NAN, |g| g.y);
+        // The cadence the placer planned this frame. Judging a gait
+        // needs both halves: without it a long swing is indistinguishable
+        // from a slow one that was asked for.
+        let timing = placer.timing();
         writeln!(
             csv,
             "{},{},{},{},{},{},{},{},\
-             {},{},{},{},{},{},{},{},{},{},\
-             {},{},{},{},{},{},{},{},{},{}",
+             {},{},{},\
+             {},{},{},{},{},{},{},{},{},{},{},\
+             {},{},{},{},{},{},{},{},{},{},{}",
             time,
             fr.pelvis.x,
             fr.pelvis.y,
@@ -261,6 +293,9 @@ fn replay_recording() {
             fr.velocity.z,
             fr.yaw,
             placer.gait_phase(),
+            timing.map_or(f32::NAN, |t| t.duty_factor),
+            timing.map_or(f32::NAN, |t| t.cycle_distance),
+            timing.map_or(f32::NAN, |t| t.swing_duration),
             u8::from(l.is_stepping()),
             l.position.x,
             l.position.y,
@@ -271,6 +306,7 @@ fn replay_recording() {
             l.planted_position.z,
             l.ideal_xz.x,
             l.ideal_xz.z,
+            u8::from(l.landing_shortened),
             u8::from(r.is_stepping()),
             r.position.x,
             r.position.y,
@@ -281,6 +317,7 @@ fn replay_recording() {
             r.planted_position.z,
             r.ideal_xz.x,
             r.ideal_xz.z,
+            u8::from(r.landing_shortened),
         )
         .unwrap();
     });
@@ -300,9 +337,17 @@ fn replay_recording() {
     println!("duration: {time:.2} s, suspended frames: {suspended_frames}");
     println!("poses: {pose_counts}");
     println!(
-        "max divergence vs in-game outputs: {max_div:.6} m at frame {max_div_frame} \
-         (>1e-3 means the recording misses an input)"
+        "max divergence vs in-game outputs: {:.6} m at frame {} \
+         (>{DIVERGENCE_TOLERANCE} means the recording misses an input)",
+        divergence.max, divergence.max_frame
     );
+    match divergence.first_frame {
+        Some(frame) => println!(
+            "first parted company at frame {frame} (t={:.2} s)",
+            frames[..=frame].iter().map(|fr| fr.dt).sum::<f32>()
+        ),
+        None => println!("replay agreed with the game for every frame"),
+    }
 }
 
 /// End-to-end proof of the record→parse→replay loop without the game:
@@ -376,10 +421,11 @@ fn record_replay_round_trip() {
     let text = std::fs::read_to_string(&path).unwrap();
     let (init, frames) = parse_recording(&text);
     assert_eq!(frames.len(), 240);
-    let (max_div, frame) = replay_frames(&init, &frames, &config, |_, _| {});
+    let divergence = replay_frames(&init, &frames, &config, |_, _| {});
     assert_eq!(
-        max_div, 0.0,
-        "replay diverged {max_div} m at frame {frame}: recording misses a placer input"
+        divergence.max, 0.0,
+        "replay diverged {} m at frame {}: recording misses a placer input",
+        divergence.max, divergence.max_frame
     );
     let _ = std::fs::remove_file(&path);
 }

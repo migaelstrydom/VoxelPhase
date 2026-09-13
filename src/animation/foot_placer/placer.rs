@@ -856,6 +856,12 @@ fn advance_stepping(
     };
 
     let landing = floor_sample(ctx, foot.side);
+    // A target with *nothing* under it is the one that has to retreat. A
+    // target with a wall or a body under it is a probe that learned nothing
+    // about the floor this frame, and a swing that treats the two alike
+    // gives up its landing target to a single frame of contact with the
+    // thing it is chasing.
+    let target_unsupported = !probe_found_geometry(ctx, foot.side);
     let reach = max_leg_extension(ctx);
     let under_hip = foot_position_from_stance(
         ctx.pelvis,
@@ -897,10 +903,10 @@ fn advance_stepping(
 
     let u = new_t / duration;
     let alpha = 1.0 - (-ctx.config.swing_retarget_rate * ctx.dt).exp();
-    if landing.is_none() {
-        // The probe aims at the landing target, so no floor sample means
+    if target_unsupported {
+        // The probe aims at the landing target, so an empty probe means
         // there is no ground under where this foot is about to plant —
-        // a hole, a ledge, or a wall face. That is not a legal target,
+        // a hole, or a ledge. That is not a legal target,
         // and nothing downstream will notice: grounding comes from the
         // capsule's contacts now, so a foot planted in mid-air simply
         // stays there. The step retreats instead, to the neutral stance
@@ -1020,6 +1026,22 @@ fn floor_sample(ctx: &PlacerCtx<'_>, side: FootSide) -> Option<(Point3<f32>, Vec
         FootSide::Right => (ctx.right_ground, ctx.right_ground_normal),
     };
     contact.filter(|_| normal.y > 0.6).map(|c| (c, normal))
+}
+
+/// Whether this foot's probe found any geometry at all, floor-like or not.
+///
+/// [`floor_sample`] answers a different question — *is there a surface here
+/// I could stand on* — and collapses "nothing out there" and "a wall face"
+/// into the same `None`. Only the first is evidence that the landing target
+/// has no ground under it. The second is a probe that struck something
+/// upright on its way down: a crate, a creature, the player. Probes are cast
+/// against the physics world as well as the terrain, so for a creature that
+/// walks up to the player and steps around it, that happens constantly.
+fn probe_found_geometry(ctx: &PlacerCtx<'_>, side: FootSide) -> bool {
+    match side {
+        FootSide::Left => ctx.left_ground.is_some(),
+        FootSide::Right => ctx.right_ground.is_some(),
+    }
 }
 
 /// Height of the floor plane through `contact` with the given normal,
@@ -1362,6 +1384,7 @@ pub(crate) fn angle_diff(b: f32, a: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    use super::super::sim::{GaitParams, RigDims};
     use super::*;
 
     const HIP_WIDTH: f32 = 0.12;
@@ -1487,6 +1510,143 @@ mod tests {
                 off
             );
         }
+    }
+
+    /// One walk on flat ground, reported as `(takeoff side, frame)` pairs
+    /// and the length in frames of each foot's swings.
+    ///
+    /// `obstruct` stands in for a probe that struck something upright on
+    /// its way to the ground — that foot's contact comes back with a wall
+    /// normal instead of the floor's.
+    fn walk_flat(
+        dims: RigDims,
+        gait: GaitParams,
+        speed: f32,
+        config: &FootPlacerConfig,
+        frames: usize,
+        obstruct: impl Fn(usize, FootSide) -> bool,
+    ) -> (Vec<(FootSide, usize)>, Vec<usize>) {
+        const DT: f32 = 1.0 / 60.0;
+        let velocity = Vector3::new(0.0, 0.0, speed);
+        let mut pelvis = Point3::new(0.0, dims.standing_height, 0.0);
+        let mut placer = FootPlacer::new(pelvis, Vector3::z(), dims.hip_width, 0.0);
+
+        let mut takeoffs = Vec::new();
+        let mut swings = Vec::new();
+        let mut swing_frames = [0usize; 2];
+
+        for f in 0..frames {
+            let was_stepping = [placer.left.is_stepping(), placer.right.is_stepping()];
+            pelvis += velocity * DT;
+
+            let sample = |foot: &PlacerFoot| {
+                let anchor = foot.probe_anchor();
+                if obstruct(f, foot.side) {
+                    // A capsule's flank: a contact well above the floor,
+                    // with a normal pointing sideways out of it.
+                    (
+                        Some(Point3::new(anchor.x, 0.3, anchor.z)),
+                        Vector3::new(1.0, 0.0, 0.0),
+                    )
+                } else {
+                    (Some(Point3::new(anchor.x, 0.0, anchor.z)), Vector3::y())
+                }
+            };
+            let (left_ground, left_ground_normal) = sample(&placer.left);
+            let (right_ground, right_ground_normal) = sample(&placer.right);
+
+            placer.tick(&PlacerCtx {
+                dt: DT,
+                pelvis,
+                velocity,
+                support_velocity: Vector3::zeros(),
+                intent_direction: velocity,
+                yaw: 0.0,
+                yaw_rate: 0.0,
+                hip_width: dims.hip_width,
+                leg_length: dims.leg_length,
+                standing_height: dims.standing_height,
+                foot_y_fallback: pelvis.y - dims.standing_height,
+                step_height: gait.step_height,
+                stride_gain: gait.stride_gain,
+                left_ground_normal,
+                right_ground_normal,
+                left_ground,
+                right_ground,
+                config,
+            });
+
+            for (slot, foot) in [&placer.left, &placer.right].into_iter().enumerate() {
+                if foot.is_stepping() {
+                    if !was_stepping[slot] {
+                        takeoffs.push((foot.side, f));
+                        swing_frames[slot] = 0;
+                    }
+                    swing_frames[slot] += 1;
+                } else if was_stepping[slot] {
+                    swings.push(swing_frames[slot]);
+                }
+            }
+        }
+        (takeoffs, swings)
+    }
+
+    /// Probes are cast against the physics world as well as the terrain,
+    /// so a creature walking up to the player puts a capsule between its
+    /// landing target and the ground. The probe comes back with that
+    /// capsule's flank — a contact that is not floor — and for that frame
+    /// the placer has no floor under the target.
+    ///
+    /// Reading a wall normal as "there is no ground here" cost the swing
+    /// its target for the rest of its length: the step froze where it was
+    /// while the body ran on, and by the end of the swing the foot was
+    /// further away than the leg is long, so it could not plant at all.
+    /// That is the foot seen dragging behind a peeper that has just
+    /// cornered onto the player.
+    #[test]
+    fn a_probe_that_strikes_a_body_does_not_cost_the_swing_its_target() {
+        let config = FootPlacerConfig::default();
+        const FRAMES: usize = 240;
+        // A peeper at a chase run. Long legs and a fast gait are what make
+        // the frozen target unreachable: the body covers more ground in one
+        // swing than a leg that has stopped aiming can follow.
+        let dims = RigDims::peeper();
+        let gait = GaitParams::peeper();
+        const SPEED: f32 = 4.0;
+
+        let (clean_takeoffs, clean_swings) =
+            walk_flat(dims, gait, SPEED, &config, FRAMES, |_, _| false);
+        // The frame each swing begins on is exactly when the target jumps
+        // forward onto whatever the creature is chasing.
+        let blips: Vec<(usize, FootSide)> = clean_takeoffs
+            .iter()
+            .map(|&(side, frame)| (frame, side))
+            .collect();
+        let (takeoffs, swings) = walk_flat(dims, gait, SPEED, &config, FRAMES, |f, side| {
+            blips.contains(&(f, side))
+        });
+
+        let sides: Vec<FootSide> = takeoffs.iter().map(|&(side, _)| side).collect();
+        for pair in sides.windows(2) {
+            assert_ne!(
+                pair[0], pair[1],
+                "the same foot stepped twice: {sides:?} — the other one was still dragging"
+            );
+        }
+        assert_eq!(
+            takeoffs.len(),
+            clean_takeoffs.len(),
+            "a blinded probe turned {} steps into {}",
+            clean_takeoffs.len(),
+            takeoffs.len()
+        );
+        let longest = swings.iter().copied().max().unwrap_or(0);
+        let clean_longest = clean_swings.iter().copied().max().unwrap_or(0);
+        assert!(
+            longest <= clean_longest,
+            "a swing ran {longest} frames against {clean_longest} on the same walk \
+             with nothing in the way"
+        );
     }
 
     /// The sticky-feet case on a moving platform: the anchors are promises
