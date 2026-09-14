@@ -13,6 +13,10 @@ use crate::rendering::visual_bench::scene::{SceneContext, SceneShot};
 use crate::resources::manager::ResourceManager;
 use crate::resources::textures::TextureManager;
 
+/// Time handed to the water shader. Fixed, because a shot that is compared
+/// against its own past has to see the same ripples every run.
+const WATER_TIME: f32 = 0.0;
+
 /// A headless renderer plus the resource managers a scene needs to draw.
 ///
 /// Owns the same objects the game's world builder wires together, so a scene is
@@ -68,8 +72,8 @@ impl VisualBench {
     /// Render one shot and read the result back as an image.
     ///
     /// Follows exactly the frame sequence `RenderSystem` uses, minus the passes
-    /// no scene currently populates (fire, water, particles) — those go through
-    /// the same transparent pass and can be added when a scene needs them.
+    /// no scene currently populates (fire, particles) — those go through the
+    /// same transparent pass and can be added when a scene needs them.
     pub fn render(&mut self, shot: &SceneShot) -> EngineResult<RgbaImage> {
         let extent = self.renderer.extent();
         let aspect = extent.width as f32 / extent.height as f32;
@@ -129,6 +133,22 @@ impl VisualBench {
         }
 
         renderer.begin_transparent_pass(cb, image_index);
+
+        // In the transparent pass, against the depth the scene left behind —
+        // the same place and the same order as in a level.
+        if let Some(pool) = &shot.water {
+            let (flow_grid, wave_grid) = pool.grids();
+            renderer.render_water(
+                cb,
+                &flow_grid,
+                &wave_grid,
+                &view,
+                &projection,
+                &camera_pos,
+                WATER_TIME,
+            )?;
+        }
+
         renderer.end_frame(cb, image_index)?;
 
         // Readback reads the image directly, so the frame has to be finished

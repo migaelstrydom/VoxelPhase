@@ -16,10 +16,12 @@
 //! comparison meaningful.
 
 pub mod bench;
+pub mod pool;
 pub mod scene;
 pub mod scenes;
 pub mod sheet;
 
 pub use bench::VisualBench;
+pub use pool::ScenePool;
 pub use scene::{SceneCamera, SceneContext, SceneEnvironment, SceneMesh, SceneShot, VisualScene};
 pub use sheet::contact_sheet;

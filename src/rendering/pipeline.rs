@@ -249,6 +249,8 @@ pub struct GraphicsPipeline {
     /// The first of the two draws every blended mesh takes. Recorded into the
     /// HDR scene pass rather than the post-tonemap one, so glass is exposed
     /// and bloomed with the rest of the scene instead of being pasted on after.
+    /// Writes depth, because the passes drawn after the resolve test against
+    /// it — see the pipeline's configuration for why that is safe here.
     pub scene_blended_back: vk::Pipeline,
     /// Blended scene geometry, front faces only. The second of the two draws.
     pub scene_blended_front: vk::Pipeline,
@@ -344,10 +346,19 @@ impl GraphicsPipeline {
         // own far and near faces arrive in index order — so the far half is
         // separated out by culling and recorded first. Exact for a convex
         // shape, which is what an ice cube is.
+        //
+        // Depth *is* written, which is unusual for blended geometry and is
+        // affordable only because these draws are sorted back to front before
+        // they are recorded: each one is nearer than everything already in the
+        // buffer, so it passes the test it would otherwise have to be excused
+        // from. What that buys is the passes that come after the scene
+        // resolves — water, fire, particles — which test against this depth
+        // and have no other way of knowing the glass is there. Without it the
+        // water surface paints straight over an ice cube standing in a pond.
         let blended_scene_config = |cull_mode| PipelineVariantConfig {
             polygon_mode: vk::PolygonMode::FILL,
             cull_mode,
-            depth_write: false,
+            depth_write: true,
             blend_mode: BlendMode::Alpha,
         };
 

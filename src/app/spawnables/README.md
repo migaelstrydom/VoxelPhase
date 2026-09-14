@@ -225,11 +225,18 @@ spawnable built the ordinary way — `ctx.patterned(&substance, ...)`, or
 `substance.material(texture)` — comes out transparent wherever it is drawn, and
 no call site can forget. `IceCubeDef` is the worked example.
 
-Two things behave differently for a blended object, both of them deliberate:
+Three things behave differently for a blended object, all of them deliberate:
 
 - **It casts no shadow.** A shadow map stores one depth per texel, so a
   transmissive caster could only throw a solid shadow — a hard black bite out
   of whatever stands behind something you can see straight through.
+- **It writes depth**, unlike most blended geometry. It can, because the
+  draws are sorted before they are recorded, and it must, because water, fire
+  and particles are drawn after the scene resolves and test against that depth
+  — without it the water surface paints straight over an ice cube standing in
+  a pond. The cost is the other direction: those effects cannot be seen
+  *through* the glass, so water behind an ice cube shows as the riverbed
+  behind it rather than as water.
 - **Both of its sides are drawn**, so its mesh must be closed and every
   triangle wound outwards. On an opaque object a single inside-out triangle is
   invisible (it is culled); here it is not. Worth a test when you build the
@@ -244,7 +251,12 @@ and without them a block of ice at any opacity is a block of glass.
 Sorting is per draw, by distance to the mesh's centre, plus a back-faces-then-
 front-faces split within each mesh. That is exact for a convex shape. Two
 blended objects that interpenetrate, or a concave blended mesh, will still
-composite wrong where they cross.
+composite wrong where they cross — and now that blended geometry writes depth,
+wrong there means hard occlusion rather than a soft blending error.
+
+`visual_bench -- ice` is where all of this is checked: `three_deep` and
+`overlap` for the sort, `in_water` for the agreement with the passes drawn
+after the scene resolves.
 
 ### Texture creation pattern
 

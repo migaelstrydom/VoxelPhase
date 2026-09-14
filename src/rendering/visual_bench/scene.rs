@@ -10,6 +10,7 @@ use crate::rendering::material::{MaterialManager, SurfaceParams};
 use crate::rendering::post::PostProcessConfig;
 use crate::rendering::shadow::ShadowVolume;
 use crate::rendering::vertex::Vertex;
+use crate::rendering::visual_bench::pool::ScenePool;
 use crate::resources::textures::{TextureHandle, TextureManager};
 
 /// Resources a scene may draw on while building its shots.
@@ -200,6 +201,10 @@ pub struct SceneShot {
     pub camera: SceneCamera,
     pub environment: SceneEnvironment,
     pub meshes: Vec<SceneMesh>,
+
+    /// Water for the shot to stand things in, drawn after the scene resolves.
+    /// `None` for the shots that have no use for it, which is most of them.
+    pub water: Option<ScenePool>,
 }
 
 impl SceneShot {
@@ -209,6 +214,7 @@ impl SceneShot {
             camera,
             environment: SceneEnvironment::default(),
             meshes: Vec::new(),
+            water: None,
         }
     }
 
@@ -224,6 +230,11 @@ impl SceneShot {
 
     pub fn with_meshes(mut self, meshes: impl IntoIterator<Item = SceneMesh>) -> Self {
         self.meshes.extend(meshes);
+        self
+    }
+
+    pub fn with_water(mut self, pool: ScenePool) -> Self {
+        self.water = Some(pool);
         self
     }
 }
