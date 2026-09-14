@@ -267,7 +267,21 @@ impl<'a, 'b> App<'a, 'b> {
                     frame_start.0 = show_cpu_ms.then(std::time::Instant::now);
                 }
 
-                dispatcher.dispatch(world);
+                // `dispatch` would run the thread-local systems too, and the
+                // render is one of them — calling it here and again below drew
+                // the frame twice. Run the parallel systems on their own, so
+                // that the explicit `dispatch_thread_local` below is the
+                // frame's only render.
+                dispatcher.dispatch_par(world);
+
+                // Before rendering, not after. `RenderSystem` is thread-local
+                // and draws by joining over storages, so an entity a system
+                // created through `LazyUpdate` this frame is invisible until
+                // `maintain` applies it. Fracture is where that showed: the
+                // compound's model drops a piece the instant it breaks off,
+                // while the piece's own entity arrived a frame later, so a
+                // structure blinked out at the moment it came apart.
+                world.maintain();
                 dispatcher.dispatch_thread_local(world);
                 world.maintain();
 
@@ -290,5 +304,118 @@ impl<'a, 'b> App<'a, 'b> {
 
         run_result.map_err(|e| EngineError::Window(format!("Event loop error: {}", e)))?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod frame_order {
+    use specs::{
+        Builder, Component, DispatcherBuilder, Entities, Join, LazyUpdate, Read, ReadStorage,
+        System, VecStorage, World, WorldExt,
+    };
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Component)]
+    #[storage(VecStorage)]
+    struct Spawned;
+
+    /// Stands in for `FractureSystem`: a parallel system that puts a new
+    /// entity into the world through `LazyUpdate`.
+    struct Spawner {
+        done: bool,
+    }
+
+    impl<'a> System<'a> for Spawner {
+        type SystemData = (Entities<'a>, Read<'a, LazyUpdate>);
+
+        fn run(&mut self, (entities, lazy): Self::SystemData) {
+            if self.done {
+                return;
+            }
+            self.done = true;
+            lazy.create_entity(&entities).with(Spawned).build();
+        }
+    }
+
+    /// Stands in for `RenderSystem`: thread-local, and sees the world only
+    /// through a join, exactly as the draw loop does.
+    struct Drawer {
+        seen: Arc<Mutex<Vec<usize>>>,
+    }
+
+    impl<'a> System<'a> for Drawer {
+        type SystemData = (Entities<'a>, ReadStorage<'a, Spawned>);
+
+        fn run(&mut self, (entities, spawned): Self::SystemData) {
+            let count = (&entities, &spawned).join().count();
+            self.seen.lock().unwrap().push(count);
+        }
+    }
+
+    fn world_and_log() -> (World, Arc<Mutex<Vec<usize>>>) {
+        let mut world = World::new();
+        world.register::<Spawned>();
+        (world, Arc::new(Mutex::new(Vec::new())))
+    }
+
+    /// The frame loop must draw once, and only after `maintain` has put this
+    /// frame's lazily created entities into their storages.
+    ///
+    /// Getting this wrong is what made a fractured piece blink: the compound's
+    /// model drops the piece the instant it breaks off, so a draw that happens
+    /// before the piece's own entity exists shows neither.
+    #[test]
+    fn the_frame_draws_once_and_only_after_the_world_is_maintained() {
+        let (mut world, seen) = world_and_log();
+        let mut dispatcher = DispatcherBuilder::new()
+            .with(Spawner { done: false }, "spawn", &[])
+            .with_thread_local(Drawer { seen: seen.clone() })
+            .build();
+
+        // Exactly the sequence in `App::run`.
+        dispatcher.dispatch_par(&world);
+        world.maintain();
+        dispatcher.dispatch_thread_local(&world);
+        world.maintain();
+
+        let seen = seen.lock().unwrap();
+        assert_eq!(
+            seen.len(),
+            1,
+            "the frame drew {} times, not once",
+            seen.len()
+        );
+        assert_eq!(
+            seen[0], 1,
+            "the draw did not see the entity created this frame"
+        );
+    }
+
+    /// Why the loop calls `dispatch_par` and not `dispatch`: `dispatch` runs
+    /// the thread-local systems itself, so pairing it with an explicit
+    /// `dispatch_thread_local` draws the frame twice — and the first of those
+    /// draws happens before `maintain`, with the hole described above.
+    #[test]
+    fn dispatch_would_run_the_thread_local_draw_as_well() {
+        let (world, seen) = world_and_log();
+        let mut dispatcher = DispatcherBuilder::new()
+            .with(Spawner { done: false }, "spawn", &[])
+            .with_thread_local(Drawer { seen: seen.clone() })
+            .build();
+
+        dispatcher.dispatch(&world);
+
+        let seen = seen.lock().unwrap();
+        assert_eq!(
+            seen.len(),
+            1,
+            "dispatch no longer runs thread-local systems; the frame loop's \
+             split into dispatch_par + dispatch_thread_local can be revisited"
+        );
+        assert_eq!(
+            seen[0], 0,
+            "the draw inside dispatch ran before any maintain, so it cannot \
+             see this frame's lazily created entity"
+        );
     }
 }
