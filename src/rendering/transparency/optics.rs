@@ -42,10 +42,16 @@ impl Transparency {
         ior: 1.5,
     };
 
-    /// Frozen water: mostly clear, with the low index that makes its edges
-    /// brighten more gently than glass.
+    /// Frozen water: you can see through it, but not read through it.
+    ///
+    /// Well above glass, and deliberately: the two materials differ far more
+    /// in how much they let past than in how they bend it, so an ice block at
+    /// a window's opacity is a glass block whatever its index says. What the
+    /// number stands for is the light scattered by the trapped air and the
+    /// fracture planes that [`pattern::ICE`](crate::rendering::pattern::ICE)
+    /// draws — the block is cloudy, not tinted.
     pub const ICE: Self = Self {
-        opacity: 0.30,
+        opacity: 0.62,
         ior: 1.31,
     };
 

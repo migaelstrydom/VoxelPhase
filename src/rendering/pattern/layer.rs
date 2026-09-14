@@ -23,7 +23,7 @@
 
 use crate::rendering::colour::Colour;
 use crate::rendering::substance::Palette;
-use crate::utils::noise::fbm_2d_periodic;
+use crate::utils::noise::{fbm_2d_periodic, fbm_perlin_2d_periodic_xy};
 
 /// Which of a palette's colours a layer works towards.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -111,6 +111,33 @@ pub enum Layer {
         amount: f32,
         towards: Slot,
     },
+
+    /// Veins drawn in a field that is stretched along the tile's `v` axis.
+    ///
+    /// The same ridge as [`Vein`], over noise sampled on an elongated lattice.
+    /// That one change is the difference between cracks that wander in every
+    /// direction and cracks that run — the fracture planes in a block of ice,
+    /// the drag marks in brushed metal. Isotropic noise cannot express it at
+    /// any frequency, which is why this is a layer rather than a `Vein` at
+    /// different settings.
+    ///
+    /// The direction is the tile's, not the world's: a surface that wants its
+    /// streaks running some other way orients its texture coordinates, exactly
+    /// as wood grain does (see [`GrainSpec`](crate::rendering::grain::GrainSpec)).
+    Streak {
+        /// Noise frequency *across* the streaks, in features per tile. The
+        /// one that sets how densely packed the lines are.
+        scale: f32,
+        octaves: u32,
+        /// How much longer a feature is along the streak than across it.
+        /// One is a plain [`Vein`]; six or more is what reads as a fracture
+        /// running through something.
+        elongation: f32,
+        /// As [`Vein`]'s: higher is a thinner line.
+        sharpness: f32,
+        amount: f32,
+        towards: Slot,
+    },
 }
 
 impl Layer {
@@ -160,8 +187,19 @@ impl Layer {
                 towards,
             } => {
                 let n = noise(u, v, scale, octaves, seed);
-                let ridge = (1.0 - (signed(n) * sharpness).abs()).max(0.0);
-                lerp(colour, towards.of(palette), ridge * amount)
+                lerp(colour, towards.of(palette), ridge(n, sharpness) * amount)
+            }
+
+            Self::Streak {
+                scale,
+                octaves,
+                elongation,
+                sharpness,
+                amount,
+                towards,
+            } => {
+                let n = streaked_noise(u, v, scale, elongation, octaves, seed);
+                lerp(colour, towards.of(palette), ridge(n, sharpness) * amount)
             }
         }
     }
@@ -241,6 +279,45 @@ fn noise(u: f32, v: f32, scale: f32, octaves: u32, seed: u32) -> f32 {
         seed,
         Some(scale.max(1.0) as i32),
     )
+}
+
+/// Periodic fractal noise on a lattice stretched along `v`.
+///
+/// Stretching the *sampling* rather than smearing the result is what keeps the
+/// field seamless, and it is the same trick the fibre grain in
+/// [`grain`](crate::rendering::grain) uses. Each axis is given its own whole
+/// number of features across the tile as its own period, because one square
+/// period cannot wrap two different frequencies at the same tile edge: made to
+/// share one, it can only divide both, and the field then repeats several times
+/// inside the texture as rows of the same feature.
+///
+/// Gradient noise rather than the value noise the other layers draw, for the
+/// reason the grain's height field uses it: value noise has an extremum at
+/// every lattice point, so a *ridge* taken through it traces the lattice. On a
+/// stretched lattice that is unmissable — it prints rows of identical
+/// teardrops, which is what the first pass at ice's fractures produced.
+fn streaked_noise(u: f32, v: f32, scale: f32, elongation: f32, octaves: u32, seed: u32) -> f32 {
+    let across = scale.round().max(1.0);
+    let along = (scale / elongation.max(1.0)).round().max(1.0);
+
+    fbm_perlin_2d_periodic_xy(
+        u * across,
+        v * along,
+        octaves,
+        0.5,
+        2.0,
+        seed,
+        Some((across as i32, along as i32)),
+    )
+}
+
+/// Where a noise field crosses its midpoint, as a 0..1 line weight.
+///
+/// The shared half of [`Layer::Vein`] and [`Layer::Streak`]: what makes either
+/// read as a line is the crossing, and the two differ only in the field they
+/// measure it on.
+fn ridge(n: f32, sharpness: f32) -> f32 {
+    (1.0 - (signed(n) * sharpness).abs()).max(0.0)
 }
 
 /// Noise as a 0..1 weight.
@@ -433,6 +510,56 @@ mod tests {
                 left.r,
                 right.r
             );
+        }
+    }
+
+    /// A streak's whole point is that it has a direction. Measured as how
+    /// much faster the field changes across the tile than along it — isotropic
+    /// noise would give a ratio near one, and that is exactly what a `Vein`
+    /// with the elongation misapplied would produce.
+    #[test]
+    fn a_streak_runs_in_one_direction() {
+        let mut across = 0.0;
+        let mut along = 0.0;
+
+        for step in 0..64 {
+            let u = (step % 8) as f32 / 8.0;
+            let v = (step / 8) as f32 / 8.0;
+            let here = streaked_noise(u, v, 12.0, 6.0, 2, 4);
+            across += (streaked_noise(u + 0.02, v, 12.0, 6.0, 2, 4) - here).abs();
+            along += (streaked_noise(u, v + 0.02, 12.0, 6.0, 2, 4) - here).abs();
+        }
+
+        assert!(
+            across > along * 3.0,
+            "the field is barely directional: across {across}, along {along}"
+        );
+    }
+
+    /// Elongation rounds both frequencies and divides by their common factor
+    /// to keep the period whole. An elongation that does not divide the scale
+    /// exactly must still tile, because nothing at the call site says which
+    /// ratios are safe.
+    #[test]
+    fn a_streaked_tile_is_seamless_in_both_axes() {
+        for elongation in [2.0, 5.0, 7.0, 8.0] {
+            for step in 0..16 {
+                let t = step as f32 / 16.0;
+
+                let left = streaked_noise(0.0, t, 12.0, elongation, 2, 3);
+                let right = streaked_noise(1.0, t, 12.0, elongation, 2, 3);
+                assert!(
+                    (left - right).abs() < 1e-4,
+                    "u seam at v={t}, elongation {elongation}: {left} vs {right}"
+                );
+
+                let bottom = streaked_noise(t, 0.0, 12.0, elongation, 2, 3);
+                let top = streaked_noise(t, 1.0, 12.0, elongation, 2, 3);
+                assert!(
+                    (bottom - top).abs() < 1e-4,
+                    "v seam at u={t}, elongation {elongation}: {bottom} vs {top}"
+                );
+            }
         }
     }
 

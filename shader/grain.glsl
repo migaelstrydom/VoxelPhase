@@ -1,7 +1,8 @@
 // Microstructure from the shared grain atlas.
 //
 // The atlas packs two grains into one texture's four channels — RG is stone,
-// BA is wood — so selecting one costs a swizzle rather than a second sample.
+// BA is directional fibre — so selecting one costs a swizzle rather than a
+// second sample.
 // See src/rendering/grain.rs for how it is generated and why.
 //
 // Terrain does not come through here. Its detail normal arrives packed beside
@@ -26,15 +27,15 @@ vec2 grainSlope(sampler2D atlas, vec2 uv, uint layer) {
 
 /// Perturb a normal by grain addressed with the mesh's texture coordinates.
 ///
-/// For grain with a direction the mesh already knows — wood fibre runs along
-/// the plank, and a projection would run it along whichever axis the face
-/// happens to point at.
+/// For grain with a direction the mesh already knows — fibre runs along the
+/// plank and fracture runs through the block, and a projection would run
+/// either along whichever axis the face happens to point at.
 ///
 /// The mesh's UVs are treated as a tangent frame whose u axis is world-x-ish
 /// and v axis world-z-ish, which is the same approximation the rest of the
 /// engine's untangented meshes make. It is good enough for a perturbation of a
 /// few degrees and wrong enough that a strongly directional grain on a curved
-/// UV-mapped surface will lean; the surfaces this is used on are planks.
+/// UV-mapped surface will lean; the surfaces this is used on are flat-faced.
 vec3 grainByUv(
     sampler2D atlas,
     vec3 normal,

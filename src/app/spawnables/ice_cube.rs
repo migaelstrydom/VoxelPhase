@@ -267,9 +267,14 @@ impl FaceBuilder {
     }
 
     /// Texture coordinates for a point, projected down the face's dominant
-    /// axis. Ice's pattern has no orientation worth respecting — it is trapped
-    /// air, not a weave — so the cheapest projection that tiles continuously
-    /// is the right one.
+    /// axis.
+    ///
+    /// Both the pattern's fracture planes and the substance's grain are
+    /// directional and both follow `v`, so this projection is what decides
+    /// which way the ice looks like it froze — per face, rather than per
+    /// block. That is the right answer for a cube: a real one shows a
+    /// different section of the same structure on each face, and a single
+    /// direction carried across all six would read as a printed wrapper.
     fn uv(&self, pos: Vector3<f32>, normal: Vector3<f32>) -> Vector2<f32> {
         let axis = dominant_axis(normal);
         let (u_axis, v_axis) = tangent_axes(axis);

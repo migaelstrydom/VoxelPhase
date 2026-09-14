@@ -59,6 +59,16 @@ impl Palette {
         self.accent = accent;
         self
     }
+
+    /// The same palette with a different light.
+    ///
+    /// For the surfaces whose bright slot is not their base turned up: frost
+    /// on ice is white, not pale blue, and a spread derived from the base can
+    /// never get there without washing the base out with it.
+    pub const fn with_light(mut self, light: Colour) -> Self {
+        self.light = light;
+        self
+    }
 }
 
 /// Multiply a colour's channels, leaving alpha alone.

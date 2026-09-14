@@ -17,7 +17,7 @@
 //!
 //! ```text
 //!   RG ── stone: isotropic, sharp-edged, the grain a chisel leaves
-//!   BA ── wood:  anisotropic, stretched along v, the fibre of a sawn plank
+//!   BA ── fibre: anisotropic, stretched along v — a sawn plank, a frozen block
 //! ```
 //!
 //! Two grains share the four channels of one texture rather than occupying two
@@ -26,15 +26,15 @@
 //! third grain needs a second texture, and
 //! [`GrainLayer`] is the index that would select it.
 //!
-//! # Why wood cannot use the same projection as stone
+//! # Why fibre cannot use the same projection as stone
 //!
 //! Stone grain is isotropic, so it can be projected from any direction and
-//! still look like stone. Wood fibre has a direction, and that direction is a
-//! property of the plank, not of the world — a triplanar projection would run
+//! still look like stone. A fibre has a direction, and that direction is a
+//! property of the object, not of the world — a triplanar projection would run
 //! the fibre along whichever axis the face happens to point at, which on a
-//! tumbling crate changes as it tumbles. Wood is therefore addressed by the
-//! mesh's own texture coordinates, which already know which way the plank
-//! runs.
+//! tumbling crate changes as it tumbles. Fibre is therefore addressed by the
+//! mesh's own texture coordinates, which already know which way the plank —
+//! or the freeze front — runs.
 
 use crate::core::error::EngineResult;
 use crate::resources::textures::{TextureHandle, TextureManager};
@@ -53,40 +53,42 @@ const OCTAVES: u32 = 5;
 /// Feature size of the stone grain, in texture repeats. Also its tiling period.
 const STONE_NOISE_SCALE: f32 = 24.0;
 
-/// Feature size of the wood grain across the fibre. Higher than stone's because
-/// the field is then stretched along the fibre by [`WOOD_FIBRE_STRETCH`], and
-/// the two together are what make a ring rather than a blob.
-const WOOD_NOISE_SCALE: f32 = 32.0;
+/// Feature size of the fibre grain across the fibre. Higher than stone's
+/// because the field is then stretched along the fibre by [`FIBRE_STRETCH`],
+/// and the two together are what make a ring rather than a blob.
+const FIBRE_NOISE_SCALE: f32 = 32.0;
 
-/// How much longer wood's features are along the fibre than across it.
+/// How much longer a fibre's features are along it than across it.
 ///
 /// Eight to one is the ratio at which the field stops reading as stretched
 /// noise and starts reading as grain: below about four the rings look like
 /// smeared blobs, and much above ten they turn into stripes with no variation
 /// to break them up.
-const WOOD_FIBRE_STRETCH: f32 = 8.0;
+const FIBRE_STRETCH: f32 = 8.0;
 
 /// Fixed so that every run and every bench sheet shows the same grain.
 const STONE_SEED: u32 = 7;
-const WOOD_SEED: u32 = 13;
+const FIBRE_SEED: u32 = 13;
 
 /// Height of the stone microrelief, relative to the spacing of the texels it is
 /// measured across. The single number that decides how pronounced stone grain
 /// is at full strength.
 const STONE_RELIEF: f32 = 16.0;
 
-/// Height of the wood microrelief. Lower than stone's: a planed plank is a far
-/// smoother thing than a broken rock face, and wood grain that competes with
+/// Height of the fibre microrelief. Lower than stone's: a planed plank is a
+/// far smoother thing than a broken rock face, and a fibre that competes with
 /// stone grain makes every material look like the same rough surface.
-const WOOD_RELIEF: f32 = 7.0;
+const FIBRE_RELIEF: f32 = 7.0;
 
 /// Which grain a surface takes, as stored in the material control word.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GrainLayer {
     /// Isotropic rock microstructure. Granite, limestone, concrete, marble.
     Stone = 0,
-    /// Directional fibre running along the mesh's v axis. Planks, crates, posts.
-    Wood = 1,
+    /// Directional fibre running along the mesh's v axis. Planks, crates and
+    /// posts; also the fracture grain in a frozen block, which runs the same
+    /// way for the same reason — it was laid down in a direction.
+    Fibre = 1,
 }
 
 impl GrainLayer {
@@ -159,9 +161,22 @@ impl GrainSpec {
     /// Sawn timber. Addressed by UV, so `scale` is in repeats per UV unit and
     /// one repeat should span roughly one plank.
     pub const WOOD: Self = Self {
-        layer: GrainLayer::Wood,
+        layer: GrainLayer::Fibre,
         scale: 1.0,
         strength: 0.4,
+    };
+
+    /// A frozen block: the same directional fibre, coarser and much fainter.
+    ///
+    /// Coarser because the flaws a freeze leaves are centimetres apart rather
+    /// than millimetres, and fainter because this is relief on a surface the
+    /// eye is mostly looking *through* — grain at plank strength on clear ice
+    /// reads as a frosted bathroom window, which is a real material and not
+    /// this one.
+    pub const ICE: Self = Self {
+        layer: GrainLayer::Fibre,
+        scale: 0.45,
+        strength: 0.14,
     };
 
     /// Roughly how many mineral features this grain shows per world metre.
@@ -174,7 +189,7 @@ impl GrainSpec {
         self.scale
             * match self.layer {
                 GrainLayer::Stone => STONE_NOISE_SCALE,
-                GrainLayer::Wood => WOOD_NOISE_SCALE,
+                GrainLayer::Fibre => FIBRE_NOISE_SCALE,
             }
     }
 
@@ -215,12 +230,12 @@ pub fn create_grain_texture(textures: &TextureManager) -> EngineResult<TextureHa
     for y in 0..RESOLUTION {
         for x in 0..RESOLUTION {
             let (stone_x, stone_y) = stone_normal(x, y);
-            let (wood_x, wood_y) = wood_normal(x, y);
+            let (fibre_x, fibre_y) = fibre_normal(x, y);
 
             rgba.push(encode_signed(stone_x));
             rgba.push(encode_signed(stone_y));
-            rgba.push(encode_signed(wood_x));
-            rgba.push(encode_signed(wood_y));
+            rgba.push(encode_signed(fibre_x));
+            rgba.push(encode_signed(fibre_y));
         }
     }
 
@@ -246,17 +261,17 @@ fn stone_height(x: u32, y: u32) -> f32 {
     )
 }
 
-/// The wood height field at a texel.
+/// The fibre height field at a texel.
 ///
 /// The same noise as stone's, sampled on a lattice stretched by
-/// [`WOOD_FIBRE_STRETCH`] along v. Stretching the *sampling* rather than
-/// filtering the result keeps the field seamless, because the period is divided
-/// by the same factor the coordinate is.
-fn wood_height(x: u32, y: u32) -> f32 {
-    let across = WOOD_NOISE_SCALE / RESOLUTION as f32;
-    let along = across / WOOD_FIBRE_STRETCH;
+/// [`FIBRE_STRETCH`] along v. Stretching the *sampling* rather than filtering
+/// the result keeps the field seamless, because the period is divided by the
+/// same factor the coordinate is.
+fn fibre_height(x: u32, y: u32) -> f32 {
+    let across = FIBRE_NOISE_SCALE / RESOLUTION as f32;
+    let along = across / FIBRE_STRETCH;
 
-    let period_along = (WOOD_NOISE_SCALE / WOOD_FIBRE_STRETCH).max(1.0) as i32;
+    let period_along = (FIBRE_NOISE_SCALE / FIBRE_STRETCH).max(1.0) as i32;
 
     fbm_perlin_2d_periodic(
         (x % RESOLUTION) as f32 * across,
@@ -264,7 +279,7 @@ fn wood_height(x: u32, y: u32) -> f32 {
         OCTAVES,
         0.5,
         2.0,
-        WOOD_SEED,
+        FIBRE_SEED,
         Some(period_along.max(1)),
     )
 }
@@ -293,8 +308,8 @@ fn stone_normal(x: u32, y: u32) -> (f32, f32) {
     slope_normal(stone_height, x, y, STONE_RELIEF)
 }
 
-fn wood_normal(x: u32, y: u32) -> (f32, f32) {
-    slope_normal(wood_height, x, y, WOOD_RELIEF)
+fn fibre_normal(x: u32, y: u32) -> (f32, f32) {
+    slope_normal(fibre_height, x, y, FIBRE_RELIEF)
 }
 
 /// Encode a -1-to-1 value into a byte, as the shader's `value * 2 - 1` expects.
@@ -333,32 +348,32 @@ mod tests {
         );
     }
 
-    /// Wood is a planed surface and stone is a broken one. If the two ever land
+    /// A fibre is a planed surface and stone is a broken one. If the two ever land
     /// on the same relief, every material in the game reads as the same rough
     /// thing under a highlight, which is the failure this library exists to
     /// avoid.
     #[test]
-    fn wood_is_smoother_than_stone() {
+    fn fibre_is_smoother_than_stone() {
         assert!(
-            mean_tilt(wood_normal) < mean_tilt(stone_normal) * 0.75,
-            "wood {}° vs stone {}°",
-            mean_tilt(wood_normal),
+            mean_tilt(fibre_normal) < mean_tilt(stone_normal) * 0.75,
+            "fibre {}° vs stone {}°",
+            mean_tilt(fibre_normal),
             mean_tilt(stone_normal)
         );
     }
 
-    /// Wood's whole character is that it has a direction. Measured as the ratio
+    /// A fibre's whole character is that it has a direction. Measured as the ratio
     /// of mean slope across the fibre to mean slope along it — isotropic noise
     /// would give a ratio near one.
     #[test]
-    fn wood_grain_runs_along_the_fibre() {
+    fn fibre_grain_runs_along_the_fibre() {
         let mut across = 0.0;
         let mut along = 0.0;
         let mut samples = 0;
 
         for y in (0..RESOLUTION).step_by(7) {
             for x in (0..RESOLUTION).step_by(7) {
-                let (nx, ny) = wood_normal(x, y);
+                let (nx, ny) = fibre_normal(x, y);
                 across += nx.abs();
                 along += ny.abs();
                 samples += 1;
@@ -368,7 +383,7 @@ mod tests {
         let ratio = (across / samples as f32) / (along / samples as f32).max(1e-6);
         assert!(
             ratio > 3.0,
-            "wood grain is barely directional: across/along = {ratio}"
+            "fibre grain is barely directional: across/along = {ratio}"
         );
     }
 
@@ -403,7 +418,7 @@ mod tests {
     fn every_stored_normal_has_a_reconstructable_z() {
         for y in (0..RESOLUTION).step_by(13) {
             for x in (0..RESOLUTION).step_by(13) {
-                for (nx, ny) in [stone_normal(x, y), wood_normal(x, y)] {
+                for (nx, ny) in [stone_normal(x, y), fibre_normal(x, y)] {
                     let planar = nx * nx + ny * ny;
                     assert!(planar < 1.0, "normal at ({x}, {y}) has no z left: {planar}");
                 }
@@ -486,6 +501,6 @@ mod tests {
     #[test]
     fn the_grains_index_distinctly() {
         assert_eq!(GrainLayer::Stone.index(), 0);
-        assert_eq!(GrainLayer::Wood.index(), 1);
+        assert_eq!(GrainLayer::Fibre.index(), 1);
     }
 }

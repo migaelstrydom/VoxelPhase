@@ -141,9 +141,13 @@ fn hash_3d_periodic(x: i32, y: i32, z: i32, seed: u32, period: Option<i32>) -> f
 
 /// Hash function for 2D coordinates with optional periodicity.
 fn hash_2d_periodic(x: i32, y: i32, seed: u32, period: Option<i32>) -> f32 {
-    // Apply wrapping if period is specified
-    let (wx, wy) = if let Some(p) = period {
-        (x.rem_euclid(p), y.rem_euclid(p))
+    hash_2d_periodic_xy(x, y, seed, period.map(|p| (p, p)))
+}
+
+/// As [`hash_2d_periodic`], with a period per axis.
+fn hash_2d_periodic_xy(x: i32, y: i32, seed: u32, period: Option<(i32, i32)>) -> f32 {
+    let (wx, wy) = if let Some((px, py)) = period {
+        (x.rem_euclid(px.max(1)), y.rem_euclid(py.max(1)))
     } else {
         (x, y)
     };
@@ -240,8 +244,8 @@ fn quintic(t: f32) -> f32 {
 }
 
 /// Unit gradient vector for a lattice point, wrapped to `period` if given.
-fn gradient_2d_periodic(x: i32, y: i32, seed: u32, period: Option<i32>) -> (f32, f32) {
-    let angle = hash_2d_periodic(x, y, seed, period) * std::f32::consts::TAU;
+fn gradient_2d_periodic(x: i32, y: i32, seed: u32, period: Option<(i32, i32)>) -> (f32, f32) {
+    let angle = hash_2d_periodic_xy(x, y, seed, period) * std::f32::consts::TAU;
     (angle.cos(), angle.sin())
 }
 
@@ -258,6 +262,18 @@ fn gradient_2d_periodic(x: i32, y: i32, seed: u32, period: Option<i32>) -> (f32,
 /// Returned in `[0, 1]` to match [`noise_2d_periodic`], so the two are
 /// interchangeable at call sites.
 pub fn perlin_2d_periodic(x: f32, y: f32, seed: u32, period: Option<i32>) -> f32 {
+    perlin_2d_periodic_xy(x, y, seed, period.map(|p| (p, p)))
+}
+
+/// [`perlin_2d_periodic`] on a lattice that wraps at a different period in
+/// each axis.
+///
+/// What a *stretched* field needs. Sampling one axis at a lower frequency than
+/// the other is how anisotropy is produced, and a single square period then
+/// cannot wrap both axes at the edge of the same tile: the best a common
+/// period can do is divide both frequencies, which tiles the field several
+/// times over within the texture and prints rows of repeated features.
+pub fn perlin_2d_periodic_xy(x: f32, y: f32, seed: u32, period: Option<(i32, i32)>) -> f32 {
     let xi = x.floor();
     let yi = y.floor();
     let xf = x - xi;
@@ -295,15 +311,42 @@ pub fn fbm_perlin_2d_periodic(
     seed: u32,
     period: Option<i32>,
 ) -> f32 {
+    fbm_perlin_2d_periodic_xy(
+        x,
+        y,
+        octaves,
+        persistence,
+        lacunarity,
+        seed,
+        period.map(|p| (p, p)),
+    )
+}
+
+/// [`fbm_perlin_2d_periodic`] over [`perlin_2d_periodic_xy`], for a field
+/// sampled at a different frequency in each axis.
+pub fn fbm_perlin_2d_periodic_xy(
+    x: f32,
+    y: f32,
+    octaves: u32,
+    persistence: f32,
+    lacunarity: f32,
+    seed: u32,
+    period: Option<(i32, i32)>,
+) -> f32 {
     let mut total = 0.0;
     let mut amplitude = 1.0;
     let mut frequency = 1.0;
     let mut max_value = 0.0;
 
     for i in 0..octaves {
-        let octave_period = period.map(|p| (p as f32 * frequency) as i32);
-        total +=
-            perlin_2d_periodic(x * frequency, y * frequency, seed + i, octave_period) * amplitude;
+        let octave_period = period.map(|(px, py)| {
+            (
+                (px as f32 * frequency) as i32,
+                (py as f32 * frequency) as i32,
+            )
+        });
+        total += perlin_2d_periodic_xy(x * frequency, y * frequency, seed + i, octave_period)
+            * amplitude;
         max_value += amplitude;
         amplitude *= persistence;
         frequency *= lacunarity;

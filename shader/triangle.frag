@@ -27,8 +27,8 @@ layout(location = 0) out vec4 outColor;
 
 layout(set = 1, binding = 0) uniform sampler2D texSampler;
 
-/// The shared grain atlas: RG is stone microstructure, BA is wood fibre, both
-/// as tangent-space slopes. One texture for every material in the scene — see
+/// The shared grain atlas: RG is stone microstructure, BA is directional
+/// fibre, both as tangent-space slopes. One texture for every material in the scene — see
 /// src/rendering/grain.rs.
 layout(set = 0, binding = 4) uniform sampler2D grainSampler;
 

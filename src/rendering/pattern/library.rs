@@ -255,49 +255,103 @@ pub const SLATE: Pattern = Pattern {
     ],
 };
 
-/// Frozen water: what is *inside* the block rather than on its face.
+/// Frozen water: the fracture structure inside the block, and the frost on it.
 ///
-/// The only pattern here that is not a surface. Everything else describes a
-/// face a finger could run along; ice is clear, so what the eye reads is the
-/// trapped air and the fracture planes some depth behind it. That makes the
-/// recipe unusually sparse — a near-uniform tile with a few features in it —
-/// and it has to be, because this texture is seen through its own Fresnel
-/// coverage and anything busy turns to grey haze.
+/// The only pattern here that is mostly not a surface. Everything else
+/// describes a face a finger could run along; ice is clear, so most of what
+/// the eye reads is trapped air and fracture planes some depth behind the
+/// face. The exception is the frost, which is the one thing here that really
+/// does sit on the outside — and it is what stops a clear block reading as
+/// glass, because glass has no equivalent.
+///
+/// Three scales, and all three are load-bearing:
+///
+/// ```text
+///   clouding ── broad, milky, tells you the block is not a window
+///   fracture ── streaked, bright, tells you it was frozen and not cast
+///   frost    ── white patches, tells you it is cold
+/// ```
 pub const ICE: Pattern = Pattern {
     name: "ice",
     layers: &[
-        // Density variation through the block: where it is clearer and where
-        // it has gone milky. Broad and gentle, or it reads as dirt.
+        // Density variation through the block: where it is clear and where it
+        // has gone milky. Broad, and strong enough to be seen through the
+        // block's own Fresnel coverage.
         Layer::Wash {
             scale: 2.0,
             octaves: 2,
             towards: Slot::Light,
-            amount: 0.35,
-        },
-        // Fracture planes. Sharp and bright rather than dark — a crack inside
-        // ice is an air gap, and an air gap reflects.
-        Layer::Vein {
-            scale: 5.0,
-            octaves: 2,
-            sharpness: 14.0,
-            amount: 0.6,
-            towards: Slot::Light,
+            amount: 0.55,
         },
         // Clouded cores where the freeze trapped air, towards the accent's
-        // deeper blue. The thing that gives the block a visible inside.
+        // deeper blue. The thing that gives the block a visible inside, and
+        // what the fracture planes are then drawn across.
         Layer::Patch {
             scale: 3.0,
             octaves: 2,
-            threshold: 0.56,
+            threshold: 0.54,
             span: 0.2,
-            amount: 0.45,
+            amount: 0.5,
             towards: Slot::Accent,
+        },
+        // Fracture planes. Bright rather than dark — a crack inside ice is an
+        // air gap, and an air gap reflects — and streaked rather than veined,
+        // because a freeze front advances in a direction and the flaws it
+        // leaves run with it. Isotropic cracks are what made the first pass at
+        // this read as cracked pottery.
+        //
+        // The frequency *along* the streak (scale / elongation) is the number
+        // that matters and the easy one to lose: take it below about four and
+        // the cracks stop being cracks and become the long smooth scallops of
+        // a single wave crossing the tile.
+        Layer::Streak {
+            scale: 11.0,
+            octaves: 3,
+            elongation: 4.0,
+            sharpness: 11.0,
+            amount: 0.85,
+            towards: Slot::Light,
+        },
+        // A second, finer family at a different frequency and a gentler
+        // stretch, so the fractures feather into each other and cross instead
+        // of running as one comb of parallel lines.
+        Layer::Streak {
+            scale: 22.0,
+            octaves: 2,
+            elongation: 3.0,
+            sharpness: 24.0,
+            amount: 0.45,
+            towards: Slot::Light,
+        },
+        // Frost: discrete, near-white, and on the outside. A high threshold
+        // over a narrow span is what keeps it in blooms with edges rather
+        // than spreading into more clouding — spread out, it just makes the
+        // whole block paler, which is the one thing that would not read as
+        // frost.
+        Layer::Patch {
+            scale: 6.0,
+            octaves: 4,
+            threshold: 0.57,
+            span: 0.07,
+            amount: 0.9,
+            towards: Slot::Light,
+        },
+        // Crystalline flecks, at the scale of individual frost crystals rather
+        // than of a bloom. Small and dense, and what keeps the frost from
+        // reading as an airbrushed cloud on close inspection.
+        Layer::Patch {
+            scale: 70.0,
+            octaves: 1,
+            threshold: 0.68,
+            span: 0.04,
+            amount: 0.35,
+            towards: Slot::Light,
         },
         // Frozen-in bubbles. Fine, faint, and the only high frequency here.
         Layer::Shade {
             scale: 18.0,
             octaves: 2,
-            amount: 0.04,
+            amount: 0.05,
         },
     ],
 };

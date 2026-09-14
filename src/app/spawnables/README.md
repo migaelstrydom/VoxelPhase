@@ -215,7 +215,7 @@ A material that lets light through is declared once, on its substance:
 ```rust
 pub const ICE: Substance = Substance {
     // ...
-    transparency: Transparency::ICE,   // opacity 0.18, refractive index 1.31
+    transparency: Transparency::ICE,   // opacity 0.62, refractive index 1.31
 };
 ```
 
@@ -234,6 +234,12 @@ Two things behave differently for a blended object, both of them deliberate:
   triangle wound outwards. On an opaque object a single inside-out triangle is
   invisible (it is culled); here it is not. Worth a test when you build the
   mesh by hand — see `ice_cube.rs`.
+
+What tells two transmissive materials apart is mostly *not* the index — ice
+and glass differ by 0.2 there and by a factor of five in opacity. Past that,
+it is the pattern: a clear material shows you whatever structure is inside it,
+so ice carries directional fracture planes (`Layer::Streak`) and white frost,
+and without them a block of ice at any opacity is a block of glass.
 
 Sorting is per draw, by distance to the mesh's centre, plus a back-faces-then-
 front-faces split within each mesh. That is exact for a convex shape. Two

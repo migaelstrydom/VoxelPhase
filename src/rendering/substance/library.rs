@@ -278,12 +278,19 @@ pub const ICE: Substance = Substance {
         roughness: 0.14,
         metallic: 0.0,
     },
-    grain: GrainSpec::DRESSED_STONE.with_scale(1.1).with_strength(0.1),
-    grain_by_uv: false,
-    // Pale blue-white, and an accent that goes *deeper* blue rather than
-    // darker grey: what a thick part of a block of ice looks like is more of
-    // the same colour, not a shadow.
-    palette: Palette::from_base_const(Colour::new(0.60, 0.79, 0.92, 1.0), 0.16)
+    // Directional, and addressed by UV so that the relief runs the same way as
+    // the fracture planes the pattern draws. Object-space projection would put
+    // the streaks along whichever world axis a face happened to point at, and
+    // change which one as the cube tumbles.
+    grain: GrainSpec::ICE,
+    grain_by_uv: true,
+    // Pale blue, with two slots doing jobs the base cannot. The light is white
+    // rather than a brighter blue, because that slot carries the frost and
+    // frost is the one part of a block of ice with no colour in it at all. The
+    // accent goes *deeper* blue rather than darker grey: a thick part of a
+    // block looks like more of the same colour, not like a shadow.
+    palette: Palette::from_base_const(Colour::new(0.58, 0.78, 0.91, 1.0), 0.16)
+        .with_light(Colour::new(0.95, 0.98, 1.0, 1.0))
         .with_accent(Colour::new(0.26, 0.55, 0.78, 1.0)),
     transparency: Transparency::ICE,
 };
@@ -291,6 +298,7 @@ pub const ICE: Substance = Substance {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rendering::grain::GrainLayer;
 
     /// Every substance in the library, for the invariants that must hold across
     /// all of them.
@@ -360,19 +368,6 @@ mod tests {
         }
     }
 
-    /// Timber is the only family whose grain has a direction.
-    #[test]
-    fn only_timber_addresses_its_grain_by_uv() {
-        for substance in ALL {
-            let is_timber = matches!(substance.name, "oak" | "pine");
-            assert_eq!(
-                substance.grain_by_uv, is_timber,
-                "{} disagrees about how its grain is addressed",
-                substance.name
-            );
-        }
-    }
-
     /// Substances exist to be told apart. Two that behave alike must still look
     /// different, and two that look alike must behave differently — otherwise
     /// one of them is redundant.
@@ -419,6 +414,27 @@ mod tests {
                 substance.transparency.is_blended(),
                 substance.name == "ice",
                 "{} disagrees about whether light passes through it",
+                substance.name
+            );
+        }
+    }
+
+    /// A grain with a direction has to be addressed by the mesh's own texture
+    /// coordinates, because the direction is a property of the object and an
+    /// object-space projection would run it along whichever world axis a face
+    /// happens to point at — and change which one as the object tumbles. The
+    /// two settings are declared independently, so nothing but this stops a
+    /// substance from pairing them wrongly.
+    #[test]
+    fn a_directional_grain_is_addressed_by_uv() {
+        for substance in ALL {
+            let directional = substance.grain.layer == GrainLayer::Fibre;
+            if !substance.grain.is_enabled() {
+                continue;
+            }
+            assert_eq!(
+                substance.grain_by_uv, directional,
+                "{} disagrees about how its grain is addressed",
                 substance.name
             );
         }
