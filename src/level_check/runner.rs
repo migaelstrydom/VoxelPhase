@@ -28,6 +28,7 @@ use super::reach::{JumpEnvelope, OPTIMISM_CAVEAT};
 use super::report::{Report, Section};
 use super::routes;
 use super::segments;
+use super::water;
 
 /// Generate and mesh a level's terrain without a graphics device.
 ///
@@ -58,6 +59,10 @@ pub fn check_level(level: &Level, level_path: &Path, terrain: &TerrainWorld) -> 
 
     let connections = segments::check_connections(level, &mut report);
     report.push_section(connections);
+
+    if let Some(section) = water::check_water(level, terrain, &mut report) {
+        report.push_section(section);
+    }
 
     segments::check_contention(terrain, &mut report);
     placement::check_player_spawn(level, terrain, &mut report);

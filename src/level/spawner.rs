@@ -186,18 +186,15 @@ fn resolve_water_cell_size(body_voxel_sizes: impl Iterator<Item = f32>, world_fi
     voxel_size * WATER_GRID_SCALE as f32
 }
 
-/// Create the water grids from the level's water configuration, if present.
+/// The dry flow grid a level's water is placed into.
 ///
-/// Returns both the coarse flow grid and the fine wave grid. Pool extents are
-/// determined by flood-filling from each body's seed point through terrain
-/// that is air at the target surface level.
-pub fn create_level_water(level: &Level, terrain: &TerrainWorld) -> Option<(WaterGrid, WaveGrid)> {
-    let water_config = level.water.as_ref()?;
-    let properties = WaterProperties::default();
-
-    // One world-space grid spanning the union of every segment, derived from the
-    // placed terrain rather than from any single segment's authored extent.
-    // Per-segment water grids are deferred; see the plan's open questions.
+/// One world-space grid spanning the union of every segment, derived from the
+/// placed terrain rather than from any single segment's authored extent.
+/// Per-segment water grids are deferred; see the plan's open questions.
+///
+/// Public so an offline check can fill one body at a time into a fresh grid
+/// and measure where it went, which the combined grid cannot say.
+pub fn empty_flow_grid(water_config: &WaterConfig, terrain: &TerrainWorld) -> WaterGrid {
     let bounds = *terrain.bounds();
     let cell_size = water_cell_size(water_config, terrain);
     let origin = nalgebra::Vector3::new(bounds.min.x, 0.0, bounds.min.z);
@@ -211,19 +208,38 @@ pub fn create_level_water(level: &Level, terrain: &TerrainWorld) -> Option<(Wate
         origin,
         ocean_level: water_config.ocean_level,
     };
-    let mut flow_grid = WaterGrid::new(flow_config, &properties);
+    WaterGrid::new(flow_config, &WaterProperties::default())
+}
 
-    for body in &water_config.bodies {
-        match body {
-            WaterBody::Pool {
-                seed,
-                surface_level,
-            } => {
-                crate::water::placer::fill_pool(&mut flow_grid, terrain, *seed, *surface_level);
-            }
+/// Place one authored body of water into a flow grid.
+pub fn fill_body(grid: &mut WaterGrid, terrain: &TerrainWorld, body: &WaterBody) {
+    match body {
+        WaterBody::Pool {
+            seed,
+            surface_level,
+        } => {
+            crate::water::placer::fill_pool(grid, terrain, *seed, *surface_level);
         }
     }
+}
 
+/// Create the water grids from the level's water configuration, if present.
+///
+/// Returns both the coarse flow grid and the fine wave grid. Pool extents are
+/// determined by flood-filling from each body's seed point through terrain
+/// that is air at the target surface level.
+pub fn create_level_water(level: &Level, terrain: &TerrainWorld) -> Option<(WaterGrid, WaveGrid)> {
+    let water_config = level.water.as_ref()?;
+    let properties = WaterProperties::default();
+
+    let mut flow_grid = empty_flow_grid(water_config, terrain);
+    for body in &water_config.bodies {
+        fill_body(&mut flow_grid, terrain, body);
+    }
+
+    let cell_size = flow_grid.cell_size();
+    let (grid_width, grid_depth) = flow_grid.dims();
+    let origin = flow_grid.origin();
     let wave_cell_size = WAVE_CELL_SIZE;
     let cells_per_flow_cell = (cell_size / wave_cell_size).round() as usize;
     let wave_dims = (

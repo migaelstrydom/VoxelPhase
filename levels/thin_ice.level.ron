@@ -9,7 +9,7 @@
 //      spawn      (drift)   gems, critter   ice wall                 peepers   GOAL
 //
 // Rules the geometry obeys:
-//   * Nowhere is the player trapped. Every shore is terraced in ≤ 1.2 m steps
+//   * Nowhere is the player trapped. Every shore is terraced in ≤ 1.6 m steps
 //     from the lake bed (3.0) to dry ground, so falling in costs a wade, not
 //     the run.
 //   * Water sits at 5.0. Floes are 1.2 m thick and draw 1.1 m, so their decks
@@ -25,7 +25,7 @@ Level(
             terrain: Terrain(
                 voxel_size: 1.0,
                 bounds: (min: (0.0, -32.0, 0.0), max: (128.0, 32.0, 96.0)),
-                base_height: 6.0,
+                base_height: 7.0,
                 material_layers: [
                     (depth: 1.0,   material: Limestone),
                     (depth: 3.0,   material: Ite),
@@ -33,7 +33,7 @@ Level(
                 ],
 
                 features: [
-                    TerrainRoughness(frequency: 0.05, amplitude: 0.8, octaves: 3, seed: 7),
+                    TerrainRoughness(frequency: 0.05, amplitude: 0.6, octaves: 3, seed: 7),
 
                     // The spawn ridge: hides the tarn until you crest it.
                     Hill(center: (8.0, 48.0), radius: 14.0, height: 3.0),
@@ -57,10 +57,8 @@ Level(
                     // The causeway east off the island, awash by half a metre.
                     Plateau(min: (82.0, 45.0), max: (100.0, 51.0), height: 5.6),
 
-                    // ── The shelf: 8 m above the east shore. ─────────────
+                    // ── The shelf: 7 m above the east shore. ─────────────
                     Plateau(min: (114.0, 28.0), max: (128.0, 68.0), height: 14.0),
-                    // A small frozen pond on the shelf, for the view.
-                    Crater(center: (121.0, 60.0), radius: 5.0, depth: 2.0),
                 ],
 
                 volumes: [
@@ -71,13 +69,13 @@ Level(
                     // The rock the off-route gem sits on.
                     Platform(center: (44.0, 5.6, 34.0), half_extents: (1.2, 1.2), thickness: 3.0),
 
-                    // The way up to the shelf: eight risers of a metre, which
+                    // The way up to the shelf: seven risers of a metre, which
                     // the player walks rather than jumps.
                     Staircase(
-                        from: (101.0, 6.0, 48.0),
+                        from: (101.0, 7.0, 48.0),
                         to: (114.0, 14.0, 48.0),
                         width: 6.0,
-                        steps: 8,
+                        steps: 7,
                         thickness: 2.0,
                         material: Limestone,
                     ),
@@ -155,13 +153,16 @@ Level(
     ],
 
     // On the far side of the spawn ridge, so the tarn is a reveal.
-    player_spawn: (6.0, 9.5, 48.0),
+    player_spawn: (6.0, 10.6, 48.0),
 
     water: Some((
         ocean_level: None,
         bodies: [
+            // The plain sits at 7 ± 0.6, two metres over the surface. A pool
+            // claims any cell with a sample at or under its level, so the
+            // margin between the water and the ground around it has to
+            // clear the roughness with room to spare or the fill escapes.
             Pool(seed: (45.0, 60.0), surface_level: 5.0),
-            Pool(seed: (121.0, 60.0), surface_level: 13.6),
         ],
     )),
 )
