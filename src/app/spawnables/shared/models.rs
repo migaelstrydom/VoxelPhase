@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use nalgebra::{Vector2, Vector3, Vector4};
+use nalgebra::{UnitQuaternion, Vector2, Vector3, Vector4};
 use smallvec::SmallVec;
 
 use crate::collision::convex_hull::{ConvexHull, HullFace};
@@ -11,6 +11,103 @@ use crate::model::{MeshPrimitive, Model, ModelPart};
 use crate::rendering::colour::Colour;
 use crate::rendering::material::MaterialId;
 use crate::rendering::vertex::Vertex;
+
+/// How one piece of a compound object is drawn: half-extents in, mesh out.
+///
+/// A compound body knows its pieces only as box colliders, which is enough to
+/// place them and not enough to draw them — an ice block and a table leg are
+/// the same box and do not look alike. A piece's owner supplies this once, and
+/// everything that has to rebuild the object later (the fracture system, when
+/// a piece breaks off) draws the pieces the way the owner draws them rather
+/// than as plain cuboids.
+/// The piece is passed whole rather than as its half-extents alone so that a
+/// mesh may vary with *where* the piece sits — which is how an object made of
+/// many identical blocks avoids showing the same markings on every one.
+pub type PieceMesh = fn(&PiecePlacement) -> (Vec<Vertex>, Vec<u32>);
+
+/// The default [`PieceMesh`]: a plain box.
+pub fn cuboid_mesh(piece: &PiecePlacement) -> (Vec<Vertex>, Vec<u32>) {
+    (
+        generate_cube_vertices(piece.half_extents, Colour::WHITE),
+        generate_cube_indices(),
+    )
+}
+
+/// Where one piece of a compound object sits in the body's frame.
+#[derive(Clone, Copy)]
+pub struct PiecePlacement {
+    pub half_extents: Vector3<f32>,
+    pub offset: Vector3<f32>,
+    pub rotation: UnitQuaternion<f32>,
+}
+
+impl PiecePlacement {
+    pub fn new(half_extents: Vector3<f32>, offset: Vector3<f32>) -> Self {
+        Self {
+            half_extents,
+            offset,
+            rotation: UnitQuaternion::identity(),
+        }
+    }
+
+    pub fn rotated(mut self, rotation: UnitQuaternion<f32>) -> Self {
+        self.rotation = rotation;
+        self
+    }
+}
+
+/// Build one model from placed pieces, each drawn by `mesh`.
+///
+/// The general form of [`compound_cuboid_model`]: it keeps each piece's
+/// rotation, and it does not assume the pieces are boxes.
+pub fn compound_model(
+    pieces: &[PiecePlacement],
+    mesh: PieceMesh,
+    material: MaterialId,
+) -> Arc<Model> {
+    let mut all_vertices: Vec<Vertex> = Vec::new();
+    let mut all_indices: Vec<u32> = Vec::new();
+
+    for piece in pieces {
+        let (vertices, indices) = mesh(piece);
+        let base = all_vertices.len() as u32;
+        let rotation = piece.rotation.to_rotation_matrix();
+
+        all_vertices.extend(vertices.into_iter().map(|mut vertex| {
+            vertex.pos = rotation * vertex.pos + piece.offset;
+            vertex.normal = rotation * vertex.normal;
+            vertex
+        }));
+        all_indices.extend(indices.iter().map(|index| index + base));
+    }
+
+    let parts = vec![ModelPart::new(vec![MeshPrimitive {
+        vertices: all_vertices,
+        indices: all_indices,
+        material,
+    }])];
+
+    Arc::new(Model::flat(parts))
+}
+
+/// Build a single-piece model, drawn by `mesh`.
+///
+/// The piece stands on its own, so it is drawn as one at the origin: a block
+/// that has broken off an object is no longer anywhere within it.
+pub fn piece_model(
+    half_extents: Vector3<f32>,
+    mesh: PieceMesh,
+    material: MaterialId,
+) -> Arc<Model> {
+    let (vertices, indices) = mesh(&PiecePlacement::new(half_extents, Vector3::zeros()));
+    let parts = vec![ModelPart::new(vec![MeshPrimitive {
+        vertices,
+        indices,
+        material,
+    }])];
+
+    Arc::new(Model::flat(parts))
+}
 
 /// Build a single-box model with the given half-extents.
 pub fn cuboid_model(half_extents: Vector3<f32>, material: MaterialId) -> Arc<Model> {

@@ -16,28 +16,55 @@
 //! than a block, and a single slab caps what is left — which is how a real
 //! igloo ends too.
 //!
-//! **The blocks are fixed, not loose.** Ice has a friction coefficient of
-//! 0.06, the lowest of any substance in the library, so a corbelled dome of it
-//! has nothing whatsoever holding it up: the moment the simulation starts, an
-//! igloo of dynamic blocks slumps into a puddle of bricks. A standing igloo is
-//! a piece of the world, and the slipperiness is something the player meets on
-//! the outside of it.
+//! **The dome is one dynamic body, with the blocks welded into it as
+//! children.** Ice has a friction coefficient of 0.06, the lowest of any
+//! substance in the library, so a corbelled dome of separate blocks has
+//! nothing whatsoever holding it together: it slides apart the moment the
+//! simulation starts. Nothing about that says the igloo should be part of the
+//! *world*, though — a static shell keeps standing in mid-air after the ground
+//! under it is blown away. So the blocks are welded rather than fixed, the
+//! same way a table's legs are welded to its top:
+//!
+//! ```text
+//!   IglooDef::blocks ─┬─▶ colliders (offset + rotated) ─▶ one dynamic body
+//!                     ├─▶ compound_model  ─────────────▶ one draw
+//!                     └─▶ joints, block to block ──────▶ CompoundFracture
+//! ```
+//!
+//! [`CompoundFracture`] carries a joint between every pair of blocks that
+//! touch. A blast drops the joints within its reach, the system works out what
+//! is still connected to what, and whatever has come loose is spawned as
+//! separate bodies — so a grenade takes a hole out of the dome and leaves the
+//! rest of it standing. Short of a blast the igloo is rigid, which is the
+//! whole reason it can be a dome of frictionless bricks at all.
 
 use std::f32::consts::{PI, TAU};
 
 use nalgebra::{Matrix3, Point3, Rotation3, UnitQuaternion, Vector3};
 use serde::Deserialize;
-use specs::{Entity, World};
+use specs::{Builder, Entity, World, WorldExt};
 
+use super::super::shared::models::{compound_model, PiecePlacement};
 use super::super::shared::orientation::Yaw;
-use super::super::shared::textures::hash_pair;
+use super::super::shared::textures::seed_from_position;
 use super::super::{MaterialCtx, Spawnable};
-use super::block::{ice_materials, Anchorage, IceBlock};
+use super::block::{ice, ice_material, ice_piece_mesh};
+use crate::components::{
+    ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
+};
 use crate::core::error::EngineResult;
+use crate::fracture::{CompoundFracture, FractureJoint};
+use crate::physics::{ColliderDesc, RigidBodyDesc};
 use crate::rendering::material::MaterialId;
+use crate::rendering::substance::ColliderSubstance;
+use crate::systems::PhysicsResource;
 
-/// How many distinct ice textures a dome's blocks are drawn from.
-const TEXTURE_VARIANTS: usize = 4;
+/// How far apart two blocks of a course may be and still count as touching,
+/// as a fraction of their combined reach.
+///
+/// The joint left between neighbours is a few per cent of a block; a doorway
+/// is most of one. Anything between the two does as the dividing line.
+const ADJACENCY_SLACK: f32 = 0.25;
 
 /// How much wider than tall a block is, measured along the dome's surface.
 ///
@@ -85,6 +112,14 @@ pub struct IglooDef {
     /// `+X`, so this is the field that decides which way you can walk in.
     #[serde(default)]
     pub yaw: f32,
+
+    /// Blast impulse, in N·s at a block, that tears that block's joints.
+    ///
+    /// A grenade delivers about 1100 N·s at its centre and falls off to
+    /// nothing over its blast radius, so the default is a hole around the
+    /// point of impact rather than the whole dome at once.
+    #[serde(default = "IglooDef::default_fracture_threshold")]
+    pub fracture_threshold: f32,
 }
 
 impl IglooDef {
@@ -108,6 +143,10 @@ impl IglooDef {
         1.2
     }
 
+    pub fn default_fracture_threshold() -> f32 {
+        420.0
+    }
+
     /// Radius of the surface every block's centre sits on.
     fn mid_radius(&self) -> f32 {
         (self.radius - self.wall_thickness * 0.5).max(self.wall_thickness)
@@ -125,6 +164,9 @@ impl IglooDef {
 
         let mut blocks = Vec::new();
         let mut open_radius = mid;
+        // Courses actually laid, which is not `rings`: the loop stops early
+        // when the hole left at the top is smaller than a block.
+        let mut courses = 0;
 
         for ring in 0..rings {
             let elevation = (ring as f32 + 0.5) * ring_arc;
@@ -169,14 +211,16 @@ impl IglooDef {
                         half_thickness,
                     ),
                     rotation: surface_frame(elevation, arc.centre),
-                    variant: hash_pair(ring as i32, index as i32) as usize,
+                    ring,
+                    arc,
                 });
             }
 
             open_radius = mid * ((ring + 1) as f32 * ring_arc).cos();
+            courses = ring + 1;
         }
 
-        blocks.push(self.cap(&blocks, open_radius, half_thickness));
+        blocks.push(self.cap(&blocks, open_radius, half_thickness, courses));
         blocks
     }
 
@@ -235,7 +279,13 @@ impl IglooDef {
     /// Laid on top of the rim rather than into it: the exact height of the
     /// last course's upper corners is where its underside goes, so the cap
     /// rests on the dome instead of growing through it.
-    fn cap(&self, blocks: &[DomeBlock], open_radius: f32, half_thickness: f32) -> DomeBlock {
+    fn cap(
+        &self,
+        blocks: &[DomeBlock],
+        open_radius: f32,
+        half_thickness: f32,
+        courses: usize,
+    ) -> DomeBlock {
         let rim = blocks
             .iter()
             .map(DomeBlock::top)
@@ -246,38 +296,130 @@ impl IglooDef {
             centre: Point3::new(0.0, rim + half_thickness, 0.0),
             half_extents: Vector3::new(half_width, half_thickness, half_width),
             rotation: UnitQuaternion::identity(),
-            variant: blocks.len(),
+            // The course above the last one laid, covering the whole circle —
+            // which is what makes it meet every block of the course below when
+            // the joints are worked out.
+            ring: courses,
+            arc: Arc {
+                centre: 0.0,
+                half_angle: PI,
+            },
         }
     }
 }
 
 impl Spawnable for IglooDef {
     fn material_count(&self) -> usize {
-        TEXTURE_VARIANTS
+        1
     }
 
     fn create_materials(&self, ctx: &mut MaterialCtx) -> EngineResult<Vec<MaterialId>> {
-        ice_materials(ctx, self.pos, TEXTURE_VARIANTS)
+        Ok(vec![ice_material(ctx, seed_from_position(self.pos, 0))?])
     }
 
     fn spawn(&self, world: &mut World, materials: &[MaterialId]) -> Vec<Entity> {
-        let yaw = Yaw::degrees(self.yaw);
+        let blocks = self.blocks();
+        if blocks.is_empty() {
+            return Vec::new();
+        }
 
-        self.blocks()
-            .into_iter()
+        // The body's origin goes on the dome's centre of mass, not on the
+        // floor centre it was authored from. A body that pivots anywhere else
+        // carries the inertia of an arm that is not there, and an igloo whose
+        // ground is blown out from under it would tip about a point in the
+        // air above its own doorway.
+        let centre_of_mass = mass_centre(&blocks);
+        let yaw = Yaw::degrees(self.yaw);
+        let origin = yaw.place(self.pos, centre_of_mass.coords);
+
+        let pieces: Vec<PiecePlacement> = blocks
+            .iter()
             .map(|block| {
-                let centre = yaw.place(self.pos, block.centre.coords);
-                IceBlock::new(
-                    centre,
-                    block.half_extents,
-                    materials[block.variant % materials.len()],
-                )
-                .rotated(yaw.rotation() * block.rotation)
-                .anchored(Anchorage::Fixed)
-                .spawn(world)
+                PiecePlacement::new(block.half_extents, block.centre - centre_of_mass)
+                    .rotated(block.rotation)
             })
-            .collect()
+            .collect();
+
+        let substance = ice();
+        let model = compound_model(&pieces, ice_piece_mesh, materials[0]);
+
+        let body_handle = {
+            let mut physics = world.write_resource::<PhysicsResource>();
+
+            let body_handle = physics.world.create_body(
+                RigidBodyDesc::dynamic()
+                    .position(origin)
+                    .rotation(yaw.rotation())
+                    .gravity_scale(1.0)
+                    .linear_damping(0.01)
+                    .angular_damping(0.005),
+            );
+
+            for piece in &pieces {
+                physics.world.attach_collider(
+                    body_handle,
+                    ColliderDesc::box_shape(piece.half_extents)
+                        .of(&substance)
+                        .offset_translation(piece.offset)
+                        .offset_rotation(piece.rotation),
+                );
+            }
+
+            body_handle
+        };
+
+        vec![world
+            .create_entity()
+            .with(Position(origin.coords))
+            .with(Velocity(Vector3::zeros()))
+            .with(Orientation(yaw.rotation()))
+            .with(RigidBodyComponent(body_handle))
+            .with(ModelInstance::new(model))
+            .with(Renderable)
+            .with(
+                CompoundFracture::boxes(self.joints(&blocks), blocks.len(), materials[0])
+                    .with_piece_mesh(ice_piece_mesh),
+            )
+            .build()]
     }
+}
+
+impl IglooDef {
+    /// Which blocks hold which others up, and how hard they have to be hit to
+    /// stop doing so.
+    ///
+    /// One joint per pair of touching blocks, so the dome comes apart where it
+    /// was struck: the fracture system drops the joints inside the blast,
+    /// works out what is still connected to what, and lets the rest fall.
+    fn joints(&self, blocks: &[DomeBlock]) -> Vec<FractureJoint> {
+        let mut joints = Vec::new();
+        for (index, block) in blocks.iter().enumerate() {
+            for (other_index, other) in blocks.iter().enumerate().skip(index + 1) {
+                if block.adjoins(other) {
+                    joints.push(FractureJoint {
+                        child_a: index,
+                        child_b: other_index,
+                        threshold: self.fracture_threshold,
+                    });
+                }
+            }
+        }
+        joints
+    }
+}
+
+/// The centre of mass of a set of blocks, which all share one density.
+fn mass_centre(blocks: &[DomeBlock]) -> Point3<f32> {
+    let mut volume = 0.0;
+    let mut weighted = Vector3::zeros();
+    for block in blocks {
+        volume += block.volume();
+        weighted += block.centre.coords * block.volume();
+    }
+    if volume <= 0.0 {
+        return Point3::origin();
+    }
+    Point3::from(weighted / volume)
 }
 
 /// A block's extent round its course, as an angle: where its centre sits and
@@ -307,18 +449,52 @@ struct DomeBlock {
     centre: Point3<f32>,
     half_extents: Vector3<f32>,
     rotation: UnitQuaternion<f32>,
-    variant: usize,
+    /// Which course it belongs to, counted from the ground.
+    ring: usize,
+    /// Where it sits round that course.
+    arc: Arc,
 }
 
 impl DomeBlock {
+    /// Mass, up to the constant density every block shares.
+    fn volume(&self) -> f32 {
+        8.0 * self.half_extents.x * self.half_extents.y * self.half_extents.z
+    }
+
+    /// Whether two blocks touch, and so hold each other up.
+    ///
+    /// Two answers in one: blocks of the same course are neighbours when the
+    /// gap between their ends is a joint rather than a doorway, and blocks of
+    /// consecutive courses are neighbours when one sits over the other.
+    fn adjoins(&self, other: &DomeBlock) -> bool {
+        let reach = self.arc.half_angle + other.arc.half_angle;
+        let separation = signed_azimuth(other.arc.centre - self.arc.centre).abs();
+
+        match self.ring.abs_diff(other.ring) {
+            0 => separation - reach < reach * ADJACENCY_SLACK,
+            1 => separation < reach,
+            _ => false,
+        }
+    }
+
     /// The highest point of the block, which is what the next thing stacked on
     /// the dome has to clear.
     fn top(&self) -> f32 {
+        self.centre.y + self.vertical_reach()
+    }
+
+    /// The lowest point of the block: where the dome meets the ground.
+    #[cfg(test)]
+    fn bottom(&self) -> f32 {
+        self.centre.y - self.vertical_reach()
+    }
+
+    /// How far the block reaches above and below its centre once turned.
+    fn vertical_reach(&self) -> f32 {
         let axes = self.rotation.to_rotation_matrix();
-        let reach: f32 = (0..3)
+        (0..3)
             .map(|axis| (axes[(1, axis)] * self.half_extents[axis]).abs())
-            .sum();
-        self.centre.y + reach
+            .sum()
     }
 }
 
@@ -366,6 +542,11 @@ fn signed_azimuth(azimuth: f32) -> f32 {
 mod tests {
     use super::*;
 
+    use crate::debug::DebugLines;
+    use crate::physics::bench_harness::geometry::FlatQuadGeometry;
+    use crate::physics::{PhysicsConfig, PhysicsWorld};
+    use crate::rendering::material::MaterialId;
+
     fn igloo() -> IglooDef {
         IglooDef {
             pos: (0.0, 0.0, 0.0),
@@ -375,6 +556,7 @@ mod tests {
             door_width: IglooDef::default_door_width(),
             door_height: IglooDef::default_door_height(),
             yaw: 0.0,
+            fracture_threshold: IglooDef::default_fracture_threshold(),
         }
     }
 
@@ -476,11 +658,132 @@ mod tests {
         );
     }
 
-    /// A dome of a few hundred bodies is a level's whole budget spent on one
+    /// A dome of a few hundred pieces is a level's whole budget spent on one
     /// prop. The default igloo must stay well under that.
     #[test]
     fn the_default_igloo_is_a_prop_not_a_level() {
         let count = igloo().blocks().len();
         assert!((40..=140).contains(&count), "{count} blocks");
+    }
+
+    /// Every block must be joined to the rest, or the dome starts the level
+    /// already in pieces: the fracture system splits off anything that is not
+    /// connected to the largest group the first time it is disturbed.
+    #[test]
+    fn the_dome_is_one_connected_structure() {
+        let igloo = igloo();
+        let blocks = igloo.blocks();
+        let fracture = CompoundFracture::boxes(igloo.joints(&blocks), blocks.len(), MaterialId(0));
+
+        let components = fracture.connected_components();
+        assert_eq!(
+            components.len(),
+            1,
+            "the dome falls into {} pieces before anything touches it",
+            components.len()
+        );
+    }
+
+    /// The doorway must not be bridged. Two blocks either side of it are not
+    /// holding each other up, and a joint saying they are would keep the
+    /// jambs standing after the wall between them had gone.
+    #[test]
+    fn nothing_reaches_across_the_doorway() {
+        let igloo = igloo();
+        let blocks = igloo.blocks();
+
+        for joint in igloo.joints(&blocks) {
+            let (a, b) = (&blocks[joint.child_a], &blocks[joint.child_b]);
+            if a.ring != b.ring || a.centre.y > igloo.door_height {
+                continue;
+            }
+            let gap = signed_azimuth(b.arc.centre - a.arc.centre).abs()
+                - a.arc.half_angle
+                - b.arc.half_angle;
+            assert!(
+                gap * a.centre.coords.xz().norm() < igloo.door_width * 0.5,
+                "a joint spans a gap of {gap} rad at door height"
+            );
+        }
+    }
+
+    /// The igloo must stand on the floor it was authored at: buried in it and
+    /// the solver spends the level pushing it out, floating above it and it
+    /// drops the moment the level starts.
+    #[test]
+    fn the_dome_stands_on_its_authored_floor() {
+        let foot = igloo()
+            .blocks()
+            .iter()
+            .map(DomeBlock::bottom)
+            .fold(f32::MAX, f32::min);
+        assert!(foot.abs() < 0.05, "the dome's lowest block sits at {foot}");
+    }
+
+    /// The whole point of the dome being one body: dropped on a floor it
+    /// stands there, rather than sinking into it or squirming.
+    ///
+    /// Ice grips almost nothing — a coefficient of 0.06 — so a dome of loose
+    /// blocks slides itself apart, and this is the test that says the object
+    /// in the level is not that.
+    #[test]
+    fn the_dome_stands_where_it_was_put() {
+        const DT: f32 = 1.0 / 60.0;
+
+        let blocks = igloo().blocks();
+        let origin = mass_centre(&blocks);
+
+        let mut world = PhysicsWorld::new(PhysicsConfig::default());
+        let body = world.create_body(RigidBodyDesc::dynamic().position(origin));
+        for block in &blocks {
+            world.attach_collider(
+                body,
+                ColliderDesc::box_shape(block.half_extents)
+                    .of(&ice())
+                    .offset_translation(block.centre - origin)
+                    .offset_rotation(block.rotation),
+            );
+        }
+        world.wake_body(body);
+
+        let floor = FlatQuadGeometry::new(20.0);
+        let mut debug = DebugLines::default();
+        for _ in 0..120 {
+            world.update_contacts(DT, 1, &floor, &[], &mut debug);
+            world.substep(DT, &floor, &[]);
+        }
+
+        let settled = world.body(body).expect("the igloo").position();
+        assert!(
+            (settled.y - origin.y).abs() < 0.05,
+            "the dome moved {:.3} m vertically",
+            settled.y - origin.y
+        );
+        assert!(
+            (settled - origin).xz().norm() < 0.05,
+            "the dome slid {:.3} m sideways",
+            (settled - origin).xz().norm()
+        );
+    }
+
+    /// The body origin has to be the centre of mass. Anywhere else and the
+    /// dome pivots about a phantom point when the ground goes out from under
+    /// it — the failure the fracture system re-centres to avoid.
+    #[test]
+    fn the_origin_is_the_centre_of_mass() {
+        let blocks = igloo().blocks();
+        let centre = mass_centre(&blocks);
+
+        let mut residual = Vector3::zeros();
+        let mut volume = 0.0;
+        for block in &blocks {
+            residual += (block.centre - centre) * block.volume();
+            volume += block.volume();
+        }
+        assert!((residual / volume).norm() < 1e-4, "{residual:?}");
+
+        // And it is inside the dome, above the floor: a sanity check that the
+        // weighting is by volume and not by block count.
+        assert!(centre.y > 0.0 && centre.y < igloo().radius);
     }
 }

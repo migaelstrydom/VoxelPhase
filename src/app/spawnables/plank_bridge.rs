@@ -289,11 +289,7 @@ impl Spawnable for PlankBridgeDef {
             });
         }
 
-        let fracture = CompoundFracture {
-            joints,
-            child_count: self.child_count(),
-            material: plank_mat,
-        };
+        let fracture = CompoundFracture::boxes(joints, self.child_count(), plank_mat);
 
         vec![world
             .create_entity()

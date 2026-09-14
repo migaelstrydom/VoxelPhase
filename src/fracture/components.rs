@@ -2,6 +2,7 @@
 
 use specs::{Component, VecStorage};
 
+use crate::app::spawnables::shared::models::{cuboid_mesh, PieceMesh};
 use crate::rendering::material::MaterialId;
 
 /// A structural joint between two children of a compound body.
@@ -39,9 +40,33 @@ pub struct CompoundFracture {
     /// Rendering material for building models of detached pieces
     /// and rebuilding the remaining compound model.
     pub material: MaterialId,
+    /// How one child is drawn.
+    ///
+    /// The system knows a child only as a box collider, which is where it is
+    /// and not what it looks like. Without this, every object came apart into
+    /// plain cuboids — and an object whose children are *not* plain cuboids
+    /// changed shape at the moment it broke, which is the one moment the
+    /// player is looking at it.
+    pub piece_mesh: PieceMesh,
 }
 
 impl CompoundFracture {
+    /// A destructible compound whose children are plain boxes.
+    pub fn boxes(joints: Vec<FractureJoint>, child_count: usize, material: MaterialId) -> Self {
+        Self {
+            joints,
+            child_count,
+            material,
+            piece_mesh: cuboid_mesh,
+        }
+    }
+
+    /// The same, for children with a shape of their own.
+    pub fn with_piece_mesh(mut self, piece_mesh: PieceMesh) -> Self {
+        self.piece_mesh = piece_mesh;
+        self
+    }
+
     /// Compute connected components from the surviving joints.
     /// Returns a list of components, each a sorted list of child indices.
     pub fn connected_components(&self) -> Vec<Vec<usize>> {

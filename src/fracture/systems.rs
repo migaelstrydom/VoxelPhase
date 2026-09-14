@@ -4,7 +4,9 @@ use nalgebra::{Point3, Vector3};
 use specs::{Builder, Entities, Join, Read, System, WriteStorage};
 
 use super::components::CompoundFracture;
-use crate::app::spawnables::shared::models::{compound_cuboid_model, cuboid_model};
+use crate::app::spawnables::shared::models::{
+    compound_model, piece_model, PieceMesh, PiecePlacement,
+};
 use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
 };
@@ -101,6 +103,7 @@ impl<'a> System<'a> for FractureSystem {
                 continue;
             };
             let material = fracture.material;
+            let piece_mesh = fracture.piece_mesh;
 
             // Break joints where the impulse at either endpoint exceeds the
             // joint's threshold — joints far from the blast survive.
@@ -197,6 +200,7 @@ impl<'a> System<'a> for FractureSystem {
                         &lazy,
                         info,
                         material,
+                        piece_mesh,
                         body_ang_vel,
                         last_impulses,
                     );
@@ -218,6 +222,7 @@ impl<'a> System<'a> for FractureSystem {
                 trigger.body_handle,
                 trigger.entity,
                 material,
+                piece_mesh,
                 &mut models,
             );
         }
@@ -268,12 +273,14 @@ fn snapshot_child(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_freed_piece(
     physics: &mut PhysicsResource,
     entities: &Entities,
     lazy: &specs::LazyUpdate,
     info: &ChildSnapshot,
     material: crate::rendering::material::MaterialId,
+    piece_mesh: PieceMesh,
     body_ang_vel: Vector3<f32>,
     impulse_sources: &[crate::physics::PhysicsImpulse],
 ) {
@@ -303,7 +310,7 @@ fn spawn_freed_piece(
         .attach_collider(new_body_handle, new_collider_desc);
 
     let piece_model = match &info.shape {
-        ColliderShape::Box { half_extents } => cuboid_model(*half_extents, material),
+        ColliderShape::Box { half_extents } => piece_model(*half_extents, piece_mesh, material),
         _ => return,
     };
 
@@ -322,6 +329,7 @@ fn rebuild_compound_model(
     body_handle: crate::physics::RigidBodyHandle,
     entity: specs::Entity,
     material: crate::rendering::material::MaterialId,
+    piece_mesh: PieceMesh,
     models: &mut WriteStorage<ModelInstance>,
 ) {
     let Some(body) = physics.world.body(body_handle) else {
@@ -337,6 +345,7 @@ fn rebuild_compound_model(
                 _ => return None,
             };
             let offset = c.offset().translation.vector;
+            let rotation = c.offset().rotation;
             if !he.x.is_finite()
                 || !he.y.is_finite()
                 || !he.z.is_finite()
@@ -351,14 +360,17 @@ fn rebuild_compound_model(
                 );
                 return None;
             }
-            Some((he, offset))
+            // Rotation carried through: a child that was laid at an angle
+            // must still be at that angle after the break, or an object made
+            // of tilted pieces straightens itself out the moment it loses one.
+            Some(PiecePlacement::new(he, offset).rotated(rotation))
         })
         .collect();
 
     if remaining.is_empty() {
         return;
     }
-    let new_model = compound_cuboid_model(&remaining, material);
+    let new_model = compound_model(&remaining, piece_mesh, material);
 
     if let Some(model_inst) = models.get_mut(entity) {
         model_inst.model = new_model;

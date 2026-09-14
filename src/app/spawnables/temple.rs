@@ -378,8 +378,8 @@ impl Spawnable for TempleDef {
             bh
         };
 
-        let stylobate_fracture = CompoundFracture {
-            joints: vec![
+        let stylobate_fracture = CompoundFracture::boxes(
+            vec![
                 FractureJoint {
                     child_a: 0,
                     child_b: 1,
@@ -391,9 +391,9 @@ impl Spawnable for TempleDef {
                     threshold: 50000.0,
                 },
             ],
-            child_count: 3,
-            material: stone,
-        };
+            3,
+            stone,
+        );
 
         entities.push(
             world

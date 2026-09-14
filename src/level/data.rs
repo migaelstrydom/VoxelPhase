@@ -832,6 +832,9 @@ pub enum LevelObject {
         /// Rotation about `+Y` in degrees; the doorway faces its own `+X`.
         #[serde(default)]
         yaw: f32,
+        /// Blast impulse, in N·s at a block, that tears that block free.
+        #[serde(default = "IglooDef::default_fracture_threshold")]
+        fracture_threshold: f32,
     },
     /// Vertical stack — auto-computes Y positions bottom-up from base.
     Stack {
@@ -1999,6 +2002,7 @@ impl LevelObject {
                 door_width,
                 door_height,
                 yaw,
+                fracture_threshold,
             } => Box::new(IglooDef {
                 pos: *pos,
                 radius: *radius,
@@ -2007,6 +2011,7 @@ impl LevelObject {
                 door_width: *door_width,
                 door_height: *door_height,
                 yaw: *yaw,
+                fracture_threshold: *fracture_threshold,
             }),
 
             LevelObject::HeavyCrate { pos, size } => Box::new(HeavyCrateDef {

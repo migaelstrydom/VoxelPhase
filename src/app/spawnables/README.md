@@ -378,9 +378,35 @@ value must match or you get a one-frame visual pop.
 
 - **Separate entities** (house, temple): each piece is an independent rigid body.
   Any piece can be knocked loose. Simpler to set up.
-- **Compound bodies** (table, plank bridge): one physics body with multiple
-  colliders at offsets. Add `CompoundFracture` + `FractureJoint`s if you want
-  pieces to break apart under force.
+- **Compound bodies** (table, plank bridge, igloo): one physics body with
+  multiple colliders at offsets. Build it with `CompoundFracture::boxes(joints,
+  child_count, material)` if you want pieces to break apart under force.
+
+A compound body is the answer whenever a structure has to stay standing but
+must not be part of the world. A static body never falls — blow the terrain out
+from under a static shell and it hangs in the air — while a pile of separate
+dynamic bodies only stands if friction holds it together, which for ice
+(coefficient 0.06) it does not. One dynamic body with welded children is rigid
+until something breaks it, and falls the moment its ground goes.
+
+Two things to know when you build one:
+
+- **Put the body origin on the centre of mass.** Colliders are offset from the
+  origin, and a body that pivots anywhere but its centre of mass carries the
+  inertia of an arm that is not there. `PhysicsWorld::recenter_on_colliders`
+  fixes one up after the fact; authoring the offsets around the centre of mass
+  in the first place is better, because then the model matches.
+- **Supply a `piece_mesh` if the children are not plain boxes.** The fracture
+  system knows a child only as a box collider, which says where it is and not
+  what it looks like. `CompoundFracture::boxes(...).with_piece_mesh(my_mesh)`
+  is what stops the object changing shape at the moment it breaks — see
+  `ice/igloo.rs`, whose children are bevelled ice blocks.
+
+`FractureJoint::threshold` is measured against the **blast impulse at the
+child**, in N·s, not against contact forces: a grenade delivers about 1100 N·s
+at its centre, falling off linearly to nothing at its blast radius. So a
+threshold of a few hundred means "a grenade within a few metres frees this
+piece", and nothing a body merely leans on will ever break a joint.
 
 ### Realistic densities (kg/m^3)
 

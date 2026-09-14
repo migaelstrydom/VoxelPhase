@@ -167,8 +167,8 @@ impl Spawnable for TableDef {
         // 5 children: [0] top slab, [1..4] legs.
         // 4 joints: each leg connects to the top.
         let joint_threshold = 10.0;
-        let fracture = CompoundFracture {
-            joints: vec![
+        let fracture = CompoundFracture::boxes(
+            vec![
                 FractureJoint {
                     child_a: 0,
                     child_b: 1,
@@ -190,9 +190,9 @@ impl Spawnable for TableDef {
                     threshold: joint_threshold,
                 },
             ],
-            child_count: 5,
-            material: materials[0],
-        };
+            5,
+            materials[0],
+        );
 
         vec![world
             .create_entity()

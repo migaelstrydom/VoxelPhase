@@ -28,6 +28,7 @@ use std::sync::Arc;
 use nalgebra::{Point3, UnitQuaternion, Vector2, Vector3};
 use specs::{Builder, Entity, World, WorldExt};
 
+use super::super::shared::models::PiecePlacement;
 use super::super::shared::textures::seed_from_position;
 use super::super::MaterialCtx;
 use crate::components::{
@@ -97,22 +98,6 @@ pub fn ice() -> Substance {
     substance::ICE
 }
 
-/// Whether a block is loose in the world or part of a standing structure.
-///
-/// Ice has a friction coefficient of 0.06 — the lowest in the library — so a
-/// corbelled dome of ice blocks has nothing holding it together: the pieces
-/// slide off each other the instant they are let go. A structure of ice is
-/// therefore built from [`Anchorage::Fixed`] blocks, and the slipperiness is
-/// something the player meets on the outside of it rather than something that
-/// destroys it before they arrive.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Anchorage {
-    /// A dynamic body: falls, tumbles, can be pushed and grabbed.
-    Loose,
-    /// A static body: part of the world's fixed geometry.
-    Fixed,
-}
-
 /// One rectangular prism of ice, ready to be put into the world.
 pub struct IceBlock {
     /// Centre of the block, in world space.
@@ -123,8 +108,6 @@ pub struct IceBlock {
     pub rotation: UnitQuaternion<f32>,
     /// Which of the caller's materials this block wears.
     pub material: MaterialId,
-    /// Loose body or part of a standing structure.
-    pub anchorage: Anchorage,
 }
 
 impl IceBlock {
@@ -134,17 +117,11 @@ impl IceBlock {
             half_extents,
             rotation: UnitQuaternion::identity(),
             material,
-            anchorage: Anchorage::Loose,
         }
     }
 
     pub fn rotated(mut self, rotation: UnitQuaternion<f32>) -> Self {
         self.rotation = rotation;
-        self
-    }
-
-    pub fn anchored(mut self, anchorage: Anchorage) -> Self {
-        self.anchorage = anchorage;
         self
     }
 
@@ -156,17 +133,14 @@ impl IceBlock {
         let body_handle = {
             let mut physics = world.write_resource::<PhysicsResource>();
 
-            let desc = match self.anchorage {
-                Anchorage::Loose => RigidBodyDesc::dynamic()
+            let body_handle = physics.world.create_body(
+                RigidBodyDesc::dynamic()
                     .gravity_scale(1.0)
                     .linear_damping(0.01)
-                    .angular_damping(0.005),
-                Anchorage::Fixed => RigidBodyDesc::static_body(),
-            }
-            .position(self.centre)
-            .rotation(self.rotation);
-
-            let body_handle = physics.world.create_body(desc);
+                    .angular_damping(0.005)
+                    .position(self.centre)
+                    .rotation(self.rotation),
+            );
 
             // A box rather than the bevelled hull. The six faces of the mesh
             // sit exactly on the box, so a block resting on a face is resting
@@ -207,6 +181,35 @@ impl IceBlock {
 pub fn ice_block_mesh(half_extents: Vector3<f32>) -> (Vec<Vertex>, Vec<u32>) {
     let bevel = half_extents.min() * BEVEL_FRACTION;
     bevelled_box(half_extents, bevel)
+}
+
+/// The same mesh, for a block that is one piece of a larger object.
+///
+/// A compound object is many blocks of the same size, and a mesh that depends
+/// only on that size gives every one of them identical markings — a wall of
+/// forty bricks with the same crack in each. Offsetting the texture by where
+/// the piece sits makes the object read as ice that was carved into blocks
+/// rather than as one block printed forty times.
+pub fn ice_piece_mesh(piece: &PiecePlacement) -> (Vec<Vertex>, Vec<u32>) {
+    let (mut vertices, indices) = ice_block_mesh(piece.half_extents);
+    let offset = texture_offset(piece.offset);
+    for vertex in &mut vertices {
+        vertex.tex_coords += offset;
+    }
+    (vertices, indices)
+}
+
+/// How far through the pattern a piece at this offset starts.
+///
+/// Any injective-enough function of the offset would do; this one keeps
+/// neighbours a whole feature apart rather than a hair, which is what makes
+/// the difference visible.
+fn texture_offset(offset: Vector3<f32>) -> Vector2<f32> {
+    let scale = 0.5 / TEXTURE_HALF;
+    Vector2::new(
+        (offset.x + offset.y * 0.5) * scale,
+        (offset.z + offset.y * 0.5) * scale,
+    )
 }
 
 /// The block as a single-primitive model, ready for a `ModelInstance`.
