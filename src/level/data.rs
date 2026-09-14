@@ -27,11 +27,11 @@ use super::footprint::{Footprint, Support};
 use crate::app::creatures::{HeartCritterDef, PeeperDef, RollerDef};
 use crate::app::spawnables::{
     BananaDef, BeachBallDef, BoxDef, BoxWallDef, CapsuleDef, CrateDef, DodecahedronDef, DolosDef,
-    DominoDef, FencePostDef, GlowingOrbDef, HeavyCrateDef, HexPrismDef, HoneycombWallDef, HouseDef,
-    IceBoxDef, IceWallDef, IcosahedronDef, IglooDef, JackDef, JengaDef, MenhirDef,
-    MovingPlatformDef, OctahedronDef, PendulumDef, PlankBridgeDef, PlankDef, PlayWheelDef,
-    PyramidDef, SeesawDef, Spawnable, StackDef, StackItemDef, TableDef, TempleDef, TetrahedronDef,
-    TowerDef, TrampolineDef, TrilithonDef, VoussoirArchDef, BEACH_BALL_RADIUS,
+    DominoDef, FencePostDef, GemDef, GlowingOrbDef, GoalDef, HeavyCrateDef, HexPrismDef,
+    HoneycombWallDef, HouseDef, IceBoxDef, IceWallDef, IcosahedronDef, IglooDef, JackDef, JengaDef,
+    MenhirDef, MovingPlatformDef, OctahedronDef, PendulumDef, PlankBridgeDef, PlankDef,
+    PlayWheelDef, PyramidDef, SeesawDef, Spawnable, StackDef, StackItemDef, TableDef, TempleDef,
+    TetrahedronDef, TowerDef, TrampolineDef, TrilithonDef, VoussoirArchDef, BEACH_BALL_RADIUS,
 };
 use crate::platform::{DeckSuspension, RouteLoop};
 
@@ -727,6 +727,25 @@ pub enum LevelObject {
         #[serde(default)]
         glow: Option<f32>,
     },
+    /// A gem the player collects. Hangs where it is authored; nothing can move
+    /// it, and catching it counts towards the level's objective.
+    Gem {
+        pos: (f32, f32, f32),
+        /// Body and glow tint. Defaults to warm gold.
+        #[serde(default)]
+        colour: Option<(f32, f32, f32)>,
+    },
+    /// The beacon that ends the level.
+    Goal {
+        /// Ground point at the foot of the beacon.
+        pos: (f32, f32, f32),
+        /// Horizontal distance from `pos` that counts as arriving.
+        #[serde(default = "GoalDef::default_radius")]
+        radius: f32,
+        /// Gems that must be caught before the goal opens.
+        #[serde(default)]
+        required_gems: u32,
+    },
     /// Raw box with full control over dimensions, appearance, and physics.
     Box {
         pos: (f32, f32, f32),
@@ -1347,6 +1366,8 @@ impl LevelObject {
             LevelObject::Banana { pos, .. } => ("Banana", point(pos)),
             LevelObject::BeachBall { pos } => ("BeachBall", point(pos)),
             LevelObject::GlowingOrb { pos, .. } => ("GlowingOrb", point(pos)),
+            LevelObject::Gem { pos, .. } => ("Gem", point(pos)),
+            LevelObject::Goal { pos, .. } => ("Goal", point(pos)),
             LevelObject::Box { pos, .. } => ("Box", point(pos)),
             LevelObject::Plank { pos, .. } => ("Plank", point(pos)),
             LevelObject::Crate { pos, .. } => ("Crate", point(pos)),
@@ -1440,6 +1461,13 @@ impl LevelObject {
             },
             LevelObject::BeachBall { .. } => Point,
             LevelObject::GlowingOrb { .. } => Point,
+            // Hangs in the air and is never stood on; what it covers is the
+            // point it was authored at.
+            LevelObject::Gem { .. } => Point,
+            // The plinth is the part that touches the ground.
+            LevelObject::Goal { radius, .. } => Disc {
+                radius: radius * 0.55,
+            },
             LevelObject::Capsule { radius, .. } => Disc { radius: *radius },
             LevelObject::Tetrahedron { size, .. } => Disc { radius: *size },
             LevelObject::Octahedron { size, .. } => Disc { radius: *size },
@@ -1680,6 +1708,8 @@ impl LevelObject {
             // arbitrary anyway.
             LevelObject::BeachBall { .. }
             | LevelObject::GlowingOrb { .. }
+            | LevelObject::Gem { .. }
+            | LevelObject::Goal { .. }
             | LevelObject::Crate { .. }
             | LevelObject::HeavyCrate { .. }
             | LevelObject::Capsule { .. }
@@ -1754,6 +1784,8 @@ impl LevelObject {
             LevelObject::Banana { pos, .. } => p3(pos),
             LevelObject::BeachBall { pos } => p3(pos),
             LevelObject::GlowingOrb { pos, .. } => p3(pos),
+            LevelObject::Gem { pos, .. } => p3(pos),
+            LevelObject::Goal { pos, .. } => p3(pos),
             LevelObject::Box { pos, yaw, .. } => {
                 p3(pos);
                 *yaw += turn;
@@ -1881,6 +1913,21 @@ impl LevelObject {
                 pos: *pos,
                 colour: *colour,
                 glow: *glow,
+            }),
+
+            LevelObject::Gem { pos, colour } => Box::new(GemDef {
+                pos: *pos,
+                colour: *colour,
+            }),
+
+            LevelObject::Goal {
+                pos,
+                radius,
+                required_gems,
+            } => Box::new(GoalDef {
+                pos: *pos,
+                radius: *radius,
+                required_gems: *required_gems,
             }),
 
             LevelObject::Box {
@@ -2692,5 +2739,102 @@ mod orientation_tests {
             kinds,
             [Orientable::Symmetric, Orientable::Turns, Orientable::Fixed]
         );
+    }
+}
+
+#[cfg(test)]
+mod objective_tests {
+    use super::*;
+
+    /// The gem's only required field is where it hangs.
+    #[test]
+    fn a_gem_parses_with_only_a_position() {
+        let object: LevelObject =
+            ron::from_str("Gem(pos: (1.0, 2.0, 3.0))").expect("Gem should parse");
+
+        let LevelObject::Gem { pos, colour } = object else {
+            panic!("expected a Gem");
+        };
+        assert_eq!(pos, (1.0, 2.0, 3.0));
+        assert_eq!(colour, None, "an unauthored gem takes the default colour");
+    }
+
+    #[test]
+    fn a_gem_carries_an_authored_colour() {
+        let object: LevelObject =
+            ron::from_str("Gem(pos: (0.0, 1.0, 0.0), colour: Some((0.2, 0.6, 1.0)))")
+                .expect("Gem should parse");
+
+        let LevelObject::Gem { colour, .. } = object else {
+            panic!("expected a Gem");
+        };
+        assert_eq!(colour, Some((0.2, 0.6, 1.0)));
+    }
+
+    /// A goal with nothing but a position is a plain finish line: default
+    /// radius, no gems demanded.
+    #[test]
+    fn a_goal_falls_back_to_its_defaults() {
+        let object: LevelObject =
+            ron::from_str("Goal(pos: (4.0, 0.5, -2.0))").expect("Goal should parse");
+
+        let LevelObject::Goal {
+            pos,
+            radius,
+            required_gems,
+        } = object
+        else {
+            panic!("expected a Goal");
+        };
+        assert_eq!(pos, (4.0, 0.5, -2.0));
+        assert_eq!(radius, GoalDef::default_radius());
+        assert_eq!(required_gems, 0);
+    }
+
+    #[test]
+    fn a_goal_carries_its_gem_requirement() {
+        let object: LevelObject = ron::from_str("Goal(pos: (0.0, 0.0, 0.0), required_gems: 3)")
+            .expect("Goal should parse");
+
+        let LevelObject::Goal { required_gems, .. } = object else {
+            panic!("expected a Goal");
+        };
+        assert_eq!(required_gems, 3);
+    }
+
+    /// Both are yaw-invariant: a quarter turn of their segment changes nothing
+    /// about how they look or where they are collected from.
+    #[test]
+    fn the_objective_objects_are_symmetric() {
+        let gem = LevelObject::Gem {
+            pos: (0.0, 0.0, 0.0),
+            colour: None,
+        };
+        let goal = LevelObject::Goal {
+            pos: (0.0, 0.0, 0.0),
+            radius: 2.0,
+            required_gems: 0,
+        };
+
+        assert_eq!(gem.orientability(), Orientable::Symmetric);
+        assert_eq!(goal.orientability(), Orientable::Symmetric);
+    }
+
+    /// A goal moves with its segment like anything else.
+    #[test]
+    fn a_goal_is_lifted_into_world_coordinates() {
+        let frame = SegmentFrame::new(Point3::new(50.0, 0.0, -10.0), 0);
+        let mut goal = LevelObject::Goal {
+            pos: (2.0, 1.0, 3.0),
+            radius: 2.0,
+            required_gems: 1,
+        };
+        goal.place_in(&frame);
+
+        let LevelObject::Goal { pos, .. } = goal else {
+            unreachable!()
+        };
+        let expected = frame.to_world(Point3::new(2.0, 1.0, 3.0));
+        assert!((Point3::new(pos.0, pos.1, pos.2) - expected).norm() < 1e-4);
     }
 }

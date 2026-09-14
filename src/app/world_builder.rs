@@ -21,6 +21,7 @@ use crate::fire::light::FireLight;
 use crate::fracture::CompoundFracture;
 use crate::input::{GameplayActions, InputState};
 use crate::lighting::{ActiveLights, PointLight};
+use crate::objective::{GemMotion, Goal, LevelProgress};
 use crate::particles::{ParticleConfig, ParticleEmitter, ParticlePool};
 use crate::physics::PhysicsImpulseQueue;
 use crate::platform::MovingPlatform;
@@ -80,6 +81,8 @@ impl WorldBuilder {
         world.register::<CritterAnimator>();
         world.register::<PeeperAnimator>();
         world.register::<Collectable>();
+        world.register::<GemMotion>();
+        world.register::<Goal>();
         world.register::<FollowTarget>();
         world.register::<SensorSet>();
         world.register::<ContactCandidates>();
@@ -153,6 +156,7 @@ impl WorldBuilder {
         self.world.insert(PhysicsImpulseQueue::default());
         self.world.insert(ActiveLights::default());
         self.world.insert(DamageQueue::default());
+        self.world.insert(LevelProgress::default());
         self
     }
 

@@ -13,6 +13,7 @@ use specs::{
 use crate::components::Position;
 use crate::damage::Health;
 use crate::debug::DebugLines;
+use crate::objective::LevelProgress;
 use crate::player::Player;
 use crate::time::Time;
 
@@ -21,6 +22,8 @@ use crate::time::Time;
 pub enum Reward {
     /// Hit points, restored to the catcher.
     Heart { value: f32 },
+    /// One step towards the level's objective.
+    Gem,
 }
 
 /// Something the player collects by touching it.
@@ -48,6 +51,18 @@ impl Collectable {
             arming_delay: 0.5,
         }
     }
+
+    /// An objective gem, catchable from `reach` metres.
+    ///
+    /// Armed immediately: a gem does not move, so there is no chase to spoil
+    /// and nothing to gain by making the player wait.
+    pub fn gem(reach: f32) -> Self {
+        Self {
+            reach,
+            reward: Reward::Gem,
+            arming_delay: 0.0,
+        }
+    }
 }
 
 /// Hands collectables to the player who runs into them.
@@ -65,11 +80,21 @@ impl<'a> System<'a> for CollectionSystem {
         ReadStorage<'a, Position>,
         WriteStorage<'a, Collectable>,
         WriteStorage<'a, Health>,
+        Write<'a, LevelProgress>,
         Write<'a, DebugLines>,
     );
 
     fn run(&mut self, data: Self::SystemData) {
-        let (entities, time, players, positions, mut collectables, mut healths, mut debug) = data;
+        let (
+            entities,
+            time,
+            players,
+            positions,
+            mut collectables,
+            mut healths,
+            mut progress,
+            mut debug,
+        ) = data;
         let dt = time.delta_seconds();
 
         let Some((player, player_position)) = (&entities, &players, &positions)
@@ -98,6 +123,10 @@ impl<'a> System<'a> for CollectionSystem {
                         health.current = (health.current + value).min(health.max);
                         debug.add("Caught", format!("heart +{value:.0}"));
                     }
+                }
+                Reward::Gem => {
+                    progress.collect_gem();
+                    debug.add("Caught", "gem".to_string());
                 }
             }
             let _ = entities.delete(entity);

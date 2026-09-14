@@ -17,6 +17,7 @@ use crate::fire::systems::{FireCleanupSystem, FireIgnitionSystem};
 use crate::fracture::FractureSystem;
 use crate::input::InputActionSystem;
 use crate::lighting::LightCollectionSystem;
+use crate::objective::{GemMotionSystem, GoalSystem, ObjectiveHudSystem, ProgressSystem};
 use crate::particles::{ParticleSpawnSystem, ParticleUpdateSystem};
 use crate::platform::MovingPlatformSystem;
 use crate::projectile::{
@@ -129,6 +130,21 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
         // Catching happens on this frame's synced positions, so a critter
         // caught at a sprint is caught where the player saw it.
         .with(CollectionSystem, "collection", &["physics_sync"])
+        // The objective, in the order it is decided: the clock runs, gems bob
+        // into reach and are caught, the goal reads the resulting count, and
+        // the HUD draws whatever all three left behind.
+        .with(ProgressSystem, "objective_progress", &["physics_sync"])
+        .with(GemMotionSystem, "gem_motion", &["physics_sync"])
+        .with(
+            GoalSystem,
+            "goal",
+            &["collection", "objective_progress", "physics_sync"],
+        )
+        .with(
+            ObjectiveHudSystem,
+            "objective_hud",
+            &["goal", "objective_progress"],
+        )
         .with(CameraControlSystem, "camera_control", &["physics_sync"])
         // Projectiles and explosions
         .with(GrenadeSpawnSystem, "grenade_spawn", &["camera_control"])

@@ -74,6 +74,13 @@ Level(
             ),
 
             objects: [
+                // The objective: three gems near the spawn and a beacon that
+                // opens once two of them are caught.
+                Gem(pos: (4.0, 1.0, -3.0)),
+                Gem(pos: (6.0, 1.0, -4.5), colour: Some((0.4, 0.85, 1.0))),
+                Gem(pos: (2.0, 1.0, -5.5)),
+                Goal(pos: (8.0, 0.0, -8.0), radius: 2.5, required_gems: 2),
+
                 // Lighting/material test subjects. Same physics as BeachBall.
                 // `glow` is emitted luminance, so the same number is the same
                 // brightness at any hue and blooms above the 1.3 threshold.

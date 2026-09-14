@@ -603,6 +603,30 @@ When using `Box` directly, these defaults apply for omitted fields:
 
 BeachBall uses its own fixed physics params (density=1.0, restitution=0.6) since those are fundamental to being a beach ball.
 
+## Objectives
+
+A level can ask something of the player. Two objects carry it; `src/objective/`
+holds the state and the HUD.
+
+```ron
+// Hangs where authored, bobs and spins, no physics. Caught by touch.
+Gem(pos: (4.0, 1.0, -3.0)),
+Gem(pos: (6.0, 1.0, -4.5), colour: Some((0.4, 0.85, 1.0))),
+
+// A plinth, a ring of posts and a beacon column. `pos` is the ground point
+// at the foot of the beacon; `radius` (default 2.0) is how close the player
+// has to come, and `required_gems` (default 0) how many gems must already be
+// caught for arriving to count.
+Goal(pos: (8.0, 0.0, -8.0), radius: 2.5, required_gems: 2),
+```
+
+The HUD shows `Gems  n / total` (hidden when the level has none), the elapsed
+`Time`, `need n more gems` while standing in a goal that has not opened, and
+`LEVEL COMPLETE` with the finish time. The count is not validated against the
+level: a goal that wants more gems than the level places is unfinishable.
+
+Demo levels built on this: `thin_ice`, `wrecking_yard`, `skyway`.
+
 ## Integration with App::new()
 
 The change to `App::new()` is minimal. Replace the hardcoded spawn block (lines 66–99) with:

@@ -20,6 +20,7 @@ pub mod level_check;
 pub mod level_viewer;
 pub mod lighting;
 pub mod model;
+pub mod objective;
 pub mod particles;
 pub mod physics;
 pub mod platform;
