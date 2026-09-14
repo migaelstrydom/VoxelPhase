@@ -129,6 +129,7 @@ pub fn spawn_level_objects(
     let (px, py, pz) = level.player_spawn;
     let player_entity = crate::app::spawners::spawn_player(world, Point3::new(px, py, pz));
 
+    world.insert(level.debris);
     spawn_objects(world, level, materials);
 
     player_entity

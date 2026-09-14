@@ -28,6 +28,18 @@ impl Time {
     }
 
     /// Call at the start of each frame to update timing
+    /// A clock that reports the same step every frame, for offline harnesses
+    /// and tests that drive systems without a real frame loop.
+    pub fn fixed(delta_seconds: f32) -> Self {
+        Self {
+            delta: Duration::from_secs_f32(delta_seconds),
+            delta_seconds,
+            last_frame: Instant::now(),
+            total: Duration::ZERO,
+            frame_count: 0,
+        }
+    }
+
     pub fn update(&mut self) {
         let now = Instant::now();
         self.delta = now.duration_since(self.last_frame);

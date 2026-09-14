@@ -20,6 +20,7 @@ use nalgebra::Point3;
 use serde::Deserialize;
 
 use crate::collision::AABB;
+use crate::fracture::DebrisBudget;
 use crate::terrain::SegmentFrame;
 
 use super::footprint::{Footprint, Support};
@@ -27,11 +28,12 @@ use super::footprint::{Footprint, Support};
 use crate::app::creatures::{HeartCritterDef, PeeperDef, RollerDef};
 use crate::app::spawnables::{
     BananaDef, BeachBallDef, BoxDef, BoxWallDef, CapsuleDef, CrateDef, DodecahedronDef, DolosDef,
-    DominoDef, FencePostDef, GemDef, GlowingOrbDef, GoalDef, HeavyCrateDef, HexPrismDef,
-    HoneycombWallDef, HouseDef, IceBoxDef, IceWallDef, IcosahedronDef, IglooDef, JackDef, JengaDef,
-    MenhirDef, MovingPlatformDef, OctahedronDef, PendulumDef, PlankBridgeDef, PlankDef,
-    PlayWheelDef, PyramidDef, SeesawDef, Spawnable, StackDef, StackItemDef, TableDef, TempleDef,
-    TetrahedronDef, TowerDef, TrampolineDef, TrilithonDef, VoussoirArchDef, BEACH_BALL_RADIUS,
+    DominoDef, FencePostDef, GemDef, GlassSheetDef, GlowingOrbDef, GoalDef, HeavyCrateDef,
+    HexPrismDef, HoneycombWallDef, HouseDef, IceBoxDef, IceWallDef, IcosahedronDef, IglooDef,
+    JackDef, JengaDef, MenhirDef, MovingPlatformDef, OctahedronDef, PendulumDef, PlankBridgeDef,
+    PlankDef, PlayWheelDef, PyramidDef, SeesawDef, Spawnable, StackDef, StackItemDef, TableDef,
+    TempleDef, TetrahedronDef, TowerDef, TrampolineDef, TrilithonDef, VoussoirArchDef,
+    BEACH_BALL_RADIUS,
 };
 use crate::platform::{DeckSuspension, RouteLoop};
 
@@ -60,6 +62,10 @@ pub struct Level {
     /// Water configuration. If omitted, no water system is created.
     #[serde(default)]
     pub water: Option<WaterConfig>,
+
+    /// How many pieces of each break are kept once it has been seen.
+    #[serde(default)]
+    pub debris: DebrisBudget,
 
     /// World frame of each segment, parallel to `segments`.
     ///
@@ -811,6 +817,41 @@ pub enum LevelObject {
         #[serde(default = "IceWallDef::default_stagger")]
         stagger: bool,
     },
+    /// A pane of glass that cracks where it is hit and drops the shards.
+    /// Upright and fixed it is a window; lying, fixed and given a `bearing`
+    /// below a person's weight it is a floor that gives way under anyone who
+    /// stops on it.
+    GlassSheet {
+        /// Centre of the pane.
+        pos: (f32, f32, f32),
+        /// Width along the pane's `+X`, and height (up, or along `+Z` when
+        /// lying).
+        #[serde(default = "GlassSheetDef::default_size")]
+        size: (f32, f32),
+        #[serde(default = "GlassSheetDef::default_thickness")]
+        thickness: f32,
+        /// Rotation about `+Y` in degrees.
+        #[serde(default)]
+        yaw: f32,
+        /// Flat like a floor rather than upright like a window.
+        #[serde(default)]
+        lying: bool,
+        /// Held in place. Off gives a loose sheet that topples and shatters.
+        #[serde(default = "GlassSheetDef::default_fixed")]
+        fixed: bool,
+        /// Contact spike in N·s that cracks the glass.
+        #[serde(default = "GlassSheetDef::default_impact_threshold")]
+        impact_threshold: f32,
+        /// Blast impulse in N·s that frees a shard.
+        #[serde(default = "GlassSheetDef::default_blast_threshold")]
+        blast_threshold: f32,
+        /// Newtons the pane bears indefinitely; zero never tires.
+        #[serde(default)]
+        bearing: f32,
+        /// Seconds a cell lasts at twice its bearing.
+        #[serde(default = "GlassSheetDef::default_endurance")]
+        endurance: f32,
+    },
     /// Corbelled dome of ice blocks with a doorway. Fixed, not loose — ice is
     /// far too slippery for a dome of it to stand on its own.
     Igloo {
@@ -1379,6 +1420,7 @@ impl LevelObject {
             LevelObject::HeavyCrate { pos, .. } => ("HeavyCrate", point(pos)),
             LevelObject::IceBox { pos, .. } => ("IceBox", point(pos)),
             LevelObject::IceWall { base, .. } => ("IceWall", point(base)),
+            LevelObject::GlassSheet { pos, .. } => ("GlassSheet", point(pos)),
             LevelObject::Igloo { pos, .. } => ("Igloo", point(pos)),
             LevelObject::Stack { base, .. } => ("Stack", point(base)),
             LevelObject::Tower { base, .. } => ("Tower", point(base)),
@@ -1500,6 +1542,21 @@ impl LevelObject {
                 half_extents, yaw, ..
             } => rect(half_extents.0, half_extents.2, *yaw),
             LevelObject::House { half_extents, .. } => rect(half_extents.0, half_extents.2, 0.0),
+            // A window stands on its bottom edge; a floor covers its size.
+            LevelObject::GlassSheet {
+                size,
+                thickness,
+                yaw,
+                lying,
+                ..
+            } => {
+                let depth = if *lying {
+                    size.1 * 0.5
+                } else {
+                    thickness * 0.5
+                };
+                rect(size.0 * 0.5, depth, *yaw)
+            }
 
             // Assemblies that stand on one patch of ground.
             LevelObject::Stack { items, yaw, .. } => {
@@ -1667,6 +1724,9 @@ impl LevelObject {
             // The one thing in the library authored to cross a gap. Reporting
             // the void under its middle would be reporting that it works.
             LevelObject::PlankBridge { .. } => Support::Spanning,
+            // A fixed pane hangs in its frame; a glass floor over a drop is
+            // the whole reason to have one.
+            LevelObject::GlassSheet { fixed: true, .. } => Support::Spanning,
             _ => Support::Bedded,
         }
     }
@@ -1694,6 +1754,7 @@ impl LevelObject {
             LevelObject::Box { .. }
             | LevelObject::IceBox { .. }
             | LevelObject::IceWall { .. }
+            | LevelObject::GlassSheet { .. }
             | LevelObject::Igloo { .. }
             | LevelObject::Plank { .. }
             | LevelObject::Stack { .. }
@@ -1805,6 +1866,10 @@ impl LevelObject {
             }
             LevelObject::IceWall { base, yaw, .. } => {
                 p3(base);
+                *yaw += turn;
+            }
+            LevelObject::GlassSheet { pos, yaw, .. } => {
+                p3(pos);
                 *yaw += turn;
             }
             LevelObject::Igloo { pos, yaw, .. } => {
@@ -1994,6 +2059,30 @@ impl LevelObject {
                 rows: *rows,
                 yaw: *yaw,
                 stagger: *stagger,
+            }),
+
+            LevelObject::GlassSheet {
+                pos,
+                size,
+                thickness,
+                yaw,
+                lying,
+                fixed,
+                impact_threshold,
+                blast_threshold,
+                bearing,
+                endurance,
+            } => Box::new(GlassSheetDef {
+                pos: *pos,
+                size: *size,
+                thickness: *thickness,
+                yaw: *yaw,
+                lying: *lying,
+                fixed: *fixed,
+                impact_threshold: *impact_threshold,
+                blast_threshold: *blast_threshold,
+                bearing: *bearing,
+                endurance: *endurance,
             }),
 
             LevelObject::Igloo {

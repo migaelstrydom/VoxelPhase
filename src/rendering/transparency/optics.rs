@@ -56,7 +56,6 @@ impl Transparency {
     };
 
     /// Window glass.
-    #[allow(dead_code)]
     pub const GLASS: Self = Self {
         opacity: 0.12,
         ior: 1.5,

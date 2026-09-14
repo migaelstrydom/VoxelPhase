@@ -34,6 +34,14 @@ pub struct Impact {
     pub point: Point3<f32>,
     /// Solver-facing contact normal at `point`, oriented towards this body.
     pub normal: Vector3<f32>,
+    /// Impulse-weighted mean of every contact point this frame: the centre of
+    /// pressure. Where a flat-bottomed crate *lands* is its middle, not
+    /// whichever of its corners the solver happened to push hardest.
+    pub centre: Point3<f32>,
+    /// The collider on the other side of the peak contact, when it was a
+    /// body rather than static geometry. Tells the struck thing *what* hit
+    /// it, which is how a pane knows how wide a hole to open.
+    pub other: Option<ColliderHandle>,
 }
 
 /// Accumulates [`Impact`] records for one frame, indexed by body and by collider.
@@ -72,6 +80,7 @@ impl ImpactLedger {
                     impulse,
                     contact.point,
                     contact.normal,
+                    header.collider_a,
                 );
                 if let Some(collider_b) = header.collider_b {
                     add(
@@ -80,6 +89,7 @@ impl ImpactLedger {
                         impulse,
                         contact.point,
                         contact.normal,
+                        header.collider_a,
                     );
                 }
                 if let Some(body_a) = header.body_a {
@@ -89,6 +99,7 @@ impl ImpactLedger {
                         impulse,
                         contact.point,
                         -contact.normal,
+                        header.collider_b,
                     );
                 }
                 if let Some(collider_a) = header.collider_a {
@@ -98,6 +109,7 @@ impl ImpactLedger {
                         impulse,
                         contact.point,
                         -contact.normal,
+                        header.collider_b,
                     );
                 }
             }
@@ -133,14 +145,20 @@ fn add<K: std::hash::Hash + Eq>(
     impulse: f32,
     point: Point3<f32>,
     normal: Vector3<f32>,
+    other: Option<ColliderHandle>,
 ) {
     match index.get_mut(&key) {
         Some(existing) => {
-            existing.total_impulse += impulse;
+            let total = existing.total_impulse + impulse;
+            existing.centre = Point3::from(
+                (existing.centre.coords * existing.total_impulse + point.coords * impulse) / total,
+            );
+            existing.total_impulse = total;
             if impulse > existing.peak_impulse {
                 existing.peak_impulse = impulse;
                 existing.point = point;
                 existing.normal = normal;
+                existing.other = other;
             }
         }
         None => {
@@ -151,6 +169,8 @@ fn add<K: std::hash::Hash + Eq>(
                     peak_impulse: impulse,
                     point,
                     normal,
+                    centre: point,
+                    other,
                 },
             );
         }

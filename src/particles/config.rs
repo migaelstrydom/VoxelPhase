@@ -40,6 +40,8 @@ pub struct ParticleConfig {
     pub splash: ParticleSpec,
     /// Cooling embers shed by a hot object in flight.
     pub ember_trail: ParticleSpec,
+    /// The glint left where a culled shard was.
+    pub shard_glitter: ParticleSpec,
 
     /// Gravity in world units per second squared, before each particle's own
     /// `gravity_scale`.
@@ -62,6 +64,7 @@ impl ParticleConfig {
             ParticleEffectType::Smoke => &self.smoke,
             ParticleEffectType::WaterSplash => &self.splash,
             ParticleEffectType::EmberTrail => &self.ember_trail,
+            ParticleEffectType::ShardGlitter => &self.shard_glitter,
         }
     }
 }
@@ -77,6 +80,7 @@ impl Default for ParticleConfig {
             smoke: smoke(),
             splash: splash(),
             ember_trail: ember_trail(),
+            shard_glitter: shard_glitter(),
             gravity: 9.81,
         }
     }
@@ -239,6 +243,35 @@ fn debris() -> ParticleSpec {
     }
 }
 
+/// A few bright flecks that drop and are gone within half a second.
+///
+/// Stands in for a shard the debris budget has removed, so the removal reads
+/// as the piece breaking up rather than blinking out. Small, fast-fading and
+/// additive: a glint, not a puff. Barely any launch speed, so the flecks stay
+/// where the shard was instead of announcing a second, smaller explosion.
+fn shard_glitter() -> ParticleSpec {
+    ParticleSpec {
+        lifetime: Spread::new(0.3, 0.6),
+        size: Spread::new(0.025, 0.06),
+        speed: Spread::new(0.4, 1.5),
+        launch: LaunchPattern::Sphere,
+        spawn_radius: 0.1,
+        ramp: ColourRamp::new(&[
+            ColourStop::new(0.0, rgba(2.2, 2.6, 2.6, 1.0)),
+            ColourStop::new(0.4, rgba(1.2, 1.7, 1.7, 0.8)),
+            ColourStop::new(1.0, rgba(0.6, 0.9, 0.9, 0.0)),
+        ]),
+        growth: 0.6,
+        spin: Spread::new(4.0, 12.0),
+        additive: 0.8,
+        billow: 0.0,
+        gravity_scale: 1.0,
+        drag: 0.5,
+        turbulence: 0.0,
+        stretch: 0.0,
+    }
+}
+
 /// The column left behind: slow, dark, swelling, and by far the longest-lived
 /// thing an explosion produces.
 ///
@@ -331,6 +364,7 @@ mod tests {
             ParticleEffectType::Smoke,
             ParticleEffectType::WaterSplash,
             ParticleEffectType::EmberTrail,
+            ParticleEffectType::ShardGlitter,
         ] {
             let spec = config.spec(effect_type);
             assert!(spec.lifetime.min > 0.0, "{effect_type:?} lives no time");

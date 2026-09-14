@@ -1,5 +1,6 @@
 //! Fracture-related ECS components.
 
+use nalgebra::Vector3;
 use specs::{Component, VecStorage};
 
 use super::contact_load::ContactLoadTracker;
@@ -67,14 +68,41 @@ pub struct CompoundFracture {
     /// beam the moment anything broke off it. Kept in step with `child_count`
     /// through [`CompoundFracture::remap_children`].
     pub materials: Vec<MaterialId>,
-    /// How one child is drawn.
+    /// How one box-shaped child is drawn.
     ///
-    /// The system knows a child only as a box collider, which is where it is
+    /// The system knows a box child only as a collider, which is where it is
     /// and not what it looks like. Without this, every object came apart into
     /// plain cuboids — and an object whose children are *not* plain cuboids
     /// changed shape at the moment it broke, which is the one moment the
-    /// player is looking at it.
+    /// player is looking at it. A convex-hull child needs no such help: the
+    /// hull is its own drawing.
     pub piece_mesh: PieceMesh,
+    /// Impulse, in N·s, to hand each child if it comes free this frame,
+    /// indexed by child. Zero for a child nobody has pushed.
+    ///
+    /// Set by whoever severs a child for a reason the solver did not see —
+    /// a shard knocked out of a window carries the momentum of what hit it,
+    /// and the hit itself was absorbed by the compound before the shard
+    /// existed as a body. Consumed when the child is spawned free.
+    pub kicks: Vec<Vector3<f32>>,
+    /// Whether joints were removed by something other than this frame's load
+    /// judgement, so the split step must run even though no joint broke under
+    /// load. Cleared when the split runs.
+    pub split_pending: bool,
+    /// Whether freed pieces are handed to the debris budget, which takes the
+    /// small ones away once the break has been seen.
+    ///
+    /// Opt-in per compound: a window's shards are scenery the moment they
+    /// land, while the planks of a bridge are still the bridge.
+    pub sheds_debris: bool,
+    /// Whether the compound is giving up its last piece: on the next split
+    /// every component comes free, nothing stays on the original body, and
+    /// the original entity is deleted.
+    ///
+    /// The split otherwise always keeps its largest component, which is right
+    /// for a wall losing a brick and wrong for a pane chipped down to a
+    /// crumb: a fixed body keeps whatever it is left with hanging in the air.
+    pub released: bool,
 }
 
 impl CompoundFracture {
@@ -87,7 +115,17 @@ impl CompoundFracture {
             contact_threshold: None,
             materials: vec![material; child_count],
             piece_mesh: cuboid_mesh,
+            kicks: vec![Vector3::zeros(); child_count],
+            split_pending: false,
+            sheds_debris: false,
+            released: false,
         }
+    }
+
+    /// Freed pieces count against the [`DebrisBudget`](super::DebrisBudget).
+    pub fn shedding_debris(mut self) -> Self {
+        self.sheds_debris = true;
+        self
     }
 
     /// The material each child is drawn with, for a compound that is not all
@@ -121,6 +159,35 @@ impl CompoundFracture {
     pub fn with_piece_mesh(mut self, piece_mesh: PieceMesh) -> Self {
         self.piece_mesh = piece_mesh;
         self
+    }
+
+    /// Cut every joint that holds `child`, so it comes free at the next split,
+    /// and give it `kick` on its way out.
+    ///
+    /// For a child that fails for a reason the joint judgement cannot see —
+    /// it fatigued, or it sat under a hit that a finer structure absorbed —
+    /// rather than for a load the solver put through it.
+    pub fn sever(&mut self, child: usize, kick: Vector3<f32>) {
+        self.joints
+            .retain(|joint| joint.child_a != child && joint.child_b != child);
+        if child < self.kicks.len() {
+            self.kicks[child] += kick;
+        }
+        self.split_pending = true;
+    }
+
+    /// Give up every remaining child on the next split and retire the body.
+    pub fn release(&mut self) {
+        self.released = true;
+        self.split_pending = true;
+    }
+
+    /// The impulse a freed child leaves with, indexed by child.
+    pub fn kick_of(&self, child: usize) -> Vector3<f32> {
+        self.kicks
+            .get(child)
+            .copied()
+            .unwrap_or_else(Vector3::zeros)
     }
 
     /// Compute connected components from the surviving joints.
@@ -167,10 +234,26 @@ impl CompoundFracture {
     /// Remap child indices after some children have been removed.
     /// `kept` lists the old indices that survive, in new-index order.
     pub fn remap_children(&mut self, kept: &[usize], new_count: usize) {
+        let mut order: Vec<Option<usize>> = kept.iter().map(|&old| Some(old)).collect();
+        order.resize(new_count, None);
+        self.reindex(&order);
+    }
+
+    /// Reindex the children after the body's collider list has changed shape.
+    ///
+    /// `order[new]` is the old index of the child now at position `new`, or
+    /// `None` for a child that is new to the compound. Joints between two
+    /// survivors follow them; joints touching a child that is gone are
+    /// dropped; a new child arrives with no joints, no load history, no kick,
+    /// and the compound's last material. Whoever added it says what it is
+    /// joined to and what it wears.
+    pub fn reindex(&mut self, order: &[Option<usize>]) {
         let mut old_to_new = vec![None; self.child_count];
-        for (new_idx, &old_idx) in kept.iter().enumerate() {
-            if old_idx < old_to_new.len() {
-                old_to_new[old_idx] = Some(new_idx);
+        for (new_idx, old_idx) in order.iter().enumerate() {
+            if let Some(old_idx) = old_idx {
+                if *old_idx < old_to_new.len() {
+                    old_to_new[*old_idx] = Some(new_idx);
+                }
             }
         }
 
@@ -184,10 +267,23 @@ impl CompoundFracture {
             joint.child_b = old_to_new[joint.child_b].unwrap();
         }
 
-        self.contact_load.remap(kept);
-        self.materials = kept.iter().map(|&old| self.material_of(old)).collect();
+        self.contact_load.reindex(order);
+        self.materials = order
+            .iter()
+            .map(|old| {
+                old.map(|old| self.material_of(old))
+                    .unwrap_or_else(|| self.material_of(usize::MAX))
+            })
+            .collect();
+        self.kicks = order
+            .iter()
+            .map(|old| {
+                old.map(|old| self.kick_of(old))
+                    .unwrap_or_else(Vector3::zeros)
+            })
+            .collect();
 
-        self.child_count = new_count;
+        self.child_count = order.len();
     }
 }
 

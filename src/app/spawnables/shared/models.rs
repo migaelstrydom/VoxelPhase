@@ -90,46 +90,45 @@ pub fn compound_model(
     Arc::new(Model::flat(parts))
 }
 
-/// Build a compound model whose pieces do not all wear the same material.
+/// One already-meshed piece of a compound object, where it sits in the body's
+/// frame, and what it is drawn with.
 ///
-/// Pieces are grouped by material and each group becomes one primitive, so an
-/// object of two materials costs two draws however many pieces it has — the
-/// same reason [`compound_model`] merges everything into one.
-///
-/// `materials` is indexed in step with `pieces`; a piece past the end of it
-/// falls back to the last material given.
-pub fn compound_model_by_material(
-    pieces: &[PiecePlacement],
-    materials: &[MaterialId],
-    mesh: PieceMesh,
-) -> Arc<Model> {
-    let Some(&fallback) = materials.last() else {
-        return Arc::new(Model::flat(Vec::new()));
-    };
+/// The step below [`PiecePlacement`]: a placement says where a *box* goes and
+/// leaves the drawing to a [`PieceMesh`], whereas this carries the mesh
+/// itself, so pieces that are not boxes — a convex shard — can be assembled
+/// into the same model as those that are.
+pub struct PlacedMesh {
+    pub vertices: Vec<Vertex>,
+    pub indices: Vec<u32>,
+    pub offset: Vector3<f32>,
+    pub rotation: UnitQuaternion<f32>,
+    pub material: MaterialId,
+}
 
-    // Grouped in first-seen order so the model is stable across rebuilds
-    // rather than reshuffling with a hash map's iteration order.
+/// Merge placed meshes into one model, one primitive per material.
+///
+/// Grouped in first-seen order so the model is stable across rebuilds rather
+/// than reshuffling with a hash map's iteration order.
+pub fn assemble_by_material(pieces: Vec<PlacedMesh>) -> Arc<Model> {
     let mut groups: Vec<(MaterialId, Vec<Vertex>, Vec<u32>)> = Vec::new();
-    for (index, piece) in pieces.iter().enumerate() {
-        let material = materials.get(index).copied().unwrap_or(fallback);
-        let slot = match groups.iter().position(|(m, _, _)| *m == material) {
+    for piece in pieces {
+        let slot = match groups.iter().position(|(m, _, _)| *m == piece.material) {
             Some(slot) => slot,
             None => {
-                groups.push((material, Vec::new(), Vec::new()));
+                groups.push((piece.material, Vec::new(), Vec::new()));
                 groups.len() - 1
             }
         };
         let (_, vertices, indices) = &mut groups[slot];
 
-        let (piece_vertices, piece_indices) = mesh(piece);
         let base = vertices.len() as u32;
         let rotation = piece.rotation.to_rotation_matrix();
-        vertices.extend(piece_vertices.into_iter().map(|mut vertex| {
+        vertices.extend(piece.vertices.into_iter().map(|mut vertex| {
             vertex.pos = rotation * vertex.pos + piece.offset;
             vertex.normal = rotation * vertex.normal;
             vertex
         }));
-        indices.extend(piece_indices.iter().map(|index| index + base));
+        indices.extend(piece.indices.iter().map(|index| index + base));
     }
 
     let primitives = groups
@@ -142,6 +141,45 @@ pub fn compound_model_by_material(
         .collect();
 
     Arc::new(Model::flat(vec![ModelPart::new(primitives)]))
+}
+
+/// The mesh of a convex hull, drawn as it collides: one flat-shaded polygon
+/// per hull face, textured by a planar projection of that face.
+///
+/// For a piece whose collider *is* its shape — a shard, a cut stone — this is
+/// the honest drawing, and the one that stays honest after the piece breaks
+/// off something, because the hull is what the physics engine kept.
+pub fn hull_mesh(hull: &ConvexHull) -> (Vec<Vertex>, Vec<u32>) {
+    let color = Vector4::new(1.0, 1.0, 1.0, 1.0);
+    let mut vertices = Vec::new();
+    let mut indices = Vec::new();
+
+    for face in &hull.faces {
+        if face.vertex_indices.len() < 3 {
+            continue;
+        }
+        let corners: Vec<Vector3<f32>> = face
+            .vertex_indices
+            .iter()
+            .map(|&i| hull.vertices[i as usize])
+            .collect();
+        let uvs = planar_face_uvs(&corners);
+        let base = vertices.len() as u32;
+        for (corner, uv) in corners.iter().zip(uvs) {
+            vertices.push(Vertex {
+                pos: *corner,
+                color,
+                tex_coords: uv,
+                normal: face.normal,
+                ao: 1.0,
+            });
+        }
+        for i in 1..corners.len() as u32 - 1 {
+            indices.extend([base, base + i, base + i + 1]);
+        }
+    }
+
+    (vertices, indices)
 }
 
 /// Build a single-piece model, drawn by `mesh`.

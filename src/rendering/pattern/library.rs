@@ -254,6 +254,28 @@ pub const SLATE: Pattern = Pattern {
         },
     ],
 };
+/// Float glass: almost nothing, which is the point.
+///
+/// A pane has no markings of its own; what it shows is a faint unevenness in
+/// how much light comes through — a wash towards clear — and the ghost of a
+/// smear. Anything stronger reads as frosted, and frosted is a different
+/// material.
+pub const GLASS: Pattern = Pattern {
+    name: "glass",
+    layers: &[
+        Layer::Wash {
+            scale: 1.5,
+            octaves: 2,
+            towards: Slot::Light,
+            amount: 0.25,
+        },
+        Layer::Shade {
+            scale: 4.0,
+            octaves: 2,
+            amount: 0.04,
+        },
+    ],
+};
 
 /// Frozen water: the fracture structure inside the block, and the frost on it.
 ///

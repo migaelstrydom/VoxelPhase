@@ -295,6 +295,37 @@ pub const ICE: Substance = Substance {
     transparency: Transparency::ICE,
 };
 
+/// Window glass: the one substance in the library you are meant to look
+/// through rather than at.
+///
+/// Denser than any stone but marble and with none of the give of plastic —
+/// glass does not bounce, it breaks — and the finish is the smoothest here by
+/// a margin: a flat pane is a mirror at a grazing angle, and the speck-narrow
+/// highlight ice avoids is exactly what a window shows the sun as.
+///
+/// The palette barely matters. At a window's opacity the base colour is the
+/// faint green tint a thick edge of float glass shows; the light slot is the
+/// white of a reflection, and the accent the deeper green of a shard seen
+/// edge-on. The transparency does the rest.
+pub const GLASS: Substance = Substance {
+    name: "glass",
+    physics: PhysicalSurface {
+        restitution: 0.1,
+        friction: 0.4,
+        density: 2500.0,
+    },
+    finish: SurfaceFinish {
+        roughness: 0.06,
+        metallic: 0.0,
+    },
+    grain: GrainSpec::NONE,
+    grain_by_uv: false,
+    palette: Palette::from_base_const(Colour::new(0.82, 0.93, 0.90, 1.0), 0.08)
+        .with_light(Colour::new(0.98, 1.0, 1.0, 1.0))
+        .with_accent(Colour::new(0.50, 0.76, 0.72, 1.0)),
+    transparency: Transparency::GLASS,
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -304,7 +335,7 @@ mod tests {
     /// all of them.
     const ALL: &[Substance] = &[
         GRANITE, LIMESTONE, MARBLE, SANDSTONE, CONCRETE, BRICK, SLATE, OAK, PINE, STEEL, RUBBER,
-        PLASTIC, ICE,
+        PLASTIC, ICE, GLASS,
     ];
 
     #[test]
@@ -352,12 +383,13 @@ mod tests {
     /// The pairing the whole visual model rests on: a surface glossy enough to
     /// show a tight highlight needs microstructure for that highlight to break
     /// up against, or it reads as plastic. Plastic and rubber are the exception
-    /// because plastic is what they are.
+    /// because plastic is what they are; glass is the other, because a pane
+    /// is optically flat and the tight, unbroken highlight *is* the look.
     #[test]
     fn a_glossy_substance_has_grain_to_break_its_highlight_up() {
         for substance in ALL {
-            let moulded = matches!(substance.name, "plastic" | "rubber");
-            if substance.finish.roughness < 0.45 && !moulded {
+            let flat_by_nature = matches!(substance.name, "plastic" | "rubber" | "glass");
+            if substance.finish.roughness < 0.45 && !flat_by_nature {
                 assert!(
                     substance.grain.is_enabled(),
                     "{} is glossy ({}) with no microstructure — it will read as plastic",
@@ -403,16 +435,18 @@ mod tests {
         assert!(GRANITE.finish.roughness < SANDSTONE.finish.roughness);
     }
 
-    /// Ice is the only substance you can see through, and the check that
-    /// nothing else has quietly acquired transparency it did not mean to — a
-    /// stray opacity would move that material into the sorted pass and change
-    /// how every object made of it is drawn.
+    /// Ice and glass are the substances you can see through, and the check
+    /// that nothing else has quietly acquired transparency it did not mean to
+    /// — a stray opacity would move that material into the sorted pass and
+    /// change how every object made of it is drawn. Of the two, glass is the
+    /// one you can read through.
     #[test]
-    fn ice_is_the_only_thing_light_gets_through() {
+    fn ice_and_glass_are_the_only_things_light_gets_through() {
+        assert!(GLASS.transparency.opacity < ICE.transparency.opacity);
         for substance in ALL {
             assert_eq!(
                 substance.transparency.is_blended(),
-                substance.name == "ice",
+                matches!(substance.name, "ice" | "glass"),
                 "{} disagrees about whether light passes through it",
                 substance.name
             );

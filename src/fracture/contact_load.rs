@@ -97,8 +97,12 @@ impl ContactLoadTracker {
             return vec![ContactSpike::default(); collider_handles.len()];
         }
 
+        // A body that never moves has no weight to redistribute: its own
+        // mass is not going through its children, so it gets no deadband.
+        // With one, a fixed pane's own mass hid every footstep on it.
         let deadband = world
             .body(body)
+            .filter(|b| !b.is_static())
             .map(|b| b.mass() * world.config().gravity.magnitude() * frame_dt)
             .unwrap_or(0.0);
 
@@ -129,6 +133,20 @@ impl ContactLoadTracker {
         self.levels = kept
             .iter()
             .map(|&old| self.levels.get(old).copied().unwrap_or(0.0))
+            .collect();
+    }
+
+    /// Reindex the baseline after children have been removed *and added*.
+    ///
+    /// `order[new]` names the old index of the child now at `new`, or `None`
+    /// for a child that did not exist last frame, which starts from no load.
+    pub fn reindex(&mut self, order: &[Option<usize>]) {
+        self.levels = order
+            .iter()
+            .map(|old| {
+                old.and_then(|old| self.levels.get(old).copied())
+                    .unwrap_or(0.0)
+            })
             .collect();
     }
 }

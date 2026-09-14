@@ -182,12 +182,24 @@ pub fn generate_dynamic_contacts(
             // normal always points from the "larger" shape toward the "smaller".
             // The solver convention is normal from A→B, so body_a must be the
             // larger shape type to match.
-            let header = if shape_type_rank(&si.shape) >= shape_type_rank(&sj.shape) {
-                make_pair_header(si, sj)
+            let (first, second) = if shape_type_rank(&si.shape) >= shape_type_rank(&sj.shape) {
+                (si, sj)
             } else {
-                make_pair_header(sj, si)
+                (sj, si)
             };
-            push_if_nonempty(&mut buf.manifolds, header, manifold);
+            debug_assert!(
+                normals_point_from_a_to_b(first, second, &manifold),
+                "Contact normal appears to point from B toward A for {:?} vs {:?}. \
+                 This usually means the body_a/body_b ordering in PairHeader \
+                 doesn't match the manifold's normal convention.",
+                first.shape,
+                second.shape,
+            );
+            push_if_nonempty(
+                &mut buf.manifolds,
+                make_pair_header(first, second),
+                manifold,
+            );
         } else {
             // Speculative CCD for sphere-sphere pairs.
             if let (ColliderShape::Sphere { radius: ra }, ColliderShape::Sphere { radius: rb }) =
@@ -231,6 +243,33 @@ fn requires_gjk_fallback(a: &ColliderShape, b: &ColliderShape) -> bool {
             | (ColliderShape::Capsule { .. }, ColliderShape::Box { .. })
             | (ColliderShape::Capsule { .. }, ColliderShape::Capsule { .. })
     )
+}
+
+/// Sanity check on the solver convention: the contact normal should roughly
+/// point from collider `a` toward collider `b`. A flipped normal inverts the
+/// impulse direction, causing penetration instead of separation.
+///
+/// Judged between the *collider* centres, not the bodies': a compound body's
+/// origin can be metres from the child that is actually touching, and a
+/// normal that is perfectly right for the child can point anywhere at all
+/// relative to the body. The threshold is generous (-0.5 ≈ 120°) to allow
+/// edge and corner contacts where the normal is perpendicular to the
+/// centre-to-centre axis.
+#[allow(dead_code)]
+fn normals_point_from_a_to_b(
+    a: &ColliderState,
+    b: &ColliderState,
+    manifold: &ContactManifold,
+) -> bool {
+    let ab = b.center - a.center;
+    let length = ab.magnitude();
+    if length < 1e-3 {
+        return true;
+    }
+    manifold
+        .points
+        .iter()
+        .all(|contact| contact.normal.dot(&ab) / length > -0.5)
 }
 
 /// Build a `PairHeader` from two collider states with combined material.

@@ -97,6 +97,19 @@ Level(
                 // A frozen slab, for the proportions a cube cannot reach.
                 IceBox(pos: (5.0, 0.5, 20.0), half_extents: (2.5, 0.5, 2.5)),
 
+                // Glass. A window to throw things through, and a floor that
+                // cracks under a footstep and gives way under anyone who
+                // stops on it — walk across, do not stand.
+                GlassSheet(pos: (1.0, 1.0, 26.0), size: (2.4, 1.8), yaw: 90.0),
+                GlassSheet(
+                    pos: (-3.0, 0.9, 24.0),
+                    size: (2.0, 5.0),
+                    thickness: 0.02,
+                    lying: true,
+                    impact_threshold: 6.0,
+                    bearing: 350.0,
+                ),
+
                 // Ice bricks in a running bond, and a dome built the same way.
                 IceWall(base: (9.0, 0.0, 24.0), columns: 5, rows: 5, yaw: 90.0),
                 Igloo(pos: (12.0, 0.0, 29.0), yaw: 180.0),

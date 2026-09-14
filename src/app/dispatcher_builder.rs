@@ -14,7 +14,8 @@ use crate::damage::{
 use crate::explosion::{BlastLightSystem, ExplosionSystem};
 use crate::fire::light::FireLightSystem;
 use crate::fire::systems::{FireCleanupSystem, FireIgnitionSystem};
-use crate::fracture::FractureSystem;
+use crate::fracture::{DebrisCullSystem, FractureSystem};
+use crate::glass::GlassCrackSystem;
 use crate::input::InputActionSystem;
 use crate::lighting::LightCollectionSystem;
 use crate::objective::{GemMotionSystem, GoalSystem, ObjectiveHudSystem, ProgressSystem};
@@ -69,8 +70,13 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
                 "moving_platform",
             ],
         )
+        // Brittle sheets craze under this frame's impacts first, so that a
+        // hit on a pane is judged against a web of shards and not one slab.
+        .with(GlassCrackSystem, "glass_crack", &["physics_sync"])
         // Compound body fracture (uses solver impulses from this frame)
-        .with(FractureSystem, "fracture", &["physics_sync"])
+        .with(FractureSystem, "fracture", &["physics_sync", "glass_crack"])
+        // Pieces the fracture freed and the level's budget will not keep.
+        .with(DebrisCullSystem, "debris_cull", &["fracture"])
         // Animation and sensing. Probes are configured from last-frame
         // animator state, fired against this-frame physics, and consumed
         // by the animator in the same frame — no one-frame lag on ground

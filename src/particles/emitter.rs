@@ -26,6 +26,9 @@ pub enum ParticleEffectType {
     WaterSplash,
     /// Cooling embers shed by a hot object, for comet-tail trails.
     EmberTrail,
+    /// The glint of a small shard vanishing: what the eye is given in place of
+    /// a piece of debris the budget has taken away.
+    ShardGlitter,
 }
 
 /// Component for entities that emit particles.
