@@ -1246,6 +1246,8 @@ pub enum LevelObject {
         yaw: f32,
         #[serde(default = "PlankBridgeDef::default_fracture_threshold")]
         fracture_threshold: f32,
+        #[serde(default = "PlankBridgeDef::default_contact_threshold")]
+        contact_threshold: f32,
     },
     /// Neolithic trilithon — two uprights with a lintel.
     Trilithon {
@@ -2458,6 +2460,7 @@ impl LevelObject {
                 density,
                 yaw,
                 fracture_threshold,
+                contact_threshold,
             } => Box::new(PlankBridgeDef {
                 pos: *pos,
                 length: *length,
@@ -2468,6 +2471,7 @@ impl LevelObject {
                 density: *density,
                 yaw: *yaw,
                 fracture_threshold: *fracture_threshold,
+                contact_threshold: *contact_threshold,
             }),
 
             LevelObject::Trilithon {

@@ -547,7 +547,7 @@ mod tests {
     use crate::physics::{PhysicsConfig, PhysicsWorld};
     use crate::rendering::material::MaterialId;
 
-    fn igloo() -> IglooDef {
+    pub fn igloo() -> IglooDef {
         IglooDef {
             pos: (0.0, 0.0, 0.0),
             radius: IglooDef::default_radius(),
@@ -785,5 +785,111 @@ mod tests {
         // And it is inside the dome, above the floor: a sanity check that the
         // weighting is by volume and not by block count.
         assert!(centre.y > 0.0 && centre.y < igloo().radius);
+    }
+}
+
+#[cfg(test)]
+mod contact_fracture {
+    use super::tests::igloo;
+    use super::*;
+    use crate::debug::DebugLines;
+    use crate::fracture::ContactLoadTracker;
+    use crate::physics::bench_harness::geometry::FlatQuadGeometry;
+    use crate::physics::stepping::{SequentialStepper, Stepper};
+    use crate::physics::{ColliderDesc, PhysicsConfig, PhysicsWorld, RigidBodyDesc};
+
+    const FRAME_DT: f32 = 1.0 / 60.0;
+
+    /// The dome as the fracture system sees it: one compound body of 88 ice
+    /// blocks, on a flat quad, with sleep off so that a body standing still is
+    /// actually solved rather than silently reporting nothing.
+    fn largest_spike(height: f32, velocity: Vector3<f32>, frames: usize) -> f32 {
+        let def = igloo();
+        let blocks = def.blocks();
+        let centre = mass_centre(&blocks);
+        let substance = ice();
+
+        let mut config = PhysicsConfig::default();
+        config.sleep.enabled = false;
+        let mut world = PhysicsWorld::new(config);
+
+        let body = world.create_body(
+            RigidBodyDesc::dynamic()
+                .position(Point3::new(0.0, height, 0.0))
+                .linear_velocity(velocity)
+                .linear_damping(0.01)
+                .angular_damping(0.005),
+        );
+        let colliders: Vec<_> = blocks
+            .iter()
+            .map(|block| {
+                world
+                    .attach_collider(
+                        body,
+                        ColliderDesc::box_shape(block.half_extents)
+                            .of(&substance)
+                            .offset_translation(block.centre - centre)
+                            .offset_rotation(block.rotation),
+                    )
+                    .expect("collider attaches to a live body")
+            })
+            .collect();
+
+        let geometry = FlatQuadGeometry::new(80.0);
+        let mut stepper = SequentialStepper::new(FRAME_DT, 4);
+        let mut debug = DebugLines::default();
+        let mut tracker = ContactLoadTracker::new(colliders.len());
+        let mut peak = 0.0f32;
+
+        for _ in 0..frames {
+            stepper.step(&mut world, FRAME_DT, &geometry, &[], &[], &mut debug);
+            let spikes = tracker.advance(&world, body, &colliders, FRAME_DT);
+            peak = peak.max(spikes.iter().fold(0.0f32, |m, s| m.max(s.magnitude)));
+        }
+        peak
+    }
+
+    /// The height a dome placed on the ground comes to rest at, since the body
+    /// origin sits on the centre of mass rather than the floor.
+    fn resting_height() -> f32 {
+        mass_centre(&igloo().blocks()).y
+    }
+
+    /// An igloo that is standing there, or being shoved along the ground, must
+    /// not be taking itself apart. Eight tonnes of ice in 88 pieces never
+    /// reaches a perfectly static equilibrium — the solver keeps shuffling the
+    /// load between blocks — and that shuffling must stay below the threshold
+    /// the dome's joints are authored with.
+    #[test]
+    fn an_igloo_left_alone_does_not_shake_itself_apart() {
+        let threshold = igloo().fracture_threshold;
+
+        let standing = largest_spike(resting_height(), Vector3::zeros(), 300);
+        assert!(
+            standing < threshold,
+            "a dome standing still spikes {standing}, past its own threshold {threshold}"
+        );
+
+        let shoved = largest_spike(resting_height(), Vector3::new(2.0, 0.0, 0.0), 300);
+        assert!(
+            shoved < threshold,
+            "a dome being pushed spikes {shoved}, past its own threshold {threshold}"
+        );
+    }
+
+    /// And the point of the exercise: shove it off a hill and it shatters.
+    /// The margin wants to be wide, not marginal — a hole is opened wherever a
+    /// child clears the threshold, so a hillside impact should clear it by
+    /// enough that the dome comes apart properly (measured ~24900 N·s against a
+    /// 420 N·s threshold).
+    #[test]
+    fn an_igloo_thrown_down_a_hill_shatters_on_impact() {
+        let threshold = igloo().fracture_threshold;
+        let impact = largest_spike(6.0, Vector3::new(6.0, -4.0, 0.0), 300);
+
+        assert!(
+            impact > threshold * 10.0,
+            "a hillside impact spikes only {impact} against threshold {threshold}"
+        );
     }
 }

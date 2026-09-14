@@ -5,7 +5,11 @@
 //! rigid bodies for each freed piece.
 
 mod components;
+mod contact_load;
+mod load;
 pub mod systems;
 
 pub use components::{CompoundFracture, FractureJoint};
+pub use contact_load::{ContactLoadTracker, ContactSpike};
+pub use load::{ChildLoad, ChildLoads};
 pub use systems::FractureSystem;

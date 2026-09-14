@@ -68,7 +68,7 @@ pub use drive::{
 };
 pub use force_provider::{ForceContext, ForceOutput, SubstepForceProvider};
 pub use handle::{ColliderHandle, RigidBodyHandle};
-pub use impact::{BodyImpact, ImpactLedger};
+pub use impact::{Impact, ImpactLedger};
 pub use impulses::{PhysicsImpulse, PhysicsImpulseQueue};
 pub use solver::{
     ConstraintSolver, IdentityConditioner, ManifoldConditioner, ManifoldConditions, PgsNgsConfig,

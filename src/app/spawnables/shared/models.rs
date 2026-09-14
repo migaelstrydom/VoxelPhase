@@ -90,6 +90,60 @@ pub fn compound_model(
     Arc::new(Model::flat(parts))
 }
 
+/// Build a compound model whose pieces do not all wear the same material.
+///
+/// Pieces are grouped by material and each group becomes one primitive, so an
+/// object of two materials costs two draws however many pieces it has — the
+/// same reason [`compound_model`] merges everything into one.
+///
+/// `materials` is indexed in step with `pieces`; a piece past the end of it
+/// falls back to the last material given.
+pub fn compound_model_by_material(
+    pieces: &[PiecePlacement],
+    materials: &[MaterialId],
+    mesh: PieceMesh,
+) -> Arc<Model> {
+    let Some(&fallback) = materials.last() else {
+        return Arc::new(Model::flat(Vec::new()));
+    };
+
+    // Grouped in first-seen order so the model is stable across rebuilds
+    // rather than reshuffling with a hash map's iteration order.
+    let mut groups: Vec<(MaterialId, Vec<Vertex>, Vec<u32>)> = Vec::new();
+    for (index, piece) in pieces.iter().enumerate() {
+        let material = materials.get(index).copied().unwrap_or(fallback);
+        let slot = match groups.iter().position(|(m, _, _)| *m == material) {
+            Some(slot) => slot,
+            None => {
+                groups.push((material, Vec::new(), Vec::new()));
+                groups.len() - 1
+            }
+        };
+        let (_, vertices, indices) = &mut groups[slot];
+
+        let (piece_vertices, piece_indices) = mesh(piece);
+        let base = vertices.len() as u32;
+        let rotation = piece.rotation.to_rotation_matrix();
+        vertices.extend(piece_vertices.into_iter().map(|mut vertex| {
+            vertex.pos = rotation * vertex.pos + piece.offset;
+            vertex.normal = rotation * vertex.normal;
+            vertex
+        }));
+        indices.extend(piece_indices.iter().map(|index| index + base));
+    }
+
+    let primitives = groups
+        .into_iter()
+        .map(|(material, vertices, indices)| MeshPrimitive {
+            vertices,
+            indices,
+            material,
+        })
+        .collect();
+
+    Arc::new(Model::flat(vec![ModelPart::new(primitives)]))
+}
+
 /// Build a single-piece model, drawn by `mesh`.
 ///
 /// The piece stands on its own, so it is drawn as one at the origin: a block

@@ -6,6 +6,12 @@
 //! folds the accumulated normal impulses into a per-body total, giving callers a
 //! single scalar for "how hard did this body just get hit".
 //!
+//! The same fold is indexed a second time by collider. A compound body reports
+//! one number for the whole object, which is enough to decide *whether* it was
+//! hit but not *where* — and a destructible compound has to come apart at the
+//! end that struck the ground, not uniformly. The per-collider index costs one
+//! extra map insert per contact and answers that.
+//!
 //! The total is a frame quantity, summed across every substep, so it stays
 //! comparable regardless of the substep count. A body resting under gravity
 //! accumulates roughly `mass * gravity * frame_dt` per frame, which is small
@@ -14,12 +20,12 @@
 use nalgebra::{Point3, Vector3};
 use rustc_hash::FxHashMap;
 
-use super::handle::RigidBodyHandle;
+use super::handle::{ColliderHandle, RigidBodyHandle};
 use super::pipeline::pair::SolverManifold;
 
-/// Momentum delivered to a single body over one frame.
+/// Momentum delivered to a single body or collider over one frame.
 #[derive(Debug, Clone, Copy)]
-pub struct BodyImpact {
+pub struct Impact {
     /// Sum of normal impulses over every contact and substep this frame (N·s).
     pub total_impulse: f32,
     /// Largest single normal impulse contributing to `total_impulse` (N·s).
@@ -30,19 +36,21 @@ pub struct BodyImpact {
     pub normal: Vector3<f32>,
 }
 
-/// Accumulates [`BodyImpact`] records for one frame.
+/// Accumulates [`Impact`] records for one frame, indexed by body and by collider.
 ///
 /// Cleared at the start of each frame by `PhysicsWorld::update_contacts`, then
 /// fed by every solve pass — the main substep solver and the CCD solver alike.
 #[derive(Debug, Default)]
 pub struct ImpactLedger {
-    impacts: FxHashMap<RigidBodyHandle, BodyImpact>,
+    bodies: FxHashMap<RigidBodyHandle, Impact>,
+    colliders: FxHashMap<ColliderHandle, Impact>,
 }
 
 impl ImpactLedger {
     /// Drop all records. Called once per frame, before any solving.
     pub fn clear(&mut self) {
-        self.impacts.clear();
+        self.bodies.clear();
+        self.colliders.clear();
     }
 
     /// Fold the impulses of already-solved manifolds into the ledger.
@@ -58,53 +66,93 @@ impl ImpactLedger {
                 if impulse <= 0.0 {
                     continue;
                 }
-                self.add(header.body_b, impulse, contact.point, contact.normal);
+                add(
+                    &mut self.bodies,
+                    header.body_b,
+                    impulse,
+                    contact.point,
+                    contact.normal,
+                );
+                if let Some(collider_b) = header.collider_b {
+                    add(
+                        &mut self.colliders,
+                        collider_b,
+                        impulse,
+                        contact.point,
+                        contact.normal,
+                    );
+                }
                 if let Some(body_a) = header.body_a {
-                    self.add(body_a, impulse, contact.point, -contact.normal);
+                    add(
+                        &mut self.bodies,
+                        body_a,
+                        impulse,
+                        contact.point,
+                        -contact.normal,
+                    );
+                }
+                if let Some(collider_a) = header.collider_a {
+                    add(
+                        &mut self.colliders,
+                        collider_a,
+                        impulse,
+                        contact.point,
+                        -contact.normal,
+                    );
                 }
             }
         }
     }
 
     /// Impulse record for a body, or `None` if it took no impulse this frame.
-    pub fn get(&self, handle: RigidBodyHandle) -> Option<&BodyImpact> {
-        self.impacts.get(&handle)
+    pub fn get(&self, handle: RigidBodyHandle) -> Option<&Impact> {
+        self.bodies.get(&handle)
+    }
+
+    /// Impulse record for a single collider, or `None` if that collider took no
+    /// impulse this frame.
+    ///
+    /// For a compound body this is the share of the body total that arrived
+    /// through one child, which is what tells a destructible object where it
+    /// was struck.
+    pub fn for_collider(&self, handle: ColliderHandle) -> Option<&Impact> {
+        self.colliders.get(&handle)
     }
 
     /// Iterate every body that took an impulse this frame.
-    pub fn iter(&self) -> impl Iterator<Item = (RigidBodyHandle, &BodyImpact)> {
-        self.impacts
-            .iter()
-            .map(|(handle, impact)| (*handle, impact))
+    pub fn iter(&self) -> impl Iterator<Item = (RigidBodyHandle, &Impact)> {
+        self.bodies.iter().map(|(handle, impact)| (*handle, impact))
     }
+}
 
-    fn add(
-        &mut self,
-        handle: RigidBodyHandle,
-        impulse: f32,
-        point: Point3<f32>,
-        normal: Vector3<f32>,
-    ) {
-        match self.impacts.get_mut(&handle) {
-            Some(existing) => {
-                existing.total_impulse += impulse;
-                if impulse > existing.peak_impulse {
-                    existing.peak_impulse = impulse;
-                    existing.point = point;
-                    existing.normal = normal;
-                }
+/// Fold one contact impulse into a keyed record, keeping the largest single
+/// impulse and the geometry that produced it.
+fn add<K: std::hash::Hash + Eq>(
+    index: &mut FxHashMap<K, Impact>,
+    key: K,
+    impulse: f32,
+    point: Point3<f32>,
+    normal: Vector3<f32>,
+) {
+    match index.get_mut(&key) {
+        Some(existing) => {
+            existing.total_impulse += impulse;
+            if impulse > existing.peak_impulse {
+                existing.peak_impulse = impulse;
+                existing.point = point;
+                existing.normal = normal;
             }
-            None => {
-                self.impacts.insert(
-                    handle,
-                    BodyImpact {
-                        total_impulse: impulse,
-                        peak_impulse: impulse,
-                        point,
-                        normal,
-                    },
-                );
-            }
+        }
+        None => {
+            index.insert(
+                key,
+                Impact {
+                    total_impulse: impulse,
+                    peak_impulse: impulse,
+                    point,
+                    normal,
+                },
+            );
         }
     }
 }
@@ -161,6 +209,23 @@ mod tests {
         }
     }
 
+    fn collider(arena: &mut Arena<u8>) -> ColliderHandle {
+        ColliderHandle(arena.insert(0))
+    }
+
+    /// The same manifold, tagged with the colliders the contact came through.
+    fn manifold_with_colliders(
+        body_b: RigidBodyHandle,
+        collider_a: Option<ColliderHandle>,
+        collider_b: ColliderHandle,
+        impulses: &[f32],
+    ) -> SolverManifold {
+        let mut m = manifold(None, body_b, impulses);
+        m.header.collider_a = collider_a;
+        m.header.collider_b = Some(collider_b);
+        m
+    }
+
     #[test]
     fn impulses_sum_across_contacts_and_substeps() {
         let mut arena = Arena::new();
@@ -199,6 +264,42 @@ mod tests {
         ledger.record_solved(&[manifold(None, body, &[0.0])]);
 
         assert!(ledger.get(body).is_none());
+    }
+
+    /// A compound body reports one body total, but a destructible one needs to
+    /// know which of its children took the hit.
+    #[test]
+    fn impulses_are_attributed_to_the_collider_that_carried_them() {
+        let mut arena = Arena::new();
+        let body = handle(&mut arena);
+        let mut collider_arena = Arena::new();
+        let struck = collider(&mut collider_arena);
+        let spared = collider(&mut collider_arena);
+        let mut ledger = ImpactLedger::default();
+
+        ledger.record_solved(&[manifold_with_colliders(body, None, struck, &[7.0])]);
+
+        assert_eq!(ledger.for_collider(struck).unwrap().total_impulse, 7.0);
+        assert!(ledger.for_collider(spared).is_none());
+        // The body total still sees everything its children took.
+        assert_eq!(ledger.get(body).unwrap().total_impulse, 7.0);
+    }
+
+    #[test]
+    fn a_collider_pair_records_against_both_colliders_with_opposed_normals() {
+        let mut arena = Arena::new();
+        let body = handle(&mut arena);
+        let mut collider_arena = Arena::new();
+        let a = collider(&mut collider_arena);
+        let b = collider(&mut collider_arena);
+        let mut ledger = ImpactLedger::default();
+
+        ledger.record_solved(&[manifold_with_colliders(body, Some(a), b, &[5.0])]);
+
+        assert_eq!(ledger.for_collider(a).unwrap().total_impulse, 5.0);
+        assert_eq!(ledger.for_collider(b).unwrap().total_impulse, 5.0);
+        assert_eq!(ledger.for_collider(a).unwrap().normal, -Vector3::y());
+        assert_eq!(ledger.for_collider(b).unwrap().normal, Vector3::y());
     }
 
     /// The grenade detonation rule reads `total_impulse` against a threshold of

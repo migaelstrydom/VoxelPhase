@@ -56,9 +56,18 @@ pub struct PlankBridgeDef {
     /// format — anchors, placements and the other oriented spawnables.
     #[serde(default)]
     pub yaw: f32,
-    /// Impulse threshold for fracture joints.
+    /// Blast impulse, in N·s, that breaks a plank off. Small: a grenade
+    /// anywhere near this bridge should take it apart.
     #[serde(default = "PlankBridgeDef::default_fracture_threshold")]
     pub fracture_threshold: f32,
+    /// Contact spike, in N·s, that breaks a plank off.
+    ///
+    /// Three orders of magnitude above the blast threshold because the two
+    /// measure different things: 2.7 tonnes of bridge settling five
+    /// centimetres already pushes 1143 N·s through a joint, which is nothing
+    /// a grenade could do.
+    #[serde(default = "PlankBridgeDef::default_contact_threshold")]
+    pub contact_threshold: f32,
 }
 
 impl PlankBridgeDef {
@@ -84,6 +93,13 @@ impl PlankBridgeDef {
         8.0
     }
 
+    /// Measured on the default bridge: it holds through a five-centimetre
+    /// settle (1143 N·s at a joint) and sheds planks from a thirty-centimetre
+    /// drop (3442 N·s). See `probe` below, which pins both.
+    pub fn default_contact_threshold() -> f32 {
+        2000.0
+    }
+
     fn beam_he(&self) -> Vector3<f32> {
         // Override beam Z to half the bridge length.
         Vector3::new(
@@ -101,6 +117,18 @@ impl PlankBridgeDef {
 
     fn child_count(&self) -> usize {
         2 + self.plank_count as usize
+    }
+
+    /// The material of each child, in the order the colliders are attached:
+    /// both beams first, then every plank.
+    ///
+    /// The fracture system paints a freed piece and the remnant from this, so
+    /// it has to match that order exactly — otherwise a beam that breaks off
+    /// comes away wearing the planks' material.
+    fn piece_materials(&self, beam: MaterialId, plank: MaterialId) -> Vec<MaterialId> {
+        let mut materials = vec![beam; 2];
+        materials.extend(std::iter::repeat_n(plank, self.plank_count as usize));
+        materials
     }
 
     /// The one declaration of the bridge's timber physics. Beams and planks
@@ -289,7 +317,9 @@ impl Spawnable for PlankBridgeDef {
             });
         }
 
-        let fracture = CompoundFracture::boxes(joints, self.child_count(), plank_mat);
+        let fracture = CompoundFracture::boxes(joints, self.child_count(), plank_mat)
+            .with_piece_materials(self.piece_materials(beam_mat, plank_mat))
+            .breaking_on_impact_at(self.contact_threshold);
 
         vec![world
             .create_entity()
@@ -417,4 +447,201 @@ fn nail_holes(u: f32, v: f32) -> f32 {
         }
     }
     best
+}
+
+#[cfg(test)]
+mod contact_fracture {
+    use super::*;
+    use crate::debug::DebugLines;
+    use crate::fracture::{ChildLoad, ChildLoads, ContactLoadTracker, FractureJoint};
+    use crate::physics::bench_harness::geometry::FlatQuadGeometry;
+    use crate::physics::stepping::{SequentialStepper, Stepper};
+    use crate::physics::{ColliderDesc, PhysicsConfig, PhysicsWorld, RigidBodyDesc};
+    use nalgebra::Point3;
+
+    const FRAME_DT: f32 = 1.0 / 60.0;
+
+    fn def() -> PlankBridgeDef {
+        PlankBridgeDef {
+            pos: (0.0, 0.0, 0.0),
+            length: PlankBridgeDef::default_length(),
+            beam_spacing: PlankBridgeDef::default_beam_spacing(),
+            plank_count: PlankBridgeDef::default_plank_count(),
+            beam_half_extents: PlankBridgeDef::default_beam_half_extents(),
+            plank_half_extents: PlankBridgeDef::default_plank_half_extents(),
+            density: PlankBridgeDef::default_density(),
+            yaw: 0.0,
+            fracture_threshold: PlankBridgeDef::default_fracture_threshold(),
+            contact_threshold: PlankBridgeDef::default_contact_threshold(),
+        }
+    }
+
+    /// Largest contact load any joint felt, and how many of the sixteen joints
+    /// the authored contact threshold would break, over one scenario.
+    fn run(label: &str, height: f32, vel: Vector3<f32>) -> (f32, usize) {
+        let d = def();
+        let beam_he = d.beam_he();
+        let plank_he = d.plank_he();
+        let half_spacing = d.beam_spacing / 2.0;
+        let beam_y = beam_he.y;
+        let plank_y = beam_he.y * 2.0 + plank_he.y;
+
+        // Joints as the spawnable builds them: every plank to both beams.
+        let joints: Vec<FractureJoint> = (0..d.plank_count as usize)
+            .flat_map(|i| {
+                [0usize, 1].map(|beam| FractureJoint {
+                    child_a: beam,
+                    child_b: 2 + i,
+                    threshold: d.fracture_threshold,
+                })
+            })
+            .collect();
+
+        {
+            let tilted = label == "end_slam";
+            let mut config = PhysicsConfig::default();
+            config.sleep.enabled = false;
+            let mut world = PhysicsWorld::new(config);
+            let body = world.create_body(
+                RigidBodyDesc::dynamic()
+                    .position(Point3::new(0.0, height, 0.0))
+                    .rotation(if tilted {
+                        UnitQuaternion::from_axis_angle(&Vector3::x_axis(), 0.35)
+                    } else {
+                        UnitQuaternion::identity()
+                    })
+                    .linear_velocity(vel)
+                    .linear_damping(0.01)
+                    .angular_damping(0.005),
+            );
+            let mut colliders = Vec::new();
+            for sx in [-half_spacing, half_spacing] {
+                colliders.push(
+                    world
+                        .attach_collider(
+                            body,
+                            ColliderDesc::box_shape(beam_he)
+                                .offset_translation(Vector3::new(sx, beam_y, 0.0))
+                                .density(d.density),
+                        )
+                        .unwrap(),
+                );
+            }
+            for i in 0..d.plank_count {
+                let z = -3.5 + i as f32 * 1.0;
+                colliders.push(
+                    world
+                        .attach_collider(
+                            body,
+                            ColliderDesc::box_shape(plank_he)
+                                .offset_translation(Vector3::new(0.0, plank_y, z))
+                                .density(d.density),
+                        )
+                        .unwrap(),
+                );
+            }
+            let mass = world.body(body).unwrap().mass();
+            let geometry = FlatQuadGeometry::new(60.0);
+            let mut stepper = SequentialStepper::new(FRAME_DT, 4);
+            let mut debug = DebugLines::default();
+            let mut tracker = ContactLoadTracker::new(colliders.len());
+            let mut peak = 0.0f32;
+            let mut peak_joint = 0.0f32;
+            let mut broken = vec![false; joints.len()];
+            for _ in 0..240 {
+                stepper.step(&mut world, FRAME_DT, &geometry, &[], &[], &mut debug);
+                let spikes = tracker.advance(&world, body, &colliders, FRAME_DT);
+                peak = peak.max(spikes.iter().fold(0.0f32, |m, s| m.max(s.magnitude)));
+
+                let body_pos = world.body(body).unwrap().position();
+                let body_rot = world.body(body).unwrap().rotation();
+                let children: Vec<ChildLoad> = colliders
+                    .iter()
+                    .zip(&spikes)
+                    .map(|(h, spike)| {
+                        let c = world.collider(*h).unwrap();
+                        ChildLoad {
+                            blast: 0.0,
+                            contact: spike.magnitude,
+                            contact_point: spike.point,
+                            centre: Point3::from(
+                                c.world_transform(body_pos, body_rot).translation.vector,
+                            ),
+                            radius: c.shape().bounding_radius(),
+                        }
+                    })
+                    .collect();
+                let loads = ChildLoads::new(children, None);
+                for (idx, joint) in joints.iter().enumerate() {
+                    let load = loads.contact_load(joint);
+                    peak_joint = peak_joint.max(load);
+                    if load > d.contact_threshold {
+                        broken[idx] = true;
+                    }
+                }
+            }
+            let _ = (mass, peak);
+            (peak_joint, broken.iter().filter(|b| **b).count())
+        }
+    }
+
+    /// The bridge is two substances, and breaking must not repaint it.
+    #[test]
+    fn beams_and_planks_keep_their_own_materials() {
+        let d = def();
+        let beam = MaterialId(7);
+        let plank = MaterialId(9);
+        let materials = d.piece_materials(beam, plank);
+
+        assert_eq!(
+            materials.len(),
+            d.child_count(),
+            "one material per child, in collider order"
+        );
+        assert_eq!(materials[0], beam, "child 0 is the left beam");
+        assert_eq!(materials[1], beam, "child 1 is the right beam");
+        assert!(
+            materials[2..].iter().all(|m| *m == plank),
+            "every remaining child is a plank"
+        );
+    }
+
+    /// The bug this guards: the bridge came apart the moment it was touched.
+    ///
+    /// Two things caused it. Its joints are authored to fail under an 8 N·s
+    /// blast, while 2.7 tonnes of bridge settling pushes over a thousand N·s
+    /// through a beam; and every joint shares a beam, so one spike on a beam
+    /// broke all sixteen at once. Contact now has its own threshold, and a
+    /// spike is felt only near where it landed.
+    #[test]
+    fn a_bridge_that_is_stood_on_or_nudged_keeps_its_planks() {
+        for (label, height, vel) in [
+            ("rest", 0.0, Vector3::zeros()),
+            ("nudge", 0.0, Vector3::new(1.5, 0.0, 0.0)),
+            ("settle", 0.05, Vector3::zeros()),
+        ] {
+            let (load, broken) = run(label, height, vel);
+            assert_eq!(
+                broken, 0,
+                "{label}: {broken} joints broke at a peak joint load of {load}"
+            );
+        }
+    }
+
+    /// It is still a rickety bridge: drop it and planks come off.
+    #[test]
+    fn a_bridge_dropped_on_its_end_sheds_planks() {
+        let (load, broken) = run("drop30cm", 0.30, Vector3::zeros());
+        assert!(
+            broken > 0,
+            "a thirty-centimetre drop broke nothing, at a peak joint load of {load}"
+        );
+    }
+
+    /// And a hard landing takes most of it apart rather than a plank or two.
+    #[test]
+    fn a_bridge_slammed_into_the_ground_comes_apart() {
+        let (_, broken) = run("slam", 2.0, Vector3::new(0.0, -8.0, 0.0));
+        assert!(broken >= 8, "a hard slam broke only {broken} of 16 joints");
+    }
 }
