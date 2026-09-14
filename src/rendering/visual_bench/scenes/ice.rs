@@ -18,7 +18,7 @@
 
 use nalgebra::{Matrix4, Point3, Vector2, Vector3};
 
-use crate::app::spawnables::ice_cube_mesh;
+use crate::app::spawnables::ice_block_mesh;
 use crate::core::error::EngineResult;
 use crate::geometry::{generate_sphere_indices, generate_sphere_vertices};
 use crate::rendering::colour::Colour;
@@ -193,7 +193,7 @@ impl VisualScene for Ice {
 
 /// One ice cube, drawn with the game's mesh and the game's substance.
 fn ice(texture: &TextureHandle, position: Vector3<f32>, yaw_degrees: f32) -> SceneMesh {
-    let (vertices, indices) = ice_cube_mesh(CUBE_HALF);
+    let (vertices, indices) = ice_block_mesh(Vector3::repeat(CUBE_HALF));
     let transform = Matrix4::new_translation(&position)
         * Matrix4::from_axis_angle(&Vector3::y_axis(), yaw_degrees.to_radians());
 

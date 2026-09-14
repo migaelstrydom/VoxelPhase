@@ -223,7 +223,8 @@ Nothing else has to change. The material's transparency is what routes its
 draws into the sorted blended pass (`src/rendering/transparency/`), so a
 spawnable built the ordinary way — `ctx.patterned(&substance, ...)`, or
 `substance.material(texture)` — comes out transparent wherever it is drawn, and
-no call site can forget. `IceCubeDef` is the worked example.
+no call site can forget. `ice/` is the worked example: one block type,
+and a wall and an igloo built out of it.
 
 Three things behave differently for a blended object, all of them deliberate:
 
@@ -240,7 +241,7 @@ Three things behave differently for a blended object, all of them deliberate:
 - **Both of its sides are drawn**, so its mesh must be closed and every
   triangle wound outwards. On an opaque object a single inside-out triangle is
   invisible (it is culled); here it is not. Worth a test when you build the
-  mesh by hand — see `ice_cube.rs`.
+  mesh by hand — see `ice/block.rs`.
 
 What tells two transmissive materials apart is mostly *not* the index — ice
 and glass differ by 0.2 there and by a factor of five in opacity. Past that,

@@ -28,10 +28,10 @@ use crate::app::creatures::{HeartCritterDef, PeeperDef, RollerDef};
 use crate::app::spawnables::{
     BananaDef, BeachBallDef, BoxDef, BoxWallDef, CapsuleDef, CrateDef, DodecahedronDef, DolosDef,
     DominoDef, FencePostDef, GlowingOrbDef, HeavyCrateDef, HexPrismDef, HoneycombWallDef, HouseDef,
-    IceCubeDef, IcosahedronDef, JackDef, JengaDef, MenhirDef, MovingPlatformDef, OctahedronDef,
-    PendulumDef, PlankBridgeDef, PlankDef, PlayWheelDef, PyramidDef, SeesawDef, Spawnable,
-    StackDef, StackItemDef, TableDef, TempleDef, TetrahedronDef, TowerDef, TrampolineDef,
-    TrilithonDef, VoussoirArchDef, BEACH_BALL_RADIUS,
+    IceBoxDef, IceWallDef, IcosahedronDef, IglooDef, JackDef, JengaDef, MenhirDef,
+    MovingPlatformDef, OctahedronDef, PendulumDef, PlankBridgeDef, PlankDef, PlayWheelDef,
+    PyramidDef, SeesawDef, Spawnable, StackDef, StackItemDef, TableDef, TempleDef, TetrahedronDef,
+    TowerDef, TrampolineDef, TrilithonDef, VoussoirArchDef, BEACH_BALL_RADIUS,
 };
 use crate::platform::{DeckSuspension, RouteLoop};
 
@@ -763,13 +763,54 @@ pub enum LevelObject {
         pos: (f32, f32, f32),
         size: f32,
     },
-    /// Block of ice: bevelled, see-through, light and very slippery.
-    IceCube {
+    /// Block of ice: bevelled, see-through, light and very slippery. Any
+    /// rectangular-prism proportions, from a cube to a frozen paving slab.
+    IceBox {
         pos: (f32, f32, f32),
-        /// Cube half-extent, before its edges are cut back.
-        #[serde(default = "IceCubeDef::default_size")]
-        size: f32,
+        /// Half-extents, before the edges are cut back.
+        #[serde(default = "IceBoxDef::default_half_extents")]
+        half_extents: (f32, f32, f32),
         /// Rotation about `+Y`, in degrees.
+        #[serde(default)]
+        yaw: f32,
+    },
+    /// Wall of ice bricks in a running bond. Loose bricks: it can be knocked
+    /// down.
+    IceWall {
+        /// Centre of the wall's bottom edge.
+        base: (f32, f32, f32),
+        #[serde(default = "IceWallDef::default_brick")]
+        brick_half_extents: (f32, f32, f32),
+        /// Bricks per course.
+        columns: u32,
+        /// Courses stacked upward.
+        rows: u32,
+        /// Rotation about `+Y` in degrees; the wall runs along its own `+X`.
+        #[serde(default)]
+        yaw: f32,
+        /// Offset alternate courses by half a brick. Off gives stack bond.
+        #[serde(default = "IceWallDef::default_stagger")]
+        stagger: bool,
+    },
+    /// Corbelled dome of ice blocks with a doorway. Fixed, not loose — ice is
+    /// far too slippery for a dome of it to stand on its own.
+    Igloo {
+        /// Centre of the igloo's floor.
+        pos: (f32, f32, f32),
+        /// Outer radius of the dome, which is also its height.
+        #[serde(default = "IglooDef::default_radius")]
+        radius: f32,
+        #[serde(default = "IglooDef::default_wall_thickness")]
+        wall_thickness: f32,
+        /// Height of one course, measured along the dome's surface.
+        #[serde(default = "IglooDef::default_block_height")]
+        block_height: f32,
+        /// Width of the doorway. Zero for a sealed dome.
+        #[serde(default = "IglooDef::default_door_width")]
+        door_width: f32,
+        #[serde(default = "IglooDef::default_door_height")]
+        door_height: f32,
+        /// Rotation about `+Y` in degrees; the doorway faces its own `+X`.
         #[serde(default)]
         yaw: f32,
     },
@@ -1310,7 +1351,9 @@ impl LevelObject {
             LevelObject::Plank { pos, .. } => ("Plank", point(pos)),
             LevelObject::Crate { pos, .. } => ("Crate", point(pos)),
             LevelObject::HeavyCrate { pos, .. } => ("HeavyCrate", point(pos)),
-            LevelObject::IceCube { pos, .. } => ("IceCube", point(pos)),
+            LevelObject::IceBox { pos, .. } => ("IceBox", point(pos)),
+            LevelObject::IceWall { base, .. } => ("IceWall", point(base)),
+            LevelObject::Igloo { pos, .. } => ("Igloo", point(pos)),
             LevelObject::Stack { base, .. } => ("Stack", point(base)),
             LevelObject::Tower { base, .. } => ("Tower", point(base)),
             LevelObject::BoxWall { base, .. } => ("BoxWall", point(base)),
@@ -1420,7 +1463,9 @@ impl LevelObject {
             } => rect(length * 0.5, width * 0.5, *yaw),
             LevelObject::Crate { size, .. } => rect(*size, *size, 0.0),
             LevelObject::HeavyCrate { size, .. } => rect(*size, *size, 0.0),
-            LevelObject::IceCube { size, yaw, .. } => rect(*size, *size, *yaw),
+            LevelObject::IceBox {
+                half_extents, yaw, ..
+            } => rect(half_extents.0, half_extents.2, *yaw),
             LevelObject::House { half_extents, .. } => rect(half_extents.0, half_extents.2, 0.0),
 
             // Assemblies that stand on one patch of ground.
@@ -1443,6 +1488,18 @@ impl LevelObject {
                 box_half_extents.2,
                 *yaw,
             ),
+            LevelObject::IceWall {
+                brick_half_extents,
+                columns,
+                yaw,
+                ..
+            } => rect(
+                grid_half(*columns, brick_half_extents.0),
+                brick_half_extents.2,
+                *yaw,
+            ),
+            // The dome touches the ground all the way round its base.
+            LevelObject::Igloo { radius, .. } => Disc { radius: *radius },
             LevelObject::HoneycombWall {
                 columns,
                 radius,
@@ -1602,7 +1659,9 @@ impl LevelObject {
         match self {
             // Turned by their own yaw.
             LevelObject::Box { .. }
-            | LevelObject::IceCube { .. }
+            | LevelObject::IceBox { .. }
+            | LevelObject::IceWall { .. }
+            | LevelObject::Igloo { .. }
             | LevelObject::Plank { .. }
             | LevelObject::Stack { .. }
             | LevelObject::Tower { .. }
@@ -1703,7 +1762,15 @@ impl LevelObject {
                 p3(pos);
                 *yaw += turn;
             }
-            LevelObject::IceCube { pos, yaw, .. } => {
+            LevelObject::IceBox { pos, yaw, .. } => {
+                p3(pos);
+                *yaw += turn;
+            }
+            LevelObject::IceWall { base, yaw, .. } => {
+                p3(base);
+                *yaw += turn;
+            }
+            LevelObject::Igloo { pos, yaw, .. } => {
                 p3(pos);
                 *yaw += turn;
             }
@@ -1851,9 +1918,47 @@ impl LevelObject {
                 size: *size,
             }),
 
-            LevelObject::IceCube { pos, size, yaw } => Box::new(IceCubeDef {
+            LevelObject::IceBox {
+                pos,
+                half_extents,
+                yaw,
+            } => Box::new(IceBoxDef {
                 pos: *pos,
-                size: *size,
+                half_extents: *half_extents,
+                yaw: *yaw,
+            }),
+
+            LevelObject::IceWall {
+                base,
+                brick_half_extents,
+                columns,
+                rows,
+                yaw,
+                stagger,
+            } => Box::new(IceWallDef {
+                base: *base,
+                brick_half_extents: *brick_half_extents,
+                columns: *columns,
+                rows: *rows,
+                yaw: *yaw,
+                stagger: *stagger,
+            }),
+
+            LevelObject::Igloo {
+                pos,
+                radius,
+                wall_thickness,
+                block_height,
+                door_width,
+                door_height,
+                yaw,
+            } => Box::new(IglooDef {
+                pos: *pos,
+                radius: *radius,
+                wall_thickness: *wall_thickness,
+                block_height: *block_height,
+                door_width: *door_width,
+                door_height: *door_height,
                 yaw: *yaw,
             }),
 
