@@ -1,0 +1,166 @@
+// Wrecking Yard — a sunken sandstone arena full of things that fall over, and
+// two boulders that want you.
+//
+// The rollers cannot be killed, and they are heavier than anything else in the
+// yard. So they are not the enemy so much as the weather: they flatten the
+// pyramid you were climbing, they scatter the crate stair you needed, and they
+// go where you go. The level is about using that. A roller on a plank bridge is
+// a roller in the moat, and a roller in the moat stays there.
+//
+//                    ┌────────────── rim, 8 m up ───────────────┐
+//   spawn ─▶ ramp ─▶ │ crate stair   ▒moat▒   pyramid            │
+//                    │ pit + tunnel  ▒bridge▒ rock bunker (grenade)│
+//                    │ toys          ▒stones▒ GOAL under the arch  │
+//                    └───────────────────────────────────────────┘
+//
+// Five gems, four ways to get one: climb something loose, blow a hole in
+// something solid, go down a hole and out the flooded end, and wade. The goal
+// wants four, so one demolition can fail and the run still finishes.
+Level(
+    name: "Wrecking Yard",
+
+    segments: [
+        (
+            name: "yard",
+
+            terrain: Terrain(
+                voxel_size: 1.0,
+                bounds: (min: (0.0, -32.0, 0.0), max: (128.0, 32.0, 128.0)),
+                base_height: 12.0,
+                material_layers: [
+                    (depth: 1.5,   material: Sand),
+                    (depth: 999.0, material: Rock),
+                ],
+
+                features: [
+                    TerrainRoughness(frequency: 0.04, amplitude: 1.2, octaves: 3, seed: 23),
+
+                    // ── The arena floor, 8 m below the rim. Nothing rolls out. ──
+                    Plateau(min: (24.0, 24.0), max: (104.0, 104.0), height: 4.0),
+
+                    // The way in. Wide enough that the cosine edge falloff still
+                    // leaves a 6 m core at full grade.
+                    Ramp(
+                        from: (12.0, 64.0),
+                        to: (30.0, 64.0),
+                        start_height: 12.0,
+                        end_height: 4.0,
+                        width: 14.0,
+                    ),
+
+                    // ── The moat: a flooded cut across the middle. ──────────
+                    // Bed at 0.0, water at 3.0. Its walls are a full 4 m, which
+                    // is the point: a boulder that goes in does not come out.
+                    Plateau(min: (60.0, 24.0), max: (68.0, 104.0), height: 0.0),
+                    // The one way out, for players only: three terraces at the
+                    // north end, each a step a person clears and a ball does not.
+                    Plateau(min: (60.0, 92.0), max: (68.0, 104.0), height: 1.3),
+                    Plateau(min: (60.0, 96.0), max: (68.0, 104.0), height: 2.6),
+                    Plateau(min: (60.0, 100.0), max: (68.0, 104.0), height: 3.9),
+                ],
+
+                volumes: [
+                    // ── The bunker: a rock knob with a hollow heart. ────────
+                    // The cavity stops two and a half metres short of the
+                    // outside on the axis — a metre opened up at this voxel
+                    // size. Rock, not sand: it takes a grenade, not a kick.
+                    Pillar(center: (88.0, 40.0), height: 10.0, radius: 5.0),
+                    Tunnel(center: (88.0, 40.0), direction: (1.0, 0.0), length: 5.0, radius: 1.6, depth: 5.6),
+
+                    // ── The pit, and the flooded way out of it. ─────────────
+                    // Six metres straight down to a gem. The bore runs east
+                    // from the pit floor into the moat bed; you leave through
+                    // the water and climb the north terraces.
+                    Shaft(center: (40.0, 88.0), from_y: -2.0, to_y: 4.0, radius: 3.0, ledge: None, material: Rock),
+                    Tunnel(center: (50.5, 88.0), direction: (1.0, 0.0), length: 21.0, radius: 1.8, depth: 0.0),
+
+                    // ── Stepping stones across the moat, south. ─────────────
+                    // Player-width hops; a boulder has nothing to roll along.
+                    Platform(center: (62.4, 4.0, 40.0), half_extents: (1.0, 1.0), thickness: 4.5),
+                    Platform(center: (65.6, 4.0, 40.0), half_extents: (1.0, 1.0), thickness: 4.5),
+                ],
+            ),
+
+            objects: [
+                // ── The bridge: the trap the level is named for. ───────────
+                // Eight metres of plank on two beams, rated for a person. A
+                // two-tonne boulder chasing you across snaps it and drops
+                // through into three metres of water.
+                PlankBridge(pos: (64.0, 4.4, 64.0), length: 9.0, yaw: 90.0),
+
+                // ── West half ──────────────────────────────────────────────
+                // A stair of loose crates up to a gem. Quick before something
+                // heavy comes through it.
+                // Metre cubes (`size` is a half-extent), so each step is 1 m.
+                Stack(base: (46.0, 4.0, 44.0), items: [Crate(size: 0.5)]),
+                Stack(base: (47.1, 4.0, 44.0), items: [Crate(size: 0.5), Crate(size: 0.5)]),
+                Stack(base: (48.2, 4.0, 44.0), items: [Crate(size: 0.5), Crate(size: 0.5), Crate(size: 0.5)]),
+                Gem(pos: (49.4, 7.9, 44.0), colour: Some((1.0, 0.8, 0.3))),
+
+                // The pit gem, lit so you can see the bottom from the rim.
+                Gem(pos: (40.0, -1.3, 88.0), colour: Some((1.0, 0.5, 0.8))),
+                GlowingOrb(pos: (40.0, -1.5, 90.5), colour: Some((1.0, 0.5, 0.8)), glow: Some(2.4)),
+                GlowingOrb(pos: (50.0, -1.4, 88.0), colour: Some((0.4, 0.7, 1.0)), glow: Some(2.0)),
+                GlowingOrb(pos: (58.0, -1.4, 88.0), colour: Some((0.4, 0.7, 1.0)), glow: Some(2.0)),
+
+                // Toys. None of them is the route; all of them are in the way.
+                Jenga(base: (44.0, 4.0, 60.0)),
+                Seesaw(pos: (36.0, 52.0)),
+                Domino(base: (32.0, 4.0, 70.0), direction: (1.0, 0.0), count: 16),
+                Tower(base: (42.0, 4.0, 74.0), box_half_extents: (0.5, 0.5, 0.5), count: 5),
+                BoxWall(
+                    base: (52.0, 4.0, 76.0),
+                    box_half_extents: (1.0, 0.5, 0.5),
+                    columns: 5,
+                    rows: 4,
+                    stagger: true,
+                ),
+                HeartCritter(pos: (36.0, 96.0)),
+
+                // ── The moat ───────────────────────────────────────────────
+                // Wade in from the north terraces. Glows through the water.
+                Gem(pos: (64.0, 0.7, 52.0), colour: Some((0.5, 0.9, 1.0))),
+
+                // ── East half ──────────────────────────────────────────────
+                // Five courses of sandstone, a metre a step, gem on the cap.
+                Pyramid(base: (86.0, 4.0, 86.0), block_half_extents: (1.0, 0.5, 1.0), base_width: 5),
+                Gem(pos: (86.0, 10.0, 86.0), colour: Some((1.0, 0.8, 0.3))),
+
+                // Inside the bunker. The knob is solid rock all round; the
+                // east and west faces are two and a half metres thick on the axis.
+                Gem(pos: (88.0, 5.2, 40.0), colour: Some((0.4, 1.0, 0.6))),
+                GlowingOrb(pos: (89.0, 4.6, 40.0), colour: Some((0.4, 1.0, 0.6)), glow: Some(2.0)),
+
+                // More in the way.
+                Pendulum(pos: (96.0, 84.0)),
+                PlayWheel(pos: (78.0, 100.0)),
+                Trampoline(pos: (74.0, 4.0, 34.0)),
+                HeavyCrate(pos: (80.0, 4.5, 60.0), size: 0.8),
+                HeavyCrate(pos: (81.4, 4.5, 61.6), size: 0.8),
+                HeartCritter(pos: (94.0, 70.0)),
+
+                // ── The finish ─────────────────────────────────────────────
+                VoussoirArch(base: (98.0, 4.0, 64.0)),
+                Goal(pos: (98.0, 4.0, 64.0), required_gems: 4),
+
+                // ── The weather ────────────────────────────────────────────
+                Roller(pos: (84.0, 64.0)),
+                Roller(pos: (48.0, 96.0)),
+            ],
+        ),
+    ],
+
+    placements: [
+        Root(segment: "yard", origin: (0.0, 0.0, 0.0), yaw: 0.0),
+    ],
+
+    // On the rim, at the head of the ramp, looking over the whole yard.
+    player_spawn: (8.0, 13.5, 64.0),
+
+    water: Some((
+        ocean_level: None,
+        bodies: [
+            Pool(seed: (64.0, 64.0), surface_level: 3.0),
+        ],
+    )),
+)

@@ -1,0 +1,217 @@
+// Skyway — up a canyon, into a hollow spire, and out onto the sky.
+//
+// The other two demo levels are about things that move when you touch them.
+// This one is about height: forty-six metres of it, gained in four different
+// ways so each stretch feels different underfoot.
+//
+//   canyon floor ─▶ slab hops ─▶ catwalk ─▶ shuttle across the river
+//       ─▶ north ledge ─▶ stair ─▶ leap to the spire ─▶ helical ledge inside
+//       ─▶ the rim ─▶ lift ─▶ sky island ─▶ GOAL
+//
+// Two segments. The canyon is landscape at 1 m voxels. The spire is a separate
+// 0.5 m segment because a helical ledge two and a half metres wide needs the
+// finer lattice to read as a ledge and not as a stack of shelves. They meet
+// across a 4 m leap at the canyon's east face — the leap is the fiction that
+// the spire calved off the plateau.
+//
+// Rises are 2 m or less, gaps 3 m or less, and every drop lands on something.
+// Falling off the spire drops you 32 m onto its own plinth, two metres below
+// the ledge you entered on. It costs the climb, not the run.
+Level(
+    name: "Skyway",
+
+    segments: [
+        // ── The canyon ────────────────────────────────────────────────────
+        (
+            name: "canyon",
+
+            terrain: Terrain(
+                voxel_size: 1.0,
+                bounds: (min: (0.0, -32.0, 0.0), max: (95.0, 64.0, 64.0)),
+                base_height: 4.0,
+                material_layers: [
+                    (depth: 1.0,   material: Grass),
+                    (depth: 3.0,   material: Dirt),
+                    (depth: 999.0, material: Rock),
+                ],
+
+                features: [
+                    TerrainRoughness(frequency: 0.06, amplitude: 0.8, octaves: 3, seed: 31),
+
+                    // Canyon walls: sheer, 26 m above the floor.
+                    Plateau(min: (0.0, 0.0),  max: (96.0, 12.0), height: 30.0),
+                    Plateau(min: (0.0, 52.0), max: (96.0, 64.0), height: 30.0),
+
+                    // The river down the middle. Bed at 1.0, water at 3.0,
+                    // banks terraced so a wade out is a step and a half.
+                    Plateau(min: (0.0, 26.0), max: (96.0, 38.0), height: 2.5),
+                    Plateau(min: (0.0, 28.0), max: (96.0, 36.0), height: 1.0),
+                ],
+
+                volumes: [
+                    // ── Slab hops off the floor, south side. 2 m up, 2 m over. ──
+                    Platform(center: (14.0, 6.0, 44.0),  half_extents: (1.5, 1.5), thickness: 2.5),
+                    Platform(center: (19.0, 8.0, 44.0),  half_extents: (1.5, 1.5), thickness: 4.5),
+                    Platform(center: (24.0, 10.0, 44.0), half_extents: (1.5, 1.5), thickness: 6.5),
+
+                    // ── The catwalk along the south wall. ──────────────────
+                    Path(points: [(26.0, 10.0, 44.0), (38.0, 10.0, 44.0)], width: 4.0, thickness: 2.0),
+
+                    // ── The north ledge, climbing as it runs east. ─────────
+                    Path(points: [(40.0, 10.0, 20.0), (60.0, 12.0, 20.0)], width: 4.0, thickness: 2.0, profile: Rounded),
+                    Staircase(from: (60.0, 12.0, 20.0), to: (72.0, 18.0, 20.0), width: 4.0, steps: 6, thickness: 2.0),
+                    // Ends two metres short of the bound, and ends running
+                    // along x. A deck that reaches the face allocates a chunk
+                    // past it, and that chunk would land inside the spire's.
+                    Path(
+                        points: [(72.0, 18.0, 20.0), (84.0, 18.0, 26.0), (90.0, 18.0, 32.0), (94.0, 18.0, 32.0)],
+                        width: 4.0,
+                        thickness: 2.0,
+                    ),
+
+                    // A rock hanging over the river, off the shuttle's route.
+                    // The shuttle passes a metre from it, two below it: jump
+                    // when you are alongside, or ride on and leave the gem.
+                    Island(center: (48.0, 11.4, 34.0), half_extents: (2.0, 1.0, 2.0), edge_noise: 0.3),
+
+                    // A stone in the river with a gem on it. A wade.
+                    Platform(center: (60.0, 3.4, 32.0), half_extents: (1.0, 1.0), thickness: 3.0),
+                ],
+            ),
+
+            anchors: [
+                // The east face, at ledge height, facing the spire.
+                (name: "east_ledge", pos: (95.0, 18.0, 32.0), yaw: 0.0),
+            ],
+
+            objects: [
+                // First thing you meet: a wrecking ball across the approach.
+                Pendulum(pos: (10.0, 47.0)),
+
+                // ── The shuttle. Waits at the catwalk, crosses the river, ──
+                // stops three metres short of the north ledge.
+                MovingPlatform(
+                    waypoints: [(43.0, 10.3, 44.0), (43.0, 10.3, 27.0)],
+                    half_extents: (2.0, 0.2, 2.0),
+                    speed: 3.0,
+                ),
+
+                // Gems on the way up.
+                Gem(pos: (60.0, 4.2, 32.0),  colour: Some((0.5, 0.9, 1.0))),
+                Gem(pos: (48.0, 13.2, 34.0), colour: Some((1.0, 0.5, 0.8))),
+                Gem(pos: (72.0, 18.8, 20.0), colour: Some((1.0, 0.8, 0.3))),
+
+                // Ground floor life. Both are terrain-anchored, so both live on
+                // the heightfield rather than on any of the built ledges.
+                Peeper(pos: (30.0, 46.0)),
+                Peeper(pos: (74.0, 42.0)),
+                HeartCritter(pos: (20.0, 22.0)),
+
+                // Set dressing on the floor, and something to climb back up
+                // with if you come off the catwalk: the trampoline throws you
+                // higher than you fell.
+                Trampoline(pos: (32.0, 5.0, 46.0)),
+                Menhir(pos: (50.0, 44.0)),
+                Menhir(pos: (56.0, 48.0)),
+                FencePost(pos: (8.0, 22.0)),
+                FencePost(pos: (12.0, 20.0)),
+                Crate(pos: (16.0, 4.5, 40.0), size: 0.5),
+                BeachBall(pos: (44.0, 4.0, 32.0)),
+            ],
+        ),
+
+        // ── The spire ─────────────────────────────────────────────────────
+        // A hollow rock tower on a plinth. You enter through a bore at ledge
+        // height, climb the helix inside, and come out on a rim that is open
+        // to the sky in the middle.
+        (
+            name: "spire",
+
+            terrain: Terrain(
+                voxel_size: 0.5,
+                bounds: (min: (0.0, -16.0, 0.0), max: (48.0, 64.0, 48.0)),
+                // The plinth. Two metres under the entry ledge, so a fall from
+                // the rim lands here and costs a hop back up.
+                base_height: 14.0,
+                material_layers: [
+                    (depth: 0.5,   material: Ite),
+                    (depth: 3.0,   material: Limestone),
+                    (depth: 999.0, material: Slate),
+                ],
+                features: [
+                    TerrainRoughness(frequency: 0.08, amplitude: 0.5, octaves: 3, seed: 53),
+                ],
+
+                volumes: [
+                    // The tower itself, 32 m above the plinth.
+                    Pillar(center: (24.0, 24.0), height: 46.0, radius: 12.0),
+
+                    // The entry ledge, from the west face to the tower.
+                    Path(points: [(1.0, 16.0, 24.0), (13.0, 16.0, 24.0)], width: 4.0, thickness: 2.0, material: Limestone),
+
+                    // The bore in. Floor at 15.8, so it meets the ledge flush
+                    // and the helix floor at 16.
+                    Tunnel(center: (16.0, 24.0), direction: (1.0, 0.0), length: 10.0, radius: 2.2, depth: 18.0),
+
+                    // The hollow, with the way up around its wall. Six metres
+                    // per turn on a 6 m bore is an 11° climb, five turns.
+                    Shaft(
+                        center: (24.0, 24.0),
+                        from_y: 16.0,
+                        to_y: 46.0,
+                        radius: 6.0,
+                        ledge: Some((width: 2.5, thickness: 1.0, pitch: 6.0, start_angle: 180.0)),
+                        material: Limestone,
+                    ),
+
+                    // The sky island, six metres above the rim, off its
+                    // north-east shoulder.
+                    Island(center: (40.0, 50.5, 38.0), half_extents: (5.0, 1.5, 5.0), edge_noise: 0.25),
+                ],
+            ),
+
+            anchors: [
+                (name: "west_ledge", pos: (0.0, 16.0, 24.0), yaw: 180.0),
+            ],
+
+            objects: [
+                // Light in the bore and up the helix, so the inside reads.
+                GlowingOrb(pos: (13.5, 16.8, 25.6), colour: Some((1.0, 0.7, 0.3)), glow: Some(2.2)),
+                GlowingOrb(pos: (24.0, 24.0, 24.0), colour: Some((0.4, 0.7, 1.0)), glow: Some(2.6)),
+                GlowingOrb(pos: (24.0, 34.0, 24.0), colour: Some((0.8, 0.3, 1.0)), glow: Some(2.6)),
+
+                // On the rim.
+                Gem(pos: (24.0, 46.8, 33.5), colour: Some((1.0, 0.8, 0.3))),
+                Trampoline(pos: (17.6, 46.0, 17.6)),
+
+                // The lift: rests on the rim's east side, climbs to half a
+                // metre off the island's south face.
+                MovingPlatform(
+                    waypoints: [(33.0, 46.5, 24.0), (39.0, 51.5, 30.5)],
+                    half_extents: (2.0, 0.2, 2.0),
+                    speed: 2.5,
+                ),
+
+                // On the island.
+                Gem(pos: (43.0, 53.2, 41.0), colour: Some((0.5, 0.9, 1.0))),
+                Goal(pos: (40.0, 52.4, 38.0), required_gems: 3),
+            ],
+        ),
+    ],
+
+    placements: [
+        Root(segment: "canyon", origin: (0.0, 0.0, 0.0), yaw: 0.0),
+        Join(segment: "spire", anchor: "west_ledge", to: "canyon.east_ledge", gap: 2.0),
+    ],
+
+    connections: [],
+
+    player_spawn: (6.0, 5.0, 44.0),
+
+    water: Some((
+        ocean_level: None,
+        bodies: [
+            Pool(seed: (48.0, 32.0), surface_level: 3.0),
+        ],
+    )),
+)

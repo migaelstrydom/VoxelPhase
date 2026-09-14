@@ -31,5 +31,8 @@
         (level: "test_empty_terrain.level.ron", triangles: 100276, open_edges: 0),
         (level: "test_segments.level.ron", triangles: 224756, open_edges: 0),
         (level: "subsidence.level.ron", triangles: 301292, open_edges: 0),
+        (level: "thin_ice.level.ron", triangles: 89412, open_edges: 0),
+        (level: "wrecking_yard.level.ron", triangles: 120792, open_edges: 0),
+        (level: "skyway.level.ron", triangles: 205916, open_edges: 0),
     ],
 )
