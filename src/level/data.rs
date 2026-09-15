@@ -28,12 +28,12 @@ use super::footprint::{Footprint, Support};
 use crate::app::creatures::{HeartCritterDef, PeeperDef, RollerDef};
 use crate::app::spawnables::{
     BananaDef, BeachBallDef, BoxDef, BoxWallDef, CapsuleDef, CrateDef, DodecahedronDef, DolosDef,
-    DominoDef, FencePostDef, GemDef, GlassSheetDef, GlowingOrbDef, GoalDef, HeavyCrateDef,
-    HexPrismDef, HoneycombWallDef, HouseDef, IceBoxDef, IceWallDef, IcosahedronDef, IglooDef,
-    JackDef, JengaDef, MenhirDef, MovingPlatformDef, OctahedronDef, PendulumDef, PlankBridgeDef,
-    PlankDef, PlayWheelDef, PyramidDef, SeesawDef, Spawnable, StackDef, StackItemDef, TableDef,
-    TempleDef, TetrahedronDef, TowerDef, TrampolineDef, TrilithonDef, VoussoirArchDef,
-    BEACH_BALL_RADIUS,
+    DominoDef, FencePostDef, FramedWindowDef, GemDef, GlassSheetDef, GlowingOrbDef, GoalDef,
+    HeavyCrateDef, HexPrismDef, HoneycombWallDef, HouseDef, IceBoxDef, IceWallDef, IcosahedronDef,
+    IglooDef, JackDef, JengaDef, MenhirDef, MovingPlatformDef, OctahedronDef, PendulumDef,
+    PlankBridgeDef, PlankDef, PlayWheelDef, PyramidDef, SeesawDef, Spawnable, StackDef,
+    StackItemDef, TableDef, TempleDef, TetrahedronDef, TowerDef, TrampolineDef, TrilithonDef,
+    VoussoirArchDef, BEACH_BALL_RADIUS,
 };
 use crate::platform::{DeckSuspension, RouteLoop};
 
@@ -852,6 +852,33 @@ pub enum LevelObject {
         #[serde(default = "GlassSheetDef::default_endurance")]
         endurance: f32,
     },
+    /// A free-standing gothic window: marble tracery on a slate base, with
+    /// three panes that craze where they are hit. One loose body, so it can
+    /// be knocked over, and a fall shatters the glass.
+    FramedWindow {
+        /// Centre of the base slab's underside.
+        pos: (f32, f32, f32),
+        /// Rotation about `+Y` in degrees; the glass faces `+Z` at zero.
+        #[serde(default)]
+        yaw: f32,
+        /// Width of the glazed opening.
+        #[serde(default = "FramedWindowDef::default_width")]
+        width: f32,
+        /// Height of the opening's straight sides below the arch.
+        #[serde(default = "FramedWindowDef::default_height")]
+        height: f32,
+        #[serde(default = "FramedWindowDef::default_thickness")]
+        thickness: f32,
+        /// Contact spike in N·s that cracks a pane.
+        #[serde(default = "FramedWindowDef::default_impact_threshold")]
+        impact_threshold: f32,
+        /// Blast impulse in N·s that frees a shard.
+        #[serde(default = "FramedWindowDef::default_blast_threshold")]
+        blast_threshold: f32,
+        /// Impulse in N·s that pulls a shard out of the stone.
+        #[serde(default = "FramedWindowDef::default_frame_grip")]
+        frame_grip: f32,
+    },
     /// Corbelled dome of ice blocks with a doorway. Fixed, not loose — ice is
     /// far too slippery for a dome of it to stand on its own.
     Igloo {
@@ -1421,6 +1448,7 @@ impl LevelObject {
             LevelObject::IceBox { pos, .. } => ("IceBox", point(pos)),
             LevelObject::IceWall { base, .. } => ("IceWall", point(base)),
             LevelObject::GlassSheet { pos, .. } => ("GlassSheet", point(pos)),
+            LevelObject::FramedWindow { pos, .. } => ("FramedWindow", point(pos)),
             LevelObject::Igloo { pos, .. } => ("Igloo", point(pos)),
             LevelObject::Stack { base, .. } => ("Stack", point(base)),
             LevelObject::Tower { base, .. } => ("Tower", point(base)),
@@ -1556,6 +1584,10 @@ impl LevelObject {
                     thickness * 0.5
                 };
                 rect(size.0 * 0.5, depth, *yaw)
+            }
+            LevelObject::FramedWindow { width, yaw, .. } => {
+                let (half_w, half_d) = FramedWindowDef::base_half_footprint(*width);
+                rect(half_w, half_d, *yaw)
             }
 
             // Assemblies that stand on one patch of ground.
@@ -1755,6 +1787,7 @@ impl LevelObject {
             | LevelObject::IceBox { .. }
             | LevelObject::IceWall { .. }
             | LevelObject::GlassSheet { .. }
+            | LevelObject::FramedWindow { .. }
             | LevelObject::Igloo { .. }
             | LevelObject::Plank { .. }
             | LevelObject::Stack { .. }
@@ -1869,6 +1902,10 @@ impl LevelObject {
                 *yaw += turn;
             }
             LevelObject::GlassSheet { pos, yaw, .. } => {
+                p3(pos);
+                *yaw += turn;
+            }
+            LevelObject::FramedWindow { pos, yaw, .. } => {
                 p3(pos);
                 *yaw += turn;
             }
@@ -2083,6 +2120,26 @@ impl LevelObject {
                 blast_threshold: *blast_threshold,
                 bearing: *bearing,
                 endurance: *endurance,
+            }),
+
+            LevelObject::FramedWindow {
+                pos,
+                yaw,
+                width,
+                height,
+                thickness,
+                impact_threshold,
+                blast_threshold,
+                frame_grip,
+            } => Box::new(FramedWindowDef {
+                pos: *pos,
+                yaw: *yaw,
+                width: *width,
+                height: *height,
+                thickness: *thickness,
+                impact_threshold: *impact_threshold,
+                blast_threshold: *blast_threshold,
+                frame_grip: *frame_grip,
             }),
 
             LevelObject::Igloo {

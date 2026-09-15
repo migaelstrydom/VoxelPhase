@@ -97,7 +97,13 @@ impl ChildLoads {
             return true;
         }
 
-        let contact_threshold = self.contact_threshold.unwrap_or(joint.threshold);
+        // A joint never lets go below its own number under any load: the
+        // compound's contact threshold is authored for its brittle joints,
+        // and a frame welded together at a million N·s must not fall apart
+        // because the pane in it cracks at twenty-five.
+        let contact_threshold = self
+            .contact_threshold
+            .map_or(joint.threshold, |authored| authored.max(joint.threshold));
         self.contact_load(joint) > contact_threshold
     }
 

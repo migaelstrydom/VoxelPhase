@@ -15,6 +15,7 @@
 mod components;
 mod crazing;
 mod fatigue;
+mod jolt;
 mod pane;
 mod polygon;
 pub mod systems;
@@ -24,6 +25,7 @@ mod web;
 pub use components::BrittleSheet;
 pub use crazing::CrazeRule;
 pub use fatigue::{FatigueRule, FatigueTracker};
+pub use jolt::{BodyJolt, JoltTracker, Motion};
 pub use pane::SheetFrame;
 pub use polygon::ConvexPolygon;
 pub use systems::GlassCrackSystem;

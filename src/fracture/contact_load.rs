@@ -52,12 +52,28 @@ impl Default for ContactSpike {
     }
 }
 
+/// Whose weight sets the churn deadband a spike must clear.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Deadband {
+    /// One frame of the whole body's weight. Right for a compound whose
+    /// children all carry the structure: a bridge redistributes the whole
+    /// deck between its beams.
+    #[default]
+    WholeBody,
+    /// One frame of each child's own weight. Right for a compound where a
+    /// heavy part must not hide what happens to a light one: a stone frame
+    /// around a pane would otherwise mask every blow the glass takes.
+    OwnWeight,
+}
+
 /// The contact impulse each child of a compound carried last frame, and enough
 /// context to tell a real impact from the solver resuming work.
 #[derive(Debug, Default)]
 pub struct ContactLoadTracker {
     /// Last frame's contact impulse per child, indexed by child.
     levels: Vec<f32>,
+    /// Whose weight the churn deadband is taken from.
+    deadband: Deadband,
     /// Whether the body was asleep when `advance` last ran, so that the frame
     /// it wakes can re-baseline rather than report a difference.
     was_asleep: bool,
@@ -68,8 +84,15 @@ impl ContactLoadTracker {
     pub fn new(child_count: usize) -> Self {
         Self {
             levels: vec![0.0; child_count],
+            deadband: Deadband::default(),
             was_asleep: false,
         }
+    }
+
+    /// The same tracker judging spikes against a different weight.
+    pub fn with_deadband(mut self, deadband: Deadband) -> Self {
+        self.deadband = deadband;
+        self
     }
 
     /// This frame's spike per child, advancing the stored baseline.
@@ -100,11 +123,19 @@ impl ContactLoadTracker {
         // A body that never moves has no weight to redistribute: its own
         // mass is not going through its children, so it gets no deadband.
         // With one, a fixed pane's own mass hid every footstep on it.
-        let deadband = world
+        let weight_per_frame = world.config().gravity.magnitude() * frame_dt;
+        let body_deadband = world
             .body(body)
             .filter(|b| !b.is_static())
-            .map(|b| b.mass() * world.config().gravity.magnitude() * frame_dt)
+            .map(|b| b.mass() * weight_per_frame)
             .unwrap_or(0.0);
+        let deadband_of = |handle: ColliderHandle| match self.deadband {
+            Deadband::WholeBody => body_deadband,
+            Deadband::OwnWeight if body_deadband == 0.0 => 0.0,
+            Deadband::OwnWeight => world
+                .collider(handle)
+                .map_or(0.0, |c| c.mass() * weight_per_frame),
+        };
 
         let waking = std::mem::replace(&mut self.was_asleep, false);
         let mut spikes = Vec::with_capacity(collider_handles.len());
@@ -115,7 +146,7 @@ impl ContactLoadTracker {
                 magnitude: if waking {
                     0.0
                 } else {
-                    (level - self.levels[child] - deadband).max(0.0)
+                    (level - self.levels[child] - deadband_of(*handle)).max(0.0)
                 },
                 point: impact.map(|i| i.point).unwrap_or_else(Point3::origin),
             });

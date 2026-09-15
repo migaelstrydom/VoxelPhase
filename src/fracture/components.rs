@@ -3,7 +3,7 @@
 use nalgebra::Vector3;
 use specs::{Component, VecStorage};
 
-use super::contact_load::ContactLoadTracker;
+use super::contact_load::{ContactLoadTracker, Deadband};
 use crate::app::spawnables::shared::models::{cuboid_mesh, PieceMesh};
 use crate::rendering::material::MaterialId;
 
@@ -174,6 +174,13 @@ impl CompoundFracture {
             self.kicks[child] += kick;
         }
         self.split_pending = true;
+    }
+
+    /// Judge contact spikes against each child's own weight rather than the
+    /// whole body's.
+    pub fn with_deadband(mut self, deadband: Deadband) -> Self {
+        self.contact_load = std::mem::take(&mut self.contact_load).with_deadband(deadband);
+        self
     }
 
     /// Give up every remaining child on the next split and retire the body.

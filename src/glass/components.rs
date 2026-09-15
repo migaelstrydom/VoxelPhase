@@ -4,8 +4,9 @@ use specs::{Component, VecStorage};
 
 use super::crazing::CrazeRule;
 use super::fatigue::{FatigueRule, FatigueTracker};
+use super::jolt::JoltTracker;
 use super::pane::SheetFrame;
-use crate::fracture::ContactLoadTracker;
+use crate::fracture::{ContactLoadTracker, Deadband};
 use crate::rendering::material::MaterialId;
 
 /// A flat compound body whose children crack into webs where they are hit.
@@ -32,8 +33,13 @@ pub struct BrittleSheet {
     /// that broke it. Sized to what was standing there: a person's foot
     /// needs a hole wider than the player's capsule to fall through.
     pub fatigue_hole_radius: f32,
-    /// What every shard is drawn with.
+    /// What every shard is drawn with, and what marks a child as glass: a
+    /// child of the body wearing any other material is frame. The frame is
+    /// never crazed, never counted as remnant, and holds the shards that
+    /// touch it at `frame_grip` rather than `joint_threshold`.
     pub material: MaterialId,
+    /// Impulse, in N·s, that pulls a shard out of the frame it touches.
+    pub frame_grip: f32,
     /// Area, in m², below which what is left of the sheet stops being a
     /// sheet and comes free as one more shard. Without it a fixed pane
     /// chipped away at ends as a crumb hanging where the pane was.
@@ -43,6 +49,8 @@ pub struct BrittleSheet {
     pub contact_load: ContactLoadTracker,
     /// Held-load damage per child.
     pub damage: FatigueTracker,
+    /// The body's motion across frames, so a jarred frame loads its glass.
+    pub jolt: JoltTracker,
 }
 
 impl BrittleSheet {
@@ -60,10 +68,31 @@ impl BrittleSheet {
             fatigue: None,
             fatigue_hole_radius: 0.35,
             material,
+            frame_grip: joint_threshold,
             min_remnant_area: 0.03,
             contact_load: ContactLoadTracker::new(1),
             damage: FatigueTracker::new(1),
+            jolt: JoltTracker::default(),
         }
+    }
+
+    /// A sheet set in a frame of some other material, which holds each shard
+    /// touching it at `grip` N·s.
+    pub fn held_by_frame(mut self, grip: f32) -> Self {
+        self.frame_grip = grip;
+        self
+    }
+
+    /// Judge the glass's contact spikes against each child's own weight, as
+    /// a sheet with a heavy frame must.
+    pub fn with_deadband(mut self, deadband: Deadband) -> Self {
+        self.contact_load = std::mem::take(&mut self.contact_load).with_deadband(deadband);
+        self
+    }
+
+    /// Whether the child wearing `material` is glass rather than frame.
+    pub fn is_glass(&self, material: MaterialId) -> bool {
+        material == self.material
     }
 
     /// A sheet whose remnant lets go once it is smaller than `area` m².

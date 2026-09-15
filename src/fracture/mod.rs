@@ -11,7 +11,7 @@ mod load;
 pub mod systems;
 
 pub use components::{CompoundFracture, FractureJoint};
-pub use contact_load::{ContactLoadTracker, ContactSpike};
+pub use contact_load::{ContactLoadTracker, ContactSpike, Deadband};
 pub use debris::{Debris, DebrisBudget, DebrisCullSystem};
 pub use load::{ChildLoad, ChildLoads};
 pub use systems::FractureSystem;

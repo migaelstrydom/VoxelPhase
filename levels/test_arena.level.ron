@@ -101,6 +101,7 @@ Level(
                 // cracks under a footstep and gives way under anyone who
                 // stops on it — walk across, do not stand.
                 GlassSheet(pos: (1.0, 1.0, 26.0), size: (2.4, 1.8), yaw: 90.0),
+                FramedWindow(pos: (6.0, 0.0, 15.0), yaw: 90.0),
                 GlassSheet(
                     pos: (-3.0, 0.9, 24.0),
                     size: (2.0, 5.0),

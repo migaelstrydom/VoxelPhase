@@ -9,6 +9,7 @@ use super::components::BrittleSheet;
 use super::crazing::cells_within;
 use super::polygon::ConvexPolygon;
 use crate::components::{ModelInstance, RigidBodyComponent};
+use crate::debug::DebugLog;
 use crate::fracture::systems::compound_model_of;
 use crate::fracture::{CompoundFracture, FractureJoint};
 use crate::physics::{
@@ -36,6 +37,10 @@ const MIN_JOINT_OVERLAP: f32 = 0.01;
 /// clearance means no shard ever starts out touching another. It is also,
 /// through the glass, the visible crack.
 const CRACK_GAP: f32 = 0.0008;
+/// Glass area, in m², a jolt's inertial impulse is scaled to before it is
+/// judged against the craze threshold: about one window pane, so the
+/// threshold authored for a blow on a pane means the same thing for a jolt.
+const JOLT_REFERENCE_AREA: f32 = 0.5;
 
 /// Cracks brittle sheets where they are hit, and hands the results to the
 /// fracture system.
@@ -54,19 +59,37 @@ impl<'a> System<'a> for GlassCrackSystem {
         WriteStorage<'a, ModelInstance>,
         Read<'a, PhysicsImpulseQueue>,
         Read<'a, Time>,
+        specs::Write<'a, DebugLog>,
     );
 
     fn run(&mut self, data: Self::SystemData) {
-        let (mut physics, mut sheets, mut fractures, bodies, mut models, impulse_queue, time) =
-            data;
+        let (
+            mut physics,
+            mut sheets,
+            mut fractures,
+            bodies,
+            mut models,
+            impulse_queue,
+            time,
+            mut debug_log,
+        ) = data;
         let dt = time.delta_seconds();
         let blasts = impulse_queue.last_impulses();
+        let mut telemetry = GlassTelemetry::default();
 
         for (sheet, fracture, body_comp, model) in
             (&mut sheets, &mut fractures, &bodies, &mut models).join()
         {
             let body_handle = body_comp.0;
-            let hits = gather_hits(&physics, sheet, body_handle, blasts, dt);
+            let hits = gather_hits(
+                &physics,
+                sheet,
+                fracture,
+                body_handle,
+                blasts,
+                dt,
+                &mut telemetry,
+            );
             if hits.is_empty() {
                 continue;
             }
@@ -77,7 +100,7 @@ impl<'a> System<'a> for GlassCrackSystem {
             }
             if cracked {
                 if remnant_area(&physics, sheet, fracture, body_handle) < sheet.min_remnant_area {
-                    fracture.release();
+                    let_go_of_the_glass(sheet, fracture);
                 }
                 if let Some(rebuilt) = compound_model_of(
                     &physics,
@@ -89,7 +112,26 @@ impl<'a> System<'a> for GlassCrackSystem {
                 }
             }
         }
+
+        debug_log.add("Glass/MaxSpike", format!("{:.1} N·s", telemetry.spike));
+        debug_log.add("Glass/MaxJolt", format!("{:.1} N·s", telemetry.jolt));
+        debug_log.add(
+            "Glass/MaxStoneSpike",
+            format!("{:.1} N·s", telemetry.stone_spike),
+        );
     }
+}
+
+/// The largest loads any glass saw this frame, for the debug log: the
+/// numbers to read off when tuning a threshold.
+#[derive(Debug, Default, Clone, Copy)]
+struct GlassTelemetry {
+    /// Largest contact spike on a glass child, N·s.
+    spike: f32,
+    /// Largest jolt on a glass child, N·s, scaled to `JOLT_REFERENCE_AREA`.
+    jolt: f32,
+    /// Largest contact spike on a frame child, N·s.
+    stone_spike: f32,
 }
 
 /// One thing that happened to one child this frame.
@@ -110,9 +152,11 @@ struct Hit {
 fn gather_hits(
     physics: &PhysicsResource,
     sheet: &mut BrittleSheet,
+    fracture: &CompoundFracture,
     body_handle: RigidBodyHandle,
     blasts: &[PhysicsImpulse],
     dt: f32,
+    telemetry: &mut GlassTelemetry,
 ) -> Vec<Hit> {
     let world = &physics.world;
     let Some(body) = world.body(body_handle) else {
@@ -123,6 +167,31 @@ fn gather_hits(
     let handles: Vec<ColliderHandle> = body.colliders().to_vec();
 
     let spikes = sheet.contact_load.advance(world, body_handle, &handles, dt);
+    let jolt = sheet
+        .jolt
+        .advance(body.linear_velocity(), body.angular_velocity());
+    // Where the frame was struck this frame, if it was: the glass cracks
+    // nearest to it. A jolt counts only then. The body is also yanked about
+    // by things that are not collisions — a grab's orientation lock has the
+    // torque to jerk a tonne of stone every frame — and glass carried in a
+    // frame is not glass hit by one.
+    let threshold = sheet.crazing.threshold;
+    let frame_struck = handles
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| !sheet.is_glass(fracture.material_of(*index)))
+        .map(|(index, _)| spikes[index])
+        .max_by(|a, b| a.magnitude.total_cmp(&b.magnitude))
+        .filter(|spike| spike.magnitude > threshold)
+        .map(|spike| spike.point);
+    telemetry.stone_spike = telemetry.stone_spike.max(
+        handles
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| !sheet.is_glass(fracture.material_of(*index)))
+            .map(|(index, _)| spikes[index].magnitude)
+            .fold(0.0, f32::max),
+    );
     let failed = match &sheet.fatigue {
         Some(rule) if dt > 0.0 => {
             let forces: Vec<f32> = handles
@@ -139,11 +208,14 @@ fn gather_hits(
         _ => Vec::new(),
     };
 
-    let threshold = sheet.crazing.threshold;
     let mut hits = Vec::new();
     for (index, handle) in handles.iter().enumerate() {
+        if !sheet.is_glass(fracture.material_of(index)) {
+            continue;
+        }
         let impact = world.impacts().for_collider(*handle);
         let spike = spikes[index];
+        telemetry.spike = telemetry.spike.max(spike.magnitude);
 
         // Whatever came through opens a hole at least its own size, centred
         // on where it bore down: the energy rule alone let a crate straddle
@@ -187,6 +259,39 @@ fn gather_hits(
                         point: *center,
                         hole_radius: 0.0,
                         kick: Vector3::zeros(),
+                    });
+                }
+            }
+
+            // A jarred body loads its glass through the joints that carry it:
+            // the impulse it took to change the cell's velocity by more than
+            // it changed last frame. A window falling on its face shatters.
+            //
+            // Unlike a blow, a jolt loads every square metre of glass alike,
+            // so it is judged as one: the cell's inertial impulse scaled to
+            // `JOLT_REFERENCE_AREA`, or a small pane would ride out what
+            // shatters a large one beside it.
+            let r = centre - body_pos;
+            let area = sheet
+                .frame
+                .polygon_of(collider.shape(), collider.offset().translation.vector)
+                .map_or(0.0, |(polygon, _)| polygon.area());
+            let jolted = if area > 0.0 {
+                collider.mass() * jolt.jerk.at(r).magnitude() * (JOLT_REFERENCE_AREA / area)
+            } else {
+                0.0
+            };
+            telemetry.jolt = telemetry.jolt.max(jolted);
+            if let (None, Some(struck)) = (&hit, frame_struck) {
+                if jolted > threshold {
+                    // The whole cell is loaded, so the hole grows with the
+                    // whole cell: twice the threshold empties it.
+                    let excess = jolted / threshold - 1.0;
+                    hit = Some(Hit {
+                        child: *handle,
+                        point: struck,
+                        hole_radius: 2.0 * collider.shape().bounding_radius() * excess,
+                        kick: -collider.mass() * jolt.delta.at(r),
                     });
                 }
             }
@@ -321,10 +426,15 @@ fn crack(
         };
         for (other, polygon) in &footprints {
             if cell.touches(polygon, MIN_JOINT_OVERLAP) {
+                let threshold = if sheet.is_glass(fracture.material_of(*other)) {
+                    sheet.joint_threshold
+                } else {
+                    sheet.frame_grip
+                };
                 fracture.joints.push(FractureJoint {
                     child_a: index,
                     child_b: *other,
-                    threshold: sheet.joint_threshold,
+                    threshold,
                 });
             }
         }
@@ -370,8 +480,29 @@ fn remnant_area(
     fracture
         .connected_components()
         .iter()
-        .map(|component| component.iter().map(area_of).sum::<f32>())
+        .map(|component| {
+            component
+                .iter()
+                .filter(|child| sheet.is_glass(fracture.material_of(**child)))
+                .map(area_of)
+                .sum::<f32>()
+        })
         .fold(0.0, f32::max)
+}
+
+/// Drop whatever glass is left. A bare sheet has nothing else, so its body
+/// retires with the glass; a framed one keeps its frame standing, empty.
+fn let_go_of_the_glass(sheet: &BrittleSheet, fracture: &mut CompoundFracture) {
+    let glass: Vec<usize> = (0..fracture.child_count)
+        .filter(|child| sheet.is_glass(fracture.material_of(*child)))
+        .collect();
+    if glass.len() == fracture.child_count {
+        fracture.release();
+    } else {
+        for child in glass {
+            fracture.sever(child, Vector3::zeros());
+        }
+    }
 }
 
 /// A shard's share of the hit's impulse, held to `MAX_SHARD_SPEED`.
@@ -424,6 +555,7 @@ mod tests {
         world.register::<BrittleSheet>();
         world.insert(Time::fixed(FRAME_DT));
         world.insert(PhysicsImpulseQueue::default());
+        world.insert(DebugLog::default());
 
         let frame = SheetFrame::lying(0.015);
         let half_extents = frame.box_half_extents(0.75, 1.0);
