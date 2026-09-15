@@ -132,6 +132,13 @@ impl VisualBench {
             )?;
         }
 
+        // Particles are blended scene surfaces, submitted before the scene
+        // pass closes so they are sorted in with the blended meshes — the same
+        // place and the same order as in a level.
+        if let Some(particles) = &shot.particles {
+            renderer.submit_particles(particles, &view, &projection)?;
+        }
+
         renderer.begin_transparent_pass(cb, image_index);
 
         // In the transparent pass, against the depth the scene left behind —

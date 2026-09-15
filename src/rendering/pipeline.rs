@@ -352,9 +352,13 @@ impl GraphicsPipeline {
         // they are recorded: each one is nearer than everything already in the
         // buffer, so it passes the test it would otherwise have to be excused
         // from. What that buys is the passes that come after the scene
-        // resolves — water, fire, particles — which test against this depth
-        // and have no other way of knowing the glass is there. Without it the
-        // water surface paints straight over an ice cube standing in a pond.
+        // resolves — water and fire — which test against this depth and have
+        // no other way of knowing the glass is there. Without it the water
+        // surface paints straight over an ice cube standing in a pond.
+        //
+        // It also means anything drawn after a blended mesh is occluded by it,
+        // which is why particles are recorded in this pass, interleaved with
+        // these draws, rather than after the resolve.
         let blended_scene_config = |cull_mode| PipelineVariantConfig {
             polygon_mode: vk::PolygonMode::FILL,
             cull_mode,
@@ -541,7 +545,8 @@ impl GraphicsPipeline {
         }
     }
 
-    /// Render pass for transparent geometry (water, particles, overlay).
+    /// Render pass for what is composited after the HDR resolve (water, fire,
+    /// overlay).
     ///
     /// Writes to the swapchain image (loaded from the blit of the opaque pass).
     /// Depth is loaded from the opaque pass and available as both a read-only

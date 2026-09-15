@@ -27,6 +27,10 @@
 //! which is exact for a convex shape and is what the renderer does with what
 //! this queue hands back.
 //!
+//! The frame's particles are ordered against these draws rather than through
+//! this queue: they are already sorted among themselves, so the renderer merges
+//! the two streams at flush time by the distance key both are keyed on.
+//!
 //! Objects that interpenetrate, or a concave blended mesh, will still composite
 //! wrong in places. Fixing those needs order-independent transparency (depth
 //! peeling, or a weighted blend), which is a different and much more expensive
@@ -79,6 +83,13 @@ impl BlendedDraw {
         let centre = self.model.transform_point(&bounds.centre().into());
         self.depth_key = (centre.coords - camera_pos).norm_squared();
         self
+    }
+
+    /// Squared distance from the camera to this draw, for a caller that has
+    /// to place something else in the same order — the frame's particles are
+    /// interleaved with these draws by comparing against it.
+    pub fn depth_key(&self) -> f32 {
+        self.depth_key
     }
 
     /// A draw with no sort key yet. Recorded first if never given one, which

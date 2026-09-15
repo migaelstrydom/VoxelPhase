@@ -99,4 +99,52 @@ vec3 tonemapScene(vec3 colour, float hue_preservation) {
     return mix(per_channel, tonemapACESHuePreserving(colour), hue_preservation);
 }
 
+/// Largest display value the inverse curve is allowed to resolve.
+///
+/// The ACES fit approaches 1.0 asymptotically, so inverting it at exactly 1.0
+/// asks for infinite radiance. Stopping just short bounds the answer.
+const float TONEMAP_MAX_INVERTIBLE = 0.98;
+
+/// The scalar ACES fit, run backwards.
+///
+/// Solves `curve(x) = y` for x — the fit is a ratio of quadratics, so the
+/// inverse is the positive root of a quadratic and needs no iteration.
+float inverseTonemapACESScalar(float y) {
+    const float a = 2.51;
+    const float b = 0.03;
+    const float c = 2.43;
+    const float d = 0.59;
+    const float e = 0.14;
+
+    y = clamp(y, 0.0, TONEMAP_MAX_INVERTIBLE);
+
+    float qa = a - c * y;
+    float qb = b - d * y;
+    float qc = -e * y;
+    float discriminant = qb * qb - 4.0 * qa * qc;
+
+    return (-qb + sqrt(max(discriminant, 0.0))) / (2.0 * qa);
+}
+
+/// The scene radiance that resolves back to `display` once the composite has
+/// applied `exposure` and the filmic curve.
+///
+/// For a surface authored as a finished display colour rather than lit — a
+/// particle — this is what lets it be drawn into the HDR scene target and come
+/// out the colour it was tuned to be. Written against the hue-preserving branch
+/// of `tonemapScene`, which is the curve the composite applies at the default
+/// hue preservation of 1.
+///
+/// `display` is expected to be in [0, 1]: a colour outside that range has no
+/// display value to resolve back to, and the caller has to decide what clipping
+/// it meant before asking.
+vec3 sceneRadianceFor(vec3 display, float exposure) {
+    float l = luminance(display);
+    if (l <= TONEMAP_MIN_LUMINANCE || exposure <= 0.0) {
+        return display;
+    }
+
+    return display * (inverseTonemapACESScalar(l) / l) / exposure;
+}
+
 #endif // TONEMAP_GLSL

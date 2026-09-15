@@ -2,12 +2,19 @@
 #extension GL_ARB_separate_shader_objects : enable
 #extension GL_ARB_shading_language_420pack : enable
 
+#include "tonemap.glsl"
+
 layout(location = 0) in vec4 fragColor;
 layout(location = 1) in float fragLife;   // 0 = just born, 1 = about to die
 layout(location = 2) in vec2 fragUV;
 layout(location = 3) in vec4 fragShape;   // (rotation, additive, billow, seed)
 
 layout(location = 0) out vec4 outColor;
+
+// Matches the vertex stage's two matrices, which occupy the first 128 bytes.
+layout(push_constant) uniform PushConstants {
+    layout(offset = 128) float exposure;
+} pc;
 
 // How many times the noise repeats across the billboard. Low: the puff should
 // be shaped by a couple of large lobes, not by a field of speckles.
@@ -104,5 +111,19 @@ void main() {
     float glow = clamp(max(fragColor.r, max(fragColor.g, fragColor.b)), 0.0, 1.0);
     float blend = additive * glow;
 
-    outColor = vec4(fragColor.rgb * alpha, alpha * (1.0 - blend));
+    // Effect ramps author colour well above 1.0, and what that has always
+    // meant on screen is a clipped one: the hot end of a fireball reads white
+    // because each channel saturates, which is the bleach a filmic curve would
+    // otherwise have to provide. The scene's tonemap preserves hue instead, so
+    // handing it the raw ramp value keeps the chroma and the core comes out
+    // orange — the same fire, wrong temperature.
+    //
+    // So the clip is applied here, where the authored intent is, and the result
+    // converted to the radiance that resolves back to it. The particle looks
+    // the way it was tuned; being in the scene target is what lets the glass in
+    // front of it tint it.
+    vec3 display = min(fragColor.rgb, vec3(1.0));
+    vec3 radiance = sceneRadianceFor(display, pc.exposure);
+
+    outColor = vec4(radiance * alpha, alpha * (1.0 - blend));
 }

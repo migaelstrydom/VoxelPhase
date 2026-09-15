@@ -46,15 +46,24 @@ impl ParticlePipeline {
     }
 
     fn create_pipeline_layout(device: &ManagedDevice) -> EngineResult<vk::PipelineLayout> {
-        // Push constants: view matrix (64 bytes) + projection matrix (64 bytes) = 128 bytes
-        let push_constant_range = vk::PushConstantRange {
-            stage_flags: vk::ShaderStageFlags::VERTEX,
-            offset: 0,
-            size: 128, // 2 * sizeof(mat4)
-        };
+        // Vertex: view matrix (64 bytes) + projection matrix (64 bytes).
+        // Fragment: the scene exposure, which the shader inverts to turn an
+        // authored display colour into the radiance that resolves back to it.
+        let push_constant_ranges = [
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::VERTEX,
+                offset: 0,
+                size: 128, // 2 * sizeof(mat4)
+            },
+            vk::PushConstantRange {
+                stage_flags: vk::ShaderStageFlags::FRAGMENT,
+                offset: 128,
+                size: std::mem::size_of::<f32>() as u32,
+            },
+        ];
 
-        let create_info = vk::PipelineLayoutCreateInfo::default()
-            .push_constant_ranges(std::slice::from_ref(&push_constant_range));
+        let create_info =
+            vk::PipelineLayoutCreateInfo::default().push_constant_ranges(&push_constant_ranges);
 
         unsafe { device.device.create_pipeline_layout(&create_info, None) }
             .map_err(|e| EngineError::Pipeline(format!("particle layout creation: {:?}", e)))

@@ -13,6 +13,14 @@
 //! its front. Both are unmistakable once you know to look; neither is visible
 //! in a shot with only one cube in it, which is why those shots exist.
 //!
+//! The *other pass* is judged on `smoke_behind` and `smoke_in_front`.
+//! Particles are blended surfaces too, and they are sorted in with the ice
+//! rather than drawn after it, so a burst behind the block must show *through*
+//! it, tinted, and a burst in front of it must cover it. A burst that vanishes
+//! entirely means the particles are being depth-tested against the glass from a
+//! later pass; a burst that is visible but untinted in `smoke_behind` means
+//! they are being drawn after it in the same pass.
+//!
 //! The cubes are drawn with the game's own mesh and the game's own substance,
 //! so what this sheet shows is what the ice cube in a level looks like.
 
@@ -21,6 +29,7 @@ use nalgebra::{Matrix4, Point3, Vector2, Vector3};
 use crate::app::spawnables::{ice_block_mesh, ice_texture_spread};
 use crate::core::error::EngineResult;
 use crate::geometry::{generate_sphere_indices, generate_sphere_vertices};
+use crate::particles::{Particle, ParticleConfig, ParticleEffectType, ParticlePool};
 use crate::rendering::colour::Colour;
 use crate::rendering::pattern;
 use crate::rendering::pattern::Spread;
@@ -52,6 +61,21 @@ const WATER_FLOOR: f32 = -0.8;
 
 const SPHERE_SEGMENTS: u32 = 32;
 const SPHERE_RINGS: u32 = 22;
+
+/// Puffs in a burst, how far the ring of them reaches, and how big each one is.
+///
+/// Small enough not to merge into one blown-out mass: the ring has to stay
+/// legible as separate puffs for the colours along it to be judged, and for a
+/// mis-sort among them to be visible at all.
+const BURST_PUFFS: usize = 9;
+const BURST_RADIUS: f32 = 0.6;
+const BURST_PUFF_SIZE: f32 = 0.13;
+
+/// Oldest the burst's puffs are sampled at, as a fraction of their life. The
+/// ring runs from birth to here, so one shot carries the whole hot half of the
+/// ramp: the white core the youngest puffs should be, and the orange the
+/// oldest have cooled to.
+const BURST_MAX_AGE: f32 = 0.35;
 
 pub struct Ice;
 
@@ -174,6 +198,34 @@ impl VisualScene for Ice {
                 cube(Vector3::new(0.0, CUBE_HALF, 0.0), 24.0),
                 cube(Vector3::new(-1.15, CUBE_HALF, -1.5), -10.0),
             ]),
+            // A burst behind the ice. The explosion this whole apparatus is
+            // for: the smoke must be visible through the block and tinted by
+            // it, exactly as the opaque marker is two shots above.
+            SceneShot::new(
+                "smoke_behind",
+                SceneCamera::looking_at(
+                    Point3::new(0.0, 1.0, 2.6),
+                    Point3::new(0.0, CUBE_HALF, 0.0),
+                )
+                .with_fov(38.0),
+            )
+            .with_environment(environment.clone())
+            .with_particles(burst(Vector3::new(0.0, CUBE_HALF, -1.3)))
+            .with_meshes([ground(), cube(Vector3::new(0.0, CUBE_HALF, 0.0), 18.0)]),
+            // The same burst in front of the ice, which is the half of the
+            // ordering the first shot cannot show: here the smoke covers the
+            // block rather than being tinted by it.
+            SceneShot::new(
+                "smoke_in_front",
+                SceneCamera::looking_at(
+                    Point3::new(0.0, 1.0, 2.6),
+                    Point3::new(0.0, CUBE_HALF, 0.0),
+                )
+                .with_fov(38.0),
+            )
+            .with_environment(environment.clone())
+            .with_particles(burst(Vector3::new(0.0, CUBE_HALF, 1.2)))
+            .with_meshes([ground(), cube(Vector3::new(0.0, CUBE_HALF, 0.0), 18.0)]),
             // Backlit. The extreme case for the Fresnel gain: with the sun
             // behind the block, the edges should go bright and the middle
             // should stay clear.
@@ -209,6 +261,48 @@ fn ice(texture: &TextureHandle, position: Vector3<f32>, yaw_degrees: f32) -> Sce
         .with_transform(transform)
         .with_texture(texture.clone())
         .with_surface(substance::ICE.material(texture.clone()).surface_params())
+}
+
+/// A ring of fireball puffs centred on `centre`, placed rather than simulated.
+///
+/// Every value is fixed — the ring's angles, the ages the ramp is sampled at —
+/// because a shot that is compared against its own past cannot contain a random
+/// burst. The spec is the game's own, so the puffs are the colour and the
+/// silhouette an explosion actually draws.
+fn burst(centre: Vector3<f32>) -> ParticlePool {
+    let spec = ParticleConfig::new()
+        .spec(ParticleEffectType::Fireball)
+        .clone();
+
+    let mut pool = ParticlePool::new(BURST_PUFFS);
+    for index in 0..BURST_PUFFS {
+        let angle = index as f32 / BURST_PUFFS as f32 * std::f32::consts::TAU;
+        // The ring is tipped out of the camera plane so the puffs sit at a
+        // spread of depths, which is what makes them sort against each other.
+        let offset = Vector3::new(
+            angle.cos() * BURST_RADIUS,
+            angle.sin() * BURST_RADIUS * 0.7,
+            (angle * 2.0).sin() * BURST_RADIUS * 0.5,
+        );
+
+        let age = index as f32 / (BURST_PUFFS - 1) as f32 * BURST_MAX_AGE;
+
+        let mut puff = Particle::new(
+            centre + offset,
+            Vector3::zeros(),
+            BURST_PUFF_SIZE,
+            1.0,
+            spec.ramp.clone(),
+        );
+        puff.life = 1.0 - age;
+        puff.colour = spec.ramp.sample(age);
+        puff.additive = spec.additive;
+        puff.billow = spec.billow;
+        puff.seed = index as f32 * 0.37;
+        pool.spawn(puff);
+    }
+
+    pool
 }
 
 /// An opaque sphere, for putting behind the ice so that there is something to

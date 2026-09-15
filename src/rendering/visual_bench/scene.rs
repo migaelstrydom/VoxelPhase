@@ -4,6 +4,7 @@ use nalgebra::{Matrix4, Point3, Vector3};
 
 use crate::core::error::EngineResult;
 use crate::lighting::{ActiveLight, ActiveLights};
+use crate::particles::ParticlePool;
 use crate::rendering::colour::Colour;
 use crate::rendering::frame::SceneLighting;
 use crate::rendering::material::{MaterialManager, SurfaceParams};
@@ -205,6 +206,10 @@ pub struct SceneShot {
     /// Water for the shot to stand things in, drawn after the scene resolves.
     /// `None` for the shots that have no use for it, which is most of them.
     pub water: Option<ScenePool>,
+
+    /// Particles to draw with the shot, placed directly rather than simulated —
+    /// a still of a burst, so the sheet is reproducible frame for frame.
+    pub particles: Option<ParticlePool>,
 }
 
 impl SceneShot {
@@ -215,6 +220,7 @@ impl SceneShot {
             environment: SceneEnvironment::default(),
             meshes: Vec::new(),
             water: None,
+            particles: None,
         }
     }
 
@@ -235,6 +241,11 @@ impl SceneShot {
 
     pub fn with_water(mut self, pool: ScenePool) -> Self {
         self.water = Some(pool);
+        self
+    }
+
+    pub fn with_particles(mut self, particles: ParticlePool) -> Self {
+        self.particles = Some(particles);
         self
     }
 }

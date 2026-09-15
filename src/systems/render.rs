@@ -334,6 +334,16 @@ impl<'a> System<'a> for RenderSystem {
                         log::error!("RenderSystem: Failed to draw debug overlays: {}", e);
                     }
 
+                    // Hand the frame's particles over before the scene pass
+                    // closes: they are blended scene surfaces and are recorded
+                    // in order with the glass and ice, not painted on after the
+                    // HDR resolve.
+                    if let Err(e) =
+                        renderer.submit_particles(&particle_pool, &view_matrix, &proj_matrix)
+                    {
+                        log::error!("RenderSystem: Failed to prepare particles: {}", e);
+                    }
+
                     // End opaque pass, blit to swapchain, begin transparent pass.
                     renderer.begin_transparent_pass(draw_cb, present_index);
 
@@ -381,16 +391,6 @@ impl<'a> System<'a> for RenderSystem {
                             "RenderSystem: Failed to draw transparent debug overlays: {}",
                             e
                         );
-                    }
-
-                    // Render particles (after models, before overlay)
-                    if let Err(e) = renderer.render_particles(
-                        draw_cb,
-                        &particle_pool,
-                        &view_matrix,
-                        &proj_matrix,
-                    ) {
-                        log::error!("RenderSystem: Failed to render particles: {}", e);
                     }
 
                     // Add FPS and fire count to debug lines

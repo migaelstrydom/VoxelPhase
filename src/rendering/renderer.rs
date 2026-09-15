@@ -290,9 +290,9 @@ impl Renderer {
             extent.height,
         )?;
 
-        // Create particle renderer (transparent pass)
+        // Create particle renderer (scene pass, interleaved with blended geometry)
         let particle_renderer =
-            ParticleRenderer::new(Arc::clone(&vulkan_context), pipeline.transparent_renderpass)?;
+            ParticleRenderer::new(Arc::clone(&vulkan_context), pipeline.renderpass)?;
 
         // Create sky renderer (opaque pass)
         let sky_renderer = SkyRenderer::new(Arc::clone(&vulkan_context), pipeline.renderpass)?;
@@ -363,6 +363,7 @@ impl Renderer {
         // Must be rewound with the buffers it indexes into: a held-over entry
         // would point at geometry that is about to be overwritten.
         self.transparent_queue.begin_frame();
+        self.particle_renderer.begin_frame();
 
         // Everything fallible that costs nothing to redo goes first, so the
         // acquire is the last step that can fail. An acquired swapchain image
@@ -726,27 +727,82 @@ impl Renderer {
         Ok(())
     }
 
-    /// Record the frame's blended geometry, farthest first.
+    /// Set the dynamic viewport and scissor to the whole target.
+    fn set_full_viewport(&self, cb: vk::CommandBuffer) {
+        let extent = self.targets.extent;
+        let viewport = vk::Viewport {
+            x: 0.0,
+            y: 0.0,
+            width: extent.width as f32,
+            height: extent.height as f32,
+            min_depth: 0.0,
+            max_depth: 1.0,
+        };
+
+        unsafe {
+            let device = self.vulkan_context.device();
+            device.cmd_set_viewport(cb, 0, &[viewport]);
+            device.cmd_set_scissor(cb, 0, &[extent.into()]);
+        }
+    }
+
+    /// Record the frame's blended surfaces, farthest first.
     ///
     /// Call once, after the last opaque draw and before the opaque pass ends —
     /// these draws go into the HDR scene target, so that glass is exposed,
     /// tonemapped and bloomed with everything behind it rather than pasted on
     /// after the resolve.
     ///
+    /// Two streams are merged here, both ordered by distance from the camera:
+    /// the blended meshes held back by the queue, and the frame's particles.
+    ///
+    /// ```text
+    ///   geometry:  ────────■──────────────■────────────▶ near
+    ///   particles: ░░░░░░░░ ░░░░░░░░░░░░░░ ░░░░░░░░░░░░
+    ///              └ drawn ┘              └ drawn after the glass in front ┘
+    /// ```
+    ///
+    /// Merging them is what lets an explosion read through an ice wall: a
+    /// particle behind the glass is composited first and the glass tints it,
+    /// and one in front is composited over the glass. Drawing all the particles
+    /// on either side of the glass gets one of those two cases wrong.
+    ///
     /// Each mesh is recorded twice, back faces then front faces. Sorting can
     /// only order whole draws, and a closed mesh contains its own far and near
     /// surfaces; splitting them by cull mode is what puts those two in order.
-    fn flush_blended_geometry(&mut self, cb: vk::CommandBuffer) {
-        if self.transparent_queue.is_empty() {
+    fn flush_scene_transparency(&mut self, cb: vk::CommandBuffer) {
+        if self.transparent_queue.is_empty() && self.particle_renderer.is_empty() {
             return;
         }
 
         // Taken out of the queue so the recording loop is not holding a borrow
         // of `self` through calls that need `&self` for the device.
         let draws: Vec<BlendedDraw> = self.transparent_queue.sorted().to_vec();
+        let exposure = self.post_process.config.exposure;
+
+        // The particle pipeline takes its viewport dynamically and the flush
+        // may record a particle before any mesh has set one.
+        self.set_full_viewport(cb);
+
+        let mut particles_drawn = 0;
         for draw in &draws {
+            // Everything behind this mesh goes down before it does.
+            let behind = self.particle_renderer.count_beyond(draw.depth_key());
+            if behind > particles_drawn {
+                self.particle_renderer.bind(cb, exposure);
+                self.particle_renderer
+                    .draw_range(cb, particles_drawn, behind);
+                particles_drawn = behind;
+            }
+
             self.record_geometry_draw(cb, self.pipeline.scene_blended_back, draw);
             self.record_geometry_draw(cb, self.pipeline.scene_blended_front, draw);
+        }
+
+        if !self.particle_renderer.is_empty() {
+            self.particle_renderer.bind(cb, exposure);
+            self.particle_renderer
+                .draw_range(cb, particles_drawn, usize::MAX);
         }
     }
 
@@ -914,7 +970,7 @@ impl Renderer {
     /// image in `COLOR_ATTACHMENT_OPTIMAL`, so no manual barriers are needed
     /// between the three passes.
     pub fn begin_transparent_pass(&mut self, cb: vk::CommandBuffer, image_index: u32) {
-        self.flush_blended_geometry(cb);
+        self.flush_scene_transparency(cb);
 
         let device = self.vulkan_context.device();
         let extent = self.targets.extent;
@@ -1066,41 +1122,23 @@ impl Renderer {
         self.active_fires.retain(|(e, _)| *e != entity);
     }
 
-    /// Render particles from the particle pool.
+    /// Hand the frame's particles to the renderer, to be recorded with the
+    /// rest of the scene's blended geometry.
     ///
-    /// Should be called after drawing the 3D scene but before overlay.
-    pub fn render_particles(
+    /// Records nothing itself. Particles are blended surfaces in the scene, so
+    /// they belong in the same sorted flush as glass and ice — see
+    /// [`Self::flush_scene_transparency`] — and that flush cannot run until
+    /// every blended draw of the frame is known.
+    pub fn submit_particles(
         &mut self,
-        cb: vk::CommandBuffer,
         pool: &ParticlePool,
         view_matrix: &Matrix4<f32>,
         proj_matrix: &Matrix4<f32>,
     ) -> EngineResult<()> {
-        let extent = self.targets.extent;
-        let viewport = vk::Viewport {
-            x: 0.0,
-            y: 0.0,
-            width: extent.width as f32,
-            height: extent.height as f32,
-            min_depth: 0.0,
-            max_depth: 1.0,
-        };
-        let scissor = vk::Rect2D {
-            offset: vk::Offset2D { x: 0, y: 0 },
-            extent,
-        };
-
-        unsafe {
-            self.vulkan_context
-                .device()
-                .cmd_set_viewport(cb, 0, &[viewport]);
-            self.vulkan_context
-                .device()
-                .cmd_set_scissor(cb, 0, &[scissor]);
-        }
-
+        let camera_pos = self.camera_pos;
         self.particle_renderer
-            .render(cb, pool, view_matrix, proj_matrix)
+            .prepare(pool, view_matrix, proj_matrix, &camera_pos)?;
+        Ok(())
     }
 
     /// Render debug overlay with the given debug line entries.
