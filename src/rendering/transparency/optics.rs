@@ -20,6 +20,16 @@
 /// Refractive index of the air a surface is assumed to sit in.
 const AIR_IOR: f32 = 1.0;
 
+/// Head-on opacity at which a surface starts casting a shadow.
+///
+/// A shadow map stores one depth per texel, so a caster's shadow is all or
+/// nothing — there is no way to write "this much light got through". The
+/// threshold picks which of the two errors a material would rather make.
+/// Below it the surface is closer to a pane you look straight through, and a
+/// hard black bite behind it reads as a bug; above it the surface is closer
+/// to a solid block, and *no* shadow reads as the object floating.
+const SHADOW_OPACITY_THRESHOLD: f32 = 0.5;
+
 /// How a surface transmits light.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Transparency {
@@ -77,6 +87,17 @@ impl Transparency {
         self.opacity < 1.0
     }
 
+    /// Whether this surface is solid enough to be worth a shadow.
+    ///
+    /// Independent of [`is_blended`](Self::is_blended): a surface can go
+    /// through the sorted pass and still occlude the sun. Ice does — it is
+    /// cloudy rather than clear, and a block of it standing on the ground
+    /// with no shadow under it does not look like it is resting there.
+    /// Window glass does not, being nearly all transmission.
+    pub fn casts_shadow(&self) -> bool {
+        self.opacity >= SHADOW_OPACITY_THRESHOLD
+    }
+
     /// Reflectance at normal incidence, from the Fresnel equations at a
     /// flat air-to-material interface.
     ///
@@ -111,6 +132,17 @@ mod tests {
     #[test]
     fn glass_reflects_four_percent_head_on() {
         assert!((Transparency::GLASS.reflectance() - 0.04).abs() < 0.002);
+    }
+
+    /// The pair of materials the threshold has to separate: a cloudy block
+    /// throws a shadow, a window does not. If a tuning pass ever moves ice's
+    /// opacity below the threshold this fires rather than silently dropping
+    /// every ice shadow in the game.
+    #[test]
+    fn ice_shadows_and_glass_does_not() {
+        assert!(Transparency::OPAQUE.casts_shadow());
+        assert!(Transparency::ICE.casts_shadow());
+        assert!(!Transparency::GLASS.casts_shadow());
     }
 
     /// Ice bends light less than glass, so it must also reflect less of it.

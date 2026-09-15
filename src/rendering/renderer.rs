@@ -96,9 +96,9 @@ struct DrawOptions {
 impl DrawOptions {
     /// Ordinary solid geometry: terrain, props, characters.
     ///
-    /// `casts_shadow` is what the *pass* asks for; a surface that lets light
-    /// through overrides it, because it cannot throw the solid shadow a
-    /// shadow map is only able to store. See `draw_mesh_internal`.
+    /// `casts_shadow` is what the *pass* asks for; a surface that lets too
+    /// much light through overrides it, because a shadow map can only store
+    /// a fully solid shadow. See `draw_mesh_internal`.
     const OPAQUE: Self = Self {
         pass: DrawPass::Opaque,
         wireframe_overlay: true,
@@ -683,10 +683,10 @@ impl Renderer {
 
         // A shadow map stores one depth per texel and has no way to express
         // partial occlusion, so a transmissive caster can only throw a fully
-        // solid shadow. On a block of ice that is worse than no shadow at
-        // all: it puts a hard black bite out of whatever stands behind it,
-        // through something the eye can see straight through.
-        if options.casts_shadow && !surface.transparency.is_blended() {
+        // solid shadow. Whether that is better or worse than none is the
+        // material's call, not the pass's — a cloudy block wants the shadow,
+        // a window would only put a hard black bite behind itself.
+        if options.casts_shadow && surface.transparency.casts_shadow() {
             self.record_shadow_caster(model, &draw_info);
         }
 
