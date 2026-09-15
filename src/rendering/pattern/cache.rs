@@ -10,7 +10,7 @@
 //! byte-identical by construction rather than by assumption:
 //!
 //! ```text
-//!   (pattern name, palette, seed, size) ──▶ TextureHandle
+//!   (pattern name, palette, seed, tile size, spread) ──▶ TextureHandle
 //! ```
 //!
 //! Objects that *want* to differ still do — they pass different seeds, which is
@@ -21,7 +21,7 @@
 use std::collections::HashMap;
 
 use crate::core::error::EngineResult;
-use crate::rendering::pattern::layer::Pattern;
+use crate::rendering::pattern::layer::{Pattern, Spread};
 use crate::rendering::substance::Palette;
 use crate::resources::textures::{TextureHandle, TextureManager};
 
@@ -37,11 +37,12 @@ pub struct TextureKey {
     palette: [u32; 16],
     seed: u32,
     size: u32,
+    spread: Spread,
 }
 
 impl TextureKey {
     /// The key for baking `pattern` over `palette`.
-    pub fn new(pattern: &Pattern, palette: &Palette, seed: u32, size: u32) -> Self {
+    pub fn new(pattern: &Pattern, palette: &Palette, seed: u32, size: u32, spread: Spread) -> Self {
         let mut bits = [0u32; 16];
         for (slot, colour) in [palette.base, palette.light, palette.dark, palette.accent]
             .iter()
@@ -58,6 +59,7 @@ impl TextureKey {
             palette: bits,
             seed,
             size,
+            spread,
         }
     }
 }
@@ -87,9 +89,10 @@ impl TextureCache {
         pattern: &Pattern,
         palette: &Palette,
         seed: u32,
-        size: u32,
+        tile_size: u32,
+        spread: Spread,
     ) -> EngineResult<TextureHandle> {
-        let key = TextureKey::new(pattern, palette, seed, size);
+        let key = TextureKey::new(pattern, palette, seed, tile_size, spread);
 
         if let Some(existing) = self.entries.get(&key) {
             self.hits += 1;
@@ -97,7 +100,8 @@ impl TextureCache {
         }
 
         self.misses += 1;
-        let pixels = pattern.bake(size, palette, seed);
+        let size = spread.texture_size(tile_size);
+        let pixels = pattern.bake_spread(tile_size, palette, seed, spread);
         let handle = textures.create_from_rgba(size, size, &pixels, true)?;
         self.entries.insert(key, handle.clone());
 
@@ -130,8 +134,8 @@ mod tests {
 
     #[test]
     fn the_same_inputs_give_the_same_key() {
-        let a = TextureKey::new(&library::STONE, &palette(0.6), 1, 256);
-        let b = TextureKey::new(&library::STONE, &palette(0.6), 1, 256);
+        let a = TextureKey::new(&library::STONE, &palette(0.6), 1, 256, Spread::ONE);
+        let b = TextureKey::new(&library::STONE, &palette(0.6), 1, 256, Spread::ONE);
 
         assert_eq!(a, b);
     }
@@ -140,23 +144,23 @@ mod tests {
     /// serve a marble tile where granite was asked for, and only sometimes.
     #[test]
     fn every_input_changes_the_key() {
-        let base = TextureKey::new(&library::STONE, &palette(0.6), 1, 256);
+        let base = TextureKey::new(&library::STONE, &palette(0.6), 1, 256, Spread::ONE);
 
         assert_ne!(
             base,
-            TextureKey::new(&library::MARBLE, &palette(0.6), 1, 256)
+            TextureKey::new(&library::MARBLE, &palette(0.6), 1, 256, Spread::ONE)
         );
         assert_ne!(
             base,
-            TextureKey::new(&library::STONE, &palette(0.7), 1, 256)
+            TextureKey::new(&library::STONE, &palette(0.7), 1, 256, Spread::ONE)
         );
         assert_ne!(
             base,
-            TextureKey::new(&library::STONE, &palette(0.6), 2, 256)
+            TextureKey::new(&library::STONE, &palette(0.6), 2, 256, Spread::ONE)
         );
         assert_ne!(
             base,
-            TextureKey::new(&library::STONE, &palette(0.6), 1, 128)
+            TextureKey::new(&library::STONE, &palette(0.6), 1, 128, Spread::ONE)
         );
     }
 
@@ -168,8 +172,25 @@ mod tests {
         let accented = plain.with_accent(Colour::new(0.9, 0.1, 0.1, 1.0));
 
         assert_ne!(
-            TextureKey::new(&library::STONE, &plain, 1, 256),
-            TextureKey::new(&library::STONE, &accented, 1, 256)
+            TextureKey::new(&library::STONE, &plain, 1, 256, Spread::ONE),
+            TextureKey::new(&library::STONE, &accented, 1, 256, Spread::ONE)
+        );
+    }
+
+    /// A spread is part of what a texture *is*, not just how big it is: the
+    /// same tile size at two spreads holds different pictures, and a key that
+    /// forgot it would hand out a tile where a spread was asked for.
+    #[test]
+    fn a_spread_changes_the_key() {
+        assert_ne!(
+            TextureKey::new(&library::STONE, &palette(0.6), 1, 256, Spread::ONE),
+            TextureKey::new(
+                &library::STONE,
+                &palette(0.6),
+                1,
+                256,
+                Spread::covering(3.0)
+            )
         );
     }
 

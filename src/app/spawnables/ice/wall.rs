@@ -24,7 +24,7 @@ use specs::{Entity, World};
 use super::super::shared::orientation::Yaw;
 use super::super::shared::textures::hash_pair;
 use super::super::{MaterialCtx, Spawnable};
-use super::block::{ice_materials, IceBlock};
+use super::block::{ice_materials, texture_spread, IceBlock};
 use crate::core::error::EngineResult;
 use crate::rendering::material::MaterialId;
 
@@ -115,13 +115,23 @@ impl Spawnable for IceWallDef {
     }
 
     fn create_materials(&self, ctx: &mut MaterialCtx) -> EngineResult<Vec<MaterialId>> {
-        ice_materials(ctx, self.base, TEXTURE_VARIANTS)
+        ice_materials(
+            ctx,
+            self.base,
+            TEXTURE_VARIANTS,
+            texture_spread(self.brick()),
+        )
     }
 
     fn spawn(&self, world: &mut World, materials: &[MaterialId]) -> Vec<Entity> {
         let brick = self.brick();
         let yaw = Yaw::degrees(self.yaw);
         let rotation = yaw.rotation();
+
+        // One spread for the whole wall, from the full brick: the end bricks
+        // are half-length and wear the same textures, so they have to address
+        // them the same way.
+        let spread = texture_spread(brick);
 
         let mut entities = Vec::new();
         for row in 0..self.rows {
@@ -134,7 +144,7 @@ impl Spawnable for IceWallDef {
                     materials[hash_pair(row as i32, index as i32) as usize % materials.len()];
 
                 entities.push(
-                    IceBlock::new(centre, half_extents, material)
+                    IceBlock::new(centre, half_extents, material, spread)
                         .rotated(rotation)
                         .spawn(world),
                 );

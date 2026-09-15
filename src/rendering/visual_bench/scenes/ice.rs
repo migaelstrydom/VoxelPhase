@@ -18,11 +18,12 @@
 
 use nalgebra::{Matrix4, Point3, Vector2, Vector3};
 
-use crate::app::spawnables::ice_block_mesh;
+use crate::app::spawnables::{ice_block_mesh, ice_texture_spread};
 use crate::core::error::EngineResult;
 use crate::geometry::{generate_sphere_indices, generate_sphere_vertices};
 use crate::rendering::colour::Colour;
 use crate::rendering::pattern;
+use crate::rendering::pattern::Spread;
 use crate::rendering::substance;
 use crate::rendering::vertex::Vertex;
 use crate::rendering::visual_bench::pool::ScenePool;
@@ -64,10 +65,11 @@ impl VisualScene for Ice {
     }
 
     fn shots(&self, ctx: &SceneContext) -> EngineResult<Vec<SceneShot>> {
+        let size = cube_spread().texture_size(TEXTURE_SIZE);
         let texture = ctx.textures.create_from_rgba(
-            TEXTURE_SIZE,
-            TEXTURE_SIZE,
-            &pattern::ICE.bake(TEXTURE_SIZE, &substance::ICE.palette, 7),
+            size,
+            size,
+            &pattern::ICE.bake_spread(TEXTURE_SIZE, &substance::ICE.palette, 7, cube_spread()),
             true,
         )?;
 
@@ -191,9 +193,15 @@ impl VisualScene for Ice {
     }
 }
 
+/// The spread the game would give a block this size, so the sheet judges the
+/// texture a real cube wears rather than a tile chosen for the bench.
+fn cube_spread() -> Spread {
+    ice_texture_spread(Vector3::repeat(CUBE_HALF))
+}
+
 /// One ice cube, drawn with the game's mesh and the game's substance.
 fn ice(texture: &TextureHandle, position: Vector3<f32>, yaw_degrees: f32) -> SceneMesh {
-    let (vertices, indices) = ice_block_mesh(Vector3::repeat(CUBE_HALF));
+    let (vertices, indices) = ice_block_mesh(Vector3::repeat(CUBE_HALF), cube_spread());
     let transform = Matrix4::new_translation(&position)
         * Matrix4::from_axis_angle(&Vector3::y_axis(), yaw_degrees.to_radians());
 

@@ -56,6 +56,7 @@ use crate::core::error::EngineResult;
 use crate::fracture::{CompoundFracture, FractureJoint};
 use crate::physics::{ColliderDesc, RigidBodyDesc};
 use crate::rendering::material::MaterialId;
+use crate::rendering::pattern::Spread;
 use crate::rendering::substance::ColliderSubstance;
 use crate::systems::PhysicsResource;
 
@@ -314,7 +315,11 @@ impl Spawnable for IglooDef {
     }
 
     fn create_materials(&self, ctx: &mut MaterialCtx) -> EngineResult<Vec<MaterialId>> {
-        Ok(vec![ice_material(ctx, seed_from_position(self.pos, 0))?])
+        Ok(vec![ice_material(
+            ctx,
+            seed_from_position(self.pos, 0),
+            Spread::ONE,
+        )?])
     }
 
     fn spawn(&self, world: &mut World, materials: &[MaterialId]) -> Vec<Entity> {

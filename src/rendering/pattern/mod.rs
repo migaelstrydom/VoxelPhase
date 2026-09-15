@@ -3,5 +3,5 @@ pub mod layer;
 pub mod library;
 
 pub use cache::{TextureCache, TextureKey};
-pub use layer::{Layer, Pattern, Slot};
+pub use layer::{Layer, Pattern, Slot, Spread};
 pub use library::*;

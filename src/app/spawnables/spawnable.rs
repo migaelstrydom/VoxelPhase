@@ -4,7 +4,7 @@ use specs::{Entity, World};
 
 use crate::core::error::EngineResult;
 use crate::rendering::material::{MaterialId, MaterialManagerBuilder};
-use crate::rendering::pattern::{Pattern, TextureCache};
+use crate::rendering::pattern::{Pattern, Spread, TextureCache};
 use crate::rendering::substance::Substance;
 use crate::resources::textures::TextureManager;
 
@@ -39,12 +39,30 @@ impl MaterialCtx<'_> {
         seed: u32,
         size: u32,
     ) -> EngineResult<MaterialId> {
+        self.patterned_spread(substance, pattern, seed, size, Spread::ONE)
+    }
+
+    /// The same, for a surface large enough that one tile of the pattern would
+    /// visibly repeat across it.
+    ///
+    /// The caller is the only one who knows how many metres of surface a tile
+    /// has to cover, so it is the caller that asks for the [`Spread`]. See
+    /// [`Spread`] for what it costs.
+    pub fn patterned_spread(
+        &mut self,
+        substance: &Substance,
+        pattern: &Pattern,
+        seed: u32,
+        tile_size: u32,
+        spread: Spread,
+    ) -> EngineResult<MaterialId> {
         let texture = self.textures_cache.get_or_bake(
             self.textures,
             pattern,
             &substance.palette,
             seed,
-            size,
+            tile_size,
+            spread,
         )?;
 
         Ok(self.materials.register(substance.material(texture)))

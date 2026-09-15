@@ -39,7 +39,7 @@ use crate::model::{MeshPrimitive, Model, ModelPart};
 use crate::physics::{ColliderDesc, RigidBodyDesc};
 use crate::rendering::colour::Colour;
 use crate::rendering::material::MaterialId;
-use crate::rendering::pattern;
+use crate::rendering::pattern::{self, Spread};
 use crate::rendering::substance::{self, ColliderSubstance, Substance};
 use crate::rendering::vertex::Vertex;
 use crate::systems::PhysicsResource;
@@ -58,14 +58,42 @@ pub const TEXTURE_SIZE: u32 = 256;
 /// shading artefact at the silhouette.
 const BEVEL_FRACTION: f32 = 0.14;
 
-/// Half-extent the ice texture is normalised against, in metres.
+/// Half-extent one tile of the ice texture is normalised against, in metres.
 ///
 /// A constant rather than the block's own size, which is what makes every
 /// piece of ice in a level look like the same substance: fracture planes and
 /// frost come out the same size on a brick of an igloo as on a loose cube, and
 /// a block larger than this tiles the pattern instead of magnifying it. The
 /// texture is periodic, so tiling is seamless.
+///
+/// Seamless is not the same as unnoticed, though — see [`texture_spread`].
 const TEXTURE_HALF: f32 = 0.4;
+
+/// How many tiles of pattern a block of this size is given.
+///
+/// The tile is 0.8m across and it is the *same* 0.8m on a paving slab five
+/// metres wide, which is right for the feature size and wrong for everything
+/// else: the slab wears a six-by-six grid of the same frost bloom, and a grid
+/// is the easiest thing in a picture to see. Asking for a [`Spread`] instead
+/// keeps the features at 0.8m and gives the block up to four tiles of distinct
+/// pattern before anything comes round again.
+///
+/// Measured against the largest half-extent, because that is the face with the
+/// most surface to fill and the texture is square: sizing to a thin axis would
+/// leave the broad face tiling exactly as before.
+pub fn texture_spread(half_extents: Vector3<f32>) -> Spread {
+    Spread::covering(half_extents.max() / TEXTURE_HALF)
+}
+
+/// Texture coordinates per metre for a block at this spread.
+///
+/// One number, derived in one place, because the mesh's UVs and the texture
+/// the material baked have to agree: a spread that reaches one and not the
+/// other does not tile wrongly, it changes the size of every feature on the
+/// block.
+fn uv_scale(spread: Spread) -> f32 {
+    0.5 / (TEXTURE_HALF * spread.tiles() as f32)
+}
 
 /// The material every ice object asks for: the ice substance, marked with the
 /// ice pattern.
@@ -73,8 +101,8 @@ const TEXTURE_HALF: f32 = 0.4;
 /// `seed` separates one block's markings from another's; identical seeds share
 /// a baked texture through the level's texture cache, which is what keeps a
 /// wall of forty bricks down to a handful of textures.
-pub fn ice_material(ctx: &mut MaterialCtx, seed: u32) -> EngineResult<MaterialId> {
-    ctx.patterned(&ice(), &pattern::ICE, seed, TEXTURE_SIZE)
+pub fn ice_material(ctx: &mut MaterialCtx, seed: u32, spread: Spread) -> EngineResult<MaterialId> {
+    ctx.patterned_spread(&ice(), &pattern::ICE, seed, TEXTURE_SIZE, spread)
 }
 
 /// A spread of distinct ice textures for an assembly of `count` blocks.
@@ -86,9 +114,10 @@ pub fn ice_materials(
     ctx: &mut MaterialCtx,
     origin: (f32, f32, f32),
     variants: usize,
+    spread: Spread,
 ) -> EngineResult<Vec<MaterialId>> {
     (0..variants)
-        .map(|variant| ice_material(ctx, seed_from_position(origin, variant as u32)))
+        .map(|variant| ice_material(ctx, seed_from_position(origin, variant as u32), spread))
         .collect()
 }
 
@@ -108,15 +137,26 @@ pub struct IceBlock {
     pub rotation: UnitQuaternion<f32>,
     /// Which of the caller's materials this block wears.
     pub material: MaterialId,
+    /// How many tiles of pattern `material`'s texture holds. Carried rather
+    /// than re-derived, because an assembly bakes one texture for blocks that
+    /// are not all the same size — a wall's end bricks are half-length — and
+    /// every block wearing that texture has to address it the same way.
+    pub spread: Spread,
 }
 
 impl IceBlock {
-    pub fn new(centre: Point3<f32>, half_extents: Vector3<f32>, material: MaterialId) -> Self {
+    pub fn new(
+        centre: Point3<f32>,
+        half_extents: Vector3<f32>,
+        material: MaterialId,
+        spread: Spread,
+    ) -> Self {
         Self {
             centre,
             half_extents,
             rotation: UnitQuaternion::identity(),
             material,
+            spread,
         }
     }
 
@@ -128,7 +168,7 @@ impl IceBlock {
     /// Create the body, the collider and the entity.
     pub fn spawn(&self, world: &mut World) -> Entity {
         let substance = ice();
-        let model = ice_block_model(self.half_extents, self.material);
+        let model = ice_block_model(self.half_extents, self.material, self.spread);
 
         let body_handle = {
             let mut physics = world.write_resource::<PhysicsResource>();
@@ -178,10 +218,19 @@ impl IceBlock {
 /// Exposed so the visual bench can look at the real geometry rather than a
 /// stand-in — a bench that draws its own approximation of a prop is judging
 /// the wrong object.
-pub fn ice_block_mesh(half_extents: Vector3<f32>) -> (Vec<Vertex>, Vec<u32>) {
+pub fn ice_block_mesh(half_extents: Vector3<f32>, spread: Spread) -> (Vec<Vertex>, Vec<u32>) {
     let bevel = half_extents.min() * BEVEL_FRACTION;
-    bevelled_box(half_extents, bevel)
+    bevelled_box(half_extents, bevel, uv_scale(spread))
 }
+
+/// The spread every piece of a compound ice object is drawn at.
+///
+/// [`PieceMesh`](super::super::shared::models::PieceMesh) is a bare function
+/// pointer — it is stored in a fracture component that outlives the spawn —
+/// so a piece mesh cannot carry a spread of its own. That costs nothing here:
+/// walls and domes are built out of bricks, and a brick is smaller than a
+/// tile. See [`texture_spread`] for the case this is not.
+const PIECE_SPREAD: Spread = Spread::ONE;
 
 /// The same mesh, for a block that is one piece of a larger object.
 ///
@@ -191,8 +240,8 @@ pub fn ice_block_mesh(half_extents: Vector3<f32>) -> (Vec<Vertex>, Vec<u32>) {
 /// the piece sits makes the object read as ice that was carved into blocks
 /// rather than as one block printed forty times.
 pub fn ice_piece_mesh(piece: &PiecePlacement) -> (Vec<Vertex>, Vec<u32>) {
-    let (mut vertices, indices) = ice_block_mesh(piece.half_extents);
-    let offset = texture_offset(piece.offset);
+    let (mut vertices, indices) = ice_block_mesh(piece.half_extents, PIECE_SPREAD);
+    let offset = texture_offset(piece.offset, PIECE_SPREAD);
     for vertex in &mut vertices {
         vertex.tex_coords += offset;
     }
@@ -204,8 +253,8 @@ pub fn ice_piece_mesh(piece: &PiecePlacement) -> (Vec<Vertex>, Vec<u32>) {
 /// Any injective-enough function of the offset would do; this one keeps
 /// neighbours a whole feature apart rather than a hair, which is what makes
 /// the difference visible.
-fn texture_offset(offset: Vector3<f32>) -> Vector2<f32> {
-    let scale = 0.5 / TEXTURE_HALF;
+fn texture_offset(offset: Vector3<f32>, spread: Spread) -> Vector2<f32> {
+    let scale = uv_scale(spread);
     Vector2::new(
         (offset.x + offset.y * 0.5) * scale,
         (offset.z + offset.y * 0.5) * scale,
@@ -213,8 +262,12 @@ fn texture_offset(offset: Vector3<f32>) -> Vector2<f32> {
 }
 
 /// The block as a single-primitive model, ready for a `ModelInstance`.
-pub fn ice_block_model(half_extents: Vector3<f32>, material: MaterialId) -> Arc<Model> {
-    let (vertices, indices) = ice_block_mesh(half_extents);
+pub fn ice_block_model(
+    half_extents: Vector3<f32>,
+    material: MaterialId,
+    spread: Spread,
+) -> Arc<Model> {
+    let (vertices, indices) = ice_block_mesh(half_extents, spread);
     let parts = vec![ModelPart::new(vec![MeshPrimitive {
         vertices,
         indices,
@@ -237,9 +290,9 @@ pub fn ice_block_model(half_extents: Vector3<f32>, material: MaterialId) -> Arc<
 /// Flat-shaded: each face carries its own copies of its vertices with the
 /// face's own normal, because a shared normal would round the bevels off into
 /// exactly the soft edge they exist to avoid.
-fn bevelled_box(half: Vector3<f32>, bevel: f32) -> (Vec<Vertex>, Vec<u32>) {
+fn bevelled_box(half: Vector3<f32>, bevel: f32, uv_scale: f32) -> (Vec<Vertex>, Vec<u32>) {
     let inner = half.map(|h| h - bevel);
-    let mut builder = FaceBuilder::new();
+    let mut builder = FaceBuilder::new(uv_scale);
 
     // Six faces, each a rectangle inset to the bevel.
     for axis in 0..3 {
@@ -321,13 +374,16 @@ fn bevelled_box(half: Vector3<f32>, bevel: f32) -> (Vec<Vertex>, Vec<u32>) {
 struct FaceBuilder {
     vertices: Vec<Vertex>,
     indices: Vec<u32>,
+    /// Texture coordinates per metre, from [`uv_scale`].
+    uv_scale: f32,
 }
 
 impl FaceBuilder {
-    fn new() -> Self {
+    fn new(uv_scale: f32) -> Self {
         Self {
             vertices: Vec::new(),
             indices: Vec::new(),
+            uv_scale,
         }
     }
 
@@ -343,8 +399,10 @@ impl FaceBuilder {
     fn uv(&self, pos: Vector3<f32>, normal: Vector3<f32>) -> Vector2<f32> {
         let axis = dominant_axis(normal);
         let (u_axis, v_axis) = tangent_axes(axis);
-        let scale = 0.5 / TEXTURE_HALF;
-        Vector2::new(pos[u_axis] * scale + 0.5, pos[v_axis] * scale + 0.5)
+        Vector2::new(
+            pos[u_axis] * self.uv_scale + 0.5,
+            pos[v_axis] * self.uv_scale + 0.5,
+        )
     }
 
     fn push_vertex(&mut self, pos: Vector3<f32>, normal: Vector3<f32>) -> u32 {
@@ -450,7 +508,11 @@ mod tests {
     }
 
     fn mesh(half: Vector3<f32>) -> (Vec<Vertex>, Vec<u32>) {
-        bevelled_box(half, half.min() * BEVEL_FRACTION)
+        bevelled_box(
+            half,
+            half.min() * BEVEL_FRACTION,
+            uv_scale(texture_spread(half)),
+        )
     }
 
     /// Six rectangles, twelve bevel rectangles and eight corner triangles:
