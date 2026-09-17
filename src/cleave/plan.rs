@@ -40,6 +40,16 @@ const PLACEMENT_ATTEMPTS: u32 = 6;
 /// rather than break the block under it.
 const HIT_BIAS: f32 = 0.45;
 
+/// Least share of the piece, measured across the cut, that each side of the
+/// cut must keep.
+///
+/// A blow on a corner pulls the cut towards that corner, and on a small
+/// block it can pull it past the point where one side is a sliver the engine
+/// will not take. Clamping the plane into the middle of the piece breaks the
+/// block wherever it was hit and still leaves two pieces worth having;
+/// without it, a couple of the dome's blocks could not be broken at all.
+const MIN_SHARE: f32 = 0.3;
+
 /// How a solid block comes apart when it is hit hard enough.
 #[derive(Debug, Clone, Copy)]
 pub struct CleaveRule {
@@ -165,7 +175,14 @@ impl CleaveRule {
         // cut shaves rather than breaks.
         let towards_hit = (hit - centre) * HIT_BIAS;
         let wander = square * (jitter.unit() - 0.5) * 0.1;
-        Plane::through(centre + towards_hit + wander, normal)
+        let wanted = normal.dot(&(centre + towards_hit + wander));
+
+        let (near, far) = span_along(piece, normal);
+        let margin = (far - near) * MIN_SHARE;
+        Plane {
+            normal,
+            offset: wanted.clamp(near + margin, far - margin),
+        }
     }
 }
 
@@ -180,14 +197,33 @@ fn hull_of(shape: &ColliderShape) -> Option<ConvexHull> {
     }
 }
 
-/// The direction the hull reaches furthest in, measured from its centre.
-fn longest_axis(hull: &ConvexHull) -> Vector3<f32> {
-    let centre = hull.centroid();
+/// How far the hull reaches each way along `direction`.
+fn span_along(hull: &ConvexHull, direction: Vector3<f32>) -> (f32, f32) {
     hull.vertices
         .iter()
-        .map(|v| v - centre)
-        .max_by(|a, b| a.magnitude_squared().total_cmp(&b.magnitude_squared()))
-        .map(|arm| arm.normalize())
+        .fold((f32::MAX, f32::MIN), |(near, far), v| {
+            let d = direction.dot(v);
+            (near.min(d), far.max(d))
+        })
+}
+
+/// The direction across which the hull is longest, chosen from its own face
+/// normals.
+///
+/// Not the direction of the furthest corner, which for any box is a body
+/// diagonal: cutting a block corner to corner leaves wedges too thin for the
+/// engine to take, and on the smaller blocks of a dome it leaves nothing the
+/// engine will take at all. Measured across the faces instead, a block is
+/// longest along the axis it is actually longest along.
+fn longest_axis(hull: &ConvexHull) -> Vector3<f32> {
+    hull.faces
+        .iter()
+        .map(|face| {
+            let (near, far) = span_along(hull, face.normal);
+            (face.normal, far - near)
+        })
+        .max_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(normal, _)| normal)
         .unwrap_or_else(Vector3::x)
 }
 
@@ -306,6 +342,58 @@ mod tests {
             .filter(|face| !square_to_an_axis(&face.normal))
             .count();
         assert!(tilted >= 2, "only {tilted} faces are off square");
+    }
+
+    /// The call the game makes, over every shape and every place a blow can
+    /// land on one. A grenade in an igloo found a cut that panicked the hull
+    /// builder; nothing here may panic, and a block struck anywhere must
+    /// nearly always break.
+    #[test]
+    fn no_blow_anywhere_on_any_block_can_panic_or_leave_it_whole() {
+        let mut state = 0x9e37_79b9u32;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            (state >> 8) as f32 / (1u32 << 24) as f32
+        };
+        // A cube, a slab, a plank, a post, and the proportions of the dome
+        // blocks that failed first.
+        let shapes = [
+            Vector3::new(0.25, 0.25, 0.25),
+            Vector3::new(0.5, 0.08, 0.4),
+            Vector3::new(0.8, 0.12, 0.12),
+            Vector3::new(0.12, 0.6, 0.12),
+            Vector3::new(0.1486, 0.2317, 0.14),
+        ];
+        let rule = CleaveRule::default();
+        let (mut tried, mut broke) = (0, 0);
+        for half in shapes {
+            let shape = ColliderShape::Box { half_extents: half };
+            for salt in 0..200u32 {
+                // Anywhere on or just outside the block, corners included.
+                let hit = half.component_mul(&Vector3::new(
+                    next() * 2.2 - 1.1,
+                    next() * 2.2 - 1.1,
+                    next() * 2.2 - 1.1,
+                ));
+                tried += 1;
+                let Some(pieces) = rule.cleave(&shape, hit, salt) else {
+                    continue;
+                };
+                broke += 1;
+                let total: f32 = pieces.iter().map(|p| p.hull.compute_volume()).sum();
+                let whole = 8.0 * half.x * half.y * half.z;
+                assert!(
+                    (total - whole).abs() < whole * 0.02,
+                    "{half:?} struck at {hit:?} made {total} of {whole}"
+                );
+            }
+        }
+        assert!(
+            broke * 100 >= tried * 98,
+            "only {broke} of {tried} blows broke the block"
+        );
     }
 
     #[test]

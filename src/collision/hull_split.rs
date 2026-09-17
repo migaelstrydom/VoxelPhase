@@ -40,6 +40,23 @@ const ON_PLANE: f32 = 1e-5;
 /// Vertices closer together than this are the same vertex.
 const COINCIDENT: f32 = 1e-5;
 
+/// Sine of the angle below which a face's corner counts as lying on the
+/// straight line between its neighbours.
+const COLLINEAR: f32 = 1e-4;
+
+/// Smallest fan sum a face may have and still be built: the hull builder
+/// rejects a face whose corners sum to less than `1e-4` as collinear, and
+/// does it with an assertion. Ten times that, so a face that passes here is
+/// one it takes without argument — and still a thousandth of the smallest
+/// face any piece worth keeping has.
+const MIN_FACE_SPAN: f32 = 1e-3;
+
+/// The hull builder's own limit, which it asserts rather than reports: the
+/// shortest side of a hull's axis-aligned box must be at least this share of
+/// the longest. Kept a little above the builder's 1% so a piece that passes
+/// here is one it takes without argument.
+const BUILDER_THICKNESS_RATIO: f32 = 0.02;
+
 /// Thinnest an accepted piece may be, as a share of its longest dimension.
 /// Above the hull builder's own 1% limit, so a piece that passes here is one
 /// it will take and one the solver can hold.
@@ -213,14 +230,150 @@ impl HalfBuilder {
                 normal: Vector3::zeros(),
             });
         }
-        if self.faces.len() < 4 || self.vertices.len() < 4 {
+        let (vertices, faces) = tidy(self.vertices, self.faces)?;
+        if faces.len() < 4 || vertices.len() < 4 || vertices.len() > MAX_HULL_VERTICES {
             return None;
         }
-        if self.vertices.len() > MAX_HULL_VERTICES || !thick_enough(&self.vertices) {
+        if !closed(&faces) {
             return None;
         }
-        Some(ConvexHull::new(self.vertices, self.faces))
+        if !thick_enough(&vertices) || !stout_enough(&vertices) {
+            return None;
+        }
+        Some(ConvexHull::new(vertices, faces))
     }
+}
+
+/// Clean up the faces of a half so the hull builder will take them: it
+/// panics on a face whose corners are in a line, and counts every vertex
+/// towards its own limits whether a face uses it or not.
+///
+/// Two things need doing. A cut that runs near a corner leaves faces with
+/// corners strung along a straight edge, which are redundant on a polygon
+/// and fatal to a hull; and a face cut away entirely leaves its corners
+/// behind in the vertex list with nothing referring to them.
+fn tidy(
+    vertices: Vec<Vector3<f32>>,
+    faces: Vec<HullFace>,
+) -> Option<(Vec<Vector3<f32>>, Vec<HullFace>)> {
+    let kept: Vec<HullFace> = faces
+        .into_iter()
+        .filter_map(|face| {
+            let corners = straighten(&vertices, face.vertex_indices)?;
+            Some(HullFace {
+                vertex_indices: corners,
+                normal: Vector3::zeros(),
+            })
+        })
+        .collect();
+
+    // Renumber onto the vertices some face still uses.
+    let mut moved_to: Vec<Option<u16>> = vec![None; vertices.len()];
+    let mut compact = Vec::with_capacity(vertices.len());
+    for face in &kept {
+        for &index in &face.vertex_indices {
+            if moved_to[index as usize].is_none() {
+                moved_to[index as usize] = Some(compact.len() as u16);
+                compact.push(vertices[index as usize]);
+            }
+        }
+    }
+    let renumbered = kept
+        .into_iter()
+        .map(|face| HullFace {
+            vertex_indices: face
+                .vertex_indices
+                .iter()
+                .map(|i| moved_to[*i as usize].expect("a face's own corner was kept"))
+                .collect(),
+            normal: face.normal,
+        })
+        .collect();
+    Some((compact, renumbered))
+}
+
+/// Drop the corners of one face that sit on the straight line between their
+/// neighbours, and refuse the face if what is left is not a polygon.
+///
+/// Repeated to a fixed point: taking one corner out can leave the next one
+/// in line with its new neighbours.
+fn straighten(
+    vertices: &[Vector3<f32>],
+    mut loop_: SmallVec<[u16; 6]>,
+) -> Option<SmallVec<[u16; 6]>> {
+    let mut dropped = true;
+    while dropped && loop_.len() > 3 {
+        dropped = false;
+        for k in 0..loop_.len() {
+            let count = loop_.len();
+            let previous = vertices[loop_[(k + count - 1) % count] as usize];
+            let corner = vertices[loop_[k] as usize];
+            let next = vertices[loop_[(k + 1) % count] as usize];
+            let (arriving, leaving) = (corner - previous, next - corner);
+            let turn = arriving.cross(&leaving).magnitude();
+            if turn <= COLLINEAR * arriving.magnitude() * leaving.magnitude() {
+                loop_.remove(k);
+                dropped = true;
+                break;
+            }
+        }
+    }
+    (loop_.len() >= 3 && area_of(vertices, &loop_) > MIN_FACE_SPAN).then_some(loop_)
+}
+
+/// The fan sum of a face — twice its area — which is zero when its corners
+/// are in a line. The same sum the hull builder takes for the face normal,
+/// so comparing against its threshold is comparing like with like.
+fn area_of(vertices: &[Vector3<f32>], loop_: &[u16]) -> f32 {
+    let first = vertices[loop_[0] as usize];
+    let mut area = Vector3::zeros();
+    for k in 1..loop_.len() - 1 {
+        let a = vertices[loop_[k] as usize] - first;
+        let b = vertices[loop_[k + 1] as usize] - first;
+        area += a.cross(&b);
+    }
+    area.magnitude()
+}
+
+/// Whether the faces make a closed surface: every edge shared by exactly two
+/// of them.
+///
+/// The hull builder demands this and asserts it. It can fail here for a
+/// reason that is nobody's mistake: a cut that passes exactly through an
+/// existing corner leaves a face with a corner in the middle of one of its
+/// edges, and dropping that corner — which must happen, or the face is
+/// degenerate — leaves the neighbouring face with an edge that no longer
+/// matches. Such a piece is refused, and the caller moves the plane and
+/// tries again. Better a cut that does not happen than a hull with a hole.
+fn closed(faces: &[HullFace]) -> bool {
+    let mut edges: Vec<((u16, u16), u32)> = Vec::new();
+    for face in faces {
+        let count = face.vertex_indices.len();
+        for k in 0..count {
+            let (a, b) = (face.vertex_indices[k], face.vertex_indices[(k + 1) % count]);
+            let edge = (a.min(b), a.max(b));
+            match edges.iter_mut().find(|(e, _)| *e == edge) {
+                Some((_, seen)) => *seen += 1,
+                None => edges.push((edge, 1)),
+            }
+        }
+    }
+    !edges.is_empty() && edges.iter().all(|(_, seen)| *seen == 2)
+}
+
+/// Whether the hull builder's own thinness rule will accept this cloud: the
+/// shortest side of its axis-aligned box against the longest. Checked here
+/// because the builder does not check, it asserts.
+fn stout_enough(vertices: &[Vector3<f32>]) -> bool {
+    let (mut low, mut high) = (Vector3::repeat(f32::MAX), Vector3::repeat(f32::MIN));
+    for v in vertices {
+        low = low.inf(v);
+        high = high.sup(v);
+    }
+    let extent = high - low;
+    let longest = extent.x.max(extent.y).max(extent.z);
+    let shortest = extent.x.min(extent.y).min(extent.z);
+    longest > 0.0 && shortest / longest >= BUILDER_THICKNESS_RATIO
 }
 
 /// Sort the cap's corners into a loop, by angle about their own centre in the
@@ -235,7 +388,15 @@ fn order_around(
         .iter()
         .fold(Vector3::zeros(), |acc, i| acc + vertices[*i as usize])
         / cap.len() as f32;
-    let spoke = (vertices[cap[0] as usize] - centre).normalize();
+    // From the corner furthest out, so the spoke is never a zero vector:
+    // a corner sitting on the cap's own centre would give one, and every
+    // angle measured against it would be a NaN.
+    let spoke = cap
+        .iter()
+        .map(|i| vertices[*i as usize] - centre)
+        .max_by(|a, b| a.magnitude_squared().total_cmp(&b.magnitude_squared()))
+        .map(|arm| arm.normalize())
+        .unwrap_or_else(Vector3::x);
     let side = outward.cross(&spoke);
 
     let mut ordered: SmallVec<[u16; 6]> = cap.iter().copied().collect();
@@ -409,6 +570,63 @@ mod tests {
         let normal = Vector3::new(1.0, 1.0, 0.0).normalize();
         let corner = Vector3::new(0.5, 0.5, 0.0);
         assert!(split_hull(&cube, Plane::through(corner * 0.98, normal)).is_none());
+    }
+
+    /// Every plane that can be aimed at a hull, twice over, and none of them
+    /// may panic the hull builder.
+    ///
+    /// Written after one did: a grenade in an igloo found a cut whose face
+    /// came out with all its corners in a line. A cut that cannot be made is
+    /// a `None`, never a crash, and the only way to be sure of that is to
+    /// try a great many of them.
+    #[test]
+    fn no_cut_anywhere_can_panic_the_hull_builder() {
+        let mut state = 0x1234_5678u32;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            (state >> 8) as f32 / (1u32 << 24) as f32 - 0.5
+        };
+        let block = cube_hull(Vector3::new(0.3, 0.15, 0.2));
+        let mut cuts = 0;
+        for _ in 0..4000 {
+            let normal = Vector3::new(next(), next(), next());
+            if normal.magnitude() < 1e-3 {
+                continue;
+            }
+            let plane = Plane::through(
+                Vector3::new(next() * 0.7, next() * 0.35, next() * 0.5),
+                normal.normalize(),
+            );
+            let Some(halves) = split_hull(&block, plane) else {
+                continue;
+            };
+            cuts += 1;
+            let total = halves.front.compute_volume() + halves.back.compute_volume();
+            assert!(
+                (total - block.compute_volume()).abs() < 1e-3,
+                "a cut lost volume: {total}"
+            );
+            // And again, on a piece that is no longer a box.
+            let normal = Vector3::new(next(), next(), next());
+            if normal.magnitude() < 1e-3 {
+                continue;
+            }
+            let centre = halves.front.centroid();
+            let again = Plane::through(
+                centre + Vector3::new(next() * 0.2, next() * 0.2, next() * 0.2),
+                normal.normalize(),
+            );
+            if let Some(twice) = split_hull(&halves.front, again) {
+                let total = twice.front.compute_volume() + twice.back.compute_volume();
+                assert!(
+                    (total - halves.front.compute_volume()).abs() < 1e-3,
+                    "a second cut lost volume: {total}"
+                );
+            }
+        }
+        assert!(cuts > 500, "only {cuts} of the planes cut anything");
     }
 
     /// Cutting twice is how a block becomes three pieces, and the second cut

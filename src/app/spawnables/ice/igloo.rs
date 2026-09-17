@@ -683,6 +683,45 @@ mod tests {
         );
     }
 
+    /// Every block of the dome must actually be breakable, from wherever it
+    /// is struck. The hull cutter refuses a cut that would leave a sliver
+    /// and the rule tries again elsewhere, so a block whose proportions
+    /// leave nowhere good to cut would simply never break — and a grenade in
+    /// an igloo would knock blocks loose and never shatter one.
+    #[test]
+    fn every_block_of_the_dome_can_be_cleaved() {
+        let rule = ice_cleaving();
+        let mut refused = Vec::new();
+        for (index, block) in igloo().blocks().iter().enumerate() {
+            let shape = crate::physics::ColliderShape::Box {
+                half_extents: block.half_extents,
+            };
+            // Struck on a face, on an edge, and dead centre.
+            for (salt, hit) in [
+                block
+                    .half_extents
+                    .component_mul(&Vector3::new(0.9, 0.0, 0.0)),
+                block
+                    .half_extents
+                    .component_mul(&Vector3::new(0.8, 0.8, 0.0)),
+                Vector3::zeros(),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                if rule.cleave(&shape, hit, salt as u32).is_none() {
+                    refused.push((index, block.half_extents, hit));
+                }
+            }
+        }
+        assert!(
+            refused.is_empty(),
+            "{} of the dome's blocks would not break: {:?}",
+            refused.len(),
+            &refused[..refused.len().min(3)]
+        );
+    }
+
     /// A dome of a few hundred pieces is a level's whole budget spent on one
     /// prop. The default igloo must stay well under that.
     #[test]

@@ -426,13 +426,21 @@ mod tests {
     }
 
     fn frame(world: &mut World, stepper: &mut SequentialStepper, geometry: &FlatQuadGeometry) {
+        step(world, stepper, geometry);
+        FractureSystem.run_now(world);
+        world.maintain();
+    }
+
+    /// A frame without the fracture system, which frees the struck wedge the
+    /// same frame the block breaks. Tests that ask what the *break* did stop
+    /// here; tests that ask what the object looks like afterwards do not.
+    fn step(world: &mut World, stepper: &mut SequentialStepper, geometry: &FlatQuadGeometry) {
         {
             let mut physics = world.write_resource::<PhysicsResource>();
             let mut debug = DebugLines::default();
             stepper.step(&mut physics.world, FRAME_DT, geometry, &[], &[], &mut debug);
         }
         SolidCleaveSystem.run_now(world);
-        FractureSystem.run_now(world);
         world.maintain();
     }
 
@@ -545,14 +553,17 @@ mod tests {
 
         let _hammer = drop_box(&mut world, 0.15, 1.0, 40.0);
         for _ in 0..90 {
-            frame(&mut world, &mut stepper, &geometry);
+            step(&mut world, &mut stepper, &geometry);
+            if child_count(&world, block) > 1 {
+                break;
+            }
         }
 
         let physics = world.read_resource::<PhysicsResource>();
         let body = physics.world.body(block).expect("the block is still there");
         assert!(
             (2..=3).contains(&body.colliders().len()),
-            "a block should leave two or three pieces, not {}",
+            "a block should break into two or three pieces, not {}",
             body.colliders().len()
         );
         for handle in body.colliders() {
