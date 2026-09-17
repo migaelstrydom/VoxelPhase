@@ -42,7 +42,7 @@ use crate::resources::textures::TextureHandle;
 /// Half-extents of the slab: the paving-slab proportions the pattern was
 /// reported wrong on, and wide enough that the spread gives it more than one
 /// tile — which is the case the two mappings disagree about.
-const SLAB: Vector3<f32> = Vector3::new(2.0, 0.4, 2.0);
+const SLAB: Vector3<f32> = Vector3::new(2.5, 0.5, 2.5);
 
 /// Half-width of the ground plane.
 const GROUND_HALF_EXTENT: f32 = 12.0;

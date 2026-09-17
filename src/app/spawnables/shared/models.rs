@@ -141,6 +141,40 @@ impl SurfaceUvs {
     }
 }
 
+/// How far the pieces of `model` stray from one projection of the whole
+/// object, in texture coordinates. Zero means they are one sheet.
+///
+/// The measurement behind "the texture changed when it broke". A compound is
+/// assembled out of one mesh per child, and each child is meshed from its own
+/// shape, so nothing about the assembly forces the children to agree — they
+/// agree only if every one of them was told where it sits and read the pattern
+/// there. This reads the finished model back and says whether they did.
+///
+/// `None` for [`SurfaceUvs::Fitted`], which has no single projection to stray
+/// from, and for a model with nothing in it.
+///
+/// Note that a piece mesh is allowed to move its own markings deliberately —
+/// an object built of identical bricks does it so that its bricks do not look
+/// stamped — and that shows up here as a seam per brick. It is the *drawn from
+/// one shape* pieces, cut where the object broke, that must read zero.
+pub fn texture_seam(model: &Model, uvs: SurfaceUvs) -> Option<f32> {
+    let SurfaceUvs::PerMetre(scale) = uvs else {
+        return None;
+    };
+    let mut worst: Option<f32> = None;
+    for vertex in model
+        .parts
+        .iter()
+        .flat_map(|part| part.primitives.iter())
+        .flat_map(|primitive| primitive.vertices.iter())
+    {
+        let want = project_at_scale(vertex.pos, vertex.normal, scale);
+        let stray = (vertex.tex_coords - want).amax();
+        worst = Some(worst.map_or(stray, |w: f32| w.max(stray)));
+    }
+    worst
+}
+
 /// Texture coordinates for a point, projected down its face's dominant axis
 /// at a fixed number of coordinates per metre.
 ///

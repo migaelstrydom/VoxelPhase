@@ -6,6 +6,7 @@ use nalgebra::{Point3, Vector3};
 use specs::{Join, Read, ReadStorage, System, WriteStorage};
 
 use super::components::BrittleSolid;
+use crate::app::spawnables::shared::models::texture_seam;
 use crate::components::{ModelInstance, RigidBodyComponent};
 use crate::debug::DebugLog;
 use crate::fracture::systems::compound_model_of;
@@ -91,6 +92,14 @@ impl<'a> System<'a> for SolidCleaveSystem {
                 if let Some(rebuilt) =
                     compound_model_of(&physics, body_handle, &fracture.materials, fracture.style)
                 {
+                    // Reported because the failure it catches is invisible in
+                    // every other reading: the pieces are the right shape, in
+                    // the right place, wearing the right texture at the right
+                    // scale, and reading it from three different places. Zero
+                    // is one sheet of ice; anything else is a seam.
+                    if let Some(seam) = texture_seam(&rebuilt, fracture.style.uvs) {
+                        debug_log.add("Cleave/TextureSeam", format!("{seam:.4} uv"));
+                    }
                     model.model = rebuilt;
                 }
             }
@@ -330,7 +339,7 @@ fn capped_kick(kick: Vector3<f32>, mass: f32, shares: usize) -> Vector3<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nalgebra::{UnitQuaternion, Vector2};
+    use nalgebra::UnitQuaternion;
     use specs::{Builder, Entity, RunNow, World, WorldExt};
 
     use super::super::plan::CleaveRule;
@@ -338,10 +347,12 @@ mod tests {
     use crate::components::{Orientation, Position, Renderable, Velocity};
     use crate::debug::DebugLines;
     use crate::fracture::FractureSystem;
+    use crate::model::Model;
     use crate::physics::bench_harness::geometry::FlatQuadGeometry;
     use crate::physics::stepping::{SequentialStepper, Stepper};
     use crate::physics::{PhysicsConfig, PhysicsWorld, RigidBodyDesc};
     use crate::rendering::material::MaterialId;
+    use std::sync::Arc;
 
     const FRAME_DT: f32 = 1.0 / 60.0;
     const BLOCK_HEIGHT: f32 = 1.0;
@@ -723,7 +734,7 @@ mod tests {
     /// Half-extents of a slab big enough that its texture holds more than one
     /// tile, which is the case where the block's mapping and a mapping fitted
     /// to a piece disagree.
-    const SLAB: Vector3<f32> = Vector3::new(1.0, 0.25, 1.0);
+    const SLAB: Vector3<f32> = Vector3::new(2.5, 0.5, 2.5);
 
     /// A real ice slab, spawned the way a level spawns one, resting on the
     /// ground.
@@ -763,23 +774,35 @@ mod tests {
         (world, block)
     }
 
-    /// Texture coordinates per metre of the object's one texture, and where
-    /// each upward-facing corner reads it.
+    /// A box of `mass` kg dropped from `drop` metres onto the slab.
     ///
-    /// Only the faces square to an axis are read, because the chamfers are
-    /// projected down the axis they lean away from and are foreshortened by
-    /// design.
-    fn upward_reads(world: &World, block: Entity) -> Vec<(Vector3<f32>, Vector2<f32>)> {
+    /// Its own, rather than `drop_box`: a slab five metres across weighs more
+    /// than twenty tonnes, and the blow that cracks a block the size of a
+    /// crate does not mark it.
+    fn slab_hammer(world: &mut World, x: f32, drop: f32, mass: f32) -> RigidBodyHandle {
+        let half = 0.25;
+        let density = mass / (8.0 * half * half * half);
+        let mut physics = world.write_resource::<PhysicsResource>();
+        let body = physics
+            .world
+            .create_body(RigidBodyDesc::dynamic().position(Point3::new(
+                x,
+                SLAB.y * 2.0 + half + drop,
+                0.0,
+            )));
+        physics.world.attach_collider(
+            body,
+            ColliderDesc::box_shape(Vector3::repeat(half))
+                .density(density)
+                .restitution(0.0),
+        );
+        body
+    }
+
+    /// The model the player is looking at, as the renderer would get it.
+    fn drawn(world: &World, block: Entity) -> Arc<Model> {
         let models = world.read_storage::<ModelInstance>();
-        let model = &models.get(block).expect("the slab is drawn").model;
-        model
-            .parts
-            .iter()
-            .flat_map(|part| part.primitives.iter())
-            .flat_map(|primitive| primitive.vertices.iter())
-            .filter(|vertex| vertex.normal.y > 0.999)
-            .map(|vertex| (vertex.pos, vertex.tex_coords))
-            .collect()
+        models.get(block).expect("the slab is drawn").model.clone()
     }
 
     /// The whole of the complaint, end to end and through the real objects: a
@@ -792,24 +815,28 @@ mod tests {
     /// jumps sideways at the crack, which is what a player sees as the block
     /// changing texture.
     ///
-    /// Stated as a residual rather than an absolute so that recentring the
-    /// body on what is left of it — which moves every child at once — is not
-    /// mistaken for the pieces disagreeing.
+    /// Asserted with [`texture_seam`], which is what the running game reports
+    /// on F3, so the number in the log and the number in this test are the
+    /// same number.
     #[test]
     fn a_cracked_slab_is_still_one_sheet_of_ice() {
         let (mut world, block) = ice_slab();
         let geometry = FlatQuadGeometry::new(50.0);
         let mut stepper = SequentialStepper::new(FRAME_DT, 4);
+        let uvs = ice_uvs(ice_texture_spread(SLAB));
 
-        let before = upward_reads(&world, block);
-        assert!(!before.is_empty(), "the whole slab has no upward face");
+        assert_eq!(
+            texture_seam(&drawn(&world, block), uvs).map(|seam| seam < 1e-4),
+            Some(true),
+            "the whole slab is not one sheet to begin with"
+        );
 
-        let _hammer = drop_box(&mut world, 0.35, 3.0, 400.0);
+        let _hammer = slab_hammer(&mut world, 0.8, 4.0, 3000.0);
         let body = {
             let bodies = world.read_storage::<RigidBodyComponent>();
             bodies.get(block).expect("the slab has a body").0
         };
-        for _ in 0..120 {
+        for _ in 0..240 {
             step(&mut world, &mut stepper, &geometry);
             if child_count(&world, body) > 1 {
                 break;
@@ -817,22 +844,10 @@ mod tests {
         }
         assert!(child_count(&world, body) > 1, "the slab never cracked");
 
-        let scale = ice_uvs(ice_texture_spread(SLAB)).per_metre_or(0.0);
-        let residual = |(pos, uv): &(Vector3<f32>, Vector2<f32>)| {
-            uv - Vector2::new(pos.z * scale + 0.5, pos.x * scale + 0.5)
-        };
-        let after = upward_reads(&world, block);
-        assert!(!after.is_empty(), "the cracked slab has no upward face");
-
-        let want = residual(&after[0]);
-        for read in &after {
-            let got = residual(read);
-            assert!(
-                (got - want).norm() < 1e-4,
-                "a corner at {:?} reads the pattern {:?} from where its neighbours do",
-                read.0,
-                got - want
-            );
-        }
+        let seam = texture_seam(&drawn(&world, block), uvs).expect("ice has a projection");
+        assert!(
+            seam < 1e-4,
+            "the wedges read the pattern up to {seam} apart in texture coordinates"
+        );
     }
 }
