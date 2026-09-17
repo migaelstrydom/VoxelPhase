@@ -24,8 +24,14 @@ pub struct BrittleSolid {
     /// When a block cleaves and into what.
     pub cleaving: CleaveRule,
     /// Impulse, in N·s, that breaks a joint between two wedges of the same
-    /// block. Fresh fracture surfaces key together, so this is usually
-    /// higher than the joint that held the block to its neighbours.
+    /// block.
+    ///
+    /// Well below what it took to crack the block, because the block is
+    /// already cracked: what holds two wedges together afterwards is the key
+    /// of two fresh surfaces, not the substance. Held at the strength of the
+    /// whole block — which is what this used to be — a struck block loses the
+    /// one wedge the blow landed on and the rest stay rigid, so it stands
+    /// there visibly cracked and behaving like one solid piece.
     pub joint_threshold: f32,
     /// How many times over a block may be cleaved before a hit takes the
     /// piece out whole instead of dividing it further. One means the wedges
@@ -46,12 +52,21 @@ pub struct BrittleSolid {
 /// hit on one of those wedges takes it out rather than splintering it again.
 const DEFAULT_MAX_CLEAVE_DEPTH: u32 = 1;
 
+/// What a block's wedges hold each other at, as a fraction of the blow it
+/// took to cleave the block in the first place.
+///
+/// Low enough that a cracked block comes apart under the next thing that
+/// touches it rather than standing there in one rigid piece, high enough that
+/// it does not fall apart on its own the moment it cracks. It has not been
+/// play-tested; [`BrittleSolid::keyed_at`] overrides it per object.
+const WEDGE_BOND: f32 = 0.25;
+
 impl BrittleSolid {
     /// An object of `child_count` whole blocks, none yet broken.
     pub fn new(cleaving: CleaveRule, material: MaterialId, child_count: usize) -> Self {
         Self {
             cleaving,
-            joint_threshold: cleaving.threshold * 1.5,
+            joint_threshold: cleaving.threshold * WEDGE_BOND,
             max_cleave_depth: DEFAULT_MAX_CLEAVE_DEPTH,
             material,
             contact_load: ContactLoadTracker::new(child_count),

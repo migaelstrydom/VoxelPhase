@@ -27,7 +27,7 @@
 
 use nalgebra::Vector3;
 
-use super::convex_hull::ConvexHull;
+use super::convex_hull::{ConvexHull, HullEdgeAdj};
 use super::hull_split::{trim_hull, Plane};
 
 /// Shortest edge, as a fraction of the hull's smallest bounding dimension,
@@ -51,7 +51,26 @@ const MIN_CORNER_SIN: f32 = 0.05;
 /// one square edge is a worse drawing than a chamfered one and a far better
 /// one than nothing.
 pub fn bevel_hull(hull: &ConvexHull, bevel: f32) -> ConvexHull {
-    if bevel <= 0.0 || !bevel.is_finite() {
+    bevel_hull_by_face(hull, &vec![bevel; hull.faces.len()])
+}
+
+/// The same, with a chamfer width chosen per face.
+///
+/// An edge is cut back by the narrower of the two faces it joins, and a corner
+/// by the narrowest of the faces meeting there, so a face asking for no
+/// chamfer keeps every one of its edges square. That is what lets an object
+/// chamfer the faces it was authored with and leave the faces it was broken
+/// along alone — a fracture surface that catches the light as brightly as the
+/// polished ones reads as a gap, not a crack.
+///
+/// `widths` is indexed in step with `hull.faces`; a short list leaves the
+/// remaining faces unchamfered.
+pub fn bevel_hull_by_face(hull: &ConvexHull, widths: &[f32]) -> ConvexHull {
+    let widest = widths.iter().copied().fold(
+        0.0f32,
+        |acc, w| if w.is_finite() { acc.max(w) } else { acc },
+    );
+    if widest <= 0.0 {
         return hull.clone();
     }
 
@@ -68,8 +87,12 @@ pub fn bevel_hull(hull: &ConvexHull, bevel: f32) -> ConvexHull {
         return hull.clone();
     }
 
+    let unit: Vec<f32> = (0..hull.faces.len())
+        .map(|face| widths.get(face).copied().unwrap_or(0.0).max(0.0) / scale)
+        .collect();
+
     let mut chamfered = hull.scaled(1.0 / scale);
-    for plane in bevel_planes(&chamfered, bevel / scale) {
+    for plane in bevel_planes(&chamfered, &unit) {
         if let Some(trimmed) = trim_hull(&chamfered, plane) {
             chamfered = trimmed;
         }
@@ -84,12 +107,17 @@ pub fn bevel_hull(hull: &ConvexHull, bevel: f32) -> ConvexHull {
 /// chamfered solid, which is what makes the result independent of the order
 /// the cuts are applied in: the chamfered solid is the intersection of the
 /// hull with all of them.
-fn bevel_planes(hull: &ConvexHull, bevel: f32) -> Vec<Plane> {
+fn bevel_planes(hull: &ConvexHull, widths: &[f32]) -> Vec<Plane> {
     let centre = hull.centroid();
     let mut planes = Vec::with_capacity(hull.edges.len() + hull.vertices.len());
+    let by_face = FaceWidths::of(hull, widths);
 
     let shortest = extent_of(hull) * MIN_EDGE_FRACTION;
     for edge in &hull.edges {
+        let bevel = by_face.at_edge(edge);
+        if bevel <= 0.0 {
+            continue;
+        }
         let (a, b) = (
             hull.vertices[edge.v0 as usize],
             hull.vertices[edge.v1 as usize],
@@ -119,9 +147,64 @@ fn bevel_planes(hull: &ConvexHull, bevel: f32) -> Vec<Plane> {
     // And one per corner, between the facets the edge cuts leave. Without
     // these a chamfered box has eight sharp points where it used to have eight
     // triangles — the facets that catch the parts of the sky the edges miss.
-    planes.extend(corner_planes(hull, bevel));
+    planes.extend(corner_planes(hull, &by_face));
 
     planes
+}
+
+/// The chamfer width of each face, and the widths that follow from it for the
+/// edges and corners between them.
+struct FaceWidths {
+    /// Width per face, indexed in step with the hull's faces.
+    per_face: Vec<f32>,
+    /// Width per vertex: the narrowest of the faces meeting there.
+    per_vertex: Vec<f32>,
+    /// Which faces carry each normal, so an edge can find its own two.
+    normals: Vec<Vector3<f32>>,
+}
+
+impl FaceWidths {
+    fn of(hull: &ConvexHull, widths: &[f32]) -> Self {
+        let per_face: Vec<f32> = (0..hull.faces.len())
+            .map(|face| widths.get(face).copied().unwrap_or(0.0).max(0.0))
+            .collect();
+        let mut per_vertex = vec![f32::INFINITY; hull.vertices.len()];
+        for (face, width) in hull.faces.iter().zip(&per_face) {
+            for &index in &face.vertex_indices {
+                per_vertex[index as usize] = per_vertex[index as usize].min(*width);
+            }
+        }
+        Self {
+            per_face,
+            per_vertex,
+            normals: hull.faces.iter().map(|f| f.normal).collect(),
+        }
+    }
+
+    /// The narrower of the two faces the edge joins.
+    ///
+    /// Matched by normal, because [`HullEdgeAdj`] carries its neighbours'
+    /// normals rather than their indices.
+    fn at_edge(&self, edge: &HullEdgeAdj) -> f32 {
+        self.for_normal(edge.normal_a)
+            .min(self.for_normal(edge.normal_b))
+    }
+
+    fn for_normal(&self, normal: Vector3<f32>) -> f32 {
+        self.normals
+            .iter()
+            .position(|n| (n - normal).magnitude() < 1e-4)
+            .map_or(0.0, |face| self.per_face[face])
+    }
+
+    /// The narrowest of the faces meeting at a vertex.
+    fn at_vertex(&self, index: usize) -> f32 {
+        self.per_vertex
+            .get(index)
+            .copied()
+            .filter(|w| w.is_finite())
+            .unwrap_or(0.0)
+    }
 }
 
 /// The half-space that cuts each corner of `hull` back by `bevel`.
@@ -138,7 +221,7 @@ fn bevel_planes(hull: &ConvexHull, bevel: f32) -> Vec<Plane> {
 /// coplanar, so the facet is laid through their mean along the vertex's own
 /// outward direction. A cube corner, where they are coplanar, gets exactly the
 /// facet a bevelled box is authored with.
-fn corner_planes(hull: &ConvexHull, bevel: f32) -> Vec<Plane> {
+fn corner_planes(hull: &ConvexHull, widths: &FaceWidths) -> Vec<Plane> {
     let mut normals = vec![Vector3::zeros(); hull.vertices.len()];
     let mut insets = vec![Vector3::zeros(); hull.vertices.len()];
     let mut counts = vec![0u32; hull.vertices.len()];
@@ -162,6 +245,10 @@ fn corner_planes(hull: &ConvexHull, bevel: f32) -> Vec<Plane> {
             // face, cross on the bisector this far along it.
             let half_angle_sin = ((1.0 - back.dot(&forth)) * 0.5).max(0.0).sqrt();
             if half_angle_sin < MIN_CORNER_SIN {
+                continue;
+            }
+            let bevel = widths.at_vertex(index);
+            if bevel <= 0.0 {
                 continue;
             }
             insets[index] += vertex + bisector * (bevel / half_angle_sin);

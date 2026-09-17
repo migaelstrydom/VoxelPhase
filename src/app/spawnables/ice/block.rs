@@ -33,7 +33,7 @@ use super::super::shared::textures::seed_from_position;
 use super::super::MaterialCtx;
 use crate::cleave::{BrittleSolid, CleaveRule};
 use crate::collision::convex_hull::ConvexHull;
-use crate::collision::hull_bevel::{bevel_hull, extent_of};
+use crate::collision::hull_bevel::{bevel_hull_by_face, extent_of};
 use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
 };
@@ -307,8 +307,52 @@ pub fn ice_hull_mesh(hull: &ConvexHull) -> (Vec<Vertex>, Vec<u32>) {
     // `extent_of` is a full dimension and [`BEVEL_FRACTION`] is authored
     // against a half-extent, so that a wedge wears the same width of facet
     // the block it came out of does.
+    hull_mesh(&chamfered(hull))
+}
+
+/// A wedge's hull as it is drawn: the block's own faces cut back in full, the
+/// surfaces it broke along barely at all.
+fn chamfered(hull: &ConvexHull) -> ConvexHull {
     let bevel = extent_of(hull) * 0.5 * BEVEL_FRACTION;
-    hull_mesh(&bevel_hull(hull, bevel))
+    let widths: Vec<f32> = hull
+        .faces
+        .iter()
+        .map(|face| {
+            if was_cut(face.normal) {
+                bevel * CUT_FACE_BEVEL
+            } else {
+                bevel
+            }
+        })
+        .collect();
+    bevel_hull_by_face(hull, &widths)
+}
+
+/// How much of the block's chamfer a fracture surface gets.
+///
+/// Not zero, because a cut face meeting a cut face at a square edge is a
+/// hairline the eye reads as an artefact; not the full width, because two
+/// wedges still holding together each cut back by that much leave a groove
+/// wide enough to read as a gap rather than a crack.
+const CUT_FACE_BEVEL: f32 = 0.2;
+
+/// How far off an axis a face may point and still be one the block was
+/// authored with, in degrees.
+///
+/// A block is a box, so in a wedge's own frame — which is the block's frame,
+/// translated — its six original faces point exactly along an axis. Every
+/// fracture surface is a face normal tilted by [`CleaveRule::tilt`], and the
+/// rule never tilts by less than 60% of it, so for ice the nearest a cut can
+/// come to an axis is 8.4°. This sits well inside that gap; the test
+/// `a_cut_face_is_never_mistaken_for_one_of_the_blocks_own` is what keeps the
+/// two from drifting together.
+const FACE_OF_THE_BLOCK: f32 = 4.0;
+
+/// Whether a face of a wedge is a surface it was broken along rather than one
+/// of the block's own.
+fn was_cut(normal: Vector3<f32>) -> bool {
+    let nearest = (0..3).fold(0.0f32, |acc, axis| acc.max(normal[axis].abs()));
+    nearest < FACE_OF_THE_BLOCK.to_radians().cos()
 }
 
 /// How far through the pattern a piece at this offset starts.
@@ -725,6 +769,151 @@ mod tests {
                 "the wedge has no facet facing {block:?}"
             );
         }
+    }
+
+    /// The load-bearing assumption behind [`was_cut`]: a block is a box, so
+    /// its own faces point exactly along an axis in the wedge's frame, while
+    /// every fracture surface is tilted off one. If the cleave rule's tilt
+    /// ever came down to meet the tolerance, wedges would start chamfering
+    /// their fracture surfaces in full again and the cracks would open into
+    /// grooves. Checked against the real cleave rule, on real cuts.
+    #[test]
+    fn a_cut_face_is_never_mistaken_for_one_of_the_blocks_own() {
+        let half = Vector3::new(0.3, 0.15, 0.2);
+        let shape = crate::physics::ColliderShape::ConvexHull {
+            hull: std::sync::Arc::new(crate::collision::convex_hull::cube_hull(half)),
+        };
+        let rule = ice_cleaving();
+        let mut cut_faces = 0;
+        let mut block_faces = 0;
+
+        for salt in 0..200u32 {
+            let hit = Vector3::new(
+                ((salt % 7) as f32 / 7.0 - 0.5) * half.x,
+                ((salt % 5) as f32 / 5.0 - 0.5) * half.y,
+                ((salt % 3) as f32 / 3.0 - 0.5) * half.z,
+            );
+            let Some(pieces) = rule.cleave(&shape, hit, salt) else {
+                continue;
+            };
+            for piece in &pieces {
+                for face in &piece.hull.faces {
+                    // Ground truth, which only a test can see: a face of the
+                    // block is one lying in one of the block's own six face
+                    // planes. Every corner must be on the *same* side, not
+                    // merely at that distance from the middle — a cut running
+                    // the full height of the block has all four corners on the
+                    // top and bottom faces without being either of them. The
+                    // wedge sits on its own centroid, so its corners go back
+                    // into the block's frame first.
+                    let on_the_block = (0..3).any(|axis| {
+                        [1.0_f32, -1.0].iter().any(|side| {
+                            face.vertex_indices.iter().all(|&i| {
+                                let corner = piece.centre + piece.hull.vertices[i as usize];
+                                (corner[axis] - side * half[axis]).abs() < 1e-3
+                            })
+                        })
+                    });
+                    assert_eq!(
+                        !was_cut(face.normal),
+                        on_the_block,
+                        "face {:?} of a wedge was read wrongly",
+                        face.normal
+                    );
+                    if on_the_block {
+                        block_faces += 1;
+                    } else {
+                        cut_faces += 1;
+                    }
+                }
+            }
+        }
+        assert!(cut_faces > 100, "only {cut_faces} fracture surfaces seen");
+        assert!(block_faces > 100, "only {block_faces} block faces seen");
+    }
+
+    /// And the point of telling them apart: a broken block shows a crack, not
+    /// a groove. Chamfering a wedge's fracture surfaces as deeply as its
+    /// polished faces took several times as much material out of it.
+    #[test]
+    fn a_fracture_surface_is_barely_chamfered() {
+        let half = Vector3::new(0.3, 0.15, 0.2);
+        let shape = crate::physics::ColliderShape::ConvexHull {
+            hull: std::sync::Arc::new(crate::collision::convex_hull::cube_hull(half)),
+        };
+        let pieces = ice_cleaving()
+            .cleave(&shape, Vector3::new(0.1, 0.05, 0.0), 7)
+            .expect("a cleaved block");
+
+        for piece in &pieces {
+            let drawn = chamfered(&piece.hull);
+            let uniform = crate::collision::hull_bevel::bevel_hull(
+                &piece.hull,
+                extent_of(&piece.hull) * 0.5 * BEVEL_FRACTION,
+            );
+
+            for face in &piece.hull.faces {
+                let before = face_area(&piece.hull, face);
+                let kept = |hull: &ConvexHull| {
+                    hull.faces
+                        .iter()
+                        .find(|f| (f.normal - face.normal).norm() < 1e-3)
+                        .map_or(0.0, |f| face_area(hull, f) / before)
+                };
+                // A cut can leave a facet only centimetres across, and a
+                // chamfer is a band of fixed width: on a face that small it
+                // is most of the face whatever it is set to, so there is
+                // nothing to measure there.
+                let bevel = extent_of(&piece.hull) * 0.5 * BEVEL_FRACTION;
+                if before < (bevel * 10.0).powi(2) {
+                    continue;
+                }
+                if was_cut(face.normal) {
+                    // The whole point: a fracture surface all but reaches the
+                    // edge of the wedge, so two of them side by side leave a
+                    // line rather than a channel.
+                    assert!(
+                        kept(&drawn) > 0.85,
+                        "a fracture surface kept only {:.2} of its area",
+                        kept(&drawn)
+                    );
+                    // And measurably more than the same face would keep if
+                    // it were chamfered like a polished one, or none of this
+                    // is doing anything.
+                    assert!(
+                        kept(&drawn) - kept(&uniform) > 0.05,
+                        "a fracture surface kept {:.2} where a full chamfer leaves {:.2}",
+                        kept(&drawn),
+                        kept(&uniform)
+                    );
+                } else {
+                    // While a polished face keeps a chamfer you can see. Not
+                    // the full uniform one: an edge is cut back by the
+                    // narrower of the two faces it joins, so a block face
+                    // narrows where it runs into a fracture surface, which is
+                    // the rule doing exactly what it is for.
+                    assert!(
+                        kept(&drawn) < 0.9,
+                        "a block face kept {:.2} of its area — it is barely chamfered",
+                        kept(&drawn)
+                    );
+                }
+            }
+        }
+    }
+
+    /// The area of one face of a hull.
+    fn face_area(hull: &ConvexHull, face: &crate::collision::convex_hull::HullFace) -> f32 {
+        let corners: Vec<Vector3<f32>> = face
+            .vertex_indices
+            .iter()
+            .map(|&i| hull.vertices[i as usize])
+            .collect();
+        let mut sum = Vector3::zeros();
+        for i in 1..corners.len() - 1 {
+            sum += (corners[i] - corners[0]).cross(&(corners[i + 1] - corners[0]));
+        }
+        sum.magnitude() * 0.5
     }
 
     /// And the drawing must stay inside the hull the wedge collides as, or it

@@ -334,6 +334,7 @@ mod tests {
     use specs::{Builder, RunNow, World, WorldExt};
 
     use super::super::plan::CleaveRule;
+    use crate::app::spawnables::ice_cleaving;
     use crate::components::{Orientation, Position, Renderable, Velocity};
     use crate::debug::DebugLines;
     use crate::fracture::FractureSystem;
@@ -536,6 +537,78 @@ mod tests {
             biggest.len() >= 3,
             "the row fell into {:?}",
             fracture.connected_components()
+        );
+    }
+
+    /// A block that has already cracked must not hold like one that has not.
+    #[test]
+    fn a_cracked_block_does_not_hold_like_a_whole_one() {
+        let (mut world, block) = ice_block(20.0);
+        let geometry = FlatQuadGeometry::new(50.0);
+        let mut stepper = SequentialStepper::new(FRAME_DT, 4);
+
+        let _hammer = drop_box(&mut world, 0.15, 1.0, 40.0);
+        for _ in 0..90 {
+            step(&mut world, &mut stepper, &geometry);
+            if child_count(&world, block) > 1 {
+                break;
+            }
+        }
+        assert!(child_count(&world, block) > 1, "the block never cracked");
+
+        // What holds the wedges to each other must be well under what it took
+        // to crack the block. Held at the block's own strength, a struck block
+        // sheds the one wedge that was hit and then stands there cracked and
+        // rigid, which is what a player sees as a bug.
+        let fractures = world.read_storage::<CompoundFracture>();
+        let fracture = (&fractures).join().next().expect("the block");
+        assert!(
+            !fracture.joints.is_empty(),
+            "the wedges are keyed to nothing"
+        );
+        for joint in &fracture.joints {
+            assert!(
+                joint.threshold < 20.0,
+                "a wedge is held at {} N·s, as strongly as the whole block was",
+                joint.threshold
+            );
+        }
+    }
+
+    /// The bond is weak, not absent: a cracked block must not shed its wedges
+    /// the instant it cracks, or every break becomes a burst.
+    #[test]
+    fn a_cracked_block_left_alone_keeps_its_wedges() {
+        // At the real ice threshold, not the harness's low one: the bond is a
+        // fraction of it, and a fraction of a small number is jitter.
+        let (mut world, block) = ice_block(ice_cleaving().threshold);
+        let geometry = FlatQuadGeometry::new(50.0);
+        let mut stepper = SequentialStepper::new(FRAME_DT, 4);
+
+        let hammer = drop_box(&mut world, 0.15, 3.0, 400.0);
+        for _ in 0..90 {
+            frame(&mut world, &mut stepper, &geometry);
+            if child_count(&world, block) > 1 {
+                break;
+            }
+        }
+        let cracked = child_count(&world, block);
+        assert!(cracked > 1, "the block never cracked");
+
+        // Take the hammer away: it is still lying on the block, and a cracked
+        // block is *supposed* to shed wedges under a load.
+        world
+            .write_resource::<PhysicsResource>()
+            .world
+            .remove_body(hammer);
+
+        for _ in 0..180 {
+            frame(&mut world, &mut stepper, &geometry);
+        }
+        assert_eq!(
+            child_count(&world, block),
+            cracked,
+            "the block shed wedges with nothing touching it"
         );
     }
 
