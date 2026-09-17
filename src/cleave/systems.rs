@@ -330,11 +330,11 @@ fn capped_kick(kick: Vector3<f32>, mass: f32, shares: usize) -> Vector3<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nalgebra::UnitQuaternion;
-    use specs::{Builder, RunNow, World, WorldExt};
+    use nalgebra::{UnitQuaternion, Vector2};
+    use specs::{Builder, Entity, RunNow, World, WorldExt};
 
     use super::super::plan::CleaveRule;
-    use crate::app::spawnables::ice_cleaving;
+    use crate::app::spawnables::{ice_cleaving, ice_texture_spread, ice_uvs, IceBlock};
     use crate::components::{Orientation, Position, Renderable, Velocity};
     use crate::debug::DebugLines;
     use crate::fracture::FractureSystem;
@@ -718,5 +718,121 @@ mod tests {
             (after - whole).abs() < whole * 0.05,
             "the pieces weigh {after} where the block weighed {whole}"
         );
+    }
+
+    /// Half-extents of a slab big enough that its texture holds more than one
+    /// tile, which is the case where the block's mapping and a mapping fitted
+    /// to a piece disagree.
+    const SLAB: Vector3<f32> = Vector3::new(1.0, 0.25, 1.0);
+
+    /// A real ice slab, spawned the way a level spawns one, resting on the
+    /// ground.
+    ///
+    /// The other harness in this file builds a stand-in: a box collider and a
+    /// plain cuboid model, which is all the behavioural tests need. This one
+    /// goes through `IceBlock` itself, because what it asks about is the
+    /// object's *look*, and the look is exactly what a stand-in leaves out.
+    fn ice_slab() -> (World, Entity) {
+        let mut world = World::new();
+        world.register::<Position>();
+        world.register::<Velocity>();
+        world.register::<Orientation>();
+        world.register::<RigidBodyComponent>();
+        world.register::<ModelInstance>();
+        world.register::<Renderable>();
+        world.register::<CompoundFracture>();
+        world.register::<BrittleSolid>();
+        world.insert(Time::fixed(FRAME_DT));
+        world.insert(PhysicsImpulseQueue::default());
+        world.insert(DebugLog::default());
+
+        let mut config = PhysicsConfig::default();
+        config.sleep.enabled = false;
+        world.insert(PhysicsResource::new(
+            PhysicsWorld::new(config),
+            Box::new(SequentialStepper::new(FRAME_DT, 4)),
+        ));
+
+        let block = IceBlock::new(
+            Point3::new(0.0, SLAB.y, 0.0),
+            SLAB,
+            MaterialId(0),
+            ice_texture_spread(SLAB),
+        )
+        .spawn(&mut world);
+        (world, block)
+    }
+
+    /// Texture coordinates per metre of the object's one texture, and where
+    /// each upward-facing corner reads it.
+    ///
+    /// Only the faces square to an axis are read, because the chamfers are
+    /// projected down the axis they lean away from and are foreshortened by
+    /// design.
+    fn upward_reads(world: &World, block: Entity) -> Vec<(Vector3<f32>, Vector2<f32>)> {
+        let models = world.read_storage::<ModelInstance>();
+        let model = &models.get(block).expect("the slab is drawn").model;
+        model
+            .parts
+            .iter()
+            .flat_map(|part| part.primitives.iter())
+            .flat_map(|primitive| primitive.vertices.iter())
+            .filter(|vertex| vertex.normal.y > 0.999)
+            .map(|vertex| (vertex.pos, vertex.tex_coords))
+            .collect()
+    }
+
+    /// The whole of the complaint, end to end and through the real objects: a
+    /// block that cracks must go on looking like the block it was.
+    ///
+    /// Not a check that the pattern is at the right scale, which a mesh test
+    /// can make on its own — a check that every piece reads the *same* sheet
+    /// of ice, at one scale and in one place. A piece textured in its own
+    /// frame passes the first and fails this: the frost is the right size and
+    /// jumps sideways at the crack, which is what a player sees as the block
+    /// changing texture.
+    ///
+    /// Stated as a residual rather than an absolute so that recentring the
+    /// body on what is left of it — which moves every child at once — is not
+    /// mistaken for the pieces disagreeing.
+    #[test]
+    fn a_cracked_slab_is_still_one_sheet_of_ice() {
+        let (mut world, block) = ice_slab();
+        let geometry = FlatQuadGeometry::new(50.0);
+        let mut stepper = SequentialStepper::new(FRAME_DT, 4);
+
+        let before = upward_reads(&world, block);
+        assert!(!before.is_empty(), "the whole slab has no upward face");
+
+        let _hammer = drop_box(&mut world, 0.35, 3.0, 400.0);
+        let body = {
+            let bodies = world.read_storage::<RigidBodyComponent>();
+            bodies.get(block).expect("the slab has a body").0
+        };
+        for _ in 0..120 {
+            step(&mut world, &mut stepper, &geometry);
+            if child_count(&world, body) > 1 {
+                break;
+            }
+        }
+        assert!(child_count(&world, body) > 1, "the slab never cracked");
+
+        let scale = ice_uvs(ice_texture_spread(SLAB)).per_metre_or(0.0);
+        let residual = |(pos, uv): &(Vector3<f32>, Vector2<f32>)| {
+            uv - Vector2::new(pos.z * scale + 0.5, pos.x * scale + 0.5)
+        };
+        let after = upward_reads(&world, block);
+        assert!(!after.is_empty(), "the cracked slab has no upward face");
+
+        let want = residual(&after[0]);
+        for read in &after {
+            let got = residual(read);
+            assert!(
+                (got - want).norm() < 1e-4,
+                "a corner at {:?} reads the pattern {:?} from where its neighbours do",
+                read.0,
+                got - want
+            );
+        }
     }
 }

@@ -53,7 +53,7 @@ pub use goal::GoalDef;
 pub use hex_prism::{HexPrismDef, HoneycombWallDef};
 pub use house::HouseDef;
 pub use ice::{
-    ice_block_mesh, ice_cleaving, ice_hull_mesh, ice_texture_spread, ice_uvs, IceBoxDef,
+    ice_block_mesh, ice_cleaving, ice_hull_mesh, ice_texture_spread, ice_uvs, IceBlock, IceBoxDef,
     IceWallDef, IglooDef,
 };
 pub use icosahedron::IcosahedronDef;
