@@ -1,7 +1,7 @@
 use crate::character::grab::{self, GrabConfig};
 use crate::character::{
-    ArmState, CharacterIntent, CharacterState, Grounding, LocomotionConfig, LocomotionInput,
-    LocomotionState, MovementRule,
+    facing_from_rotation, ArmState, CharacterIntent, CharacterState, Grounding, LocomotionConfig,
+    LocomotionInput, LocomotionState, MovementRule,
 };
 use crate::components::{Position, RigidBodyComponent, Rotation};
 use crate::debug::DebugOverlays;
@@ -443,11 +443,6 @@ fn apply_movement_rule(drive: &mut DriveIntent, rule: MovementRule) {
 /// which is the same answer every other planar term gives there.
 fn across(velocity: Vector3<f32>, up: &Vector3<f32>) -> Vector3<f32> {
     velocity - up * velocity.dot(up)
-}
-
-/// Convert a Y-axis rotation angle to a facing direction vector (unit, XZ plane).
-fn facing_from_rotation(rotation_y: f32) -> Vector3<f32> {
-    Vector3::new(rotation_y.sin(), 0.0, rotation_y.cos())
 }
 
 /// Wrap an angle to the range [-π, π].

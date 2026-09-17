@@ -4,6 +4,7 @@
 
 use nalgebra::{Point3, Vector3};
 
+use crate::aim::Launch;
 use crate::physics::{ConstraintHandle, ConstraintKind, PhysicsWorld, RigidBodyHandle};
 
 use super::components::ArmState;
@@ -219,6 +220,34 @@ pub fn throw(
 ) {
     physics.remove_constraint(constraint_handle);
     physics.apply_impulse(target_body, facing * throw_impulse);
+}
+
+/// The arc a held body would fly if it were thrown this instant.
+///
+/// Stated from the same impulse [`throw`] applies, so the aiming cursor and
+/// the throw agree by construction. A fixed impulse means a light crate leaves
+/// fast and a heavy one barely leaves at all — the mass is doing the talking,
+/// and the cursor says so.
+///
+/// Returns `None` for a body that has gone (destroyed terrain took it) or one
+/// that cannot be moved at all.
+pub fn throw_launch(
+    physics: &PhysicsWorld,
+    target_body: RigidBodyHandle,
+    facing: Vector3<f32>,
+    throw_impulse: f32,
+) -> Option<Launch> {
+    let body = physics.body(target_body)?;
+    let inv_mass = body.inv_mass();
+    if inv_mass <= 0.0 {
+        return None;
+    }
+
+    Some(Launch {
+        origin: body.position(),
+        velocity: body.linear_velocity() + facing * throw_impulse * inv_mass,
+        gravity: physics.config().gravity * body.gravity_scale(),
+    })
 }
 
 /// Check if a held body still exists in the physics world.

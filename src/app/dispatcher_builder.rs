@@ -1,5 +1,6 @@
 use specs::{Dispatcher, DispatcherBuilder};
 
+use crate::aim::AimPredictionSystem;
 use crate::animation::critter::{CritterAnimationSystem, CritterProbeConfigSystem};
 use crate::animation::peeper::{PeeperAnimationSystem, PeeperProbeConfigSystem};
 use crate::animation::{AnimationProbeConfigSystem, CharacterAnimationSystem};
@@ -152,6 +153,14 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
             &["goal", "objective_progress"],
         )
         .with(CameraControlSystem, "camera_control", &["physics_sync"])
+        // Where a throw would land, predicted from this frame's camera and
+        // this frame's arm state — the same two things the throw itself reads,
+        // so the cursor and the grenade cannot disagree.
+        .with(
+            AimPredictionSystem::default(),
+            "aim_prediction",
+            &["camera_control", "character_control"],
+        )
         // Projectiles and explosions
         .with(GrenadeSpawnSystem, "grenade_spawn", &["camera_control"])
         .with(LifetimeSystem, "lifetime", &["grenade_spawn"])

@@ -29,7 +29,7 @@ use crate::rendering::frame::{DrawInfo, FrameData, LightUbo, SceneLighting, Scen
 use crate::rendering::material::{
     MaterialManager, SurfaceModulation, SurfaceParams, SURFACE_INDEX_OFFSET,
 };
-use crate::rendering::overlay::OverlayRenderer;
+use crate::rendering::overlay::{OverlayGeometry, OverlayRenderer};
 use crate::rendering::pipeline::{GraphicsPipeline, GraphicsPipelineConfig};
 use crate::rendering::post::PostProcessRenderer;
 use crate::rendering::shadow::map::SHADOW_SAMPLED_LAYOUT;
@@ -1141,13 +1141,13 @@ impl Renderer {
         Ok(())
     }
 
-    /// Render debug overlay with the given debug line entries.
+    /// Draw a frame's overlay geometry — debug text and HUD together.
     ///
     /// Should be called after drawing the 3D scene but before end_frame.
-    pub fn render_overlay<'a>(
+    pub fn render_overlay(
         &mut self,
         cb: vk::CommandBuffer,
-        entries: impl Iterator<Item = (&'a str, &'a str)>,
+        geometry: &OverlayGeometry,
     ) -> EngineResult<()> {
         let extent = self.targets.extent;
         let viewport = vk::Viewport {
@@ -1172,7 +1172,7 @@ impl Renderer {
                 .cmd_set_scissor(cb, 0, &[scissor]);
         }
 
-        self.overlay.render_debug_lines(cb, entries)
+        self.overlay.render(cb, geometry)
     }
 
     /// End the frame: finish the transparent render pass, submit, and hand the

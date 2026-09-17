@@ -1,5 +1,6 @@
 use specs::{World, WorldExt};
 
+use crate::aim::AimState;
 use crate::animation::critter::CritterAnimator;
 use crate::animation::peeper::PeeperAnimator;
 use crate::animation::{AnimationDebugConfig, CharacterAnimator};
@@ -161,6 +162,7 @@ impl WorldBuilder {
         self.world.insert(ActiveLights::default());
         self.world.insert(DamageQueue::default());
         self.world.insert(LevelProgress::default());
+        self.world.insert(AimState::default());
         self
     }
 

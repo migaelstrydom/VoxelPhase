@@ -48,7 +48,7 @@ impl Default for GrenadeConfig {
             max_lifetime: 10.0,
             fuse_time: 2.5,
             arm_delay: 0.15,
-            detonation_impact_speed: 6.0,
+            detonation_impact_speed: 3.0,
             cooldown: 0.01,
             upward_offset: 0.1,
             pitch_influence: 0.5,

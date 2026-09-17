@@ -7,6 +7,7 @@ mod components;
 mod config;
 pub mod model;
 pub mod systems;
+mod throw;
 mod visuals;
 
 pub use components::{Grenade, Lifetime, Projectile};
@@ -16,4 +17,5 @@ pub use systems::{
     GrenadeCooldown, GrenadeModelResource, GrenadeSpawnSystem, LifetimeSystem,
     ProjectileDetonationSystem,
 };
+pub use throw::grenade_launch;
 pub use visuals::{GrenadeVisualSystem, GrenadeVisuals};

@@ -6,18 +6,20 @@
 use std::sync::Arc;
 
 use ash::vk;
-use nalgebra::{Matrix4, Vector4};
+use nalgebra::{Matrix4, Vector2, Vector4};
 
 use crate::core::device::ManagedDevice;
 use crate::core::error::EngineResult;
 use crate::core::vulkan_context::VulkanContext;
 use crate::rendering::frame::ManagedBuffer;
 use crate::rendering::overlay::font::{FontAtlas, TextLayout};
+use crate::rendering::overlay::geometry::OverlayGeometry;
 use crate::rendering::overlay::pipeline::OverlayPipeline;
 use crate::rendering::overlay::OverlayVertex;
 
-/// Maximum characters that can be rendered in a single draw call.
-const MAX_OVERLAY_CHARS: usize = 256;
+/// Maximum quads the overlay can draw in one frame. Covers the debug text and
+/// every HUD element together, since they share one buffer and one draw.
+const MAX_OVERLAY_QUADS: usize = 1024;
 
 /// Overlay renderer for debug text and UI elements.
 ///
@@ -28,6 +30,7 @@ pub struct OverlayRenderer {
     pipeline: OverlayPipeline,
     font_atlas: FontAtlas,
     ortho_matrix: Matrix4<f32>,
+    screen_size: Vector2<f32>,
     vertex_buffer: ManagedBuffer,
     index_buffer: ManagedBuffer,
 }
@@ -60,11 +63,11 @@ impl OverlayRenderer {
             font_atlas.descriptor_set_layout(),
         )?;
 
-        // Buffer sizes for MAX_OVERLAY_CHARS quads (4 verts, 6 indices each)
+        // Buffer sizes for MAX_OVERLAY_QUADS quads (4 verts, 6 indices each)
         let vertex_buffer_size =
-            (MAX_OVERLAY_CHARS * 4 * std::mem::size_of::<OverlayVertex>()) as vk::DeviceSize;
+            (MAX_OVERLAY_QUADS * 4 * std::mem::size_of::<OverlayVertex>()) as vk::DeviceSize;
         let index_buffer_size =
-            (MAX_OVERLAY_CHARS * 6 * std::mem::size_of::<u32>()) as vk::DeviceSize;
+            (MAX_OVERLAY_QUADS * 6 * std::mem::size_of::<u32>()) as vk::DeviceSize;
 
         let vertex_buffer = ManagedBuffer::new(
             Arc::clone(&device),
@@ -85,53 +88,70 @@ impl OverlayRenderer {
             pipeline,
             font_atlas,
             ortho_matrix,
+            screen_size: Vector2::new(width as f32, height as f32),
             vertex_buffer,
             index_buffer,
         })
     }
 
-    /// Render debug lines from a DebugLines resource.
+    /// Screen size the overlay's orthographic projection was built for, in
+    /// pixels. HUD elements size themselves against this.
+    pub fn screen_size(&self) -> Vector2<f32> {
+        self.screen_size
+    }
+
+    /// UV of a fully-opaque texel, for drawing filled shapes through the same
+    /// text pipeline.
+    pub fn solid_uv(&self) -> Vector2<f32> {
+        self.font_atlas.solid_uv()
+    }
+
+    /// Lay out debug key/value lines as overlay geometry.
     ///
-    /// Batches all text into a single draw call to avoid buffer synchronization issues.
-    pub fn render_debug_lines<'a>(
-        &mut self,
-        cb: vk::CommandBuffer,
+    /// Laying out and drawing are separate so that a frame can gather text and
+    /// HUD shapes into one batch before any of it is uploaded.
+    pub fn layout_debug_lines<'a>(
+        &self,
         entries: impl Iterator<Item = (&'a str, &'a str)>,
-    ) -> EngineResult<()> {
+    ) -> OverlayGeometry {
         let line_height = self.font_atlas.line_height();
         let x = 10.0;
         let mut y = 10.0;
-        let color = Vector4::new(1.0, 1.0, 0.0, 1.0);
+        let colour = Vector4::new(1.0, 1.0, 0.0, 1.0);
 
-        // Batch all text into single vertex/index arrays
-        let mut all_vertices = Vec::new();
-        let mut all_indices = Vec::new();
-
+        let mut geometry = OverlayGeometry::new();
         for (key, value) in entries {
             let line = format!("{}: {}", key, value);
-            let (mut vertices, indices) =
-                TextLayout::layout_text(&self.font_atlas, &line, x, y, color);
-
-            // Offset indices by current vertex count
-            let base_vertex = all_vertices.len() as u32;
-            all_indices.extend(indices.iter().map(|i| i + base_vertex));
-            all_vertices.append(&mut vertices);
-
+            let (vertices, indices) =
+                TextLayout::layout_text(&self.font_atlas, &line, x, y, colour);
+            geometry.extend(&vertices, &indices);
             y += line_height;
         }
+        geometry
+    }
 
-        if all_vertices.is_empty() {
+    /// Upload and draw a frame's overlay geometry in one batch.
+    ///
+    /// Geometry past the buffer's capacity is dropped rather than written past
+    /// the end of it; whole quads are kept, so nothing is ever drawn with half
+    /// its vertices.
+    pub fn render(
+        &mut self,
+        cb: vk::CommandBuffer,
+        geometry: &OverlayGeometry,
+    ) -> EngineResult<()> {
+        if geometry.is_empty() {
             return Ok(());
         }
 
-        // Clamp to buffer capacity to avoid writing past the fixed-size buffers.
-        let max_indices = MAX_OVERLAY_CHARS * 6;
-        let max_vertices = MAX_OVERLAY_CHARS * 4;
-        let index_count = all_indices.len().min(max_indices);
-        let vertex_count = all_vertices.len().min(max_vertices);
+        let quads = (geometry.indices().len() / 6).min(MAX_OVERLAY_QUADS);
+        let index_count = quads * 6;
+        let vertex_count = geometry.vertices().len().min(MAX_OVERLAY_QUADS * 4);
 
-        // Single upload and single draw call
-        self.upload_geometry(&all_vertices[..vertex_count], &all_indices[..index_count])?;
+        self.upload_geometry(
+            &geometry.vertices()[..vertex_count],
+            &geometry.indices()[..index_count],
+        )?;
         self.record_draw_commands(cb, index_count as u32);
 
         Ok(())

@@ -110,7 +110,7 @@ impl GlassSheetDef {
     /// on a fixed pane, a person walking across one at 5–15 N·s. A window
     /// takes the walker and not the crate.
     pub fn default_impact_threshold() -> f32 {
-        25.0
+        50.0
     }
 
     /// The plank bridge's number: a grenade next to it takes shards out, a

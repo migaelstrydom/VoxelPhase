@@ -10,6 +10,8 @@ use specs::{
 
 use super::components::{Grenade, Lifetime, Projectile};
 use super::config::GrenadeConfig;
+use super::throw::grenade_launch;
+use crate::aim::launch::gravity_scale;
 use crate::camera::FollowTarget;
 use crate::character::CharacterIntent;
 use crate::components::{
@@ -139,43 +141,25 @@ impl<'a> System<'a> for GrenadeSpawnSystem {
             }
         };
 
-        // Calculate throw pitch based on camera orientation.
-        // Camera pitch is positive when looking down, so we subtract it.
-        // upward_offset provides a base upward angle, pitch_influence controls how much
-        // the camera pitch affects the throw direction.
-        let throw_pitch = config.upward_offset - camera_pitch * config.pitch_influence;
-        let throw_pitch = throw_pitch.clamp(-0.4, 0.8); // Clamp to reasonable range
-
-        // Calculate 3D throw direction using spherical coordinates
-        let cos_pitch = throw_pitch.cos();
-        let sin_pitch = throw_pitch.sin();
-        let throw_dir = Vector3::new(
-            look_angle.sin() * cos_pitch,
-            sin_pitch,
-            look_angle.cos() * cos_pitch,
+        // The one statement of what a grenade throw is, shared with the
+        // aiming cursor so the two cannot drift apart.
+        let world_gravity = physics.world.config().gravity;
+        let launch = grenade_launch(
+            &config,
+            Point3::new(player_pos.x, player_pos.y, player_pos.z),
+            look_angle,
+            camera_pitch,
+            world_gravity,
         );
-
-        // Spawn position: slightly in front of and above the player
-        let horizontal_dir = Vector3::new(look_angle.sin(), 0.0, look_angle.cos());
-        let spawn_offset = horizontal_dir * 0.1 + Vector3::new(0.0, 0.5, 0.0);
-        let spawn_pos = player_pos + spawn_offset;
-
-        // Calculate throw velocity: directional throw + additional arc factor
-        let throw_velocity =
-            throw_dir * config.throw_speed + Vector3::new(0.0, config.arc_factor, 0.0);
-
-        let gravity_mag = physics.world.config().gravity.magnitude();
-        let gravity_scale = if gravity_mag > 1e-6 {
-            config.gravity / gravity_mag
-        } else {
-            1.0
-        };
+        let spawn_pos = Vector3::new(launch.origin.x, launch.origin.y, launch.origin.z);
+        let throw_velocity = launch.velocity;
+        let grenade_gravity_scale = gravity_scale(world_gravity, config.gravity);
 
         let body_handle = {
             let body_desc = RigidBodyDesc::dynamic()
-                .position(Point3::new(spawn_pos.x, spawn_pos.y, spawn_pos.z))
+                .position(launch.origin)
                 .linear_velocity(throw_velocity)
-                .gravity_scale(gravity_scale);
+                .gravity_scale(grenade_gravity_scale);
 
             let body_handle = physics.world.create_body(body_desc);
 

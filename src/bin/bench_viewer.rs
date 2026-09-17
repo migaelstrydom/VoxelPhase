@@ -384,7 +384,8 @@ fn run_with_scenario<S: PhysicsBenchScenario>(scenario: &S) -> EngineResult<()> 
                             log::error!("Failed to render transparent debug overlays: {}", e);
                         }
 
-                        if let Err(e) = renderer.render_overlay(cb, debug_lines.iter()) {
+                        let overlay = renderer.overlay.layout_debug_lines(debug_lines.iter());
+                        if let Err(e) = renderer.render_overlay(cb, &overlay) {
                             log::error!("Failed to render overlay: {}", e);
                         }
 

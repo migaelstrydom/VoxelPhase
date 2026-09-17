@@ -1,3 +1,4 @@
+pub mod aim;
 pub mod anim_viewer;
 pub mod animation;
 pub mod app;
@@ -15,6 +16,7 @@ pub mod fire;
 pub mod fracture;
 pub mod geometry;
 pub mod glass;
+pub mod hud;
 pub mod input;
 pub mod level;
 pub mod level_check;

@@ -1,3 +1,4 @@
+use crate::aim::AimState;
 use crate::animation::critter::CritterAnimator;
 use crate::animation::peeper::PeeperAnimator;
 use crate::animation::CharacterAnimator;
@@ -8,6 +9,7 @@ use crate::components::{
 use crate::core::error::{EngineError, EngineResult};
 use crate::debug::{DebugConfig, DebugLines, DebugOverlays};
 use crate::fire::components::OnFire;
+use crate::hud::{Hud, HudContext};
 use crate::lighting::ActiveLights;
 use crate::model::Transform;
 use crate::particles::ParticlePool;
@@ -44,6 +46,10 @@ pub struct RigAnimators<'a> {
 #[derive(Default)]
 pub struct RenderSystem {
     cpu_ms_ema: f32,
+    /// The game's HUD. Lives here rather than in a resource because its only
+    /// reader is this system and its state is per-frame animation, not
+    /// anything another system should be able to reach into.
+    hud: Hud,
 }
 
 /// Marks the start of a frame's CPU work. Set by `app.rs` immediately before
@@ -109,6 +115,7 @@ impl<'a> System<'a> for RenderSystem {
         Read<'a, FrameStart>,
         Read<'a, DebugConfig>,
         Read<'a, ActiveLights>,
+        Read<'a, AimState>,
     );
 
     fn run(&mut self, data: Self::SystemData) {
@@ -138,6 +145,7 @@ impl<'a> System<'a> for RenderSystem {
             frame_start,
             debug_config,
             active_lights,
+            aim_state,
         ) = data;
 
         let camera = camera_components.join().next();
@@ -411,8 +419,21 @@ impl<'a> System<'a> for RenderSystem {
                     //     debug_lines.add("Fires", format!("{} ({} slots)", fire_count, active_slots));
                     // }
 
-                    // Render debug overlay (cleared in app.rs after all systems complete)
-                    if let Err(e) = renderer.render_overlay(draw_cb, debug_lines.iter()) {
+                    // Debug text and HUD go out as one batch: the overlay
+                    // owns a single vertex buffer, so a second upload before
+                    // the first draw executes would redraw the first batch
+                    // with the second's contents.
+                    let mut overlay = renderer.overlay.layout_debug_lines(debug_lines.iter());
+                    let hud_context = HudContext::new(
+                        renderer.overlay.screen_size(),
+                        time.delta_seconds(),
+                        proj_matrix * view_matrix,
+                        &aim_state,
+                    );
+                    let solid_uv = renderer.overlay.solid_uv();
+                    overlay.append(&self.hud.render(&hud_context, solid_uv));
+
+                    if let Err(e) = renderer.render_overlay(draw_cb, &overlay) {
                         log::error!("RenderSystem: Failed to render overlay: {}", e);
                     }
 

@@ -35,6 +35,8 @@ pub struct GlyphMetrics {
 /// Rasterizes ASCII characters 32-126 at 24px and packs them into a texture.
 pub struct FontAtlas {
     _texture: Arc<ManagedTexture>,
+    /// UV of a texel inside the solid block, for filled (untextured) quads.
+    solid_uv: Vector2<f32>,
     descriptor_set: vk::DescriptorSet,
     descriptor_set_layout: vk::DescriptorSetLayout,
     descriptor_pool: vk::DescriptorPool,
@@ -53,6 +55,10 @@ impl FontAtlas {
         const ATLAS_WIDTH: usize = 512;
         const ATLAS_HEIGHT: usize = 512;
         const PADDING: usize = 2;
+        /// Side of the fully-opaque block reserved for filled quads. Several
+        /// texels wide so bilinear sampling near its centre never reaches the
+        /// empty atlas around it.
+        const SOLID_BLOCK: usize = 8;
 
         // Load font with fontdue
         let font = Font::from_bytes(FONT_DATA, FontSettings::default()).map_err(|e| {
@@ -72,10 +78,25 @@ impl FontAtlas {
         let mut atlas_data = vec![0u8; ATLAS_WIDTH * ATLAS_HEIGHT];
         let mut glyphs = HashMap::new();
 
-        // Pack glyphs into atlas
-        let mut atlas_x = PADDING;
+        // Reserve a solid block in the top-left corner before anything is
+        // packed. Overlay drawing is one pipeline sampling one atlas, so a
+        // filled shape is a quad whose texels are all 1.0 — the block is what
+        // makes the text atlas serve UI geometry as well, with no second
+        // texture, descriptor set or pipeline behind it.
+        for y in PADDING..PADDING + SOLID_BLOCK {
+            for x in PADDING..PADDING + SOLID_BLOCK {
+                atlas_data[y * ATLAS_WIDTH + x] = 255;
+            }
+        }
+        let solid_uv = Vector2::new(
+            (PADDING + SOLID_BLOCK / 2) as f32 / ATLAS_WIDTH as f32,
+            (PADDING + SOLID_BLOCK / 2) as f32 / ATLAS_HEIGHT as f32,
+        );
+
+        // Pack glyphs into atlas, starting clear of the solid block
+        let mut atlas_x = PADDING + SOLID_BLOCK + PADDING;
         let mut atlas_y = PADDING;
-        let mut row_height = 0;
+        let mut row_height = SOLID_BLOCK;
 
         for c in 32u8..=126 {
             let ch = c as char;
@@ -207,6 +228,7 @@ impl FontAtlas {
 
         Ok(Self {
             _texture: texture,
+            solid_uv,
             descriptor_set,
             descriptor_set_layout,
             descriptor_pool,
@@ -295,6 +317,12 @@ impl FontAtlas {
 
     pub fn line_height(&self) -> f32 {
         self.line_height
+    }
+
+    /// UV of a fully-opaque texel. A quad whose corners all carry this UV is
+    /// a flat filled rectangle in its vertex colour.
+    pub fn solid_uv(&self) -> Vector2<f32> {
+        self.solid_uv
     }
 }
 

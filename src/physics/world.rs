@@ -1240,11 +1240,44 @@ impl PhysicsWorld {
         length: f32,
         exclude: &[RigidBodyHandle],
     ) -> Option<BodyProbeHit> {
+        self.raycast_bodies(origin, direction, length, true, exclude)
+            .map(|(body, hit)| BodyProbeHit { body, hit })
+    }
+
+    /// Ray probe against every body, static ones included, skipping any body
+    /// in `exclude`.
+    ///
+    /// The exclusion list is what a *predicted* cast needs and a sensing probe
+    /// does not: a trajectory launched from inside the thrower would otherwise
+    /// report its first hit on the thrower's own capsule, and a held object is
+    /// the projectile rather than something for it to hit.
+    pub fn raycast_excluding(
+        &self,
+        origin: Point3<f32>,
+        direction: Vector3<f32>,
+        length: f32,
+        exclude: &[RigidBodyHandle],
+    ) -> Option<ProbeHit> {
+        self.raycast_bodies(origin, direction, length, false, exclude)
+            .map(|(_, hit)| hit)
+    }
+
+    /// The one ray-versus-bodies loop behind `probe_bodies`, `raycast_excluding`
+    /// and the [`ProbeTarget`] impl. Returns the earliest hit and the body it
+    /// belongs to.
+    fn raycast_bodies(
+        &self,
+        origin: Point3<f32>,
+        direction: Vector3<f32>,
+        length: f32,
+        skip_static: bool,
+        exclude: &[RigidBodyHandle],
+    ) -> Option<(RigidBodyHandle, ProbeHit)> {
         let end = origin + direction * length;
-        let mut earliest: Option<BodyProbeHit> = None;
+        let mut earliest: Option<(RigidBodyHandle, ProbeHit)> = None;
 
         for (idx, body) in self.bodies.iter() {
-            if body.is_static() {
+            if skip_static && body.is_static() {
                 continue;
             }
             let handle = RigidBodyHandle(idx);
@@ -1285,8 +1318,8 @@ impl PhysicsWorld {
                     }
                 };
                 if let Some(hit) = hit {
-                    if earliest.as_ref().map_or(true, |e| hit.t < e.hit.t) {
-                        earliest = Some(BodyProbeHit { body: handle, hit });
+                    if earliest.as_ref().map_or(true, |(_, e)| hit.t < e.t) {
+                        earliest = Some((handle, hit));
                     }
                 }
             }
@@ -1319,52 +1352,7 @@ impl ProbeTarget for PhysicsWorld {
         direction: Vector3<f32>,
         length: f32,
     ) -> Option<ProbeHit> {
-        let end = origin + direction * length;
-        let mut earliest: Option<ProbeHit> = None;
-
-        for (_idx, body) in self.bodies.iter() {
-            let body_pos = body.position();
-            let body_rot = body.rotation();
-
-            for ch in body.colliders() {
-                let Some(collider) = self.colliders.get(ch.0) else {
-                    continue;
-                };
-                let center = collider.world_center(body_pos, body_rot);
-                let world_xform = collider.world_transform(body_pos, body_rot);
-                let hit = match collider.shape() {
-                    ColliderShape::Sphere { radius: r } => {
-                        ray_vs_sphere(origin, direction, length, center, *r)
-                    }
-                    ColliderShape::Box { half_extents } => {
-                        let obb = Obb::new(center, body_rot, *half_extents);
-                        ray_vs_obb(origin, end, &obb, *half_extents)
-                    }
-                    ColliderShape::Capsule {
-                        half_height,
-                        radius: cap_radius,
-                    } => ray_vs_capsule(
-                        origin,
-                        direction,
-                        length,
-                        center,
-                        body_rot,
-                        *half_height,
-                        *cap_radius,
-                    ),
-                    ColliderShape::ConvexHull { hull } => {
-                        ray_vs_convex_hull(origin, direction, length, &world_xform, hull)
-                    }
-                };
-                if let Some(hit) = hit {
-                    if earliest.as_ref().map_or(true, |e: &ProbeHit| hit.t < e.t) {
-                        earliest = Some(hit);
-                    }
-                }
-            }
-        }
-
-        earliest
+        self.raycast_excluding(origin, direction, length, &[])
     }
 }
 

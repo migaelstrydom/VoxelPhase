@@ -310,6 +310,12 @@ impl RigidBody {
         self.inv_mass
     }
 
+    /// How much of the world's gravity this body feels. A grenade thrown on a
+    /// lighter arc than the world's own runs at a scale below 1.
+    pub fn gravity_scale(&self) -> f32 {
+        self.gravity_scale
+    }
+
     pub fn colliders(&self) -> &[ColliderHandle] {
         &self.colliders
     }

@@ -5,7 +5,7 @@
 
 use specs::{Entities, Join, Read, System, Write, WriteStorage};
 
-use super::probe::{ContactCandidate, ContactCandidates, ProbeTarget, SensorSet};
+use super::probe::{ContactCandidate, ContactCandidates, ProbeSet, ProbeTarget, SensorSet};
 use crate::debug::DebugOverlays;
 use crate::systems::PhysicsResource;
 use crate::terrain::TerrainWorld;
@@ -30,13 +30,10 @@ impl<'a> System<'a> for SensorProbeSystem {
         &mut self,
         (terrain_opt, physics_opt, entities, sensors, mut candidates, mut _debug_overlays): Self::SystemData,
     ) {
-        let targets: Vec<&dyn ProbeTarget> = [
+        let targets = ProbeSet::new([
             terrain_opt.as_ref().map(|t| &**t as &dyn ProbeTarget),
             physics_opt.as_ref().map(|p| &p.world as &dyn ProbeTarget),
-        ]
-        .into_iter()
-        .flatten()
-        .collect();
+        ]);
 
         if targets.is_empty() {
             return;
@@ -50,19 +47,7 @@ impl<'a> System<'a> for SensorProbeSystem {
                     continue;
                 }
 
-                let mut earliest = None;
-                for target in &targets {
-                    if let Some(hit) = target.raycast(probe.origin, probe.direction, probe.length) {
-                        if earliest
-                            .as_ref()
-                            .map_or(true, |(t, _): &(f32, _)| hit.t < *t)
-                        {
-                            earliest = Some((hit.t, hit));
-                        }
-                    }
-                }
-
-                if let Some((_, hit)) = earliest {
+                if let Some(hit) = targets.raycast(probe.origin, probe.direction, probe.length) {
                     let distance = (hit.t * probe.length).max(0.0);
                     results.candidates.push(ContactCandidate {
                         tag: probe.tag,
