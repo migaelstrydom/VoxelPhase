@@ -8,6 +8,7 @@ use specs::{Join, Read, ReadStorage, System, WriteStorage};
 use super::components::BrittleSheet;
 use super::crazing::cells_within;
 use super::polygon::ConvexPolygon;
+use super::remnant::Remnant;
 use crate::components::{ModelInstance, RigidBodyComponent};
 use crate::debug::DebugLog;
 use crate::fracture::systems::compound_model_of;
@@ -81,6 +82,15 @@ impl<'a> System<'a> for GlassCrackSystem {
             (&mut sheets, &mut fractures, &bodies, &mut models).join()
         {
             let body_handle = body_comp.0;
+            if sheet.whole_glass_area.is_none() {
+                // The pane as spawned, and the structure it was spawned
+                // with. Seeding the census here is what keeps an uncracked
+                // pane from being judged: it is one cell, and one cell is
+                // the very thing the remnant rule lets go of.
+                sheet.whole_glass_area = Some(remnant(&physics, sheet, fracture, body_handle).area);
+                sheet.last_census = census(&physics, fracture, body_handle);
+            }
+
             let hits = gather_hits(
                 &physics,
                 sheet,
@@ -90,18 +100,11 @@ impl<'a> System<'a> for GlassCrackSystem {
                 dt,
                 &mut telemetry,
             );
-            if hits.is_empty() {
-                continue;
-            }
-
             let mut cracked = false;
             for hit in hits {
                 cracked |= crack(&mut physics, sheet, fracture, body_handle, &hit);
             }
             if cracked {
-                if remnant_area(&physics, sheet, fracture, body_handle) < sheet.min_remnant_area {
-                    let_go_of_the_glass(sheet, fracture);
-                }
                 if let Some(rebuilt) = compound_model_of(
                     &physics,
                     body_handle,
@@ -109,6 +112,21 @@ impl<'a> System<'a> for GlassCrackSystem {
                     fracture.piece_mesh,
                 ) {
                     model.model = rebuilt;
+                }
+            }
+
+            // Judge what is left whenever the glass has changed at all, not
+            // only when this system cracked it: shards are severed under hits
+            // that craze nothing, and the fracture system breaks joints of
+            // its own accord. A pane chipped away by either road has to reach
+            // the same end as one crazed to bits.
+            let census = census(&physics, fracture, body_handle);
+            if census != sheet.last_census {
+                sheet.last_census = census;
+                let left = remnant(&physics, sheet, fracture, body_handle);
+                let whole = sheet.whole_glass_area.unwrap_or(0.0);
+                if !sheet.remnant.holds(left, whole) {
+                    let_go_of_the_glass(sheet, fracture);
                 }
             }
         }
@@ -340,6 +358,7 @@ fn crack(
     let Some(collider) = world.collider(hit.child) else {
         return false;
     };
+    let depth = sheet.depths.of(child);
     let frame = sheet.frame;
     let Some((cell, height)) =
         frame.polygon_of(collider.shape(), collider.offset().translation.vector)
@@ -353,8 +372,13 @@ fn crack(
     let hit_plane = cell.closest_point(frame.to_plane(hit_local));
     let salt = hit_plane.x.to_bits() ^ hit_plane.y.to_bits().rotate_left(16);
 
-    let Some(cells) = sheet.crazing.craze(&cell, hit_plane, frame.thickness, salt) else {
-        // A shard, not a pane. It comes out whole if it was hit hard enough.
+    // A shard rather than a pane — too small to crack, or already as broken
+    // down as this sheet goes. It comes out whole if it was hit hard enough.
+    let cells = sheet
+        .may_craze(child)
+        .then(|| sheet.crazing.craze(&cell, hit_plane, frame.thickness, salt))
+        .flatten();
+    let Some(cells) = cells else {
         if hit.hole_radius > 0.0 {
             fracture.sever(child, capped_kick(hit.kick, collider.mass(), 1));
         }
@@ -404,11 +428,13 @@ fn crack(
     fracture.reindex(&order);
     sheet.contact_load.reindex(&order);
     sheet.damage.reindex(&order);
+    sheet.depths.reindex(&order);
 
     let index_of = |handle: ColliderHandle| now.iter().position(|h| *h == handle);
     for handle in &new_handles {
         if let Some(index) = index_of(*handle) {
             fracture.materials[index] = sheet.material;
+            sheet.depths.set(index, depth + 1);
         }
     }
 
@@ -454,16 +480,18 @@ fn crack(
     true
 }
 
-/// Area of what will still be the sheet after this frame's split: the largest
-/// connected group of cells, which is the one the fracture system keeps.
-fn remnant_area(
+/// How much glass is left and in how many pieces, after this frame's split:
+/// the largest connected group of cells, which is the one the fracture system
+/// keeps. Groups are ranked by area, so the remnant is the biggest piece of
+/// glass rather than the most numerous.
+fn remnant(
     physics: &PhysicsResource,
     sheet: &BrittleSheet,
     fracture: &CompoundFracture,
     body_handle: RigidBodyHandle,
-) -> f32 {
+) -> Remnant {
     let Some(body) = physics.world.body(body_handle) else {
-        return 0.0;
+        return Remnant::default();
     };
     let handles = body.colliders();
     let area_of = |child: &usize| -> f32 {
@@ -481,13 +509,37 @@ fn remnant_area(
         .connected_components()
         .iter()
         .map(|component| {
-            component
+            let glass = component
                 .iter()
-                .filter(|child| sheet.is_glass(fracture.material_of(**child)))
-                .map(area_of)
-                .sum::<f32>()
+                .filter(|child| sheet.is_glass(fracture.material_of(**child)));
+            Remnant {
+                area: glass.clone().map(area_of).sum(),
+                cells: glass.count(),
+            }
         })
-        .fold(0.0, f32::max)
+        .fold(Remnant::default(), |best, group| {
+            if group.area > best.area {
+                group
+            } else {
+                best
+            }
+        })
+}
+
+/// A cheap signature of the sheet's structure: how many children it carries
+/// and how many joints still hold them. Anything that takes glass off the
+/// sheet moves one of the two, and nothing else does, so comparing it with
+/// the last one judged says exactly when to judge again.
+fn census(
+    physics: &PhysicsResource,
+    fracture: &CompoundFracture,
+    body_handle: RigidBodyHandle,
+) -> (usize, usize) {
+    let children = physics
+        .world
+        .body(body_handle)
+        .map_or(0, |b| b.colliders().len());
+    (children, fracture.joints.len())
 }
 
 /// Drop whatever glass is left. A bare sheet has nothing else, so its body
@@ -679,13 +731,102 @@ mod tests {
             .map_or(f32::NAN, |b| b.position().y)
     }
 
+    /// The expense of a broken sheet is the children it carries, and a sheet
+    /// that crazed its shards again on every hit grew them without bound. A
+    /// cell records how deep in the crazing it was born, and the record has
+    /// to survive the reshuffling of the body's collider list that every
+    /// break and every severed shard causes.
+    #[test]
+    fn every_shard_of_a_broken_pane_is_marked_as_already_crazed() {
+        let (mut world, sheet) = glass_floor(25.0, None);
+        let geometry = FlatQuadGeometry::new(50.0);
+        let mut stepper = SequentialStepper::new(FRAME_DT, 4);
+
+        let _crate = drop_box(&mut world, -0.5, -0.5, 1.0, 20.0);
+        for _ in 0..60 {
+            frame(&mut world, &mut stepper, &geometry);
+        }
+
+        let children = child_count(&world, sheet);
+        assert!(
+            children > 10,
+            "the pane should have crazed into a web, not {children} children"
+        );
+
+        let sheets = world.read_storage::<BrittleSheet>();
+        let pane = (&sheets).join().next().expect("the pane is still there");
+        assert_eq!(pane.max_craze_depth, 1, "a cell cracks once, by default");
+        for child in 0..children {
+            assert!(
+                !pane.may_craze(child),
+                "shard {child} of {children} would craze again"
+            );
+        }
+    }
+
+    /// The literal complaint that coarse shards brought back: a static pane
+    /// picked apart leaves one shard hanging in mid-air, immovable because
+    /// the body behind it never moves. It has to fall, and it has to fall
+    /// when the glass was taken off by something other than a craze — here
+    /// by severing, as a hit that knocks a shard out whole does.
+    #[test]
+    fn the_last_shard_of_a_picked_apart_pane_does_not_hang_there() {
+        let (mut world, sheet) = glass_floor(25.0, None);
+        let geometry = FlatQuadGeometry::new(50.0);
+        let mut stepper = SequentialStepper::new(FRAME_DT, 4);
+
+        let _crate = drop_box(&mut world, -0.5, -0.5, 1.0, 20.0);
+        for _ in 0..60 {
+            frame(&mut world, &mut stepper, &geometry);
+        }
+        assert!(
+            child_count(&world, sheet) > 10,
+            "the pane should have crazed into a web first"
+        );
+
+        // Take the shards off one at a time, as hits on a broken pane do,
+        // and never craze again.
+        for _ in 0..30 {
+            {
+                let mut fractures = world.write_storage::<CompoundFracture>();
+                let Some(fracture) = (&mut fractures).join().next() else {
+                    break;
+                };
+                if fracture.child_count == 0 {
+                    break;
+                }
+                // The freed shard is gone by the next split, so the first
+                // child is always one that is still on the sheet.
+                fracture.sever(0, Vector3::zeros());
+            }
+            for _ in 0..4 {
+                frame(&mut world, &mut stepper, &geometry);
+            }
+            if world.read_storage::<BrittleSheet>().join().count() == 0 {
+                break;
+            }
+        }
+
+        assert_eq!(
+            world.read_storage::<BrittleSheet>().join().count(),
+            0,
+            "the pane still holds {} shards",
+            child_count(&world, sheet)
+        );
+        assert_eq!(
+            child_count(&world, sheet),
+            0,
+            "the pane body should be gone"
+        );
+    }
+
     /// What is left of a pane once it is smaller than its remnant limit comes
     /// free as shards, and the pane's own entity and body are gone.
     #[test]
     fn a_pane_worn_down_below_its_limit_lets_go_of_the_rest() {
         let (mut world, sheet) = glass_floor(25.0, None);
         for pane in (&mut world.write_storage::<BrittleSheet>()).join() {
-            pane.min_remnant_area = 100.0;
+            pane.remnant.min_area = 100.0;
         }
         let _crate = drop_box(&mut world, -0.7, -0.5, 1.0, 20.0);
         let geometry = FlatQuadGeometry::new(50.0);

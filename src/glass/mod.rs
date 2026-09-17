@@ -14,19 +14,23 @@
 
 mod components;
 mod crazing;
+mod depth;
 mod fatigue;
 mod jolt;
 mod pane;
 mod polygon;
+mod remnant;
 pub mod systems;
 mod voronoi;
 mod web;
 
 pub use components::BrittleSheet;
 pub use crazing::CrazeRule;
+pub use depth::CrazeDepths;
 pub use fatigue::{FatigueRule, FatigueTracker};
 pub use jolt::{BodyJolt, JoltTracker, Motion};
 pub use pane::SheetFrame;
 pub use polygon::ConvexPolygon;
+pub use remnant::{Remnant, RemnantRule};
 pub use systems::GlassCrackSystem;
 pub use web::CrackWeb;
