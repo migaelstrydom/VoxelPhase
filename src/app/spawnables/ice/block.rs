@@ -28,7 +28,9 @@ use std::sync::Arc;
 use nalgebra::{Point3, UnitQuaternion, Vector2, Vector3};
 use specs::{Builder, Entity, World, WorldExt};
 
-use super::super::shared::models::{hull_mesh, PiecePlacement};
+use super::super::shared::models::{
+    dominant_axis, hull_mesh, tangent_axes, PiecePlacement, SurfaceUvs,
+};
 use super::super::shared::textures::seed_from_position;
 use super::super::MaterialCtx;
 use crate::cleave::{BrittleSolid, CleaveRule};
@@ -97,6 +99,19 @@ pub fn texture_spread(half_extents: Vector3<f32>) -> Spread {
 /// block.
 fn uv_scale(spread: Spread) -> f32 {
     0.5 / (TEXTURE_HALF * spread.tiles() as f32)
+}
+
+/// How ice is laid out on its texture, at this spread.
+///
+/// The one thing every piece of an ice object has to agree on. A wedge is
+/// drawn from the hull it broke into, which has faces the block never had and
+/// is smaller than the block besides; mapping the texture onto each of those
+/// faces in turn would magnify the frost by whatever each face happened to
+/// measure. Fixing the density instead keeps the markings the size they were,
+/// so a block that cracks reads as one piece of ice in two parts rather than
+/// as two smaller pieces of some finer ice.
+pub fn ice_uvs(spread: Spread) -> SurfaceUvs {
+    SurfaceUvs::PerMetre(uv_scale(spread))
 }
 
 /// The material every ice object asks for: the ice substance, marked with the
@@ -229,7 +244,8 @@ impl IceBlock {
             .with(
                 CompoundFracture::boxes(Vec::new(), 1, self.material)
                     .with_piece_mesh(ice_piece_mesh)
-                    .with_hull_mesh(ice_hull_mesh),
+                    .with_hull_mesh(ice_hull_mesh)
+                    .with_uvs(ice_uvs(self.spread)),
             )
             .with(BrittleSolid::new(self.cleaving, self.material, 1))
             .build()
@@ -265,13 +281,14 @@ pub fn ice_block_mesh(half_extents: Vector3<f32>, spread: Spread) -> (Vec<Vertex
     bevelled_box(half_extents, bevel, uv_scale(spread))
 }
 
-/// The spread every piece of a compound ice object is drawn at.
+/// The spread a piece of a compound ice object falls back to.
 ///
 /// [`PieceMesh`](super::super::shared::models::PieceMesh) is a bare function
 /// pointer — it is stored in a fracture component that outlives the spawn —
-/// so a piece mesh cannot carry a spread of its own. That costs nothing here:
-/// walls and domes are built out of bricks, and a brick is smaller than a
-/// tile. See [`texture_spread`] for the case this is not.
+/// so a piece mesh cannot carry a spread of its own. It is told one through
+/// [`SurfaceUvs`] instead, and this is what it uses when it is not: walls and
+/// domes are built out of bricks, and a brick is smaller than a tile. See
+/// [`texture_spread`] for the case this is not.
 const PIECE_SPREAD: Spread = Spread::ONE;
 
 /// The same mesh, for a block that is one piece of a larger object.
@@ -281,9 +298,11 @@ const PIECE_SPREAD: Spread = Spread::ONE;
 /// forty bricks with the same crack in each. Offsetting the texture by where
 /// the piece sits makes the object read as ice that was carved into blocks
 /// rather than as one block printed forty times.
-pub fn ice_piece_mesh(piece: &PiecePlacement) -> (Vec<Vertex>, Vec<u32>) {
-    let (mut vertices, indices) = ice_block_mesh(piece.half_extents, PIECE_SPREAD);
-    let offset = texture_offset(piece.offset, PIECE_SPREAD);
+pub fn ice_piece_mesh(piece: &PiecePlacement, uvs: SurfaceUvs) -> (Vec<Vertex>, Vec<u32>) {
+    let scale = uvs.per_metre_or(uv_scale(PIECE_SPREAD));
+    let bevel = piece.half_extents.min() * BEVEL_FRACTION;
+    let (mut vertices, indices) = bevelled_box(piece.half_extents, bevel, scale);
+    let offset = texture_offset(piece.offset, scale);
     for vertex in &mut vertices {
         vertex.tex_coords += offset;
     }
@@ -303,11 +322,11 @@ pub fn ice_piece_mesh(piece: &PiecePlacement) -> (Vec<Vertex>, Vec<u32>) {
 ///
 /// Drawing only. The collider keeps the full hull, the same bargain the whole
 /// block makes with its box.
-pub fn ice_hull_mesh(hull: &ConvexHull) -> (Vec<Vertex>, Vec<u32>) {
+pub fn ice_hull_mesh(hull: &ConvexHull, uvs: SurfaceUvs) -> (Vec<Vertex>, Vec<u32>) {
     // `extent_of` is a full dimension and [`BEVEL_FRACTION`] is authored
     // against a half-extent, so that a wedge wears the same width of facet
     // the block it came out of does.
-    hull_mesh(&chamfered(hull))
+    hull_mesh(&chamfered(hull), uvs)
 }
 
 /// A wedge's hull as it is drawn: the block's own faces cut back in full, the
@@ -360,8 +379,7 @@ fn was_cut(normal: Vector3<f32>) -> bool {
 /// Any injective-enough function of the offset would do; this one keeps
 /// neighbours a whole feature apart rather than a hair, which is what makes
 /// the difference visible.
-fn texture_offset(offset: Vector3<f32>, spread: Spread) -> Vector2<f32> {
-    let scale = uv_scale(spread);
+fn texture_offset(offset: Vector3<f32>, scale: f32) -> Vector2<f32> {
     Vector2::new(
         (offset.x + offset.y * 0.5) * scale,
         (offset.z + offset.y * 0.5) * scale,
@@ -578,24 +596,6 @@ fn axis_vector(axis: usize, sign: f32) -> Vector3<f32> {
     v
 }
 
-/// The two axes that are not `axis`, in cyclic order so that
-/// `axis × u = v` — which is what makes the face windings come out consistent.
-fn tangent_axes(axis: usize) -> (usize, usize) {
-    ((axis + 1) % 3, (axis + 2) % 3)
-}
-
-/// Which axis a normal points most nearly along.
-fn dominant_axis(normal: Vector3<f32>) -> usize {
-    let abs = normal.abs();
-    if abs.x >= abs.y && abs.x >= abs.z {
-        0
-    } else if abs.y >= abs.z {
-        1
-    } else {
-        2
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -736,8 +736,8 @@ mod tests {
     #[test]
     fn a_cleaved_wedge_is_still_drawn_with_bevels() {
         let wedge = crate::collision::convex_hull::cube_hull(Vector3::new(0.2, 0.15, 0.18));
-        let (plain, _) = hull_mesh(&wedge);
-        let (bevelled, _) = ice_hull_mesh(&wedge);
+        let (plain, _) = hull_mesh(&wedge, SurfaceUvs::Fitted);
+        let (bevelled, _) = ice_hull_mesh(&wedge, SurfaceUvs::Fitted);
 
         assert_eq!(distinct_normals(&plain).len(), 6, "a box has six faces");
         assert_eq!(
@@ -756,7 +756,10 @@ mod tests {
     fn a_wedge_wears_the_same_facets_the_whole_block_does() {
         let half = Vector3::new(0.25, 0.18, 0.21);
         let (authored, _) = ice_block_mesh(half, PIECE_SPREAD);
-        let (cleaved, _) = ice_hull_mesh(&crate::collision::convex_hull::cube_hull(half));
+        let (cleaved, _) = ice_hull_mesh(
+            &crate::collision::convex_hull::cube_hull(half),
+            SurfaceUvs::Fitted,
+        );
 
         let from_block = distinct_normals(&authored);
         let from_wedge = distinct_normals(&cleaved);
@@ -769,6 +772,99 @@ mod tests {
                 "the wedge has no facet facing {block:?}"
             );
         }
+    }
+
+    /// Texture coordinates per metre of surface, measured off the mesh, one
+    /// reading per triangle.
+    ///
+    /// The square root of a ratio of areas, so it is the linear magnification
+    /// the pattern is drawn at whatever shape the triangle is.
+    ///
+    /// Only the faces that lie square to an axis are read. The chamfers are
+    /// deliberately left out: they are projected down the axis they lean away
+    /// from, so the pattern on them is foreshortened by cos 45° — which is
+    /// what a chamfer on a real surface looks like, and not a reading of what
+    /// scale the texture is addressed at.
+    fn uv_density(vertices: &[Vertex], indices: &[u32]) -> Vec<f32> {
+        indices
+            .chunks_exact(3)
+            .filter_map(|tri| {
+                let v: Vec<&Vertex> = tri.iter().map(|&i| &vertices[i as usize]).collect();
+                if v[0].normal.abs().max() < 0.999 {
+                    return None;
+                }
+                let world = (v[1].pos - v[0].pos).cross(&(v[2].pos - v[0].pos)).norm();
+                let a = v[1].tex_coords - v[0].tex_coords;
+                let b = v[2].tex_coords - v[0].tex_coords;
+                let uv = (a.x * b.y - a.y * b.x).abs();
+                (world > 1e-9).then(|| (uv / world).sqrt())
+            })
+            .collect()
+    }
+
+    /// The whole point of [`ice_uvs`]. A wedge inherits the block's baked
+    /// texture, so unless it addresses that texture at the block's scale the
+    /// frost changes size at the instant the block cracks — and it changes by
+    /// a different amount on every facet, because the old mapping fitted the
+    /// texture to whatever each face happened to measure.
+    ///
+    /// Large blocks are where this shows: a block bigger than one tile is
+    /// drawn at a smaller density than a wedge of it would fit to.
+    #[test]
+    fn a_wedge_shows_the_pattern_at_the_size_the_block_did() {
+        let half = Vector3::new(0.9, 0.7, 0.8);
+        let spread = texture_spread(half);
+        assert!(spread.tiles() > 1, "wanted a block larger than one tile");
+
+        let (block, block_indices) = ice_block_mesh(half, spread);
+        let wedge = crate::collision::convex_hull::cube_hull(half * 0.4);
+        let (cleaved, cleaved_indices) = ice_hull_mesh(&wedge, ice_uvs(spread));
+
+        let want = uv_density(&block, &block_indices)[0];
+        for measured in uv_density(&cleaved, &cleaved_indices) {
+            assert!(
+                (measured - want).abs() < 1e-3,
+                "the wedge draws the pattern at {measured} per metre, the block at {want}"
+            );
+        }
+    }
+
+    /// The old mapping, kept for objects whose texture is a decoration of one
+    /// face rather than the substance behind it. It is recorded here because
+    /// it is what a fracturable material must *not* use: two pieces of
+    /// different size come out at different magnifications.
+    #[test]
+    fn fitting_the_texture_to_a_face_magnifies_it_on_a_small_piece() {
+        let big = crate::collision::convex_hull::cube_hull(Vector3::new(0.8, 0.8, 0.8));
+        let small = crate::collision::convex_hull::cube_hull(Vector3::new(0.2, 0.2, 0.2));
+        let density = |hull| {
+            let (vertices, indices) = hull_mesh(hull, SurfaceUvs::Fitted);
+            uv_density(&vertices, &indices)[0]
+        };
+        assert!(
+            density(&small) > density(&big) * 3.0,
+            "fitted coordinates were expected to scale with the piece"
+        );
+    }
+
+    /// A brick of a dome that loses a neighbour is rebuilt from its collider,
+    /// which knows where the brick sits but nothing about what it looked like.
+    /// If the offset does not reach the mesh, every brick of the rebuilt dome
+    /// wears identical markings — the wall of forty identical bricks that
+    /// [`ice_piece_mesh`] exists to avoid, reappearing at the break.
+    #[test]
+    fn two_bricks_of_one_object_are_marked_differently() {
+        let half = Vector3::new(0.2, 0.1, 0.15);
+        let uvs = ice_uvs(PIECE_SPREAD);
+        let here = ice_piece_mesh(&PiecePlacement::new(half, Vector3::zeros()), uvs);
+        let there = ice_piece_mesh(&PiecePlacement::new(half, Vector3::new(0.4, 0.0, 0.0)), uvs);
+
+        let shift = there.0[0].tex_coords - here.0[0].tex_coords;
+        assert!(
+            shift.norm() > 0.1,
+            "the two bricks start {shift:?} apart in the pattern"
+        );
+        assert_eq!(here.0.len(), there.0.len(), "only the markings should move");
     }
 
     /// The load-bearing assumption behind [`was_cut`]: a block is a box, so
@@ -922,7 +1018,7 @@ mod tests {
     fn the_drawn_wedge_fits_inside_the_collider() {
         let half = Vector3::new(0.2, 0.15, 0.18);
         let wedge = crate::collision::convex_hull::cube_hull(half);
-        let (bevelled, _) = ice_hull_mesh(&wedge);
+        let (bevelled, _) = ice_hull_mesh(&wedge, SurfaceUvs::Fitted);
         for vertex in &bevelled {
             for axis in 0..3 {
                 assert!(

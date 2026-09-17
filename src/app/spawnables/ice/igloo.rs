@@ -48,7 +48,7 @@ use super::super::shared::models::{compound_model, PiecePlacement};
 use super::super::shared::orientation::Yaw;
 use super::super::shared::textures::seed_from_position;
 use super::super::{MaterialCtx, Spawnable};
-use super::block::{ice, ice_cleaving, ice_hull_mesh, ice_material, ice_piece_mesh};
+use super::block::{ice, ice_cleaving, ice_hull_mesh, ice_material, ice_piece_mesh, ice_uvs};
 use crate::cleave::{BrittleSolid, CleaveRule};
 use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
@@ -60,6 +60,15 @@ use crate::rendering::material::MaterialId;
 use crate::rendering::pattern::Spread;
 use crate::rendering::substance::ColliderSubstance;
 use crate::systems::PhysicsResource;
+
+/// How many tiles of pattern a dome's one ice texture holds.
+///
+/// One, because a dome is built out of bricks and a brick is smaller than a
+/// tile, so there is nothing for a second tile to cover. Named rather than
+/// written twice: the texture that is baked and the coordinates every block
+/// and every wedge addresses it with must come from the same number, or the
+/// frost changes size somewhere in the dome.
+const BRICK_SPREAD: Spread = Spread::ONE;
 
 /// How far apart two blocks of a course may be and still count as touching,
 /// as a fraction of their combined reach.
@@ -328,7 +337,7 @@ impl Spawnable for IglooDef {
         Ok(vec![ice_material(
             ctx,
             seed_from_position(self.pos, 0),
-            Spread::ONE,
+            BRICK_SPREAD,
         )?])
     }
 
@@ -356,7 +365,7 @@ impl Spawnable for IglooDef {
             .collect();
 
         let substance = ice();
-        let model = compound_model(&pieces, ice_piece_mesh, materials[0]);
+        let model = compound_model(&pieces, ice_piece_mesh, ice_uvs(BRICK_SPREAD), materials[0]);
 
         let body_handle = {
             let mut physics = world.write_resource::<PhysicsResource>();
@@ -394,7 +403,8 @@ impl Spawnable for IglooDef {
             .with(
                 CompoundFracture::boxes(self.joints(&blocks), blocks.len(), materials[0])
                     .with_piece_mesh(ice_piece_mesh)
-                    .with_hull_mesh(ice_hull_mesh),
+                    .with_hull_mesh(ice_hull_mesh)
+                    .with_uvs(ice_uvs(BRICK_SPREAD)),
             )
             .with(BrittleSolid::new(
                 CleaveRule {

@@ -23,10 +23,10 @@ use crate::rendering::vertex::Vertex;
 /// The piece is passed whole rather than as its half-extents alone so that a
 /// mesh may vary with *where* the piece sits — which is how an object made of
 /// many identical blocks avoids showing the same markings on every one.
-pub type PieceMesh = fn(&PiecePlacement) -> (Vec<Vertex>, Vec<u32>);
+pub type PieceMesh = fn(&PiecePlacement, SurfaceUvs) -> (Vec<Vertex>, Vec<u32>);
 
 /// The default [`PieceMesh`]: a plain box.
-pub fn cuboid_mesh(piece: &PiecePlacement) -> (Vec<Vertex>, Vec<u32>) {
+pub fn cuboid_mesh(piece: &PiecePlacement, _uvs: SurfaceUvs) -> (Vec<Vertex>, Vec<u32>) {
     (
         generate_cube_vertices(piece.half_extents, Colour::WHITE),
         generate_cube_indices(),
@@ -41,7 +41,7 @@ pub fn cuboid_mesh(piece: &PiecePlacement) -> (Vec<Vertex>, Vec<u32>) {
 /// this exists for the object whose look is not quite its collision shape,
 /// such as ice, whose edges are chamfered on the drawing and square on the
 /// collider.
-pub type HullMesh = fn(&ConvexHull) -> (Vec<Vertex>, Vec<u32>);
+pub type HullMesh = fn(&ConvexHull, SurfaceUvs) -> (Vec<Vertex>, Vec<u32>);
 
 /// How every piece of one compound object is drawn, whatever shape it is.
 ///
@@ -54,6 +54,8 @@ pub struct PieceStyle {
     pub boxes: PieceMesh,
     /// How a convex-hull child is drawn.
     pub hulls: HullMesh,
+    /// How either one is laid out on its texture.
+    pub uvs: SurfaceUvs,
 }
 
 impl Default for PieceStyle {
@@ -61,7 +63,91 @@ impl Default for PieceStyle {
         Self {
             boxes: cuboid_mesh,
             hulls: hull_mesh,
+            uvs: SurfaceUvs::Fitted,
         }
+    }
+}
+
+/// How a piece's faces are laid out on the texture they share.
+///
+/// The part of a compound object's look that belongs to the object rather
+/// than to any one piece. A fragment inherits its parent's material, so
+/// unless it also inherits the scale that material is addressed at, the
+/// substance appears to change at the moment the object breaks: the pattern
+/// jumps size, and it jumps by a different amount on every face.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SurfaceUvs {
+    /// Stretch the texture across each face, once, whatever the face's size.
+    ///
+    /// Right when the texture is a decoration *of that face* — a label, a
+    /// panel, a sign — and wrong when it is the substance the piece is made
+    /// of, because two faces of different sizes then show the same pattern at
+    /// different magnifications.
+    Fitted,
+    /// A fixed number of texture coordinates per metre of surface.
+    ///
+    /// The pattern is then a property of the material and not of the piece,
+    /// which is what lets a fragment go on looking like the thing it broke
+    /// off.
+    PerMetre(f32),
+}
+
+impl SurfaceUvs {
+    /// Texture coordinates for the corners of one flat face.
+    ///
+    /// `corners` are in the piece's own frame and `normal` is the face's
+    /// outward normal.
+    pub fn face_uvs(self, corners: &[Vector3<f32>], normal: Vector3<f32>) -> Vec<Vector2<f32>> {
+        match self {
+            Self::Fitted => planar_face_uvs(corners),
+            Self::PerMetre(scale) => corners
+                .iter()
+                .map(|corner| project_at_scale(*corner, normal, scale))
+                .collect(),
+        }
+    }
+
+    /// The density this mapping asks for, or `fallback` if it does not ask for
+    /// one.
+    ///
+    /// For a mesh builder that works in metres throughout and has no way to
+    /// express [`Fitted`](Self::Fitted) — a parametric solid, as against a
+    /// hull whose faces are whatever the last cut left.
+    pub fn per_metre_or(self, fallback: f32) -> f32 {
+        match self {
+            Self::Fitted => fallback,
+            Self::PerMetre(scale) => scale,
+        }
+    }
+}
+
+/// Texture coordinates for a point, projected down its face's dominant axis
+/// at a fixed number of coordinates per metre.
+///
+/// Projecting down an axis rather than along an in-face tangent is what makes
+/// the mapping agree with a box's: the six faces of a bevelled box are
+/// textured exactly this way, so a fragment's surviving faces keep the
+/// markings they had, and only the surfaces it broke along are new.
+fn project_at_scale(pos: Vector3<f32>, normal: Vector3<f32>, scale: f32) -> Vector2<f32> {
+    let (u_axis, v_axis) = tangent_axes(dominant_axis(normal));
+    Vector2::new(pos[u_axis] * scale + 0.5, pos[v_axis] * scale + 0.5)
+}
+
+/// The two axes that are not `axis`, in cyclic order so that `axis × u = v` —
+/// which is what makes face windings come out consistent.
+pub(crate) fn tangent_axes(axis: usize) -> (usize, usize) {
+    ((axis + 1) % 3, (axis + 2) % 3)
+}
+
+/// Which axis a normal points most nearly along.
+pub(crate) fn dominant_axis(normal: Vector3<f32>) -> usize {
+    let abs = normal.abs();
+    if abs.x >= abs.y && abs.x >= abs.z {
+        0
+    } else if abs.y >= abs.z {
+        1
+    } else {
+        2
     }
 }
 
@@ -95,13 +181,14 @@ impl PiecePlacement {
 pub fn compound_model(
     pieces: &[PiecePlacement],
     mesh: PieceMesh,
+    uvs: SurfaceUvs,
     material: MaterialId,
 ) -> Arc<Model> {
     let mut all_vertices: Vec<Vertex> = Vec::new();
     let mut all_indices: Vec<u32> = Vec::new();
 
     for piece in pieces {
-        let (vertices, indices) = mesh(piece);
+        let (vertices, indices) = mesh(piece, uvs);
         let base = all_vertices.len() as u32;
         let rotation = piece.rotation.to_rotation_matrix();
 
@@ -181,7 +268,7 @@ pub fn assemble_by_material(pieces: Vec<PlacedMesh>) -> Arc<Model> {
 /// For a piece whose collider *is* its shape — a shard, a cut stone — this is
 /// the honest drawing, and the one that stays honest after the piece breaks
 /// off something, because the hull is what the physics engine kept.
-pub fn hull_mesh(hull: &ConvexHull) -> (Vec<Vertex>, Vec<u32>) {
+pub fn hull_mesh(hull: &ConvexHull, uvs: SurfaceUvs) -> (Vec<Vertex>, Vec<u32>) {
     let color = Vector4::new(1.0, 1.0, 1.0, 1.0);
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
@@ -195,9 +282,9 @@ pub fn hull_mesh(hull: &ConvexHull) -> (Vec<Vertex>, Vec<u32>) {
             .iter()
             .map(|&i| hull.vertices[i as usize])
             .collect();
-        let uvs = planar_face_uvs(&corners);
+        let corner_uvs = uvs.face_uvs(&corners, face.normal);
         let base = vertices.len() as u32;
-        for (corner, uv) in corners.iter().zip(uvs) {
+        for (corner, uv) in corners.iter().zip(corner_uvs) {
             vertices.push(Vertex {
                 pos: *corner,
                 color,
@@ -216,14 +303,18 @@ pub fn hull_mesh(hull: &ConvexHull) -> (Vec<Vertex>, Vec<u32>) {
 
 /// Build a single-piece model, drawn by `mesh`.
 ///
-/// The piece stands on its own, so it is drawn as one at the origin: a block
-/// that has broken off an object is no longer anywhere within it.
+/// The piece stands on its own, so its geometry is centred on the origin: a
+/// block that has broken off an object is no longer anywhere within it. Its
+/// placement is still passed whole, because a mesh may vary its *markings*
+/// with where the piece used to sit, and a piece that repaints itself as it
+/// comes off is the break made visible in the wrong way.
 pub fn piece_model(
-    half_extents: Vector3<f32>,
+    piece: &PiecePlacement,
     mesh: PieceMesh,
+    uvs: SurfaceUvs,
     material: MaterialId,
 ) -> Arc<Model> {
-    let (vertices, indices) = mesh(&PiecePlacement::new(half_extents, Vector3::zeros()));
+    let (vertices, indices) = mesh(piece, uvs);
     let parts = vec![ModelPart::new(vec![MeshPrimitive {
         vertices,
         indices,

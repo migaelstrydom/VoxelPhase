@@ -356,6 +356,9 @@ struct ChildSnapshot {
     world_pos: Point3<f32>,
     world_rot: nalgebra::UnitQuaternion<f32>,
     lin_vel: Vector3<f32>,
+    /// Where the child sat in the compound's frame, kept only so its mesh can
+    /// be drawn with the markings it wore while attached.
+    local_offset: Vector3<f32>,
 }
 
 fn snapshot_child(
@@ -382,6 +385,7 @@ fn snapshot_child(
         world_pos,
         world_rot: world_xform.rotation,
         lin_vel: body_lin_vel + body_ang_vel.cross(&r),
+        local_offset: collider.offset().translation.vector,
     })
 }
 
@@ -422,11 +426,14 @@ fn spawn_freed_piece(
         .attach_collider(new_body_handle, new_collider_desc);
 
     let piece_model = match &info.shape {
-        ColliderShape::Box { half_extents } => {
-            piece_model(*half_extents, style.boxes, info.material)
-        }
+        ColliderShape::Box { half_extents } => piece_model(
+            &PiecePlacement::new(*half_extents, info.local_offset),
+            style.boxes,
+            style.uvs,
+            info.material,
+        ),
         ColliderShape::ConvexHull { hull } => {
-            let (vertices, indices) = (style.hulls)(hull);
+            let (vertices, indices) = (style.hulls)(hull, style.uvs);
             assemble_by_material(vec![PlacedMesh {
                 vertices,
                 indices,
@@ -491,9 +498,12 @@ pub(crate) fn compound_model_of(
                     // angle must still be at that angle after the break, or an
                     // object made of tilted pieces straightens itself out the
                     // moment it loses one.
-                    (style.boxes)(&PiecePlacement::new(*half_extents, Vector3::zeros()))
+                    (style.boxes)(
+                        &PiecePlacement::new(*half_extents, offset).rotated(rotation),
+                        style.uvs,
+                    )
                 }
-                ColliderShape::ConvexHull { hull } => (style.hulls)(hull),
+                ColliderShape::ConvexHull { hull } => (style.hulls)(hull, style.uvs),
                 _ => return None,
             };
             Some(PlacedMesh {
@@ -761,8 +771,9 @@ mod tests {
             .with(Orientation(nalgebra::UnitQuaternion::identity()))
             .with(RigidBodyComponent(body))
             .with(ModelInstance::new(piece_model(
-                Vector3::new(0.5, 0.5, 0.5),
+                &PiecePlacement::new(Vector3::new(0.5, 0.5, 0.5), Vector3::zeros()),
                 crate::app::spawnables::shared::models::cuboid_mesh,
+                crate::app::spawnables::shared::models::SurfaceUvs::Fitted,
                 crate::rendering::material::MaterialId(0),
             )))
             .with(Renderable)
@@ -861,8 +872,9 @@ mod tests {
             .with(Orientation(nalgebra::UnitQuaternion::identity()))
             .with(RigidBodyComponent(body))
             .with(ModelInstance::new(piece_model(
-                Vector3::new(0.5, 0.5, 0.5),
+                &PiecePlacement::new(Vector3::new(0.5, 0.5, 0.5), Vector3::zeros()),
                 crate::app::spawnables::shared::models::cuboid_mesh,
+                crate::app::spawnables::shared::models::SurfaceUvs::Fitted,
                 crate::rendering::material::MaterialId(0),
             )))
             .with(Renderable)
@@ -972,8 +984,9 @@ mod tests {
             .with(Orientation(nalgebra::UnitQuaternion::identity()))
             .with(RigidBodyComponent(body))
             .with(ModelInstance::new(piece_model(
-                half,
+                &PiecePlacement::new(half, Vector3::zeros()),
                 crate::app::spawnables::shared::models::cuboid_mesh,
+                crate::app::spawnables::shared::models::SurfaceUvs::Fitted,
                 crate::rendering::material::MaterialId(0),
             )))
             .with(Renderable)

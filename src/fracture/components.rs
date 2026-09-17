@@ -4,7 +4,7 @@ use nalgebra::Vector3;
 use specs::{Component, VecStorage};
 
 use super::contact_load::{ContactLoadTracker, Deadband};
-use crate::app::spawnables::shared::models::{HullMesh, PieceMesh, PieceStyle};
+use crate::app::spawnables::shared::models::{HullMesh, PieceMesh, PieceStyle, SurfaceUvs};
 use crate::rendering::material::MaterialId;
 
 /// A structural joint between two children of a compound body.
@@ -166,6 +166,17 @@ impl CompoundFracture {
     /// look is not quite its collision shape.
     pub fn with_hull_mesh(mut self, hull_mesh: HullMesh) -> Self {
         self.style.hulls = hull_mesh;
+        self
+    }
+
+    /// How this compound's pieces are laid out on the texture they share.
+    ///
+    /// Set it for any object whose texture is the substance it is made of.
+    /// The default fits the texture to each face, which is a decoration and
+    /// not a material: a fragment of an object textured that way changes size
+    /// of pattern the instant it comes off.
+    pub fn with_uvs(mut self, uvs: SurfaceUvs) -> Self {
+        self.style.uvs = uvs;
         self
     }
 

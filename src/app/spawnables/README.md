@@ -407,6 +407,14 @@ Two things to know when you build one:
   by `SolidCleaveSystem` and a cut wedge has square edges, so `ice/block.rs`
   passes `.with_hull_mesh(ice_hull_mesh)` to put the chamfer back —
   `collision::hull_bevel` does that for any hull.
+- **Supply `with_uvs` if the texture is the substance and not a decoration.**
+  A fragment inherits its parent's material, and by default each of its faces
+  is stretched to hold one copy of that texture — so the pattern changes size
+  at the moment the object breaks, by a different amount on every face.
+  `SurfaceUvs::PerMetre(coords_per_metre)` fixes the density instead, and the
+  faces the fragment kept go on wearing the markings they had. `ice/block.rs`
+  derives the number once, in `ice_uvs`, from the same spread its texture was
+  baked at; anything else is a pattern at two magnifications.
 - **`shedding_debris` is for objects that break into *many* pieces.** The
   debris budget takes the small ones away with a glitter burst once the break
   has been seen, which is right for a pane of glass and wrong for ice: ice
