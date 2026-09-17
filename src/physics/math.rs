@@ -91,6 +91,14 @@ pub fn transform_inertia_tensor(
     r.matrix() * local_inertia * r.matrix().transpose()
 }
 
+/// The matrix that applies `v × _`, so that `skew(v) * w == v.cross(&w)`.
+///
+/// The cross product written as a matrix, which is what lets a term
+/// containing one be differentiated or inverted alongside the rest.
+pub fn skew(v: &Vector3<f32>) -> Matrix3<f32> {
+    Matrix3::new(0.0, -v.z, v.y, v.z, 0.0, -v.x, -v.y, v.x, 0.0)
+}
+
 /// Integrate a quaternion by angular velocity.
 ///
 /// q' = q + (dt/2) * Quaternion(0, ω) * q

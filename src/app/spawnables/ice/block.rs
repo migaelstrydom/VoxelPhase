@@ -28,10 +28,12 @@ use std::sync::Arc;
 use nalgebra::{Point3, UnitQuaternion, Vector2, Vector3};
 use specs::{Builder, Entity, World, WorldExt};
 
-use super::super::shared::models::PiecePlacement;
+use super::super::shared::models::{hull_mesh, PiecePlacement};
 use super::super::shared::textures::seed_from_position;
 use super::super::MaterialCtx;
 use crate::cleave::{BrittleSolid, CleaveRule};
+use crate::collision::convex_hull::ConvexHull;
+use crate::collision::hull_bevel::{bevel_hull, extent_of};
 use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
 };
@@ -207,6 +209,15 @@ impl IceBlock {
         // break: `SolidCleaveSystem` replaces the one child with the wedges
         // it cleaved into, and from then on the block is a compound like any
         // other.
+        //
+        // Deliberately not `shedding_debris`, unlike glass. A pane crazes into
+        // dozens of slivers that are scenery the moment they land, and taking
+        // the small ones away is the whole reason the budget exists. Ice
+        // cleaves into two or three wedges the size of the block, and a wedge
+        // that large glittering out of existence in front of the player reads
+        // as a bug rather than as settling debris. The cost is that ice piles
+        // up: the ceiling on the pieces in a level is the cleave depth, not
+        // the budget.
         world
             .create_entity()
             .with(Position(self.centre.coords))
@@ -218,7 +229,7 @@ impl IceBlock {
             .with(
                 CompoundFracture::boxes(Vec::new(), 1, self.material)
                     .with_piece_mesh(ice_piece_mesh)
-                    .shedding_debris(),
+                    .with_hull_mesh(ice_hull_mesh),
             )
             .with(BrittleSolid::new(self.cleaving, self.material, 1))
             .build()
@@ -277,6 +288,27 @@ pub fn ice_piece_mesh(piece: &PiecePlacement) -> (Vec<Vertex>, Vec<u32>) {
         vertex.tex_coords += offset;
     }
     (vertices, indices)
+}
+
+/// The mesh one cleaved wedge of ice is drawn with: its hull, chamfered.
+///
+/// A wedge is drawn from the hull it collides as, and a hull cut by a plane
+/// has square edges — so without this a block that had twelve bevels and eight
+/// corner facets lost every one of them at the instant it cracked, which is
+/// the instant the player is watching it. The chamfer goes on every edge of
+/// the wedge rather than only the ones that were on the block, because a wedge
+/// does not know which of its faces it was born with; the cost is that the
+/// fracture surfaces catch the light too, which on ice reads as the crack it
+/// is.
+///
+/// Drawing only. The collider keeps the full hull, the same bargain the whole
+/// block makes with its box.
+pub fn ice_hull_mesh(hull: &ConvexHull) -> (Vec<Vertex>, Vec<u32>) {
+    // `extent_of` is a full dimension and [`BEVEL_FRACTION`] is authored
+    // against a half-extent, so that a wedge wears the same width of facet
+    // the block it came out of does.
+    let bevel = extent_of(hull) * 0.5 * BEVEL_FRACTION;
+    hull_mesh(&bevel_hull(hull, bevel))
 }
 
 /// How far through the pattern a piece at this offset starts.
@@ -651,6 +683,77 @@ mod tests {
                 slab()[axis]
             );
         }
+    }
+
+    /// The bevels have to survive the block breaking. A wedge is drawn from
+    /// its hull, and a hull cut by a plane has square edges — so a block that
+    /// cracked went from twenty-six facets to a handful of flat ones at the
+    /// one moment the player was watching it.
+    #[test]
+    fn a_cleaved_wedge_is_still_drawn_with_bevels() {
+        let wedge = crate::collision::convex_hull::cube_hull(Vector3::new(0.2, 0.15, 0.18));
+        let (plain, _) = hull_mesh(&wedge);
+        let (bevelled, _) = ice_hull_mesh(&wedge);
+
+        assert_eq!(distinct_normals(&plain).len(), 6, "a box has six faces");
+        assert_eq!(
+            distinct_normals(&bevelled).len(),
+            6 + 12 + 8,
+            "the wedge lost its facets"
+        );
+    }
+
+    /// A wedge and a whole block are the same substance and must be chamfered
+    /// the same way, or a broken block reads as two materials. Both are cut
+    /// back by the same fraction, so both carry the same twenty-six facets —
+    /// including the eight 45° corner facets, which are the ones a chamfer
+    /// built out of edge cuts alone silently leaves out.
+    #[test]
+    fn a_wedge_wears_the_same_facets_the_whole_block_does() {
+        let half = Vector3::new(0.25, 0.18, 0.21);
+        let (authored, _) = ice_block_mesh(half, PIECE_SPREAD);
+        let (cleaved, _) = ice_hull_mesh(&crate::collision::convex_hull::cube_hull(half));
+
+        let from_block = distinct_normals(&authored);
+        let from_wedge = distinct_normals(&cleaved);
+        assert_eq!(from_block.len(), 6 + 12 + 8);
+        assert_eq!(from_wedge.len(), from_block.len());
+
+        for block in &from_block {
+            assert!(
+                from_wedge.iter().any(|w| (w - block).norm() < 1e-3),
+                "the wedge has no facet facing {block:?}"
+            );
+        }
+    }
+
+    /// And the drawing must stay inside the hull the wedge collides as, or it
+    /// visibly sinks into whatever it lands on.
+    #[test]
+    fn the_drawn_wedge_fits_inside_the_collider() {
+        let half = Vector3::new(0.2, 0.15, 0.18);
+        let wedge = crate::collision::convex_hull::cube_hull(half);
+        let (bevelled, _) = ice_hull_mesh(&wedge);
+        for vertex in &bevelled {
+            for axis in 0..3 {
+                assert!(
+                    vertex.pos[axis].abs() <= half[axis] + 1e-4,
+                    "{:?}",
+                    vertex.pos
+                );
+            }
+        }
+    }
+
+    /// The directions the faces of a mesh point in, one entry each.
+    fn distinct_normals(vertices: &[Vertex]) -> Vec<Vector3<f32>> {
+        let mut seen: Vec<Vector3<f32>> = Vec::new();
+        for vertex in vertices {
+            if !seen.iter().any(|n| (n - vertex.normal).norm() < 1e-3) {
+                seen.push(vertex.normal);
+            }
+        }
+        seen
     }
 
     /// Every bevel facet is a 45° cut between the two faces it joins, on a

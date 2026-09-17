@@ -6,7 +6,7 @@ use super::constraint::types::ConstraintHandle;
 use super::drive::allowance::AllowanceCommand;
 use super::drive::command::NormalVerbs;
 use super::handle::ColliderHandle;
-use super::math::{integrate_orientation, transform_inertia_tensor};
+use super::math::{integrate_orientation, skew, transform_inertia_tensor};
 
 /// Type of rigid body determining how it participates in physics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -221,6 +221,19 @@ pub struct RigidBody {
     /// [`crate::physics::drive::allowance`].
     allowance: AllowanceCommand,
 }
+
+/// Newton steps allowed on the gyroscopic update per frame.
+///
+/// One is the usual recommendation and is enough while `|ω|·dt` is small. It
+/// is not small for a piece of debris off an explosion, which can leave at
+/// tens of radians a second and take most of a radian in a single frame; one
+/// step there loses a third of the body's angular momentum over a few seconds,
+/// so a tumbling shard visibly slows to a stop in mid-air. Newton converges
+/// quadratically, so the extra steps are nearly free and usually not taken.
+const GYROSCOPIC_ITERATIONS: usize = 4;
+
+/// Change in ω, in rad/s, below which the gyroscopic iteration has converged.
+const GYROSCOPIC_TOLERANCE: f32 = 1e-6;
 
 impl RigidBody {
     pub(crate) fn new(desc: RigidBodyDesc) -> Self {
@@ -567,32 +580,69 @@ impl RigidBody {
 
     /// Apply the gyroscopic torque correction: −ω × (I·ω).
     ///
-    /// Uses explicit Euler with a magnitude clamp to prevent instability at
-    /// large angular velocities or timesteps.
+    /// Solved implicitly, by one Newton step on Euler's equations in the
+    /// body's own frame, because the explicit form is not merely inaccurate —
+    /// it is unstable. Free rotation of a body whose three principal moments
+    /// differ has a genuine instability about the intermediate axis, and an
+    /// explicit step *adds* energy on every frame of it: a brick spun about a
+    /// mixed axis in empty space, with no gravity and no contact and angular
+    /// damping working against it, wound itself from 27 rad/s to 119 rad/s in
+    /// ten seconds and kept going. Clamping the step, which is what this used
+    /// to do, bounds how fast it winds up and not whether it does.
+    ///
+    /// Solving for the ω that satisfies the equation at the *end* of the step
+    /// instead is stable at any spin and any timestep, and holds |I·ω| — the
+    /// quantity free rotation must conserve — steady.
+    ///
+    /// Reference: Catto, "Numerical Methods", GDC 2015.
     fn apply_gyroscopic_correction(&mut self, dt: f32) {
-        let omega_sq = self.angular_velocity.magnitude_squared();
-        if omega_sq < 1e-12 {
+        if self.angular_velocity.magnitude_squared() < 1e-12 {
             return;
         }
 
-        let world_inertia = transform_inertia_tensor(&self.local_inertia, &self.rotation);
-        let angular_momentum = world_inertia * self.angular_velocity;
-        let gyro_torque = self.angular_velocity.cross(&angular_momentum);
+        // Euler's equations are diagonal in the body frame, which is where
+        // the inertia tensor is constant and the Newton step is cheap.
+        let start = self
+            .rotation
+            .inverse_transform_vector(&self.angular_velocity);
+        let mut omega = start;
 
-        if gyro_torque.magnitude_squared() < 1e-12 {
+        for _ in 0..GYROSCOPIC_ITERATIONS {
+            let momentum = self.local_inertia * omega;
+            // g(ω) = I·(ω − ω₀) + dt · ω × I·ω, the equation to satisfy at the
+            // *end* of the step, and its derivative with respect to ω.
+            let residual = self.local_inertia * (omega - start) + omega.cross(&momentum) * dt;
+            let jacobian =
+                self.local_inertia + (skew(&omega) * self.local_inertia - skew(&momentum)) * dt;
+            let Some(step) = jacobian.try_inverse() else {
+                // A body with no inertia about some axis — nothing to precess.
+                return;
+            };
+            let correction = step * residual;
+            omega -= correction;
+            if correction.magnitude_squared() <= GYROSCOPIC_TOLERANCE * GYROSCOPIC_TOLERANCE {
+                break;
+            }
+        }
+
+        if !omega.iter().all(|v| v.is_finite()) {
             return;
         }
 
-        let correction = self.world_inv_inertia() * gyro_torque * dt;
-
-        // Clamp the correction to a fraction of |ω| to keep explicit Euler stable.
-        let corr_mag = correction.magnitude();
-        let max_corr = omega_sq.sqrt() * 0.125;
-        if corr_mag > max_corr {
-            self.angular_velocity -= correction * (max_corr / corr_mag);
-        } else {
-            self.angular_velocity -= correction;
+        // The implicit step is stable where the explicit one was not, and it
+        // pays for that by damping: a fast tumble lost a third of its angular
+        // momentum over half a minute, so debris visibly wound down in
+        // mid-air. But the gyroscopic term does no work and applies no
+        // torque — free rotation conserves |I·ω| exactly — so the size of the
+        // answer is known in advance and only its direction had to be solved
+        // for. Putting the magnitude back makes the step lossless.
+        let before = (self.local_inertia * start).magnitude();
+        let after = (self.local_inertia * omega).magnitude();
+        if after > 1e-9 {
+            omega *= before / after;
         }
+
+        self.angular_velocity = self.rotation.transform_vector(&omega);
     }
 
     /// Integrate positions from velocities.
@@ -614,6 +664,118 @@ mod tests {
         let mut body = RigidBody::new(RigidBodyDesc::dynamic());
         body.set_mass_properties(1.0, Matrix3::identity());
         body
+    }
+
+    /// A body whose three principal moments all differ, which is the only
+    /// case free rotation is interesting in: a brick, not a ball.
+    fn tumbling_body(spin: Vector3<f32>) -> RigidBody {
+        // Damping off, so that what the measurements see is the integrator
+        // and not a decay the body was asked for.
+        let mut body = RigidBody::new(
+            RigidBodyDesc::dynamic()
+                .angular_velocity(spin)
+                .angular_damping(0.0)
+                .linear_damping(0.0),
+        );
+        body.set_mass_properties(
+            24.0,
+            Matrix3::from_diagonal(&Vector3::new(0.31, 0.36, 0.40)),
+        );
+        body
+    }
+
+    /// Angular momentum and rotational energy, the two quantities a body
+    /// spinning with nothing acting on it must keep.
+    fn rotational_state(body: &RigidBody) -> (f32, f32) {
+        let inertia = transform_inertia_tensor(&body.local_inertia, &body.rotation);
+        let momentum = inertia * body.angular_velocity;
+        (
+            momentum.magnitude(),
+            0.5 * body.angular_velocity.dot(&momentum),
+        )
+    }
+
+    /// Spin a body in empty space for `seconds`. Reports what became of its
+    /// angular momentum, as a ratio of where it started, and the fastest it
+    /// ever span.
+    fn spun_freely(spin: Vector3<f32>, seconds: f32) -> (f32, f32) {
+        const DT: f32 = 1.0 / 60.0;
+        let mut body = tumbling_body(spin);
+        let (momentum, _) = rotational_state(&body);
+        let mut peak = body.angular_velocity.magnitude();
+        for _ in 0..(seconds / DT) as usize {
+            body.integrate_forces(DT, Vector3::zeros());
+            body.integrate_velocities(DT);
+            peak = peak.max(body.angular_velocity.magnitude());
+        }
+        (rotational_state(&body).0 / momentum, peak)
+    }
+
+    /// The largest angular speed a body holding this much angular momentum
+    /// can possibly have: all of it about its easiest axis to spin.
+    fn fastest_possible_spin(body: &RigidBody, momentum: f32) -> f32 {
+        let smallest = body
+            .local_inertia
+            .diagonal()
+            .iter()
+            .copied()
+            .fold(f32::INFINITY, f32::min);
+        momentum / smallest
+    }
+
+    /// The bug this guards against took a machine down. A body whose
+    /// principal moments differ has a genuine instability about its
+    /// intermediate axis, and the gyroscopic term used to be integrated
+    /// explicitly, which *adds* energy on every frame of it. A brick spun
+    /// about a mixed axis wound itself from 27 rad/s past 100 in ten seconds
+    /// with nothing touching it; in the game a blown-off piece of ice climbed
+    /// until its swept bounding box covered the level, and the terrain query
+    /// that followed exhausted memory.
+    ///
+    /// Free rotation applies no torque, so angular momentum is the invariant
+    /// to hold — and holding it is what bounds everything else. A body may
+    /// legitimately trade angular *speed* between its axes as it tumbles, up
+    /// to the ratio of its largest principal moment to its smallest, but it
+    /// can never exceed what its momentum allows. Spinning near the
+    /// intermediate axis, where the tumble is genuinely unstable, is the case
+    /// that says so.
+    #[test]
+    fn a_tumbling_body_does_not_wind_itself_up() {
+        for spin in [
+            Vector3::new(-12.0, -18.0, 16.0),
+            Vector3::new(1.0, 30.0, 1.0),
+            // About the intermediate axis, the unstable one.
+            Vector3::new(0.2, 60.0, 0.1),
+            Vector3::new(40.0, 40.0, 40.0),
+        ] {
+            let body = tumbling_body(spin);
+            let (momentum, _) = rotational_state(&body);
+            let ceiling = fastest_possible_spin(&body, momentum);
+
+            let (kept, peak) = spun_freely(spin, 30.0);
+            assert!(
+                (kept - 1.0).abs() < 0.01,
+                "spun about {spin:?}, angular momentum became {kept:.4} of what it was"
+            );
+            assert!(
+                peak <= ceiling * 1.01,
+                "spun about {spin:?}, reached {peak:.1} rad/s where its momentum allows {ceiling:.1}"
+            );
+        }
+    }
+
+    /// Spun about one of its own principal axes a body just keeps spinning:
+    /// there is no gyroscopic term at all, so this is the case that says the
+    /// correction stays out of the way when it has nothing to correct.
+    #[test]
+    fn a_body_spun_about_a_principal_axis_is_left_alone() {
+        for axis in 0..3 {
+            let mut spin = Vector3::zeros();
+            spin[axis] = 11.0;
+            let (kept, peak) = spun_freely(spin, 30.0);
+            assert!((kept - 1.0).abs() < 1e-3, "axis {axis}: momentum {kept}");
+            assert!((peak - 11.0).abs() < 1e-2, "axis {axis}: peak {peak}");
+        }
     }
 
     /// Force integration no longer knows what a drive is. Both anchors are

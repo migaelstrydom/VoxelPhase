@@ -33,6 +33,38 @@ pub fn cuboid_mesh(piece: &PiecePlacement) -> (Vec<Vertex>, Vec<u32>) {
     )
 }
 
+/// How one hull-shaped piece of a compound object is drawn: the hull it
+/// collides as in, mesh out.
+///
+/// The counterpart of [`PieceMesh`] for the children that are not boxes. A
+/// hull is its own drawing, so the default — [`hull_mesh`] — needs no help;
+/// this exists for the object whose look is not quite its collision shape,
+/// such as ice, whose edges are chamfered on the drawing and square on the
+/// collider.
+pub type HullMesh = fn(&ConvexHull) -> (Vec<Vertex>, Vec<u32>);
+
+/// How every piece of one compound object is drawn, whatever shape it is.
+///
+/// Carried together because a compound breaks into both kinds at once: an ice
+/// block starts as a box child and becomes hull children the moment it is
+/// cleaved, and the two have to be drawn as the same substance.
+#[derive(Debug, Clone, Copy)]
+pub struct PieceStyle {
+    /// How a box child is drawn.
+    pub boxes: PieceMesh,
+    /// How a convex-hull child is drawn.
+    pub hulls: HullMesh,
+}
+
+impl Default for PieceStyle {
+    fn default() -> Self {
+        Self {
+            boxes: cuboid_mesh,
+            hulls: hull_mesh,
+        }
+    }
+}
+
 /// Where one piece of a compound object sits in the body's frame.
 #[derive(Clone, Copy)]
 pub struct PiecePlacement {

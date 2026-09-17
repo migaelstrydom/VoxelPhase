@@ -171,11 +171,34 @@ impl ConvexHull {
     }
 
     /// The same hull scaled about its local origin.
+    ///
+    /// Rebuilt by hand rather than through [`ConvexHull::new`], because a
+    /// uniform positive scale cannot make a sound hull unsound: every face
+    /// keeps its winding, its plane and its normal, and every edge keeps both
+    /// of its faces. What it does change is the *size* of those faces, and the
+    /// constructor's degeneracy check is an absolute one — so scaling a
+    /// perfectly good small hull smaller asserts on geometry that never
+    /// changed shape.
     pub fn scaled(&self, factor: f32) -> Self {
-        Self::new(
-            self.vertices.iter().map(|v| v * factor).collect(),
-            self.faces.clone(),
-        )
+        assert!(
+            factor > 0.0 && factor.is_finite(),
+            "ConvexHull: scale factor {factor} is not a positive number",
+        );
+        Self {
+            vertices: self.vertices.iter().map(|v| v * factor).collect(),
+            faces: self.faces.clone(),
+            edges: self
+                .edges
+                .iter()
+                .map(|edge| HullEdgeAdj {
+                    v0: edge.v0,
+                    v1: edge.v1,
+                    normal_a: edge.normal_a,
+                    normal_b: edge.normal_b,
+                })
+                .collect(),
+            bounding_radius: self.bounding_radius * factor,
+        }
     }
 
     /// Compute the inertia tensor for this hull at the given mass.
@@ -845,6 +868,43 @@ mod tests {
             assert!(approx_eq(v.x, 5.0 + v.x - 5.0, 1e-5)); // x in [4,6]
             assert!(approx_eq(v.y, 1.0, 1e-5));
         }
+    }
+}
+
+#[cfg(test)]
+mod scale_tests {
+    use super::*;
+
+    /// Scaling must not re-judge geometry it did not change. The constructor
+    /// rejects a face whose fan sum is below an absolute floor, and that sum
+    /// falls with the square of the scale — so a hull that is sound at one
+    /// size used to assert at a smaller one, on faces that kept their exact
+    /// shape. The cleave path shrinks every wedge it cuts by a hair, which
+    /// made this a crash waiting on a small enough piece.
+    #[test]
+    fn a_small_hull_survives_being_made_smaller() {
+        let hull = cube_hull(Vector3::new(0.02, 0.013, 0.017));
+        let shrunk = hull.scaled(0.05);
+
+        assert_eq!(shrunk.faces.len(), hull.faces.len());
+        assert_eq!(shrunk.edges.len(), hull.edges.len());
+        for (before, after) in hull.vertices.iter().zip(&shrunk.vertices) {
+            assert!((before * 0.05 - after).magnitude() < 1e-9);
+        }
+        for (before, after) in hull.faces.iter().zip(&shrunk.faces) {
+            assert!((before.normal - after.normal).magnitude() < 1e-6);
+        }
+        assert!((shrunk.bounding_radius - hull.bounding_radius * 0.05).abs() < 1e-9);
+    }
+
+    /// And the volume must scale with the cube of the factor, which is the
+    /// check that the hand-rolled rebuild did not quietly drop a face.
+    #[test]
+    fn scaling_changes_volume_by_the_cube_of_the_factor() {
+        let hull = cube_hull(Vector3::new(0.3, 0.2, 0.25));
+        let grown = hull.scaled(3.0);
+        let expected = hull.compute_volume() * 27.0;
+        assert!((grown.compute_volume() - expected).abs() < expected * 1e-4);
     }
 }
 

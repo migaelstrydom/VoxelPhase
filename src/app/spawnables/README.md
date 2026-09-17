@@ -401,6 +401,17 @@ Two things to know when you build one:
   what it looks like. `CompoundFracture::boxes(...).with_piece_mesh(my_mesh)`
   is what stops the object changing shape at the moment it breaks — see
   `ice/igloo.rs`, whose children are bevelled ice blocks.
+- **Supply a `hull_mesh` too if the object can be cleaved.** A child that is a
+  convex hull is drawn as that hull, which is right for a shard and wrong for
+  anything whose look is not quite its collision shape. Ice is cut into wedges
+  by `SolidCleaveSystem` and a cut wedge has square edges, so `ice/block.rs`
+  passes `.with_hull_mesh(ice_hull_mesh)` to put the chamfer back —
+  `collision::hull_bevel` does that for any hull.
+- **`shedding_debris` is for objects that break into *many* pieces.** The
+  debris budget takes the small ones away with a glitter burst once the break
+  has been seen, which is right for a pane of glass and wrong for ice: ice
+  cleaves into two or three wedges the size of the block, and a piece that
+  large glittering out of existence in front of the player reads as a bug.
 
 `FractureJoint::threshold` is measured against the **blast impulse at the
 child**, in N·s, not against contact forces: a grenade delivers about 1100 N·s

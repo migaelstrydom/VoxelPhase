@@ -20,6 +20,7 @@ pub mod continuous;
 pub mod convex_hull;
 pub mod discrete;
 pub mod dispatch;
+pub mod hull_bevel;
 pub mod hull_split;
 pub mod mesh;
 mod mesh_patch;

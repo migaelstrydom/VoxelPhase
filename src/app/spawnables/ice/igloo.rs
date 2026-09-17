@@ -48,7 +48,7 @@ use super::super::shared::models::{compound_model, PiecePlacement};
 use super::super::shared::orientation::Yaw;
 use super::super::shared::textures::seed_from_position;
 use super::super::{MaterialCtx, Spawnable};
-use super::block::{ice, ice_cleaving, ice_material, ice_piece_mesh};
+use super::block::{ice, ice_cleaving, ice_hull_mesh, ice_material, ice_piece_mesh};
 use crate::cleave::{BrittleSolid, CleaveRule};
 use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
@@ -394,7 +394,7 @@ impl Spawnable for IglooDef {
             .with(
                 CompoundFracture::boxes(self.joints(&blocks), blocks.len(), materials[0])
                     .with_piece_mesh(ice_piece_mesh)
-                    .shedding_debris(),
+                    .with_hull_mesh(ice_hull_mesh),
             )
             .with(BrittleSolid::new(
                 CleaveRule {

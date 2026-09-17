@@ -9,7 +9,7 @@ use super::components::CompoundFracture;
 use super::debris::Debris;
 use super::load::{ChildLoad, ChildLoads};
 use crate::app::spawnables::shared::models::{
-    assemble_by_material, hull_mesh, piece_model, PieceMesh, PiecePlacement, PlacedMesh,
+    assemble_by_material, piece_model, PiecePlacement, PieceStyle, PlacedMesh,
 };
 use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
@@ -147,7 +147,7 @@ impl<'a> System<'a> for FractureSystem {
                 continue;
             };
             let materials = fracture.materials.clone();
-            let piece_mesh = fracture.piece_mesh;
+            let style = fracture.style;
             let debris_of = fracture.sheds_debris.then_some(trigger.entity);
 
             // Break the overloaded joints; the rest of the structure survives.
@@ -237,7 +237,7 @@ impl<'a> System<'a> for FractureSystem {
                         &entities,
                         &lazy,
                         info,
-                        piece_mesh,
+                        style,
                         body_ang_vel,
                         last_impulses,
                         debris_of.map(|origin| Debris::new(origin, info.shape.compute_mass(1.0))),
@@ -301,12 +301,9 @@ impl<'a> System<'a> for FractureSystem {
             let Some(fracture) = fractures.get(trigger.entity) else {
                 continue;
             };
-            if let Some(model) = compound_model_of(
-                &physics,
-                trigger.body_handle,
-                &fracture.materials,
-                piece_mesh,
-            ) {
+            if let Some(model) =
+                compound_model_of(&physics, trigger.body_handle, &fracture.materials, style)
+            {
                 if let Some(instance) = models.get_mut(trigger.entity) {
                     instance.model = model;
                 }
@@ -394,7 +391,7 @@ fn spawn_freed_piece(
     entities: &Entities,
     lazy: &specs::LazyUpdate,
     info: &ChildSnapshot,
-    piece_mesh: PieceMesh,
+    style: PieceStyle,
     body_ang_vel: Vector3<f32>,
     impulse_sources: &[crate::physics::PhysicsImpulse],
     debris: Option<Debris>,
@@ -426,10 +423,10 @@ fn spawn_freed_piece(
 
     let piece_model = match &info.shape {
         ColliderShape::Box { half_extents } => {
-            piece_model(*half_extents, piece_mesh, info.material)
+            piece_model(*half_extents, style.boxes, info.material)
         }
         ColliderShape::ConvexHull { hull } => {
-            let (vertices, indices) = hull_mesh(hull);
+            let (vertices, indices) = (style.hulls)(hull);
             assemble_by_material(vec![PlacedMesh {
                 vertices,
                 indices,
@@ -456,8 +453,8 @@ fn spawn_freed_piece(
 }
 
 /// The model of a compound body as its colliders stand right now: box
-/// children drawn by `piece_mesh`, hull children drawn as their hulls, each
-/// wearing its own material.
+/// children and hull children each drawn by `style`, each wearing its own
+/// material.
 ///
 /// `None` if the body has no drawable child, which is not the same as an
 /// empty model — a caller that has nothing to draw should keep what it had
@@ -466,7 +463,7 @@ pub(crate) fn compound_model_of(
     physics: &PhysicsResource,
     body_handle: RigidBodyHandle,
     materials: &[MaterialId],
-    piece_mesh: PieceMesh,
+    style: PieceStyle,
 ) -> Option<Arc<Model>> {
     let body = physics.world.body(body_handle)?;
     let fallback = materials.last().copied().unwrap_or(MaterialId(0));
@@ -494,9 +491,9 @@ pub(crate) fn compound_model_of(
                     // angle must still be at that angle after the break, or an
                     // object made of tilted pieces straightens itself out the
                     // moment it loses one.
-                    piece_mesh(&PiecePlacement::new(*half_extents, Vector3::zeros()))
+                    (style.boxes)(&PiecePlacement::new(*half_extents, Vector3::zeros()))
                 }
-                ColliderShape::ConvexHull { hull } => hull_mesh(hull),
+                ColliderShape::ConvexHull { hull } => (style.hulls)(hull),
                 _ => return None,
             };
             Some(PlacedMesh {

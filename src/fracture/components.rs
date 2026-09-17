@@ -4,7 +4,7 @@ use nalgebra::Vector3;
 use specs::{Component, VecStorage};
 
 use super::contact_load::{ContactLoadTracker, Deadband};
-use crate::app::spawnables::shared::models::{cuboid_mesh, PieceMesh};
+use crate::app::spawnables::shared::models::{HullMesh, PieceMesh, PieceStyle};
 use crate::rendering::material::MaterialId;
 
 /// A structural joint between two children of a compound body.
@@ -68,15 +68,16 @@ pub struct CompoundFracture {
     /// beam the moment anything broke off it. Kept in step with `child_count`
     /// through [`CompoundFracture::remap_children`].
     pub materials: Vec<MaterialId>,
-    /// How one box-shaped child is drawn.
+    /// How this compound's children are drawn, by shape.
     ///
     /// The system knows a box child only as a collider, which is where it is
     /// and not what it looks like. Without this, every object came apart into
     /// plain cuboids — and an object whose children are *not* plain cuboids
     /// changed shape at the moment it broke, which is the one moment the
-    /// player is looking at it. A convex-hull child needs no such help: the
-    /// hull is its own drawing.
-    pub piece_mesh: PieceMesh,
+    /// player is looking at it. A convex-hull child mostly needs no such
+    /// help — the hull is its own drawing — which is why the default draws it
+    /// exactly as it collides.
+    pub style: PieceStyle,
     /// Impulse, in N·s, to hand each child if it comes free this frame,
     /// indexed by child. Zero for a child nobody has pushed.
     ///
@@ -114,7 +115,7 @@ impl CompoundFracture {
             contact_load: ContactLoadTracker::new(child_count),
             contact_threshold: None,
             materials: vec![material; child_count],
-            piece_mesh: cuboid_mesh,
+            style: PieceStyle::default(),
             kicks: vec![Vector3::zeros(); child_count],
             split_pending: false,
             sheds_debris: false,
@@ -157,7 +158,14 @@ impl CompoundFracture {
 
     /// The same, for children with a shape of their own.
     pub fn with_piece_mesh(mut self, piece_mesh: PieceMesh) -> Self {
-        self.piece_mesh = piece_mesh;
+        self.style.boxes = piece_mesh;
+        self
+    }
+
+    /// How this compound's convex-hull children are drawn, for an object whose
+    /// look is not quite its collision shape.
+    pub fn with_hull_mesh(mut self, hull_mesh: HullMesh) -> Self {
+        self.style.hulls = hull_mesh;
         self
     }
 

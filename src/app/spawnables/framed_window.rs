@@ -28,7 +28,7 @@ use nalgebra::{Point3, Vector2, Vector3};
 use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
-use super::shared::models::{build_convex_hull, cuboid_mesh, SolidFace};
+use super::shared::models::{build_convex_hull, PieceStyle, SolidFace};
 use super::shared::orientation::Yaw;
 use super::shared::textures::seed_from_position;
 use super::{MaterialCtx, Spawnable};
@@ -473,7 +473,7 @@ impl Spawnable for FramedWindowDef {
         }
 
         let child_count = child_materials.len();
-        let model = compound_model_of(&physics, body, &child_materials, cuboid_mesh)
+        let model = compound_model_of(&physics, body, &child_materials, PieceStyle::default())
             .expect("a window has something to draw");
         drop(physics);
 

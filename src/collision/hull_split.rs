@@ -101,6 +101,30 @@ pub struct HullHalves {
 /// past the hull vertex limit. A refusal is the caller's cue to move the
 /// plane, not an error.
 pub fn split_hull(hull: &ConvexHull, plane: Plane) -> Option<HullHalves> {
+    let (front, back) = clip(hull, plane)?;
+    Some(HullHalves {
+        front: front.build(plane.normal)?,
+        back: back.build(-plane.normal)?,
+    })
+}
+
+/// The part of `hull` behind `plane`, with everything in front of it cut away.
+///
+/// The half-space form of [`split_hull`], for a cut whose other side is not
+/// wanted as a body — chamfering an edge throws away a sliver that no builder
+/// would accept as a piece, and refusing the cut on those grounds would refuse
+/// every chamfer. `None` if the plane misses the hull or if what is left is
+/// not a piece the builder will take.
+pub fn trim_hull(hull: &ConvexHull, plane: Plane) -> Option<ConvexHull> {
+    let (_, back) = clip(hull, plane)?;
+    back.build(-plane.normal)
+}
+
+/// Clip every face of `hull` against `plane`, collecting each side.
+///
+/// `None` if the plane leaves every vertex on one side, where there is nothing
+/// to cut.
+fn clip(hull: &ConvexHull, plane: Plane) -> Option<(HalfBuilder, HalfBuilder)> {
     let distances: Vec<f32> = hull
         .vertices
         .iter()
@@ -148,10 +172,7 @@ pub fn split_hull(hull: &ConvexHull, plane: Plane) -> Option<HullHalves> {
         back.add_face(loop_of(Side::Back), &plane);
     }
 
-    Some(HullHalves {
-        front: front.build(plane.normal)?,
-        back: back.build(-plane.normal)?,
-    })
+    Some((front, back))
 }
 
 /// Which half of the cut a builder is collecting.

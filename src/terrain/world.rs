@@ -620,8 +620,45 @@ fn union_bounds(segments: &[Segment]) -> AABB {
     })
 }
 
+/// Largest span, in metres, a collision query may ask for along any axis.
+///
+/// Every caller of [`TerrainWorld::query_region`] asks for the region around
+/// one collider, which is metres across at most even when swept. A query far
+/// larger than that does not mean a large object, it means a body whose state
+/// has gone wrong — and answering it honestly means gathering every triangle
+/// in the level, with its adjacency, every frame. That is how a single runaway
+/// piece of debris took a machine down rather than merely looking silly: the
+/// physics bug was upstream, but this is where the cost landed.
+const MAX_QUERY_SPAN: f32 = 256.0;
+
+/// Whether a query region is one a collider could plausibly have asked for.
+fn is_sane_query(aabb: &AABB) -> bool {
+    let finite = aabb
+        .min
+        .coords
+        .iter()
+        .chain(aabb.max.coords.iter())
+        .all(|v| v.is_finite());
+    finite && (aabb.max - aabb.min).amax() <= MAX_QUERY_SPAN
+}
+
 impl StaticGeometry for TerrainWorld {
     fn query_region(&self, aabb: &AABB) -> MeshPatch {
+        // A body that has run away asks for the whole level. Refusing costs it
+        // its contacts, which for a body already in that state is no loss, and
+        // keeps one broken body from being able to exhaust memory.
+        if !is_sane_query(aabb) {
+            log::error!(
+                "Terrain: refusing a collision query spanning {:?} — from {:?} to {:?}",
+                aabb.max - aabb.min,
+                aabb.min,
+                aabb.max,
+            );
+            return MeshPatch {
+                triangles: Vec::new(),
+            };
+        }
+
         // A triangle is identified across the level by its segment plus its
         // in-segment reference; adjacency is per-segment, so both are needed to
         // resolve a neighbour to an index within this patch.
@@ -1587,5 +1624,40 @@ mod tests {
                 ms(t.concat_split.rebase),
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod query_guard_tests {
+    use super::*;
+
+    fn span(size: f32) -> AABB {
+        AABB::new(
+            Point3::new(-size * 0.5, -size * 0.5, -size * 0.5),
+            Point3::new(size * 0.5, size * 0.5, size * 0.5),
+        )
+    }
+
+    /// An ordinary collider-sized query is answered.
+    #[test]
+    fn a_collider_sized_query_is_allowed() {
+        assert!(is_sane_query(&span(0.5)));
+        assert!(is_sane_query(&span(64.0)));
+    }
+
+    /// A query the size of a level is a broken body, not a large one.
+    #[test]
+    fn a_level_sized_query_is_refused() {
+        assert!(!is_sane_query(&span(1.0e6)));
+        assert!(!is_sane_query(&span(f32::INFINITY)));
+    }
+
+    /// And so is one that has gone to NaN, which compares false against every
+    /// bound and would otherwise sail through a size check.
+    #[test]
+    fn a_query_that_has_gone_to_nan_is_refused() {
+        let mut aabb = span(1.0);
+        aabb.max.x = f32::NAN;
+        assert!(!is_sane_query(&aabb));
     }
 }

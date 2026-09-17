@@ -88,12 +88,9 @@ impl<'a> System<'a> for SolidCleaveSystem {
                 broke |= cleave(&mut physics, solid, fracture, body_handle, &hit);
             }
             if broke {
-                if let Some(rebuilt) = compound_model_of(
-                    &physics,
-                    body_handle,
-                    &fracture.materials,
-                    fracture.piece_mesh,
-                ) {
+                if let Some(rebuilt) =
+                    compound_model_of(&physics, body_handle, &fracture.materials, fracture.style)
+                {
                     model.model = rebuilt;
                 }
             }
