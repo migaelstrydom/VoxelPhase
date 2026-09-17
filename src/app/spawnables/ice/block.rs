@@ -29,7 +29,7 @@ use nalgebra::{Point3, UnitQuaternion, Vector2, Vector3};
 use specs::{Builder, Entity, World, WorldExt};
 
 use super::super::shared::models::{
-    dominant_axis, hull_mesh, tangent_axes, PiecePlacement, SurfaceUvs,
+    dominant_axis, hull_mesh, tangent_axes, PieceHull, PiecePlacement, SurfaceUvs,
 };
 use super::super::shared::textures::seed_from_position;
 use super::super::MaterialCtx;
@@ -322,11 +322,11 @@ pub fn ice_piece_mesh(piece: &PiecePlacement, uvs: SurfaceUvs) -> (Vec<Vertex>, 
 ///
 /// Drawing only. The collider keeps the full hull, the same bargain the whole
 /// block makes with its box.
-pub fn ice_hull_mesh(hull: &ConvexHull, uvs: SurfaceUvs) -> (Vec<Vertex>, Vec<u32>) {
+pub fn ice_hull_mesh(piece: &PieceHull, uvs: SurfaceUvs) -> (Vec<Vertex>, Vec<u32>) {
     // `extent_of` is a full dimension and [`BEVEL_FRACTION`] is authored
     // against a half-extent, so that a wedge wears the same width of facet
     // the block it came out of does.
-    hull_mesh(&chamfered(hull), uvs)
+    hull_mesh(&PieceHull::new(&chamfered(piece.hull), piece.offset), uvs)
 }
 
 /// A wedge's hull as it is drawn: the block's own faces cut back in full, the
@@ -736,8 +736,14 @@ mod tests {
     #[test]
     fn a_cleaved_wedge_is_still_drawn_with_bevels() {
         let wedge = crate::collision::convex_hull::cube_hull(Vector3::new(0.2, 0.15, 0.18));
-        let (plain, _) = hull_mesh(&wedge, SurfaceUvs::Fitted);
-        let (bevelled, _) = ice_hull_mesh(&wedge, SurfaceUvs::Fitted);
+        let (plain, _) = hull_mesh(
+            &PieceHull::new(&wedge, Vector3::zeros()),
+            SurfaceUvs::Fitted,
+        );
+        let (bevelled, _) = ice_hull_mesh(
+            &PieceHull::new(&wedge, Vector3::zeros()),
+            SurfaceUvs::Fitted,
+        );
 
         assert_eq!(distinct_normals(&plain).len(), 6, "a box has six faces");
         assert_eq!(
@@ -757,7 +763,10 @@ mod tests {
         let half = Vector3::new(0.25, 0.18, 0.21);
         let (authored, _) = ice_block_mesh(half, PIECE_SPREAD);
         let (cleaved, _) = ice_hull_mesh(
-            &crate::collision::convex_hull::cube_hull(half),
+            &PieceHull::new(
+                &crate::collision::convex_hull::cube_hull(half),
+                Vector3::zeros(),
+            ),
             SurfaceUvs::Fitted,
         );
 
@@ -818,13 +827,42 @@ mod tests {
 
         let (block, block_indices) = ice_block_mesh(half, spread);
         let wedge = crate::collision::convex_hull::cube_hull(half * 0.4);
-        let (cleaved, cleaved_indices) = ice_hull_mesh(&wedge, ice_uvs(spread));
+        let (cleaved, cleaved_indices) =
+            ice_hull_mesh(&PieceHull::new(&wedge, Vector3::zeros()), ice_uvs(spread));
 
         let want = uv_density(&block, &block_indices)[0];
         for measured in uv_density(&cleaved, &cleaved_indices) {
             assert!(
                 (measured - want).abs() < 1e-3,
                 "the wedge draws the pattern at {measured} per metre, the block at {want}"
+            );
+        }
+    }
+
+    /// Matching the *scale* leaves the pattern in a different place, which on
+    /// a block that has cracked but not yet come apart is still a change: the
+    /// frost jumps across a hairline crack. Reading the pattern at the wedge's
+    /// place in the block it came out of removes the jump, so a cracked block
+    /// is the block it was plus a crack.
+    #[test]
+    fn a_wedge_keeps_the_markings_it_had_inside_the_block() {
+        let half = Vector3::new(0.9, 0.7, 0.8);
+        let spread = texture_spread(half);
+        let scale = uv_scale(spread);
+        let offset = Vector3::new(0.45, 0.0, -0.4);
+
+        let wedge = crate::collision::convex_hull::cube_hull(half * 0.4);
+        let (drawn, _) = ice_hull_mesh(&PieceHull::new(&wedge, offset), ice_uvs(spread));
+
+        let top: Vec<&Vertex> = drawn.iter().filter(|v| v.normal.y > 0.999).collect();
+        assert!(!top.is_empty(), "the wedge has no upward face");
+        for vertex in top {
+            let inside = vertex.pos + offset;
+            let want = Vector2::new(inside.z * scale + 0.5, inside.x * scale + 0.5);
+            assert!(
+                (vertex.tex_coords - want).norm() < 1e-5,
+                "a corner at {inside:?} of the block reads {:?}, the block draws it at {want:?}",
+                vertex.tex_coords
             );
         }
     }
@@ -838,7 +876,8 @@ mod tests {
         let big = crate::collision::convex_hull::cube_hull(Vector3::new(0.8, 0.8, 0.8));
         let small = crate::collision::convex_hull::cube_hull(Vector3::new(0.2, 0.2, 0.2));
         let density = |hull| {
-            let (vertices, indices) = hull_mesh(hull, SurfaceUvs::Fitted);
+            let (vertices, indices) =
+                hull_mesh(&PieceHull::new(hull, Vector3::zeros()), SurfaceUvs::Fitted);
             uv_density(&vertices, &indices)[0]
         };
         assert!(
@@ -1018,7 +1057,10 @@ mod tests {
     fn the_drawn_wedge_fits_inside_the_collider() {
         let half = Vector3::new(0.2, 0.15, 0.18);
         let wedge = crate::collision::convex_hull::cube_hull(half);
-        let (bevelled, _) = ice_hull_mesh(&wedge, SurfaceUvs::Fitted);
+        let (bevelled, _) = ice_hull_mesh(
+            &PieceHull::new(&wedge, Vector3::zeros()),
+            SurfaceUvs::Fitted,
+        );
         for vertex in &bevelled {
             for axis in 0..3 {
                 assert!(

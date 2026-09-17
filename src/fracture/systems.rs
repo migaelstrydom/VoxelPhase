@@ -9,7 +9,7 @@ use super::components::CompoundFracture;
 use super::debris::Debris;
 use super::load::{ChildLoad, ChildLoads};
 use crate::app::spawnables::shared::models::{
-    assemble_by_material, piece_model, PiecePlacement, PieceStyle, PlacedMesh,
+    assemble_by_material, piece_model, PieceHull, PiecePlacement, PieceStyle, PlacedMesh,
 };
 use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
@@ -433,7 +433,8 @@ fn spawn_freed_piece(
             info.material,
         ),
         ColliderShape::ConvexHull { hull } => {
-            let (vertices, indices) = (style.hulls)(hull, style.uvs);
+            let (vertices, indices) =
+                (style.hulls)(&PieceHull::new(hull, info.local_offset), style.uvs);
             assemble_by_material(vec![PlacedMesh {
                 vertices,
                 indices,
@@ -503,7 +504,9 @@ pub(crate) fn compound_model_of(
                         style.uvs,
                     )
                 }
-                ColliderShape::ConvexHull { hull } => (style.hulls)(hull, style.uvs),
+                ColliderShape::ConvexHull { hull } => {
+                    (style.hulls)(&PieceHull::new(hull, offset), style.uvs)
+                }
                 _ => return None,
             };
             Some(PlacedMesh {

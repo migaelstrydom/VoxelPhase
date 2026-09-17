@@ -41,7 +41,27 @@ pub fn cuboid_mesh(piece: &PiecePlacement, _uvs: SurfaceUvs) -> (Vec<Vertex>, Ve
 /// this exists for the object whose look is not quite its collision shape,
 /// such as ice, whose edges are chamfered on the drawing and square on the
 /// collider.
-pub type HullMesh = fn(&ConvexHull, SurfaceUvs) -> (Vec<Vertex>, Vec<u32>);
+pub type HullMesh = for<'a> fn(&PieceHull<'a>, SurfaceUvs) -> (Vec<Vertex>, Vec<u32>);
+
+/// One hull-shaped piece of a compound object, and where it sits in the body's
+/// frame.
+///
+/// The counterpart of [`PiecePlacement`], and it carries the offset for the
+/// same reason: a piece's markings follow from where it is, not only from what
+/// shape it is. A wedge cut out of a block keeps its parent's pattern exactly
+/// when the pattern is read at the wedge's place in the parent.
+pub struct PieceHull<'a> {
+    /// The hull the piece collides as, in its own frame.
+    pub hull: &'a ConvexHull,
+    /// Where that frame's origin sits in the body's frame.
+    pub offset: Vector3<f32>,
+}
+
+impl<'a> PieceHull<'a> {
+    pub fn new(hull: &'a ConvexHull, offset: Vector3<f32>) -> Self {
+        Self { hull, offset }
+    }
+}
 
 /// How every piece of one compound object is drawn, whatever shape it is.
 ///
@@ -268,7 +288,8 @@ pub fn assemble_by_material(pieces: Vec<PlacedMesh>) -> Arc<Model> {
 /// For a piece whose collider *is* its shape — a shard, a cut stone — this is
 /// the honest drawing, and the one that stays honest after the piece breaks
 /// off something, because the hull is what the physics engine kept.
-pub fn hull_mesh(hull: &ConvexHull, uvs: SurfaceUvs) -> (Vec<Vertex>, Vec<u32>) {
+pub fn hull_mesh(piece: &PieceHull, uvs: SurfaceUvs) -> (Vec<Vertex>, Vec<u32>) {
+    let hull = piece.hull;
     let color = Vector4::new(1.0, 1.0, 1.0, 1.0);
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
@@ -282,7 +303,11 @@ pub fn hull_mesh(hull: &ConvexHull, uvs: SurfaceUvs) -> (Vec<Vertex>, Vec<u32>) 
             .iter()
             .map(|&i| hull.vertices[i as usize])
             .collect();
-        let corner_uvs = uvs.face_uvs(&corners, face.normal);
+        // Read where the piece sits rather than where its own origin is, so
+        // that a piece cut out of something keeps the markings it had: two
+        // halves of a broken block line up across the break until they move.
+        let in_parent: Vec<Vector3<f32>> = corners.iter().map(|c| c + piece.offset).collect();
+        let corner_uvs = uvs.face_uvs(&in_parent, face.normal);
         let base = vertices.len() as u32;
         for (corner, uv) in corners.iter().zip(corner_uvs) {
             vertices.push(Vertex {
