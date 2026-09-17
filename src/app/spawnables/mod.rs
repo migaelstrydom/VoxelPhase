@@ -52,8 +52,12 @@ pub use glowing_orb::GlowingOrbDef;
 pub use goal::GoalDef;
 pub use hex_prism::{HexPrismDef, HoneycombWallDef};
 pub use house::HouseDef;
+/// Exported for the cleave system's tests, which break a real block rather
+/// than a stand-in for one.
+#[cfg(test)]
+pub use ice::IceBlock;
 pub use ice::{
-    ice_block_mesh, ice_cleaving, ice_hull_mesh, ice_texture_spread, ice_uvs, IceBlock, IceBoxDef,
+    ice_block_mesh, ice_cleaving, ice_hull_mesh, ice_texture_spread, ice_uvs, IceBoxDef,
     IceWallDef, IglooDef,
 };
 pub use icosahedron::IcosahedronDef;
