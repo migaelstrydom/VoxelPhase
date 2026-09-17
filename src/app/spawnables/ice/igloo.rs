@@ -48,7 +48,8 @@ use super::super::shared::models::{compound_model, PiecePlacement};
 use super::super::shared::orientation::Yaw;
 use super::super::shared::textures::seed_from_position;
 use super::super::{MaterialCtx, Spawnable};
-use super::block::{ice, ice_material, ice_piece_mesh};
+use super::block::{ice, ice_cleaving, ice_material, ice_piece_mesh};
+use crate::cleave::{BrittleSolid, CleaveRule};
 use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
 };
@@ -121,6 +122,11 @@ pub struct IglooDef {
     /// point of impact rather than the whole dome at once.
     #[serde(default = "IglooDef::default_fracture_threshold")]
     pub fracture_threshold: f32,
+    /// Blow, in N·s, that breaks a single block into wedges rather than
+    /// merely knocking it out of the dome. Above `fracture_threshold`, so a
+    /// moderate hit takes blocks out whole and a hard one shatters them.
+    #[serde(default = "IglooDef::default_cleave_threshold")]
+    pub cleave_threshold: f32,
 }
 
 impl IglooDef {
@@ -146,6 +152,10 @@ impl IglooDef {
 
     pub fn default_fracture_threshold() -> f32 {
         420.0
+    }
+
+    pub fn default_cleave_threshold() -> f32 {
+        700.0
     }
 
     /// Radius of the surface every block's centre sits on.
@@ -383,8 +393,17 @@ impl Spawnable for IglooDef {
             .with(Renderable)
             .with(
                 CompoundFracture::boxes(self.joints(&blocks), blocks.len(), materials[0])
-                    .with_piece_mesh(ice_piece_mesh),
+                    .with_piece_mesh(ice_piece_mesh)
+                    .shedding_debris(),
             )
+            .with(BrittleSolid::new(
+                CleaveRule {
+                    threshold: self.cleave_threshold,
+                    ..ice_cleaving()
+                },
+                materials[0],
+                blocks.len(),
+            ))
             .build()]
     }
 }
@@ -562,6 +581,7 @@ mod tests {
             door_height: IglooDef::default_door_height(),
             yaw: 0.0,
             fracture_threshold: IglooDef::default_fracture_threshold(),
+            cleave_threshold: IglooDef::default_cleave_threshold(),
         }
     }
 

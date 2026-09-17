@@ -3,12 +3,11 @@
 use specs::{Component, VecStorage};
 
 use super::crazing::CrazeRule;
-use super::depth::CrazeDepths;
 use super::fatigue::{FatigueRule, FatigueTracker};
 use super::jolt::JoltTracker;
 use super::pane::SheetFrame;
 use super::remnant::RemnantRule;
-use crate::fracture::{ContactLoadTracker, Deadband};
+use crate::fracture::{BreakDepths, ContactLoadTracker, Deadband};
 use crate::rendering::material::MaterialId;
 
 /// A flat compound body whose children crack into webs where they are hit.
@@ -67,7 +66,7 @@ pub struct BrittleSheet {
     /// Held-load damage per child.
     pub damage: FatigueTracker,
     /// How deep in the crazing each child was born.
-    pub depths: CrazeDepths,
+    pub depths: BreakDepths,
     /// The body's motion across frames, so a jarred frame loads its glass.
     pub jolt: JoltTracker,
 }
@@ -98,7 +97,7 @@ impl BrittleSheet {
             last_census: (0, 0),
             contact_load: ContactLoadTracker::new(1),
             damage: FatigueTracker::new(1),
-            depths: CrazeDepths::new(1),
+            depths: BreakDepths::new(1),
             jolt: JoltTracker::default(),
         }
     }

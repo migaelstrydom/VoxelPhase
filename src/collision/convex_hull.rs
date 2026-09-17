@@ -129,6 +129,55 @@ impl ConvexHull {
         volume.abs()
     }
 
+    /// The hull's centre of volume, in local space.
+    ///
+    /// A collider's offset is taken to be the centre of mass of what it
+    /// holds — `PhysicsWorld::recenter_on_colliders` weighs the offsets by
+    /// mass and nothing else — so a hull cut out of a larger one has to be
+    /// moved onto its own centroid before it is attached, or the body it
+    /// joins pivots about a point that is not its centre.
+    pub fn centroid(&self) -> Vector3<f32> {
+        let mut volume = 0.0f32;
+        let mut weighted = Vector3::zeros();
+        for face in &self.faces {
+            let indices = &face.vertex_indices;
+            if indices.len() < 3 {
+                continue;
+            }
+            let v0 = self.vertices[indices[0] as usize];
+            for i in 1..indices.len() - 1 {
+                let v1 = self.vertices[indices[i] as usize];
+                let v2 = self.vertices[indices[i + 1] as usize];
+                // The fourth corner of each tetrahedron is the origin, which
+                // contributes nothing to the sum of its corners.
+                let tet = signed_tetrahedron_volume(v0, v1, v2);
+                volume += tet;
+                weighted += (v0 + v1 + v2) * (tet * 0.25);
+            }
+        }
+        if volume.abs() < 1e-12 {
+            return self.vertices.iter().fold(Vector3::zeros(), |a, v| a + v)
+                / self.vertices.len() as f32;
+        }
+        weighted / volume
+    }
+
+    /// The same hull moved by `by`.
+    pub fn translated(&self, by: Vector3<f32>) -> Self {
+        Self::new(
+            self.vertices.iter().map(|v| v + by).collect(),
+            self.faces.clone(),
+        )
+    }
+
+    /// The same hull scaled about its local origin.
+    pub fn scaled(&self, factor: f32) -> Self {
+        Self::new(
+            self.vertices.iter().map(|v| v * factor).collect(),
+            self.faces.clone(),
+        )
+    }
+
     /// Compute the inertia tensor for this hull at the given mass.
     ///
     /// Uses the same tetrahedron decomposition as `compute_volume`, accumulating
@@ -427,8 +476,9 @@ fn build_edge_adjacency(_vertices: &[Vector3<f32>], faces: &[HullFace]) -> Vec<H
 
 /// Build a cube-shaped ConvexHull with the given half-extents, centered at origin.
 ///
-/// Used by tests to create cube-shaped hulls for comparison against OBB paths.
-#[cfg(test)]
+/// The bridge from a box collider to the hull operations: a block that is
+/// about to be cut into wedges is a box until the first cut, and tests use it
+/// to compare hull paths against the OBB ones.
 pub fn cube_hull(half_extents: Vector3<f32>) -> ConvexHull {
     let hx = half_extents.x;
     let hy = half_extents.y;
@@ -795,5 +845,63 @@ mod tests {
             assert!(approx_eq(v.x, 5.0 + v.x - 5.0, 1e-5)); // x in [4,6]
             assert!(approx_eq(v.y, 1.0, 1e-5));
         }
+    }
+}
+
+#[cfg(test)]
+mod centroid_tests {
+    use super::*;
+
+    #[test]
+    fn a_cube_is_centred_on_its_own_centre() {
+        let cube = cube_hull(Vector3::new(0.5, 0.25, 1.0));
+        assert!(cube.centroid().magnitude() < 1e-5);
+        let moved = cube.translated(Vector3::new(3.0, -2.0, 0.5));
+        assert!((moved.centroid() - Vector3::new(3.0, -2.0, 0.5)).magnitude() < 1e-5);
+        assert!((moved.compute_volume() - cube.compute_volume()).abs() < 1e-5);
+    }
+
+    /// A tetrahedron's centroid really is the mean of its four corners, so a
+    /// corner cut off a cube is the case where the cheap answer is also the
+    /// right one — and a check that the tetrahedron decomposition is sound.
+    #[test]
+    fn a_corner_tetrahedron_agrees_with_the_mean_of_its_corners() {
+        let corner = wedge().0;
+        let mean = corner.vertices.iter().fold(Vector3::zeros(), |a, v| a + v)
+            / corner.vertices.len() as f32;
+        assert!((corner.centroid() - mean).magnitude() < 1e-5);
+    }
+
+    /// The cube that corner came off is where the two part company: its
+    /// corners bunch around the cut, and their mean is pulled towards it
+    /// while the solid's centre of volume barely moves.
+    #[test]
+    fn a_cube_missing_a_corner_is_not_centred_on_the_mean_of_its_corners() {
+        let rest = wedge().1;
+        let centroid = rest.centroid();
+        let mean =
+            rest.vertices.iter().fold(Vector3::zeros(), |a, v| a + v) / rest.vertices.len() as f32;
+        assert!(
+            (centroid - mean).magnitude() > 0.02,
+            "{centroid:?} {mean:?}"
+        );
+        // The centre of volume of a solid is inside it.
+        for face in &rest.faces {
+            let corner = rest.vertices[face.vertex_indices[0] as usize];
+            assert!(face.normal.dot(&(centroid - corner)) < 0.0);
+        }
+    }
+
+    /// A unit cube with one corner cut off: the corner, and the rest.
+    fn wedge() -> (ConvexHull, ConvexHull) {
+        let halves = crate::collision::hull_split::split_hull(
+            &cube_hull(Vector3::repeat(0.5)),
+            crate::collision::hull_split::Plane::through(
+                Vector3::repeat(0.28),
+                Vector3::repeat(1.0).normalize(),
+            ),
+        )
+        .expect("a corner comes off");
+        (halves.front, halves.back)
     }
 }

@@ -14,7 +14,6 @@
 
 mod components;
 mod crazing;
-mod depth;
 mod fatigue;
 mod jolt;
 mod pane;
@@ -26,7 +25,6 @@ mod web;
 
 pub use components::BrittleSheet;
 pub use crazing::CrazeRule;
-pub use depth::CrazeDepths;
 pub use fatigue::{FatigueRule, FatigueTracker};
 pub use jolt::{BodyJolt, JoltTracker, Motion};
 pub use pane::SheetFrame;

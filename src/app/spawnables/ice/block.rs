@@ -31,10 +31,12 @@ use specs::{Builder, Entity, World, WorldExt};
 use super::super::shared::models::PiecePlacement;
 use super::super::shared::textures::seed_from_position;
 use super::super::MaterialCtx;
+use crate::cleave::{BrittleSolid, CleaveRule};
 use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
 };
 use crate::core::error::EngineResult;
+use crate::fracture::CompoundFracture;
 use crate::model::{MeshPrimitive, Model, ModelPart};
 use crate::physics::{ColliderDesc, RigidBodyDesc};
 use crate::rendering::colour::Colour;
@@ -137,6 +139,8 @@ pub struct IceBlock {
     pub rotation: UnitQuaternion<f32>,
     /// Which of the caller's materials this block wears.
     pub material: MaterialId,
+    /// How hard the block has to be struck to come apart, and into what.
+    pub cleaving: CleaveRule,
     /// How many tiles of pattern `material`'s texture holds. Carried rather
     /// than re-derived, because an assembly bakes one texture for blocks that
     /// are not all the same size — a wall's end bricks are half-length — and
@@ -156,6 +160,7 @@ impl IceBlock {
             half_extents,
             rotation: UnitQuaternion::identity(),
             material,
+            cleaving: ice_cleaving(),
             spread,
         }
     }
@@ -197,6 +202,11 @@ impl IceBlock {
 
         // Deliberately not `Flammable`. Everything else box-shaped in the
         // library is, and this one is made of water.
+        //
+        // A compound of one block, which is all a block needs to be able to
+        // break: `SolidCleaveSystem` replaces the one child with the wedges
+        // it cleaved into, and from then on the block is a compound like any
+        // other.
         world
             .create_entity()
             .with(Position(self.centre.coords))
@@ -205,7 +215,28 @@ impl IceBlock {
             .with(RigidBodyComponent(body_handle))
             .with(ModelInstance::new(model))
             .with(Renderable)
+            .with(
+                CompoundFracture::boxes(Vec::new(), 1, self.material)
+                    .with_piece_mesh(ice_piece_mesh)
+                    .shedding_debris(),
+            )
+            .with(BrittleSolid::new(self.cleaving, self.material, 1))
             .build()
+    }
+}
+
+/// How ice comes apart: into a few stout wedges, along surfaces tilted off
+/// the block's own faces.
+///
+/// The threshold is roughly the blow a block of this size takes falling two
+/// metres onto rock — hard enough that handling one does not shatter it, soft
+/// enough that throwing one at something does. It has not been play-tested.
+pub fn ice_cleaving() -> CleaveRule {
+    CleaveRule {
+        threshold: 400.0,
+        pieces: 3,
+        tilt: 14.0,
+        min_volume: 0.004,
     }
 }
 

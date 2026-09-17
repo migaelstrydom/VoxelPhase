@@ -12,7 +12,7 @@ use super::remnant::Remnant;
 use crate::components::{ModelInstance, RigidBodyComponent};
 use crate::debug::DebugLog;
 use crate::fracture::systems::compound_model_of;
-use crate::fracture::{CompoundFracture, FractureJoint};
+use crate::fracture::{split_child, ChildSubstance, CompoundFracture, FractureJoint};
 use crate::physics::{
     ColliderDesc, ColliderHandle, PhysicsImpulse, PhysicsImpulseQueue, RigidBodyHandle,
 };
@@ -385,67 +385,53 @@ fn crack(
         return false;
     };
 
-    // The neighbours' footprints, for deciding which new shards they join.
-    let neighbours: Vec<(ColliderHandle, ConvexPolygon)> = old_handles
+    // The neighbours' footprints, for deciding which new shards they join,
+    // keyed by the index each had before the split.
+    let neighbours: Vec<(usize, ConvexPolygon)> = old_handles
         .iter()
-        .filter(|h| **h != hit.child)
-        .filter_map(|h| {
+        .enumerate()
+        .filter(|(_, h)| **h != hit.child)
+        .filter_map(|(index, h)| {
             let c = world.collider(*h)?;
             let (polygon, _) = frame.polygon_of(c.shape(), c.offset().translation.vector)?;
-            Some((*h, polygon))
+            Some((index, polygon))
         })
         .collect();
 
-    let density = collider.mass() / collider.shape().compute_mass(1.0).max(1e-9);
-    let material = *collider.material();
+    let Some(substance) = ChildSubstance::of(physics, hit.child) else {
+        return false;
+    };
 
     // Swap the pane for its shards.
-    let world = &mut physics.world;
-    world.detach_collider(body_handle, hit.child);
-    let mut new_handles = Vec::with_capacity(cells.len());
-    for cell in &cells {
+    let shards = cells.iter().map(|cell| {
         let (hull, centroid) = frame.prism(&cell.inset(CRACK_GAP).unwrap_or_else(|| cell.clone()));
-        let desc = ColliderDesc::convex_hull(Arc::new(hull))
-            .offset_translation(frame.lift(centroid, height))
-            .density(density)
-            .restitution(material.restitution)
-            .friction_model(material.friction);
-        if let Some(handle) = world.attach_collider(body_handle, desc) {
-            new_handles.push(handle);
-        }
-    }
-    world.wake_body(body_handle);
-
-    // Everything indexed by child follows the body's new collider order.
-    let Some(body) = world.body(body_handle) else {
-        return true;
+        substance.clothe(
+            ColliderDesc::convex_hull(Arc::new(hull))
+                .offset_translation(frame.lift(centroid, height)),
+        )
+    });
+    let Some(split) = split_child(physics, fracture, body_handle, hit.child, shards) else {
+        return false;
     };
-    let now: Vec<ColliderHandle> = body.colliders().to_vec();
-    let order: Vec<Option<usize>> = now
-        .iter()
-        .map(|h| old_handles.iter().position(|old| old == h))
-        .collect();
-    fracture.reindex(&order);
-    sheet.contact_load.reindex(&order);
-    sheet.damage.reindex(&order);
-    sheet.depths.reindex(&order);
 
-    let index_of = |handle: ColliderHandle| now.iter().position(|h| *h == handle);
-    for handle in &new_handles {
-        if let Some(index) = index_of(*handle) {
-            fracture.materials[index] = sheet.material;
-            sheet.depths.set(index, depth + 1);
-        }
+    // Everything else indexed by child follows the body's new collider order.
+    sheet.contact_load.reindex(&split.order);
+    sheet.damage.reindex(&split.order);
+    sheet.depths.reindex(&split.order);
+    for index in &split.pieces {
+        fracture.materials[*index] = sheet.material;
+        sheet.depths.set(*index, depth + 1);
     }
 
     // Join each new shard to the shards and neighbours it touches.
+    let old_index_of = |old: usize| split.order.iter().position(|o| *o == Some(old));
     let mut footprints: Vec<(usize, ConvexPolygon)> = Vec::new();
-    for (handle, polygon) in neighbours {
-        if let Some(index) = index_of(handle) {
+    for (old, polygon) in neighbours {
+        if let Some(index) = old_index_of(old) {
             footprints.push((index, polygon));
         }
     }
-    let new_indices: Vec<usize> = new_handles.iter().filter_map(|h| index_of(*h)).collect();
+    let new_indices: Vec<usize> = split.pieces.clone();
     for (k, cell) in cells.iter().enumerate() {
         let Some(&index) = new_indices.get(k) else {
             continue;
@@ -472,7 +458,12 @@ fn crack(
     let count = under.len();
     for k in under {
         if let Some(&index) = new_indices.get(k) {
-            let mass = world.collider(new_handles[k]).map_or(0.0, |c| c.mass());
+            let mass = physics
+                .world
+                .body(body_handle)
+                .and_then(|b| b.colliders().get(index).copied())
+                .and_then(|h| physics.world.collider(h))
+                .map_or(0.0, |c| c.mass());
             fracture.sever(index, capped_kick(hit.kick, mass, count));
         }
     }

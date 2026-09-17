@@ -2160,6 +2160,9 @@ impl LevelObject {
                 door_height: *door_height,
                 yaw: *yaw,
                 fracture_threshold: *fracture_threshold,
+                // Not a level knob yet: one home for the value, in the
+                // spawnable that owns it.
+                cleave_threshold: IglooDef::default_cleave_threshold(),
             }),
 
             LevelObject::HeavyCrate { pos, size } => Box::new(HeavyCrateDef {

@@ -7,6 +7,7 @@ use crate::animation::{AnimationDebugConfig, CharacterAnimator};
 use crate::camera::{CameraConfig, FollowTarget};
 use crate::character::grab::GrabConfig;
 use crate::character::{CharacterIntent, CharacterState, Grounding, LocomotionConfig};
+use crate::cleave::BrittleSolid;
 use crate::components::{
     CameraComponent, MaterialModulation, ModelInstance, Orientation, Position, Renderable,
     RigidBodyComponent, Rotation, TerrainAnchored, Velocity,
@@ -103,6 +104,7 @@ impl WorldBuilder {
         world.register::<OnFire>();
         world.register::<CompoundFracture>();
         world.register::<BrittleSheet>();
+        world.register::<BrittleSolid>();
         world.register::<TerrainAnchored>();
         world.register::<PointLight>();
         world.register::<MaterialModulation>();
