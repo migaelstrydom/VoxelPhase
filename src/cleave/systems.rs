@@ -6,7 +6,6 @@ use nalgebra::{Point3, Vector3};
 use specs::{Join, Read, ReadStorage, System, WriteStorage};
 
 use super::components::BrittleSolid;
-use crate::app::spawnables::shared::models::texture_seam;
 use crate::components::{ModelInstance, RigidBodyComponent};
 use crate::debug::DebugLog;
 use crate::fracture::systems::compound_model_of;
@@ -42,17 +41,7 @@ const CLEAVE_INSET: f32 = 0.004;
 /// Runs after the physics step and *before* `FractureSystem`, so that a blow
 /// on a block becomes wedges before the joints are judged: the alternative is
 /// a whole block leaving the wall it was part of, intact.
-#[derive(Default)]
-pub struct SolidCleaveSystem {
-    /// The last break's [`texture_seam`], kept because a break lasts one frame
-    /// and the debug log is cleared every frame — a reading that only exists
-    /// on the frame it is taken cannot be read by a person holding a key down
-    /// afterwards.
-    last_seam: Option<f32>,
-    /// How many blocks have cracked since the level was loaded, so that a
-    /// missing seam reading can be told from a break that never happened.
-    breaks: u32,
-}
+pub struct SolidCleaveSystem;
 
 impl<'a> System<'a> for SolidCleaveSystem {
     type SystemData = (
@@ -106,29 +95,12 @@ impl<'a> System<'a> for SolidCleaveSystem {
                     fracture.style,
                     fracture.texture_anchor,
                 ) {
-                    // Reported because the failure it catches is invisible in
-                    // every other reading: the pieces are the right shape, in
-                    // the right place, wearing the right texture at the right
-                    // scale, and reading it from three different places. Zero
-                    // is one sheet of ice; anything else is a seam.
-                    self.breaks += 1;
-                    self.last_seam =
-                        texture_seam(&rebuilt, fracture.style.uvs, fracture.texture_anchor);
                     model.model = rebuilt;
                 }
             }
         }
 
         debug_log.add("Cleave/MaxSpike", format!("{loudest:.1} N·s"));
-        debug_log.add("Cleave/Breaks", self.breaks.to_string());
-        debug_log.add(
-            "Cleave/TextureSeam",
-            match (self.breaks, self.last_seam) {
-                (0, _) => "nothing has cracked yet".to_string(),
-                (_, Some(seam)) => format!("{seam:.4} uv"),
-                (_, None) => "the object has no fixed mapping".to_string(),
-            },
-        );
     }
 }
 
@@ -366,6 +338,7 @@ mod tests {
     use specs::{Builder, Entity, RunNow, World, WorldExt};
 
     use super::super::plan::CleaveRule;
+    use crate::app::spawnables::shared::models::texture_seam;
     use crate::app::spawnables::{ice_cleaving, ice_texture_spread, ice_uvs, IceBlock};
     use crate::components::{Orientation, Position, Renderable, Velocity};
     use crate::debug::DebugLines;
@@ -459,7 +432,7 @@ mod tests {
 
     fn frame(world: &mut World, stepper: &mut SequentialStepper, geometry: &FlatQuadGeometry) {
         step(world, stepper, geometry);
-        FractureSystem::default().run_now(world);
+        FractureSystem.run_now(world);
         world.maintain();
     }
 
@@ -472,7 +445,7 @@ mod tests {
             let mut debug = DebugLines::default();
             stepper.step(&mut physics.world, FRAME_DT, geometry, &[], &[], &mut debug);
         }
-        SolidCleaveSystem::default().run_now(world);
+        SolidCleaveSystem.run_now(world);
         world.maintain();
     }
 
@@ -549,7 +522,7 @@ mod tests {
                     &mut debug,
                 );
             }
-            SolidCleaveSystem::default().run_now(&world);
+            SolidCleaveSystem.run_now(&world);
             world.maintain();
             if child_count(&world, body) > 3 {
                 break;
@@ -730,7 +703,7 @@ mod tests {
                     &mut debug,
                 );
             }
-            SolidCleaveSystem::default().run_now(&world);
+            SolidCleaveSystem.run_now(&world);
             world.maintain();
 
             let physics = world.read_resource::<PhysicsResource>();

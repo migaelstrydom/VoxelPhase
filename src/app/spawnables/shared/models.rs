@@ -161,6 +161,7 @@ impl SurfaceUvs {
 /// an object built of identical bricks does it so that its bricks do not look
 /// stamped — and that shows up here as a seam per brick. It is the *drawn from
 /// one shape* pieces, cut where the object broke, that must read zero.
+#[cfg(test)]
 pub fn texture_seam(model: &Model, uvs: SurfaceUvs, anchor: Vector3<f32>) -> Option<f32> {
     let SurfaceUvs::PerMetre(scale) = uvs else {
         return None;

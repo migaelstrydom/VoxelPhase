@@ -75,14 +75,10 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
         // Brittle sheets craze under this frame's impacts first, so that a
         // hit on a pane is judged against a web of shards and not one slab.
         .with(GlassCrackSystem, "glass_crack", &["physics_sync"])
-        .with(
-            SolidCleaveSystem::default(),
-            "solid_cleave",
-            &["physics_sync"],
-        )
+        .with(SolidCleaveSystem, "solid_cleave", &["physics_sync"])
         // Compound body fracture (uses solver impulses from this frame)
         .with(
-            FractureSystem::default(),
+            FractureSystem,
             "fracture",
             &["physics_sync", "glass_crack", "solid_cleave"],
         )
