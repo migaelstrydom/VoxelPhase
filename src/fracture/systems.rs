@@ -9,11 +9,13 @@ use super::components::CompoundFracture;
 use super::debris::Debris;
 use super::load::{ChildLoad, ChildLoads};
 use crate::app::spawnables::shared::models::{
-    assemble_by_material, piece_model, PieceHull, PiecePlacement, PieceStyle, PlacedMesh,
+    assemble_by_material, piece_model, texture_seam, PieceHull, PiecePlacement, PieceStyle,
+    PlacedMesh,
 };
 use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
 };
+use crate::debug::DebugLog;
 use crate::model::Model;
 use crate::physics::{
     ColliderHandle, ColliderShape, FrictionModel, PhysicsImpulseQueue, RigidBodyHandle,
@@ -39,7 +41,14 @@ use crate::time::Time;
 /// which for anything massive is larger than a sensible fracture threshold on
 /// its own. Differencing against last frame leaves resting weight and steady
 /// pushing at roughly zero and keeps only the step change of a real collision.
-pub struct FractureSystem;
+#[derive(Default)]
+pub struct FractureSystem {
+    /// The last rebuild's [`texture_seam`], and how many rebuilds there have
+    /// been. Kept for the same reason the cleave system keeps them: a break
+    /// lasts one frame and the debug log does not.
+    last_seam: Option<f32>,
+    rebuilds: u32,
+}
 
 impl<'a> System<'a> for FractureSystem {
     type SystemData = (
@@ -53,6 +62,7 @@ impl<'a> System<'a> for FractureSystem {
         Read<'a, specs::LazyUpdate>,
         Read<'a, PhysicsImpulseQueue>,
         Read<'a, Time>,
+        specs::Write<'a, DebugLog>,
     );
 
     fn run(&mut self, data: Self::SystemData) {
@@ -67,6 +77,7 @@ impl<'a> System<'a> for FractureSystem {
             lazy,
             impulse_queue,
             time,
+            mut debug_log,
         ) = data;
 
         let last_impulses = impulse_queue.last_impulses();
@@ -304,11 +315,23 @@ impl<'a> System<'a> for FractureSystem {
             if let Some(model) =
                 compound_model_of(&physics, trigger.body_handle, &fracture.materials, style)
             {
+                self.rebuilds += 1;
+                self.last_seam = texture_seam(&model, style.uvs);
                 if let Some(instance) = models.get_mut(trigger.entity) {
                     instance.model = model;
                 }
             }
         }
+
+        debug_log.add("Fracture/Rebuilds", self.rebuilds.to_string());
+        debug_log.add(
+            "Fracture/TextureSeam",
+            match (self.rebuilds, self.last_seam) {
+                (0, _) => "nothing has been rebuilt yet".to_string(),
+                (_, Some(seam)) => format!("{seam:.4} uv"),
+                (_, None) => "the object has no fixed mapping".to_string(),
+            },
+        );
     }
 }
 
@@ -739,6 +762,7 @@ mod tests {
         world.register::<Renderable>();
         world.register::<CompoundFracture>();
         world.insert(crate::time::Time::default());
+        world.insert(DebugLog::default());
 
         // A row of four boxes, joined in a chain, so that blasting one end off
         // moves the centre of mass a long way along the row.
@@ -799,7 +823,7 @@ mod tests {
         let _ = queue.drain().count();
         world.insert(queue);
 
-        FractureSystem.run_now(&world);
+        FractureSystem::default().run_now(&world);
 
         let recentred = {
             let physics = world.read_resource::<PhysicsResource>();
@@ -842,6 +866,7 @@ mod tests {
         world.register::<Renderable>();
         world.register::<CompoundFracture>();
         world.insert(crate::time::Time::default());
+        world.insert(DebugLog::default());
 
         let origin = Point3::new(0.0, 10.0, 0.0);
         let mut physics_world = PhysicsWorld::new(PhysicsConfig::default());
@@ -909,7 +934,7 @@ mod tests {
 
         assert_eq!(drawn(&world).len(), 1, "one compound before the break");
 
-        FractureSystem.run_now(&world);
+        FractureSystem::default().run_now(&world);
         // Exactly what the frame loop does before the render pass runs.
         world.maintain();
 
@@ -954,6 +979,7 @@ mod tests {
         world.register::<Renderable>();
         world.register::<CompoundFracture>();
         world.insert(crate::time::Time::default());
+        world.insert(DebugLog::default());
 
         let origin = Point3::new(0.0, 10.0, 0.0);
         let half = Vector3::new(0.5, 0.5, 0.5);
@@ -1011,7 +1037,7 @@ mod tests {
         let _ = queue.drain().count();
         world.insert(queue);
 
-        FractureSystem.run_now(&world);
+        FractureSystem::default().run_now(&world);
         world.maintain();
 
         // Where the model says its geometry is, in the body's own frame.

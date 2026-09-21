@@ -564,7 +564,7 @@ mod tests {
             stepper.step(&mut physics.world, FRAME_DT, geometry, &[], &[], &mut debug);
         }
         GlassCrackSystem.run_now(world);
-        FractureSystem.run_now(world);
+        FractureSystem::default().run_now(world);
         world.maintain();
     }
 
