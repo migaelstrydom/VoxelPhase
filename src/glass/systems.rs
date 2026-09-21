@@ -105,9 +105,13 @@ impl<'a> System<'a> for GlassCrackSystem {
                 cracked |= crack(&mut physics, sheet, fracture, body_handle, &hit);
             }
             if cracked {
-                if let Some(rebuilt) =
-                    compound_model_of(&physics, body_handle, &fracture.materials, fracture.style)
-                {
+                if let Some(rebuilt) = compound_model_of(
+                    &physics,
+                    body_handle,
+                    &fracture.materials,
+                    fracture.style,
+                    fracture.texture_anchor,
+                ) {
                     model.model = rebuilt;
                 }
             }

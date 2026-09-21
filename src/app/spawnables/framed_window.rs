@@ -473,8 +473,14 @@ impl Spawnable for FramedWindowDef {
         }
 
         let child_count = child_materials.len();
-        let model = compound_model_of(&physics, body, &child_materials, PieceStyle::default())
-            .expect("a window has something to draw");
+        let model = compound_model_of(
+            &physics,
+            body,
+            &child_materials,
+            PieceStyle::default(),
+            Vector3::zeros(),
+        )
+        .expect("a window has something to draw");
         drop(physics);
 
         let fracture = CompoundFracture::boxes(joints, child_count, marble)

@@ -1153,12 +1153,16 @@ impl PhysicsWorld {
     /// Linear velocity is corrected so the new origin keeps the velocity that
     /// point of the body actually had, and mass properties are recomputed
     /// against the new offsets.
-    pub fn recenter_on_colliders(&mut self, body_handle: RigidBodyHandle) {
+    ///
+    /// Returns how far the origin moved, in the body's own frame, so that a
+    /// caller holding anything else measured from that origin can follow it.
+    /// Zero when the body was already centred.
+    pub fn recenter_on_colliders(&mut self, body_handle: RigidBodyHandle) -> Vector3<f32> {
         let Some(body) = self.bodies.get(body_handle.0) else {
-            return;
+            return Vector3::zeros();
         };
         if body.is_static() {
-            return;
+            return Vector3::zeros();
         }
 
         let collider_handles: Vec<_> = body.colliders().to_vec();
@@ -1172,13 +1176,13 @@ impl PhysicsWorld {
             }
         }
         if total_mass <= 0.0 {
-            return;
+            return Vector3::zeros();
         }
 
         let local_com = weighted / total_mass;
         const RECENTER_EPSILON: f32 = 1e-4;
         if local_com.norm_squared() < RECENTER_EPSILON * RECENTER_EPSILON {
-            return;
+            return Vector3::zeros();
         }
 
         for ch in &collider_handles {
@@ -1196,6 +1200,7 @@ impl PhysicsWorld {
         }
 
         self.recompute_mass_properties(body_handle);
+        local_com
     }
 
     fn recompute_mass_properties(&mut self, body_handle: RigidBodyHandle) {

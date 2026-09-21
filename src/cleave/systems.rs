@@ -99,16 +99,21 @@ impl<'a> System<'a> for SolidCleaveSystem {
                 broke |= cleave(&mut physics, solid, fracture, body_handle, &hit);
             }
             if broke {
-                if let Some(rebuilt) =
-                    compound_model_of(&physics, body_handle, &fracture.materials, fracture.style)
-                {
+                if let Some(rebuilt) = compound_model_of(
+                    &physics,
+                    body_handle,
+                    &fracture.materials,
+                    fracture.style,
+                    fracture.texture_anchor,
+                ) {
                     // Reported because the failure it catches is invisible in
                     // every other reading: the pieces are the right shape, in
                     // the right place, wearing the right texture at the right
                     // scale, and reading it from three different places. Zero
                     // is one sheet of ice; anything else is a seam.
                     self.breaks += 1;
-                    self.last_seam = texture_seam(&rebuilt, fracture.style.uvs);
+                    self.last_seam =
+                        texture_seam(&rebuilt, fracture.style.uvs, fracture.texture_anchor);
                     model.model = rebuilt;
                 }
             }
@@ -843,8 +848,15 @@ mod tests {
         let mut stepper = SequentialStepper::new(FRAME_DT, 4);
         let uvs = ice_uvs(ice_texture_spread(SLAB));
 
+        let anchor_of = |world: &World| {
+            let fractures = world.read_storage::<CompoundFracture>();
+            fractures
+                .get(block)
+                .expect("the slab can break")
+                .texture_anchor
+        };
         assert_eq!(
-            texture_seam(&drawn(&world, block), uvs).map(|seam| seam < 1e-4),
+            texture_seam(&drawn(&world, block), uvs, anchor_of(&world)).map(|seam| seam < 1e-4),
             Some(true),
             "the whole slab is not one sheet to begin with"
         );
@@ -854,18 +866,31 @@ mod tests {
             let bodies = world.read_storage::<RigidBodyComponent>();
             bodies.get(block).expect("the slab has a body").0
         };
+        // The *whole* break, fracture system included, so that a wedge comes
+        // free and the remnant is re-centred on what is left. Re-centring is
+        // the step that moves the ground the pattern is projected from, and a
+        // test that stops at the cleave never reaches it.
+        let mut cracked = false;
         for _ in 0..240 {
-            step(&mut world, &mut stepper, &geometry);
-            if child_count(&world, body) > 1 {
+            frame(&mut world, &mut stepper, &geometry);
+            cracked |= child_count(&world, body) > 1;
+            if cracked && anchor_of(&world) != Vector3::zeros() {
                 break;
             }
         }
-        assert!(child_count(&world, body) > 1, "the slab never cracked");
+        assert!(cracked, "the slab never cracked");
 
-        let seam = texture_seam(&drawn(&world, block), uvs).expect("ice has a projection");
+        let anchor = anchor_of(&world);
+        assert_ne!(
+            anchor,
+            Vector3::zeros(),
+            "the remnant was never re-centred, so this proves nothing"
+        );
+
+        let seam = texture_seam(&drawn(&world, block), uvs, anchor).expect("ice has a projection");
         assert!(
             seam < 1e-4,
-            "the wedges read the pattern up to {seam} apart in texture coordinates"
+            "the remnant reads the pattern {seam} from where the block wore it"
         );
     }
 }

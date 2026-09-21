@@ -150,6 +150,10 @@ impl SurfaceUvs {
 /// agree only if every one of them was told where it sits and read the pattern
 /// there. This reads the finished model back and says whether they did.
 ///
+/// `anchor` is the object's texture origin in the body's current frame — see
+/// `CompoundFracture::texture_anchor` — without which this reads zero on an
+/// object whose whole pattern has slid, because the pieces slid together.
+///
 /// `None` for [`SurfaceUvs::Fitted`], which has no single projection to stray
 /// from, and for a model with nothing in it.
 ///
@@ -157,7 +161,7 @@ impl SurfaceUvs {
 /// an object built of identical bricks does it so that its bricks do not look
 /// stamped — and that shows up here as a seam per brick. It is the *drawn from
 /// one shape* pieces, cut where the object broke, that must read zero.
-pub fn texture_seam(model: &Model, uvs: SurfaceUvs) -> Option<f32> {
+pub fn texture_seam(model: &Model, uvs: SurfaceUvs, anchor: Vector3<f32>) -> Option<f32> {
     let SurfaceUvs::PerMetre(scale) = uvs else {
         return None;
     };
@@ -168,7 +172,7 @@ pub fn texture_seam(model: &Model, uvs: SurfaceUvs) -> Option<f32> {
         .flat_map(|part| part.primitives.iter())
         .flat_map(|primitive| primitive.vertices.iter())
     {
-        let want = project_at_scale(vertex.pos, vertex.normal, scale);
+        let want = project_at_scale(vertex.pos + anchor, vertex.normal, scale);
         let stray = (vertex.tex_coords - want).amax();
         worst = Some(worst.map_or(stray, |w: f32| w.max(stray)));
     }

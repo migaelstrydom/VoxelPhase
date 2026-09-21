@@ -104,6 +104,21 @@ pub struct CompoundFracture {
     /// for a wall losing a brick and wrong for a pane chipped down to a
     /// crumb: a fixed body keeps whatever it is left with hanging in the air.
     pub released: bool,
+    /// Where the object's texture origin sits in the body's *current* frame.
+    ///
+    /// The pattern a compound wears is projected from its body origin, and
+    /// that origin moves: losing a piece leaves the survivors clustered to one
+    /// side, so the body is re-centred on what is left of it. Nothing moves in
+    /// the world when that happens, but every child's offset changes, and a
+    /// projection read from the new origin slides the pattern across the
+    /// object — the remnant's markings shift while a piece that broke off a
+    /// moment earlier keeps the old ones, which is exactly the look of two
+    /// halves of one block wearing different textures.
+    ///
+    /// Adding this to a child's offset puts it back where it was when the
+    /// object was whole, so the markings stay with the material rather than
+    /// with the body's bookkeeping.
+    pub texture_anchor: Vector3<f32>,
 }
 
 impl CompoundFracture {
@@ -120,6 +135,7 @@ impl CompoundFracture {
             split_pending: false,
             sheds_debris: false,
             released: false,
+            texture_anchor: Vector3::zeros(),
         }
     }
 

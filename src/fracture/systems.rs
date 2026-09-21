@@ -159,6 +159,7 @@ impl<'a> System<'a> for FractureSystem {
             };
             let materials = fracture.materials.clone();
             let style = fracture.style;
+            let anchor = fracture.texture_anchor;
             let debris_of = fracture.sheds_debris.then_some(trigger.entity);
 
             // Break the overloaded joints; the rest of the structure survives.
@@ -249,6 +250,7 @@ impl<'a> System<'a> for FractureSystem {
                         &lazy,
                         info,
                         style,
+                        anchor,
                         body_ang_vel,
                         last_impulses,
                         debris_of.map(|origin| Debris::new(origin, info.shape.compute_mass(1.0))),
@@ -267,7 +269,15 @@ impl<'a> System<'a> for FractureSystem {
             // move the origin onto them. Without this the remnant spins about
             // the vanished compound's centre — a plank pivoting on a phantom
             // axle metres away, too sluggish to push straight.
-            physics.world.recenter_on_colliders(trigger.body_handle);
+            // The origin moves onto the survivors, so the object's texture
+            // origin has to follow it: everything below draws from the new
+            // frame, and the pieces that came free a moment ago were drawn
+            // from the old one.
+            let moved = physics.world.recenter_on_colliders(trigger.body_handle);
+            if let Some(fracture) = fractures.get_mut(trigger.entity) {
+                fracture.texture_anchor += moved;
+            }
+            let anchor = anchor + moved;
 
             // Recentering moves the body's origin and shifts every surviving
             // collider's offset to match, so nothing moves in the world — but
@@ -312,11 +322,15 @@ impl<'a> System<'a> for FractureSystem {
             let Some(fracture) = fractures.get(trigger.entity) else {
                 continue;
             };
-            if let Some(model) =
-                compound_model_of(&physics, trigger.body_handle, &fracture.materials, style)
-            {
+            if let Some(model) = compound_model_of(
+                &physics,
+                trigger.body_handle,
+                &fracture.materials,
+                style,
+                anchor,
+            ) {
                 self.rebuilds += 1;
-                self.last_seam = texture_seam(&model, style.uvs);
+                self.last_seam = texture_seam(&model, style.uvs, anchor);
                 if let Some(instance) = models.get_mut(trigger.entity) {
                     instance.model = model;
                 }
@@ -419,6 +433,7 @@ fn spawn_freed_piece(
     lazy: &specs::LazyUpdate,
     info: &ChildSnapshot,
     style: PieceStyle,
+    anchor: Vector3<f32>,
     body_ang_vel: Vector3<f32>,
     impulse_sources: &[crate::physics::PhysicsImpulse],
     debris: Option<Debris>,
@@ -450,14 +465,14 @@ fn spawn_freed_piece(
 
     let piece_model = match &info.shape {
         ColliderShape::Box { half_extents } => piece_model(
-            &PiecePlacement::new(*half_extents, info.local_offset),
+            &PiecePlacement::new(*half_extents, info.local_offset + anchor),
             style.boxes,
             style.uvs,
             info.material,
         ),
         ColliderShape::ConvexHull { hull } => {
             let (vertices, indices) =
-                (style.hulls)(&PieceHull::new(hull, info.local_offset), style.uvs);
+                (style.hulls)(&PieceHull::new(hull, info.local_offset + anchor), style.uvs);
             assemble_by_material(vec![PlacedMesh {
                 vertices,
                 indices,
@@ -495,6 +510,7 @@ pub(crate) fn compound_model_of(
     body_handle: RigidBodyHandle,
     materials: &[MaterialId],
     style: PieceStyle,
+    anchor: Vector3<f32>,
 ) -> Option<Arc<Model>> {
     let body = physics.world.body(body_handle)?;
     let fallback = materials.last().copied().unwrap_or(MaterialId(0));
@@ -523,12 +539,12 @@ pub(crate) fn compound_model_of(
                     // object made of tilted pieces straightens itself out the
                     // moment it loses one.
                     (style.boxes)(
-                        &PiecePlacement::new(*half_extents, offset).rotated(rotation),
+                        &PiecePlacement::new(*half_extents, offset + anchor).rotated(rotation),
                         style.uvs,
                     )
                 }
                 ColliderShape::ConvexHull { hull } => {
-                    (style.hulls)(&PieceHull::new(hull, offset), style.uvs)
+                    (style.hulls)(&PieceHull::new(hull, offset + anchor), style.uvs)
                 }
                 _ => return None,
             };
