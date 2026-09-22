@@ -51,6 +51,7 @@ mod impulses;
 mod math;
 mod narrowphase;
 mod pipeline;
+pub mod profile;
 mod sleep;
 pub mod solver;
 mod static_geometry;
@@ -70,6 +71,7 @@ pub use force_provider::{ForceContext, ForceOutput, SubstepForceProvider};
 pub use handle::{ColliderHandle, RigidBodyHandle};
 pub use impact::{Impact, ImpactLedger};
 pub use impulses::{PhysicsImpulse, PhysicsImpulseQueue};
+pub use profile::{FrameProfile, PhysicsStage};
 pub use solver::{
     ConstraintSolver, IdentityConditioner, ManifoldConditioner, ManifoldConditions, PgsNgsConfig,
     PgsNgsSolver, ShockPropagationConditioner, ShockPropagationConfig,

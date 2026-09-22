@@ -12,7 +12,8 @@ use crate::components::{Orientation, Position, RigidBodyComponent, Velocity};
 use crate::debug::{DebugLines, DebugLog, DebugOverlays};
 use crate::drive::{resolve_drive, Actuator, BodyMotion, DriveIntent};
 use crate::physics::{
-    PhysicsImpulseQueue, PhysicsWorld, SequentialStepper, Stepper, SubstepForceProvider,
+    FrameProfile, PhysicsImpulseQueue, PhysicsWorld, SequentialStepper, Stepper,
+    SubstepForceProvider,
 };
 use crate::terrain::TerrainWorld;
 use crate::time::Time;
@@ -152,6 +153,25 @@ impl PhysicsSyncSystem {
     /// watchable rather than merely admitted, so every driven body that has
     /// one reports the force it borrowed and how often its rows ran out of
     /// budget. A body driving at the honest bound prints nothing.
+    /// Where the last physics frame's time went, stage by stage, so a slow
+    /// frame in the game can be read against `physics_perf`'s numbers.
+    fn log_frame_profile(profile: &FrameProfile, debug_log: &mut DebugLog) {
+        for (stage, time) in profile.iter() {
+            debug_log.add(
+                format!("Physics/Time/{}", stage.label()),
+                format!("{:.3} ms", time.as_secs_f64() * 1000.0),
+            );
+        }
+        debug_log.add(
+            "Physics/Time/total",
+            format!(
+                "{:.3} ms over {} substeps",
+                profile.total().as_secs_f64() * 1000.0,
+                profile.substeps
+            ),
+        );
+    }
+
     fn log_traction_usage(
         physics: &PhysicsWorld,
         actuators: &ReadStorage<Actuator>,
@@ -402,6 +422,7 @@ impl<'a> System<'a> for PhysicsSyncSystem {
             physics.world.colliders_arena(),
             &mut debug_overlays,
         );
+        Self::log_frame_profile(physics.world.frame_profile(), &mut debug_log);
         Self::log_traction_usage(&physics.world, &actuators, &bodies, &mut debug_log);
         Self::log_allowance_usage(&physics.world, &actuators, &bodies, &mut debug_log);
         physics.world.debugger().write_debug_log(

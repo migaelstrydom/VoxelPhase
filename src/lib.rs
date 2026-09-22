@@ -27,6 +27,7 @@ pub mod model;
 pub mod objective;
 pub mod particles;
 pub mod physics;
+pub mod physics_perf;
 pub mod platform;
 pub mod player;
 pub mod projectile;

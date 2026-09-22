@@ -1,5 +1,7 @@
 //! Physics world containing all simulation state.
 
+use std::time::Instant;
+
 use generational_arena::Arena;
 use nalgebra::{Isometry3, Matrix3, Point3, UnitQuaternion, UnitVector3, Vector3};
 use rustc_hash::FxHashMap;
@@ -31,6 +33,7 @@ use super::pipeline::integration::{integrate_bodies, integrate_forces};
 use super::pipeline::manifold::ManifoldCache;
 use super::pipeline::normal_smoothing::NormalSmoothingConfig;
 use super::pipeline::pair::SolverManifold;
+use super::profile::{FrameProfile, PhysicsStage};
 use super::sleep::{SleepManager, SleepManagerConfig};
 use super::solver::{ConstraintSolver, ManifoldConditioner, ManifoldConditions, PgsNgsSolver};
 use super::static_geometry::StaticGeometry;
@@ -215,6 +218,8 @@ pub struct PhysicsWorld {
     gjk_cache_map: GjkCacheMap,
     /// Reusable work buffer for dynamic narrowphase (avoids per-frame allocation).
     narrowphase_work_buffer: NarrowphaseWorkBuffer,
+    /// Where the current frame's time went, stage by stage.
+    profile: FrameProfile,
 }
 
 impl PhysicsWorld {
@@ -285,6 +290,7 @@ impl PhysicsWorld {
             sat_cache_map: SatCacheMap::new(),
             gjk_cache_map: GjkCacheMap::new(),
             narrowphase_work_buffer: NarrowphaseWorkBuffer::new(),
+            profile: FrameProfile::default(),
         }
     }
 
@@ -753,6 +759,8 @@ impl PhysicsWorld {
     ) {
         let _ = debug_lines;
 
+        self.profile.open();
+        let lap = Instant::now();
         self.substeps_this_frame = substeps.max(1);
         self.frame_index = self.frame_index.wrapping_add(1);
         self.sleep_manager.sync_bodies(&self.bodies);
@@ -770,6 +778,9 @@ impl PhysicsWorld {
         // static first, so the caller owns the reset rather than either pass.
         let narrowphase_config = self.config.narrowphase();
         self.narrowphase_work_buffer.begin_frame();
+        self.profile
+            .record(PhysicsStage::Bookkeeping, lap.elapsed());
+        let lap = Instant::now();
         generate_static_contacts(
             &self.bodies,
             &self.colliders,
@@ -779,6 +790,9 @@ impl PhysicsWorld {
             sleeping_snapshot.as_ref(),
             &mut self.narrowphase_work_buffer,
         );
+        self.profile
+            .record(PhysicsStage::StaticNarrowphase, lap.elapsed());
+        let lap = Instant::now();
         generate_dynamic_contacts(
             &self.bodies,
             &self.colliders,
@@ -789,6 +803,9 @@ impl PhysicsWorld {
             &mut self.gjk_cache_map,
             &mut self.narrowphase_work_buffer,
         );
+        self.profile
+            .record(PhysicsStage::DynamicNarrowphase, lap.elapsed());
+        let lap = Instant::now();
         let raw_manifolds = self.narrowphase_work_buffer.manifolds();
 
         // Merge with manifold cache (populates warm-start impulses)
@@ -807,6 +824,9 @@ impl PhysicsWorld {
                 ));
             }
         }
+        self.profile
+            .record(PhysicsStage::ManifoldMerge, lap.elapsed());
+        let lap = Instant::now();
 
         self.sleep_manager
             .note_contact_wakes(&solver_manifolds, &self.bodies);
@@ -841,6 +861,9 @@ impl PhysicsWorld {
 
         self.cached_active_manifolds = active_manifolds;
         self.cached_all_manifolds = solver_manifolds;
+        self.profile
+            .record(PhysicsStage::Bookkeeping, lap.elapsed());
+        let lap = Instant::now();
 
         // Condition manifolds (reorder + compute shock scales) before solving
         let gravity_dir = {
@@ -891,6 +914,8 @@ impl PhysicsWorld {
         if let Some(ccd) = self.ccd.as_mut() {
             ccd.begin_frame(self.substeps_this_frame);
         }
+        self.profile
+            .record(PhysicsStage::Conditioning, lap.elapsed());
     }
 
     /// Solve velocity constraints and integrate positions using cached manifolds.
@@ -910,6 +935,8 @@ impl PhysicsWorld {
         static_geometry: &dyn StaticGeometry,
         force_providers: &[&dyn SubstepForceProvider],
     ) {
+        self.profile.substeps += 1;
+        let lap = Instant::now();
         let sleeping_snapshot = if self.config.sleep.enabled {
             Some(self.sleep_manager.sleeping_snapshot())
         } else {
@@ -942,6 +969,8 @@ impl PhysicsWorld {
             &mut self.allowance_ledger,
         );
         self.substeps_taken += 1;
+        let mut integrate_time = lap.elapsed();
+        let lap = Instant::now();
 
         // Solve velocity constraints + position correction
         self.solver.solve(
@@ -973,6 +1002,8 @@ impl PhysicsWorld {
         // iteration count and handles large-angle tilt where linearized
         // Jacobians become degenerate.
         self.solver.project_velocities(&mut self.bodies, dt);
+        self.profile.record(PhysicsStage::Solve, lap.elapsed());
+        let lap = Instant::now();
 
         // Save pre-integration state for CCD
         let sleeping_snapshot = if self.config.sleep.enabled {
@@ -994,6 +1025,8 @@ impl PhysicsWorld {
                 })
                 .map(|(idx, body)| (idx, (body.position(), body.rotation())))
                 .collect();
+        self.profile.record(PhysicsStage::CcdSetup, lap.elapsed());
+        let lap = Instant::now();
 
         // Integrate positions
         let sleeping_snapshot = if self.config.sleep.enabled {
@@ -1002,6 +1035,9 @@ impl PhysicsWorld {
             None
         };
         integrate_bodies(&mut self.bodies, dt, sleeping_snapshot.as_ref());
+        integrate_time += lap.elapsed();
+        self.profile.record(PhysicsStage::Integrate, integrate_time);
+        let lap = Instant::now();
 
         // CCD pass (fast bodies only, excluding narrowphase-managed bodies)
         let narrowphase_ownership = std::mem::take(&mut self.narrowphase_ownership);
@@ -1020,15 +1056,25 @@ impl PhysicsWorld {
                 ccd_frame_coverage: self.config.ccd_frame_coverage,
                 substeps_per_frame: self.substeps_this_frame,
             };
-            let _ccd_count = ccd.run(&mut ctx, dt, static_geometry);
+            self.profile.ccd_corrections += ccd.run(&mut ctx, dt, static_geometry);
             self.ccd = Some(ccd);
         }
         self.narrowphase_ownership = narrowphase_ownership;
+        self.profile.record(PhysicsStage::Ccd, lap.elapsed());
+        let lap = Instant::now();
 
         let all_manifolds = std::mem::take(&mut self.cached_all_manifolds);
         self.sleep_manager
             .update_sleep_states(&mut self.bodies, &all_manifolds, &self.constraints);
         self.cached_all_manifolds = all_manifolds;
+        self.profile
+            .record(PhysicsStage::SleepUpdate, lap.elapsed());
+    }
+
+    /// Where the most recent frame's time went: the stages of the last
+    /// `update_contacts()` and of every `substep()` run since.
+    pub fn frame_profile(&self) -> &FrameProfile {
+        &self.profile
     }
 
     /// Contacts generated in the most recent step.

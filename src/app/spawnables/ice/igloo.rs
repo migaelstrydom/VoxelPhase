@@ -40,7 +40,7 @@
 
 use std::f32::consts::{PI, TAU};
 
-use nalgebra::{Matrix3, Point3, Rotation3, UnitQuaternion, Vector3};
+use nalgebra::{Isometry3, Matrix3, Point3, Rotation3, Translation3, UnitQuaternion, Vector3};
 use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
@@ -165,6 +165,22 @@ impl IglooDef {
 
     pub fn default_cleave_threshold() -> f32 {
         700.0
+    }
+
+    /// Each block of the dome as the box it collides as: its pose in the
+    /// igloo's own frame and its half-extents.
+    ///
+    /// The dome with its joints gone, which is what a harness needs to stand
+    /// in for one a blast has taken apart.
+    pub fn block_boxes(&self) -> Vec<(Isometry3<f32>, Vector3<f32>)> {
+        self.blocks()
+            .iter()
+            .map(|block| {
+                let pose =
+                    Isometry3::from_parts(Translation3::from(block.centre.coords), block.rotation);
+                (pose, block.half_extents)
+            })
+            .collect()
     }
 
     /// Radius of the surface every block's centre sits on.
