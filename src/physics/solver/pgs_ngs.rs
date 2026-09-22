@@ -15,11 +15,12 @@ use crate::physics::constraint::types::{Constraint, ConstraintRow, Enforcement, 
 use crate::physics::pipeline::pair::SolverManifold;
 
 use super::conditioning::ManifoldConditions;
-use super::constraint_row::{solve_constraint_row, warm_start_constraint_row};
+use super::constraint_row::{solve_constraint_row, warm_start_constraint_row, RowSlots};
 use super::contact_row::ContactRows;
 use super::friction::{manifold_friction_projection, solve_friction_impulse};
 use super::normal::solve_normal_impulse;
 use super::position_correction::{self, PositionCorrectionConfig};
+use super::solver_bodies::SolverBodies;
 use super::torsional::solve_torsional_impulse;
 use super::warm_start::{effective_solver_iterations, warm_start_contact};
 use super::ConstraintSolver;
@@ -78,6 +79,12 @@ pub struct PgsNgsSolver {
     /// Solver-ready contact rows, prepared at the start of every `solve`:
     /// the bodies turn between substeps, so these cannot outlive one.
     contact_rows: ContactRows,
+    /// Velocities of every body a row touches, packed for the velocity
+    /// phase and written back to the arena when it ends.
+    solver_bodies: SolverBodies,
+    /// Solver slots of each constraint row's bodies, parallel to
+    /// `cached_constraint_rows`.
+    constraint_slots: Vec<RowSlots>,
 }
 
 impl PgsNgsSolver {
@@ -87,6 +94,8 @@ impl PgsNgsSolver {
             contact_generation_positions: FxHashMap::default(),
             cached_constraint_rows: Vec::new(),
             contact_rows: ContactRows::default(),
+            solver_bodies: SolverBodies::default(),
+            constraint_slots: Vec::new(),
         }
     }
 }
@@ -130,11 +139,16 @@ impl ConstraintSolver for PgsNgsSolver {
             return;
         }
 
-        // Phase 1: Prepare every contact's rows, and capture the pre-solve
-        // normal velocities restitution and warm-starting are decided from.
+        // Phase 1: Gather the bodies every row touches, prepare every
+        // contact's rows, and capture the pre-solve normal velocities
+        // restitution and warm-starting are decided from. From here until the
+        // scatter, velocities live in `solver_bodies`, not in the arena.
+        let solver_bodies = &mut self.solver_bodies;
+        solver_bodies.clear();
         let contact_rows = &mut self.contact_rows;
         contact_rows.prepare(
             bodies,
+            solver_bodies,
             manifolds.iter().enumerate().map(|(mi, m)| {
                 (
                     &m.header,
@@ -144,14 +158,25 @@ impl ConstraintSolver for PgsNgsSolver {
             }),
         );
 
+        let constraint_slots = &mut self.constraint_slots;
+        constraint_slots.clear();
+        constraint_slots.extend(constraint_rows.iter().map(|row| {
+            (
+                row.body_a
+                    .and_then(|handle| solver_bodies.gather(bodies, handle.0)),
+                row.body_b
+                    .and_then(|handle| solver_bodies.gather(bodies, handle.0)),
+            )
+        }));
+
         // Phase 2: Warm-start — apply cached impulses from previous frame.
         // Joint constraints first, contacts second (matches solve order).
-        for row in constraint_rows.iter_mut() {
-            warm_start_constraint_row(bodies, row, self.config.warm_start_scale);
+        for (row, &slots) in constraint_rows.iter_mut().zip(constraint_slots.iter()) {
+            warm_start_constraint_row(solver_bodies, slots, row, self.config.warm_start_scale);
         }
         for (mi, manifold) in manifolds.iter_mut().enumerate() {
             let header = &manifold.header;
-            let shock = conditions.shock_scales_for(mi);
+            let rows = contact_rows.manifold(mi);
             let pre_solve_vn = contact_rows.pre_solve_normal_velocities(mi);
             for (ci, contact) in manifold.contacts.iter_mut().enumerate() {
                 let warm_scale =
@@ -160,7 +185,13 @@ impl ConstraintSolver for PgsNgsSolver {
                     } else {
                         self.config.warm_start_scale
                     };
-                warm_start_contact(bodies, header, contact, warm_scale, shock);
+                warm_start_contact(
+                    solver_bodies,
+                    rows[ci].as_ref(),
+                    header,
+                    contact,
+                    warm_scale,
+                );
             }
         }
 
@@ -169,8 +200,8 @@ impl ConstraintSolver for PgsNgsSolver {
         for _ in 0..iterations {
             // Joint constraints first — solved early so contacts get the
             // last word for penetration prevention.
-            for row in constraint_rows.iter_mut() {
-                solve_constraint_row(bodies, row);
+            for (row, &slots) in constraint_rows.iter_mut().zip(constraint_slots.iter()) {
+                solve_constraint_row(solver_bodies, slots, row);
             }
 
             // Contacts last — normal + friction impulses.
@@ -188,7 +219,7 @@ impl ConstraintSolver for PgsNgsSolver {
                 for _ in 0..normal_passes {
                     for ci in 0..manifold.contacts.len() {
                         solve_normal_impulse(
-                            bodies,
+                            solver_bodies,
                             rows[ci].as_ref(),
                             &manifold.header,
                             &mut manifold.contacts[ci],
@@ -201,7 +232,7 @@ impl ConstraintSolver for PgsNgsSolver {
                 // Per-contact friction solve
                 for ci in 0..manifold.contacts.len() {
                     solve_friction_impulse(
-                        bodies,
+                        solver_bodies,
                         rows[ci].as_ref(),
                         &manifold.header,
                         &mut manifold.contacts[ci],
@@ -212,7 +243,7 @@ impl ConstraintSolver for PgsNgsSolver {
                 // through the contact declared a patch for it to bear on.
                 for ci in 0..manifold.contacts.len() {
                     solve_torsional_impulse(
-                        bodies,
+                        solver_bodies,
                         rows[ci].as_ref(),
                         &manifold.header,
                         &mut manifold.contacts[ci],
@@ -222,7 +253,7 @@ impl ConstraintSolver for PgsNgsSolver {
                 // Manifold-level friction budget projection
                 if manifold.contacts.len() > 1 {
                     manifold_friction_projection(
-                        bodies,
+                        solver_bodies,
                         rows,
                         &manifold.header,
                         &mut manifold.contacts,
@@ -230,6 +261,8 @@ impl ConstraintSolver for PgsNgsSolver {
                 }
             }
         }
+
+        solver_bodies.scatter(bodies);
 
         // Phase 4: Position correction after velocity solving.
         // NGS uses real masses (no shock propagation) — position correction

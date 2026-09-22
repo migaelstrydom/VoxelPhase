@@ -4,16 +4,15 @@
 //! under the `mu * N` traction budget. Friction is the case where that target is
 //! zero.
 
-use generational_arena::Arena;
 use nalgebra::Vector3;
 use smallvec::SmallVec;
 
-use crate::physics::body::RigidBody;
 use crate::physics::pipeline::pair::{PairHeader, SolverContact};
 
 use super::contact_row::ContactRow;
 use super::diagnostics::log_impulse_torque_diag;
 use super::normal::MIN_EFFECTIVE_INV_MASS;
+use super::solver_bodies::SolverBodies;
 
 /// What one contact's tangential row may spend, before the normal impulse it
 /// is multiplied by: the pair's combined friction, scaled by what its
@@ -60,7 +59,7 @@ fn tangential_error(target: &Vector3<f32>, relative: &Vector3<f32>, tangent: &Ve
 /// `row` is `None` when a body of the pair is gone; the bookkeeping for an
 /// unloaded contact still happens, and nothing else does.
 pub(crate) fn solve_friction_impulse(
-    bodies: &mut Arena<RigidBody>,
+    bodies: &mut SolverBodies,
     row: Option<&ContactRow>,
     header: &PairHeader,
     contact: &mut SolverContact,
@@ -139,7 +138,7 @@ pub(crate) fn solve_friction_impulse(
 ///
 /// `rows` are the manifold's prepared rows, in contact order.
 pub(crate) fn manifold_friction_projection(
-    bodies: &mut Arena<RigidBody>,
+    bodies: &mut SolverBodies,
     rows: &[Option<ContactRow>],
     header: &PairHeader,
     contacts: &mut SmallVec<[SolverContact; 4]>,

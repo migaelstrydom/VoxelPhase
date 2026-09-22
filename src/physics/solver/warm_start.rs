@@ -2,22 +2,24 @@
 
 use rustc_hash::FxHashMap;
 
-use generational_arena::Arena;
 use nalgebra::Vector3;
 
-use crate::physics::body::RigidBody;
 use crate::physics::handle::RigidBodyHandle;
 use crate::physics::pipeline::pair::{PairHeader, SolverContact, SolverManifold};
 
-use super::impulse::apply_impulse_pair;
+use super::contact_row::ContactRow;
+use super::solver_bodies::SolverBodies;
 
 /// Apply cached impulse for a single contact and initialize its accumulated impulses.
+///
+/// `row` is `None` when a body of the pair is gone: the accumulators are still
+/// initialised, and nothing is applied.
 pub(crate) fn warm_start_contact(
-    bodies: &mut Arena<RigidBody>,
+    bodies: &mut SolverBodies,
+    row: Option<&ContactRow>,
     header: &PairHeader,
     contact: &mut SolverContact,
     scale: f32,
-    shock_scales: (f32, f32),
 ) {
     contact.accumulated_normal_impulse = contact.warm_normal_impulse * scale;
 
@@ -51,7 +53,9 @@ pub(crate) fn warm_start_contact(
     let normal_impulse = contact.normal * contact.accumulated_normal_impulse;
     let total = normal_impulse + friction_ws;
 
-    apply_impulse_pair(bodies, header, contact.point, total, shock_scales);
+    if let Some(row) = row {
+        row.apply_impulse(bodies, total);
+    }
 }
 
 /// Compute effective solver iteration count based on contact complexity.

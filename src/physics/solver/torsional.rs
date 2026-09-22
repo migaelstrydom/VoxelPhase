@@ -31,12 +31,10 @@
 //! it would leave the requirement satisfied by argument alone, and re-deriving
 //! it for the first turntable would be strictly more work than keeping it.
 
-use generational_arena::Arena;
-
-use crate::physics::body::RigidBody;
 use crate::physics::pipeline::pair::{PairHeader, SolverContact};
 
 use super::contact_row::ContactRow;
+use super::solver_bodies::SolverBodies;
 
 /// Smallest effective inverse inertia a torsional row will solve against.
 ///
@@ -53,7 +51,7 @@ const MIN_EFFECTIVE_INV_INERTIA: f32 = 1e-9;
 ///
 /// `row` is `None` when a body of the pair is gone.
 pub(crate) fn solve_torsional_impulse(
-    bodies: &mut Arena<RigidBody>,
+    bodies: &mut SolverBodies,
     row: Option<&ContactRow>,
     header: &PairHeader,
     contact: &mut SolverContact,
@@ -102,7 +100,7 @@ mod tests {
 
     use super::*;
     use crate::collision::contact::FeatureId;
-    use crate::physics::body::RigidBodyDesc;
+    use crate::physics::body::{RigidBody, RigidBodyDesc};
     use crate::physics::drive::TractionRow;
     use crate::physics::handle::RigidBodyHandle;
 
@@ -143,10 +141,13 @@ mod tests {
         (bodies, header)
     }
 
-    /// One solve of the row, prepared from the bodies as they are now.
+    /// One solve of the row, prepared from the bodies as they are now and
+    /// written back to them.
     fn solve(bodies: &mut Arena<RigidBody>, header: &PairHeader, contact: &mut SolverContact) {
-        let row = ContactRow::prepare(bodies, header, contact, (1.0, 1.0));
-        solve_torsional_impulse(bodies, row.as_ref(), header, contact);
+        let mut solver_bodies = SolverBodies::default();
+        let row = ContactRow::prepare(bodies, &mut solver_bodies, header, contact, (1.0, 1.0));
+        solve_torsional_impulse(&mut solver_bodies, row.as_ref(), header, contact);
+        solver_bodies.scatter(bodies);
     }
 
     fn spin(bodies: &Arena<RigidBody>, header: &PairHeader) -> f32 {

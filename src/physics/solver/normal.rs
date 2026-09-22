@@ -1,12 +1,10 @@
 //! Normal impulse resolution for contact constraints.
 
-use generational_arena::Arena;
-
-use crate::physics::body::RigidBody;
 use crate::physics::pipeline::pair::{PairHeader, SolverContact};
 
 use super::contact_row::ContactRow;
 use super::diagnostics::log_impulse_torque_diag;
+use super::solver_bodies::SolverBodies;
 
 /// Minimum effective inverse mass allowed in the normal solver.
 ///
@@ -18,7 +16,7 @@ pub(crate) const MIN_EFFECTIVE_INV_MASS: f32 = 1.0e-8;
 ///
 /// `row` is `None` when a body of the pair is gone, which leaves nothing to do.
 pub(crate) fn solve_normal_impulse(
-    bodies: &mut Arena<RigidBody>,
+    bodies: &mut SolverBodies,
     row: Option<&ContactRow>,
     header: &PairHeader,
     contact: &mut SolverContact,

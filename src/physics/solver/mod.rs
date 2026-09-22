@@ -11,6 +11,7 @@ pub(crate) mod normal;
 pub(crate) mod pgs_ngs;
 pub(crate) mod position_correction;
 pub mod shock_propagation;
+pub(crate) mod solver_bodies;
 pub(crate) mod torsional;
 pub(crate) mod warm_start;
 

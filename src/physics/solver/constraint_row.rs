@@ -3,27 +3,30 @@
 //! These functions work for any constraint type because the Jacobian is
 //! stored explicitly on the row.
 
-use generational_arena::Arena;
+use nalgebra::Vector3;
 
-use crate::physics::body::RigidBody;
 use crate::physics::constraint::ConstraintRow;
 
+use super::solver_bodies::{SolverBodies, SolverBody};
+
+/// The solver slots of a constraint row's two bodies, `None` for a
+/// world-anchored side or a body that is gone.
+pub(crate) type RowSlots = (Option<usize>, Option<usize>);
+
 /// Compute the constraint-space velocity: Cdot = J · v.
-fn jacobian_dot_velocity(bodies: &Arena<RigidBody>, row: &ConstraintRow) -> f32 {
+fn jacobian_dot_velocity(bodies: &SolverBodies, slots: RowSlots, row: &ConstraintRow) -> f32 {
     let mut cdot = 0.0;
 
-    if let Some(handle) = row.body_a {
-        if let Some(body) = bodies.get(handle.0) {
-            cdot += row.lin_jac_a.dot(&body.linear_velocity());
-            cdot += row.ang_jac_a.dot(&body.angular_velocity());
-        }
+    if let Some(slot) = slots.0 {
+        let body = bodies.get(slot);
+        cdot += row.lin_jac_a.dot(&body.linear_velocity);
+        cdot += row.ang_jac_a.dot(&body.angular_velocity);
     }
 
-    if let Some(handle) = row.body_b {
-        if let Some(body) = bodies.get(handle.0) {
-            cdot += row.lin_jac_b.dot(&body.linear_velocity());
-            cdot += row.ang_jac_b.dot(&body.angular_velocity());
-        }
+    if let Some(slot) = slots.1 {
+        let body = bodies.get(slot);
+        cdot += row.lin_jac_b.dot(&body.linear_velocity);
+        cdot += row.ang_jac_b.dot(&body.angular_velocity);
     }
 
     cdot
@@ -33,22 +36,34 @@ fn jacobian_dot_velocity(bodies: &Arena<RigidBody>, row: &ConstraintRow) -> f32 
 ///
 /// Linear: v += inv_mass * J_lin * impulse
 /// Angular: ω += I_world_inv * J_ang * impulse
-fn apply_constraint_impulse(bodies: &mut Arena<RigidBody>, row: &ConstraintRow, impulse: f32) {
-    if let Some(handle) = row.body_a {
-        if let Some(body) = bodies.get_mut(handle.0) {
-            body.apply_impulse(row.lin_jac_a * impulse);
-            let ang = body.world_inv_inertia() * (row.ang_jac_a * impulse);
-            body.set_angular_velocity(body.angular_velocity() + ang);
-        }
+fn apply_constraint_impulse(
+    bodies: &mut SolverBodies,
+    slots: RowSlots,
+    row: &ConstraintRow,
+    impulse: f32,
+) {
+    if let Some(slot) = slots.0 {
+        apply_along_jacobian(bodies.get_mut(slot), row.lin_jac_a, row.ang_jac_a, impulse);
     }
 
-    if let Some(handle) = row.body_b {
-        if let Some(body) = bodies.get_mut(handle.0) {
-            body.apply_impulse(row.lin_jac_b * impulse);
-            let ang = body.world_inv_inertia() * (row.ang_jac_b * impulse);
-            body.set_angular_velocity(body.angular_velocity() + ang);
-        }
+    if let Some(slot) = slots.1 {
+        apply_along_jacobian(bodies.get_mut(slot), row.lin_jac_b, row.ang_jac_b, impulse);
     }
+}
+
+/// One side of [`apply_constraint_impulse`].
+///
+/// The angular half is added even to a body with no inverse mass, whose world
+/// inverse inertia is zero: adding that zero is not a no-op on a velocity
+/// component of `-0.0`, and the rows have always added it.
+fn apply_along_jacobian(
+    body: &mut SolverBody,
+    linear_jacobian: Vector3<f32>,
+    angular_jacobian: Vector3<f32>,
+    impulse: f32,
+) {
+    body.apply_linear_impulse(linear_jacobian * impulse);
+    body.angular_velocity += body.world_inv_inertia * (angular_jacobian * impulse);
 }
 
 /// Solve one constraint row: compute impulse, clamp, apply to bodies.
@@ -59,8 +74,12 @@ fn apply_constraint_impulse(bodies: &mut Arena<RigidBody>, row: &ConstraintRow, 
 /// softness instead — a spring, whose steady deflection under a constant load
 /// `tau` is `compliance · tau / beta`. Without this term the softness would
 /// only slow the row's convergence, and it would still end up rigid.
-pub fn solve_constraint_row(bodies: &mut Arena<RigidBody>, row: &mut ConstraintRow) {
-    let cdot = jacobian_dot_velocity(bodies, row);
+pub(crate) fn solve_constraint_row(
+    bodies: &mut SolverBodies,
+    slots: RowSlots,
+    row: &mut ConstraintRow,
+) {
+    let cdot = jacobian_dot_velocity(bodies, slots, row);
 
     let lambda =
         row.effective_mass_inv * -(cdot + row.bias + row.softness * row.accumulated_impulse);
@@ -70,7 +89,7 @@ pub fn solve_constraint_row(bodies: &mut Arena<RigidBody>, row: &mut ConstraintR
     let delta_lambda = row.accumulated_impulse - old_accumulated;
 
     if delta_lambda.abs() > 1e-12 {
-        apply_constraint_impulse(bodies, row, delta_lambda);
+        apply_constraint_impulse(bodies, slots, row, delta_lambda);
     }
 }
 
@@ -81,13 +100,14 @@ pub fn solve_constraint_row(bodies: &mut Arena<RigidBody>, row: &mut ConstraintR
 /// the body never received. An unbounded row corrects that on its next solve;
 /// a row at its bound cannot, so its clamp works off a stale number and the
 /// impulse it delivers per substep stops meaning what the bound says.
-pub fn warm_start_constraint_row(
-    bodies: &mut Arena<RigidBody>,
+pub(crate) fn warm_start_constraint_row(
+    bodies: &mut SolverBodies,
+    slots: RowSlots,
     row: &mut ConstraintRow,
     scale: f32,
 ) {
     row.accumulated_impulse *= scale;
     if row.accumulated_impulse.abs() > 1e-12 {
-        apply_constraint_impulse(bodies, row, row.accumulated_impulse);
+        apply_constraint_impulse(bodies, slots, row, row.accumulated_impulse);
     }
 }

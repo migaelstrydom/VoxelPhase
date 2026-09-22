@@ -27,10 +27,13 @@ PgsNgsSolver (default solver)
 ├── PgsNgsConfig        — solver iterations, warm-start scale, position correction config
 ├── contact_generation_positions — body position snapshots for stale-depth correction
 ├── contact_rows        — ContactRows, rebuilt at the start of every solve()
+├── solver_bodies       — SolverBodies, the velocity phase's dense velocity store
 └── 4-phase solve pipeline:
-    1. Prepare contact rows (lever arms, world inverse inertias, effective masses,
-       tangent basis) + capture pre-solve normal velocities. Bodies do not move
-       during the velocity phase, so rows only ever read velocities live.
+    1. Gather every body a row touches into SolverBodies; prepare contact rows
+       (lever arms, effective masses, tangent basis) + capture pre-solve normal
+       velocities. Bodies do not move during the velocity phase, so rows only
+       ever read velocities live — from SolverBodies, until the scatter back to
+       the arena that ends phase 3.
     2. Warm-start from cached impulses (contacts: shock-scaled, joints: real masses)
     3. Iterative sequential-impulse (contacts first, then joints per iteration)
     4. Position correction (NGS or Baumgarte, real masses)
@@ -52,7 +55,7 @@ ShockPropagationConditioner (default conditioner)
 | File | Purpose |
 |------|---------|
 | `constraint_solver.rs` | `ConstraintSolver` trait definition |
-| `constraint_row.rs` | `solve_constraint_row()`, `warm_start_constraint_row()`, impulse application |
+| `constraint_row.rs` | `solve_constraint_row()`, `warm_start_constraint_row()`, impulse application (on `SolverBodies`) |
 | `conditioning.rs` | `ManifoldConditioner` trait, `ManifoldConditions`, `IdentityConditioner` |
 | `shock_propagation.rs` | `ShockPropagationConditioner` with BFS contact graph |
 | `pgs_ngs.rs` | PGS+NGS solver: config, state, trait impl |
@@ -60,7 +63,8 @@ ShockPropagationConditioner (default conditioner)
 | `contact_row.rs` | `ContactRow` — per-contact lever arms, effective masses and impulse response, prepared once per substep |
 | `normal.rs` | Normal impulse solve (restitution, accumulated clamping) |
 | `friction.rs` | Per-contact friction + manifold-level friction projection |
-| `impulse.rs` | `apply_impulse_pair()` (warm start), tangent basis construction |
+| `impulse.rs` | Tangent basis construction |
+| `solver_bodies.rs` | `SolverBodies` — dense velocities of every body the rows touch, gathered before the velocity phase and scattered after it |
 | `warm_start.rs` | Warm-start application, adaptive iteration count |
 | `position_correction.rs` | NGS direct correction + Baumgarte fallback |
 | `diagnostics.rs` | Optional per-impulse diagnostic logging |
