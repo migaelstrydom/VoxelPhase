@@ -7,6 +7,7 @@ pub(crate) mod contact_row;
 pub(crate) mod diagnostics;
 pub(crate) mod friction;
 pub(crate) mod impulse;
+pub(crate) mod island_solver;
 pub(crate) mod iteration_budget;
 pub(crate) mod normal;
 pub(crate) mod pgs_ngs;

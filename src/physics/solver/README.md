@@ -26,20 +26,17 @@ PhysicsWorld orchestration:
 PgsNgsSolver (default solver)
 ├── PgsNgsConfig        — solver iterations, warm-start scale, position correction config
 ├── contact_generation_positions — body position snapshots for stale-depth correction
-├── contact_rows        — ContactRows, rebuilt at the start of every solve()
-├── solver_bodies       — SolverBodies, the velocity phase's dense velocity store
 ├── islands             — SolverIslands, rows grouped by the movable bodies they share
-├── iteration_budget    — IterationBudget, per-body contact counts → per-island iterations
+├── island_solvers      — one IslandSolver per island: its own SolverBodies,
+│                         ContactRows, joint slots and IterationBudget
 └── 4-phase solve pipeline:
-    1. Gather every body a row touches into SolverBodies; prepare contact rows
-       (lever arms, effective masses, tangent basis) + capture pre-solve normal
-       velocities. Bodies do not move during the velocity phase, so rows only
-       ever read velocities live — from SolverBodies, until the scatter back to
-       the arena that ends phase 3.
-    2. Warm-start from cached impulses (contacts: shock-scaled, joints: real masses)
-    3. Iterative sequential-impulse, island by island (joints first, then
-       contacts per iteration). Islands share no movable body, so each gets
-       its own iteration count from the hardest body in it.
+    1. Build islands from the rows' body handles (static geometry links nothing).
+    2. In parallel (rayon), per island: gather its bodies into its own
+       SolverBodies, prepare its contact rows, warm-start (joints, then
+       contacts), and iterate for the island's own count (joints, then
+       contacts, per iteration). Islands share no movable body, so the result
+       does not depend on thread scheduling.
+    3. Scatter every island's velocities back to the arena.
     4. Position correction (NGS or Baumgarte, real masses)
 
 Post-solve projection (in PhysicsWorld, outside the solver):
@@ -71,6 +68,7 @@ ShockPropagationConditioner (default conditioner)
 | `solver_bodies.rs` | `SolverBodies` — dense velocities of every body the rows touch, gathered before the velocity phase and scattered after it |
 | `solver_islands.rs` | `SolverIslands` — union-find over solver slots; static geometry never joins two islands |
 | `iteration_budget.rs` | `IterationBudget` — extra iterations for many contacts or disagreeing normals, per island |
+| `island_solver.rs` | `IslandSolver` — the velocity phase of one island, self-contained so islands run on separate threads |
 | `warm_start.rs` | Warm-start application |
 | `position_correction.rs` | NGS direct correction + Baumgarte fallback |
 | `diagnostics.rs` | Optional per-impulse diagnostic logging |

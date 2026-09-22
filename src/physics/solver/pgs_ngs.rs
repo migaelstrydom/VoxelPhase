@@ -1,6 +1,7 @@
 //! PGS + NGS solver: Projected Gauss-Seidel velocity solve with
 //! nonlinear Gauss-Seidel position correction.
 
+use rayon::prelude::*;
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
@@ -15,16 +16,9 @@ use crate::physics::constraint::types::{Constraint, ConstraintRow, Enforcement, 
 use crate::physics::pipeline::pair::SolverManifold;
 
 use super::conditioning::ManifoldConditions;
-use super::constraint_row::{solve_constraint_row, warm_start_constraint_row, RowSlots};
-use super::contact_row::ContactRows;
-use super::friction::{manifold_friction_projection, solve_friction_impulse};
-use super::iteration_budget::IterationBudget;
-use super::normal::solve_normal_impulse;
+use super::island_solver::{IslandManifold, IslandSolver};
 use super::position_correction::{self, PositionCorrectionConfig};
-use super::solver_bodies::SolverBodies;
 use super::solver_islands::SolverIslands;
-use super::torsional::solve_torsional_impulse;
-use super::warm_start::warm_start_contact;
 use super::ConstraintSolver;
 
 /// Configuration for the PGS+NGS solver.
@@ -78,19 +72,10 @@ pub struct PgsNgsSolver {
     /// Solver-ready constraint rows, expanded once per frame in `prepare`.
     /// Reused across substeps within the same frame.
     cached_constraint_rows: Vec<ConstraintRow>,
-    /// Solver-ready contact rows, prepared at the start of every `solve`:
-    /// the bodies turn between substeps, so these cannot outlive one.
-    contact_rows: ContactRows,
-    /// Velocities of every body a row touches, packed for the velocity
-    /// phase and written back to the arena when it ends.
-    solver_bodies: SolverBodies,
-    /// Solver slots of each constraint row's bodies, parallel to
-    /// `cached_constraint_rows`.
-    constraint_slots: Vec<RowSlots>,
     /// Rows grouped by the movable bodies they share, rebuilt every `solve`.
     islands: SolverIslands,
-    /// Per-body contact measurements that set each island's iteration count.
-    iteration_budget: IterationBudget,
+    /// One velocity-phase workspace per island, kept to reuse its buffers.
+    island_solvers: Vec<IslandSolver>,
 }
 
 impl PgsNgsSolver {
@@ -99,11 +84,8 @@ impl PgsNgsSolver {
             config,
             contact_generation_positions: FxHashMap::default(),
             cached_constraint_rows: Vec::new(),
-            contact_rows: ContactRows::default(),
-            solver_bodies: SolverBodies::default(),
-            constraint_slots: Vec::new(),
             islands: SolverIslands::default(),
-            iteration_budget: IterationBudget::default(),
+            island_solvers: Vec::new(),
         }
     }
 }
@@ -147,148 +129,45 @@ impl ConstraintSolver for PgsNgsSolver {
             return;
         }
 
-        // Phase 1: Gather the bodies every row touches, prepare every
-        // contact's rows, and capture the pre-solve normal velocities
-        // restitution and warm-starting are decided from. From here until the
-        // scatter, velocities live in `solver_bodies`, not in the arena.
-        let solver_bodies = &mut self.solver_bodies;
-        solver_bodies.clear();
-        let contact_rows = &mut self.contact_rows;
-        contact_rows.prepare(
-            bodies,
-            solver_bodies,
-            manifolds.iter().enumerate().map(|(mi, m)| {
-                (
-                    &m.header,
-                    m.contacts.as_slice(),
-                    conditions.shock_scales_for(mi),
-                )
-            }),
-        );
-
-        let constraint_slots = &mut self.constraint_slots;
-        constraint_slots.clear();
-        constraint_slots.extend(constraint_rows.iter().map(|row| {
-            (
-                row.body_a
-                    .and_then(|handle| solver_bodies.gather(bodies, handle.0)),
-                row.body_b
-                    .and_then(|handle| solver_bodies.gather(bodies, handle.0)),
-            )
-        }));
-
-        // Phase 2: Warm-start — apply cached impulses from previous frame.
-        // Joint constraints first, contacts second (matches solve order).
-        for (row, &slots) in constraint_rows.iter_mut().zip(constraint_slots.iter()) {
-            warm_start_constraint_row(solver_bodies, slots, row, self.config.warm_start_scale);
-        }
-        for (mi, manifold) in manifolds.iter_mut().enumerate() {
-            let header = &manifold.header;
-            let rows = contact_rows.manifold(mi);
-            let pre_solve_vn = contact_rows.pre_solve_normal_velocities(mi);
-            for (ci, contact) in manifold.contacts.iter_mut().enumerate() {
-                let warm_scale =
-                    if pre_solve_vn[ci].abs() > self.config.restitution_velocity_threshold {
-                        0.0
-                    } else {
-                        self.config.warm_start_scale
-                    };
-                warm_start_contact(
-                    solver_bodies,
-                    rows[ci].as_ref(),
-                    header,
-                    contact,
-                    warm_scale,
-                );
-            }
-        }
-
-        // Phase 3: Iterative sequential-impulse solving, island by island.
-        // Islands share no movable body, so each converges on its own and
-        // takes only the iterations its own contacts call for.
+        // Phases 1–3: the velocity phase, island by island. Islands share no
+        // movable body, so they run in parallel, each gathering, warm-starting
+        // and iterating on its own copy of its bodies; their velocities reach
+        // the arena only once every island is done.
         let islands = &mut self.islands;
         islands.build(
-            solver_bodies,
-            contact_rows,
-            manifolds.len(),
-            constraint_slots,
+            bodies,
+            manifolds
+                .iter()
+                .map(|m| (m.header.body_a, Some(m.header.body_b))),
+            constraint_rows.iter().map(|row| (row.body_a, row.body_b)),
         );
-        let budget = &mut self.iteration_budget;
-        budget.measure(manifolds, contact_rows, solver_bodies.len());
-        for island in islands.iter() {
-            let iterations = budget.iterations(island.manifolds, self.config.solver_iterations);
-            for _ in 0..iterations {
-                // Joint constraints first — solved early so contacts get the
-                // last word for penetration prevention.
-                for &ci in island.constraints {
-                    solve_constraint_row(
-                        solver_bodies,
-                        constraint_slots[ci],
-                        &mut constraint_rows[ci],
-                    );
-                }
-
-                // Contacts last — normal + friction impulses.
-                for &mi in island.manifolds {
-                    let manifold = &mut manifolds[mi];
-                    let rows = contact_rows.manifold(mi);
-                    let pre_solve_vn = contact_rows.pre_solve_normal_velocities(mi);
-
-                    // Block normal solve: multi-contact manifolds get extra local
-                    // iterations to capture cross-contact coupling.
-                    let normal_passes = if manifold.contacts.len() > 1 {
-                        self.config.block_normal_micro_iterations
-                    } else {
-                        1
-                    };
-                    for _ in 0..normal_passes {
-                        for ci in 0..manifold.contacts.len() {
-                            solve_normal_impulse(
-                                solver_bodies,
-                                rows[ci].as_ref(),
-                                &manifold.header,
-                                &mut manifold.contacts[ci],
-                                self.config.restitution_velocity_threshold,
-                                pre_solve_vn[ci],
-                            );
-                        }
-                    }
-
-                    // Per-contact friction solve
-                    for ci in 0..manifold.contacts.len() {
-                        solve_friction_impulse(
-                            solver_bodies,
-                            rows[ci].as_ref(),
-                            &manifold.header,
-                            &mut manifold.contacts[ci],
-                        );
-                    }
-
-                    // Per-contact torsional solve. Inert unless a body driving
-                    // through the contact declared a patch for it to bear on.
-                    for ci in 0..manifold.contacts.len() {
-                        solve_torsional_impulse(
-                            solver_bodies,
-                            rows[ci].as_ref(),
-                            &manifold.header,
-                            &mut manifold.contacts[ci],
-                        );
-                    }
-
-                    // Manifold-level friction budget projection
-                    if manifold.contacts.len() > 1 {
-                        manifold_friction_projection(
-                            solver_bodies,
-                            rows,
-                            &manifold.header,
-                            &mut manifold.contacts,
-                        );
-                    }
-                }
-            }
+        if self.island_solvers.len() < islands.len() {
+            self.island_solvers
+                .resize_with(islands.len(), IslandSolver::default);
         }
+        let island_solvers = &mut self.island_solvers[..islands.len()];
 
-        solver_bodies.scatter(bodies);
+        let mut arranged_manifolds: Vec<IslandManifold> =
+            islands.arrange_manifolds(manifolds.iter_mut().enumerate());
+        let mut arranged_constraints: Vec<&mut ConstraintRow> =
+            islands.arrange_constraints(constraint_rows.iter_mut());
+        let work: Vec<_> = island_solvers
+            .iter_mut()
+            .zip(islands.split_manifolds(&mut arranged_manifolds))
+            .zip(islands.split_constraints(&mut arranged_constraints))
+            .collect();
+        let arena: &Arena<RigidBody> = bodies;
+        let config = &self.config;
+        work.into_par_iter()
+            .for_each(|((solver, manifolds), constraints)| {
+                solver.solve(arena, manifolds, constraints, conditions, config);
+            });
+        drop(arranged_manifolds);
+        drop(arranged_constraints);
+
+        for solver in island_solvers.iter() {
+            solver.scatter(bodies);
+        }
 
         // Phase 4: Position correction after velocity solving.
         // NGS uses real masses (no shock propagation) — position correction

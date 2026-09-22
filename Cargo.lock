@@ -1945,6 +1945,7 @@ dependencies = [
  "noise",
  "rand",
  "raw-window-handle",
+ "rayon",
  "ron",
  "rustc-hash",
  "serde",
