@@ -36,7 +36,7 @@ use generational_arena::Arena;
 use crate::physics::body::RigidBody;
 use crate::physics::pipeline::pair::{PairHeader, SolverContact};
 
-use super::body_pair::BodyPairState;
+use super::contact_row::ContactRow;
 
 /// Smallest effective inverse inertia a torsional row will solve against.
 ///
@@ -50,11 +50,13 @@ const MIN_EFFECTIVE_INV_INERTIA: f32 = 1e-9;
 /// Bounded by `μ · N · r`, so an unloaded contact and a contact standing for no
 /// patch both spend nothing. The early return on `patch_radius` is what keeps
 /// this free for the whole game: no declaration, no row, no cost.
+///
+/// `row` is `None` when a body of the pair is gone.
 pub(crate) fn solve_torsional_impulse(
     bodies: &mut Arena<RigidBody>,
+    row: Option<&ContactRow>,
     header: &PairHeader,
     contact: &mut SolverContact,
-    shock_scales: (f32, f32),
 ) {
     let radius = contact.traction.patch_radius;
     if radius <= 0.0 || contact.accumulated_normal_impulse <= 0.0 {
@@ -67,17 +69,17 @@ pub(crate) fn solve_torsional_impulse(
         return;
     }
 
-    let Some(state) = BodyPairState::extract(bodies, header, contact.point, shock_scales) else {
+    let Some(row) = row else {
         return;
     };
 
     let normal = contact.normal;
-    let effective_inv_inertia = normal.dot(&((state.inv_inertia_a + state.inv_inertia_b) * normal));
+    let effective_inv_inertia = row.torsional_inv_inertia;
     if effective_inv_inertia <= MIN_EFFECTIVE_INV_INERTIA || !effective_inv_inertia.is_finite() {
         return;
     }
 
-    let relative_spin = (state.angular_vel_b - state.angular_vel_a).dot(&normal);
+    let relative_spin = row.relative_angular_velocity(bodies).dot(&normal);
     let delta = (contact.traction.target_spin - relative_spin) / effective_inv_inertia;
 
     let max_torsional = mu * contact.accumulated_normal_impulse * radius;
@@ -90,19 +92,7 @@ pub(crate) fn solve_torsional_impulse(
         return;
     }
 
-    let angular_impulse = normal * applied;
-    if let Some(handle_a) = header.body_a {
-        if let Some(body_a) = bodies.get_mut(handle_a.0) {
-            if body_a.is_dynamic() {
-                body_a.apply_angular_impulse(-angular_impulse * shock_scales.0);
-            }
-        }
-    }
-    if let Some(body_b) = bodies.get_mut(header.body_b.0) {
-        if body_b.is_dynamic() {
-            body_b.apply_angular_impulse(angular_impulse * shock_scales.1);
-        }
-    }
+    row.apply_angular_impulse(bodies, normal * applied);
 }
 
 #[cfg(test)]
@@ -153,6 +143,12 @@ mod tests {
         (bodies, header)
     }
 
+    /// One solve of the row, prepared from the bodies as they are now.
+    fn solve(bodies: &mut Arena<RigidBody>, header: &PairHeader, contact: &mut SolverContact) {
+        let row = ContactRow::prepare(bodies, header, contact, (1.0, 1.0));
+        solve_torsional_impulse(bodies, row.as_ref(), header, contact);
+    }
+
     fn spin(bodies: &Arena<RigidBody>, header: &PairHeader) -> f32 {
         bodies.get(header.body_b.0).unwrap().angular_velocity().y
     }
@@ -166,7 +162,7 @@ mod tests {
             target_spin: 4.0,
             ..Default::default()
         });
-        solve_torsional_impulse(&mut bodies, &header, &mut contact, (1.0, 1.0));
+        solve(&mut bodies, &header, &mut contact);
         assert_eq!(spin(&bodies, &header), 0.0);
     }
 
@@ -180,7 +176,7 @@ mod tests {
             ..Default::default()
         });
         for _ in 0..8 {
-            solve_torsional_impulse(&mut bodies, &header, &mut contact, (1.0, 1.0));
+            solve(&mut bodies, &header, &mut contact);
         }
         assert!((spin(&bodies, &header) - 1.0).abs() < 1e-4);
     }
@@ -195,7 +191,7 @@ mod tests {
             ..Default::default()
         });
         for _ in 0..8 {
-            solve_torsional_impulse(&mut bodies, &header, &mut contact, (1.0, 1.0));
+            solve(&mut bodies, &header, &mut contact);
         }
         // μ·N·r = 0.5 · 10 · 0.5 = 2.5 N·m·s, into a unit inertia.
         assert!((spin(&bodies, &header) - 2.5).abs() < 1e-4);
@@ -217,7 +213,7 @@ mod tests {
             patch_radius: 0.5,
             ..Default::default()
         });
-        solve_torsional_impulse(&mut bodies, &header, &mut contact, (1.0, 1.0));
+        solve(&mut bodies, &header, &mut contact);
         assert!((spin(&bodies, &header) - 2.5).abs() < 1e-4);
     }
 }

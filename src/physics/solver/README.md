@@ -26,8 +26,11 @@ PhysicsWorld orchestration:
 PgsNgsSolver (default solver)
 ├── PgsNgsConfig        — solver iterations, warm-start scale, position correction config
 ├── contact_generation_positions — body position snapshots for stale-depth correction
+├── contact_rows        — ContactRows, rebuilt at the start of every solve()
 └── 4-phase solve pipeline:
-    1. Capture pre-solve velocities + warm-start scales
+    1. Prepare contact rows (lever arms, world inverse inertias, effective masses,
+       tangent basis) + capture pre-solve normal velocities. Bodies do not move
+       during the velocity phase, so rows only ever read velocities live.
     2. Warm-start from cached impulses (contacts: shock-scaled, joints: real masses)
     3. Iterative sequential-impulse (contacts first, then joints per iteration)
     4. Position correction (NGS or Baumgarte, real masses)
@@ -53,10 +56,11 @@ ShockPropagationConditioner (default conditioner)
 | `conditioning.rs` | `ManifoldConditioner` trait, `ManifoldConditions`, `IdentityConditioner` |
 | `shock_propagation.rs` | `ShockPropagationConditioner` with BFS contact graph |
 | `pgs_ngs.rs` | PGS+NGS solver: config, state, trait impl |
-| `body_pair.rs` | `BodyPairState` — extracted kinematics for a contact pair (shock-scaled) |
+| `body_pair.rs` | `BodyPairState` — pose and shock-scaled mass properties of a contact pair |
+| `contact_row.rs` | `ContactRow` — per-contact lever arms, effective masses and impulse response, prepared once per substep |
 | `normal.rs` | Normal impulse solve (restitution, accumulated clamping) |
 | `friction.rs` | Per-contact friction + manifold-level friction projection |
-| `impulse.rs` | `apply_impulse_pair()`, tangent basis construction |
+| `impulse.rs` | `apply_impulse_pair()` (warm start), tangent basis construction |
 | `warm_start.rs` | Warm-start application, adaptive iteration count |
 | `position_correction.rs` | NGS direct correction + Baumgarte fallback |
 | `diagnostics.rs` | Optional per-impulse diagnostic logging |

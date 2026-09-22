@@ -14,9 +14,9 @@ use crate::physics::constraint::expand::{
 use crate::physics::constraint::types::{Constraint, ConstraintRow, Enforcement, RowKind};
 use crate::physics::pipeline::pair::SolverManifold;
 
-use super::body_pair::BodyPairState;
 use super::conditioning::ManifoldConditions;
 use super::constraint_row::{solve_constraint_row, warm_start_constraint_row};
+use super::contact_row::ContactRows;
 use super::friction::{manifold_friction_projection, solve_friction_impulse};
 use super::normal::solve_normal_impulse;
 use super::position_correction::{self, PositionCorrectionConfig};
@@ -75,6 +75,9 @@ pub struct PgsNgsSolver {
     /// Solver-ready constraint rows, expanded once per frame in `prepare`.
     /// Reused across substeps within the same frame.
     cached_constraint_rows: Vec<ConstraintRow>,
+    /// Solver-ready contact rows, prepared at the start of every `solve`:
+    /// the bodies turn between substeps, so these cannot outlive one.
+    contact_rows: ContactRows,
 }
 
 impl PgsNgsSolver {
@@ -83,6 +86,7 @@ impl PgsNgsSolver {
             config,
             contact_generation_positions: FxHashMap::default(),
             cached_constraint_rows: Vec::new(),
+            contact_rows: ContactRows::default(),
         }
     }
 }
@@ -126,30 +130,19 @@ impl ConstraintSolver for PgsNgsSolver {
             return;
         }
 
-        // Phase 1: Capture pre-solve normal velocities and warm-start scales.
-        //
-        // Pre-solve extraction uses identity shock scales — we need the real
-        // relative velocity for restitution decisions, not the shock-adjusted one.
-        let no_shock = (1.0, 1.0);
-        let pre_solve: Vec<Vec<(f32, f32)>> = manifolds
-            .iter()
-            .map(|m| {
-                m.contacts
-                    .iter()
-                    .map(|c| {
-                        let vn = BodyPairState::extract(bodies, &m.header, c.point, no_shock)
-                            .map(|s| s.relative_normal_velocity(c.point, &c.normal))
-                            .unwrap_or(0.0);
-                        let warm_scale = if vn.abs() > self.config.restitution_velocity_threshold {
-                            0.0
-                        } else {
-                            self.config.warm_start_scale
-                        };
-                        (vn, warm_scale)
-                    })
-                    .collect()
-            })
-            .collect();
+        // Phase 1: Prepare every contact's rows, and capture the pre-solve
+        // normal velocities restitution and warm-starting are decided from.
+        let contact_rows = &mut self.contact_rows;
+        contact_rows.prepare(
+            bodies,
+            manifolds.iter().enumerate().map(|(mi, m)| {
+                (
+                    &m.header,
+                    m.contacts.as_slice(),
+                    conditions.shock_scales_for(mi),
+                )
+            }),
+        );
 
         // Phase 2: Warm-start — apply cached impulses from previous frame.
         // Joint constraints first, contacts second (matches solve order).
@@ -159,8 +152,15 @@ impl ConstraintSolver for PgsNgsSolver {
         for (mi, manifold) in manifolds.iter_mut().enumerate() {
             let header = &manifold.header;
             let shock = conditions.shock_scales_for(mi);
+            let pre_solve_vn = contact_rows.pre_solve_normal_velocities(mi);
             for (ci, contact) in manifold.contacts.iter_mut().enumerate() {
-                warm_start_contact(bodies, header, contact, pre_solve[mi][ci].1, shock);
+                let warm_scale =
+                    if pre_solve_vn[ci].abs() > self.config.restitution_velocity_threshold {
+                        0.0
+                    } else {
+                        self.config.warm_start_scale
+                    };
+                warm_start_contact(bodies, header, contact, warm_scale, shock);
             }
         }
 
@@ -175,7 +175,8 @@ impl ConstraintSolver for PgsNgsSolver {
 
             // Contacts last — normal + friction impulses.
             for (mi, manifold) in manifolds.iter_mut().enumerate() {
-                let shock = conditions.shock_scales_for(mi);
+                let rows = contact_rows.manifold(mi);
+                let pre_solve_vn = contact_rows.pre_solve_normal_velocities(mi);
 
                 // Block normal solve: multi-contact manifolds get extra local
                 // iterations to capture cross-contact coupling.
@@ -188,11 +189,11 @@ impl ConstraintSolver for PgsNgsSolver {
                     for ci in 0..manifold.contacts.len() {
                         solve_normal_impulse(
                             bodies,
+                            rows[ci].as_ref(),
                             &manifold.header,
                             &mut manifold.contacts[ci],
                             self.config.restitution_velocity_threshold,
-                            pre_solve[mi][ci].0,
-                            shock,
+                            pre_solve_vn[ci],
                         );
                     }
                 }
@@ -201,9 +202,9 @@ impl ConstraintSolver for PgsNgsSolver {
                 for ci in 0..manifold.contacts.len() {
                     solve_friction_impulse(
                         bodies,
+                        rows[ci].as_ref(),
                         &manifold.header,
                         &mut manifold.contacts[ci],
-                        shock,
                     );
                 }
 
@@ -212,9 +213,9 @@ impl ConstraintSolver for PgsNgsSolver {
                 for ci in 0..manifold.contacts.len() {
                     solve_torsional_impulse(
                         bodies,
+                        rows[ci].as_ref(),
                         &manifold.header,
                         &mut manifold.contacts[ci],
-                        shock,
                     );
                 }
 
@@ -222,9 +223,9 @@ impl ConstraintSolver for PgsNgsSolver {
                 if manifold.contacts.len() > 1 {
                     manifold_friction_projection(
                         bodies,
+                        rows,
                         &manifold.header,
                         &mut manifold.contacts,
-                        shock,
                     );
                 }
             }

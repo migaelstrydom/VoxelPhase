@@ -6,7 +6,7 @@ use nalgebra::Vector3;
 
 use crate::physics::pipeline::pair::{PairHeader, SolverContact};
 
-use super::body_pair::BodyPairState;
+use super::contact_row::ContactRow;
 
 pub(crate) fn solver_diag_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
@@ -44,7 +44,7 @@ pub(crate) fn log_impulse_torque_diag(
     kind: &str,
     header: &PairHeader,
     contact: &SolverContact,
-    state: &BodyPairState,
+    row: &ContactRow,
     impulse_to_b: &Vector3<f32>,
 ) {
     if !solver_diag_enabled() || !solver_diag_pair_includes_filtered_body(header) {
@@ -60,12 +60,12 @@ pub(crate) fn log_impulse_torque_diag(
     } else {
         "dynamic-dynamic"
     };
-    let r_b = contact.point - state.pos_b;
+    let r_b = row.body_b.lever();
     let tau_b = r_b.cross(impulse_to_b);
     let tangent_mag = contact.accumulated_friction_impulse_ws.magnitude();
 
     if let Some(handle_a) = header.body_a {
-        let r_a = contact.point - state.pos_a;
+        let r_a = row.body_a.map_or_else(Vector3::zeros, |a| a.lever());
         let tau_a = r_a.cross(&(-*impulse_to_b));
         eprintln!(
             "solver_diag impulse kind={kind} pair={pair_kind} a={:?} b={:?} feature={:?} \

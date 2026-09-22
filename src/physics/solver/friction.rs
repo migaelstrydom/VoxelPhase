@@ -11,9 +11,8 @@ use smallvec::SmallVec;
 use crate::physics::body::RigidBody;
 use crate::physics::pipeline::pair::{PairHeader, SolverContact};
 
-use super::body_pair::BodyPairState;
+use super::contact_row::ContactRow;
 use super::diagnostics::log_impulse_torque_diag;
-use super::impulse::{apply_impulse_pair, compute_tangent_basis};
 use super::normal::MIN_EFFECTIVE_INV_MASS;
 
 /// What one contact's tangential row may spend, before the normal impulse it
@@ -57,11 +56,14 @@ fn tangential_error(target: &Vector3<f32>, relative: &Vector3<f32>, tangent: &Ve
 /// The early return on an unloaded contact is what makes "no load, no drive"
 /// true: an airborne body has no normal impulse anywhere, so it has no drive
 /// authority of any kind.
+///
+/// `row` is `None` when a body of the pair is gone; the bookkeeping for an
+/// unloaded contact still happens, and nothing else does.
 pub(crate) fn solve_friction_impulse(
     bodies: &mut Arena<RigidBody>,
+    row: Option<&ContactRow>,
     header: &PairHeader,
     contact: &mut SolverContact,
-    shock_scales: (f32, f32),
 ) {
     let target_relative_velocity = &contact.traction.target;
     let mu = tangential_coefficient(header, contact);
@@ -72,15 +74,13 @@ pub(crate) fn solve_friction_impulse(
         return;
     }
 
-    let Some(state) = BodyPairState::extract(bodies, header, contact.point, shock_scales) else {
+    let Some(row) = row else {
         return;
     };
 
-    let rel_vel = state.relative_velocity_at(contact.point);
-    let (t1, t2) = compute_tangent_basis(&contact.normal);
-
-    let effective_mass_t1 = state.effective_inv_mass(contact.point, &t1);
-    let effective_mass_t2 = state.effective_inv_mass(contact.point, &t2);
+    let rel_vel = row.relative_velocity(bodies);
+    let (t1, t2) = row.tangents;
+    let (effective_mass_t1, effective_mass_t2) = row.tangent_inv_mass;
     if effective_mass_t1 <= MIN_EFFECTIVE_INV_MASS
         || !effective_mass_t1.is_finite()
         || effective_mass_t2 <= MIN_EFFECTIVE_INV_MASS
@@ -124,8 +124,8 @@ pub(crate) fn solve_friction_impulse(
 
     if applied_t1.abs() > 1e-10 || applied_t2.abs() > 1e-10 {
         let impulse = t1 * applied_t1 + t2 * applied_t2;
-        log_impulse_torque_diag("friction", header, contact, &state, &impulse);
-        apply_impulse_pair(bodies, header, contact.point, impulse, shock_scales);
+        log_impulse_torque_diag("friction", header, contact, row, &impulse);
+        row.apply_impulse(bodies, impulse);
     }
 }
 
@@ -136,11 +136,13 @@ pub(crate) fn solve_friction_impulse(
 /// budgets `mu_i * lambda_n_i`. If it does, all contacts' friction impulses are
 /// scaled down proportionally. This prevents individual contacts from each
 /// maxing out their friction cones and producing oscillating net torque.
+///
+/// `rows` are the manifold's prepared rows, in contact order.
 pub(crate) fn manifold_friction_projection(
     bodies: &mut Arena<RigidBody>,
+    rows: &[Option<ContactRow>],
     header: &PairHeader,
     contacts: &mut SmallVec<[SolverContact; 4]>,
-    shock_scales: (f32, f32),
 ) {
     let budget: f32 = contacts
         .iter()
@@ -160,12 +162,14 @@ pub(crate) fn manifold_friction_projection(
     }
 
     let scale = budget / total_friction_mag;
-    for contact in contacts.iter_mut() {
+    for (contact, row) in contacts.iter_mut().zip(rows) {
         let old = contact.accumulated_friction_impulse_ws;
         contact.accumulated_friction_impulse_ws = old * scale;
         let delta = contact.accumulated_friction_impulse_ws - old;
         if delta.magnitude_squared() > 1e-20 {
-            apply_impulse_pair(bodies, header, contact.point, delta, shock_scales);
+            if let Some(row) = row {
+                row.apply_impulse(bodies, delta);
+            }
         }
     }
 }
