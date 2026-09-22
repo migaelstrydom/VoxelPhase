@@ -13,7 +13,10 @@ use crate::collision::{MeshPatch, Triangle, AABB};
 /// Implementors perform the broad-phase spatial query and return a
 /// [`MeshPatch`] with triangles and adjacency data. All narrowphase
 /// collision testing is done by the caller.
-pub trait StaticGeometry {
+///
+/// Queries run from several threads at once, one per collider, so an
+/// implementor must be `Sync`.
+pub trait StaticGeometry: Sync {
     /// Query all triangles intersecting an AABB region.
     ///
     /// Returns a [`MeshPatch`] containing the triangles and their
