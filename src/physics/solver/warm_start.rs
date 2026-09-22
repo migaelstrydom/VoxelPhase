@@ -1,11 +1,6 @@
-//! Warm-starting and adaptive iteration count for PGS solvers.
+//! Warm-starting for PGS solvers.
 
-use rustc_hash::FxHashMap;
-
-use nalgebra::Vector3;
-
-use crate::physics::handle::RigidBodyHandle;
-use crate::physics::pipeline::pair::{PairHeader, SolverContact, SolverManifold};
+use crate::physics::pipeline::pair::{PairHeader, SolverContact};
 
 use super::contact_row::ContactRow;
 use super::solver_bodies::SolverBodies;
@@ -56,57 +51,4 @@ pub(crate) fn warm_start_contact(
     if let Some(row) = row {
         row.apply_impulse(bodies, total);
     }
-}
-
-/// Compute effective solver iteration count based on contact complexity.
-///
-/// Bodies with many contacts or divergent normals get extra iterations to
-/// improve convergence.
-pub(crate) fn effective_solver_iterations(
-    manifolds: &[SolverManifold],
-    base_iterations: u32,
-) -> u32 {
-    let mut per_body_counts: FxHashMap<RigidBodyHandle, usize> = FxHashMap::default();
-    let mut per_body_normals: FxHashMap<RigidBodyHandle, Vec<Vector3<f32>>> = FxHashMap::default();
-    for manifold in manifolds {
-        for contact in &manifold.contacts {
-            let entry = per_body_counts.entry(manifold.header.body_b).or_insert(0);
-            *entry += 1;
-            per_body_normals
-                .entry(manifold.header.body_b)
-                .or_default()
-                .push(contact.normal);
-        }
-    }
-
-    let mut extra = 0u32;
-    if let Some(max_contacts) = per_body_counts.values().copied().max() {
-        if max_contacts > 2 {
-            extra += ((max_contacts - 2).min(4)) as u32;
-        }
-    }
-
-    for normals in per_body_normals.values() {
-        if normals.len() < 2 {
-            continue;
-        }
-        let mut sum = Vector3::zeros();
-        for n in normals {
-            sum += *n;
-        }
-        if sum.magnitude_squared() < 1e-6 {
-            continue;
-        }
-        let avg = sum.normalize();
-        let mut min_dot = 1.0f32;
-        for n in normals {
-            min_dot = min_dot.min(n.dot(&avg));
-        }
-        if min_dot < 0.85 {
-            extra += 2;
-            break;
-        }
-    }
-
-    base_iterations + extra
 }

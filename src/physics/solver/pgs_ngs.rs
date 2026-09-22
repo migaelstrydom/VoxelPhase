@@ -18,11 +18,13 @@ use super::conditioning::ManifoldConditions;
 use super::constraint_row::{solve_constraint_row, warm_start_constraint_row, RowSlots};
 use super::contact_row::ContactRows;
 use super::friction::{manifold_friction_projection, solve_friction_impulse};
+use super::iteration_budget::IterationBudget;
 use super::normal::solve_normal_impulse;
 use super::position_correction::{self, PositionCorrectionConfig};
 use super::solver_bodies::SolverBodies;
+use super::solver_islands::SolverIslands;
 use super::torsional::solve_torsional_impulse;
-use super::warm_start::{effective_solver_iterations, warm_start_contact};
+use super::warm_start::warm_start_contact;
 use super::ConstraintSolver;
 
 /// Configuration for the PGS+NGS solver.
@@ -85,6 +87,10 @@ pub struct PgsNgsSolver {
     /// Solver slots of each constraint row's bodies, parallel to
     /// `cached_constraint_rows`.
     constraint_slots: Vec<RowSlots>,
+    /// Rows grouped by the movable bodies they share, rebuilt every `solve`.
+    islands: SolverIslands,
+    /// Per-body contact measurements that set each island's iteration count.
+    iteration_budget: IterationBudget,
 }
 
 impl PgsNgsSolver {
@@ -96,6 +102,8 @@ impl PgsNgsSolver {
             contact_rows: ContactRows::default(),
             solver_bodies: SolverBodies::default(),
             constraint_slots: Vec::new(),
+            islands: SolverIslands::default(),
+            iteration_budget: IterationBudget::default(),
         }
     }
 }
@@ -195,69 +203,87 @@ impl ConstraintSolver for PgsNgsSolver {
             }
         }
 
-        // Phase 3: Iterative sequential-impulse solving.
-        let iterations = effective_solver_iterations(manifolds, self.config.solver_iterations);
-        for _ in 0..iterations {
-            // Joint constraints first — solved early so contacts get the
-            // last word for penetration prevention.
-            for (row, &slots) in constraint_rows.iter_mut().zip(constraint_slots.iter()) {
-                solve_constraint_row(solver_bodies, slots, row);
-            }
+        // Phase 3: Iterative sequential-impulse solving, island by island.
+        // Islands share no movable body, so each converges on its own and
+        // takes only the iterations its own contacts call for.
+        let islands = &mut self.islands;
+        islands.build(
+            solver_bodies,
+            contact_rows,
+            manifolds.len(),
+            constraint_slots,
+        );
+        let budget = &mut self.iteration_budget;
+        budget.measure(manifolds, contact_rows, solver_bodies.len());
+        for island in islands.iter() {
+            let iterations = budget.iterations(island.manifolds, self.config.solver_iterations);
+            for _ in 0..iterations {
+                // Joint constraints first — solved early so contacts get the
+                // last word for penetration prevention.
+                for &ci in island.constraints {
+                    solve_constraint_row(
+                        solver_bodies,
+                        constraint_slots[ci],
+                        &mut constraint_rows[ci],
+                    );
+                }
 
-            // Contacts last — normal + friction impulses.
-            for (mi, manifold) in manifolds.iter_mut().enumerate() {
-                let rows = contact_rows.manifold(mi);
-                let pre_solve_vn = contact_rows.pre_solve_normal_velocities(mi);
+                // Contacts last — normal + friction impulses.
+                for &mi in island.manifolds {
+                    let manifold = &mut manifolds[mi];
+                    let rows = contact_rows.manifold(mi);
+                    let pre_solve_vn = contact_rows.pre_solve_normal_velocities(mi);
 
-                // Block normal solve: multi-contact manifolds get extra local
-                // iterations to capture cross-contact coupling.
-                let normal_passes = if manifold.contacts.len() > 1 {
-                    self.config.block_normal_micro_iterations
-                } else {
-                    1
-                };
-                for _ in 0..normal_passes {
+                    // Block normal solve: multi-contact manifolds get extra local
+                    // iterations to capture cross-contact coupling.
+                    let normal_passes = if manifold.contacts.len() > 1 {
+                        self.config.block_normal_micro_iterations
+                    } else {
+                        1
+                    };
+                    for _ in 0..normal_passes {
+                        for ci in 0..manifold.contacts.len() {
+                            solve_normal_impulse(
+                                solver_bodies,
+                                rows[ci].as_ref(),
+                                &manifold.header,
+                                &mut manifold.contacts[ci],
+                                self.config.restitution_velocity_threshold,
+                                pre_solve_vn[ci],
+                            );
+                        }
+                    }
+
+                    // Per-contact friction solve
                     for ci in 0..manifold.contacts.len() {
-                        solve_normal_impulse(
+                        solve_friction_impulse(
                             solver_bodies,
                             rows[ci].as_ref(),
                             &manifold.header,
                             &mut manifold.contacts[ci],
-                            self.config.restitution_velocity_threshold,
-                            pre_solve_vn[ci],
                         );
                     }
-                }
 
-                // Per-contact friction solve
-                for ci in 0..manifold.contacts.len() {
-                    solve_friction_impulse(
-                        solver_bodies,
-                        rows[ci].as_ref(),
-                        &manifold.header,
-                        &mut manifold.contacts[ci],
-                    );
-                }
+                    // Per-contact torsional solve. Inert unless a body driving
+                    // through the contact declared a patch for it to bear on.
+                    for ci in 0..manifold.contacts.len() {
+                        solve_torsional_impulse(
+                            solver_bodies,
+                            rows[ci].as_ref(),
+                            &manifold.header,
+                            &mut manifold.contacts[ci],
+                        );
+                    }
 
-                // Per-contact torsional solve. Inert unless a body driving
-                // through the contact declared a patch for it to bear on.
-                for ci in 0..manifold.contacts.len() {
-                    solve_torsional_impulse(
-                        solver_bodies,
-                        rows[ci].as_ref(),
-                        &manifold.header,
-                        &mut manifold.contacts[ci],
-                    );
-                }
-
-                // Manifold-level friction budget projection
-                if manifold.contacts.len() > 1 {
-                    manifold_friction_projection(
-                        solver_bodies,
-                        rows,
-                        &manifold.header,
-                        &mut manifold.contacts,
-                    );
+                    // Manifold-level friction budget projection
+                    if manifold.contacts.len() > 1 {
+                        manifold_friction_projection(
+                            solver_bodies,
+                            rows,
+                            &manifold.header,
+                            &mut manifold.contacts,
+                        );
+                    }
                 }
             }
         }

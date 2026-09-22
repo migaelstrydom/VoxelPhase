@@ -345,7 +345,7 @@ All existing bench harness tests must remain green, including:
 
 ### Interaction with solver iterations
 
-Shock propagation reduces the number of PGS iterations needed for convergence. The `effective_solver_iterations` function currently adds extra iterations for multi-contact bodies. With shock propagation active, these extras may become unnecessary. Consider reducing the base iteration count after shock propagation is validated, to reclaim the performance spent on micro-iterations.
+Shock propagation reduces the number of PGS iterations needed for convergence. `IterationBudget` currently adds extra iterations to islands with multi-contact bodies. With shock propagation active, these extras may become unnecessary. Consider reducing the base iteration count after shock propagation is validated, to reclaim the performance spent on micro-iterations.
 
 ---
 

@@ -75,6 +75,9 @@ pub(crate) struct SolverBodies {
     bodies: Vec<SolverBody>,
     /// Arena index of each solver body, in slot order, for the scatter.
     handles: Vec<Index>,
+    /// Whether each solver body's velocity can change — anything but a
+    /// static body — in slot order. Only these couple rows into islands.
+    movable: Vec<bool>,
     /// Solver slot per arena slot number, `NO_SLOT` where there is none.
     slot_of: Vec<u32>,
 }
@@ -87,6 +90,7 @@ impl SolverBodies {
         }
         self.bodies.clear();
         self.handles.clear();
+        self.movable.clear();
     }
 
     /// The solver slot for `index`, gathering the body on first use.
@@ -108,7 +112,19 @@ impl SolverBodies {
         self.slot_of[arena_slot] = slot as u32;
         self.bodies.push(SolverBody::gather(body));
         self.handles.push(index);
+        self.movable.push(!body.is_static());
         Some(slot)
+    }
+
+    /// How many bodies are gathered; slots run from zero to this.
+    pub fn len(&self) -> usize {
+        self.bodies.len()
+    }
+
+    /// Whether the body in `slot` can be moved by an impulse — through its
+    /// mass, or as a kinematic body pushed off static geometry.
+    pub fn is_movable(&self, slot: usize) -> bool {
+        self.movable[slot]
     }
 
     pub fn get(&self, slot: usize) -> &SolverBody {

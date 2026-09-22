@@ -188,6 +188,11 @@ impl ContactRow {
         })
     }
 
+    /// Solver slots of the pair: A's, when it is a body, and B's.
+    pub fn slots(&self) -> (Option<usize>, usize) {
+        (self.body_a.map(|a| a.slot), self.body_b.slot)
+    }
+
     /// Relative velocity at the contact (B minus A), from the live velocities.
     pub fn relative_velocity(&self, bodies: &SolverBodies) -> Vector3<f32> {
         let at_a = self
@@ -270,6 +275,17 @@ impl ContactRows {
     /// The pre-solve normal velocities of manifold `manifold`, in contact order.
     pub fn pre_solve_normal_velocities(&self, manifold: usize) -> &[f32] {
         &self.pre_solve_normal_velocity[self.range(manifold)]
+    }
+
+    /// Solver slots of manifold `manifold`'s pair, as
+    /// [`ContactRow::slots`]; `None` when it has no rows because a body is
+    /// gone.
+    pub fn manifold_slots(&self, manifold: usize) -> Option<(Option<usize>, usize)> {
+        self.manifold(manifold)
+            .iter()
+            .flatten()
+            .next()
+            .map(ContactRow::slots)
     }
 
     fn range(&self, manifold: usize) -> std::ops::Range<usize> {
