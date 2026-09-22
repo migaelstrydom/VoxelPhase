@@ -515,8 +515,8 @@ mod tests {
         assert!(m.len() <= 4);
     }
 
-    /// Same patch geometry as the hull_patch pop_replay test, but using an
-    /// OBB that approximates the menhir's bounding dimensions.
+    /// Captured patch geometry from an in-game pop dump: two flat floor faces
+    /// at y=-3 and two sloped faces forming a step.
     fn pop_replay_patch_minimal() -> FilteredPatch {
         FilteredPatch {
             faces: SmallVec::from_vec(vec![
@@ -564,35 +564,48 @@ mod tests {
         }
     }
 
+    /// A box straddling a terrain step legitimately touches faces with
+    /// different normals, so a mixed-normal manifold is correct here. What
+    /// must hold is that every depth is real overlap: each contact sits inside
+    /// a face it was generated from, and stepping back along the normal by the
+    /// reported depth lands on the box. A depth measured against a face's
+    /// infinite plane, beyond its polygon, fails one or the other.
     #[test]
-    #[should_panic(expected = "SAT-consistent manifold should keep one contact direction")]
-    fn pop_replay_obb_manifold_should_not_mix_normals() {
-        let patch = pop_replay_patch_minimal();
+    fn step_replay_depths_are_real_overlap() {
+        const TOLERANCE: f32 = 1e-3;
 
-        // OBB approximating the menhir: half_extents match the egg's bounding
-        // dimensions (half_height=4, max_radius=1.8).
+        let patch = pop_replay_patch_minimal();
         let center = Point3::new(10.586787, -1.690402, -4.410592);
         let rot = UnitQuaternion::from_quaternion(nalgebra::Quaternion::new(
             0.335174, 0.163065, -0.581374, 0.723237,
         ));
         let obb = Obb::new(center, rot, Vector3::new(1.8, 4.0, 1.8));
-        let margin = 0.02;
 
-        let manifold = obb_patch_manifold(&obb, &patch, margin);
+        let manifold = obb_patch_manifold(&obb, &patch, 0.02);
         assert!(
             !manifold.is_empty(),
-            "OBB replay case should produce contacts for analysis"
+            "box overlaps the step and must produce contacts"
         );
 
-        let base = manifold.points[0].raw_normal.normalize();
         for (i, cp) in manifold.points.iter().enumerate() {
-            let d = base.dot(&cp.raw_normal.normalize());
+            let normal = cp.raw_normal.normalize();
+            let on_a_face = patch.faces.iter().any(|face| {
+                face.normal.dot(&normal) > 0.999
+                    && (cp.point - face.vertices[0]).dot(&face.normal).abs() < TOLERANCE
+                    && point_in_convex_polygon(&cp.point, &face.vertices, &face.normal)
+            });
             assert!(
-                d > 0.95,
-                "SAT-consistent manifold should keep one contact direction. \
-                 Contact {i} has mixed normal {:?} vs base {:?} (dot={d:.4})",
-                cp.raw_normal,
-                base
+                on_a_face,
+                "contact {i} at {:?} lies outside every face with its normal",
+                cp.point
+            );
+
+            let witness = cp.point - normal * cp.raw_depth;
+            let gap = (obb.closest_point(witness) - witness).magnitude();
+            assert!(
+                gap < TOLERANCE,
+                "contact {i} claims depth {:.3} but its witness {witness:?} is {gap:.3} outside the box",
+                cp.raw_depth
             );
         }
     }
