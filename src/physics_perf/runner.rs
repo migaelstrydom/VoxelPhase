@@ -1,11 +1,12 @@
 use std::collections::hash_map::DefaultHasher;
 use std::hash::Hasher;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use crate::debug::DebugLines;
+use crate::perf::stats::median;
+use crate::perf::Ground;
 use crate::physics::{FixedTimestep, FrameProfile, PhysicsStage, PhysicsWorld};
 
-use super::ground::Ground;
 use super::record::{FrameRecord, PerfRun};
 use super::scenario::PerfScenario;
 
@@ -164,10 +165,4 @@ fn median_frames(takes: Vec<Vec<FrameRecord>>) -> Vec<FrameRecord> {
             }
         })
         .collect()
-}
-
-fn median(values: impl Iterator<Item = Duration>) -> Duration {
-    let mut values: Vec<Duration> = values.collect();
-    values.sort_unstable();
-    values[values.len() / 2]
 }

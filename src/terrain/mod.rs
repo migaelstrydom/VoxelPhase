@@ -30,7 +30,7 @@ mod voxel;
 mod voxel_block;
 mod world;
 
-pub use adjacency::DefectiveEdge;
+pub use adjacency::{AdjacencyMap, AdjacencyTimings, DefectiveEdge, TriangleNeighbors};
 pub use anchor::{mate, outward, Anchor};
 pub use chunk::{ChunkCoord, CHUNK_VOXELS};
 pub use chunk_grid::ChunkGrid;

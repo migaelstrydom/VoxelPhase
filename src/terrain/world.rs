@@ -30,7 +30,7 @@ use nalgebra::{Point3, Vector3};
 use rustc_hash::FxHashMap;
 use std::time::{Duration, Instant};
 
-use super::adjacency::DefectiveEdge;
+use super::adjacency::{AdjacencyTimings, DefectiveEdge};
 use super::blast::BlastConfig;
 use super::chunk::ChunkTriangleRef;
 use super::mesh_octree::MeshBuildTimings;
@@ -75,9 +75,10 @@ const NEIGHBOR_OFFSETS: [Vector3<f32>; 6] = [
     Vector3::new(0.0, 0.0, -1.0),
 ];
 
-/// Wall-clock breakdown of one `TerrainWorld::update()` that did work.
+/// Wall-clock breakdown of one `TerrainWorld::update()` that did work, and of
+/// the detonations that made it necessary.
 ///
-/// The three phases scale differently, which is the whole reason they are timed
+/// The phases scale differently, which is the whole reason they are timed
 /// apart: `remesh` and `adjacency` are O(chunks dirtied) and roughly constant as
 /// a level grows, whereas `concat` rebuilds every vertex in the level and is
 /// therefore O(total triangles).
@@ -85,6 +86,10 @@ const NEIGHBOR_OFFSETS: [Vector3<f32>; 6] = [
 pub struct UpdateTimings {
     /// How many chunks were remeshed, across all segments.
     pub chunks_dirtied: usize,
+    /// Every `detonate` call since the previous update: resolving each blast's
+    /// budget and writing the removed voxels. Runs before the update, usually
+    /// earlier in the same frame.
+    pub detonate: Duration,
     /// Marching cubes over the dirty chunks, plus the vacant-chunk prune.
     /// Excludes the adjacency patching measured separately.
     pub remesh: Duration,
@@ -95,6 +100,8 @@ pub struct UpdateTimings {
     pub collect: Duration,
     /// Incremental adjacency patching for the remeshed triangles.
     pub adjacency: Duration,
+    /// Sub-breakdown of `adjacency`, which these do not add to separately.
+    pub adjacency_split: AdjacencyTimings,
     /// Rebuilding the concatenated render vertex/index buffers.
     pub concat: Duration,
     /// Sub-breakdown of `concat`, which these do not add to separately.
@@ -106,7 +113,7 @@ pub struct UpdateTimings {
 impl UpdateTimings {
     /// Sum of the measured phases.
     pub fn total(&self) -> Duration {
-        self.remesh + self.adjacency + self.concat
+        self.detonate + self.remesh + self.adjacency + self.concat
     }
 }
 
@@ -134,6 +141,10 @@ pub struct TerrainWorld {
     /// Timing breakdown of the most recent `update()` that had work to do.
     /// Retained across idle frames so it can still be read after the event.
     last_update: Option<UpdateTimings>,
+
+    /// Time spent in `detonate` since the last `update()`, carried into that
+    /// update's timings so a blast is reported with the rebuild it caused.
+    pending_detonate: Duration,
 }
 
 impl TerrainWorld {
@@ -180,6 +191,7 @@ impl TerrainWorld {
             texture: None,
             bounds,
             last_update: None,
+            pending_detonate: Duration::ZERO,
         }
     }
 
@@ -210,6 +222,7 @@ impl TerrainWorld {
     /// budget against its own material, which is what lets a charge cut deep
     /// into one segment's sand and barely mark the granite next to it.
     pub fn detonate(&mut self, center: Point3<f32>, config: &BlastConfig) {
+        let started = Instant::now();
         for segment in &mut self.segments {
             if segment
                 .bounds()
@@ -218,6 +231,7 @@ impl TerrainWorld {
                 segment.detonate(center, config);
             }
         }
+        self.pending_detonate += started.elapsed();
     }
 
     /// Update terrain incrementally, remeshing only the chunks marked dirty.
@@ -230,16 +244,17 @@ impl TerrainWorld {
 
         let mut chunks_dirtied = 0;
         let mut remesh = Duration::ZERO;
-        let mut adjacency = Duration::ZERO;
+        let mut adjacency = AdjacencyTimings::default();
         let mut build = MeshBuildTimings::default();
         let mut collect = Duration::ZERO;
+        let detonate = std::mem::take(&mut self.pending_detonate);
 
         let mut rebuilt = Vec::new();
         for segment in &mut self.segments {
             if let Some(t) = segment.update(&mut rebuilt) {
                 chunks_dirtied += t.chunks_dirtied;
                 remesh += t.remesh;
-                adjacency += t.adjacency;
+                adjacency.add(&t.adjacency);
                 collect += t.collect;
                 build.add(&t.build);
             }
@@ -256,10 +271,12 @@ impl TerrainWorld {
 
         let timings = UpdateTimings {
             chunks_dirtied,
+            detonate,
             remesh,
             build,
             collect,
-            adjacency,
+            adjacency: adjacency.total(),
+            adjacency_split: adjacency,
             concat_split,
             concat,
             triangles: self.triangle_count(),
@@ -272,7 +289,7 @@ impl TerrainWorld {
             self.segments.len(),
             timings.triangles,
             remesh,
-            adjacency,
+            timings.adjacency,
             concat,
             timings.total(),
         );
@@ -1550,80 +1567,6 @@ mod tests {
             "flat terrain surfaced at {h}, expected {}",
             terrain.base_height
         );
-    }
-
-    /// Measure where the cost of a terrain rebuild actually goes.
-    ///
-    /// Ignored by default because it takes seconds and is a measurement rather
-    /// than an assertion. Run it in release when the answer matters:
-    ///
-    /// ```bash
-    /// cargo test --release --lib -- --ignored --nocapture grenade_update_cost
-    /// ```
-    ///
-    /// The point is which term dominates: remesh is O(chunks dirtied) and stays
-    /// put as levels grow, whereas the render buffer concatenation is O(total
-    /// level triangles) and grows with them.
-    #[test]
-    #[ignore]
-    fn grenade_update_cost_split() {
-        let level = crate::level::load_level(std::path::Path::new("levels/test_arena.level.ron"))
-            .expect("test_arena should load");
-        let segments = crate::level::build_segments(&level).expect("placement resolves");
-        let mut world = TerrainWorld::from_segments_headless(segments);
-        println!(
-            "test_arena: {} chunks, {} triangles, {} vertices",
-            world.chunk_count(),
-            world.triangle_count(),
-            world.render_vertices().len()
-        );
-
-        // Explosion defaults: a 2.5 m crater at full voxel damage.
-        for (i, centre) in [
-            Point3::new(0.0, 0.0, 0.0),
-            Point3::new(16.0, 0.0, 16.0),
-            Point3::new(-20.0, 0.0, 8.0),
-            // Two more wide craters. Grenade 0 used to cost several times these
-            // because the concat buffers reallocated on the first edit after
-            // load; keeping later same-size craters here is what makes that kind
-            // of regression visible as an outlier rather than the norm.
-            Point3::new(32.0, 0.0, 0.0),
-            Point3::new(0.0, 0.0, 32.0),
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            world.detonate(centre, &BlastConfig::fixed_radius(2.5));
-            world.update();
-            let t = world
-                .last_update_timings()
-                .expect("an update that destroyed voxels should be timed");
-            let ms = |d: Duration| d.as_secs_f64() * 1000.0;
-            println!(
-                "grenade {i} at {centre:?}: {} chunks dirtied | remesh {:.2} ms | adjacency {:.2} ms | concat {:.2} ms | total {:.2} ms",
-                t.chunks_dirtied,
-                ms(t.remesh),
-                ms(t.adjacency),
-                ms(t.concat),
-                ms(t.total())
-            );
-            println!(
-                "    remesh split: grid alloc {:.2} | sample {:.2} | marching cubes {:.2} | ambient occlusion {:.2} | octree insert {:.2} | neighbour refs {:.2} | collect {:.2} ms",
-                ms(t.build.grid_alloc),
-                ms(t.build.sample),
-                ms(t.build.marching_cubes),
-                ms(t.build.ambient_occlusion),
-                ms(t.build.insert),
-                ms(t.build.neighbor_refs),
-                ms(t.collect),
-            );
-            println!(
-                "    concat split: mesh walk {:.2} | world transform {:.2} | index rebase {:.2} ms",
-                ms(t.concat_split.mesh_walk),
-                ms(t.concat_split.transform),
-                ms(t.concat_split.rebase),
-            );
-        }
     }
 }
 

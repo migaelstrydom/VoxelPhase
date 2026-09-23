@@ -1,6 +1,6 @@
 use crate::physics::PhysicsWorld;
 
-use super::ground::Ground;
+use crate::perf::Ground;
 
 /// A population of bodies whose simulation cost is worth measuring.
 ///

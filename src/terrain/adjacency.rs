@@ -27,6 +27,7 @@
 //! the total mesh size (~1–2 ms vs ~16 ms for a 10K-triangle terrain).
 
 use std::hash::Hash;
+use std::time::{Duration, Instant};
 
 use nalgebra::Point3;
 use rustc_hash::FxHashMap;
@@ -71,6 +72,30 @@ impl Edge {
 /// `neighbors[0]` = neighbor across edge v0→v1
 /// `neighbors[1]` = neighbor across edge v1→v2
 /// `neighbors[2]` = neighbor across edge v2→v0
+/// Wall-clock breakdown of patching the adjacency map for remeshed triangles.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AdjacencyTimings {
+    /// Tagging each chunk's triangles with the chunk they belong to, so they
+    /// can be keyed segment-wide. Done by the caller, before the patch.
+    pub qualify: Duration,
+    /// Removing the old triangles and cutting the links they held.
+    pub unlink: Duration,
+    /// Inserting the new triangles and linking every edge that became manifold.
+    pub link: Duration,
+}
+
+impl AdjacencyTimings {
+    pub fn total(&self) -> Duration {
+        self.qualify + self.unlink + self.link
+    }
+
+    pub fn add(&mut self, other: &Self) {
+        self.qualify += other.qualify;
+        self.unlink += other.unlink;
+        self.link += other.link;
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct TriangleNeighbors<R> {
     pub neighbors: [Option<R>; 3],
@@ -140,8 +165,9 @@ impl<R: Copy + Eq + Hash> AdjacencyMap<R> {
         old_triangles: &[(R, [Point3<f32>; 3])],
         new_triangles: &[(R, [Point3<f32>; 3])],
         tolerance: f32,
-    ) {
+    ) -> AdjacencyTimings {
         self.inv_cell = 1.0 / tolerance as f64;
+        let t_unlink = Instant::now();
         // === REMOVE phase ===
         for (tri_ref, positions) in old_triangles {
             let edges = self.triangle_edges(positions);
@@ -175,7 +201,10 @@ impl<R: Copy + Eq + Hash> AdjacencyMap<R> {
             self.adjacency.remove(tri_ref);
         }
 
+        let unlink = t_unlink.elapsed();
+
         // === ADD phase ===
+        let t_link = Instant::now();
         for (tri_ref, positions) in new_triangles {
             let edges = self.triangle_edges(positions);
 
@@ -205,6 +234,20 @@ impl<R: Copy + Eq + Hash> AdjacencyMap<R> {
                 }
             }
         }
+
+        AdjacencyTimings {
+            qualify: Duration::ZERO,
+            unlink,
+            link: t_link.elapsed(),
+        }
+    }
+
+    /// Every triangle with at least one neighbour, and its neighbours.
+    ///
+    /// In hash order, which depends on insertion history; a caller comparing
+    /// two maps must not rely on it.
+    pub fn links(&self) -> impl Iterator<Item = (&R, &TriangleNeighbors<R>)> {
+        self.adjacency.iter()
     }
 
     /// Look up the neighbors of a triangle.

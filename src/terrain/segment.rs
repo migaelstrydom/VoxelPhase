@@ -22,7 +22,7 @@
 use nalgebra::{Point3, Vector3};
 use std::time::{Duration, Instant};
 
-use super::adjacency::{AdjacencyMap, DefectiveEdge};
+use super::adjacency::{AdjacencyMap, AdjacencyTimings, DefectiveEdge};
 use super::anchor::Anchor;
 use super::blast::{self, BlastConfig};
 use super::chunk::{ChunkCoord, ChunkTriangleRef, CHUNK_VOXELS};
@@ -66,7 +66,8 @@ pub struct SegmentTimings {
     pub build: MeshBuildTimings,
     /// Walking the old and new octrees to list their triangles for adjacency.
     pub collect: Duration,
-    pub adjacency: Duration,
+    /// Patching the segment's adjacency map, split by phase.
+    pub adjacency: AdjacencyTimings,
 }
 
 /// Wall-clock breakdown of one render-buffer concatenation.
@@ -93,7 +94,7 @@ impl ConcatTimings {
 struct ChunkRemeshTimings {
     build: MeshBuildTimings,
     collect: Duration,
-    adjacency: Duration,
+    adjacency: AdjacencyTimings,
 }
 
 /// An independently placed chunk grid with a name, a frame and named anchors.
@@ -282,13 +283,13 @@ impl Segment {
         }
 
         let t0 = Instant::now();
-        let mut adjacency = Duration::ZERO;
+        let mut adjacency = AdjacencyTimings::default();
         let mut build = MeshBuildTimings::default();
         let mut collect = Duration::ZERO;
 
         for coord in &dirty {
             let chunk = self.remesh_chunk(*coord);
-            adjacency += chunk.adjacency;
+            adjacency.add(&chunk.adjacency);
             collect += chunk.collect;
             build.add(&chunk.build);
             rebuilt.push(self.frame.aabb_to_world(&self.grid.chunk_bounds(*coord)));
@@ -303,7 +304,7 @@ impl Segment {
 
         Some(SegmentTimings {
             chunks_dirtied: dirty.len(),
-            remesh: t0.elapsed() - adjacency,
+            remesh: t0.elapsed() - adjacency.total(),
             build,
             collect,
             adjacency,
@@ -334,15 +335,18 @@ impl Segment {
         mesh.collect_all_triangles_into(&mut new_tris);
         let collect = t_collect.elapsed();
 
-        let t = Instant::now();
+        let t_qualify = Instant::now();
         let old_refs = qualify(coord, &old_tris);
         let new_refs = qualify(coord, &new_tris);
-        self.adjacency.update_region(
-            &old_refs,
-            &new_refs,
-            voxel_size * ADJACENCY_TOLERANCE_FACTOR,
-        );
-        let adjacency = t.elapsed();
+        let qualify = t_qualify.elapsed();
+        let adjacency = AdjacencyTimings {
+            qualify,
+            ..self.adjacency.update_region(
+                &old_refs,
+                &new_refs,
+                voxel_size * ADJACENCY_TOLERANCE_FACTOR,
+            )
+        };
 
         let chunk = self.grid.chunk_or_insert(coord);
         chunk.replace_mesh(mesh);
@@ -595,7 +599,7 @@ impl Segment {
             .collect()
     }
 
-    #[cfg(test)]
+    /// Triangle links within this segment.
     pub fn adjacency(&self) -> &AdjacencyMap<ChunkTriangleRef> {
         &self.adjacency
     }

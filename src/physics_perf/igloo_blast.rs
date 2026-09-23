@@ -6,8 +6,8 @@ use crate::app::spawnables::IglooDef;
 use crate::physics::{ColliderDesc, PhysicsWorld, RigidBodyDesc};
 use crate::rendering::substance::{self, ColliderSubstance};
 
-use super::ground::Ground;
 use super::scenario::PerfScenario;
+use crate::perf::Ground;
 
 /// Distance between neighbouring domes when more than one is built.
 const DOME_SPACING: f32 = 8.0;

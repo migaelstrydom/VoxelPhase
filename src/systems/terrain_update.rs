@@ -44,6 +44,7 @@ fn report(timings: &UpdateTimings, debug_log: &mut DebugLog) {
         "Terrain/LastUpdate/Chunks",
         timings.chunks_dirtied.to_string(),
     );
+    debug_log.add("Terrain/LastUpdate/0 Detonate", ms(timings.detonate));
     debug_log.add("Terrain/LastUpdate/1 Remesh", ms(timings.remesh));
     debug_log.add("Terrain/LastUpdate/2 Adjacency", ms(timings.adjacency));
     debug_log.add("Terrain/LastUpdate/3 BufferConcat", ms(timings.concat));
