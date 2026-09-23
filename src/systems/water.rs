@@ -16,7 +16,7 @@ use crate::water::{BodySnapshot, SplashEvent, WakeEvent, WaterGrid, WaveBodyCoup
 
 /// Steps the water flow simulation and wave equation each frame.
 ///
-/// Reads terrain dirty_regions to detect floor changes under water, then
+/// Reads terrain changed_regions to detect floor changes under water, then
 /// advances the flow sim by the frame's delta time. Wave-body coupling
 /// injects disturbances from rigid body interactions before the wave
 /// equation step produces fine-resolution surface ripples.
@@ -115,7 +115,7 @@ impl<'a> System<'a> for WaterSystem {
 
         // Propagate terrain damage to water floor levels.
         if let Some(ref terrain) = terrain_opt {
-            let dirty = terrain.dirty_regions();
+            let dirty = terrain.changed_regions();
             if !dirty.is_empty() {
                 let mut dirty_cells = Vec::new();
                 let dims = grid.dims();
@@ -145,6 +145,10 @@ impl<'a> System<'a> for WaterSystem {
                         }
                     }
                 }
+                // Overlapping regions name the same cell more than once, and
+                // every recheck is nine terrain rays.
+                dirty_cells.sort_unstable();
+                dirty_cells.dedup();
                 if !dirty_cells.is_empty() {
                     grid.mark_dirty_floors(&dirty_cells);
                 }

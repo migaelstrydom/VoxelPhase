@@ -124,8 +124,16 @@ pub struct TerrainWorld {
     segments: Vec<Segment>,
 
     /// World AABBs of the chunks rebuilt in the most recent `update()` call.
-    /// Downstream systems (e.g. WaterSystem) read these to detect terrain changes.
     rebuilt_regions: Vec<AABB>,
+
+    /// World boxes the surface can have moved within, from the edits the most
+    /// recent `update()` meshed. Far tighter than `rebuilt_regions`: a blast
+    /// changes a few metres of ground and rebuilds whole chunks around it.
+    changed_regions: Vec<AABB>,
+
+    /// Edits made since the last `update()`, published by it as
+    /// `changed_regions`.
+    pending_changes: Vec<AABB>,
 
     /// Render buffers, concatenated across every segment and already in world
     /// space. Per-segment draw calls are the eventual shape; see `PROGRESS.md`
@@ -187,6 +195,8 @@ impl TerrainWorld {
         Self {
             segments,
             rebuilt_regions: Vec::new(),
+            changed_regions: Vec::new(),
+            pending_changes: Vec::new(),
             render_vertices: Vec::new(),
             render_indices: Vec::new(),
             texture: None,
@@ -229,7 +239,9 @@ impl TerrainWorld {
                 .bounds()
                 .intersects_sphere(center, config.max_radius)
             {
-                segment.detonate(center, config);
+                if let Some(changed) = segment.detonate(center, config) {
+                    self.pending_changes.push(changed);
+                }
             }
         }
         self.pending_detonate += started.elapsed();
@@ -242,6 +254,7 @@ impl TerrainWorld {
         // Clear last frame's rebuilt regions so downstream systems see an empty
         // list on frames with no terrain changes.
         self.rebuilt_regions.clear();
+        self.changed_regions = std::mem::take(&mut self.pending_changes);
 
         let mut chunks_dirtied = 0;
         let mut build = Duration::ZERO;
@@ -422,6 +435,15 @@ impl TerrainWorld {
     /// changes and invalidate cached floor levels.
     pub fn dirty_regions(&self) -> &[AABB] {
         &self.rebuilt_regions
+    }
+
+    /// World boxes the terrain surface can have moved within in the most
+    /// recent `update()`. Empty on a frame with no edits.
+    ///
+    /// What a system that depends on the *surface* should read: a query
+    /// outside these boxes answers as it did before the update.
+    pub fn changed_regions(&self) -> &[AABB] {
+        &self.changed_regions
     }
 
     // === Mesh-precise queries ===
@@ -1224,6 +1246,80 @@ mod tests {
                 !world.is_solid_at(centre.x, centre.y, centre.z),
                 "{label}: voxel survived the blast"
             );
+        }
+    }
+
+    /// Water rechecks its floor only inside `changed_regions`, so every column
+    /// whose surface a blast moved must be inside one — in every frame, since
+    /// the regions are carried from segment space to world space. And they
+    /// belong to one update: the next, with no edits, publishes none.
+    #[test]
+    fn the_surface_only_moves_inside_the_changed_regions() {
+        for (label, frame) in frames() {
+            let mut world = world_of(
+                frame,
+                slab_grid(
+                    1.0,
+                    Point3::new(-5.0, 0.0, -5.0),
+                    Point3::new(5.0, 3.0, 5.0),
+                ),
+            );
+            let columns: Vec<Point3<f32>> = (0..40)
+                .flat_map(|i| (0..40).map(move |j| (i, j)))
+                .map(|(i, j)| {
+                    frame.to_world(Point3::new(
+                        -4.9 + i as f32 * 0.25,
+                        0.0,
+                        -4.9 + j as f32 * 0.25,
+                    ))
+                })
+                .collect();
+            let heights = |world: &TerrainWorld| -> Vec<Option<f32>> {
+                columns
+                    .iter()
+                    .map(|c| world.mesh_surface_height_at(c.x, c.z))
+                    .collect()
+            };
+            let before = heights(&world);
+
+            // Centred on the top face, so the cut's edge band spreads out
+            // along the surface as far as it reaches.
+            world.detonate(
+                frame.to_world(Point3::new(0.5, 3.0, 0.0)),
+                &BlastConfig::fixed_radius(2.0),
+            );
+            world.update();
+            let after = heights(&world);
+            let regions = world.changed_regions().to_vec();
+            assert!(!regions.is_empty(), "{label}: the blast reported no change");
+
+            let mut moved = 0;
+            for ((column, was), now) in columns.iter().zip(&before).zip(&after) {
+                let changed = match (was, now) {
+                    (Some(a), Some(b)) => (a - b).abs() > 1e-4,
+                    (a, b) => a.is_some() != b.is_some(),
+                };
+                if !changed {
+                    continue;
+                }
+                moved += 1;
+                assert!(
+                    regions.iter().any(|r| {
+                        column.x >= r.min.x
+                            && column.x <= r.max.x
+                            && column.z >= r.min.z
+                            && column.z <= r.max.z
+                    }),
+                    "{label}: the surface moved at {column:?}, outside {regions:?}"
+                );
+            }
+            assert!(
+                moved > 0,
+                "{label}: the blast moved no surface, so this proves nothing"
+            );
+
+            world.update();
+            assert!(world.changed_regions().is_empty(), "{label}");
         }
     }
 

@@ -222,20 +222,18 @@ impl Segment {
 
     // === Modification ===
 
-    /// Detonate a charge at a world-space point. Returns true if any chunk was
-    /// marked dirty.
+    /// Detonate a charge at a world-space point. Returns the world-space box
+    /// the surface can have moved within, or `None` if nothing was carved.
     ///
     /// How far the cut reaches is the charge's budget against what it is digging
     /// through — see [`blast::effective_radius`]. The radius is resolved across
     /// the whole grid before anything is carved, so a blast on a chunk boundary
     /// spends one budget rather than one per chunk.
-    pub fn detonate(&mut self, center: Point3<f32>, config: &BlastConfig) -> bool {
+    pub fn detonate(&mut self, center: Point3<f32>, config: &BlastConfig) -> Option<AABB> {
         let local_center = self.frame.to_local(center);
         let voxel_size = self.grid.voxel_size();
 
-        let Some(radius) = blast::effective_radius(&self.grid, local_center, config) else {
-            return false;
-        };
+        let radius = blast::effective_radius(&self.grid, local_center, config)?;
 
         // A changed voxel affects the marching-cubes cells on both sides of its
         // sample, so the neighbouring chunk across a seam has to remesh too.
@@ -250,14 +248,20 @@ impl Segment {
             }
         }
 
-        if any_destroyed {
-            for coord in &coords {
-                if let Some(chunk) = self.grid.chunk_mut(*coord) {
-                    chunk.mark_dirty();
-                }
+        if !any_destroyed {
+            return None;
+        }
+        for coord in &coords {
+            if let Some(chunk) = self.grid.chunk_mut(*coord) {
+                chunk.mark_dirty();
             }
         }
-        any_destroyed
+        // The carve moves samples out to a voxel past the radius (a density is
+        // a clamped distance), and the surface moves in every cell such a
+        // sample is a corner of: one voxel further again.
+        let surface_reach = radius + 2.0 * voxel_size;
+        let surface = AABB::from_center_half_extents(local_center, Vector3::repeat(surface_reach));
+        Some(self.frame.aabb_to_world(&surface))
     }
 
     /// Remesh the chunks marked dirty, appending their world bounds to
