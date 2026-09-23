@@ -1,4 +1,4 @@
-use specs::{Dispatcher, DispatcherBuilder};
+use specs::Dispatcher;
 
 use crate::aim::AimPredictionSystem;
 use crate::animation::critter::{CritterAnimationSystem, CritterProbeConfigSystem};
@@ -32,9 +32,11 @@ use crate::systems::{
     RenderSystem, TerrainAnchorSystem, TerrainUpdateSystem, WaterSystem,
 };
 
+use super::system_timing::TimedDispatcherBuilder;
+
 /// Builds the system dispatcher with proper dependency ordering.
 pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
-    DispatcherBuilder::new()
+    TimedDispatcherBuilder::new()
         // === Phase 1: Input processing ===
         .with(InputActionSystem, "input_actions", &[])
         .with(PlayerInputSystem, "player_input", &["input_actions"])
@@ -242,7 +244,7 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
             ],
         )
         // Rendering (thread-local)
-        .with_thread_local(RenderSystem::default())
+        .with_thread_local(RenderSystem::default(), "render")
         .build()
 }
 

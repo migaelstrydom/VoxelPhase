@@ -520,6 +520,12 @@ impl FrameData {
         Ok(())
     }
 
+    /// Current capacity of the vertex and index buffers, in bytes. Changes
+    /// only when `append_mesh_data` has to grow one.
+    pub fn mesh_buffer_sizes(&self) -> (vk::DeviceSize, vk::DeviceSize) {
+        (self.vertex_buffer.size, self.index_buffer.size)
+    }
+
     pub fn append_mesh_data(
         &mut self,
         vertices: &[Vertex],

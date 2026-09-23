@@ -32,6 +32,7 @@ pub mod physics_perf;
 pub mod platform;
 pub mod player;
 pub mod projectile;
+pub mod render_perf;
 pub mod rendering;
 pub mod resources;
 pub mod sensing;

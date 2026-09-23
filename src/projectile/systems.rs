@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use nalgebra::{Point3, Vector3};
+use nalgebra::Point3;
 use specs::{
     Builder, Entities, Entity, Join, LazyUpdate, Read, ReadExpect, ReadStorage, System, Write,
     WriteStorage,
@@ -10,16 +10,13 @@ use specs::{
 
 use super::components::{Grenade, Lifetime, Projectile};
 use super::config::GrenadeConfig;
+use super::spawn::spawn_grenade;
 use super::throw::grenade_launch;
-use crate::aim::launch::gravity_scale;
 use crate::camera::FollowTarget;
 use crate::character::CharacterIntent;
-use crate::components::{
-    ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
-};
+use crate::components::{Position, RigidBodyComponent};
 use crate::explosion::Explosion;
 use crate::model::Model;
-use crate::physics::{ColliderDesc, RigidBodyDesc};
 use crate::player::Player;
 use crate::systems::PhysicsResource;
 use crate::time::Time;
@@ -151,38 +148,14 @@ impl<'a> System<'a> for GrenadeSpawnSystem {
             camera_pitch,
             world_gravity,
         );
-        let spawn_pos = Vector3::new(launch.origin.x, launch.origin.y, launch.origin.z);
-        let throw_velocity = launch.velocity;
-        let grenade_gravity_scale = gravity_scale(world_gravity, config.gravity);
-
-        let body_handle = {
-            let body_desc = RigidBodyDesc::dynamic()
-                .position(launch.origin)
-                .linear_velocity(throw_velocity)
-                .gravity_scale(grenade_gravity_scale);
-
-            let body_handle = physics.world.create_body(body_desc);
-
-            let collider_desc = ColliderDesc::sphere(config.radius)
-                .density(2000.0)
-                .restitution(0.0)
-                .friction(0.3);
-            physics.world.attach_collider(body_handle, collider_desc);
-
-            body_handle
-        };
-
-        lazy.create_entity(&entities)
-            .with(Position(spawn_pos))
-            .with(Velocity(throw_velocity))
-            .with(Orientation::default())
-            .with(RigidBodyComponent(body_handle))
-            .with(Projectile)
-            .with(Grenade::new(config.fuse_time, config.arm_delay))
-            .with(Lifetime::new(config.max_lifetime))
-            .with(ModelInstance::new(model))
-            .with(Renderable)
-            .build();
+        spawn_grenade(
+            lazy.create_entity(&entities),
+            &mut physics.world,
+            &config,
+            model,
+            launch.origin,
+            launch.velocity,
+        );
 
         // Set cooldown
         cooldown.remaining = config.cooldown;

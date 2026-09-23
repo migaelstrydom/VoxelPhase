@@ -27,6 +27,7 @@ use crate::core::command_buffer::ManagedCommandBuffer;
 use crate::core::error::EngineResult;
 use crate::core::vulkan_context::VulkanContext;
 use crate::rendering::frame::{DrawInfo, ShadowUniforms};
+use crate::rendering::profile::{GpuSpan, GpuTimer};
 use crate::rendering::shadow::frustum::ViewFrustum;
 use crate::rendering::shadow::map::ShadowMap;
 use crate::rendering::shadow::pipeline::ShadowPipeline;
@@ -127,10 +128,16 @@ impl ShadowRenderer {
     /// Separate from [`Self::aim`] because the two are known at different
     /// points in a frame: recording can start immediately, but where the light
     /// is pointed is not settled until the camera has been handed over.
-    pub fn begin_frame(&mut self) -> EngineResult<()> {
+    ///
+    /// This command buffer is the first the GPU runs each frame, so it is
+    /// where the frame's GPU timer is rewound.
+    pub fn begin_frame(&mut self, timer: &GpuTimer) -> EngineResult<()> {
         self.command_buffer
             .begin(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)?;
-        self.map.begin_pass(self.command_buffer.raw());
+        let cb = self.command_buffer.raw();
+        timer.open_frame(cb);
+        timer.begin(cb, GpuSpan::Shadow);
+        self.map.begin_pass(cb);
         Ok(())
     }
 
@@ -227,8 +234,10 @@ impl ShadowRenderer {
     }
 
     /// Close the pass and the command buffer, ready for submission.
-    pub fn end_frame(&self) -> EngineResult<()> {
-        self.map.end_pass(self.command_buffer.raw());
+    pub fn end_frame(&self, timer: &GpuTimer) -> EngineResult<()> {
+        let cb = self.command_buffer.raw();
+        self.map.end_pass(cb);
+        timer.end(cb, GpuSpan::Shadow);
         self.command_buffer.end()
     }
 }

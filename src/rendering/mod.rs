@@ -14,6 +14,7 @@ pub mod pattern;
 pub mod physical_finish;
 pub mod pipeline;
 pub mod post;
+pub mod profile;
 pub mod renderer;
 pub mod shaders;
 pub mod shadow;

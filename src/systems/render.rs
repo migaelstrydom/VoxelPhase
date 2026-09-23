@@ -7,7 +7,7 @@ use crate::components::{
     RigidBodyComponent, Rotation,
 };
 use crate::core::error::{EngineError, EngineResult};
-use crate::debug::{DebugConfig, DebugLines, DebugOverlays};
+use crate::debug::{DebugConfig, DebugLines, DebugLog, DebugOverlays};
 use crate::fire::components::OnFire;
 use crate::hud::{Hud, HudContext};
 use crate::lighting::ActiveLights;
@@ -17,6 +17,7 @@ use crate::rendering::debug_render::{
     render_debug_overlays_opaque, render_debug_overlays_transparent,
 };
 use crate::rendering::material::{MaterialManager, SurfaceModulation};
+use crate::rendering::profile::{RenderProfile, RenderStage};
 use crate::rendering::renderer::Renderer;
 use crate::rendering::vertex::Vertex;
 use crate::resources::textures::TextureManager;
@@ -28,6 +29,7 @@ use specs::{
     Entities, Join, Read, ReadExpect, ReadStorage, System, SystemData, World, Write, WriteExpect,
     WriteStorage,
 };
+use std::time::{Duration, Instant};
 
 /// Every procedurally-rigged character in the world.
 ///
@@ -43,9 +45,23 @@ pub struct RigAnimators<'a> {
     peeper: WriteStorage<'a, PeeperAnimator>,
 }
 
+/// The debug resources the render system reads toggles from and reports into.
+///
+/// Grouped for the same reason as [`RigAnimators`]: the system's flat tuple is
+/// at the limit specs implements.
+#[derive(SystemData)]
+pub struct DebugChannels<'a> {
+    config: Read<'a, DebugConfig>,
+    lines: Write<'a, DebugLines>,
+    overlays: Read<'a, DebugOverlays>,
+    log: Write<'a, DebugLog>,
+}
+
 #[derive(Default)]
 pub struct RenderSystem {
     cpu_ms_ema: f32,
+    /// Smoothed whole-frame GPU time, as the timestamps last reported it.
+    gpu_ms_ema: f32,
     /// The game's HUD. Lives here rather than in a resource because its only
     /// reader is this system and its state is per-frame animation, not
     /// anything another system should be able to reach into.
@@ -88,6 +104,79 @@ fn fire_volume_to_world(pos: &Vector3<f32>, scale: &Vector3<f32>) -> Matrix4<f32
     Matrix4::new_translation(&(pos + offset)) * Matrix4::new_nonuniform_scaling(scale)
 }
 
+fn millis(time: Duration) -> f32 {
+    time.as_secs_f32() * 1000.0
+}
+
+/// Exponentially smoothed frame time for the on-screen readout, seeded by
+/// the first sample rather than climbing from zero.
+fn smoothed(ema: f32, sample: f32) -> f32 {
+    const ALPHA: f32 = 0.1;
+    if ema == 0.0 {
+        sample
+    } else {
+        ema * (1.0 - ALPHA) + sample * ALPHA
+    }
+}
+
+/// Where the last finished frame's rendering time went, on both processors,
+/// and what it drew — so a slow frame in the game can be read span by span.
+fn log_render_profile(profile: &RenderProfile, debug_log: &mut DebugLog) {
+    for (stage, time) in profile.iter() {
+        debug_log.add(
+            format!("Render/Cpu/{}", stage.label()),
+            format!("{:.3} ms", millis(time)),
+        );
+    }
+    debug_log.add(
+        "Render/Cpu/total_work",
+        format!("{:.3} ms", millis(profile.cpu_work())),
+    );
+
+    match profile.gpu {
+        Some(gpu) => {
+            for (span, time) in gpu.iter() {
+                let text = time.map_or("-".to_string(), |t| format!("{:.3} ms", millis(t)));
+                debug_log.add(format!("Render/Gpu/{}", span.label()), text);
+            }
+            let total = gpu
+                .total
+                .map_or("-".to_string(), |t| format!("{:.3} ms", millis(t)));
+            debug_log.add("Render/Gpu/total", total);
+        }
+        None => debug_log.add("Render/Gpu/total", "unavailable"),
+    }
+
+    let counters = &profile.counters;
+    debug_log.add(
+        "Render/Count/draws",
+        format!(
+            "{} ({} opaque, {} blended, {} overlay)",
+            counters.mesh_draws(),
+            counters.opaque_draws,
+            counters.blended_draws,
+            counters.overlay_draws
+        ),
+    );
+    debug_log.add("Render/Count/triangles", counters.triangles.to_string());
+    debug_log.add(
+        "Render/Count/shadow_casters",
+        counters.shadow_casters.to_string(),
+    );
+    debug_log.add("Render/Count/particles", counters.particles.to_string());
+    debug_log.add(
+        "Render/Count/uploaded_mesh",
+        format!(
+            "{:.2} MB",
+            counters.uploaded_mesh_bytes as f64 / (1024.0 * 1024.0)
+        ),
+    );
+    debug_log.add(
+        "Render/Count/buffer_growths",
+        counters.buffer_growths.to_string(),
+    );
+}
+
 impl<'a> System<'a> for RenderSystem {
     type SystemData = (
         Entities<'a>,
@@ -95,8 +184,7 @@ impl<'a> System<'a> for RenderSystem {
         ReadExpect<'a, TextureManager>,
         ReadExpect<'a, MaterialManager>,
         Read<'a, crate::time::Time>,
-        Write<'a, DebugLines>,
-        Read<'a, DebugOverlays>,
+        DebugChannels<'a>,
         Read<'a, ParticlePool>,
         Option<Read<'a, TerrainWorld>>,
         Option<Read<'a, WaterGrid>>,
@@ -113,7 +201,6 @@ impl<'a> System<'a> for RenderSystem {
         ReadStorage<'a, RigidBodyComponent>,
         ReadExpect<'a, super::PhysicsResource>,
         Read<'a, FrameStart>,
-        Read<'a, DebugConfig>,
         Read<'a, ActiveLights>,
         Read<'a, AimState>,
     );
@@ -125,8 +212,7 @@ impl<'a> System<'a> for RenderSystem {
             texture_manager,
             material_manager,
             time,
-            mut debug_lines,
-            debug_overlays,
+            mut debug,
             particle_pool,
             terrain_manager_opt,
             water_grid_opt,
@@ -143,7 +229,6 @@ impl<'a> System<'a> for RenderSystem {
             rigid_bodies,
             physics_resource,
             frame_start,
-            debug_config,
             active_lights,
             aim_state,
         ) = data;
@@ -213,10 +298,14 @@ impl<'a> System<'a> for RenderSystem {
                 // the middle strands both and freezes rendering for good.
                 let recorded = (|| -> EngineResult<()> {
                     // Run fire simulation compute passes before the render pass
+                    let lap = Instant::now();
                     renderer.simulate_fire(draw_cb, time.delta_seconds(), time.total_seconds());
+                    renderer.record_stage(RenderStage::Fire, lap.elapsed());
 
                     // Begin the opaque render pass
                     renderer.begin_opaque_pass(draw_cb);
+
+                    let lap = Instant::now();
 
                     // Update per-frame scene data (view/projection) once
                     let camera_world_pos = Vector3::new(
@@ -233,8 +322,10 @@ impl<'a> System<'a> for RenderSystem {
                     if let Err(e) = renderer.render_sky(draw_cb, &view_matrix, &proj_matrix) {
                         log::error!("RenderSystem: Failed to render sky: {}", e);
                     }
+                    renderer.record_stage(RenderStage::Setup, lap.elapsed());
 
                     // Draw terrain
+                    let lap = Instant::now();
                     if let Some(ref terrain_manager) = terrain_manager_opt {
                         if terrain_manager.has_geometry() {
                             let identity = Matrix4::identity();
@@ -257,8 +348,10 @@ impl<'a> System<'a> for RenderSystem {
                             }
                         }
                     }
+                    renderer.record_stage(RenderStage::Terrain, lap.elapsed());
 
                     // Draw all model instances (grenades, beach balls, etc.)
+                    let lap = Instant::now();
                     for (entity, model_instance, pos, _renderable) in
                         (&entities, &model_instances, &positions, &renderables).join()
                     {
@@ -294,6 +387,7 @@ impl<'a> System<'a> for RenderSystem {
                             log::error!("RenderSystem: Failed to draw model: {}", e);
                         }
                     }
+                    renderer.record_stage(RenderStage::Models, lap.elapsed());
 
                     // Draw every procedurally-rigged character.
                     //
@@ -301,6 +395,7 @@ impl<'a> System<'a> for RenderSystem {
                     // poses its own joints there — so the transform is
                     // identity and the only thing that differs between rigs
                     // is which storage the mesh comes out of.
+                    let lap = Instant::now();
                     let identity = Matrix4::identity();
                     let mut rig_meshes: Vec<(&[Vertex], &[u32])> = Vec::new();
                     for (controller, _pos, _rot, _renderable) in
@@ -330,32 +425,38 @@ impl<'a> System<'a> for RenderSystem {
                             log::error!("RenderSystem: Failed to draw a rigged character: {}", e);
                         }
                     }
+                    renderer.record_stage(RenderStage::Rigs, lap.elapsed());
 
                     // Render opaque debug overlay shapes (spheres, lines)
+                    let lap = Instant::now();
                     if let Err(e) = render_debug_overlays_opaque(
                         &mut renderer,
                         draw_cb,
-                        &debug_overlays,
+                        &debug.overlays,
                         &material_manager,
                         &texture_manager,
                     ) {
                         log::error!("RenderSystem: Failed to draw debug overlays: {}", e);
                     }
+                    renderer.record_stage(RenderStage::DebugShapes, lap.elapsed());
 
                     // Hand the frame's particles over before the scene pass
                     // closes: they are blended scene surfaces and are recorded
                     // in order with the glass and ice, not painted on after the
                     // HDR resolve.
+                    let lap = Instant::now();
                     if let Err(e) =
                         renderer.submit_particles(&particle_pool, &view_matrix, &proj_matrix)
                     {
                         log::error!("RenderSystem: Failed to prepare particles: {}", e);
                     }
+                    renderer.record_stage(RenderStage::Particles, lap.elapsed());
 
                     // End opaque pass, blit to swapchain, begin transparent pass.
                     renderer.begin_transparent_pass(draw_cb, present_index);
 
                     // Render water surface (after geometry, before particles)
+                    let lap = Instant::now();
                     if let (Some(ref water_grid), Some(ref wave_grid)) =
                         (&water_grid_opt, &wave_grid_opt)
                     {
@@ -376,8 +477,10 @@ impl<'a> System<'a> for RenderSystem {
                             log::error!("RenderSystem: Failed to render water: {}", e);
                         }
                     }
+                    renderer.record_stage(RenderStage::Water, lap.elapsed());
 
                     // Render fire volumes (after water, before particles)
+                    let lap = Instant::now();
                     {
                         let camera_pos = Vector3::new(
                             camera_data.position.x,
@@ -386,12 +489,14 @@ impl<'a> System<'a> for RenderSystem {
                         );
                         renderer.render_fire(draw_cb, &view_matrix, &proj_matrix, &camera_pos);
                     }
+                    renderer.record_stage(RenderStage::Fire, lap.elapsed());
 
                     // Render transparent debug overlay shapes (triangles)
+                    let lap = Instant::now();
                     if let Err(e) = render_debug_overlays_transparent(
                         &mut renderer,
                         draw_cb,
-                        &debug_overlays,
+                        &debug.overlays,
                         &material_manager,
                         &texture_manager,
                     ) {
@@ -400,15 +505,23 @@ impl<'a> System<'a> for RenderSystem {
                             e
                         );
                     }
+                    renderer.record_stage(RenderStage::DebugShapes, lap.elapsed());
 
                     // Add FPS and fire count to debug lines
-                    if debug_config.show_fps {
+                    if debug.config.show_fps {
                         let fps = 1.0 / time.delta_seconds();
-                        debug_lines.add("FPS", format!("{:.0}", fps));
+                        debug.lines.add("FPS", format!("{:.0}", fps));
                     }
-                    if debug_config.show_cpu_ms {
-                        debug_lines.add("CPU ms", format!("{:.2}", self.cpu_ms_ema));
+                    if debug.config.show_cpu_ms {
+                        debug.lines.add("CPU ms", format!("{:.2}", self.cpu_ms_ema));
                     }
+                    if debug.config.show_gpu_ms {
+                        if let Some(gpu) = renderer.profile().gpu.and_then(|g| g.total) {
+                            self.gpu_ms_ema = smoothed(self.gpu_ms_ema, millis(gpu));
+                            debug.lines.add("GPU ms", format!("{:.2}", self.gpu_ms_ema));
+                        }
+                    }
+                    log_render_profile(renderer.profile(), &mut debug.log);
                     // if !renderer.active_fires.is_empty() {
                     //     let fire_count = renderer.active_fires.len();
                     //     let mut slot_counts = [0usize; crate::fire::renderer::SIM_POOL_SIZE];
@@ -423,7 +536,8 @@ impl<'a> System<'a> for RenderSystem {
                     // owns a single vertex buffer, so a second upload before
                     // the first draw executes would redraw the first batch
                     // with the second's contents.
-                    let mut overlay = renderer.overlay.layout_debug_lines(debug_lines.iter());
+                    let lap = Instant::now();
+                    let mut overlay = renderer.overlay.layout_debug_lines(debug.lines.iter());
                     let hud_context = HudContext::new(
                         renderer.overlay.screen_size(),
                         time.delta_seconds(),
@@ -436,6 +550,7 @@ impl<'a> System<'a> for RenderSystem {
                     if let Err(e) = renderer.render_overlay(draw_cb, &overlay) {
                         log::error!("RenderSystem: Failed to render overlay: {}", e);
                     }
+                    renderer.record_stage(RenderStage::Overlay, lap.elapsed());
 
                     Ok(())
                 })();
@@ -459,13 +574,7 @@ impl<'a> System<'a> for RenderSystem {
                 if let Some(start) = frame_start.0 {
                     let total = start.elapsed();
                     let cpu_work = total.saturating_sub(vsync_wait);
-                    let cpu_ms = cpu_work.as_secs_f32() * 1000.0;
-                    let alpha = 0.1;
-                    self.cpu_ms_ema = if self.cpu_ms_ema == 0.0 {
-                        cpu_ms
-                    } else {
-                        self.cpu_ms_ema * (1.0 - alpha) + cpu_ms * alpha
-                    };
+                    self.cpu_ms_ema = smoothed(self.cpu_ms_ema, millis(cpu_work));
                 }
             }
             Err(EngineError::SwapchainOutOfDate) => {

@@ -21,6 +21,10 @@ pub struct DebugConfig {
     /// If true, measure per-frame CPU work (excluding the vsync acquire wait)
     /// and display it as `CPU ms` in the overlay.
     pub show_cpu_ms: bool,
+    /// If true, display the whole-frame GPU time, from timestamp queries, as
+    /// `GPU ms` in the overlay. Reads back a finished frame, so costs nothing
+    /// to measure; the timestamps are written either way.
+    pub show_gpu_ms: bool,
 }
 
 impl Default for DebugConfig {
@@ -28,6 +32,7 @@ impl Default for DebugConfig {
         Self {
             show_fps: true,
             show_cpu_ms: false,
+            show_gpu_ms: true,
         }
     }
 }

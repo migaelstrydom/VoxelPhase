@@ -13,6 +13,7 @@
 //! shaders rather than a stand-in.
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use ash::vk;
 use nalgebra::{Matrix4, Vector3};
@@ -32,6 +33,7 @@ use crate::rendering::material::{
 use crate::rendering::overlay::{OverlayGeometry, OverlayRenderer};
 use crate::rendering::pipeline::{GraphicsPipeline, GraphicsPipelineConfig};
 use crate::rendering::post::PostProcessRenderer;
+use crate::rendering::profile::{GpuSpan, GpuTimer, RenderProfile, RenderStage};
 use crate::rendering::shadow::map::SHADOW_SAMPLED_LAYOUT;
 use crate::rendering::shadow::{ShadowMap, ShadowRenderer, ShadowVolume, ViewFrustum};
 use crate::rendering::sky::SkyRenderer;
@@ -178,6 +180,12 @@ pub struct Renderer {
     /// The output image this frame is being rendered into, between
     /// `begin_frame` and `end_frame`.
     current_frame: Option<AcquiredFrame>,
+    /// Timestamps the frame's GPU spans.
+    gpu_timer: GpuTimer,
+    /// The frame being recorded: stage times and counts so far.
+    profile: RenderProfile,
+    /// The last frame to finish on the GPU, complete with its GPU times.
+    last_profile: RenderProfile,
 }
 
 impl Renderer {
@@ -312,6 +320,8 @@ impl Renderer {
             targets.depth_buffer.view,
         )?;
 
+        let gpu_timer = GpuTimer::new(&vulkan_context)?;
+
         Ok(Self {
             pipeline,
             output,
@@ -334,6 +344,9 @@ impl Renderer {
             debug_wireframe_backfaces: false,
             wireframe_color: [0.0, 0.0, 0.0, 1.0],
             current_frame: None,
+            gpu_timer,
+            profile: RenderProfile::default(),
+            last_profile: RenderProfile::default(),
         })
     }
 
@@ -355,7 +368,15 @@ impl Renderer {
         // `end_frame` resets it immediately before the submit that re-signals
         // it, so a frame abandoned in between leaves it signalled rather than
         // stranding every later frame on a signal that never arrives.
+        let fence_wait = Instant::now();
         self.targets.sync.wait()?;
+        let fence_wait = fence_wait.elapsed();
+
+        // The previous frame is now finished on both sides, so its GPU times
+        // can be read without stalling and its profile is complete.
+        self.profile.gpu = self.gpu_timer.collect();
+        self.last_profile = std::mem::take(&mut self.profile);
+        self.profile.record(RenderStage::FenceWait, fence_wait);
 
         // Now that the GPU is done with previous frames, flush deferred deletions
         self.frame_data.begin_frame();
@@ -378,18 +399,21 @@ impl Renderer {
         // The shadow pass records into its own command buffer, filled by the
         // same draw calls that fill the geometry one. Opening it here means a
         // caller cannot forget to.
-        self.shadow.begin_frame()?;
+        self.shadow.begin_frame(&self.gpu_timer)?;
 
         // Begin command buffer recording
         self.targets
             .draw_command_buffer
             .begin(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)?;
 
+        let acquire = Instant::now();
         let frame = self.output.acquire(&self.targets.sync)?;
+        self.profile.record(RenderStage::Acquire, acquire.elapsed());
         let image_index = frame.index;
         self.current_frame = Some(frame);
 
         let cb = self.targets.draw_command_buffer.raw();
+        self.gpu_timer.begin(cb, GpuSpan::FireSim);
 
         Ok((cb, image_index))
     }
@@ -416,6 +440,9 @@ impl Renderer {
             .framebuffer(self.targets.opaque_framebuffer)
             .render_area(self.targets.extent.into())
             .clear_values(&clear_values);
+
+        self.gpu_timer.end(cb, GpuSpan::FireSim);
+        self.gpu_timer.begin(cb, GpuSpan::Scene);
 
         unsafe {
             self.vulkan_context.device().cmd_begin_render_pass(
@@ -677,7 +704,12 @@ impl Renderer {
         }
 
         // Append mesh data to frame buffers and get draw offsets
+        let buffer_sizes = self.frame_data.mesh_buffer_sizes();
         let draw_info = self.frame_data.append_mesh_data(vertices, indices)?;
+        self.profile.counters.record_upload(
+            std::mem::size_of_val(vertices) + std::mem::size_of_val(indices),
+            self.frame_data.mesh_buffer_sizes() != buffer_sizes,
+        );
 
         // Park this draw's shading parameters in the frame's surface table.
         let surface_index = self.surfaces.push(surface.to_gpu());
@@ -689,6 +721,9 @@ impl Renderer {
         // a window would only put a hard black bite behind itself.
         if options.casts_shadow && surface.transparency.casts_shadow() {
             self.record_shadow_caster(model, &draw_info);
+            if self.shadow.enabled {
+                self.profile.counters.shadow_casters += 1;
+            }
         }
 
         let texture_set = texture_manager
@@ -709,16 +744,21 @@ impl Renderer {
             other => other,
         };
 
+        self.profile.counters.triangles += (indices.len() / 3) as u64;
+
         match pass {
             DrawPass::SceneBlended => {
+                self.profile.counters.blended_draws += 1;
                 self.transparent_queue
                     .push(blended.sorted_from(&self.camera_pos, &MeshBounds::of(vertices)));
             }
             DrawPass::Opaque => {
+                self.profile.counters.opaque_draws += 1;
                 self.record_geometry_draw(cb, self.pipeline.opaque, &blended);
                 self.record_wireframe_overlay(cb, &blended, options);
             }
             DrawPass::Overlay => {
+                self.profile.counters.overlay_draws += 1;
                 self.record_geometry_draw(cb, self.pipeline.transparent, &blended);
                 self.record_wireframe_overlay(cb, &blended, options);
             }
@@ -970,15 +1010,22 @@ impl Renderer {
     /// image in `COLOR_ATTACHMENT_OPTIMAL`, so no manual barriers are needed
     /// between the three passes.
     pub fn begin_transparent_pass(&mut self, cb: vk::CommandBuffer, image_index: u32) {
+        let flush = Instant::now();
         self.flush_scene_transparency(cb);
+        self.profile
+            .record(RenderStage::TransparencyFlush, flush.elapsed());
 
         let device = self.vulkan_context.device();
         let extent = self.targets.extent;
 
         unsafe {
             device.cmd_end_render_pass(cb);
+            self.gpu_timer.end(cb, GpuSpan::Scene);
 
+            self.gpu_timer.begin(cb, GpuSpan::Resolve);
             self.post_process.resolve(cb, image_index, extent);
+            self.gpu_timer.end(cb, GpuSpan::Resolve);
+            self.gpu_timer.begin(cb, GpuSpan::Composite);
 
             // Begin transparent render pass (loads composited colour + depth).
             let render_pass_begin = vk::RenderPassBeginInfo::default()
@@ -1136,8 +1183,10 @@ impl Renderer {
         proj_matrix: &Matrix4<f32>,
     ) -> EngineResult<()> {
         let camera_pos = self.camera_pos;
-        self.particle_renderer
-            .prepare(pool, view_matrix, proj_matrix, &camera_pos)?;
+        let prepared =
+            self.particle_renderer
+                .prepare(pool, view_matrix, proj_matrix, &camera_pos)?;
+        self.profile.counters.particles = prepared as u32;
         Ok(())
     }
 
@@ -1183,21 +1232,26 @@ impl Renderer {
             .take()
             .ok_or_else(|| EngineError::Swapchain("end_frame without begin_frame".to_string()))?;
 
+        let submit = Instant::now();
+
         unsafe {
             self.vulkan_context.device().cmd_end_render_pass(cb);
         }
+        self.gpu_timer.end(cb, GpuSpan::Composite);
 
         // Bloom goes on last so transparent surfaces cannot paint over a halo
         // that belongs in front of them. This is also the pass that transitions
         // the output image into the layout its consumer expects.
+        self.gpu_timer.begin(cb, GpuSpan::Bloom);
         self.post_process
             .apply_bloom(cb, image_index, self.targets.extent);
+        self.gpu_timer.end(cb, GpuSpan::Bloom);
 
         self.targets.draw_command_buffer.end()?;
 
         // Closes the pass that has been collecting casters alongside every
         // opaque draw this frame.
-        self.shadow.end_frame()?;
+        self.shadow.end_frame(&self.gpu_timer)?;
 
         // Only a swapchain acquire produces semaphores to synchronize against;
         // an engine-owned image is ready the moment it is asked for, and the
@@ -1223,11 +1277,26 @@ impl Renderer {
                 &signal,
                 &wait_stages,
             )?;
+        self.gpu_timer.mark_submitted();
 
-        self.output.release(
+        let released = self.output.release(
             &frame,
             self.vulkan_context.command_buffer_manager.graphics_queue,
-        )
+        );
+        self.profile.record(RenderStage::Submit, submit.elapsed());
+        released
+    }
+
+    /// The last frame the GPU finished: CPU time per stage, GPU time per span,
+    /// and what it drew.
+    pub fn profile(&self) -> &RenderProfile {
+        &self.last_profile
+    }
+
+    /// Add CPU time to a stage of the frame being recorded. For the stages a
+    /// caller drives; the renderer times its own.
+    pub fn record_stage(&mut self, stage: RenderStage, elapsed: std::time::Duration) {
+        self.profile.record(stage, elapsed);
     }
 
     /// Block until the frame submitted by `end_frame` has finished on the GPU.

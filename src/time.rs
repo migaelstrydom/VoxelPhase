@@ -40,6 +40,13 @@ impl Time {
         }
     }
 
+    /// Advance a clock made by [`Time::fixed`] by its own step, so its
+    /// total and frame count move exactly as a real frame loop's would.
+    pub fn advance_fixed(&mut self) {
+        self.total += self.delta;
+        self.frame_count += 1;
+    }
+
     pub fn update(&mut self) {
         let now = Instant::now();
         self.delta = now.duration_since(self.last_frame);

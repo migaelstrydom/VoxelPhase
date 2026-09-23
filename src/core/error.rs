@@ -68,6 +68,9 @@ pub enum EngineError {
     /// Synchronization primitive (fence, semaphore) operation failed
     Synchronization(String),
 
+    /// Query pool creation or readback failed
+    Query(String),
+
     /// Texture loading or creation failed
     Texture {
         path: Option<String>,
@@ -161,6 +164,7 @@ impl fmt::Display for EngineError {
             Self::CommandBuffer(msg) => write!(f, "Command buffer error: {}", msg),
             Self::Descriptor(msg) => write!(f, "Descriptor error: {}", msg),
             Self::Synchronization(msg) => write!(f, "Synchronization error: {}", msg),
+            Self::Query(msg) => write!(f, "Query error: {}", msg),
             Self::Texture { path, reason } => match path {
                 Some(p) => write!(f, "Texture error ({}): {}", p, reason),
                 None => write!(f, "Texture error: {}", reason),
