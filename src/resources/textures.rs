@@ -67,7 +67,7 @@ impl Drop for TextureHandle {
         // the retain in `clone` panics. Unwinding out of a drop would turn a
         // poisoned lock into an abort.
         if let Ok(mut manager) = self.manager.lock() {
-            manager.release_texture(self.id);
+            manager.release_texture(self.id, &self.texture);
         }
     }
 }
@@ -93,17 +93,16 @@ impl TextureManagerInner {
         self.registry.retain(id);
     }
 
-    /// Drop one handle to a texture, freeing its GPU resources if it was the last.
-    fn release_texture(&mut self, id: u64) {
+    /// Drop one handle to a texture. If it was the last, the texture and its
+    /// descriptor set are retired: frames still in flight may be drawing with
+    /// them, so they are freed once those frames finish, not here.
+    fn release_texture(&mut self, id: u64, texture: &Arc<ManagedTexture>) {
         let ReleaseOutcome::Released { descriptor_set } = self.registry.release(id) else {
             return;
         };
 
-        if let Some(descriptor_set) = descriptor_set {
-            let _ = self.descriptor_manager.free_texture_set(descriptor_set);
-            log::debug!("Freed descriptor set for texture {}", id);
-        }
-
+        self.descriptor_manager
+            .retire_texture(descriptor_set, Arc::clone(texture));
         log::debug!("Released texture {}", id);
     }
 }

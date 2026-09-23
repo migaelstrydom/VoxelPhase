@@ -8,6 +8,7 @@ pub mod deletion_queue;
 pub mod descriptors;
 pub mod frame;
 pub mod grain;
+pub mod in_flight;
 pub mod material;
 pub mod overlay;
 pub mod pattern;

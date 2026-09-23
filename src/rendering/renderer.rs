@@ -3,8 +3,9 @@
 //! The Renderer is a thin orchestration layer that delegates to:
 //! - `GraphicsPipeline` - immutable pipeline state
 //! - `FrameOutput` - where finished frames go (a window, or an image)
-//! - `FrameTargets` - what frames are drawn into, plus synchronization
-//! - `FrameData` - per-frame mutable buffers
+//! - `FrameTargets` - what frames are drawn into
+//! - `InFlightFrame` - per-frame mutable buffers, command buffer and fence,
+//!   one per frame in flight
 //! - `DescriptorManager` - descriptor set management
 //!
 //! The renderer holds its output behind the `FrameOutput` trait, so it has no
@@ -26,7 +27,8 @@ use crate::lighting::ActiveLights;
 use crate::model::{Model, Transform};
 use crate::particles::{ParticlePool, ParticleRenderer};
 use crate::rendering::descriptors::DescriptorManager;
-use crate::rendering::frame::{DrawInfo, FrameData, LightUbo, SceneLighting, SceneUbo};
+use crate::rendering::frame::{DrawInfo, LightUbo, SceneLighting, SceneUbo};
+use crate::rendering::in_flight::{FrameSlot, InFlightFrame, PerFrame};
 use crate::rendering::material::{
     MaterialManager, SurfaceModulation, SurfaceParams, SURFACE_INDEX_OFFSET,
 };
@@ -147,10 +149,13 @@ pub struct Renderer {
     /// force the choice through every type that holds a renderer.
     pub output: Box<dyn FrameOutput>,
     pub targets: FrameTargets,
-    pub frame_data: FrameData,
-    /// This frame's surface parameters, one entry per draw. Bound to the scene
-    /// descriptor set; draws carry only an index into it.
-    surfaces: SurfaceBuffer,
+    /// What each frame in flight writes while it is recorded: buffers,
+    /// surface table, command buffer, fence and GPU timer.
+    frames: PerFrame<InFlightFrame>,
+    /// The frame in flight being recorded.
+    slot: FrameSlot,
+    /// Frames begun so far; the number of the one being recorded.
+    frames_begun: u64,
     pub descriptors: Arc<DescriptorManager>,
     pub vulkan_context: Arc<VulkanContext>,
     pub overlay: OverlayRenderer,
@@ -180,8 +185,6 @@ pub struct Renderer {
     /// The output image this frame is being rendered into, between
     /// `begin_frame` and `end_frame`.
     current_frame: Option<AcquiredFrame>,
-    /// Timestamps the frame's GPU spans.
-    gpu_timer: GpuTimer,
     /// The frame being recorded: stage times and counts so far.
     profile: RenderProfile,
     /// The last frame to finish on the GPU, complete with its GPU times.
@@ -264,11 +267,9 @@ impl Renderer {
         let shadow =
             ShadowRenderer::new(&vulkan_context, shadow_map, pipeline.layout, shadow_volume)?;
 
-        // Create frame data (vertex/index/UBO buffers)
-        let frame_data = FrameData::new(Arc::clone(&vulkan_context.device))?;
-
-        // The table every draw's shading parameters go into.
-        let surfaces = SurfaceBuffer::new(Arc::clone(&vulkan_context.device))?;
+        // Buffers, surface table, command buffer and fence for each frame in
+        // flight.
+        let frames = PerFrame::try_new(|_| InFlightFrame::new(&vulkan_context))?;
 
         // Create descriptor manager
         let descriptors = Arc::new(DescriptorManager::new(
@@ -278,17 +279,22 @@ impl Renderer {
             100, // initial texture descriptor capacity
         )?);
 
-        // Initialize the UBO descriptors
-        descriptors.update_scene_ubo(
-            &frame_data.scene_ubo_buffer,
-            std::mem::size_of::<SceneUbo>() as vk::DeviceSize,
-        );
-        descriptors.update_light_ubo(
-            &frame_data.light_ubo_buffer,
-            std::mem::size_of::<LightUbo>() as vk::DeviceSize,
-        );
+        // Point each frame's scene set at that frame's own buffers.
+        for slot in FrameSlot::all() {
+            let frame = &frames[slot];
+            descriptors.update_scene_ubo(
+                slot,
+                &frame.data.scene_ubo_buffer,
+                std::mem::size_of::<SceneUbo>() as vk::DeviceSize,
+            );
+            descriptors.update_light_ubo(
+                slot,
+                &frame.data.light_ubo_buffer,
+                std::mem::size_of::<LightUbo>() as vk::DeviceSize,
+            );
+            descriptors.update_surface_table(slot, frame.surfaces.buffer(), SurfaceBuffer::SIZE);
+        }
         descriptors.update_shadow_map(shadow.map().view, SHADOW_SAMPLED_LAYOUT);
-        descriptors.update_surface_table(surfaces.buffer(), SurfaceBuffer::SIZE);
 
         // Create overlay renderer for debug text (transparent pass)
         let overlay = OverlayRenderer::new(
@@ -320,14 +326,13 @@ impl Renderer {
             targets.depth_buffer.view,
         )?;
 
-        let gpu_timer = GpuTimer::new(&vulkan_context)?;
-
         Ok(Self {
             pipeline,
             output,
             targets,
-            frame_data,
-            surfaces,
+            frames,
+            slot: FrameSlot::default(),
+            frames_begun: 0,
             descriptors,
             vulkan_context,
             overlay,
@@ -344,7 +349,6 @@ impl Renderer {
             debug_wireframe_backfaces: false,
             wireframe_color: [0.0, 0.0, 0.0, 1.0],
             current_frame: None,
-            gpu_timer,
             profile: RenderProfile::default(),
             last_profile: RenderProfile::default(),
         })
@@ -360,31 +364,43 @@ impl Renderer {
         Arc::clone(&self.descriptors)
     }
 
-    /// Begin a new frame: wait for the previous frame, acquire an output image,
-    /// start the command buffer. Call `begin_opaque_pass()` after any pre-pass
-    /// compute work (e.g. fire simulation) is recorded.
+    /// Begin a new frame: wait for the frame that last used this slot, acquire
+    /// an output image, start the command buffer. Call `begin_opaque_pass()`
+    /// after any pre-pass compute work (e.g. fire simulation) is recorded.
+    ///
+    /// The wait is for the frame before last, not the last one: that one may
+    /// still be drawing while this one is recorded.
     pub fn begin_frame(&mut self) -> EngineResult<(vk::CommandBuffer, u32)> {
-        // Wait for previous frame to complete. The fence is *not* reset here —
-        // `end_frame` resets it immediately before the submit that re-signals
-        // it, so a frame abandoned in between leaves it signalled rather than
-        // stranding every later frame on a signal that never arrives.
+        self.slot = self.slot.next();
+        self.frames_begun += 1;
+        let slot = self.slot;
+
+        // The fence is *not* reset here — `end_frame` resets it immediately
+        // before the submit that re-signals it, so a frame abandoned in
+        // between leaves it signalled rather than stranding every later frame
+        // on a signal that never arrives.
         let fence_wait = Instant::now();
-        self.targets.sync.wait()?;
+        let finished = self.frames[slot].wait()?;
         let fence_wait = fence_wait.elapsed();
 
-        // The previous frame is now finished on both sides, so its GPU times
-        // can be read without stalling and its profile is complete.
-        self.profile.gpu = self.gpu_timer.collect();
-        self.last_profile = std::mem::take(&mut self.profile);
+        // The frame this slot last carried is now finished on both sides, so
+        // its profile is complete.
+        if let Some(finished) = finished {
+            self.last_profile = finished;
+        }
+        self.profile = RenderProfile::for_frame(self.frames_begun);
         self.profile.record(RenderStage::FenceWait, fence_wait);
 
-        // Now that the GPU is done with previous frames, flush deferred deletions
-        self.frame_data.begin_frame();
-        self.surfaces.begin_frame();
+        // Now that the GPU is done with this slot, its buffers can be rewound
+        // and whatever was retired while it was in flight freed.
+        self.descriptors.begin_frame();
+        self.frames[slot].rewind();
         // Must be rewound with the buffers it indexes into: a held-over entry
         // would point at geometry that is about to be overwritten.
         self.transparent_queue.begin_frame();
-        self.particle_renderer.begin_frame();
+        self.particle_renderer.begin_frame(slot);
+        self.overlay.begin_frame(slot);
+        self.water_renderer.begin_frame(slot);
 
         // Everything fallible that costs nothing to redo goes first, so the
         // acquire is the last step that can fail. An acquired swapchain image
@@ -399,23 +415,37 @@ impl Renderer {
         // The shadow pass records into its own command buffer, filled by the
         // same draw calls that fill the geometry one. Opening it here means a
         // caller cannot forget to.
-        self.shadow.begin_frame(&self.gpu_timer)?;
+        let frame = &self.frames[slot];
+        self.shadow.begin_frame(slot, &frame.timer)?;
 
-        // Begin command buffer recording
-        self.targets
-            .draw_command_buffer
+        frame
+            .command_buffer
             .begin(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)?;
 
         let acquire = Instant::now();
-        let frame = self.output.acquire(&self.targets.sync)?;
+        let acquired = self.output.acquire(&frame.sync)?;
         self.profile.record(RenderStage::Acquire, acquire.elapsed());
-        let image_index = frame.index;
-        self.current_frame = Some(frame);
+        let image_index = acquired.index;
+        self.current_frame = Some(acquired);
 
-        let cb = self.targets.draw_command_buffer.raw();
-        self.gpu_timer.begin(cb, GpuSpan::FireSim);
+        let cb = self.frames[slot].command_buffer.raw();
+        self.timer().begin(cb, GpuSpan::FireSim);
 
         Ok((cb, image_index))
+    }
+
+    /// The frame in flight being recorded.
+    fn frame(&self) -> &InFlightFrame {
+        &self.frames[self.slot]
+    }
+
+    fn frame_mut(&mut self) -> &mut InFlightFrame {
+        &mut self.frames[self.slot]
+    }
+
+    /// The GPU timer of the frame being recorded.
+    fn timer(&self) -> &GpuTimer {
+        &self.frame().timer
     }
 
     /// Begin the opaque render pass. Call after `begin_frame()` and any
@@ -441,8 +471,8 @@ impl Renderer {
             .render_area(self.targets.extent.into())
             .clear_values(&clear_values);
 
-        self.gpu_timer.end(cb, GpuSpan::FireSim);
-        self.gpu_timer.begin(cb, GpuSpan::Scene);
+        self.timer().end(cb, GpuSpan::FireSim);
+        self.timer().begin(cb, GpuSpan::Scene);
 
         unsafe {
             self.vulkan_context.device().cmd_begin_render_pass(
@@ -484,8 +514,10 @@ impl Renderer {
             &sun_direction,
         );
 
-        self.frame_data
-            .update_scene_ubo(view, proj, camera_pos, &lighting, &self.shadow.uniforms())
+        let shadow = self.shadow.uniforms();
+        self.frame_mut()
+            .data
+            .update_scene_ubo(view, proj, camera_pos, &lighting, &shadow)
     }
 
     /// Upload the frame's point light set.
@@ -493,7 +525,7 @@ impl Renderer {
     /// Call once per frame alongside `update_scene`. The buffer is already
     /// bound to set 0, binding 1; this only refreshes its contents.
     pub fn update_lights(&mut self, active: &ActiveLights) -> EngineResult<()> {
-        self.frame_data.update_light_ubo(active)
+        self.frame_mut().data.update_light_ubo(active)
     }
 
     /// Mutable access to the scene lighting environment (sun colour, ambient,
@@ -674,9 +706,9 @@ impl Renderer {
             self.vulkan_context.device(),
             model,
             draw_info,
-            self.frame_data.vertex_buffer.buffer,
-            self.frame_data.index_buffer.buffer,
-            self.descriptors.scene_ubo_set,
+            self.frame().data.vertex_buffer.buffer,
+            self.frame().data.index_buffer.buffer,
+            self.descriptors.scene_set(self.slot),
         );
     }
 
@@ -704,15 +736,17 @@ impl Renderer {
         }
 
         // Append mesh data to frame buffers and get draw offsets
-        let buffer_sizes = self.frame_data.mesh_buffer_sizes();
-        let draw_info = self.frame_data.append_mesh_data(vertices, indices)?;
-        self.profile.counters.record_upload(
-            std::mem::size_of_val(vertices) + std::mem::size_of_val(indices),
-            self.frame_data.mesh_buffer_sizes() != buffer_sizes,
-        );
+        let frame = self.frame_mut();
+        let buffer_sizes = frame.data.mesh_buffer_sizes();
+        let draw_info = frame.data.append_mesh_data(vertices, indices)?;
+        let grew = frame.data.mesh_buffer_sizes() != buffer_sizes;
 
         // Park this draw's shading parameters in the frame's surface table.
-        let surface_index = self.surfaces.push(surface.to_gpu());
+        let surface_index = frame.surfaces.push(surface.to_gpu());
+        self.profile.counters.record_upload(
+            std::mem::size_of_val(vertices) + std::mem::size_of_val(indices),
+            grew,
+        );
 
         // A shadow map stores one depth per texel and has no way to express
         // partial occlusion, so a transmissive caster can only throw a fully
@@ -919,7 +953,7 @@ impl Renderer {
             );
 
             // Bind descriptor sets
-            let descriptor_sets = [self.descriptors.scene_ubo_set, draw.texture_set];
+            let descriptor_sets = [self.descriptors.scene_set(self.slot), draw.texture_set];
             device.cmd_bind_descriptor_sets(
                 cb,
                 vk::PipelineBindPoint::GRAPHICS,
@@ -930,13 +964,9 @@ impl Renderer {
             );
 
             // Bind vertex and index buffers
-            device.cmd_bind_vertex_buffers(cb, 0, &[self.frame_data.vertex_buffer.buffer], &[0]);
-            device.cmd_bind_index_buffer(
-                cb,
-                self.frame_data.index_buffer.buffer,
-                0,
-                vk::IndexType::UINT32,
-            );
+            let data = &self.frame().data;
+            device.cmd_bind_vertex_buffers(cb, 0, &[data.vertex_buffer.buffer], &[0]);
+            device.cmd_bind_index_buffer(cb, data.index_buffer.buffer, 0, vk::IndexType::UINT32);
 
             device.cmd_draw_indexed(
                 cb,
@@ -1020,12 +1050,12 @@ impl Renderer {
 
         unsafe {
             device.cmd_end_render_pass(cb);
-            self.gpu_timer.end(cb, GpuSpan::Scene);
+            self.timer().end(cb, GpuSpan::Scene);
 
-            self.gpu_timer.begin(cb, GpuSpan::Resolve);
+            self.timer().begin(cb, GpuSpan::Resolve);
             self.post_process.resolve(cb, image_index, extent);
-            self.gpu_timer.end(cb, GpuSpan::Resolve);
-            self.gpu_timer.begin(cb, GpuSpan::Composite);
+            self.timer().end(cb, GpuSpan::Resolve);
+            self.timer().begin(cb, GpuSpan::Composite);
 
             // Begin transparent render pass (loads composited colour + depth).
             let render_pass_begin = vk::RenderPassBeginInfo::default()
@@ -1226,7 +1256,17 @@ impl Renderer {
 
     /// End the frame: finish the transparent render pass, submit, and hand the
     /// image to the output.
+    ///
+    /// Returns without waiting for the GPU. The frame's profile is parked on
+    /// its slot and published once the slot's fence is next waited on.
     pub fn end_frame(&mut self, cb: vk::CommandBuffer, image_index: u32) -> EngineResult<()> {
+        let result = self.submit_frame(cb, image_index);
+        let profile = std::mem::take(&mut self.profile);
+        self.frame_mut().park(profile);
+        result
+    }
+
+    fn submit_frame(&mut self, cb: vk::CommandBuffer, image_index: u32) -> EngineResult<()> {
         let frame = self
             .current_frame
             .take()
@@ -1237,21 +1277,22 @@ impl Renderer {
         unsafe {
             self.vulkan_context.device().cmd_end_render_pass(cb);
         }
-        self.gpu_timer.end(cb, GpuSpan::Composite);
+        self.timer().end(cb, GpuSpan::Composite);
 
         // Bloom goes on last so transparent surfaces cannot paint over a halo
         // that belongs in front of them. This is also the pass that transitions
         // the output image into the layout its consumer expects.
-        self.gpu_timer.begin(cb, GpuSpan::Bloom);
+        self.timer().begin(cb, GpuSpan::Bloom);
         self.post_process
             .apply_bloom(cb, image_index, self.targets.extent);
-        self.gpu_timer.end(cb, GpuSpan::Bloom);
+        self.timer().end(cb, GpuSpan::Bloom);
 
-        self.targets.draw_command_buffer.end()?;
+        let in_flight = &self.frames[self.slot];
+        in_flight.command_buffer.end()?;
 
         // Closes the pass that has been collecting casters alongside every
         // opaque draw this frame.
-        self.shadow.end_frame(&self.gpu_timer)?;
+        self.shadow.end_frame(&in_flight.timer)?;
 
         // Only a swapchain acquire produces semaphores to synchronize against;
         // an engine-owned image is ready the moment it is asked for, and the
@@ -1260,7 +1301,7 @@ impl Renderer {
         let signal: Vec<vk::Semaphore> = frame.signal.into_iter().collect();
         let wait_stages = vec![vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT; wait.len()];
 
-        self.targets.sync.reset()?;
+        in_flight.sync.reset()?;
 
         // The shadow map goes first: the geometry pass samples it, and the
         // ordering plus the shadow pass's own external dependency are what make
@@ -1268,16 +1309,13 @@ impl Renderer {
         self.vulkan_context
             .command_buffer_manager
             .submit_recorded_graphics_batch_async(
-                &[
-                    self.shadow.command_buffer(),
-                    &self.targets.draw_command_buffer,
-                ],
-                self.targets.sync.draw_fence,
+                &[self.shadow.command_buffer(), &in_flight.command_buffer],
+                in_flight.sync.draw_fence,
                 &wait,
                 &signal,
                 &wait_stages,
             )?;
-        self.gpu_timer.mark_submitted();
+        self.frame_mut().timer.mark_submitted();
 
         let released = self.output.release(
             &frame,
@@ -1285,6 +1323,12 @@ impl Renderer {
         );
         self.profile.record(RenderStage::Submit, submit.elapsed());
         released
+    }
+
+    /// The number of the frame most recently begun, counted from 1. Matches
+    /// the `frame` of its profile once that is published.
+    pub fn frame_number(&self) -> u64 {
+        self.frames_begun
     }
 
     /// The last frame the GPU finished: CPU time per stage, GPU time per span,
@@ -1299,12 +1343,13 @@ impl Renderer {
         self.profile.record(stage, elapsed);
     }
 
-    /// Block until the frame submitted by `end_frame` has finished on the GPU.
+    /// Block until every frame submitted by `end_frame` has finished on the
+    /// GPU.
     ///
     /// Only meaningful for outputs that are read back rather than presented;
-    /// the windowed path lets the next `begin_frame` do the waiting.
+    /// the windowed path lets `begin_frame` do the waiting, one slot at a time.
     pub fn wait_for_frame(&self) -> EngineResult<()> {
-        self.targets.sync.wait()
+        self.frames.iter().try_for_each(|frame| frame.sync.wait())
     }
 }
 
@@ -1315,7 +1360,9 @@ impl Drop for Renderer {
             let _ = self.vulkan_context.device().device_wait_idle();
         }
         // Flush any pending buffer deletions now that GPU is idle
-        self.frame_data.cleanup();
+        for frame in self.frames.iter_mut() {
+            frame.data.cleanup();
+        }
         // Components drop in reverse order due to struct field ordering
     }
 }

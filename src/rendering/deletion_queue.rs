@@ -52,16 +52,23 @@ impl<T> DeletionQueue<T> {
     /// Call this at the start of each frame, after waiting for the frame fence.
     /// Resources queued `frames_to_wait` or more frames ago will be dropped.
     pub fn flush(&mut self, current_frame: u64) {
-        // Remove items from the front that are old enough to be safely deleted
+        drop(self.take_ready(current_frame));
+    }
+
+    /// Remove and return the resources `flush` would drop, for a caller that
+    /// has to release them through something other than `Drop`.
+    pub fn take_ready(&mut self, current_frame: u64) -> Vec<T> {
+        let mut ready = Vec::new();
+        // Queued in frame order, so the first one not yet old enough ends it.
         while let Some((_, queued_frame)) = self.pending.front() {
-            if current_frame >= queued_frame + self.frames_to_wait {
-                // Resource is old enough - drop it (happens automatically)
-                self.pending.pop_front();
-            } else {
-                // Queue is ordered by frame, so if this one isn't ready, none after it are
+            if current_frame < queued_frame + self.frames_to_wait {
                 break;
             }
+            if let Some((resource, _)) = self.pending.pop_front() {
+                ready.push(resource);
+            }
         }
+        ready
     }
 
     /// Force-flush all pending deletions.

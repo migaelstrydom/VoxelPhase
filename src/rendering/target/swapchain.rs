@@ -84,6 +84,12 @@ pub struct SwapchainOutput {
     format: vk::Format,
     images: Vec<vk::Image>,
     image_views: Vec<vk::ImageView>,
+    /// One per image, signalled by the submit that draws into it and waited on
+    /// by its present. Per image rather than per frame in flight: a semaphore
+    /// handed to a present may not be signalled again until that present has
+    /// consumed it, and the only proof of that is the image being acquired
+    /// again.
+    rendering_complete: Vec<vk::Semaphore>,
     device: Arc<ManagedDevice>,
 }
 
@@ -195,6 +201,16 @@ impl SwapchainOutput {
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|e| EngineError::Swapchain(format!("create image views: {:?}", e)))?;
 
+            let rendering_complete = images
+                .iter()
+                .map(|_| {
+                    device
+                        .device
+                        .create_semaphore(&vk::SemaphoreCreateInfo::default(), None)
+                })
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| EngineError::Swapchain(format!("create semaphores: {:?}", e)))?;
+
             Ok(Self {
                 handle,
                 loader,
@@ -204,6 +220,7 @@ impl SwapchainOutput {
                 format: format.format,
                 images,
                 image_views,
+                rendering_complete,
                 device,
             })
         }
@@ -252,7 +269,7 @@ impl FrameOutput for SwapchainOutput {
             Ok(AcquiredFrame {
                 index,
                 wait: Some(sync.present_complete),
-                signal: Some(sync.rendering_complete),
+                signal: Some(self.rendering_complete[index as usize]),
             })
         }
     }
@@ -286,6 +303,9 @@ impl Drop for SwapchainOutput {
         unsafe {
             for &view in &self.image_views {
                 self.device.device.destroy_image_view(view, None);
+            }
+            for &semaphore in &self.rendering_complete {
+                self.device.device.destroy_semaphore(semaphore, None);
             }
             self.loader.destroy_swapchain(self.handle, None);
             self.surface_loader.destroy_surface(self.surface, None);

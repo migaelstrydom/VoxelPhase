@@ -27,6 +27,7 @@ use crate::core::command_buffer::ManagedCommandBuffer;
 use crate::core::error::EngineResult;
 use crate::core::vulkan_context::VulkanContext;
 use crate::rendering::frame::{DrawInfo, ShadowUniforms};
+use crate::rendering::in_flight::{FrameSlot, PerFrame};
 use crate::rendering::profile::{GpuSpan, GpuTimer};
 use crate::rendering::shadow::frustum::ViewFrustum;
 use crate::rendering::shadow::map::ShadowMap;
@@ -46,7 +47,11 @@ pub struct ShadowRenderer {
 
     map: ShadowMap,
     pipeline: ShadowPipeline,
-    command_buffer: ManagedCommandBuffer,
+    /// One per frame in flight: a frame records its casters while the GPU may
+    /// still be running the previous frame's.
+    command_buffers: PerFrame<ManagedCommandBuffer>,
+    /// The frame being recorded, as [`Self::begin_frame`] was told.
+    slot: FrameSlot,
     layout: vk::PipelineLayout,
     /// The volume resolved against the frame's camera, set by [`Self::aim`].
     /// Everything the shader is told about the map comes from here, so the
@@ -71,16 +76,19 @@ impl ShadowRenderer {
     ) -> EngineResult<Self> {
         let pipeline =
             ShadowPipeline::new(Arc::clone(&vulkan_context.device), map.render_pass, layout)?;
-        let command_buffer = vulkan_context
-            .command_buffer_manager
-            .create_primary_buffer()?;
+        let command_buffers = PerFrame::try_new(|_| {
+            vulkan_context
+                .command_buffer_manager
+                .create_primary_buffer()
+        })?;
 
         Ok(Self {
             volume,
             enabled: true,
             map,
             pipeline,
-            command_buffer,
+            command_buffers,
+            slot: FrameSlot::default(),
             layout,
             // A stand-in until the first `aim`, so the uniforms are never
             // read from an unfitted volume.
@@ -96,7 +104,7 @@ impl ShadowRenderer {
 
     /// The command buffer to submit ahead of the geometry pass's.
     pub fn command_buffer(&self) -> &ManagedCommandBuffer {
-        &self.command_buffer
+        &self.command_buffers[self.slot]
     }
 
     /// How the map is currently framed. Valid from the first [`Self::aim`].
@@ -131,10 +139,11 @@ impl ShadowRenderer {
     ///
     /// This command buffer is the first the GPU runs each frame, so it is
     /// where the frame's GPU timer is rewound.
-    pub fn begin_frame(&mut self, timer: &GpuTimer) -> EngineResult<()> {
-        self.command_buffer
-            .begin(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)?;
-        let cb = self.command_buffer.raw();
+    pub fn begin_frame(&mut self, slot: FrameSlot, timer: &GpuTimer) -> EngineResult<()> {
+        self.slot = slot;
+        let command_buffer = self.command_buffer();
+        command_buffer.begin(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)?;
+        let cb = command_buffer.raw();
         timer.open_frame(cb);
         timer.begin(cb, GpuSpan::Shadow);
         self.map.begin_pass(cb);
@@ -188,7 +197,7 @@ impl ShadowRenderer {
             return;
         }
 
-        let cb = self.command_buffer.raw();
+        let cb = self.command_buffer().raw();
 
         unsafe {
             device.cmd_bind_pipeline(cb, vk::PipelineBindPoint::GRAPHICS, self.pipeline.pipeline);
@@ -235,9 +244,10 @@ impl ShadowRenderer {
 
     /// Close the pass and the command buffer, ready for submission.
     pub fn end_frame(&self, timer: &GpuTimer) -> EngineResult<()> {
-        let cb = self.command_buffer.raw();
+        let command_buffer = self.command_buffer();
+        let cb = command_buffer.raw();
         self.map.end_pass(cb);
         timer.end(cb, GpuSpan::Shadow);
-        self.command_buffer.end()
+        command_buffer.end()
     }
 }

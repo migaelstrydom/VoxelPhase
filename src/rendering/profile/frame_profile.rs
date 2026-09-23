@@ -8,6 +8,10 @@ use super::stage::RenderStage;
 /// counts that explain both.
 #[derive(Debug, Clone, Default)]
 pub struct RenderProfile {
+    /// Which frame this is, counted from 1 by the renderer that drew it. With
+    /// frames in flight a profile is published some frames after it was
+    /// recorded; this is what matches the two up.
+    pub frame: u64,
     /// Time per stage, indexed by [`RenderStage::slot`].
     stages: [Duration; RenderStage::COUNT],
     /// What the frame was asked to draw.
@@ -18,6 +22,14 @@ pub struct RenderProfile {
 }
 
 impl RenderProfile {
+    /// An empty profile for the renderer's `frame`th frame.
+    pub fn for_frame(frame: u64) -> Self {
+        Self {
+            frame,
+            ..Self::default()
+        }
+    }
+
     pub fn record(&mut self, stage: RenderStage, elapsed: Duration) {
         self.stages[stage.slot()] += elapsed;
     }

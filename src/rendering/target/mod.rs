@@ -9,7 +9,6 @@
 //!   HDR colour target       SwapchainOutput  → window
 //!   depth buffer            OffscreenOutput  → PNG / raw pixels
 //!   framebuffers
-//!   sync + command buffer
 //! ```
 //!
 //! `FrameTargets` owns everything the render passes draw into. `FrameOutput`

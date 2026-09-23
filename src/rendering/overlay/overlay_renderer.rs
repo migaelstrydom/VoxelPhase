@@ -11,7 +11,7 @@ use nalgebra::{Matrix4, Vector2, Vector4};
 use crate::core::device::ManagedDevice;
 use crate::core::error::EngineResult;
 use crate::core::vulkan_context::VulkanContext;
-use crate::rendering::frame::ManagedBuffer;
+use crate::rendering::in_flight::{FrameSlot, PerFrame, StreamedMesh};
 use crate::rendering::overlay::font::{FontAtlas, TextLayout};
 use crate::rendering::overlay::geometry::OverlayGeometry;
 use crate::rendering::overlay::pipeline::OverlayPipeline;
@@ -31,8 +31,10 @@ pub struct OverlayRenderer {
     font_atlas: FontAtlas,
     ortho_matrix: Matrix4<f32>,
     screen_size: Vector2<f32>,
-    vertex_buffer: ManagedBuffer,
-    index_buffer: ManagedBuffer,
+    /// Quad buffers, one pair per frame in flight.
+    meshes: PerFrame<StreamedMesh>,
+    /// The frame being recorded, as [`Self::begin_frame`] was told.
+    slot: FrameSlot,
 }
 
 impl OverlayRenderer {
@@ -69,19 +71,9 @@ impl OverlayRenderer {
         let index_buffer_size =
             (MAX_OVERLAY_QUADS * 6 * std::mem::size_of::<u32>()) as vk::DeviceSize;
 
-        let vertex_buffer = ManagedBuffer::new(
-            Arc::clone(&device),
-            vertex_buffer_size,
-            vk::BufferUsageFlags::VERTEX_BUFFER,
-            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-        )?;
-
-        let index_buffer = ManagedBuffer::new(
-            Arc::clone(&device),
-            index_buffer_size,
-            vk::BufferUsageFlags::INDEX_BUFFER,
-            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-        )?;
+        let meshes = PerFrame::try_new(|_| {
+            StreamedMesh::new(&device, vertex_buffer_size, index_buffer_size)
+        })?;
 
         Ok(Self {
             device,
@@ -89,9 +81,14 @@ impl OverlayRenderer {
             font_atlas,
             ortho_matrix,
             screen_size: Vector2::new(width as f32, height as f32),
-            vertex_buffer,
-            index_buffer,
+            meshes,
+            slot: FrameSlot::default(),
         })
+    }
+
+    /// Point uploads at this frame's buffers.
+    pub fn begin_frame(&mut self, slot: FrameSlot) {
+        self.slot = slot;
     }
 
     /// Screen size the overlay's orthographic projection was built for, in
@@ -148,33 +145,12 @@ impl OverlayRenderer {
         let index_count = quads * 6;
         let vertex_count = geometry.vertices().len().min(MAX_OVERLAY_QUADS * 4);
 
-        self.upload_geometry(
+        self.meshes[self.slot].upload(
             &geometry.vertices()[..vertex_count],
             &geometry.indices()[..index_count],
         )?;
         self.record_draw_commands(cb, index_count as u32);
 
-        Ok(())
-    }
-
-    fn upload_geometry(&self, vertices: &[OverlayVertex], indices: &[u32]) -> EngineResult<()> {
-        unsafe {
-            let vert_ptr = self
-                .vertex_buffer
-                .map_memory(0, vk::MemoryMapFlags::empty())?;
-            std::ptr::copy_nonoverlapping(
-                vertices.as_ptr(),
-                vert_ptr as *mut OverlayVertex,
-                vertices.len(),
-            );
-            self.vertex_buffer.unmap_memory();
-
-            let idx_ptr = self
-                .index_buffer
-                .map_memory(0, vk::MemoryMapFlags::empty())?;
-            std::ptr::copy_nonoverlapping(indices.as_ptr(), idx_ptr as *mut u32, indices.len());
-            self.index_buffer.unmap_memory();
-        }
         Ok(())
     }
 
@@ -207,15 +183,7 @@ impl OverlayRenderer {
                 &[],
             );
 
-            self.device
-                .device
-                .cmd_bind_vertex_buffers(cb, 0, &[self.vertex_buffer.buffer], &[0]);
-            self.device.device.cmd_bind_index_buffer(
-                cb,
-                self.index_buffer.buffer,
-                0,
-                vk::IndexType::UINT32,
-            );
+            self.meshes[self.slot].bind(&self.device.device, cb);
 
             self.device
                 .device

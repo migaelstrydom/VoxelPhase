@@ -7,14 +7,18 @@ use ash::vk;
 use crate::core::device::ManagedDevice;
 use crate::core::error::{EngineError, EngineResult, VkResultExt};
 
-/// Frame synchronization primitives.
+/// Synchronization for one frame in flight.
 ///
-/// The two semaphores are only meaningful for outputs whose images become
-/// available asynchronously — a swapchain acquire. An offscreen output owns its
-/// images outright and leaves both unused, waiting on `draw_fence` alone.
+/// The semaphore is only meaningful for outputs whose images become available
+/// asynchronously — a swapchain acquire. An offscreen output owns its images
+/// outright and leaves it unused, waiting on `draw_fence` alone.
+///
+/// The semaphore the submit signals for presentation is not here: it belongs
+/// to the swapchain image, not the frame (see `SwapchainOutput`).
 pub struct FrameSync {
+    /// Signalled by the acquire when the output image may be written.
     pub present_complete: vk::Semaphore,
-    pub rendering_complete: vk::Semaphore,
+    /// Signalled when the frame's submission has finished on the GPU.
     pub draw_fence: vk::Fence,
     device: Arc<ManagedDevice>,
 }
@@ -34,11 +38,6 @@ impl FrameSync {
                 .create_semaphore(&semaphore_info, None)
                 .sync_context("create present semaphore")?;
 
-            let rendering_complete = device
-                .device
-                .create_semaphore(&semaphore_info, None)
-                .sync_context("create rendering semaphore")?;
-
             let draw_fence = device
                 .device
                 .create_fence(&fence_info, None)
@@ -46,7 +45,6 @@ impl FrameSync {
 
             Ok(Self {
                 present_complete,
-                rendering_complete,
                 draw_fence,
                 device,
             })
@@ -105,9 +103,6 @@ impl Drop for FrameSync {
             self.device
                 .device
                 .destroy_semaphore(self.present_complete, None);
-            self.device
-                .device
-                .destroy_semaphore(self.rendering_complete, None);
             self.device.device.destroy_fence(self.draw_fence, None);
         }
     }

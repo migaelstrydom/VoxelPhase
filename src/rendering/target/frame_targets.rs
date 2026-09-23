@@ -8,19 +8,20 @@ use std::sync::Arc;
 
 use ash::vk;
 
-use crate::core::command_buffer::ManagedCommandBuffer;
 use crate::core::device::ManagedDevice;
 use crate::core::error::{EngineError, EngineResult};
 use crate::core::vulkan_context::VulkanContext;
 use crate::rendering::target::images::{ColorTarget, DepthBuffer};
 use crate::rendering::target::output::FrameOutput;
-use crate::rendering::target::sync::FrameSync;
 
 /// Depth format used by both render passes.
 pub const DEPTH_FORMAT: vk::Format = vk::Format::D16_UNORM;
 
-/// Per-frame render resources: what geometry is drawn into, and the
-/// synchronization that orders one frame against the next.
+/// What geometry is drawn into.
+///
+/// One set, shared by every frame in flight: these are written and read only
+/// by the GPU, and consecutive frames take turns with them in submission
+/// order, kept apart by the render passes' external dependencies.
 pub struct FrameTargets {
     pub extent: vk::Extent2D,
 
@@ -37,9 +38,6 @@ pub struct FrameTargets {
 
     /// One per output image, for the transparent render pass.
     pub transparent_framebuffers: Vec<vk::Framebuffer>,
-
-    pub sync: FrameSync,
-    pub draw_command_buffer: ManagedCommandBuffer,
 
     device: Arc<ManagedDevice>,
 }
@@ -87,20 +85,12 @@ impl FrameTargets {
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| EngineError::Framebuffer(format!("transparent creation: {:?}", e)))?;
 
-        let sync = FrameSync::new(Arc::clone(&device))?;
-
-        let draw_command_buffer = vulkan_context
-            .command_buffer_manager
-            .create_primary_buffer()?;
-
         Ok(Self {
             extent,
             color_target,
             depth_buffer,
             opaque_framebuffer,
             transparent_framebuffers,
-            sync,
-            draw_command_buffer,
             device,
         })
     }

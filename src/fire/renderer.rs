@@ -12,6 +12,7 @@ use crate::core::device::ManagedDevice;
 use crate::core::error::{EngineError, EngineResult};
 use crate::rendering::frame::ManagedBuffer;
 use crate::rendering::shaders::ShaderManager;
+use crate::rendering::texture::ManagedTexture;
 
 use super::pipeline::{FireSimParams, FireSimPipelines, FireVolumeDescriptors};
 use super::volume::FireVolume;
@@ -46,7 +47,10 @@ pub const SIM_POOL_SIZE: usize = 5;
 struct SimSlot {
     volume: FireVolume,
     sim_descriptors: FireVolumeDescriptors,
-    render_descriptor_set: vk::DescriptorSet,
+    /// One per field texture, written once: the render binds whichever the
+    /// last advection left as the source. Rewriting one set every frame
+    /// instead would change it under a frame still in flight.
+    render_descriptor_sets: [vk::DescriptorSet; 2],
     /// Random noise seed so each slot evolves differently.
     noise_seed: f32,
 }
@@ -111,23 +115,26 @@ impl FireRenderer {
             let sim_descriptors = sim_pipelines.allocate_volume_descriptors()?;
             sim_pipelines.update_volume_descriptors(&volume, &sim_descriptors);
 
-            let render_descriptor_set = Self::allocate_render_descriptor_set_from_pool(
-                &device,
-                graphics_descriptor_pool,
-                graphics_descriptor_set_layout,
-            )?;
-            Self::write_render_descriptor_set(
-                &device,
-                render_descriptor_set,
-                &volume,
-                depth_sampler,
-                depth_view,
-            );
+            let mut render_descriptor_sets = [vk::DescriptorSet::null(); 2];
+            for (field, set) in render_descriptor_sets.iter_mut().enumerate() {
+                *set = Self::allocate_render_descriptor_set_from_pool(
+                    &device,
+                    graphics_descriptor_pool,
+                    graphics_descriptor_set_layout,
+                )?;
+                Self::write_render_descriptor_set(
+                    &device,
+                    *set,
+                    &volume.field[field],
+                    depth_sampler,
+                    depth_view,
+                );
+            }
 
             sim_slots.push(SimSlot {
                 volume,
                 sim_descriptors,
-                render_descriptor_set,
+                render_descriptor_sets,
                 noise_seed: i as f32 * 200.0,
             });
         }
@@ -198,15 +205,13 @@ impl FireRenderer {
                 .simulate(cb, &mut slot.volume, &slot.sim_descriptors, &params);
         }
 
-        // After simulation, update render descriptors to point at the current
-        // source texture (advection swaps read/write indices each frame), then
-        // transition field textures to SHADER_READ_ONLY for fragment sampling.
-        // Both must happen here (outside the render pass), not in render().
+        // After simulation, transition the current source field (advection
+        // swaps read/write indices each frame) to SHADER_READ_ONLY for fragment
+        // sampling. Must happen here, outside the render pass, not in render().
         for (i, slot) in self.sim_slots.iter().enumerate() {
             if slot_intensities[i] <= 0.0 {
                 continue;
             }
-            update_render_volume_binding(device, slot.render_descriptor_set, &slot.volume);
             transition_field_for_read(device, cb, &slot.volume);
         }
     }
@@ -265,7 +270,7 @@ impl FireRenderer {
                     vk::PipelineBindPoint::GRAPHICS,
                     self.graphics_pipeline_layout,
                     0,
-                    &[slot.render_descriptor_set],
+                    &[slot.render_descriptor_sets[slot.volume.src()]],
                     &[],
                 );
 
@@ -301,14 +306,13 @@ impl FireRenderer {
     fn write_render_descriptor_set(
         device: &ManagedDevice,
         set: vk::DescriptorSet,
-        volume: &FireVolume,
+        field: &ManagedTexture,
         depth_sampler: vk::Sampler,
         depth_view: vk::ImageView,
     ) {
-        let src = volume.src();
         let volume_info = vk::DescriptorImageInfo::default()
-            .sampler(volume.field[src].sampler)
-            .image_view(volume.field[src].image_view)
+            .sampler(field.sampler)
+            .image_view(field.image_view)
             .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
 
         let depth_info = vk::DescriptorImageInfo::default()
@@ -508,15 +512,17 @@ impl FireRenderer {
     }
 
     fn create_graphics_descriptor_pool(device: &ManagedDevice) -> EngineResult<vk::DescriptorPool> {
-        // 2 combined image samplers per fire volume (volume + depth)
+        // Two sets per fire volume, one per field texture, each with two
+        // combined image samplers (volume + depth)
+        let sets = 2 * MAX_FIRE_VOLUMES as u32;
         let pool_size = vk::DescriptorPoolSize {
             ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-            descriptor_count: 2 * MAX_FIRE_VOLUMES as u32,
+            descriptor_count: 2 * sets,
         };
 
         let create_info = vk::DescriptorPoolCreateInfo::default()
             .flags(vk::DescriptorPoolCreateFlags::FREE_DESCRIPTOR_SET)
-            .max_sets(MAX_FIRE_VOLUMES as u32)
+            .max_sets(sets)
             .pool_sizes(std::slice::from_ref(&pool_size));
 
         unsafe { device.device.create_descriptor_pool(&create_info, None) }
@@ -639,7 +645,7 @@ fn transition_volumes_for_compute(
                 .image(image)
                 .old_layout(vk::ImageLayout::UNDEFINED)
                 .new_layout(vk::ImageLayout::GENERAL)
-                .src_access_mask(vk::AccessFlags::empty())
+                .src_access_mask(vk::AccessFlags::SHADER_WRITE)
                 .dst_access_mask(vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE)
                 .subresource_range(vk::ImageSubresourceRange {
                     aspect_mask: vk::ImageAspectFlags::COLOR,
@@ -652,9 +658,11 @@ fn transition_volumes_for_compute(
         .collect();
 
     unsafe {
+        // The previous frame may still be on the GPU, sampling these volumes
+        // in its fire pass: wait for that, and for its simulation's writes.
         device.cmd_pipeline_barrier(
             cb,
-            vk::PipelineStageFlags::TOP_OF_PIPE,
+            vk::PipelineStageFlags::FRAGMENT_SHADER | vk::PipelineStageFlags::COMPUTE_SHADER,
             vk::PipelineStageFlags::COMPUTE_SHADER,
             vk::DependencyFlags::empty(),
             &[],
@@ -690,24 +698,6 @@ fn transition_field_for_read(device: &ash::Device, cb: vk::CommandBuffer, volume
             &[],
             &[barrier],
         );
-    }
-}
-
-fn update_render_volume_binding(device: &ash::Device, set: vk::DescriptorSet, volume: &FireVolume) {
-    let src = volume.src();
-    let volume_info = vk::DescriptorImageInfo::default()
-        .sampler(volume.field[src].sampler)
-        .image_view(volume.field[src].image_view)
-        .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
-
-    let write = vk::WriteDescriptorSet::default()
-        .dst_set(set)
-        .dst_binding(0)
-        .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-        .image_info(std::slice::from_ref(&volume_info));
-
-    unsafe {
-        device.update_descriptor_sets(std::slice::from_ref(&write), &[]);
     }
 }
 

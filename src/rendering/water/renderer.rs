@@ -8,7 +8,7 @@ use nalgebra::{Matrix4, Vector3};
 use crate::core::device::ManagedDevice;
 use crate::core::error::EngineResult;
 use crate::core::vulkan_context::VulkanContext;
-use crate::rendering::frame::ManagedBuffer;
+use crate::rendering::in_flight::{FrameSlot, PerFrame, StreamedMesh};
 use crate::water::{WaterGrid, WaveGrid};
 
 use super::pipeline::WaterPipeline;
@@ -26,8 +26,10 @@ const MAX_WATER_QUADS: usize = 65536;
 pub struct WaterRenderer {
     device: Arc<ManagedDevice>,
     pipeline: WaterPipeline,
-    vertex_buffer: ManagedBuffer,
-    index_buffer: ManagedBuffer,
+    /// Surface mesh buffers, one pair per frame in flight.
+    meshes: PerFrame<StreamedMesh>,
+    /// The frame being recorded, as [`Self::begin_frame`] was told.
+    slot: FrameSlot,
 }
 
 impl WaterRenderer {
@@ -46,26 +48,21 @@ impl WaterRenderer {
         let index_buffer_size =
             (MAX_WATER_QUADS * 6 * std::mem::size_of::<u32>()) as vk::DeviceSize;
 
-        let vertex_buffer = ManagedBuffer::new(
-            Arc::clone(&device),
-            vertex_buffer_size,
-            vk::BufferUsageFlags::VERTEX_BUFFER,
-            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-        )?;
-
-        let index_buffer = ManagedBuffer::new(
-            Arc::clone(&device),
-            index_buffer_size,
-            vk::BufferUsageFlags::INDEX_BUFFER,
-            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-        )?;
+        let meshes = PerFrame::try_new(|_| {
+            StreamedMesh::new(&device, vertex_buffer_size, index_buffer_size)
+        })?;
 
         Ok(Self {
             device,
             pipeline,
-            vertex_buffer,
-            index_buffer,
+            meshes,
+            slot: FrameSlot::default(),
         })
+    }
+
+    /// Point uploads at this frame's buffers.
+    pub fn begin_frame(&mut self, slot: FrameSlot) {
+        self.slot = slot;
     }
 
     /// Generate the water mesh from both grids and render it.
@@ -89,30 +86,8 @@ impl WaterRenderer {
             return Ok(());
         }
 
-        // Upload vertex data
-        unsafe {
-            let vertex_size = std::mem::size_of::<WaterVertex>() * vertices.len();
-            let ptr = self
-                .vertex_buffer
-                .map_memory(0, vk::MemoryMapFlags::empty())?;
-            std::ptr::copy_nonoverlapping(
-                vertices.as_ptr() as *const u8,
-                ptr as *mut u8,
-                vertex_size,
-            );
-            self.vertex_buffer.unmap_memory();
-
-            let index_size = std::mem::size_of::<u32>() * indices.len();
-            let ptr = self
-                .index_buffer
-                .map_memory(0, vk::MemoryMapFlags::empty())?;
-            std::ptr::copy_nonoverlapping(
-                indices.as_ptr() as *const u8,
-                ptr as *mut u8,
-                index_size,
-            );
-            self.index_buffer.unmap_memory();
-        }
+        let mesh = &self.meshes[self.slot];
+        mesh.upload(&vertices, &indices)?;
 
         // Bind pipeline and draw
         unsafe {
@@ -189,16 +164,7 @@ impl WaterRenderer {
                 &[],
             );
 
-            self.device
-                .device
-                .cmd_bind_vertex_buffers(cb, 0, &[self.vertex_buffer.buffer], &[0]);
-
-            self.device.device.cmd_bind_index_buffer(
-                cb,
-                self.index_buffer.buffer,
-                0,
-                vk::IndexType::UINT32,
-            );
+            mesh.bind(&self.device.device, cb);
 
             self.device
                 .device

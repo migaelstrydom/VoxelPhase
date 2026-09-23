@@ -1,3 +1,5 @@
+use std::collections::VecDeque;
+
 use image::RgbaImage;
 
 use crate::core::error::{EngineError, EngineResult};
@@ -36,8 +38,8 @@ impl Default for RunConfig {
 /// Returns the run and, if asked for, an image of its last frame — taken
 /// after the timed frames, since reading pixels back waits on the GPU.
 ///
-/// The last frame run is not in the record: its profile is published at the
-/// start of a frame that never comes.
+/// The last frames run are not in the record: their profiles are published
+/// at the start of frames that never come.
 pub fn run(
     level: &Level,
     level_name: &str,
@@ -59,7 +61,9 @@ pub fn run(
     let mut dropped_at = scenario.drop_at;
     let mut detonated_at = None;
     let mut frames = Vec::with_capacity(frame_count);
-    let mut pending: Option<RenderFrameRecord> = None;
+    // Frames run whose render profile has not been published yet, with the
+    // renderer's number for each.
+    let mut pending: VecDeque<(u64, RenderFrameRecord)> = VecDeque::new();
 
     for _ in 0..frame_count {
         if grenade.is_none() && harness.sim_time() >= scenario.drop_at {
@@ -77,18 +81,30 @@ pub fn run(
             }
         }
 
-        // This step published the previous frame's render profile; that frame
-        // is now complete.
-        if let Some(mut previous) = pending.take() {
-            previous.profile = sample.previous_render;
-            frames.push(previous);
+        pending.push_back((
+            sample.render_frame,
+            RenderFrameRecord {
+                sim_time,
+                timing: sample.timing,
+                physics: sample.physics,
+                profile: Default::default(),
+            },
+        ));
+
+        // Every frame up to the one just published is complete. One whose
+        // profile was never published (a frame abandoned before submit) is
+        // dropped rather than given another frame's.
+        let published = sample.finished_render;
+        while pending
+            .front()
+            .is_some_and(|(frame, _)| *frame <= published.frame)
+        {
+            let (frame, mut record) = pending.pop_front().expect("front checked above");
+            if frame == published.frame {
+                record.profile = published.clone();
+                frames.push(record);
+            }
         }
-        pending = Some(RenderFrameRecord {
-            sim_time,
-            timing: sample.timing,
-            physics: sample.physics,
-            profile: Default::default(),
-        });
     }
 
     let image = if snapshot {

@@ -27,7 +27,7 @@ use nalgebra::{Matrix4, Vector2, Vector3, Vector4};
 use crate::core::device::ManagedDevice;
 use crate::core::error::EngineResult;
 use crate::core::vulkan_context::VulkanContext;
-use crate::rendering::frame::ManagedBuffer;
+use crate::rendering::in_flight::{FrameSlot, PerFrame, StreamedMesh};
 
 use super::particle::{Particle, ParticlePool};
 use super::pipeline::ParticlePipeline;
@@ -43,8 +43,10 @@ const MAX_PARTICLES: usize = 10000;
 pub struct ParticleRenderer {
     device: Arc<ManagedDevice>,
     pipeline: ParticlePipeline,
-    vertex_buffer: ManagedBuffer,
-    index_buffer: ManagedBuffer,
+    /// Billboard buffers, one pair per frame in flight.
+    meshes: PerFrame<StreamedMesh>,
+    /// The frame being recorded, as [`Self::begin_frame`] was told.
+    slot: FrameSlot,
     /// Particle indices ordered far-to-near for this frame, paired with the
     /// squared distance from the camera that ordered them. Kept between frames
     /// so the sort does not allocate every time.
@@ -69,25 +71,15 @@ impl ParticleRenderer {
             (MAX_PARTICLES * 4 * std::mem::size_of::<ParticleVertex>()) as vk::DeviceSize;
         let index_buffer_size = (MAX_PARTICLES * 6 * std::mem::size_of::<u32>()) as vk::DeviceSize;
 
-        let vertex_buffer = ManagedBuffer::new(
-            Arc::clone(&device),
-            vertex_buffer_size,
-            vk::BufferUsageFlags::VERTEX_BUFFER,
-            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-        )?;
-
-        let index_buffer = ManagedBuffer::new(
-            Arc::clone(&device),
-            index_buffer_size,
-            vk::BufferUsageFlags::INDEX_BUFFER,
-            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-        )?;
+        let meshes = PerFrame::try_new(|_| {
+            StreamedMesh::new(&device, vertex_buffer_size, index_buffer_size)
+        })?;
 
         Ok(Self {
             device,
             pipeline,
-            vertex_buffer,
-            index_buffer,
+            meshes,
+            slot: FrameSlot::default(),
             draw_order: Vec::with_capacity(MAX_PARTICLES),
             matrices: None,
         })
@@ -98,7 +90,8 @@ impl ParticleRenderer {
     /// Called from the renderer's own `begin_frame`, so a frame that never
     /// submits a pool — a tool that drives the renderer without particles —
     /// records nothing rather than replaying the last order it was given.
-    pub fn begin_frame(&mut self) {
+    pub fn begin_frame(&mut self, slot: FrameSlot) {
+        self.slot = slot;
         self.draw_order.clear();
         self.matrices = None;
     }
@@ -176,30 +169,7 @@ impl ParticleRenderer {
             indices.push(base_index + 3);
         }
 
-        // Upload vertex data
-        unsafe {
-            let vertex_size = std::mem::size_of::<ParticleVertex>() * vertices.len();
-            let ptr = self
-                .vertex_buffer
-                .map_memory(0, vk::MemoryMapFlags::empty())?;
-            std::ptr::copy_nonoverlapping(
-                vertices.as_ptr() as *const u8,
-                ptr as *mut u8,
-                vertex_size,
-            );
-            self.vertex_buffer.unmap_memory();
-
-            let index_size = std::mem::size_of::<u32>() * indices.len();
-            let ptr = self
-                .index_buffer
-                .map_memory(0, vk::MemoryMapFlags::empty())?;
-            std::ptr::copy_nonoverlapping(
-                indices.as_ptr() as *const u8,
-                ptr as *mut u8,
-                index_size,
-            );
-            self.index_buffer.unmap_memory();
-        }
+        self.meshes[self.slot].upload(&vertices, &indices)?;
 
         self.matrices = Some((*view_matrix, *proj_matrix));
 
@@ -262,17 +232,7 @@ impl ParticleRenderer {
                 &exposure.to_ne_bytes(),
             );
 
-            // Bind vertex and index buffers
-            self.device
-                .device
-                .cmd_bind_vertex_buffers(cb, 0, &[self.vertex_buffer.buffer], &[0]);
-
-            self.device.device.cmd_bind_index_buffer(
-                cb,
-                self.index_buffer.buffer,
-                0,
-                vk::IndexType::UINT32,
-            );
+            self.meshes[self.slot].bind(&self.device.device, cb);
         }
     }
 

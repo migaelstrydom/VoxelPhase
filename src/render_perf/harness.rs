@@ -29,10 +29,13 @@ pub struct FrameSample {
     pub timing: FrameTiming,
     /// The physics world's own account of the frame just run.
     pub physics: Duration,
-    /// The *previous* frame's render profile. A frame's GPU times can only be
-    /// read once its fence has signalled, which is at the start of the next
-    /// frame, so the renderer publishes each profile one frame late.
-    pub previous_render: RenderProfile,
+    /// The renderer's number for the frame just run.
+    pub render_frame: u64,
+    /// The latest render profile the renderer has published, which is of an
+    /// earlier frame: GPU times can only be read once a frame's fence has
+    /// signalled, and with frames in flight that is some frames later. Its
+    /// `frame` says which.
+    pub finished_render: RenderProfile,
 }
 
 /// The real game, run headlessly against an offscreen renderer.
@@ -158,12 +161,13 @@ impl<'a, 'b> GameHarness<'a, 'b> {
             .world
             .frame_profile()
             .total();
-        let previous_render = self.world.read_resource::<Renderer>().profile().clone();
+        let renderer = self.world.read_resource::<Renderer>();
 
         FrameSample {
             timing,
             physics,
-            previous_render,
+            render_frame: renderer.frame_number(),
+            finished_render: renderer.profile().clone(),
         }
     }
 

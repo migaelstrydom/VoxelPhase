@@ -10,7 +10,10 @@ use ash::vk;
 
 use crate::core::device::ManagedDevice;
 use crate::core::error::{EngineResult, VkResultExt};
+use crate::rendering::deletion_queue::DeletionQueue;
 use crate::rendering::frame::ManagedBuffer;
+use crate::rendering::in_flight::{FrameSlot, PerFrame, FRAMES_IN_FLIGHT};
+use crate::rendering::texture::ManagedTexture;
 
 // Constants for texture pool management
 const INITIAL_TEXTURE_POOL_SIZE: u32 = 100;
@@ -31,15 +34,36 @@ struct TextureDescriptorState {
     texture_layout: vk::DescriptorSetLayout,
 }
 
+/// A texture whose last handle has gone, held until no frame in flight can
+/// still be sampling it.
+struct RetiredTexture {
+    /// Its descriptor set, if one was ever allocated.
+    set: Option<vk::DescriptorSet>,
+    /// Held only so the image outlives the frames that draw with it.
+    _texture: Arc<ManagedTexture>,
+}
+
+/// Textures released while frames may still be using them.
+struct Retirement {
+    queue: DeletionQueue<RetiredTexture>,
+    /// Frames begun so far; what retired textures are stamped with.
+    frame: u64,
+}
+
 /// Manages all descriptor pools and sets for the renderer.
 ///
 /// This centralizes:
-/// - Scene UBO descriptor set (single, pre-allocated)
+/// - Scene descriptor sets (one per frame in flight, pre-allocated)
 /// - Texture descriptor sets (dynamically allocated with pool growth)
 pub struct DescriptorManager {
-    pub scene_ubo_set: vk::DescriptorSet,
+    /// Set 0, one per frame in flight. Each points at its own frame's uniform
+    /// buffers and surface table; the shadow map and grain texture are shared.
+    scene_sets: PerFrame<vk::DescriptorSet>,
     ubo_pool: vk::DescriptorPool,
     texture_state: Mutex<TextureDescriptorState>,
+    /// Textures released by their handles, freed once the frames that were in
+    /// flight at the time have finished. See [`Self::retire_texture`].
+    retired: Mutex<Retirement>,
     device: Arc<ManagedDevice>,
 }
 
@@ -51,24 +75,26 @@ impl DescriptorManager {
         texture_layout: vk::DescriptorSetLayout,
         initial_texture_capacity: u32,
     ) -> EngineResult<Self> {
-        // Create UBO pool. One descriptor set holding two uniform buffer
-        // descriptors — the scene block (binding 0) and the light set
-        // (binding 1) — plus the sun shadow map (binding 2) and the frame's
-        // surface table (binding 3) and the shared grain texture (binding 4).
+        // Create UBO pool. One descriptor set per frame in flight, each
+        // holding two uniform buffer descriptors — the scene block (binding 0)
+        // and the light set (binding 1) — plus the sun shadow map (binding 2)
+        // and the frame's surface table (binding 3) and the shared grain
+        // texture (binding 4).
+        let frames = FRAMES_IN_FLIGHT as u32;
         let ubo_pool_sizes = [
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::UNIFORM_BUFFER)
-                .descriptor_count(2),
+                .descriptor_count(2 * frames),
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .descriptor_count(2),
+                .descriptor_count(2 * frames),
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::STORAGE_BUFFER)
-                .descriptor_count(1),
+                .descriptor_count(frames),
         ];
 
         let ubo_pool_info = vk::DescriptorPoolCreateInfo::default()
-            .max_sets(1)
+            .max_sets(frames)
             .pool_sizes(&ubo_pool_sizes);
 
         let ubo_pool = unsafe {
@@ -78,16 +104,16 @@ impl DescriptorManager {
                 .descriptor_context("create UBO descriptor pool")?
         };
 
-        // Allocate the scene UBO descriptor set
+        let layouts = [ubo_layout; FRAMES_IN_FLIGHT];
         let alloc_info = vk::DescriptorSetAllocateInfo::default()
             .descriptor_pool(ubo_pool)
-            .set_layouts(std::slice::from_ref(&ubo_layout));
+            .set_layouts(&layouts);
 
         let sets = unsafe {
             device
                 .device
                 .allocate_descriptor_sets(&alloc_info)
-                .descriptor_context("allocate UBO descriptor set")?
+                .descriptor_context("allocate UBO descriptor sets")?
         };
 
         // Create initial texture pool
@@ -95,7 +121,7 @@ impl DescriptorManager {
         let texture_pool = Self::create_texture_pool(&device, initial_capacity)?;
 
         Ok(Self {
-            scene_ubo_set: sets[0],
+            scene_sets: PerFrame::new(|slot| sets[slot.index()]),
             ubo_pool,
             texture_state: Mutex::new(TextureDescriptorState {
                 pools: vec![DescriptorPool {
@@ -105,6 +131,10 @@ impl DescriptorManager {
                 }],
                 set_to_pool: HashMap::new(),
                 texture_layout,
+            }),
+            retired: Mutex::new(Retirement {
+                queue: DeletionQueue::new(FRAMES_IN_FLIGHT as u64),
+                frame: 0,
             }),
             device,
         })
@@ -132,29 +162,40 @@ impl DescriptorManager {
         }
     }
 
-    /// Update the scene UBO descriptor (set 0, binding 0) to point at a buffer.
-    pub fn update_scene_ubo(&self, buffer: &ManagedBuffer, size: vk::DeviceSize) {
-        self.write_ubo_binding(0, buffer, size);
+    /// The scene descriptor set (set 0) of one frame in flight.
+    pub fn scene_set(&self, slot: FrameSlot) -> vk::DescriptorSet {
+        self.scene_sets[slot]
     }
 
-    /// Update the light UBO descriptor (set 0, binding 1) to point at a buffer.
-    pub fn update_light_ubo(&self, buffer: &ManagedBuffer, size: vk::DeviceSize) {
-        self.write_ubo_binding(1, buffer, size);
+    /// Point one frame's scene UBO descriptor (set 0, binding 0) at a buffer.
+    pub fn update_scene_ubo(&self, slot: FrameSlot, buffer: &ManagedBuffer, size: vk::DeviceSize) {
+        self.write_ubo_binding(self.scene_sets[slot], 0, buffer, size);
     }
 
-    /// Point the surface table descriptor (set 0, binding 3) at a buffer.
+    /// Point one frame's light UBO descriptor (set 0, binding 1) at a buffer.
+    pub fn update_light_ubo(&self, slot: FrameSlot, buffer: &ManagedBuffer, size: vk::DeviceSize) {
+        self.write_ubo_binding(self.scene_sets[slot], 1, buffer, size);
+    }
+
+    /// Point one frame's surface table descriptor (set 0, binding 3) at a
+    /// buffer.
     ///
     /// Written once at startup. The table is sized for the worst frame and
     /// never reallocated, precisely so this descriptor never has to be
     /// rewritten while a frame is in flight.
-    pub fn update_surface_table(&self, buffer: &ManagedBuffer, size: vk::DeviceSize) {
+    pub fn update_surface_table(
+        &self,
+        slot: FrameSlot,
+        buffer: &ManagedBuffer,
+        size: vk::DeviceSize,
+    ) {
         let buffer_info = [vk::DescriptorBufferInfo::default()
             .buffer(buffer.buffer)
             .offset(0)
             .range(size)];
 
         let write = [vk::WriteDescriptorSet::default()
-            .dst_set(self.scene_ubo_set)
+            .dst_set(self.scene_sets[slot])
             .dst_binding(3)
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
             .buffer_info(&buffer_info)];
@@ -164,7 +205,8 @@ impl DescriptorManager {
         }
     }
 
-    /// Point the grain descriptor (set 0, binding 4) at the shared grain texture.
+    /// Point every frame's grain descriptor (set 0, binding 4) at the shared
+    /// grain texture.
     ///
     /// Written once at startup. The fragment shader statically samples this
     /// binding, so it must be valid before any draw, whether or not a material
@@ -175,18 +217,26 @@ impl DescriptorManager {
             .image_view(image_view)
             .sampler(sampler)];
 
-        let write = [vk::WriteDescriptorSet::default()
-            .dst_set(self.scene_ubo_set)
-            .dst_binding(4)
-            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-            .image_info(&image_info)];
+        let writes: Vec<_> = self
+            .scene_sets
+            .iter()
+            .map(|&set| {
+                vk::WriteDescriptorSet::default()
+                    .dst_set(set)
+                    .dst_binding(4)
+                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .image_info(&image_info)
+            })
+            .collect();
 
         unsafe {
-            self.device.device.update_descriptor_sets(&write, &[]);
+            self.device.device.update_descriptor_sets(&writes, &[]);
         }
     }
 
-    /// Point the shadow map descriptor (set 0, binding 2) at a depth image.
+    /// Point every frame's shadow map descriptor (set 0, binding 2) at a depth
+    /// image. There is one map: frames take turns with it, ordered on the GPU
+    /// by the shadow pass's own dependencies.
     ///
     /// `layout` is the layout the image is in when it is sampled, which for a
     /// depth attachment is not the colour path's `SHADER_READ_ONLY_OPTIMAL`.
@@ -199,14 +249,20 @@ impl DescriptorManager {
             .image_layout(layout)
             .image_view(image_view)];
 
-        let write = [vk::WriteDescriptorSet::default()
-            .dst_set(self.scene_ubo_set)
-            .dst_binding(2)
-            .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-            .image_info(&image_info)];
+        let writes: Vec<_> = self
+            .scene_sets
+            .iter()
+            .map(|&set| {
+                vk::WriteDescriptorSet::default()
+                    .dst_set(set)
+                    .dst_binding(2)
+                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .image_info(&image_info)
+            })
+            .collect();
 
         unsafe {
-            self.device.device.update_descriptor_sets(&write, &[]);
+            self.device.device.update_descriptor_sets(&writes, &[]);
         }
     }
 
@@ -214,14 +270,20 @@ impl DescriptorManager {
     ///
     /// Descriptor writes only rebind the buffer; per-frame *contents* are
     /// written through the mapped buffer, so this runs once at startup.
-    fn write_ubo_binding(&self, binding: u32, buffer: &ManagedBuffer, size: vk::DeviceSize) {
+    fn write_ubo_binding(
+        &self,
+        set: vk::DescriptorSet,
+        binding: u32,
+        buffer: &ManagedBuffer,
+        size: vk::DeviceSize,
+    ) {
         let buffer_info = [vk::DescriptorBufferInfo::default()
             .buffer(buffer.buffer)
             .offset(0)
             .range(size)];
 
         let write = [vk::WriteDescriptorSet::default()
-            .dst_set(self.scene_ubo_set)
+            .dst_set(set)
             .dst_binding(binding)
             .descriptor_type(vk::DescriptorType::UNIFORM_BUFFER)
             .buffer_info(&buffer_info)];
@@ -305,8 +367,43 @@ impl DescriptorManager {
         Ok(set)
     }
 
+    /// Hand over a texture whose last handle has gone.
+    ///
+    /// A frame recorded before the release may still be on the GPU, sampling
+    /// the image through the set, so neither is freed until every frame begun
+    /// by then has finished — see [`Self::begin_frame`].
+    pub fn retire_texture(&self, set: Option<vk::DescriptorSet>, texture: Arc<ManagedTexture>) {
+        let mut retired = self.retired.lock().unwrap();
+        let frame = retired.frame;
+        retired.queue.queue(
+            RetiredTexture {
+                set,
+                _texture: texture,
+            },
+            frame,
+        );
+    }
+
+    /// Start a frame: free the textures retired `FRAMES_IN_FLIGHT` frames ago.
+    ///
+    /// Call once per frame, after waiting on that frame's fence — which is
+    /// what guarantees the frame that last used them has finished.
+    pub fn begin_frame(&self) {
+        let ready = {
+            let mut retired = self.retired.lock().unwrap();
+            retired.frame += 1;
+            let frame = retired.frame;
+            retired.queue.take_ready(frame)
+        };
+        for texture in ready {
+            if let Some(set) = texture.set {
+                let _ = self.free_texture_set(set);
+            }
+        }
+    }
+
     /// Free a texture descriptor set back to the pool that allocated it.
-    pub fn free_texture_set(&self, set: vk::DescriptorSet) -> EngineResult<()> {
+    fn free_texture_set(&self, set: vk::DescriptorSet) -> EngineResult<()> {
         let mut state = self.texture_state.lock().unwrap();
 
         if let Some(pool_index) = state.set_to_pool.remove(&set) {
