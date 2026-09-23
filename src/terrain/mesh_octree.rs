@@ -55,6 +55,13 @@ impl TriangleRef {
         }
     }
 
+    /// A root-leaf reference to triangle `index`, for tests that need distinct
+    /// references without building an octree.
+    #[cfg(test)]
+    pub(crate) fn for_test(index: u32) -> Self {
+        Self::new(0, 0, index)
+    }
+
     /// Get the octant index at a given level of the path.
     fn octant_at_level(&self, level: u8) -> usize {
         ((self.path >> (level * 3)) & 0b111) as usize

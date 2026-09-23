@@ -65,11 +65,13 @@ pub enum BuildPhase {
     OctreeInsert,
     NeighbourRefs,
     Collect,
+    /// Linking the chunk's own triangles; seams are linked at commit.
+    Adjacency,
     RenderData,
 }
 
 impl BuildPhase {
-    pub const ALL: [BuildPhase; 8] = [
+    pub const ALL: [BuildPhase; 9] = [
         BuildPhase::GridAlloc,
         BuildPhase::Sample,
         BuildPhase::MarchingCubes,
@@ -77,6 +79,7 @@ impl BuildPhase {
         BuildPhase::OctreeInsert,
         BuildPhase::NeighbourRefs,
         BuildPhase::Collect,
+        BuildPhase::Adjacency,
         BuildPhase::RenderData,
     ];
 
@@ -89,6 +92,7 @@ impl BuildPhase {
             BuildPhase::OctreeInsert => "octree insert",
             BuildPhase::NeighbourRefs => "neighbour refs",
             BuildPhase::Collect => "collect triangles",
+            BuildPhase::Adjacency => "chunk adjacency",
             BuildPhase::RenderData => "render data",
         }
     }
@@ -102,6 +106,7 @@ impl BuildPhase {
             BuildPhase::OctreeInsert => t.mesh.insert,
             BuildPhase::NeighbourRefs => t.mesh.neighbor_refs,
             BuildPhase::Collect => t.collect,
+            BuildPhase::Adjacency => t.adjacency,
             BuildPhase::RenderData => t.render_data,
         }
     }
@@ -137,6 +142,7 @@ mod tests {
         let ms = Duration::from_millis;
         let mut t = ChunkBuildTimings {
             collect: ms(2),
+            adjacency: ms(6),
             render_data: ms(3),
             ..Default::default()
         };

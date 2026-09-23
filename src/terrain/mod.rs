@@ -24,6 +24,7 @@ mod marching_cubes;
 mod mesh_octree;
 mod render_cache;
 mod segment;
+mod segment_adjacency;
 pub mod surface;
 pub(crate) mod svo;
 pub mod traversal;
@@ -38,6 +39,7 @@ pub use chunk_grid::ChunkGrid;
 pub use chunk_rebuild::ChunkBuildTimings;
 pub use frame::{SegmentFrame, YAW_STEP_DEGREES};
 pub use segment::{Segment, SegmentState};
+pub use segment_adjacency::SegmentAdjacency;
 pub use world::{TerrainWorld, UpdateTimings};
 
 // Voxel types for terrain modification

@@ -5,7 +5,7 @@
 //!   │  Segment  "start_plaza"                              │
 //!   │    SegmentFrame   origin + 90°-multiple yaw          │
 //!   │    ChunkGrid      voxels, entirely segment-local     │
-//!   │    AdjacencyMap   triangle links within this segment │
+//!   │    SegmentAdjacency  triangle links, chunk by chunk  │
 //!   │    Anchors        named local frames                 │
 //!   └──────────────────────────────────────────────────────┘
 //!         ▲  world query ──to_local──▶ grid ──to_world──▶ world result
@@ -23,7 +23,7 @@ use nalgebra::{Point3, Vector3};
 use rayon::prelude::*;
 use std::time::{Duration, Instant};
 
-use super::adjacency::{AdjacencyMap, AdjacencyTimings, DefectiveEdge};
+use super::adjacency::{AdjacencyTimings, DefectiveEdge};
 use super::anchor::Anchor;
 use super::blast::{self, BlastConfig};
 use super::chunk::{ChunkCoord, ChunkTriangleRef};
@@ -31,14 +31,11 @@ use super::chunk_grid::ChunkGrid;
 use super::chunk_rebuild::{ChunkBuildTimings, ChunkRebuild};
 use super::frame::SegmentFrame;
 use super::render_cache::{build_chunk_render_data, ChunkRenderCache};
+use super::segment_adjacency::{adjacency_tolerance, SegmentAdjacency};
 use super::voxel::Voxel;
 use crate::collision::ray_triangle::RayHit;
 use crate::collision::{Triangle, AABB};
 use crate::rendering::vertex::Vertex;
-
-/// Fraction of a voxel used as the vertex-matching tolerance when linking
-/// triangles into the adjacency map.
-const ADJACENCY_TOLERANCE_FACTOR: f32 = 0.01;
 
 /// Where a segment is in its lifecycle.
 ///
@@ -108,7 +105,7 @@ pub struct Segment {
     /// load and unload, and a level-wide map keyed by position would have to be
     /// rebuilt whenever one came or went. Welded joins are not implemented, so
     /// no two segments have coincident geometry to link across anyway.
-    adjacency: AdjacencyMap<ChunkTriangleRef>,
+    adjacency: SegmentAdjacency,
 
     /// Each chunk's render geometry in world space, so a terrain edit only
     /// rebuilds what it dirtied. Kept current by [`Self::remesh_chunk`].
@@ -147,11 +144,12 @@ impl Segment {
             .map(|b| frame.aabb_to_world(&b))
             .unwrap_or_else(|| AABB::new(frame.origin(), frame.origin()));
 
+        let adjacency = SegmentAdjacency::new(grid.voxel_size());
         Self {
             name: name.into(),
             frame,
             grid,
-            adjacency: AdjacencyMap::new(),
+            adjacency,
             render_cache: ChunkRenderCache::new(),
             anchors,
             state: SegmentState::Active,
@@ -278,9 +276,10 @@ impl Segment {
 
         let t_build = Instant::now();
         let (grid, frame) = (&self.grid, &self.frame);
+        let tolerance = adjacency_tolerance(grid.voxel_size());
         let rebuilds: Vec<ChunkRebuild> = dirty
             .par_iter()
-            .map(|&coord| ChunkRebuild::build(grid, frame, coord))
+            .map(|&coord| ChunkRebuild::build(grid, frame, coord, tolerance))
             .collect();
         let build = t_build.elapsed();
 
@@ -312,15 +311,13 @@ impl Segment {
         })
     }
 
-    /// Install one rebuilt chunk: patch adjacency, swap in its mesh and cache
-    /// its render data. Chunks must be committed one at a time, since they
-    /// share the adjacency map and the grid's chunk table.
+    /// Install one rebuilt chunk: swap in its adjacency and relink its seams,
+    /// swap in its mesh and cache its render data. Chunks must be committed one
+    /// at a time, since they share seam links and the grid's chunk table.
     fn commit_chunk(&mut self, rebuild: ChunkRebuild) -> AdjacencyTimings {
-        let adjacency = self.adjacency.update_region(
-            &rebuild.old_triangles,
-            &rebuild.new_triangles,
-            self.grid.voxel_size() * ADJACENCY_TOLERANCE_FACTOR,
-        );
+        let adjacency = self
+            .adjacency
+            .replace_chunk(rebuild.coord, rebuild.adjacency);
         self.grid
             .chunk_or_insert(rebuild.coord)
             .replace_mesh(rebuild.mesh);
@@ -568,7 +565,7 @@ impl Segment {
     }
 
     /// Triangle links within this segment.
-    pub fn adjacency(&self) -> &AdjacencyMap<ChunkTriangleRef> {
+    pub fn adjacency(&self) -> &SegmentAdjacency {
         &self.adjacency
     }
 

@@ -41,7 +41,7 @@ use super::mesh_octree::{MeshOctree, TriangleRef};
 /// vertices produced by different marching-cubes cells or octree leaves
 /// are guaranteed to compare equal when they represent the same point.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct QuantizedPos(i64, i64, i64);
+pub(super) struct QuantizedPos(i64, i64, i64);
 
 impl QuantizedPos {
     fn from_point(p: Point3<f32>, inv_cell: f64) -> Self {
@@ -51,11 +51,20 @@ impl QuantizedPos {
             (p.z as f64 * inv_cell).round() as i64,
         )
     }
+
+    /// The grid point back as a position, given the cell size.
+    fn to_point(self, cell: f64) -> Point3<f32> {
+        Point3::new(
+            (self.0 as f64 * cell) as f32,
+            (self.1 as f64 * cell) as f32,
+            (self.2 as f64 * cell) as f32,
+        )
+    }
 }
 
 /// Canonical edge representation: smaller quantized vertex first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct Edge(QuantizedPos, QuantizedPos);
+pub(super) struct Edge(QuantizedPos, QuantizedPos);
 
 impl Edge {
     fn new(a: QuantizedPos, b: QuantizedPos) -> Self {
@@ -63,6 +72,16 @@ impl Edge {
             Edge(a, b)
         } else {
             Edge(b, a)
+        }
+    }
+
+    /// An edge claimed by `triangles` triangles, as a defect report.
+    pub(super) fn defect(&self, inv_cell: f64, triangles: usize) -> DefectiveEdge {
+        let cell = if inv_cell == 0.0 { 0.0 } else { 1.0 / inv_cell };
+        DefectiveEdge {
+            from: self.0.to_point(cell),
+            to: self.1.to_point(cell),
+            triangles,
         }
     }
 }
@@ -132,6 +151,52 @@ impl<R: Copy + Eq + Hash> AdjacencyMap<R> {
             triangle_buf: Vec::new(),
             inv_cell: 0.0,
         }
+    }
+
+    /// Link `triangles` among themselves, as a fresh map.
+    pub fn from_triangles(triangles: &[(R, [Point3<f32>; 3])], tolerance: f32) -> Self {
+        let mut map = Self::new();
+        map.update_region(&[], triangles, tolerance);
+        map
+    }
+
+    /// Edges not shared by exactly two of this map's triangles, with the
+    /// triangles (and their edge slots) that do claim them.
+    pub(super) fn loose_edges(&self) -> impl Iterator<Item = (&Edge, &[(R, u8)])> {
+        self.edge_map
+            .iter()
+            .filter(|(_, entries)| entries.len() != 2)
+            .map(|(edge, entries)| (edge, entries.as_slice()))
+    }
+
+    /// Set the neighbour across one edge of `triangle`, for a link made
+    /// outside this map. Clearing a slot of a triangle with no entry is a
+    /// no-op, as is clearing one already clear.
+    pub(super) fn set_neighbour(&mut self, triangle: R, slot: u8, neighbour: Option<R>) {
+        match neighbour {
+            Some(_) => {
+                self.adjacency
+                    .entry(triangle)
+                    .or_insert(TriangleNeighbors {
+                        neighbors: [None; 3],
+                    })
+                    .neighbors[slot as usize] = neighbour;
+            }
+            None => {
+                if let Some(neighbours) = self.adjacency.get_mut(&triangle) {
+                    neighbours.neighbors[slot as usize] = None;
+                }
+            }
+        }
+    }
+
+    /// Filled neighbour slots across every triangle. A link inside the map
+    /// fills two; a link to a triangle outside it fills one here.
+    pub(super) fn linked_slot_count(&self) -> usize {
+        self.adjacency
+            .values()
+            .map(|n| n.neighbors.iter().filter(|x| x.is_some()).count())
+            .sum()
     }
 
     /// Compute the 3 quantized edges for a triangle's vertex positions.
@@ -264,15 +329,9 @@ impl<R: Copy + Eq + Hash> AdjacencyMap<R> {
     }
 
     /// Count the total number of manifold edges (shared by exactly 2 triangles).
-    #[allow(dead_code)]
     pub fn manifold_edge_count(&self) -> usize {
-        let total_neighbors: usize = self
-            .adjacency
-            .values()
-            .map(|n| n.neighbors.iter().filter(|x| x.is_some()).count())
-            .sum();
         // Each manifold edge is counted twice (once from each side).
-        total_neighbors / 2
+        self.linked_slot_count() / 2
     }
 
     /// Count boundary edges (edges with only one triangle).
@@ -290,27 +349,8 @@ impl<R: Copy + Eq + Hash> AdjacencyMap<R> {
     /// hole (one triangle) and a seam where the surface passes through itself
     /// (three or more). This reports them apart, and says where they are.
     pub fn defective_edges(&self) -> Vec<DefectiveEdge> {
-        let cell = if self.inv_cell == 0.0 {
-            0.0
-        } else {
-            1.0 / self.inv_cell
-        };
-        let point = |q: QuantizedPos| {
-            Point3::new(
-                (q.0 as f64 * cell) as f32,
-                (q.1 as f64 * cell) as f32,
-                (q.2 as f64 * cell) as f32,
-            )
-        };
-
-        self.edge_map
-            .iter()
-            .filter(|(_, entries)| entries.len() != 2)
-            .map(|(edge, entries)| DefectiveEdge {
-                from: point(edge.0),
-                to: point(edge.1),
-                triangles: entries.len(),
-            })
+        self.loose_edges()
+            .map(|(edge, entries)| edge.defect(self.inv_cell, entries.len()))
             .collect()
     }
 }
