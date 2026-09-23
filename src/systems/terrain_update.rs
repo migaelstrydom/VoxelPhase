@@ -11,9 +11,9 @@ use crate::terrain::{TerrainWorld, UpdateTimings};
 /// and before systems that read terrain (e.g., TerrainCollisionSystem, RenderSystem).
 ///
 /// Also reports the cost breakdown of the most recent terrain rebuild through
-/// [`DebugLog`] (printed on F3). The phases scale differently — remesh with the
-/// number of chunks dirtied, buffer concatenation with the size of the whole
-/// level — so they are reported apart.
+/// [`DebugLog`] (printed on F3). The phases scale differently — build and
+/// commit with the number of chunks dirtied, buffer concatenation with the size
+/// of the whole level — so they are reported apart.
 pub struct TerrainUpdateSystem;
 
 impl<'a> System<'a> for TerrainUpdateSystem {
@@ -45,9 +45,10 @@ fn report(timings: &UpdateTimings, debug_log: &mut DebugLog) {
         timings.chunks_dirtied.to_string(),
     );
     debug_log.add("Terrain/LastUpdate/0 Detonate", ms(timings.detonate));
-    debug_log.add("Terrain/LastUpdate/1 Remesh", ms(timings.remesh));
-    debug_log.add("Terrain/LastUpdate/2 Adjacency", ms(timings.adjacency));
-    debug_log.add("Terrain/LastUpdate/3 BufferConcat", ms(timings.concat));
-    debug_log.add("Terrain/LastUpdate/4 Total", ms(timings.total()));
+    debug_log.add("Terrain/LastUpdate/1 Build", ms(timings.build));
+    debug_log.add("Terrain/LastUpdate/2 Commit", ms(timings.commit));
+    debug_log.add("Terrain/LastUpdate/3 Adjacency", ms(timings.adjacency));
+    debug_log.add("Terrain/LastUpdate/4 BufferConcat", ms(timings.concat));
+    debug_log.add("Terrain/LastUpdate/5 Total", ms(timings.total()));
     debug_log.add("Terrain/Triangles", timings.triangles.to_string());
 }

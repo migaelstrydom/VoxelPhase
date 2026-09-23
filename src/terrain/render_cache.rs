@@ -15,8 +15,9 @@
 
 use rustc_hash::FxHashMap;
 
-use super::chunk::{Chunk, ChunkCoord};
+use super::chunk::ChunkCoord;
 use super::frame::SegmentFrame;
+use super::mesh_octree::MeshOctree;
 use crate::rendering::vertex::Vertex;
 
 /// One chunk's render geometry, already lifted into world space.
@@ -32,8 +33,8 @@ pub struct ChunkRenderData {
 ///
 /// The frame is baked in at collection time, which is what keeps everything
 /// downstream of the terrain in world space.
-pub fn build_chunk_render_data(chunk: &Chunk, frame: &SegmentFrame) -> ChunkRenderData {
-    let (vertices, indices) = chunk.mesh().get_render_data();
+pub fn build_chunk_render_data(mesh: &MeshOctree, frame: &SegmentFrame) -> ChunkRenderData {
+    let (vertices, indices) = mesh.get_render_data();
     ChunkRenderData {
         vertices: vertices
             .into_iter()

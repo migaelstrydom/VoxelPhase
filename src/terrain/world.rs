@@ -33,7 +33,7 @@ use std::time::{Duration, Instant};
 use super::adjacency::{AdjacencyTimings, DefectiveEdge};
 use super::blast::BlastConfig;
 use super::chunk::ChunkTriangleRef;
-use super::mesh_octree::MeshBuildTimings;
+use super::chunk_rebuild::ChunkBuildTimings;
 use super::segment::{ConcatTimings, Segment};
 use super::surface;
 use crate::collision::ray_triangle::{ray_triangle, RayHit};
@@ -79,9 +79,10 @@ const NEIGHBOR_OFFSETS: [Vector3<f32>; 6] = [
 /// the detonations that made it necessary.
 ///
 /// The phases scale differently, which is the whole reason they are timed
-/// apart: `remesh` and `adjacency` are O(chunks dirtied) and roughly constant as
-/// a level grows, whereas `concat` rebuilds every vertex in the level and is
-/// therefore O(total triangles).
+/// apart: `build`, `commit` and `adjacency` are O(chunks dirtied) and roughly
+/// constant as a level grows, whereas `concat` rebuilds every vertex in the
+/// level and is therefore O(total triangles). `build` runs chunks in parallel;
+/// the rest is sequential.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct UpdateTimings {
     /// How many chunks were remeshed, across all segments.
@@ -90,14 +91,14 @@ pub struct UpdateTimings {
     /// budget and writing the removed voxels. Runs before the update, usually
     /// earlier in the same frame.
     pub detonate: Duration,
-    /// Marching cubes over the dirty chunks, plus the vacant-chunk prune.
-    /// Excludes the adjacency patching measured separately.
-    pub remesh: Duration,
-    /// Mesh construction within `remesh`, split by phase. A sub-breakdown of
-    /// `remesh`, so these do not add to the total separately.
-    pub build: MeshBuildTimings,
-    /// Listing old and new triangles for the adjacency diff, within `remesh`.
-    pub collect: Duration,
+    /// Wall clock of building the dirty chunks' replacement meshes, which
+    /// runs chunks in parallel.
+    pub build: Duration,
+    /// CPU time of `build` summed over chunks, split by phase. Not part of the
+    /// total: on several threads it adds up to more than `build` took.
+    pub build_cpu: ChunkBuildTimings,
+    /// Installing the rebuilt chunks, excluding the adjacency patch.
+    pub commit: Duration,
     /// Incremental adjacency patching for the remeshed triangles.
     pub adjacency: Duration,
     /// Sub-breakdown of `adjacency`, which these do not add to separately.
@@ -113,7 +114,7 @@ pub struct UpdateTimings {
 impl UpdateTimings {
     /// Sum of the measured phases.
     pub fn total(&self) -> Duration {
-        self.detonate + self.remesh + self.adjacency + self.concat
+        self.detonate + self.build + self.commit + self.adjacency + self.concat
     }
 }
 
@@ -243,20 +244,20 @@ impl TerrainWorld {
         self.rebuilt_regions.clear();
 
         let mut chunks_dirtied = 0;
-        let mut remesh = Duration::ZERO;
+        let mut build = Duration::ZERO;
+        let mut build_cpu = ChunkBuildTimings::default();
+        let mut commit = Duration::ZERO;
         let mut adjacency = AdjacencyTimings::default();
-        let mut build = MeshBuildTimings::default();
-        let mut collect = Duration::ZERO;
         let detonate = std::mem::take(&mut self.pending_detonate);
 
         let mut rebuilt = Vec::new();
         for segment in &mut self.segments {
             if let Some(t) = segment.update(&mut rebuilt) {
                 chunks_dirtied += t.chunks_dirtied;
-                remesh += t.remesh;
+                build += t.build;
+                build_cpu.add(&t.build_cpu);
+                commit += t.commit;
                 adjacency.add(&t.adjacency);
-                collect += t.collect;
-                build.add(&t.build);
             }
         }
         self.rebuilt_regions = rebuilt;
@@ -272,9 +273,9 @@ impl TerrainWorld {
         let timings = UpdateTimings {
             chunks_dirtied,
             detonate,
-            remesh,
             build,
-            collect,
+            build_cpu,
+            commit,
             adjacency: adjacency.total(),
             adjacency_split: adjacency,
             concat_split,
@@ -284,11 +285,12 @@ impl TerrainWorld {
         self.last_update = Some(timings);
 
         log::debug!(
-            "Terrain updated: {} chunks remeshed across {} segments, {} triangles, {:?} remesh, {:?} adjacency, {:?} render data, {:?} total",
+            "Terrain updated: {} chunks remeshed across {} segments, {} triangles, {:?} build, {:?} commit, {:?} adjacency, {:?} render data, {:?} total",
             timings.chunks_dirtied,
             self.segments.len(),
             timings.triangles,
-            remesh,
+            build,
+            commit,
             timings.adjacency,
             concat,
             timings.total(),

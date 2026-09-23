@@ -15,6 +15,7 @@ pub mod ao;
 pub mod blast;
 mod chunk;
 mod chunk_grid;
+mod chunk_rebuild;
 mod csg;
 pub use csg::SURFACE_BAND;
 mod frame;
@@ -34,6 +35,7 @@ pub use adjacency::{AdjacencyMap, AdjacencyTimings, DefectiveEdge, TriangleNeigh
 pub use anchor::{mate, outward, Anchor};
 pub use chunk::{ChunkCoord, CHUNK_VOXELS};
 pub use chunk_grid::ChunkGrid;
+pub use chunk_rebuild::ChunkBuildTimings;
 pub use frame::{SegmentFrame, YAW_STEP_DEGREES};
 pub use segment::{Segment, SegmentState};
 pub use world::{TerrainWorld, UpdateTimings};

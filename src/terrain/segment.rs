@@ -20,15 +20,16 @@
 //! [`TerrainWorld`]: super::world::TerrainWorld
 
 use nalgebra::{Point3, Vector3};
+use rayon::prelude::*;
 use std::time::{Duration, Instant};
 
 use super::adjacency::{AdjacencyMap, AdjacencyTimings, DefectiveEdge};
 use super::anchor::Anchor;
 use super::blast::{self, BlastConfig};
-use super::chunk::{ChunkCoord, ChunkTriangleRef, CHUNK_VOXELS};
+use super::chunk::{ChunkCoord, ChunkTriangleRef};
 use super::chunk_grid::ChunkGrid;
+use super::chunk_rebuild::{ChunkBuildTimings, ChunkRebuild};
 use super::frame::SegmentFrame;
-use super::mesh_octree::{MeshBuildTimings, MeshOctree, TriangleRef};
 use super::render_cache::{build_chunk_render_data, ChunkRenderCache};
 use super::voxel::Voxel;
 use crate::collision::ray_triangle::RayHit;
@@ -59,13 +60,14 @@ pub enum SegmentState {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct SegmentTimings {
     pub chunks_dirtied: usize,
-    /// Everything from sampling voxels to owning the new octree. `build` and
-    /// `collect` are sub-phases of this, so they do not add to it.
-    pub remesh: Duration,
-    /// Mesh construction inside `remesh`, split by phase.
-    pub build: MeshBuildTimings,
-    /// Walking the old and new octrees to list their triangles for adjacency.
-    pub collect: Duration,
+    /// Wall clock of building every dirty chunk's replacement, in parallel.
+    pub build: Duration,
+    /// CPU time of that build summed over chunks, split by phase. More than
+    /// `build` whenever chunks ran on several threads.
+    pub build_cpu: ChunkBuildTimings,
+    /// Wall clock of installing the rebuilt chunks, excluding `adjacency`:
+    /// mesh swaps, render cache entries, the vacant-chunk prune and stats.
+    pub commit: Duration,
     /// Patching the segment's adjacency map, split by phase.
     pub adjacency: AdjacencyTimings,
 }
@@ -87,14 +89,6 @@ impl ConcatTimings {
         self.transform += other.transform;
         self.rebase += other.rebase;
     }
-}
-
-/// Time spent rebuilding one chunk, split by phase.
-#[derive(Debug, Clone, Copy, Default)]
-struct ChunkRemeshTimings {
-    build: MeshBuildTimings,
-    collect: Duration,
-    adjacency: AdjacencyTimings,
 }
 
 /// An independently placed chunk grid with a name, a frame and named anchors.
@@ -282,17 +276,24 @@ impl Segment {
             return None;
         }
 
-        let t0 = Instant::now();
-        let mut adjacency = AdjacencyTimings::default();
-        let mut build = MeshBuildTimings::default();
-        let mut collect = Duration::ZERO;
+        let t_build = Instant::now();
+        let (grid, frame) = (&self.grid, &self.frame);
+        let rebuilds: Vec<ChunkRebuild> = dirty
+            .par_iter()
+            .map(|&coord| ChunkRebuild::build(grid, frame, coord))
+            .collect();
+        let build = t_build.elapsed();
 
-        for coord in &dirty {
-            let chunk = self.remesh_chunk(*coord);
-            adjacency.add(&chunk.adjacency);
-            collect += chunk.collect;
-            build.add(&chunk.build);
-            rebuilt.push(self.frame.aabb_to_world(&self.grid.chunk_bounds(*coord)));
+        let t_commit = Instant::now();
+        let mut adjacency = AdjacencyTimings::default();
+        let mut build_cpu = ChunkBuildTimings::default();
+        for rebuild in rebuilds {
+            build_cpu.add(&rebuild.timings);
+            rebuilt.push(
+                self.frame
+                    .aabb_to_world(&self.grid.chunk_bounds(rebuild.coord)),
+            );
+            adjacency.add(&self.commit_chunk(rebuild));
         }
 
         // A chunk allocated purely to own a seam cell may have produced nothing.
@@ -304,60 +305,27 @@ impl Segment {
 
         Some(SegmentTimings {
             chunks_dirtied: dirty.len(),
-            remesh: t0.elapsed() - adjacency.total(),
             build,
-            collect,
+            build_cpu,
+            commit: t_commit.elapsed().saturating_sub(adjacency.total()),
             adjacency,
         })
     }
 
-    /// Rebuild one chunk's mesh and patch adjacency.
-    fn remesh_chunk(&mut self, coord: ChunkCoord) -> ChunkRemeshTimings {
-        let local_bounds = self.grid.chunk_bounds(coord);
-        let first_sample = self.grid.first_sample(coord);
-        let voxel_size = self.grid.voxel_size();
-
-        let mut mesh = MeshOctree::new(local_bounds);
-        let build = mesh.generate_block(
-            Point3::origin(),
-            first_sample,
-            CHUNK_VOXELS as usize,
-            voxel_size,
-            &self.grid,
+    /// Install one rebuilt chunk: patch adjacency, swap in its mesh and cache
+    /// its render data. Chunks must be committed one at a time, since they
+    /// share the adjacency map and the grid's chunk table.
+    fn commit_chunk(&mut self, rebuild: ChunkRebuild) -> AdjacencyTimings {
+        let adjacency = self.adjacency.update_region(
+            &rebuild.old_triangles,
+            &rebuild.new_triangles,
+            self.grid.voxel_size() * ADJACENCY_TOLERANCE_FACTOR,
         );
-
-        let t_collect = Instant::now();
-        let mut old_tris = Vec::new();
-        if let Some(chunk) = self.grid.chunk(coord) {
-            chunk.mesh().collect_all_triangles_into(&mut old_tris);
-        }
-        let mut new_tris = Vec::new();
-        mesh.collect_all_triangles_into(&mut new_tris);
-        let collect = t_collect.elapsed();
-
-        let t_qualify = Instant::now();
-        let old_refs = qualify(coord, &old_tris);
-        let new_refs = qualify(coord, &new_tris);
-        let qualify = t_qualify.elapsed();
-        let adjacency = AdjacencyTimings {
-            qualify,
-            ..self.adjacency.update_region(
-                &old_refs,
-                &new_refs,
-                voxel_size * ADJACENCY_TOLERANCE_FACTOR,
-            )
-        };
-
-        let chunk = self.grid.chunk_or_insert(coord);
-        chunk.replace_mesh(mesh);
-        let data = build_chunk_render_data(chunk, &self.frame);
-        self.render_cache.insert(coord, data);
-
-        ChunkRemeshTimings {
-            build,
-            collect,
-            adjacency,
-        }
+        self.grid
+            .chunk_or_insert(rebuild.coord)
+            .replace_mesh(rebuild.mesh);
+        self.render_cache.insert(rebuild.coord, rebuild.render_data);
+        adjacency
     }
 
     /// Recompute cached bounds and mesh statistics.
@@ -504,7 +472,7 @@ impl Segment {
             let data = match self.render_cache.get(coord) {
                 Some(cached) => cached,
                 None => {
-                    built = build_chunk_render_data(chunk, &self.frame);
+                    built = build_chunk_render_data(chunk.mesh(), &self.frame);
                     &built
                 }
             };
@@ -609,28 +577,6 @@ impl Segment {
         self.grid.set(self.frame.to_local(world), voxel);
         self.grid.allocate_seam_neighbours();
     }
-}
-
-/// Qualify a chunk's triangle refs with its coordinate, keeping the vertex
-/// positions segment-local.
-///
-/// Adjacency matches by quantised position, and a segment's triangles are all
-/// in one frame, so the local positions are already directly comparable.
-fn qualify(
-    coord: ChunkCoord,
-    tris: &[(TriangleRef, [Point3<f32>; 3])],
-) -> Vec<(ChunkTriangleRef, [Point3<f32>; 3])> {
-    tris.iter()
-        .map(|(tri_ref, positions)| {
-            (
-                ChunkTriangleRef {
-                    chunk: coord,
-                    triangle: *tri_ref,
-                },
-                *positions,
-            )
-        })
-        .collect()
 }
 
 /// An AABB spanning two points in any order.

@@ -1,43 +1,27 @@
 use std::time::Duration;
 
-use crate::terrain::UpdateTimings;
+use crate::terrain::{ChunkBuildTimings, UpdateTimings};
 
-/// One leaf of a blast's cost, in the order the frame pays them.
+/// One leaf of a blast's wall-clock cost, in the order the frame pays them.
 ///
-/// The leaves partition `UpdateTimings::total()`: the parts `UpdateTimings`
-/// does not split further are kept as their own "other" leaf, so the shares a
-/// report prints always add to the whole.
+/// The leaves partition `UpdateTimings::total()`, so the shares a report
+/// prints add to the whole.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TerrainStage {
     Detonate,
-    GridAlloc,
-    Sample,
-    MarchingCubes,
-    AmbientOcclusion,
-    OctreeInsert,
-    NeighbourRefs,
-    Collect,
-    /// Remesh time outside the timed build phases: the render cache entry,
-    /// the mesh swap and the vacant-chunk prune.
-    RemeshOther,
-    Qualify,
+    /// Every dirty chunk's replacement mesh, built in parallel.
+    Build,
+    Commit,
     Unlink,
     Link,
     Concat,
 }
 
 impl TerrainStage {
-    pub const ALL: [TerrainStage; 13] = [
+    pub const ALL: [TerrainStage; 6] = [
         TerrainStage::Detonate,
-        TerrainStage::GridAlloc,
-        TerrainStage::Sample,
-        TerrainStage::MarchingCubes,
-        TerrainStage::AmbientOcclusion,
-        TerrainStage::OctreeInsert,
-        TerrainStage::NeighbourRefs,
-        TerrainStage::Collect,
-        TerrainStage::RemeshOther,
-        TerrainStage::Qualify,
+        TerrainStage::Build,
+        TerrainStage::Commit,
         TerrainStage::Unlink,
         TerrainStage::Link,
         TerrainStage::Concat,
@@ -46,15 +30,8 @@ impl TerrainStage {
     pub fn label(self) -> &'static str {
         match self {
             TerrainStage::Detonate => "detonate",
-            TerrainStage::GridAlloc => "remesh/grid alloc",
-            TerrainStage::Sample => "remesh/sample",
-            TerrainStage::MarchingCubes => "remesh/marching cubes",
-            TerrainStage::AmbientOcclusion => "remesh/ambient occl.",
-            TerrainStage::OctreeInsert => "remesh/octree insert",
-            TerrainStage::NeighbourRefs => "remesh/neighbour refs",
-            TerrainStage::Collect => "remesh/collect",
-            TerrainStage::RemeshOther => "remesh/other",
-            TerrainStage::Qualify => "adjacency/qualify",
+            TerrainStage::Build => "build (parallel)",
+            TerrainStage::Commit => "commit",
             TerrainStage::Unlink => "adjacency/unlink",
             TerrainStage::Link => "adjacency/link",
             TerrainStage::Concat => "concat",
@@ -65,18 +42,67 @@ impl TerrainStage {
     pub fn of(self, t: &UpdateTimings) -> Duration {
         match self {
             TerrainStage::Detonate => t.detonate,
-            TerrainStage::GridAlloc => t.build.grid_alloc,
-            TerrainStage::Sample => t.build.sample,
-            TerrainStage::MarchingCubes => t.build.marching_cubes,
-            TerrainStage::AmbientOcclusion => t.build.ambient_occlusion,
-            TerrainStage::OctreeInsert => t.build.insert,
-            TerrainStage::NeighbourRefs => t.build.neighbor_refs,
-            TerrainStage::Collect => t.collect,
-            TerrainStage::RemeshOther => t.remesh.saturating_sub(t.build.total() + t.collect),
-            TerrainStage::Qualify => t.adjacency_split.qualify,
+            TerrainStage::Build => t.build,
+            TerrainStage::Commit => t.commit,
             TerrainStage::Unlink => t.adjacency_split.unlink,
             TerrainStage::Link => t.adjacency_split.link,
             TerrainStage::Concat => t.concat,
+        }
+    }
+}
+
+/// One phase of building a chunk, as CPU time summed over chunks.
+///
+/// These partition `ChunkBuildTimings::total()`. They say where the build's
+/// work goes, not how long the frame waited for it: chunks build on several
+/// threads, so the sum exceeds the `Build` stage's wall clock.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BuildPhase {
+    GridAlloc,
+    Sample,
+    MarchingCubes,
+    AmbientOcclusion,
+    OctreeInsert,
+    NeighbourRefs,
+    Collect,
+    RenderData,
+}
+
+impl BuildPhase {
+    pub const ALL: [BuildPhase; 8] = [
+        BuildPhase::GridAlloc,
+        BuildPhase::Sample,
+        BuildPhase::MarchingCubes,
+        BuildPhase::AmbientOcclusion,
+        BuildPhase::OctreeInsert,
+        BuildPhase::NeighbourRefs,
+        BuildPhase::Collect,
+        BuildPhase::RenderData,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            BuildPhase::GridAlloc => "grid alloc",
+            BuildPhase::Sample => "sample",
+            BuildPhase::MarchingCubes => "marching cubes",
+            BuildPhase::AmbientOcclusion => "ambient occlusion",
+            BuildPhase::OctreeInsert => "octree insert",
+            BuildPhase::NeighbourRefs => "neighbour refs",
+            BuildPhase::Collect => "collect triangles",
+            BuildPhase::RenderData => "render data",
+        }
+    }
+
+    pub fn of(self, t: &ChunkBuildTimings) -> Duration {
+        match self {
+            BuildPhase::GridAlloc => t.mesh.grid_alloc,
+            BuildPhase::Sample => t.mesh.sample,
+            BuildPhase::MarchingCubes => t.mesh.marching_cubes,
+            BuildPhase::AmbientOcclusion => t.mesh.ambient_occlusion,
+            BuildPhase::OctreeInsert => t.mesh.insert,
+            BuildPhase::NeighbourRefs => t.mesh.neighbor_refs,
+            BuildPhase::Collect => t.collect,
+            BuildPhase::RenderData => t.render_data,
         }
     }
 }
@@ -87,25 +113,37 @@ mod tests {
     use crate::terrain::AdjacencyTimings;
 
     #[test]
-    fn the_leaves_add_up_to_the_total() {
+    fn the_stages_add_up_to_the_total() {
         let ms = Duration::from_millis;
         let mut t = UpdateTimings {
             detonate: ms(1),
-            remesh: ms(20),
-            collect: ms(2),
+            build: ms(20),
+            commit: ms(2),
             concat: ms(3),
+            adjacency_split: AdjacencyTimings {
+                unlink: ms(2),
+                link: ms(3),
+            },
             ..Default::default()
-        };
-        t.build.sample = ms(4);
-        t.build.ambient_occlusion = ms(5);
-        t.adjacency_split = AdjacencyTimings {
-            qualify: ms(1),
-            unlink: ms(2),
-            link: ms(3),
         };
         t.adjacency = t.adjacency_split.total();
 
         let sum: Duration = TerrainStage::ALL.iter().map(|s| s.of(&t)).sum();
+        assert_eq!(sum, t.total());
+    }
+
+    #[test]
+    fn the_build_phases_add_up_to_the_build_cpu_total() {
+        let ms = Duration::from_millis;
+        let mut t = ChunkBuildTimings {
+            collect: ms(2),
+            render_data: ms(3),
+            ..Default::default()
+        };
+        t.mesh.sample = ms(4);
+        t.mesh.ambient_occlusion = ms(5);
+
+        let sum: Duration = BuildPhase::ALL.iter().map(|p| p.of(&t)).sum();
         assert_eq!(sum, t.total());
     }
 }

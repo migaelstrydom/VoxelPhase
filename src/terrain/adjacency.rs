@@ -75,9 +75,6 @@ impl Edge {
 /// Wall-clock breakdown of patching the adjacency map for remeshed triangles.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AdjacencyTimings {
-    /// Tagging each chunk's triangles with the chunk they belong to, so they
-    /// can be keyed segment-wide. Done by the caller, before the patch.
-    pub qualify: Duration,
     /// Removing the old triangles and cutting the links they held.
     pub unlink: Duration,
     /// Inserting the new triangles and linking every edge that became manifold.
@@ -86,11 +83,10 @@ pub struct AdjacencyTimings {
 
 impl AdjacencyTimings {
     pub fn total(&self) -> Duration {
-        self.qualify + self.unlink + self.link
+        self.unlink + self.link
     }
 
     pub fn add(&mut self, other: &Self) {
-        self.qualify += other.qualify;
         self.unlink += other.unlink;
         self.link += other.link;
     }
@@ -236,7 +232,6 @@ impl<R: Copy + Eq + Hash> AdjacencyMap<R> {
         }
 
         AdjacencyTimings {
-            qualify: Duration::ZERO,
             unlink,
             link: t_link.elapsed(),
         }
