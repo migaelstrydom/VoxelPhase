@@ -2,8 +2,9 @@
 
 use std::sync::Arc;
 
-use nalgebra::{Point3, Vector3};
-use specs::{Builder, Entities, Join, Read, System, WriteStorage};
+use nalgebra::{Point3, UnitQuaternion, Vector3};
+use rayon::prelude::*;
+use specs::{Builder, Entities, Join, Read, ReadStorage, System, WriteStorage};
 
 use super::components::CompoundFracture;
 use super::debris::Debris;
@@ -46,7 +47,7 @@ impl<'a> System<'a> for FractureSystem {
         Entities<'a>,
         specs::Write<'a, PhysicsResource>,
         WriteStorage<'a, CompoundFracture>,
-        WriteStorage<'a, RigidBodyComponent>,
+        ReadStorage<'a, RigidBodyComponent>,
         WriteStorage<'a, ModelInstance>,
         WriteStorage<'a, Position>,
         WriteStorage<'a, Velocity>,
@@ -230,21 +231,26 @@ impl<'a> System<'a> for FractureSystem {
                 physics.world.detach_collider(trigger.body_handle, *ch);
             }
 
-            // Spawn each split-off child as an independent body.
-            for group in &split_groups {
-                for info in group {
-                    spawn_freed_piece(
-                        &mut physics,
-                        &entities,
-                        &lazy,
-                        info,
-                        style,
-                        anchor,
-                        body_ang_vel,
-                        last_impulses,
-                        debris_of.map(|origin| Debris::new(origin, info.shape.compute_mass(1.0))),
-                    );
-                }
+            // Spawn each split-off child as an independent body. Every piece's
+            // mesh is its own business, and a blast frees them by the hundred,
+            // so they are built side by side before the spawning, which has
+            // to take the physics world one piece at a time.
+            let freed: Vec<&ChildSnapshot> = split_groups.iter().flatten().collect();
+            let freed_models: Vec<Option<Arc<Model>>> = freed
+                .par_iter()
+                .map(|info| freed_piece_model(info, style, anchor))
+                .collect();
+            for (info, model) in freed.into_iter().zip(freed_models) {
+                spawn_freed_piece(
+                    &mut physics,
+                    &entities,
+                    &lazy,
+                    info,
+                    model,
+                    body_ang_vel,
+                    last_impulses,
+                    debris_of.map(|origin| Debris::new(origin, info.shape.compute_mass(1.0))),
+                );
             }
 
             // A released body has nothing left; it and its entity are done.
@@ -266,7 +272,6 @@ impl<'a> System<'a> for FractureSystem {
             if let Some(fracture) = fractures.get_mut(trigger.entity) {
                 fracture.texture_anchor += moved;
             }
-            let anchor = anchor + moved;
 
             // Recentering moves the body's origin and shifts every surviving
             // collider's offset to match, so nothing moves in the world — but
@@ -306,22 +311,35 @@ impl<'a> System<'a> for FractureSystem {
                 continue;
             };
             fracture.remap_children(&kept, new_count);
+            fracture.model_stale = true;
+        }
 
-            // Rebuild the model for the remaining compound body.
-            let Some(fracture) = fractures.get(trigger.entity) else {
-                continue;
-            };
-            if let Some(model) = compound_model_of(
-                &physics,
-                trigger.body_handle,
-                &fracture.materials,
-                style,
-                anchor,
-            ) {
-                if let Some(instance) = models.get_mut(trigger.entity) {
-                    instance.model = model;
-                }
-            }
+        rebuild_stale_models(&physics, &mut fractures, &bodies, &mut models);
+    }
+}
+
+/// Redraw every compound whose children changed this frame, once each.
+///
+/// The last thing the system does, so that a body reshaped by a cleave or a
+/// craze and then split here is drawn as it finally stands, and only then.
+fn rebuild_stale_models(
+    physics: &PhysicsResource,
+    fractures: &mut WriteStorage<CompoundFracture>,
+    bodies: &ReadStorage<RigidBodyComponent>,
+    models: &mut WriteStorage<ModelInstance>,
+) {
+    for (fracture, body, instance) in (fractures, bodies, models).join() {
+        if !std::mem::take(&mut fracture.model_stale) {
+            continue;
+        }
+        if let Some(model) = compound_model_of(
+            physics,
+            body.0,
+            &fracture.materials,
+            fracture.style,
+            fracture.texture_anchor,
+        ) {
+            instance.model = model;
         }
     }
 }
@@ -403,14 +421,44 @@ fn snapshot_child(
     })
 }
 
+/// The model a freed piece is drawn with, standing on its own.
+///
+/// `None` for a shape no style draws. Pure, so a blast's worth of pieces can
+/// be built side by side.
+fn freed_piece_model(
+    info: &ChildSnapshot,
+    style: PieceStyle,
+    anchor: Vector3<f32>,
+) -> Option<Arc<Model>> {
+    match &info.shape {
+        ColliderShape::Box { half_extents } => Some(piece_model(
+            &PiecePlacement::new(*half_extents, info.local_offset + anchor),
+            style.boxes,
+            style.uvs,
+            info.material,
+        )),
+        ColliderShape::ConvexHull { hull } => {
+            let (vertices, indices) =
+                (style.hulls)(&PieceHull::new(hull, info.local_offset + anchor), style.uvs);
+            Some(assemble_by_material(vec![PlacedMesh {
+                vertices,
+                indices,
+                offset: Vector3::zeros(),
+                rotation: nalgebra::UnitQuaternion::identity(),
+                material: info.material,
+            }]))
+        }
+        _ => None,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn spawn_freed_piece(
     physics: &mut PhysicsResource,
     entities: &Entities,
     lazy: &specs::LazyUpdate,
     info: &ChildSnapshot,
-    style: PieceStyle,
-    anchor: Vector3<f32>,
+    model: Option<Arc<Model>>,
     body_ang_vel: Vector3<f32>,
     impulse_sources: &[crate::physics::PhysicsImpulse],
     debris: Option<Debris>,
@@ -440,25 +488,8 @@ fn spawn_freed_piece(
         .world
         .attach_collider(new_body_handle, new_collider_desc);
 
-    let piece_model = match &info.shape {
-        ColliderShape::Box { half_extents } => piece_model(
-            &PiecePlacement::new(*half_extents, info.local_offset + anchor),
-            style.boxes,
-            style.uvs,
-            info.material,
-        ),
-        ColliderShape::ConvexHull { hull } => {
-            let (vertices, indices) =
-                (style.hulls)(&PieceHull::new(hull, info.local_offset + anchor), style.uvs);
-            assemble_by_material(vec![PlacedMesh {
-                vertices,
-                indices,
-                offset: Vector3::zeros(),
-                rotation: nalgebra::UnitQuaternion::identity(),
-                material: info.material,
-            }])
-        }
-        _ => return,
+    let Some(piece_model) = model else {
+        return;
     };
 
     let mut piece = lazy
@@ -491,19 +522,33 @@ pub(crate) fn compound_model_of(
 ) -> Option<Arc<Model>> {
     let body = physics.world.body(body_handle)?;
     let fallback = materials.last().copied().unwrap_or(MaterialId(0));
-    let pieces: Vec<PlacedMesh> = body
+
+    // Read off serially, meshed in parallel: a freshly cleaved dome is
+    // hundreds of chamfered wedges, and each one's mesh is its own business.
+    let children: Vec<(ColliderShape, Vector3<f32>, UnitQuaternion<f32>, MaterialId)> = body
         .colliders()
         .iter()
         .enumerate()
         .filter_map(|(child, ch)| {
             let c = physics.world.collider(*ch)?;
-            let offset = c.offset().translation.vector;
-            let rotation = c.offset().rotation;
+            Some((
+                c.shape().clone(),
+                c.offset().translation.vector,
+                c.offset().rotation,
+                materials.get(child).copied().unwrap_or(fallback),
+            ))
+        })
+        .collect();
+
+    let pieces: Vec<PlacedMesh> = children
+        .par_iter()
+        .filter_map(|(shape, offset, rotation, material)| {
+            let (offset, rotation) = (*offset, *rotation);
             if !offset.iter().all(|v| v.is_finite()) {
                 log::error!("Fracture: NaN/Inf in remaining collider offset {offset:?}");
                 return None;
             }
-            let (vertices, indices) = match c.shape() {
+            let (vertices, indices) = match shape {
                 ColliderShape::Box { half_extents } => {
                     if !half_extents.iter().all(|v| v.is_finite()) {
                         log::error!(
@@ -530,7 +575,7 @@ pub(crate) fn compound_model_of(
                 indices,
                 offset,
                 rotation,
-                material: materials.get(child).copied().unwrap_or(fallback),
+                material: *material,
             })
         })
         .collect();

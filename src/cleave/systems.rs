@@ -6,9 +6,8 @@ use nalgebra::{Point3, Vector3};
 use specs::{Join, Read, ReadStorage, System, WriteStorage};
 
 use super::components::BrittleSolid;
-use crate::components::{ModelInstance, RigidBodyComponent};
+use crate::components::RigidBodyComponent;
 use crate::debug::DebugLog;
-use crate::fracture::systems::compound_model_of;
 use crate::fracture::{split_child, ChildSubstance, CompoundFracture, FractureJoint};
 use crate::physics::{
     ColliderDesc, ColliderHandle, PhysicsImpulse, PhysicsImpulseQueue, RigidBodyHandle,
@@ -49,30 +48,19 @@ impl<'a> System<'a> for SolidCleaveSystem {
         WriteStorage<'a, BrittleSolid>,
         WriteStorage<'a, CompoundFracture>,
         ReadStorage<'a, RigidBodyComponent>,
-        WriteStorage<'a, ModelInstance>,
         Read<'a, PhysicsImpulseQueue>,
         Read<'a, Time>,
         specs::Write<'a, DebugLog>,
     );
 
     fn run(&mut self, data: Self::SystemData) {
-        let (
-            mut physics,
-            mut solids,
-            mut fractures,
-            bodies,
-            mut models,
-            impulse_queue,
-            time,
-            mut debug_log,
-        ) = data;
+        let (mut physics, mut solids, mut fractures, bodies, impulse_queue, time, mut debug_log) =
+            data;
         let dt = time.delta_seconds();
         let blasts = impulse_queue.last_impulses();
         let mut loudest = 0.0f32;
 
-        for (solid, fracture, body_comp, model) in
-            (&mut solids, &mut fractures, &bodies, &mut models).join()
-        {
+        for (solid, fracture, body_comp) in (&mut solids, &mut fractures, &bodies).join() {
             let body_handle = body_comp.0;
             let hits = gather_hits(
                 &physics,
@@ -83,19 +71,9 @@ impl<'a> System<'a> for SolidCleaveSystem {
                 dt,
                 &mut loudest,
             );
-            let mut broke = false;
             for hit in hits {
-                broke |= cleave(&mut physics, solid, fracture, body_handle, &hit);
-            }
-            if broke {
-                if let Some(rebuilt) = compound_model_of(
-                    &physics,
-                    body_handle,
-                    &fracture.materials,
-                    fracture.style,
-                    fracture.texture_anchor,
-                ) {
-                    model.model = rebuilt;
+                if cleave(&mut physics, solid, fracture, body_handle, &hit) {
+                    fracture.model_stale = true;
                 }
             }
         }
@@ -340,7 +318,7 @@ mod tests {
     use super::super::plan::CleaveRule;
     use crate::app::spawnables::shared::models::texture_seam;
     use crate::app::spawnables::{ice_cleaving, ice_texture_spread, ice_uvs, IceBlock};
-    use crate::components::{Orientation, Position, Renderable, Velocity};
+    use crate::components::{ModelInstance, Orientation, Position, Renderable, Velocity};
     use crate::debug::DebugLines;
     use crate::fracture::FractureSystem;
     use crate::model::Model;

@@ -119,6 +119,15 @@ pub struct CompoundFracture {
     /// object was whole, so the markings stay with the material rather than
     /// with the body's bookkeeping.
     pub texture_anchor: Vector3<f32>,
+    /// Whether the body's children have changed since its model was last
+    /// built.
+    ///
+    /// Set by whatever reshapes the compound — a cleave, a craze, a split —
+    /// and consumed by `FractureSystem`, which rebuilds the model once, after
+    /// it has decided what comes free. A blast that cleaves every block of a
+    /// dome and then frees most of the wedges would otherwise draw the whole
+    /// dome twice in one frame, the first time for nothing.
+    pub model_stale: bool,
 }
 
 impl CompoundFracture {
@@ -136,6 +145,7 @@ impl CompoundFracture {
             sheds_debris: false,
             released: false,
             texture_anchor: Vector3::zeros(),
+            model_stale: false,
         }
     }
 
