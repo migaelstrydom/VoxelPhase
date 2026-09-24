@@ -94,6 +94,17 @@ Level(
                 IceBox(pos: (6.1, 0.36, 25.2), half_extents: (0.35, 0.35, 0.35), yaw: 25.0),
                 IceBox(pos: (5.5, 1.08, 24.7), half_extents: (0.35, 0.35, 0.35), yaw: -15.0),
 
+                // Solid metal at its real density, stamped with its element.
+                MetalCube(pos: (2.0, 0.16, 13.0), metal: Tungsten, yaw: 190.0),
+                MetalCube(pos: (2.6, 0.16, 13.0), metal: Gold, yaw: 175.0),
+                MetalCube(pos: (3.2, 0.16, 13.0), metal: Copper, yaw: 165.0),
+                MetalCube(pos: (3.8, 0.16, 13.0), metal: Aluminium, yaw: 185.0),
+                MetalCube(pos: (4.4, 0.16, 13.0), metal: Bismuth, yaw: 172.0),
+                MetalCube(pos: (5.0, 0.16, 13.0), metal: Osmium, yaw: 182.0),
+                MetalCube(pos: (5.6, 0.16, 13.0), metal: Titanium, yaw: 176.0),
+                // Lithium is lighter than water: this one floats in the pool.
+                MetalCube(pos: (-10.0, -1.2, 10.0), metal: Lithium, yaw: 30.0),
+
                 // A frozen slab, for the proportions a cube cannot reach.
                 IceBox(pos: (5.0, 0.5, 20.0), half_extents: (2.5, 0.5, 2.5)),
 

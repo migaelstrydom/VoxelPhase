@@ -30,10 +30,10 @@ use crate::app::spawnables::{
     BananaDef, BeachBallDef, BoxDef, BoxWallDef, CapsuleDef, CrateDef, DodecahedronDef, DolosDef,
     DominoDef, FencePostDef, FramedWindowDef, GemDef, GlassSheetDef, GlowingOrbDef, GoalDef,
     HeavyCrateDef, HexPrismDef, HoneycombWallDef, HouseDef, IceBoxDef, IceWallDef, IcosahedronDef,
-    IglooDef, JackDef, JengaDef, MenhirDef, MovingPlatformDef, OctahedronDef, PendulumDef,
-    PlankBridgeDef, PlankDef, PlayWheelDef, PyramidDef, SeesawDef, Spawnable, StackDef,
-    StackItemDef, TableDef, TempleDef, TetrahedronDef, TowerDef, TrampolineDef, TrilithonDef,
-    VoussoirArchDef, BEACH_BALL_RADIUS,
+    IglooDef, JackDef, JengaDef, MenhirDef, Metal, MetalCubeDef, MovingPlatformDef, OctahedronDef,
+    PendulumDef, PlankBridgeDef, PlankDef, PlayWheelDef, PyramidDef, SeesawDef, Spawnable,
+    StackDef, StackItemDef, TableDef, TempleDef, TetrahedronDef, TowerDef, TrampolineDef,
+    TrilithonDef, VoussoirArchDef, BEACH_BALL_RADIUS,
 };
 use crate::platform::{DeckSuspension, RouteLoop};
 
@@ -799,6 +799,19 @@ pub enum LevelObject {
         #[serde(default)]
         yaw: f32,
     },
+    /// Cube of one solid metal at its real density, with its element stamped
+    /// on its `+Z` face.
+    MetalCube {
+        pos: (f32, f32, f32),
+        #[serde(default)]
+        metal: Metal,
+        /// Edge length, in metres.
+        #[serde(default = "MetalCubeDef::default_size")]
+        size: f32,
+        /// Rotation about `+Y`, in degrees.
+        #[serde(default)]
+        yaw: f32,
+    },
     /// Wall of ice bricks in a running bond. Loose bricks: it can be knocked
     /// down.
     IceWall {
@@ -1446,6 +1459,7 @@ impl LevelObject {
             LevelObject::Crate { pos, .. } => ("Crate", point(pos)),
             LevelObject::HeavyCrate { pos, .. } => ("HeavyCrate", point(pos)),
             LevelObject::IceBox { pos, .. } => ("IceBox", point(pos)),
+            LevelObject::MetalCube { pos, .. } => ("MetalCube", point(pos)),
             LevelObject::IceWall { base, .. } => ("IceWall", point(base)),
             LevelObject::GlassSheet { pos, .. } => ("GlassSheet", point(pos)),
             LevelObject::FramedWindow { pos, .. } => ("FramedWindow", point(pos)),
@@ -1569,6 +1583,7 @@ impl LevelObject {
             LevelObject::IceBox {
                 half_extents, yaw, ..
             } => rect(half_extents.0, half_extents.2, *yaw),
+            LevelObject::MetalCube { size, yaw, .. } => rect(size * 0.5, size * 0.5, *yaw),
             LevelObject::House { half_extents, .. } => rect(half_extents.0, half_extents.2, 0.0),
             // A window stands on its bottom edge; a floor covers its size.
             LevelObject::GlassSheet {
@@ -1785,6 +1800,7 @@ impl LevelObject {
             // Turned by their own yaw.
             LevelObject::Box { .. }
             | LevelObject::IceBox { .. }
+            | LevelObject::MetalCube { .. }
             | LevelObject::IceWall { .. }
             | LevelObject::GlassSheet { .. }
             | LevelObject::FramedWindow { .. }
@@ -1894,6 +1910,10 @@ impl LevelObject {
                 *yaw += turn;
             }
             LevelObject::IceBox { pos, yaw, .. } => {
+                p3(pos);
+                *yaw += turn;
+            }
+            LevelObject::MetalCube { pos, yaw, .. } => {
                 p3(pos);
                 *yaw += turn;
             }
@@ -2079,6 +2099,18 @@ impl LevelObject {
             } => Box::new(IceBoxDef {
                 pos: *pos,
                 half_extents: *half_extents,
+                yaw: *yaw,
+            }),
+
+            LevelObject::MetalCube {
+                pos,
+                metal,
+                size,
+                yaw,
+            } => Box::new(MetalCubeDef {
+                pos: *pos,
+                metal: *metal,
+                size: *size,
                 yaw: *yaw,
             }),
 

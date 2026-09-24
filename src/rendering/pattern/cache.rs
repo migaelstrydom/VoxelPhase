@@ -10,7 +10,7 @@
 //! byte-identical by construction rather than by assumption:
 //!
 //! ```text
-//!   (pattern name, palette, seed, tile size, spread) ──▶ TextureHandle
+//!   (pattern name, palette, seed, tile size, spread, engraving) ──▶ TextureHandle
 //! ```
 //!
 //! Objects that *want* to differ still do — they pass different seeds, which is
@@ -21,6 +21,7 @@
 use std::collections::HashMap;
 
 use crate::core::error::EngineResult;
+use crate::rendering::engraving::Engraving;
 use crate::rendering::pattern::layer::{Pattern, Spread};
 use crate::rendering::substance::Palette;
 use crate::resources::textures::{TextureHandle, TextureManager};
@@ -38,6 +39,8 @@ pub struct TextureKey {
     seed: u32,
     size: u32,
     spread: Spread,
+    /// The id of the engraving cut into the bake, if any.
+    engraving: Option<&'static str>,
 }
 
 impl TextureKey {
@@ -60,6 +63,20 @@ impl TextureKey {
             seed,
             size,
             spread,
+            engraving: None,
+        }
+    }
+
+    /// Edge length of the texture this key names.
+    fn size_in_texels(&self) -> u32 {
+        self.spread.texture_size(self.size)
+    }
+
+    /// The same key, for the bake with `engraving` cut into it.
+    pub fn engraved(self, engraving: &Engraving) -> Self {
+        Self {
+            engraving: Some(engraving.id),
+            ..self
         }
     }
 }
@@ -93,15 +110,46 @@ impl TextureCache {
         spread: Spread,
     ) -> EngineResult<TextureHandle> {
         let key = TextureKey::new(pattern, palette, seed, tile_size, spread);
+        self.get_or_insert(textures, key, || {
+            Ok(pattern.bake_spread(tile_size, palette, seed, spread))
+        })
+    }
 
+    /// The texture for this pattern with `engraving` cut into it, baked once
+    /// per engraving. One tile across: an engraving is laid out on the
+    /// texture's own coordinates, so a spread would repeat it.
+    pub fn get_or_engrave(
+        &mut self,
+        textures: &TextureManager,
+        pattern: &Pattern,
+        palette: &Palette,
+        seed: u32,
+        size: u32,
+        engraving: &Engraving,
+    ) -> EngineResult<TextureHandle> {
+        let key = TextureKey::new(pattern, palette, seed, size, Spread::ONE).engraved(engraving);
+        self.get_or_insert(textures, key, || {
+            let mut pixels = pattern.bake(size, palette, seed);
+            engraving.cut(&mut pixels, size)?;
+            Ok(pixels)
+        })
+    }
+
+    /// The texture under `key`, from `bake` only if there is none yet.
+    fn get_or_insert(
+        &mut self,
+        textures: &TextureManager,
+        key: TextureKey,
+        bake: impl FnOnce() -> EngineResult<Vec<u8>>,
+    ) -> EngineResult<TextureHandle> {
         if let Some(existing) = self.entries.get(&key) {
             self.hits += 1;
             return Ok(existing.clone());
         }
 
         self.misses += 1;
-        let size = spread.texture_size(tile_size);
-        let pixels = pattern.bake_spread(tile_size, palette, seed, spread);
+        let size = key.size_in_texels();
+        let pixels = bake()?;
         let handle = textures.create_from_rgba(size, size, &pixels, true)?;
         self.entries.insert(key, handle.clone());
 
@@ -126,6 +174,7 @@ impl TextureCache {
 mod tests {
     use super::*;
     use crate::rendering::colour::Colour;
+    use crate::rendering::engraving::CutFill;
     use crate::rendering::pattern::library;
 
     fn palette(base: f32) -> Palette {
@@ -191,6 +240,25 @@ mod tests {
                 256,
                 Spread::covering(3.0)
             )
+        );
+    }
+
+    /// An engraved bake is a different picture from the plain one, and from
+    /// the same bake engraved with something else.
+    #[test]
+    fn an_engraving_changes_the_key() {
+        let engraving = |id| Engraving {
+            id,
+            lines: Vec::new(),
+            depth: 0.0,
+            fill: CutFill::Darkened(1.0),
+        };
+        let plain = TextureKey::new(&library::STONE, &palette(0.6), 1, 256, Spread::ONE);
+
+        assert_ne!(plain, plain.engraved(&engraving("W")));
+        assert_ne!(
+            plain.engraved(&engraving("W")),
+            plain.engraved(&engraving("Au"))
         );
     }
 

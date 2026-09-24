@@ -253,6 +253,35 @@ pub const SLATE: Pattern = Pattern {
         },
     ],
 };
+/// Polished metal: next to nothing, because what a polished surface shows is
+/// its reflection. A faint unevenness in the polish, and the smudges where it
+/// has been handled — towards the accent, so a metal that tarnishes shows it
+/// there first.
+pub const POLISHED_METAL: Pattern = Pattern {
+    name: "polished_metal",
+    layers: &[
+        Layer::Wash {
+            scale: 2.0,
+            octaves: 2,
+            towards: Slot::Light,
+            amount: 0.25,
+        },
+        Layer::Patch {
+            scale: 3.0,
+            octaves: 3,
+            threshold: 0.64,
+            span: 0.16,
+            amount: 0.2,
+            towards: Slot::Accent,
+        },
+        Layer::Shade {
+            scale: 16.0,
+            octaves: 2,
+            amount: 0.03,
+        },
+    ],
+};
+
 /// Float glass: almost nothing, which is the point.
 ///
 /// A pane has no markings of its own; what it shows is a faint unevenness in

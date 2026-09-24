@@ -218,8 +218,8 @@ pub const PINE: Substance = timber(
     Colour::new(0.42, 0.30, 0.17, 1.0),
 );
 
-/// Structural steel. The only substance here that reads as metal, and the
-/// density is what says so — see `physical_finish`, which draws the same line.
+/// Structural steel. The one metal that is worked rather than polished, and
+/// the density is what says it is metal — see `physical_finish`, which draws the same line.
 pub const STEEL: Substance = Substance {
     name: "steel",
     physics: PhysicalSurface {
@@ -239,6 +239,136 @@ pub const STEEL: Substance = Substance {
     palette: Palette::from_base_const(Colour::new(0.62, 0.64, 0.67, 1.0), 0.18),
     transparency: Transparency::OPAQUE,
 };
+
+/// Build a pure-metal substance. Fully metallic, so its colour is all in the
+/// reflection, and with no grain: a finished face is optically flat, and the
+/// reflected horizon running straight across it is what says metal. Any grain
+/// at all crinkles that line into a hammered finish. How polished it is, is
+/// the roughness alone.
+const fn pure_metal(
+    name: &'static str,
+    density: f32,
+    friction: f32,
+    restitution: f32,
+    roughness: f32,
+    palette: Palette,
+) -> Substance {
+    Substance {
+        name,
+        physics: PhysicalSurface {
+            restitution,
+            friction,
+            density,
+        },
+        finish: SurfaceFinish {
+            roughness,
+            metallic: 1.0,
+        },
+        grain: GrainSpec::NONE,
+        grain_by_uv: false,
+        palette,
+        transparency: Transparency::OPAQUE,
+    }
+}
+
+/// Ground tungsten: the heaviest thing in the library, and grey in a way steel
+/// is not — darker, flatter and a shade warm. A hand-sized block of it weighs
+/// what a person does, which is the whole joke of owning one.
+pub const TUNGSTEN: Substance = pure_metal(
+    "tungsten",
+    19250.0,
+    0.4,
+    0.3,
+    0.22,
+    Palette::from_base_const(Colour::new(0.66, 0.65, 0.62, 1.0), 0.08),
+);
+
+/// Polished gold: as dense as tungsten, and soft enough that it grips a little
+/// more and bounces less. The only warm-white metal here.
+pub const GOLD: Substance = pure_metal(
+    "gold",
+    19300.0,
+    0.5,
+    0.15,
+    0.14,
+    Palette::from_base_const(Colour::new(1.0, 0.74, 0.26, 1.0), 0.08),
+);
+
+/// Polished copper, starting to tarnish: the accent is the brown oxide that
+/// gathers where it has been handled.
+pub const COPPER: Substance = pure_metal(
+    "copper",
+    8960.0,
+    0.45,
+    0.25,
+    0.18,
+    Palette::from_base_const(Colour::new(0.96, 0.52, 0.34, 1.0), 0.08)
+        .with_accent(Colour::new(0.48, 0.27, 0.18, 1.0)),
+);
+
+/// Machined aluminium: the brightest, whitest metal here, and the odd one out
+/// for weight — barely heavier than stone, so a cube of it is the one that
+/// can actually be shoved about. A shade rougher than the rest, because it is
+/// turned rather than lapped.
+pub const ALUMINIUM: Substance = pure_metal(
+    "aluminium",
+    2700.0,
+    0.45,
+    0.3,
+    0.26,
+    Palette::from_base_const(Colour::new(0.9, 0.91, 0.92, 1.0), 0.08),
+);
+
+/// Bismuth: a pinkish silver, and brittle enough that it barely bounces. The
+/// accent is the blue-violet of the oxide film it grows, which is what makes
+/// a bismuth crystal iridescent; on a polished cube it shows only where the
+/// surface has been handled.
+pub const BISMUTH: Substance = pure_metal(
+    "bismuth",
+    9780.0,
+    0.4,
+    0.1,
+    0.2,
+    Palette::from_base_const(Colour::new(0.8, 0.72, 0.73, 1.0), 0.08)
+        .with_accent(Colour::new(0.42, 0.4, 0.78, 1.0)),
+);
+
+/// Lithium: the lightest metal, and the only one here that floats — at about
+/// half the density of water. Soft, and never polished for long: the tarnish
+/// it takes on in air is the dark accent, and the finish is the dullest of
+/// the metals.
+pub const LITHIUM: Substance = pure_metal(
+    "lithium",
+    534.0,
+    0.6,
+    0.1,
+    0.42,
+    Palette::from_base_const(Colour::new(0.7, 0.7, 0.68, 1.0), 0.1)
+        .with_accent(Colour::new(0.3, 0.3, 0.3, 1.0)),
+);
+
+/// Osmium: the densest element there is, heavier even than tungsten, and the
+/// one metal with a blue cast of its own.
+pub const OSMIUM: Substance = pure_metal(
+    "osmium",
+    22590.0,
+    0.35,
+    0.3,
+    0.16,
+    Palette::from_base_const(Colour::new(0.6, 0.64, 0.7, 1.0), 0.08),
+);
+
+/// Titanium: a warm mid-grey, half the density of steel. Where it is heated
+/// it grows an oxide film thin enough to colour by interference, which is
+/// the anodised blue its markings take on.
+pub const TITANIUM: Substance = pure_metal(
+    "titanium",
+    4506.0,
+    0.45,
+    0.35,
+    0.22,
+    Palette::from_base_const(Colour::new(0.62, 0.6, 0.57, 1.0), 0.08),
+);
 
 /// Bouncy and grippy, and deliberately smooth: bounce reads as a coated,
 /// rubbery surface, and grain on it would read as perished.
@@ -362,14 +492,30 @@ mod tests {
     /// all of them.
     const ALL: &[Substance] = &[
         GRANITE, LIMESTONE, SARSEN, MARBLE, SANDSTONE, CONCRETE, BRICK, SLATE, OAK, PINE, STEEL,
-        RUBBER, PLASTIC, ICE, GLASS,
+        TUNGSTEN, GOLD, COPPER, ALUMINIUM, BISMUTH, LITHIUM, OSMIUM, TITANIUM, RUBBER, PLASTIC,
+        ICE, GLASS,
     ];
 
+    /// The metals, which are the only things that read as metal.
+    const METALS: &[&str] = &[
+        "steel",
+        "tungsten",
+        "gold",
+        "copper",
+        "aluminium",
+        "bismuth",
+        "lithium",
+        "osmium",
+        "titanium",
+    ];
+
+    /// Nothing is lighter than balsa or denser than osmium, the densest
+    /// element there is.
     #[test]
     fn every_substance_has_a_plausible_density() {
         for substance in ALL {
             assert!(
-                (100.0..20000.0).contains(&substance.physics.density),
+                (100.0..=22590.0).contains(&substance.physics.density),
                 "{} has a density of {}",
                 substance.name,
                 substance.physics.density
@@ -393,9 +539,9 @@ mod tests {
     /// Only genuinely metal-dense things read as metal. Heavy rock should read
     /// heavy, not metallic — the same line `physical_finish` draws.
     #[test]
-    fn nothing_but_steel_reads_as_metal() {
+    fn nothing_but_the_metals_reads_as_metal() {
         for substance in ALL {
-            if substance.name == "steel" {
+            if METALS.contains(&substance.name) {
                 assert!(substance.finish.metallic > 0.9);
             } else {
                 assert_eq!(
@@ -410,12 +556,14 @@ mod tests {
     /// The pairing the whole visual model rests on: a surface glossy enough to
     /// show a tight highlight needs microstructure for that highlight to break
     /// up against, or it reads as plastic. Plastic and rubber are the exception
-    /// because plastic is what they are; glass is the other, because a pane
-    /// is optically flat and the tight, unbroken highlight *is* the look.
+    /// because plastic is what they are; glass and polished metal are the
+    /// other, because they are optically flat and the tight, unbroken
+    /// reflection *is* the look.
     #[test]
     fn a_glossy_substance_has_grain_to_break_its_highlight_up() {
         for substance in ALL {
-            let flat_by_nature = matches!(substance.name, "plastic" | "rubber" | "glass");
+            let flat_by_nature = matches!(substance.name, "plastic" | "rubber" | "glass")
+                || METALS.contains(&substance.name);
             if substance.finish.roughness < 0.45 && !flat_by_nature {
                 assert!(
                     substance.grain.is_enabled(),

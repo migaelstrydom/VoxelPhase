@@ -13,12 +13,10 @@ use crate::core::error::EngineResult;
 use crate::core::vulkan_context::VulkanContext;
 use crate::rendering::frame::ManagedBuffer;
 use crate::rendering::texture::ManagedTexture;
+use crate::rendering::typeface::JETBRAINS_MONO;
 use crate::resources::transfer_service::TransferService;
 
 use super::vertex::OverlayVertex;
-
-/// Font data embedded at compile time
-const FONT_DATA: &[u8] = include_bytes!("../../../data/JetBrainsMono-Regular.ttf");
 
 /// Glyph metrics for text layout
 #[derive(Copy, Clone, Debug)]
@@ -61,7 +59,7 @@ impl FontAtlas {
         const SOLID_BLOCK: usize = 8;
 
         // Load font with fontdue
-        let font = Font::from_bytes(FONT_DATA, FontSettings::default()).map_err(|e| {
+        let font = Font::from_bytes(JETBRAINS_MONO, FontSettings::default()).map_err(|e| {
             crate::core::error::EngineError::InvalidState(format!("Failed to load font: {}", e))
         })?;
 

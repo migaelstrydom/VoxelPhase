@@ -3,6 +3,7 @@
 use specs::{Entity, World};
 
 use crate::core::error::EngineResult;
+use crate::rendering::engraving::Engraving;
 use crate::rendering::material::{MaterialId, MaterialManagerBuilder};
 use crate::rendering::pattern::{Pattern, Spread, TextureCache};
 use crate::rendering::substance::Substance;
@@ -72,6 +73,33 @@ impl MaterialCtx<'_> {
         Ok(self
             .materials
             .register(substance.material(texture).with_relief(relief)))
+    }
+
+    /// The same, with `engraving` cut into the texture: one tile, laid out on
+    /// the texture's own coordinates, so the mesh wearing it has to map the
+    /// engraved face across exactly `0..1`.
+    pub fn engraved(
+        &mut self,
+        substance: &Substance,
+        pattern: &Pattern,
+        seed: u32,
+        size: u32,
+        engraving: &Engraving,
+    ) -> EngineResult<MaterialId> {
+        let texture = self.textures_cache.get_or_engrave(
+            self.textures,
+            pattern,
+            &substance.palette,
+            seed,
+            size,
+            engraving,
+        )?;
+
+        // The engraving is the only relief the texture carries, so the alpha
+        // runs across exactly its depth.
+        Ok(self
+            .materials
+            .register(substance.material(texture).with_relief(engraving.depth)))
     }
 }
 
