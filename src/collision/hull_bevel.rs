@@ -17,8 +17,11 @@
 //!                                 └──▶ 1 per vertex (the facet between facets)
 //!                       │
 //!                       ▼
-//!              trim_hull, in turn ──▶ ConvexHull, chamfered
+//!          HullDraft::trim, in turn ──▶ build once ──▶ ConvexHull, chamfered
 //! ```
+//!
+//! The cuts are made on a [`HullDraft`] and the hull is built once at the end:
+//! building is most of the cost of a cut, and a wedge takes twenty or so.
 //!
 //! For drawing, not for colliding. The chamfered solid is strictly smaller
 //! than the one it came from, so a piece drawn with it still sits inside its
@@ -28,7 +31,7 @@
 use nalgebra::Vector3;
 
 use super::convex_hull::{ConvexHull, HullEdgeAdj};
-use super::hull_split::{trim_hull, Plane};
+use super::hull_split::{HullDraft, Plane};
 
 /// Shortest edge, as a fraction of the hull's smallest bounding dimension,
 /// that is worth chamfering. Below this the facet is narrower than the
@@ -91,13 +94,14 @@ pub fn bevel_hull_by_face(hull: &ConvexHull, widths: &[f32]) -> ConvexHull {
         .map(|face| widths.get(face).copied().unwrap_or(0.0).max(0.0) / scale)
         .collect();
 
-    let mut chamfered = hull.scaled(1.0 / scale);
-    for plane in bevel_planes(&chamfered, &unit) {
-        if let Some(trimmed) = trim_hull(&chamfered, plane) {
+    let unit_hull = hull.scaled(1.0 / scale);
+    let mut chamfered = HullDraft::of(&unit_hull);
+    for plane in bevel_planes(&unit_hull, &unit) {
+        if let Some(trimmed) = chamfered.trim(plane) {
             chamfered = trimmed;
         }
     }
-    chamfered.scaled(scale)
+    chamfered.build().scaled(scale)
 }
 
 /// The half-space that cuts each edge and each corner of `hull` back by

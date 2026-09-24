@@ -101,78 +101,125 @@ pub struct HullHalves {
 /// past the hull vertex limit. A refusal is the caller's cue to move the
 /// plane, not an error.
 pub fn split_hull(hull: &ConvexHull, plane: Plane) -> Option<HullHalves> {
-    let (front, back) = clip(hull, plane)?;
+    let cut = Cut::new(&hull.vertices, plane)?;
     Some(HullHalves {
-        front: front.build(plane.normal)?,
-        back: back.build(-plane.normal)?,
+        front: cut
+            .keep(&hull.faces, Side::Front)
+            .finish(plane.normal)?
+            .build(),
+        back: cut
+            .keep(&hull.faces, Side::Back)
+            .finish(-plane.normal)?
+            .build(),
     })
 }
 
-/// The part of `hull` behind `plane`, with everything in front of it cut away.
+/// A convex solid as its corners and face loops, checked to be one the hull
+/// builder will take but not yet built into a [`ConvexHull`].
 ///
-/// The half-space form of [`split_hull`], for a cut whose other side is not
-/// wanted as a body — chamfering an edge throws away a sliver that no builder
-/// would accept as a piece, and refusing the cut on those grounds would refuse
-/// every chamfer. `None` if the plane misses the hull or if what is left is
-/// not a piece the builder will take.
-pub fn trim_hull(hull: &ConvexHull, plane: Plane) -> Option<ConvexHull> {
-    let (_, back) = clip(hull, plane)?;
-    back.build(-plane.normal)
+/// Building is the expensive step — the builder works out every face's normal
+/// and pairs up the two faces of every edge — and a run of cuts needs none of
+/// that until the last one. Trimming a draft cut after cut and building it
+/// once costs a fraction of building a hull after every cut.
+pub struct HullDraft {
+    /// Corners, each one used by at least one face.
+    vertices: Vec<Vector3<f32>>,
+    /// Face loops. Their normals are left for the builder to work out.
+    faces: Vec<HullFace>,
 }
 
-/// Clip every face of `hull` against `plane`, collecting each side.
-///
-/// `None` if the plane leaves every vertex on one side, where there is nothing
-/// to cut.
-fn clip(hull: &ConvexHull, plane: Plane) -> Option<(HalfBuilder, HalfBuilder)> {
-    let distances: Vec<f32> = hull
-        .vertices
-        .iter()
-        .map(|v| {
-            let d = plane.distance(*v);
-            if d.abs() <= ON_PLANE {
-                0.0
-            } else {
-                d
-            }
-        })
-        .collect();
-
-    // A plane that leaves every vertex on one side has not cut anything, and
-    // one that only grazes a face gives a half with no interior.
-    if !distances.iter().any(|d| *d > 0.0) || !distances.iter().any(|d| *d < 0.0) {
-        return None;
+impl HullDraft {
+    /// The draft of a hull that has already been built.
+    pub fn of(hull: &ConvexHull) -> Self {
+        Self {
+            vertices: hull.vertices.clone(),
+            faces: hull.faces.clone(),
+        }
     }
 
-    let mut front = HalfBuilder::default();
-    let mut back = HalfBuilder::default();
+    /// The part of the draft behind `plane`, with everything in front of it
+    /// cut away.
+    ///
+    /// The half-space form of [`split_hull`], for a cut whose other side is
+    /// not wanted as a body — chamfering an edge throws away a sliver that no
+    /// builder would accept as a piece, and refusing the cut on those grounds
+    /// would refuse every chamfer. `None` if the plane misses the draft or if
+    /// what is left is not a piece the builder will take.
+    pub fn trim(&self, plane: Plane) -> Option<Self> {
+        Cut::new(&self.vertices, plane)?
+            .keep(&self.faces, Side::Back)
+            .finish(-plane.normal)
+    }
 
-    for face in &hull.faces {
-        let loop_of = |side: Side| -> SmallVec<[Vector3<f32>; 8]> {
-            let mut kept = SmallVec::new();
+    /// Build the hull. Every draft is one the builder takes, so this cannot
+    /// fail.
+    pub fn build(self) -> ConvexHull {
+        ConvexHull::new(self.vertices, self.faces)
+    }
+}
+
+/// A plane laid across a solid: the signed distance of each of its vertices
+/// from the plane, snapped to zero within [`ON_PLANE`].
+struct Cut<'a> {
+    /// The solid's vertices, indexed as its faces index them.
+    vertices: &'a [Vector3<f32>],
+    /// Signed distance of each vertex from the plane.
+    distances: Vec<f32>,
+}
+
+impl<'a> Cut<'a> {
+    /// `None` if the plane leaves every vertex on one side, where there is
+    /// nothing to cut.
+    fn new(vertices: &'a [Vector3<f32>], plane: Plane) -> Option<Self> {
+        let distances: Vec<f32> = vertices
+            .iter()
+            .map(|v| {
+                let d = plane.distance(*v);
+                if d.abs() <= ON_PLANE {
+                    0.0
+                } else {
+                    d
+                }
+            })
+            .collect();
+
+        // A plane that leaves every vertex on one side has not cut anything,
+        // and one that only grazes a face gives a half with no interior.
+        if !distances.iter().any(|d| *d > 0.0) || !distances.iter().any(|d| *d < 0.0) {
+            return None;
+        }
+        Some(Self {
+            vertices,
+            distances,
+        })
+    }
+
+    /// Clip every face to one side of the plane, collecting what is left.
+    fn keep(&self, faces: &[HullFace], side: Side) -> HalfBuilder {
+        let mut half = HalfBuilder::new(self.vertices.len());
+        for face in faces {
+            let mut corners: SmallVec<[u16; 8]> = SmallVec::new();
             let count = face.vertex_indices.len();
             for k in 0..count {
                 let i = face.vertex_indices[k] as usize;
                 let j = face.vertex_indices[(k + 1) % count] as usize;
-                let (di, dj) = (distances[i], distances[j]);
+                let (di, dj) = (self.distances[i], self.distances[j]);
                 if side.keeps(di) {
-                    kept.push(hull.vertices[i]);
+                    corners.push(half.original(i, self.vertices[i], di == 0.0));
                 }
                 // An edge that crosses the plane contributes the crossing
                 // point to both halves. An edge that only touches it does
                 // not: its endpoint is on the plane and already kept.
                 if di * dj < 0.0 {
                     let t = di / (di - dj);
-                    kept.push(hull.vertices[i] + (hull.vertices[j] - hull.vertices[i]) * t);
+                    let (from, to) = (self.vertices[i], self.vertices[j]);
+                    corners.push(half.on_plane(from + (to - from) * t));
                 }
             }
-            kept
-        };
-        front.add_face(loop_of(Side::Front), &plane);
-        back.add_face(loop_of(Side::Back), &plane);
+            half.add_face(corners);
+        }
+        half
     }
-
-    Some((front, back))
 }
 
 /// Which half of the cut a builder is collecting.
@@ -194,27 +241,35 @@ impl Side {
 }
 
 /// Collects the faces of one half, deduplicating their vertices as it goes.
-#[derive(Default)]
 struct HalfBuilder {
     vertices: Vec<Vector3<f32>>,
     faces: Vec<HullFace>,
+    /// Where each vertex of the solid being cut has landed in this half, once
+    /// a face has kept it.
+    placed: Vec<Option<u16>>,
     /// The vertices that landed on the cutting plane, which together are the
     /// face that caps this half.
     cap: Vec<u16>,
 }
 
 impl HalfBuilder {
+    /// An empty half of a solid with `source_vertices` vertices.
+    fn new(source_vertices: usize) -> Self {
+        Self {
+            vertices: Vec::new(),
+            faces: Vec::new(),
+            placed: vec![None; source_vertices],
+            cap: Vec::new(),
+        }
+    }
+
     /// Add one clipped face, given as its corners in loop order. A face left
     /// with fewer than three distinct corners was cut away entirely.
-    fn add_face(&mut self, corners: SmallVec<[Vector3<f32>; 8]>, plane: &Plane) {
+    fn add_face(&mut self, corners: SmallVec<[u16; 8]>) {
         let mut indices: SmallVec<[u16; 6]> = SmallVec::new();
-        for corner in corners {
-            let index = self.intern(corner);
+        for index in corners {
             if !indices.contains(&index) {
                 indices.push(index);
-            }
-            if plane.distance(corner).abs() <= ON_PLANE && !self.cap.contains(&index) {
-                self.cap.push(index);
             }
         }
         if indices.len() >= 3 {
@@ -225,25 +280,48 @@ impl HalfBuilder {
         }
     }
 
-    /// The index of `vertex`, adding it if it is new.
-    fn intern(&mut self, vertex: Vector3<f32>) -> u16 {
-        match self
-            .vertices
-            .iter()
-            .position(|v| (v - vertex).magnitude() <= COINCIDENT)
-        {
-            Some(index) => index as u16,
-            None => {
-                self.vertices.push(vertex);
-                (self.vertices.len() - 1) as u16
-            }
+    /// The index in this half of vertex `source` of the solid being cut.
+    ///
+    /// A vertex of the solid is distinct from every other, so it only needs
+    /// looking up by where it came from — unless it sits on the plane, where
+    /// a crossing point may already have landed on top of it.
+    fn original(&mut self, source: usize, position: Vector3<f32>, on_plane: bool) -> u16 {
+        if let Some(index) = self.placed[source] {
+            return index;
         }
+        let index = if on_plane {
+            self.on_plane(position)
+        } else {
+            self.push(position)
+        };
+        self.placed[source] = Some(index);
+        index
     }
 
-    /// Close the half with its cap and build the hull, or refuse a piece the
-    /// engine cannot hold. `outward` is the cap's outward normal, which is
-    /// the only ordering this builder cannot work out for itself.
-    fn build(mut self, outward: Vector3<f32>) -> Option<ConvexHull> {
+    /// The index of a point on the cutting plane, welded to any point already
+    /// there. Only the cap can hold a match: every vertex off the plane is
+    /// more than [`ON_PLANE`] from it, which is further than [`COINCIDENT`].
+    fn on_plane(&mut self, position: Vector3<f32>) -> u16 {
+        let existing =
+            self.cap.iter().copied().find(|&index| {
+                (self.vertices[index as usize] - position).magnitude() <= COINCIDENT
+            });
+        existing.unwrap_or_else(|| {
+            let index = self.push(position);
+            self.cap.push(index);
+            index
+        })
+    }
+
+    fn push(&mut self, position: Vector3<f32>) -> u16 {
+        self.vertices.push(position);
+        (self.vertices.len() - 1) as u16
+    }
+
+    /// Close the half with its cap and check it, or refuse a piece the engine
+    /// cannot hold. `outward` is the cap's outward normal, which is the only
+    /// ordering this builder cannot work out for itself.
+    fn finish(mut self, outward: Vector3<f32>) -> Option<HullDraft> {
         if self.cap.len() >= 3 {
             let ordered = order_around(&self.vertices, &self.cap, outward);
             self.faces.push(HullFace {
@@ -261,7 +339,7 @@ impl HalfBuilder {
         if !thick_enough(&vertices) || !stout_enough(&vertices) {
             return None;
         }
-        Some(ConvexHull::new(vertices, faces))
+        Some(HullDraft { vertices, faces })
     }
 }
 
@@ -367,19 +445,19 @@ fn area_of(vertices: &[Vector3<f32>], loop_: &[u16]) -> f32 {
 /// matches. Such a piece is refused, and the caller moves the plane and
 /// tries again. Better a cut that does not happen than a hull with a hole.
 fn closed(faces: &[HullFace]) -> bool {
-    let mut edges: Vec<((u16, u16), u32)> = Vec::new();
-    for face in faces {
-        let count = face.vertex_indices.len();
-        for k in 0..count {
-            let (a, b) = (face.vertex_indices[k], face.vertex_indices[(k + 1) % count]);
-            let edge = (a.min(b), a.max(b));
-            match edges.iter_mut().find(|(e, _)| *e == edge) {
-                Some((_, seen)) => *seen += 1,
-                None => edges.push((edge, 1)),
-            }
-        }
-    }
-    !edges.is_empty() && edges.iter().all(|(_, seen)| *seen == 2)
+    let mut edges: Vec<(u16, u16)> = faces
+        .iter()
+        .flat_map(|face| {
+            let corners = &face.vertex_indices;
+            (0..corners.len()).map(move |k| {
+                let (a, b) = (corners[k], corners[(k + 1) % corners.len()]);
+                (a.min(b), a.max(b))
+            })
+        })
+        .collect();
+    edges.sort_unstable();
+    // Sorted, a closed surface lists every edge exactly twice in a row.
+    !edges.is_empty() && edges.chunk_by(|a, b| a == b).all(|run| run.len() == 2)
 }
 
 /// Whether the hull builder's own thinness rule will accept this cloud: the
