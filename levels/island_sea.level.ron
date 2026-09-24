@@ -8,6 +8,8 @@
 //   floating rock + pool (y 10–14) ── over the open sea to the north
 //   island (2 m) ── crater lake ── east cliff spring ─▶ the sea
 //
+// A lift off the island's north shore rises to the floating rock.
+//
 // Things to try: blow the floating pool's floor out and watch it pour into
 // the sea; blow a channel from the crater lake to the shore; blow the cliff
 // round the spring.
@@ -40,6 +42,17 @@ Level(
                     Tunnel(center: (0.0, -26.0), direction: (1.0, 0.0), length: 6.0, radius: 2.5, depth: 13.0),
                 ],
             ),
+
+            objects: [
+                // Up from just off the north shore to the rock's height, then
+                // across to its south face: rising in the open keeps the deck
+                // clear of the rock's side.
+                MovingPlatform(
+                    waypoints: [(0.0, 2.25, -8.2), (0.0, 12.25, -8.2), (0.0, 12.25, -16.2)],
+                    half_extents: (2.0, 0.2, 2.0),
+                    speed: 2.5,
+                ),
+            ],
         ),
     ],
 
