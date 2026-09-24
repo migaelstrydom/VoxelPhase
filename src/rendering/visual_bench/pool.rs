@@ -6,18 +6,18 @@
 //! how the blended pass and the post-resolve passes agree about depth — and
 //! they did not, which is why this exists.
 //!
-//! The grids are the game's own, filled directly rather than simulated: a shot
-//! has to frame the same water every run, and a settling pool does not.
+//! The pool is drawn by the game's own water renderer, from a mesh built
+//! directly rather than from a hydrology network: a shot has to frame the same
+//! water every run.
 
-use nalgebra::Vector3;
+use nalgebra::Vector2;
 
-use crate::water::{WaterGrid, WaterGridConfig, WaterProperties, WaveGrid, WaveGridConfig};
+use crate::rendering::water::{BasinVertex, MeshKey, WaterDraw, WaterMesh, WaterScene};
+use crate::water::geometry::{SpanChunkCoord, COLUMN_SIZE};
+use crate::water::ids::StoreId;
 
-/// Flow cell size, matching what a level of this size would resolve to.
-const FLOW_CELL_SIZE: f32 = 1.0;
-
-/// Wave cell size. The game's own, so ripple scale reads as it does in a level.
-const WAVE_CELL_SIZE: f32 = 0.5;
+/// The pool's body id, as the renderer sees it.
+const POOL_BODY: StoreId = StoreId(0);
 
 /// A rectangular pool at a fixed level, centred on the origin in x and z.
 #[derive(Clone, Copy, Debug)]
@@ -43,46 +43,51 @@ impl ScenePool {
         }
     }
 
-    /// The pair of grids the water renderer draws from.
-    ///
-    /// Every cell is filled to exactly `level`, and the wave grid is left at
-    /// rest: what this pool is for is depth and ordering, and a moving surface
-    /// would only make two runs of the same shot disagree.
-    pub fn grids(&self) -> (WaterGrid, WaveGrid) {
-        let properties = WaterProperties::default();
+    /// Columns along each side of the pool.
+    fn columns(&self) -> i32 {
+        (self.half_extent * 2.0 / COLUMN_SIZE).ceil() as i32
+    }
+}
 
-        let span = (self.half_extent * 2.0 / FLOW_CELL_SIZE).ceil() as usize;
-        let origin = Vector3::new(-self.half_extent, 0.0, -self.half_extent);
+impl WaterScene for ScenePool {
+    fn mesh_key(&self) -> MeshKey {
+        vec![(POOL_BODY, 0)]
+    }
 
-        let mut flow_grid = WaterGrid::new(
-            WaterGridConfig {
-                cell_size: FLOW_CELL_SIZE,
-                dims: (span, span),
-                origin,
-                ocean_level: None,
-            },
-            &properties,
-        );
-
-        let volume = (self.level - self.floor) * flow_grid.cell_area();
-        for j in 0..span {
-            for i in 0..span {
-                flow_grid.add_water(i, j, volume, self.floor);
+    /// One quad per column over the pool's square, on a lattice starting at
+    /// its corner.
+    fn build_mesh(&self) -> WaterMesh {
+        let n = self.columns();
+        let mut mesh = WaterMesh::default();
+        for k in 0..=n {
+            for i in 0..=n {
+                mesh.vertices.push(BasinVertex {
+                    xz: Vector2::new(
+                        -self.half_extent + i as f32 * COLUMN_SIZE,
+                        -self.half_extent + k as f32 * COLUMN_SIZE,
+                    ),
+                    floor: self.floor,
+                });
             }
         }
+        let at = |i: i32, k: i32| (k * (n + 1) + i) as u32;
+        for k in 0..n {
+            for i in 0..n {
+                let (a, b, c, d) = (at(i, k), at(i + 1, k), at(i + 1, k + 1), at(i, k + 1));
+                mesh.indices.extend_from_slice(&[a, d, c, a, c, b]);
+            }
+        }
+        mesh.draws.push(WaterDraw {
+            body: POOL_BODY,
+            tile: SpanChunkCoord { x: 0, z: 0 },
+            first_index: 0,
+            index_count: mesh.indices.len() as u32,
+        });
+        mesh
+    }
 
-        let cells_per_flow_cell = (FLOW_CELL_SIZE / WAVE_CELL_SIZE).round() as usize;
-        let wave_grid = WaveGrid::new(
-            WaveGridConfig {
-                cell_size: WAVE_CELL_SIZE,
-                dims: (span * cells_per_flow_cell, span * cells_per_flow_cell),
-                origin,
-                cells_per_flow_cell,
-            },
-            &properties,
-        );
-
-        (flow_grid, wave_grid)
+    fn level(&self, body: StoreId) -> Option<f32> {
+        (body == POOL_BODY).then_some(self.level)
     }
 }
 
@@ -90,38 +95,16 @@ impl ScenePool {
 mod tests {
     use super::*;
 
-    /// The surface has to come out at the level asked for, or every shot that
-    /// stands something half in the water is framed wrong.
+    /// The mesh has to cover the square asked for, or every shot that stands
+    /// something half in the water is framed wrong.
     #[test]
-    fn the_pool_fills_to_the_level_it_was_given() {
+    fn the_pool_covers_its_square() {
         let pool = ScenePool::new(0.4, -1.0, 3.0);
-        let (flow, _) = pool.grids();
-
-        let (width, depth) = flow.dims();
-        for j in 0..depth {
-            for i in 0..width {
-                let surface = flow.cell(i, j).surface_level(flow.cell_area());
-                assert!(
-                    (surface - pool.level).abs() < 1e-3,
-                    "cell ({i}, {j}) sits at {surface}, not {}",
-                    pool.level
-                );
-            }
-        }
-    }
-
-    /// The two grids are addressed in the same world frame, and the wave grid
-    /// has to divide the flow grid exactly or the renderer interpolates the
-    /// bulk level off the end of it.
-    #[test]
-    fn the_wave_grid_covers_the_flow_grid() {
-        let pool = ScenePool::new(0.4, -1.0, 3.0);
-        let (flow, wave) = pool.grids();
-
-        assert_eq!(flow.origin(), wave.origin());
-        assert_eq!(
-            wave.dims().0 as f32 * WAVE_CELL_SIZE,
-            flow.dims().0 as f32 * FLOW_CELL_SIZE
-        );
+        let mesh = pool.build_mesh();
+        let xs: Vec<f32> = mesh.vertices.iter().map(|v| v.xz.x).collect();
+        let lo = xs.iter().copied().fold(f32::INFINITY, f32::min);
+        let hi = xs.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+        assert_eq!((lo, hi), (-3.0, 3.0));
+        assert_eq!(pool.level(POOL_BODY), Some(0.4));
     }
 }

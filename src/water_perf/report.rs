@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use crate::perf::stats::{as_ms, max_ms, mean_ms, percentile_ms};
 
-use super::runner::{FrameCost, Subject};
+use super::runner::{FrameCost, Subject, WorstCase};
 
 /// One subject: quiet frames, the blast frame, and the transient after it.
 pub fn subject_table(subject: &Subject) -> String {
@@ -13,13 +13,20 @@ pub fn subject_table(subject: &Subject) -> String {
     let p = subject.blast_at;
     let _ = writeln!(
         out,
-        "{}  (blast at {:.1}, {:.1}, {:.1}; quiet mesh {} indices)",
-        subject.label, p.x, p.y, p.z, subject.mesh_indices
+        "{}  (blast at {:.1}, {:.1}, {:.1}; mesh {} indices; basins {} -> {}; load {:.1} ms)",
+        subject.label,
+        p.x,
+        p.y,
+        p.z,
+        subject.mesh_indices,
+        subject.basins.0,
+        subject.basins.1,
+        as_ms(subject.load)
     );
     let _ = writeln!(
         out,
-        "  {:<18} {:>20} {:>20} {:>20} {:>24}",
-        "phase (ms)", "flow mean/p99", "wave mean/p99", "mesh mean/p99", "water mean/p99/max"
+        "  {:<18} {:>16} {:>16} {:>16} {:>16} {:>16} {:>24}",
+        "phase (ms)", "geometry", "reregion", "settle", "solve", "mesh", "water mean/p99/max"
     );
     out.push_str(&phase_row("quiet", &subject.quiet));
     out.push_str(&phase_row(
@@ -35,21 +42,32 @@ pub fn subject_table(subject: &Subject) -> String {
     out
 }
 
+/// Each basin before the blast and after the transient.
+pub fn basin_table(subject: &Subject) -> String {
+    let mut out = String::from("  before:\n");
+    for line in &subject.basin_lines.0 {
+        let _ = writeln!(out, "    {line}");
+    }
+    out.push_str("  after:\n");
+    for line in &subject.basin_lines.1 {
+        let _ = writeln!(out, "    {line}");
+    }
+    out
+}
+
 fn phase_row(name: &str, frames: &[FrameCost]) -> String {
     let pair = |f: fn(&FrameCost) -> Duration| {
         let times: Vec<Duration> = frames.iter().map(f).collect();
-        format!(
-            "{:.3} / {:.3}",
-            mean_ms(&times),
-            percentile_ms(&times, 0.99)
-        )
+        format!("{:.3}/{:.3}", mean_ms(&times), percentile_ms(&times, 0.99))
     };
     let water: Vec<Duration> = frames.iter().map(FrameCost::water).collect();
     format!(
-        "  {:<18} {:>20} {:>20} {:>20} {:>24}\n",
+        "  {:<18} {:>16} {:>16} {:>16} {:>16} {:>16} {:>24}\n",
         format!("{name} ({})", frames.len()),
-        pair(|f| f.flow),
-        pair(|f| f.wave),
+        pair(|f| f.geometry),
+        pair(|f| f.reregion),
+        pair(|f| f.settle),
+        pair(|f| f.solve),
         pair(|f| f.mesh),
         format!(
             "{:.3} / {:.3} / {:.3}",
@@ -57,5 +75,17 @@ fn phase_row(name: &str, frames: &[FrameCost]) -> String {
             percentile_ms(&water, 0.99),
             max_ms(&water)
         ),
+    )
+}
+
+/// The largest basin's re-flood and mesh rebuild.
+pub fn worst_case_line(w: &WorstCase) -> String {
+    format!(
+        "{:<24} largest basin {:>6} spans: re-region {:.3} ms mean, {:.3} max; mesh {:.3} ms mean",
+        w.label,
+        w.spans,
+        mean_ms(&w.reregion),
+        max_ms(&w.reregion),
+        mean_ms(&w.mesh)
     )
 }

@@ -42,6 +42,8 @@ pub struct Scenario {
     pub duration: f32,
     pub beats: Vec<Beat>,
     pub probes: Vec<Probe>,
+    /// Where the filmstrip's camera stands, and what it looks at.
+    pub camera: (Point3<f32>, Point3<f32>),
 }
 
 impl Scenario {

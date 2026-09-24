@@ -17,9 +17,15 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use voxel_phase::water_perf::{run_breach, run_level, subject_table, Durations};
+use voxel_phase::water_perf::{
+    basin_table, run_breach, run_level, subject_table, worst_case, worst_case_line, Durations,
+};
 
-const USAGE: &str = "usage: water_perf [--level <level.ron>]... [--quiet S] [--transient S]";
+const USAGE: &str = "usage: water_perf [--level <level.ron>]... [--quiet S] [--transient S]
+                  [--basins] [--repeats N]";
+
+/// Re-floods of each level's largest basin, for the worst-case figure.
+const WORST_CASE_REPEATS: usize = 20;
 
 /// Every level that has water.
 const DEFAULT_LEVELS: [&str; 5] = [
@@ -31,7 +37,8 @@ const DEFAULT_LEVELS: [&str; 5] = [
 ];
 
 fn main() -> ExitCode {
-    let (levels, durations) = match parse_args(std::env::args().skip(1)) {
+    env_logger::init();
+    let (levels, durations, show_basins, repeats) = match parse_args(std::env::args().skip(1)) {
         Ok(parsed) => parsed,
         Err(message) => {
             eprintln!("{message}\n{USAGE}");
@@ -44,13 +51,30 @@ fn main() -> ExitCode {
 
     for level in &levels {
         match run_level(level, durations) {
-            Ok(subject) => println!("{}", subject_table(&subject)),
+            Ok(subject) => {
+                println!("{}", subject_table(&subject));
+                if show_basins {
+                    println!("{}", basin_table(&subject));
+                }
+            }
             Err(message) => {
                 eprintln!("error: {message}");
                 return ExitCode::FAILURE;
             }
         }
     }
+    println!("Worst case (§9.2): the largest basin re-flooded in place");
+    for level in &levels {
+        match worst_case(level, repeats) {
+            Ok(w) => println!("  {}", worst_case_line(&w)),
+            Err(message) => {
+                eprintln!("error: {message}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+    println!();
+
     match run_breach(durations) {
         Ok(subject) => println!("{}", subject_table(&subject)),
         Err(message) => {
@@ -61,9 +85,13 @@ fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn parse_args(args: impl Iterator<Item = String>) -> Result<(Vec<PathBuf>, Durations), String> {
+fn parse_args(
+    args: impl Iterator<Item = String>,
+) -> Result<(Vec<PathBuf>, Durations, bool, usize), String> {
     let mut levels = Vec::new();
     let mut durations = Durations::default();
+    let mut show_basins = false;
+    let mut repeats = WORST_CASE_REPEATS;
     let mut args = args.peekable();
     while let Some(arg) = args.next() {
         let mut value = |name: &str| args.next().ok_or(format!("{name} needs a value"));
@@ -71,6 +99,8 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<(Vec<PathBuf>, Durat
             "--level" => levels.push(PathBuf::from(value(&arg)?)),
             "--quiet" => durations.quiet = parse_number(&value(&arg)?)?,
             "--transient" => durations.transient = parse_number(&value(&arg)?)?,
+            "--basins" => show_basins = true,
+            "--repeats" => repeats = parse_number(&value(&arg)?)?,
             "-h" | "--help" => return Err(String::new()),
             other => return Err(format!("unknown argument {other}")),
         }
@@ -78,7 +108,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<(Vec<PathBuf>, Durat
     if levels.is_empty() {
         levels = DEFAULT_LEVELS.iter().map(PathBuf::from).collect();
     }
-    Ok((levels, durations))
+    Ok((levels, durations, show_basins, repeats))
 }
 
 fn parse_number<T: std::str::FromStr>(text: &str) -> Result<T, String> {

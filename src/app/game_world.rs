@@ -78,8 +78,8 @@ impl<'a, 'b> GameWorld<'a, 'b> {
         // Generate terrain from level description
         let terrain_manager = create_level_terrain(level, &texture_manager)?;
 
-        // Create water grids (needs terrain for floor height queries)
-        let water_grids = create_level_water(level, &terrain_manager);
+        // Place the level's water over its terrain.
+        let water = create_level_water(level, &terrain_manager);
 
         let mut world = WorldBuilder::new()
             .with_renderer(renderer)
@@ -93,11 +93,10 @@ impl<'a, 'b> GameWorld<'a, 'b> {
             .with_default_resources()
             .build()?;
 
-        // Insert water grids and wave-body coupler as optional resources
+        // Insert the water and the wave-body coupler as optional resources
         // (WaterSystem handles the None case)
-        if let Some((flow_grid, wave_grid)) = water_grids {
-            world.insert(flow_grid);
-            world.insert(wave_grid);
+        if let Some(water) = water {
+            world.insert(water);
             world.insert(crate::water::WaveBodyCoupler::new(
                 crate::water::WaveCouplingConfig::default(),
             ));

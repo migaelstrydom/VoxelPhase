@@ -13,7 +13,8 @@
 //!                       ├─create_level_materials──▶ LevelMaterials  │
 //!                       │                              │            │
 //!                       │                              ▼            ▼
-//!                       └────────spawn_objects────▶  ECS world (models, positions)
+//!                       ├────────spawn_objects────▶  ECS world (models, positions)
+//!                       └─create_level_water──▶ WaterWorld  │
 //!                                                        │
 //!                                       Renderer::offscreen ──▶ RgbaImage
 //! ```
@@ -40,7 +41,9 @@ use crate::app::world_builder::WorldBuilder;
 use crate::components::{ModelInstance, Orientation, Position, Renderable, Rotation};
 use crate::core::error::{EngineError, EngineResult};
 use crate::core::vulkan_context::VulkanContext;
-use crate::level::{create_level_materials, create_level_terrain, spawn_objects, Level};
+use crate::level::{
+    create_level_materials, create_level_terrain, create_level_water, spawn_objects, Level,
+};
 use crate::model::Transform;
 use crate::rendering::colour::Colour;
 use crate::rendering::material::{MaterialManager, MaterialManagerBuilder, SurfaceModulation};
@@ -48,6 +51,7 @@ use crate::rendering::renderer::Renderer;
 use crate::resources::manager::ResourceManager;
 use crate::resources::textures::TextureManager;
 use crate::terrain::{self, TerrainWorld};
+use crate::water::WaterWorld;
 
 use super::shots::ViewerShot;
 
@@ -60,7 +64,8 @@ pub struct LevelViewer {
     texture_manager: TextureManager,
     material_manager: MaterialManager,
 
-    /// Holds the spawned objects and the terrain. Never dispatched.
+    /// Holds the spawned objects, the terrain and the water. Never
+    /// dispatched.
     world: World,
 
     /// Keeps the transfer service alive for the texture manager's lifetime.
@@ -97,8 +102,12 @@ impl LevelViewer {
 
         // Terrain-anchored objects resolve their height from the world as they
         // spawn, so it goes in first.
+        let water = create_level_water(level, &terrain);
         let mut world = WorldBuilder::new().with_default_resources().build()?;
         world.insert(terrain);
+        if let Some(water) = water {
+            world.insert(water);
+        }
         spawn_objects(&mut world, level, &materials);
 
         // The wireframe pass would put black lines through every shot.
@@ -119,12 +128,22 @@ impl LevelViewer {
         self.world.read_resource::<TerrainWorld>()
     }
 
+    /// Swap in a terrain and water from outside, and back out on the next
+    /// call: how an offline harness that edits and simulates its own world
+    /// photographs it without copying either.
+    pub fn swap_state(&mut self, terrain: &mut TerrainWorld, water: &mut WaterWorld) {
+        std::mem::swap(&mut *self.world.write_resource::<TerrainWorld>(), terrain);
+        if !self.world.has_value::<WaterWorld>() {
+            let (empty, _) = WaterWorld::from_config(&Default::default(), terrain);
+            self.world.insert(empty);
+        }
+        std::mem::swap(&mut *self.world.write_resource::<WaterWorld>(), water);
+    }
+
     /// Render one view and read the result back as an image.
     ///
     /// Mirrors `RenderSystem`'s frame sequence, minus the passes a static level
-    /// has nothing to put in: no particles, no fire, and no water — the last of
-    /// which is a real omission, since a level can be authored with a pool it
-    /// never shows here.
+    /// has nothing to put in: no particles and no fire.
     pub fn render(&mut self, shot: &ViewerShot) -> EngineResult<RgbaImage> {
         let extent = self.renderer.extent();
         let aspect = extent.width as f32 / extent.height as f32;
@@ -158,6 +177,10 @@ impl LevelViewer {
         self.draw_objects(cb)?;
 
         self.renderer.begin_transparent_pass(cb, image_index);
+        if let Some(water) = self.world.try_fetch::<WaterWorld>() {
+            self.renderer
+                .render_water(cb, &*water, &view, &projection, &camera_pos, 0.0)?;
+        }
         self.renderer.end_frame(cb, image_index)?;
 
         // Readback reads the image directly, so the frame has to be finished

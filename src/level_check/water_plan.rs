@@ -1,8 +1,12 @@
-//! Where water would collect: the span graph and drainage field, reduced to
-//! what a plan drawing can show.
+//! Where water would collect, and where the authored water is: the span
+//! graph, the drainage field and the level's basins, reduced to what a plan
+//! drawing can show.
 
+use crate::level::Level;
 use crate::terrain::TerrainWorld;
-use crate::water::geometry::{Column, Drain, Outlets, WaterGeometry, COLUMN_SIZE};
+use crate::water::geometry::{Column, Drain, COLUMN_SIZE};
+use crate::water::network::CrestKind;
+use crate::water::WaterWorld;
 
 /// Still water shallower than this is not drawn, in metres.
 const MIN_DEPTH: f32 = 0.05;
@@ -20,17 +24,51 @@ pub struct PlanCell {
     pub sealed: bool,
 }
 
+/// One cell of a crest, for drawing.
+#[derive(Debug, Clone, Copy)]
+pub struct PlanCrest {
+    pub column: Column,
+    pub saddle: f32,
+    /// Drains away (an outlet) rather than into a depression of its own.
+    pub outlet: bool,
+}
+
 /// The water-relevant geometry of a level, per column.
 pub struct WaterPlan {
     pub cells: Vec<PlanCell>,
+    /// Columns under the authored water.
+    pub wet: Vec<Column>,
+    pub crests: Vec<PlanCrest>,
     /// Width of a cell, in metres.
     pub cell: f32,
     pub parity_repairs: Vec<Column>,
 }
 
 impl WaterPlan {
-    pub fn from_terrain(terrain: &TerrainWorld) -> Self {
-        let geometry = WaterGeometry::build(terrain, Outlets::default());
+    pub fn from_level(level: &Level, terrain: &TerrainWorld) -> Self {
+        let config = level.water.clone().unwrap_or_default();
+        let (water, _) = WaterWorld::from_config(&config, terrain);
+        let mut wet = Vec::new();
+        let mut crests = Vec::new();
+        for (_, basin) in water.basins() {
+            let surface = basin.level();
+            wet.extend(
+                basin
+                    .region
+                    .iter()
+                    .filter(|r| r.shape.floor_min < surface)
+                    .map(|r| r.span.column),
+            );
+            crests.extend(basin.crests.iter().map(|c| PlanCrest {
+                column: c.inside.column,
+                saddle: c.saddle,
+                outlet: c.kind == CrestKind::Outlet,
+            }));
+        }
+        wet.sort_unstable();
+        wet.dedup();
+
+        let geometry = water.geometry();
         let graph = geometry.graph();
         let drainage = geometry.drainage();
         let (min, max) = graph.column_bounds();
@@ -65,6 +103,8 @@ impl WaterPlan {
         }
         Self {
             cells,
+            wet,
+            crests,
             cell: COLUMN_SIZE,
             parity_repairs: geometry.repaired_columns(),
         }

@@ -13,7 +13,14 @@ use crate::core::device::ManagedDevice;
 use crate::core::error::{EngineError, EngineResult};
 use crate::rendering::shaders::ShaderManager;
 
-use super::vertex::WaterVertex;
+use super::vertex::BasinVertex;
+
+/// Where each draw's body constants start, and how many bytes they are.
+pub const BODY_PUSH_OFFSET: u32 = 128;
+pub const BODY_PUSH_SIZE: u32 = 16;
+
+/// Where the fragment stage's constants start.
+pub const FRAGMENT_PUSH_OFFSET: u32 = BODY_PUSH_OFFSET + BODY_PUSH_SIZE;
 
 /// Graphics pipeline for water surface rendering.
 ///
@@ -130,17 +137,18 @@ impl WaterPipeline {
     ) -> EngineResult<vk::PipelineLayout> {
         // Push constants layout:
         //   0..128  — view matrix (64) + projection matrix (64) [vertex]
-        // 128..192  — camera_pos (vec4) + sun_dir (vec4) + proj_params (vec4)
+        // 128..144  — body (vec4: level, unused ×3), one per draw [vertex]
+        // 144..208  — camera_pos (vec4) + sun_dir (vec4) + proj_params (vec4)
         //             + screen_params (vec4) [fragment]
         let push_constant_ranges = [
             vk::PushConstantRange {
                 stage_flags: vk::ShaderStageFlags::VERTEX,
                 offset: 0,
-                size: 128,
+                size: BODY_PUSH_OFFSET + BODY_PUSH_SIZE,
             },
             vk::PushConstantRange {
                 stage_flags: vk::ShaderStageFlags::FRAGMENT,
-                offset: 128,
+                offset: FRAGMENT_PUSH_OFFSET,
                 size: 64,
             },
         ];
@@ -240,8 +248,8 @@ impl WaterPipeline {
                 .name(entry_name),
         ];
 
-        let binding_description = WaterVertex::binding_description();
-        let attribute_descriptions = WaterVertex::attribute_descriptions();
+        let binding_description = BasinVertex::binding_description();
+        let attribute_descriptions = BasinVertex::attribute_descriptions();
 
         let vertex_input_state = vk::PipelineVertexInputStateCreateInfo::default()
             .vertex_binding_descriptions(std::slice::from_ref(&binding_description))

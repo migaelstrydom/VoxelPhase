@@ -2702,26 +2702,58 @@ pub enum StackItem {
     Capsule { half_height: f32, radius: f32 },
 }
 
-/// Level-authored water placement data.
-#[derive(Deserialize, Default)]
-#[serde(deny_unknown_fields)]
+/// Level-authored water placement data. Every field is optional; missing
+/// ones take [`WaterConfig::default`]'s values.
+#[derive(Deserialize, Clone)]
+#[serde(default, deny_unknown_fields)]
 pub struct WaterConfig {
     /// Sea level for the infinite ocean plane. If None, no ocean is rendered
     /// and boundary cells do not act as sources/sinks.
     pub ocean_level: Option<f32>,
 
     /// Individual water bodies placed in the level.
-    #[serde(default)]
     pub bodies: Vec<WaterBody>,
+
+    /// Scales every weir and orifice discharge: the one dial on how dramatic
+    /// a breach is. Hydrology always runs at real time.
+    pub drain_gain: f32,
+
+    /// Water lost by minor stores, in mm/h over the area they wet. Clears
+    /// trickles and puddles; rivers and lakes never lose. Zero is off.
+    pub loss_rate: f32,
+
+    /// How the level opens.
+    pub settle: Settle,
+}
+
+impl Default for WaterConfig {
+    fn default() -> Self {
+        Self {
+            ocean_level: None,
+            bodies: Vec::new(),
+            drain_gain: 1.0,
+            loss_rate: 0.0,
+            settle: Settle::default(),
+        }
+    }
+}
+
+/// How a level's water starts.
+#[derive(Deserialize, Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Settle {
+    /// At rest: channels routed and full, every fed basin at the level where
+    /// what flows in equals what flows out.
+    #[default]
+    Steady,
+    /// Exactly as authored, and left to settle in play.
+    AsAuthored,
 }
 
 /// A discrete body of water placed at level load time.
-///
-/// Flood-fills from a seed point outward through all connected terrain cells
-/// whose floor is below `surface_level`. The extent is dilated by one cell
-/// to cover marching-cubes shore smoothing.
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub enum WaterBody {
+    /// Still water standing at `surface_level` over the basin holding `seed`:
+    /// everything connected to it below that level.
     Pool {
         /// Seed point (x, z) — must be inside a terrain depression.
         seed: (f32, f32),
@@ -2811,6 +2843,9 @@ mod tests {
 
         assert_eq!(config.ocean_level, None);
         assert!(config.bodies.is_empty());
+        assert_eq!(config.drain_gain, 1.0);
+        assert_eq!(config.loss_rate, 0.0);
+        assert_eq!(config.settle, Settle::Steady);
     }
 
     #[test]

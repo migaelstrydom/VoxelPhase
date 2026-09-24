@@ -8,14 +8,40 @@
 //! 3. **Wake**: velocity-driven bodies (player) moving horizontally through
 //!    water inject displacement proportional to speed, creating a wake.
 //!
-//! No ECS or physics engine dependency — the caller provides body snapshots.
+//! No ECS or physics engine dependency — the caller provides body snapshots,
+//! the water to test them against, and the ripple field to disturb.
 
 use std::collections::HashMap;
 
 use nalgebra::Point3;
 
-use super::{WaterGrid, WaveGrid};
-use crate::water::buoyancy::sample_water;
+use crate::water::buoyancy::WaterSurface;
+
+/// How a disturbance moves the surface.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Disturbance {
+    /// Kicks the surface's vertical velocity: a splash that then spreads.
+    Velocity(f32),
+    /// Moves the surface directly: tracks a body's motion however damped.
+    Displacement(f32),
+}
+
+/// Whatever carries surface ripples: the thing the coupler disturbs.
+pub trait RippleField {
+    /// Disturb the surface over a disc of `radius` about (x, z), full at the
+    /// centre and fading to nothing at the rim. A zero radius disturbs the
+    /// single point.
+    fn disturb(&mut self, x: f32, z: f32, radius: f32, disturbance: Disturbance);
+}
+
+/// A field with no ripples: disturbances go nowhere. Splash and wake events
+/// are still emitted.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct StillSurface;
+
+impl RippleField for StillSurface {
+    fn disturb(&mut self, _x: f32, _z: f32, _radius: f32, _disturbance: Disturbance) {}
+}
 
 /// Emitted when a body impacts the water surface.
 ///
@@ -156,8 +182,8 @@ impl WaveBodyCoupler {
     pub fn update(
         &mut self,
         bodies: &[BodySnapshot],
-        wave_grid: &mut WaveGrid,
-        flow_grid: &WaterGrid,
+        ripples: &mut dyn RippleField,
+        water: &dyn WaterSurface,
     ) {
         self.splash_events.clear();
         self.wake_events.clear();
@@ -168,7 +194,7 @@ impl WaveBodyCoupler {
         }
 
         for body in bodies {
-            let sample = sample_water(flow_grid, None, body.position.x, body.position.z);
+            let sample = water.sample(body.position);
 
             let is_submerged = sample
                 .as_ref()
@@ -200,7 +226,12 @@ impl WaveBodyCoupler {
                 let down_speed = -body.velocity.y;
                 if down_speed > self.config.impact_speed_threshold {
                     let strength = -down_speed * self.config.impact_strength * mass_factor;
-                    self.inject_at_footprint(body, wave_grid, InjectionMode::Velocity(strength));
+                    ripples.disturb(
+                        body.position.x,
+                        body.position.z,
+                        body.footprint_radius,
+                        Disturbance::Velocity(strength),
+                    );
 
                     let surface_y = sample.as_ref().map_or(body.position.y, |s| s.surface_level);
                     self.splash_events.push(SplashEvent {
@@ -218,10 +249,11 @@ impl WaveBodyCoupler {
                 let vy = body.velocity.y;
                 if vy.abs() > 0.01 {
                     let strength = -vy * self.config.bobbing_strength * mass_factor;
-                    self.inject_at_footprint(
-                        body,
-                        wave_grid,
-                        InjectionMode::Displacement(strength),
+                    ripples.disturb(
+                        body.position.x,
+                        body.position.z,
+                        body.footprint_radius,
+                        Disturbance::Displacement(strength),
                     );
                 }
             }
@@ -238,7 +270,12 @@ impl WaveBodyCoupler {
                     let wake_offset = -move_dir * body.footprint_radius * 0.8;
                     let wake_pos = body.position + wake_offset;
                     let strength = -h_speed * self.config.wake_strength;
-                    wave_grid.inject_displacement_at(wake_pos.x, wake_pos.z, strength);
+                    ripples.disturb(
+                        wake_pos.x,
+                        wake_pos.z,
+                        0.0,
+                        Disturbance::Displacement(strength),
+                    );
 
                     let surface_y = sample.as_ref().map_or(body.position.y, |s| s.surface_level);
                     self.wake_events.push(WakeEvent {
@@ -254,66 +291,6 @@ impl WaveBodyCoupler {
         // Prune bodies not seen for several frames.
         self.body_states.retain(|_, state| state.age < 60);
     }
-
-    /// Inject a wave disturbance across the body's XZ footprint cells.
-    fn inject_at_footprint(
-        &self,
-        body: &BodySnapshot,
-        wave_grid: &mut WaveGrid,
-        mode: InjectionMode,
-    ) {
-        let r = body.footprint_radius;
-        let cell_size = wave_grid.cell_size();
-        let origin = wave_grid.origin();
-        let dims = wave_grid.dims();
-
-        // Compute the bounding box of the footprint in wave grid coords.
-        let min_x = body.position.x - r;
-        let max_x = body.position.x + r;
-        let min_z = body.position.z - r;
-        let max_z = body.position.z + r;
-
-        let i_min = ((min_x - origin.x) / cell_size).floor().max(0.0) as usize;
-        let i_max = (((max_x - origin.x) / cell_size).ceil() as usize).min(dims.0);
-        let j_min = ((min_z - origin.z) / cell_size).floor().max(0.0) as usize;
-        let j_max = (((max_z - origin.z) / cell_size).ceil() as usize).min(dims.1);
-
-        let r_sq = r * r;
-        let cx = body.position.x;
-        let cz = body.position.z;
-
-        for wj in j_min..j_max {
-            for wi in i_min..i_max {
-                let wx = origin.x + (wi as f32 + 0.5) * cell_size;
-                let wz = origin.z + (wj as f32 + 0.5) * cell_size;
-                let dx = wx - cx;
-                let dz = wz - cz;
-                let dist_sq = dx * dx + dz * dz;
-
-                if dist_sq > r_sq {
-                    continue;
-                }
-
-                // Smooth falloff from center to edge.
-                let t = 1.0 - (dist_sq / r_sq).sqrt();
-
-                match mode {
-                    InjectionMode::Velocity(amount) => {
-                        wave_grid.cell_mut(wi, wj).velocity += amount * t;
-                    }
-                    InjectionMode::Displacement(amount) => {
-                        wave_grid.cell_mut(wi, wj).displacement += amount * t;
-                    }
-                }
-            }
-        }
-    }
-}
-
-#[allow(dead_code)]
-enum InjectionMode {
-    Velocity(f32),
-    Displacement(f32),
 }
 
 #[cfg(test)]
@@ -321,220 +298,109 @@ mod tests {
     use nalgebra::{Point3, Vector3};
 
     use super::*;
-    use crate::water::{WaterGridConfig, WaterProperties, WaveGridConfig};
+    use crate::water::buoyancy::WaterSample;
 
-    fn test_properties() -> WaterProperties {
-        WaterProperties {
-            wave_speed: 4.0,
-            ..Default::default()
+    /// Water standing at 5 m over a flat floor, everywhere.
+    struct Flat;
+
+    impl WaterSurface for Flat {
+        fn sample(&self, _point: Point3<f32>) -> Option<WaterSample> {
+            Some(WaterSample {
+                surface_level: 5.0,
+                floor_level: 0.0,
+            })
         }
     }
 
-    fn make_flow_grid() -> WaterGrid {
-        let config = WaterGridConfig {
-            cell_size: 2.0,
-            dims: (5, 5),
-            origin: Vector3::new(0.0, 0.0, 0.0),
-            ocean_level: None,
-        };
-        let mut grid = WaterGrid::new(config, &test_properties());
-        // Fill with water at surface level 5.0 on a flat floor.
-        let cell_area = grid.cell_area();
-        for j in 0..5 {
-            for i in 0..5 {
-                grid.add_water(i, j, 5.0 * cell_area, 0.0);
-            }
-        }
-        grid
+    /// A ripple field that remembers every disturbance.
+    #[derive(Default)]
+    struct Recorder {
+        disturbances: Vec<Disturbance>,
     }
 
-    fn make_wave_grid(flow_grid: &WaterGrid) -> WaveGrid {
-        let flow_dims = flow_grid.dims();
-        let flow_cell_size = flow_grid.cell_size();
-        let wave_cell_size = 0.5;
-        let n = (flow_cell_size / wave_cell_size).round() as usize;
-        let wave_dims = (flow_dims.0 * n, flow_dims.1 * n);
-
-        let config = WaveGridConfig {
-            cell_size: wave_cell_size,
-            dims: wave_dims,
-            origin: flow_grid.origin(),
-            cells_per_flow_cell: n,
-        };
-        WaveGrid::new(config, &test_properties())
+    impl RippleField for Recorder {
+        fn disturb(&mut self, _x: f32, _z: f32, _radius: f32, disturbance: Disturbance) {
+            self.disturbances.push(disturbance);
+        }
     }
 
-    fn total_wave_energy(wave_grid: &WaveGrid) -> f32 {
-        let dims = wave_grid.dims();
-        let mut energy = 0.0f32;
-        for wj in 0..dims.1 {
-            for wi in 0..dims.0 {
-                let c = wave_grid.cell(wi, wj);
-                energy += c.displacement * c.displacement + c.velocity * c.velocity;
-            }
+    fn body(y: f32, velocity: Vector3<f32>, self_propelled: bool) -> BodySnapshot {
+        BodySnapshot {
+            id: 1,
+            position: Point3::new(5.0, y, 5.0),
+            velocity,
+            footprint_radius: 0.5,
+            mass: 20.0,
+            is_self_propelled: self_propelled,
         }
-        energy
     }
 
     #[test]
-    fn impact_creates_wave_disturbance() {
-        let flow_grid = make_flow_grid();
-        let mut wave_grid = make_wave_grid(&flow_grid);
+    fn impact_splashes_and_disturbs() {
+        let mut ripples = Recorder::default();
         let mut coupler = WaveBodyCoupler::new(WaveCouplingConfig::default());
-
-        // Body above water, first frame.
-        let body_above = BodySnapshot {
-            id: 1,
-            position: Point3::new(5.0, 8.0, 5.0),
-            velocity: Vector3::new(0.0, -5.0, 0.0),
-            footprint_radius: 0.5,
-            mass: 20.0,
-            is_self_propelled: false,
-        };
-        coupler.update(&[body_above], &mut wave_grid, &flow_grid);
+        coupler.update(
+            &[body(8.0, Vector3::new(0.0, -5.0, 0.0), false)],
+            &mut ripples,
+            &Flat,
+        );
         assert!(
-            total_wave_energy(&wave_grid) < 1e-6,
-            "No disturbance when body is above water"
+            ripples.disturbances.is_empty(),
+            "no disturbance above water"
         );
 
-        // Body enters water.
-        let body_entering = BodySnapshot {
-            id: 1,
-            position: Point3::new(5.0, 4.8, 5.0),
-            velocity: Vector3::new(0.0, -5.0, 0.0),
-            footprint_radius: 0.5,
-            mass: 20.0,
-            is_self_propelled: false,
-        };
-        coupler.update(&[body_entering], &mut wave_grid, &flow_grid);
-
-        let energy = total_wave_energy(&wave_grid);
-        assert!(
-            energy > 0.1,
-            "Impact should create wave disturbance, got energy={energy}"
+        coupler.update(
+            &[body(4.8, Vector3::new(0.0, -5.0, 0.0), false)],
+            &mut ripples,
+            &Flat,
         );
+        assert!(matches!(ripples.disturbances[..], [Disturbance::Velocity(v)] if v < 0.0));
+        assert_eq!(coupler.drain_splash_events().len(), 1);
     }
 
     #[test]
-    fn bobbing_creates_continuous_disturbance() {
-        let flow_grid = make_flow_grid();
-        let mut wave_grid = make_wave_grid(&flow_grid);
+    fn bobbing_disturbs_every_frame() {
+        let mut ripples = Recorder::default();
         let mut coupler = WaveBodyCoupler::new(WaveCouplingConfig::default());
-
-        // Frame 1: body submerged.
-        let body = BodySnapshot {
-            id: 1,
-            position: Point3::new(5.0, 4.5, 5.0),
-            velocity: Vector3::new(0.0, 0.5, 0.0),
-            footprint_radius: 0.5,
-            mass: 20.0,
-            is_self_propelled: false,
-        };
-        coupler.update(&[body], &mut wave_grid, &flow_grid);
-        let energy_after_first = total_wave_energy(&wave_grid);
-
-        // Frame 2: still submerged, oscillating.
-        let body = BodySnapshot {
-            id: 1,
-            position: Point3::new(5.0, 4.7, 5.0),
-            velocity: Vector3::new(0.0, -0.3, 0.0),
-            footprint_radius: 0.5,
-            mass: 20.0,
-            is_self_propelled: false,
-        };
-        coupler.update(&[body], &mut wave_grid, &flow_grid);
-        let energy_after_second = total_wave_energy(&wave_grid);
-
-        assert!(
-            energy_after_second > energy_after_first,
-            "Bobbing should accumulate wave energy: first={energy_after_first}, second={energy_after_second}"
+        coupler.update(
+            &[body(4.5, Vector3::new(0.0, 0.5, 0.0), false)],
+            &mut ripples,
+            &Flat,
         );
+        coupler.update(
+            &[body(4.7, Vector3::new(0.0, -0.3, 0.0), false)],
+            &mut ripples,
+            &Flat,
+        );
+        assert!(ripples
+            .disturbances
+            .iter()
+            .any(|d| matches!(d, Disturbance::Displacement(_))));
     }
 
     #[test]
     fn player_wake_from_horizontal_movement() {
-        let flow_grid = make_flow_grid();
-        let mut wave_grid = make_wave_grid(&flow_grid);
+        let mut ripples = Recorder::default();
         let mut coupler = WaveBodyCoupler::new(WaveCouplingConfig::default());
-
-        // Frame 1: establish submerged state.
-        let body = BodySnapshot {
-            id: 1,
-            position: Point3::new(5.0, 4.5, 5.0),
-            velocity: Vector3::zeros(),
-            footprint_radius: 0.5,
-            mass: 20.0,
-            is_self_propelled: true,
-        };
-        coupler.update(&[body], &mut wave_grid, &flow_grid);
-
-        // Frame 2: moving horizontally.
-        let body = BodySnapshot {
-            id: 1,
-            position: Point3::new(5.0, 4.5, 5.0),
-            velocity: Vector3::new(3.0, 0.0, 0.0),
-            footprint_radius: 0.5,
-            mass: 20.0,
-            is_self_propelled: true,
-        };
-        coupler.update(&[body], &mut wave_grid, &flow_grid);
-
-        let energy = total_wave_energy(&wave_grid);
-        assert!(
-            energy > 0.01,
-            "Player wake should create disturbance, got energy={energy}"
+        coupler.update(&[body(4.5, Vector3::zeros(), true)], &mut ripples, &Flat);
+        coupler.update(
+            &[body(4.5, Vector3::new(3.0, 0.0, 0.0), true)],
+            &mut ripples,
+            &Flat,
         );
-    }
-
-    #[test]
-    fn no_disturbance_when_above_water() {
-        let flow_grid = make_flow_grid();
-        let mut wave_grid = make_wave_grid(&flow_grid);
-        let mut coupler = WaveBodyCoupler::new(WaveCouplingConfig::default());
-
-        let body = BodySnapshot {
-            id: 1,
-            position: Point3::new(5.0, 10.0, 5.0),
-            velocity: Vector3::new(0.0, -2.0, 0.0),
-            footprint_radius: 0.5,
-            mass: 20.0,
-            is_self_propelled: false,
-        };
-
-        // Two frames above water.
-        coupler.update(&[body.clone()], &mut wave_grid, &flow_grid);
-        coupler.update(&[body], &mut wave_grid, &flow_grid);
-
-        assert!(
-            total_wave_energy(&wave_grid) < 1e-6,
-            "No disturbance when body is always above water"
-        );
+        assert_eq!(coupler.drain_wake_events().len(), 1);
+        assert!(!ripples.disturbances.is_empty());
     }
 
     #[test]
     fn stale_bodies_cleaned_up() {
-        let flow_grid = make_flow_grid();
-        let mut wave_grid = make_wave_grid(&flow_grid);
+        let mut ripples = Recorder::default();
         let mut coupler = WaveBodyCoupler::new(WaveCouplingConfig::default());
-
-        let body = BodySnapshot {
-            id: 42,
-            position: Point3::new(5.0, 4.5, 5.0),
-            velocity: Vector3::zeros(),
-            footprint_radius: 0.5,
-            mass: 20.0,
-            is_self_propelled: false,
-        };
-        coupler.update(&[body], &mut wave_grid, &flow_grid);
-        assert!(coupler.body_states.contains_key(&42));
-
-        // 60 frames with no bodies → should be pruned.
+        coupler.update(&[body(4.5, Vector3::zeros(), false)], &mut ripples, &Flat);
+        assert!(coupler.body_states.contains_key(&1));
         for _ in 0..60 {
-            coupler.update(&[], &mut wave_grid, &flow_grid);
+            coupler.update(&[], &mut ripples, &Flat);
         }
-        assert!(
-            !coupler.body_states.contains_key(&42),
-            "Stale body state should be cleaned up"
-        );
+        assert!(!coupler.body_states.contains_key(&1));
     }
 }

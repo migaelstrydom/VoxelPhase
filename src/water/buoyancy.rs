@@ -13,7 +13,6 @@ use std::f32::consts::PI;
 
 use nalgebra::{Point3, UnitQuaternion, Vector3};
 
-use super::{WaterGrid, WaveGrid};
 use crate::physics::{
     ColliderShape, ForceContext, ForceOutput, RigidBodyHandle, SubstepForceProvider,
 };
@@ -61,27 +60,21 @@ const WATERPLANE_EPSILON: f32 = 0.05;
 
 /// Per-substep buoyancy force provider.
 ///
-/// Borrows the water grids for the duration of the physics step and
-/// recomputes buoyancy from each body's current position every substep,
-/// eliminating the stale-force energy gain that occurs when forces are
-/// frozen for the entire frame.
+/// Borrows the water for the duration of the physics step and recomputes
+/// buoyancy from each body's current position every substep, eliminating the
+/// stale-force energy gain that occurs when forces are frozen for the entire
+/// frame.
 pub struct BuoyancyForceProvider<'a> {
-    flow_grid: &'a WaterGrid,
-    wave_grid: Option<&'a WaveGrid>,
+    water: &'a (dyn WaterSurface + Sync),
     fluid_density: f32,
     affected: Vec<RigidBodyHandle>,
 }
 
 impl<'a> BuoyancyForceProvider<'a> {
-    pub fn new(
-        flow_grid: &'a WaterGrid,
-        wave_grid: Option<&'a WaveGrid>,
-        affected: Vec<RigidBodyHandle>,
-    ) -> Self {
+    pub fn new(water: &'a (dyn WaterSurface + Sync), affected: Vec<RigidBodyHandle>) -> Self {
         Self {
-            fluid_density: flow_grid.fluid_density(),
-            flow_grid,
-            wave_grid,
+            water,
+            fluid_density: FLUID_DENSITY,
             affected,
         }
     }
@@ -129,8 +122,7 @@ impl SubstepForceProvider for BuoyancyForceProvider<'_> {
                 self.fluid_density,
                 ctx.gravity,
                 ctx.gravity_magnitude,
-                self.flow_grid,
-                self.wave_grid,
+                self.water,
             ) {
                 Some(f) => f,
                 None => continue,
@@ -174,38 +166,14 @@ impl SubstepForceProvider for BuoyancyForceProvider<'_> {
     }
 }
 
-/// Sample the effective water surface at (x, z), combining the coarse flow
-/// grid bulk level with fine wave displacement.
-///
-/// Returns `None` if the position is outside the grid or the cell is dry.
-pub fn sample_water(
-    flow_grid: &WaterGrid,
-    wave_grid: Option<&WaveGrid>,
-    x: f32,
-    z: f32,
-) -> Option<WaterSample> {
-    let (i, j) = flow_grid.world_to_grid(x, z)?;
-    let cell = flow_grid.cell(i, j);
-
-    let bulk_level = if cell.volume > 0.0 {
-        cell.surface_level(flow_grid.cell_area())
-    } else {
-        // Delegate to surface_level_at for ocean-coupled boundary cells.
-        flow_grid.surface_level_at(x, z)?
-    };
-
-    let displacement = wave_grid
-        .and_then(|wg| {
-            let (wi, wj) = wg.world_to_wave(x, z)?;
-            Some(wg.cell(wi, wj).displacement)
-        })
-        .unwrap_or(0.0);
-
-    Some(WaterSample {
-        surface_level: bulk_level + displacement,
-        floor_level: cell.floor_level,
-    })
+/// Water as buoyancy sees it: the surface and floor over a point.
+pub trait WaterSurface {
+    /// The water at a point, or `None` where there is none.
+    fn sample(&self, point: Point3<f32>) -> Option<WaterSample>;
 }
+
+/// Density of water, kg/m³.
+pub const FLUID_DENSITY: f32 = 1000.0;
 
 /// Compute buoyancy force and drag coefficients for a body with the given shape.
 ///
@@ -222,20 +190,15 @@ pub fn compute_buoyancy(
     fluid_density: f32,
     gravity: Vector3<f32>,
     gravity_magnitude: f32,
-    flow_grid: &WaterGrid,
-    wave_grid: Option<&WaveGrid>,
+    water: &dyn WaterSurface,
 ) -> Option<BuoyancyForces> {
     let (submerged_volume, submerged_fraction, buoyancy_center) = match shape {
         ColliderShape::Sphere { radius } => {
-            compute_sphere_submersion(collider_center, *radius, flow_grid, wave_grid)?
+            compute_sphere_submersion(collider_center, *radius, water)?
         }
-        ColliderShape::Box { half_extents } => compute_box_submersion(
-            collider_center,
-            body_rotation,
-            *half_extents,
-            flow_grid,
-            wave_grid,
-        )?,
+        ColliderShape::Box { half_extents } => {
+            compute_box_submersion(collider_center, body_rotation, *half_extents, water)?
+        }
         ColliderShape::Capsule {
             half_height,
             radius,
@@ -244,11 +207,10 @@ pub fn compute_buoyancy(
             body_rotation,
             *half_height,
             *radius,
-            flow_grid,
-            wave_grid,
+            water,
         )?,
         ColliderShape::ConvexHull { hull } => {
-            compute_hull_submersion(collider_center, body_rotation, hull, flow_grid, wave_grid)?
+            compute_hull_submersion(collider_center, body_rotation, hull, water)?
         }
     };
 
@@ -270,8 +232,7 @@ pub fn compute_buoyancy(
         collider_center,
         body_rotation,
         shape,
-        flow_grid,
-        wave_grid,
+        water,
         WATERPLANE_EPSILON,
     );
     let heave_stiffness = fluid_density * gravity_magnitude * waterplane_area;
@@ -303,10 +264,9 @@ pub fn compute_buoyancy(
 fn compute_sphere_submersion(
     center: Point3<f32>,
     radius: f32,
-    flow_grid: &WaterGrid,
-    wave_grid: Option<&WaveGrid>,
+    water: &dyn WaterSurface,
 ) -> Option<(f32, f32, Point3<f32>)> {
-    let sample = sample_water(flow_grid, wave_grid, center.x, center.z)?;
+    let sample = water.sample(center)?;
 
     // Floor check: reject bodies whose center is at or below the terrain
     // floor. This prevents false buoyancy for bodies underneath floating
@@ -350,10 +310,9 @@ fn compute_box_submersion(
     center: Point3<f32>,
     rotation: UnitQuaternion<f32>,
     half_extents: Vector3<f32>,
-    flow_grid: &WaterGrid,
-    wave_grid: Option<&WaveGrid>,
+    water: &dyn WaterSurface,
 ) -> Option<(f32, f32, Point3<f32>)> {
-    let sample = sample_water(flow_grid, wave_grid, center.x, center.z)?;
+    let sample = water.sample(center)?;
     let hx = half_extents.x;
     let hy = half_extents.y;
     let hz = half_extents.z;
@@ -381,10 +340,9 @@ fn compute_hull_submersion(
     center: Point3<f32>,
     rotation: UnitQuaternion<f32>,
     hull: &crate::collision::convex_hull::ConvexHull,
-    flow_grid: &WaterGrid,
-    wave_grid: Option<&WaveGrid>,
+    water: &dyn WaterSurface,
 ) -> Option<(f32, f32, Point3<f32>)> {
-    let sample = sample_water(flow_grid, wave_grid, center.x, center.z)?;
+    let sample = water.sample(center)?;
 
     if center.y <= sample.floor_level {
         return None;
@@ -606,10 +564,9 @@ fn compute_capsule_submersion(
     rotation: UnitQuaternion<f32>,
     half_height: f32,
     radius: f32,
-    flow_grid: &WaterGrid,
-    wave_grid: Option<&WaveGrid>,
+    water: &dyn WaterSurface,
 ) -> Option<(f32, f32, Point3<f32>)> {
-    let sample = sample_water(flow_grid, wave_grid, center.x, center.z)?;
+    let sample = water.sample(center)?;
 
     let r = radius;
     let cylinder_half = half_height - r;
@@ -708,35 +665,25 @@ fn submerged_volume_for_pose(
     center: Point3<f32>,
     rotation: UnitQuaternion<f32>,
     shape: &ColliderShape,
-    flow_grid: &WaterGrid,
-    wave_grid: Option<&WaveGrid>,
+    water: &dyn WaterSurface,
 ) -> f32 {
     match shape {
-        ColliderShape::Sphere { radius } => {
-            compute_sphere_submersion(center, *radius, flow_grid, wave_grid)
-                .map(|(v, _, _)| v)
-                .unwrap_or(0.0)
-        }
+        ColliderShape::Sphere { radius } => compute_sphere_submersion(center, *radius, water)
+            .map(|(v, _, _)| v)
+            .unwrap_or(0.0),
         ColliderShape::Box { half_extents } => {
-            compute_box_submersion(center, rotation, *half_extents, flow_grid, wave_grid)
+            compute_box_submersion(center, rotation, *half_extents, water)
                 .map(|(v, _, _)| v)
                 .unwrap_or(0.0)
         }
         ColliderShape::Capsule {
             half_height,
             radius,
-        } => compute_capsule_submersion(
-            center,
-            rotation,
-            *half_height,
-            *radius,
-            flow_grid,
-            wave_grid,
-        )
-        .map(|(v, _, _)| v)
-        .unwrap_or(0.0),
+        } => compute_capsule_submersion(center, rotation, *half_height, *radius, water)
+            .map(|(v, _, _)| v)
+            .unwrap_or(0.0),
         ColliderShape::ConvexHull { hull } => {
-            compute_hull_submersion(center, rotation, hull, flow_grid, wave_grid)
+            compute_hull_submersion(center, rotation, hull, water)
                 .map(|(v, _, _)| v)
                 .unwrap_or(0.0)
         }
@@ -747,8 +694,7 @@ fn estimate_waterplane_area(
     center: Point3<f32>,
     rotation: UnitQuaternion<f32>,
     shape: &ColliderShape,
-    flow_grid: &WaterGrid,
-    wave_grid: Option<&WaveGrid>,
+    water: &dyn WaterSurface,
     epsilon: f32,
 ) -> f32 {
     if epsilon <= 1e-6 {
@@ -756,8 +702,8 @@ fn estimate_waterplane_area(
     }
     let center_up = Point3::new(center.x, center.y + epsilon, center.z);
     let center_down = Point3::new(center.x, center.y - epsilon, center.z);
-    let volume_up = submerged_volume_for_pose(center_up, rotation, shape, flow_grid, wave_grid);
-    let volume_down = submerged_volume_for_pose(center_down, rotation, shape, flow_grid, wave_grid);
+    let volume_up = submerged_volume_for_pose(center_up, rotation, shape, water);
+    let volume_down = submerged_volume_for_pose(center_down, rotation, shape, water);
     ((volume_down - volume_up) / (2.0 * epsilon)).max(0.0)
 }
 
@@ -808,24 +754,27 @@ fn shape_drag_properties(shape: &ColliderShape) -> (f32, f32, f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::water::{WaterGridConfig, WaterProperties};
 
-    fn make_test_grid(surface_level: f32) -> WaterGrid {
-        let config = WaterGridConfig {
-            cell_size: 10.0,
-            dims: (3, 3),
-            origin: Vector3::new(-15.0, 0.0, -15.0),
-            ocean_level: None,
-        };
-        let mut grid = WaterGrid::new(config, &WaterProperties::default());
-        // Fill all cells with water up to surface_level on a flat floor at y=0.
-        for j in 0..3 {
-            for i in 0..3 {
-                let volume = surface_level * grid.cell_area();
-                grid.add_water(i, j, volume, 0.0);
-            }
+    /// Water standing at `surface` over a flat floor at `floor`, everywhere.
+    struct Flat {
+        surface: f32,
+        floor: f32,
+    }
+
+    impl WaterSurface for Flat {
+        fn sample(&self, _point: Point3<f32>) -> Option<WaterSample> {
+            Some(WaterSample {
+                surface_level: self.surface,
+                floor_level: self.floor,
+            })
         }
-        grid
+    }
+
+    fn make_test_grid(surface_level: f32) -> Flat {
+        Flat {
+            surface: surface_level,
+            floor: 0.0,
+        }
     }
 
     #[test]
@@ -834,8 +783,7 @@ mod tests {
         let center = Point3::new(0.0, 5.0, 0.0);
         let radius = 1.0;
 
-        let (vol, frac, _centroid) =
-            compute_sphere_submersion(center, radius, &grid, None).unwrap();
+        let (vol, frac, _centroid) = compute_sphere_submersion(center, radius, &grid).unwrap();
 
         let full_vol = (4.0 / 3.0) * PI * radius.powi(3);
         assert!(
@@ -854,8 +802,7 @@ mod tests {
         let center = Point3::new(0.0, 5.0, 0.0);
         let radius = 1.0;
 
-        let (_vol, frac, _centroid) =
-            compute_sphere_submersion(center, radius, &grid, None).unwrap();
+        let (_vol, frac, _centroid) = compute_sphere_submersion(center, radius, &grid).unwrap();
 
         // Bottom of sphere at y=4, water at y=5 → depth=1 out of diameter=2 → ~half
         assert!(
@@ -870,7 +817,7 @@ mod tests {
         let center = Point3::new(0.0, 5.0, 0.0);
         let radius = 1.0;
 
-        let result = compute_sphere_submersion(center, radius, &grid, None);
+        let result = compute_sphere_submersion(center, radius, &grid);
         assert!(result.is_none(), "Sphere above water should return None");
     }
 
@@ -880,14 +827,9 @@ mod tests {
         let center = Point3::new(0.0, 5.0, 0.0);
         let half_extents = Vector3::new(0.5, 0.5, 0.5);
 
-        let (vol, frac, _centroid) = compute_box_submersion(
-            center,
-            UnitQuaternion::identity(),
-            half_extents,
-            &grid,
-            None,
-        )
-        .unwrap();
+        let (vol, frac, _centroid) =
+            compute_box_submersion(center, UnitQuaternion::identity(), half_extents, &grid)
+                .unwrap();
 
         // Bottom face at y=4.5, water at y=5 → depth=0.5 out of height=1.0
         let expected_frac = 0.5;
@@ -904,20 +846,14 @@ mod tests {
         let center = Point3::new(0.0, 5.0, 0.0);
         let half_extents = Vector3::new(0.5, 0.5, 0.5);
 
-        let (vol_identity, frac_identity, _) = compute_box_submersion(
-            center,
-            UnitQuaternion::identity(),
-            half_extents,
-            &grid,
-            None,
-        )
-        .unwrap();
+        let (vol_identity, frac_identity, _) =
+            compute_box_submersion(center, UnitQuaternion::identity(), half_extents, &grid)
+                .unwrap();
         let (vol_turned, frac_turned, _) = compute_box_submersion(
             center,
             UnitQuaternion::from_euler_angles(PI * 0.5, 0.0, 0.0),
             half_extents,
             &grid,
-            None,
         )
         .unwrap();
 
@@ -944,7 +880,6 @@ mod tests {
             Vector3::new(0.0, -9.81, 0.0),
             9.81,
             &grid,
-            None,
         )
         .unwrap();
 
@@ -968,7 +903,6 @@ mod tests {
             Vector3::new(0.0, -9.81, 0.0),
             9.81,
             &grid,
-            None,
         )
         .unwrap();
 
@@ -992,23 +926,16 @@ mod tests {
 
     #[test]
     fn floor_level_prevents_false_underwater() {
-        // Sky island scenario: water floor is at y=10, body is at y=5 (below the island).
-        let config = WaterGridConfig {
-            cell_size: 10.0,
-            dims: (3, 3),
-            origin: Vector3::new(-15.0, 0.0, -15.0),
-            ocean_level: None,
+        // Sky island scenario: water on a floor at y=10, surface at y=12, and
+        // a body at y=5, below the island. A surface that reads this column's
+        // water for the point is what a single-layer water would give.
+        let grid = Flat {
+            surface: 12.0,
+            floor: 10.0,
         };
-        let mut grid = WaterGrid::new(config, &WaterProperties::default());
-        for j in 0..3 {
-            for i in 0..3 {
-                // Water sitting on a sky island floor at y=10, surface at y=12.
-                grid.add_water(i, j, 2.0 * grid.cell_area(), 10.0);
-            }
-        }
 
         let center = Point3::new(0.0, 5.0, 0.0);
-        let result = compute_sphere_submersion(center, 1.0, &grid, None);
+        let result = compute_sphere_submersion(center, 1.0, &grid);
         assert!(
             result.is_none(),
             "Body below sky island floor should not be submerged"
@@ -1055,7 +982,6 @@ mod tests {
             half_height,
             radius,
             &grid,
-            None,
         )
         .unwrap();
 
@@ -1091,7 +1017,6 @@ mod tests {
             half_height,
             radius,
             &grid,
-            None,
         )
         .unwrap();
 
@@ -1113,7 +1038,7 @@ mod tests {
         let center = Point3::new(0.0, 5.0, 0.0);
 
         let result =
-            compute_capsule_submersion(center, UnitQuaternion::identity(), 1.0, 0.5, &grid, None);
+            compute_capsule_submersion(center, UnitQuaternion::identity(), 1.0, 0.5, &grid);
         assert!(result.is_none(), "Capsule above water should return None");
     }
 
@@ -1125,7 +1050,7 @@ mod tests {
         let tilt = UnitQuaternion::from_euler_angles(0.0, 0.0, PI * 0.25);
 
         let (_vol, _frac, centroid) =
-            compute_capsule_submersion(center, tilt, 1.0, 0.5, &grid, None).unwrap();
+            compute_capsule_submersion(center, tilt, 1.0, 0.5, &grid).unwrap();
 
         // Buoyancy center should be offset horizontally toward the lower
         // side of the tilt (negative x for a positive z-rotation).
@@ -1146,8 +1071,7 @@ mod tests {
         let horizontal = UnitQuaternion::from_euler_angles(0.0, 0.0, PI * 0.5);
 
         let (vol, frac, centroid) =
-            compute_capsule_submersion(center, horizontal, half_height, radius, &grid, None)
-                .unwrap();
+            compute_capsule_submersion(center, horizontal, half_height, radius, &grid).unwrap();
 
         let cyl_len = 2.0 * (half_height - radius);
         let expected_vol = PI * radius * radius * cyl_len + (4.0 / 3.0) * PI * radius.powi(3);

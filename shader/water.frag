@@ -20,10 +20,10 @@ layout(set = 0, binding = 0) uniform sampler2D colorSampler;
 layout(set = 0, binding = 1) uniform sampler2D depthSampler;
 
 layout(push_constant) uniform FragPushConstants {
-    layout(offset = 128) vec4 cameraPos;
-    layout(offset = 144) vec4 sunDir;
-    layout(offset = 160) vec4 projParams;    // (near, far, time, unused)
-    layout(offset = 176) vec4 screenParams;  // (width, height, hue preservation, exposure)
+    layout(offset = 144) vec4 cameraPos;
+    layout(offset = 160) vec4 sunDir;
+    layout(offset = 176) vec4 projParams;    // (near, far, time, unused)
+    layout(offset = 192) vec4 screenParams;  // (width, height, hue preservation, exposure)
 } fpc;
 
 layout(location = 0) out vec4 outColor;

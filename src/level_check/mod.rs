@@ -21,5 +21,5 @@ pub use routes::RouteMap;
 pub use runner::{build_terrain, check_level};
 pub use segments::Crossing;
 pub use svg::write_schematic;
-pub use water::{check_water, BodyExtent};
+pub use water::check_water;
 pub use water_plan::{PlanCell, WaterPlan};

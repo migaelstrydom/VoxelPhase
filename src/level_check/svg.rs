@@ -218,7 +218,7 @@ fn shade_colour(step: usize) -> String {
 
 /// Write a two-panel schematic of `level` to `path`.
 pub fn write_schematic(level: &Level, terrain: &TerrainWorld, path: &Path) -> std::io::Result<()> {
-    let water = WaterPlan::from_terrain(terrain);
+    let water = WaterPlan::from_level(level, terrain);
     let svg = render(level, terrain, &water);
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
@@ -562,7 +562,9 @@ fn plan_view(
 
 /// Where water would collect, over the heightmap: blue as deep as a
 /// depression is, violet where a column holds more than one layer of air,
-/// red where a pocket is sealed or its spans needed a parity repair.
+/// red where a pocket is sealed or its spans needed a parity repair. Over
+/// those, the authored water in solid blue, and its crests: orange where it
+/// spills away, purple where it spills into a depression of its own.
 fn water_overlay(
     s: &mut String,
     water: &WaterPlan,
@@ -600,6 +602,36 @@ fn water_overlay(
             px(x),
             pz(z),
             water.cell * scale * len as f32 + 0.4,
+        );
+    }
+    // The authored water itself, over the potential pools.
+    let mut wet_runs: Vec<(Column, usize)> = Vec::new();
+    for &column in &water.wet {
+        match wet_runs.last_mut() {
+            Some((start, len)) if start.k == column.k && start.i + *len as i32 == column.i => {
+                *len += 1;
+            }
+            _ => wet_runs.push((column, 1)),
+        }
+    }
+    for (start, len) in wet_runs {
+        let (x, z) = start.min_corner();
+        let _ = writeln!(
+            s,
+            "<rect x=\"{:.1}\" y=\"{:.1}\" width=\"{:.1}\" height=\"{size:.1}\" fill=\"rgba(20,80,200,0.85)\"/>",
+            px(x),
+            pz(z),
+            water.cell * scale * len as f32 + 0.4,
+        );
+    }
+    for crest in &water.crests {
+        let (x, z) = crest.column.centre();
+        let colour = if crest.outlet { "#e67e22" } else { "#8e44ad" };
+        let _ = writeln!(
+            s,
+            "<rect x=\"{:.1}\" y=\"{:.1}\" width=\"{size:.1}\" height=\"{size:.1}\" fill=\"{colour}\"/>",
+            px(x) - size * 0.5,
+            pz(z) - size * 0.5,
         );
     }
     for column in &water.parity_repairs {

@@ -5,13 +5,13 @@ use specs::World;
 
 use crate::app::spawnables::MaterialCtx;
 use crate::core::error::EngineResult;
-use crate::level::data::{Level, WaterBody, WaterConfig};
+use crate::level::data::Level;
 use crate::level::placement::{local_frame, PlacementError};
 use crate::rendering::material::{MaterialId, MaterialManagerBuilder};
 use crate::rendering::pattern::TextureCache;
 use crate::resources::textures::TextureManager;
 use crate::terrain::{generate_terrain, Anchor, ChunkGrid, Segment, TerrainWorld};
-use crate::water::{WaterGrid, WaterGridConfig, WaterProperties, WaveGrid, WaveGridConfig};
+use crate::water::WaterWorld;
 
 /// Pre-created materials for all objects in a level.
 ///
@@ -20,12 +20,6 @@ pub struct LevelMaterials {
     /// One material set per object, indexed by object position in the level.
     pub per_object: Vec<Vec<MaterialId>>,
 }
-
-/// Coarsening factor applied to the voxel size for the flow grid cell size.
-const WATER_GRID_SCALE: u32 = 2;
-
-/// Fine-grid cell size for visible ripples (meters).
-const WAVE_CELL_SIZE: f32 = 0.5;
 
 /// Pre-scan the level and create all needed materials during init.
 ///
@@ -149,152 +143,20 @@ pub fn spawn_objects(world: &mut World, level: &Level, materials: &LevelMaterial
     }
 }
 
-/// Flow-grid cell size for a level's water, in world units.
+/// A level's water, placed over its terrain, if the level has any.
 ///
-/// The grid is one world-space sheet at a single resolution, so it has to
-/// commit to one voxel size — but the honest input is the resolution of the
-/// terrain the water *sits in*, not the finest resolution anywhere in the
-/// level. A level whose water pools in a coarse segment should not be
-/// simulated at the resolution of some unrelated fine segment across the map:
-/// that costs cells with no gain, since the floor it samples is no finer.
-///
-/// Segments carrying water are found through each body's seed. An ocean covers
-/// everything, so it takes the world's finest and no per-body query applies.
-/// Where several bodies disagree, the finest of them wins: it is the only
-/// choice that resolves every pool's floor.
-fn water_cell_size(water_config: &WaterConfig, terrain: &TerrainWorld) -> f32 {
-    if water_config.ocean_level.is_some() {
-        return resolve_water_cell_size(std::iter::empty(), terrain.voxel_size());
+/// Pools that cannot be placed are logged and skipped; `level_check` reports
+/// them, and any pool authored above where it spills.
+pub fn create_level_water(level: &Level, terrain: &TerrainWorld) -> Option<WaterWorld> {
+    let config = level.water.as_ref()?;
+    let (water, errors) = WaterWorld::from_config(config, terrain);
+    for error in errors {
+        log::warn!("{error}");
     }
-
-    let body_voxel_sizes = water_config.bodies.iter().map(|body| match body {
-        WaterBody::Pool {
-            seed,
-            surface_level,
-        } => terrain.voxel_size_at(Point3::new(seed.0, *surface_level, seed.1)),
-    });
-
-    resolve_water_cell_size(body_voxel_sizes, terrain.voxel_size())
-}
-
-/// Pick a cell size from the voxel sizes of the segments holding water.
-///
-/// Falls back to `world_finest` when no body reports one — an ocean, or a
-/// config with no bodies at all.
-fn resolve_water_cell_size(body_voxel_sizes: impl Iterator<Item = f32>, world_finest: f32) -> f32 {
-    let voxel_size = body_voxel_sizes.reduce(f32::min).unwrap_or(world_finest);
-
-    voxel_size * WATER_GRID_SCALE as f32
-}
-
-/// The dry flow grid a level's water is placed into.
-///
-/// One world-space grid spanning the union of every segment, derived from the
-/// placed terrain rather than from any single segment's authored extent.
-/// Per-segment water grids are deferred; see the plan's open questions.
-///
-/// Public so an offline check can fill one body at a time into a fresh grid
-/// and measure where it went, which the combined grid cannot say.
-pub fn empty_flow_grid(water_config: &WaterConfig, terrain: &TerrainWorld) -> WaterGrid {
-    let bounds = *terrain.bounds();
-    let cell_size = water_cell_size(water_config, terrain);
-    let origin = nalgebra::Vector3::new(bounds.min.x, 0.0, bounds.min.z);
-
-    let grid_width = ((bounds.max.x - bounds.min.x) / cell_size).ceil() as usize;
-    let grid_depth = ((bounds.max.z - bounds.min.z) / cell_size).ceil() as usize;
-
-    let flow_config = WaterGridConfig {
-        cell_size,
-        dims: (grid_width, grid_depth),
-        origin,
-        ocean_level: water_config.ocean_level,
-    };
-    WaterGrid::new(flow_config, &WaterProperties::default())
-}
-
-/// Place one authored body of water into a flow grid.
-pub fn fill_body(grid: &mut WaterGrid, terrain: &TerrainWorld, body: &WaterBody) {
-    match body {
-        WaterBody::Pool {
-            seed,
-            surface_level,
-        } => {
-            crate::water::placer::fill_pool(grid, terrain, *seed, *surface_level);
-        }
-    }
-}
-
-/// Create the water grids from the level's water configuration, if present.
-///
-/// Returns both the coarse flow grid and the fine wave grid. Pool extents are
-/// determined by flood-filling from each body's seed point through terrain
-/// that is air at the target surface level.
-pub fn create_level_water(level: &Level, terrain: &TerrainWorld) -> Option<(WaterGrid, WaveGrid)> {
-    let water_config = level.water.as_ref()?;
-    let properties = WaterProperties::default();
-
-    let mut flow_grid = empty_flow_grid(water_config, terrain);
-    for body in &water_config.bodies {
-        fill_body(&mut flow_grid, terrain, body);
-    }
-
-    let cell_size = flow_grid.cell_size();
-    let (grid_width, grid_depth) = flow_grid.dims();
-    let origin = flow_grid.origin();
-    let wave_cell_size = WAVE_CELL_SIZE;
-    let cells_per_flow_cell = (cell_size / wave_cell_size).round() as usize;
-    let wave_dims = (
-        grid_width * cells_per_flow_cell,
-        grid_depth * cells_per_flow_cell,
-    );
-
-    let wave_config = WaveGridConfig {
-        cell_size: wave_cell_size,
-        dims: wave_dims,
-        origin,
-        cells_per_flow_cell,
-    };
-    let wave_grid = WaveGrid::new(wave_config, &properties);
-
     log::info!(
-        "Water grids created: flow={}x{} (cell_size={:.1}), wave={}x{} (cell_size={:.2}), {} bodies",
-        grid_width,
-        grid_depth,
-        cell_size,
-        wave_dims.0,
-        wave_dims.1,
-        wave_cell_size,
-        water_config.bodies.len(),
+        "Water placed: {} basins, {:.0} m³",
+        water.basins().count(),
+        water.volume()
     );
-
-    Some((flow_grid, wave_grid))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn cell_size_follows_the_segment_holding_the_water() {
-        // A pool in a 1.0-voxel segment gets 2 m cells even where the level
-        // also contains a 0.5-voxel segment elsewhere.
-        assert_eq!(resolve_water_cell_size([1.0].into_iter(), 0.5), 2.0);
-    }
-
-    #[test]
-    fn several_bodies_take_the_finest_of_them() {
-        // The grid is one sheet at one resolution, so it must resolve the
-        // finest floor any of its pools sits on.
-        assert_eq!(
-            resolve_water_cell_size([2.0, 0.5, 1.0].into_iter(), 0.25),
-            1.0
-        );
-    }
-
-    #[test]
-    fn no_bodies_falls_back_to_the_world_finest() {
-        // An ocean covers every segment, so the conservative choice is the only
-        // one that resolves all of them.
-        assert_eq!(resolve_water_cell_size(std::iter::empty(), 0.5), 1.0);
-    }
+    Some(water)
 }

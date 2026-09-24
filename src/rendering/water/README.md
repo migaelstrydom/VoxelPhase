@@ -1,8 +1,9 @@
 # Water Rendering
 
-This module generates and renders the water surface mesh. It reads from the
-simulation grids (`FlowGrid` + `WaveGrid` in `src/water/`) and produces a
-Vulkan draw call each frame.
+This module draws every body of water from a static mesh. Meshes are built
+from the hydrology network's basins (`src/water/`, see
+`docs/WATER_HYDROLOGY_DESIGN.md` §15) when their topology changes, never per
+frame; each draw pushes its body's current level.
 
 ---
 
@@ -31,42 +32,39 @@ occluded by terrain) and fragment shader reads (volumetric depth calculation).
 A subpass dependency ensures all depth writes from subpass 0 complete before
 fragment shader reads in subpass 1.
 
-## Mesh generation
+## Meshes
 
-Each frame, the renderer iterates the `WaveGrid` and emits quads at wave
-resolution (~10cm cells). Only quads where all four corners are wet produce
-geometry.
-
-Per-vertex position:
-
-```
-x = origin.x + i * wave_cell_size
-y = bulk_level(i, j) + wave_displacement(i, j)
-z = origin.z + j * wave_cell_size
-```
-
-`bulk_level` is bilinearly interpolated from the coarse flow grid to avoid
-staircase artifacts at flow cell boundaries. `wave_displacement` comes from
-the 2D wave equation simulation.
-
-Per-vertex normals are computed from the heightfield gradient using central
-differences:
+`BasinMesher` builds one quad per region column of every basin, plus a ring of
+columns just outside it whose ground stands above the water. Columns beyond a
+crest, lower than the water, are left out, so a surface never hangs over the
+hillside below an outlet. The depth test against the terrain cuts the
+shoreline.
 
 ```
-dh/dx = (h[i+1,j] - h[i-1,j]) / (2 * cell_size)
-dh/dz = (h[i,j+1] - h[i,j-1]) / (2 * cell_size)
-normal = normalize(-dh/dx, 1, -dh/dz)
+x, z = column corners (0.5 m lattice)
+y    = the body's level, pushed per draw
+floor (per vertex) = the lowest floor of the column's span
 ```
+
+Quads are grouped into 8 m tiles, one draw per (basin, tile). The mesh key is
+each basin's id and region version: a re-region, merge or split changes it and
+the mesh is rebuilt, then uploaded once into each frame slot's buffers. A
+level change is a push constant.
+
+Anything implementing `WaterScene` can be drawn: `WaterWorld`, and the visual
+bench's fixed `ScenePool`.
 
 ## Push constants
 
-| Offset | Size | Stage    | Contents                          |
-|--------|------|----------|-----------------------------------|
-| 0      | 64   | Vertex   | View matrix (mat4)                |
-| 64     | 64   | Vertex   | Projection matrix (mat4)          |
-| 128    | 16   | Fragment | Camera position (vec3 + padding)  |
-| 144    | 16   | Fragment | Sun direction (vec3 + padding)    |
-| 160    | 16   | Fragment | Near, far planes (vec2 + padding) |
+| Offset | Size | Stage    | Contents                                  |
+|--------|------|----------|-------------------------------------------|
+| 0      | 64   | Vertex   | View matrix (mat4)                        |
+| 64     | 64   | Vertex   | Projection matrix (mat4)                  |
+| 128    | 16   | Vertex   | Body: level (x), rest unused — per draw   |
+| 144    | 16   | Fragment | Camera position (vec3 + padding)          |
+| 160    | 16   | Fragment | Sun direction (vec3 + padding)            |
+| 176    | 16   | Fragment | Near, far planes, time                    |
+| 192    | 16   | Fragment | Screen size, hue preservation, exposure   |
 
 The near and far planes are extracted from the projection matrix at runtime:
 

@@ -1,15 +1,18 @@
 use ash::vk;
-use nalgebra::Vector3;
+use nalgebra::Vector2;
 
-/// Vertex for water mesh rendering.
+/// A water surface vertex. Its height is not stored: every draw pushes its
+/// body's level, so the mesh outlives a change of level.
 #[repr(C)]
-#[derive(Clone, Copy)]
-pub struct WaterVertex {
-    pub position: Vector3<f32>,
-    pub normal: Vector3<f32>,
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BasinVertex {
+    /// World (x, z).
+    pub xz: Vector2<f32>,
+    /// The floor under this vertex, for depth tint and swell attenuation.
+    pub floor: f32,
 }
 
-impl WaterVertex {
+impl BasinVertex {
     pub fn binding_description() -> vk::VertexInputBindingDescription {
         vk::VertexInputBindingDescription {
             binding: 0,
@@ -20,19 +23,17 @@ impl WaterVertex {
 
     pub fn attribute_descriptions() -> [vk::VertexInputAttributeDescription; 2] {
         [
-            // position: vec3
             vk::VertexInputAttributeDescription {
                 location: 0,
                 binding: 0,
-                format: vk::Format::R32G32B32_SFLOAT,
+                format: vk::Format::R32G32_SFLOAT,
                 offset: 0,
             },
-            // normal: vec3
             vk::VertexInputAttributeDescription {
                 location: 1,
                 binding: 0,
-                format: vk::Format::R32G32B32_SFLOAT,
-                offset: std::mem::size_of::<Vector3<f32>>() as u32,
+                format: vk::Format::R32_SFLOAT,
+                offset: std::mem::size_of::<Vector2<f32>>() as u32,
             },
         ]
     }

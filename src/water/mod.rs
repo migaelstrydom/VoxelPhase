@@ -1,27 +1,30 @@
-//! Water simulation system.
+//! Water as a network: stores that hold volume, joined by links that move it.
 //!
-//! Heightfield-based water simulation that sits on top of the voxel terrain.
-//! Water is tracked on a 2D grid in the XZ plane. Each cell stores a volume
-//! and a floor level (the terrain surface it rests on). Flow equalization
-//! between neighbors runs each physics step, but only on active cells.
+//! ```text
+//!   presentation   rendering/water (BasinMesher)      static meshes, levels as uniforms
+//!   interaction    query · buoyancy · coupling        WaterQuery::sample(point)
+//!   network        network · solver · topology        stores, links, ledger
+//!   geometry       geometry                           spans, drainage field
+//! ```
 //!
-//! A fine-resolution wave grid sits on top of the flow grid, running the 2D
-//! wave equation to produce visible surface ripples.
+//! See `docs/WATER_HYDROLOGY_DESIGN.md`.
 
 pub mod buoyancy;
 pub mod coupling;
 pub mod debug;
 pub mod geometry;
-mod grid;
 pub mod ids;
 pub mod network;
-pub mod placer;
-mod properties;
+pub mod query;
 pub mod sleep_tracker;
-mod wave;
+pub mod solver;
+pub mod topology;
+pub mod world;
 
-pub use coupling::{BodySnapshot, SplashEvent, WakeEvent, WaveBodyCoupler, WaveCouplingConfig};
-pub use grid::{WaterCell, WaterGrid, WaterGridConfig};
-pub use properties::WaterProperties;
+pub use coupling::{
+    BodySnapshot, Disturbance, RippleField, SplashEvent, StillSurface, WakeEvent, WaveBodyCoupler,
+    WaveCouplingConfig,
+};
+pub use query::{WaterQuery, WaterSample as WaterPointSample};
 pub use sleep_tracker::WaterSleepTracker;
-pub use wave::{WaveCell, WaveGrid, WaveGridConfig};
+pub use world::{HydrologyConfig, WaterTimings, WaterWorld};

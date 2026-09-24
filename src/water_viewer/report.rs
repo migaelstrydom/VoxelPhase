@@ -17,7 +17,11 @@ pub fn report(run: &Run, every: f32) -> String {
     for name in &run.probe_names {
         let _ = write!(out, " {:>10}", name);
     }
-    let _ = writeln!(out, " {:>12} {:>10} {:>8}", "volume m³", "drift m³", "wet");
+    let _ = writeln!(
+        out,
+        " {:>12} {:>10} {:>10} {:>7}",
+        "volume m³", "discarded", "ledger", "basins"
+    );
 
     let mut next = 0.0f32;
     let last = run.samples.len().saturating_sub(1);
@@ -26,12 +30,12 @@ pub fn report(run: &Run, every: f32) -> String {
             continue;
         }
         next = sample.time + every;
-        out.push_str(&row(run, sample));
+        out.push_str(&row(sample));
     }
     out
 }
 
-fn row(run: &Run, sample: &Sample) -> String {
+fn row(sample: &Sample) -> String {
     let mut out = String::new();
     let _ = write!(out, "  {:>8.2}", sample.time);
     for level in &sample.probes {
@@ -46,10 +50,8 @@ fn row(run: &Run, sample: &Sample) -> String {
     }
     let _ = writeln!(
         out,
-        " {:>12.2} {:>10.3} {:>8}",
-        sample.volume,
-        sample.volume - run.initial_volume,
-        sample.wet_cells
+        " {:>12.2} {:>10.3} {:>10.1e} {:>7}",
+        sample.volume, sample.discarded, sample.ledger_error, sample.basins
     );
     out
 }
@@ -69,12 +71,14 @@ pub fn summary_line(run: &Run) -> String {
         })
         .collect();
     format!(
-        "{:<14} t={:.0}s  {}  volume {:.1} m³ (drift {:+.3})",
+        "{:<14} t={:.0}s  {}  volume {:.1} m³, discarded {:.2}, ledger {:+.1e}, {} basins",
         run.scenario,
         last.time,
         probes.join("  "),
         last.volume,
-        last.volume - run.initial_volume
+        last.discarded,
+        last.ledger_error,
+        last.basins
     )
 }
 
@@ -84,7 +88,7 @@ pub fn write_csv(run: &Run, path: &Path) -> std::io::Result<()> {
     for name in &run.probe_names {
         let _ = write!(out, ",{name}");
     }
-    out.push_str(",volume,wet_cells\n");
+    out.push_str(",volume,discarded,ledger_error,basins\n");
     for sample in &run.samples {
         let _ = write!(out, "{}", sample.time);
         for level in &sample.probes {
@@ -95,7 +99,11 @@ pub fn write_csv(run: &Run, path: &Path) -> std::io::Result<()> {
                 None => out.push(','),
             }
         }
-        let _ = writeln!(out, ",{},{}", sample.volume, sample.wet_cells);
+        let _ = writeln!(
+            out,
+            ",{},{},{},{}",
+            sample.volume, sample.discarded, sample.ledger_error, sample.basins
+        );
     }
     std::fs::write(path, out)
 }

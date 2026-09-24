@@ -1,8 +1,8 @@
 //! Runs a scenario: builds its world, plays its script, records the water.
 
 use crate::terrain::{BlastConfig, TerrainWorld};
+use crate::water::WaterWorld;
 
-use super::legacy::LegacyWater;
 use super::scenario::{Action, Scenario};
 
 /// Water ticks per simulated second. Hydrology runs at a fixed 1/60 s (§10.1).
@@ -31,8 +31,12 @@ pub struct Sample {
     pub probes: Vec<Option<f32>>,
     /// Total water held, in m³.
     pub volume: f64,
-    /// Wet cells.
-    pub wet_cells: usize,
+    /// Basins in the network.
+    pub basins: usize,
+    /// Volume the ledger has booked as discarded so far.
+    pub discarded: f64,
+    /// The ledger's imbalance, m³.
+    pub ledger_error: f64,
 }
 
 /// Something that happened during a run, for the report.
@@ -53,9 +57,24 @@ pub struct Run {
 
 /// Run a scenario to the end of its duration.
 pub fn run(scenario: &Scenario, config: RunConfig) -> Result<Run, String> {
+    run_with_captures(scenario, config, &[], |_, _, _| {})
+}
+
+/// Run a scenario, handing the terrain and water to `capture` at each of
+/// `captures` (simulated seconds, ascending): how a filmstrip is shot from a
+/// run that edits and simulates its own world.
+pub fn run_with_captures(
+    scenario: &Scenario,
+    config: RunConfig,
+    captures: &[f32],
+    mut capture: impl FnMut(f32, &mut TerrainWorld, &mut WaterWorld),
+) -> Result<Run, String> {
     let (level, mut terrain) = scenario.terrain()?;
-    let mut water = LegacyWater::from_level(&level, &terrain)
+    let water_config = level
+        .water
+        .as_ref()
         .ok_or_else(|| format!("scenario {} has no water", scenario.name))?;
+    let (mut water, errors) = WaterWorld::recording(water_config, &terrain);
 
     let dt = 1.0 / TICK_RATE;
     let ticks = (scenario.duration * TICK_RATE).round() as u64;
@@ -71,7 +90,18 @@ pub fn run(scenario: &Scenario, config: RunConfig) -> Result<Run, String> {
         samples: Vec::new(),
         events: Vec::new(),
     };
+    for error in errors {
+        recorded.events.push(Event {
+            time: 0.0,
+            text: error.to_string(),
+        });
+    }
     recorded.samples.push(sample(scenario, &water, 0.0));
+    let mut edits_seen = water.topology_log().len();
+    let mut captures = captures.iter().copied().peekable();
+    while let Some(at) = captures.next_if(|t| *t <= 0.0) {
+        capture(at, &mut terrain, &mut water);
+    }
 
     for tick in 1..=ticks {
         let time = tick as f32 * dt;
@@ -80,9 +110,21 @@ pub fn run(scenario: &Scenario, config: RunConfig) -> Result<Run, String> {
             recorded.events.push(Event { time, text });
         }
         terrain.update();
-        water.tick(&terrain, dt);
+        water.on_terrain_update(&terrain);
+        water.step(dt);
+        let log = water.topology_log();
+        for edit in &log[edits_seen..] {
+            recorded.events.push(Event {
+                time,
+                text: format!("{edit:?}"),
+            });
+        }
+        edits_seen = log.len();
         if tick % per_frame == 0 || tick == ticks {
             recorded.samples.push(sample(scenario, &water, time));
+        }
+        while let Some(at) = captures.next_if(|t| *t <= time) {
+            capture(at, &mut terrain, &mut water);
         }
     }
     Ok(recorded)
@@ -100,15 +142,18 @@ fn apply(terrain: &mut TerrainWorld, action: Action) -> String {
     }
 }
 
-fn sample(scenario: &Scenario, water: &LegacyWater, time: f32) -> Sample {
+fn sample(scenario: &Scenario, water: &WaterWorld, time: f32) -> Sample {
+    let query = water.query();
     Sample {
         time,
         probes: scenario
             .probes
             .iter()
-            .map(|p| water.level_at(p.at))
+            .map(|p| query.sample(p.at).map(|s| s.surface))
             .collect(),
         volume: water.volume(),
-        wet_cells: water.wet_cells(),
+        basins: water.basins().count(),
+        discarded: water.ledger().discarded,
+        ledger_error: water.balance().error(),
     }
 }

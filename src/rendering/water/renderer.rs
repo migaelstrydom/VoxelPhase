@@ -1,33 +1,44 @@
-//! Water surface mesh generation and rendering.
+//! Water surface rendering.
+//!
+//! Meshes are static between topology changes (see [`basin_mesher`]): the
+//! renderer rebuilds its mesh only when a basin's region changes, uploads it
+//! once into each frame slot's buffers, and otherwise only pushes each
+//! body's level per draw.
+//!
+//! [`basin_mesher`]: super::basin_mesher
 
 use std::sync::Arc;
 
 use ash::vk;
 use nalgebra::{Matrix4, Vector3};
 
+use super::basin_mesher::{MeshKey, WaterMesh, WaterScene};
+use super::pipeline::{WaterPipeline, BODY_PUSH_OFFSET, FRAGMENT_PUSH_OFFSET};
+use super::vertex::BasinVertex;
 use crate::core::device::ManagedDevice;
 use crate::core::error::EngineResult;
 use crate::core::vulkan_context::VulkanContext;
 use crate::rendering::in_flight::{FrameSlot, PerFrame, StreamedMesh};
-use crate::water::{WaterGrid, WaveGrid};
 
-use super::pipeline::WaterPipeline;
-use super::vertex::WaterVertex;
+/// One frame slot's copy of the mesh.
+struct SlotMesh {
+    buffers: Option<StreamedMesh>,
+    /// Vertices and indices the buffers have room for.
+    capacity: (usize, usize),
+    /// The mesh version these buffers hold.
+    version: u64,
+}
 
-/// Maximum water quads that can be rendered in a single draw call.
-/// At wave resolution (~10cm cells), a 25m pond produces ~62,500 quads.
-const MAX_WATER_QUADS: usize = 65536;
-
-/// Renders the water surface mesh generated from the wave grid.
-///
-/// Each frame, iterates wet wave cells and emits quads at wave resolution.
-/// The per-vertex Y position is `bulk_level + wave_displacement`, producing
-/// smooth surfaces with visible ripples.
+/// Renders every body of water from its static mesh.
 pub struct WaterRenderer {
     device: Arc<ManagedDevice>,
     pipeline: WaterPipeline,
-    /// Surface mesh buffers, one pair per frame in flight.
-    meshes: PerFrame<StreamedMesh>,
+    mesh: WaterMesh,
+    /// What `mesh` was built from.
+    key: MeshKey,
+    /// Bumped on every rebuild of `mesh`.
+    version: u64,
+    slots: PerFrame<SlotMesh>,
     /// The frame being recorded, as [`Self::begin_frame`] was told.
     slot: FrameSlot,
 }
@@ -42,20 +53,17 @@ impl WaterRenderer {
         let device = Arc::clone(&vulkan_context.device);
         let pipeline =
             WaterPipeline::new(Arc::clone(&device), render_pass, depth_view, color_view)?;
-
-        let vertex_buffer_size =
-            (MAX_WATER_QUADS * 4 * std::mem::size_of::<WaterVertex>()) as vk::DeviceSize;
-        let index_buffer_size =
-            (MAX_WATER_QUADS * 6 * std::mem::size_of::<u32>()) as vk::DeviceSize;
-
-        let meshes = PerFrame::try_new(|_| {
-            StreamedMesh::new(&device, vertex_buffer_size, index_buffer_size)
-        })?;
-
         Ok(Self {
             device,
             pipeline,
-            meshes,
+            mesh: WaterMesh::default(),
+            key: MeshKey::new(),
+            version: 0,
+            slots: PerFrame::new(|_| SlotMesh {
+                buffers: None,
+                capacity: (0, 0),
+                version: 0,
+            }),
             slot: FrameSlot::default(),
         })
     }
@@ -65,12 +73,46 @@ impl WaterRenderer {
         self.slot = slot;
     }
 
-    /// Generate the water mesh from both grids and render it.
+    /// Bring the mesh up to date with the water's topology, and this frame
+    /// slot's buffers up to date with the mesh.
+    fn sync(&mut self, water: &dyn WaterScene) -> EngineResult<()> {
+        let key = water.mesh_key();
+        if key != self.key {
+            self.mesh = water.build_mesh();
+            self.key = key;
+            self.version += 1;
+        }
+        let slot = &mut self.slots[self.slot];
+        if slot.version == self.version {
+            return Ok(());
+        }
+        let needed = (self.mesh.vertices.len(), self.mesh.indices.len());
+        if slot.buffers.is_none() || needed.0 > slot.capacity.0 || needed.1 > slot.capacity.1 {
+            // Grow with headroom, so a re-region that adds a few columns does
+            // not reallocate.
+            let capacity = (
+                (needed.0 + needed.0 / 4).max(1024),
+                (needed.1 + needed.1 / 4).max(1536),
+            );
+            slot.buffers = Some(StreamedMesh::new(
+                &self.device,
+                (capacity.0 * std::mem::size_of::<BasinVertex>()) as vk::DeviceSize,
+                (capacity.1 * std::mem::size_of::<u32>()) as vk::DeviceSize,
+            )?);
+            slot.capacity = capacity;
+        }
+        if let Some(buffers) = &slot.buffers {
+            buffers.upload(&self.mesh.vertices, &self.mesh.indices)?;
+        }
+        slot.version = self.version;
+        Ok(())
+    }
+
+    /// Draw every body of water.
     pub fn render(
         &mut self,
         cb: vk::CommandBuffer,
-        flow_grid: &WaterGrid,
-        wave_grid: &WaveGrid,
+        water: &dyn WaterScene,
         view_matrix: &Matrix4<f32>,
         proj_matrix: &Matrix4<f32>,
         camera_pos: &Vector3<f32>,
@@ -81,14 +123,13 @@ impl WaterRenderer {
         hue_preservation: f32,
         exposure: f32,
     ) -> EngineResult<()> {
-        let (vertices, indices) = Self::generate_mesh(flow_grid, wave_grid);
-        if indices.is_empty() {
+        self.sync(water)?;
+        if self.mesh.draws.is_empty() {
             return Ok(());
         }
-
-        let mesh = &self.meshes[self.slot];
-        mesh.upload(&vertices, &indices)?;
-
+        let Some(mesh) = self.slots[self.slot].buffers.as_ref() else {
+            return Ok(());
+        };
         // Bind pipeline and draw
         unsafe {
             self.device.device.cmd_bind_pipeline(
@@ -124,7 +165,7 @@ impl WaterRenderer {
             let near = p32 / p22;
             let far = p32 / (p22 + 1.0);
 
-            // Push camera_pos, sun_dir, proj params, and screen params (fragment stage, offset 128)
+            // Push camera_pos, sun_dir, proj params, and screen params (fragment stage)
             let frag_push_data: [f32; 16] = [
                 camera_pos.x,
                 camera_pos.y,
@@ -150,7 +191,7 @@ impl WaterRenderer {
                 cb,
                 self.pipeline.layout(),
                 vk::ShaderStageFlags::FRAGMENT,
-                128,
+                FRAGMENT_PUSH_OFFSET,
                 bytemuck_cast_slice(&frag_push_data),
             );
 
@@ -166,271 +207,31 @@ impl WaterRenderer {
 
             mesh.bind(&self.device.device, cb);
 
-            self.device
-                .device
-                .cmd_draw_indexed(cb, indices.len() as u32, 1, 0, 0, 0);
+            for draw in &self.mesh.draws {
+                let Some(level) = water.level(draw.body) else {
+                    continue;
+                };
+                let body: [f32; 4] = [level, 0.0, 0.0, 0.0];
+                self.device.device.cmd_push_constants(
+                    cb,
+                    self.pipeline.layout(),
+                    vk::ShaderStageFlags::VERTEX,
+                    BODY_PUSH_OFFSET,
+                    bytemuck_cast_slice(&body),
+                );
+                self.device.device.cmd_draw_indexed(
+                    cb,
+                    draw.index_count,
+                    1,
+                    draw.first_index,
+                    0,
+                    0,
+                );
+            }
         }
 
         Ok(())
     }
-
-    /// Generate water surface mesh at wave grid resolution.
-    ///
-    /// Iterates wet flow cells and emits quads from their wave cells. For each
-    /// wave cell quad where all four corners are wet, a quad is emitted with
-    /// per-vertex Y = `bulk_level + displacement`. Normals are computed from
-    /// the heightfield gradient for smooth lighting.
-    pub fn generate_mesh(
-        flow_grid: &WaterGrid,
-        wave_grid: &WaveGrid,
-    ) -> (Vec<WaterVertex>, Vec<u32>) {
-        let flow_dims = flow_grid.dims();
-        let wave_dims = wave_grid.dims();
-        let n = wave_grid.cells_per_flow_cell();
-        let cell_area = flow_grid.cell_area();
-        let wave_cs = wave_grid.cell_size();
-        let origin = wave_grid.origin();
-
-        if wave_dims.0 < 2 || wave_dims.1 < 2 {
-            return (Vec::new(), Vec::new());
-        }
-
-        let mut vertices = Vec::with_capacity(MAX_WATER_QUADS * 4);
-        let mut indices = Vec::with_capacity(MAX_WATER_QUADS * 6);
-        let mut quad_count = 0;
-
-        // Iterate flow cells; for each wet flow cell, emit wave-resolution quads.
-        for fj in 0..flow_dims.1 {
-            for fi in 0..flow_dims.0 {
-                let flow_cell = flow_grid.cell(fi, fj);
-                if flow_cell.volume <= 0.0 {
-                    continue;
-                }
-
-                let w_start_i = fi * n;
-                let w_start_j = fj * n;
-                let w_end_i = ((fi + 1) * n).min(wave_dims.0 - 1);
-                let w_end_j = ((fj + 1) * n).min(wave_dims.1 - 1);
-
-                for wj in w_start_j..w_end_j {
-                    for wi in w_start_i..w_end_i {
-                        if quad_count >= MAX_WATER_QUADS {
-                            return (vertices, indices);
-                        }
-
-                        // Skip only if ALL 4 corners are in dry flow cells.
-                        // Quads at the edge of a wet flow cell may have corners
-                        // in dry neighbors; emitting them avoids triangular gaps
-                        // at diagonal shorelines. bulk_level_at handles the dry
-                        // corners gracefully via bilinear interpolation.
-                        if !wave_grid.is_wet(wi, wj, flow_grid)
-                            && !wave_grid.is_wet(wi + 1, wj, flow_grid)
-                            && !wave_grid.is_wet(wi, wj + 1, flow_grid)
-                            && !wave_grid.is_wet(wi + 1, wj + 1, flow_grid)
-                        {
-                            continue;
-                        }
-
-                        let x0 = origin.x + wi as f32 * wave_cs;
-                        let x1 = origin.x + (wi + 1) as f32 * wave_cs;
-                        let z0 = origin.z + wj as f32 * wave_cs;
-                        let z1 = origin.z + (wj + 1) as f32 * wave_cs;
-
-                        // Get bulk levels for each corner (may span flow cells).
-                        let bl00 = bulk_level_at(flow_grid, wave_grid, wi, wj, cell_area);
-                        let bl10 = bulk_level_at(flow_grid, wave_grid, wi + 1, wj, cell_area);
-                        let bl01 = bulk_level_at(flow_grid, wave_grid, wi, wj + 1, cell_area);
-                        let bl11 = bulk_level_at(flow_grid, wave_grid, wi + 1, wj + 1, cell_area);
-
-                        let y00 = bl00 + wave_grid.cell(wi, wj).displacement;
-                        let y10 = bl10 + wave_grid.cell(wi + 1, wj).displacement;
-                        let y01 = bl01 + wave_grid.cell(wi, wj + 1).displacement;
-                        let y11 = bl11 + wave_grid.cell(wi + 1, wj + 1).displacement;
-
-                        // Compute normals from the heightfield gradient at each corner.
-                        let n00 = heightfield_normal(flow_grid, wave_grid, wi, wj, cell_area);
-                        let n10 = heightfield_normal(flow_grid, wave_grid, wi + 1, wj, cell_area);
-                        let n01 = heightfield_normal(flow_grid, wave_grid, wi, wj + 1, cell_area);
-                        let n11 =
-                            heightfield_normal(flow_grid, wave_grid, wi + 1, wj + 1, cell_area);
-
-                        let base = vertices.len() as u32;
-
-                        vertices.push(WaterVertex {
-                            position: Vector3::new(x0, y00, z0),
-                            normal: n00,
-                        });
-                        vertices.push(WaterVertex {
-                            position: Vector3::new(x1, y10, z0),
-                            normal: n10,
-                        });
-                        vertices.push(WaterVertex {
-                            position: Vector3::new(x1, y11, z1),
-                            normal: n11,
-                        });
-                        vertices.push(WaterVertex {
-                            position: Vector3::new(x0, y01, z1),
-                            normal: n01,
-                        });
-
-                        // Two triangles: 0-1-2, 0-2-3
-                        indices.push(base);
-                        indices.push(base + 1);
-                        indices.push(base + 2);
-                        indices.push(base);
-                        indices.push(base + 2);
-                        indices.push(base + 3);
-
-                        quad_count += 1;
-                    }
-                }
-            }
-        }
-
-        (vertices, indices)
-    }
-}
-
-/// Get the smoothed bulk water level at a wave cell position.
-#[inline]
-fn bulk_level_at(
-    flow_grid: &WaterGrid,
-    wave_grid: &WaveGrid,
-    wi: usize,
-    wj: usize,
-    cell_area: f32,
-) -> f32 {
-    let x = wave_grid.origin().x + wi as f32 * wave_grid.cell_size();
-    let z = wave_grid.origin().z + wj as f32 * wave_grid.cell_size();
-    smoothed_bulk_level_at(flow_grid, x, z, cell_area)
-}
-
-/// Sample a smoothed bulk surface from the coarse flow grid.
-///
-/// The flow simulation remains cell-based, but rendering bilinearly blends the
-/// coarse surface levels so the visible water mesh does not inherit the raw
-/// stair-step profile of the authoritative flow grid.
-#[inline]
-fn smoothed_bulk_level_at(flow_grid: &WaterGrid, x: f32, z: f32, cell_area: f32) -> f32 {
-    let flow_dims = flow_grid.dims();
-    if flow_dims.0 == 0 || flow_dims.1 == 0 {
-        return 0.0;
-    }
-
-    let flow_cs = flow_grid.cell_size();
-    let origin = flow_grid.origin();
-
-    let u = (x - origin.x) / flow_cs - 0.5;
-    let v = (z - origin.z) / flow_cs - 0.5;
-    let i0 = u.floor() as i32;
-    let j0 = v.floor() as i32;
-    let tx = u - i0 as f32;
-    let tz = v - j0 as f32;
-
-    let samples = [
-        (i0, j0, (1.0 - tx) * (1.0 - tz)),
-        (i0 + 1, j0, tx * (1.0 - tz)),
-        (i0, j0 + 1, (1.0 - tx) * tz),
-        (i0 + 1, j0 + 1, tx * tz),
-    ];
-
-    let mut weighted_sum = 0.0;
-    let mut total_weight = 0.0;
-
-    for (i, j, weight) in samples {
-        if weight <= 0.0 {
-            continue;
-        }
-
-        if let Some(surface) = flow_surface_level(flow_grid, i, j, cell_area) {
-            weighted_sum += surface * weight;
-            total_weight += weight;
-        }
-    }
-
-    if total_weight > 0.0 {
-        return weighted_sum / total_weight;
-    }
-
-    let nearest_i = u.round() as i32;
-    let nearest_j = v.round() as i32;
-    flow_surface_level(flow_grid, nearest_i, nearest_j, cell_area).unwrap_or(0.0)
-}
-
-#[inline]
-fn flow_surface_level(flow_grid: &WaterGrid, i: i32, j: i32, cell_area: f32) -> Option<f32> {
-    let flow_dims = flow_grid.dims();
-    if i < 0 || j < 0 || i >= flow_dims.0 as i32 || j >= flow_dims.1 as i32 {
-        return None;
-    }
-
-    let cell = flow_grid.cell(i as usize, j as usize);
-    if cell.volume <= 0.0 {
-        return None;
-    }
-
-    Some(cell.surface_level(cell_area))
-}
-
-/// Compute the heightfield normal at a wave cell using central differences.
-///
-/// Uses the rendered surface level (`bulk_level + displacement`) of
-/// neighboring cells to compute the gradient.
-#[inline]
-fn heightfield_normal(
-    flow_grid: &WaterGrid,
-    wave_grid: &WaveGrid,
-    wi: usize,
-    wj: usize,
-    cell_area: f32,
-) -> Vector3<f32> {
-    let wave_dims = wave_grid.dims();
-    let cs = wave_grid.cell_size();
-
-    let h_center = rendered_level(flow_grid, wave_grid, wi, wj, cell_area);
-
-    // Central differences (fall back to forward/backward at boundaries).
-    let dh_dx = if wi > 0 && wi + 1 < wave_dims.0 {
-        let h_left = rendered_level(flow_grid, wave_grid, wi - 1, wj, cell_area);
-        let h_right = rendered_level(flow_grid, wave_grid, wi + 1, wj, cell_area);
-        (h_right - h_left) / (2.0 * cs)
-    } else if wi + 1 < wave_dims.0 {
-        let h_right = rendered_level(flow_grid, wave_grid, wi + 1, wj, cell_area);
-        (h_right - h_center) / cs
-    } else if wi > 0 {
-        let h_left = rendered_level(flow_grid, wave_grid, wi - 1, wj, cell_area);
-        (h_center - h_left) / cs
-    } else {
-        0.0
-    };
-
-    let dh_dz = if wj > 0 && wj + 1 < wave_dims.1 {
-        let h_back = rendered_level(flow_grid, wave_grid, wi, wj - 1, cell_area);
-        let h_front = rendered_level(flow_grid, wave_grid, wi, wj + 1, cell_area);
-        (h_front - h_back) / (2.0 * cs)
-    } else if wj + 1 < wave_dims.1 {
-        let h_front = rendered_level(flow_grid, wave_grid, wi, wj + 1, cell_area);
-        (h_front - h_center) / cs
-    } else if wj > 0 {
-        let h_back = rendered_level(flow_grid, wave_grid, wi, wj - 1, cell_area);
-        (h_center - h_back) / cs
-    } else {
-        0.0
-    };
-
-    Vector3::new(-dh_dx, 1.0, -dh_dz).normalize()
-}
-
-/// Rendered surface level at a wave cell: bulk_level + displacement.
-#[inline]
-fn rendered_level(
-    flow_grid: &WaterGrid,
-    wave_grid: &WaveGrid,
-    wi: usize,
-    wj: usize,
-    cell_area: f32,
-) -> f32 {
-    bulk_level_at(flow_grid, wave_grid, wi, wj, cell_area) + wave_grid.cell(wi, wj).displacement
 }
 
 /// Helper to cast a slice of f32 to bytes.
@@ -440,74 +241,5 @@ fn bytemuck_cast_slice(slice: &[f32]) -> &[u8] {
             slice.as_ptr() as *const u8,
             slice.len() * std::mem::size_of::<f32>(),
         )
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::water::{WaterGridConfig, WaterProperties, WaveGridConfig};
-
-    fn make_flow_grid() -> WaterGrid {
-        let config = WaterGridConfig {
-            cell_size: 2.0,
-            dims: (2, 2),
-            origin: Vector3::new(0.0, 0.0, 0.0),
-            ocean_level: None,
-        };
-        let props = WaterProperties {
-            flow_rate: 4.0,
-            ..Default::default()
-        };
-        WaterGrid::new(config, &props)
-    }
-
-    #[test]
-    fn smoothed_bulk_level_blends_adjacent_flow_cells() {
-        let mut flow_grid = make_flow_grid();
-        let cell_area = flow_grid.cell_area();
-
-        flow_grid.add_water(0, 0, 2.0 * cell_area, 0.0);
-        flow_grid.add_water(1, 0, 6.0 * cell_area, 0.0);
-        flow_grid.add_water(0, 1, 10.0 * cell_area, 0.0);
-        flow_grid.add_water(1, 1, 14.0 * cell_area, 0.0);
-
-        let sample = smoothed_bulk_level_at(&flow_grid, 2.0, 2.0, cell_area);
-
-        assert!(
-            (sample - 8.0).abs() < 1e-4,
-            "Expected bilinear average at the cell-center junction, got {sample}"
-        );
-    }
-
-    #[test]
-    fn bulk_level_at_uses_smoothed_sampling() {
-        let mut flow_grid = make_flow_grid();
-        let cell_area = flow_grid.cell_area();
-
-        flow_grid.add_water(0, 0, 2.0 * cell_area, 0.0);
-        flow_grid.add_water(1, 0, 6.0 * cell_area, 0.0);
-        flow_grid.add_water(0, 1, 10.0 * cell_area, 0.0);
-        flow_grid.add_water(1, 1, 14.0 * cell_area, 0.0);
-
-        let wave_config = WaveGridConfig {
-            cell_size: 1.0,
-            dims: (4, 4),
-            origin: Vector3::new(0.0, 0.0, 0.0),
-            cells_per_flow_cell: 2,
-        };
-        let wave_props = WaterProperties {
-            wave_speed: 4.0,
-            wave_damping: 2.0,
-            ..Default::default()
-        };
-        let wave_grid = WaveGrid::new(wave_config, &wave_props);
-
-        let sample = bulk_level_at(&flow_grid, &wave_grid, 2, 2, cell_area);
-
-        assert!(
-            (sample - 8.0).abs() < 1e-4,
-            "Expected smoothed bulk level at shared wave-grid corner, got {sample}"
-        );
     }
 }

@@ -22,7 +22,7 @@ use crate::rendering::renderer::Renderer;
 use crate::rendering::vertex::Vertex;
 use crate::resources::textures::TextureManager;
 use crate::terrain::{self, TerrainWorld};
-use crate::water::{WaterGrid, WaveGrid};
+use crate::water::WaterWorld;
 use nalgebra::{Matrix4, Vector3};
 use specs::shred::ResourceId;
 use specs::{
@@ -187,8 +187,7 @@ impl<'a> System<'a> for RenderSystem {
         DebugChannels<'a>,
         Read<'a, ParticlePool>,
         Option<Read<'a, TerrainWorld>>,
-        Option<Read<'a, WaterGrid>>,
-        Option<Read<'a, WaveGrid>>,
+        Option<Read<'a, WaterWorld>>,
         ReadStorage<'a, ModelInstance>,
         ReadStorage<'a, MaterialModulation>,
         ReadStorage<'a, Position>,
@@ -215,8 +214,7 @@ impl<'a> System<'a> for RenderSystem {
             mut debug,
             particle_pool,
             terrain_manager_opt,
-            water_grid_opt,
-            wave_grid_opt,
+            water_opt,
             model_instances,
             material_modulations,
             positions,
@@ -457,9 +455,7 @@ impl<'a> System<'a> for RenderSystem {
 
                     // Render water surface (after geometry, before particles)
                     let lap = Instant::now();
-                    if let (Some(ref water_grid), Some(ref wave_grid)) =
-                        (&water_grid_opt, &wave_grid_opt)
-                    {
+                    if let Some(ref water) = water_opt {
                         let camera_pos = Vector3::new(
                             camera_data.position.x,
                             camera_data.position.y,
@@ -467,8 +463,7 @@ impl<'a> System<'a> for RenderSystem {
                         );
                         if let Err(e) = renderer.render_water(
                             draw_cb,
-                            water_grid,
-                            wave_grid,
+                            &**water,
                             &view_matrix,
                             &proj_matrix,
                             &camera_pos,

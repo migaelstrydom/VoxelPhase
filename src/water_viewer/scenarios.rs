@@ -10,7 +10,7 @@ use super::scenario::{Action, Beat, Probe, Scenario};
 
 /// Every scenario, in the order they are worth reading.
 pub fn catalogue() -> Vec<Scenario> {
-    vec![breach(), island_pool(), staircase()]
+    vec![breach(), island_pool(), crater_lake(), staircase()]
 }
 
 pub fn find(name: &str) -> Option<Scenario> {
@@ -31,38 +31,41 @@ pub fn select(name: &str) -> Vec<Scenario> {
         .collect()
 }
 
-/// A pond in a bowl on a hillside. Its downhill rim is blown out at 2 s.
+/// A pond behind a dam on a hillside. The dam is blown out at 2 s.
 ///
-/// The ground falls 8 m across the 64 m map along +x. The bowl's lowest rim
-/// is on the downhill side at about −0.75; the pond stands at −1.5. The charge
-/// cuts a 2.5 m crater into that rim, well below the water line.
+/// The ground falls 12 m across the 64 m map along +x. A bowl centred at
+/// x = −10 holds the pond; a 3 m wall across its downhill rim at x = 4 is the
+/// dam, and lifts the lowest rim to about −2.7. The pond stands at −2.8. The
+/// charge cuts a 3 m crater through the dam's middle, down past the pond's
+/// surface and out to the hillside below it.
 fn breach() -> Scenario {
     Scenario {
         name: "breach",
-        description: "a pond's downhill rim is blown out; it drains down the hill",
+        description: "a pond's dam is blown out; it drains down the hill",
         level: BREACH_LEVEL,
         duration: 60.0,
         beats: vec![Beat {
             at: 2.0,
             action: Action::Blast {
-                centre: Point3::new(-2.5, -0.9, 0.0),
-                radius: 2.5,
+                centre: Point3::new(4.0, -1.5, 0.0),
+                radius: 3.0,
             },
         }],
         probes: vec![
             Probe {
                 name: "pond",
-                at: Point3::new(-14.0, -1.0, 0.0),
+                at: Point3::new(-10.0, -2.0, 0.0),
             },
             Probe {
                 name: "notch",
-                at: Point3::new(-1.0, -2.0, 0.0),
+                at: Point3::new(4.0, -3.0, 0.0),
             },
             Probe {
                 name: "hill",
-                at: Point3::new(12.0, -3.0, 0.0),
+                at: Point3::new(16.0, -5.0, 0.0),
             },
         ],
+        camera: (Point3::new(18.0, 8.0, 18.0), Point3::new(-4.0, -3.0, 0.0)),
     }
 }
 
@@ -77,16 +80,16 @@ Level(
             base_height: 0.0,
             material_layers: [(depth: 999.0, material: Dirt)],
             features: [
-                Ramp(from: (-32.0, 0.0), to: (32.0, 0.0), start_height: 3.0, end_height: -5.0, width: 400.0),
-                Crater(center: (-14.0, 0.0), radius: 12.0, depth: 6.0),
+                Ramp(from: (-32.0, 0.0), to: (32.0, 0.0), start_height: 4.0, end_height: -8.0, width: 400.0),
+                Crater(center: (-10.0, 0.0), radius: 14.0, depth: 5.0),
+                Wall(from: (4.0, -10.0), to: (4.0, 10.0), height: 3.0, thickness: 3.0),
             ],
         ),
     )],
     placements: [Root(segment: "main")],
     player_spawn: (20.0, 0.0, 20.0),
     water: Some((
-        ocean_level: None,
-        bodies: [Pool(seed: (-14.0, 0.0), surface_level: -1.5)],
+        bodies: [Pool(seed: (-10.0, 0.0), surface_level: -2.8)],
     )),
 )
 "#;
@@ -116,6 +119,7 @@ fn island_pool() -> Scenario {
                 at: Point3::new(10.0, -2.0, 0.0),
             },
         ],
+        camera: (Point3::new(22.0, 14.0, 22.0), Point3::new(0.0, 2.0, 0.0)),
     }
 }
 
@@ -174,6 +178,7 @@ fn staircase() -> Scenario {
                 at: Point3::new(24.0, 1.8, 0.0),
             },
         ],
+        camera: (Point3::new(0.0, 20.0, 24.0), Point3::new(0.0, 5.0, 0.0)),
     }
 }
 
@@ -205,6 +210,61 @@ Level(
     water: Some((
         ocean_level: None,
         bodies: [],
+    )),
+)
+"#;
+
+/// A pond in a bowl on flat ground, with a crater blown in its floor at 2 s.
+///
+/// The crater is under water and inside the pond's region: it merges at once,
+/// and the level drops by the crater's volume over the pond's area. Nothing
+/// flows anywhere (§9.3, scenario 6).
+fn crater_lake() -> Scenario {
+    Scenario {
+        name: "crater_lake",
+        description: "a crater is blown in a pond's floor; the level drops, nothing flows",
+        level: CRATER_LAKE_LEVEL,
+        duration: 10.0,
+        beats: vec![Beat {
+            at: 2.0,
+            action: Action::Blast {
+                centre: Point3::new(3.0, -3.5, 0.0),
+                radius: 2.0,
+            },
+        }],
+        probes: vec![
+            Probe {
+                name: "pond",
+                at: Point3::new(-4.0, -2.0, 0.0),
+            },
+            Probe {
+                name: "crater",
+                at: Point3::new(3.0, -4.0, 0.0),
+            },
+        ],
+        camera: (Point3::new(16.0, 10.0, 16.0), Point3::new(0.0, -3.0, 0.0)),
+    }
+}
+
+const CRATER_LAKE_LEVEL: &str = r#"
+Level(
+    name: "water_viewer: crater_lake",
+    segments: [(
+        name: "main",
+        terrain: Terrain(
+            voxel_size: 0.5,
+            bounds: (min: (-32.0, -16.0, -32.0), max: (32.0, 16.0, 32.0)),
+            base_height: 0.0,
+            material_layers: [(depth: 999.0, material: Dirt)],
+            features: [
+                Crater(center: (0.0, 0.0), radius: 14.0, depth: 5.0),
+            ],
+        ),
+    )],
+    placements: [Root(segment: "main")],
+    player_spawn: (20.0, 1.0, 20.0),
+    water: Some((
+        bodies: [Pool(seed: (0.0, 0.0), surface_level: -1.5)],
     )),
 )
 "#;

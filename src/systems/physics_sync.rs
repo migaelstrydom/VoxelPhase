@@ -18,7 +18,7 @@ use crate::physics::{
 use crate::terrain::TerrainWorld;
 use crate::time::Time;
 use crate::water::buoyancy::BuoyancyForceProvider;
-use crate::water::{WaterGrid, WaterSleepTracker, WaveGrid};
+use crate::water::{WaterSleepTracker, WaterWorld};
 
 /// ECS resource wrapping the physics world and its stepping strategy.
 pub struct PhysicsResource {
@@ -282,8 +282,7 @@ impl<'a> System<'a> for PhysicsSyncSystem {
         Write<'a, DebugLog>,
         Write<'a, DebugOverlays>,
         Write<'a, PhysicsImpulseQueue>,
-        Option<Read<'a, WaterGrid>>,
-        Option<Read<'a, WaveGrid>>,
+        Option<Read<'a, WaterWorld>>,
     );
 
     fn run(
@@ -303,8 +302,7 @@ impl<'a> System<'a> for PhysicsSyncSystem {
             mut debug_log,
             mut debug_overlays,
             mut impulse_queue,
-            flow_opt,
-            wave_opt,
+            water_opt,
         ): Self::SystemData,
     ) {
         let frame_dt = time.delta_seconds();
@@ -323,17 +321,17 @@ impl<'a> System<'a> for PhysicsSyncSystem {
 
         let impulses: Vec<_> = impulse_queue.drain().collect();
 
+        let water_query = water_opt.as_deref().map(WaterWorld::query);
+
         // Wake sleeping bodies whose water surface has changed.
-        if let Some(ref flow_grid) = flow_opt {
+        if let Some(ref query) = water_query {
             let sleeping = physics.world.sleeping_bodies();
             for handle in &sleeping {
                 if let Some(body) = physics.world.body(*handle) {
-                    if self.water_sleep_tracker.should_wake(
-                        *handle,
-                        flow_grid,
-                        wave_opt.as_deref(),
-                        body.position(),
-                    ) {
+                    if self
+                        .water_sleep_tracker
+                        .should_wake(*handle, query, body.position())
+                    {
                         physics.world.wake_body(*handle);
                     }
                 }
@@ -341,7 +339,7 @@ impl<'a> System<'a> for PhysicsSyncSystem {
         }
 
         // Build per-substep force providers.
-        let buoyancy_provider = flow_opt.as_ref().map(|flow_grid| {
+        let buoyancy_provider = water_query.as_ref().map(|query| {
             let affected: Vec<_> = (&bodies)
                 .join()
                 .filter_map(|b| {
@@ -349,7 +347,7 @@ impl<'a> System<'a> for PhysicsSyncSystem {
                     body.is_dynamic().then_some(b.0)
                 })
                 .collect();
-            BuoyancyForceProvider::new(flow_grid, wave_opt.as_deref(), affected)
+            BuoyancyForceProvider::new(query, affected)
         });
         let providers: Vec<&dyn SubstepForceProvider> = buoyancy_provider
             .as_ref()
@@ -375,7 +373,7 @@ impl<'a> System<'a> for PhysicsSyncSystem {
 
         // Record water levels for awake buoyant bodies (used next frame
         // to detect surface changes under sleeping bodies).
-        if let Some(ref flow_grid) = flow_opt {
+        if let Some(ref query) = water_query {
             for body_comp in (&bodies).join() {
                 let handle = body_comp.0;
                 if physics.world.is_sleeping(handle) {
@@ -383,12 +381,8 @@ impl<'a> System<'a> for PhysicsSyncSystem {
                 }
                 if let Some(body) = physics.world.body(handle) {
                     if body.is_dynamic() {
-                        self.water_sleep_tracker.record(
-                            handle,
-                            flow_grid,
-                            wave_opt.as_deref(),
-                            body.position(),
-                        );
+                        self.water_sleep_tracker
+                            .record(handle, query, body.position());
                     }
                 }
             }

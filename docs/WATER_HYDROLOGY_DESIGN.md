@@ -1341,6 +1341,39 @@ decided before stage 2.
   stage 4a, so it is booked to `discarded`.
 - The old grid is deleted.
 
+**As built.**
+
+- **The flood** runs in two phases. Under the water, everything connected below
+  the level is one body already; the wet flood takes it all and stops only at
+  outlets. Above the water, the climb follows the design's rule: every descent
+  is a crest. Merge saddles come from merging the wet spans in saddle order
+  (Kruskal), recording each merge of two real depressions. Seed placement then
+  does not matter.
+- **The climb stops** at `max(level, lowest crest of any kind) + 5 cm`, and never
+  more than 0.5 m above the level. A child crest bounds it as well as an outlet,
+  since water spills there. The 0.5 m bound stops a pond drained into a cave
+  system from claiming the flat arena its crests lie on: that re-flood once
+  climbed 132k spans in 42 ms. A basin rising near the top of its region is
+  re-flooded.
+- **Open world edges.** A region span that opens onto the void is an outlet
+  crest at its floor.
+- **Children below the level.** Until weirs exist (stage 4a), the wet flood
+  absorbs an unowned depression under the water at once, so its volume comes
+  out of the level.
+- **Waves** were deleted here, not in stage 3. The old renderer was their only
+  visible output, so buoyancy and the surface are flat until ripple tiles
+  arrive. Splash and wake particles still fire. The coupler disturbs any
+  `RippleField`, which is `StillSurface` for now.
+- **Decisions at the gate.** Skyway's pool is left as authored: it drains off the
+  world at load, and `level_check` reports it. Routing proceeds without
+  centreline hints. Stage 4b re-runs the three routing criteria on a sloped
+  carved-channel scenario, and hints return only if that fails.
+- **Cost** (`water_perf`): a quiet frame is 0.001–0.002 ms of water CPU on every
+  level (baseline 0.37–4.5 ms). Load is 30–110 ms. A blast frame is 0.7–2.5 ms
+  on four levels. thin_ice is 6.7 ms: re-flooding its 17.7k-span lake takes 4.0 ms
+  and rebuilding its mesh 1.4 ms. This is the worst case of §9.2, over budget.
+  Stage 6 takes it on.
+
 ### Stage 3: surface detail
 
 - `Swell`, `RippleTiles` keyed by body, and the fine tile mesh.
@@ -1390,3 +1423,5 @@ This is the stage most likely to need iteration on looks. 4a stands without it.
 | Crates grounding on outlet lips | **Play-testing decides.** Steady head over a 5 m lip is about 8 cm at 0.2 m³/s and about 31 cm at 1.5 m³/s, so river-sized outlets will carry most crates over. |
 | Authored centreline hints | **Spike 0.5b decides.** |
 | Segment streaming | **Not planned.** If it arrives, lazy span building, and fronts waiting at segment borders, come back. |
+| Skyway's pool above its outlet | **Left as authored** (stage 2 gate). It drains off the world at load; `level_check` reports it. |
+| Centreline hints after spike 0.5b | **Not now.** Re-test the routing criteria on a sloped carved channel at stage 4b; hints only if that fails. |

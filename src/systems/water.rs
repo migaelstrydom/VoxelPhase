@@ -1,50 +1,30 @@
-//! System that steps the water simulation and provides debug visualisation.
+//! System that steps the water and turns what bodies do in it into spray.
 
 use nalgebra::{Point3, Vector3, Vector4};
 use rand::Rng;
 use specs::{Join, LendJoin, Read, ReadStorage, System, Write};
 
 use crate::components::{Position, RigidBodyComponent, Velocity};
-use crate::debug::{DebugLines, DebugOverlays};
+use crate::debug::DebugLog;
 use crate::drive::Actuator;
 use crate::particles::{ColourRamp, Particle, ParticleConfig, ParticlePool};
-use crate::rendering::Colour;
 use crate::systems::PhysicsResource;
 use crate::terrain::TerrainWorld;
 use crate::time::Time;
-use crate::water::{BodySnapshot, SplashEvent, WakeEvent, WaterGrid, WaveBodyCoupler, WaveGrid};
+use crate::water::{
+    BodySnapshot, SplashEvent, StillSurface, WakeEvent, WaterWorld, WaveBodyCoupler,
+};
 
-/// Steps the water flow simulation and wave equation each frame.
+/// Steps the water each frame.
 ///
-/// Reads terrain changed_regions to detect floor changes under water, then
-/// advances the flow sim by the frame's delta time. Wave-body coupling
-/// injects disturbances from rigid body interactions before the wave
-/// equation step produces fine-resolution surface ripples.
+/// Catches the water up with any terrain edit the frame made, advances the
+/// hydrology by the frame's delta time, then lets the coupler find bodies
+/// entering or moving through water, for splash and wake spray.
 pub struct WaterSystem;
-
-const WATER_DEBUG_COLOUR: Colour = Colour {
-    r: 0.2,
-    g: 0.5,
-    b: 1.0,
-    a: 0.8,
-};
-
-struct WaterDebugConfig {
-    draw_wet_cells: bool,
-    debug_colour: Colour,
-    sphere_radius: f32,
-}
-
-const WATER_DEBUG_CONFIG: WaterDebugConfig = WaterDebugConfig {
-    draw_wet_cells: false,
-    debug_colour: WATER_DEBUG_COLOUR,
-    sphere_radius: 0.3,
-};
 
 impl<'a> System<'a> for WaterSystem {
     type SystemData = (
-        Option<Write<'a, WaterGrid>>,
-        Option<Write<'a, WaveGrid>>,
+        Option<Write<'a, WaterWorld>>,
         Option<Write<'a, WaveBodyCoupler>>,
         Option<Read<'a, TerrainWorld>>,
         Read<'a, Time>,
@@ -53,8 +33,7 @@ impl<'a> System<'a> for WaterSystem {
         ReadStorage<'a, Position>,
         ReadStorage<'a, Velocity>,
         ReadStorage<'a, Actuator>,
-        Write<'a, DebugOverlays>,
-        Write<'a, DebugLines>,
+        Write<'a, DebugLog>,
         Write<'a, ParticlePool>,
         Read<'a, ParticleConfig>,
     );
@@ -63,7 +42,6 @@ impl<'a> System<'a> for WaterSystem {
         &mut self,
         (
             water_opt,
-            wave_opt,
             coupler_opt,
             terrain_opt,
             time,
@@ -71,77 +49,34 @@ impl<'a> System<'a> for WaterSystem {
             bodies,
             positions,
             velocities,
-            velocity_driven,
-            mut debug_overlays,
-            mut _debug_lines,
+            actuators,
+            mut debug_log,
             mut particle_pool,
             particle_config,
         ): Self::SystemData,
     ) {
-        let Some(mut grid) = water_opt else {
+        let Some(mut water) = water_opt else {
             return;
         };
 
-        let dt = time.delta_seconds();
-
-        // Propagate terrain damage to water floor levels.
         if let Some(ref terrain) = terrain_opt {
-            grid.mark_changed_regions(terrain.changed_regions());
+            water.on_terrain_update(terrain);
         }
+        water.step(time.delta_seconds());
 
-        // Step the flow simulation.
-        let terrain_ref = terrain_opt.as_deref();
-        grid.step(dt, |x, z| {
-            terrain_ref.and_then(|t| t.mesh_surface_height_at(x, z))
-        });
-
-        // Wave-body coupling + wave equation step.
-        if let Some(mut wave_grid) = wave_opt {
-            // Inject wave disturbances from rigid body interactions.
-            if let Some(mut coupler) = coupler_opt {
-                let snapshots = build_body_snapshots(
-                    &physics,
-                    &bodies,
-                    &positions,
-                    &velocities,
-                    &velocity_driven,
-                );
-                coupler.update(&snapshots, &mut wave_grid, &grid);
-
-                for splash in coupler.drain_splash_events() {
-                    spawn_splash_particles(&splash, &particle_config, &mut particle_pool);
-                }
-
-                for wake in coupler.drain_wake_events() {
-                    spawn_wake_particles(&wake, &mut particle_pool);
-                }
+        if let Some(mut coupler) = coupler_opt {
+            let snapshots =
+                build_body_snapshots(&physics, &bodies, &positions, &velocities, &actuators);
+            coupler.update(&snapshots, &mut StillSurface, &water.query());
+            for splash in coupler.drain_splash_events() {
+                spawn_splash_particles(&splash, &particle_config, &mut particle_pool);
             }
-
-            wave_grid.step(dt, &grid);
-        }
-
-        // Debug visualisation: spheres at each wet cell's surface.
-        if WATER_DEBUG_CONFIG.draw_wet_cells {
-            let dims = grid.dims();
-            let cell_area = grid.cell_area();
-
-            for j in 0..dims.1 {
-                for i in 0..dims.0 {
-                    let cell = grid.cell(i, j);
-                    if cell.volume <= 0.0 {
-                        continue;
-                    }
-                    let x = grid.cell_center_x(i);
-                    let z = grid.cell_center_z(j);
-                    let y = cell.surface_level(cell_area);
-                    debug_overlays.add_sphere(
-                        Point3::new(x, y, z),
-                        WATER_DEBUG_CONFIG.sphere_radius,
-                        WATER_DEBUG_CONFIG.debug_colour,
-                    );
-                }
+            for wake in coupler.drain_wake_events() {
+                spawn_wake_particles(&wake, &mut particle_pool);
             }
         }
+
+        water.debug_log(&mut debug_log);
     }
 }
 

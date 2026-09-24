@@ -1,0 +1,166 @@
+//! Static water meshes for basins: built on topology changes, never per frame.
+//!
+//! ```text
+//!   Basin region columns ──▶ one quad per column, plus a ring of columns
+//!   (+ one column under        under the terrain at the waterline
+//!    the terrain)           ──▶ grouped into 8 m tiles, one draw per (basin, tile)
+//! ```
+//!
+//! The surface height is not in the mesh: each draw pushes its basin's level,
+//! so a lake that drains keeps its mesh and only a number changes. The depth
+//! test against the terrain makes the shorelines. Each vertex carries the
+//! floor beneath it, for depth tint and swell attenuation.
+
+use nalgebra::Vector2;
+use rustc_hash::FxHashMap;
+
+use crate::water::geometry::{Column, SpanChunkCoord, CHUNK_COLUMNS, COLUMN_SIZE, ORTHOGONAL};
+use crate::water::ids::StoreId;
+use crate::water::network::Basin;
+use crate::water::WaterWorld;
+
+use super::vertex::BasinVertex;
+
+/// One draw: a basin's quads within one 8 m tile.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WaterDraw {
+    pub body: StoreId,
+    pub tile: SpanChunkCoord,
+    pub first_index: u32,
+    pub index_count: u32,
+}
+
+/// Every basin's surface, in one vertex and index buffer.
+#[derive(Debug, Clone, Default)]
+pub struct WaterMesh {
+    pub vertices: Vec<BasinVertex>,
+    pub indices: Vec<u32>,
+    pub draws: Vec<WaterDraw>,
+}
+
+/// What the mesh was built from: each body and the version of its shape. A
+/// different key means a rebuild.
+pub type MeshKey = Vec<(StoreId, u32)>;
+
+/// Anything the water renderer can draw: bodies with static meshes and a
+/// level each.
+pub trait WaterScene {
+    /// Changes whenever [`Self::build_mesh`] would build something different.
+    fn mesh_key(&self) -> MeshKey;
+    fn build_mesh(&self) -> WaterMesh;
+    /// A body's surface level now.
+    fn level(&self, body: StoreId) -> Option<f32>;
+}
+
+impl WaterScene for WaterWorld {
+    fn mesh_key(&self) -> MeshKey {
+        mesh_key(self.basins())
+    }
+
+    fn build_mesh(&self) -> WaterMesh {
+        build(self.basins())
+    }
+
+    fn level(&self, body: StoreId) -> Option<f32> {
+        WaterWorld::level(self, body)
+    }
+}
+
+/// The mesh key of a set of basins.
+pub fn mesh_key<'a>(basins: impl Iterator<Item = (StoreId, &'a Basin)>) -> MeshKey {
+    basins.map(|(id, b)| (id, b.region_version)).collect()
+}
+
+/// Build the surface of every basin.
+pub fn build<'a>(basins: impl Iterator<Item = (StoreId, &'a Basin)>) -> WaterMesh {
+    let mut mesh = WaterMesh::default();
+    for (id, basin) in basins {
+        append_basin(&mut mesh, id, basin);
+    }
+    mesh
+}
+
+/// A basin's columns with the floor under each, and the ring of columns just
+/// outside it whose ground stands above its highest possible surface: those
+/// are under the terrain at the waterline, and let the depth test cut the
+/// shore cleanly. Columns beyond a crest, lower than the water, are left out.
+fn columns(basin: &Basin) -> Vec<(Column, f32)> {
+    let mut floors: FxHashMap<Column, f32> = FxHashMap::default();
+    for r in &basin.region {
+        let floor = floors.entry(r.span.column).or_insert(f32::INFINITY);
+        *floor = floor.min(r.shape.floor_min);
+    }
+    let crest_columns: rustc_hash::FxHashSet<Column> =
+        basin.crests.iter().map(|c| c.outside.column).collect();
+    let mut ring: Vec<(Column, f32)> = Vec::new();
+    for (&column, &floor) in &floors {
+        for step in ORTHOGONAL {
+            let next = column.offset(step.di, step.dk);
+            if floors.contains_key(&next) || crest_columns.contains(&next) {
+                continue;
+            }
+            ring.push((next, floor));
+        }
+    }
+    let mut out: Vec<(Column, f32)> = floors.into_iter().collect();
+    ring.sort_by(|a, b| a.0.cmp(&b.0));
+    ring.dedup_by(|a, b| a.0 == b.0);
+    out.extend(ring);
+    out.sort_by(|a, b| a.0.chunk().cmp(&b.0.chunk()).then(a.0.cmp(&b.0)));
+    out
+}
+
+/// Corners along each side of a tile.
+const TILE_CORNERS: usize = CHUNK_COLUMNS as usize + 1;
+
+fn append_basin(mesh: &mut WaterMesh, id: StoreId, basin: &Basin) {
+    let columns = columns(basin);
+    let mut corners = [u32::MAX; TILE_CORNERS * TILE_CORNERS];
+    let mut start = 0;
+    while start < columns.len() {
+        let tile = columns[start].0.chunk();
+        let end = start
+            + columns[start..]
+                .iter()
+                .take_while(|(c, _)| c.chunk() == tile)
+                .count();
+        let first_index = mesh.indices.len() as u32;
+        let origin = tile.column(0);
+        // Corners shared between the tile's quads, on the tile's own lattice.
+        corners.fill(u32::MAX);
+        for &(column, floor) in &columns[start..end] {
+            let (li, lk) = (
+                (column.i - origin.i) as usize,
+                (column.k - origin.k) as usize,
+            );
+            let mut corner = |di: usize, dk: usize, mesh: &mut WaterMesh| {
+                let slot = &mut corners[(lk + dk) * TILE_CORNERS + li + di];
+                if *slot == u32::MAX {
+                    mesh.vertices.push(BasinVertex {
+                        xz: Vector2::new(
+                            (column.i + di as i32) as f32 * COLUMN_SIZE,
+                            (column.k + dk as i32) as f32 * COLUMN_SIZE,
+                        ),
+                        floor,
+                    });
+                    *slot = mesh.vertices.len() as u32 - 1;
+                }
+                *slot
+            };
+            let a = corner(0, 0, mesh);
+            let b = corner(1, 0, mesh);
+            let c = corner(1, 1, mesh);
+            let d = corner(0, 1, mesh);
+            // Counter-clockwise seen from above (+y), matching the terrain's
+            // outward winding.
+            mesh.indices.extend_from_slice(&[a, d, c, a, c, b]);
+        }
+        mesh.draws.push(WaterDraw {
+            body: id,
+            tile,
+            first_index,
+            index_count: mesh.indices.len() as u32 - first_index,
+        });
+        start = end;
+    }
+}

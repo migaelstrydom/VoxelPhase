@@ -5,8 +5,7 @@ use std::collections::HashMap;
 
 use nalgebra::Point3;
 
-use super::buoyancy::sample_water;
-use super::{WaterGrid, WaveGrid};
+use super::buoyancy::WaterSurface;
 use crate::physics::RigidBodyHandle;
 
 /// Threshold for water level change that triggers a wake (meters).
@@ -34,11 +33,10 @@ impl WaterSleepTracker {
     pub fn record(
         &mut self,
         handle: RigidBodyHandle,
-        flow_grid: &WaterGrid,
-        wave_grid: Option<&WaveGrid>,
+        water: &dyn WaterSurface,
         position: Point3<f32>,
     ) {
-        if let Some(sample) = sample_water(flow_grid, wave_grid, position.x, position.z) {
+        if let Some(sample) = water.sample(position) {
             self.levels.insert(handle, sample.surface_level);
         } else {
             self.levels.remove(&handle);
@@ -50,14 +48,13 @@ impl WaterSleepTracker {
     pub fn should_wake(
         &self,
         handle: RigidBodyHandle,
-        flow_grid: &WaterGrid,
-        wave_grid: Option<&WaveGrid>,
+        water: &dyn WaterSurface,
         position: Point3<f32>,
     ) -> bool {
         let Some(&stored_level) = self.levels.get(&handle) else {
             return false;
         };
-        match sample_water(flow_grid, wave_grid, position.x, position.z) {
+        match water.sample(position) {
             Some(sample) => (sample.surface_level - stored_level).abs() > WAKE_THRESHOLD,
             // Water disappeared — wake so the body can fall.
             None => true,

@@ -48,8 +48,8 @@ use crate::rendering::target::{
 use crate::rendering::transparency::{BlendedDraw, MeshBounds, TransparentQueue};
 use crate::rendering::vertex::Vertex;
 use crate::rendering::water::WaterRenderer;
+use crate::rendering::water::WaterScene;
 use crate::resources::textures::{TextureHandle, TextureManager};
-use crate::water::{WaterGrid, WaveGrid};
 
 /// Format of the offscreen scene target. Floating point so that emissive
 /// surfaces can carry radiance above 1.0 into the post-processing resolve,
@@ -976,14 +976,13 @@ impl Renderer {
         }
     }
 
-    /// Render the water surface mesh from a `WaterGrid`.
+    /// Render every body of water.
     ///
     /// Should be called after next_subpass but before particles.
     pub fn render_water(
         &mut self,
         cb: vk::CommandBuffer,
-        flow_grid: &WaterGrid,
-        wave_grid: &WaveGrid,
+        water: &dyn WaterScene,
         view_matrix: &Matrix4<f32>,
         proj_matrix: &Matrix4<f32>,
         camera_pos: &Vector3<f32>,
@@ -1016,8 +1015,7 @@ impl Renderer {
         let extent = self.targets.extent;
         self.water_renderer.render(
             cb,
-            flow_grid,
-            wave_grid,
+            water,
             view_matrix,
             proj_matrix,
             camera_pos,

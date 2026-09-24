@@ -144,16 +144,7 @@ impl VisualBench {
         // In the transparent pass, against the depth the scene left behind —
         // the same place and the same order as in a level.
         if let Some(pool) = &shot.water {
-            let (flow_grid, wave_grid) = pool.grids();
-            renderer.render_water(
-                cb,
-                &flow_grid,
-                &wave_grid,
-                &view,
-                &projection,
-                &camera_pos,
-                WATER_TIME,
-            )?;
+            renderer.render_water(cb, pool, &view, &projection, &camera_pos, WATER_TIME)?;
         }
 
         renderer.end_frame(cb, image_index)?;
