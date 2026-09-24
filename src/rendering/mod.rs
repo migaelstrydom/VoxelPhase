@@ -7,6 +7,7 @@ pub mod debug_render;
 pub mod deletion_queue;
 pub mod descriptors;
 pub mod frame;
+pub mod geometry_draw;
 pub mod grain;
 pub mod in_flight;
 pub mod material;

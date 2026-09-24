@@ -27,17 +27,18 @@ use crate::lighting::ActiveLights;
 use crate::model::{Model, Transform};
 use crate::particles::{ParticlePool, ParticleRenderer};
 use crate::rendering::descriptors::DescriptorManager;
-use crate::rendering::frame::{DrawInfo, LightUbo, SceneLighting, SceneUbo};
+use crate::rendering::frame::{LightUbo, SceneLighting, SceneUbo};
+use crate::rendering::geometry_draw::{GeometryDraw, GeometryRecorder, SharedBindings};
 use crate::rendering::in_flight::{FrameSlot, InFlightFrame, PerFrame};
-use crate::rendering::material::{
-    MaterialManager, SurfaceModulation, SurfaceParams, SURFACE_INDEX_OFFSET,
-};
+use crate::rendering::material::{MaterialManager, SurfaceModulation, SurfaceParams};
 use crate::rendering::overlay::{OverlayGeometry, OverlayRenderer};
 use crate::rendering::pipeline::{GraphicsPipeline, GraphicsPipelineConfig};
 use crate::rendering::post::PostProcessRenderer;
 use crate::rendering::profile::{GpuSpan, GpuTimer, RenderProfile, RenderStage};
 use crate::rendering::shadow::map::SHADOW_SAMPLED_LAYOUT;
-use crate::rendering::shadow::{ShadowMap, ShadowRenderer, ShadowVolume, ViewFrustum};
+use crate::rendering::shadow::{
+    CasterBindings, ShadowMap, ShadowRenderer, ShadowVolume, ViewFrustum,
+};
 use crate::rendering::sky::SkyRenderer;
 use crate::rendering::surface_buffer::SurfaceBuffer;
 use crate::rendering::target::frame_targets::DEPTH_FORMAT;
@@ -142,6 +143,16 @@ fn camera_forward(view: &Matrix4<f32>) -> Vector3<f32> {
 ///
 /// This is a thin layer that coordinates the pipeline, output, frame targets,
 /// frame data and descriptor management to render frames.
+/// An opaque draw held back until the scene's draws are recorded, so that a
+/// run of them shares one set of bindings.
+#[derive(Clone, Copy, Debug)]
+struct HeldDraw {
+    /// The draw itself.
+    geometry: GeometryDraw,
+    /// Whether the debug backface wireframe goes over it.
+    wireframe: bool,
+}
+
 pub struct Renderer {
     pub pipeline: GraphicsPipeline,
     /// Where finished frames go. Boxed rather than generic so that a caller
@@ -169,6 +180,9 @@ pub struct Renderer {
     pub shadow: ShadowRenderer,
     /// Active fire instances with their GPU resources. Keyed by entity index.
     pub active_fires: Vec<(specs::Entity, ActiveFire)>,
+    /// Opaque scene draws, in the order they were issued, held back to be
+    /// recorded together at the end of the opaque pass.
+    opaque_draws: Vec<HeldDraw>,
     /// Blended scene draws held back for the sorted flush at the end of the
     /// opaque pass.
     transparent_queue: TransparentQueue,
@@ -343,6 +357,7 @@ impl Renderer {
             post_process,
             shadow,
             active_fires: Vec::new(),
+            opaque_draws: Vec::new(),
             transparent_queue: TransparentQueue::new(),
             camera_pos: Vector3::zeros(),
             lighting: SceneLighting::default(),
@@ -398,6 +413,7 @@ impl Renderer {
         // Must be rewound with the buffers it indexes into: a held-over entry
         // would point at geometry that is about to be overwritten.
         self.transparent_queue.begin_frame();
+        self.opaque_draws.clear();
         self.particle_renderer.begin_frame(slot);
         self.overlay.begin_frame(slot);
         self.water_renderer.begin_frame(slot);
@@ -696,30 +712,15 @@ impl Renderer {
         )
     }
 
-    /// Record a mesh into the sun shadow pass.
+    /// Commit a mesh to the frame, and hold its draw back or record it.
     ///
-    /// The mesh data is already in this frame's vertex and index buffers — the
-    /// geometry draw that owns it put it there — so this costs one more draw
-    /// call and no extra upload.
-    fn record_shadow_caster(&self, model: &Matrix4<f32>, draw_info: &DrawInfo) {
-        self.shadow.record_caster(
-            self.vulkan_context.device(),
-            model,
-            draw_info,
-            self.frame().data.vertex_buffer.buffer,
-            self.frame().data.index_buffer.buffer,
-            self.descriptors.scene_set(self.slot),
-        );
-    }
-
-    /// Commit a mesh to the frame and record it, or hold it back.
-    ///
-    /// Everything a draw needs is committed here either way — the geometry
-    /// into the frame's buffers, the shading parameters into its surface
-    /// table, the caster into the shadow pass — because all three are
-    /// order-independent. Only the *recording* of the colour draw depends on
-    /// what else the frame contains, and only for blended surfaces, so only
-    /// that part is deferred.
+    /// Everything a draw needs is committed here — the geometry into the
+    /// frame's buffers, the shading parameters into its surface table, the
+    /// caster into the shadow pass. Scene draws are then held back and
+    /// recorded together at the end of the opaque pass: blended ones because
+    /// their order depends on what else the frame contains, opaque ones so a
+    /// run of them shares one set of bindings. Overlay draws land after the
+    /// scene is resolved and are recorded where they are issued.
     fn draw_mesh_internal(
         &mut self,
         cb: vk::CommandBuffer,
@@ -753,11 +754,9 @@ impl Renderer {
         // solid shadow. Whether that is better or worse than none is the
         // material's call, not the pass's — a cloudy block wants the shadow,
         // a window would only put a hard black bite behind itself.
-        if options.casts_shadow && surface.transparency.casts_shadow() {
-            self.record_shadow_caster(model, &draw_info);
-            if self.shadow.enabled {
-                self.profile.counters.shadow_casters += 1;
-            }
+        if options.casts_shadow && surface.transparency.casts_shadow() && self.shadow.enabled {
+            self.shadow.add_caster(model, &draw_info);
+            self.profile.counters.shadow_casters += 1;
         }
 
         let texture_set = texture_manager
@@ -767,7 +766,13 @@ impl Renderer {
                 reason: format!("descriptor set creation: {}", e),
             })?;
 
-        let blended = BlendedDraw::new(*model, draw_info, surface_index, texture_set);
+        let geometry = GeometryDraw {
+            model: *model,
+            draw: draw_info,
+            surface_index,
+            texture_set,
+        };
+        let wireframe = options.wireframe_overlay && self.debug_wireframe_backfaces;
 
         // A material that lets light through overrides the scene pass it was
         // asked for. The call site does not know what it is drawing — a model
@@ -783,18 +788,29 @@ impl Renderer {
         match pass {
             DrawPass::SceneBlended => {
                 self.profile.counters.blended_draws += 1;
-                self.transparent_queue
-                    .push(blended.sorted_from(&self.camera_pos, &MeshBounds::of(vertices)));
+                self.transparent_queue.push(
+                    BlendedDraw::new(geometry)
+                        .sorted_from(&self.camera_pos, &MeshBounds::of(vertices)),
+                );
             }
             DrawPass::Opaque => {
                 self.profile.counters.opaque_draws += 1;
-                self.record_geometry_draw(cb, self.pipeline.opaque, &blended);
-                self.record_wireframe_overlay(cb, &blended, options);
+                self.opaque_draws.push(HeldDraw {
+                    geometry,
+                    wireframe,
+                });
             }
             DrawPass::Overlay => {
                 self.profile.counters.overlay_draws += 1;
-                self.record_geometry_draw(cb, self.pipeline.transparent, &blended);
-                self.record_wireframe_overlay(cb, &blended, options);
+                let mut recorder = self.geometry_recorder(cb);
+                recorder.draw(self.pipeline.transparent, &geometry);
+                if wireframe {
+                    recorder.overdraw(
+                        self.pipeline.wireframe_backface,
+                        self.wireframe_color,
+                        &geometry,
+                    );
+                }
             }
         }
 
@@ -820,15 +836,37 @@ impl Renderer {
         }
     }
 
-    /// Record the frame's blended surfaces, farthest first.
+    /// A recorder of geometry draws into `cb`, over this frame's bindings.
+    ///
+    /// The frame's mesh buffers are read when the recorder is made, so one
+    /// made after the last append binds buffers that hold every mesh — a
+    /// buffer that grows carries what it held across (see `FrameData`).
+    fn geometry_recorder(&self, cb: vk::CommandBuffer) -> GeometryRecorder<'_> {
+        let data = &self.frame().data;
+        GeometryRecorder::new(
+            self.vulkan_context.device(),
+            cb,
+            self.pipeline.layout,
+            SharedBindings {
+                extent: self.targets.extent,
+                scene_set: self.descriptors.scene_set(self.slot),
+                vertex_buffer: data.vertex_buffer.buffer,
+                index_buffer: data.index_buffer.buffer,
+            },
+        )
+    }
+
+    /// Record the frame's held scene draws: the opaque ones in the order they
+    /// were issued, then the blended ones farthest first.
     ///
     /// Call once, after the last opaque draw and before the opaque pass ends —
     /// these draws go into the HDR scene target, so that glass is exposed,
     /// tonemapped and bloomed with everything behind it rather than pasted on
     /// after the resolve.
     ///
-    /// Two streams are merged here, both ordered by distance from the camera:
-    /// the blended meshes held back by the queue, and the frame's particles.
+    /// Two blended streams are merged here, both ordered by distance from the
+    /// camera: the blended meshes held back by the queue, and the frame's
+    /// particles.
     ///
     /// ```text
     ///   geometry:  ────────■──────────────■────────────▶ near
@@ -841,25 +879,39 @@ impl Renderer {
     /// and one in front is composited over the glass. Drawing all the particles
     /// on either side of the glass gets one of those two cases wrong.
     ///
-    /// Each mesh is recorded twice, back faces then front faces. Sorting can
-    /// only order whole draws, and a closed mesh contains its own far and near
-    /// surfaces; splitting them by cull mode is what puts those two in order.
-    fn flush_scene_transparency(&mut self, cb: vk::CommandBuffer) {
-        if self.transparent_queue.is_empty() && self.particle_renderer.is_empty() {
-            return;
-        }
-
+    /// Each blended mesh is recorded twice, back faces then front faces.
+    /// Sorting can only order whole draws, and a closed mesh contains its own
+    /// far and near surfaces; splitting them by cull mode is what puts those
+    /// two in order.
+    fn record_scene_draws(&mut self, cb: vk::CommandBuffer) {
         // Taken out of the queue so the recording loop is not holding a borrow
         // of `self` through calls that need `&self` for the device.
-        let draws: Vec<BlendedDraw> = self.transparent_queue.sorted().to_vec();
+        let blended: Vec<BlendedDraw> = self.transparent_queue.sorted().to_vec();
         let exposure = self.post_process.config.exposure;
+        let pipeline = &self.pipeline;
+        let mut recorder = self.geometry_recorder(cb);
+
+        for held in &self.opaque_draws {
+            recorder.draw(pipeline.opaque, &held.geometry);
+            if held.wireframe {
+                recorder.overdraw(
+                    pipeline.wireframe_backface,
+                    self.wireframe_color,
+                    &held.geometry,
+                );
+            }
+        }
+
+        if blended.is_empty() && self.particle_renderer.is_empty() {
+            return;
+        }
 
         // The particle pipeline takes its viewport dynamically and the flush
         // may record a particle before any mesh has set one.
         self.set_full_viewport(cb);
 
         let mut particles_drawn = 0;
-        for draw in &draws {
+        for draw in &blended {
             // Everything behind this mesh goes down before it does.
             let behind = self.particle_renderer.count_beyond(draw.depth_key());
             if behind > particles_drawn {
@@ -867,10 +919,11 @@ impl Renderer {
                 self.particle_renderer
                     .draw_range(cb, particles_drawn, behind);
                 particles_drawn = behind;
+                recorder.interrupted();
             }
 
-            self.record_geometry_draw(cb, self.pipeline.scene_blended_back, draw);
-            self.record_geometry_draw(cb, self.pipeline.scene_blended_front, draw);
+            recorder.draw(pipeline.scene_blended_back, &draw.geometry);
+            recorder.draw(pipeline.scene_blended_front, &draw.geometry);
         }
 
         if !self.particle_renderer.is_empty() {
@@ -880,150 +933,6 @@ impl Renderer {
         }
     }
 
-    /// Bind the given pipeline and issue one mesh's draw call.
-    ///
-    /// The shared tail of every geometry draw, whichever pass and whenever it
-    /// was decided: state that varies per draw is pushed here, and nothing
-    /// about it depends on when the draw was committed.
-    fn record_geometry_draw(
-        &self,
-        cb: vk::CommandBuffer,
-        pipeline: vk::Pipeline,
-        draw: &BlendedDraw,
-    ) {
-        let device = self.vulkan_context.device();
-
-        unsafe {
-            device.cmd_bind_pipeline(cb, vk::PipelineBindPoint::GRAPHICS, pipeline);
-
-            // Set dynamic state
-            let viewports = [vk::Viewport {
-                x: 0.0,
-                y: 0.0,
-                width: self.targets.extent.width as f32,
-                height: self.targets.extent.height as f32,
-                min_depth: 0.0,
-                max_depth: 1.0,
-            }];
-            let scissors = [self.targets.extent.into()];
-
-            device.cmd_set_viewport(cb, 0, &viewports);
-            device.cmd_set_scissor(cb, 0, &scissors);
-
-            // Push model matrix (per-draw data)
-            let model_bytes: &[u8] = std::slice::from_raw_parts(
-                draw.model.as_ptr() as *const u8,
-                std::mem::size_of::<Matrix4<f32>>(),
-            );
-            device.cmd_push_constants(
-                cb,
-                self.pipeline.layout,
-                // The range is declared for both stages — the fragment shader
-                // reads the model rotation to place an object-space grain — so
-                // the push must name both, even though only the vertex stage
-                // uses it here.
-                PUSH_CONSTANT_STAGES,
-                0,
-                model_bytes,
-            );
-
-            // Push color override (alpha=0 means use normal rendering)
-            let no_override: [f32; 4] = [0.0, 0.0, 0.0, 0.0];
-            let override_bytes: &[u8] = std::slice::from_raw_parts(
-                no_override.as_ptr() as *const u8,
-                std::mem::size_of::<[f32; 4]>(),
-            );
-            device.cmd_push_constants(
-                cb,
-                self.pipeline.layout,
-                PUSH_CONSTANT_STAGES,
-                64,
-                override_bytes,
-            );
-
-            // Push where this draw's parameters landed in the surface table.
-            // The parameters themselves went into the table above; only this
-            // index travels through the push constants.
-            device.cmd_push_constants(
-                cb,
-                self.pipeline.layout,
-                PUSH_CONSTANT_STAGES,
-                SURFACE_INDEX_OFFSET,
-                &draw.surface_index.as_bytes(),
-            );
-
-            // Bind descriptor sets
-            let descriptor_sets = [self.descriptors.scene_set(self.slot), draw.texture_set];
-            device.cmd_bind_descriptor_sets(
-                cb,
-                vk::PipelineBindPoint::GRAPHICS,
-                self.pipeline.layout,
-                0,
-                &descriptor_sets,
-                &[],
-            );
-
-            // Bind vertex and index buffers
-            let data = &self.frame().data;
-            device.cmd_bind_vertex_buffers(cb, 0, &[data.vertex_buffer.buffer], &[0]);
-            device.cmd_bind_index_buffer(cb, data.index_buffer.buffer, 0, vk::IndexType::UINT32);
-
-            device.cmd_draw_indexed(
-                cb,
-                draw.draw.index_count,
-                1,
-                draw.draw.first_index,
-                draw.draw.vertex_offset,
-                0,
-            );
-        }
-    }
-
-    /// Re-draw a mesh's backfaces in wireframe, when that debug mode is on.
-    ///
-    /// Follows the mesh's own draw and reuses everything it just bound, so
-    /// only the pipeline and the colour override change.
-    fn record_wireframe_overlay(
-        &self,
-        cb: vk::CommandBuffer,
-        draw: &BlendedDraw,
-        options: DrawOptions,
-    ) {
-        if !options.wireframe_overlay || !self.debug_wireframe_backfaces {
-            return;
-        }
-
-        let device = self.vulkan_context.device();
-
-        unsafe {
-            device.cmd_bind_pipeline(
-                cb,
-                vk::PipelineBindPoint::GRAPHICS,
-                self.pipeline.wireframe_backface,
-            );
-
-            let color_bytes: &[u8] = std::slice::from_raw_parts(
-                self.wireframe_color.as_ptr() as *const u8,
-                std::mem::size_of::<[f32; 4]>(),
-            );
-            device.cmd_push_constants(
-                cb,
-                self.pipeline.layout,
-                PUSH_CONSTANT_STAGES,
-                64,
-                color_bytes,
-            );
-
-            device.cmd_draw_indexed(
-                cb,
-                draw.draw.index_count,
-                1,
-                draw.draw.first_index,
-                draw.draw.vertex_offset,
-                0,
-            );
-        }
-    }
     /// End the opaque render pass, resolve the HDR scene onto the output image
     /// (tonemap + bloom), and begin the transparent render pass.
     ///
@@ -1040,10 +949,10 @@ impl Renderer {
     /// image in `COLOR_ATTACHMENT_OPTIMAL`, so no manual barriers are needed
     /// between the three passes.
     pub fn begin_transparent_pass(&mut self, cb: vk::CommandBuffer, image_index: u32) {
-        let flush = Instant::now();
-        self.flush_scene_transparency(cb);
+        let scene_draws = Instant::now();
+        self.record_scene_draws(cb);
         self.profile
-            .record(RenderStage::TransparencyFlush, flush.elapsed());
+            .record(RenderStage::SceneDraws, scene_draws.elapsed());
 
         let device = self.vulkan_context.device();
         let extent = self.targets.extent;
@@ -1204,7 +1113,7 @@ impl Renderer {
     ///
     /// Records nothing itself. Particles are blended surfaces in the scene, so
     /// they belong in the same sorted flush as glass and ice — see
-    /// [`Self::flush_scene_transparency`] — and that flush cannot run until
+    /// [`Self::record_scene_draws`] — and that flush cannot run until
     /// every blended draw of the frame is known.
     pub fn submit_particles(
         &mut self,
@@ -1290,9 +1199,17 @@ impl Renderer {
         let in_flight = &self.frames[self.slot];
         in_flight.command_buffer.end()?;
 
-        // Closes the pass that has been collecting casters alongside every
-        // opaque draw this frame.
-        self.shadow.end_frame(&in_flight.timer)?;
+        // Records the casters collected alongside every opaque draw this
+        // frame, now that the buffers hold all of them, and closes the pass.
+        self.shadow.end_frame(
+            self.vulkan_context.device(),
+            &in_flight.timer,
+            CasterBindings {
+                scene_set: self.descriptors.scene_set(self.slot),
+                vertex_buffer: in_flight.data.vertex_buffer.buffer,
+                index_buffer: in_flight.data.index_buffer.buffer,
+            },
+        )?;
 
         // Only a swapchain acquire produces semaphores to synchronize against;
         // an engine-owned image is ready the moment it is asked for, and the

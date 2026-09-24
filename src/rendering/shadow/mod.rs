@@ -9,5 +9,5 @@ pub mod volume;
 
 pub use frustum::{FrustumSlice, ViewFrustum};
 pub use map::ShadowMap;
-pub use renderer::ShadowRenderer;
+pub use renderer::{CasterBindings, ShadowRenderer};
 pub use volume::{ShadowFraming, ShadowVolume};

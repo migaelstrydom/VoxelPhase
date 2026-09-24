@@ -5,8 +5,10 @@
 ///                └─ Acquire     (the next output image)
 ///   record ──────┬─ Setup       (scene, lights, sky)
 ///                ├─ Terrain · Models · Rigs · DebugShapes
+///                │              (upload, and hold each draw back)
 ///                ├─ Particles   (sort, build billboards, upload)
-///                ├─ TransparencyFlush (sorted blended draws + particles)
+///                ├─ SceneDraws  (record the held draws: opaque, then
+///                │               sorted blended draws + particles)
 ///                └─ Water · Fire · Overlay
 ///   end_frame ───── Submit      (submit and present)
 /// ```
@@ -23,7 +25,7 @@ pub enum RenderStage {
     Rigs,
     DebugShapes,
     Particles,
-    TransparencyFlush,
+    SceneDraws,
     Water,
     Fire,
     Overlay,
@@ -43,7 +45,7 @@ impl RenderStage {
         RenderStage::Rigs,
         RenderStage::DebugShapes,
         RenderStage::Particles,
-        RenderStage::TransparencyFlush,
+        RenderStage::SceneDraws,
         RenderStage::Water,
         RenderStage::Fire,
         RenderStage::Overlay,
@@ -60,7 +62,7 @@ impl RenderStage {
             RenderStage::Rigs => "rigs",
             RenderStage::DebugShapes => "debug_shapes",
             RenderStage::Particles => "particles",
-            RenderStage::TransparencyFlush => "transparency_flush",
+            RenderStage::SceneDraws => "scene_draws",
             RenderStage::Water => "water",
             RenderStage::Fire => "fire",
             RenderStage::Overlay => "overlay",

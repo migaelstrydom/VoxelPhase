@@ -7,12 +7,12 @@
 //! blended surface does not write depth, and so has nothing to resolve it with.
 //! The order it is *recorded* in is the order it is composited in.
 //!
-//! So blended geometry cannot be drawn as it is encountered. It is collected
-//! here instead, sorted, and recorded in one flush after the last opaque draw:
+//! So blended geometry cannot be drawn in the order it is encountered. It is
+//! collected here instead, sorted, and recorded after the last opaque draw:
 //!
 //! ```text
-//!   draw_mesh ─┬─ opaque  ──────────────────────▶ recorded now
-//!              └─ blended ──▶ TransparentQueue ──▶ sorted ──▶ recorded at flush
+//!   draw_mesh ─┬─ opaque  ──▶ held, in issue order ──────────▶ recorded at flush, first
+//!              └─ blended ──▶ TransparentQueue ──▶ sorted ──▶ recorded at flush, after
 //!                                  (far to near)
 //! ```
 //!
@@ -36,33 +36,20 @@
 //! peeling, or a weighted blend), which is a different and much more expensive
 //! apparatus than this one.
 
-use ash::vk;
-use nalgebra::{Matrix4, Vector3};
+use nalgebra::Vector3;
 
-use crate::rendering::frame::DrawInfo;
-use crate::rendering::surface_buffer::SurfaceIndex;
+use crate::rendering::geometry_draw::GeometryDraw;
 use crate::rendering::vertex::Vertex;
 
 /// One blended draw, held back for the sorted flush.
 ///
-/// Everything here is plain data that has already been committed to the
-/// frame — the vertices are in the frame's buffers and the shading parameters
-/// are in its surface table — so holding a draw costs no borrow of the mesh it
-/// came from, and the flush needs nothing but this struct to record it.
+/// Holding a draw costs no borrow of the mesh it came from: the geometry is
+/// already committed to the frame, and this is all the flush needs to record
+/// it and put it in order.
 #[derive(Clone, Copy, Debug)]
 pub struct BlendedDraw {
-    /// Model matrix, pushed as this draw's vertex transform.
-    pub model: Matrix4<f32>,
-
-    /// Where this draw's geometry landed in the frame's vertex and index
-    /// buffers.
-    pub draw: DrawInfo,
-
-    /// Where its shading parameters landed in the frame's surface table.
-    pub surface_index: SurfaceIndex,
-
-    /// The descriptor set holding its albedo texture.
-    pub texture_set: vk::DescriptorSet,
+    /// The draw itself, as recorded at the flush.
+    pub geometry: GeometryDraw,
 
     /// Squared distance from the camera to the mesh's world-space centre.
     ///
@@ -80,7 +67,7 @@ impl BlendedDraw {
     /// its vertex average towards the detail and away from where the object
     /// visibly is.
     pub fn sorted_from(mut self, camera_pos: &Vector3<f32>, bounds: &MeshBounds) -> Self {
-        let centre = self.model.transform_point(&bounds.centre().into());
+        let centre = self.geometry.model.transform_point(&bounds.centre().into());
         self.depth_key = (centre.coords - camera_pos).norm_squared();
         self
     }
@@ -95,17 +82,9 @@ impl BlendedDraw {
     /// A draw with no sort key yet. Recorded first if never given one, which
     /// is the safe default: a queue that silently dropped an unsorted draw
     /// would be much harder to notice than one that mis-orders it.
-    pub fn new(
-        model: Matrix4<f32>,
-        draw: DrawInfo,
-        surface_index: SurfaceIndex,
-        texture_set: vk::DescriptorSet,
-    ) -> Self {
+    pub fn new(geometry: GeometryDraw) -> Self {
         Self {
-            model,
-            draw,
-            surface_index,
-            texture_set,
+            geometry,
             depth_key: f32::INFINITY,
         }
     }
@@ -203,7 +182,11 @@ impl TransparentQueue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nalgebra::{Vector2, Vector4};
+    use ash::vk;
+    use nalgebra::{Matrix4, Vector2, Vector4};
+
+    use crate::rendering::frame::DrawInfo;
+    use crate::rendering::surface_buffer::SurfaceIndex;
 
     fn vertex(pos: Vector3<f32>) -> Vertex {
         Vertex {
@@ -220,16 +203,16 @@ mod tests {
             vertex(Vector3::new(-1.0, -1.0, -1.0)),
             vertex(Vector3::new(1.0, 1.0, 1.0)),
         ];
-        BlendedDraw::new(
-            Matrix4::new_translation(&position),
-            DrawInfo {
+        BlendedDraw::new(GeometryDraw {
+            model: Matrix4::new_translation(&position),
+            draw: DrawInfo {
                 index_count: 3,
                 first_index: 0,
                 vertex_offset: 0,
             },
-            SurfaceIndex(0),
-            vk::DescriptorSet::null(),
-        )
+            surface_index: SurfaceIndex(0),
+            texture_set: vk::DescriptorSet::null(),
+        })
         .sorted_from(&camera, &MeshBounds::of(&cube))
     }
 
@@ -243,7 +226,11 @@ mod tests {
         queue.push(draw_at(Vector3::new(0.0, 0.0, 50.0), camera));
         queue.push(draw_at(Vector3::new(0.0, 0.0, 20.0), camera));
 
-        let order: Vec<f32> = queue.sorted().iter().map(|d| d.model[(2, 3)]).collect();
+        let order: Vec<f32> = queue
+            .sorted()
+            .iter()
+            .map(|d| d.geometry.model[(2, 3)])
+            .collect();
         assert_eq!(order, vec![50.0, 20.0, 5.0]);
     }
 
@@ -259,7 +246,7 @@ mod tests {
         queue.push(draw_at(near, camera));
         queue.push(draw_at(far, camera));
 
-        let first = queue.sorted()[0].model;
+        let first = queue.sorted()[0].geometry.model;
         assert_eq!(first[(0, 3)], 40.0);
     }
 
