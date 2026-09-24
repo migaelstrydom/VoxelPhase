@@ -71,15 +71,24 @@ disagreed.
 | wrecking_yard | 0.16 / 0.22 ms | 0.97 ms | 1.1 ms | 4.6 ms |
 
 - **Settled water is already cheap to simulate.** The avoidable cost is the renderer
-  rebuilding and uploading the mesh every frame: up to 4.2 ms on a quiet frame.
+  rebuilding the mesh every frame: up to 4.2 ms on a quiet frame. A profile of thin_ice
+  (`sample`) puts about 95% of that stage in `generate_mesh`, which is pure computation.
+  - It recomputes each corner's normal from smoothed levels once per quad, and
+    neighbouring quads share corners, so each corner's normal is computed up to four times.
+  - It allocates about 7.8 MB of `Vec`s every frame.
+
+  The upload itself is about 0.2 ms.
 - **No stopgap in the old renderer.** A dirty flag would skip rebuilds on quiet frames, but
   thin_ice's floating ice keeps its waves busy, and thin_ice is the level that would
   motivate one.
-- **Measurement caveat.** `render_perf`'s `cpu/water` is 10.6 ms on thin_ice whenever both
-  `--worst 300` and `--csv` are passed, and 4.2 ms otherwise, deterministically, with every
-  other stage unchanged. Those flags are read only after the run, so the likely cause is
-  memory layout interacting with the per-frame upload into mapped memory. The table uses
-  runs without `--csv`. The anomaly belongs to `render_perf` and is tracked separately.
+- **Measurement note.** One earlier build of `render_perf` reported `cpu/water` on
+  thin_ice as 10.6 ms whenever `--worst 300` and `--csv` were both passed. It did so over
+  six interleaved runs, with every other stage unchanged.
+  - It did not reproduce on a later build, with any flag combination or path length. The
+    numbers above match the later build.
+  - The cause is unknown. It was not the upload, which is too small (see the profile
+    above).
+  - Repeat any surprising figure before trusting it.
 - **Not yet measured:** water under active flow, and water after a blast. Stage 0 measures
   both for the old system (§21).
 
