@@ -8,33 +8,56 @@ use std::sync::Arc;
 
 use nalgebra::{Point3, Vector3};
 use serde::Deserialize;
-use specs::{Builder, Entity, World, WorldExt};
+use specs::{Entity, World};
 
-use super::shared::models::{build_convex_hull, convex_solid_model, cuboid_model, SolidFace};
+use super::shared::models::{build_convex_hull, SolidFace, SurfaceUvs};
+use super::stone::{StoneBlock, StoneShape};
 use super::{MaterialCtx, Spawnable};
-use crate::components::{
-    ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
-};
+use crate::collision::convex_hull::ConvexHull;
 use crate::core::error::EngineResult;
-use crate::physics::{ColliderDesc, RigidBodyDesc};
 use crate::rendering::material::MaterialId;
-use crate::rendering::pattern;
-use crate::rendering::substance::{self, ColliderSubstance, Substance};
-use crate::systems::PhysicsResource;
+use crate::rendering::pattern::{self, Pattern, Spread};
+use crate::rendering::substance::{self, Substance};
 
-const TEXTURE_SIZE: u32 = 256;
-
-/// Base seed for the arch's stone. Dressed stone from one quarry should look
-/// like dressed stone from one quarry.
-const LIMESTONE_SEED: u32 = 77;
-
-/// How many distinct blocks the arch is cut from.
+/// What the arch's stone texture is baked from.
 ///
-/// One seed for every piece would be fourteen baked textures; one seed for all
-/// of them is the same photograph fourteen times, which is what an arch of
-/// identical stones looks like. A few variants cycled around the ring buys the
-/// difference for the cost of a few tiles.
-const STONE_VARIANTS: u32 = 3;
+/// Public so the visual bench can bake exactly what a level does.
+pub struct StoneTexture {
+    pub pattern: &'static Pattern,
+    /// Dressed stone from one quarry should look like dressed stone from one
+    /// quarry: one seed for every block.
+    pub seed: u32,
+    /// Edge length of one tile, in texels.
+    pub tile_size: u32,
+    /// How many tiles one baked texture holds across. With the tile scaled
+    /// to the stone (see [`REFERENCE_TILE`]), two across is several
+    /// blocks of surface before anything comes round again — and every block
+    /// reads its own part of it, since each is textured from where it stands.
+    pub tiles: f32,
+}
+
+impl StoneTexture {
+    pub const ARCH: Self = Self {
+        pattern: &pattern::WEATHERED_STONE,
+        seed: 77,
+        tile_size: 256,
+        tiles: 2.0,
+    };
+
+    pub fn spread(&self) -> Spread {
+        Spread::covering(self.tiles)
+    }
+}
+
+/// How much surface one tile of texture covers on the default arch, in
+/// metres, and the thickness of that arch.
+///
+/// A bigger arch gets bigger tiles, but only as the square root of its size:
+/// cracks and pits are drawn larger on a bigger block, as a toy-scale world
+/// wants, but not so much larger that a five-metre block shows no more of
+/// them than a half-metre one — which is what gives the scale away.
+const REFERENCE_TILE: f32 = 0.8;
+const REFERENCE_THICKNESS: f32 = 0.5;
 
 #[derive(Deserialize)]
 pub struct VoussoirArchDef {
@@ -59,6 +82,22 @@ pub struct VoussoirArchDef {
     pub density: f32,
     #[serde(default = "VoussoirArchDef::default_friction")]
     pub friction: f32,
+}
+
+impl Default for VoussoirArchDef {
+    /// The arch a level gets when it gives nothing but a base, at the origin.
+    fn default() -> Self {
+        Self {
+            base: (0.0, 0.0, 0.0),
+            inner_radius: Self::default_inner_radius(),
+            thickness: Self::default_thickness(),
+            depth: Self::default_depth(),
+            num_voussoirs: Self::default_num_voussoirs(),
+            abutment_height: Self::default_abutment_height(),
+            density: Self::default_density(),
+            friction: Self::default_friction(),
+        }
+    }
 }
 
 impl VoussoirArchDef {
@@ -91,7 +130,7 @@ impl VoussoirArchDef {
     /// The voussoirs: dressed limestone, with the friction and density a level
     /// authors. Declared once so the collider and the stone they are rendered
     /// with cannot disagree about what they are.
-    fn voussoir_substance(&self) -> Substance {
+    pub fn voussoir_substance(&self) -> Substance {
         substance::LIMESTONE
             .with_density(self.density)
             .with_friction(self.friction)
@@ -100,50 +139,45 @@ impl VoussoirArchDef {
     /// The abutment pillars: the same stone at twice the density, so they stay
     /// put under the arch's thrust. Twice as heavy and identical to look at,
     /// which is the separation the substance library exists to allow.
-    fn abutment_substance(&self) -> Substance {
+    pub fn abutment_substance(&self) -> Substance {
         self.voussoir_substance().with_density(self.density * 2.0)
     }
 }
 
 impl Spawnable for VoussoirArchDef {
     fn material_count(&self) -> usize {
-        self.total_pieces()
+        2
     }
 
+    /// One material for the voussoirs and one for the abutments. They are the
+    /// same stone and share one texture; they differ in density, which the
+    /// finish is derived from. Blocks do not need a texture each to look
+    /// different, because each reads the texture at its own place in the
+    /// world.
     fn create_materials(&self, ctx: &mut MaterialCtx) -> EngineResult<Vec<MaterialId>> {
-        let count = self.total_pieces();
-        let mut mats = Vec::with_capacity(count);
-
-        // One material per piece, drawing on `STONE_VARIANTS` textures: the
-        // voussoirs and the abutments are the same weathered limestone, so
-        // the cache hands the same tile to every piece that shares a variant.
-        // The pieces differ in density, which the cache key rightly ignores —
-        // a heavier stone is not a different-looking one.
-        for i in 0..self.num_voussoirs as usize {
-            mats.push(ctx.patterned(
+        let texture = StoneTexture::ARCH;
+        Ok(vec![
+            ctx.patterned_spread(
                 &self.voussoir_substance(),
-                &pattern::WEATHERED_STONE,
-                stone_seed(i as u32),
-                TEXTURE_SIZE,
-            )?);
-        }
-        for i in 0..2 {
-            mats.push(ctx.patterned(
+                texture.pattern,
+                texture.seed,
+                texture.tile_size,
+                texture.spread(),
+            )?,
+            ctx.patterned_spread(
                 &self.abutment_substance(),
-                &pattern::WEATHERED_STONE,
-                stone_seed(self.num_voussoirs + i),
-                TEXTURE_SIZE,
-            )?);
-        }
-        Ok(mats)
+                texture.pattern,
+                texture.seed,
+                texture.tile_size,
+                texture.spread(),
+            )?,
+        ])
     }
 
     fn spawn(&self, world: &mut World, materials: &[MaterialId]) -> Vec<Entity> {
-        let n = self.num_voussoirs;
         let inner_r = self.inner_radius;
-        let outer_r = inner_r + self.thickness;
         let half_depth = self.depth / 2.0;
-        let angle_step = std::f32::consts::PI / n as f32;
+        let uvs = self.surface_uvs();
 
         // Arch center of curvature sits at the top of the abutment pillars.
         let center = Vector3::new(self.base.0, self.base.1 + self.abutment_height, self.base.2);
@@ -151,51 +185,17 @@ impl Spawnable for VoussoirArchDef {
         let mut entities = Vec::with_capacity(self.total_pieces());
 
         // --- Voussoirs ---
-        for i in 0..n {
-            let angle_start = i as f32 * angle_step;
-            let angle_end = (i + 1) as f32 * angle_step;
-
-            let (arch_verts, faces) =
-                voussoir_geometry(inner_r, outer_r, half_depth, angle_start, angle_end);
-
-            let centroid =
-                arch_verts.iter().copied().sum::<Vector3<f32>>() / arch_verts.len() as f32;
-            let local_verts: Vec<_> = arch_verts.iter().map(|v| v - centroid).collect();
-
-            let pos = Point3::new(
-                center.x + centroid.x,
-                center.y + centroid.y,
-                center.z + centroid.z,
-            );
-
-            let hull = Arc::new(build_convex_hull(&local_verts, &faces));
-            let model = convex_solid_model(&local_verts, &faces, materials[i as usize]);
-
-            let body_handle = {
-                let mut physics = world.write_resource::<PhysicsResource>();
-                let body_desc = RigidBodyDesc::dynamic()
-                    .position(pos)
-                    .gravity_scale(1.0)
-                    .linear_damping(0.01)
-                    .angular_damping(0.005);
-                let body_handle = physics.world.create_body(body_desc);
-                physics.world.attach_collider(
-                    body_handle,
-                    ColliderDesc::convex_hull(hull).of(&self.voussoir_substance()),
-                );
-                body_handle
-            };
-
+        for i in 0..self.num_voussoirs {
+            let (hull, centroid) = self.voussoir(i);
             entities.push(
-                world
-                    .create_entity()
-                    .with(Position(Vector3::new(pos.x, pos.y, pos.z)))
-                    .with(Velocity(Vector3::zeros()))
-                    .with(Orientation::default())
-                    .with(RigidBodyComponent(body_handle))
-                    .with(ModelInstance::new(model))
-                    .with(Renderable)
-                    .build(),
+                StoneBlock {
+                    centre: Point3::from(center + centroid),
+                    shape: StoneShape::Hull(Arc::new(hull)),
+                    substance: self.voussoir_substance(),
+                    material: materials[0],
+                    uvs,
+                }
+                .spawn(world),
             );
         }
 
@@ -203,40 +203,21 @@ impl Spawnable for VoussoirArchDef {
         let abutment_he =
             Vector3::new(self.thickness / 2.0, self.abutment_height / 2.0, half_depth);
 
-        for (i, side) in [1.0f32, -1.0].iter().enumerate() {
-            let x = center.x + side * (inner_r + self.thickness / 2.0);
-            let y = self.base.1 + self.abutment_height / 2.0;
-            let z = center.z;
-            let pos = Point3::new(x, y, z);
-            let mat_idx = n as usize + i;
-
-            let model = cuboid_model(abutment_he, materials[mat_idx]);
-
-            let body_handle = {
-                let mut physics = world.write_resource::<PhysicsResource>();
-                let body_desc = RigidBodyDesc::dynamic()
-                    .position(pos)
-                    .gravity_scale(1.0)
-                    .linear_damping(0.01)
-                    .angular_damping(0.005);
-                let body_handle = physics.world.create_body(body_desc);
-                physics.world.attach_collider(
-                    body_handle,
-                    ColliderDesc::box_shape(abutment_he).of(&self.abutment_substance()),
-                );
-                body_handle
-            };
-
+        for side in [1.0f32, -1.0] {
+            let centre = Point3::new(
+                center.x + side * (inner_r + self.thickness / 2.0),
+                self.base.1 + self.abutment_height / 2.0,
+                center.z,
+            );
             entities.push(
-                world
-                    .create_entity()
-                    .with(Position(Vector3::new(pos.x, pos.y, pos.z)))
-                    .with(Velocity(Vector3::zeros()))
-                    .with(Orientation::default())
-                    .with(RigidBodyComponent(body_handle))
-                    .with(ModelInstance::new(model))
-                    .with(Renderable)
-                    .build(),
+                StoneBlock {
+                    centre,
+                    shape: StoneShape::Box(abutment_he),
+                    substance: self.abutment_substance(),
+                    material: materials[1],
+                    uvs,
+                }
+                .spawn(world),
             );
         }
 
@@ -244,9 +225,31 @@ impl Spawnable for VoussoirArchDef {
     }
 }
 
-/// The stone a given piece was cut from, cycling around the ring.
-fn stone_seed(piece: u32) -> u32 {
-    LIMESTONE_SEED.wrapping_add(piece % STONE_VARIANTS)
+impl VoussoirArchDef {
+    /// Voussoir `index`, counted from the right-hand springing: its hull about
+    /// its own centre, and where that centre sits relative to the arch's
+    /// centre of curvature.
+    pub fn voussoir(&self, index: u32) -> (ConvexHull, Vector3<f32>) {
+        let angle_step = std::f32::consts::PI / self.num_voussoirs as f32;
+        let (arch_verts, faces) = voussoir_geometry(
+            self.inner_radius,
+            self.inner_radius + self.thickness,
+            self.depth / 2.0,
+            index as f32 * angle_step,
+            (index + 1) as f32 * angle_step,
+        );
+        let centroid = arch_verts.iter().copied().sum::<Vector3<f32>>() / arch_verts.len() as f32;
+        let local_verts: Vec<_> = arch_verts.iter().map(|v| v - centroid).collect();
+        (build_convex_hull(&local_verts, &faces), centroid)
+    }
+
+    /// How the stone's texture is laid on every block: at one scale for the
+    /// whole arch, growing with its thickness (see [`REFERENCE_TILE`]).
+    pub fn surface_uvs(&self) -> SurfaceUvs {
+        let tile = REFERENCE_TILE * (self.thickness / REFERENCE_THICKNESS).sqrt();
+        let texture_metres = tile * StoneTexture::ARCH.tiles;
+        SurfaceUvs::PerMetre(1.0 / texture_metres)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -321,6 +324,193 @@ fn voussoir_geometry(
     (vertices, faces)
 }
 
-// ---------------------------------------------------------------------------
-// Limestone texture generation
-// ---------------------------------------------------------------------------
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cleave::{BrittleSolid, SolidCleaveSystem};
+    use crate::components::{
+        ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
+    };
+    use crate::debug::{DebugLines, DebugLog};
+    use crate::fracture::{CompoundFracture, FractureSystem};
+    use crate::physics::bench_harness::geometry::FlatQuadGeometry;
+    use crate::physics::stepping::{SequentialStepper, Stepper};
+    use crate::physics::{PhysicsConfig, PhysicsImpulseQueue, PhysicsWorld};
+    use crate::systems::PhysicsResource;
+    use crate::time::Time;
+    use specs::{Join, RunNow, WorldExt};
+
+    const FRAME_DT: f32 = 1.0 / 60.0;
+
+    fn world_with_arch() -> (World, Vec<Entity>) {
+        let mut world = World::new();
+        world.register::<Position>();
+        world.register::<Velocity>();
+        world.register::<Orientation>();
+        world.register::<RigidBodyComponent>();
+        world.register::<ModelInstance>();
+        world.register::<Renderable>();
+        world.register::<CompoundFracture>();
+        world.register::<BrittleSolid>();
+        world.insert(Time::fixed(FRAME_DT));
+        world.insert(PhysicsImpulseQueue::default());
+        world.insert(DebugLog::default());
+        // Asleep, the ring would hang in the air when its abutment goes: a
+        // removed body wakes nothing that was resting on it.
+        let mut config = PhysicsConfig::default();
+        config.sleep.enabled = false;
+        world.insert(PhysicsResource::new(
+            PhysicsWorld::new(config),
+            Box::new(SequentialStepper::new(FRAME_DT, 4)),
+        ));
+        let arch = VoussoirArchDef::default();
+        let stones = arch.spawn(&mut world, &[MaterialId(0), MaterialId(1)]);
+        (world, stones)
+    }
+
+    fn run(world: &mut World, frames: usize) {
+        let geometry = FlatQuadGeometry::new(50.0);
+        let mut stepper = SequentialStepper::new(FRAME_DT, 4);
+        for _ in 0..frames {
+            {
+                let mut physics = world.write_resource::<PhysicsResource>();
+                let mut debug = DebugLines::default();
+                stepper.step(
+                    &mut physics.world,
+                    FRAME_DT,
+                    &geometry,
+                    &[],
+                    &[],
+                    &mut debug,
+                );
+            }
+            SolidCleaveSystem.run_now(world);
+            FractureSystem.run_now(world);
+            world.maintain();
+        }
+    }
+
+    /// Pieces of stone per body, over every body in the world.
+    fn pieces(world: &World) -> Vec<usize> {
+        let physics = world.read_resource::<PhysicsResource>();
+        let bodies = world.read_storage::<RigidBodyComponent>();
+        (&bodies)
+            .join()
+            .filter_map(|body| physics.world.body(body.0).map(|b| b.colliders().len()))
+            .collect()
+    }
+
+    /// Standing, the arch carries its own thrust without a crack: the load a
+    /// voussoir carries is not a blow, however much it swings as the ring
+    /// beds in.
+    #[test]
+    fn a_standing_arch_does_not_crack_under_its_own_weight() {
+        let (mut world, stones) = world_with_arch();
+        run(&mut world, 180);
+        assert_eq!(pieces(&world).iter().sum::<usize>(), stones.len());
+    }
+
+    /// Take an abutment away and the arch comes down. Some stones crack,
+    /// once each: the fall is a few pieces more than the arch, never a
+    /// shower of rubble.
+    #[test]
+    fn a_falling_arch_cracks_stones_but_does_not_shatter() {
+        let (mut world, stones) = world_with_arch();
+        run(&mut world, 30);
+        let abutment = *stones.last().expect("the arch has abutments");
+        {
+            let body = world
+                .read_storage::<RigidBodyComponent>()
+                .get(abutment)
+                .unwrap()
+                .0;
+            world
+                .write_resource::<PhysicsResource>()
+                .world
+                .remove_body(body);
+        }
+        world.delete_entity(abutment).unwrap();
+        run(&mut world, 360);
+
+        let total: usize = pieces(&world).iter().sum();
+        let whole = stones.len() - 1;
+        assert!(total > whole, "no stone cracked in the fall");
+        assert!(
+            total <= whole * 2,
+            "{total} pieces from {whole} stones: something broke more than once"
+        );
+    }
+
+    /// Triangles of a drawing that face the opposite way to the surface
+    /// they sit on: each one is a fold, and a fold shows as a hole.
+    fn inside_out(vertices: &[crate::rendering::vertex::Vertex], indices: &[u32]) -> usize {
+        indices
+            .chunks(3)
+            .filter(|t| {
+                let [a, b, c] = [0, 1, 2].map(|k| &vertices[t[k] as usize]);
+                let facet = (b.pos - a.pos).cross(&(c.pos - a.pos));
+                facet.magnitude() > 1e-9 && facet.dot(&(a.normal + b.normal + c.normal)) < 0.0
+            })
+            .count()
+    }
+
+    /// Every stone of the arch, whole and cracked every way the game cracks
+    /// it, is drawn right side out.
+    ///
+    /// Cracked stones used to show holes the size of a fist: a point near an
+    /// arris was pushed straight in by the depth of a chip, past the points
+    /// pushed in from the neighbouring face, and the drawing folded. A whole
+    /// stone must have no fold at all. A piece may have one or two slivers
+    /// lying exactly on the crease of a break, where three faces meet and a
+    /// triangle's vertex normals belong to different faces — a few
+    /// millimetres, never the hundreds of triangles a fold was.
+    #[test]
+    fn every_stone_whole_or_cracked_is_drawn_right_side_out() {
+        use crate::app::spawnables::shared::models::PieceHull;
+        use crate::app::spawnables::{stone_cleaving, weathered_hull_mesh};
+        use crate::physics::ColliderShape;
+
+        let arch = VoussoirArchDef {
+            base: (44.0, 11.5, 44.0),
+            ..VoussoirArchDef::default()
+        };
+        let centre = Vector3::new(44.0, 13.0, 44.0);
+        for i in 0..arch.num_voussoirs {
+            let (hull, offset) = arch.voussoir(i);
+            let anchor = centre + offset;
+            let whole = hull.translated(anchor);
+            let (v, idx) = weathered_hull_mesh(
+                &PieceHull::new(&hull, anchor).within(Some(&whole)),
+                arch.surface_uvs(),
+            );
+            assert_eq!(inside_out(&v, &idx), 0, "voussoir {i} is folded whole");
+
+            let shape = ColliderShape::ConvexHull {
+                hull: Arc::new(hull.clone()),
+            };
+            for salt in 0..12u32 {
+                let hit = Vector3::new(
+                    ((salt * 7) % 5) as f32 * 0.1 - 0.2,
+                    ((salt * 3) % 5) as f32 * 0.1 - 0.2,
+                    ((salt * 11) % 7) as f32 * 0.15 - 0.45,
+                );
+                let Some(pieces) = stone_cleaving(1000.0).cleave(&shape, hit, salt) else {
+                    continue;
+                };
+                for piece in pieces {
+                    // Shrunk as the cleave system shrinks it.
+                    let drawn = piece.hull.scaled(0.996);
+                    let (v, idx) = weathered_hull_mesh(
+                        &PieceHull::new(&drawn, anchor + piece.centre).within(Some(&whole)),
+                        arch.surface_uvs(),
+                    );
+                    let folded = inside_out(&v, &idx);
+                    assert!(
+                        folded <= 4,
+                        "voussoir {i} cut {salt}: {folded} triangles inside out"
+                    );
+                }
+            }
+        }
+    }
+}

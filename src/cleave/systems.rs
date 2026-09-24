@@ -5,7 +5,7 @@ use std::sync::Arc;
 use nalgebra::{Point3, Vector3};
 use specs::{Join, Read, ReadStorage, System, WriteStorage};
 
-use super::components::BrittleSolid;
+use super::components::{BlowMeasure, BrittleSolid};
 use crate::components::RigidBodyComponent;
 use crate::debug::DebugLog;
 use crate::fracture::{split_child, ChildSubstance, CompoundFracture, FractureJoint};
@@ -114,20 +114,40 @@ fn gather_hits(
     let spikes = solid.contact_load.advance(world, body_handle, &handles, dt);
     let threshold = solid.cleaving.threshold;
 
+    // Both measures advance every frame, whichever is judged by, so that
+    // neither's baseline goes stale.
+    let gravity = world.config().gravity * body.gravity_scale() * dt;
+    let arrest = if world.is_sleeping(body_handle) {
+        solid.arrest(Vector3::zeros(), Vector3::zeros(), body.mass())
+    } else {
+        solid.arrest(body.linear_velocity(), gravity, body.mass())
+    };
+    // An arrest is the whole body's; it lands on the child that took the
+    // biggest share of the contact.
+    let struck = spikes
+        .iter()
+        .enumerate()
+        .max_by(|a, b| a.1.magnitude.total_cmp(&b.1.magnitude))
+        .map(|(index, _)| index);
+
     let mut hits = Vec::new();
     for (index, handle) in handles.iter().enumerate() {
         if !solid.is_brittle(fracture.material_of(index)) {
             continue;
         }
-        let spike = spikes[index];
-        *loudest = loudest.max(spike.magnitude);
+        let blow = match solid.measure {
+            BlowMeasure::ContactSpike => spikes[index].magnitude,
+            BlowMeasure::Arrest if struck == Some(index) => arrest,
+            BlowMeasure::Arrest => 0.0,
+        };
+        *loudest = loudest.max(blow);
 
-        if spike.magnitude > threshold {
+        if blow > threshold {
             let impact = world.impacts().for_collider(*handle);
             hits.push(Hit {
                 child: *handle,
                 point: impact.map_or(body_pos, |i| i.centre),
-                kick: impact.map_or(Vector3::zeros(), |i| i.normal) * spike.magnitude,
+                kick: impact.map_or(Vector3::zeros(), |i| i.normal) * blow,
             });
             continue;
         }

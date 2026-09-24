@@ -25,6 +25,9 @@ const uint SOURCE_GRAIN_OBJECT_SPACE = 1u << 4;
 /// Perturb the normal with the grain atlas, addressed by vertex UVs.
 const uint SOURCE_GRAIN_BY_UV = 1u << 5;
 
+/// The diffuse alpha is relief height rather than coverage.
+const uint SOURCE_RELIEF_IN_ALPHA = 1u << 6;
+
 /// Either grain projection.
 const uint SOURCE_GRAIN_ANY = SOURCE_GRAIN_OBJECT_SPACE | SOURCE_GRAIN_BY_UV;
 

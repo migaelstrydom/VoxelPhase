@@ -18,6 +18,7 @@
 //!              | ROUGHNESS_FROM_CHARACTER | RELIEF_FROM_CHARACTER
 //!   stone prop GRAIN_OBJECT_SPACE
 //!   plank      GRAIN_BY_UV
+//!   old stone  GRAIN_OBJECT_SPACE | RELIEF_IN_ALPHA
 //!   beach ball (none)
 //! ```
 
@@ -75,6 +76,13 @@ impl SurfaceSource {
     /// running along a plank, which a triplanar projection cannot express.
     pub const GRAIN_BY_UV: Self = Self(1 << 5);
 
+    /// The diffuse texture's alpha is relief height, not coverage: perturb the
+    /// normal by its slope, and draw the surface opaque.
+    ///
+    /// For patterns that cut into the surface they colour — the cracks and
+    /// pits of weathered stone, which read as painted on without it.
+    pub const RELIEF_IN_ALPHA: Self = Self(1 << 6);
+
     /// Everything terrain asks for. The four bits that used to be one.
     pub const TERRAIN: Self = Self(
         Self::ALBEDO_TRIPLANAR.0
@@ -121,6 +129,7 @@ mod tests {
         assert_eq!(SurfaceSource::RELIEF_FROM_CHARACTER.0, 8);
         assert_eq!(SurfaceSource::GRAIN_OBJECT_SPACE.0, 16);
         assert_eq!(SurfaceSource::GRAIN_BY_UV.0, 32);
+        assert_eq!(SurfaceSource::RELIEF_IN_ALPHA.0, 64);
     }
 
     /// The whole point of the split: a prop can ask for grain without

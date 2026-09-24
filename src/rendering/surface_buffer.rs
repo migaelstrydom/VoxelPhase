@@ -177,7 +177,7 @@ mod tests {
     /// its Rust size and its std430 stride are the same number.
     #[test]
     fn the_gpu_struct_matches_its_std430_stride() {
-        assert_eq!(std::mem::size_of::<GpuSurface>(), 80);
+        assert_eq!(std::mem::size_of::<GpuSurface>(), 96);
         assert_eq!(std::mem::align_of::<GpuSurface>() % 4, 0);
     }
 

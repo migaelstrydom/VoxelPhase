@@ -55,11 +55,29 @@ pub struct PieceHull<'a> {
     pub hull: &'a ConvexHull,
     /// Where that frame's origin sits in the body's frame.
     pub offset: Vector3<f32>,
+    /// The solid the piece was cut from, as it was before anything broke, in
+    /// the frame `offset` leads into. `None` when nobody kept it.
+    ///
+    /// What lets a mesh tell the surfaces the object was made with from the
+    /// ones it broke along: a face of the piece lying on a face of the whole
+    /// is old surface, and any other face is a fresh break. Stone weathers
+    /// the first kind and leaves the second raw.
+    pub whole: Option<&'a ConvexHull>,
 }
 
 impl<'a> PieceHull<'a> {
     pub fn new(hull: &'a ConvexHull, offset: Vector3<f32>) -> Self {
-        Self { hull, offset }
+        Self {
+            hull,
+            offset,
+            whole: None,
+        }
+    }
+
+    /// The same piece, known to have been cut from `whole`.
+    pub fn within(mut self, whole: Option<&'a ConvexHull>) -> Self {
+        self.whole = whole;
+        self
     }
 }
 

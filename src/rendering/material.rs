@@ -165,6 +165,11 @@ pub struct Material {
     /// one dial that decides which of the frame's two geometry passes a draw
     /// belongs to — see `rendering::transparency`.
     pub transparency: Transparency,
+
+    /// Depth of the relief carried in the diffuse texture's alpha, in texture
+    /// coordinates. Zero — the default — means the alpha is coverage, as it
+    /// is for every texture that was not baked with relief.
+    pub relief: f32,
 }
 
 impl Material {
@@ -179,6 +184,7 @@ impl Material {
             grain: GrainSpec::NONE,
             source: SurfaceSource::PLAIN,
             transparency: Transparency::OPAQUE,
+            relief: 0.0,
         }
     }
 
@@ -194,6 +200,7 @@ impl Material {
             grain: GrainSpec::NONE,
             source: SurfaceSource::PLAIN,
             transparency: Transparency::OPAQUE,
+            relief: 0.0,
         }
     }
 
@@ -232,6 +239,23 @@ impl Material {
         self
     }
 
+    /// Read the diffuse texture's alpha as relief `depth` texture coordinates
+    /// deep, rather than as coverage.
+    ///
+    /// For a texture baked from a pattern that cuts into the surface — see
+    /// [`Pattern::relief_depth`](crate::rendering::pattern::Pattern::relief_depth).
+    /// The depth is in texture coordinates rather than metres so that the
+    /// relief keeps its proportions whatever scale the mesh lays the texture
+    /// at: a crack is as deep, relative to its width, on a big block as on a
+    /// small one.
+    pub fn with_relief(mut self, depth: f32) -> Self {
+        self.relief = depth;
+        if depth > 0.0 {
+            self.source = self.source.with(SurfaceSource::RELIEF_IN_ALPHA);
+        }
+        self
+    }
+
     /// Set the self-illumination.
     pub fn with_emission(mut self, emission: Emission) -> Self {
         self.emission = emission;
@@ -264,6 +288,7 @@ impl Material {
             source: self.source,
             grain: self.grain,
             transparency: self.transparency,
+            relief: self.relief,
         }
     }
 }
@@ -334,6 +359,10 @@ pub struct GpuSurface {
     /// x = head-on opacity, y = reflectance at normal incidence, zw spare.
     /// See [`Transparency`].
     pub optics: [f32; 4],
+
+    /// x = depth of the relief in the diffuse alpha, in texture coordinates
+    /// (see [`Material::with_relief`]), yzw spare.
+    pub detail: [f32; 4],
 }
 
 impl GpuSurface {
@@ -345,6 +374,7 @@ impl GpuSurface {
         projection: [0.0, 0.0, 0.0, 0.0],
         control: [0, 0, 0, 0],
         optics: [1.0, 0.04, 0.0, 0.0],
+        detail: [0.0; 4],
     };
 }
 
@@ -368,6 +398,10 @@ pub struct SurfaceParams {
     /// How much light passes through. Decides which geometry pass the draw
     /// carrying these parameters is recorded into.
     pub transparency: Transparency,
+
+    /// Depth of the relief in the diffuse alpha, in texture coordinates. Zero
+    /// when the alpha is coverage.
+    pub relief: f32,
 }
 
 impl SurfaceParams {
@@ -380,6 +414,7 @@ impl SurfaceParams {
         source: SurfaceSource::PLAIN,
         grain: GrainSpec::NONE,
         transparency: Transparency::OPAQUE,
+        relief: 0.0,
     };
 
     /// Give this surface a microstructure, projected from the object's own
@@ -454,6 +489,7 @@ impl SurfaceParams {
                 0.0,
                 0.0,
             ],
+            detail: [self.relief, 0.0, 0.0, 0.0],
         }
     }
 }
@@ -550,7 +586,7 @@ mod tests {
     #[test]
     fn the_surface_table_carries_the_parameters_not_the_push_constants() {
         assert_eq!(std::mem::size_of::<SurfaceParams>() > 4, true);
-        assert_eq!(std::mem::size_of::<GpuSurface>(), 80);
+        assert_eq!(std::mem::size_of::<GpuSurface>(), 96);
     }
 
     #[test]
@@ -568,5 +604,24 @@ mod tests {
             params.projection,
             TriplanarProjection::new(0.1, 4.0).packed()
         );
+    }
+
+    /// Relief is opt-in: a material says nothing about it and its texture's
+    /// alpha stays coverage.
+    #[test]
+    fn relief_is_asked_for_and_reaches_the_surface_table() {
+        let plain = Material::coloured(Colour::WHITE).surface_params();
+        assert!(!plain.source.contains(SurfaceSource::RELIEF_IN_ALPHA));
+        assert_eq!(plain.to_gpu().detail[0], 0.0);
+
+        let carved = Material::coloured(Colour::WHITE)
+            .with_relief(0.004)
+            .surface_params();
+        assert!(carved.source.contains(SurfaceSource::RELIEF_IN_ALPHA));
+        assert_eq!(carved.to_gpu().detail[0], 0.004);
+        assert!(!Material::coloured(Colour::WHITE)
+            .with_relief(0.0)
+            .source
+            .contains(SurfaceSource::RELIEF_IN_ALPHA));
     }
 }

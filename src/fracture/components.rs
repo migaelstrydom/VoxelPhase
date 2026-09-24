@@ -1,10 +1,13 @@
 //! Fracture-related ECS components.
 
+use std::sync::Arc;
+
 use nalgebra::Vector3;
 use specs::{Component, VecStorage};
 
 use super::contact_load::{ContactLoadTracker, Deadband};
 use crate::app::spawnables::shared::models::{HullMesh, PieceMesh, PieceStyle, SurfaceUvs};
+use crate::collision::convex_hull::ConvexHull;
 use crate::rendering::material::MaterialId;
 
 /// A structural joint between two children of a compound body.
@@ -119,6 +122,15 @@ pub struct CompoundFracture {
     /// object was whole, so the markings stay with the material rather than
     /// with the body's bookkeeping.
     pub texture_anchor: Vector3<f32>,
+    /// The object's shape before anything broke off it, in the frame child
+    /// offsets are read in once `texture_anchor` is added. `None` unless the
+    /// owner kept it.
+    ///
+    /// Meaningful for an object that is one solid — a block that cleaves —
+    /// where it lets the piece mesh tell the block's old surfaces from the
+    /// ones it broke along. See
+    /// [`PieceHull::whole`](crate::app::spawnables::shared::models::PieceHull::whole).
+    pub whole_shape: Option<Arc<ConvexHull>>,
     /// Whether the body's children have changed since its model was last
     /// built.
     ///
@@ -145,8 +157,23 @@ impl CompoundFracture {
             sheds_debris: false,
             released: false,
             texture_anchor: Vector3::zeros(),
+            whole_shape: None,
             model_stale: false,
         }
+    }
+
+    /// Draw the object's pattern as though its origin sat at `anchor`, so
+    /// that objects built alike do not all wear the same markings.
+    pub fn with_texture_anchor(mut self, anchor: Vector3<f32>) -> Self {
+        self.texture_anchor = anchor;
+        self
+    }
+
+    /// Keep the object's whole shape, in its texture frame, for the piece
+    /// meshes to read. See [`Self::whole_shape`].
+    pub fn with_whole_shape(mut self, whole: Arc<ConvexHull>) -> Self {
+        self.whole_shape = Some(whole);
+        self
     }
 
     /// Freed pieces count against the [`DebrisBudget`](super::DebrisBudget).

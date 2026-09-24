@@ -103,12 +103,13 @@ pub const WEATHERED_STONE: Pattern = Pattern {
     name: "weathered_stone",
     layers: &[
         // Broad tonal variation, stronger than dressed stone's: sunlight and
-        // rain do not fade a wall evenly.
+        // rain do not fade a wall evenly. Held back from the light end, which
+        // on a pale stone in sun is plaster.
         Layer::Wash {
             scale: 2.0,
             octaves: 3,
             towards: Slot::Light,
-            amount: 0.9,
+            amount: 0.55,
         },
         // Erosion relief — where the face has worn hollow.
         Layer::Shade {
@@ -122,36 +123,34 @@ pub const WEATHERED_STONE: Pattern = Pattern {
             octaves: 3,
             threshold: 0.52,
             span: 0.24,
-            amount: 0.3,
+            amount: 0.4,
             towards: Slot::Dark,
         },
-        // The cracks. Few per face and thin, so they read as fractures in the
-        // block rather than as a pattern printed on it.
-        Layer::Vein {
-            scale: 6.0,
-            octaves: 3,
-            sharpness: 45.0,
-            amount: 0.6,
-            towards: Slot::Accent,
-        },
-        // A second, finer set at another frequency, so the cracks branch and
-        // cross instead of running as one family of parallel lines.
-        Layer::Vein {
-            scale: 11.0,
+        // The cracks: few, faint, running roughly one way — the way stone
+        // splits along its bed — and only through part of the surface. A
+        // crack that wanders the whole face at one density reads as marble
+        // veining or as a pen line. Cut, so the light finds their lips.
+        Layer::Crack {
+            scale: 5.0,
             octaves: 2,
+            elongation: 3.0,
             sharpness: 60.0,
             amount: 0.35,
-            towards: Slot::Dark,
+            towards: Slot::Accent,
+            coverage: 0.35,
+            depth: 0.006,
         },
-        // Pitting: small, scattered, and dark. A high threshold over a narrow
-        // span is what makes these discrete chips rather than more mottling.
-        Layer::Patch {
-            scale: 30.0,
+        // Pitting: sparse and large enough to be pits rather than a peened
+        // finish. A high threshold over a narrow span is what makes these
+        // discrete hollows rather than more mottling.
+        Layer::Pits {
+            scale: 16.0,
             octaves: 2,
-            threshold: 0.72,
-            span: 0.05,
-            amount: 0.45,
+            threshold: 0.75,
+            span: 0.06,
+            amount: 0.22,
             towards: Slot::Dark,
+            depth: 0.004,
         },
         Layer::Shade {
             scale: 26.0,
@@ -445,22 +444,21 @@ mod tests {
     fn weathered_stone_is_more_broken_than_dressed() {
         let palette = Palette::from_base(Colour::new(0.72, 0.69, 0.61, 1.0), 0.16);
 
+        // Broken is either darkened in colour or cut into the surface: the
+        // cracks and pits of weathered stone are drawn faint on purpose — at
+        // full contrast they read as veining — and carried by the relief the
+        // pattern bakes into alpha, which a colour sample cannot see.
         let broken = |pattern: &Pattern| {
-            let samples: Vec<f32> = (0..4096)
-                .map(|step| {
-                    let u = (step % 64) as f32 / 64.0;
-                    let v = (step / 64) as f32 / 64.0;
-                    pattern.sample(u, v, &palette, 77).r
-                })
-                .collect();
-
-            let mean = samples.iter().sum::<f32>() / samples.len() as f32;
-            let dark = samples.iter().filter(|&&r| r < mean - 0.1).count();
-            dark as f32 / samples.len() as f32
+            let texels = pattern.bake(64, &palette, 77);
+            let reds: Vec<f32> = texels.chunks(4).map(|t| t[0] as f32).collect();
+            let mean = reds.iter().sum::<f32>() / reds.len() as f32;
+            let broken = texels
+                .chunks(4)
+                .filter(|t| (t[0] as f32) < mean - 25.0 || t[3] < 230)
+                .count();
+            broken as f32 / reds.len() as f32
         };
 
-        // Cracks are thin on purpose, so the fraction is small in absolute
-        // terms; what matters is that dressed stone's is near zero.
         assert!(
             broken(&WEATHERED_STONE) > 0.01
                 && broken(&WEATHERED_STONE) > broken(&DRESSED_STONE) * 5.0,

@@ -60,6 +60,17 @@ impl Palette {
         self
     }
 
+    /// The same palette with a different dark.
+    ///
+    /// For stone whose stains are a colour of their own — the umber and
+    /// olive of grime on limestone — rather than its base in shadow. A dark
+    /// derived from a pale base is a grey, and under a blue sky a grey stain
+    /// reads as granite.
+    pub const fn with_dark(mut self, dark: Colour) -> Self {
+        self.dark = dark;
+        self
+    }
+
     /// The same palette with a different light.
     ///
     /// For the surfaces whose bright slot is not their base turned up: frost

@@ -408,3 +408,99 @@ mod gradient_noise_tests {
         assert!(high - low > 0.6, "only spans {low}..{high}");
     }
 }
+
+/// Unit-ish gradient for a 3D lattice point: one of the twelve cube-edge
+/// directions, which is the classic set and has no axis bias.
+fn gradient_3d(x: i32, y: i32, z: i32, seed: u32) -> (f32, f32, f32) {
+    const EDGES: [(f32, f32, f32); 12] = [
+        (1.0, 1.0, 0.0),
+        (-1.0, 1.0, 0.0),
+        (1.0, -1.0, 0.0),
+        (-1.0, -1.0, 0.0),
+        (1.0, 0.0, 1.0),
+        (-1.0, 0.0, 1.0),
+        (1.0, 0.0, -1.0),
+        (-1.0, 0.0, -1.0),
+        (0.0, 1.0, 1.0),
+        (0.0, -1.0, 1.0),
+        (0.0, 1.0, -1.0),
+        (0.0, -1.0, -1.0),
+    ];
+    let pick = (hash_3d_periodic(x, y, z, seed, None) * 12.0) as usize;
+    EDGES[pick.min(11)]
+}
+
+/// 3D gradient (Perlin) noise, **signed**: roughly `-1..1`, zero on average.
+///
+/// Signed rather than the `0..1` of the other functions here because the one
+/// thing it is for — displacing a solid's surface and differentiating the
+/// result into normals — wants a deviation, not a level. Gradient rather than
+/// value noise for the reason [`perlin_2d_periodic`] gives: a surface built
+/// from value noise shows its lattice in its shading.
+pub fn perlin_3d(x: f32, y: f32, z: f32, seed: u32) -> f32 {
+    let (xi, yi, zi) = (x.floor(), y.floor(), z.floor());
+    let (xf, yf, zf) = (x - xi, y - yi, z - zi);
+    let (xi, yi, zi) = (xi as i32, yi as i32, zi as i32);
+
+    let corner = |dx: i32, dy: i32, dz: i32| {
+        let (gx, gy, gz) = gradient_3d(xi + dx, yi + dy, zi + dz, seed);
+        gx * (xf - dx as f32) + gy * (yf - dy as f32) + gz * (zf - dz as f32)
+    };
+
+    let (u, v, w) = (quintic(xf), quintic(yf), quintic(zf));
+    let x00 = lerp(corner(0, 0, 0), corner(1, 0, 0), u);
+    let x10 = lerp(corner(0, 1, 0), corner(1, 1, 0), u);
+    let x01 = lerp(corner(0, 0, 1), corner(1, 0, 1), u);
+    let x11 = lerp(corner(0, 1, 1), corner(1, 1, 1), u);
+    lerp(lerp(x00, x10, v), lerp(x01, x11, v), w).clamp(-1.0, 1.0)
+}
+
+/// Fractional Brownian Motion over [`perlin_3d`], normalised so the result
+/// stays in `-1..1`.
+pub fn fbm_perlin_3d(x: f32, y: f32, z: f32, octaves: u32, persistence: f32, seed: u32) -> f32 {
+    let mut total = 0.0;
+    let mut amplitude = 1.0;
+    let mut frequency = 1.0;
+    let mut max_value = 0.0;
+    for i in 0..octaves {
+        total += perlin_3d(
+            x * frequency,
+            y * frequency,
+            z * frequency,
+            seed.wrapping_add(i),
+        ) * amplitude;
+        max_value += amplitude;
+        amplitude *= persistence;
+        frequency *= 2.0;
+    }
+    total / max_value
+}
+
+#[cfg(test)]
+mod perlin_3d_tests {
+    use super::*;
+
+    #[test]
+    fn signed_gradient_noise_is_centred_on_zero_and_bounded() {
+        let mut sum = 0.0;
+        let mut count = 0;
+        for i in 0..2000 {
+            let t = i as f32;
+            let n = fbm_perlin_3d(t * 0.137, t * 0.071 + 3.0, t * 0.193 - 1.0, 4, 0.5, 9);
+            assert!((-1.0..=1.0).contains(&n), "{n}");
+            sum += n;
+            count += 1;
+        }
+        let mean = sum / count as f32;
+        assert!(mean.abs() < 0.08, "mean {mean}");
+    }
+
+    /// Gradient noise is zero at every lattice point; that is what keeps its
+    /// slope from printing the lattice.
+    #[test]
+    fn gradient_noise_vanishes_on_the_lattice() {
+        for i in -3..3 {
+            assert!(perlin_3d(i as f32, (i * 2) as f32, 5.0, 4).abs() < 1e-6);
+        }
+    }
+}

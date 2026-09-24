@@ -66,17 +66,25 @@ pub const GRANITE: Substance = stone(
     0.22,
 );
 
-/// Softer sedimentary rock, the stone of a dressed arch. Paler and finer than
-/// granite, and worked rather than broken, so it shows less relief.
-pub const LIMESTONE: Substance = stone(
-    "limestone",
-    2400.0,
-    0.75,
-    0.62,
-    GrainSpec::DRESSED_STONE,
-    Colour::new(0.72, 0.69, 0.61, 1.0),
-    0.16,
-);
+/// Softer sedimentary rock, the stone of an old arch: warm buff, worked once
+/// and weathered since, so its grain is soft and its stains are umber and
+/// olive rather than grey. The base is held below the palest a stone could
+/// be, so that grime and lichen have somewhere to go and the block does not
+/// read as plaster in full sun.
+pub const LIMESTONE: Substance = Substance {
+    palette: Palette::from_base_const(Colour::new(0.64, 0.60, 0.50, 1.0), 0.16)
+        .with_dark(Colour::new(0.44, 0.39, 0.31, 1.0))
+        .with_accent(Colour::new(0.34, 0.29, 0.22, 1.0)),
+    ..stone(
+        "limestone",
+        2400.0,
+        0.75,
+        0.62,
+        GrainSpec::WEATHERED_STONE,
+        Colour::new(0.64, 0.60, 0.50, 1.0),
+        0.16,
+    )
+};
 
 /// Polished stone. The one material that proves the point of this library:
 /// marble and granite have near-identical friction and could never have been

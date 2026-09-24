@@ -479,6 +479,7 @@ impl Spawnable for FramedWindowDef {
             &child_materials,
             PieceStyle::default(),
             Vector3::zeros(),
+            None,
         )
         .expect("a window has something to draw");
         drop(physics);

@@ -138,6 +138,47 @@ pub enum Layer {
         amount: f32,
         towards: Slot,
     },
+
+    /// A [`Vein`](Self::Vein) that is also cut into the surface.
+    ///
+    /// Colours exactly as a vein does, and in addition lowers the relief the
+    /// texture carries in its alpha by `depth` along the ridge — so the crack
+    /// catches the light on one lip and falls into shadow on the other, rather
+    /// than being a line painted on. A surface asks for the relief to be used
+    /// by being given a material with relief; see [`Pattern::relief_depth`].
+    Crack {
+        scale: f32,
+        octaves: u32,
+        /// How much longer a crack runs along the tile's `v` axis than
+        /// across it, as [`Streak`](Self::Streak)'s. One wanders in every
+        /// direction like a contour line; a little more runs the way stone
+        /// splits, along its bed.
+        elongation: f32,
+        sharpness: f32,
+        amount: f32,
+        towards: Slot,
+        /// How much of the surface the cracks run through, zero to one. A
+        /// ridge of noise is one unbroken line that wanders across the whole
+        /// tile; a crack in stone runs a way and stops. Less than one confines
+        /// the ridge to patches, so it reads as a run of broken cracks rather
+        /// than as a drawn contour.
+        coverage: f32,
+        /// How deep the crack is cut, in tile widths.
+        depth: f32,
+    },
+
+    /// A [`Patch`](Self::Patch) that is also sunk into the surface: pores,
+    /// solution pits, the pocks rain leaves in soft stone.
+    Pits {
+        scale: f32,
+        octaves: u32,
+        threshold: f32,
+        span: f32,
+        amount: f32,
+        towards: Slot,
+        /// How deep a pit is at its bottom, in tile widths.
+        depth: f32,
+    },
 }
 
 impl Layer {
@@ -172,11 +213,11 @@ impl Layer {
                 towards,
             } => {
                 let n = noise(u, v, scale, octaves, seed);
-                if n <= threshold {
-                    return colour;
-                }
-                let t = ((n - threshold) / span).clamp(0.0, 1.0) * amount;
-                lerp(colour, towards.of(palette), t)
+                lerp(
+                    colour,
+                    towards.of(palette),
+                    patch_strength(n, threshold, span) * amount,
+                )
             }
 
             Self::Vein {
@@ -201,6 +242,77 @@ impl Layer {
                 let n = streaked_noise(u, v, scale, elongation, octaves, seed);
                 lerp(colour, towards.of(palette), ridge(n, sharpness) * amount)
             }
+
+            Self::Crack {
+                scale,
+                octaves,
+                elongation,
+                sharpness,
+                amount,
+                towards,
+                coverage,
+                ..
+            } => {
+                let n = crack_noise(u, v, scale, elongation, octaves, seed);
+                let strength = ridge(n, sharpness) * crack_mask(u, v, scale, coverage, seed);
+                lerp(colour, towards.of(palette), strength * amount)
+            }
+
+            Self::Pits {
+                scale,
+                octaves,
+                threshold,
+                span,
+                amount,
+                towards,
+                ..
+            } => {
+                let n = noise(u, v, scale, octaves, seed);
+                lerp(
+                    colour,
+                    towards.of(palette),
+                    patch_strength(n, threshold, span) * amount,
+                )
+            }
+        }
+    }
+
+    /// How far this layer lowers the surface at `(u, v)`, in tile widths.
+    ///
+    /// Reads the same field [`apply`](Self::apply) colours by, with the same
+    /// seed, so a crack is cut exactly where it is drawn.
+    fn carve(&self, u: f32, v: f32, seed: u32) -> f32 {
+        match *self {
+            Self::Crack {
+                scale,
+                octaves,
+                elongation,
+                sharpness,
+                depth,
+                ..
+            } => {
+                ridge(
+                    crack_noise(u, v, scale, elongation, octaves, seed),
+                    sharpness,
+                ) * depth
+            }
+            Self::Pits {
+                scale,
+                octaves,
+                threshold,
+                span,
+                depth,
+                ..
+            } => patch_strength(noise(u, v, scale, octaves, seed), threshold, span) * depth,
+            _ => 0.0,
+        }
+    }
+
+    /// The deepest this layer can cut, in tile widths.
+    fn max_depth(&self) -> f32 {
+        match *self {
+            Self::Crack { depth, .. } | Self::Pits { depth, .. } => depth,
+            _ => 0.0,
         }
     }
 
@@ -274,6 +386,46 @@ impl Layer {
                 sharpness,
                 amount,
                 towards,
+            },
+            // A crack's depth is in tile widths and a spread texture holds
+            // `factor` tiles, so the depth is left alone here and divided by
+            // the spread where the material learns it — see
+            // `Pattern::relief_depth`.
+            Self::Crack {
+                scale,
+                octaves,
+                elongation,
+                sharpness,
+                amount,
+                towards,
+                coverage,
+                depth,
+            } => Self::Crack {
+                scale: scale * factor,
+                octaves,
+                elongation,
+                sharpness,
+                amount,
+                towards,
+                coverage,
+                depth,
+            },
+            Self::Pits {
+                scale,
+                octaves,
+                threshold,
+                span,
+                amount,
+                towards,
+                depth,
+            } => Self::Pits {
+                scale: scale * factor,
+                octaves,
+                threshold,
+                span,
+                amount,
+                towards,
+                depth,
             },
         }
     }
@@ -362,22 +514,43 @@ impl Pattern {
         seed: u32,
         spread: Spread,
     ) -> Colour {
+        self.texel(u, v, palette, seed, spread).0
+    }
+
+    /// How deep this pattern's relief runs at its deepest, in tile widths.
+    ///
+    /// Zero for a pattern with no [`Crack`](Layer::Crack) or
+    /// [`Pits`](Layer::Pits) layer, which is a flat print and bakes an opaque
+    /// alpha. Otherwise the alpha carries height, with this depth as its
+    /// range, and a material wearing the texture must be told so — the alpha
+    /// of an opaque surface is otherwise nobody's business.
+    pub fn relief_depth(&self) -> f32 {
+        self.layers.iter().map(Layer::max_depth).sum()
+    }
+
+    /// Colour and relief height at `(u, v)`. Height is `1` at the untouched
+    /// surface and `0` at the deepest the pattern can cut.
+    fn texel(&self, u: f32, v: f32, palette: &Palette, seed: u32, spread: Spread) -> (Colour, f32) {
         let factor = spread.tiles() as f32;
         let mut colour = palette.base;
+        let mut carved = 0.0;
         for (index, layer) in self.layers.iter().enumerate() {
             // Derived from the layer's position rather than authored. Two
             // layers at the same frequency must not draw the same field, or
             // their features line up and the surface acquires a structure
             // nobody asked for.
-            colour = layer.scaled(factor).apply(
-                colour,
-                u,
-                v,
-                palette,
-                seed.wrapping_add(index as u32 * 7919),
-            );
+            let layer_seed = seed.wrapping_add(index as u32 * 7919);
+            let layer = layer.scaled(factor);
+            colour = layer.apply(colour, u, v, palette, layer_seed);
+            carved += layer.carve(u, v, layer_seed);
         }
-        colour
+        let depth = self.relief_depth();
+        let height = if depth > 0.0 {
+            1.0 - carved / depth
+        } else {
+            1.0
+        };
+        (colour, height)
     }
 
     /// Bake this pattern into an RGBA8 tile.
@@ -447,12 +620,12 @@ impl Pattern {
             for x in 0..size {
                 let u = x as f32 / size as f32;
                 let v = y as f32 / size as f32;
-                let colour = self.sample_spread(u, v, palette, seed, spread);
+                let (colour, height) = self.texel(u, v, palette, seed, spread);
 
                 strip.push(byte(colour.r));
                 strip.push(byte(colour.g));
                 strip.push(byte(colour.b));
-                strip.push(255);
+                strip.push(byte(height));
             }
         }
 
@@ -500,6 +673,30 @@ fn noise(u: f32, v: f32, scale: f32, octaves: u32, seed: u32) -> f32 {
     )
 }
 
+/// Where a [`Layer::Crack`] shows: one where the cracks run, zero where they
+/// do not, with a short fade between. Drawn at half the crack's frequency
+/// from a seed of its own, so a patch spans a few features of the crack.
+fn crack_mask(u: f32, v: f32, scale: f32, coverage: f32, seed: u32) -> f32 {
+    if coverage >= 1.0 {
+        return 1.0;
+    }
+    // The noise sits in about 0.17..0.81, centred on 0.5; a threshold that
+    // far above the middle leaves about `coverage` of the surface.
+    let threshold = 0.5 + (0.5 - coverage) * 0.5;
+    let n = noise(u, v, (scale * 0.5).max(1.0), 2, seed ^ 0x2c1b_3c6d);
+    patch_strength(n, threshold, 0.08)
+}
+
+/// The field a [`Layer::Crack`] is the ridge of: plain noise, or noise
+/// stretched along `v` when the crack is asked to run.
+fn crack_noise(u: f32, v: f32, scale: f32, elongation: f32, octaves: u32, seed: u32) -> f32 {
+    if elongation > 1.0 {
+        streaked_noise(u, v, scale, elongation, octaves, seed)
+    } else {
+        noise(u, v, scale, octaves, seed)
+    }
+}
+
 /// Periodic fractal noise on a lattice stretched along `v`.
 ///
 /// Stretching the *sampling* rather than smearing the result is what keeps the
@@ -537,6 +734,15 @@ fn streaked_noise(u: f32, v: f32, scale: f32, elongation: f32, octaves: u32, see
 /// measure it on.
 fn ridge(n: f32, sharpness: f32) -> f32 {
     (1.0 - (signed(n) * sharpness).abs()).max(0.0)
+}
+
+/// How far into a patch noise value `n` is: zero below `threshold`, rising to
+/// one over `span`.
+fn patch_strength(n: f32, threshold: f32, span: f32) -> f32 {
+    if n <= threshold {
+        return 0.0;
+    }
+    ((n - threshold) / span).clamp(0.0, 1.0)
 }
 
 /// Noise as a 0..1 weight.
@@ -912,5 +1118,63 @@ mod tests {
         let pixels = library::STONE.bake(16, &palette(), 1);
         assert_eq!(pixels.len(), 16 * 16 * 4);
         assert!(pixels.chunks(4).all(|p| p[3] == 255));
+    }
+
+    /// A pattern that cuts nothing prints a flat, opaque tile: its alpha is
+    /// coverage, and every surface drawn with it before relief existed must
+    /// look exactly as it did.
+    #[test]
+    fn a_flat_pattern_has_no_relief() {
+        assert_eq!(library::STONE.relief_depth(), 0.0);
+        assert_eq!(library::MARBLE.relief_depth(), 0.0);
+    }
+
+    /// Cracks are cut exactly where they are drawn: the lowest texels of the
+    /// relief are the darkest of the cracks.
+    #[test]
+    fn a_crack_is_cut_where_it_is_drawn() {
+        const CRACKED: Pattern = Pattern {
+            name: "crack_only",
+            layers: &[Layer::Crack {
+                scale: 6.0,
+                octaves: 3,
+                elongation: 1.0,
+                sharpness: 20.0,
+                amount: 1.0,
+                towards: Slot::Accent,
+                coverage: 1.0,
+                depth: 0.01,
+            }],
+        };
+        let palette = palette();
+        let size = 64;
+        let pixels = CRACKED.bake(size, &palette, 3);
+        let (mut in_crack, mut outside) = ((0.0, 0), (0.0, 0));
+        for texel in pixels.chunks(4) {
+            let brightness = texel[0] as f32;
+            if texel[3] < 128 {
+                in_crack = (in_crack.0 + brightness, in_crack.1 + 1);
+            } else if texel[3] == 255 {
+                outside = (outside.0 + brightness, outside.1 + 1);
+            }
+        }
+        assert!(in_crack.1 > 0, "nothing was cut");
+        assert!(outside.1 > in_crack.1, "the crack is everywhere");
+        let mean = |(sum, n): (f32, i32)| sum / n as f32;
+        assert!(
+            mean(in_crack) < mean(outside) - 20.0,
+            "the cut is not where the crack is drawn: {} inside vs {} outside",
+            mean(in_crack),
+            mean(outside)
+        );
+    }
+
+    /// Weathered stone is the pattern relief was made for.
+    #[test]
+    fn weathered_stone_cuts_into_its_surface() {
+        let depth = library::WEATHERED_STONE.relief_depth();
+        assert!(depth > 0.0 && depth < 0.05, "relief depth {depth}");
+        let pixels = library::WEATHERED_STONE.bake(64, &palette(), 1);
+        assert!(pixels.chunks(4).any(|p| p[3] < 200), "no texel is cut");
     }
 }

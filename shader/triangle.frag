@@ -13,6 +13,7 @@
 #include "surface_character.glsl"
 #include "surface_source.glsl"
 #include "grain.glsl"
+#include "relief.glsl"
 #include "transparency.glsl"
 
 layout(location = 0) in vec4 inColor;
@@ -90,6 +91,21 @@ void main() {
         texture_alpha = texColor.a;
     }
 
+    // Relief: a texture baked from a pattern that cuts into the surface keeps
+    // its height in alpha. The surface is opaque; the alpha is the shape.
+    float relief_occlusion = 1.0;
+    if (sourceHas(source, SOURCE_RELIEF_IN_ALPHA)) {
+        normal = reliefNormal(
+            texSampler,
+            inTexCoord,
+            texture_alpha,
+            normal,
+            inWorldPos,
+            materialReliefDepth());
+        relief_occlusion = reliefOcclusion(texture_alpha);
+        texture_alpha = 1.0;
+    }
+
     // Grain: microstructure from the shared atlas, for surfaces whose albedo
     // did not already carry a detail normal of its own. Terrain's arrives with
     // its albedo in one packed read and never reaches here.
@@ -136,7 +152,7 @@ void main() {
     surface.normal = normal;
     surface.view_dir = view_dir;
     surface.metallic = materialMetallic();
-    surface.occlusion = inAo;
+    surface.occlusion = inAo * relief_occlusion;
 
     // Roughness last, because the filtering reads the shading normal that the
     // detail perturbation has already been folded into. Applied to every

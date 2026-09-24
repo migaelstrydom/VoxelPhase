@@ -23,6 +23,7 @@ pub mod terrain_detail;
 pub mod terrain_finish;
 pub mod terrain_forms;
 pub mod voxel_terrain;
+pub mod weathered_stone;
 
 pub use craters::Craters;
 pub use critter::Critter;
@@ -44,3 +45,4 @@ pub use terrain_ao::TerrainAo;
 pub use terrain_detail::TerrainDetail;
 pub use terrain_finish::TerrainFinish;
 pub use terrain_forms::TerrainForms;
+pub use weathered_stone::WeatheredStone;

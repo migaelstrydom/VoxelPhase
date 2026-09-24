@@ -47,6 +47,9 @@ struct GpuSurface {
     /// incidence, derived from the material's refractive index. zw spare.
     /// See src/rendering/transparency/optics.rs.
     vec4 optics;
+    /// x = depth of the relief in the diffuse alpha, in texture coordinates.
+    /// yzw spare. See src/rendering/material.rs `with_relief`.
+    vec4 detail;
 };
 
 layout(std430, set = 0, binding = 3) readonly buffer SurfaceTable {
@@ -87,6 +90,9 @@ float materialOpacity() { return materialSurface().optics.x; }
 
 /// This surface's reflectance at normal incidence, from its refractive index.
 float materialReflectance() { return materialSurface().optics.y; }
+
+/// How deep the relief in the diffuse alpha runs, in texture coordinates.
+float materialReliefDepth() { return materialSurface().detail.x; }
 
 /// Emissive radiance added independently of incoming light.
 ///

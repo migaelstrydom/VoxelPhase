@@ -65,7 +65,13 @@ impl MaterialCtx<'_> {
             spread,
         )?;
 
-        Ok(self.materials.register(substance.material(texture)))
+        // A pattern that cuts into the surface bakes its relief into the
+        // texture's alpha, in tile widths; the texture holds `spread` tiles
+        // across its one unit of texture coordinates.
+        let relief = pattern.relief_depth() / spread.tiles() as f32;
+        Ok(self
+            .materials
+            .register(substance.material(texture).with_relief(relief)))
     }
 }
 

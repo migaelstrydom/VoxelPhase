@@ -12,6 +12,7 @@ use super::load::{ChildLoad, ChildLoads};
 use crate::app::spawnables::shared::models::{
     assemble_by_material, piece_model, PieceHull, PiecePlacement, PieceStyle, PlacedMesh,
 };
+use crate::collision::convex_hull::ConvexHull;
 use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
 };
@@ -150,6 +151,7 @@ impl<'a> System<'a> for FractureSystem {
             let materials = fracture.materials.clone();
             let style = fracture.style;
             let anchor = fracture.texture_anchor;
+            let whole = fracture.whole_shape.clone();
             let debris_of = fracture.sheds_debris.then_some(trigger.entity);
 
             // Break the overloaded joints; the rest of the structure survives.
@@ -238,7 +240,7 @@ impl<'a> System<'a> for FractureSystem {
             let freed: Vec<&ChildSnapshot> = split_groups.iter().flatten().collect();
             let freed_models: Vec<Option<Arc<Model>>> = freed
                 .par_iter()
-                .map(|info| freed_piece_model(info, style, anchor))
+                .map(|info| freed_piece_model(info, style, anchor, whole.as_deref()))
                 .collect();
             for (info, model) in freed.into_iter().zip(freed_models) {
                 spawn_freed_piece(
@@ -338,6 +340,7 @@ fn rebuild_stale_models(
             &fracture.materials,
             fracture.style,
             fracture.texture_anchor,
+            fracture.whole_shape.as_deref(),
         ) {
             instance.model = model;
         }
@@ -429,6 +432,7 @@ fn freed_piece_model(
     info: &ChildSnapshot,
     style: PieceStyle,
     anchor: Vector3<f32>,
+    whole: Option<&ConvexHull>,
 ) -> Option<Arc<Model>> {
     match &info.shape {
         ColliderShape::Box { half_extents } => Some(piece_model(
@@ -438,8 +442,10 @@ fn freed_piece_model(
             info.material,
         )),
         ColliderShape::ConvexHull { hull } => {
-            let (vertices, indices) =
-                (style.hulls)(&PieceHull::new(hull, info.local_offset + anchor), style.uvs);
+            let (vertices, indices) = (style.hulls)(
+                &PieceHull::new(hull, info.local_offset + anchor).within(whole),
+                style.uvs,
+            );
             Some(assemble_by_material(vec![PlacedMesh {
                 vertices,
                 indices,
@@ -519,6 +525,7 @@ pub(crate) fn compound_model_of(
     materials: &[MaterialId],
     style: PieceStyle,
     anchor: Vector3<f32>,
+    whole: Option<&ConvexHull>,
 ) -> Option<Arc<Model>> {
     let body = physics.world.body(body_handle)?;
     let fallback = materials.last().copied().unwrap_or(MaterialId(0));
@@ -565,9 +572,10 @@ pub(crate) fn compound_model_of(
                         style.uvs,
                     )
                 }
-                ColliderShape::ConvexHull { hull } => {
-                    (style.hulls)(&PieceHull::new(hull, offset + anchor), style.uvs)
-                }
+                ColliderShape::ConvexHull { hull } => (style.hulls)(
+                    &PieceHull::new(hull, offset + anchor).within(whole),
+                    style.uvs,
+                ),
                 _ => return None,
             };
             Some(PlacedMesh {

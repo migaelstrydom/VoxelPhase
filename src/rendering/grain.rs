@@ -150,6 +150,19 @@ impl GrainSpec {
         strength: 0.55,
     };
 
+    /// Dressed stone the weather has had for centuries: the same
+    /// microstructure as `DRESSED_STONE` at about half the strength.
+    ///
+    /// Rain softens soft stone rather than roughening it — the skin goes
+    /// smooth and a little sugary, and the pits that remain are few and large
+    /// enough to be the texture's business, not the grain's. At dressed
+    /// strength a weathered block reads as a peened, popcorn-ceiling surface.
+    pub const WEATHERED_STONE: Self = Self {
+        layer: GrainLayer::Stone,
+        scale: 0.65,
+        strength: 0.3,
+    };
+
     /// Cast concrete: coarser than dressed stone and rougher than rock, because
     /// the aggregate is bigger than the crystal.
     pub const CONCRETE: Self = Self {
@@ -457,6 +470,13 @@ mod tests {
         assert!(GrainSpec::STONE.is_enabled());
     }
 
+    /// Weathering softens a worked face further still, but never to nothing.
+    #[test]
+    fn weathered_stone_is_softer_than_dressed() {
+        assert!(GrainSpec::WEATHERED_STONE.strength < GrainSpec::DRESSED_STONE.strength);
+        assert!(GrainSpec::WEATHERED_STONE.is_enabled());
+    }
+
     /// A worked face has been taken down but not polished away, so it must
     /// still show more than nothing and less than broken rock.
     #[test]
@@ -474,6 +494,7 @@ mod tests {
         for (name, spec) in [
             ("stone", GrainSpec::STONE),
             ("dressed", GrainSpec::DRESSED_STONE),
+            ("weathered", GrainSpec::WEATHERED_STONE),
             ("concrete", GrainSpec::CONCRETE),
         ] {
             let density = spec.features_per_metre();
