@@ -1731,6 +1731,26 @@ sea, and spikes after a grenade).
 - **Ripple slope** is capped at 1 for the normal.
 - `level_viewer` takes `--blast`, `--splash` and `--run` to look at ripples.
 
+**Second play-test** (test_arena: a crash, the pool vanishing, a floor
+raised). `water_fuzz` blows a level's water about at random and checks it
+after every frame; it found each of these.
+
+- **Reverse flow crashed the current.** A weir running backwards gave its
+  current term a negative speed cap. The cap is `|Q|`.
+- **A flooded pocket is merged.** A cave under a lake, with a hole blown
+  between them, filled to its cap and could rise no further, so it never
+  met the lake's level to merge; it sloshed several m³ a frame. Two basins
+  over a shared lip now merge also when one is full to its cap and the
+  other stands above that cap.
+- **Slivers.** An air span thinner than a voxel is below what marching cubes
+  resolves; a nearby blast can close it with no material added. Its remap
+  entry is marked as not resting: it no longer claims the new span's owner,
+  counts as a blown-through floor (which gave the lake a phantom hole to
+  drain through), sets the drain, or holds the floor.
+- **Re-triangulation tolerance** is one voxel: blasts into floors and caves
+  raised a floor 0.75 of a voxel, and the surface stays within its cell.
+- **Wakes and bobbing** stir the surface only while a body breaks it.
+
 ## 22. Decided and deferred
 
 | Question | Status |

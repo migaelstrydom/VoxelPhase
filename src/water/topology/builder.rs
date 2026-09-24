@@ -460,7 +460,9 @@ impl TopologyBuilder {
 
     /// Where several old spans landed in one new span, the floor between
     /// them was blown through (§8.3): the new span went to the owner of the
-    /// lowest, and every basin that owned one above it has a hole there.
+    /// lowest, and every basin that owned one above it has a hole there. A
+    /// closed sliver blew nothing through, and is lowest only if nothing
+    /// resting landed.
     fn note_holes(&self, t: &mut Topology, update: &GeometryUpdate) {
         let mut landed: FxHashMap<(Column, u8), Vec<&crate::water::geometry::RemapEntry>> =
             FxHashMap::default();
@@ -475,11 +477,11 @@ impl TopologyBuilder {
             let entries = &landed[&key];
             let lowest = entries
                 .iter()
-                .min_by_key(|e| e.old_ordinal)
+                .min_by_key(|e| (!e.rests, e.old_ordinal))
                 .expect("at least one entry landed");
             for upper in entries
                 .iter()
-                .filter(|e| e.old_ordinal != lowest.old_ordinal)
+                .filter(|e| e.rests && e.old_ordinal != lowest.old_ordinal)
             {
                 let Some(body) = upper.old_owner.body else {
                     continue;
@@ -1302,7 +1304,11 @@ impl TopologyBuilder {
     }
 
     /// Merge with a basin across an outflow once both stand over its lip at
-    /// the same level (§8.1). Returns whether the basin is gone.
+    /// the same level (§8.1), or once one of them is full to its cap and the
+    /// other stands above that cap. A full basin can rise no further, so it
+    /// would never meet the other's level: it is a pocket the other has
+    /// flooded, a cave under a lake with a hole blown between them. Returns
+    /// whether the basin is gone.
     fn merge_with_neighbour(&mut self, t: &mut Topology, id: StoreId) -> bool {
         let basin = t.network.store(id).and_then(Store::as_basin).expect("live");
         let level = basin.level();
@@ -1322,11 +1328,16 @@ impl TopologyBuilder {
                 return None;
             }
             let other_level = other.level();
+            let flooded = |full: &Basin, full_level: f32, above: f32| {
+                full_level > full.cap - CAP_MARGIN && above > full.cap
+            };
             (target != id
                 && level > o.lip
                 && other_level > o.lip
-                && (level - other_level).abs() < MERGE_LEVELS)
-                .then_some(target)
+                && ((level - other_level).abs() < MERGE_LEVELS
+                    || flooded(basin, level, other_level)
+                    || flooded(other, other_level, level)))
+            .then_some(target)
         });
         match partner {
             Some(other) => {

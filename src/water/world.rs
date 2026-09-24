@@ -698,7 +698,7 @@ struct CurrentTerm {
     radius: f32,
     /// Water depth the flow is spread over, m.
     depth: f32,
-    /// The fastest the term runs: the velocity over the crest.
+    /// The fastest the term runs, either way: the speed over the crest.
     cap: f32,
 }
 
@@ -721,7 +721,8 @@ impl CurrentTerm {
             discharge: q,
             radius: 3.0 * width,
             depth: (level - basin.deepest()).max(0.1),
-            cap: q / (width * head),
+            // A reversible weir running backwards has a negative discharge.
+            cap: q.abs() / (width * head),
         })
     }
 
@@ -736,5 +737,25 @@ impl CurrentTerm {
         let speed =
             (self.discharge / (std::f32::consts::PI * r * self.depth)).clamp(-self.cap, self.cap);
         d / r * speed * fade
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_term_running_backwards_pushes_outwards() {
+        let q = -0.5;
+        let (width, head) = (1.0f32, 0.1f32);
+        let term = CurrentTerm {
+            centre: nalgebra::Vector2::new(0.0, 0.0),
+            discharge: q,
+            radius: 3.0,
+            depth: 1.0,
+            cap: q.abs() / (width * head),
+        };
+        let v = term.velocity_at(1.0, 0.0);
+        assert!(v.x > 0.0, "flow out of a reversed crest runs away from it");
     }
 }

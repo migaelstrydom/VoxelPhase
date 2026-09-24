@@ -715,9 +715,19 @@ impl DrainageField {
         let old = std::mem::take(&mut self.chunks[slot]);
         let mut fresh = Self::empty_chunk(graph, slot);
         // Each new span takes the lowest fill of the old spans that landed in
-        // it, and the drain of the lowest of them: the one it rests on.
+        // it, and the drain of the lowest of them: the one it rests on. A
+        // closed sliver counts only where nothing resting landed.
         let mut landed: FxHashMap<(usize, u8), (f32, Drain)> = FxHashMap::default();
-        for entry in remap.entries.iter().filter(|e| e.column.chunk() == coord) {
+        let here: Vec<_> = remap
+            .entries
+            .iter()
+            .filter(|e| e.column.chunk() == coord)
+            .collect();
+        for entry in here
+            .iter()
+            .filter(|e| e.rests)
+            .chain(here.iter().filter(|e| !e.rests))
+        {
             let local = entry.column.local_index();
             let Some(new_ordinal) = entry.new_ordinal else {
                 continue;
@@ -725,10 +735,13 @@ impl DrainageField {
             let old_index = old.offsets[local] as usize + entry.old_ordinal as usize;
             let old_fill = old.fill.get(old_index).copied().unwrap_or(f32::INFINITY);
             let old_drain = old.drain.get(old_index).copied().unwrap_or(Drain::Sealed);
-            landed
-                .entry((local, new_ordinal))
-                .and_modify(|(fill, _)| *fill = fill.min(old_fill))
-                .or_insert((old_fill, old_drain));
+            let slot = landed.entry((local, new_ordinal));
+            if entry.rests {
+                slot.and_modify(|(fill, _)| *fill = fill.min(old_fill))
+                    .or_insert((old_fill, old_drain));
+            } else {
+                slot.or_insert((old_fill, old_drain));
+            }
         }
         for local in 0..COLUMNS_PER_CHUNK {
             let column = coord.column(local);
@@ -925,6 +938,7 @@ mod tests {
                 old,
                 old_owner: Default::default(),
                 new_ordinal: Some(0),
+                rests: true,
             });
         }
         g.replace_chunk(coord, SpanChunk::from_columns(&columns, 2));

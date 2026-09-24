@@ -229,6 +229,11 @@ impl WaveBodyCoupler {
             if !is_submerged {
                 continue;
             }
+            // Bobbing and wakes stir the surface only while the body breaks
+            // it; one moving deep under water leaves the surface alone.
+            let breaks_surface = sample
+                .as_ref()
+                .is_some_and(|s| body.position.y + body.footprint_radius >= s.surface_level);
 
             // Wave injection scales with mass: light objects create smaller
             // disturbances, breaking the feedback loop where self-generated
@@ -259,7 +264,7 @@ impl WaveBodyCoupler {
             // 2. Bobbing: floating body's vertical motion perturbs surface.
             //    Uses displacement injection so the surface visibly tracks the
             //    body's oscillation regardless of wave damping.
-            if was_submerged {
+            if was_submerged && breaks_surface {
                 let vy = body.velocity.y;
                 if vy.abs() > 0.01 {
                     let strength = -vy * self.config.bobbing_strength * mass_factor;
@@ -274,7 +279,7 @@ impl WaveBodyCoupler {
 
             // 3. Wake: self-propelled body moving horizontally through water.
             //    Uses displacement injection behind the body.
-            if body.is_self_propelled {
+            if body.is_self_propelled && breaks_surface {
                 let horizontal_vel = nalgebra::Vector3::new(body.velocity.x, 0.0, body.velocity.z);
                 let h_speed = horizontal_vel.magnitude();
                 if h_speed > self.config.wake_speed_threshold {
@@ -416,5 +421,17 @@ mod tests {
             coupler.update(&[], &mut ripples, &Flat);
         }
         assert!(!coupler.body_states.contains_key(&1));
+    }
+
+    #[test]
+    fn a_body_deep_under_water_leaves_the_surface_alone() {
+        let mut ripples = Recorder::default();
+        let mut coupler = WaveBodyCoupler::new(WaveCouplingConfig::default());
+        let gliding = Vector3::new(3.0, 0.0, 0.0);
+        let sinking = Vector3::new(3.0, -1.0, 0.0);
+        coupler.update(&[body(2.0, gliding, true)], &mut ripples, &Flat);
+        coupler.update(&[body(1.9, sinking, true)], &mut ripples, &Flat);
+        assert!(ripples.disturbances.is_empty());
+        assert!(coupler.wake_events.is_empty());
     }
 }

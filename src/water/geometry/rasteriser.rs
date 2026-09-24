@@ -40,11 +40,13 @@ pub const REMAP_EPSILON: f32 = 1e-3;
 /// Carving only lowers densities, but marching cubes does not turn that into
 /// a surface that only falls: when a cell near a crater's rim changes case,
 /// its triangles connect different edge vertices, and the surface over a
-/// fixed point can rise by a fraction of a voxel. Measured over 240 grenades
-/// on the five water levels at up to 0.3 of a voxel. A rise within this
-/// tolerance is clamped: the span keeps its old floor, so everything
-/// downstream still sees floors that only drop.
-pub const RETRIANGULATION_TOLERANCE: f32 = 0.5;
+/// fixed point can rise by up to a voxel: the surface stays within the cell
+/// it crosses. Grenades on the surface of the five water levels raised it at
+/// most 0.3 of a voxel; `water_fuzz`, blasting into test_arena's pool floor
+/// and the caves under it, 0.75. A rise within this tolerance is clamped: the
+/// span keeps its old floor, so everything downstream still sees floors that
+/// only drop.
+pub const RETRIANGULATION_TOLERANCE: f32 = 1.0;
 
 /// Where each span of the rebuilt columns went.
 ///
@@ -72,6 +74,12 @@ pub struct RemapEntry {
     /// `None` where the edit blew away every floor below the old one: the
     /// span now opens onto the void, and its water leaves the world.
     pub new_ordinal: Option<u8>,
+    /// Whether the new span still rests on this span's floor. Not for a
+    /// sliver thinner than a voxel that the re-mesh closed: marching cubes
+    /// does not resolve it, so it can vanish with no material added, and the
+    /// span above takes its air. Owners, holes, drains and the floor hold go
+    /// by the lowest span that rests.
+    pub rests: bool,
 }
 
 /// What pairing one column found.
@@ -110,7 +118,11 @@ pub struct RasterStats {
     /// Spans whose `floor_min` rose because a span opened below them, held
     /// at the old height.
     pub floor_min_holds: usize,
+    /// Slivers thinner than a voxel that a re-mesh closed.
+    pub closed_slivers: usize,
     pub invariant_violations: usize,
+    /// The most recent violation: the column, its old floor and its new.
+    pub last_violation: Option<(Column, f32, f32)>,
 }
 
 /// Rasterises terrain into a span graph and keeps it current.
@@ -309,8 +321,14 @@ impl SpanRasteriser {
             }
             // Old spans are remapped bottom-up, so the lowest old span to land
             // in a new span claims it first: the one it still rests on (§8.3).
+            // A closed sliver claims only a span nothing resting landed in.
             let mut claimed: BTreeSet<(Column, u8)> = BTreeSet::new();
-            for entry in &remap.entries[first_entry..] {
+            let entries = &remap.entries[first_entry..];
+            for entry in entries
+                .iter()
+                .filter(|e| e.rests)
+                .chain(entries.iter().filter(|e| !e.rests))
+            {
                 let Some(new_ordinal) = entry.new_ordinal else {
                     continue;
                 };
@@ -459,12 +477,18 @@ impl SpanRasteriser {
         for (ordinal, span) in old.iter().enumerate() {
             let y = span.floor_c + REMAP_EPSILON;
             let new_ordinal = new.iter().position(|s| s.ceiling > y);
-            if let Some(n) = new_ordinal {
+            let rests = new_ordinal.is_none_or(|n| {
+                let sliver = span.ceiling - span.floor_c < voxel_size;
+                !(sliver && new[n].floor_c > y)
+            });
+            if let Some(n) = new_ordinal.filter(|_| rests) {
                 // Old spans are visited bottom-up: the first to land in a new
                 // span is the one it rests on.
                 if !std::mem::replace(&mut claimed[n], true) {
                     self.hold_floor(column, span, &mut new[n], voxel_size);
                 }
+            } else if new_ordinal.is_some() {
+                self.stats.closed_slivers += 1;
             }
             remap.entries.push(RemapEntry {
                 column,
@@ -472,6 +496,7 @@ impl SpanRasteriser {
                 old: *span,
                 old_owner: old_owners.get(ordinal).copied().unwrap_or_default(),
                 new_ordinal: new_ordinal.map(|n| n as u8),
+                rests,
             });
         }
     }
@@ -499,6 +524,7 @@ impl SpanRasteriser {
 
     fn report_violation(&mut self, column: Column, old: f32, new: f32) {
         self.stats.invariant_violations += 1;
+        self.stats.last_violation = Some((column, old, new));
         log::error!(
             "terrain edit raised a floor at column ({}, {}): {old:.3} -> {new:.3}; \
              terrain edits must only remove material",
