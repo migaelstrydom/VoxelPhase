@@ -28,30 +28,49 @@ pub struct SwellWave {
 }
 
 /// The shared spectrum. Mirrored in `shader/swell.glsl`.
-pub const SPECTRUM: [SwellWave; 5] = [
+///
+/// Eight waves about a prevailing heading, their wavelengths in no simple
+/// ratio and the height spread over them, so that no pair dominates: two
+/// strong waves cross in a lattice that reads as tiles.
+pub const SPECTRUM: [SwellWave; 8] = [
     SwellWave {
         heading: 0.0,
-        wavelength: 7.3,
-        share: 0.45,
+        wavelength: 9.7,
+        share: 0.24,
     },
     SwellWave {
-        heading: 0.7,
-        wavelength: 4.1,
-        share: 0.25,
+        heading: 0.6,
+        wavelength: 6.9,
+        share: 0.19,
     },
     SwellWave {
-        heading: -0.9,
-        wavelength: 2.6,
+        heading: -0.5,
+        wavelength: 5.3,
         share: 0.15,
     },
     SwellWave {
-        heading: 1.9,
-        wavelength: 1.7,
-        share: 0.10,
+        heading: 1.1,
+        wavelength: 3.8,
+        share: 0.12,
     },
     SwellWave {
-        heading: -2.4,
-        wavelength: 1.1,
+        heading: -0.9,
+        wavelength: 2.9,
+        share: 0.1,
+    },
+    SwellWave {
+        heading: 0.3,
+        wavelength: 2.2,
+        share: 0.08,
+    },
+    SwellWave {
+        heading: -1.4,
+        wavelength: 1.6,
+        share: 0.07,
+    },
+    SwellWave {
+        heading: 1.5,
+        wavelength: 1.2,
         share: 0.05,
     },
 ];

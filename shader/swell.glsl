@@ -10,13 +10,16 @@ struct SwellWave {
     float share;       // share of the body's amplitude
 };
 
-const int SWELL_WAVES = 5;
+const int SWELL_WAVES = 8;
 const SwellWave SWELL_SPECTRUM[SWELL_WAVES] = SwellWave[](
-    SwellWave(0.0, 7.3, 0.45),
-    SwellWave(0.7, 4.1, 0.25),
-    SwellWave(-0.9, 2.6, 0.15),
-    SwellWave(1.9, 1.7, 0.10),
-    SwellWave(-2.4, 1.1, 0.05)
+    SwellWave(0.0, 9.7, 0.24),
+    SwellWave(0.6, 6.9, 0.19),
+    SwellWave(-0.5, 5.3, 0.15),
+    SwellWave(1.1, 3.8, 0.12),
+    SwellWave(-0.9, 2.9, 0.10),
+    SwellWave(0.3, 2.2, 0.08),
+    SwellWave(-1.4, 1.6, 0.07),
+    SwellWave(1.5, 1.2, 0.05)
 );
 
 const float SWELL_GRAVITY = 9.81;
