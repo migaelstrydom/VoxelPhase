@@ -132,6 +132,17 @@ pub fn shore_fade(depth: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
+/// The floor a surface corner fades its swell by: the lowest of the wet
+/// columns touching it (NaN for a dry one); NaN if none is wet. Every
+/// surface that meets another at a corner — coarse tile, fine tile — takes
+/// it this way, so the two stand at the same height there.
+pub fn corner_floor(touching: [f32; 4]) -> f32 {
+    touching
+        .into_iter()
+        .filter(|f| !f.is_nan())
+        .fold(f32::NAN, f32::min)
+}
+
 /// A phase in [0, 2π) from a seed, spread by the golden ratio.
 fn phase_for(seed: u32) -> f32 {
     (seed as f32 * 0.618_034).fract() * std::f32::consts::TAU

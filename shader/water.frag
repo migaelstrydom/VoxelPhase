@@ -5,6 +5,7 @@
 
 #include "tonemap.glsl"
 #include "ripple.glsl"
+#include "swell.glsl"
 
 // --- Tuning constants ---
 const float REFRACTION_STRENGTH = 0.01;
@@ -21,6 +22,9 @@ layout(location = 3) flat in vec2 fragTileOrigin;
 layout(location = 4) in vec2 fragFlow;
 layout(location = 5) in float fragAlong;
 layout(location = 6) flat in vec2 fragWetRange;
+// The swell under this fragment: (amplitude with its shore fade, phase,
+// clock, unused); zero amplitude where there is none.
+layout(location = 7) in vec4 fragSwell;
 
 // Opaque color target (sampled at offset UVs for refraction)
 layout(set = 0, binding = 0) uniform sampler2D colorSampler;
@@ -84,6 +88,9 @@ vec3 proceduralNormal(vec2 pos, float scale, float strength) {
 }
 
 void main() {
+    // How much ground a pixel covers, taken before any fragment is discarded.
+    float footprint = max(length(dFdx(fragWorldPos.xz)), length(dFdy(fragWorldPos.xz)));
+
     // A ripple tile covers its whole 8 m square; only its body's columns are
     // this body's water.
     if (fragLayer >= 0 && isnan(rippleFloorAt(fragLayer, fragWorldPos.xz - fragTileOrigin))) {
@@ -106,8 +113,17 @@ void main() {
     vec3 noiseN1 = proceduralNormal(worldXZ + carried + vec2(time * 0.3, time * 0.2), 0.5, 0.07 + 0.015 * min(speed, 2.0));
     vec3 noiseN2 = proceduralNormal(worldXZ + carried * 1.3 + vec2(-time * 0.15, time * 0.25), 1.0, 0.04 + 0.015 * min(speed, 2.0));
 
+    // The vertex normal carries the ripples; the swell's slope is added
+    // here, per pixel.
+    vec3 rippleN = normalize(fragNormal);
+    vec2 swellSlope = swellSlopeAt(worldXZ, fragSwell.z, fragSwell.x, fragSwell.y, footprint);
+    vec3 vertexN = normalize(vec3(
+        rippleN.x / rippleN.y - swellSlope.x,
+        1.0,
+        rippleN.z / rippleN.y - swellSlope.y
+    ));
+
     // Blend noise normals with the vertex normal.
-    vec3 vertexN = normalize(fragNormal);
     vec3 N = normalize(vec3(
         vertexN.x + noiseN1.x + noiseN2.x,
         vertexN.y,

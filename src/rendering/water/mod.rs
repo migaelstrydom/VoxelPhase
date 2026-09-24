@@ -11,5 +11,5 @@ pub use basin_mesher::{
 };
 pub use fall_mesher::{FallDraw, FallKey, FallMesh, FallState};
 pub use reach_mesher::{RiverDraw, RiverMesh, RiverState};
-pub use renderer::WaterRenderer;
+pub use renderer::{WaterRenderer, RIPPLE_TILE_STRIDE};
 pub use vertex::{BasinVertex, FallVertex, FineVertex, RiverVertex};

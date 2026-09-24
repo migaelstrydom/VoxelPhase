@@ -14,12 +14,10 @@
 use nalgebra::Vector2;
 use rustc_hash::FxHashMap;
 
-use crate::water::geometry::{
-    Column, SpanChunkCoord, CHUNK_COLUMNS, COLUMNS_PER_CHUNK, COLUMN_SIZE, ORTHOGONAL,
-};
+use crate::water::geometry::{Column, SpanChunkCoord, COLUMNS_PER_CHUNK, COLUMN_SIZE, ORTHOGONAL};
 use crate::water::ids::{LinkId, StoreId};
 use crate::water::network::Basin;
-use crate::water::surface::Swell;
+use crate::water::surface::{corner_floor, RippleTiles, Swell, TILE_CORNERS};
 use crate::water::WaterWorld;
 
 use super::fall_mesher::{FallKey, FallMesh, FallState};
@@ -48,14 +46,24 @@ pub struct WaterMesh {
 pub type MeshKey = Vec<(StoreId, u32)>;
 
 /// One awake ripple tile, as the renderer uploads it.
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct RippleTileView<'a> {
     pub tile: SpanChunkCoord,
     pub body: StoreId,
-    /// Displacement per cell, row-major.
-    pub heights: &'a [f32],
     /// Floor under each column; NaN where the body holds no water there.
     pub floors: &'a [f32; COLUMNS_PER_CHUNK],
+    /// Floor at each column corner, as the coarse surface takes it.
+    pub corners: &'a [f32; TILE_CORNERS * TILE_CORNERS],
+    /// Edges beside coarse water, one bit each: +x, −x, +z, −z.
+    pub sealed: u32,
+    ripples: &'a RippleTiles,
+}
+
+impl RippleTileView<'_> {
+    /// Write the tile's heights as drawn, over `PADDED_CELLS`².
+    pub fn write_heights(&self, out: &mut [f32]) {
+        self.ripples.write_padded(&(self.tile, self.body), out);
+    }
 }
 
 /// Anything the water renderer can draw: bodies with static meshes and a
@@ -202,13 +210,16 @@ impl WaterScene for WaterWorld {
     }
 
     fn ripple_tiles(&self) -> Vec<RippleTileView<'_>> {
-        self.ripples()
+        let ripples = self.ripples();
+        ripples
             .active()
             .map(|(key, tile)| RippleTileView {
                 tile: key.0,
                 body: key.1,
-                heights: &tile.height,
                 floors: &tile.mask.floors,
+                corners: &tile.mask.corners,
+                sealed: ripples.sealed_edges(key),
+                ripples,
             })
             .collect()
     }
@@ -232,7 +243,8 @@ pub fn build<'a>(basins: impl Iterator<Item = (StoreId, &'a Basin)>) -> WaterMes
 /// outside it whose ground stands above its highest possible surface: those
 /// are under the terrain at the waterline, and let the depth test cut the
 /// shore cleanly. Columns beyond a crest, lower than the water, are left out.
-fn columns(basin: &Basin) -> Vec<(Column, f32)> {
+/// Also returns the basin's own columns' floors.
+fn columns(basin: &Basin) -> (Vec<(Column, f32)>, FxHashMap<Column, f32>) {
     let mut floors: FxHashMap<Column, f32> = FxHashMap::default();
     for r in &basin.region {
         let floor = floors.entry(r.span.column).or_insert(f32::INFINITY);
@@ -250,24 +262,30 @@ fn columns(basin: &Basin) -> Vec<(Column, f32)> {
             ring.push((next, floor));
         }
     }
-    let mut out: Vec<(Column, f32)> = floors.into_iter().collect();
+    let mut out: Vec<(Column, f32)> = floors.iter().map(|(&c, &f)| (c, f)).collect();
     ring.sort_by(|a, b| a.0.cmp(&b.0));
     ring.dedup_by(|a, b| a.0 == b.0);
     out.extend(ring);
     out.sort_by(|a, b| a.0.chunk().cmp(&b.0.chunk()).then(a.0.cmp(&b.0)));
-    out
+    (out, floors)
 }
 
-/// Corners along each side of a tile.
-const TILE_CORNERS: usize = CHUNK_COLUMNS as usize + 1;
-
 fn append_basin(mesh: &mut WaterMesh, id: StoreId, basin: &Basin) {
-    append_columns(mesh, id, &columns(basin));
+    let (columns, wet) = columns(basin);
+    append_columns(mesh, id, &columns, &wet);
 }
 
 /// One quad per column, drawn per 8 m tile. `columns` must be sorted by
-/// tile, then column.
-pub(super) fn append_columns(mesh: &mut WaterMesh, id: StoreId, columns: &[(Column, f32)]) {
+/// tile, then column. Each corner takes the [`corner_floor`] of the `wet`
+/// columns touching it, as a ripple tile's corners do, so the surfaces meet
+/// at the same height; a corner with none takes its column's own floor.
+pub(super) fn append_columns(
+    mesh: &mut WaterMesh,
+    id: StoreId,
+    columns: &[(Column, f32)],
+    wet: &FxHashMap<Column, f32>,
+) {
+    let wet_floor = |i: i32, k: i32| wet.get(&Column::new(i, k)).copied().unwrap_or(f32::NAN);
     let mut corners = [u32::MAX; TILE_CORNERS * TILE_CORNERS];
     let mut start = 0;
     while start < columns.len() {
@@ -289,12 +307,20 @@ pub(super) fn append_columns(mesh: &mut WaterMesh, id: StoreId, columns: &[(Colu
             let mut corner = |di: usize, dk: usize, mesh: &mut WaterMesh| {
                 let slot = &mut corners[(lk + dk) * TILE_CORNERS + li + di];
                 if *slot == u32::MAX {
+                    let (ci, ck) = (column.i + di as i32, column.k + dk as i32);
+                    let corner = corner_floor([
+                        wet_floor(ci - 1, ck - 1),
+                        wet_floor(ci, ck - 1),
+                        wet_floor(ci - 1, ck),
+                        wet_floor(ci, ck),
+                    ]);
                     mesh.vertices.push(BasinVertex {
                         xz: Vector2::new(
                             (column.i + di as i32) as f32 * COLUMN_SIZE,
                             (column.k + dk as i32) as f32 * COLUMN_SIZE,
                         ),
-                        floor,
+                        floor: if corner.is_nan() { floor } else { corner },
+                        swell_share: 1.0,
                     });
                     *slot = mesh.vertices.len() as u32 - 1;
                 }

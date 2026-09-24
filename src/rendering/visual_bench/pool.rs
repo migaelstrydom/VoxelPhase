@@ -67,6 +67,7 @@ impl WaterScene for ScenePool {
                         -self.half_extent + k as f32 * COLUMN_SIZE,
                     ),
                     floor: self.floor,
+                    swell_share: 1.0,
                 });
             }
         }

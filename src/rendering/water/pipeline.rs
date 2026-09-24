@@ -208,7 +208,7 @@ impl WaterPipeline {
         // Push constants layout:
         //   0..128  — view matrix (64) + projection matrix (64) [vertex]
         // 128..160  — body (vec4: level, swell amplitude, swell phase, clock)
-        //             + tile (vec4: origin x, origin z, ripple layer, unused),
+        //             + tile (vec4: origin x, origin z, ripple layer, sealed edges),
         //             one per draw [vertex]
         // 160..224  — camera_pos (vec4) + sun_dir (vec4) + proj_params (vec4)
         //             + screen_params (vec4) [fragment]

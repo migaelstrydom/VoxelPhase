@@ -10,7 +10,11 @@
 //! each tile is masked to its body's columns. A merge or split makes a new
 //! body, so its tiles restart calm. The edges of a tile with no awake
 //! neighbour absorb what reaches them through a sponge, rather than
-//! reflecting it back.
+//! reflecting it back; energy entering the sponge wakes the neighbour first.
+//!
+//! The step is explicit, so it never takes more than [`RippleTiles::stable_dt`]:
+//! a long frame runs the ripples slow rather than past the stencil's limit.
+//! Damping is implicit, stable at any rate.
 
 use std::collections::BTreeMap;
 
@@ -28,6 +32,15 @@ pub const TILE_CELLS: usize = 64;
 /// Cells in a tile.
 pub const CELLS_PER_TILE: usize = TILE_CELLS * TILE_CELLS;
 
+/// Cells along each side of a tile as drawn: the tile and a one-cell apron.
+pub const PADDED_CELLS: usize = TILE_CELLS + 2;
+
+/// Cells in a tile as drawn.
+pub const PADDED_CELLS_PER_TILE: usize = PADDED_CELLS * PADDED_CELLS;
+
+/// Column corners along each side of a tile.
+pub const TILE_CORNERS: usize = CHUNK_COLUMNS as usize + 1;
+
 /// Width of a cell, m.
 pub const RIPPLE_CELL: f32 = COLUMN_SIZE * CHUNK_COLUMNS as f32 / TILE_CELLS as f32;
 
@@ -42,6 +55,12 @@ pub type RippleKey = (SpanChunkCoord, WaterBodyId);
 pub struct TileMask {
     /// Per column, row-major; NaN where the body holds no water there.
     pub floors: [f32; COLUMNS_PER_CHUNK],
+    /// Per column corner, row-major over `TILE_CORNERS`²: the
+    /// [`corner_floor`](super::corner_floor) of the columns touching it, this tile's and its
+    /// neighbours'.
+    pub corners: [f32; TILE_CORNERS * TILE_CORNERS],
+    /// The body's level when the mask was taken, m.
+    pub level: f32,
 }
 
 impl TileMask {
@@ -50,9 +69,13 @@ impl TileMask {
     }
 
     fn wet_cell(&self, cell: usize) -> bool {
+        !self.floor_under(cell).is_nan()
+    }
+
+    fn floor_under(&self, cell: usize) -> f32 {
         let (ci, ck) = (cell % TILE_CELLS, cell / TILE_CELLS);
         let column = (ck / CELLS_PER_COLUMN) * CHUNK_COLUMNS as usize + ci / CELLS_PER_COLUMN;
-        !self.floors[column].is_nan()
+        self.floors[column]
     }
 }
 
@@ -78,6 +101,10 @@ pub struct RippleConfig {
     pub max_active: usize,
     /// Cells of sponge along an edge with nothing awake beyond it.
     pub sponge: usize,
+    /// The highest a ripple stands above or below the surface, m.
+    pub max_height: f32,
+    /// ... and at most this share of the water's depth under it.
+    pub height_per_depth: f32,
 }
 
 impl Default for RippleConfig {
@@ -90,6 +117,8 @@ impl Default for RippleConfig {
             wake_energy: 1e-3,
             max_active: 32,
             sponge: 6,
+            max_height: 0.4,
+            height_per_depth: 0.5,
         }
     }
 }
@@ -104,8 +133,10 @@ pub struct RippleTile {
     /// 1 where the cell holds the body's water, 0 where it is dry: the
     /// mask per cell, as a factor the step multiplies through.
     wet: Vec<f32>,
-    /// Scratch for the step's accelerations.
-    acceleration: Vec<f32>,
+    /// The most a cell's height may stray from the surface, m.
+    cap: Vec<f32>,
+    /// Scratch for the step's new velocities.
+    next_velocity: Vec<f32>,
     /// Seconds spent below the sleep energy.
     quiet: f32,
     /// Energy after the last step.
@@ -113,25 +144,32 @@ pub struct RippleTile {
 }
 
 impl RippleTile {
-    fn new(mask: TileMask) -> Self {
+    fn new(mask: TileMask, config: &RippleConfig) -> Self {
         let mut tile = Self {
-            mask,
+            mask: mask.clone(),
             height: vec![0.0; CELLS_PER_TILE],
             velocity: vec![0.0; CELLS_PER_TILE],
             wet: vec![0.0; CELLS_PER_TILE],
-            acceleration: vec![0.0; CELLS_PER_TILE],
+            cap: vec![0.0; CELLS_PER_TILE],
+            next_velocity: vec![0.0; CELLS_PER_TILE],
             quiet: 0.0,
             energy: 0.0,
         };
-        tile.set_mask(tile.mask.clone());
+        tile.set_mask(mask, config);
         tile
     }
 
     /// Take a new mask, stilling any cell that has gone dry.
-    fn set_mask(&mut self, mask: TileMask) {
+    fn set_mask(&mut self, mask: TileMask, config: &RippleConfig) {
         for cell in 0..CELLS_PER_TILE {
-            let wet = mask.wet_cell(cell);
+            let floor = mask.floor_under(cell);
+            let wet = !floor.is_nan();
             self.wet[cell] = if wet { 1.0 } else { 0.0 };
+            self.cap[cell] = if wet {
+                (config.height_per_depth * (mask.level - floor)).clamp(0.0, config.max_height)
+            } else {
+                0.0
+            };
             if !wet {
                 self.height[cell] = 0.0;
                 self.velocity[cell] = 0.0;
@@ -191,7 +229,7 @@ impl RippleTiles {
             match masks.mask(key.0, key.1) {
                 Some(mask) if !mask.is_empty() => {
                     let tile = self.tiles.get_mut(&key).expect("key from this map");
-                    tile.set_mask(mask);
+                    tile.set_mask(mask, &self.config);
                 }
                 _ => {
                     self.tiles.remove(&key);
@@ -265,7 +303,7 @@ impl RippleTiles {
     fn wake(&mut self, key: RippleKey, masks: &dyn MaskSource) -> Option<&mut RippleTile> {
         if !self.tiles.contains_key(&key) {
             let mask = masks.mask(key.0, key.1).filter(|m| !m.is_empty())?;
-            self.tiles.insert(key, RippleTile::new(mask));
+            self.tiles.insert(key, RippleTile::new(mask, &self.config));
         }
         self.tiles.get_mut(&key)
     }
@@ -288,8 +326,15 @@ impl RippleTiles {
         a * (1.0 - tz) + b * tz
     }
 
-    /// Advance every awake tile by `dt`, wake neighbours that energy crosses
-    /// into, put quiet tiles to sleep and hold the budget.
+    /// The longest step the explicit stencil takes stably, s: half the
+    /// time a wave takes to cross a cell, inside the 2D limit of 1/√2.
+    pub fn stable_dt(&self) -> f32 {
+        0.5 * RIPPLE_CELL / self.config.wave_speed
+    }
+
+    /// Advance every awake tile by `dt`, at most [`Self::stable_dt`], wake
+    /// neighbours that energy crosses into, put quiet tiles to sleep and
+    /// hold the budget.
     ///
     /// Dry cells hold still water at zero. Each tile is copied into a padded
     /// buffer whose border is the facing edge of an awake neighbour, or still
@@ -301,13 +346,14 @@ impl RippleTiles {
         if self.tiles.is_empty() {
             return;
         }
+        let dt = dt.min(self.stable_dt());
         let c2_dx2 = self.config.wave_speed.powi(2) / (RIPPLE_CELL * RIPPLE_CELL);
         let keys: Vec<RippleKey> = self.tiles.keys().copied().collect();
         const P: usize = TILE_CELLS + 2;
 
-        // Accelerations first, reading every tile's heights, so neighbouring
+        // New velocities first, reading every tile's heights, so neighbouring
         // tiles see each other's edges from the same instant.
-        let mut accelerations: Vec<Vec<f32>> = keys
+        let mut next_velocities: Vec<Vec<f32>> = keys
             .iter()
             .map(|k| {
                 std::mem::take(
@@ -315,25 +361,17 @@ impl RippleTiles {
                         .tiles
                         .get_mut(k)
                         .expect("key from this map")
-                        .acceleration,
+                        .next_velocity,
                 )
             })
             .collect();
+        let mut sponges: Vec<([f32; TILE_CELLS], [f32; TILE_CELLS])> =
+            Vec::with_capacity(keys.len());
         let mut wakes: Vec<RippleKey> = Vec::new();
         let mut padded = vec![0.0f32; P * P];
-        let mut sponge_x = [0.0f32; TILE_CELLS];
-        let mut sponge_z = [0.0f32; TILE_CELLS];
-        for (key, acc) in keys.iter().zip(accelerations.iter_mut()) {
+        for (key, next) in keys.iter().zip(next_velocities.iter_mut()) {
             let tile = &self.tiles[key];
-            let neighbours: [Option<&RippleTile>; 4] = EDGES.map(|(dx, dz)| {
-                self.tiles.get(&(
-                    SpanChunkCoord {
-                        x: key.0.x + dx,
-                        z: key.0.z + dz,
-                    },
-                    key.1,
-                ))
-            });
+            let neighbours = self.neighbours(key);
             padded.fill(0.0);
             for k in 0..TILE_CELLS {
                 let row = &tile.height[k * TILE_CELLS..(k + 1) * TILE_CELLS];
@@ -353,6 +391,8 @@ impl RippleTiles {
                     padded[along + 1] = n.height[(TILE_CELLS - 1) * TILE_CELLS + along];
                 }
             }
+            let mut sponge_x = [0.0f32; TILE_CELLS];
+            let mut sponge_z = [0.0f32; TILE_CELLS];
             self.sponge_profile(&neighbours, &mut sponge_x, &mut sponge_z);
 
             for k in 0..TILE_CELLS {
@@ -364,7 +404,7 @@ impl RippleTiles {
                 let wet = &tile.wet[row.clone()];
                 let base = self.config.damping;
                 let damp_z = sponge_z[k];
-                for (((((out, w), (a, b)), v), wet), sx) in acc[row]
+                for (((((out, w), (a, b)), v), wet), sx) in next[row]
                     .iter_mut()
                     .zip(here.windows(3))
                     .zip(above.iter().zip(below))
@@ -374,12 +414,15 @@ impl RippleTiles {
                 {
                     let laplacian = w[0] + w[2] + a + b - 4.0 * w[1];
                     let damping = base + damp_z.max(*sx);
-                    *out = (c2_dx2 * laplacian - damping * v) * wet;
+                    *out = (v + c2_dx2 * laplacian * dt) / (1.0 + damping * dt) * wet;
                 }
             }
-            // Energy in an edge strip facing a sleeping neighbour wakes it.
+            // Energy entering the sponge on an edge facing a sleeping
+            // neighbour wakes it, before the sponge can absorb it.
             for (edge, (dx, dz)) in EDGES.iter().enumerate() {
-                if neighbours[edge].is_none() && edge_energy(tile, edge) > self.config.wake_energy {
+                if neighbours[edge].is_none()
+                    && edge_energy(tile, edge, self.config.sponge) > self.config.wake_energy
+                {
                     wakes.push((
                         SpanChunkCoord {
                             x: key.0.x + dx,
@@ -389,20 +432,28 @@ impl RippleTiles {
                     ));
                 }
             }
+            sponges.push((sponge_x, sponge_z));
         }
 
-        for (key, acc) in keys.iter().zip(accelerations) {
+        for ((key, next), (sponge_x, sponge_z)) in keys.iter().zip(next_velocities).zip(&sponges) {
             let tile = self.tiles.get_mut(key).expect("key from this map");
             let mut energy = 0.0;
-            for cell in 0..CELLS_PER_TILE {
-                let v = tile.velocity[cell] + acc[cell] * dt;
-                let h = tile.height[cell] + v * dt;
-                tile.velocity[cell] = v;
-                tile.height[cell] = h;
-                energy += h * h + (v * dt) * (v * dt);
+            for k in 0..TILE_CELLS {
+                for i in 0..TILE_CELLS {
+                    let cell = k * TILE_CELLS + i;
+                    let v = next[cell];
+                    // The sponge settles heights as well as motion, so the
+                    // edge it guards comes to rest at the still surface.
+                    let settle = 1.0 + sponge_z[k].max(sponge_x[i]) * dt;
+                    let cap = tile.cap[cell];
+                    let h = ((tile.height[cell] + v * dt) / settle).clamp(-cap, cap);
+                    tile.velocity[cell] = v;
+                    tile.height[cell] = h;
+                    energy += h * h + (v * dt) * (v * dt);
+                }
             }
             tile.energy = energy;
-            tile.acceleration = acc;
+            tile.next_velocity = next;
             if energy < self.config.sleep_energy {
                 tile.quiet += dt;
             } else {
@@ -419,6 +470,54 @@ impl RippleTiles {
             self.wake(key, masks);
         }
         self.hold_budget();
+    }
+
+    /// The awake tiles beside a tile, in [`EDGES`] order.
+    fn neighbours(&self, key: &RippleKey) -> [Option<&RippleTile>; 4] {
+        EDGES.map(|(dx, dz)| {
+            self.tiles.get(&(
+                SpanChunkCoord {
+                    x: key.0.x + dx,
+                    z: key.0.z + dz,
+                },
+                key.1,
+            ))
+        })
+    }
+
+    /// Edges of a tile with no awake neighbour, one bit each in [`EDGES`]
+    /// order: drawn beside the coarse surface, which stands still.
+    pub fn sealed_edges(&self, key: &RippleKey) -> u32 {
+        self.neighbours(key)
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| n.is_none())
+            .fold(0, |bits, (edge, _)| bits | 1 << edge)
+    }
+
+    /// A tile's heights as drawn, row-major over [`PADDED_CELLS`]²: the
+    /// tile and a one-cell apron. The apron holds an awake neighbour's
+    /// cells, so two tiles interpolate their shared edge from the same
+    /// values. Over a sleeping neighbour it holds the tile's edge mirrored
+    /// with its sign flipped, so the edge interpolates to the still surface
+    /// the coarse tile beside it draws.
+    pub fn write_padded(&self, key: &RippleKey, out: &mut [f32]) {
+        let hood = Neighbourhood::around(&self.tiles, key);
+        let n = TILE_CELLS as i32;
+        for k in -1..=n {
+            let row = (k + 1) as usize * PADDED_CELLS;
+            if (0..n).contains(&k) {
+                let tile = &hood.tiles[1][1].expect("the centre is awake").height;
+                let src = k as usize * TILE_CELLS;
+                out[row + 1..row + 1 + TILE_CELLS].copy_from_slice(&tile[src..src + TILE_CELLS]);
+                out[row] = hood.apron(-1, k);
+                out[row + PADDED_CELLS - 1] = hood.apron(n, k);
+            } else {
+                for i in -1..=n {
+                    out[row + (i + 1) as usize] = hood.apron(i, k);
+                }
+            }
+        }
     }
 
     /// Extra damping along each axis from the sponges on edges with no
@@ -491,10 +590,11 @@ const SPONGE_DAMPING: f32 = 30.0;
 /// Width of the strip whose energy wakes a neighbour, in cells.
 const WAKE_STRIP: usize = 2;
 
-fn edge_energy(tile: &RippleTile, edge: usize) -> f32 {
+/// Energy in the strip `inset` cells in from an edge.
+fn edge_energy(tile: &RippleTile, edge: usize, inset: usize) -> f32 {
     let mut energy = 0.0;
     for along in 0..TILE_CELLS {
-        for depth in 0..WAKE_STRIP {
+        for depth in inset..inset + WAKE_STRIP {
             let (i, k) = match edge {
                 0 => (TILE_CELLS - 1 - depth, along),
                 1 => (depth, along),
@@ -505,6 +605,59 @@ fn edge_energy(tile: &RippleTile, edge: usize) -> f32 {
         }
     }
     energy
+}
+
+/// A tile and the eight around it, for reading cells across its edges.
+struct Neighbourhood<'a> {
+    /// `[dz + 1][dx + 1]`; `None` where the tile sleeps.
+    tiles: [[Option<&'a RippleTile>; 3]; 3],
+}
+
+impl<'a> Neighbourhood<'a> {
+    fn around(tiles: &'a BTreeMap<RippleKey, RippleTile>, key: &RippleKey) -> Self {
+        let at = |dx: i32, dz: i32| {
+            tiles.get(&(
+                SpanChunkCoord {
+                    x: key.0.x + dx,
+                    z: key.0.z + dz,
+                },
+                key.1,
+            ))
+        };
+        Self {
+            tiles: [-1, 0, 1].map(|dz| [-1, 0, 1].map(|dx| at(dx, dz))),
+        }
+    }
+
+    /// A cell's height, in cells from the centre tile's origin; `None` in
+    /// a sleeping tile.
+    fn cell(&self, i: i32, k: i32) -> Option<f32> {
+        let n = TILE_CELLS as i32;
+        let tile = self.tiles[(k.div_euclid(n) + 1) as usize][(i.div_euclid(n) + 1) as usize]?;
+        Some(tile.height[k.rem_euclid(n) as usize * TILE_CELLS + i.rem_euclid(n) as usize])
+    }
+
+    /// The height drawn at a cell next to the centre tile. A cell in an
+    /// awake tile is its own; one in a sleeping tile takes the negated mean
+    /// of its awake edge neighbours, or at a lone corner its awake diagonal.
+    /// Only whether tiles are awake and their heights decide it, so every
+    /// tile that draws the cell draws the same value.
+    fn apron(&self, i: i32, k: i32) -> f32 {
+        if let Some(h) = self.cell(i, k) {
+            return h;
+        }
+        let mean = |steps: [(i32, i32); 4]| {
+            let (sum, count) = steps
+                .iter()
+                .filter_map(|(di, dk)| self.cell(i + di, k + dk))
+                .fold((0.0, 0), |(s, c), h| (s + h, c + 1));
+            (count > 0).then(|| sum / count as f32)
+        };
+        if let Some(m) = mean([(1, 0), (-1, 0), (0, 1), (0, -1)]) {
+            return -m;
+        }
+        mean([(1, 1), (-1, 1), (1, -1), (-1, -1)]).unwrap_or(0.0)
+    }
 }
 
 /// How much a tile deserves to stay awake: its energy, less with distance
@@ -531,6 +684,8 @@ mod tests {
         fn mask(&self, _tile: SpanChunkCoord, _body: WaterBodyId) -> Option<TileMask> {
             Some(TileMask {
                 floors: [-1.0; COLUMNS_PER_CHUNK],
+                corners: [-1.0; TILE_CORNERS * TILE_CORNERS],
+                level: 0.0,
             })
         }
     }
@@ -598,5 +753,136 @@ mod tests {
         ripples.step(1.0 / 60.0, &Everywhere);
         assert_eq!(ripples.active_count(), 2);
         assert_eq!(ripples.height_at(BODY, 4.0, 4.0), 0.0, "the weakest went");
+    }
+
+    #[test]
+    fn a_long_frame_stays_calm() {
+        let mut ripples = RippleTiles::new(RippleConfig::default());
+        ripples.disturb(
+            BODY,
+            4.0,
+            4.0,
+            0.5,
+            Disturbance::Velocity(-2.0),
+            &Everywhere,
+        );
+        // The frame clock's cap: far past the stencil's own limit.
+        for _ in 0..30 {
+            ripples.step(0.1, &Everywhere);
+        }
+        let peak = ripples
+            .active()
+            .flat_map(|(_, t)| t.height.iter())
+            .fold(0.0f32, |m, h| m.max(h.abs()));
+        assert!(peak < 0.05, "the splash grew to {peak} m");
+    }
+
+    #[test]
+    fn a_ring_wakes_the_neighbour_before_the_sponge_eats_it() {
+        let mut ripples = RippleTiles::new(RippleConfig::default());
+        ripples.disturb(
+            BODY,
+            4.0,
+            4.0,
+            0.5,
+            Disturbance::Velocity(-2.0),
+            &Everywhere,
+        );
+        for _ in 0..120 {
+            ripples.step(1.0 / 60.0, &Everywhere);
+        }
+        assert!(
+            ripples.active_count() >= 5,
+            "the ring stopped at the tile's edges"
+        );
+    }
+
+    /// The height the shader interpolates on a tile's low-x edge, at row k.
+    fn low_x_edge(padded: &[f32], k: usize) -> f32 {
+        0.5 * (padded[(k + 1) * PADDED_CELLS] + padded[(k + 1) * PADDED_CELLS + 1])
+    }
+
+    /// ... and on its high-x edge.
+    fn high_x_edge(padded: &[f32], k: usize) -> f32 {
+        let row = (k + 1) * PADDED_CELLS;
+        0.5 * (padded[row + PADDED_CELLS - 2] + padded[row + PADDED_CELLS - 1])
+    }
+
+    #[test]
+    fn awake_tiles_draw_their_shared_edge_alike() {
+        let mut ripples = RippleTiles::new(RippleConfig::default());
+        ripples.disturb(
+            BODY,
+            8.0,
+            4.0,
+            1.0,
+            Disturbance::Displacement(0.2),
+            &Everywhere,
+        );
+        ripples.step(1.0 / 60.0, &Everywhere);
+        let (west, east) = (
+            (SpanChunkCoord { x: 0, z: 0 }, BODY),
+            (SpanChunkCoord { x: 1, z: 0 }, BODY),
+        );
+        let mut a = vec![0.0; PADDED_CELLS_PER_TILE];
+        let mut b = vec![0.0; PADDED_CELLS_PER_TILE];
+        ripples.write_padded(&west, &mut a);
+        ripples.write_padded(&east, &mut b);
+        let mut largest = 0.0f32;
+        for k in 0..TILE_CELLS {
+            assert_eq!(high_x_edge(&a, k), low_x_edge(&b, k));
+            largest = largest.max(high_x_edge(&a, k).abs());
+        }
+        assert!(largest > 1e-3, "the disturbance never reached the edge");
+    }
+
+    #[test]
+    fn an_edge_beside_a_sleeping_tile_draws_still_water() {
+        let mut ripples = RippleTiles::new(RippleConfig::default());
+        ripples.disturb(
+            BODY,
+            7.45,
+            4.0,
+            0.5,
+            Disturbance::Displacement(0.2),
+            &Everywhere,
+        );
+        // One cell at the low corner.
+        ripples.disturb(
+            BODY,
+            0.07,
+            0.07,
+            0.0,
+            Disturbance::Displacement(0.2),
+            &Everywhere,
+        );
+        let key = (SpanChunkCoord { x: 0, z: 0 }, BODY);
+        assert_eq!(ripples.active_count(), 1);
+        assert_eq!(ripples.sealed_edges(&key), 0b1111);
+        let mut padded = vec![0.0; PADDED_CELLS_PER_TILE];
+        ripples.write_padded(&key, &mut padded);
+        assert!(padded[33 * PADDED_CELLS + PADDED_CELLS - 2].abs() > 1e-3);
+        assert!(padded[PADDED_CELLS + 1].abs() > 1e-3);
+        for k in 0..TILE_CELLS {
+            assert_eq!(high_x_edge(&padded, k), 0.0);
+        }
+        // The corner, where two sealed edges meet.
+        let corner = padded[0] + padded[1] + padded[PADDED_CELLS] + padded[PADDED_CELLS + 1];
+        assert_eq!(corner, 0.0);
+    }
+
+    #[test]
+    fn the_shader_reads_the_layout_written_here() {
+        let glsl =
+            std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/shader/ripple.glsl"))
+                .expect("shader/ripple.glsl");
+        for line in [
+            format!("const int RIPPLE_CELLS = {TILE_CELLS};"),
+            format!("const float RIPPLE_CELL = {RIPPLE_CELL};"),
+            format!("const int RIPPLE_COLUMNS = {CHUNK_COLUMNS};"),
+            format!("const float RIPPLE_COLUMN = {COLUMN_SIZE};"),
+        ] {
+            assert!(glsl.contains(&line), "ripple.glsl lacks `{line}`");
+        }
     }
 }

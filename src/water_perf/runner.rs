@@ -7,7 +7,7 @@ use nalgebra::Point3;
 
 use crate::level::{load_level, Level, Settle};
 use crate::level_check::build_terrain;
-use crate::rendering::water::{MeshKey, WaterScene};
+use crate::rendering::water::{MeshKey, WaterScene, RIPPLE_TILE_STRIDE};
 use crate::terrain::{BlastConfig, TerrainWorld};
 use crate::water::WaterWorld;
 use crate::water_viewer::{find, Action, TICK_RATE};
@@ -348,7 +348,7 @@ pub fn ripple_cost(path: &Path, frames: usize) -> Result<RippleCost, String> {
         label,
         tiles,
         steps,
-        upload_bytes: tiles * (crate::water::surface::CELLS_PER_TILE + 256) * 4,
+        upload_bytes: tiles * RIPPLE_TILE_STRIDE * std::mem::size_of::<f32>(),
     })
 }
 

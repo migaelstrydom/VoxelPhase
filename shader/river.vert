@@ -22,12 +22,14 @@ layout(location = 3) flat out vec2 fragTileOrigin;
 layout(location = 4) out vec2 fragFlow;
 layout(location = 5) out float fragAlong;
 layout(location = 6) flat out vec2 fragWetRange;
+layout(location = 7) out vec4 fragSwell;
 
 void main() {
     float surface = inSection.x + inSection.y * pc.body.x;
     vec3 position = vec3(inXz.x, surface, inXz.y);
     gl_Position = pc.proj * pc.view * vec4(position, 1.0);
     fragNormal = vec3(0.0, 1.0, 0.0);
+    fragSwell = vec4(0.0);
     fragWorldPos = position;
     fragLayer = -1;
     fragTileOrigin = vec2(0.0);

@@ -23,13 +23,16 @@ use nalgebra::{Point3, Vector3};
 
 use super::coupling::{Disturbance, Disturbances};
 use super::geometry::{
-    GeometryUpdate, Outlets, SeaEdges, SinkBox, SpanChunkCoord, SpanGraph, WaterGeometry,
+    Column, GeometryUpdate, Outlets, SeaEdges, SinkBox, SpanChunkCoord, SpanGraph, WaterGeometry,
+    CHUNK_COLUMNS, COLUMNS_PER_CHUNK,
 };
 use super::ids::{LinkId, StoreId, WaterBodyId};
 use super::network::{Basin, FallPath, LossLaw, Network, Ocean, Store};
 use super::query::WaterQuery;
 use super::solver::{Balance, HydrologySolver, VolumeLedger};
-use super::surface::{MaskSource, RippleConfig, RippleTiles, Swell, TileMask};
+use super::surface::{
+    corner_floor, MaskSource, RippleConfig, RippleTiles, Swell, TileMask, TILE_CORNERS,
+};
 use super::topology::{settle_steady, PoolError, Source, SteadyReport, Topology, TopologyBuilder};
 
 /// Per-level dials of the hydrology.
@@ -636,18 +639,50 @@ struct BodyMasks<'a> {
 impl MaskSource for BodyMasks<'_> {
     fn mask(&self, tile: SpanChunkCoord, body: WaterBodyId) -> Option<TileMask> {
         let level = self.levels.get(body.0 as usize).copied().flatten()?;
+        // The tile's columns and a ring of its neighbours', for the corners
+        // on its edges.
+        const SIDE: usize = CHUNK_COLUMNS as usize + 2;
+        let origin = tile.column(0);
+        let mut around = [f32::NAN; SIDE * SIDE];
+        for k in 0..SIDE {
+            for i in 0..SIDE {
+                let column = origin.offset(i as i32 - 1, k as i32 - 1);
+                around[k * SIDE + i] = self.floor(column, body, level);
+            }
+        }
+        let n = CHUNK_COLUMNS as usize;
         let mut mask = TileMask {
-            floors: [f32::NAN; crate::water::geometry::COLUMNS_PER_CHUNK],
+            floors: [f32::NAN; COLUMNS_PER_CHUNK],
+            corners: [f32::NAN; TILE_CORNERS * TILE_CORNERS],
+            level,
         };
-        for (local, column) in tile.columns().enumerate() {
-            for span in self.graph.refs(column) {
-                let floor = self.graph.span(span).floor_min;
-                if self.graph.owner(span).body == Some(body) && floor < level {
-                    mask.floors[local] = floor;
-                }
+        for k in 0..n {
+            for i in 0..n {
+                mask.floors[k * n + i] = around[(k + 1) * SIDE + i + 1];
+            }
+        }
+        for k in 0..TILE_CORNERS {
+            for i in 0..TILE_CORNERS {
+                mask.corners[k * TILE_CORNERS + i] = corner_floor([
+                    around[k * SIDE + i],
+                    around[k * SIDE + i + 1],
+                    around[(k + 1) * SIDE + i],
+                    around[(k + 1) * SIDE + i + 1],
+                ]);
             }
         }
         (!mask.is_empty()).then_some(mask)
+    }
+}
+
+impl BodyMasks<'_> {
+    /// The lowest floor of the body's wet spans in a column; NaN if none.
+    fn floor(&self, column: Column, body: WaterBodyId, level: f32) -> f32 {
+        self.graph
+            .refs(column)
+            .map(|span| (span, self.graph.span(span).floor_min))
+            .filter(|&(span, floor)| self.graph.owner(span).body == Some(body) && floor < level)
+            .fold(f32::NAN, |lowest, (_, floor)| lowest.min(floor))
     }
 }
 

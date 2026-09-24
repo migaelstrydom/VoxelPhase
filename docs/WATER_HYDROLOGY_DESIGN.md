@@ -1702,6 +1702,35 @@ This is the stage most likely to need iteration on looks. 4a stands without it.
 - **`level_check`** names the sea, and warns if water runs off a closed edge
   of a level that has one.
 
+**Revised after the first play-test** (island_sea: seams, a hard edge to the
+sea, and spikes after a grenade).
+
+- **Ripple stability.** The step is explicit, and a grenade frame is long
+  (the frame clock caps at 100 ms, against a limit of 44 ms at 0.125 m
+  cells). It now takes at most half a cell's crossing time (31 ms): a long
+  frame runs the ripples slow. Damping is implicit, and heights are capped
+  at 0.4 m or half the depth. A test runs 100 ms frames.
+- **Waking.** A tile wakes its neighbour when energy enters the sponge, not
+  once it reaches the edge: the sponge had absorbed it first, and the
+  ripples stopped at a square.
+- **Seams between awake tiles.** Each tile is uploaded with a one-cell apron
+  holding its neighbours' cells, so both interpolate the shared edge alike.
+- **The edge beside coarse water** is sealed. The apron there mirrors the
+  edge with its sign flipped, so ripples meet it at zero. The swell runs
+  straight between column corners, as the coarse quads' edges do.
+- **Corner floors.** Every surface takes a corner's floor as the lowest wet
+  column touching it (`corner_floor`), so swell fades the same on either side
+  of a tile edge. Ripple tiles upload their 17 × 17 corner floors. Upload at
+  32 tiles is 612 KB.
+- **The ring.** The first 8 m past the map's edge are column-wide quads
+  whose swell height fades out, so they meet the sea vertex for vertex and
+  the flat coarse rows beyond at no height. The ring's 8 m quads had drawn a
+  crack at the edge and a flat, pale sea beyond it.
+- **Swell normals are per pixel** for every surface, each wave fading as it
+  grows too short for the pixel, so the flat ring still reads as swell.
+- **Ripple slope** is capped at 1 for the normal.
+- `level_viewer` takes `--blast`, `--splash` and `--run` to look at ripples.
+
 ## 22. Decided and deferred
 
 | Question | Status |

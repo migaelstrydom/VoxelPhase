@@ -43,3 +43,25 @@ vec3 swellAt(vec2 xz, float t, float amplitude, float phase, float depth) {
     }
     return out_h * (amplitude * swellShoreFade(depth));
 }
+
+// The swell's slope at a fragment, for its normal: each wave fades out as it
+// grows too short for the pixel's footprint (m), rather than sparkling.
+// `amplitude` already carries the shore fade. The geometry may carry less
+// swell than this, or none (the ring past the map's edge); the normal still
+// reads as the sea's.
+vec2 swellSlopeAt(vec2 xz, float t, float amplitude, float phase, float footprint) {
+    vec2 slope = vec2(0.0);
+    if (amplitude <= 0.0) {
+        return slope;
+    }
+    for (int i = 0; i < SWELL_WAVES; i++) {
+        SwellWave w = SWELL_SPECTRUM[i];
+        float k = 6.28318530718 / w.wavelength;
+        float omega = sqrt(SWELL_GRAVITY * k);
+        vec2 d = vec2(cos(w.heading), sin(w.heading));
+        float arg = k * dot(d, xz) - omega * t + phase;
+        float resolved = 1.0 - smoothstep(0.25 * w.wavelength, 0.5 * w.wavelength, footprint);
+        slope += d * (w.share * k * cos(arg) * resolved);
+    }
+    return slope * amplitude;
+}

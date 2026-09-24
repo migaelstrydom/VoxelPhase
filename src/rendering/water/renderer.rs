@@ -26,16 +26,18 @@ use crate::rendering::frame::ManagedBuffer;
 use crate::rendering::in_flight::{FrameSlot, PerFrame, StreamedMesh};
 use crate::water::geometry::{CHUNK_COLUMNS, COLUMNS_PER_CHUNK, COLUMN_SIZE};
 use crate::water::ids::StoreId;
-use crate::water::surface::{RippleConfig, CELLS_PER_TILE};
+use crate::water::surface::{RippleConfig, PADDED_CELLS_PER_TILE, TILE_CORNERS};
 
 /// Ripple tiles one frame can draw: the ripple budget.
 fn ripple_layers() -> usize {
     RippleConfig::default().max_active
 }
 
-/// Floats per ripple tile in the storage buffer: its heights, then the
-/// floor under each column. Mirrors `RIPPLE_TILE_STRIDE` in `ripple.glsl`.
-const RIPPLE_TILE_STRIDE: usize = CELLS_PER_TILE + COLUMNS_PER_CHUNK;
+/// Floats per ripple tile in the storage buffer: its heights with their
+/// apron, the floor under each column, then the floor at each column corner.
+/// Mirrors `RIPPLE_TILE_STRIDE` in `ripple.glsl`.
+pub const RIPPLE_TILE_STRIDE: usize =
+    PADDED_CELLS_PER_TILE + COLUMNS_PER_CHUNK + TILE_CORNERS * TILE_CORNERS;
 
 /// Vertices along each side of the fine grid.
 const FINE_SIDE: usize = 65;
@@ -406,14 +408,19 @@ impl WaterRenderer {
                     self.pipeline.fine_pipeline(),
                 );
                 self.fine_grid.bind(&self.device.device, cb);
-                let mut tiles: Vec<(&(i32, i32, StoreId), &usize)> = layers.iter().collect();
+                let mut tiles: Vec<(&(i32, i32, StoreId), &(usize, u32))> = layers.iter().collect();
                 tiles.sort();
                 let extent = CHUNK_COLUMNS as f32 * COLUMN_SIZE;
-                for (&(tx, tz, body), &layer) in tiles {
+                for (&(tx, tz, body), &(layer, sealed)) in tiles {
                     let Some(level) = water.level(body) else {
                         continue;
                     };
-                    let tile = [tx as f32 * extent, tz as f32 * extent, layer as f32, 0.0];
+                    let tile = [
+                        tx as f32 * extent,
+                        tz as f32 * extent,
+                        layer as f32,
+                        sealed as f32,
+                    ];
                     self.push_draw(cb, water, body, level, clock, tile);
                     self.device
                         .device
@@ -503,11 +510,12 @@ impl WaterRenderer {
     }
 
     /// Write this frame's awake ripple tiles into the slot's storage buffer.
-    /// Returns each tile's layer, keyed by (tile x, tile z, body).
+    /// Returns each tile's layer and sealed edges, keyed by (tile x, tile z,
+    /// body).
     fn upload_ripples(
         &self,
         water: &dyn WaterScene,
-    ) -> EngineResult<FxHashMap<(i32, i32, StoreId), usize>> {
+    ) -> EngineResult<FxHashMap<(i32, i32, StoreId), (usize, u32)>> {
         let mut layers = FxHashMap::default();
         let tiles = water.ripple_tiles();
         if tiles.is_empty() {
@@ -518,13 +526,18 @@ impl WaterRenderer {
             let ptr = buffer.map_memory(0, vk::MemoryMapFlags::empty())? as *mut f32;
             for (layer, tile) in tiles.iter().take(ripple_layers()).enumerate() {
                 let base = ptr.add(layer * RIPPLE_TILE_STRIDE);
-                std::ptr::copy_nonoverlapping(tile.heights.as_ptr(), base, CELLS_PER_TILE);
+                tile.write_heights(std::slice::from_raw_parts_mut(base, PADDED_CELLS_PER_TILE));
                 std::ptr::copy_nonoverlapping(
                     tile.floors.as_ptr(),
-                    base.add(CELLS_PER_TILE),
+                    base.add(PADDED_CELLS_PER_TILE),
                     COLUMNS_PER_CHUNK,
                 );
-                layers.insert((tile.tile.x, tile.tile.z, tile.body), layer);
+                std::ptr::copy_nonoverlapping(
+                    tile.corners.as_ptr(),
+                    base.add(PADDED_CELLS_PER_TILE + COLUMNS_PER_CHUNK),
+                    TILE_CORNERS * TILE_CORNERS,
+                );
+                layers.insert((tile.tile.x, tile.tile.z, tile.body), (layer, tile.sealed));
             }
             buffer.unmap_memory();
         }

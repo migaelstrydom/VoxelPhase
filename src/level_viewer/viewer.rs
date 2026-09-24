@@ -27,12 +27,14 @@
 //!
 //! What it is *not* is a running game: no systems are dispatched, so nothing has
 //! settled under gravity and nothing has moved. That is a feature. What it shows
-//! is the level exactly as authored, which is the thing being checked.
+//! is the level exactly as authored, which is the thing being checked. The one
+//! exception is asked for: [`LevelViewer::stir_water`] blasts and splashes the
+//! water and runs it on, so ripples and their seams can be seen.
 
 use std::sync::Arc;
 
 use image::RgbaImage;
-use nalgebra::{Matrix4, Vector3};
+use nalgebra::{Matrix4, Point3, Vector3};
 use specs::{Join, World, WorldExt};
 
 use crate::animation::critter::CritterAnimator;
@@ -50,8 +52,8 @@ use crate::rendering::material::{MaterialManager, MaterialManagerBuilder, Surfac
 use crate::rendering::renderer::Renderer;
 use crate::resources::manager::ResourceManager;
 use crate::resources::textures::TextureManager;
-use crate::terrain::{self, TerrainWorld};
-use crate::water::WaterWorld;
+use crate::terrain::{self, BlastConfig, TerrainWorld};
+use crate::water::{Disturbance, WaterWorld};
 
 use super::shots::ViewerShot;
 
@@ -138,6 +140,40 @@ impl LevelViewer {
             self.world.insert(empty);
         }
         std::mem::swap(&mut *self.world.write_resource::<WaterWorld>(), water);
+    }
+
+    /// Set off each blast, drop a splash at each point, then run the water
+    /// on for `seconds` of 60 Hz frames. The blasts' frame lasts `blast_dt`:
+    /// a blast frame in the game is a long one.
+    pub fn stir_water(
+        &mut self,
+        blasts: &[Point3<f32>],
+        splashes: &[Point3<f32>],
+        blast_dt: f32,
+        seconds: f32,
+    ) {
+        let mut terrain = self.world.write_resource::<TerrainWorld>();
+        let Some(mut water) = self.world.try_fetch_mut::<WaterWorld>() else {
+            return;
+        };
+        if !blasts.is_empty() {
+            for &at in blasts {
+                terrain.detonate(at, &BlastConfig::default());
+            }
+            terrain.update();
+            water.on_terrain_update(&terrain);
+            for &at in blasts {
+                water.disturb(at, 2.0, Disturbance::Velocity(-6.0));
+            }
+            water.step(blast_dt);
+        }
+        for &at in splashes {
+            water.disturb(at, 0.5, Disturbance::Velocity(-3.0));
+        }
+        let frame = 1.0 / 60.0;
+        for _ in 0..(seconds / frame).round() as usize {
+            water.step(frame);
+        }
     }
 
     /// Render one view and read the result back as an image.

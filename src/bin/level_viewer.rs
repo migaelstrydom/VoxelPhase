@@ -17,6 +17,7 @@
 //! cargo run --bin level_viewer -- levels/subsidence.level.ron --tiles --columns 2
 //! cargo run --bin level_viewer -- levels/subsidence.level.ron --shot pit_rim --width 1200 --height 800
 //! cargo run --bin level_viewer -- levels/subsidence.level.ron --eye 60,20,40 --look 74,10,62
+//! cargo run --bin level_viewer -- levels/island_sea.level.ron --eye 0,4,20 --look 0,0,8 --splash 0,0,6 --run 1.5
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -46,6 +47,14 @@ struct Options {
     shot: Option<String>,
     /// An explicit camera, replacing the standard set entirely.
     view: Option<(Point3<f32>, Point3<f32>)>,
+    /// Grenade blasts set off before the shots.
+    blasts: Vec<Point3<f32>>,
+    /// Splashes dropped on the water before the shots.
+    splashes: Vec<Point3<f32>>,
+    /// How long the blasts' frame lasts, s.
+    blast_dt: f32,
+    /// How long the water runs after blasts and splashes, s.
+    run: f32,
 }
 
 fn main() {
@@ -79,6 +88,14 @@ fn run(options: &Options) -> EngineResult<()> {
     );
 
     let mut viewer = LevelViewer::open(&level, options.width, options.height)?;
+    if !options.blasts.is_empty() || !options.splashes.is_empty() {
+        viewer.stir_water(
+            &options.blasts,
+            &options.splashes,
+            options.blast_dt,
+            options.run,
+        );
+    }
 
     let shots = match options.view {
         Some((eye, target)) => vec![custom_shot(eye, target)],
@@ -186,6 +203,10 @@ fn parse_args() -> Result<Option<Options>, String> {
     let mut shot = None;
     let mut eye = None;
     let mut look = None;
+    let mut blasts = Vec::new();
+    let mut splashes = Vec::new();
+    let mut blast_dt = 0.1;
+    let mut run = 1.0;
 
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -199,6 +220,10 @@ fn parse_args() -> Result<Option<Options>, String> {
             "--shot" => shot = Some(next(&mut args, "--shot")?),
             "--eye" => eye = Some(parse_point(&mut args, "--eye")?),
             "--look" => look = Some(parse_point(&mut args, "--look")?),
+            "--blast" => blasts.push(parse_point(&mut args, "--blast")?),
+            "--splash" => splashes.push(parse_point(&mut args, "--splash")?),
+            "--blast-dt" => blast_dt = parse_f32(&mut args, "--blast-dt")?,
+            "--run" => run = parse_f32(&mut args, "--run")?,
             "--width" => width = parse_u32(&mut args, "--width")?,
             "--height" => height = parse_u32(&mut args, "--height")?,
             "--columns" => columns = parse_u32(&mut args, "--columns")?,
@@ -231,6 +256,10 @@ fn parse_args() -> Result<Option<Options>, String> {
         tiles,
         shot,
         view,
+        blasts,
+        splashes,
+        blast_dt,
+        run,
     }))
 }
 
@@ -242,6 +271,13 @@ fn parse_u32(args: &mut impl Iterator<Item = String>, flag: &str) -> Result<u32,
     next(args, flag)?
         .parse()
         .map_err(|_| format!("{flag} needs a number"))
+}
+
+fn parse_f32(args: &mut impl Iterator<Item = String>, flag: &str) -> Result<f32, String> {
+    let value = next(args, flag)?;
+    value
+        .parse()
+        .map_err(|_| format!("{flag} expects a number, got '{value}'"))
 }
 
 fn parse_point(args: &mut impl Iterator<Item = String>, flag: &str) -> Result<Point3<f32>, String> {
@@ -268,6 +304,10 @@ fn print_usage() {
     println!("  --shot <text>      render only shots whose label contains this");
     println!("  --eye x,y,z        an explicit camera position, replacing the standard set");
     println!("  --look x,y,z       what that camera points at (required with --eye)");
+    println!("  --blast x,y,z      set off a grenade there first (repeatable)");
+    println!("  --splash x,y,z     drop a splash on the water there (repeatable)");
+    println!("  --blast-dt <s>     how long the blast's frame lasts (default 0.1)");
+    println!("  --run <s>          how long the water runs afterwards (default 1)");
     println!("  --width <px>       per-tile width (default {DEFAULT_WIDTH})");
     println!("  --height <px>      per-tile height (default {DEFAULT_HEIGHT})");
     println!("  --columns <n>      tiles per sheet row (default {DEFAULT_COLUMNS})");

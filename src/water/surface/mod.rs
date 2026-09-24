@@ -3,8 +3,9 @@ mod swell;
 
 pub use ripple_tiles::{
     MaskSource, RippleConfig, RippleKey, RippleTile, RippleTiles, TileMask, CELLS_PER_TILE,
-    RIPPLE_CELL, TILE_CELLS,
+    PADDED_CELLS, PADDED_CELLS_PER_TILE, RIPPLE_CELL, TILE_CELLS, TILE_CORNERS,
 };
 pub use swell::{
-    shore_fade, Swell, SwellWave, AMPLITUDE_PER_FETCH, MAX_BASIN_AMPLITUDE, SHORE_FADE, SPECTRUM,
+    corner_floor, shore_fade, Swell, SwellWave, AMPLITUDE_PER_FETCH, MAX_BASIN_AMPLITUDE,
+    SHORE_FADE, SPECTRUM,
 };

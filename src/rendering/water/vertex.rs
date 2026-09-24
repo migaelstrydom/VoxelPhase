@@ -8,8 +8,12 @@ use nalgebra::{Vector2, Vector3};
 pub struct BasinVertex {
     /// World (x, z).
     pub xz: Vector2<f32>,
-    /// The floor under this vertex, for depth tint and swell attenuation.
+    /// The floor under this vertex, for the swell's shore fade.
     pub floor: f32,
+    /// The share of the swell's height the geometry carries: 1, except in
+    /// the ring past the map's edge, whose quads are too coarse to follow
+    /// it. Its normal is the fragment shader's, at full swell.
+    pub swell_share: f32,
 }
 
 impl BasinVertex {
@@ -21,7 +25,8 @@ impl BasinVertex {
         }
     }
 
-    pub fn attribute_descriptions() -> [vk::VertexInputAttributeDescription; 2] {
+    pub fn attribute_descriptions() -> [vk::VertexInputAttributeDescription; 3] {
+        let float = std::mem::size_of::<f32>() as u32;
         [
             vk::VertexInputAttributeDescription {
                 location: 0,
@@ -33,7 +38,13 @@ impl BasinVertex {
                 location: 1,
                 binding: 0,
                 format: vk::Format::R32_SFLOAT,
-                offset: std::mem::size_of::<Vector2<f32>>() as u32,
+                offset: 2 * float,
+            },
+            vk::VertexInputAttributeDescription {
+                location: 2,
+                binding: 0,
+                format: vk::Format::R32_SFLOAT,
+                offset: 3 * float,
             },
         ]
     }
