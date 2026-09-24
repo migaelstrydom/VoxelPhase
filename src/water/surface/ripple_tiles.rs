@@ -1,7 +1,7 @@
 //! Ripple tiles: the short waves bodies make, simulated only near them.
 //!
 //! ```text
-//!   8 m tile (one span chunk) × 64 × 64 cells of 0.125 m, keyed by (tile, body)
+//!   8 m tile (one span chunk) × 32 × 32 cells of 0.25 m, keyed by (tile, body)
 //!   woken by a disturbance, or by energy crossing in from an active neighbour
 //!   asleep after 2 s quiet; at most 32 awake, the weakest and farthest evicted
 //! ```
@@ -27,7 +27,7 @@ use crate::water::geometry::{
 use crate::water::ids::WaterBodyId;
 
 /// Cells along each side of a tile.
-pub const TILE_CELLS: usize = 64;
+pub const TILE_CELLS: usize = 32;
 
 /// Cells in a tile.
 pub const CELLS_PER_TILE: usize = TILE_CELLS * TILE_CELLS;
@@ -88,14 +88,19 @@ pub trait MaskSource {
 /// How ripples move and settle.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RippleConfig {
-    /// Wave speed, m/s.
+    /// Wave speed, m/s. The wave equation runs every wavelength at one
+    /// speed, where real ripples disperse: c = √(gλ/2π + 2πσ/ρλ). This is
+    /// water's at λ = 1 m, four cells, the shortest wave the grid draws
+    /// cleanly: 1.25 m/s. Shorter ones run somewhat fast, longer ones slow.
     pub wave_speed: f32,
     /// Velocity damping, 1/s.
     pub damping: f32,
     /// A tile quieter than `sleep_energy` for this long sleeps, s.
     pub sleep_after: f32,
+    /// Σh² over the tile, m²: an RMS height of 0.16 mm.
     pub sleep_energy: f32,
-    /// Energy in a tile's edge strip that wakes the neighbour it faces.
+    /// Σh² in a tile's edge strip that wakes the neighbour it faces, m²: an
+    /// RMS height of 2.8 mm.
     pub wake_energy: f32,
     /// Most tiles awake at once.
     pub max_active: usize,
@@ -110,13 +115,13 @@ pub struct RippleConfig {
 impl Default for RippleConfig {
     fn default() -> Self {
         Self {
-            wave_speed: 2.0,
+            wave_speed: 1.25,
             damping: 0.5,
             sleep_after: 2.0,
-            sleep_energy: 1e-4,
-            wake_energy: 1e-3,
+            sleep_energy: 2.5e-5,
+            wake_energy: 5e-4,
             max_active: 32,
-            sponge: 6,
+            sponge: 4,
             max_height: 0.4,
             height_per_depth: 0.5,
         }
@@ -850,8 +855,8 @@ mod tests {
         // One cell at the low corner.
         ripples.disturb(
             BODY,
-            0.07,
-            0.07,
+            0.13,
+            0.13,
             0.0,
             Disturbance::Displacement(0.2),
             &Everywhere,
@@ -861,7 +866,7 @@ mod tests {
         assert_eq!(ripples.sealed_edges(&key), 0b1111);
         let mut padded = vec![0.0; PADDED_CELLS_PER_TILE];
         ripples.write_padded(&key, &mut padded);
-        assert!(padded[33 * PADDED_CELLS + PADDED_CELLS - 2].abs() > 1e-3);
+        assert!(padded[17 * PADDED_CELLS + PADDED_CELLS - 2].abs() > 1e-3);
         assert!(padded[PADDED_CELLS + 1].abs() > 1e-3);
         for k in 0..TILE_CELLS {
             assert_eq!(high_x_edge(&padded, k), 0.0);

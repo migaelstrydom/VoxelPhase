@@ -1,13 +1,13 @@
 // Ripple tiles on the GPU: one block per awake tile in a storage buffer,
 // written by the CPU each frame. Mirrors src/water/surface/ripple_tiles.rs:
-// 64 x 64 cells of 0.125 m per 8 m tile, heights at cell centres with a
-// one-cell apron (66 x 66), then the floor under each of the tile's 16 x 16
+// 32 x 32 cells of 0.25 m per 8 m tile, heights at cell centres with a
+// one-cell apron (34 x 34), then the floor under each of the tile's 16 x 16
 // columns (NaN where the tile's body holds no water), then the floor at each
 // of its 17 x 17 column corners (NaN where no wet column touches it).
 
-const int RIPPLE_CELLS = 64;
+const int RIPPLE_CELLS = 32;
 const int RIPPLE_PADDED = RIPPLE_CELLS + 2;
-const float RIPPLE_CELL = 0.125;
+const float RIPPLE_CELL = 0.25;
 const int RIPPLE_COLUMNS = 16;
 const int RIPPLE_CORNERS = RIPPLE_COLUMNS + 1;
 const float RIPPLE_COLUMN = 0.5;

@@ -1750,6 +1750,13 @@ after every frame; it found each of these.
 - **Re-triangulation tolerance** is one voxel: blasts into floors and caves
   raised a floor 0.75 of a voxel, and the surface stays within its cell.
 - **Wakes and bobbing** stir the surface only while a body breaks it.
+- **Ripple cells are 0.25 m** (32 × 32 per tile), not 0.125 m, and waves run
+  at 1.25 m/s, not 2. The wave equation runs every wavelength at one speed;
+  real ripples disperse, `c = √(gλ/2π + 2πσ/ρλ)`, and 2 m/s was water's at
+  λ ≈ 2.5 m while the 0.125 m grid mostly showed λ of 0.25–0.5 m (0.6–0.9 m/s):
+  too fine and too fast. 1.25 m/s is water's at λ = 1 m, four cells. The
+  stable step is now 100 ms, the frame clock's cap. At 32 tiles: step
+  0.09 ms, upload 212 KB.
 
 ## 22. Decided and deferred
 

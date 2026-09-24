@@ -6,7 +6,7 @@
 #include "swell.glsl"
 #include "ripple.glsl"
 
-// The fine surface of an awake ripple tile: a static 65 x 65 grid over the
+// The fine surface of an awake ripple tile: a static 33 x 33 grid over the
 // 8 m tile, displaced by the body's level, its swell and the tile's ripples.
 // The fragment shader masks it to the body's columns, and adds the swell's
 // slope to the ripples' for the normal.

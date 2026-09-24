@@ -26,7 +26,7 @@ use crate::rendering::frame::ManagedBuffer;
 use crate::rendering::in_flight::{FrameSlot, PerFrame, StreamedMesh};
 use crate::water::geometry::{CHUNK_COLUMNS, COLUMNS_PER_CHUNK, COLUMN_SIZE};
 use crate::water::ids::StoreId;
-use crate::water::surface::{RippleConfig, PADDED_CELLS_PER_TILE, TILE_CORNERS};
+use crate::water::surface::{RippleConfig, PADDED_CELLS_PER_TILE, TILE_CELLS, TILE_CORNERS};
 
 /// Ripple tiles one frame can draw: the ripple budget.
 fn ripple_layers() -> usize {
@@ -39,8 +39,8 @@ fn ripple_layers() -> usize {
 pub const RIPPLE_TILE_STRIDE: usize =
     PADDED_CELLS_PER_TILE + COLUMNS_PER_CHUNK + TILE_CORNERS * TILE_CORNERS;
 
-/// Vertices along each side of the fine grid.
-const FINE_SIDE: usize = 65;
+/// Vertices along each side of the fine grid: one per ripple cell corner.
+const FINE_SIDE: usize = TILE_CELLS + 1;
 
 /// One frame slot's ripple storage, and the descriptor set pointing at it.
 struct RippleSlot {
