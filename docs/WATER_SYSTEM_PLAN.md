@@ -1,5 +1,7 @@
 # Water System Design
 
+> **Superseded** by [`WATER_HYDROLOGY_DESIGN.md`](WATER_HYDROLOGY_DESIGN.md). Kept as a record of the current flow-grid system; do not implement new work from it.
+
 Design document for adding water simulation, rendering, and rigid body interaction to the engine.
 
 ---
