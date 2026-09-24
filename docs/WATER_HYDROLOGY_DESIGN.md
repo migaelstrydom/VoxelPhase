@@ -1757,6 +1757,11 @@ after every frame; it found each of these.
   too fine and too fast. 1.25 m/s is water's at λ = 1 m, four cells. The
   stable step is now 100 ms, the frame clock's cap. At 32 tiles: step
   0.09 ms, upload 212 KB.
+- **The ring has no T-junctions.** It is nested rectangles around the map,
+  0.5 m apart with a vertex every 0.5 m out to 8 m, then twice as far out
+  each time, and neighbouring rectangles are stitched with triangles that
+  share every vertex. Where the 0.5 m band met 8 m quads, a pixel crack
+  showed along the join.
 
 ## 22. Decided and deferred
 

@@ -1,6 +1,7 @@
 mod basin_mesher;
 mod fall_mesher;
 mod ocean_mesher;
+mod ocean_ring;
 mod pipeline;
 mod reach_mesher;
 mod renderer;
