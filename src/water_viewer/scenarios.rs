@@ -10,7 +10,15 @@ use super::scenario::{Action, Beat, Probe, Scenario};
 
 /// Every scenario, in the order they are worth reading.
 pub fn catalogue() -> Vec<Scenario> {
-    vec![breach(), island_pool(), crater_lake(), staircase()]
+    vec![
+        breach(),
+        spill_merge(),
+        drain_split(),
+        island_pool(),
+        island_hole(),
+        crater_lake(),
+        staircase(),
+    ]
 }
 
 pub fn find(name: &str) -> Option<Scenario> {
@@ -31,30 +39,31 @@ pub fn select(name: &str) -> Vec<Scenario> {
         .collect()
 }
 
-/// A pond behind a dam on a hillside. The dam is blown out at 2 s.
+/// A pond held against a dam in a walled channel on a hillside. The dam is
+/// blown out at 2 s.
 ///
-/// The ground falls 12 m across the 64 m map along +x. A bowl centred at
-/// x = −10 holds the pond; a 3 m wall across its downhill rim at x = 4 is the
-/// dam, and lifts the lowest rim to about −2.7. The pond stands at −2.8. The
-/// charge cuts a 3 m crater through the dam's middle, down past the pond's
-/// surface and out to the hillside below it.
+/// The ground falls 12 m across the 64 m map along +x. Two walls 12 m apart
+/// make a channel down the hill, and a 3 m wall across it at x = 4 is the
+/// dam. The pond stands against it at −1.0, reaching back up the channel to
+/// x ≈ −5. The charge cuts a 2.5 m crater through the dam's middle, down past
+/// the pond's surface and out to the hillside below.
 fn breach() -> Scenario {
     Scenario {
         name: "breach",
         description: "a pond's dam is blown out; it drains down the hill",
         level: BREACH_LEVEL,
-        duration: 60.0,
+        duration: 120.0,
         beats: vec![Beat {
             at: 2.0,
             action: Action::Blast {
                 centre: Point3::new(4.0, -1.5, 0.0),
-                radius: 3.0,
+                radius: 2.5,
             },
         }],
         probes: vec![
             Probe {
                 name: "pond",
-                at: Point3::new(-10.0, -2.0, 0.0),
+                at: Point3::new(0.0, -1.5, 0.0),
             },
             Probe {
                 name: "notch",
@@ -65,7 +74,7 @@ fn breach() -> Scenario {
                 at: Point3::new(16.0, -5.0, 0.0),
             },
         ],
-        camera: (Point3::new(18.0, 8.0, 18.0), Point3::new(-4.0, -3.0, 0.0)),
+        camera: (Point3::new(18.0, 8.0, 16.0), Point3::new(0.0, -2.0, 0.0)),
     }
 }
 
@@ -81,15 +90,16 @@ Level(
             material_layers: [(depth: 999.0, material: Dirt)],
             features: [
                 Ramp(from: (-32.0, 0.0), to: (32.0, 0.0), start_height: 4.0, end_height: -8.0, width: 400.0),
-                Crater(center: (-10.0, 0.0), radius: 14.0, depth: 5.0),
-                Wall(from: (4.0, -10.0), to: (4.0, 10.0), height: 3.0, thickness: 3.0),
+                Wall(from: (-20.0, -6.0), to: (6.0, -6.0), height: 3.0, thickness: 3.0),
+                Wall(from: (-20.0, 6.0), to: (6.0, 6.0), height: 3.0, thickness: 3.0),
+                Wall(from: (4.0, -7.0), to: (4.0, 7.0), height: 3.0, thickness: 3.0),
             ],
         ),
     )],
     placements: [Root(segment: "main")],
     player_spawn: (20.0, 0.0, 20.0),
     water: Some((
-        bodies: [Pool(seed: (-10.0, 0.0), surface_level: -2.8)],
+        bodies: [Pool(seed: (1.0, 0.0), surface_level: -1.0)],
     )),
 )
 "#;
@@ -268,3 +278,134 @@ Level(
     )),
 )
 "#;
+
+/// A trench split by a wall, water in the west half, the east half dry. A
+/// notch is blown in the wall at 2 s, below the pond's surface and below
+/// where the two halves would stand together: the pond spills into the dry
+/// half until the levels meet, then the two merge (§7.2, Fill–Spill–Merge).
+fn spill_merge() -> Scenario {
+    Scenario {
+        name: "spill_merge",
+        description: "a notch lets a pond spill into a dry pit until the two merge",
+        level: SPILL_MERGE_LEVEL,
+        duration: 180.0,
+        beats: vec![Beat {
+            at: 2.0,
+            action: Action::Blast {
+                centre: Point3::new(0.0, -0.5, 0.0),
+                radius: 2.0,
+            },
+        }],
+        probes: vec![
+            Probe {
+                name: "west",
+                at: Point3::new(-10.0, -2.0, 0.0),
+            },
+            Probe {
+                name: "east",
+                at: Point3::new(10.0, -2.0, 0.0),
+            },
+        ],
+        camera: (Point3::new(0.0, 12.0, 22.0), Point3::new(0.0, -2.0, 0.0)),
+    }
+}
+
+const SPILL_MERGE_LEVEL: &str = r#"
+Level(
+    name: "water_viewer: spill_merge",
+    segments: [(
+        name: "main",
+        terrain: Terrain(
+            voxel_size: 0.5,
+            bounds: (min: (-32.0, -16.0, -32.0), max: (32.0, 16.0, 32.0)),
+            base_height: 0.0,
+            material_layers: [(depth: 999.0, material: Dirt)],
+            features: [
+                Plateau(min: (-20.0, -4.0), max: (20.0, 4.0), height: -3.0),
+                Wall(from: (0.0, -5.0), to: (0.0, 5.0), height: 3.5, thickness: 2.0),
+            ],
+        ),
+    )],
+    placements: [Root(segment: "main")],
+    player_spawn: (0.0, 1.0, 12.0),
+    water: Some((
+        bodies: [Pool(seed: (-10.0, 0.0), surface_level: -1.5)],
+    )),
+)
+"#;
+
+/// The same trench, its divider lower, one lake over both halves. At 2 s the
+/// trench's west end is blown open to a channel running off the map: the lake
+/// drains, and once it falls below the divider the east half keeps its water
+/// and the west half drains on alone (§8.1, Split).
+fn drain_split() -> Scenario {
+    Scenario {
+        name: "drain_split",
+        description: "a lake over a divider drains below it and splits in two",
+        level: DRAIN_SPLIT_LEVEL,
+        duration: 120.0,
+        beats: vec![Beat {
+            at: 2.0,
+            action: Action::Blast {
+                centre: Point3::new(-20.0, -1.0, 0.0),
+                radius: 2.5,
+            },
+        }],
+        probes: vec![
+            Probe {
+                name: "west",
+                at: Point3::new(-10.0, -2.0, 0.0),
+            },
+            Probe {
+                name: "east",
+                at: Point3::new(10.0, -2.0, 0.0),
+            },
+        ],
+        camera: (Point3::new(0.0, 12.0, 22.0), Point3::new(-4.0, -2.0, 0.0)),
+    }
+}
+
+const DRAIN_SPLIT_LEVEL: &str = r#"
+Level(
+    name: "water_viewer: drain_split",
+    segments: [(
+        name: "main",
+        terrain: Terrain(
+            voxel_size: 0.5,
+            bounds: (min: (-32.0, -16.0, -32.0), max: (32.0, 16.0, 32.0)),
+            base_height: 0.0,
+            material_layers: [(depth: 999.0, material: Dirt)],
+            features: [
+                Plateau(min: (-40.0, -4.0), max: (20.0, 4.0), height: -3.0),
+                Wall(from: (0.0, -5.0), to: (0.0, 5.0), height: 2.0, thickness: 2.0),
+                Wall(from: (-20.0, -5.0), to: (-20.0, 5.0), height: 4.0, thickness: 2.0),
+            ],
+        ),
+    )],
+    placements: [Root(segment: "main")],
+    player_spawn: (0.0, 1.0, 12.0),
+    water: Some((
+        bodies: [Pool(seed: (-10.0, 0.0), surface_level: -0.5)],
+    )),
+)
+"#;
+
+/// The island pool again, its floor blown through at 2 s: the pool drains
+/// through an orifice onto the pond below, and the pond's region is
+/// unchanged (§9.3, scenario 2).
+fn island_hole() -> Scenario {
+    Scenario {
+        name: "island_hole",
+        description: "an island pool's floor is blown through; it pours onto the pond below",
+        level: ISLAND_POOL_LEVEL,
+        duration: 60.0,
+        beats: vec![Beat {
+            at: 2.0,
+            action: Action::Blast {
+                centre: Point3::new(1.0, 5.2, 0.0),
+                radius: 2.2,
+            },
+        }],
+        ..island_pool()
+    }
+}

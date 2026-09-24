@@ -120,6 +120,16 @@ impl Flood {
     }
 }
 
+/// What a flood is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FloodMode {
+    /// Placing water: everything connected under the level is one body.
+    Create,
+    /// Re-flooding a basin after an edit: its own spans are one body, but a
+    /// dry depression it can now reach under its level fills over a weir.
+    Reregion,
+}
+
 /// Finds basin regions over a span graph.
 pub struct DepressionFinder<'a> {
     pub graph: &'a SpanGraph,
@@ -129,6 +139,7 @@ pub struct DepressionFinder<'a> {
     pub store: Option<StoreId>,
     /// Which store owns a span, if any.
     pub owner: &'a dyn Fn(SpanRef) -> Option<StoreId>,
+    pub mode: FloodMode,
 }
 
 /// A frontier entry for the climbing flood, lowest saddle first.
@@ -210,8 +221,9 @@ impl DepressionFinder<'_> {
                     );
                     continue;
                 }
-                let far = self.graph.span(n.span);
-                if far.floor_min < n.saddle && self.drainage.fill(self.graph, n.span) < n.saddle {
+                let far = *self.graph.span(n.span);
+                let descent = far.floor_min < n.saddle;
+                if descent && self.drainage.fill(self.graph, n.span) < n.saddle {
                     self.crest(
                         &mut flood,
                         &mut crossed,
@@ -222,7 +234,39 @@ impl DepressionFinder<'_> {
                     );
                     continue;
                 }
-                add(&mut flood, &mut index, n.span, *far);
+                // A basin re-flooding keeps its own spans and any new air
+                // at its level, but a dry depression it can now reach is a
+                // depression of its own, filled over a weir (§7.2).
+                let unowned = (self.owner)(n.span) != self.store || self.store.is_none();
+                if descent && unowned && self.mode == FloodMode::Reregion {
+                    if let Some((pit, volume)) = self.pothole(n.span, n.saddle, &index) {
+                        flood.dead.push(DeadStorage {
+                            rim: n.saddle,
+                            volume,
+                        });
+                        for span in pit {
+                            let raised = Span {
+                                floor_c: n.saddle,
+                                floor_min: n.saddle,
+                                floor_max: n.saddle.max(self.graph.span(span).floor_max),
+                                ..*self.graph.span(span)
+                            };
+                            add(&mut flood, &mut index, span, raised);
+                            queue.push_back(span);
+                        }
+                        continue;
+                    }
+                    self.crest(
+                        &mut flood,
+                        &mut crossed,
+                        s,
+                        n.span,
+                        n.saddle,
+                        CrestKind::Child { owner: None },
+                    );
+                    continue;
+                }
+                add(&mut flood, &mut index, n.span, far);
                 self.void_crest(&mut flood, &mut crossed, n.span);
                 queue.push_back(n.span);
             }
@@ -469,6 +513,35 @@ fn root(parent: &mut [usize], mut i: usize) -> usize {
     i
 }
 
+/// Whether the pit water at `span` would fill to `rim` is a pothole (§7.4):
+/// no deeper than [`POTHOLE_DEPTH`] and holding no more than
+/// [`POTHOLE_VOLUME`].
+pub fn is_pothole(graph: &SpanGraph, span: SpanRef, rim: f32) -> bool {
+    let mut pit = vec![span];
+    let mut seen = FxHashSet::from_iter([span]);
+    let mut volume = 0.0f64;
+    let mut cursor = 0;
+    while cursor < pit.len() {
+        let s = pit[cursor];
+        cursor += 1;
+        let shape = graph.span(s);
+        if rim - shape.floor_min > POTHOLE_DEPTH {
+            return false;
+        }
+        let mean = 0.5 * (shape.floor_min + shape.floor_max.min(rim));
+        volume += ((rim - mean).max(0.0)) as f64 * CELL_AREA;
+        if volume > POTHOLE_VOLUME {
+            return false;
+        }
+        for n in graph.orthogonal_neighbours(s) {
+            if n.saddle < rim && graph.span(n.span).floor_min < rim && seen.insert(n.span) {
+                pit.push(n.span);
+            }
+        }
+    }
+    true
+}
+
 /// The bottom of the pit a span lies in: walk to the lowest neighbouring
 /// floor until none is lower.
 pub fn pit_bottom(graph: &SpanGraph, mut span: SpanRef) -> SpanRef {
@@ -550,6 +623,7 @@ mod tests {
             drainage: d,
             store: None,
             owner,
+            mode: FloodMode::Create,
         }
     }
 

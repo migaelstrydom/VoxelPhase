@@ -34,7 +34,11 @@ pub struct Sample {
     pub volume: f64,
     /// Basins in the network.
     pub basins: usize,
-    /// Volume the ledger has booked as discarded so far.
+    /// Open links.
+    pub links: usize,
+    /// Volume the ledger has booked into sinks and the void so far.
+    pub sunk: f64,
+    /// Volume the ledger has booked as discarded so far; zero from stage 4a.
     pub discarded: f64,
     /// The ledger's imbalance, m³.
     pub ledger_error: f64,
@@ -154,6 +158,8 @@ fn sample(scenario: &Scenario, water: &WaterWorld, time: f32) -> Sample {
             .collect(),
         volume: water.volume(),
         basins: water.basins().count(),
+        links: water.network().links().filter(|(_, l)| l.open).count(),
+        sunk: water.ledger().sunk,
         discarded: water.ledger().discarded,
         ledger_error: water.balance().error(),
     }

@@ -848,6 +848,7 @@ mod tests {
                 column,
                 old_ordinal: 0,
                 old,
+                old_owner: Default::default(),
                 new_ordinal: Some(0),
             });
         }

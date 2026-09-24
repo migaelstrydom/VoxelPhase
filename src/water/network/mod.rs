@@ -3,16 +3,17 @@ mod centreline;
 mod depression;
 mod hypsometry;
 mod link;
+pub mod links;
 mod loss;
 mod net;
 mod rating;
 mod store;
 
-pub use basin::Basin;
+pub use basin::{Basin, HoleColumn, HoleGeometry, Outflow};
 pub use centreline::{chaikin, Centreline, SMOOTHING_PASSES};
 pub use depression::{
-    pit_bottom, CrestCell, CrestKind, DepressionFinder, Flood, MergeSaddle, RegionSpan,
-    CLIMB_LIMIT, HEADROOM, POTHOLE_DEPTH, POTHOLE_VOLUME,
+    is_pothole, pit_bottom, CrestCell, CrestKind, DepressionFinder, Flood, FloodMode, MergeSaddle,
+    RegionSpan, CLIMB_LIMIT, HEADROOM, POTHOLE_DEPTH, POTHOLE_VOLUME,
 };
 pub use hypsometry::{DeadStorage, Hypsometry, POTHOLE_STEP, WET_BAND};
 pub use link::{FallPath, Link};

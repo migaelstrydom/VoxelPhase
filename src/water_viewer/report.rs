@@ -19,8 +19,8 @@ pub fn report(run: &Run, every: f32) -> String {
     }
     let _ = writeln!(
         out,
-        " {:>12} {:>10} {:>10} {:>7}",
-        "volume m³", "discarded", "ledger", "basins"
+        " {:>12} {:>10} {:>10} {:>7} {:>6}",
+        "volume m³", "sunk m³", "ledger", "basins", "links"
     );
 
     let mut next = 0.0f32;
@@ -50,8 +50,8 @@ fn row(sample: &Sample) -> String {
     }
     let _ = writeln!(
         out,
-        " {:>12.2} {:>10.3} {:>10.1e} {:>7}",
-        sample.volume, sample.discarded, sample.ledger_error, sample.basins
+        " {:>12.2} {:>10.3} {:>10.1e} {:>7} {:>6}",
+        sample.volume, sample.sunk, sample.ledger_error, sample.basins, sample.links
     );
     out
 }
@@ -71,12 +71,12 @@ pub fn summary_line(run: &Run) -> String {
         })
         .collect();
     format!(
-        "{:<14} t={:.0}s  {}  volume {:.1} m³, discarded {:.2}, ledger {:+.1e}, {} basins",
+        "{:<14} t={:.0}s  {}  volume {:.1} m³, sunk {:.2}, ledger {:+.1e}, {} basins",
         run.scenario,
         last.time,
         probes.join("  "),
         last.volume,
-        last.discarded,
+        last.sunk,
         last.ledger_error,
         last.basins
     )
@@ -88,7 +88,7 @@ pub fn write_csv(run: &Run, path: &Path) -> std::io::Result<()> {
     for name in &run.probe_names {
         let _ = write!(out, ",{name}");
     }
-    out.push_str(",volume,discarded,ledger_error,basins\n");
+    out.push_str(",volume,sunk,discarded,ledger_error,basins,links\n");
     for sample in &run.samples {
         let _ = write!(out, "{}", sample.time);
         for level in &sample.probes {
@@ -101,8 +101,13 @@ pub fn write_csv(run: &Run, path: &Path) -> std::io::Result<()> {
         }
         let _ = writeln!(
             out,
-            ",{},{},{},{}",
-            sample.volume, sample.discarded, sample.ledger_error, sample.basins
+            ",{},{},{},{},{},{}",
+            sample.volume,
+            sample.sunk,
+            sample.discarded,
+            sample.ledger_error,
+            sample.basins,
+            sample.links
         );
     }
     std::fs::write(path, out)

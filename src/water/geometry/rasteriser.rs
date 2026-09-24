@@ -67,6 +67,8 @@ pub struct RemapEntry {
     pub column: Column,
     pub old_ordinal: u8,
     pub old: Span,
+    /// Who owned the old span.
+    pub old_owner: SpanOwner,
     /// `None` where the edit blew away every floor below the old one: the
     /// span now opens onto the void, and its water leaves the world.
     pub new_ordinal: Option<u8>,
@@ -284,6 +286,7 @@ impl SpanRasteriser {
             for column in stale {
                 remap.columns.push(*column);
                 let old = graph.spans(*column).to_vec();
+                let owners = old_owners[column.local_index()].clone();
                 let (x, z) = column.centre();
                 let voxel = terrain.voxel_size_at(nalgebra::Point3::new(
                     x,
@@ -291,7 +294,7 @@ impl SpanRasteriser {
                     z,
                 ));
                 let new = &mut columns[column.local_index()].spans;
-                self.remap_column(*column, &old, new, voxel, &mut remap);
+                self.remap_column(*column, &old, &owners, new, voxel, &mut remap);
             }
             self.commit(graph, coord, columns, generation);
 
@@ -447,6 +450,7 @@ impl SpanRasteriser {
         &mut self,
         column: Column,
         old: &[Span],
+        old_owners: &[SpanOwner],
         new: &mut [Span],
         voxel_size: f32,
         remap: &mut SpanRemap,
@@ -466,6 +470,7 @@ impl SpanRasteriser {
                 column,
                 old_ordinal: ordinal as u8,
                 old: *span,
+                old_owner: old_owners.get(ordinal).copied().unwrap_or_default(),
                 new_ordinal: new_ordinal.map(|n| n as u8),
             });
         }

@@ -99,12 +99,16 @@ impl WaterWorld {
     /// A level's water, placed from its config over its terrain. Pools that
     /// cannot be placed are reported and skipped.
     pub fn from_config(config: &WaterConfig, terrain: &TerrainWorld) -> (Self, Vec<PoolError>) {
-        Self::build(config, terrain, TopologyBuilder::default())
+        Self::build(config, terrain, TopologyBuilder::new(config.drain_gain))
     }
 
     /// As [`Self::from_config`], logging every topology edit.
     pub fn recording(config: &WaterConfig, terrain: &TerrainWorld) -> (Self, Vec<PoolError>) {
-        Self::build(config, terrain, TopologyBuilder::recording())
+        Self::build(
+            config,
+            terrain,
+            TopologyBuilder::recording(config.drain_gain),
+        )
     }
 
     fn build(
@@ -162,8 +166,7 @@ impl WaterWorld {
             ledger: &mut self.ledger,
             geometry: &mut self.geometry,
         };
-        self.topology
-            .after_terrain_update(&mut t, &update.remap.columns);
+        self.topology.after_terrain_update(&mut t, &update);
         self.refresh_levels();
         self.last_timings.geometry = geometry;
         self.last_timings.reregion = started.elapsed();
@@ -201,6 +204,10 @@ impl WaterWorld {
         }
         let balance = self.balance();
         debug_assert!(balance.is_balanced(), "water ledger unbalanced: {balance}");
+        debug_assert_eq!(
+            self.ledger.discarded, 0.0,
+            "water discarded: every outlet has a link"
+        );
         self.last_step = self.last_timings;
         self.last_timings = WaterTimings::default();
     }

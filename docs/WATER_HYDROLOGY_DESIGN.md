@@ -1408,6 +1408,44 @@ decided before stage 2.
 - The §8.1 state table is the acceptance checklist.
 - `discarded` reaches zero and is asserted to stay there.
 
+**As built.**
+
+- **Outflows.** A basin groups its crest cells into outflows: cells of one kind
+  whose inside columns touch, and every cell into a hole as one orifice.
+- **Links are made lazily.** An outflow is linked once its basin is within
+  2 cm of its lip, which matches the design's "always linked, carries zero
+  while filling". Its target is resolved then:
+  - for a child crest, the store owning the far side, or a new empty basin
+    at the pit's bottom;
+  - for an outlet, the store its drainage path reaches (instant routing),
+    with an empty basin made at the first real depression on the way, or
+    the void sink at an open edge.
+
+  A link whose store is removed by a merge, split or drying is dropped, and
+  its outflow relinks by the same rule. Re-floods drop a basin's links too,
+  so they churn during big edits. That is harmless, but noisy in the
+  topology log.
+- **One weir per pair.** Two basins across one ridge share one reversible weir.
+  A second weir the other way would carry the same water twice.
+- **Re-flooding after an edit** keeps the basin's claim through the flood, so
+  its own spans are its own. A span re-paired by the edit seeds the flood only
+  if water stood over it before. Without that rule, a crater blown into a dry
+  bank filled from the lake beside it. A dry depression the basin can now
+  reach under its level becomes a child behind a weir, not part of the lake.
+- **Holes.** Where the remap lands an upper basin's span in a lower store's
+  (§8.3), the basin records a hole. The crest cells into the hole's columns
+  form one orifice.
+- **Scenarios** (`water_viewer`, all tests):
+  - `breach`: 58 of 62 m³ leave over the weir in about 10 s, and the weir
+    closes at 31 s.
+  - `spill_merge`: two halves of a trench merge at 104 s at one level, with
+    no water lost.
+  - `drain_split`: a lake split in two by its divider.
+  - `island_hole`: an island pool poured onto the pond below.
+- **Cost:** 0.02 ms per frame through the breach's transient. Skyway's pool,
+  draining off the world over its weir, costs 0.36 ms per frame. Inverting its
+  4.9k-span hypsometry dominates.
+
 ### Stage 4b: rivers
 
 - Reaches, rating curves, fronts and tails, and the §8.2 state table.
