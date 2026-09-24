@@ -25,6 +25,21 @@ pub fn spawn_player(world: &mut World, initial_pos: nalgebra::Point3<f32>) -> En
     // acceleration the old reactionless yaw drive was bounded by, so a turn
     // costs what it always did.
     const TURN_AUTHORITY: f32 = 500.0;
+    // Effective density of the player capsule, kg/m³, giving a mass of 57kg.
+    //
+    // The capsule is a *bounding* volume — 1m tall and half a metre across —
+    // and a spindly humanoid fills a little over a third of it. So the figure
+    // that belongs here is flesh's own density times that fill fraction,
+    // roughly 985 x 0.36, and not flesh's density itself: at the 800 declared
+    // before, the capsule was solid meat and the player weighed 131kg, enough
+    // to craze a block of ice by walking into it.
+    //
+    // Everything about how the player *moves* is authored as a velocity or an
+    // acceleration and multiplied by the mass where it is applied — see
+    // `TractionPlanner::plan` and `Allowance` — so this number decides what the
+    // player weighs against the world and not how they handle. What it does
+    // move is float depth, which is this density over the water's.
+    const CAPSULE_DENSITY: f32 = 350.0;
     /// Facing the player spawns with, matching the `Rotation` below.
     const INITIAL_YAW: f32 = 0.0;
 
@@ -50,7 +65,7 @@ pub fn spawn_player(world: &mut World, initial_pos: nalgebra::Point3<f32>) -> En
         // leans on. Which contacts the player is allowed to draw it at is the
         // actuator's business — see `non_support_grip` below.
         let collider_desc = ColliderDesc::capsule(collider_half_height, collider_radius)
-            .density(800.0)
+            .density(CAPSULE_DENSITY)
             .restitution(0.0)
             .friction_model(FrictionModel::Isotropic(0.8));
         physics.world.attach_collider(body_handle, collider_desc);
