@@ -18,8 +18,8 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use voxel_phase::water_perf::{
-    basin_table, ripple_cost, ripple_line, run_breach, run_level, subject_table, worst_case,
-    worst_case_line, Durations,
+    basin_table, ripple_cost, ripple_line, run_breach, run_level, steady_line, steady_loads,
+    subject_table, worst_case, worst_case_line, Durations,
 };
 
 const USAGE: &str = "usage: water_perf [--level <level.ron>]... [--quiet S] [--transient S]
@@ -93,6 +93,19 @@ fn main() -> ExitCode {
 
     match run_breach(durations) {
         Ok(subject) => println!("{}", subject_table(&subject)),
+        Err(message) => {
+            eprintln!("error: {message}");
+            return ExitCode::FAILURE;
+        }
+    }
+
+    println!("Opening at rest (settle: Steady), budget 200 ms");
+    match steady_loads() {
+        Ok(loads) => {
+            for load in &loads {
+                println!("  {}", steady_line(load));
+            }
+        }
         Err(message) => {
             eprintln!("error: {message}");
             return ExitCode::FAILURE;

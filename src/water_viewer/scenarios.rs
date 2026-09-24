@@ -19,6 +19,7 @@ pub fn catalogue() -> Vec<Scenario> {
         island_hole(),
         crater_lake(),
         staircase(),
+        spring_pools(),
     ]
 }
 
@@ -166,14 +167,14 @@ Level(
 "#;
 
 /// A stepped channel: eight 7 m treads, each 1.25 m below the last, cut 4 m
-/// wide into banks at 12 m. Water run down it falls from tread to tread and
-/// leaves the map at its low end.
+/// wide into banks at 12 m. A spring in the head wall runs 1 m³/s down it:
+/// the water falls from tread to tread and leaves the map at its low end.
 fn staircase() -> Scenario {
     Scenario {
         name: "staircase",
-        description: "a stepped channel of eight treads, open at its low end",
+        description: "a spring runs down a stepped channel, falling tread to tread",
         level: STAIRCASE_LEVEL,
-        duration: 30.0,
+        duration: 150.0,
         beats: Vec::new(),
         probes: vec![
             Probe {
@@ -189,7 +190,7 @@ fn staircase() -> Scenario {
                 at: Point3::new(24.0, 1.8, 0.0),
             },
         ],
-        camera: (Point3::new(0.0, 20.0, 24.0), Point3::new(0.0, 5.0, 0.0)),
+        camera: (Point3::new(-31.0, 16.0, 7.0), Point3::new(-17.0, 8.0, 0.0)),
     }
 }
 
@@ -219,8 +220,10 @@ Level(
     placements: [Root(segment: "main")],
     player_spawn: (0.0, 13.0, 10.0),
     water: Some((
-        ocean_level: None,
-        bodies: [],
+        bodies: [
+            Spring(position: (-28.3, 10.9, 0.0), direction: (1.5, 0.0, 0.0), discharge: 1.0),
+        ],
+        settle: AsAuthored,
     )),
 )
 "#;
@@ -464,6 +467,57 @@ Level(
     player_spawn: (0.0, 6.0, 20.0),
     water: Some((
         bodies: [Pool(seed: (-26.0, 0.0), surface_level: 4.4)],
+    )),
+)
+"#;
+
+/// A sky source over the west half of a divided trench, with a notch at the
+/// east end running off the map. Opened steady, the west half has filled and
+/// spilled, the two halves have merged into one lake over the divider, and
+/// the lake passes the source's discharge out through the notch: the level
+/// opens at rest, with nothing left to fill (§13, `settle: Steady`).
+fn spring_pools() -> Scenario {
+    Scenario {
+        name: "spring_pools",
+        description: "a sky source fills, spills and merges two pools; opened at rest",
+        level: SPRING_POOLS_LEVEL,
+        duration: 30.0,
+        beats: Vec::new(),
+        probes: vec![
+            Probe {
+                name: "west",
+                at: Point3::new(-10.0, -2.0, 0.0),
+            },
+            Probe {
+                name: "east",
+                at: Point3::new(10.0, -2.0, 0.0),
+            },
+        ],
+        camera: (Point3::new(0.0, 14.0, 24.0), Point3::new(4.0, -2.0, 0.0)),
+    }
+}
+
+const SPRING_POOLS_LEVEL: &str = r#"
+Level(
+    name: "water_viewer: spring_pools",
+    segments: [(
+        name: "main",
+        terrain: Terrain(
+            voxel_size: 0.5,
+            bounds: (min: (-32.0, -16.0, -32.0), max: (32.0, 16.0, 32.0)),
+            base_height: 0.0,
+            material_layers: [(depth: 999.0, material: Dirt)],
+            features: [
+                Plateau(min: (-20.0, -4.0), max: (20.0, 4.0), height: -3.0),
+                Wall(from: (0.0, -5.0), to: (0.0, 5.0), height: 1.5, thickness: 2.0),
+                Ramp(from: (19.0, 0.0), to: (32.0, 0.0), start_height: -1.0, end_height: -4.0, width: 3.0),
+            ],
+        ),
+    )],
+    placements: [Root(segment: "main")],
+    player_spawn: (0.0, 1.0, 12.0),
+    water: Some((
+        bodies: [SkySource(position: (-10.0, 6.0, 0.0), discharge: 0.5)],
     )),
 )
 "#;

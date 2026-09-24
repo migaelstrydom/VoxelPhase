@@ -1,5 +1,5 @@
 use ash::vk;
-use nalgebra::Vector2;
+use nalgebra::{Vector2, Vector3};
 
 /// A water surface vertex. Its height is not stored: every draw pushes its
 /// body's level, so the mesh outlives a change of level.
@@ -112,6 +112,59 @@ impl RiverVertex {
                 binding: 0,
                 format: vk::Format::R32G32_SFLOAT,
                 offset: 5 * f,
+            },
+        ]
+    }
+}
+
+/// A vertex of a fall's sheet: a point on the arc, and the horizontal
+/// direction across the sheet there. The shader sets the sheet's width from
+/// the discharge now.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FallVertex {
+    /// On the arc.
+    pub centre: Vector3<f32>,
+    /// Unit, horizontal, across the sheet.
+    pub side: Vector3<f32>,
+    /// Which edge: −1 or +1.
+    pub across: f32,
+    /// Seconds from the lip.
+    pub time: f32,
+    /// Share of the way down, 0 at the lip and 1 at the landing.
+    pub along: f32,
+}
+
+impl FallVertex {
+    pub fn binding_description() -> vk::VertexInputBindingDescription {
+        vk::VertexInputBindingDescription {
+            binding: 0,
+            stride: std::mem::size_of::<Self>() as u32,
+            input_rate: vk::VertexInputRate::VERTEX,
+        }
+    }
+
+    pub fn attribute_descriptions() -> [vk::VertexInputAttributeDescription; 3] {
+        let f = std::mem::size_of::<f32>() as u32;
+        [
+            vk::VertexInputAttributeDescription {
+                location: 0,
+                binding: 0,
+                format: vk::Format::R32G32B32_SFLOAT,
+                offset: 0,
+            },
+            vk::VertexInputAttributeDescription {
+                location: 1,
+                binding: 0,
+                format: vk::Format::R32G32B32_SFLOAT,
+                offset: 3 * f,
+            },
+            // (across, time, along)
+            vk::VertexInputAttributeDescription {
+                location: 2,
+                binding: 0,
+                format: vk::Format::R32G32B32_SFLOAT,
+                offset: 6 * f,
             },
         ]
     }

@@ -7,7 +7,7 @@
 
 use crate::water::ids::{LinkId, StoreId};
 
-use super::link::Link;
+use super::link::{FallPath, Link};
 use super::store::{Port, Store, StoreView};
 
 /// A link and the stores it joins.
@@ -20,6 +20,9 @@ pub struct LinkEntry {
     pub open: bool,
     pub up_port: Port,
     pub down_port: Port,
+    /// The arc the water falls along between the stores, if it leaves a lip
+    /// (§7.6). A fall is geometry on a link, not a law of its own.
+    pub fall: Option<FallPath>,
 }
 
 /// Every store and link.

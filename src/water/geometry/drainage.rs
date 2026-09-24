@@ -28,6 +28,7 @@
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, VecDeque};
 
+use nalgebra::Point3;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::rasteriser::SpanRemap;
@@ -48,11 +49,32 @@ pub enum Drain {
     To { step: u8, ordinal: u8 },
 }
 
+/// An authored box that swallows water: a span whose column centre lies
+/// inside it in plan, with its floor inside it in height, drains away.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SinkBox {
+    pub min: Point3<f32>,
+    pub max: Point3<f32>,
+}
+
+impl SinkBox {
+    fn swallows(&self, column: Column, floor: f32) -> bool {
+        let (x, z) = column.centre();
+        (self.min.x..=self.max.x).contains(&x)
+            && (self.min.z..=self.max.z).contains(&z)
+            && (self.min.y..=self.max.y).contains(&floor)
+    }
+}
+
 /// Where water may leave the world, beyond the void.
+///
+/// Sinks are held as boxes and tested against the span in hand, so they
+/// hold through every rebuild of the spans under them.
 #[derive(Debug, Clone, Default)]
 pub struct Outlets {
-    /// Extra outlets and the level each drains at: the sea, authored sinks.
+    /// Extra outlets and the level each drains at: the sea.
     extra: FxHashMap<SpanRef, f32>,
+    sinks: Vec<SinkBox>,
 }
 
 impl Outlets {
@@ -61,12 +83,17 @@ impl Outlets {
         *entry = entry.min(level);
     }
 
+    pub fn add_sink(&mut self, sink: SinkBox) {
+        self.sinks.push(sink);
+    }
+
     /// The level a span drains away at, if it is an outlet.
     pub fn level(&self, graph: &SpanGraph, span: SpanRef) -> Option<f32> {
-        let void = graph
-            .borders_void(span.column)
-            .then(|| graph.span(span).floor_min);
-        match (void, self.extra.get(&span)) {
+        let floor = graph.span(span).floor_min;
+        let edge = (graph.borders_void(span.column)
+            || self.sinks.iter().any(|s| s.swallows(span.column, floor)))
+        .then_some(floor);
+        match (edge, self.extra.get(&span)) {
             (Some(a), Some(b)) => Some(a.min(*b)),
             (a, b) => a.or(b.copied()),
         }

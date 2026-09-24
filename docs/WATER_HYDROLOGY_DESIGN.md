@@ -1505,6 +1505,89 @@ This is the stage most likely to need iteration on looks. 4a stands without it.
 - `FallTracer`, `FallPath` on links, `Spring`, `SkySource`, `Sink` and `FallMesher`.
 - The staircase scenario passes.
 
+**As built.**
+
+- **`FallTracer`** (`network/fall_tracer.rs`). It sweeps the parabola in
+  0.25 m steps through the span graph, not the mesh. A point is in air when a
+  span holds it above that span's floor. Where the arc lands:
+  - it stops at ground under it, a wall across it (at the wall's foot), or
+    water standing in its way;
+  - off the map, it lands in the void;
+  - a source placed inside rock is moved up to 2 m along its direction to
+    find air, and one that finds none is *sealed*.
+- **Fall steps are measured over a run.** A drop of more than 0.75 m within
+  1 m horizontally is a fall. Marching cubes rounds every riser through one
+  intermediate column (10.0 → 9.5 → 8.75 on the staircase), so a
+  column-by-column test would never fire. The lip is the highest cell of the
+  drop. A crest counts as a lip at its saddle height, so a riser right at a
+  pool's edge falls from the crest.
+- **A fall is geometry on the link.** `FallPath` lives on `LinkEntry`, not
+  behind `Link::fall_path()`: a weir, a reach's outflow and a spring's
+  `FixedRate` all carry one the same way, and no law duplicates it.
+- **Routing through falls.** A channel that reaches a fall step ends there.
+  Its last link carries the arc, launched at the reach's design velocity, or
+  at the critical velocity over a 0.3 m design head for a bare weir. From
+  where the arc lands, a new channel is laid. When a fall lands on a ledge
+  too short to be a channel, its arc is joined to the next fall's, so a chain
+  of falls is one path.
+- **A channel's outlet is kept as a point** (`ChannelOutlet`), with its fall.
+  A `SpanRef` would not survive the rebuild of its chunk. If the store a
+  channel fed is replaced (merged, split), its last reach relinks to
+  whatever stands there now.
+- **Channel removal is topological, not by id.** Laying a channel over a fall
+  lays the one below first, so ids no longer run downstream.
+- **Sources.** A `Spring` is a `Reservoir` plus a `FixedRate` link launched
+  along its traced arc; its `direction` is the launch velocity in m/s. A
+  `SkySource` has zero launch velocity. A source whose link goes relinks on
+  the next settle.
+- **Re-tracing.** An edit that re-pairs a column under any fall's arc drops
+  that link, and the channels it joins, and they relink by the usual rule.
+- **Sinks** are boxes in `Outlets`, tested against the span in hand, so they
+  hold through rebuilds. They drain into the same void sink as the open
+  edges.
+- **`settle: Steady`** (`topology/steady.rs`). Gauss–Seidel sweeps run
+  Fill–Spill–Merge to completion:
+  - Each sweep settles topology, then brings every store a source feeds to
+    steady, nearest the source first.
+  - A reach gets its storage at its inflow, running its whole length.
+  - A basin gets the volume at which its inflow equals its outflow plus loss.
+  - A fed basin that nothing yet drains fast enough is held two `CAP_MARGIN`s
+    under its cap. There its lips link, but a re-flood does not drop the
+    links. It goes to the cap only if it already stands there and still
+    cannot pass its inflow.
+
+    Setting it straight to the cap made every sweep re-flood it, lose its
+    links, and climb 5 cm, without end.
+  - Water brought in is booked as `emitted`. Unfed pools keep their volume.
+- **`FallMesher`** and `fall.vert`/`fall.frag`. Each fall is one static
+  ribbon, drawn last in the water pass with a fragment shader of its own:
+  - Its width comes from √Q and is pushed per draw, so the mesh never
+    changes with the flow. A trickle thins.
+  - Streaks are keyed to seconds from the lip, so they fall at the water's
+    pace.
+  - The sheet whitens and breaks up as it drops.
+
+  It is drawn in the water pass rather than the sorted transparency pass.
+  That is a shortcut: it refracts the opaque scene behind it, so glass behind
+  a fall shows unrefracted.
+- **Scenarios** (`water_viewer`, all tests):
+  - `staircase`: a 1 m³/s spring runs down eight treads, over eight falls.
+    As authored, the front reaches the bottom in 80 s. Opened steady, it
+    passes 1 m³/s from the first frame, holding the same 82.9 m³ as the
+    dynamic run.
+  - `spring_pools`: a sky source over a divided trench. It opens already
+    merged, 641 m³ filled, passing 0.5 m³/s over its notch, with the volume
+    constant to 1e-6.
+- **Cost.** Opening steady costs 14 ms (staircase, 3 sweeps) and 17.5 ms
+  (spring_pools, 37 sweeps), against the 200 ms budget.
+- **`level_check`** lists each source and where it lands, and reports a
+  sealed one. It does not report a source-fed basin standing over its outlet,
+  and warns if the steady settle did not converge. The SVG draws falls as
+  dashed arcs with their landing points.
+- **Also fixed:**
+  - The river pipeline was never destroyed.
+  - A level with rivers or falls but no basin drew nothing.
+
 ### Stage 6: destruction
 
 - The six scenarios of §9.3 pass in `water_viewer`.

@@ -10,6 +10,7 @@ use crate::debug::DebugOverlays;
 use crate::rendering::Colour;
 
 use super::geometry::{Column, Drain, WaterGeometry, COLUMN_SIZE};
+use super::network::FallPath;
 
 /// What the network debug view draws, and how far from its centre.
 #[derive(Debug, Clone, Copy)]
@@ -17,6 +18,8 @@ pub struct WaterNetworkDebug {
     /// Drainage directions: an arrow from each span's floor towards the span
     /// it drains to.
     pub drainage: bool,
+    /// Fall arcs, with a sphere where each lands.
+    pub falls: bool,
     /// Horizontal radius around the centre, in metres.
     pub radius: f32,
 }
@@ -25,6 +28,7 @@ impl Default for WaterNetworkDebug {
     fn default() -> Self {
         Self {
             drainage: false,
+            falls: true,
             radius: 12.0,
         }
     }
@@ -34,6 +38,7 @@ const DRAIN_COLOUR: Colour = Colour::rgb(0.25, 0.55, 1.0);
 const POOLED_COLOUR: Colour = Colour::rgb(0.1, 0.3, 0.9);
 const OUTLET_COLOUR: Colour = Colour::rgb(1.0, 0.5, 0.1);
 const PENDING_COLOUR: Colour = Colour::rgb(0.9, 0.9, 0.2);
+const FALL_COLOUR: Colour = Colour::rgb(0.5, 0.85, 1.0);
 
 impl WaterNetworkDebug {
     /// Draw the enabled layers around `centre`.
@@ -45,6 +50,25 @@ impl WaterNetworkDebug {
     ) {
         if self.drainage {
             self.draw_drainage(overlays, geometry, centre);
+        }
+    }
+
+    /// Every fall's arc and landing point.
+    pub fn draw_falls<'a>(
+        &self,
+        overlays: &mut DebugOverlays,
+        falls: impl Iterator<Item = &'a FallPath>,
+    ) {
+        if !self.falls {
+            return;
+        }
+        for fall in falls {
+            for pair in fall.points.windows(2) {
+                overlays.add_line(pair[0], pair[1], FALL_COLOUR);
+            }
+            if let Some(at) = fall.landing() {
+                overlays.add_sphere(at, 0.15, FALL_COLOUR);
+            }
         }
     }
 

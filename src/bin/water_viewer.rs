@@ -18,6 +18,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use voxel_phase::level::Settle;
 use voxel_phase::level_viewer::{custom_shot, LevelViewer};
 use voxel_phase::rendering::visual_bench::contact_sheet;
 use voxel_phase::water_viewer::{
@@ -25,7 +26,7 @@ use voxel_phase::water_viewer::{
 };
 
 const USAGE: &str = "usage: water_viewer <scenario|all> [--no-render] [--fast-forward N]
-                    [--every SECONDS] [--csv <out.csv>] [--reaches]
+                    [--settle steady|as-authored] [--every SECONDS] [--csv <out.csv>] [--reaches]
                     [--tiles N] [--from F] [--to F] [--columns N]
                     [--width W] [--height H] [--out <sheet.png>]
        water_viewer --list";
@@ -188,6 +189,13 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Option<Options>, Str
             "--no-render" => options.render = false,
             "--reaches" => options.reaches = true,
             "--fast-forward" => options.config.fast_forward = parse_number(&value(&arg)?)?,
+            "--settle" => {
+                options.config.settle = Some(match value(&arg)?.as_str() {
+                    "steady" => Settle::Steady,
+                    "as-authored" => Settle::AsAuthored,
+                    other => return Err(format!("unknown settle {other}")),
+                })
+            }
             "--every" => options.every = parse_number(&value(&arg)?)?,
             "--csv" => options.csv = Some(PathBuf::from(value(&arg)?)),
             "--tiles" => options.film.tiles = parse_number(&value(&arg)?)?,

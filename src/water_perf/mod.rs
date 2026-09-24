@@ -4,8 +4,8 @@
 mod report;
 mod runner;
 
-pub use report::{basin_table, ripple_line, subject_table, worst_case_line};
+pub use report::{basin_table, ripple_line, steady_line, subject_table, worst_case_line};
 pub use runner::{
-    ripple_cost, run_breach, run_level, worst_case, Durations, FrameCost, RippleCost, Subject,
-    WorstCase, WARM_UP,
+    ripple_cost, run_breach, run_level, steady_loads, worst_case, Durations, FrameCost, RippleCost,
+    SteadyLoad, Subject, WorstCase, WARM_UP,
 };

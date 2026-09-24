@@ -1,5 +1,7 @@
 //! The scenarios as tests: each runs headlessly and checks what the water did.
 
+use crate::level::Settle;
+
 use super::driver::{run, RunConfig};
 use super::scenarios::find;
 
@@ -138,5 +140,75 @@ fn a_lake_drains_down_a_channel_whose_front_advances() {
         first.volume
     );
     assert!(recorded.samples.iter().all(|s| s.discarded == 0.0));
+    assert!(last.ledger_error.abs() < 1e-6);
+}
+
+#[test]
+fn a_spring_runs_down_a_staircase_falling_tread_to_tread() {
+    let scenario = find("staircase").unwrap();
+    let recorded = run(&scenario, RunConfig::default()).unwrap();
+    let wet_from = |name: &str| {
+        (0..recorded.samples.len())
+            .find(|i| probe(&recorded, name, *i).is_some())
+            .map(|i| recorded.samples[i].time)
+    };
+    let (top, middle, bottom) = (
+        wet_from("top").unwrap(),
+        wet_from("middle").unwrap(),
+        wet_from("bottom").unwrap(),
+    );
+    assert!(top < middle && middle < bottom, "{top} {middle} {bottom}");
+    // Every riser is a fall: one channel of reaches, one per tread.
+    assert!(
+        recorded.reaches.len() >= 7,
+        "{} reaches",
+        recorded.reaches.len()
+    );
+    // At rest, what the spring gives leaves the bottom.
+    let n = recorded.samples.len();
+    let (a, b) = (&recorded.samples[n - 11], &recorded.samples[n - 1]);
+    let rate = (b.sunk - a.sunk) / (b.time - a.time) as f64;
+    assert!((rate - 1.0).abs() < 0.01, "{rate} m³/s leaves");
+    assert!(b.ledger_error.abs() < 1e-6);
+}
+
+#[test]
+fn a_staircase_opened_steady_is_already_running() {
+    let scenario = find("staircase").unwrap();
+    let config = RunConfig {
+        settle: Some(Settle::Steady),
+        ..RunConfig::default()
+    };
+    let recorded = run(&scenario, config).unwrap();
+    let first = &recorded.samples[0];
+    let last = recorded.samples.last().unwrap();
+    for name in ["top", "middle", "bottom"] {
+        assert!(
+            probe(&recorded, name, 0).is_some(),
+            "{name} dry at the start"
+        );
+    }
+    assert!(
+        (last.volume - first.volume).abs() < 1e-3 * first.volume,
+        "{} -> {}",
+        first.volume,
+        last.volume
+    );
+    let rate = last.sunk / last.time as f64;
+    assert!((rate - 1.0).abs() < 0.01, "{rate} m³/s leaves");
+    assert!(last.ledger_error.abs() < 1e-6);
+}
+
+#[test]
+fn a_source_fills_spills_and_merges_before_the_level_opens() {
+    let scenario = find("spring_pools").unwrap();
+    let recorded = run(&scenario, RunConfig::default()).unwrap();
+    let first = &recorded.samples[0];
+    let last = recorded.samples.last().unwrap();
+    assert_eq!(first.basins, 1, "the two halves opened merged");
+    assert_eq!(probe(&recorded, "west", 0), probe(&recorded, "east", 0));
+    assert!((last.volume - first.volume).abs() < 1e-6 * first.volume);
+    let rate = last.sunk / last.time as f64;
+    assert!((rate - 0.5).abs() < 1e-3, "{rate} m³/s leaves");
     assert!(last.ledger_error.abs() < 1e-6);
 }

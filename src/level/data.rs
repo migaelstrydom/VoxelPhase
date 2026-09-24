@@ -2760,6 +2760,30 @@ pub enum WaterBody {
         /// Target water surface height (world Y).
         surface_level: f32,
     },
+    /// Water issuing from a point, as from a cliff face, and falling from
+    /// there. Blasting the rock around it moves where it lands, never where
+    /// it comes from.
+    Spring {
+        /// Where the water comes out. A point just inside rock is moved out
+        /// along `direction` to the nearest air.
+        position: (f32, f32, f32),
+        /// Launch velocity, m/s: its length is the speed the water leaves at.
+        direction: (f32, f32, f32),
+        /// m³/s, forever.
+        discharge: f32,
+    },
+    /// Water falling from a point in the sky with no launch speed.
+    SkySource {
+        position: (f32, f32, f32),
+        /// m³/s, forever.
+        discharge: f32,
+    },
+    /// A box that swallows water: every span whose floor lies inside it
+    /// drains away, as at an open edge of the world.
+    Sink {
+        min: (f32, f32, f32),
+        max: (f32, f32, f32),
+    },
 }
 
 #[cfg(test)]

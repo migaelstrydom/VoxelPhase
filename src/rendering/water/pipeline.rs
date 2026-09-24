@@ -1,10 +1,12 @@
 //! Water rendering pipelines.
 //!
-//! Two pipelines over one layout and one fragment shader: the coarse surface
-//! (a quad per column) and the fine surface of an awake ripple tile (a static
-//! grid displaced from the ripple storage buffer). Both depth-test against
-//! the opaque scene without writing depth, read that depth for volumetric
-//! tint, and sample the opaque colour target at offset UVs for refraction.
+//! Four pipelines over one layout. Three share the water fragment shader:
+//! the coarse surface (a quad per column), the fine surface of an awake
+//! ripple tile (a static grid displaced from the ripple storage buffer) and a
+//! reach's surface. The fourth draws a fall's sheet with a fragment shader of
+//! its own. All depth-test against the opaque scene without writing depth,
+//! read that depth for volumetric tint, and sample the opaque colour target
+//! at offset UVs for refraction.
 
 use std::sync::Arc;
 
@@ -16,7 +18,7 @@ use crate::rendering::shaders::ShaderManager;
 
 use crate::rendering::in_flight::FRAMES_IN_FLIGHT;
 
-use super::vertex::{BasinVertex, FineVertex, RiverVertex};
+use super::vertex::{BasinVertex, FallVertex, FineVertex, RiverVertex};
 
 /// Where each draw's constants start (its body, then its tile), and how many
 /// bytes they are.
@@ -42,6 +44,7 @@ pub struct WaterPipeline {
     fine_pipeline: vk::Pipeline,
     /// A reach's surface.
     river_pipeline: vk::Pipeline,
+    fall_pipeline: vk::Pipeline,
     pipeline_layout: vk::PipelineLayout,
     descriptor_set_layout: vk::DescriptorSetLayout,
     /// Set 1: the ripple storage buffer.
@@ -72,6 +75,7 @@ impl WaterPipeline {
             ShaderManager::load_water_vertex(&device)?,
             BasinVertex::binding_description(),
             &BasinVertex::attribute_descriptions(),
+            ShaderManager::load_water_fragment(&device)?,
         )?;
         let fine_pipeline = Self::create_pipeline(
             &device,
@@ -80,6 +84,7 @@ impl WaterPipeline {
             ShaderManager::load_ripple_vertex(&device)?,
             FineVertex::binding_description(),
             &FineVertex::attribute_descriptions(),
+            ShaderManager::load_water_fragment(&device)?,
         )?;
         let river_pipeline = Self::create_pipeline(
             &device,
@@ -88,6 +93,16 @@ impl WaterPipeline {
             ShaderManager::load_river_vertex(&device)?,
             RiverVertex::binding_description(),
             &RiverVertex::attribute_descriptions(),
+            ShaderManager::load_water_fragment(&device)?,
+        )?;
+        let fall_pipeline = Self::create_pipeline(
+            &device,
+            render_pass,
+            pipeline_layout,
+            ShaderManager::load_fall_vertex(&device)?,
+            FallVertex::binding_description(),
+            &FallVertex::attribute_descriptions(),
+            ShaderManager::load_fall_fragment(&device)?,
         )?;
         let descriptor_pool = Self::create_descriptor_pool(&device)?;
 
@@ -107,6 +122,7 @@ impl WaterPipeline {
             pipeline,
             fine_pipeline,
             river_pipeline,
+            fall_pipeline,
             pipeline_layout,
             descriptor_set_layout,
             ripple_set_layout,
@@ -297,9 +313,8 @@ impl WaterPipeline {
         vert_module: vk::ShaderModule,
         binding_description: vk::VertexInputBindingDescription,
         attribute_descriptions: &[vk::VertexInputAttributeDescription],
+        frag_module: vk::ShaderModule,
     ) -> EngineResult<vk::Pipeline> {
-        let frag_module = ShaderManager::load_water_fragment(device)?;
-
         let entry_name = c"main";
         let shader_stages = [
             vk::PipelineShaderStageCreateInfo::default()
@@ -397,6 +412,11 @@ impl WaterPipeline {
         self.river_pipeline
     }
 
+    /// The pipeline for a fall's sheet, with a fragment shader of its own.
+    pub fn fall_pipeline(&self) -> vk::Pipeline {
+        self.fall_pipeline
+    }
+
     /// A descriptor set pointing set 1 at a ripple storage buffer. One per
     /// frame slot, allocated once: a set is never rewritten while a frame may
     /// be reading it.
@@ -441,6 +461,12 @@ impl Drop for WaterPipeline {
             self.device
                 .device
                 .destroy_pipeline(self.fine_pipeline, None);
+            self.device
+                .device
+                .destroy_pipeline(self.river_pipeline, None);
+            self.device
+                .device
+                .destroy_pipeline(self.fall_pipeline, None);
             self.device
                 .device
                 .destroy_pipeline_layout(self.pipeline_layout, None);

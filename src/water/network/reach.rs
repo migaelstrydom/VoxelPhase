@@ -18,6 +18,7 @@ use nalgebra::{Point3, Vector2};
 use crate::water::geometry::SpanRef;
 
 use super::centreline::Centreline;
+use super::link::FallPath;
 use super::rating::{RatingCurve, RatingPoint};
 
 /// Where a reach is in its life.
@@ -26,6 +27,17 @@ pub enum ReachState {
     Advancing,
     Flowing,
     Receding,
+}
+
+/// Where the last reach of a channel lets its water go. It is kept as a
+/// point, which outlives rebuilds of the spans there, so the reach can link
+/// again to whatever store stands there if the one it fed is replaced.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChannelOutlet {
+    /// On the floor or water where the channel's water enters its target.
+    pub at: Point3<f32>,
+    /// The arc it falls along to get there, if it leaves the bed at a step.
+    pub fall: Option<FallPath>,
 }
 
 /// One stretch of channel and the water in it.
@@ -63,6 +75,8 @@ pub struct Reach {
     /// basin's level when the channel was laid. A channel whose basin has
     /// since risen over it or fallen away from it is re-routed (§8.2).
     pub routed_to_level: Option<f32>,
+    /// For the last reach of a channel: where its water goes.
+    pub outlet: Option<ChannelOutlet>,
 }
 
 impl Reach {
@@ -96,6 +110,7 @@ impl Reach {
             version: 0,
             claimed: Vec::new(),
             routed_to_level: None,
+            outlet: None,
         }
     }
 

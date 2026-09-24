@@ -37,6 +37,8 @@ mod bytecode {
     pub const WATER_FRAGMENT: &[u8] = include_bytes!("../../shader/water.frag.spv");
     pub const RIPPLE_VERTEX: &[u8] = include_bytes!("../../shader/ripple.vert.spv");
     pub const RIVER_VERTEX: &[u8] = include_bytes!("../../shader/river.vert.spv");
+    pub const FALL_VERTEX: &[u8] = include_bytes!("../../shader/fall.vert.spv");
+    pub const FALL_FRAGMENT: &[u8] = include_bytes!("../../shader/fall.frag.spv");
 
     /// Post-processing shaders (HDR resolve, bloom)
     pub const POST_FULLSCREEN_VERTEX: &[u8] =
@@ -148,6 +150,16 @@ impl ShaderManager {
     /// Load the vertex shader of a reach's surface.
     pub fn load_river_vertex(device: &ManagedDevice) -> EngineResult<vk::ShaderModule> {
         Self::load_shader(device, bytecode::RIVER_VERTEX, ShaderStage::Vertex)
+    }
+
+    /// Load the vertex shader of a fall's sheet.
+    pub fn load_fall_vertex(device: &ManagedDevice) -> EngineResult<vk::ShaderModule> {
+        Self::load_shader(device, bytecode::FALL_VERTEX, ShaderStage::Vertex)
+    }
+
+    /// Load the fragment shader of a fall's sheet.
+    pub fn load_fall_fragment(device: &ManagedDevice) -> EngineResult<vk::ShaderModule> {
+        Self::load_shader(device, bytecode::FALL_FRAGMENT, ShaderStage::Fragment)
     }
 
     /// Load the water fragment shader.

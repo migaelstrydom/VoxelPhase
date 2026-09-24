@@ -635,6 +635,25 @@ fn water_overlay(
             points.join(" ")
         );
     }
+    for fall in &water.falls {
+        let points: Vec<String> = fall
+            .iter()
+            .map(|(x, z)| format!("{:.1},{:.1}", px(*x), pz(*z)))
+            .collect();
+        let _ = writeln!(
+            s,
+            "<polyline points=\"{}\" fill=\"none\" stroke=\"#7fdbff\" stroke-width=\"2.5\" stroke-dasharray=\"3 2\"/>",
+            points.join(" ")
+        );
+        if let Some((x, z)) = fall.last() {
+            let _ = writeln!(
+                s,
+                "<circle cx=\"{:.1}\" cy=\"{:.1}\" r=\"3\" fill=\"#7fdbff\"/>",
+                px(*x),
+                pz(*z)
+            );
+        }
+    }
     for crest in &water.crests {
         let (x, z) = crest.column.centre();
         let colour = if crest.outlet { "#e67e22" } else { "#8e44ad" };

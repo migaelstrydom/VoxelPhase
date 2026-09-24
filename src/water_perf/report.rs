@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use crate::perf::stats::{as_ms, max_ms, mean_ms, percentile_ms};
 
-use super::runner::{FrameCost, RippleCost, Subject, WorstCase};
+use super::runner::{FrameCost, RippleCost, SteadyLoad, Subject, WorstCase};
 
 /// One subject: quiet frames, the blast frame, and the transient after it.
 pub fn subject_table(subject: &Subject) -> String {
@@ -99,5 +99,21 @@ pub fn ripple_line(r: &RippleCost) -> String {
         mean_ms(&r.steps),
         percentile_ms(&r.steps, 0.99),
         r.upload_bytes / 1024
+    )
+}
+
+/// A steady open's cost.
+pub fn steady_line(s: &SteadyLoad) -> String {
+    format!(
+        "{:<24} load {:.1} ms; {} sweeps{}; {:.0} m³ filled",
+        s.label,
+        as_ms(s.load),
+        s.sweeps,
+        if s.converged {
+            ""
+        } else {
+            " (did not converge)"
+        },
+        s.filled
     )
 }

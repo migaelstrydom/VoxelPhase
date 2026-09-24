@@ -20,21 +20,26 @@
 
 use std::fmt;
 
+use nalgebra::{Point3, Vector3};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::water::geometry::{
-    Column, Drain, GeometryUpdate, SpanRef, SpanRemap, WaterGeometry, ORTHOGONAL,
+    Column, Drain, GeometryUpdate, SpanGraph, SpanRef, SpanRemap, WaterGeometry, COLUMN_SIZE,
+    ORTHOGONAL,
 };
 use crate::water::ids::{LinkId, StoreId};
-use crate::water::network::links::{Orifice, ReachOutflow, Weir};
+use crate::water::network::links::{FixedRate, Orifice, ReachOutflow, Weir};
 use crate::water::network::{
-    is_pothole, pit_bottom, Basin, CrestKind, DepressionFinder, Flood, FloodMode, HoleColumn,
-    LinkEntry, LossLaw, Network, Outflow, Port, Store, POTHOLE_DEPTH, POTHOLE_VOLUME,
+    is_pothole, pit_bottom, Basin, ChannelOutlet, CrestKind, DepressionFinder, FallPath,
+    FallTracer, Flood, FloodMode, HoleColumn, Landing, LinkEntry, LossLaw, Network, Outflow, Port,
+    Store, Trace, GRAVITY, POTHOLE_DEPTH, POTHOLE_VOLUME,
 };
 use crate::water::solver::{account, Account, VolumeLedger};
 
 use super::edit::TopologyEdit;
-use super::router::{build_reaches, downstream_of, reach_footprint, rescan, walk, WalkEnd};
+use super::router::{
+    build_reaches, downstream_of, reach_footprint, rescan, walk, WalkEnd, WalkLip,
+};
 
 /// Head over the lip a channel's design discharge is taken at, m.
 const DESIGN_HEAD: f32 = 0.3;
@@ -51,7 +56,7 @@ const REROUTE_SHIFT: f32 = 0.25;
 
 /// A basin within this of its flood's cap is re-flooded to find its higher
 /// banks.
-const CAP_MARGIN: f32 = 0.01;
+pub const CAP_MARGIN: f32 = 0.01;
 
 /// A lake splits once it is this far below a merge saddle; a pair merges once
 /// within `MERGE_LEVELS` of each other. The gap between them stops a lake
@@ -71,6 +76,17 @@ pub const Q_RETIRE: f64 = 2e-3;
 
 /// Steps a drainage walk takes before giving up on reaching a store.
 const MAX_WALK: usize = 1 << 16;
+
+/// Depth over a crest where a weir's water leaves it: the critical depth at
+/// the design head, m.
+const CRITICAL_DEPTH: f32 = 2.0 / 3.0 * DESIGN_HEAD;
+
+/// Falls chained through landings before the chain is given up to the void.
+const MAX_FALLS: u32 = 256;
+
+/// A channel outlet's point is this far above the floor it names, m, so that
+/// finding its span again reads the air over the floor, not the rock under.
+const OUTLET_LIFT: f32 = 0.05;
 
 /// What the builder needs to change the network: the network itself, its
 /// ledger, and the geometry that regions are flooded over.
@@ -114,6 +130,30 @@ impl fmt::Display for PoolError {
     }
 }
 
+/// A spring or sky source: a reservoir giving a fixed discharge from a
+/// point in space (§7.6). It is anchored there, so an edit moves where its
+/// water lands, never where it comes from.
+#[derive(Debug, Clone)]
+pub struct Source {
+    pub reservoir: StoreId,
+    pub position: Point3<f32>,
+    /// Launch velocity, m/s.
+    pub velocity: Vector3<f32>,
+    /// m³/s.
+    pub discharge: f64,
+    /// The link carrying its water, once traced and landed.
+    pub link: Option<LinkId>,
+    /// Sealed in rock: never traced again.
+    pub buried: bool,
+}
+
+/// Where water entering the network goes: the first store it reaches, and
+/// the arc it falls along on the way, if it falls.
+struct Entry {
+    store: StoreId,
+    fall: Option<FallPath>,
+}
+
 /// The only writer of topology.
 #[derive(Debug)]
 pub struct TopologyBuilder {
@@ -123,6 +163,10 @@ pub struct TopologyBuilder {
     void: Option<StoreId>,
     /// Every edit applied, oldest first, when recording is on.
     log: Option<Vec<TopologyEdit>>,
+    /// Edits applied so far, recorded or not: how a caller tells whether a
+    /// pass changed anything.
+    edits: u64,
+    sources: Vec<Source>,
 }
 
 impl TopologyBuilder {
@@ -131,6 +175,8 @@ impl TopologyBuilder {
             gain,
             void: None,
             log: None,
+            edits: 0,
+            sources: Vec::new(),
         }
     }
 
@@ -147,7 +193,13 @@ impl TopologyBuilder {
         self.log.as_deref().unwrap_or(&[])
     }
 
+    /// How many edits have been applied.
+    pub fn edit_count(&self) -> u64 {
+        self.edits
+    }
+
     fn record(&mut self, edit: TopologyEdit) {
+        self.edits += 1;
         if let Some(log) = self.log.as_mut() {
             log.push(edit);
         }
@@ -191,6 +243,7 @@ impl TopologyBuilder {
     pub fn after_terrain_update(&mut self, t: &mut Topology, update: &GeometryUpdate) {
         self.note_holes(t, update);
         self.reroute_touched(t, update);
+        self.retrace_touched(t, update);
         let graph = t.geometry.graph();
         let mut touched: FxHashSet<StoreId> = FxHashSet::default();
         for column in &update.remap.columns {
@@ -302,6 +355,7 @@ impl TopologyBuilder {
     /// region.
     pub fn settle(&mut self, t: &mut Topology, loss: &LossLaw) {
         self.settle_reaches(t, loss);
+        self.link_sources(t);
         for id in t.network.store_ids() {
             if t.network.store(id).and_then(Store::as_basin).is_none() {
                 continue;
@@ -350,31 +404,21 @@ impl TopologyBuilder {
         }
     }
 
-    /// Lay a channel of reaches from an outlet down the drainage field to the
-    /// store it reaches. Returns the store the outlet's weir feeds: the first
-    /// reach, or the target itself for a path too short to be a channel.
+    /// Lay a channel from an outlet down the drainage field to the store it
+    /// reaches. Returns where the outlet's weir feeds: the first reach, or
+    /// for a path too short to be a channel the target itself, with the arc
+    /// the water falls along if it leaves the lip at a riser.
     fn route(
         &mut self,
         t: &mut Topology,
         from: StoreId,
         outflow: &Outflow,
         level: f32,
-    ) -> Option<StoreId> {
+    ) -> Option<Entry> {
         let cell = outflow
             .cells
             .iter()
             .min_by(|a, b| a.saddle.total_cmp(&b.saddle))?;
-        let (cells, end) = {
-            let network = &*t.network;
-            let levels = |s: StoreId| network.store(s).and_then(Store::as_basin).map(Basin::level);
-            let (graph, drainage) = t.geometry.routing();
-            walk(graph, drainage, network, &levels, from, cell.outside)
-        };
-        let target = match end {
-            WalkEnd::Store(store) => store,
-            WalkEnd::Void | WalkEnd::Lost => self.void(t),
-            WalkEnd::Depression(span) => self.empty_basin(t, span),
-        };
         let weir = Weir::new(
             outflow.cells.iter().map(|c| c.saddle).collect(),
             self.gain,
@@ -384,9 +428,79 @@ impl TopologyBuilder {
             .free((level.max(outflow.lip) + DESIGN_HEAD) as f64)
             .0
             .max(MIN_DESIGN_DISCHARGE);
+        let lip = WalkLip {
+            inside: cell.inside,
+            height: cell.saddle,
+        };
+        self.channel(t, Some(from), Some(lip), cell.outside, design, 0)
+    }
+
+    /// Lay a channel of reaches from `start` down the drainage field, and
+    /// link it to wherever it ends: a store, the void, an empty basin in a
+    /// dry depression, or over a fall to wherever that lands. `falls` counts
+    /// the falls already chained above this channel.
+    fn channel(
+        &mut self,
+        t: &mut Topology,
+        from: Option<StoreId>,
+        lip: Option<WalkLip>,
+        start: SpanRef,
+        design: f64,
+        falls: u32,
+    ) -> Option<Entry> {
+        let (cells, end) = {
+            let network = &*t.network;
+            let levels = |s: StoreId| network.store(s).and_then(Store::as_basin).map(Basin::level);
+            let (graph, drainage) = t.geometry.routing();
+            walk(graph, drainage, network, &levels, from, lip, start)
+        };
         let reaches = build_reaches(t.geometry.graph(), &cells, design);
+        let (speed, depth) =
+            reaches
+                .last()
+                .map_or(((GRAVITY * CRITICAL_DEPTH).sqrt(), CRITICAL_DEPTH), |r| {
+                    let at = r.rating.at(design);
+                    (at.velocity, at.depth)
+                });
+        let graph = t.geometry.graph();
+        let (target, outlet) = match end {
+            WalkEnd::Store(store, span) => (store, Some(outlet_at(graph, span, None))),
+            WalkEnd::Depression(span) => {
+                let at = outlet_at(graph, span, None);
+                (self.empty_basin(t, span), Some(at))
+            }
+            WalkEnd::Void | WalkEnd::Lost => (self.void(t), None),
+            WalkEnd::Fall { lip: edge, toward } => {
+                let base = match (cells.is_empty(), lip) {
+                    (true, Some(l)) => l.height,
+                    _ => graph.span(edge).floor_c,
+                };
+                let (ex, ez) = edge.column.centre();
+                let (tx, tz) = toward.column.centre();
+                let direction = Vector3::new(tx - ex, 0.0, tz - ez)
+                    .try_normalize(1e-6)
+                    .unwrap_or_else(Vector3::x);
+                let launch = Point3::new(ex, base + depth, ez) + direction * (0.5 * COLUMN_SIZE);
+                let entry = self.fall(t, from, launch, direction * speed, design, falls + 1)?;
+                let at = entry
+                    .fall
+                    .as_ref()
+                    .and_then(FallPath::landing)
+                    .unwrap_or(launch);
+                (
+                    entry.store,
+                    Some(ChannelOutlet {
+                        at,
+                        fall: entry.fall,
+                    }),
+                )
+            }
+        };
         if reaches.is_empty() {
-            return Some(target);
+            return Some(Entry {
+                store: target,
+                fall: outlet.and_then(|o| o.fall),
+            });
         }
         let ids: Vec<StoreId> = reaches
             .into_iter()
@@ -402,26 +516,233 @@ impl TopologyBuilder {
             .store(target)
             .and_then(Store::as_basin)
             .map(Basin::level);
+        let fall = outlet.as_ref().and_then(|o| o.fall.clone());
         if let Some(last) = ids
             .last()
             .and_then(|id| t.network.store_mut(*id))
             .and_then(Store::as_reach_mut)
         {
-            last.routed_to_level = target_level;
+            // A channel that falls into its basin is not drowned by it.
+            last.routed_to_level = target_level.filter(|_| fall.is_none());
+            last.outlet = outlet;
         }
         for (i, &id) in ids.iter().enumerate() {
-            let down = ids.get(i + 1).copied().unwrap_or(target);
-            let link = t.network.add_link(LinkEntry {
-                up: id,
-                down,
-                law: Box::new(ReachOutflow),
-                open: true,
-                up_port: Port::Downstream,
-                down_port: Port::Upstream,
-            });
-            self.record(TopologyEdit::AddLink(link));
+            let last = i + 1 == ids.len();
+            let down = if last { target } else { ids[i + 1] };
+            self.link_reach(t, id, down, if last { fall.clone() } else { None });
         }
-        Some(ids[0])
+        Some(Entry {
+            store: ids[0],
+            fall: None,
+        })
+    }
+
+    fn link_reach(
+        &mut self,
+        t: &mut Topology,
+        reach: StoreId,
+        down: StoreId,
+        fall: Option<FallPath>,
+    ) {
+        let link = t.network.add_link(LinkEntry {
+            up: reach,
+            down,
+            law: Box::new(ReachOutflow),
+            open: true,
+            up_port: Port::Downstream,
+            down_port: Port::Upstream,
+            fall,
+        });
+        self.record(TopologyEdit::AddLink(link));
+    }
+
+    /// Trace water launched at `at` and find the store it comes down in,
+    /// laying a channel on from where it lands on dry ground. `None` when
+    /// `at` is sealed in rock.
+    fn fall(
+        &mut self,
+        t: &mut Topology,
+        from: Option<StoreId>,
+        at: Point3<f32>,
+        velocity: Vector3<f32>,
+        design: f64,
+        falls: u32,
+    ) -> Option<Entry> {
+        let trace = self.trace(t, at, velocity)?;
+        let mut path = trace.path;
+        let store = match trace.landing {
+            Landing::Void => self.void(t),
+            Landing::Span(_) if falls > MAX_FALLS => {
+                log::warn!("water falling from {at:?}: more than {MAX_FALLS} falls in a chain");
+                self.void(t)
+            }
+            Landing::Span(span) => match self.standing_water(t, span) {
+                Some(store) if Some(store) != from => store,
+                _ => {
+                    let entry = self.channel(t, from, None, span, design, falls)?;
+                    if let Some(more) = entry.fall {
+                        path.extend(more);
+                    }
+                    entry.store
+                }
+            },
+        };
+        Some(Entry {
+            store,
+            fall: Some(path),
+        })
+    }
+
+    /// Sweep a fall arc; it lands on any water standing in its way.
+    fn trace(&self, t: &Topology, at: Point3<f32>, velocity: Vector3<f32>) -> Option<Trace> {
+        let graph = t.geometry.graph();
+        let network = &*t.network;
+        let surface = |span: SpanRef| surface_over(graph, network, span);
+        FallTracer {
+            graph,
+            surface: &surface,
+        }
+        .trace(at, velocity)
+    }
+
+    /// The store whose water stands over `span`, if any.
+    fn standing_water(&self, t: &Topology, span: SpanRef) -> Option<StoreId> {
+        let graph = t.geometry.graph();
+        let owner = graph.owner(span);
+        if let Some((reach, _)) = owner.reach.filter(|(r, _)| t.network.store(*r).is_some()) {
+            return Some(reach);
+        }
+        owner
+            .body
+            .filter(|_| surface_over(graph, t.network, span).is_some())
+    }
+
+    /// Place a spring or sky source: a reservoir giving `discharge` from
+    /// `position`, launched at `velocity`, linked to wherever it lands.
+    pub fn create_source(
+        &mut self,
+        t: &mut Topology,
+        position: Point3<f32>,
+        velocity: Vector3<f32>,
+        discharge: f64,
+    ) -> StoreId {
+        let reservoir = t.network.add_store(Store::Reservoir);
+        self.record(TopologyEdit::AddStore(reservoir));
+        self.sources.push(Source {
+            reservoir,
+            position,
+            velocity,
+            discharge,
+            link: None,
+            buried: false,
+        });
+        self.link_source(t, self.sources.len() - 1);
+        reservoir
+    }
+
+    /// The sources placed, in the order they were.
+    pub fn sources(&self) -> &[Source] {
+        &self.sources
+    }
+
+    /// Link every source whose link has gone: its landing store was
+    /// replaced, or an edit touched its arc.
+    fn link_sources(&mut self, t: &mut Topology) {
+        for index in 0..self.sources.len() {
+            let source = &self.sources[index];
+            let linked = source.link.is_some_and(|l| t.network.link(l).is_some());
+            if !source.buried && !linked {
+                self.link_source(t, index);
+            }
+        }
+    }
+
+    fn link_source(&mut self, t: &mut Topology, index: usize) {
+        let source = self.sources[index].clone();
+        let design = (2.0 * source.discharge).max(MIN_DESIGN_DISCHARGE);
+        let Some(entry) = self.fall(t, None, source.position, source.velocity, design, 0) else {
+            log::warn!(
+                "water source at {:?} is sealed in rock: nothing flows",
+                source.position
+            );
+            self.sources[index].buried = true;
+            return;
+        };
+        let link = t.network.add_link(LinkEntry {
+            up: source.reservoir,
+            down: entry.store,
+            law: Box::new(FixedRate {
+                discharge: source.discharge,
+            }),
+            open: true,
+            up_port: Port::Downstream,
+            down_port: Port::Upstream,
+            fall: entry.fall,
+        });
+        self.record(TopologyEdit::AddLink(link));
+        self.sources[index].link = Some(link);
+    }
+
+    /// Link the last reach of a channel again once the store it fed has been
+    /// replaced (merged, split): to whatever stands at its outlet now.
+    fn relink_channel_end(&mut self, t: &mut Topology, id: StoreId) {
+        let Some(reach) = t.network.store(id).and_then(Store::as_reach) else {
+            return;
+        };
+        if downstream_of(t.network, id).is_some() {
+            return;
+        }
+        let Some(outlet) = reach.outlet.clone() else {
+            let void = self.void(t);
+            self.link_reach(t, id, void, None);
+            return;
+        };
+        let design = reach.rating.design();
+        let column = Column::containing(outlet.at.x, outlet.at.z);
+        let span = t
+            .geometry
+            .graph()
+            .span_at(column, outlet.at.y + OUTLET_LIFT);
+        let target = match span {
+            None => Some(self.void(t)),
+            Some(span) => match self.standing_water(t, span) {
+                Some(store) => Some(store),
+                None => self
+                    .channel(t, None, None, span, design, 0)
+                    .map(|e| e.store),
+            },
+        };
+        match target.filter(|d| *d != id) {
+            Some(down) => self.link_reach(t, id, down, outlet.fall),
+            None => self.remove_channel(t, id),
+        }
+    }
+
+    /// An edit across a fall's arc moves where it lands: every link whose
+    /// arc crosses a re-paired column is dropped with the channels it joins,
+    /// and relinks by the usual rule.
+    fn retrace_touched(&mut self, t: &mut Topology, update: &GeometryUpdate) {
+        let mut columns = update.remap.columns.clone();
+        columns.sort_unstable();
+        columns.dedup();
+        let touched: Vec<(LinkId, StoreId, StoreId)> = t
+            .network
+            .links()
+            .filter(|(_, l)| l.fall.as_ref().is_some_and(|f| f.crosses(&columns)))
+            .map(|(id, l)| (id, l.up, l.down))
+            .collect();
+        for (link, up, down) in touched {
+            let is_reach =
+                |t: &Topology, s: StoreId| t.network.store(s).and_then(Store::as_reach).is_some();
+            if is_reach(t, up) {
+                self.remove_channel(t, up);
+            } else {
+                self.remove_link(t, link);
+            }
+            if is_reach(t, down) {
+                self.remove_channel(t, down);
+            }
+        }
     }
 
     /// Mark the spans a reach's water covers at its design discharge, each
@@ -480,6 +801,9 @@ impl TopologyBuilder {
             .collect();
         for id in shifted {
             self.remove_channel(t, id);
+        }
+        for id in t.network.store_ids() {
+            self.relink_channel_end(t, id);
         }
         for id in t.network.store_ids() {
             let Some(reach) = t.network.store(id).and_then(Store::as_reach) else {
@@ -584,11 +908,19 @@ impl TopologyBuilder {
                 }
             }
         }
-        // Upstream first (ids are issued down a channel), so each reach's
-        // water lands in the reach below, still there, and the last reach's
-        // in the channel's target.
+        // Upstream first, so each reach's water lands in the reach below,
+        // still there, and the last reach's in the channel's target.
         channel.sort();
-        for id in channel {
+        while !channel.is_empty() {
+            let top = channel
+                .iter()
+                .position(|&id| {
+                    !t.network
+                        .links()
+                        .any(|(_, l)| l.down == id && channel.contains(&l.up))
+                })
+                .unwrap_or(0);
+            let id = channel.remove(top);
             if t.network.store(id).and_then(Store::as_reach).is_some() {
                 self.remove_reach(t, id);
             }
@@ -631,12 +963,17 @@ impl TopologyBuilder {
             let routed = outflow.kind == CrestKind::Outlet
                 && outflow.hole.is_none()
                 && outflow.cells.iter().all(|c| c.inside != c.outside);
-            let target = if routed {
+            let entry = if routed {
                 self.route(t, id, &outflow, level)
             } else {
                 self.resolve_target(t, id, &outflow)
+                    .map(|store| Entry { store, fall: None })
             };
-            let Some(target) = target.filter(|t| *t != id) else {
+            let Some(Entry {
+                store: target,
+                fall,
+            }) = entry.filter(|e| e.store != id)
+            else {
                 continue;
             };
             // Two basins across one ridge share one reversible weir: a
@@ -646,7 +983,7 @@ impl TopologyBuilder {
             });
             let link = match shared {
                 Some(link) => link,
-                None => self.add_link(t, id, target, &outflow),
+                None => self.add_link(t, id, target, &outflow, fall),
             };
             if let Some(b) = t.network.store_mut(id).and_then(Store::as_basin_mut) {
                 if let Some(o) = b.outflows.get_mut(index) {
@@ -950,6 +1287,7 @@ impl TopologyBuilder {
         up: StoreId,
         down: StoreId,
         outflow: &Outflow,
+        fall: Option<FallPath>,
     ) -> LinkId {
         let down_is_basin = t
             .network
@@ -984,6 +1322,7 @@ impl TopologyBuilder {
             open,
             up_port: Port::Downstream,
             down_port: Port::Upstream,
+            fall,
         });
         self.record(TopologyEdit::AddLink(id));
         id
@@ -1166,6 +1505,38 @@ impl TopologyBuilder {
             parts.push(part);
         }
         parts
+    }
+}
+
+/// The water surface standing over `span`: its basin's level, or its
+/// reach's running depth over the floor. `None` where it is dry.
+fn surface_over(graph: &SpanGraph, network: &Network, span: SpanRef) -> Option<f32> {
+    let owner = graph.owner(span);
+    let floor = graph.span(span);
+    if let Some(reach) = owner
+        .reach
+        .and_then(|(r, _)| network.store(r))
+        .and_then(Store::as_reach)
+    {
+        let depth = reach.running().depth;
+        if depth > 0.0 && reach.wetted() > 0.0 {
+            return Some(floor.floor_c + depth);
+        }
+    }
+    let level = owner
+        .body
+        .and_then(|b| network.store(b))
+        .and_then(Store::as_basin)
+        .map(Basin::level)?;
+    (level > floor.floor_min).then_some(level)
+}
+
+/// A channel's outlet over `span`: its floor, lifted clear of the rock.
+fn outlet_at(graph: &SpanGraph, span: SpanRef, fall: Option<FallPath>) -> ChannelOutlet {
+    let (x, z) = span.column.centre();
+    ChannelOutlet {
+        at: Point3::new(x, graph.span(span).floor_c + OUTLET_LIFT, z),
+        fall,
     }
 }
 

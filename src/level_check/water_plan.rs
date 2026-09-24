@@ -39,6 +39,8 @@ pub struct WaterPlan {
     /// Channels the level's first frame routes: each reach's centreline in
     /// plan, (x, z).
     pub channels: Vec<Vec<(f32, f32)>>,
+    /// Every fall's arc in plan, (x, z), lip first.
+    pub falls: Vec<Vec<(f32, f32)>>,
     /// Columns under the authored water.
     pub wet: Vec<Column>,
     pub crests: Vec<PlanCrest>,
@@ -58,6 +60,10 @@ impl WaterPlan {
             .stores()
             .filter_map(|(_, s)| s.as_reach())
             .map(|r| r.centreline.points.iter().map(|p| (p.x, p.z)).collect())
+            .collect();
+        let falls = water
+            .falls()
+            .map(|(_, f)| f.points.iter().map(|p| (p.x, p.z)).collect())
             .collect();
         let mut wet = Vec::new();
         let mut crests = Vec::new();
@@ -115,6 +121,7 @@ impl WaterPlan {
         Self {
             cells,
             channels,
+            falls,
             wet,
             crests,
             cell: COLUMN_SIZE,

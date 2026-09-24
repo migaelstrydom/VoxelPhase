@@ -3,16 +3,19 @@
 //!
 //! ```text
 //!   outlet crest ──walk drains──▶ cells ──cut 8–16 m──▶ reaches ──▶ target store
-//!                                 │                      rating curve per reach
+//!   or a landing                  │                      rating curve per reach
 //!                                 ends at: a basin's water, an existing reach
-//!                                 (a junction), the void, a real depression
+//!                                 (a junction), the void, a real depression,
+//!                                 or a fall step, where the water leaves the bed
 //! ```
 
 use nalgebra::Point3;
 
 use crate::water::geometry::{Drain, SpanGraph, SpanRef};
 use crate::water::ids::StoreId;
-use crate::water::network::{is_pothole, Centreline, CrossSection, RatingCurve, Reach, Store};
+use crate::water::network::{
+    is_pothole, Centreline, CrossSection, RatingCurve, Reach, Store, FALL_RUN, FALL_THRESHOLD,
+};
 
 /// Reaches are cut at about this length, m.
 pub const REACH_LENGTH: f32 = 12.0;
@@ -39,41 +42,68 @@ const MAX_WALK: usize = 1 << 16;
 /// How a walk down the drainage field ended.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum WalkEnd {
-    /// Into a store: a basin's water, or an existing reach.
-    Store(StoreId),
+    /// Into a store, at this span: a basin's water, or an existing reach.
+    Store(StoreId, SpanRef),
     /// Off an open edge of the world.
     Void,
     /// Into a dry depression, at this span.
     Depression(SpanRef),
+    /// Over a fall step: the bed drops more than `FALL_THRESHOLD` within
+    /// `FALL_RUN` of `lip`, the last cell of the channel.
+    Fall {
+        lip: SpanRef,
+        /// The first cell past the lip, which gives the fall its direction.
+        toward: SpanRef,
+    },
     /// Nowhere found within the step limit.
     Lost,
 }
 
+/// The crest a walk starts over, when it leaves a basin: the lip's inside
+/// span and the crest height, so a riser right at the crest is a fall.
+#[derive(Debug, Clone, Copy)]
+pub struct WalkLip {
+    pub inside: SpanRef,
+    pub height: f32,
+}
+
 /// The cells a channel from `start` runs over, and where it ends. The walk
 /// stops at the first span under a basin's water, at a span already carrying
-/// a reach, at the void and at a real depression. `from` is the basin the
-/// channel leaves: its own spans do not end it.
+/// a reach, at the void, at a real depression and at a fall step. `from` is
+/// the basin the channel leaves: its own spans do not end it.
 pub fn walk(
     graph: &SpanGraph,
     drainage: &mut crate::water::geometry::DrainageField,
     network: &crate::water::network::Network,
     levels: &dyn Fn(StoreId) -> Option<f32>,
-    from: StoreId,
+    from: Option<StoreId>,
+    lip: Option<WalkLip>,
     start: SpanRef,
 ) -> (Vec<SpanRef>, WalkEnd) {
     let mut cells: Vec<SpanRef> = Vec::new();
     let mut span = start;
     for _ in 0..MAX_WALK {
+        if let Some((at, toward)) = fall_step(graph, lip, &cells, span) {
+            cells.truncate(at.map_or(0, |i| i + 1));
+            let lip = match at {
+                Some(i) => cells[i],
+                None => {
+                    lip.expect("a fall before the first cell is at the lip")
+                        .inside
+                }
+            };
+            return (cells, WalkEnd::Fall { lip, toward });
+        }
         let owner = graph.owner(span);
         let floor = graph.span(span).floor_min;
         if let Some((reach, _)) = owner.reach {
             if network.store(reach).is_some() {
-                return (cells, WalkEnd::Store(reach));
+                return (cells, WalkEnd::Store(reach, span));
             }
         }
-        if let Some(body) = owner.body.filter(|b| *b != from) {
+        if let Some(body) = owner.body.filter(|b| Some(*b) != from) {
             if levels(body).is_some_and(|level| level > floor) {
-                return (cells, WalkEnd::Store(body));
+                return (cells, WalkEnd::Store(body, span));
             }
         }
         cells.push(span);
@@ -90,6 +120,48 @@ pub fn walk(
         }
     }
     (cells, WalkEnd::Lost)
+}
+
+/// Whether stepping onto `next` goes over a fall: some cell within
+/// `FALL_RUN` behind it, or the lip, stands more than `FALL_THRESHOLD` above
+/// it. Returns the highest such cell (`None` for the lip) and the cell after
+/// it.
+fn fall_step(
+    graph: &SpanGraph,
+    lip: Option<WalkLip>,
+    cells: &[SpanRef],
+    next: SpanRef,
+) -> Option<(Option<usize>, SpanRef)> {
+    let floor = graph.span(next).floor_c;
+    let (nx, nz) = next.column.centre();
+    let within = |column: crate::water::geometry::Column| {
+        let (x, z) = column.centre();
+        ((x - nx).powi(2) + (z - nz).powi(2)).sqrt() <= FALL_RUN + 1e-3
+    };
+    let mut best: Option<(Option<usize>, f32)> = None;
+    for (i, cell) in cells.iter().enumerate().rev() {
+        if !within(cell.column) {
+            break;
+        }
+        let height = graph.span(*cell).floor_c;
+        if height - floor > FALL_THRESHOLD && best.is_none_or(|(_, h)| height > h) {
+            best = Some((Some(i), height));
+        }
+    }
+    if let Some(lip) = lip {
+        let near = cells.iter().all(|c| within(c.column));
+        if near && within(lip.inside.column) && lip.height - floor > FALL_THRESHOLD {
+            if best.is_none_or(|(_, h)| lip.height > h) {
+                best = Some((None, lip.height));
+            }
+        }
+    }
+    let (at, _) = best?;
+    let toward = match at {
+        Some(i) => cells.get(i + 1).copied().unwrap_or(next),
+        None => cells.first().copied().unwrap_or(next),
+    };
+    Some((at, toward))
 }
 
 /// Cut a path into reaches and build each: its centreline, sections and

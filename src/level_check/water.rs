@@ -54,7 +54,12 @@ pub fn check_water(level: &Level, terrain: &TerrainWorld, report: &mut Report) -
                 basin.merge_saddles.len()
             ),
         );
-        if let Some(crest) = spill.filter(|c| c.saddle < level) {
+        // A basin a source feeds stands over its outlet by design.
+        let fed = world
+            .network()
+            .links()
+            .any(|(link, l)| l.down == id && world.link_discharge(link).is_some_and(|q| q > 0.0));
+        if let Some(crest) = spill.filter(|c| c.saddle < level && !fed) {
             let (x, z) = crest.inside.column.centre();
             let keep = basin.hypsometry.volume(crest.saddle);
             report.error(
@@ -65,6 +70,50 @@ pub fn check_water(level: &Level, terrain: &TerrainWorld, report: &mut Report) -
                     id.0,
                     crest.saddle,
                     basin.volume - keep,
+                ),
+            );
+        }
+    }
+
+    for (i, source) in world.sources().iter().enumerate() {
+        let p = source.position;
+        let name = format!("Source {i}");
+        if source.buried {
+            report.error(
+                "water",
+                format!(
+                    "source at ({:.1}, {:.1}, {:.1}) is sealed in rock: no air within reach \
+                     along its direction, so nothing flows",
+                    p.x, p.y, p.z
+                ),
+            );
+            section.row(name, "sealed in rock".to_string());
+            continue;
+        }
+        let lands = source
+            .link
+            .and_then(|l| world.network().link(l))
+            .and_then(|l| l.fall.as_ref())
+            .and_then(|f| f.landing());
+        let text = match lands {
+            Some(at) => format!(
+                "{:.2} m³/s from ({:.1}, {:.1}, {:.1}), lands at ({:.1}, {:.1}, {:.1})",
+                source.discharge, p.x, p.y, p.z, at.x, at.y, at.z
+            ),
+            None => format!(
+                "{:.2} m³/s from ({:.1}, {:.1}, {:.1})",
+                source.discharge, p.x, p.y, p.z
+            ),
+        };
+        section.row(name, text);
+    }
+    if let Some(steady) = world.steady_report() {
+        if !steady.converged {
+            report.warn(
+                "water",
+                format!(
+                    "the water did not come to rest in {} sweeps; the level opens still settling",
+                    steady.sweeps
                 ),
             );
         }

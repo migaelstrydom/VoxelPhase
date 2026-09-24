@@ -1,5 +1,6 @@
 //! Runs a scenario: builds its world, plays its script, records the water.
 
+use crate::level::Settle;
 use crate::terrain::{BlastConfig, TerrainWorld};
 use crate::water::network::Store;
 use crate::water::topology::TopologyEdit;
@@ -16,11 +17,16 @@ pub struct RunConfig {
     /// Ticks per recorded frame. Each tick is still the true `dt`, so a larger
     /// value plays a scenario out in fewer frames without changing any law.
     pub fast_forward: u32,
+    /// How the water opens, in place of what the scenario's level says.
+    pub settle: Option<Settle>,
 }
 
 impl Default for RunConfig {
     fn default() -> Self {
-        Self { fast_forward: 1 }
+        Self {
+            fast_forward: 1,
+            settle: None,
+        }
     }
 }
 
@@ -79,11 +85,14 @@ pub fn run_with_captures(
     mut capture: impl FnMut(f32, &mut TerrainWorld, &mut WaterWorld),
 ) -> Result<Run, String> {
     let (level, mut terrain) = scenario.terrain()?;
-    let water_config = level
+    let mut water_config = level
         .water
-        .as_ref()
+        .clone()
         .ok_or_else(|| format!("scenario {} has no water", scenario.name))?;
-    let (mut water, errors) = WaterWorld::recording(water_config, &terrain);
+    if let Some(settle) = config.settle {
+        water_config.settle = settle;
+    }
+    let (mut water, errors) = WaterWorld::recording(&water_config, &terrain);
 
     let dt = 1.0 / TICK_RATE;
     let ticks = (scenario.duration * TICK_RATE).round() as u64;
@@ -105,6 +114,11 @@ pub fn run_with_captures(
             time: 0.0,
             text: error.to_string(),
         });
+    }
+    for (id, store) in water.network().stores() {
+        if let Some(reach) = store.as_reach() {
+            recorded.reaches.push(describe_reach(id.0, reach, 0.0));
+        }
     }
     recorded.samples.push(sample(scenario, &water, 0.0));
     let mut edits_seen = water.topology_log().len();

@@ -17,11 +17,12 @@ use rustc_hash::FxHashMap;
 use crate::water::geometry::{
     Column, SpanChunkCoord, CHUNK_COLUMNS, COLUMNS_PER_CHUNK, COLUMN_SIZE, ORTHOGONAL,
 };
-use crate::water::ids::StoreId;
+use crate::water::ids::{LinkId, StoreId};
 use crate::water::network::Basin;
 use crate::water::surface::Swell;
 use crate::water::WaterWorld;
 
+use super::fall_mesher::{FallKey, FallMesh, FallState};
 use super::reach_mesher::{RiverMesh, RiverState};
 use super::vertex::BasinVertex;
 
@@ -95,6 +96,21 @@ pub trait WaterScene {
     fn river_state(&self, _reach: StoreId) -> Option<RiverState> {
         None
     }
+
+    /// Changes whenever [`Self::build_falls`] would build something
+    /// different.
+    fn fall_key(&self) -> FallKey {
+        Vec::new()
+    }
+
+    fn build_falls(&self) -> FallMesh {
+        FallMesh::default()
+    }
+
+    /// A fall's state for its draw: `None` when nothing falls.
+    fn fall_state(&self, _link: LinkId) -> Option<FallState> {
+        None
+    }
 }
 
 impl WaterScene for WaterWorld {
@@ -138,6 +154,18 @@ impl WaterScene for WaterWorld {
             .store(reach)
             .and_then(|s| s.as_reach())
             .map(RiverState::of)
+    }
+
+    fn fall_key(&self) -> FallKey {
+        super::fall_mesher::fall_key(self.falls())
+    }
+
+    fn build_falls(&self) -> FallMesh {
+        super::fall_mesher::build(self.falls())
+    }
+
+    fn fall_state(&self, link: LinkId) -> Option<FallState> {
+        FallState::carrying(self.link_discharge(link)?)
     }
 
     fn ripple_tiles(&self) -> Vec<RippleTileView<'_>> {

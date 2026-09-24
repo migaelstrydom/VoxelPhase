@@ -15,6 +15,7 @@ use nalgebra::{Matrix4, Vector2, Vector3};
 use rustc_hash::FxHashMap;
 
 use super::basin_mesher::{MeshKey, WaterMesh, WaterScene};
+use super::fall_mesher::{FallKey, FallMesh, SPREAD as FALL_SPREAD};
 use super::pipeline::{WaterPipeline, BODY_PUSH_OFFSET, FRAGMENT_PUSH_OFFSET};
 use super::reach_mesher::RiverMesh;
 use super::vertex::FineVertex;
@@ -68,6 +69,10 @@ pub struct WaterRenderer {
     river_key: MeshKey,
     river_version: u64,
     river_slots: PerFrame<SlotMesh>,
+    falls: FallMesh,
+    fall_key: FallKey,
+    fall_version: u64,
+    fall_slots: PerFrame<SlotMesh>,
     ripple_slots: PerFrame<RippleSlot>,
     /// The fine grid every awake ripple tile is drawn with. Never changes.
     fine_grid: StreamedMesh,
@@ -128,6 +133,14 @@ impl WaterRenderer {
                 capacity: (0, 0),
                 version: 0,
             }),
+            falls: FallMesh::default(),
+            fall_key: FallKey::new(),
+            fall_version: 0,
+            fall_slots: PerFrame::new(|_| SlotMesh {
+                buffers: None,
+                capacity: (0, 0),
+                version: 0,
+            }),
             slot: FrameSlot::default(),
         })
     }
@@ -159,6 +172,19 @@ impl WaterRenderer {
             &self.rivers.vertices,
             &self.rivers.indices,
         )?;
+        let key = water.fall_key();
+        if key != self.fall_key {
+            self.falls = water.build_falls();
+            self.fall_key = key;
+            self.fall_version += 1;
+        }
+        upload_slot(
+            &self.device,
+            &mut self.fall_slots[self.slot],
+            self.fall_version,
+            &self.falls.vertices,
+            &self.falls.indices,
+        )?;
 
         upload_slot(
             &self.device,
@@ -185,13 +211,12 @@ impl WaterRenderer {
         exposure: f32,
     ) -> EngineResult<()> {
         self.sync(water)?;
-        if self.mesh.draws.is_empty() && self.rivers.draws.is_empty() {
+        if self.mesh.draws.is_empty() && self.rivers.draws.is_empty() && self.falls.draws.is_empty()
+        {
             return Ok(());
         }
         let layers = self.upload_ripples(water)?;
-        let Some(mesh) = self.slots[self.slot].buffers.as_ref() else {
-            return Ok(());
-        };
+        let mesh = self.slots[self.slot].buffers.as_ref();
         let clock = water.clock();
         // Bind pipeline and draw
         unsafe {
@@ -272,9 +297,10 @@ impl WaterRenderer {
                 &[],
             );
 
-            mesh.bind(&self.device.device, cb);
-
-            for draw in &self.mesh.draws {
+            if let Some(mesh) = mesh {
+                mesh.bind(&self.device.device, cb);
+            }
+            for draw in self.mesh.draws.iter().filter(|_| mesh.is_some()) {
                 // A tile whose ripples are awake is drawn fine, below.
                 if layers.contains_key(&(draw.tile.x, draw.tile.z, draw.body)) {
                     continue;
@@ -356,6 +382,49 @@ impl WaterRenderer {
                     self.device
                         .device
                         .cmd_draw_indexed(cb, self.fine_indices, 1, 0, 0, 0);
+                }
+            }
+
+            // Falls last: a sheet reads the scene behind it, water included
+            // only as far as the opaque pass drew it.
+            if let Some(falls) = self.fall_slots[self.slot].buffers.as_ref() {
+                if !self.falls.draws.is_empty() {
+                    self.device.device.cmd_bind_pipeline(
+                        cb,
+                        vk::PipelineBindPoint::GRAPHICS,
+                        self.pipeline.fall_pipeline(),
+                    );
+                    falls.bind(&self.device.device, cb);
+                    for draw in &self.falls.draws {
+                        let Some(state) = water.fall_state(draw.link) else {
+                            continue;
+                        };
+                        let constants: [f32; 8] = [
+                            state.half_width,
+                            state.strength,
+                            FALL_SPREAD,
+                            clock,
+                            0.0,
+                            0.0,
+                            0.0,
+                            0.0,
+                        ];
+                        self.device.device.cmd_push_constants(
+                            cb,
+                            self.pipeline.layout(),
+                            vk::ShaderStageFlags::VERTEX,
+                            BODY_PUSH_OFFSET,
+                            bytemuck_cast_slice(&constants),
+                        );
+                        self.device.device.cmd_draw_indexed(
+                            cb,
+                            draw.index_count,
+                            1,
+                            draw.first_index,
+                            0,
+                            0,
+                        );
+                    }
                 }
             }
         }

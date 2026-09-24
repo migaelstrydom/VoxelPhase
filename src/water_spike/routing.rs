@@ -316,11 +316,12 @@ fn pools(level: &Level) -> Vec<((f32, f32), f32)> {
         .water
         .iter()
         .flat_map(|w| &w.bodies)
-        .map(|b| match b {
+        .filter_map(|b| match b {
             WaterBody::Pool {
                 seed,
                 surface_level,
-            } => (*seed, *surface_level),
+            } => Some((*seed, *surface_level)),
+            _ => None,
         })
         .collect()
 }

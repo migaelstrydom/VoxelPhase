@@ -16,19 +16,19 @@
 use std::time::{Duration, Instant};
 
 use crate::debug::DebugLog;
-use crate::level::{WaterBody, WaterConfig};
+use crate::level::{Settle, WaterBody, WaterConfig};
 use crate::terrain::TerrainWorld;
 
-use nalgebra::Point3;
+use nalgebra::{Point3, Vector3};
 
 use super::coupling::{Disturbance, Disturbances};
-use super::geometry::{GeometryUpdate, Outlets, SpanChunkCoord, SpanGraph, WaterGeometry};
-use super::ids::{StoreId, WaterBodyId};
-use super::network::{Basin, LossLaw, Network, Store};
+use super::geometry::{GeometryUpdate, Outlets, SinkBox, SpanChunkCoord, SpanGraph, WaterGeometry};
+use super::ids::{LinkId, StoreId, WaterBodyId};
+use super::network::{Basin, FallPath, LossLaw, Network, Store};
 use super::query::WaterQuery;
 use super::solver::{Balance, HydrologySolver, VolumeLedger};
 use super::surface::{MaskSource, RippleConfig, RippleTiles, Swell, TileMask};
-use super::topology::{PoolError, Topology, TopologyBuilder};
+use super::topology::{settle_steady, PoolError, Source, SteadyReport, Topology, TopologyBuilder};
 
 /// Per-level dials of the hydrology.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -95,6 +95,8 @@ pub struct WaterWorld {
     last_step: WaterTimings,
     /// Timings of the most recent frame that had a terrain edit.
     last_edit: Option<WaterTimings>,
+    /// How the level's opening settle went, if it opened steady.
+    steady: Option<SteadyReport>,
 }
 
 impl WaterWorld {
@@ -118,8 +120,17 @@ impl WaterWorld {
         terrain: &TerrainWorld,
         topology: TopologyBuilder,
     ) -> (Self, Vec<PoolError>) {
+        let mut outlets = Outlets::default();
+        for body in &config.bodies {
+            if let WaterBody::Sink { min, max } = body {
+                outlets.add_sink(SinkBox {
+                    min: Point3::new(min.0, min.1, min.2),
+                    max: Point3::new(max.0, max.1, max.2),
+                });
+            }
+        }
         let mut world = Self {
-            geometry: WaterGeometry::build(terrain, Outlets::default()),
+            geometry: WaterGeometry::build(terrain, outlets),
             network: Network::default(),
             ledger: VolumeLedger::default(),
             solver: HydrologySolver::default(),
@@ -134,25 +145,69 @@ impl WaterWorld {
             last_timings: WaterTimings::default(),
             last_step: WaterTimings::default(),
             last_edit: None,
+            steady: None,
         };
         let mut errors = Vec::new();
+        // Pools first, so that sources landing in them find their water.
         for body in &config.bodies {
-            match body {
-                WaterBody::Pool {
-                    seed,
-                    surface_level,
-                } => {
-                    let mut t = Topology {
-                        network: &mut world.network,
-                        ledger: &mut world.ledger,
-                        geometry: &mut world.geometry,
-                    };
-                    if let Err(e) = world.topology.create_pool(&mut t, *seed, *surface_level) {
-                        log::warn!("{e}");
-                        errors.push(e);
-                    }
+            if let WaterBody::Pool {
+                seed,
+                surface_level,
+            } = body
+            {
+                let mut t = Topology {
+                    network: &mut world.network,
+                    ledger: &mut world.ledger,
+                    geometry: &mut world.geometry,
+                };
+                if let Err(e) = world.topology.create_pool(&mut t, *seed, *surface_level) {
+                    log::warn!("{e}");
+                    errors.push(e);
                 }
             }
+        }
+        for body in &config.bodies {
+            let (position, velocity, discharge) = match body {
+                WaterBody::Spring {
+                    position,
+                    direction,
+                    discharge,
+                } => (
+                    *position,
+                    Vector3::new(direction.0, direction.1, direction.2),
+                    *discharge,
+                ),
+                WaterBody::SkySource {
+                    position,
+                    discharge,
+                } => (*position, Vector3::zeros(), *discharge),
+                _ => continue,
+            };
+            let position = Point3::new(position.0, position.1, position.2);
+            let mut t = Topology {
+                network: &mut world.network,
+                ledger: &mut world.ledger,
+                geometry: &mut world.geometry,
+            };
+            world
+                .topology
+                .create_source(&mut t, position, velocity, discharge as f64);
+        }
+        if config.settle == Settle::Steady {
+            let loss = world.config.loss;
+            let mut t = Topology {
+                network: &mut world.network,
+                ledger: &mut world.ledger,
+                geometry: &mut world.geometry,
+            };
+            let report = settle_steady(&mut world.topology, &mut t, &loss);
+            if !report.converged {
+                log::warn!(
+                    "water did not come to rest in {} sweeps; the level opens still settling",
+                    report.sweeps
+                );
+            }
+            world.steady = Some(report);
         }
         world.refresh_levels();
         (world, errors)
@@ -384,6 +439,37 @@ impl WaterWorld {
 
     pub fn network(&self) -> &Network {
         &self.network
+    }
+
+    /// Every link that carries a fall, and its arc, in id order.
+    pub fn falls(&self) -> impl Iterator<Item = (LinkId, &FallPath)> {
+        self.network
+            .links()
+            .filter_map(|(id, l)| l.fall.as_ref().map(|f| (id, f)))
+    }
+
+    /// What a link carries now, m³/s: zero when closed, `None` once gone.
+    pub fn link_discharge(&self, id: LinkId) -> Option<f64> {
+        let link = self.network.link(id)?;
+        if !link.open {
+            return Some(0.0);
+        }
+        let volume = |s: StoreId| self.network.store(s).map_or(0.0, Store::volume);
+        let up = self.network.view(link.up, volume(link.up), link.up_port)?;
+        let down = self
+            .network
+            .view(link.down, volume(link.down), link.down_port)?;
+        Some(link.law.discharge(up, down).abs())
+    }
+
+    /// How the level's opening settle went, if it opened steady.
+    pub fn steady_report(&self) -> Option<SteadyReport> {
+        self.steady
+    }
+
+    /// Every spring and sky source.
+    pub fn sources(&self) -> &[Source] {
+        self.topology.sources()
     }
 
     pub fn geometry(&self) -> &WaterGeometry {

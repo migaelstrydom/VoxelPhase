@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use nalgebra::Point3;
 
-use crate::level::{load_level, Level};
+use crate::level::{load_level, Level, Settle};
 use crate::level_check::build_terrain;
 use crate::rendering::water::{MeshKey, WaterScene};
 use crate::terrain::{BlastConfig, TerrainWorld};
@@ -351,4 +351,40 @@ pub fn ripple_cost(path: &Path, frames: usize) -> Result<RippleCost, String> {
         steps,
         upload_bytes: tiles * (crate::water::surface::CELLS_PER_TILE + 256) * 4,
     })
+}
+
+/// A level opened at rest: what the steady settle cost at load.
+#[derive(Debug, Clone)]
+pub struct SteadyLoad {
+    pub label: String,
+    /// The whole water load, settle included.
+    pub load: Duration,
+    pub sweeps: usize,
+    pub converged: bool,
+    /// Water the sources put in before the level opened, m³.
+    pub filled: f64,
+}
+
+/// Scenarios with sources, each opened steady (§13, budget §19).
+pub fn steady_loads() -> Result<Vec<SteadyLoad>, String> {
+    ["staircase", "spring_pools"]
+        .into_iter()
+        .map(|name| {
+            let scenario = find(name).ok_or(format!("the {name} scenario is missing"))?;
+            let (level, terrain) = scenario.terrain()?;
+            let mut config = level.water.clone().ok_or(format!("{name} has no water"))?;
+            config.settle = Settle::Steady;
+            let started = Instant::now();
+            let (water, _) = WaterWorld::from_config(&config, &terrain);
+            let load = started.elapsed();
+            let report = water.steady_report().ok_or("opened without a settle")?;
+            Ok(SteadyLoad {
+                label: format!("{name} (water_viewer)"),
+                load,
+                sweeps: report.sweeps,
+                converged: report.converged,
+                filled: water.ledger().emitted,
+            })
+        })
+        .collect()
 }
