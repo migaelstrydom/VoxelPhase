@@ -7,13 +7,15 @@ use nalgebra::{Point3, Vector3};
 use crate::aim::Launch;
 use crate::physics::{ConstraintHandle, ConstraintKind, PhysicsWorld, RigidBodyHandle};
 
-use super::components::ArmState;
+use crate::character::components::ArmState;
+
+use super::probe::{GrabProbe, ReachFrame};
 
 /// Configuration for grab mechanics. ECS resource (single player).
 #[derive(Debug, Clone)]
 pub struct GrabConfig {
-    /// Maximum distance for the grab probe (world units).
-    pub grab_range: f32,
+    /// Decides what a grab reaches for.
+    pub probe: GrabProbe,
     /// Distance in front of the player to hold the object.
     pub hold_distance: f32,
     /// Height offset above pelvis for the hold point.
@@ -43,7 +45,7 @@ pub struct GrabConfig {
 impl Default for GrabConfig {
     fn default() -> Self {
         Self {
-            grab_range: 2.0,
+            probe: GrabProbe::default(),
             hold_distance: 0.5,
             hold_height: 0.3,
             compliance: 0.0,
@@ -76,20 +78,23 @@ pub fn desired_hold_point(
     player_pos + facing * config.hold_distance + Vector3::y() * config.hold_height
 }
 
-/// Attempt to initiate a grab: probe for a body in range.
+/// Attempt to initiate a grab: probe the reach volume for a body.
 ///
+/// `ground_depth` is the distance from `player_pos` down to the soles.
 /// Returns the new `ArmState::Reaching` with the probe result.
 pub fn begin_reach(
     physics: &PhysicsWorld,
     player_pos: Point3<f32>,
     facing: Vector3<f32>,
+    ground_depth: f32,
     player_body: RigidBodyHandle,
     config: &GrabConfig,
 ) -> ArmState {
-    let probe_hit = physics.probe_bodies(player_pos, facing, config.grab_range, &[player_body]);
+    let target = ReachFrame::new(player_pos, facing, ground_depth)
+        .and_then(|frame| config.probe.find_target(physics, &frame, &[player_body]));
     ArmState::Reaching {
         elapsed: 0.0,
-        target: probe_hit.map(|h| (h.body, h.hit.point)),
+        target,
     }
 }
 

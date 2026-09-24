@@ -1,4 +1,4 @@
-use crate::character::grab::{self, GrabConfig};
+use crate::character::grab::{self, GrabConfig, ReachFrame};
 use crate::character::{
     facing_from_rotation, ArmState, CharacterIntent, CharacterState, Grounding, LocomotionConfig,
     LocomotionInput, LocomotionState, MovementRule,
@@ -227,6 +227,7 @@ impl<'a> System<'a> for CharacterControlSystem {
                             &physics_res.world,
                             character_pos,
                             facing,
+                            config.collider_half_height,
                             character_body,
                             &grab_config,
                         )
@@ -316,6 +317,7 @@ impl<'a> System<'a> for CharacterControlSystem {
                     &state.arm,
                     character_pos,
                     facing,
+                    config.collider_half_height,
                     &grab_config,
                     &physics_res.world,
                 );
@@ -324,19 +326,41 @@ impl<'a> System<'a> for CharacterControlSystem {
     }
 }
 
+/// The twelve edges of a box whose corners are indexed by
+/// [`GrabProbe::corners`](crate::character::grab::GrabProbe::corners).
+const REACH_VOLUME_EDGES: [(usize, usize); 12] = [
+    (0, 1),
+    (2, 3),
+    (4, 5),
+    (6, 7),
+    (0, 2),
+    (1, 3),
+    (4, 6),
+    (5, 7),
+    (0, 4),
+    (1, 5),
+    (2, 6),
+    (3, 7),
+];
+
 fn draw_grab_debug(
     overlays: &mut DebugOverlays,
     arm: &ArmState,
     character_pos: Point3<f32>,
     facing: Vector3<f32>,
+    ground_depth: f32,
     config: &GrabConfig,
     physics: &crate::physics::PhysicsWorld,
 ) {
-    let probe_end = character_pos + facing * config.grab_range;
     let hold_point = grab::desired_hold_point(character_pos, facing, config);
 
-    // Probe ray (cyan line from character to max grab range)
-    overlays.add_line_with_radius(character_pos, probe_end, 0.01, Colour::rgb(0.0, 0.8, 0.8));
+    // Reach volume (cyan box the probe gathers candidates from)
+    if let Some(frame) = ReachFrame::new(character_pos, facing, ground_depth) {
+        let corners = config.probe.corners(&frame);
+        for (a, b) in REACH_VOLUME_EDGES {
+            overlays.add_line_with_radius(corners[a], corners[b], 0.01, Colour::rgb(0.0, 0.8, 0.8));
+        }
+    }
 
     // Hold point (where the object is pulled toward)
     overlays.add_sphere(hold_point, 0.05, Colour::YELLOW);
