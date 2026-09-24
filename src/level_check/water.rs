@@ -8,7 +8,7 @@
 
 use crate::level::Level;
 use crate::terrain::TerrainWorld;
-use crate::water::network::CrestKind;
+use crate::water::network::{CrestKind, Store};
 use crate::water::WaterWorld;
 
 use super::report::{Report, Section};
@@ -21,8 +21,14 @@ pub fn check_water(level: &Level, terrain: &TerrainWorld, report: &mut Report) -
     let config = level.water.as_ref()?;
     let mut section = Section::new("Water");
 
-    if let Some(level_y) = config.ocean_level {
-        section.row("Ocean", format!("surface {level_y:.1}"));
+    if let Some(ocean) = &config.ocean {
+        section.row(
+            "Ocean",
+            format!(
+                "sea level {:.1}, open to {:?}",
+                ocean.level, ocean.open_edges
+            ),
+        );
     }
 
     let (world, errors) = WaterWorld::from_config(config, terrain);
@@ -106,6 +112,24 @@ pub fn check_water(level: &Level, terrain: &TerrainWorld, report: &mut Report) -
             ),
         };
         section.row(name, text);
+    }
+    // With a sea, a closed edge needs scenery: water should not run off it.
+    if config.ocean.is_some() {
+        let lost = world
+            .network()
+            .links()
+            .filter(|(_, l)| matches!(world.network().store(l.down), Some(Store::Sink)))
+            .filter_map(|(link, _)| world.link_discharge(link))
+            .sum::<f64>();
+        if lost > 0.0 {
+            report.warn(
+                "water",
+                format!(
+                    "{lost:.2} m³/s runs off a closed edge of the map at rest; \
+                     give that edge scenery or open it onto the sea"
+                ),
+            );
+        }
     }
     if let Some(steady) = world.steady_report() {
         if !steady.converged {

@@ -28,6 +28,7 @@
 (
     entries: [
         (level: "test_arena.level.ron", triangles: 193828, open_edges: 0),
+        (level: "island_sea.level.ron", triangles: 195952, open_edges: 0),
         (level: "test_empty_terrain.level.ron", triangles: 100276, open_edges: 0),
         (level: "test_segments.level.ron", triangles: 224756, open_edges: 0),
         (level: "subsidence.level.ron", triangles: 301292, open_edges: 0),

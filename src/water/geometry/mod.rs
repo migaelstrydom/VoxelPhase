@@ -8,7 +8,7 @@ mod water_geometry;
 pub use crossings::{
     rasterise_by_tile, ColumnCrossings, Crossing, Facing, FloorPiece, TileCrossings,
 };
-pub use drainage::{Drain, DrainageField, Outlets, RepairStats, SinkBox};
+pub use drainage::{Drain, DrainageField, Outlets, RepairStats, SeaEdges, SinkBox};
 pub use rasteriser::{
     RasterStats, RebuildTimings, RemapEntry, SpanRasteriser, SpanRemap, REMAP_EPSILON,
     RETRIANGULATION_TOLERANCE,

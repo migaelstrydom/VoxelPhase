@@ -65,6 +65,11 @@ pub struct WaterRenderer {
     /// Bumped on every rebuild of `mesh`.
     version: u64,
     slots: PerFrame<SlotMesh>,
+    /// The sea, kept apart so a basin's re-flood does not rebuild it.
+    ocean: WaterMesh,
+    ocean_key: MeshKey,
+    ocean_version: u64,
+    ocean_slots: PerFrame<SlotMesh>,
     rivers: RiverMesh,
     river_key: MeshKey,
     river_version: u64,
@@ -125,6 +130,14 @@ impl WaterRenderer {
                 capacity: (0, 0),
                 version: 0,
             }),
+            ocean: WaterMesh::default(),
+            ocean_key: MeshKey::new(),
+            ocean_version: 0,
+            ocean_slots: PerFrame::new(|_| SlotMesh {
+                buffers: None,
+                capacity: (0, 0),
+                version: 0,
+            }),
             rivers: RiverMesh::default(),
             river_key: MeshKey::new(),
             river_version: 0,
@@ -159,6 +172,19 @@ impl WaterRenderer {
             self.key = key;
             self.version += 1;
         }
+        let key = water.ocean_key();
+        if key != self.ocean_key {
+            self.ocean = water.build_ocean();
+            self.ocean_key = key;
+            self.ocean_version += 1;
+        }
+        upload_slot(
+            &self.device,
+            &mut self.ocean_slots[self.slot],
+            self.ocean_version,
+            &self.ocean.vertices,
+            &self.ocean.indices,
+        )?;
         let key = water.river_key();
         if key != self.river_key {
             self.rivers = water.build_rivers();
@@ -211,7 +237,10 @@ impl WaterRenderer {
         exposure: f32,
     ) -> EngineResult<()> {
         self.sync(water)?;
-        if self.mesh.draws.is_empty() && self.rivers.draws.is_empty() && self.falls.draws.is_empty()
+        if self.mesh.draws.is_empty()
+            && self.ocean.draws.is_empty()
+            && self.rivers.draws.is_empty()
+            && self.falls.draws.is_empty()
         {
             return Ok(());
         }
@@ -297,26 +326,33 @@ impl WaterRenderer {
                 &[],
             );
 
-            if let Some(mesh) = mesh {
-                mesh.bind(&self.device.device, cb);
-            }
-            for draw in self.mesh.draws.iter().filter(|_| mesh.is_some()) {
-                // A tile whose ripples are awake is drawn fine, below.
-                if layers.contains_key(&(draw.tile.x, draw.tile.z, draw.body)) {
-                    continue;
-                }
-                let Some(level) = water.level(draw.body) else {
+            let meshes = [
+                (mesh, &self.mesh),
+                (self.ocean_slots[self.slot].buffers.as_ref(), &self.ocean),
+            ];
+            for (buffers, built) in meshes {
+                let Some(buffers) = buffers else {
                     continue;
                 };
-                self.push_draw(cb, water, draw.body, level, clock, [0.0; 4]);
-                self.device.device.cmd_draw_indexed(
-                    cb,
-                    draw.index_count,
-                    1,
-                    draw.first_index,
-                    0,
-                    0,
-                );
+                buffers.bind(&self.device.device, cb);
+                for draw in &built.draws {
+                    // A tile whose ripples are awake is drawn fine, below.
+                    if layers.contains_key(&(draw.tile.x, draw.tile.z, draw.body)) {
+                        continue;
+                    }
+                    let Some(level) = water.level(draw.body) else {
+                        continue;
+                    };
+                    self.push_draw(cb, water, draw.body, level, clock, [0.0; 4]);
+                    self.device.device.cmd_draw_indexed(
+                        cb,
+                        draw.index_count,
+                        1,
+                        draw.first_index,
+                        0,
+                        0,
+                    );
+                }
             }
 
             if let Some(rivers) = self.river_slots[self.slot].buffers.as_ref() {

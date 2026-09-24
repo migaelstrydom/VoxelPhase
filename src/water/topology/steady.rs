@@ -98,8 +98,12 @@ fn fed_upstream_first(network: &Network) -> Vec<StoreId> {
     }
     let mut order = Vec::new();
     while let Some(id) = queue.pop_front() {
-        if network.store(id).is_some_and(Store::is_finite) {
+        let store = network.store(id);
+        if store.is_some_and(Store::is_finite) {
             order.push(id);
+        } else if !store.is_some_and(|s| matches!(s, Store::Reservoir)) {
+            // The sea and the sinks take water without passing it on.
+            continue;
         }
         for (_, link) in network.links() {
             let next = if link.up == id {

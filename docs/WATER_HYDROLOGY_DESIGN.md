@@ -1639,6 +1639,69 @@ This is the stage most likely to need iteration on looks. 4a stands without it.
 - Swell at sea.
 - One demo level with an island pool over the ocean.
 
+**As built.**
+
+- **Level format.** `ocean: Some((level: 0.0))` is an island; list the edges
+  for a coast: `open_edges: [South]` (`West` −x, `East` +x, `South` −z,
+  `North` +z).
+  - Leaving `open_edges` out opens all four edges. RON has no clean way to
+    write `All` beside a list, so that spelling from §12 was dropped.
+  - `swell` defaults to 0.25 m.
+  - `ocean_level` is gone. Every level had it as `None`.
+- **`Store::Ocean`** has a fixed level and endless volume, and books against
+  the ledger's `Ocean` account. Its region is held only as span ownership,
+  which the remap already carries through rebuilds, so the ocean keeps no
+  span list of its own.
+- **At load**, the sea claims every span below sea level joined to a column on
+  an open edge. It is made before any pool, so a pool seeded in it *is* the
+  sea.
+- **Edges.**
+  - A span on an open edge drains at `max(floor, sea level)`.
+  - Water leaving the map there goes to the sea: off a walk, a crest or a fall
+    arc. Everything else goes to the void.
+  - Sea-edge columns are found by scanning, not taken from the graph's bounds:
+    the graph's chunk-aligned bounds overhang the terrain by up to a chunk.
+- **Lowlands (§9.1, step 5).**
+  - After an edit, a below-sea span newly joined to the sea seeds an empty
+    basin.
+  - A crest whose far side stands over its lip links at once, so the sea
+    pours in over a reversible weir.
+  - Once the basin is within 5 mm of sea level and both stand over the lip,
+    it is absorbed: its spans below sea level become the sea's, and its water
+    the ocean's.
+  - A weir into the sea is reversible only if the sea stands above the lip.
+- **`fed` counts water coming back up a reversible link.** Without that, an
+  empty lowland dried and was removed before the sea reached it.
+- **The steady settle's search stops at endless stores.** A spring into the sea
+  used to lead the search back up through a floating pool's weir, and the
+  pool was "steadied" to empty.
+- **`OceanMesher`**:
+  - One quad per sea-owned column, plus the shore ring, which leaves out any
+    lowland the sea could stand in but does not own.
+  - Strips beyond each open edge out to 1 km, at 8 m near the edge and
+    coarser further out.
+  - Drawn through the basin pipeline at sea level, with the authored swell.
+  - It is a mesh of its own, rebuilt only when the sea grows. Folded into the
+    basin mesh, every lake's re-flood rebuilt the sea too: 3.6 ms of the
+    island_sea blast frame.
+
+  The design called for a 2D mask texture. Per-column quads from ownership
+  are that mask in geometry, and share the basin path.
+- **Scenario `sea_wall`** (§9.3, scenario 4; test). A dry lowland 2 m below
+  the sea is breached at 2 s. It floods over the weir for about 17 s, then
+  joins the sea: 494 m³ booked to `ocean_in` and back out as it is absorbed,
+  with the ledger balanced.
+- **`levels/island_sea.level.ron`** is the demo:
+  - an island with a crater lake;
+  - a spring falling off its east cliff into the sea;
+  - a floating rock whose pool stands 11.5 m above the sea in the same
+    columns.
+
+  `water_perf` includes it: quiet 0.004 ms, blast frame 1.2 ms. A test holds
+  the two bodies per column.
+- **`level_check`** names the sea, and warns if water runs off a closed edge
+  of a level that has one.
+
 ## 22. Decided and deferred
 
 | Question | Status |

@@ -63,7 +63,7 @@ impl LossLaw {
                 let width = r.rating.at(r.inflow).top_width as f64;
                 (self.rate * width * r.wetted() as f64, 0.0)
             }
-            Store::Sink | Store::Reservoir => (0.0, 0.0),
+            Store::Ocean(_) | Store::Sink | Store::Reservoir => (0.0, 0.0),
         }
     }
 

@@ -343,3 +343,48 @@ fn the_valve_defers_a_large_lake_s_reflood_by_a_frame() {
     assert!(!frozen(&water), "and runs on the next");
     assert!(water.balance().is_balanced());
 }
+
+#[test]
+fn a_breached_sea_wall_floods_the_lowland_until_it_joins_the_sea() {
+    let scenario = find("sea_wall").unwrap();
+    let recorded = run(&scenario, RunConfig::default()).unwrap();
+    assert_eq!(probe(&recorded, "sea", 0), Some(0.0), "the sea stands at 0");
+    assert!(
+        probe(&recorded, "lowland", 0).is_none(),
+        "the lowland starts dry"
+    );
+    // It floods as a basin of its own, filled from the sea over a weir...
+    let flooding = recorded
+        .samples
+        .iter()
+        .position(|s| s.basins > 0)
+        .expect("the breach made a lowland basin");
+    assert!(recorded.samples[flooding..].iter().any(|s| s.volume > 1.0));
+    // ...and at sea level joins it.
+    let last = recorded.samples.last().unwrap();
+    let n = recorded.samples.len() - 1;
+    assert_eq!(last.basins, 0, "the lowland is the sea's now");
+    assert_eq!(probe(&recorded, "lowland", n), Some(0.0));
+    assert!(last.volume.abs() < 1e-6, "its water is the ocean's");
+    assert!(last.ledger_error.abs() < 1e-6);
+}
+
+#[test]
+fn the_island_sea_demo_opens_with_its_pools_above_the_sea() {
+    use crate::level::load_level;
+    use crate::level_check::build_terrain;
+    use crate::water::WaterWorld;
+    use nalgebra::Point3;
+
+    let level = load_level(std::path::Path::new("levels/island_sea.level.ron")).unwrap();
+    let terrain = build_terrain(&level);
+    let (water, errors) = WaterWorld::from_config(level.water.as_ref().unwrap(), &terrain);
+    assert!(errors.is_empty(), "{errors:?}");
+    let query = water.query();
+    // The floating pool and the sea beneath it are two bodies in one column.
+    assert_eq!(query.level_at(Point3::new(0.0, 11.0, -26.0)), Some(11.5));
+    assert_eq!(query.level_at(Point3::new(0.0, -1.0, -26.0)), Some(0.0));
+    assert_eq!(query.level_at(Point3::new(-4.0, 0.0, 12.0)), Some(1.0));
+    assert!(water.sources().iter().all(|s| !s.buried));
+    assert!(water.balance().is_balanced());
+}

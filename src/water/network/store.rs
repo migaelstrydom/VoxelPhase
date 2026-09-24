@@ -5,6 +5,7 @@
 //! laws that move water between stores live in links.
 
 use super::basin::Basin;
+use super::ocean::Ocean;
 use super::reach::Reach;
 
 /// Where a link attaches to a store. Basins ignore it; a reach has two ends.
@@ -21,6 +22,8 @@ pub enum Store {
     Basin(Basin),
     /// A stretch of running channel.
     Reach(Reach),
+    /// The sea: fixed level, endless volume.
+    Ocean(Ocean),
     /// Takes whatever reaches it: an authored sink, the edge of the world.
     Sink,
     /// Gives without running dry: behind a spring or a sky source.
@@ -33,7 +36,7 @@ impl Store {
         match self {
             Store::Basin(b) => b.volume,
             Store::Reach(r) => r.storage,
-            Store::Sink | Store::Reservoir => f64::INFINITY,
+            Store::Ocean(_) | Store::Sink | Store::Reservoir => f64::INFINITY,
         }
     }
 
@@ -47,6 +50,7 @@ impl Store {
         match self {
             Store::Basin(b) => b.hypsometry.level(volume),
             Store::Reach(r) => r.level_at_end(port == Port::Downstream),
+            Store::Ocean(o) => o.level,
             Store::Sink => f32::NEG_INFINITY,
             Store::Reservoir => f32::INFINITY,
         }
@@ -90,6 +94,30 @@ impl Store {
         }
     }
 
+    pub fn as_ocean(&self) -> Option<&Ocean> {
+        match self {
+            Store::Ocean(o) => Some(o),
+            _ => None,
+        }
+    }
+
+    pub fn as_ocean_mut(&mut self) -> Option<&mut Ocean> {
+        match self {
+            Store::Ocean(o) => Some(o),
+            _ => None,
+        }
+    }
+
+    /// The still surface of a store that has one: a basin's level, or the
+    /// sea's.
+    pub fn surface(&self) -> Option<f32> {
+        match self {
+            Store::Basin(b) => Some(b.level()),
+            Store::Ocean(o) => Some(o.level),
+            _ => None,
+        }
+    }
+
     /// Whether the store waits on a deferred re-flood (§9.2).
     pub fn is_frozen(&self) -> bool {
         matches!(self, Store::Basin(b) if b.frozen)
@@ -100,7 +128,7 @@ impl Store {
         match self {
             Store::Basin(b) => b.minor,
             Store::Reach(r) => r.minor,
-            Store::Sink | Store::Reservoir => false,
+            Store::Ocean(_) | Store::Sink | Store::Reservoir => false,
         }
     }
 
@@ -108,7 +136,7 @@ impl Store {
         match self {
             Store::Basin(b) => b.volume = volume,
             Store::Reach(r) => r.storage = volume,
-            Store::Sink | Store::Reservoir => {}
+            Store::Ocean(_) | Store::Sink | Store::Reservoir => {}
         }
     }
 

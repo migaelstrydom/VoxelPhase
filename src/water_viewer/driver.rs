@@ -177,6 +177,7 @@ fn describe(edit: &TopologyEdit, water: &WaterWorld) -> String {
                 Some(Store::Reach(_)) => "reach",
                 Some(Store::Sink) => "sink",
                 Some(Store::Reservoir) => "reservoir",
+                Some(Store::Ocean(_)) => "ocean",
                 None => "gone",
             };
             format!("AddStore({} {kind})", id.0)

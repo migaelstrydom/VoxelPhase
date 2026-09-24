@@ -16,15 +16,17 @@
 use std::time::{Duration, Instant};
 
 use crate::debug::DebugLog;
-use crate::level::{Settle, WaterBody, WaterConfig};
+use crate::level::{MapEdge, Settle, WaterBody, WaterConfig};
 use crate::terrain::TerrainWorld;
 
 use nalgebra::{Point3, Vector3};
 
 use super::coupling::{Disturbance, Disturbances};
-use super::geometry::{GeometryUpdate, Outlets, SinkBox, SpanChunkCoord, SpanGraph, WaterGeometry};
+use super::geometry::{
+    GeometryUpdate, Outlets, SeaEdges, SinkBox, SpanChunkCoord, SpanGraph, WaterGeometry,
+};
 use super::ids::{LinkId, StoreId, WaterBodyId};
-use super::network::{Basin, FallPath, LossLaw, Network, Store};
+use super::network::{Basin, FallPath, LossLaw, Network, Ocean, Store};
 use super::query::WaterQuery;
 use super::solver::{Balance, HydrologySolver, VolumeLedger};
 use super::surface::{MaskSource, RippleConfig, RippleTiles, Swell, TileMask};
@@ -129,6 +131,18 @@ impl WaterWorld {
                 });
             }
         }
+        if let Some(ocean) = &config.ocean {
+            let open = |edge: MapEdge| ocean.open_edges.contains(&edge);
+            outlets.set_sea(SeaEdges {
+                level: ocean.level,
+                open: [
+                    open(MapEdge::West),
+                    open(MapEdge::East),
+                    open(MapEdge::South),
+                    open(MapEdge::North),
+                ],
+            });
+        }
         let mut world = Self {
             geometry: WaterGeometry::build(terrain, outlets),
             network: Network::default(),
@@ -148,7 +162,18 @@ impl WaterWorld {
             steady: None,
         };
         let mut errors = Vec::new();
-        // Pools first, so that sources landing in them find their water.
+        // The sea first: a pool seeded in it is the sea.
+        if let Some(ocean) = &config.ocean {
+            let mut t = Topology {
+                network: &mut world.network,
+                ledger: &mut world.ledger,
+                geometry: &mut world.geometry,
+            };
+            world
+                .topology
+                .create_ocean(&mut t, ocean.level, ocean.swell);
+        }
+        // Pools next, so that sources landing in them find their water.
         for body in &config.bodies {
             if let WaterBody::Pool {
                 seed,
@@ -295,9 +320,10 @@ impl WaterWorld {
 
     fn refresh_levels(&mut self) {
         self.levels = (0..self.network.store_slots())
-            .map(|i| match self.network.store(StoreId(i as u32)) {
-                Some(Store::Basin(b)) => Some(b.level()),
-                _ => None,
+            .map(|i| {
+                self.network
+                    .store(StoreId(i as u32))
+                    .and_then(Store::surface)
             })
             .collect();
         self.refresh_currents();
@@ -307,6 +333,10 @@ impl WaterWorld {
                     (Some(Store::Basin(b)), Some(level)) => {
                         Swell::for_basin(b.hypsometry.area(level), i as u32)
                     }
+                    (Some(Store::Ocean(o)), _) => Swell {
+                        amplitude: o.swell,
+                        phase: 0.0,
+                    },
                     _ => Swell::default(),
                 },
             )
@@ -365,8 +395,13 @@ impl WaterWorld {
     /// under them.
     fn step_ripples(&mut self, dt: f32) {
         let shape: Vec<(StoreId, u32)> = self
-            .basins()
-            .map(|(id, b)| (id, b.region_version))
+            .network
+            .stores()
+            .filter_map(|(id, s)| match s {
+                Store::Basin(b) => Some((id, b.region_version)),
+                Store::Ocean(o) => Some((id, o.region_version)),
+                _ => None,
+            })
             .collect();
         let masks = BodyMasks {
             graph: self.geometry.graph(),
@@ -488,6 +523,12 @@ impl WaterWorld {
     /// How the level's opening settle went, if it opened steady.
     pub fn steady_report(&self) -> Option<SteadyReport> {
         self.steady
+    }
+
+    /// The sea, if the level has one.
+    pub fn ocean(&self) -> Option<(StoreId, &Ocean)> {
+        let id = self.topology.ocean()?;
+        Some((id, self.network.store(id)?.as_ocean()?))
     }
 
     /// Every spring and sky source.

@@ -209,7 +209,6 @@ Level(
     player_spawn: (6.0, 5.0, 44.0),
 
     water: Some((
-        ocean_level: None,
         bodies: [
             Pool(seed: (48.0, 32.0), surface_level: 3.0),
         ],

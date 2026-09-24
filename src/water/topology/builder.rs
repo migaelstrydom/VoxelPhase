@@ -31,8 +31,8 @@ use crate::water::ids::{LinkId, StoreId};
 use crate::water::network::links::{FixedRate, Orifice, ReachOutflow, Weir};
 use crate::water::network::{
     is_pothole, pit_bottom, Basin, ChannelOutlet, CrestKind, DepressionFinder, FallPath,
-    FallTracer, Flood, FloodMode, HoleColumn, Landing, LinkEntry, LossLaw, Network, Outflow, Port,
-    Store, Trace, FALL_THRESHOLD, GRAVITY, POTHOLE_DEPTH, POTHOLE_VOLUME,
+    FallTracer, Flood, FloodMode, HoleColumn, Landing, LinkEntry, LossLaw, Network, Ocean, Outflow,
+    Port, Store, Trace, FALL_THRESHOLD, GRAVITY, POTHOLE_DEPTH, POTHOLE_VOLUME,
 };
 use crate::water::solver::{account, Account, VolumeLedger};
 
@@ -165,8 +165,10 @@ struct Entry {
 pub struct TopologyBuilder {
     /// The level's `drain_gain`, for every weir and orifice made.
     gain: f32,
-    /// The sink every open world edge drains into, made on first use.
+    /// The sink every closed world edge drains into, made on first use.
     void: Option<StoreId>,
+    /// The sea, if the level has one.
+    ocean: Option<StoreId>,
     /// Every edit applied, oldest first, when recording is on.
     log: Option<Vec<TopologyEdit>>,
     /// Edits applied so far, recorded or not: how a caller tells whether a
@@ -184,6 +186,7 @@ impl TopologyBuilder {
         Self {
             gain,
             void: None,
+            ocean: None,
             log: None,
             edits: 0,
             sources: Vec::new(),
@@ -249,6 +252,141 @@ impl TopologyBuilder {
         Ok(id)
     }
 
+    /// Place the sea at `level`: a store claiming every span below it that the
+    /// open edges reach, flooded once, here (§12).
+    pub fn create_ocean(&mut self, t: &mut Topology, level: f32, swell: f32) -> StoreId {
+        let id = t.network.add_store(Store::Ocean(Ocean {
+            level,
+            swell,
+            region_version: 0,
+        }));
+        self.record(TopologyEdit::AddStore(id));
+        self.ocean = Some(id);
+        let seeds: Vec<SpanRef> = {
+            let geometry = &*t.geometry;
+            let (graph, outlets) = (geometry.graph(), geometry.drainage().outlets());
+            let (min, max) = graph.column_bounds();
+            let mut border = Vec::new();
+            for k in min.k..=max.k {
+                for i in min.i..=max.i {
+                    let column = Column::new(i, k);
+                    if outlets.on_sea_edge(graph, column) {
+                        border.extend(
+                            graph
+                                .refs(column)
+                                .filter(|s| graph.span(*s).floor_min < level),
+                        );
+                    }
+                }
+            }
+            border
+        };
+        self.claim_below(t, id, seeds, level);
+        id
+    }
+
+    /// The sea, if the level has one.
+    pub fn ocean(&self) -> Option<StoreId> {
+        self.ocean
+    }
+
+    /// Claim for `id` every unowned span joined to `seeds` below `level`.
+    fn claim_below(&mut self, t: &mut Topology, id: StoreId, seeds: Vec<SpanRef>, level: f32) {
+        let graph = t.geometry.graph_mut();
+        let mut queue: Vec<SpanRef> = Vec::new();
+        for seed in seeds {
+            let owner = graph.owner_mut(seed);
+            if owner.body.is_none() {
+                owner.body = Some(id);
+                queue.push(seed);
+            }
+        }
+        while let Some(span) = queue.pop() {
+            for n in graph.orthogonal_neighbours(span) {
+                if n.saddle >= level {
+                    continue;
+                }
+                let owner = graph.owner_mut(n.span);
+                if owner.body.is_none() {
+                    owner.body = Some(id);
+                    queue.push(n.span);
+                }
+            }
+        }
+    }
+
+    /// A lowland that has filled to sea level over its weir joins the sea:
+    /// its spans below sea level become the sea's, and its water the
+    /// ocean's.
+    fn absorb_into_ocean(&mut self, t: &mut Topology, id: StoreId, ocean: StoreId) {
+        let Some(basin) = t.network.store(id).and_then(Store::as_basin) else {
+            return;
+        };
+        let columns = basin.columns();
+        let volume = basin.volume;
+        let level = t
+            .network
+            .store(ocean)
+            .and_then(Store::surface)
+            .unwrap_or(0.0);
+        self.transfer(t, Account::Store(id), Account::Ocean, volume);
+        let graph = t.geometry.graph_mut();
+        for column in columns {
+            let refs: Vec<SpanRef> = graph.refs(column).collect();
+            for span in refs {
+                let below = graph.span(span).floor_min < level;
+                let owner = graph.owner_mut(span);
+                if owner.body == Some(id) {
+                    owner.body = below.then_some(ocean);
+                }
+            }
+        }
+        t.network.remove_store(id);
+        self.record(TopologyEdit::RemoveStore {
+            store: id,
+            residual_to: Account::Ocean,
+        });
+        if let Some(o) = t.network.store_mut(ocean).and_then(Store::as_ocean_mut) {
+            o.region_version = o.region_version.wrapping_add(1);
+        }
+    }
+
+    /// Spans an edit has newly joined to the sea below sea level (a breached
+    /// sea wall) become a lowland basin, empty if dry, whose crest into the
+    /// sea links at once: the sea floods it over the weir, and it joins the
+    /// sea once it reaches sea level (§9.1, step 5). The sea never claims
+    /// spans at once.
+    fn connect_lowlands(&mut self, t: &mut Topology, update: &GeometryUpdate) {
+        let Some(ocean) = self.ocean else {
+            return;
+        };
+        let Some(level) = t.network.store(ocean).and_then(Store::surface) else {
+            return;
+        };
+        let candidates: Vec<SpanRef> = {
+            let graph = t.geometry.graph();
+            update
+                .remap
+                .columns
+                .iter()
+                .flat_map(|c| graph.refs(*c))
+                .filter(|s| {
+                    graph.owner(*s).body.is_none()
+                        && graph.span(*s).floor_min < level
+                        && graph
+                            .orthogonal_neighbours(*s)
+                            .iter()
+                            .any(|n| n.saddle < level && graph.owner(n.span).body == Some(ocean))
+                })
+                .collect()
+        };
+        for span in candidates {
+            if t.geometry.graph().owner(span).body.is_none() {
+                self.empty_basin(t, span);
+            }
+        }
+    }
+
     /// Bring the network up to date with a terrain edit: note floors blown
     /// through into something below, then re-flood every basin that owns a
     /// span in a re-paired column or the ring around it.
@@ -291,6 +429,8 @@ impl TopologyBuilder {
         if !self.deferred.is_empty() {
             self.deferred_remap = Some(update.remap.clone());
         }
+        // Last: a lowland made now is new, not a basin the edit touched.
+        self.connect_lowlands(t, update);
     }
 
     /// Hold a basin still until its deferred re-flood runs.
@@ -507,7 +647,7 @@ impl TopologyBuilder {
     ) -> Option<Entry> {
         let (cells, end) = {
             let network = &*t.network;
-            let levels = |s: StoreId| network.store(s).and_then(Store::as_basin).map(Basin::level);
+            let levels = |s: StoreId| network.store(s).and_then(Store::surface);
             let (graph, drainage) = t.geometry.routing();
             walk(graph, drainage, network, &levels, from, lip, start)
         };
@@ -526,7 +666,8 @@ impl TopologyBuilder {
                 let at = outlet_at(graph, span, None);
                 (self.empty_basin(t, span), Some(at))
             }
-            WalkEnd::Void | WalkEnd::Lost => (self.void(t), None),
+            WalkEnd::Void(span) => (self.edge_store(t, span), None),
+            WalkEnd::Lost => (self.void(t), None),
             WalkEnd::Fall { lip: edge, toward } => {
                 let base = match (cells.is_empty(), lip) {
                     (true, Some(l)) => l.height,
@@ -628,7 +769,10 @@ impl TopologyBuilder {
         let trace = self.trace(t, at, velocity)?;
         let mut path = trace.path;
         let store = match trace.landing {
-            Landing::Void => self.void(t),
+            Landing::Void => {
+                let off = path.landing().unwrap_or(at);
+                self.edge_store_at(t, off)
+            }
             Landing::Span(_) if falls > MAX_FALLS => {
                 log::warn!("water falling from {at:?}: more than {MAX_FALLS} falls in a chain");
                 self.void(t)
@@ -1049,7 +1193,17 @@ impl TopologyBuilder {
                     continue;
                 }
             }
-            if level + LINK_MARGIN < outflow.lip {
+            // A store standing over the lip on the far side pours in: link
+            // at once, however low this side is.
+            let poured = match outflow.kind {
+                CrestKind::Child { owner: Some(other) } => t
+                    .network
+                    .store(other)
+                    .and_then(Store::surface)
+                    .is_some_and(|l| l > outflow.lip),
+                _ => false,
+            };
+            if level + LINK_MARGIN < outflow.lip && !poured {
                 continue;
             }
             // Nothing worth a link crosses yet: a weir made now would open
@@ -1152,6 +1306,15 @@ impl TopologyBuilder {
     fn merge_with_neighbour(&mut self, t: &mut Topology, id: StoreId) -> bool {
         let basin = t.network.store(id).and_then(Store::as_basin).expect("live");
         let level = basin.level();
+        let sea = basin.outflows.iter().find_map(|o| {
+            let target = o.target?;
+            let sea = t.network.store(target)?.as_ocean()?.level;
+            (level > o.lip && sea > o.lip && (level - sea).abs() < MERGE_LEVELS).then_some(target)
+        });
+        if let Some(ocean) = sea {
+            self.absorb_into_ocean(t, id, ocean);
+            return true;
+        }
         let partner = basin.outflows.iter().find_map(|o| {
             let target = o.target?;
             let other = t.network.store(target)?.as_basin()?;
@@ -1320,7 +1483,7 @@ impl TopologyBuilder {
             .iter()
             .min_by(|a, b| a.saddle.total_cmp(&b.saddle))?;
         if cell.inside == cell.outside {
-            return Some(self.void(t));
+            return Some(self.edge_store(t, cell.inside));
         }
         let graph = t.geometry.graph();
         if let Some(owner) = graph.owner(cell.outside).body {
@@ -1378,7 +1541,7 @@ impl TopologyBuilder {
             let fill = drainage.fill(graph, span);
             let floor = graph.span(span).floor_min;
             if drainage.drain(graph, span) == Drain::Outlet {
-                return Some(self.void(t));
+                return Some(self.edge_store(t, span));
             }
             if fill > floor + 1e-3 && (!fill.is_finite() || !is_pothole(graph, span, fill)) {
                 return Some(self.empty_basin(t, span));
@@ -1407,7 +1570,39 @@ impl TopologyBuilder {
         self.add_basin(t, Basin::from_flood(flood, 0.0))
     }
 
-    /// The sink every open world edge drains into.
+    /// Where water leaving the world at `span` goes: the sea, on an edge that
+    /// opens onto it, or the void.
+    fn edge_store(&mut self, t: &mut Topology, span: SpanRef) -> StoreId {
+        let geometry = &*t.geometry;
+        let sea = geometry
+            .drainage()
+            .outlets()
+            .on_sea_edge(geometry.graph(), span.column);
+        match self.ocean.filter(|_| sea) {
+            Some(ocean) => ocean,
+            None => self.void(t),
+        }
+    }
+
+    /// As [`Self::edge_store`], for water falling off the map at `at`: the
+    /// edge it crossed is the one on the side it left by.
+    fn edge_store_at(&mut self, t: &mut Topology, at: Point3<f32>) -> StoreId {
+        let geometry = &*t.geometry;
+        let (min, max) = geometry.graph().column_bounds();
+        let column = Column::containing(at.x, at.z);
+        let (di, dk) = (
+            (column.i > max.i) as i32 - (column.i < min.i) as i32,
+            (column.k > max.k) as i32 - (column.k < min.k) as i32,
+        );
+        let sea = geometry.drainage().outlets().sea();
+        let opens = sea.is_some_and(|s| s.opens(di, 0) || s.opens(0, dk));
+        match self.ocean.filter(|_| opens) {
+            Some(ocean) => ocean,
+            None => self.void(t),
+        }
+    }
+
+    /// The sink every closed world edge drains into.
     fn void(&mut self, t: &mut Topology) -> StoreId {
         if let Some(id) = self.void.filter(|id| t.network.store(*id).is_some()) {
             return id;
@@ -1426,10 +1621,13 @@ impl TopologyBuilder {
         outflow: &Outflow,
         fall: Option<FallPath>,
     ) -> LinkId {
-        let down_is_basin = t
-            .network
-            .store(down)
-            .is_some_and(|s| s.as_basin().is_some());
+        // Water can come back over the weir only if the far side can stand
+        // above it: another basin, or the sea over a lowland's lip.
+        let down_is_basin = match t.network.store(down) {
+            Some(Store::Basin(_)) => true,
+            Some(Store::Ocean(o)) => outflow.cells.iter().any(|c| c.saddle < o.level),
+            _ => false,
+        };
         let law: Box<dyn crate::water::network::Link> = match outflow.hole {
             Some(hole) => Box::new(Orifice {
                 lip: hole.lip,
@@ -1475,23 +1673,24 @@ impl TopologyBuilder {
     /// whose front has yet to reach its end feeds the store it ends in.
     fn fed(&self, t: &Topology, id: StoreId) -> bool {
         t.network.links().any(|(_, l)| {
-            let coming = t
-                .network
-                .store(l.up)
-                .and_then(Store::as_reach)
-                .is_some_and(|r| r.inflow > 0.0);
-            l.open && l.down == id && coming
-                || l.open && l.down == id && {
-                    let up = t.network.store(l.up).map_or(0.0, Store::volume);
-                    let down = t.network.store(id).map_or(0.0, Store::volume);
-                    match (
-                        t.network.view(l.up, up, l.up_port),
-                        t.network.view(id, down, l.down_port),
-                    ) {
-                        (Some(u), Some(d)) => l.law.discharge(u, d) > 0.0,
-                        _ => false,
-                    }
-                }
+            if !l.open || (l.down != id && l.up != id) {
+                return false;
+            }
+            let coming = l.down == id
+                && t.network
+                    .store(l.up)
+                    .and_then(Store::as_reach)
+                    .is_some_and(|r| r.inflow > 0.0);
+            let volume = |s: StoreId| t.network.store(s).map_or(0.0, Store::volume);
+            let q = match (
+                t.network.view(l.up, volume(l.up), l.up_port),
+                t.network.view(l.down, volume(l.down), l.down_port),
+            ) {
+                (Some(u), Some(d)) => l.law.discharge(u, d),
+                _ => 0.0,
+            };
+            // Into it downstream, or back up a reversible link.
+            coming || (l.down == id && q > 0.0) || (l.up == id && q < 0.0)
         })
     }
 
@@ -1670,8 +1869,7 @@ fn surface_over(graph: &SpanGraph, network: &Network, span: SpanRef) -> Option<f
     let level = owner
         .body
         .and_then(|b| network.store(b))
-        .and_then(Store::as_basin)
-        .map(Basin::level)?;
+        .and_then(Store::surface)?;
     (level > floor.floor_min).then_some(level)
 }
 

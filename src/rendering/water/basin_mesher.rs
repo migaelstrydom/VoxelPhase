@@ -82,6 +82,17 @@ pub trait WaterScene {
         Vec::new()
     }
 
+    /// Changes whenever [`Self::build_ocean`] would build something
+    /// different: only when the sea claims a lowland.
+    fn ocean_key(&self) -> MeshKey {
+        Vec::new()
+    }
+
+    /// The sea's surface, drawn like a basin's.
+    fn build_ocean(&self) -> WaterMesh {
+        WaterMesh::default()
+    }
+
     /// Changes whenever [`Self::build_rivers`] would build something
     /// different.
     fn river_key(&self) -> MeshKey {
@@ -120,6 +131,28 @@ impl WaterScene for WaterWorld {
 
     fn build_mesh(&self) -> WaterMesh {
         build(self.basins())
+    }
+
+    fn ocean_key(&self) -> MeshKey {
+        self.ocean()
+            .map(|(id, o)| (id, o.region_version))
+            .into_iter()
+            .collect()
+    }
+
+    fn build_ocean(&self) -> WaterMesh {
+        let mut mesh = WaterMesh::default();
+        if let Some((id, ocean)) = self.ocean() {
+            let outlets = self.geometry().drainage().outlets();
+            super::ocean_mesher::append_ocean(
+                &mut mesh,
+                id,
+                ocean,
+                self.geometry().graph(),
+                outlets,
+            );
+        }
+        mesh
     }
 
     fn level(&self, body: StoreId) -> Option<f32> {
@@ -229,7 +262,12 @@ fn columns(basin: &Basin) -> Vec<(Column, f32)> {
 const TILE_CORNERS: usize = CHUNK_COLUMNS as usize + 1;
 
 fn append_basin(mesh: &mut WaterMesh, id: StoreId, basin: &Basin) {
-    let columns = columns(basin);
+    append_columns(mesh, id, &columns(basin));
+}
+
+/// One quad per column, drawn per 8 m tile. `columns` must be sorted by
+/// tile, then column.
+pub(super) fn append_columns(mesh: &mut WaterMesh, id: StoreId, columns: &[(Column, f32)]) {
     let mut corners = [u32::MAX; TILE_CORNERS * TILE_CORNERS];
     let mut start = 0;
     while start < columns.len() {

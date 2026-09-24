@@ -2707,9 +2707,9 @@ pub enum StackItem {
 #[derive(Deserialize, Clone)]
 #[serde(default, deny_unknown_fields)]
 pub struct WaterConfig {
-    /// Sea level for the infinite ocean plane. If None, no ocean is rendered
-    /// and boundary cells do not act as sources/sinks.
-    pub ocean_level: Option<f32>,
+    /// The sea beyond the map's open edges. Without one, every edge of the
+    /// map drains into the void.
+    pub ocean: Option<OceanConfig>,
 
     /// Individual water bodies placed in the level.
     pub bodies: Vec<WaterBody>,
@@ -2729,12 +2729,53 @@ pub struct WaterConfig {
 impl Default for WaterConfig {
     fn default() -> Self {
         Self {
-            ocean_level: None,
+            ocean: None,
             bodies: Vec::new(),
             drain_gain: 1.0,
             loss_rate: 0.0,
             settle: Settle::default(),
         }
+    }
+}
+
+/// The sea: a fixed level beyond the map's open edges, flooding every span
+/// below it that the edges reach (§12).
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct OceanConfig {
+    /// Sea level, world y.
+    pub level: f32,
+    /// The edges of the map that open onto the sea. Left out, all four do:
+    /// an island. The rest are closed, and drain into the void.
+    #[serde(default = "MapEdge::all")]
+    pub open_edges: Vec<MapEdge>,
+    /// Height of the swell at sea, m.
+    #[serde(default = "OceanConfig::default_swell")]
+    pub swell: f32,
+}
+
+impl OceanConfig {
+    fn default_swell() -> f32 {
+        0.25
+    }
+}
+
+/// One edge of the map, by the direction it faces.
+#[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MapEdge {
+    /// −x.
+    West,
+    /// +x.
+    East,
+    /// −z.
+    South,
+    /// +z.
+    North,
+}
+
+impl MapEdge {
+    pub fn all() -> Vec<MapEdge> {
+        vec![MapEdge::West, MapEdge::East, MapEdge::South, MapEdge::North]
     }
 }
 
@@ -2865,7 +2906,7 @@ mod tests {
     fn water_config_serde_defaults_apply_when_fields_are_omitted() {
         let config: WaterConfig = ron::from_str("(bodies: [])").expect("WaterConfig should parse");
 
-        assert_eq!(config.ocean_level, None);
+        assert_eq!(config.ocean, None);
         assert!(config.bodies.is_empty());
         assert_eq!(config.drain_gain, 1.0);
         assert_eq!(config.loss_rate, 0.0);
@@ -2876,8 +2917,16 @@ mod tests {
     fn water_config_default_matches_serde_defaults() {
         let config = WaterConfig::default();
 
-        assert_eq!(config.ocean_level, None);
+        assert_eq!(config.ocean, None);
         assert!(config.bodies.is_empty());
+    }
+
+    #[test]
+    fn an_ocean_opens_on_every_edge_unless_told() {
+        let island: OceanConfig = ron::from_str("(level: 0.0)").unwrap();
+        assert_eq!(island.open_edges, MapEdge::all());
+        let coast: OceanConfig = ron::from_str("(level: 1.5, open_edges: [South])").unwrap();
+        assert_eq!(coast.open_edges, vec![MapEdge::South]);
     }
 
     #[test]

@@ -159,6 +159,7 @@ pub fn account(network: &Network, id: StoreId) -> Account {
     match network.store(id) {
         Some(Store::Sink) => Account::Sunk,
         Some(Store::Reservoir) => Account::Emitted,
+        Some(Store::Ocean(_)) => Account::Ocean,
         _ => Account::Store(id),
     }
 }

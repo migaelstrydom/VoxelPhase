@@ -66,6 +66,28 @@ impl SinkBox {
     }
 }
 
+/// The sea beyond some edges of the map (§12). A span on an open edge drains
+/// into it at sea level, or at its own floor where that stands higher.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SeaEdges {
+    pub level: f32,
+    /// Which edges open onto it: −x, +x, −z, +z.
+    pub open: [bool; 4],
+}
+
+impl SeaEdges {
+    /// Whether the edge a step of `(di, dk)` crosses opens onto the sea.
+    pub fn opens(&self, di: i32, dk: i32) -> bool {
+        match (di, dk) {
+            (-1, 0) => self.open[0],
+            (1, 0) => self.open[1],
+            (0, -1) => self.open[2],
+            (0, 1) => self.open[3],
+            _ => false,
+        }
+    }
+}
+
 /// Where water may leave the world, beyond the void.
 ///
 /// Sinks are held as boxes and tested against the span in hand, so they
@@ -75,6 +97,7 @@ pub struct Outlets {
     /// Extra outlets and the level each drains at: the sea.
     extra: FxHashMap<SpanRef, f32>,
     sinks: Vec<SinkBox>,
+    sea: Option<SeaEdges>,
 }
 
 impl Outlets {
@@ -87,12 +110,37 @@ impl Outlets {
         self.sinks.push(sink);
     }
 
+    pub fn set_sea(&mut self, sea: SeaEdges) {
+        self.sea = Some(sea);
+    }
+
+    pub fn sea(&self) -> Option<SeaEdges> {
+        self.sea
+    }
+
+    /// Whether a column stands on an edge of the map that opens onto the sea.
+    pub fn on_sea_edge(&self, graph: &SpanGraph, column: Column) -> bool {
+        let Some(sea) = self.sea else {
+            return false;
+        };
+        ORTHOGONAL.iter().any(|step| {
+            let next = column.offset(step.di, step.dk);
+            sea.opens(step.di, step.dk)
+                && (!graph.contains_column(next) || graph.spans(next).is_empty())
+        })
+    }
+
     /// The level a span drains away at, if it is an outlet.
     pub fn level(&self, graph: &SpanGraph, span: SpanRef) -> Option<f32> {
         let floor = graph.span(span).floor_min;
-        let edge = (graph.borders_void(span.column)
-            || self.sinks.iter().any(|s| s.swallows(span.column, floor)))
-        .then_some(floor);
+        let edge = if self.on_sea_edge(graph, span.column) {
+            let sea = self.sea.map_or(floor, |s| s.level);
+            Some(floor.max(sea))
+        } else {
+            (graph.borders_void(span.column)
+                || self.sinks.iter().any(|s| s.swallows(span.column, floor)))
+            .then_some(floor)
+        };
         match (edge, self.extra.get(&span)) {
             (Some(a), Some(b)) => Some(a.min(*b)),
             (a, b) => a.or(b.copied()),

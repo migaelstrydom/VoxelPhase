@@ -23,6 +23,7 @@ pub fn catalogue() -> Vec<Scenario> {
         crater_drain(),
         river_diversion(),
         spring_rock(),
+        sea_wall(),
     ]
 }
 
@@ -160,7 +161,6 @@ Level(
     placements: [Root(segment: "main")],
     player_spawn: (20.0, 0.0, 20.0),
     water: Some((
-        ocean_level: None,
         bodies: [
             Pool(seed: (12.0, 0.0), surface_level: -1.5),
             Pool(seed: (0.0, 0.0), surface_level: 7.5),
@@ -671,3 +671,59 @@ fn spring_rock() -> Scenario {
         ..staircase()
     }
 }
+
+/// A coast: the sea to the south at 0 m, and behind a strip of land a dry
+/// lowland 2 m below it. The strip is blown through at 2 s: the sea floods
+/// the lowland over a weir, and once it stands at sea level the lowland
+/// joins the sea (§9.3, scenario 4).
+fn sea_wall() -> Scenario {
+    Scenario {
+        name: "sea_wall",
+        description: "a sea wall is breached; the lowland floods and joins the sea",
+        level: SEA_WALL_LEVEL,
+        duration: 120.0,
+        beats: vec![Beat {
+            at: 2.0,
+            action: Action::Blast {
+                centre: Point3::new(0.0, -0.5, -8.0),
+                radius: 3.5,
+            },
+        }],
+        probes: vec![
+            Probe {
+                name: "lowland",
+                at: Point3::new(0.0, -1.5, 0.0),
+            },
+            Probe {
+                name: "sea",
+                at: Point3::new(0.0, -1.0, -20.0),
+            },
+        ],
+        camera: (Point3::new(18.0, 12.0, 16.0), Point3::new(0.0, -1.0, -6.0)),
+    }
+}
+
+const SEA_WALL_LEVEL: &str = r#"
+Level(
+    name: "water_viewer: sea_wall",
+    segments: [(
+        name: "main",
+        terrain: Terrain(
+            voxel_size: 0.5,
+            bounds: (min: (-32.0, -16.0, -32.0), max: (32.0, 16.0, 32.0)),
+            base_height: 2.0,
+            material_layers: [(depth: 999.0, material: Dirt)],
+            features: [
+                Plateau(min: (-40.0, -40.0), max: (40.0, -11.0), height: -6.0),
+                Plateau(min: (-10.0, -5.0), max: (10.0, 5.0), height: -2.0),
+            ],
+        ),
+    )],
+    placements: [Root(segment: "main")],
+    player_spawn: (0.0, 3.0, 12.0),
+    water: Some((
+        ocean: Some((level: 0.0, open_edges: [South])),
+        bodies: [],
+    )),
+)
+"#;

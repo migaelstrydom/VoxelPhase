@@ -32,7 +32,8 @@ const RIPPLE_FRAMES: usize = 240;
 const WORST_CASE_REPEATS: usize = 20;
 
 /// Every level that has water.
-const DEFAULT_LEVELS: [&str; 5] = [
+const DEFAULT_LEVELS: [&str; 6] = [
+    "levels/island_sea.level.ron",
     "levels/test_arena.level.ron",
     "levels/skyway.level.ron",
     "levels/subsidence.level.ron",

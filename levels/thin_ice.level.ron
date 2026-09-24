@@ -156,7 +156,6 @@ Level(
     player_spawn: (6.0, 10.6, 48.0),
 
     water: Some((
-        ocean_level: None,
         bodies: [
             // The plain sits at 7 ± 0.6, two metres over the surface. A pool
             // claims any cell with a sample at or under its level, so the

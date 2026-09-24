@@ -324,7 +324,6 @@ Level(
     player_spawn: (3.0, 1.0, 0.0),
 
     water: Some(WaterConfig(
-        ocean_level: None,
         bodies: [
             Pool(
                 seed: (-10.0, 10.0),

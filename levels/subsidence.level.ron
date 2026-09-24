@@ -311,7 +311,6 @@ Level(
     player_spawn: (12.0, 13.5, 40.0),
 
     water: Some((
-        ocean_level: None,
         bodies: [
             // Seeded in the sump. The floor around it sits at y = 2, so the fill
             // is contained by the bench itself rather than by a wall.

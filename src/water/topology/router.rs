@@ -44,8 +44,8 @@ const MAX_WALK: usize = 1 << 16;
 pub enum WalkEnd {
     /// Into a store, at this span: a basin's water, or an existing reach.
     Store(StoreId, SpanRef),
-    /// Off an open edge of the world.
-    Void,
+    /// Off an edge of the world, or into a sink, at this span.
+    Void(SpanRef),
     /// Into a dry depression, at this span.
     Depression(SpanRef),
     /// Over a fall step: the bed drops more than `FALL_THRESHOLD` within
@@ -109,14 +109,14 @@ pub fn walk(
         cells.push(span);
         let fill = drainage.fill(graph, span);
         if drainage.drain(graph, span) == Drain::Outlet {
-            return (cells, WalkEnd::Void);
+            return (cells, WalkEnd::Void(span));
         }
         if fill > floor + 1e-3 && (!fill.is_finite() || !is_pothole(graph, span, fill)) {
             return (cells, WalkEnd::Depression(span));
         }
         match drainage.downstream_resolved(graph, span) {
             Some(next) => span = next,
-            None => return (cells, WalkEnd::Void),
+            None => return (cells, WalkEnd::Void(span)),
         }
     }
     (cells, WalkEnd::Lost)
