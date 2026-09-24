@@ -16,6 +16,11 @@ layout(location = 1) in vec3 fragWorldPos;
 // The ripple tile this fragment is drawn from, or -1 for the coarse surface.
 layout(location = 2) flat in int fragLayer;
 layout(location = 3) flat in vec2 fragTileOrigin;
+// A reach's flow velocity, its distance down the reach and its wetted range;
+// zero flow and an unbounded range for still water.
+layout(location = 4) in vec2 fragFlow;
+layout(location = 5) in float fragAlong;
+layout(location = 6) flat in vec2 fragWetRange;
 
 // Opaque color target (sampled at offset UVs for refraction)
 layout(set = 0, binding = 0) uniform sampler2D colorSampler;
@@ -85,12 +90,21 @@ void main() {
         discard;
     }
 
+    // A reach is wet only between its tail and its front.
+    if (fragAlong < fragWetRange.x || fragAlong > fragWetRange.y) {
+        discard;
+    }
+
     float time = fpc.projParams.z;
 
     // --- Animated normal mapping (dual-layer procedural noise) ---
+    // Running water carries its detail downstream: the noise scrolls with the
+    // flow, over a drift of its own.
     vec2 worldXZ = fragWorldPos.xz;
-    vec3 noiseN1 = proceduralNormal(worldXZ + vec2(time * 0.3, time * 0.2), 0.5, 0.07);
-    vec3 noiseN2 = proceduralNormal(worldXZ + vec2(-time * 0.15, time * 0.25), 1.0, 0.04);
+    vec2 carried = -fragFlow * time;
+    float speed = length(fragFlow);
+    vec3 noiseN1 = proceduralNormal(worldXZ + carried + vec2(time * 0.3, time * 0.2), 0.5, 0.07 + 0.015 * min(speed, 2.0));
+    vec3 noiseN2 = proceduralNormal(worldXZ + carried * 1.3 + vec2(-time * 0.15, time * 0.25), 1.0, 0.04 + 0.015 * min(speed, 2.0));
 
     // Blend noise normals with the vertex normal.
     vec3 vertexN = normalize(fragNormal);
@@ -187,8 +201,11 @@ void main() {
     float sss = pow(max(dot(V, -L), 0.0), 4.0) * (1.0 - depthFactor) * SSS_INTENSITY;
     color += SSS_COLOR * sss;
 
-    // --- Shoreline foam ---
-    float foamFactor = 1.0 - smoothstep(0.0, 0.3, opticalDepth);
+    // --- Shoreline foam on still water, white water where a reach runs fast ---
+    float running = step(1.0e-4, speed);
+    float shoreFoam = (1.0 - smoothstep(0.0, 0.3, opticalDepth)) * (1.0 - running);
+    float whiteWater = smoothstep(3.0, 7.0, speed) * 0.4 * fbm(worldXZ * 2.0 + carried * 2.0);
+    float foamFactor = max(shoreFoam, whiteWater);
     color = mix(color, vec3(0.9, 0.95, 1.0), foamFactor * 0.6);
 
     // The water pass draws onto the swapchain, which already holds the

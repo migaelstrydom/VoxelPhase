@@ -65,3 +65,54 @@ impl FineVertex {
         }]
     }
 }
+
+/// A vertex of a reach's surface. Its height is the section's bed plus the
+/// design depth, scaled per draw to the reach's current discharge.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RiverVertex {
+    pub xz: Vector2<f32>,
+    /// Bed height at the section's centre.
+    pub bed: f32,
+    /// Water depth at the design discharge.
+    pub depth: f32,
+    /// Distance down the reach, m.
+    pub along: f32,
+    /// Flow velocity at the design discharge.
+    pub flow: Vector2<f32>,
+}
+
+impl RiverVertex {
+    pub fn binding_description() -> vk::VertexInputBindingDescription {
+        vk::VertexInputBindingDescription {
+            binding: 0,
+            stride: std::mem::size_of::<Self>() as u32,
+            input_rate: vk::VertexInputRate::VERTEX,
+        }
+    }
+
+    pub fn attribute_descriptions() -> [vk::VertexInputAttributeDescription; 3] {
+        let f = std::mem::size_of::<f32>() as u32;
+        [
+            vk::VertexInputAttributeDescription {
+                location: 0,
+                binding: 0,
+                format: vk::Format::R32G32_SFLOAT,
+                offset: 0,
+            },
+            // (bed, depth, along)
+            vk::VertexInputAttributeDescription {
+                location: 1,
+                binding: 0,
+                format: vk::Format::R32G32B32_SFLOAT,
+                offset: 2 * f,
+            },
+            vk::VertexInputAttributeDescription {
+                location: 2,
+                binding: 0,
+                format: vk::Format::R32G32_SFLOAT,
+                offset: 5 * f,
+            },
+        ]
+    }
+}

@@ -36,6 +36,9 @@ pub struct PlanCrest {
 /// The water-relevant geometry of a level, per column.
 pub struct WaterPlan {
     pub cells: Vec<PlanCell>,
+    /// Channels the level's first frame routes: each reach's centreline in
+    /// plan, (x, z).
+    pub channels: Vec<Vec<(f32, f32)>>,
     /// Columns under the authored water.
     pub wet: Vec<Column>,
     pub crests: Vec<PlanCrest>,
@@ -47,7 +50,15 @@ pub struct WaterPlan {
 impl WaterPlan {
     pub fn from_level(level: &Level, terrain: &TerrainWorld) -> Self {
         let config = level.water.clone().unwrap_or_default();
-        let (water, _) = WaterWorld::from_config(&config, terrain);
+        let (mut water, _) = WaterWorld::from_config(&config, terrain);
+        // One frame, for the outflows that link at once to lay their channels.
+        water.step(1.0 / 60.0);
+        let channels = water
+            .network()
+            .stores()
+            .filter_map(|(_, s)| s.as_reach())
+            .map(|r| r.centreline.points.iter().map(|p| (p.x, p.z)).collect())
+            .collect();
         let mut wet = Vec::new();
         let mut crests = Vec::new();
         for (_, basin) in water.basins() {
@@ -103,6 +114,7 @@ impl WaterPlan {
         }
         Self {
             cells,
+            channels,
             wet,
             crests,
             cell: COLUMN_SIZE,

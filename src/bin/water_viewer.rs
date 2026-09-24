@@ -25,7 +25,7 @@ use voxel_phase::water_viewer::{
 };
 
 const USAGE: &str = "usage: water_viewer <scenario|all> [--no-render] [--fast-forward N]
-                    [--every SECONDS] [--csv <out.csv>]
+                    [--every SECONDS] [--csv <out.csv>] [--reaches]
                     [--tiles N] [--from F] [--to F] [--columns N]
                     [--width W] [--height H] [--out <sheet.png>]
        water_viewer --list";
@@ -39,6 +39,8 @@ struct Options {
     every: f32,
     csv: Option<PathBuf>,
     render: bool,
+    /// List every reach laid.
+    reaches: bool,
     film: Film,
 }
 
@@ -87,6 +89,11 @@ fn main() -> ExitCode {
         };
         if single {
             println!("{}", report(&recorded, options.every));
+            if options.reaches {
+                for line in &recorded.reaches {
+                    println!("{line}");
+                }
+            }
         } else {
             println!("{}", summary_line(&recorded));
         }
@@ -157,6 +164,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Option<Options>, Str
         every: DEFAULT_EVERY,
         csv: None,
         render: true,
+        reaches: false,
         film: Film {
             tiles: 8,
             from: 0.0,
@@ -178,6 +186,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Option<Options>, Str
                 return Ok(None);
             }
             "--no-render" => options.render = false,
+            "--reaches" => options.reaches = true,
             "--fast-forward" => options.config.fast_forward = parse_number(&value(&arg)?)?,
             "--every" => options.every = parse_number(&value(&arg)?)?,
             "--csv" => options.csv = Some(PathBuf::from(value(&arg)?)),

@@ -16,7 +16,8 @@ use rustc_hash::FxHashMap;
 
 use super::basin_mesher::{MeshKey, WaterMesh, WaterScene};
 use super::pipeline::{WaterPipeline, BODY_PUSH_OFFSET, FRAGMENT_PUSH_OFFSET};
-use super::vertex::{BasinVertex, FineVertex};
+use super::reach_mesher::RiverMesh;
+use super::vertex::FineVertex;
 use crate::core::device::ManagedDevice;
 use crate::core::error::EngineResult;
 use crate::core::vulkan_context::VulkanContext;
@@ -63,6 +64,10 @@ pub struct WaterRenderer {
     /// Bumped on every rebuild of `mesh`.
     version: u64,
     slots: PerFrame<SlotMesh>,
+    rivers: RiverMesh,
+    river_key: MeshKey,
+    river_version: u64,
+    river_slots: PerFrame<SlotMesh>,
     ripple_slots: PerFrame<RippleSlot>,
     /// The fine grid every awake ripple tile is drawn with. Never changes.
     fine_grid: StreamedMesh,
@@ -115,6 +120,14 @@ impl WaterRenderer {
                 capacity: (0, 0),
                 version: 0,
             }),
+            rivers: RiverMesh::default(),
+            river_key: MeshKey::new(),
+            river_version: 0,
+            river_slots: PerFrame::new(|_| SlotMesh {
+                buffers: None,
+                capacity: (0, 0),
+                version: 0,
+            }),
             slot: FrameSlot::default(),
         })
     }
@@ -133,30 +146,27 @@ impl WaterRenderer {
             self.key = key;
             self.version += 1;
         }
-        let slot = &mut self.slots[self.slot];
-        if slot.version == self.version {
-            return Ok(());
+        let key = water.river_key();
+        if key != self.river_key {
+            self.rivers = water.build_rivers();
+            self.river_key = key;
+            self.river_version += 1;
         }
-        let needed = (self.mesh.vertices.len(), self.mesh.indices.len());
-        if slot.buffers.is_none() || needed.0 > slot.capacity.0 || needed.1 > slot.capacity.1 {
-            // Grow with headroom, so a re-region that adds a few columns does
-            // not reallocate.
-            let capacity = (
-                (needed.0 + needed.0 / 4).max(1024),
-                (needed.1 + needed.1 / 4).max(1536),
-            );
-            slot.buffers = Some(StreamedMesh::new(
-                &self.device,
-                (capacity.0 * std::mem::size_of::<BasinVertex>()) as vk::DeviceSize,
-                (capacity.1 * std::mem::size_of::<u32>()) as vk::DeviceSize,
-            )?);
-            slot.capacity = capacity;
-        }
-        if let Some(buffers) = &slot.buffers {
-            buffers.upload(&self.mesh.vertices, &self.mesh.indices)?;
-        }
-        slot.version = self.version;
-        Ok(())
+        upload_slot(
+            &self.device,
+            &mut self.river_slots[self.slot],
+            self.river_version,
+            &self.rivers.vertices,
+            &self.rivers.indices,
+        )?;
+
+        upload_slot(
+            &self.device,
+            &mut self.slots[self.slot],
+            self.version,
+            &self.mesh.vertices,
+            &self.mesh.indices,
+        )
     }
 
     /// Draw every body of water.
@@ -175,7 +185,7 @@ impl WaterRenderer {
         exposure: f32,
     ) -> EngineResult<()> {
         self.sync(water)?;
-        if self.mesh.draws.is_empty() {
+        if self.mesh.draws.is_empty() && self.rivers.draws.is_empty() {
             return Ok(());
         }
         let layers = self.upload_ripples(water)?;
@@ -283,6 +293,50 @@ impl WaterRenderer {
                 );
             }
 
+            if let Some(rivers) = self.river_slots[self.slot].buffers.as_ref() {
+                if !self.rivers.draws.is_empty() {
+                    self.device.device.cmd_bind_pipeline(
+                        cb,
+                        vk::PipelineBindPoint::GRAPHICS,
+                        self.pipeline.river_pipeline(),
+                    );
+                    rivers.bind(&self.device.device, cb);
+                    for draw in &self.rivers.draws {
+                        let Some(state) = water.river_state(draw.reach) else {
+                            continue;
+                        };
+                        if state.front <= state.tail {
+                            continue;
+                        }
+                        let constants: [f32; 8] = [
+                            state.depth_scale,
+                            state.tail,
+                            state.front,
+                            clock,
+                            state.speed_scale,
+                            0.0,
+                            0.0,
+                            0.0,
+                        ];
+                        self.device.device.cmd_push_constants(
+                            cb,
+                            self.pipeline.layout(),
+                            vk::ShaderStageFlags::VERTEX,
+                            BODY_PUSH_OFFSET,
+                            bytemuck_cast_slice(&constants),
+                        );
+                        self.device.device.cmd_draw_indexed(
+                            cb,
+                            draw.index_count,
+                            1,
+                            draw.first_index,
+                            0,
+                            0,
+                        );
+                    }
+                }
+            }
+
             if !layers.is_empty() {
                 self.device.device.cmd_bind_pipeline(
                     cb,
@@ -371,6 +425,38 @@ impl WaterRenderer {
         }
         Ok(layers)
     }
+}
+
+/// Bring a frame slot's buffers up to a mesh version, growing them with
+/// headroom when the mesh has outgrown them.
+fn upload_slot<V: Copy>(
+    device: &Arc<ManagedDevice>,
+    slot: &mut SlotMesh,
+    version: u64,
+    vertices: &[V],
+    indices: &[u32],
+) -> EngineResult<()> {
+    if slot.version == version {
+        return Ok(());
+    }
+    let needed = (vertices.len(), indices.len());
+    if slot.buffers.is_none() || needed.0 > slot.capacity.0 || needed.1 > slot.capacity.1 {
+        let capacity = (
+            (needed.0 + needed.0 / 4).max(1024),
+            (needed.1 + needed.1 / 4).max(1536),
+        );
+        slot.buffers = Some(StreamedMesh::new(
+            device,
+            (capacity.0 * std::mem::size_of::<V>()) as vk::DeviceSize,
+            (capacity.1 * std::mem::size_of::<u32>()) as vk::DeviceSize,
+        )?);
+        slot.capacity = capacity;
+    }
+    if let Some(buffers) = &slot.buffers {
+        buffers.upload(vertices, indices)?;
+    }
+    slot.version = version;
+    Ok(())
 }
 
 /// The fine grid over one tile: 65 × 65 vertices across 8 m.

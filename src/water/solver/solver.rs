@@ -62,8 +62,26 @@ pub fn tick(network: &mut Network, ledger: &mut VolumeLedger, loss: &LossLaw, dt
     for group in groups_upstream_first(network) {
         solve_group(network, loss, &group, &start, &mut volumes, dt);
     }
-    commit(network, ledger, loss, &start, &volumes, dt);
+    let flows = commit(network, ledger, loss, &start, &volumes, dt);
+    advance_reaches(network, &flows, dt);
     ledger.check(network.held_volume())
+}
+
+/// What moved through each store over a tick, m³/s, by store slot.
+struct Flows {
+    inflow: Vec<f64>,
+    outflow: Vec<f64>,
+}
+
+/// Move every reach's front and tail by what flowed through it.
+fn advance_reaches(network: &mut Network, flows: &Flows, dt: f64) {
+    for id in network.store_ids() {
+        if let Some(reach) = network.store_mut(id).and_then(Store::as_reach_mut) {
+            reach.inflow = flows.inflow[id.0 as usize];
+            reach.outflow = flows.outflow[id.0 as usize];
+            reach.advance(dt as f32);
+        }
+    }
 }
 
 /// Book every link's transfer and every loss at the solved volumes, scaled
@@ -75,7 +93,7 @@ fn commit(
     start: &[f64],
     volumes: &[f64],
     dt: f64,
-) {
+) -> Flows {
     // (source, destination, amount) with every amount positive.
     let mut moves: Vec<(StoreId, StoreId, f64)> = Vec::new();
     for (_, link) in network.links().filter(|(_, l)| l.open) {
@@ -115,18 +133,25 @@ fn commit(
         }
     };
 
+    let mut flows = Flows {
+        inflow: vec![0.0; start.len()],
+        outflow: vec![0.0; start.len()],
+    };
     for (from, to, amount) in moves {
         let amount = amount * scale(from, network);
         let (from_account, to_account) = (account(network, from), account(network, to));
         ledger.transfer(from_account, to_account, amount);
         adjust(network, from, -amount);
         adjust(network, to, amount);
+        flows.outflow[from.0 as usize] += amount / dt;
+        flows.inflow[to.0 as usize] += amount / dt;
     }
     for (id, amount) in losses {
         let amount = amount * scale(id, network);
         ledger.transfer(Account::Store(id), Account::Lost, amount);
         adjust(network, id, -amount);
     }
+    flows
 }
 
 /// The ledger account a store's volume is booked against.

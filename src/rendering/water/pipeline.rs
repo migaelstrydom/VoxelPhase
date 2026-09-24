@@ -16,7 +16,7 @@ use crate::rendering::shaders::ShaderManager;
 
 use crate::rendering::in_flight::FRAMES_IN_FLIGHT;
 
-use super::vertex::{BasinVertex, FineVertex};
+use super::vertex::{BasinVertex, FineVertex, RiverVertex};
 
 /// Where each draw's constants start (its body, then its tile), and how many
 /// bytes they are.
@@ -40,6 +40,8 @@ pub struct WaterPipeline {
     pipeline: vk::Pipeline,
     /// The fine surface of an awake ripple tile.
     fine_pipeline: vk::Pipeline,
+    /// A reach's surface.
+    river_pipeline: vk::Pipeline,
     pipeline_layout: vk::PipelineLayout,
     descriptor_set_layout: vk::DescriptorSetLayout,
     /// Set 1: the ripple storage buffer.
@@ -79,6 +81,14 @@ impl WaterPipeline {
             FineVertex::binding_description(),
             &FineVertex::attribute_descriptions(),
         )?;
+        let river_pipeline = Self::create_pipeline(
+            &device,
+            render_pass,
+            pipeline_layout,
+            ShaderManager::load_river_vertex(&device)?,
+            RiverVertex::binding_description(),
+            &RiverVertex::attribute_descriptions(),
+        )?;
         let descriptor_pool = Self::create_descriptor_pool(&device)?;
 
         let descriptor_set =
@@ -96,6 +106,7 @@ impl WaterPipeline {
             device,
             pipeline,
             fine_pipeline,
+            river_pipeline,
             pipeline_layout,
             descriptor_set_layout,
             ripple_set_layout,
@@ -379,6 +390,11 @@ impl WaterPipeline {
     /// The pipeline for an awake ripple tile's fine surface.
     pub fn fine_pipeline(&self) -> vk::Pipeline {
         self.fine_pipeline
+    }
+
+    /// The pipeline for a reach's surface.
+    pub fn river_pipeline(&self) -> vk::Pipeline {
+        self.river_pipeline
     }
 
     /// A descriptor set pointing set 1 at a ripple storage buffer. One per

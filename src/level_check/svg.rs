@@ -624,6 +624,17 @@ fn water_overlay(
             water.cell * scale * len as f32 + 0.4,
         );
     }
+    for channel in &water.channels {
+        let points: Vec<String> = channel
+            .iter()
+            .map(|(x, z)| format!("{:.1},{:.1}", px(*x), pz(*z)))
+            .collect();
+        let _ = writeln!(
+            s,
+            "<polyline points=\"{}\" fill=\"none\" stroke=\"#0a4fc4\" stroke-width=\"2.5\" stroke-linecap=\"round\"/>",
+            points.join(" ")
+        );
+    }
     for crest in &water.crests {
         let (x, z) = crest.column.centre();
         let colour = if crest.outlet { "#e67e22" } else { "#8e44ad" };

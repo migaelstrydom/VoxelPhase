@@ -7,6 +7,7 @@ pub mod links;
 mod loss;
 mod net;
 mod rating;
+mod reach;
 mod store;
 
 pub use basin::{Basin, HoleColumn, HoleGeometry, Outflow};
@@ -19,5 +20,9 @@ pub use hypsometry::{DeadStorage, Hypsometry, POTHOLE_STEP, WET_BAND};
 pub use link::{FallPath, Link};
 pub use loss::{LossLaw, MINOR_HYSTERESIS};
 pub use net::{LinkEntry, Network};
-pub use rating::{CrossSection, Hydraulics, MANNING_N, MIN_SLOPE, SAMPLE_SPACING};
+pub use rating::{
+    CrossSection, Hydraulics, RatingCurve, RatingPoint, MANNING_N, MIN_SLOPE, RATING_POINTS,
+    RATING_Q_MIN, SAMPLE_SPACING,
+};
+pub use reach::{Reach, ReachState};
 pub use store::{Port, Store, StoreView};

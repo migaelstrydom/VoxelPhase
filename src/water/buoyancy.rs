@@ -17,12 +17,15 @@ use crate::physics::{
     ColliderShape, ForceContext, ForceOutput, RigidBodyHandle, SubstepForceProvider,
 };
 
-/// Water surface and floor level at a single (x, z) probe point.
+/// Water surface and floor level at a single probe point.
 pub struct WaterSample {
-    /// Effective surface level (bulk level + wave displacement).
+    /// Effective surface level (bulk level + swell + ripples).
     pub surface_level: f32,
     /// Terrain floor that the water rests on.
     pub floor_level: f32,
+    /// Velocity of the water: a river's flow, or a lake's current towards
+    /// its outlet. Drag acts on a body relative to it.
+    pub velocity: Vector3<f32>,
 }
 
 /// Computed buoyancy and drag for a single body.
@@ -149,18 +152,27 @@ impl SubstepForceProvider for BuoyancyForceProvider<'_> {
         let linear_drag_floor =
             2.0 * HEAVE_DAMPING_RATIO * (mass * total_heave_stiffness.max(0.0)).sqrt();
 
-        // Quadratic drag from shape area: Fd = -k |v| v.
-        let linear_speed = body.linear_velocity().magnitude();
+        // Drag acts relative to the water, so a current carries a floating
+        // body with it: −c·(v − u) is −c·v, which the engine applies, plus
+        // c·u, added here.
+        let water_velocity = self
+            .water
+            .sample(body_pos)
+            .map_or(Vector3::zeros(), |s| s.velocity);
+
+        // Quadratic drag from shape area: Fd = -k |v - u| (v - u).
+        let linear_speed = (body.linear_velocity() - water_velocity).magnitude();
         let angular_speed = body.angular_velocity().magnitude();
 
         // Angular drag floor: linear term that guarantees rocking settles
         // even at low angular speeds where the quadratic term vanishes.
         let angular_drag_floor = ANGULAR_DRAG_FLOOR * avg_submerged_fraction;
 
+        let linear_drag_coeff = linear_drag_floor + total_linear_drag_coeff * linear_speed;
         ForceOutput {
-            force: total_force,
+            force: total_force + water_velocity * linear_drag_coeff,
             torque: total_torque,
-            linear_drag_coeff: linear_drag_floor + total_linear_drag_coeff * linear_speed,
+            linear_drag_coeff,
             angular_drag_coeff: angular_drag_floor + total_angular_drag_coeff * angular_speed,
         }
     }
@@ -766,6 +778,7 @@ mod tests {
             Some(WaterSample {
                 surface_level: self.surface,
                 floor_level: self.floor,
+                velocity: Vector3::zeros(),
             })
         }
     }

@@ -11,7 +11,8 @@ use std::process::ExitCode;
 
 use nalgebra::Point3;
 use voxel_phase::water_spike::{
-    check_level, hierarchy, hierarchy_report, report, route_level, route_report, route_staircase,
+    check_level, hierarchy, hierarchy_report, report, route_level, route_report, route_river,
+    route_staircase,
 };
 
 const USAGE: &str = "usage: water_spike spans [<level.ron>...]\n       water_spike routing";
@@ -69,7 +70,7 @@ fn main() -> ExitCode {
                         .max_by(|a, b| a.length.total_cmp(&b.length))
                         .expect("nine routes")
                 });
-            let routes = [longest, route_staircase()];
+            let routes = [longest, route_staircase(), route_river()];
             for route in routes {
                 match route {
                     Ok(findings) => println!("{}", route_report(&findings)),

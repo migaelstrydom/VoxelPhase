@@ -82,6 +82,8 @@ pub struct WaterWorld {
     levels: Vec<Option<f32>>,
     /// Each store's swell, by store slot, refreshed with the levels.
     swells: Vec<Swell>,
+    /// Each basin's currents, by store slot, refreshed with the levels.
+    currents: Vec<Vec<CurrentTerm>>,
     ripples: RippleTiles,
     /// Seconds simulated: the swell's clock, shared with the renderer.
     clock: f64,
@@ -125,6 +127,7 @@ impl WaterWorld {
             config: HydrologyConfig::from_level(config),
             levels: Vec::new(),
             swells: Vec::new(),
+            currents: Vec::new(),
             ripples: RippleTiles::new(RippleConfig::default()),
             clock: 0.0,
             masked_for: Vec::new(),
@@ -219,6 +222,7 @@ impl WaterWorld {
                 _ => None,
             })
             .collect();
+        self.refresh_currents();
         self.swells = (0..self.network.store_slots())
             .map(
                 |i| match (self.network.store(StoreId(i as u32)), self.levels[i]) {
@@ -229,6 +233,54 @@ impl WaterWorld {
                 },
             )
             .collect();
+    }
+
+    /// The potential-flow terms of every basin with water crossing its
+    /// crests: towards an outflow carrying water, away from an inlet.
+    fn refresh_currents(&mut self) {
+        let mut currents: Vec<Vec<CurrentTerm>> = vec![Vec::new(); self.network.store_slots()];
+        for (link_id, link) in self.network.links().filter(|(_, l)| l.open) {
+            let (Some(up), Some(down)) =
+                (self.network.store(link.up), self.network.store(link.down))
+            else {
+                continue;
+            };
+            let q = link.law.discharge(
+                super::network::StoreView {
+                    store: up,
+                    volume: up.volume(),
+                    port: link.up_port,
+                },
+                super::network::StoreView {
+                    store: down,
+                    volume: down.volume(),
+                    port: link.down_port,
+                },
+            );
+            if q.abs() < 1e-6 {
+                continue;
+            }
+            if let Some(basin) = up.as_basin() {
+                if let Some(outflow) = basin.outflows.iter().find(|o| o.link == Some(link_id)) {
+                    if let Some(term) = CurrentTerm::for_cells(outflow, basin, q as f32) {
+                        currents[link.up.0 as usize].push(term);
+                    }
+                }
+            }
+            if let (Some(basin), Some(reach)) = (down.as_basin(), up.as_reach()) {
+                if let Some(end) = reach.centreline.points.last() {
+                    let depth = (basin.level() - basin.deepest()).max(0.1);
+                    currents[link.down.0 as usize].push(CurrentTerm {
+                        centre: nalgebra::Vector2::new(end.x, end.z),
+                        discharge: -(q as f32),
+                        radius: 3.0 * reach.running().top_width.max(1.0),
+                        depth,
+                        cap: reach.running().velocity,
+                    });
+                }
+            }
+        }
+        self.currents = currents;
     }
 
     /// Advance the ripple tiles, first re-masking them if the topology moved
@@ -278,6 +330,17 @@ impl WaterWorld {
     /// The ripple tiles that are awake.
     pub fn ripples(&self) -> &RippleTiles {
         &self.ripples
+    }
+
+    /// The current at a point of a basin: the potential flow towards each
+    /// outflow carrying water and away from each inlet (§7.8), capped at the
+    /// velocity over the crest.
+    pub fn current_at(&self, id: StoreId, point: Point3<f32>) -> nalgebra::Vector3<f32> {
+        let mut v = nalgebra::Vector2::zeros();
+        for term in self.currents.get(id.0 as usize).into_iter().flatten() {
+            v += term.velocity_at(point.x, point.z);
+        }
+        nalgebra::Vector3::new(v.x, 0.0, v.y)
     }
 
     /// A body's swell.
@@ -435,5 +498,58 @@ impl MaskSource for BodyMasks<'_> {
             }
         }
         (!mask.is_empty()).then_some(mask)
+    }
+}
+
+/// One potential-flow term in a basin: a sink at an outflow's crest, or a
+/// source at an inlet (§7.8).
+#[derive(Debug, Clone, Copy)]
+struct CurrentTerm {
+    /// Plan position of the crest or inlet.
+    centre: nalgebra::Vector2<f32>,
+    /// m³/s; positive draws water in, negative pushes it out.
+    discharge: f32,
+    /// The term fades to nothing here, m: three crest widths.
+    radius: f32,
+    /// Water depth the flow is spread over, m.
+    depth: f32,
+    /// The fastest the term runs: the velocity over the crest.
+    cap: f32,
+}
+
+impl CurrentTerm {
+    /// The term for an outflow's crest cells at discharge `q`.
+    fn for_cells(outflow: &super::network::Outflow, basin: &Basin, q: f32) -> Option<Self> {
+        let n = outflow.cells.len() as f32;
+        if n == 0.0 {
+            return None;
+        }
+        let (sx, sz) = outflow.cells.iter().fold((0.0, 0.0), |(x, z), c| {
+            let (cx, cz) = c.inside.column.centre();
+            (x + cx, z + cz)
+        });
+        let width = n * crate::water::geometry::COLUMN_SIZE;
+        let level = basin.level();
+        let head = (level - outflow.lip).max(0.02);
+        Some(Self {
+            centre: nalgebra::Vector2::new(sx / n, sz / n),
+            discharge: q,
+            radius: 3.0 * width,
+            depth: (level - basin.deepest()).max(0.1),
+            cap: q / (width * head),
+        })
+    }
+
+    /// v = Q / (π r depth) towards the centre, faded from 2R/3 to R.
+    fn velocity_at(&self, x: f32, z: f32) -> nalgebra::Vector2<f32> {
+        let d = self.centre - nalgebra::Vector2::new(x, z);
+        let r = d.norm();
+        if r >= self.radius || r < 1e-3 {
+            return nalgebra::Vector2::zeros();
+        }
+        let fade = ((self.radius - r) / (self.radius / 3.0)).min(1.0);
+        let speed =
+            (self.discharge / (std::f32::consts::PI * r * self.depth)).clamp(-self.cap, self.cap);
+        d / r * speed * fade
     }
 }

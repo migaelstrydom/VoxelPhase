@@ -1454,6 +1454,52 @@ decided before stage 2.
 
 This is the stage most likely to need iteration on looks. 4a stands without it.
 
+**As built.**
+
+- **Routing** (`topology/router.rs`). An outlet whose drainage path runs at
+  least 3 m before it reaches a store is laid as a channel: the path is cut
+  into reaches of about 12 m (none shorter than 8 m), linked in series by
+  `ReachOutflow` into the store at the bottom. A shorter path keeps 4a's
+  instant weir.
+- **Rating curves** (`network/rating.rs`). Manning with n = 0.035, sampled on
+  cross-sections 1 m apart and ±8 m wide over the span floors. The slope is
+  taken over a 3 m window and floored at 1e-3. Each reach tabulates eight
+  points from 0.01 m³/s to its design discharge, the outlet's flow at 0.3 m of
+  head; below the first point, flow goes as depth^0.6.
+- **Reaches** (`network/reach.rs`). Kinematic storage with a front and a tail.
+  The front advances at the rated velocity and the reach fills behind it. A
+  reach retires once nothing feeds it and it has drained below 5 mm. It never
+  retires mid-channel while its upstream still runs.
+- **Re-routing.** When a receiving basin's level moves more than 0.25 m from
+  the level its channel was routed against, the channel is laid again.
+  Relinking follows 4a's lazy rule: an outflow that already had a link is not
+  relinked while its free flow is at or below 2·`Q_RETIRE`, so a retiring
+  channel does not churn.
+- **Currents.** `WaterSurface::sample` returns the water's velocity.
+  Buoyancy drag acts relative to it, so floating bodies ride the current. On a
+  reach, `level_at` falls back to the reach's sample, so probes see water.
+- **Meshing.** `ReachMesher` builds a strip along each reach's centreline, and
+  `river.vert` raises it to the reach's depth per vertex. Flow maps scroll the
+  normals along the channel. Shore foam is for still water only; white water
+  appears above 3 m/s and stays faint.
+- **Scenario** `river` (test): a 44 m³ lake is breached at the head of a
+  zig-zag carved channel. Five reaches of 12–14 m run into the void sink. The
+  front wets the upper probe by 2 s and the lower one by 6 s. The sink
+  receives its first water at 10 s and 38 m³ by 90 s. The ledger stays at
+  zero.
+- **Routing criteria, re-tested on the carved channel.**
+  - 88% of centreline points are within 0.5 m (p95 0.62 m).
+  - Every miss is the 0.62 m diagonal of a single column. The 3 m outliers are
+    inside the lake crater at the channel head, where the path has not yet
+    entered the channel.
+  - The width-step p95 is 22%, which is column quantisation.
+  - No false depressions.
+
+  The misses are all at column resolution, so **centreline hints are not
+  added** (§22).
+- **Cost.** In `breach`, routing runs on the blast frame: the settle stage takes
+  1.9 ms of a 3.4 ms water frame. The transient that follows is 0.07 ms mean.
+
 ### Stage 5: falls and sources
 
 - `FallTracer`, `FallPath` on links, `Spring`, `SkySource`, `Sink` and `FallMesher`.
@@ -1481,4 +1527,4 @@ This is the stage most likely to need iteration on looks. 4a stands without it.
 | Authored centreline hints | **Spike 0.5b decides.** |
 | Segment streaming | **Not planned.** If it arrives, lazy span building, and fronts waiting at segment borders, come back. |
 | Skyway's pool above its outlet | **Left as authored** (stage 2 gate). It drains off the world at load; `level_check` reports it. |
-| Centreline hints after spike 0.5b | **Not now.** Re-test the routing criteria on a sloped carved channel at stage 4b; hints only if that fails. |
+| Centreline hints after spike 0.5b | **Not added.** Re-tested at stage 4b on a sloped carved channel: every miss is one column quantum (0.62 m). Hints come back only if play-testing shows a visible wander. |

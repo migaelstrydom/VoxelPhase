@@ -69,6 +69,18 @@ pub fn route_level(path: &Path, start: Point3<f32>, label: &str) -> Result<Route
     Ok(route(&terrain, start, label))
 }
 
+/// Route a spring down the water harness's carved river channel: the sloped
+/// bed the criteria were re-run on at stage 4b.
+pub fn route_river() -> Result<RouteFindings, String> {
+    let scenario = find("river").ok_or("the river scenario is missing")?;
+    let (_, terrain) = scenario.terrain()?;
+    Ok(route(
+        &terrain,
+        Point3::new(-21.0, 3.5, 0.0),
+        "carved river (water_viewer)",
+    ))
+}
+
 /// Route a spring down the water harness's staircase.
 pub fn route_staircase() -> Result<RouteFindings, String> {
     let scenario = find("staircase").ok_or("the staircase scenario is missing")?;
@@ -149,6 +161,12 @@ fn route(terrain: &TerrainWorld, start: Point3<f32>, label: &str) -> RouteFindin
         let section = CrossSection::sample(&graph, *point, line.tangents[i], SECTION_HALF_WIDTH);
         if let Some(offset) = bottom_offset(&section) {
             findings.deviations.push(offset.abs());
+            if std::env::var_os("WATER_SPIKE_TRACE").is_some() {
+                eprintln!(
+                    "{label} {:.1} ({:.1}, {:.1}, {:.1}) offset {offset:.2}",
+                    line.distance[i], point.x, point.y, point.z
+                );
+            }
         }
         let slope = bed_slope(&line, i);
         match section.hydraulics(DESIGN_DISCHARGE, slope) {
@@ -170,14 +188,30 @@ fn route(terrain: &TerrainWorld, start: Point3<f32>, label: &str) -> RouteFindin
     findings
 }
 
-/// Offset of the middle of the section's lowest run from its centre.
+/// Distance each side of the centreline the bed's lowest line is looked for,
+/// m: a channel's half-width, so a meander's other limb is not mistaken for
+/// this one.
+const LOWEST_LINE_REACH: f32 = 3.0;
+
+/// Offset of the middle of the section's lowest run from its centre, within
+/// `LOWEST_LINE_REACH` of it.
 fn bottom_offset(section: &CrossSection) -> Option<f32> {
-    let (lowest, _) = section.lowest()?;
+    let reach = (LOWEST_LINE_REACH / section.spacing).round() as usize;
+    let lo = section.centre.saturating_sub(reach);
+    let hi = (section.centre + reach).min(section.floors.len() - 1);
+    let lowest = section.floors[lo..=hi]
+        .iter()
+        .flatten()
+        .copied()
+        .fold(f32::INFINITY, f32::min);
+    if !lowest.is_finite() {
+        return None;
+    }
     let bottom: Vec<usize> = section
         .floors
         .iter()
         .enumerate()
-        .filter(|(_, f)| f.is_some_and(|f| f <= lowest + BOTTOM_BAND))
+        .filter(|(i, f)| (lo..=hi).contains(i) && f.is_some_and(|f| f <= lowest + BOTTOM_BAND))
         .map(|(i, _)| i)
         .collect();
     // The run of bottom samples nearest the centre.

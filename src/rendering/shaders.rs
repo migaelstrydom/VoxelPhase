@@ -36,6 +36,7 @@ mod bytecode {
     pub const WATER_VERTEX: &[u8] = include_bytes!("../../shader/water.vert.spv");
     pub const WATER_FRAGMENT: &[u8] = include_bytes!("../../shader/water.frag.spv");
     pub const RIPPLE_VERTEX: &[u8] = include_bytes!("../../shader/ripple.vert.spv");
+    pub const RIVER_VERTEX: &[u8] = include_bytes!("../../shader/river.vert.spv");
 
     /// Post-processing shaders (HDR resolve, bloom)
     pub const POST_FULLSCREEN_VERTEX: &[u8] =
@@ -142,6 +143,11 @@ impl ShaderManager {
     /// Load the vertex shader of an awake ripple tile's fine surface.
     pub fn load_ripple_vertex(device: &ManagedDevice) -> EngineResult<vk::ShaderModule> {
         Self::load_shader(device, bytecode::RIPPLE_VERTEX, ShaderStage::Vertex)
+    }
+
+    /// Load the vertex shader of a reach's surface.
+    pub fn load_river_vertex(device: &ManagedDevice) -> EngineResult<vk::ShaderModule> {
+        Self::load_shader(device, bytecode::RIVER_VERTEX, ShaderStage::Vertex)
     }
 
     /// Load the water fragment shader.

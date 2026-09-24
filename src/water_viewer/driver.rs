@@ -1,6 +1,8 @@
 //! Runs a scenario: builds its world, plays its script, records the water.
 
 use crate::terrain::{BlastConfig, TerrainWorld};
+use crate::water::network::Store;
+use crate::water::topology::TopologyEdit;
 use crate::water::WaterWorld;
 
 use super::scenario::{Action, Scenario};
@@ -53,6 +55,8 @@ pub struct Event {
 
 /// Everything recorded from one run of a scenario.
 pub struct Run {
+    /// Each reach laid during the run, as it was when laid.
+    pub reaches: Vec<String>,
     pub scenario: &'static str,
     pub probe_names: Vec<&'static str>,
     pub initial_volume: f64,
@@ -89,6 +93,7 @@ pub fn run_with_captures(
     let mut pending = pending.into_iter().peekable();
 
     let mut recorded = Run {
+        reaches: Vec::new(),
         scenario: scenario.name,
         probe_names: scenario.probes.iter().map(|p| p.name).collect(),
         initial_volume: water.volume(),
@@ -121,8 +126,13 @@ pub fn run_with_captures(
         for edit in &log[edits_seen..] {
             recorded.events.push(Event {
                 time,
-                text: format!("{edit:?}"),
+                text: describe(edit, &water),
             });
+            if let TopologyEdit::AddStore(id) = edit {
+                if let Some(reach) = water.network().store(*id).and_then(Store::as_reach) {
+                    recorded.reaches.push(describe_reach(id.0, reach, time));
+                }
+            }
         }
         edits_seen = log.len();
         if tick % per_frame == 0 || tick == ticks {
@@ -133,6 +143,43 @@ pub fn run_with_captures(
         }
     }
     Ok(recorded)
+}
+
+/// An edit as the report prints it: links with their ends, stores with
+/// their kind.
+fn describe(edit: &TopologyEdit, water: &WaterWorld) -> String {
+    match edit {
+        TopologyEdit::AddLink(id) => match water.network().link(*id) {
+            Some(l) => format!("AddLink({}: {} -> {})", id.0, l.up.0, l.down.0),
+            None => format!("AddLink({})", id.0),
+        },
+        TopologyEdit::AddStore(id) => {
+            let kind = match water.network().store(*id) {
+                Some(Store::Basin(_)) => "basin",
+                Some(Store::Reach(_)) => "reach",
+                Some(Store::Sink) => "sink",
+                Some(Store::Reservoir) => "reservoir",
+                None => "gone",
+            };
+            format!("AddStore({} {kind})", id.0)
+        }
+        TopologyEdit::Reregion { basin, seeds } => {
+            format!("Reregion({}, {} seeds)", basin.0, seeds.len())
+        }
+        other => format!("{other:?}"),
+    }
+}
+
+fn describe_reach(id: u32, reach: &crate::water::network::Reach, time: f32) -> String {
+    let (a, b) = (
+        reach.centreline.points.first().copied().unwrap_or_default(),
+        reach.centreline.points.last().copied().unwrap_or_default(),
+    );
+    let design = reach.rating.at(reach.rating.design());
+    format!(
+        "{time:>7.2}s reach {id}: ({:.1}, {:.1}, {:.1}) -> ({:.1}, {:.1}, {:.1}), {:.1} m; design {:.2} m³/s runs {:.2} m deep, {:.1} m wide at {:.2} m/s",
+        a.x, a.y, a.z, b.x, b.y, b.z, reach.length, design.q, design.depth, design.top_width, design.velocity
+    )
 }
 
 fn apply(terrain: &mut TerrainWorld, action: Action) -> String {

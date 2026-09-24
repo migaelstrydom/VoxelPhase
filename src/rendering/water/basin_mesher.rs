@@ -22,6 +22,7 @@ use crate::water::network::Basin;
 use crate::water::surface::Swell;
 use crate::water::WaterWorld;
 
+use super::reach_mesher::{RiverMesh, RiverState};
 use super::vertex::BasinVertex;
 
 /// One draw: a basin's quads within one 8 m tile.
@@ -79,6 +80,21 @@ pub trait WaterScene {
     fn ripple_tiles(&self) -> Vec<RippleTileView<'_>> {
         Vec::new()
     }
+
+    /// Changes whenever [`Self::build_rivers`] would build something
+    /// different.
+    fn river_key(&self) -> MeshKey {
+        Vec::new()
+    }
+
+    fn build_rivers(&self) -> RiverMesh {
+        RiverMesh::default()
+    }
+
+    /// A reach's state for its draw, if it is still there.
+    fn river_state(&self, _reach: StoreId) -> Option<RiverState> {
+        None
+    }
 }
 
 impl WaterScene for WaterWorld {
@@ -100,6 +116,28 @@ impl WaterScene for WaterWorld {
 
     fn clock(&self) -> f32 {
         WaterWorld::clock(self)
+    }
+
+    fn river_key(&self) -> MeshKey {
+        self.network()
+            .stores()
+            .filter_map(|(id, s)| s.as_reach().map(|r| (id, r.version)))
+            .collect()
+    }
+
+    fn build_rivers(&self) -> RiverMesh {
+        super::reach_mesher::build(
+            self.network()
+                .stores()
+                .filter_map(|(id, s)| s.as_reach().map(|r| (id, r))),
+        )
+    }
+
+    fn river_state(&self, reach: StoreId) -> Option<RiverState> {
+        self.network()
+            .store(reach)
+            .and_then(|s| s.as_reach())
+            .map(RiverState::of)
     }
 
     fn ripple_tiles(&self) -> Vec<RippleTileView<'_>> {

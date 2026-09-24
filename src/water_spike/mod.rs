@@ -6,7 +6,7 @@ mod routing;
 mod spans;
 
 pub use routing::{
-    hierarchy, hierarchy_report, route_level, route_report, route_staircase, HierarchyFindings,
-    RouteFindings,
+    hierarchy, hierarchy_report, route_level, route_report, route_river, route_staircase,
+    HierarchyFindings, RouteFindings,
 };
 pub use spans::{check_level, report, SpanFindings};

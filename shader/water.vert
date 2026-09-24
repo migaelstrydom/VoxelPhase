@@ -22,6 +22,9 @@ layout(location = 0) out vec3 fragNormal;
 layout(location = 1) out vec3 fragWorldPos;
 layout(location = 2) flat out int fragLayer;
 layout(location = 3) flat out vec2 fragTileOrigin;
+layout(location = 4) out vec2 fragFlow;
+layout(location = 5) out float fragAlong;
+layout(location = 6) flat out vec2 fragWetRange;
 
 void main() {
     float level = pc.body.x;
@@ -32,4 +35,7 @@ void main() {
     fragWorldPos = position;
     fragLayer = -1;
     fragTileOrigin = vec2(0.0);
+    fragFlow = vec2(0.0);
+    fragAlong = 0.0;
+    fragWetRange = vec2(-1.0e9, 1.0e9);
 }

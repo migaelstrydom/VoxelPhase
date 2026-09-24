@@ -38,8 +38,16 @@ impl<'a> WaterQuery<'a> {
     pub fn level_at(&self, point: Point3<f32>) -> Option<f32> {
         let graph = self.world.geometry().graph();
         let span = graph.span_at(Column::containing(point.x, point.z), point.y)?;
-        let level = self.world.level(graph.owner(span).body?)?;
-        (level > graph.span(span).floor_min).then_some(level)
+        let floor = graph.span(span).floor_min;
+        let owner = graph.owner(span);
+        let still = owner
+            .body
+            .and_then(|body| self.world.level(body))
+            .filter(|level| *level > floor);
+        still.or_else(|| {
+            let (reach, _) = owner.reach?;
+            self.reach_sample(reach, point, floor).map(|s| s.surface)
+        })
     }
 
     /// Water at a 3D point, or `None` if the point's span holds no water. The
@@ -53,12 +61,17 @@ impl<'a> WaterQuery<'a> {
         let graph = self.world.geometry().graph();
         let column = Column::containing(point.x, point.z);
         let span = graph.span_at(column, point.y)?;
-        let body = graph.owner(span).body?;
-        let level = self.world.level(body)?;
+        let owner = graph.owner(span);
         let floor = graph.span(span).floor_min;
-        if level <= floor {
-            return None;
-        }
+        let still = owner
+            .body
+            .and_then(|body| Some((body, self.world.level(body)?)))
+            .filter(|(_, level)| *level > floor);
+        let Some((body, level)) = still else {
+            return owner
+                .reach
+                .and_then(|(reach, _)| self.reach_sample(reach, point, floor));
+        };
         let swell =
             self.world
                 .swell(body)
@@ -67,8 +80,31 @@ impl<'a> WaterQuery<'a> {
         Some(WaterSample {
             surface: level + swell + ripple,
             floor,
-            velocity: Vector3::zeros(),
+            velocity: self.world.current_at(body, point),
             body,
+        })
+    }
+
+    /// Water in a reach at a point, if the reach is wetted there: the level
+    /// its current discharge runs at over the bed of the nearest section,
+    /// moving down the channel at the reach's velocity.
+    fn reach_sample(&self, id: WaterBodyId, point: Point3<f32>, floor: f32) -> Option<WaterSample> {
+        let reach = self.world.network().store(id)?.as_reach()?;
+        let distance = reach.distance_at(point.x, point.z);
+        if distance < reach.tail || distance > reach.front {
+            return None;
+        }
+        let running = reach.running();
+        let surface = reach.bed_at(distance) + running.depth;
+        if surface <= floor {
+            return None;
+        }
+        let direction = reach.direction_at(distance) * running.velocity;
+        Some(WaterSample {
+            surface,
+            floor,
+            velocity: Vector3::new(direction.x, 0.0, direction.y),
+            body: id,
         })
     }
 }
@@ -78,6 +114,7 @@ impl WaterSurface for WaterQuery<'_> {
         WaterQuery::sample(self, point).map(|s| SurfaceSample {
             surface_level: s.surface,
             floor_level: s.floor,
+            velocity: s.velocity,
         })
     }
 }

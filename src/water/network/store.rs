@@ -5,6 +5,7 @@
 //! laws that move water between stores live in links.
 
 use super::basin::Basin;
+use super::reach::Reach;
 
 /// Where a link attaches to a store. Basins ignore it; a reach has two ends.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -18,6 +19,8 @@ pub enum Port {
 pub enum Store {
     /// Still water with one level.
     Basin(Basin),
+    /// A stretch of running channel.
+    Reach(Reach),
     /// Takes whatever reaches it: an authored sink, the edge of the world.
     Sink,
     /// Gives without running dry: behind a spring or a sky source.
@@ -29,21 +32,47 @@ impl Store {
     pub fn volume(&self) -> f64 {
         match self {
             Store::Basin(b) => b.volume,
+            Store::Reach(r) => r.storage,
             Store::Sink | Store::Reservoir => f64::INFINITY,
         }
     }
 
     /// Whether the store holds a finite volume the solver integrates.
     pub fn is_finite(&self) -> bool {
-        matches!(self, Store::Basin(_))
+        matches!(self, Store::Basin(_) | Store::Reach(_))
     }
 
     /// The surface level at `port` implied by `volume`.
-    pub fn level_at(&self, volume: f64, _port: Port) -> f32 {
+    pub fn level_at(&self, volume: f64, port: Port) -> f32 {
         match self {
             Store::Basin(b) => b.hypsometry.level(volume),
+            Store::Reach(r) => r.level_at_end(port == Port::Downstream),
             Store::Sink => f32::NEG_INFINITY,
             Store::Reservoir => f32::INFINITY,
+        }
+    }
+
+    /// What a store lets out of its downstream end at `volume` by its own
+    /// law, and the derivative: a reach's rating. `None` for stores whose
+    /// outflow is set by the link across their lip.
+    pub fn release(&self, volume: f64) -> Option<(f64, f64)> {
+        match self {
+            Store::Reach(r) => Some(r.release(volume)),
+            _ => None,
+        }
+    }
+
+    pub fn as_reach(&self) -> Option<&Reach> {
+        match self {
+            Store::Reach(r) => Some(r),
+            _ => None,
+        }
+    }
+
+    pub fn as_reach_mut(&mut self) -> Option<&mut Reach> {
+        match self {
+            Store::Reach(r) => Some(r),
+            _ => None,
         }
     }
 
@@ -65,13 +94,16 @@ impl Store {
     pub fn is_minor(&self) -> bool {
         match self {
             Store::Basin(b) => b.minor,
+            Store::Reach(r) => r.minor,
             Store::Sink | Store::Reservoir => false,
         }
     }
 
     fn set_volume(&mut self, volume: f64) {
-        if let Store::Basin(b) = self {
-            b.volume = volume;
+        match self {
+            Store::Basin(b) => b.volume = volume,
+            Store::Reach(r) => r.storage = volume,
+            Store::Sink | Store::Reservoir => {}
         }
     }
 

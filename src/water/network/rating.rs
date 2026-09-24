@@ -182,6 +182,161 @@ impl CrossSection {
     }
 }
 
+/// A reach's hydraulics at one discharge, averaged over its sections.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RatingPoint {
+    /// Discharge, m³/s.
+    pub q: f64,
+    /// Mean flow area, which is storage per metre of wetted reach, m².
+    pub area: f64,
+    pub top_width: f32,
+    pub depth: f32,
+    pub velocity: f32,
+}
+
+/// How a reach carries discharge: area, width, depth and velocity against
+/// `Q`, tabulated at log-spaced discharges between `Q_min` and `Q_design`
+/// (§7.5). Below `Q_min` it extrapolates as a power law, depth ∝ Q^0.6; above
+/// `Q_design` the reach is re-scanned.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct RatingCurve {
+    points: Vec<RatingPoint>,
+}
+
+/// Discharges a rating curve is tabulated at.
+pub const RATING_POINTS: usize = 8;
+
+/// The least discharge a rating curve is tabulated from, m³/s.
+pub const RATING_Q_MIN: f64 = 0.01;
+
+/// Exponent of depth (and area) against discharge below the table.
+const LOW_FLOW_EXPONENT: f64 = 0.6;
+
+impl RatingCurve {
+    /// Scan a reach's sections at each tabulated discharge. Each section
+    /// comes with its bed slope. Sections that cannot carry a discharge
+    /// within their sampled width are left out of that discharge's mean.
+    pub fn scan(sections: &[(CrossSection, f32)], q_design: f64) -> Self {
+        let q_design = q_design.max(RATING_Q_MIN * 2.0);
+        let ratio = (q_design / RATING_Q_MIN).powf(1.0 / (RATING_POINTS - 1) as f64);
+        let mut points = Vec::with_capacity(RATING_POINTS);
+        for i in 0..RATING_POINTS {
+            let q = RATING_Q_MIN * ratio.powi(i as i32);
+            let found: Vec<Hydraulics> = sections
+                .iter()
+                .filter_map(|(section, slope)| section.hydraulics(q as f32, *slope))
+                .collect();
+            if found.is_empty() {
+                continue;
+            }
+            let n = found.len() as f64;
+            let area = found.iter().map(|h| h.area as f64).sum::<f64>() / n;
+            points.push(RatingPoint {
+                q,
+                area,
+                top_width: (found.iter().map(|h| h.top_width as f64).sum::<f64>() / n) as f32,
+                depth: (found.iter().map(|h| h.depth as f64).sum::<f64>() / n) as f32,
+                velocity: (q / area.max(1e-6)) as f32,
+            });
+        }
+        // Area must rise with discharge for the inverse to exist.
+        for i in 1..points.len() {
+            if points[i].area <= points[i - 1].area {
+                points[i].area = points[i - 1].area * 1.0001;
+            }
+        }
+        Self { points }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.points.is_empty()
+    }
+
+    /// The tabulated design discharge: the largest the curve holds.
+    pub fn design(&self) -> f64 {
+        self.points.last().map_or(0.0, |p| p.q)
+    }
+
+    /// Hydraulics at discharge `q`.
+    pub fn at(&self, q: f64) -> RatingPoint {
+        let Some(first) = self.points.first() else {
+            return RatingPoint {
+                q,
+                area: 0.0,
+                top_width: 0.0,
+                depth: 0.0,
+                velocity: 0.0,
+            };
+        };
+        if q <= 0.0 {
+            return RatingPoint {
+                q: 0.0,
+                area: 0.0,
+                top_width: first.top_width,
+                depth: 0.0,
+                velocity: 0.0,
+            };
+        }
+        if q <= first.q || self.points.len() == 1 {
+            let scale = (q / first.q).powf(LOW_FLOW_EXPONENT);
+            return RatingPoint {
+                q,
+                area: first.area * scale,
+                top_width: first.top_width,
+                depth: first.depth * scale as f32,
+                velocity: (q / (first.area * scale).max(1e-9)) as f32,
+            };
+        }
+        let k = self
+            .points
+            .windows(2)
+            .position(|w| q <= w[1].q)
+            .unwrap_or(self.points.len() - 2);
+        let (a, b) = (self.points[k], self.points[k + 1]);
+        // Interpolate in log-log, where the rating is nearly straight.
+        let t = ((q.ln() - a.q.ln()) / (b.q.ln() - a.q.ln())).max(0.0);
+        let lerp = |x: f64, y: f64| (x.ln() + t * (y.ln() - x.ln())).exp();
+        let area = lerp(a.area, b.area);
+        RatingPoint {
+            q,
+            area,
+            top_width: lerp(a.top_width as f64, b.top_width as f64) as f32,
+            depth: lerp(a.depth as f64, b.depth as f64) as f32,
+            velocity: (q / area.max(1e-9)) as f32,
+        }
+    }
+
+    /// The discharge whose mean area is `area`: the inverse of the curve.
+    pub fn discharge_for(&self, area: f64) -> f64 {
+        if area <= 0.0 || self.points.is_empty() {
+            return 0.0;
+        }
+        let (mut lo, mut hi) = (0.0f64, self.design().max(RATING_Q_MIN));
+        while self.at(hi).area < area {
+            hi *= 2.0;
+            if hi > 1e6 {
+                return hi;
+            }
+        }
+        for _ in 0..50 {
+            let mid = 0.5 * (lo + hi);
+            if self.at(mid).area < area {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        0.5 * (lo + hi)
+    }
+
+    /// d(area)/d(Q) at `q`.
+    pub fn area_slope(&self, q: f64) -> f64 {
+        let e = (q * 1e-3).max(1e-6);
+        let (lo, hi) = ((q - e).max(0.0), q + e);
+        ((self.at(hi).area - self.at(lo).area) / (hi - lo)).max(1e-9)
+    }
+}
+
 /// The floor of the span in the column under (x, z) whose band holds `near`.
 fn floor_near(graph: &SpanGraph, x: f32, z: f32, near: f32) -> Option<f32> {
     let column = Column::containing(x, z);

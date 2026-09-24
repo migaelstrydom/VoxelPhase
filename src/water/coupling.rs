@@ -321,6 +321,7 @@ mod tests {
             Some(WaterSample {
                 surface_level: 5.0,
                 floor_level: 0.0,
+                velocity: nalgebra::Vector3::zeros(),
             })
         }
     }

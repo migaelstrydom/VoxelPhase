@@ -58,7 +58,22 @@ impl LossLaw {
                 let d = if area > 1e-9 { slope / area } else { 0.0 };
                 (self.rate * area, self.rate * d)
             }
+            Store::Reach(r) => {
+                // Loss over the wetted channel: rate × top width × ℓ.
+                let width = r.rating.at(r.inflow).top_width as f64;
+                (self.rate * width * r.wetted() as f64, 0.0)
+            }
             Store::Sink | Store::Reservoir => (0.0, 0.0),
+        }
+    }
+
+    /// Whether a reach should be minor, given whether it is now: its inflow
+    /// against the threshold, with hysteresis.
+    pub fn reach_minor(&self, inflow: f64, now: bool) -> bool {
+        if now {
+            inflow < self.minor_discharge * MINOR_HYSTERESIS as f64
+        } else {
+            inflow < self.minor_discharge
         }
     }
 

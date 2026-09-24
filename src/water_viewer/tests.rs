@@ -109,3 +109,34 @@ fn an_island_pool_holed_through_pours_onto_the_pond_below() {
     assert!(after > before, "the pond rose: {before} -> {after}");
     assert!(last.ledger_error.abs() < 1e-6);
 }
+
+#[test]
+fn a_lake_drains_down_a_channel_whose_front_advances() {
+    let scenario = find("river").unwrap();
+    let recorded = run(&scenario, RunConfig::default()).unwrap();
+    let first = &recorded.samples[0];
+    let last = recorded.samples.last().unwrap();
+    // The front reaches the lower probe some seconds after the upper one.
+    let wet_from = |name: &str| {
+        recorded
+            .samples
+            .iter()
+            .enumerate()
+            .find(|(i, _)| probe(&recorded, name, *i).is_some())
+            .map(|(_, s)| s.time)
+    };
+    let (upper, lower) = (wet_from("upper").unwrap(), wet_from("lower").unwrap());
+    assert!(
+        upper < lower,
+        "the front ran down the channel: {upper} then {lower}"
+    );
+    assert!(!recorded.reaches.is_empty(), "the outlet laid a channel");
+    assert!(
+        last.sunk > 0.5 * first.volume,
+        "{} of {}",
+        last.sunk,
+        first.volume
+    );
+    assert!(recorded.samples.iter().all(|s| s.discarded == 0.0));
+    assert!(last.ledger_error.abs() < 1e-6);
+}
