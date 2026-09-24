@@ -6,58 +6,17 @@
 
 use std::sync::Arc;
 
-use nalgebra::{Point3, Vector3};
+use nalgebra::{Point3, UnitQuaternion, Vector3};
 use serde::Deserialize;
 use specs::{Entity, World};
 
 use super::shared::models::{build_convex_hull, SolidFace, SurfaceUvs};
-use super::stone::{StoneBlock, StoneShape};
+use super::stone::{StoneBlock, StoneShape, StoneTexture};
 use super::{MaterialCtx, Spawnable};
 use crate::collision::convex_hull::ConvexHull;
 use crate::core::error::EngineResult;
 use crate::rendering::material::MaterialId;
-use crate::rendering::pattern::{self, Pattern, Spread};
 use crate::rendering::substance::{self, Substance};
-
-/// What the arch's stone texture is baked from.
-///
-/// Public so the visual bench can bake exactly what a level does.
-pub struct StoneTexture {
-    pub pattern: &'static Pattern,
-    /// Dressed stone from one quarry should look like dressed stone from one
-    /// quarry: one seed for every block.
-    pub seed: u32,
-    /// Edge length of one tile, in texels.
-    pub tile_size: u32,
-    /// How many tiles one baked texture holds across. With the tile scaled
-    /// to the stone (see [`REFERENCE_TILE`]), two across is several
-    /// blocks of surface before anything comes round again — and every block
-    /// reads its own part of it, since each is textured from where it stands.
-    pub tiles: f32,
-}
-
-impl StoneTexture {
-    pub const ARCH: Self = Self {
-        pattern: &pattern::WEATHERED_STONE,
-        seed: 77,
-        tile_size: 256,
-        tiles: 2.0,
-    };
-
-    pub fn spread(&self) -> Spread {
-        Spread::covering(self.tiles)
-    }
-}
-
-/// How much surface one tile of texture covers on the default arch, in
-/// metres, and the thickness of that arch.
-///
-/// A bigger arch gets bigger tiles, but only as the square root of its size:
-/// cracks and pits are drawn larger on a bigger block, as a toy-scale world
-/// wants, but not so much larger that a five-metre block shows no more of
-/// them than a half-metre one — which is what gives the scale away.
-const REFERENCE_TILE: f32 = 0.8;
-const REFERENCE_THICKNESS: f32 = 0.5;
 
 #[derive(Deserialize)]
 pub struct VoussoirArchDef {
@@ -155,22 +114,10 @@ impl Spawnable for VoussoirArchDef {
     /// different, because each reads the texture at its own place in the
     /// world.
     fn create_materials(&self, ctx: &mut MaterialCtx) -> EngineResult<Vec<MaterialId>> {
-        let texture = StoneTexture::ARCH;
+        let texture = StoneTexture::WEATHERED;
         Ok(vec![
-            ctx.patterned_spread(
-                &self.voussoir_substance(),
-                texture.pattern,
-                texture.seed,
-                texture.tile_size,
-                texture.spread(),
-            )?,
-            ctx.patterned_spread(
-                &self.abutment_substance(),
-                texture.pattern,
-                texture.seed,
-                texture.tile_size,
-                texture.spread(),
-            )?,
+            texture.material(ctx, &self.voussoir_substance())?,
+            texture.material(ctx, &self.abutment_substance())?,
         ])
     }
 
@@ -190,6 +137,7 @@ impl Spawnable for VoussoirArchDef {
             entities.push(
                 StoneBlock {
                     centre: Point3::from(center + centroid),
+                    rotation: UnitQuaternion::identity(),
                     shape: StoneShape::Hull(Arc::new(hull)),
                     substance: self.voussoir_substance(),
                     material: materials[0],
@@ -212,6 +160,7 @@ impl Spawnable for VoussoirArchDef {
             entities.push(
                 StoneBlock {
                     centre,
+                    rotation: UnitQuaternion::identity(),
                     shape: StoneShape::Box(abutment_he),
                     substance: self.abutment_substance(),
                     material: materials[1],
@@ -244,11 +193,9 @@ impl VoussoirArchDef {
     }
 
     /// How the stone's texture is laid on every block: at one scale for the
-    /// whole arch, growing with its thickness (see [`REFERENCE_TILE`]).
+    /// whole arch, set by its thickness.
     pub fn surface_uvs(&self) -> SurfaceUvs {
-        let tile = REFERENCE_TILE * (self.thickness / REFERENCE_THICKNESS).sqrt();
-        let texture_metres = tile * StoneTexture::ARCH.tiles;
-        SurfaceUvs::PerMetre(1.0 / texture_metres)
+        StoneTexture::WEATHERED.uvs(self.thickness)
     }
 }
 
@@ -441,19 +388,6 @@ mod tests {
         );
     }
 
-    /// Triangles of a drawing that face the opposite way to the surface
-    /// they sit on: each one is a fold, and a fold shows as a hole.
-    fn inside_out(vertices: &[crate::rendering::vertex::Vertex], indices: &[u32]) -> usize {
-        indices
-            .chunks(3)
-            .filter(|t| {
-                let [a, b, c] = [0, 1, 2].map(|k| &vertices[t[k] as usize]);
-                let facet = (b.pos - a.pos).cross(&(c.pos - a.pos));
-                facet.magnitude() > 1e-9 && facet.dot(&(a.normal + b.normal + c.normal)) < 0.0
-            })
-            .count()
-    }
-
     /// Every stone of the arch, whole and cracked every way the game cracks
     /// it, is drawn right side out.
     ///
@@ -467,6 +401,7 @@ mod tests {
     #[test]
     fn every_stone_whole_or_cracked_is_drawn_right_side_out() {
         use crate::app::spawnables::shared::models::PieceHull;
+        use crate::app::spawnables::stone::inside_out;
         use crate::app::spawnables::{stone_cleaving, weathered_hull_mesh};
         use crate::physics::ColliderShape;
 

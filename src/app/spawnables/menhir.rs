@@ -1,7 +1,7 @@
 //! Menhir spawnable — terrain-anchored standing stone.
 //!
-//! An egg-shaped monolith pinned to the terrain via a Fixed constraint.
-//! The geometry is a UV sphere whose horizontal
+//! An egg-shaped monolith pinned to the terrain via a Fixed constraint,
+//! drawn as old weathered stone. The collider is a UV sphere whose horizontal
 //! radius blends linearly from `bottom_radius` (wide base) to `top_radius`
 //! (narrow tip) as a function of latitude, producing a natural egg profile.
 //!
@@ -11,28 +11,24 @@
 use std::f32::consts::{FRAC_PI_2, TAU};
 use std::sync::Arc;
 
-use nalgebra::{Point3, Vector2, Vector3};
+use nalgebra::{Point3, Vector3};
 use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
 use super::shared::models::{build_convex_hull, SolidFace};
 use super::shared::textures::seed_from_ground;
+use super::stone::{weathered_model, StoneTexture};
 use super::{MaterialCtx, Spawnable};
 use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, TerrainAnchored, Velocity,
 };
 use crate::core::error::EngineResult;
-use crate::model::{MeshPrimitive, Model, ModelPart};
 use crate::physics::{ColliderDesc, ConstraintKind, RigidBodyDesc};
-use crate::rendering::colour::Colour;
 use crate::rendering::material::MaterialId;
-use crate::rendering::pattern;
 use crate::rendering::substance::{self, ColliderSubstance, Substance};
-use crate::rendering::vertex::Vertex;
 use crate::systems::PhysicsResource;
 use crate::terrain::TerrainWorld;
 
-const TEXTURE_SIZE: u32 = 256;
 /// Longitude segments (around the equator).
 const SEGMENTS: usize = 8;
 /// Latitude rings between the poles (exclusive of poles themselves).
@@ -53,7 +49,7 @@ pub struct MenhirDef {
     /// Horizontal radius at the widest point of the top half.
     #[serde(default = "MenhirDef::default_top_radius")]
     pub top_radius: f32,
-    /// Stone density (kg/m^3). Default is granite.
+    /// Stone density (kg/m^3). Default is granite's.
     #[serde(default = "MenhirDef::default_density")]
     pub density: f32,
 }
@@ -77,9 +73,9 @@ impl MenhirDef {
     /// cannot drift apart.
     ///
     /// The density stays authored per instance — a level may want a heavier
-    /// stone — while everything about how granite looks comes from the library.
+    /// stone — while everything about how sarsen looks comes from the library.
     fn substance(&self) -> Substance {
-        substance::GRANITE.with_density(self.density)
+        substance::SARSEN.with_density(self.density)
     }
 }
 
@@ -91,13 +87,8 @@ impl Spawnable for MenhirDef {
     fn create_materials(&self, ctx: &mut MaterialCtx) -> EngineResult<Vec<MaterialId>> {
         // A seed per stone, so two menhirs in a level are not the same rock
         // twice — which is also what keeps them out of each other's cache entry.
-        let seed = seed_from_ground(self.pos, 0);
-        Ok(vec![ctx.patterned(
-            &self.substance(),
-            &pattern::STONE,
-            seed,
-            TEXTURE_SIZE,
-        )?])
+        let texture = StoneTexture::WEATHERED.with_seed(seed_from_ground(self.pos, 0));
+        Ok(vec![texture.material(ctx, &self.substance())?])
     }
 
     fn spawn(&self, world: &mut World, materials: &[MaterialId]) -> Vec<Entity> {
@@ -124,8 +115,14 @@ impl Spawnable for MenhirDef {
             top_radius: self.top_radius,
         };
 
-        let model = build_egg_mesh(&egg, material);
         let hull = Arc::new(build_egg_hull(&egg));
+        let thickness = 2.0 * self.bottom_radius.min(self.top_radius);
+        let model = weathered_model(
+            &hull,
+            initial_pos.coords,
+            StoneTexture::WEATHERED.uvs(thickness),
+            material,
+        );
 
         let exposed_half_height = (full_height - buried_depth) / 2.0;
         let collider_offset_y = self.half_height - exposed_half_height;
@@ -190,7 +187,7 @@ impl Spawnable for MenhirDef {
 }
 
 // ---------------------------------------------------------------------------
-// Geometry — UV sphere scaled into an ellipsoid
+// Geometry — UV sphere shaped into an egg
 // ---------------------------------------------------------------------------
 
 /// Parameters defining the egg profile.
@@ -221,100 +218,8 @@ impl EggParams {
     }
 }
 
-/// Build a visual mesh: UV sphere with `SEGMENTS` longitude and `RINGS`
-/// latitude divisions, shaped into an egg by `EggParams`. Cylindrical UV
-/// mapping with seam duplication.
-fn build_egg_mesh(egg: &EggParams, material: MaterialId) -> Arc<Model> {
-    let n = SEGMENTS;
-    let r = RINGS;
-    let colour_vec = Colour::WHITE.to_vec4();
-
-    let verts_per_ring = n + 1; // seam duplication
-    let mut vertices = Vec::with_capacity(r * verts_per_ring + 2);
-    let mut indices = Vec::new();
-
-    // South pole (bottom).
-    let south = 0u32;
-    vertices.push(Vertex {
-        pos: Vector3::new(0.0, -egg.half_height, 0.0),
-        color: colour_vec,
-        tex_coords: Vector2::new(0.5, 1.0),
-        normal: -Vector3::y(),
-        ao: 1.0,
-    });
-
-    // Latitude rings from south to north.
-    let ring_base = 1u32;
-    for ri in 0..r {
-        let phi = -FRAC_PI_2 + (ri as f32 + 1.0) / (r as f32 + 1.0) * std::f32::consts::PI;
-        let v_coord = 1.0 - (ri as f32 + 1.0) / (r as f32 + 1.0);
-
-        for si in 0..=n {
-            let theta = si as f32 * TAU / n as f32;
-            let pos = egg.point(phi, theta);
-
-            // Approximate normal via finite-difference on the egg surface.
-            let eps = 1e-3;
-            let dp_dphi = egg.point(phi + eps, theta) - egg.point(phi - eps, theta);
-            let dp_dtheta = egg.point(phi, theta + eps) - egg.point(phi, theta - eps);
-            let normal = dp_dphi.cross(&dp_dtheta).normalize();
-
-            let u_coord = si as f32 / n as f32;
-
-            vertices.push(Vertex {
-                pos: Vector3::new(pos.x, pos.y, pos.z),
-                color: colour_vec,
-                tex_coords: Vector2::new(u_coord, v_coord),
-                normal,
-                ao: 1.0,
-            });
-        }
-    }
-
-    // North pole (top).
-    let north = vertices.len() as u32;
-    vertices.push(Vertex {
-        pos: Vector3::new(0.0, egg.half_height, 0.0),
-        color: colour_vec,
-        tex_coords: Vector2::new(0.5, 0.0),
-        normal: Vector3::y(),
-        ao: 1.0,
-    });
-
-    let rv = |ri: usize, si: usize| -> u32 { ring_base + (ri * verts_per_ring + si) as u32 };
-
-    // South fan.
-    for si in 0..n {
-        indices.extend_from_slice(&[south, rv(0, si), rv(0, si + 1)]);
-    }
-
-    // Quads between adjacent rings.
-    for ri in 0..(r - 1) {
-        for si in 0..n {
-            let b0 = rv(ri, si);
-            let b1 = rv(ri, si + 1);
-            let t0 = rv(ri + 1, si);
-            let t1 = rv(ri + 1, si + 1);
-            indices.extend_from_slice(&[b0, t1, b1, b0, t0, t1]);
-        }
-    }
-
-    // North fan.
-    let last = r - 1;
-    for si in 0..n {
-        indices.extend_from_slice(&[rv(last, si), north, rv(last, si + 1)]);
-    }
-
-    let parts = vec![ModelPart::new(vec![MeshPrimitive {
-        vertices,
-        indices,
-        material,
-    }])];
-    Arc::new(Model::flat(parts))
-}
-
-/// Build a convex hull from the same egg vertices (no seam duplication
-/// needed for physics).
+/// Build the egg's convex hull: `SEGMENTS` longitude and `RINGS` latitude
+/// divisions.
 fn build_egg_hull(egg: &EggParams) -> crate::collision::ConvexHull {
     let n = SEGMENTS;
     let r = RINGS;
@@ -373,6 +278,48 @@ fn build_egg_hull(egg: &EggParams) -> crate::collision::ConvexHull {
     build_convex_hull(&vertices, &faces)
 }
 
-// ---------------------------------------------------------------------------
-// Texture generation
-// ---------------------------------------------------------------------------
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::spawnables::stone::inside_out;
+    use crate::rendering::vertex::Vertex;
+
+    fn drawing(egg: &EggParams) -> Vec<(Vec<Vertex>, Vec<u32>)> {
+        let hull = build_egg_hull(egg);
+        let thickness = 2.0 * egg.bottom_radius.min(egg.top_radius);
+        let model = weathered_model(
+            &hull,
+            Vector3::new(15.0, 1.2, 0.0),
+            StoneTexture::WEATHERED.uvs(thickness),
+            MaterialId(0),
+        );
+        model
+            .parts
+            .iter()
+            .flat_map(|part| part.primitives.iter())
+            .map(|p| (p.vertices.clone(), p.indices.clone()))
+            .collect()
+    }
+
+    /// The egg's facets meet at shallow angles, many to a vertex, unlike the
+    /// arch's blocks; its weathered drawing must still have no fold in it.
+    #[test]
+    fn a_menhir_is_drawn_right_side_out() {
+        for egg in [
+            EggParams {
+                half_height: MenhirDef::default_half_height(),
+                bottom_radius: MenhirDef::default_bottom_radius(),
+                top_radius: MenhirDef::default_top_radius(),
+            },
+            EggParams {
+                half_height: 2.0,
+                bottom_radius: 0.8,
+                top_radius: 0.5,
+            },
+        ] {
+            for (vertices, indices) in drawing(&egg) {
+                assert_eq!(inside_out(&vertices, &indices), 0);
+            }
+        }
+    }
+}

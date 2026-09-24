@@ -13,7 +13,7 @@
 
 use std::sync::Arc;
 
-use nalgebra::{Point3, Vector3};
+use nalgebra::{Point3, UnitQuaternion, Vector3};
 use specs::{Builder, Entity, World, WorldExt};
 
 use super::mesh::{weathered_box_mesh, weathered_hull_mesh};
@@ -26,6 +26,7 @@ use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
 };
 use crate::fracture::CompoundFracture;
+use crate::model::Model;
 use crate::physics::{ColliderDesc, RigidBodyDesc};
 use crate::rendering::material::MaterialId;
 use crate::rendering::substance::{ColliderSubstance, Substance};
@@ -88,6 +89,8 @@ impl StoneShape {
 pub struct StoneBlock {
     /// Centre of the block, in world space.
     pub centre: Point3<f32>,
+    /// How the block is turned in the world. Its shape is in its own frame.
+    pub rotation: UnitQuaternion<f32>,
     pub shape: StoneShape,
     /// What it is made of: the collider's coefficients and the look.
     pub substance: Substance,
@@ -110,19 +113,7 @@ impl StoneBlock {
         let anchor = self.centre.coords;
         let whole = Arc::new(hull.translated(anchor));
         let model = match &self.shape {
-            StoneShape::Hull(hull) => {
-                let (vertices, indices) = weathered_hull_mesh(
-                    &PieceHull::new(hull, anchor).within(Some(&whole)),
-                    self.uvs,
-                );
-                assemble_by_material(vec![PlacedMesh {
-                    vertices,
-                    indices,
-                    offset: Vector3::zeros(),
-                    rotation: nalgebra::UnitQuaternion::identity(),
-                    material: self.material,
-                }])
-            }
+            StoneShape::Hull(hull) => weathered_model(hull, anchor, self.uvs, self.material),
             StoneShape::Box(half_extents) => piece_model(
                 &PiecePlacement::new(*half_extents, anchor),
                 weathered_box_mesh,
@@ -136,6 +127,7 @@ impl StoneBlock {
             let body_handle = physics.world.create_body(
                 RigidBodyDesc::dynamic()
                     .position(self.centre)
+                    .rotation(self.rotation)
                     .gravity_scale(1.0)
                     .linear_damping(0.01)
                     .angular_damping(0.005),
@@ -154,7 +146,7 @@ impl StoneBlock {
             .create_entity()
             .with(Position(self.centre.coords))
             .with(Velocity(Vector3::zeros()))
-            .with(Orientation::default())
+            .with(Orientation(self.rotation))
             .with(RigidBodyComponent(body_handle))
             .with(ModelInstance::new(model))
             .with(Renderable)
@@ -172,6 +164,28 @@ impl StoneBlock {
             )
             .build()
     }
+}
+
+/// A whole stone of convex `hull`, in its own frame, drawn weathered.
+///
+/// `anchor` is where its markings are read from — where it stands in the world
+/// — so that no two stones wear the same ones.
+pub fn weathered_model(
+    hull: &ConvexHull,
+    anchor: Vector3<f32>,
+    uvs: SurfaceUvs,
+    material: MaterialId,
+) -> Arc<Model> {
+    let whole = hull.translated(anchor);
+    let (vertices, indices) =
+        weathered_hull_mesh(&PieceHull::new(hull, anchor).within(Some(&whole)), uvs);
+    assemble_by_material(vec![PlacedMesh {
+        vertices,
+        indices,
+        offset: Vector3::zeros(),
+        rotation: UnitQuaternion::identity(),
+        material,
+    }])
 }
 
 /// How a stone block of `mass` kilograms cracks: once, clean through, and
@@ -228,6 +242,7 @@ mod tests {
 
         StoneBlock {
             centre: Point3::new(0.0, VOUSSOIR.y + drop, 0.0),
+            rotation: UnitQuaternion::identity(),
             shape: StoneShape::Box(VOUSSOIR),
             substance: substance::LIMESTONE,
             material: MaterialId(0),

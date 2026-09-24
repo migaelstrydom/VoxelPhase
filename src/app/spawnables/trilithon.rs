@@ -2,31 +2,25 @@
 //!
 //! Two upright megaliths with a horizontal lintel resting across the top,
 //! in the style of Stonehenge. Each stone is an irregular convex polyhedron
-//! (distorted cuboid) for a rough-hewn look. All three pieces are independent
-//! rigid bodies so the structure can be toppled. A single cold grey stone
-//! material is shared across all pieces.
+//! (distorted cuboid), drawn as old weathered stone. All three pieces are
+//! independent rigid bodies so the structure can be toppled, and each cracks
+//! once if it lands hard enough. A single stone material is shared across all
+//! pieces.
 
 use std::sync::Arc;
 
 use nalgebra::{Point3, Vector3};
 use serde::Deserialize;
-use specs::{Builder, Entity, World, WorldExt};
+use specs::{Entity, World};
 
-use super::shared::models::{build_convex_hull, convex_solid_model, SolidFace};
+use super::shared::models::{build_convex_hull, SolidFace};
 use super::shared::orientation::Yaw;
 use super::shared::textures::seed_from_position;
+use super::stone::{StoneBlock, StoneShape, StoneTexture};
 use super::{MaterialCtx, Spawnable};
-use crate::components::{
-    ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
-};
 use crate::core::error::EngineResult;
-use crate::physics::{ColliderDesc, RigidBodyDesc};
 use crate::rendering::material::MaterialId;
-use crate::rendering::pattern;
-use crate::rendering::substance::{self, ColliderSubstance, Substance};
-use crate::systems::PhysicsResource;
-
-const TEXTURE_SIZE: u32 = 256;
+use crate::rendering::substance::{self, Substance};
 
 #[derive(Deserialize)]
 pub struct TrilithonDef {
@@ -52,7 +46,7 @@ pub struct TrilithonDef {
     /// How far the lintel overhangs past each upright (X direction).
     #[serde(default = "TrilithonDef::default_lintel_overhang")]
     pub lintel_overhang: f32,
-    /// Stone density (kg/m^3). Default is granite.
+    /// Stone density (kg/m^3). Default is granite's.
     #[serde(default = "TrilithonDef::default_density")]
     pub density: f32,
 }
@@ -84,9 +78,9 @@ impl TrilithonDef {
     /// the coefficients and the material takes the finish and grain, so the two
     /// cannot drift apart.
     ///
-    /// Granite, with the density left authored per instance.
+    /// Sarsen, with the density left authored per instance.
     fn substance(&self) -> Substance {
-        substance::GRANITE.with_density(self.density)
+        substance::SARSEN.with_density(self.density)
     }
 }
 
@@ -96,15 +90,9 @@ impl Spawnable for TrilithonDef {
     }
 
     fn create_materials(&self, ctx: &mut MaterialCtx) -> EngineResult<Vec<MaterialId>> {
-        // A seed per stone, so the three blocks of one trilithon are cut from
-        // visibly different rock.
-        let seed = seed_from_position(self.pos, 0);
-        Ok(vec![ctx.patterned(
-            &self.substance(),
-            &pattern::STONE,
-            seed,
-            TEXTURE_SIZE,
-        )?])
+        // A seed per trilithon, so two in a level are not the same rock twice.
+        let texture = StoneTexture::WEATHERED.with_seed(seed_from_position(self.pos, 0));
+        Ok(vec![texture.material(ctx, &self.substance())?])
     }
 
     fn spawn(&self, world: &mut World, materials: &[MaterialId]) -> Vec<Entity> {
@@ -138,80 +126,36 @@ impl Spawnable for TrilithonDef {
         let lintel_pos = yaw.place(origin, Vector3::new(0.0, lintel_y - base.y, 0.0));
 
         // Each stone gets a different seed for unique distortion.
+        let stones = [
+            (left_pos, distorted_cuboid(upright_he, seed), upright_he),
+            (
+                right_pos,
+                distorted_cuboid(upright_he, seed.wrapping_add(1)),
+                upright_he,
+            ),
+            (
+                lintel_pos,
+                distorted_cuboid(lintel_he, seed.wrapping_add(2)),
+                lintel_he,
+            ),
+        ];
         let faces = cuboid_faces();
 
-        let left_verts = distorted_cuboid(upright_he, seed, true, true);
-        let right_verts = distorted_cuboid(upright_he, seed.wrapping_add(1), true, true);
-        let lintel_verts = distorted_cuboid(lintel_he, seed.wrapping_add(2), false, true);
-
-        let left_hull = Arc::new(build_convex_hull(&left_verts, &faces));
-        let right_hull = Arc::new(build_convex_hull(&right_verts, &faces));
-        let lintel_hull = Arc::new(build_convex_hull(&lintel_verts, &faces));
-
-        let left_model = convex_solid_model(&left_verts, &faces, material);
-        let right_model = convex_solid_model(&right_verts, &faces, material);
-        let lintel_model = convex_solid_model(&lintel_verts, &faces, material);
-
-        let (left_body, right_body, lintel_body) = {
-            let mut physics = world.write_resource::<PhysicsResource>();
-
-            let left_body = physics.world.create_body(
-                RigidBodyDesc::dynamic()
-                    .position(left_pos)
-                    .rotation(yaw.rotation())
-                    .linear_damping(0.01)
-                    .angular_damping(0.005),
-            );
-            physics.world.attach_collider(
-                left_body,
-                ColliderDesc::convex_hull(left_hull).of(&self.substance()),
-            );
-
-            let right_body = physics.world.create_body(
-                RigidBodyDesc::dynamic()
-                    .position(right_pos)
-                    .rotation(yaw.rotation())
-                    .linear_damping(0.01)
-                    .angular_damping(0.005),
-            );
-            physics.world.attach_collider(
-                right_body,
-                ColliderDesc::convex_hull(right_hull).of(&self.substance()),
-            );
-
-            let lintel_body = physics.world.create_body(
-                RigidBodyDesc::dynamic()
-                    .position(lintel_pos)
-                    .rotation(yaw.rotation())
-                    .linear_damping(0.01)
-                    .angular_damping(0.005),
-            );
-            physics.world.attach_collider(
-                lintel_body,
-                ColliderDesc::convex_hull(lintel_hull).of(&self.substance()),
-            );
-
-            (left_body, right_body, lintel_body)
-        };
-
-        let rotation = yaw.rotation();
-        let spawn_entity = move |world: &mut World, pos: Point3<f32>, body, model| -> Entity {
-            world
-                .create_entity()
-                .with(Position(Vector3::new(pos.x, pos.y, pos.z)))
-                .with(Velocity(Vector3::zeros()))
-                .with(Orientation(rotation))
-                .with(RigidBodyComponent(body))
-                .with(ModelInstance::new(model))
-                .with(Renderable)
-                .build()
-        };
-
-        vec![
-            spawn_entity(world, left_pos, left_body, left_model),
-            spawn_entity(world, right_pos, right_body, right_model),
-            spawn_entity(world, lintel_pos, lintel_body, lintel_model),
-        ]
+        stones
+            .into_iter()
+            .map(|(centre, vertices, half_extents)| {
+                let thickness = 2.0 * half_extents.min();
+                StoneBlock {
+                    centre,
+                    rotation: yaw.rotation(),
+                    shape: StoneShape::Hull(Arc::new(build_convex_hull(&vertices, &faces))),
+                    substance: self.substance(),
+                    material,
+                    uvs: StoneTexture::WEATHERED.uvs(thickness),
+                }
+                .spawn(world)
+            })
+            .collect()
     }
 }
 
@@ -261,15 +205,13 @@ fn cuboid_faces() -> Vec<SolidFace> {
 /// rough-hewn stone look. The `distort` fraction is relative to the smallest
 /// half-extent so the shape stays convincingly solid.
 ///
-/// `flat_top` / `flat_bottom` suppress Y displacement on the +Y / -Y face
-/// vertices respectively, keeping those faces perfectly horizontal for stable
-/// stacking surfaces.
-fn distorted_cuboid(
-    half_extents: Vector3<f32>,
-    seed: u32,
-    flat_top: bool,
-    flat_bottom: bool,
-) -> Vec<Vector3<f32>> {
+/// Corners move only across the stone, never along Y, and the top and bottom
+/// corner of each vertical edge move together: every face then stays a true
+/// plane, which a hull built from its face list must have, and the top and
+/// bottom stay level for stacking. A face bent out of plane has a normal that
+/// its own corners stand proud of — a collider that disagrees with itself,
+/// and a drawing that folds where the weathering follows the wrong plane.
+fn distorted_cuboid(half_extents: Vector3<f32>, seed: u32) -> Vec<Vector3<f32>> {
     let he = half_extents;
     let distort = he.x.min(he.y).min(he.z) * 0.5;
 
@@ -285,12 +227,7 @@ fn distorted_cuboid(
     ];
 
     // Vertex pairs sharing the same column (bottom↔top at each corner).
-    // Each pair gets the same X/Z distortion so the stone is irregular in
-    // cross-section but vertically straight, keeping the center of mass
-    // above the support polygon.
     let column_peer: [usize; 8] = [3, 2, 1, 0, 7, 6, 5, 4];
-    let is_top = [false, false, true, true, false, false, true, true];
-    let is_bottom = [true, true, false, false, true, true, false, false];
 
     base_verts
         .iter()
@@ -299,14 +236,8 @@ fn distorted_cuboid(
             let canonical = i.min(column_peer[i]);
             let s = seed.wrapping_add(canonical as u32);
             let dx = hash_float(s, 0) * distort;
-            let suppress_y = (flat_top && is_top[i]) || (flat_bottom && is_bottom[i]);
-            let dy = if suppress_y {
-                0.0
-            } else {
-                hash_float(s, 1) * distort
-            };
             let dz = hash_float(s, 2) * distort;
-            Vector3::new(v.x + dx, v.y + dy, v.z + dz)
+            Vector3::new(v.x + dx, v.y, v.z + dz)
         })
         .collect()
 }
@@ -322,6 +253,46 @@ fn hash_float(seed: u32, channel: u32) -> f32 {
     (h as f32 / u32::MAX as f32) * 2.0 - 1.0
 }
 
-// ---------------------------------------------------------------------------
-// Texture generation
-// ---------------------------------------------------------------------------
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::spawnables::shared::models::PieceHull;
+    use crate::app::spawnables::stone::inside_out;
+    use crate::app::spawnables::weathered_hull_mesh;
+
+    /// Every stone of a trilithon, however it was distorted, is drawn with no
+    /// fold in it.
+    #[test]
+    fn every_stone_of_a_trilithon_is_drawn_right_side_out() {
+        let def = TrilithonDef {
+            pos: (15.0, 0.0, -5.0),
+            yaw: 0.0,
+            upright_half_height: TrilithonDef::default_upright_half_height(),
+            upright_half_width: TrilithonDef::default_upright_half_width(),
+            upright_half_depth: TrilithonDef::default_upright_half_depth(),
+            gap: TrilithonDef::default_gap(),
+            lintel_half_thickness: TrilithonDef::default_lintel_half_thickness(),
+            lintel_overhang: TrilithonDef::default_lintel_overhang(),
+            density: TrilithonDef::default_density(),
+        };
+        let upright = Vector3::new(
+            def.upright_half_width,
+            def.upright_half_height,
+            def.upright_half_depth,
+        );
+        let lintel = Vector3::new(2.1, def.lintel_half_thickness, def.upright_half_depth);
+        for seed in 0..8u32 {
+            for half_extents in [upright, lintel] {
+                let vertices = distorted_cuboid(half_extents, seed * 97);
+                let hull = build_convex_hull(&vertices, &cuboid_faces());
+                let anchor = Vector3::new(15.0, 1.2, -5.0);
+                let whole = hull.translated(anchor);
+                let (v, idx) = weathered_hull_mesh(
+                    &PieceHull::new(&hull, anchor).within(Some(&whole)),
+                    StoneTexture::WEATHERED.uvs(2.0 * half_extents.min()),
+                );
+                assert_eq!(inside_out(&v, &idx), 0, "seed {seed}");
+            }
+        }
+    }
+}

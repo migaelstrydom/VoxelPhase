@@ -86,6 +86,25 @@ pub const LIMESTONE: Substance = Substance {
     )
 };
 
+/// Hard silcrete, the stone of standing stones: as heavy and grippy as
+/// granite, but a warm grey-brown, weathered for millennia rather than
+/// dressed. Its darks are brown rather than blue-grey, which in a cool sky
+/// keeps a shaded face reading as stone and not as slate.
+pub const SARSEN: Substance = Substance {
+    palette: Palette::from_base_const(Colour::new(0.62, 0.60, 0.55, 1.0), 0.16)
+        .with_dark(Colour::new(0.43, 0.40, 0.35, 1.0))
+        .with_accent(Colour::new(0.33, 0.30, 0.25, 1.0)),
+    ..stone(
+        "sarsen",
+        2650.0,
+        0.8,
+        0.6,
+        GrainSpec::WEATHERED_STONE,
+        Colour::new(0.62, 0.60, 0.55, 1.0),
+        0.16,
+    )
+};
+
 /// Polished stone. The one material that proves the point of this library:
 /// marble and granite have near-identical friction and could never have been
 /// told apart by a derivation from it.
@@ -342,8 +361,8 @@ mod tests {
     /// Every substance in the library, for the invariants that must hold across
     /// all of them.
     const ALL: &[Substance] = &[
-        GRANITE, LIMESTONE, MARBLE, SANDSTONE, CONCRETE, BRICK, SLATE, OAK, PINE, STEEL, RUBBER,
-        PLASTIC, ICE, GLASS,
+        GRANITE, LIMESTONE, SARSEN, MARBLE, SANDSTONE, CONCRETE, BRICK, SLATE, OAK, PINE, STEEL,
+        RUBBER, PLASTIC, ICE, GLASS,
     ];
 
     #[test]

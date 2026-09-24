@@ -271,6 +271,20 @@ fn edge_point(from: Vector3<f32>, to: Vector3<f32>, step: usize, n: usize) -> Ve
     start + (end - start) * (step as f32 / n as f32)
 }
 
+/// Triangles of a drawing that face the opposite way to the surface they sit
+/// on: each one is a fold, and a fold shows as a hole.
+#[cfg(test)]
+pub fn inside_out(vertices: &[Vertex], indices: &[u32]) -> usize {
+    indices
+        .chunks(3)
+        .filter(|t| {
+            let [a, b, c] = [0, 1, 2].map(|k| &vertices[t[k] as usize]);
+            let facet = (b.pos - a.pos).cross(&(c.pos - a.pos));
+            facet.magnitude() > 1e-9 && facet.dot(&(a.normal + b.normal + c.normal)) < 0.0
+        })
+        .count()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

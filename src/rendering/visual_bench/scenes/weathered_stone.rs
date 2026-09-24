@@ -75,7 +75,7 @@ impl VisualScene for WeatheredStone {
 
     fn shots(&self, ctx: &SceneContext) -> EngineResult<Vec<SceneShot>> {
         let arch = VoussoirArchDef::default();
-        let recipe = StoneTexture::ARCH;
+        let recipe = StoneTexture::WEATHERED;
         let spread = recipe.spread();
         let size = spread.texture_size(recipe.tile_size);
         let substance = arch.voussoir_substance();
