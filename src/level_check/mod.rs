@@ -12,6 +12,7 @@ pub mod runner;
 pub mod segments;
 pub mod svg;
 pub mod water;
+pub mod water_plan;
 
 pub use baseline::{BaselineVerdict, Baselines};
 pub use reach::{JumpArc, JumpEnvelope, Stance};
@@ -21,3 +22,4 @@ pub use runner::{build_terrain, check_level};
 pub use segments::Crossing;
 pub use svg::write_schematic;
 pub use water::{check_water, BodyExtent};
+pub use water_plan::{PlanCell, WaterPlan};

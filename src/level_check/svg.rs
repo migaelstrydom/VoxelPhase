@@ -23,6 +23,9 @@ use nalgebra::Point3;
 
 use crate::level::{world_anchor, Level, ObjectPlacement, Placement, VolumeFeature};
 use crate::terrain::{outward, SegmentFrame, TerrainWorld};
+use crate::water::geometry::Column;
+
+use super::water_plan::WaterPlan;
 
 /// Target number of heightmap samples along the longest horizontal axis.
 ///
@@ -215,7 +218,8 @@ fn shade_colour(step: usize) -> String {
 
 /// Write a two-panel schematic of `level` to `path`.
 pub fn write_schematic(level: &Level, terrain: &TerrainWorld, path: &Path) -> std::io::Result<()> {
-    let svg = render(level, terrain);
+    let water = WaterPlan::from_terrain(terrain);
+    let svg = render(level, terrain, &water);
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
             std::fs::create_dir_all(parent)?;
@@ -224,7 +228,7 @@ pub fn write_schematic(level: &Level, terrain: &TerrainWorld, path: &Path) -> st
     std::fs::write(path, svg)
 }
 
-fn render(level: &Level, terrain: &TerrainWorld) -> String {
+fn render(level: &Level, terrain: &TerrainWorld, water: &WaterPlan) -> String {
     let field = HeightField::sample(terrain);
     let bounds = terrain.bounds();
     let size = bounds.size();
@@ -279,7 +283,7 @@ fn render(level: &Level, terrain: &TerrainWorld) -> String {
         field.cell,
     );
 
-    plan_view(&mut s, level, terrain, &field, plan_top, scale);
+    plan_view(&mut s, level, terrain, &field, water, plan_top, scale);
     elevation_view(&mut s, level, terrain, &field, &vertical, elev_top, scale);
     object_key(&mut s, level, key_top);
 
@@ -414,6 +418,7 @@ fn plan_view(
     level: &Level,
     terrain: &TerrainWorld,
     field: &HeightField,
+    water: &WaterPlan,
     top: f32,
     scale: f32,
 ) {
@@ -468,6 +473,8 @@ fn plan_view(
             ix += run;
         }
     }
+
+    water_overlay(s, water, &px, &pz, scale);
 
     // Segment outlines over their solid extent, so the picture shows the areas
     // a level is built from rather than one undifferentiated heightmap.
@@ -551,6 +558,59 @@ fn plan_view(
 
     scale_bar(s, MARGIN, top + height + 34.0, scale);
     legend(s, MARGIN + 190.0, top + height + 34.0, field);
+}
+
+/// Where water would collect, over the heightmap: blue as deep as a
+/// depression is, violet where a column holds more than one layer of air,
+/// red where a pocket is sealed or its spans needed a parity repair.
+fn water_overlay(
+    s: &mut String,
+    water: &WaterPlan,
+    px: &impl Fn(f32) -> f32,
+    pz: &impl Fn(f32) -> f32,
+    scale: f32,
+) {
+    let size = water.cell * scale + 0.4;
+    let mut runs: Vec<(Column, usize, String)> = Vec::new();
+    for cell in &water.cells {
+        let colour = if cell.sealed {
+            "rgba(200,40,40,0.8)".to_string()
+        } else if cell.pooled > 0.0 {
+            let alpha = 0.25 + 0.55 * (cell.pooled / 2.0).min(1.0);
+            format!("rgba(40,110,220,{alpha:.2})")
+        } else {
+            "rgba(130,70,190,0.35)".to_string()
+        };
+        match runs.last_mut() {
+            Some((start, len, c))
+                if *c == colour
+                    && start.k == cell.column.k
+                    && start.i + *len as i32 == cell.column.i =>
+            {
+                *len += 1;
+            }
+            _ => runs.push((cell.column, 1, colour)),
+        }
+    }
+    for (start, len, colour) in runs {
+        let (x, z) = start.min_corner();
+        let _ = writeln!(
+            s,
+            "<rect x=\"{:.1}\" y=\"{:.1}\" width=\"{:.1}\" height=\"{size:.1}\" fill=\"{colour}\"/>",
+            px(x),
+            pz(z),
+            water.cell * scale * len as f32 + 0.4,
+        );
+    }
+    for column in &water.parity_repairs {
+        let (x, z) = column.centre();
+        let _ = writeln!(
+            s,
+            "<circle cx=\"{:.1}\" cy=\"{:.1}\" r=\"4\" fill=\"none\" stroke=\"#c00\" stroke-width=\"1.5\"/>",
+            px(x),
+            pz(z)
+        );
+    }
 }
 
 /// The traversal primitives, drawn as the route they are.

@@ -21,6 +21,7 @@
 
 use nalgebra::{Point3, Vector3};
 use rayon::prelude::*;
+use std::borrow::Cow;
 use std::time::{Duration, Instant};
 
 use super::adjacency::{AdjacencyTimings, DefectiveEdge};
@@ -30,7 +31,7 @@ use super::chunk::{ChunkCoord, ChunkTriangleRef};
 use super::chunk_grid::ChunkGrid;
 use super::chunk_rebuild::{ChunkBuildTimings, ChunkRebuild};
 use super::frame::SegmentFrame;
-use super::render_cache::{build_chunk_render_data, ChunkRenderCache};
+use super::render_cache::{build_chunk_render_data, ChunkRenderCache, ChunkRenderData};
 use super::segment_adjacency::{adjacency_tolerance, SegmentAdjacency};
 use super::voxel::Voxel;
 use crate::collision::ray_triangle::RayHit;
@@ -114,6 +115,10 @@ pub struct Segment {
     /// Named local frames within this segment.
     anchors: Vec<Anchor>,
 
+    /// Chunks remeshed by the most recent [`Self::update`]; empty after one
+    /// with nothing to do.
+    last_rebuilt: Vec<ChunkCoord>,
+
     /// Lifecycle state. Always `Active` today.
     state: SegmentState,
 
@@ -152,6 +157,7 @@ impl Segment {
             adjacency,
             render_cache: ChunkRenderCache::new(),
             anchors,
+            last_rebuilt: Vec::new(),
             state: SegmentState::Active,
             bounds,
             triangle_count: 0,
@@ -267,6 +273,7 @@ impl Segment {
     /// Remesh the chunks marked dirty, appending their world bounds to
     /// `rebuilt`. Returns `None` if there was nothing to do.
     pub fn update(&mut self, rebuilt: &mut Vec<AABB>) -> Option<SegmentTimings> {
+        self.last_rebuilt.clear();
         let dirty: Vec<ChunkCoord> = self
             .grid
             .coords()
@@ -296,6 +303,7 @@ impl Segment {
                 self.frame
                     .aabb_to_world(&self.grid.chunk_bounds(rebuild.coord)),
             );
+            self.last_rebuilt.push(rebuild.coord);
             adjacency.add(&self.commit_chunk(rebuild));
         }
 
@@ -343,6 +351,55 @@ impl Segment {
         if let Some(bounds) = self.grid.allocated_bounds() {
             self.bounds = self.frame.aabb_to_world(&bounds);
         }
+    }
+
+    // === Per-chunk geometry ===
+
+    /// Every allocated chunk, in lattice order.
+    pub fn chunk_coords(&self) -> Vec<ChunkCoord> {
+        self.grid.coords()
+    }
+
+    /// Chunks remeshed by the most recent [`Self::update`].
+    pub fn last_rebuilt(&self) -> &[ChunkCoord] {
+        &self.last_rebuilt
+    }
+
+    /// A chunk's world-space bounds.
+    pub fn chunk_world_bounds(&self, coord: ChunkCoord) -> AABB {
+        self.frame.aabb_to_world(&self.grid.chunk_bounds(coord))
+    }
+
+    /// A chunk's triangles in world space, or `None` if it is not allocated.
+    ///
+    /// Borrowed from the render cache when the chunk has been meshed, which is
+    /// every chunk after the first update.
+    pub fn chunk_geometry(&self, coord: ChunkCoord) -> Option<Cow<'_, ChunkRenderData>> {
+        let chunk = self.grid.chunk(coord)?;
+        Some(match self.render_cache.get(coord) {
+            Some(cached) => Cow::Borrowed(cached),
+            None => Cow::Owned(build_chunk_render_data(chunk.mesh(), &self.frame)),
+        })
+    }
+
+    /// A chunk's triangles overlapping a world-space box, in world space.
+    pub fn chunk_triangles_in(&self, coord: ChunkCoord, world: &AABB) -> Vec<Triangle> {
+        let Some(chunk) = self.grid.chunk(coord) else {
+            return Vec::new();
+        };
+        let local = self.frame.aabb_to_local(world);
+        chunk
+            .mesh()
+            .query_aabb(&local)
+            .into_iter()
+            .map(|(_, t)| {
+                Triangle::new(
+                    self.frame.to_world(t.v0),
+                    self.frame.to_world(t.v1),
+                    self.frame.to_world(t.v2),
+                )
+            })
+            .collect()
     }
 
     // === Queries, all in world space ===

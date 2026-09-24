@@ -44,5 +44,6 @@ pub mod time;
 pub mod utils;
 pub mod water;
 pub mod water_perf;
+pub mod water_spike;
 pub mod water_viewer;
 pub mod world;

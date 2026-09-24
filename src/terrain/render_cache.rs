@@ -21,6 +21,7 @@ use super::mesh_octree::MeshOctree;
 use crate::rendering::vertex::Vertex;
 
 /// One chunk's render geometry, already lifted into world space.
+#[derive(Clone)]
 pub struct ChunkRenderData {
     /// World-space vertices.
     pub vertices: Vec<Vertex>,

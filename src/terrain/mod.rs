@@ -38,9 +38,10 @@ pub use chunk::{ChunkCoord, CHUNK_VOXELS};
 pub use chunk_grid::ChunkGrid;
 pub use chunk_rebuild::ChunkBuildTimings;
 pub use frame::{SegmentFrame, YAW_STEP_DEGREES};
+pub use render_cache::ChunkRenderData;
 pub use segment::{Segment, SegmentState};
 pub use segment_adjacency::SegmentAdjacency;
-pub use world::{TerrainWorld, UpdateTimings};
+pub use world::{TerrainChunkId, TerrainWorld, UpdateTimings};
 
 // Voxel types for terrain modification
 pub use blast::BlastConfig;

@@ -10,7 +10,7 @@ use super::scenario::{Action, Beat, Probe, Scenario};
 
 /// Every scenario, in the order they are worth reading.
 pub fn catalogue() -> Vec<Scenario> {
-    vec![breach(), island_pool()]
+    vec![breach(), island_pool(), staircase()]
 }
 
 pub fn find(name: &str) -> Option<Scenario> {
@@ -146,6 +146,65 @@ Level(
             Pool(seed: (12.0, 0.0), surface_level: -1.5),
             Pool(seed: (0.0, 0.0), surface_level: 7.5),
         ],
+    )),
+)
+"#;
+
+/// A stepped channel: eight 7 m treads, each 1.25 m below the last, cut 4 m
+/// wide into banks at 12 m. Water run down it falls from tread to tread and
+/// leaves the map at its low end.
+fn staircase() -> Scenario {
+    Scenario {
+        name: "staircase",
+        description: "a stepped channel of eight treads, open at its low end",
+        level: STAIRCASE_LEVEL,
+        duration: 30.0,
+        beats: Vec::new(),
+        probes: vec![
+            Probe {
+                name: "top",
+                at: Point3::new(-24.0, 10.5, 0.0),
+            },
+            Probe {
+                name: "middle",
+                at: Point3::new(3.0, 5.5, 0.0),
+            },
+            Probe {
+                name: "bottom",
+                at: Point3::new(24.0, 1.8, 0.0),
+            },
+        ],
+    }
+}
+
+const STAIRCASE_LEVEL: &str = r#"
+Level(
+    name: "water_viewer: staircase",
+    segments: [(
+        name: "main",
+        terrain: Terrain(
+            voxel_size: 0.5,
+            bounds: (min: (-32.0, -16.0, -32.0), max: (32.0, 16.0, 32.0)),
+            base_height: 0.0,
+            material_layers: [(depth: 999.0, material: Rock)],
+            features: [
+                Plateau(min: (-40.0, -40.0), max: (40.0, 40.0), height: 12.0),
+                Plateau(min: (-28.0, -2.0), max: (-21.0, 2.0), height: 10.0),
+                Plateau(min: (-21.0, -2.0), max: (-14.0, 2.0), height: 8.75),
+                Plateau(min: (-14.0, -2.0), max: (-7.0, 2.0), height: 7.5),
+                Plateau(min: (-7.0, -2.0), max: (0.0, 2.0), height: 6.25),
+                Plateau(min: (0.0, -2.0), max: (7.0, 2.0), height: 5.0),
+                Plateau(min: (7.0, -2.0), max: (14.0, 2.0), height: 3.75),
+                Plateau(min: (14.0, -2.0), max: (21.0, 2.0), height: 2.5),
+                Plateau(min: (21.0, -2.0), max: (40.0, 2.0), height: 1.25),
+            ],
+        ),
+    )],
+    placements: [Root(segment: "main")],
+    player_spawn: (0.0, 13.0, 10.0),
+    water: Some((
+        ocean_level: None,
+        bodies: [],
     )),
 )
 "#;

@@ -10,7 +10,11 @@
 
 pub mod buoyancy;
 pub mod coupling;
+pub mod debug;
+pub mod geometry;
 mod grid;
+pub mod ids;
+pub mod network;
 pub mod placer;
 mod properties;
 pub mod sleep_tracker;

@@ -142,6 +142,16 @@ At runtime the terrain changes only through `TerrainWorld::detonate`, which carv
 `TerrainChangeHandler` asserts the invariant at column centres. A future "place terrain"
 feature will fail loudly there instead of quietly corrupting water.
 
+**Measured (spike 0.5a): marching cubes does not keep it exactly.** Carving only lowers
+densities, but when a cell near a crater's rim changes case its triangles connect different
+edge vertices, and the surface over a fixed point can rise. Over 240 grenades on the five
+water levels, `floor_c` rose by up to 0.3 of a voxel. Separately, a pocket blown under a
+ledge takes the floor pieces under its ceiling into its own band, which lifts the upper
+span's `floor_min`. The rasteriser therefore *holds* the invariant on the data: a re-paired
+span's `floor_c` and `floor_min` never rise above those of the old span it rests on. A
+`floor_c` rise beyond half a voxel is still a violation, logged and debug-asserted. None
+occurred.
+
 ### 3.3 Non-goals
 
 - Pressurised flow and trapped air. Water fills a cave to its ceiling and no further.
@@ -1281,6 +1291,34 @@ synthetic staircase, plus a full drain of each current level's pool. To pass:
 
 If the routing criteria fail, the fallback is an optional authored centreline hint,
 decided before stage 2.
+
+**Results** (`water_spike spans` and `water_spike routing`):
+
+- **(a) Spans.**
+  - Zero parity repairs on all five levels. Zero spans with `floor_min` above the sampled
+    minimum.
+  - `floor_min` within 0.1 m of the 8 × 8 interior samples in only 97.5–99.5% of spans.
+    With the square's rim sampled too, 99.86–100%: the misses are cliffs, where the lowest
+    floor lies on the rim that interior samples never reach. The rasteriser's `floor_min` is
+    the exact minimum of the clipped triangles; the interior grid is the less accurate side.
+  - Re-pairing after a grenade: mean 0.46–0.64 ms, max 0.95 ms over 48 grenades per level,
+    once each blast re-rasterises only the 8 m tiles its changed region touches. Rasterising
+    whole terrain chunks took 3.5 ms.
+  - The incremental rebuild matches a full rebuild of the blasted terrain in every column.
+  - The centre ray disagrees with the spans in 2–34 columns per level, all at silhouette
+    edges, where the ray reports a zero-height pair the fill rule drops.
+- **Drainage field.** Load 19–83 ms (test_arena's 135k spans are the slow case). Repair after
+  a grenade: mean 0.08–0.65 ms. The worst was 13 ms: one breach on wrecking_yard lowered
+  the fill of 30k spans, the whole-lowland case of §9.2. Flats are not resolved on the blast
+  frame; the router resolves one when it first follows a drain on it.
+- **(b) Routing.** The staircase passes all three criteria: worst lateral deviation 0.38 m,
+  worst width step 3%, no real depressions. Skyway's bed fails: p95 deviation 3.4 m, worst
+  width step 153%. Its bed is level along its length, with 0.8 m of roughness, so neither
+  the drains nor a "lowest line" have a direction to follow.
+- **(b) Hierarchy.** Each current pool has at most two children and one split per full drain.
+  The dissolve rule is not needed.
+- **Skyway's pool stands above its outlet.** Its bed runs out of both ends of the level, so the
+  fill level at the seed is 1.01 against an authored surface of 3.0.
 
 ### Stage 1: span graph
 

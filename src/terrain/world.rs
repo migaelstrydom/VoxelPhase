@@ -28,16 +28,18 @@
 
 use nalgebra::{Point3, Vector3};
 use rustc_hash::FxHashMap;
+use std::borrow::Cow;
 use std::time::{Duration, Instant};
 
 use super::adjacency::{AdjacencyTimings, DefectiveEdge};
 use super::blast::BlastConfig;
-use super::chunk::ChunkTriangleRef;
+use super::chunk::{ChunkCoord, ChunkTriangleRef};
 use super::chunk_rebuild::ChunkBuildTimings;
+use super::render_cache::ChunkRenderData;
 use super::segment::{ConcatTimings, Segment};
 use super::surface;
 use crate::collision::ray_triangle::{ray_triangle, RayHit};
-use crate::collision::{MeshPatch, PatchTriangle, AABB};
+use crate::collision::{MeshPatch, PatchTriangle, Triangle, AABB};
 use crate::core::error::EngineResult;
 use crate::physics::StaticGeometry;
 use crate::rendering::vertex::Vertex;
@@ -118,6 +120,15 @@ impl UpdateTimings {
     }
 }
 
+/// One terrain chunk, named across the whole level: which segment, and which
+/// chunk of that segment's grid.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct TerrainChunkId {
+    /// Index into [`TerrainWorld::segments`].
+    pub segment: u16,
+    pub coord: ChunkCoord,
+}
+
 /// A level's terrain: every placed segment, and the queries that span them.
 pub struct TerrainWorld {
     /// Placed segments, in declaration order. The first is the placement root.
@@ -125,6 +136,9 @@ pub struct TerrainWorld {
 
     /// World AABBs of the chunks rebuilt in the most recent `update()` call.
     rebuilt_regions: Vec<AABB>,
+
+    /// The chunks rebuilt in the most recent `update()` call.
+    rebuilt_chunks: Vec<TerrainChunkId>,
 
     /// World boxes the surface can have moved within, from the edits the most
     /// recent `update()` meshed. Far tighter than `rebuilt_regions`: a blast
@@ -195,6 +209,7 @@ impl TerrainWorld {
         Self {
             segments,
             rebuilt_regions: Vec::new(),
+            rebuilt_chunks: Vec::new(),
             changed_regions: Vec::new(),
             pending_changes: Vec::new(),
             render_vertices: Vec::new(),
@@ -274,6 +289,20 @@ impl TerrainWorld {
             }
         }
         self.rebuilt_regions = rebuilt;
+        self.rebuilt_chunks = self
+            .segments
+            .iter()
+            .enumerate()
+            .flat_map(|(index, segment)| {
+                segment
+                    .last_rebuilt()
+                    .iter()
+                    .map(move |&coord| TerrainChunkId {
+                        segment: index as u16,
+                        coord,
+                    })
+            })
+            .collect();
 
         if chunks_dirtied == 0 {
             return;
@@ -437,6 +466,50 @@ impl TerrainWorld {
         &self.rebuilt_regions
     }
 
+    /// The chunks rebuilt in the most recent `update()`: whose geometry, as
+    /// returned by [`Self::chunk_geometry`], may differ from before it.
+    pub fn rebuilt_chunks(&self) -> &[TerrainChunkId] {
+        &self.rebuilt_chunks
+    }
+
+    /// Every allocated chunk of every segment.
+    pub fn chunk_ids(&self) -> Vec<TerrainChunkId> {
+        self.segments
+            .iter()
+            .enumerate()
+            .flat_map(|(index, segment)| {
+                segment
+                    .chunk_coords()
+                    .into_iter()
+                    .map(move |coord| TerrainChunkId {
+                        segment: index as u16,
+                        coord,
+                    })
+            })
+            .collect()
+    }
+
+    /// A chunk's world-space bounds.
+    pub fn chunk_world_bounds(&self, id: TerrainChunkId) -> Option<AABB> {
+        let segment = self.segments.get(id.segment as usize)?;
+        Some(segment.chunk_world_bounds(id.coord))
+    }
+
+    /// A chunk's triangles in world space, or `None` if it no longer exists.
+    pub fn chunk_geometry(&self, id: TerrainChunkId) -> Option<Cow<'_, ChunkRenderData>> {
+        self.segments
+            .get(id.segment as usize)?
+            .chunk_geometry(id.coord)
+    }
+
+    /// A chunk's triangles overlapping a world-space box, in world space.
+    pub fn chunk_triangles_in(&self, id: TerrainChunkId, world: &AABB) -> Vec<Triangle> {
+        self.segments
+            .get(id.segment as usize)
+            .map(|s| s.chunk_triangles_in(id.coord, world))
+            .unwrap_or_default()
+    }
+
     /// World boxes the terrain surface can have moved within in the most
     /// recent `update()`. Empty on a frame with no edits.
     ///
@@ -515,6 +588,13 @@ impl TerrainWorld {
             .collect();
         heights.sort_by(|a, b| b.total_cmp(a));
         heights
+    }
+
+    /// Every mesh surface a vertical line at (x, z) passes through, facing up
+    /// or down, in no particular order.
+    pub fn mesh_hits_at(&self, x: f32, z: f32) -> Vec<RayHit> {
+        let (origin, length) = self.downward_ray(x, z);
+        self.ray_cast_all(origin, Vector3::new(0.0, -1.0, 0.0), length)
     }
 
     /// Origin and length of a downward ray spanning the terrain at (x, z).
