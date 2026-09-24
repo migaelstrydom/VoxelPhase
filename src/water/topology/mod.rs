@@ -5,7 +5,7 @@ mod steady;
 
 pub use builder::{
     stands_above_outlet, PoolError, Source, Topology, TopologyBuilder, DRIED_VOLUME, MERGE_LEVELS,
-    SPLIT_BELOW,
+    SPLIT_BELOW, VALVE_SPANS,
 };
 pub use edit::TopologyEdit;
 pub use router::{

@@ -20,6 +20,9 @@ pub fn catalogue() -> Vec<Scenario> {
         crater_lake(),
         staircase(),
         spring_pools(),
+        crater_drain(),
+        river_diversion(),
+        spring_rock(),
     ]
 }
 
@@ -224,6 +227,41 @@ Level(
             Spring(position: (-28.3, 10.9, 0.0), direction: (1.5, 0.0, 0.0), discharge: 1.0),
         ],
         settle: AsAuthored,
+    )),
+)
+"#;
+
+/// The staircase, opened running.
+const STAIRCASE_STEADY_LEVEL: &str = r#"
+Level(
+    name: "water_viewer: staircase",
+    segments: [(
+        name: "main",
+        terrain: Terrain(
+            voxel_size: 0.5,
+            bounds: (min: (-32.0, -16.0, -32.0), max: (32.0, 16.0, 32.0)),
+            base_height: 0.0,
+            material_layers: [(depth: 999.0, material: Rock)],
+            features: [
+                Plateau(min: (-40.0, -40.0), max: (40.0, 40.0), height: 12.0),
+                Plateau(min: (-28.0, -2.0), max: (-21.0, 2.0), height: 10.0),
+                Plateau(min: (-21.0, -2.0), max: (-14.0, 2.0), height: 8.75),
+                Plateau(min: (-14.0, -2.0), max: (-7.0, 2.0), height: 7.5),
+                Plateau(min: (-7.0, -2.0), max: (0.0, 2.0), height: 6.25),
+                Plateau(min: (0.0, -2.0), max: (7.0, 2.0), height: 5.0),
+                Plateau(min: (7.0, -2.0), max: (14.0, 2.0), height: 3.75),
+                Plateau(min: (14.0, -2.0), max: (21.0, 2.0), height: 2.5),
+                Plateau(min: (21.0, -2.0), max: (40.0, 2.0), height: 1.25),
+            ],
+        ),
+    )],
+    placements: [Root(segment: "main")],
+    player_spawn: (0.0, 13.0, 10.0),
+    water: Some((
+        bodies: [
+            Spring(position: (-28.3, 10.9, 0.0), direction: (1.5, 0.0, 0.0), discharge: 1.0),
+        ],
+        settle: Steady,
     )),
 )
 "#;
@@ -521,3 +559,115 @@ Level(
     )),
 )
 "#;
+
+/// A lake in a bowl, held by a dam across a channel cut down to the bowl's
+/// floor. A crater is blown in the lake floor at 2 s and merges into the
+/// lake. The dam is blown at 6 s: the lake drains below the crater's rim,
+/// and the crater splits off and keeps its water (§9.3, scenario 6).
+fn crater_drain() -> Scenario {
+    Scenario {
+        name: "crater_drain",
+        description: "a crater merges into a lake; the lake drains and the crater keeps its water",
+        level: CRATER_DRAIN_LEVEL,
+        duration: 120.0,
+        beats: vec![
+            Beat {
+                at: 2.0,
+                action: Action::Blast {
+                    centre: Point3::new(-6.0, -3.2, 0.0),
+                    radius: 2.0,
+                },
+            },
+            Beat {
+                at: 6.0,
+                action: Action::Blast {
+                    centre: Point3::new(10.0, -3.0, 0.0),
+                    radius: 3.0,
+                },
+            },
+        ],
+        probes: vec![
+            Probe {
+                name: "lake",
+                at: Point3::new(-2.0, -4.5, 5.0),
+            },
+            Probe {
+                name: "crater",
+                at: Point3::new(-6.0, -4.5, 0.0),
+            },
+        ],
+        camera: (Point3::new(14.0, 12.0, 20.0), Point3::new(0.0, -4.0, 0.0)),
+    }
+}
+
+const CRATER_DRAIN_LEVEL: &str = r#"
+Level(
+    name: "water_viewer: crater_drain",
+    segments: [(
+        name: "main",
+        terrain: Terrain(
+            voxel_size: 0.5,
+            bounds: (min: (-32.0, -16.0, -32.0), max: (32.0, 16.0, 32.0)),
+            base_height: 0.0,
+            material_layers: [(depth: 999.0, material: Dirt)],
+            features: [
+                Crater(center: (0.0, 0.0), radius: 14.0, depth: 5.0),
+                Ramp(from: (0.0, 0.0), to: (32.0, 0.0), start_height: -5.2, end_height: -12.0, width: 4.0),
+                Wall(from: (10.0, -4.0), to: (10.0, 4.0), height: 8.0, thickness: 2.0),
+            ],
+        ),
+    )],
+    placements: [Root(segment: "main")],
+    player_spawn: (20.0, 1.0, 20.0),
+    water: Some((
+        bodies: [Pool(seed: (0.0, 0.0), surface_level: -2.5)],
+    )),
+)
+"#;
+
+/// The river scenario with a crater blown into its bed at 12 s, while it
+/// runs. The channel is laid again: it now ends in the crater, which fills
+/// as a new basin and spills, and the river runs on below it (§9.3,
+/// scenario 3).
+fn river_diversion() -> Scenario {
+    let mut probes = river().probes;
+    probes.push(Probe {
+        name: "crater",
+        at: Point3::new(-7.0, -0.5, 1.0),
+    });
+    Scenario {
+        name: "river_diversion",
+        description:
+            "a crater is blown in a running river's bed; it fills, spills, and the river runs on",
+        beats: vec![Beat {
+            at: 12.0,
+            action: Action::Blast {
+                centre: Point3::new(-7.0, 0.6, 1.0),
+                radius: 2.0,
+            },
+        }],
+        probes,
+        ..river()
+    }
+}
+
+/// The staircase, opened running, with the rock around its spring blown
+/// away at 5 s. The spring is anchored in space: it keeps flowing from the
+/// same point, and its fall is traced again over the new ground (§9.3,
+/// scenario 5).
+fn spring_rock() -> Scenario {
+    Scenario {
+        name: "spring_rock",
+        description: "the rock around a spring is blown away; it keeps flowing, its fall re-traced",
+        level: STAIRCASE_STEADY_LEVEL,
+        duration: 200.0,
+        beats: vec![Beat {
+            at: 5.0,
+            action: Action::Blast {
+                centre: Point3::new(-28.5, 10.5, 0.0),
+                radius: 2.5,
+            },
+        }],
+        ..staircase()
+    }
+}

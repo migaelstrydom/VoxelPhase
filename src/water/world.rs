@@ -215,6 +215,13 @@ impl WaterWorld {
 
     /// Catch up with the terrain's most recent update.
     pub fn on_terrain_update(&mut self, terrain: &TerrainWorld) -> Option<GeometryUpdate> {
+        if self.topology.has_deferred() && !terrain.rebuilt_chunks().is_empty() {
+            // The valve's re-floods follow the last edit; run them before
+            // the geometry takes this one.
+            let started = Instant::now();
+            self.run_deferred();
+            self.last_timings.reregion += started.elapsed();
+        }
         let started = Instant::now();
         let update = self.geometry.update(terrain)?;
         let geometry = started.elapsed();
@@ -227,13 +234,18 @@ impl WaterWorld {
         self.topology.after_terrain_update(&mut t, &update);
         self.refresh_levels();
         self.last_timings.geometry = geometry;
-        self.last_timings.reregion = started.elapsed();
+        self.last_timings.reregion += started.elapsed();
         Some(update)
     }
 
     /// Advance by one frame: settle topology, then run the ticks due.
     pub fn step(&mut self, frame_dt: f32) {
         let edited = self.last_timings.geometry > Duration::ZERO;
+        if self.topology.has_deferred() && !edited {
+            let started = Instant::now();
+            self.run_deferred();
+            self.last_timings.reregion += started.elapsed();
+        }
         let started = Instant::now();
         let loss = self.config.loss;
         let mut t = Topology {
@@ -270,6 +282,17 @@ impl WaterWorld {
         self.last_timings = WaterTimings::default();
     }
 
+    /// Run the re-floods the valve deferred (§9.2).
+    fn run_deferred(&mut self) {
+        let mut t = Topology {
+            network: &mut self.network,
+            ledger: &mut self.ledger,
+            geometry: &mut self.geometry,
+        };
+        self.topology.run_deferred(&mut t);
+        self.refresh_levels();
+    }
+
     fn refresh_levels(&mut self) {
         self.levels = (0..self.network.store_slots())
             .map(|i| match self.network.store(StoreId(i as u32)) {
@@ -294,7 +317,7 @@ impl WaterWorld {
     /// crests: towards an outflow carrying water, away from an inlet.
     fn refresh_currents(&mut self) {
         let mut currents: Vec<Vec<CurrentTerm>> = vec![Vec::new(); self.network.store_slots()];
-        for (link_id, link) in self.network.links().filter(|(_, l)| l.open) {
+        for (link_id, link) in self.network.flowing_links() {
             let (Some(up), Some(down)) =
                 (self.network.store(link.up), self.network.store(link.down))
             else {

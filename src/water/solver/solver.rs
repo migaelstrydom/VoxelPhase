@@ -96,7 +96,7 @@ fn commit(
 ) -> Flows {
     // (source, destination, amount) with every amount positive.
     let mut moves: Vec<(StoreId, StoreId, f64)> = Vec::new();
-    for (_, link) in network.links().filter(|(_, l)| l.open) {
+    for (_, link) in network.flowing_links() {
         let up = view(network, link.up, link.up_port, volumes);
         let down = view(network, link.down, link.down_port, volumes);
         let amount = link.law.discharge(up, down) * dt;
@@ -107,7 +107,7 @@ fn commit(
         }
     }
     let mut losses: Vec<(StoreId, f64)> = Vec::new();
-    for (id, store) in network.stores() {
+    for (id, store) in network.stores().filter(|(_, s)| !s.is_frozen()) {
         let (lost, _) = loss.loss(store, volumes[id.0 as usize]);
         if lost > 0.0 {
             losses.push((id, lost * dt));
@@ -176,7 +176,7 @@ fn adjust(network: &mut Network, id: StoreId, delta: f64) {
 fn groups_upstream_first(network: &Network) -> Vec<Vec<StoreId>> {
     let slots = network.store_slots();
     let mut edges: Vec<Vec<usize>> = vec![Vec::new(); slots];
-    for (_, link) in network.links().filter(|(_, l)| l.open) {
+    for (_, link) in network.flowing_links() {
         let finite = |id: StoreId| network.store(id).is_some_and(Store::is_finite);
         if finite(link.up) && finite(link.down) {
             edges[link.up.0 as usize].push(link.down.0 as usize);
@@ -187,7 +187,7 @@ fn groups_upstream_first(network: &Network) -> Vec<Vec<StoreId>> {
     }
     let nodes: Vec<usize> = network
         .stores()
-        .filter(|(_, s)| s.is_finite())
+        .filter(|(_, s)| s.is_finite() && !s.is_frozen())
         .map(|(id, _)| id.0 as usize)
         .collect();
     let mut groups = tarjan(&nodes, &edges);

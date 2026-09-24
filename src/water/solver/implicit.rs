@@ -36,7 +36,7 @@ pub fn solve_group(
             residual[i] = v - start[id.0 as usize] + dt * lost;
             jacobian[i * n + i] += 1.0 + dt * d_lost;
         }
-        for (_, link) in network.links().filter(|(_, l)| l.open) {
+        for (_, link) in network.flowing_links() {
             let (up_i, down_i) = (position(link.up), position(link.down));
             if up_i.is_none() && down_i.is_none() {
                 continue;

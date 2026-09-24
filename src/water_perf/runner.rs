@@ -210,7 +210,6 @@ fn frame(
     terrain.update();
     let terrain_time = started.elapsed();
     water.on_terrain_update(terrain);
-    let edit = water.pending_timings();
     water.step(dt);
     let step = water.last_step_timings();
 
@@ -224,8 +223,8 @@ fn frame(
         mesh = started.elapsed();
     }
     FrameCost {
-        geometry: edit.geometry,
-        reregion: edit.reregion,
+        geometry: step.geometry,
+        reregion: step.reregion,
         settle: step.settle,
         solve: step.solve,
         mesh,

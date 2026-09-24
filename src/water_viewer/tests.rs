@@ -212,3 +212,134 @@ fn a_source_fills_spills_and_merges_before_the_level_opens() {
     assert!((rate - 0.5).abs() < 1e-3, "{rate} m³/s leaves");
     assert!(last.ledger_error.abs() < 1e-6);
 }
+
+#[test]
+fn a_breach_lays_a_channel_that_retires_once_the_weir_closes() {
+    let scenario = find("breach").unwrap();
+    let recorded = run(&scenario, RunConfig::default()).unwrap();
+    assert!(
+        recorded.samples.iter().any(|s| s.reaches > 0),
+        "a channel advanced from the breach"
+    );
+    let last = recorded.samples.last().unwrap();
+    assert_eq!(last.reaches, 0, "the channel retired");
+    assert_eq!(last.links, 0);
+    assert!(last.ledger_error.abs() < 1e-6);
+}
+
+#[test]
+fn an_island_pool_pours_through_its_hole_along_a_fall() {
+    let scenario = find("island_hole").unwrap();
+    let recorded = run(&scenario, RunConfig::default()).unwrap();
+    assert!(
+        recorded.samples.iter().any(|s| s.falls > 0),
+        "the orifice carried a fall onto the pond"
+    );
+}
+
+#[test]
+fn a_river_diverted_into_a_crater_fills_it_and_runs_on() {
+    let scenario = find("river_diversion").unwrap();
+    let recorded = run(&scenario, RunConfig::default()).unwrap();
+    let n = recorded.samples.len() - 1;
+    let blast = recorded
+        .samples
+        .iter()
+        .position(|s| s.time >= 12.0)
+        .unwrap();
+    let crater = (blast..=n)
+        .find(|i| probe(&recorded, "crater", *i).is_some())
+        .expect("the crater filled");
+    assert!(
+        probe(&recorded, "crater", n).is_some(),
+        "and kept its water"
+    );
+    assert!(
+        probe(&recorded, "lower", n).is_some(),
+        "the river runs on below the crater"
+    );
+    let (at_blast, last) = (&recorded.samples[blast], &recorded.samples[n]);
+    assert!(
+        last.sunk > at_blast.sunk,
+        "water left the map after the crater"
+    );
+    assert!(recorded.samples[crater].basins >= 2);
+    assert!(recorded.samples.iter().all(|s| s.discarded == 0.0));
+    assert!(last.ledger_error.abs() < 1e-6);
+}
+
+#[test]
+fn a_spring_keeps_flowing_when_the_rock_around_it_is_blown_away() {
+    let scenario = find("spring_rock").unwrap();
+    let recorded = run(&scenario, RunConfig::default()).unwrap();
+    let n = recorded.samples.len();
+    let (a, b) = (&recorded.samples[n - 601], &recorded.samples[n - 1]);
+    let rate = (b.sunk - a.sunk) / (b.time - a.time) as f64;
+    assert!((rate - 1.0).abs() < 0.01, "{rate} m³/s leaves");
+    assert!(b.falls > 0, "its fall was traced again");
+    assert!(b.ledger_error.abs() < 1e-6);
+}
+
+#[test]
+fn a_crater_merged_into_a_lake_keeps_its_water_when_the_lake_drains() {
+    let scenario = find("crater_drain").unwrap();
+    let recorded = run(&scenario, RunConfig::default()).unwrap();
+    let at = |t: f32| recorded.samples.iter().position(|s| s.time >= t).unwrap();
+    // Merged: one body, one level.
+    let merged = at(4.0);
+    assert_eq!(recorded.samples[merged].basins, 1);
+    assert_eq!(
+        probe(&recorded, "crater", merged),
+        probe(&recorded, "lake", merged)
+    );
+    // Drained: the lake is gone below the crater's rim, the crater is not.
+    let n = recorded.samples.len() - 1;
+    let crater = probe(&recorded, "crater", n).expect("the crater kept its water");
+    assert!(probe(&recorded, "lake", n).is_none_or(|lake| lake < crater - 0.1));
+    let last = &recorded.samples[n];
+    assert!(recorded.samples.iter().all(|s| s.discarded == 0.0));
+    assert!(last.ledger_error.abs() < 1e-6);
+}
+
+/// thin_ice's lake is over the valve's size (§9.2): a blast at its shore
+/// freezes it for the blast's frame, and it re-floods on the next.
+#[test]
+fn the_valve_defers_a_large_lake_s_reflood_by_a_frame() {
+    use crate::level::load_level;
+    use crate::level_check::build_terrain;
+    use crate::terrain::BlastConfig;
+    use crate::water::topology::VALVE_SPANS;
+    use crate::water::WaterWorld;
+    use nalgebra::Point3;
+
+    let level = load_level(std::path::Path::new("levels/thin_ice.level.ron")).unwrap();
+    let mut terrain = build_terrain(&level);
+    let (mut water, _) = WaterWorld::from_config(level.water.as_ref().unwrap(), &terrain);
+    let (lake, _) = water.basins().max_by_key(|(_, b)| b.region.len()).unwrap();
+    assert!(
+        water
+            .network()
+            .store(lake)
+            .unwrap()
+            .as_basin()
+            .unwrap()
+            .region
+            .len()
+            > VALVE_SPANS
+    );
+    let volume = water.volume();
+
+    terrain.detonate(Point3::new(45.2, 3.0, 60.2), &BlastConfig::default());
+    terrain.update();
+    water.on_terrain_update(&terrain);
+    water.step(1.0 / 60.0);
+    let frozen = |water: &WaterWorld| water.basins().any(|(_, b)| b.frozen);
+    assert!(frozen(&water), "the re-flood waits a frame");
+    assert_eq!(water.volume(), volume, "a frozen lake holds still");
+
+    terrain.update();
+    water.on_terrain_update(&terrain);
+    water.step(1.0 / 60.0);
+    assert!(!frozen(&water), "and runs on the next");
+    assert!(water.balance().is_balanced());
+}

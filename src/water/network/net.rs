@@ -99,6 +99,16 @@ impl Network {
             .filter_map(|(i, l)| l.as_ref().map(|l| (LinkId(i as u32), l)))
     }
 
+    /// Every link water runs through now: open, and joining no frozen store.
+    pub fn flowing_links(&self) -> impl Iterator<Item = (LinkId, &LinkEntry)> {
+        self.links().filter(|(_, l)| {
+            l.open
+                && ![l.up, l.down]
+                    .iter()
+                    .any(|s| self.store(*s).is_some_and(Store::is_frozen))
+        })
+    }
+
     /// Water held in every finite store, m³.
     pub fn held_volume(&self) -> f64 {
         self.stores()

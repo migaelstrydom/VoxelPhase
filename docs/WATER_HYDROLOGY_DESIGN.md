@@ -1593,6 +1593,46 @@ This is the stage most likely to need iteration on looks. 4a stands without it.
 - The six scenarios of §9.3 pass in `water_viewer`.
 - Play-tested in a level.
 
+**As built.**
+
+- **Scenarios** (`water_viewer`, all tests):
+
+  | §9.3 | Scenario | What passes |
+  |---|---|---|
+  | 1 | `breach` | A channel advances from the notch; once the weir closes, it recedes and retires, and no link is left |
+  | 2 | `island_hole` | The orifice carries a straight-down `FallPath` from the hole onto the pond; no water is lost |
+  | 3 | `river_diversion` | A crater blown in a running bed at 12 s fills as a new basin and spills, and the river reaches the lower probe again |
+  | 4 | – | The sea wall needs the ocean; stage 7 |
+  | 5 | `spring_rock` | The rock around the spring is blown away at 5 s. The spring keeps its point, its fall is traced again into the crater the blast left, which fills and spills, and 1 m³/s leaves the bottom again |
+  | 6 | `crater_drain` | A crater under a lake merges at once (one body, one level). The dam is blown, the lake drains away, and the crater splits off holding its water |
+
+- **Cutting a channel, not removing it.** An edit across a reach, or across a
+  fall's arc, used to remove the whole channel, and every reach's water was
+  dumped downstream in one frame: 36 m³ into the void at once in
+  `river_diversion`, 83 m³ in `spring_rock`. Now only the touched reach and
+  everything above it go, upstream first, each into the reach below it. The
+  reaches below keep their water and recede, as §8.2 says, unless the channel
+  laid again joins them.
+- **A basin whose bed is blown away** runs its water off along the drainage
+  from where it stood, to whatever store that reaches. It used to go to the
+  void.
+- **An empty basin a channel is still advancing towards is fed.** It used to
+  dry up and be removed before the front arrived.
+- **The §9.2 valve.** A re-flood of a region over 8000 spans (about 1.8 ms)
+  waits one frame, off the frame that already carries the terrain rebuild.
+  - The basin is **frozen**: no link runs through it, its volume holds still,
+    it neither settles nor merges, and nothing reads its region's spans.
+  - The deferred re-flood runs at the start of the next step, or before the
+    geometry takes another edit, against the remap of the edit it followed.
+  - thin_ice's shore blast: the blast frame's water work falls from 6.1 ms to
+    0.39 ms, and the next frame carries the re-flood and mesh rebuild,
+    5.8 ms. The peak frame falls from about 9 ms (terrain plus water) to
+    5.8 ms. **The 17.7k-span lake's own re-flood is still 4.4 ms**, over the
+    2 ms budget: meeting it needs an incremental re-flood, not a delay.
+  - skyway's blast frame is 2.5 ms, just over budget, below the valve's size.
+- **Not done: play-testing.** The game window cannot be launched from the
+  agent's shell, so no level has been played with the new water.
+
 ### Stage 7: ocean
 
 - Open edges, the ocean flood, weir-based lowland flooding, the mask and the ring mesh.

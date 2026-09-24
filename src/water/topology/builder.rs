@@ -32,7 +32,7 @@ use crate::water::network::links::{FixedRate, Orifice, ReachOutflow, Weir};
 use crate::water::network::{
     is_pothole, pit_bottom, Basin, ChannelOutlet, CrestKind, DepressionFinder, FallPath,
     FallTracer, Flood, FloodMode, HoleColumn, Landing, LinkEntry, LossLaw, Network, Outflow, Port,
-    Store, Trace, GRAVITY, POTHOLE_DEPTH, POTHOLE_VOLUME,
+    Store, Trace, FALL_THRESHOLD, GRAVITY, POTHOLE_DEPTH, POTHOLE_VOLUME,
 };
 use crate::water::solver::{account, Account, VolumeLedger};
 
@@ -80,6 +80,12 @@ const MAX_WALK: usize = 1 << 16;
 /// Depth over a crest where a weir's water leaves it: the critical depth at
 /// the design head, m.
 const CRITICAL_DEPTH: f32 = 2.0 / 3.0 * DESIGN_HEAD;
+
+/// A basin whose region holds more spans than this is re-flooded a frame
+/// after the edit that touched it, not on the edit's own frame (§9.2): the
+/// edit's frame already carries the terrain rebuild. A re-flood costs about
+/// 0.23 µs a span, so this is about 1.8 ms.
+pub const VALVE_SPANS: usize = 8000;
 
 /// Falls chained through landings before the chain is given up to the void.
 const MAX_FALLS: u32 = 256;
@@ -167,6 +173,10 @@ pub struct TopologyBuilder {
     /// pass changed anything.
     edits: u64,
     sources: Vec<Source>,
+    /// Basins frozen for a re-flood the valve deferred, and the edit's remap
+    /// they re-flood after.
+    deferred: Vec<StoreId>,
+    deferred_remap: Option<SpanRemap>,
 }
 
 impl TopologyBuilder {
@@ -177,6 +187,8 @@ impl TopologyBuilder {
             log: None,
             edits: 0,
             sources: Vec::new(),
+            deferred: Vec::new(),
+            deferred_remap: None,
         }
     }
 
@@ -265,7 +277,44 @@ impl TopologyBuilder {
         let mut touched: Vec<StoreId> = touched.into_iter().collect();
         touched.sort();
         for basin in touched {
-            self.reregion_after(t, basin, Some(&update.remap));
+            let large = t
+                .network
+                .store(basin)
+                .and_then(Store::as_basin)
+                .is_some_and(|b| b.region.len() > VALVE_SPANS);
+            if large {
+                self.freeze(t, basin);
+            } else {
+                self.reregion_after(t, basin, Some(&update.remap));
+            }
+        }
+        if !self.deferred.is_empty() {
+            self.deferred_remap = Some(update.remap.clone());
+        }
+    }
+
+    /// Hold a basin still until its deferred re-flood runs.
+    fn freeze(&mut self, t: &mut Topology, id: StoreId) {
+        if let Some(basin) = t.network.store_mut(id).and_then(Store::as_basin_mut) {
+            basin.frozen = true;
+            self.deferred.push(id);
+        }
+    }
+
+    /// Whether a re-flood is waiting on the valve.
+    pub fn has_deferred(&self) -> bool {
+        !self.deferred.is_empty()
+    }
+
+    /// Run the re-floods the valve deferred, against the edit they followed.
+    /// Must run before the geometry takes another edit.
+    pub fn run_deferred(&mut self, t: &mut Topology) {
+        let remap = self.deferred_remap.take();
+        for id in std::mem::take(&mut self.deferred) {
+            if let Some(basin) = t.network.store_mut(id).and_then(Store::as_basin_mut) {
+                basin.frozen = false;
+                self.reregion_after(t, id, remap.as_ref());
+            }
         }
     }
 
@@ -332,9 +381,12 @@ impl TopologyBuilder {
         }
         if seeds.is_empty() {
             // Nothing under the water survived: the bed was blown away from
-            // under it, into the void.
-            let void = self.void(t);
-            self.remove_basin(t, id, Account::Store(void));
+            // under it. The water runs on to wherever the ground there now
+            // drains.
+            let to = self
+                .runoff(t, id, &columns, level)
+                .map_or(Account::Store(self.void(t)), |s| account(t.network, s));
+            self.remove_basin(t, id, to);
             return;
         }
         let flood = self.flood(t, Some(id), &seeds, level, FloodMode::Reregion);
@@ -357,7 +409,12 @@ impl TopologyBuilder {
         self.settle_reaches(t, loss);
         self.link_sources(t);
         for id in t.network.store_ids() {
-            if t.network.store(id).and_then(Store::as_basin).is_none() {
+            let settles = t
+                .network
+                .store(id)
+                .and_then(Store::as_basin)
+                .is_some_and(|b| !b.frozen);
+            if !settles {
                 continue;
             }
             self.link_outflows(t, id);
@@ -593,6 +650,23 @@ impl TopologyBuilder {
         })
     }
 
+    /// The arc water pours along through a hole in a basin's floor: straight
+    /// down from the middle of the hole's cells, just under the lip.
+    fn hole_fall(&self, t: &Topology, outflow: &Outflow, lip: f32) -> Option<FallPath> {
+        let n = outflow.cells.len() as f32;
+        if n == 0.0 {
+            return None;
+        }
+        let (x, z) = outflow.cells.iter().fold((0.0, 0.0), |(x, z), c| {
+            let (cx, cz) = c.outside.column.centre();
+            (x + cx / n, z + cz / n)
+        });
+        let at = Point3::new(x, lip - OUTLET_LIFT, z);
+        self.trace(t, at, Vector3::zeros())
+            .filter(|trace| trace.path.drop() > FALL_THRESHOLD)
+            .map(|trace| trace.path)
+    }
+
     /// Sweep a fall arc; it lands on any water standing in its way.
     fn trace(&self, t: &Topology, at: Point3<f32>, velocity: Vector3<f32>) -> Option<Trace> {
         let graph = t.geometry.graph();
@@ -719,8 +793,8 @@ impl TopologyBuilder {
     }
 
     /// An edit across a fall's arc moves where it lands: every link whose
-    /// arc crosses a re-paired column is dropped with the channels it joins,
-    /// and relinks by the usual rule.
+    /// arc crosses a re-paired column is dropped, with the channel above it
+    /// and the first reach below, and relinks by the usual rule.
     fn retrace_touched(&mut self, t: &mut Topology, update: &GeometryUpdate) {
         let mut columns = update.remap.columns.clone();
         columns.sort_unstable();
@@ -735,12 +809,12 @@ impl TopologyBuilder {
             let is_reach =
                 |t: &Topology, s: StoreId| t.network.store(s).and_then(Store::as_reach).is_some();
             if is_reach(t, up) {
-                self.remove_channel(t, up);
+                self.cut_channel(t, up);
             } else {
                 self.remove_link(t, link);
             }
             if is_reach(t, down) {
-                self.remove_channel(t, down);
+                self.cut_channel(t, down);
             }
         }
     }
@@ -859,9 +933,10 @@ impl TopologyBuilder {
         });
     }
 
-    /// An edit across a channel re-routes it: every reach joined to one the
-    /// edit touched is removed, its water going downstream, and the outflow
-    /// that fed them relinks and lays a new channel over the new ground.
+    /// An edit across a channel re-routes it: each reach the edit touched is
+    /// cut out with the channel above it, their water going downstream, and
+    /// the outflow that fed them relinks and lays a new channel over the new
+    /// ground.
     fn reroute_touched(&mut self, t: &mut Topology, update: &GeometryUpdate) {
         let mut touched: FxHashSet<StoreId> = FxHashSet::default();
         let graph = t.geometry.graph();
@@ -880,7 +955,40 @@ impl TopologyBuilder {
         let mut touched: Vec<StoreId> = touched.into_iter().collect();
         touched.sort();
         for id in touched {
-            self.remove_channel(t, id);
+            self.cut_channel(t, id);
+        }
+    }
+
+    /// Cut a channel at a reach an edit touched: remove it and every reach
+    /// above it, upstream first, so each one's water lands in the reach below
+    /// and the cut reach's in whatever survives beneath it. The reaches below
+    /// keep their water; with nothing feeding them they recede and retire
+    /// (§8.2), unless the channel laid again joins them.
+    fn cut_channel(&mut self, t: &mut Topology, at: StoreId) {
+        if t.network.store(at).and_then(Store::as_reach).is_none() {
+            return;
+        }
+        let mut above: Vec<StoreId> = vec![at];
+        let mut cursor = 0;
+        while cursor < above.len() {
+            let id = above[cursor];
+            cursor += 1;
+            let feeders: Vec<StoreId> = t
+                .network
+                .links()
+                .filter(|(_, l)| l.down == id)
+                .map(|(_, l)| l.up)
+                .filter(|up| t.network.store(*up).and_then(Store::as_reach).is_some())
+                .collect();
+            for up in feeders {
+                if !above.contains(&up) {
+                    above.push(up);
+                }
+            }
+        }
+        // `above` runs downstream to upstream.
+        for id in above.into_iter().rev() {
+            self.remove_reach(t, id);
         }
     }
 
@@ -966,8 +1074,11 @@ impl TopologyBuilder {
             let entry = if routed {
                 self.route(t, id, &outflow, level)
             } else {
+                let fall = outflow
+                    .hole
+                    .and_then(|hole| self.hole_fall(t, &outflow, hole.lip));
                 self.resolve_target(t, id, &outflow)
-                    .map(|store| Entry { store, fall: None })
+                    .map(|store| Entry { store, fall })
             };
             let Some(Entry {
                 store: target,
@@ -1044,6 +1155,9 @@ impl TopologyBuilder {
         let partner = basin.outflows.iter().find_map(|o| {
             let target = o.target?;
             let other = t.network.store(target)?.as_basin()?;
+            if other.frozen {
+                return None;
+            }
             let other_level = other.level();
             (target != id
                 && level > o.lip
@@ -1222,6 +1336,29 @@ impl TopologyBuilder {
         }
     }
 
+    /// Where water standing over `columns` at `level` runs to once the bed
+    /// under it is gone: the store the drainage from the lowest span there
+    /// reaches.
+    fn runoff(
+        &mut self,
+        t: &mut Topology,
+        from: StoreId,
+        columns: &[Column],
+        level: f32,
+    ) -> Option<StoreId> {
+        let graph = t.geometry.graph();
+        let start = columns
+            .iter()
+            .filter_map(|c| graph.span_at(*c, level))
+            .min_by(|a, b| {
+                graph
+                    .span(*a)
+                    .floor_min
+                    .total_cmp(&graph.span(*b).floor_min)
+            })?;
+        self.follow_drainage(t, from, start).filter(|s| *s != from)
+    }
+
     /// Walk the drainage field from `start` to the first store it reaches:
     /// a basin's region, the void, or a dry depression made a basin.
     fn follow_drainage(
@@ -1334,20 +1471,27 @@ impl TopologyBuilder {
         }
     }
 
-    /// Whether anything flows into a store.
+    /// Whether anything flows into a store, or is on its way: a channel
+    /// whose front has yet to reach its end feeds the store it ends in.
     fn fed(&self, t: &Topology, id: StoreId) -> bool {
         t.network.links().any(|(_, l)| {
-            l.open && l.down == id && {
-                let up = t.network.store(l.up).map_or(0.0, Store::volume);
-                let down = t.network.store(id).map_or(0.0, Store::volume);
-                match (
-                    t.network.view(l.up, up, l.up_port),
-                    t.network.view(id, down, l.down_port),
-                ) {
-                    (Some(u), Some(d)) => l.law.discharge(u, d) > 0.0,
-                    _ => false,
+            let coming = t
+                .network
+                .store(l.up)
+                .and_then(Store::as_reach)
+                .is_some_and(|r| r.inflow > 0.0);
+            l.open && l.down == id && coming
+                || l.open && l.down == id && {
+                    let up = t.network.store(l.up).map_or(0.0, Store::volume);
+                    let down = t.network.store(id).map_or(0.0, Store::volume);
+                    match (
+                        t.network.view(l.up, up, l.up_port),
+                        t.network.view(id, down, l.down_port),
+                    ) {
+                        (Some(u), Some(d)) => l.law.discharge(u, d) > 0.0,
+                        _ => false,
+                    }
                 }
-            }
         })
     }
 

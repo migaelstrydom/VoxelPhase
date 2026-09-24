@@ -90,6 +90,11 @@ impl Store {
         }
     }
 
+    /// Whether the store waits on a deferred re-flood (§9.2).
+    pub fn is_frozen(&self) -> bool {
+        matches!(self, Store::Basin(b) if b.frozen)
+    }
+
     /// Whether the store is minor, and loses water (§7.7).
     pub fn is_minor(&self) -> bool {
         match self {
