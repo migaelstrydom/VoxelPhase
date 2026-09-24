@@ -1,6 +1,7 @@
 # Water: a Hydrology Design
 
-Status: awaiting sign-off. Replaces the design in `WATER_SYSTEM_PLAN.md`.
+Status: signed off; being implemented stage by stage (§21). Replaces the design in
+`WATER_SYSTEM_PLAN.md`.
 
 ## 1. The idea in one paragraph
 
@@ -89,8 +90,26 @@ disagreed.
   - The cause is unknown. It was not the upload, which is too small (see the profile
     above).
   - Repeat any surprising figure before trusting it.
-- **Not yet measured:** water under active flow, and water after a blast. Stage 0 measures
-  both for the old system (§21).
+- **Blast and transient (stage 0, `water_perf`).** A grenade on the shore of each level's
+  water, then 10 s of frames after it. Water CPU per frame is flow + wave + mesh build; the
+  terrain's own rebuild is excluded.
+
+  | Subject | Quiet mean / p99 | Blast frame | Transient mean / p99 / max |
+  |---|---|---|---|
+  | test_arena | 0.48 / 0.58 ms | 3.3 ms | 0.50 / 0.63 / 0.71 ms |
+  | skyway | 2.6 / 2.8 ms | 4.5 ms | 2.5 / 3.0 / 3.4 ms |
+  | subsidence | 0.37 / 0.48 ms | 2.5 ms | 0.37 / 0.47 / 0.59 ms |
+  | thin_ice | 4.5 / 5.0 ms | 5.7 ms | 4.3 / 4.8 / 5.3 ms |
+  | wrecking_yard | 1.0 / 1.1 ms | 2.3 ms | 1.0 / 1.06 / 1.2 ms |
+  | `water_viewer` breach | 0.22 / 0.24 ms | 3.7 ms | 0.25 / 0.28 / 0.35 ms |
+
+  - The blast frame's extra 1.2–3.4 ms is the flow grid re-querying floors by ray for
+    every cell under the changed region.
+  - A transient costs no more than a quiet frame. The old flow is too slow to be busy: the
+    breached pond loses only 29 m³ in its first minute, and most of that is water snapped
+    dry on the hillside, not water arriving anywhere.
+- **GPU.** Water is drawn inside the composite pass, which `render_perf` cannot split. At
+  the default camera `gpu/composite` (water, fire and overlay) is 0.01–0.27 ms.
 
 ## 3. Decisions and invariants
 
@@ -1156,11 +1175,11 @@ misses one. Frame statistics exclude warm-up, and report mean, p99 and max.
 | … of which ripple tiles | ≤ 0.4 ms at 32 active tiles | (included in the row above) |
 | … of which render CPU | ≤ 0.3 ms | 0.20–4.2 ms |
 | Ripple texture upload | ≤ 0.5 MB per frame | whole mesh every frame |
-| Blast frame, water share (re-pair, drainage repair, re-region, re-route) | ≤ 2 ms at p99 | unmeasured (stage 0) |
-| Worst-case blast (largest basin re-region, whole-lowland repair) | reported; the §9.2 valve only if over | unmeasured (stage 0) |
-| Transient (breach draining), CPU per frame | ≤ 0.5 ms | unmeasured (stage 0) |
+| Blast frame, water share (re-pair, drainage repair, re-region, re-route) | ≤ 2 ms at p99 | 2.3–5.7 ms (§2.3) |
+| Worst-case blast (largest basin re-region, whole-lowland repair) | reported; the §9.2 valve only if over | no equivalent; the shore blast above |
+| Transient (breach draining), CPU per frame | ≤ 0.5 ms | 0.25–4.3 ms, same as quiet (§2.3) |
 | Load with `settle: Steady` | ≤ 200 ms | 1.8–8.5 ms first-frame spike |
-| GPU water pass at 2400×1600 | ≤ today's | measured in stage 0 |
+| GPU water pass at 2400×1600 | ≤ today's | composite pass 0.01–0.27 ms (§2.3) |
 
 **Where the cost will sit:**
 

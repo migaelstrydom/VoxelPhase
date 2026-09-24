@@ -2,6 +2,8 @@
 
 use nalgebra::Vector3;
 
+use crate::collision::AABB;
+
 use super::WaterProperties;
 
 /// Geometry configuration for the water flow grid.
@@ -348,6 +350,41 @@ impl WaterGrid {
         self.settled = false;
     }
 
+    /// Mark every cell overlapping a changed terrain region for a floor recheck.
+    pub fn mark_changed_regions(&mut self, regions: &[AABB]) {
+        let mut dirty_cells = Vec::new();
+        for region in regions {
+            let x_range = overlapping_cell_range(
+                region.min.x,
+                region.max.x,
+                self.origin.x,
+                self.cell_size,
+                self.dims.0,
+            );
+            let z_range = overlapping_cell_range(
+                region.min.z,
+                region.max.z,
+                self.origin.z,
+                self.cell_size,
+                self.dims.1,
+            );
+            if let (Some((i0, i1)), Some((j0, j1))) = (x_range, z_range) {
+                for j in j0..=j1 {
+                    for i in i0..=i1 {
+                        dirty_cells.push((i, j));
+                    }
+                }
+            }
+        }
+        // Overlapping regions name the same cell more than once, and every
+        // recheck is nine terrain rays.
+        dirty_cells.sort_unstable();
+        dirty_cells.dedup();
+        if !dirty_cells.is_empty() {
+            self.mark_dirty_floors(&dirty_cells);
+        }
+    }
+
     /// Get the water surface level at a world-space (x, z) position.
     ///
     /// Returns `None` if the position is outside the grid or the cell is dry
@@ -687,6 +724,36 @@ impl WaterGrid {
             }
         }
         best
+    }
+}
+
+/// Inclusive range of cells along one axis that overlap `[min, max]`.
+fn overlapping_cell_range(
+    min: f32,
+    max: f32,
+    grid_origin: f32,
+    cell_size: f32,
+    dim: usize,
+) -> Option<(usize, usize)> {
+    if dim == 0 {
+        return None;
+    }
+
+    let grid_min = grid_origin;
+    let grid_max = grid_origin + dim as f32 * cell_size;
+    if max <= grid_min || min >= grid_max {
+        return None;
+    }
+
+    let start = ((min - grid_origin) / cell_size).floor() as isize;
+    let end = ((max - grid_origin) / cell_size).ceil() as isize - 1;
+
+    let clamped_start = start.clamp(0, dim as isize - 1) as usize;
+    let clamped_end = end.clamp(0, dim as isize - 1) as usize;
+    if clamped_start > clamped_end {
+        None
+    } else {
+        Some((clamped_start, clamped_end))
     }
 }
 

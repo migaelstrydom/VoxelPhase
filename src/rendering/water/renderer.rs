@@ -180,7 +180,10 @@ impl WaterRenderer {
     /// wave cell quad where all four corners are wet, a quad is emitted with
     /// per-vertex Y = `bulk_level + displacement`. Normals are computed from
     /// the heightfield gradient for smooth lighting.
-    fn generate_mesh(flow_grid: &WaterGrid, wave_grid: &WaveGrid) -> (Vec<WaterVertex>, Vec<u32>) {
+    pub fn generate_mesh(
+        flow_grid: &WaterGrid,
+        wave_grid: &WaveGrid,
+    ) -> (Vec<WaterVertex>, Vec<u32>) {
         let flow_dims = flow_grid.dims();
         let wave_dims = wave_grid.dims();
         let n = wave_grid.cells_per_flow_cell();

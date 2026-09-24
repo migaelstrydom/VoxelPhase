@@ -41,35 +41,6 @@ const WATER_DEBUG_CONFIG: WaterDebugConfig = WaterDebugConfig {
     sphere_radius: 0.3,
 };
 
-fn overlapping_cell_range(
-    min: f32,
-    max: f32,
-    grid_origin: f32,
-    cell_size: f32,
-    dim: usize,
-) -> Option<(usize, usize)> {
-    if dim == 0 {
-        return None;
-    }
-
-    let grid_min = grid_origin;
-    let grid_max = grid_origin + dim as f32 * cell_size;
-    if max <= grid_min || min >= grid_max {
-        return None;
-    }
-
-    let start = ((min - grid_origin) / cell_size).floor() as isize;
-    let end = ((max - grid_origin) / cell_size).ceil() as isize - 1;
-
-    let clamped_start = start.clamp(0, dim as isize - 1) as usize;
-    let clamped_end = end.clamp(0, dim as isize - 1) as usize;
-    if clamped_start > clamped_end {
-        None
-    } else {
-        Some((clamped_start, clamped_end))
-    }
-}
-
 impl<'a> System<'a> for WaterSystem {
     type SystemData = (
         Option<Write<'a, WaterGrid>>,
@@ -115,44 +86,7 @@ impl<'a> System<'a> for WaterSystem {
 
         // Propagate terrain damage to water floor levels.
         if let Some(ref terrain) = terrain_opt {
-            let dirty = terrain.changed_regions();
-            if !dirty.is_empty() {
-                let mut dirty_cells = Vec::new();
-                let dims = grid.dims();
-                let origin = grid.origin();
-                let cell_size = grid.cell_size();
-                for region in dirty {
-                    // Convert AABB to grid cells that overlap, including edge regions.
-                    let x_range = overlapping_cell_range(
-                        region.min.x,
-                        region.max.x,
-                        origin.x,
-                        cell_size,
-                        dims.0,
-                    );
-                    let z_range = overlapping_cell_range(
-                        region.min.z,
-                        region.max.z,
-                        origin.z,
-                        cell_size,
-                        dims.1,
-                    );
-                    if let (Some((i0, i1)), Some((j0, j1))) = (x_range, z_range) {
-                        for j in j0..=j1 {
-                            for i in i0..=i1 {
-                                dirty_cells.push((i, j));
-                            }
-                        }
-                    }
-                }
-                // Overlapping regions name the same cell more than once, and
-                // every recheck is nine terrain rays.
-                dirty_cells.sort_unstable();
-                dirty_cells.dedup();
-                if !dirty_cells.is_empty() {
-                    grid.mark_dirty_floors(&dirty_cells);
-                }
-            }
+            grid.mark_changed_regions(terrain.changed_regions());
         }
 
         // Step the flow simulation.

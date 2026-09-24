@@ -60,7 +60,13 @@ impl From<ron::de::SpannedError> for LevelError {
 /// Load, validate and place a level from a RON file.
 pub fn load_level(path: &Path) -> Result<Level, LevelError> {
     let contents = std::fs::read_to_string(path)?;
-    let mut level: Level = ron::from_str(&contents)?;
+    parse_level(&contents)
+}
+
+/// Parse, validate and place a level from RON text, for levels that live in
+/// code rather than on disk (the water harness's synthetic scenarios).
+pub fn parse_level(contents: &str) -> Result<Level, LevelError> {
+    let mut level: Level = ron::from_str(contents)?;
     validate(&level)?;
     place(&mut level)?;
     Ok(level)
