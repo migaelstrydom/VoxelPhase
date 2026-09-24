@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use crate::perf::stats::{as_ms, max_ms, mean_ms, percentile_ms};
 
-use super::runner::{FrameCost, Subject, WorstCase};
+use super::runner::{FrameCost, RippleCost, Subject, WorstCase};
 
 /// One subject: quiet frames, the blast frame, and the transient after it.
 pub fn subject_table(subject: &Subject) -> String {
@@ -87,5 +87,17 @@ pub fn worst_case_line(w: &WorstCase) -> String {
         mean_ms(&w.reregion),
         max_ms(&w.reregion),
         mean_ms(&w.mesh)
+    )
+}
+
+/// Ripple stepping at the budget.
+pub fn ripple_line(r: &RippleCost) -> String {
+    format!(
+        "{:<24} {:>2} tiles awake: step {:.3} ms mean, p99 {:.3}; upload {} KB per frame",
+        r.label,
+        r.tiles,
+        mean_ms(&r.steps),
+        percentile_ms(&r.steps, 0.99),
+        r.upload_bytes / 1024
     )
 }

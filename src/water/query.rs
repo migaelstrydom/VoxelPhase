@@ -33,7 +33,17 @@ impl<'a> WaterQuery<'a> {
         Self { world }
     }
 
-    /// Water at a 3D point, or `None` if the point's span holds no water.
+    /// The still level of the water at a 3D point, without swell or ripples:
+    /// what the hydrology holds. `None` if the point's span holds no water.
+    pub fn level_at(&self, point: Point3<f32>) -> Option<f32> {
+        let graph = self.world.geometry().graph();
+        let span = graph.span_at(Column::containing(point.x, point.z), point.y)?;
+        let level = self.world.level(graph.owner(span).body?)?;
+        (level > graph.span(span).floor_min).then_some(level)
+    }
+
+    /// Water at a 3D point, or `None` if the point's span holds no water. The
+    /// surface includes swell and ripples, exactly as drawn.
     ///
     /// The span is the one whose band holds the point: the air it is in, or
     /// for a point just inside the ground, the span resting on that ground.
@@ -44,13 +54,18 @@ impl<'a> WaterQuery<'a> {
         let column = Column::containing(point.x, point.z);
         let span = graph.span_at(column, point.y)?;
         let body = graph.owner(span).body?;
-        let surface = self.world.level(body)?;
+        let level = self.world.level(body)?;
         let floor = graph.span(span).floor_min;
-        if surface <= floor {
+        if level <= floor {
             return None;
         }
+        let swell =
+            self.world
+                .swell(body)
+                .height(point.x, point.z, self.world.clock(), level - floor);
+        let ripple = self.world.ripples().height_at(body, point.x, point.z);
         Some(WaterSample {
-            surface,
+            surface: level + swell + ripple,
             floor,
             velocity: Vector3::zeros(),
             body,

@@ -19,11 +19,15 @@ use crate::debug::DebugLog;
 use crate::level::{WaterBody, WaterConfig};
 use crate::terrain::TerrainWorld;
 
-use super::geometry::{GeometryUpdate, Outlets, WaterGeometry};
-use super::ids::StoreId;
+use nalgebra::Point3;
+
+use super::coupling::{Disturbance, Disturbances};
+use super::geometry::{GeometryUpdate, Outlets, SpanChunkCoord, SpanGraph, WaterGeometry};
+use super::ids::{StoreId, WaterBodyId};
 use super::network::{Basin, LossLaw, Network, Store};
 use super::query::WaterQuery;
 use super::solver::{Balance, HydrologySolver, VolumeLedger};
+use super::surface::{MaskSource, RippleConfig, RippleTiles, Swell, TileMask};
 use super::topology::{PoolError, Topology, TopologyBuilder};
 
 /// Per-level dials of the hydrology.
@@ -54,12 +58,14 @@ pub struct WaterTimings {
     pub settle: Duration,
     /// Solver ticks.
     pub solve: Duration,
+    /// Ripple tiles.
+    pub ripples: Duration,
     pub ticks: u32,
 }
 
 impl WaterTimings {
     pub fn total(&self) -> Duration {
-        self.geometry + self.reregion + self.settle + self.solve
+        self.geometry + self.reregion + self.settle + self.solve + self.ripples
     }
 }
 
@@ -74,6 +80,13 @@ pub struct WaterWorld {
     /// Each store's surface level after the last change, by store slot, so
     /// that queries in every physics substep do not invert a hypsometry.
     levels: Vec<Option<f32>>,
+    /// Each store's swell, by store slot, refreshed with the levels.
+    swells: Vec<Swell>,
+    ripples: RippleTiles,
+    /// Seconds simulated: the swell's clock, shared with the renderer.
+    clock: f64,
+    /// Store ids and region versions the ripple masks were last built for.
+    masked_for: Vec<(StoreId, u32)>,
     /// This frame's timings so far: an edit's, until the step that follows.
     last_timings: WaterTimings,
     /// The most recent step's timings, edit included.
@@ -107,6 +120,10 @@ impl WaterWorld {
             topology,
             config: HydrologyConfig::from_level(config),
             levels: Vec::new(),
+            swells: Vec::new(),
+            ripples: RippleTiles::new(RippleConfig::default()),
+            clock: 0.0,
+            masked_for: Vec::new(),
             last_timings: WaterTimings::default(),
             last_step: WaterTimings::default(),
             last_edit: None,
@@ -174,6 +191,11 @@ impl WaterWorld {
         self.last_timings.settle = settle;
         self.last_timings.solve = started.elapsed();
         self.last_timings.ticks = ticks;
+
+        let started = Instant::now();
+        self.clock += frame_dt as f64;
+        self.step_ripples(frame_dt);
+        self.last_timings.ripples = started.elapsed();
         if edited {
             self.last_edit = Some(self.last_timings);
         }
@@ -190,6 +212,75 @@ impl WaterWorld {
                 _ => None,
             })
             .collect();
+        self.swells = (0..self.network.store_slots())
+            .map(
+                |i| match (self.network.store(StoreId(i as u32)), self.levels[i]) {
+                    (Some(Store::Basin(b)), Some(level)) => {
+                        Swell::for_basin(b.hypsometry.area(level), i as u32)
+                    }
+                    _ => Swell::default(),
+                },
+            )
+            .collect();
+    }
+
+    /// Advance the ripple tiles, first re-masking them if the topology moved
+    /// under them.
+    fn step_ripples(&mut self, dt: f32) {
+        let shape: Vec<(StoreId, u32)> = self
+            .basins()
+            .map(|(id, b)| (id, b.region_version))
+            .collect();
+        let masks = BodyMasks {
+            graph: self.geometry.graph(),
+            levels: &self.levels,
+        };
+        if shape != self.masked_for {
+            self.ripples.refresh_masks(&masks);
+            self.masked_for = shape;
+        }
+        self.ripples.step(dt, &masks);
+    }
+
+    /// Disturb the surface at `at` for ripples: from a body entering or
+    /// moving through the water.
+    pub fn disturb(&mut self, at: Point3<f32>, radius: f32, disturbance: Disturbance) {
+        let Some(body) = self.query().sample(at).map(|s| s.body) else {
+            return;
+        };
+        let masks = BodyMasks {
+            graph: self.geometry.graph(),
+            levels: &self.levels,
+        };
+        self.ripples
+            .disturb(body, at.x, at.z, radius, disturbance, &masks);
+    }
+
+    /// Apply every disturbance the coupler collected this frame.
+    pub fn apply(&mut self, disturbances: &Disturbances) {
+        for &(at, radius, disturbance) in &disturbances.pending {
+            self.disturb(at, radius, disturbance);
+        }
+    }
+
+    /// Where the camera is, for ranking ripple tiles against their budget.
+    pub fn set_focus(&mut self, focus: Option<Point3<f32>>) {
+        self.ripples.set_focus(focus);
+    }
+
+    /// The ripple tiles that are awake.
+    pub fn ripples(&self) -> &RippleTiles {
+        &self.ripples
+    }
+
+    /// A body's swell.
+    pub fn swell(&self, id: StoreId) -> Swell {
+        self.swells.get(id.0 as usize).copied().unwrap_or_default()
+    }
+
+    /// Seconds simulated: the clock the swell runs on.
+    pub fn clock(&self) -> f32 {
+        self.clock as f32
     }
 
     /// Re-flood a basin in place, as a terrain edit would: for measuring the
@@ -268,6 +359,10 @@ impl WaterWorld {
 
     /// Write the F3 statistics.
     pub fn debug_log(&self, log: &mut DebugLog) {
+        log.add(
+            "Water/Ripples",
+            format!("{} tiles awake", self.ripples.active_count()),
+        );
         let ledger = self.ledger;
         let balance = self.balance();
         log.add("Water/Ledger/Held", format!("{:.3} m³", balance.held));
@@ -308,5 +403,30 @@ impl WaterWorld {
                 ),
             );
         }
+    }
+}
+
+/// Tile masks read off the span graph: the columns where a body's water
+/// stands, and the floor under each.
+struct BodyMasks<'a> {
+    graph: &'a SpanGraph,
+    levels: &'a [Option<f32>],
+}
+
+impl MaskSource for BodyMasks<'_> {
+    fn mask(&self, tile: SpanChunkCoord, body: WaterBodyId) -> Option<TileMask> {
+        let level = self.levels.get(body.0 as usize).copied().flatten()?;
+        let mut mask = TileMask {
+            floors: [f32::NAN; crate::water::geometry::COLUMNS_PER_CHUNK],
+        };
+        for (local, column) in tile.columns().enumerate() {
+            for span in self.graph.refs(column) {
+                let floor = self.graph.span(span).floor_min;
+                if self.graph.owner(span).body == Some(body) && floor < level {
+                    mask.floors[local] = floor;
+                }
+            }
+        }
+        (!mask.is_empty()).then_some(mask)
     }
 }

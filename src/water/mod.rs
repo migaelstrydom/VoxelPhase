@@ -18,12 +18,13 @@ pub mod network;
 pub mod query;
 pub mod sleep_tracker;
 pub mod solver;
+pub mod surface;
 pub mod topology;
 pub mod world;
 
 pub use coupling::{
-    BodySnapshot, Disturbance, RippleField, SplashEvent, StillSurface, WakeEvent, WaveBodyCoupler,
-    WaveCouplingConfig,
+    BodySnapshot, Disturbance, Disturbances, RippleField, SplashEvent, StillSurface, WakeEvent,
+    WaveBodyCoupler, WaveCouplingConfig,
 };
 pub use query::{WaterQuery, WaterSample as WaterPointSample};
 pub use sleep_tracker::WaterSleepTracker;

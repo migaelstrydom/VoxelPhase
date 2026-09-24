@@ -54,17 +54,32 @@ level change is a push constant.
 Anything implementing `WaterScene` can be drawn: `WaterWorld`, and the visual
 bench's fixed `ScenePool`.
 
+## Swell and ripples
+
+The vertex shader adds the body's swell (`swell.glsl`, a sum of five sines
+shared with the CPU so buoyancy floats bodies on the drawn surface), faded
+out over the last metre of depth using the vertex's floor.
+
+A tile whose ripples are awake is not drawn from the coarse mesh. Instead a
+static 65 × 65 grid over the 8 m tile (`ripple.vert`) is displaced by the
+tile's ripple heights, read from a storage buffer (set 1) the CPU fills each
+frame: per awake tile, 64 × 64 heights then the floor under each of its
+16 × 16 columns, NaN where the tile's body holds no water. The fragment
+shader discards the grid outside the body's columns. One buffer and one
+descriptor set per frame slot, both allocated once.
+
 ## Push constants
 
 | Offset | Size | Stage    | Contents                                  |
 |--------|------|----------|-------------------------------------------|
 | 0      | 64   | Vertex   | View matrix (mat4)                        |
 | 64     | 64   | Vertex   | Projection matrix (mat4)                  |
-| 128    | 16   | Vertex   | Body: level (x), rest unused — per draw   |
-| 144    | 16   | Fragment | Camera position (vec3 + padding)          |
-| 160    | 16   | Fragment | Sun direction (vec3 + padding)            |
-| 176    | 16   | Fragment | Near, far planes, time                    |
-| 192    | 16   | Fragment | Screen size, hue preservation, exposure   |
+| 128    | 16   | Vertex   | Body: level, swell amplitude, phase, clock — per draw |
+| 144    | 16   | Vertex   | Tile: origin x, origin z, ripple layer — fine draws only |
+| 160    | 16   | Fragment | Camera position (vec3 + padding)          |
+| 176    | 16   | Fragment | Sun direction (vec3 + padding)            |
+| 192    | 16   | Fragment | Near, far planes, time                    |
+| 208    | 16   | Fragment | Screen size, hue preservation, exposure   |
 
 The near and far planes are extracted from the projection matrix at runtime:
 

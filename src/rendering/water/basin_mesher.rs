@@ -14,9 +14,12 @@
 use nalgebra::Vector2;
 use rustc_hash::FxHashMap;
 
-use crate::water::geometry::{Column, SpanChunkCoord, CHUNK_COLUMNS, COLUMN_SIZE, ORTHOGONAL};
+use crate::water::geometry::{
+    Column, SpanChunkCoord, CHUNK_COLUMNS, COLUMNS_PER_CHUNK, COLUMN_SIZE, ORTHOGONAL,
+};
 use crate::water::ids::StoreId;
 use crate::water::network::Basin;
+use crate::water::surface::Swell;
 use crate::water::WaterWorld;
 
 use super::vertex::BasinVertex;
@@ -42,14 +45,40 @@ pub struct WaterMesh {
 /// different key means a rebuild.
 pub type MeshKey = Vec<(StoreId, u32)>;
 
+/// One awake ripple tile, as the renderer uploads it.
+#[derive(Debug, Clone, Copy)]
+pub struct RippleTileView<'a> {
+    pub tile: SpanChunkCoord,
+    pub body: StoreId,
+    /// Displacement per cell, row-major.
+    pub heights: &'a [f32],
+    /// Floor under each column; NaN where the body holds no water there.
+    pub floors: &'a [f32; COLUMNS_PER_CHUNK],
+}
+
 /// Anything the water renderer can draw: bodies with static meshes and a
-/// level each.
+/// level each, and optionally swell and awake ripple tiles.
 pub trait WaterScene {
     /// Changes whenever [`Self::build_mesh`] would build something different.
     fn mesh_key(&self) -> MeshKey;
     fn build_mesh(&self) -> WaterMesh;
     /// A body's surface level now.
     fn level(&self, body: StoreId) -> Option<f32>;
+
+    /// A body's swell.
+    fn swell(&self, _body: StoreId) -> Swell {
+        Swell::default()
+    }
+
+    /// The clock the swell runs on, s.
+    fn clock(&self) -> f32 {
+        0.0
+    }
+
+    /// Every awake ripple tile.
+    fn ripple_tiles(&self) -> Vec<RippleTileView<'_>> {
+        Vec::new()
+    }
 }
 
 impl WaterScene for WaterWorld {
@@ -63,6 +92,26 @@ impl WaterScene for WaterWorld {
 
     fn level(&self, body: StoreId) -> Option<f32> {
         WaterWorld::level(self, body)
+    }
+
+    fn swell(&self, body: StoreId) -> Swell {
+        WaterWorld::swell(self, body)
+    }
+
+    fn clock(&self) -> f32 {
+        WaterWorld::clock(self)
+    }
+
+    fn ripple_tiles(&self) -> Vec<RippleTileView<'_>> {
+        self.ripples()
+            .active()
+            .map(|(key, tile)| RippleTileView {
+                tile: key.0,
+                body: key.1,
+                heights: &tile.height,
+                floors: &tile.mask.floors,
+            })
+            .collect()
     }
 }
 

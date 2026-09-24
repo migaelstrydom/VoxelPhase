@@ -28,10 +28,11 @@ pub enum Disturbance {
 
 /// Whatever carries surface ripples: the thing the coupler disturbs.
 pub trait RippleField {
-    /// Disturb the surface over a disc of `radius` about (x, z), full at the
+    /// Disturb the surface over a disc of `radius` about `at`, full at the
     /// centre and fading to nothing at the rim. A zero radius disturbs the
-    /// single point.
-    fn disturb(&mut self, x: f32, z: f32, radius: f32, disturbance: Disturbance);
+    /// single point. `at` is on the surface, so its height picks the water
+    /// where one column holds two.
+    fn disturb(&mut self, at: Point3<f32>, radius: f32, disturbance: Disturbance);
 }
 
 /// A field with no ripples: disturbances go nowhere. Splash and wake events
@@ -40,7 +41,20 @@ pub trait RippleField {
 pub struct StillSurface;
 
 impl RippleField for StillSurface {
-    fn disturb(&mut self, _x: f32, _z: f32, _radius: f32, _disturbance: Disturbance) {}
+    fn disturb(&mut self, _at: Point3<f32>, _radius: f32, _disturbance: Disturbance) {}
+}
+
+/// Disturbances collected to apply later, when whatever the coupler read the
+/// water through no longer holds it.
+#[derive(Debug, Default, Clone)]
+pub struct Disturbances {
+    pub pending: Vec<(Point3<f32>, f32, Disturbance)>,
+}
+
+impl RippleField for Disturbances {
+    fn disturb(&mut self, at: Point3<f32>, radius: f32, disturbance: Disturbance) {
+        self.pending.push((at, radius, disturbance));
+    }
 }
 
 /// Emitted when a body impacts the water surface.
@@ -226,9 +240,9 @@ impl WaveBodyCoupler {
                 let down_speed = -body.velocity.y;
                 if down_speed > self.config.impact_speed_threshold {
                     let strength = -down_speed * self.config.impact_strength * mass_factor;
+                    let surface = sample.as_ref().map_or(body.position.y, |s| s.surface_level);
                     ripples.disturb(
-                        body.position.x,
-                        body.position.z,
+                        Point3::new(body.position.x, surface, body.position.z),
                         body.footprint_radius,
                         Disturbance::Velocity(strength),
                     );
@@ -249,9 +263,9 @@ impl WaveBodyCoupler {
                 let vy = body.velocity.y;
                 if vy.abs() > 0.01 {
                     let strength = -vy * self.config.bobbing_strength * mass_factor;
+                    let surface = sample.as_ref().map_or(body.position.y, |s| s.surface_level);
                     ripples.disturb(
-                        body.position.x,
-                        body.position.z,
+                        Point3::new(body.position.x, surface, body.position.z),
                         body.footprint_radius,
                         Disturbance::Displacement(strength),
                     );
@@ -270,14 +284,13 @@ impl WaveBodyCoupler {
                     let wake_offset = -move_dir * body.footprint_radius * 0.8;
                     let wake_pos = body.position + wake_offset;
                     let strength = -h_speed * self.config.wake_strength;
+                    let surface_y = sample.as_ref().map_or(body.position.y, |s| s.surface_level);
                     ripples.disturb(
-                        wake_pos.x,
-                        wake_pos.z,
+                        Point3::new(wake_pos.x, surface_y, wake_pos.z),
                         0.0,
                         Disturbance::Displacement(strength),
                     );
 
-                    let surface_y = sample.as_ref().map_or(body.position.y, |s| s.surface_level);
                     self.wake_events.push(WakeEvent {
                         position: Point3::new(wake_pos.x, surface_y, wake_pos.z),
                         speed: h_speed,
@@ -319,7 +332,7 @@ mod tests {
     }
 
     impl RippleField for Recorder {
-        fn disturb(&mut self, _x: f32, _z: f32, _radius: f32, disturbance: Disturbance) {
+        fn disturb(&mut self, _at: Point3<f32>, _radius: f32, disturbance: Disturbance) {
             self.disturbances.push(disturbance);
         }
     }

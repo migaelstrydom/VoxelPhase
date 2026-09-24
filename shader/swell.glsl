@@ -1,0 +1,45 @@
+// Swell: the analytic long waves on every body of still water.
+//
+// Mirrors src/water/surface/swell.rs wave for wave, so the surface drawn is
+// the surface buoyancy floats bodies on. A test in that file checks the
+// spectrum below against the Rust one.
+
+struct SwellWave {
+    float heading;     // radians from +x towards +z
+    float wavelength;  // metres
+    float share;       // share of the body's amplitude
+};
+
+const int SWELL_WAVES = 5;
+const SwellWave SWELL_SPECTRUM[SWELL_WAVES] = SwellWave[](
+    SwellWave(0.0, 7.3, 0.45),
+    SwellWave(0.7, 4.1, 0.25),
+    SwellWave(-0.9, 2.6, 0.15),
+    SwellWave(1.9, 1.7, 0.10),
+    SwellWave(-2.4, 1.1, 0.05)
+);
+
+const float SWELL_GRAVITY = 9.81;
+const float SWELL_SHORE_FADE = 1.0;
+
+float swellShoreFade(float depth) {
+    return smoothstep(0.0, SWELL_SHORE_FADE, depth);
+}
+
+// Height above the level at xz, and its gradient in .yz.
+vec3 swellAt(vec2 xz, float t, float amplitude, float phase, float depth) {
+    vec3 out_h = vec3(0.0);
+    if (amplitude <= 0.0) {
+        return out_h;
+    }
+    for (int i = 0; i < SWELL_WAVES; i++) {
+        SwellWave w = SWELL_SPECTRUM[i];
+        float k = 6.28318530718 / w.wavelength;
+        float omega = sqrt(SWELL_GRAVITY * k);
+        vec2 d = vec2(cos(w.heading), sin(w.heading));
+        float arg = k * dot(d, xz) - omega * t + phase;
+        out_h.x += w.share * sin(arg);
+        out_h.yz += d * (w.share * k * cos(arg));
+    }
+    return out_h * (amplitude * swellShoreFade(depth));
+}

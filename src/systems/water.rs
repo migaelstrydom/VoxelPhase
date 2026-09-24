@@ -12,7 +12,7 @@ use crate::systems::PhysicsResource;
 use crate::terrain::TerrainWorld;
 use crate::time::Time;
 use crate::water::{
-    BodySnapshot, SplashEvent, StillSurface, WakeEvent, WaterWorld, WaveBodyCoupler,
+    BodySnapshot, Disturbances, SplashEvent, WakeEvent, WaterWorld, WaveBodyCoupler,
 };
 
 /// Steps the water each frame.
@@ -67,7 +67,9 @@ impl<'a> System<'a> for WaterSystem {
         if let Some(mut coupler) = coupler_opt {
             let snapshots =
                 build_body_snapshots(&physics, &bodies, &positions, &velocities, &actuators);
-            coupler.update(&snapshots, &mut StillSurface, &water.query());
+            let mut disturbances = Disturbances::default();
+            coupler.update(&snapshots, &mut disturbances, &water.query());
+            water.apply(&disturbances);
             for splash in coupler.drain_splash_events() {
                 spawn_splash_particles(&splash, &particle_config, &mut particle_pool);
             }

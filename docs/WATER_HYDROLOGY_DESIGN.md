@@ -1361,9 +1361,9 @@ decided before stage 2.
   absorbs an unowned depression under the water at once, so its volume comes
   out of the level.
 - **Waves** were deleted here, not in stage 3. The old renderer was their only
-  visible output, so buoyancy and the surface are flat until ripple tiles
-  arrive. Splash and wake particles still fire. The coupler disturbs any
-  `RippleField`, which is `StillSurface` for now.
+  visible output, so buoyancy and the surface stayed flat until ripple tiles
+  arrived in stage 3. Splash and wake particles still fired. The coupler
+  disturbs any `RippleField`.
 - **Decisions at the gate.** Skyway's pool is left as authored: it drains off the
   world at load, and `level_check` reports it. Routing proceeds without
   centreline hints. Stage 4b re-runs the three routing criteria on a sloped
@@ -1378,6 +1378,25 @@ decided before stage 2.
 
 - `Swell`, `RippleTiles` keyed by body, and the fine tile mesh.
 - `WaveGrid` is deleted.
+
+**As built.**
+
+- **Swell.** Five sines shared by `swell.rs` and `swell.glsl`, and a test holds
+  the two spectra together. Amplitude is 1.5 mm per metre of fetch, capped at
+  15 cm: thin_ice's lake gets 10 cm, test_arena's pond 2 cm. Each body has its
+  own phase.
+- **Ripple tiles.** A padded, branch-free stencil. Dry cells are held at zero.
+  An edge facing a sleeping tile gets a 6-cell sponge. Energy in an edge strip
+  wakes the neighbour it faces, unless the budget is full.
+- **Cost** (`water_perf`): 0.23 ms per frame with 32 tiles awake on thin_ice,
+  0.03–0.19 ms elsewhere. The upload is 544 KB per frame at 32 tiles: 512 KB of
+  heights and 32 KB of column masks, a little over the 0.5 MB target.
+- **Rendering.** The fine tile is a static 65 × 65 grid. It reads heights from a
+  per-slot storage buffer rather than a texture, so it needs no image layout
+  transitions, and the fragment shader discards it outside the body's
+  columns.
+- **Queries** add swell and ripples to the surface. `WaterQuery::level_at` gives
+  the still level for harnesses and anything else that wants hydrology alone.
 
 ### Stage 4a: the correctness core
 

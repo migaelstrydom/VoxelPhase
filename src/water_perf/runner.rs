@@ -291,3 +291,64 @@ pub fn worst_case(path: &Path, repeats: usize) -> Result<WorstCase, String> {
     }
     Ok(out)
 }
+
+/// Ripple tiles at their budget: every awake tile of the largest basin
+/// stepped, as many as the budget allows.
+pub struct RippleCost {
+    pub label: String,
+    pub tiles: usize,
+    pub steps: Vec<Duration>,
+    /// Bytes the renderer uploads per frame for them.
+    pub upload_bytes: usize,
+}
+
+pub fn ripple_cost(path: &Path, frames: usize) -> Result<RippleCost, String> {
+    let level = load_level(path).map_err(|e| e.to_string())?;
+    let terrain = build_terrain(&level);
+    let label = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let config = level
+        .water
+        .as_ref()
+        .ok_or_else(|| format!("{label} has no water"))?;
+    let (mut water, _) = WaterWorld::from_config(config, &terrain);
+    let points: Vec<Point3<f32>> = {
+        let (_, basin) = water
+            .basins()
+            .max_by_key(|(_, b)| b.region.len())
+            .ok_or_else(|| format!("{label} has no basin"))?;
+        let level = basin.level();
+        let mut tiles = std::collections::BTreeSet::new();
+        basin
+            .region
+            .iter()
+            .filter(|r| r.shape.floor_min < level)
+            .filter(|r| tiles.insert(r.span.column.chunk()))
+            .map(|r| {
+                let (x, z) = r.span.column.centre();
+                Point3::new(x, level, z)
+            })
+            .collect()
+    };
+    let dt = 1.0 / TICK_RATE;
+    let mut steps = Vec::with_capacity(frames);
+    for frame in 0..frames {
+        // Keep every tile stirred, as a crowd of floats would.
+        if frame % 30 == 0 {
+            for p in &points {
+                water.disturb(*p, 0.5, crate::water::Disturbance::Velocity(-1.0));
+            }
+        }
+        water.step(dt);
+        steps.push(water.last_step_timings().ripples);
+    }
+    let tiles = water.ripples().active_count();
+    Ok(RippleCost {
+        label,
+        tiles,
+        steps,
+        upload_bytes: tiles * (crate::water::surface::CELLS_PER_TILE + 256) * 4,
+    })
+}

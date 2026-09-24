@@ -18,11 +18,15 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use voxel_phase::water_perf::{
-    basin_table, run_breach, run_level, subject_table, worst_case, worst_case_line, Durations,
+    basin_table, ripple_cost, ripple_line, run_breach, run_level, subject_table, worst_case,
+    worst_case_line, Durations,
 };
 
 const USAGE: &str = "usage: water_perf [--level <level.ron>]... [--quiet S] [--transient S]
                   [--basins] [--repeats N]";
+
+/// Frames of ripple stepping measured per level.
+const RIPPLE_FRAMES: usize = 240;
 
 /// Re-floods of each level's largest basin, for the worst-case figure.
 const WORST_CASE_REPEATS: usize = 20;
@@ -67,6 +71,18 @@ fn main() -> ExitCode {
     for level in &levels {
         match worst_case(level, repeats) {
             Ok(w) => println!("  {}", worst_case_line(&w)),
+            Err(message) => {
+                eprintln!("error: {message}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+    println!();
+
+    println!("Ripples at the budget: the largest basin stirred on every tile it has");
+    for level in &levels {
+        match ripple_cost(level, RIPPLE_FRAMES) {
+            Ok(r) => println!("  {}", ripple_line(&r)),
             Err(message) => {
                 eprintln!("error: {message}");
                 return ExitCode::FAILURE;

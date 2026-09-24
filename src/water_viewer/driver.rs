@@ -27,7 +27,8 @@ impl Default for RunConfig {
 pub struct Sample {
     /// Simulated seconds since the start.
     pub time: f32,
-    /// Level at each probe, in the scenario's probe order. `None` where dry.
+    /// Still level at each probe, in the scenario's probe order, without
+    /// swell or ripples. `None` where dry.
     pub probes: Vec<Option<f32>>,
     /// Total water held, in m³.
     pub volume: f64,
@@ -149,7 +150,7 @@ fn sample(scenario: &Scenario, water: &WaterWorld, time: f32) -> Sample {
         probes: scenario
             .probes
             .iter()
-            .map(|p| query.sample(p.at).map(|s| s.surface))
+            .map(|p| query.level_at(p.at))
             .collect(),
         volume: water.volume(),
         basins: water.basins().count(),

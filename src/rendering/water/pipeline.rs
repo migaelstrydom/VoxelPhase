@@ -1,9 +1,10 @@
-//! Water rendering pipeline.
+//! Water rendering pipelines.
 //!
-//! Creates a graphics pipeline configured for water surface rendering
-//! with alpha blending, depth testing (read-only), volumetric depth via
-//! a depth input attachment, and screen-space refraction via sampling
-//! the opaque color target as a texture at offset UVs.
+//! Two pipelines over one layout and one fragment shader: the coarse surface
+//! (a quad per column) and the fine surface of an awake ripple tile (a static
+//! grid displaced from the ripple storage buffer). Both depth-test against
+//! the opaque scene without writing depth, read that depth for volumetric
+//! tint, and sample the opaque colour target at offset UVs for refraction.
 
 use std::sync::Arc;
 
@@ -13,11 +14,14 @@ use crate::core::device::ManagedDevice;
 use crate::core::error::{EngineError, EngineResult};
 use crate::rendering::shaders::ShaderManager;
 
-use super::vertex::BasinVertex;
+use crate::rendering::in_flight::FRAMES_IN_FLIGHT;
 
-/// Where each draw's body constants start, and how many bytes they are.
+use super::vertex::{BasinVertex, FineVertex};
+
+/// Where each draw's constants start (its body, then its tile), and how many
+/// bytes they are.
 pub const BODY_PUSH_OFFSET: u32 = 128;
-pub const BODY_PUSH_SIZE: u32 = 16;
+pub const BODY_PUSH_SIZE: u32 = 32;
 
 /// Where the fragment stage's constants start.
 pub const FRAGMENT_PUSH_OFFSET: u32 = BODY_PUSH_OFFSET + BODY_PUSH_SIZE;
@@ -34,8 +38,12 @@ pub const FRAGMENT_PUSH_OFFSET: u32 = BODY_PUSH_OFFSET + BODY_PUSH_SIZE;
 pub struct WaterPipeline {
     device: Arc<ManagedDevice>,
     pipeline: vk::Pipeline,
+    /// The fine surface of an awake ripple tile.
+    fine_pipeline: vk::Pipeline,
     pipeline_layout: vk::PipelineLayout,
     descriptor_set_layout: vk::DescriptorSetLayout,
+    /// Set 1: the ripple storage buffer.
+    ripple_set_layout: vk::DescriptorSetLayout,
     descriptor_pool: vk::DescriptorPool,
     descriptor_set: vk::DescriptorSet,
     color_sampler: vk::Sampler,
@@ -52,8 +60,25 @@ impl WaterPipeline {
         let color_sampler = Self::create_color_sampler(&device)?;
         let depth_sampler = Self::create_depth_sampler(&device)?;
         let descriptor_set_layout = Self::create_descriptor_set_layout(&device)?;
-        let pipeline_layout = Self::create_pipeline_layout(&device, descriptor_set_layout)?;
-        let pipeline = Self::create_pipeline(&device, render_pass, pipeline_layout)?;
+        let ripple_set_layout = Self::create_ripple_set_layout(&device)?;
+        let pipeline_layout =
+            Self::create_pipeline_layout(&device, descriptor_set_layout, ripple_set_layout)?;
+        let pipeline = Self::create_pipeline(
+            &device,
+            render_pass,
+            pipeline_layout,
+            ShaderManager::load_water_vertex(&device)?,
+            BasinVertex::binding_description(),
+            &BasinVertex::attribute_descriptions(),
+        )?;
+        let fine_pipeline = Self::create_pipeline(
+            &device,
+            render_pass,
+            pipeline_layout,
+            ShaderManager::load_ripple_vertex(&device)?,
+            FineVertex::binding_description(),
+            &FineVertex::attribute_descriptions(),
+        )?;
         let descriptor_pool = Self::create_descriptor_pool(&device)?;
 
         let descriptor_set =
@@ -70,8 +95,10 @@ impl WaterPipeline {
         Ok(Self {
             device,
             pipeline,
+            fine_pipeline,
             pipeline_layout,
             descriptor_set_layout,
+            ripple_set_layout,
             descriptor_pool,
             descriptor_set,
             color_sampler,
@@ -131,14 +158,32 @@ impl WaterPipeline {
         .map_err(|e| EngineError::Pipeline(format!("water descriptor layout: {:?}", e)))
     }
 
+    fn create_ripple_set_layout(device: &ManagedDevice) -> EngineResult<vk::DescriptorSetLayout> {
+        let bindings = [vk::DescriptorSetLayoutBinding::default()
+            .binding(0)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .descriptor_count(1)
+            .stage_flags(vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT)];
+        let create_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
+        unsafe {
+            device
+                .device
+                .create_descriptor_set_layout(&create_info, None)
+        }
+        .map_err(|e| EngineError::Pipeline(format!("water ripple layout: {:?}", e)))
+    }
+
     fn create_pipeline_layout(
         device: &ManagedDevice,
         descriptor_set_layout: vk::DescriptorSetLayout,
+        ripple_set_layout: vk::DescriptorSetLayout,
     ) -> EngineResult<vk::PipelineLayout> {
         // Push constants layout:
         //   0..128  — view matrix (64) + projection matrix (64) [vertex]
-        // 128..144  — body (vec4: level, unused ×3), one per draw [vertex]
-        // 144..208  — camera_pos (vec4) + sun_dir (vec4) + proj_params (vec4)
+        // 128..160  — body (vec4: level, swell amplitude, swell phase, clock)
+        //             + tile (vec4: origin x, origin z, ripple layer, unused),
+        //             one per draw [vertex]
+        // 160..224  — camera_pos (vec4) + sun_dir (vec4) + proj_params (vec4)
         //             + screen_params (vec4) [fragment]
         let push_constant_ranges = [
             vk::PushConstantRange {
@@ -153,7 +198,7 @@ impl WaterPipeline {
             },
         ];
 
-        let set_layouts = [descriptor_set_layout];
+        let set_layouts = [descriptor_set_layout, ripple_set_layout];
 
         let create_info = vk::PipelineLayoutCreateInfo::default()
             .set_layouts(&set_layouts)
@@ -164,13 +209,19 @@ impl WaterPipeline {
     }
 
     fn create_descriptor_pool(device: &ManagedDevice) -> EngineResult<vk::DescriptorPool> {
-        let pool_sizes = [vk::DescriptorPoolSize {
-            ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-            descriptor_count: 2,
-        }];
+        let pool_sizes = [
+            vk::DescriptorPoolSize {
+                ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+                descriptor_count: 2,
+            },
+            vk::DescriptorPoolSize {
+                ty: vk::DescriptorType::STORAGE_BUFFER,
+                descriptor_count: FRAMES_IN_FLIGHT as u32,
+            },
+        ];
 
         let create_info = vk::DescriptorPoolCreateInfo::default()
-            .max_sets(1)
+            .max_sets(1 + FRAMES_IN_FLIGHT as u32)
             .pool_sizes(&pool_sizes);
 
         unsafe { device.device.create_descriptor_pool(&create_info, None) }
@@ -232,8 +283,10 @@ impl WaterPipeline {
         device: &ManagedDevice,
         render_pass: vk::RenderPass,
         layout: vk::PipelineLayout,
+        vert_module: vk::ShaderModule,
+        binding_description: vk::VertexInputBindingDescription,
+        attribute_descriptions: &[vk::VertexInputAttributeDescription],
     ) -> EngineResult<vk::Pipeline> {
-        let vert_module = ShaderManager::load_water_vertex(device)?;
         let frag_module = ShaderManager::load_water_fragment(device)?;
 
         let entry_name = c"main";
@@ -248,12 +301,9 @@ impl WaterPipeline {
                 .name(entry_name),
         ];
 
-        let binding_description = BasinVertex::binding_description();
-        let attribute_descriptions = BasinVertex::attribute_descriptions();
-
         let vertex_input_state = vk::PipelineVertexInputStateCreateInfo::default()
             .vertex_binding_descriptions(std::slice::from_ref(&binding_description))
-            .vertex_attribute_descriptions(&attribute_descriptions);
+            .vertex_attribute_descriptions(attribute_descriptions);
 
         let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
             .topology(vk::PrimitiveTopology::TRIANGLE_LIST);
@@ -326,6 +376,39 @@ impl WaterPipeline {
         self.pipeline
     }
 
+    /// The pipeline for an awake ripple tile's fine surface.
+    pub fn fine_pipeline(&self) -> vk::Pipeline {
+        self.fine_pipeline
+    }
+
+    /// A descriptor set pointing set 1 at a ripple storage buffer. One per
+    /// frame slot, allocated once: a set is never rewritten while a frame may
+    /// be reading it.
+    pub fn allocate_ripple_set(
+        &self,
+        buffer: vk::Buffer,
+        size: vk::DeviceSize,
+    ) -> EngineResult<vk::DescriptorSet> {
+        let set = Self::allocate_descriptor_set(
+            &self.device,
+            self.descriptor_pool,
+            self.ripple_set_layout,
+        )?;
+        let info = vk::DescriptorBufferInfo::default()
+            .buffer(buffer)
+            .offset(0)
+            .range(size);
+        let write = vk::WriteDescriptorSet::default()
+            .dst_set(set)
+            .dst_binding(0)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .buffer_info(std::slice::from_ref(&info));
+        unsafe {
+            self.device.device.update_descriptor_sets(&[write], &[]);
+        }
+        Ok(set)
+    }
+
     pub fn layout(&self) -> vk::PipelineLayout {
         self.pipeline_layout
     }
@@ -341,6 +424,9 @@ impl Drop for WaterPipeline {
             self.device.device.destroy_pipeline(self.pipeline, None);
             self.device
                 .device
+                .destroy_pipeline(self.fine_pipeline, None);
+            self.device
+                .device
                 .destroy_pipeline_layout(self.pipeline_layout, None);
             self.device
                 .device
@@ -348,6 +434,9 @@ impl Drop for WaterPipeline {
             self.device
                 .device
                 .destroy_descriptor_set_layout(self.descriptor_set_layout, None);
+            self.device
+                .device
+                .destroy_descriptor_set_layout(self.ripple_set_layout, None);
             self.device.device.destroy_sampler(self.color_sampler, None);
             self.device.device.destroy_sampler(self.depth_sampler, None);
         }

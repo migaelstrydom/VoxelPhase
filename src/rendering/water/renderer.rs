@@ -3,22 +3,46 @@
 //! Meshes are static between topology changes (see [`basin_mesher`]): the
 //! renderer rebuilds its mesh only when a basin's region changes, uploads it
 //! once into each frame slot's buffers, and otherwise only pushes each
-//! body's level per draw.
+//! body's level and swell per draw. A tile whose ripples are awake is drawn
+//! instead from a fine grid displaced out of that frame's ripple storage.
 //!
 //! [`basin_mesher`]: super::basin_mesher
 
 use std::sync::Arc;
 
 use ash::vk;
-use nalgebra::{Matrix4, Vector3};
+use nalgebra::{Matrix4, Vector2, Vector3};
+use rustc_hash::FxHashMap;
 
 use super::basin_mesher::{MeshKey, WaterMesh, WaterScene};
 use super::pipeline::{WaterPipeline, BODY_PUSH_OFFSET, FRAGMENT_PUSH_OFFSET};
-use super::vertex::BasinVertex;
+use super::vertex::{BasinVertex, FineVertex};
 use crate::core::device::ManagedDevice;
 use crate::core::error::EngineResult;
 use crate::core::vulkan_context::VulkanContext;
+use crate::rendering::frame::ManagedBuffer;
 use crate::rendering::in_flight::{FrameSlot, PerFrame, StreamedMesh};
+use crate::water::geometry::{CHUNK_COLUMNS, COLUMNS_PER_CHUNK, COLUMN_SIZE};
+use crate::water::ids::StoreId;
+use crate::water::surface::{RippleConfig, CELLS_PER_TILE};
+
+/// Ripple tiles one frame can draw: the ripple budget.
+fn ripple_layers() -> usize {
+    RippleConfig::default().max_active
+}
+
+/// Floats per ripple tile in the storage buffer: its heights, then the
+/// floor under each column. Mirrors `RIPPLE_TILE_STRIDE` in `ripple.glsl`.
+const RIPPLE_TILE_STRIDE: usize = CELLS_PER_TILE + COLUMNS_PER_CHUNK;
+
+/// Vertices along each side of the fine grid.
+const FINE_SIDE: usize = 65;
+
+/// One frame slot's ripple storage, and the descriptor set pointing at it.
+struct RippleSlot {
+    buffer: ManagedBuffer,
+    set: vk::DescriptorSet,
+}
 
 /// One frame slot's copy of the mesh.
 struct SlotMesh {
@@ -39,6 +63,10 @@ pub struct WaterRenderer {
     /// Bumped on every rebuild of `mesh`.
     version: u64,
     slots: PerFrame<SlotMesh>,
+    ripple_slots: PerFrame<RippleSlot>,
+    /// The fine grid every awake ripple tile is drawn with. Never changes.
+    fine_grid: StreamedMesh,
+    fine_indices: u32,
     /// The frame being recorded, as [`Self::begin_frame`] was told.
     slot: FrameSlot,
 }
@@ -53,9 +81,32 @@ impl WaterRenderer {
         let device = Arc::clone(&vulkan_context.device);
         let pipeline =
             WaterPipeline::new(Arc::clone(&device), render_pass, depth_view, color_view)?;
+        let host = vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
+        let ripple_bytes =
+            (ripple_layers() * RIPPLE_TILE_STRIDE * std::mem::size_of::<f32>()) as vk::DeviceSize;
+        let ripple_slots = PerFrame::try_new(|_| {
+            let buffer = ManagedBuffer::new(
+                Arc::clone(&device),
+                ripple_bytes,
+                vk::BufferUsageFlags::STORAGE_BUFFER,
+                host,
+            )?;
+            let set = pipeline.allocate_ripple_set(buffer.buffer, ripple_bytes)?;
+            Ok(RippleSlot { buffer, set })
+        })?;
+        let (grid_vertices, grid_indices) = fine_grid();
+        let fine_grid = StreamedMesh::new(
+            &device,
+            std::mem::size_of_val(grid_vertices.as_slice()) as vk::DeviceSize,
+            std::mem::size_of_val(grid_indices.as_slice()) as vk::DeviceSize,
+        )?;
+        fine_grid.upload(&grid_vertices, &grid_indices)?;
         Ok(Self {
             device,
             pipeline,
+            ripple_slots,
+            fine_grid,
+            fine_indices: grid_indices.len() as u32,
             mesh: WaterMesh::default(),
             key: MeshKey::new(),
             version: 0,
@@ -127,9 +178,11 @@ impl WaterRenderer {
         if self.mesh.draws.is_empty() {
             return Ok(());
         }
+        let layers = self.upload_ripples(water)?;
         let Some(mesh) = self.slots[self.slot].buffers.as_ref() else {
             return Ok(());
         };
+        let clock = water.clock();
         // Bind pipeline and draw
         unsafe {
             self.device.device.cmd_bind_pipeline(
@@ -195,30 +248,31 @@ impl WaterRenderer {
                 bytemuck_cast_slice(&frag_push_data),
             );
 
-            // Bind depth input attachment descriptor set
+            // Set 0: the opaque scene's colour and depth; set 1: this slot's
+            // ripple tiles.
             self.device.device.cmd_bind_descriptor_sets(
                 cb,
                 vk::PipelineBindPoint::GRAPHICS,
                 self.pipeline.layout(),
                 0,
-                &[self.pipeline.descriptor_set()],
+                &[
+                    self.pipeline.descriptor_set(),
+                    self.ripple_slots[self.slot].set,
+                ],
                 &[],
             );
 
             mesh.bind(&self.device.device, cb);
 
             for draw in &self.mesh.draws {
+                // A tile whose ripples are awake is drawn fine, below.
+                if layers.contains_key(&(draw.tile.x, draw.tile.z, draw.body)) {
+                    continue;
+                }
                 let Some(level) = water.level(draw.body) else {
                     continue;
                 };
-                let body: [f32; 4] = [level, 0.0, 0.0, 0.0];
-                self.device.device.cmd_push_constants(
-                    cb,
-                    self.pipeline.layout(),
-                    vk::ShaderStageFlags::VERTEX,
-                    BODY_PUSH_OFFSET,
-                    bytemuck_cast_slice(&body),
-                );
+                self.push_draw(cb, water, draw.body, level, clock, [0.0; 4]);
                 self.device.device.cmd_draw_indexed(
                     cb,
                     draw.index_count,
@@ -228,10 +282,118 @@ impl WaterRenderer {
                     0,
                 );
             }
+
+            if !layers.is_empty() {
+                self.device.device.cmd_bind_pipeline(
+                    cb,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    self.pipeline.fine_pipeline(),
+                );
+                self.fine_grid.bind(&self.device.device, cb);
+                let mut tiles: Vec<(&(i32, i32, StoreId), &usize)> = layers.iter().collect();
+                tiles.sort();
+                let extent = CHUNK_COLUMNS as f32 * COLUMN_SIZE;
+                for (&(tx, tz, body), &layer) in tiles {
+                    let Some(level) = water.level(body) else {
+                        continue;
+                    };
+                    let tile = [tx as f32 * extent, tz as f32 * extent, layer as f32, 0.0];
+                    self.push_draw(cb, water, body, level, clock, tile);
+                    self.device
+                        .device
+                        .cmd_draw_indexed(cb, self.fine_indices, 1, 0, 0, 0);
+                }
+            }
         }
 
         Ok(())
     }
+}
+
+impl WaterRenderer {
+    /// Push one draw's body and tile constants.
+    fn push_draw(
+        &self,
+        cb: vk::CommandBuffer,
+        water: &dyn WaterScene,
+        body: StoreId,
+        level: f32,
+        clock: f32,
+        tile: [f32; 4],
+    ) {
+        let swell = water.swell(body);
+        let constants: [f32; 8] = [
+            level,
+            swell.amplitude,
+            swell.phase,
+            clock,
+            tile[0],
+            tile[1],
+            tile[2],
+            tile[3],
+        ];
+        unsafe {
+            self.device.device.cmd_push_constants(
+                cb,
+                self.pipeline.layout(),
+                vk::ShaderStageFlags::VERTEX,
+                BODY_PUSH_OFFSET,
+                bytemuck_cast_slice(&constants),
+            );
+        }
+    }
+
+    /// Write this frame's awake ripple tiles into the slot's storage buffer.
+    /// Returns each tile's layer, keyed by (tile x, tile z, body).
+    fn upload_ripples(
+        &self,
+        water: &dyn WaterScene,
+    ) -> EngineResult<FxHashMap<(i32, i32, StoreId), usize>> {
+        let mut layers = FxHashMap::default();
+        let tiles = water.ripple_tiles();
+        if tiles.is_empty() {
+            return Ok(layers);
+        }
+        let buffer = &self.ripple_slots[self.slot].buffer;
+        unsafe {
+            let ptr = buffer.map_memory(0, vk::MemoryMapFlags::empty())? as *mut f32;
+            for (layer, tile) in tiles.iter().take(ripple_layers()).enumerate() {
+                let base = ptr.add(layer * RIPPLE_TILE_STRIDE);
+                std::ptr::copy_nonoverlapping(tile.heights.as_ptr(), base, CELLS_PER_TILE);
+                std::ptr::copy_nonoverlapping(
+                    tile.floors.as_ptr(),
+                    base.add(CELLS_PER_TILE),
+                    COLUMNS_PER_CHUNK,
+                );
+                layers.insert((tile.tile.x, tile.tile.z, tile.body), layer);
+            }
+            buffer.unmap_memory();
+        }
+        Ok(layers)
+    }
+}
+
+/// The fine grid over one tile: 65 × 65 vertices across 8 m.
+fn fine_grid() -> (Vec<FineVertex>, Vec<u32>) {
+    let extent = CHUNK_COLUMNS as f32 * COLUMN_SIZE;
+    let step = extent / (FINE_SIDE - 1) as f32;
+    let mut vertices = Vec::with_capacity(FINE_SIDE * FINE_SIDE);
+    for k in 0..FINE_SIDE {
+        for i in 0..FINE_SIDE {
+            vertices.push(FineVertex {
+                local: Vector2::new(i as f32 * step, k as f32 * step),
+            });
+        }
+    }
+    let at = |i: usize, k: usize| (k * FINE_SIDE + i) as u32;
+    let mut indices = Vec::with_capacity((FINE_SIDE - 1) * (FINE_SIDE - 1) * 6);
+    for k in 0..FINE_SIDE - 1 {
+        for i in 0..FINE_SIDE - 1 {
+            let (a, b, c, d) = (at(i, k), at(i + 1, k), at(i + 1, k + 1), at(i, k + 1));
+            indices.extend_from_slice(&[a, d, c, a, c, b]);
+        }
+    }
+    (vertices, indices)
 }
 
 /// Helper to cast a slice of f32 to bytes.
