@@ -555,26 +555,39 @@ pub fn pit_bottom_within(
     mut span: SpanRef,
     within: impl Fn(SpanRef) -> bool,
 ) -> SpanRef {
-    loop {
-        let here = graph.span(span).floor_min;
-        let lower = graph
-            .orthogonal_neighbours(span)
-            .into_iter()
-            .filter(|n| {
-                graph.span(n.span).floor_min < here && n.saddle <= here + 1e-6 && within(n.span)
-            })
-            .min_by(|a, b| {
-                graph
-                    .span(a.span)
-                    .floor_min
-                    .total_cmp(&graph.span(b.span).floor_min)
-                    .then(a.span.cmp(&b.span))
-            });
-        match lower {
-            Some(n) => span = n.span,
-            None => return span,
-        }
+    while let Some(next) = downhill_within(graph, span, &within) {
+        span = next;
     }
+    span
+}
+
+/// The lowest neighbour water on `span` runs down to, over the real floor
+/// rather than the filled surface: the way down a pit's dry side. `None` at
+/// the bottom.
+pub fn downhill(graph: &SpanGraph, span: SpanRef) -> Option<SpanRef> {
+    downhill_within(graph, span, &|_| true)
+}
+
+fn downhill_within(
+    graph: &SpanGraph,
+    span: SpanRef,
+    within: &dyn Fn(SpanRef) -> bool,
+) -> Option<SpanRef> {
+    let here = graph.span(span).floor_min;
+    graph
+        .orthogonal_neighbours(span)
+        .into_iter()
+        .filter(|n| {
+            graph.span(n.span).floor_min < here && n.saddle <= here + 1e-6 && within(n.span)
+        })
+        .min_by(|a, b| {
+            graph
+                .span(a.span)
+                .floor_min
+                .total_cmp(&graph.span(b.span).floor_min)
+                .then(a.span.cmp(&b.span))
+        })
+        .map(|n| n.span)
 }
 
 #[cfg(test)]

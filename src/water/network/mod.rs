@@ -17,8 +17,9 @@ mod store;
 pub use basin::{Basin, HoleColumn, HoleGeometry, Outflow};
 pub use centreline::{chaikin, Centreline, SMOOTHING_PASSES};
 pub use depression::{
-    is_pothole, pit_bottom, pit_bottom_within, CrestCell, CrestKind, DepressionFinder, Flood,
-    FloodMode, MergeSaddle, RegionSpan, CLIMB_LIMIT, HEADROOM, POTHOLE_DEPTH, POTHOLE_VOLUME,
+    downhill, is_pothole, pit_bottom, pit_bottom_within, CrestCell, CrestKind, DepressionFinder,
+    Flood, FloodMode, MergeSaddle, RegionSpan, CLIMB_LIMIT, HEADROOM, POTHOLE_DEPTH,
+    POTHOLE_VOLUME,
 };
 pub use fall_tracer::{FallTracer, Landing, Trace, FALL_RUN, FALL_THRESHOLD, GRAVITY};
 pub use hypsometry::{DeadStorage, Hypsometry, POTHOLE_STEP, WET_BAND};

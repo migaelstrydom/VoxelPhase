@@ -14,7 +14,7 @@ use nalgebra::Point3;
 use crate::water::geometry::{Drain, SpanGraph, SpanRef};
 use crate::water::ids::StoreId;
 use crate::water::network::{
-    is_pothole, Centreline, CrossSection, Network, RatingCurve, Reach, Store, FALL_RUN,
+    downhill, is_pothole, Centreline, CrossSection, Network, RatingCurve, Reach, Store, FALL_RUN,
     FALL_THRESHOLD,
 };
 
@@ -69,8 +69,10 @@ pub struct WalkLip {
 }
 
 /// The cells a channel from `start` runs over, and where it ends. The walk
-/// stops at the first span under a basin's water, at a span already carrying
-/// a reach, at the void, at a real depression and at a fall step. Whether
+/// follows the drainage field, and inside a real depression, below where it
+/// would spill, runs straight down the pit's dry side instead. It stops at
+/// the first span under a basin's water, at a span already carrying a reach,
+/// at the void, at the bottom of a dry pit and at a fall step. Whether
 /// water falls from its last cell into a basin is its end link's lip's to
 /// say (§7.9), not the walk's. `from` is
 /// the basin the channel leaves: its own spans do not end it.
@@ -115,7 +117,16 @@ pub fn walk(
             return (cells, WalkEnd::Void(span));
         }
         if fill > floor + 1e-3 && (!fill.is_finite() || !is_pothole(graph, span, fill)) {
-            return (cells, WalkEnd::Depression(span));
+            // In a pit, below where it would spill: the water runs on down
+            // the pit's dry side to the water standing in it, or to its
+            // bottom, where an empty basin is made.
+            match downhill(graph, span) {
+                Some(next) => {
+                    span = next;
+                    continue;
+                }
+                None => return (cells, WalkEnd::Depression(span)),
+            }
         }
         match drainage.downstream_resolved(graph, span) {
             Some(next) => span = next,

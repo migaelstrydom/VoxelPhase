@@ -554,35 +554,41 @@ fn a_lake_moves_a_channel_s_shoreline_without_pouring_the_channel_into_it() {
                 .query()
                 .sample(Point3::new(4.0, 6.2, 0.0))
                 .map(|s| s.body);
-            let top = water.network().links().find_map(|(_, l)| {
-                matches!(water.network().store(l.up), Some(Store::Reservoir)).then_some(l.down)
-            });
-            logs.push((water.topology_log().to_vec(), lake, top));
+            let channel: Vec<StoreId> = water
+                .network()
+                .stores()
+                .filter(|(_, s)| s.as_reach().is_some())
+                .map(|(id, _)| id)
+                .collect();
+            logs.push((water.topology_log().to_vec(), lake, channel));
         },
     )
     .unwrap();
     assert!(recorded.samples.iter().all(|s| s.ledger_error.abs() < 1e-6));
-    let (before, lake, top) = &logs[0];
-    let (lake, top) = (lake.expect("the lake"), top.expect("the channel"));
+    let (before, lake, channel) = &logs[0];
+    let lake = lake.expect("the lake");
     // Rising, the lake cuts the channel back cell by cell, and what the
-    // channel loses goes into the lake: none of it is poured elsewhere.
-    assert!(
-        before
-            .iter()
-            .filter(|e| matches!(e, TopologyEdit::CutReach { reach, .. } if *reach == top))
-            .count()
-            >= 2
-    );
+    // channel loses goes into the lake: none of it is poured elsewhere, and
+    // no reach is laid again.
+    let cuts = before
+        .iter()
+        .filter(|e| matches!(e, TopologyEdit::CutReach { reach, .. } if channel.contains(reach)))
+        .count();
+    assert!(cuts >= 2, "{cuts} cuts");
     for edit in before {
-        if let TopologyEdit::Transfer { from, to, .. } = edit {
-            if *from == Account::Store(top) {
-                assert_eq!(*to, Account::Store(lake), "{edit:?}");
+        match edit {
+            TopologyEdit::Transfer {
+                from: Account::Store(from),
+                to,
+                ..
+            } if channel.contains(from) => {
+                assert_eq!(*to, Account::Store(lake), "{edit:?}")
             }
+            TopologyEdit::RemoveStore { store, residual_to } if channel.contains(store) => {
+                assert_eq!(*residual_to, Account::Store(lake), "{edit:?}")
+            }
+            _ => {}
         }
-        assert!(
-            !matches!(edit, TopologyEdit::RemoveStore { store, .. } if *store == top),
-            "the channel was re-laid"
-        );
     }
     // Before the blast its level climbs smoothly: no river's storage is
     // dumped into it at once.
@@ -602,7 +608,7 @@ fn a_lake_moves_a_channel_s_shoreline_without_pouring_the_channel_into_it() {
     let (after, _, _) = &logs[1];
     assert!(after[before.len()..]
         .iter()
-        .any(|e| matches!(e, TopologyEdit::ExtendReach { reach, .. } if *reach == top)));
+        .any(|e| matches!(e, TopologyEdit::ExtendReach { reach, .. } if channel.contains(reach))));
 }
 
 #[test]
@@ -768,35 +774,80 @@ fn a_river_ending_a_little_over_the_sea_falls_into_it() {
 fn a_reach_cut_short_by_rising_water_lets_out_what_it_did_before() {
     let scenario = find("shoreline").unwrap();
     let dt = 1.0 / 60.0;
-    let times: Vec<f32> = (0..3000).map(|i| 120.0 + i as f32 * dt).collect();
-    // Each tick: the edits so far, and the outflow of the reach the spring
-    // feeds.
-    let mut ticks: Vec<(usize, f64)> = Vec::new();
+    let times: Vec<f32> = (0..6000).map(|i| 60.0 + i as f32 * dt).collect();
+    // Each tick: the reaches cut so far, and every reach's outflow.
+    let mut ticks: Vec<(Vec<StoreId>, Vec<(StoreId, f64)>)> = Vec::new();
     run_with_captures(&scenario, RunConfig::default(), &times, |_, _, water| {
-        let top = water.network().links().find_map(|(_, l)| {
-            matches!(water.network().store(l.up), Some(Store::Reservoir)).then_some(l.down)
-        });
-        let outflow = top
-            .and_then(|id| water.network().store(id)?.as_reach())
-            .map_or(0.0, |r| r.outflow);
-        let cuts = water
+        let cut = water
             .topology_log()
             .iter()
-            .filter(|e| matches!(e, TopologyEdit::CutReach { .. }))
-            .count();
-        ticks.push((cuts, outflow));
+            .filter_map(|e| match e {
+                TopologyEdit::CutReach { reach, .. } => Some(*reach),
+                _ => None,
+            })
+            .collect();
+        let outflows = water
+            .network()
+            .stores()
+            .filter_map(|(id, s)| Some((id, s.as_reach()?.outflow)))
+            .collect();
+        ticks.push((cut, outflows));
     })
     .unwrap();
-    let across: Vec<(f64, f64)> = ticks
-        .windows(2)
-        .filter(|w| w[1].0 > w[0].0)
-        .map(|w| (w[0].1, w[1].1))
-        .collect();
-    assert!(!across.is_empty(), "no cut in the window");
-    for (before, after) in across {
-        assert!(
-            (after - before).abs() < 0.05 * before.max(0.1),
-            "outflow {before} -> {after} across a cut"
-        );
+    let outflow = |tick: &(Vec<StoreId>, Vec<(StoreId, f64)>), id: StoreId| {
+        tick.1.iter().find(|(r, _)| *r == id).map(|(_, q)| *q)
+    };
+    let mut checked = 0;
+    for w in ticks.windows(2) {
+        for reach in &w[1].0[w[0].0.len()..] {
+            let (Some(before), Some(after)) = (outflow(&w[0], *reach), outflow(&w[1], *reach))
+            else {
+                continue;
+            };
+            assert!(
+                (after - before).abs() < 0.05 * before.max(0.1),
+                "reach {reach:?}: outflow {before} -> {after} across a cut"
+            );
+            checked += 1;
+        }
     }
+    assert!(checked >= 2, "{checked} cuts in the window");
+}
+
+#[test]
+fn a_breached_dam_pours_down_its_spillway_as_a_river() {
+    let level = load_level(Path::new("levels/water_park.level.ron")).unwrap();
+    let mut terrain = build_terrain(&level);
+    let (mut water, _) = WaterWorld::from_config(level.water.as_ref().unwrap(), &terrain);
+    terrain.detonate(Point3::new(-48.3, 7.5, 40.0), &BlastConfig::default());
+    terrain.update();
+    water.on_terrain_update(&terrain);
+    for _ in 0..(60 * 20) {
+        water.step(1.0 / 60.0);
+    }
+    let query = water.query();
+    let reservoir = query.level_at(Point3::new(-62.0, 5.0, 40.0)).unwrap();
+    assert!(reservoir < 8.3, "the reservoir stands at {reservoir}");
+    // Its water runs as a river down the spillway, from the breach to the
+    // pit, wetted along its length...
+    let spillway: Vec<_> = water
+        .network()
+        .stores()
+        .filter_map(|(_, s)| s.as_reach())
+        .filter(|r| {
+            r.centreline
+                .points
+                .iter()
+                .all(|p| p.x > -50.0 && p.x < -25.0 && (p.z - 40.0).abs() < 6.0)
+        })
+        .collect();
+    let length: f32 = spillway.iter().map(|r| r.length).sum();
+    assert!(length > 12.0, "{} m of river down the spillway", length);
+    assert!(spillway
+        .iter()
+        .all(|r| r.inflow > 1.0 && r.front >= r.length));
+    // ...into the pit, filling.
+    let pit = query.level_at(Point3::new(-29.0, -1.5, 40.0));
+    assert!(pit.is_some_and(|l| l > -1.5), "the pit stands at {pit:?}");
+    assert!(water.balance().is_balanced());
 }

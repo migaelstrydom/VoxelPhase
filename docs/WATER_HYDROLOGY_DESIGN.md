@@ -654,9 +654,13 @@ order.
   whole flat, including where fill did not change. Repair therefore re-runs it for every
   flat the Dijkstra touched.
 
-**Channels.** A channel follows drainage directions until it enters a real depression. It
-ends there in a basin, which is created empty if none exists. That basin's outlet crest
-starts the next channel.
+**Channels.** A channel follows drainage directions until it enters a real depression.
+There, below where the depression spills, the drainage field is flat: the channel instead
+runs straight down the pit's dry side over the real floor, to the water standing in it, or
+to its bottom, where an empty basin is made. As that water rises and falls, Drowned and
+Exposed (§8.2) move the channel's end with it. That basin's outlet crest starts the next
+channel. A crest into a neighbouring pit is routed the same way while no water stands just
+beyond it; once water does, it is a weir between the two basins.
 
 **Potholes are decided by geometry, not discharge.** A depression at most `pothole_depth`
 deep (default 0.3 m) **and** holding at most `pothole_volume` (default 1 m³) is absorbed.
@@ -670,7 +674,7 @@ neither blocky nor √2 too wide.
 
 **A channel ends:**
 
-- at a real depression,
+- at the bottom of a dry pit,
 - at the first span whose `floor_min` lies below the level of the body that owns it (the
   rest of the channel is drowned, §8.2). Its last link has a lip like any other (§7.9):
   whether a sheet is drawn there follows from the heights, not from the walk,
@@ -2068,14 +2072,16 @@ and ratings stopped at a shore.
   blast, the undercroft's cavern after its blast; skyway's pool; the sea wall's breach
   through its fill; the shoreline scenario; island_sea's ditch. `water_viewer` takes
   `--eye` and `--look` for this.
+- **Water runs down a basin's dry bed.** A channel once ended where it entered a
+  depression, below its spill level, and a crest into a pit (a breached dam) linked
+  straight to the pit's basin: water_park's dam poured 1.4 m onto its spillway and
+  appeared in the pit with nothing drawn down the 21 m between, and a river stopped
+  metres short of a filling lake. The walk now runs down the pit's dry side over the real
+  floor (`downhill`), and a crest into a pit with no water just beyond it is routed. A
+  channel too short to lay a reach leaves the water to fall from the crest itself. A basin
+  a channel ends in counts as fed while the channel stands, however far its front has to
+  run: an empty basin at a pit's bottom was otherwise dried and made again every tick.
 - **Open.**
-  - Water does not run down a basin's dry bed. A channel ends where it enters a
-    depression, below its spill level, and a crest into a pit (a breached dam) links
-    straight to the pit's basin. So the shoreline scenario's river stops metres short of
-    a filling lake, and water_park's dam pours 1.4 m onto its spillway and appears in the
-    pit, with nothing drawn down the 21 m between. Laying the channel down the dry bed to
-    the water, and letting Drowned and Exposed move its end, would fix both; it changes
-    how every channel into a filling basin is laid, so it waits on a decision.
   - A lake's re-flood when it rises to its region's cap still drops and relays its
     outflow channel (the churn noted at stage 5); nothing is lost, since that water was
     going where the channel took it.

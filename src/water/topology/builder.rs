@@ -1409,7 +1409,14 @@ impl TopologyBuilder {
                 continue;
             }
             let outflow = outflow.clone();
-            let routed = outflow.kind == CrestKind::Outlet
+            // Water over an outlet runs down a channel; so does water over a
+            // crest into a neighbouring pit while no water stands beyond it,
+            // down the pit's dry side to whatever stands at its bottom.
+            let into_dry = match outflow.kind {
+                CrestKind::Outlet => true,
+                CrestKind::Child { .. } => !self.water_beyond(t, &outflow),
+            };
+            let routed = into_dry
                 && outflow.hole.is_none()
                 && outflow.cells.iter().all(|c| c.inside != c.outside);
             let entry = if routed {
@@ -1431,6 +1438,17 @@ impl TopologyBuilder {
             else {
                 continue;
             };
+            // A channel too short to lay a reach leaves the water to fall
+            // from the crest itself, down the pit's side.
+            let into_reach = t.network.store(target).and_then(Store::as_reach).is_some();
+            let (fall, lip) = match fall {
+                None if routed && !into_reach => (
+                    self.outflow_lip(&outflow)
+                        .and_then(|lip| self.outflow_arc(t, id, &outflow, &lip)),
+                    None,
+                ),
+                fall => (fall, lip),
+            };
             // Two basins across one ridge share one reversible weir: a
             // second, the other way, would carry the same water twice.
             let shared = t.network.links().find_map(|(link, e)| {
@@ -1447,6 +1465,18 @@ impl TopologyBuilder {
                 }
             }
         }
+    }
+
+    /// Whether water stands just beyond an outflow's lowest crest cell.
+    fn water_beyond(&self, t: &Topology, outflow: &Outflow) -> bool {
+        let Some(cell) = outflow
+            .cells
+            .iter()
+            .min_by(|a, b| a.saddle.total_cmp(&b.saddle))
+        else {
+            return false;
+        };
+        surface_over(t.geometry.graph(), t.network, cell.outside).is_some()
     }
 
     /// Close links whose flow has fallen below `Q_RETIRE`; reopen closed ones
@@ -1901,17 +1931,14 @@ impl TopologyBuilder {
     }
 
     /// Whether anything flows into a store, or is on its way: a channel
-    /// whose front has yet to reach its end feeds the store it ends in.
+    /// ending in it feeds it until the channel retires, however far its
+    /// front has still to run.
     fn fed(&self, t: &Topology, id: StoreId) -> bool {
         t.network.links().any(|(_, l)| {
             if !l.open || (l.down != id && l.up != id) {
                 return false;
             }
-            let coming = l.down == id
-                && t.network
-                    .store(l.up)
-                    .and_then(Store::as_reach)
-                    .is_some_and(|r| r.inflow > 0.0);
+            let coming = l.down == id && t.network.store(l.up).and_then(Store::as_reach).is_some();
             let volume = |s: StoreId| t.network.store(s).map_or(0.0, Store::volume);
             let q = match (
                 t.network.view(l.up, volume(l.up), l.up_port),
