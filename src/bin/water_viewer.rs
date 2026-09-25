@@ -13,10 +13,13 @@
 //! cargo run --bin water_viewer -- all --no-render            # one line per scenario
 //! cargo run --bin water_viewer -- breach --no-render --every 5 --csv /tmp/breach.csv
 //! cargo run --bin water_viewer -- island_pool --tiles 8 --from 0 --to 1
+//! cargo run --bin water_viewer -- sea_wall --eye 2,2,-4 --look 0,-1,-8   # a closer look
 //! ```
 
 use std::path::PathBuf;
 use std::process::ExitCode;
+
+use nalgebra::Point3;
 
 use voxel_phase::level::Settle;
 use voxel_phase::level_viewer::{custom_shot, LevelViewer};
@@ -55,6 +58,9 @@ struct Film {
     width: u32,
     height: u32,
     out: Option<PathBuf>,
+    /// Where the camera stands and what it looks at, in place of the
+    /// scenario's own.
+    camera: Option<(Point3<f32>, Point3<f32>)>,
 }
 
 fn main() -> ExitCode {
@@ -128,7 +134,7 @@ fn film(scenario: &Scenario, options: &Options) -> Result<voxel_phase::water_vie
         })
         .collect();
 
-    let (eye, look) = scenario.camera;
+    let (eye, look) = film.camera.unwrap_or(scenario.camera);
     let mut frames = Vec::new();
     let mut failure = None;
     let recorded = run_with_captures(scenario, options.config, &captures, |at, terrain, water| {
@@ -174,6 +180,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Option<Options>, Str
             width: 480,
             height: 360,
             out: None,
+            camera: None,
         },
     };
     let mut args = args.peekable();
@@ -205,6 +212,16 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Option<Options>, Str
             "--width" => options.film.width = parse_number(&value(&arg)?)?,
             "--height" => options.film.height = parse_number(&value(&arg)?)?,
             "--out" => options.film.out = Some(PathBuf::from(value(&arg)?)),
+            "--eye" => {
+                let eye = parse_point(&value(&arg)?)?;
+                let look = options.film.camera.map_or(Point3::origin(), |(_, l)| l);
+                options.film.camera = Some((eye, look));
+            }
+            "--look" => {
+                let look = parse_point(&value(&arg)?)?;
+                let eye = options.film.camera.map_or(Point3::origin(), |(e, _)| e);
+                options.film.camera = Some((eye, look));
+            }
             "-h" | "--help" => return Err(String::new()),
             other if other.starts_with("--") => return Err(format!("unknown argument {other}")),
             other => scenario = Some(other.to_string()),
@@ -218,4 +235,16 @@ fn parse_number<T: std::str::FromStr>(text: &str) -> Result<T, String> {
     text.trim()
         .parse()
         .map_err(|_| format!("not a number: {text}"))
+}
+
+fn parse_point(text: &str) -> Result<Point3<f32>, String> {
+    let parts: Vec<&str> = text.split(',').collect();
+    match parts.as_slice() {
+        [x, y, z] => Ok(Point3::new(
+            parse_number(x)?,
+            parse_number(y)?,
+            parse_number(z)?,
+        )),
+        _ => Err(format!("expected X,Y,Z, got {text}")),
+    }
 }

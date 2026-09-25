@@ -64,7 +64,10 @@ pub struct FallState {
     pub half_width: f32,
     /// 0 to 1: how solid the sheet is.
     pub strength: f32,
-    /// Added to the arc's height, so it leaves the surface it leaves from.
+    /// Added to the arc's height at its lip, and less of it down the arc to
+    /// none where it meets the ground: the sheet leaves the surface it
+    /// leaves from and still reaches the water below, however deep the
+    /// crest it was traced from lies under that surface.
     pub lift: f32,
     /// The top of the sheet, after the lift.
     pub top: f32,
@@ -123,6 +126,7 @@ fn append_fall(mesh: &mut FallMesh, link: LinkId, back: bool, fall: &FallPath) {
     let side = run
         .try_normalize(0.05)
         .map_or_else(Vector3::x, |d| Vector3::new(-d.z, 0.0, d.x));
+    let total = fall.times[n - 1].max(1e-3);
     let base = mesh.vertices.len() as u32;
     let first_index = mesh.indices.len() as u32;
     for (point, time) in fall.points.iter().zip(&fall.times) {
@@ -132,6 +136,7 @@ fn append_fall(mesh: &mut FallMesh, link: LinkId, back: bool, fall: &FallPath) {
                 side,
                 across,
                 time: *time,
+                along: time / total,
             });
         }
     }

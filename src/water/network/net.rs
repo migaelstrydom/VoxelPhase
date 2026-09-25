@@ -97,6 +97,11 @@ impl Network {
         self.stores.len()
     }
 
+    /// One past the highest link id ever issued.
+    pub fn link_slots(&self) -> usize {
+        self.links.len()
+    }
+
     pub fn add_link(&mut self, link: LinkEntry) -> LinkId {
         self.links.push(Some(link));
         LinkId(self.links.len() as u32 - 1)

@@ -22,7 +22,7 @@ pub use depression::{
 };
 pub use fall_tracer::{FallTracer, Landing, Trace, FALL_RUN, FALL_THRESHOLD, GRAVITY};
 pub use hypsometry::{DeadStorage, Hypsometry, POTHOLE_STEP, WET_BAND};
-pub use interface::{interface, reach_ends, Interface, STEP_EPSILON};
+pub use interface::{interface, interfaces, reach_ends, Interface, STEP_EPSILON};
 pub use link::{FallPath, Link};
 pub use lip::{critical_depth, Lip};
 pub use loss::{LossLaw, MINOR_HYSTERESIS};

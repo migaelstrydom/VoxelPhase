@@ -28,7 +28,7 @@ use super::geometry::{
 };
 use super::ids::{LinkId, StoreId, WaterBodyId};
 use super::network::{
-    interface, reach_ends, Basin, FallPath, Interface, LossLaw, Network, Ocean, ReachEnds, Store,
+    interfaces, reach_ends, Basin, FallPath, Interface, LossLaw, Network, Ocean, ReachEnds, Store,
 };
 use super::query::WaterQuery;
 use super::solver::{Balance, HydrologySolver, VolumeLedger};
@@ -94,6 +94,9 @@ pub struct WaterWorld {
     /// How far each reach's ends are eased to its ports, by store slot,
     /// refreshed with the levels (§7.9).
     ends: Vec<ReachEnds>,
+    /// The heights across each link and the flow it carries, by link slot,
+    /// refreshed with the levels: the fall renderer reads them every draw.
+    heights: Vec<Option<(Interface, f64)>>,
     ripples: RippleTiles,
     /// Seconds simulated: the swell's clock, shared with the renderer.
     clock: f64,
@@ -162,6 +165,7 @@ impl WaterWorld {
             swells: Vec::new(),
             currents: Vec::new(),
             ends: Vec::new(),
+            heights: Vec::new(),
             ripples: RippleTiles::new(RippleConfig::default()),
             clock: 0.0,
             masked_for: Vec::new(),
@@ -337,16 +341,23 @@ impl WaterWorld {
             .collect();
         self.refresh_currents();
         let network = &self.network;
-        self.ends = reach_ends(network, |link| {
-            let volume = |s: StoreId| network.store(s).map_or(0.0, Store::volume);
-            match (
-                network.view(link.up, volume(link.up), link.up_port),
-                network.view(link.down, volume(link.down), link.down_port),
-            ) {
-                (Some(up), Some(down)) if link.open => link.law.discharge(up, down),
-                _ => 0.0,
-            }
-        });
+        let still = |p: Point3<f32>| self.still_over(p);
+        let heights = interfaces(
+            network,
+            |link| {
+                let volume = |s: StoreId| network.store(s).map_or(0.0, Store::volume);
+                match (
+                    network.view(link.up, volume(link.up), link.up_port),
+                    network.view(link.down, volume(link.down), link.down_port),
+                ) {
+                    (Some(up), Some(down)) if link.open => link.law.discharge(up, down),
+                    _ => 0.0,
+                }
+            },
+            &still,
+        );
+        self.ends = reach_ends(network, &heights);
+        self.heights = heights;
         self.swells = (0..self.network.store_slots())
             .map(
                 |i| match (self.network.store(StoreId(i as u32)), self.levels[i]) {
@@ -558,10 +569,23 @@ impl WaterWorld {
         self.ends.get(id.0 as usize).copied().unwrap_or_default()
     }
 
-    /// The heights where a link's stores meet now (§7.9).
+    /// The heights where a link's stores meet, as of the last tick (§7.9).
     pub fn link_interface(&self, id: LinkId) -> Option<Interface> {
-        let q = self.link_flow(id)?;
-        interface(&self.network, self.network.link(id)?, q)
+        self.heights
+            .get(id.0 as usize)
+            .copied()
+            .flatten()
+            .map(|(h, _)| h)
+    }
+
+    /// The level of a basin's or the sea's water standing over a point on
+    /// the ground, if any.
+    fn still_over(&self, point: Point3<f32>) -> Option<f32> {
+        let graph = self.geometry.graph();
+        let span = graph.span_at(Column::containing(point.x, point.z), point.y + 0.05)?;
+        let body = graph.owner(span).body?;
+        let level = self.levels.get(body.0 as usize).copied().flatten()?;
+        (level > graph.span(span).floor_min).then_some(level)
     }
 
     /// How the level's opening settle went, if it opened steady.

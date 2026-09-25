@@ -5,7 +5,8 @@
 //!                          ──▶ upper (the surface it leaves at)
 //!                              lip   (the floor it leaves over)
 //!                              lower (the surface it enters, never below
-//!                                     the ground its arc lands on)
+//!                                     the ground its arc lands on, nor below
+//!                                     still water standing over that ground)
 //! ```
 //!
 //! A pure function of the network, read where it is needed: by the fall
@@ -16,6 +17,8 @@
 //! or, where that stands lower, the brink over its lip. The reach below, or
 //! the one fed without a sheet between, starts at that same height, so two
 //! surfaces meet wherever no sheet joins them.
+
+use nalgebra::Point3;
 
 use crate::water::ids::StoreId;
 
@@ -59,8 +62,16 @@ impl Interface {
 }
 
 /// The heights across `link` while it carries `q` m³/s (negative back over
-/// a reversible link). `None` for a link out of a sink.
-pub fn interface(network: &Network, link: &LinkEntry, q: f64) -> Option<Interface> {
+/// a reversible link). `still` is the level of still water standing over a
+/// point, if any: where the water leaving a lake lands under that same lake,
+/// as over its own outlet, there is no step to see. `None` for a link out of
+/// a sink.
+pub fn interface(
+    network: &Network,
+    link: &LinkEntry,
+    q: f64,
+    still: &dyn Fn(Point3<f32>) -> Option<f32>,
+) -> Option<Interface> {
     let back = q < 0.0 && link.back.is_some();
     let (leaving, leaving_port, entering, entering_port) = if back {
         (link.down, link.down_port, link.up, link.up_port)
@@ -81,7 +92,10 @@ pub fn interface(network: &Network, link: &LinkEntry, q: f64) -> Option<Interfac
         Store::Sink => f32::NEG_INFINITY,
         store => store.level_at(store.volume(), entering_port),
     };
-    let lower = entered.max(landing.map_or(f32::NEG_INFINITY, |p| p.y));
+    let over_landing = landing.and_then(|p| still(p)).unwrap_or(f32::NEG_INFINITY);
+    let lower = entered
+        .max(landing.map_or(f32::NEG_INFINITY, |p| p.y))
+        .max(over_landing);
     let upper = match network.store(leaving)? {
         Store::Reservoir => lip.height(),
         Store::Sink => return None,
@@ -96,15 +110,29 @@ pub fn interface(network: &Network, link: &LinkEntry, q: f64) -> Option<Interfac
     })
 }
 
-/// How far every reach's ends are eased to meet the stores at its ports, by
-/// store slot (§7.9). Its downstream end goes to the height its water leaves
-/// at. Its upstream end goes to the height the water feeding it leaves at,
-/// unless a sheet falls between the two.
-pub fn reach_ends(network: &Network, flows: impl Fn(&LinkEntry) -> f64) -> Vec<ReachEnds> {
-    let mut ends = vec![ReachEnds::default(); network.store_slots()];
-    for (_, link) in network.links() {
+/// The heights across every link, and the flow it carries, by link slot:
+/// worked out once a tick, for the renderer and for [`reach_ends`].
+pub fn interfaces(
+    network: &Network,
+    flows: impl Fn(&LinkEntry) -> f64,
+    still: &dyn Fn(Point3<f32>) -> Option<f32>,
+) -> Vec<Option<(Interface, f64)>> {
+    let mut all = vec![None; network.link_slots()];
+    for (id, link) in network.links() {
         let q = flows(link);
-        let Some(heights) = interface(network, link, q) else {
+        all[id.0 as usize] = interface(network, link, q, still).map(|h| (h, q));
+    }
+    all
+}
+
+/// How far every reach's ends are eased to meet the stores at its ports, by
+/// store slot (§7.9), from every link's `heights`. Its downstream end goes
+/// to the height its water leaves at. Its upstream end goes to the height
+/// the water feeding it leaves at, unless a sheet falls between the two.
+pub fn reach_ends(network: &Network, heights: &[Option<(Interface, f64)>]) -> Vec<ReachEnds> {
+    let mut ends = vec![ReachEnds::default(); network.store_slots()];
+    for (id, link) in network.links() {
+        let Some((heights, q)) = heights.get(id.0 as usize).copied().flatten() else {
             continue;
         };
         let (leaving, entering) = if heights.back {
@@ -135,6 +163,50 @@ fn as_reach(network: &Network, id: StoreId) -> Option<&super::reach::Reach> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::water::network::links::FixedRate;
+    use crate::water::network::{Lip, RatingCurve, Reach};
+    use nalgebra::{Vector2, Vector3};
+
+    #[test]
+    fn a_fall_landing_partway_down_a_reach_meets_it_where_it_lands() {
+        let mut network = Network::default();
+        let spring = network.add_store(Store::Reservoir);
+        // A dry reach 20 m long, its bed falling from 5 m to 4 m.
+        let points: Vec<Point3<f32>> = (0..=40)
+            .map(|i| Point3::new(i as f32 * 0.5, 5.0 - i as f32 * 0.025, 0.0))
+            .collect();
+        let reach = network.add_store(Store::Reach(Reach::new(
+            Vec::new(),
+            &points,
+            RatingCurve::default(),
+            Vec::new(),
+        )));
+        let link = LinkEntry {
+            up: spring,
+            down: reach,
+            law: Box::new(FixedRate { discharge: 1.0 }),
+            open: true,
+            up_port: Port::Downstream,
+            down_port: Port::Upstream,
+            lip: Lip {
+                at: Point3::new(12.0, 8.0, 2.0),
+                direction: Vector2::zeros(),
+            },
+            fall: Some(FallPath {
+                points: vec![Point3::new(12.0, 8.0, 2.0), Point3::new(12.0, 4.7, 0.0)],
+                times: vec![0.0, 0.8],
+                velocity: Vector3::zeros(),
+            }),
+            back: None,
+        };
+        let heights = interface(&network, &link, 1.0, &|_| None).unwrap();
+        // 12 m down, the bed stands at 4.7, not the 5 m at the reach's top.
+        assert!((heights.lower - 4.7).abs() < 1e-3, "{heights:?}");
+        assert_eq!(heights.upper, 8.0);
+        // Still water standing over the landing raises it.
+        let pooled = interface(&network, &link, 1.0, &|_| Some(6.0)).unwrap();
+        assert_eq!(pooled.lower, 6.0);
+    }
 
     fn heights(upper: f32, lip: f32, lower: f32) -> Interface {
         Interface {

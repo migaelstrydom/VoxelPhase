@@ -692,8 +692,12 @@ impl TopologyBuilder {
             .last()
             .map(|c| (c.column, t.geometry.graph().span(*c).floor_c))
             .or(lip.map(|l| (l.inside.column, l.height)));
+        // A channel ending in a pit or off the world's edge holds the span it
+        // ends at as its last cell: there is no edge to cross, and its lip is
+        // its last reach's own end.
         let end_lip = |toward: SpanRef| {
-            last.map(|(column, height)| Lip::across(column, toward.column, height))
+            last.filter(|(column, _)| *column != toward.column)
+                .map(|(column, height)| Lip::across(column, toward.column, height))
         };
         let width = reaches
             .last()

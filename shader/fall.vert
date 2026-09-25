@@ -5,10 +5,11 @@
 // A fall's sheet: two vertices at each point of its arc, pushed apart
 // across it by the width the discharge now gives, spreading as it drops.
 // The arc runs to the ground; the sheet is lifted to leave the surface it
-// leaves from, and cut off where it enters the water below (§7.9).
+// leaves from, less so down the arc to not at all at the ground, and cut off
+// where it enters the water below (§7.9).
 layout(location = 0) in vec3 inCentre;
 layout(location = 1) in vec3 inSide;
-layout(location = 2) in vec2 inPath;   // (across, seconds from the lip)
+layout(location = 2) in vec3 inPath;   // (across, seconds from the lip, share of the arc)
 
 layout(push_constant) uniform PushConstants {
     mat4 view;
@@ -25,7 +26,7 @@ layout(location = 4) out float fragAlong;
 layout(location = 5) flat out vec4 fragBody;   // (strength, clock, cut, aeration)
 
 void main() {
-    vec3 centre = inCentre + vec3(0.0, pc.tile.x, 0.0);
+    vec3 centre = inCentre + vec3(0.0, pc.tile.x * (1.0 - inPath.z), 0.0);
     // Share of the way down the part that shows, from the top to the cut.
     float along = clamp((pc.tile.y - centre.y) / max(pc.tile.y - pc.tile.z, 1e-3), 0.0, 1.0);
     float halfWidth = pc.body.x * (1.0 + pc.body.z * along);

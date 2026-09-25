@@ -6,6 +6,8 @@ use nalgebra::Point3;
 
 use crate::level::{load_level, Settle, WaterBody};
 use crate::level_check::build_terrain;
+use crate::terrain::BlastConfig;
+use crate::water::ids::StoreId;
 use crate::water::network::{Store, STEP_EPSILON};
 use crate::water::solver::Account;
 use crate::water::topology::TopologyEdit;
@@ -620,5 +622,181 @@ fn every_level_s_water_comes_to_rest_when_it_opens() {
             assert!(report.converged, "{}: {report:?}", path.display());
         }
         assert!(water.balance().is_balanced(), "{}", path.display());
+    }
+}
+
+#[test]
+fn a_weir_between_two_basins_draws_a_sheet_only_while_there_is_a_step() {
+    let scenario = find("spill_merge").unwrap();
+    let times: Vec<f32> = (1..36).map(|i| i as f32 * 5.0).collect();
+    // At each capture: the drawn step across the pond's weir into the pit,
+    // if the two are still apart.
+    let mut steps: Vec<Option<f32>> = Vec::new();
+    run_with_captures(&scenario, RunConfig::default(), &times, |_, _, water| {
+        let weir = water
+            .network()
+            .links()
+            .find(|(_, l)| l.law.reversible() && l.fall.is_some());
+        steps.push(weir.and_then(|(id, l)| {
+            let heights = water.link_interface(id)?;
+            let (_, arc) = l.side(if heights.back { -1.0 } else { 1.0 });
+            Some(if arc.is_some() { heights.step() } else { 0.0 })
+        }));
+    })
+    .unwrap();
+    let first = steps
+        .iter()
+        .position(|s| s.is_some())
+        .expect("the weir was laid");
+    // While the pit fills from dry, water falls into it...
+    assert!(steps[first].is_some_and(|s| s > 0.3), "{steps:?}");
+    // ...and the step shrinks as the pit rises, to nothing by the time the
+    // two are one lake.
+    let drawn: Vec<f32> = steps.iter().flatten().copied().collect();
+    assert!(drawn.windows(2).all(|w| w[1] <= w[0] + 0.02), "{steps:?}");
+    assert!(
+        steps.last().unwrap().is_none_or(|s| s <= STEP_EPSILON),
+        "{steps:?}"
+    );
+}
+
+#[test]
+fn a_blast_under_the_water_a_fall_lands_in_leaves_the_river_above_it() {
+    let level = load_level(Path::new("levels/water_park.level.ron")).unwrap();
+    let mut terrain = build_terrain(&level);
+    let (mut water, _) = WaterWorld::recording(level.water.as_ref().unwrap(), &terrain);
+    let lake = water
+        .query()
+        .sample(Point3::new(11.0, 2.0, 19.0))
+        .unwrap()
+        .body;
+    let (link, reach) = water
+        .network()
+        .links()
+        .find(|(_, l)| l.down == lake && l.fall.is_some())
+        .map(|(id, l)| (id, l.up))
+        .expect("the river falls into the catch lake");
+    let landing = water
+        .network()
+        .link(link)
+        .unwrap()
+        .fall
+        .as_ref()
+        .unwrap()
+        .landing()
+        .unwrap();
+    let river: Vec<StoreId> = water
+        .network()
+        .stores()
+        .filter(|(_, s)| s.as_reach().is_some_and(|r| r.inflow > 2.4))
+        .map(|(id, _)| id)
+        .collect();
+    let seen = water.topology_log().len();
+    // A crater in the lake bed just past where the fall comes down: its
+    // columns reach under the arc, but only where the arc runs through the
+    // lake.
+    let fall = water.network().link(link).unwrap().fall.clone().unwrap();
+    let (centre, radius) = (Point3::new(landing.x, landing.y, landing.z - 1.0), 0.8);
+    let surface = water.level(lake).unwrap();
+    let under = |p: &Point3<f32>| (p.z - centre.z).abs() <= radius + 0.5;
+    assert!(fall.points.iter().any(under), "the crater misses the arc");
+    assert!(fall
+        .points
+        .iter()
+        .filter(|p| under(p))
+        .all(|p| p.y < surface));
+    terrain.detonate(centre, &BlastConfig::fixed_radius(radius));
+    terrain.update();
+    water.on_terrain_update(&terrain);
+    for _ in 0..60 {
+        water.step(1.0 / 60.0);
+    }
+    for edit in &water.topology_log()[seen..] {
+        let touches = match edit {
+            TopologyEdit::RemoveStore { store, .. } => river.contains(store),
+            TopologyEdit::CutReach { reach, .. } | TopologyEdit::ExtendReach { reach, .. } => {
+                river.contains(reach)
+            }
+            TopologyEdit::Transfer {
+                from: Account::Store(store),
+                ..
+            } => river.contains(store),
+            TopologyEdit::RemoveLink(id) => *id == link,
+            _ => false,
+        };
+        assert!(!touches, "the blast reached the river: {edit:?}");
+    }
+    let after = water.network().link(link).expect("the link stands");
+    assert!(after.up == reach && after.down == lake);
+    // Under the water an edit is not in the fall's air: it is not traced
+    // again.
+    assert_eq!(after.fall.as_ref(), Some(&fall));
+    assert!(water.balance().is_balanced());
+}
+
+#[test]
+fn a_river_ending_a_little_over_the_sea_falls_into_it() {
+    let scenario = find("low_mouth").unwrap();
+    let mut seen = None;
+    run_with_captures(&scenario, RunConfig::default(), &[5.0], |_, _, water| {
+        let sea = water.ocean().map(|(id, _)| id).expect("the sea");
+        seen = water
+            .network()
+            .links()
+            .find(|(_, l)| l.down == sea && l.fall.is_some())
+            .and_then(|(id, l)| {
+                let reach = water.network().store(l.up)?.as_reach()?;
+                let end = reach.surface_at(reach.length, water.reach_ends(l.up));
+                Some((water.link_interface(id)?, end))
+            });
+    })
+    .unwrap();
+    let (heights, end) = seen.expect("the river falls into the sea");
+    // The river's end stands at its brink over the 0.3 m lip, and the sheet
+    // runs from there down to the sea.
+    assert!((heights.lip - 0.3).abs() < 0.15, "{heights:?}");
+    assert!(heights.free() && heights.step() > 0.05, "{heights:?}");
+    assert_eq!(heights.lower, 0.0);
+    assert!(
+        (heights.upper - end).abs() < 0.01,
+        "sheet at {}, river at {end}",
+        heights.upper
+    );
+}
+
+#[test]
+fn a_reach_cut_short_by_rising_water_lets_out_what_it_did_before() {
+    let scenario = find("shoreline").unwrap();
+    let dt = 1.0 / 60.0;
+    let times: Vec<f32> = (0..3000).map(|i| 120.0 + i as f32 * dt).collect();
+    // Each tick: the edits so far, and the outflow of the reach the spring
+    // feeds.
+    let mut ticks: Vec<(usize, f64)> = Vec::new();
+    run_with_captures(&scenario, RunConfig::default(), &times, |_, _, water| {
+        let top = water.network().links().find_map(|(_, l)| {
+            matches!(water.network().store(l.up), Some(Store::Reservoir)).then_some(l.down)
+        });
+        let outflow = top
+            .and_then(|id| water.network().store(id)?.as_reach())
+            .map_or(0.0, |r| r.outflow);
+        let cuts = water
+            .topology_log()
+            .iter()
+            .filter(|e| matches!(e, TopologyEdit::CutReach { .. }))
+            .count();
+        ticks.push((cuts, outflow));
+    })
+    .unwrap();
+    let across: Vec<(f64, f64)> = ticks
+        .windows(2)
+        .filter(|w| w[1].0 > w[0].0)
+        .map(|w| (w[0].1, w[1].1))
+        .collect();
+    assert!(!across.is_empty(), "no cut in the window");
+    for (before, after) in across {
+        assert!(
+            (after - before).abs() < 0.05 * before.max(0.1),
+            "outflow {before} -> {after} across a cut"
+        );
     }
 }

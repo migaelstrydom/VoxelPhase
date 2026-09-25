@@ -26,6 +26,7 @@ pub fn catalogue() -> Vec<Scenario> {
         spring_rock(),
         sea_wall(),
         shoreline(),
+        low_mouth(),
     ]
 }
 
@@ -818,6 +819,52 @@ Level(
             Spring(position: (-24.5, 9.6, 0.0), direction: (1.5, 0.0, 0.0), discharge: 1.0),
         ],
         settle: AsAuthored,
+    )),
+)
+"#;
+
+/// A spring runs down a channel whose bed ends 0.3 m over the sea, at the
+/// top of a cliff. A drop that small is still a fall (§7.9): the river's
+/// end stands at its brink and a short sheet reaches the sea.
+fn low_mouth() -> Scenario {
+    Scenario {
+        name: "low_mouth",
+        description: "a river ends 0.3 m over the sea and falls into it",
+        level: LOW_MOUTH_LEVEL,
+        duration: 10.0,
+        beats: Vec::new(),
+        probes: vec![Probe {
+            name: "sea",
+            at: Point3::new(6.0, -1.0, 0.0),
+        }],
+        camera: (Point3::new(6.0, 3.0, 6.0), Point3::new(-1.0, 0.0, 0.0)),
+    }
+}
+
+const LOW_MOUTH_LEVEL: &str = r#"
+Level(
+    name: "water_viewer: low_mouth",
+    segments: [(
+        name: "main",
+        terrain: Terrain(
+            voxel_size: 0.5,
+            bounds: (min: (-32.0, -16.0, -32.0), max: (32.0, 16.0, 32.0)),
+            base_height: 2.0,
+            material_layers: [(depth: 999.0, material: Rock)],
+            features: [
+                Ramp(from: (-20.0, 0.0), to: (0.0, 0.0), start_height: 1.5, end_height: 0.3, width: 4.0, flat_width: 2.0),
+                Plateau(min: (0.0, -40.0), max: (40.0, 40.0), height: -3.0),
+            ],
+        ),
+    )],
+    placements: [Root(segment: "main")],
+    player_spawn: (0.0, 5.0, 10.0),
+    water: Some((
+        ocean: Some((level: 0.0, open_edges: [East])),
+        bodies: [
+            Spring(position: (-20.5, 1.9, 0.0), direction: (1.5, 0.0, 0.0), discharge: 1.0),
+        ],
+        settle: Steady,
     )),
 )
 "#;

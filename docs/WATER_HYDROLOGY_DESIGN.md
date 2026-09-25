@@ -2006,11 +2006,23 @@ and ratings stopped at a shore.
   unchanged; arcs are taller, since they now run on to the ground.
 - **A channel too short for a reach** hands its weir the lip it actually falls from, the
   far side of its one cell, not the crest.
-- **Heights** are computed where needed. Reach ends are worked out once a tick, with the
-  levels, and cached by store slot: `WaterQuery` samples them in every physics substep.
-- **Sheets** are lifted by `upper` minus the arc's first point, cut at `lower`, and whiten
-  by their share of the drop that shows rather than of the time to the ground. Their
-  aeration eases from clear to white over the 5 cm above submergence.
+- **Heights** are worked out for every link once a tick, with the levels, and cached by
+  link slot; reach ends come from them, cached by store slot. The fall renderer reads
+  them every draw and `WaterQuery` every physics substep. Worked out per draw instead,
+  skyway's 35 falls cost the renderer 0.12 ms a frame.
+- **Sheets** are lifted by `upper` minus the arc's first point at the lip, less so down the
+  arc to not at all where it meets the ground, then cut at `lower`. A whole-arc lift left
+  the sheet ending in the air wherever the crest lies deep under the surface it leaves:
+  a sea-wall breach's crest is at the bottom of its crater, 3.4 m down, and the arc from
+  there is a 0.3 m hop along the crater floor. Sheets whiten by their share of the drop
+  that shows rather than of the time to the ground, and their aeration eases from clear
+  to white over the 5 cm above submergence.
+- **`lower` is never below still water standing over the landing.** A lake over its own
+  outlet (skyway) covers the channels its falls land in; without this, its 35 falls stood
+  as a curtain in the middle of the pool.
+- **A channel ending in a pit or off the world's edge** holds the span it ends at as its
+  last cell. Its lip crossed from that cell to itself, with no direction, and a lip with
+  no direction always parts: a sheet stood at the end of every channel into a pit.
 - **Drowned** passes over the lakes a channel drains from. A lake standing over its own
   outlet (skyway) covers the first cells of every channel leaving it; without this, each
   was drowned and laid again every tick, and skyway's steady settle ran to 400 sweeps.
@@ -2029,18 +2041,44 @@ and ratings stopped at a shore.
     own claim, and a channel into a dry pit gets the pit's basin again.
   - A reach removed with nothing below it booked its water to the void's store account,
     not to `sunk`: the ledger lost it.
-- **Cost.** Quiet frames are unchanged on every level (skyway 0.82 ms, the rest under
-  0.01 ms); skyway loads in 38 ms.
-- **Tests.** `shoreline` (a lake climbs a river's channel, cutting it back cell by cell
-  with every drop going to the lake and its level never jumping, then drains down it and
-  the channel is lengthened); the sea pouring back over a lowland's weir draws its sheet;
-  water_park's river leaves its head lake at the lake's level and falls from its own end
-  into the catch lake; water_park opens at rest with the catch lake authored at 1.0 or 3.3
-  (24 and 6 sweeps); every level's water comes to rest when it opens; plus unit tests for
-  the lip, the heights, `surface_at` and its shader mirror, and a rating at a shore.
-- **Open.** A lake's re-flood when it rises to its region's cap still drops and relays its
-  outflow channel (the churn noted at stage 5); nothing is lost, since that water was
-  going where the channel took it.
+- **Cost.** Water per quiet frame: skyway 0.86 ms against 0.82 before this stage, every
+  other level under 0.01 ms as before; skyway loads in 38 ms. `render_perf`, render-side
+  water CPU against the build before this stage: 0.30 ms against 0.31 at water_park's
+  river mouth, 0.08 ms against 0.05 at skyway's pool; the GPU is unchanged within noise.
+- **Tests,** against the list above:
+  - Built: `shoreline` (a lake climbs a river's channel, cutting it back cell by cell with
+    every drop going to the lake and its level never jumping, then drains down it and the
+    channel is lengthened); `low_mouth` (a river ending 0.3 m over the sea falls into it,
+    its sheet starting at the river's end); the sea pouring back over a lowland's weir
+    draws its sheet; a weir between two basins draws a sheet that shrinks as the lower one
+    fills and is gone once they are one lake; a blast under the lake a fall lands in
+    leaves the arc and the river above it untouched; a fall landing partway down a reach
+    meets its surface there; water rising over the middle of a channel drowns it there,
+    and the lake a channel leaves does not; a reach cut short keeps its outflow; water_park
+    leaves its head lake at the lake's level, falls from its own end into the catch lake,
+    and opens at rest with the catch lake authored at 1.0 or 3.3 (24 and 6 sweeps); every
+    level's water comes to rest when it opens; unit tests for the lip, the heights,
+    `surface_at` and its shader mirror, and a rating at a shore.
+  - Weaker than it looks: the outflow test runs on a uniform channel, where a share of
+    storage by length and the water actually held agree, so it would not catch the share
+    by length it was meant to rule out.
+  - Not built: a test that the arc counts of water_park and the staircase do not grow;
+    they were compared by hand once.
+- **Looked at, rendered:** water_park's river mouth and head lake, the dam after its
+  blast, the undercroft's cavern after its blast; skyway's pool; the sea wall's breach
+  through its fill; the shoreline scenario; island_sea's ditch. `water_viewer` takes
+  `--eye` and `--look` for this.
+- **Open.**
+  - Water does not run down a basin's dry bed. A channel ends where it enters a
+    depression, below its spill level, and a crest into a pit (a breached dam) links
+    straight to the pit's basin. So the shoreline scenario's river stops metres short of
+    a filling lake, and water_park's dam pours 1.4 m onto its spillway and appears in the
+    pit, with nothing drawn down the 21 m between. Laying the channel down the dry bed to
+    the water, and letting Drowned and Exposed move its end, would fix both; it changes
+    how every channel into a filling basin is laid, so it waits on a decision.
+  - A lake's re-flood when it rises to its region's cap still drops and relays its
+    outflow channel (the churn noted at stage 5); nothing is lost, since that water was
+    going where the channel took it.
 
 ## 22. Decided and deferred
 

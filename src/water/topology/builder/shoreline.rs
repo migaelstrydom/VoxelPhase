@@ -311,3 +311,71 @@ fn first_drowned(
         (level > graph.span(*cell).floor_max + DROWN_MARGIN).then_some((i, body))
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::water::geometry::{Span, SpanChunk, SpanChunkCoord, COLUMNS_PER_CHUNK};
+    use crate::water::network::Ocean;
+
+    /// A channel's cells down column row k = 0, on a bed falling 0.1 m a
+    /// column from 5 m, and a network holding one body at `level` that owns
+    /// the cells from i = 6 to i = 9.
+    fn channel_past_a_body(level: f32) -> (SpanGraph, Network, Vec<SpanRef>, StoreId) {
+        let coord = SpanChunkCoord { x: 0, z: 0 };
+        let mut graph = SpanGraph::new(coord, coord);
+        let columns: Vec<Vec<Span>> = (0..COLUMNS_PER_CHUNK)
+            .map(|local| {
+                let f = 5.0 - 0.1 * coord.column(local).i as f32;
+                vec![Span {
+                    floor_c: f,
+                    floor_min: f,
+                    floor_max: f,
+                    ceiling: f32::INFINITY,
+                }]
+            })
+            .collect();
+        graph.replace_chunk(coord, SpanChunk::from_columns(&columns, 1));
+        let mut network = Network::default();
+        let body = network.add_store(Store::Ocean(Ocean {
+            level,
+            swell: 0.0,
+            region_version: 0,
+        }));
+        let cells: Vec<SpanRef> = (0..14)
+            .map(|i| graph.span_at(Column::new(i, 0), 5.5).unwrap())
+            .collect();
+        for cell in &cells[6..10] {
+            graph.owner_mut(*cell).body = Some(body);
+        }
+        (graph, network, cells, body)
+    }
+
+    #[test]
+    fn water_rising_over_the_middle_of_a_channel_drowns_it_there() {
+        // Floors under the body run 4.4 down to 4.1. At 4.36 it stands more
+        // than 5 cm over the floor at i = 7 (4.3), so the channel is cut
+        // there, in the middle, though the body is not what it runs into.
+        let (graph, network, cells, body) = channel_past_a_body(4.36);
+        assert_eq!(
+            first_drowned(&graph, &network, &cells, &[]),
+            Some((7, body))
+        );
+        // At 4.34 it is within the margin at i = 7, and over it at i = 8.
+        let (graph, network, cells, _) = channel_past_a_body(4.34);
+        assert_eq!(
+            first_drowned(&graph, &network, &cells, &[]),
+            Some((8, body))
+        );
+        // Below every floor it owns, it drowns nothing.
+        let (graph, network, cells, _) = channel_past_a_body(4.1);
+        assert_eq!(first_drowned(&graph, &network, &cells, &[]), None);
+    }
+
+    #[test]
+    fn the_lake_a_channel_leaves_does_not_drown_it() {
+        let (graph, network, cells, body) = channel_past_a_body(6.0);
+        assert!(first_drowned(&graph, &network, &cells, &[]).is_some());
+        assert_eq!(first_drowned(&graph, &network, &cells, &[body]), None);
+    }
+}
