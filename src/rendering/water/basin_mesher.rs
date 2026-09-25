@@ -227,7 +227,8 @@ impl WaterScene for WaterWorld {
         } else {
             entry.fall.as_ref()?
         };
-        FallState::of(self.link_discharge(link)?, heights, arc)
+        let q = self.link_discharge(link)?;
+        FallState::of(q, heights, arc, self.fall_width(link, q, back))
     }
 
     fn ripple_tiles(&self) -> Vec<RippleTileView<'_>> {

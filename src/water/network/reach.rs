@@ -314,17 +314,29 @@ fn smoothstep(from: f32, to: f32, x: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
-/// Distance along a centreline of the point nearest `p` in plan.
+/// Distance along a centreline of the point nearest `p` in plan: on the
+/// nearest of its segments, so that it undoes [`Centreline::point_at`].
 fn nearest_distance(line: &Centreline, p: Point3<f32>) -> f32 {
+    let at = nalgebra::Vector2::new(p.x, p.z);
+    let plan = |q: &Point3<f32>| nalgebra::Vector2::new(q.x, q.z);
+    if line.points.len() < 2 {
+        return 0.0;
+    }
     line.points
-        .iter()
-        .zip(&line.distance)
-        .min_by(|a, b| {
-            let da = (a.0.x - p.x).powi(2) + (a.0.z - p.z).powi(2);
-            let db = (b.0.x - p.x).powi(2) + (b.0.z - p.z).powi(2);
-            da.total_cmp(&db)
+        .windows(2)
+        .zip(line.distance.windows(2))
+        .map(|(seg, d)| {
+            let (a, b) = (plan(&seg[0]), plan(&seg[1]));
+            let run = b - a;
+            let t = if run.norm_squared() > 0.0 {
+                ((at - a).dot(&run) / run.norm_squared()).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            ((a + run * t - at).norm_squared(), d[0] + t * (d[1] - d[0]))
         })
-        .map_or(0.0, |(_, d)| *d)
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .map_or(0.0, |(_, d)| d)
 }
 
 #[cfg(test)]

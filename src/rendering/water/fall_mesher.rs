@@ -21,7 +21,8 @@ use crate::water::network::{FallPath, Interface, STEP_EPSILON};
 
 use super::vertex::FallVertex;
 
-/// Half width of a sheet per √(m³/s), m: 1 m³/s falls as a 2 m sheet.
+/// Half width of a sheet per √(m³/s), m, where nothing gives the width of
+/// the water leaving: 1 m³/s from a spring falls as a 2 m sheet.
 const HALF_WIDTH_PER_ROOT_Q: f32 = 1.0;
 const MIN_HALF_WIDTH: f32 = 0.1;
 const MAX_HALF_WIDTH: f32 = 4.0;
@@ -79,15 +80,24 @@ pub struct FallState {
 }
 
 impl FallState {
-    /// The sheet along `arc` carrying `discharge` m³/s across `heights`.
+    /// The sheet along `arc` carrying `discharge` m³/s across `heights`, as
+    /// wide at its lip as the water leaving, `width`, where that is known.
     /// `None` when nothing falls, or there is no step to fall down.
-    pub fn of(discharge: f64, heights: Interface, arc: &FallPath) -> Option<Self> {
+    pub fn of(
+        discharge: f64,
+        heights: Interface,
+        arc: &FallPath,
+        width: Option<f32>,
+    ) -> Option<Self> {
         let start = arc.points.first()?.y;
         if discharge <= 0.0 || heights.step() <= STEP_EPSILON {
             return None;
         }
         Some(Self {
-            half_width: (HALF_WIDTH_PER_ROOT_Q * (discharge as f32).sqrt())
+            half_width: width
+                .map_or(HALF_WIDTH_PER_ROOT_Q * (discharge as f32).sqrt(), |w| {
+                    0.5 * w
+                })
                 .clamp(MIN_HALF_WIDTH, MAX_HALF_WIDTH),
             strength: (discharge / SOLID_DISCHARGE).min(1.0) as f32,
             lift: heights.upper - start,

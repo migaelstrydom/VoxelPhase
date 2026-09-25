@@ -48,6 +48,14 @@ pub enum TopologyEdit {
         reach: StoreId,
         cells: usize,
     },
+    /// A store removed by a rebuild after a terrain edit; its water is
+    /// `Poured` again.
+    Cleared(StoreId),
+    /// Water from a store a rebuild cleared, poured where it stood.
+    Poured {
+        into: Account,
+        volume: f64,
+    },
     /// A basin re-flooded from these seeds at its current level, keeping its
     /// volume.
     Reregion {

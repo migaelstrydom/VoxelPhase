@@ -54,9 +54,10 @@ const SUDDEN_LOSS_FLOOR: f64 = 1.0;
 const REST: f32 = 180.0;
 const REST_QUIET: f32 = 60.0;
 
-/// Store, link and region edits allowed in the quiet end of the rest: a
-/// lake still filling may reach a bank or two.
-const REST_EDITS: usize = 4;
+/// Frames with store, link or region edits allowed in the quiet end of the
+/// rest: a lake still filling may reach a bank or two, and one draining may
+/// part at its ridges, each once, however many stores and links that lays.
+const REST_FRAMES: usize = 4;
 
 struct Options {
     level: PathBuf,
@@ -240,21 +241,25 @@ fn run_seed(options: &Options, seed: u64) -> Result<Vec<String>, String> {
 
 /// Leave the water alone for [`REST`] and report any store, link or region
 /// it still re-lays in the last [`REST_QUIET`] of it. A lake still filling
-/// may reach a new bank now and then; the same edits over and over are
-/// churn.
+/// may reach a new bank now and then; edits frame after frame are churn.
 fn churn(water: &mut WaterWorld) -> Vec<String> {
     let dt = 1.0 / 60.0;
     let frames = (REST / dt) as usize;
     let quiet = ((REST - REST_QUIET) / dt) as usize;
     let mut from = water.topology_log().len();
+    let mut edited = 0;
     for frame in 0..frames {
         if frame == quiet {
             from = water.topology_log().len();
         }
+        let before = water.topology_log().len();
         water.step(dt);
+        if frame >= quiet && water.topology_log()[before..].iter().any(relays) {
+            edited += 1;
+        }
     }
     let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
-    for edit in &water.topology_log()[from..] {
+    for edit in water.topology_log()[from..].iter().filter(|e| relays(e)) {
         let kind = match edit {
             TopologyEdit::AddStore(_) => "AddStore",
             TopologyEdit::RemoveStore { .. } => "RemoveStore",
@@ -267,13 +272,27 @@ fn churn(water: &mut WaterWorld) -> Vec<String> {
         };
         *counts.entry(kind).or_default() += 1;
     }
-    if counts.values().sum::<usize>() <= REST_EDITS {
+    if edited <= REST_FRAMES {
         return Vec::new();
     }
     let first: Vec<&TopologyEdit> = water.topology_log()[from..].iter().take(12).collect();
     vec![format!(
-        "in the last {REST_QUIET:.0} s of a {REST:.0} s rest, still re-laying: {counts:?}; first {first:?}"
+        "in the last {REST_QUIET:.0} s of a {REST:.0} s rest, still re-laying on {edited} frames: {counts:?}; first {first:?}"
     )]
+}
+
+/// Whether an edit lays a store, link or region again.
+fn relays(edit: &TopologyEdit) -> bool {
+    matches!(
+        edit,
+        TopologyEdit::AddStore(_)
+            | TopologyEdit::RemoveStore { .. }
+            | TopologyEdit::AddLink(_)
+            | TopologyEdit::RemoveLink(_)
+            | TopologyEdit::Reregion { .. }
+            | TopologyEdit::CutReach { .. }
+            | TopologyEdit::ExtendReach { .. }
+    )
 }
 
 /// How far above and below a blast the column profiles reach, m.

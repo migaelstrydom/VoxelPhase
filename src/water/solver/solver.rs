@@ -107,7 +107,7 @@ fn commit(
         }
     }
     let mut losses: Vec<(StoreId, f64)> = Vec::new();
-    for (id, store) in network.stores().filter(|(_, s)| !s.is_frozen()) {
+    for (id, store) in network.stores() {
         let (lost, _) = loss.loss(store, volumes[id.0 as usize]);
         if lost > 0.0 {
             losses.push((id, lost * dt));
@@ -188,7 +188,7 @@ fn groups_upstream_first(network: &Network) -> Vec<Vec<StoreId>> {
     }
     let nodes: Vec<usize> = network
         .stores()
-        .filter(|(_, s)| s.is_finite() && !s.is_frozen())
+        .filter(|(_, s)| s.is_finite())
         .map(|(id, _)| id.0 as usize)
         .collect();
     let mut groups = tarjan(&nodes, &edges);

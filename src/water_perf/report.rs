@@ -26,7 +26,7 @@ pub fn subject_table(subject: &Subject) -> String {
     let _ = writeln!(
         out,
         "  {:<18} {:>16} {:>16} {:>16} {:>16} {:>16} {:>24}",
-        "phase (ms)", "geometry", "reregion", "settle", "solve", "mesh", "water mean/p99/max"
+        "phase (ms)", "geometry", "rebuild", "settle", "solve", "mesh", "water mean/p99/max"
     );
     out.push_str(&phase_row("quiet", &subject.quiet));
     out.push_str(&phase_row(
@@ -65,7 +65,7 @@ fn phase_row(name: &str, frames: &[FrameCost]) -> String {
         "  {:<18} {:>16} {:>16} {:>16} {:>16} {:>16} {:>24}\n",
         format!("{name} ({})", frames.len()),
         pair(|f| f.geometry),
-        pair(|f| f.reregion),
+        pair(|f| f.rebuild),
         pair(|f| f.settle),
         pair(|f| f.solve),
         pair(|f| f.mesh),

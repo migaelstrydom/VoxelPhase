@@ -409,8 +409,8 @@ pub struct SpanOwner {
 Ownership is an attribute of the span, and the remap rewrites it on rebuild.
 
 Network objects hold `SpanRef`s only where the `TopologyBuilder` re-derives them: reach
-paths, crests and flood seeds. A holder with a ref into a rebuilt chunk is re-derived
-before the next tick, with the bounded exception of §9.2.
+paths, crests and flood seeds. A holder with a ref into a rebuilt column is laid again
+before the next tick (§9.1).
 
 Where two cross-sections overlap at a bend, a span belongs to the reach cell with the
 nearest centreline point.
@@ -1083,39 +1083,51 @@ through the hole onto the sea.
 
 ### 9.1 The handler
 
-`TerrainChangeHandler` runs after `TerrainWorld::update` and before the solver.
+`WaterWorld::on_terrain_update` runs after `TerrainWorld::update` and before the solver.
+Nothing in the network is patched: it is laid again over the new ground, and its water
+poured back where it stood (stage 9).
 
-1. **Re-pair** the stale columns from the crossing cache, and collect their remaps (§6.3,
-   §6.5).
-2. **Assert** the removal-only invariant at column centres (§3.2).
-3. **Repair the drainage field:** decrease-only fill, plus flat re-resolution (§7.4).
-4. **Emit edits:**
-   - `Reregion` for touched basins, except the ocean (§8.1),
-   - `Reroute` for touched reaches,
-   - `Floor holed`, and weirs to newly reached stores,
-   - a re-trace of every `FallPath` whose arc was touched.
-5. **Handle newly connected below-sea-level spans.** They become a new basin at their
-   current water, or empty if dry, joined to the ocean by a `Weir`. The lowland floods at
-   the weir's rate and merges into the ocean under the normal rule. The ocean never claims
-   spans instantly. The new basin is laid over the pit found by walking down through spans
-   nobody owns. The steepest way down from a breach's mouth leads out over the lip into
-   the sea, not into the lowland behind it.
+1. **Take the running water as parcels.** Before the geometry takes the edit, every
+   reach's water becomes parcels at points just over its wetted cells, with what its
+   channel was rated to, what flowed in and out, and where its front and tail stood.
+   Points outlive the spans under them.
+2. **Re-pair** the stale columns from the crossing cache, and collect their remaps (§6.3,
+   §6.5). **Assert** the removal-only invariant at column centres (§3.2). **Repair the
+   drainage field:** decrease-only fill, plus flat re-resolution (§7.4).
+3. **Find each basin's water again:** its level, volume and the spans still under it,
+   through ownership, which the remap carries (a re-paired span counts only if water
+   stood over it before). Floors blown through become holes (§8.3).
+4. **Clear** every basin, reach and link. The sea, sinks and sources' reservoirs stay.
+5. **Refill.** A basin whose region, ring and crests the edit did not touch goes back in
+   its own slot unchanged: flooded again it would be the same, and keeping it keeps its
+   mesh and ripples. Every other basin claims its seeds, then each is flooded from them
+   at its level (`Reregion` mode: a dry depression the edit opened is a child, filled
+   over a weir), holding its volume.
+6. **Lay** newly connected below-sea-level spans as lowland basins (below), every
+   outflow each basin stands at, and every source: the same rules the settle lays them
+   by between edits.
+7. **Pour** each parcel into whatever holds its point now: the basin or sea whose water
+   stands over it, the reach over it, an empty basin in the dry depression it lies in,
+   the world's edge, or else a channel laid down the drainage from it. So a crater cut
+   into a river fills from above while the river below it drains on; the crater's
+   outflow joins that channel when it spills. Each reach gets its water's ends, state,
+   flows and rating back.
 
-### 9.2 Worst case, and the deferral valve
+Newly connected below-sea-level spans become a new basin at their current water, or
+empty if dry, joined to the ocean by a `Weir`. The lowland floods at the weir's rate and
+merges into the ocean under the normal rule. The ocean never claims spans instantly. The
+new basin is laid over the pit found by walking down through spans nobody owns. The
+steepest way down from a breach's mouth leads out over the lip into the sea, not into
+the lowland behind it.
 
-Most blasts fit the 2 ms water budget (§19). The worst cases may not:
+### 9.2 Worst case
 
-- a breach whose drainage repair spans a whole lowland,
-- a re-region of the largest lake, including its mesh rebuild.
-
-`water_perf` measures both first, on the largest basin in any level (stage 0).
-
-Only if they are over budget, a `Reregion` or `Reroute` may lag by up to N frames:
-
-- The holder is marked **frozen**. No links run through it, its volume stays still, and
-  the ledger is untouched.
-- A frozen holder is the one permitted exception to "stale refs never survive a frame".
-  The debug generation check (§6.2) skips it.
+The whole rebuild runs on the blast's frame. Its cost is the re-flood of each basin the
+edit touched, up to the largest lake's (thin_ice: 4 ms, plus 1.7 ms of mesh), and the
+channels, which are laid again everywhere. An earlier design deferred large re-floods
+by a frame behind a valve that froze the basin; the rebuild keeps untouched basins
+instead, and the valve is gone. If a level's blast frame goes over budget, a deferral
+comes back as a frame's lag on the whole rebuild, not per store.
 
 ### 9.3 Acceptance scenarios
 
@@ -1368,7 +1380,7 @@ misses one. Frame statistics exclude warm-up, and report mean, p99 and max.
 | … of which render CPU | ≤ 0.3 ms | 0.20–4.2 ms |
 | Ripple texture upload | ≤ 0.5 MB per frame | whole mesh every frame |
 | Blast frame, water share (re-pair, drainage repair, re-region, re-route) | ≤ 2 ms at p99 | 2.3–5.7 ms (§2.3) |
-| Worst-case blast (largest basin re-region, whole-lowland repair) | reported; the §9.2 valve only if over | no equivalent; the shore blast above |
+| Worst-case blast (largest basin re-region, whole-lowland repair) | reported; on the blast frame (§9.2) | no equivalent; the shore blast above |
 | Transient (breach draining), CPU per frame | ≤ 0.5 ms | 0.25–4.3 ms, same as quiet (§2.3) |
 | Load with `settle: Steady` | ≤ 200 ms | 1.8–8.5 ms first-frame spike |
 | GPU water pass at 2400×1600 | ≤ today's | composite pass 0.01–0.27 ms (§2.3) |
@@ -2125,6 +2137,64 @@ and ratings stopped at a shore.
 - **Open.**
   - A river over a wide, flat plain spreads to the full 16 m of its sections at
     minimum slope and holds a lot of water (87 m³ in 20 m below the shoreline's notch).
+
+### Stage 9: the network laid again after an edit
+
+Play-testing found that a grenade in a running river made the whole river vanish: the
+edit handler removed every reach below the crater at once, poured their water into the
+store below, and laid the river above it again empty, so nothing ran anywhere below the
+lake while its front advanced again and the crater filled. And a fall into a lake left
+from a metre beside the river it came from. Neither was a numeric error: both were two
+rules deciding one thing their own way, the first an incremental patch of the network
+disagreeing with what the new ground gives, the second a lip placed on the walked cell
+while the river is drawn on its water.
+
+- **The rule.** After an edit nothing is patched: the network is laid again from the
+  ground and its water poured back where it stood (§9.1). What the network holds is
+  derived from the ground and the water; the water is the state.
+- **What went.** `after_terrain_update` and its reroute, retrace, cut and relink paths;
+  the valve, the frozen flag and deferred re-floods (§9.2).
+- **What each derived quantity may depend on.** The ground and the water, never when it
+  was computed. Found by the invariant test below, and fixed:
+  - a channel's design discharge came from the lake's level when it was laid; it now
+    comes from its lip, and the water poured into a reach brings its rating with it;
+  - a channel's line was centred on the water at that design discharge; it is now
+    centred at a fixed 0.5 m³/s, so its cells and cuts depend on the ground alone;
+  - consecutive reaches share a boundary cell; its water is the lower reach's;
+  - a reach's front round-tripped through its nearest centreline vertex; distances along
+    a centreline now project onto its segments.
+- **Falls leave from the water.** A channel's lip is moved across onto the middle of the
+  water over its last cell, and its line runs on to it rather than easing back to the
+  walked cell. A sheet is as wide at its lip as the water leaving: a river's top width,
+  or the wetted length of a crest; the `√Q` rule is left for springs.
+- **Invariant tests.** Every scenario, twice during its run: the network laid again over
+  unchanged ground is laid identically a second time (exact), holds the same water, and
+  shows every water surface where it stood to 2 cm. Four scenarios are excepted from the
+  last only, where the settle's shoreline moves and channels laid on from below a crater
+  leave a layout a fresh lay does not repeat (named in the test, with why).
+- **Tests of the two reports.** `river_blast`: right after the blast the river above
+  holds its water but for what stood over the crater, the river below keeps its own and
+  runs on, and the crater is near its lip within 20 s (the old handler left it dry for
+  24 s); with the runnels dropped the test fails. In water_park every fall from a river
+  leaves where the river's line ends, from within its visible water, its sheet
+  overlapping that water by half or more; with the old lip and `√Q` width it fails.
+- **Fuzzing.** `water_fuzz`'s rest check now counts frames with edits, not edits: a lake
+  draining below its ridges parts once into as many basins as it must (skyway seed 9,
+  ten at once), which is not churn. Forced to re-flood every tick it still reports 3600
+  frames.
+- **Cost.** Blast frames as before (island_sea 1.48 ms, skyway 4.07, wrecking_yard 2.19)
+  but thin_ice: the blast at its lake's lip re-floods the 17,735-span lake on the blast
+  frame (7.2 ms with its mesh), where the valve paid it on the next.
+- **Open.**
+  - The settle still patches between edits: shorelines cut and extend reaches, a lake's
+    region is kept from a higher flood. A rebuild after that lays them afresh, so an
+    edit anywhere can move a river's reach boundaries a little once. Next: cut reaches at
+    points fixed on the ground rather than counted from the channel's head, and make the
+    settle's shoreline moves lay the channel again the same way.
+  - A fall's arc is traced at the flow running when it is laid, so a relay can move its
+    landing (0.4 m in water_park's catch lake).
+  - A river strip is centred on its water at 0.5 m³/s and drawn at its running flow; on
+    a diagonal step the visible water leans 0.9 m off the line.
 
 ## 22. Decided and deferred
 

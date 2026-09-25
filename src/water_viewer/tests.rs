@@ -8,7 +8,7 @@ use crate::level::{load_level, Settle, WaterBody};
 use crate::level_check::build_terrain;
 use crate::terrain::BlastConfig;
 use crate::water::ids::StoreId;
-use crate::water::network::STEP_EPSILON;
+use crate::water::network::{FallPath, Store, STEP_EPSILON};
 use crate::water::solver::Account;
 use crate::water::topology::TopologyEdit;
 use crate::water::WaterWorld;
@@ -332,47 +332,6 @@ fn a_crater_merged_into_a_lake_keeps_its_water_when_the_lake_drains() {
 /// thin_ice's lake is over the valve's size (§9.2): a blast at its shore
 /// freezes it for the blast's frame, and it re-floods on the next.
 #[test]
-fn the_valve_defers_a_large_lake_s_reflood_by_a_frame() {
-    use crate::level::load_level;
-    use crate::level_check::build_terrain;
-    use crate::terrain::BlastConfig;
-    use crate::water::topology::VALVE_SPANS;
-    use crate::water::WaterWorld;
-    use nalgebra::Point3;
-
-    let level = load_level(std::path::Path::new("levels/thin_ice.level.ron")).unwrap();
-    let mut terrain = build_terrain(&level);
-    let (mut water, _) = WaterWorld::from_config(level.water.as_ref().unwrap(), &terrain);
-    let (lake, _) = water.basins().max_by_key(|(_, b)| b.region.len()).unwrap();
-    assert!(
-        water
-            .network()
-            .store(lake)
-            .unwrap()
-            .as_basin()
-            .unwrap()
-            .region
-            .len()
-            > VALVE_SPANS
-    );
-    let volume = water.volume();
-
-    terrain.detonate(Point3::new(45.2, 3.0, 60.2), &BlastConfig::default());
-    terrain.update();
-    water.on_terrain_update(&terrain);
-    water.step(1.0 / 60.0);
-    let frozen = |water: &WaterWorld| water.basins().any(|(_, b)| b.frozen);
-    assert!(frozen(&water), "the re-flood waits a frame");
-    assert_eq!(water.volume(), volume, "a frozen lake holds still");
-
-    terrain.update();
-    water.on_terrain_update(&terrain);
-    water.step(1.0 / 60.0);
-    assert!(!frozen(&water), "and runs on the next");
-    assert!(water.balance().is_balanced());
-}
-
-#[test]
 fn a_breached_sea_wall_floods_the_lowland_until_it_joins_the_sea() {
     let scenario = find("sea_wall").unwrap();
     let recorded = run(&scenario, RunConfig::default()).unwrap();
@@ -560,12 +519,16 @@ fn a_lake_moves_a_channel_s_shoreline_without_pouring_the_channel_into_it() {
                 .filter(|(_, s)| s.as_reach().is_some())
                 .map(|(id, _)| id)
                 .collect();
-            logs.push((water.topology_log().to_vec(), lake, channel));
+            let bed = water
+                .query()
+                .sample(Point3::new(4.0, 6.2, 0.0))
+                .and_then(|s| water.network().store(s.body)?.as_reach().map(|_| s.body));
+            logs.push((water.topology_log().to_vec(), lake, channel, bed));
         },
     )
     .unwrap();
     assert!(recorded.samples.iter().all(|s| s.ledger_error.abs() < 1e-6));
-    let (before, lake, channel) = &logs[0];
+    let (before, lake, channel, _) = &logs[0];
     let lake = lake.expect("the lake");
     // Rising, the lake cuts the channel back cell by cell, and what the
     // channel loses goes into the lake: none of it is poured elsewhere, and
@@ -605,12 +568,11 @@ fn a_lake_moves_a_channel_s_shoreline_without_pouring_the_channel_into_it() {
         .map(|w| (w[1] - w[0]).abs())
         .fold(0.0f32, f32::max);
     assert!(jump < 0.02, "the lake jumped {jump} m");
-    // Drained, the lake leaves the channel's bed dry, and the channel is
-    // carried on down it.
-    let (after, _, _) = &logs[1];
-    assert!(after[before.len()..]
-        .iter()
-        .any(|e| matches!(e, TopologyEdit::ExtendReach { reach, .. } if channel.contains(reach))));
+    // Drained, the lake leaves the channel's bed dry, and the channel runs
+    // on down it.
+    assert!(logs[0].3.is_none(), "the lake stood over the bed");
+    let (_, _, _, bed) = &logs[1];
+    assert!(bed.is_some(), "no channel runs over the drained bed");
 }
 
 #[test]
@@ -693,13 +655,44 @@ fn a_blast_under_the_water_a_fall_lands_in_leaves_the_river_above_it() {
         .unwrap()
         .landing()
         .unwrap();
-    let river: Vec<StoreId> = water
-        .network()
-        .stores()
-        .filter(|(_, s)| s.as_reach().is_some_and(|r| r.inflow > 2.4))
-        .map(|(id, _)| id)
-        .collect();
-    let seen = water.topology_log().len();
+    let _ = reach;
+    // The river falling into the lake, and the links along it, by where
+    // they stand: every reach above the lake's fall link.
+    let river = |water: &WaterWorld| -> Vec<String> {
+        let network = water.network();
+        let lake = water
+            .query()
+            .sample(Point3::new(11.0, 2.0, 19.0))
+            .unwrap()
+            .body;
+        let mut above: Vec<StoreId> = network
+            .links()
+            .filter(|(_, l)| l.down == lake && l.fall.is_some())
+            .map(|(_, l)| l.up)
+            .collect();
+        let mut cursor = 0;
+        while cursor < above.len() {
+            let id = above[cursor];
+            cursor += 1;
+            above.extend(
+                network
+                    .links()
+                    .filter(|(_, l)| l.down == id)
+                    .map(|(_, l)| l.up)
+                    .filter(|up| network.store(*up).is_some_and(|s| s.as_reach().is_some())),
+            );
+        }
+        let keys: Vec<String> = above
+            .iter()
+            .filter_map(|id| network.store(*id)?.as_reach())
+            .map(|r| format!("reach {:?}", r.cells.first().map(|c| c.column)))
+            .collect();
+        fingerprint(water)
+            .into_iter()
+            .filter(|l| keys.iter().any(|k| l.starts_with(&format!("{k}:"))))
+            .collect()
+    };
+    let before = river(&water);
     // A crater in the lake bed just past where the fall comes down: its
     // columns reach under the arc, but only where the arc runs through the
     // lake.
@@ -716,29 +709,34 @@ fn a_blast_under_the_water_a_fall_lands_in_leaves_the_river_above_it() {
     terrain.detonate(centre, &BlastConfig::fixed_radius(radius));
     terrain.update();
     water.on_terrain_update(&terrain);
+    // Laid again, the river stands as it did, water and all, and falls
+    // along the same arc into the lake.
+    assert_eq!(river(&water), before, "the blast reached the river");
+    let lake = water
+        .query()
+        .sample(Point3::new(11.0, 2.0, 19.0))
+        .unwrap()
+        .body;
+    let after = water
+        .network()
+        .links()
+        .find(|(_, l)| l.down == lake && l.fall.is_some())
+        .map(|(_, l)| l)
+        .expect("the river still falls into the lake");
+    assert!(water
+        .network()
+        .store(after.up)
+        .unwrap()
+        .as_reach()
+        .is_some());
+    // Under the water an edit is not in the fall's air: traced again, the
+    // arc comes down where it did, but for the throw of the flow it carries
+    // now rather than the flow it was first traced at, as the level opened.
+    let again = after.fall.as_ref().and_then(FallPath::landing).unwrap();
+    assert!((again - landing).norm() < 0.5, "{landing:?} -> {again:?}");
     for _ in 0..60 {
         water.step(1.0 / 60.0);
     }
-    for edit in &water.topology_log()[seen..] {
-        let touches = match edit {
-            TopologyEdit::RemoveStore { store, .. } => river.contains(store),
-            TopologyEdit::CutReach { reach, .. } | TopologyEdit::ExtendReach { reach, .. } => {
-                river.contains(reach)
-            }
-            TopologyEdit::Transfer {
-                from: Account::Store(store),
-                ..
-            } => river.contains(store),
-            TopologyEdit::RemoveLink(id) => *id == link,
-            _ => false,
-        };
-        assert!(!touches, "the blast reached the river: {edit:?}");
-    }
-    let after = water.network().link(link).expect("the link stands");
-    assert!(after.up == reach && after.down == lake);
-    // Under the water an edit is not in the fall's air: it is not traced
-    // again.
-    assert_eq!(after.fall.as_ref(), Some(&fall));
     assert!(water.balance().is_balanced());
 }
 
@@ -923,4 +921,272 @@ fn a_tributary_joins_a_river_partway_down_it() {
         .filter(|e| matches!(e, TopologyEdit::RemoveStore { .. }))
         .count();
     assert_eq!(removed, 0, "{:?}", logs[0]);
+}
+
+/// The network described by where its stores stand, not by their ids: two
+/// networks laid over the same ground holding the same water describe alike.
+fn fingerprint(water: &WaterWorld) -> Vec<String> {
+    let network = water.network();
+    let graph = water.geometry().graph();
+    let key = |id: StoreId| match network.store(id) {
+        Some(Store::Basin(b)) => {
+            let at = b
+                .region
+                .iter()
+                .map(|r| (r.span.column, r.span.ordinal))
+                .min();
+            format!("basin {at:?}")
+        }
+        Some(Store::Reach(r)) => format!("reach {:?}", r.cells.first().map(|c| c.column)),
+        Some(Store::Ocean(_)) => "ocean".to_string(),
+        Some(Store::Sink) => "sink".to_string(),
+        Some(Store::Reservoir) => format!("reservoir {}", id.0),
+        None => "gone".to_string(),
+    };
+    let mut lines: Vec<String> = network
+        .stores()
+        .filter_map(|(id, s)| match s {
+            Store::Basin(b) => Some(format!(
+                "{}: level {:.4} volume {:.4} spans {} outflows {}",
+                key(id),
+                b.level(),
+                b.volume,
+                b.region.len(),
+                b.outflows.len()
+            )),
+            Store::Reach(r) => Some(format!(
+                "{}: cells {} to {:?} storage {:.4} {:?} front {:.2} tail {:.2} design {:.3} floor {:.3}",
+                key(id),
+                r.cells.len(),
+                r.cells.last().map(|c| c.column),
+                r.storage,
+                r.state,
+                r.front,
+                r.tail,
+                r.rating.design(),
+                r.cells.first().map_or(0.0, |c| graph.span(*c).floor_c),
+            )),
+            _ => None,
+        })
+        .collect();
+    lines.extend(network.links().map(|(_, l)| {
+        format!(
+            "link {} -> {} open {} fall {}",
+            key(l.up),
+            key(l.down),
+            l.open,
+            l.fall.is_some()
+        )
+    }));
+    lines.sort();
+    lines
+}
+
+/// The still or running surface over every span's floor, where water
+/// stands: what the player sees, without swell or ripples.
+fn surfaces(water: &WaterWorld) -> Vec<(Point3<f32>, Option<f32>)> {
+    let graph = water.geometry().graph();
+    let (min, max) = graph.column_bounds();
+    let query = water.query();
+    let mut out = Vec::new();
+    for k in min.k..=max.k {
+        for i in min.i..=max.i {
+            let column = crate::water::geometry::Column::new(i, k);
+            let (x, z) = column.centre();
+            for span in graph.refs(column) {
+                let at = Point3::new(x, graph.span(span).floor_min + 0.01, z);
+                out.push((at, query.level_at(at)));
+            }
+        }
+    }
+    out
+}
+
+/// Scenarios whose network the settle has changed in ways a network laid
+/// afresh does not repeat, so that laid again their water stands a little
+/// differently; laid twice, it must not:
+///
+/// - river: a draining lake keeps the region it was flooded to higher up,
+///   whose banks by its outlet a fresh flood leaves to the river;
+/// - shoreline: a rising lake cuts its inflowing channel back, and a
+///   falling one carries it on, reach by reach; laid again it is one channel;
+/// - river_diversion, river_blast: below a crater, a channel was laid on
+///   from the water standing there, and the crater's outflow joined it;
+///   laid again, it is one channel from the crater's lip, cut into reaches
+///   from there.
+const SETTLE_HISTORY: [&str; 4] = ["river", "shoreline", "river_diversion", "river_blast"];
+
+#[test]
+fn laying_the_network_again_over_unchanged_ground_leaves_the_water_where_it_was() {
+    let mut failures = Vec::new();
+    for scenario in super::scenarios::catalogue() {
+        let times = [0.3 * scenario.duration, 0.9 * scenario.duration];
+        run_with_captures(&scenario, RunConfig::default(), &times, |t, _, water| {
+            let volume = water.volume();
+            let seen = surfaces(water);
+            water.rebuild();
+            let once = fingerprint(water);
+            let moved: Vec<String> = seen
+                .iter()
+                .zip(surfaces(water))
+                .filter(|((_, a), (_, b))| match (a, b) {
+                    (Some(a), Some(b)) => (a - b).abs() > 0.02,
+                    (None, None) => false,
+                    _ => true,
+                })
+                .map(|((at, a), (_, b))| {
+                    format!("({:.1}, {:.1}, {:.1}) {a:?} -> {b:?}", at.x, at.y, at.z)
+                })
+                .collect();
+            let history = SETTLE_HISTORY.contains(&scenario.name);
+            if (!moved.is_empty() && !history) || (water.volume() - volume).abs() > 1e-9 {
+                failures.push(format!(
+                    "{} at {t:.1} s: volume {volume:.6} -> {:.6}; {} points moved, e.g. {:#?}",
+                    scenario.name,
+                    water.volume(),
+                    moved.len(),
+                    &moved[..moved.len().min(6)]
+                ));
+            }
+            water.rebuild();
+            let twice = fingerprint(water);
+            if once != twice {
+                let gone: Vec<_> = once.iter().filter(|l| !twice.contains(l)).collect();
+                let new: Vec<_> = twice.iter().filter(|l| !once.contains(l)).collect();
+                failures.push(format!(
+                    "{} at {t:.1} s, laid twice:\n  once: {gone:#?}\n  twice: {new:#?}",
+                    scenario.name
+                ));
+            }
+        })
+        .unwrap();
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn a_crater_in_a_river_fills_while_the_river_below_it_runs_on() {
+    let scenario = find("river_blast").unwrap();
+    // Water in reaches above the crater, and below it, and the most any
+    // reach below it lets out, at each capture.
+    let mut seen = Vec::new();
+    let recorded = run_with_captures(
+        &scenario,
+        RunConfig::default(),
+        &[9.9, 10.05, 15.0, 20.0],
+        |_, _, water| {
+            let (mut above, mut below, mut running) = (0.0, 0.0, 0.0f64);
+            for (_, store) in water.network().stores() {
+                let Some(reach) = store.as_reach() else {
+                    continue;
+                };
+                let x = reach.centreline.points[0].x;
+                if x < -9.0 {
+                    above += reach.storage;
+                } else if x > -3.0 {
+                    below += reach.storage;
+                    running = running.max(reach.outflow);
+                }
+            }
+            seen.push((above, below, running));
+        },
+    )
+    .unwrap();
+    let (above, below, _) = seen[0];
+    // Laid again over the new ground, the river above the crater holds the
+    // water it held, but for what stood over the crater's columns, now the
+    // crater's; the river below it holds its own. None is laid again empty,
+    // and none is poured into the crater from afar.
+    let (after_above, after_below, _) = seen[1];
+    assert!(
+        after_above > 0.8 * above && after_above <= above + 1e-9,
+        "{above} -> {after_above}"
+    );
+    assert!(after_below > 0.9 * below, "{below} -> {after_below}");
+    // While the crater fills, the river below it drains on: water still
+    // runs down it seconds later.
+    for &(_, _, running) in &seen[1..] {
+        assert!(running > 0.3, "the river below stopped: {running}");
+    }
+    // Fed by the river above, still running at the blast, the crater is
+    // near its lip, 7.9 m, within 20 s: the 50 m³ it takes at 1 m³/s, less
+    // what stood over it.
+    let crater = recorded
+        .samples
+        .iter()
+        .find(|s| s.time >= 30.0)
+        .and_then(|s| s.probes[1]);
+    assert!(crater.is_some_and(|l| l > 7.5), "{crater:?}");
+    assert!(recorded.samples.iter().all(|s| s.ledger_error.abs() < 1e-6));
+}
+
+#[test]
+fn a_river_falls_from_where_its_water_runs_as_wide_as_it_runs() {
+    let level = load_level(Path::new("levels/water_park.level.ron")).unwrap();
+    let terrain = build_terrain(&level);
+    let (water, _) = WaterWorld::from_config(level.water.as_ref().unwrap(), &terrain);
+    let graph = water.geometry().graph();
+    let mut checked = 0;
+    for (id, link) in water.network().links() {
+        let Some(reach) = water.network().store(link.up).and_then(Store::as_reach) else {
+            continue;
+        };
+        if link.fall.is_none() {
+            continue;
+        }
+        // The water the river is drawn with over its last cell: the ground
+        // across it that lies under the surface it runs at, within the
+        // width its strip is drawn to either side of its line.
+        let surface = reach.surface_at(reach.length, water.reach_ends(link.up));
+        let direction = link.lip.direction;
+        let across = nalgebra::Vector2::new(-direction.y, direction.x);
+        let inside = link.lip.at - nalgebra::Vector3::new(direction.x, 0.0, direction.y) * 0.25;
+        let end = reach.centreline.points.last().unwrap();
+        let line = (end.x - inside.x) * across.x + (end.z - inside.z) * across.y;
+        let drawn = reach.rating.at(reach.rating.design()).top_width * 0.5 + 0.5;
+        let wet: Vec<f32> = (-24..=24)
+            .map(|i| i as f32 * 0.25)
+            .filter(|s| (s - line).abs() <= drawn)
+            .filter(|s| {
+                let p = inside + nalgebra::Vector3::new(across.x, 0.0, across.y) * *s;
+                crate::water::network::floor_near(graph, p.x, p.z, inside.y)
+                    .is_some_and(|(_, floor)| floor < surface)
+            })
+            .collect();
+        // The run of it the lip stands in.
+        let Some(&at) = wet.iter().min_by(|a, b| a.abs().total_cmp(&b.abs())) else {
+            panic!("link {id:?}: no water over the lip");
+        };
+        let (mut lo, mut hi) = (at, at);
+        while wet.contains(&(lo - 0.25)) {
+            lo -= 0.25;
+        }
+        while wet.contains(&(hi + 0.25)) {
+            hi += 0.25;
+        }
+        // The river's line runs to the lip the sheet leaves from, and the
+        // lip stands in its water, with water either side: laid from the
+        // walked cell, the fall into the catch lake left from the edge of
+        // its water, a metre off its middle.
+        assert!(
+            line.abs() <= 0.25,
+            "link {id:?}: the river ends {line} m off the lip"
+        );
+        assert!(
+            lo < 0.0 && hi > 0.0,
+            "link {id:?}: the lip stands at the edge of {lo}..{hi}"
+        );
+        // And the sheet covers the water it leaves over, as wide as it runs.
+        let q = water.link_discharge(id).unwrap();
+        let half = 0.5 * water.fall_width(id, q, false).unwrap();
+        let (top, bottom) = (hi + 0.125, lo - 0.125);
+        let overlap = (half.min(top) - (-half).max(bottom)).max(0.0);
+        let union = half.max(top) - (-half).min(bottom);
+        assert!(
+            overlap / union >= 0.5,
+            "link {id:?}: a sheet ±{half} over water {lo}..{hi}"
+        );
+        checked += 1;
+    }
+    assert!(checked >= 3, "{checked} falls from rivers");
 }

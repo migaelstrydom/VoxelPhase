@@ -38,8 +38,8 @@ impl Default for Durations {
 pub struct FrameCost {
     /// Re-pairing spans and repairing drainage after a terrain edit.
     pub geometry: Duration,
-    /// Re-flooding the basins an edit touched.
-    pub reregion: Duration,
+    /// Laying the network again over the edited ground.
+    pub rebuild: Duration,
     /// Between-tick topology.
     pub settle: Duration,
     /// Solver ticks.
@@ -53,7 +53,7 @@ pub struct FrameCost {
 impl FrameCost {
     /// Every water stage: what the frame's water costs the CPU.
     pub fn water(&self) -> Duration {
-        self.geometry + self.reregion + self.settle + self.solve + self.mesh
+        self.geometry + self.rebuild + self.settle + self.solve + self.mesh
     }
 }
 
@@ -224,7 +224,7 @@ fn frame(
     }
     FrameCost {
         geometry: step.geometry,
-        reregion: step.reregion,
+        rebuild: step.rebuild,
         settle: step.settle,
         solve: step.solve,
         mesh,

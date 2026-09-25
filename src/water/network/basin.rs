@@ -64,10 +64,6 @@ pub struct Basin {
     pub minor: bool,
     /// Bumped whenever the region changes, so its mesh knows to rebuild.
     pub region_version: u32,
-    /// Waiting for a re-flood deferred by the valve (§9.2): no links run
-    /// through it and its volume holds still, and its region may name spans
-    /// an edit has since rebuilt, so nothing reads them until it re-floods.
-    pub frozen: bool,
 }
 
 impl Basin {
@@ -76,7 +72,9 @@ impl Basin {
         Self::with_holes(flood, volume, Vec::new())
     }
 
-    fn with_holes(flood: Flood, volume: f64, holes: Vec<HoleColumn>) -> Self {
+    /// A basin over a flood's region, holding `volume`, with holes blown
+    /// through its floor at `holes`.
+    pub fn with_holes(flood: Flood, volume: f64, holes: Vec<HoleColumn>) -> Self {
         let hypsometry = Hypsometry::new(
             flood.region.iter().map(|r| r.shape),
             COLUMN_SIZE * COLUMN_SIZE,
@@ -95,7 +93,6 @@ impl Basin {
             merge_saddles: flood.merge_saddles,
             cap: flood.cap,
             minor: false,
-            frozen: false,
             region_version: 0,
         }
     }

@@ -28,6 +28,7 @@ pub fn catalogue() -> Vec<Scenario> {
         shoreline(),
         low_mouth(),
         confluence(),
+        river_blast(),
     ]
 }
 
@@ -922,6 +923,73 @@ Level(
             Spring(position: (-12.3, 11.6, -16.5), direction: (0.8, 0.0, 1.27), discharge: 0.5),
         ],
         settle: AsAuthored,
+    )),
+)
+"#;
+
+/// A spring keeps a lake full; the lake spills down a river into a pit. A
+/// grenade cuts a crater into the river's bed halfway down: the crater fills
+/// from the river above it, and once full the river runs on below it again.
+fn river_blast() -> Scenario {
+    Scenario {
+        name: "river_blast",
+        description: "a grenade craters a running river; the crater fills and the river runs on",
+        level: RIVER_BLAST_LEVEL,
+        duration: 120.0,
+        beats: vec![Beat {
+            at: 10.0,
+            action: Action::Blast {
+                centre: Point3::new(-6.0, 8.0, 0.0),
+                radius: 2.5,
+            },
+        }],
+        probes: vec![
+            Probe {
+                name: "lake",
+                at: Point3::new(-25.0, 9.5, 0.0),
+            },
+            Probe {
+                name: "crater",
+                at: Point3::new(-6.0, 6.5, 0.0),
+            },
+            Probe {
+                name: "pit",
+                at: Point3::new(14.0, 3.2, 0.0),
+            },
+        ],
+        camera: (Point3::new(-6.0, 22.0, 18.0), Point3::new(-6.0, 7.0, 0.0)),
+    }
+}
+
+const RIVER_BLAST_LEVEL: &str = r#"
+Level(
+    name: "water_viewer: river_blast",
+    segments: [(
+        name: "main",
+        terrain: Terrain(
+            voxel_size: 0.5,
+            bounds: (min: (-32.0, -16.0, -32.0), max: (32.0, 16.0, 32.0)),
+            base_height: 0.0,
+            material_layers: [(depth: 999.0, material: Dirt)],
+            features: [
+                Plateau(min: (-40.0, -40.0), max: (40.0, 40.0), height: 12.0),
+                // The lake, 3 m deep below the river's head.
+                Plateau(min: (-30.0, -5.0), max: (-20.0, 5.0), height: 7.0),
+                // The river, falling from 10 m at the lake's lip to 6 m at the pit.
+                Ramp(from: (-20.0, 0.0), to: (8.0, 0.0), start_height: 10.0, end_height: 6.0, width: 4.0, flat_width: 2.0),
+                // A trench 3 m below the river's end, open off the map's edge.
+                Plateau(min: (8.0, -6.0), max: (40.0, 6.0), height: 3.0),
+            ],
+        ),
+    )],
+    placements: [Root(segment: "main")],
+    player_spawn: (0.0, 13.0, 10.0),
+    water: Some((
+        bodies: [
+            Pool(seed: (-25.0, 0.0), surface_level: 9.5),
+            Spring(position: (-25.0, 11.0, 4.5), direction: (0.0, 0.0, -1.0), discharge: 1.0),
+        ],
+        settle: Steady,
     )),
 )
 "#;

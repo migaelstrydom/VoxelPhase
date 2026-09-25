@@ -61,6 +61,13 @@ impl Network {
         StoreId(self.stores.len() as u32 - 1)
     }
 
+    /// Put a store back in the slot it was removed from.
+    pub fn restore(&mut self, id: StoreId, store: Store) {
+        let slot = &mut self.stores[id.0 as usize];
+        debug_assert!(slot.is_none(), "{id:?} is live");
+        *slot = Some(store);
+    }
+
     /// Remove a store and every link touching it, returning it.
     pub fn remove_store(&mut self, id: StoreId) -> Option<Store> {
         for slot in self.links.iter_mut() {
@@ -127,14 +134,9 @@ impl Network {
             .filter_map(|(i, l)| l.as_ref().map(|l| (LinkId(i as u32), l)))
     }
 
-    /// Every link water runs through now: open, and joining no frozen store.
+    /// Every link water runs through now: the open ones.
     pub fn flowing_links(&self) -> impl Iterator<Item = (LinkId, &LinkEntry)> {
-        self.links().filter(|(_, l)| {
-            l.open
-                && ![l.up, l.down]
-                    .iter()
-                    .any(|s| self.store(*s).is_some_and(Store::is_frozen))
-        })
+        self.links().filter(|(_, l)| l.open)
     }
 
     /// Water held in every finite store, m³.

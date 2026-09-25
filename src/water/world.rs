@@ -23,8 +23,8 @@ use nalgebra::{Point3, Vector3};
 
 use super::coupling::{Disturbance, Disturbances};
 use super::geometry::{
-    Column, GeometryUpdate, Outlets, SeaEdges, SinkBox, SpanChunkCoord, SpanGraph, WaterGeometry,
-    CHUNK_COLUMNS, COLUMNS_PER_CHUNK,
+    Column, GeometryUpdate, Outlets, SeaEdges, SinkBox, SpanChunkCoord, SpanGraph, SpanRemap,
+    WaterGeometry, CHUNK_COLUMNS, COLUMNS_PER_CHUNK, COLUMN_SIZE,
 };
 use super::ids::{LinkId, StoreId, WaterBodyId};
 use super::network::{
@@ -59,8 +59,8 @@ impl HydrologyConfig {
 pub struct WaterTimings {
     /// Re-pairing spans and repairing drainage after a terrain edit.
     pub geometry: Duration,
-    /// Re-flooding basins the edit touched.
-    pub reregion: Duration,
+    /// Laying the network again over the edited ground.
+    pub rebuild: Duration,
     /// Between-tick topology.
     pub settle: Duration,
     /// Solver ticks.
@@ -72,7 +72,7 @@ pub struct WaterTimings {
 
 impl WaterTimings {
     pub fn total(&self) -> Duration {
-        self.geometry + self.reregion + self.settle + self.solve + self.ripples
+        self.geometry + self.rebuild + self.settle + self.solve + self.ripples
     }
 }
 
@@ -251,15 +251,17 @@ impl WaterWorld {
         (world, errors)
     }
 
-    /// Catch up with the terrain's most recent update.
+    /// Catch up with the terrain's most recent update: lay the network
+    /// again over the new ground and pour its water back where it stood.
     pub fn on_terrain_update(&mut self, terrain: &TerrainWorld) -> Option<GeometryUpdate> {
-        if self.topology.has_deferred() && !terrain.rebuilt_chunks().is_empty() {
-            // The valve's re-floods follow the last edit; run them before
-            // the geometry takes this one.
-            let started = Instant::now();
-            self.run_deferred();
-            self.last_timings.reregion += started.elapsed();
+        if terrain.rebuilt_chunks().is_empty() {
+            return None;
         }
+        let runnels = self.topology.runnels(&Topology {
+            network: &mut self.network,
+            ledger: &mut self.ledger,
+            geometry: &mut self.geometry,
+        });
         let started = Instant::now();
         let update = self.geometry.update(terrain)?;
         let geometry = started.elapsed();
@@ -269,21 +271,30 @@ impl WaterWorld {
             ledger: &mut self.ledger,
             geometry: &mut self.geometry,
         };
-        self.topology.after_terrain_update(&mut t, &update);
+        self.topology.rebuild(&mut t, &update.remap, runnels);
         self.refresh_levels();
         self.last_timings.geometry = geometry;
-        self.last_timings.reregion += started.elapsed();
+        self.last_timings.rebuild += started.elapsed();
         Some(update)
+    }
+
+    /// Lay the network again over unchanged ground: what an edit that
+    /// changed nothing does. It must leave the water as it was.
+    pub fn rebuild(&mut self) {
+        let mut t = Topology {
+            network: &mut self.network,
+            ledger: &mut self.ledger,
+            geometry: &mut self.geometry,
+        };
+        let runnels = self.topology.runnels(&t);
+        self.topology
+            .rebuild(&mut t, &SpanRemap::default(), runnels);
+        self.refresh_levels();
     }
 
     /// Advance by one frame: settle topology, then run the ticks due.
     pub fn step(&mut self, frame_dt: f32) {
         let edited = self.last_timings.geometry > Duration::ZERO;
-        if self.topology.has_deferred() && !edited {
-            let started = Instant::now();
-            self.run_deferred();
-            self.last_timings.reregion += started.elapsed();
-        }
         let started = Instant::now();
         let loss = self.config.loss;
         let mut t = Topology {
@@ -318,17 +329,6 @@ impl WaterWorld {
         );
         self.last_step = self.last_timings;
         self.last_timings = WaterTimings::default();
-    }
-
-    /// Run the re-floods the valve deferred (§9.2).
-    fn run_deferred(&mut self) {
-        let mut t = Topology {
-            network: &mut self.network,
-            ledger: &mut self.ledger,
-            geometry: &mut self.geometry,
-        };
-        self.topology.run_deferred(&mut t);
-        self.refresh_levels();
     }
 
     fn refresh_levels(&mut self) {
@@ -564,6 +564,29 @@ impl WaterWorld {
         self.link_flow(id).map(f64::abs)
     }
 
+    /// How wide the water leaving over a link's lip is when it carries `q`
+    /// m³/s: a channel's top width, or the length of a crest under the water
+    /// running over it, from the side it runs from. `None` for a spring.
+    pub fn fall_width(&self, id: LinkId, q: f64, back: bool) -> Option<f32> {
+        let link = self.network.link(id)?;
+        let from = if back { link.down } else { link.up };
+        match self.network.store(from)? {
+            Store::Reach(reach) => Some(reach.rating.at(q).top_width),
+            Store::Basin(_) => {
+                let level = self.level(from)?;
+                let outflow = self
+                    .network
+                    .stores()
+                    .filter_map(|(_, s)| s.as_basin())
+                    .flat_map(|b| b.outflows.iter())
+                    .find(|o| o.link == Some(id))?;
+                let wet = outflow.cells.iter().filter(|c| c.saddle < level).count();
+                Some(wet.max(1) as f32 * COLUMN_SIZE)
+            }
+            _ => None,
+        }
+    }
+
     /// How far a reach's ends are eased to meet its ports now (§7.9).
     pub fn reach_ends(&self, id: StoreId) -> ReachEnds {
         self.ends.get(id.0 as usize).copied().unwrap_or_default()
@@ -684,10 +707,10 @@ impl WaterWorld {
             log.add(
                 "Water/Time/LastEdit",
                 format!(
-                    "{:.3} ms (geometry {:.3}, reregion {:.3})",
+                    "{:.3} ms (geometry {:.3}, rebuild {:.3})",
                     t.total().as_secs_f64() * 1000.0,
                     t.geometry.as_secs_f64() * 1000.0,
-                    t.reregion.as_secs_f64() * 1000.0
+                    t.rebuild.as_secs_f64() * 1000.0
                 ),
             );
         }
