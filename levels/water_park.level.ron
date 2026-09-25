@@ -1,0 +1,189 @@
+// Water Park — a tour of the water system, one demo to a corner.
+//
+// An upland at 10 m, the sea to the south at 0 m. Each demo is cut into the
+// upland on its own, so no two share water.
+//
+//                         north (+z)
+//   ┌───────────────────────────────────────────────────────┐
+//   │ DAM: reservoir ▐dam▌ spillway ─▶ pit          head lake│
+//   │                                   │     RIVER ◀─ spring│
+//   │                   lower lake ◀────┘   ~meanders~       │
+//   │                                          │             │
+//   │ UNDERCROFT: pond                   catch lake ──────┐  │
+//   │   over a cavern ═════▶ courtyard     spawn             │
+//   │                              BUOYANCY pond   STAIRCASE│ │
+//   │ SEA WALL: lowland 2 m under the sea            │ spring│ │
+//   │ ▀▀▀▀▀▀▀▀▀ thin wall ▀▀▀▀▀▀▀▀▀                  ▼       ▼ │
+//   └────────────────────────── the sea ────────────────────┘
+//
+// Things to try:
+// - DAM: hole the sand dam across the spillway (-49, 8, 40) below the waterline. The reservoir pours
+//   down the spillway, falls into the pit, fills it, and spills on into the
+//   lower lake.
+// - RIVER: crates, planks and beach balls float from the spring-fed head
+//   lake down a winding river into the catch lake. Throw more in. Blow a
+//   crater in the river bed: it fills and the river runs on.
+// - STAIRCASE: a spring runs down seven treads, falling from each to the
+//   next, and off the last into the sea. Blow a tread's lip or the rock
+//   round the spring.
+// - SEA WALL: blow through the sand wall (-50, 0.5, -49.5). The sea floods the
+//   lowland over the breach, floating the crates stored there, until the
+//   lowland stands at sea level and joins the sea.
+// - UNDERCROFT: a pond's floor is 1 m of earth over a cavern. Blow the floor
+//   (-64, 6, -6) and watch it pour through, from the pond's edge or from
+//   the courtyard at the cavern's mouth (down the ramp at x = -33).
+// - BUOYANCY: a pond of things of every density: lithium and ice float,
+//   aluminium and gold sink, a 900 kg/m³ box floats nearly awash, a
+//   1100 kg/m³ one sinks slowly. A bridge crosses it.
+Level(
+    name: "Water Park",
+
+    segments: [
+        (
+            name: "park",
+
+            terrain: Terrain(
+                voxel_size: 0.5,
+                bounds: (min: (-80.0, -16.0, -80.0), max: (80.0, 24.0, 80.0)),
+                base_height: 10.0,
+                material_layers: [
+                    (depth: 0.5,   material: Grass),
+                    (depth: 3.0,   material: Dirt),
+                    (depth: 999.0, material: Rock),
+                ],
+
+                features: [
+                    // The sea floor, south of a cliff at z = -50.
+                    Plateau(min: (-90.0, -90.0), max: (90.0, -50.0), height: -6.0),
+
+                    // DAM. The reservoir, a 20 m square 8 m deep.
+                    Plateau(min: (-72.0, 30.0), max: (-52.0, 50.0), height: 2.0),
+                    // The spillway, falling east from the reservoir to the pit.
+                    Ramp(from: (-52.0, 40.0), to: (-31.0, 40.0), start_height: 6.0, end_height: 4.0, width: 8.0, flat_width: 4.0),
+                    // The pit the spillway falls into, 6 m below its end.
+                    Plateau(min: (-32.0, 35.0), max: (-26.0, 45.0), height: -2.0),
+                    // The pit's overflow, south to the lower lake.
+                    Ramp(from: (-29.0, 35.0), to: (-29.0, 23.5), start_height: 3.0, end_height: 2.0, width: 6.0, flat_width: 2.5),
+                    // The lower lake.
+                    Plateau(min: (-40.0, 4.0), max: (-18.0, 24.0), height: -1.0),
+
+                    // RIVER. The head lake, fed by a spring in its north wall.
+                    Plateau(min: (56.0, 56.0), max: (72.0, 72.0), height: 4.0),
+                    // The river: bends from the head lake's west side down to the
+                    // catch lake, falling 3.5 m over 88 m on a bed 4 m wide.
+                    // Each bend's segment runs 2.5 m on past it, at its own
+                    // slope, to cut the bend's outer corner.
+                    Ramp(from: (57.0, 64.0), to: (41.7, 71.0), start_height: 7.50, end_height: 6.91, width: 7.0, flat_width: 2.0),
+                    Ramp(from: (44.0, 70.0), to: (32.4, 56.1), start_height: 7.00, end_height: 6.30, width: 7.0, flat_width: 2.0),
+                    Ramp(from: (34.0, 58.0), to: (41.1, 43.8), start_height: 6.40, end_height: 5.69, width: 7.0, flat_width: 2.0),
+                    Ramp(from: (40.0, 46.0), to: (26.1, 34.4), start_height: 5.80, end_height: 5.10, width: 7.0, flat_width: 2.0),
+                    Ramp(from: (28.0, 36.0), to: (13.9, 45.4), start_height: 5.20, end_height: 4.50, width: 7.0, flat_width: 2.0),
+                    Ramp(from: (16.0, 44.0), to: (10.0, 25.0), start_height: 4.60, end_height: 4.00, width: 7.0, flat_width: 2.0),
+                    // The catch lake, and its overflow east, then south over
+                    // the cliff into the sea.
+                    Plateau(min: (2.0, 12.0), max: (20.0, 26.0), height: 0.0),
+                    Ramp(from: (19.5, 19.0), to: (64.5, 19.0), start_height: 3.0, end_height: 2.58, width: 6.0, flat_width: 1.5),
+                    Ramp(from: (62.0, 19.0), to: (62.0, -50.0), start_height: 2.6, end_height: 1.0, width: 6.0, flat_width: 1.5),
+
+                    // STAIRCASE: seven 7 m treads, each 1.25 m below the last,
+                    // cut 4 m wide, running south off the cliff into the sea.
+                    Plateau(min: (44.0, -6.0),  max: (48.0, 2.0),   height: 8.75),
+                    Plateau(min: (44.0, -13.0), max: (48.0, -6.0),  height: 7.5),
+                    Plateau(min: (44.0, -20.0), max: (48.0, -13.0), height: 6.25),
+                    Plateau(min: (44.0, -27.0), max: (48.0, -20.0), height: 5.0),
+                    Plateau(min: (44.0, -34.0), max: (48.0, -27.0), height: 3.75),
+                    Plateau(min: (44.0, -41.0), max: (48.0, -34.0), height: 2.5),
+                    Plateau(min: (44.0, -50.0), max: (48.0, -41.0), height: 1.25),
+
+                    // SEA WALL: a lowland 2 m below the sea, open to it but for
+                    // the wall (a volume, below).
+                    Plateau(min: (-65.0, -50.0), max: (-35.0, -36.0), height: -2.0),
+
+                    // UNDERCROFT: a pond 2.5 m deep...
+                    Plateau(min: (-72.0, -14.0), max: (-56.0, 2.0), height: 6.0),
+                    // ...and a courtyard at the cavern's mouth, down a ramp.
+                    Plateau(min: (-38.0, -12.0), max: (-28.0, 0.0), height: -1.0),
+                    Ramp(from: (-33.0, -24.0), to: (-33.0, -12.0), start_height: 10.0, end_height: -1.0, width: 4.0),
+
+                    // BUOYANCY: a pond 3 m deep.
+                    Plateau(min: (-10.0, -28.0), max: (10.0, -12.0), height: 2.0),
+                ],
+
+                volumes: [
+                    // DAM: a sand wall 1 m thick across the spillway, soft enough
+                    // for a grenade or two to hole.
+                    Platform(center: (-49.0, 10.0, 40.0), half_extents: (0.5, 5.0), thickness: 5.0, material: Sand),
+                    // SEA WALL: sand, 1 m thick and 0.5 m above the sea.
+                    Platform(center: (-50.0, 0.5, -49.5), half_extents: (16.0, 0.5), thickness: 3.0, material: Sand),
+                    // UNDERCROFT: the cavern, from under the pond east to the
+                    // courtyard; its roof is 1 m under the pond's floor.
+                    Tunnel(center: (-52.0, -6.0), direction: (1.0, 0.0), length: 40.0, radius: 3.0, depth: 2.0),
+                    // BUOYANCY: a bridge across the pond.
+                    Path(points: [(0.0, 10.0, -31.0), (0.0, 7.0, -24.0), (0.0, 7.0, -16.0), (0.0, 10.0, -9.0)], width: 2.0),
+                ],
+            ),
+
+            objects: [
+                // RIVER: flotsam on the head lake by its outlet, and on the
+                // river's first reaches.
+                Crate(pos: (59.0, 8.5, 62.0), size: 0.4),
+                Crate(pos: (59.0, 8.5, 66.0), size: 0.4),
+                Crate(pos: (61.0, 8.5, 64.0), size: 0.5),
+                BeachBall(pos: (62.0, 8.5, 61.0)),
+                BeachBall(pos: (62.0, 8.5, 67.0)),
+                Plank(pos: (60.0, 8.5, 60.0), length: 2.0, width: 0.4, yaw: 30.0),
+                Plank(pos: (60.0, 8.5, 68.0), length: 2.0, width: 0.4, yaw: -20.0),
+                Crate(pos: (50.0, 8.2, 67.0), size: 0.4),
+                IceBox(pos: (39.0, 8.0, 64.0)),
+
+                // SEA WALL: crates stored in the dry lowland.
+                Crate(pos: (-58.0, -1.4, -40.0), size: 0.5),
+                Crate(pos: (-56.8, -1.4, -40.0), size: 0.5),
+                Crate(pos: (-57.4, -0.4, -40.0), size: 0.5),
+                Crate(pos: (-45.0, -1.4, -42.0), size: 0.5),
+                Crate(pos: (-44.0, -1.4, -43.0), size: 0.5),
+                HeavyCrate(pos: (-40.0, -1.4, -44.0), size: 0.5),
+                BeachBall(pos: (-50.0, -1.0, -44.0)),
+                Plank(pos: (-52.0, -1.8, -41.0), length: 3.0, width: 0.4),
+
+                // BUOYANCY: dropped into the pond, west to east from light
+                // to heavy.
+                BeachBall(pos: (-8.0, 6.0, -20.0)),
+                Plank(pos: (-6.5, 5.6, -22.0), length: 2.0, width: 0.4, yaw: 90.0),
+                Crate(pos: (-5.0, 6.0, -18.0), size: 0.4),
+                MetalCube(pos: (-3.5, 6.0, -21.0), metal: Lithium, size: 0.5),
+                IceBox(pos: (-2.0, 6.0, -18.0)),
+                Box(pos: (2.0, 6.0, -20.0), half_extents: (0.4, 0.4, 0.4), style: Cardboard, density: 900.0),
+                Box(pos: (3.5, 6.0, -17.0), half_extents: (0.4, 0.4, 0.4), style: Brick, density: 1100.0),
+                HeavyCrate(pos: (5.0, 6.0, -22.0), size: 0.4),
+                MetalCube(pos: (6.5, 6.0, -18.0), metal: Aluminium, size: 0.5),
+                MetalCube(pos: (8.0, 6.0, -21.0), metal: Gold, size: 0.3),
+            ],
+        ),
+    ],
+
+    placements: [Root(segment: "park")],
+
+    player_spawn: (0.0, 11.0, -4.0),
+
+    water: Some((
+        ocean: Some((level: 0.0, open_edges: [South])),
+        // Breaches three times as fast as the weir laws alone: a demo.
+        drain_gain: 3.0,
+        bodies: [
+            // DAM
+            Pool(seed: (-62.0, 40.0), surface_level: 8.5),
+            Pool(seed: (-29.0, 14.0), surface_level: 0.0),
+            // RIVER: the head lake and its spring; the catch lake.
+            Pool(seed: (64.0, 64.0), surface_level: 7.6),
+            Spring(position: (64.0, 9.0, 72.5), direction: (0.0, 0.0, -1.5), discharge: 2.5),
+            Pool(seed: (11.0, 19.0), surface_level: 3.3),
+            // STAIRCASE
+            Spring(position: (46.0, 9.6, 2.3), direction: (0.0, 0.0, -1.5), discharge: 1.0),
+            // UNDERCROFT
+            Pool(seed: (-64.0, -6.0), surface_level: 8.5),
+            // BUOYANCY
+            Pool(seed: (5.0, -20.0), surface_level: 5.0),
+        ],
+    )),
+)

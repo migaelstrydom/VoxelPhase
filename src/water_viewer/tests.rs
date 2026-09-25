@@ -406,3 +406,27 @@ fn the_island_sea_demo_opens_with_its_pools_above_the_sea() {
     assert!(water.sources().iter().all(|s| !s.buried));
     assert!(water.balance().is_balanced());
 }
+
+#[test]
+fn the_water_park_opens_at_rest_with_its_river_running() {
+    let level = load_level(Path::new("levels/water_park.level.ron")).unwrap();
+    let terrain = build_terrain(&level);
+    let (water, errors) = WaterWorld::from_config(level.water.as_ref().unwrap(), &terrain);
+    assert!(errors.is_empty(), "{errors:?}");
+    assert!(water.steady_report().is_some_and(|r| r.converged));
+    let query = water.query();
+    // The undercroft's pond stands over its cavern, which is dry.
+    assert_eq!(query.level_at(Point3::new(-64.0, 7.0, -6.0)), Some(8.5));
+    assert_eq!(query.level_at(Point3::new(-64.0, 0.0, -6.0)), None);
+    // The sea wall holds the lowland dry.
+    assert_eq!(query.level_at(Point3::new(-50.0, -1.5, -43.0)), None);
+    // The spring's 2.5 m³/s runs down the river into the catch lake.
+    let river = water
+        .network()
+        .stores()
+        .filter_map(|(_, s)| s.as_reach())
+        .filter(|r| r.inflow > 2.4)
+        .count();
+    assert!(river >= 7, "{river} reaches carry the river");
+    assert!(water.balance().is_balanced());
+}

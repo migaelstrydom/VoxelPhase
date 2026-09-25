@@ -258,14 +258,20 @@ fn contribute(feature: &TerrainFeature, x: f32, z: f32, current_h: f32) -> f32 {
             start_height,
             end_height,
             width,
+            flat_width,
         } => {
             let (proj_t, perp_dist) = point_to_segment_projection(x, z, fx, fz, tx, tz);
             let half_w = width * 0.5;
+            let half_flat = (flat_width * 0.5).clamp(0.0, half_w);
             if perp_dist >= half_w || proj_t < 0.0 || proj_t > 1.0 {
                 0.0
             } else {
                 let ramp_h = start_height + (end_height - start_height) * proj_t;
-                let edge_t = perp_dist / half_w;
+                let edge_t = if perp_dist <= half_flat {
+                    0.0
+                } else {
+                    (perp_dist - half_flat) / (half_w - half_flat)
+                };
                 let edge_falloff = (1.0 + (edge_t * std::f32::consts::PI).cos()) * 0.5;
                 // Set absolute height along the ramp
                 (ramp_h - current_h) * edge_falloff

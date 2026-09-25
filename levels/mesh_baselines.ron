@@ -35,5 +35,6 @@
         (level: "thin_ice.level.ron", triangles: 90524, open_edges: 0),
         (level: "wrecking_yard.level.ron", triangles: 120792, open_edges: 0),
         (level: "skyway.level.ron", triangles: 205916, open_edges: 0),
+        (level: "water_park.level.ron", triangles: 617300, open_edges: 0),
     ],
 )

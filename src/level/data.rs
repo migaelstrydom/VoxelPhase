@@ -295,6 +295,12 @@ pub enum TerrainFeature {
         start_height: f32,
         end_height: f32,
         width: f32,
+        /// Width of the ramp's flat middle, where it holds its height
+        /// exactly; beyond it the ramp blends into the ground by a cosine
+        /// out to `width`. Zero blends from the centreline: a V in cross
+        /// section. Cut into higher ground, a flat middle is a channel's bed.
+        #[serde(default)]
+        flat_width: f32,
     },
     /// FBM noise layer for natural surface variation.
     TerrainRoughness {
