@@ -49,6 +49,27 @@ impl Centreline {
     pub fn length(&self) -> f32 {
         self.distance.last().copied().unwrap_or(0.0)
     }
+
+    /// The point `distance` metres along, clamped to the ends.
+    pub fn point_at(&self, distance: f32) -> Point3<f32> {
+        let Some(last) = self.points.len().checked_sub(1) else {
+            return Point3::origin();
+        };
+        let i = self.distance.partition_point(|d| *d <= distance);
+        if i == 0 {
+            return self.points[0];
+        }
+        if i > last {
+            return self.points[last];
+        }
+        let (d0, d1) = (self.distance[i - 1], self.distance[i]);
+        let t = if d1 > d0 {
+            (distance - d0) / (d1 - d0)
+        } else {
+            0.0
+        };
+        Point3::from(self.points[i - 1].coords.lerp(&self.points[i].coords, t))
+    }
 }
 
 /// One pass of Chaikin's corner cutting, keeping both endpoints.

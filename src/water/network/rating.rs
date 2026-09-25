@@ -37,7 +37,10 @@ pub struct CrossSection {
 /// What a discharge does at one cross-section.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Hydraulics {
-    /// Water depth over the lowest wet sample.
+    /// Height of the surface over the bed on the centreline, which is where
+    /// a reach's surface is drawn from and sampled at. Measured from the
+    /// section's lowest floor instead, a section reaching across a shore
+    /// into a lake would read the lake's depth.
     pub depth: f32,
     /// Water surface height.
     pub level: f32,
@@ -137,13 +140,6 @@ impl CrossSection {
     /// sampled width.
     pub fn hydraulics(&self, q: f32, slope: f32) -> Option<Hydraulics> {
         let bed = self.floors[self.centre]?;
-        let bottom = self
-            .floors
-            .iter()
-            .flatten()
-            .copied()
-            .fold(bed, f32::min)
-            .min(bed);
         let slope = slope.max(MIN_SLOPE);
         let conveyance = |level: f32| {
             let (area, perimeter, _) = self.geometry_at(level);
@@ -173,7 +169,7 @@ impl CrossSection {
         let level = hi;
         let (area, _, top_width) = self.geometry_at(level);
         Some(Hydraulics {
-            depth: level - bottom.min(bed),
+            depth: level - bed,
             level,
             area,
             top_width,
@@ -368,5 +364,18 @@ mod tests {
         let h = rectangle(4.0).hydraulics(2.0, 0.01).unwrap();
         assert!((h.depth - 0.37).abs() < 0.04, "depth {}", h.depth);
         assert!((h.velocity - 1.33).abs() < 0.15, "velocity {}", h.velocity);
+    }
+
+    #[test]
+    fn depth_is_over_the_bed_not_a_lake_beyond_the_bank() {
+        // The same channel, its section reaching over the right bank into a
+        // lake whose floor is 4 m under the bed.
+        let mut section = rectangle(4.0);
+        let n = section.floors.len();
+        section.floors[n - 2] = Some(-4.0);
+        section.floors[n - 1] = Some(-4.0);
+        let h = section.hydraulics(2.0, 0.01).unwrap();
+        assert!((h.depth - 0.37).abs() < 0.04, "depth {}", h.depth);
+        assert!((h.level - h.depth).abs() < 1e-6, "the bed is at 0");
     }
 }
