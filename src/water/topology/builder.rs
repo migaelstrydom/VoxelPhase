@@ -33,6 +33,7 @@ use crate::water::network::{
     is_pothole, pit_bottom, pit_bottom_within, Basin, ChannelOutlet, CrestKind, DepressionFinder,
     FallPath, FallTracer, Flood, FloodMode, HoleColumn, Landing, LinkEntry, LossLaw, Network,
     Ocean, Outflow, Port, Store, Trace, FALL_THRESHOLD, GRAVITY, POTHOLE_DEPTH, POTHOLE_VOLUME,
+    RATING_Q_MIN,
 };
 use crate::water::solver::{account, Account, VolumeLedger};
 
@@ -76,6 +77,15 @@ pub const Q_RETIRE: f64 = 2e-3;
 
 /// Steps a drainage walk takes before giving up on reaching a store.
 const MAX_WALK: usize = 1 << 16;
+
+/// The discharges a channel is laid for.
+#[derive(Debug, Clone, Copy)]
+struct ChannelFlow {
+    /// What its reaches are rated to, with headroom, m³/s.
+    design: f64,
+    /// What flows into it as it is laid, m³/s.
+    now: f64,
+}
 
 /// Depth over a crest where a weir's water leaves it: the critical depth at
 /// the design head, m.
@@ -625,15 +635,18 @@ impl TopologyBuilder {
             self.gain,
             false,
         );
-        let design = weir
-            .free((level.max(outflow.lip) + DESIGN_HEAD) as f64)
-            .0
-            .max(MIN_DESIGN_DISCHARGE);
+        let flow = ChannelFlow {
+            design: weir
+                .free((level.max(outflow.lip) + DESIGN_HEAD) as f64)
+                .0
+                .max(MIN_DESIGN_DISCHARGE),
+            now: weir.free(level.max(outflow.lip) as f64).0,
+        };
         let lip = WalkLip {
             inside: cell.inside,
             height: cell.saddle,
         };
-        self.channel(t, Some(from), Some(lip), cell.outside, design, 0)
+        self.channel(t, Some(from), Some(lip), cell.outside, flow, 0)
     }
 
     /// Lay a channel of reaches from `start` down the drainage field, and
@@ -646,7 +659,7 @@ impl TopologyBuilder {
         from: Option<StoreId>,
         lip: Option<WalkLip>,
         start: SpanRef,
-        design: f64,
+        flow: ChannelFlow,
         falls: u32,
     ) -> Option<Entry> {
         let (cells, end) = {
@@ -655,12 +668,14 @@ impl TopologyBuilder {
             let (graph, drainage) = t.geometry.routing();
             walk(graph, drainage, network, &levels, from, lip, start)
         };
-        let reaches = build_reaches(t.geometry.graph(), &cells, design);
+        let reaches = build_reaches(t.geometry.graph(), &cells, flow.design);
+        // A fall leaves from the surface the channel runs at now, which is
+        // where its last reach is drawn, not at the design discharge.
         let (speed, depth) =
             reaches
                 .last()
                 .map_or(((GRAVITY * CRITICAL_DEPTH).sqrt(), CRITICAL_DEPTH), |r| {
-                    let at = r.rating.at(design);
+                    let at = r.rating.at(flow.now.max(RATING_Q_MIN));
                     (at.velocity, at.depth)
                 });
         let graph = t.geometry.graph();
@@ -683,7 +698,7 @@ impl TopologyBuilder {
                     .try_normalize(1e-6)
                     .unwrap_or_else(Vector3::x);
                 let launch = Point3::new(ex, base + depth, ez) + direction * (0.5 * COLUMN_SIZE);
-                let entry = self.fall(t, from, launch, direction * speed, design, falls + 1)?;
+                let entry = self.fall(t, from, launch, direction * speed, flow, falls + 1)?;
                 let at = entry
                     .fall
                     .as_ref()
@@ -767,7 +782,7 @@ impl TopologyBuilder {
         from: Option<StoreId>,
         at: Point3<f32>,
         velocity: Vector3<f32>,
-        design: f64,
+        flow: ChannelFlow,
         falls: u32,
     ) -> Option<Entry> {
         let trace = self.trace(t, at, velocity)?;
@@ -784,7 +799,7 @@ impl TopologyBuilder {
             Landing::Span(span) => match self.standing_water(t, span) {
                 Some(store) if Some(store) != from => store,
                 _ => {
-                    let entry = self.channel(t, from, None, span, design, falls)?;
+                    let entry = self.channel(t, from, None, span, flow, falls)?;
                     if let Some(more) = entry.fall {
                         path.extend(more);
                     }
@@ -909,8 +924,11 @@ impl TopologyBuilder {
 
     fn link_source(&mut self, t: &mut Topology, index: usize) {
         let source = self.sources[index].clone();
-        let design = (2.0 * source.discharge).max(MIN_DESIGN_DISCHARGE);
-        let Some(entry) = self.fall(t, None, source.position, source.velocity, design, 0) else {
+        let flow = ChannelFlow {
+            design: (2.0 * source.discharge).max(MIN_DESIGN_DISCHARGE),
+            now: source.discharge,
+        };
+        let Some(entry) = self.fall(t, None, source.position, source.velocity, flow, 0) else {
             log::warn!(
                 "water source at {:?} is sealed in rock: nothing flows",
                 source.position
@@ -947,7 +965,10 @@ impl TopologyBuilder {
             self.link_reach(t, id, void, None);
             return;
         };
-        let design = reach.rating.design();
+        let flow = ChannelFlow {
+            design: reach.rating.design(),
+            now: reach.outflow,
+        };
         let column = Column::containing(outlet.at.x, outlet.at.z);
         let span = t
             .geometry
@@ -957,9 +978,7 @@ impl TopologyBuilder {
             None => Some(self.void(t)),
             Some(span) => match self.standing_water(t, span) {
                 Some(store) => Some(store),
-                None => self
-                    .channel(t, None, None, span, design, 0)
-                    .map(|e| e.store),
+                None => self.channel(t, None, None, span, flow, 0).map(|e| e.store),
             },
         };
         match target.filter(|d| *d != id) {

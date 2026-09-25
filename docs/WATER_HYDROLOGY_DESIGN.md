@@ -672,7 +672,9 @@ neither blocky nor √2 too wide.
 
 - at a real depression,
 - at the first span whose `floor_min` lies below the receiving basin's current level (the
-  rest of the channel is drowned, §8.2),
+  rest of the channel is drowned, §8.2). If that water stands more than `FALL_THRESHOLD`
+  below the channel's last cell, the channel falls to it: a cliff-top column is the
+  basin's once the cliff's foot in its square is under water, though its middle is not,
 - at a fall step (§7.6),
 - where it joins an existing reach, forming a junction,
 - at the ocean or a sink.
@@ -1533,8 +1535,10 @@ This is the stage most likely to need iteration on looks. 4a stands without it.
   behind `Link::fall_path()`: a weir, a reach's outflow and a spring's
   `FixedRate` all carry one the same way, and no law duplicates it.
 - **Routing through falls.** A channel that reaches a fall step ends there.
-  Its last link carries the arc, launched at the reach's design velocity, or
-  at the critical velocity over a 0.3 m design head for a bare weir. From
+  Its last link carries the arc, launched from the surface the reach runs at
+  as it is laid (not its design discharge, which has headroom) at that
+  velocity, or at the critical velocity over a 0.3 m design head for a bare
+  weir. The reach's drawn surface runs on to the arc's first point. From
   where the arc lands, a new channel is laid. When a fall lands on a ledge
   too short to be a channel, its arc is joined to the next fall's, so a chain
   of falls is one path.

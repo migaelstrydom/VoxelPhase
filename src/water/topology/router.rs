@@ -68,8 +68,9 @@ pub struct WalkLip {
 }
 
 /// The cells a channel from `start` runs over, and where it ends. The walk
-/// stops at the first span under a basin's water, at a span already carrying
-/// a reach, at the void, at a real depression and at a fall step. `from` is
+/// stops at the first span under a basin's water (over a fall if the water
+/// stands more than `FALL_THRESHOLD` below the channel), at a span already
+/// carrying a reach, at the void, at a real depression and at a fall step. `from` is
 /// the basin the channel leaves: its own spans do not end it.
 pub fn walk(
     graph: &SpanGraph,
@@ -102,7 +103,21 @@ pub fn walk(
             }
         }
         if let Some(body) = owner.body.filter(|b| Some(*b) != from) {
-            if levels(body).is_some_and(|level| level > floor) {
+            if let Some(level) = levels(body).filter(|level| *level > floor) {
+                // A column at a cliff top is the body's once the cliff's foot
+                // in its square is under water, though its middle is not: the
+                // channel falls from its last cell to the water.
+                if let Some(&last) = cells.last() {
+                    if graph.span(last).floor_c - level > FALL_THRESHOLD {
+                        return (
+                            cells,
+                            WalkEnd::Fall {
+                                lip: last,
+                                toward: span,
+                            },
+                        );
+                    }
+                }
                 return (cells, WalkEnd::Store(body, span));
             }
         }

@@ -110,7 +110,10 @@ fn append_reach(mesh: &mut RiverMesh, id: StoreId, reach: &Reach) {
     let row = (2 * steps + 1) as u32;
     let first_index = mesh.indices.len() as u32;
     let base = mesh.vertices.len() as u32;
-    let sections = sections(&reach.centreline);
+    let mut sections = sections(&reach.centreline);
+    if let Some(lip) = fall_lip(reach) {
+        extend_to(&mut sections, lip);
+    }
     for section in &sections {
         let across = section.across();
         for s in -steps..=steps {
@@ -197,6 +200,31 @@ fn sections(line: &Centreline) -> Vec<Section> {
         }
     }
     sections
+}
+
+/// Where a reach's water leaves its bed over a fall: the fall's first
+/// point. The centreline ends at the middle of its last column, up to half
+/// a column short of it.
+fn fall_lip(reach: &Reach) -> Option<Vector2<f32>> {
+    let fall = reach.outlet.as_ref()?.fall.as_ref()?;
+    let first = fall.points.first()?;
+    Some(Vector2::new(first.x, first.z))
+}
+
+/// Carry the surface on from its last section to `lip`, when the lip lies
+/// ahead of it.
+fn extend_to(sections: &mut Vec<Section>, lip: Vector2<f32>) {
+    let Some(&last) = sections.last() else {
+        return;
+    };
+    let ahead = lip - Vector2::new(last.centre.x, last.centre.z);
+    if ahead.dot(&last.tangent) <= 1e-3 {
+        return;
+    }
+    sections.push(Section {
+        centre: Point3::new(lip.x, last.centre.y, lip.y),
+        ..last
+    });
 }
 
 /// The centreline's direction in plan at `along`, over `TANGENT_WINDOW`
@@ -289,5 +317,19 @@ mod tests {
             sections.last().unwrap().centre,
             *line.points.last().unwrap()
         );
+    }
+
+    #[test]
+    fn a_surface_runs_on_to_a_lip_ahead_of_it_only() {
+        let line = bend(10, 0);
+        let end = *line.points.last().unwrap();
+        let mut ahead = sections(&line);
+        let n = ahead.len();
+        extend_to(&mut ahead, Vector2::new(end.x + 0.25, end.z));
+        assert_eq!(ahead.len(), n + 1);
+        assert_eq!(ahead[n].centre, Point3::new(end.x + 0.25, end.y, end.z));
+        let mut behind = sections(&line);
+        extend_to(&mut behind, Vector2::new(end.x - 0.25, end.z));
+        assert_eq!(behind.len(), n);
     }
 }

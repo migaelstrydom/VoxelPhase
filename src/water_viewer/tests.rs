@@ -428,5 +428,24 @@ fn the_water_park_opens_at_rest_with_its_river_running() {
         .filter(|r| r.inflow > 2.4)
         .count();
     assert!(river >= 7, "{river} reaches carry the river");
+    // It ends over the cliff top at the catch lake's shore, 0.9 m above the
+    // water, and falls from its own surface into the lake.
+    let (reach, fall) = water
+        .network()
+        .links()
+        .filter_map(|(_, l)| {
+            let reach = water.network().store(l.up)?.as_reach()?;
+            let fall = l.fall.as_ref()?;
+            let landing = fall.points.last()?;
+            ((landing.y - 3.3).abs() < 0.01).then_some((reach, fall))
+        })
+        .next()
+        .expect("the river falls into the catch lake");
+    let end = reach.centreline.points.last().unwrap().y + reach.running().depth;
+    let launch = fall.points[0].y;
+    assert!(
+        (launch - end).abs() < 0.15,
+        "falls from {launch}, runs at {end}"
+    );
     assert!(water.balance().is_balanced());
 }
