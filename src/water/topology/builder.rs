@@ -39,7 +39,8 @@ use crate::water::solver::{account, Account, VolumeLedger};
 
 use super::edit::TopologyEdit;
 use super::router::{
-    build_reaches, downstream_of, reach_footprint, rescan, walk, WalkEnd, WalkLip,
+    build_reaches, channel_heads, downstream_of, reach_footprint, rescan, standing_in, walk,
+    WalkEnd, WalkLip,
 };
 
 mod shoreline;
@@ -670,7 +671,12 @@ impl TopologyBuilder {
             let (graph, drainage) = t.geometry.routing();
             walk(graph, drainage, network, &levels, from, lip, start)
         };
-        let reaches = build_reaches(t.geometry.graph(), &cells, flow.design);
+        let heads: Vec<StoreId> = from.into_iter().collect();
+        let reaches = {
+            let graph = t.geometry.graph();
+            let standing = standing_in(graph, t.network, &heads);
+            build_reaches(graph, &cells, flow.design, &standing)
+        };
         // A fall leaves from the surface the channel runs at now, which is
         // where its last reach is drawn, not at the design discharge.
         let (speed, depth) =
@@ -1213,7 +1219,12 @@ impl TopologyBuilder {
             let minor = loss.reach_minor(reach.inflow, reach.minor);
             let outgrown = reach.inflow > reach.rating.design() * 1.05;
             if outgrown {
-                let rating = rescan(t.geometry.graph(), reach, reach.inflow * 2.0);
+                let rating = {
+                    let heads = channel_heads(t.network, id);
+                    let graph = t.geometry.graph();
+                    let standing = standing_in(graph, t.network, &heads);
+                    rescan(graph, reach, reach.inflow * 2.0, &standing)
+                };
                 if let Some(r) = t.network.store_mut(id).and_then(Store::as_reach_mut) {
                     r.rating = rating;
                     r.version = r.version.wrapping_add(1);

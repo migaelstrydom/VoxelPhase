@@ -158,7 +158,13 @@ fn route(terrain: &TerrainWorld, start: Point3<f32>, label: &str) -> RouteFindin
 
     let mut previous_width: Option<f32> = None;
     for (i, point) in line.points.iter().enumerate() {
-        let section = CrossSection::sample(&graph, *point, line.tangents[i], SECTION_HALF_WIDTH);
+        let section = CrossSection::sample(
+            &graph,
+            *point,
+            line.tangents[i],
+            SECTION_HALF_WIDTH,
+            &|_| false,
+        );
         if let Some(offset) = bottom_offset(&section) {
             findings.deviations.push(offset.abs());
             if std::env::var_os("WATER_SPIKE_TRACE").is_some() {

@@ -10,7 +10,7 @@
 
 use nalgebra::{Point3, Vector2};
 
-use crate::water::geometry::{Column, SpanGraph};
+use crate::water::geometry::{Column, SpanGraph, SpanRef};
 
 /// Manning's roughness for a natural earth channel.
 pub const MANNING_N: f32 = 0.035;
@@ -55,12 +55,16 @@ pub struct Hydraulics {
 impl CrossSection {
     /// Sample the bed across `tangent` at `centre`, out to `half_width` each
     /// side. Each sample reads the floor of the span resting nearest
-    /// `centre.y` in its column.
+    /// `centre.y` in its column. A span where `standing` says another
+    /// store's water stands is no sample: past a shore with no bank, a
+    /// section running on into a lake would count the lake's water as the
+    /// channel's.
     pub fn sample(
         graph: &SpanGraph,
         centre: Point3<f32>,
         tangent: Vector2<f32>,
         half_width: f32,
+        standing: &dyn Fn(SpanRef) -> bool,
     ) -> Self {
         let across = Vector2::new(-tangent.y, tangent.x);
         let steps = (half_width / SAMPLE_SPACING).round() as i32;
@@ -68,6 +72,8 @@ impl CrossSection {
             .map(|i| {
                 let offset = across * (i as f32 * SAMPLE_SPACING);
                 floor_near(graph, centre.x + offset.x, centre.z + offset.y, centre.y)
+                    .filter(|(span, _)| !standing(*span))
+                    .map(|(_, floor)| floor)
             })
             .collect();
         Self {
@@ -333,11 +339,12 @@ impl RatingCurve {
     }
 }
 
-/// The floor of the span in the column under (x, z) whose band holds `near`.
-fn floor_near(graph: &SpanGraph, x: f32, z: f32, near: f32) -> Option<f32> {
+/// The span in the column under (x, z) whose band holds `near`, and its
+/// floor.
+fn floor_near(graph: &SpanGraph, x: f32, z: f32, near: f32) -> Option<(SpanRef, f32)> {
     let column = Column::containing(x, z);
     let span = graph.span_at(column, near + 0.5)?;
-    Some(graph.span(span).floor_c)
+    Some((span, graph.span(span).floor_c))
 }
 
 #[cfg(test)]
@@ -377,5 +384,46 @@ mod tests {
         let h = section.hydraulics(2.0, 0.01).unwrap();
         assert!((h.depth - 0.37).abs() < 0.04, "depth {}", h.depth);
         assert!((h.level - h.depth).abs() < 1e-6, "the bed is at 0");
+    }
+
+    #[test]
+    fn a_section_stops_at_a_lake_with_no_bank_between() {
+        use crate::water::geometry::{Span, SpanChunk, SpanChunkCoord, COLUMNS_PER_CHUNK};
+        // Across x: a bank at 5 m to the west, a 4 m bed at 0, and past it,
+        // with no bank, a lake whose floor is 1 m lower.
+        let coord = SpanChunkCoord { x: 0, z: 0 };
+        let mut graph = SpanGraph::new(coord, coord);
+        let columns: Vec<Vec<Span>> = (0..COLUMNS_PER_CHUNK)
+            .map(|local| {
+                let f = match coord.column(local).i {
+                    ..=3 => 5.0,
+                    4..=11 => 0.0,
+                    _ => -1.0,
+                };
+                vec![Span {
+                    floor_c: f,
+                    floor_min: f,
+                    floor_max: f,
+                    ceiling: f32::INFINITY,
+                }]
+            })
+            .collect();
+        graph.replace_chunk(coord, SpanChunk::from_columns(&columns, 1));
+        let (x, z) = Column::new(8, 8).centre();
+        let centre = Point3::new(x, 0.0, z);
+        let along = Vector2::new(0.0, 1.0);
+        let lake = |span: SpanRef| span.column.i >= 12;
+        let open = CrossSection::sample(&graph, centre, along, 8.0, &|_| false);
+        let shored = CrossSection::sample(&graph, centre, along, 8.0, &lake);
+        let (wide, narrow) = (
+            open.hydraulics(2.0, 0.01).unwrap(),
+            shored.hydraulics(2.0, 0.01).unwrap(),
+        );
+        // Open, the section runs on into the lake, whose water carries the
+        // flow: the channel reads as barely wet.
+        assert!(wide.depth < 0.05, "{wide:?}");
+        // Stopped at the shore, it is the 4 m channel it is.
+        assert!((narrow.top_width - 4.0).abs() < 0.3, "{narrow:?}");
+        assert!((narrow.depth - 0.37).abs() < 0.05, "{narrow:?}");
     }
 }

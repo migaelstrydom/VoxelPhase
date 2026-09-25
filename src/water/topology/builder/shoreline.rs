@@ -25,7 +25,9 @@ use crate::water::network::{critical_depth, Lip, Network, ReachState, Store};
 use crate::water::solver::{account, Account};
 
 use super::super::edit::TopologyEdit;
-use super::super::router::{downstream_of, one_reach, walk, WalkEnd, REACH_LENGTH};
+use super::super::router::{
+    channel_heads, downstream_of, one_reach, standing_in, walk, WalkEnd, REACH_LENGTH,
+};
 use super::{outlet_at, ChannelFlow, Topology, TopologyBuilder};
 
 /// A cell is drowned once water stands this far over the highest point of
@@ -53,7 +55,7 @@ impl TopologyBuilder {
                 let Some(reach) = t.network.store(id).and_then(Store::as_reach) else {
                     continue;
                 };
-                let heads = heads(t.network, id);
+                let heads = channel_heads(t.network, id);
                 if let Some((at, body)) =
                     first_drowned(t.geometry.graph(), t.network, &reach.cells, &heads)
                 {
@@ -75,8 +77,13 @@ impl TopologyBuilder {
             return;
         };
         let design = old.rating.design();
-        let graph = t.geometry.graph();
-        let Some(mut kept) = one_reach(graph, &old.cells[..at], design) else {
+        let kept = {
+            let heads = channel_heads(t.network, id);
+            let graph = t.geometry.graph();
+            let standing = standing_in(graph, t.network, &heads);
+            one_reach(graph, &old.cells[..at], design, &standing)
+        };
+        let Some(mut kept) = kept else {
             self.drown_reach(t, id, body);
             return;
         };
@@ -100,6 +107,7 @@ impl TopologyBuilder {
         kept.version = old.version.wrapping_add(1);
 
         let (last, drowned) = (old.cells[at - 1], old.cells[at]);
+        let graph = t.geometry.graph();
         let lip = Lip::across(last.column, drowned.column, graph.span(last).floor_c);
         let running = kept.rating.at(q);
         let thickness = critical_depth(design, kept.rating.at(design).top_width);
@@ -205,12 +213,14 @@ impl TopologyBuilder {
             .filter(|(_, l)| l.up == id)
             .map(|(link, _)| link)
             .collect();
-        let graph = t.geometry.graph();
         let longer = match end {
             WalkEnd::Store(store, span) if down.is_none_or(|d| d == store) => {
                 let mut all = old.cells.clone();
                 all.extend(cells.iter().copied());
-                one_reach(graph, &all, old.rating.design())
+                let heads = channel_heads(t.network, id);
+                let graph = t.geometry.graph();
+                let standing = standing_in(graph, t.network, &heads);
+                one_reach(graph, &all, old.rating.design(), &standing)
                     .filter(|r| r.length <= MAX_EXTENDED)
                     .map(|r| (r, span, store))
             }
@@ -300,24 +310,4 @@ fn first_drowned(
         let level = network.store(body)?.surface()?;
         (level > graph.span(*cell).floor_max + DROWN_MARGIN).then_some((i, body))
     })
-}
-
-/// The stores a reach's channel drains from: every store above it, up
-/// through the reaches feeding it, that is not a reach.
-fn heads(network: &Network, id: StoreId) -> Vec<StoreId> {
-    let mut heads = Vec::new();
-    let mut above = vec![id];
-    let mut cursor = 0;
-    while cursor < above.len() {
-        let current = above[cursor];
-        cursor += 1;
-        for (_, link) in network.links().filter(|(_, l)| l.down == current) {
-            let is_reach = network.store(link.up).and_then(Store::as_reach).is_some();
-            let seen = if is_reach { &mut above } else { &mut heads };
-            if !seen.contains(&link.up) {
-                seen.push(link.up);
-            }
-        }
-    }
-    heads
 }

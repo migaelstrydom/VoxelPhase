@@ -14,7 +14,8 @@ use nalgebra::Point3;
 use crate::water::geometry::{Drain, SpanGraph, SpanRef};
 use crate::water::ids::StoreId;
 use crate::water::network::{
-    is_pothole, Centreline, CrossSection, RatingCurve, Reach, Store, FALL_RUN, FALL_THRESHOLD,
+    is_pothole, Centreline, CrossSection, Network, RatingCurve, Reach, Store, FALL_RUN,
+    FALL_THRESHOLD,
 };
 
 /// Reaches are cut at about this length, m.
@@ -168,7 +169,12 @@ fn fall_step(
 
 /// Cut a path into reaches and build each: its centreline, sections and
 /// rating curve at `q_design`.
-pub fn build_reaches(graph: &SpanGraph, cells: &[SpanRef], q_design: f64) -> Vec<Reach> {
+pub fn build_reaches(
+    graph: &SpanGraph,
+    cells: &[SpanRef],
+    q_design: f64,
+    standing: &dyn Fn(SpanRef) -> bool,
+) -> Vec<Reach> {
     let points: Vec<Point3<f32>> = cells
         .iter()
         .map(|c| {
@@ -206,7 +212,7 @@ pub fn build_reaches(graph: &SpanGraph, cells: &[SpanRef], q_design: f64) -> Vec
             let reach_points = &points[a..=b];
             let reach_cells = cells[a..=b].to_vec();
             let line = Centreline::from_path(reach_points);
-            let sections = sections_along(graph, &line);
+            let sections = sections_along(graph, &line, standing);
             let rating = RatingCurve::scan(&sections, q_design);
             Reach::new(reach_cells, reach_points, rating, Vec::new())
         })
@@ -216,7 +222,12 @@ pub fn build_reaches(graph: &SpanGraph, cells: &[SpanRef], q_design: f64) -> Vec
 /// One reach over `cells`, however long, with its rating scanned at
 /// `q_design`: what is left of a reach cut short. `None` for fewer than two
 /// cells, which is no channel.
-pub fn one_reach(graph: &SpanGraph, cells: &[SpanRef], q_design: f64) -> Option<Reach> {
+pub fn one_reach(
+    graph: &SpanGraph,
+    cells: &[SpanRef],
+    q_design: f64,
+    standing: &dyn Fn(SpanRef) -> bool,
+) -> Option<Reach> {
     if cells.len() < 2 {
         return None;
     }
@@ -228,19 +239,31 @@ pub fn one_reach(graph: &SpanGraph, cells: &[SpanRef], q_design: f64) -> Option<
         })
         .collect();
     let line = Centreline::from_path(&points);
-    let rating = RatingCurve::scan(&sections_along(graph, &line), q_design);
+    let rating = RatingCurve::scan(&sections_along(graph, &line, standing), q_design);
     Some(Reach::new(cells.to_vec(), &points, rating, Vec::new()))
 }
 
 /// A reach's rating scanned again at a new design discharge, once the flow
 /// down it outgrows the old one.
-pub fn rescan(graph: &SpanGraph, reach: &Reach, q_design: f64) -> RatingCurve {
-    RatingCurve::scan(&sections_along(graph, &reach.centreline), q_design)
+pub fn rescan(
+    graph: &SpanGraph,
+    reach: &Reach,
+    q_design: f64,
+    standing: &dyn Fn(SpanRef) -> bool,
+) -> RatingCurve {
+    RatingCurve::scan(
+        &sections_along(graph, &reach.centreline, standing),
+        q_design,
+    )
 }
 
 /// Cross-sections every `SECTION_SPACING` along a centreline, each with its
-/// bed slope.
-fn sections_along(graph: &SpanGraph, line: &Centreline) -> Vec<(CrossSection, f32)> {
+/// bed slope, sampling no span where `standing` says a store's water stands.
+fn sections_along(
+    graph: &SpanGraph,
+    line: &Centreline,
+    standing: &dyn Fn(SpanRef) -> bool,
+) -> Vec<(CrossSection, f32)> {
     let mut out = Vec::new();
     let mut next = 0.0;
     for (i, point) in line.points.iter().enumerate() {
@@ -248,7 +271,13 @@ fn sections_along(graph: &SpanGraph, line: &Centreline) -> Vec<(CrossSection, f3
             continue;
         }
         next = line.distance[i] + SECTION_SPACING;
-        let section = CrossSection::sample(graph, *point, line.tangents[i], SECTION_HALF_WIDTH);
+        let section = CrossSection::sample(
+            graph,
+            *point,
+            line.tangents[i],
+            SECTION_HALF_WIDTH,
+            standing,
+        );
         out.push((section, slope_at(line, i)));
     }
     out
@@ -298,6 +327,44 @@ pub fn reach_footprint(graph: &SpanGraph, reach: &Reach) -> Vec<(SpanRef, u16, f
         }
     }
     out
+}
+
+/// The stores a reach's channel drains from: every store above it, up
+/// through the reaches feeding it, that is not a reach.
+pub fn channel_heads(network: &Network, id: StoreId) -> Vec<StoreId> {
+    let mut heads = Vec::new();
+    let mut above = vec![id];
+    let mut cursor = 0;
+    while cursor < above.len() {
+        let current = above[cursor];
+        cursor += 1;
+        for (_, link) in network.links().filter(|(_, l)| l.down == current) {
+            let is_reach = network.store(link.up).and_then(Store::as_reach).is_some();
+            let seen = if is_reach { &mut above } else { &mut heads };
+            if !seen.contains(&link.up) {
+                seen.push(link.up);
+            }
+        }
+    }
+    heads
+}
+
+/// Whether the water of a body other than `heads` stands over a span now:
+/// where a channel's cross-section leaves the channel for a lake.
+pub fn standing_in<'a>(
+    graph: &'a SpanGraph,
+    network: &'a Network,
+    heads: &'a [StoreId],
+) -> impl Fn(SpanRef) -> bool + 'a {
+    move |span| {
+        graph
+            .owner(span)
+            .body
+            .filter(|b| !heads.contains(b))
+            .and_then(|b| network.store(b))
+            .and_then(Store::surface)
+            .is_some_and(|level| level > graph.span(span).floor_min)
+    }
 }
 
 /// The store a reach lets its water into: the down end of its outflow link.
