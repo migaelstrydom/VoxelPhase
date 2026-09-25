@@ -30,9 +30,9 @@ use crate::water::geometry::{
 use crate::water::ids::{LinkId, StoreId};
 use crate::water::network::links::{FixedRate, Orifice, ReachOutflow, Weir};
 use crate::water::network::{
-    is_pothole, pit_bottom, Basin, ChannelOutlet, CrestKind, DepressionFinder, FallPath,
-    FallTracer, Flood, FloodMode, HoleColumn, Landing, LinkEntry, LossLaw, Network, Ocean, Outflow,
-    Port, Store, Trace, FALL_THRESHOLD, GRAVITY, POTHOLE_DEPTH, POTHOLE_VOLUME,
+    is_pothole, pit_bottom, pit_bottom_within, Basin, ChannelOutlet, CrestKind, DepressionFinder,
+    FallPath, FallTracer, Flood, FloodMode, HoleColumn, Landing, LinkEntry, LossLaw, Network,
+    Ocean, Outflow, Port, Store, Trace, FALL_THRESHOLD, GRAVITY, POTHOLE_DEPTH, POTHOLE_VOLUME,
 };
 use crate::water::solver::{account, Account, VolumeLedger};
 
@@ -381,8 +381,10 @@ impl TopologyBuilder {
                 .collect()
         };
         for span in candidates {
-            if t.geometry.graph().owner(span).body.is_none() {
-                self.empty_basin(t, span);
+            let graph = t.geometry.graph();
+            let bottom = pit_bottom_within(graph, span, |s| graph.owner(s).body.is_none());
+            if graph.owner(bottom).body.is_none() {
+                self.basin_at_bottom(t, bottom);
             }
         }
     }
@@ -1606,7 +1608,12 @@ impl TopologyBuilder {
                 return owner;
             }
         }
-        let level = graph.span(bottom).floor_min;
+        self.basin_at_bottom(t, bottom)
+    }
+
+    /// A new, empty basin over the pit whose bottom is `bottom`.
+    fn basin_at_bottom(&mut self, t: &mut Topology, bottom: SpanRef) -> StoreId {
+        let level = t.geometry.graph().span(bottom).floor_min;
         let flood = self.flood(t, None, &[bottom], level, FloodMode::Create);
         self.add_basin(t, Basin::from_flood(flood, 0.0))
     }

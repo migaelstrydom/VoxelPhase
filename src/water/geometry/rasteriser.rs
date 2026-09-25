@@ -19,7 +19,7 @@ use rustc_hash::FxHashMap;
 use crate::collision::AABB;
 use crate::terrain::{TerrainChunkId, TerrainWorld};
 
-use super::crossings::{rasterise_by_tile, Crossing, Facing, FloorPiece, TileCrossings};
+use super::crossings::{rasterise_by_tile, Crossing, Facing, SurfacePiece, TileCrossings};
 use super::span::{
     Column, Span, SpanChunk, SpanChunkCoord, SpanOwner, CHUNK_COLUMNS, COLUMNS_PER_CHUNK,
     COLUMN_SIZE,
@@ -419,7 +419,7 @@ impl SpanRasteriser {
                     };
                 }
                 let mut crossings: Vec<Crossing> = Vec::new();
-                let mut pieces: Vec<FloorPiece> = Vec::new();
+                let mut pieces: Vec<SurfacePiece> = Vec::new();
                 for source in &sources {
                     let c = source.column(column);
                     crossings.extend(c.crossings.iter().map(|e| e.1));
@@ -546,7 +546,7 @@ fn tiles_over(region: &AABB, margin: f32) -> impl Iterator<Item = SpanChunkCoord
 fn pair_column(
     column: Column,
     mut crossings: Vec<Crossing>,
-    pieces: &[FloorPiece],
+    pieces: &[SurfacePiece],
     terrain: &TerrainWorld,
 ) -> PairedColumn {
     crossings.sort_by(|a, b| a.y.total_cmp(&b.y).then(a.facing.cmp(&b.facing)));
@@ -638,13 +638,25 @@ fn repaired_intervals(
 }
 
 /// Fold each clipped floor piece into the span whose band it lies in. A span's
-/// band runs from the ceiling of the span below (−∞ for the lowest) up to its
-/// own ceiling.
-fn fold_floor_bands(spans: &mut [Span], pieces: &[FloorPiece]) {
-    let mut band_lo = f32::NEG_INFINITY;
+/// band runs up to its own ceiling, and down to the ceiling of the span below
+/// (−∞ for the lowest) or to the top of the highest ceiling anywhere in the
+/// square under its floor, whichever is higher. Floor under such a ceiling
+/// is the floor of other air, such as a cave reaching into the square's
+/// corner, not this span's; a cave's end wall faces up and down by turns all
+/// the way to its roof, so only floor rising above the roof counts.
+fn fold_floor_bands(spans: &mut [Span], pieces: &[SurfacePiece]) {
+    let mut below = f32::NEG_INFINITY;
     for span in spans.iter_mut() {
         let band_hi = span.ceiling;
-        for piece in pieces {
+        let band_lo = pieces
+            .iter()
+            .filter(|p| p.facing == Facing::Ceiling && p.y_max < span.floor_c)
+            .map(|p| p.y_max)
+            .fold(below, f32::max);
+        for piece in pieces.iter().filter(|p| p.facing == Facing::Floor) {
+            if band_lo > below && piece.y_max <= band_lo {
+                continue;
+            }
             let lo = piece.y_min.max(band_lo);
             let hi = piece.y_max.min(band_hi);
             if lo <= hi {
@@ -652,7 +664,7 @@ fn fold_floor_bands(spans: &mut [Span], pieces: &[FloorPiece]) {
                 span.floor_max = span.floor_max.max(hi);
             }
         }
-        band_lo = band_hi;
+        below = band_hi;
     }
 }
 
@@ -714,17 +726,63 @@ mod tests {
             },
         ];
         let pieces = [
-            FloorPiece {
+            SurfacePiece {
                 y_min: -0.3,
                 y_max: 0.2,
+                facing: Facing::Floor,
             },
-            FloorPiece {
+            SurfacePiece {
                 y_min: 7.9,
                 y_max: 8.1,
+                facing: Facing::Floor,
             },
         ];
         fold_floor_bands(&mut spans, &pieces);
         assert_eq!((spans[0].floor_min, spans[0].floor_max), (-0.3, 0.2));
         assert_eq!((spans[1].floor_min, spans[1].floor_max), (7.9, 8.1));
+    }
+
+    fn piece(y_min: f32, y_max: f32, facing: Facing) -> SurfacePiece {
+        SurfacePiece {
+            y_min,
+            y_max,
+            facing,
+        }
+    }
+
+    fn top_span(floor: f32) -> Span {
+        Span {
+            floor_c: floor,
+            floor_min: floor,
+            floor_max: floor,
+            ceiling: f32::INFINITY,
+        }
+    }
+
+    /// Solid ground at the centre, and a cave reaching into the square's
+    /// corner under 6 m of it: the cave's floor is not the ground's.
+    #[test]
+    fn a_floor_under_a_roof_in_the_square_is_not_the_span_s() {
+        let mut spans = vec![top_span(10.0)];
+        let pieces = [
+            piece(-0.6, 0.1, Facing::Floor),
+            piece(1.9, 4.0, Facing::Ceiling),
+            piece(9.9, 10.0, Facing::Floor),
+        ];
+        fold_floor_bands(&mut spans, &pieces);
+        assert_eq!((spans[0].floor_min, spans[0].floor_max), (9.9, 10.0));
+    }
+
+    /// A square across a cliff's edge: the foot is open to the sky, so it is
+    /// the span's floor, and water errs low.
+    #[test]
+    fn a_cliff_foot_in_the_square_is_the_span_s_floor() {
+        let mut spans = vec![top_span(10.0)];
+        let pieces = [
+            piece(2.0, 2.1, Facing::Floor),
+            piece(9.9, 10.0, Facing::Floor),
+        ];
+        fold_floor_bands(&mut spans, &pieces);
+        assert_eq!(spans[0].floor_min, 2.0);
     }
 }

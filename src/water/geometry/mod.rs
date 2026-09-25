@@ -6,7 +6,7 @@ mod span_graph;
 mod water_geometry;
 
 pub use crossings::{
-    rasterise_by_tile, ColumnCrossings, Crossing, Facing, FloorPiece, TileCrossings,
+    rasterise_by_tile, ColumnCrossings, Crossing, Facing, SurfacePiece, TileCrossings,
 };
 pub use drainage::{Drain, DrainageField, Outlets, RepairStats, SeaEdges, SinkBox};
 pub use rasteriser::{

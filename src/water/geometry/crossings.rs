@@ -3,9 +3,11 @@
 //! Every terrain triangle is projected onto the XZ plane and rasterised
 //! against the column centres it covers. A centre inside a triangle records a
 //! [`Crossing`]: the height of the surface there, and whether it faces up (a
-//! floor) or down (a ceiling). Upward-facing triangles are also clipped to
-//! each column square they touch, recording the [`FloorPiece`] of floor that
-//! lies inside it — what a span's `floor_min` and `floor_max` come from.
+//! floor) or down (a ceiling). Every triangle is also clipped to each column
+//! square it touches, recording the [`SurfacePiece`] that lies inside it:
+//! floor pieces are what a span's `floor_min` and `floor_max` come from, and
+//! ceiling pieces tell a floor under other air in the square from the span's
+//! own.
 //!
 //! **Fill rule.** A centre on an edge shared by two triangles belongs to
 //! exactly one of them. Each projected triangle is oriented counter-clockwise
@@ -42,19 +44,19 @@ pub struct Crossing {
     pub facing: Facing,
 }
 
-/// The height range of one upward-facing triangle, clipped to one column's
-/// square.
+/// The height range of one triangle, clipped to one column's square.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct FloorPiece {
+pub struct SurfacePiece {
     pub y_min: f32,
     pub y_max: f32,
+    pub facing: Facing,
 }
 
 /// What one terrain chunk contributes to one column.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ColumnCrossings<'a> {
     pub crossings: &'a [(Column, Crossing)],
-    pub pieces: &'a [(Column, FloorPiece)],
+    pub pieces: &'a [(Column, SurfacePiece)],
 }
 
 /// One terrain chunk's crossings and floor pieces within one span chunk's
@@ -62,7 +64,7 @@ pub struct ColumnCrossings<'a> {
 #[derive(Debug, Clone, Default)]
 pub struct TileCrossings {
     crossings: Vec<(Column, Crossing)>,
-    pieces: Vec<(Column, FloorPiece)>,
+    pieces: Vec<(Column, SurfacePiece)>,
 }
 
 /// Rasterise triangles, bucketed into the tiles they touch.
@@ -129,17 +131,15 @@ impl TileCrossings {
             }
         }
 
-        if projected.facing == Facing::Floor {
-            let (first, last) = projected.square_range();
-            for k in first.k..=last.k {
-                for i in first.i..=last.i {
-                    let column = Column::new(i, k);
-                    if !keep(column) {
-                        continue;
-                    }
-                    if let Some(piece) = clip_to_square(&vertices, column) {
-                        self.pieces.push((column, piece));
-                    }
+        let (first, last) = projected.square_range();
+        for k in first.k..=last.k {
+            for i in first.i..=last.i {
+                let column = Column::new(i, k);
+                if !keep(column) {
+                    continue;
+                }
+                if let Some(piece) = clip_to_square(&vertices, column, projected.facing) {
+                    self.pieces.push((column, piece));
                 }
             }
         }
@@ -156,6 +156,7 @@ impl TileCrossings {
             a.0.cmp(&b.0)
                 .then(a.1.y_min.total_cmp(&b.1.y_min))
                 .then(a.1.y_max.total_cmp(&b.1.y_max))
+                .then(a.1.facing.cmp(&b.1.facing))
         });
     }
 
@@ -353,7 +354,11 @@ struct Polygon {
 
 /// The height range of a triangle clipped to a column's square, or `None` if
 /// the two do not overlap.
-fn clip_to_square(vertices: &[Point3<f32>; 3], column: Column) -> Option<FloorPiece> {
+fn clip_to_square(
+    vertices: &[Point3<f32>; 3],
+    column: Column,
+    facing: Facing,
+) -> Option<SurfacePiece> {
     let (x0, z0) = column.min_corner();
     let (x1, z1) = (x0 + COLUMN_SIZE, z0 + COLUMN_SIZE);
     let inside_square = |p: &Point3<f32>| p.x >= x0 && p.x <= x1 && p.z >= z0 && p.z <= z1;
@@ -363,9 +368,10 @@ fn clip_to_square(vertices: &[Point3<f32>; 3], column: Column) -> Option<FloorPi
             .fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), p| {
                 (lo.min(p.y), hi.max(p.y))
             });
-        return Some(FloorPiece {
+        return Some(SurfacePiece {
             y_min: lo,
             y_max: hi,
+            facing,
         });
     }
     let mut polygon = Polygon {
@@ -387,7 +393,11 @@ fn clip_to_square(vertices: &[Point3<f32>; 3], column: Column) -> Option<FloorPi
         .fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), p| {
             (lo.min(p[1]), hi.max(p[1]))
         });
-    Some(FloorPiece { y_min, y_max })
+    Some(SurfacePiece {
+        y_min,
+        y_max,
+        facing,
+    })
 }
 
 /// One Sutherland–Hodgman pass against an axis-aligned plane.

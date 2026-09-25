@@ -544,13 +544,25 @@ pub fn is_pothole(graph: &SpanGraph, span: SpanRef, rim: f32) -> bool {
 
 /// The bottom of the pit a span lies in: walk to the lowest neighbouring
 /// floor until none is lower.
-pub fn pit_bottom(graph: &SpanGraph, mut span: SpanRef) -> SpanRef {
+pub fn pit_bottom(graph: &SpanGraph, span: SpanRef) -> SpanRef {
+    pit_bottom_within(graph, span, |_| true)
+}
+
+/// As [`pit_bottom`], walking only onto spans `within` admits: the bottom of
+/// a pit opened into another's side is its own, not the other's.
+pub fn pit_bottom_within(
+    graph: &SpanGraph,
+    mut span: SpanRef,
+    within: impl Fn(SpanRef) -> bool,
+) -> SpanRef {
     loop {
         let here = graph.span(span).floor_min;
         let lower = graph
             .orthogonal_neighbours(span)
             .into_iter()
-            .filter(|n| graph.span(n.span).floor_min < here && n.saddle <= here + 1e-6)
+            .filter(|n| {
+                graph.span(n.span).floor_min < here && n.saddle <= here + 1e-6 && within(n.span)
+            })
             .min_by(|a, b| {
                 graph
                     .span(a.span)

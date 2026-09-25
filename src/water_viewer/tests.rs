@@ -1,6 +1,12 @@
 //! The scenarios as tests: each runs headlessly and checks what the water did.
 
-use crate::level::Settle;
+use std::path::Path;
+
+use nalgebra::Point3;
+
+use crate::level::{load_level, Settle};
+use crate::level_check::build_terrain;
+use crate::water::WaterWorld;
 
 use super::driver::{run, RunConfig};
 use super::scenarios::find;
@@ -104,7 +110,12 @@ fn an_island_pool_holed_through_pours_onto_the_pond_below() {
     let last = recorded.samples.last().unwrap();
     let n = recorded.samples.len() - 1;
     assert_eq!(first.basins, 2);
-    assert_eq!(last.basins, 1, "the island pool is gone into the pond");
+    // Its trough is flat at its lip, 6 m: at most a film is left there.
+    let trough = probe(&recorded, "trough", n);
+    assert!(
+        trough.is_none_or(|level| level < 6.01),
+        "the island pool is gone into the pond: {trough:?}"
+    );
     assert!((last.volume - first.volume).abs() < 1e-6, "no water lost");
     let before = probe(&recorded, "pond_open", 0).unwrap();
     let after = probe(&recorded, "pond_open", n).unwrap();
@@ -383,12 +394,7 @@ fn a_breached_sea_wall_floods_the_lowland_until_it_joins_the_sea() {
 
 #[test]
 fn the_island_sea_demo_opens_with_its_pools_above_the_sea() {
-    use crate::level::load_level;
-    use crate::level_check::build_terrain;
-    use crate::water::WaterWorld;
-    use nalgebra::Point3;
-
-    let level = load_level(std::path::Path::new("levels/island_sea.level.ron")).unwrap();
+    let level = load_level(Path::new("levels/island_sea.level.ron")).unwrap();
     let terrain = build_terrain(&level);
     let (water, errors) = WaterWorld::from_config(level.water.as_ref().unwrap(), &terrain);
     assert!(errors.is_empty(), "{errors:?}");

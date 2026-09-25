@@ -353,11 +353,17 @@ In debug builds, dereferencing a `SpanRef` whose generation doesn't match its ch
     exactly where parity breaks.
   - The repair is counted under `Water/Geometry/ParityRepairs`.
   - One open edge anywhere in a segment must never silently invert a column of water.
-- **Floor bounds.** Each upward-facing triangle is clipped to the column square and split
-  into *floor bands*. A span's band runs from the ceiling of the span below (−∞ for the
-  lowest) up to its own ceiling. The `y` range of the clipped polygon inside a band folds
-  into that span's `floor_min` and `floor_max`. At an island rim, floor that lies below the
-  ledge goes to the lower span.
+- **Floor bounds.** Each triangle is clipped to the column square, and the upward-facing
+  pieces are split into *floor bands*. A span's band runs up to its own ceiling. It runs
+  down to the ceiling of the span below (−∞ for the lowest), or to the top of the highest
+  downward-facing piece in the square under the span's floor, whichever is higher. The `y`
+  range of the clipped polygon inside a band folds into that span's `floor_min` and
+  `floor_max`. At an island rim, floor that lies below the ledge goes to the lower span.
+  Floor under a roof that the column's centre never sees belongs to no span. Such floor
+  might be a cave reaching into the square's corner, or the undercut rim of a blast. Folded
+  in, it would give solid ground a `floor_min` down at the cave's floor, and water would
+  flood through the rock. A cave's end wall faces up and down by turns all the way to its
+  roof, so a floor piece that does not rise above that roof is dropped.
 
 Ray casting is not used. `mesh_surface_heights_at` drops downward-facing hits, so it cannot
 see ceilings. Every ray also allocates an `FxHashSet` in `MeshOctree::ray_cast_all`, the
@@ -917,7 +923,9 @@ through the hole onto the sea.
 5. **Handle newly connected below-sea-level spans.** They become a new basin at their
    current water, or empty if dry, joined to the ocean by a `Weir`. The lowland floods at
    the weir's rate and merges into the ocean under the normal rule. The ocean never claims
-   spans instantly.
+   spans instantly. The new basin is laid over the pit found by walking down through spans
+   nobody owns. The steepest way down from a breach's mouth leads out over the lip into
+   the sea, not into the lowland behind it.
 
 ### 9.2 Worst case, and the deferral valve
 

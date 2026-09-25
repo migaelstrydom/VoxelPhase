@@ -449,6 +449,14 @@ fn island_hole() -> Scenario {
                 radius: 2.2,
             },
         }],
+        probes: island_pool()
+            .probes
+            .into_iter()
+            .chain([Probe {
+                name: "trough",
+                at: Point3::new(-2.0, 7.5, 0.0),
+            }])
+            .collect(),
         ..island_pool()
     }
 }
