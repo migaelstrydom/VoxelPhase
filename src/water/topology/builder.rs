@@ -42,6 +42,8 @@ use super::router::{
     build_reaches, downstream_of, reach_footprint, rescan, walk, WalkEnd, WalkLip,
 };
 
+mod shoreline;
+
 /// Head over the lip a channel's design discharge is taken at, m.
 const DESIGN_HEAD: f32 = 0.3;
 
@@ -50,10 +52,6 @@ const MIN_DESIGN_DISCHARGE: f64 = 0.5;
 
 /// A receding reach this shallow, m, has dried.
 const RETIRE_DEPTH: f32 = 0.005;
-
-/// A channel is re-routed once its receiving basin's level has moved this
-/// far since it was laid, m: drowned or left short of the water.
-const REROUTE_SHIFT: f32 = 0.25;
 
 /// A basin within this of its flood's cap is re-flooded to find its higher
 /// banks.
@@ -543,7 +541,7 @@ impl TopologyBuilder {
             // drains.
             let to = self
                 .runoff(t, id, &columns, level)
-                .map_or(Account::Store(self.void(t)), |s| account(t.network, s));
+                .map_or(Account::Sunk, |s| account(t.network, s));
             self.remove_basin(t, id, to);
             return;
         }
@@ -750,19 +748,12 @@ impl TopologyBuilder {
                 id
             })
             .collect();
-        let target_level = t
-            .network
-            .store(target)
-            .and_then(Store::as_basin)
-            .map(Basin::level);
         let fall = outlet.as_ref().and_then(|o| o.fall.clone());
         if let Some(last) = ids
             .last()
             .and_then(|id| t.network.store_mut(*id))
             .and_then(Store::as_reach_mut)
         {
-            // A channel that falls into its basin is not drowned by it.
-            last.routed_to_level = target_level.filter(|_| fall.is_none());
             last.outlet = outlet;
         }
         for (i, &id) in ids.iter().enumerate() {
@@ -815,9 +806,8 @@ impl TopologyBuilder {
     }
 
     /// Trace water launched at `at` and find the store it comes down in:
-    /// the first along its arc that could hold water at its height there,
-    /// whatever its level now (§7.9), or else a channel laid on from where
-    /// it lands. `None` when `at` is sealed in rock.
+    /// the first whose water stands in its way (§7.9), or else a channel
+    /// laid on from where it lands. `None` when `at` is sealed in rock.
     fn fall(
         &mut self,
         t: &mut Topology,
@@ -949,11 +939,14 @@ impl TopologyBuilder {
         .trace(at, velocity)
     }
 
-    /// The store whose water stands over `span`, if any.
-    fn standing_water(&self, t: &Topology, span: SpanRef) -> Option<StoreId> {
+    /// The store other than `except` whose water stands over `span`, if any.
+    fn standing_water(&self, t: &Topology, span: SpanRef, except: StoreId) -> Option<StoreId> {
         let graph = t.geometry.graph();
         let owner = graph.owner(span);
-        if let Some((reach, _)) = owner.reach.filter(|(r, _)| t.network.store(*r).is_some()) {
+        if let Some((reach, _)) = owner
+            .reach
+            .filter(|(r, _)| *r != except && t.network.store(*r).is_some())
+        {
             return Some(reach);
         }
         owner
@@ -1051,20 +1044,25 @@ impl TopologyBuilder {
             self.link_reach(t, id, void, None, None);
             return;
         };
-        let flow = ChannelFlow {
-            design: reach.rating.design(),
-            now: reach.outflow,
-        };
         let column = Column::containing(outlet.at.x, outlet.at.z);
         let span = t
             .geometry
             .graph()
             .span_at(column, outlet.at.y + OUTLET_LIFT);
+        // A channel ending in a dry pit claims the pit's first span as its
+        // last cell, so a walk from there finds the channel itself: the pit
+        // gets an empty basin again.
         let target = match span {
             None => Some(self.void(t)),
-            Some(span) => match self.standing_water(t, span) {
+            Some(span) => match self.standing_water(t, span, id) {
                 Some(store) => Some(store),
-                None => self.channel(t, None, None, span, flow, 0).map(|e| e.store),
+                None if self.in_depression(t, span) => Some(self.empty_basin(t, span)),
+                None => {
+                    // The water it ran into has gone from its shore: it
+                    // carries on over the bed left dry (§8.2).
+                    self.expose(t, id, span, None);
+                    return;
+                }
             },
         };
         match target.filter(|d| *d != id) {
@@ -1073,8 +1071,8 @@ impl TopologyBuilder {
         }
     }
 
-    /// An edit across a fall's arc, in its air above the water it is caught
-    /// in, may move where it lands (§7.9). The arc is traced again from its
+    /// An edit across a fall's arc, in its air above the water it enters,
+    /// may move where it lands (§7.9). The arc is traced again from its
     /// lip. Where it is still caught by the same store, only the arc
     /// changes; where not, the link is made again to the new store and the
     /// channel it fed recedes. The channels above keep their reaches.
@@ -1089,7 +1087,7 @@ impl TopologyBuilder {
                 let above = t
                     .network
                     .store(l.down)
-                    .and_then(Store::cap)
+                    .and_then(Store::surface)
                     .unwrap_or(f32::NEG_INFINITY);
                 l.fall.as_ref().is_some_and(|f| f.crosses(&columns, above))
             })
@@ -1188,24 +1186,12 @@ impl TopologyBuilder {
         }
     }
 
-    /// Retire reaches whose water has run out, set their loss gate, and
-    /// rescan any whose flow has outgrown its rating. A channel whose
-    /// receiving basin has risen over its end or fallen from it is re-routed.
+    /// Move every channel's shoreline to where the water stands (§8.2),
+    /// relink channel ends whose store was replaced, retire reaches whose
+    /// water has run out, set their loss gate, and rescan any whose flow has
+    /// outgrown its rating.
     fn settle_reaches(&mut self, t: &mut Topology, loss: &LossLaw) {
-        let shifted: Vec<StoreId> = t
-            .network
-            .stores()
-            .filter_map(|(id, s)| {
-                let reach = s.as_reach()?;
-                let routed = reach.routed_to_level?;
-                let target = downstream_of(t.network, id)?;
-                let level = t.network.store(target)?.as_basin()?.level();
-                ((level - routed).abs() > REROUTE_SHIFT).then_some(id)
-            })
-            .collect();
-        for id in shifted {
-            self.remove_channel(t, id);
-        }
+        self.move_shorelines(t);
         for id in t.network.store_ids() {
             self.relink_channel_end(t, id);
         }
@@ -1252,7 +1238,7 @@ impl TopologyBuilder {
         let down = downstream_of(t.network, id);
         let residual_to = match down {
             Some(d) if t.network.store(d).is_some() => account(t.network, d),
-            _ => Account::Store(self.void(t)),
+            _ => Account::Sunk,
         };
         self.transfer(t, Account::Store(id), residual_to, storage);
         self.release_reach(t, id, &columns);
@@ -1753,6 +1739,15 @@ impl TopologyBuilder {
         None
     }
 
+    /// Whether `span` lies in a real depression, below where it would fill
+    /// to before spilling.
+    fn in_depression(&self, t: &mut Topology, span: SpanRef) -> bool {
+        let (graph, drainage) = t.geometry.routing();
+        let fill = drainage.fill(graph, span);
+        fill > graph.span(span).floor_min + 1e-3
+            && (!fill.is_finite() || !is_pothole(graph, span, fill))
+    }
+
     /// An empty basin in the depression holding `span`, or the store that
     /// already has it.
     fn empty_basin(&mut self, t: &mut Topology, span: SpanRef) -> StoreId {
@@ -2094,9 +2089,11 @@ fn surface_over(graph: &SpanGraph, network: &Network, span: SpanRef) -> Option<f
     (level > floor.floor_min).then_some(level)
 }
 
-/// The store other than `from` that could hold water at height `y` over
-/// `span`, whatever its level now: a basin or the sea up to its cap, or a
-/// reach up to its design depth over the bed.
+/// The store other than `from` whose water stands at height `y` over
+/// `span` now: a basin or the sea up to its level, or a reach up to its
+/// design depth over the bed. Water landing on a basin's dry bed is not yet
+/// the basin's: it runs down that bed as a channel, and the basin drowns the
+/// channel as it rises (§8.2).
 fn holder(
     graph: &SpanGraph,
     network: &Network,
@@ -2109,8 +2106,8 @@ fn holder(
         Some(*b) != from
             && network
                 .store(*b)
-                .and_then(Store::cap)
-                .is_some_and(|cap| y <= cap)
+                .and_then(Store::surface)
+                .is_some_and(|level| y <= level)
     });
     let reach = owner.reach.map(|(r, _)| r).filter(|r| {
         Some(*r) != from

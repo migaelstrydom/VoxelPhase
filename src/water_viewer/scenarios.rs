@@ -25,6 +25,7 @@ pub fn catalogue() -> Vec<Scenario> {
         river_diversion(),
         spring_rock(),
         sea_wall(),
+        shoreline(),
     ]
 }
 
@@ -757,6 +758,66 @@ Level(
     water: Some((
         ocean: Some((level: 0.0, open_edges: [South])),
         bodies: [],
+    )),
+)
+"#;
+
+/// A spring runs down a channel into a pit that spills through a notch in
+/// its east wall at 7.3 m. The channel runs down to that line; below it the
+/// bed is the pit's. The lake that fills it stands 0.4 m over the notch to
+/// spill the spring's 1 m³/s, drowning the channel's last metres (§8.2,
+/// Drowned). At 180 s the notch is blown deeper; the lake drains and the
+/// channel is carried on down the bed it leaves dry (Exposed).
+fn shoreline() -> Scenario {
+    Scenario {
+        name: "shoreline",
+        description: "a lake climbs a river's channel, then drains down it again",
+        level: SHORELINE_LEVEL,
+        duration: 240.0,
+        beats: vec![Beat {
+            at: 180.0,
+            action: Action::Blast {
+                centre: Point3::new(9.5, 6.8, 0.0),
+                radius: 2.0,
+            },
+        }],
+        probes: vec![Probe {
+            name: "lake",
+            at: Point3::new(4.0, 6.2, 0.0),
+        }],
+        camera: (Point3::new(-6.0, 16.0, 16.0), Point3::new(0.0, 6.0, 0.0)),
+    }
+}
+
+const SHORELINE_LEVEL: &str = r#"
+Level(
+    name: "water_viewer: shoreline",
+    segments: [(
+        name: "main",
+        terrain: Terrain(
+            voxel_size: 0.5,
+            bounds: (min: (-32.0, -16.0, -32.0), max: (32.0, 16.0, 32.0)),
+            base_height: 0.0,
+            material_layers: [(depth: 999.0, material: Rock)],
+            features: [
+                Plateau(min: (-40.0, -40.0), max: (11.0, 40.0), height: 12.0),
+                // The channel, falling 3 m over 26 m to the pit's floor.
+                Ramp(from: (-24.0, 0.0), to: (2.0, 0.0), start_height: 9.0, end_height: 6.0, width: 4.0, flat_width: 2.0),
+                // The pit, and a notch at 7.3 m through its 3 m east wall.
+                Plateau(min: (0.0, -5.0), max: (8.0, 5.0), height: 6.0),
+                Plateau(min: (8.0, -1.0), max: (11.0, 1.0), height: 7.3),
+                // Low ground beyond the wall.
+                Plateau(min: (11.0, -40.0), max: (40.0, 40.0), height: 2.0),
+            ],
+        ),
+    )],
+    placements: [Root(segment: "main")],
+    player_spawn: (0.0, 13.0, 10.0),
+    water: Some((
+        bodies: [
+            Spring(position: (-24.5, 9.6, 0.0), direction: (1.5, 0.0, 0.0), discharge: 1.0),
+        ],
+        settle: AsAuthored,
     )),
 )
 "#;

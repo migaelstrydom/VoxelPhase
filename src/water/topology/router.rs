@@ -213,6 +213,25 @@ pub fn build_reaches(graph: &SpanGraph, cells: &[SpanRef], q_design: f64) -> Vec
         .collect()
 }
 
+/// One reach over `cells`, however long, with its rating scanned at
+/// `q_design`: what is left of a reach cut short. `None` for fewer than two
+/// cells, which is no channel.
+pub fn one_reach(graph: &SpanGraph, cells: &[SpanRef], q_design: f64) -> Option<Reach> {
+    if cells.len() < 2 {
+        return None;
+    }
+    let points: Vec<Point3<f32>> = cells
+        .iter()
+        .map(|c| {
+            let (x, z) = c.column.centre();
+            Point3::new(x, graph.span(*c).floor_c, z)
+        })
+        .collect();
+    let line = Centreline::from_path(&points);
+    let rating = RatingCurve::scan(&sections_along(graph, &line), q_design);
+    Some(Reach::new(cells.to_vec(), &points, rating, Vec::new()))
+}
+
 /// A reach's rating scanned again at a new design discharge, once the flow
 /// down it outgrows the old one.
 pub fn rescan(graph: &SpanGraph, reach: &Reach, q_design: f64) -> RatingCurve {

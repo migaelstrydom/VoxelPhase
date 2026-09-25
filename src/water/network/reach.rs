@@ -81,10 +81,6 @@ pub struct Reach {
     pub version: u32,
     /// Columns whose spans this reach claims.
     pub claimed: Vec<crate::water::geometry::Column>,
-    /// For the last reach of a channel ending in a basin's water: that
-    /// basin's level when the channel was laid. A channel whose basin has
-    /// since risen over it or fallen away from it is re-routed (§8.2).
-    pub routed_to_level: Option<f32>,
     /// For the last reach of a channel: where its water goes.
     pub outlet: Option<ChannelOutlet>,
 }
@@ -119,7 +115,6 @@ impl Reach {
             minor: false,
             version: 0,
             claimed: Vec::new(),
-            routed_to_level: None,
             outlet: None,
         }
     }

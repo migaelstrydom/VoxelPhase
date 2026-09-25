@@ -4,9 +4,11 @@ use std::path::Path;
 
 use nalgebra::Point3;
 
-use crate::level::{load_level, Settle};
+use crate::level::{load_level, Settle, WaterBody};
 use crate::level_check::build_terrain;
-use crate::water::network::STEP_EPSILON;
+use crate::water::network::{Store, STEP_EPSILON};
+use crate::water::solver::Account;
+use crate::water::topology::TopologyEdit;
 use crate::water::WaterWorld;
 
 use super::driver::{run, run_with_captures, RunConfig};
@@ -507,4 +509,116 @@ fn the_water_park_opens_at_rest_with_its_river_running() {
         heights.lower
     );
     assert!(water.balance().is_balanced());
+}
+
+#[test]
+fn the_water_park_opens_at_rest_whatever_level_its_catch_lake_is_authored_at() {
+    let level = load_level(Path::new("levels/water_park.level.ron")).unwrap();
+    let terrain = build_terrain(&level);
+    for authored in [1.0, 3.3] {
+        let mut config = level.water.clone().unwrap();
+        for body in config.bodies.iter_mut() {
+            if let WaterBody::Pool {
+                seed: (11.0, 19.0),
+                surface_level,
+            } = body
+            {
+                *surface_level = authored;
+            }
+        }
+        let (water, _) = WaterWorld::from_config(&config, &terrain);
+        let report = water.steady_report().unwrap();
+        assert!(report.converged, "authored at {authored}: {report:?}");
+        assert!(report.sweeps < 60, "authored at {authored}: {report:?}");
+        let lake = water.query().sample(Point3::new(11.0, 2.0, 19.0)).unwrap();
+        println!(
+            "authored at {authored}: {} sweeps, lake at {:.3}",
+            report.sweeps, lake.surface
+        );
+        assert!(water.balance().is_balanced());
+    }
+}
+
+#[test]
+fn a_lake_moves_a_channel_s_shoreline_without_pouring_the_channel_into_it() {
+    let scenario = find("shoreline").unwrap();
+    let mut logs = Vec::new();
+    let recorded = run_with_captures(
+        &scenario,
+        RunConfig::default(),
+        &[179.9, 239.9],
+        |_, _, water| {
+            let lake = water
+                .query()
+                .sample(Point3::new(4.0, 6.2, 0.0))
+                .map(|s| s.body);
+            let top = water.network().links().find_map(|(_, l)| {
+                matches!(water.network().store(l.up), Some(Store::Reservoir)).then_some(l.down)
+            });
+            logs.push((water.topology_log().to_vec(), lake, top));
+        },
+    )
+    .unwrap();
+    assert!(recorded.samples.iter().all(|s| s.ledger_error.abs() < 1e-6));
+    let (before, lake, top) = &logs[0];
+    let (lake, top) = (lake.expect("the lake"), top.expect("the channel"));
+    // Rising, the lake cuts the channel back cell by cell, and what the
+    // channel loses goes into the lake: none of it is poured elsewhere.
+    assert!(
+        before
+            .iter()
+            .filter(|e| matches!(e, TopologyEdit::CutReach { reach, .. } if *reach == top))
+            .count()
+            >= 2
+    );
+    for edit in before {
+        if let TopologyEdit::Transfer { from, to, .. } = edit {
+            if *from == Account::Store(top) {
+                assert_eq!(*to, Account::Store(lake), "{edit:?}");
+            }
+        }
+        assert!(
+            !matches!(edit, TopologyEdit::RemoveStore { store, .. } if *store == top),
+            "the channel was re-laid"
+        );
+    }
+    // Before the blast its level climbs smoothly: no river's storage is
+    // dumped into it at once.
+    let rising: Vec<f32> = recorded
+        .samples
+        .iter()
+        .filter(|s| s.time > 20.0 && s.time < 179.0)
+        .filter_map(|s| s.probes[0])
+        .collect();
+    let jump = rising
+        .windows(2)
+        .map(|w| (w[1] - w[0]).abs())
+        .fold(0.0f32, f32::max);
+    assert!(jump < 0.01, "the lake jumped {jump} m");
+    // Drained, the lake leaves the channel's bed dry, and the channel is
+    // carried on down it.
+    let (after, _, _) = &logs[1];
+    assert!(after[before.len()..]
+        .iter()
+        .any(|e| matches!(e, TopologyEdit::ExtendReach { reach, .. } if *reach == top)));
+}
+
+#[test]
+fn every_level_s_water_comes_to_rest_when_it_opens() {
+    for entry in std::fs::read_dir("levels").unwrap() {
+        let path = entry.unwrap().path();
+        if !path.to_string_lossy().ends_with(".level.ron") {
+            continue;
+        }
+        let level = load_level(&path).unwrap();
+        let Some(config) = level.water.as_ref() else {
+            continue;
+        };
+        let terrain = build_terrain(&level);
+        let (water, _) = WaterWorld::from_config(config, &terrain);
+        if let Some(report) = water.steady_report() {
+            assert!(report.converged, "{}: {report:?}", path.display());
+        }
+        assert!(water.balance().is_balanced(), "{}", path.display());
+    }
 }

@@ -4,15 +4,15 @@
 //!   lip or source ──parabola, 0.25 m steps──▶ first span it cannot stay in:
 //!                                              ground under it, a wall beside it,
 //!                                              or off the world
-//!                  noting on the way ─────────▶ the first span where a store could
-//!                                              hold water at the arc's height
+//!                  noting on the way ─────────▶ the first span where water
+//!                                              stands at the arc's height
 //! ```
 //!
 //! The arc is swept through the span graph, not the terrain mesh: a point is
 //! in air when some span's column range holds it above that span's floor.
 //! It runs on through water to the ground, so one arc serves every level the
-//! water below may stand at (§7.9); where the water is caught is a question
-//! of geometry, answered by `holds`, not of the level now.
+//! water below may stand at (§7.9); where it is caught, answered by
+//! `holds`, is the first water standing in its way now.
 
 use nalgebra::{Point3, Vector3};
 
@@ -57,9 +57,8 @@ pub struct Trace {
     pub path: FallPath,
     /// Where the arc meets the ground.
     pub landing: Landing,
-    /// The first span along the arc over which a store could hold water at
-    /// the arc's height, and that height: where the water is caught, at any
-    /// level.
+    /// The first span along the arc over which water stands at the arc's
+    /// height, and that height: where the water is caught.
     pub caught: Option<(SpanRef, f32)>,
 }
 
@@ -73,7 +72,7 @@ enum Cell {
 /// Sweeps fall arcs through the span graph.
 pub struct FallTracer<'a> {
     pub graph: &'a SpanGraph,
-    /// Whether a store could hold water at this height over this span.
+    /// Whether water stands at this height over this span.
     pub holds: &'a dyn Fn(SpanRef, f32) -> bool,
 }
 
