@@ -6,9 +6,10 @@ use nalgebra::Point3;
 
 use crate::level::{load_level, Settle};
 use crate::level_check::build_terrain;
+use crate::water::network::STEP_EPSILON;
 use crate::water::WaterWorld;
 
-use super::driver::{run, RunConfig};
+use super::driver::{run, run_with_captures, RunConfig};
 use super::scenarios::find;
 
 fn probe(run: &super::driver::Run, name: &str, sample: usize) -> Option<f32> {
@@ -393,6 +394,30 @@ fn a_breached_sea_wall_floods_the_lowland_until_it_joins_the_sea() {
 }
 
 #[test]
+fn the_sea_pouring_back_over_a_lowland_s_weir_falls_along_its_far_side() {
+    let scenario = find("sea_wall").unwrap();
+    // The weir is laid lowland → sea; the sea runs back over it.
+    let mut poured = Vec::new();
+    run_with_captures(
+        &scenario,
+        RunConfig::default(),
+        &[4.0, 8.0, 16.0],
+        |_, _, water| {
+            poured.push(water.network().links().any(|(id, l)| {
+                let heights = water.link_interface(id);
+                l.back.as_ref().is_some_and(|b| b.fall.is_some())
+                    && heights.is_some_and(|h| h.back && h.step() > STEP_EPSILON)
+            }));
+        },
+    )
+    .unwrap();
+    assert!(
+        poured.iter().any(|p| *p),
+        "no sheet on the sea's side: {poured:?}"
+    );
+}
+
+#[test]
 fn the_island_sea_demo_opens_with_its_pools_above_the_sea() {
     let level = load_level(Path::new("levels/island_sea.level.ron")).unwrap();
     let terrain = build_terrain(&level);
@@ -430,15 +455,15 @@ fn the_water_park_opens_at_rest_with_its_river_running() {
     assert!(river >= 7, "{river} reaches carry the river");
     // It ends over the cliff top at the catch lake's shore, 0.9 m above the
     // water, and falls from its own surface into the lake.
+    let lake = query
+        .sample(Point3::new(11.0, 2.0, 19.0))
+        .expect("the catch lake")
+        .body;
     let (reach, fall) = water
         .network()
         .links()
-        .filter_map(|(_, l)| {
-            let reach = water.network().store(l.up)?.as_reach()?;
-            let fall = l.fall.as_ref()?;
-            let landing = fall.points.last()?;
-            ((landing.y - 3.3).abs() < 0.01).then_some((reach, fall))
-        })
+        .filter(|(_, l)| l.down == lake)
+        .filter_map(|(_, l)| Some((water.network().store(l.up)?.as_reach()?, l.fall.as_ref()?)))
         .next()
         .expect("the river falls into the catch lake");
     let end = reach.centreline.points.last().unwrap().y + reach.running().depth;

@@ -439,7 +439,7 @@ impl WaterRenderer {
                     );
                     falls.bind(&self.device.device, cb);
                     for draw in &self.falls.draws {
-                        let Some(state) = water.fall_state(draw.link) else {
+                        let Some(state) = water.fall_state(draw.link, draw.back) else {
                             continue;
                         };
                         let constants: [f32; 8] = [
@@ -447,10 +447,10 @@ impl WaterRenderer {
                             state.strength,
                             FALL_SPREAD,
                             clock,
-                            0.0,
-                            0.0,
-                            0.0,
-                            0.0,
+                            state.lift,
+                            state.top,
+                            state.cut,
+                            state.aeration,
                         ];
                         self.device.device.cmd_push_constants(
                             cb,

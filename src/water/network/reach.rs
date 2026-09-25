@@ -15,10 +15,11 @@
 
 use nalgebra::{Point3, Vector2};
 
-use crate::water::geometry::SpanRef;
+use crate::water::geometry::{SpanRef, COLUMN_SIZE};
 
 use super::centreline::Centreline;
 use super::link::FallPath;
+use super::lip::Lip;
 use super::rating::{RatingCurve, RatingPoint};
 
 /// Where a reach is in its life.
@@ -242,6 +243,19 @@ impl Reach {
             .get(i)
             .copied()
             .unwrap_or_else(Vector2::x)
+    }
+
+    /// Where its water leaves it: the edge of its last column, on the bed,
+    /// in the direction the channel runs there.
+    pub fn end_lip(&self) -> Lip {
+        let line = &self.centreline;
+        let end = line.points.last().copied().unwrap_or_else(Point3::origin);
+        let direction = line.tangents.last().copied().unwrap_or_else(Vector2::x);
+        let edge = direction * (0.5 * COLUMN_SIZE);
+        Lip {
+            at: Point3::new(end.x + edge.x, end.y, end.z + edge.y),
+            direction,
+        }
     }
 
     /// Bed height nearest a distance along the reach.

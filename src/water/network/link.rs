@@ -5,7 +5,7 @@
 
 use std::fmt::Debug;
 
-use nalgebra::Point3;
+use nalgebra::{Point3, Vector3};
 
 use crate::water::geometry::Column;
 
@@ -19,14 +19,18 @@ pub struct FallPath {
     pub points: Vec<Point3<f32>>,
     /// Seconds the water takes from the lip to the landing, at each point.
     pub times: Vec<f32>,
+    /// Velocity at the first point, so the arc can be traced again from it.
+    pub velocity: Vector3<f32>,
 }
 
 impl FallPath {
-    /// Whether the arc passes over any of `columns` (sorted).
-    pub fn crosses(&self, columns: &[Column]) -> bool {
+    /// Whether the arc passes over any of `columns` (sorted) above `above`.
+    /// Below the water it is caught in, an arc runs through water, and an
+    /// edit there is not one in its air.
+    pub fn crosses(&self, columns: &[Column], above: f32) -> bool {
         self.points
             .iter()
-            .any(|p| columns.binary_search(&Column::containing(p.x, p.z)).is_ok())
+            .any(|p| p.y > above && columns.binary_search(&Column::containing(p.x, p.z)).is_ok())
     }
 
     /// Where the water lands.

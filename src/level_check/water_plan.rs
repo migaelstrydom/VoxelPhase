@@ -63,7 +63,7 @@ impl WaterPlan {
             .collect();
         let falls = water
             .falls()
-            .map(|(_, f)| f.points.iter().map(|p| (p.x, p.z)).collect())
+            .map(|(_, _, f)| f.points.iter().map(|p| (p.x, p.z)).collect())
             .collect();
         let mut wet = Vec::new();
         let mut crests = Vec::new();

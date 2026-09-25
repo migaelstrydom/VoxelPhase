@@ -8,6 +8,7 @@
 use crate::water::ids::{LinkId, StoreId};
 
 use super::link::{FallPath, Link};
+use super::lip::Lip;
 use super::store::{Port, Store, StoreView};
 
 /// A link and the stores it joins.
@@ -20,9 +21,31 @@ pub struct LinkEntry {
     pub open: bool,
     pub up_port: Port,
     pub down_port: Port,
-    /// The arc the water falls along between the stores, if it leaves a lip
-    /// (§7.6). A fall is geometry on a link, not a law of its own.
+    /// Where water leaves `up` (§7.9).
+    pub lip: Lip,
+    /// The arc the water falls along from the lip, where its jet parts from
+    /// the ground (§7.6). A fall is geometry on a link, not a law of its own.
     pub fall: Option<FallPath>,
+    /// For a reversible link, where water running back leaves `down`.
+    pub back: Option<BackSide>,
+}
+
+/// The far side of a reversible link: the same crest, facing the other way.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BackSide {
+    pub lip: Lip,
+    pub fall: Option<FallPath>,
+}
+
+impl LinkEntry {
+    /// The lip and arc water leaves by when the link carries `q` (negative
+    /// when it runs back): `up`'s side forwards, `down`'s backwards.
+    pub fn side(&self, q: f64) -> (&Lip, Option<&FallPath>) {
+        match (&self.back, q < 0.0) {
+            (Some(back), true) => (&back.lip, back.fall.as_ref()),
+            _ => (&self.lip, self.fall.as_ref()),
+        }
+    }
 }
 
 /// Every store and link.

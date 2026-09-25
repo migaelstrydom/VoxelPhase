@@ -7,12 +7,17 @@
 //! ```
 //!
 //! Each draw pushes the sheet's half width and strength from the link's
-//! discharge now, so a change in flow needs no new mesh.
+//! discharge now, and from the heights where its stores meet (§7.9): how
+//! far to lift the arc so it leaves the surface it leaves from, where to cut
+//! it off at the water it enters, and whether it falls free and aerated or
+//! drops clear into water standing over its lip. A change in flow or level
+//! needs no new mesh. An arc is traced to the ground, so the cut, not the
+//! mesh, ends the sheet.
 
 use nalgebra::Vector3;
 
 use crate::water::ids::LinkId;
-use crate::water::network::FallPath;
+use crate::water::network::{FallPath, Interface, STEP_EPSILON};
 
 use super::vertex::FallVertex;
 
@@ -27,13 +32,19 @@ const SOLID_DISCHARGE: f64 = 0.05;
 /// How much wider a sheet is at its foot than at its lip, as a share.
 pub const SPREAD: f32 = 0.3;
 
+/// Height over which a jet turns from clear to aerated as the water below
+/// drops away from its lip, m.
+const AERATION_BAND: f32 = 0.05;
+
 /// Changes whenever [`build`] would build something different.
-pub type FallKey = Vec<(LinkId, u32)>;
+pub type FallKey = Vec<(LinkId, bool, u32)>;
 
 /// One fall's draw.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FallDraw {
     pub link: LinkId,
+    /// The arc water running back over a reversible link falls along.
+    pub back: bool,
     pub first_index: u32,
     pub index_count: u32,
 }
@@ -53,37 +64,54 @@ pub struct FallState {
     pub half_width: f32,
     /// 0 to 1: how solid the sheet is.
     pub strength: f32,
+    /// Added to the arc's height, so it leaves the surface it leaves from.
+    pub lift: f32,
+    /// The top of the sheet, after the lift.
+    pub top: f32,
+    /// Where it is cut off: the surface of the water it enters.
+    pub cut: f32,
+    /// 0 to 1: clear where the water below stands over the lip, aerated
+    /// where the jet falls free.
+    pub aeration: f32,
 }
 
 impl FallState {
-    /// A sheet carrying `discharge` m³/s. `None` when nothing falls.
-    pub fn carrying(discharge: f64) -> Option<Self> {
-        if discharge <= 0.0 {
+    /// The sheet along `arc` carrying `discharge` m³/s across `heights`.
+    /// `None` when nothing falls, or there is no step to fall down.
+    pub fn of(discharge: f64, heights: Interface, arc: &FallPath) -> Option<Self> {
+        let start = arc.points.first()?.y;
+        if discharge <= 0.0 || heights.step() <= STEP_EPSILON {
             return None;
         }
         Some(Self {
             half_width: (HALF_WIDTH_PER_ROOT_Q * (discharge as f32).sqrt())
                 .clamp(MIN_HALF_WIDTH, MAX_HALF_WIDTH),
             strength: (discharge / SOLID_DISCHARGE).min(1.0) as f32,
+            lift: heights.upper - start,
+            top: heights.upper,
+            cut: heights.lower,
+            aeration: ((heights.lip - heights.lower) / AERATION_BAND).clamp(0.0, 1.0),
         })
     }
 }
 
 /// The key of a set of falls.
-pub fn fall_key<'a>(falls: impl Iterator<Item = (LinkId, &'a FallPath)>) -> FallKey {
-    falls.map(|(id, f)| (id, f.points.len() as u32)).collect()
+pub fn fall_key<'a>(falls: impl Iterator<Item = (LinkId, bool, &'a FallPath)>) -> FallKey {
+    falls
+        .map(|(id, back, f)| (id, back, f.points.len() as u32))
+        .collect()
 }
 
 /// Build the sheet of every fall.
-pub fn build<'a>(falls: impl Iterator<Item = (LinkId, &'a FallPath)>) -> FallMesh {
+pub fn build<'a>(falls: impl Iterator<Item = (LinkId, bool, &'a FallPath)>) -> FallMesh {
     let mut mesh = FallMesh::default();
-    for (link, fall) in falls {
-        append_fall(&mut mesh, link, fall);
+    for (link, back, fall) in falls {
+        append_fall(&mut mesh, link, back, fall);
     }
     mesh
 }
 
-fn append_fall(mesh: &mut FallMesh, link: LinkId, fall: &FallPath) {
+fn append_fall(mesh: &mut FallMesh, link: LinkId, back: bool, fall: &FallPath) {
     let n = fall.points.len();
     if n < 2 {
         return;
@@ -95,7 +123,6 @@ fn append_fall(mesh: &mut FallMesh, link: LinkId, fall: &FallPath) {
     let side = run
         .try_normalize(0.05)
         .map_or_else(Vector3::x, |d| Vector3::new(-d.z, 0.0, d.x));
-    let total = fall.times[n - 1].max(1e-3);
     let base = mesh.vertices.len() as u32;
     let first_index = mesh.indices.len() as u32;
     for (point, time) in fall.points.iter().zip(&fall.times) {
@@ -105,7 +132,6 @@ fn append_fall(mesh: &mut FallMesh, link: LinkId, fall: &FallPath) {
                 side,
                 across,
                 time: *time,
-                along: time / total,
             });
         }
     }
@@ -116,6 +142,7 @@ fn append_fall(mesh: &mut FallMesh, link: LinkId, fall: &FallPath) {
     }
     mesh.draws.push(FallDraw {
         link,
+        back,
         first_index,
         index_count: mesh.indices.len() as u32 - first_index,
     });

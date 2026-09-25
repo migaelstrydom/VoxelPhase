@@ -118,6 +118,15 @@ impl Store {
         }
     }
 
+    /// The highest a store can hold water: a basin's cap, the sea's level.
+    pub fn cap(&self) -> Option<f32> {
+        match self {
+            Store::Basin(b) => Some(b.cap),
+            Store::Ocean(o) => Some(o.level),
+            _ => None,
+        }
+    }
+
     /// Whether the store waits on a deferred re-flood (§9.2).
     pub fn is_frozen(&self) -> bool {
         matches!(self, Store::Basin(b) if b.frozen)

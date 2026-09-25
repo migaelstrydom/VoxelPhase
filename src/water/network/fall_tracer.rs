@@ -3,11 +3,16 @@
 //! ```text
 //!   lip or source ──parabola, 0.25 m steps──▶ first span it cannot stay in:
 //!                                              ground under it, a wall beside it,
-//!                                              a water surface, or off the world
+//!                                              or off the world
+//!                  noting on the way ─────────▶ the first span where a store could
+//!                                              hold water at the arc's height
 //! ```
 //!
 //! The arc is swept through the span graph, not the terrain mesh: a point is
 //! in air when some span's column range holds it above that span's floor.
+//! It runs on through water to the ground, so one arc serves every level the
+//! water below may stand at (§7.9); where the water is caught is a question
+//! of geometry, answered by `holds`, not of the level now.
 
 use nalgebra::{Point3, Vector3};
 
@@ -50,7 +55,12 @@ pub enum Landing {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Trace {
     pub path: FallPath,
+    /// Where the arc meets the ground.
     pub landing: Landing,
+    /// The first span along the arc over which a store could hold water at
+    /// the arc's height, and that height: where the water is caught, at any
+    /// level.
+    pub caught: Option<(SpanRef, f32)>,
 }
 
 /// What a point of the arc is in.
@@ -63,8 +73,8 @@ enum Cell {
 /// Sweeps fall arcs through the span graph.
 pub struct FallTracer<'a> {
     pub graph: &'a SpanGraph,
-    /// The water surface standing over a span, if any: an arc lands on it.
-    pub surface: &'a dyn Fn(SpanRef) -> Option<f32>,
+    /// Whether a store could hold water at this height over this span.
+    pub holds: &'a dyn Fn(SpanRef, f32) -> bool,
 }
 
 impl FallTracer<'_> {
@@ -76,13 +86,16 @@ impl FallTracer<'_> {
         let mut path = FallPath {
             points: vec![start],
             times: vec![0.0],
+            velocity,
         };
+        let mut caught = None;
         let mut span = match self.cell(start) {
             Cell::Air(span) => span,
             _ => {
                 return Some(Trace {
                     path,
                     landing: Landing::Void,
+                    caught,
                 })
             }
         };
@@ -100,6 +113,7 @@ impl FallTracer<'_> {
                     return Some(Trace {
                         path,
                         landing: Landing::Void,
+                        caught,
                     });
                 }
                 Cell::Solid => {
@@ -116,18 +130,15 @@ impl FallTracer<'_> {
                     return Some(Trace {
                         path,
                         landing: Landing::Span(span),
+                        caught: caught
+                            .or(Some((span, floor)).filter(|(s, y)| (self.holds)(*s, *y))),
                     });
                 }
                 Cell::Air(here) => {
                     span = here;
                     previous = p;
-                    if let Some(level) = (self.surface)(here).filter(|l| p.y <= *l) {
-                        path.points.push(Point3::new(p.x, level, p.z));
-                        path.times.push(t);
-                        return Some(Trace {
-                            path,
-                            landing: Landing::Span(here),
-                        });
+                    if caught.is_none() && (self.holds)(here, p.y) {
+                        caught = Some((here, p.y));
                     }
                     path.points.push(p);
                     path.times.push(t);
@@ -137,6 +148,7 @@ impl FallTracer<'_> {
         Some(Trace {
             path,
             landing: Landing::Void,
+            caught,
         })
     }
 
@@ -201,10 +213,10 @@ mod tests {
     #[test]
     fn water_off_a_cliff_lands_where_the_parabola_meets_the_ground() {
         let graph = cliff();
-        let dry = |_: SpanRef| None;
+        let dry = |_: SpanRef, _: f32| false;
         let tracer = FallTracer {
             graph: &graph,
-            surface: &dry,
+            holds: &dry,
         };
         // 10 m at 1.4 m/s: 1.43 s in the air, 2 m out.
         let trace = tracer
@@ -223,10 +235,10 @@ mod tests {
     #[test]
     fn a_jet_into_a_wall_comes_down_at_its_foot() {
         let graph = cliff();
-        let dry = |_: SpanRef| None;
+        let dry = |_: SpanRef, _: f32| false;
         let tracer = FallTracer {
             graph: &graph,
-            surface: &dry,
+            holds: &dry,
         };
         let trace = tracer
             .trace(Point3::new(2.0, 10.0, 4.0), Vector3::new(8.0, 0.0, 0.0))
@@ -237,26 +249,36 @@ mod tests {
     }
 
     #[test]
-    fn water_lands_on_a_surface_standing_over_the_ground() {
+    fn water_runs_on_to_the_ground_through_a_pond_that_catches_it() {
         let graph = cliff();
-        let pond = |span: SpanRef| (span.column.i >= 4).then_some(3.0);
+        // A pond whose banks could hold it to 3 m, from x = 2 on.
+        let pond = |span: SpanRef, y: f32| span.column.i >= 4 && y <= 3.0;
         let tracer = FallTracer {
             graph: &graph,
-            surface: &pond,
+            holds: &pond,
         };
         let trace = tracer
             .trace(Point3::new(2.0, 10.0, 4.0), Vector3::new(1.4, 0.0, 0.0))
             .unwrap();
-        assert_eq!(trace.path.landing().unwrap().y, 3.0);
+        assert_eq!(trace.path.landing().unwrap().y, 0.0);
+        let (caught, _) = trace.caught.expect("the pond catches it");
+        let Landing::Span(landing) = trace.landing else {
+            panic!("landed nowhere");
+        };
+        // Caught where it crosses 3 m, a little short of where it lands.
+        assert!(
+            caught.column.i <= landing.column.i,
+            "{caught:?} vs {landing:?}"
+        );
     }
 
     #[test]
     fn a_source_in_rock_emerges_along_its_direction_or_is_sealed() {
         let graph = cliff();
-        let dry = |_: SpanRef| None;
+        let dry = |_: SpanRef, _: f32| false;
         let tracer = FallTracer {
             graph: &graph,
-            surface: &dry,
+            holds: &dry,
         };
         // 0.5 m into the cliff face, pointing out of it.
         let out = tracer.trace(Point3::new(1.5, 5.0, 4.0), Vector3::new(1.0, 0.0, 0.0));

@@ -3,8 +3,10 @@ mod centreline;
 mod depression;
 mod fall_tracer;
 mod hypsometry;
+mod interface;
 mod link;
 pub mod links;
+mod lip;
 mod loss;
 mod net;
 mod ocean;
@@ -20,9 +22,11 @@ pub use depression::{
 };
 pub use fall_tracer::{FallTracer, Landing, Trace, FALL_RUN, FALL_THRESHOLD, GRAVITY};
 pub use hypsometry::{DeadStorage, Hypsometry, POTHOLE_STEP, WET_BAND};
+pub use interface::{interface, Interface, STEP_EPSILON};
 pub use link::{FallPath, Link};
+pub use lip::{critical_depth, Lip};
 pub use loss::{LossLaw, MINOR_HYSTERESIS};
-pub use net::{LinkEntry, Network};
+pub use net::{BackSide, LinkEntry, Network};
 pub use ocean::Ocean;
 pub use rating::{
     CrossSection, Hydraulics, RatingCurve, RatingPoint, MANNING_N, MIN_SLOPE, RATING_POINTS,

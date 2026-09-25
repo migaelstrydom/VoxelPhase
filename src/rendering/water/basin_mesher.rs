@@ -126,8 +126,9 @@ pub trait WaterScene {
         FallMesh::default()
     }
 
-    /// A fall's state for its draw: `None` when nothing falls.
-    fn fall_state(&self, _link: LinkId) -> Option<FallState> {
+    /// A fall's state for its draw: `None` when nothing falls down it now,
+    /// or water runs the other way over its link.
+    fn fall_state(&self, _link: LinkId, _back: bool) -> Option<FallState> {
         None
     }
 }
@@ -205,8 +206,18 @@ impl WaterScene for WaterWorld {
         super::fall_mesher::build(self.falls())
     }
 
-    fn fall_state(&self, link: LinkId) -> Option<FallState> {
-        FallState::carrying(self.link_discharge(link)?)
+    fn fall_state(&self, link: LinkId, back: bool) -> Option<FallState> {
+        let heights = self.link_interface(link)?;
+        if heights.back != back {
+            return None;
+        }
+        let entry = self.network().link(link)?;
+        let arc = if back {
+            entry.back.as_ref()?.fall.as_ref()?
+        } else {
+            entry.fall.as_ref()?
+        };
+        FallState::of(self.link_discharge(link)?, heights, arc)
     }
 
     fn ripple_tiles(&self) -> Vec<RippleTileView<'_>> {

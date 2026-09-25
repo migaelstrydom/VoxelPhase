@@ -27,7 +27,7 @@ use super::geometry::{
     CHUNK_COLUMNS, COLUMNS_PER_CHUNK,
 };
 use super::ids::{LinkId, StoreId, WaterBodyId};
-use super::network::{Basin, FallPath, LossLaw, Network, Ocean, Store};
+use super::network::{interface, Basin, FallPath, Interface, LossLaw, Network, Ocean, Store};
 use super::query::WaterQuery;
 use super::solver::{Balance, HydrologySolver, VolumeLedger};
 use super::surface::{
@@ -502,15 +502,23 @@ impl WaterWorld {
         &self.network
     }
 
-    /// Every link that carries a fall, and its arc, in id order.
-    pub fn falls(&self) -> impl Iterator<Item = (LinkId, &FallPath)> {
-        self.network
-            .links()
-            .filter_map(|(id, l)| l.fall.as_ref().map(|f| (id, f)))
+    /// Every arc a link carries, in id order: its own, then, for a
+    /// reversible link, the one water running back falls along (`true`).
+    pub fn falls(&self) -> impl Iterator<Item = (LinkId, bool, &FallPath)> {
+        self.network.links().flat_map(|(id, l)| {
+            let forward = l.fall.as_ref().map(|f| (id, false, f));
+            let back = l
+                .back
+                .as_ref()
+                .and_then(|b| b.fall.as_ref())
+                .map(|f| (id, true, f));
+            forward.into_iter().chain(back)
+        })
     }
 
-    /// What a link carries now, m³/s: zero when closed, `None` once gone.
-    pub fn link_discharge(&self, id: LinkId) -> Option<f64> {
+    /// What a link carries now, m³/s, negative back over a reversible link:
+    /// zero when closed, `None` once gone.
+    pub fn link_flow(&self, id: LinkId) -> Option<f64> {
         let link = self.network.link(id)?;
         if !link.open {
             return Some(0.0);
@@ -520,7 +528,18 @@ impl WaterWorld {
         let down = self
             .network
             .view(link.down, volume(link.down), link.down_port)?;
-        Some(link.law.discharge(up, down).abs())
+        Some(link.law.discharge(up, down))
+    }
+
+    /// What a link carries now, either way, m³/s.
+    pub fn link_discharge(&self, id: LinkId) -> Option<f64> {
+        self.link_flow(id).map(f64::abs)
+    }
+
+    /// The heights where a link's stores meet now (§7.9).
+    pub fn link_interface(&self, id: LinkId) -> Option<Interface> {
+        let q = self.link_flow(id)?;
+        interface(&self.network, self.network.link(id)?, q)
     }
 
     /// How the level's opening settle went, if it opened steady.

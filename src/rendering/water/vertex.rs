@@ -142,8 +142,6 @@ pub struct FallVertex {
     pub across: f32,
     /// Seconds from the lip.
     pub time: f32,
-    /// Share of the way down, 0 at the lip and 1 at the landing.
-    pub along: f32,
 }
 
 impl FallVertex {
@@ -170,11 +168,11 @@ impl FallVertex {
                 format: vk::Format::R32G32B32_SFLOAT,
                 offset: 3 * f,
             },
-            // (across, time, along)
+            // (across, time)
             vk::VertexInputAttributeDescription {
                 location: 2,
                 binding: 0,
-                format: vk::Format::R32G32B32_SFLOAT,
+                format: vk::Format::R32G32_SFLOAT,
                 offset: 6 * f,
             },
         ]

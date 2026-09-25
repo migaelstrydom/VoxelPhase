@@ -8,7 +8,8 @@
 // A fall's sheet: aerated water over the scene behind it. Streaks run down
 // the arc at the water's own pace (they are keyed to seconds from the lip),
 // the sheet whitens as it falls and breaks up, and it thins to nothing at
-// its edges.
+// its edges. Below the surface of the water it enters, nothing is drawn;
+// a drop into water standing over its lip stays clear rather than white.
 
 const vec3 WATER_TINT = vec3(0.55, 0.72, 0.80);
 const vec3 AERATED = vec3(0.92, 0.96, 1.0);
@@ -19,7 +20,7 @@ layout(location = 1) in vec3 fragNormal;
 layout(location = 2) in float fragAcross;
 layout(location = 3) in float fragTime;
 layout(location = 4) in float fragAlong;
-layout(location = 5) flat in vec2 fragBody;   // (strength, clock)
+layout(location = 5) flat in vec4 fragBody;   // (strength, clock, cut, aeration)
 
 layout(set = 0, binding = 0) uniform sampler2D colorSampler;
 layout(set = 0, binding = 1) uniform sampler2D depthSampler;
@@ -48,6 +49,10 @@ float noise(vec2 p) {
 void main() {
     float strength = fragBody.x;
     float clock = fragBody.y;
+    if (fragWorldPos.y < fragBody.z) {
+        discard;
+    }
+    float aeration = fragBody.w;
 
     // Streaks: fine across the sheet, long down it, carried with the water.
     vec2 streakUv = vec2(fragAcross * 6.0, (fragTime - clock) * 4.0);
@@ -56,7 +61,7 @@ void main() {
     // The sheet thins at its edges and, lower down, breaks into gaps.
     float edge = 1.0 - smoothstep(0.55, 1.0, abs(fragAcross));
     float breakUp = smoothstep(0.25 + 0.5 * fragAlong, 0.75, streaks);
-    float coverage = edge * mix(0.85, breakUp, fragAlong * 0.8) * strength;
+    float coverage = edge * mix(0.85, breakUp, fragAlong * 0.8 * aeration) * strength;
     if (coverage < 0.02) {
         discard;
     }
@@ -67,7 +72,8 @@ void main() {
 
     vec3 L = normalize(fpc.sunDir.xyz);
     float lit = 0.6 + 0.4 * abs(dot(normalize(fragNormal), L));
-    vec3 water = mix(WATER_TINT, AERATED, clamp(0.35 + 0.65 * fragAlong + 0.3 * streaks, 0.0, 1.0));
+    float white = clamp(0.35 + 0.65 * fragAlong + 0.3 * streaks, 0.0, 1.0) * mix(0.3, 1.0, aeration);
+    vec3 water = mix(WATER_TINT, AERATED, white);
     vec3 sheet = water * lit;
 
     // Where the sheet is thin the scene shows through, tinted only where
