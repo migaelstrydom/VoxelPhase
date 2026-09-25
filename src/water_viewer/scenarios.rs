@@ -17,6 +17,7 @@ pub fn catalogue() -> Vec<Scenario> {
         river(),
         island_pool(),
         island_hole(),
+        island_ditch(),
         crater_lake(),
         staircase(),
         spring_pools(),
@@ -448,6 +449,30 @@ fn island_hole() -> Scenario {
                 radius: 2.2,
             },
         }],
+        ..island_pool()
+    }
+}
+
+/// The island pool again, a ditch blown from its end out through the
+/// island's edge: the pool spills over the cliff face straight into the pond
+/// below, along a fall.
+fn island_ditch() -> Scenario {
+    Scenario {
+        name: "island_ditch",
+        description: "a ditch is blown from an island pool through the island's edge; it spills over the cliff",
+        level: ISLAND_POOL_LEVEL,
+        duration: 12.0,
+        beats: [3.5, 5.0, 6.5, 8.0]
+            .into_iter()
+            .enumerate()
+            .map(|(i, x)| Beat {
+                at: 1.0 + i as f32,
+                action: Action::Blast {
+                    centre: Point3::new(x, 8.0, 0.0),
+                    radius: 1.5,
+                },
+            })
+            .collect(),
         ..island_pool()
     }
 }

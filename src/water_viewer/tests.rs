@@ -238,6 +238,18 @@ fn an_island_pool_pours_through_its_hole_along_a_fall() {
 }
 
 #[test]
+fn an_island_pool_breached_at_its_edge_spills_along_a_fall() {
+    let scenario = find("island_ditch").unwrap();
+    let recorded = run(&scenario, RunConfig::default()).unwrap();
+    let last = recorded.samples.last().unwrap();
+    assert!(
+        probe(&recorded, "island", recorded.samples.len() - 1).unwrap() < 7.3,
+        "the pool drains"
+    );
+    assert!(last.falls > 0, "over the cliff face along a fall");
+}
+
+#[test]
 fn a_river_diverted_into_a_crater_fills_it_and_runs_on() {
     let scenario = find("river_diversion").unwrap();
     let recorded = run(&scenario, RunConfig::default()).unwrap();

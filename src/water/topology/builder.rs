@@ -813,6 +813,34 @@ impl TopologyBuilder {
             .map(|trace| trace.path)
     }
 
+    /// The arc water pours along over a lip straight into standing water
+    /// well below it, such as a pool breached at a cliff face over the sea:
+    /// launched at the critical speed off the crest's lowest cell, square to
+    /// it. `None` where the water below stands near the lip, or the lip is
+    /// the edge of the world.
+    fn spill_fall(&self, t: &Topology, outflow: &Outflow, target: StoreId) -> Option<FallPath> {
+        let below = t.network.store(target).and_then(Store::surface)?;
+        if outflow.lip - below <= FALL_THRESHOLD {
+            return None;
+        }
+        let cell = outflow
+            .cells
+            .iter()
+            .filter(|c| c.inside != c.outside)
+            .min_by(|a, b| a.saddle.total_cmp(&b.saddle))?;
+        let (ix, iz) = cell.inside.column.centre();
+        let (ox, oz) = cell.outside.column.centre();
+        let direction = Vector3::new(ox - ix, 0.0, oz - iz)
+            .try_normalize(1e-6)
+            .unwrap_or_else(Vector3::x);
+        let launch =
+            Point3::new(ix, cell.saddle + CRITICAL_DEPTH, iz) + direction * (0.5 * COLUMN_SIZE);
+        let speed = (GRAVITY * CRITICAL_DEPTH).sqrt();
+        self.trace(t, launch, direction * speed)
+            .filter(|trace| trace.path.drop() > FALL_THRESHOLD)
+            .map(|trace| trace.path)
+    }
+
     /// Sweep a fall arc; it lands on any water standing in its way.
     fn trace(&self, t: &Topology, at: Point3<f32>, velocity: Vector3<f32>) -> Option<Trace> {
         let graph = t.geometry.graph();
@@ -1230,11 +1258,13 @@ impl TopologyBuilder {
             let entry = if routed {
                 self.route(t, id, &outflow, level)
             } else {
-                let fall = outflow
-                    .hole
-                    .and_then(|hole| self.hole_fall(t, &outflow, hole.lip));
-                self.resolve_target(t, id, &outflow)
-                    .map(|store| Entry { store, fall })
+                self.resolve_target(t, id, &outflow).map(|store| {
+                    let fall = match outflow.hole {
+                        Some(hole) => self.hole_fall(t, &outflow, hole.lip),
+                        None => self.spill_fall(t, &outflow, store),
+                    };
+                    Entry { store, fall }
+                })
             };
             let Some(Entry {
                 store: target,
