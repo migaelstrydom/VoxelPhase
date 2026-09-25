@@ -285,6 +285,9 @@ impl SpanRasteriser {
         for (coord, columns) in paired {
             let stale = &by_chunk[&coord];
             let generation = graph.chunk(coord).map_or(0, |c| c.generation()) + 1;
+            let old_changed: Vec<u32> = (0..COLUMNS_PER_CHUNK)
+                .map(|local| graph.chunk(coord).map_or(0, |c| c.changed(local)))
+                .collect();
             let old_owners: Vec<Vec<SpanOwner>> = (0..COLUMNS_PER_CHUNK)
                 .map(|local| {
                     graph
@@ -315,6 +318,7 @@ impl SpanRasteriser {
                 if stale.contains(&column) {
                     continue;
                 }
+                graph.keep_changed(column, old_changed[local]);
                 for (ordinal, owner) in owners.iter().enumerate() {
                     *graph.owner_mut(graph.make_ref(column, ordinal as u8)) = *owner;
                 }

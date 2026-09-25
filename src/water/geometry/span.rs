@@ -119,8 +119,9 @@ pub struct Span {
 /// One span, named across the world.
 ///
 /// Debug builds carry the generation of the chunk it was taken from, and
-/// dereferencing a ref into a chunk rebuilt since panics: a holder must be
-/// re-derived after a rebuild, never left pointing at a different span.
+/// dereferencing a ref into a column rebuilt since panics: a holder must be
+/// re-derived after a rebuild, never left pointing at a different span. A
+/// ref into a column the rebuild left alone still names the same span.
 #[derive(Debug, Clone, Copy)]
 pub struct SpanRef {
     pub column: Column,
@@ -188,9 +189,12 @@ pub struct SpanChunk {
     spans: Vec<Span>,
     /// Parallel to `spans`.
     owner: Vec<SpanOwner>,
-    /// Bumped on every rebuild. Checked against `SpanRef::generation` in
-    /// debug builds.
+    /// Bumped on every rebuild.
     generation: u32,
+    /// The generation at which each column's spans last changed: a ref taken
+    /// since is current. Checked against `SpanRef::generation` in debug
+    /// builds.
+    changed: [u32; COLUMNS_PER_CHUNK],
 }
 
 impl Default for SpanChunk {
@@ -200,6 +204,7 @@ impl Default for SpanChunk {
             spans: Vec::new(),
             owner: Vec::new(),
             generation: 0,
+            changed: [0; COLUMNS_PER_CHUNK],
         }
     }
 }
@@ -211,6 +216,7 @@ impl SpanChunk {
         debug_assert_eq!(columns.len(), COLUMNS_PER_CHUNK);
         let mut chunk = Self {
             generation,
+            changed: [generation; COLUMNS_PER_CHUNK],
             ..Self::default()
         };
         for (local, spans) in columns.iter().enumerate() {
@@ -223,6 +229,17 @@ impl SpanChunk {
 
     pub fn generation(&self) -> u32 {
         self.generation
+    }
+
+    /// The generation at which the column at a local index last changed.
+    pub fn changed(&self, local: usize) -> u32 {
+        self.changed[local]
+    }
+
+    /// Mark the column at a local index as last changed at `generation`: a
+    /// rebuild that carried its spans over unchanged.
+    pub fn keep_changed(&mut self, local: usize, generation: u32) {
+        self.changed[local] = generation;
     }
 
     /// Spans of the column at a local index.

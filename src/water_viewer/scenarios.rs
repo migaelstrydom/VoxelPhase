@@ -27,6 +27,7 @@ pub fn catalogue() -> Vec<Scenario> {
         sea_wall(),
         shoreline(),
         low_mouth(),
+        confluence(),
     ]
 }
 
@@ -764,7 +765,8 @@ Level(
 "#;
 
 /// A spring runs down a channel into a pit that spills through a notch in
-/// its east wall at 7.3 m. The channel runs down to that line; below it the
+/// its east wall at 7.3 m. The channel's last 10 m widen into a flat-bottomed
+/// fan, with a level shelf where it begins. The channel runs down to that line; below it the
 /// bed is the pit's. The lake that fills it stands 0.4 m over the notch to
 /// spill the spring's 1 m³/s, drowning the channel's last metres (§8.2,
 /// Drowned). At 180 s the notch is blown deeper; the lake drains and the
@@ -804,6 +806,9 @@ Level(
                 Plateau(min: (-40.0, -40.0), max: (11.0, 40.0), height: 12.0),
                 // The channel, falling 3 m over 26 m to the pit's floor.
                 Ramp(from: (-24.0, 0.0), to: (2.0, 0.0), start_height: 9.0, end_height: 6.0, width: 4.0, flat_width: 2.0),
+                // Its last 10 m widen on the same slope, so a metre of it
+                // holds less water there than above.
+                Ramp(from: (-8.0, 0.0), to: (2.0, 0.0), start_height: 7.1538, end_height: 6.0, width: 9.0, flat_width: 6.0),
                 // The pit, and a notch at 7.3 m through its 3 m east wall.
                 Plateau(min: (0.0, -5.0), max: (8.0, 5.0), height: 6.0),
                 Plateau(min: (8.0, -1.0), max: (11.0, 1.0), height: 7.3),
@@ -865,6 +870,58 @@ Level(
             Spring(position: (-20.5, 1.9, 0.0), direction: (1.5, 0.0, 0.0), discharge: 1.0),
         ],
         settle: Steady,
+    )),
+)
+"#;
+
+/// Two springs run down two channels that meet: the tributary's walk ends on
+/// the main river's reach partway down it, and the two run on together over
+/// a 3 m fall into a pit.
+fn confluence() -> Scenario {
+    Scenario {
+        name: "confluence",
+        description: "a tributary joins a river partway down; both fall into a pit",
+        level: CONFLUENCE_LEVEL,
+        duration: 60.0,
+        beats: Vec::new(),
+        probes: vec![Probe {
+            name: "pit",
+            at: Point3::new(14.0, 3.2, 0.0),
+        }],
+        camera: (Point3::new(-10.0, 22.0, 18.0), Point3::new(-2.0, 6.0, -2.0)),
+    }
+}
+
+const CONFLUENCE_LEVEL: &str = r#"
+Level(
+    name: "water_viewer: confluence",
+    segments: [(
+        name: "main",
+        terrain: Terrain(
+            voxel_size: 0.5,
+            bounds: (min: (-32.0, -16.0, -32.0), max: (32.0, 16.0, 32.0)),
+            base_height: 0.0,
+            material_layers: [(depth: 999.0, material: Rock)],
+            features: [
+                Plateau(min: (-40.0, -40.0), max: (40.0, 40.0), height: 12.0),
+                // The tributary, falling from 11 m to the river's bed where
+                // the two meet at x = -2.
+                Ramp(from: (-12.0, -16.0), to: (-2.0, 0.0), start_height: 11.0, end_height: 7.25, width: 3.0, flat_width: 1.5),
+                // The river, falling from 10 m to 6 m at the pit's edge.
+                Ramp(from: (-24.0, 0.0), to: (8.0, 0.0), start_height: 10.0, end_height: 6.0, width: 4.0, flat_width: 2.0),
+                // The pit, 3 m below the river's end.
+                Plateau(min: (8.0, -6.0), max: (20.0, 6.0), height: 3.0),
+            ],
+        ),
+    )],
+    placements: [Root(segment: "main")],
+    player_spawn: (0.0, 13.0, 10.0),
+    water: Some((
+        bodies: [
+            Spring(position: (-24.5, 10.6, 0.0), direction: (1.5, 0.0, 0.0), discharge: 1.0),
+            Spring(position: (-12.3, 11.6, -16.5), direction: (0.8, 0.0, 1.27), discharge: 0.5),
+        ],
+        settle: AsAuthored,
     )),
 )
 "#;

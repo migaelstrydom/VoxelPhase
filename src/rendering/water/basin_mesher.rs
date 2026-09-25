@@ -16,13 +16,17 @@ use rustc_hash::FxHashMap;
 
 use crate::water::geometry::{Column, SpanChunkCoord, COLUMNS_PER_CHUNK, COLUMN_SIZE, ORTHOGONAL};
 use crate::water::ids::{LinkId, StoreId};
-use crate::water::network::Basin;
+use crate::water::network::{Basin, Store};
 use crate::water::surface::{corner_floor, RippleTiles, Swell, TILE_CORNERS};
 use crate::water::WaterWorld;
 
 use super::fall_mesher::{FallKey, FallMesh, FallState};
 use super::reach_mesher::{RiverMesh, RiverState};
 use super::vertex::BasinVertex;
+
+/// A basin whose surface stands no higher than this over its deepest floor
+/// is not drawn, m: it would lie on the floor and fight it for depth.
+pub const DRAWN_DEPTH: f32 = 0.002;
 
 /// One draw: a basin's quads within one 8 m tile.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -164,8 +168,14 @@ impl WaterScene for WaterWorld {
         mesh
     }
 
+    /// `None` for a basin no deeper than [`DRAWN_DEPTH`]: an empty one at
+    /// the bottom of a dry pit waiting for water to reach it.
     fn level(&self, body: StoreId) -> Option<f32> {
-        WaterWorld::level(self, body)
+        let level = WaterWorld::level(self, body)?;
+        let basin = self.network().store(body).and_then(Store::as_basin);
+        basin
+            .is_none_or(|b| level - b.deepest() > DRAWN_DEPTH)
+            .then_some(level)
     }
 
     fn swell(&self, body: StoreId) -> Swell {

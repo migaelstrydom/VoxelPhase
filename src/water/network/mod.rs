@@ -30,8 +30,8 @@ pub use loss::{LossLaw, MINOR_HYSTERESIS};
 pub use net::{BackSide, LinkEntry, Network};
 pub use ocean::Ocean;
 pub use rating::{
-    CrossSection, Hydraulics, RatingCurve, RatingPoint, MANNING_N, MIN_SLOPE, RATING_POINTS,
-    RATING_Q_MIN, SAMPLE_SPACING,
+    floor_near, CrossSection, Hydraulics, RatingCurve, RatingPoint, MANNING_N, MIN_SLOPE,
+    RATING_POINTS, RATING_Q_MIN, SAMPLE_SPACING,
 };
 pub use reach::{ChannelOutlet, Reach, ReachEnds, ReachState};
 pub use store::{Port, Store, StoreView};

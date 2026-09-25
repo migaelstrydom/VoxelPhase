@@ -9,13 +9,15 @@
 //!                                 or a fall step, where the water leaves the bed
 //! ```
 
+use std::collections::VecDeque;
+
 use nalgebra::Point3;
 
 use crate::water::geometry::{Drain, SpanGraph, SpanRef};
 use crate::water::ids::StoreId;
 use crate::water::network::{
-    downhill, is_pothole, Centreline, CrossSection, Network, RatingCurve, Reach, Store, FALL_RUN,
-    FALL_THRESHOLD,
+    downhill, floor_near, is_pothole, Centreline, CrossSection, Network, RatingCurve, Reach, Store,
+    FALL_RUN, FALL_THRESHOLD,
 };
 
 /// Reaches are cut at about this length, m.
@@ -36,6 +38,14 @@ pub const SECTION_SPACING: f32 = 1.0;
 
 /// Distance each side over which a section's bed slope is measured, m.
 const SLOPE_WINDOW: f32 = 3.0;
+
+/// Distance each side over which a channel's move to the middle of its
+/// water is averaged, m.
+const CENTRE_WINDOW: f32 = 1.5;
+
+/// Distance over which a channel eases from the middle of its water back to
+/// the cell it starts or ends on, where it meets a store or a lip, m.
+const CENTRE_EASE: f32 = 2.0;
 
 /// Steps a walk takes before giving up.
 const MAX_WALK: usize = 1 << 16;
@@ -87,6 +97,8 @@ pub fn walk(
 ) -> (Vec<SpanRef>, WalkEnd) {
     let mut cells: Vec<SpanRef> = Vec::new();
     let mut span = start;
+    // The rest of a way across a flat, still to walk.
+    let mut ahead: VecDeque<SpanRef> = VecDeque::new();
     for _ in 0..MAX_WALK {
         if let Some((at, toward)) = fall_step(graph, lip, &cells, span) {
             cells.truncate(at.map_or(0, |i| i + 1));
@@ -116,12 +128,19 @@ pub fn walk(
         if drainage.drain(graph, span) == Drain::Outlet {
             return (cells, WalkEnd::Void(span));
         }
+        // Partway across a flat on a pit's side.
+        if let Some(next) = ahead.pop_front() {
+            span = next;
+            continue;
+        }
         if fill > floor + 1e-3 && (!fill.is_finite() || !is_pothole(graph, span, fill)) {
             // In a pit, below where it would spill: the water runs on down
             // the pit's dry side to the water standing in it, or to its
             // bottom, where an empty basin is made.
-            match downhill(graph, span) {
+            let mut path = downhill(graph, span).into_iter();
+            match path.next() {
                 Some(next) => {
+                    ahead.extend(path);
                     span = next;
                     continue;
                 }
@@ -186,13 +205,7 @@ pub fn build_reaches(
     q_design: f64,
     standing: &dyn Fn(SpanRef) -> bool,
 ) -> Vec<Reach> {
-    let points: Vec<Point3<f32>> = cells
-        .iter()
-        .map(|c| {
-            let (x, z) = c.column.centre();
-            Point3::new(x, graph.span(*c).floor_c, z)
-        })
-        .collect();
+    let points = centre_on_water(graph, cells, q_design, standing, (true, true));
     let mut distance = vec![0.0f32];
     for pair in points.windows(2) {
         let d = ((pair[1].x - pair[0].x).powi(2) + (pair[1].z - pair[0].z).powi(2)).sqrt();
@@ -231,8 +244,9 @@ pub fn build_reaches(
 }
 
 /// One reach over `cells`, however long, with its rating scanned at
-/// `q_design`: what is left of a reach cut short. `None` for fewer than two
-/// cells, which is no channel.
+/// `q_design`: what is left of a reach cut short, or one carried on down a
+/// shore. Its start joins what it did before, so only its end eases back to
+/// its cell. `None` for fewer than two cells, which is no channel.
 pub fn one_reach(
     graph: &SpanGraph,
     cells: &[SpanRef],
@@ -242,6 +256,27 @@ pub fn one_reach(
     if cells.len() < 2 {
         return None;
     }
+    let points = centre_on_water(graph, cells, q_design, standing, (false, true));
+    let line = Centreline::from_path(&points);
+    let rating = RatingCurve::scan(&sections_along(graph, &line, standing), q_design);
+    Some(Reach::new(cells.to_vec(), &points, rating, Vec::new()))
+}
+
+/// A point on the bed for each of a channel's cells, moved across its
+/// water to the middle of the surface carrying `q_design`: where its
+/// centreline belongs. The walk follows the drainage field, which runs
+/// straight down a flat-bottomed bed from wherever it entered it, along the
+/// foot of a bank as readily as down the middle; a centreline left there
+/// stands above the water it carries. The move is averaged along the
+/// channel, and eased back to the cell at each end flagged in `ease`
+/// (start, end), where the channel meets a store or leaves over a lip.
+fn centre_on_water(
+    graph: &SpanGraph,
+    cells: &[SpanRef],
+    q_design: f64,
+    standing: &dyn Fn(SpanRef) -> bool,
+    ease: (bool, bool),
+) -> Vec<Point3<f32>> {
     let points: Vec<Point3<f32>> = cells
         .iter()
         .map(|c| {
@@ -249,9 +284,67 @@ pub fn one_reach(
             Point3::new(x, graph.span(*c).floor_c, z)
         })
         .collect();
+    if points.len() < 2 {
+        return points;
+    }
     let line = Centreline::from_path(&points);
-    let rating = RatingCurve::scan(&sections_along(graph, &line, standing), q_design);
-    Some(Reach::new(cells.to_vec(), &points, rating, Vec::new()))
+    // Each cell's nearest point on the smoothed line, which gives it a
+    // tangent to cut its section across and a bed slope.
+    let mut j = 0;
+    let nearest: Vec<usize> = points
+        .iter()
+        .map(|p| {
+            let d = |k: usize| (line.points[k] - p).xz().norm_squared();
+            while j + 1 < line.points.len() && d(j + 1) <= d(j) {
+                j += 1;
+            }
+            j
+        })
+        .collect();
+    let across: Vec<nalgebra::Vector2<f32>> = nearest
+        .iter()
+        .map(|&j| nalgebra::Vector2::new(-line.tangents[j].y, line.tangents[j].x))
+        .collect();
+    let distance: Vec<f32> = nearest.iter().map(|&j| line.distance[j]).collect();
+    // The middle of the water, found every `SECTION_SPACING`.
+    let mut middles: Vec<(f32, f32)> = Vec::new();
+    for (i, p) in points.iter().enumerate() {
+        let last = i + 1 == points.len();
+        if middles
+            .last()
+            .is_some_and(|(d, _)| distance[i] - d < SECTION_SPACING)
+            && !last
+        {
+            continue;
+        }
+        let j = nearest[i];
+        let middle =
+            CrossSection::sample(graph, *p, line.tangents[j], SECTION_HALF_WIDTH, standing)
+                .water_middle(q_design as f32, slope_at(&line, j))
+                .unwrap_or(0.0);
+        middles.push((distance[i], middle));
+    }
+    let total = line.length();
+    points
+        .iter()
+        .enumerate()
+        .map(|(i, p)| {
+            let d = distance[i];
+            let near = &middles[middles.partition_point(|(at, _)| *at < d - CENTRE_WINDOW)
+                ..middles.partition_point(|(at, _)| *at <= d + CENTRE_WINDOW)];
+            let (sum, n) = near.iter().fold((0.0, 0), |(s, n), (_, o)| (s + o, n + 1));
+            let mut offset = sum / n.max(1) as f32;
+            if ease.0 {
+                offset *= (d / CENTRE_EASE).min(1.0);
+            }
+            if ease.1 {
+                offset *= ((total - d) / CENTRE_EASE).clamp(0.0, 1.0);
+            }
+            let (x, z) = (p.x + across[i].x * offset, p.z + across[i].y * offset);
+            let y = floor_near(graph, x, z, p.y).map_or(p.y, |(_, floor)| floor);
+            Point3::new(x, y, z)
+        })
+        .collect()
 }
 
 /// A reach's rating scanned again at a new design discharge, once the flow
@@ -389,4 +482,53 @@ pub fn downstream_of(network: &crate::water::network::Network, reach: StoreId) -
                     .is_some_and(|s| matches!(s, Store::Reach(_)))
         })
         .map(|(_, l)| l.down)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::water::geometry::{Column, Span, SpanChunk, SpanChunkCoord, COLUMNS_PER_CHUNK};
+
+    #[test]
+    fn a_channel_down_the_foot_of_a_bank_is_centred_on_its_water() {
+        // A 5 m flat-bottomed bed along i, from k = 3 to k = 12, falling
+        // 0.05 m a column, under banks 0.2 m up and then walls 2 m up. The
+        // walk has run down it along the foot of the k = 3 side.
+        let coord = SpanChunkCoord { x: 0, z: 0 };
+        let mut graph = SpanGraph::new(coord, coord);
+        let columns: Vec<Vec<Span>> = (0..COLUMNS_PER_CHUNK)
+            .map(|local| {
+                let c = coord.column(local);
+                let bed = 5.0 - 0.05 * c.i as f32;
+                let f = match c.k {
+                    3..=12 => bed,
+                    2 | 13 => bed + 0.2,
+                    _ => bed + 2.0,
+                };
+                vec![Span {
+                    floor_c: f,
+                    floor_min: f,
+                    floor_max: f,
+                    ceiling: f32::INFINITY,
+                }]
+            })
+            .collect();
+        graph.replace_chunk(coord, SpanChunk::from_columns(&columns, 1));
+        let cells: Vec<SpanRef> = (0..16)
+            .map(|i| graph.span_at(Column::new(i, 3), 10.0).unwrap())
+            .collect();
+        let points = centre_on_water(&graph, &cells, 1.0, &|_| false, (true, true));
+        let middle = Column::new(0, 7).centre().1 + 0.25;
+        for (i, p) in points.iter().enumerate() {
+            let d = i as f32 * 0.5;
+            if (CENTRE_EASE..7.5 - CENTRE_EASE).contains(&d) {
+                assert!((p.z - middle).abs() < 0.5, "cell {i} at z {}", p.z);
+            }
+            let bed = 5.0 - 0.05 * i as f32;
+            assert!((p.y - bed).abs() < 1e-4, "cell {i} stands on the bed");
+        }
+        // Each end eases back to its cell.
+        assert!((points[0].z - cells[0].column.centre().1).abs() < 1e-4);
+        assert!((points[15].z - cells[15].column.centre().1).abs() < 1e-4);
+    }
 }

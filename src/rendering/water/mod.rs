@@ -8,7 +8,7 @@ mod renderer;
 mod vertex;
 
 pub use basin_mesher::{
-    build, mesh_key, MeshKey, RippleTileView, WaterDraw, WaterMesh, WaterScene,
+    build, mesh_key, MeshKey, RippleTileView, WaterDraw, WaterMesh, WaterScene, DRAWN_DEPTH,
 };
 pub use fall_mesher::{FallDraw, FallKey, FallMesh, FallState};
 pub use reach_mesher::{RiverDraw, RiverMesh, RiverState};

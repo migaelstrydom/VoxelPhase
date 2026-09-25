@@ -8,7 +8,7 @@ use crate::level::{load_level, Settle, WaterBody};
 use crate::level_check::build_terrain;
 use crate::terrain::BlastConfig;
 use crate::water::ids::StoreId;
-use crate::water::network::{Store, STEP_EPSILON};
+use crate::water::network::STEP_EPSILON;
 use crate::water::solver::Account;
 use crate::water::topology::TopologyEdit;
 use crate::water::WaterWorld;
@@ -591,7 +591,9 @@ fn a_lake_moves_a_channel_s_shoreline_without_pouring_the_channel_into_it() {
         }
     }
     // Before the blast its level climbs smoothly: no river's storage is
-    // dumped into it at once.
+    // dumped into it at once. The channel's flat shelf is drowned whole in
+    // one rise, and the 2 m³ running over it joins the lake together, 1.4 cm
+    // of it; the whole river's 15 m³ would be several times that.
     let rising: Vec<f32> = recorded
         .samples
         .iter()
@@ -602,7 +604,7 @@ fn a_lake_moves_a_channel_s_shoreline_without_pouring_the_channel_into_it() {
         .windows(2)
         .map(|w| (w[1] - w[0]).abs())
         .fold(0.0f32, f32::max);
-    assert!(jump < 0.01, "the lake jumped {jump} m");
+    assert!(jump < 0.02, "the lake jumped {jump} m");
     // Drained, the lake leaves the channel's bed dry, and the channel is
     // carried on down it.
     let (after, _, _) = &logs[1];
@@ -850,4 +852,75 @@ fn a_breached_dam_pours_down_its_spillway_as_a_river() {
     let pit = query.level_at(Point3::new(-29.0, -1.5, 40.0));
     assert!(pit.is_some_and(|l| l > -1.5), "the pit stands at {pit:?}");
     assert!(water.balance().is_balanced());
+}
+
+#[test]
+fn a_lake_rising_past_its_cap_keeps_the_river_leaving_it() {
+    // From 140 s the lake spills through the notch and goes on rising, which
+    // re-floods it at its cap every few centimetres until the blast at 180 s.
+    let scenario = find("shoreline").unwrap();
+    let mut logs = Vec::new();
+    run_with_captures(
+        &scenario,
+        RunConfig::default(),
+        &[145.0, 179.9],
+        |_, _, water| logs.push(water.topology_log().to_vec()),
+    )
+    .unwrap();
+    let rising = &logs[1][logs[0].len()..];
+    let reregions = rising
+        .iter()
+        .filter(|e| matches!(e, TopologyEdit::Reregion { .. }))
+        .count();
+    assert!(reregions >= 2, "{reregions} re-floods");
+    // Each re-flood keeps the weir over the notch and the river below it:
+    // nothing is removed, and nothing laid again.
+    let relaid: Vec<_> = rising
+        .iter()
+        .filter(|e| {
+            matches!(
+                e,
+                TopologyEdit::AddStore(_)
+                    | TopologyEdit::RemoveStore { .. }
+                    | TopologyEdit::AddLink(_)
+                    | TopologyEdit::RemoveLink(_)
+            )
+        })
+        .collect();
+    assert!(relaid.is_empty(), "{relaid:?}");
+}
+
+#[test]
+fn a_tributary_joins_a_river_partway_down_it() {
+    let scenario = find("confluence").unwrap();
+    let mut logs = Vec::new();
+    let mut joined = None;
+    let recorded = run_with_captures(&scenario, RunConfig::default(), &[59.9], |_, _, water| {
+        let network = water.network();
+        let is_reach = |id: StoreId| network.store(id).is_some_and(|s| s.as_reach().is_some());
+        // The reach both channels run into: fed by two reaches.
+        joined = network.stores().find_map(|(id, s)| {
+            let reach = s.as_reach()?;
+            let feeders = network
+                .links()
+                .filter(|(_, l)| l.down == id && is_reach(l.up))
+                .count();
+            (feeders == 2).then_some(reach.inflow)
+        });
+        logs.push(water.topology_log().to_vec());
+    })
+    .unwrap();
+    // Both springs' 1.5 m³/s run on down the river below the junction.
+    let inflow = joined.expect("a reach fed by both channels");
+    assert!((inflow - 1.5).abs() < 0.05, "{inflow}");
+    // And reach the pit, every drop accounted for.
+    let pit = recorded.samples.last().unwrap().probes[0];
+    assert!(pit.is_some_and(|l| l > 3.2), "{pit:?}");
+    assert!(recorded.samples.iter().all(|s| s.ledger_error.abs() < 1e-6));
+    // Nothing was laid twice.
+    let removed = logs[0]
+        .iter()
+        .filter(|e| matches!(e, TopologyEdit::RemoveStore { .. }))
+        .count();
+    assert_eq!(removed, 0, "{:?}", logs[0]);
 }

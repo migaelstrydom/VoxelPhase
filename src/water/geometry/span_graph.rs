@@ -167,6 +167,14 @@ impl SpanGraph {
         self.chunk_index(coord).map(|i| &self.chunks[i])
     }
 
+    /// Mark a column carried over unchanged by its chunk's rebuild as last
+    /// changed at `generation`, so refs taken before the rebuild stay good.
+    pub fn keep_changed(&mut self, column: Column, generation: u32) {
+        if let Some(index) = self.chunk_index(column.chunk()) {
+            self.chunks[index].keep_changed(column.local_index(), generation);
+        }
+    }
+
     /// Replace a chunk wholesale. The rasteriser's only way in.
     pub fn replace_chunk(&mut self, coord: SpanChunkCoord, chunk: SpanChunk) {
         let index = self
@@ -231,15 +239,7 @@ impl SpanGraph {
         let index = self
             .chunk_index(span.column.chunk())
             .expect("SpanRef outside the graph");
-        #[cfg(debug_assertions)]
-        {
-            let generation = self.chunks[index].generation();
-            assert!(
-                span.generation == u32::MAX || span.generation == generation,
-                "stale SpanRef {:?}: chunk is at generation {generation}",
-                span
-            );
-        }
+        self.check_generation(&self.chunks[index], span);
         &mut self.chunks[index].column_owners_mut(span.column.local_index())[span.ordinal as usize]
     }
 
@@ -247,10 +247,12 @@ impl SpanGraph {
     fn check_generation(&self, chunk: &SpanChunk, span: SpanRef) {
         #[cfg(debug_assertions)]
         assert!(
-            span.generation == u32::MAX || span.generation == chunk.generation(),
-            "stale SpanRef {:?}: chunk is at generation {}",
+            span.generation == u32::MAX
+                || (span.generation >= chunk.changed(span.column.local_index())
+                    && span.generation <= chunk.generation()),
+            "stale SpanRef {:?}: its column changed at generation {}",
             span,
-            chunk.generation()
+            chunk.changed(span.column.local_index())
         );
     }
 

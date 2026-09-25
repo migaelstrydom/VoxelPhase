@@ -2081,10 +2081,50 @@ and ratings stopped at a shore.
   channel too short to lay a reach leaves the water to fall from the crest itself. A basin
   a channel ends in counts as fed while the channel stands, however far its front has to
   run: an empty basin at a pit's bottom was otherwise dried and made again every tick.
+- **Edge cases, second pass.** The shoreline channel's last 10 m were widened into a
+  flat-bottomed fan, so a metre of it holds less water than a metre above; the outflow
+  test now fails when a cut reach's storage is shared by length. That one change found
+  four bugs, and a `confluence` scenario (a tributary joining a river partway down)
+  covers the one path no scenario had exercised.
+  - *A re-flood at the cap re-laid the river below.* It dropped the basin's outflow
+    links; the reach below went unfed for a tick and retired, and was laid again, every
+    4 cm the lake rose. With no terrain edit the crests have not moved, so a re-flood
+    now hands each link to the new outflow over the same crest, its weir remade for the
+    new cells. After an edit every link is still dropped and relinked lazily.
+  - *A river's centreline could run up its bank.* The walk follows the drainage field,
+    which runs straight down a flat bed from wherever it entered it. The depth solve
+    started from the centreline's floor, so a centreline 0.2 m up a bank read 0.00 m
+    deep over a 6.5 m wide flat at a third of its real speed, and the reach retired the
+    first tick it went unfed. The solve now starts from the low ground the centre
+    stands in, and each channel's points are moved across to the middle of its water at
+    design flow (every metre, averaged over ±1.5 m, eased back to its cells over 2 m at
+    the ends where it meets a store or a lip; a reach cut or carried on eases only at
+    its new end).
+  - *The way down a pit's side stopped on a flat.* `downhill` wanted a strictly lower
+    neighbour, so a level shelf on a pit's side was taken for the bottom, and an empty
+    basin was made on it. A flat (floors within 1 mm of where the walk met it) is now
+    crossed in one go, along the shortest way to a cell clearly below it; stepping cell by
+    cell looped forever on a flat rippled within that millimetre (wrecking_yard hung).
+  - *Debug builds panicked on a reach's cell after an unrelated blast.* A chunk's
+    generation marked every ref into it stale on any rebuild, though its untouched
+    columns keep their spans; stage 8's `first_drowned` is the first thing to read a
+    reach's cells every tick. Each column now records the generation it last changed at.
+  - *An empty basin drew its surface on its floor,* which fought the floor for depth. A
+    basin no deeper than 2 mm is not drawn.
+  - *An outflow into a dry pit was linked before water crossed it.* A lake 1.5 cm under
+    such a crest (outflows link from 2 cm under their lip) got a closed weir to an empty
+    basin at the pit's bottom, which dried and was made again every other tick
+    (island_sea). An outflow into dry ground now links only once water would cross it;
+    a weir to water already standing beyond is still laid early. A basin a channel runs
+    into also counts as fed while that channel's link is closed for a trickle.
+  - `water_fuzz` now rests the water 180 s after its blasts and reports any store, link
+    or region still being laid in the last 60 s; forced to re-flood every tick, it
+    reports it. No level churns.
+  - Cost: laying breach's channel down its hill costs 0.26 ms more on its blast frame
+    (settle 2.18 ms against 1.92); the levels' blast frames are unchanged.
 - **Open.**
-  - A lake's re-flood when it rises to its region's cap still drops and relays its
-    outflow channel (the churn noted at stage 5); nothing is lost, since that water was
-    going where the channel took it.
+  - A river over a wide, flat plain spreads to the full 16 m of its sections at
+    minimum slope and holds a lot of water (87 m³ in 20 m below the shoreline's notch).
 
 ## 22. Decided and deferred
 

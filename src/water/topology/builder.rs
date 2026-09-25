@@ -514,8 +514,11 @@ impl TopologyBuilder {
         }
     }
 
-    /// Re-flood a basin from its surviving wet spans at its current level,
-    /// keeping its volume. Its outflows are regrouped and relinked lazily.
+    /// Re-flood a basin from its wet spans at its current level, keeping its
+    /// volume: it has risen to its region's cap, or drained below a merge
+    /// saddle without parting. The ground has not changed, so an outflow
+    /// the new region still has keeps its link, and the channel below it
+    /// never goes unfed; the rest are regrouped and relinked lazily.
     pub fn reregion(&mut self, t: &mut Topology, id: StoreId) {
         self.reregion_after(t, id, None);
     }
@@ -524,17 +527,20 @@ impl TopologyBuilder {
     /// re-paired by it seeds the flood only if water stood over it before,
     /// so a crater blown into a dry bank does not fill from the lake beside
     /// it. The basin keeps its claim through the flood, so its own spans are
-    /// its own and a dry depression it can now reach is not.
+    /// its own and a dry depression it can now reach is not. The edit may
+    /// have moved any crest, so every outflow is relinked lazily.
     fn reregion_after(&mut self, t: &mut Topology, id: StoreId, remap: Option<&SpanRemap>) {
         let Some(basin) = t.network.store(id).and_then(Store::as_basin) else {
             return;
         };
         let level = basin.level();
         let columns = basin.columns();
-        let links: Vec<LinkId> = basin.links().collect();
+        let old = basin.outflows.clone();
         let seeds = self.surviving_seeds(t, id, &columns, level, remap);
-        for link in links {
-            self.remove_link(t, link);
+        if remap.is_some() {
+            for link in old.iter().filter_map(|o| o.link) {
+                self.remove_link(t, link);
+            }
         }
         if seeds.is_empty() {
             // Nothing under the water survived: the bed was blown away from
@@ -554,8 +560,64 @@ impl TopologyBuilder {
             .and_then(Store::as_basin_mut)
             .expect("checked above");
         basin.reregion(flood);
+        if remap.is_none() {
+            self.carry_links(t, id, &old);
+        }
         self.claim(t, id);
         self.record(TopologyEdit::Reregion { basin: id, seeds });
+    }
+
+    /// Hand each link of a basin's `old` outflows to the new outflow over
+    /// the same crest, its law remade for the new outflow's cells, and
+    /// remove the links no new outflow crosses.
+    fn carry_links(&mut self, t: &mut Topology, id: StoreId, old: &[Outflow]) {
+        let mut carried: Vec<LinkId> = Vec::new();
+        let count = t
+            .network
+            .store(id)
+            .and_then(Store::as_basin)
+            .map_or(0, |b| b.outflows.len());
+        for index in 0..count {
+            let outflow = t
+                .network
+                .store(id)
+                .and_then(Store::as_basin)
+                .map(|b| b.outflows[index].clone())
+                .expect("live");
+            let Some(before) = old.iter().find(|o| {
+                o.link
+                    .is_some_and(|l| !carried.contains(&l) && t.network.link(l).is_some())
+                    && o.hole.is_some() == outflow.hole.is_some()
+                    && o.cells
+                        .iter()
+                        .any(|a| outflow.cells.iter().any(|b| a.outside == b.outside))
+            }) else {
+                continue;
+            };
+            let link = before.link.expect("found by it");
+            carried.push(link);
+            let law = self.outflow_law(
+                &outflow,
+                t.network.link(link).expect("live").law.reversible(),
+            );
+            if let Some(entry) = t.network.link_mut(link) {
+                entry.law = law;
+            }
+            if let Some(o) = t
+                .network
+                .store_mut(id)
+                .and_then(Store::as_basin_mut)
+                .and_then(|b| b.outflows.get_mut(index))
+            {
+                o.link = Some(link);
+                o.target = before.target;
+            }
+        }
+        for link in old.iter().filter_map(|o| o.link) {
+            if !carried.contains(&link) {
+                self.remove_link(t, link);
+            }
+        }
     }
 
     /// The between-tick housekeeping of every basin: links to outflows it has
@@ -1393,21 +1455,6 @@ impl TopologyBuilder {
             if level + LINK_MARGIN < outflow.lip && !poured {
                 continue;
             }
-            // Nothing worth a link crosses yet: a weir made now would open
-            // closed, and a channel routed now would lie empty.
-            if outflow.cells.iter().any(|c| c.saddle < level)
-                && outflow.hole.is_none()
-                && Weir::new(
-                    outflow.cells.iter().map(|c| c.saddle).collect(),
-                    self.gain,
-                    false,
-                )
-                .free(level as f64)
-                .0 <= 2.0 * Q_RETIRE
-                && outflow.link.is_some()
-            {
-                continue;
-            }
             let outflow = outflow.clone();
             // Water over an outlet runs down a channel; so does water over a
             // crest into a neighbouring pit while no water stands beyond it,
@@ -1416,6 +1463,23 @@ impl TopologyBuilder {
                 CrestKind::Outlet => true,
                 CrestKind::Child { .. } => !self.water_beyond(t, &outflow),
             };
+            // Nothing worth a link crosses yet: a weir made now would open
+            // closed, and a channel routed now would lie empty, as would a
+            // basin made for it at the bottom of a dry pit, which would dry
+            // up and be made again every tick. Only a weir to water already
+            // standing beyond is laid before its water arrives, and one
+            // relaid after an edit only once water crosses.
+            let crossing = Weir::new(
+                outflow.cells.iter().map(|c| c.saddle).collect(),
+                self.gain,
+                false,
+            )
+            .free(level as f64)
+            .0;
+            let early = !into_dry && outflow.link.is_none();
+            if crossing <= 2.0 * Q_RETIRE && outflow.hole.is_none() && !poured && !early {
+                continue;
+            }
             let routed = into_dry
                 && outflow.hole.is_none()
                 && outflow.cells.iter().all(|c| c.inside != c.outside);
@@ -1856,6 +1920,28 @@ impl TopologyBuilder {
         id
     }
 
+    /// The law water crosses an outflow by: an orifice through a hole, or
+    /// else a weir over its crest cells, reversible between two basins.
+    fn outflow_law(
+        &self,
+        outflow: &Outflow,
+        between_basins: bool,
+    ) -> Box<dyn crate::water::network::Link> {
+        match outflow.hole {
+            Some(hole) => Box::new(Orifice {
+                lip: hole.lip,
+                area: hole.area,
+                perimeter: hole.perimeter,
+                gain: self.gain,
+            }),
+            None => Box::new(Weir::new(
+                outflow.cells.iter().map(|c| c.saddle).collect(),
+                self.gain,
+                between_basins,
+            )),
+        }
+    }
+
     fn add_link(
         &mut self,
         t: &mut Topology,
@@ -1872,19 +1958,7 @@ impl TopologyBuilder {
             Some(Store::Ocean(o)) => outflow.cells.iter().any(|c| c.saddle < o.level),
             _ => false,
         };
-        let law: Box<dyn crate::water::network::Link> = match outflow.hole {
-            Some(hole) => Box::new(Orifice {
-                lip: hole.lip,
-                area: hole.area,
-                perimeter: hole.perimeter,
-                gain: self.gain,
-            }),
-            None => Box::new(Weir::new(
-                outflow.cells.iter().map(|c| c.saddle).collect(),
-                self.gain,
-                down_is_basin,
-            )),
-        };
+        let law = self.outflow_law(outflow, down_is_basin);
         let volume = t.network.store(up).map_or(0.0, Store::volume);
         let down_volume = t.network.store(down).map_or(0.0, Store::volume);
         let open = match (
@@ -1932,13 +2006,15 @@ impl TopologyBuilder {
 
     /// Whether anything flows into a store, or is on its way: a channel
     /// ending in it feeds it until the channel retires, however far its
-    /// front has still to run.
+    /// front has still to run and however little it now carries.
     fn fed(&self, t: &Topology, id: StoreId) -> bool {
         t.network.links().any(|(_, l)| {
+            if l.down == id && t.network.store(l.up).and_then(Store::as_reach).is_some() {
+                return true;
+            }
             if !l.open || (l.down != id && l.up != id) {
                 return false;
             }
-            let coming = l.down == id && t.network.store(l.up).and_then(Store::as_reach).is_some();
             let volume = |s: StoreId| t.network.store(s).map_or(0.0, Store::volume);
             let q = match (
                 t.network.view(l.up, volume(l.up), l.up_port),
@@ -1948,7 +2024,7 @@ impl TopologyBuilder {
                 _ => 0.0,
             };
             // Into it downstream, or back up a reversible link.
-            coming || (l.down == id && q > 0.0) || (l.up == id && q < 0.0)
+            (l.down == id && q > 0.0) || (l.up == id && q < 0.0)
         })
     }
 

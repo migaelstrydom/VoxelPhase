@@ -38,9 +38,10 @@ pub struct CrossSection {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Hydraulics {
     /// Height of the surface over the bed on the centreline, which is where
-    /// a reach's surface is drawn from and sampled at. Measured from the
-    /// section's lowest floor instead, a section reaching across a shore
-    /// into a lake would read the lake's depth.
+    /// a reach's surface is drawn from and sampled at; zero where the
+    /// centreline stands on a bank above it. Measured from the section's
+    /// lowest floor instead, a section reaching across a shore into a lake
+    /// would read the lake's depth.
     pub depth: f32,
     /// Water surface height.
     pub level: f32,
@@ -86,7 +87,12 @@ impl CrossSection {
     /// Area, wetted perimeter and top width with the surface at `level`,
     /// counting only the wet run connected to the centre.
     pub fn geometry_at(&self, level: f32) -> (f32, f32, f32) {
-        let (lo, hi) = self.wet_run(level);
+        self.geometry_from(self.centre, level)
+    }
+
+    /// As [`Self::geometry_at`], for the wet run connected to sample `from`.
+    fn geometry_from(&self, from: usize, level: f32) -> (f32, f32, f32) {
+        let (lo, hi) = self.wet_run(from, level);
         let mut area = 0.0;
         let mut perimeter = 0.0;
         let mut width = 0.0;
@@ -114,14 +120,14 @@ impl CrossSection {
     }
 
     /// The span of samples, as `[lo, hi]`, wet at `level` and connected to
-    /// the centre.
-    fn wet_run(&self, level: f32) -> (usize, usize) {
+    /// sample `from`.
+    fn wet_run(&self, from: usize, level: f32) -> (usize, usize) {
         let wet = |i: usize| self.floors[i].is_some_and(|f| f < level);
-        let mut lo = self.centre;
+        let mut lo = from;
         while lo > 0 && wet(lo - 1) {
             lo -= 1;
         }
-        let mut hi = self.centre;
+        let mut hi = from;
         while hi + 1 < self.floors.len() && wet(hi + 1) {
             hi += 1;
         }
@@ -143,12 +149,63 @@ impl CrossSection {
 
     /// The flow of discharge `q` at bed slope `slope` by Manning's equation,
     /// or `None` if the section cannot hold it before spilling past the
-    /// sampled width.
+    /// sampled width. The water runs in the low ground the centre stands
+    /// in, found by stepping down from it, though the centre be on its bank.
     pub fn hydraulics(&self, q: f32, slope: f32) -> Option<Hydraulics> {
         let bed = self.floors[self.centre]?;
+        let (level, area, top_width) = self.solve(self.low_point(), q, slope)?;
+        Some(Hydraulics {
+            depth: (level - bed).max(0.0),
+            level,
+            area,
+            top_width,
+            velocity: if area > 0.0 { q / area } else { 0.0 },
+        })
+    }
+
+    /// Offset from the centre, m, positive to the left of travel, of the
+    /// middle of the water surface carrying `q`: where a channel's
+    /// centreline belongs. `None` where the section cannot hold it.
+    pub fn water_middle(&self, q: f32, slope: f32) -> Option<f32> {
+        let low = self.low_point();
+        let (level, _, _) = self.solve(low, q, slope)?;
+        let (lo, hi) = self.wet_run(low, level);
+        let wet = |i: usize| self.floors[i].is_some_and(|f| f < level);
+        let first = if wet(lo) { lo } else { lo + 1 };
+        let last = if wet(hi) { hi } else { hi - 1 };
+        Some(((first + last) as f32 * 0.5 - self.centre as f32) * self.spacing)
+    }
+
+    /// The sample reached by stepping down from the centre while a
+    /// neighbour is lower.
+    fn low_point(&self) -> usize {
+        let floor = |i: usize| self.floors[i].unwrap_or(f32::INFINITY);
+        let mut at = self.centre;
+        loop {
+            let left = at.checked_sub(1).filter(|&i| floor(i) < floor(at));
+            let right = Some(at + 1).filter(|&i| i < self.floors.len() && floor(i) < floor(at));
+            at = match (left, right) {
+                (Some(l), Some(r)) => {
+                    if floor(l) <= floor(r) {
+                        l
+                    } else {
+                        r
+                    }
+                }
+                (Some(i), None) | (None, Some(i)) => i,
+                (None, None) => break,
+            };
+        }
+        at
+    }
+
+    /// The level, area and top width at which `q` runs over the wet run
+    /// connected to sample `from`, rising from its floor.
+    fn solve(&self, from: usize, q: f32, slope: f32) -> Option<(f32, f32, f32)> {
+        let bed = self.floors[from]?;
         let slope = slope.max(MIN_SLOPE);
         let conveyance = |level: f32| {
-            let (area, perimeter, _) = self.geometry_at(level);
+            let (area, perimeter, _) = self.geometry_from(from, level);
             if area <= 0.0 || perimeter <= 0.0 {
                 return 0.0;
             }
@@ -173,14 +230,8 @@ impl CrossSection {
             }
         }
         let level = hi;
-        let (area, _, top_width) = self.geometry_at(level);
-        Some(Hydraulics {
-            depth: level - bed,
-            level,
-            area,
-            top_width,
-            velocity: if area > 0.0 { q / area } else { 0.0 },
-        })
+        let (area, _, top_width) = self.geometry_from(from, level);
+        Some((level, area, top_width))
     }
 }
 
@@ -341,7 +392,7 @@ impl RatingCurve {
 
 /// The span in the column under (x, z) whose band holds `near`, and its
 /// floor.
-fn floor_near(graph: &SpanGraph, x: f32, z: f32, near: f32) -> Option<(SpanRef, f32)> {
+pub fn floor_near(graph: &SpanGraph, x: f32, z: f32, near: f32) -> Option<(SpanRef, f32)> {
     let column = Column::containing(x, z);
     let span = graph.span_at(column, near + 0.5)?;
     Some((span, graph.span(span).floor_c))
@@ -371,6 +422,35 @@ mod tests {
         let h = rectangle(4.0).hydraulics(2.0, 0.01).unwrap();
         assert!((h.depth - 0.37).abs() < 0.04, "depth {}", h.depth);
         assert!((h.velocity - 1.33).abs() < 0.15, "velocity {}", h.velocity);
+    }
+
+    #[test]
+    fn a_centre_on_the_foot_of_a_bank_finds_the_water_below_it() {
+        // The 4 m bed, and on one side a bank rising 0.1 m a sample before
+        // its wall; the section's centre is two samples up it, 0.2 m above
+        // the bed.
+        let bed = rectangle(4.0);
+        let mut floors = bed.floors.clone();
+        let wall = bed.floors.iter().position(|f| *f == Some(0.0)).unwrap();
+        let bank: Vec<Option<f32>> = (1..=8).rev().map(|i| Some(0.1 * i as f32)).collect();
+        floors.splice(wall..wall, bank);
+        let section = CrossSection {
+            centre: wall + 6,
+            floors,
+            spacing: SAMPLE_SPACING,
+        };
+        assert_eq!(section.floors[section.centre], Some(0.2));
+        // The water runs in the bed as before, spreading a little up the bank,
+        // and its depth over the centre is what the level leaves above it.
+        let h = section.hydraulics(2.0, 0.01).unwrap();
+        let open = bed.hydraulics(2.0, 0.01).unwrap();
+        assert!(h.level < open.level && h.level > open.level - 0.05, "{h:?}");
+        assert!((h.depth - (h.level - 0.2)).abs() < 1e-6, "{h:?}");
+        assert!((h.velocity - open.velocity).abs() < 0.2, "{h:?}");
+        // The middle of its surface lies out over the bed, away from the
+        // bank: halfway across the 4 m bed and the bank's wet foot.
+        let middle = section.water_middle(2.0, 0.01).unwrap();
+        assert!((1.8..=2.6).contains(&middle), "{middle}");
     }
 
     #[test]

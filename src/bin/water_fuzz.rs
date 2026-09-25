@@ -11,12 +11,16 @@
 //! - no basin lost most of its water in one frame without the ledger saying
 //!   where it went.
 //!
+//! Then it leaves the water alone for a while and checks it stops re-laying
+//! its stores, links and regions.
+//!
 //! ```text
 //! cargo run --release --bin water_fuzz -- levels/test_arena.level.ron --seeds 20 --blasts 12
 //! # Every store, link and topology edit, frame by frame, through one blast.
 //! cargo run --release --bin water_fuzz -- levels/test_arena.level.ron --trace 17:3
 //! ```
 
+use std::collections::BTreeMap;
 use std::panic::{self, AssertUnwindSafe};
 use std::path::PathBuf;
 
@@ -26,11 +30,12 @@ use rand::{Rng, SeedableRng};
 
 use voxel_phase::level::load_level;
 use voxel_phase::level_check::build_terrain;
-use voxel_phase::rendering::water::WaterScene;
+use voxel_phase::rendering::water::{WaterScene, DRAWN_DEPTH};
 use voxel_phase::terrain::{BlastConfig, TerrainWorld};
 use voxel_phase::water::geometry::{Column, Span, COLUMN_SIZE};
 use voxel_phase::water::ids::StoreId;
 use voxel_phase::water::network::Store;
+use voxel_phase::water::topology::TopologyEdit;
 use voxel_phase::water::{Disturbance, WaterWorld};
 
 /// Frames run after each blast, at 60 Hz.
@@ -43,6 +48,15 @@ const BLAST_DT: f32 = 0.1;
 /// more than [`SUDDEN_LOSS_FLOOR`] m³ at stake, is reported.
 const SUDDEN_LOSS: f64 = 0.5;
 const SUDDEN_LOSS_FLOOR: f64 = 1.0;
+
+/// How long the water is left alone after the last blast, s, and how much
+/// of the end of that it must spend re-laying almost nothing.
+const REST: f32 = 180.0;
+const REST_QUIET: f32 = 60.0;
+
+/// Store, link and region edits allowed in the quiet end of the rest: a
+/// lake still filling may reach a bank or two.
+const REST_EDITS: usize = 4;
 
 struct Options {
     level: PathBuf,
@@ -99,11 +113,7 @@ fn run_seed(options: &Options, seed: u64) -> Result<Vec<String>, String> {
     let level = load_level(&options.level).map_err(|e| e.to_string())?;
     let mut terrain = build_terrain(&level);
     let config = level.water.as_ref().ok_or("the level has no water")?;
-    let (mut water, _) = if options.trace.is_some() {
-        WaterWorld::recording(config, &terrain)
-    } else {
-        WaterWorld::from_config(config, &terrain)
-    };
+    let (mut water, _) = WaterWorld::recording(config, &terrain);
     let mut rng = StdRng::seed_from_u64(seed);
     let mut findings = Vec::new();
     let mut violations = water.geometry().stats().invariant_violations;
@@ -224,7 +234,46 @@ fn run_seed(options: &Options, seed: u64) -> Result<Vec<String>, String> {
             }
         }
     }
+    findings.extend(churn(&mut water));
     Ok(findings)
+}
+
+/// Leave the water alone for [`REST`] and report any store, link or region
+/// it still re-lays in the last [`REST_QUIET`] of it. A lake still filling
+/// may reach a new bank now and then; the same edits over and over are
+/// churn.
+fn churn(water: &mut WaterWorld) -> Vec<String> {
+    let dt = 1.0 / 60.0;
+    let frames = (REST / dt) as usize;
+    let quiet = ((REST - REST_QUIET) / dt) as usize;
+    let mut from = water.topology_log().len();
+    for frame in 0..frames {
+        if frame == quiet {
+            from = water.topology_log().len();
+        }
+        water.step(dt);
+    }
+    let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
+    for edit in &water.topology_log()[from..] {
+        let kind = match edit {
+            TopologyEdit::AddStore(_) => "AddStore",
+            TopologyEdit::RemoveStore { .. } => "RemoveStore",
+            TopologyEdit::AddLink(_) => "AddLink",
+            TopologyEdit::RemoveLink(_) => "RemoveLink",
+            TopologyEdit::Reregion { .. } => "Reregion",
+            TopologyEdit::CutReach { .. } => "CutReach",
+            TopologyEdit::ExtendReach { .. } => "ExtendReach",
+            _ => continue,
+        };
+        *counts.entry(kind).or_default() += 1;
+    }
+    if counts.values().sum::<usize>() <= REST_EDITS {
+        return Vec::new();
+    }
+    let first: Vec<&TopologyEdit> = water.topology_log()[from..].iter().take(12).collect();
+    vec![format!(
+        "in the last {REST_QUIET:.0} s of a {REST:.0} s rest, still re-laying: {counts:?}; first {first:?}"
+    )]
 }
 
 /// How far above and below a blast the column profiles reach, m.
@@ -344,12 +393,13 @@ fn basin_volumes(water: &WaterWorld) -> Vec<(StoreId, f64)> {
     water.basins().map(|(id, b)| (id, b.volume)).collect()
 }
 
-/// Basins that hold water but would draw nothing.
+/// Basins that hold water deeper than [`DRAWN_DEPTH`] but would draw
+/// nothing.
 fn undrawn(water: &WaterWorld) -> Vec<String> {
     let mesh = water.build_mesh();
     water
         .basins()
-        .filter(|(_, b)| b.volume > 0.01)
+        .filter(|(_, b)| b.volume > 0.01 && b.level() - b.deepest() > DRAWN_DEPTH)
         .filter_map(|(id, b)| {
             let drawn = mesh.draws.iter().any(|d| d.body == id && d.index_count > 0);
             let level = WaterScene::level(water, id);

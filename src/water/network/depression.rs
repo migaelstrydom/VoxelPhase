@@ -555,30 +555,85 @@ pub fn pit_bottom_within(
     mut span: SpanRef,
     within: impl Fn(SpanRef) -> bool,
 ) -> SpanRef {
-    while let Some(next) = downhill_within(graph, span, &within) {
-        span = next;
+    while let Some(&last) = downhill_within(graph, span, &within).last() {
+        span = last;
     }
     span
 }
 
-/// The lowest neighbour water on `span` runs down to, over the real floor
-/// rather than the filled surface: the way down a pit's dry side. `None` at
-/// the bottom.
-pub fn downhill(graph: &SpanGraph, span: SpanRef) -> Option<SpanRef> {
+/// The way water on `span` runs down, over the real floor rather than the
+/// filled surface: the way down a pit's dry side. Its next step, to the
+/// lowest neighbour below it; or, on a flat, every step across the flat to
+/// the nearest edge where the floor drops clearly below it, and that first
+/// cell below. Each call ends lower than it began, so a walk down always
+/// ends. Empty at the bottom.
+pub fn downhill(graph: &SpanGraph, span: SpanRef) -> Vec<SpanRef> {
     downhill_within(graph, span, &|_| true)
 }
+
+/// Floors within this of where a walk met them are one flat, m.
+const FLAT_TOLERANCE: f32 = 1e-3;
+
+/// The most cells of a flat searched for its way down: one larger is the
+/// bottom of its pit.
+const MAX_FLAT: usize = 4096;
 
 fn downhill_within(
     graph: &SpanGraph,
     span: SpanRef,
     within: &dyn Fn(SpanRef) -> bool,
-) -> Option<SpanRef> {
+) -> Vec<SpanRef> {
     let here = graph.span(span).floor_min;
+    if let Some(lower) = lower_neighbour(graph, span, here, within) {
+        return vec![lower];
+    }
+    // A flat: search it outwards for the nearest cell with a neighbour
+    // clearly below it.
+    let on_flat = |n: &crate::water::geometry::Neighbour| {
+        (graph.span(n.span).floor_min - here).abs() <= FLAT_TOLERANCE
+            && n.saddle <= here + FLAT_TOLERANCE
+            && within(n.span)
+    };
+    let mut came_from: FxHashMap<SpanRef, SpanRef> = FxHashMap::default();
+    let mut queue: VecDeque<SpanRef> = VecDeque::from([span]);
+    while let Some(cell) = queue.pop_front() {
+        if let Some(below) = lower_neighbour(graph, cell, here - FLAT_TOLERANCE, within) {
+            let mut path = vec![below];
+            let mut at = cell;
+            while at != span {
+                path.push(at);
+                at = came_from[&at];
+            }
+            path.reverse();
+            return path;
+        }
+        if came_from.len() > MAX_FLAT {
+            break;
+        }
+        for n in graph.orthogonal_neighbours(cell) {
+            if n.span != span && on_flat(&n) && !came_from.contains_key(&n.span) {
+                came_from.insert(n.span, cell);
+                queue.push_back(n.span);
+            }
+        }
+    }
+    Vec::new()
+}
+
+/// The lowest neighbour of `span` below `below` that water can reach over
+/// the saddle between them.
+fn lower_neighbour(
+    graph: &SpanGraph,
+    span: SpanRef,
+    below: f32,
+    within: &dyn Fn(SpanRef) -> bool,
+) -> Option<SpanRef> {
+    let floor = graph.span(span).floor_min;
     graph
         .orthogonal_neighbours(span)
         .into_iter()
         .filter(|n| {
-            graph.span(n.span).floor_min < here && n.saddle <= here + 1e-6 && within(n.span)
+            graph.span(n.span).floor_min < below && n.saddle <= floor + 1e-6 && within(n.span)
         })
         .min_by(|a, b| {
             graph
@@ -615,6 +670,59 @@ mod tests {
             .collect();
         graph.replace_chunk(coord, SpanChunk::from_columns(&columns, 1));
         graph
+    }
+
+    #[test]
+    fn the_way_down_a_pit_s_side_crosses_a_flat_on_it() {
+        // Down a channel along i, walled at 5 m: falling 0.25 m a column to
+        // a flat at 2 m from i = 5 to i = 9, then falling again to i = 14,
+        // the pit's bottom.
+        let g = graph(|i, k| {
+            if !(1..=14).contains(&i) {
+                return None;
+            }
+            if !(5..=9).contains(&k) {
+                return Some(5.0);
+            }
+            Some(match i {
+                ..=4 => 2.0 + 0.25 * (5 - i) as f32,
+                5..=9 => 2.0,
+                _ => 2.0 - 0.25 * (i - 9) as f32,
+            })
+        });
+        let at = |i: i32| g.span_at(Column::new(i, 7), 10.0).unwrap();
+        // From the middle of the flat, the first step is towards its lower
+        // edge, not a stop.
+        let path = downhill(&g, at(7));
+        let columns: Vec<i32> = path.iter().map(|s| s.column.i).collect();
+        assert_eq!(columns, [8, 9, 10], "{path:?}");
+        let bottom = pit_bottom(&g, at(2));
+        assert_eq!(bottom.column.i, 14, "{bottom:?}");
+        // At the bottom there is nowhere lower to go.
+        assert!(downhill(&g, at(14)).is_empty());
+    }
+
+    #[test]
+    fn a_flat_within_its_tolerance_is_crossed_without_turning_back() {
+        // The same channel, its flat rippled: every other cell half a
+        // millimetre higher. Stepping onto a higher cell of it and back down
+        // again would never end, and stopping in a dip of the ripple would
+        // take it for the bottom.
+        let g = graph(|i, k| {
+            if !(1..=14).contains(&i) {
+                return None;
+            }
+            if !(5..=9).contains(&k) {
+                return Some(5.0);
+            }
+            Some(match i {
+                ..=4 => 2.0 + 0.25 * (5 - i) as f32,
+                5..=9 => 2.0 + 0.0005 * ((i + k) % 2) as f32,
+                _ => 2.0 - 0.25 * (i - 9) as f32,
+            })
+        });
+        let bottom = pit_bottom(&g, g.span_at(Column::new(2, 7), 10.0).unwrap());
+        assert_eq!(bottom.column.i, 14, "{bottom:?}");
     }
 
     /// Two 1 m-deep pits on a plateau at 2 m, joined by a ridge at 1.5 m,
