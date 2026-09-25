@@ -453,24 +453,58 @@ fn the_water_park_opens_at_rest_with_its_river_running() {
         .filter(|r| r.inflow > 2.4)
         .count();
     assert!(river >= 7, "{river} reaches carry the river");
-    // It ends over the cliff top at the catch lake's shore, 0.9 m above the
-    // water, and falls from its own surface into the lake.
+    // It leaves the head lake at the lake's level...
+    let head = query
+        .sample(Point3::new(64.0, 6.0, 64.0))
+        .expect("the head lake")
+        .body;
+    let first = water
+        .network()
+        .links()
+        .find(|(_, l)| {
+            l.up == head
+                && water
+                    .network()
+                    .store(l.down)
+                    .is_some_and(|s| s.as_reach().is_some())
+        })
+        .map(|(_, l)| l.down)
+        .expect("the river leaves the head lake");
+    let top = water.network().store(first).unwrap().as_reach().unwrap();
+    let start = top.surface_at(0.0, water.reach_ends(first));
+    let level = water.level(head).unwrap();
+    assert!(
+        (start - level).abs() < 0.01,
+        "starts at {start}, the lake is at {level}"
+    );
+    // ...and ends over the cliff top at the catch lake's shore, 0.9 m above
+    // the water, falling from its own surface to the lake's.
     let lake = query
         .sample(Point3::new(11.0, 2.0, 19.0))
         .expect("the catch lake")
         .body;
-    let (reach, fall) = water
+    let (id, link, reach) = water
         .network()
         .links()
-        .filter(|(_, l)| l.down == lake)
-        .filter_map(|(_, l)| Some((water.network().store(l.up)?.as_reach()?, l.fall.as_ref()?)))
-        .next()
+        .filter(|(_, l)| l.down == lake && l.fall.is_some())
+        .find_map(|(id, l)| Some((id, l, water.network().store(l.up)?.as_reach()?)))
         .expect("the river falls into the catch lake");
-    let end = reach.centreline.points.last().unwrap().y + reach.running().depth;
-    let launch = fall.points[0].y;
+    let heights = water.link_interface(id).unwrap();
+    let end = reach.surface_at(reach.length, water.reach_ends(link.up));
     assert!(
-        (launch - end).abs() < 0.15,
-        "falls from {launch}, runs at {end}"
+        (heights.upper - end).abs() < 0.01,
+        "falls from {}, ends at {end}",
+        heights.upper
+    );
+    assert!(
+        heights.free() && heights.upper - heights.lower > 1.0,
+        "{heights:?}"
+    );
+    let surface = water.level(lake).unwrap();
+    assert!(
+        (heights.lower - surface).abs() < 1e-4,
+        "lands at {}, the lake is at {surface}",
+        heights.lower
     );
     assert!(water.balance().is_balanced());
 }

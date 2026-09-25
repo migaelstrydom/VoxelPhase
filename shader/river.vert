@@ -3,7 +3,9 @@
 #extension GL_ARB_shading_language_420pack : enable
 
 // A reach's surface: cross-sections along its centreline, each vertex at the
-// section's bed plus the design depth, scaled to the reach's discharge now.
+// section's bed plus the design depth, scaled to the reach's discharge now,
+// and each end eased to meet the store at its port. Mirrors
+// `Reach::surface_at` (src/water/network/reach.rs).
 layout(location = 0) in vec2 inXz;
 layout(location = 1) in vec3 inSection;  // (bed, design depth, distance down the reach)
 layout(location = 2) in vec2 inFlow;     // velocity at the design discharge
@@ -12,7 +14,7 @@ layout(push_constant) uniform PushConstants {
     mat4 view;
     mat4 proj;
     vec4 body;   // (depth scale, tail, front, clock)
-    vec4 tile;   // (speed scale, unused, unused, unused)
+    vec4 tile;   // (speed scale, upstream ease, downstream ease, length)
 } pc;
 
 layout(location = 0) out vec3 fragNormal;
@@ -24,8 +26,19 @@ layout(location = 5) out float fragAlong;
 layout(location = 6) flat out vec2 fragWetRange;
 layout(location = 7) out vec4 fragSwell;
 
+// An end eases over 4 depths of water, never under 2 m, never over half
+// the reach.
+const float EASE_DEPTHS = 4.0;
+const float MIN_EASE = 2.0;
+
 void main() {
-    float surface = inSection.x + inSection.y * pc.body.x;
+    float depth = inSection.y * pc.body.x;
+    float along = inSection.z;
+    float length = pc.tile.w;
+    float ease = min(max(EASE_DEPTHS * depth, MIN_EASE), 0.5 * length);
+    float upstream = 1.0 - smoothstep(0.0, ease, along);
+    float downstream = smoothstep(length - ease, length, along);
+    float surface = inSection.x + depth + upstream * pc.tile.y + downstream * pc.tile.z;
     vec3 position = vec3(inXz.x, surface, inXz.y);
     gl_Position = pc.proj * pc.view * vec4(position, 1.0);
     fragNormal = vec3(0.0, 1.0, 0.0);

@@ -85,9 +85,9 @@ impl<'a> WaterQuery<'a> {
         })
     }
 
-    /// Water in a reach at a point, if the reach is wetted there: the level
-    /// its current discharge runs at over the bed of the nearest section,
-    /// moving down the channel at the reach's velocity.
+    /// Water in a reach at a point, if the reach is wetted there: its
+    /// surface there, eased at its ends to meet its ports (§7.9), moving
+    /// down the channel at the reach's velocity.
     fn reach_sample(&self, id: WaterBodyId, point: Point3<f32>, floor: f32) -> Option<WaterSample> {
         let reach = self.world.network().store(id)?.as_reach()?;
         let distance = reach.distance_at(point.x, point.z);
@@ -95,7 +95,7 @@ impl<'a> WaterQuery<'a> {
             return None;
         }
         let running = reach.running();
-        let surface = reach.bed_at(distance) + running.depth;
+        let surface = reach.surface_at(distance, self.world.reach_ends(id));
         if surface <= floor {
             return None;
         }

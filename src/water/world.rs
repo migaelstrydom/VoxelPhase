@@ -27,7 +27,9 @@ use super::geometry::{
     CHUNK_COLUMNS, COLUMNS_PER_CHUNK,
 };
 use super::ids::{LinkId, StoreId, WaterBodyId};
-use super::network::{interface, Basin, FallPath, Interface, LossLaw, Network, Ocean, Store};
+use super::network::{
+    interface, reach_ends, Basin, FallPath, Interface, LossLaw, Network, Ocean, ReachEnds, Store,
+};
 use super::query::WaterQuery;
 use super::solver::{Balance, HydrologySolver, VolumeLedger};
 use super::surface::{
@@ -89,6 +91,9 @@ pub struct WaterWorld {
     swells: Vec<Swell>,
     /// Each basin's currents, by store slot, refreshed with the levels.
     currents: Vec<Vec<CurrentTerm>>,
+    /// How far each reach's ends are eased to its ports, by store slot,
+    /// refreshed with the levels (§7.9).
+    ends: Vec<ReachEnds>,
     ripples: RippleTiles,
     /// Seconds simulated: the swell's clock, shared with the renderer.
     clock: f64,
@@ -156,6 +161,7 @@ impl WaterWorld {
             levels: Vec::new(),
             swells: Vec::new(),
             currents: Vec::new(),
+            ends: Vec::new(),
             ripples: RippleTiles::new(RippleConfig::default()),
             clock: 0.0,
             masked_for: Vec::new(),
@@ -330,6 +336,17 @@ impl WaterWorld {
             })
             .collect();
         self.refresh_currents();
+        let network = &self.network;
+        self.ends = reach_ends(network, |link| {
+            let volume = |s: StoreId| network.store(s).map_or(0.0, Store::volume);
+            match (
+                network.view(link.up, volume(link.up), link.up_port),
+                network.view(link.down, volume(link.down), link.down_port),
+            ) {
+                (Some(up), Some(down)) if link.open => link.law.discharge(up, down),
+                _ => 0.0,
+            }
+        });
         self.swells = (0..self.network.store_slots())
             .map(
                 |i| match (self.network.store(StoreId(i as u32)), self.levels[i]) {
@@ -534,6 +551,11 @@ impl WaterWorld {
     /// What a link carries now, either way, m³/s.
     pub fn link_discharge(&self, id: LinkId) -> Option<f64> {
         self.link_flow(id).map(f64::abs)
+    }
+
+    /// How far a reach's ends are eased to meet its ports now (§7.9).
+    pub fn reach_ends(&self, id: StoreId) -> ReachEnds {
+        self.ends.get(id.0 as usize).copied().unwrap_or_default()
     }
 
     /// The heights where a link's stores meet now (§7.9).

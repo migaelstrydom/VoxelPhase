@@ -195,7 +195,7 @@ impl WaterScene for WaterWorld {
         self.network()
             .store(reach)
             .and_then(|s| s.as_reach())
-            .map(RiverState::of)
+            .map(|r| RiverState::of(r, self.reach_ends(reach)))
     }
 
     fn fall_key(&self) -> FallKey {

@@ -14,14 +14,16 @@
 //! wide, cross one another; so does any section on the inside of a bend
 //! tighter than its half width.
 //!
-//! Each draw pushes the reach's depth scale `(Q/Q_design)^0.6` and its wetted
-//! range `[x_t, x_f]`; the shader discards outside the range, and the depth
-//! test trims the width at lower flow, where the banks stand above the water.
+//! Each draw pushes the reach's depth scale `(Q/Q_design)^0.6`, its wetted
+//! range `[x_t, x_f]`, and how far its ends ease to meet its ports
+//! (`Reach::surface_at`, §7.9); the shader discards outside the range, and
+//! the depth test trims the width at lower flow, where the banks stand above
+//! the water.
 
 use nalgebra::{Point3, Vector2};
 
 use crate::water::ids::StoreId;
-use crate::water::network::{Centreline, Reach};
+use crate::water::network::{Centreline, Reach, ReachEnds};
 
 use super::vertex::RiverVertex;
 
@@ -71,10 +73,14 @@ pub struct RiverState {
     /// The wetted range, m from the top of the reach.
     pub tail: f32,
     pub front: f32,
+    /// How far its ends are eased to meet its ports (§7.9).
+    pub ends: ReachEnds,
+    /// Its length, m, which its ends ease back from.
+    pub length: f32,
 }
 
 impl RiverState {
-    pub fn of(reach: &Reach) -> Self {
+    pub fn of(reach: &Reach, ends: ReachEnds) -> Self {
         let design = reach.rating.at(reach.rating.design());
         let running = reach.running();
         Self {
@@ -90,6 +96,8 @@ impl RiverState {
             },
             tail: reach.tail,
             front: reach.front,
+            ends,
+            length: reach.length,
         }
     }
 }

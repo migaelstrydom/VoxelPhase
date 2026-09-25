@@ -378,9 +378,9 @@ impl WaterRenderer {
                             state.front,
                             clock,
                             state.speed_scale,
-                            0.0,
-                            0.0,
-                            0.0,
+                            state.ends.upstream,
+                            state.ends.downstream,
+                            state.length,
                         ];
                         self.device.device.cmd_push_constants(
                             cb,

@@ -19,8 +19,17 @@ use crate::water::geometry::{SpanRef, COLUMN_SIZE};
 
 use super::centreline::Centreline;
 use super::link::FallPath;
-use super::lip::Lip;
+use super::lip::{critical_depth, Lip};
 use super::rating::{RatingCurve, RatingPoint};
+
+/// Depth at a free brink as a share of the critical depth.
+const BRINK_SHARE: f32 = 0.715;
+
+/// An end eases over this many depths of the water in the reach...
+const EASE_DEPTHS: f32 = 4.0;
+
+/// ...and never less than this, m.
+const MIN_EASE: f32 = 2.0;
 
 /// Where a reach is in its life.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -258,15 +267,56 @@ impl Reach {
         }
     }
 
-    /// Bed height nearest a distance along the reach.
+    /// Bed height a distance along the reach, between its points.
     pub fn bed_at(&self, distance: f32) -> f32 {
-        let i = self
-            .centreline
-            .distance
-            .partition_point(|d| *d < distance)
-            .min(self.centreline.points.len().saturating_sub(1));
-        self.centreline.points.get(i).map_or(0.0, |p| p.y)
+        self.centreline.point_at(distance).y
     }
+
+    /// The surface its rating gives a distance along it, before its ends
+    /// meet the stores at its ports.
+    pub fn normal_surface(&self, distance: f32) -> f32 {
+        self.bed_at(distance) + self.running().depth
+    }
+
+    /// Depth at a free brink, where the water leaves its end over a drop: a
+    /// little under the critical depth of what it carries now.
+    pub fn brink_depth(&self) -> f32 {
+        let running = self.running();
+        BRINK_SHARE * critical_depth(running.q, running.top_width)
+    }
+
+    /// Length over which each end eases to the store at its port, m: never
+    /// more than half the reach, so the two ends do not overlap.
+    pub fn ease_length(&self) -> f32 {
+        (EASE_DEPTHS * self.running().depth)
+            .max(MIN_EASE)
+            .min(0.5 * self.length)
+    }
+
+    /// The surface a distance along the reach, its ends eased by `ends` to
+    /// the stores at its ports (§7.9). Mirrored in `shader/river.vert`.
+    pub fn surface_at(&self, distance: f32, ends: ReachEnds) -> f32 {
+        let ease = self.ease_length();
+        let upstream = 1.0 - smoothstep(0.0, ease, distance);
+        let downstream = smoothstep(self.length - ease, self.length, distance);
+        self.normal_surface(distance) + upstream * ends.upstream + downstream * ends.downstream
+    }
+}
+
+/// How far a reach's surface is moved at each end to meet the stores at its
+/// ports, over its normal surface there, m (§7.9).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct ReachEnds {
+    pub upstream: f32,
+    pub downstream: f32,
+}
+
+fn smoothstep(from: f32, to: f32, x: f32) -> f32 {
+    if to <= from {
+        return if x >= to { 1.0 } else { 0.0 };
+    }
+    let t = ((x - from) / (to - from)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
 }
 
 /// Distance along a centreline of the point nearest `p` in plan.
@@ -280,4 +330,56 @@ fn nearest_distance(line: &Centreline, p: Point3<f32>) -> f32 {
             da.total_cmp(&db)
         })
         .map_or(0.0, |(_, d)| *d)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A dry reach 20 m long on a bed falling from 5 m to 4 m.
+    fn straight() -> Reach {
+        let points: Vec<Point3<f32>> = (0..=40)
+            .map(|i| Point3::new(i as f32 * 0.5, 5.0 - i as f32 * 0.025, 0.0))
+            .collect();
+        Reach::new(Vec::new(), &points, RatingCurve::default(), Vec::new())
+    }
+
+    #[test]
+    fn a_surface_eases_to_its_ports_at_its_ends_only() {
+        let reach = straight();
+        let ends = ReachEnds {
+            upstream: 0.5,
+            downstream: -0.3,
+        };
+        let at = |d: f32| reach.surface_at(d, ends) - reach.normal_surface(d);
+        assert!((at(0.0) - 0.5).abs() < 1e-5);
+        assert!((at(reach.length) + 0.3).abs() < 1e-5);
+        assert_eq!(at(reach.length * 0.5), 0.0);
+        // Smoothly: no step between neighbouring points.
+        let steps = (0..400).map(|i| {
+            let d = i as f32 * reach.length / 400.0;
+            (reach.surface_at(d + reach.length / 400.0, ends) - reach.surface_at(d, ends)).abs()
+        });
+        assert!(steps.fold(0.0f32, f32::max) < 0.03);
+    }
+
+    #[test]
+    fn the_ends_of_a_short_reach_do_not_overlap() {
+        let points = [Point3::new(0.0, 1.0, 0.0), Point3::new(1.5, 1.0, 0.0)];
+        let reach = Reach::new(Vec::new(), &points, RatingCurve::default(), Vec::new());
+        assert!(reach.ease_length() <= 0.5 * reach.length);
+    }
+
+    /// `shader/river.vert` eases the ends the same way.
+    #[test]
+    fn the_shader_eases_as_surface_at_does() {
+        let glsl =
+            std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/shader/river.vert"))
+                .expect("shader/river.vert");
+        assert!(glsl.contains(&format!("EASE_DEPTHS = {EASE_DEPTHS:.1}")));
+        assert!(glsl.contains(&format!("MIN_EASE = {MIN_EASE:.1}")));
+        assert!(glsl.contains("0.5 * length"));
+        assert!(glsl.contains("1.0 - smoothstep(0.0, ease, along)"));
+        assert!(glsl.contains("smoothstep(length - ease, length, along)"));
+    }
 }

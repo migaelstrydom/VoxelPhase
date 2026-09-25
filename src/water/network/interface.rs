@@ -11,10 +11,22 @@
 //! A pure function of the network, read where it is needed: by the fall
 //! renderer, and by a reach's surface where it meets a port. Nothing here is
 //! topology; a height that moves re-lays nothing.
+//!
+//! A reach's end is drawn at the height it leaves at: the water it enters,
+//! or, where that stands lower, the brink over its lip. The reach below, or
+//! the one fed without a sheet between, starts at that same height, so two
+//! surfaces meet wherever no sheet joins them.
+
+use crate::water::ids::StoreId;
 
 use super::link::FallPath;
 use super::net::{LinkEntry, Network};
+use super::reach::ReachEnds;
 use super::store::{Port, Store};
+
+/// An inflow entering a reach within this of its top meets its upstream
+/// end, m; one further down joins it mid-reach.
+const AT_THE_TOP: f32 = 1.0;
 
 /// A step shorter than this is not drawn, m.
 pub const STEP_EPSILON: f32 = 0.01;
@@ -56,11 +68,6 @@ pub fn interface(network: &Network, link: &LinkEntry, q: f64) -> Option<Interfac
         (link.up, link.up_port, link.down, link.down_port)
     };
     let (lip, fall) = link.side(q);
-    let upper = match network.store(leaving)? {
-        Store::Reservoir => lip.height(),
-        Store::Sink => return None,
-        store => store.level_at(store.volume(), leaving_port),
-    };
     let landing = fall.and_then(FallPath::landing);
     let entered = match network.store(entering)? {
         Store::Reach(reach) => {
@@ -74,13 +81,55 @@ pub fn interface(network: &Network, link: &LinkEntry, q: f64) -> Option<Interfac
         Store::Sink => f32::NEG_INFINITY,
         store => store.level_at(store.volume(), entering_port),
     };
-    let ground = landing.map_or(f32::NEG_INFINITY, |p| p.y);
+    let lower = entered.max(landing.map_or(f32::NEG_INFINITY, |p| p.y));
+    let upper = match network.store(leaving)? {
+        Store::Reservoir => lip.height(),
+        Store::Sink => return None,
+        Store::Reach(reach) => lower.max(lip.height() + reach.brink_depth()),
+        store => store.level_at(store.volume(), leaving_port),
+    };
     Some(Interface {
         upper,
         lip: lip.height(),
-        lower: entered.max(ground),
+        lower,
         back,
     })
+}
+
+/// How far every reach's ends are eased to meet the stores at its ports, by
+/// store slot (§7.9). Its downstream end goes to the height its water leaves
+/// at. Its upstream end goes to the height the water feeding it leaves at,
+/// unless a sheet falls between the two.
+pub fn reach_ends(network: &Network, flows: impl Fn(&LinkEntry) -> f64) -> Vec<ReachEnds> {
+    let mut ends = vec![ReachEnds::default(); network.store_slots()];
+    for (_, link) in network.links() {
+        let q = flows(link);
+        let Some(heights) = interface(network, link, q) else {
+            continue;
+        };
+        let (leaving, entering) = if heights.back {
+            (link.down, link.up)
+        } else {
+            (link.up, link.down)
+        };
+        if let Some(reach) = as_reach(network, leaving) {
+            ends[leaving.0 as usize].downstream =
+                heights.upper - reach.normal_surface(reach.length);
+        }
+        let (lip, fall) = link.side(q);
+        let sheet = fall.is_some() && heights.step() > STEP_EPSILON;
+        if let Some(reach) = as_reach(network, entering).filter(|_| !sheet) {
+            let at = fall.and_then(FallPath::landing).unwrap_or(lip.at);
+            if reach.distance_at(at.x, at.z) <= AT_THE_TOP {
+                ends[entering.0 as usize].upstream = heights.upper - reach.normal_surface(0.0);
+            }
+        }
+    }
+    ends
+}
+
+fn as_reach(network: &Network, id: StoreId) -> Option<&super::reach::Reach> {
+    network.store(id).and_then(Store::as_reach)
 }
 
 #[cfg(test)]
