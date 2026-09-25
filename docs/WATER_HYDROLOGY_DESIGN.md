@@ -671,10 +671,9 @@ neither blocky nor √2 too wide.
 **A channel ends:**
 
 - at a real depression,
-- at the first span whose `floor_min` lies below the receiving basin's current level (the
-  rest of the channel is drowned, §8.2). If that water stands more than `FALL_THRESHOLD`
-  below the channel's last cell, the channel falls to it: a cliff-top column is the
-  basin's once the cliff's foot in its square is under water, though its middle is not,
+- at the first span whose `floor_min` lies below the level of the body that owns it (the
+  rest of the channel is drowned, §8.2). Its last link has a lip like any other (§7.9):
+  whether a sheet is drawn there follows from the heights, not from the walk,
 - at a fall step (§7.6),
 - where it joins an existing reach, forming a junction,
 - at the ocean or a sink.
@@ -721,15 +720,21 @@ stable. `S`, not `x_f`, `x_t` or `ℓ`, is what the ledger sees.
 
 ### 7.6 Falls and sources
 
-**Fall steps.** A step that drops more than `fall_threshold` (0.75 m), at a cliff lip or an
-island rim, is a fall step. `FallTracer` sweeps a parabola against terrain in short
-segments. It launches with the upstream reach's velocity, or a source's authored direction.
-The outbound link's `down` store becomes whichever store owns the span the arc hits, and
-the link keeps the arc as its `FallPath`.
+**Fall steps.** A step in a channel's bed that drops more than `fall_threshold` (0.75 m)
+within a metre, at a cliff lip or an island rim, is a fall step: the walk cuts the channel
+there, because water that cannot follow the bed is no longer a reach. That is the
+threshold's only job. It does not decide where arcs are or whether a sheet is drawn:
+every link has a lip, an arc where its jet separates, and heights read each frame (§7.9).
+
+`FallTracer` sweeps a parabola against terrain in short segments. It launches with the
+upstream reach's velocity, or a source's authored direction. It lands on **ground**, not
+on water, so one arc serves every level the water below may stand at. The outbound link's
+`down` store is chosen by geometry alone (§7.9), and the link keeps the arc as its
+`FallPath`.
 
 For example, a 10 m drop at 1.4 m/s lands 2 m out after 1.4 s.
 
-A path is re-traced only when an edit touches its arc.
+A path is re-traced, in place, only when an edit touches its arc above the water it lands in (§7.9).
 
 - **`Spring`**: a `Reservoir` with a `FixedRate` link, launched along a `FallPath` from a
   point with a direction. It is anchored in space, so blasting the rock around it changes
@@ -814,6 +819,132 @@ v = Q / (π · r · depth) · r̂ · fade(r / R)
 - The term is stateless. `WaterQuery` adds it to any reach velocity, capped at the reach
   velocity at the crest.
 
+### 7.9 Interfaces: where stores meet
+
+Every link joins two stores, and where they meet the water surface has a height on each
+side. Getting that height step right (a fall where the water leaves the ground, surfaces
+that meet where it does not) is one rule for every link, not a case per link type or per
+way the topology was built.
+
+```text
+      upper ─────────┐                         a step: upper − max(lower, lip) > ε
+                     │╲  sheet, drawn from       the sheet is drawn from upper at
+      lip  ▓▓▓▓▓▓▓▓▓▓│ ╲ upper down to lower     the lip down to lower
+                ▓▓▓▓▓│  ╲
+                ▓▓▓▓▓│~~~~~ lower               free (lower < lip): the nappe is
+                ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓                  aerated, white as it falls
+
+      upper ──────╮                             submerged (lower ≥ lip): the sheet
+      lip ▓▓▓▓▓▓▓▓╰───── lower                  is a short, clear drop from upper
+                ▓▓▓▓▓▓▓▓▓▓▓▓▓                   to lower, gone once they meet
+```
+
+**Direction is the flow's, not the link's.** A reversible weir between two basins is laid
+once, `up → down` by whichever basin found it first; the sea pouring into a lowland runs a
+lowland → ocean weir backwards. Every rule below reads the two sides by the sign of `Q`:
+`upper` is the side water leaves, `lower` the side it enters. A reversible link has a lip
+on each side of its crest (the same crest cell, facing each way), and the reverse side's
+arc is traced the first time its flow reverses.
+
+**The lip.** The point on the floor where water leaves the upper store, and the horizontal
+direction it leaves in. It is fixed when the link is made; its position and direction are
+kept only so its arc can be traced and re-traced.
+
+| Link | Lip | Direction |
+|---|---|---|
+| `Weir` | The crest's lowest cell, at its saddle, on the column edge | Inside column centre to outside |
+| `Orifice` | The middle of the hole's cells, at the hole's lip | Straight down |
+| `ReachOutflow` | The end of the reach's last column, at its bed | The centreline's direction there |
+| `FixedRate` | The source's position | Its authored direction |
+
+```rust
+/// Where water leaves the upper store of a link.
+pub struct Lip {
+    /// On the floor where the water leaves.
+    pub at: Point3<f32>,
+    /// Unit horizontal direction it leaves in; zero for straight down.
+    pub direction: Vector2<f32>,
+}
+```
+
+`LinkEntry` holds `lip: Lip` (two for a reversible link) beside `fall: Option<FallPath>`.
+A reach's drawn surface runs to its outflow's lip, not to the middle of its last column.
+
+**An arc where the jet separates.** A link gets an arc when the ground within `FALL_RUN`
+past its lip lies more than the jet's thickness below the lip: the critical depth
+`d_c = (q²/g)^⅓` at its design discharge per metre of lip. Water thinner than the drop
+cannot follow the ground; water thicker than it runs down it as a steep reach. This is
+physical, has no tuning constant, and keeps sliver arcs off steep channels. A hole
+(straight down) and a source always have one.
+
+**Three heights.** For any link, arc or not, as a pure function of the network
+(`fn interface(&LinkEntry, &Network) -> Interface`, computed where needed, not stored):
+
+| Height | From |
+|---|---|
+| `upper` | The side water leaves, `Store::level_at(port)`: a basin's level; a reach's surface at its end before easing; a source's position |
+| `lip` | `lip.at.y` on that side |
+| `lower` | `max(level, landing floor)` of the side it enters: a basin's level, a reach's un-eased surface at the landing's distance along it, sea level; for a sink or the void, the arc's end |
+
+Neither end reads the other's easing (below), so no port's height is an input to its own.
+
+- **The sheet** is drawn wherever the link has an arc and `upper − max(lower, lip) > ε`
+  (1 cm): from `upper` at the lip, along the arc, cut off at `lower`. The arc was traced from
+  the surface at the discharge the link was laid for, so it is shifted by the change in
+  `upper` since, and its top always meets the water it leaves. A drop of any size draws.
+- **The regime**, free while `lower < lip`, submerged once `lower ≥ lip`, sets only the
+  sheet's look: aerated and white when free, a clear drop when submerged. At submergence the
+  sheet's length is `upper − lower`, which shrinks to zero as the two meet, so nothing pops.
+- A submerged weir between two basins, still passing flow, draws its step the same way.
+
+The weir's own law already has the free/submerged split (§7.3); this is its geometric twin.
+None of it is topology: nothing is re-laid when a height moves.
+
+**A reach's surface meets its ports.** A reach's normal surface is its bed plus its rating
+depth. `Reach::surface_at(distance, ends)` eases it, smoothstep over `EASE_LENGTH`
+(`max(2 m, 4 × depth)`) of channel, to a height at each end:
+
+- **Downstream**, towards `max(lower, lip + d_brink)`, with `d_brink ≈ 0.715 d_c` the depth
+  at a free brink. A lake above the lip draws the end down or backs it up to the lake; a lake
+  below it leaves the end at the brink, where the sheet starts. The target is continuous
+  through the regime change, so the surface never jumps.
+- **Upstream**, from a basin, towards the basin's level, so a river leaves its lake without a
+  step.
+
+Distances are along the channel, across reach boundaries, so a short reach left by a cut
+still eases smoothly. Where the two eases overlap, each is clamped to half the channel
+between its ports. `surface_at` is the one definition: `WaterQuery` samples it for
+buoyancy, the fall's launch and landing read it, and `river.vert` mirrors it from the
+reach's port targets pushed per draw (`pc.tile.yzw` is free). A test holds the shader to it
+as it does for swell. The mesh does not change.
+
+**Where an arc lands, by geometry alone.** `FallTracer` sweeps to **ground**, not to water,
+so one arc serves every level the water below may stand at. The link's `down` store is the
+owner of the first span along the arc that belongs to a body whose `cap` is above the arc's
+height there: the first store that could hold water at that height, whatever its level now.
+That does not change with levels, so the landing store is stable while the lake below fills
+and drains, and it disagrees with a weir's crest-far-side target only where the arc overflies
+a neighbour, which a debug assert reports. If nothing along the arc can hold water, the owner
+of the landing span takes it, as now. A landing that has dried is Exposed (§8.2) like a
+reach's end: a channel is laid from it.
+
+**Edits and arcs.** An edit touches an arc only where it re-pairs a column the arc crosses
+**above the landing store's `cap`**. Below that the arc runs through water, and a blast in a
+plunge pool is not a blast in the air. A touched arc is re-traced in place from its lip; the
+link is remade only if its landing store changed, and the channels above and below keep
+their reaches and storage.
+
+**What this replaces.** Each of these decided a fall once, when the topology was built,
+with its own rule:
+
+- a spill straight into water well below a crest (`spill_fall`),
+- a hole's fall kept only if it drops more than `fall_threshold` (`hole_fall`),
+- a channel's walk ending in a basin more than `fall_threshold` below its last cell,
+- a fall on a reversible weir that kept drawing once the lower basin filled, and none at all
+  when the flow ran backwards.
+
+All become a lip, an arc where the jet separates, and the heights each frame.
+
 ## 8. Topology and its state tables
 
 The `TopologyBuilder` is the only component that changes the network. It runs between
@@ -897,6 +1028,38 @@ an edit inside a merged basin cannot leave the hierarchy stale.
 
 Drowning is judged on `floor_max` and exposure on `floor_min`, so a level hovering at a
 shoreline cannot make a reach flicker in and out of existence.
+
+**Drowned and Exposed move one boundary, not a channel.**
+
+- **Drowned** is judged per reach cell against whichever body owns its span, not only the
+  basin the channel feeds: a lake that rises over the middle of a channel running past it,
+  or a basin an edit opens under one, drowns those cells too. The reach is cut at the
+  drowned run. The part above ends in that body (its outflow gets a new lip and, if the jet
+  separates there, an arc); the part below, if any, recedes as a channel with no inflow.
+  - The water moved is what the drowned length holds, not a share by length: the rating
+    area integrated over `[max(x_t, cut), x_f]` at the reach's `Q_out`, plus the pothole
+    storage in that range. Mouth sections are the widest, so a share by length moves too
+    little. `Q_out` stays continuous across the cut, and `x_f` is clamped to the new length.
+  - The kept part is rebuilt from its cells (`build_reaches`): its `Ā`, length, claimed
+    spans and mesh.
+  - A reach drowned whole is removed with a `Transfer` of its storage, and every reach feeding
+    it (each branch at a junction) is tested next.
+- **Exposed** walks on from the channel's last cell, or from a fall's landing, over the cells
+  the basin has let go, as a channel from there, and appends what it lays. The new reaches
+  start empty: their water is in the basin's hypsometry. The walk may end over a fall, into
+  the basin again further out, or anywhere else a channel ends.
+- Reaches upstream of the boundary keep their state.
+
+**Why this cannot loop.** Drowned only ever moves water into the body that drowned the cells,
+so it only raises that body's level, which can only drown more: a cascade, but monotone and
+bounded by the channel's length. Exposed moves no water, so it cannot raise or lower anything.
+Neither direction feeds the other. The `floor_max + 5 cm` / `floor_min` band stops a level
+hovering at a shoreline from flickering; it is not what stops the loop. On a small tread
+(about 2 m²) one cut can raise the level by decimetres and drown the next cells too; the
+steady settle test bounds the sweeps.
+
+A rising lake meets a fall's lip first through the heights (§7.9): the sheet shortens to
+nothing. Only once the lake covers the channel's last cells does Drowned cut it.
 
 ### 8.3 Span-remap conflicts
 
@@ -1139,8 +1302,8 @@ Water at rest generates no mesh per frame.
 |---|---|---|
 | `BasinMesher` | One quad per region column (ocean excluded), in 8 m tiles, extended one column under terrain. Each vertex carries its floor, for depth tint and swell attenuation. Level, swell and colour come from a per-basin uniform. The depth test makes the shorelines. | Re-region, merge, split. Never on a level change. |
 | Fine tile mesh | A static 64 × 64 grid, displaced by the tile's ripple texture and masked to its body. It replaces the coarse tile while the ripple tile is active. | Never |
-| `ReachMesher` | One quad per cross-section cell, out to the `Q_design` top width. Each vertex carries its distance along the reach, a reference depth and a velocity. Per-reach uniforms set the depth to `d_ref · (Q/Q_design)^0.6` and discard outside `[x_t, x_f]`. The depth test trims the width at lower `Q`. | Route, re-route, or `Q_design` growth |
-| `FallMesher` | A ribbon along each link's `FallPath`, with width from its `Q`, drawn in the sorted transparency pass. Mist comes from the particle system. | Re-trace |
+| `ReachMesher` | One quad per cross-section cell, out to the `Q_design` top width. Each vertex carries its distance along the reach, a reference depth and a velocity. Per-reach uniforms set the depth to `d_ref · (Q/Q_design)^0.6` and discard outside `[x_t, x_f]`, and carry the port levels its ends ease to (§7.9). The depth test trims the width at lower `Q`. | Route, re-route, or `Q_design` growth |
+| `FallMesher` | A ribbon along each link's `FallPath`, with width from its `Q`, drawn last in the water pass (the sorted transparency pass is deferred with the water/smoke pass order). Per draw, the link's heights (§7.9) shift it to the upper surface, cut it at the lower one, and set its look by the regime. Mist comes from the particle system. | Re-trace in place |
 | `OceanMesher` | Ring mesh plus mask (§12) | Mask on ocean growth |
 
 The shading carries over: volumetric depth, Fresnel, specular, and the depth-read subpass.
@@ -1774,6 +1937,58 @@ after every frame; it found each of these.
   each time, and neighbouring rectangles are stitched with triangles that
   share every vertex. Where the 0.5 m band met 8 m quads, a pixel crack
   showed along the join.
+
+### Stage 8: interfaces
+
+§7.9, and §8.2's Drowned and Exposed as designed. Until now a channel ending in a basin
+kept the basin's level when laid (`routed_to_level`) and was re-laid whole when the level
+moved 0.25 m (`REROUTE_SHIFT`); a channel ending in a fall was never re-laid; and falls
+were decided at build time in four places. Re-laying a whole river poured its storage into
+a small receiving lake, which moved the lake past 0.25 m and re-laid it again: water_park's
+steady settle never converged until its catch lake was authored at its settled level.
+
+- `Lip` on every `LinkEntry`, one per side for a reversible link; `spill_fall`, `hole_fall`
+  and the walk's store-end fall give way to one `link_arc(lip, speed, d_c)`, which traces
+  only where the jet separates.
+- `FallTracer` lands on ground; the landing store is chosen by `cap` along the arc.
+- `interface(link, network)`, read by the fall renderer and `surface_at`.
+- `Reach::surface_at` with its port targets; `river.vert` mirrors it; `WaterQuery` and the
+  fall's launch use it.
+- `fall.vert` shifts, cuts and styles each sheet from its heights.
+- Edits touch an arc only above its landing store's `cap`, and re-trace it in place.
+- Drowned and Exposed as incremental edits; `routed_to_level` and `REROUTE_SHIFT` go.
+- Check first: whether a mouth section's rating counts the lake's samples (`wet_run` across
+  a shore with no bank), so `Ā` holds water the basin's hypsometry also holds. If so, drop
+  samples whose span another body owns.
+
+**Tests.**
+
+- Unit: `interface` for a basin's crest, a reach's end, a hole, a source, and a reversible
+  weir run each way; the sheet's length through submergence goes to zero without a jump.
+- Unit: `link_arc` gives none on a steep channel whose ground stays within `d_c` of the lip,
+  one at a riser, and always one for a hole or a source.
+- Unit: `surface_at` eases to a lower lake, backs up to a higher one, stays continuous as
+  `lower` crosses the lip, starts at the basin's level, eases across a reach boundary, and
+  clamps overlapping eases on a short reach; the shader's copy matches.
+- Unit: Drowned conserves volume, moves the integrated area not a length share, and keeps
+  `Q_out` continuous.
+- Unit: a rating across a shore with no bank (§ check above).
+- Scenario: a river mouth 0.3 m over a lake draws a sheet that reaches the lake's surface.
+- Scenario: the sea wall breached: the sea pours into the lowland over the lowland → ocean
+  weir, and its sheet is drawn.
+- Scenario: a reversible weir between two basins draws a sheet only while there is a step.
+- Scenario: a lake rising under a river's fall (outflow blocked): the sheet shortens to
+  nothing, then the channel's end drowns and is cut, and no reach above the cut changes its
+  storage in that frame; lowered again, the end is exposed and the sheet returns. Volume
+  balanced throughout.
+- Scenario: a lake rising over the middle of a channel that runs past it.
+- Scenario: a fall landing mid-reach reads `lower` at the landing's distance.
+- Scenario: an underwater blast near a fall's landing leaves the channel above it unchanged.
+- water_park and staircase: the arc count does not grow; water_park opens steady with the
+  catch lake authored at 1.0 as well as 3.3, within a sweep bound, and its fall test finds
+  the catch lake's link by `down`, with the launch within 1 cm of `surface_at`.
+- `water_fuzz` on every level, and the island_sea, water_park and staircase views compared
+  in `level_viewer` before and after.
 
 ## 22. Decided and deferred
 
