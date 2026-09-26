@@ -32,10 +32,11 @@ impl<'a> System<'a> for TerrainAnchorSystem {
         let mut released = Vec::new();
 
         for (entity, anchor, body) in (&entities, &mut anchored, &bodies).join() {
-            let p = anchor.anchor_world;
-            let terrain_gone = terrain
-                .mesh_surface_height_at(p.x, p.z)
-                .map_or(true, |surface_y| surface_y < p.y);
+            let terrain_gone = anchor.anchor_points.iter().any(|p| {
+                terrain
+                    .mesh_surface_height_at(p.x, p.z)
+                    .map_or(true, |surface_y| surface_y < p.y)
+            });
             if terrain_gone {
                 physics.world.remove_constraint(anchor.anchor_handle);
                 physics.world.remove_constraint(anchor.upright_handle);

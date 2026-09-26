@@ -440,7 +440,7 @@ piece", and nothing a body merely leans on will ever break a joint.
 
 ## Terrain-anchored objects
 
-For objects pinned to the terrain surface (fence posts, menhirs, play wheels),
+For objects pinned to the terrain surface (fence posts, menhirs, rocks, play wheels),
 use `(f32, f32)` for the position (x, z) and query the terrain for Y:
 
 ```rust
@@ -482,11 +482,11 @@ constraints when the terrain beneath is destroyed:
 .with(TerrainAnchored {
     anchor_handle: fixed_handle,    // ConstraintHandle
     upright_handle: fixed_handle,   // same handle (second remove is harmless)
-    anchor_world: Point3::new(      // sample point checked each frame
-        x,
-        surface_y - 0.1,           // slightly below surface
+    anchor_points: vec![Point3::new( // sample points checked each frame;
+        x,                           // released when any one is exposed
+        surface_y - 0.1,             // slightly below surface
         z,
-    ),
+    )],
     released_collider: Some(full_collider),  // swapped in on release
     released_model: None,           // or Some(model) to swap visual on release
 })

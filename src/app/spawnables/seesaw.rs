@@ -279,7 +279,7 @@ impl Spawnable for SeesawDef {
             .with(TerrainAnchored {
                 anchor_handle: beam_anchor,
                 upright_handle: beam_upright,
-                anchor_world: anchor_check,
+                anchor_points: vec![anchor_check],
                 released_collider: None,
                 released_model: None,
             })
@@ -347,7 +347,7 @@ impl Spawnable for SeesawDef {
             .with(TerrainAnchored {
                 anchor_handle: fulcrum_fixed_h,
                 upright_handle: fulcrum_fixed_h,
-                anchor_world: anchor_check,
+                anchor_points: vec![anchor_check],
                 released_collider: None,
                 released_model: None,
             })

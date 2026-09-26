@@ -68,7 +68,7 @@ pub struct MaterialModulation(pub SurfaceModulation);
 
 /// Anchors an entity to a fixed world-space position via physics constraints.
 ///
-/// When the terrain beneath the anchor point is destroyed, both constraints
+/// When the terrain beneath any of its anchor points is destroyed, both constraints
 /// are removed, the collider is swapped to its full-size version, and this
 /// component is removed — releasing the body to fall freely.
 #[derive(Component)]
@@ -78,8 +78,11 @@ pub struct TerrainAnchored {
     pub anchor_handle: ConstraintHandle,
     /// Handle to the KeepUpright constraint locking orientation.
     pub upright_handle: ConstraintHandle,
-    /// World-space position to check for terrain solidity.
-    pub anchor_world: nalgebra::Point3<f32>,
+    /// World-space positions to check for terrain solidity. The body is
+    /// released as soon as the ground at any one of them is gone: a post needs
+    /// one, under its foot; a stone bedded in the ground is loose once the
+    /// ground under any part of it goes.
+    pub anchor_points: Vec<nalgebra::Point3<f32>>,
     /// Full-size collider to attach when released (replaces the short
     /// anchored-mode collider that avoids terrain overlap).
     pub released_collider: Option<ColliderDesc>,
@@ -93,7 +96,7 @@ impl std::fmt::Debug for TerrainAnchored {
         f.debug_struct("TerrainAnchored")
             .field("anchor_handle", &self.anchor_handle)
             .field("upright_handle", &self.upright_handle)
-            .field("anchor_world", &self.anchor_world)
+            .field("anchor_points", &self.anchor_points)
             .field("released_collider", &self.released_collider.is_some())
             .field("released_model", &self.released_model.is_some())
             .finish()

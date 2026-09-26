@@ -181,7 +181,7 @@ fn divisions_for(hull: &ConvexHull, thickness: f32) -> usize {
     let fan_triangles: usize = hull
         .faces
         .iter()
-        .map(|face| face.vertex_indices.len().saturating_sub(2))
+        .map(|face| fan_size(face.vertex_indices.len()))
         .sum();
     let points_per_triangle = |n: usize| (n + 1) * (n + 2) / 2;
     let mut divisions = wanted.max(MIN_DIVISIONS);
@@ -192,11 +192,37 @@ fn divisions_for(hull: &ConvexHull, thickness: f32) -> usize {
     divisions
 }
 
-/// A face cut into a fan of triangles from its first corner, each triangle cut
-/// into a grid `divisions` to a side.
+/// Most corners a face may have and still be fanned from its first corner.
+const FAN_FROM_CORNER: usize = 4;
+
+/// How many triangles [`tessellate`] fans a face of `corners` corners into.
+fn fan_size(corners: usize) -> usize {
+    if corners <= FAN_FROM_CORNER {
+        corners.saturating_sub(2)
+    } else {
+        corners
+    }
+}
+
+/// A face cut into a fan of triangles, each triangle cut into a grid
+/// `divisions` to a side.
+///
+/// A triangle or a quad is fanned from its first corner. A face of more
+/// corners is fanned from its centre instead: fanned from a corner, it is cut
+/// into slivers whose finest cells crowd into that corner — on the arris, where
+/// the weathering moves points furthest and cells that small fold over.
 fn tessellate(corners: &[Vector3<f32>], normal: Vector3<f32>, divisions: usize) -> FaceGrid {
     let n = divisions;
     let centre = corners.iter().sum::<Vector3<f32>>() / corners.len() as f32;
+    let fan: Vec<(Vector3<f32>, Vector3<f32>, Vector3<f32>)> = if corners.len() <= FAN_FROM_CORNER {
+        (1..corners.len() - 1)
+            .map(|k| (corners[0], corners[k], corners[k + 1]))
+            .collect()
+    } else {
+        (0..corners.len())
+            .map(|k| (centre, corners[k], corners[(k + 1) % corners.len()]))
+            .collect()
+    };
     let mut points: Vec<Vector3<f32>> = Vec::new();
     let mut index_of: HashMap<[u32; 3], u32> = HashMap::new();
     let mut triangles = Vec::new();
@@ -209,8 +235,7 @@ fn tessellate(corners: &[Vector3<f32>], normal: Vector3<f32>, divisions: usize) 
         })
     };
 
-    for k in 1..corners.len() - 1 {
-        let (a, b, c) = (corners[0], corners[k], corners[k + 1]);
+    for (a, b, c) in fan {
         // `grid[i][j]` is the point `i` steps towards `b` and `j` towards `c`.
         let grid: Vec<Vec<u32>> = (0..=n)
             .map(|i| {
@@ -312,6 +337,20 @@ mod tests {
         }
         let open = edges.values().filter(|&&count| count != 0).count();
         assert_eq!(open, 0, "{open} edges are open or wound inconsistently");
+    }
+
+    /// The wear is noise laid over space, so where a block stands decides
+    /// what its corners meet. Among these placements are ones where a chip
+    /// once rose faster than the rounded corner fell and folded the drawing.
+    #[test]
+    fn a_weathered_block_is_right_side_out_wherever_it_stands() {
+        let hull = cube_hull(Vector3::new(0.2, 0.1, 0.12));
+        for k in 0..60 {
+            let offset = Vector3::new(k as f32 * 1.37, 0.3 + k as f32 * 0.71, k as f32 * -2.1);
+            let (vertices, indices) =
+                weathered_mesh(&hull, offset, None, SurfaceUvs::PerMetre(1.0));
+            assert_eq!(inside_out(&vertices, &indices), 0, "placement {k}");
+        }
     }
 
     #[test]

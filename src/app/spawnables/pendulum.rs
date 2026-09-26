@@ -265,7 +265,7 @@ impl Spawnable for PendulumDef {
             .with(TerrainAnchored {
                 anchor_handle: frame_constraint,
                 upright_handle: frame_constraint,
-                anchor_world: anchor_check,
+                anchor_points: vec![anchor_check],
                 released_collider: None,
                 released_model: None,
             })
@@ -322,7 +322,7 @@ impl Spawnable for PendulumDef {
             .with(TerrainAnchored {
                 anchor_handle: ball_constraint,
                 upright_handle: ball_constraint,
-                anchor_world: anchor_check,
+                anchor_points: vec![anchor_check],
                 released_collider: None,
                 released_model: Some(build_ball_model(self.ball_radius, ball_mat)),
             })

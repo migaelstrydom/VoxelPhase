@@ -393,11 +393,9 @@ mod tests {
     ///
     /// Cracked stones used to show holes the size of a fist: a point near an
     /// arris was pushed straight in by the depth of a chip, past the points
-    /// pushed in from the neighbouring face, and the drawing folded. A whole
-    /// stone must have no fold at all. A piece may have one or two slivers
-    /// lying exactly on the crease of a break, where three faces meet and a
-    /// triangle's vertex normals belong to different faces — a few
-    /// millimetres, never the hundreds of triangles a fold was.
+    /// pushed in from the neighbouring face, and the drawing folded. Slivers
+    /// on the crease of a break outlived that, until the wear was read where
+    /// each projection ray begins and measured along it.
     #[test]
     fn every_stone_whole_or_cracked_is_drawn_right_side_out() {
         use crate::app::spawnables::shared::models::PieceHull;
@@ -439,11 +437,7 @@ mod tests {
                         &PieceHull::new(&drawn, anchor + piece.centre).within(Some(&whole)),
                         arch.surface_uvs(),
                     );
-                    let folded = inside_out(&v, &idx);
-                    assert!(
-                        folded <= 4,
-                        "voussoir {i} cut {salt}: {folded} triangles inside out"
-                    );
+                    assert_eq!(inside_out(&v, &idx), 0, "voussoir {i} cut {salt} is folded");
                 }
             }
         }

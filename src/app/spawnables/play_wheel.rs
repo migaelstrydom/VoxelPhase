@@ -215,7 +215,7 @@ impl Spawnable for PlayWheelDef {
             .with(TerrainAnchored {
                 anchor_handle,
                 upright_handle,
-                anchor_world: anchor_check,
+                anchor_points: vec![anchor_check],
                 released_collider: None,
                 released_model: None,
             })

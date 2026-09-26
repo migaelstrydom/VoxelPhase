@@ -31,8 +31,8 @@ use crate::app::spawnables::{
     DolosDef, DominoDef, FencePostDef, FramedWindowDef, GemDef, GlassSheetDef, GlowingOrbDef,
     GoalDef, HeavyCrateDef, HexPrismDef, HoneycombWallDef, HouseDef, IceBoxDef, IceWallDef,
     IcosahedronDef, IglooDef, JackDef, JengaDef, MenhirDef, Metal, MetalCubeDef, MovingPlatformDef,
-    OctahedronDef, PendulumDef, PlankBridgeDef, PlankDef, PlayWheelDef, PyramidDef, SeesawDef,
-    Spawnable, StackDef, StackItemDef, TableDef, TempleDef, TetrahedronDef, TowerDef,
+    OctahedronDef, PendulumDef, PlankBridgeDef, PlankDef, PlayWheelDef, PyramidDef, RockDef,
+    SeesawDef, Spawnable, StackDef, StackItemDef, TableDef, TempleDef, TetrahedronDef, TowerDef,
     TrampolineDef, TrilithonDef, VoussoirArchDef, BARREL_RADIUS, BEACH_BALL_RADIUS,
 };
 use crate::platform::{DeckSuspension, RouteLoop};
@@ -992,6 +992,20 @@ pub enum LevelObject {
         #[serde(default = "MenhirDef::default_density")]
         density: f32,
     },
+    /// Small field stone bedded in the terrain, a different shape per seed.
+    /// Released when terrain is destroyed.
+    Rock {
+        /// Position (x, z). Y is determined by terrain surface height.
+        pos: (f32, f32),
+        #[serde(default = "RockDef::default_size")]
+        size: f32,
+        #[serde(default)]
+        seed: Option<u32>,
+        #[serde(default = "RockDef::default_bury")]
+        bury: f32,
+        #[serde(default = "RockDef::default_density")]
+        density: f32,
+    },
     /// Vertical post anchored to terrain. Released when terrain is destroyed.
     FencePost {
         /// Position (x, z). Y is determined by terrain surface height.
@@ -1481,6 +1495,7 @@ impl LevelObject {
             LevelObject::House { pos, .. } => ("House", point(pos)),
             LevelObject::Capsule { pos, .. } => ("Capsule", point(pos)),
             LevelObject::Menhir { pos, .. } => ("Menhir", anchored(pos)),
+            LevelObject::Rock { pos, .. } => ("Rock", anchored(pos)),
             LevelObject::FencePost { pos, .. } => ("FencePost", anchored(pos)),
             LevelObject::Roller { pos, .. } => ("Roller", anchored(pos)),
             LevelObject::HeartCritter { pos, .. } => ("HeartCritter", anchored(pos)),
@@ -1754,6 +1769,7 @@ impl LevelObject {
                 radius: *bottom_radius,
             },
             LevelObject::FencePost { radius, .. } => Disc { radius: *radius },
+            LevelObject::Rock { size, .. } => Disc { radius: size * 0.5 },
             LevelObject::Roller { radius, .. } => Disc { radius: *radius },
             // Small and it moves off immediately; the footprint is only
             // ever about what it is standing on at spawn.
@@ -1844,6 +1860,8 @@ impl LevelObject {
             | LevelObject::HeavyCrate { .. }
             | LevelObject::Capsule { .. }
             | LevelObject::Menhir { .. }
+            // Its pose is drawn from its seed; there is no authored one to turn.
+            | LevelObject::Rock { .. }
             | LevelObject::FencePost { .. }
             | LevelObject::Roller { .. }
             | LevelObject::HeartCritter { .. }
@@ -1966,6 +1984,7 @@ impl LevelObject {
             LevelObject::House { pos, .. } => p3(pos),
             LevelObject::Capsule { pos, .. } => p3(pos),
             LevelObject::Menhir { pos, .. } => p2(pos),
+            LevelObject::Rock { pos, .. } => p2(pos),
             LevelObject::FencePost { pos, .. } => p2(pos),
             LevelObject::Roller { pos, .. } => p2(pos),
             LevelObject::HeartCritter { pos, .. } => p2(pos),
@@ -2308,6 +2327,20 @@ impl LevelObject {
                 half_height: *half_height,
                 bottom_radius: *bottom_radius,
                 top_radius: *top_radius,
+                density: *density,
+            }),
+
+            LevelObject::Rock {
+                pos,
+                size,
+                seed,
+                bury,
+                density,
+            } => Box::new(RockDef {
+                pos: *pos,
+                size: *size,
+                seed: *seed,
+                bury: *bury,
                 density: *density,
             }),
 

@@ -268,6 +268,30 @@ Level(
                     pos: (15.0, 0.0, -5.0),
                 ),
 
+                // A rockery: a curved bed edged with field stones, a few more
+                // set inside it, like a garden border. Each rock's shape comes
+                // from where it stands; a grenade among them knocks some loose.
+                Rock(pos: (31.05, -8.52), size: 0.42),
+                Rock(pos: (31.21, -9.10), size: 0.36),
+                Rock(pos: (31.48, -9.63), size: 0.5),
+                Rock(pos: (31.86, -10.10), size: 0.4),
+                Rock(pos: (32.32, -10.49), size: 0.34),
+                Rock(pos: (32.85, -10.77), size: 0.46),
+                Rock(pos: (33.43, -10.94), size: 0.38),
+                Rock(pos: (34.03, -11.00), size: 0.44),
+                Rock(pos: (34.62, -10.93), size: 0.42),
+                Rock(pos: (35.20, -10.75), size: 0.36),
+                Rock(pos: (35.72, -10.46), size: 0.5),
+                Rock(pos: (36.18, -10.07), size: 0.4),
+                Rock(pos: (36.54, -9.59), size: 0.34),
+                Rock(pos: (36.81, -9.05), size: 0.46),
+                Rock(pos: (36.96, -8.47), size: 0.38),
+                Rock(pos: (32.60, -7.60), size: 0.3),
+                Rock(pos: (34.00, -8.80), size: 0.34),
+                Rock(pos: (35.50, -7.90), size: 0.28),
+                Rock(pos: (33.30, -6.60), size: 0.32),
+                Rock(pos: (34.90, -6.80), size: 0.3),
+
                 Pendulum(
                     pos: (15.0, -10.0),
                 ),

@@ -90,6 +90,12 @@ const FRACTURE_CONTRAST: f32 = 1.8;
 /// Bumps per thickness across a fresh break.
 const FRACTURE_FREQUENCY: f32 = 2.5;
 
+/// Least rate, in metres per metre, at which the unworn shape is taken to
+/// fall along a projection ray when finding where the ray met it. A corner of
+/// three square faces falls at 1/√3; this only guards against a point where
+/// the ray runs along the surface.
+const MIN_FALL: f32 = 0.3;
+
 /// Seeds for the three fields, so they do not line up with each other.
 const UNDULATION_SEED: u32 = 401;
 const CHIP_SEED: u32 = 877;
@@ -213,19 +219,28 @@ impl StoneSurface {
     /// It turns from one face's normal to the next over the whole reach of a
     /// chip, not only over the rounding — see [`PROJECTION_SPREAD`].
     pub fn inward(&self, p: &Vector3<f32>) -> Vector3<f32> {
-        let distances: Vec<f32> = self.facets.iter().map(|f| f.distance(p)).collect();
-        let top = distances.iter().copied().fold(f32::MIN, f32::max);
-        let mut sum = Vector3::zeros();
-        for (facet, d) in self.facets.iter().zip(&distances) {
-            sum += facet.normal
-                * ((d - top) / (self.thickness * CHIP_REACH * PROJECTION_SPREAD)).exp();
-        }
-        let length = sum.magnitude();
+        let blend = self.normal_blend(p);
+        let length = blend.magnitude();
         if length > 1e-6 {
-            -sum / length
+            -blend / length
         } else {
             Vector3::zeros()
         }
+    }
+
+    /// The faces' normals averaged over the reach [`inward`](Self::inward)
+    /// turns over. Its direction is the way a point moves; its length is one
+    /// out on a face and less where faces meet — `1/√3` at a square corner.
+    fn normal_blend(&self, p: &Vector3<f32>) -> Vector3<f32> {
+        let distances: Vec<f32> = self.facets.iter().map(|f| f.distance(p)).collect();
+        let top = distances.iter().copied().fold(f32::MIN, f32::max);
+        let (mut sum, mut weights) = (Vector3::zeros(), 0.0f32);
+        for (facet, d) in self.facets.iter().zip(&distances) {
+            let weight = ((d - top) / (self.thickness * CHIP_REACH * PROJECTION_SPREAD)).exp();
+            sum += facet.normal * weight;
+            weights += weight;
+        }
+        sum / weights
     }
 
     /// Move a point on the hull onto the weathered surface.
@@ -304,50 +319,39 @@ impl StoneSurface {
     }
 
     /// The field at `p`, and what the wear is doing there.
+    ///
+    /// ```text
+    ///   p ──▶ unworn shape ──▶ where p's ray met it ──▶ wear read there
+    ///         (rounded hull)   (one Newton step back       │
+    ///                           along `inward`)            ▼
+    ///                             field = unworn shape + wear
+    /// ```
+    ///
+    /// The wear is a property of a point on the stone's surface, not of a
+    /// point in space, so it is read where the ray a point is projected along
+    /// meets the unworn shape. Read at `p` itself, it changed along the ray,
+    /// and near a corner — where the rounded shape falls at only 1/√3 of a
+    /// metre per metre, the average of three faces' normals — a chip rose
+    /// faster than the shape fell: the ray crossed the surface twice, and
+    /// neighbouring points landed on either side of the ridge between the
+    /// crossings. Read where the ray began, the wear is the same all along
+    /// it, and the field falls monotonically inward.
+    ///
+    /// And the wear is measured along the ray, not square to the surface:
+    /// where faces meet, a ray leaves the surface obliquely and the shape
+    /// falls slowly along it, so a cut measured square to the surface is a
+    /// ray several times as long, mostly sideways. Where the cut's depth
+    /// changes from one point to the next, neighbouring points then slid past
+    /// each other. Scaled by how directly the faces around face the same way
+    /// — one on an open face — a ray is never longer than the cut. A break's
+    /// relief is not scaled: the two halves of one break have different
+    /// faces around them, and must be cut to the same relief to close up.
+    /// It is shallow beside a chip, too shallow to slide a point far.
     fn shape_and_wear(&self, p: &Vector3<f32>) -> (f32, Wear) {
-        let mut dressed_top = f32::MIN;
-        let mut fresh_top = f32::MIN;
-        let mut fresh_normal = Vector3::zeros();
-        for facet in &self.facets {
-            let d = facet.distance(p);
-            if facet.fresh {
-                if d > fresh_top {
-                    fresh_top = d;
-                    fresh_normal = facet.normal;
-                }
-            } else {
-                dressed_top = dressed_top.max(d);
-            }
-        }
+        let unworn = self.unworn(p);
+        let at = self.read_point(p, &unworn);
+        let along = self.normal_blend(&at).magnitude();
 
-        // Log-sum-exp: a smooth maximum that equals the plain maximum out on
-        // a face and rounds over where two faces compete. Its softness varies
-        // along the arris, so no two stretches of an edge are worn alike.
-        let r = ROUNDING_FREQUENCY / self.thickness;
-        let swing = fbm_perlin_3d(p.x * r, p.y * r, p.z * r, 2, 0.5, ROUNDING_SEED);
-        let rounding = self.rounding * (1.0 + ROUNDING_SWING * (swing * 2.0).clamp(-1.0, 1.0));
-        let (mut near, mut wide, mut up) = (0.0f32, 0.0f32, 0.0f32);
-        let chip_reach = self.thickness * CHIP_REACH;
-        for facet in self.facets.iter().filter(|f| !f.fresh) {
-            let d = facet.distance(p) - dressed_top;
-            near += (d / rounding).exp();
-            let weight = (d / chip_reach).exp();
-            wide += weight;
-            up += weight * facet.normal.y;
-        }
-        let has_dressed = dressed_top > f32::MIN;
-        let dressed = if has_dressed {
-            dressed_top + rounding * near.ln()
-        } else {
-            f32::MIN
-        };
-        // Which way the surface nearby faces the sky, blended across arrises
-        // so the extra wear on a top edge has no step in it.
-        let exposure = if has_dressed {
-            (up / wide).max(0.0)
-        } else {
-            0.0
-        };
         // The old surface and the break are each worn on their own and then
         // intersected, as two solids. Blending their wear across the crease
         // instead puts a step in the field wherever a deep chip on an old
@@ -355,45 +359,21 @@ impl StoneSurface {
         // drawing, a hole at the corner of every cracked stone.
         let mut wear = Wear::default();
         let mut old_surface = f32::MIN;
-        if has_dressed {
-            // Near an arris, within reach of a chip.
-            let arris =
-                ((chip_reach * wide.ln()) / (chip_reach * std::f32::consts::LN_2)).clamp(0.0, 1.0);
-            let s = UNDULATION_FREQUENCY / self.thickness;
-            let hollow =
-                0.5 + 0.5 * fbm_perlin_3d(p.x * s, p.y * s, p.z * s, 3, 0.5, UNDULATION_SEED);
-            let c = CHIP_FREQUENCY / self.thickness;
-            // Broad in the noise's range and only two octaves: a chip is a
-            // steep-walled bite, but a wall steeper than the direction a
-            // point is projected along folds the drawing under itself.
-            let chip_field = fbm_perlin_3d(p.x * c, p.y * c, p.z * c, 2, 0.45, CHIP_SEED);
-            let chip = smoothstep(-0.1, 0.5, chip_field) * arris * (1.0 + EXPOSED_WEAR * exposure);
-            let depth = (hollow * UNDULATION_DEPTH + chip * CHIP_DEPTH) * self.thickness;
-            old_surface = dressed + depth;
-            wear.depth = depth;
-            wear.arris = arris;
-            wear.hollow = hollow;
+        if let Some(dressed) = unworn.dressed {
+            wear = self.old_wear(&at);
+            wear.depth *= along;
+            old_surface = dressed + wear.depth;
         }
 
         let mut fresh_surface = f32::MIN;
-        if fresh_top > f32::MIN {
-            // Signed relief about the break plane, read from one side for
-            // both halves so that one's bump is the other's hollow.
-            let f = FRACTURE_FREQUENCY / self.thickness;
-            let relief = fbm_perlin_3d(p.x * f, p.y * f, p.z * f, 5, 0.55, FRACTURE_SEED)
-                * FRACTURE_CONTRAST;
-            let side = if fresh_normal.dot(&BREAK_SIDE) >= 0.0 {
-                1.0
-            } else {
-                -1.0
-            };
-            let depth = FRACTURE_RELIEF * self.thickness * (1.0 - side * relief.clamp(-1.0, 1.0));
+        if let Some((fresh_top, fresh_normal)) = unworn.fresh {
+            let depth = self.fracture_depth(&at, fresh_normal);
             fresh_surface = fresh_top + depth;
 
             // How much of this point is fresh break: a narrow blend across
             // the crease, for the colour's sake only.
             let blend = self.thickness * 0.004;
-            wear.fresh = if has_dressed {
+            wear.fresh = if unworn.dressed.is_some() {
                 smoothstep(-blend, blend, fresh_surface - old_surface)
             } else {
                 1.0
@@ -402,6 +382,140 @@ impl StoneSurface {
         }
 
         (old_surface.max(fresh_surface), wear)
+    }
+
+    /// The stone before any wear: the hull with its dressed arrises rounded
+    /// over and its breaks left sharp.
+    fn unworn(&self, p: &Vector3<f32>) -> Unworn {
+        let mut dressed_top = f32::MIN;
+        let mut fresh: Option<(f32, Vector3<f32>)> = None;
+        for facet in &self.facets {
+            let d = facet.distance(p);
+            if facet.fresh {
+                if fresh.map_or(true, |(top, _)| d > top) {
+                    fresh = Some((d, facet.normal));
+                }
+            } else {
+                dressed_top = dressed_top.max(d);
+            }
+        }
+        if dressed_top == f32::MIN {
+            return Unworn {
+                dressed: None,
+                dressed_gradient: Vector3::zeros(),
+                fresh,
+            };
+        }
+
+        // Log-sum-exp: a smooth maximum that equals the plain maximum out on
+        // a face and rounds over where two faces compete. Its softness varies
+        // along the arris, so no two stretches of an edge are worn alike.
+        let r = ROUNDING_FREQUENCY / self.thickness;
+        let swing = fbm_perlin_3d(p.x * r, p.y * r, p.z * r, 2, 0.5, ROUNDING_SEED);
+        let rounding = self.rounding * (1.0 + ROUNDING_SWING * (swing * 2.0).clamp(-1.0, 1.0));
+        let mut near = 0.0f32;
+        let mut gradient = Vector3::zeros();
+        for facet in self.facets.iter().filter(|f| !f.fresh) {
+            let weight = ((facet.distance(p) - dressed_top) / rounding).exp();
+            near += weight;
+            gradient += facet.normal * weight;
+        }
+        Unworn {
+            dressed: Some(dressed_top + rounding * near.ln()),
+            dressed_gradient: gradient / near,
+            fresh,
+        }
+    }
+
+    /// Where the ray through `p` along [`inward`](Self::inward) meets the
+    /// unworn shape, to first order: one Newton step along the ray. Exact on a
+    /// face; on the rounding it moves by the curvature over a distance no
+    /// deeper than the wear, which is what keeps the wear's slope along the
+    /// ray small next to the shape's.
+    fn read_point(&self, p: &Vector3<f32>, unworn: &Unworn) -> Vector3<f32> {
+        let (value, gradient) = unworn.base();
+        let direction = self.inward(p);
+        // How fast the unworn shape falls along the ray. Never less than a
+        // corner's 1/√3 in practice; held above a floor so a point off in
+        // the corner of no face cannot be thrown across the stone.
+        let fall = (-direction.dot(&gradient)).max(MIN_FALL);
+        p + direction * (value / fall)
+    }
+
+    /// The wear on old surface at `at`, a point on the unworn shape.
+    fn old_wear(&self, at: &Vector3<f32>) -> Wear {
+        let dressed_top = self
+            .facets
+            .iter()
+            .filter(|f| !f.fresh)
+            .map(|f| f.distance(at))
+            .fold(f32::MIN, f32::max);
+        let chip_reach = self.thickness * CHIP_REACH;
+        let (mut wide, mut up) = (0.0f32, 0.0f32);
+        for facet in self.facets.iter().filter(|f| !f.fresh) {
+            let weight = ((facet.distance(at) - dressed_top) / chip_reach).exp();
+            wide += weight;
+            up += weight * facet.normal.y;
+        }
+        // Which way the surface nearby faces the sky, blended across arrises
+        // so the extra wear on a top edge has no step in it.
+        let exposure = (up / wide).max(0.0);
+        // Near an arris, within reach of a chip.
+        let arris = (wide.ln() / std::f32::consts::LN_2).clamp(0.0, 1.0);
+        let s = UNDULATION_FREQUENCY / self.thickness;
+        let hollow =
+            0.5 + 0.5 * fbm_perlin_3d(at.x * s, at.y * s, at.z * s, 3, 0.5, UNDULATION_SEED);
+        let c = CHIP_FREQUENCY / self.thickness;
+        // Broad in the noise's range and only two octaves: a chip is a
+        // steep-walled bite, but a wall steeper than the direction a point
+        // is projected along folds the drawing under itself.
+        let chip_field = fbm_perlin_3d(at.x * c, at.y * c, at.z * c, 2, 0.45, CHIP_SEED);
+        let chip = smoothstep(-0.1, 0.5, chip_field) * arris * (1.0 + EXPOSED_WEAR * exposure);
+        Wear {
+            depth: (hollow * UNDULATION_DEPTH + chip * CHIP_DEPTH) * self.thickness,
+            arris,
+            fresh: 0.0,
+            hollow,
+        }
+    }
+
+    /// How far a break facing `normal` is cut back at `at`, a point on the
+    /// unworn shape: signed relief about the break plane, read from one side
+    /// for both halves so that one's bump is the other's hollow.
+    fn fracture_depth(&self, at: &Vector3<f32>, normal: Vector3<f32>) -> f32 {
+        let f = FRACTURE_FREQUENCY / self.thickness;
+        let relief =
+            fbm_perlin_3d(at.x * f, at.y * f, at.z * f, 5, 0.55, FRACTURE_SEED) * FRACTURE_CONTRAST;
+        let side = if normal.dot(&BREAK_SIDE) >= 0.0 {
+            1.0
+        } else {
+            -1.0
+        };
+        FRACTURE_RELIEF * self.thickness * (1.0 - side * relief.clamp(-1.0, 1.0))
+    }
+}
+
+/// The stone at a point before any wear.
+struct Unworn {
+    /// The rounded old surface's field, if the piece has any old surface.
+    dressed: Option<f32>,
+    /// That field's gradient.
+    dressed_gradient: Vector3<f32>,
+    /// The nearest break's plane distance and outward normal, if the piece
+    /// has any break.
+    fresh: Option<(f32, Vector3<f32>)>,
+}
+
+impl Unworn {
+    /// The unworn shape's field and its gradient: old surface and break
+    /// intersected, as the worn ones are.
+    fn base(&self) -> (f32, Vector3<f32>) {
+        match (self.dressed, self.fresh) {
+            (Some(dressed), Some((fresh, normal))) if fresh > dressed => (fresh, normal),
+            (Some(dressed), _) => (dressed, self.dressed_gradient),
+            (None, Some((fresh, normal))) => (fresh, normal),
+            (None, None) => (0.0, Vector3::zeros()),
+        }
     }
 }
 
@@ -510,6 +624,54 @@ mod tests {
         )
         .expect("splits");
         (split.front, split.back)
+    }
+
+    /// Along the ray a point is projected along, the field only ever falls:
+    /// the ray meets the surface once, so neighbouring points cannot land on
+    /// either side of a ridge. Checked near a corner, where the rounded shape
+    /// falls slowest, at placements where a chip once rose faster.
+    #[test]
+    fn the_field_falls_all_along_every_projection_ray() {
+        let small = cube_hull(Vector3::new(0.2, 0.1, 0.12));
+        for k in [4, 14, 47, 56] {
+            let offset = Vector3::new(k as f32 * 1.37, 0.3 + k as f32 * 0.71, k as f32 * -2.1);
+            let hull = small.translated(offset);
+            let surface = StoneSurface::new(&hull, None);
+            let reach = surface.thickness() * 0.2;
+            for corner in &hull.vertices {
+                for (u, v) in [(0.0, 0.0), (0.03, 0.01), (0.01, 0.04), (0.05, 0.05)] {
+                    for face in hull.faces.iter().filter(|f| {
+                        f.vertex_indices
+                            .iter()
+                            .any(|&i| hull.vertices[i as usize] == *corner)
+                    }) {
+                        let tangent = face.normal.cross(&Vector3::new(0.3, 0.8, 0.5)).normalize();
+                        let bitangent = face.normal.cross(&tangent);
+                        let centre = hull.centroid();
+                        let inwards = |w: Vector3<f32>| {
+                            if w.dot(&(centre - corner)) < 0.0 {
+                                -w
+                            } else {
+                                w
+                            }
+                        };
+                        let p = corner + inwards(tangent) * u + inwards(bitangent) * v;
+                        let p = p - face.normal * face.normal.dot(&(p - corner));
+                        let direction = surface.inward(&p);
+                        let mut previous = surface.field(&p);
+                        for step in 1..=200 {
+                            let here =
+                                surface.field(&(p + direction * (reach * step as f32 / 200.0)));
+                            assert!(
+                                here <= previous + 1e-7,
+                                "placement {k}: the field rises along the ray from {p:?}"
+                            );
+                            previous = here;
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// The faces a block broke along are told from the ones it was made with.
