@@ -269,11 +269,14 @@ pub fn worst_case(path: &Path, repeats: usize) -> Result<WorstCase, String> {
         .as_ref()
         .ok_or_else(|| format!("{label} has no water"))?;
     let (mut water, _) = WaterWorld::from_config(config, &terrain);
-    let (id, spans) = water
-        .basins()
-        .map(|(id, b)| (id, b.region.len()))
-        .max_by_key(|(_, n)| *n)
-        .ok_or_else(|| format!("{label} has no basin"))?;
+    // Flooded again, a basin is a new store: found again each time.
+    let largest = |water: &WaterWorld| {
+        water
+            .basins()
+            .map(|(id, b)| (id, b.region.len()))
+            .max_by_key(|(_, n)| *n)
+    };
+    let (_, spans) = largest(&water).ok_or_else(|| format!("{label} has no basin"))?;
     let mut out = WorstCase {
         label,
         spans,
@@ -281,6 +284,7 @@ pub fn worst_case(path: &Path, repeats: usize) -> Result<WorstCase, String> {
         mesh: Vec::new(),
     };
     for _ in 0..repeats {
+        let (id, _) = largest(&water).expect("found above");
         let started = Instant::now();
         water.reregion(id);
         out.reregion.push(started.elapsed());

@@ -36,18 +36,6 @@ pub enum TopologyEdit {
         to: Account,
         volume: f64,
     },
-    /// A reach cut short before cell `at`, which the water beyond has
-    /// drowned (§8.2); what it held from there on was `Transfer`red.
-    CutReach {
-        reach: StoreId,
-        at: usize,
-    },
-    /// A reach lengthened by `cells` over a shoreline the water it runs into
-    /// has left dry (§8.2). The new length starts empty.
-    ExtendReach {
-        reach: StoreId,
-        cells: usize,
-    },
     /// A store removed by a rebuild after a terrain edit; its water is
     /// `Poured` again.
     Cleared(StoreId),

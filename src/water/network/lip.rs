@@ -48,6 +48,21 @@ impl Lip {
     }
 
     /// Water leaving straight down, through a hole.
+    /// Moved along its edge onto the line water running through `point`
+    /// crosses it by.
+    pub fn through(self, point: Point3<f32>) -> Self {
+        let across = Vector2::new(-self.direction.y, self.direction.x);
+        let off = (point.x - self.at.x) * across.x + (point.z - self.at.z) * across.y;
+        Self {
+            at: Point3::new(
+                self.at.x + across.x * off,
+                self.at.y,
+                self.at.z + across.y * off,
+            ),
+            ..self
+        }
+    }
+
     pub fn down(at: Point3<f32>) -> Self {
         Self {
             at,

@@ -1031,41 +1031,33 @@ an edit inside a merged basin cannot leave the hierarchy stale.
 | Resumed | `Q_in > 0` while Receding | None: `x_t ← 0`, and the state follows from `x_f` (§7.5) | — |
 | Becomes / stops being minor | `Q_in` below `minor_discharge` / above 1.5 × `minor_discharge` | `SetMinor` | — |
 | Retired | Receding and (`ℓ ≤ 0`, or mean depth < 5 mm, or `Q_out < Q_retire`) | `RemoveStore { residual_to: downstream }`; pothole dead storage goes with the residual | 1 transfer |
-| Drowned | The receiving basin's `L > floor_max + 0.05 m` over the reach's last cells | Truncate the reach, or remove it; `Transfer` the drowned storage to the basin | 1 transfer |
-| Exposed | The receiving basin's `L < floor_min` at its shoreline cell | `Reroute` from the old end; the new reach starts empty, because its water is already in the basin's hypsometry | — |
+| Drowned | A body's `L > floor_max + 0.05 m` over any of the reach's cells | The network is laid again (§9.1) | Parcels poured |
+| Exposed | The receiving basin's `L < floor_min` at its shoreline cell, over a fall too | The network is laid again (§9.1) | Parcels poured |
 | Re-routed | An edit crosses the path | Storage in blasted cells is `Transfer`red to the store the remap assigns; intact old cells keep receding; the new path starts empty | 1 per orphaned group |
 
 Drowning is judged on `floor_max` and exposure on `floor_min`, so a level hovering at a
 shoreline cannot make a reach flicker in and out of existence.
 
-**Drowned and Exposed move one boundary, not a channel.**
+**Drowned and Exposed lay the network again.** Neither moves a boundary itself: the settle
+sees that water has moved along a channel's bed and lays the network again over the water as
+it stands (§9.1). A channel is laid down to the first span water stands over, so the relaid
+channel ends at the new shoreline, and each reach's water is poured back where it stood: on
+cells the lake has taken it goes into the lake, on the rest back into the channel, and over
+a bed the lake has left the channel runs on, its new length empty.
 
-- **Drowned** is judged per reach cell against whichever body owns its span, not only the
-  basin the channel feeds: a lake that rises over the middle of a channel running past it,
-  or a basin an edit opens under one, drowns those cells too. The reach is cut at the
-  drowned run. The part above ends in that body (its outflow gets a new lip and, if the jet
-  separates there, an arc); the part below, if any, recedes as a channel with no inflow.
-  - The water moved is what the drowned length holds, not a share by length: the rating
-    area integrated over `[max(x_t, cut), x_f]` at the reach's `Q_out`, plus the pothole
-    storage in that range. Mouth sections are the widest, so a share by length moves too
-    little. `Q_out` stays continuous across the cut, and `x_f` is clamped to the new length.
-  - The kept part is rebuilt from its cells (`build_reaches`): its `Ā`, length, claimed
-    spans and mesh.
-  - A reach drowned whole is removed with a `Transfer` of its storage, and every reach feeding
-    it (each branch at a junction) is tested next.
-- **Exposed** walks on from the channel's last cell, or from a fall's landing, over the cells
-  the basin has let go, as a channel from there, and appends what it lays. The new reaches
-  start empty: their water is in the basin's hypsometry. The walk may end over a fall, into
-  the basin again further out, or anywhere else a channel ends.
-- Reaches upstream of the boundary keep their state.
+- Where the water ran on out of a reach into standing water, the reach lets out what it did
+  before, and the water at the mouth is shared between the two as the reach holds it at that
+  flow: parcels are even along a reach, and a reach laid shorter holds its flow in less
+  water than they give it (the flat shelf a lake drowns first held more than its share).
+- Drowned is judged per reach cell against whichever body owns its span, not only the basin
+  the channel feeds: a lake that rises over the middle of a channel running past it, or a
+  basin an edit opens under one, drowns those cells too.
 
-**Why this cannot loop.** Drowned only ever moves water into the body that drowned the cells,
-so it only raises that body's level, which can only drown more: a cascade, but monotone and
-bounded by the channel's length. Exposed moves no water, so it cannot raise or lower anything.
-Neither direction feeds the other. The `floor_max + 5 cm` / `floor_min` band stops a level
-hovering at a shoreline from flickering; it is not what stops the loop. On a small tread
-(about 2 m²) one cut can raise the level by decimetres and drown the next cells too; the
-steady settle test bounds the sweeps.
+**Why this cannot loop.** A relay only moves water that stood over the cells a body has taken
+into that body, so it only raises the body, which can only drown more; exposure moves none.
+The `floor_max + 5 cm` / `floor_min` band stops a level hovering at a shoreline from laying
+the network again every tick. On a small tread (about 2 m²) one relay can raise the level by
+decimetres and drown the next cells too; the steady settle test bounds the sweeps.
 
 A rising lake meets a fall's lip first through the heights (§7.9): the sheet shortens to
 nothing. Only once the lake covers the channel's last cells does Drowned cut it.
@@ -1615,10 +1607,8 @@ decided before stage 2.
     with an empty basin made at the first real depression on the way, or
     the void sink at an open edge.
 
-  A link whose store is removed by a merge, split or drying is dropped, and
-  its outflow relinks by the same rule. Re-floods drop a basin's links too,
-  so they churn during big edits. That is harmless, but noisy in the
-  topology log.
+  A merge, split, drying or re-flood changes basins only; the network is
+  then laid again (§9.1), and every outflow links by the same rule.
 - **One weir per pair.** Two basins across one ridge share one reversible weir.
   A second weir the other way would carry the same water twice.
 - **Re-flooding after an edit** keeps the basin's claim through the flood, so
@@ -1727,17 +1717,15 @@ This is the stage most likely to need iteration on looks. 4a stands without it.
   too short to be a channel, its arc is joined to the next fall's, so a chain
   of falls is one path.
 - **A channel's outlet is kept as a point** (`ChannelOutlet`), with its fall.
-  A `SpanRef` would not survive the rebuild of its chunk. If the store a
-  channel fed is replaced (merged, split), its last reach relinks to
-  whatever stands there now.
+  A `SpanRef` would not survive the rebuild of its chunk.
 - **Channel removal is topological, not by id.** Laying a channel over a fall
   lays the one below first, so ids no longer run downstream.
 - **Sources.** A `Spring` is a `Reservoir` plus a `FixedRate` link launched
   along its traced arc; its `direction` is the launch velocity in m/s. A
-  `SkySource` has zero launch velocity. A source whose link goes relinks on
-  the next settle.
-- **Re-tracing.** An edit that re-pairs a column under any fall's arc drops
-  that link, and the channels it joins, and they relink by the usual rule.
+  `SkySource` has zero launch velocity. A source is linked again whenever
+  the network is laid again.
+- **Re-tracing.** Every fall is traced again when the network is laid again
+  (§9.1).
 - **Sinks** are boxes in `Outlets`, tested against the span in hand, so they
   hold through rebuilds. They drain into the same void sink as the open
   edges.
@@ -2163,9 +2151,9 @@ while the river is drawn on its water.
   - consecutive reaches share a boundary cell; its water is the lower reach's;
   - a reach's front round-tripped through its nearest centreline vertex; distances along
     a centreline now project onto its segments.
-- **Falls leave from the water.** A channel's lip is moved across onto the middle of the
-  water over its last cell, and its line runs on to it rather than easing back to the
-  walked cell. A sheet is as wide at its lip as the water leaving: a river's top width,
+- **Falls leave from the water.** A channel's line runs on to the middle of the water over
+  its last cell rather than easing back to the walked cell, and its lip is moved along its
+  edge onto that line (`Lip::through`). A sheet is as wide at its lip as the water leaving: a river's top width,
   or the wetted length of a crest; the `√Q` rule is left for springs.
 - **Invariant tests.** Every scenario, twice during its run: the network laid again over
   unchanged ground is laid identically a second time (exact), holds the same water, and
@@ -2185,12 +2173,44 @@ while the river is drawn on its water.
 - **Cost.** Blast frames as before (island_sea 1.48 ms, skyway 4.07, wrecking_yard 2.19)
   but thin_ice: the blast at its lake's lip re-floods the 17,735-span lake on the blast
   frame (7.2 ms with its mesh), where the valve paid it on the next.
+
+### Stage 9b: the settle lays the network again too
+
+Stage 9 left the settle patching between edits: shorelines cut and lengthened reaches, a
+re-flood at the cap carried links over, and a channel whose lake was merged or split was
+relinked by hand. That was the code play-testing still found river bugs in.
+
+- **The rule.** The settle's basin rules change basins only: merging, splitting, drying up,
+  joining the sea, and marking a basin to flood again from its water at its cap or below a
+  merge saddle it did not part at. None touches a link or a channel. If any fired, or water
+  has moved along a channel's bed (§8.2), the network is laid again over unchanged ground
+  (`rebuild` with an empty remap and the basins to flood again). Then outflows link, links
+  open and close, and reaches retire, as before.
+- **What went.** `shoreline.rs`'s cut, drown, expose and lengthen paths (only the two
+  staleness tests are left), `carry_links` and the settle's in-place `reregion`,
+  `relink_channel_end`, `remove_channel`, `one_reach`, `onto_water`, and the `CutReach`
+  and `ExtendReach` edits.
+- **What the pour learnt.** A reach whose runnel's water ran on past its end lets out what
+  the runnel did; where it ran on into standing water, the water at the mouth is shared
+  as the reach holds it at that flow (§8.2). A kept basin's crests name the stores beyond
+  them as the ground's owners say now, not through a table of renamed ids. The rebuild
+  links every basin's outflows, including basins it made itself, so an empty lowland the
+  sea floods is linked before the settle would dry it.
+- **Found on the way.** A channel ending over a fall was never tested for exposure: a lake
+  that drained from under a fall left it landing on dry bed, feeding the lake, until an
+  edit came. It is tested now, at the span its outlet names.
+- **Invariant tests.** The "laid again" test keeps four scenarios excepted from its 2 cm
+  check, now for hysteresis only: an outflow linked above 2·`Q_RETIRE` and kept to
+  `Q_RETIRE`; a shoreline laid at `floor_min` and relaid at `floor_max + 5 cm`; a fall's arc
+  traced at the flow when laid. A re-flood at the cap moves no surface by 2 cm; a channel
+  laid again as water rises over it lets out what it did, within 5 %.
+- **Cost.** A re-flood at the cap lays everything again: thin_ice's 17,735-span lake 4.9 ms
+  (4.1 in place before), skyway 1.3 (1.1). Blast frames as before.
 - **Open.**
-  - The settle still patches between edits: shorelines cut and extend reaches, a lake's
-    region is kept from a higher flood. A rebuild after that lays them afresh, so an
-    edit anywhere can move a river's reach boundaries a little once. Next: cut reaches at
-    points fixed on the ground rather than counted from the channel's head, and make the
-    settle's shoreline moves lay the channel again the same way.
+  - Hysteresis is the settle's only memory, and a relay inside a band snaps to the base
+    rule: a shoreline relay can cut the last reaches differently, since a tail under 8 m
+    folds into the reach before it. Cutting reaches where the bed's slope changes would
+    make each reach homogeneous and the fold harmless.
   - A fall's arc is traced at the flow running when it is laid, so a relay can move its
     landing (0.4 m in water_park's catch lake).
   - A river strip is centred on its water at 0.5 m³/s and drawn at its running flow; on

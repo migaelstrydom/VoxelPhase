@@ -266,8 +266,6 @@ fn churn(water: &mut WaterWorld) -> Vec<String> {
             TopologyEdit::AddLink(_) => "AddLink",
             TopologyEdit::RemoveLink(_) => "RemoveLink",
             TopologyEdit::Reregion { .. } => "Reregion",
-            TopologyEdit::CutReach { .. } => "CutReach",
-            TopologyEdit::ExtendReach { .. } => "ExtendReach",
             _ => continue,
         };
         *counts.entry(kind).or_default() += 1;
@@ -290,8 +288,6 @@ fn relays(edit: &TopologyEdit) -> bool {
             | TopologyEdit::AddLink(_)
             | TopologyEdit::RemoveLink(_)
             | TopologyEdit::Reregion { .. }
-            | TopologyEdit::CutReach { .. }
-            | TopologyEdit::ExtendReach { .. }
     )
 }
 

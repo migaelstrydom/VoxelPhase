@@ -1,4 +1,5 @@
-//! Rebuilding the network after a terrain edit.
+//! Laying the network again: after a terrain edit, and whenever the settle
+//! finds the one it has out of date with the water.
 //!
 //! ```text
 //!   before the geometry update   every reach's water ──▶ parcels at points
@@ -13,9 +14,8 @@
 //! Nothing of the old network is carried but its water and where it stood:
 //! no store, link or channel is patched, so none can disagree with the new
 //! ground. The network laid is the one the new ground and the water on it
-//! give, by the same rules the settle lays one between edits. Ground an
-//! edit did not touch gives the same stores and channels as before, holding
-//! the same water.
+//! give. Ground an edit did not touch gives the same stores and channels as
+//! before, holding the same water.
 //!
 //! A parcel goes to whatever holds its point now: a basin, a reach, an
 //! empty basin in the dry depression it has fallen into, or else a channel
@@ -27,7 +27,9 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::water::geometry::{Column, Drain, SpanRef, SpanRemap, COLUMN_SIZE, ORTHOGONAL};
 use crate::water::ids::StoreId;
-use crate::water::network::{Basin, CrestKind, FloodMode, HoleColumn, ReachState, Store};
+use crate::water::network::{
+    Basin, CrestCell, CrestKind, FloodMode, HoleColumn, ReachState, Store,
+};
 use crate::water::solver::Account;
 
 use super::super::edit::TopologyEdit;
@@ -88,8 +90,9 @@ struct Wet {
     design: f64,
     /// The most that flowed into a runnel poured into it.
     inflow: f64,
-    /// Where a runnel's last water landed, and what flowed out of it: the
-    /// reach's own outflow, if that is its last cell.
+    /// The furthest cell a runnel's water ran on from, out of the reach,
+    /// and what flowed out of the runnel: the reach's own outflow, if that is
+    /// its last cell.
     outflow: Option<(usize, f64)>,
     /// Every runnel poured into it was receding.
     receding: bool,
@@ -194,19 +197,27 @@ impl TopologyBuilder {
 
     /// Lay the network again over ground an edit has changed, as `remap`
     /// says, and pour back the water it held: the basins' from the network
-    /// as it stood, the reaches' from `runnels`, taken before the edit.
-    pub fn rebuild(&mut self, t: &mut Topology, remap: &SpanRemap, runnels: Vec<Runnel>) {
-        let ponds = self.ponds(t, remap);
+    /// as it stood, the reaches' from `runnels`, taken before the edit. The
+    /// basins in `reflood` are flooded again from their water even where the
+    /// ground under them is as it was.
+    pub fn rebuild(
+        &mut self,
+        t: &mut Topology,
+        remap: &SpanRemap,
+        reflood: &[StoreId],
+        runnels: Vec<Runnel>,
+    ) {
+        let ponds = self.ponds(t, remap, reflood);
         let kept: FxHashSet<StoreId> = ponds
             .iter()
             .filter(|p| p.kept.is_some())
             .map(|p| p.old)
             .collect();
         self.clear(t, &kept);
-        let (basins, runoff) = self.refill(t, ponds);
+        let runoff = self.refill(t, ponds);
         self.connect_lowlands(t, remap);
-        for &id in &basins {
-            if t.network.store(id).is_some() {
+        for id in t.network.store_ids() {
+            if t.network.store(id).and_then(Store::as_basin).is_some() {
                 self.link_outflows(t, id);
             }
         }
@@ -216,9 +227,13 @@ impl TopologyBuilder {
         let mut wetted = Wetted::default();
         let mut cells = Cells::default();
         for runnel in &runnels {
+            let mut above: Option<(StoreId, usize)> = None;
             for parcel in &runnel.parcels {
-                self.pour(t, *parcel, runnel, &mut cells, &mut wetted);
+                let landed = self.pour(t, *parcel, runnel, &mut cells, &mut wetted);
+                run_on(&mut wetted, above, landed, runnel);
+                above = landed;
             }
+            run_on(&mut wetted, above, None, runnel);
         }
         // Nothing under the water survived: the bed was blown away from
         // under it. The water runs on to wherever the ground there drains.
@@ -228,14 +243,14 @@ impl TopologyBuilder {
                 .map_or(Account::Sunk, |s| {
                     crate::water::solver::account(t.network, s)
                 });
-            self.receive(t, to, pond.volume, None, false, &mut wetted);
+            self.receive(t, to, pond.volume, None, &mut wetted);
         }
         let ends = ends(t, &runnels);
         self.wet_reaches(t, &wetted, &ends, &mut cells);
     }
 
     /// Every basin's water as it stands on the new ground.
-    fn ponds(&self, t: &Topology, remap: &SpanRemap) -> Vec<Pond> {
+    fn ponds(&self, t: &Topology, remap: &SpanRemap, reflood: &[StoreId]) -> Vec<Pond> {
         let mut holes = self.new_holes(t, remap);
         let touched: FxHashSet<Column> = remap
             .columns
@@ -255,6 +270,7 @@ impl TopologyBuilder {
             let mut kept_holes = basin.holes.clone();
             let new = holes.remove(&old).unwrap_or_default();
             let untouched = new.is_empty()
+                && !reflood.contains(&old)
                 && !columns.iter().any(|c| touched.contains(c))
                 && !basin
                     .crests
@@ -323,19 +339,16 @@ impl TopologyBuilder {
     /// body and a dry depression the edit opened to it a depression of its
     /// own, filled over a weir. Every new basin claims its seeds before any
     /// floods, so each finds the others' water where it stands. Returns the
-    /// basins, and the ponds with nothing left under their water.
-    fn refill(&mut self, t: &mut Topology, ponds: Vec<Pond>) -> (Vec<StoreId>, Vec<Pond>) {
-        let mut renamed: FxHashMap<StoreId, StoreId> = FxHashMap::default();
-        let was_basin: FxHashSet<StoreId> = ponds.iter().map(|p| p.old).collect();
-        let mut basins = Vec::new();
+    /// ponds with nothing left under their water.
+    fn refill(&mut self, t: &mut Topology, ponds: Vec<Pond>) -> Vec<Pond> {
+        let mut kept = Vec::new();
         let mut runoff = Vec::new();
         let mut flooding = Vec::new();
         for mut pond in ponds {
             if let Some(basin) = pond.kept.take() {
                 t.network.restore(pond.old, Store::Basin(basin));
                 self.record(TopologyEdit::AddStore(pond.old));
-                renamed.insert(pond.old, pond.old);
-                basins.push(pond.old);
+                kept.push(pond.old);
             } else if pond.seeds.is_empty() {
                 runoff.push(pond);
             } else {
@@ -361,36 +374,19 @@ impl TopologyBuilder {
             .collect();
         for (pond, flood) in flooding.into_iter().zip(floods) {
             let id = self.add_basin(t, Basin::with_holes(flood, pond.volume, pond.holes));
-            renamed.insert(pond.old, id);
             self.record(TopologyEdit::Reregion {
                 basin: id,
                 seeds: pond.seeds,
             });
-            basins.push(id);
         }
-        // A kept basin's crests name the basins beyond them by their old ids.
-        for &id in &kept_ids(&basins, &renamed) {
-            if let Some(basin) = t.network.store_mut(id).and_then(Store::as_basin_mut) {
-                let rename = |kind: &mut CrestKind| {
-                    if let CrestKind::Child { owner: Some(o) } = kind {
-                        if was_basin.contains(o) {
-                            *kind = CrestKind::Child {
-                                owner: renamed.get(o).copied(),
-                            };
-                        }
-                    }
-                };
-                basin.crests.iter_mut().for_each(|c| rename(&mut c.kind));
-                for outflow in &mut basin.outflows {
-                    rename(&mut outflow.kind);
-                    outflow.cells.iter_mut().for_each(|c| rename(&mut c.kind));
-                }
-            }
+        for id in kept {
+            rename_neighbours(t, id);
         }
-        (basins, runoff)
+        runoff
     }
 
-    /// Pour a parcel of `runnel`'s where it stands now.
+    /// Pour a parcel of `runnel`'s where it stands now. Returns the reach
+    /// and cell it landed on, if a reach.
     fn pour(
         &mut self,
         t: &mut Topology,
@@ -398,12 +394,12 @@ impl TopologyBuilder {
         runnel: &Runnel,
         cells: &mut Cells,
         wetted: &mut Wetted,
-    ) {
+    ) -> Option<(StoreId, usize)> {
         let column = Column::containing(parcel.at.x, parcel.at.z);
         let Some(span) = t.geometry.graph().span_at(column, parcel.at.y) else {
             let void = self.void(t);
-            self.receive(t, Account::Store(void), parcel.volume, None, false, wetted);
-            return;
+            self.receive(t, Account::Store(void), parcel.volume, None, wetted);
+            return None;
         };
         let to = self.holder_of(t, span, runnel.flow, cells);
         let account = crate::water::solver::account(t.network, to);
@@ -412,15 +408,9 @@ impl TopologyBuilder {
             .filter(|(reach, _)| *reach == to)
             .map(|(_, cell)| cell)
             .or_else(|| nearest_cell(t, to, parcel.at));
-        let last = runnel.parcels.last().is_some_and(|p| p.at == parcel.at);
-        self.receive(
-            t,
-            account,
-            parcel.volume,
-            cell.map(|c| (c, runnel)),
-            last,
-            wetted,
-        );
+        self.receive(t, account, parcel.volume, cell.map(|c| (c, runnel)), wetted);
+        let is_reach = t.network.store(to).and_then(Store::as_reach).is_some();
+        cell.filter(|_| is_reach).map(|c| (to, c))
     }
 
     /// The store water standing on `span` belongs to: the basin or sea whose
@@ -478,7 +468,6 @@ impl TopologyBuilder {
         to: Account,
         volume: f64,
         cell: Option<(usize, &Runnel)>,
-        last: bool,
         wetted: &mut Wetted,
     ) {
         match to {
@@ -496,9 +485,6 @@ impl TopologyBuilder {
                     wet.last = wet.last.max(cell);
                     wet.design = wet.design.max(runnel.flow.design);
                     wet.inflow = wet.inflow.max(runnel.inflow);
-                    if last && wet.outflow.is_none_or(|(c, _)| cell >= c) {
-                        wet.outflow = Some((cell, runnel.outflow));
-                    }
                     wet.receding &= runnel.receding;
                 }
             }
@@ -561,10 +547,63 @@ impl TopologyBuilder {
             } else {
                 wet.inflow
             };
-            reach.outflow = match wet.outflow {
-                Some((cell, q)) if cell + 1 >= own_end => q,
-                _ => reach.release(reach.storage).0,
+            let ran_on = wet.outflow.filter(|(cell, _)| cell + 1 >= own_end);
+            reach.outflow = match ran_on {
+                Some((_, q)) => q,
+                None => reach.release(reach.storage).0,
             };
+            if let Some((_, q)) = ran_on {
+                self.share_mouth(t, id, q);
+            }
+        }
+    }
+
+    /// Share the water at a channel's mouth between its last reach, running
+    /// at `q`, and the standing water it runs into, as the reach holds it at
+    /// that flow: parcels are even along a reach, and a reach laid shorter
+    /// or longer holds its flow in more or less water than they give it.
+    fn share_mouth(&mut self, t: &mut Topology, id: StoreId, q: f64) {
+        let Some(reach) = t.network.store(id).and_then(Store::as_reach) else {
+            return;
+        };
+        if reach.state == ReachState::Advancing {
+            return;
+        }
+        let Some(down) = downstream_of(t.network, id) else {
+            return;
+        };
+        let into = match t.network.store(down) {
+            Some(Store::Basin(b)) => Some(b.volume),
+            Some(Store::Ocean(_)) => None,
+            _ => return,
+        };
+        let holds = reach.rating.at(q).area * reach.wetted() as f64
+            + reach.dead_between(reach.tail, reach.front);
+        let excess = reach.storage - holds;
+        let excess = into.map_or(excess, |v| excess.max(-v));
+        let to = crate::water::solver::account(t.network, down);
+        self.transfer(t, Account::Store(id), to, excess);
+    }
+}
+
+/// A runnel's water landed on reach cell `above`, and its next parcel on
+/// `below`, or nowhere further: where it left the reach, the reach lets out
+/// what the runnel did.
+fn run_on(
+    wetted: &mut Wetted,
+    above: Option<(StoreId, usize)>,
+    below: Option<(StoreId, usize)>,
+    runnel: &Runnel,
+) {
+    let Some((reach, cell)) = above else {
+        return;
+    };
+    if below.is_some_and(|(next, _)| next == reach) {
+        return;
+    }
+    if let Some(wet) = wetted.get_mut(&reach) {
+        if wet.outflow.is_none_or(|(c, _)| cell >= c) {
+            wet.outflow = Some((cell, runnel.outflow));
         }
     }
 }
@@ -615,13 +654,50 @@ fn nearest_cell(t: &Topology, id: StoreId, at: Point3<f32>) -> Option<usize> {
     )
 }
 
-/// The basins of `basins` that kept their ids.
-fn kept_ids(basins: &[StoreId], renamed: &FxHashMap<StoreId, StoreId>) -> Vec<StoreId> {
-    basins
+/// Name again the stores beyond a kept basin's crests where the basins its
+/// flood found there are gone: whatever owns the span beyond each crest cell
+/// now, as a flood would find it. An outflow is named for its lowest cell.
+fn rename_neighbours(t: &mut Topology, id: StoreId) {
+    let graph = t.geometry.graph();
+    let network = &*t.network;
+    let now = |cell: &CrestCell| match cell.kind {
+        CrestKind::Child { owner: Some(o) } if network.store(o).is_none() => CrestKind::Child {
+            owner: graph
+                .owner(cell.outside)
+                .body
+                .filter(|b| network.store(*b).is_some()),
+        },
+        kind => kind,
+    };
+    let Some(basin) = network.store(id).and_then(Store::as_basin) else {
+        return;
+    };
+    let crests: Vec<CrestKind> = basin.crests.iter().map(now).collect();
+    let outflows: Vec<(CrestKind, Vec<CrestKind>)> = basin
+        .outflows
         .iter()
-        .copied()
-        .filter(|id| renamed.get(id) == Some(id))
-        .collect()
+        .map(|o| {
+            let lowest = o.cells.iter().min_by(|a, b| a.saddle.total_cmp(&b.saddle));
+            (
+                lowest.map_or(o.kind, now),
+                o.cells.iter().map(now).collect(),
+            )
+        })
+        .collect();
+    let basin = t
+        .network
+        .store_mut(id)
+        .and_then(Store::as_basin_mut)
+        .expect("checked above");
+    for (cell, kind) in basin.crests.iter_mut().zip(crests) {
+        cell.kind = kind;
+    }
+    for (outflow, (kind, cells)) in basin.outflows.iter_mut().zip(outflows) {
+        outflow.kind = kind;
+        for (cell, kind) in outflow.cells.iter_mut().zip(cells) {
+            cell.kind = kind;
+        }
+    }
 }
 
 /// Every reach, each after every reach that feeds it.

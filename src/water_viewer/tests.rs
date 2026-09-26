@@ -513,44 +513,28 @@ fn a_lake_moves_a_channel_s_shoreline_without_pouring_the_channel_into_it() {
                 .query()
                 .sample(Point3::new(4.0, 6.2, 0.0))
                 .map(|s| s.body);
-            let channel: Vec<StoreId> = water
-                .network()
-                .stores()
-                .filter(|(_, s)| s.as_reach().is_some())
-                .map(|(id, _)| id)
-                .collect();
             let bed = water
                 .query()
                 .sample(Point3::new(4.0, 6.2, 0.0))
                 .and_then(|s| water.network().store(s.body)?.as_reach().map(|_| s.body));
-            logs.push((water.topology_log().to_vec(), lake, channel, bed));
+            logs.push((water.topology_log().to_vec(), lake, bed));
         },
     )
     .unwrap();
     assert!(recorded.samples.iter().all(|s| s.ledger_error.abs() < 1e-6));
-    let (before, lake, channel, _) = &logs[0];
-    let lake = lake.expect("the lake");
-    // Rising, the lake cuts the channel back cell by cell, and what the
-    // channel loses goes into the lake: none of it is poured elsewhere, and
-    // no reach is laid again.
-    let cuts = before
+    let (before, lake, _) = &logs[0];
+    assert!(lake.is_some(), "the lake");
+    // Rising, the lake takes the channel's cells, and the network is laid
+    // again each time: the water on the cells it has taken is poured into
+    // it, and the rest back into the channel. None leaves the stores.
+    let relays = before
         .iter()
-        .filter(|e| matches!(e, TopologyEdit::CutReach { reach, .. } if channel.contains(reach)))
+        .filter(|e| matches!(e, TopologyEdit::Cleared(_)))
         .count();
-    assert!(cuts >= 2, "{cuts} cuts");
+    assert!(relays >= 2, "laid again {relays} times");
     for edit in before {
-        match edit {
-            TopologyEdit::Transfer {
-                from: Account::Store(from),
-                to,
-                ..
-            } if channel.contains(from) => {
-                assert_eq!(*to, Account::Store(lake), "{edit:?}")
-            }
-            TopologyEdit::RemoveStore { store, residual_to } if channel.contains(store) => {
-                assert_eq!(*residual_to, Account::Store(lake), "{edit:?}")
-            }
-            _ => {}
+        if let TopologyEdit::Poured { into, .. } = edit {
+            assert!(matches!(into, Account::Store(_)), "{edit:?}");
         }
     }
     // Before the blast its level climbs smoothly: no river's storage is
@@ -570,8 +554,8 @@ fn a_lake_moves_a_channel_s_shoreline_without_pouring_the_channel_into_it() {
     assert!(jump < 0.02, "the lake jumped {jump} m");
     // Drained, the lake leaves the channel's bed dry, and the channel runs
     // on down it.
-    assert!(logs[0].3.is_none(), "the lake stood over the bed");
-    let (_, _, _, bed) = &logs[1];
+    assert!(logs[0].2.is_none(), "the lake stood over the bed");
+    let (_, _, bed) = &logs[1];
     assert!(bed.is_some(), "no channel runs over the drained bed");
 }
 
@@ -771,47 +755,48 @@ fn a_river_ending_a_little_over_the_sea_falls_into_it() {
 }
 
 #[test]
-fn a_reach_cut_short_by_rising_water_lets_out_what_it_did_before() {
+fn a_channel_laid_again_as_water_rises_over_it_lets_out_what_it_did_before() {
     let scenario = find("shoreline").unwrap();
     let dt = 1.0 / 60.0;
     let times: Vec<f32> = (0..6000).map(|i| 60.0 + i as f32 * dt).collect();
-    // Each tick: the reaches cut so far, and every reach's outflow.
-    let mut ticks: Vec<(Vec<StoreId>, Vec<(StoreId, f64)>)> = Vec::new();
-    run_with_captures(&scenario, RunConfig::default(), &times, |_, _, water| {
-        let cut = water
+    // Each tick: how many times the lake has been laid again, and what the
+    // channel lets out into it.
+    let mut ticks: Vec<(usize, f64, f32)> = Vec::new();
+    run_with_captures(&scenario, RunConfig::default(), &times, |t, _, water| {
+        let network = water.network();
+        let lake = water
+            .query()
+            .sample(Point3::new(4.0, 6.2, 0.0))
+            .map(|s| s.body)
+            .filter(|b| network.store(*b).and_then(Store::as_basin).is_some());
+        let relays = water
             .topology_log()
             .iter()
-            .filter_map(|e| match e {
-                TopologyEdit::CutReach { reach, .. } => Some(*reach),
-                _ => None,
-            })
-            .collect();
-        let outflows = water
-            .network()
-            .stores()
-            .filter_map(|(id, s)| Some((id, s.as_reach()?.outflow)))
-            .collect();
-        ticks.push((cut, outflows));
+            .filter(|e| matches!(e, TopologyEdit::Cleared(id) if Some(*id) == lake))
+            .count();
+        let into = network
+            .links()
+            .filter(|(_, l)| Some(l.down) == lake)
+            .filter_map(|(_, l)| network.store(l.up)?.as_reach())
+            .map(|r| r.outflow)
+            .sum();
+        ticks.push((relays, into, t));
     })
     .unwrap();
-    let outflow = |tick: &(Vec<StoreId>, Vec<(StoreId, f64)>), id: StoreId| {
-        tick.1.iter().find(|(r, _)| *r == id).map(|(_, q)| *q)
-    };
     let mut checked = 0;
     for w in ticks.windows(2) {
-        for reach in &w[1].0[w[0].0.len()..] {
-            let (Some(before), Some(after)) = (outflow(&w[0], *reach), outflow(&w[1], *reach))
-            else {
-                continue;
-            };
-            assert!(
-                (after - before).abs() < 0.05 * before.max(0.1),
-                "reach {reach:?}: outflow {before} -> {after} across a cut"
-            );
-            checked += 1;
+        if w[1].0 == w[0].0 {
+            continue;
         }
+        let (before, after) = (w[0].1, w[1].1);
+        assert!(
+            (after - before).abs() < 0.05 * before.max(0.1),
+            "outflow {before} -> {after} across laying the channel again at {} s",
+            w[1].2
+        );
+        checked += 1;
     }
-    assert!(checked >= 2, "{checked} cuts in the window");
+    assert!(checked >= 2, "laid again {checked} times in the window");
 }
 
 #[test]
@@ -857,35 +842,40 @@ fn a_lake_rising_past_its_cap_keeps_the_river_leaving_it() {
     // From 140 s the lake spills through the notch and goes on rising, which
     // re-floods it at its cap every few centimetres until the blast at 180 s.
     let scenario = find("shoreline").unwrap();
-    let mut logs = Vec::new();
-    run_with_captures(
-        &scenario,
-        RunConfig::default(),
-        &[145.0, 179.9],
-        |_, _, water| logs.push(water.topology_log().to_vec()),
-    )
+    let dt = 1.0 / 60.0;
+    let times: Vec<f32> = (0..2100).map(|i| 145.0 + i as f32 * dt).collect();
+    // Each re-flood lays the network again, and the water, the weir's over
+    // the notch and the river's below it, stands where it did.
+    let mut last: Option<(usize, Vec<(Point3<f32>, Option<f32>)>)> = None;
+    let mut refloods = 0;
+    let mut moved = Vec::new();
+    run_with_captures(&scenario, RunConfig::default(), &times, |t, _, water| {
+        let count = water
+            .topology_log()
+            .iter()
+            .filter(|e| matches!(e, TopologyEdit::Reregion { .. }))
+            .count();
+        let seen = surfaces(water);
+        if let Some((before, previous)) = &last {
+            if count != *before {
+                refloods += 1;
+                for ((at, a), (_, b)) in previous.iter().zip(&seen) {
+                    let off = match (a, b) {
+                        (Some(a), Some(b)) => (a - b).abs() > 0.02,
+                        (None, None) => false,
+                        _ => true,
+                    };
+                    if off {
+                        moved.push(format!("{t:.2} s at {at:?}: {a:?} -> {b:?}"));
+                    }
+                }
+            }
+        }
+        last = Some((count, seen));
+    })
     .unwrap();
-    let rising = &logs[1][logs[0].len()..];
-    let reregions = rising
-        .iter()
-        .filter(|e| matches!(e, TopologyEdit::Reregion { .. }))
-        .count();
-    assert!(reregions >= 2, "{reregions} re-floods");
-    // Each re-flood keeps the weir over the notch and the river below it:
-    // nothing is removed, and nothing laid again.
-    let relaid: Vec<_> = rising
-        .iter()
-        .filter(|e| {
-            matches!(
-                e,
-                TopologyEdit::AddStore(_)
-                    | TopologyEdit::RemoveStore { .. }
-                    | TopologyEdit::AddLink(_)
-                    | TopologyEdit::RemoveLink(_)
-            )
-        })
-        .collect();
-    assert!(relaid.is_empty(), "{relaid:?}");
+    assert!(refloods >= 2, "{refloods} re-floods");
+    assert!(moved.is_empty(), "{:#?}", &moved[..moved.len().min(8)]);
 }
 
 #[test]
@@ -1002,18 +992,19 @@ fn surfaces(water: &WaterWorld) -> Vec<(Point3<f32>, Option<f32>)> {
     out
 }
 
-/// Scenarios whose network the settle has changed in ways a network laid
-/// afresh does not repeat, so that laid again their water stands a little
-/// differently; laid twice, it must not:
+/// Scenarios where what the settle keeps inside a hysteresis band differs
+/// from what a network laid afresh starts from, so that laid again their
+/// water stands a little differently; laid twice, it must not:
 ///
-/// - river: a draining lake keeps the region it was flooded to higher up,
-///   whose banks by its outlet a fresh flood leaves to the river;
-/// - shoreline: a rising lake cuts its inflowing channel back, and a
-///   falling one carries it on, reach by reach; laid again it is one channel;
-/// - river_diversion, river_blast: below a crater, a channel was laid on
-///   from the water standing there, and the crater's outflow joined it;
-///   laid again, it is one channel from the crater's lip, cut into reaches
-///   from there.
+/// - river: a draining lake's outflow is linked once its flow passes twice
+///   `Q_RETIRE` and kept until it drops below `Q_RETIRE`; laid again in
+///   between, it is not linked;
+/// - shoreline: a channel is laid down to the first span water stands over,
+///   and laid again only once the water stands `DROWN_MARGIN` over a cell's
+///   highest floor; in between, laid again it is a cell shorter, and cut
+///   into reaches differently;
+/// - river_diversion, river_blast: a fall's arc is traced at the flow when
+///   it was laid; laid again at the flow now, it lands a cell over.
 const SETTLE_HISTORY: [&str; 4] = ["river", "shoreline", "river_diversion", "river_blast"];
 
 #[test]

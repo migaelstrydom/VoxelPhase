@@ -2,7 +2,7 @@
 //!
 //! ```text
 //!   authored pools ──create_pool──┐
-//!   terrain edits ──after_edit────┼──▶ stores, links, regions, span owners ──▶ solver
+//!   terrain edits ──rebuild───────┼──▶ stores, links, regions, span owners ──▶ solver
 //!   between ticks ──settle────────┘    (every volume moved via the ledger)
 //! ```
 //!
@@ -14,9 +14,12 @@
 //! its lip: until then nothing crosses it, and a weir would carry zero. Its
 //! target is resolved then: the store owning the far side, or for an outlet
 //! the store its drainage path reaches (§7.4, instant routing), with an empty
-//! basin made in a dry depression on the way. A link whose store is removed
-//! by a merge, split or drying is dropped, and its outflow relinks the same
-//! way. So every topology change heals by the same rule.
+//! basin made in a dry depression on the way.
+//!
+//! **Links and channels are never patched.** A terrain edit, or a settle
+//! that has reshaped a basin or seen water move along a channel's bed, lays
+//! the whole network again over the water as it stands (`rebuild`). So every
+//! link and channel is one the ground and the water give.
 
 use std::fmt;
 
@@ -38,8 +41,8 @@ use crate::water::solver::{account, Account, VolumeLedger};
 
 use super::edit::TopologyEdit;
 use super::router::{
-    build_reaches, channel_heads, downstream_of, onto_water, reach_footprint, rescan, standing_in,
-    walk, WalkEnd, WalkLip, CENTRE_DISCHARGE,
+    build_reaches, channel_heads, downstream_of, reach_footprint, rescan, standing_in, walk,
+    WalkEnd, WalkLip,
 };
 
 mod rebuild;
@@ -434,130 +437,58 @@ impl TopologyBuilder {
         holes
     }
 
-    /// Re-flood a basin from its wet spans at its current level, keeping its
-    /// volume: it has risen to its region's cap, or drained below a merge
-    /// saddle without parting. The ground has not changed, so an outflow
-    /// the new region still has keeps its link, and the channel below it
-    /// never goes unfed; the rest are regrouped and relinked lazily. The
-    /// basin keeps its claim through the flood, so its own spans are its
-    /// own and a dry depression it can now reach is not.
-    pub fn reregion(&mut self, t: &mut Topology, id: StoreId) {
-        let Some(basin) = t.network.store(id).and_then(Store::as_basin) else {
-            return;
-        };
-        let level = basin.level();
-        let columns = basin.columns();
-        let old = basin.outflows.clone();
-        let seeds = self.surviving_seeds(t, id, &columns, level, None);
-        if seeds.is_empty() {
-            // Nothing stands under the water: it runs on to wherever the
-            // ground there drains.
-            let to = self
-                .runoff(t, id, &columns, level)
-                .map_or(Account::Sunk, |s| account(t.network, s));
-            self.remove_basin(t, id, to);
-            return;
-        }
-        let flood = self.flood(t, Some(id), &seeds, level, FloodMode::Reregion);
-        self.release(t, id, &columns);
-        let basin = t
-            .network
-            .store_mut(id)
-            .and_then(Store::as_basin_mut)
-            .expect("checked above");
-        basin.reregion(flood);
-        self.carry_links(t, id, &old);
-        self.claim(t, id);
-        self.record(TopologyEdit::Reregion { basin: id, seeds });
-    }
-
-    /// Hand each link of a basin's `old` outflows to the new outflow over
-    /// the same crest, its law remade for the new outflow's cells, and
-    /// remove the links no new outflow crosses.
-    fn carry_links(&mut self, t: &mut Topology, id: StoreId, old: &[Outflow]) {
-        let mut carried: Vec<LinkId> = Vec::new();
-        let count = t
-            .network
-            .store(id)
-            .and_then(Store::as_basin)
-            .map_or(0, |b| b.outflows.len());
-        for index in 0..count {
-            let outflow = t
-                .network
-                .store(id)
-                .and_then(Store::as_basin)
-                .map(|b| b.outflows[index].clone())
-                .expect("live");
-            let Some(before) = old.iter().find(|o| {
-                o.link
-                    .is_some_and(|l| !carried.contains(&l) && t.network.link(l).is_some())
-                    && o.hole.is_some() == outflow.hole.is_some()
-                    && o.cells
-                        .iter()
-                        .any(|a| outflow.cells.iter().any(|b| a.outside == b.outside))
-            }) else {
-                continue;
-            };
-            let link = before.link.expect("found by it");
-            carried.push(link);
-            let law = self.outflow_law(
-                &outflow,
-                t.network.link(link).expect("live").law.reversible(),
-            );
-            if let Some(entry) = t.network.link_mut(link) {
-                entry.law = law;
-            }
-            if let Some(o) = t
-                .network
-                .store_mut(id)
-                .and_then(Store::as_basin_mut)
-                .and_then(|b| b.outflows.get_mut(index))
-            {
-                o.link = Some(link);
-                o.target = before.target;
-            }
-        }
-        for link in old.iter().filter_map(|o| o.link) {
-            if !carried.contains(&link) {
-                self.remove_link(t, link);
-            }
-        }
-    }
-
-    /// The between-tick housekeeping of every basin: links to outflows it has
-    /// risen to, closing and reopening them, merges, splits, the loss gate,
-    /// drying up, and re-flooding a basin that has risen to the top of its
-    /// region.
+    /// The between-tick housekeeping. Every outflow a basin has risen to is
+    /// linked, and links close and reopen. Then the water's own rules
+    /// reshape the basins: merging, splitting, drying up, joining the sea,
+    /// rising to the top of a region. None of them touches a link or a
+    /// channel: if any fired, or water has moved along a channel's bed, the
+    /// network is laid again over the water as it stands. Last, reaches dry
+    /// up.
     pub fn settle(&mut self, t: &mut Topology, loss: &LossLaw) {
-        self.settle_reaches(t, loss);
         self.link_sources(t);
+        for id in t.network.store_ids() {
+            if t.network.store(id).and_then(Store::as_basin).is_some() {
+                self.link_outflows(t, id);
+                self.close_or_open(t, id);
+            }
+        }
+        let edits = self.edits;
+        let reflood = self.reshape_basins(t, loss);
+        if self.edits != edits || !reflood.is_empty() || self.shorelines_moved(t) {
+            let runnels = self.runnels(t);
+            self.rebuild(t, &SpanRemap::default(), &reflood, runnels);
+        }
+        self.settle_reaches(t, loss);
+    }
+
+    /// Merge, split and dry up basins, join them to the sea, and set their
+    /// loss gate. Returns the basins to flood again from their water: risen
+    /// to the top of their region, or drained below a merge saddle without
+    /// parting.
+    fn reshape_basins(&mut self, t: &mut Topology, loss: &LossLaw) -> Vec<StoreId> {
+        let mut reflood = Vec::new();
         for id in t.network.store_ids() {
             if t.network.store(id).and_then(Store::as_basin).is_none() {
                 continue;
             }
-            self.link_outflows(t, id);
-            self.close_or_open(t, id);
             if self.merge_with_neighbour(t, id) {
                 continue;
             }
-
             let basin = t.network.store(id).and_then(Store::as_basin).expect("live");
             let level = basin.level();
-            if basin
+            let below_saddle = basin
                 .merge_saddles
                 .iter()
-                .any(|m| level < m.saddle - SPLIT_BELOW)
-            {
-                self.split(t, id);
+                .any(|m| level < m.saddle - SPLIT_BELOW);
+            let at_cap = level > basin.cap - CAP_MARGIN;
+            if below_saddle && self.split(t, id) {
                 continue;
             }
-            if level > basin.cap - CAP_MARGIN {
-                self.reregion(t, id);
-            }
-
-            let Some(basin) = t.network.store(id).and_then(Store::as_basin) else {
+            if below_saddle || at_cap {
+                reflood.push(id);
                 continue;
-            };
+            }
+            let basin = t.network.store(id).and_then(Store::as_basin).expect("live");
             if basin.volume < DRIED_VOLUME && !self.fed(t, id) {
                 let residual_to = basin
                     .outflows
@@ -577,6 +508,7 @@ impl TopologyBuilder {
                 self.record(TopologyEdit::SetMinor { store: id, minor });
             }
         }
+        reflood
     }
 
     /// Lay a channel from an outlet down the drainage field to the store it
@@ -653,19 +585,13 @@ impl TopologyBuilder {
             .last()
             .map(|c| (c.column, t.geometry.graph().span(*c).floor_c))
             .or(lip.map(|l| (l.inside.column, l.height)));
-        // Water leaves over the middle of the water running over the last
-        // cell, at the bed slope there: found as the river's line is, so the
-        // fall leaves from under the river, and from the same place however
-        // often the channel is laid.
-        let on_water = |lip: Lip| {
-            let graph = t.geometry.graph();
-            let standing = standing_in(graph, t.network, &heads);
-            let slope = match cells.as_slice() {
-                [.., a, b] => (graph.span(*a).floor_c - graph.span(*b).floor_c) / COLUMN_SIZE,
-                _ => 0.0,
-            };
-            onto_water(graph, lip, CENTRE_DISCHARGE, slope.max(1e-3), &standing)
-        };
+        // Water leaves where the river's line ends, on the middle of the
+        // water over its last cell: the fall leaves from under the river, and
+        // from the same place however often the channel is laid.
+        let river_end = reaches
+            .last()
+            .and_then(|r| r.centreline.points.last().copied());
+        let on_water = |lip: Lip| river_end.map_or(lip, |end| lip.through(end));
         // A channel ending in a pit or off the world's edge holds the span it
         // ends at as its last cell: there is no edge to cross, and its lip is
         // its last reach's own end.
@@ -926,21 +852,6 @@ impl TopologyBuilder {
         .trace(at, velocity)
     }
 
-    /// The store other than `except` whose water stands over `span`, if any.
-    fn standing_water(&self, t: &Topology, span: SpanRef, except: StoreId) -> Option<StoreId> {
-        let graph = t.geometry.graph();
-        let owner = graph.owner(span);
-        if let Some((reach, _)) = owner
-            .reach
-            .filter(|(r, _)| *r != except && t.network.store(*r).is_some())
-        {
-            return Some(reach);
-        }
-        owner
-            .body
-            .filter(|_| surface_over(graph, t.network, span).is_some())
-    }
-
     /// Place a spring or sky source: a reservoir giving `discharge` from
     /// `position`, launched at `velocity`, linked to wherever it lands.
     pub fn create_source(
@@ -1017,47 +928,6 @@ impl TopologyBuilder {
         self.sources[index].link = Some(link);
     }
 
-    /// Link the last reach of a channel again once the store it fed has been
-    /// replaced (merged, split): to whatever stands at its outlet now.
-    fn relink_channel_end(&mut self, t: &mut Topology, id: StoreId) {
-        let Some(reach) = t.network.store(id).and_then(Store::as_reach) else {
-            return;
-        };
-        if downstream_of(t.network, id).is_some() {
-            return;
-        }
-        let Some(outlet) = reach.outlet.clone() else {
-            let void = self.void(t);
-            self.link_reach(t, id, void, None, None);
-            return;
-        };
-        let column = Column::containing(outlet.at.x, outlet.at.z);
-        let span = t
-            .geometry
-            .graph()
-            .span_at(column, outlet.at.y + OUTLET_LIFT);
-        // A channel ending in a dry pit claims the pit's first span as its
-        // last cell, so a walk from there finds the channel itself: the pit
-        // gets an empty basin again.
-        let target = match span {
-            None => Some(self.void(t)),
-            Some(span) => match self.standing_water(t, span, id) {
-                Some(store) => Some(store),
-                None if self.in_depression(t, span) => Some(self.empty_basin(t, span)),
-                None => {
-                    // The water it ran into has gone from its shore: it
-                    // carries on over the bed left dry (§8.2).
-                    self.expose(t, id, span, None);
-                    return;
-                }
-            },
-        };
-        match target.filter(|d| *d != id) {
-            Some(down) => self.link_reach(t, id, down, None, outlet.fall),
-            None => self.remove_channel(t, id),
-        }
-    }
-
     /// Mark the spans a reach's water covers at its design discharge, each
     /// with the reach cell nearest it.
     fn claim_reach(&self, t: &mut Topology, id: StoreId) {
@@ -1097,15 +967,9 @@ impl TopologyBuilder {
         }
     }
 
-    /// Move every channel's shoreline to where the water stands (§8.2),
-    /// relink channel ends whose store was replaced, retire reaches whose
-    /// water has run out, set their loss gate, and rescan any whose flow has
-    /// outgrown its rating.
+    /// Retire reaches whose water has run out, set their loss gate, and
+    /// rescan any whose flow has outgrown its rating.
     fn settle_reaches(&mut self, t: &mut Topology, loss: &LossLaw) {
-        self.move_shorelines(t);
-        for id in t.network.store_ids() {
-            self.relink_channel_end(t, id);
-        }
         for id in t.network.store_ids() {
             let Some(reach) = t.network.store(id).and_then(Store::as_reach) else {
                 continue;
@@ -1173,49 +1037,6 @@ impl TopologyBuilder {
             store: id,
             residual_to,
         });
-    }
-
-    /// Remove a reach and every reach joined to it, up or down: the channel
-    /// the outflow that fed it will lay again.
-    fn remove_channel(&mut self, t: &mut Topology, start: StoreId) {
-        if t.network.store(start).and_then(Store::as_reach).is_none() {
-            return;
-        }
-        let mut channel: Vec<StoreId> = vec![start];
-        let mut seen: FxHashSet<StoreId> = channel.iter().copied().collect();
-        let mut cursor = 0;
-        while cursor < channel.len() {
-            let id = channel[cursor];
-            cursor += 1;
-            for (_, link) in t.network.links() {
-                for other in [link.up, link.down] {
-                    let joined = (link.up == id || link.down == id)
-                        && t.network
-                            .store(other)
-                            .is_some_and(|s| s.as_reach().is_some());
-                    if joined && seen.insert(other) {
-                        channel.push(other);
-                    }
-                }
-            }
-        }
-        // Upstream first, so each reach's water lands in the reach below,
-        // still there, and the last reach's in the channel's target.
-        channel.sort();
-        while !channel.is_empty() {
-            let top = channel
-                .iter()
-                .position(|&id| {
-                    !t.network
-                        .links()
-                        .any(|(_, l)| l.down == id && channel.contains(&l.up))
-                })
-                .unwrap_or(0);
-            let id = channel.remove(top);
-            if t.network.store(id).and_then(Store::as_reach).is_some() {
-                self.remove_reach(t, id);
-            }
-        }
     }
 
     /// Link every outflow the basin has risen to, and forget links whose
@@ -1419,7 +1240,7 @@ impl TopologyBuilder {
 
     /// Two basins standing at one level over the ridge between them become
     /// one: a new store over both regions, holding both volumes.
-    pub fn merge(&mut self, t: &mut Topology, a: StoreId, b: StoreId) {
+    fn merge(&mut self, t: &mut Topology, a: StoreId, b: StoreId) {
         let (Some(first), Some(second)) = (
             t.network.store(a).and_then(Store::as_basin),
             t.network.store(b).and_then(Store::as_basin),
@@ -1468,16 +1289,15 @@ impl TopologyBuilder {
     /// Split a basin that has drained below a merge saddle into one basin per
     /// connected part of what is still under water. Each part keeps the
     /// volume its own hypsometry puts under the level; the rounding remainder
-    /// goes to the largest.
-    pub fn split(&mut self, t: &mut Topology, id: StoreId) {
+    /// goes to the largest. Returns whether it parted.
+    fn split(&mut self, t: &mut Topology, id: StoreId) -> bool {
         let Some(basin) = t.network.store(id).and_then(Store::as_basin) else {
-            return;
+            return false;
         };
         let level = basin.level();
         let volume = basin.volume;
         let columns = basin.columns();
         let holes = basin.holes.clone();
-        let links: Vec<LinkId> = basin.links().collect();
         let wet: Vec<SpanRef> = basin
             .region
             .iter()
@@ -1486,12 +1306,7 @@ impl TopologyBuilder {
             .collect();
         let parts = self.wet_components(t, &wet, level);
         if parts.len() < 2 {
-            self.reregion(t, id);
-            return;
-        }
-
-        for link in links {
-            self.remove_link(t, link);
+            return false;
         }
         self.release(t, id, &columns);
         let mut children: Vec<(Flood, f64)> = Vec::new();
@@ -1548,6 +1363,7 @@ impl TopologyBuilder {
         for child in ids {
             self.claim(t, child);
         }
+        true
     }
 
     /// Where an outflow's water goes, making an empty basin in a dry

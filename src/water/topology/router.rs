@@ -16,8 +16,8 @@ use nalgebra::Point3;
 use crate::water::geometry::{Drain, SpanGraph, SpanRef};
 use crate::water::ids::StoreId;
 use crate::water::network::{
-    downhill, floor_near, is_pothole, Centreline, CrossSection, Lip, Network, RatingCurve, Reach,
-    Store, FALL_RUN, FALL_THRESHOLD,
+    downhill, floor_near, is_pothole, Centreline, CrossSection, Network, RatingCurve, Reach, Store,
+    FALL_RUN, FALL_THRESHOLD,
 };
 
 /// Reaches are cut at about this length, m.
@@ -202,30 +202,6 @@ fn fall_step(
     Some((at, toward))
 }
 
-/// A channel's lip moved across onto the middle of the water carrying `q`
-/// over its last cell, where the river is drawn: water leaves over the
-/// crest where it runs, not where the walk that found the crest stepped.
-pub fn onto_water(
-    graph: &SpanGraph,
-    lip: Lip,
-    q: f64,
-    slope: f32,
-    standing: &dyn Fn(SpanRef) -> bool,
-) -> Lip {
-    let inside = lip.at - nalgebra::Vector3::new(lip.direction.x, 0.0, lip.direction.y) * 0.25;
-    let Some(middle) =
-        CrossSection::sample(graph, inside, lip.direction, SECTION_HALF_WIDTH, standing)
-            .water_middle(q as f32, slope)
-    else {
-        return lip;
-    };
-    let across = nalgebra::Vector2::new(-lip.direction.y, lip.direction.x) * middle;
-    Lip {
-        at: Point3::new(lip.at.x + across.x, lip.at.y, lip.at.z + across.y),
-        ..lip
-    }
-}
-
 /// Cut a path into reaches and build each: its centreline, sections and
 /// rating curve at `q_design`.
 pub fn build_reaches(
@@ -272,25 +248,6 @@ pub fn build_reaches(
             Reach::new(reach_cells, reach_points, rating, Vec::new())
         })
         .collect()
-}
-
-/// One reach over `cells`, however long, with its rating scanned at
-/// `q_design`: what is left of a reach cut short, or one carried on down a
-/// shore. Its start joins what it did before, so only its end eases back to
-/// its cell. `None` for fewer than two cells, which is no channel.
-pub fn one_reach(
-    graph: &SpanGraph,
-    cells: &[SpanRef],
-    q_design: f64,
-    standing: &dyn Fn(SpanRef) -> bool,
-) -> Option<Reach> {
-    if cells.len() < 2 {
-        return None;
-    }
-    let points = centre_on_water(graph, cells, CENTRE_DISCHARGE, standing, (false, true));
-    let line = Centreline::from_path(&points);
-    let rating = RatingCurve::scan(&sections_along(graph, &line, standing), q_design);
-    Some(Reach::new(cells.to_vec(), &points, rating, Vec::new()))
 }
 
 /// A point on the bed for each of a channel's cells, moved across its

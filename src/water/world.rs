@@ -271,7 +271,7 @@ impl WaterWorld {
             ledger: &mut self.ledger,
             geometry: &mut self.geometry,
         };
-        self.topology.rebuild(&mut t, &update.remap, runnels);
+        self.topology.rebuild(&mut t, &update.remap, &[], runnels);
         self.refresh_levels();
         self.last_timings.geometry = geometry;
         self.last_timings.rebuild += started.elapsed();
@@ -281,6 +281,17 @@ impl WaterWorld {
     /// Lay the network again over unchanged ground: what an edit that
     /// changed nothing does. It must leave the water as it was.
     pub fn rebuild(&mut self) {
+        self.relay(&[]);
+    }
+
+    /// Lay the network again over unchanged ground, flooding the basin `id`
+    /// again from its water, as the settle does once it has risen to the top
+    /// of its region: for measuring the worst case of §9.2.
+    pub fn reregion(&mut self, id: StoreId) {
+        self.relay(&[id]);
+    }
+
+    fn relay(&mut self, reflood: &[StoreId]) {
         let mut t = Topology {
             network: &mut self.network,
             ledger: &mut self.ledger,
@@ -288,7 +299,7 @@ impl WaterWorld {
         };
         let runnels = self.topology.runnels(&t);
         self.topology
-            .rebuild(&mut t, &SpanRemap::default(), runnels);
+            .rebuild(&mut t, &SpanRemap::default(), reflood, runnels);
         self.refresh_levels();
     }
 
@@ -495,18 +506,6 @@ impl WaterWorld {
     /// Seconds simulated: the clock the swell runs on.
     pub fn clock(&self) -> f32 {
         self.clock as f32
-    }
-
-    /// Re-flood a basin in place, as a terrain edit would: for measuring the
-    /// worst case of §9.2.
-    pub fn reregion(&mut self, id: StoreId) {
-        let mut t = Topology {
-            network: &mut self.network,
-            ledger: &mut self.ledger,
-            geometry: &mut self.geometry,
-        };
-        self.topology.reregion(&mut t, id);
-        self.refresh_levels();
     }
 
     /// Point queries against the water: buoyancy, currents, the player.
