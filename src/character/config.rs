@@ -1,5 +1,7 @@
 use specs::{Component, DenseVecStorage};
 
+use super::swim::SwimConfig;
+
 /// Movement tuning for one character.
 ///
 /// This is a per-entity component rather than a global resource: a scuttling
@@ -85,6 +87,8 @@ pub struct LocomotionConfig {
     /// character's ground clearance, which is what the animator needs to place
     /// a rig below it (see `CharacterAnimator::pelvis_for`).
     pub collider_half_height: f32,
+    /// How the character takes to the water.
+    pub swim: SwimConfig,
 }
 
 impl LocomotionConfig {
@@ -110,6 +114,7 @@ impl LocomotionConfig {
             turn_aggression: 10.0,
             collider_radius: 0.25,
             collider_half_height: 0.5,
+            swim: SwimConfig::default(),
         }
     }
 

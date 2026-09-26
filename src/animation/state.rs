@@ -39,6 +39,54 @@ impl FootState {
     }
 }
 
+/// A fall into water, from the splash until the swimmer has recovered.
+///
+/// Arms thrown up as the body goes under, swept down to haul it back up,
+/// then treading again: a short choreography the samplers play off `progress`.
+#[derive(Debug, Clone, Copy)]
+pub struct WaterEntry {
+    /// Seconds since the body went in.
+    pub elapsed: f32,
+    /// How hard it went in, in [0, 1], from the speed it hit the water at.
+    pub strength: f32,
+}
+
+impl WaterEntry {
+    /// How long the recovery takes, in seconds.
+    pub const DURATION: f32 = 0.9;
+    /// Impact speed at which the reaction is at its fullest, in m/s: about a
+    /// two-metre drop.
+    const FULL_SPEED: f32 = 5.0;
+    /// Impact speed below which there is no reaction at all: stepping in.
+    const LEAST_SPEED: f32 = 1.5;
+
+    /// An entry at `impact_speed`, or `None` if that was too gentle to react
+    /// to.
+    pub fn at(impact_speed: f32) -> Option<Self> {
+        let strength = ((impact_speed - Self::LEAST_SPEED)
+            / (Self::FULL_SPEED - Self::LEAST_SPEED))
+            .clamp(0.0, 1.0);
+        (strength > 0.0).then_some(Self {
+            elapsed: 0.0,
+            strength,
+        })
+    }
+
+    /// Progress through the recovery, in [0, 1].
+    pub fn progress(&self) -> f32 {
+        (self.elapsed / Self::DURATION).clamp(0.0, 1.0)
+    }
+
+    /// Advance by `dt`; `None` once the recovery is over.
+    pub fn advanced(self, dt: f32) -> Option<Self> {
+        let next = Self {
+            elapsed: self.elapsed + dt,
+            ..self
+        };
+        (next.elapsed < Self::DURATION).then_some(next)
+    }
+}
+
 /// State of a single hand (simpler than FootState - no ground contact).
 #[derive(Debug, Clone)]
 pub struct HandState {
@@ -96,6 +144,23 @@ pub struct AnimationState {
     /// `Grounding` component — the Support Set's answer, not the probes'.
     /// Animation reads support; it no longer decides it.
     pub is_grounded: bool,
+
+    /// How far the physics body lies over from upright toward its facing, in
+    /// radians, as measured — not as asked for. The rig is built in this
+    /// frame (see `BodyFrame`), so it lies down and stands up with the body.
+    pub body_pitch: f32,
+    /// The body's velocity relative to whatever carries it.
+    pub velocity: Vector3<f32>,
+    /// The water's surface over the body, as drawn, if it is in or over any.
+    pub water_surface: Option<f32>,
+    /// Swim stroke phase in [0, TAU): one full cycle of both arms. Advances
+    /// with speed through the water; parameterises arms, kick and roll.
+    pub stroke_phase: f32,
+    /// How deep the character is wading, in [0, 1]: 0 dry, 1 with the water
+    /// at its chest. Eased, so a wave does not jerk the arms.
+    pub wade: f32,
+    /// A fall into the water still being recovered from.
+    pub water_entry: Option<WaterEntry>,
 }
 
 impl AnimationState {
@@ -128,6 +193,13 @@ impl AnimationState {
             facing: Vector3::new(0.0, 0.0, 1.0),
 
             is_grounded: false,
+
+            body_pitch: 0.0,
+            velocity: Vector3::zeros(),
+            water_surface: None,
+            stroke_phase: 0.0,
+            wade: 0.0,
+            water_entry: None,
         }
     }
 }

@@ -34,7 +34,9 @@ use crate::core::error::EngineResult;
 use crate::creature::{Brain, MeleeAttack, Perception};
 use crate::damage::{Health, Ragdoll};
 use crate::drive::{Actuator, Allowance, BodyMotion, DriveIntent};
-use crate::physics::{ColliderDesc, ConstraintKind, FrictionModel, RigidBodyDesc};
+use crate::physics::{
+    BulkShape, ColliderDesc, ColliderShape, ConstraintKind, FrictionModel, RigidBodyDesc, Volume,
+};
 use crate::rendering::material::MaterialId;
 use crate::sensing::{ContactCandidates, SensorSet};
 use crate::systems::PhysicsResource;
@@ -107,6 +109,45 @@ impl PeeperDef {
     }
 }
 
+/// What water and wind see of a peeper: two stilts, a haunch, a neck and an
+/// eye, and not the air between them that the capsule round it also holds.
+///
+/// It weighs what the capsule says, which is far more than this displaces,
+/// so it wades on its stilts until the water reaches its eye, and past that
+/// walks the bottom. The legs are straight and the neck upright: a rest pose
+/// is all a rigid body can carry.
+fn stilts_and_eye(rig: &PeeperRigConfig, clearance: f32) -> BulkShape {
+    // Heights above the foot centres, which sit `clearance` below the
+    // capsule's centre.
+    let hip = rig.standing_height();
+    let shoulder = hip + rig.haunch_height;
+    let eye = shoulder + rig.neck_length;
+    let at = |height: f32, across: f32| Vector3::new(across, height - clearance, 0.0);
+    let capsule = |length: f32, radius: f32| ColliderShape::Capsule {
+        half_height: 0.5 * length + radius,
+        radius,
+    };
+    let stilt = capsule(hip, rig.leg_radius);
+    BulkShape::displacing(vec![
+        Volume::at(stilt.clone(), at(0.5 * hip, -0.5 * rig.hip_width)),
+        Volume::at(stilt, at(0.5 * hip, 0.5 * rig.hip_width)),
+        Volume::at(
+            capsule(rig.haunch_height, rig.haunch_radius),
+            at(hip + 0.5 * rig.haunch_height, 0.0),
+        ),
+        Volume::at(
+            capsule(rig.neck_length, rig.neck_radius),
+            at(shoulder + 0.5 * rig.neck_length, 0.0),
+        ),
+        Volume::at(
+            ColliderShape::Sphere {
+                radius: rig.eye_radius,
+            },
+            at(eye, 0.0),
+        ),
+    ])
+}
+
 impl Spawnable for PeeperDef {
     fn material_count(&self) -> usize {
         0
@@ -157,6 +198,7 @@ impl Spawnable for PeeperDef {
             let mut physics = world.write_resource::<PhysicsResource>();
             let body_handle = physics.world.create_body(
                 RigidBodyDesc::dynamic()
+                    .bulk(stilts_and_eye(&rig, clearance))
                     .position(initial_pos)
                     .gravity_scale(1.0)
                     .linear_damping(0.0)
@@ -219,5 +261,52 @@ impl Spawnable for PeeperDef {
             .with(Health::new(self.health, 6.0))
             .with(Ragdoll::new(vec![keep_upright]))
             .build()]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use nalgebra::Point3;
+
+    use super::*;
+    use crate::physics::{PhysicsWorld, RigidBodyHandle};
+    use crate::water::buoyancy::{lift, StillWater};
+
+    /// A peeper's body standing with its feet on a floor at zero.
+    fn peeper(world: &mut PhysicsWorld) -> RigidBodyHandle {
+        let rig = PeeperRigConfig::default();
+        let clearance = rig.body_height() * 0.5;
+        let body = world.create_body(
+            RigidBodyDesc::dynamic()
+                .bulk(stilts_and_eye(&rig, clearance))
+                .position(Point3::new(0.0, clearance, 0.0)),
+        );
+        world.attach_collider(
+            body,
+            ColliderDesc::capsule(clearance, rig.eye_radius).density(DENSITY),
+        );
+        body
+    }
+
+    #[test]
+    fn a_peeper_wades_on_its_stilts_and_is_never_floated_off_them() {
+        let mut world = PhysicsWorld::default();
+        let body = peeper(&mut world);
+        let weight = world.body(body).unwrap().mass() * 9.81;
+        let rig = PeeperRigConfig::default();
+
+        // Knee deep, the capsule round it would already have floated it.
+        let knee_deep = StillWater {
+            surface: 0.5 * rig.standing_height(),
+            floor: 0.0,
+        };
+        assert!(lift(&world, body, &knee_deep) < 0.05 * weight);
+        // Over its eye, it still keeps its feet.
+        let drowned = StillWater {
+            surface: 2.0 * rig.body_height(),
+            floor: 0.0,
+        };
+        let fully = lift(&world, body, &drowned);
+        assert!(fully < weight, "lift {fully} N against weight {weight} N");
     }
 }

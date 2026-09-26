@@ -25,7 +25,9 @@ use crate::components::{
 use crate::core::error::EngineResult;
 use crate::creature::{Brain, Collectable, Perception};
 use crate::drive::{Actuator, Allowance, BodyMotion, DriveIntent};
-use crate::physics::{ColliderDesc, ConstraintKind, FrictionModel, RigidBodyDesc};
+use crate::physics::{
+    BulkShape, ColliderDesc, ColliderShape, ConstraintKind, FrictionModel, RigidBodyDesc, Volume,
+};
 use crate::rendering::material::MaterialId;
 use crate::systems::PhysicsResource;
 use crate::terrain::TerrainWorld;
@@ -72,6 +74,19 @@ impl HeartCritterDef {
     }
 }
 
+/// What water and wind see of a critter: the heart, and not the air between
+/// its legs that the capsule round it also holds. It weighs what the capsule
+/// says, so the fluff floats it with its legs hanging under the surface.
+fn fluff(rig: &CritterRigConfig, clearance: f32) -> BulkShape {
+    // The capsule's lower end is at the foot centres, `clearance` below its
+    // centre.
+    let heart_rise = rig.standing_height() + rig.torso_rise() - clearance;
+    let heart = ColliderShape::Box {
+        half_extents: Vector3::new(rig.torso_width, rig.torso_height, rig.torso_depth) * 0.5,
+    };
+    BulkShape::displacing(vec![Volume::at(heart, Vector3::y() * heart_rise)])
+}
+
 impl Spawnable for HeartCritterDef {
     fn material_count(&self) -> usize {
         0
@@ -111,6 +126,7 @@ impl Spawnable for HeartCritterDef {
             let mut physics = world.write_resource::<PhysicsResource>();
             let body_handle = physics.world.create_body(
                 RigidBodyDesc::dynamic()
+                    .bulk(fluff(&rig, clearance))
                     .position(initial_pos)
                     .gravity_scale(1.0)
                     .linear_damping(0.0)
@@ -172,5 +188,53 @@ impl Spawnable for HeartCritterDef {
             // on something this size reads as broken rather than as hard.
             .with(Collectable::heart(radius + 0.5, self.reward))
             .build()]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use nalgebra::Point3;
+
+    use super::*;
+    use crate::physics::{PhysicsWorld, RigidBodyHandle};
+    use crate::water::buoyancy::{lift, StillWater};
+
+    /// A critter's body standing with its feet on a floor at zero.
+    fn critter(world: &mut PhysicsWorld) -> RigidBodyHandle {
+        let rig = CritterRigConfig::default();
+        let clearance = rig.body_height() * 0.5;
+        let body = world.create_body(
+            RigidBodyDesc::dynamic()
+                .bulk(fluff(&rig, clearance))
+                .position(Point3::new(0.0, clearance, 0.0)),
+        );
+        world.attach_collider(
+            body,
+            ColliderDesc::capsule(clearance, rig.torso_width * 0.5).density(DENSITY),
+        );
+        body
+    }
+
+    #[test]
+    fn a_critter_floats_on_its_heart_with_its_legs_in_the_water() {
+        let mut world = PhysicsWorld::default();
+        let body = critter(&mut world);
+        let weight = world.body(body).unwrap().mass() * 9.81;
+        let rig = CritterRigConfig::default();
+        let hip = rig.standing_height();
+
+        // Water up to its hips does not lift it: the legs displace nothing
+        // worth counting, where the capsule round them would float it.
+        let wading = StillWater {
+            surface: hip,
+            floor: 0.0,
+        };
+        assert!(lift(&world, body, &wading) < 0.05 * weight);
+        // Over its heart, it is lifted clear.
+        let deep = StillWater {
+            surface: rig.body_height(),
+            floor: 0.0,
+        };
+        assert!(lift(&world, body, &deep) > 2.0 * weight);
     }
 }

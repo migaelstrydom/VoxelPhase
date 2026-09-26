@@ -61,6 +61,31 @@ impl ColliderShape {
         }
     }
 
+    /// Area of the shape's shadow on a plane perpendicular to `direction`, a
+    /// unit vector in the shape's own frame: the area it presents to a flow
+    /// along it.
+    pub fn projected_area(&self, direction: Vector3<f32>) -> f32 {
+        match self {
+            ColliderShape::Sphere { radius } => std::f32::consts::PI * radius * radius,
+            ColliderShape::Box { half_extents: h } => {
+                4.0 * (h.y * h.z * direction.x.abs()
+                    + h.x * h.z * direction.y.abs()
+                    + h.x * h.y * direction.z.abs())
+            }
+            ColliderShape::Capsule {
+                half_height,
+                radius,
+            } => {
+                // The caps' disc, and the cylinder's rectangle foreshortened
+                // by how far the flow is off its axis.
+                let cylinder = 2.0 * (half_height - radius).max(0.0);
+                let across_axis = direction.cross(&Vector3::y()).norm();
+                std::f32::consts::PI * radius * radius + 2.0 * radius * cylinder * across_axis
+            }
+            ColliderShape::ConvexHull { hull } => hull.projected_area(direction),
+        }
+    }
+
     /// Get the bounding radius of the shape.
     pub fn bounding_radius(&self) -> f32 {
         match self {
@@ -310,5 +335,55 @@ impl Collider {
                 .translation
                 .vector,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::f32::consts::PI;
+
+    use super::*;
+    use crate::collision::convex_hull::cube_hull;
+
+    #[test]
+    fn a_box_presents_one_face_head_on_and_more_obliquely() {
+        let shape = ColliderShape::Box {
+            half_extents: Vector3::new(1.0, 0.5, 0.25),
+        };
+        assert!((shape.projected_area(Vector3::x()) - 0.5).abs() < 1e-6);
+        assert!((shape.projected_area(Vector3::z()) - 2.0).abs() < 1e-6);
+        let diagonal = Vector3::new(1.0, 0.0, 1.0).normalize();
+        assert!((shape.projected_area(diagonal) - 2.5 / 2f32.sqrt()).abs() < 1e-5);
+    }
+
+    #[test]
+    fn a_hull_presents_the_same_area_as_the_box_it_is() {
+        let half = Vector3::new(1.0, 0.5, 0.25);
+        let hull = ColliderShape::ConvexHull {
+            hull: Arc::new(cube_hull(half)),
+        };
+        let solid = ColliderShape::Box { half_extents: half };
+        for direction in [
+            Vector3::x(),
+            Vector3::y(),
+            Vector3::new(1.0, 2.0, -3.0).normalize(),
+        ] {
+            let (a, b) = (
+                hull.projected_area(direction),
+                solid.projected_area(direction),
+            );
+            assert!((a - b).abs() < 1e-5, "{direction:?}: hull {a}, box {b}");
+        }
+    }
+
+    #[test]
+    fn a_capsule_end_on_presents_its_disc_and_side_on_its_outline() {
+        let shape = ColliderShape::Capsule {
+            half_height: 0.5,
+            radius: 0.2,
+        };
+        assert!((shape.projected_area(Vector3::y()) - PI * 0.04).abs() < 1e-6);
+        let side = PI * 0.04 + 0.4 * 0.6;
+        assert!((shape.projected_area(Vector3::x()) - side).abs() < 1e-6);
     }
 }

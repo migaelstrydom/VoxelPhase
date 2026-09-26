@@ -1,0 +1,55 @@
+// Swim Test — the character_viewer's pool: somewhere to wade in, fall in,
+// swim, and come ashore.
+//
+// Land at 1 m to the west shelves down a beach into a sea 3 m deep. A pier
+// 2 m above the water stands out into the deep end to the south.
+//
+//                     north (+z)
+//   ┌──────────────┬──────────────────────────────────┐
+//   │              │                                  │
+//   │  land (1 m)  │ beach ─▶ 1 m down to 3 m under   │  sea (0 m),
+//   │   spawn      │   (x -8 → 12, z -8 → 8)          │  floor at -3 m
+//   │              ├───────────┐                      │
+//   │              │ pier (2 m)│ ─▶ deep water        │
+//   │              └───────────┘ (x -8 → 8, z -20 → -12)
+//   └──────────────────────────────────────────────────┘
+//
+// The water's edge on the beach is at x = -3. Chest deep (0.75 m) is x ≈ 0.75;
+// the floor reaches -3 m at x = 12.
+Level(
+    name: "Swim Test",
+
+    segments: [
+        (
+            name: "pool",
+
+            terrain: Terrain(
+                voxel_size: 0.5,
+                bounds: (min: (-32.0, -16.0, -32.0), max: (32.0, 16.0, 32.0)),
+                base_height: -3.0,
+                material_layers: [
+                    (depth: 0.5,   material: Sand),
+                    (depth: 999.0, material: Rock),
+                ],
+
+                features: [
+                    // The land.
+                    Plateau(min: (-32.0, -32.0), max: (-8.0, 32.0), height: 1.0),
+                    // The beach: 1 m at the top to the sea floor, over 20 m.
+                    Ramp(from: (-8.0, 0.0), to: (12.0, 0.0), start_height: 1.0, end_height: -3.0, width: 16.0, flat_width: 12.0),
+                    // The pier, standing out into the deep end.
+                    Plateau(min: (-8.0, -20.0), max: (8.0, -12.0), height: 2.0),
+                ],
+            ),
+        ),
+    ],
+
+    placements: [Root(segment: "pool")],
+
+    player_spawn: (-12.0, 2.5, 0.0),
+
+    water: Some((
+        ocean: Some((level: 0.0)),
+        bodies: [],
+    )),
+)

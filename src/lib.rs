@@ -4,6 +4,7 @@ pub mod animation;
 pub mod app;
 pub mod camera;
 pub mod character;
+pub mod character_viewer;
 pub mod cleave;
 pub mod collision;
 pub mod components;

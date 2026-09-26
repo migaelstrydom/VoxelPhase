@@ -1,17 +1,55 @@
-use nalgebra::{UnitVector3, Vector3};
+use nalgebra::Vector3;
 use specs::{Builder, Entity, World, WorldExt};
 
 use crate::animation::{CharacterAnimator, CharacterRigConfig};
-use crate::character::{CharacterIntent, CharacterState, Grounding, LocomotionConfig};
+use crate::character::{
+    AttitudeControl, CharacterIntent, CharacterState, Grounding, Immersion, LocomotionConfig,
+};
 use crate::components::{
     Orientation, Position, Renderable, RigidBodyComponent, Rotation, Velocity,
 };
 use crate::damage::{Health, Ragdoll};
 use crate::drive::{Actuator, Allowance, BodyMotion, DriveIntent};
-use crate::physics::{ColliderDesc, ConstraintKind, FrictionModel, RigidBodyDesc};
+use crate::physics::{
+    BulkShape, ColliderDesc, ColliderShape, ConstraintKind, FrictionModel, RigidBodyDesc, Volume,
+};
 use crate::player::Player;
 use crate::sensing::{ContactCandidates, SensorSet};
 use crate::systems::PhysicsResource;
+
+/// The figure inside the capsule, as the world weighs it and the water
+/// floats it.
+///
+/// The capsule is a *bounding* volume — 1m tall and half a metre across —
+/// for contacts, and a spindly humanoid fills a third to a half of it.
+/// Declared as the capsule, the player either weighs as solid meat (131kg
+/// at 800, enough to craze a block of ice by walking into it) or, lightened
+/// to a believable weight, floats high on the water like a cork. The body
+/// shape is the same height and as thick as the figure, so the capsule can
+/// stay the contact envelope.
+///
+/// Everything about how the player *moves* is authored as a velocity or an
+/// acceleration and multiplied by the mass where it is applied — see
+/// `TractionPlanner::plan` and `Allowance` — so the mass decides what the
+/// player weighs against the world and not how they handle: 56kg.
+const FIGURE_RADIUS: f32 = 0.17;
+/// A real swimmer, at about 985, floats with the head barely out, which on
+/// this figure — a head sat on top of a 1m body — reads as drowning. This
+/// floats it shoulder deep upright, at 0.68m, and awash lying down, which is
+/// where a swimmer is.
+const FIGURE_DENSITY: f32 = 700.0;
+
+/// The figure inside a capsule `half_height` tall: what weighs the player and
+/// what the water floats.
+fn figure(half_height: f32) -> BulkShape {
+    BulkShape::solid(
+        Volume::centred(ColliderShape::Capsule {
+            half_height,
+            radius: FIGURE_RADIUS,
+        }),
+        FIGURE_DENSITY,
+    )
+}
 
 /// Spawns the player entity with all required components.
 pub fn spawn_player(world: &mut World, initial_pos: nalgebra::Point3<f32>) -> Entity {
@@ -19,27 +57,16 @@ pub fn spawn_player(world: &mut World, initial_pos: nalgebra::Point3<f32>) -> En
     let (collider_half_height, collider_radius) =
         (locomotion.collider_half_height, locomotion.collider_radius);
     let (air_steer_speed, jump_speed) = (locomotion.air_steer_speed, locomotion.jump_speed);
+    // Swimming is steered out of the same allowance as the air: nothing holds
+    // a swimmer up but the water, and the stroke is the one authority it has.
+    // The budget is the larger of the two; each asks only for its own rate.
+    let swim_accel = locomotion.swim.accel(true);
     // The yaw allowance's ceiling, in rad/s². A capsule's supports are a point
     // and a torsional row bounded by `μ·N·r` therefore has nothing to bear on
     // (§6.2), so this is the whole of the player's angular authority. It is the
     // acceleration the old reactionless yaw drive was bounded by, so a turn
     // costs what it always did.
     const TURN_AUTHORITY: f32 = 500.0;
-    // Effective density of the player capsule, kg/m³, giving a mass of 57kg.
-    //
-    // The capsule is a *bounding* volume — 1m tall and half a metre across —
-    // and a spindly humanoid fills a little over a third of it. So the figure
-    // that belongs here is flesh's own density times that fill fraction,
-    // roughly 985 x 0.36, and not flesh's density itself: at the 800 declared
-    // before, the capsule was solid meat and the player weighed 131kg, enough
-    // to craze a block of ice by walking into it.
-    //
-    // Everything about how the player *moves* is authored as a velocity or an
-    // acceleration and multiplied by the mass where it is applied — see
-    // `TractionPlanner::plan` and `Allowance` — so this number decides what the
-    // player weighs against the world and not how they handle. What it does
-    // move is float depth, which is this density over the water's.
-    const CAPSULE_DENSITY: f32 = 350.0;
     /// Facing the player spawns with, matching the `Rotation` below.
     const INITIAL_YAW: f32 = 0.0;
 
@@ -54,6 +81,7 @@ pub fn spawn_player(world: &mut World, initial_pos: nalgebra::Point3<f32>) -> En
     let (body_handle, upright_handle) = {
         let mut physics = world.write_resource::<PhysicsResource>();
         let body_desc = RigidBodyDesc::dynamic()
+            .bulk(figure(collider_half_height))
             .position(initial_pos)
             .gravity_scale(1.0)
             .linear_damping(0.0)
@@ -65,7 +93,6 @@ pub fn spawn_player(world: &mut World, initial_pos: nalgebra::Point3<f32>) -> En
         // leans on. Which contacts the player is allowed to draw it at is the
         // actuator's business — see `non_support_grip` below.
         let collider_desc = ColliderDesc::capsule(collider_half_height, collider_radius)
-            .density(CAPSULE_DENSITY)
             .restitution(0.0)
             .friction_model(FrictionModel::Isotropic(0.8));
         physics.world.attach_collider(body_handle, collider_desc);
@@ -74,13 +101,15 @@ pub fn spawn_player(world: &mut World, initial_pos: nalgebra::Point3<f32>) -> En
             .body_mut(body_handle)
             .unwrap()
             .scale_local_inertia(Vector3::new(1.0, 50.0, 1.0));
-        // Held so `DeathSystem` can release it. Without that the corpse stays
-        // rigidly upright, which reads as a bug rather than a death.
+        // Upright on land, laid over to swim: `CharacterControlSystem` sets
+        // the pitch through `AttitudeControl`. Held so `DeathSystem` can
+        // release it. Without that the corpse stays rigidly upright, which
+        // reads as a bug rather than a death.
         let upright_handle = physics
             .world
-            .create_constraint(ConstraintKind::KeepUpright {
+            .create_constraint(ConstraintKind::KeepAttitude {
                 body: body_handle,
-                target_up: UnitVector3::new_normalize(Vector3::new(0.0, 1.0, 0.0)),
+                pitch: 0.0,
                 compliance: 0.0,
                 max_impulse: f32::INFINITY,
             });
@@ -94,6 +123,10 @@ pub fn spawn_player(world: &mut World, initial_pos: nalgebra::Point3<f32>) -> En
         .with(CharacterState::default())
         .with(locomotion)
         .with(Grounding::default())
+        .with(Immersion::default())
+        .with(AttitudeControl {
+            constraint: upright_handle,
+        })
         // The player's corpse is never despawned — death should be a state to
         // recover from, not an entity disappearing out from under the camera.
         .with(Health::persistent(100.0))
@@ -126,7 +159,7 @@ pub fn spawn_player(world: &mut World, initial_pos: nalgebra::Point3<f32>) -> En
                 .with_non_support_grip(0.0)
                 .with_drive_gain(5.0)
                 .with_allowance(Allowance::character(
-                    air_steer_speed,
+                    air_steer_speed.max(swim_accel),
                     TURN_AUTHORITY,
                     jump_speed,
                 )),
@@ -134,4 +167,76 @@ pub fn spawn_player(world: &mut World, initial_pos: nalgebra::Point3<f32>) -> En
         .with(DriveIntent::default())
         .with(BodyMotion::default())
         .build()
+}
+
+#[cfg(test)]
+mod tests {
+    use nalgebra::{Point3, UnitQuaternion};
+
+    use super::*;
+    use crate::water::buoyancy::{compute_buoyancy, StillWater, FLUID_DENSITY};
+
+    const GRAVITY: f32 = 9.81;
+
+    /// The depth of still water that lifts the figure, standing on the
+    /// floor, off its feet.
+    fn float_depth(config: &LocomotionConfig) -> f32 {
+        let half_height = config.collider_half_height;
+        let shape = ColliderShape::Capsule {
+            half_height,
+            radius: FIGURE_RADIUS,
+        };
+        let weight = figure(half_height).mass().unwrap() * GRAVITY;
+        let lift = |depth: f32| {
+            compute_buoyancy(
+                Point3::new(0.0, half_height, 0.0),
+                UnitQuaternion::identity(),
+                &shape,
+                FLUID_DENSITY,
+                Vector3::new(0.0, -GRAVITY, 0.0),
+                GRAVITY,
+                None,
+                &StillWater {
+                    surface: depth,
+                    floor: 0.0,
+                },
+            )
+            .map_or(0.0, |f| f.buoyancy_force.y)
+        };
+        let (mut shallow, mut deep) = (0.0, 2.0 * half_height);
+        for _ in 0..40 {
+            let mid = 0.5 * (shallow + deep);
+            if lift(mid) < weight {
+                shallow = mid;
+            } else {
+                deep = mid;
+            }
+        }
+        shallow
+    }
+
+    #[test]
+    fn the_figure_weighs_what_a_player_should() {
+        let config = LocomotionConfig::player();
+        let mass = figure(config.collider_half_height).mass().unwrap();
+        assert!((50.0..65.0).contains(&mass), "{mass} kg");
+    }
+
+    #[test]
+    fn the_player_swims_just_before_the_water_lifts_it_off_its_feet() {
+        let config = LocomotionConfig::player();
+        let floats_at = float_depth(&config);
+        let swim = config.swim;
+        assert!(
+            swim.stand_depth < swim.swim_depth && swim.swim_depth < floats_at,
+            "stand {} swim {} float {floats_at}",
+            swim.stand_depth,
+            swim.swim_depth
+        );
+        assert!(
+            floats_at - swim.swim_depth < 0.12,
+            "swims only at {} but floats at {floats_at}: wades a stride on tiptoe",
+            swim.swim_depth
+        );
+    }
 }

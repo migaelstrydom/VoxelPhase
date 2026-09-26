@@ -1,4 +1,5 @@
 mod banana;
+mod barrel;
 mod beach_ball;
 mod box_object;
 mod capsule;
@@ -40,6 +41,7 @@ mod voussoir_arch;
 mod wall;
 
 pub use banana::BananaDef;
+pub use barrel::{BarrelDef, BARREL_RADIUS};
 pub use beach_ball::{BeachBallDef, RADIUS as BEACH_BALL_RADIUS};
 pub use box_object::{BoxDef, CrateDef, HeavyCrateDef, PlankDef};
 pub use capsule::CapsuleDef;

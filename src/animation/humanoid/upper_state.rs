@@ -4,10 +4,13 @@
 //! orthogonally to `PoseState`: the driver samples both and composes the
 //! fragments with overlay semantics (UpperState wins on its channels).
 
+use std::f32::consts::PI;
+
 use nalgebra::{Point3, Vector3};
 
+use super::body_frame::BodyFrame;
 use super::gait::GaitCycle;
-use super::pose_state::{AirKind, Takeoff};
+use super::pose_state::{smoothstep, AirKind, Stroke, Takeoff};
 use super::stride_sync;
 use crate::animation::config::{CharacterRigConfig, GaitPreset};
 use crate::animation::pose::{Cycle, CycleKind, HandsPose, PoseFragment};
@@ -29,6 +32,7 @@ pub enum UpperKey {
     Reaching,
     Holding,
     Braced,
+    Stroking,
 }
 
 /// Upper-body animation state.
@@ -50,6 +54,9 @@ pub enum UpperState {
     },
     /// Arms spread outward and down (falling / landing).
     Braced,
+    /// Swimming: a front crawl, or sculling to tread water. Coupled to the
+    /// `Stroke` cycle `PoseState::Swimming` exposes.
+    Stroking,
 }
 
 /// Per-frame tick inputs for `UpperState`.
@@ -79,6 +86,8 @@ pub struct UpperSampleCtx<'a> {
     /// `Launching` or `Airborne`. Drives per-AirKind hand variations in
     /// `Braced` (e.g. LongJump reach-forward).
     pub airborne: Option<(AirKind, Takeoff)>,
+    /// The stroke the lower body is swimming, when it is.
+    pub stroke: Option<Stroke>,
 }
 
 impl UpperSampleCtx<'_> {
@@ -119,6 +128,7 @@ impl UpperState {
             UpperState::Reaching { .. } => UpperKey::Reaching,
             UpperState::Holding { .. } => UpperKey::Holding,
             UpperState::Braced => UpperKey::Braced,
+            UpperState::Stroking => UpperKey::Stroking,
         }
     }
 
@@ -127,6 +137,7 @@ impl UpperState {
         match self {
             UpperState::Swinging => sample_swinging(ctx),
             UpperState::Braced => sample_braced(ctx),
+            UpperState::Stroking => sample_stroking(ctx),
             UpperState::Reaching { elapsed, target } => sample_reaching(ctx, *elapsed, *target),
             UpperState::Holding {
                 current_hold_height,
@@ -142,21 +153,20 @@ struct Shoulders {
     right: Point3<f32>,
 }
 
+/// The torso's frame this frame: the body's own, leaned by `torso_pitch`.
+fn torso_frame(ctx: &UpperSampleCtx<'_>) -> BodyFrame {
+    BodyFrame::new(ctx.anim.facing, ctx.anim.body_pitch).leaned(ctx.torso_pitch)
+}
+
 fn shoulders_with_twist(ctx: &UpperSampleCtx<'_>, twist: f32) -> Shoulders {
     let rig = ctx.rig;
     let anim = ctx.anim;
-    let facing = anim.facing;
-    let right = facing.cross(&Vector3::y());
-    let left = -right;
+    let torso = torso_frame(ctx);
+    let (right, left, facing) = (torso.right, torso.left(), torso.front);
 
     // Pelvis origin for the torso stack, shifted by any visual crouch offset.
     let pelvis = anim.pelvis_position + ctx.pelvis_offset;
-
-    // Rotate the torso-local up axis forward by `torso_pitch` around the
-    // lateral (right) axis. The chest sits on the pitched up-axis.
-    let pitch = ctx.torso_pitch;
-    let torso_up = Vector3::y() * pitch.cos() + facing * pitch.sin();
-    let chest = pelvis + torso_up * rig.torso_height;
+    let chest = pelvis + torso.up * rig.torso_height;
 
     let cos_twist = twist.cos();
     let sin_twist = twist.sin();
@@ -212,17 +222,62 @@ fn natural_hands(ctx: &UpperSampleCtx<'_>, shoulders: &Shoulders) -> HandsPose {
             // arms swing — arms follow the feet, amplitude fades in and
             // out with the step cadence.
             let a = anim.stride_activity.clamp(0.0, 1.0);
-            HandsPose {
-                left: Point3::from(rest_left.coords.lerp(&left_hand.position.coords, a)),
-                right: Point3::from(rest_right.coords.lerp(&right_hand.position.coords, a)),
-            }
+            wading_carriage(
+                ctx,
+                shoulders,
+                HandsPose {
+                    left: Point3::from(rest_left.coords.lerp(&left_hand.position.coords, a)),
+                    right: Point3::from(rest_right.coords.lerp(&right_hand.position.coords, a)),
+                },
+            )
         }
-        _ => HandsPose {
-            left: rest_left,
-            right: rest_right,
-        },
+        _ => wading_carriage(
+            ctx,
+            shoulders,
+            HandsPose {
+                left: rest_left,
+                right: rest_right,
+            },
+        ),
     }
 }
+
+/// Hands lifted clear of the water a character is wading through.
+///
+/// Nobody wading chest deep lets their arms hang in it: they come up and out
+/// to the sides, forearms riding just over the surface, still swinging a
+/// little with the stride. Blended in by wade depth, so a paddle at the
+/// water's edge leaves the arms alone and a chest-deep wade holds them up.
+fn wading_carriage(ctx: &UpperSampleCtx<'_>, shoulders: &Shoulders, dry: HandsPose) -> HandsPose {
+    let anim = ctx.anim;
+    let lift = smoothstep(WADE_ARMS_FROM, WADE_ARMS_FULL, anim.wade);
+    let Some(surface) = anim.water_surface.filter(|_| lift > 0.0) else {
+        return dry;
+    };
+    let torso = torso_frame(ctx);
+    let reach = ctx.rig.arm_length();
+    let carried = |shoulder: Point3<f32>, hand: Point3<f32>, side: Vector3<f32>| {
+        // Out to the side and a little ahead, keeping the stride's swing.
+        let swing = (hand - shoulder).dot(&torso.front);
+        let mut held = shoulder + side * (reach * 0.55) + torso.front * (reach * 0.3 + swing * 0.4);
+        held.y = held
+            .y
+            .min(shoulder.y - reach * 0.2)
+            .max(surface + WADE_HAND_CLEARANCE);
+        Point3::from(hand.coords.lerp(&held.coords, lift))
+    };
+    HandsPose {
+        left: carried(shoulders.left, dry.left, torso.left()),
+        right: carried(shoulders.right, dry.right, torso.right),
+    }
+}
+
+/// Wade depth at which the arms start to come up out of the water.
+const WADE_ARMS_FROM: f32 = 0.3;
+/// Wade depth by which they are all the way up.
+const WADE_ARMS_FULL: f32 = 0.75;
+/// How far over the surface a wader holds its hands, in metres.
+const WADE_HAND_CLEARANCE: f32 = 0.04;
 
 fn sample_swinging(ctx: &UpperSampleCtx<'_>) -> PoseFragment {
     let twist = match ctx.cycle {
@@ -402,3 +457,126 @@ fn sample_holding(ctx: &UpperSampleCtx<'_>, current_hold_height: f32) -> PoseFra
         torso_pitch: None,
     }
 }
+
+/// Swimming arms, in the torso's frame, so they stroke along the body however
+/// far it lies over.
+///
+/// ```text
+///   crawl, one arm (the other half a cycle behind):
+///
+///        recovery: out of the water, elbow high
+///      ╭──────────────────────────────╮
+///   hip                             overhead ── catch
+///      ╰──────────────────────────────╯
+///        pull: under the belly, back to the hip
+/// ```
+///
+/// Treading, both hands scull in front of the chest. A body that has just
+/// fallen in throws its arms overhead as it goes under, then sweeps them down
+/// to its sides to haul itself back up (`WaterEntry`).
+fn sample_stroking(ctx: &UpperSampleCtx<'_>) -> PoseFragment {
+    let rig = ctx.rig;
+    let anim = ctx.anim;
+    let phase = match ctx.cycle {
+        Some(Cycle {
+            phase,
+            kind: CycleKind::Stroke,
+        }) => phase,
+        _ => anim.stroke_phase,
+    };
+    let stroke = ctx.stroke.unwrap_or(Stroke::Tread);
+    let reach = rig.arm_length();
+
+    // The crawl rolls the shoulders into each pull.
+    let twist = match stroke {
+        Stroke::Crawl => SWIM_ROLL * phase.cos(),
+        Stroke::Tread => 0.0,
+    };
+    let shoulders = shoulders_with_twist(ctx, twist);
+    let torso = torso_frame(ctx);
+
+    let hand = |shoulder: Point3<f32>, side: Vector3<f32>, arm_phase: f32| -> Point3<f32> {
+        match stroke {
+            Stroke::Crawl => {
+                let arm_phase = arm_phase.rem_euclid(2.0 * PI);
+                let (along, below, out) = if arm_phase < PI {
+                    // Pull: from the catch overhead, under the body, to the hip.
+                    let s = arm_phase / PI;
+                    let along = CRAWL_CATCH + (CRAWL_FINISH - CRAWL_CATCH) * s;
+                    (along, CRAWL_PULL_DEPTH * (PI * s).sin(), 0.05)
+                } else {
+                    // Recovery: from the hip, up over the water, to the catch.
+                    let u = (arm_phase - PI) / PI;
+                    let along = CRAWL_FINISH + (CRAWL_CATCH - CRAWL_FINISH) * u;
+                    (
+                        along,
+                        -CRAWL_RECOVERY_LIFT * (PI * u).sin(),
+                        0.05 + 0.2 * (PI * u).sin(),
+                    )
+                };
+                shoulder
+                    + torso.up * (reach * along)
+                    + torso.front * (reach * below)
+                    + side * (reach * out)
+            }
+            Stroke::Tread => {
+                // A flat figure-of-eight: hands sweep in and out together.
+                let sweep = arm_phase.sin();
+                shoulder + side * (reach * (0.45 + 0.15 * sweep)) + torso.front * (reach * 0.4)
+                    - torso.up * (reach * (0.3 + 0.05 * (2.0 * arm_phase).cos()))
+            }
+        }
+    };
+    let (left_phase, right_phase) = match stroke {
+        Stroke::Crawl => (phase, phase + PI),
+        Stroke::Tread => (phase, phase),
+    };
+    let mut left = hand(shoulders.left, torso.left(), left_phase);
+    let mut right = hand(shoulders.right, torso.right, right_phase);
+
+    // Fallen in: arms thrown up overhead, then swept down to the sides.
+    let (plunge, surge) = anim.water_entry.map_or((0.0, 0.0), |entry| {
+        let p = entry.progress();
+        let up = smoothstep(0.0, 0.12, p) * (1.0 - smoothstep(0.3, 0.55, p));
+        let down = smoothstep(0.35, 0.55, p) * (1.0 - smoothstep(0.7, 1.0, p));
+        (entry.strength * up, entry.strength * down)
+    });
+    let overhead = |shoulder: Point3<f32>, side: Vector3<f32>| {
+        shoulder + Vector3::y() * (reach * 0.9) + side * (reach * 0.25)
+    };
+    let pressed = |shoulder: Point3<f32>, side: Vector3<f32>| {
+        shoulder - Vector3::y() * (reach * 0.7) + side * (reach * 0.35)
+    };
+    for (hand, shoulder, side) in [
+        (&mut left, shoulders.left, torso.left()),
+        (&mut right, shoulders.right, torso.right),
+    ] {
+        *hand = Point3::from(hand.coords.lerp(&overhead(shoulder, side).coords, plunge));
+        *hand = Point3::from(hand.coords.lerp(&pressed(shoulder, side).coords, surge));
+    }
+
+    PoseFragment {
+        feet: None,
+        hands: Some(HandsPose {
+            left: clamp_to_reach(shoulders.left, left, reach),
+            right: clamp_to_reach(shoulders.right, right, reach),
+        }),
+        pelvis_offset: None,
+        shoulder_twist: Some(twist),
+        head_tilt: None,
+        head_bob: None,
+        torso_pitch: None,
+    }
+}
+
+/// How far the crawl rolls the shoulders into each pull, in radians.
+const SWIM_ROLL: f32 = 0.35;
+/// Where a crawling hand enters the water, up the body from its shoulder, in
+/// arm lengths.
+const CRAWL_CATCH: f32 = 0.95;
+/// Where the pull finishes, down by the hip, in arm lengths.
+const CRAWL_FINISH: f32 = -0.75;
+/// How deep under the body the pull reaches, in arm lengths.
+const CRAWL_PULL_DEPTH: f32 = 0.45;
+/// How high over the back the recovery lifts the hand, in arm lengths.
+const CRAWL_RECOVERY_LIFT: f32 = 0.35;

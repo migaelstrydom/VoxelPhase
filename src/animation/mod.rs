@@ -27,7 +27,7 @@ pub mod rig;
 mod state;
 mod systems;
 
-pub use animator::CharacterAnimator;
+pub use animator::{BodyReading, CharacterAnimator};
 pub use config::CharacterRigConfig;
 pub use debug_config::AnimationDebugConfig;
 pub use foot_placer::{FootPhase, FootPlacer, FootPlacerConfig, FootSide, GaitTiming, PlacerFoot};

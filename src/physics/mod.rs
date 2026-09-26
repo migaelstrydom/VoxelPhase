@@ -37,6 +37,7 @@
 pub mod bench_harness;
 mod body;
 mod broadphase;
+mod bulk;
 pub mod ccd;
 mod collider;
 pub mod constraint;
@@ -59,6 +60,7 @@ pub mod stepping;
 mod world;
 
 pub use body::{BodyType, RigidBody, RigidBodyDesc};
+pub use bulk::{BulkShape, Envelope, EnvelopePart, MassPartRef, MassParts, Volume};
 pub use ccd::{CcdStrategy, SweepClampCcd};
 pub use collider::{Collider, ColliderDesc, ColliderMaterial, ColliderShape, FrictionModel};
 pub use constraint::{Constraint, ConstraintHandle, ConstraintKind};

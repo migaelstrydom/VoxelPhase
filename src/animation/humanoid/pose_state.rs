@@ -5,12 +5,15 @@
 //! `CharacterAnimator::update`) and emits a `PoseFragment`. Upper-body
 //! channels (hands, shoulder twist) are produced by `UpperState`.
 
+use std::f32::consts::PI;
+
 use nalgebra::{Point3, Vector2, Vector3};
 
+use super::body_frame::BodyFrame;
 use super::stride_sync;
 use crate::animation::config::{CharacterRigConfig, GaitPreset};
 use crate::animation::pose::{Cycle, CycleKind, FeetPose, FootAnchor, PoseFragment};
-use crate::animation::state::AnimationState;
+use crate::animation::state::{AnimationState, WaterEntry};
 
 /// Gait preset inside `PoseState::Grounded`.
 ///
@@ -95,6 +98,15 @@ impl AirKind {
     }
 }
 
+/// How a swimmer is moving its limbs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stroke {
+    /// Lying flat and going somewhere: front crawl, flutter kick.
+    Crawl,
+    /// Upright and staying put: sculling hands, a bicycle kick.
+    Tread,
+}
+
 /// Snapshot of facing and planar speed at liftoff. Latched on
 /// `Grounded → Launching` so the airborne pose does not jitter as live
 /// velocity changes.
@@ -123,6 +135,7 @@ pub enum PoseKey {
     Launching(AirKind),
     Airborne(AirKind),
     Landing(AirKind),
+    Swimming(Stroke),
 }
 
 /// Lower-body / core animation state.
@@ -147,6 +160,11 @@ pub enum PoseState {
         /// height while x/z track the hips — keeps legs from stretching
         /// as the body slides horizontally.
         ground_y: f32,
+    },
+    /// In the water with nothing underfoot. The body's own pitch lays the rig
+    /// flat or stands it up; this chooses what the limbs do.
+    Swimming {
+        stroke: Stroke,
     },
 }
 
@@ -214,6 +232,7 @@ impl PoseState {
             PoseState::Launching { kind, t, .. } => sample_launching(ctx, *kind, *t),
             PoseState::Landing { kind, t, .. } => sample_landing(ctx, *kind, *t),
             PoseState::Airborne { kind, takeoff } => sample_airborne(ctx, *kind, *takeoff),
+            PoseState::Swimming { stroke } => sample_swimming(ctx, *stroke),
         }
     }
 
@@ -226,6 +245,29 @@ impl PoseState {
             PoseState::Launching { kind, .. } => PoseKey::Launching(kind),
             PoseState::Airborne { kind, .. } => PoseKey::Airborne(kind),
             PoseState::Landing { kind, .. } => PoseKey::Landing(kind),
+            PoseState::Swimming { stroke } => PoseKey::Swimming(stroke),
+        }
+    }
+
+    /// Short comma-free name for the variant, for recorders and reports.
+    pub fn tag(&self) -> &'static str {
+        match self {
+            PoseState::Grounded { gait } => match gait {
+                Gait::Idle => "idle",
+                Gait::Walk => "walk",
+                Gait::Sprint => "sprint",
+                Gait::Crouch { walking: false } => "crouch",
+                Gait::Crouch { walking: true } => "crouch_walk",
+            },
+            PoseState::Launching { .. } => "launching",
+            PoseState::Airborne { .. } => "airborne",
+            PoseState::Landing { .. } => "landing",
+            PoseState::Swimming {
+                stroke: Stroke::Crawl,
+            } => "crawl",
+            PoseState::Swimming {
+                stroke: Stroke::Tread,
+            } => "tread",
         }
     }
 
@@ -239,6 +281,10 @@ impl PoseState {
             PoseState::Grounded { .. } => Some(Cycle {
                 phase: anim.stride_phase,
                 kind: CycleKind::Stride,
+            }),
+            PoseState::Swimming { .. } => Some(Cycle {
+                phase: anim.stroke_phase,
+                kind: CycleKind::Stroke,
             }),
             _ => None,
         }
@@ -263,7 +309,7 @@ fn sample_idle(ctx: &SampleCtx<'_>, preset: Option<&GaitPreset>) -> PoseFragment
         .filter(|v| *v != 0.0)
         .map(|v| Vector3::new(0.0, -v, 0.0));
 
-    let torso_pitch = preset.map(|p| p.torso_pitch).unwrap_or(0.0);
+    let torso_pitch = preset.map(|p| p.torso_pitch).unwrap_or(0.0) + wade_lean(anim.wade);
 
     // Head channels go through the same formulas as sample_walking —
     // `stride_activity` is near zero at true idle (head_bob fades to 0),
@@ -318,8 +364,15 @@ fn sample_walking(ctx: &SampleCtx<'_>, preset: &GaitPreset) -> PoseFragment {
         shoulder_twist: None,
         head_tilt: Some(head_tilt),
         head_bob: Some(head_bob),
-        torso_pitch: Some(preset.torso_pitch),
+        torso_pitch: Some(preset.torso_pitch + wade_lean(anim.wade)),
     }
+}
+
+/// How far a wader leans into the water, in radians, at wade depth `wade`.
+/// Pushing a chest through water is done leaning into it.
+pub fn wade_lean(wade: f32) -> f32 {
+    const MAX_LEAN: f32 = 0.22;
+    MAX_LEAN * wade.clamp(0.0, 1.0)
 }
 
 /// Airborne pose varies by `AirKind`:
@@ -450,4 +503,93 @@ fn sample_landing(ctx: &SampleCtx<'_>, kind: AirKind, t: f32) -> PoseFragment {
         head_bob: Some(0.0),
         torso_pitch: Some(0.15 * decay),
     }
+}
+
+/// Swimming lower body: legs trailing from the hips down the body's own axis,
+/// kicking across it.
+///
+/// - `Crawl`: a flutter kick, three beats a leg per stroke cycle, legs in
+///   antiphase, feet moving across the body's front-back axis.
+/// - `Tread`: a bicycle kick, feet circling under the hips with the knees
+///   bent.
+///
+/// A body that has just fallen in straightens and closes its legs as it goes
+/// under, and opens them into the kick as it comes back up (`WaterEntry`).
+fn sample_swimming(ctx: &SampleCtx<'_>, stroke: Stroke) -> PoseFragment {
+    let rig = ctx.rig;
+    let anim = ctx.anim;
+    let frame = BodyFrame::new(anim.facing, anim.body_pitch);
+    let leg = rig.leg_length();
+    let phase = anim.stroke_phase;
+    let left_hip = anim.pelvis_position + frame.left() * rig.hip_width;
+    let right_hip = anim.pelvis_position + frame.right * rig.hip_width;
+
+    let foot = |hip: Point3<f32>, side: f32| -> Point3<f32> {
+        match stroke {
+            Stroke::Crawl => {
+                let kick = (3.0 * phase + if side < 0.0 { 0.0 } else { PI }).sin();
+                hip - frame.up * (leg * 0.94) + frame.front * (SWIM_FLUTTER * kick)
+            }
+            Stroke::Tread => {
+                let turn = 2.0 * phase + if side < 0.0 { 0.0 } else { PI };
+                hip - frame.up * (leg * 0.8)
+                    + frame.front * (SWIM_TREAD_CIRCLE * turn.cos())
+                    + frame.right * (side * SWIM_TREAD_CIRCLE * turn.sin())
+            }
+        }
+    };
+    let mut left = foot(left_hip, -1.0);
+    let mut right = foot(right_hip, 1.0);
+
+    // Plunging: legs straight and together, pointing down the body.
+    let plunge = anim.water_entry.map_or(0.0, |entry| legs_together(&entry));
+    if plunge > 0.0 {
+        let straight = anim.pelvis_position - frame.up * (leg * 0.98);
+        left = Point3::from(
+            left.coords
+                .lerp(&(straight + frame.left() * 0.03).coords, plunge),
+        );
+        right = Point3::from(
+            right
+                .coords
+                .lerp(&(straight + frame.right * 0.03).coords, plunge),
+        );
+    }
+
+    let (torso_pitch, head_tilt) = match stroke {
+        // Head up enough to see where it is going, rolling to breathe.
+        Stroke::Crawl => (0.0, Vector2::new(-0.05, 0.03 * phase.sin())),
+        // Leaning into the sculling hands, chin up out of the water.
+        Stroke::Tread => (0.12, Vector2::new(-0.03, 0.0)),
+    };
+
+    PoseFragment {
+        feet: Some(FeetPose {
+            left,
+            right,
+            anchor: FootAnchor::Hips,
+        }),
+        hands: None,
+        pelvis_offset: None,
+        shoulder_twist: None,
+        head_tilt: Some(head_tilt),
+        head_bob: Some(0.0),
+        torso_pitch: Some(torso_pitch),
+    }
+}
+
+/// Distance a crawling foot kicks either side of the body's axis, in metres.
+const SWIM_FLUTTER: f32 = 0.08;
+/// Radius of a treading foot's circle, in metres.
+const SWIM_TREAD_CIRCLE: f32 = 0.09;
+
+/// How straight and together a plunging body's legs are, in [0, 1]: at once
+/// on entry, opening into the kick through the middle of the recovery.
+fn legs_together(entry: &WaterEntry) -> f32 {
+    entry.strength * (1.0 - smoothstep(0.25, 0.6, entry.progress()))
+}
+
+pub fn smoothstep(from: f32, to: f32, x: f32) -> f32 {
+    let t = ((x - from) / (to - from)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
 }

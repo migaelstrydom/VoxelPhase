@@ -145,6 +145,19 @@ impl<'a, 'b> GameHarness<'a, 'b> {
             .map(|y| Point3::new(x, y, z))
     }
 
+    /// The game's world, for a caller that drives or inspects entities the
+    /// way a system would.
+    pub fn world(&self) -> &World {
+        &self.world
+    }
+
+    /// The game's world, mutably. Anything written here between steps is what
+    /// the next frame's systems see, exactly as if an earlier system had
+    /// written it.
+    pub fn world_mut(&mut self) -> &mut World {
+        &mut self.world
+    }
+
     /// Simulated seconds since the harness opened.
     pub fn sim_time(&self) -> f32 {
         self.world.read_resource::<Time>().total_seconds()

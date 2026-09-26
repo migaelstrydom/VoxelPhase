@@ -7,6 +7,7 @@ use nalgebra::{Isometry3, Matrix3, Point3, UnitQuaternion, UnitVector3, Vector3}
 use rustc_hash::FxHashMap;
 
 use super::body::{BodyDrive, BodyType, RigidBody, RigidBodyDesc, SupportDrive};
+use super::bulk::EnvelopePart;
 use super::ccd::{
     pair_separation, CcdContext, CcdStrategy, ContactPairKey, NarrowphaseOwnership, SweepClampCcd,
 };
@@ -446,6 +447,15 @@ impl PhysicsWorld {
         self.colliders.get(handle.0)
     }
 
+    /// What a fluid sees of a body: its declared envelope, or its colliders.
+    /// Empty for a body that does not exist.
+    pub fn envelope(&self, handle: RigidBodyHandle) -> impl Iterator<Item = EnvelopePart<'_>> {
+        self.bodies
+            .get(handle.0)
+            .into_iter()
+            .flat_map(|body| body.envelope(&self.colliders))
+    }
+
     // === Constraint Management ===
 
     /// Create a new constraint and return its handle.
@@ -727,6 +737,9 @@ impl PhysicsWorld {
         if !body.remove_collider(collider_handle) {
             return None;
         }
+        // The bulk described the whole body; what is left of it is described
+        // by its own colliders.
+        body.clear_bulk();
 
         self.manifold_cache.remove_collider(collider_handle);
         let collider = self.colliders.remove(collider_handle.0)?;
@@ -1214,12 +1227,9 @@ impl PhysicsWorld {
         let collider_handles: Vec<_> = body.colliders().to_vec();
         let mut total_mass = 0.0f32;
         let mut weighted = Vector3::zeros();
-        for ch in &collider_handles {
-            if let Some(collider) = self.colliders.get(ch.0) {
-                let m = collider.mass();
-                total_mass += m;
-                weighted += collider.offset().translation.vector * m;
-            }
+        for part in body.mass_parts(&self.colliders) {
+            total_mass += part.mass;
+            weighted += part.offset.translation.vector * part.mass;
         }
         if total_mass <= 0.0 {
             return Vector3::zeros();
@@ -1238,6 +1248,9 @@ impl PhysicsWorld {
         }
 
         if let Some(body) = self.bodies.get_mut(body_handle.0) {
+            if let Some(bulk) = body.bulk_mut() {
+                bulk.shift(-local_com);
+            }
             let world_shift = body.rotation() * local_com;
             let angular = body.angular_velocity();
             let linear = body.linear_velocity();
@@ -1254,27 +1267,23 @@ impl PhysicsWorld {
             return;
         };
 
-        let collider_handles: Vec<_> = body.colliders().to_vec();
-
         let mut total_mass = 0.0f32;
         let mut total_inertia = Matrix3::zeros();
 
-        for ch in &collider_handles {
-            if let Some(collider) = self.colliders.get(ch.0) {
-                let m = collider.mass();
-                total_mass += m;
+        for part in body.mass_parts(&self.colliders) {
+            let m = part.mass;
+            total_mass += m;
 
-                // Rotate the local inertia tensor into the body frame.
-                let r = collider.offset().rotation.to_rotation_matrix();
-                let rotated_inertia = r * collider.local_inertia() * r.transpose();
+            // Rotate the local inertia tensor into the body frame.
+            let r = part.offset.rotation.to_rotation_matrix();
+            let rotated_inertia = r * part.local_inertia * r.transpose();
 
-                // Parallel axis theorem: shift inertia to body center of mass.
-                let d = collider.offset().translation.vector;
-                let d_sq = d.dot(&d);
-                let steiner = m * (d_sq * Matrix3::identity() - d * d.transpose());
+            // Parallel axis theorem: shift inertia to body center of mass.
+            let d = part.offset.translation.vector;
+            let d_sq = d.dot(&d);
+            let steiner = m * (d_sq * Matrix3::identity() - d * d.transpose());
 
-                total_inertia += rotated_inertia + steiner;
-            }
+            total_inertia += rotated_inertia + steiner;
         }
 
         if let Some(body) = self.bodies.get_mut(body_handle.0) {

@@ -1,16 +1,18 @@
 use crate::character::grab::{self, GrabConfig, ReachFrame};
 use crate::character::{
-    facing_from_rotation, ArmState, CharacterIntent, CharacterState, Grounding, LocomotionConfig,
-    LocomotionInput, LocomotionState, MovementRule,
+    approach, facing_from_rotation, ArmState, AttitudeControl, CharacterIntent, CharacterState,
+    Grounding, Immersion, LocomotionConfig, LocomotionInput, LocomotionState, MovementRule,
+    RuleSpeeds,
 };
 use crate::components::{Position, RigidBodyComponent, Rotation};
 use crate::debug::DebugOverlays;
 use crate::drive::{Actuator, BodyMotion, DriveIntent};
+use crate::physics::constraint::keep_attitude;
 use crate::rendering::colour::Colour;
 use crate::systems::PhysicsResource;
 use crate::time::Time;
 use nalgebra::{Point3, Vector3};
-use specs::{Join, Read, ReadExpect, ReadStorage, System, Write, WriteStorage};
+use specs::{Join, LendJoin, Read, ReadExpect, ReadStorage, System, Write, WriteStorage};
 
 /// Owns all `CharacterState` transitions (locomotion and arm) and applies
 /// physics effects. Reads `CharacterIntent` as input and `Grounding` as the
@@ -27,6 +29,11 @@ use specs::{Join, Read, ReadExpect, ReadStorage, System, Write, WriteStorage};
 ///   CoyoteTime ──(jump)──────────────────────────────────────► Airborne
 ///   CoyoteTime ──(is_grounded)──► Grounded
 ///   Airborne ──(is_grounded)────► Grounded
+///   any but Launching ──(too deep to stand)──► Swimming
+///   Swimming ──(shallow, or out of the water)──► Grounded | Airborne
+///
+/// A swimmer lies over to stroke and stands up to tread or come ashore: the
+/// pitch is eased here and handed to the body's `AttitudeControl`.
 pub struct CharacterControlSystem;
 
 impl<'a> System<'a> for CharacterControlSystem {
@@ -44,6 +51,8 @@ impl<'a> System<'a> for CharacterControlSystem {
         WriteStorage<'a, DriveIntent>,
         ReadStorage<'a, Actuator>,
         ReadStorage<'a, BodyMotion>,
+        ReadStorage<'a, Immersion>,
+        ReadStorage<'a, AttitudeControl>,
         Write<'a, DebugOverlays>,
     );
 
@@ -62,6 +71,8 @@ impl<'a> System<'a> for CharacterControlSystem {
             mut drive_intents,
             actuators,
             body_motions,
+            immersions,
+            attitudes,
             mut debug_overlays,
         ) = data;
         let dt = time.delta_seconds();
@@ -76,7 +87,20 @@ impl<'a> System<'a> for CharacterControlSystem {
             .map(|down| -down.into_inner())
             .unwrap_or_else(Vector3::zeros);
 
-        for (target, state, config, grounding, pos, rb, rotation, drive, motion, _) in (
+        for (
+            target,
+            state,
+            config,
+            grounding,
+            pos,
+            rb,
+            rotation,
+            drive,
+            motion,
+            _,
+            immersion,
+            attitude,
+        ) in (
             &mut intents,
             &mut character_states,
             &configs,
@@ -87,9 +111,12 @@ impl<'a> System<'a> for CharacterControlSystem {
             &mut drive_intents,
             &body_motions,
             &actuators,
+            (&immersions).maybe(),
+            (&attitudes).maybe(),
         )
             .join()
         {
+            let immersion = immersion.copied().unwrap_or_default();
             // Grounding is one contact-derived answer for every body, and a
             // contact set chatters where a probe's reach did not: a walking
             // capsule leaves the floor between footfalls. The forgiveness
@@ -126,6 +153,8 @@ impl<'a> System<'a> for CharacterControlSystem {
                 horizontal_speed,
                 move_dir,
                 long_jump_armed: state.crouch_buffer.active(),
+                immersion,
+                body_y: pos.0.y,
                 config,
             });
             state.locomotion = outcome.next_state;
@@ -166,11 +195,12 @@ impl<'a> System<'a> for CharacterControlSystem {
             let ground_speed = resolve_ground_speed(target, config, &state.crouch_lockout);
 
             // --- Yaw drive (physics body → Rotation, input → angular velocity) ---
+            // Read against the pitch the body is being held at: a swimmer's
+            // front faces the floor, and its heading is along its length.
             let current_yaw = {
                 let body = physics_res.world.body(character_body);
                 body.map(|b| {
-                    let forward = b.rotation() * Vector3::z();
-                    forward.x.atan2(forward.z)
+                    keep_attitude::yaw_of(&keep_attitude::heading(&b.rotation(), state.body_pitch))
                 })
                 .unwrap_or(rotation.0)
             };
@@ -204,25 +234,56 @@ impl<'a> System<'a> for CharacterControlSystem {
             // walker on a platform is in that window at every footfall, and
             // aiming him at a world standstill for it drags him off the back
             // a few centimetres at a time.
+            let swimming = matches!(state.locomotion, LocomotionState::Swimming);
             let mut rule = state.locomotion.movement_rule(
                 move_dir,
-                ground_speed,
-                state.air_speed,
-                config.air_steer_speed,
+                &RuleSpeeds {
+                    ground: ground_speed,
+                    air: state.air_speed,
+                    air_accel: config.air_steer_speed,
+                    swim: config.swim.speed(target.sprint),
+                    swim_accel: config.swim.accel(target.sprint),
+                },
             );
             if is_grounded && !grounding.is_grounded {
                 rule.target += across(support.surface_velocity, &up);
             }
+            // A swimmer's speed is through the water, and the water moves: one
+            // treading in a river goes down it, as drag would take it anyway.
+            if swimming {
+                rule.target += across(immersion.current(), &up);
+            }
             apply_movement_rule(drive, rule);
+
+            // --- Attitude: lie over to stroke, stand up to tread or wade ---
+            let stroking = swimming && move_dir.magnitude() > 0.001;
+            let target_pitch = if swimming {
+                config.swim.pitch(stroking)
+            } else {
+                0.0
+            };
+            let rate = config
+                .swim
+                .pitch_rate_toward(state.body_pitch, target_pitch);
+            state.body_pitch = approach(state.body_pitch, target_pitch, rate, dt);
+            if let Some(attitude) = attitude {
+                attitude.hold(&mut physics_res.world, state.body_pitch);
+            }
 
             // --- Arm state transitions ---
             let facing = facing_from_rotation(rotation.0);
             let character_pos = Point3::new(pos.0.x, pos.0.y, pos.0.z);
 
             let was_holding = matches!(state.arm, ArmState::Holding { .. });
+            if let ArmState::Holding { constraint, .. } = state.arm {
+                if !state.arm_state_allowed(&state.arm) {
+                    grab::release(&mut physics_res.world, constraint);
+                    state.arm = ArmState::Idle;
+                }
+            }
             state.arm = match state.arm {
                 ArmState::Idle => {
-                    if target.grab_just_pressed {
+                    if target.grab_just_pressed && !swimming {
                         grab::begin_reach(
                             &physics_res.world,
                             character_pos,
@@ -567,6 +628,8 @@ mod tests {
         world.register::<CharacterState>();
         world.register::<LocomotionConfig>();
         world.register::<Grounding>();
+        world.register::<Immersion>();
+        world.register::<AttitudeControl>();
         world.register::<Position>();
         world.register::<RigidBodyComponent>();
         world.register::<Rotation>();

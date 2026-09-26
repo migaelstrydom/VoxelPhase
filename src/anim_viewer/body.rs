@@ -32,7 +32,8 @@
 use nalgebra::{Point3, Vector3};
 
 use crate::character::{
-    CharacterIntent, CharacterState, LocomotionConfig, LocomotionInput, LocomotionState,
+    CharacterIntent, CharacterState, Immersion, LocomotionConfig, LocomotionInput, LocomotionState,
+    RuleSpeeds,
 };
 use crate::systems::resolve_ground_speed;
 
@@ -144,6 +145,8 @@ impl Body {
             horizontal_speed,
             move_dir,
             long_jump_armed: self.state.crouch_buffer.active(),
+            immersion: Immersion::dry(),
+            body_y: self.position.y,
             config: &self.config,
         });
         self.state.locomotion = outcome.next_state;
@@ -160,9 +163,13 @@ impl Body {
         let ground_speed = resolve_ground_speed(intent, &self.config, &self.state.crouch_lockout);
         let mut rule = self.state.locomotion.movement_rule(
             move_dir,
-            ground_speed,
-            self.state.air_speed,
-            self.config.air_steer_speed,
+            &RuleSpeeds {
+                ground: ground_speed,
+                air: self.state.air_speed,
+                air_accel: self.config.air_steer_speed,
+                swim: self.config.swim.speed(intent.sprint),
+                swim_accel: self.config.swim.accel(intent.sprint),
+            },
         );
         // The gait's speed is relative to the floor: standing still on a
         // platform means matching it, not holding a world position. The game

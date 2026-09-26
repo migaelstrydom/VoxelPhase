@@ -9,6 +9,7 @@ use generational_arena::{Arena, Index};
 use nalgebra::{Matrix3, Point3, UnitQuaternion, UnitVector3, Vector3};
 
 use crate::physics::body::RigidBody;
+use crate::physics::constraint::keep_attitude;
 use crate::physics::constraint::types::{
     Constraint, ConstraintKind, ConstraintRow, CorrectionMode, Enforcement, RowKind,
 };
@@ -626,6 +627,20 @@ fn correct_constraint_angular_drift(
                 );
             }
 
+            ConstraintKind::KeepAttitude {
+                body,
+                pitch,
+                compliance,
+                max_impulse,
+            } => {
+                // As KeepUpright: a bounded or compliant attitude answers to
+                // its velocity rows alone.
+                if max_impulse.is_finite() || *compliance > 0.0 {
+                    continue;
+                }
+                correct_attitude_drift(bodies, body.0, *pitch, correction_factor, transforms);
+            }
+
             ConstraintKind::Fixed {
                 body_a,
                 body_b,
@@ -749,6 +764,27 @@ fn correct_upright_angular_drift(
     let correction = error * angular_factor;
     if let Some(t) = transforms.get_mut(&handle) {
         t.rotation = integrate_orientation(t.rotation, correction, 1.0);
+    }
+}
+
+/// Correct attitude error for KeepAttitude by rotating the body directly,
+/// about the two horizontal axes of its heading frame only.
+fn correct_attitude_drift(
+    bodies: &Arena<RigidBody>,
+    handle: Index,
+    pitch: f32,
+    angular_factor: f32,
+    transforms: &mut FxHashMap<Index, CorrectedTransform>,
+) {
+    let Some((_, rot, _, _)) = get_corrected_transform(bodies, handle, transforms) else {
+        return;
+    };
+    let (error, _, _) = keep_attitude::attitude_error(&rot, pitch);
+    if error.norm_squared() < 1e-14 {
+        return;
+    }
+    if let Some(t) = transforms.get_mut(&handle) {
+        t.rotation = integrate_orientation(t.rotation, error * angular_factor, 1.0);
     }
 }
 

@@ -6,7 +6,9 @@ use crate::animation::peeper::PeeperAnimator;
 use crate::animation::{AnimationDebugConfig, CharacterAnimator};
 use crate::camera::{CameraConfig, FollowTarget};
 use crate::character::grab::GrabConfig;
-use crate::character::{CharacterIntent, CharacterState, Grounding, LocomotionConfig};
+use crate::character::{
+    AttitudeControl, CharacterIntent, CharacterState, Grounding, Immersion, LocomotionConfig,
+};
 use crate::cleave::BrittleSolid;
 use crate::components::{
     CameraComponent, MaterialModulation, ModelInstance, Orientation, Position, Renderable,
@@ -68,6 +70,8 @@ impl WorldBuilder {
         world.register::<CharacterState>();
         world.register::<LocomotionConfig>();
         world.register::<Grounding>();
+        world.register::<Immersion>();
+        world.register::<AttitudeControl>();
         world.register::<Health>();
         world.register::<Dead>();
         world.register::<Ragdoll>();

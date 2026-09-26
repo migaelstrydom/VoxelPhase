@@ -2,14 +2,15 @@
 //!
 //! These are thin wrappers that call into the CharacterAnimator.
 
+use nalgebra::Vector3;
 use specs::{Entities, Join, Read, ReadExpect, ReadStorage, System, Write, WriteStorage};
 
-use super::animator::CharacterAnimator;
+use super::animator::{BodyReading, CharacterAnimator};
 use super::debug_config::AnimationDebugConfig;
 use super::foot_placer::{FootPhase, FootPlacer};
 use crate::character::grab::GrabConfig;
-use crate::character::{CharacterIntent, CharacterState, Grounding};
-use crate::components::{Position, Rotation, Velocity};
+use crate::character::{CharacterIntent, CharacterState, Grounding, Immersion};
+use crate::components::{Orientation, Position, Rotation, Velocity};
 use crate::debug::{DebugLines, DebugOverlays};
 use crate::rendering::Colour;
 use crate::sensing::{ContactCandidates, SensorSet};
@@ -26,14 +27,20 @@ impl<'a> System<'a> for AnimationProbeConfigSystem {
         Entities<'a>,
         ReadStorage<'a, Position>,
         ReadStorage<'a, Rotation>,
+        ReadStorage<'a, Orientation>,
         ReadStorage<'a, CharacterAnimator>,
         WriteStorage<'a, SensorSet>,
     );
 
-    fn run(&mut self, (entities, positions, rotations, animators, mut sensors): Self::SystemData) {
-        for (entity, pos, rot, animator) in (&entities, &positions, &rotations, &animators).join() {
+    fn run(
+        &mut self,
+        (entities, positions, rotations, orientations, animators, mut sensors): Self::SystemData,
+    ) {
+        for (entity, pos, rot, orientation, animator) in
+            (&entities, &positions, &rotations, &orientations, &animators).join()
+        {
             let body_pos = nalgebra::Point3::new(pos.0.x, pos.0.y, pos.0.z);
-            let pelvis_pos = animator.pelvis_for(body_pos);
+            let pelvis_pos = animator.pelvis_for(body_pos, orientation.0 * Vector3::y());
             let yaw = rot.0;
 
             let probes = animator.configure_probes(pelvis_pos, yaw);
@@ -58,10 +65,12 @@ impl<'a> System<'a> for CharacterAnimationSystem {
         ReadStorage<'a, CharacterState>,
         ReadStorage<'a, Position>,
         ReadStorage<'a, Rotation>,
+        ReadStorage<'a, Orientation>,
         ReadStorage<'a, Velocity>,
         ReadStorage<'a, CharacterIntent>,
         ReadStorage<'a, ContactCandidates>,
         ReadStorage<'a, Grounding>,
+        ReadStorage<'a, Immersion>,
         WriteStorage<'a, CharacterAnimator>,
         Write<'a, DebugLines>,
         Write<'a, DebugOverlays>,
@@ -76,10 +85,12 @@ impl<'a> System<'a> for CharacterAnimationSystem {
             character_states,
             positions,
             rotations,
+            orientations,
             velocities,
             intents,
             candidates,
             groundings,
+            immersions,
             mut animators,
             mut debug_lines,
             mut debug_overlays,
@@ -87,11 +98,12 @@ impl<'a> System<'a> for CharacterAnimationSystem {
 
         let dt = time.delta_seconds();
 
-        for (entity, character_state, pos, rot, vel, target, grounding, animator) in (
+        for (entity, character_state, pos, rot, orientation, vel, target, grounding, animator) in (
             &entities,
             &character_states,
             &positions,
             &rotations,
+            &orientations,
             &velocities,
             &intents,
             &groundings,
@@ -100,26 +112,23 @@ impl<'a> System<'a> for CharacterAnimationSystem {
             .join()
         {
             let body_pos = nalgebra::Point3::new(pos.0.x, pos.0.y, pos.0.z);
-            let pelvis_pos = animator.pelvis_for(body_pos);
-            let yaw = rot.0;
+            let body_up = orientation.0 * Vector3::y();
+            let immersion = immersions.get(entity).copied().unwrap_or_default();
 
             let contacts = candidates
                 .get(entity)
                 .map(|c| c.candidates.as_slice())
                 .unwrap_or(&[]);
 
-            let velocity = nalgebra::Vector3::new(vel.0.x, vel.0.y, vel.0.z);
-            animator.update(
-                dt,
-                pelvis_pos,
-                yaw,
-                velocity,
+            let body = BodyReading {
+                pelvis: animator.pelvis_for(body_pos, body_up),
+                yaw: rot.0,
+                velocity: Vector3::new(vel.0.x, vel.0.y, vel.0.z),
+                up: body_up,
                 grounding,
-                character_state,
-                target,
-                &grab_config,
-                contacts,
-            );
+                immersion: &immersion,
+            };
+            animator.update(dt, &body, character_state, target, &grab_config, contacts);
 
             if let Some(status) = animator.recording_status() {
                 debug_lines.add("Placer rec", status);

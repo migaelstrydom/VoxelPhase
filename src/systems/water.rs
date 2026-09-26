@@ -242,19 +242,16 @@ fn build_body_snapshots(
             continue;
         }
 
-        let collider_handle = match rb.colliders().first() {
-            Some(h) => *h,
-            None => continue,
-        };
-        let Some(collider) = physics.world.collider(collider_handle) else {
+        // What the water sees of the body, which for a character is the
+        // figure and not the capsule round it.
+        let Some(part) = physics.world.envelope(body_comp.0).next() else {
             continue;
         };
+        let footprint_radius = part.shape.footprint_radius();
 
         // Use the arena index raw parts to create a stable u64 ID.
         let (slot, gen) = body_comp.0.raw_parts();
         let id = (gen << 32) | (slot as u64);
-
-        let footprint_radius = collider.shape().footprint_radius();
 
         snapshots.push(BodySnapshot {
             id,

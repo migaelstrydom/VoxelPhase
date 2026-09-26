@@ -53,6 +53,26 @@ pub enum ConstraintKind {
         max_impulse: f32,
     },
 
+    /// Hold a body's pitch and roll about its own heading, leaving rotation
+    /// about world up free. Produces 2 constraint rows. At `pitch` 0 it holds
+    /// a body upright exactly as `KeepUpright` with a +Y target does; pitched,
+    /// it lays the body's +Y over toward its heading and still lets it turn.
+    /// See `keep_attitude`.
+    KeepAttitude {
+        /// The body to hold.
+        body: RigidBodyHandle,
+        /// How far the body's +Y is tipped from vertical toward its heading,
+        /// in radians. Meant to be changed while the constraint lives: the
+        /// rows chase it at `beta`.
+        pitch: f32,
+        /// Angular compliance, in rad per N·m (0 = perfectly rigid). As
+        /// `KeepUpright`'s.
+        compliance: f32,
+        /// Bound on the angular impulse each row may accumulate. As
+        /// `KeepUpright`'s.
+        max_impulse: f32,
+    },
+
     /// Locks all 6 DOF between two bodies (or body to world). Equivalent
     /// to a weld joint. Produces 3 positional rows (X, Y, Z) + 3 angular
     /// rows = 6 total. For world-anchored Fixed with compliance=0, the tilt
@@ -260,7 +280,7 @@ impl ConstraintKind {
     /// Number of solver rows this constraint expands to.
     pub fn row_count(&self) -> usize {
         match self {
-            ConstraintKind::KeepUpright { .. } => 2,
+            ConstraintKind::KeepUpright { .. } | ConstraintKind::KeepAttitude { .. } => 2,
             ConstraintKind::BallJoint { .. } => 3,
             ConstraintKind::Fixed { .. } => 6,
             ConstraintKind::Hinge { .. } => 5,
@@ -272,7 +292,8 @@ impl ConstraintKind {
     /// Whether this constraint references the given body.
     pub fn references_body(&self, handle: RigidBodyHandle) -> bool {
         match self {
-            ConstraintKind::KeepUpright { body, .. } => *body == handle,
+            ConstraintKind::KeepUpright { body, .. }
+            | ConstraintKind::KeepAttitude { body, .. } => *body == handle,
             ConstraintKind::BallJoint { body_a, body_b, .. }
             | ConstraintKind::Fixed { body_a, body_b, .. }
             | ConstraintKind::Hinge { body_a, body_b, .. } => {
@@ -288,7 +309,8 @@ impl ConstraintKind {
     /// All body handles referenced by this constraint.
     pub fn referenced_bodies(&self) -> SmallVec<[RigidBodyHandle; 2]> {
         match self {
-            ConstraintKind::KeepUpright { body, .. } => {
+            ConstraintKind::KeepUpright { body, .. }
+            | ConstraintKind::KeepAttitude { body, .. } => {
                 smallvec::smallvec![*body]
             }
             ConstraintKind::BallJoint { body_a, body_b, .. }

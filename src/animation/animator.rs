@@ -8,22 +8,56 @@ use specs::{Component, VecStorage};
 
 use super::config::{CharacterRigConfig, GaitPreset};
 use super::foot_placer::{FootPlacer, FootSide, PlacerFoot};
-use super::humanoid::pose_state::{AirKind, Gait, PoseState, SampleCtx, Takeoff, TickCtx};
+use super::humanoid::pose_state::{AirKind, Gait, PoseState, SampleCtx, Stroke, Takeoff, TickCtx};
 use super::humanoid::skeleton::{generate_character_mesh, Skeleton};
 use super::humanoid::stride_sync;
 use super::humanoid::upper_state::{UpperSampleCtx, UpperState, UpperTickCtx};
 use super::legged::{LeggedLocomotion, LocomotionCtx};
 use super::pose::{Crossfade, Linear, PoseFragment};
-use super::state::{AnimationState, FootState};
+use super::state::{AnimationState, FootState, WaterEntry};
 use crate::character::grab::GrabConfig;
 use crate::character::{
-    AirSteering, ArmState, CharacterIntent, CharacterState, Grounding, LocomotionState,
+    AirSteering, ArmState, CharacterIntent, CharacterState, Grounding, Immersion, LocomotionState,
 };
 use crate::rendering::vertex::Vertex;
 use crate::sensing::{ContactCandidate, Probe};
 
 /// Duration of the crossfade when either FSM changes variant kind.
 const TRANSITION_BLEND_DURATION: f32 = 0.1;
+
+/// Duration of a crossfade into, out of, or within swimming. Limbs move
+/// through water slowly, and a stroke changing to a tread is a body settling,
+/// not a snap.
+const SWIM_BLEND_DURATION: f32 = 0.3;
+
+/// Distance a stroke cycle carries a swimmer, in metres: sets the stroke rate
+/// from the speed.
+const STROKE_LENGTH: f32 = 1.8;
+
+/// Slowest stroke rate, in cycles per second: treading water, or a crawl
+/// barely under way.
+const TREAD_RATE: f32 = 0.7;
+
+/// Extra step height a wader lifts its feet by at chest depth, in metres.
+/// Striding through water is done knees high.
+const WADE_KNEE_LIFT: f32 = 0.08;
+
+/// Time constant the wade depth is eased with, in seconds.
+const WADE_EASE: f32 = 0.15;
+
+/// What the animator is told about the physics body each frame.
+pub struct BodyReading<'a> {
+    /// Where the rig's pelvis belongs: see [`CharacterAnimator::pelvis_for`].
+    pub pelvis: Point3<f32>,
+    /// Heading, in radians about +y, with 0 facing +z.
+    pub yaw: f32,
+    pub velocity: Vector3<f32>,
+    /// The body's long axis — its local +Y — in world space. Upright it is
+    /// world up; a swimmer's lies along its heading.
+    pub up: Vector3<f32>,
+    pub grounding: &'a Grounding,
+    pub immersion: &'a Immersion,
+}
 
 /// The character animation driver.
 ///
@@ -103,9 +137,12 @@ impl CharacterAnimator {
         }
     }
 
-    /// Where the rig's pelvis belongs, given where the physics body is.
-    pub fn pelvis_for(&self, body_position: Point3<f32>) -> Point3<f32> {
-        self.locomotion.pelvis_for(body_position)
+    /// Where the rig's pelvis belongs, given where the physics body is and
+    /// which way its long axis points. The pelvis hangs below the body's
+    /// centre along that axis, so a swimmer's lies behind it.
+    pub fn pelvis_for(&self, body_position: Point3<f32>, body_up: Vector3<f32>) -> Point3<f32> {
+        let drop = body_position.y - self.locomotion.pelvis_for(body_position).y;
+        body_position - body_up * drop
     }
 
     /// The foot placer driving the legs.
@@ -128,15 +165,13 @@ impl CharacterAnimator {
     pub fn update(
         &mut self,
         dt: f32,
-        pelvis_position: Point3<f32>,
-        yaw: f32,
-        velocity: Vector3<f32>,
-        grounding: &Grounding,
+        body: &BodyReading<'_>,
         character_state: &CharacterState,
         target: &CharacterIntent,
         grab_config: &GrabConfig,
         contacts: &[ContactCandidate],
     ) {
+        let (pelvis_position, yaw, grounding) = (body.pelvis, body.yaw, body.grounding);
         // Everything below the neck is animated in the frame of whatever is
         // holding the character up. A body riding a platform has the
         // platform's velocity and is nonetheless standing still: it should
@@ -144,12 +179,15 @@ impl CharacterAnimator {
         // where they were put. Nothing carries an airborne character, so this
         // is the world frame the moment support is lost.
         let support_velocity = self.locomotion.observe_support(grounding, dt);
-        let velocity = velocity - support_velocity;
+        let velocity = body.velocity - support_velocity;
         let speed = Vector3::new(velocity.x, 0.0, velocity.z).magnitude();
         let facing = Vector3::new(yaw.sin(), 0.0, yaw.cos());
 
         self.state.facing = facing;
         self.state.pelvis_position = pelvis_position;
+        self.state.velocity = velocity;
+        self.state.body_pitch = body.up.dot(&facing).atan2(body.up.y);
+        self.state.water_surface = body.immersion.water.map(|w| w.surface);
         self.locomotion.process_contacts(contacts);
         self.state.left.normal = self.locomotion.ground(FootSide::Left).normal_or_up();
         self.state.right.normal = self.locomotion.ground(FootSide::Right).normal_or_up();
@@ -165,6 +203,17 @@ impl CharacterAnimator {
         // radius below), so a probe contact is the correct value directly.
         let landing_ground_y = self.locomotion.ground_height(pelvis_position);
 
+        self.ease_wade(landing_ground_y, dt);
+
+        // A body in the water with nothing under it looks like a swimmer
+        // whatever the motion FSM calls it: one still falling into the water,
+        // or one standing up out of it before its feet find the floor.
+        let afloat = !grounding.is_grounded
+            && self
+                .state
+                .water_surface
+                .is_some_and(|surface| surface > pelvis_position.y);
+
         // Map CharacterState → next PoseState variant.
         let new_pose = next_pose_state(
             self.pose_state,
@@ -174,7 +223,10 @@ impl CharacterAnimator {
             self.config.idle_threshold,
             facing,
             landing_ground_y,
+            afloat,
         );
+        self.advance_stroke(&new_pose, speed, dt);
+        self.track_water_entry(&new_pose, dt);
 
         // Tick the foot placer before sampling so the pose layer reads a
         // current foot position. Airborne states suspend the placer; feet
@@ -225,12 +277,14 @@ impl CharacterAnimator {
 
         // Snapshot outgoing fragments BEFORE the variant swap, so the
         // crossfade `from` reflects what the old state was producing.
+        let blend = blend_duration(&self.pose_state, &new_pose);
         begin_crossfade_if_changed(
             &mut self.pose_crossfade,
             self.pose_state.transition_key(),
             new_pose.transition_key(),
             pelvis_position,
             self.config.leg_length(),
+            blend,
             || self.pose_state.sample(&pose_sample_ctx),
         );
         begin_crossfade_if_changed(
@@ -239,6 +293,7 @@ impl CharacterAnimator {
             new_upper.transition_key(),
             pelvis_position,
             self.config.leg_length(),
+            blend,
             || {
                 let ctx = build_upper_ctx(&self.pose_state, &self.config, &self.state, grab_config);
                 self.upper_state.sample(&ctx)
@@ -293,13 +348,14 @@ impl CharacterAnimator {
     ) {
         let airborne = matches!(
             next_pose,
-            PoseState::Launching { .. } | PoseState::Airborne { .. }
+            PoseState::Launching { .. } | PoseState::Airborne { .. } | PoseState::Swimming { .. }
         );
 
         let preset = gait_preset_for(next_pose, &self.config);
         let step_height = preset
             .map(|p| p.step_height)
-            .unwrap_or(self.config.step_height);
+            .unwrap_or(self.config.step_height)
+            + WADE_KNEE_LIFT * self.state.wade;
         // `stride_gain` scales the capture-point target: 1.0 plants at
         // the stopping foothold, values below 1 let the body pass over
         // the foot. Airborne and landing states fall back to the walk
@@ -319,8 +375,49 @@ impl CharacterAnimator {
             airborne,
             step_height,
             stride_gain,
-            pose_tag: pose_tag(next_pose),
+            pose_tag: next_pose.tag(),
         });
+    }
+
+    /// Ease the wade depth toward how deep the water stands over the ground
+    /// under the character, as a fraction of its chest height.
+    fn ease_wade(&mut self, ground_y: f32, dt: f32) {
+        let chest = self.config.standing_height() + self.config.torso_height;
+        let target = self.state.water_surface.map_or(0.0, |surface| {
+            ((surface - ground_y) / chest).clamp(0.0, 1.0)
+        });
+        let blend = 1.0 - (-dt / WADE_EASE).exp();
+        self.state.wade += (target - self.state.wade) * blend;
+    }
+
+    /// Advance the stroke clock while swimming: a cycle per `STROKE_LENGTH`
+    /// travelled, never slower than a tread. Out of the water it holds, so a
+    /// swimmer who stands and goes straight back in picks up where it was.
+    fn advance_stroke(&mut self, pose: &PoseState, speed: f32, dt: f32) {
+        if !matches!(pose, PoseState::Swimming { .. }) {
+            return;
+        }
+        let rate = (speed / STROKE_LENGTH).max(TREAD_RATE);
+        self.state.stroke_phase =
+            (self.state.stroke_phase + rate * std::f32::consts::TAU * dt) % std::f32::consts::TAU;
+    }
+
+    /// Start a water entry when the body goes from the air into the water,
+    /// and play it out; any recovery ends the moment the body is out of the
+    /// water again.
+    fn track_water_entry(&mut self, pose: &PoseState, dt: f32) {
+        let swimming = matches!(pose, PoseState::Swimming { .. });
+        let was_falling = matches!(
+            self.pose_state,
+            PoseState::Airborne { .. } | PoseState::Launching { .. }
+        );
+        self.state.water_entry = if !swimming {
+            None
+        } else if was_falling {
+            WaterEntry::at(-self.state.velocity.y)
+        } else {
+            self.state.water_entry.and_then(|entry| entry.advanced(dt))
+        };
     }
 
     /// Start recording placer input, or stop and write what was kept.
@@ -384,6 +481,7 @@ fn begin_crossfade_if_changed<K: PartialEq, F: FnOnce() -> PoseFragment>(
     new_key: K,
     pelvis: Point3<f32>,
     reach: f32,
+    duration: f32,
     sample_from: F,
 ) {
     if old_key != new_key {
@@ -391,10 +489,20 @@ fn begin_crossfade_if_changed<K: PartialEq, F: FnOnce() -> PoseFragment>(
             from: sample_from(),
             from_pelvis: pelvis,
             reach,
-            to_duration: TRANSITION_BLEND_DURATION,
+            to_duration: duration,
             elapsed: 0.0,
             policy: Linear,
         });
+    }
+}
+
+/// How long a change from `from` to `to` should take to blend.
+fn blend_duration(from: &PoseState, to: &PoseState) -> f32 {
+    let swimming = |p: &PoseState| matches!(p, PoseState::Swimming { .. });
+    if swimming(from) || swimming(to) {
+        SWIM_BLEND_DURATION
+    } else {
+        TRANSITION_BLEND_DURATION
     }
 }
 
@@ -418,6 +526,10 @@ fn build_upper_ctx<'a>(
         pelvis_offset,
         torso_pitch,
         airborne: airborne_ctx_for(pose),
+        stroke: match pose {
+            PoseState::Swimming { stroke } => Some(*stroke),
+            _ => None,
+        },
     }
 }
 
@@ -445,23 +557,6 @@ fn blend_through(
 /// Look up the active `GaitPreset` for the current `PoseState`. Returns
 /// `None` when the lower body is not Grounded — the upper body falls back
 /// to rig-level defaults in that case.
-/// Short comma-free tag identifying the pose FSM variant, for the placer
-/// input recorder.
-fn pose_tag(pose: &PoseState) -> &'static str {
-    match pose {
-        PoseState::Grounded { gait } => match gait {
-            Gait::Idle => "idle",
-            Gait::Walk => "walk",
-            Gait::Sprint => "sprint",
-            Gait::Crouch { walking: false } => "crouch",
-            Gait::Crouch { walking: true } => "crouch_walk",
-        },
-        PoseState::Launching { .. } => "launching",
-        PoseState::Airborne { .. } => "airborne",
-        PoseState::Landing { .. } => "landing",
-    }
-}
-
 fn gait_preset_for(pose: &PoseState, rig: &CharacterRigConfig) -> Option<GaitPreset> {
     match pose {
         PoseState::Grounded { gait } => Some(rig.gait_presets.for_gait(*gait)),
@@ -515,6 +610,7 @@ fn map_upper_state(arm: &ArmState, pose: PoseState) -> UpperState {
     match arm {
         ArmState::Idle => match pose {
             PoseState::Grounded { .. } => UpperState::Swinging,
+            PoseState::Swimming { .. } => UpperState::Stroking,
             _ => UpperState::Braced,
         },
         ArmState::Reaching { elapsed, target } => UpperState::Reaching {
@@ -545,6 +641,7 @@ fn next_pose_state(
     idle_threshold: f32,
     facing: Vector3<f32>,
     landing_ground_y: f32,
+    afloat: bool,
 ) -> PoseState {
     // Launching: hold for the full anticipation window unless physics
     // reports an early touchdown (rare — e.g. hit ceiling, dropped back).
@@ -572,6 +669,16 @@ fn next_pose_state(
     }
 
     let moving = speed > idle_threshold || target.direction.magnitude_squared() > 0.001;
+
+    // In the water, the stroke follows the intent the way the gait does on
+    // land: going somewhere is a crawl, staying put is a tread.
+    let swimming = PoseState::Swimming {
+        stroke: if target.direction.magnitude_squared() > 0.001 {
+            Stroke::Crawl
+        } else {
+            Stroke::Tread
+        },
+    };
 
     let mapped = match character.locomotion {
         // CoyoteTime exists to bridge one-frame ground-contact losses
@@ -606,6 +713,12 @@ fn next_pose_state(
                 t: 0.0,
             }
         }
+        LocomotionState::Swimming => swimming,
+        // Falling in, or standing up on the way out: upright in the water,
+        // so treading whatever the intent — only a swimmer lying down crawls.
+        LocomotionState::Airborne { .. } if afloat => PoseState::Swimming {
+            stroke: Stroke::Tread,
+        },
         LocomotionState::Airborne { steering, .. } => {
             let kind = match (current, steering) {
                 (PoseState::Launching { kind, .. }, _) => kind,
@@ -667,6 +780,7 @@ mod tests {
             0.1,
             Vector3::new(0.0, 0.0, 1.0),
             0.0,
+            false,
         );
 
         assert!(matches!(next, PoseState::Grounded { gait: Gait::Walk }));
@@ -684,7 +798,7 @@ mod tests {
         let animator =
             CharacterAnimator::new(config, Point3::new(0.0, clearance, 0.0), clearance, 0.0);
 
-        let pelvis = animator.pelvis_for(Point3::new(4.0, clearance, -2.0));
+        let pelvis = animator.pelvis_for(Point3::new(4.0, clearance, -2.0), Vector3::y());
         assert_eq!((pelvis.x, pelvis.z), (4.0, -2.0), "only height is adjusted");
         assert!(
             (pelvis.y - standing).abs() < 1e-6,
@@ -700,6 +814,9 @@ mod tests {
         let config = CharacterRigConfig::default();
         let clearance = config.standing_height() * 0.5;
         let animator = CharacterAnimator::new(config, Point3::origin(), clearance, 0.0);
-        assert_eq!(animator.pelvis_for(Point3::origin()), Point3::origin());
+        assert_eq!(
+            animator.pelvis_for(Point3::origin(), Vector3::y()),
+            Point3::origin()
+        );
     }
 }

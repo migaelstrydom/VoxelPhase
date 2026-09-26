@@ -1,7 +1,10 @@
 //! Rigid body representation.
 
+use generational_arena::Arena;
 use nalgebra::{Matrix3, Point3, UnitQuaternion, Vector3};
 
+use super::bulk::{self, BulkShape, Envelope, MassParts};
+use super::collider::Collider;
 use super::constraint::types::ConstraintHandle;
 use super::drive::allowance::AllowanceCommand;
 use super::drive::command::NormalVerbs;
@@ -30,6 +33,8 @@ pub struct RigidBodyDesc {
     pub linear_damping: f32,
     pub angular_damping: f32,
     pub gravity_scale: f32,
+    /// The body's bulk, where it is not its colliders. See [`BulkShape`].
+    pub bulk: Option<BulkShape>,
 }
 
 impl Default for RigidBodyDesc {
@@ -43,6 +48,7 @@ impl Default for RigidBodyDesc {
             linear_damping: 0.0,
             angular_damping: 0.05,
             gravity_scale: 1.0,
+            bulk: None,
         }
     }
 }
@@ -97,6 +103,14 @@ impl RigidBodyDesc {
 
     pub fn gravity_scale(mut self, scale: f32) -> Self {
         self.gravity_scale = scale;
+        self
+    }
+
+    /// Declare the body's bulk apart from its colliders: what weighs it, and
+    /// what the media it moves through see. The colliders' densities are then
+    /// not used. See [`BulkShape`].
+    pub fn bulk(mut self, bulk: BulkShape) -> Self {
+        self.bulk = Some(bulk);
         self
     }
 }
@@ -193,6 +207,12 @@ pub struct RigidBody {
     // Attached colliders
     colliders: Vec<ColliderHandle>,
 
+    /// What weighs the body and what fluids see of it, where that is not its
+    /// colliders. `None` for almost every body. Read through
+    /// `PhysicsWorld::mass_parts` and `PhysicsWorld::envelope`, which fall
+    /// back to the colliders.
+    bulk: Option<Box<BulkShape>>,
+
     /// How this body converts a drive command into momentum, if it is driven
     /// at all. Exactly one form at a time — see [`BodyDrive`].
     ///
@@ -255,6 +275,7 @@ impl RigidBody {
             linear_drag_coeff: 0.0,
             angular_drag_coeff: 0.0,
             colliders: Vec::new(),
+            bulk: desc.bulk.map(Box::new),
             drive: None,
             non_support_grip: 1.0,
             allowance: AllowanceCommand::default(),
@@ -331,6 +352,22 @@ impl RigidBody {
 
     pub fn colliders(&self) -> &[ColliderHandle] {
         &self.colliders
+    }
+
+    /// The bulk declared apart from the colliders, if any.
+    pub fn bulk(&self) -> Option<&BulkShape> {
+        self.bulk.as_deref()
+    }
+
+    /// What a fluid sees of this body: the declared envelope, or else the
+    /// colliders, looked up in `colliders`.
+    pub fn envelope<'a>(&'a self, colliders: &'a Arena<Collider>) -> Envelope<'a> {
+        bulk::envelope(self.bulk(), &self.colliders, colliders)
+    }
+
+    /// Where this body's mass is: the declared parts, or else the colliders.
+    pub fn mass_parts<'a>(&'a self, colliders: &'a Arena<Collider>) -> MassParts<'a> {
+        bulk::mass_parts(self.bulk(), &self.colliders, colliders)
     }
 
     /// Get the world-space inverse inertia tensor.
@@ -501,6 +538,15 @@ impl RigidBody {
     }
 
     // === Internal methods ===
+
+    pub(crate) fn bulk_mut(&mut self) -> Option<&mut BulkShape> {
+        self.bulk.as_deref_mut()
+    }
+
+    /// Forget the declared bulk, leaving the colliders to stand for it.
+    pub(crate) fn clear_bulk(&mut self) {
+        self.bulk = None;
+    }
 
     pub(crate) fn add_collider(&mut self, handle: ColliderHandle) {
         self.colliders.push(handle);

@@ -4,7 +4,7 @@ use crate::aim::AimPredictionSystem;
 use crate::animation::critter::{CritterAnimationSystem, CritterProbeConfigSystem};
 use crate::animation::peeper::{PeeperAnimationSystem, PeeperProbeConfigSystem};
 use crate::animation::{AnimationProbeConfigSystem, CharacterAnimationSystem};
-use crate::character::ContactGroundingSystem;
+use crate::character::{ContactGroundingSystem, ImmersionSystem};
 use crate::cleave::SolidCleaveSystem;
 use crate::creature::{
     AlertTelegraphSystem, BrainSystem, CollectionSystem, MeleeAttackSystem, PerceptionSystem,
@@ -125,10 +125,14 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
             "contact_grounding",
             &["physics_sync"],
         )
+        // The one writer of `Immersion`: the water in each character's
+        // column, read by the animator this frame and `character_control` the
+        // next, like grounding.
+        .with(ImmersionSystem, "immersion", &["physics_sync"])
         .with(
             CharacterAnimationSystem,
             "character_animation",
-            &["sensor_probe", "contact_grounding"],
+            &["sensor_probe", "contact_grounding", "immersion"],
         )
         .with(
             CritterAnimationSystem,

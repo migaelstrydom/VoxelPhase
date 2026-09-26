@@ -3,6 +3,7 @@ use specs::{Component, DenseVecStorage};
 
 use super::config::LocomotionConfig;
 use super::forgiveness::GroundForgiveness;
+use super::immersion::Immersion;
 use crate::physics::RigidBodyHandle;
 
 /// Countdown timer for input-grace windows (jump buffer, crouch buffer, lockouts).
@@ -92,6 +93,11 @@ pub enum LocomotionState {
         steering: AirSteering,
         allow_cutoff: bool,
     },
+    /// In water too deep to stand in. Steered at the swim rate relative to the
+    /// water; buoyancy owns vertical, and a jump does nothing. Entered from any
+    /// state but `Launching` once `SwimConfig::takes_to_water`, left for
+    /// `Grounded` or `Airborne` once `SwimConfig::leaves_water`.
+    Swimming,
 }
 
 impl Default for LocomotionState {
@@ -113,6 +119,10 @@ pub struct LocomotionInput<'a> {
     /// True when sprint is held and crouch was pressed within the buffer
     /// window — the precondition for a long jump on this frame's jump press.
     pub long_jump_armed: bool,
+    /// The water at the body this frame.
+    pub immersion: Immersion,
+    /// Height of the body's centre, to measure against the water.
+    pub body_y: f32,
     pub config: &'a LocomotionConfig,
 }
 
@@ -126,6 +136,22 @@ pub struct LocomotionOutcome {
     pub set_air_speed: Option<f32>,
     /// True when this tick consumed the jump input (driver clears the buffer).
     pub consumed_jump: bool,
+}
+
+/// The speeds and rates a movement rule chooses between, resolved from the
+/// intent and the config before the rule is asked for.
+#[derive(Debug, Clone, Copy)]
+pub struct RuleSpeeds {
+    /// Gait-resolved speed on the ground.
+    pub ground: f32,
+    /// Latched takeoff cap for air steering.
+    pub air: f32,
+    /// Air steering rate, in m/s².
+    pub air_accel: f32,
+    /// Swimming speed, relative to the water.
+    pub swim: f32,
+    /// Swimming acceleration, in m/s².
+    pub swim_accel: f32,
 }
 
 /// Horizontal movement rule for the current locomotion state. Every state
@@ -160,6 +186,22 @@ impl LocomotionState {
             next_state: self,
             ..Default::default()
         };
+        // Water too deep to stand in overrides whatever the character was
+        // doing on land or in the air — except a jump still leaving the
+        // ground, which gets its launch window and is caught on the way down.
+        let enters_water = !matches!(
+            self,
+            LocomotionState::Swimming | LocomotionState::Launching { .. }
+        ) && cfg.swim.takes_to_water(
+            &input.immersion,
+            input.body_y,
+            cfg.collider_half_height,
+            input.is_grounded,
+        );
+        if enters_water {
+            out.next_state = LocomotionState::Swimming;
+            return out;
+        }
         match self {
             LocomotionState::Grounded => {
                 if input.jump_pressed && input.long_jump_armed && input.move_dir.magnitude() > 0.001
@@ -251,8 +293,35 @@ impl LocomotionState {
                     };
                 }
             }
+            LocomotionState::Swimming => {
+                if cfg
+                    .swim
+                    .leaves_water(&input.immersion, input.body_y, input.is_grounded)
+                {
+                    out.next_state = if input.is_grounded {
+                        LocomotionState::Grounded
+                    } else {
+                        LocomotionState::Airborne {
+                            steering: AirSteering::Responsive,
+                            allow_cutoff: false,
+                        }
+                    };
+                    out.set_air_speed = Some(input.horizontal_speed.max(cfg.walk_speed));
+                }
+            }
         }
         out
+    }
+
+    /// Short comma-free name for the state, for recorders and reports.
+    pub fn tag(&self) -> &'static str {
+        match self {
+            LocomotionState::Grounded => "grounded",
+            LocomotionState::Launching { .. } => "launching",
+            LocomotionState::CoyoteTime(_) => "coyote",
+            LocomotionState::Airborne { .. } => "airborne",
+            LocomotionState::Swimming => "swimming",
+        }
     }
 
     /// Whether jump-cutoff (variable-height jump) applies in this state.
@@ -280,17 +349,13 @@ impl LocomotionState {
         )
     }
 
-    /// Compute this tick's movement rule. `ground_speed` is the gait-resolved
-    /// speed; `air_speed` is the latched takeoff cap. Planar target is
-    /// `move_dir * speed` for steered states; for locked steering it is the
-    /// committed velocity, with no authority to steer it anywhere else.
-    pub fn movement_rule(
-        &self,
-        move_dir: Vector3<f32>,
-        ground_speed: f32,
-        air_speed: f32,
-        air_accel: f32,
-    ) -> MovementRule {
+    /// Compute this tick's movement rule. Planar target is `move_dir * speed`
+    /// for steered states, at the speed `speeds` gives the state; for locked
+    /// steering it is the committed velocity, with no authority to steer it
+    /// anywhere else. A swimmer's target is relative to the water, which the
+    /// caller adds.
+    pub fn movement_rule(&self, move_dir: Vector3<f32>, speeds: &RuleSpeeds) -> MovementRule {
+        let (ground_speed, air_speed, air_accel) = (speeds.ground, speeds.air, speeds.air_accel);
         // Common helper: steered-toward-input rule at the given speed. The
         // rate is the airborne one whatever the state, because it is only ever
         // spent while nothing is holding the character up.
@@ -326,6 +391,10 @@ impl LocomotionState {
             LocomotionState::Airborne { steering, .. } => match steering {
                 AirSteering::Locked { velocity, .. } => locked(*velocity),
                 AirSteering::Responsive => steered(air_speed),
+            },
+            LocomotionState::Swimming => MovementRule {
+                steer_accel: Some(speeds.swim_accel),
+                ..steered(speeds.swim)
             },
         }
     }
@@ -380,6 +449,10 @@ pub struct CharacterState {
     /// Holds grounding true briefly after contact is lost, so the chatter of a
     /// real contact set does not reach the state machine.
     pub ground_forgiveness: GroundForgiveness,
+    /// How far the body is asked to lie over from upright, toward its
+    /// heading, in radians. Eased toward the swimming state's pitch and back;
+    /// handed to the engine by `AttitudeControl`.
+    pub body_pitch: f32,
 }
 
 impl Default for CharacterState {
@@ -392,6 +465,7 @@ impl Default for CharacterState {
             crouch_buffer: Timer::default(),
             crouch_lockout: Timer::default(),
             ground_forgiveness: GroundForgiveness::default(),
+            body_pitch: 0.0,
         }
     }
 }
@@ -400,12 +474,9 @@ impl CharacterState {
     /// Whether the given arm state is permitted with the current locomotion.
     pub fn arm_state_allowed(&self, arm: &ArmState) -> bool {
         match self.locomotion {
-            // Swimming would force arm to Idle (drop held objects).
-            // LocomotionState::Swimming => matches!(arm, ArmState::Idle),
-            _ => {
-                let _ = arm;
-                true
-            }
+            // A swimmer's arms are stroking: nothing can be held.
+            LocomotionState::Swimming => matches!(arm, ArmState::Idle),
+            _ => true,
         }
     }
 }
@@ -481,6 +552,8 @@ mod tests {
             horizontal_speed: 0.0,
             move_dir,
             long_jump_armed: false,
+            immersion: Immersion::dry(),
+            body_y: 0.0,
             config,
         }
     }
@@ -566,7 +639,14 @@ mod tests {
         let config = LocomotionConfig::player();
         let state = long_jump(&config);
 
-        let rule = state.movement_rule(Vector3::new(-1.0, 0.0, 0.0), 5.0, 5.0, 8.0);
+        let speeds = RuleSpeeds {
+            ground: 5.0,
+            air: 5.0,
+            air_accel: 8.0,
+            swim: 2.0,
+            swim_accel: 6.0,
+        };
+        let rule = state.movement_rule(Vector3::new(-1.0, 0.0, 0.0), &speeds);
 
         assert_eq!(rule.steer_accel, None);
         assert!(rule.target.x > 0.0, "target follows takeoff, not input");
@@ -608,5 +688,67 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    fn deep_sea() -> Immersion {
+        Immersion::in_water(crate::character::WaterAtBody {
+            level: 0.0,
+            surface: 0.0,
+            floor: -3.0,
+            current: Vector3::zeros(),
+        })
+    }
+
+    /// Falling into deep water ends the fall: the body is swimming the moment
+    /// it is in the water, and a jump pressed there does nothing.
+    #[test]
+    fn a_fall_into_deep_water_swims_and_cannot_jump() {
+        let config = LocomotionConfig::player();
+        let airborne = LocomotionState::Airborne {
+            steering: AirSteering::Responsive,
+            allow_cutoff: true,
+        };
+        let mut splash = input(&config, false, Vector3::zeros());
+        splash.immersion = deep_sea();
+        splash.body_y = -0.2;
+        let state = airborne.tick(&splash).next_state;
+        assert_eq!(state, LocomotionState::Swimming);
+
+        splash.jump_pressed = true;
+        let out = state.tick(&splash);
+        assert_eq!(out.next_state, LocomotionState::Swimming);
+        assert!(!out.consumed_jump && out.set_vy.is_none());
+    }
+
+    /// Water that stops being deep stops the swim, onto the floor if the body
+    /// is on it.
+    #[test]
+    fn a_swimmer_in_the_shallows_is_on_its_feet() {
+        let config = LocomotionConfig::player();
+        let mut shallows = input(&config, true, Vector3::x());
+        shallows.immersion = Immersion::in_water(crate::character::WaterAtBody {
+            level: 0.0,
+            surface: 0.0,
+            floor: -0.4,
+            current: Vector3::zeros(),
+        });
+        shallows.body_y = 0.1;
+        let out = LocomotionState::Swimming.tick(&shallows);
+        assert_eq!(out.next_state, LocomotionState::Grounded);
+    }
+
+    /// A swimmer is steered at the swim rate, toward the swim speed.
+    #[test]
+    fn swimming_steers_at_the_stroke_rate() {
+        let speeds = RuleSpeeds {
+            ground: 5.0,
+            air: 5.0,
+            air_accel: 8.0,
+            swim: 2.0,
+            swim_accel: 14.0,
+        };
+        let rule = LocomotionState::Swimming.movement_rule(Vector3::x(), &speeds);
+        assert_eq!(rule.steer_accel, Some(14.0));
+        assert!((rule.target.x - 2.0).abs() < 1e-6);
     }
 }

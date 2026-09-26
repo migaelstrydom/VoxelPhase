@@ -19,9 +19,9 @@
 use nalgebra::{Point3, Vector3};
 
 use crate::animation::humanoid::pose_state::{Gait, PoseState};
-use crate::animation::{CharacterAnimator, CharacterRigConfig};
+use crate::animation::{BodyReading, CharacterAnimator, CharacterRigConfig};
 use crate::character::grab::GrabConfig;
-use crate::character::{CharacterIntent, Grounding, LocomotionConfig};
+use crate::character::{CharacterIntent, Grounding, Immersion, LocomotionConfig};
 use crate::sensing::ContactCandidate;
 
 use super::body::Body;
@@ -128,7 +128,7 @@ pub fn run(spec: &Run<'_>) -> Take {
 
         body.step(dt, &intent, &ground, support_velocity);
 
-        let pelvis = animator.pelvis_for(body.position);
+        let pelvis = animator.pelvis_for(body.position, Vector3::y());
         let grounding = if body.grounded {
             Grounding::on(ground.normal(body.position.x, body.position.z))
                 .carried_by(support_velocity)
@@ -155,10 +155,14 @@ pub fn run(spec: &Run<'_>) -> Take {
 
         animator.update(
             dt,
-            pelvis,
-            body.yaw,
-            body.velocity,
-            &grounding,
+            &BodyReading {
+                pelvis,
+                yaw: body.yaw,
+                velocity: body.velocity,
+                up: Vector3::y(),
+                grounding: &grounding,
+                immersion: &Immersion::dry(),
+            },
             &body.state,
             &intent,
             &grab_config,
@@ -251,7 +255,7 @@ fn sample(
         dt,
         beat,
         pose: pose_label(&animator.pose_state),
-        pelvis: animator.pelvis_for(body.position),
+        pelvis: animator.pelvis_for(body.position, Vector3::y()),
         velocity: body.velocity,
         yaw: body.yaw,
         grounded: body.grounded,
@@ -280,6 +284,7 @@ fn pose_label(pose: &PoseState) -> &'static str {
         PoseState::Launching { .. } => "launch",
         PoseState::Airborne { .. } => "air",
         PoseState::Landing { .. } => "land",
+        PoseState::Swimming { .. } => "swim",
     }
 }
 

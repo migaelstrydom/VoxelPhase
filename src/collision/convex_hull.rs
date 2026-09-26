@@ -107,6 +107,31 @@ impl ConvexHull {
         }
     }
 
+    /// Area of the hull's shadow on a plane perpendicular to `direction`
+    /// (a unit vector in hull space): the area it presents to a flow along it.
+    ///
+    /// Every line along `direction` through the shadow crosses the surface
+    /// twice, so the shadow is half the sum of every face's area projected
+    /// onto the plane.
+    pub fn projected_area(&self, direction: Vector3<f32>) -> f32 {
+        let mut twice = 0.0f32;
+        for face in &self.faces {
+            let indices = &face.vertex_indices;
+            if indices.len() < 3 {
+                continue;
+            }
+            let v0 = self.vertices[indices[0] as usize];
+            let mut area = Vector3::zeros();
+            for i in 1..indices.len() - 1 {
+                let v1 = self.vertices[indices[i] as usize];
+                let v2 = self.vertices[indices[i + 1] as usize];
+                area += (v1 - v0).cross(&(v2 - v0));
+            }
+            twice += 0.5 * area.dot(&direction).abs();
+        }
+        0.5 * twice
+    }
+
     /// Compute volume via tetrahedron decomposition from the origin.
     ///
     /// Each face is decomposed into triangles (fan from first vertex).

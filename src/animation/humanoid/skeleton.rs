@@ -4,6 +4,7 @@
 
 use nalgebra::{Point3, Vector2, Vector3};
 
+use super::body_frame::BodyFrame;
 use crate::animation::config::CharacterRigConfig;
 use crate::animation::pose::PoseFragment;
 use crate::animation::rig::{right_vector, solve_knee, within_reach, FootShape, RigMesh};
@@ -146,10 +147,9 @@ impl Skeleton {
         let pelvis_offset = fragment.pelvis_offset.unwrap_or_else(Vector3::zeros);
         self.pelvis = pelvis_base + pelvis_offset;
 
-        let right = right_vector(state.facing);
-        let left = Vector3::new(-right.x, 0.0, -right.z);
-        self.left_hip = self.pelvis + left * config.hip_width;
-        self.right_hip = self.pelvis + right * config.hip_width;
+        let frame = BodyFrame::new(state.facing, state.body_pitch);
+        self.left_hip = self.pelvis + frame.left() * config.hip_width;
+        self.right_hip = self.pelvis + frame.right * config.hip_width;
 
         let (left_foot, right_foot) = match &fragment.feet {
             Some(feet) => (feet.left, feet.right),
@@ -171,7 +171,7 @@ impl Skeleton {
         self.left_foot_up = state.left.up;
         self.right_foot_up = state.right.up;
 
-        self.solve_knee_ik(state.facing, config);
+        self.solve_knee_ik(&frame, config);
 
         let shoulder_twist = fragment.shoulder_twist.unwrap_or(state.shoulder_twist);
         let head_tilt = fragment.head_tilt.unwrap_or(state.head_tilt);
@@ -183,7 +183,7 @@ impl Skeleton {
         };
 
         self.update_upper_body(
-            state.facing,
+            &frame,
             config,
             shoulder_twist,
             head_tilt,
@@ -197,7 +197,7 @@ impl Skeleton {
     /// Update upper body joint positions from resolved pose channels.
     fn update_upper_body(
         &mut self,
-        facing: Vector3<f32>,
+        frame: &BodyFrame,
         config: &CharacterRigConfig,
         shoulder_twist: f32,
         head_tilt: Vector2<f32>,
@@ -206,12 +206,10 @@ impl Skeleton {
         left_hand: Point3<f32>,
         right_hand: Point3<f32>,
     ) {
-        let right = right_vector(facing);
-        let left = Vector3::new(-right.x, 0.0, -right.z);
-
-        // Torso-local up axis, pitched forward by `torso_pitch` around the
-        // lateral axis. Chest, neck, and head ride on this axis.
-        let torso_up = Vector3::y() * torso_pitch.cos() + facing * torso_pitch.sin();
+        // The torso leans a further `torso_pitch` over the body's own frame.
+        // Chest, neck, and head ride on its up axis.
+        let torso = frame.leaned(torso_pitch);
+        let (right, left, facing, torso_up) = (torso.right, torso.left(), torso.front, torso.up);
 
         self.chest = self.pelvis + torso_up * config.torso_height;
 
@@ -228,7 +226,7 @@ impl Skeleton {
         self.left_hand = left_hand;
         self.right_hand = right_hand;
 
-        self.solve_elbow_ik(facing, config);
+        self.solve_elbow_ik(&torso, config);
 
         self.neck = self.chest + torso_up * config.neck_length;
 
@@ -243,8 +241,8 @@ impl Skeleton {
     }
 
     /// Solve IK to position knees based on hip and foot positions.
-    fn solve_knee_ik(&mut self, facing: Vector3<f32>, config: &CharacterRigConfig) {
-        let right = right_vector(facing);
+    fn solve_knee_ik(&mut self, frame: &BodyFrame, config: &CharacterRigConfig) {
+        let (right, facing) = (frame.right, frame.front);
 
         // Knee bend directions (slightly outward from facing)
         let left_bend = (facing - right * 0.2).normalize();
@@ -274,10 +272,10 @@ impl Skeleton {
     }
 
     /// Solve IK to position elbows based on shoulder and hand positions.
-    fn solve_elbow_ik(&mut self, facing: Vector3<f32>, config: &CharacterRigConfig) {
+    fn solve_elbow_ik(&mut self, frame: &BodyFrame, config: &CharacterRigConfig) {
         // Elbow bend directions (backward, slightly outward)
-        let right = right_vector(facing);
-        let backward = -facing;
+        let right = frame.right;
+        let backward = -frame.front;
         let left_bend = (backward - right * 0.3).normalize();
         let right_bend = (backward + right * 0.3).normalize();
 

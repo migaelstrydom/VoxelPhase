@@ -6,6 +6,7 @@ use super::ball_joint;
 use super::fixed;
 use super::follow_point;
 use super::hinge;
+use super::keep_attitude;
 use super::keep_upright;
 use super::types::{Constraint, ConstraintKind, ConstraintRow};
 use crate::physics::body::RigidBody;
@@ -53,6 +54,28 @@ pub fn expand_constraints(
                     &constraint.warm_impulses,
                 );
                 rows.extend(expanded);
+            }
+
+            ConstraintKind::KeepAttitude {
+                body,
+                pitch,
+                compliance,
+                max_impulse,
+            } => {
+                let Some(rigid_body) = bodies.get(body.0) else {
+                    continue;
+                };
+                rows.extend(keep_attitude::expand(
+                    rigid_body,
+                    *body,
+                    *pitch,
+                    *compliance,
+                    *max_impulse,
+                    dt,
+                    beta,
+                    index,
+                    &constraint.warm_impulses,
+                ));
             }
 
             ConstraintKind::BallJoint {
@@ -237,7 +260,7 @@ pub fn write_back_constraints(constraints: &mut Arena<Constraint>, rows: &[Const
 /// (max_impulse < f32::MAX). When any row's accumulated impulse reaches the
 /// bound, the joint cannot provide enough force and is permanently deactivated.
 ///
-/// `KeepUpright` and `MediumDrive` are exempt. Their bounds are the authority
+/// `KeepUpright`, `KeepAttitude` and `MediumDrive` are exempt. Their bounds are the authority
 /// of an actuator, not the failure load of a joint: a thruster-stabilised
 /// platform that saturates while righting an off-centre load is working
 /// exactly as intended, and a motor at full throttle is a motor, not a broken
@@ -256,7 +279,9 @@ pub fn check_constraint_breakage(constraints: &mut Arena<Constraint>, rows: &[Co
             if let Some(constraint) = constraints.get_mut(row.constraint_index) {
                 if matches!(
                     constraint.kind,
-                    ConstraintKind::KeepUpright { .. } | ConstraintKind::MediumDrive { .. }
+                    ConstraintKind::KeepUpright { .. }
+                        | ConstraintKind::KeepAttitude { .. }
+                        | ConstraintKind::MediumDrive { .. }
                 ) {
                     continue;
                 }

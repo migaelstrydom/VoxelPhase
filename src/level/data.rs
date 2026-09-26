@@ -27,13 +27,13 @@ use super::footprint::{Footprint, Support};
 
 use crate::app::creatures::{HeartCritterDef, PeeperDef, RollerDef};
 use crate::app::spawnables::{
-    BananaDef, BeachBallDef, BoxDef, BoxWallDef, CapsuleDef, CrateDef, DodecahedronDef, DolosDef,
-    DominoDef, FencePostDef, FramedWindowDef, GemDef, GlassSheetDef, GlowingOrbDef, GoalDef,
-    HeavyCrateDef, HexPrismDef, HoneycombWallDef, HouseDef, IceBoxDef, IceWallDef, IcosahedronDef,
-    IglooDef, JackDef, JengaDef, MenhirDef, Metal, MetalCubeDef, MovingPlatformDef, OctahedronDef,
-    PendulumDef, PlankBridgeDef, PlankDef, PlayWheelDef, PyramidDef, SeesawDef, Spawnable,
-    StackDef, StackItemDef, TableDef, TempleDef, TetrahedronDef, TowerDef, TrampolineDef,
-    TrilithonDef, VoussoirArchDef, BEACH_BALL_RADIUS,
+    BananaDef, BarrelDef, BeachBallDef, BoxDef, BoxWallDef, CapsuleDef, CrateDef, DodecahedronDef,
+    DolosDef, DominoDef, FencePostDef, FramedWindowDef, GemDef, GlassSheetDef, GlowingOrbDef,
+    GoalDef, HeavyCrateDef, HexPrismDef, HoneycombWallDef, HouseDef, IceBoxDef, IceWallDef,
+    IcosahedronDef, IglooDef, JackDef, JengaDef, MenhirDef, Metal, MetalCubeDef, MovingPlatformDef,
+    OctahedronDef, PendulumDef, PlankBridgeDef, PlankDef, PlayWheelDef, PyramidDef, SeesawDef,
+    Spawnable, StackDef, StackItemDef, TableDef, TempleDef, TetrahedronDef, TowerDef,
+    TrampolineDef, TrilithonDef, VoussoirArchDef, BARREL_RADIUS, BEACH_BALL_RADIUS,
 };
 use crate::platform::{DeckSuspension, RouteLoop};
 
@@ -724,6 +724,10 @@ pub enum LevelObject {
         restitution: f32,
         #[serde(default = "BananaDef::default_friction")]
         friction: f32,
+    },
+    /// Sealed wooden barrel, hollow: floats high and rolls on its belly.
+    Barrel {
+        pos: (f32, f32, f32),
     },
     BeachBall {
         pos: (f32, f32, f32),
@@ -1456,6 +1460,7 @@ impl LevelObject {
 
         let (kind, placement) = match self {
             LevelObject::Banana { pos, .. } => ("Banana", point(pos)),
+            LevelObject::Barrel { pos } => ("Barrel", point(pos)),
             LevelObject::BeachBall { pos } => ("BeachBall", point(pos)),
             LevelObject::GlowingOrb { pos, .. } => ("GlowingOrb", point(pos)),
             LevelObject::Gem { pos, .. } => ("Gem", point(pos)),
@@ -1553,6 +1558,9 @@ impl LevelObject {
             // a voxel of the point it was authored at.
             LevelObject::Banana { length, .. } => Disc {
                 radius: length * 0.5,
+            },
+            LevelObject::Barrel { .. } => Disc {
+                radius: BARREL_RADIUS,
             },
             LevelObject::BeachBall { .. } => Point,
             LevelObject::GlowingOrb { .. } => Point,
@@ -1827,7 +1835,8 @@ impl LevelObject {
             // No observable orientation: spheres, cubes, bodies of revolution
             // about the vertical, and regular solids whose resting pose is
             // arbitrary anyway.
-            LevelObject::BeachBall { .. }
+            LevelObject::Barrel { .. }
+            | LevelObject::BeachBall { .. }
             | LevelObject::GlowingOrb { .. }
             | LevelObject::Gem { .. }
             | LevelObject::Goal { .. }
@@ -1903,6 +1912,7 @@ impl LevelObject {
 
         match self {
             LevelObject::Banana { pos, .. } => p3(pos),
+            LevelObject::Barrel { pos } => p3(pos),
             LevelObject::BeachBall { pos } => p3(pos),
             LevelObject::GlowingOrb { pos, .. } => p3(pos),
             LevelObject::Gem { pos, .. } => p3(pos),
@@ -2039,6 +2049,8 @@ impl LevelObject {
                 restitution: *restitution,
                 friction: *friction,
             }),
+
+            LevelObject::Barrel { pos } => Box::new(BarrelDef { pos: *pos }),
 
             LevelObject::BeachBall { pos } => Box::new(BeachBallDef { pos: *pos }),
 

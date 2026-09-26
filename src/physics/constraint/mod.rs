@@ -3,6 +3,7 @@ pub mod expand;
 pub mod fixed;
 pub mod follow_point;
 pub mod hinge;
+pub mod keep_attitude;
 pub mod keep_upright;
 pub mod primitives;
 pub mod types;
