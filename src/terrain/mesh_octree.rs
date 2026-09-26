@@ -24,6 +24,7 @@ use nalgebra::{Point3, Vector3};
 
 use super::ao::{OcclusionGrid, OcclusionSettings};
 use super::marching_cubes::MarchingCubes;
+use super::voxel::VoxelMaterial;
 use super::voxel_block::{SampleLattice, VoxelBlock, VoxelSource};
 use crate::collision::{Triangle, AABB};
 use crate::rendering::vertex::{self, Vertex};
@@ -75,6 +76,8 @@ pub struct MeshLeaf {
     pub vertices: Vec<Vertex>,
     /// Indices into vertices array (groups of 3 for triangles).
     pub indices: Vec<u32>,
+    /// Material of each owned triangle, by triangle index.
+    pub materials: Vec<VoxelMaterial>,
     /// References to triangles from neighboring leaves that intersect this leaf.
     pub neighbor_refs: Vec<TriangleRef>,
 }
@@ -84,6 +87,7 @@ impl MeshLeaf {
         Self {
             vertices: Vec::new(),
             indices: Vec::new(),
+            materials: Vec::new(),
             neighbor_refs: Vec::new(),
         }
     }
@@ -110,6 +114,11 @@ impl MeshLeaf {
             Point3::new(v1.pos.x, v1.pos.y, v1.pos.z),
             Point3::new(v2.pos.x, v2.pos.y, v2.pos.z),
         )
+    }
+
+    /// Material of an owned triangle.
+    pub fn material(&self, triangle_index: usize) -> VoxelMaterial {
+        self.materials[triangle_index]
     }
 
     /// Compute AABB for a specific owned triangle.
@@ -328,7 +337,15 @@ impl MeshOctree {
                 .unwrap();
 
             if self.bounds.contains_point(min_vertex) {
-                Self::insert_triangle_recursive(&mut self.root, v0, v1, v2, min_vertex, 0);
+                Self::insert_triangle_recursive(
+                    &mut self.root,
+                    v0,
+                    v1,
+                    v2,
+                    mesh.triangle_materials[tri_idx / 3],
+                    min_vertex,
+                    0,
+                );
             }
         }
 
@@ -349,6 +366,7 @@ impl MeshOctree {
         v0: &Vertex,
         v1: &Vertex,
         v2: &Vertex,
+        material: VoxelMaterial,
         min_vertex: Point3<f32>,
         depth: u32,
     ) {
@@ -368,6 +386,7 @@ impl MeshOctree {
                 leaf.indices.push(base_idx);
                 leaf.indices.push(base_idx + 1);
                 leaf.indices.push(base_idx + 2);
+                leaf.materials.push(material);
 
                 // Check if we need to split
                 if leaf.owned_triangle_count() > MAX_TRIANGLES_PER_LEAF && depth < MAX_MESH_DEPTH {
@@ -382,6 +401,7 @@ impl MeshOctree {
                     v0,
                     v1,
                     v2,
+                    material,
                     min_vertex,
                     depth + 1,
                 );
@@ -437,6 +457,7 @@ impl MeshOctree {
                 v0,
                 v1,
                 v2,
+                leaf.materials[tri],
                 min_vertex,
                 depth + 1,
             );
@@ -528,9 +549,10 @@ impl MeshOctree {
 
     /// Query all triangles intersecting an AABB.
     ///
-    /// Returns `(TriangleRef, Triangle)` pairs. The `TriangleRef` identifies
-    /// each triangle within the octree and can be used for adjacency lookups.
-    pub fn query_aabb(&self, query: &AABB) -> Vec<(TriangleRef, Triangle)> {
+    /// Returns `(TriangleRef, Triangle, VoxelMaterial)` triples. The
+    /// `TriangleRef` identifies each triangle within the octree and can be used
+    /// for adjacency lookups.
+    pub fn query_aabb(&self, query: &AABB) -> Vec<(TriangleRef, Triangle, VoxelMaterial)> {
         let mut seen = FxHashSet::default();
         let mut triangles = Vec::new();
         self.query_aabb_recursive(&self.root, 0, 0, query, &mut seen, &mut triangles);
@@ -544,7 +566,7 @@ impl MeshOctree {
         path: u64,
         query: &AABB,
         seen: &mut FxHashSet<(u64, u8, u32)>,
-        out: &mut Vec<(TriangleRef, Triangle)>,
+        out: &mut Vec<(TriangleRef, Triangle, VoxelMaterial)>,
     ) {
         if !node.bounds.intersects(query) {
             return;
@@ -565,16 +587,17 @@ impl MeshOctree {
                     let aabb = leaf.triangle_aabb(tri);
                     if query.intersects(&aabb) && seen.insert((path, depth, tri as u32)) {
                         let tri_ref = TriangleRef::new(path, depth, tri as u32);
-                        out.push((tri_ref, leaf.to_collision_triangle(tri)));
+                        out.push((tri_ref, leaf.to_collision_triangle(tri), leaf.material(tri)));
                     }
                 }
 
                 // Add neighbor triangles
                 for tri_ref in &leaf.neighbor_refs {
-                    if let Some(triangle) = self.resolve_triangle_ref(tri_ref) {
+                    if let Some((leaf, tri)) = self.resolve_owner(tri_ref) {
+                        let triangle = leaf.to_collision_triangle(tri);
                         let key = (tri_ref.path, tri_ref.depth, tri_ref.triangle_index);
                         if query.intersects(&triangle.aabb()) && seen.insert(key) {
-                            out.push((*tri_ref, triangle));
+                            out.push((*tri_ref, triangle, leaf.material(tri)));
                         }
                     }
                 }
@@ -590,6 +613,12 @@ impl MeshOctree {
 
     /// Resolve a triangle reference to actual triangle data.
     pub(super) fn resolve_triangle_ref(&self, tri_ref: &TriangleRef) -> Option<Triangle> {
+        self.resolve_owner(tri_ref)
+            .map(|(leaf, tri)| leaf.to_collision_triangle(tri))
+    }
+
+    /// The leaf that owns a referenced triangle, and the triangle's index in it.
+    fn resolve_owner(&self, tri_ref: &TriangleRef) -> Option<(&MeshLeaf, usize)> {
         let mut node = &self.root;
         for level in 0..tri_ref.depth {
             match &node.content {
@@ -601,13 +630,11 @@ impl MeshOctree {
             }
         }
 
-        if let MeshNodeContent::Leaf(leaf) = &node.content {
-            if (tri_ref.triangle_index as usize) < leaf.owned_triangle_count() {
-                return Some(leaf.to_collision_triangle(tri_ref.triangle_index as usize));
-            }
-        }
-
-        None
+        let MeshNodeContent::Leaf(leaf) = &node.content else {
+            return None;
+        };
+        let tri = tri_ref.triangle_index as usize;
+        (tri < leaf.owned_triangle_count()).then_some((leaf, tri))
     }
 
     /// Cast a ray and return the nearest triangle hit.
@@ -1006,7 +1033,15 @@ impl MeshOctree {
                     .then(a.z.partial_cmp(&b.z).unwrap())
             })
             .unwrap();
-        Self::insert_triangle_recursive(&mut self.root, v0, v1, v2, min_vertex, 0);
+        Self::insert_triangle_recursive(
+            &mut self.root,
+            v0,
+            v1,
+            v2,
+            VoxelMaterial::Rock,
+            min_vertex,
+            0,
+        );
     }
 }
 
@@ -1086,7 +1121,15 @@ mod tests {
         let v2 = test_vertex(1.5, 2.0, 1.0);
 
         let min_vertex = Point3::new(1.0, 1.0, 1.0);
-        MeshOctree::insert_triangle_recursive(&mut octree.root, &v0, &v1, &v2, min_vertex, 0);
+        MeshOctree::insert_triangle_recursive(
+            &mut octree.root,
+            &v0,
+            &v1,
+            &v2,
+            VoxelMaterial::Rock,
+            min_vertex,
+            0,
+        );
         octree.rebuild_neighbor_refs();
 
         assert_eq!(octree.triangle_count(), 1);
@@ -1096,7 +1139,7 @@ mod tests {
         let results = octree.query_aabb(&query);
         assert_eq!(results.len(), 1);
         // Verify we get both TriangleRef and Triangle
-        let (tri_ref, _triangle) = &results[0];
+        let (tri_ref, _triangle, _material) = &results[0];
         assert_eq!(tri_ref.triangle_index, 0);
 
         // Query outside should find nothing
@@ -1119,7 +1162,15 @@ mod tests {
             let v1 = test_vertex(x + 0.1, y, z);
             let v2 = test_vertex(x + 0.05, y + 0.1, z);
             let min_vertex = Point3::new(x, y, z);
-            MeshOctree::insert_triangle_recursive(&mut octree.root, &v0, &v1, &v2, min_vertex, 0);
+            MeshOctree::insert_triangle_recursive(
+                &mut octree.root,
+                &v0,
+                &v1,
+                &v2,
+                VoxelMaterial::Rock,
+                min_vertex,
+                0,
+            );
         }
 
         assert_eq!(octree.triangle_count(), MAX_TRIANGLES_PER_LEAF + 10);
@@ -1141,7 +1192,15 @@ mod tests {
         let v1 = test_vertex(6.0, 1.0, 1.0);
         let v2 = test_vertex(5.0, 2.0, 1.0);
         let min_vertex = Point3::new(4.0, 1.0, 1.0);
-        MeshOctree::insert_triangle_recursive(&mut octree.root, &v0, &v1, &v2, min_vertex, 0);
+        MeshOctree::insert_triangle_recursive(
+            &mut octree.root,
+            &v0,
+            &v1,
+            &v2,
+            VoxelMaterial::Rock,
+            min_vertex,
+            0,
+        );
         octree.rebuild_neighbor_refs();
 
         // Query the right side should still find the triangle
@@ -1204,6 +1263,7 @@ mod tests {
         owner_leaf.vertices.push(test_vertex(6.0, 0.0, 1.0));
         owner_leaf.vertices.push(test_vertex(5.0, 1.0, 1.0));
         owner_leaf.indices.extend_from_slice(&[0, 1, 2]);
+        owner_leaf.materials.push(VoxelMaterial::Rock);
         children[0].content = MeshNodeContent::Leaf(owner_leaf);
 
         // Octant 1 covers (5,0,0)→(10,5,5). Add a neighbor_ref to octant 0's

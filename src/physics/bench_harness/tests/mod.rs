@@ -19,7 +19,7 @@ use std::fs;
 
 use nalgebra::Point3;
 
-use crate::collision::{MeshPatch, PatchTriangle, Triangle, AABB};
+use crate::collision::{MeshPatch, PatchTriangle, SurfaceId, Triangle, AABB};
 use crate::physics::StaticGeometry;
 
 use super::framework::BenchRunResult;
@@ -47,55 +47,67 @@ impl CubeShellGeometry {
             PatchTriangle {
                 triangle: Triangle::new(v000, v011, v010),
                 neighbors: [None; 3],
+                surface: SurfaceId::UNSPECIFIED,
             },
             PatchTriangle {
                 triangle: Triangle::new(v000, v001, v011),
                 neighbors: [None; 3],
+                surface: SurfaceId::UNSPECIFIED,
             },
             // +X face
             PatchTriangle {
                 triangle: Triangle::new(v100, v110, v111),
                 neighbors: [None; 3],
+                surface: SurfaceId::UNSPECIFIED,
             },
             PatchTriangle {
                 triangle: Triangle::new(v100, v111, v101),
                 neighbors: [None; 3],
+                surface: SurfaceId::UNSPECIFIED,
             },
             // -Y face
             PatchTriangle {
                 triangle: Triangle::new(v000, v100, v101),
                 neighbors: [None; 3],
+                surface: SurfaceId::UNSPECIFIED,
             },
             PatchTriangle {
                 triangle: Triangle::new(v000, v101, v001),
                 neighbors: [None; 3],
+                surface: SurfaceId::UNSPECIFIED,
             },
             // +Y face
             PatchTriangle {
                 triangle: Triangle::new(v010, v011, v111),
                 neighbors: [None; 3],
+                surface: SurfaceId::UNSPECIFIED,
             },
             PatchTriangle {
                 triangle: Triangle::new(v010, v111, v110),
                 neighbors: [None; 3],
+                surface: SurfaceId::UNSPECIFIED,
             },
             // -Z face
             PatchTriangle {
                 triangle: Triangle::new(v000, v010, v110),
                 neighbors: [None; 3],
+                surface: SurfaceId::UNSPECIFIED,
             },
             PatchTriangle {
                 triangle: Triangle::new(v000, v110, v100),
                 neighbors: [None; 3],
+                surface: SurfaceId::UNSPECIFIED,
             },
             // +Z face
             PatchTriangle {
                 triangle: Triangle::new(v001, v101, v111),
                 neighbors: [None; 3],
+                surface: SurfaceId::UNSPECIFIED,
             },
             PatchTriangle {
                 triangle: Triangle::new(v001, v111, v011),
                 neighbors: [None; 3],
+                surface: SurfaceId::UNSPECIFIED,
             },
         ];
 

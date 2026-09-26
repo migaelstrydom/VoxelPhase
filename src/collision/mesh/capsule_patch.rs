@@ -13,6 +13,7 @@ use crate::collision::contact::{ContactManifold, ContactPoint, FeatureId};
 use crate::collision::contact_reducer::ContactReducer;
 use crate::collision::mesh::seam_filter::{ContactEdge, ContactFace, FilteredPatch};
 use crate::collision::mesh::sphere_patch::{closest_point_on_segment, point_in_convex_polygon};
+use crate::collision::SurfaceId;
 
 /// Maximum contacts emitted before reduction.
 const MAX_CAPSULE_PATCH_CONTACTS: usize = 4;
@@ -95,12 +96,10 @@ pub fn capsule_patch_manifold(
         return match best_boundary {
             Some(hit) => {
                 let raw_depth = hit.raw_depth(radius);
-                ContactManifold::single(ContactPoint::new(
-                    hit.point,
-                    hit.normal,
-                    raw_depth,
-                    hit.feature_id,
-                ))
+                ContactManifold::single(
+                    ContactPoint::new(hit.point, hit.normal, raw_depth, hit.feature_id)
+                        .on(hit.surface),
+                )
             }
             None => ContactManifold::empty(),
         };
@@ -110,7 +109,7 @@ pub fn capsule_patch_manifold(
         .iter()
         .map(|hit| {
             let raw_depth = hit.raw_depth(radius);
-            ContactPoint::new(hit.point, hit.normal, raw_depth, hit.feature_id)
+            ContactPoint::new(hit.point, hit.normal, raw_depth, hit.feature_id).on(hit.surface)
         })
         .collect();
 
@@ -131,6 +130,8 @@ struct CapsuleContact {
     is_face: bool,
     face_signed_dist: f32,
     feature_id: FeatureId,
+    /// Surface of the face or edge the contact was found on.
+    surface: SurfaceId,
 }
 
 impl CapsuleContact {
@@ -255,6 +256,7 @@ fn sample_center_vs_face(
             is_face: true,
             face_signed_dist: signed_dist,
             feature_id: face.feature_id,
+            surface: face.surface,
         });
     }
 
@@ -292,6 +294,7 @@ fn sample_center_vs_face(
         is_face: false,
         face_signed_dist: signed_dist,
         feature_id: face.feature_id,
+        surface: face.surface,
     })
 }
 
@@ -492,6 +495,7 @@ fn capsule_vs_edge(
         is_face: false,
         face_signed_dist: 0.0,
         feature_id: edge.feature_id,
+        surface: edge.surface,
     })
 }
 
@@ -513,6 +517,7 @@ mod tests {
                     ]),
                     normal: Vector3::y(),
                     feature_id: FeatureId::from_face(0),
+                    surface: SurfaceId::UNSPECIFIED,
                 },
                 1,
             ),
@@ -530,6 +535,7 @@ mod tests {
             ]),
             normal: Vector3::y(),
             feature_id: FeatureId::from_face(feature),
+            surface: SurfaceId::UNSPECIFIED,
         }
     }
 
@@ -637,6 +643,7 @@ mod tests {
                     ]),
                     normal: Vector3::y(),
                     feature_id: FeatureId::from_face(1),
+                    surface: SurfaceId::UNSPECIFIED,
                 },
                 1,
             ),

@@ -5,6 +5,7 @@
 
 use nalgebra::{Point3, Vector3};
 
+use super::voxel::VoxelMaterial;
 use super::voxel_block::VoxelBlock;
 
 /// Result of marching cubes mesh generation.
@@ -19,6 +20,10 @@ pub struct MarchingCubesMesh {
     /// colour is, so a vertex's finish and its colour always describe the same
     /// material.
     pub hardness: Vec<f32>,
+    /// Per-triangle material: the one at least two of its vertices took their
+    /// colour from, or the first vertex's when all three differ. What the
+    /// physics reads as the triangle's surface.
+    pub triangle_materials: Vec<VoxelMaterial>,
     /// Triangle indices.
     pub indices: Vec<u32>,
 }
@@ -31,6 +36,7 @@ impl MarchingCubesMesh {
             normals: Vec::new(),
             colors: Vec::new(),
             hardness: Vec::new(),
+            triangle_materials: Vec::new(),
             indices: Vec::new(),
         }
     }
@@ -170,6 +176,7 @@ impl MarchingCubes {
         let mut edge_vertices = [Point3::origin(); 12];
         let mut edge_colors = [[0.0f32; 4]; 12];
         let mut edge_hardness = [0.0f32; 12];
+        let mut edge_materials = [VoxelMaterial::Air; 12];
         let mut edge_normals = [Vector3::zeros(); 12];
 
         for i in 0..12 {
@@ -186,6 +193,7 @@ impl MarchingCubes {
                 let solid_corner = if d0 > self.iso_level { v0 } else { v1 };
                 edge_colors[i] = corners[solid_corner].material.color();
                 edge_hardness[i] = corners[solid_corner].material.hardness();
+                edge_materials[i] = corners[solid_corner].material;
                 let grad = corner_gradients[v0].lerp(&corner_gradients[v1], t);
                 let n = -grad;
                 edge_normals[i] = if n.magnitude_squared() > 1e-10 {
@@ -211,8 +219,23 @@ impl MarchingCubes {
                 mesh.normals.push(edge_normals[edge]);
                 mesh.indices.push(base_index + (i + j) as u32);
             }
+            mesh.triangle_materials.push(majority_material([
+                edge_materials[triangles[i] as usize],
+                edge_materials[triangles[i + 1] as usize],
+                edge_materials[triangles[i + 2] as usize],
+            ]));
             i += 3;
         }
+    }
+}
+
+/// The material at least two of a triangle's three vertices share, or the
+/// first vertex's when all three differ.
+fn majority_material([a, b, c]: [VoxelMaterial; 3]) -> VoxelMaterial {
+    if b == c && a != b {
+        b
+    } else {
+        a
     }
 }
 

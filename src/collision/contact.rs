@@ -6,6 +6,8 @@
 use nalgebra::{Point3, Vector3};
 use smallvec::SmallVec;
 
+use super::SurfaceId;
+
 /// Identifies the geometric feature pair that generated a contact point.
 ///
 /// Feature IDs enable warm-starting (cached impulse matching), temporal coherence
@@ -77,6 +79,10 @@ pub struct ContactPoint {
 
     /// Identifies the geometric feature pair that produced this contact.
     pub feature_id: FeatureId,
+
+    /// Surface of the static triangle this contact was generated against;
+    /// `SurfaceId::UNSPECIFIED` for a contact between two shapes.
+    pub surface: SurfaceId,
 }
 
 impl ContactPoint {
@@ -98,7 +104,14 @@ impl ContactPoint {
             raw_depth,
             depth: raw_depth.max(0.0),
             feature_id,
+            surface: SurfaceId::UNSPECIFIED,
         }
+    }
+
+    /// The same contact, generated against a static triangle of `surface`.
+    pub fn on(mut self, surface: SurfaceId) -> Self {
+        self.surface = surface;
+        self
     }
 }
 

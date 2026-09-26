@@ -1,6 +1,6 @@
 use nalgebra::Point3;
 
-use crate::collision::{MeshPatch, PatchTriangle, Triangle, AABB};
+use crate::collision::{MeshPatch, PatchTriangle, SurfaceId, Triangle, AABB};
 use crate::physics::StaticGeometry;
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -37,10 +37,12 @@ impl FlatQuadGeometry {
         let tri_a = PatchTriangle {
             triangle: Triangle::new(v0, v2, v1),
             neighbors: [Some(1), None, None],
+            surface: SurfaceId::UNSPECIFIED,
         };
         let tri_b = PatchTriangle {
             triangle: Triangle::new(v0, v3, v2),
             neighbors: [None, None, Some(0)],
+            surface: SurfaceId::UNSPECIFIED,
         };
         Self {
             bounds: AABB::new(
@@ -100,10 +102,12 @@ impl FlatGridGeometry {
                 let tri_a = PatchTriangle {
                     triangle: Triangle::new(bl, tr, br),
                     neighbors: [Some(idx + 1), None, None],
+                    surface: SurfaceId::UNSPECIFIED,
                 };
                 let tri_b = PatchTriangle {
                     triangle: Triangle::new(bl, tl, tr),
                     neighbors: [None, None, Some(idx)],
+                    surface: SurfaceId::UNSPECIFIED,
                 };
                 triangles.push(tri_a);
                 triangles.push(tri_b);
@@ -159,19 +163,23 @@ impl RampGeometry {
         let flat_a = PatchTriangle {
             triangle: Triangle::new(f0, f2, f1),
             neighbors: [Some(1), None, None],
+            surface: SurfaceId::UNSPECIFIED,
         };
         let flat_b = PatchTriangle {
             triangle: Triangle::new(f0, f3, f2),
             neighbors: [None, Some(2), Some(0)],
+            surface: SurfaceId::UNSPECIFIED,
         };
         // Ramp quad: two triangles sharing the edge f3-f2 with the flat section
         let ramp_a = PatchTriangle {
             triangle: Triangle::new(f3, r1, f2),
             neighbors: [Some(3), None, Some(1)],
+            surface: SurfaceId::UNSPECIFIED,
         };
         let ramp_b = PatchTriangle {
             triangle: Triangle::new(f3, r0, r1),
             neighbors: [None, None, Some(2)],
+            surface: SurfaceId::UNSPECIFIED,
         };
 
         Self {
@@ -228,28 +236,34 @@ impl StepGeometry {
         let lower_a = PatchTriangle {
             triangle: Triangle::new(l0, l2, l1),
             neighbors: [Some(1), None, None],
+            surface: SurfaceId::UNSPECIFIED,
         };
         let lower_b = PatchTriangle {
             triangle: Triangle::new(l0, l3, l2),
             neighbors: [None, None, Some(0)],
+            surface: SurfaceId::UNSPECIFIED,
         };
         // Step wall triangles
         let wall_a = PatchTriangle {
             triangle: Triangle::new(l1, l2, u3),
             neighbors: [None, Some(3), None],
+            surface: SurfaceId::UNSPECIFIED,
         };
         let wall_b = PatchTriangle {
             triangle: Triangle::new(l1, u3, u0),
             neighbors: [Some(2), Some(4), None],
+            surface: SurfaceId::UNSPECIFIED,
         };
         // Upper level
         let upper_a = PatchTriangle {
             triangle: Triangle::new(u0, u2, u1),
             neighbors: [Some(5), None, Some(3)],
+            surface: SurfaceId::UNSPECIFIED,
         };
         let upper_b = PatchTriangle {
             triangle: Triangle::new(u0, u3, u2),
             neighbors: [None, None, Some(4)],
+            surface: SurfaceId::UNSPECIFIED,
         };
 
         Self {
@@ -305,18 +319,22 @@ impl BowlGeometry {
         let front = PatchTriangle {
             triangle: Triangle::new(apex, v1, v0),
             neighbors: [Some(1), None, Some(3)],
+            surface: SurfaceId::UNSPECIFIED,
         };
         let right = PatchTriangle {
             triangle: Triangle::new(apex, v2, v1),
             neighbors: [Some(2), None, Some(0)],
+            surface: SurfaceId::UNSPECIFIED,
         };
         let back = PatchTriangle {
             triangle: Triangle::new(apex, v3, v2),
             neighbors: [Some(3), None, Some(1)],
+            surface: SurfaceId::UNSPECIFIED,
         };
         let left = PatchTriangle {
             triangle: Triangle::new(apex, v0, v3),
             neighbors: [Some(0), None, Some(2)],
+            surface: SurfaceId::UNSPECIFIED,
         };
 
         Self {
@@ -367,10 +385,12 @@ impl WallAndFloorGeometry {
         let floor_a = PatchTriangle {
             triangle: Triangle::new(f0, f2, f1),
             neighbors: [Some(1), None, None],
+            surface: SurfaceId::UNSPECIFIED,
         };
         let floor_b = PatchTriangle {
             triangle: Triangle::new(f0, f3, f2),
             neighbors: [None, None, Some(0)],
+            surface: SurfaceId::UNSPECIFIED,
         };
 
         // Wall at x=0, normal +X (faces the positive-X side where bodies rest).
@@ -385,10 +405,12 @@ impl WallAndFloorGeometry {
         let wall_a = PatchTriangle {
             triangle: Triangle::new(w0, w2, w1),
             neighbors: [None, None, Some(3)],
+            surface: SurfaceId::UNSPECIFIED,
         };
         let wall_b = PatchTriangle {
             triangle: Triangle::new(w2, w3, w1),
             neighbors: [None, None, Some(2)],
+            surface: SurfaceId::UNSPECIFIED,
         };
 
         Self {

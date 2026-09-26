@@ -20,6 +20,7 @@ use smallvec::SmallVec;
 use crate::collision::contact::{ContactManifold, ContactPoint, FeatureId};
 use crate::collision::contact_reducer::ContactReducer;
 use crate::collision::mesh::seam_filter::{ContactEdge, FilteredPatch};
+use crate::collision::SurfaceId;
 
 /// Maximum contacts emitted before reduction.
 const MAX_SPHERE_PATCH_CONTACTS: usize = 4;
@@ -87,12 +88,10 @@ pub fn sphere_patch_manifold(
         return match best_boundary {
             Some(hit) => {
                 let raw_depth = hit.raw_depth(radius);
-                ContactManifold::single(ContactPoint::new(
-                    hit.point,
-                    hit.normal,
-                    raw_depth,
-                    hit.feature_id,
-                ))
+                ContactManifold::single(
+                    ContactPoint::new(hit.point, hit.normal, raw_depth, hit.feature_id)
+                        .on(hit.surface),
+                )
             }
             None => ContactManifold::empty(),
         };
@@ -102,7 +101,7 @@ pub fn sphere_patch_manifold(
         .iter()
         .map(|hit| {
             let raw_depth = hit.raw_depth(radius);
-            ContactPoint::new(hit.point, hit.normal, raw_depth, hit.feature_id)
+            ContactPoint::new(hit.point, hit.normal, raw_depth, hit.feature_id).on(hit.surface)
         })
         .collect();
 
@@ -129,6 +128,8 @@ struct SphereContact {
     face_signed_dist: f32,
     /// Feature ID.
     feature_id: FeatureId,
+    /// Surface of the face or edge the contact was found on.
+    surface: SurfaceId,
 }
 
 impl SphereContact {
@@ -176,6 +177,7 @@ fn sphere_vs_face(
             is_face: true,
             face_signed_dist: signed_dist,
             feature_id: face.feature_id,
+            surface: face.surface,
         });
     }
 
@@ -213,6 +215,7 @@ fn sphere_vs_face(
         is_face: false,
         face_signed_dist: signed_dist,
         feature_id: face.feature_id,
+        surface: face.surface,
     })
 }
 
@@ -244,6 +247,7 @@ fn sphere_vs_edge(
         is_face: false,
         face_signed_dist: 0.0,
         feature_id: edge.feature_id,
+        surface: edge.surface,
     })
 }
 
@@ -307,6 +311,7 @@ mod tests {
                     ]),
                     normal: Vector3::y(),
                     feature_id: FeatureId::from_face(0),
+                    surface: SurfaceId::UNSPECIFIED,
                 },
                 1,
             ),
@@ -385,6 +390,7 @@ mod tests {
                     ]),
                     normal: Vector3::y(),
                     feature_id: FeatureId::from_face(0),
+                    surface: SurfaceId::UNSPECIFIED,
                 },
                 1,
             ),
@@ -410,6 +416,7 @@ mod tests {
                     a: Point3::new(0.0, 0.0, 0.0),
                     b: Point3::new(1.0, 0.0, 0.0),
                     feature_id: FeatureId::from_edge_pair(0, 0),
+                    surface: SurfaceId::UNSPECIFIED,
                     normal_a: Vector3::y(),
                     normal_b: None,
                 },

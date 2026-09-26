@@ -18,6 +18,7 @@ use smallvec::SmallVec;
 use crate::collision::contact::FeatureId;
 use crate::collision::mesh_patch::MeshPatch;
 use crate::collision::triangle::Triangle;
+use crate::collision::SurfaceId;
 
 /// Cosine threshold above which two neighbouring faces count as coplanar and
 /// may merge. Shared by every production caller of [`filter_patch`] so the
@@ -49,6 +50,9 @@ pub struct ContactFace {
 
     /// Feature ID for manifold persistence.
     pub feature_id: FeatureId,
+    /// What the face is made of. A merged quad has one surface: only
+    /// triangles of the same surface merge.
+    pub surface: SurfaceId,
 }
 
 /// A boundary or crease edge, valid as a contact feature.
@@ -67,6 +71,8 @@ pub struct ContactEdge {
     /// Outward normal of the neighboring face (crease edge), or `None`
     /// for true boundary edges where no neighbor exists.
     pub normal_b: Option<Vector3<f32>>,
+    /// Surface of the face this edge belongs to.
+    pub surface: SurfaceId,
 }
 
 /// Filter a mesh patch: merge coplanar triangle pairs into convex quads
@@ -108,7 +114,9 @@ pub fn filter_patch(patch: &MeshPatch, coplanar_dot_threshold: f32) -> FilteredP
             }
 
             let normal_j = patch.triangles[j].triangle.normal();
-            if normal_i.dot(&normal_j) < coplanar_dot_threshold {
+            if normal_i.dot(&normal_j) < coplanar_dot_threshold
+                || patch.triangles[j].surface != pt_i.surface
+            {
                 continue;
             }
 
@@ -134,6 +142,7 @@ pub fn filter_patch(patch: &MeshPatch, coplanar_dot_threshold: f32) -> FilteredP
                     ),
                     normal: normal_i,
                     feature_id: FeatureId::from_triangle_set(&[lo, hi]),
+                    surface: pt_i.surface,
                 });
                 merged[i] = true;
                 merged[j] = true;
@@ -157,6 +166,7 @@ pub fn filter_patch(patch: &MeshPatch, coplanar_dot_threshold: f32) -> FilteredP
                 ),
                 normal: normal_i,
                 feature_id: FeatureId::from_face(i as u32),
+                surface: pt_i.surface,
             });
         }
     }
@@ -185,6 +195,7 @@ pub fn filter_patch(patch: &MeshPatch, coplanar_dot_threshold: f32) -> FilteredP
                     feature_id: FeatureId::from_edge_pair(ti, edge_idx),
                     normal_a: normal,
                     normal_b: neighbor_normal,
+                    surface: pt.surface,
                 });
             }
         }
@@ -263,6 +274,7 @@ mod tests {
                         Point3::new(1.0, 0.0, 1.0),
                     ),
                     neighbors: [None, None, Some(1)],
+                    surface: SurfaceId::UNSPECIFIED,
                 },
                 PatchTriangle {
                     triangle: Triangle::new(
@@ -271,6 +283,7 @@ mod tests {
                         Point3::new(0.0, 0.0, 1.0),
                     ),
                     neighbors: [Some(0), None, None],
+                    surface: SurfaceId::UNSPECIFIED,
                 },
             ],
         }
@@ -289,6 +302,7 @@ mod tests {
                         Point3::new(0.0, 0.0, 1.0),
                     ),
                     neighbors: [Some(1), None, None],
+                    surface: SurfaceId::UNSPECIFIED,
                 },
                 PatchTriangle {
                     triangle: Triangle::new(
@@ -297,6 +311,7 @@ mod tests {
                         Point3::new(0.0, 0.0, 1.0),
                     ),
                     neighbors: [None, None, Some(0)],
+                    surface: SurfaceId::UNSPECIFIED,
                 },
             ],
         }
@@ -344,6 +359,20 @@ mod tests {
         }
     }
 
+    /// A merged face has one surface, so two materials meeting on a flat
+    /// stay two faces — but the line between them is still no edge.
+    #[test]
+    fn coplanar_triangles_of_two_surfaces_stay_apart() {
+        let mut patch = flat_quad_patch();
+        patch.triangles[0].surface = SurfaceId(1);
+        patch.triangles[1].surface = SurfaceId(2);
+        let filtered = filter_patch(&patch, 0.98);
+
+        let surfaces: Vec<_> = filtered.faces.iter().map(|f| f.surface).collect();
+        assert_eq!(surfaces, vec![SurfaceId(1), SurfaceId(2)]);
+        assert_eq!(filtered.boundary_edges.len(), 4);
+    }
+
     #[test]
     fn flat_quad_suppresses_internal_edge() {
         let patch = flat_quad_patch();
@@ -386,6 +415,7 @@ mod tests {
                     Point3::new(0.0, 0.0, 1.0),
                 ),
                 neighbors: [None, None, None],
+                surface: SurfaceId::UNSPECIFIED,
             }],
         };
         let filtered = filter_patch(&patch, 0.98);
@@ -441,6 +471,7 @@ mod tests {
                         Point3::new(1.0, 0.0, 1.0),
                     ),
                     neighbors: [None, None, Some(1)],
+                    surface: SurfaceId::UNSPECIFIED,
                 },
                 PatchTriangle {
                     triangle: Triangle::new(
@@ -449,6 +480,7 @@ mod tests {
                         Point3::new(0.0, 0.0, 1.0),
                     ),
                     neighbors: [Some(0), Some(2), None],
+                    surface: SurfaceId::UNSPECIFIED,
                 },
                 PatchTriangle {
                     triangle: Triangle::new(
@@ -457,6 +489,7 @@ mod tests {
                         Point3::new(0.0, 0.0, 2.0),
                     ),
                     neighbors: [Some(1), None, Some(3)],
+                    surface: SurfaceId::UNSPECIFIED,
                 },
                 PatchTriangle {
                     triangle: Triangle::new(
@@ -465,6 +498,7 @@ mod tests {
                         Point3::new(1.0, 0.0, 2.0),
                     ),
                     neighbors: [None, None, Some(2)],
+                    surface: SurfaceId::UNSPECIFIED,
                 },
             ],
         };
@@ -499,6 +533,7 @@ mod tests {
                         Point3::new(1.0, 0.0, 1.0),
                     ),
                     neighbors: [Some(1), None, None],
+                    surface: SurfaceId::UNSPECIFIED,
                 },
                 PatchTriangle {
                     triangle: Triangle::new(
@@ -510,6 +545,7 @@ mod tests {
                         Point3::new(0.5, 0.0, -0.1),
                     ),
                     neighbors: [Some(0), None, None],
+                    surface: SurfaceId::UNSPECIFIED,
                 },
             ],
         };
@@ -536,6 +572,7 @@ mod tests {
                     Point3::new(0.0, 0.0, 1.0),
                 ),
                 neighbors: [None, None, None],
+                surface: SurfaceId::UNSPECIFIED,
             }],
         };
         let filtered = filter_patch(&patch, 0.98);

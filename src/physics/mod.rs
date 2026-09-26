@@ -56,6 +56,7 @@ pub mod profile;
 mod sleep;
 pub mod solver;
 mod static_geometry;
+mod static_surface;
 pub mod stepping;
 mod world;
 
@@ -79,5 +80,6 @@ pub use solver::{
     PgsNgsSolver, ShockPropagationConditioner, ShockPropagationConfig,
 };
 pub use static_geometry::StaticGeometry;
+pub use static_surface::{StaticSurface, SurfaceResponse};
 pub use stepping::{FixedTimestep, SequentialStepper, Stepper};
 pub use world::{BodyProbeHit, PhysicsConfig, PhysicsWorld};

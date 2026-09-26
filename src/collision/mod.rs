@@ -31,6 +31,7 @@ pub mod segment;
 pub mod shape_view;
 pub mod sphere_triangle;
 pub mod support;
+mod surface;
 pub mod triangle;
 
 pub use aabb::AABB;
@@ -38,4 +39,5 @@ pub use convex_hull::ConvexHull;
 pub use mesh_patch::{MeshPatch, PatchTriangle};
 pub use ray_triangle::RayHit;
 pub use shape_view::ShapeView;
+pub use surface::SurfaceId;
 pub use triangle::Triangle;

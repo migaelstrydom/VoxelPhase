@@ -38,10 +38,11 @@ use super::chunk_rebuild::ChunkBuildTimings;
 use super::render_cache::ChunkRenderData;
 use super::segment::{ConcatTimings, Segment};
 use super::surface;
+use super::voxel::VoxelMaterial;
 use crate::collision::ray_triangle::{ray_triangle, RayHit};
-use crate::collision::{MeshPatch, PatchTriangle, Triangle, AABB};
+use crate::collision::{MeshPatch, PatchTriangle, SurfaceId, Triangle, AABB};
 use crate::core::error::EngineResult;
-use crate::physics::StaticGeometry;
+use crate::physics::{StaticGeometry, StaticSurface};
 use crate::rendering::vertex::Vertex;
 use crate::resources::textures::{TextureHandle, TextureManager};
 use crate::sensing::{ProbeHit, ProbeTarget};
@@ -783,7 +784,12 @@ impl StaticGeometry for TerrainWorld {
         // A triangle is identified across the level by its segment plus its
         // in-segment reference; adjacency is per-segment, so both are needed to
         // resolve a neighbour to an index within this patch.
-        let mut results: Vec<(usize, ChunkTriangleRef, crate::collision::Triangle)> = Vec::new();
+        let mut results: Vec<(
+            usize,
+            ChunkTriangleRef,
+            crate::collision::Triangle,
+            VoxelMaterial,
+        )> = Vec::new();
         for (index, segment) in self.segments.iter().enumerate() {
             if !segment.bounds().intersects(aabb) {
                 continue;
@@ -792,19 +798,19 @@ impl StaticGeometry for TerrainWorld {
                 segment
                     .query_region(aabb)
                     .into_iter()
-                    .map(|(tri_ref, triangle)| (index, tri_ref, triangle)),
+                    .map(|(tri_ref, triangle, material)| (index, tri_ref, triangle, material)),
             );
         }
 
         let ref_to_index: FxHashMap<(usize, ChunkTriangleRef), u32> = results
             .iter()
             .enumerate()
-            .map(|(i, (seg, tri_ref, _))| ((*seg, *tri_ref), i as u32))
+            .map(|(i, (seg, tri_ref, _, _))| ((*seg, *tri_ref), i as u32))
             .collect();
 
         let triangles = results
             .iter()
-            .map(|(seg, tri_ref, triangle)| {
+            .map(|(seg, tri_ref, triangle, material)| {
                 let neighbors = match self.segments[*seg].neighbours(tri_ref) {
                     Some(nbrs) => std::array::from_fn(|edge| {
                         nbrs[edge].and_then(|nbr| ref_to_index.get(&(*seg, nbr)).copied())
@@ -814,6 +820,7 @@ impl StaticGeometry for TerrainWorld {
                 PatchTriangle {
                     triangle: *triangle,
                     neighbors,
+                    surface: material.surface_id(),
                 }
             })
             .collect();
@@ -834,10 +841,14 @@ impl StaticGeometry for TerrainWorld {
                 segment
                     .query_region(aabb)
                     .into_iter()
-                    .map(|(_, triangle)| triangle),
+                    .map(|(_, triangle, _)| triangle),
             );
         }
         triangles
+    }
+
+    fn surface(&self, id: SurfaceId) -> Option<StaticSurface> {
+        VoxelMaterial::from_surface_id(id).and_then(|material| material.surface())
     }
 }
 
@@ -904,6 +915,16 @@ mod tests {
     }
 
     fn slab_grid(voxel_size: f32, min: Point3<f32>, max: Point3<f32>) -> ChunkGrid {
+        slab_grid_of(voxel_size, min, max, |_| VoxelMaterial::Rock)
+    }
+
+    /// A slab whose material at each sample is `material` of its position.
+    fn slab_grid_of(
+        voxel_size: f32,
+        min: Point3<f32>,
+        max: Point3<f32>,
+        material: impl Fn(Point3<f32>) -> VoxelMaterial,
+    ) -> ChunkGrid {
         let mut grid = ChunkGrid::new(voxel_size);
 
         // Written through `union_solid`, at its signed distance, and sampled one
@@ -924,13 +945,7 @@ mod tests {
                 let mut z = min.z - voxel_size;
                 while z <= max.z + voxel_size {
                     let p = Point3::new(x, y, z);
-                    union_solid(
-                        &mut grid,
-                        p,
-                        box_sdf(p, min, max),
-                        voxel_size,
-                        VoxelMaterial::Rock,
-                    );
+                    union_solid(&mut grid, p, box_sdf(p, min, max), voxel_size, material(p));
                     z += voxel_size;
                 }
                 y += voxel_size;
@@ -1114,6 +1129,41 @@ mod tests {
                 "{label}: {open} open edges in a {}-triangle closed slab spanning a chunk seam",
                 world.triangle_count()
             );
+        }
+    }
+
+    /// A triangle carries the material it was cut from all the way to the
+    /// physics, and the physics reads that material's surface back from it:
+    /// grass underfoot on one half of a slab, rock on the other.
+    #[test]
+    fn triangles_carry_the_surface_they_were_cut_from() {
+        let grid = slab_grid_of(
+            1.0,
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(16.0, 2.0, 8.0),
+            |p| {
+                if p.x < 8.0 {
+                    VoxelMaterial::Grass
+                } else {
+                    VoxelMaterial::Rock
+                }
+            },
+        );
+        let world = world_of(SegmentFrame::identity(), grid);
+        let top_of = |x: f32| {
+            world.query_region(&AABB::new(
+                Point3::new(x - 1.0, 1.5, 3.0),
+                Point3::new(x + 1.0, 2.5, 5.0),
+            ))
+        };
+
+        for (x, material) in [(3.0, VoxelMaterial::Grass), (13.0, VoxelMaterial::Rock)] {
+            let patch = top_of(x);
+            assert!(!patch.triangles.is_empty(), "nothing under x = {x}");
+            for pt in &patch.triangles {
+                assert_eq!(pt.surface, material.surface_id(), "at x = {x}");
+                assert_eq!(world.surface(pt.surface), material.surface());
+            }
         }
     }
 

@@ -6,7 +6,9 @@
 //! detection (sphere-triangle, OBB-triangle, swept tests) is handled
 //! by the physics engine itself.
 
-use crate::collision::{MeshPatch, Triangle, AABB};
+use crate::collision::{MeshPatch, SurfaceId, Triangle, AABB};
+
+use super::static_surface::StaticSurface;
 
 /// Trait for querying collision geometry from static world structures.
 ///
@@ -36,5 +38,14 @@ pub trait StaticGeometry: Sync {
             .into_iter()
             .map(|pt| pt.triangle)
             .collect()
+    }
+
+    /// What the triangles tagged `id` are made of.
+    ///
+    /// `None` — the default, and the answer for [`SurfaceId::UNSPECIFIED`] —
+    /// is geometry with no material of its own: a contact against it takes
+    /// the collider's values unchanged.
+    fn surface(&self, _id: SurfaceId) -> Option<StaticSurface> {
+        None
     }
 }

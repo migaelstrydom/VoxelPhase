@@ -6,7 +6,7 @@
 //! triangle neighborhoods (e.g., ignoring interior edges between
 //! coplanar triangles).
 
-use super::Triangle;
+use super::{SurfaceId, Triangle};
 
 /// A triangle within a [`MeshPatch`], with local adjacency information.
 #[derive(Debug, Clone)]
@@ -20,6 +20,9 @@ pub struct PatchTriangle {
     /// `None` means the edge is a boundary edge (the neighbor either
     /// doesn't exist or wasn't included in this patch's query region).
     pub neighbors: [Option<u32>; 3],
+
+    /// What the triangle is made of, as the geometry that issued it names it.
+    pub surface: SurfaceId,
 }
 
 /// A localized fragment of a triangle mesh returned by broad-phase queries.

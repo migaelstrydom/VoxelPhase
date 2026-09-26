@@ -152,12 +152,9 @@ fn gjk_epa_vs_face<S: ConvexSupport + SupportFaceExtractor>(
             return SmallVec::new();
         }
         let mut contacts = SmallVec::new();
-        contacts.push(ContactPoint::new(
-            projected,
-            normal,
-            raw_depth,
-            face.feature_id,
-        ));
+        contacts.push(
+            ContactPoint::new(projected, normal, raw_depth, face.feature_id).on(face.surface),
+        );
         return contacts;
     }
 
@@ -182,12 +179,9 @@ fn gjk_epa_vs_face<S: ConvexSupport + SupportFaceExtractor>(
     let projected = project_onto_face_plane(deepest, face);
     if point_in_convex_polygon(&projected, &face.vertices, &normal) {
         let mut contacts = SmallVec::new();
-        contacts.push(ContactPoint::new(
-            projected,
-            normal,
-            raw_depth,
-            face.feature_id,
-        ));
+        contacts.push(
+            ContactPoint::new(projected, normal, raw_depth, face.feature_id).on(face.surface),
+        );
         contacts
     } else {
         SmallVec::new()
@@ -228,7 +222,7 @@ fn clip_shape_face_against_mesh_face(
 
         let projected = p - face_normal * signed_dist;
         let feature_id = face.feature_id.with_vertex(i as u32);
-        contacts.push(ContactPoint::new(projected, normal, raw_depth, feature_id));
+        contacts.push(ContactPoint::new(projected, normal, raw_depth, feature_id).on(face.surface));
     }
 
     // If all clipped points were above the margin threshold, return empty.
@@ -258,12 +252,15 @@ fn project_shape_verts_into_face(
 
         let projected = v - face_normal * signed_dist;
         if point_in_convex_polygon(&projected, &face.vertices, &face_normal) {
-            contacts.push(ContactPoint::new(
-                projected,
-                normal,
-                raw_depth,
-                face.feature_id.with_vertex(i as u32),
-            ));
+            contacts.push(
+                ContactPoint::new(
+                    projected,
+                    normal,
+                    raw_depth,
+                    face.feature_id.with_vertex(i as u32),
+                )
+                .on(face.surface),
+            );
         }
     }
 
@@ -382,6 +379,7 @@ mod tests {
     use crate::collision::mesh::sphere_patch::sphere_patch_manifold;
     use crate::collision::obb::Obb;
     use crate::collision::shape_view::ShapeView;
+    use crate::collision::SurfaceId;
     use crate::physics::ColliderShape;
     use nalgebra::UnitQuaternion;
 
@@ -397,6 +395,7 @@ mod tests {
                     ]),
                     normal: Vector3::y(),
                     feature_id: FeatureId::from_face(0),
+                    surface: SurfaceId::UNSPECIFIED,
                 },
                 1,
             ),
@@ -422,6 +421,7 @@ mod tests {
                     ]),
                     normal,
                     feature_id: FeatureId::from_face(0),
+                    surface: SurfaceId::UNSPECIFIED,
                 },
                 1,
             ),
@@ -641,6 +641,7 @@ mod tests {
                     ]),
                     normal: Vector3::y(),
                     feature_id: FeatureId::from_face(0),
+                    surface: SurfaceId::UNSPECIFIED,
                 },
                 ContactFace {
                     vertices: SmallVec::from_vec(vec![
@@ -651,6 +652,7 @@ mod tests {
                     ]),
                     normal: Vector3::y(),
                     feature_id: FeatureId::from_face(1),
+                    surface: SurfaceId::UNSPECIFIED,
                 },
             ]),
             boundary_edges: SmallVec::new(),
@@ -757,6 +759,7 @@ mod tests {
             ]),
             normal: Vector3::y(),
             feature_id: FeatureId::from_face(0),
+            surface: SurfaceId::UNSPECIFIED,
         }
     }
 
@@ -772,6 +775,7 @@ mod tests {
             ]),
             normal: Vector3::y(),
             feature_id: FeatureId::from_face(0),
+            surface: SurfaceId::UNSPECIFIED,
         }
     }
 

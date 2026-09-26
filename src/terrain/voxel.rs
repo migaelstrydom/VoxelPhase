@@ -16,6 +16,9 @@
 //! could not see. Toughness-by-material is both legible — the colour is the
 //! durability — and immune to that class of bug.
 
+use crate::collision::SurfaceId;
+use crate::physics::StaticSurface;
+
 /// Toughness that maps to half hardness. Sits just above the mid-range
 /// materials so that the destructible ladder spends most of its span on the
 /// soft half, where the visible difference between chalk and stone is, rather
@@ -131,6 +134,53 @@ impl VoxelMaterial {
     pub fn is_solid(&self) -> bool {
         !matches!(self, VoxelMaterial::Air)
     }
+
+    /// What a body touching this material meets: its grip, its bounce, and
+    /// whether it gives way (see `physics::static_surface`).
+    ///
+    /// Loose ground yields, so its own friction is the contact's whatever
+    /// lies on it — a block of ice sits on grass about as firmly as a crate
+    /// does. Rock is hard and meets a collider as another collider would.
+    ///
+    /// Starting values, tuned by feel rather than measured: published
+    /// coefficients for soil and turf vary with moisture more than between
+    /// materials.
+    pub fn surface(&self) -> Option<StaticSurface> {
+        match self {
+            VoxelMaterial::Air => None,
+            VoxelMaterial::Grass => Some(StaticSurface::yielding(0.45, 0.2)),
+            VoxelMaterial::Dirt => Some(StaticSurface::yielding(0.55, 0.15)),
+            VoxelMaterial::Sand => Some(StaticSurface::yielding(0.5, 0.1)),
+            VoxelMaterial::Ite => Some(StaticSurface::rigid(0.6, 0.3)),
+            VoxelMaterial::Limestone => Some(StaticSurface::rigid(0.6, 0.3)),
+            VoxelMaterial::Rock => Some(StaticSurface::rigid(0.7, 0.3)),
+            VoxelMaterial::Slate => Some(StaticSurface::rigid(0.5, 0.3)),
+            VoxelMaterial::Bedrock => Some(StaticSurface::rigid(0.7, 0.3)),
+        }
+    }
+
+    /// The id a triangle of this material carries into the physics engine.
+    /// Air is [`SurfaceId::UNSPECIFIED`], which no surface triangle is made of.
+    pub fn surface_id(&self) -> SurfaceId {
+        SurfaceId(*self as u8)
+    }
+
+    /// The material a [`surface_id`](Self::surface_id) came from, or `None`
+    /// for an id terrain never issued.
+    pub fn from_surface_id(id: SurfaceId) -> Option<Self> {
+        match id.0 {
+            0 => Some(VoxelMaterial::Air),
+            1 => Some(VoxelMaterial::Rock),
+            2 => Some(VoxelMaterial::Grass),
+            3 => Some(VoxelMaterial::Dirt),
+            4 => Some(VoxelMaterial::Ite),
+            5 => Some(VoxelMaterial::Limestone),
+            6 => Some(VoxelMaterial::Slate),
+            7 => Some(VoxelMaterial::Sand),
+            8 => Some(VoxelMaterial::Bedrock),
+            _ => None,
+        }
+    }
 }
 
 /// A single voxel with density and material.
@@ -202,6 +252,23 @@ mod tests {
         VoxelMaterial::Rock,
         VoxelMaterial::Slate,
     ];
+
+    /// Every surface a triangle can carry must come back as the material it
+    /// was cut from, or the physics would read one rock as another.
+    #[test]
+    fn surface_ids_round_trip() {
+        for material in DESTRUCTIBLE
+            .into_iter()
+            .chain([VoxelMaterial::Air, VoxelMaterial::Bedrock])
+        {
+            assert_eq!(
+                VoxelMaterial::from_surface_id(material.surface_id()),
+                Some(material)
+            );
+        }
+        assert_eq!(VoxelMaterial::Air.surface_id(), SurfaceId::UNSPECIFIED);
+        assert!(VoxelMaterial::Air.surface().is_none());
+    }
 
     /// The whole point of shading from hardness is that a harder surface never
     /// looks softer than an easier one. Anything non-monotonic would make the

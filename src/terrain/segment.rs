@@ -33,7 +33,7 @@ use super::chunk_rebuild::{ChunkBuildTimings, ChunkRebuild};
 use super::frame::SegmentFrame;
 use super::render_cache::{build_chunk_render_data, ChunkRenderCache, ChunkRenderData};
 use super::segment_adjacency::{adjacency_tolerance, SegmentAdjacency};
-use super::voxel::Voxel;
+use super::voxel::{Voxel, VoxelMaterial};
 use crate::collision::ray_triangle::RayHit;
 use crate::collision::{Triangle, AABB};
 use crate::rendering::vertex::Vertex;
@@ -392,7 +392,7 @@ impl Segment {
             .mesh()
             .query_aabb(&local)
             .into_iter()
-            .map(|(_, t)| {
+            .map(|(_, t, _)| {
                 Triangle::new(
                     self.frame.to_world(t.v0),
                     self.frame.to_world(t.v1),
@@ -472,18 +472,19 @@ impl Segment {
     }
 
     /// Triangles overlapping a world-space AABB, in world space, each with the
-    /// reference that identifies it within this segment.
+    /// reference that identifies it within this segment
+    /// and the material it was cut from.
     ///
     /// The AABB conversion is exact rather than conservative: a 90° yaw permutes
     /// the axes, so an axis-aligned box stays axis-aligned.
-    pub fn query_region(&self, world: &AABB) -> Vec<(ChunkTriangleRef, Triangle)> {
+    pub fn query_region(&self, world: &AABB) -> Vec<(ChunkTriangleRef, Triangle, VoxelMaterial)> {
         let local = self.frame.aabb_to_local(world);
         let mut results = Vec::new();
         for coord in self.grid.coords_in(&local) {
             let Some(chunk) = self.grid.chunk(coord) else {
                 continue;
             };
-            for (tri_ref, triangle) in chunk.mesh().query_aabb(&local) {
+            for (tri_ref, triangle, material) in chunk.mesh().query_aabb(&local) {
                 results.push((
                     ChunkTriangleRef {
                         chunk: coord,
@@ -494,6 +495,7 @@ impl Segment {
                         self.frame.to_world(triangle.v1),
                         self.frame.to_world(triangle.v2),
                     ),
+                    material,
                 ));
             }
         }

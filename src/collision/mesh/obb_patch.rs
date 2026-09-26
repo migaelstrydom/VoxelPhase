@@ -65,12 +65,15 @@ pub fn obb_patch_manifold(
                 let projected = corner - normal * signed_dist;
                 if point_in_convex_polygon(&projected, &face.vertices, &normal) {
                     let vi = nearest_support_vertex(&projected, &support.vertices);
-                    all_points.push(ContactPoint::new(
-                        projected,
-                        normal,
-                        raw_depth,
-                        face.feature_id.with_vertex(vi as u32),
-                    ));
+                    all_points.push(
+                        ContactPoint::new(
+                            projected,
+                            normal,
+                            raw_depth,
+                            face.feature_id.with_vertex(vi as u32),
+                        )
+                        .on(face.surface),
+                    );
                 }
             }
             continue;
@@ -84,12 +87,15 @@ pub fn obb_patch_manifold(
             }
             let projected = p - normal * signed_dist;
             let vi = nearest_support_vertex(&projected, &support.vertices);
-            all_points.push(ContactPoint::new(
-                projected,
-                normal,
-                raw_depth,
-                face.feature_id.with_vertex(vi as u32),
-            ));
+            all_points.push(
+                ContactPoint::new(
+                    projected,
+                    normal,
+                    raw_depth,
+                    face.feature_id.with_vertex(vi as u32),
+                )
+                .on(face.surface),
+            );
         }
     }
 
@@ -256,7 +262,8 @@ fn obb_vs_boundary_edges(obb: &Obb, patch: &FilteredPatch, contact_margin: f32) 
             if best.as_ref().map_or(true, |b| raw_depth > b.1) {
                 let point = Point3::from((pa.coords + pb.coords) * 0.5);
                 best = Some((
-                    ContactPoint::new(point, normal, raw_depth, boundary_edge.feature_id),
+                    ContactPoint::new(point, normal, raw_depth, boundary_edge.feature_id)
+                        .on(boundary_edge.surface),
                     raw_depth,
                 ));
             }
@@ -335,6 +342,7 @@ mod tests {
     use super::*;
     use crate::collision::contact::FeatureId;
     use crate::collision::mesh::seam_filter::FilteredPatch;
+    use crate::collision::SurfaceId;
     use nalgebra::UnitQuaternion;
 
     fn large_flat_patch() -> FilteredPatch {
@@ -349,6 +357,7 @@ mod tests {
                     ]),
                     normal: Vector3::y(),
                     feature_id: FeatureId::from_face(0),
+                    surface: SurfaceId::UNSPECIFIED,
                 },
                 1,
             ),
@@ -501,6 +510,7 @@ mod tests {
                     ]),
                     normal: Vector3::y(),
                     feature_id: FeatureId::from_face(0),
+                    surface: SurfaceId::UNSPECIFIED,
                 },
                 1,
             ),
@@ -529,6 +539,7 @@ mod tests {
                     ]),
                     normal: Vector3::y(),
                     feature_id: FeatureId::from_face(58),
+                    surface: SurfaceId::UNSPECIFIED,
                 },
                 ContactFace {
                     vertices: SmallVec::from_vec(vec![
@@ -539,6 +550,7 @@ mod tests {
                     ]),
                     normal: Vector3::y(),
                     feature_id: FeatureId::from_face(59),
+                    surface: SurfaceId::UNSPECIFIED,
                 },
                 ContactFace {
                     vertices: SmallVec::from_vec(vec![
@@ -549,6 +561,7 @@ mod tests {
                     ]),
                     normal: Vector3::new(0.577350, 0.577350, 0.577350),
                     feature_id: FeatureId::from_face(35),
+                    surface: SurfaceId::UNSPECIFIED,
                 },
                 ContactFace {
                     vertices: SmallVec::from_vec(vec![
@@ -558,6 +571,7 @@ mod tests {
                     ]),
                     normal: Vector3::new(0.577350, 0.577350, 0.577350),
                     feature_id: FeatureId::from_face(53),
+                    surface: SurfaceId::UNSPECIFIED,
                 },
             ]),
             boundary_edges: SmallVec::new(),
@@ -623,6 +637,7 @@ mod tests {
                     ]),
                     normal: Vector3::y(),
                     feature_id: FeatureId::from_face(0),
+                    surface: SurfaceId::UNSPECIFIED,
                 },
                 ContactFace {
                     vertices: SmallVec::from_vec(vec![
@@ -633,6 +648,7 @@ mod tests {
                     ]),
                     normal: -Vector3::y(),
                     feature_id: FeatureId::from_face(1),
+                    surface: SurfaceId::UNSPECIFIED,
                 },
             ]),
             boundary_edges: SmallVec::new(),

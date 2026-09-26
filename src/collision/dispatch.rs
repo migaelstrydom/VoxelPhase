@@ -323,6 +323,7 @@ mod tests {
     use crate::collision::contact::FeatureId;
     use crate::collision::convex_hull::{ConvexHull, HullFace};
     use crate::collision::mesh::seam_filter::{ContactFace, FilteredPatch};
+    use crate::collision::SurfaceId;
     use nalgebra::{Point3, UnitQuaternion, Vector3};
     use smallvec::SmallVec;
 
@@ -467,6 +468,7 @@ mod tests {
                 ],
                 normal: Vector3::y(),
                 feature_id: FeatureId::SINGLE,
+                surface: SurfaceId::UNSPECIFIED,
             }],
             boundary_edges: smallvec![],
         };
@@ -504,6 +506,7 @@ mod tests {
                 ],
                 normal: Vector3::y(),
                 feature_id: FeatureId::SINGLE,
+                surface: SurfaceId::UNSPECIFIED,
             }],
             boundary_edges: smallvec![],
         };
@@ -2187,6 +2190,7 @@ mod tests {
                     ]),
                     normal: Vector3::y(),
                     feature_id: FeatureId::from_face(58),
+                    surface: SurfaceId::UNSPECIFIED,
                 },
                 ContactFace {
                     vertices: SmallVec::from_vec(vec![
@@ -2197,6 +2201,7 @@ mod tests {
                     ]),
                     normal: Vector3::y(),
                     feature_id: FeatureId::from_face(59),
+                    surface: SurfaceId::UNSPECIFIED,
                 },
                 ContactFace {
                     vertices: SmallVec::from_vec(vec![
@@ -2207,6 +2212,7 @@ mod tests {
                     ]),
                     normal: Vector3::new(0.577350, 0.577350, 0.577350),
                     feature_id: FeatureId::from_face(35),
+                    surface: SurfaceId::UNSPECIFIED,
                 },
                 ContactFace {
                     vertices: SmallVec::from_vec(vec![
@@ -2216,6 +2222,7 @@ mod tests {
                     ]),
                     normal: Vector3::new(0.577350, 0.577350, 0.577350),
                     feature_id: FeatureId::from_face(53),
+                    surface: SurfaceId::UNSPECIFIED,
                 },
             ]),
             boundary_edges: SmallVec::new(),
