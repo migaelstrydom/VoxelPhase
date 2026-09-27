@@ -34,3 +34,11 @@ bench_harness = []
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
 
 
+
+# A build to share or ship: `cargo build --profile dist`, output in target/dist/.
+# Fat LTO took the contact solver 13% faster on a crate stack but tripled the
+# rebuild after a one-file edit, so everyday --release builds go without it.
+[profile.dist]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
