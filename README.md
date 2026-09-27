@@ -1,11 +1,17 @@
 # Voxel Phase
 
+[![CI](https://github.com/migaelstrydom/VoxelPhase/actions/workflows/ci.yml/badge.svg)](https://github.com/migaelstrydom/VoxelPhase/actions/workflows/ci.yml)
+
 A 3D game engine in Rust and Vulkan, built around destructible voxel terrain. It
 has its own rigid-body physics engine, procedural character animation, water
 simulated as a hydrological network, fracturing glass and ice, and a GPU fluid
 simulation for fire.
 
 ![The test arena: the player in front of a stone arch, a temple, a wall of ice blocks knocked down, and an igloo](VoxelPhase.png)
+
+It is an experimental engine, not a finished game: some systems are more
+finished than others, and several have been verified through the headless tools
+below rather than played by hand.
 
 It is developed on macOS through MoltenVK. Linux and Windows have not been
 tried.
