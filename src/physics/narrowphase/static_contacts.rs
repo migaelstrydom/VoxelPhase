@@ -20,7 +20,8 @@ use crate::physics::handle::{ColliderHandle, RigidBodyHandle};
 use crate::physics::pipeline::pair::{PairHeader, PairManifold};
 use crate::physics::static_geometry::StaticGeometry;
 
-use super::config::NarrowphaseConfig;
+use super::config::{ContactHorizon, NarrowphaseConfig};
+use super::speculative::rewind_to_now;
 use super::work_buffer::NarrowphaseWorkBuffer;
 
 /// Generate contacts between all non-static colliders and static geometry.
@@ -38,7 +39,7 @@ pub fn generate_static_contacts(
     colliders: &Arena<Collider>,
     static_geometry: &dyn StaticGeometry,
     config: &NarrowphaseConfig,
-    dt: f32,
+    horizon: ContactHorizon,
     sleeping: Option<&FxHashSet<RigidBodyHandle>>,
     buf: &mut NarrowphaseWorkBuffer,
 ) {
@@ -68,7 +69,7 @@ pub fn generate_static_contacts(
                 collider,
                 static_geometry,
                 config,
-                dt,
+                horizon,
             )
         })
         .collect();
@@ -76,8 +77,8 @@ pub fn generate_static_contacts(
 }
 
 /// The manifold of one collider against static geometry: its contacts now, or
-/// if it has none and is fast enough, speculative contacts where it will be
-/// after `dt`.
+/// if it has none and is in the speculative band, speculative contacts where it
+/// will be at the end of `horizon`.
 fn collider_vs_static(
     body_handle: RigidBodyHandle,
     body: &RigidBody,
@@ -85,7 +86,7 @@ fn collider_vs_static(
     collider: &Collider,
     static_geometry: &dyn StaticGeometry,
     config: &NarrowphaseConfig,
-    dt: f32,
+    horizon: ContactHorizon,
 ) -> Option<PairManifold> {
     let contact_margin = config.contact_margin;
     let world_tf = collider.world_transform(body.position(), body.rotation());
@@ -102,16 +103,16 @@ fn collider_vs_static(
     let manifold = shape_vs_static(&view, static_geometry, contact_margin);
 
     let manifold = if manifold.is_empty()
-        && config.admits_speculative(speed, dt, collider.shape().bounding_radius())
+        && config.admits_speculative(speed, horizon, collider.shape().bounding_radius())
     {
-        let predicted_center = center + linear_velocity * dt;
+        let travel = linear_velocity * horizon.frame_dt();
         let predicted_view = ShapeView {
-            center: predicted_center,
-            rotation: body.rotation(),
+            center: center + travel,
+            rotation,
             shape: collider.shape(),
         };
         let mut m = shape_vs_static(&predicted_view, static_geometry, contact_margin);
-        make_speculative(&mut m, contact_margin);
+        rewind_to_now(&mut m, None, travel);
         m
     } else {
         manifold
@@ -170,14 +171,6 @@ fn shape_vs_static(
     let patch = static_geometry.query_region(&query);
     let filtered = filter_patch(&patch, COPLANAR_DOT);
     dispatch::generate_mesh_manifold(view, &filtered, contact_margin)
-}
-
-/// Convert a manifold to speculative: depth=0, raw_depth=-margin.
-fn make_speculative(manifold: &mut ContactManifold, contact_margin: f32) {
-    for cp in &mut manifold.points {
-        cp.depth = 0.0;
-        cp.raw_depth = -contact_margin;
-    }
 }
 
 #[cfg(test)]

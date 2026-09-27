@@ -65,6 +65,73 @@ impl PhysicsBenchScenario for FlatSphereRestScenario {
     }
 }
 
+/// A bouncy ball dropped onto flat ground, landing at a speed whose contact is
+/// predicted rather than found: 7.7 m/s from 3 m, a 0.13 m frame of travel for
+/// a 0.2 m ball — past the contact margin, short of CCD.
+///
+/// Restitution is the ratio of rebound speed to impact speed, so the first
+/// bounce should rise to `restitution² × drop_height`. A predicted landing that
+/// arrests the ball on arrival and answers the impact a substep late rebounds
+/// with nothing: the approach it would reflect is already gone.
+#[derive(Debug, Clone)]
+pub struct BouncyBallDropScenario {
+    pub restitution: f32,
+    pub radius: f32,
+    /// Height of the ball's underside above the ground at release.
+    pub drop_height: f32,
+    geometry: FlatQuadGeometry,
+}
+
+impl BouncyBallDropScenario {
+    pub fn new(restitution: f32) -> Self {
+        Self {
+            restitution,
+            radius: 0.2,
+            drop_height: 3.0,
+            geometry: FlatQuadGeometry::new(8.0),
+        }
+    }
+
+    /// Height of the ball's underside at the top of its first bounce, if it
+    /// loses no energy beyond what restitution takes.
+    pub fn expected_first_rebound(&self) -> f32 {
+        self.restitution * self.restitution * self.drop_height
+    }
+}
+
+impl PhysicsBenchScenario for BouncyBallDropScenario {
+    fn name(&self) -> &'static str {
+        "bouncy_ball_drop"
+    }
+
+    fn restitution(&self) -> f32 {
+        self.restitution
+    }
+
+    fn setup(&self, world: &mut PhysicsWorld) -> RigidBodyHandle {
+        let body = world.create_body(RigidBodyDesc::dynamic().position(Point3::new(
+            0.0,
+            self.drop_height + self.radius,
+            0.0,
+        )));
+        let collider = ColliderDesc::sphere(self.radius)
+            .density(1000.0)
+            .restitution(self.restitution)
+            .friction(0.5);
+        let _ = world.attach_collider(body, collider);
+        body
+    }
+
+    fn geometry(&self) -> &dyn StaticGeometry {
+        &self.geometry
+    }
+
+    fn frame_dt(&self, _frame_idx: u64) -> f32 {
+        // 4 substeps of 1/240: a 60 fps frame.
+        4.0 / 240.0
+    }
+}
+
 /// Sphere sliding laterally across flat terrain. The sphere crosses the
 /// internal mesh edge (diagonal seam between the two triangles in
 /// FlatQuadGeometry). This must not cause jitter or speed anomalies —
@@ -3127,12 +3194,12 @@ impl PhysicsBenchScenario for SphereIntoDynamicCornerScenario {
     }
 }
 
-/// Two shapes closing inside the speculative band: fast enough to step past the
-/// contact margin in a substep, too slow for either CCD gate to fire.
+/// Two shapes closing inside the speculative band: fast enough to travel past
+/// the contact margin between narrowphase passes, too slow for either CCD gate
+/// to fire.
 ///
-/// The band is narrow and frame-rate dependent. At 60 Hz a 0.2 m sphere at
-/// 12 m/s travels 0.05 m per substep — past the 0.04 m margin gate — while its
-/// 0.2 m frame travel stays under the 0.3 m frame-coverage gate. Speculative
+/// At 60 Hz a 0.2 m sphere at 12 m/s travels 0.2 m per frame — far past the
+/// 0.04 m margin gate, under the 0.3 m frame-coverage gate. Speculative
 /// contacts are the only mechanism covering it.
 #[derive(Debug, Clone)]
 pub struct SpeculativeBandApproachScenario {

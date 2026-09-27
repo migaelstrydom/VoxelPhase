@@ -1,5 +1,11 @@
 # GJK/EPA and General Convex Support
 
+> **Deprecated.** A historical design document, kept for the reasoning behind
+> it; the code has moved on and parts of it no longer describe what exists —
+> speculative contacts in particular, now in `physics/narrowphase/speculative.rs`
+> and described in `COLLISION_LIBRARY.md`. Read the code, not this, for how
+> things work today.
+
 Design document for adding GJK, EPA, general-purpose CCD, centralized dispatch,
 and the `ConvexHull` shape variant. Corresponds to Step 6 from `COLLISION_LIBRARY.md`.
 

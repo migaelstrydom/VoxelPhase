@@ -113,6 +113,8 @@ mod tests {
             raw_normal: Vector3::y(),
             depth: 0.0,
             raw_depth: 0.0,
+            gap: 0.0,
+            closing_allowance: 0.0,
             feature_id: FeatureId(0),
             warm_normal_impulse: 0.0,
             warm_friction_impulse_ws: Vector3::zeros(),

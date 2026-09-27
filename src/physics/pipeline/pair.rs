@@ -58,6 +58,18 @@ pub struct SolverContact {
     pub depth: f32,
     /// Raw penetration depth (may be negative for margin-only contacts).
     pub raw_depth: f32,
+    /// Separation the pair had still to close when the contact was generated;
+    /// zero unless the contact was predicted ahead of the pair's arrival.
+    ///
+    /// See [`ContactPoint::gap`](crate::collision::contact::ContactPoint::gap).
+    pub gap: f32,
+    /// Normal approach speed the solver permits this substep: what is left of
+    /// `gap` after the motion since generation, over the substep.
+    ///
+    /// Written by the solver before each substep's velocity phase; zero for a
+    /// contact whose shapes already meet, which the solver then arrests
+    /// outright as it always has.
+    pub closing_allowance: f32,
     /// Feature pair that produced this contact, used for impulse cache matching.
     pub feature_id: FeatureId,
     /// Normal impulse inherited from the previous frame's cache (warm-start).
@@ -112,4 +124,15 @@ pub struct SolverManifold {
     pub header: PairHeader,
     /// Per-contact working data, up to 4 points.
     pub contacts: SmallVec<[SolverContact; 4]>,
+}
+
+impl SolverManifold {
+    /// Whether the pair is touching, rather than only predicted to meet: at
+    /// least one contact has no gap left to close.
+    ///
+    /// A pair that has not met supports nothing and rubs against nothing; what
+    /// reads a manifold as "these bodies are in contact" should ask this.
+    pub fn has_met(&self) -> bool {
+        self.contacts.iter().any(|c| c.gap <= 0.0)
+    }
 }

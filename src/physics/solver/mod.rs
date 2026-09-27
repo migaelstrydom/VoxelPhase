@@ -1,5 +1,6 @@
 pub(crate) mod body_pair;
 pub(crate) mod ccd;
+pub(crate) mod closing_allowance;
 pub mod conditioning;
 pub(crate) mod constraint_row;
 mod constraint_solver;

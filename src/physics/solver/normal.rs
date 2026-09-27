@@ -40,14 +40,23 @@ pub(crate) fn solve_normal_impulse(
     let speed = pre_solve_vn.abs();
     let restitution_scale =
         ((speed - restitution_velocity_threshold) / restitution_velocity_threshold).clamp(0.0, 1.0);
-    let restitution = header.restitution * restitution_scale;
-    let restitution_velocity = if pre_solve_vn < 0.0 {
-        restitution * pre_solve_vn
+    let rebound = header.restitution * restitution_scale * (-pre_solve_vn).max(0.0);
+
+    // A speculative contact whose pair has not arrived permits approach up to
+    // the gap that remains. On the substep it arrives there is an impact to
+    // answer, and the rebound is taken from the approach it arrived with —
+    // arrested on arrival, the pair would otherwise start the next substep
+    // with no approach left for restitution to reflect. It leaves up to the
+    // remaining gap unclosed, less than one substep of travel.
+    let allowance = contact.closing_allowance;
+    let arrives = -pre_solve_vn > allowance;
+    let target_velocity = if allowance > 0.0 && !(arrives && rebound > 0.0) {
+        -allowance
     } else {
-        0.0
+        rebound
     };
 
-    let delta = -(vel_along_normal + restitution_velocity) / effective_inv_mass;
+    let delta = (target_velocity - vel_along_normal) / effective_inv_mass;
     let old = contact.accumulated_normal_impulse;
     let new = (old + delta).max(0.0);
     let applied = new - old;

@@ -49,12 +49,31 @@ impl ColliderState {
         self.view().query_aabb(margin)
     }
 
+    /// World-space AABB enclosing this collider both where it is and after
+    /// moving by `travel`, expanded by `margin`.
+    ///
+    /// Encloses the whole straight path between the two, since an AABB swept
+    /// along a line is contained in the box around its two ends.
+    pub fn swept_bounds(&self, margin: f32, travel: Vector3<f32>) -> AABB {
+        let here = self.bounds(margin);
+        let there = AABB::new(here.min + travel, here.max + travel);
+        here.merged(&there)
+    }
+
     /// Borrow this state as a dispatch-facing shape view.
     pub fn view(&self) -> ShapeView<'_> {
         ShapeView {
             center: self.center,
             rotation: self.rotation,
             shape: &self.shape,
+        }
+    }
+
+    /// This state's shape view after translating by `travel`, orientation held.
+    pub fn view_moved(&self, travel: Vector3<f32>) -> ShapeView<'_> {
+        ShapeView {
+            center: self.center + travel,
+            ..self.view()
         }
     }
 }

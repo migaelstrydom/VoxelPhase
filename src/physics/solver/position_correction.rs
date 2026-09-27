@@ -228,7 +228,10 @@ fn apply_ngs_correction(
                 // Recompute separation from corrected positions
                 let delta_a = pos_a - base_pos_a;
                 let delta_b = pos_b - base_pos_b;
-                let separation = contact.depth - (delta_b - delta_a).dot(&contact.normal) - slop;
+                // A speculative contact's gap is room still to close before any
+                // penetration begins.
+                let separation =
+                    contact.depth - contact.gap - (delta_b - delta_a).dot(&contact.normal) - slop;
                 if separation <= 0.0 {
                     flat_idx += 1;
                     continue;
@@ -809,7 +812,7 @@ fn apply_contact_rolling_resistance(
     }
 
     let mut impacted: FxHashSet<RigidBodyHandle> = FxHashSet::default();
-    for manifold in manifolds {
+    for manifold in manifolds.iter().filter(|m| m.has_met()) {
         if let Some(handle_a) = manifold.header.body_a {
             impacted.insert(handle_a);
         }
@@ -842,7 +845,7 @@ fn apply_contact_linear_damping(
     }
 
     let mut impacted: FxHashSet<RigidBodyHandle> = FxHashSet::default();
-    for manifold in manifolds {
+    for manifold in manifolds.iter().filter(|m| m.has_met()) {
         if let Some(handle_a) = manifold.header.body_a {
             impacted.insert(handle_a);
         }

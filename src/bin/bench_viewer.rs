@@ -112,6 +112,8 @@ const SCENARIO_NAMES: &[&str] = &[
     "sphere_through_two_slabs",
     "sphere_into_dynamic_corner",
     "speculative_band_approach",
+    "speculative_band_approach_boxes",
+    "bouncy_ball_drop",
     "ccd_stress",
     "box_on_static_platform",
     "box_on_plank",
@@ -152,6 +154,10 @@ fn run_viewer(name: &str) -> EngineResult<()> {
         "speculative_band_approach" => {
             run_with_scenario(&SpeculativeBandApproachScenario::spheres())
         }
+        "speculative_band_approach_boxes" => {
+            run_with_scenario(&SpeculativeBandApproachScenario::boxes())
+        }
+        "bouncy_ball_drop" => run_with_scenario(&BouncyBallDropScenario::new(0.8)),
         "ccd_stress" => run_with_scenario(&CcdStressScenario::new(10, 6)),
         "box_on_static_platform" => run_with_scenario(&BoxOnStaticPlatformScenario::new(0.0)),
         "box_on_plank" => run_with_scenario(&BoxOnPlankScenario::new()),

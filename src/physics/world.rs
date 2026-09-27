@@ -27,8 +27,8 @@ use super::handle::{ColliderHandle, RigidBodyHandle};
 use super::impact::ImpactLedger;
 use super::impulses::PhysicsImpulse;
 use super::narrowphase::{
-    generate_dynamic_contacts, generate_static_contacts, GjkCacheMap, NarrowphaseConfig,
-    NarrowphaseWorkBuffer, SatCacheMap, SpeculativeConfig,
+    generate_dynamic_contacts, generate_static_contacts, ContactHorizon, GjkCacheMap,
+    NarrowphaseConfig, NarrowphaseWorkBuffer, SatCacheMap, SpeculativeConfig,
 };
 use super::pipeline::integration::{integrate_bodies, integrate_forces};
 use super::pipeline::manifold::ManifoldCache;
@@ -60,8 +60,9 @@ pub struct PhysicsConfig {
     /// Per-substep CCD activation threshold. A body requires CCD when:
     /// `|linear_velocity| * substep_dt > radius * ccd_threshold`.
     /// Below this, the narrowphase handles contacts; above, CCD sweeps
-    /// prevent tunneling. Also partitions speculative contact generation,
-    /// which covers the band below this threshold.
+    /// prevent tunneling. Together with `ccd_frame_coverage` it sets the
+    /// ceiling of speculative contact generation, which covers the band below
+    /// where either gate fires.
     ///
     /// See `ccd_frame_coverage` for the frame-level gate that catches bodies
     /// slow enough to pass this test yet fast enough to outrun the
@@ -92,12 +93,31 @@ pub struct PhysicsConfig {
     pub support: SupportConfig,
     /// Allow warm-start when raw depth exceeds this (can be negative).
     pub warm_start_depth_slop: f32,
-    /// Enable speculative contacts to close the CCD activation gap.
+    /// Enable speculative contacts to cover the band of speeds beneath CCD.
     pub enable_speculative_contacts: bool,
     /// Minimum linear speed required for speculative contact generation.
     pub speculative_min_speed: f32,
     /// Multiplier for contact_margin when gating speculative contacts.
     pub speculative_margin_multiplier: f32,
+    /// Predict a pair of bodies only when they close on each other fast enough
+    /// to outrun the contact margin, rather than whenever either is fast.
+    ///
+    /// On: a pair whose relative speed is under the band's floor (0.04 m a
+    /// frame by default — 2.4 m/s at 60 Hz) gets no speculative contact, even
+    /// if both bodies are moving fast, like two fragments flying off a blast
+    /// together. If such a pair does collide, the discrete margin catches it
+    /// as it would any slow pair, and it can overlap by up to the floor less
+    /// the margin — about 0.02 m — before the solver pushes it out. Measured
+    /// on a 704-body igloo blast: body-pair narrowphase 0.262 → 0.235 ms mean,
+    /// 0.84 → 0.65 ms p95, with no change to the result.
+    ///
+    /// Off: every pair with a body in the speculative band is predicted, so no
+    /// pair in the band overlaps, at the cost of a time-of-impact search for
+    /// pairs that can barely close on each other.
+    ///
+    /// Only an approximation when on; the bounding-sphere test that also skips
+    /// searches is exact and is not affected by this flag.
+    pub speculative_relative_speed_gate: bool,
     /// Configuration for the sleep system.
     pub sleep: SleepManagerConfig,
     /// Debug rendering configuration.
@@ -126,7 +146,9 @@ impl PhysicsConfig {
                 enabled: self.enable_speculative_contacts,
                 min_speed: self.speculative_min_speed,
                 margin_multiplier: self.speculative_margin_multiplier,
+                relative_speed_gate: self.speculative_relative_speed_gate,
                 ccd_threshold: self.ccd_threshold,
+                ccd_frame_coverage: self.ccd_frame_coverage,
             },
         }
     }
@@ -148,6 +170,7 @@ impl Default for PhysicsConfig {
             enable_speculative_contacts: true,
             speculative_min_speed: 1.0,
             speculative_margin_multiplier: 2.0,
+            speculative_relative_speed_gate: true,
             sleep: SleepManagerConfig::default(),
             debug: PhysicsDebugConfig::default(),
         }
@@ -790,6 +813,10 @@ impl PhysicsWorld {
         // Narrowphase contact generation. Both passes append to one buffer,
         // static first, so the caller owns the reset rather than either pass.
         let narrowphase_config = self.config.narrowphase();
+        let horizon = ContactHorizon {
+            substep_dt: dt,
+            substeps: self.substeps_this_frame,
+        };
         self.narrowphase_work_buffer.begin_frame();
         self.profile
             .record(PhysicsStage::Bookkeeping, lap.elapsed());
@@ -799,7 +826,7 @@ impl PhysicsWorld {
             &self.colliders,
             static_geometry,
             &narrowphase_config,
-            dt,
+            horizon,
             sleeping_snapshot.as_ref(),
             &mut self.narrowphase_work_buffer,
         );
@@ -810,7 +837,7 @@ impl PhysicsWorld {
             &self.bodies,
             &self.colliders,
             &narrowphase_config,
-            dt,
+            horizon,
             sleeping_snapshot.as_ref(),
             &mut self.sat_cache_map,
             &mut self.gjk_cache_map,

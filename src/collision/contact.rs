@@ -77,6 +77,14 @@ pub struct ContactPoint {
     /// get depth = 0, meaning velocity-only correction with no position push.
     pub depth: f32,
 
+    /// Separation still to close before the shapes touch, for a contact
+    /// predicted ahead of the pair's arrival (a speculative contact).
+    ///
+    /// Zero for a contact where the shapes already meet, which is every contact
+    /// the collision tests themselves produce. The solver lets a pair approach
+    /// by this much before it arrests them.
+    pub gap: f32,
+
     /// Identifies the geometric feature pair that produced this contact.
     pub feature_id: FeatureId,
 
@@ -103,6 +111,7 @@ impl ContactPoint {
             normal,
             raw_depth,
             depth: raw_depth.max(0.0),
+            gap: 0.0,
             feature_id,
             surface: SurfaceId::UNSPECIFIED,
         }

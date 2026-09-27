@@ -649,18 +649,19 @@ solve them normally. This closes the CCD activation gap without forcing full CCD
 moderate-speed bodies.
 
 **Implementation notes:**
-- Add config toggles to gate speculative contacts:
+- Config toggles gate speculative contacts:
   `enable_speculative_contacts`, `speculative_min_speed`,
   `speculative_margin_multiplier`.
 - Only emit speculative contacts when there are **no overlap contacts** for the pair
   that frame (avoid redundant work on resting contacts).
-- Gate by travel distance per step: `travel = |v| * dt` with
+- Gate by travel over the whole frame, the span one narrowphase pass must cover:
+  `travel = |v| * frame_dt` with
   `travel > contact_margin * speculative_margin_multiplier` and
-  `travel <= radius * ccd_threshold`.
-- For sphere-static, sweep the margin-inflated sphere from current to predicted center;
-  emit a velocity-only contact with `depth = 0` and `raw_depth < 0`.
-- For sphere-sphere, use swept sphere-sphere with margin-inflated radii and build a
-  contact at the time of impact.
+  `travel <=` the frame travel at which either CCD gate fires.
+- Generate the manifold where the pair will meet with the ordinary dispatch and rewind
+  it: each contact carries the `gap` still to close. The solver permits approach up to
+  that gap and arrests beyond it; restitution answers the approach on the substep the
+  pair arrives. A zero-depth contact without its gap stops the pair short, in mid-air.
 
 ### Step 8: CCD mini-solve
 When a CCD sweep hits, build CCD constraints and run a small solver pass (2–4 iterations)

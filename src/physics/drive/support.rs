@@ -214,7 +214,9 @@ impl SupportResolver {
             for (contact_index, contact) in manifold.contacts.iter().enumerate() {
                 let site = ContactSite::new(manifold_index, contact_index);
                 let normal = contact.raw_normal;
-                if normal.magnitude_squared() <= 1e-8 {
+                // A contact predicted ahead of its pair's arrival holds
+                // nothing up yet.
+                if contact.gap > 0.0 || normal.magnitude_squared() <= 1e-8 {
                     continue;
                 }
                 let weight = (contact.depth + self.config.depth_weight_bias).max(0.0);
@@ -358,6 +360,8 @@ pub(crate) mod tests {
                     raw_normal: *normal,
                     depth: 0.01,
                     raw_depth: 0.01,
+                    gap: 0.0,
+                    closing_allowance: 0.0,
                     feature_id: FeatureId::from_face(0),
                     warm_normal_impulse: 0.0,
                     warm_friction_impulse_ws: Vector3::zeros(),

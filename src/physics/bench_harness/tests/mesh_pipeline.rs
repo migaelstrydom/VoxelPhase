@@ -52,6 +52,49 @@ fn flat_sphere_rest_bouncy_sphere_reaches_higher_peak() {
     );
 }
 
+/// A ball landing in the speculative band bounces as high as its restitution
+/// says: `e² × h` for the first bounce, within what one substep of travel
+/// either side of the ground can cost.
+#[test]
+fn bouncy_ball_landing_in_the_speculative_band_rebounds_to_its_restitution() {
+    let scenario = BouncyBallDropScenario::new(0.8);
+    let cfg = BenchRunConfig {
+        duration: 2.5,
+        ..BenchRunConfig::default()
+    };
+    let run = run_scenario(&scenario, cfg);
+    write_exports(&run, "bouncy_ball_drop");
+
+    // The underside's height, sample by sample: falling to the landing, then
+    // rising to the first bounce's apex.
+    let heights: Vec<f32> = run.samples.iter().map(|s| s.y - scenario.radius).collect();
+    let landing = heights
+        .windows(2)
+        .position(|w| w[1] > w[0])
+        .expect("the ball never bounced");
+    let lowest = heights[landing];
+    let apex = heights[landing..]
+        .windows(2)
+        .position(|w| w[1] < w[0])
+        .map(|i| landing + i)
+        .expect("the first bounce never peaked");
+    let rebound = heights[apex];
+
+    let expected = scenario.expected_first_rebound();
+    eprintln!(
+        "bouncy ball: first rebound {rebound:.3} m, expected {expected:.3} m, lowest {lowest:.4} m"
+    );
+    assert!(
+        (rebound - expected).abs() < 0.05 * expected,
+        "first rebound rose to {rebound:.3} m, restitution predicts {expected:.3} m"
+    );
+    assert!(
+        lowest > -0.02,
+        "the ball sank {:.3} m into the ground on landing",
+        -lowest
+    );
+}
+
 // ── Mesh pipeline: sphere sliding over internal edges ────────────
 
 #[test]

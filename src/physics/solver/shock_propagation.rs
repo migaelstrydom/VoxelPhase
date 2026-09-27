@@ -165,6 +165,12 @@ impl ContactGraph {
         for manifold in manifolds {
             let header = &manifold.header;
 
+            // A pair that has not met yet supports nothing: a body falling onto
+            // a stack is not part of it until it lands.
+            if !manifold.has_met() {
+                continue;
+            }
+
             // Anything immovable is ground: static geometry (no body_a) and
             // static bodies alike. A static body must seed depth 0 rather than
             // become a node, or a stack resting on one would be ordered as if
@@ -282,7 +288,7 @@ impl ContactGraph {
             let depth_b = self.depth.get(&header.body_b).copied();
 
             let scales = match (depth_a, depth_b) {
-                (Some(da), Some(db)) if da != db => {
+                (Some(da), Some(db)) if da != db && manifold.has_met() => {
                     let diff = da.abs_diff(db);
                     let factor = shock_alpha.powi(diff as i32);
                     if da < db {

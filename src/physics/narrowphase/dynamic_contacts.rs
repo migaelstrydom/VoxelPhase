@@ -3,10 +3,8 @@
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use generational_arena::Arena;
-use nalgebra::Vector3;
 
-use crate::collision::contact::{ContactManifold, ContactPoint, FeatureId};
-use crate::collision::continuous::swept_sphere_sphere;
+use crate::collision::contact::ContactManifold;
 use crate::collision::discrete::gjk::GjkCache;
 use crate::collision::dispatch;
 use crate::collision::sat::SatCache;
@@ -16,7 +14,8 @@ use crate::physics::handle::{ColliderHandle, RigidBodyHandle};
 use crate::physics::pipeline::pair::{PairHeader, PairManifold};
 
 use super::collider_state::{collect_collider_states_into, ColliderState};
-use super::config::NarrowphaseConfig;
+use super::config::{ContactHorizon, NarrowphaseConfig};
+use super::speculative::{rewind_to_now, time_of_impact};
 use super::work_buffer::NarrowphaseWorkBuffer;
 
 /// Pair key for SAT axis caching. Collider handles are stored in canonical order.
@@ -112,7 +111,7 @@ pub fn generate_dynamic_contacts(
     bodies: &Arena<RigidBody>,
     colliders: &Arena<Collider>,
     config: &NarrowphaseConfig,
-    dt: f32,
+    horizon: ContactHorizon,
     sleeping: Option<&FxHashSet<RigidBodyHandle>>,
     sat_cache_map: &mut SatCacheMap,
     gjk_cache_map: &mut GjkCacheMap,
@@ -126,9 +125,28 @@ pub fn generate_dynamic_contacts(
         return;
     }
 
+    // A collider in the speculative band is bounded over the whole frame's
+    // travel, not where it stands: a pair that will meet this frame has to be
+    // paired now, or there is nothing to predict for.
+    let frame_dt = horizon.frame_dt();
+    buf.speculative.reserve(buf.states.len());
+    buf.speculative.extend(buf.states.iter().map(|s| {
+        s.is_mobile()
+            && config.admits_speculative(s.velocity.magnitude(), horizon, s.shape.bounding_radius())
+    }));
     buf.bounds.reserve(buf.states.len());
-    buf.bounds
-        .extend(buf.states.iter().map(|s| s.bounds(contact_margin)));
+    buf.bounds.extend(
+        buf.states
+            .iter()
+            .zip(&buf.speculative)
+            .map(|(s, &speculative)| {
+                if speculative {
+                    s.swept_bounds(contact_margin, s.velocity * frame_dt)
+                } else {
+                    s.bounds(contact_margin)
+                }
+            }),
+    );
     let states = &buf.states;
     buf.broadphase
         .pairs_into(&buf.bounds, |i| states[i].is_mobile(), &mut buf.pairs);
@@ -176,17 +194,23 @@ pub fn generate_dynamic_contacts(
             gjk_cache_opt.as_deref_mut(),
         );
 
-        if !manifold.is_empty() {
-            // The dispatch routes mixed pairs to a canonical shape order
-            // (e.g. obb_capsule_manifold always has OBB first), so the contact
-            // normal always points from the "larger" shape toward the "smaller".
-            // The solver convention is normal from A→B, so body_a must be the
-            // larger shape type to match.
-            let (first, second) = if shape_type_rank(&si.shape) >= shape_type_rank(&sj.shape) {
-                (si, sj)
-            } else {
-                (sj, si)
-            };
+        // The dispatch routes mixed pairs to a canonical shape order
+        // (e.g. obb_capsule_manifold always has OBB first), so the contact
+        // normal always points from the "larger" shape toward the "smaller".
+        // The solver convention is normal from A→B, so body_a must be the
+        // larger shape type to match.
+        let (first, second) = if shape_type_rank(&si.shape) >= shape_type_rank(&sj.shape) {
+            (si, sj)
+        } else {
+            (sj, si)
+        };
+
+        let predict = manifold.is_empty()
+            && (buf.speculative[i] || buf.speculative[j])
+            && config.admits_speculative_pair((si.velocity - sj.velocity).magnitude(), horizon);
+        let manifold = if predict {
+            predict_pair_manifold(first, second, contact_margin, frame_dt)
+        } else {
             debug_assert!(
                 normals_point_from_a_to_b(first, second, &manifold),
                 "Contact normal appears to point from B toward A for {:?} vs {:?}. \
@@ -195,19 +219,13 @@ pub fn generate_dynamic_contacts(
                 first.shape,
                 second.shape,
             );
-            push_if_nonempty(
-                &mut buf.manifolds,
-                make_pair_header(first, second),
-                manifold,
-            );
-        } else {
-            // Speculative CCD for sphere-sphere pairs.
-            if let (ColliderShape::Sphere { radius: ra }, ColliderShape::Sphere { radius: rb }) =
-                (&si.shape, &sj.shape)
-            {
-                sphere_sphere_speculative(si, *ra, sj, *rb, config, dt, &mut buf.manifolds);
-            }
-        }
+            manifold
+        };
+        push_if_nonempty(
+            &mut buf.manifolds,
+            make_pair_header(first, second),
+            manifold,
+        );
     }
 
     sat_cache_map.prune(&buf.active_sat_pairs);
@@ -300,59 +318,34 @@ fn push_if_nonempty(out: &mut Vec<PairManifold>, header: PairHeader, manifold: C
     }
 }
 
-/// Sphere-sphere speculative CCD (special case that uses swept_sphere_sphere).
-fn sphere_sphere_speculative(
-    a: &ColliderState,
-    radius_a: f32,
-    b: &ColliderState,
-    radius_b: f32,
-    config: &NarrowphaseConfig,
-    dt: f32,
-    out: &mut Vec<PairManifold>,
-) {
-    if !config.admits_speculative_pair(
-        a.velocity.magnitude(),
-        radius_a,
-        b.velocity.magnitude(),
-        radius_b,
-        dt,
-    ) {
-        return;
-    }
-    let contact_margin = config.contact_margin;
-
-    let end_a = a.center + a.velocity * dt;
-    let end_b = b.center + b.velocity * dt;
-    if let Some(t) = swept_sphere_sphere(
-        a.center,
-        end_a,
-        radius_a + contact_margin,
-        b.center,
-        end_b,
-        radius_b + contact_margin,
-    ) {
-        let pos_a = a.center + (end_a - a.center) * t;
-        let pos_b = b.center + (end_b - b.center) * t;
-        let delta = pos_b - pos_a;
-        let dist = delta.magnitude();
-        let normal = if dist < 1e-6 {
-            Vector3::y()
-        } else {
-            delta / dist
-        };
-        let actual_depth = (radius_a + radius_b) - dist;
-        let solver_depth = actual_depth.max(0.0);
-        let point = pos_a + normal * (radius_a - actual_depth * 0.5);
-
-        let cp = ContactPoint::new(point, normal, actual_depth, FeatureId::SINGLE);
-        let mut speculative = ContactManifold::single(cp);
-        speculative.points[0].depth = solver_depth;
-
-        out.push(PairManifold {
-            header: make_pair_header(a, b),
-            manifold: speculative,
-        });
-    }
+/// Speculative contacts for a pair that is apart now but meets within
+/// `frame_dt`: the manifold where it meets, rewound to the present with the gap
+/// each point has still to close. Empty if the pair does not meet.
+///
+/// `first` and `second` are in the solver's A/B order. The manifold at the
+/// meeting pose comes from the same dispatch as any other contact, so it has as
+/// many points, and the same normal convention, as the contact the pair will
+/// have once it arrives.
+fn predict_pair_manifold(
+    first: &ColliderState,
+    second: &ColliderState,
+    contact_margin: f32,
+    frame_dt: f32,
+) -> ContactManifold {
+    let Some(t) = time_of_impact(first, second, frame_dt) else {
+        return ContactManifold::empty();
+    };
+    let travel_first = first.velocity * (frame_dt * t);
+    let travel_second = second.velocity * (frame_dt * t);
+    let mut manifold = dispatch::generate_manifold(
+        &first.view_moved(travel_first),
+        &second.view_moved(travel_second),
+        contact_margin,
+        None,
+        None,
+    );
+    rewind_to_now(&mut manifold, Some(travel_first), travel_second);
+    manifold
 }
 
 #[cfg(test)]

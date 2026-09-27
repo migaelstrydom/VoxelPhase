@@ -24,6 +24,9 @@ pub struct NarrowphaseWorkBuffer {
     pub(super) manifolds: Vec<PairManifold>,
     pub(super) states: Vec<ColliderState>,
     pub(super) bounds: Vec<AABB>,
+    /// Per collider in `states`: whether it is in the speculative band, and so
+    /// bounded, paired and predicted over the whole frame's travel.
+    pub(super) speculative: Vec<bool>,
     /// Pair culling over `bounds`, holding its own sort scratch.
     pub(super) broadphase: SweepAndPrune,
     pub(super) pairs: Vec<(usize, usize)>,
@@ -37,6 +40,7 @@ impl NarrowphaseWorkBuffer {
             manifolds: Vec::new(),
             states: Vec::new(),
             bounds: Vec::new(),
+            speculative: Vec::new(),
             broadphase: SweepAndPrune::new(),
             pairs: Vec::new(),
             active_sat_pairs: FxHashSet::default(),
@@ -56,6 +60,7 @@ impl NarrowphaseWorkBuffer {
     pub(super) fn clear_pair_scratch(&mut self) {
         self.states.clear();
         self.bounds.clear();
+        self.speculative.clear();
         self.pairs.clear();
         self.active_sat_pairs.clear();
         self.active_gjk_pairs.clear();

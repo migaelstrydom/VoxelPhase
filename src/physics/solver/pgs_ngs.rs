@@ -15,6 +15,7 @@ use crate::physics::constraint::expand::{
 use crate::physics::constraint::types::{Constraint, ConstraintRow, Enforcement, RowKind};
 use crate::physics::pipeline::pair::SolverManifold;
 
+use super::closing_allowance::set_closing_allowances;
 use super::conditioning::ManifoldConditions;
 use super::island_solver::{IslandManifold, IslandSolver};
 use super::position_correction::{self, PositionCorrectionConfig};
@@ -128,6 +129,8 @@ impl ConstraintSolver for PgsNgsSolver {
         if manifolds.is_empty() && constraint_rows.is_empty() {
             return;
         }
+
+        set_closing_allowances(bodies, manifolds, &self.contact_generation_positions, dt);
 
         // Phases 1–3: the velocity phase, island by island. Islands share no
         // movable body, so they run in parallel, each gathering, warm-starting

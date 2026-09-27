@@ -462,17 +462,25 @@ physics-pipeline concern because it depends on frame-to-frame manifold persisten
 
 ### Speculative contacts
 
-For bodies moving faster than the contact margin can catch but below the CCD threshold,
-the physics pipeline:
+For bodies moving faster than the contact margin can catch but below where CCD engages,
+the physics pipeline predicts the contact rather than waiting for the overlap
+(`physics/narrowphase/speculative.rs`):
 
-1. Expands the broadphase query region along the velocity vector.
-2. Calls the collision library with the expanded region (margin-inflated shapes).
-3. Accepts contacts with `raw_depth < 0` (not yet overlapping).
-4. The solver applies velocity-only correction (`depth = 0`) to prevent future
-   penetration without position push.
+1. Gates each collider on its travel over the whole frame, since contacts are generated
+   once per frame and reused by every substep. The band's ceiling is computed from CCD's
+   two gates, so the two mechanisms meet with nothing between them.
+2. Bounds a collider in the band over its frame's travel, so a pair that will meet this
+   frame is paired now.
+3. Finds where the pair meets — `gjk_raycast` over the relative motion for body pairs, the
+   end of the frame's travel for static geometry — and calls the ordinary dispatch there,
+   so the manifold has the points and normals the real contact will have.
+4. Rewinds that manifold to the present: each point carries its `gap`, the separation
+   still to close, with `depth = 0` and `raw_depth = -gap`.
 
-The collision library supports this by accepting `contact_margin` and faithfully
-reporting negative `raw_depth` for margin-only contacts.
+The solver lets the pair approach by the gap and arrests it only beyond it, so it stops
+on arrival — a zero-depth contact would stop it wherever it happened to be when the
+contact was generated. The collision library's part is only to report negative
+`raw_depth` for margin contacts faithfully and to leave `gap` at zero.
 
 ### Warm-start gating
 
