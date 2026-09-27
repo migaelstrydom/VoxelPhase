@@ -28,9 +28,12 @@ pub fn append_ocean(
     graph: &SpanGraph,
     outlets: &Outlets,
 ) {
-    let (columns, wet) = sea_columns(id, ocean, graph);
+    let Some((min, max)) = occupied_bounds(graph) else {
+        return;
+    };
+    let (columns, wet) = sea_columns(id, ocean, graph, (min, max));
     append_columns(mesh, id, &columns, &wet);
-    if let (Some(sea), Some((min, max))) = (outlets.sea(), occupied_bounds(graph)) {
+    if let Some(sea) = outlets.sea() {
         let map = MapRect {
             i0: min.i,
             k0: min.k,
@@ -42,12 +45,16 @@ pub fn append_ocean(
 }
 
 /// Columns the sea owns, with the floor under each, and the shore ring;
-/// and the owned columns' floors alone.
+/// and the owned columns' floors alone. `occupied` is the terrain's extent,
+/// from [`occupied_bounds`].
 fn sea_columns(
     id: StoreId,
     ocean: &Ocean,
     graph: &SpanGraph,
+    occupied: (Column, Column),
 ) -> (Vec<(Column, f32)>, FxHashMap<Column, f32>) {
+    let (min, max) = occupied;
+    let on_terrain = |c: Column| (min.i..=max.i).contains(&c.i) && (min.k..=max.k).contains(&c.k);
     let mut floors: FxHashMap<Column, f32> = FxHashMap::default();
     for span in graph.all_refs() {
         if graph.owner(span).body == Some(id) {
@@ -57,12 +64,13 @@ fn sea_columns(
     }
     // Beside the sea, a column whose ground holds the sea back: under the
     // terrain at the waterline. A column the sea could stand in but does not
-    // own (a lowland behind a wall) is left out.
+    // own (a lowland behind a wall) is left out, and so is one past the
+    // terrain's edge, where the ring out to the horizon begins.
     let mut ring: Vec<(Column, f32)> = Vec::new();
     for (&column, &floor) in &floors {
         for step in ORTHOGONAL {
             let next = column.offset(step.di, step.dk);
-            if floors.contains_key(&next) || !graph.contains_column(next) {
+            if floors.contains_key(&next) || !on_terrain(next) {
                 continue;
             }
             let dry = graph

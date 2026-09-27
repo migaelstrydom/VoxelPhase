@@ -27,6 +27,7 @@ use super::basin_mesher::{MeshKey, WaterMesh, WaterScene};
 use super::divide::WaterPatch;
 use super::fall_mesher::{FallKey, FallMesh, SPREAD as FALL_SPREAD};
 use super::footprint::ScreenFootprint;
+use super::ocean_ring::RING_TILE;
 use super::pipeline::{WaterPipeline, BODY_PUSH_OFFSET, FRAGMENT_PUSH_OFFSET};
 use super::reach_mesher::RiverMesh;
 use super::vertex::FineVertex;
@@ -397,18 +398,25 @@ impl WaterRenderer {
                 let Some(level) = water.level(draw.body) else {
                     continue;
                 };
-                patches.push(WaterPatch::tile(draw.tile.x, draw.tile.z, level));
-                // A tile whose ripples are awake is drawn fine, below.
-                if layers.contains_key(&(draw.tile.x, draw.tile.z, draw.body)) {
-                    continue;
-                }
-                if !in_view(
-                    &mut footprint,
-                    (draw.tile.x, draw.tile.z),
-                    level,
-                    water.swell(draw.body).amplitude,
-                ) {
-                    continue;
+                if draw.tile == RING_TILE {
+                    // The sea past the map's edges is no tile: it reaches the
+                    // horizon all round, so it is always drawn and can cover
+                    // any part of the screen.
+                    footprint.cover_all();
+                } else {
+                    patches.push(WaterPatch::tile(draw.tile.x, draw.tile.z, level));
+                    // A tile whose ripples are awake is drawn fine, below.
+                    if layers.contains_key(&(draw.tile.x, draw.tile.z, draw.body)) {
+                        continue;
+                    }
+                    if !in_view(
+                        &mut footprint,
+                        (draw.tile.x, draw.tile.z),
+                        level,
+                        water.swell(draw.body).amplitude,
+                    ) {
+                        continue;
+                    }
                 }
                 self.plan.push(PlannedDraw {
                     surface,
