@@ -1,7 +1,7 @@
 use super::super::framework::{run_scenario, BenchRunConfig};
 use super::super::scenarios::{
-    CcdStressScenario, GrazingSphereWallCcdScenario, GrenadeSpeedWallCcdScenario,
-    HighSpeedSphereCcdScenario, SpeculativeBandApproachScenario, SphereIntoDynamicCornerScenario,
+    GrazingSphereWallCcdScenario, GrenadeSpeedWallCcdScenario, HighSpeedSphereCcdScenario,
+    SpeculativeBandApproachScenario, SphereIntoDynamicCornerScenario,
     SphereThroughDynamicSlabScenario, SphereThroughTwoSlabsScenario,
 };
 use super::assertions::*;
@@ -219,38 +219,5 @@ fn assert_band_pair_separates(scenario: SpeculativeBandApproachScenario, stem: &
     assert!(
         min_x < contact_x + 0.05,
         "pair stopped short of contact: tracked body stalled at x={min_x}, contact at {contact_x}"
-    );
-}
-
-/// Timing instrumentation for the CCD perf checkpoint. Not an assertion — it
-/// prints and passes.
-///
-/// A grid of resting boxes with fast projectiles crossing it: many colliders
-/// that are not candidates, some that are, which is the shape of world the
-/// body sweep costs the most in. Measured on an M-series laptop at the time
-/// dynamic sweeping landed: 1114 us/step with the body sweep stubbed out
-/// against 1143 us/step with it, so it costs about 2.6% of physics — and this
-/// mix, 60 of 160 bodies fast enough to sweep, is far heavier than a real
-/// scene of a few grenades among scenery.
-///
-/// Run with:
-/// `cargo test --release --features bench_harness ccd_stress_timing -- --ignored --nocapture`
-#[test]
-#[ignore = "timing instrumentation, not an assertion; run with --ignored --nocapture"]
-fn ccd_stress_timing() {
-    let scenario = CcdStressScenario::new(10, 60);
-    let cfg = BenchRunConfig {
-        duration: 2.0,
-        ..BenchRunConfig::default()
-    };
-    let start = std::time::Instant::now();
-    let run = run_scenario(&scenario, cfg);
-    let elapsed = start.elapsed();
-    println!(
-        "ccd_stress: {} bodies, {} steps in {:?} ({:.1} us/step)",
-        10 * 10 + 60,
-        run.physics_steps,
-        elapsed,
-        elapsed.as_micros() as f64 / run.physics_steps as f64
     );
 }

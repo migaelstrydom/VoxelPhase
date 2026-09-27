@@ -170,6 +170,10 @@ struct Entry {
     /// enters by: a channel too short for a reach falls from the far side
     /// of its one cell, not from the crest before it.
     lip: Option<Lip>,
+    /// Where the water enters `store`, when that is not where it left the
+    /// lip: a fall landing on dry ground runs one cell further, too short
+    /// for a reach, to the water's edge.
+    shore: Option<Point3<f32>>,
 }
 
 /// The only writer of topology.
@@ -631,9 +635,8 @@ impl TopologyBuilder {
                 let (launch, velocity) = fall_lip.launch(base + depth, speed);
                 let entry = self.fall(t, from, launch, velocity, flow, falls + 1)?;
                 let at = entry
-                    .fall
-                    .as_ref()
-                    .and_then(FallPath::landing)
+                    .shore
+                    .or_else(|| entry.fall.as_ref().and_then(FallPath::landing))
                     .unwrap_or(launch);
                 (
                     entry.store,
@@ -648,6 +651,7 @@ impl TopologyBuilder {
         if reaches.is_empty() {
             return Some(Entry {
                 store: target,
+                shore: outlet.as_ref().map(|o| o.at),
                 fall: outlet.and_then(|o| o.fall),
                 lip,
             });
@@ -683,6 +687,7 @@ impl TopologyBuilder {
             store: ids[0],
             fall: None,
             lip: None,
+            shore: None,
         })
     }
 
@@ -735,6 +740,7 @@ impl TopologyBuilder {
             .caught
             .and_then(|(span, y)| holder(t.geometry.graph(), t.network, from, span, y));
         let mut path = trace.path;
+        let mut shore = None;
         let store = match (caught, trace.landing) {
             (Some(store), _) => store,
             (None, Landing::Void) => {
@@ -750,6 +756,7 @@ impl TopologyBuilder {
                 if let Some(more) = entry.fall {
                     path.extend(more);
                 }
+                shore = entry.shore;
                 entry.store
             }
         };
@@ -757,6 +764,7 @@ impl TopologyBuilder {
             store,
             fall: Some(path),
             lip: None,
+            shore,
         })
     }
 
@@ -1103,12 +1111,14 @@ impl TopologyBuilder {
                         .outflow_lip(&outflow)
                         .and_then(|lip| self.outflow_arc(t, id, &outflow, &lip)),
                     lip: None,
+                    shore: None,
                 })
             };
             let Some(Entry {
                 store: target,
                 fall,
                 lip,
+                ..
             }) = entry.filter(|e| e.store != id)
             else {
                 continue;

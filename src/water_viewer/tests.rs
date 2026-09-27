@@ -557,6 +557,21 @@ fn a_lake_moves_a_channel_s_shoreline_without_pouring_the_channel_into_it() {
     assert!(logs[0].2.is_none(), "the lake stood over the bed");
     let (_, _, bed) = &logs[1];
     assert!(bed.is_some(), "no channel runs over the drained bed");
+    // It is laid again as the falling lake bares each cell of the bed, not
+    // on every tick: a fall landing on the dry bank above the water names
+    // the water's edge as its shore, not the bank it landed on.
+    let mut relaid: Vec<f32> = recorded
+        .events
+        .iter()
+        .filter(|e| e.time > 180.0 && e.text.starts_with("Cleared"))
+        .map(|e| e.time)
+        .collect();
+    relaid.dedup();
+    assert!(
+        relaid.len() < 60,
+        "laid again {} times draining",
+        relaid.len()
+    );
 }
 
 #[test]
