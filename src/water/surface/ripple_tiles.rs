@@ -32,8 +32,13 @@ pub const TILE_CELLS: usize = 32;
 /// Cells in a tile.
 pub const CELLS_PER_TILE: usize = TILE_CELLS * TILE_CELLS;
 
-/// Cells along each side of a tile as drawn: the tile and a one-cell apron.
-pub const PADDED_CELLS: usize = TILE_CELLS + 2;
+/// Cells of apron around a tile as drawn: as far past its edge as the
+/// shader's slope reaches, a central difference of one cell either side of a
+/// point interpolated between cell centres.
+pub const APRON_CELLS: usize = 2;
+
+/// Cells along each side of a tile as drawn: the tile and its apron.
+pub const PADDED_CELLS: usize = TILE_CELLS + 2 * APRON_CELLS;
 
 /// Cells in a tile as drawn.
 pub const PADDED_CELLS_PER_TILE: usize = PADDED_CELLS * PADDED_CELLS;
@@ -501,26 +506,25 @@ impl RippleTiles {
     }
 
     /// A tile's heights as drawn, row-major over [`PADDED_CELLS`]²: the
-    /// tile and a one-cell apron. The apron holds an awake neighbour's
-    /// cells, so two tiles interpolate their shared edge from the same
-    /// values. Over a sleeping neighbour it holds the tile's edge mirrored
-    /// with its sign flipped, so the edge interpolates to the still surface
-    /// the coarse tile beside it draws.
+    /// tile and its apron. The apron holds an awake neighbour's cells, so
+    /// two tiles interpolate their shared edge, and take its slope, from the
+    /// same values. Over a sleeping neighbour it holds the tile's edge
+    /// mirrored with its sign flipped, so the edge interpolates to the still
+    /// surface the coarse tile beside it draws.
     pub fn write_padded(&self, key: &RippleKey, out: &mut [f32]) {
         let hood = Neighbourhood::around(&self.tiles, key);
         let n = TILE_CELLS as i32;
-        for k in -1..=n {
-            let row = (k + 1) as usize * PADDED_CELLS;
-            if (0..n).contains(&k) {
-                let tile = &hood.tiles[1][1].expect("the centre is awake").height;
-                let src = k as usize * TILE_CELLS;
-                out[row + 1..row + 1 + TILE_CELLS].copy_from_slice(&tile[src..src + TILE_CELLS]);
-                out[row] = hood.apron(-1, k);
-                out[row + PADDED_CELLS - 1] = hood.apron(n, k);
-            } else {
-                for i in -1..=n {
-                    out[row + (i + 1) as usize] = hood.apron(i, k);
-                }
+        let a = APRON_CELLS as i32;
+        let tile = &hood.tiles[1][1].expect("the centre is awake").height;
+        for k in -a..n + a {
+            let row = (k + a) as usize * PADDED_CELLS;
+            for i in -a..n + a {
+                let inside = (0..n).contains(&i) && (0..n).contains(&k);
+                out[row + (i + a) as usize] = if inside {
+                    tile[k as usize * TILE_CELLS + i as usize]
+                } else {
+                    hood.apron(i, k)
+                };
             }
         }
     }
@@ -642,26 +646,42 @@ impl<'a> Neighbourhood<'a> {
         Some(tile.height[k.rem_euclid(n) as usize * TILE_CELLS + i.rem_euclid(n) as usize])
     }
 
-    /// The height drawn at a cell next to the centre tile. A cell in an
-    /// awake tile is its own; one in a sleeping tile takes the negated mean
-    /// of its awake edge neighbours, or at a lone corner its awake diagonal.
+    /// The height drawn at a cell in the centre tile's apron. A cell in an
+    /// awake tile is its own. One in a sleeping tile is the negated mean of
+    /// its mirror images across the nearby tile edges that lie in awake
+    /// tiles, or, with none, its image across both axes at a lone corner.
     /// Only whether tiles are awake and their heights decide it, so every
     /// tile that draws the cell draws the same value.
     fn apron(&self, i: i32, k: i32) -> f32 {
         if let Some(h) = self.cell(i, k) {
             return h;
         }
-        let mean = |steps: [(i32, i32); 4]| {
-            let (sum, count) = steps
-                .iter()
-                .filter_map(|(di, dk)| self.cell(i + di, k + dk))
-                .fold((0.0, 0), |(s, c), h| (s + h, c + 1));
-            (count > 0).then(|| sum / count as f32)
-        };
-        if let Some(m) = mean([(1, 0), (-1, 0), (0, 1), (0, -1)]) {
-            return -m;
+        let (mi, mk) = (mirror(i), mirror(k));
+        let images = [mi.map(|i| (i, k)), mk.map(|k| (i, k))];
+        let (sum, count) = images
+            .into_iter()
+            .flatten()
+            .filter_map(|(i, k)| self.cell(i, k))
+            .fold((0.0, 0), |(s, c), h| (s + h, c + 1));
+        if count > 0 {
+            return -sum / count as f32;
         }
-        mean([(1, 1), (-1, 1), (1, -1), (-1, -1)]).unwrap_or(0.0)
+        mi.zip(mk).and_then(|(i, k)| self.cell(i, k)).unwrap_or(0.0)
+    }
+}
+
+/// A cell index's mirror image across the tile edge within [`APRON_CELLS`]
+/// of it, in cells from the centre tile's origin; `None` if no edge is that
+/// close.
+fn mirror(index: i32) -> Option<i32> {
+    let (n, a) = (TILE_CELLS as i32, APRON_CELLS as i32);
+    let (tile, local) = (index.div_euclid(n), index.rem_euclid(n));
+    if local < a {
+        Some(tile * n - 1 - local)
+    } else if local >= n - a {
+        Some((tile + 1) * n + (n - 1 - local))
+    } else {
+        None
     }
 }
 
@@ -802,15 +822,46 @@ mod tests {
         );
     }
 
+    /// A cell as drawn, in cells from the tile's origin; the apron lies
+    /// below 0 and from `TILE_CELLS`.
+    fn drawn(padded: &[f32], i: i32, k: i32) -> f32 {
+        let a = APRON_CELLS as i32;
+        padded[(k + a) as usize * PADDED_CELLS + (i + a) as usize]
+    }
+
     /// The height the shader interpolates on a tile's low-x edge, at row k.
     fn low_x_edge(padded: &[f32], k: usize) -> f32 {
-        0.5 * (padded[(k + 1) * PADDED_CELLS] + padded[(k + 1) * PADDED_CELLS + 1])
+        0.5 * (drawn(padded, -1, k as i32) + drawn(padded, 0, k as i32))
     }
 
     /// ... and on its high-x edge.
     fn high_x_edge(padded: &[f32], k: usize) -> f32 {
-        let row = (k + 1) * PADDED_CELLS;
-        0.5 * (padded[row + PADDED_CELLS - 2] + padded[row + PADDED_CELLS - 1])
+        let n = TILE_CELLS as i32;
+        0.5 * (drawn(padded, n - 1, k as i32) + drawn(padded, n, k as i32))
+    }
+
+    /// `rippleHeightAt` in ripple.glsl: bilinear between cell centres, at a
+    /// tile-local position, m.
+    fn shader_height(padded: &[f32], x: f32, z: f32) -> f32 {
+        let a = APRON_CELLS as i32;
+        let n = TILE_CELLS as i32;
+        let cell = |i: i32, k: i32| drawn(padded, i.clamp(-a, n + a - 1), k.clamp(-a, n + a - 1));
+        let (fx, fz) = (x / RIPPLE_CELL - 0.5, z / RIPPLE_CELL - 0.5);
+        let (cx, cz) = (fx.floor() as i32, fz.floor() as i32);
+        let (tx, tz) = (fx - cx as f32, fz - cz as f32);
+        let lerp = |p: f32, q: f32, t: f32| p + (q - p) * t;
+        let low = lerp(cell(cx, cz), cell(cx + 1, cz), tx);
+        let high = lerp(cell(cx, cz + 1), cell(cx + 1, cz + 1), tx);
+        lerp(low, high, tz)
+    }
+
+    /// `rippleGradientAt` in ripple.glsl.
+    fn shader_gradient(padded: &[f32], x: f32, z: f32) -> (f32, f32) {
+        let e = RIPPLE_CELL;
+        (
+            (shader_height(padded, x + e, z) - shader_height(padded, x - e, z)) / (2.0 * e),
+            (shader_height(padded, x, z + e) - shader_height(padded, x, z - e)) / (2.0 * e),
+        )
     }
 
     #[test]
@@ -842,6 +893,44 @@ mod tests {
     }
 
     #[test]
+    fn awake_tiles_slope_alike_across_their_shared_edge() {
+        let mut ripples = RippleTiles::new(RippleConfig::default());
+        // Off the edge, so the ring crosses it on a slope.
+        ripples.disturb(
+            BODY,
+            7.0,
+            4.0,
+            1.0,
+            Disturbance::Displacement(0.2),
+            &Everywhere,
+        );
+        for _ in 0..10 {
+            ripples.step(1.0 / 60.0, &Everywhere);
+        }
+        let (west, east) = (
+            (SpanChunkCoord { x: 0, z: 0 }, BODY),
+            (SpanChunkCoord { x: 1, z: 0 }, BODY),
+        );
+        let mut a = vec![0.0; PADDED_CELLS_PER_TILE];
+        let mut b = vec![0.0; PADDED_CELLS_PER_TILE];
+        ripples.write_padded(&west, &mut a);
+        ripples.write_padded(&east, &mut b);
+        let extent = TILE_CELLS as f32 * RIPPLE_CELL;
+        let mut steepest = 0.0f32;
+        for step in 0..=32 {
+            let z = step as f32 * extent / 32.0;
+            let (ax, az) = shader_gradient(&a, extent, z);
+            let (bx, bz) = shader_gradient(&b, 0.0, z);
+            assert!(
+                (ax - bx).abs() < 1e-6 && (az - bz).abs() < 1e-6,
+                "at z = {z}: ({ax}, {az}) vs ({bx}, {bz})"
+            );
+            steepest = steepest.max(ax.abs().max(az.abs()));
+        }
+        assert!(steepest > 1e-3, "the disturbance never reached the edge");
+    }
+
+    #[test]
     fn an_edge_beside_a_sleeping_tile_draws_still_water() {
         let mut ripples = RippleTiles::new(RippleConfig::default());
         ripples.disturb(
@@ -866,14 +955,23 @@ mod tests {
         assert_eq!(ripples.sealed_edges(&key), 0b1111);
         let mut padded = vec![0.0; PADDED_CELLS_PER_TILE];
         ripples.write_padded(&key, &mut padded);
-        assert!(padded[17 * PADDED_CELLS + PADDED_CELLS - 2].abs() > 1e-3);
-        assert!(padded[PADDED_CELLS + 1].abs() > 1e-3);
+        let n = TILE_CELLS as i32;
+        assert!(drawn(&padded, n - 1, 16).abs() > 1e-3);
+        assert!(drawn(&padded, 0, 0).abs() > 1e-3);
         for k in 0..TILE_CELLS {
             assert_eq!(high_x_edge(&padded, k), 0.0);
+            // The second apron cell mirrors the second cell in.
+            let k = k as i32;
+            assert_eq!(drawn(&padded, n + 1, k), -drawn(&padded, n - 2, k));
         }
         // The corner, where two sealed edges meet.
-        let corner = padded[0] + padded[1] + padded[PADDED_CELLS] + padded[PADDED_CELLS + 1];
-        assert_eq!(corner, 0.0);
+        for (i, k) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+            let square = drawn(&padded, -1 - i, -1 - k)
+                + drawn(&padded, i, -1 - k)
+                + drawn(&padded, -1 - i, k)
+                + drawn(&padded, i, k);
+            assert_eq!(square, 0.0, "the corner's images at ({i}, {k})");
+        }
     }
 
     #[test]
@@ -883,6 +981,7 @@ mod tests {
                 .expect("shader/ripple.glsl");
         for line in [
             format!("const int RIPPLE_CELLS = {TILE_CELLS};"),
+            format!("const int RIPPLE_APRON = {APRON_CELLS};"),
             format!("const float RIPPLE_CELL = {RIPPLE_CELL};"),
             format!("const int RIPPLE_COLUMNS = {CHUNK_COLUMNS};"),
             format!("const float RIPPLE_COLUMN = {COLUMN_SIZE};"),

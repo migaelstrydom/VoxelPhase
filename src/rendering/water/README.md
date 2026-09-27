@@ -72,8 +72,12 @@ out over the last metre of depth using the vertex's floor.
 A tile whose ripples are awake is not drawn from the coarse mesh. Instead a
 static 65 × 65 grid over the 8 m tile (`ripple.vert`) is displaced by the
 tile's ripple heights, read from a storage buffer (set 1) the CPU fills each
-frame: per awake tile, 64 × 64 heights then the floor under each of its
-16 × 16 columns, NaN where the tile's body holds no water. The fragment
+frame: per awake tile, 32 × 32 heights with a two-cell apron (36 × 36),
+then the floor under each of its 16 × 16 columns, NaN where the tile's body
+holds no water, then the floor at each of its 17 × 17 column corners. The
+apron reaches as far past an edge as the normal's central difference does,
+so two awake tiles take the same slope, not just the same height, along
+their shared edge; otherwise the crease shows in the sun's glare. The fragment
 shader discards the grid outside the body's columns. One buffer and one
 descriptor set per frame slot, both allocated once.
 

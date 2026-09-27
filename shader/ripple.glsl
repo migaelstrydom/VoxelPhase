@@ -1,12 +1,14 @@
 // Ripple tiles on the GPU: one block per awake tile in a storage buffer,
 // written by the CPU each frame. Mirrors src/water/surface/ripple_tiles.rs:
 // 32 x 32 cells of 0.25 m per 8 m tile, heights at cell centres with a
-// one-cell apron (34 x 34), then the floor under each of the tile's 16 x 16
+// two-cell apron (36 x 36), as far as rippleGradientAt reaches past an edge,
+// then the floor under each of the tile's 16 x 16
 // columns (NaN where the tile's body holds no water), then the floor at each
 // of its 17 x 17 column corners (NaN where no wet column touches it).
 
 const int RIPPLE_CELLS = 32;
-const int RIPPLE_PADDED = RIPPLE_CELLS + 2;
+const int RIPPLE_APRON = 2;
+const int RIPPLE_PADDED = RIPPLE_CELLS + 2 * RIPPLE_APRON;
 const float RIPPLE_CELL = 0.25;
 const int RIPPLE_COLUMNS = 16;
 const int RIPPLE_CORNERS = RIPPLE_COLUMNS + 1;
@@ -19,11 +21,12 @@ layout(std430, set = 1, binding = 0) readonly buffer RippleTiles {
     float rippleData[];
 };
 
-// A cell's height; -1 and RIPPLE_CELLS reach into the apron.
+// A cell's height; below 0 and from RIPPLE_CELLS reach into the apron.
 float rippleCell(int layer, int i, int k) {
-    i = clamp(i, -1, RIPPLE_CELLS);
-    k = clamp(k, -1, RIPPLE_CELLS);
-    return rippleData[layer * RIPPLE_TILE_STRIDE + (k + 1) * RIPPLE_PADDED + i + 1];
+    i = clamp(i, -RIPPLE_APRON, RIPPLE_CELLS + RIPPLE_APRON - 1);
+    k = clamp(k, -RIPPLE_APRON, RIPPLE_CELLS + RIPPLE_APRON - 1);
+    return rippleData[layer * RIPPLE_TILE_STRIDE + (k + RIPPLE_APRON) * RIPPLE_PADDED
+        + i + RIPPLE_APRON];
 }
 
 // Displacement at a tile-local position, bilinear between cell centres.
