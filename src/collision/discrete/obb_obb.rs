@@ -1011,6 +1011,8 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "wall-clock benchmark; its ~0.1 ms loops read noise, not speed, on a loaded \
+                machine. Run alone with --ignored."]
     fn sat_cache_throughput_separated_pairs() {
         // Micro-benchmark: measure cached vs uncached throughput for separated
         // pairs. Uses rotated boxes so the separating axis is NOT the first face
