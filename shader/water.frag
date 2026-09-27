@@ -87,6 +87,16 @@ vec3 proceduralNormal(vec2 pos, float scale, float strength) {
     return normalize(vec3(-dx, 1.0, -dz));
 }
 
+// Where the scene seen through the water at `screenUV` is looked up, for
+// something `opticalDepth` metres of view ray beyond the surface. Nothing
+// under 0.5 m shifts: at that depth the offset would be too small to clear
+// an object's silhouette, and would only fringe it.
+vec2 refractedLookup(vec2 screenUV, vec3 N, float opticalDepth) {
+    float refractionDepth = smoothstep(0.5, 2.0, opticalDepth) * 3.0;
+    vec2 offset = N.xz * REFRACTION_STRENGTH * refractionDepth;
+    return clamp(screenUV + offset, vec2(0.001), vec2(0.999));
+}
+
 void main() {
     // How much ground a pixel covers, taken before any fragment is discarded.
     float footprint = max(length(dFdx(fragWorldPos.xz)), length(dFdy(fragWorldPos.xz)));
@@ -152,14 +162,18 @@ void main() {
 
     // --- Screen-space refraction ---
 
-    // Offset UV by the water normal's XZ, scaled by optical depth.
-    // Uses smoothstep to suppress refraction in shallow water (< 0.5m),
-    // avoiding double-image artifacts where the offset is too small to
-    // clear an object's silhouette in the color target.
-    float refractionDepth = smoothstep(0.5, 2.0, opticalDepth) * 3.0;
-    vec2 refractionOffset = N.xz * REFRACTION_STRENGTH * refractionDepth;
-
-    vec2 refractedUV = clamp(screenUV + refractionOffset, vec2(0.001), vec2(0.999));
+    // Offset UV by the water normal's XZ. How far something under the water
+    // appears to shift depends on its own depth below the surface, not on the
+    // depth behind this pixel: a shallow object over a deep floor barely
+    // moves. A first lookup is offset by the depth behind this pixel; where it
+    // lands on something shallower, the offset is cut down to that depth and
+    // looked up again. Otherwise the floor around a shallow object reaches
+    // across onto it, and the object shows twice: in place, and refracted
+    // around itself.
+    vec2 firstUV = refractedLookup(screenUV, N, opticalDepth);
+    float firstDist = linearizeDepth(texture(depthSampler, firstUV).r, near, far);
+    float firstOpticalDepth = max(firstDist - waterDist, 0.0);
+    vec2 refractedUV = refractedLookup(screenUV, N, min(opticalDepth, firstOpticalDepth));
 
     // Reject refraction offsets that land on pixels above the water surface
     // (e.g. a character's head poking out). If the depth at the refracted UV
