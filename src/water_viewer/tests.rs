@@ -859,37 +859,53 @@ fn a_lake_rising_past_its_cap_keeps_the_river_leaving_it() {
     let scenario = find("shoreline").unwrap();
     let dt = 1.0 / 60.0;
     let times: Vec<f32> = (0..2100).map(|i| 145.0 + i as f32 * dt).collect();
-    // Each re-flood lays the network again, and the water, the weir's over
-    // the notch and the river's below it, stands where it did.
-    let mut last: Option<(usize, Vec<(Point3<f32>, Option<f32>)>)> = None;
-    let mut refloods = 0;
-    let mut moved = Vec::new();
-    run_with_captures(&scenario, RunConfig::default(), &times, |t, _, water| {
-        let count = water
+    let refloods_seen = |water: &WaterWorld| {
+        water
             .topology_log()
             .iter()
             .filter(|e| matches!(e, TopologyEdit::Reregion { .. }))
-            .count();
-        let seen = surfaces(water);
-        if let Some((before, previous)) = &last {
-            if count != *before {
-                refloods += 1;
-                for ((at, a), (_, b)) in previous.iter().zip(&seen) {
-                    let off = match (a, b) {
-                        (Some(a), Some(b)) => (a - b).abs() > 0.02,
-                        (None, None) => false,
-                        _ => true,
-                    };
-                    if off {
-                        moved.push(format!("{t:.2} s at {at:?}: {a:?} -> {b:?}"));
-                    }
-                }
-            }
-        }
-        last = Some((count, seen));
+            .count()
+    };
+    // The ticks that re-flood it. Measuring every surface on every tick costs
+    // far more than the water does, so a first run only finds them.
+    let mut counts = Vec::new();
+    run_with_captures(&scenario, RunConfig::default(), &times, |_, _, water| {
+        counts.push(refloods_seen(water));
     })
     .unwrap();
-    assert!(refloods >= 2, "{refloods} re-floods");
+    let refloods: Vec<usize> = (1..counts.len())
+        .filter(|&i| counts[i] != counts[i - 1])
+        .collect();
+    assert!(refloods.len() >= 2, "{} re-floods", refloods.len());
+    // Each re-flood lays the network again, and the water, the weir's over
+    // the notch and the river's below it, stands where it did the tick
+    // before.
+    let around: Vec<f32> = refloods
+        .iter()
+        .flat_map(|&i| [times[i - 1], times[i]])
+        .collect();
+    let mut seen = Vec::new();
+    run_with_captures(&scenario, RunConfig::default(), &around, |t, _, water| {
+        seen.push((t, refloods_seen(water), surfaces(water)));
+    })
+    .unwrap();
+    let mut moved = Vec::new();
+    for pair in seen.chunks(2) {
+        let [(_, before, previous), (t, after, now)] = pair else {
+            panic!("a re-flood was not seen with the tick before it");
+        };
+        assert_ne!(before, after, "no re-flood between the ticks at {t:.2} s");
+        for ((at, a), (_, b)) in previous.iter().zip(now) {
+            let off = match (a, b) {
+                (Some(a), Some(b)) => (a - b).abs() > 0.02,
+                (None, None) => false,
+                _ => true,
+            };
+            if off {
+                moved.push(format!("{t:.2} s at {at:?}: {a:?} -> {b:?}"));
+            }
+        }
+    }
     assert!(moved.is_empty(), "{:#?}", &moved[..moved.len().min(8)]);
 }
 
