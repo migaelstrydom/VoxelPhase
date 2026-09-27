@@ -24,6 +24,7 @@ use crate::core::vulkan_context::find_memorytype_index;
 use crate::lighting::{ActiveLight, ActiveLights, PointLight, MAX_ACTIVE_LIGHTS};
 use crate::rendering::colour::Colour;
 use crate::rendering::deletion_queue::DeletionQueue;
+use crate::rendering::mesh_source::MeshSource;
 use crate::rendering::vertex::Vertex;
 
 /// Uniform buffer object for per-frame scene data.
@@ -370,6 +371,8 @@ pub struct DrawInfo {
     pub index_count: u32,
     pub first_index: u32,
     pub vertex_offset: i32,
+    /// Which buffer pair the offsets index into.
+    pub source: MeshSource,
 }
 
 /// Manages per-frame mutable data: vertex buffer, index buffer, UBO.
@@ -616,6 +619,7 @@ impl FrameData {
             index_count: indices.len() as u32,
             first_index: self.current_index_count,
             vertex_offset: self.current_vertex_count as i32,
+            source: MeshSource::Frame,
         };
 
         // Update offsets for next mesh

@@ -19,6 +19,7 @@ use crate::rendering::debug_render::{
 use crate::rendering::material::{MaterialManager, SurfaceModulation};
 use crate::rendering::profile::{RenderProfile, RenderStage};
 use crate::rendering::renderer::Renderer;
+use crate::rendering::resident::VersionedMeshId;
 use crate::rendering::vertex::Vertex;
 use crate::resources::textures::TextureManager;
 use crate::terrain::{self, TerrainWorld};
@@ -333,8 +334,10 @@ impl<'a> System<'a> for RenderSystem {
                                 .texture()
                                 .unwrap_or(material_manager.fallback_texture());
 
-                            if let Err(e) = renderer.draw_mesh_with_texture(
+                            if let Err(e) = renderer.draw_versioned_mesh(
                                 draw_cb,
+                                VersionedMeshId::TERRAIN,
+                                terrain_manager.render_version(),
                                 terrain_manager.render_vertices(),
                                 terrain_manager.render_indices(),
                                 &identity,

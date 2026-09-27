@@ -50,6 +50,7 @@ use crate::model::Transform;
 use crate::rendering::colour::Colour;
 use crate::rendering::material::{MaterialManager, MaterialManagerBuilder, SurfaceModulation};
 use crate::rendering::renderer::Renderer;
+use crate::rendering::resident::VersionedMeshId;
 use crate::resources::manager::ResourceManager;
 use crate::resources::textures::TextureManager;
 use crate::terrain::{self, BlastConfig, TerrainWorld};
@@ -239,8 +240,10 @@ impl LevelViewer {
             .texture()
             .unwrap_or_else(|| self.material_manager.fallback_texture());
 
-        self.renderer.draw_mesh_with_texture(
+        self.renderer.draw_versioned_mesh(
             cb,
+            VersionedMeshId::TERRAIN,
+            terrain.render_version(),
             terrain.render_vertices(),
             terrain.render_indices(),
             &Matrix4::identity(),

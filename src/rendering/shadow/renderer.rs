@@ -29,6 +29,7 @@ use crate::core::error::EngineResult;
 use crate::core::vulkan_context::VulkanContext;
 use crate::rendering::frame::{DrawInfo, ShadowUniforms};
 use crate::rendering::in_flight::{FrameSlot, PerFrame};
+use crate::rendering::mesh_source::{MeshBindings, MeshSource};
 use crate::rendering::profile::{GpuSpan, GpuTimer};
 use crate::rendering::shadow::frustum::ViewFrustum;
 use crate::rendering::shadow::map::ShadowMap;
@@ -36,14 +37,12 @@ use crate::rendering::shadow::pipeline::ShadowPipeline;
 use crate::rendering::shadow::volume::{ShadowFraming, ShadowVolume};
 
 /// What every caster in a frame binds the same.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct CasterBindings {
     /// Set 0: the scene uniforms, which carry the light's matrix.
     pub scene_set: vk::DescriptorSet,
-    /// The frame's vertex buffer, holding every caster's mesh.
-    pub vertex_buffer: vk::Buffer,
-    /// The frame's index buffer, likewise.
-    pub index_buffer: vk::Buffer,
+    /// The buffer pairs the casters' meshes are in.
+    pub meshes: MeshBindings,
 }
 
 /// One mesh to draw into the map.
@@ -218,8 +217,9 @@ impl ShadowRenderer {
         }
     }
 
-    /// Record every caster: the pipeline, scene set and buffers bound once,
-    /// then a model matrix and a draw each.
+    /// Record every caster: the pipeline and scene set bound once, then a
+    /// model matrix and a draw each, rebinding the mesh buffers only where
+    /// the caster's source differs from the one before.
     fn record_casters(
         &self,
         device: &ash::Device,
@@ -242,10 +242,12 @@ impl ShadowRenderer {
                 &[bindings.scene_set],
                 &[],
             );
-            device.cmd_bind_vertex_buffers(cb, 0, &[bindings.vertex_buffer], &[0]);
-            device.cmd_bind_index_buffer(cb, bindings.index_buffer, 0, vk::IndexType::UINT32);
-
+            let mut bound: Option<MeshSource> = None;
             for caster in &self.casters {
+                if bound != Some(caster.draw.source) {
+                    bindings.meshes.of(caster.draw.source).bind(device, cb);
+                    bound = Some(caster.draw.source);
+                }
                 let model_bytes: &[u8] = std::slice::from_raw_parts(
                     caster.model.as_ptr() as *const u8,
                     std::mem::size_of::<Matrix4<f32>>(),

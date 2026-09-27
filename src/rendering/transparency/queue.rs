@@ -186,6 +186,7 @@ mod tests {
     use nalgebra::{Matrix4, Vector2, Vector4};
 
     use crate::rendering::frame::DrawInfo;
+    use crate::rendering::mesh_source::MeshSource;
     use crate::rendering::surface_buffer::SurfaceIndex;
 
     fn vertex(pos: Vector3<f32>) -> Vertex {
@@ -209,6 +210,7 @@ mod tests {
                 index_count: 3,
                 first_index: 0,
                 vertex_offset: 0,
+                source: MeshSource::Frame,
             },
             surface_index: SurfaceIndex(0),
             texture_set: vk::DescriptorSet::null(),

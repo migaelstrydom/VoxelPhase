@@ -27,14 +27,16 @@ use crate::lighting::ActiveLights;
 use crate::model::{Model, Transform};
 use crate::particles::{ParticlePool, ParticleRenderer};
 use crate::rendering::descriptors::DescriptorManager;
-use crate::rendering::frame::{LightUbo, SceneLighting, SceneUbo};
+use crate::rendering::frame::{DrawInfo, LightUbo, SceneLighting, SceneUbo};
 use crate::rendering::geometry_draw::{GeometryDraw, GeometryRecorder, SharedBindings};
 use crate::rendering::in_flight::{FrameSlot, InFlightFrame, PerFrame};
 use crate::rendering::material::{MaterialManager, SurfaceModulation, SurfaceParams};
+use crate::rendering::mesh_source::{MeshBindings, MeshBuffers};
 use crate::rendering::overlay::{OverlayGeometry, OverlayRenderer};
 use crate::rendering::pipeline::{GraphicsPipeline, GraphicsPipelineConfig};
 use crate::rendering::post::PostProcessRenderer;
 use crate::rendering::profile::{GpuSpan, GpuTimer, RenderProfile, RenderStage};
+use crate::rendering::resident::{ResidentGeometry, VersionedMeshId};
 use crate::rendering::shadow::map::SHADOW_SAMPLED_LAYOUT;
 use crate::rendering::shadow::{
     CasterBindings, ShadowMap, ShadowRenderer, ShadowVolume, ViewFrustum,
@@ -103,7 +105,7 @@ impl DrawOptions {
     ///
     /// `casts_shadow` is what the *pass* asks for; a surface that lets too
     /// much light through overrides it, because a shadow map can only store
-    /// a fully solid shadow. See `draw_mesh_internal`.
+    /// a fully solid shadow. See `submit_draw`.
     const OPAQUE: Self = Self {
         pass: DrawPass::Opaque,
         wireframe_overlay: true,
@@ -165,6 +167,10 @@ pub struct Renderer {
     frames: PerFrame<InFlightFrame>,
     /// The frame in flight being recorded.
     slot: FrameSlot,
+    /// Models and terrain, kept on the GPU between frames and uploaded only
+    /// when they change. Everything else is streamed into the frame's
+    /// buffers each time it is drawn.
+    resident: ResidentGeometry,
     /// Frames begun so far; the number of the one being recorded.
     frames_begun: u64,
     pub descriptors: Arc<DescriptorManager>,
@@ -284,6 +290,7 @@ impl Renderer {
         // Buffers, surface table, command buffer and fence for each frame in
         // flight.
         let frames = PerFrame::try_new(|_| InFlightFrame::new(&vulkan_context))?;
+        let resident = ResidentGeometry::new(Arc::clone(&vulkan_context.device));
 
         // Create descriptor manager
         let descriptors = Arc::new(DescriptorManager::new(
@@ -346,6 +353,7 @@ impl Renderer {
             targets,
             frames,
             slot: FrameSlot::default(),
+            resident,
             frames_begun: 0,
             descriptors,
             vulkan_context,
@@ -410,6 +418,7 @@ impl Renderer {
         // and whatever was retired while it was in flight freed.
         self.descriptors.begin_frame();
         self.frames[slot].rewind();
+        self.resident.begin_frame(self.frames_begun);
         // Must be rewound with the buffers it indexes into: a held-over entry
         // would point at geometry that is about to be overwritten.
         self.transparent_queue.begin_frame();
@@ -586,18 +595,23 @@ impl Renderer {
 
     /// Draw a complete model with per-part transforms applied.
     ///
-    /// This iterates through all model parts and draws each primitive,
-    /// applying the part's local transform combined with the world transform.
+    /// The model's meshes are resident: uploaded the first time this `Arc`
+    /// is drawn, and drawn from the GPU's copy every time after, until the
+    /// last `Arc` to it is dropped. A model that changes shape — a compound
+    /// losing a piece — is a new `Arc`, and so a new upload.
     pub fn draw_model(
         &mut self,
         cb: vk::CommandBuffer,
-        model: &Model,
+        model: &Arc<Model>,
         world_transform: &Matrix4<f32>,
         part_transforms: &[Transform],
         material_manager: &MaterialManager,
         texture_manager: &TextureManager,
         modulation: SurfaceModulation,
     ) -> EngineResult<()> {
+        let resident = self.resident.model(model)?.to_vec();
+        let mut resident = resident.into_iter();
+
         for (part_idx, part) in model.parts.iter().enumerate() {
             // Get the animated/modified transform for this part
             let part_transform = if part_idx < part_transforms.len() {
@@ -611,24 +625,65 @@ impl Renderer {
 
             // Draw each primitive in this part
             for primitive in &part.primitives {
+                let Some(uploaded) = resident.next() else {
+                    break;
+                };
+                if uploaded.is_empty() {
+                    continue;
+                }
                 let texture = material_manager.get_effective_texture(primitive.material);
                 let surface = material_manager
                     .get_surface_params(primitive.material)
                     .modulated(modulation);
 
-                self.draw_mesh_with_texture(
+                self.submit_draw(
                     cb,
-                    &primitive.vertices,
-                    &primitive.indices,
+                    uploaded.draw_info(),
+                    || MeshBounds::of(&primitive.vertices),
                     &final_transform,
                     texture,
                     surface,
                     texture_manager,
+                    DrawOptions::OPAQUE,
                 )?;
             }
         }
 
         Ok(())
+    }
+
+    /// Draw a mesh whose owner publishes a version that changes whenever the
+    /// mesh does, such as the terrain.
+    ///
+    /// Uploaded when `version` differs from the one resident under `id`, and
+    /// drawn from the GPU's copy otherwise, so the vertices are only read on
+    /// the frames they changed.
+    pub fn draw_versioned_mesh(
+        &mut self,
+        cb: vk::CommandBuffer,
+        id: VersionedMeshId,
+        version: u64,
+        vertices: &[Vertex],
+        indices: &[u32],
+        model: &Matrix4<f32>,
+        texture: &TextureHandle,
+        surface: SurfaceParams,
+        texture_manager: &TextureManager,
+    ) -> EngineResult<()> {
+        if vertices.is_empty() || indices.is_empty() {
+            return Ok(());
+        }
+        let uploaded = self.resident.versioned(id, version, vertices, indices)?;
+        self.submit_draw(
+            cb,
+            uploaded.draw_info(),
+            || MeshBounds::of(vertices),
+            model,
+            texture,
+            surface,
+            texture_manager,
+            DrawOptions::OPAQUE,
+        )
     }
 
     /// Draw a procedural mesh (like a skeleton character or terrain chunk) using vertex colours.
@@ -712,15 +767,11 @@ impl Renderer {
         )
     }
 
-    /// Commit a mesh to the frame, and hold its draw back or record it.
+    /// Stream a mesh into the frame's buffers, then draw it.
     ///
-    /// Everything a draw needs is committed here — the geometry into the
-    /// frame's buffers, the shading parameters into its surface table, the
-    /// caster into the shadow pass. Scene draws are then held back and
-    /// recorded together at the end of the opaque pass: blended ones because
-    /// their order depends on what else the frame contains, opaque ones so a
-    /// run of them shares one set of bindings. Overlay draws land after the
-    /// scene is resolved and are recorded where they are issued.
+    /// For geometry that changes from one frame to the next. Anything that
+    /// holds still between frames belongs in the resident arena instead —
+    /// see [`Self::draw_model`] and [`Self::draw_versioned_mesh`].
     fn draw_mesh_internal(
         &mut self,
         cb: vk::CommandBuffer,
@@ -736,18 +787,53 @@ impl Renderer {
             return Ok(());
         }
 
-        // Append mesh data to frame buffers and get draw offsets
-        let frame = self.frame_mut();
-        let buffer_sizes = frame.data.mesh_buffer_sizes();
-        let draw_info = frame.data.append_mesh_data(vertices, indices)?;
-        let grew = frame.data.mesh_buffer_sizes() != buffer_sizes;
-
-        // Park this draw's shading parameters in the frame's surface table.
-        let surface_index = frame.surfaces.push(surface.to_gpu());
+        let data = &mut self.frame_mut().data;
+        let buffer_sizes = data.mesh_buffer_sizes();
+        let draw_info = data.append_mesh_data(vertices, indices)?;
+        let grew = data.mesh_buffer_sizes() != buffer_sizes;
         self.profile.counters.record_upload(
             std::mem::size_of_val(vertices) + std::mem::size_of_val(indices),
             grew,
         );
+
+        self.submit_draw(
+            cb,
+            draw_info,
+            || MeshBounds::of(vertices),
+            model,
+            texture,
+            surface,
+            texture_manager,
+            options,
+        )
+    }
+
+    /// Draw geometry already in a buffer, and hold the draw back or record
+    /// it.
+    ///
+    /// Everything else a draw needs is committed here — the shading
+    /// parameters into the frame's surface table, the caster into the shadow
+    /// pass. Scene draws are then held back and recorded together at the end
+    /// of the opaque pass: blended ones because their order depends on what
+    /// else the frame contains, opaque ones so a run of them shares one set
+    /// of bindings. Overlay draws land after the scene is resolved and are
+    /// recorded where they are issued.
+    ///
+    /// `bounds` is only asked for when the draw turns out to be blended,
+    /// which is the one case that sorts by it.
+    fn submit_draw(
+        &mut self,
+        cb: vk::CommandBuffer,
+        draw_info: DrawInfo,
+        bounds: impl FnOnce() -> MeshBounds,
+        model: &Matrix4<f32>,
+        texture: &TextureHandle,
+        surface: SurfaceParams,
+        texture_manager: &TextureManager,
+        options: DrawOptions,
+    ) -> EngineResult<()> {
+        // Park this draw's shading parameters in the frame's surface table.
+        let surface_index = self.frame_mut().surfaces.push(surface.to_gpu());
 
         // A shadow map stores one depth per texel and has no way to express
         // partial occlusion, so a transmissive caster can only throw a fully
@@ -783,15 +869,13 @@ impl Renderer {
             other => other,
         };
 
-        self.profile.counters.triangles += (indices.len() / 3) as u64;
+        self.profile.counters.triangles += (draw_info.index_count / 3) as u64;
 
         match pass {
             DrawPass::SceneBlended => {
                 self.profile.counters.blended_draws += 1;
-                self.transparent_queue.push(
-                    BlendedDraw::new(geometry)
-                        .sorted_from(&self.camera_pos, &MeshBounds::of(vertices)),
-                );
+                self.transparent_queue
+                    .push(BlendedDraw::new(geometry).sorted_from(&self.camera_pos, &bounds()));
             }
             DrawPass::Opaque => {
                 self.profile.counters.opaque_draws += 1;
@@ -836,13 +920,25 @@ impl Renderer {
         }
     }
 
-    /// A recorder of geometry draws into `cb`, over this frame's bindings.
+    /// The buffer pairs this frame's draws read from, as they stand now.
     ///
-    /// The frame's mesh buffers are read when the recorder is made, so one
-    /// made after the last append binds buffers that hold every mesh — a
-    /// buffer that grows carries what it held across (see `FrameData`).
-    fn geometry_recorder(&self, cb: vk::CommandBuffer) -> GeometryRecorder<'_> {
+    /// Read when the draws are recorded, not when they are issued, so bindings
+    /// taken after the last mesh is committed name buffers that hold every
+    /// mesh — a buffer that grows carries what it held across (see
+    /// `FrameData` and `MeshArena`).
+    fn mesh_bindings(&self) -> MeshBindings {
         let data = &self.frame().data;
+        MeshBindings {
+            frame: MeshBuffers {
+                vertex: data.vertex_buffer.buffer,
+                index: data.index_buffer.buffer,
+            },
+            resident: self.resident.buffers(),
+        }
+    }
+
+    /// A recorder of geometry draws into `cb`, over this frame's bindings.
+    fn geometry_recorder(&self, cb: vk::CommandBuffer) -> GeometryRecorder<'_> {
         GeometryRecorder::new(
             self.vulkan_context.device(),
             cb,
@@ -850,8 +946,7 @@ impl Renderer {
             SharedBindings {
                 extent: self.targets.extent,
                 scene_set: self.descriptors.scene_set(self.slot),
-                vertex_buffer: data.vertex_buffer.buffer,
-                index_buffer: data.index_buffer.buffer,
+                meshes: self.mesh_bindings(),
             },
         )
     }
@@ -1168,6 +1263,9 @@ impl Renderer {
     /// its slot and published once the slot's fence is next waited on.
     pub fn end_frame(&mut self, cb: vk::CommandBuffer, image_index: u32) -> EngineResult<()> {
         let result = self.submit_frame(cb, image_index);
+        let uploaded = self.resident.take_tally();
+        self.profile.counters.uploaded_mesh_bytes += uploaded.bytes;
+        self.profile.counters.buffer_growths += uploaded.growths;
         let profile = std::mem::take(&mut self.profile);
         self.frame_mut().park(profile);
         result
@@ -1194,6 +1292,7 @@ impl Renderer {
             .apply_bloom(cb, image_index, self.targets.extent);
         self.timer().end(cb, GpuSpan::Bloom);
 
+        let meshes = self.mesh_bindings();
         let in_flight = &self.frames[self.slot];
         in_flight.command_buffer.end()?;
 
@@ -1204,8 +1303,7 @@ impl Renderer {
             &in_flight.timer,
             CasterBindings {
                 scene_set: self.descriptors.scene_set(self.slot),
-                vertex_buffer: in_flight.data.vertex_buffer.buffer,
-                index_buffer: in_flight.data.index_buffer.buffer,
+                meshes,
             },
         )?;
 

@@ -19,10 +19,12 @@ pub struct RenderCounters {
     pub shadow_casters: u32,
     /// Particles sorted, built and drawn.
     pub particles: u32,
-    /// Vertex and index bytes copied into the frame's mesh buffers.
+    /// Vertex and index bytes copied into a mesh buffer: streamed into the
+    /// frame's, or uploaded into the resident arena because a model or the
+    /// terrain was new or had changed.
     pub uploaded_mesh_bytes: u64,
-    /// Times a mesh buffer ran out of room mid-frame and was reallocated,
-    /// carrying everything already written across.
+    /// Times a mesh buffer ran out of room and was reallocated, carrying
+    /// everything already written across.
     pub buffer_growths: u32,
 }
 

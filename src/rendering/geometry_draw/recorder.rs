@@ -1,27 +1,28 @@
 use ash::vk;
 
 use crate::rendering::geometry_draw::{GeometryDraw, GeometryPush};
+use crate::rendering::mesh_source::{MeshBindings, MeshSource};
 use crate::rendering::renderer::PUSH_CONSTANT_STAGES;
 
-/// What every geometry draw in a frame binds the same: the viewport, the scene
-/// descriptor set and the frame's mesh buffers.
-#[derive(Clone, Copy, Debug)]
+/// What every geometry draw in a frame binds the same: the viewport and the
+/// scene descriptor set, and the buffer pairs its meshes come from.
+#[derive(Clone, Debug)]
 pub struct SharedBindings {
     /// The extent the viewport and scissor cover.
     pub extent: vk::Extent2D,
     /// Set 0: scene uniforms, lights, surface table, shadow map.
     pub scene_set: vk::DescriptorSet,
-    /// The frame's vertex buffer, holding every mesh appended so far.
-    pub vertex_buffer: vk::Buffer,
-    /// The frame's index buffer, likewise.
-    pub index_buffer: vk::Buffer,
+    /// The frame's streamed buffers and the resident arena's blocks, as they
+    /// stand once the frame's last mesh is committed.
+    pub meshes: MeshBindings,
 }
 
 /// Records geometry draws into one command buffer, binding only what differs
 /// from the draw before.
 ///
 /// ```text
-///   draw ──▶ shared bound? ──no──▶ viewport, scene set, mesh buffers
+///   draw ──▶ shared bound? ──no──▶ viewport, scene set
+///        mesh source same? ──no──▶ vertex and index buffers
 ///             pipeline same? ──no──▶ bind pipeline
 ///          texture set same? ──no──▶ bind set 1
 ///           push constants same? ──no──▶ push
@@ -41,6 +42,8 @@ pub struct GeometryRecorder<'a> {
     shared: SharedBindings,
     /// Whether `shared` is bound.
     shared_bound: bool,
+    /// The buffer pair last bound.
+    source: Option<MeshSource>,
     /// The pipeline last bound.
     pipeline: Option<vk::Pipeline>,
     /// The texture set last bound to set 1.
@@ -63,6 +66,7 @@ impl<'a> GeometryRecorder<'a> {
             layout,
             shared,
             shared_bound: false,
+            source: None,
             pipeline: None,
             texture_set: None,
             pushed: None,
@@ -72,6 +76,7 @@ impl<'a> GeometryRecorder<'a> {
     /// Record `draw` through `pipeline`.
     pub fn draw(&mut self, pipeline: vk::Pipeline, draw: &GeometryDraw) {
         self.bind_shared();
+        self.bind_mesh_source(draw.draw.source);
         self.bind_pipeline(pipeline);
         self.bind_texture_set(draw.texture_set);
         self.push(draw.push());
@@ -101,6 +106,7 @@ impl<'a> GeometryRecorder<'a> {
     /// Something else recorded into the command buffer: forget what is bound.
     pub fn interrupted(&mut self) {
         self.shared_bound = false;
+        self.source = None;
         self.pipeline = None;
         self.texture_set = None;
         self.pushed = None;
@@ -110,7 +116,7 @@ impl<'a> GeometryRecorder<'a> {
         if self.shared_bound {
             return;
         }
-        let shared = self.shared;
+        let shared = &self.shared;
         let viewport = vk::Viewport {
             x: 0.0,
             y: 0.0,
@@ -131,16 +137,16 @@ impl<'a> GeometryRecorder<'a> {
                 &[shared.scene_set],
                 &[],
             );
-            self.device
-                .cmd_bind_vertex_buffers(self.cb, 0, &[shared.vertex_buffer], &[0]);
-            self.device.cmd_bind_index_buffer(
-                self.cb,
-                shared.index_buffer,
-                0,
-                vk::IndexType::UINT32,
-            );
         }
         self.shared_bound = true;
+    }
+
+    fn bind_mesh_source(&mut self, source: MeshSource) {
+        if self.source == Some(source) {
+            return;
+        }
+        self.shared.meshes.of(source).bind(self.device, self.cb);
+        self.source = Some(source);
     }
 
     fn bind_pipeline(&mut self, pipeline: vk::Pipeline) {

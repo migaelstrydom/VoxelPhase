@@ -29,6 +29,7 @@
 use nalgebra::{Point3, Vector3};
 use rustc_hash::FxHashMap;
 use std::borrow::Cow;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use super::adjacency::{AdjacencyTimings, DefectiveEdge};
@@ -130,6 +131,12 @@ pub struct TerrainChunkId {
     pub coord: ChunkCoord,
 }
 
+/// Hands out render buffer versions, unique across every terrain world.
+fn next_render_version() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    NEXT.fetch_add(1, Ordering::Relaxed)
+}
+
 /// A level's terrain: every placed segment, and the queries that span them.
 pub struct TerrainWorld {
     /// Placed segments, in declaration order. The first is the placement root.
@@ -155,6 +162,12 @@ pub struct TerrainWorld {
     /// for the measurement that decides when.
     render_vertices: Vec<Vertex>,
     render_indices: Vec<u32>,
+
+    /// Changes whenever the render buffers are rebuilt, so a renderer that
+    /// keeps its own copy knows when to refresh it. Drawn from one counter
+    /// across every `TerrainWorld`, so a level loaded after another can never
+    /// reuse a version the renderer already holds.
+    render_version: u64,
 
     /// Optional noise texture for terrain surface variation.
     texture: Option<TextureHandle>,
@@ -215,6 +228,7 @@ impl TerrainWorld {
             pending_changes: Vec::new(),
             render_vertices: Vec::new(),
             render_indices: Vec::new(),
+            render_version: next_render_version(),
             texture: None,
             bounds,
             last_update: None,
@@ -353,6 +367,7 @@ impl TerrainWorld {
         let mut timings = ConcatTimings::default();
         self.render_vertices.clear();
         self.render_indices.clear();
+        self.render_version = next_render_version();
 
         // Sized up front, with slack, from the stats each segment refreshed
         // while remeshing.
@@ -647,6 +662,12 @@ impl TerrainWorld {
     /// Get render indices.
     pub fn render_indices(&self) -> &[u32] {
         &self.render_indices
+    }
+
+    /// The version of the render buffers: equal between two calls exactly
+    /// when the buffers were not rebuilt in between.
+    pub fn render_version(&self) -> u64 {
+        self.render_version
     }
 
     /// Get the terrain texture handle, if set.
