@@ -718,7 +718,7 @@ mod tests {
 
     #[test]
     fn scene_ubo_matches_the_glsl_block() {
-        // The build consumes pre-compiled .spv and never reads the GLSL, so a
+        // glslc checks the GLSL only against itself, never against Rust, so a
         // member added on one side and not the other produces no error — every
         // field past the mismatch silently reads the wrong bytes. Both sides
         // are all-vec4-aligned by construction, so comparing the std140 size
@@ -754,8 +754,7 @@ mod tests {
             declared,
             mem::size_of::<SceneUbo>(),
             "shader/scene.glsl's SceneUbo block is {} bytes but Rust's is {}. Bring them back \
-             into step, then recompile the shaders (see CLAUDE.md) — the .spv in the tree is \
-             stale until you do.",
+             into step.",
             declared,
             mem::size_of::<SceneUbo>()
         );
@@ -866,7 +865,7 @@ mod tests {
 
     #[test]
     fn glsl_light_count_matches_the_rust_constant() {
-        // The build consumes pre-compiled .spv and never reads the GLSL, so
+        // glslc checks the GLSL only against itself, never against Rust, so
         // nothing else would catch a drift here. A mismatch silently corrupts
         // the tail of the light array at runtime.
         let source = include_str!("../../shader/lights.glsl");
@@ -891,8 +890,7 @@ mod tests {
         assert_eq!(
             declared, MAX_ACTIVE_LIGHTS,
             "shader/lights.glsl declares MAX_ACTIVE_LIGHTS = {} but Rust has {}. \
-             Update shader/lights.glsl to match, then recompile the shaders \
-             (see CLAUDE.md) — the .spv in the tree is stale until you do.",
+             Update shader/lights.glsl to match.",
             declared, MAX_ACTIVE_LIGHTS
         );
     }

@@ -10,44 +10,50 @@ use ash::{util::read_spv, vk};
 use crate::core::device::ManagedDevice;
 use crate::core::error::{EngineError, EngineResult, ShaderStage};
 
+/// Includes the SPIR-V that `build.rs` compiled from `shader/<source>`.
+#[macro_export]
+macro_rules! embedded_spirv {
+    ($source:literal) => {
+        include_bytes!(concat!(env!("OUT_DIR"), "/shader/", $source, ".spv"))
+    };
+}
+
 /// Embedded shader bytecode.
 mod bytecode {
     /// Main 3D pipeline shaders
-    pub const MAIN_VERTEX: &[u8] = include_bytes!("../../shader/vert.spv");
-    pub const MAIN_FRAGMENT: &[u8] = include_bytes!("../../shader/frag.spv");
+    pub const MAIN_VERTEX: &[u8] = embedded_spirv!("triangle.vert");
+    pub const MAIN_FRAGMENT: &[u8] = embedded_spirv!("triangle.frag");
 
     /// Overlay/UI pipeline shaders
-    pub const OVERLAY_VERTEX: &[u8] = include_bytes!("../../shader/overlay.vert.spv");
-    pub const OVERLAY_FRAGMENT: &[u8] = include_bytes!("../../shader/overlay.frag.spv");
+    pub const OVERLAY_VERTEX: &[u8] = embedded_spirv!("overlay.vert");
+    pub const OVERLAY_FRAGMENT: &[u8] = embedded_spirv!("overlay.frag");
 
     /// Particle system shaders
-    pub const PARTICLE_VERTEX: &[u8] = include_bytes!("../../shader/particle.vert.spv");
-    pub const PARTICLE_FRAGMENT: &[u8] = include_bytes!("../../shader/particle.frag.spv");
+    pub const PARTICLE_VERTEX: &[u8] = embedded_spirv!("particle.vert");
+    pub const PARTICLE_FRAGMENT: &[u8] = embedded_spirv!("particle.frag");
 
     /// Sun shadow map pass (depth only)
-    pub const SHADOW_VERTEX: &[u8] = include_bytes!("../../shader/shadow.vert.spv");
-    pub const SHADOW_FRAGMENT: &[u8] = include_bytes!("../../shader/shadow.frag.spv");
+    pub const SHADOW_VERTEX: &[u8] = embedded_spirv!("shadow.vert");
+    pub const SHADOW_FRAGMENT: &[u8] = embedded_spirv!("shadow.frag");
 
     /// Sky rendering shaders
-    pub const SKY_VERTEX: &[u8] = include_bytes!("../../shader/sky.vert.spv");
-    pub const SKY_FRAGMENT: &[u8] = include_bytes!("../../shader/sky.frag.spv");
+    pub const SKY_VERTEX: &[u8] = embedded_spirv!("sky.vert");
+    pub const SKY_FRAGMENT: &[u8] = embedded_spirv!("sky.frag");
 
     /// Water rendering shaders
-    pub const WATER_VERTEX: &[u8] = include_bytes!("../../shader/water.vert.spv");
-    pub const WATER_FRAGMENT: &[u8] = include_bytes!("../../shader/water.frag.spv");
-    pub const RIPPLE_VERTEX: &[u8] = include_bytes!("../../shader/ripple.vert.spv");
-    pub const RIVER_VERTEX: &[u8] = include_bytes!("../../shader/river.vert.spv");
-    pub const FALL_VERTEX: &[u8] = include_bytes!("../../shader/fall.vert.spv");
-    pub const FALL_FRAGMENT: &[u8] = include_bytes!("../../shader/fall.frag.spv");
+    pub const WATER_VERTEX: &[u8] = embedded_spirv!("water.vert");
+    pub const WATER_FRAGMENT: &[u8] = embedded_spirv!("water.frag");
+    pub const RIPPLE_VERTEX: &[u8] = embedded_spirv!("ripple.vert");
+    pub const RIVER_VERTEX: &[u8] = embedded_spirv!("river.vert");
+    pub const FALL_VERTEX: &[u8] = embedded_spirv!("fall.vert");
+    pub const FALL_FRAGMENT: &[u8] = embedded_spirv!("fall.frag");
 
     /// Post-processing shaders (HDR resolve, bloom)
-    pub const POST_FULLSCREEN_VERTEX: &[u8] =
-        include_bytes!("../../shader/post/fullscreen.vert.spv");
-    pub const POST_BRIGHT_PASS: &[u8] = include_bytes!("../../shader/post/bright_pass.frag.spv");
-    pub const POST_BLUR: &[u8] = include_bytes!("../../shader/post/blur.frag.spv");
-    pub const POST_COMPOSITE: &[u8] = include_bytes!("../../shader/post/composite.frag.spv");
-    pub const POST_BLOOM_OVERLAY: &[u8] =
-        include_bytes!("../../shader/post/bloom_overlay.frag.spv");
+    pub const POST_FULLSCREEN_VERTEX: &[u8] = embedded_spirv!("post/fullscreen.vert");
+    pub const POST_BRIGHT_PASS: &[u8] = embedded_spirv!("post/bright_pass.frag");
+    pub const POST_BLUR: &[u8] = embedded_spirv!("post/blur.frag");
+    pub const POST_COMPOSITE: &[u8] = embedded_spirv!("post/composite.frag");
+    pub const POST_BLOOM_OVERLAY: &[u8] = embedded_spirv!("post/bloom_overlay.frag");
 }
 
 /// Centralized shader loading and management.

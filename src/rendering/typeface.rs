@@ -4,4 +4,4 @@
 //! rasterise it into an atlas, and engravings cut it into a surface.
 
 /// JetBrains Mono Regular, as TrueType.
-pub const JETBRAINS_MONO: &[u8] = include_bytes!("../../data/JetBrainsMono-Regular.ttf");
+pub const JETBRAINS_MONO: &[u8] = include_bytes!("../../assets/fonts/JetBrainsMono-Regular.ttf");

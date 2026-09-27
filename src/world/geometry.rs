@@ -1,7 +1,5 @@
 use nalgebra::{Vector2, Vector3};
 use std::collections::HashMap;
-use std::fs;
-use std::path::Path;
 
 use crate::core::error::{EngineError, EngineResult};
 use crate::model::{MeshPrimitive, Model, ModelPart};
@@ -459,17 +457,5 @@ impl LandscapeLoader {
             indices: final_indices,
             material: self.material,
         }])]))
-    }
-
-    pub fn load_ripple_obj(&self) -> EngineResult<Model> {
-        let obj_path_str = "data/ripple.obj";
-        let obj_path = Path::new(obj_path_str);
-
-        let obj_data = fs::read_to_string(obj_path).map_err(|e| EngineError::Io {
-            path: obj_path_str.to_string(),
-            reason: format!("Failed to read OBJ file: {}", e),
-        })?;
-
-        self.from_obj_string(&obj_data, obj_path_str)
     }
 }

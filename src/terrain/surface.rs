@@ -42,8 +42,8 @@
 //! | Specular anti-aliasing strength and ceiling | `shader/lighting.glsl` | Applies to every surface in the game, not just terrain. |
 //! | Material colour, and the toughness-to-hardness curve | `src/terrain/voxel.rs` | Material identity, which destruction reads too. A renderer must not be the thing that defines what rock *is*. |
 //!
-//! Changing anything in the two shader files needs `glslc` re-run; see
-//! CLAUDE.md for the command.
+//! Both shader files are compiled by `build.rs`, so a change to them takes
+//! effect on the next build.
 
 use crate::core::error::EngineResult;
 use crate::rendering::material::SurfaceParams;

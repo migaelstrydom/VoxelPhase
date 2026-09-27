@@ -1,7 +1,7 @@
 .vscode
 .cargo
 /target
-shader/**/*.spv
-data/
 .venv/
 scratch/
+.claude/
+CLAUDE.md

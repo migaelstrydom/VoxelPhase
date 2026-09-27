@@ -380,12 +380,12 @@ New shaders in `shader/fire/`:
 
 Compilation commands to add to CLAUDE.md:
 ```bash
-~/software/VulkanSDK/1.4.309.0/macOS/bin/glslc shader/fire/advect.comp -o shader/fire/advect.comp.spv
-~/software/VulkanSDK/1.4.309.0/macOS/bin/glslc shader/fire/forces.comp -o shader/fire/forces.comp.spv
-~/software/VulkanSDK/1.4.309.0/macOS/bin/glslc shader/fire/pressure.comp -o shader/fire/pressure.comp.spv
-~/software/VulkanSDK/1.4.309.0/macOS/bin/glslc shader/fire/correct.comp -o shader/fire/correct.comp.spv
-~/software/VulkanSDK/1.4.309.0/macOS/bin/glslc shader/fire/fire.vert -o shader/fire/fire.vert.spv
-~/software/VulkanSDK/1.4.309.0/macOS/bin/glslc shader/fire/fire.frag -o shader/fire/fire.frag.spv
+glslc shader/fire/advect.comp -o shader/fire/advect.comp.spv
+glslc shader/fire/forces.comp -o shader/fire/forces.comp.spv
+glslc shader/fire/pressure.comp -o shader/fire/pressure.comp.spv
+glslc shader/fire/correct.comp -o shader/fire/correct.comp.spv
+glslc shader/fire/fire.vert -o shader/fire/fire.vert.spv
+glslc shader/fire/fire.frag -o shader/fire/fire.frag.spv
 ```
 
 ## 7. Performance Budget

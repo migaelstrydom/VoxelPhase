@@ -19,8 +19,10 @@ use super::volume::FireVolume;
 
 /// Embedded shader bytecode for the raymarching graphics pipeline.
 mod bytecode {
-    pub const FIRE_VERTEX: &[u8] = include_bytes!("../../shader/fire/fire.vert.spv");
-    pub const FIRE_FRAGMENT: &[u8] = include_bytes!("../../shader/fire/fire.frag.spv");
+    use crate::embedded_spirv;
+
+    pub const FIRE_VERTEX: &[u8] = embedded_spirv!("fire/fire.vert");
+    pub const FIRE_FRAGMENT: &[u8] = embedded_spirv!("fire/fire.frag");
 }
 
 /// Maximum number of fire volumes that can be rendered simultaneously.

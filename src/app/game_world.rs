@@ -51,14 +51,6 @@ impl<'a, 'b> GameWorld<'a, 'b> {
         // Create materials: grenade, house pool, and level-specific box materials
         let mut material_builder = MaterialManagerBuilder::new();
 
-        let _eye_texture =
-            texture_manager
-                .load_texture("data/eye.bmp")
-                .map_err(|e| EngineError::Mesh {
-                    path: Some("eye.bmp".to_string()),
-                    reason: format!("Failed to load eye texture: {}", e),
-                })?;
-
         let fallback_white = texture_manager
             .create_solid_colour(Colour::WHITE)
             .map_err(|e| EngineError::Mesh {

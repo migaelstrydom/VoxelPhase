@@ -3,6 +3,7 @@ name = "voxel_phase"
 version = "0.1.0"
 edition = "2021"
 default-run = "voxel_phase"
+license = "MIT OR Apache-2.0"
 
 [dependencies]
 log = "0.4.21"

@@ -17,10 +17,12 @@ use super::volume::FireVolume;
 
 /// Embedded compute shader bytecode.
 mod bytecode {
-    pub const ADVECT: &[u8] = include_bytes!("../../shader/fire/advect.comp.spv");
-    pub const FORCES: &[u8] = include_bytes!("../../shader/fire/forces.comp.spv");
-    pub const PRESSURE: &[u8] = include_bytes!("../../shader/fire/pressure.comp.spv");
-    pub const CORRECT: &[u8] = include_bytes!("../../shader/fire/correct.comp.spv");
+    use crate::embedded_spirv;
+
+    pub const ADVECT: &[u8] = embedded_spirv!("fire/advect.comp");
+    pub const FORCES: &[u8] = embedded_spirv!("fire/forces.comp");
+    pub const PRESSURE: &[u8] = embedded_spirv!("fire/pressure.comp");
+    pub const CORRECT: &[u8] = embedded_spirv!("fire/correct.comp");
 }
 
 /// Number of Jacobi iterations for pressure projection.
