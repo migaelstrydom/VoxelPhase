@@ -132,20 +132,17 @@ impl VisualBench {
             )?;
         }
 
-        // Particles are blended scene surfaces, submitted before the scene
-        // pass closes so they are sorted in with the blended meshes — the same
-        // place and the same order as in a level.
+        // Water and particles are drawn in the scene pass, submitted before it
+        // closes, the water first — the same place and the same order as in a
+        // level.
+        if let Some(pool) = &shot.water {
+            renderer.submit_water(pool, &view, &projection, &camera_pos, WATER_TIME)?;
+        }
         if let Some(particles) = &shot.particles {
             renderer.submit_particles(particles, &view, &projection)?;
         }
 
         renderer.begin_transparent_pass(cb, image_index);
-
-        // In the transparent pass, against the depth the scene left behind —
-        // the same place and the same order as in a level.
-        if let Some(pool) = &shot.water {
-            renderer.render_water(cb, pool, &view, &projection, &camera_pos, WATER_TIME)?;
-        }
 
         renderer.end_frame(cb, image_index)?;
 

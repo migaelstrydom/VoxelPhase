@@ -3,7 +3,6 @@
 #extension GL_ARB_shading_language_420pack : enable
 #extension GL_GOOGLE_include_directive : require
 
-#include "tonemap.glsl"
 #include "ripple.glsl"
 #include "swell.glsl"
 
@@ -26,17 +25,18 @@ layout(location = 6) flat in vec2 fragWetRange;
 // clock, unused); zero amplitude where there is none.
 layout(location = 7) in vec4 fragSwell;
 
-// Opaque color target (sampled at offset UVs for refraction)
+// The scene beyond the water, copied before the water is drawn (sampled at
+// offset UVs for refraction)
 layout(set = 0, binding = 0) uniform sampler2D colorSampler;
 
-// Depth buffer (sampled at both current and refracted UVs)
+// Its depth, copied with it (sampled at both current and refracted UVs)
 layout(set = 0, binding = 1) uniform sampler2D depthSampler;
 
 layout(push_constant) uniform FragPushConstants {
     layout(offset = 160) vec4 cameraPos;
     layout(offset = 176) vec4 sunDir;
     layout(offset = 192) vec4 projParams;    // (near, far, time, unused)
-    layout(offset = 208) vec4 screenParams;  // (width, height, hue preservation, exposure)
+    layout(offset = 208) vec4 screenParams;  // (width, height, unused, unused)
 } fpc;
 
 layout(location = 0) out vec4 outColor;
@@ -224,10 +224,7 @@ void main() {
     float foamFactor = max(shoreFoam, whiteWater);
     color = mix(color, vec3(0.9, 0.95, 1.0), foamFactor * 0.6);
 
-    // The water pass draws onto the swapchain, which already holds the
-    // tonemapped scene, but `colorSampler` is the raw HDR scene target. Apply
-    // the same exposure and curve the composite pass used, or refracted terrain
-    // resolves differently from the terrain beside it and the water reads as a
-    // brightness seam rather than a surface.
-    outColor = vec4(tonemapScene(color * fpc.screenParams.w, fpc.screenParams.z), 1.0);
+    // Scene radiance, like `colorSampler`: the water is drawn into the HDR
+    // scene target and resolved with everything around it.
+    outColor = vec4(color, 1.0);
 }

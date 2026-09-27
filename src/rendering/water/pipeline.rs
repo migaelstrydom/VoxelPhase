@@ -4,9 +4,9 @@
 //! the coarse surface (a quad per column), the fine surface of an awake
 //! ripple tile (a static grid displaced from the ripple storage buffer) and a
 //! reach's surface. The fourth draws a fall's sheet with a fragment shader of
-//! its own. All depth-test against the opaque scene without writing depth,
-//! read that depth for volumetric tint, and sample the opaque colour target
-//! at offset UVs for refraction.
+//! its own. All are drawn in the HDR scene pass and depth-test against it
+//! without writing depth, read the refraction copy's depth for volumetric
+//! tint, and sample its colour at offset UVs for refraction.
 
 use std::sync::Arc;
 
@@ -35,8 +35,8 @@ pub const FRAGMENT_PUSH_OFFSET: u32 = BODY_PUSH_OFFSET + BODY_PUSH_SIZE;
 /// - Depth test enabled (water occluded by terrain)
 /// - Depth write disabled (terrain behind water still visible through alpha)
 /// - No backface culling (water visible from both sides)
-/// - Input attachment for reading the opaque depth buffer (volumetric depth)
-/// - Combined image sampler for the opaque color target (screen-space refraction)
+/// - Combined image sampler for the refraction copy's depth (volumetric depth)
+/// - Combined image sampler for its colour (screen-space refraction)
 pub struct WaterPipeline {
     device: Arc<ManagedDevice>,
     pipeline: vk::Pipeline,
@@ -161,13 +161,13 @@ impl WaterPipeline {
         device: &ManagedDevice,
     ) -> EngineResult<vk::DescriptorSetLayout> {
         let bindings = [
-            // Binding 0: opaque color target (sampled at offset UVs for refraction)
+            // Binding 0: the refraction copy's colour (sampled at offset UVs for refraction)
             vk::DescriptorSetLayoutBinding::default()
                 .binding(0)
                 .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 .descriptor_count(1)
                 .stage_flags(vk::ShaderStageFlags::FRAGMENT),
-            // Binding 1: depth buffer (sampled at both current and refracted UVs)
+            // Binding 1: its depth (sampled at both current and refracted UVs)
             vk::DescriptorSetLayoutBinding::default()
                 .binding(1)
                 .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
@@ -286,7 +286,7 @@ impl WaterPipeline {
         let depth_info = vk::DescriptorImageInfo::default()
             .sampler(depth_sampler)
             .image_view(depth_view)
-            .image_layout(vk::ImageLayout::DEPTH_STENCIL_READ_ONLY_OPTIMAL);
+            .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL);
 
         let writes = [
             vk::WriteDescriptorSet::default()
@@ -354,7 +354,7 @@ impl WaterPipeline {
             .depth_compare_op(vk::CompareOp::LESS_OR_EQUAL);
 
         // No blending — the shader composites the final color internally
-        // (samples the opaque color target, applies absorption/Fresnel/etc.)
+        // (samples the refraction copy, applies absorption/Fresnel/etc.)
         // and outputs alpha = 1.0, fully replacing the destination pixel.
         let color_blend_attachment = vk::PipelineColorBlendAttachmentState {
             blend_enable: vk::FALSE,

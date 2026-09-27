@@ -3,6 +3,7 @@ use nalgebra::Matrix4;
 
 use crate::rendering::frame::DrawInfo;
 use crate::rendering::surface_buffer::SurfaceIndex;
+use crate::rendering::water::NO_CLIP;
 
 /// One mesh draw, committed to the frame and ready to record.
 ///
@@ -28,12 +29,20 @@ pub struct GeometryDraw {
 
 impl GeometryDraw {
     /// The push constants this draw is recorded with: its transform, no colour
-    /// override, and its row of the surface table.
+    /// override, its row of the surface table, and no clipping.
     pub fn push(&self) -> GeometryPush {
+        self.clipped(NO_CLIP)
+    }
+
+    /// The push constants for drawing only the part of this draw on the
+    /// positive side of a world-space plane.
+    pub fn clipped(&self, clip_plane: [f32; 4]) -> GeometryPush {
         GeometryPush {
             model: self.model,
             colour_override: GeometryPush::NO_OVERRIDE,
             surface_index: self.surface_index.0,
+            padding: [0; 3],
+            clip_plane,
         }
     }
 }
@@ -53,6 +62,13 @@ pub struct GeometryPush {
 
     /// The draw's row in the frame's surface table.
     pub surface_index: u32,
+
+    /// Aligns `clip_plane` to a vec4, as the shader's block does.
+    pub padding: [u32; 3],
+
+    /// World-space plane `(n, d)`: the vertex stage keeps what lies where
+    /// `dot(n, p) + d >= 0`.
+    pub clip_plane: [f32; 4],
 }
 
 impl GeometryPush {
@@ -77,7 +93,7 @@ impl GeometryPush {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rendering::material::SURFACE_INDEX_OFFSET;
+    use crate::rendering::material::{CLIP_PLANE_OFFSET, GEOMETRY_PUSH_SIZE, SURFACE_INDEX_OFFSET};
 
     /// The block must match the offsets the shaders and the pipeline layout
     /// were built with, or every field past the mismatch reads the wrong bytes.
@@ -89,8 +105,12 @@ mod tests {
             SURFACE_INDEX_OFFSET
         );
         assert_eq!(
+            std::mem::offset_of!(GeometryPush, clip_plane) as u32,
+            CLIP_PLANE_OFFSET
+        );
+        assert_eq!(
             std::mem::size_of::<GeometryPush>() as u32,
-            SURFACE_INDEX_OFFSET + 4
+            GEOMETRY_PUSH_SIZE
         );
     }
 }

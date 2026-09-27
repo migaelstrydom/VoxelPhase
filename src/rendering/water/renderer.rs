@@ -6,6 +6,15 @@
 //! body's level and swell per draw. A tile whose ripples are awake is drawn
 //! instead from a fine grid displaced out of that frame's ripple storage.
 //!
+//! The water is drawn inside the HDR scene pass, over a copy of the scene
+//! taken once everything beyond the surface is down, so a frame is prepared
+//! and recorded apart:
+//!
+//! ```text
+//!   prepare ──▶ meshes synced, ripples uploaded, draws planned ──▶ patches
+//!   record  ──▶ the plan, after the refraction copy
+//! ```
+//!
 //! [`basin_mesher`]: super::basin_mesher
 
 use std::sync::Arc;
@@ -15,7 +24,9 @@ use nalgebra::{Matrix4, Vector2, Vector3};
 use rustc_hash::FxHashMap;
 
 use super::basin_mesher::{MeshKey, WaterMesh, WaterScene};
+use super::divide::WaterPatch;
 use super::fall_mesher::{FallKey, FallMesh, SPREAD as FALL_SPREAD};
+use super::footprint::ScreenFootprint;
 use super::pipeline::{WaterPipeline, BODY_PUSH_OFFSET, FRAGMENT_PUSH_OFFSET};
 use super::reach_mesher::RiverMesh;
 use super::vertex::FineVertex;
@@ -24,6 +35,9 @@ use crate::core::error::EngineResult;
 use crate::core::vulkan_context::VulkanContext;
 use crate::rendering::frame::ManagedBuffer;
 use crate::rendering::in_flight::{FrameSlot, PerFrame, StreamedMesh};
+use crate::rendering::reflection::BoundingSphere;
+use crate::rendering::target::RefractionCopy;
+use crate::rendering::view_volume::ViewVolume;
 use crate::water::geometry::{CHUNK_COLUMNS, COLUMNS_PER_CHUNK, COLUMN_SIZE};
 use crate::water::ids::StoreId;
 use crate::water::surface::{RippleConfig, PADDED_CELLS_PER_TILE, TILE_CELLS, TILE_CORNERS};
@@ -46,6 +60,88 @@ const FINE_SIDE: usize = TILE_CELLS + 1;
 struct RippleSlot {
     buffer: ManagedBuffer,
     set: vk::DescriptorSet,
+}
+
+/// How far above and below its level a tile's surface may be drawn, over its
+/// swell: ripples and a reach easing into the basin, m.
+const TILE_HEIGHT_PAD: f32 = 0.5;
+
+/// What a frame's prepared water tells the renderer.
+#[derive(Debug, Clone, Default)]
+pub struct WaterFrame {
+    /// Every tile of still water, in view or not.
+    pub patches: Vec<WaterPatch>,
+    /// The part of the screen the planned draws can read.
+    pub footprint: ScreenFootprint,
+}
+
+/// Which of the water's meshes a draw comes from; each has its own buffers
+/// and pipeline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WaterSurface {
+    Basins,
+    Ocean,
+    Rivers,
+    Ripples,
+    Falls,
+}
+
+/// One draw of the frame's plan, with every constant it pushes.
+#[derive(Debug, Clone, Copy)]
+struct PlannedDraw {
+    surface: WaterSurface,
+    /// The body (or reach, or fall) constants at [`BODY_PUSH_OFFSET`].
+    constants: [f32; 8],
+    first_index: u32,
+    index_count: u32,
+}
+
+/// What the water is seen through this frame.
+#[derive(Debug, Clone, Copy)]
+pub struct WaterView {
+    pub view: Matrix4<f32>,
+    pub projection: Matrix4<f32>,
+    pub camera: Vector3<f32>,
+    /// Towards the sun.
+    pub sun: Vector3<f32>,
+    /// Seconds, for the surface detail's drift.
+    pub time: f32,
+    /// The render target's size in pixels.
+    pub screen: Vector2<f32>,
+}
+
+impl WaterView {
+    /// The fragment stage's constants: camera, sun, near and far planes and
+    /// time, screen size.
+    fn fragment_constants(&self) -> [f32; 16] {
+        // For a Vulkan perspective projection (depth [0,1]):
+        //   proj[2][2] = far / (near - far)
+        //   proj[3][2] = (near * far) / (near - far)
+        // So: near = proj[3][2] / proj[2][2]
+        //     far  = proj[3][2] / (proj[2][2] + 1)
+        let p22 = self.projection[(2, 2)];
+        let p32 = self.projection[(3, 2)];
+        let near = p32 / p22;
+        let far = p32 / (p22 + 1.0);
+        [
+            self.camera.x,
+            self.camera.y,
+            self.camera.z,
+            0.0,
+            self.sun.x,
+            self.sun.y,
+            self.sun.z,
+            0.0,
+            near,
+            far,
+            self.time,
+            0.0,
+            self.screen.x,
+            self.screen.y,
+            0.0,
+            0.0,
+        ]
+    }
 }
 
 /// One frame slot's copy of the mesh.
@@ -86,18 +182,25 @@ pub struct WaterRenderer {
     fine_indices: u32,
     /// The frame being recorded, as [`Self::begin_frame`] was told.
     slot: FrameSlot,
+    /// This frame's draws, as [`Self::prepare`] planned them.
+    plan: Vec<PlannedDraw>,
+    /// What this frame's water is seen through.
+    view: Option<WaterView>,
 }
 
 impl WaterRenderer {
     pub fn new(
         vulkan_context: Arc<VulkanContext>,
         render_pass: vk::RenderPass,
-        depth_view: vk::ImageView,
-        color_view: vk::ImageView,
+        refraction: &RefractionCopy,
     ) -> EngineResult<Self> {
         let device = Arc::clone(&vulkan_context.device);
-        let pipeline =
-            WaterPipeline::new(Arc::clone(&device), render_pass, depth_view, color_view)?;
+        let pipeline = WaterPipeline::new(
+            Arc::clone(&device),
+            render_pass,
+            refraction.depth_view(),
+            refraction.colour_view(),
+        )?;
         let host = vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
         let ripple_bytes =
             (ripple_layers() * RIPPLE_TILE_STRIDE * std::mem::size_of::<f32>()) as vk::DeviceSize;
@@ -157,12 +260,16 @@ impl WaterRenderer {
                 version: 0,
             }),
             slot: FrameSlot::default(),
+            plan: Vec::new(),
+            view: None,
         })
     }
 
-    /// Point uploads at this frame's buffers.
+    /// Point uploads at this frame's buffers, and forget last frame's plan.
     pub fn begin_frame(&mut self, slot: FrameSlot) {
         self.slot = slot;
+        self.plan.clear();
+        self.view = None;
     }
 
     /// Bring the mesh up to date with the water's topology, and this frame
@@ -223,100 +330,207 @@ impl WaterRenderer {
         )
     }
 
-    /// Draw every body of water.
-    pub fn render(
+    /// Bring the meshes and this frame's ripple storage up to date, and plan
+    /// the frame's draws. Records nothing: [`Self::record`] replays the plan
+    /// inside the scene pass, once everything drawn beyond the water is down.
+    ///
+    /// Draws out of view are left out of the plan. Returns the still water
+    /// for the renderer to divide the scene's blended surfaces by, and the
+    /// part of the screen the planned draws can read.
+    pub fn prepare(
         &mut self,
-        cb: vk::CommandBuffer,
         water: &dyn WaterScene,
-        view_matrix: &Matrix4<f32>,
-        proj_matrix: &Matrix4<f32>,
-        camera_pos: &Vector3<f32>,
-        sun_dir: &Vector3<f32>,
-        time: f32,
-        screen_width: f32,
-        screen_height: f32,
-        hue_preservation: f32,
-        exposure: f32,
-    ) -> EngineResult<()> {
+        view: &WaterView,
+    ) -> EngineResult<WaterFrame> {
+        self.plan.clear();
         self.sync(water)?;
+        let mut patches = Vec::new();
+        let mut footprint = ScreenFootprint::EMPTY;
+        let clip = view.projection * view.view;
+        let volume = ViewVolume::new(&view.view, &view.projection, 1.0);
+        let extent = CHUNK_COLUMNS as f32 * COLUMN_SIZE;
+        // Whether a tile of water at `level` is in view, adding it to the
+        // footprint if so.
+        let in_view =
+            |footprint: &mut ScreenFootprint, tile: (i32, i32), level: f32, swell: f32| {
+                let pad = swell + TILE_HEIGHT_PAD;
+                let min = Vector3::new(tile.0 as f32 * extent, level - pad, tile.1 as f32 * extent);
+                let max = min + Vector3::new(extent, 2.0 * pad, extent);
+                let sphere = BoundingSphere {
+                    centre: (min + max) * 0.5,
+                    radius: (max - min).norm() * 0.5,
+                };
+                let visible = volume.contains(&sphere);
+                if visible {
+                    footprint.add_box(&clip, min, max);
+                }
+                visible
+            };
         if self.mesh.draws.is_empty()
             && self.ocean.draws.is_empty()
             && self.rivers.draws.is_empty()
             && self.falls.draws.is_empty()
         {
-            return Ok(());
+            return Ok(WaterFrame::default());
         }
         let layers = self.upload_ripples(water)?;
-        let mesh = self.slots[self.slot].buffers.as_ref();
         let clock = water.clock();
-        // Bind pipeline and draw
+        let body = |id: StoreId, level: f32, tile: [f32; 4]| {
+            let swell = water.swell(id);
+            [
+                level,
+                swell.amplitude,
+                swell.phase,
+                clock,
+                tile[0],
+                tile[1],
+                tile[2],
+                tile[3],
+            ]
+        };
+
+        for (surface, built) in [
+            (WaterSurface::Basins, &self.mesh),
+            (WaterSurface::Ocean, &self.ocean),
+        ] {
+            for draw in &built.draws {
+                let Some(level) = water.level(draw.body) else {
+                    continue;
+                };
+                patches.push(WaterPatch::tile(draw.tile.x, draw.tile.z, level));
+                // A tile whose ripples are awake is drawn fine, below.
+                if layers.contains_key(&(draw.tile.x, draw.tile.z, draw.body)) {
+                    continue;
+                }
+                if !in_view(
+                    &mut footprint,
+                    (draw.tile.x, draw.tile.z),
+                    level,
+                    water.swell(draw.body).amplitude,
+                ) {
+                    continue;
+                }
+                self.plan.push(PlannedDraw {
+                    surface,
+                    constants: body(draw.body, level, [0.0; 4]),
+                    first_index: draw.first_index,
+                    index_count: draw.index_count,
+                });
+            }
+        }
+
+        for draw in &self.rivers.draws {
+            let Some(state) = water.river_state(draw.reach) else {
+                continue;
+            };
+            if state.front <= state.tail {
+                continue;
+            }
+            // A reach's strip has no bounds of its own to place it by.
+            footprint.cover_all();
+            self.plan.push(PlannedDraw {
+                surface: WaterSurface::Rivers,
+                constants: [
+                    state.depth_scale,
+                    state.tail,
+                    state.front,
+                    clock,
+                    state.speed_scale,
+                    state.ends.upstream,
+                    state.ends.downstream,
+                    state.length,
+                ],
+                first_index: draw.first_index,
+                index_count: draw.index_count,
+            });
+        }
+
+        let mut tiles: Vec<(&(i32, i32, StoreId), &(usize, u32))> = layers.iter().collect();
+        tiles.sort();
+        for (&(tx, tz, id), &(layer, sealed)) in tiles {
+            let Some(level) = water.level(id) else {
+                continue;
+            };
+            if !in_view(&mut footprint, (tx, tz), level, water.swell(id).amplitude) {
+                continue;
+            }
+            let tile = [
+                tx as f32 * extent,
+                tz as f32 * extent,
+                layer as f32,
+                sealed as f32,
+            ];
+            self.plan.push(PlannedDraw {
+                surface: WaterSurface::Ripples,
+                constants: body(id, level, tile),
+                first_index: 0,
+                index_count: self.fine_indices,
+            });
+        }
+
+        // Falls last: a sheet reads the scene behind it, which holds no
+        // water.
+        for draw in &self.falls.draws {
+            let Some(state) = water.fall_state(draw.link, draw.back) else {
+                continue;
+            };
+            footprint.cover_all();
+            self.plan.push(PlannedDraw {
+                surface: WaterSurface::Falls,
+                constants: [
+                    state.half_width,
+                    state.strength,
+                    FALL_SPREAD,
+                    clock,
+                    state.lift,
+                    state.top,
+                    state.cut,
+                    state.aeration,
+                ],
+                first_index: draw.first_index,
+                index_count: draw.index_count,
+            });
+        }
+
+        self.view = Some(*view);
+        Ok(WaterFrame { patches, footprint })
+    }
+
+    /// Whether [`Self::prepare`] left anything to draw this frame.
+    pub fn is_empty(&self) -> bool {
+        self.plan.is_empty()
+    }
+
+    /// Record the planned draws. They sample the refraction copy through
+    /// set 0, which must hold this frame's scene by now.
+    pub fn record(&self, cb: vk::CommandBuffer) {
+        let Some(view) = self.view.filter(|_| !self.plan.is_empty()) else {
+            return;
+        };
+        let device = &self.device.device;
         unsafe {
-            self.device.device.cmd_bind_pipeline(
-                cb,
-                vk::PipelineBindPoint::GRAPHICS,
-                self.pipeline.pipeline(),
-            );
-
-            // Push view and projection matrices (vertex stage, offset 0)
-            let view_bytes: &[u8] = bytemuck_cast_slice(view_matrix.as_slice());
-            let proj_bytes: &[u8] = bytemuck_cast_slice(proj_matrix.as_slice());
-
             let mut vertex_push_data = [0u8; 128];
-            vertex_push_data[0..64].copy_from_slice(view_bytes);
-            vertex_push_data[64..128].copy_from_slice(proj_bytes);
-
-            self.device.device.cmd_push_constants(
+            vertex_push_data[0..64].copy_from_slice(bytemuck_cast_slice(view.view.as_slice()));
+            vertex_push_data[64..128]
+                .copy_from_slice(bytemuck_cast_slice(view.projection.as_slice()));
+            device.cmd_push_constants(
                 cb,
                 self.pipeline.layout(),
                 vk::ShaderStageFlags::VERTEX,
                 0,
                 &vertex_push_data,
             );
-
-            // Extract near/far from the projection matrix.
-            // For a Vulkan perspective projection (depth [0,1]):
-            //   proj[2][2] = far / (near - far)
-            //   proj[3][2] = (near * far) / (near - far)
-            // So: near = proj[3][2] / proj[2][2]
-            //     far  = proj[3][2] / (proj[2][2] + 1)
-            let p22 = proj_matrix[(2, 2)];
-            let p32 = proj_matrix[(3, 2)];
-            let near = p32 / p22;
-            let far = p32 / (p22 + 1.0);
-
-            // Push camera_pos, sun_dir, proj params, and screen params (fragment stage)
-            let frag_push_data: [f32; 16] = [
-                camera_pos.x,
-                camera_pos.y,
-                camera_pos.z,
-                0.0, // padding
-                sun_dir.x,
-                sun_dir.y,
-                sun_dir.z,
-                0.0, // padding
-                near,
-                far,
-                time,
-                0.0, // padding
-                screen_width,
-                screen_height,
-                // Both must match the composite pass, or refracted scene colour
-                // resolves differently from the pixels beside it.
-                hue_preservation,
-                exposure,
-            ];
-
-            self.device.device.cmd_push_constants(
+            device.cmd_push_constants(
                 cb,
                 self.pipeline.layout(),
                 vk::ShaderStageFlags::FRAGMENT,
                 FRAGMENT_PUSH_OFFSET,
-                bytemuck_cast_slice(&frag_push_data),
+                bytemuck_cast_slice(&view.fragment_constants()),
             );
 
-            // Set 0: the opaque scene's colour and depth; set 1: this slot's
-            // ripple tiles.
-            self.device.device.cmd_bind_descriptor_sets(
+            // Set 0: the refraction copy's colour and depth; set 1: this
+            // slot's ripple tiles.
+            device.cmd_bind_descriptor_sets(
                 cb,
                 vk::PipelineBindPoint::GRAPHICS,
                 self.pipeline.layout(),
@@ -328,187 +542,54 @@ impl WaterRenderer {
                 &[],
             );
 
-            let meshes = [
-                (mesh, &self.mesh),
-                (self.ocean_slots[self.slot].buffers.as_ref(), &self.ocean),
-            ];
-            for (buffers, built) in meshes {
-                let Some(buffers) = buffers else {
-                    continue;
-                };
-                buffers.bind(&self.device.device, cb);
-                for draw in &built.draws {
-                    // A tile whose ripples are awake is drawn fine, below.
-                    if layers.contains_key(&(draw.tile.x, draw.tile.z, draw.body)) {
-                        continue;
-                    }
-                    let Some(level) = water.level(draw.body) else {
+            let mut bound = None;
+            for draw in &self.plan {
+                if bound != Some(draw.surface) {
+                    let Some(buffers) = self.buffers(draw.surface) else {
                         continue;
                     };
-                    self.push_draw(cb, water, draw.body, level, clock, [0.0; 4]);
-                    self.device.device.cmd_draw_indexed(
-                        cb,
-                        draw.index_count,
-                        1,
-                        draw.first_index,
-                        0,
-                        0,
-                    );
-                }
-            }
-
-            if let Some(rivers) = self.river_slots[self.slot].buffers.as_ref() {
-                if !self.rivers.draws.is_empty() {
-                    self.device.device.cmd_bind_pipeline(
+                    device.cmd_bind_pipeline(
                         cb,
                         vk::PipelineBindPoint::GRAPHICS,
-                        self.pipeline.river_pipeline(),
+                        self.pipeline_for(draw.surface),
                     );
-                    rivers.bind(&self.device.device, cb);
-                    for draw in &self.rivers.draws {
-                        let Some(state) = water.river_state(draw.reach) else {
-                            continue;
-                        };
-                        if state.front <= state.tail {
-                            continue;
-                        }
-                        let constants: [f32; 8] = [
-                            state.depth_scale,
-                            state.tail,
-                            state.front,
-                            clock,
-                            state.speed_scale,
-                            state.ends.upstream,
-                            state.ends.downstream,
-                            state.length,
-                        ];
-                        self.device.device.cmd_push_constants(
-                            cb,
-                            self.pipeline.layout(),
-                            vk::ShaderStageFlags::VERTEX,
-                            BODY_PUSH_OFFSET,
-                            bytemuck_cast_slice(&constants),
-                        );
-                        self.device.device.cmd_draw_indexed(
-                            cb,
-                            draw.index_count,
-                            1,
-                            draw.first_index,
-                            0,
-                            0,
-                        );
-                    }
+                    buffers.bind(device, cb);
+                    bound = Some(draw.surface);
                 }
-            }
-
-            if !layers.is_empty() {
-                self.device.device.cmd_bind_pipeline(
+                device.cmd_push_constants(
                     cb,
-                    vk::PipelineBindPoint::GRAPHICS,
-                    self.pipeline.fine_pipeline(),
+                    self.pipeline.layout(),
+                    vk::ShaderStageFlags::VERTEX,
+                    BODY_PUSH_OFFSET,
+                    bytemuck_cast_slice(&draw.constants),
                 );
-                self.fine_grid.bind(&self.device.device, cb);
-                let mut tiles: Vec<(&(i32, i32, StoreId), &(usize, u32))> = layers.iter().collect();
-                tiles.sort();
-                let extent = CHUNK_COLUMNS as f32 * COLUMN_SIZE;
-                for (&(tx, tz, body), &(layer, sealed)) in tiles {
-                    let Some(level) = water.level(body) else {
-                        continue;
-                    };
-                    let tile = [
-                        tx as f32 * extent,
-                        tz as f32 * extent,
-                        layer as f32,
-                        sealed as f32,
-                    ];
-                    self.push_draw(cb, water, body, level, clock, tile);
-                    self.device
-                        .device
-                        .cmd_draw_indexed(cb, self.fine_indices, 1, 0, 0, 0);
-                }
-            }
-
-            // Falls last: a sheet reads the scene behind it, water included
-            // only as far as the opaque pass drew it.
-            if let Some(falls) = self.fall_slots[self.slot].buffers.as_ref() {
-                if !self.falls.draws.is_empty() {
-                    self.device.device.cmd_bind_pipeline(
-                        cb,
-                        vk::PipelineBindPoint::GRAPHICS,
-                        self.pipeline.fall_pipeline(),
-                    );
-                    falls.bind(&self.device.device, cb);
-                    for draw in &self.falls.draws {
-                        let Some(state) = water.fall_state(draw.link, draw.back) else {
-                            continue;
-                        };
-                        let constants: [f32; 8] = [
-                            state.half_width,
-                            state.strength,
-                            FALL_SPREAD,
-                            clock,
-                            state.lift,
-                            state.top,
-                            state.cut,
-                            state.aeration,
-                        ];
-                        self.device.device.cmd_push_constants(
-                            cb,
-                            self.pipeline.layout(),
-                            vk::ShaderStageFlags::VERTEX,
-                            BODY_PUSH_OFFSET,
-                            bytemuck_cast_slice(&constants),
-                        );
-                        self.device.device.cmd_draw_indexed(
-                            cb,
-                            draw.index_count,
-                            1,
-                            draw.first_index,
-                            0,
-                            0,
-                        );
-                    }
-                }
+                device.cmd_draw_indexed(cb, draw.index_count, 1, draw.first_index, 0, 0);
             }
         }
+    }
 
-        Ok(())
+    /// The buffers a surface's draws index into, in this frame's slot.
+    fn buffers(&self, surface: WaterSurface) -> Option<&StreamedMesh> {
+        match surface {
+            WaterSurface::Basins => self.slots[self.slot].buffers.as_ref(),
+            WaterSurface::Ocean => self.ocean_slots[self.slot].buffers.as_ref(),
+            WaterSurface::Rivers => self.river_slots[self.slot].buffers.as_ref(),
+            WaterSurface::Ripples => Some(&self.fine_grid),
+            WaterSurface::Falls => self.fall_slots[self.slot].buffers.as_ref(),
+        }
+    }
+
+    fn pipeline_for(&self, surface: WaterSurface) -> vk::Pipeline {
+        match surface {
+            WaterSurface::Basins | WaterSurface::Ocean => self.pipeline.pipeline(),
+            WaterSurface::Rivers => self.pipeline.river_pipeline(),
+            WaterSurface::Ripples => self.pipeline.fine_pipeline(),
+            WaterSurface::Falls => self.pipeline.fall_pipeline(),
+        }
     }
 }
 
 impl WaterRenderer {
-    /// Push one draw's body and tile constants.
-    fn push_draw(
-        &self,
-        cb: vk::CommandBuffer,
-        water: &dyn WaterScene,
-        body: StoreId,
-        level: f32,
-        clock: f32,
-        tile: [f32; 4],
-    ) {
-        let swell = water.swell(body);
-        let constants: [f32; 8] = [
-            level,
-            swell.amplitude,
-            swell.phase,
-            clock,
-            tile[0],
-            tile[1],
-            tile[2],
-            tile[3],
-        ];
-        unsafe {
-            self.device.device.cmd_push_constants(
-                cb,
-                self.pipeline.layout(),
-                vk::ShaderStageFlags::VERTEX,
-                BODY_PUSH_OFFSET,
-                bytemuck_cast_slice(&constants),
-            );
-        }
-    }
-
     /// Write this frame's awake ripple tiles into the slot's storage buffer.
     /// Returns each tile's layer and sealed edges, keyed by (tile x, tile z,
     /// body).

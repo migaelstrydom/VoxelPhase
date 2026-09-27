@@ -31,11 +31,17 @@ layout(location = 6) out vec3 outModelNormal;
 // Per-object data (updated per draw call via push constants)
 layout(push_constant) uniform PushConstants {
     mat4 model;
+    // Offsets 64..96 belong to the fragment stage.
+    layout(offset = 96) vec4 clipPlane;
 } push;
 
 void main() {
     vec4 worldPos = push.model * vec4(inPosition, 1.0);
     gl_Position = scene.proj * scene.view * worldPos;
+    // Where the water divides a blended mesh crossing its surface, each half
+    // is drawn on its own side of the water; everything else passes a plane
+    // that clips nothing.
+    gl_ClipDistance[0] = dot(push.clipPlane, worldPos);
     outColor = inColor;
     outTexCoord = inTexCoord;
     outWorldPos = worldPos.xyz;

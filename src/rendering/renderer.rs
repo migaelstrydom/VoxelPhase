@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use ash::vk;
-use nalgebra::{Matrix4, Vector3};
+use nalgebra::{Matrix4, Vector2, Vector3};
 use winit::window::Window;
 
 use crate::core::error::{EngineError, EngineResult};
@@ -53,8 +53,7 @@ use crate::rendering::target::{
 use crate::rendering::transparency::{BlendedDraw, MeshBounds, TransparentQueue};
 use crate::rendering::vertex::Vertex;
 use crate::rendering::view_volume::ViewVolume;
-use crate::rendering::water::WaterRenderer;
-use crate::rendering::water::WaterScene;
+use crate::rendering::water::{Side, WaterDivide, WaterRenderer, WaterScene, WaterView, NO_CLIP};
 use crate::resources::textures::{TextureHandle, TextureManager};
 
 /// Format of the offscreen scene target. Floating point so that emissive
@@ -229,6 +228,12 @@ pub struct Renderer {
     /// Blended scene draws held back for the sorted flush at the end of the
     /// opaque pass.
     transparent_queue: TransparentQueue,
+    /// This frame's water surfaces, which the flush divides blended draws
+    /// and particles by. Empty until the water is submitted.
+    water_divide: WaterDivide,
+    /// The pixels this frame's water can read, which the refraction copy
+    /// is limited to. `None` when no water is in view.
+    water_footprint: Option<vk::Rect2D>,
     /// Where the camera is this frame, as `update_scene` was told. Held
     /// because sorting blended draws needs it and a draw call has no reason
     /// to be handed it again.
@@ -382,12 +387,11 @@ impl Renderer {
         // Create sky renderer (opaque pass)
         let sky_renderer = SkyRenderer::new(Arc::clone(&vulkan_context), pipeline.renderpass)?;
 
-        // Create water renderer (transparent pass, samples opaque color target for refraction)
+        // Create water renderer (scene pass, samples the refraction copy)
         let water_renderer = WaterRenderer::new(
             Arc::clone(&vulkan_context),
-            pipeline.transparent_renderpass,
-            targets.depth_buffer.view,
-            targets.color_target.view,
+            pipeline.renderpass,
+            &targets.refraction,
         )?;
 
         // Create fire renderer with shared sim pool
@@ -418,6 +422,8 @@ impl Renderer {
             active_fires: Vec::new(),
             opaque_draws: Vec::new(),
             transparent_queue: TransparentQueue::new(),
+            water_divide: WaterDivide::none(),
+            water_footprint: None,
             camera_pos: Vector3::zeros(),
             probe_view: ViewVolume::EVERYTHING,
             lighting: SceneLighting::default(),
@@ -478,6 +484,8 @@ impl Renderer {
         self.particle_renderer.begin_frame(slot);
         self.overlay.begin_frame(slot);
         self.water_renderer.begin_frame(slot);
+        self.water_divide = WaterDivide::none();
+        self.water_footprint = None;
 
         // Everything fallible that costs nothing to redo goes first, so the
         // acquire is the last step that can fail. An acquired swapchain image
@@ -1111,11 +1119,32 @@ impl Renderer {
     /// Sorting can only order whole draws, and a closed mesh contains its own
     /// far and near surfaces; splitting them by cull mode is what puts those
     /// two in order.
-    fn record_scene_draws(&mut self, cb: vk::CommandBuffer) {
+    ///
+    /// Water divides the blended draws in two ([`WaterDivide`]). With water
+    /// in the frame the scene pass is ended once what lies beyond the surface
+    /// is down, the scene is copied for the water to refract, and a resumed
+    /// pass draws the water and then everything this side of it:
+    ///
+    /// ```text
+    ///   opaque ─▶ blended beyond ─▶ ┊copy┊ ─▶ water ─▶ blended near
+    ///   └──────── scene pass ─────┘        └──── resumed scene pass ───┘
+    /// ```
+    ///
+    /// A mesh through the surface is drawn in both, each time clipped to its
+    /// own side of the level. Returns the GPU span left open, which closes
+    /// with the pass.
+    fn record_scene_draws(&mut self, cb: vk::CommandBuffer) -> GpuSpan {
         // Taken out of the queue so the recording loop is not holding a borrow
         // of `self` through calls that need `&self` for the device.
-        let blended: Vec<BlendedDraw> = self.transparent_queue.sorted().to_vec();
-        let exposure = self.post_process.config.exposure;
+        let blended: Vec<(BlendedDraw, Side)> = self
+            .transparent_queue
+            .sorted()
+            .iter()
+            .map(|draw| {
+                let (centre, radius) = draw.sphere();
+                (*draw, self.water_divide.of_sphere(centre, radius))
+            })
+            .collect();
         let pipeline = &self.pipeline;
         let mut recorder = self.geometry_recorder(cb);
 
@@ -1130,55 +1159,116 @@ impl Renderer {
             }
         }
 
-        if blended.is_empty() && self.particle_renderer.is_empty() {
-            return;
+        let particles = &self.particle_renderer;
+        let footprint = match self.water_footprint {
+            Some(footprint) if !self.water_renderer.is_empty() => footprint,
+            _ => {
+                let all = blended.iter().map(|(draw, _)| (draw, NO_CLIP));
+                self.record_blended(&mut recorder, cb, all, 0..particles.len());
+                return GpuSpan::Scene;
+            }
+        };
+        let beyond = blended
+            .iter()
+            .filter(|(_, side)| side.reaches_beyond())
+            .map(|(draw, side)| (draw, side.clip_planes().0));
+        self.record_blended(&mut recorder, cb, beyond, 0..particles.beyond_water_end());
+
+        let device = self.vulkan_context.device();
+        unsafe {
+            device.cmd_end_render_pass(cb);
         }
+        self.timer().end(cb, GpuSpan::Scene);
+        self.timer().begin(cb, GpuSpan::Water);
+        self.targets.refraction.capture(
+            device,
+            cb,
+            self.targets.color_target.image,
+            self.targets.depth_buffer.image,
+            footprint,
+        );
+        let resume = vk::RenderPassBeginInfo::default()
+            .render_pass(pipeline.resume_renderpass)
+            .framebuffer(self.targets.opaque_framebuffer)
+            .render_area(self.targets.extent.into());
+        unsafe {
+            device.cmd_begin_render_pass(cb, &resume, vk::SubpassContents::INLINE);
+        }
+
+        self.set_full_viewport(cb);
+        self.water_renderer.record(cb);
+        recorder.interrupted();
+
+        let near = blended
+            .iter()
+            .filter(|(_, side)| side.reaches_near())
+            .map(|(draw, side)| (draw, side.clip_planes().1));
+        self.record_blended(
+            &mut recorder,
+            cb,
+            near,
+            particles.beyond_water_end()..particles.len(),
+        );
+        GpuSpan::Water
+    }
+
+    /// Record blended draws, farthest first, merged with the particles in
+    /// `particles` of the draw order. Each draw is clipped to its plane.
+    fn record_blended<'d>(
+        &self,
+        recorder: &mut GeometryRecorder<'_>,
+        cb: vk::CommandBuffer,
+        draws: impl Iterator<Item = (&'d BlendedDraw, [f32; 4])>,
+        particles: std::ops::Range<usize>,
+    ) {
+        let exposure = self.post_process.config.exposure;
+        let pipeline = &self.pipeline;
+        let particle_renderer = &self.particle_renderer;
 
         // The particle pipeline takes its viewport dynamically and the flush
         // may record a particle before any mesh has set one.
         self.set_full_viewport(cb);
 
-        let mut particles_drawn = 0;
-        for draw in &blended {
+        let mut particles_drawn = particles.start;
+        for (draw, clip) in draws {
             // Everything behind this mesh goes down before it does.
-            let behind = self.particle_renderer.count_beyond(draw.depth_key());
+            let behind = particle_renderer.count_beyond(particles.clone(), draw.depth_key());
             if behind > particles_drawn {
-                self.particle_renderer.bind(cb, exposure);
-                self.particle_renderer
-                    .draw_range(cb, particles_drawn, behind);
+                particle_renderer.bind(cb, exposure);
+                particle_renderer.draw_range(cb, particles_drawn, behind);
                 particles_drawn = behind;
                 recorder.interrupted();
             }
 
-            recorder.draw(pipeline.scene_blended_back, &draw.geometry);
-            recorder.draw(pipeline.scene_blended_front, &draw.geometry);
+            recorder.draw_clipped(pipeline.scene_blended_back, &draw.geometry, clip);
+            recorder.draw_clipped(pipeline.scene_blended_front, &draw.geometry, clip);
         }
 
-        if !self.particle_renderer.is_empty() {
-            self.particle_renderer.bind(cb, exposure);
-            self.particle_renderer
-                .draw_range(cb, particles_drawn, usize::MAX);
+        if particles_drawn < particles.end {
+            particle_renderer.bind(cb, exposure);
+            particle_renderer.draw_range(cb, particles_drawn, particles.end);
+            recorder.interrupted();
         }
     }
 
-    /// End the opaque render pass, resolve the HDR scene onto the output image
+    /// End the scene render pass, resolve the HDR scene onto the output image
     /// (tonemap + bloom), and begin the transparent render pass.
     ///
-    /// Must be called after all opaque geometry is drawn and before water,
-    /// particles, or overlay rendering.
+    /// Must be called after all opaque geometry is drawn, and the water and
+    /// particles submitted, and before fire or overlay rendering.
     ///
-    /// The frame's blended scene geometry is recorded here, on the way out of
-    /// the opaque pass: it belongs to the HDR target, and this is the one
-    /// point every caller already passes through on leaving it, so no call
-    /// site has to remember to flush the queue itself.
+    /// The frame's blended scene geometry and water are recorded here, on the
+    /// way out of the scene pass: they belong to the HDR target, and this is
+    /// the one point every caller already passes through on leaving it, so no
+    /// call site has to remember to flush the queue itself.
     ///
-    /// The opaque render pass leaves the HDR colour target in
+    /// The scene render pass leaves the HDR colour target in
     /// `SHADER_READ_ONLY_OPTIMAL`, and the composite pass leaves the output
     /// image in `COLOR_ATTACHMENT_OPTIMAL`, so no manual barriers are needed
     /// between the three passes.
     pub fn begin_transparent_pass(&mut self, cb: vk::CommandBuffer, image_index: u32) {
         let scene_draws = Instant::now();
-        self.record_scene_draws(cb);
+        let open = self.record_scene_draws(cb);
         self.profile
             .record(RenderStage::SceneDraws, scene_draws.elapsed());
 
@@ -1187,7 +1277,7 @@ impl Renderer {
 
         unsafe {
             device.cmd_end_render_pass(cb);
-            self.timer().end(cb, GpuSpan::Scene);
+            self.timer().end(cb, open);
 
             self.timer().begin(cb, GpuSpan::Resolve);
             self.post_process.resolve(cb, image_index, extent);
@@ -1204,56 +1294,38 @@ impl Renderer {
         }
     }
 
-    /// Render every body of water.
+    /// Hand the frame's water to the renderer, to be drawn inside the scene
+    /// pass: over what lies beyond its surface, under what lies this side.
     ///
-    /// Should be called after next_subpass but before particles.
-    pub fn render_water(
+    /// Records nothing itself; the water is recorded with the blended
+    /// geometry when the scene pass closes. Call before
+    /// [`Self::submit_particles`], which sorts the particles by the side of
+    /// the water they are on.
+    pub fn submit_water(
         &mut self,
-        cb: vk::CommandBuffer,
         water: &dyn WaterScene,
         view_matrix: &Matrix4<f32>,
         proj_matrix: &Matrix4<f32>,
         camera_pos: &Vector3<f32>,
         time: f32,
     ) -> EngineResult<()> {
+        debug_assert!(
+            self.particle_renderer.is_empty(),
+            "water must be submitted before the particles it divides"
+        );
         let extent = self.targets.extent;
-        let viewport = vk::Viewport {
-            x: 0.0,
-            y: 0.0,
-            width: extent.width as f32,
-            height: extent.height as f32,
-            min_depth: 0.0,
-            max_depth: 1.0,
-        };
-        let scissor = vk::Rect2D {
-            offset: vk::Offset2D { x: 0, y: 0 },
-            extent,
-        };
-
-        unsafe {
-            self.vulkan_context
-                .device()
-                .cmd_set_viewport(cb, 0, &[viewport]);
-            self.vulkan_context
-                .device()
-                .cmd_set_scissor(cb, 0, &[scissor]);
-        }
-
-        let sun_dir = self.sky_renderer.sun_direction();
-        let extent = self.targets.extent;
-        self.water_renderer.render(
-            cb,
-            water,
-            view_matrix,
-            proj_matrix,
-            camera_pos,
-            &sun_dir,
+        let view = WaterView {
+            view: *view_matrix,
+            projection: *proj_matrix,
+            camera: *camera_pos,
+            sun: self.sky_renderer.sun_direction(),
             time,
-            extent.width as f32,
-            extent.height as f32,
-            self.post_process.config.hue_preservation,
-            self.post_process.config.exposure,
-        )
+            screen: Vector2::new(extent.width as f32, extent.height as f32),
+        };
+        let frame = self.water_renderer.prepare(water, &view)?;
+        self.water_footprint = frame.footprint.pixels(extent);
+        self.water_divide = WaterDivide::new(frame.patches, *camera_pos);
+        Ok(())
     }
 
     /// Run fire simulation compute dispatches. Call after `begin_frame()`
@@ -1348,9 +1420,14 @@ impl Renderer {
         proj_matrix: &Matrix4<f32>,
     ) -> EngineResult<()> {
         let camera_pos = self.camera_pos;
-        let prepared =
-            self.particle_renderer
-                .prepare(pool, view_matrix, proj_matrix, &camera_pos)?;
+        let divide = &self.water_divide;
+        let prepared = self.particle_renderer.prepare(
+            pool,
+            view_matrix,
+            proj_matrix,
+            &camera_pos,
+            |position| divide.of_point(*position) == Side::Beyond,
+        )?;
         self.profile.counters.particles = prepared as u32;
         Ok(())
     }

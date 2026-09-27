@@ -7,7 +7,7 @@ use ash::vk;
 
 use crate::core::device::ManagedDevice;
 use crate::core::error::{EngineError, EngineResult};
-use crate::rendering::material::SURFACE_INDEX_OFFSET;
+use crate::rendering::material::GEOMETRY_PUSH_SIZE;
 use crate::rendering::renderer::PUSH_CONSTANT_STAGES;
 use crate::rendering::shaders::ShaderManager;
 use crate::rendering::vertex::Vertex;
@@ -40,7 +40,7 @@ impl ProbePipeline {
         let push_constant_ranges = [vk::PushConstantRange {
             stage_flags: PUSH_CONSTANT_STAGES,
             offset: 0,
-            size: SURFACE_INDEX_OFFSET + mem::size_of::<u32>() as u32,
+            size: GEOMETRY_PUSH_SIZE,
         }];
         let layout_info = vk::PipelineLayoutCreateInfo::default()
             .set_layouts(&set_layouts)

@@ -9,28 +9,37 @@ frame; each draw pushes its body's current level.
 
 ## Pipeline architecture
 
-Water renders in **subpass 1** (transparent) of the main render pass. Subpass 0
-(opaque) draws terrain, models, and debug overlays, writing the depth buffer.
-Subpass 1 then reads that depth buffer as a Vulkan **input attachment**, giving
-the water fragment shader access to the terrain depth behind each water pixel.
+Water is drawn inside the HDR scene pass, between the blended surfaces beyond
+its surface and those this side of it. It refracts a copy of the scene, so the
+pass is ended once for the copy and resumed:
 
 ```
-Subpass 0 (opaque)          Subpass 1 (transparent)
-+-----------------------+   +-----------------------+
-| Sky                   |   | Water                 |
-| Terrain        depth >--->| Particles             |
-| Models         write  |   | Overlay               |
-| Debug overlays        |   |           depth read   |
-+-----------------------+   +-----------------------+
+scene pass                          resumed scene pass
++---------------------------+       +------------------------------+
+| Sky, terrain, models      |       | Water (reads the copy)       |
+| Blended + particles       | copy  | Blended + particles          |
+|   beyond the water        |------>|   this side of the water     |
++---------------------------+       +------------------------------+
+         colour, depth ──▶ RefractionCopy (only the water's footprint)
 ```
 
-The depth buffer is created with `DEPTH_STENCIL_ATTACHMENT | INPUT_ATTACHMENT`
-usage flags. In subpass 1, the depth attachment layout is
-`DEPTH_STENCIL_READ_ONLY_OPTIMAL`, which allows both depth testing (water is
-occluded by terrain) and fragment shader reads (volumetric depth calculation).
+`WaterDivide` (`divide.rs`) sorts each blended draw and particle by the water
+level under it: from above, what is under the surface is beyond it; from
+below, the reverse. A mesh crossing the surface (an ice floe) is drawn in both
+passes, each half clipped at the level through `gl_ClipDistance`
+(`triangle.vert`'s `clipPlane`). So smoke over a lake covers it, the lake shows
+through the dry part of a floe, and what is under the water is tinted and
+refracted by it. Rivers and falls are not in the divide; what stands in them
+counts as this side.
 
-A subpass dependency ensures all depth writes from subpass 0 complete before
-fragment shader reads in subpass 1.
+`WaterRenderer::prepare` syncs meshes, uploads ripples and plans the frame's
+draws, leaving out tiles outside the view. A frame with no water in view is
+never split. `ScreenFootprint` (`footprint.rs`) projects the planned tiles'
+boxes, and the copy is limited to that rectangle plus the refraction's reach;
+a river or fall, whose draws carry no bounds, widens it to the whole screen.
+
+The water writes scene radiance like everything else in the pass; the resolve
+tonemaps it with the rest of the scene.
 
 ## Meshes
 
@@ -99,10 +108,10 @@ These are needed by the fragment shader to linearize depth buffer values.
 The key visual effect: water colour and opacity depend on the optical path
 length through the water volume, not just the vertical water column height.
 
-The fragment shader reads the opaque geometry depth from the input attachment:
+The fragment shader reads the depth behind it from the refraction copy:
 
 ```glsl
-float terrainDepthRaw = subpassLoad(depthInput).r;
+float terrainDepthRaw = texture(depthSampler, screenUV).r;
 float waterDepthRaw   = gl_FragCoord.z;
 ```
 
@@ -234,14 +243,19 @@ opaque).
 
 ```
 src/rendering/water/
-    mod.rs       -- re-exports
-    pipeline.rs  -- Vulkan pipeline, descriptor set for depth input attachment
-    renderer.rs  -- mesh generation, draw call, push constant upload
-    vertex.rs    -- WaterVertex (position + normal), vertex input layout
+    mod.rs          -- re-exports
+    basin_mesher.rs -- basin meshes and the WaterScene trait
+    ocean_mesher.rs, ocean_ring.rs, reach_mesher.rs, fall_mesher.rs
+    divide.rs       -- which side of the water a blended surface lies on
+    footprint.rs    -- the screen rectangle the water can read
+    pipeline.rs     -- Vulkan pipelines, descriptor set for the refraction copy
+    renderer.rs     -- mesh sync, frame plan, draw recording
+    vertex.rs       -- vertex layouts
 ```
 
 Shaders:
 ```
-shader/water.vert  -- transforms vertices, passes normal + world pos
-shader/water.frag  -- Fresnel, specular, volumetric depth, alpha blend
+shader/water.vert, ripple.vert, river.vert -- surfaces
+shader/water.frag  -- Fresnel, specular, volumetric depth, refraction
+shader/fall.vert, fall.frag -- a fall's sheet
 ```

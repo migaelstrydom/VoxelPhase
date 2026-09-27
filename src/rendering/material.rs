@@ -537,6 +537,13 @@ impl SurfaceParams {
 /// Follows the 64-byte vertex model matrix and the 16-byte colour override.
 pub const SURFACE_INDEX_OFFSET: u32 = 80;
 
+/// Byte offset of the vertex stage's clip plane: after the surface index,
+/// padded to a vec4's alignment.
+pub const CLIP_PLANE_OFFSET: u32 = 96;
+
+/// Bytes of the geometry pipelines' push-constant range.
+pub const GEOMETRY_PUSH_SIZE: u32 = CLIP_PLANE_OFFSET + 16;
+
 /// Mutable builder for registering materials during initialization.
 pub struct MaterialManagerBuilder {
     materials: Vec<Material>,
@@ -608,12 +615,12 @@ mod tests {
 
     /// Vulkan only guarantees 128 bytes of push constants. The surface index
     /// exists precisely so that this budget stops being the material system's
-    /// ceiling — but the model matrix, the colour override and the index still
-    /// have to fit inside it.
+    /// ceiling — but the model matrix, the colour override, the index and the
+    /// clip plane still have to fit inside it.
     #[test]
     fn the_push_constants_fit_the_guaranteed_budget() {
         const GUARANTEED_BUDGET: usize = 128;
-        let used = SURFACE_INDEX_OFFSET as usize + std::mem::size_of::<u32>();
+        let used = GEOMETRY_PUSH_SIZE as usize;
         assert!(
             used <= GUARANTEED_BUDGET,
             "push constants use {used} bytes of a guaranteed {GUARANTEED_BUDGET}"

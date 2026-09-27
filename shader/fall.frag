@@ -3,7 +3,6 @@
 #extension GL_ARB_shading_language_420pack : enable
 #extension GL_GOOGLE_include_directive : require
 
-#include "tonemap.glsl"
 
 // A fall's sheet: aerated water over the scene behind it. Streaks run down
 // the arc at the water's own pace (they are keyed to seconds from the lip),
@@ -29,7 +28,7 @@ layout(push_constant) uniform FragPushConstants {
     layout(offset = 160) vec4 cameraPos;
     layout(offset = 176) vec4 sunDir;
     layout(offset = 192) vec4 projParams;    // (near, far, time, unused)
-    layout(offset = 208) vec4 screenParams;  // (width, height, hue preservation, exposure)
+    layout(offset = 208) vec4 screenParams;  // (width, height, unused, unused)
 } fpc;
 
 layout(location = 0) out vec4 outColor;
@@ -81,7 +80,7 @@ void main() {
     vec3 tinted = mix(behind, behind * WATER_TINT, smoothstep(0.02, 0.3, coverage));
     vec3 color = mix(tinted, sheet, coverage);
 
-    // As in water.frag: `colorSampler` is the raw HDR scene, drawn over the
-    // tonemapped one, so apply the composite's exposure and curve.
-    outColor = vec4(tonemapScene(color * fpc.screenParams.w, fpc.screenParams.z), 1.0);
+    // Scene radiance, like `colorSampler`: the resolve tonemaps it with the
+    // rest of the scene.
+    outColor = vec4(color, 1.0);
 }

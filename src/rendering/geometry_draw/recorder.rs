@@ -75,11 +75,25 @@ impl<'a> GeometryRecorder<'a> {
 
     /// Record `draw` through `pipeline`.
     pub fn draw(&mut self, pipeline: vk::Pipeline, draw: &GeometryDraw) {
+        self.draw_with(pipeline, draw, draw.push());
+    }
+
+    /// Record the part of `draw` on the positive side of `clip_plane`.
+    pub fn draw_clipped(
+        &mut self,
+        pipeline: vk::Pipeline,
+        draw: &GeometryDraw,
+        clip_plane: [f32; 4],
+    ) {
+        self.draw_with(pipeline, draw, draw.clipped(clip_plane));
+    }
+
+    fn draw_with(&mut self, pipeline: vk::Pipeline, draw: &GeometryDraw, push: GeometryPush) {
         self.bind_shared();
         self.bind_mesh_source(draw.draw.source);
         self.bind_pipeline(pipeline);
         self.bind_texture_set(draw.texture_set);
-        self.push(draw.push());
+        self.push(push);
         self.draw_indexed(draw);
     }
 

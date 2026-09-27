@@ -21,6 +21,12 @@
 //! later pass; a burst that is visible but untinted in `smoke_behind` means
 //! they are being drawn after it in the same pass.
 //!
+//! The *water* is judged on `in_water`, `smoke_over_water` and
+//! `smoke_in_water`. Water is drawn in the scene pass between what lies beyond
+//! its surface and what lies this side of it, so the far water must show
+//! through the cube's dry half, the burst above the pool must cover the water,
+//! and the sunken cube and burst must be seen through it, tinted.
+//!
 //! The cubes are drawn with the game's own mesh and the game's own substance,
 //! so what this sheet shows is what the ice cube in a level looks like.
 
@@ -58,6 +64,9 @@ const WATER_LEVEL: f32 = 0.3;
 /// The floor the pool rests on. Below the ground the cubes stand on, so that
 /// the water has a depth to shade by.
 const WATER_FLOOR: f32 = -0.8;
+
+/// A pool deep enough to sink a cube and a burst in.
+const DEEP_WATER_LEVEL: f32 = 1.6;
 
 const SPHERE_SEGMENTS: u32 = 32;
 const SPHERE_RINGS: u32 = 22;
@@ -177,12 +186,11 @@ impl VisualScene for Ice {
                 cube(Vector3::new(-0.35, CUBE_HALF, -1.4), 15.0),
                 cube(Vector3::new(0.32, CUBE_HALF, -0.2), -15.0),
             ]),
-            // Standing in water. Water is drawn after the scene resolves,
-            // against the depth the scene left behind — so this is the shot
-            // that says whether the blended pass and the passes after it agree
-            // about what is in front of what. The failure is unmistakable: the
-            // surface paints straight over the cube's submerged half and over
-            // anything of it that stands in front of the far water.
+            // Standing in water. The cube crosses the surface, so it is drawn
+            // in two halves: the submerged half before the water, which tints
+            // it, and the dry half after, over the water. Two failures are
+            // unmistakable: the surface painting over the cube's dry half, and
+            // the far water vanishing where it is seen through that half.
             SceneShot::new(
                 "in_water",
                 SceneCamera::looking_at(
@@ -226,6 +234,34 @@ impl VisualScene for Ice {
             .with_environment(environment.clone())
             .with_particles(burst(Vector3::new(0.0, CUBE_HALF, 1.2)))
             .with_meshes([ground(), cube(Vector3::new(0.0, CUBE_HALF, 0.0), 18.0)]),
+            // A burst over the water, with the pool running on behind it.
+            // The water is drawn in the scene pass before anything blended on
+            // this side of its surface, so the smoke must cover the water;
+            // water painted over the puffs means it is being drawn last again.
+            SceneShot::new(
+                "smoke_over_water",
+                SceneCamera::looking_at(
+                    Point3::new(0.0, 1.4, 2.6),
+                    Point3::new(0.0, WATER_LEVEL, -1.5),
+                )
+                .with_fov(42.0),
+            )
+            .with_environment(environment.clone())
+            .with_water(ScenePool::new(WATER_LEVEL, WATER_FLOOR, 7.0))
+            .with_particles(burst(Vector3::new(0.0, 1.0, 0.6)))
+            .with_meshes([ground(), cube(Vector3::new(-1.15, CUBE_HALF, -1.5), -10.0)]),
+            // The same burst and a cube under deep water. Both lie beyond the
+            // surface, so they are drawn before it and seen through it: tinted,
+            // and shifted by the refraction, never pasted over the top.
+            SceneShot::new(
+                "smoke_in_water",
+                SceneCamera::looking_at(Point3::new(0.0, 2.8, 2.6), Point3::new(0.0, 0.6, -0.5))
+                    .with_fov(42.0),
+            )
+            .with_environment(environment.clone())
+            .with_water(ScenePool::new(DEEP_WATER_LEVEL, WATER_FLOOR, 7.0))
+            .with_particles(burst(Vector3::new(0.8, 0.8, -0.8)))
+            .with_meshes([ground(), cube(Vector3::new(-0.6, CUBE_HALF, 0.0), 24.0)]),
             // Backlit. The extreme case for the Fresnel gain: with the sun
             // behind the block, the edges should go bright and the middle
             // should stay clear.

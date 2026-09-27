@@ -456,6 +456,28 @@ impl<'a> System<'a> for RenderSystem {
                     }
                     renderer.record_stage(RenderStage::DebugShapes, lap.elapsed());
 
+                    // Hand the water over before the particles: it is drawn inside
+                    // the scene pass, and the particles are sorted by which side
+                    // of its surface they are on.
+                    let lap = Instant::now();
+                    if let Some(ref water) = water_opt {
+                        let camera_pos = Vector3::new(
+                            camera_data.position.x,
+                            camera_data.position.y,
+                            camera_data.position.z,
+                        );
+                        if let Err(e) = renderer.submit_water(
+                            &**water,
+                            &view_matrix,
+                            &proj_matrix,
+                            &camera_pos,
+                            time.total_seconds(),
+                        ) {
+                            log::error!("RenderSystem: Failed to prepare water: {}", e);
+                        }
+                    }
+                    renderer.record_stage(RenderStage::Water, lap.elapsed());
+
                     // Hand the frame's particles over before the scene pass
                     // closes: they are blended scene surfaces and are recorded
                     // in order with the glass and ice, not painted on after the
@@ -471,28 +493,7 @@ impl<'a> System<'a> for RenderSystem {
                     // End opaque pass, blit to swapchain, begin transparent pass.
                     renderer.begin_transparent_pass(draw_cb, present_index);
 
-                    // Render water surface (after geometry, before particles)
-                    let lap = Instant::now();
-                    if let Some(ref water) = water_opt {
-                        let camera_pos = Vector3::new(
-                            camera_data.position.x,
-                            camera_data.position.y,
-                            camera_data.position.z,
-                        );
-                        if let Err(e) = renderer.render_water(
-                            draw_cb,
-                            &**water,
-                            &view_matrix,
-                            &proj_matrix,
-                            &camera_pos,
-                            time.total_seconds(),
-                        ) {
-                            log::error!("RenderSystem: Failed to render water: {}", e);
-                        }
-                    }
-                    renderer.record_stage(RenderStage::Water, lap.elapsed());
-
-                    // Render fire volumes (after water, before particles)
+                    // Render fire volumes
                     let lap = Instant::now();
                     {
                         let camera_pos = Vector3::new(

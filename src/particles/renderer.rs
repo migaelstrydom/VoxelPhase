@@ -14,6 +14,14 @@
 //! [`ParticleRenderer::count_beyond`] where a blended mesh falls in that order
 //! and emits the particles behind it before recording the mesh.
 //!
+//! The scene's water divides the order in two. Particles beyond the surface
+//! are drawn before the water, which refracts them, and the rest after it:
+//!
+//! ```text
+//!   draw order: [ beyond the water, far → near | near side, far → near ]
+//!                0                   beyond_water_end()                 len
+//! ```
+//!
 //! Drawing into the scene target means the composite's exposure and tonemap now
 //! stand between a particle and the screen. The shader takes that into account
 //! (see `particle.frag`) so that what an effect resolves to is what it resolved
@@ -51,6 +59,8 @@ pub struct ParticleRenderer {
     /// squared distance from the camera that ordered them. Kept between frames
     /// so the sort does not allocate every time.
     draw_order: Vec<(f32, usize)>,
+    /// Where the particles beyond the water end in `draw_order`.
+    beyond_end: usize,
 
     /// View and projection matrices `prepare` was given, pushed at bind time.
     matrices: Option<(Matrix4<f32>, Matrix4<f32>)>,
@@ -81,6 +91,7 @@ impl ParticleRenderer {
             meshes,
             slot: FrameSlot::default(),
             draw_order: Vec::with_capacity(MAX_PARTICLES),
+            beyond_end: 0,
             matrices: None,
         })
     }
@@ -93,10 +104,12 @@ impl ParticleRenderer {
     pub fn begin_frame(&mut self, slot: FrameSlot) {
         self.slot = slot;
         self.draw_order.clear();
+        self.beyond_end = 0;
         self.matrices = None;
     }
 
-    /// Sort the frame's particles far to near and upload their billboards.
+    /// Sort the frame's particles far to near, those `beyond` the water first,
+    /// and upload their billboards.
     ///
     /// Records nothing. Call once per frame before the scene pass begins
     /// recording blended geometry; [`Self::bind`] and [`Self::draw_range`] then
@@ -110,8 +123,10 @@ impl ParticleRenderer {
         view_matrix: &Matrix4<f32>,
         proj_matrix: &Matrix4<f32>,
         camera_pos: &Vector3<f32>,
+        beyond: impl Fn(&Vector3<f32>) -> bool,
     ) -> EngineResult<usize> {
         self.draw_order.clear();
+        self.beyond_end = 0;
         self.matrices = None;
 
         if pool.is_empty() {
@@ -120,6 +135,9 @@ impl ParticleRenderer {
 
         let particles = pool.particles();
         self.sort_far_to_near(particles, camera_pos);
+        self.beyond_end = partition_stable(&mut self.draw_order, |&(_, index)| {
+            beyond(&particles[index].position)
+        });
         let particle_count = self.draw_order.len();
 
         // Generate billboard vertices for each particle
@@ -181,15 +199,27 @@ impl ParticleRenderer {
         self.draw_order.is_empty()
     }
 
-    /// How many of the prepared particles lie at or beyond `distance_sq` from
-    /// the camera — that is, the length of the prefix of the draw order that
-    /// must be recorded before something at that distance.
+    /// Where the particles beyond the water end in the draw order, and the
+    /// rest begin.
+    pub fn beyond_water_end(&self) -> usize {
+        self.beyond_end
+    }
+
+    /// The end of the draw order.
+    pub fn len(&self) -> usize {
+        self.draw_order.len()
+    }
+
+    /// Of the prepared particles in `range` of the draw order, the index just
+    /// past those at or beyond `distance_sq` from the camera — that is, where
+    /// the stretch that must be recorded before something at that distance
+    /// ends.
     ///
-    /// The order is far to near, so this is a binary search on a descending
-    /// key rather than a scan.
-    pub fn count_beyond(&self, distance_sq: f32) -> usize {
-        self.draw_order
-            .partition_point(|&(key, _)| key >= distance_sq)
+    /// Each side of the water is ordered far to near, so this is a binary
+    /// search on a descending key rather than a scan.
+    pub fn count_beyond(&self, range: std::ops::Range<usize>, distance_sq: f32) -> usize {
+        let start = range.start;
+        start + self.draw_order[range].partition_point(|&(key, _)| key >= distance_sq)
     }
 
     /// Bind the particle pipeline and this frame's buffers and matrices.
@@ -292,6 +322,16 @@ impl ParticleRenderer {
             self.draw_order.drain(..excess);
         }
     }
+}
+
+/// Move the items `first` picks to the front, keeping the order within each
+/// side. Returns where the others begin.
+fn partition_stable<T: Copy>(items: &mut Vec<T>, first: impl Fn(&T) -> bool) -> usize {
+    let (mut front, back): (Vec<T>, Vec<T>) = items.iter().partition(|item| first(item));
+    let split = front.len();
+    front.extend(back);
+    *items = front;
+    split
 }
 
 /// Helper to cast a slice of f32 to bytes.

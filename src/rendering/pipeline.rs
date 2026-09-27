@@ -12,7 +12,7 @@ use ash::vk;
 
 use crate::core::device::ManagedDevice;
 use crate::core::error::{EngineError, EngineResult};
-use crate::rendering::material::SURFACE_INDEX_OFFSET;
+use crate::rendering::material::GEOMETRY_PUSH_SIZE;
 use crate::rendering::shaders::ShaderManager;
 use crate::rendering::vertex::Vertex;
 
@@ -233,6 +233,15 @@ pub struct GraphicsPipelineConfig {
     pub shadow_sampler: vk::Sampler,
 }
 
+/// How a scene render pass finds its attachments.
+#[derive(Clone, Copy, Debug)]
+enum ScenePassStart {
+    /// Cleared, at the start of the frame.
+    Clear,
+    /// As the refraction copy left them.
+    AfterCopy,
+}
+
 /// Immutable graphics pipeline configuration and state.
 ///
 /// Owns the render passes, descriptor set layouts, pipeline layout, and the
@@ -256,8 +265,12 @@ pub struct GraphicsPipeline {
     pub scene_blended_front: vk::Pipeline,
     /// Pipeline layout shared by all standard geometry variants.
     pub layout: vk::PipelineLayout,
-    /// Render pass for opaque geometry.
+    /// Render pass for the HDR scene: opaque geometry, then blended.
     pub renderpass: vk::RenderPass,
+    /// The scene pass again, picking up colour and depth where it left them
+    /// after the refraction copy. Compatible with `renderpass`, so every
+    /// pipeline and the framebuffer serve both.
+    pub resume_renderpass: vk::RenderPass,
     /// Render pass for transparent geometry (loads existing colour + depth read-only).
     pub transparent_renderpass: vk::RenderPass,
     pub scene_ubo_descriptor_set_layout: vk::DescriptorSetLayout,
@@ -286,6 +299,8 @@ impl GraphicsPipeline {
         //     which reads its rotation to place an object-space grain
         // - vec4 colourOverride   (offset 64, 16 bytes) — fragment
         // - uint surfaceIndex     (offset 80,  4 bytes) — fragment
+        // - vec4 clipPlane        (offset 96, 16 bytes) — vertex, where the
+        //     water divides a blended mesh that crosses its surface
         //
         // A single range rather than one per stage: two ranges may not declare
         // the same stage, and the fragment block now starts at offset 0.
@@ -295,7 +310,7 @@ impl GraphicsPipeline {
         let push_constant_ranges = [vk::PushConstantRange {
             stage_flags: vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
             offset: 0,
-            size: SURFACE_INDEX_OFFSET + std::mem::size_of::<u32>() as u32,
+            size: GEOMETRY_PUSH_SIZE,
         }];
 
         let pipeline_layout_create_info = vk::PipelineLayoutCreateInfo::default()
@@ -309,7 +324,9 @@ impl GraphicsPipeline {
         };
 
         // Create render passes
-        let renderpass = Self::create_render_pass(&device, config)?;
+        let renderpass = Self::create_render_pass(&device, config, ScenePassStart::Clear)?;
+        let resume_renderpass =
+            Self::create_render_pass(&device, config, ScenePassStart::AfterCopy)?;
         let transparent_renderpass = Self::create_transparent_render_pass(
             &device,
             config.swapchain_format,
@@ -351,14 +368,16 @@ impl GraphicsPipeline {
         // affordable only because these draws are sorted back to front before
         // they are recorded: each one is nearer than everything already in the
         // buffer, so it passes the test it would otherwise have to be excused
-        // from. What that buys is the passes that come after the scene
-        // resolves — water and fire — which test against this depth and have
-        // no other way of knowing the glass is there. Without it the water
-        // surface paints straight over an ice cube standing in a pond.
+        // from. What that buys is the fire drawn after the scene resolves,
+        // which tests against this depth and has no other way of knowing the
+        // glass is there.
         //
         // It also means anything drawn after a blended mesh is occluded by it,
         // which is why particles are recorded in this pass, interleaved with
-        // these draws, rather than after the resolve.
+        // these draws, rather than after the resolve. The water, drawn in
+        // this pass too, goes down before any blended mesh in front of it; one
+        // that crosses the surface is clipped at it and drawn in two halves,
+        // so its depth never hides the water behind it.
         let blended_scene_config = |cull_mode| PipelineVariantConfig {
             polygon_mode: vk::PolygonMode::FILL,
             cull_mode,
@@ -397,6 +416,7 @@ impl GraphicsPipeline {
             scene_blended_front,
             layout,
             renderpass,
+            resume_renderpass,
             transparent_renderpass,
             scene_ubo_descriptor_set_layout,
             sampler_descriptor_set_layout,
@@ -486,30 +506,50 @@ impl GraphicsPipeline {
         }
     }
 
-    /// Render pass for opaque geometry (sky, terrain, models, debug overlays).
+    /// Render pass for the HDR scene (sky, terrain, models, blended geometry,
+    /// particles, water).
     ///
     /// Writes to the offscreen HDR `ColorTarget` and depth buffer. The color
     /// attachment transitions to `SHADER_READ_ONLY_OPTIMAL` at the end, ready to
-    /// be sampled by the post-processing resolve and by the water shader for
-    /// refraction.
+    /// be sampled by the post-processing resolve. Depth is stored: the
+    /// refraction copy and the passes after the resolve read it.
+    ///
+    /// A frame with water ends the pass once, for the refraction copy, and
+    /// resumes it with the `AfterCopy` variant, which loads both attachments
+    /// from where the copy left them.
     fn create_render_pass(
         device: &ManagedDevice,
         config: &GraphicsPipelineConfig,
+        start: ScenePassStart,
     ) -> EngineResult<vk::RenderPass> {
+        let (load_op, colour_initial, depth_initial) = match start {
+            ScenePassStart::Clear => (
+                vk::AttachmentLoadOp::CLEAR,
+                vk::ImageLayout::UNDEFINED,
+                vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+            ),
+            ScenePassStart::AfterCopy => (
+                vk::AttachmentLoadOp::LOAD,
+                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+            ),
+        };
         let attachments = [
             vk::AttachmentDescription {
                 format: config.scene_color_format,
                 samples: vk::SampleCountFlags::TYPE_1,
-                load_op: vk::AttachmentLoadOp::CLEAR,
+                load_op,
                 store_op: vk::AttachmentStoreOp::STORE,
+                initial_layout: colour_initial,
                 final_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
                 ..Default::default()
             },
             vk::AttachmentDescription {
                 format: config.depth_format,
                 samples: vk::SampleCountFlags::TYPE_1,
-                load_op: vk::AttachmentLoadOp::CLEAR,
-                initial_layout: vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                load_op,
+                store_op: vk::AttachmentStoreOp::STORE,
+                initial_layout: depth_initial,
                 final_layout: vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
                 ..Default::default()
             },
@@ -527,13 +567,18 @@ impl GraphicsPipeline {
 
         // The previous frame may still be on the GPU, reading the depth
         // buffer in its transparent pass and sampling the colour target in its
-        // resolve and water passes. Both finish by its colour output, and the
+        // resolve and refraction copy. Both finish by its colour output, and the
         // depth clear here must also wait for its depth writes.
         let depth_stages = vk::PipelineStageFlags::EARLY_FRAGMENT_TESTS
             | vk::PipelineStageFlags::LATE_FRAGMENT_TESTS;
+        //
+        // Resumed after the refraction copy, the same dependency must also
+        // follow the copy's reads of both attachments.
         let dependencies = [vk::SubpassDependency {
             src_subpass: vk::SUBPASS_EXTERNAL,
-            src_stage_mask: vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT | depth_stages,
+            src_stage_mask: vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT
+                | depth_stages
+                | vk::PipelineStageFlags::TRANSFER,
             src_access_mask: vk::AccessFlags::DEPTH_STENCIL_ATTACHMENT_WRITE,
             dst_access_mask: vk::AccessFlags::COLOR_ATTACHMENT_READ
                 | vk::AccessFlags::COLOR_ATTACHMENT_WRITE
@@ -561,12 +606,12 @@ impl GraphicsPipeline {
         }
     }
 
-    /// Render pass for what is composited after the HDR resolve (water, fire,
+    /// Render pass for what is composited after the HDR resolve (fire,
     /// overlay).
     ///
     /// Writes to the swapchain image (loaded from the blit of the opaque pass).
-    /// Depth is loaded from the opaque pass and available as both a read-only
-    /// depth-stencil attachment and an input attachment (for water volumetric depth).
+    /// Depth is loaded from the scene pass as a read-only depth-stencil
+    /// attachment, which fire also samples.
     pub fn create_transparent_render_pass(
         device: &ManagedDevice,
         color_format: vk::Format,
@@ -687,6 +732,9 @@ impl Drop for GraphicsPipeline {
             self.device
                 .device
                 .destroy_render_pass(self.renderpass, None);
+            self.device
+                .device
+                .destroy_render_pass(self.resume_renderpass, None);
             self.device
                 .device
                 .destroy_render_pass(self.transparent_renderpass, None);

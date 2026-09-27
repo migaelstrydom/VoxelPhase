@@ -13,6 +13,7 @@ use crate::core::error::{EngineError, EngineResult};
 use crate::core::vulkan_context::VulkanContext;
 use crate::rendering::target::images::{ColorTarget, DepthBuffer};
 use crate::rendering::target::output::FrameOutput;
+use crate::rendering::target::refraction::RefractionCopy;
 
 /// Depth format used by both render passes.
 pub const DEPTH_FORMAT: vk::Format = vk::Format::D16_UNORM;
@@ -25,15 +26,18 @@ pub const DEPTH_FORMAT: vk::Format = vk::Format::D16_UNORM;
 pub struct FrameTargets {
     pub extent: vk::Extent2D,
 
-    /// Offscreen HDR colour target for the opaque pass. Resolved to the output
-    /// image by the post-processing chain between passes, and sampled by the
-    /// water shader for refraction.
+    /// Offscreen HDR colour target for the scene pass. Resolved to the output
+    /// image by the post-processing chain between passes.
     pub color_target: ColorTarget,
 
     /// Depth buffer shared by both render passes.
     pub depth_buffer: DepthBuffer,
 
-    /// Framebuffer for the opaque render pass (HDR colour target + depth).
+    /// The scene as it stood before the water, for the water to refract.
+    pub refraction: RefractionCopy,
+
+    /// Framebuffer for the scene render pass and the pass that resumes it
+    /// after the refraction copy (HDR colour target + depth).
     pub opaque_framebuffer: vk::Framebuffer,
 
     /// One per output image, for the transparent render pass.
@@ -57,6 +61,8 @@ impl FrameTargets {
         // resolve tonemaps it down to the displayable range.
         let color_target = ColorTarget::new(vulkan_context, extent, scene_color_format)?;
         let depth_buffer = DepthBuffer::new(vulkan_context, extent, DEPTH_FORMAT)?;
+        let refraction =
+            RefractionCopy::new(vulkan_context, extent, scene_color_format, DEPTH_FORMAT)?;
 
         let opaque_attachments = [color_target.view, depth_buffer.view];
         let opaque_fb_info = vk::FramebufferCreateInfo::default()
@@ -89,6 +95,7 @@ impl FrameTargets {
             extent,
             color_target,
             depth_buffer,
+            refraction,
             opaque_framebuffer,
             transparent_framebuffers,
             device,

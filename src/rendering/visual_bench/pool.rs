@@ -1,10 +1,8 @@
 //! A still body of water for a bench shot to stand things in.
 //!
-//! Water is the one thing in the frame that is neither opaque geometry nor part
-//! of the scene's own blended pass: it is drawn after the tonemap resolve,
-//! against the depth the scene left behind. That makes it the only way to test
-//! how the blended pass and the post-resolve passes agree about depth — and
-//! they did not, which is why this exists.
+//! Water divides the scene's blended surfaces: what lies beyond its surface is
+//! drawn before it and seen through it, and what lies this side is drawn over
+//! it. A shot with a pool is the only way to see that division hold.
 //!
 //! The pool is drawn by the game's own water renderer, from a mesh built
 //! directly rather than from a hydrology network: a shot has to frame the same

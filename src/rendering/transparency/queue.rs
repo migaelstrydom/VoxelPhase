@@ -56,6 +56,11 @@ pub struct BlendedDraw {
     /// Squared because the sort only ever compares it: taking the root would
     /// be a wasted `sqrt` per draw that cannot change any ordering.
     depth_key: f32,
+
+    /// The world-space sphere around the mesh, for placing it against the
+    /// water.
+    centre: Vector3<f32>,
+    radius: f32,
 }
 
 impl BlendedDraw {
@@ -69,7 +74,18 @@ impl BlendedDraw {
     pub fn sorted_from(mut self, camera_pos: &Vector3<f32>, bounds: &MeshBounds) -> Self {
         let centre = self.geometry.model.transform_point(&bounds.centre().into());
         self.depth_key = (centre.coords - camera_pos).norm_squared();
+        self.centre = centre.coords;
+        let scale = (0..3)
+            .map(|axis| self.geometry.model.fixed_view::<3, 1>(0, axis).norm())
+            .fold(0.0, f32::max);
+        self.radius = bounds.half_diagonal() * scale;
         self
+    }
+
+    /// The world-space sphere around the mesh: its centre and radius. A draw
+    /// never given its bounds is taken to reach everywhere.
+    pub fn sphere(&self) -> (Vector3<f32>, f32) {
+        (self.centre, self.radius)
     }
 
     /// Squared distance from the camera to this draw, for a caller that has
@@ -86,6 +102,8 @@ impl BlendedDraw {
         Self {
             geometry,
             depth_key: f32::INFINITY,
+            centre: geometry.model.fixed_view::<3, 1>(0, 3).into_owned(),
+            radius: f32::INFINITY,
         }
     }
 }

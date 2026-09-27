@@ -245,11 +245,11 @@ impl LevelViewer {
         self.draw_terrain(cb)?;
         self.draw_objects(cb)?;
 
-        self.renderer.begin_transparent_pass(cb, image_index);
         if let Some(water) = self.world.try_fetch::<WaterWorld>() {
             self.renderer
-                .render_water(cb, &*water, &view, &projection, &camera_pos, 0.0)?;
+                .submit_water(&*water, &view, &projection, &camera_pos, 0.0)?;
         }
+        self.renderer.begin_transparent_pass(cb, image_index);
         self.renderer.end_frame(cb, image_index)?;
 
         // Readback reads the image directly, so the frame has to be finished

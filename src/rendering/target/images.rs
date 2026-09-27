@@ -17,10 +17,28 @@ pub struct DepthBuffer {
 }
 
 impl DepthBuffer {
+    /// The scene's depth buffer: tested and written by the scene pass,
+    /// sampled after it, and copied for the water to read.
     pub fn new(
         vulkan_context: &VulkanContext,
         extent: vk::Extent2D,
         format: vk::Format,
+    ) -> EngineResult<Self> {
+        Self::with_usage(
+            vulkan_context,
+            extent,
+            format,
+            vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT
+                | vk::ImageUsageFlags::SAMPLED
+                | vk::ImageUsageFlags::TRANSFER_SRC,
+        )
+    }
+
+    pub fn with_usage(
+        vulkan_context: &VulkanContext,
+        extent: vk::Extent2D,
+        format: vk::Format,
+        usage: vk::ImageUsageFlags,
     ) -> EngineResult<Self> {
         let device = Arc::clone(&vulkan_context.device);
 
@@ -33,7 +51,7 @@ impl DepthBuffer {
                 .array_layers(1)
                 .samples(vk::SampleCountFlags::TYPE_1)
                 .tiling(vk::ImageTiling::OPTIMAL)
-                .usage(vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT | vk::ImageUsageFlags::SAMPLED)
+                .usage(usage)
                 .sharing_mode(vk::SharingMode::EXCLUSIVE);
 
             let image =
@@ -49,8 +67,11 @@ impl DepthBuffer {
 
             let memory = allocate_and_bind(&device, image, extent)?;
 
-            // Transition depth image layout
-            Self::transition_layout(vulkan_context, image)?;
+            // A depth attachment starts in the layout the scene pass expects;
+            // anything else is transitioned by whoever first writes it.
+            if usage.contains(vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT) {
+                Self::transition_layout(vulkan_context, image)?;
+            }
 
             let view_info = vk::ImageViewCreateInfo::default()
                 .image(image)
@@ -164,6 +185,22 @@ impl ColorTarget {
         extent: vk::Extent2D,
         format: vk::Format,
     ) -> EngineResult<Self> {
+        Self::with_usage(
+            vulkan_context,
+            extent,
+            format,
+            vk::ImageUsageFlags::COLOR_ATTACHMENT
+                | vk::ImageUsageFlags::TRANSFER_SRC
+                | vk::ImageUsageFlags::SAMPLED,
+        )
+    }
+
+    pub fn with_usage(
+        vulkan_context: &VulkanContext,
+        extent: vk::Extent2D,
+        format: vk::Format,
+        usage: vk::ImageUsageFlags,
+    ) -> EngineResult<Self> {
         let device = Arc::clone(&vulkan_context.device);
 
         unsafe {
@@ -175,11 +212,7 @@ impl ColorTarget {
                 .array_layers(1)
                 .samples(vk::SampleCountFlags::TYPE_1)
                 .tiling(vk::ImageTiling::OPTIMAL)
-                .usage(
-                    vk::ImageUsageFlags::COLOR_ATTACHMENT
-                        | vk::ImageUsageFlags::TRANSFER_SRC
-                        | vk::ImageUsageFlags::SAMPLED,
-                )
+                .usage(usage)
                 .sharing_mode(vk::SharingMode::EXCLUSIVE);
 
             let image =
