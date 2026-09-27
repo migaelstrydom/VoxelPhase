@@ -5,6 +5,8 @@ has its own rigid-body physics engine, procedural character animation, water
 simulated as a hydrological network, fracturing glass and ice, and a GPU fluid
 simulation for fire.
 
+![The test arena: the player in front of a stone arch, a temple, a wall of ice blocks knocked down, and an igloo](VoxelPhase.png)
+
 It is developed on macOS through MoltenVK. Linux and Windows have not been
 tried.
 
