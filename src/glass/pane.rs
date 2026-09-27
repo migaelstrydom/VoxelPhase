@@ -22,6 +22,16 @@ use super::polygon::ConvexPolygon;
 use crate::collision::convex_hull::{ConvexHull, HullFace};
 use crate::physics::ColliderShape;
 
+/// How far, in metres, each shard's collider stands back from the crack.
+///
+/// Two shards that share an edge exactly are two colliders in contact from
+/// the moment one of them comes free, and a body that starts a sweep already
+/// touching its neighbour is clamped at time zero by continuous collision
+/// detection: it hangs in the air with its velocity climbing. A hairline of
+/// clearance means no shard ever starts out touching another. It is also,
+/// through the glass, the visible crack.
+const CRACK_GAP: f32 = 0.0008;
+
 /// The axes of a sheet in its body's frame, and how thick it is.
 #[derive(Debug, Clone, Copy)]
 pub struct SheetFrame {
@@ -109,6 +119,14 @@ impl SheetFrame {
             }
             _ => None,
         }
+    }
+
+    /// The collider a crack leaves of `cell`: its prism set back from the
+    /// crack, and where it sits in the body's frame when the cell's
+    /// mid-plane is `height` along the normal.
+    pub fn shard(&self, cell: &ConvexPolygon, height: f32) -> (ConvexHull, Vector3<f32>) {
+        let (hull, centroid) = self.prism(&cell.inset(CRACK_GAP).unwrap_or_else(|| cell.clone()));
+        (hull, self.lift(centroid, height))
     }
 
     /// The solid shard of a cell: a convex prism centred on the cell's

@@ -5,10 +5,10 @@ use std::time::Instant;
 use crate::debug::DebugLines;
 use crate::perf::stats::median;
 use crate::perf::Ground;
-use crate::physics::{FixedTimestep, FrameProfile, PhysicsStage, PhysicsWorld};
+use crate::physics::{FixedTimestep, FrameProfile, PhysicsImpulse, PhysicsStage, PhysicsWorld};
 
 use super::record::{FrameRecord, PerfRun};
-use super::scenario::PerfScenario;
+use super::scenario::{Disturbance, PerfScenario};
 
 /// How a scenario is stepped and how often it is repeated.
 ///
@@ -70,7 +70,7 @@ struct Take {
 }
 
 fn run_once(scenario: &dyn PerfScenario, ground: &Ground, config: RunConfig) -> Take {
-    let mut world = PhysicsWorld::default();
+    let mut world = PhysicsWorld::new(scenario.physics_config());
     scenario.populate(&mut world, ground);
     let bodies = world
         .bodies()
@@ -83,15 +83,24 @@ fn run_once(scenario: &dyn PerfScenario, ground: &Ground, config: RunConfig) -> 
     let mut debug_lines = DebugLines::default();
     let mut frames = Vec::new();
     let mut sim_time = 0.0f32;
+    let mut pending = scenario.disturbances(ground);
+    pending.sort_by(|a, b| b.at.total_cmp(&a.at));
 
     while sim_time < config.duration {
         let substeps = timestep.accumulate(config.frame_dt);
         if substeps == 0 {
             continue;
         }
+        let impulses = due(&mut pending, sim_time);
 
         let started = Instant::now();
-        world.update_contacts(config.fixed_dt, substeps, terrain, &[], &mut debug_lines);
+        world.update_contacts(
+            config.fixed_dt,
+            substeps,
+            terrain,
+            &impulses,
+            &mut debug_lines,
+        );
         for _ in 0..substeps {
             world.substep(config.fixed_dt, terrain, &[]);
         }
@@ -106,6 +115,7 @@ fn run_once(scenario: &dyn PerfScenario, ground: &Ground, config: RunConfig) -> 
             profile: world.frame_profile().clone(),
             awake_bodies: bodies.saturating_sub(sleeping),
             contacts: world.contact_events().len(),
+            disturbances: impulses.len(),
         });
     }
 
@@ -114,6 +124,15 @@ fn run_once(scenario: &dyn PerfScenario, ground: &Ground, config: RunConfig) -> 
         fingerprint: fingerprint(&world),
         frames,
     }
+}
+
+/// Take the disturbances due by `now` off `pending`, which is sorted latest first.
+fn due(pending: &mut Vec<Disturbance>, now: f32) -> Vec<PhysicsImpulse> {
+    let mut impulses = Vec::new();
+    while pending.last().is_some_and(|d| d.at <= now) {
+        impulses.extend(pending.pop().map(|d| d.impulse));
+    }
+    impulses
 }
 
 /// A hash of every body's final pose and velocity, bit for bit.

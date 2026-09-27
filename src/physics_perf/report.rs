@@ -10,6 +10,8 @@ use super::record::{FrameRecord, PerfRun};
 
 /// Length of one timeline row, in simulated seconds.
 pub const DEFAULT_WINDOW: f32 = 0.25;
+/// How long after a disturbance its aftermath is searched for the worst frame.
+const AFTERMATH: f32 = 1.0;
 
 /// The run as a whole: header, then where the time went stage by stage.
 pub fn summary(run: &PerfRun) -> String {
@@ -75,6 +77,9 @@ pub fn summary(run: &PerfRun) -> String {
         max_ms(&walls),
         budget_ms
     );
+    for index in (0..run.frames.len()).filter(|&i| run.frames[i].disturbances > 0) {
+        let _ = writeln!(out, "{}", aftermath(&run.frames, index));
+    }
     let ccd: u32 = run.frames.iter().map(|f| f.profile.ccd_corrections).sum();
     let _ = writeln!(out, "CCD corrections over the run: {}", ccd);
     let _ = writeln!(out, "final state fingerprint: {:016x}", run.fingerprint);
@@ -82,6 +87,7 @@ pub fn summary(run: &PerfRun) -> String {
 }
 
 /// The run over time: one row per `window` seconds, each the mean frame in it.
+/// A row holding a disturbance is marked `✸`.
 ///
 /// A blast is a sequence of different loads — flight, landing, sliding,
 /// sleep — and a whole-run average hides which of them is expensive.
@@ -102,9 +108,14 @@ pub fn timeline(run: &PerfRun, window: f32) -> String {
         let awake = frames.iter().map(|f| f.awake_bodies).sum::<usize>() as f64 / count;
         let contacts = frames.iter().map(|f| f.contacts).sum::<usize>() as f64 / count;
         let totals: Vec<Duration> = frames.iter().map(|f| f.wall).collect();
+        let marker = if frames.iter().any(|f| f.disturbances > 0) {
+            '✸'
+        } else {
+            ' '
+        };
         let _ = write!(
             out,
-            "{:>6.2} {:>6.0} {:>8.0} {:>8.3} |",
+            "{marker}{:>5.2} {:>6.0} {:>8.0} {:>8.3} |",
             frames[0].sim_time,
             awake,
             contacts,
@@ -149,7 +160,9 @@ pub fn scaling_table(runs: &[PerfRun], window: f32) -> String {
 
 /// Every frame as a CSV row: counts, wall clock, and each stage in ms.
 pub fn write_csv(run: &PerfRun, path: &Path) -> io::Result<()> {
-    let mut out = String::from("sim_time,awake_bodies,contacts,substeps,ccd_corrections,wall_ms");
+    let mut out = String::from(
+        "sim_time,awake_bodies,contacts,disturbances,substeps,ccd_corrections,wall_ms",
+    );
     for stage in PhysicsStage::ALL {
         let _ = write!(out, ",{}_ms", stage.label());
     }
@@ -157,10 +170,11 @@ pub fn write_csv(run: &PerfRun, path: &Path) -> io::Result<()> {
     for frame in &run.frames {
         let _ = write!(
             out,
-            "{:.4},{},{},{},{},{:.4}",
+            "{:.4},{},{},{},{},{},{:.4}",
             frame.sim_time,
             frame.awake_bodies,
             frame.contacts,
+            frame.disturbances,
             frame.profile.substeps,
             frame.profile.ccd_corrections,
             as_ms(frame.wall)
@@ -171,6 +185,43 @@ pub fn write_csv(run: &PerfRun, path: &Path) -> io::Result<()> {
         out.push('\n');
     }
     std::fs::write(path, out)
+}
+
+/// One line on what the disturbance at `frames[index]` cost: its own frame,
+/// the worst frame after it, and when the bodies it woke had settled again.
+fn aftermath(frames: &[FrameRecord], index: usize) -> String {
+    let hit = &frames[index];
+    let before = index.checked_sub(1).map_or(0, |i| frames[i].awake_bodies);
+    let horizon = hit.sim_time + AFTERMATH;
+    let worst = frames[index..]
+        .iter()
+        .take_while(|f| f.sim_time <= horizon)
+        .max_by_key(|f| f.wall)
+        .unwrap_or(hit);
+    let peak_awake = frames[index..]
+        .iter()
+        .map(|f| f.awake_bodies)
+        .max()
+        .unwrap_or(0);
+    let settled = frames[index + 1..]
+        .iter()
+        .find(|f| f.awake_bodies <= before)
+        .map_or("not within the run".to_string(), |f| {
+            format!("at {:.2} s", f.sim_time)
+        });
+    format!(
+        "disturbance at {:.2} s: {:.3} ms that frame, worst {:.3} ms at {:.2} s ({}); \
+         awake {} → {} peak, back to {} {}",
+        hit.sim_time,
+        as_ms(hit.wall),
+        as_ms(worst.wall),
+        worst.sim_time,
+        top_stages(std::slice::from_ref(worst), 2),
+        before,
+        peak_awake,
+        before,
+        settled
+    )
 }
 
 fn top_stages(frames: &[FrameRecord], count: usize) -> String {

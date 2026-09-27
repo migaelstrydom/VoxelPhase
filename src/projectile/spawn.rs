@@ -10,7 +10,7 @@ use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
 };
 use crate::model::Model;
-use crate::physics::{ColliderDesc, PhysicsWorld, RigidBodyDesc};
+use crate::physics::{ColliderDesc, PhysicsWorld, RigidBodyDesc, RigidBodyHandle};
 
 /// Create a live grenade: its body in `physics` and its entity through
 /// `builder`, fuse lit.
@@ -25,18 +25,7 @@ pub fn spawn_grenade<B: Builder>(
     origin: Point3<f32>,
     velocity: Vector3<f32>,
 ) -> Entity {
-    let world_gravity = physics.config().gravity;
-    let body_desc = RigidBodyDesc::dynamic()
-        .position(origin)
-        .linear_velocity(velocity)
-        .gravity_scale(gravity_scale(world_gravity, config.gravity));
-    let body_handle = physics.create_body(body_desc);
-
-    let collider_desc = ColliderDesc::sphere(config.radius)
-        .density(2000.0)
-        .restitution(0.0)
-        .friction(0.3);
-    physics.attach_collider(body_handle, collider_desc);
+    let body_handle = create_grenade_body(physics, config, origin, velocity);
 
     builder
         .with(Position(origin.coords))
@@ -49,4 +38,27 @@ pub fn spawn_grenade<B: Builder>(
         .with(ModelInstance::new(model))
         .with(Renderable)
         .build()
+}
+
+/// A grenade's body alone, in flight from `origin` at `velocity`: what the
+/// physics sees of a thrown grenade, for a caller with no entity to give it.
+pub fn create_grenade_body(
+    physics: &mut PhysicsWorld,
+    config: &GrenadeConfig,
+    origin: Point3<f32>,
+    velocity: Vector3<f32>,
+) -> RigidBodyHandle {
+    let world_gravity = physics.config().gravity;
+    let body_desc = RigidBodyDesc::dynamic()
+        .position(origin)
+        .linear_velocity(velocity)
+        .gravity_scale(gravity_scale(world_gravity, config.gravity));
+    let body_handle = physics.create_body(body_desc);
+
+    let collider_desc = ColliderDesc::sphere(config.radius)
+        .density(2000.0)
+        .restitution(0.0)
+        .friction(0.3);
+    physics.attach_collider(body_handle, collider_desc);
+    body_handle
 }

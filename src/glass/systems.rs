@@ -28,15 +28,6 @@ const MAX_SHARD_SPEED: f32 = 5.0;
 /// Shards must share at least this much edge, in metres, to hold each other.
 const MIN_JOINT_OVERLAP: f32 = 0.01;
 
-/// How far, in metres, each shard's collider stands back from the crack.
-///
-/// Two shards that share an edge exactly are two colliders in contact from
-/// the moment one of them comes free, and a body that starts a sweep already
-/// touching its neighbour is clamped at time zero by continuous collision
-/// detection: it hangs in the air with its velocity climbing. A hairline of
-/// clearance means no shard ever starts out touching another. It is also,
-/// through the glass, the visible crack.
-const CRACK_GAP: f32 = 0.0008;
 /// Glass area, in m², a jolt's inertial impulse is scaled to before it is
 /// judged against the craze threshold: about one window pane, so the
 /// threshold authored for a blow on a pane means the same thing for a jolt.
@@ -385,11 +376,8 @@ fn crack(
 
     // Swap the pane for its shards.
     let shards = cells.iter().map(|cell| {
-        let (hull, centroid) = frame.prism(&cell.inset(CRACK_GAP).unwrap_or_else(|| cell.clone()));
-        substance.clothe(
-            ColliderDesc::convex_hull(Arc::new(hull))
-                .offset_translation(frame.lift(centroid, height)),
-        )
+        let (hull, offset) = frame.shard(cell, height);
+        substance.clothe(ColliderDesc::convex_hull(Arc::new(hull)).offset_translation(offset))
     });
     let Some(split) = split_child(physics, fracture, body_handle, hit.child, shards) else {
         return false;

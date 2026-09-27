@@ -21,7 +21,7 @@
 //!   person's weight, so it crazes under a footstep and gives way under
 //!   someone who stops walking.
 
-use nalgebra::{Point3, Vector3};
+use nalgebra::{Point3, Vector2, Vector3};
 use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
@@ -29,12 +29,13 @@ use super::shared::models::cuboid_model;
 use super::shared::orientation::Yaw;
 use super::shared::textures::seed_from_position;
 use super::{MaterialCtx, Spawnable};
+use crate::collision::convex_hull::ConvexHull;
 use crate::components::{
     ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Velocity,
 };
 use crate::core::error::EngineResult;
 use crate::fracture::CompoundFracture;
-use crate::glass::{BrittleSheet, CrackWeb, CrazeRule, FatigueRule, SheetFrame};
+use crate::glass::{BrittleSheet, ConvexPolygon, CrackWeb, CrazeRule, FatigueRule, SheetFrame};
 use crate::physics::{ColliderDesc, RigidBodyDesc};
 use crate::rendering::material::MaterialId;
 use crate::rendering::pattern;
@@ -125,6 +126,22 @@ impl GlassSheetDef {
 
     fn substance() -> Substance {
         substance::GLASS
+    }
+
+    /// Every shard the whole pane crazes into around `hit`, a point in its
+    /// plane from its centre, cut as the crack system cuts them: each hull
+    /// with its offset from the pane's centre, in the pane's own axes. Empty
+    /// if no layout for `salt` produced shards the engine can take.
+    pub fn shards(&self, hit: Vector2<f32>, salt: u32) -> Vec<(ConvexHull, Vector3<f32>)> {
+        let frame = self.frame();
+        let (half_u, half_v) = self.half_size();
+        let pane = ConvexPolygon::rectangle(Vector2::zeros(), half_u, half_v);
+        self.crazing()
+            .craze(&pane, hit, frame.thickness, salt)
+            .unwrap_or_default()
+            .iter()
+            .map(|cell| frame.shard(cell, 0.0))
+            .collect()
     }
 
     fn frame(&self) -> SheetFrame {

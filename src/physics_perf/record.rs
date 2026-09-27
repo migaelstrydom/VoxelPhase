@@ -15,6 +15,8 @@ pub struct FrameRecord {
     pub awake_bodies: usize,
     /// Contacts the narrowphase produced this frame.
     pub contacts: usize,
+    /// Scenario disturbances delivered at the start of this frame.
+    pub disturbances: usize,
 }
 
 impl FrameRecord {
