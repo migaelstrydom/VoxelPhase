@@ -21,6 +21,7 @@ use crate::rendering::colour::Colour;
 use crate::rendering::grain::GrainSpec;
 use crate::rendering::material::SurfaceFinish;
 use crate::rendering::physical_finish::PhysicalSurface;
+use crate::rendering::reflection::Reflects;
 use crate::rendering::substance::palette::Palette;
 use crate::rendering::substance::spec::Substance;
 use crate::rendering::transparency::Transparency;
@@ -51,6 +52,7 @@ const fn stone(
         grain_by_uv: false,
         palette: Palette::from_base_const(base, spread),
         transparency: Transparency::OPAQUE,
+        reflects: Reflects::Sky,
     }
 }
 
@@ -159,6 +161,7 @@ pub const BRICK: Substance = Substance {
     palette: Palette::from_base_const(Colour::new(0.55, 0.27, 0.20, 1.0), 0.2)
         .with_accent(Colour::new(0.72, 0.70, 0.66, 1.0)),
     transparency: Transparency::OPAQUE,
+    reflects: Reflects::Sky,
 };
 
 /// Split roofing stone: dark, dense, and the smoothest of the stones because a
@@ -197,6 +200,7 @@ const fn timber(
         grain_by_uv: true,
         palette: Palette::from_base_const(base, 0.22).with_accent(accent),
         transparency: Transparency::OPAQUE,
+        reflects: Reflects::Sky,
     }
 }
 
@@ -238,6 +242,7 @@ pub const STEEL: Substance = Substance {
     grain_by_uv: false,
     palette: Palette::from_base_const(Colour::new(0.62, 0.64, 0.67, 1.0), 0.18),
     transparency: Transparency::OPAQUE,
+    reflects: Reflects::Sky,
 };
 
 /// Build a pure-metal substance. Fully metallic, so its colour is all in the
@@ -268,6 +273,9 @@ const fn pure_metal(
         grain_by_uv: false,
         palette,
         transparency: Transparency::OPAQUE,
+        // A metal shows no colour of its own but what it reflects; the sky
+        // alone leaves its downward half a flat grey.
+        reflects: Reflects::Surroundings,
     }
 }
 
@@ -387,6 +395,7 @@ pub const RUBBER: Substance = Substance {
     grain_by_uv: false,
     palette: Palette::from_base_const(Colour::new(0.22, 0.22, 0.24, 1.0), 0.25),
     transparency: Transparency::OPAQUE,
+    reflects: Reflects::Sky,
 };
 
 /// Moulded plastic: the bright toy props. Smooth on purpose — the visual
@@ -406,6 +415,7 @@ pub const PLASTIC: Substance = Substance {
     grain_by_uv: false,
     palette: Palette::from_base_const(Colour::new(0.8, 0.8, 0.82, 1.0), 0.2),
     transparency: Transparency::OPAQUE,
+    reflects: Reflects::Sky,
 };
 
 /// Frozen water. The library's first transmissive substance, and the one that
@@ -450,6 +460,7 @@ pub const ICE: Substance = Substance {
         .with_light(Colour::new(0.95, 0.98, 1.0, 1.0))
         .with_accent(Colour::new(0.26, 0.55, 0.78, 1.0)),
     transparency: Transparency::ICE,
+    reflects: Reflects::Sky,
 };
 
 /// Window glass: the one substance in the library you are meant to look
@@ -481,6 +492,7 @@ pub const GLASS: Substance = Substance {
         .with_light(Colour::new(0.98, 1.0, 1.0, 1.0))
         .with_accent(Colour::new(0.50, 0.76, 0.72, 1.0)),
     transparency: Transparency::GLASS,
+    reflects: Reflects::Sky,
 };
 
 #[cfg(test)]

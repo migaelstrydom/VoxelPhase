@@ -53,10 +53,15 @@ use crate::rendering::renderer::Renderer;
 use crate::rendering::resident::VersionedMeshId;
 use crate::resources::manager::ResourceManager;
 use crate::resources::textures::TextureManager;
+use crate::systems::probe_owner;
 use crate::terrain::{self, BlastConfig, TerrainWorld};
 use crate::water::{Disturbance, WaterWorld};
 
 use super::shots::ViewerShot;
+
+/// The most frames a still is drawn over while its reflection probes are
+/// handed out. Each admits a few; this covers a probe atlas's worth.
+const MAX_PROBE_SETTLING_FRAMES: usize = 8;
 
 /// A level loaded onto the GPU, ready to be photographed from anywhere.
 ///
@@ -201,6 +206,33 @@ impl LevelViewer {
         self.renderer.shadow.volume = shot.environment.shadow;
         self.renderer.shadow.volume.resolution = resolution;
 
+        // A reflection probe is handed out on the frame after its object first
+        // asks for one, and a frame admits only a few, so the shot is drawn
+        // until every probe it wants is live. The game gets there within a
+        // few frames of a level loading, so the still shows what it shows.
+        for _ in 0..MAX_PROBE_SETTLING_FRAMES {
+            self.draw_frame(&view, &projection, &camera_pos, shot)?;
+            if !self.renderer.probes.settling() {
+                break;
+            }
+        }
+
+        let pixels = self.renderer.output.read_pixels()?;
+
+        RgbaImage::from_raw(extent.width, extent.height, pixels).ok_or_else(|| {
+            EngineError::InvalidState("readback produced the wrong number of pixels".to_string())
+        })
+    }
+
+    /// Record, submit and finish one frame of `shot`.
+    fn draw_frame(
+        &mut self,
+        view: &Matrix4<f32>,
+        projection: &Matrix4<f32>,
+        camera_pos: &Vector3<f32>,
+        shot: &ViewerShot,
+    ) -> EngineResult<()> {
+        let (view, projection, camera_pos) = (*view, *projection, *camera_pos);
         let (cb, image_index) = self.renderer.begin_frame()?;
 
         self.renderer.begin_opaque_pass(cb);
@@ -222,12 +254,7 @@ impl LevelViewer {
 
         // Readback reads the image directly, so the frame has to be finished
         // rather than merely submitted.
-        self.renderer.wait_for_frame()?;
-        let pixels = self.renderer.output.read_pixels()?;
-
-        RgbaImage::from_raw(extent.width, extent.height, pixels).ok_or_else(|| {
-            EngineError::InvalidState("readback produced the wrong number of pixels".to_string())
-        })
+        self.renderer.wait_for_frame()
     }
 
     fn draw_terrain(&mut self, cb: ash::vk::CommandBuffer) -> EngineResult<()> {
@@ -288,6 +315,7 @@ impl LevelViewer {
                     &self.material_manager,
                     &self.texture_manager,
                     SurfaceModulation::IDENTITY,
+                    Some(probe_owner(entity)),
                 )?;
             }
         }

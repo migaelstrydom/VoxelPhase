@@ -8,6 +8,7 @@
 #include "lighting.glsl"
 #include "lights.glsl"
 #include "environment.glsl"
+#include "reflection.glsl"
 #include "shadow.glsl"
 #include "triplanar.glsl"
 #include "surface_character.glsl"
@@ -188,7 +189,7 @@ void main() {
     // or metallic surface shows. `ambient_colour` remains on top as an author's
     // fill for lifting a scene without moving the sky.
     vec3 litColor = totalResponse(sun_response) * sun_visibility
-                  + shadeEnvironment(surface, sun.direction)
+                  + shadeEnvironment(surface, sun.direction, reflectedRadiance(surface, sun.direction))
                   + shadeAmbient(surface, scene.ambient_colour.rgb)
                   + materialEmissive();
 

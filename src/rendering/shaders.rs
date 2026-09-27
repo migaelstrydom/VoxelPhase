@@ -36,6 +36,10 @@ mod bytecode {
     pub const SHADOW_VERTEX: &[u8] = embedded_spirv!("shadow.vert");
     pub const SHADOW_FRAGMENT: &[u8] = embedded_spirv!("shadow.frag");
 
+    /// Reflection probe capture shaders
+    pub const PROBE_VERTEX: &[u8] = embedded_spirv!("probe.vert");
+    pub const PROBE_FRAGMENT: &[u8] = embedded_spirv!("probe.frag");
+
     /// Sky rendering shaders
     pub const SKY_VERTEX: &[u8] = embedded_spirv!("sky.vert");
     pub const SKY_FRAGMENT: &[u8] = embedded_spirv!("sky.frag");
@@ -81,6 +85,16 @@ impl ShaderManager {
     /// Load the shadow map fragment shader (writes nothing; see shadow.frag).
     pub fn load_shadow_fragment(device: &ManagedDevice) -> EngineResult<vk::ShaderModule> {
         Self::load_shader(device, bytecode::SHADOW_FRAGMENT, ShaderStage::Fragment)
+    }
+
+    /// Load the reflection probe capture vertex shader.
+    pub fn load_probe_vertex(device: &ManagedDevice) -> EngineResult<vk::ShaderModule> {
+        Self::load_shader(device, bytecode::PROBE_VERTEX, ShaderStage::Vertex)
+    }
+
+    /// Load the reflection probe capture fragment shader.
+    pub fn load_probe_fragment(device: &ManagedDevice) -> EngineResult<vk::ShaderModule> {
+        Self::load_shader(device, bytecode::PROBE_FRAGMENT, ShaderStage::Fragment)
     }
 
     /// Load the shared fullscreen-triangle vertex shader used by every

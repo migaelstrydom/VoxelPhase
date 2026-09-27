@@ -239,7 +239,7 @@ impl Drop for ColorTarget {
 /// Allocate device-local memory for `image` and bind it.
 ///
 /// `extent` is carried only so a failure can report which image it was.
-fn allocate_and_bind(
+pub(crate) fn allocate_and_bind(
     device: &ManagedDevice,
     image: vk::Image,
     extent: vk::Extent2D,

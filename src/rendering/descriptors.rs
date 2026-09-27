@@ -13,6 +13,7 @@ use crate::core::error::{EngineResult, VkResultExt};
 use crate::rendering::deletion_queue::DeletionQueue;
 use crate::rendering::frame::ManagedBuffer;
 use crate::rendering::in_flight::{FrameSlot, PerFrame, FRAMES_IN_FLIGHT};
+use crate::rendering::reflection::atlas::PROBE_LAYOUT;
 use crate::rendering::texture::ManagedTexture;
 
 // Constants for texture pool management
@@ -78,8 +79,8 @@ impl DescriptorManager {
         // Create UBO pool. One descriptor set per frame in flight, each
         // holding two uniform buffer descriptors — the scene block (binding 0)
         // and the light set (binding 1) — plus the sun shadow map (binding 2)
-        // and the frame's surface table (binding 3) and the shared grain
-        // texture (binding 4).
+        // and the frame's surface table (binding 3), the shared grain
+        // texture (binding 4) and the reflection probes (binding 5).
         let frames = FRAMES_IN_FLIGHT as u32;
         let ubo_pool_sizes = [
             vk::DescriptorPoolSize::default()
@@ -87,7 +88,7 @@ impl DescriptorManager {
                 .descriptor_count(2 * frames),
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                .descriptor_count(2 * frames),
+                .descriptor_count(3 * frames),
             vk::DescriptorPoolSize::default()
                 .ty(vk::DescriptorType::STORAGE_BUFFER)
                 .descriptor_count(frames),
@@ -224,6 +225,35 @@ impl DescriptorManager {
                 vk::WriteDescriptorSet::default()
                     .dst_set(set)
                     .dst_binding(4)
+                    .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                    .image_info(&image_info)
+            })
+            .collect();
+
+        unsafe {
+            self.device.device.update_descriptor_sets(&writes, &[]);
+        }
+    }
+
+    /// Point every frame's reflection probe descriptor (set 0, binding 5) at
+    /// the probe atlas.
+    ///
+    /// Written once at startup, like the shadow map: there is one atlas,
+    /// shared by the frames in flight and ordered on the GPU by the capture
+    /// pass's own dependencies.
+    pub fn update_reflection_probes(&self, image_view: vk::ImageView, sampler: vk::Sampler) {
+        let image_info = [vk::DescriptorImageInfo::default()
+            .image_layout(PROBE_LAYOUT)
+            .image_view(image_view)
+            .sampler(sampler)];
+
+        let writes: Vec<_> = self
+            .scene_sets
+            .iter()
+            .map(|&set| {
+                vk::WriteDescriptorSet::default()
+                    .dst_set(set)
+                    .dst_binding(5)
                     .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                     .image_info(&image_info)
             })

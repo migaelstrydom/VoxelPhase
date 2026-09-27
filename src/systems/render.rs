@@ -18,6 +18,7 @@ use crate::rendering::debug_render::{
 };
 use crate::rendering::material::{MaterialManager, SurfaceModulation};
 use crate::rendering::profile::{RenderProfile, RenderStage};
+use crate::rendering::reflection::ProbeOwner;
 use crate::rendering::renderer::Renderer;
 use crate::rendering::resident::VersionedMeshId;
 use crate::rendering::vertex::Vertex;
@@ -27,8 +28,8 @@ use crate::water::WaterWorld;
 use nalgebra::{Matrix4, Vector3};
 use specs::shred::ResourceId;
 use specs::{
-    Entities, Join, Read, ReadExpect, ReadStorage, System, SystemData, World, Write, WriteExpect,
-    WriteStorage,
+    Entities, Entity, Join, Read, ReadExpect, ReadStorage, System, SystemData, World, Write,
+    WriteExpect, WriteStorage,
 };
 use std::time::{Duration, Instant};
 
@@ -105,6 +106,12 @@ fn fire_volume_to_world(pos: &Vector3<f32>, scale: &Vector3<f32>) -> Matrix4<f32
     Matrix4::new_translation(&(pos + offset)) * Matrix4::new_nonuniform_scaling(scale)
 }
 
+/// The name an entity's reflection probe is held under: its index and its
+/// generation, so an entity that reuses a freed index is a new owner.
+pub fn probe_owner(entity: Entity) -> ProbeOwner {
+    ProbeOwner((entity.gen().id() as u32 as u64) << 32 | entity.id() as u64)
+}
+
 fn millis(time: Duration) -> f32 {
     time.as_secs_f32() * 1000.0
 }
@@ -165,6 +172,13 @@ fn log_render_profile(profile: &RenderProfile, debug_log: &mut DebugLog) {
         counters.shadow_casters.to_string(),
     );
     debug_log.add("Render/Count/particles", counters.particles.to_string());
+    debug_log.add(
+        "Render/Count/probes",
+        format!(
+            "{} ({} faces, {} draws)",
+            counters.probes, counters.probe_faces, counters.probe_draws
+        ),
+    );
     debug_log.add(
         "Render/Count/uploaded_mesh",
         format!(
@@ -384,6 +398,7 @@ impl<'a> System<'a> for RenderSystem {
                             &material_manager,
                             &texture_manager,
                             modulation,
+                            Some(probe_owner(entity)),
                         ) {
                             log::error!("RenderSystem: Failed to draw model: {}", e);
                         }

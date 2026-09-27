@@ -1,5 +1,6 @@
 use crate::rendering::colour::Colour;
 use crate::rendering::grain::GrainSpec;
+use crate::rendering::reflection::{ProbeSlot, Reflects};
 use crate::rendering::surface_source::SurfaceSource;
 use crate::rendering::transparency::Transparency;
 use crate::rendering::triplanar::TriplanarProjection;
@@ -170,6 +171,10 @@ pub struct Material {
     /// coordinates. Zero — the default — means the alpha is coverage, as it
     /// is for every texture that was not baked with relief.
     pub relief: f32,
+
+    /// What the surface's reflection shows: the sky, by default, or the
+    /// object's actual surroundings from a reflection probe.
+    pub reflects: Reflects,
 }
 
 impl Material {
@@ -185,6 +190,7 @@ impl Material {
             source: SurfaceSource::PLAIN,
             transparency: Transparency::OPAQUE,
             relief: 0.0,
+            reflects: Reflects::Sky,
         }
     }
 
@@ -201,6 +207,7 @@ impl Material {
             source: SurfaceSource::PLAIN,
             transparency: Transparency::OPAQUE,
             relief: 0.0,
+            reflects: Reflects::Sky,
         }
     }
 
@@ -256,6 +263,12 @@ impl Material {
         self
     }
 
+    /// Choose what the surface reflects. See [`Reflects`].
+    pub fn with_reflections(mut self, reflects: Reflects) -> Self {
+        self.reflects = reflects;
+        self
+    }
+
     /// Set the self-illumination.
     pub fn with_emission(mut self, emission: Emission) -> Self {
         self.emission = emission;
@@ -289,6 +302,8 @@ impl Material {
             grain: self.grain,
             transparency: self.transparency,
             relief: self.relief,
+            reflects: self.reflects,
+            probe: None,
         }
     }
 }
@@ -366,13 +381,17 @@ pub struct GpuSurface {
 }
 
 impl GpuSurface {
+    /// `control.z` of a surface that reflects no probe. Matches `NO_PROBE` in
+    /// material.glsl.
+    pub const NO_PROBE: u32 = u32::MAX;
+
     /// Parameters for an unlit-looking matte surface, used where no material
     /// is available (debug overlays, procedural meshes).
     pub const MATTE: Self = Self {
         emissive: [0.0, 0.0, 0.0, 0.0],
         surface: [1.0, 0.0, 0.0, 3.0],
         projection: [0.0, 0.0, 0.0, 0.0],
-        control: [0, 0, 0, 0],
+        control: [0, 0, Self::NO_PROBE, 0],
         optics: [1.0, 0.04, 0.0, 0.0],
         detail: [0.0; 4],
     };
@@ -402,6 +421,13 @@ pub struct SurfaceParams {
     /// Depth of the relief in the diffuse alpha, in texture coordinates. Zero
     /// when the alpha is coverage.
     pub relief: f32,
+
+    /// What the surface asks to reflect.
+    pub reflects: Reflects,
+
+    /// The probe this draw reflects, when it asked for one and its object
+    /// holds one. Set per draw by the renderer, never by a material.
+    pub probe: Option<ProbeSlot>,
 }
 
 impl SurfaceParams {
@@ -415,6 +441,8 @@ impl SurfaceParams {
         grain: GrainSpec::NONE,
         transparency: Transparency::OPAQUE,
         relief: 0.0,
+        reflects: Reflects::Sky,
+        probe: None,
     };
 
     /// Give this surface a microstructure, projected from the object's own
@@ -459,6 +487,12 @@ impl SurfaceParams {
         self
     }
 
+    /// Reflect the probe in `slot`, or the sky alone when `None`.
+    pub fn with_probe(mut self, slot: Option<ProbeSlot>) -> Self {
+        self.probe = slot;
+        self
+    }
+
     /// Apply a per-instance modulation to these parameters.
     ///
     /// The emissive scale lands on `emissive.w` — the CPU-side radiance scale —
@@ -482,7 +516,12 @@ impl SurfaceParams {
                 self.grain.scale,
                 self.grain.strength,
             ],
-            control: [self.source.0, self.grain.layer.index(), 0, 0],
+            control: [
+                self.source.0,
+                self.grain.layer.index(),
+                self.probe.map_or(GpuSurface::NO_PROBE, |slot| slot.0),
+                0,
+            ],
             optics: [
                 self.transparency.opacity,
                 self.transparency.reflectance(),

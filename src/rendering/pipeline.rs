@@ -419,6 +419,8 @@ impl GraphicsPipeline {
         //   the worst frame rather than for a fixed small count.
         // Binding 4: the shared grain texture, one microstructure atlas for
         //   every material in the scene rather than one per material.
+        // Binding 5: the reflection probes, one cube-map array holding every
+        //   live probe (see `rendering::reflection`).
         let immutable_shadow_sampler = [shadow_sampler];
         let bindings = [
             vk::DescriptorSetLayoutBinding::default()
@@ -445,6 +447,11 @@ impl GraphicsPipeline {
                 .stage_flags(vk::ShaderStageFlags::FRAGMENT),
             vk::DescriptorSetLayoutBinding::default()
                 .binding(4)
+                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .descriptor_count(1)
+                .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+            vk::DescriptorSetLayoutBinding::default()
+                .binding(5)
                 .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 .descriptor_count(1)
                 .stage_flags(vk::ShaderStageFlags::FRAGMENT),

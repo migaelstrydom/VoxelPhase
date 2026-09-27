@@ -6,5 +6,5 @@ mod geometry;
 mod range_allocator;
 
 pub use arena::{MeshArena, ResidentMesh, UploadTally};
-pub use geometry::{ResidentGeometry, VersionedMeshId};
+pub use geometry::{ResidentGeometry, ResidentPrimitive, VersionedMeshId};
 pub use range_allocator::RangeAllocator;

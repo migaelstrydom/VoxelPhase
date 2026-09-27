@@ -1,0 +1,79 @@
+#version 450
+
+// Fills a reflection probe face's mips 1 to 5 from its freshly captured mip 0.
+//
+// One workgroup per face, which holds the whole 32x32 face: each thread
+// averages a 2x2 block of mip 0 into mip 1, then the chain is reduced in
+// shared memory, a quarter of the threads fewer at each level. Box filtering
+// stands in for prefiltering by roughness; at 32 texels a face nobody can
+// tell it from the GGX lobe.
+//
+// Done here rather than by blits because MoltenVK turns every blit into a
+// render pass of its own, which measured an order of magnitude slower.
+//
+// See src/rendering/reflection/mip_filter.rs.
+
+/// Must match PROBE_RESOLUTION / 2 in src/rendering/reflection/atlas.rs.
+const uint HALF = 16u;
+/// Must match MAX_FACES_PER_FRAME in src/rendering/reflection/faces.rs.
+const uint MAX_FACES = 24u;
+
+layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
+
+/// Every layer's mip 0.
+layout(set = 0, binding = 0) uniform sampler2DArray level0;
+/// Mips 1 to 5, every layer each.
+layout(set = 0, binding = 1, rgba16f) uniform writeonly image2DArray levels[5];
+
+layout(push_constant) uniform Faces {
+    /// The atlas layer of each face this dispatch filters, one per workgroup.
+    uint layers[MAX_FACES];
+} faces;
+
+shared vec4 tile[HALF][HALF];
+
+void store(uint level, ivec2 texel, int layer, vec4 value) {
+    // Indexed by constants only: an image array indexed dynamically needs a
+    // device feature that buys nothing here.
+    switch (level) {
+        case 1u: imageStore(levels[0], ivec3(texel, layer), value); break;
+        case 2u: imageStore(levels[1], ivec3(texel, layer), value); break;
+        case 3u: imageStore(levels[2], ivec3(texel, layer), value); break;
+        case 4u: imageStore(levels[3], ivec3(texel, layer), value); break;
+        case 5u: imageStore(levels[4], ivec3(texel, layer), value); break;
+    }
+}
+
+void main() {
+    int layer = int(faces.layers[gl_WorkGroupID.x]);
+    ivec2 texel = ivec2(gl_LocalInvocationID.xy);
+
+    ivec2 source = texel * 2;
+    vec4 average = 0.25 * (
+        texelFetch(level0, ivec3(source, layer), 0) +
+        texelFetch(level0, ivec3(source + ivec2(1, 0), layer), 0) +
+        texelFetch(level0, ivec3(source + ivec2(0, 1), layer), 0) +
+        texelFetch(level0, ivec3(source + ivec2(1, 1), layer), 0));
+    store(1u, texel, layer, average);
+    tile[texel.y][texel.x] = average;
+    barrier();
+
+    uint size = HALF / 2u;
+    for (uint level = 2u; level <= 5u; ++level) {
+        bool reducing = texel.x < int(size) && texel.y < int(size);
+        vec4 reduced = vec4(0.0);
+        if (reducing) {
+            ivec2 s = texel * 2;
+            reduced = 0.25 * (
+                tile[s.y][s.x] + tile[s.y][s.x + 1] +
+                tile[s.y + 1][s.x] + tile[s.y + 1][s.x + 1]);
+        }
+        barrier();
+        if (reducing) {
+            tile[texel.y][texel.x] = reduced;
+            store(level, texel, layer, reduced);
+        }
+        barrier();
+        size /= 2u;
+    }
+}

@@ -19,6 +19,12 @@ pub struct RenderCounters {
     pub shadow_casters: u32,
     /// Particles sorted, built and drawn.
     pub particles: u32,
+    /// Reflection probes live this frame.
+    pub probes: u32,
+    /// Probe faces captured this frame.
+    pub probe_faces: u32,
+    /// Draws recorded into probe faces, summed over the faces.
+    pub probe_draws: u32,
     /// Vertex and index bytes copied into a mesh buffer: streamed into the
     /// frame's, or uploaded into the resident arena because a model or the
     /// terrain was new or had changed.

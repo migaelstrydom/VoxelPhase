@@ -55,6 +55,8 @@ impl ManagedDevice {
                 shader_clip_distance: 1,
                 sampler_anisotropy: 1,
                 fill_mode_non_solid: 1,
+                // Reflection probes are sampled as one cube-map array.
+                image_cube_array: 1,
                 ..Default::default()
             };
             let device_extension_names_raw = [

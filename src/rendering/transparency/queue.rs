@@ -119,6 +119,11 @@ impl MeshBounds {
     pub fn centre(&self) -> Vector3<f32> {
         (self.min + self.max) * 0.5
     }
+
+    /// Half the box's diagonal: the radius of the sphere around it.
+    pub fn half_diagonal(&self) -> f32 {
+        (self.max - self.min).norm() * 0.5
+    }
 }
 
 /// The frame's blended draws, collected during recording and flushed in order.

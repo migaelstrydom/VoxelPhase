@@ -8,12 +8,14 @@
 ///
 /// ```text
 ///   shadow cb:  [Shadow]
+///   probe cb:   [Probes: reflection probe faces and their mips]
 ///   draw cb:    [FireSim] [Scene: sky, opaque, blended, particles] [Resolve]
 ///               [Composite: water, fire, overlay] [Bloom]
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum GpuSpan {
     Shadow,
+    Probes,
     FireSim,
     Scene,
     Resolve,
@@ -22,11 +24,12 @@ pub enum GpuSpan {
 }
 
 impl GpuSpan {
-    pub const COUNT: usize = 6;
+    pub const COUNT: usize = 7;
 
     /// Every span, in the order the GPU runs them.
     pub const ALL: [GpuSpan; Self::COUNT] = [
         GpuSpan::Shadow,
+        GpuSpan::Probes,
         GpuSpan::FireSim,
         GpuSpan::Scene,
         GpuSpan::Resolve,
@@ -37,6 +40,7 @@ impl GpuSpan {
     pub fn label(self) -> &'static str {
         match self {
             GpuSpan::Shadow => "shadow",
+            GpuSpan::Probes => "probes",
             GpuSpan::FireSim => "fire_sim",
             GpuSpan::Scene => "scene",
             GpuSpan::Resolve => "resolve",

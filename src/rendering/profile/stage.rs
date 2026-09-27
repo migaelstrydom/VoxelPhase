@@ -10,7 +10,8 @@
 ///                ├─ SceneDraws  (record the held draws: opaque, then
 ///                │               sorted blended draws + particles)
 ///                └─ Water · Fire · Overlay
-///   end_frame ───── Submit      (submit and present)
+///   end_frame ───┬─ Probes      (record the reflection probe faces)
+///                └─ Submit      (record shadows, submit and present)
 /// ```
 ///
 /// `FenceWait` is time the CPU spent idle on the GPU, not work of its own: a
@@ -29,11 +30,12 @@ pub enum RenderStage {
     Water,
     Fire,
     Overlay,
+    Probes,
     Submit,
 }
 
 impl RenderStage {
-    pub const COUNT: usize = 13;
+    pub const COUNT: usize = 14;
 
     /// Every stage, in the order a frame runs them.
     pub const ALL: [RenderStage; Self::COUNT] = [
@@ -49,6 +51,7 @@ impl RenderStage {
         RenderStage::Water,
         RenderStage::Fire,
         RenderStage::Overlay,
+        RenderStage::Probes,
         RenderStage::Submit,
     ];
 
@@ -66,6 +69,7 @@ impl RenderStage {
             RenderStage::Water => "water",
             RenderStage::Fire => "fire",
             RenderStage::Overlay => "overlay",
+            RenderStage::Probes => "probes",
             RenderStage::Submit => "submit",
         }
     }

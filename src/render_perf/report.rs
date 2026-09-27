@@ -94,6 +94,9 @@ fn metrics() -> Vec<Metric> {
             f.profile.counters.triangles as f64 / 1000.0
         }),
         Metric::count("particles", |f| f.profile.counters.particles as f64),
+        Metric::count("probes", |f| f.profile.counters.probes as f64),
+        Metric::count("  probe faces", |f| f.profile.counters.probe_faces as f64),
+        Metric::count("  probe draws", |f| f.profile.counters.probe_draws as f64),
         Metric::count("uploaded MB", |f| {
             f.profile.counters.uploaded_mesh_bytes as f64 / (1024.0 * 1024.0)
         }),

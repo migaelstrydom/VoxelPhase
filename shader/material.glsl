@@ -41,7 +41,7 @@ struct GpuSurface {
     /// y = blend sharpness, z = grain scale, w = grain strength.
     vec4 projection;
     /// x = SurfaceSource flags (see surface_source.glsl), y = grain index,
-    /// zw spare.
+    /// z = the reflection probe this draw samples, or NO_PROBE. w spare.
     uvec4 control;
     /// x = opacity viewed head-on (1 = opaque), y = reflectance at normal
     /// incidence, derived from the material's refractive index. zw spare.
@@ -83,6 +83,13 @@ uint materialSource() { return materialSurface().control.x; }
 
 /// Which layer of the grain atlas this surface's microstructure comes from.
 uint materialGrainLayer() { return materialSurface().control.y; }
+
+/// A draw that reflects only the sky: see `materialProbe`.
+const uint NO_PROBE = 0xFFFFFFFFu;
+
+/// Which reflection probe this draw reflects, or NO_PROBE. See
+/// reflection.glsl.
+uint materialProbe() { return materialSurface().control.z; }
 
 /// Fraction of the pixel this surface claims when viewed head-on, before the
 /// Fresnel gain at grazing angles. 1 for everything but glass and ice.

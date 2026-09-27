@@ -10,6 +10,11 @@
 // (sky_model.glsl), so both queries below are point evaluations of it: no
 // probe capture, no cubemap, no prefiltering pass, and no possibility of the
 // reflection disagreeing with the sky the camera can see.
+//
+// What a surface *reflects* is passed in rather than looked up here, so the
+// shading below is the same whether that is the sky alone (`reflectedSky`) or
+// a reflection probe composited over it (reflection.glsl). The probe capture
+// pass includes this file too, and must not sample the probes it is writing.
 
 #ifndef ENVIRONMENT_GLSL
 #define ENVIRONMENT_GLSL
@@ -99,20 +104,30 @@ vec2 environmentBrdf(float roughness, float n_dot_v) {
     return vec2(-1.04, 1.04) * a004 + r.zw;
 }
 
+/// The direction a surface reflects the viewer's ray into.
+vec3 reflectionDirection(SurfaceSample surface) {
+    return reflect(-surface.view_dir, surface.normal);
+}
+
+/// What a surface reflects when it reflects only the sky.
+vec3 reflectedSky(SurfaceSample surface, vec3 sun_dir) {
+    return prefilteredSkyRadiance(reflectionDirection(surface), sun_dir, surface.roughness);
+}
+
 /// Total light a surface receives from its surroundings: a diffuse term from
-/// sky and ground irradiance, and a specular term reflecting the sky.
+/// sky and ground irradiance, and a specular term from `radiance`, what the
+/// surface reflects along its mirror direction, already blurred for its
+/// roughness.
 ///
 /// The specular half is what makes roughness legible across its whole range and
 /// what gives metals anything at all to show, since a metal's colour is
 /// entirely its reflection.
-vec3 shadeEnvironment(SurfaceSample surface, vec3 sun_dir) {
+vec3 shadeEnvironment(SurfaceSample surface, vec3 sun_dir, vec3 radiance) {
     float n_dot_v = max(dot(surface.normal, surface.view_dir), 0.0);
-    vec3 reflect_dir = reflect(-surface.view_dir, surface.normal);
 
     vec3 irradiance = environmentIrradiance(surface.normal, sun_dir);
     vec3 diffuse = surface.albedo * (1.0 - surface.metallic) * irradiance;
 
-    vec3 radiance = prefilteredSkyRadiance(reflect_dir, sun_dir, surface.roughness);
     vec3 f0 = specularF0(surface.albedo, surface.metallic);
     vec2 brdf = environmentBrdf(surface.roughness, n_dot_v);
     vec3 specular = radiance * (f0 * brdf.x + brdf.y);

@@ -7,6 +7,7 @@ use crate::core::error::EngineResult;
 use crate::model::Model;
 use crate::rendering::mesh_source::MeshBuffers;
 use crate::rendering::resident::arena::{MeshArena, ResidentMesh, UploadTally};
+use crate::rendering::transparency::MeshBounds;
 use crate::rendering::vertex::Vertex;
 
 /// Frames a versioned mesh may go undrawn before it is let go.
@@ -22,6 +23,17 @@ impl VersionedMeshId {
     pub const TERRAIN: Self = Self(0);
 }
 
+/// One primitive of a resident model.
+#[derive(Clone, Copy, Debug)]
+pub struct ResidentPrimitive {
+    /// Where its mesh sits in the arena.
+    pub mesh: ResidentMesh,
+    /// Its extent in model space, measured once at upload: a model's
+    /// vertices never change, so there is no reason to walk them again on
+    /// the frames that sort or cull by it.
+    pub bounds: MeshBounds,
+}
+
 /// A model's meshes, as long as the model lives.
 struct CachedModel {
     /// Tells the cache when the model is gone. Holding it also keeps the
@@ -29,7 +41,7 @@ struct CachedModel {
     /// by cannot come to name a different model while the entry exists.
     model: Weak<Model>,
     /// One per primitive, parts in order and each part's primitives in order.
-    primitives: Vec<ResidentMesh>,
+    primitives: Vec<ResidentPrimitive>,
 }
 
 /// A versioned mesh, as of the version last drawn.
@@ -90,7 +102,7 @@ impl ResidentGeometry {
                 cached
                     .primitives
                     .iter()
-                    .for_each(|&mesh| arena.release(mesh));
+                    .for_each(|primitive| arena.release(primitive.mesh));
             }
             alive
         });
@@ -109,15 +121,20 @@ impl ResidentGeometry {
     }
 
     /// A model's primitives, uploading them the first time it is seen.
-    pub fn model(&mut self, model: &Arc<Model>) -> EngineResult<&[ResidentMesh]> {
+    pub fn model(&mut self, model: &Arc<Model>) -> EngineResult<&[ResidentPrimitive]> {
         let key = Arc::as_ptr(model) as usize;
         if !self.models.contains_key(&key) {
             let mut primitives = Vec::new();
             for primitive in model.parts.iter().flat_map(|part| &part.primitives) {
                 match self.arena.upload(&primitive.vertices, &primitive.indices) {
-                    Ok(uploaded) => primitives.push(uploaded),
+                    Ok(mesh) => primitives.push(ResidentPrimitive {
+                        mesh,
+                        bounds: MeshBounds::of(&primitive.vertices),
+                    }),
                     Err(e) => {
-                        primitives.iter().for_each(|&mesh| self.arena.release(mesh));
+                        primitives
+                            .iter()
+                            .for_each(|uploaded| self.arena.release(uploaded.mesh));
                         return Err(e);
                     }
                 }

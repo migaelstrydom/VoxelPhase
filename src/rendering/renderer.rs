@@ -36,7 +36,10 @@ use crate::rendering::overlay::{OverlayGeometry, OverlayRenderer};
 use crate::rendering::pipeline::{GraphicsPipeline, GraphicsPipelineConfig};
 use crate::rendering::post::PostProcessRenderer;
 use crate::rendering::profile::{GpuSpan, GpuTimer, RenderProfile, RenderStage};
-use crate::rendering::resident::{ResidentGeometry, VersionedMeshId};
+use crate::rendering::reflection::{
+    BoundingSphere, ProbeCaster, ProbeConfig, ProbeOwner, ProbeRenderer, Reach, Reflects,
+};
+use crate::rendering::resident::{ResidentGeometry, ResidentPrimitive, VersionedMeshId};
 use crate::rendering::shadow::map::SHADOW_SAMPLED_LAYOUT;
 use crate::rendering::shadow::{
     CasterBindings, ShadowMap, ShadowRenderer, ShadowVolume, ViewFrustum,
@@ -49,6 +52,7 @@ use crate::rendering::target::{
 };
 use crate::rendering::transparency::{BlendedDraw, MeshBounds, TransparentQueue};
 use crate::rendering::vertex::Vertex;
+use crate::rendering::view_volume::ViewVolume;
 use crate::rendering::water::WaterRenderer;
 use crate::rendering::water::WaterScene;
 use crate::resources::textures::{TextureHandle, TextureManager};
@@ -66,6 +70,15 @@ const SCENE_HDR_FORMAT: vk::Format = vk::Format::R16G16B16A16_SFLOAT;
 pub const PUSH_CONSTANT_STAGES: vk::ShaderStageFlags = vk::ShaderStageFlags::from_raw(
     vk::ShaderStageFlags::VERTEX.as_raw() | vk::ShaderStageFlags::FRAGMENT.as_raw(),
 );
+
+/// How much wider than the camera's view an object may be and still count as
+/// in view for a reflection probe, as a factor on the tangent of each
+/// half-angle.
+///
+/// A probe is handed out the frame after it is asked for, so an object that
+/// waited to be on screen would show the sky for its first frame there. The
+/// margin asks a little early, as it approaches the edge of the view.
+const PROBE_VIEW_MARGIN: f32 = 1.25;
 
 /// Which of the frame's geometry passes a draw belongs to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -86,6 +99,18 @@ enum DrawPass {
     Overlay,
 }
 
+/// Whether, and how far out, a draw shows in the reflection probes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum InProbes {
+    /// Not captured: debug geometry, which has no business in a reflection.
+    Hidden,
+    /// Captured by the probes whose reach its bounding sphere falls within.
+    Bounded,
+    /// Captured by every probe: the terrain, which surrounds them all and
+    /// whose sphere would be the size of the level.
+    Everywhere,
+}
+
 /// How a mesh draw participates in the frame beyond issuing its own triangles.
 ///
 /// Grouped rather than passed as loose flags so that adding a pass does not
@@ -98,6 +123,11 @@ struct DrawOptions {
     wireframe_overlay: bool,
     /// Whether the mesh is also recorded into the sun shadow pass.
     casts_shadow: bool,
+    /// Whether it is also recorded into the reflection probes that see it.
+    /// Only ever an opaque draw: a probe captures solid surroundings.
+    in_probes: InProbes,
+    /// The object the mesh belongs to, which its own probe leaves out.
+    owner: Option<ProbeOwner>,
 }
 
 impl DrawOptions {
@@ -110,6 +140,8 @@ impl DrawOptions {
         pass: DrawPass::Opaque,
         wireframe_overlay: true,
         casts_shadow: true,
+        in_probes: InProbes::Bounded,
+        owner: None,
     };
 
     /// Debug overlay geometry, composited after tonemapping. Casts nothing:
@@ -120,6 +152,8 @@ impl DrawOptions {
         pass: DrawPass::Overlay,
         wireframe_overlay: false,
         casts_shadow: false,
+        in_probes: InProbes::Hidden,
+        owner: None,
     };
 }
 
@@ -184,6 +218,9 @@ pub struct Renderer {
     pub post_process: PostProcessRenderer,
     /// Sun shadow map, filled from the same draws the opaque pass issues.
     pub shadow: ShadowRenderer,
+    /// Reflection probes: small cube maps, captured from the same draws, of
+    /// what surrounds the objects whose materials ask to reflect it.
+    pub probes: ProbeRenderer,
     /// Active fire instances with their GPU resources. Keyed by entity index.
     pub active_fires: Vec<(specs::Entity, ActiveFire)>,
     /// Opaque scene draws, in the order they were issued, held back to be
@@ -196,6 +233,9 @@ pub struct Renderer {
     /// because sorting blended draws needs it and a draw call has no reason
     /// to be handed it again.
     camera_pos: Vector3<f32>,
+    /// What the camera can see this frame, a little widened. Only objects in
+    /// it ask for a reflection probe.
+    probe_view: ViewVolume,
     /// Scene lighting environment uploaded to the scene UBO each frame.
     lighting: SceneLighting,
     /// When true, backfaces are rendered in wireframe with `wireframe_color`.
@@ -287,6 +327,15 @@ impl Renderer {
         let shadow =
             ShadowRenderer::new(&vulkan_context, shadow_map, pipeline.layout, shadow_volume)?;
 
+        // Probes replay the same draws again, through a layout that repeats
+        // the scene's descriptor sets.
+        let probes = ProbeRenderer::new(
+            &vulkan_context,
+            ProbeConfig::default(),
+            pipeline.scene_ubo_descriptor_set_layout,
+            pipeline.sampler_descriptor_set_layout,
+        )?;
+
         // Buffers, surface table, command buffer and fence for each frame in
         // flight.
         let frames = PerFrame::try_new(|_| InFlightFrame::new(&vulkan_context))?;
@@ -316,6 +365,7 @@ impl Renderer {
             descriptors.update_surface_table(slot, frame.surfaces.buffer(), SurfaceBuffer::SIZE);
         }
         descriptors.update_shadow_map(shadow.map().view, SHADOW_SAMPLED_LAYOUT);
+        descriptors.update_reflection_probes(probes.atlas().view, probes.atlas().sampler);
 
         // Create overlay renderer for debug text (transparent pass)
         let overlay = OverlayRenderer::new(
@@ -364,10 +414,12 @@ impl Renderer {
             fire_renderer,
             post_process,
             shadow,
+            probes,
             active_fires: Vec::new(),
             opaque_draws: Vec::new(),
             transparent_queue: TransparentQueue::new(),
             camera_pos: Vector3::zeros(),
+            probe_view: ViewVolume::EVERYTHING,
             lighting: SceneLighting::default(),
             debug_wireframe_backfaces: false,
             wireframe_color: [0.0, 0.0, 0.0, 1.0],
@@ -442,6 +494,7 @@ impl Renderer {
         // caller cannot forget to.
         let frame = &self.frames[slot];
         self.shadow.begin_frame(slot, &frame.timer)?;
+        self.probes.begin_frame(slot, &frame.timer)?;
 
         frame
             .command_buffer
@@ -525,6 +578,7 @@ impl Renderer {
         camera_pos: &Vector3<f32>,
     ) -> EngineResult<()> {
         self.camera_pos = *camera_pos;
+        self.probe_view = ViewVolume::new(view, proj, PROBE_VIEW_MARGIN);
 
         let sun_direction = self.sky_renderer.sun_direction();
         let lighting = SceneLighting {
@@ -599,6 +653,12 @@ impl Renderer {
     /// is drawn, and drawn from the GPU's copy every time after, until the
     /// last `Arc` to it is dropped. A model that changes shape — a compound
     /// losing a piece — is a new `Arc`, and so a new upload.
+    ///
+    /// `owner` names the object across frames. A model with a material that
+    /// reflects its surroundings needs one to hold a reflection probe, centred
+    /// on `world_transform`'s origin; without one it reflects the sky. Only
+    /// a model in view, or nearly, asks for one: an object off screen has no
+    /// reflection to show.
     pub fn draw_model(
         &mut self,
         cb: vk::CommandBuffer,
@@ -608,9 +668,33 @@ impl Renderer {
         material_manager: &MaterialManager,
         texture_manager: &TextureManager,
         modulation: SurfaceModulation,
+        owner: Option<ProbeOwner>,
     ) -> EngineResult<()> {
-        let resident = self.resident.model(model)?.to_vec();
-        let mut resident = resident.into_iter();
+        let primitives = self.resident.model(model)?.to_vec();
+        let mut resident = primitives.iter().copied();
+
+        let reflects_surroundings =
+            model
+                .parts
+                .iter()
+                .flat_map(|part| &part.primitives)
+                .any(|primitive| {
+                    material_manager.get(primitive.material).reflects == Reflects::Surroundings
+                });
+        let probe = match owner {
+            Some(owner)
+                if reflects_surroundings
+                    && self.in_probe_view(model, &primitives, world_transform) =>
+            {
+                let centre = world_transform.fixed_view::<3, 1>(0, 3).into_owned();
+                self.probes.request(owner, centre, &self.camera_pos)
+            }
+            _ => None,
+        };
+        let options = DrawOptions {
+            owner,
+            ..DrawOptions::OPAQUE
+        };
 
         for (part_idx, part) in model.parts.iter().enumerate() {
             // Get the animated/modified transform for this part
@@ -628,28 +712,53 @@ impl Renderer {
                 let Some(uploaded) = resident.next() else {
                     break;
                 };
-                if uploaded.is_empty() {
+                if uploaded.mesh.is_empty() {
                     continue;
                 }
                 let texture = material_manager.get_effective_texture(primitive.material);
-                let surface = material_manager
+                let mut surface = material_manager
                     .get_surface_params(primitive.material)
                     .modulated(modulation);
+                if surface.reflects == Reflects::Surroundings {
+                    surface = surface.with_probe(probe);
+                }
 
                 self.submit_draw(
                     cb,
-                    uploaded.draw_info(),
-                    || MeshBounds::of(&primitive.vertices),
+                    uploaded.mesh.draw_info(),
+                    || uploaded.bounds,
                     &final_transform,
                     texture,
                     surface,
                     texture_manager,
-                    DrawOptions::OPAQUE,
+                    options,
                 )?;
             }
         }
 
         Ok(())
+    }
+
+    /// Whether any primitive of `model`, drawn at `world_transform`, is in
+    /// the widened view that decides who asks for a reflection probe.
+    ///
+    /// Each part is placed by its resting transform; the per-frame part
+    /// transforms `draw_model` takes are animation's, and nudge a part far
+    /// less than the view's margin.
+    fn in_probe_view(
+        &self,
+        model: &Model,
+        primitives: &[ResidentPrimitive],
+        world_transform: &Matrix4<f32>,
+    ) -> bool {
+        let placements = model.parts.iter().flat_map(|part| {
+            let placed = world_transform * part.local_transform.to_matrix();
+            part.primitives.iter().map(move |_| placed)
+        });
+        placements.zip(primitives).any(|(placed, primitive)| {
+            self.probe_view
+                .contains(&BoundingSphere::around(&primitive.bounds, &placed))
+        })
     }
 
     /// Draw a mesh whose owner publishes a version that changes whenever the
@@ -674,6 +783,13 @@ impl Renderer {
             return Ok(());
         }
         let uploaded = self.resident.versioned(id, version, vertices, indices)?;
+        // Seen by every probe, however far off: it is the ground they all
+        // stand on, and walking its vertices for a sphere every frame would
+        // cost more than recording it.
+        let options = DrawOptions {
+            in_probes: InProbes::Everywhere,
+            ..DrawOptions::OPAQUE
+        };
         self.submit_draw(
             cb,
             uploaded.draw_info(),
@@ -682,7 +798,7 @@ impl Renderer {
             texture,
             surface,
             texture_manager,
-            DrawOptions::OPAQUE,
+            options,
         )
     }
 
@@ -820,7 +936,8 @@ impl Renderer {
     /// recorded where they are issued.
     ///
     /// `bounds` is only asked for when the draw turns out to be blended,
-    /// which is the one case that sorts by it.
+    /// which sorts by it, or opaque and bounded while any reflection probe
+    /// is live, which culls by it.
     fn submit_draw(
         &mut self,
         cb: vk::CommandBuffer,
@@ -879,6 +996,22 @@ impl Renderer {
             }
             DrawPass::Opaque => {
                 self.profile.counters.opaque_draws += 1;
+                if self.probes.collecting() {
+                    let reach = match options.in_probes {
+                        InProbes::Hidden => None,
+                        InProbes::Everywhere => Some(Reach::Everywhere),
+                        InProbes::Bounded => {
+                            Some(Reach::Within(BoundingSphere::around(&bounds(), model)))
+                        }
+                    };
+                    if let Some(reach) = reach {
+                        self.probes.add_caster(ProbeCaster {
+                            geometry,
+                            reach,
+                            owner: options.owner,
+                        });
+                    }
+                }
                 self.opaque_draws.push(HeldDraw {
                     geometry,
                     wireframe,
@@ -1293,6 +1426,7 @@ impl Renderer {
         self.timer().end(cb, GpuSpan::Bloom);
 
         let meshes = self.mesh_bindings();
+        let scene_set = self.descriptors.scene_set(self.slot);
         let in_flight = &self.frames[self.slot];
         in_flight.command_buffer.end()?;
 
@@ -1302,10 +1436,17 @@ impl Renderer {
             self.vulkan_context.device(),
             &in_flight.timer,
             CasterBindings {
-                scene_set: self.descriptors.scene_set(self.slot),
-                meshes,
+                scene_set,
+                meshes: meshes.clone(),
             },
         )?;
+        let recording = Instant::now();
+        let probes = self.probes.end_frame(&in_flight.timer, scene_set, meshes)?;
+        let recording = recording.elapsed();
+        self.profile.record(RenderStage::Probes, recording);
+        self.profile.counters.probes = probes.probes;
+        self.profile.counters.probe_faces = probes.faces;
+        self.profile.counters.probe_draws = probes.draws;
 
         // Only a swapchain acquire produces semaphores to synchronize against;
         // an engine-owned image is ready the moment it is asked for, and the
@@ -1316,13 +1457,19 @@ impl Renderer {
 
         in_flight.sync.reset()?;
 
-        // The shadow map goes first: the geometry pass samples it, and the
-        // ordering plus the shadow pass's own external dependency are what make
-        // that read see this frame's contents rather than the last one's.
+        // The shadow map goes first: the probes and the geometry pass sample
+        // it, and the ordering plus the shadow pass's own external dependency
+        // are what make that read see this frame's contents rather than the
+        // last one's. The probes go next, on the same terms, for the geometry
+        // pass that samples them.
         self.vulkan_context
             .command_buffer_manager
             .submit_recorded_graphics_batch_async(
-                &[self.shadow.command_buffer(), &in_flight.command_buffer],
+                &[
+                    self.shadow.command_buffer(),
+                    self.probes.command_buffer(),
+                    &in_flight.command_buffer,
+                ],
                 in_flight.sync.draw_fence,
                 &wait,
                 &signal,
@@ -1334,7 +1481,10 @@ impl Renderer {
             &frame,
             self.vulkan_context.command_buffer_manager.graphics_queue,
         );
-        self.profile.record(RenderStage::Submit, submit.elapsed());
+        self.profile.record(
+            RenderStage::Submit,
+            submit.elapsed().saturating_sub(recording),
+        );
         released
     }
 

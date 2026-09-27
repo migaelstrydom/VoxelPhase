@@ -27,6 +27,7 @@ use crate::physics::ColliderDesc;
 use crate::rendering::grain::GrainSpec;
 use crate::rendering::material::{Material, SurfaceFinish};
 use crate::rendering::physical_finish::PhysicalSurface;
+use crate::rendering::reflection::Reflects;
 use crate::rendering::substance::palette::Palette;
 use crate::rendering::transparency::Transparency;
 use crate::resources::textures::TextureHandle;
@@ -63,6 +64,12 @@ pub struct Substance {
     /// declares but ice, and the field that decides which geometry pass an
     /// object made of this substance is drawn in.
     pub transparency: Transparency,
+
+    /// What its surface reflects: the sky, or its surroundings from a
+    /// reflection probe. Surroundings for the substances whose look is mostly
+    /// their reflection — the metals — and the one field to set for any other
+    /// that should join them, such as ice, glass or polished stone.
+    pub reflects: Reflects,
 }
 
 impl Substance {
@@ -81,6 +88,7 @@ impl Substance {
             grain_by_uv: false,
             palette,
             transparency: Transparency::OPAQUE,
+            reflects: Reflects::Sky,
         }
     }
 
@@ -160,8 +168,8 @@ impl Substance {
         self.shade(Material::textured(texture))
     }
 
-    /// Apply this substance's finish, grain and transparency to an existing
-    /// material.
+    /// Apply this substance's finish, grain, transparency and reflections to
+    /// an existing material.
     ///
     /// The one place the choice between the two grain addressing modes is made,
     /// so a spawnable never has to remember that timber is the odd one — and
@@ -170,7 +178,8 @@ impl Substance {
     pub fn shade(&self, material: Material) -> Material {
         let material = material
             .with_finish(self.finish)
-            .with_transparency(self.transparency);
+            .with_transparency(self.transparency)
+            .with_reflections(self.reflects);
         if self.grain_by_uv {
             material.with_uv_grain(self.grain)
         } else {

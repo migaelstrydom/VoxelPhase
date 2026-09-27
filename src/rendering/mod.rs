@@ -19,6 +19,7 @@ pub mod physical_finish;
 pub mod pipeline;
 pub mod post;
 pub mod profile;
+pub mod reflection;
 pub mod renderer;
 pub mod resident;
 pub mod shaders;
@@ -33,6 +34,7 @@ pub mod transparency;
 pub mod triplanar;
 pub mod typeface;
 pub mod vertex;
+pub mod view_volume;
 pub mod visual_bench;
 pub mod water;
 
