@@ -221,8 +221,8 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
             ],
         )
         .with(DeathSystem, "death", &["damage_apply"])
-        .with(TerrainAnchorSystem, "terrain_anchor", &["explosion"])
         .with(TerrainUpdateSystem, "terrain_update", &["explosion"])
+        .with(TerrainAnchorSystem, "terrain_anchor", &["terrain_update"])
         // Water simulation (after terrain update so dirty_regions are visible)
         .with(WaterSystem, "water", &["terrain_update"])
         // Particles

@@ -5,7 +5,7 @@ use specs::{Component, DenseVecStorage, VecStorage};
 
 use crate::model::Model;
 use crate::physics::constraint::ConstraintHandle;
-use crate::physics::{ColliderDesc, RigidBodyHandle};
+use crate::physics::RigidBodyHandle;
 use crate::rendering::camera::Camera;
 use crate::rendering::material::SurfaceModulation;
 
@@ -68,9 +68,10 @@ pub struct MaterialModulation(pub SurfaceModulation);
 
 /// Anchors an entity to a fixed world-space position via physics constraints.
 ///
-/// When the terrain beneath any of its anchor points is destroyed, both constraints
-/// are removed, the collider is swapped to its full-size version, and this
-/// component is removed — releasing the body to fall freely.
+/// When the terrain beneath any of its anchor points is destroyed, both
+/// constraints are removed, a body welded into the ground stops passing through
+/// it (`RigidBody::ignores_static`), and this component is removed — releasing
+/// the body to fall freely.
 #[derive(Component)]
 #[storage(DenseVecStorage)]
 pub struct TerrainAnchored {
@@ -83,9 +84,6 @@ pub struct TerrainAnchored {
     /// one, under its foot; a stone bedded in the ground is loose once the
     /// ground under any part of it goes.
     pub anchor_points: Vec<nalgebra::Point3<f32>>,
-    /// Full-size collider to attach when released (replaces the short
-    /// anchored-mode collider that avoids terrain overlap).
-    pub released_collider: Option<ColliderDesc>,
     /// Model to swap in when released (e.g. to remove a rope visual that
     /// only makes sense while the constraint is active).
     pub released_model: Option<Arc<Model>>,
@@ -97,7 +95,6 @@ impl std::fmt::Debug for TerrainAnchored {
             .field("anchor_handle", &self.anchor_handle)
             .field("upright_handle", &self.upright_handle)
             .field("anchor_points", &self.anchor_points)
-            .field("released_collider", &self.released_collider.is_some())
             .field("released_model", &self.released_model.is_some())
             .finish()
     }

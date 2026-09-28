@@ -3,7 +3,7 @@
 How a body meant to sit partly inside the terrain rests there without fighting
 it, sleeps, and comes free when the ground under it is destroyed.
 
-Status: stage 1 (physics) built; stage 2 (spawnables) not started.
+Status: built.
 
 ## 1. The problem
 
@@ -138,15 +138,17 @@ Both stay, with less in them:
 
 ### 3.4 Spawnables
 
-The menhir, fence post, rock, seesaw, pendulum and play wheel attach their full
-collider and set `ignores_static`. This deletes:
-- `rock::above_ground` and its tests;
+The bodies welded to the world set `ignores_static` and keep their full
+collider: the menhir, fence post and rock, the seesaw's fulcrum and the
+pendulum's frame. Bodies that move on a joint to the world keep meeting the
+ground: the seesaw's beam, the pendulum's bob and the play wheel. This deletes:
+- `rock::above_ground` and its test;
 - the menhir's collider offset;
 - the post's shortened capsule;
-- every anchored/released collider pair.
+- every anchored/released collider pair and `TerrainAnchored::released_collider`.
 
-If the six spawnables end up with near-identical anchoring code, it moves into
-one helper.
+What's left of the anchoring code in each spawnable is a body flag and a
+weld, which is too little to be worth a helper.
 
 ## 4. SOLID check
 
@@ -174,9 +176,10 @@ one helper.
    - a ball dropped on it wakes it;
    - a released box comes out of the floor with no velocity and no overshoot,
      and ends resting on it.
-2. **Game.** Migrate the six spawnables, cut `released_collider`, and gate
-   `TerrainAnchorSystem` on `changed_regions()`. The check is the rest lint:
-   menhirs gone from it, nothing new in it.
+2. **Game.** Migrate the welded spawnables, cut `released_collider`, and gate
+   `TerrainAnchorSystem` on `changed_regions()`. The checks are the rest lint
+   (every menhir gone from it, nothing new in it) and system tests: a blast
+   under a menhir releases it, and a blast elsewhere doesn't.
 
 ## 6. Later: exhuming as gameplay
 

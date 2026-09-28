@@ -280,7 +280,6 @@ impl Spawnable for SeesawDef {
                 anchor_handle: beam_anchor,
                 upright_handle: beam_upright,
                 anchor_points: vec![anchor_check],
-                released_collider: None,
                 released_model: None,
             })
             .build();
@@ -306,11 +305,14 @@ impl Spawnable for SeesawDef {
         let (fulcrum_handle, fulcrum_fixed_h) = {
             let mut physics = world.write_resource::<PhysicsResource>();
 
+            // Welded to the ground it stands on, which it passes through
+            // until released: the weld holds it where the ground would.
             let body = physics.world.create_body(
                 RigidBodyDesc::dynamic()
                     .position(fulcrum_pos)
                     .linear_damping(0.01)
-                    .angular_damping(0.01),
+                    .angular_damping(0.01)
+                    .ignores_static(true),
             );
 
             physics.world.attach_collider(
@@ -320,7 +322,6 @@ impl Spawnable for SeesawDef {
             );
 
             // Single Fixed constraint replaces AnchorPoint + KeepUpright.
-            // Locks all 6 DOF; tilt rows get HardProjection (compliance=0).
             let fixed = physics.world.create_constraint(ConstraintKind::world_fixed(
                 body,
                 fulcrum_pos,
@@ -349,7 +350,6 @@ impl Spawnable for SeesawDef {
                 anchor_handle: fulcrum_fixed_h,
                 upright_handle: fulcrum_fixed_h,
                 anchor_points: vec![anchor_check],
-                released_collider: None,
                 released_model: None,
             })
             .build();

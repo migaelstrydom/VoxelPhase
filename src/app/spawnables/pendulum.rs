@@ -221,11 +221,14 @@ impl Spawnable for PendulumDef {
         let (frame_handle, frame_constraint) = {
             let mut physics = world.write_resource::<PhysicsResource>();
 
+            // Welded to the ground it stands on, which it passes through
+            // until released: the weld holds it where the ground would.
             let body = physics.world.create_body(
                 RigidBodyDesc::dynamic()
                     .position(frame_world_pos)
                     .linear_damping(0.01)
-                    .angular_damping(0.01),
+                    .angular_damping(0.01)
+                    .ignores_static(true),
             );
 
             physics.world.attach_collider(
@@ -267,7 +270,6 @@ impl Spawnable for PendulumDef {
                 anchor_handle: frame_constraint,
                 upright_handle: frame_constraint,
                 anchor_points: vec![anchor_check],
-                released_collider: None,
                 released_model: None,
             })
             .build();
@@ -324,7 +326,6 @@ impl Spawnable for PendulumDef {
                 anchor_handle: ball_constraint,
                 upright_handle: ball_constraint,
                 anchor_points: vec![anchor_check],
-                released_collider: None,
                 released_model: Some(build_ball_model(self.ball_radius, ball_mat)),
             })
             .build();

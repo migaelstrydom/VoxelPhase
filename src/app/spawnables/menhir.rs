@@ -124,28 +124,22 @@ impl Spawnable for MenhirDef {
             material,
         );
 
-        let exposed_half_height = (full_height - buried_depth) / 2.0;
-        let collider_offset_y = self.half_height - exposed_half_height;
-
-        let anchored_collider = ColliderDesc::convex_hull(hull.clone())
-            .of(&self.substance())
-            .offset_translation(Vector3::new(0.0, collider_offset_y, 0.0));
-
-        let released_collider = ColliderDesc::convex_hull(hull).of(&self.substance());
+        let collider = ColliderDesc::convex_hull(hull).of(&self.substance());
 
         let (body_handle, anchor_handle, upright_handle) = {
             let mut physics = world.write_resource::<PhysicsResource>();
 
+            // Welded with its foot in the ground, which it passes through
+            // until released: the weld holds it where the ground would.
             let body_desc = RigidBodyDesc::dynamic()
                 .position(initial_pos)
                 .gravity_scale(1.0)
                 .linear_damping(0.01)
-                .angular_damping(0.05);
+                .angular_damping(0.05)
+                .ignores_static(true);
 
             let body_handle = physics.world.create_body(body_desc);
-            physics
-                .world
-                .attach_collider(body_handle, anchored_collider);
+            physics.world.attach_collider(body_handle, collider);
 
             let local_anchor = Vector3::new(0.0, -self.half_height, 0.0);
             let world_anchor = Point3::new(self.pos.0, surface_y - buried_depth, self.pos.1);
@@ -180,7 +174,6 @@ impl Spawnable for MenhirDef {
                 anchor_handle,
                 upright_handle,
                 anchor_points: vec![anchor_check],
-                released_collider: Some(released_collider),
                 released_model: None,
             })
             .build()]

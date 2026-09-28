@@ -1,9 +1,9 @@
 //! Fence post spawnable — terrain-anchored vertical cylinder.
 //!
 //! The post is pinned to the terrain surface via a Fixed constraint, with
-//! its bottom third buried in terrain. While anchored the
-//! physics collider covers only the exposed portion; on release it expands
-//! to the full post length so the freed body tumbles with correct collision.
+//! its bottom third buried in terrain. While anchored it passes through the
+//! ground, which only the weld stands in for; on release it meets the ground
+//! again, whole.
 //!
 //! Uses two materials: bark (barrel) and cross-section (caps with wood rings).
 
@@ -109,7 +109,6 @@ impl Spawnable for FencePostDef {
 
         let full_height = self.half_height * 2.0;
         let buried_depth = full_height * BURIED_FRACTION;
-        let exposed_height = full_height - buried_depth;
 
         // Body center is at the geometric center of the full post.
         let center_y = surface_y - buried_depth + self.half_height;
@@ -133,32 +132,22 @@ impl Spawnable for FencePostDef {
         ])];
         let model = Arc::new(Model::flat(parts));
 
-        // Physics: while anchored, the collider covers only the exposed portion
-        // and is offset upward so it aligns with the top of the mesh.
-        let exposed_half_height = exposed_height / 2.0;
-        let collider_offset_y = self.half_height - exposed_half_height;
-
-        let anchored_collider = ColliderDesc::capsule(exposed_half_height, self.radius)
-            .of(&self.substance())
-            .offset_translation(Vector3::new(0.0, collider_offset_y, 0.0));
-
-        // Full-size collider for when the post is freed.
-        let released_collider =
-            ColliderDesc::capsule(self.half_height, self.radius).of(&self.substance());
+        let collider = ColliderDesc::capsule(self.half_height, self.radius).of(&self.substance());
 
         let (body_handle, anchor_handle, upright_handle) = {
             let mut physics = world.write_resource::<PhysicsResource>();
 
+            // Welded with its foot in the ground, which it passes through
+            // until released: the weld holds it where the ground would.
             let body_desc = RigidBodyDesc::dynamic()
                 .position(initial_pos)
                 .gravity_scale(1.0)
                 .linear_damping(0.01)
-                .angular_damping(0.05);
+                .angular_damping(0.05)
+                .ignores_static(true);
 
             let body_handle = physics.world.create_body(body_desc);
-            physics
-                .world
-                .attach_collider(body_handle, anchored_collider);
+            physics.world.attach_collider(body_handle, collider);
 
             // Pin the bottom of the post to its buried position.
             let local_anchor = Vector3::new(0.0, -self.half_height, 0.0);
@@ -195,7 +184,6 @@ impl Spawnable for FencePostDef {
                 anchor_handle,
                 upright_handle,
                 anchor_points: vec![anchor_check],
-                released_collider: Some(released_collider),
                 released_model: None,
             })
             .build()]

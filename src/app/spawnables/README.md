@@ -474,6 +474,25 @@ let fixed_handle = physics.world.create_constraint(
 );
 ```
 
+### Welded into the ground
+
+A body welded with part of it in the ground (a post's foot, a stone's base)
+must pass through the ground while the weld holds it, or the ground pushes it
+out and the weld pulls it back, forever. Give it its full collider and
+`ignores_static(true)`; release clears the flag:
+
+```rust
+let body_handle = physics.world.create_body(
+    RigidBodyDesc::dynamic()
+        .position(initial_pos)
+        .ignores_static(true),   // the weld stands in for the ground
+);
+physics.world.attach_collider(body_handle, full_collider);
+```
+
+Only for a body welded to the world. A body that moves on its joint (a
+seesaw's beam, a pendulum's bob, a play wheel) still meets the ground.
+
 ### TerrainAnchored component
 
 Attach the `TerrainAnchored` component so the terrain system can release the
@@ -483,31 +502,13 @@ constraints when the terrain beneath is destroyed:
 .with(TerrainAnchored {
     anchor_handle: fixed_handle,    // ConstraintHandle
     upright_handle: fixed_handle,   // same handle (second remove is harmless)
-    anchor_points: vec![Point3::new( // sample points checked each frame;
-        x,                           // released when any one is exposed
+    anchor_points: vec![Point3::new( // checked after the terrain changes near
+        x,                           // them; released when any one is exposed
         surface_y - 0.1,             // slightly below surface
         z,
     )],
-    released_collider: Some(full_collider),  // swapped in on release
     released_model: None,           // or Some(model) to swap visual on release
 })
-```
-
-### Anchored vs released collider pattern
-
-While anchored, the collider covers only the exposed portion (offset upward).
-When released, the full-size collider is swapped in:
-
-```rust
-let exposed_half_height = (full_height - buried_depth) / 2.0;
-let collider_offset_y = half_height - exposed_half_height;
-
-let anchored_collider = ColliderDesc::capsule(exposed_half_height, radius)
-    .density(density)
-    .offset_translation(Vector3::new(0.0, collider_offset_y, 0.0));
-
-let released_collider = ColliderDesc::capsule(half_height, radius)
-    .density(density);
 ```
 
 ## ECS entity setup

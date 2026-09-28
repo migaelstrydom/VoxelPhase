@@ -216,7 +216,6 @@ impl Spawnable for PlayWheelDef {
                 anchor_handle,
                 upright_handle,
                 anchor_points: vec![anchor_check],
-                released_collider: None,
                 released_model: None,
             })
             .build()]
