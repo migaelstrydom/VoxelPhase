@@ -35,6 +35,9 @@ pub struct RigidBodyDesc {
     pub gravity_scale: f32,
     /// The body's bulk, where it is not its colliders. See [`BulkShape`].
     pub bulk: Option<BulkShape>,
+    /// Whether the body passes through static geometry. See
+    /// [`RigidBody::ignores_static`].
+    pub ignores_static: bool,
 }
 
 impl Default for RigidBodyDesc {
@@ -49,6 +52,7 @@ impl Default for RigidBodyDesc {
             angular_damping: 0.05,
             gravity_scale: 1.0,
             bulk: None,
+            ignores_static: false,
         }
     }
 }
@@ -103,6 +107,13 @@ impl RigidBodyDesc {
 
     pub fn gravity_scale(mut self, scale: f32) -> Self {
         self.gravity_scale = scale;
+        self
+    }
+
+    /// Let the body pass through static geometry. See
+    /// [`RigidBody::ignores_static`].
+    pub fn ignores_static(mut self, ignores: bool) -> Self {
+        self.ignores_static = ignores;
         self
     }
 
@@ -185,6 +196,12 @@ pub struct RigidBody {
     // Gravity
     gravity_scale: f32,
 
+    /// Whether static geometry is invisible to the body: no contacts with it,
+    /// no sweeps against it. For a body something else holds where the static
+    /// geometry would, such as a stone welded into the ground, whose contacts
+    /// with the ground could only fight the weld.
+    ignores_static: bool,
+
     // Mass properties (computed from attached colliders)
     mass: f32,
     inv_mass: f32,
@@ -266,6 +283,7 @@ impl RigidBody {
             linear_damping: desc.linear_damping,
             angular_damping: desc.angular_damping,
             gravity_scale: desc.gravity_scale,
+            ignores_static: desc.ignores_static,
             mass: 0.0,
             inv_mass: 0.0,
             local_inertia: Matrix3::zeros(),
@@ -348,6 +366,15 @@ impl RigidBody {
     /// lighter arc than the world's own runs at a scale below 1.
     pub fn gravity_scale(&self) -> f32 {
         self.gravity_scale
+    }
+
+    /// Whether static geometry is invisible to the body.
+    pub fn ignores_static(&self) -> bool {
+        self.ignores_static
+    }
+
+    pub fn set_ignores_static(&mut self, ignores: bool) {
+        self.ignores_static = ignores;
     }
 
     pub fn colliders(&self) -> &[ColliderHandle] {

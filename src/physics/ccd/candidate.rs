@@ -33,6 +33,9 @@ pub(super) struct CcdCandidate {
     pub post_rot: UnitQuaternion<f32>,
     pub pre_center: Point3<f32>,
     pub post_center: Point3<f32>,
+    /// Whether the body passes through static geometry, so is swept against
+    /// other bodies only.
+    pub ignores_static: bool,
 }
 
 impl CcdCandidate {
@@ -134,6 +137,7 @@ pub(super) fn collect_candidates_into(ctx: &CcdContext<'_>, dt: f32, out: &mut V
                         post_rot,
                         pre_center,
                         post_center,
+                        ignores_static: body.ignores_static(),
                     });
                 }
                 found

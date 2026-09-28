@@ -82,6 +82,9 @@ impl CcdStrategy for SweepClampCcd {
         collect_candidates_into(ctx, dt, &mut candidates);
         self.impacts.clear();
         for (index, candidate) in candidates.iter().enumerate() {
+            if candidate.ignores_static {
+                continue;
+            }
             if let Some(impact) =
                 sweep_against_static(candidate, static_geometry, &mut self.patch_cache)
             {

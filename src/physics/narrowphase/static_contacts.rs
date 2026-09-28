@@ -24,7 +24,8 @@ use super::config::{ContactHorizon, NarrowphaseConfig};
 use super::speculative::rewind_to_now;
 use super::work_buffer::NarrowphaseWorkBuffer;
 
-/// Generate contacts between all non-static colliders and static geometry.
+/// Generate contacts between static geometry and every collider of an awake,
+/// non-static body that does not ignore it.
 ///
 /// Appends one `PairManifold` per collider that has contacts (or speculative
 /// contacts) with static geometry. Each manifold carries the collision library's
@@ -47,6 +48,7 @@ pub fn generate_static_contacts(
         .iter()
         .filter(|(idx, body)| {
             !body.is_static()
+                && !body.ignores_static()
                 && !sleeping.is_some_and(|sleeping| sleeping.contains(&RigidBodyHandle(*idx)))
         })
         .flat_map(|(idx, body)| {

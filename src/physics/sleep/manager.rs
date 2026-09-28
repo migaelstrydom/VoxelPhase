@@ -198,8 +198,7 @@ impl SleepManager {
             if self.is_sleeping(handle) {
                 continue;
             }
-            // Bodies with active constraints stay awake unconditionally.
-            if has_active_constraint(constraints, handle) {
+            if is_kept_awake(constraints, handle) {
                 continue;
             }
             if self.sleep_tracker.update_body(handle, body, dt) {
@@ -228,17 +227,18 @@ impl SleepManager {
     }
 }
 
-/// Whether any active constraint references the given body.
+/// Whether an active constraint on the body forbids it to sleep; each kind
+/// says for itself, through [`ConstraintKind::permits_sleep`].
 ///
-/// This is a conservative policy: any active constraint prevents sleep. Correct
-/// for grab (FollowPoint) and player upright (KeepUpright), but overly
-/// conservative for future two-body constraints where both bodies are at rest
-/// (e.g. a "glue" constraint). The proper fix is constraint-aware island
-/// building — constraints become edges in the contact graph, and entire islands
-/// sleep/wake as a unit. See `CONSTRAINT_SYSTEM_PLAN.md` ("Constraint islands
-/// for sleeping").
-fn has_active_constraint(constraints: &Arena<Constraint>, body: RigidBodyHandle) -> bool {
+/// Conservative for two-body constraints where both bodies are at rest (e.g.
+/// a "glue" constraint), which keep both awake. The proper fix is
+/// constraint-aware island building — constraints become edges in the contact
+/// graph, and entire islands sleep/wake as a unit. See
+/// `CONSTRAINT_SYSTEM_PLAN.md` ("Constraint islands for sleeping").
+///
+/// [`ConstraintKind::permits_sleep`]: crate::physics::constraint::ConstraintKind::permits_sleep
+fn is_kept_awake(constraints: &Arena<Constraint>, body: RigidBodyHandle) -> bool {
     constraints
         .iter()
-        .any(|(_, c)| c.active && c.kind.references_body(body))
+        .any(|(_, c)| c.active && c.kind.references_body(body) && !c.kind.permits_sleep())
 }

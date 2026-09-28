@@ -2,7 +2,7 @@
 //! nonlinear Gauss-Seidel position correction.
 
 use rayon::prelude::*;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 
 use generational_arena::{Arena, Index};
@@ -13,6 +13,7 @@ use crate::physics::constraint::expand::{
     check_constraint_breakage, expand_constraints, write_back_constraints,
 };
 use crate::physics::constraint::types::{Constraint, ConstraintRow, Enforcement, RowKind};
+use crate::physics::handle::RigidBodyHandle;
 use crate::physics::pipeline::pair::SolverManifold;
 
 use super::closing_allowance::set_closing_allowances;
@@ -98,7 +99,13 @@ impl Default for PgsNgsSolver {
 }
 
 impl ConstraintSolver for PgsNgsSolver {
-    fn prepare(&mut self, bodies: &Arena<RigidBody>, constraints: &Arena<Constraint>, dt: f32) {
+    fn prepare(
+        &mut self,
+        bodies: &Arena<RigidBody>,
+        constraints: &Arena<Constraint>,
+        sleeping: Option<&FxHashSet<RigidBodyHandle>>,
+        dt: f32,
+    ) {
         self.contact_generation_positions.clear();
         for (idx, body) in bodies.iter() {
             if !body.is_static() {
@@ -110,6 +117,7 @@ impl ConstraintSolver for PgsNgsSolver {
         expand_constraints(
             constraints,
             bodies,
+            sleeping,
             dt,
             self.config.constraint_position_beta,
             &mut self.cached_constraint_rows,

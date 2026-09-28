@@ -1,7 +1,10 @@
+use rustc_hash::FxHashSet;
+
 use generational_arena::Arena;
 
 use crate::physics::body::RigidBody;
 use crate::physics::constraint::types::Constraint;
+use crate::physics::handle::RigidBodyHandle;
 use crate::physics::pipeline::pair::SolverManifold;
 
 use super::conditioning::ManifoldConditions;
@@ -16,7 +19,16 @@ pub trait ConstraintSolver {
     /// Called once per frame after contact generation, before substeps.
     /// The solver can snapshot body state, pre-process constraints,
     /// expand into internal representations, etc.
-    fn prepare(&mut self, bodies: &Arena<RigidBody>, constraints: &Arena<Constraint>, dt: f32);
+    ///
+    /// A constraint whose bodies are all in `sleeping` is left out of the
+    /// frame: nothing it holds is moving.
+    fn prepare(
+        &mut self,
+        bodies: &Arena<RigidBody>,
+        constraints: &Arena<Constraint>,
+        sleeping: Option<&FxHashSet<RigidBodyHandle>>,
+        dt: f32,
+    );
 
     /// Solve all constraints (contacts + joints) for one substep.
     ///

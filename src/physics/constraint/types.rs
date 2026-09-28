@@ -294,6 +294,24 @@ impl ConstraintKind {
         }
     }
 
+    /// Whether the body this holds may sleep while it is active.
+    ///
+    /// A joint that ties a body to the world and nothing else answers only to
+    /// that body's own motion: once the body is still, nothing the joint does
+    /// will move it. Every other kind either drives its body or ties it to
+    /// another body that may still be moving.
+    pub fn permits_sleep(&self) -> bool {
+        match self {
+            ConstraintKind::Fixed { body_a, .. }
+            | ConstraintKind::BallJoint { body_a, .. }
+            | ConstraintKind::Hinge { body_a, .. } => body_a.is_none(),
+            ConstraintKind::KeepUpright { .. }
+            | ConstraintKind::KeepAttitude { .. }
+            | ConstraintKind::FollowPoint { .. }
+            | ConstraintKind::MediumDrive { .. } => false,
+        }
+    }
+
     /// Whether this constraint references the given body.
     pub fn references_body(&self, handle: RigidBodyHandle) -> bool {
         match self {

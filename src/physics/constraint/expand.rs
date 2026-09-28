@@ -1,5 +1,7 @@
 //! Constraint expansion: converts persistent constraint definitions into solver-ready rows.
 
+use rustc_hash::FxHashSet;
+
 use generational_arena::Arena;
 
 use super::ball_joint;
@@ -11,8 +13,10 @@ use super::keep_upright;
 use super::types::{Constraint, ConstraintKind, ConstraintRow};
 use crate::physics::body::RigidBody;
 use crate::physics::drive::medium;
+use crate::physics::handle::RigidBodyHandle;
 
-/// Expand all active constraints into solver-ready rows.
+/// Expand all active constraints into solver-ready rows, except those whose
+/// bodies are all in `sleeping`.
 ///
 /// Clears `rows` and refills it from the constraint arena. Warm-start
 /// impulses are copied from each constraint's cached values.
@@ -21,6 +25,7 @@ use crate::physics::drive::medium;
 pub fn expand_constraints(
     constraints: &Arena<Constraint>,
     bodies: &Arena<RigidBody>,
+    sleeping: Option<&FxHashSet<RigidBodyHandle>>,
     dt: f32,
     beta: f32,
     rows: &mut Vec<ConstraintRow>,
@@ -29,6 +34,15 @@ pub fn expand_constraints(
 
     for (index, constraint) in constraints.iter() {
         if !constraint.active {
+            continue;
+        }
+        if sleeping.is_some_and(|sleeping| {
+            constraint
+                .kind
+                .referenced_bodies()
+                .iter()
+                .all(|body| sleeping.contains(body))
+        }) {
             continue;
         }
 

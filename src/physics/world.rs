@@ -347,6 +347,19 @@ impl PhysicsWorld {
         self.sleep_manager.wake_body(handle);
     }
 
+    /// Let a body pass through static geometry, or stop it doing so, waking
+    /// it: what it rests on has changed.
+    ///
+    /// Returns false if the handle refers to no body.
+    pub fn set_ignores_static(&mut self, handle: RigidBodyHandle, ignores: bool) -> bool {
+        let Some(body) = self.body_mut(handle) else {
+            return false;
+        };
+        body.set_ignores_static(ignores);
+        self.wake_body(handle);
+        true
+    }
+
     /// Apply an instantaneous linear impulse to one body, waking it.
     ///
     /// Prefer this over `body_mut(h).apply_impulse(..)`. The body-level methods
@@ -947,7 +960,17 @@ impl PhysicsWorld {
         self.traction_ledger.open_frame();
         self.substeps_taken = 0;
 
-        self.solver.prepare(&self.bodies, &self.constraints, dt);
+        let sleeping_snapshot = self
+            .config
+            .sleep
+            .enabled
+            .then(|| self.sleep_manager.sleeping_snapshot());
+        self.solver.prepare(
+            &self.bodies,
+            &self.constraints,
+            sleeping_snapshot.as_ref(),
+            dt,
+        );
 
         // Static geometry is fixed for the frame; let CCD reset the query
         // cache it reuses across this frame's substeps.
