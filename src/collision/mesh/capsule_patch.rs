@@ -12,6 +12,7 @@ use smallvec::SmallVec;
 use crate::collision::contact::{ContactManifold, ContactPoint, FeatureId};
 use crate::collision::contact_reducer::ContactReducer;
 use crate::collision::mesh::seam_filter::{ContactEdge, ContactFace, FilteredPatch};
+use crate::collision::mesh::solid_side::pushing_faces;
 use crate::collision::mesh::sphere_patch::{closest_point_on_segment, point_in_convex_polygon};
 use crate::collision::SurfaceId;
 
@@ -52,8 +53,16 @@ pub fn capsule_patch_manifold(
     let mut parallel_spans: SmallVec<[ParallelFaceSpan; 8]> = SmallVec::new();
     let mut best_boundary: Option<CapsuleContact> = None;
 
+    let centre = Point3::from((seg_a.coords + seg_b.coords) * 0.5);
+    let half_segment = seg_b - centre;
+    let pushing = pushing_faces(
+        &patch.faces,
+        centre,
+        |normal| radius + half_segment.dot(normal).abs(),
+        contact_margin,
+    );
     for (face_index, face) in patch.faces.iter().enumerate() {
-        if face.vertices.len() < 3 {
+        if face.vertices.len() < 3 || !pushing[face_index] {
             continue;
         }
         let face_result = capsule_vs_face(seg_a, seg_b, expanded_radius, face_index, face);

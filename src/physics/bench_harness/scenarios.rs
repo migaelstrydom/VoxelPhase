@@ -5,7 +5,7 @@ use smallvec::SmallVec;
 
 use super::framework::PhysicsBenchScenario;
 use super::geometry::*;
-use crate::collision::convex_hull::{ConvexHull, HullFace};
+use crate::collision::convex_hull::{cube_hull, dodecahedron_hull, ConvexHull, HullFace};
 use crate::physics::constraint::ConstraintKind;
 use crate::physics::world::PhysicsConfig;
 use crate::physics::{ColliderDesc, PhysicsWorld, RigidBodyDesc, RigidBodyHandle, StaticGeometry};
@@ -632,11 +632,60 @@ impl PhysicsBenchScenario for BuriedBoxScenario {
     }
 }
 
-/// A cube starting partly inside static solid geometry, which has to leave it
-/// by the side its centre is on — and must not be let into solid it only
+/// The shape a [`ShapeIntoSolidScenario`] presses into solid geometry, one
+/// per path through the mesh contact code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProbeShape {
+    /// A metre cube, through the OBB path.
+    Box,
+    /// The same cube as a convex hull, through the GJK path: geometry
+    /// identical to `Box`, so any difference between them is the code's.
+    Hull,
+    /// A metre ball.
+    Sphere,
+    /// A standing capsule a metre across and 1.6 m tall.
+    Capsule,
+    /// The test arena's dodecahedron, 45 cm edges: a hull with many faces,
+    /// none of them square to the world.
+    Dodecahedron,
+}
+
+impl ProbeShape {
+    pub const ALL: [ProbeShape; 4] = [Self::Box, Self::Hull, Self::Sphere, Self::Capsule];
+
+    /// Half the shape's extent along each world axis, as spawned upright.
+    pub fn reach(self) -> Vector3<f32> {
+        match self {
+            Self::Box | Self::Hull | Self::Sphere => Vector3::repeat(0.5),
+            Self::Capsule => Vector3::new(0.5, 0.8, 0.5),
+            Self::Dodecahedron => Vector3::repeat(Self::dodecahedron().vertices[16].x),
+        }
+    }
+
+    fn collider(self) -> ColliderDesc {
+        match self {
+            Self::Box => ColliderDesc::box_shape(Vector3::repeat(0.5)),
+            Self::Hull => ColliderDesc::convex_hull(Arc::new(cube_hull(Vector3::repeat(0.5)))),
+            Self::Sphere => ColliderDesc::sphere(0.5),
+            Self::Capsule => ColliderDesc::capsule(0.8, 0.5),
+            Self::Dodecahedron => ColliderDesc::convex_hull(Arc::new(Self::dodecahedron())),
+        }
+    }
+
+    fn dodecahedron() -> ConvexHull {
+        dodecahedron_hull(0.45)
+    }
+}
+
+/// The radius of [`ShapeIntoSolidScenario::round_pillar`]'s pillar.
+pub const ROUND_PILLAR_RADIUS: f32 = 0.15;
+
+/// A shape starting partly inside static solid geometry, which has to leave
+/// it by the side its centre is on — and must not be let into solid it only
 /// touches.
 ///
-/// One scenario per arrangement a one-sided contact test can misread:
+/// One scenario per arrangement a one-sided contact test can misread, each
+/// for any [`ProbeShape`]:
 ///
 /// ```text
 ///   thin wall      slot            knife edge     ridge      pillar
@@ -644,27 +693,42 @@ impl PhysicsBenchScenario for BuriedBoxScenario {
 ///                                                ╱▓╲
 /// ```
 #[derive(Debug, Clone)]
-pub struct BoxIntoSolidScenario {
+pub struct ShapeIntoSolidScenario {
     name: &'static str,
-    pub half_extent: f32,
-    /// Where the cube's centre starts.
+    pub shape: ProbeShape,
+    /// Where the shape's centre starts.
     pub start: Point3<f32>,
+    /// The shape's velocity at the start.
+    pub velocity: Vector3<f32>,
     /// Whether gravity acts. Off where only the push out is being watched.
     pub gravity: bool,
+    /// Whether the shape may fall asleep, as it may in the game. Off where
+    /// only the contacts are being watched.
+    pub sleep: bool,
     geometry: SolidsGeometry,
 }
 
-impl BoxIntoSolidScenario {
-    /// Half-extent of the cube in every scenario.
-    pub const HALF_EXTENT: f32 = 0.5;
-
-    /// A wall `thickness` thick across `x = 0`, with the cube pressed
-    /// `penetration` into it from the −X side.
-    pub fn thin_wall(thickness: f32, penetration: f32) -> Self {
-        let t = thickness * 0.5;
+impl ShapeIntoSolidScenario {
+    /// Bare ground, with the shape's centre `depth` under it.
+    pub fn buried(shape: ProbeShape, depth: f32) -> Self {
         Self::new(
-            "box_into_thin_wall",
-            Point3::new(-t - Self::HALF_EXTENT + penetration, Self::HALF_EXTENT, 0.0),
+            "shape_buried",
+            shape,
+            Point3::new(0.0, -depth, 0.0),
+            true,
+            &[],
+        )
+    }
+
+    /// A wall `thickness` thick across `x = 0`, with the shape pressed
+    /// `penetration` into it from the −X side.
+    pub fn thin_wall(shape: ProbeShape, thickness: f32, penetration: f32) -> Self {
+        let t = thickness * 0.5;
+        let reach = shape.reach();
+        Self::new(
+            "shape_into_thin_wall",
+            shape,
+            Point3::new(-t - reach.x + penetration, reach.y, 0.0),
             true,
             &[ConvexSolid::block(
                 Point3::new(-t, 0.0, -8.0),
@@ -673,12 +737,13 @@ impl BoxIntoSolidScenario {
         )
     }
 
-    /// A slot narrower than the cube between two thick walls, with the cube
+    /// A slot narrower than the shape between two thick walls, with the shape
     /// wedged in it off-centre by `offset`.
-    pub fn slot(half_width: f32, offset: f32) -> Self {
+    pub fn slot(shape: ProbeShape, half_width: f32, offset: f32) -> Self {
         let w = half_width;
         Self::new(
-            "box_into_slot",
+            "shape_into_slot",
+            shape,
             Point3::new(offset, 1.5, 0.0),
             true,
             &[
@@ -689,21 +754,19 @@ impl BoxIntoSolidScenario {
     }
 
     /// A blade 20° across, its edge along y at the origin and widening towards
-    /// +z, with the cube pressed `penetration` into its −X side where the blade
-    /// is a third of a metre thick.
-    pub fn knife_edge(penetration: f32) -> Self {
+    /// +z, with the shape pressed `penetration` into its −X side where the
+    /// blade is a third of a metre thick.
+    pub fn knife_edge(shape: ProbeShape, penetration: f32) -> Self {
         let half_angle = 10.0f32.to_radians();
         let length = 4.0;
         let spread = length * half_angle.tan();
         let z = 1.0;
         let face_x = -z * half_angle.tan();
+        let reach = shape.reach();
         Self::new(
-            "box_into_knife_edge",
-            Point3::new(
-                face_x - Self::HALF_EXTENT + penetration,
-                Self::HALF_EXTENT,
-                z,
-            ),
+            "shape_into_knife_edge",
+            shape,
+            Point3::new(face_x - reach.x + penetration, reach.y, z),
             false,
             &[ConvexSolid::upright_prism(
                 &[(0.0, 0.0), (spread, length), (-spread, length)],
@@ -713,37 +776,40 @@ impl BoxIntoSolidScenario {
     }
 
     /// A ridge whose slopes are 60° from level — steep enough that their
-    /// normals are 120° apart — with the cube centred over it and pressed
+    /// normals are 120° apart — with the shape centred over it and pressed
     /// `penetration` into its apex.
-    pub fn ridge(penetration: f32) -> Self {
+    pub fn ridge(shape: ProbeShape, penetration: f32) -> Self {
         let height = 2.0;
         let half_base = height / 60.0f32.to_radians().tan();
-        // Resting on the apex, the cube's centre is still in front of both
+        // Resting on the apex, the shape's centre is still in front of both
         // slopes: this is ordinary contact, which must be left alone.
         Self::new(
-            "box_into_ridge",
-            Point3::new(0.0, height + Self::HALF_EXTENT - penetration, 0.0),
+            "shape_into_ridge",
+            shape,
+            Point3::new(0.0, height + shape.reach().y - penetration, 0.0),
             false,
             &[ConvexSolid::ridge(half_base, height, 8.0)],
         )
     }
 
-    /// The same ridge with the cube set down on its apex under gravity.
-    pub fn resting_on_ridge() -> Self {
-        let mut scenario = Self::ridge(0.0);
-        scenario.name = "box_resting_on_ridge";
+    /// The same ridge with the shape set down on its apex under gravity.
+    pub fn resting_on_ridge(shape: ProbeShape) -> Self {
+        let mut scenario = Self::ridge(shape, 0.0);
+        scenario.name = "shape_resting_on_ridge";
         scenario.gravity = true;
         scenario
     }
 
-    /// A pillar 10 cm square at the origin, with the cube pressed
+    /// A pillar 10 cm square at the origin, with the shape pressed
     /// `penetration` into it diagonally from the −X −Z side.
-    pub fn pillar(penetration: f32) -> Self {
+    pub fn pillar(shape: ProbeShape, penetration: f32) -> Self {
         let t = 0.05;
-        let c = -t - Self::HALF_EXTENT + penetration;
+        let reach = shape.reach();
+        let c = -t - reach.x + penetration;
         Self::new(
-            "box_into_pillar",
-            Point3::new(c, Self::HALF_EXTENT, c),
+            "shape_into_pillar",
+            shape,
+            Point3::new(c, reach.y, c),
             false,
             &[ConvexSolid::block(
                 Point3::new(-t, 0.0, -t),
@@ -752,18 +818,77 @@ impl BoxIntoSolidScenario {
         )
     }
 
-    fn new(name: &'static str, start: Point3<f32>, gravity: bool, solids: &[ConvexSolid]) -> Self {
+    /// A round pillar as thin as the test arena's — a 16-sided prism 15 cm in
+    /// radius on the y axis, its sides in bands 12.5 cm tall — with the shape standing on the floor beside
+    /// it, its centre `offset` along +X from the pillar's axis. An offset
+    /// under the pillar's radius starts the shape skewered on it.
+    ///
+    /// The shape may sleep: a shape pushed out of the pillar is moved by
+    /// position correction, not velocity, and must not sleep half way out.
+    pub fn round_pillar(shape: ProbeShape, offset: f32) -> Self {
+        let mut scenario = Self::new(
+            "shape_on_round_pillar",
+            shape,
+            Point3::new(offset, shape.reach().y, 0.0),
+            true,
+            &[Self::round_pillar_solid()],
+        );
+        scenario.sleep = true;
+        scenario
+    }
+
+    /// The same round pillar with the shape thrown at it along +X at `speed`,
+    /// its centre `miss` to the side of the pillar's axis.
+    pub fn thrown_at_round_pillar(shape: ProbeShape, speed: f32, miss: f32) -> Self {
+        let reach = shape.reach();
+        let mut scenario = Self::new(
+            "shape_thrown_at_round_pillar",
+            shape,
+            Point3::new(-(ROUND_PILLAR_RADIUS + reach.x + 0.5), reach.y, miss),
+            true,
+            &[Self::round_pillar_solid()],
+        );
+        scenario.velocity = Vector3::new(speed, 0.0, 0.0);
+        scenario.sleep = true;
+        scenario
+    }
+
+    fn round_pillar_solid() -> ConvexSolid {
+        let sides = 16;
+        let outline: Vec<(f32, f32)> = (0..sides)
+            .map(|i| {
+                let angle = std::f32::consts::TAU * i as f32 / sides as f32;
+                (
+                    ROUND_PILLAR_RADIUS * angle.cos(),
+                    ROUND_PILLAR_RADIUS * angle.sin(),
+                )
+            })
+            .collect();
+        // In bands one of the test arena's fine voxels tall, as the terrain
+        // meshes it.
+        ConvexSolid::banded_prism(&outline, 3.0, 0.125)
+    }
+
+    fn new(
+        name: &'static str,
+        shape: ProbeShape,
+        start: Point3<f32>,
+        gravity: bool,
+        solids: &[ConvexSolid],
+    ) -> Self {
         Self {
             name,
-            half_extent: Self::HALF_EXTENT,
+            shape,
             start,
+            velocity: Vector3::zeros(),
             gravity,
+            sleep: false,
             geometry: SolidsGeometry::new(8.0, solids),
         }
     }
 }
 
-impl PhysicsBenchScenario for BoxIntoSolidScenario {
+impl PhysicsBenchScenario for ShapeIntoSolidScenario {
     fn name(&self) -> &'static str {
         self.name
     }
@@ -774,7 +899,7 @@ impl PhysicsBenchScenario for BoxIntoSolidScenario {
 
     fn build_world(&self) -> PhysicsWorld {
         let mut config = PhysicsConfig::default();
-        config.sleep.enabled = false;
+        config.sleep.enabled = self.sleep;
         if !self.gravity {
             config.gravity = Vector3::zeros();
         }
@@ -782,12 +907,20 @@ impl PhysicsBenchScenario for BoxIntoSolidScenario {
     }
 
     fn setup(&self, world: &mut PhysicsWorld) -> RigidBodyHandle {
-        let body = world.create_body(RigidBodyDesc::dynamic().position(self.start));
-        let collider = ColliderDesc::box_shape(Vector3::repeat(self.half_extent))
+        let body = world.create_body(
+            RigidBodyDesc::dynamic()
+                .position(self.start)
+                .linear_velocity(self.velocity),
+        );
+        let collider = self
+            .shape
+            .collider()
             .density(500.0)
             .restitution(0.0)
             .friction(0.6);
         let _ = world.attach_collider(body, collider);
+        // Placed at rest, it would start asleep, wherever it is.
+        world.wake_body(body);
         body
     }
 

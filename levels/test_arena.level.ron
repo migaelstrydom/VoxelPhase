@@ -338,11 +338,100 @@ Level(
                     speed: 2.5,
                 ),
             ],
+
+            anchors: [
+                // East edge, where the contact lab joins.
+                (name: "east", pos: (64.0, 0.0, 40.0), yaw: 0.0),
+            ],
+        ),
+        (
+            // Contact lab: shapes pressed into thin terrain, for watching the
+            // mesh contact rules in play. Every object here is authored
+            // overlapping terrain on purpose and starts asleep: knock it (walk
+            // into it, grab it, or a grenade) to see it resolve. Four lanes of
+            // box, hull, ball and capsule, from z = 6 to 18. Fine voxels so the
+            // walls can be thinner than the shapes.
+            name: "contact_lab",
+
+            terrain: Terrain(
+                voxel_size: 0.125,
+                bounds: (min: (0.0, -4.0, 0.0), max: (36.0, 8.0, 24.0)),
+                base_height: 0.0,
+                material_layers: [
+                    (depth: 0.5,  material: Sand),
+                    (depth: 999.0, material: Rock),
+                ],
+                features: [
+                    // Two thin walls, 0.25 m: pressed in shallow at x = 5, deep at x = 11.
+                    Wall(from: (5.0, 3.0), to: (5.0, 21.0), height: 2.5, thickness: 0.25),
+                    Wall(from: (11.0, 3.0), to: (11.0, 21.0), height: 2.5, thickness: 0.25),
+                    // A slot 0.7 m wide between two 1 m walls.
+                    Wall(from: (16.15, 3.0), to: (16.15, 21.0), height: 2.5, thickness: 1.0),
+                    Wall(from: (17.85, 3.0), to: (17.85, 21.0), height: 2.5, thickness: 1.0),
+                ],
+                volumes: [
+                    // A thin deck: the thin wall on its side, with gravity pressing.
+                    Path(points: [(23.0, 1.5, 3.0), (23.0, 1.5, 21.0)], width: 3.0, thickness: 0.25),
+                    Pillar(center: (28.0, 6.0), height: 2.5, radius: 0.15),
+                    Pillar(center: (28.0, 10.0), height: 2.5, radius: 0.15),
+                    Pillar(center: (28.0, 14.0), height: 2.5, radius: 0.15),
+                    Pillar(center: (28.0, 18.0), height: 2.5, radius: 0.15),
+                ],
+            ),
+
+            anchors: [
+                (name: "entry", pos: (0.0, 0.0, 12.0), yaw: 180.0),
+            ],
+
+            objects: [
+                // Shallow: 0.2 m into the near side of a 0.25 m wall. Should come back out.
+
+                Box(pos: (4.58, 0.5, 6.0), half_extents: (0.5, 0.5, 0.5)),
+                Dodecahedron(pos: (4.58, 0.5, 10.0), size: 0.45),
+                BeachBall(pos: (4.58, 0.5, 14.0)),
+                Capsule(pos: (4.58, 0.8, 18.0), half_height: 0.8, radius: 0.5),
+
+                // Deep: 0.55 m in, 0.075 m short of the wall's midline. Should still come back out.
+
+                Box(pos: (10.9, 0.5, 6.0), half_extents: (0.5, 0.5, 0.5)),
+                Dodecahedron(pos: (10.9, 0.5, 10.0), size: 0.45),
+                BeachBall(pos: (10.9, 0.5, 14.0)),
+                Capsule(pos: (10.9, 0.8, 18.0), half_height: 0.8, radius: 0.5),
+
+                // Wedged across a slot narrower than itself. Should pass through neither wall.
+
+                Box(pos: (17.0, 1.5, 6.0), half_extents: (0.5, 0.5, 0.5)),
+                Dodecahedron(pos: (17.0, 1.5, 10.0), size: 0.45),
+                BeachBall(pos: (17.0, 1.5, 14.0)),
+                Capsule(pos: (17.0, 1.5, 18.0), half_height: 0.8, radius: 0.5),
+
+                // Sunk 0.3 m into the deck from above. Should come up onto it, not fall through.
+
+                Box(pos: (23.0, 1.7, 6.0), half_extents: (0.5, 0.5, 0.5)),
+                Dodecahedron(pos: (23.0, 1.7, 10.0), size: 0.45),
+                BeachBall(pos: (23.0, 1.7, 14.0)),
+                Capsule(pos: (23.0, 2.0, 18.0), half_height: 0.8, radius: 0.5),
+
+                // Pressed 0.2 m into a 0.3 m pillar. Should be pushed back the way it came.
+
+                Box(pos: (27.6, 0.5, 6.0), half_extents: (0.5, 0.5, 0.5)),
+                Dodecahedron(pos: (27.6, 0.5, 10.0), size: 0.45),
+                BeachBall(pos: (27.6, 0.5, 14.0)),
+                Capsule(pos: (27.6, 0.8, 18.0), half_height: 0.8, radius: 0.5),
+
+                // Centre just under the ground. Should come up onto it.
+
+                Box(pos: (33.0, -0.04, 6.0), half_extents: (0.5, 0.5, 0.5)),
+                Dodecahedron(pos: (33.0, -0.04, 10.0), size: 0.45),
+                BeachBall(pos: (33.0, -0.04, 14.0)),
+                Capsule(pos: (33.0, -0.04, 18.0), half_height: 0.8, radius: 0.5),
+            ],
         ),
     ],
 
     placements: [
         Root(segment: "main", origin: (0.0, 0.0, 0.0), yaw: 0.0),
+        Join(segment: "contact_lab", anchor: "entry", to: "main.east", gap: 1.0),
     ],
 
     player_spawn: (3.0, 1.0, 0.0),

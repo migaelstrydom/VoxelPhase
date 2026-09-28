@@ -20,6 +20,7 @@ use smallvec::SmallVec;
 use crate::collision::contact::{ContactManifold, ContactPoint, FeatureId};
 use crate::collision::contact_reducer::ContactReducer;
 use crate::collision::mesh::seam_filter::{ContactEdge, FilteredPatch};
+use crate::collision::mesh::solid_side::pushing_faces;
 use crate::collision::SurfaceId;
 
 /// Maximum contacts emitted before reduction.
@@ -54,7 +55,8 @@ pub fn sphere_patch_manifold(
     let mut face_hits: SmallVec<[SphereContact; 4]> = SmallVec::new();
     let mut best_boundary: Option<SphereContact> = None;
 
-    for face in &patch.faces {
+    let pushing = pushing_faces(&patch.faces, center, |_| radius, contact_margin);
+    for (face, _) in patch.faces.iter().zip(&pushing).filter(|(_, &p)| p) {
         if face.vertices.len() < 3 {
             continue;
         }

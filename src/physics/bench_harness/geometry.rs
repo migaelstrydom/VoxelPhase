@@ -543,11 +543,22 @@ impl ConvexSolid {
 
     /// A convex polygon in the floor's `(x, z)`, raised to `height`.
     pub fn upright_prism(outline: &[(f32, f32)], height: f32) -> Self {
+        Self::banded_prism(outline, height, height)
+    }
+
+    /// The same prism with its sides cut into bands `band` tall, as a
+    /// voxel mesh cuts them: its upright edges come in pieces, not whole.
+    pub fn banded_prism(outline: &[(f32, f32)], height: f32, band: f32) -> Self {
         let at = |(x, z): (f32, f32), y: f32| Point3::new(x, y, z);
+        let bands = (height / band).ceil().max(1.0) as usize;
+        let level = |k: usize| height * k as f32 / bands as f32;
         let mut faces = vec![outline.iter().map(|&p| at(p, height)).collect()];
         for i in 0..outline.len() {
             let (a, b) = (outline[i], outline[(i + 1) % outline.len()]);
-            faces.push(vec![at(a, 0.0), at(b, 0.0), at(b, height), at(a, height)]);
+            for k in 0..bands {
+                let (low, high) = (level(k), level(k + 1));
+                faces.push(vec![at(a, low), at(b, low), at(b, high), at(a, high)]);
+            }
         }
         let inside = Self::mean(&faces);
         Self::orient(faces, inside)

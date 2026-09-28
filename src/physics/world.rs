@@ -1104,8 +1104,12 @@ impl PhysicsWorld {
         let lap = Instant::now();
 
         let all_manifolds = std::mem::take(&mut self.cached_all_manifolds);
-        self.sleep_manager
-            .update_sleep_states(&mut self.bodies, &all_manifolds, &self.constraints);
+        self.sleep_manager.update_sleep_states(
+            &mut self.bodies,
+            &all_manifolds,
+            &self.constraints,
+            dt,
+        );
         self.cached_all_manifolds = all_manifolds;
         self.profile
             .record(PhysicsStage::SleepUpdate, lap.elapsed());

@@ -183,6 +183,7 @@ impl SleepManager {
         bodies: &mut Arena<RigidBody>,
         manifolds: &[SolverManifold],
         constraints: &Arena<Constraint>,
+        dt: f32,
     ) {
         if !self.enabled {
             return;
@@ -201,7 +202,7 @@ impl SleepManager {
             if has_active_constraint(constraints, handle) {
                 continue;
             }
-            if self.sleep_tracker.update_body(handle, body) {
+            if self.sleep_tracker.update_body(handle, body, dt) {
                 candidates.insert(handle);
             }
         }

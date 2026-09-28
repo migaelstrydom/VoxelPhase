@@ -36,6 +36,7 @@ pub struct BenchSample {
     pub angular_speed: f32,
     pub x: f32,
     pub y: f32,
+    pub z: f32,
     pub contact_count: usize,
     pub max_contact_depth: f32,
     pub manifold_points: usize,
@@ -81,11 +82,11 @@ impl BenchRunResult {
 
     pub fn to_csv(&self) -> String {
         let mut out = String::from(
-            "scenario,restitution,fixed_dt,sim_time,linear_speed,angular_speed,x,y,contact_count,max_contact_depth,manifold_points,manifold_churn\n",
+            "scenario,restitution,fixed_dt,sim_time,linear_speed,angular_speed,x,y,z,contact_count,max_contact_depth,manifold_points,manifold_churn\n",
         );
         for s in &self.samples {
             out.push_str(&format!(
-                "{},{:.3},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{},{:.6},{},{}\n",
+                "{},{:.3},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{:.6},{},{:.6},{},{}\n",
                 self.scenario_name,
                 self.restitution,
                 self.fixed_dt,
@@ -94,6 +95,7 @@ impl BenchRunResult {
                 s.angular_speed,
                 s.x,
                 s.y,
+                s.z,
                 s.contact_count,
                 s.max_contact_depth,
                 s.manifold_points,
@@ -110,12 +112,13 @@ impl BenchRunResult {
                 samples.push(',');
             }
             samples.push_str(&format!(
-                "{{\"sim_time\":{:.6},\"linear_speed\":{:.6},\"angular_speed\":{:.6},\"x\":{:.6},\"y\":{:.6},\"contact_count\":{},\"max_contact_depth\":{:.6},\"manifold_points\":{},\"manifold_churn\":{}}}",
+                "{{\"sim_time\":{:.6},\"linear_speed\":{:.6},\"angular_speed\":{:.6},\"x\":{:.6},\"y\":{:.6},\"z\":{:.6},\"contact_count\":{},\"max_contact_depth\":{:.6},\"manifold_points\":{},\"manifold_churn\":{}}}",
                 s.sim_time,
                 s.linear_speed,
                 s.angular_speed,
                 s.x,
                 s.y,
+                s.z,
                 s.contact_count,
                 s.max_contact_depth,
                 s.manifold_points,
@@ -219,6 +222,7 @@ fn capture_sample(world: &PhysicsWorld, handle: RigidBodyHandle, sim_time: f32) 
         angular_speed: body.angular_velocity().magnitude(),
         x: body.position().x,
         y: body.position().y,
+        z: body.position().z,
         contact_count,
         max_contact_depth,
         manifold_points: manifold.points,

@@ -110,6 +110,9 @@ const SCENARIO_NAMES: &[&str] = &[
     "box_into_ridge",
     "box_resting_on_ridge",
     "box_into_pillar",
+    "sphere_into_thin_wall",
+    "capsule_into_thin_wall",
+    "hull_into_thin_wall",
     "sphere_sphere_collision",
     "sphere_obb_collision",
     "obb_obb_collision",
@@ -150,12 +153,39 @@ fn run_viewer(name: &str) -> EngineResult<()> {
         "box_slides_down_wall" => run_with_scenario(&BoxSlidesDownWallScenario::new(0.0)),
         "buried_box" => run_with_scenario(&BuriedBoxScenario::cube()),
         "buried_plank" => run_with_scenario(&BuriedBoxScenario::plank()),
-        "box_into_thin_wall" => run_with_scenario(&BoxIntoSolidScenario::thin_wall(0.1, 0.4)),
-        "box_into_slot" => run_with_scenario(&BoxIntoSolidScenario::slot(0.4, 0.05)),
-        "box_into_knife_edge" => run_with_scenario(&BoxIntoSolidScenario::knife_edge(0.3)),
-        "box_into_ridge" => run_with_scenario(&BoxIntoSolidScenario::ridge(0.1)),
-        "box_resting_on_ridge" => run_with_scenario(&BoxIntoSolidScenario::resting_on_ridge()),
-        "box_into_pillar" => run_with_scenario(&BoxIntoSolidScenario::pillar(0.3)),
+        "box_into_thin_wall" => run_with_scenario(&ShapeIntoSolidScenario::thin_wall(
+            ProbeShape::Box,
+            0.1,
+            0.4,
+        )),
+        "box_into_slot" => {
+            run_with_scenario(&ShapeIntoSolidScenario::slot(ProbeShape::Box, 0.4, 0.05))
+        }
+        "box_into_knife_edge" => {
+            run_with_scenario(&ShapeIntoSolidScenario::knife_edge(ProbeShape::Box, 0.3))
+        }
+        "box_into_ridge" => run_with_scenario(&ShapeIntoSolidScenario::ridge(ProbeShape::Box, 0.1)),
+        "box_resting_on_ridge" => {
+            run_with_scenario(&ShapeIntoSolidScenario::resting_on_ridge(ProbeShape::Box))
+        }
+        "box_into_pillar" => {
+            run_with_scenario(&ShapeIntoSolidScenario::pillar(ProbeShape::Box, 0.3))
+        }
+        "sphere_into_thin_wall" => run_with_scenario(&ShapeIntoSolidScenario::thin_wall(
+            ProbeShape::Sphere,
+            0.1,
+            0.4,
+        )),
+        "capsule_into_thin_wall" => run_with_scenario(&ShapeIntoSolidScenario::thin_wall(
+            ProbeShape::Capsule,
+            0.1,
+            0.4,
+        )),
+        "hull_into_thin_wall" => run_with_scenario(&ShapeIntoSolidScenario::thin_wall(
+            ProbeShape::Hull,
+            0.1,
+            0.4,
+        )),
         "sphere_sphere_collision" => run_with_scenario(&SphereSphereCollisionScenario::new(0.8)),
         "sphere_obb_collision" => run_with_scenario(&SphereObbCollisionScenario::new(0.5)),
         "obb_obb_collision" => run_with_scenario(&ObbObbCollisionScenario::new(0.5)),

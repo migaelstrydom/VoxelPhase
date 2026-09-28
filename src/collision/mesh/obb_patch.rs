@@ -1,19 +1,8 @@
 //! OBB vs FilteredPatch manifold generation.
 //!
-//! A mesh has no inside, so a face whose plane the OBB's centre has crossed
-//! is ambiguous: the OBB may be a little too deep in the ground, or most of
-//! the way through a thin wall and looking at its far side. Such a face is
-//! used while the centre is within the OBB's own reach behind it, unless a
-//! face it stands back to back with would push the OBB out a shorter way —
-//! so an OBB always leaves solid on the side its centre is on:
-//!
-//! ```text
-//!     back to back: one pushes          face to face: both push
-//!       ← │▓▓▓▓│ →                        ▓▓▓│ →    ← │▓▓▓
-//!    ┌────┼──┐ │                          ▓▓▓│ ┌────┐ │▓▓▓
-//!    │  ● │  │ │   centre left of the     ▓▓▓│ │ ●  │ │▓▓▓
-//!    └────┼──┘ │   midline: push ←        ▓▓▓│ └────┘ │▓▓▓
-//! ```
+//! Which faces may push the OBB when its centre has crossed some of them is
+//! [`solid_side`](super::solid_side)'s call; a ridge coming up through a face
+//! no face contact clips is [`crease_contacts`](super::crease_contacts)'s.
 //!
 //! For each merged face in the filtered patch, tests OBB overlap via
 //! half-extent projection. For the face with deepest penetration, clips
@@ -27,7 +16,9 @@ use smallvec::SmallVec;
 use crate::collision::contact::{ContactManifold, ContactPoint};
 use crate::collision::contact_reducer::ContactReducer;
 use crate::collision::discrete::clipping::{clip_polygon, obb_face, ClipPolygon};
-use crate::collision::mesh::seam_filter::{ContactEdge, ContactFace, FilteredPatch};
+use crate::collision::mesh::crease_contacts::{crease_edge_contacts, SolidPlane};
+use crate::collision::mesh::seam_filter::{ContactFace, FilteredPatch};
+use crate::collision::mesh::solid_side::pushing_faces;
 use crate::collision::obb::Obb;
 use crate::collision::segment::segment_segment_closest_points;
 
@@ -35,9 +26,6 @@ use crate::collision::segment::segment_segment_closest_points;
 const MAX_MANIFOLD_POINTS: usize = 4;
 /// Small tolerance for rejecting backfacing mesh contacts.
 const BACKFACE_EPSILON: f32 = 1e-4;
-
-/// Tolerance for calling one face's centroid behind another's plane.
-const BACK_TO_BACK_EPSILON: f32 = 1e-4;
 
 /// Generate a contact manifold for an OBB against a filtered mesh patch.
 ///
@@ -55,19 +43,22 @@ pub fn obb_patch_manifold(
 ) -> ContactManifold {
     let mut all_points: SmallVec<[ContactPoint; 4]> = SmallVec::new();
 
-    let overlaps: SmallVec<[(&ContactFace, FaceOverlap); 16]> = patch
-        .faces
-        .iter()
-        .filter(|face| face.vertices.len() >= 3)
-        .filter_map(|face| Some((face, test_obb_face_overlap(obb, face, contact_margin)?)))
-        .collect();
+    let pushing = pushing_faces(
+        &patch.faces,
+        obb.center,
+        |normal| obb.project_half_extent(normal),
+        contact_margin,
+    );
 
     // Collect contacts from ALL overlapping faces (individual triangles).
     // Each triangle is always convex so clipping is always correct.
-    for (index, (face, overlap)) in overlaps.iter().enumerate() {
-        if overlap.centre_behind && is_outpushed(index, &overlaps) {
+    for (face, _) in patch.faces.iter().zip(&pushing).filter(|(_, &p)| p) {
+        if face.vertices.len() < 3 {
             continue;
         }
+        let Some(overlap) = test_obb_face_overlap(obb, face, contact_margin) else {
+            continue;
+        };
 
         let normal = overlap.normal;
         let support = find_support_face(obb, &normal);
@@ -121,7 +112,13 @@ pub fn obb_patch_manifold(
         }
     }
 
-    crease_edge_contacts(obb, patch, contact_margin, &mut all_points);
+    crease_edge_contacts(
+        &SolidPlane::of_obb(obb),
+        |u| obb.center.coords.dot(u) + obb.project_half_extent(u),
+        patch,
+        contact_margin,
+        &mut all_points,
+    );
 
     // No face or crease contacts — try boundary edges as a fallback.
     if all_points.is_empty() {
@@ -138,224 +135,10 @@ pub fn obb_patch_manifold(
     ContactManifold::from_vec(all_points)
 }
 
-/// Contacts from convex crease edges that run into the OBB through a face
-/// neither of the crease's own faces would clip against.
-///
-/// A face contact clips the OBB face most aligned with the terrain face. On a
-/// ridge steeper than 45°, that is a side of the OBB for both slopes, while
-/// the apex comes up through its bottom: neither slope's contact sees it, and
-/// the OBB sank onto the ridge untouched. The crease is pushed out of the
-/// OBB along whichever OBB face normal clears it soonest, of those within
-/// the crease's outward cone — so a ridge lifts what rests across it.
-///
-/// ```text
-///         ┌───────┐
-///         │   ●   │      push ↑ : clears the apex soonest,
-///         │   ▲   │               and lies between both slopes' normals
-///         └──╱─╲──┘
-///           ╱   ╲
-/// ```
-fn crease_edge_contacts(
-    obb: &Obb,
-    patch: &FilteredPatch,
-    contact_margin: f32,
-    out: &mut SmallVec<[ContactPoint; 4]>,
-) {
-    for edge in &patch.boundary_edges {
-        let Some(normal_b) = edge.normal_b else {
-            continue;
-        };
-        // Each crease is emitted once from each side, in opposite directions.
-        if !is_canonical_direction(edge.a, edge.b) || !is_convex_crease(edge, &normal_b) {
-            continue;
-        }
-        let Some(clipped) = clip_segment_to_obb(obb, edge.a, edge.b, contact_margin) else {
-            continue;
-        };
-        let Some(push) = shortest_push(obb, &clipped, &edge.normal_a, &normal_b) else {
-            continue;
-        };
-        if push.axis == support_axis(obb, &edge.normal_a)
-            || push.axis == support_axis(obb, &normal_b)
-        {
-            continue;
-        }
-
-        for (vertex, point) in clipped.iter().enumerate() {
-            let depth = push.half_extent + (point - obb.center).dot(&push.direction);
-            if depth < -contact_margin {
-                continue;
-            }
-            out.push(
-                ContactPoint::new(
-                    *point,
-                    push.direction,
-                    depth,
-                    edge.feature_id.with_vertex(vertex as u32),
-                )
-                .on(edge.surface),
-            );
-        }
-    }
-}
-
-/// How the OBB is pushed off a crease: along one of its face normals.
-struct CreasePush {
-    /// Which OBB axis the push runs along.
-    axis: usize,
-    /// The push direction, from the terrain towards the OBB.
-    direction: Vector3<f32>,
-    /// The OBB's half-extent along `axis`.
-    half_extent: f32,
-}
-
-/// The OBB face normal, within the crease's outward cone, along which the OBB
-/// clears `points` in the shortest move.
-fn shortest_push(
-    obb: &Obb,
-    points: &[Point3<f32>; 2],
-    normal_a: &Vector3<f32>,
-    normal_b: &Vector3<f32>,
-) -> Option<CreasePush> {
-    let axes = obb.axes();
-    let half = [obb.half_extents.x, obb.half_extents.y, obb.half_extents.z];
-    let mut best: Option<(CreasePush, f32)> = None;
-    for (axis, &base) in axes.iter().enumerate() {
-        for direction in [base, -base] {
-            if direction.dot(normal_a) <= 0.0 || direction.dot(normal_b) <= 0.0 {
-                continue;
-            }
-            let reach = points
-                .iter()
-                .map(|p| (p - obb.center).dot(&direction))
-                .fold(f32::MIN, f32::max);
-            let distance = half[axis] + reach;
-            if best.as_ref().map_or(true, |(_, d)| distance < *d) {
-                best = Some((
-                    CreasePush {
-                        axis,
-                        direction,
-                        half_extent: half[axis],
-                    },
-                    distance,
-                ));
-            }
-        }
-    }
-    best.map(|(push, _)| push)
-}
-
-/// The OBB axis whose face a face contact against `normal` clips: the one
-/// most aligned with it, as [`find_support_face`] chooses.
-fn support_axis(obb: &Obb, normal: &Vector3<f32>) -> usize {
-    let axes = obb.axes();
-    (0..3)
-        .max_by(|&a, &b| {
-            axes[a]
-                .dot(normal)
-                .abs()
-                .partial_cmp(&axes[b].dot(normal).abs())
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
-        .unwrap_or(0)
-}
-
-/// Whether the crease folds away from the OBB's side, as a ridge does, rather
-/// than towards it, as a valley does.
-///
-/// Edges run in their triangle's winding, which is counter-clockwise about
-/// its normal, so the face lies to the left: along `normal_a × (b - a)`. A
-/// convex neighbour's normal points away from that side.
-fn is_convex_crease(edge: &ContactEdge, normal_b: &Vector3<f32>) -> bool {
-    let into_face_a = edge.normal_a.cross(&(edge.b - edge.a));
-    normal_b.dot(&into_face_a) < 0.0
-}
-
-/// One of the two directions a shared edge is walked in, chosen by its ends.
-fn is_canonical_direction(a: Point3<f32>, b: Point3<f32>) -> bool {
-    (a.x, a.y, a.z) < (b.x, b.y, b.z)
-}
-
-/// The part of segment `a`–`b` inside the OBB, grown by `margin`, if any.
-fn clip_segment_to_obb(
-    obb: &Obb,
-    a: Point3<f32>,
-    b: Point3<f32>,
-    margin: f32,
-) -> Option<[Point3<f32>; 2]> {
-    let axes = obb.axes();
-    let half = [obb.half_extents.x, obb.half_extents.y, obb.half_extents.z];
-    let (mut t0, mut t1) = (0.0f32, 1.0f32);
-    for k in 0..3 {
-        let start = (a - obb.center).dot(&axes[k]);
-        let delta = (b - a).dot(&axes[k]);
-        let limit = half[k] + margin;
-        if delta.abs() < 1e-9 {
-            if start.abs() > limit {
-                return None;
-            }
-            continue;
-        }
-        let (mut enter, mut exit) = ((-limit - start) / delta, (limit - start) / delta);
-        if enter > exit {
-            std::mem::swap(&mut enter, &mut exit);
-        }
-        t0 = t0.max(enter);
-        t1 = t1.min(exit);
-        if t0 > t1 {
-            return None;
-        }
-    }
-    Some([a + (b - a) * t0, a + (b - a) * t1])
-}
-
 /// Result of testing OBB overlap against a single face.
 struct FaceOverlap {
     /// Face normal from the mesh surface toward the OBB.
     normal: Vector3<f32>,
-    /// How far the OBB must move along `normal` to clear the face's plane.
-    push: f32,
-    /// Whether the OBB's centre is behind the face's plane.
-    centre_behind: bool,
-}
-
-/// Whether another overlapping face, back to back with this one, would push
-/// the OBB out of the solid between them a shorter way.
-///
-/// Back to back means each face lies behind the other's plane: the two sides
-/// of something solid, which the OBB can leave by only one of. Faces that
-/// face each other bound a gap instead, and both push. Pushes less than a
-/// right angle apart never oppose, so they are summed as ever: the two slopes
-/// of a roof both lift what rests across its ridge.
-///
-/// Equal pushes — the centre exactly on the midline — go to the lower index,
-/// so one of the two always survives.
-fn is_outpushed(index: usize, overlaps: &[(&ContactFace, FaceOverlap)]) -> bool {
-    let (face, overlap) = &overlaps[index];
-    overlaps
-        .iter()
-        .enumerate()
-        .any(|(other_index, (other, other_overlap))| {
-            other_index != index
-                && overlap.normal.dot(&other_overlap.normal) < 0.0
-                && is_behind(face, other)
-                && is_behind(other, face)
-                && (other_overlap.push < overlap.push
-                    || (other_overlap.push == overlap.push && other_index < index))
-        })
-}
-
-/// Whether `face`'s centroid lies on or behind `plane_of`'s plane.
-fn is_behind(face: &ContactFace, plane_of: &ContactFace) -> bool {
-    (centroid(face) - plane_of.vertices[0]).dot(&plane_of.normal) <= BACK_TO_BACK_EPSILON
-}
-
-fn centroid(face: &ContactFace) -> Point3<f32> {
-    let sum = face
-        .vertices
-        .iter()
-        .fold(Vector3::zeros(), |acc, v| acc + v.coords);
-    Point3::from(sum / face.vertices.len() as f32)
 }
 
 /// Test if an OBB overlaps a face via half-extent projection.
@@ -390,11 +173,7 @@ fn test_obb_face_overlap(
         return None;
     }
 
-    Some(FaceOverlap {
-        normal,
-        push: depth,
-        centre_behind: signed_dist < -BACKFACE_EPSILON,
-    })
+    Some(FaceOverlap { normal })
 }
 
 /// Information about the OBB support face for clipping.

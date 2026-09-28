@@ -579,6 +579,78 @@ pub fn cube_hull(half_extents: Vector3<f32>) -> ConvexHull {
     ConvexHull::new(vertices, faces)
 }
 
+/// A regular dodecahedron with edges `edge` long, centred at the origin.
+///
+/// Its vertices are the eight corners of a cube plus three golden rectangles,
+/// one in each coordinate plane; the faces are its twelve pentagons.
+pub fn dodecahedron_hull(edge: f32) -> ConvexHull {
+    let phi: f32 = (1.0 + 5.0f32.sqrt()) / 2.0;
+    let inv_phi = 1.0 / phi;
+    // These coordinates give edges 2/φ long.
+    let scale = edge * phi / 2.0;
+    let vertices: Vec<Vector3<f32>> = [
+        (1.0, 1.0, 1.0),
+        (1.0, 1.0, -1.0),
+        (1.0, -1.0, 1.0),
+        (1.0, -1.0, -1.0),
+        (-1.0, 1.0, 1.0),
+        (-1.0, 1.0, -1.0),
+        (-1.0, -1.0, 1.0),
+        (-1.0, -1.0, -1.0),
+        (0.0, inv_phi, phi),
+        (0.0, inv_phi, -phi),
+        (0.0, -inv_phi, phi),
+        (0.0, -inv_phi, -phi),
+        (inv_phi, phi, 0.0),
+        (inv_phi, -phi, 0.0),
+        (-inv_phi, phi, 0.0),
+        (-inv_phi, -phi, 0.0),
+        (phi, 0.0, inv_phi),
+        (phi, 0.0, -inv_phi),
+        (-phi, 0.0, inv_phi),
+        (-phi, 0.0, -inv_phi),
+    ]
+    .iter()
+    .map(|&(x, y, z)| Vector3::new(x, y, z) * scale)
+    .collect();
+
+    let pentagons: [[u16; 5]; 12] = [
+        [0, 8, 10, 2, 16],
+        [0, 16, 17, 1, 12],
+        [0, 12, 14, 4, 8],
+        [1, 17, 3, 11, 9],
+        [1, 9, 5, 14, 12],
+        [2, 10, 6, 15, 13],
+        [2, 13, 3, 17, 16],
+        [3, 13, 15, 7, 11],
+        [4, 14, 5, 19, 18],
+        [4, 18, 6, 10, 8],
+        [5, 9, 11, 7, 19],
+        [6, 18, 19, 7, 15],
+    ];
+    let faces = pentagons
+        .iter()
+        .map(|pentagon| {
+            let mut indices = SmallVec::from_slice(pentagon);
+            let centre = indices
+                .iter()
+                .fold(Vector3::zeros(), |sum, &i| sum + vertices[i as usize])
+                / 5.0;
+            let normal = centre.normalize();
+            let [a, b, c] = [0, 1, 2].map(|k| vertices[indices[k] as usize]);
+            if (b - a).cross(&(c - a)).dot(&normal) < 0.0 {
+                indices.reverse();
+            }
+            HullFace {
+                vertex_indices: indices,
+                normal,
+            }
+        })
+        .collect();
+
+    ConvexHull::new(vertices, faces)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

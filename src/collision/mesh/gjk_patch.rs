@@ -16,9 +16,13 @@ use smallvec::SmallVec;
 
 use crate::collision::contact::{ContactManifold, ContactPoint};
 use crate::collision::contact_reducer::ContactReducer;
+use crate::collision::mesh::crease_contacts::{crease_edge_contacts, SolidPlane};
 use crate::collision::mesh::seam_filter::{ContactFace, FilteredPatch};
-use crate::collision::shape_view::{SupportFace, SupportFaceExtractor};
+use crate::collision::mesh::solid_side::pushing_faces;
+use crate::collision::obb::Obb;
+use crate::collision::shape_view::{ShapeView, SupportFace, SupportFaceExtractor};
 use crate::collision::support::ConvexSupport;
+use crate::physics::ColliderShape;
 
 /// Maximum contacts in the final manifold.
 const MAX_MANIFOLD_POINTS: usize = 4;
@@ -68,6 +72,39 @@ impl SupportFaceExtractor for SupportPolygon<'_> {
     }
 }
 
+/// What the mesh path needs of a shape beyond its support function.
+pub trait MeshContactShape {
+    /// The shape's centre: the side of a face it is on is the side this is.
+    fn centre(&self) -> Point3<f32>;
+
+    /// The shape's faces as planes, or none for a shape without flat faces.
+    fn face_planes(&self) -> SmallVec<[SolidPlane; 8]>;
+}
+
+impl MeshContactShape for ShapeView<'_> {
+    fn centre(&self) -> Point3<f32> {
+        self.center
+    }
+
+    fn face_planes(&self) -> SmallVec<[SolidPlane; 8]> {
+        match self.shape {
+            ColliderShape::Box { half_extents } => {
+                SolidPlane::of_obb(&Obb::new(self.center, self.rotation, *half_extents))
+            }
+            ColliderShape::ConvexHull { hull } => hull
+                .faces
+                .iter()
+                .map(|face| {
+                    let normal = self.rotation * face.normal;
+                    let vertex = hull.vertices[face.vertex_indices[0] as usize];
+                    SolidPlane::through(self.center + self.rotation * vertex, normal)
+                })
+                .collect(),
+            ColliderShape::Sphere { .. } | ColliderShape::Capsule { .. } => SmallVec::new(),
+        }
+    }
+}
+
 /// Generate a contact manifold for a convex shape against a filtered mesh patch.
 ///
 /// Runs direct face-normal projection per face, clips support faces,
@@ -78,20 +115,41 @@ impl SupportFaceExtractor for SupportPolygon<'_> {
 /// * `shape` — world-space convex shape view
 /// * `patch` — seam-filtered mesh patch
 /// * `margin` — contact margin for speculative contacts
-pub fn gjk_patch_manifold<S: ConvexSupport + SupportFaceExtractor>(
+pub fn gjk_patch_manifold<S: ConvexSupport + SupportFaceExtractor + MeshContactShape>(
     shape: &S,
     patch: &FilteredPatch,
     margin: f32,
 ) -> ContactManifold {
     let mut all_points: SmallVec<[ContactPoint; 4]> = SmallVec::new();
 
-    for face in &patch.faces {
+    let centre = shape.centre();
+    let pushing = pushing_faces(
+        &patch.faces,
+        centre,
+        |normal| (centre - shape.support(-normal)).dot(normal),
+        margin,
+    );
+    for (face, _) in patch.faces.iter().zip(&pushing).filter(|(_, &p)| p) {
         if face.vertices.len() < 3 {
             continue;
         }
 
         let face_contacts = gjk_epa_vs_face(shape, face, margin);
         all_points.extend(face_contacts);
+    }
+
+    if patch
+        .boundary_edges
+        .iter()
+        .any(|edge| edge.normal_b.is_some())
+    {
+        crease_edge_contacts(
+            &shape.face_planes(),
+            |u| shape.support(*u).coords.dot(u),
+            patch,
+            margin,
+            &mut all_points,
+        );
     }
 
     if all_points.is_empty() {
