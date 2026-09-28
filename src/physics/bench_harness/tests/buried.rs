@@ -157,8 +157,6 @@ fn a_cube_pressed_into_a_knife_edge_is_pushed_back_out_of_its_side() {
 /// is in front of both slopes — ordinary contact — so both push, and their
 /// sideways halves cancel. Picking one would shove it off to the side.
 #[test]
-#[ignore = "an OBB gets no contact from a convex mesh edge that runs through one of its \
-            faces: face clipping misses it and the edge fallback only matches OBB edges"]
 fn a_cube_pressed_onto_a_steep_ridge_is_lifted_straight_up() {
     let scenario = BoxIntoSolidScenario::ridge(0.1);
     let run = run(&scenario, "box_into_ridge");
@@ -174,6 +172,26 @@ fn a_cube_pressed_onto_a_steep_ridge_is_lifted_straight_up() {
         "the cube was not lifted: y went from {:.3} to {:.3}",
         scenario.start.y,
         last.y
+    );
+}
+
+/// A cube set down across a steep ridge rests on its apex. Balanced there, it
+/// neither sinks onto the ridge nor is pushed off it.
+#[test]
+fn a_cube_set_down_on_a_steep_ridge_rests_on_its_apex() {
+    let scenario = BoxIntoSolidScenario::resting_on_ridge();
+    let run = run(&scenario, "box_resting_on_ridge");
+
+    let lowest = run.samples.iter().map(|s| s.y).fold(f32::MAX, f32::min);
+    assert!(
+        lowest > scenario.start.y - 0.03,
+        "the cube sank onto the ridge from y = {:.3} to y = {lowest:.3}",
+        scenario.start.y
+    );
+    let widest = run.samples.iter().map(|s| s.x.abs()).fold(0.0, f32::max);
+    assert!(
+        widest < 0.01,
+        "the cube was pushed off the apex to x = ±{widest:.3}"
     );
 }
 

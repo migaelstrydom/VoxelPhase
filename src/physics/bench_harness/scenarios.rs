@@ -728,6 +728,14 @@ impl BoxIntoSolidScenario {
         )
     }
 
+    /// The same ridge with the cube set down on its apex under gravity.
+    pub fn resting_on_ridge() -> Self {
+        let mut scenario = Self::ridge(0.0);
+        scenario.name = "box_resting_on_ridge";
+        scenario.gravity = true;
+        scenario
+    }
+
     /// A pillar 10 cm square at the origin, with the cube pressed
     /// `penetration` into it diagonally from the −X −Z side.
     pub fn pillar(penetration: f32) -> Self {

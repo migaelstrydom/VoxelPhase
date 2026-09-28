@@ -27,7 +27,7 @@ use smallvec::SmallVec;
 use crate::collision::contact::{ContactManifold, ContactPoint};
 use crate::collision::contact_reducer::ContactReducer;
 use crate::collision::discrete::clipping::{clip_polygon, obb_face, ClipPolygon};
-use crate::collision::mesh::seam_filter::{ContactFace, FilteredPatch};
+use crate::collision::mesh::seam_filter::{ContactEdge, ContactFace, FilteredPatch};
 use crate::collision::obb::Obb;
 use crate::collision::segment::segment_segment_closest_points;
 
@@ -121,7 +121,9 @@ pub fn obb_patch_manifold(
         }
     }
 
-    // No face contacts — try boundary edges as a fallback.
+    crease_edge_contacts(obb, patch, contact_margin, &mut all_points);
+
+    // No face or crease contacts — try boundary edges as a fallback.
     if all_points.is_empty() {
         return obb_vs_boundary_edges(obb, patch, contact_margin);
     }
@@ -134,6 +136,177 @@ pub fn obb_patch_manifold(
     }
 
     ContactManifold::from_vec(all_points)
+}
+
+/// Contacts from convex crease edges that run into the OBB through a face
+/// neither of the crease's own faces would clip against.
+///
+/// A face contact clips the OBB face most aligned with the terrain face. On a
+/// ridge steeper than 45°, that is a side of the OBB for both slopes, while
+/// the apex comes up through its bottom: neither slope's contact sees it, and
+/// the OBB sank onto the ridge untouched. The crease is pushed out of the
+/// OBB along whichever OBB face normal clears it soonest, of those within
+/// the crease's outward cone — so a ridge lifts what rests across it.
+///
+/// ```text
+///         ┌───────┐
+///         │   ●   │      push ↑ : clears the apex soonest,
+///         │   ▲   │               and lies between both slopes' normals
+///         └──╱─╲──┘
+///           ╱   ╲
+/// ```
+fn crease_edge_contacts(
+    obb: &Obb,
+    patch: &FilteredPatch,
+    contact_margin: f32,
+    out: &mut SmallVec<[ContactPoint; 4]>,
+) {
+    for edge in &patch.boundary_edges {
+        let Some(normal_b) = edge.normal_b else {
+            continue;
+        };
+        // Each crease is emitted once from each side, in opposite directions.
+        if !is_canonical_direction(edge.a, edge.b) || !is_convex_crease(edge, &normal_b) {
+            continue;
+        }
+        let Some(clipped) = clip_segment_to_obb(obb, edge.a, edge.b, contact_margin) else {
+            continue;
+        };
+        let Some(push) = shortest_push(obb, &clipped, &edge.normal_a, &normal_b) else {
+            continue;
+        };
+        if push.axis == support_axis(obb, &edge.normal_a)
+            || push.axis == support_axis(obb, &normal_b)
+        {
+            continue;
+        }
+
+        for (vertex, point) in clipped.iter().enumerate() {
+            let depth = push.half_extent + (point - obb.center).dot(&push.direction);
+            if depth < -contact_margin {
+                continue;
+            }
+            out.push(
+                ContactPoint::new(
+                    *point,
+                    push.direction,
+                    depth,
+                    edge.feature_id.with_vertex(vertex as u32),
+                )
+                .on(edge.surface),
+            );
+        }
+    }
+}
+
+/// How the OBB is pushed off a crease: along one of its face normals.
+struct CreasePush {
+    /// Which OBB axis the push runs along.
+    axis: usize,
+    /// The push direction, from the terrain towards the OBB.
+    direction: Vector3<f32>,
+    /// The OBB's half-extent along `axis`.
+    half_extent: f32,
+}
+
+/// The OBB face normal, within the crease's outward cone, along which the OBB
+/// clears `points` in the shortest move.
+fn shortest_push(
+    obb: &Obb,
+    points: &[Point3<f32>; 2],
+    normal_a: &Vector3<f32>,
+    normal_b: &Vector3<f32>,
+) -> Option<CreasePush> {
+    let axes = obb.axes();
+    let half = [obb.half_extents.x, obb.half_extents.y, obb.half_extents.z];
+    let mut best: Option<(CreasePush, f32)> = None;
+    for (axis, &base) in axes.iter().enumerate() {
+        for direction in [base, -base] {
+            if direction.dot(normal_a) <= 0.0 || direction.dot(normal_b) <= 0.0 {
+                continue;
+            }
+            let reach = points
+                .iter()
+                .map(|p| (p - obb.center).dot(&direction))
+                .fold(f32::MIN, f32::max);
+            let distance = half[axis] + reach;
+            if best.as_ref().map_or(true, |(_, d)| distance < *d) {
+                best = Some((
+                    CreasePush {
+                        axis,
+                        direction,
+                        half_extent: half[axis],
+                    },
+                    distance,
+                ));
+            }
+        }
+    }
+    best.map(|(push, _)| push)
+}
+
+/// The OBB axis whose face a face contact against `normal` clips: the one
+/// most aligned with it, as [`find_support_face`] chooses.
+fn support_axis(obb: &Obb, normal: &Vector3<f32>) -> usize {
+    let axes = obb.axes();
+    (0..3)
+        .max_by(|&a, &b| {
+            axes[a]
+                .dot(normal)
+                .abs()
+                .partial_cmp(&axes[b].dot(normal).abs())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .unwrap_or(0)
+}
+
+/// Whether the crease folds away from the OBB's side, as a ridge does, rather
+/// than towards it, as a valley does.
+///
+/// Edges run in their triangle's winding, which is counter-clockwise about
+/// its normal, so the face lies to the left: along `normal_a × (b - a)`. A
+/// convex neighbour's normal points away from that side.
+fn is_convex_crease(edge: &ContactEdge, normal_b: &Vector3<f32>) -> bool {
+    let into_face_a = edge.normal_a.cross(&(edge.b - edge.a));
+    normal_b.dot(&into_face_a) < 0.0
+}
+
+/// One of the two directions a shared edge is walked in, chosen by its ends.
+fn is_canonical_direction(a: Point3<f32>, b: Point3<f32>) -> bool {
+    (a.x, a.y, a.z) < (b.x, b.y, b.z)
+}
+
+/// The part of segment `a`–`b` inside the OBB, grown by `margin`, if any.
+fn clip_segment_to_obb(
+    obb: &Obb,
+    a: Point3<f32>,
+    b: Point3<f32>,
+    margin: f32,
+) -> Option<[Point3<f32>; 2]> {
+    let axes = obb.axes();
+    let half = [obb.half_extents.x, obb.half_extents.y, obb.half_extents.z];
+    let (mut t0, mut t1) = (0.0f32, 1.0f32);
+    for k in 0..3 {
+        let start = (a - obb.center).dot(&axes[k]);
+        let delta = (b - a).dot(&axes[k]);
+        let limit = half[k] + margin;
+        if delta.abs() < 1e-9 {
+            if start.abs() > limit {
+                return None;
+            }
+            continue;
+        }
+        let (mut enter, mut exit) = ((-limit - start) / delta, (limit - start) / delta);
+        if enter > exit {
+            std::mem::swap(&mut enter, &mut exit);
+        }
+        t0 = t0.max(enter);
+        t1 = t1.min(exit);
+        if t0 > t1 {
+            return None;
+        }
+    }
+    Some([a + (b - a) * t0, a + (b - a) * t1])
 }
 
 /// Result of testing OBB overlap against a single face.

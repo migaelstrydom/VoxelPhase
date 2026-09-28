@@ -440,6 +440,10 @@ impl StaticGeometry for WallAndFloorGeometry {
 /// What a one-sided contact test has to read the inside of solid geometry
 /// from: a thin wall's two faces point away from each other, a slot's two
 /// walls face each other, and only their arrangement says which is which.
+///
+/// Triangles are linked to their neighbours across shared edges, as terrain's
+/// are, so a solid's edges reach the contact test as creases and the
+/// diagonals of its flat faces not at all.
 #[derive(Debug, Clone)]
 pub struct SolidsGeometry {
     bounds: AABB,
@@ -476,9 +480,30 @@ impl SolidsGeometry {
             }
         }
 
+        link_neighbours(&mut triangles);
+
         Self {
             bounds: AABB::new(Point3::new(-s, -0.01, -s), Point3::new(s, top + 0.01, s)),
             patch: MeshPatch { triangles },
+        }
+    }
+}
+
+/// Link each triangle edge to the triangle that runs the same edge the other
+/// way: with consistent winding, that is its neighbour across it.
+fn link_neighbours(triangles: &mut [PatchTriangle]) {
+    let key = |p: Point3<f32>| (p.x.to_bits(), p.y.to_bits(), p.z.to_bits());
+    let mut edges = std::collections::HashMap::new();
+    for (t, pt) in triangles.iter().enumerate() {
+        for e in 0..3 {
+            let (a, b) = pt.triangle.edge(e);
+            edges.insert((key(a), key(b)), t as u32);
+        }
+    }
+    for pt in triangles.iter_mut() {
+        for e in 0..3 {
+            let (a, b) = pt.triangle.edge(e);
+            pt.neighbors[e] = edges.get(&(key(b), key(a))).copied();
         }
     }
 }
