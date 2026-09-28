@@ -124,8 +124,6 @@ fn a_cube_wedged_in_a_slot_passes_through_neither_wall() {
 /// shorter one, but the walls face each other: had the one the centre is
 /// behind been dropped for it, the cube would be driven deeper.
 #[test]
-#[ignore = "the manifold reducer keeps points by spread alone, so with more of its four \
-            points on one wall than the other, that wall outvotes the deeper one"]
 fn a_cube_with_its_centre_inside_a_slot_wall_is_not_driven_deeper() {
     let scenario = BoxIntoSolidScenario::slot(0.1, 0.2);
     let run = run(&scenario, "box_into_slot_deep");
