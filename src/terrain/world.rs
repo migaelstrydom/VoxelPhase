@@ -1673,6 +1673,43 @@ mod tests {
         }
     }
 
+    /// The solid ends on the authored bounds, whether or not they fall on
+    /// the voxel lattice: not half a voxel short of the far faces and past
+    /// the near ones, as it did when the last sample inside simply stopped.
+    #[test]
+    fn the_terrain_ends_on_its_bounds() {
+        for (voxel_size, min, max) in [
+            (0.5, (-8.0, -4.0, -8.0), (8.0, 4.0, 8.0)),
+            (1.0, (-8.0, -4.0, -8.0), (8.0, 4.0, 8.0)),
+            (0.5, (-7.8, -3.7, -8.3), (8.2, 4.0, 7.6)),
+        ] {
+            let mut terrain = flat_terrain(voxel_size, 1.0);
+            terrain.bounds = crate::level::Extent { min, max };
+            let world = meshed(&terrain);
+            let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
+            for v in world.render_vertices() {
+                for (axis, c) in [v.pos.x, v.pos.y, v.pos.z].into_iter().enumerate() {
+                    lo[axis] = lo[axis].min(c);
+                    hi[axis] = hi[axis].max(c);
+                }
+            }
+            let tolerance = 2.0 * crate::terrain::csg::SURFACE_BAND * voxel_size;
+            let expected = [
+                (lo[0], min.0),
+                (hi[0], max.0),
+                (lo[1], min.1),
+                (lo[2], min.2),
+                (hi[2], max.2),
+            ];
+            for (measured, authored) in expected {
+                assert!(
+                    (measured - authored).abs() < tolerance,
+                    "voxel {voxel_size}, bounds {min:?}..{max:?}: a face at {measured}, authored at {authored}"
+                );
+            }
+        }
+    }
+
     /// Generate and mesh a terrain description at the origin.
     fn meshed(terrain: &crate::level::Terrain) -> TerrainWorld {
         use crate::terrain::generation::generate_terrain;

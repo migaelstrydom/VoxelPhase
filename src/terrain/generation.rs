@@ -15,7 +15,7 @@ use nalgebra::Point3;
 
 use super::chunk::{ChunkCoord, CHUNK_VOXELS};
 use super::chunk_grid::ChunkGrid;
-use super::csg::{carve_with_sdf, debias_height, index_range, union_solid};
+use super::csg::{carve_with_sdf, debias_height, index_range, sample_range, union_solid};
 use super::traversal::{excavate, rasterise, route_plan, RoutePart};
 use super::voxel::{Voxel, VoxelMaterial};
 use crate::collision::AABB;
@@ -28,7 +28,7 @@ use crate::utils::noise::{fbm_2d_periodic, fbm_3d};
 /// Generate terrain into a chunk grid from a `Terrain` description.
 ///
 /// `bounds` is the grid-local extent to generate within; features are clipped
-/// to it and nothing outside is written.
+/// to it, and the terrain's solid ends exactly on its faces.
 pub fn generate_terrain(grid: &mut ChunkGrid, terrain: &Terrain, bounds: &AABB) {
     let step = grid.voxel_size();
 
@@ -38,6 +38,52 @@ pub fn generate_terrain(grid: &mut ChunkGrid, terrain: &Terrain, bounds: &AABB) 
     // derives its own iteration box, so only the chunks it overlaps are visited.
     for volume in &terrain.volumes {
         apply_volume(grid, volume, terrain, bounds, step);
+    }
+
+    clip_to_bounds(grid, bounds, step);
+}
+
+/// Pass 3: cut the solid off at the bounds' faces.
+///
+/// A sample is solid or air, and marching cubes puts the wall between a solid
+/// one and the air past it halfway along, so a solid that simply stops at the
+/// last sample inside ends half a voxel short of a face on the lattice, or
+/// past one between lattice planes. Carving every sample within a voxel of a
+/// face by its distance to that face puts the wall on the face.
+///
+/// ```text
+///   sample   47.0   47.5   48.0 (face)   48.5
+///   before    +1     +1     (none)        (none)   wall at 47.75
+///   after     +1     +1     ≈0⁻           (none)   wall at 48.0
+/// ```
+fn clip_to_bounds(grid: &mut ChunkGrid, bounds: &AABB, step: f32) {
+    let ranges = [
+        sample_range(bounds.min.x, bounds.max.x, step),
+        sample_range(bounds.min.y, bounds.max.y, step),
+        sample_range(bounds.min.z, bounds.max.z, step),
+    ];
+    let (min, max) = (
+        [bounds.min.x, bounds.min.y, bounds.min.z],
+        [bounds.max.x, bounds.max.y, bounds.max.z],
+    );
+    for axis in 0..3 {
+        for (face, inward) in [(min[axis], 1.0f32), (max[axis], -1.0)] {
+            // Only the samples within a voxel of the face take a density
+            // other than the full solid the carve leaves alone.
+            let (lo, hi) = index_range(face - step, face + step, step);
+            let mut slab = ranges;
+            slab[axis] = (lo.max(ranges[axis].0), (hi + 1).min(ranges[axis].1));
+            for i in slab[0].0..slab[0].1 {
+                for j in slab[1].0..slab[1].1 {
+                    for k in slab[2].0..slab[2].1 {
+                        let p = Point3::new(i as f32 * step, j as f32 * step, k as f32 * step);
+                        // Negative outside the bounds: the region removed.
+                        let inside = (p[axis] - face) * inward;
+                        carve_with_sdf(grid, p, inside, step);
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -50,9 +96,11 @@ fn generate_heightfield(grid: &mut ChunkGrid, terrain: &Terrain, bounds: &AABB, 
     let floor_y = bounds.min.y;
     let n = CHUNK_VOXELS as i32;
 
-    let (ix0, ix1) = index_range(bounds.min.x, bounds.max.x, step);
-    let (iy0, iy1) = index_range(bounds.min.y, bounds.max.y, step);
-    let (iz0, iz1) = index_range(bounds.min.z, bounds.max.z, step);
+    // Up to the sample on or past each far face, for `clip_to_bounds` to cut
+    // the wall back to it.
+    let (ix0, ix1) = sample_range(bounds.min.x, bounds.max.x, step);
+    let (iy0, iy1) = sample_range(bounds.min.y, bounds.max.y, step);
+    let (iz0, iz1) = sample_range(bounds.min.z, bounds.max.z, step);
 
     let chunk_x = (div_floor(ix0, n), div_floor(ix1 - 1, n));
     let chunk_z = (div_floor(iz0, n), div_floor(iz1 - 1, n));

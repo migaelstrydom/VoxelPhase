@@ -76,6 +76,14 @@ pub(super) fn index_range(min: f32, max: f32, step: f32) -> (i32, i32) {
     ((min / step).floor() as i32, (max / step).ceil() as i32)
 }
 
+/// Inclusive-exclusive index range of every lattice sample in a coordinate
+/// span, and the samples just outside it on either side: the ones a surface
+/// on the span's ends interpolates to. [`index_range`] stops short of the
+/// sample on (or past) `max`, so a solid filling it ends half a voxel short.
+pub(super) fn sample_range(min: f32, max: f32, step: f32) -> (i32, i32) {
+    ((min / step).floor() as i32, (max / step).ceil() as i32 + 1)
+}
+
 /// Union a solid into the grid using SDF-style density.
 ///
 /// Writes a smoothly-varying density based on the signed distance `sdf`
