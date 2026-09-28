@@ -1,4 +1,4 @@
-use nalgebra::Point3;
+use nalgebra::{Point3, Vector3};
 
 use crate::collision::{MeshPatch, PatchTriangle, SurfaceId, Triangle, AABB};
 use crate::physics::StaticGeometry;
@@ -431,5 +431,142 @@ impl StaticGeometry for WallAndFloorGeometry {
                 triangles: Vec::new(),
             }
         }
+    }
+}
+
+/// A floor at y=0 with convex solids standing on it, each a closed surface
+/// but for its base, which terrain never has either.
+///
+/// What a one-sided contact test has to read the inside of solid geometry
+/// from: a thin wall's two faces point away from each other, a slot's two
+/// walls face each other, and only their arrangement says which is which.
+#[derive(Debug, Clone)]
+pub struct SolidsGeometry {
+    bounds: AABB,
+    patch: MeshPatch,
+}
+
+impl SolidsGeometry {
+    pub fn new(floor_half_size: f32, solids: &[ConvexSolid]) -> Self {
+        let s = floor_half_size;
+        let floor = ConvexSolid::orient(
+            vec![vec![
+                Point3::new(-s, 0.0, -s),
+                Point3::new(s, 0.0, -s),
+                Point3::new(s, 0.0, s),
+                Point3::new(-s, 0.0, s),
+            ]],
+            Point3::new(0.0, -1.0, 0.0),
+        );
+
+        let mut triangles = Vec::new();
+        let mut top = 0.0f32;
+        for face in floor
+            .faces
+            .iter()
+            .chain(solids.iter().flat_map(|solid| &solid.faces))
+        {
+            for i in 1..face.len() - 1 {
+                top = top.max(face[i].y).max(face[i + 1].y);
+                triangles.push(PatchTriangle {
+                    triangle: Triangle::new(face[0], face[i], face[i + 1]),
+                    neighbors: [None, None, None],
+                    surface: SurfaceId::UNSPECIFIED,
+                });
+            }
+        }
+
+        Self {
+            bounds: AABB::new(Point3::new(-s, -0.01, -s), Point3::new(s, top + 0.01, s)),
+            patch: MeshPatch { triangles },
+        }
+    }
+}
+
+impl StaticGeometry for SolidsGeometry {
+    fn query_region(&self, aabb: &AABB) -> MeshPatch {
+        if self.bounds.intersects(aabb) {
+            self.patch.clone()
+        } else {
+            MeshPatch {
+                triangles: Vec::new(),
+            }
+        }
+    }
+}
+
+/// A convex solid as its faces, each wound so its normal points out.
+#[derive(Debug, Clone)]
+pub struct ConvexSolid {
+    /// Convex polygons, wound so `Triangle::new(v0, v1, v2)` faces outward.
+    faces: Vec<Vec<Point3<f32>>>,
+}
+
+impl ConvexSolid {
+    /// An axis-aligned block from `min` to `max`, its base on the floor.
+    pub fn block(min: Point3<f32>, max: Point3<f32>) -> Self {
+        Self::upright_prism(
+            &[
+                (min.x, min.z),
+                (max.x, min.z),
+                (max.x, max.z),
+                (min.x, max.z),
+            ],
+            max.y,
+        )
+    }
+
+    /// A convex polygon in the floor's `(x, z)`, raised to `height`.
+    pub fn upright_prism(outline: &[(f32, f32)], height: f32) -> Self {
+        let at = |(x, z): (f32, f32), y: f32| Point3::new(x, y, z);
+        let mut faces = vec![outline.iter().map(|&p| at(p, height)).collect()];
+        for i in 0..outline.len() {
+            let (a, b) = (outline[i], outline[(i + 1) % outline.len()]);
+            faces.push(vec![at(a, 0.0), at(b, 0.0), at(b, height), at(a, height)]);
+        }
+        let inside = Self::mean(&faces);
+        Self::orient(faces, inside)
+    }
+
+    /// A ridge along z: a triangle in `(x, y)` with its base on the floor from
+    /// `-half_base` to `half_base` and its apex at `height` over `x = 0`,
+    /// running from `-half_length` to `half_length`.
+    pub fn ridge(half_base: f32, height: f32, half_length: f32) -> Self {
+        let section = [(-half_base, 0.0), (0.0, height), (half_base, 0.0)];
+        let at = |(x, y): (f32, f32), z: f32| Point3::new(x, y, z);
+        let mut faces = vec![
+            section.iter().map(|&p| at(p, -half_length)).collect(),
+            section.iter().map(|&p| at(p, half_length)).collect(),
+        ];
+        for (a, b) in [(section[0], section[1]), (section[1], section[2])] {
+            faces.push(vec![
+                at(a, -half_length),
+                at(b, -half_length),
+                at(b, half_length),
+                at(a, half_length),
+            ]);
+        }
+        let inside = Self::mean(&faces);
+        Self::orient(faces, inside)
+    }
+
+    /// Wind every face so its normal points away from `inside`.
+    fn orient(mut faces: Vec<Vec<Point3<f32>>>, inside: Point3<f32>) -> Self {
+        for face in &mut faces {
+            let normal = (face[1] - face[0]).cross(&(face[2] - face[0]));
+            let outward = Self::mean(std::slice::from_ref(face)) - inside;
+            if normal.dot(&outward) < 0.0 {
+                face.reverse();
+            }
+        }
+        Self { faces }
+    }
+
+    fn mean(faces: &[Vec<Point3<f32>>]) -> Point3<f32> {
+        let points: Vec<_> = faces.iter().flatten().collect();
+        let sum = points
+            .iter()
+            .fold(Vector3::zeros(), |acc, p| acc + p.coords);
+        Point3::from(sum / points.len() as f32)
     }
 }

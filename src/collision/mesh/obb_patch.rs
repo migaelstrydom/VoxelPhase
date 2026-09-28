@@ -1,5 +1,20 @@
 //! OBB vs FilteredPatch manifold generation.
 //!
+//! A mesh has no inside, so a face whose plane the OBB's centre has crossed
+//! is ambiguous: the OBB may be a little too deep in the ground, or most of
+//! the way through a thin wall and looking at its far side. Such a face is
+//! used while the centre is within the OBB's own reach behind it, unless a
+//! face it stands back to back with would push the OBB out a shorter way —
+//! so an OBB always leaves solid on the side its centre is on:
+//!
+//! ```text
+//!     back to back: one pushes          face to face: both push
+//!       ← │▓▓▓▓│ →                        ▓▓▓│ →    ← │▓▓▓
+//!    ┌────┼──┐ │                          ▓▓▓│ ┌────┐ │▓▓▓
+//!    │  ● │  │ │   centre left of the     ▓▓▓│ │ ●  │ │▓▓▓
+//!    └────┼──┘ │   midline: push ←        ▓▓▓│ └────┘ │▓▓▓
+//! ```
+//!
 //! For each merged face in the filtered patch, tests OBB overlap via
 //! half-extent projection. For the face with deepest penetration, clips
 //! the OBB's support face against the merged polygon and projects the
@@ -21,6 +36,9 @@ const MAX_MANIFOLD_POINTS: usize = 4;
 /// Small tolerance for rejecting backfacing mesh contacts.
 const BACKFACE_EPSILON: f32 = 1e-4;
 
+/// Tolerance for calling one face's centroid behind another's plane.
+const BACK_TO_BACK_EPSILON: f32 = 1e-4;
+
 /// Generate a contact manifold for an OBB against a filtered mesh patch.
 ///
 /// Returns up to 4 contact points. The normal points from the terrain
@@ -37,15 +55,19 @@ pub fn obb_patch_manifold(
 ) -> ContactManifold {
     let mut all_points: SmallVec<[ContactPoint; 4]> = SmallVec::new();
 
+    let overlaps: SmallVec<[(&ContactFace, FaceOverlap); 16]> = patch
+        .faces
+        .iter()
+        .filter(|face| face.vertices.len() >= 3)
+        .filter_map(|face| Some((face, test_obb_face_overlap(obb, face, contact_margin)?)))
+        .collect();
+
     // Collect contacts from ALL overlapping faces (individual triangles).
     // Each triangle is always convex so clipping is always correct.
-    for face in &patch.faces {
-        if face.vertices.len() < 3 {
+    for (index, (face, overlap)) in overlaps.iter().enumerate() {
+        if overlap.centre_behind && is_outpushed(index, &overlaps) {
             continue;
         }
-        let Some(overlap) = test_obb_face_overlap(obb, face, contact_margin) else {
-            continue;
-        };
 
         let normal = overlap.normal;
         let support = find_support_face(obb, &normal);
@@ -118,12 +140,57 @@ pub fn obb_patch_manifold(
 struct FaceOverlap {
     /// Face normal from the mesh surface toward the OBB.
     normal: Vector3<f32>,
+    /// How far the OBB must move along `normal` to clear the face's plane.
+    push: f32,
+    /// Whether the OBB's centre is behind the face's plane.
+    centre_behind: bool,
+}
+
+/// Whether another overlapping face, back to back with this one, would push
+/// the OBB out of the solid between them a shorter way.
+///
+/// Back to back means each face lies behind the other's plane: the two sides
+/// of something solid, which the OBB can leave by only one of. Faces that
+/// face each other bound a gap instead, and both push. Pushes less than a
+/// right angle apart never oppose, so they are summed as ever: the two slopes
+/// of a roof both lift what rests across its ridge.
+///
+/// Equal pushes — the centre exactly on the midline — go to the lower index,
+/// so one of the two always survives.
+fn is_outpushed(index: usize, overlaps: &[(&ContactFace, FaceOverlap)]) -> bool {
+    let (face, overlap) = &overlaps[index];
+    overlaps
+        .iter()
+        .enumerate()
+        .any(|(other_index, (other, other_overlap))| {
+            other_index != index
+                && overlap.normal.dot(&other_overlap.normal) < 0.0
+                && is_behind(face, other)
+                && is_behind(other, face)
+                && (other_overlap.push < overlap.push
+                    || (other_overlap.push == overlap.push && other_index < index))
+        })
+}
+
+/// Whether `face`'s centroid lies on or behind `plane_of`'s plane.
+fn is_behind(face: &ContactFace, plane_of: &ContactFace) -> bool {
+    (centroid(face) - plane_of.vertices[0]).dot(&plane_of.normal) <= BACK_TO_BACK_EPSILON
+}
+
+fn centroid(face: &ContactFace) -> Point3<f32> {
+    let sum = face
+        .vertices
+        .iter()
+        .fold(Vector3::zeros(), |acc, v| acc + v.coords);
+    Point3::from(sum / face.vertices.len() as f32)
 }
 
 /// Test if an OBB overlaps a face via half-extent projection.
 ///
-/// Mesh faces are treated as one-sided: the OBB must be on the normal side
-/// of the plane, with a tiny tolerance for floating-point noise.
+/// Mesh faces are treated as one-sided: they only ever push the OBB along
+/// their normal, and only while its centre is within its own reach behind
+/// the plane. Past that, the face belongs to something the OBB has already
+/// gone through.
 fn test_obb_face_overlap(
     obb: &Obb,
     face: &ContactFace,
@@ -135,13 +202,12 @@ fn test_obb_face_overlap(
     // Signed distance from OBB center to face plane.
     let signed_dist = (obb.center - face_point).dot(&normal);
 
-    // Reject backfacing contacts against the opposite side of a closed mesh.
-    if signed_dist < -BACKFACE_EPSILON {
-        return None;
-    }
-
     // OBB half-extent projected onto face normal.
     let half_proj = obb.project_half_extent(&normal);
+
+    if signed_dist < -half_proj - BACKFACE_EPSILON {
+        return None;
+    }
 
     // Geometric depth: how far the OBB extends below the face plane.
     let depth = half_proj - signed_dist;
@@ -151,7 +217,11 @@ fn test_obb_face_overlap(
         return None;
     }
 
-    Some(FaceOverlap { normal })
+    Some(FaceOverlap {
+        normal,
+        push: depth,
+        centre_behind: signed_dist < -BACKFACE_EPSILON,
+    })
 }
 
 /// Information about the OBB support face for clipping.

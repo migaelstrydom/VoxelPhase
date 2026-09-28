@@ -574,6 +574,220 @@ impl PhysicsBenchScenario for BoxSlidesDownWallScenario {
     }
 }
 
+/// A box authored with its centre below a flat surface, as a level can place
+/// one: resting, but set a little too low. It should be pushed out on top.
+#[derive(Debug, Clone)]
+pub struct BuriedBoxScenario {
+    pub half_extents: Vector3<f32>,
+    /// How far below the surface the box's centre starts, in metres.
+    pub centre_depth: f32,
+    geometry: FlatQuadGeometry,
+}
+
+impl BuriedBoxScenario {
+    /// A metre cube with its centre a centimetre under the ground.
+    pub fn cube() -> Self {
+        Self::new(Vector3::new(0.5, 0.5, 0.5), 0.01)
+    }
+
+    /// A plank four centimetres thick, lying flat, centre a centimetre under.
+    pub fn plank() -> Self {
+        Self::new(Vector3::new(1.0, 0.02, 0.2), 0.01)
+    }
+
+    pub fn new(half_extents: Vector3<f32>, centre_depth: f32) -> Self {
+        Self {
+            half_extents,
+            centre_depth,
+            geometry: FlatQuadGeometry::new(8.0),
+        }
+    }
+}
+
+impl PhysicsBenchScenario for BuriedBoxScenario {
+    fn name(&self) -> &'static str {
+        "buried_box"
+    }
+
+    fn restitution(&self) -> f32 {
+        0.0
+    }
+
+    fn setup(&self, world: &mut PhysicsWorld) -> RigidBodyHandle {
+        let body = world.create_body(RigidBodyDesc::dynamic().position(Point3::new(
+            0.0,
+            -self.centre_depth,
+            0.0,
+        )));
+        let collider = ColliderDesc::box_shape(self.half_extents)
+            .density(500.0)
+            .restitution(0.0)
+            .friction(0.6);
+        let _ = world.attach_collider(body, collider);
+        body
+    }
+
+    fn geometry(&self) -> &dyn StaticGeometry {
+        &self.geometry
+    }
+}
+
+/// A cube starting partly inside static solid geometry, which has to leave it
+/// by the side its centre is on — and must not be let into solid it only
+/// touches.
+///
+/// One scenario per arrangement a one-sided contact test can misread:
+///
+/// ```text
+///   thin wall      slot            knife edge     ridge      pillar
+///   ■│▓│          ▓▓│■│▓▓          ■ ◁▓▓▓         ■         ■▪
+///                                                ╱▓╲
+/// ```
+#[derive(Debug, Clone)]
+pub struct BoxIntoSolidScenario {
+    name: &'static str,
+    pub half_extent: f32,
+    /// Where the cube's centre starts.
+    pub start: Point3<f32>,
+    /// Whether gravity acts. Off where only the push out is being watched.
+    pub gravity: bool,
+    geometry: SolidsGeometry,
+}
+
+impl BoxIntoSolidScenario {
+    /// Half-extent of the cube in every scenario.
+    pub const HALF_EXTENT: f32 = 0.5;
+
+    /// A wall `thickness` thick across `x = 0`, with the cube pressed
+    /// `penetration` into it from the −X side.
+    pub fn thin_wall(thickness: f32, penetration: f32) -> Self {
+        let t = thickness * 0.5;
+        Self::new(
+            "box_into_thin_wall",
+            Point3::new(-t - Self::HALF_EXTENT + penetration, Self::HALF_EXTENT, 0.0),
+            true,
+            &[ConvexSolid::block(
+                Point3::new(-t, 0.0, -8.0),
+                Point3::new(t, 3.0, 8.0),
+            )],
+        )
+    }
+
+    /// A slot narrower than the cube between two thick walls, with the cube
+    /// wedged in it off-centre by `offset`.
+    pub fn slot(half_width: f32, offset: f32) -> Self {
+        let w = half_width;
+        Self::new(
+            "box_into_slot",
+            Point3::new(offset, 1.5, 0.0),
+            true,
+            &[
+                ConvexSolid::block(Point3::new(-w - 1.0, 0.0, -8.0), Point3::new(-w, 3.0, 8.0)),
+                ConvexSolid::block(Point3::new(w, 0.0, -8.0), Point3::new(w + 1.0, 3.0, 8.0)),
+            ],
+        )
+    }
+
+    /// A blade 20° across, its edge along y at the origin and widening towards
+    /// +z, with the cube pressed `penetration` into its −X side where the blade
+    /// is a third of a metre thick.
+    pub fn knife_edge(penetration: f32) -> Self {
+        let half_angle = 10.0f32.to_radians();
+        let length = 4.0;
+        let spread = length * half_angle.tan();
+        let z = 1.0;
+        let face_x = -z * half_angle.tan();
+        Self::new(
+            "box_into_knife_edge",
+            Point3::new(
+                face_x - Self::HALF_EXTENT + penetration,
+                Self::HALF_EXTENT,
+                z,
+            ),
+            false,
+            &[ConvexSolid::upright_prism(
+                &[(0.0, 0.0), (spread, length), (-spread, length)],
+                3.0,
+            )],
+        )
+    }
+
+    /// A ridge whose slopes are 60° from level — steep enough that their
+    /// normals are 120° apart — with the cube centred over it and pressed
+    /// `penetration` into its apex.
+    pub fn ridge(penetration: f32) -> Self {
+        let height = 2.0;
+        let half_base = height / 60.0f32.to_radians().tan();
+        // Resting on the apex, the cube's centre is still in front of both
+        // slopes: this is ordinary contact, which must be left alone.
+        Self::new(
+            "box_into_ridge",
+            Point3::new(0.0, height + Self::HALF_EXTENT - penetration, 0.0),
+            false,
+            &[ConvexSolid::ridge(half_base, height, 8.0)],
+        )
+    }
+
+    /// A pillar 10 cm square at the origin, with the cube pressed
+    /// `penetration` into it diagonally from the −X −Z side.
+    pub fn pillar(penetration: f32) -> Self {
+        let t = 0.05;
+        let c = -t - Self::HALF_EXTENT + penetration;
+        Self::new(
+            "box_into_pillar",
+            Point3::new(c, Self::HALF_EXTENT, c),
+            false,
+            &[ConvexSolid::block(
+                Point3::new(-t, 0.0, -t),
+                Point3::new(t, 3.0, t),
+            )],
+        )
+    }
+
+    fn new(name: &'static str, start: Point3<f32>, gravity: bool, solids: &[ConvexSolid]) -> Self {
+        Self {
+            name,
+            half_extent: Self::HALF_EXTENT,
+            start,
+            gravity,
+            geometry: SolidsGeometry::new(8.0, solids),
+        }
+    }
+}
+
+impl PhysicsBenchScenario for BoxIntoSolidScenario {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+
+    fn restitution(&self) -> f32 {
+        0.0
+    }
+
+    fn build_world(&self) -> PhysicsWorld {
+        let mut config = PhysicsConfig::default();
+        config.sleep.enabled = false;
+        if !self.gravity {
+            config.gravity = Vector3::zeros();
+        }
+        PhysicsWorld::new(config)
+    }
+
+    fn setup(&self, world: &mut PhysicsWorld) -> RigidBodyHandle {
+        let body = world.create_body(RigidBodyDesc::dynamic().position(self.start));
+        let collider = ColliderDesc::box_shape(Vector3::repeat(self.half_extent))
+            .density(500.0)
+            .restitution(0.0)
+            .friction(0.6);
+        let _ = world.attach_collider(body, collider);
+        body
+    }
+
+    fn geometry(&self) -> &dyn StaticGeometry {
+        &self.geometry
+    }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Scenarios: discrete dynamic-dynamic contacts
 // ═══════════════════════════════════════════════════════════════════════════

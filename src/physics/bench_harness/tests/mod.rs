@@ -1,6 +1,7 @@
 #![cfg(all(test, feature = "bench_harness"))]
 
 mod assertions;
+mod buried;
 mod ccd;
 mod constraint;
 mod dynamic_pairs;
