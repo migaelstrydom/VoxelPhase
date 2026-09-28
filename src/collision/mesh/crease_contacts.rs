@@ -29,7 +29,8 @@ use nalgebra::{Point3, Vector3};
 use smallvec::SmallVec;
 
 use crate::collision::contact::ContactPoint;
-use crate::collision::mesh::seam_filter::{ContactEdge, FilteredPatch};
+use crate::collision::mesh::crease_edges::{convex_creases, ConvexCrease};
+use crate::collision::mesh::seam_filter::FilteredPatch;
 use crate::collision::obb::Obb;
 
 /// Shortest a face normal, taken square to a crease, may be and still give a
@@ -79,14 +80,7 @@ pub fn crease_edge_contacts(
     if planes.is_empty() {
         return;
     }
-    for edge in &patch.boundary_edges {
-        let Some(normal_b) = edge.normal_b else {
-            continue;
-        };
-        // Each crease is emitted once from each side, in opposite directions.
-        if !is_canonical_direction(edge.a, edge.b) || !is_convex_crease(edge, &normal_b) {
-            continue;
-        }
+    for ConvexCrease { edge, normal_b } in convex_creases(patch) {
         let Some(clipped) = clip_segment(planes, edge.a, edge.b, margin) else {
             continue;
         };
@@ -184,22 +178,6 @@ fn support_plane(planes: &[SolidPlane], normal: &Vector3<f32>) -> usize {
         })
         .map(|(index, _)| index)
         .unwrap_or(0)
-}
-
-/// Whether the crease folds away from the shape's side, as a ridge does,
-/// rather than towards it, as a valley does.
-///
-/// Edges run in their triangle's winding, which is counter-clockwise about
-/// its normal, so the face lies to the left: along `normal_a × (b - a)`. A
-/// convex neighbour's normal points away from that side.
-fn is_convex_crease(edge: &ContactEdge, normal_b: &Vector3<f32>) -> bool {
-    let into_face_a = edge.normal_a.cross(&(edge.b - edge.a));
-    normal_b.dot(&into_face_a) < 0.0
-}
-
-/// One of the two directions a shared edge is walked in, chosen by its ends.
-fn is_canonical_direction(a: Point3<f32>, b: Point3<f32>) -> bool {
-    (a.x, a.y, a.z) < (b.x, b.y, b.z)
 }
 
 /// The part of segment `a`–`b` inside the shape, grown by `margin`, if any.

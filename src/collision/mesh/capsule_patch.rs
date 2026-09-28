@@ -11,6 +11,7 @@ use smallvec::SmallVec;
 
 use crate::collision::contact::{ContactManifold, ContactPoint, FeatureId};
 use crate::collision::contact_reducer::ContactReducer;
+use crate::collision::mesh::crease_edges::{convex_creases, ConvexCrease};
 use crate::collision::mesh::seam_filter::{ContactEdge, ContactFace, FilteredPatch};
 use crate::collision::mesh::solid_side::pushing_faces;
 use crate::collision::mesh::sphere_patch::{closest_point_on_segment, point_in_convex_polygon};
@@ -32,6 +33,8 @@ const CAPSULE_FACE_CLUSTER_NORMAL_DOT: f32 = 0.999;
 const CAPSULE_FACE_CLUSTER_PLANE_EPS: f32 = 1e-3;
 /// Join adjacent intervals with tiny parametric gaps caused by clipping tolerance.
 const CAPSULE_FACE_INTERVAL_JOIN_EPS: f32 = 1e-3;
+/// Alignment past which a crease counts as parallel to the capsule's axis.
+const CREASE_PARALLEL_DOT: f32 = 0.999;
 
 /// Generate a contact manifold for a capsule against a filtered mesh patch.
 ///
@@ -88,6 +91,13 @@ pub fn capsule_patch_manifold(
         &patch.faces,
         &parallel_spans,
         &mut face_hits,
+    );
+
+    // A convex crease the capsule is past both faces of — a thin post's
+    // edge, a wall's corner — is found by no face, whatever faces are hit.
+    face_hits.extend(
+        convex_creases(patch)
+            .filter_map(|crease| capsule_vs_crease(seg_a, seg_b, expanded_radius, &crease)),
     );
 
     for edge in &patch.boundary_edges {
@@ -473,6 +483,67 @@ fn sample_axis_t_vs_face(
 }
 
 /// Test capsule against a boundary/crease edge.
+/// Test a capsule against a convex crease, when the capsule's nearest point
+/// is in the crease's own region. The crease's ends are left to the faces and
+/// the boundary fallback: a crease's end is shared with the next piece of the
+/// same crease.
+fn capsule_vs_crease(
+    seg_a: Point3<f32>,
+    seg_b: Point3<f32>,
+    expanded_radius: f32,
+    crease: &ConvexCrease,
+) -> Option<CapsuleContact> {
+    let edge = crease.edge;
+    let run = edge.b - edge.a;
+    let t = crease_point_nearest_axis(seg_a, seg_b, edge.a, edge.b);
+    if t <= CAPSULE_FACE_ENDPOINT_T_EPS || t >= 1.0 - CAPSULE_FACE_ENDPOINT_T_EPS {
+        return None;
+    }
+    let on_edge = edge.a + run * t;
+    let on_capsule = closest_point_on_segment(on_edge, seg_a, seg_b);
+    let to_capsule = on_capsule - on_edge;
+    let dist_sq = to_capsule.magnitude_squared();
+    if dist_sq > expanded_radius * expanded_radius || dist_sq < 1e-12 || !crease.owns(&to_capsule) {
+        return None;
+    }
+    Some(CapsuleContact {
+        point: on_edge,
+        normal: to_capsule / dist_sq.sqrt(),
+        dist_sq,
+        is_face: false,
+        face_signed_dist: 0.0,
+        feature_id: edge.feature_id,
+        surface: edge.surface,
+    })
+}
+
+/// Where along edge `a`–`b` it comes nearest the capsule's axis, from 0 at
+/// `a` to 1 at `b`.
+///
+/// An edge parallel to the axis is equally near all along the stretch beside
+/// the capsule, and the nearest-points solution picks an arbitrary end of
+/// it: the middle of the stretch is taken instead.
+fn crease_point_nearest_axis(
+    seg_a: Point3<f32>,
+    seg_b: Point3<f32>,
+    a: Point3<f32>,
+    b: Point3<f32>,
+) -> f32 {
+    let axis = seg_b - seg_a;
+    let run = b - a;
+    let parallel = axis.normalize().dot(&run.normalize()).abs() > CREASE_PARALLEL_DOT;
+    if !parallel {
+        let (_, on_edge) =
+            crate::collision::segment::segment_segment_closest_points(seg_a, seg_b, a, b);
+        return (on_edge - a).dot(&run) / run.magnitude_squared();
+    }
+    // The capsule axis's ends, as positions along the edge.
+    let along = |p: Point3<f32>| (p - a).dot(&run) / run.magnitude_squared();
+    let (start, end) = (along(seg_a), along(seg_b));
+    let (low, high) = (start.min(end).max(0.0), start.max(end).min(1.0));
+    (low + high) * 0.5
+}
+
 fn capsule_vs_edge(
     seg_a: Point3<f32>,
     seg_b: Point3<f32>,

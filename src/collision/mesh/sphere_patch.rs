@@ -19,6 +19,7 @@ use smallvec::SmallVec;
 
 use crate::collision::contact::{ContactManifold, ContactPoint, FeatureId};
 use crate::collision::contact_reducer::ContactReducer;
+use crate::collision::mesh::crease_edges::{convex_creases, ConvexCrease};
 use crate::collision::mesh::seam_filter::{ContactEdge, FilteredPatch};
 use crate::collision::mesh::solid_side::pushing_faces;
 use crate::collision::SurfaceId;
@@ -72,6 +73,13 @@ pub fn sphere_patch_manifold(
         }
     }
 
+    // A convex crease the sphere is past both faces of — a thin post's edge,
+    // a wall's corner — is found by no face, whatever faces are hit.
+    face_hits.extend(
+        convex_creases(patch)
+            .filter_map(|crease| sphere_vs_crease(center, expanded_radius, &crease)),
+    );
+
     // Also check boundary edges for the fallback.
     for edge in &patch.boundary_edges {
         if let Some(contact) = sphere_vs_edge(center, expanded_radius, edge) {
@@ -84,8 +92,8 @@ pub fn sphere_patch_manifold(
         }
     }
 
-    // Prefer face-interior contacts. Fall back to the single closest
-    // boundary contact only when no face-interior contact was found.
+    // Prefer face-interior and crease contacts. Fall back to the single
+    // closest boundary contact only when there are none.
     if face_hits.is_empty() {
         return match best_boundary {
             Some(hit) => {
@@ -218,6 +226,37 @@ fn sphere_vs_face(
         face_signed_dist: signed_dist,
         feature_id: face.feature_id,
         surface: face.surface,
+    })
+}
+
+/// Test sphere against a convex crease, when the sphere is in the crease's
+/// own region. Its ends are left to the faces and the boundary fallback: a
+/// crease's end is shared with the next piece of the same crease.
+fn sphere_vs_crease(
+    center: Point3<f32>,
+    expanded_radius: f32,
+    crease: &ConvexCrease,
+) -> Option<SphereContact> {
+    let edge = crease.edge;
+    let run = edge.b - edge.a;
+    let t = (center - edge.a).dot(&run) / run.magnitude_squared();
+    if t <= 0.0 || t >= 1.0 {
+        return None;
+    }
+    let point = edge.a + run * t;
+    let to_center = center - point;
+    let dist_sq = to_center.magnitude_squared();
+    if dist_sq > expanded_radius * expanded_radius || dist_sq < 1e-12 || !crease.owns(&to_center) {
+        return None;
+    }
+    Some(SphereContact {
+        point,
+        normal: to_center / dist_sq.sqrt(),
+        dist_sq,
+        is_face: false,
+        face_signed_dist: 0.0,
+        feature_id: edge.feature_id,
+        surface: edge.surface,
     })
 }
 
