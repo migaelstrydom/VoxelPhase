@@ -114,6 +114,7 @@ pub fn expand_constraints(
                 body_b,
                 local_anchor_a,
                 local_anchor_b,
+                reference,
                 compliance,
                 max_impulse,
             } => {
@@ -130,6 +131,7 @@ pub fn expand_constraints(
                     *body_b,
                     local_anchor_a,
                     local_anchor_b,
+                    reference,
                     *compliance,
                     *max_impulse,
                     dt,

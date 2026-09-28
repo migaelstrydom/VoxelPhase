@@ -10,7 +10,7 @@
 use std::f32::consts::TAU;
 use std::sync::Arc;
 
-use nalgebra::{Point3, Vector2, Vector3};
+use nalgebra::{Point3, UnitQuaternion, Vector2, Vector3};
 use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
@@ -168,6 +168,7 @@ impl Spawnable for FencePostDef {
                 body_handle,
                 world_anchor,
                 local_anchor,
+                &UnitQuaternion::identity(),
                 0.0,
                 f32::MAX,
             ));

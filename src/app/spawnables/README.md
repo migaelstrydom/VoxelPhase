@@ -467,6 +467,7 @@ let fixed_handle = physics.world.create_constraint(
         body_handle,
         Point3::new(x, buried_y, z),       // world anchor position
         Vector3::new(0.0, -half_height, 0.0), // body-local anchor
+        &UnitQuaternion::identity(),        // orientation held (the body's own)
         0.0,                                // compliance (rigid)
         f32::MAX,                           // max impulse (unbreakable)
     )

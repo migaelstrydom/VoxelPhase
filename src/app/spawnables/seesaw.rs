@@ -325,6 +325,7 @@ impl Spawnable for SeesawDef {
                 body,
                 fulcrum_pos,
                 Vector3::zeros(),
+                &UnitQuaternion::identity(),
                 0.0,
                 f32::MAX,
             ));

@@ -75,8 +75,7 @@ pub enum ConstraintKind {
 
     /// Locks all 6 DOF between two bodies (or body to world). Equivalent
     /// to a weld joint. Produces 3 positional rows (X, Y, Z) + 3 angular
-    /// rows = 6 total. For world-anchored Fixed with compliance=0, the tilt
-    /// angular rows get `Enforcement::HardProjection`.
+    /// rows = 6 total.
     Fixed {
         /// The first body (None for world-anchored).
         body_a: Option<RigidBodyHandle>,
@@ -86,6 +85,9 @@ pub enum ConstraintKind {
         local_anchor_a: Vector3<f32>,
         /// Body-local anchor on body_b.
         local_anchor_b: Vector3<f32>,
+        /// The rotation the joint holds body_b at, relative to body_a's
+        /// (or to the world when world-anchored): `rot_a⁻¹ · rot_b`.
+        reference: UnitQuaternion<f32>,
         /// Positional compliance (0 = perfectly rigid).
         compliance: f32,
         /// Maximum impulse per axis per substep. Finite values make the
@@ -217,11 +219,13 @@ impl ConstraintKind {
 
     /// Convenience constructor for a world-anchored fixed joint (weld to world).
     ///
-    /// Locks all 6 DOF, pinning the body at its current position and orientation.
+    /// Locks all 6 DOF, pinning the body with `local_anchor` at `world_anchor`
+    /// and turned to `body_rotation`.
     pub fn world_fixed(
         body: RigidBodyHandle,
         world_anchor: Point3<f32>,
         local_anchor: Vector3<f32>,
+        body_rotation: &UnitQuaternion<f32>,
         compliance: f32,
         max_impulse: f32,
     ) -> Self {
@@ -230,6 +234,7 @@ impl ConstraintKind {
             body_b: body,
             local_anchor_a: world_anchor.coords,
             local_anchor_b: local_anchor,
+            reference: *body_rotation,
             compliance,
             max_impulse,
         }

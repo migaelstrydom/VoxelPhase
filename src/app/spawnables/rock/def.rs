@@ -189,6 +189,7 @@ impl Spawnable for RockDef {
                 body_handle,
                 centre,
                 Vector3::zeros(),
+                &pose,
                 0.0,
                 f32::MAX,
             ));

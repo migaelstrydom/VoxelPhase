@@ -1,4 +1,4 @@
-use nalgebra::{Point3, UnitVector3, Vector3};
+use nalgebra::{Point3, UnitQuaternion, UnitVector3, Vector3};
 
 use super::super::framework::{run_scenario, BenchRunConfig, PhysicsBenchScenario};
 use super::super::geometry::{FlatGridGeometry, FlatQuadGeometry};
@@ -537,6 +537,7 @@ fn breakable_fixed_joint_breaks_cleanly() {
         body_b: box_b,
         local_anchor_a: Vector3::new(0.3, 0.0, 0.0),
         local_anchor_b: Vector3::new(-0.3, 0.0, 0.0),
+        reference: UnitQuaternion::identity(),
         compliance: 0.0,
         max_impulse: 5.0,
     });
@@ -614,6 +615,158 @@ fn breakable_fixed_joint_breaks_cleanly() {
     assert!(
         !constraint.active,
         "constraint should be deactivated after break"
+    );
+}
+
+/// A post welded to the world at a tilt stays at that tilt, and when a heavy
+/// ball knocks its top it gives only a little and comes back to it.
+///
+/// A weld holds the pose it was made in — not upright, which is all it held
+/// once, snapping every tilted stone it anchored straight on its first step.
+#[test]
+#[cfg(feature = "bench_harness")]
+fn a_tilted_weld_holds_its_pose_and_returns_to_it_when_struck() {
+    let geometry = FlatQuadGeometry::new(10.0);
+    let mut config = PhysicsConfig::default();
+    config.sleep.enabled = false;
+    let mut world = PhysicsWorld::new(config);
+
+    let half_height = 1.0;
+    let tilt = UnitQuaternion::from_axis_angle(&Vector3::z_axis(), 25f32.to_radians());
+    let foot = Point3::new(0.0, 1.0, 0.0);
+    let post = world.create_body(
+        RigidBodyDesc::dynamic()
+            .position(foot + tilt * Vector3::new(0.0, half_height, 0.0))
+            .rotation(tilt),
+    );
+    let _ = world.attach_collider(
+        post,
+        ColliderDesc::box_shape(Vector3::new(0.15, half_height, 0.15)).density(2600.0),
+    );
+    let _ = world.create_constraint(ConstraintKind::world_fixed(
+        post,
+        foot,
+        Vector3::new(0.0, -half_height, 0.0),
+        &tilt,
+        0.0,
+        f32::MAX,
+    ));
+
+    // A 20 kg ball at 6 m/s, aimed at the post's top from its leaning side.
+    let top = foot + tilt * Vector3::new(0.0, 2.0 * half_height - 0.2, 0.0);
+    let ball_radius: f32 = 0.3;
+    let ball_density = 20.0 / ((4.0 / 3.0) * std::f32::consts::PI * ball_radius.powi(3));
+    let ball = world.create_body(
+        RigidBodyDesc::dynamic()
+            .position(top + Vector3::new(-2.0, 0.0, 0.0))
+            .linear_velocity(Vector3::new(6.0, 0.0, 0.0))
+            .gravity_scale(0.0),
+    );
+    let _ = world.attach_collider(
+        ball,
+        ColliderDesc::sphere(ball_radius).density(ball_density),
+    );
+
+    let turned = |world: &PhysicsWorld| {
+        tilt.angle_to(&world.body(post).unwrap().rotation())
+            .to_degrees()
+    };
+    let mut before_impact = 0.0f32;
+    let mut worst = 0.0f32;
+    let mut debug_lines = DebugLines::default();
+    for frame in 0..180 {
+        world.update_contacts(1.0 / 240.0, 4, &geometry, &[], &mut debug_lines);
+        debug_lines.clear();
+        for _ in 0..4 {
+            world.substep(1.0 / 240.0, &geometry, &[]);
+        }
+        let angle = turned(&world);
+        if frame < 15 {
+            before_impact = before_impact.max(angle);
+        }
+        worst = worst.max(angle);
+    }
+    let settled = turned(&world);
+    eprintln!(
+        "tilted weld: before impact {before_impact:.3}°, worst {worst:.3}°, after 3 s {settled:.3}°"
+    );
+
+    let ball_speed = world.body(ball).unwrap().linear_velocity().x;
+    assert!(
+        ball_speed < 5.0,
+        "the ball flew on at {ball_speed:.2} m/s: it missed the post"
+    );
+    assert!(
+        before_impact < 0.1,
+        "the weld turned the post {before_impact:.2}° on its own"
+    );
+    assert!(
+        worst < 2.0,
+        "the strike turned the post {worst:.2}° out of its weld"
+    );
+    assert!(
+        settled < 0.1,
+        "the post came back only to {settled:.2}° off its weld"
+    );
+}
+
+/// Two bodies welded at an angle and knocked off it come back to it, even
+/// while they tumble together.
+#[test]
+#[cfg(feature = "bench_harness")]
+fn a_weld_between_two_bodies_restores_the_angle_between_them() {
+    let geometry = FlatQuadGeometry::new(10.0);
+    let mut config = PhysicsConfig::default();
+    config.sleep.enabled = false;
+    let mut world = PhysicsWorld::new(config);
+
+    let half_extents = Vector3::new(0.25, 0.25, 0.25);
+    let a = world.create_body(
+        RigidBodyDesc::dynamic()
+            .position(Point3::new(-0.3, 50.0, 0.0))
+            .angular_velocity(Vector3::new(0.0, 3.0, 2.0)),
+    );
+    let _ = world.attach_collider(a, ColliderDesc::box_shape(half_extents).density(500.0));
+    // Welded 40° apart about the join, while the bodies start 5° short of it.
+    let reference = UnitQuaternion::from_axis_angle(&Vector3::x_axis(), 40f32.to_radians());
+    let knocked = UnitQuaternion::from_axis_angle(&Vector3::x_axis(), 35f32.to_radians());
+    let b = world.create_body(
+        RigidBodyDesc::dynamic()
+            .position(Point3::new(0.3, 50.0, 0.0))
+            .rotation(knocked)
+            .angular_velocity(Vector3::new(0.0, 3.0, 2.0)),
+    );
+    let _ = world.attach_collider(b, ColliderDesc::box_shape(half_extents).density(500.0));
+    let _ = world.create_constraint(ConstraintKind::Fixed {
+        body_a: Some(a),
+        body_b: b,
+        local_anchor_a: Vector3::new(0.3, 0.0, 0.0),
+        local_anchor_b: Vector3::new(-0.3, 0.0, 0.0),
+        reference,
+        compliance: 0.0,
+        max_impulse: f32::MAX,
+    });
+
+    let off_weld = |world: &PhysicsWorld| {
+        let (rot_a, rot_b) = (
+            world.body(a).unwrap().rotation(),
+            world.body(b).unwrap().rotation(),
+        );
+        (rot_a * reference).angle_to(&rot_b).to_degrees()
+    };
+    let mut debug_lines = DebugLines::default();
+    for _ in 0..60 {
+        world.update_contacts(1.0 / 240.0, 4, &geometry, &[], &mut debug_lines);
+        debug_lines.clear();
+        for _ in 0..4 {
+            world.substep(1.0 / 240.0, &geometry, &[]);
+        }
+    }
+    let settled = off_weld(&world);
+    eprintln!("two-body weld: {settled:.3}° off after 1 s");
+    assert!(
+        settled < 0.1,
+        "the weld left the bodies {settled:.2}° off its angle"
     );
 }
 

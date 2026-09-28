@@ -11,7 +11,7 @@
 use std::f32::consts::{FRAC_PI_2, TAU};
 use std::sync::Arc;
 
-use nalgebra::{Point3, Vector3};
+use nalgebra::{Point3, UnitQuaternion, Vector3};
 use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
@@ -154,6 +154,7 @@ impl Spawnable for MenhirDef {
                 body_handle,
                 world_anchor,
                 local_anchor,
+                &UnitQuaternion::identity(),
                 0.0,
                 f32::MAX,
             ));

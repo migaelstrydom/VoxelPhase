@@ -9,7 +9,7 @@
 use std::f32::consts::PI;
 use std::sync::Arc;
 
-use nalgebra::{Point3, Vector3};
+use nalgebra::{Point3, UnitQuaternion, Vector3};
 use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
@@ -245,6 +245,7 @@ impl Spawnable for PendulumDef {
                 body,
                 frame_world_pos,
                 Vector3::zeros(),
+                &UnitQuaternion::identity(),
                 0.0,
                 f32::MAX,
             ));

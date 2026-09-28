@@ -2,14 +2,10 @@
 //!
 //! Produces 6 constraint rows:
 //! - Rows 0-2: `lock_linear_axis` x3 — pin anchor points together.
-//! - Rows 3-5: `lock_angular_axis` x3 — lock all rotation.
-//!
-//! For world-anchored Fixed with compliance=0, the two tilt angular rows
-//! (perpendicular to world Y) get `Enforcement::HardProjection`, matching
-//! the KeepUpright projection behavior. The spin row (around Y) uses
-//! iterative solving.
+//! - Rows 3-5: `lock_angular_axis` x3 — hold body_b at the joint's reference
+//!   rotation relative to body_a (or to the world).
 
-use nalgebra::{Point3, Vector3};
+use nalgebra::{Point3, UnitQuaternion, Vector3};
 use smallvec::SmallVec;
 
 use crate::physics::body::RigidBody;
@@ -21,7 +17,7 @@ use super::types::{ConstraintRow, CorrectionMode, Enforcement};
 /// Expand a Fixed constraint into 6 solver rows.
 ///
 /// Rows 0-2: positional (X, Y, Z). Error = anchor_b_world - anchor_a_world.
-/// Rows 3-5: angular (X, Y, Z). Lock all relative rotation.
+/// Rows 3-5: angular (X, Y, Z). Error = [`orientation_error`].
 ///
 /// `beta` is the position correction factor (from solver config).
 #[allow(clippy::too_many_arguments)]
@@ -31,6 +27,7 @@ pub fn expand(
     handle_b: RigidBodyHandle,
     local_anchor_a: &Vector3<f32>,
     local_anchor_b: &Vector3<f32>,
+    reference: &UnitQuaternion<f32>,
     compliance: f32,
     max_impulse: f32,
     dt: f32,
@@ -97,77 +94,46 @@ pub fn expand(
         ));
     }
 
-    // Rows 3-5: angular — lock all rotation.
-    //
-    // For world-anchored Fixed with zero compliance, the two tilt axes
-    // (perpendicular to world Y) get HardProjection so the projection pass
-    // handles tilt correction with the same cross-product recovery as
-    // KeepUpright. The spin axis (Y) uses iterative solving.
-    let is_world_anchored_rigid = body_a.is_none() && compliance == 0.0;
-
-    // Use the same perpendicular basis as KeepUpright: perp1 and perp2 are
-    // perpendicular to world Y, so cross(perp1, perp2) recovers +Y for the
-    // projection pass.
-    let world_y = Vector3::y();
-    let perp1 = world_y.cross(&Vector3::x()).normalize(); // = -Z
-    let perp2 = world_y.cross(&perp1); // = -X
-
-    // Row 3: first tilt axis (perp1).
-    let enforcement_tilt = if is_world_anchored_rigid {
-        Enforcement::HardProjection
-    } else {
-        Enforcement::Iterative
-    };
-
-    rows.push(primitives::lock_angular_axis(
-        &side_a,
-        &side_b,
-        perp1,
-        0.0,
-        compliance_term,
-        max_impulse,
-        CorrectionMode::PositionAndVelocity,
-        enforcement_tilt,
-        &RowParams {
-            constraint_index,
-            row_index: 3,
-            warm_impulse: warm_impulses[3],
-        },
-    ));
-
-    // Row 4: second tilt axis (perp2).
-    rows.push(primitives::lock_angular_axis(
-        &side_a,
-        &side_b,
-        perp2,
-        0.0,
-        compliance_term,
-        max_impulse,
-        CorrectionMode::PositionAndVelocity,
-        enforcement_tilt,
-        &RowParams {
-            constraint_index,
-            row_index: 4,
-            warm_impulse: warm_impulses[4],
-        },
-    ));
-
-    // Row 5: spin axis (world Y). Iterative only — PGS handles spin locking.
-    rows.push(primitives::lock_angular_axis(
-        &side_a,
-        &side_b,
-        world_y,
-        0.0,
-        compliance_term,
-        max_impulse,
-        CorrectionMode::VelocityOnly,
-        Enforcement::Iterative,
-        &RowParams {
-            constraint_index,
-            row_index: 5,
-            warm_impulse: warm_impulses[5],
-        },
-    ));
+    // Rows 3-5: angular — hold the reference rotation.
+    let rotation_error = orientation_error(body_a.map(|(ba, _)| ba.rotation()), rot_b, reference);
+    for (i, axis) in axes.into_iter().enumerate() {
+        let bias = -(beta / dt) * rotation_error.dot(&axis);
+        rows.push(primitives::lock_angular_axis(
+            &side_a,
+            &side_b,
+            axis,
+            bias,
+            compliance_term,
+            max_impulse,
+            CorrectionMode::PositionAndVelocity,
+            Enforcement::Iterative,
+            &RowParams {
+                constraint_index,
+                row_index: 3 + i,
+                warm_impulse: warm_impulses[3 + i],
+            },
+        ));
+    }
 
     rows
+}
+
+/// How far body_b is turned from where the joint holds it, as a world-space
+/// rotation vector: turning body_b by its negative puts it back.
+///
+/// `rot_a` is `None` for a joint anchored to the world.
+pub fn orientation_error(
+    rot_a: Option<UnitQuaternion<f32>>,
+    rot_b: UnitQuaternion<f32>,
+    reference: &UnitQuaternion<f32>,
+) -> Vector3<f32> {
+    let held = rot_a.map_or(*reference, |a| a * reference);
+    let off = rot_b * held.inverse();
+    // q and -q are the same rotation; the one with w ≥ 0 is the short way round.
+    let off = if off.w < 0.0 {
+        UnitQuaternion::new_unchecked(-off.into_inner())
+    } else {
+        off
+    };
+    off.scaled_axis()
 }

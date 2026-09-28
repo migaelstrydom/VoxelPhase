@@ -9,10 +9,10 @@ use generational_arena::{Arena, Index};
 use nalgebra::{Matrix3, Point3, UnitQuaternion, UnitVector3, Vector3};
 
 use crate::physics::body::RigidBody;
-use crate::physics::constraint::keep_attitude;
 use crate::physics::constraint::types::{
     Constraint, ConstraintKind, ConstraintRow, CorrectionMode, Enforcement, RowKind,
 };
+use crate::physics::constraint::{fixed, keep_attitude};
 use crate::physics::handle::RigidBodyHandle;
 use crate::physics::math::integrate_orientation;
 use crate::physics::pipeline::pair::SolverManifold;
@@ -647,25 +647,19 @@ fn correct_constraint_angular_drift(
             ConstraintKind::Fixed {
                 body_a,
                 body_b,
+                reference,
                 compliance,
                 ..
             } => {
-                // Fixed tilt rows use the same perpendicular-to-Y basis as
-                // KeepUpright. Only reached when compliance > 0 (rigid
-                // world-anchored Fixed uses HardProjection, which is excluded).
                 let angular_factor = correction_factor / (1.0 + compliance);
-                if body_a.is_none() {
-                    let target_up = UnitVector3::new_normalize(Vector3::y());
-                    correct_upright_angular_drift(
-                        bodies,
-                        body_b.0,
-                        &target_up,
-                        angular_factor,
-                        transforms,
-                    );
-                }
-                // Two-body Fixed angular correction would need stored reference
-                // orientations. No current use case — skipped.
+                correct_fixed_angular_drift(
+                    bodies,
+                    body_a.map(|h| h.0),
+                    body_b.0,
+                    reference,
+                    angular_factor,
+                    transforms,
+                );
             }
 
             _ => {}
@@ -738,6 +732,54 @@ fn correct_hinge_angular_drift(
         if let Some(t) = transforms.get_mut(&handle_b) {
             t.rotation = integrate_orientation(t.rotation, correction, 1.0);
         }
+    }
+}
+
+/// Turn a Fixed joint's bodies back toward the rotation it holds between
+/// them, split between the two by inverse inertia as a hinge's is.
+fn correct_fixed_angular_drift(
+    bodies: &Arena<RigidBody>,
+    handle_a: Option<Index>,
+    handle_b: Index,
+    reference: &UnitQuaternion<f32>,
+    angular_factor: f32,
+    transforms: &mut FxHashMap<Index, CorrectedTransform>,
+) {
+    let Some((_, rot_b, _, inv_inertia_b)) = get_corrected_transform(bodies, handle_b, transforms)
+    else {
+        return;
+    };
+    let body_a = match handle_a {
+        Some(ha) => match get_corrected_transform(bodies, ha, transforms) {
+            Some((_, rot_a, _, inv_inertia_a)) => Some((ha, rot_a, inv_inertia_a)),
+            None => return,
+        },
+        None => None,
+    };
+
+    let error = fixed::orientation_error(body_a.map(|(_, rot_a, _)| rot_a), rot_b, reference);
+    if error.norm_squared() < 1e-14 {
+        return;
+    }
+    let correction = -error * angular_factor;
+
+    let share_b = match body_a {
+        Some((ha, _, inv_inertia_a)) => {
+            let (trace_a, trace_b) = (inv_inertia_a.trace(), inv_inertia_b.trace());
+            let total = trace_a + trace_b;
+            if total <= 0.0 {
+                return;
+            }
+            if let Some(t) = transforms.get_mut(&ha) {
+                t.rotation =
+                    integrate_orientation(t.rotation, -correction * (trace_a / total), 1.0);
+            }
+            trace_b / total
+        }
+        None => 1.0,
+    };
+    if let Some(t) = transforms.get_mut(&handle_b) {
+        t.rotation = integrate_orientation(t.rotation, correction * share_b, 1.0);
     }
 }
 
