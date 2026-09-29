@@ -32,6 +32,13 @@ pub struct PgsNgsConfig {
     /// restitution is zeroed to prevent micro-bouncing at resting contacts.
     pub restitution_velocity_threshold: f32,
     /// Scale factor applied to warm-start impulses (0..=1).
+    ///
+    /// Whole: the impulses a resting structure needs change little from one
+    /// frame to the next, and starting each frame from all of last frame's
+    /// lets the few iterations a substep has converge further every frame.
+    /// Starting from part of them undoes that work each frame; at 60 %, a
+    /// settled arch sagged 9 cm in three seconds. Fast-moving contacts are
+    /// not warm-started at all, whatever this is.
     pub warm_start_scale: f32,
     /// Position correction configuration.
     pub position_correction: PositionCorrectionConfig,
@@ -46,7 +53,7 @@ impl Default for PgsNgsConfig {
         Self {
             solver_iterations: 3,
             restitution_velocity_threshold: 0.3,
-            warm_start_scale: 0.6,
+            warm_start_scale: 1.0,
             position_correction: PositionCorrectionConfig::default(),
             constraint_position_beta: 0.2,
         }

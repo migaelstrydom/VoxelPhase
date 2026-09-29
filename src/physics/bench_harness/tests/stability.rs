@@ -4,10 +4,15 @@
 //! it settles to rest within tight tolerance. These are regression guards
 //! against solver changes that break stacking stability.
 
-use crate::physics::bench_harness::framework::{run_scenario, BenchRunConfig};
-use crate::physics::bench_harness::scenarios::{
-    HoneycombWallScenario, JengaTowerScenario, TempleScenario, VoussoirArchScenario,
+use crate::debug::DebugLines;
+use crate::physics::bench_harness::framework::{
+    run_scenario, BenchRunConfig, PhysicsBenchScenario,
 };
+use crate::physics::bench_harness::scenarios::{
+    BoxGridScenario, HoneycombWallScenario, JengaTowerScenario, TempleScenario,
+    VoussoirArchScenario,
+};
+use crate::physics::{RigidBodyHandle, SequentialStepper, Stepper};
 
 use super::write_exports;
 
@@ -143,4 +148,69 @@ fn temple_stands_stable() {
         tail_angular < 0.05,
         "temple should settle (angular < 0.05 rad/s), got {tail_angular:.4}"
     );
+}
+
+// ── Every block holds still ──────────────────────────────────────────
+
+/// Once a structure has settled, none of its blocks creeps. The tests above
+/// follow one body each, with tolerances loose enough to pass a structure in
+/// slow collapse: with warm starts at 60 %, the arch sagged 9 cm in three
+/// seconds and the jenga tower crept 1.4 cm while each passed. Sleep hides
+/// that in the game until something wakes the structure.
+///
+/// Not the honeycomb wall, whose top cell rolls off as it settles.
+#[test]
+fn every_block_of_a_settled_structure_holds_still() {
+    const LIMIT: f32 = 1.0e-3;
+    let structures: [(&str, &dyn PhysicsBenchScenario); 4] = [
+        ("voussoir arch", &VoussoirArchScenario::new()),
+        ("jenga tower", &JengaTowerScenario::new(12)),
+        ("box grid", &BoxGridScenario::new(5)),
+        ("temple", &TempleScenario::new()),
+    ];
+    let failures: Vec<String> = structures
+        .into_iter()
+        .filter_map(|(name, scenario)| {
+            let creep = creep_once_settled(scenario, 3.0, 3.0);
+            (creep > LIMIT).then(|| format!("{name}: a block crept {creep:.4} m"))
+        })
+        .collect();
+    assert!(failures.is_empty(), "\n{}", failures.join("\n"));
+}
+
+/// How far the block that moved most moved over `watch` seconds, after
+/// `settle` seconds to come to rest. Every block starts awake, as a blast
+/// or a footstep would leave it, and the scenario's world keeps it awake.
+fn creep_once_settled(scenario: &dyn PhysicsBenchScenario, settle: f32, watch: f32) -> f32 {
+    const FRAME_DT: f32 = 1.0 / 60.0;
+    let mut world = scenario.build_world();
+    scenario.setup(&mut world);
+    let blocks: Vec<RigidBodyHandle> = world
+        .bodies()
+        .iter()
+        .filter(|(_, body)| body.is_dynamic())
+        .map(|(index, _)| RigidBodyHandle(index))
+        .collect();
+    for &block in &blocks {
+        world.wake_body(block);
+    }
+
+    let mut stepper = SequentialStepper::new(1.0 / 240.0, 12);
+    let mut debug = DebugLines::default();
+    let mut run_for = |world: &mut _, seconds: f32| {
+        for _ in 0..(seconds / FRAME_DT).round() as u32 {
+            stepper.step(world, FRAME_DT, scenario.geometry(), &[], &[], &mut debug);
+        }
+    };
+    run_for(&mut world, settle);
+    let settled: Vec<_> = blocks
+        .iter()
+        .map(|&b| world.body(b).unwrap().position())
+        .collect();
+    run_for(&mut world, watch);
+    blocks
+        .iter()
+        .zip(&settled)
+        .map(|(&b, at)| (world.body(b).unwrap().position() - at).norm())
+        .fold(0.0, f32::max)
 }
