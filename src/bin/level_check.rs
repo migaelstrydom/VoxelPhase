@@ -20,7 +20,8 @@ use std::time::{Duration, Instant};
 
 use voxel_phase::level::{load_level, Level};
 use voxel_phase::level_check::{
-    build_terrain, check_level, check_rest, write_schematic, Report, RestTrial, Severity,
+    build_terrain, check_disturbance, check_level, check_rest, write_schematic, Report, RestTrial,
+    Severity,
 };
 use voxel_phase::terrain::TerrainWorld;
 
@@ -118,6 +119,8 @@ fn check(level_path: &Path) -> Result<Checked, String> {
     let mut report = check_level(&level, level_path, &trial.terrain());
     let rest = check_rest(&mut trial, &mut report);
     report.push_section(rest);
+    let disturbance = check_disturbance(&mut trial, &mut report);
+    report.push_section(disturbance);
     Ok(Checked {
         level,
         trial,

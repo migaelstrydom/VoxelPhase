@@ -35,6 +35,8 @@
 //! Headless, but not ECS-free: spawnables build their bodies through a specs
 //! `World`, so the trial keeps one. Materials are placeholders; nothing draws.
 
+use std::ops::ControlFlow;
+
 use nalgebra::{Point3, UnitQuaternion};
 use specs::shred::Fetch;
 use specs::{Join, World, WorldExt};
@@ -56,7 +58,7 @@ use crate::water::WaterWorld;
 use super::report::{Report, Section};
 
 /// The game's frame and physics step: 60 Hz frames of 1/240 s substeps.
-const FRAME_DT: f32 = 1.0 / 60.0;
+pub(super) const FRAME_DT: f32 = 1.0 / 60.0;
 const FIXED_DT: f32 = 1.0 / 240.0;
 const MAX_SUBSTEPS: u32 = 12;
 
@@ -82,7 +84,7 @@ pub const TURN_LIMIT_DEGREES: f32 = 5.0;
 ///
 /// A floater's centre rides at or below the surface; half a metre admits a
 /// large, light one riding high without taking in a body resting on a bank.
-const AFLOAT_BAND: f32 = 0.5;
+pub(super) const AFLOAT_BAND: f32 = 0.5;
 
 /// Frames every body must stay at rest before the trial calls the world
 /// settled: the sleep system's own delay, so a ball at the top of a bounce is
@@ -99,11 +101,11 @@ pub struct RestTrial {
 }
 
 /// One authored object and the dynamic bodies it became.
-struct TrialObject {
+pub(super) struct TrialObject {
     /// How the object is named in findings.
-    label: String,
+    pub(super) label: String,
     /// Each body and the pose it was created in.
-    bodies: Vec<(RigidBodyHandle, Point3<f32>, UnitQuaternion<f32>)>,
+    pub(super) bodies: Vec<(RigidBodyHandle, Point3<f32>, UnitQuaternion<f32>)>,
 }
 
 /// How far one object ended up from where it was authored.
@@ -232,24 +234,87 @@ impl RestTrial {
     /// Wake everything and step until it is all at rest again, or until
     /// [`TRIAL_SECONDS`] have passed.
     pub fn run(&mut self) -> RestOutcome {
+        let handles = self.handles();
+        {
+            let mut physics = self.world.write_resource::<PhysicsResource>();
+            for &handle in &handles {
+                physics.world.wake_body(handle);
+            }
+        }
+
+        let mut settled_after = None;
+        let mut frames_at_rest = 0;
+        self.simulate(TRIAL_SECONDS, |world, _, elapsed| {
+            if handles.iter().all(|&h| is_at_rest(world, h)) {
+                frames_at_rest += 1;
+            } else {
+                frames_at_rest = 0;
+            }
+            if frames_at_rest >= SETTLE_FRAMES {
+                settled_after = Some(elapsed);
+                return ControlFlow::Break(());
+            }
+            ControlFlow::Continue(())
+        });
+
+        let water = self.world.try_fetch::<WaterWorld>();
+        let query = water.as_deref().map(WaterWorld::query);
+        let physics = self.world.read_resource::<PhysicsResource>();
+        let drifts = self
+            .objects
+            .iter()
+            .map(|object| {
+                object.drift(
+                    &physics.world,
+                    query.as_ref().map(|q| q as &dyn WaterSurface),
+                )
+            })
+            .filter(Drift::is_significant)
+            .collect();
+
+        RestOutcome {
+            bodies: handles.len(),
+            settled_after,
+            drifts,
+        }
+    }
+
+    /// The objects being judged, with their bodies.
+    pub(super) fn objects(&self) -> &[TrialObject] {
+        &self.objects
+    }
+
+    /// Every body being judged.
+    pub(super) fn handles(&self) -> Vec<RigidBodyHandle> {
+        self.objects
+            .iter()
+            .flat_map(|o| o.bodies.iter().map(|(h, _, _)| *h))
+            .collect()
+    }
+
+    /// The trial's physics, to change bodies between runs.
+    pub(super) fn physics_mut(&self) -> specs::shred::FetchMut<'_, PhysicsResource> {
+        self.world.write_resource::<PhysicsResource>()
+    }
+
+    /// Step the world at the game's cadence, on the level's terrain and with
+    /// its water's buoyancy, for up to `seconds`. `frame` sees the world and
+    /// the water after each frame, with the time elapsed, and may stop early.
+    pub(super) fn simulate(
+        &mut self,
+        seconds: f32,
+        mut frame: impl FnMut(&PhysicsWorld, Option<&dyn WaterSurface>, f32) -> ControlFlow<()>,
+    ) {
+        let handles = self.handles();
         let terrain = self.world.read_resource::<TerrainWorld>();
         let water = self.world.try_fetch::<WaterWorld>();
         let mut physics = self.world.write_resource::<PhysicsResource>();
         let world = &mut physics.world;
 
-        let handles: Vec<_> = self
-            .objects
-            .iter()
-            .flat_map(|o| o.bodies.iter().map(|(h, _, _)| *h))
-            .collect();
-        for &handle in &handles {
-            world.wake_body(handle);
-        }
-
         let query = water.as_deref().map(WaterWorld::query);
         let buoyancy = query
             .as_ref()
-            .map(|q| BuoyancyForceProvider::new(q, handles.clone()));
+            .map(|q| BuoyancyForceProvider::new(q, handles));
         let providers: Vec<&dyn SubstepForceProvider> = buoyancy
             .as_ref()
             .map(|p| vec![p as &dyn SubstepForceProvider])
@@ -258,9 +323,7 @@ impl RestTrial {
         let mut stepper = SequentialStepper::new(FIXED_DT, MAX_SUBSTEPS);
         let mut debug_lines = DebugLines::default();
         let mut elapsed = 0.0;
-        let mut settled_after = None;
-        let mut frames_at_rest = 0;
-        while elapsed < TRIAL_SECONDS {
+        while elapsed < seconds {
             stepper.step(
                 world,
                 FRAME_DT,
@@ -271,28 +334,10 @@ impl RestTrial {
             );
             debug_lines.clear();
             elapsed += FRAME_DT;
-            if handles.iter().all(|&h| is_at_rest(world, h)) {
-                frames_at_rest += 1;
-            } else {
-                frames_at_rest = 0;
-            }
-            if frames_at_rest >= SETTLE_FRAMES {
-                settled_after = Some(elapsed);
+            let surface = query.as_ref().map(|q| q as &dyn WaterSurface);
+            if frame(world, surface, elapsed).is_break() {
                 break;
             }
-        }
-
-        let drifts = self
-            .objects
-            .iter()
-            .map(|object| object.drift(world, query.as_ref().map(|q| q as &dyn WaterSurface)))
-            .filter(Drift::is_significant)
-            .collect();
-
-        RestOutcome {
-            bodies: handles.len(),
-            settled_after,
-            drifts,
         }
     }
 }
@@ -337,7 +382,7 @@ impl TrialObject {
 
 /// Whether a body is asleep, or slow enough that the sleep system would put it
 /// to sleep were it free to.
-fn is_at_rest(world: &PhysicsWorld, handle: RigidBodyHandle) -> bool {
+pub(super) fn is_at_rest(world: &PhysicsWorld, handle: RigidBodyHandle) -> bool {
     if world.is_sleeping(handle) {
         return true;
     }

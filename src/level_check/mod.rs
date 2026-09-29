@@ -5,6 +5,7 @@
 //! touches the ECS, because spawnables build their bodies through it.
 
 pub mod baseline;
+pub mod disturb;
 pub mod placement;
 pub mod reach;
 pub mod report;
@@ -17,6 +18,7 @@ pub mod water;
 pub mod water_plan;
 
 pub use baseline::{BaselineVerdict, Baselines};
+pub use disturb::check_disturbance;
 pub use reach::{JumpArc, JumpEnvelope, Stance};
 pub use report::{Finding, Report, Section, Severity};
 pub use rest::{check_rest, RestTrial};
