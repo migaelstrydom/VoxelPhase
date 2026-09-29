@@ -83,10 +83,12 @@ Level(
 
             objects: [
                 // ── The bridge: the trap the level is named for. ───────────
-                // Eight metres of plank on two beams, rated for a person. A
-                // two-tonne boulder chasing you across snaps it and drops
-                // through into three metres of water.
-                PlankBridge(pos: (64.0, 4.4, 64.0), length: 9.0, yaw: 90.0),
+                // Plank on two beams, rated for a person. A two-tonne
+                // boulder chasing you across snaps it and drops through into
+                // three metres of water. The moat is 8 m across its bed but
+                // 10 m at the rim, where its walls slope in; at 12 m the
+                // bridge bears a metre on each bank.
+                PlankBridge(pos: (64.0, 4.02, 64.0), length: 12.0, plank_count: 12, yaw: 90.0),
 
                 // ── West half ──────────────────────────────────────────────
                 // A stair of loose crates up to a gem. Quick before something
