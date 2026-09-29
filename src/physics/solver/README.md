@@ -63,6 +63,7 @@ ShockPropagationConditioner (default conditioner)
 | `body_pair.rs` | `BodyPairState` — pose and shock-scaled mass properties of a contact pair |
 | `contact_row.rs` | `ContactRow` — per-contact lever arms, effective masses and impulse response, prepared once per substep |
 | `normal.rs` | Normal impulse solve (restitution, accumulated clamping) |
+| `normal_block.rs` | `NormalCoupling` — a manifold's normal rows solved together, exactly |
 | `friction.rs` | Per-contact friction + manifold-level friction projection |
 | `impulse.rs` | Tangent basis construction |
 | `solver_bodies.rs` | `SolverBodies` — dense velocities of every body the rows touch, gathered before the velocity phase and scattered after it |

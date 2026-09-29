@@ -37,6 +37,35 @@ pub(crate) fn solve_normal_impulse(
         return;
     }
 
+    let target_velocity = normal_target_velocity(
+        header,
+        contact,
+        restitution_velocity_threshold,
+        pre_solve_vn,
+    );
+
+    let delta = (target_velocity - vel_along_normal) / effective_inv_mass;
+    let old = contact.accumulated_normal_impulse;
+    let new = (old + delta).max(0.0);
+    let applied = new - old;
+    contact.accumulated_normal_impulse = new;
+
+    if applied.abs() > 1e-10 {
+        let impulse = contact.normal * applied;
+        log_impulse_torque_diag("normal", header, contact, row, &impulse);
+        row.apply_impulse(bodies, impulse);
+    }
+}
+
+/// The normal velocity a contact's row drives its pair towards: the rebound
+/// restitution asks for, or, for a speculative contact whose pair has not
+/// arrived, the approach it still permits.
+pub(crate) fn normal_target_velocity(
+    header: &PairHeader,
+    contact: &SolverContact,
+    restitution_velocity_threshold: f32,
+    pre_solve_vn: f32,
+) -> f32 {
     let speed = pre_solve_vn.abs();
     let restitution_scale =
         ((speed - restitution_velocity_threshold) / restitution_velocity_threshold).clamp(0.0, 1.0);
@@ -50,21 +79,9 @@ pub(crate) fn solve_normal_impulse(
     // remaining gap unclosed, less than one substep of travel.
     let allowance = contact.closing_allowance;
     let arrives = -pre_solve_vn > allowance;
-    let target_velocity = if allowance > 0.0 && !(arrives && rebound > 0.0) {
+    if allowance > 0.0 && !(arrives && rebound > 0.0) {
         -allowance
     } else {
         rebound
-    };
-
-    let delta = (target_velocity - vel_along_normal) / effective_inv_mass;
-    let old = contact.accumulated_normal_impulse;
-    let new = (old + delta).max(0.0);
-    let applied = new - old;
-    contact.accumulated_normal_impulse = new;
-
-    if applied.abs() > 1e-10 {
-        let impulse = contact.normal * applied;
-        log_impulse_torque_diag("normal", header, contact, row, &impulse);
-        row.apply_impulse(bodies, impulse);
     }
 }

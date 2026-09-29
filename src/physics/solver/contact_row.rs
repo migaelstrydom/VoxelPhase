@@ -28,6 +28,7 @@ use crate::physics::pipeline::pair::{PairHeader, SolverContact};
 
 use super::body_pair::{is_kinematic_static, BodyPairState};
 use super::impulse::compute_tangent_basis;
+use super::normal_block::NormalCoupling;
 use super::solver_bodies::SolverBodies;
 
 /// How one side of a contact answers an impulse, fixed for the substep.
@@ -240,6 +241,9 @@ pub(crate) struct ContactRows {
     pre_solve_normal_velocity: Vec<f32>,
     /// Index of each manifold's first row.
     starts: Vec<usize>,
+    /// Each manifold's normal coupling, for solving its normal rows as one
+    /// block; `None` where they are solved one at a time.
+    couplings: Vec<Option<NormalCoupling>>,
 }
 
 impl ContactRows {
@@ -254,8 +258,10 @@ impl ContactRows {
         self.rows.clear();
         self.pre_solve_normal_velocity.clear();
         self.starts.clear();
+        self.couplings.clear();
         for (header, contacts, shock_scales) in manifolds {
-            self.starts.push(self.rows.len());
+            let start = self.rows.len();
+            self.starts.push(start);
             for contact in contacts {
                 let row = ContactRow::prepare(bodies, solver_bodies, header, contact, shock_scales);
                 let vn = row.map_or(0.0, |row| {
@@ -264,7 +270,18 @@ impl ContactRows {
                 self.rows.push(row);
                 self.pre_solve_normal_velocity.push(vn);
             }
+            self.couplings.push(NormalCoupling::measure(
+                &self.rows[start..],
+                contacts,
+                solver_bodies,
+            ));
         }
+    }
+
+    /// Manifold `manifold`'s normal coupling, if its normal rows are solved as
+    /// one block.
+    pub fn coupling(&self, manifold: usize) -> Option<&NormalCoupling> {
+        self.couplings[manifold].as_ref()
     }
 
     /// The rows of manifold `manifold`, in contact order.

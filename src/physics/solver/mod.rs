@@ -11,6 +11,7 @@ pub(crate) mod impulse;
 pub(crate) mod island_solver;
 pub(crate) mod iteration_budget;
 pub(crate) mod normal;
+pub(crate) mod normal_block;
 pub(crate) mod pgs_ngs;
 pub(crate) mod position_correction;
 pub mod shock_propagation;

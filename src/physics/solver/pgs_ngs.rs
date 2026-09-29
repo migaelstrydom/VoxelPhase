@@ -33,10 +33,6 @@ pub struct PgsNgsConfig {
     pub restitution_velocity_threshold: f32,
     /// Scale factor applied to warm-start impulses (0..=1).
     pub warm_start_scale: f32,
-    /// Number of PGS micro-iterations for block normal solve on multi-contact
-    /// manifolds. Extra local iterations capture cross-contact coupling within
-    /// a single outer solver pass, reducing rocking in stacks and eccentric loads.
-    pub block_normal_micro_iterations: u32,
     /// Position correction configuration.
     pub position_correction: PositionCorrectionConfig,
     /// Position correction factor for joint constraints (beta).
@@ -51,7 +47,6 @@ impl Default for PgsNgsConfig {
             solver_iterations: 3,
             restitution_velocity_threshold: 0.3,
             warm_start_scale: 0.6,
-            block_normal_micro_iterations: 4,
             position_correction: PositionCorrectionConfig::default(),
             constraint_position_beta: 0.2,
         }
@@ -61,7 +56,8 @@ impl Default for PgsNgsConfig {
 /// PGS+NGS contact constraint solver.
 ///
 /// Velocity phase: warm-started Projected Gauss-Seidel with accumulated impulse
-/// clamping, block normal micro-iterations, and manifold-level friction projection.
+/// clamping, each manifold's normal rows solved exactly as one block, and
+/// manifold-level friction projection.
 ///
 /// Position phase: nonlinear Gauss-Seidel (NGS) direct position correction,
 /// or Baumgarte stabilization as a fallback.

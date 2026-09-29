@@ -26,6 +26,7 @@ use super::contact_row::ContactRows;
 use super::friction::{manifold_friction_projection, solve_friction_impulse};
 use super::iteration_budget::IterationBudget;
 use super::normal::solve_normal_impulse;
+use super::normal_block::solve_normal_block;
 use super::pgs_ngs::PgsNgsConfig;
 use super::solver_bodies::SolverBodies;
 use super::torsional::solve_torsional_impulse;
@@ -166,14 +167,20 @@ impl IslandSolver {
             let rows = self.contact_rows.manifold(i);
             let pre_solve_vn = self.contact_rows.pre_solve_normal_velocities(i);
 
-            // Block normal solve: multi-contact manifolds get extra local
-            // iterations to capture cross-contact coupling.
-            let normal_passes = if manifold.contacts.len() > 1 {
-                config.block_normal_micro_iterations
-            } else {
-                1
-            };
-            for _ in 0..normal_passes {
+            // A manifold's contacts push on the same two bodies, so their
+            // normal rows are solved together where they can be.
+            let solved_as_block = self.contact_rows.coupling(i).is_some_and(|coupling| {
+                solve_normal_block(
+                    solver_bodies,
+                    rows,
+                    coupling,
+                    &manifold.header,
+                    &mut manifold.contacts,
+                    config.restitution_velocity_threshold,
+                    pre_solve_vn,
+                )
+            });
+            if !solved_as_block {
                 for ci in 0..manifold.contacts.len() {
                     solve_normal_impulse(
                         solver_bodies,
