@@ -70,6 +70,35 @@ fn reserve_with_slack<T>(buffer: &mut Vec<T>, needed: usize) {
 const DEFAULT_VOXEL_SIZE: f32 = 1.0;
 
 /// Axis-aligned neighbour offsets for the 6-neighbour voxel check.
+/// How close along a ray two triangle hits must be to count as one crossing
+/// of the surface, in metres. Hits on the triangles either side of an edge,
+/// or round a vertex, land at the same point up to rounding.
+const CROSSING_MERGE_DISTANCE: f32 = 1e-4;
+
+/// How many times a ray crosses the surface, given every triangle it hit.
+///
+/// A ray along an edge or through a vertex hits each triangle there, two to
+/// six of them for one crossing, so the raw hit count's parity is luck. Hits
+/// at the same point facing the same way are one crossing. Hits at the same
+/// point facing opposite ways are a ray grazing the surface: in and out
+/// again, two crossings, which leaves the parity alone.
+fn surface_crossings(mut hits: Vec<RayHit>, direction: &Vector3<f32>) -> usize {
+    hits.sort_by(|a, b| a.t.total_cmp(&b.t));
+    let mut crossings: Vec<(f32, bool)> = Vec::with_capacity(hits.len());
+    for hit in hits {
+        let entering = hit.normal.dot(direction) < 0.0;
+        let repeat = crossings
+            .iter()
+            .rev()
+            .take_while(|(t, _)| hit.t - t <= CROSSING_MERGE_DISTANCE)
+            .any(|&(_, e)| e == entering);
+        if !repeat {
+            crossings.push((hit.t, entering));
+        }
+    }
+    crossings.len()
+}
+
 const NEIGHBOR_OFFSETS: [Vector3<f32>; 6] = [
     Vector3::new(1.0, 0.0, 0.0),
     Vector3::new(-1.0, 0.0, 0.0),
@@ -574,8 +603,9 @@ impl TerrainWorld {
             return false;
         }
 
-        let hits = self.ray_cast_all(pos, Vector3::new(0.0, 1.0, 0.0), ray_length);
-        hits.len() % 2 == 1
+        let up = Vector3::new(0.0, 1.0, 0.0);
+        let hits = self.ray_cast_all(pos, up, ray_length);
+        surface_crossings(hits, &up) % 2 == 1
     }
 
     /// Highest mesh surface height at a given (x, z) position.
@@ -1052,6 +1082,32 @@ mod tests {
             !world.is_mesh_solid_at(4.0, top + 0.2, 4.0),
             "0.2 m above a surface at {top} is air, not rock"
         );
+    }
+
+    /// A ray along an edge or through a vertex hits every triangle there;
+    /// each surface it passes is still crossed once. The bug this guards: a
+    /// probe under a deck at a whole-metre x read solid, because the deck's
+    /// underside and top were hit once and three times.
+    #[test]
+    fn a_ray_through_shared_edges_crosses_each_surface_once() {
+        let hit = |t: f32, normal_y: f32| RayHit {
+            t,
+            point: Point3::new(0.0, t, 0.0),
+            normal: Vector3::new(0.0, normal_y, 0.0),
+        };
+        let up = Vector3::new(0.0, 1.0, 0.0);
+        // Deck underside hit on two triangles, its top on three.
+        let through_edges = vec![
+            hit(6.0, 1.0),
+            hit(4.0, -1.0),
+            hit(6.0, 1.0),
+            hit(4.0 + 1e-6, -1.0),
+            hit(6.0 - 1e-6, 1.0),
+        ];
+        assert_eq!(surface_crossings(through_edges, &up), 2);
+        // A ray grazing a ridge: in and out at the same point.
+        let grazing = vec![hit(3.0, -1.0), hit(3.0, 1.0)];
+        assert_eq!(surface_crossings(grazing, &up), 2);
     }
 
     #[test]
