@@ -651,7 +651,13 @@ pub enum ProbeShape {
 }
 
 impl ProbeShape {
-    pub const ALL: [ProbeShape; 4] = [Self::Box, Self::Hull, Self::Sphere, Self::Capsule];
+    pub const ALL: [ProbeShape; 5] = [
+        Self::Box,
+        Self::Hull,
+        Self::Sphere,
+        Self::Capsule,
+        Self::Dodecahedron,
+    ];
 
     /// Half the shape's extent along each world axis, as spawned upright.
     pub fn reach(self) -> Vector3<f32> {
@@ -659,6 +665,20 @@ impl ProbeShape {
             Self::Box | Self::Hull | Self::Sphere => Vector3::repeat(0.5),
             Self::Capsule => Vector3::new(0.5, 0.8, 0.5),
             Self::Dodecahedron => Vector3::repeat(Self::dodecahedron().vertices[16].x),
+        }
+    }
+
+    /// The heights the shape's centre may rest at on level ground: from
+    /// lying on its broadest face up to standing as spawned. The same for
+    /// all but the dodecahedron, which is spawned standing on an edge and
+    /// may stay there or tip onto a face.
+    pub fn resting_heights(self) -> (f32, f32) {
+        match self {
+            Self::Dodecahedron => (
+                DODECAHEDRON_EDGE * DODECAHEDRON_INRADIUS_PER_EDGE,
+                self.reach().y,
+            ),
+            _ => (self.reach().y, self.reach().y),
         }
     }
 
@@ -673,9 +693,18 @@ impl ProbeShape {
     }
 
     fn dodecahedron() -> ConvexHull {
-        dodecahedron_hull(0.45)
+        dodecahedron_hull(DODECAHEDRON_EDGE)
     }
 }
+
+/// Edge length of [`ProbeShape::Dodecahedron`], as the test arena's.
+const DODECAHEDRON_EDGE: f32 = 0.45;
+
+/// A regular dodecahedron's inradius — centre to face — per unit of edge.
+const DODECAHEDRON_INRADIUS_PER_EDGE: f32 = 1.113_516_4;
+
+/// The height of the top of [`ShapeIntoSolidScenario::deck`]'s deck.
+pub const DECK_TOP: f32 = 1.5;
 
 /// The radius of [`ShapeIntoSolidScenario::round_pillar`]'s pillar.
 pub const ROUND_PILLAR_RADIUS: f32 = 0.15;
@@ -688,9 +717,9 @@ pub const ROUND_PILLAR_RADIUS: f32 = 0.15;
 /// for any [`ProbeShape`]:
 ///
 /// ```text
-///   thin wall      slot            knife edge     ridge      pillar
-///   ■│▓│          ▓▓│■│▓▓          ■ ◁▓▓▓         ■         ■▪
-///                                                ╱▓╲
+///   thin wall      slot            knife edge     ridge      pillar    deck
+///   ■│▓│          ▓▓│■│▓▓          ■ ◁▓▓▓         ■         ■▪         ■
+///                                                ╱▓╲                 ▔▔▔▔
 /// ```
 #[derive(Debug, Clone)]
 pub struct ShapeIntoSolidScenario {
@@ -709,6 +738,13 @@ pub struct ShapeIntoSolidScenario {
 }
 
 impl ShapeIntoSolidScenario {
+    /// Bare ground, with the shape standing on it exactly flush, as spawned.
+    pub fn set_down(shape: ProbeShape) -> Self {
+        let mut scenario = Self::buried(shape, -shape.reach().y);
+        scenario.name = "shape_set_down";
+        scenario
+    }
+
     /// Bare ground, with the shape's centre `depth` under it.
     pub fn buried(shape: ProbeShape, depth: f32) -> Self {
         Self::new(
@@ -717,6 +753,21 @@ impl ShapeIntoSolidScenario {
             Point3::new(0.0, -depth, 0.0),
             true,
             &[],
+        )
+    }
+
+    /// A deck `thickness` thick, its top at [`DECK_TOP`] over open ground,
+    /// with the shape set on it but sunk `sink` into it from above.
+    pub fn deck(shape: ProbeShape, thickness: f32, sink: f32) -> Self {
+        Self::new(
+            "shape_into_deck",
+            shape,
+            Point3::new(0.0, DECK_TOP + shape.reach().y - sink, 0.0),
+            true,
+            &[ConvexSolid::block(
+                Point3::new(-1.5, DECK_TOP - thickness, -8.0),
+                Point3::new(1.5, DECK_TOP, 8.0),
+            )],
         )
     }
 

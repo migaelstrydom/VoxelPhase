@@ -350,7 +350,8 @@ Level(
             // overlapping terrain on purpose and starts asleep: knock it (walk
             // into it, grab it, or a grenade) to see it resolve. Four lanes of
             // box, hull, ball and capsule, from z = 6 to 18. Fine voxels so the
-            // walls can be thinner than the shapes.
+            // walls can be thinner than the shapes. Each row is a physics bench
+            // test for each shape: src/physics/bench_harness/tests/buried.rs.
             name: "contact_lab",
 
             terrain: Terrain(

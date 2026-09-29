@@ -28,8 +28,6 @@ use crate::physics::ColliderShape;
 const MAX_MANIFOLD_POINTS: usize = 4;
 /// Small tolerance for rejecting backfacing mesh contacts.
 const BACKFACE_EPSILON: f32 = 1e-4;
-/// Keep near-touching contacts single-point until penetration is clearly positive.
-const SHALLOW_PENETRATION_EPSILON: f32 = 1e-3;
 
 /// A convex polygon (ContactFace) wrapped for GJK/EPA support queries.
 struct SupportPolygon<'a> {
@@ -202,21 +200,10 @@ fn gjk_epa_vs_face<S: ConvexSupport + SupportFaceExtractor>(
     }
 
     let raw_depth = -deepest_signed_dist;
-    if raw_depth <= SHALLOW_PENETRATION_EPSILON {
-        // Near-touching contact: keep a single point to avoid premature face-face
-        // manifolds while transitioning from edge/vertex to stable penetration.
-        let projected = project_onto_face_plane(deepest, face);
-        if !point_in_convex_polygon(&projected, &face.vertices, &normal) {
-            return SmallVec::new();
-        }
-        let mut contacts = SmallVec::new();
-        contacts.push(
-            ContactPoint::new(projected, normal, raw_depth, face.feature_id).on(face.surface),
-        );
-        return contacts;
-    }
 
-    // Extract support faces for clipping to produce multi-point manifolds.
+    // Clip the shape's support face against this face, touching or not: a
+    // face or an edge set down flush has no one deepest point, and a single
+    // contact at whichever corner the support function picks tips it over.
     let shape_face = shape.support_face(-normal);
     let polygon = SupportPolygon { face };
     let face_support = polygon.support_face(normal);
@@ -961,8 +948,11 @@ mod tests {
         }
     }
 
+    /// A face hovering within the margin of a face gets a contact at each of
+    /// its corners, not one at whichever corner the support function picks:
+    /// landing on one corner alone would tip it.
     #[test]
-    fn layer2_tetrahedron_vs_face_margin_only_single_contact() {
+    fn layer2_tetrahedron_base_hovering_within_margin_touches_at_every_corner() {
         let hull = tetrahedron_hull(1.0);
         let face = flat_face();
         let margin = 0.02;
@@ -975,15 +965,10 @@ mod tests {
         };
 
         let contacts = gjk_epa_vs_face(&transformed, &face, margin);
-        assert_eq!(
-            contacts.len(),
-            1,
-            "Margin-only contact should collapse to a single point"
-        );
+        assert_eq!(contacts.len(), 3, "one contact per corner of the base");
         assert!(
-            contacts[0].raw_depth <= 0.0,
-            "Expected margin-only raw_depth <= 0, got {}",
-            contacts[0].raw_depth
+            contacts.iter().all(|cp| cp.raw_depth <= 0.0),
+            "hovering: every contact is a gap, not a depth"
         );
     }
 
@@ -1012,8 +997,10 @@ mod tests {
         );
     }
 
+    /// A face resting on a face, pressed in a fraction of a millimetre, is
+    /// held at every corner: set down flush, it must not start on one.
     #[test]
-    fn layer2_tetrahedron_vs_face_shallow_penetration_single_contact() {
+    fn layer2_tetrahedron_base_resting_flush_touches_at_every_corner() {
         let hull = tetrahedron_hull(1.0);
         let face = flat_face();
         let margin = 0.02;
@@ -1027,16 +1014,13 @@ mod tests {
         };
 
         let contacts = gjk_epa_vs_face(&transformed, &face, margin);
-        assert_eq!(
-            contacts.len(),
-            1,
-            "Shallow penetration should stay single-point near transition",
-        );
+        assert_eq!(contacts.len(), 3, "one contact per corner of the base");
+        let depths: Vec<f32> = contacts.iter().map(|cp| cp.raw_depth).collect();
         assert!(
-            contacts[0].raw_depth > 0.0
-                && contacts[0].raw_depth <= SHALLOW_PENETRATION_EPSILON + 5e-4,
-            "Expected tiny positive raw depth near threshold, got {}",
-            contacts[0].raw_depth
+            depths
+                .iter()
+                .all(|d| *d > 0.0 && (d - depths[0]).abs() < 1e-5),
+            "every corner equally, slightly deep: {depths:?}"
         );
     }
 

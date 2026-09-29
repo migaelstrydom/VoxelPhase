@@ -1,6 +1,18 @@
 //! Shapes that start partly inside static geometry: pushed out by the side
 //! their centre is on, never on through, and never let into solid they only
 //! touch.
+//!
+//! Every row of the test arena's contact lab is here, for each of its shapes
+//! (box, dodecahedron, ball, capsule), at parameters of its own:
+//!
+//! | Contact lab row                  | Test                                                       |
+//! |----------------------------------|------------------------------------------------------------|
+//! | pressed shallow into a thin wall | `a_shape_in_a_thin_wall_leaves_by_the_side_its_centre_is_on` |
+//! | pressed deep into a thin wall    | the same, short of and past the midline                    |
+//! | wedged across a slot             | `a_shape_wedged_in_a_slot_passes_through_neither_wall`     |
+//! | sunk into a thin deck            | `a_shape_sunk_into_a_thin_deck_comes_up_onto_it`           |
+//! | pressed into a thin pillar       | `a_shape_pressed_into_a_thin_pillar_is_pushed_back_the_way_it_came`, and the round pillar tests |
+//! | centre just under the ground     | `a_shape_with_its_centre_under_the_ground_comes_up_on_top` |
 
 use super::super::framework::{run_scenario, BenchRunConfig, BenchRunResult};
 use super::super::scenarios::*;
@@ -20,13 +32,40 @@ fn a_shape_with_its_centre_under_the_ground_comes_up_on_top() {
         for depth in [0.01, 0.4] {
             let scenario = ShapeIntoSolidScenario::buried(shape, depth);
             let run = run(&scenario, "shape_buried");
-            let rest = shape.reach().y;
+            let (low, high) = shape.resting_heights();
             let end = final_sample(&run).y;
-            if (end - rest).abs() > 0.03 {
+            if end < low - 0.03 || end > high + 0.03 {
                 failures.push(format!(
-                    "{shape:?} {depth} m under: ended at y = {end:.3}, not resting at {rest:.3}"
+                    "{shape:?} {depth} m under: ended at y = {end:.3}, not resting on the \
+                     ground between {low:.3} and {high:.3}"
                 ));
             }
+        }
+    }
+    assert_none(failures);
+}
+
+/// A shape set down flush on the ground is not kicked. The bug this guards:
+/// a hull's flat face or edge touching but not yet pressed in got a single
+/// contact, at whichever corner the support function picked, and gravity's
+/// first impulse through that one corner kicked a cube hull to 0.1 rad/s and
+/// left it resting tilted.
+///
+/// Watched for a second only: the dodecahedron stands on an edge, a balance
+/// that rounding error tips over after several seconds, as it would anywhere.
+#[test]
+fn a_shape_set_down_flush_on_the_ground_is_not_kicked() {
+    let mut failures = Vec::new();
+    for shape in ProbeShape::ALL {
+        let run = run(&ShapeIntoSolidScenario::set_down(shape), "shape_set_down");
+        let spin = run
+            .samples
+            .iter()
+            .take_while(|s| s.sim_time < 1.0)
+            .map(|s| s.angular_speed)
+            .fold(0.0, f32::max);
+        if spin > 0.001 {
+            failures.push(format!("{shape:?}: turned at up to {spin:.4} rad/s"));
         }
     }
     assert_none(failures);
@@ -43,6 +82,31 @@ fn a_plank_with_its_centre_just_under_the_ground_comes_up_on_top() {
     assert_above_floor(&run, -0.05);
     assert_settled(&run, 1.0, 0.02, 0.05);
     assert_final_y_near(&run, 0.02, 0.01);
+}
+
+/// A shape sunk into a deck from above — deeper than the deck is thick, for
+/// all but the ball — is lifted onto it, not dropped through it: its centre
+/// is above the deck, so the top pushes and the underside does not.
+#[test]
+fn a_shape_sunk_into_a_thin_deck_comes_up_onto_it() {
+    let mut failures = Vec::new();
+    for shape in ProbeShape::ALL {
+        for sink in [0.1, 0.3] {
+            let scenario = ShapeIntoSolidScenario::deck(shape, 0.25, sink);
+            let run = run(&scenario, "shape_into_deck");
+            let (low, high) = shape.resting_heights();
+            let (low, high) = (DECK_TOP + low, DECK_TOP + high);
+            let lowest = run.samples.iter().map(|s| s.y).fold(f32::MAX, f32::min);
+            let end = final_sample(&run).y;
+            if lowest < scenario.start.y - 0.03 || end < low - 0.03 || end > high + 0.03 {
+                failures.push(format!(
+                    "{shape:?} sunk {sink}: went down to y = {lowest:.3} and ended at {end:.3}, \
+                     not resting on the deck between {low:.3} and {high:.3}"
+                ));
+            }
+        }
+    }
+    assert_none(failures);
 }
 
 // ── A shape inside solid leaves by the side its centre is on ────────
@@ -202,10 +266,16 @@ fn a_shape_pressed_onto_a_steep_ridge_is_lifted_straight_up() {
 
 /// A shape set down across a steep ridge rests on its apex. Balanced there,
 /// it neither sinks onto the ridge nor is pushed off it.
+///
+/// Not the dodecahedron: spawned standing on an edge, it meets the apex at a
+/// single point, a balance with nothing to restore it, and it rolls off.
 #[test]
 fn a_shape_set_down_on_a_steep_ridge_rests_on_its_apex() {
     let mut failures = Vec::new();
-    for shape in ProbeShape::ALL {
+    for shape in ProbeShape::ALL
+        .into_iter()
+        .filter(|s| *s != ProbeShape::Dodecahedron)
+    {
         let scenario = ShapeIntoSolidScenario::resting_on_ridge(shape);
         let run = run(&scenario, "shape_resting_on_ridge");
         let lowest = run.samples.iter().map(|s| s.y).fold(f32::MAX, f32::min);
@@ -246,7 +316,7 @@ fn a_shape_pressed_into_a_thin_pillar_is_pushed_back_the_way_it_came() {
 #[test]
 fn a_shape_skewered_on_a_thin_round_pillar_comes_off_it() {
     let mut failures = Vec::new();
-    for shape in round_pillar_probes() {
+    for shape in ProbeShape::ALL {
         for offset in [0.0, 0.05, 0.12] {
             let scenario = ShapeIntoSolidScenario::round_pillar(shape, offset);
             let run = run(&scenario, "shape_on_round_pillar");
@@ -266,7 +336,7 @@ fn a_shape_skewered_on_a_thin_round_pillar_comes_off_it() {
 #[test]
 fn a_shape_skewered_on_a_thin_round_pillar_leaves_it_sideways() {
     let mut failures = Vec::new();
-    for shape in round_pillar_probes() {
+    for shape in ProbeShape::ALL {
         for offset in [0.0, 0.05, 0.12] {
             let scenario = ShapeIntoSolidScenario::round_pillar(shape, offset);
             let run = run(&scenario, "shape_on_round_pillar");
@@ -287,7 +357,7 @@ fn a_shape_skewered_on_a_thin_round_pillar_leaves_it_sideways() {
 #[test]
 fn a_shape_thrown_at_a_thin_round_pillar_never_ends_up_on_it() {
     let mut failures = Vec::new();
-    for shape in round_pillar_probes() {
+    for shape in ProbeShape::ALL {
         for speed in [1.0, 3.0, 6.0] {
             for miss in [0.0, 0.2, 0.4] {
                 let scenario = ShapeIntoSolidScenario::thrown_at_round_pillar(shape, speed, miss);
@@ -301,12 +371,6 @@ fn a_shape_thrown_at_a_thin_round_pillar_never_ends_up_on_it() {
         }
     }
     assert_none(failures);
-}
-
-fn round_pillar_probes() -> impl Iterator<Item = ProbeShape> {
-    ProbeShape::ALL
-        .into_iter()
-        .chain([ProbeShape::Dodecahedron])
 }
 
 /// Every probe is at least 45 cm from its centre to its side, however it

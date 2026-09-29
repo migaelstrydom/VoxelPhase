@@ -323,6 +323,7 @@ mod tests {
     use crate::collision::contact::FeatureId;
     use crate::collision::convex_hull::{ConvexHull, HullFace};
     use crate::collision::mesh::seam_filter::{ContactFace, FilteredPatch};
+    use crate::collision::mesh::sphere_patch::point_in_convex_polygon;
     use crate::collision::SurfaceId;
     use nalgebra::{Point3, UnitQuaternion, Vector3};
     use smallvec::SmallVec;
@@ -2229,16 +2230,30 @@ mod tests {
         }
     }
 
-    /// Regression test: hull vs concave step terrain should not produce a
-    /// manifold with mixed normals from unrelated faces.
-    ///
-    /// Currently routes through GJK/EPA (no dedicated hull-patch path),
-    /// which happens to avoid the mixed-normal issue. When a face-clipping
-    /// hull-patch path is (re)introduced, this test should verify that it
-    /// also produces consistent normals.
+    /// A hull straddling a terrain step legitimately touches faces with
+    /// different normals, so a mixed-normal manifold is correct here, as it
+    /// is for the box in `obb_patch`'s step replay. What must hold is that
+    /// every depth is real: each contact sits inside a face it was generated
+    /// from, and stepping back along the normal by the reported depth lands
+    /// on the hull's surface.
     #[test]
-    fn hull_pop_replay_minimal_manifold_should_not_mix_normals() {
+    fn hull_step_replay_depths_are_real_overlap() {
+        const TOLERANCE: f32 = 1e-3;
+
         let hull = menhir_hull(4.0, 1.8, 1.0);
+        let planes: Vec<(Vector3<f32>, Point3<f32>)> = {
+            let center = Point3::new(10.586787, -1.690402, -4.410592);
+            let rot = UnitQuaternion::from_quaternion(nalgebra::Quaternion::new(
+                0.335174, 0.163065, -0.581374, 0.723237,
+            ));
+            hull.faces
+                .iter()
+                .map(|f| {
+                    let v = hull.vertices[f.vertex_indices[0] as usize];
+                    (rot * f.normal, center + rot * v)
+                })
+                .collect()
+        };
         let shape = ColliderShape::ConvexHull {
             hull: std::sync::Arc::new(hull),
         };
@@ -2253,18 +2268,34 @@ mod tests {
         let manifold = generate_mesh_manifold(&view, &patch, margin);
         assert!(
             !manifold.is_empty(),
-            "Replay case should produce contacts for analysis"
+            "hull overlaps the step and must produce contacts"
         );
 
-        let base = manifold.points[0].raw_normal.normalize();
         for (i, cp) in manifold.points.iter().enumerate() {
-            let d = base.dot(&cp.raw_normal.normalize());
+            let normal = cp.raw_normal.normalize();
+            let on_a_face = patch.faces.iter().any(|face| {
+                face.normal.dot(&normal) > 0.999
+                    && (cp.point - face.vertices[0]).dot(&face.normal).abs() < TOLERANCE
+                    && point_in_convex_polygon(&cp.point, &face.vertices, &face.normal)
+            });
             assert!(
-                d > 0.95,
-                "SAT-consistent manifold should keep one contact direction. \
-                 Contact {i} has mixed normal {:?} vs base {:?} (dot={d:.4})",
-                cp.raw_normal,
-                base
+                on_a_face,
+                "contact {i} at {:?} lies outside every face with its normal",
+                cp.point
+            );
+
+            // On a convex hull's surface, the farthest any face plane is from
+            // the point is zero.
+            let witness = cp.point - normal * cp.raw_depth;
+            let off_surface = planes
+                .iter()
+                .map(|(n, p)| n.dot(&(witness - p)))
+                .fold(f32::MIN, f32::max);
+            assert!(
+                off_surface.abs() < TOLERANCE,
+                "contact {i}: stepping back {:.4} from {:?} lands {off_surface:.4} off the hull",
+                cp.raw_depth,
+                cp.point
             );
         }
     }
