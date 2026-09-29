@@ -149,7 +149,7 @@ Level(
                 // as wide as the pad, so the trampoline moves to the open floor
                 // by the adit, where it also earns its keep as the way back up.
                 Trampoline(pos: (89.0, 2.0, 52.0)),
-                Dolos(pos: (80.0, 2.45, 41.5)),
+                Dolos(pos: (80.0, 2.02, 41.5)),
                 BeachBall(pos: (79.0, 3.0, 49.0)),
                 Crate(pos: (77.0, 2.0, 46.0), size: 0.5),
                 GlowingOrb(pos: (74.0, 2.5, 52.0), colour: Some((1.0, 0.45, 0.15)), glow: Some(2.2)),
@@ -195,7 +195,7 @@ Level(
                 Menhir(pos: (9.0, 10.0)),
                 Menhir(pos: (23.0, 22.0)),
                 // The ride home.
-                Trampoline(pos: (24.0, 6.0, 8.0)),
+                Trampoline(pos: (24.0, 5.86, 8.0)),
             ],
         ),
 

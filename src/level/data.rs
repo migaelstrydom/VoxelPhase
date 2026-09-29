@@ -1213,6 +1213,7 @@ pub enum LevelObject {
     },
     /// Trampoline — bouncy pad on four short legs.
     Trampoline {
+        /// Ground point under its centre, where its feet stand.
         pos: (f32, f32, f32),
         /// Rotation about `+Y` in degrees, within the segment's frame.
         #[serde(default)]
@@ -1257,6 +1258,7 @@ pub enum LevelObject {
     /// Dolos — concrete breakwater armour unit. Central shank with two
     /// perpendicular flukes, one at each end.
     Dolos {
+        /// Ground point under it, where its lowest point rests.
         pos: (f32, f32, f32),
         /// Rotation about `+Y` in degrees, within the segment's frame.
         #[serde(default)]

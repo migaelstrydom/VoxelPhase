@@ -110,7 +110,7 @@ Level(
                 // Set dressing on the floor, and something to climb back up
                 // with if you come off the catwalk: the trampoline throws you
                 // higher than you fell.
-                Trampoline(pos: (32.0, 5.0, 46.0)),
+                Trampoline(pos: (32.0, 3.92, 46.0)),
                 Menhir(pos: (50.0, 44.0)),
                 Menhir(pos: (56.0, 48.0)),
                 FencePost(pos: (8.0, 22.0)),

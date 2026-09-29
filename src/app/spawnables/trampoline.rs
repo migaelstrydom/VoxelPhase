@@ -26,6 +26,7 @@ const TEXTURE_SIZE: u32 = 128;
 
 #[derive(Deserialize)]
 pub struct TrampolineDef {
+    /// Ground point under the trampoline's centre: where its feet stand.
     pub pos: (f32, f32, f32),
     /// Rotation about `+Y`, in degrees. A rotated segment adds its own yaw.
     #[serde(default)]
@@ -104,10 +105,12 @@ impl Spawnable for TrampolineDef {
     }
 
     fn spawn(&self, world: &mut World, materials: &[MaterialId]) -> Vec<Entity> {
-        let initial_pos = Point3::new(self.pos.0, self.pos.1, self.pos.2);
         let pad_he = self.pad_he();
         let leg_he = self.leg_he();
         let total_height = self.total_height();
+        // The body's frame is at the middle of its height, so its feet are
+        // half of that below it.
+        let initial_pos = Point3::new(self.pos.0, self.pos.1 + total_height * 0.5, self.pos.2);
 
         let pad_y = total_height * 0.5 - pad_he.y;
         let leg_y = -pad_he.y;

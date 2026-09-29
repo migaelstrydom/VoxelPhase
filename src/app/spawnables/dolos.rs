@@ -4,8 +4,13 @@
 //! perpendicular to each other. The resulting shape interlocks with its
 //! neighbours on a breakwater and is notoriously awkward to stack flat —
 //! which makes it a fun obstacle.
+//!
+//! Laid down with the shank level, it would stand on the tip of its upright
+//! fluke with everything else in the air, and topple. It is spawned already
+//! tipped onto that fluke's edge and the far end of the level one, which is
+//! where it comes to rest.
 
-use nalgebra::{Point3, Vector3};
+use nalgebra::{Point3, UnitQuaternion, Vector3};
 use serde::Deserialize;
 use specs::{Builder, Entity, World, WorldExt};
 
@@ -28,6 +33,7 @@ const TEXTURE_SIZE: u32 = 128;
 
 #[derive(Deserialize)]
 pub struct DolosDef {
+    /// Ground point under the dolos: its lowest point rests here.
     pub pos: (f32, f32, f32),
     /// Rotation about `+Y`, in degrees. A rotated segment adds its own yaw.
     #[serde(default)]
@@ -78,6 +84,26 @@ impl DolosDef {
     /// Cast concrete, but with every coefficient left authored: a dolos exists
     /// to be tuned, and how it grips and bounces is the point of placing one.
     /// Only its appearance comes from the library.
+    /// The tip about the shank's cross axis that brings it to rest: the
+    /// upright fluke's inner bottom edge and the far bottom edge of the shank
+    /// and level fluke both on the ground.
+    fn resting_tilt(&self) -> UnitQuaternion<f32> {
+        let (half_shank, half_fluke, half_thk) = (
+            self.shank_length * 0.5,
+            self.fluke_length * 0.5,
+            self.thickness * 0.5,
+        );
+        // Both edges in the shank's (y, z) plane.
+        let upright_edge = (-half_fluke, -(half_shank - 2.0 * half_thk));
+        let level_edge = (-half_thk, half_shank);
+        let tilt = (upright_edge.0 - level_edge.0).atan2(upright_edge.1 - level_edge.1);
+        // atan2 of two negatives lands in the third quadrant; the tip is the
+        // acute angle, and none at all if the upright fluke does not reach
+        // below the shank.
+        let tilt = (tilt + std::f32::consts::PI).max(0.0);
+        UnitQuaternion::from_axis_angle(&Vector3::x_axis(), tilt)
+    }
+
     fn substance(&self) -> Substance {
         substance::CONCRETE.with_physics(PhysicalSurface {
             restitution: self.restitution,
@@ -102,7 +128,6 @@ impl Spawnable for DolosDef {
     }
 
     fn spawn(&self, world: &mut World, materials: &[MaterialId]) -> Vec<Entity> {
-        let initial_pos = Point3::new(self.pos.0, self.pos.1, self.pos.2);
         let material = materials[0];
 
         let half_shank = self.shank_length * 0.5;
@@ -128,12 +153,20 @@ impl Spawnable for DolosDef {
         ];
         let model = compound_cuboid_model(&boxes, material);
 
+        let rotation = Yaw::degrees(self.yaw).rotation() * self.resting_tilt();
+        let lowest = boxes
+            .iter()
+            .flat_map(|(he, offset)| corners(he).map(move |c| rotation * (offset + c)))
+            .map(|c| c.y)
+            .fold(f32::INFINITY, f32::min);
+        let initial_pos = Point3::new(self.pos.0, self.pos.1 - lowest, self.pos.2);
+
         let body_handle = {
             let mut physics = world.write_resource::<PhysicsResource>();
 
             let body_desc = RigidBodyDesc::dynamic()
                 .position(initial_pos)
-                .rotation(Yaw::degrees(self.yaw).rotation())
+                .rotation(rotation)
                 .gravity_scale(1.0)
                 .linear_damping(0.01)
                 .angular_damping(0.02);
@@ -160,10 +193,21 @@ impl Spawnable for DolosDef {
                 initial_pos.z,
             )))
             .with(Velocity(Vector3::zeros()))
-            .with(Orientation(Yaw::degrees(self.yaw).rotation()))
+            .with(Orientation(rotation))
             .with(RigidBodyComponent(body_handle))
             .with(ModelInstance::new(model))
             .with(Renderable)
             .build()]
     }
+}
+
+/// The eight corners of a box with these half-extents, about its centre.
+fn corners(he: &Vector3<f32>) -> impl Iterator<Item = Vector3<f32>> + '_ {
+    (0..8).map(move |i| {
+        Vector3::new(
+            if i & 1 == 0 { -he.x } else { he.x },
+            if i & 2 == 0 { -he.y } else { he.y },
+            if i & 4 == 0 { -he.z } else { he.z },
+        )
+    })
 }

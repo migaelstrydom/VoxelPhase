@@ -275,7 +275,7 @@ Level(
                 Tower(base: (26.0, 3.0, 24.0), box_half_extents: (0.4, 0.4, 0.4), count: 5),
                 GlowingOrb(pos: (22.0, 4.0, 20.0), colour: Some((1.0, 0.45, 0.15)), glow: Some(2.18)),
                 Crate(pos: (30.0, 4.0, 28.0), size: 0.5),
-                Dolos(pos: (18.0, 4.0, 30.0)),
+                Dolos(pos: (8.0, 4.17, 40.0)),
             ],
         ),
     ],
