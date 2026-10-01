@@ -145,6 +145,43 @@ Three classes of object, from `LevelObject::orientability()`:
 `PlankBridge.yaw` is in **degrees**, like every other yaw in the format. It was radians
 before stage 3.
 
+### Where an object's height comes from
+
+Every body in the game starts asleep, so an object stays exactly where it is authored
+until something disturbs it: a crate a little too high hangs in the air, one a little too
+low sits in the ground. An object gets its height in one of three ways:
+
+| Placement | Written as | Height |
+|-----------|------------|--------|
+| **Authored** | `Crate(pos: (x, y, z), ..)` | Exactly as written. Right for what is meant to hang (a gem, a lamp) or to start somewhere particular. |
+| **Anchored** | `Rock(pos: (x, z))`, `Menhir`, `FencePost`, creatures, mechanisms | The spawnable reads the terrain surface itself. |
+| **Dropped** | `Dropped(Crate(pos: (x, y, z), ..))` | Falls straight down from `(x, y, z)` until it touches something. |
+
+`Dropped` wraps any authored object; the loader rejects it around an anchored one or around
+another `Dropped`. What it does, in `level::drop`:
+
+1. **Turns** an object of one body (one box or convex hull) the least it takes onto a face
+   it can rest on, so an octahedron built point-down lands on a face and a square crate is
+   not turned at all, keeping its yaw. An object of many bodies keeps its authored pose.
+2. **Falls** as one rigid group and stops where its real colliders first touch the terrain
+   or any object placed before it. The start height picks the surface: dropped from inside a
+   temple a die lands on the floor; from above, on the roof.
+3. **Floats**: water is not something to land on, so a drop falls to the bed. If the water
+   holds the object up, it rises to its draft, or until it meets a roof (a flooded tunnel).
+
+Every authored object is spawned first, then every dropped one in file order, so a drop
+lands on the structures around it wherever they appear in the file, and a drop onto a drop
+follows the file.
+
+A drop places; it does not settle. Dropped onto a slope or onto something narrower than
+itself, an object still slides or tips once woken. `level_check` reports that, along with
+a drop that starts already touching something (start it higher), finds nothing below, or
+falls more than 8 m.
+
+A segment whose objects are authored out of rest on purpose (`contact_lab` starts every
+body pressed into a wall to test depenetration) sets `unsettled: true`: `level_check`
+still simulates them, but does not report them as not at rest.
+
 ## Level File Structure
 
 ```ron
@@ -206,6 +243,9 @@ Level(
                     restitution: 0.2,
                     friction: 0.6,
                 ),
+
+                // Dropped from y = 6 onto whatever is below it
+                Dropped(Octahedron(pos: (3.0, 6.0, -4.0), size: 1.5)),
 
                 // Named types — bundled defaults for appearance + physics
                 Plank(pos: (8.0, 4.0, 0.0), length: 4.0, width: 1.0),

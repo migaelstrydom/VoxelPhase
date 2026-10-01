@@ -45,7 +45,8 @@ use crate::app::world_builder::WorldBuilder;
 use crate::components::RigidBodyComponent;
 use crate::debug::DebugLines;
 use crate::drive::Actuator;
-use crate::level::{create_level_water, Level};
+use crate::level::drop::DropOutcome;
+use crate::level::{create_level_water, spawn_object, spawn_order, Level, ObjectPlacement};
 use crate::physics::{
     PhysicsWorld, RigidBodyHandle, SequentialStepper, Stepper, SubstepForceProvider,
 };
@@ -98,6 +99,8 @@ pub struct RestTrial {
     world: World,
     /// Every object that spawned at least one dynamic body, in level order.
     objects: Vec<TrialObject>,
+    /// Every dropped object whose drop went wrong, as a finding.
+    drop_problems: Vec<String>,
 }
 
 /// One authored object and the dynamic bodies it became.
@@ -106,6 +109,9 @@ pub(super) struct TrialObject {
     pub(super) label: String,
     /// Each body and the pose it was created in.
     pub(super) bodies: Vec<(RigidBodyHandle, Point3<f32>, UnitQuaternion<f32>)>,
+    /// Authored out of rest on purpose, in an `unsettled` segment: simulated
+    /// with everything else, never reported for moving.
+    pub(super) unsettled: bool,
 }
 
 /// How far one object ended up from where it was authored.
@@ -167,6 +173,8 @@ pub struct RestOutcome {
     pub settled_after: Option<f32>,
     /// Every object that did not stay where it was authored.
     pub drifts: Vec<Drift>,
+    /// Objects in `unsettled` segments, simulated but not judged.
+    pub unjudged: usize,
 }
 
 impl RestTrial {
@@ -186,36 +194,52 @@ impl RestTrial {
         }
 
         let mut objects = Vec::new();
-        let mut known = dynamic_bodies(&world.read_resource::<PhysicsResource>().world);
-        for (ordinal, (segment, object)) in level.objects().enumerate() {
-            let spawnable = object.to_spawnable();
-            let materials = vec![MaterialId(0); spawnable.material_count()];
-            spawnable.spawn(&mut world, &materials);
+        let mut drop_problems = Vec::new();
+        for entry in spawn_order(level) {
+            let materials = vec![MaterialId(0); entry.object.to_spawnable().material_count()];
+            let spawned = spawn_object(&mut world, entry.object, &materials);
 
             let physics = &world.read_resource::<PhysicsResource>().world;
-            let now = dynamic_bodies(physics);
-            let bodies: Vec<_> = now
+            let bodies: Vec<_> = spawned
+                .bodies
                 .iter()
-                .filter(|h| !known.contains(h))
-                .filter_map(|&h| physics.body(h).map(|b| (h, b.position(), b.rotation())))
+                .filter_map(|&h| physics.body(h).map(|b| (h, b)))
+                .filter(|(_, b)| b.is_dynamic())
+                .map(|(h, b)| (h, b.position(), b.rotation()))
                 .collect();
-            known = now;
 
-            if let Some(&(_, first, _)) = bodies.first() {
-                objects.push(TrialObject {
-                    label: format!(
-                        "{} #{} in '{}' at ({:.1}, {:.1}, {:.1})",
-                        object.describe().kind,
-                        ordinal + 1,
-                        level.segments[segment].name,
-                        first.x,
-                        first.y,
-                        first.z
-                    ),
-                    bodies,
+            let name = |at: Point3<f32>| {
+                format!(
+                    "{} #{} in '{}' at ({:.1}, {:.1}, {:.1})",
+                    entry.object.describe().kind,
+                    entry.ordinal + 1,
+                    level.segments[entry.segment].name,
+                    at.x,
+                    at.y,
+                    at.z
+                )
+            };
+            let first = bodies.first().map(|&(_, at, _)| at);
+            if let Some(problem) = spawned.drop.as_ref().and_then(DropOutcome::problem) {
+                let at = first.unwrap_or_else(|| match entry.object.describe().placement {
+                    ObjectPlacement::Free(p) | ObjectPlacement::Dropped(p) => p,
+                    ObjectPlacement::TerrainAnchored { x, z } => Point3::new(x, 0.0, z),
                 });
+                drop_problems.push(format!("{} {problem}", name(at)));
+            }
+            if let Some(first) = first {
+                objects.push((
+                    entry.ordinal,
+                    TrialObject {
+                        label: name(first),
+                        bodies,
+                        unsettled: level.segments[entry.segment].unsettled,
+                    },
+                ));
             }
         }
+        objects.sort_by_key(|(ordinal, _)| *ordinal);
+        let mut objects: Vec<_> = objects.into_iter().map(|(_, o)| o).collect();
 
         let driven = driven_bodies(&world);
         for object in &mut objects {
@@ -223,7 +247,11 @@ impl RestTrial {
         }
         objects.retain(|object| !object.bodies.is_empty());
 
-        Self { world, objects }
+        Self {
+            world,
+            objects,
+            drop_problems,
+        }
     }
 
     /// The terrain the trial was spawned on.
@@ -263,6 +291,7 @@ impl RestTrial {
         let drifts = self
             .objects
             .iter()
+            .filter(|object| !object.unsettled)
             .map(|object| {
                 object.drift(
                     &physics.world,
@@ -276,6 +305,7 @@ impl RestTrial {
             bodies: handles.len(),
             settled_after,
             drifts,
+            unjudged: self.objects.iter().filter(|o| o.unsettled).count(),
         }
     }
 
@@ -401,16 +431,6 @@ fn driven_bodies(world: &World) -> Vec<RigidBodyHandle> {
     (&bodies, &actuators).join().map(|(b, _)| b.0).collect()
 }
 
-/// Every dynamic body in the world.
-fn dynamic_bodies(world: &PhysicsWorld) -> Vec<RigidBodyHandle> {
-    world
-        .bodies()
-        .iter()
-        .filter(|(_, body)| body.is_dynamic())
-        .map(|(index, _)| RigidBodyHandle(index))
-        .collect()
-}
-
 /// Run a trial and report every object that did not stay where it was put.
 ///
 /// Warnings, not errors: an object dropped from a height on purpose is
@@ -430,10 +450,18 @@ pub fn check_rest(trial: &mut RestTrial, report: &mut Report) -> Section {
             },
         )
         .row("Objects not at rest", outcome.drifts.len().to_string())
+        .row(
+            "Not judged (unsettled segments)",
+            outcome.unjudged.to_string(),
+        )
         .note(
             "Every body starts asleep in the game, so an object reported here stays where \
              it was authored until something disturbs it.",
         );
+
+    for problem in &trial.drop_problems {
+        report.warn("drop", problem.clone());
+    }
 
     for drift in &outcome.drifts {
         report.warn(
@@ -459,6 +487,11 @@ mod tests {
 
     /// Flat ground at y = 0, and one crate with its centre at `crate_y`.
     fn crate_level(crate_y: f32) -> Level {
+        flat_level(&format!("Crate(pos: (4.0, {crate_y}, 4.0), size: 0.5)"))
+    }
+
+    /// Flat ground at y = 0 under the given objects.
+    fn flat_level(objects: &str) -> Level {
         let ron = format!(
             r#"
             Level(
@@ -471,7 +504,7 @@ mod tests {
                         base_height: 0.0,
                         features: [],
                     ),
-                    objects: [Crate(pos: (4.0, {crate_y}, 4.0), size: 0.5)],
+                    objects: [{objects}],
                 )],
                 placements: [Root(segment: "main")],
                 player_spawn: (0.0, 2.0, 0.0),
@@ -494,6 +527,60 @@ mod tests {
         let drift = &outcome.drifts[0];
         assert!(drift.drop > 2.0, "a 3 m hang fell only {:.2} m", drift.drop);
         assert!(drift.describe().starts_with("fell"), "{}", drift.describe());
+    }
+
+    /// Every body of the trial's objects, where it is now, in level order.
+    fn object_heights(trial: &RestTrial) -> Vec<f32> {
+        let physics = trial.physics_mut();
+        trial
+            .objects()
+            .iter()
+            .map(|o| physics.world.body(o.bodies[0].0).unwrap().position().y)
+            .collect()
+    }
+
+    #[test]
+    fn a_dropped_crate_lands_on_the_ground_and_rests() {
+        let level = flat_level("Dropped(Crate(pos: (4.0, 3.0, 4.0), size: 0.5))");
+        let mut trial = RestTrial::spawn(&level, build_terrain(&level));
+        assert!(trial.drop_problems.is_empty(), "{:?}", trial.drop_problems);
+        let y = object_heights(&trial)[0];
+        assert!((y - 0.5).abs() < 0.02, "landed with its centre at {y:.3}");
+
+        let outcome = trial.run();
+        assert!(outcome.drifts.is_empty(), "{:?}", outcome.drifts);
+    }
+
+    /// The drop is listed first, yet lands on the crate after it: placed
+    /// objects are spawned before any drop.
+    #[test]
+    fn a_dropped_crate_lands_on_a_crate_authored_after_it() {
+        let level = flat_level(
+            "Dropped(Crate(pos: (4.0, 5.0, 4.0), size: 0.5)), \
+             Crate(pos: (4.0, 0.5, 4.0), size: 0.5)",
+        );
+        let mut trial = RestTrial::spawn(&level, build_terrain(&level));
+        assert!(trial.drop_problems.is_empty(), "{:?}", trial.drop_problems);
+        let heights = object_heights(&trial);
+        assert!((heights[0] - 1.5).abs() < 0.02, "top at {:.3}", heights[0]);
+        assert!((heights[1] - 0.5).abs() < 0.02, "base at {:.3}", heights[1]);
+
+        let outcome = trial.run();
+        assert!(outcome.drifts.is_empty(), "{:?}", outcome.drifts);
+    }
+
+    #[test]
+    fn a_drop_that_starts_buried_is_reported_and_left_alone() {
+        let level = flat_level("Dropped(Crate(pos: (4.0, 0.3, 4.0), size: 0.5))");
+        let trial = RestTrial::spawn(&level, build_terrain(&level));
+        assert_eq!(trial.drop_problems.len(), 1, "{:?}", trial.drop_problems);
+        assert!(
+            trial.drop_problems[0].contains("start it higher"),
+            "{}",
+            trial.drop_problems[0]
+        );
+        let y = object_heights(&trial)[0];
+        assert!((y - 0.3).abs() < 1e-4, "moved to {y:.3}");
     }
 
     #[test]

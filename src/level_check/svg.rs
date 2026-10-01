@@ -236,7 +236,7 @@ fn render(level: &Level, terrain: &TerrainWorld, water: &WaterPlan) -> String {
     let object_heights: Vec<f32> = level
         .objects()
         .filter_map(|(_, o)| match o.describe().placement {
-            ObjectPlacement::Free(p) => Some(p.y),
+            ObjectPlacement::Free(p) | ObjectPlacement::Dropped(p) => Some(p.y),
             ObjectPlacement::TerrainAnchored { .. } => None,
         })
         .collect();
@@ -327,6 +327,9 @@ fn object_key(s: &mut String, level: &Level, top: f32) {
         let info = object.describe();
         let position = match info.placement {
             ObjectPlacement::Free(p) => format!("({:.1}, {:.1}, {:.1})", p.x, p.y, p.z),
+            ObjectPlacement::Dropped(p) => {
+                format!("({:.1}, dropped from {:.1}, {:.1})", p.x, p.y, p.z)
+            }
             ObjectPlacement::TerrainAnchored { x, z } => {
                 format!("({x:.1}, on terrain, {z:.1})")
             }
@@ -1034,12 +1037,14 @@ fn elevation_view(
     }
 
     // Objects at their authored height. An anchored object has no authored
-    // height, so it is drawn at the surface it will be dropped onto.
+    // height, so it is drawn at the surface it stands on; a dropped one is
+    // drawn where its fall starts, since what it lands on may be another
+    // object, which this view does not know about.
     let mut labels = LabelSpace::new(16.0, 12.0);
     for (index, (_, object)) in level.objects().enumerate() {
         let info = object.describe();
         let (x, y) = match info.placement {
-            ObjectPlacement::Free(p) => (p.x, p.y),
+            ObjectPlacement::Free(p) | ObjectPlacement::Dropped(p) => (p.x, p.y),
             ObjectPlacement::TerrainAnchored { x, z } => {
                 (x, terrain.approx_surface_height_at(x, z).unwrap_or(0.0))
             }
@@ -1105,6 +1110,7 @@ fn object_marker(
 ) {
     let fill = match placement {
         ObjectPlacement::Free(_) => "#c1440e",
+        ObjectPlacement::Dropped(_) => "#7a4fa8",
         ObjectPlacement::TerrainAnchored { .. } => "#1c6ea4",
     };
     let _ = writeln!(
@@ -1212,12 +1218,14 @@ fn legend(s: &mut String, x: f32, y: f32, field: &HeightField) {
          <circle cx=\"{:.1}\" cy=\"{:.1}\" r=\"3.2\" fill=\"#1c6ea4\"/><text class=\"axis\" x=\"{:.1}\" y=\"{:.1}\">anchored</text>\n\
          <line x1=\"{:.1}\" y1=\"{:.1}\" x2=\"{:.1}\" y2=\"{:.1}\" stroke=\"#c1440e\" stroke-width=\"1.6\" stroke-dasharray=\"5 3\"/><text class=\"axis\" x=\"{:.1}\" y=\"{:.1}\">join</text>\n\
          <line x1=\"{:.1}\" y1=\"{:.1}\" x2=\"{:.1}\" y2=\"{:.1}\" stroke=\"#6a3fa0\" stroke-width=\"1.6\" stroke-dasharray=\"2 4\"/><text class=\"axis\" x=\"{:.1}\" y=\"{:.1}\">assertion</text>\n\
-         <line x1=\"{:.1}\" y1=\"{:.1}\" x2=\"{:.1}\" y2=\"{:.1}\" stroke=\"{ROUTE_FILL}\" stroke-width=\"6\" opacity=\"0.75\"/><text class=\"axis\" x=\"{:.1}\" y=\"{:.1}\">route</text>",
+         <line x1=\"{:.1}\" y1=\"{:.1}\" x2=\"{:.1}\" y2=\"{:.1}\" stroke=\"{ROUTE_FILL}\" stroke-width=\"6\" opacity=\"0.75\"/><text class=\"axis\" x=\"{:.1}\" y=\"{:.1}\">route</text>\n\
+         <circle cx=\"{:.1}\" cy=\"{:.1}\" r=\"3.2\" fill=\"#7a4fa8\"/><text class=\"axis\" x=\"{:.1}\" y=\"{:.1}\">dropped</text>",
         x, y, x + 7.0, y + 4.0,
         x + 55.0, y, x + 62.0, y + 4.0,
         x + 130.0, y, x + 150.0, y, x + 154.0, y + 4.0,
         x + 185.0, y, x + 205.0, y, x + 209.0, y + 4.0,
         x + 262.0, y, x + 282.0, y, x + 286.0, y + 4.0,
+        x + 335.0, y, x + 342.0, y + 4.0,
     );
 
     // The height ramp itself, as a strip of its own shades.

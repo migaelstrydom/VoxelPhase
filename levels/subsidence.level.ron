@@ -153,9 +153,9 @@ Level(
                 // by the adit, where it also earns its keep as the way back up.
                 Trampoline(pos: (89.0, 2.0, 52.0)),
                 Dolos(pos: (80.0, 2.02, 41.5)),
-                BeachBall(pos: (79.0, 3.0, 49.0)),
-                Crate(pos: (77.0, 2.0, 46.0), size: 0.5),
-                GlowingOrb(pos: (74.0, 2.5, 52.0), colour: Some((1.0, 0.45, 0.15)), glow: Some(2.2)),
+                Dropped(BeachBall(pos: (79.0, 3.0, 49.0))),
+                Dropped(Crate(pos: (77.0, 2.0, 46.0), size: 0.5)),
+                Dropped(GlowingOrb(pos: (74.0, 2.5, 52.0), colour: Some((1.0, 0.45, 0.15)), glow: Some(2.2))),
                 // Marks the adit mouth from the far rim.
                 GlowingOrb(pos: (93.0, 2.5, 48.0), colour: Some((0.4, 0.7, 1.0)), glow: Some(2.0)),
             ],
@@ -292,12 +292,12 @@ Level(
                 // their height from the *heightfield*, which in this segment is
                 // the top of the butte, 18 m over the chamber roof.
                 Temple(pos: (44.0, 6.0, 32.0), column_height: 3.5, front_columns: 4, side_columns: 4),
-                GlowingOrb(pos: (36.0, 7.0, 28.0), colour: Some((0.8, 0.3, 1.0)), glow: Some(2.1)),
-                GlowingOrb(pos: (52.0, 7.0, 36.0), colour: Some((0.8, 0.3, 1.0)), glow: Some(2.1)),
-                Crate(pos: (24.0, 4.5, 31.0), size: 0.6),
-                Crate(pos: (26.0, 4.5, 33.0), size: 0.6),
+                Dropped(GlowingOrb(pos: (36.0, 7.0, 28.0), colour: Some((0.8, 0.3, 1.0)), glow: Some(2.1))),
+                Dropped(GlowingOrb(pos: (52.0, 7.0, 36.0), colour: Some((0.8, 0.3, 1.0)), glow: Some(2.1))),
+                Dropped(Crate(pos: (24.0, 5.5, 31.0), size: 0.6)),
+                Dropped(Crate(pos: (26.0, 5.5, 33.0), size: 0.6)),
                 Jack(pos: (30.0, 4.5, 32.0), length: 1.0, thickness: 0.2),
-                HeavyCrate(pos: (56.0, 4.0, 30.0), size: 0.8),
+                Dropped(HeavyCrate(pos: (56.0, 5.0, 30.0), size: 0.8)),
             ],
         ),
     ],

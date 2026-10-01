@@ -103,7 +103,7 @@ Level(
                 MetalCube(pos: (5.0, 0.16, 13.0), metal: Osmium, yaw: 182.0),
                 MetalCube(pos: (5.6, 0.16, 13.0), metal: Titanium, yaw: 176.0),
                 // Lithium is lighter than water: this one floats in the pool.
-                MetalCube(pos: (-10.0, -1.2, 10.0), metal: Lithium, yaw: 30.0),
+                MetalCube(pos: (-10.0, -1.49, 10.0), metal: Lithium, yaw: 30.0),
 
                 // A frozen slab, for the proportions a cube cannot reach.
                 IceBox(pos: (5.0, 0.5, 20.0), half_extents: (2.5, 0.5, 2.5)),
@@ -126,9 +126,9 @@ Level(
                 IceWall(base: (9.0, 0.0, 24.0), columns: 5, rows: 5, yaw: 90.0),
                 Igloo(pos: (12.0, 0.0, 29.0), yaw: 180.0),
 
-                Banana(pos: (2.0, 1.0, -1.0)),
-                Banana(pos: (3.2, 1.0, -1.6), ripeness: 0.05, curvature: 1.1),
-                Banana(pos: (0.8, 1.0, -2.2), ripeness: 0.95, length: 0.7),
+                Dropped(Banana(pos: (2.0, 1.0, -1.0))),
+                Dropped(Banana(pos: (3.2, 1.0, -1.6), ripeness: 0.05, curvature: 1.1)),
+                Dropped(Banana(pos: (1.2, 1.0, -2.8), ripeness: 0.95, length: 0.7)),
 
                 // BeachBall(pos: (3.0, 5.0, 2.0)),
                 // BeachBall(pos: (-2.0, 4.0, -1.0)),
@@ -155,11 +155,11 @@ Level(
                 //     base_width: 5,
                 // ),
 
-                Tetrahedron(pos: (30.0, 3.0, -26.0), size: 1.5),
-                Box(pos: (30.0, 3.0, -28.0), half_extents: (0.5, 0.5, 0.5), density: 200.0),
-                Octahedron(pos: (30.0, 3.0, -30.0), size: 1.5),
-                Dodecahedron(pos: (30.0, 3.0, -32.0), size: 0.8),
-                Icosahedron(pos: (30.0, 3.0, -34.0), size: 1.2),
+                Dropped(Tetrahedron(pos: (30.0, 3.0, -26.0), size: 1.5)),
+                Dropped(Box(pos: (30.0, 3.0, -28.0), half_extents: (0.5, 0.5, 0.5), density: 200.0)),
+                Dropped(Octahedron(pos: (30.0, 3.0, -30.0), size: 1.5)),
+                Dropped(Dodecahedron(pos: (30.0, 3.0, -32.0), size: 0.8)),
+                Dropped(Icosahedron(pos: (30.0, 3.0, -34.6), size: 1.2)),
 
                 HoneycombWall(
                     base: (6.0, 0.0, -6.0),
@@ -193,7 +193,7 @@ Level(
                 ),
 
                 // Box(pos: (3.0, 0.0, -6.0), half_extents: (10.0, 0.5, 10.0), density: 2000.0),
-                Tetrahedron(pos: (3.0, 1.0, -6.0), size: 1.5),
+                Dropped(Tetrahedron(pos: (3.0, 1.0, -6.0), size: 1.5)),
 
                 VoussoirArch(
                     base: (15.0, 0.0, 8.0),
@@ -353,6 +353,7 @@ Level(
             // walls can be thinner than the shapes. Each row is a physics bench
             // test for each shape: src/physics/bench_harness/tests/buried.rs.
             name: "contact_lab",
+            unsettled: true,
 
             terrain: Terrain(
                 voxel_size: 0.125,

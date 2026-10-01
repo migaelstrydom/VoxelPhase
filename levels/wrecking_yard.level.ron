@@ -101,9 +101,9 @@ Level(
 
                 // The pit gem, lit so you can see the bottom from the rim.
                 Gem(pos: (40.0, -1.3, 88.0), colour: Some((1.0, 0.5, 0.8))),
-                GlowingOrb(pos: (40.0, -1.5, 90.5), colour: Some((1.0, 0.5, 0.8)), glow: Some(2.4)),
-                GlowingOrb(pos: (50.0, -1.4, 88.0), colour: Some((0.4, 0.7, 1.0)), glow: Some(2.0)),
-                GlowingOrb(pos: (58.0, -1.4, 88.0), colour: Some((0.4, 0.7, 1.0)), glow: Some(2.0)),
+                Dropped(GlowingOrb(pos: (40.0, -1.0, 90.0), colour: Some((1.0, 0.5, 0.8)), glow: Some(2.4))),
+                Dropped(GlowingOrb(pos: (50.0, -1.4, 88.0), colour: Some((0.4, 0.7, 1.0)), glow: Some(2.0))),
+                Dropped(GlowingOrb(pos: (58.0, -1.4, 88.0), colour: Some((0.4, 0.7, 1.0)), glow: Some(2.0))),
 
                 // Toys. None of them is the route; all of them are in the way.
                 Jenga(base: (44.0, 4.0, 60.0)),
@@ -137,8 +137,8 @@ Level(
                 Pendulum(pos: (96.0, 84.0)),
                 PlayWheel(pos: (78.0, 100.0)),
                 Trampoline(pos: (74.0, 4.0, 34.0)),
-                HeavyCrate(pos: (80.0, 4.5, 60.0), size: 0.8),
-                HeavyCrate(pos: (81.4, 4.5, 61.6), size: 0.8),
+                Dropped(HeavyCrate(pos: (80.0, 5.5, 60.0), size: 0.8)),
+                Dropped(HeavyCrate(pos: (81.8, 5.5, 61.8), size: 0.8)),
                 HeartCritter(pos: (94.0, 70.0)),
 
                 // ── The finish ─────────────────────────────────────────────

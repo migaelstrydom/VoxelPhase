@@ -113,12 +113,17 @@ pub fn check_player_spawn(level: &Level, terrain: &TerrainWorld, report: &mut Re
 /// Check every authored object's placement.
 ///
 /// Terrain-anchored objects are skipped: their height is resolved from the
-/// surface at spawn time, so it cannot be authored wrongly.
+/// surface at spawn time, so it cannot be authored wrongly. A dropped object's
+/// height is derived too, and what it lands on may be another object, which
+/// the terrain cannot speak for: only where its fall starts is checked here,
+/// and the rest trial judges where it lands.
 pub fn check_objects(level: &Level, terrain: &TerrainWorld, report: &mut Report) {
     for (index, (segment, object)) in level.objects().enumerate() {
         let info = object.describe();
-        let ObjectPlacement::Free(pos) = info.placement else {
-            continue;
+        let (pos, dropped) = match info.placement {
+            ObjectPlacement::Free(pos) => (pos, false),
+            ObjectPlacement::Dropped(pos) => (pos, true),
+            ObjectPlacement::TerrainAnchored { .. } => continue,
         };
         let kind = info.kind;
         let at = format!(
@@ -132,6 +137,9 @@ pub fn check_objects(level: &Level, terrain: &TerrainWorld, report: &mut Report)
 
         if is_buried(terrain, pos) {
             report.error("objects", format!("{at} is inside solid terrain"));
+            continue;
+        }
+        if dropped {
             continue;
         }
 

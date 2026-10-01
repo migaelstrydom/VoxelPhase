@@ -117,6 +117,12 @@ pub struct SegmentDef {
     /// Objects authored in this segment's local frame.
     #[serde(default)]
     pub objects: Vec<LevelObject>,
+    /// Whether this segment's objects are authored out of rest on purpose: a
+    /// lab whose bodies start pressed into walls to test that contacts push
+    /// them back out. `level_check` still simulates them but does not report
+    /// them as not at rest.
+    #[serde(default)]
+    pub unsettled: bool,
 }
 
 /// A named local frame within a segment.
@@ -1387,6 +1393,23 @@ pub enum LevelObject {
         #[serde(default = "TempleDef::default_side_columns")]
         side_columns: u32,
     },
+    /// Any free object, dropped straight down from where it is authored until
+    /// it touches something: the terrain, or an object placed before it.
+    ///
+    /// ```ron
+    /// Dropped(Octahedron(pos: (30.0, 3.0, -30.0), size: 1.5)),
+    /// ```
+    ///
+    /// The authored height is where the fall starts, which is how an author
+    /// picks the surface: from inside a temple it lands on the floor, from
+    /// above it on the roof. The whole object falls as one and stops where
+    /// its real colliders first touch; an object of one body is first turned
+    /// the least it takes onto a face it can rest on. A drop into water falls
+    /// to the bed and, if the water holds it up, rises to float at its draft.
+    /// Dropped objects are placed after every other object, in file order, so
+    /// a drop lands on the structures around it and on the drops before it.
+    /// See `level::drop`.
+    Dropped(Box<LevelObject>),
 }
 
 /// How much ground a stack covers, taken from its widest item.
@@ -1424,13 +1447,16 @@ pub enum ObjectPlacement {
     /// Authored in (x, z) only; the spawner resolves the height from the
     /// terrain surface.
     TerrainAnchored { x: f32, z: f32 },
+    /// Authored at the point its fall starts from; the spawner drops it onto
+    /// whatever is below, so its height is derived rather than authored.
+    Dropped(Point3<f32>),
 }
 
 impl ObjectPlacement {
     /// Horizontal position, which both forms have.
     pub fn xz(&self) -> (f32, f32) {
         match self {
-            ObjectPlacement::Free(p) => (p.x, p.z),
+            ObjectPlacement::Free(p) | ObjectPlacement::Dropped(p) => (p.x, p.z),
             ObjectPlacement::TerrainAnchored { x, z } => (*x, *z),
         }
     }
@@ -1532,6 +1558,16 @@ impl LevelObject {
             LevelObject::PlankBridge { pos, .. } => ("PlankBridge", point(pos)),
             LevelObject::Trilithon { pos, .. } => ("Trilithon", point(pos)),
             LevelObject::Temple { pos, .. } => ("Temple", point(pos)),
+            LevelObject::Dropped(inner) => {
+                let info = inner.describe();
+                let placement = match info.placement {
+                    Free(p) => ObjectPlacement::Dropped(p),
+                    // The loader rejects a drop around anything but a free
+                    // object, so this is only ever seen before validation.
+                    other => other,
+                };
+                (info.kind, placement)
+            }
         };
 
         ObjectInfo {
@@ -1790,6 +1826,7 @@ impl LevelObject {
             // is overhead and touches nothing.
             LevelObject::Pendulum { .. } => Point,
             LevelObject::Seesaw { .. } => Point,
+            LevelObject::Dropped(inner) => inner.footprint(),
         }
     }
 
@@ -1806,6 +1843,7 @@ impl LevelObject {
             // A fixed pane hangs in its frame; a glass floor over a drop is
             // the whole reason to have one.
             LevelObject::GlassSheet { fixed: true, .. } => Support::Spanning,
+            LevelObject::Dropped(inner) => inner.support(),
             _ => Support::Bedded,
         }
     }
@@ -1894,6 +1932,7 @@ impl LevelObject {
             | LevelObject::MovingPlatform { .. }
             | LevelObject::VoussoirArch { .. }
             | LevelObject::Temple { .. } => Fixed,
+            LevelObject::Dropped(inner) => inner.orientability(),
         }
     }
 
@@ -2041,7 +2080,14 @@ impl LevelObject {
                 *yaw += turn;
             }
             LevelObject::Temple { pos, .. } => p3(pos),
+            LevelObject::Dropped(inner) => inner.place_in(frame),
         }
+    }
+
+    /// Whether the spawner drops this object onto what is below it rather
+    /// than placing it where it is authored.
+    pub fn is_dropped(&self) -> bool {
+        matches!(self, LevelObject::Dropped(_))
     }
 
     /// Convert this level object into a boxed [`Spawnable`].
@@ -2741,6 +2787,7 @@ impl LevelObject {
                 front_columns: *front_columns,
                 side_columns: *side_columns,
             }),
+            LevelObject::Dropped(inner) => inner.to_spawnable(),
         }
     }
 }

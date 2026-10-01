@@ -1,6 +1,7 @@
-//! Level files: data model, loading, segment placement, object footprints, and spawning a level into the world.
+//! Level files: data model, loading, segment placement, object footprints, and spawning a level into the world (dropping objects onto what is below them).
 
 pub mod data;
+pub mod drop;
 pub mod footprint;
 pub mod loader;
 pub mod placement;
@@ -12,5 +13,5 @@ pub use loader::{load_level, LevelError};
 pub use placement::{resolve_placements, world_anchor, PlacementError};
 pub use spawner::{
     build_segments, create_level_materials, create_level_terrain, create_level_water,
-    spawn_level_objects, spawn_objects,
+    spawn_level_objects, spawn_object, spawn_objects, spawn_order, SpawnEntry, SpawnedObject,
 };

@@ -16,7 +16,7 @@ use std::path::Path;
 
 use nalgebra::Point3;
 
-use super::data::Level;
+use super::data::{Level, LevelObject, ObjectPlacement};
 use super::placement::{resolve_placements, PlacementError};
 
 /// Errors that can occur when loading a level file.
@@ -144,6 +144,28 @@ fn validate(level: &Level) -> Result<(), LevelError> {
     Ok(())
 }
 
+/// A drop moves a free object down onto what is below it. Around anything
+/// else it has nothing to act on: a terrain-anchored object already takes its
+/// height from the ground, and a drop around a drop would only fall twice.
+fn validate_drop(segment: &str, object: &LevelObject) -> Result<(), LevelError> {
+    let LevelObject::Dropped(inner) = object else {
+        return Ok(());
+    };
+    let kind = inner.describe().kind;
+    if inner.is_dropped() {
+        return Err(LevelError::Validation(format!(
+            "segment '{segment}': Dropped(Dropped(..)) around a {kind}; drop it once"
+        )));
+    }
+    match inner.describe().placement {
+        ObjectPlacement::Free(_) => Ok(()),
+        _ => Err(LevelError::Validation(format!(
+            "segment '{segment}': a {kind} takes its height from the terrain and cannot be \
+             Dropped"
+        ))),
+    }
+}
+
 fn validate_segment(segment: &super::data::SegmentDef) -> Result<(), LevelError> {
     let name = &segment.name;
     let voxel_size = segment.terrain.voxel_size;
@@ -175,6 +197,10 @@ fn validate_segment(segment: &super::data::SegmentDef) -> Result<(), LevelError>
              voxel_size {}; limit is 4096",
             max_voxels, voxel_size
         )));
+    }
+
+    for object in &segment.objects {
+        validate_drop(name, object)?;
     }
 
     for layer in &segment.terrain.material_layers {
@@ -224,6 +250,58 @@ mod tests {
 
     fn parse(ron: &str) -> Level {
         ron::from_str(ron).expect("Failed to parse RON")
+    }
+
+    const FLAT: &str = r#"Terrain(
+        voxel_size: 1.0,
+        bounds: (min: (-32.0, -32.0, -32.0), max: (32.0, 32.0, 32.0)),
+        base_height: 0.0,
+        features: [],
+    )"#;
+
+    /// A drop is moved through the segment's frame with what it wraps, and
+    /// keeps the authored point as where its fall starts.
+    #[test]
+    fn a_dropped_free_object_parses_as_a_drop() {
+        let level = parse_level(&one_segment(
+            FLAT,
+            "(0.0, 2.0, 0.0)",
+            "Dropped(Octahedron(pos: (1.0, 3.0, 2.0), size: 1.5))",
+        ))
+        .expect("a dropped free object is valid");
+
+        let (_, object) = level.objects().next().unwrap();
+        assert!(object.is_dropped());
+        let info = object.describe();
+        assert_eq!(info.kind, "Octahedron");
+        assert_eq!(
+            info.placement,
+            ObjectPlacement::Dropped(Point3::new(1.0, 3.0, 2.0))
+        );
+    }
+
+    #[test]
+    fn a_terrain_anchored_object_cannot_be_dropped() {
+        let error = parse_level(&one_segment(
+            FLAT,
+            "(0.0, 2.0, 0.0)",
+            "Dropped(Rock(pos: (1.0, 2.0)))",
+        ))
+        .err()
+        .expect("a rock takes its height from the terrain");
+        assert!(error.to_string().contains("cannot be"), "{error}");
+    }
+
+    #[test]
+    fn a_drop_cannot_wrap_a_drop() {
+        let error = parse_level(&one_segment(
+            FLAT,
+            "(0.0, 2.0, 0.0)",
+            "Dropped(Dropped(BeachBall(pos: (1.0, 3.0, 0.0))))",
+        ))
+        .err()
+        .expect("a drop of a drop is rejected");
+        assert!(error.to_string().contains("drop it once"), "{error}");
     }
 
     #[test]

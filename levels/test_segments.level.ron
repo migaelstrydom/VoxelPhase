@@ -91,9 +91,9 @@ Level(
             objects: [
                 Menhir(pos: (20.0, 70.0)),
                 FencePost(pos: (24.0, 70.0)),
-                Crate(pos: (62.0, 1.0, 48.0), size: 0.5),
-                Crate(pos: (64.0, 1.0, 49.0), size: 0.5),
-                BeachBall(pos: (34.0, 2.0, 34.0)),
+                Dropped(Crate(pos: (62.0, 2.0, 48.0), size: 0.5)),
+                Dropped(Crate(pos: (64.0, 2.0, 49.0), size: 0.5)),
+                Dropped(BeachBall(pos: (34.0, 2.0, 34.0))),
             ],
         ),
 
@@ -153,8 +153,8 @@ Level(
             ],
 
             objects: [
-                Crate(pos: (32.0, 7.0, 6.0), size: 0.5),
-                Jack(pos: (48.0, 7.0, 5.0), length: 1.0, thickness: 0.2),
+                Dropped(Crate(pos: (32.0, 7.0, 6.0), size: 0.5)),
+                Dropped(Jack(pos: (48.0, 7.0, 5.0), length: 1.0, thickness: 0.2)),
             ],
         ),
 
@@ -213,9 +213,9 @@ Level(
             ],
 
             objects: [
-                Crate(pos: (18.0, 5.0, 24.0), size: 0.5),
-                Crate(pos: (31.0, 7.0, 24.0), size: 0.5),
-                BeachBall(pos: (43.0, 9.5, 24.0)),
+                Dropped(Crate(pos: (18.0, 5.0, 24.0), size: 0.5)),
+                Dropped(Crate(pos: (31.0, 7.0, 24.0), size: 0.5)),
+                Dropped(BeachBall(pos: (43.0, 9.5, 24.0))),
             ],
         ),
 
@@ -272,7 +272,7 @@ Level(
             ],
 
             objects: [
-                Tower(base: (26.0, 3.0, 24.0), box_half_extents: (0.4, 0.4, 0.4), count: 5),
+                Dropped(Tower(base: (26.0, 3.0, 24.0), box_half_extents: (0.4, 0.4, 0.4), count: 5)),
                 GlowingOrb(pos: (22.0, 4.0, 20.0), colour: Some((1.0, 0.45, 0.15)), glow: Some(2.18)),
                 Crate(pos: (30.0, 4.0, 28.0), size: 0.5),
                 Dolos(pos: (8.0, 4.17, 40.0)),

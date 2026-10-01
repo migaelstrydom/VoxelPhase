@@ -1,15 +1,18 @@
 //! Spawns a level's terrain and objects into the ECS world.
 
 use nalgebra::Point3;
-use specs::World;
+use specs::{World, WorldExt};
 
 use crate::app::spawnables::MaterialCtx;
 use crate::core::error::EngineResult;
-use crate::level::data::Level;
+use crate::level::data::{Level, LevelObject};
+use crate::level::drop::{body_handles, drop_onto_below, DropOutcome};
 use crate::level::placement::{local_frame, PlacementError};
+use crate::physics::RigidBodyHandle;
 use crate::rendering::material::{MaterialId, MaterialManagerBuilder};
 use crate::rendering::pattern::TextureCache;
 use crate::resources::textures::TextureManager;
+use crate::systems::PhysicsResource;
 use crate::terrain::{generate_terrain, Anchor, ChunkGrid, Segment, TerrainWorld};
 use crate::water::WaterWorld;
 
@@ -120,13 +123,12 @@ pub fn spawn_level_objects(
     level: &Level,
     materials: &LevelMaterials,
 ) -> specs::Entity {
-    let (px, py, pz) = level.player_spawn;
-    let player_entity = crate::app::spawners::spawn_player(world, Point3::new(px, py, pz));
-
     world.insert(level.debris);
     spawn_objects(world, level, materials);
 
-    player_entity
+    // After the objects, so a dropped object cannot land on the player.
+    let (px, py, pz) = level.player_spawn;
+    crate::app::spawners::spawn_player(world, Point3::new(px, py, pz))
 }
 
 /// Spawn the level's objects and nothing else.
@@ -138,9 +140,86 @@ pub fn spawn_level_objects(
 /// Terrain-anchored objects read `TerrainWorld` out of the world as they spawn,
 /// so it has to be in place before this is called.
 pub fn spawn_objects(world: &mut World, level: &Level, materials: &LevelMaterials) {
-    for ((_, obj), mats) in level.objects().zip(&materials.per_object) {
-        obj.to_spawnable().spawn(world, mats);
+    for entry in spawn_order(level) {
+        let mats = &materials.per_object[entry.ordinal];
+        let spawned = spawn_object(world, entry.object, mats);
+        if let Some(problem) = spawned.drop.as_ref().and_then(DropOutcome::problem) {
+            log::warn!(
+                "{} #{} in '{}' {problem}",
+                entry.object.describe().kind,
+                entry.ordinal + 1,
+                level.segments[entry.segment].name
+            );
+        }
     }
+}
+
+/// One level object, where it falls in the order objects are spawned.
+pub struct SpawnEntry<'a> {
+    /// Index in file order across the whole level, the index
+    /// [`LevelMaterials::per_object`] and every report use.
+    pub ordinal: usize,
+    /// Index of the segment the object is authored in.
+    pub segment: usize,
+    pub object: &'a LevelObject,
+}
+
+/// The level's objects in the order they must be spawned: every placed object
+/// first, then every dropped one, each group in file order.
+///
+/// A drop lands on what is already in the world, so whatever it is meant to
+/// land on has to be there first. Putting placed objects first means an author
+/// never has to order a temple before the dice dropped into it; drops onto
+/// drops follow the file.
+pub fn spawn_order(level: &Level) -> impl Iterator<Item = SpawnEntry<'_>> {
+    let entries = || {
+        level
+            .objects()
+            .enumerate()
+            .map(|(ordinal, (segment, object))| SpawnEntry {
+                ordinal,
+                segment,
+                object,
+            })
+    };
+    entries()
+        .filter(|e| !e.object.is_dropped())
+        .chain(entries().filter(|e| e.object.is_dropped()))
+}
+
+/// What spawning one level object put into the world.
+pub struct SpawnedObject {
+    /// Every body the spawn created, of any kind.
+    pub bodies: Vec<RigidBodyHandle>,
+    /// How the drop went, for a dropped object.
+    pub drop: Option<DropOutcome>,
+}
+
+/// Spawn one level object and, if it is dropped, drop it onto what is below.
+///
+/// The bodies are found by what the spawn added to the physics world, not by
+/// the entities it returned, so every body counts whichever entity owns it.
+pub fn spawn_object(
+    world: &mut World,
+    object: &LevelObject,
+    materials: &[MaterialId],
+) -> SpawnedObject {
+    let before = body_handles(&world.read_resource::<PhysicsResource>().world);
+    object.to_spawnable().spawn(world, materials);
+    let bodies: Vec<_> = {
+        let physics = &world.read_resource::<PhysicsResource>().world;
+        let mut added: Vec<_> = body_handles(physics)
+            .into_iter()
+            .filter(|h| !before.contains(h))
+            .collect();
+        // Arena order: the order they were created in, since nothing is
+        // removed while a level loads. The first is the object's own.
+        added.sort_by_key(|h| h.0.into_raw_parts());
+        added
+    };
+
+    let drop = object.is_dropped().then(|| drop_onto_below(world, &bodies));
+    SpawnedObject { bodies, drop }
 }
 
 /// A level's water, placed over its terrain, if the level has any.

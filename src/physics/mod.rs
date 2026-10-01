@@ -55,11 +55,13 @@ mod math;
 mod narrowphase;
 mod pipeline;
 pub mod profile;
+mod rest_pose;
 mod sleep;
 pub mod solver;
 mod static_geometry;
 mod static_surface;
 pub mod stepping;
+mod sweep;
 mod world;
 
 pub use body::{BodyType, RigidBody, RigidBodyDesc};
@@ -79,6 +81,7 @@ pub use handle::{ColliderHandle, RigidBodyHandle};
 pub use impact::{Impact, ImpactLedger};
 pub use impulses::{PhysicsImpulse, PhysicsImpulseQueue};
 pub use profile::{FrameProfile, PhysicsStage};
+pub use rest_pose::resting_turn;
 pub use solver::{
     ConstraintSolver, IdentityConditioner, ManifoldConditioner, ManifoldConditions, PgsNgsConfig,
     PgsNgsSolver, ShockPropagationConditioner, ShockPropagationConfig,
@@ -86,4 +89,5 @@ pub use solver::{
 pub use static_geometry::StaticGeometry;
 pub use static_surface::{StaticSurface, SurfaceResponse};
 pub use stepping::{FixedTimestep, SequentialStepper, Stepper};
+pub use sweep::{BodySweep, SweepHit, SweepObstacle};
 pub use world::{BodyProbeHit, PhysicsConfig, PhysicsWorld};

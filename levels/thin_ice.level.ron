@@ -86,21 +86,21 @@ Level(
                 // ── The floe crossing ──────────────────────────────────────
                 // Authored just above the surface; buoyancy settles them. Two
                 // metre gaps between decks, the same as the fixed stones.
-                IceBox(pos: (34.5, 5.3, 47.0), half_extents: (1.5, 0.6, 1.5), yaw: 8.0),
-                IceBox(pos: (38.0, 5.3, 49.5), half_extents: (1.5, 0.6, 1.5), yaw: -12.0),
-                IceBox(pos: (48.0, 5.3, 46.5), half_extents: (1.5, 0.6, 1.5), yaw: 20.0),
-                IceBox(pos: (52.0, 5.3, 49.5), half_extents: (1.5, 0.6, 1.5), yaw: -5.0),
+                Dropped(IceBox(pos: (34.5, 5.3, 47.0), half_extents: (1.5, 0.6, 1.5), yaw: 8.0)),
+                Dropped(IceBox(pos: (38.0, 5.3, 49.5), half_extents: (1.5, 0.6, 1.5), yaw: -12.0)),
+                Dropped(IceBox(pos: (48.0, 5.3, 46.5), half_extents: (1.5, 0.6, 1.5), yaw: 20.0)),
+                Dropped(IceBox(pos: (52.0, 5.3, 49.5), half_extents: (1.5, 0.6, 1.5), yaw: -5.0)),
 
                 // The off-route pair, north-west, toward the gem rock.
-                IceBox(pos: (36.0, 5.3, 41.0), half_extents: (1.5, 0.6, 1.5), yaw: 30.0),
-                IceBox(pos: (40.0, 5.3, 37.5), half_extents: (1.5, 0.6, 1.5), yaw: -25.0),
+                Dropped(IceBox(pos: (36.0, 5.3, 41.0), half_extents: (1.5, 0.6, 1.5), yaw: 30.0)),
+                Dropped(IceBox(pos: (40.0, 5.3, 37.5), half_extents: (1.5, 0.6, 1.5), yaw: -25.0)),
                 Gem(pos: (44.0, 6.4, 34.0), colour: Some((0.5, 0.9, 1.0))),
 
                 // Something to watch sink and not sink: a beach ball floats
                 // high, a crate floats low, a heavy crate does not float at
                 // all. Kick them in.
-                BeachBall(pos: (31.0, 6.0, 52.0)),
-                Crate(pos: (30.0, 6.0, 44.0), size: 0.5),
+                Dropped(BeachBall(pos: (31.0, 6.0, 52.0))),
+                Dropped(Crate(pos: (30.0, 6.0, 44.0), size: 0.5)),
 
                 // ── The island ─────────────────────────────────────────────
                 // The village. Doorways face the beach you arrive on.
@@ -142,7 +142,7 @@ Level(
                 Peeper(pos: (120.0, 58.0)),
                 Gem(pos: (124.0, 14.7, 34.0), colour: Some((1.0, 0.5, 0.8))),
 
-                Trilithon(pos: (121.0, 14.0, 48.0), yaw: 90.0),
+                Dropped(Trilithon(pos: (121.0, 15.0, 48.0), yaw: 90.0)),
                 Goal(pos: (121.0, 14.0, 48.0), required_gems: 3),
             ],
         ),
