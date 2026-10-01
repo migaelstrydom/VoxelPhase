@@ -326,6 +326,9 @@ impl Spawnable for HeavyCrateDef {
 // PlankDef
 // ---------------------------------------------------------------------------
 
+/// Half a plank's thickness, in metres.
+pub const PLANK_HALF_THICKNESS: f32 = 0.3;
+
 #[derive(Deserialize)]
 pub struct PlankDef {
     pub pos: (f32, f32, f32),
@@ -354,7 +357,7 @@ impl Spawnable for PlankDef {
     }
 
     fn spawn(&self, world: &mut World, materials: &[MaterialId]) -> Vec<Entity> {
-        let he = Vector3::new(self.length * 0.5, 0.3, self.width * 0.5);
+        let he = Vector3::new(self.length * 0.5, PLANK_HALF_THICKNESS, self.width * 0.5);
         vec![spawn_box_entity(
             world,
             Point3::new(self.pos.0, self.pos.1, self.pos.2),

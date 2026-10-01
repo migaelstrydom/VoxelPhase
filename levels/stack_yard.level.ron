@@ -1,0 +1,257 @@
+// Stack Yard — a test level for stacking physics, laid out to play-test
+// stacks and arches.
+//
+// West, a dead-flat yard: towers of equal crates, heavy blocks on light
+// columns at 10:1 and 100:1, slabs on columns, jenga, a pyramid, a wall,
+// arches, trilithons, a temple, dominoes, a card stack and ice.
+//
+// East, rolling ground. Every structure there stands on a flat pad of its
+// own, set into or above the bumps, because every body starts asleep exactly
+// as authored and a stack on a slope would hang tilted until touched. What
+// it tests is what happens next: knocks and collapses that land on the
+// bumps, and one slab carried by columns standing on ground a metre apart.
+//
+//        x 8 ─────────── flat yard ─────────── 64 │ 68 ──── rolling field ──── 124
+//   z 16   towers · heavy-on-light · slabs        │ tower · 100:1 · jenga · stepped slab
+//   z 34   jenga · pyramid · wall                 │ arch · trilithon · pyramid
+//   z 54   arches · trilithons                    │ wall · gold on tower · tall jenga
+//   z 75   ball pit · temple                      │
+//   z 104  dominoes · card stack · ice            │ arch over a crater · crate block in a crater
+//
+// Crates are 1 m cubes of 50 kg. The 100:1 blocks are 1 m cubes at
+// 5000 kg/m³, the ratio the mass-ratio sweep measures.
+Level(
+    name: "Stack Yard",
+
+    segments: [
+        (
+            name: "yard",
+
+            terrain: Terrain(
+                voxel_size: 0.5,
+                bounds: (min: (0.0, -32.0, 0.0), max: (128.0, 32.0, 128.0)),
+                base_height: 4.0,
+                material_layers: [
+                    (depth: 1.0,   material: Grass),
+                    (depth: 4.0,   material: Dirt),
+                    (depth: 999.0, material: Rock),
+                ],
+
+                features: [
+                    // ── The rolling field: everywhere, then flattened in the west. ──
+                    TerrainRoughness(frequency: 0.12, amplitude: 1.1, octaves: 3, seed: 61),
+                    Hill(center: (118.0, 78.0), radius: 7.0, height: 1.8),
+
+                    // ── The jumble crater: gentle walls, a flat floor 3.5 m down. ──
+                    Crater(center: (108.0, 100.0), radius: 10.0, depth: 3.5),
+                    Plateau(min: (105.0, 97.0), max: (111.0, 103.0), height: 0.5),
+
+                    // ── The arch crater. ────────────────────────────────────
+                    // A flat rim at 4.0 and a round pit. Along the arch's line a
+                    // ledge at 0.0 takes the abutments, and under the arch the
+                    // pit goes on down. The rim stands level with the ring's
+                    // flanks where they lean at about 50°: step across the gap
+                    // from the rim onto the ring and walk over.
+                    Plateau(min: (74.0, 94.0), max: (94.0, 114.0), height: 4.0),
+                    Crater(center: (84.0, 104.0), radius: 6.0, depth: 6.0),
+                    Plateau(min: (78.8, 102.0), max: (89.2, 106.0), height: 0.0),
+                    Plateau(min: (81.0, 102.0), max: (87.0, 106.0), height: -2.0),
+
+                    // ── The flat yard. ──────────────────────────────────────
+                    Plateau(min: (4.0, 4.0), max: (66.0, 124.0), height: 4.0),
+
+                    // ── The ball pit, in the flat yard: 1.5 m deep. ──────────
+                    Plateau(min: (48.0, 70.0), max: (58.0, 80.0), height: 2.5),
+
+                    // ── Pads in the field, one per structure. ───────────────
+                    // Absolute heights: a pad below the bumps is a pit, one
+                    // above them a plinth.
+                    Plateau(min: (73.0, 13.0), max: (79.0, 19.0), height: 4.0),
+                    Plateau(min: (81.0, 13.0), max: (87.0, 19.0), height: 4.4),
+                    Plateau(min: (91.0, 13.0), max: (97.0, 19.0), height: 3.7),
+                    // The stepped pair under one slab: a metre apart.
+                    Plateau(min: (101.0, 13.0), max: (106.0, 19.0), height: 4.0),
+                    Plateau(min: (106.0, 13.0), max: (111.0, 19.0), height: 5.0),
+
+                    Plateau(min: (75.0, 31.0), max: (85.0, 37.0), height: 4.2),
+                    Plateau(min: (93.0, 31.0), max: (99.0, 37.0), height: 3.8),
+                    Plateau(min: (103.0, 29.0), max: (115.0, 41.0), height: 4.3),
+
+                    Plateau(min: (74.0, 50.0), max: (90.0, 58.0), height: 4.0),
+                    Plateau(min: (97.0, 51.0), max: (103.0, 57.0), height: 4.5),
+                    Plateau(min: (109.0, 51.0), max: (115.0, 57.0), height: 4.0),
+                ],
+            ),
+
+            objects: [
+                // ── Flat yard, z 16: columns ───────────────────────────────
+                // Equal crates, 4, 8 and 12 high.
+                Tower(base: (10.0, 4.0, 16.0), box_half_extents: (0.5, 0.5, 0.5), count: 4),
+                Tower(base: (13.0, 4.0, 16.0), box_half_extents: (0.5, 0.5, 0.5), count: 8),
+                Tower(base: (16.0, 4.0, 16.0), box_half_extents: (0.5, 0.5, 0.5), count: 12),
+
+                // Heavy on light: 100:1 on 3, 100:1 on 8, 10:1 on 8.
+                Tower(base: (21.0, 4.0, 16.0), box_half_extents: (0.5, 0.5, 0.5), count: 3),
+                Box(pos: (21.0, 7.5, 16.0), half_extents: (0.5, 0.5, 0.5), style: Metal, density: 5000.0),
+                Tower(base: (24.0, 4.0, 16.0), box_half_extents: (0.5, 0.5, 0.5), count: 8),
+                Box(pos: (24.0, 12.5, 16.0), half_extents: (0.5, 0.5, 0.5), style: Metal, density: 5000.0),
+                Tower(base: (27.0, 4.0, 16.0), box_half_extents: (0.5, 0.5, 0.5), count: 8),
+                Box(pos: (27.0, 12.5, 16.0), half_extents: (0.5, 0.5, 0.5), style: Stone, density: 500.0),
+
+                // Gold and tungsten on crate columns: about 160:1 and 200:1.
+                Tower(base: (30.0, 4.0, 16.0), box_half_extents: (0.5, 0.5, 0.5), count: 4),
+                MetalCube(pos: (30.0, 8.4, 16.0), metal: Gold, size: 0.8),
+                Tower(base: (33.0, 4.0, 16.0), box_half_extents: (0.5, 0.5, 0.5), count: 6),
+                MetalCube(pos: (33.0, 10.4, 16.0), metal: Tungsten, size: 0.8),
+
+                // Slabs on two columns: 2.4 t (about 50:1) and 12 t (240:1).
+                Tower(base: (38.0, 4.0, 16.0), box_half_extents: (0.5, 0.5, 0.5), count: 4),
+                Tower(base: (41.0, 4.0, 16.0), box_half_extents: (0.5, 0.5, 0.5), count: 4),
+                Box(pos: (39.5, 8.25, 16.0), half_extents: (2.0, 0.25, 0.6), style: Stone, density: 1000.0),
+                Tower(base: (46.0, 4.0, 16.0), box_half_extents: (0.5, 0.5, 0.5), count: 4),
+                Tower(base: (49.0, 4.0, 16.0), box_half_extents: (0.5, 0.5, 0.5), count: 4),
+                Box(pos: (47.5, 8.25, 16.0), half_extents: (2.0, 0.25, 0.6), style: Metal, density: 5000.0),
+
+                // Mixed: crates, a plank, a heavy crate, a light crate on top.
+                Stack(base: (56.0, 4.0, 16.0), items: [
+                    Crate(size: 0.5),
+                    Crate(size: 0.5),
+                    Plank(length: 3.0, width: 1.0),
+                    HeavyCrate(size: 0.5),
+                    Crate(size: 0.4),
+                    Crate(size: 0.3),
+                ]),
+
+                // ── Flat yard, z 34: blocks ────────────────────────────────
+                Jenga(base: (10.0, 4.0, 34.0)),
+                Jenga(base: (16.0, 4.0, 34.0), layers: 30),
+                Pyramid(base: (30.0, 4.0, 34.0), block_half_extents: (1.0, 0.5, 1.0), base_width: 5),
+                BoxWall(
+                    base: (50.0, 4.0, 34.0),
+                    box_half_extents: (1.0, 0.5, 0.5),
+                    columns: 6,
+                    rows: 5,
+                    stagger: true,
+                ),
+
+                // ── Flat yard, z 54: arches ────────────────────────────────
+                VoussoirArch(base: (12.0, 4.0, 54.0)),
+                VoussoirArch(base: (26.0, 4.0, 54.0), inner_radius: 3.5, num_voussoirs: 15),
+                Trilithon(pos: (40.0, 4.0, 54.0)),
+                Trilithon(pos: (46.0, 4.0, 54.0), gap: 2.0, upright_half_height: 1.8),
+                Trilithon(pos: (54.0, 4.0, 54.0), yaw: 90.0),
+
+                // ── Flat yard, z 80: the temple ────────────────────────────
+                Temple(pos: (30.0, 4.0, 80.0)),
+
+                // ── Flat yard, z 75: the ball pit ──────────────────────────
+                // Two layers of beach balls, the second in the first's hollows.
+                BeachBall(pos: (49.5, 3.0, 71.5)), BeachBall(pos: (49.5, 3.0, 72.5)), BeachBall(pos: (49.5, 3.0, 73.5)), BeachBall(pos: (49.5, 3.0, 74.5)),
+                BeachBall(pos: (49.5, 3.0, 75.5)), BeachBall(pos: (49.5, 3.0, 76.5)), BeachBall(pos: (49.5, 3.0, 77.5)), BeachBall(pos: (49.5, 3.0, 78.5)),
+                BeachBall(pos: (50.5, 3.0, 71.5)), BeachBall(pos: (50.5, 3.0, 72.5)), BeachBall(pos: (50.5, 3.0, 73.5)), BeachBall(pos: (50.5, 3.0, 74.5)),
+                BeachBall(pos: (50.5, 3.0, 75.5)), BeachBall(pos: (50.5, 3.0, 76.5)), BeachBall(pos: (50.5, 3.0, 77.5)), BeachBall(pos: (50.5, 3.0, 78.5)),
+                BeachBall(pos: (51.5, 3.0, 71.5)), BeachBall(pos: (51.5, 3.0, 72.5)), BeachBall(pos: (51.5, 3.0, 73.5)), BeachBall(pos: (51.5, 3.0, 74.5)),
+                BeachBall(pos: (51.5, 3.0, 75.5)), BeachBall(pos: (51.5, 3.0, 76.5)), BeachBall(pos: (51.5, 3.0, 77.5)), BeachBall(pos: (51.5, 3.0, 78.5)),
+                BeachBall(pos: (52.5, 3.0, 71.5)), BeachBall(pos: (52.5, 3.0, 72.5)), BeachBall(pos: (52.5, 3.0, 73.5)), BeachBall(pos: (52.5, 3.0, 74.5)),
+                BeachBall(pos: (52.5, 3.0, 75.5)), BeachBall(pos: (52.5, 3.0, 76.5)), BeachBall(pos: (52.5, 3.0, 77.5)), BeachBall(pos: (52.5, 3.0, 78.5)),
+                BeachBall(pos: (53.5, 3.0, 71.5)), BeachBall(pos: (53.5, 3.0, 72.5)), BeachBall(pos: (53.5, 3.0, 73.5)), BeachBall(pos: (53.5, 3.0, 74.5)),
+                BeachBall(pos: (53.5, 3.0, 75.5)), BeachBall(pos: (53.5, 3.0, 76.5)), BeachBall(pos: (53.5, 3.0, 77.5)), BeachBall(pos: (53.5, 3.0, 78.5)),
+                BeachBall(pos: (54.5, 3.0, 71.5)), BeachBall(pos: (54.5, 3.0, 72.5)), BeachBall(pos: (54.5, 3.0, 73.5)), BeachBall(pos: (54.5, 3.0, 74.5)),
+                BeachBall(pos: (54.5, 3.0, 75.5)), BeachBall(pos: (54.5, 3.0, 76.5)), BeachBall(pos: (54.5, 3.0, 77.5)), BeachBall(pos: (54.5, 3.0, 78.5)),
+                BeachBall(pos: (55.5, 3.0, 71.5)), BeachBall(pos: (55.5, 3.0, 72.5)), BeachBall(pos: (55.5, 3.0, 73.5)), BeachBall(pos: (55.5, 3.0, 74.5)),
+                BeachBall(pos: (55.5, 3.0, 75.5)), BeachBall(pos: (55.5, 3.0, 76.5)), BeachBall(pos: (55.5, 3.0, 77.5)), BeachBall(pos: (55.5, 3.0, 78.5)),
+                BeachBall(pos: (56.5, 3.0, 71.5)), BeachBall(pos: (56.5, 3.0, 72.5)), BeachBall(pos: (56.5, 3.0, 73.5)), BeachBall(pos: (56.5, 3.0, 74.5)),
+                BeachBall(pos: (56.5, 3.0, 75.5)), BeachBall(pos: (56.5, 3.0, 76.5)), BeachBall(pos: (56.5, 3.0, 77.5)), BeachBall(pos: (56.5, 3.0, 78.5)),
+                BeachBall(pos: (50.0, 3.707, 72.0)), BeachBall(pos: (50.0, 3.707, 73.0)), BeachBall(pos: (50.0, 3.707, 74.0)), BeachBall(pos: (50.0, 3.707, 75.0)),
+                BeachBall(pos: (50.0, 3.707, 76.0)), BeachBall(pos: (50.0, 3.707, 77.0)), BeachBall(pos: (50.0, 3.707, 78.0)), BeachBall(pos: (51.0, 3.707, 72.0)),
+                BeachBall(pos: (51.0, 3.707, 73.0)), BeachBall(pos: (51.0, 3.707, 74.0)), BeachBall(pos: (51.0, 3.707, 75.0)), BeachBall(pos: (51.0, 3.707, 76.0)),
+                BeachBall(pos: (51.0, 3.707, 77.0)), BeachBall(pos: (51.0, 3.707, 78.0)), BeachBall(pos: (52.0, 3.707, 72.0)), BeachBall(pos: (52.0, 3.707, 73.0)),
+                BeachBall(pos: (52.0, 3.707, 74.0)), BeachBall(pos: (52.0, 3.707, 75.0)), BeachBall(pos: (52.0, 3.707, 76.0)), BeachBall(pos: (52.0, 3.707, 77.0)),
+                BeachBall(pos: (52.0, 3.707, 78.0)), BeachBall(pos: (53.0, 3.707, 72.0)), BeachBall(pos: (53.0, 3.707, 73.0)), BeachBall(pos: (53.0, 3.707, 74.0)),
+                BeachBall(pos: (53.0, 3.707, 75.0)), BeachBall(pos: (53.0, 3.707, 76.0)), BeachBall(pos: (53.0, 3.707, 77.0)), BeachBall(pos: (53.0, 3.707, 78.0)),
+                BeachBall(pos: (54.0, 3.707, 72.0)), BeachBall(pos: (54.0, 3.707, 73.0)), BeachBall(pos: (54.0, 3.707, 74.0)), BeachBall(pos: (54.0, 3.707, 75.0)),
+                BeachBall(pos: (54.0, 3.707, 76.0)), BeachBall(pos: (54.0, 3.707, 77.0)), BeachBall(pos: (54.0, 3.707, 78.0)), BeachBall(pos: (55.0, 3.707, 72.0)),
+                BeachBall(pos: (55.0, 3.707, 73.0)), BeachBall(pos: (55.0, 3.707, 74.0)), BeachBall(pos: (55.0, 3.707, 75.0)), BeachBall(pos: (55.0, 3.707, 76.0)),
+                BeachBall(pos: (55.0, 3.707, 77.0)), BeachBall(pos: (55.0, 3.707, 78.0)), BeachBall(pos: (56.0, 3.707, 72.0)), BeachBall(pos: (56.0, 3.707, 73.0)),
+                BeachBall(pos: (56.0, 3.707, 74.0)), BeachBall(pos: (56.0, 3.707, 75.0)), BeachBall(pos: (56.0, 3.707, 76.0)), BeachBall(pos: (56.0, 3.707, 77.0)),
+                BeachBall(pos: (56.0, 3.707, 78.0)),
+
+                // ── Flat yard, z 106: odds ─────────────────────────────────
+                Domino(base: (8.0, 4.0, 106.0), direction: (1.0, 0.0), count: 20),
+                // A card stack: planks across crates, narrowing upward.
+                Stack(base: (34.0, 4.0, 106.0), items: [
+                    Crate(size: 0.5),
+                    Plank(length: 2.5, width: 1.0),
+                    Crate(size: 0.4),
+                    Plank(length: 2.0, width: 0.8),
+                    Crate(size: 0.3),
+                    Plank(length: 1.5, width: 0.6),
+                    Crate(size: 0.2),
+                ]),
+                // Ice slabs: slippery, so friction holds nothing sideways.
+                IceBox(pos: (44.0, 4.25, 106.0), half_extents: (0.6, 0.25, 0.6)),
+                IceBox(pos: (44.0, 4.75, 106.0), half_extents: (0.6, 0.25, 0.6)),
+                IceBox(pos: (44.0, 5.25, 106.0), half_extents: (0.6, 0.25, 0.6)),
+                IceBox(pos: (44.0, 5.75, 106.0), half_extents: (0.6, 0.25, 0.6)),
+                IceBox(pos: (44.0, 6.25, 106.0), half_extents: (0.6, 0.25, 0.6)),
+                IceBox(pos: (44.0, 6.75, 106.0), half_extents: (0.6, 0.25, 0.6)),
+
+                // ── Rolling field, z 16 ────────────────────────────────────
+                Tower(base: (76.0, 4.0, 16.0), box_half_extents: (0.5, 0.5, 0.5), count: 6),
+                Tower(base: (84.0, 4.4, 16.0), box_half_extents: (0.5, 0.5, 0.5), count: 8),
+                Box(pos: (84.0, 12.9, 16.0), half_extents: (0.5, 0.5, 0.5), style: Metal, density: 5000.0),
+                Jenga(base: (94.0, 3.7, 16.0)),
+                // One slab, two columns, ground a metre apart: both tops at 7.0.
+                Tower(base: (104.0, 4.0, 16.0), box_half_extents: (0.5, 0.5, 0.5), count: 3),
+                Tower(base: (108.0, 5.0, 16.0), box_half_extents: (0.5, 0.5, 0.5), count: 2),
+                Box(pos: (106.0, 7.25, 16.0), half_extents: (2.6, 0.25, 0.6), style: Stone, density: 1000.0),
+
+                // ── Rolling field, z 34 ────────────────────────────────────
+                VoussoirArch(base: (80.0, 4.2, 34.0)),
+                Trilithon(pos: (96.0, 3.8, 34.0)),
+                Pyramid(base: (109.0, 4.3, 35.0), block_half_extents: (1.0, 0.5, 1.0), base_width: 4),
+
+                // ── Rolling field, z 54 ────────────────────────────────────
+                BoxWall(
+                    base: (82.0, 4.0, 54.0),
+                    box_half_extents: (1.0, 0.5, 0.5),
+                    columns: 5,
+                    rows: 4,
+                    stagger: true,
+                ),
+                Tower(base: (100.0, 4.5, 54.0), box_half_extents: (0.5, 0.5, 0.5), count: 4),
+                MetalCube(pos: (100.0, 8.9, 54.0), metal: Gold, size: 0.8),
+                Jenga(base: (112.0, 4.0, 54.0), layers: 30),
+
+                // ── Rolling field, z 104: the arch crater ──────────────────
+                VoussoirArch(
+                    base: (84.0, 0.0, 104.0),
+                    inner_radius: 4.0,
+                    thickness: 0.6,
+                    depth: 2.0,
+                    num_voussoirs: 15,
+                    abutment_height: 1.0,
+                ),
+
+                // ── Rolling field, z 100: the jumble crater ────────────────
+                // Nine crate columns, ten high, as one block: push it over.
+                Tower(base: (107.0, 0.5, 99.0), box_half_extents: (0.5, 0.5, 0.5), count: 10),
+                Tower(base: (107.0, 0.5, 100.0), box_half_extents: (0.5, 0.5, 0.5), count: 10),
+                Tower(base: (107.0, 0.5, 101.0), box_half_extents: (0.5, 0.5, 0.5), count: 10),
+                Tower(base: (108.0, 0.5, 99.0), box_half_extents: (0.5, 0.5, 0.5), count: 10),
+                Tower(base: (108.0, 0.5, 100.0), box_half_extents: (0.5, 0.5, 0.5), count: 10),
+                Tower(base: (108.0, 0.5, 101.0), box_half_extents: (0.5, 0.5, 0.5), count: 10),
+                Tower(base: (109.0, 0.5, 99.0), box_half_extents: (0.5, 0.5, 0.5), count: 10),
+                Tower(base: (109.0, 0.5, 100.0), box_half_extents: (0.5, 0.5, 0.5), count: 10),
+                Tower(base: (109.0, 0.5, 101.0), box_half_extents: (0.5, 0.5, 0.5), count: 10),
+            ],
+        ),
+    ],
+
+    placements: [
+        Root(segment: "yard", origin: (0.0, 0.0, 0.0), yaw: 0.0),
+    ],
+
+    // On the seam between the halves, at the south end.
+    player_spawn: (66.0, 5.5, 8.0),
+)

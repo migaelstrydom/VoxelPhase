@@ -6,7 +6,7 @@ use specs::Entity;
 use super::beach_ball::BeachBallDef;
 use super::box_object::{
     create_box_material_for_style, CrateDef, HeavyCrateDef, PlankDef, CRATE_SURFACE,
-    HEAVY_CRATE_SURFACE, PLANK_SURFACE,
+    HEAVY_CRATE_SURFACE, PLANK_HALF_THICKNESS, PLANK_SURFACE,
 };
 use super::capsule::CapsuleDef;
 use super::shared::textures::seed_from_position;
@@ -41,7 +41,7 @@ impl StackItemDef {
         match self {
             StackItemDef::Crate { size } => *size,
             StackItemDef::HeavyCrate { size } => *size,
-            StackItemDef::Plank { .. } => 0.1,
+            StackItemDef::Plank { .. } => PLANK_HALF_THICKNESS,
             StackItemDef::BeachBall => 0.5,
             StackItemDef::Capsule { half_height, .. } => *half_height,
         }

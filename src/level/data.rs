@@ -778,7 +778,7 @@ pub enum LevelObject {
         #[serde(default = "BoxDef::default_friction")]
         friction: f32,
     },
-    /// Thin wooden board. Defaults: style=WoodenCrate, density=20, thickness=0.1.
+    /// Wooden board, 0.6 m thick. Defaults: style=WoodenCrate, density=20.
     Plank {
         pos: (f32, f32, f32),
         length: f32,
