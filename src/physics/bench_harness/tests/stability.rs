@@ -4,6 +4,8 @@
 //! it settles to rest within tight tolerance. These are regression guards
 //! against solver changes that break stacking stability.
 
+use nalgebra::Vector3;
+
 use crate::debug::DebugLines;
 use crate::physics::bench_harness::framework::{
     run_scenario, BenchRunConfig, PhysicsBenchScenario,
@@ -12,7 +14,7 @@ use crate::physics::bench_harness::scenarios::{
     BoxGridScenario, HoneycombWallScenario, JengaTowerScenario, TempleScenario,
     VoussoirArchScenario,
 };
-use crate::physics::{RigidBodyHandle, SequentialStepper, Stepper};
+use crate::physics::{PhysicsWorld, RigidBodyHandle, SequentialStepper, Stepper};
 
 use super::write_exports;
 
@@ -213,4 +215,110 @@ fn creep_once_settled(scenario: &dyn PhysicsBenchScenario, settle: f32, watch: f
         .zip(&settled)
         .map(|(&b, at)| (world.body(b).unwrap().position() - at).norm())
         .fold(0.0, f32::max)
+}
+
+// ── A knocked arch gains nothing ─────────────────────────────────────
+
+/// An arch knocked about resettles without regaining energy it lost. It did:
+/// shock propagation took part of every contact's push off the lower block,
+/// which the ground takes up under a stack, but along an arch's leaning
+/// joints the part withheld pushed sideways with nothing to push back, and
+/// the warm start carried it on. Its crown rose up to 7 cm on its own.
+///
+/// How much it regained depended on the order contacts were solved in, so
+/// one knock proves little: this knocks it sixteen ways.
+#[test]
+fn a_knocked_arch_regains_no_energy() {
+    const LIMIT: f32 = 0.1;
+    let scenario = VoussoirArchScenario::new();
+    let worst = (0..8)
+        .flat_map(|pattern| [false, true].map(|ordered| (pattern, ordered)))
+        .map(|(pattern, ordered)| energy_regained_after_knock(&scenario, pattern, ordered))
+        .fold(0.0, f32::max);
+    assert!(
+        worst < LIMIT,
+        "a knocked arch regained {worst:.3} J/kg, as if it rose {:.1} cm on its own",
+        worst / 9.81 * 100.0
+    );
+}
+
+/// Settle a structure, knock every block up and sideways at 1 m/s — in
+/// directions set by `pattern` — and return the most its energy per kilogram
+/// rose above the least it had had since.
+fn energy_regained_after_knock(
+    scenario: &dyn PhysicsBenchScenario,
+    pattern: usize,
+    ordered_contacts: bool,
+) -> f32 {
+    const FRAME_DT: f32 = 1.0 / 60.0;
+    let mut config = scenario.build_world().config().clone();
+    config.deterministic_contact_ordering = ordered_contacts;
+    let mut world = PhysicsWorld::new(config);
+    scenario.setup(&mut world);
+    let blocks: Vec<RigidBodyHandle> = world
+        .bodies()
+        .iter()
+        .filter(|(_, body)| body.is_dynamic())
+        .map(|(index, _)| RigidBodyHandle(index))
+        .collect();
+    for &block in &blocks {
+        world.wake_body(block);
+    }
+    let mut stepper = SequentialStepper::new(1.0 / 240.0, 12);
+    let mut debug = DebugLines::default();
+    for _ in 0..180 {
+        stepper.step(
+            &mut world,
+            FRAME_DT,
+            scenario.geometry(),
+            &[],
+            &[],
+            &mut debug,
+        );
+    }
+
+    let golden_angle = std::f32::consts::PI * (3.0 - 5.0f32.sqrt());
+    for (i, &block) in blocks.iter().enumerate() {
+        let angle = golden_angle * (i + pattern * 7) as f32 + pattern as f32;
+        let body = world.body_mut(block).unwrap();
+        let velocity = body.linear_velocity() + Vector3::new(angle.cos(), 1.0, angle.sin());
+        body.set_linear_velocity(velocity);
+    }
+
+    let mut lowest = energy_per_kg(&world, &blocks);
+    let mut regained = 0.0f32;
+    for _ in 0..480 {
+        stepper.step(
+            &mut world,
+            FRAME_DT,
+            scenario.geometry(),
+            &[],
+            &[],
+            &mut debug,
+        );
+        let energy = energy_per_kg(&world, &blocks);
+        lowest = lowest.min(energy);
+        regained = regained.max(energy - lowest);
+    }
+    regained
+}
+
+/// Kinetic energy, spin included, and height, per kilogram of the bodies.
+fn energy_per_kg(world: &PhysicsWorld, bodies: &[RigidBodyHandle]) -> f32 {
+    let gravity = world.config().gravity;
+    let (energy, mass) = bodies
+        .iter()
+        .filter_map(|&h| world.body(h))
+        .map(|body| {
+            let spin = body.angular_velocity();
+            let rotational = body
+                .world_inv_inertia()
+                .try_inverse()
+                .map_or(0.0, |inertia| 0.5 * spin.dot(&(inertia * spin)));
+            let kinetic = 0.5 * body.mass() * body.linear_velocity().norm_squared();
+            let height = -body.mass() * gravity.dot(&body.position().coords);
+            (kinetic + rotational + height, body.mass())
+        })
+        .fold((0.0, 0.0), |(e, m), (be, bm)| (e + be, m + bm));
+    energy / mass
 }

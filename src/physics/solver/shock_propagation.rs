@@ -25,7 +25,14 @@ pub struct ShockPropagationConfig {
     /// 1.0 = disabled (no mass scaling).
     pub shock_alpha: f32,
     /// Contacts with `|dot(normal, gravity_dir)| < horizontal_threshold` are
-    /// considered horizontal (wall contacts) and do not create depth edges.
+    /// considered horizontal and do not create depth edges.
+    ///
+    /// Scaling takes part of a contact's push off the lower body, which is
+    /// right where that body is held up from below: the ground takes the
+    /// rest. Along a normal leaning well off vertical, the part withheld has
+    /// a sideways share nothing takes up — an arch's joints lean up to the
+    /// horizontal — and a warm start carries it into every frame. Only
+    /// contacts within 45° of vertical are scaled.
     pub horizontal_threshold: f32,
 }
 
@@ -33,7 +40,7 @@ impl Default for ShockPropagationConfig {
     fn default() -> Self {
         Self {
             shock_alpha: 0.3,
-            horizontal_threshold: 0.3,
+            horizontal_threshold: 0.7,
         }
     }
 }
