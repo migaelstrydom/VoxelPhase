@@ -610,6 +610,14 @@ impl WaterRenderer {
         if tiles.is_empty() {
             return Ok(layers);
         }
+        // A tile left undrawn would be drawn coarse while its neighbours
+        // leave their edges open to its ripples.
+        debug_assert!(
+            tiles.len() <= ripple_layers(),
+            "{} ripple tiles awake, storage for {}",
+            tiles.len(),
+            ripple_layers()
+        );
         let buffer = &self.ripple_slots[self.slot].buffer;
         unsafe {
             let ptr = buffer.map_memory(0, vk::MemoryMapFlags::empty())? as *mut f32;

@@ -263,9 +263,10 @@ impl WaveBodyCoupler {
 
             // 2. Bobbing: floating body's vertical motion perturbs surface.
             //    Uses displacement injection so the surface visibly tracks the
-            //    body's oscillation regardless of wave damping.
+            //    body's oscillation regardless of wave damping. Measured
+            //    against the surface: a float riding the swell stirs nothing.
             if was_submerged && breaks_surface {
-                let vy = body.velocity.y;
+                let vy = body.velocity.y - sample.as_ref().map_or(0.0, |s| s.surface_rise);
                 if vy.abs() > 0.01 {
                     let strength = -vy * self.config.bobbing_strength * mass_factor;
                     let surface = sample.as_ref().map_or(body.position.y, |s| s.surface_level);
@@ -327,6 +328,7 @@ mod tests {
                 surface_level: 5.0,
                 floor_level: 0.0,
                 velocity: nalgebra::Vector3::zeros(),
+                surface_rise: 0.0,
             })
         }
     }
@@ -395,6 +397,38 @@ mod tests {
             .disturbances
             .iter()
             .any(|d| matches!(d, Disturbance::Displacement(_))));
+    }
+
+    /// Water at 5 m whose surface is rising at 0.4 m/s: the swell's heave.
+    struct Heaving;
+
+    impl WaterSurface for Heaving {
+        fn sample(&self, _point: Point3<f32>) -> Option<WaterSample> {
+            Some(WaterSample {
+                surface_rise: 0.4,
+                ..Flat
+                    .sample(Point3::origin())
+                    .expect("flat water everywhere")
+            })
+        }
+    }
+
+    #[test]
+    fn a_float_riding_the_swell_stirs_nothing() {
+        let mut ripples = Recorder::default();
+        let mut coupler = WaveBodyCoupler::new(WaveCouplingConfig::default());
+        for _ in 0..2 {
+            coupler.update(
+                &[body(4.7, Vector3::new(0.0, 0.4, 0.0), false)],
+                &mut ripples,
+                &Heaving,
+            );
+        }
+        assert!(
+            ripples.disturbances.is_empty(),
+            "{:?}",
+            ripples.disturbances
+        );
     }
 
     #[test]

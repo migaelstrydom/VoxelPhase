@@ -18,6 +18,8 @@ pub struct WaterSample {
     /// Bulk velocity: the reach's velocity, or the basin's potential-flow
     /// current.
     pub velocity: Vector3<f32>,
+    /// How fast the surface rises here, m/s: the swell's heave.
+    pub rise: f32,
     /// The body this point belongs to.
     pub body: WaterBodyId,
 }
@@ -72,15 +74,14 @@ impl<'a> WaterQuery<'a> {
                 .reach
                 .and_then(|(reach, _)| self.reach_sample(reach, point, floor));
         };
-        let swell =
-            self.world
-                .swell(body)
-                .height(point.x, point.z, self.world.clock(), level - floor);
+        let swell = self.world.swell(body);
+        let (t, depth) = (self.world.clock(), level - floor);
         let ripple = self.world.ripples().height_at(body, point.x, point.z);
         Some(WaterSample {
-            surface: level + swell + ripple,
+            surface: level + swell.height(point.x, point.z, t, depth) + ripple,
             floor,
             velocity: self.world.current_at(body, point),
+            rise: swell.rise_rate(point.x, point.z, t, depth),
             body,
         })
     }
@@ -104,6 +105,7 @@ impl<'a> WaterQuery<'a> {
             surface,
             floor,
             velocity: Vector3::new(direction.x, 0.0, direction.y),
+            rise: 0.0,
             body: id,
         })
     }
@@ -115,6 +117,7 @@ impl WaterSurface for WaterQuery<'_> {
             surface_level: s.surface,
             floor_level: s.floor,
             velocity: s.velocity,
+            surface_rise: s.rise,
         })
     }
 }

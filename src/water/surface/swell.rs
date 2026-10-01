@@ -116,6 +116,20 @@ impl Swell {
         self.amplitude * h * shore_fade(depth)
     }
 
+    /// How fast the surface rises at (x, z), time `t`, over water `depth`
+    /// deep: d(height)/dt, m/s. What a float riding the swell moves at.
+    pub fn rise_rate(&self, x: f32, z: f32, t: f32, depth: f32) -> f32 {
+        if self.amplitude <= 0.0 {
+            return 0.0;
+        }
+        let mut rate = 0.0;
+        for wave in &SPECTRUM {
+            let (k, omega, d) = wave.terms();
+            rate -= wave.share * omega * (k * (d.x * x + d.y * z) - omega * t + self.phase).cos();
+        }
+        self.amplitude * rate * shore_fade(depth)
+    }
+
     /// d(height)/dx and d(height)/dz at (x, z), time `t`, ignoring how the
     /// shore fade itself varies.
     pub fn gradient(&self, x: f32, z: f32, t: f32, depth: f32) -> Vector2<f32> {
@@ -186,6 +200,19 @@ mod tests {
             (g.x - dx).abs() < 1e-3 && (g.y - dz).abs() < 1e-3,
             "{g:?} vs ({dx}, {dz})"
         );
+    }
+
+    #[test]
+    fn the_rise_rate_is_the_derivative_of_the_height_in_time() {
+        let swell = Swell {
+            amplitude: 0.1,
+            phase: 0.3,
+        };
+        let (x, z, t, depth) = (1.7, -2.2, 3.1, 5.0);
+        let e = 1e-3;
+        let rate = swell.rise_rate(x, z, t, depth);
+        let dt = (swell.height(x, z, t + e, depth) - swell.height(x, z, t - e, depth)) / (2.0 * e);
+        assert!((rate - dt).abs() < 1e-3, "{rate} vs {dt}");
     }
 
     #[test]

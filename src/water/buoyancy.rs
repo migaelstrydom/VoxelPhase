@@ -26,6 +26,9 @@ pub struct WaterSample {
     /// Velocity of the water: a river's flow, or a lake's current towards
     /// its outlet. Drag acts on a body relative to it.
     pub velocity: Vector3<f32>,
+    /// How fast the surface rises here, m/s: the swell's heave. A body
+    /// moving with it rides the water rather than stirring it.
+    pub surface_rise: f32,
 }
 
 /// Computed buoyancy and drag for a single body.
@@ -202,6 +205,7 @@ impl WaterSurface for StillWater {
             surface_level: self.surface,
             floor_level: self.floor,
             velocity: Vector3::zeros(),
+            surface_rise: 0.0,
         })
     }
 }

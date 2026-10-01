@@ -3,7 +3,8 @@
 //! ```text
 //!   8 m tile (one span chunk) × 32 × 32 cells of 0.25 m, keyed by (tile, body)
 //!   woken by a disturbance, or by energy crossing in from an active neighbour
-//!   asleep after 2 s quiet; at most 32 awake, the weakest and farthest evicted
+//!   asleep after 2 s quiet; at most 32 awake, a tile woken past that kept only
+//!   if it outranks the weakest and farthest by a margin, which it displaces
 //! ```
 //!
 //! Keyed by body, so an island pool and the sea beneath it ripple apart, and
@@ -265,7 +266,9 @@ impl RippleTiles {
         for tz in lo.z..=hi.z {
             for tx in lo.x..=hi.x {
                 let coord = SpanChunkCoord { x: tx, z: tz };
-                let Some(tile) = self.wake((coord, body), masks) else {
+                let key = (coord, body);
+                let woken = !self.tiles.contains_key(&key);
+                let Some(tile) = self.wake(key, masks) else {
                     continue;
                 };
                 let (x0, z0) = coord.column(0).min_corner();
@@ -297,13 +300,16 @@ impl RippleTiles {
                     }
                 }
                 tile.quiet = 0.0;
-                // Ranked against the budget before its next step.
+                // Ranked against the budget by what it now holds.
                 tile.energy = tile
                     .height
                     .iter()
                     .zip(&tile.velocity)
                     .map(|(h, v)| h * h + v * v / 3600.0)
                     .sum();
+                if woken {
+                    self.admit(key);
+                }
             }
         }
     }
@@ -350,9 +356,6 @@ impl RippleTiles {
     /// buffer whose border is the facing edge of an awake neighbour, or still
     /// water where there is none, so the stencil runs without a branch.
     pub fn step(&mut self, dt: f32, masks: &dyn MaskSource) {
-        // Disturbances since the last step may have woken more than the
-        // budget; only the ones that stay are worth stepping.
-        self.hold_budget();
         if self.tiles.is_empty() {
             return;
         }
@@ -479,7 +482,6 @@ impl RippleTiles {
             }
             self.wake(key, masks);
         }
-        self.hold_budget();
     }
 
     /// The awake tiles beside a tile, in [`EDGES`] order.
@@ -573,25 +575,33 @@ impl RippleTiles {
         }
     }
 
-    /// Evict the weakest, farthest tiles until the budget holds.
-    fn hold_budget(&mut self) {
-        while self.tiles.len() > self.config.max_active {
-            let focus = self.focus;
-            let weakest = self
-                .tiles
-                .iter()
-                .map(|(key, tile)| (*key, priority(key, tile, focus)))
-                .min_by(|a, b| a.1.total_cmp(&b.1).then(b.0.cmp(&a.0)))
-                .map(|(key, _)| key);
-            match weakest {
-                Some(key) => {
-                    self.tiles.remove(&key);
-                }
-                None => break,
-            }
+    /// Keep a tile just woken only if the budget has room for it, or it
+    /// outranks the weakest awake tile by [`ADMISSION_MARGIN`] and displaces
+    /// it. So the budget holds whenever the tiles are read, and two tiles of
+    /// near-equal claim do not take turns being drawn.
+    fn admit(&mut self, key: RippleKey) {
+        if self.tiles.len() <= self.config.max_active {
+            return;
         }
+        let focus = self.focus;
+        let claim = priority(&key, &self.tiles[&key], focus);
+        let weakest = self
+            .tiles
+            .iter()
+            .filter(|(k, _)| **k != key)
+            .map(|(k, tile)| (*k, priority(k, tile, focus)))
+            .min_by(|a, b| a.1.total_cmp(&b.1).then(b.0.cmp(&a.0)));
+        let evicted = match weakest {
+            Some((weakest, standing)) if claim > ADMISSION_MARGIN * standing => weakest,
+            _ => key,
+        };
+        self.tiles.remove(&evicted);
     }
 }
+
+/// How many times the weakest awake tile's priority a tile woken past the
+/// budget needs to displace it.
+const ADMISSION_MARGIN: f32 = 1.5;
 
 /// Damping at the outer edge of a sponge, 1/s.
 const SPONGE_DAMPING: f32 = 30.0;
@@ -757,27 +767,57 @@ mod tests {
         assert!(ripples.active_count() >= 2);
     }
 
-    #[test]
-    fn the_budget_evicts_the_weakest() {
+    /// A budget of two, and a disturbance of `strength` in each of a row
+    /// of tiles 40 m apart, in order.
+    fn woken_in_turn(strengths: &[f32], focus: Option<Point3<f32>>) -> RippleTiles {
         let config = RippleConfig {
             max_active: 2,
             ..RippleConfig::default()
         };
         let mut ripples = RippleTiles::new(config);
-        for (i, strength) in [0.1, 0.5, 0.3].into_iter().enumerate() {
-            let x = 4.0 + 40.0 * i as f32;
+        ripples.set_focus(focus);
+        for (i, &strength) in strengths.iter().enumerate() {
             ripples.disturb(
                 BODY,
-                x,
+                4.0 + 40.0 * i as f32,
                 4.0,
                 1.0,
                 Disturbance::Displacement(strength),
                 &Everywhere,
             );
         }
-        ripples.step(1.0 / 60.0, &Everywhere);
-        assert_eq!(ripples.active_count(), 2);
+        ripples
+    }
+
+    #[test]
+    fn the_budget_holds_as_tiles_are_woken() {
+        let ripples = woken_in_turn(&[0.1, 0.5, 0.3], None);
+        assert_eq!(ripples.active_count(), 2, "held before any step");
         assert_eq!(ripples.height_at(BODY, 4.0, 4.0), 0.0, "the weakest went");
+    }
+
+    #[test]
+    fn a_tile_woken_past_the_budget_must_clearly_outrank_the_weakest() {
+        let ripples = woken_in_turn(&[0.3, 0.5, 0.32], None);
+        assert_eq!(ripples.active_count(), 2);
+        assert_ne!(
+            ripples.height_at(BODY, 4.0, 4.0),
+            0.0,
+            "the incumbent stays"
+        );
+        assert_eq!(
+            ripples.height_at(BODY, 84.0, 4.0),
+            0.0,
+            "the newcomer is turned away"
+        );
+    }
+
+    #[test]
+    fn the_budget_keeps_the_tiles_near_the_camera() {
+        let ripples = woken_in_turn(&[0.5, 0.5, 0.3], Some(Point3::new(84.0, 6.0, 4.0)));
+        assert_eq!(ripples.active_count(), 2);
+        assert_ne!(ripples.height_at(BODY, 84.0, 4.0), 0.0, "the nearest stays");
+        assert_eq!(ripples.height_at(BODY, 4.0, 4.0), 0.0, "the farthest went");
     }
 
     #[test]
