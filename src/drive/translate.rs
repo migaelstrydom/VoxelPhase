@@ -12,7 +12,24 @@
 //! put the two halves of one entity's frame into one struct.
 
 use crate::drive::components::{Actuator, DriveIntent};
-use crate::physics::{DriveCommand, NormalVerbs};
+use crate::physics::{DriveCommand, NormalVerbs, PhysicsWorld, RigidBodyHandle};
+
+/// Hand one body's frame of command to the engine: what it may grip where
+/// nothing holds it up, and what it drives toward. Consumes the frame's
+/// discrete verbs, on gameplay's side of the seam.
+///
+/// The one path every actuated body takes into the engine, in the game and
+/// in any harness that drives a body without it.
+pub fn apply_drive(
+    physics: &mut PhysicsWorld,
+    body: RigidBodyHandle,
+    intent: &mut DriveIntent,
+    actuator: &Actuator,
+) {
+    let verbs = intent.take_normal_verbs();
+    let _ = physics.set_body_non_support_grip(body, actuator.non_support_grip);
+    let _ = physics.set_body_drive(body, &resolve_drive(intent, verbs, actuator));
+}
 
 /// Fold one frame's command into a drive command.
 pub fn resolve_drive(

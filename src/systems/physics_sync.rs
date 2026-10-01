@@ -10,7 +10,7 @@ use specs::{Join, Read, ReadStorage, System, Write, WriteStorage};
 
 use crate::components::{Orientation, Position, RigidBodyComponent, Velocity};
 use crate::debug::{DebugLines, DebugLog, DebugOverlays};
-use crate::drive::{resolve_drive, Actuator, BodyMotion, DriveIntent};
+use crate::drive::{apply_drive, Actuator, BodyMotion, DriveIntent};
 use crate::physics::{
     FrameProfile, PhysicsImpulseQueue, PhysicsWorld, SequentialStepper, Stepper,
     SubstepForceProvider,
@@ -114,18 +114,8 @@ impl PhysicsSyncSystem {
         actuators: &ReadStorage<Actuator>,
         bodies: &ReadStorage<RigidBodyComponent>,
     ) {
-        let mut updates = Vec::new();
         for (intent, actuator, body) in (intents, actuators, bodies).join() {
-            let verbs = intent.take_normal_verbs();
-            updates.push((
-                body.0,
-                actuator.non_support_grip,
-                resolve_drive(intent, verbs, actuator),
-            ));
-        }
-        for (handle, non_support_grip, command) in updates {
-            let _ = physics.set_body_non_support_grip(handle, non_support_grip);
-            let _ = physics.set_body_drive(handle, &command);
+            apply_drive(physics, body.0, intent, actuator);
         }
     }
 

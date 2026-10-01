@@ -10,4 +10,4 @@ pub mod translate;
 
 pub use crate::physics::{Allowance, NormalProjection, NormalVerbs, ReactionAnchor};
 pub use components::{Actuator, BodyMotion, DriveIntent};
-pub use translate::resolve_drive;
+pub use translate::{apply_drive, resolve_drive};

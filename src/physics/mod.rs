@@ -42,8 +42,10 @@ pub mod ccd;
 mod collider;
 pub mod constraint;
 mod contact_event;
+mod contact_work;
 mod debug;
 pub mod drive;
+mod energy_audit;
 mod force_provider;
 pub mod grounding;
 mod handle;
@@ -66,10 +68,12 @@ pub use ccd::{CcdStrategy, SweepClampCcd};
 pub use collider::{Collider, ColliderDesc, ColliderMaterial, ColliderShape, FrictionModel};
 pub use constraint::{Constraint, ConstraintHandle, ConstraintKind};
 pub use contact_event::{ContactEvent, ContactSource};
+pub use contact_work::ContactWorkLedger;
 pub use drive::{
     Allowance, AllowanceCommand, AllowanceUsage, DriveCommand, NormalProjection, NormalVerbs,
     ReactionAnchor, SupportConfig, SupportContact, SupportResolver, SupportSet, SupportSets,
 };
+pub use energy_audit::{energy_per_kg, EnergyAudit};
 pub use force_provider::{ForceContext, ForceOutput, SubstepForceProvider};
 pub use handle::{ColliderHandle, RigidBodyHandle};
 pub use impact::{Impact, ImpactLedger};

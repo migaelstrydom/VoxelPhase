@@ -29,6 +29,7 @@ pub mod objective;
 pub mod particles;
 pub mod perf;
 pub mod physics;
+pub mod physics_fuzz;
 pub mod physics_perf;
 pub mod platform;
 pub mod player;

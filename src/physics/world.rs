@@ -15,6 +15,7 @@ use super::collider::{Collider, ColliderDesc, ColliderShape};
 use super::constraint::types::Constraint;
 use super::constraint::{ConstraintHandle, ConstraintKind};
 use super::contact_event::{ContactEvent, ContactSource};
+use super::contact_work::ContactWorkLedger;
 use super::debug::{PhysicsDebugConfig, PhysicsDebugger};
 use super::drive::{
     apply_allowances, stamp_non_support_grip, AllowanceCommand, AllowanceLedger, AllowanceUsage,
@@ -189,6 +190,8 @@ pub struct PhysicsWorld {
     last_contacts: Vec<ContactEvent>,
     /// Normal impulses delivered to each body this frame.
     impacts: ImpactLedger,
+    /// Work contacts did on each body this frame, when an audit asks for it.
+    contact_work: ContactWorkLedger,
     debugger: PhysicsDebugger,
     frame_index: u64,
     sleep_manager: SleepManager,
@@ -292,6 +295,7 @@ impl PhysicsWorld {
             manifold_cache,
             last_contacts: Vec::new(),
             impacts: ImpactLedger::default(),
+            contact_work: ContactWorkLedger::default(),
             debugger,
             frame_index: 0,
             sleep_manager,
@@ -868,6 +872,7 @@ impl PhysicsWorld {
 
         self.last_contacts.clear();
         self.impacts.clear();
+        self.contact_work.clear();
         for manifold in &solver_manifolds {
             for contact in &manifold.contacts {
                 self.last_contacts.push(ContactEvent::from_solver(
@@ -1036,6 +1041,8 @@ impl PhysicsWorld {
         let lap = Instant::now();
 
         // Solve velocity constraints + position correction
+        self.contact_work
+            .snapshot(&self.bodies, &self.cached_active_manifolds);
         self.solver.solve(
             &mut self.bodies,
             &mut self.cached_active_manifolds,
@@ -1044,6 +1051,11 @@ impl PhysicsWorld {
             dt,
         );
         self.impacts.record_solved(&self.cached_active_manifolds);
+        self.contact_work.record_solved(
+            &self.bodies,
+            &self.cached_active_manifolds,
+            &self.manifold_conditions,
+        );
         self.traction_ledger.record_substep(
             &self.cached_active_manifolds,
             &self.frame_supports,
@@ -1156,6 +1168,19 @@ impl PhysicsWorld {
     /// contact occurred.
     pub fn impacts(&self) -> &ImpactLedger {
         &self.impacts
+    }
+
+    /// Work contacts did on each body over the current frame, and which body
+    /// did it. Empty unless [`PhysicsWorld::record_contact_work`] switched it
+    /// on.
+    pub fn contact_work(&self) -> &ContactWorkLedger {
+        &self.contact_work
+    }
+
+    /// Start or stop recording the work contacts do. Off by default: only an
+    /// energy audit reads it.
+    pub fn record_contact_work(&mut self, enabled: bool) {
+        self.contact_work.set_enabled(enabled);
     }
 
     /// Get access to the rigid bodies arena.
