@@ -1,3 +1,5 @@
+//! ECS systems that glue subsystems together: input, character control, camera, physics sync, terrain, water and rendering.
+
 mod camera;
 mod character_control;
 mod physics_sync;

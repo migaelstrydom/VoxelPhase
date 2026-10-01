@@ -1,3 +1,5 @@
+//! Level files: data model, loading, segment placement, object footprints, and spawning a level into the world.
+
 pub mod data;
 pub mod footprint;
 pub mod loader;

@@ -1,3 +1,5 @@
+//! Terrain blast-cost bench: the game's grenade charge set off across real level terrain, timed stage by stage, with a fingerprint of the rebuilt mesh.
+
 mod fingerprint;
 mod record;
 mod report;

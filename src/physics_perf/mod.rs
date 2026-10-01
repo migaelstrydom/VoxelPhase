@@ -1,3 +1,5 @@
+//! Physics performance bench: scripted scenarios (igloo blast, stacks, glass, grenade volleys) on real level terrain, reported per FrameProfile stage.
+
 mod box_stack;
 mod glass_shatter;
 mod grenade;

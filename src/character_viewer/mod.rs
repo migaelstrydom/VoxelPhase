@@ -1,3 +1,5 @@
+//! The real game run headlessly with a scripted pilot in place of the keyboard, reporting the character's motion and animation against the water, rendered as a filmstrip.
+
 mod driver;
 mod pilot;
 mod record;

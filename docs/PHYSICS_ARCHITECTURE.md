@@ -1,836 +1,290 @@
 # Physics Engine Architecture
 
-## Design goals
+How the rigid-body engine in `src/physics/` (with collision primitives in `src/collision/`)
+steps a frame, what each stage owns, and the invariants that are easy to break. This
+describes the engine as built. The documents listed under "Related documents" record the
+reasoning behind individual parts.
 
-1. **Correctness first.** No tunneling, no energy gain, no jitter at rest.
-2. **Independent library.** The engine knows nothing about ECS, rendering, or terrain
-   implementation. External geometry is accessed through a trait.
-3. **Discrete-primary pipeline.** The narrowphase is the primary contact source; CCD is
-   a safety net for fast bodies only. This replaces the existing TOI-first architecture
-   where all contacts go through sweep tests and are resolved in time order.
-4. **Incremental buildability.** Each section marks its dependencies. Features can be
-   implemented in dependency order, with the engine remaining functional after each step.
+Each file's `//!` header is the authority on its own details. This doc is the map that
+connects them.
 
----
+## Boundaries
 
-## Pipeline overview
+- **No ECS, no rendering, no terrain types.** The engine is handle-based
+  (`RigidBodyHandle`, `ColliderHandle`, `ConstraintHandle` over generational arenas).
+  `systems/physics_sync.rs` is the only ECS glue.
+- **Static geometry comes through a trait.** `StaticGeometry::query_region(aabb)` returns
+  a `MeshPatch` (triangles plus local adjacency), and `StaticGeometry::surface` names what
+  each triangle is made of. Queries run from several threads at once, so implementors are
+  `Sync`. Terrain implements it; the engine never sees chunks, segments or voxels.
+- **Gameplay asks for motion through the drive seam** (`physics::drive`), never by
+  writing velocities each frame. See "Drive" below.
+- **Media see a body's bulk, not its colliders.** Water, buoyancy, drag and splash read
+  `RigidBody::envelope()`, and mass properties read `mass_parts()`. Both fall back to the
+  colliders unless the body declares a `BulkShape` (`bulk.rs`).
 
-One call to `PhysicsWorld::step(dt)` executes these phases in order:
+## Bodies, colliders, constraints
 
-```
-1. Apply gravity and external forces         (force accumulators → velocity)
-2. Integrate velocities                       (forces → velocities, clear accumulators)
-3. Broadphase                                 (produce candidate pairs)
-4. Narrowphase                                (candidate pairs → contact manifolds)
-5. Build constraint list                      (contacts + joints → constraints)
-6. Warm-start solver                          (apply cached impulses from previous frame)
-7. Solve velocity constraints                 (sequential impulses, N iterations)
-8. Store solver impulses                      (cache impulses for next frame's warm-start)
-9. Integrate positions                        (velocities → positions)
-10. CCD pass                                  (fast bodies only: sweep, correct, re-solve)
-11. Update sleeping                           (deactivate/wake islands based on energy)
-```
+- `RigidBody` (`body.rs`): `Dynamic`, `Kinematic` or `Static`. **Its origin is its centre
+  of mass.** Detaching colliders (fracture, cleaving) breaks that until
+  `PhysicsWorld::recenter_on_colliders` is called. Free rotation integrates the gyroscopic
+  term implicitly (a few Newton steps), because the explicit form gained energy without
+  bound on asymmetric bodies.
+- `Collider` (`collider.rs`): `Sphere`, `Box`, `Capsule`, `ConvexHull`, with a
+  `ColliderMaterial` (friction, restitution, density). Colliders attach to and detach from
+  bodies at runtime. `detach_collider` swap-removes, so collider order changes after a split.
+- Constraints (`constraint/`): persistent definitions in an arena, `ConstraintKind` =
+  `KeepUpright`, `KeepAttitude`, `Fixed`, `BallJoint`, `Hinge`, `FollowPoint`. Each is
+  expanded every frame into solver `ConstraintRow`s (`expand.rs`, built from
+  `primitives.rs`). The enforcement mode is `Iterative` (PGS, optionally NGS) or
+  `HardProjection` (a post-solve velocity projection). Compliance rules out hard
+  projection. A constraint whose bodies are all asleep is skipped, and
+  `ConstraintKind::permits_sleep` decides whether a constrained body may sleep.
 
-Each phase is described in detail below.
+## A frame
 
----
+`PhysicsSyncSystem` drives a `Stepper`. The game uses `SequentialStepper` with a fixed
+1/240 s substep and at most 12 substeps per frame (`FixedTimestep` clamps the accumulator,
+which prevents a spiral of death). A frame is **one contact pass, then N substeps**:
 
-## Phase 1–2: Force application and velocity integration
+```text
+PhysicsWorld::update_contacts(dt, substeps)         once per frame
+  ├─ sleep bookkeeping, wake events, one-shot impulses (explosions)
+  ├─ generate_contacts                               static, then dynamic; repeated for
+  │     └─ narrowphase (+ speculative contacts)      bodies each pass wakes, until none do
+  ├─ ManifoldCache::merge                            match by FeatureId → warm-start impulses
+  ├─ filter manifolds of sleeping islands; record NarrowphaseOwnership per pair
+  ├─ ManifoldConditioner::condition                  shock propagation: order + mass scales
+  ├─ SupportResolver::resolve                        Support Sets (what holds each body up)
+  ├─ stamp_non_support_grip, TractionPlanner::plan   drive targets written onto contacts
+  ├─ ConstraintSolver::prepare                       expand constraint rows
+  └─ CcdStrategy::begin_frame
 
-**What happens:**
-- Gravity is applied to all dynamic bodies, scaled by per-body `gravity_scale`.
-- Accumulated external forces and torques are integrated into linear and angular velocities.
-- Damping is applied (linear and angular, per-body).
-- Force and torque accumulators are cleared.
-
-**Key detail:** Only velocities are updated here. Positions are not touched until phase 9.
-This is the semi-implicit Euler scheme: forces update velocities, then the solver corrects
-velocities, then velocities update positions. This ordering is what gives the solver authority
-to prevent penetration before it happens.
-
-**Dependencies:** None.
-
----
-
-## Phase 3: Broadphase
-
-**Purpose:** Reduce the O(n^2) pair count to a small set of candidate pairs that might
-actually be colliding.
-
-**Approach:** Axis-Aligned Bounding Box (AABB) overlap test. Each collider's world-space AABB
-is computed from its shape and its parent body's transform. Pairs whose AABBs overlap are
-forwarded to the narrowphase.
-
-**AABB computation:**
-- Sphere: center +/- radius on each axis.
-- Future shapes (capsule, box, convex hull): compute from rotated vertices or support mapping.
-
-**AABB margin:** Each AABB is expanded by `contact_margin` (typically 0.01–0.05) so that the
-narrowphase can generate contacts slightly before geometric overlap. This is essential for
-resting contact stability — the solver sees the contact and cancels approach velocity before
-the body actually penetrates.
-
-**Data structure options (in order of implementation simplicity):**
-1. **Brute force O(n^2):** Sufficient for < 100 bodies. Good starting point.
-2. **Sort-and-sweep on one axis:** Good for scenes with a dominant axis.
-3. **AABB tree (BVH):** Best general-purpose choice for dynamic scenes.
-
-**Static geometry:** Not part of the broadphase. Dynamic-vs-static contacts are generated
-directly in the narrowphase by querying the `StaticGeometry` trait.
-
-**Output:** A set of `(ColliderHandle, ColliderHandle)` candidate pairs for dynamic-vs-dynamic
-contacts.
-
-**Dependencies:** Colliders must be able to compute world-space AABBs.
-
----
-
-## Phase 4: Narrowphase
-
-**Purpose:** For each candidate pair from the broadphase (and for each dynamic collider vs
-static geometry), compute the contact manifold: the set of contact points, normals, and
-penetration depths.
-
-### 4a: Dynamic-vs-static contacts
-
-For each dynamic body's collider, query the `StaticGeometry` trait:
-```
-static_geometry.query_sphere(center, radius + contact_margin) → Vec<StaticContact>
+PhysicsWorld::substep(dt)                            × N
+  ├─ SubstepForceProvider forces (buoyancy), integrate_forces (gravity)
+  ├─ apply_allowances                                the drive's non-conservative authority
+  ├─ ConstraintSolver::solve                         velocity phase per island + NGS position pass
+  ├─ ledgers: impacts, contact work, traction
+  ├─ ManifoldCache::write_back / prune, constraint write-back
+  ├─ ConstraintSolver::project_velocities            HardProjection constraints
+  ├─ integrate_bodies                                positions and rotations
+  ├─ CcdStrategy::run                                sweep fast colliders the narrowphase does not own
+  └─ SleepManager::update_sleep_states
 ```
 
-Each `StaticContact` provides a point, normal, and depth. Because the query uses the expanded
-radius, the returned depth includes the margin. The narrowphase must subtract the margin
-before passing to the solver:
-```
-solver_depth = (terrain_depth - contact_margin).max(0.0)
-```
+**The central fact: contacts are generated once per frame but integrated over up to 12
+substeps.** Every safeguard against tunnelling and every contact reference has to cover the
+whole frame, not one substep. Speculative contacts, closing allowances, NGS's reference
+positions, CCD's frame gate and narrowphase ownership all exist because of this.
 
-This ensures:
-- Contacts within the margin skin generate constraints with depth=0 (velocity correction
-  only, no position correction).
-- Contacts with actual penetration get depth > 0 (position correction applies).
+## Narrowphase
 
-### 4b: Dynamic-vs-dynamic contacts
+`narrowphase/` produces `PairManifold`s (at most 4 points each, with a `FeatureId` per
+point) into a `NarrowphaseWorkBuffer` that is reset once per frame.
 
-For each candidate pair from the broadphase, perform shape-specific overlap tests:
+**Scope** (`scope.rs`): only awake bodies start pairs. When a pass wakes a sleeping body,
+another pass generates contacts for exactly the bodies it woke, until a pass wakes nobody.
+A stack touched at the top is therefore solved whole, down to the ground, on the frame it
+wakes, rather than one layer per frame.
 
-**Sphere-vs-sphere:**
-```
-delta       = center_b - center_a
-dist        = |delta|
-normal      = delta / dist  (or fallback Y-up if dist < epsilon)
-depth       = (radius_a + radius_b) - dist
-contact_pt  = center_a + normal * (radius_a - depth/2)
-```
+**Against static geometry** (`static_contacts.rs`, in parallel per collider): query the
+patch around the collider, then run the mesh pipeline in `collision/mesh/`:
 
-A contact is generated if `dist < radius_a + radius_b + contact_margin`. The depth passed to
-the solver uses the real radii (no margin inflation), so margin contacts naturally have
-depth <= 0 and receive velocity-only correction.
-
-### 4c: Contact manifold persistence
-
-Contact manifolds are cached per collider pair across frames. Each contact point is identified
-by a **feature ID** (or by nearest-point matching within a distance threshold). This allows:
-- **Warm-starting:** Previous impulses are associated with specific contact points and
-  reapplied at the start of the solver (phase 6).
-- **Stable normals:** For resting contacts, reusing the previous frame's normal avoids
-  jitter from floating-point noise in the narrowphase.
-
-**Manifold data structure:**
-```
-ContactManifold {
-    collider_a: ColliderHandle,
-    collider_b: ColliderHandle,     // or None for static
-    contacts: SmallVec<[ContactPoint; 4]>,
-    last_seen_frame: u64,
-}
-
-ContactPoint {
-    local_point_a: Point3,          // in body-A local space
-    local_point_b: Point3,          // in body-B local space (or world for static)
-    normal: Vector3,                // world-space, A-to-B
-    depth: f32,
-    normal_impulse: f32,            // cached from solver, used for warm-starting
-    tangent_impulse: [f32; 2],      // cached friction impulses
-}
+```text
+MeshPatch ──seam_filter──▶ FilteredPatch ──shape routine──▶ manifold
+            merge coplanar      (faces + boundary/       sphere_patch, capsule_patch,
+            triangles into      crease edges)            obb_patch, gjk_patch (hulls)
+            convex quads                                  + crease_contacts, solid_side
 ```
 
-Storing contact points in local space allows matching across frames even as bodies move.
-Each frame, recompute world positions from the local points and update depth/normal.
+- Mesh contacts take the **face normal**, and depth comes from projecting the shape's
+  deepest support point. GJK/EPA is not used against large flat polygons (the extreme
+  aspect ratio makes it unstable).
+- `solid_side`: a face whose plane the shape's centre has crossed still pushes while the
+  centre is within reach behind it, unless a back-to-back face would push the shape out a
+  shorter way. A shape always leaves solid on the side its centre is on.
+- `crease_edges` / `crease_contacts`: convex ridges that no face contact reaches (a post's
+  edge, a hilltop fold) push the shape out along whichever of its face normals clears the
+  whole run of the crease.
+- `static_surface.rs`: friction and restitution come from `StaticSurface::meet`. Ground
+  that yields (grass, sand) imposes its own grip; two rigid surfaces combine as two
+  colliders do.
+- A body with `ignores_static` skips static contacts and CCD. This is used for bodies
+  welded to the world whose colliders are bedded in terrain.
 
-**Contact point matching:** When the narrowphase produces new contacts, match each to the
-closest existing contact in the manifold (by local-space distance). Matched contacts inherit
-the cached impulses. Unmatched new contacts start with zero impulse. Old contacts not matched
-to any new contact are removed.
+**Between bodies** (`dynamic_contacts.rs`): per-collider world bounds, widened over the
+frame's travel for colliders in the speculative band, go through `SweepAndPrune`
+(`broadphase/`). `collision/dispatch.rs` routes each pair to an analytic or SAT routine
+(sphere/capsule/OBB combinations, `obb_obb`, `hull_obb`, `hull_hull` with per-pair SAT
+caches) and falls back to GJK/EPA with a per-pair GJK cache. Contacts are reduced to 4 by
+area (`contact_reducer.rs`).
 
-**Contact reduction:** For 3D, keep at most 4 contacts per manifold (the 4 that maximize the
-contact area). This keeps solver cost bounded without losing stability.
+**Speculative contacts** (`speculative.rs`): a pair that is not touching but will meet
+within the frame gets a contact generated at its predicted meeting pose and carried back,
+with the **gap** it still has to close. The solver lets the pair approach by that gap and
+arrests it only beyond it (`solver/closing_allowance.rs`, recomputed every substep from how
+far the bodies have moved), so the pair stops on arrival. A predicted contact without its
+gap halts bodies in mid-air.
 
-**Dependencies:** Manifold cache requires a persistent store indexed by collider pair,
-surviving across frames.
+## Manifold cache
 
----
+`pipeline/manifold.rs` matches new contacts to last frame's by `FeatureId`, using proximity
+as the tiebreak among points that share one. Matched contacts inherit their accumulated
+impulses (warm start). A contact point survives `manifold_max_age` frames without a
+narrowphase refresh before it is pruned.
+This persistence is the single largest contributor to stable resting contact.
 
-## Phase 5: Build constraint list
+## Conditioning: shock propagation
 
-**Purpose:** Flatten all active contact manifolds (and future joints) into a flat list of
-constraints for the solver.
+`ManifoldConditioner` (`solver/conditioning.rs`) runs once per frame on the active
+manifolds. The default is `ShockPropagationConditioner`. It runs a BFS outward from static
+geometry through the contact graph, orders manifolds top-down, and gives each manifold
+within 45° of vertical a mass scale so that the lower body appears heavier
+(`shock_alpha` 0.3).
 
-Each `ContactPoint` in an active manifold becomes a `ContactConstraint`:
-```
-ContactConstraint {
-    body_a: Option<RigidBodyHandle>,
-    body_b: RigidBodyHandle,
-    point: Point3,                  // world-space contact point
-    normal: Vector3,                // world-space normal, A-to-B
-    depth: f32,
-    restitution: f32,               // combined material property
-    friction: f32,                  // combined material property
-    normal_impulse_cache: f32,      // from manifold, for warm-starting
-    tangent_impulse_cache: [f32; 2],
-}
-```
+- A single-body constraint (`KeepAttitude` on the player) does not make a body
+  "ground". Only static geometry roots the BFS.
+- The scaling creates energy when a structure collapses dynamically, because scaled
+  impulses are not equal and opposite. It is kept because heavy-on-light stacks sag, creep
+  or topple without it. Fixes tried and rejected are in `docs/BOX3D_SOLVER_COMPARISON.md`
+  and in `physics_fuzz`'s history.
 
-**Material combination:**
-- Restitution: average `(e_a + e_b) / 2`.
-- Friction: geometric mean `sqrt(mu_a * mu_b)`.
+## Solver
 
-**Dependencies:** Phases 3–4 must have produced contact manifolds.
+`ConstraintSolver` is the pluggable trait (`prepare`, `solve`, `write_back`,
+`project_velocities`). The only implementation is `PgsNgsSolver` (`solver/pgs_ngs.rs`).
 
----
+**Velocity phase, per island, in parallel.** `SolverIslands` (union-find over arena slots)
+groups rows that share no movable body; static bodies never join islands. Each
+`IslandSolver` gathers its own copy of its bodies' velocities (`SolverBodies`), builds
+`ContactRow`s, warm-starts, iterates, and scatters velocities back after every island is
+done. The result is independent of thread scheduling. Within an iteration:
 
-## Phase 6: Warm-start solver
+- **Normal impulses per manifold are solved together and exactly** (`normal_block.rs`). A
+  manifold has at most 4 contacts, so the LCP is solved by trying sets of active contacts.
+  Contacts are not solved one at a time, which converged slowly and left a phantom torque
+  between close contacts.
+- **Friction** (`friction.rs`): the tangential row is bounded by μ·N and driven toward
+  `SolverContact::traction.target`. That target is zero for ordinary friction and nonzero
+  for a drive.
+- **Torsional** (`torsional.rs`): spin about the normal, bounded by μ·N·r. It is inert
+  unless an actuator declares a patch radius.
+- **Constraint rows** (`constraint_row.rs`), using Baumgarte bias for joints.
+- Restitution applies only above `restitution_velocity_threshold`. Warm starting is
+  whole (`warm_start_scale` 1.0), and fast contacts are not warm-started.
+- Iterations: base 3, plus extra passes earned by an island's hardest body (many contacts,
+  or disagreeing normals) (`iteration_budget.rs`).
 
-**Purpose:** Apply cached impulses from the previous frame to give the solver a head start.
-Without warm-starting, the solver must reconverge from scratch each frame, leading to visible
-jitter on resting contacts (the solver doesn't reach equilibrium in a small number of
-iterations).
+**Position phase.** NGS (`position_correction.rs`) runs after the velocity phase with real
+masses (no shock scaling), and corrects penetration beyond `slop` from the positions at
+contact generation, with a per-contact correction-speed cap. It also corrects
+`PositionAndVelocity` constraint rows and applies contact rolling resistance and damping.
+It moves bodies without giving them velocity.
 
-**Procedure:** For each constraint with a cached `normal_impulse_cache > 0`:
-1. Compute the impulse vector: `impulse = normal * normal_impulse_cache`.
-2. Apply to both bodies: body_a gets `-impulse`, body_b gets `+impulse`, both at the
-   contact point (affecting linear and angular velocity).
-3. Similarly apply cached tangent impulses along the two friction directions.
+**Hard projection** then removes the velocity that `HardProjection` constraints forbid.
 
-**Scaling:** Optionally scale cached impulses by a factor (e.g., 0.8–1.0) for robustness.
-A factor of 1.0 is correct when contacts are well-matched; a factor < 1.0 adds safety margin
-for poorly-matched contacts. Start with 1.0 and reduce if instability is observed.
+## Drive
 
-**Dependencies:** Manifold persistence (phase 4c) must provide cached impulses.
+How gameplay moves bodies honestly (`physics/drive/`, design in
+`docs/TRACTION_DRIVE_DESIGN.md`). Gameplay sets a `DriveCommand` with
+`PhysicsWorld::set_body_drive`. Its gameplay half (`DriveIntent`, `Actuator`) lives in
+`src/drive/`.
 
----
-
-## Phase 7: Solve velocity constraints
-
-**Purpose:** Iteratively adjust body velocities so that all contact constraints are satisfied
-(no interpenetration, correct restitution, Coulomb friction).
-
-**Algorithm:** Sequential impulses (Projected Gauss-Seidel). For each solver iteration, loop
-over all constraints and solve each one independently, immediately updating body velocities.
-
-### Normal impulse (non-penetration)
-
-For each constraint:
-1. Compute relative velocity at the contact point:
-   ```
-   v_rel = (vel_b + omega_b x r_b) - (vel_a + omega_a x r_a)
-   v_n   = v_rel . normal
-   ```
-2. Compute the velocity bias for position correction (Baumgarte stabilization):
-   ```
-   bias = (baumgarte_factor / dt) * max(depth - slop, 0)
-   ```
-   Typical values: `baumgarte_factor = 0.1–0.2`, `slop = 0.001–0.01`.
-   If split impulse is enabled, this bias is applied in a separate positional solve
-   so it does not add energy to the velocity solution.
-3. Compute the desired velocity change:
-   ```
-   restitution_velocity = restitution * v_n_initial
-   ```
-   Where `v_n_initial` is the pre-solver relative normal velocity (computed once before
-   iterations begin, not updated during iteration). Apply restitution only when
-   `|v_n_initial| > restitution_threshold` (typically 0.5–1.0 m/s) to prevent micro-bouncing
-   at resting contacts.
-4. Compute the effective mass:
-   ```
-   K = inv_mass_a + inv_mass_b
-     + ((I_inv_a * (r_a x n)) x r_a) . n
-     + ((I_inv_b * (r_b x n)) x r_b) . n
-   m_eff = 1 / K
-   ```
-5. Compute the impulse magnitude:
-   ```
-   lambda = -m_eff * (v_n + restitution_velocity + bias)
-   ```
-6. **Accumulated impulse clamping:**
-   ```
-   old_accumulated = constraint.accumulated_normal_impulse
-   constraint.accumulated_normal_impulse = max(old_accumulated + lambda, 0)
-   lambda = constraint.accumulated_normal_impulse - old_accumulated
-   ```
-   This is critical. Clamping the accumulated impulse (not the per-iteration impulse) ensures
-   the solver converges to the correct solution over multiple iterations. Per-iteration
-   clamping can overshoot.
-7. Apply the impulse: `normal * lambda` to both bodies at the contact point.
-
-### Friction impulse
-
-After solving the normal constraint for a contact:
-1. Compute two tangent directions orthogonal to the normal.
-2. For each tangent direction, compute relative tangent velocity and solve similarly.
-3. Clamp accumulated friction impulse to the friction cone:
-   ```
-   |accumulated_tangent| <= friction * accumulated_normal_impulse
-   ```
-
-### Post-stabilization (split impulse)
-
-To reduce energy injection from Baumgarte, optionally run a positional correction pass
-after the main velocity solver. This applies the `bias` term as a position-level impulse
-that does not affect linear or angular velocity. It improves tall stacks and resting
-stability at the cost of an extra loop over constraints.
-
-Implementation sketch:
-- Keep the velocity solve exactly as above with `bias = 0`.
-- Run N position iterations using the same constraints, but only solve for the
-  penetration bias term.
-- Apply the correction to positions/orientations directly (or via a separate
-  "pseudo-velocity" accumulator that is not carried into the next frame).
-
-Start with this disabled and enable once the base solver is stable. It can be added
-after warm-starting and accumulated impulse clamping are in place.
-
-### Iteration count
-
-Start with 4–8 iterations. More iterations improve convergence for stacking and resting
-stability. Fewer iterations are cheaper. This is a tunable parameter.
-
-**Dependencies:** Phase 6 (warm-start) must have run first. Phases 3–5 must have produced
-constraints.
-
----
-
-## Phase 8: Store solver impulses
-
-**Purpose:** Write the accumulated impulses from the solver back into the contact manifold's
-cache for next frame's warm-starting.
-
-For each constraint, copy `accumulated_normal_impulse` and `accumulated_tangent_impulse`
-back into the corresponding `ContactPoint` in the manifold.
-
-**Dependencies:** Phase 7 must have completed.
-
----
-
-## Phase 9: Integrate positions
-
-**Purpose:** Apply corrected velocities to update body positions and orientations.
-
-```
-position += linear_velocity * dt
-orientation = integrate_orientation(orientation, angular_velocity, dt)
+```text
+manifolds ──▶ SupportResolver ──▶ SupportSets ──┬──▶ Grounding (what characters read)
+                                                ├──▶ stamp_non_support_grip
+                                                └──▶ TractionPlanner ──▶ contact traction targets
+DriveCommand ─┬─ support-anchored ──▶ traction targets (friction with a non-zero target)
+              ├─ medium-anchored  ──▶ 6 world-anchored motor rows (platform motors)
+              └─ allowance        ──▶ apply_allowances (jump, air steer: bounded, ledgered)
 ```
 
-**Key detail:** By this point, the solver has already adjusted velocities to prevent
-penetration. The position integration simply carries out the corrected motion. This is why
-contacts must be generated at current positions (before integration) — the solver prevents
-the bad motion rather than reacting to it after the fact.
+- **Support Set**: which contacts hold a body up, along the gravity axis.
+  `grounding.rs` is its boolean projection, plus carry-over for sleeping bodies.
+- **Support anchor**: a drive is friction with a target, so the reaction goes into whatever
+  the body stands on (a platform is pushed back). Nothing holding the body up means no
+  authority.
+- **Medium anchor**: the reaction goes into the world, through ordinary constraint rows
+  bounded by `max_accel·dt`, solved alongside gravity.
+- **Allowance**: the one sanctioned non-conservative authority (jumping, air steering).
+  It is opt-in, bounded per entity, and spent before the solve, so contacts still answer it.
+  Edge-triggered verbs fire on the first substep only.
+- Both cheats (`drive_gain` > 1 and allowances) are measured in `TractionLedger` /
+  `AllowanceLedger` and printed under F3.
 
-**Dependencies:** Phase 7 must have completed.
+## CCD
 
----
+A safety net for motion the frame's contacts cannot catch. `CcdStrategy` is pluggable; the
+default is `SweepClampCcd` (`ccd/sweep_clamp.rs`):
 
-## Phase 10: CCD pass
-
-**Purpose:** Prevent tunneling for fast-moving bodies whose per-frame displacement exceeds
-their collision geometry size.
-
-### When CCD activates
-
-CCD is **not** the primary collision detection mechanism. It is a safety net for bodies moving
-too fast for the narrowphase margin to catch. A body requires CCD when:
-```
-|linear_velocity| * dt > radius * ccd_threshold
-```
-Where `ccd_threshold` is typically 0.5 (half the body radius). The narrowphase margin and
-CCD threshold must be coordinated so there is no gap:
-```
-contact_margin >= ccd_threshold * min_radius * (1 / min_expected_fps)
-```
-In practice, using `contact_margin = 0.02` and `ccd_threshold = 0.5` with radius 0.15 at
-60fps gives: narrowphase catches up to `0.02 / 0.0167 = 1.2 m/s` displacement; CCD activates
-at `0.15 * 0.5 / 0.0167 = 4.5 m/s`. There is a gap between 1.2 and 4.5 m/s. The preferred
-solution is to add **speculative contacts** for fast bodies below the CCD threshold:
-
-- For bodies with `|v| * dt > contact_margin`, expand their AABB along the velocity vector
-  and allow the narrowphase to emit contacts with `depth <= 0` (velocity-only correction).
-- This keeps discrete contacts primary, closes the gap without forcing full CCD, and avoids
-  excessive margins that can cause jitter.
-
-If speculative contacts are not yet implemented, reduce `ccd_threshold` as a stopgap, but
-plan to replace the stopgap with speculative contacts later.
-
-### CCD procedure
-
-1. Before phase 9, save all dynamic body positions.
-2. After phase 9, for each body flagged for CCD:
-   a. Sweep the body's collider from pre-integration position to post-integration position
-      against static geometry and other bodies.
-   b. If a sweep hit occurs at time `t in [0, 1]`:
-      - Move the body to the hit position: `pos = pre_pos + (post_pos - pre_pos) * t`.
-      - Generate one or more CCD contact constraints at the hit point(s).
-      - **CCD mini-solve:** run a small sequential-impulse solve (2–4 iterations) over the
-        CCD constraints for the impacted bodies (or their island). This handles multiple
-        hits in a single frame and avoids single-contact overshoot.
-      - The body's velocity is now corrected and it will not tunnel.
-
-### CCD vs static geometry
-
-Use `StaticGeometry::sweep_sphere(start, end, radius)` to find the first impact.
-
-### CCD vs dynamic bodies
-
-For pairs where at least one body is flagged for CCD, use `swept_sphere_sphere` to find
-the first impact. Process hits in time order per CCD body, then run the CCD mini-solve
-for the bodies involved in those hits.
-
-**Dependencies:** Phase 9 must have run. Pre-integration positions must be saved before
-phase 9. Speculative contacts (if used) are generated in phase 4 and only require the
-expanded AABB.
-
----
-
-## Phase 11: Sleeping and islands
-
-**Purpose:** Bodies at rest should stop being simulated. This eliminates resting jitter
-and improves performance.
-
-```mermaid
-flowchart TD
-  physicsWorld[PhysicsWorld] --> sleepManager[SleepManager]
-  sleepManager --> energyTracker[EnergyTracker]
-  sleepManager --> islandBuilder[IslandBuilder]
-  sleepManager --> wakeEvents[WakeEvents]
-  contacts[ContactConstraints] --> sleepManager
-  external[ExternalForces] --> wakeEvents
+```text
+collect_candidates ──▶ static_sweep / dynamic_sweep ──▶ clamp to earliest impact ──▶ solve contact
 ```
 
-### Energy-based sleep criterion
-
-A body is a sleep candidate when its kinetic energy stays below a threshold for N consecutive
-frames:
-```
-kinetic_energy = 0.5 * mass * |v|^2 + 0.5 * omega . (I * omega)
-sleep_candidate = kinetic_energy < sleep_threshold for sleep_delay frames
-```
-Typical values: `sleep_threshold = 0.01`, `sleep_delay = 60` frames (1 second at 60fps).
-
-### Island building
-
-Bodies connected by active contacts or joints form an island. All bodies in an island must
-sleep together (one fast body keeps the whole island awake). Implementation:
-1. Build a graph where bodies are nodes and active contacts/joints are edges.
-2. Find connected components (union-find or BFS).
-3. An island sleeps only if all its bodies are sleep candidates.
-
-### Wake-up
-
-A sleeping body wakes (along with its island) when:
-- An external force or impulse is applied to it.
-- A non-sleeping body enters contact with it (detected via broadphase AABB overlap).
-- Its velocity is set externally (e.g., by game code via `set_linear_velocity`).
-
-### Sleeping bodies in the pipeline
-
-Sleeping bodies skip phases 1–2 (integration), are excluded from broadphase pair generation,
-and their contacts are not solved. They retain their cached contact manifolds so warm-starting
-works immediately upon wake-up.
-
-**Dependencies:** Requires broadphase and contact manifold persistence.
-
----
-
-## Data structures summary
-
-### PhysicsWorld
-```
-PhysicsWorld {
-    config: PhysicsConfig,
-    bodies: Arena<RigidBody>,
-    colliders: Arena<Collider>,
-    manifolds: ManifoldCache,               // persistent contact manifolds
-    broadphase: BroadPhase,                 // AABB acceleration structure
-    islands: IslandManager,                 // connected components for sleeping
-}
-```
-
-### PhysicsConfig
-```
-PhysicsConfig {
-    gravity: Vector3,
-    solver_iterations: u32,                 // 4–8
-    contact_margin: f32,                    // 0.01–0.05
-    ccd_threshold: f32,                     // 0.5
-    baumgarte_factor: f32,                  // 0.1–0.2
-    baumgarte_slop: f32,                    // 0.001–0.01
-    restitution_velocity_threshold: f32,    // 0.5–1.0
-    sleep: SleepManagerConfig,              // nested config for sleep system
-}
-```
-
-### SleepManagerConfig
-```
-SleepManagerConfig {
-    enabled: bool,                          // enable/disable sleep system
-    threshold: f32,                         // 0.01–0.2 (kinetic energy threshold)
-    delay_frames: u32,                      // 30–60 (frames below threshold before sleeping)
-}
-```
-
-### ManifoldCache
-```
-ManifoldCache {
-    manifolds: HashMap<ColliderPairKey, ContactManifold>,
-}
-```
-Indexed by ordered collider pair. Pruned each frame: remove manifolds not refreshed by the
-narrowphase for N frames (e.g., 10), or whose colliders have been removed.
-
----
-
-## Module structure
-
-```
-src/physics/
-    mod.rs                  (public API re-exports only)
-    body.rs                 (RigidBody, RigidBodyDesc, BodyType)
-    collider.rs             (Collider, ColliderDesc, ColliderShape, ColliderMaterial)
-    handle.rs               (RigidBodyHandle, ColliderHandle)
-    math.rs                 (inertia tensors, orientation integration)
-    static_geometry.rs      (StaticGeometry trait, StaticContact, SweptStaticContact)
-    world.rs                (PhysicsWorld, PhysicsConfig — orchestrates the pipeline)
-    broadphase/
-        mod.rs
-        aabb.rs             (AABB type, overlap test, from-shape computation)
-        brute_force.rs      (O(n^2) broadphase — initial implementation)
-        bvh.rs              (AABB tree — later implementation)
-    narrowphase/
-        mod.rs
-        manifold.rs         (ContactManifold, ContactPoint, ManifoldCache)
-        sphere_sphere.rs    (sphere-sphere overlap + contact generation)
-        sphere_static.rs    (sphere-static geometry contact generation)
-    collision/
-        mod.rs
-        swept.rs            (swept sphere-sphere, swept sphere-static)
-    solver/
-        mod.rs
-        sequential_impulse.rs   (the main solver loop)
-        constraints.rs          (ContactConstraint, JointConstraint types)
-    island.rs               (island building, sleep management)
-```
-
----
-
-## Implementation order
-
-Each step should be a standalone PR that leaves the engine functional and testable.
-
-### Step 1: Immediate solver fixes ✅
-
-Two fixes to the existing solver without changing pipeline structure:
-1. **Restitution velocity threshold.** Add the threshold to prevent micro-bouncing at
-   resting contacts. Fixes resting contact jitter.
-2. **Friction angular impulses.** Friction impulses are currently applied directly to
-   linear velocity, bypassing `apply_impulse_at_point()`. This means friction never
-   generates torque — bodies slide instead of rolling. Fix by applying friction impulses
-   at the contact point so they affect angular velocity. **This unblocks all other work
-   by fixing the immediate bugs.**
-
-**Implementation notes:**
-- `restitution_velocity_threshold` added to `PhysicsConfig` (default 1.0 m/s). When
-  approach speed is below the threshold, restitution is zeroed in `solve_single_contact`.
-- `apply_friction()` in `solver.rs` now calls `apply_impulse_at_point()` for both bodies
-  instead of modifying linear velocity directly. This generates torque via `r × impulse`.
-- **Known limitation:** After a wall collision redirects a ball's velocity, the static
-  contact cache can fail to re-acquire the terrain contact, causing balls to fall through.
-  This is a fundamental gap in the CCD-primary architecture, fixed by the discrete
-  narrowphase in Steps 2–3.
-
-### Step 2: Narrowphase contact generation
-Add `narrowphase/` module. Generate contacts at current positions for sphere-static and
-sphere-sphere. Wire into `step()` alongside the existing CCD pipeline (both run; the
-narrowphase handles resting contacts, CCD handles fast motion). Subtract contact margin
-from terrain-reported depth.
-
-### Step 3: Pipeline reorder
-Rewrite `step()` to follow the new pipeline order: integrate velocities → narrowphase →
-solve → integrate positions → CCD. This replaces the existing TOI-first architecture
-(predict positions, sweep all pairs, resolve events in time order, re-sweep after each
-collision). The predict/event-loop/re-CCD machinery, manifold cache, static contact cache,
-and warm-start cache in their current form are all removed. The narrowphase is now the
-primary contact source; CCD is the tunneling safety net.
-
-**Implementation notes:**
-- Current implementation uses narrowphase-first contact generation plus a CCD sweep after
-  integration. CCD is skipped for bodies already handled by static narrowphase contacts.
-- Static contacts currently keep a single strongest triangle contact per sphere to avoid
-  conflicting normals (multiple triangle contacts at once cause impulse jitter near edges).
-- Contact margin is applied in narrowphase queries, with solver depth clamped to `>= 0`.
-- No manifold persistence, warm-starting, or accumulated impulse caching yet; those start
-  in Step 4. Expect higher bounce energy and normal jitter until then.
-
-### Step 4: Contact manifold persistence and warm-starting ✅
-Add `ManifoldCache`. Store contact points in local space, match across frames, cache
-impulses. Implement warm-starting in the solver. This is the single biggest stability
-improvement for resting and stacking contacts.
-
-**Implementation notes:**
-- `ManifoldCache` lives in `pipeline/manifold.rs`, bridging narrowphase output and solver
-  input. Keyed by `(Option<ColliderHandle>, ColliderHandle)` ordered pair (`None` for
-  static geometry). Contact points stored in body-local space, matched across frames by
-  local-space distance (`contact_match_threshold`, default 0.05). Stale points pruned
-  after `manifold_max_age` frames (default 3) without a narrowphase refresh.
-- Narrowphase returns raw contacts; the manifold cache merges them with persistent
-  data and populates warm-start impulse fields on `ContactConstraint`. CCD contacts
-  are transient and bypass the cache (`collider_b: None`).
-- `solve()` in `solver.rs` is now the single entry point: warm-start, N iterations,
-  position correction (once), return `SolvedImpulses` for writeback. The iteration
-  loop moved out of `world.rs` into the solver. `solve_contacts()` remains as a
-  low-level function for CCD's one-off transient contacts.
-- Friction refactored to use a stable tangent basis (`compute_tangent_basis`) derived
-  from the contact normal, replacing the previous velocity-derived tangent direction.
-  This ensures tangent impulses from the manifold cache are applied in a consistent
-  frame across warm-start and iterative solving.
-- **Bug fix:** Position correction (Baumgarte) was previously inside `solve_single_contact`,
-  causing it to run `solver_iterations` times per frame instead of once. With
-  `correction_factor=0.2` and 4 iterations, bodies received 0.8 effective correction —
-  over-correcting penetration, injecting energy via gravity on the next frame, and
-  producing visible perpetual bouncing at low energy. Now runs once after iterations.
-- **Bug fix:** Warm-start writeback was initialized to zero, only capturing iterative
-  impulses. The total impulse (warm-start + iterative) must be written back so the
-  cache converges to the correct steady-state value. Without this, cached impulses
-  oscillate between correct and near-zero on alternating frames.
-
-### Step 5: Accumulated impulse clamping
-Change the solver from per-iteration impulse clamping to accumulated impulse clamping.
-This improves convergence and prevents the solver from overshooting on contacts that
-are solved multiple times per iteration loop.
-
-**Implementation notes:**
-- Use Projected Gauss-Seidel: maintain an accumulated normal impulse per contact and
-  clamp the **accumulated** value to `>= 0`, then apply only the delta each iteration.
-- For friction, accumulate the 2D tangent impulse and clamp it to the friction cone:
-  `|tangent| <= mu * accumulated_normal`.
-- Restitution should be computed from the **pre-warm-start** relative normal velocity
-  so it is applied once per frame, not re-triggered by warm-start impulses.
-- Warm-start impulses are scaled (`warm_start_scale`) and written back as total
-  (warm + iterative) impulses to prevent oscillation.
-- Carry `raw_depth` alongside `depth` so restitution and warm-start gating can use the
-  unclamped penetration (margin contacts otherwise look like zero depth).
-- Gate warm-start reuse by normal alignment (`normal_alignment_threshold`) and a
-  depth slop (`warm_start_depth_slop`) so stale impulses aren’t applied across
-  changing contacts.
-- Suppress warm-start for moving contacts (|vn| above the restitution threshold) to
-  avoid injecting stale impulses into sliding/impacting contacts.
-- Allow restitution within a small depth slop (`restitution_depth_slop`) to preserve
-  bounce for fast impacts that are still inside the contact margin.
-- Tune Baumgarte parameters (`baumgarte_factor`, `baumgarte_slop`) to reduce energy
-  injection while still correcting penetrations.
-
-### Step 6: Broadphase
-Add AABB computation for colliders. Implement brute-force broadphase (loop over all
-pairs, test AABB overlap). Replace the current all-pairs sphere check in body-body
-narrowphase. This is a performance improvement, not a correctness change.
-
-### Step 7: Speculative contacts (CCD gap closure)
-Add speculative contacts for fast bodies below the CCD threshold. Expand AABBs along the
-velocity vector, allow narrowphase to emit velocity-only contacts with `depth <= 0`, and
-solve them normally. This closes the CCD activation gap without forcing full CCD on
-moderate-speed bodies.
-
-**Implementation notes:**
-- Config toggles gate speculative contacts:
-  `enable_speculative_contacts`, `speculative_min_speed`,
-  `speculative_margin_multiplier`.
-- Only emit speculative contacts when there are **no overlap contacts** for the pair
-  that frame (avoid redundant work on resting contacts).
-- Gate by travel over the whole frame, the span one narrowphase pass must cover:
-  `travel = |v| * frame_dt` with
-  `travel > contact_margin * speculative_margin_multiplier` and
-  `travel <=` the frame travel at which either CCD gate fires.
-- Generate the manifold where the pair will meet with the ordinary dispatch and rewind
-  it: each contact carries the `gap` still to close. The solver permits approach up to
-  that gap and arrests beyond it; restitution answers the approach on the substep the
-  pair arrives. A zero-depth contact without its gap stops the pair short, in mid-air.
-
-### Step 8: CCD mini-solve
-When a CCD sweep hits, build CCD constraints and run a small solver pass (2–4 iterations)
-for the impacted bodies or island. This reduces artifacts from multiple hits in a single
-frame.
-
-### Step 9: Split impulse (post-stabilization)
-Add the optional positional correction pass to reduce energy injection from Baumgarte.
-Keep it disabled by default; enable once base stability is proven.
-
-### Step 10: Sleeping
-Add energy tracking, island building, and sleep/wake logic. Sleeping bodies skip
-integration and solving. This eliminates residual micro-jitter and improves performance.
-
-**Implementation notes:**
-- Track per-body kinetic energy and require `sleep_delay_frames` below
-  `sleep_threshold` before marking as a sleep candidate.
-- Build islands from active contacts; an island sleeps only if all bodies are candidates.
-- Wake rules: external impulse/force or kinematic move, and contact with an awake body.
-- When a body wakes, wake the entire island to avoid half-awake constraints.
-- Sleeping bodies skip integration, narrowphase pair generation, solver, and CCD.
-- Keep manifold cache entries for sleeping bodies so warm-starting works on wake.
-
-### Step 11: BVH broadphase (optional)
-Replace brute-force broadphase with an AABB tree for better scaling to large body counts.
-
----
-
-## Kinematic player integration plan
-
-**Goal:** Integrate the player character into `PhysicsWorld` as a kinematic body so it
-collides with other physics objects and terrain. Walking/footing stays animation-driven
-and uses probes only; collision response comes exclusively from the physics engine.
-
-### Design constraints
-- **Player motion is authored by game code.** The physics engine must not overwrite the
-  commanded motion except to resolve penetrations.
-- **Kinematic bodies are infinite mass.** They affect dynamic bodies, but do not receive
-  impulses that change their velocities.
-- **Collision response is authoritative.** Any penetration correction applied by the
-  solver must be fed back to the player transform so the controller does not re-embed.
-
-### Step K1: Narrowphase includes kinematic bodies
-
-**Why:** Kinematic bodies are currently filtered out of all contact generation.
-
-**Changes:**
-- `narrowphase/sphere_sphere.rs`: include bodies where `!is_static()`; emit
-  dynamic–kinematic contacts (and optionally kinematic–kinematic if needed later).
-- `narrowphase/sphere_static.rs`: include kinematic bodies in static queries.
-
-**Result:** Contacts are generated for kinematic bodies against terrain and other bodies.
-
-**Implementation notes:**
-- `generate_sphere_sphere_contacts` now filters `!is_static()` instead of `is_dynamic()`.
-- `generate_sphere_static_contacts` now skips only static bodies.
-- **Missing:** Kinematic–kinematic contacts are not required today; when needed, add an
-  explicit pair filter (or a second pass) to include them deliberately.
-
-### Step K2: Solver treats kinematic as infinite mass
-
-**Why:** The solver currently applies impulses only to dynamic bodies. Kinematics should
-contribute to relative velocity but should not be modified by impulses.
-
-**Changes:**
-- Keep relative-velocity computation unchanged (it already reads velocities from both bodies).
-- Apply impulses only to dynamic bodies.
-- Allow position correction to move kinematic bodies **only if** the controller does not
-  overwrite the corrected transform later in the frame (see K4/K5).
-
-**Result:** Dynamic bodies respond to kinematic collisions; kinematics remain user-driven.
-
-**Implementation notes:**
-- Impulse application remains `dynamic`-only for normal and friction solves.
-- Position correction now allows kinematic bodies to be moved when resolving penetration.
-- Kinematic correction weight can be constrained to static contacts only to avoid
-  kinematic–dynamic pushback.
-
-### Step K3: CCD includes kinematic bodies
-
-**Why:** Kinematic bodies moved by user code can still tunnel if moved quickly.
-
-**Changes:**
-- Include kinematic bodies in the CCD pre-state cache and candidate sweep list.
-- Allow CCD correction for kinematic bodies exactly as for dynamic bodies.
-
-**Result:** High-speed player motion does not tunnel through terrain.
-
-**Implementation notes:**
-- Pre-integration CCD state capture includes all non-static bodies.
-- CCD candidate filtering includes all non-static bodies while still skipping any body
-  already handled by static narrowphase contacts.
-
-### Step K4: Kinematic sync API in PhysicsWorld
-
-**Why:** The physics engine needs authoritative input for kinematic transforms and
-velocities before each `step()`.
-
-**Changes:**
-- Add `set_kinematic_transform(handle, position, rotation)`.
-- Add `set_kinematic_velocity(handle, linear, angular)`.
-- Optionally add `set_kinematic_motion(handle, prev, next)` if MotionState is used to
-  drive CCD more directly.
-
-**Result:** Game code can drive kinematic bodies explicitly each frame.
-
-### Step K5: ECS ↔ Physics synchronization
-
-**Why:** The player entity must write its commanded motion into the physics world, and
-must read back penetration corrections after the solver.
-
-**Changes:**
-- Pre-physics system: read player motion target and call the kinematic sync API.
-- Post-physics system: read corrected body position and write back to the player `Position`
-  (and `MotionState.prev/predicted` if used for animation).
-
-**Result:** The player respects physics corrections without the controller fighting them.
-
-### Step K6: Player body creation
-
-**Why:** The player must have a physics body and collider to participate in contacts.
-
-**Changes:**
-- Spawn a kinematic `RigidBody` for the player with a sphere or capsule collider.
-- Store the `RigidBodyHandle` on the player entity (component or resource).
-- Initialize collider material separately from projectile materials (tune friction).
-
-**Result:** The player exists in the physics world and generates contacts.
-
-### Step K7: Remove BipedCollisionSystem authority
-
-**Why:** The player should be integrated into the physics engine, not a separate terrain
-resolver. Walking/footing remains animation-driven and probe-based.
-
-**Changes:**
-- Remove or disable `BipedCollisionSystem` for the player entity.
-- Preserve probe-based grounding if desired, but do not apply collision resolution there.
-
-**Result:** All collision response is centralized in `PhysicsWorld`.
-
-### Stability notes for kinematic bodies
-- **Penetration correction:** The solver may move kinematics slightly to resolve overlap.
-  This correction must be fed back into the controller’s state to avoid re-penetration.
-- **Commanded motion vs solver:** Use a single source of truth per frame: write motion
-  to physics, solve, then read back. Do not write again after the solve.
-- **No impulse feedback:** Kinematic velocities should not be changed by impulses; only
-  external code should set them.
-- **CCD only helps continuous motion:** Teleports should be resolved by explicit overlap
-  correction or by temporarily disabling penetration resolution for that frame.
-
----
-
-## Stability techniques reference
-
-These are the specific techniques that prevent common physics engine bugs. Each is annotated
-with which phase implements it.
-
-| Technique | Phase | What it prevents |
+- **Gate**: a collider is swept if it outruns contact generation across one substep
+  (`ccd_threshold` × radius) **or** across the whole frame (`ccd_frame_coverage` × radius).
+- **Ownership is per pair**: a pair with frame-start narrowphase contacts belongs to the
+  solver until it drifts away from the separation its manifold was made at
+  (`ownership.rs`). A grenade skimming the floor is still swept against the wall ahead.
+- **Grazes at t≈0 are rejected** inside the per-triangle search (`is_tunnelling_hit`), so a
+  body sliding along a surface is not frozen and a floor graze cannot mask a wall behind it.
+- Static sweeps reuse a per-frame patch cache. Dynamic sweeps use the shared
+  `SweepAndPrune` over swept bounds and `collision/continuous/` (analytic or GJK raycast).
+- A freed piece exactly flush with a static neighbour is clamped at t=0. Spawn pieces with a
+  hairline gap.
+
+## Sleep
+
+`sleep/`: `SleepTracker` counts substeps a body has been still, which means below both
+velocity thresholds **and** not moved in pose. Pose matters because NGS moves bodies
+without giving them velocity. When every body of a contact island is a candidate, the
+island sleeps and its velocities are zeroed. Sleeping bodies start no contacts, are skipped
+by integration and CCD, and are woken by contact from an awake body, by `apply_impulse` /
+`apply_angular_impulse` / `wake_body`, or by a drive being set. **Every created body starts
+asleep.** Body-level impulse methods bypass the wake, so use `PhysicsWorld`'s methods.
+
+## Outputs and diagnostics
+
+- `contact_events()`: contacts this frame (narrowphase and CCD), emitted before the solve.
+- `impacts()`: `ImpactLedger`, the normal impulse each body (and collider) received this
+  frame, used by fracture, damage and grenade fuses.
+- `contact_work()`: `ContactWorkLedger`, the work each contact did and on whom. Off by
+  default; `EnergyAudit` uses it to catch energy the solver made up.
+- `frame_profile()`: `FrameProfile` per `PhysicsStage`. Printed under `Physics/Time/` on F3.
+- `raycast_excluding`, `probe_bodies`: queries used by sensing and foot placement.
+- `PhysicsDebugger` (`debug.rs`) and env-gated solver diagnostics (`solver/diagnostics.rs`).
+
+## Tools and tests
+
+- `src/physics/bench_harness/`: `PhysicsBenchScenario`s run headlessly by
+  `run_scenario()` with assertions in `tests/` (`--features bench_harness`, release), and
+  in a window by `bench_viewer`.
+- `physics_fuzz`: seeded structures disturbed by the real player body, judged by
+  `EnergyAudit`.
+- `physics_perf`: stage timings on real terrain.
+- `level_check`: wakes every level object and reports what doesn't stay at rest.
+- When adding a regression test for tunnelling or contact behaviour, check that it **fails
+  with the fix reverted**, with frame boundaries straddling the obstacle.
+
+## Extension points
+
+| Trait | Default | Swaps |
 |---|---|---|
-| Semi-implicit Euler (solve before integrate) | 1–2, 7, 9 | Solver fights forces instead of preventing penetration |
-| Contact margin / AABB expansion | 3–4 | Contacts not detected until penetration already happened |
-| Speculative contacts (AABB expansion along velocity) | 4 | CCD activation gap for moderate-speed bodies |
-| Margin depth subtraction | 4 | Position correction pushing apart non-penetrating contacts |
-| Restitution velocity threshold | 7 | Micro-bouncing at resting contacts from gravity |
-| Accumulated impulse clamping | 7 | Solver overshoot on multi-iteration convergence |
-| Warm-starting | 6, 8 | Solver reconverging from scratch each frame (jitter) |
-| Baumgarte position correction | 7 | Accumulated penetration drift over time |
-| Split impulse (post-stabilization) | 7, 9 | Energy injection from Baumgarte in tall stacks |
-| Baumgarte slop | 7 | Position correction jitter on shallow contacts |
-| CCD for fast bodies | 10 | Tunneling through thin geometry |
-| CCD mini-solve | 10 | Multiple CCD hits in a single frame |
-| Sleeping | 11 | Residual jitter from floating-point noise in solver |
+| `StaticGeometry` | terrain (`TerrainWorld`) | bench geometry in `bench_harness/geometry.rs` |
+| `Stepper` | `SequentialStepper` | |
+| `ConstraintSolver` | `PgsNgsSolver` | |
+| `ManifoldConditioner` | `ShockPropagationConditioner` | `IdentityConditioner` |
+| `CcdStrategy` | `SweepClampCcd` | |
+| `SubstepForceProvider` | none | `BuoyancyForceProvider` (water) |
+
+## Related documents
+
+- `TRACTION_DRIVE_DESIGN.md`: the drive seam, Support Sets, allowances.
+- `BOX3D_SOLVER_COMPARISON.md`: why soft-step substepping was shelved.
+- `BLOCK_LCP_POSTMORTEM.md`: an earlier attempt at exact 3–4 contact manifold solves that
+  regressed. `normal_block.rs` is the later approach that worked.
+- `TERRAIN_BEDDING_DESIGN.md`: `ignores_static` and welded bodies.
+- `GJK_EPA_DESIGN.md`, `HULL_SAT_MANIFOLD_PLAN.md`: convex collision.
+- `SHOCK_PROPAGATION_PLAN.md`, `CONSTRAINT_SYSTEM_PLAN.md`,
+  `SOLVER_CONVERGENCE_ANALYSIS.md`: historical design records. The code has moved on
+  since they were written.

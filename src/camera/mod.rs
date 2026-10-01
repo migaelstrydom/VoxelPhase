@@ -1,3 +1,5 @@
+//! The follow-target camera and its configuration.
+
 mod config;
 mod follow_target;
 

@@ -1,3 +1,5 @@
+//! Headless render of a level as authored, through the real pipeline, to a PNG contact sheet.
+
 mod shots;
 mod viewer;
 

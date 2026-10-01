@@ -1,3 +1,5 @@
+//! Moving platforms: waypoint routes, thrust-and-drag seek motion, and decks that tip under a load.
+
 pub mod components;
 pub mod route;
 pub mod seek;

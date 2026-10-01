@@ -1,3 +1,5 @@
+//! Offline gait harness: the real CharacterAnimator over a scripted body on analytic or moving ground, judged against the cadence the foot placer planned, and rendered as a filmstrip.
+
 mod body;
 mod driver;
 mod film;
