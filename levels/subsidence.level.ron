@@ -53,6 +53,9 @@ Level(
                     // quarter of a metre off round numbers, and stacked masonry
                     // wants a flat footing rather than a nominal one.
                     Plateau(min: (40.0, 40.0), max: (48.0, 48.0), height: 11.5),
+                    // And under the trilithon, whose uprights stood on a 1.5°
+                    // slope and leaned until the lintel slid.
+                    Plateau(min: (28.0, 50.0), max: (32.0, 54.0), height: 12.0),
 
                     // Five benches, 6 m wide, 2 m apart. Nested rectangles
                     // applied outward-in; each one sets an absolute height, so

@@ -16,9 +16,9 @@
 //! Concave creases own no region: the faces either side of a valley meet
 //! whatever rests in it.
 
-use nalgebra::Vector3;
+use nalgebra::{Point3, Vector3};
 
-use crate::collision::mesh::seam_filter::{ContactEdge, FilteredPatch};
+use crate::collision::mesh::seam_filter::{ContactEdge, ContactFace, FilteredPatch};
 
 /// A convex crease edge with its neighbouring face's normal.
 pub struct ConvexCrease<'a> {
@@ -49,6 +49,79 @@ pub fn convex_creases(patch: &FilteredPatch) -> impl Iterator<Item = ConvexCreas
         (canonical && is_convex(edge, &normal_b)).then_some(ConvexCrease { edge, normal_b })
     })
 }
+
+/// A convex crease of one face: a ridge a shape lying across it may be pushed
+/// off over.
+pub struct Ridge {
+    /// Outward normal of the face across the crease.
+    pub normal_b: Vector3<f32>,
+    /// The ends of the straight crease this one is a piece of.
+    pub run: [Point3<f32>; 2],
+}
+
+/// `face`'s convex creases.
+pub fn ridges_of<'a>(
+    patch: &'a FilteredPatch,
+    face: &'a ContactFace,
+) -> impl Iterator<Item = Ridge> + 'a {
+    patch.boundary_edges.iter().filter_map(move |edge| {
+        let normal_b = edge.normal_b?;
+        let owned = face.vertices.contains(&edge.a)
+            && face.vertices.contains(&edge.b)
+            && edge.normal_a.dot(&face.normal) > OWN_SIDE_DOT;
+        (owned && is_convex(edge, &normal_b)).then(|| Ridge {
+            normal_b,
+            run: straight_run(patch, edge),
+        })
+    })
+}
+
+/// The ends of the straight crease `edge` is one piece of: on through every
+/// convex crease edge that carries on in its direction.
+///
+/// A crease is only as long as it runs. A thin pillar's upright edge comes in
+/// short pieces stacked into one line up the pillar, and a box skewered on it
+/// clears no piece by moving along it: the next piece is there. A crater's
+/// radial crease ends at the rim, and a slab lying over it clears it by
+/// rising a few millimetres.
+pub fn straight_run(patch: &FilteredPatch, edge: &ContactEdge) -> [Point3<f32>; 2] {
+    let Some(along) = (edge.b - edge.a).try_normalize(f32::EPSILON) else {
+        return [edge.a, edge.b];
+    };
+    [run_on(patch, edge.a, -along), run_on(patch, edge.b, along)]
+}
+
+/// The far end of the crease from `end`, walking on in `direction`.
+fn run_on(patch: &FilteredPatch, mut end: Point3<f32>, direction: Vector3<f32>) -> Point3<f32> {
+    for _ in 0..patch.boundary_edges.len() {
+        let next = patch.boundary_edges.iter().find_map(|edge| {
+            let far = match end {
+                at if at == edge.a => edge.b,
+                at if at == edge.b => edge.a,
+                _ => return None,
+            };
+            let convex = edge
+                .normal_b
+                .is_some_and(|normal_b| is_convex(edge, &normal_b));
+            let straight = (far - end).try_normalize(f32::EPSILON)?.dot(&direction) > STRAIGHT_DOT;
+            (convex && straight).then_some(far)
+        });
+        match next {
+            Some(far) => end = far,
+            None => break,
+        }
+    }
+    end
+}
+
+/// How nearly, as a cosine, the next crease edge must carry on in a crease's
+/// direction to be more of the same crease.
+const STRAIGHT_DOT: f32 = 0.95;
+
+/// How closely an edge's own face normal must match a face for the edge to
+/// be that face's side of a crease, rather than its neighbour's. The two
+/// sides of one crease share their ends.
+const OWN_SIDE_DOT: f32 = 0.99;
 
 /// Whether the crease folds away from the shape's side, as a ridge does,
 /// rather than towards it, as a valley does.

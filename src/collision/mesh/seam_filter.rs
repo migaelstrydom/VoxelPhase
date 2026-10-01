@@ -6,8 +6,8 @@
 //! Coplanar triangle pairs that share an edge are merged into a single
 //! convex quad when possible. This eliminates contact reducer flickering
 //! caused by clipping against separate triangles that represent the same
-//! physical surface. Pairs that would form a concave quad are left as
-//! individual triangles.
+//! physical surface. Pairs that would form a concave quad, or whose fold
+//! puts the quad off one plane, are left as individual triangles.
 //!
 //! Boundary and crease edges are emitted as ContactEdges. Internal seam
 //! edges between coplanar neighbors are suppressed.
@@ -26,6 +26,18 @@ use crate::collision::SurfaceId;
 /// generate contacts against the same surfaces and must not disagree about
 /// which of them are creases.
 pub const COPLANAR_DOT: f32 = 0.98;
+
+/// Furthest, in metres, the second triangle's free vertex may lie off the
+/// first triangle's plane for the pair to merge into one quad.
+///
+/// A merged quad is one plane: the first triangle's normal through its
+/// vertices. [`COPLANAR_DOT`] bounds the fold's angle, not how far that plane
+/// strays over the second triangle, which grows with the second triangle's
+/// size. A 2.5 cm sliver at a crater's lip, folded 11° to the flat cell beside
+/// it, carried its slope 0.5 m across that cell and stood 10 cm proud of the
+/// ground: a slab resting there was pushed up and sideways every frame it came
+/// within reach. Well under the solver's 5 mm slop.
+const MERGE_PLANARITY: f32 = 1.0e-3;
 
 /// A MeshPatch after seam filtering: contact faces (triangles or merged
 /// quads) and boundary/crease edges only.
@@ -210,7 +222,8 @@ pub fn filter_patch(patch: &MeshPatch, coplanar_dot_threshold: f32) -> FilteredP
 /// Try to merge two coplanar triangles sharing an edge into a convex quad.
 ///
 /// Returns the 4 quad vertices in winding order consistent with the face
-/// normal, or `None` if the result would be concave.
+/// normal, or `None` if the result would be concave or the second triangle
+/// lies off the first one's plane by more than [`MERGE_PLANARITY`].
 fn try_merge_coplanar(
     tri_i: &Triangle,
     edge_idx: usize,
@@ -229,6 +242,9 @@ fn try_merge_coplanar(
     let non_shared_j = [tri_j.v0, tri_j.v1, tri_j.v2].into_iter().find(|v| {
         (v - shared_a).magnitude_squared() > 1e-8 && (v - shared_b).magnitude_squared() > 1e-8
     })?;
+    if (non_shared_j - shared_a).dot(normal).abs() > MERGE_PLANARITY {
+        return None;
+    }
 
     // Quad winding: non_shared_i → shared_a → non_shared_j → shared_b
     // This preserves the original triangle's winding direction.
@@ -560,6 +576,54 @@ mod tests {
         for face in &filtered.faces {
             assert_eq!(face.vertices.len(), 3);
         }
+    }
+
+    /// A sliver at a crater's lip beside a flat cell, as a blast left them
+    /// under the temple: within [`COPLANAR_DOT`] of each other, but the
+    /// sliver's plane stands 10 cm over the cell's far edge.
+    #[test]
+    fn a_sliver_does_not_tilt_the_flat_cell_beside_it() {
+        let patch = MeshPatch {
+            triangles: vec![
+                PatchTriangle {
+                    triangle: Triangle::new(
+                        Point3::new(36.0, 4.005, 69.5),
+                        Point3::new(36.5, 4.005, 69.5),
+                        Point3::new(36.0, 4.0, 69.475),
+                    ),
+                    neighbors: [Some(1), None, None],
+                    surface: SurfaceId::UNSPECIFIED,
+                },
+                PatchTriangle {
+                    triangle: Triangle::new(
+                        Point3::new(36.5, 4.005, 69.5),
+                        Point3::new(36.0, 4.005, 69.5),
+                        Point3::new(36.0, 4.005, 70.0),
+                    ),
+                    neighbors: [Some(0), None, None],
+                    surface: SurfaceId::UNSPECIFIED,
+                },
+            ],
+        };
+        let [sliver, cell] =
+            [&patch.triangles[0], &patch.triangles[1]].map(|t| t.triangle.normal());
+        assert!(
+            sliver.dot(&cell) >= COPLANAR_DOT,
+            "the pair should count as coplanar"
+        );
+
+        let filtered = filter_patch(&patch, COPLANAR_DOT);
+
+        for face in &filtered.faces {
+            for vertex in &face.vertices {
+                let off = (vertex - face.vertices[0]).dot(&face.normal).abs();
+                assert!(
+                    off <= MERGE_PLANARITY,
+                    "a face vertex lies {off:.4} m off its plane"
+                );
+            }
+        }
+        assert_eq!(filtered.faces.len(), 2);
     }
 
     #[test]

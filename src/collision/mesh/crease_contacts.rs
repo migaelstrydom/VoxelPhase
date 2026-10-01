@@ -9,11 +9,12 @@
 //! of those within the crease's outward cone — so a ridge lifts what rests
 //! across it.
 //!
-//! A crease edge is one piece of a crease that runs on past it, so only a
-//! push across the crease clears it: sliding along it meets the next piece.
-//! Each face normal is taken square to the edge before it is measured, or a
-//! face tilted along a pillar's short vertical edges would clear each piece
-//! soonest, and walk the shape up the pillar.
+//! A crease edge may be one piece of a crease that runs on past it, so a
+//! push must clear the whole run: sliding along it meets the next piece.
+//! Each face normal is measured two ways: taken square to the edge, against
+//! the crease as an endless line, and as it is, against the crease's straight
+//! run of edges. Otherwise a face tilted along a pillar's short vertical edges
+//! would clear each piece soonest, and walk the shape up the pillar.
 //!
 //! ```text
 //!         ┌───────┐
@@ -29,7 +30,7 @@ use nalgebra::{Point3, Vector3};
 use smallvec::SmallVec;
 
 use crate::collision::contact::ContactPoint;
-use crate::collision::mesh::crease_edges::{convex_creases, ConvexCrease};
+use crate::collision::mesh::crease_edges::{convex_creases, straight_run, ConvexCrease};
 use crate::collision::mesh::seam_filter::FilteredPatch;
 use crate::collision::obb::Obb;
 
@@ -87,6 +88,7 @@ pub fn crease_edge_contacts(
         let crease = Crease {
             point: edge.a,
             along: (edge.b - edge.a).normalize(),
+            run: straight_run(patch, edge),
             normal_a: edge.normal_a,
             normal_b,
         };
@@ -123,6 +125,8 @@ struct Crease {
     point: Point3<f32>,
     /// Unit direction the crease runs in.
     along: Vector3<f32>,
+    /// The ends of the straight run of crease edges this one is part of.
+    run: [Point3<f32>; 2],
     /// Outward normal of the face on one side.
     normal_a: Vector3<f32>,
     /// Outward normal of the face on the other.
@@ -133,34 +137,55 @@ struct Crease {
 struct CreasePush {
     /// The shape face the push is taken from.
     plane: usize,
-    /// That face's normal, square to the crease: the shape moves along its
-    /// negation.
+    /// The direction the shape moves against: the face's normal, either
+    /// square to the crease or as it is.
     outward: Vector3<f32>,
     /// How far the shape must move for the crease to clear it.
     distance: f32,
 }
 
 /// The face, among those whose normal faces into both of the crease's faces,
-/// that clears the crease in the shortest move across it.
+/// that clears the crease in the shortest move.
+///
+/// Each face is tried two ways. Square to the crease, it clears the crease
+/// as a line, however far it runs. As it is, it must clear the crease's whole
+/// straight run: a crease that ends near the shape, as a crater's radial
+/// crease ends at the rim under a slab lying over it, is cleared by the
+/// slab's bottom rising, though the crease slopes. Taken as a line, it ran on
+/// up into the slab, and the slab was pushed 3 m along its length.
 fn shortest_push(
     planes: &[SolidPlane],
     extent: &impl Fn(&Vector3<f32>) -> f32,
     crease: &Crease,
 ) -> Option<CreasePush> {
+    let faces_in = |outward: &Vector3<f32>| {
+        outward.dot(&crease.normal_a) < 0.0 && outward.dot(&crease.normal_b) < 0.0
+    };
     planes
         .iter()
         .enumerate()
-        .filter_map(|(index, plane)| {
+        .flat_map(|(index, plane)| {
             let across = plane.normal - crease.along * plane.normal.dot(&crease.along);
-            let outward = across.try_normalize(SQUARE_EPSILON)?;
-            let faces_in =
-                outward.dot(&crease.normal_a) < 0.0 && outward.dot(&crease.normal_b) < 0.0;
-            faces_in.then(|| CreasePush {
+            let square = across
+                .try_normalize(SQUARE_EPSILON)
+                .map(|outward| CreasePush {
+                    plane: index,
+                    outward,
+                    distance: extent(&outward) - outward.dot(&crease.point.coords),
+                });
+            let whole = CreasePush {
                 plane: index,
-                outward,
-                distance: extent(&outward) - outward.dot(&crease.point.coords),
-            })
+                outward: plane.normal,
+                distance: crease
+                    .run
+                    .iter()
+                    .map(|end| plane.offset - plane.normal.dot(&end.coords))
+                    .fold(f32::NEG_INFINITY, f32::max),
+            };
+            [square, Some(whole)]
         })
+        .flatten()
+        .filter(|push| faces_in(&push.outward))
         .min_by(|a, b| a.distance.total_cmp(&b.distance))
 }
 
