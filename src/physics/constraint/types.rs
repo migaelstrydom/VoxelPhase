@@ -312,6 +312,25 @@ impl ConstraintKind {
         }
     }
 
+    /// Whether this holds its body's position against the world, so that the
+    /// body bears a load the way the ground does.
+    ///
+    /// A joint to the world does, and so does a medium drive, which pushes
+    /// against the world for whatever rides on it. Holding an attitude does
+    /// not: a capsule kept upright still falls, and what rests on it is
+    /// resting on whatever it stands on.
+    pub fn anchors_position(&self) -> bool {
+        match self {
+            ConstraintKind::Fixed { body_a, .. }
+            | ConstraintKind::BallJoint { body_a, .. }
+            | ConstraintKind::Hinge { body_a, .. } => body_a.is_none(),
+            ConstraintKind::MediumDrive { .. } => true,
+            ConstraintKind::KeepUpright { .. }
+            | ConstraintKind::KeepAttitude { .. }
+            | ConstraintKind::FollowPoint { .. } => false,
+        }
+    }
+
     /// Whether this constraint references the given body.
     pub fn references_body(&self, handle: RigidBodyHandle) -> bool {
         match self {

@@ -14,7 +14,9 @@ use crate::physics::bench_harness::scenarios::{
     BoxGridScenario, HoneycombWallScenario, JengaTowerScenario, TempleScenario,
     VoussoirArchScenario,
 };
-use crate::physics::{PhysicsWorld, RigidBodyHandle, SequentialStepper, Stepper};
+use crate::physics::{
+    ConstraintKind, PhysicsWorld, RigidBodyHandle, SequentialStepper, StaticGeometry, Stepper,
+};
 
 use super::write_exports;
 
@@ -240,6 +242,67 @@ fn a_knocked_arch_regains_no_energy() {
         "a knocked arch regained {worst:.3} J/kg, as if it rose {:.1} cm on its own",
         worst / 9.81 * 100.0
     );
+}
+
+/// A body held upright is not ground. Shock propagation counted any body with
+/// a constraint of its own as resting on the world, so a block held upright in
+/// the middle of a tower was depth zero, and the tower above it was ordered
+/// and scaled from there — upside down against the blocks beside it. The
+/// player's capsule is held so, and jumped into a jenga tower it threw the top
+/// half twenty metres into the air.
+#[test]
+fn a_tower_with_a_block_held_upright_regains_no_energy() {
+    const LIMIT: f32 = 0.1;
+    let scenario = HeldBlockTower(JengaTowerScenario::new(18));
+    let worst = (0..4)
+        .flat_map(|pattern| [false, true].map(|ordered| (pattern, ordered)))
+        .map(|(pattern, ordered)| energy_regained_after_knock(&scenario, pattern, ordered))
+        .fold(0.0, f32::max);
+    assert!(
+        worst < LIMIT,
+        "a knocked tower regained {worst:.3} J/kg, as if it rose {:.1} cm on its own",
+        worst / 9.81 * 100.0
+    );
+}
+
+/// A jenga tower whose middle block, halfway up, is held upright the way a
+/// character's capsule is.
+struct HeldBlockTower(JengaTowerScenario);
+
+impl PhysicsBenchScenario for HeldBlockTower {
+    fn name(&self) -> &'static str {
+        "held_block_tower"
+    }
+
+    fn restitution(&self) -> f32 {
+        self.0.restitution()
+    }
+
+    fn build_world(&self) -> PhysicsWorld {
+        self.0.build_world()
+    }
+
+    fn setup(&self, world: &mut PhysicsWorld) -> RigidBodyHandle {
+        let tracked = self.0.setup(world);
+        let held = world
+            .bodies()
+            .iter()
+            .filter(|(_, body)| body.is_dynamic())
+            .map(|(index, _)| RigidBodyHandle(index))
+            .nth((self.0.layers / 2 * 3 + 1) as usize)
+            .unwrap();
+        world.create_constraint(ConstraintKind::KeepAttitude {
+            body: held,
+            pitch: 0.0,
+            compliance: 0.0,
+            max_impulse: f32::INFINITY,
+        });
+        tracked
+    }
+
+    fn geometry(&self) -> &dyn StaticGeometry {
+        self.0.geometry()
+    }
 }
 
 /// Settle a structure, knock every block up and sideways at 1 m/s — in

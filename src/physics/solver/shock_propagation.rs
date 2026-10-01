@@ -130,7 +130,8 @@ impl ContactGraph {
         self.adjacency.clear();
 
         // Pass 0: include active constraints in the graph.
-        // World-anchored (single-body) constraints make the body depth 0.
+        // A constraint holding its body's position against the world makes it
+        // depth 0; one that only holds its attitude leaves it to its contacts.
         // Two-body constraints add bidirectional edges.
         for (_, constraint) in constraints.iter() {
             if !constraint.active {
@@ -138,6 +139,9 @@ impl ContactGraph {
             }
             let refs = constraint.kind.referenced_bodies();
             if refs.len() == 1 {
+                if !constraint.kind.anchors_position() {
+                    continue;
+                }
                 let handle = refs[0];
                 if bodies.get(handle.0).map_or(false, |b| b.is_dynamic()) {
                     if !self.depth.contains_key(&handle) {
