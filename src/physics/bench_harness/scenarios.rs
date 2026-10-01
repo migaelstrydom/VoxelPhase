@@ -2260,6 +2260,137 @@ impl PhysicsBenchScenario for JengaTowerScenario {
     }
 }
 
+/// How a [`MassRatioStackScenario`] puts its heavy body on its light ones.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MassRatioArrangement {
+    /// A column of light cubes with one heavy cube on top.
+    HeavyOnColumn,
+    /// Two columns of light cubes with a heavy slab laid across them.
+    SlabOnColumns,
+}
+
+/// A heavy body resting on light ones: the case a sequential solver
+/// converges worst on, since each light body passes on far more weight than
+/// its own, and the case shock propagation is meant for.
+///
+/// Every body starts exactly touching the one below it, so how far a body
+/// ends below where it was set is how far the stack has sagged.
+#[derive(Debug, Clone)]
+pub struct MassRatioStackScenario {
+    /// Light cubes in each column.
+    pub layers: u32,
+    /// The heavy body's mass over one light cube's.
+    pub ratio: f32,
+    pub arrangement: MassRatioArrangement,
+    /// Half the edge of a light cube, in metres.
+    pub half_extent: f32,
+    geometry: FlatQuadGeometry,
+}
+
+impl MassRatioStackScenario {
+    const DENSITY: f32 = 500.0;
+    /// Centre-to-centre distance between the slab's two columns, in cube edges.
+    const SLAB_SPAN: f32 = 3.0;
+
+    pub fn new(layers: u32, ratio: f32, arrangement: MassRatioArrangement) -> Self {
+        Self {
+            layers,
+            ratio,
+            arrangement,
+            half_extent: 0.25,
+            geometry: FlatQuadGeometry::new(10.0),
+        }
+    }
+
+    fn add_box(
+        world: &mut PhysicsWorld,
+        centre: Point3<f32>,
+        half_extents: Vector3<f32>,
+        density: f32,
+    ) -> RigidBodyHandle {
+        let body = world.create_body(RigidBodyDesc::dynamic().position(centre));
+        world.attach_collider(
+            body,
+            ColliderDesc::box_shape(half_extents)
+                .density(density)
+                .restitution(0.0)
+                .friction(0.6),
+        );
+        body
+    }
+
+    /// Stack a column of light cubes at `x`, and return the height of its top.
+    fn add_column(&self, world: &mut PhysicsWorld, x: f32) -> f32 {
+        let h = self.half_extent;
+        for layer in 0..self.layers {
+            let y = h + layer as f32 * 2.0 * h;
+            Self::add_box(
+                world,
+                Point3::new(x, y, 0.0),
+                Vector3::repeat(h),
+                Self::DENSITY,
+            );
+        }
+        self.layers as f32 * 2.0 * h
+    }
+}
+
+impl PhysicsBenchScenario for MassRatioStackScenario {
+    fn name(&self) -> &'static str {
+        match self.arrangement {
+            MassRatioArrangement::HeavyOnColumn => "mass_ratio_column",
+            MassRatioArrangement::SlabOnColumns => "mass_ratio_slab",
+        }
+    }
+
+    fn restitution(&self) -> f32 {
+        0.0
+    }
+
+    fn build_world(&self) -> PhysicsWorld {
+        let mut config = PhysicsConfig::default();
+        config.sleep.enabled = false;
+        config.deterministic_contact_ordering = true;
+        PhysicsWorld::new(config)
+    }
+
+    /// Returns the heavy body.
+    fn setup(&self, world: &mut PhysicsWorld) -> RigidBodyHandle {
+        let h = self.half_extent;
+        match self.arrangement {
+            MassRatioArrangement::HeavyOnColumn => {
+                let top = self.add_column(world, 0.0);
+                Self::add_box(
+                    world,
+                    Point3::new(0.0, top + h, 0.0),
+                    Vector3::repeat(h),
+                    Self::DENSITY * self.ratio,
+                )
+            }
+            MassRatioArrangement::SlabOnColumns => {
+                let span = Self::SLAB_SPAN * 2.0 * h;
+                self.add_column(world, -span / 2.0);
+                let top = self.add_column(world, span / 2.0);
+                // As long as the span plus a cube, as deep as a cube and half
+                // as thick, and as heavy as `ratio` cubes.
+                let half_extents = Vector3::new((span + 2.0 * h) / 2.0, h / 2.0, h);
+                let volume_in_cubes =
+                    (half_extents.x * half_extents.y * half_extents.z) / h.powi(3);
+                Self::add_box(
+                    world,
+                    Point3::new(0.0, top + half_extents.y, 0.0),
+                    half_extents,
+                    Self::DENSITY * self.ratio / volume_in_cubes,
+                )
+            }
+        }
+    }
+
+    fn geometry(&self) -> &dyn StaticGeometry {
+        &self.geometry
+    }
+}
+
 const PHI: f32 = 1.618034;
 const COLUMN_SIDES: u32 = 20;
 
