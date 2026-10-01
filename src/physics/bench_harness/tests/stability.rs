@@ -120,6 +120,70 @@ fn jenga_tower_settles() {
     );
 }
 
+/// A sleeping tower nudged at the top wakes whole on that frame, and stands:
+/// no block below the nudged one sinks.
+///
+/// A sleeping body generates no contacts, so a woken one has none until a
+/// pass generates them. When that waited for the next frame, the tower woke a
+/// layer per frame, each layer falling a frame's worth onto the one below
+/// before being pushed back up.
+#[test]
+fn a_sleeping_tower_nudged_at_the_top_wakes_whole_and_stands() {
+    const FRAME_DT: f32 = 1.0 / 60.0;
+    let scenario = JengaTowerScenario::new(12);
+    let mut config = scenario.build_world().config().clone();
+    config.sleep.enabled = true;
+    let mut world = PhysicsWorld::new(config);
+    scenario.setup(&mut world);
+    let blocks: Vec<RigidBodyHandle> = world
+        .bodies()
+        .iter()
+        .filter(|(_, body)| body.is_dynamic())
+        .map(|(index, _)| RigidBodyHandle(index))
+        .collect();
+    for &block in &blocks {
+        world.wake_body(block);
+    }
+    let mut stepper = SequentialStepper::new(1.0 / 240.0, 12);
+    let mut debug = DebugLines::default();
+    let mut step = |world: &mut PhysicsWorld| {
+        stepper.step(world, FRAME_DT, scenario.geometry(), &[], &[], &mut debug)
+    };
+    for _ in 0..240 {
+        step(&mut world);
+    }
+    assert!(
+        blocks.iter().all(|&b| world.is_sleeping(b)),
+        "the tower never fell asleep"
+    );
+
+    let height = |world: &PhysicsWorld, b: RigidBodyHandle| world.body(b).unwrap().position().y;
+    let top = *blocks
+        .iter()
+        .max_by(|&&a, &&b| height(&world, a).total_cmp(&height(&world, b)))
+        .unwrap();
+    let rest: Vec<(RigidBodyHandle, f32)> = blocks
+        .iter()
+        .filter(|&&b| b != top)
+        .map(|&b| (b, height(&world, b)))
+        .collect();
+    world.set_body_velocity(top, Vector3::new(0.05, 0.0, 0.0), Vector3::zeros());
+
+    step(&mut world);
+    let still_asleep = blocks.iter().filter(|&&b| world.is_sleeping(b)).count();
+    let mut sunk = 0.0f32;
+    for _ in 0..30 {
+        step(&mut world);
+        for &(block, rest_y) in &rest {
+            sunk = sunk.max(rest_y - height(&world, block));
+        }
+    }
+    eprintln!("nudged tower: {still_asleep} still asleep after a frame, sank up to {sunk:.5} m");
+
+    assert_eq!(still_asleep, 0, "the tower did not wake whole");
+    assert!(sunk < 0.001, "a block sank {sunk:.4} m when the tower woke");
+}
+
 // ── Temple ───────────────────────────────────────────────────────────
 
 #[test]

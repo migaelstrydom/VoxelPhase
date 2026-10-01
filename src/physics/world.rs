@@ -4,7 +4,7 @@ use std::time::Instant;
 
 use generational_arena::Arena;
 use nalgebra::{Isometry3, Matrix3, Point3, UnitQuaternion, UnitVector3, Vector3};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::body::{BodyDrive, BodyType, RigidBody, RigidBodyDesc, SupportDrive};
 use super::bulk::EnvelopePart;
@@ -28,8 +28,9 @@ use super::handle::{ColliderHandle, RigidBodyHandle};
 use super::impact::ImpactLedger;
 use super::impulses::PhysicsImpulse;
 use super::narrowphase::{
-    generate_dynamic_contacts, generate_static_contacts, ContactHorizon, GjkCacheMap,
-    NarrowphaseConfig, NarrowphaseWorkBuffer, SatCacheMap, SpeculativeConfig,
+    generate_dynamic_contacts, generate_static_contacts, prune_pair_caches, ContactHorizon,
+    ContactScope, GjkCacheMap, NarrowphaseConfig, NarrowphaseWorkBuffer, SatCacheMap,
+    SpeculativeConfig,
 };
 use super::pipeline::integration::{integrate_bodies, integrate_forces};
 use super::pipeline::manifold::ManifoldCache;
@@ -789,6 +790,77 @@ impl PhysicsWorld {
 
     // === Simulation ===
 
+    /// Generate this frame's contacts into the narrowphase work buffer, and
+    /// wake the sleeping bodies they touch.
+    ///
+    /// A sleeping body starts no contacts, so one woken here has none yet: a
+    /// further pass generates its contacts, which may wake its neighbours in
+    /// turn, until a pass wakes nobody. A stack woken at the top is then solved
+    /// whole on the frame it wakes, down to the ground it stands on.
+    fn generate_contacts(&mut self, dt: f32, static_geometry: &dyn StaticGeometry) {
+        let narrowphase_config = self.config.narrowphase();
+        let horizon = ContactHorizon {
+            substep_dt: dt,
+            substeps: self.substeps_this_frame,
+        };
+        let mut sleeping = self
+            .config
+            .sleep
+            .enabled
+            .then(|| self.sleep_manager.sleeping_snapshot());
+        let mut woken: Option<FxHashSet<RigidBodyHandle>> = None;
+        loop {
+            let scope = match (&woken, &sleeping) {
+                (Some(woken), Some(sleeping)) => ContactScope::woken(woken, sleeping),
+                _ => ContactScope::awake(sleeping.as_ref()),
+            };
+            let first_new = self.narrowphase_work_buffer.manifolds().len();
+            let lap = Instant::now();
+            generate_static_contacts(
+                &self.bodies,
+                &self.colliders,
+                static_geometry,
+                &narrowphase_config,
+                horizon,
+                scope,
+                &mut self.narrowphase_work_buffer,
+            );
+            self.profile
+                .record(PhysicsStage::StaticNarrowphase, lap.elapsed());
+            let lap = Instant::now();
+            generate_dynamic_contacts(
+                &self.bodies,
+                &self.colliders,
+                &narrowphase_config,
+                horizon,
+                scope,
+                &mut self.sat_cache_map,
+                &mut self.gjk_cache_map,
+                &mut self.narrowphase_work_buffer,
+            );
+            self.profile
+                .record(PhysicsStage::DynamicNarrowphase, lap.elapsed());
+
+            let Some(still_sleeping) = sleeping.as_mut() else {
+                break;
+            };
+            let new_manifolds = &self.narrowphase_work_buffer.manifolds()[first_new..];
+            let newly_woken = self
+                .sleep_manager
+                .wake_touched(new_manifolds.iter().map(|m| &m.header), &self.bodies);
+            if newly_woken.is_empty() {
+                break;
+            }
+            still_sleeping.retain(|handle| !newly_woken.contains(handle));
+            woken = Some(newly_woken);
+        }
+        prune_pair_caches(
+            &mut self.sat_cache_map,
+            &mut self.gjk_cache_map,
+            &self.narrowphase_work_buffer,
+        );
+    }
+
     /// Run narrowphase contact generation and manifold cache update.
     ///
     /// Call once before a series of `substep()` calls. `substeps` is how many
@@ -797,9 +869,10 @@ impl PhysicsWorld {
     /// This performs:
     /// 1. Sleep bookkeeping
     /// 2. One-shot impulse application
-    /// 3. Narrowphase contact generation (static + dynamic)
+    /// 3. Narrowphase contact generation (static + dynamic), waking the
+    ///    sleeping bodies it touches
     /// 4. Manifold cache merge (warm-start population)
-    /// 5. Sleep/debug contact processing
+    /// 5. Debug contact processing
     ///
     /// The resulting manifolds are cached internally for `substep()` to consume.
     pub fn update_contacts(
@@ -817,51 +890,17 @@ impl PhysicsWorld {
         self.substeps_this_frame = substeps.max(1);
         self.frame_index = self.frame_index.wrapping_add(1);
         self.sleep_manager.sync_bodies(&self.bodies);
-        self.sleep_manager.apply_wake_events(&[], &self.bodies);
-        let sleeping_snapshot = if self.config.sleep.enabled {
-            Some(self.sleep_manager.sleeping_snapshot())
-        } else {
-            None
-        };
+        self.sleep_manager.apply_wake_events();
 
         // Apply one-shot impulses and persistent force fields
         self.apply_impulses(impulses);
 
-        // Narrowphase contact generation. Both passes append to one buffer,
-        // static first, so the caller owns the reset rather than either pass.
-        let narrowphase_config = self.config.narrowphase();
-        let horizon = ContactHorizon {
-            substep_dt: dt,
-            substeps: self.substeps_this_frame,
-        };
+        // Every narrowphase pass appends to one buffer, so the caller owns the
+        // reset rather than any pass.
         self.narrowphase_work_buffer.begin_frame();
         self.profile
             .record(PhysicsStage::Bookkeeping, lap.elapsed());
-        let lap = Instant::now();
-        generate_static_contacts(
-            &self.bodies,
-            &self.colliders,
-            static_geometry,
-            &narrowphase_config,
-            horizon,
-            sleeping_snapshot.as_ref(),
-            &mut self.narrowphase_work_buffer,
-        );
-        self.profile
-            .record(PhysicsStage::StaticNarrowphase, lap.elapsed());
-        let lap = Instant::now();
-        generate_dynamic_contacts(
-            &self.bodies,
-            &self.colliders,
-            &narrowphase_config,
-            horizon,
-            sleeping_snapshot.as_ref(),
-            &mut self.sat_cache_map,
-            &mut self.gjk_cache_map,
-            &mut self.narrowphase_work_buffer,
-        );
-        self.profile
-            .record(PhysicsStage::DynamicNarrowphase, lap.elapsed());
+        self.generate_contacts(dt, static_geometry);
         let lap = Instant::now();
         let raw_manifolds = self.narrowphase_work_buffer.manifolds();
 
@@ -885,11 +924,6 @@ impl PhysicsWorld {
         self.profile
             .record(PhysicsStage::ManifoldMerge, lap.elapsed());
         let lap = Instant::now();
-
-        self.sleep_manager
-            .note_contact_wakes(&solver_manifolds, &self.bodies);
-        self.sleep_manager
-            .apply_wake_events(&solver_manifolds, &self.bodies);
 
         let active_manifolds = self
             .sleep_manager

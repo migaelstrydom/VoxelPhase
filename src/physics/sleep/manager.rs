@@ -6,7 +6,7 @@ use nalgebra::Vector3;
 use crate::physics::body::RigidBody;
 use crate::physics::constraint::types::Constraint;
 use crate::physics::handle::RigidBodyHandle;
-use crate::physics::pipeline::pair::SolverManifold;
+use crate::physics::pipeline::pair::{PairHeader, SolverManifold};
 use crate::physics::sleep::energy::SleepTracker;
 use crate::physics::sleep::islands::IslandBuilder;
 use crate::physics::sleep::wake::WakeEvents;
@@ -92,69 +92,51 @@ impl SleepManager {
         self.wake_events.push(handle);
     }
 
-    pub fn note_contact_wakes(&mut self, manifolds: &[SolverManifold], bodies: &Arena<RigidBody>) {
+    /// Wake every sleeping body that one of `headers` puts in contact with an
+    /// awake dynamic or kinematic body, and return those it woke.
+    ///
+    /// A body woken here had no contacts generated while it slept, so the
+    /// caller generates them before solving; they may wake more.
+    pub fn wake_touched<'a>(
+        &mut self,
+        headers: impl Iterator<Item = &'a PairHeader>,
+        bodies: &Arena<RigidBody>,
+    ) -> FxHashSet<RigidBodyHandle> {
+        let mut woken = FxHashSet::default();
         if !self.enabled {
-            return;
+            return woken;
         }
-        for manifold in manifolds {
-            let handle_b = manifold.header.body_b;
-            let Some(body_b) = bodies.get(handle_b.0) else {
+        let is_active = |handle: RigidBodyHandle| {
+            bodies
+                .get(handle.0)
+                .is_some_and(|body| body.is_dynamic() || body.is_kinematic())
+        };
+        for header in headers {
+            let Some(body_a) = header.body_a else {
                 continue;
             };
-            let body_a_handle = manifold.header.body_a;
-            let body_a = body_a_handle.and_then(|h| bodies.get(h.0));
-
-            let sleeping_a = body_a_handle.map(|h| self.is_sleeping(h)).unwrap_or(false);
-            let sleeping_b = self.is_sleeping(handle_b);
-
-            if sleeping_a == sleeping_b {
-                continue;
-            }
-
-            let other_is_active = if let Some(body_a) = body_a {
-                body_a.is_dynamic() || body_a.is_kinematic()
-            } else {
-                false
-            };
-            let b_is_active = body_b.is_dynamic() || body_b.is_kinematic();
-
-            if sleeping_a && b_is_active {
-                if let Some(handle_a) = body_a_handle {
-                    self.wake_events.push(handle_a);
+            let body_b = header.body_b;
+            for (sleeper, toucher) in [(body_a, body_b), (body_b, body_a)] {
+                if self.is_sleeping(sleeper) && !self.is_sleeping(toucher) && is_active(toucher) {
+                    woken.insert(sleeper);
                 }
-            } else if sleeping_b && other_is_active {
-                self.wake_events.push(handle_b);
             }
         }
+        for handle in &woken {
+            self.wake_body(*handle);
+        }
+        woken
     }
 
-    pub fn apply_wake_events(&mut self, manifolds: &[SolverManifold], bodies: &Arena<RigidBody>) {
-        if !self.enabled {
-            self.wake_events.clear();
-            return;
-        }
-        let wake_seeds: FxHashSet<RigidBodyHandle> =
+    /// Wake the bodies queued by kinematic moves since the last call.
+    pub fn apply_wake_events(&mut self) {
+        let queued: Vec<RigidBodyHandle> =
             self.wake_events.drain().map(|event| event.body).collect();
-        if wake_seeds.is_empty() {
+        if !self.enabled {
             return;
         }
-        for handle in &wake_seeds {
-            self.sleeping.remove(handle);
-            self.sleep_tracker.clear_body(*handle);
-        }
-
-        let islands = self.island_builder.build(bodies, manifolds);
-        for island in islands {
-            if island
-                .bodies
-                .iter()
-                .any(|handle| wake_seeds.contains(handle))
-            {
-                for handle in island.bodies {
-                    self.sleeping.remove(&handle);
-                    self.sleep_tracker.clear_body(handle);
-                }
-            }
+        for handle in queued {
+            self.wake_body(handle);
         }
     }
 

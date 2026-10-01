@@ -10,11 +10,12 @@ use crate::collision::dispatch;
 use crate::collision::sat::SatCache;
 use crate::physics::body::RigidBody;
 use crate::physics::collider::{Collider, ColliderMaterial, ColliderShape};
-use crate::physics::handle::{ColliderHandle, RigidBodyHandle};
+use crate::physics::handle::ColliderHandle;
 use crate::physics::pipeline::pair::{PairHeader, PairManifold};
 
 use super::collider_state::{collect_collider_states_into, ColliderState};
 use super::config::{ContactHorizon, NarrowphaseConfig};
+use super::scope::ContactScope;
 use super::speculative::{rewind_to_now, time_of_impact};
 use super::work_buffer::NarrowphaseWorkBuffer;
 
@@ -103,7 +104,8 @@ impl GjkCacheMap {
 /// Uses sort-and-sweep broadphase on the axis of greatest positional spread
 /// to prune pairs before narrowphase dispatch. Manifolds are appended to `buf`,
 /// after any the static pass has already contributed, and can be read via
-/// [`NarrowphaseWorkBuffer::manifolds`].
+/// [`NarrowphaseWorkBuffer::manifolds`]. Only pairs some body in `scope`
+/// starts are generated.
 ///
 /// The work buffer's internal `Vec`s are reused across frames — only cleared,
 /// never deallocated — eliminating per-frame allocation overhead.
@@ -112,7 +114,7 @@ pub fn generate_dynamic_contacts(
     colliders: &Arena<Collider>,
     config: &NarrowphaseConfig,
     horizon: ContactHorizon,
-    sleeping: Option<&FxHashSet<RigidBodyHandle>>,
+    scope: ContactScope<'_>,
     sat_cache_map: &mut SatCacheMap,
     gjk_cache_map: &mut GjkCacheMap,
     buf: &mut NarrowphaseWorkBuffer,
@@ -120,7 +122,7 @@ pub fn generate_dynamic_contacts(
     let contact_margin = config.contact_margin;
     buf.clear_pair_scratch();
 
-    collect_collider_states_into(&mut buf.states, bodies, colliders, sleeping);
+    collect_collider_states_into(&mut buf.states, bodies, colliders, scope);
     if buf.states.len() < 2 {
         return;
     }
@@ -227,7 +229,14 @@ pub fn generate_dynamic_contacts(
             manifold,
         );
     }
+}
 
+/// Drop the SAT and GJK caches of pairs no pass tested this frame.
+pub fn prune_pair_caches(
+    sat_cache_map: &mut SatCacheMap,
+    gjk_cache_map: &mut GjkCacheMap,
+    buf: &NarrowphaseWorkBuffer,
+) {
     sat_cache_map.prune(&buf.active_sat_pairs);
     gjk_cache_map.prune(&buf.active_gjk_pairs);
 }

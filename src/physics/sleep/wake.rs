@@ -23,8 +23,4 @@ impl WakeEvents {
     pub fn drain(&mut self) -> impl Iterator<Item = WakeEvent> + '_ {
         self.events.drain(..)
     }
-
-    pub fn clear(&mut self) {
-        self.events.clear();
-    }
 }

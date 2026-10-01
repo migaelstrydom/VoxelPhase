@@ -1,14 +1,14 @@
 //! World-space collider snapshots feeding broadphase and pair dispatch.
 
-use generational_arena::Arena;
-use nalgebra::{Point3, UnitQuaternion, Vector3};
-use rustc_hash::FxHashSet;
-
 use crate::collision::shape_view::ShapeView;
 use crate::collision::AABB;
 use crate::physics::body::RigidBody;
 use crate::physics::collider::{Collider, ColliderMaterial, ColliderShape};
 use crate::physics::handle::{ColliderHandle, RigidBodyHandle};
+use generational_arena::Arena;
+use nalgebra::{Point3, UnitQuaternion, Vector3};
+
+use super::scope::{ContactRole, ContactScope};
 
 /// Shape-agnostic snapshot of a collider's world-space state for pair dispatch.
 pub(super) struct ColliderState {
@@ -78,7 +78,7 @@ impl ColliderState {
     }
 }
 
-/// Snapshot every collider eligible for pair contacts.
+/// Snapshot every collider `scope` gives a part in pair contacts.
 ///
 /// Static bodies are included. They are distinct from the static *geometry*
 /// that `StaticGeometry` supplies — a static body is an ordinary collider that
@@ -88,11 +88,14 @@ pub(super) fn collect_collider_states_into(
     states: &mut Vec<ColliderState>,
     bodies: &Arena<RigidBody>,
     colliders: &Arena<Collider>,
-    sleeping: Option<&FxHashSet<RigidBodyHandle>>,
+    scope: ContactScope<'_>,
 ) {
     for (idx, body) in bodies.iter() {
         let body_handle = RigidBodyHandle(idx);
-        let is_sleeping = sleeping.map(|s| s.contains(&body_handle)).unwrap_or(false);
+        let is_sleeping = match scope.role(body_handle, body) {
+            ContactRole::Skipped => continue,
+            role => role == ContactRole::Touched,
+        };
 
         for collider_handle in body.colliders() {
             let Some(collider) = colliders.get(collider_handle.0) else {

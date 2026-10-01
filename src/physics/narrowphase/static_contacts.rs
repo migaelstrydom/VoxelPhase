@@ -5,7 +5,6 @@
 //! manifolds directly from the merged geometry.
 
 use rayon::prelude::*;
-use rustc_hash::FxHashSet;
 
 use generational_arena::Arena;
 use nalgebra::Point3;
@@ -21,11 +20,12 @@ use crate::physics::pipeline::pair::{PairHeader, PairManifold};
 use crate::physics::static_geometry::StaticGeometry;
 
 use super::config::{ContactHorizon, NarrowphaseConfig};
+use super::scope::{ContactRole, ContactScope};
 use super::speculative::rewind_to_now;
 use super::work_buffer::NarrowphaseWorkBuffer;
 
-/// Generate contacts between static geometry and every collider of an awake,
-/// non-static body that does not ignore it.
+/// Generate contacts between static geometry and every collider of a body
+/// that starts pairs in `scope` and does not ignore it.
 ///
 /// Appends one `PairManifold` per collider that has contacts (or speculative
 /// contacts) with static geometry. Each manifold carries the collision library's
@@ -41,15 +41,13 @@ pub fn generate_static_contacts(
     static_geometry: &dyn StaticGeometry,
     config: &NarrowphaseConfig,
     horizon: ContactHorizon,
-    sleeping: Option<&FxHashSet<RigidBodyHandle>>,
+    scope: ContactScope<'_>,
     buf: &mut NarrowphaseWorkBuffer,
 ) {
     let awake_colliders: Vec<(RigidBodyHandle, &RigidBody, ColliderHandle)> = bodies
         .iter()
         .filter(|(idx, body)| {
-            !body.is_static()
-                && !body.ignores_static()
-                && !sleeping.is_some_and(|sleeping| sleeping.contains(&RigidBodyHandle(*idx)))
+            !body.ignores_static() && scope.role(RigidBodyHandle(*idx), body) == ContactRole::Starts
         })
         .flat_map(|(idx, body)| {
             body.colliders()
