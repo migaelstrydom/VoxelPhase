@@ -16,7 +16,9 @@
 use nalgebra::Vector3;
 use specs::{Component, DenseVecStorage};
 
-use crate::physics::{Allowance, AllowanceCommand, NormalProjection, NormalVerbs, ReactionAnchor};
+use crate::physics::{
+    Allowance, AllowanceCommand, ReactionAnchor, VerticalProjection, VerticalVerbs,
+};
 
 /// The command channel: what gameplay wants this body to do.
 ///
@@ -29,12 +31,12 @@ pub struct DriveIntent {
     pub linear_target: Vector3<f32>,
     /// Continuous target angular velocity, in world space.
     pub angular_target: Vector3<f32>,
-    /// Discrete: a jump, as a speed along the support normal. Consumed once,
+    /// Discrete: a jump, as a speed along the jump axis. Consumed once,
     /// on the frame it is set.
-    pub normal_impulse: Option<f32>,
-    /// Discrete: jump shaping along the support normal. Consumed once,
-    /// alongside `normal_impulse`.
-    pub normal_projection: NormalProjection,
+    pub jump_speed: Option<f32>,
+    /// Discrete: jump shaping along the jump axis. Consumed once,
+    /// alongside `jump_speed`.
+    pub vertical_projection: VerticalProjection,
     /// Rate at which this frame's `linear_target` may be steered toward while
     /// nothing holds the body up, in m/s².
     ///
@@ -47,21 +49,22 @@ pub struct DriveIntent {
 }
 
 impl DriveIntent {
-    /// Command a jump at `speed` along the support normal.
+    /// Command a jump at `speed` along the jump axis: the world's up, or the
+    /// support normal in a world with no gravity.
     pub fn jump(&mut self, speed: f32) {
-        self.normal_impulse = Some(speed);
+        self.jump_speed = Some(speed);
     }
 
-    /// Cut the velocity along the support normal by `factor` — the
+    /// Cut the velocity along the jump axis by `factor` — the
     /// variable-height jump verb.
-    pub fn cut_normal(&mut self, factor: f32) {
-        self.normal_projection.scale_by(factor);
+    pub fn cut_rise(&mut self, factor: f32) {
+        self.vertical_projection.scale_by(factor);
     }
 
-    /// Cancel any velocity *up* the support normal, leaving downward motion
+    /// Cancel any velocity *up* the jump axis, leaving downward motion
     /// alone — the walk-off verb.
-    pub fn clamp_normal_rise(&mut self) {
-        self.normal_projection.clamp_positive = true;
+    pub fn clamp_rise(&mut self) {
+        self.vertical_projection.clamp_positive = true;
     }
 
     /// Take the discrete half of the command, leaving the continuous half.
@@ -69,10 +72,10 @@ impl DriveIntent {
     /// The sync takes this at the frame boundary as it pushes, so consumption
     /// happens on gameplay's side of the seam and the physics world never
     /// writes to an ECS component.
-    pub fn take_normal_verbs(&mut self) -> NormalVerbs {
-        NormalVerbs {
-            impulse: self.normal_impulse.take(),
-            projection: std::mem::take(&mut self.normal_projection),
+    pub fn take_vertical_verbs(&mut self) -> VerticalVerbs {
+        VerticalVerbs {
+            jump_speed: self.jump_speed.take(),
+            projection: std::mem::take(&mut self.vertical_projection),
         }
     }
 }
@@ -231,7 +234,7 @@ impl Actuator {
     /// at.
     pub fn allowance_command(
         &self,
-        verbs: NormalVerbs,
+        verbs: VerticalVerbs,
         steer_accel: Option<f32>,
     ) -> AllowanceCommand {
         AllowanceCommand {

@@ -5,14 +5,14 @@
 //! the single command the physics engine is asked to act on.
 //!
 //! Nothing here decides *how* a verb is delivered. A jump is a speed along the
-//! support normal, and which normal that is — and whether it is delivered as
+//! jump axis, and which axis that is — and whether it is delivered as
 //! an impulse exchange with the floor or conjured out of the actuator's
 //! allowance — is the engine's answer, because only the engine knows what is
 //! holding the body up when the frame is solved. This module's whole job is to
 //! put the two halves of one entity's frame into one struct.
 
 use crate::drive::components::{Actuator, DriveIntent};
-use crate::physics::{DriveCommand, NormalVerbs, PhysicsWorld, RigidBodyHandle};
+use crate::physics::{DriveCommand, PhysicsWorld, RigidBodyHandle, VerticalVerbs};
 
 /// Hand one body's frame of command to the engine: what it may grip where
 /// nothing holds it up, and what it drives toward. Consumes the frame's
@@ -26,7 +26,7 @@ pub fn apply_drive(
     intent: &mut DriveIntent,
     actuator: &Actuator,
 ) {
-    let verbs = intent.take_normal_verbs();
+    let verbs = intent.take_vertical_verbs();
     let _ = physics.set_body_non_support_grip(body, actuator.non_support_grip);
     let _ = physics.set_body_drive(body, &resolve_drive(intent, verbs, actuator));
 }
@@ -34,7 +34,7 @@ pub fn apply_drive(
 /// Fold one frame's command into a drive command.
 pub fn resolve_drive(
     intent: &DriveIntent,
-    verbs: NormalVerbs,
+    verbs: VerticalVerbs,
     actuator: &Actuator,
 ) -> DriveCommand {
     DriveCommand {
@@ -68,7 +68,7 @@ mod tests {
     #[test]
     fn the_target_crosses_the_seam_unedited() {
         let intent = walking();
-        let command = resolve_drive(&intent, NormalVerbs::default(), &Actuator::character());
+        let command = resolve_drive(&intent, VerticalVerbs::default(), &Actuator::character());
         assert_eq!(command.linear_target, intent.linear_target);
     }
 
@@ -78,28 +78,28 @@ mod tests {
     fn a_jump_crosses_as_a_verb() {
         let mut intent = walking();
         intent.jump(7.0);
-        let verbs = intent.take_normal_verbs();
+        let verbs = intent.take_vertical_verbs();
         let command = resolve_drive(&intent, verbs, &Actuator::character());
         assert_eq!(command.linear_target, Vector3::new(5.0, -2.0, 0.0));
-        assert_eq!(command.allowance.verbs.impulse, Some(7.0));
+        assert_eq!(command.allowance.verbs.jump_speed, Some(7.0));
     }
 
     #[test]
     fn taking_the_verbs_consumes_them() {
         let mut intent = walking();
         intent.jump(7.0);
-        intent.cut_normal(0.4);
-        let _ = intent.take_normal_verbs();
-        assert!(intent.take_normal_verbs().is_inert());
+        intent.cut_rise(0.4);
+        let _ = intent.take_vertical_verbs();
+        assert!(intent.take_vertical_verbs().is_inert());
     }
 
     #[test]
     fn two_cutoffs_on_one_frame_compose_as_a_product() {
         let mut intent = walking();
         intent.jump(10.0);
-        intent.cut_normal(0.5);
-        intent.cut_normal(0.5);
-        let verbs = intent.take_normal_verbs();
+        intent.cut_rise(0.5);
+        intent.cut_rise(0.5);
+        let verbs = intent.take_vertical_verbs();
         let command = resolve_drive(&intent, verbs, &Actuator::character());
         assert_eq!(command.allowance.verbs.projection.scale, 0.25);
     }
@@ -108,12 +108,12 @@ mod tests {
     fn the_actuator_supplies_the_reaction_anchor() {
         let character = resolve_drive(
             &DriveIntent::default(),
-            NormalVerbs::default(),
+            VerticalVerbs::default(),
             &Actuator::character(),
         );
         let platform = resolve_drive(
             &DriveIntent::default(),
-            NormalVerbs::default(),
+            VerticalVerbs::default(),
             &Actuator::medium(40.0, 0.0),
         );
 
@@ -125,7 +125,7 @@ mod tests {
     fn the_actuator_supplies_the_acceleration_budget() {
         let command = resolve_drive(
             &DriveIntent::default(),
-            NormalVerbs::default(),
+            VerticalVerbs::default(),
             &Actuator::medium(40.0, 0.0),
         );
         assert_eq!(command.max_accel, 40.0);
@@ -136,12 +136,12 @@ mod tests {
     /// request; both cross together so neither can arrive without the other.
     #[test]
     fn the_actuator_supplies_the_allowance_and_the_intent_the_rate() {
-        let ungranted = resolve_drive(&walking(), NormalVerbs::default(), &Actuator::character());
+        let ungranted = resolve_drive(&walking(), VerticalVerbs::default(), &Actuator::character());
         assert_eq!(ungranted.allowance.budget, None);
 
         let granted = resolve_drive(
             &walking(),
-            NormalVerbs::default(),
+            VerticalVerbs::default(),
             &Actuator::character().with_allowance(Allowance::character(8.0, 500.0, 7.0)),
         );
         assert_eq!(granted.allowance.budget.unwrap().air_accel, 8.0);

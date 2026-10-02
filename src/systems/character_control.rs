@@ -179,7 +179,7 @@ impl<'a> System<'a> for CharacterControlSystem {
                 // Tap-then-land (buffered jump, button already released): apply
                 // cutoff up-front so the hop is short. Skip committed maneuvers.
                 if !target.jump_held && state.locomotion.allows_jump_cutoff() {
-                    drive.cut_normal(config.jump_cutoff_factor);
+                    drive.cut_rise(config.jump_cutoff_factor);
                 }
             }
 
@@ -187,7 +187,7 @@ impl<'a> System<'a> for CharacterControlSystem {
             // cut acts on a rise only, so there is nothing to test here — a
             // falling character has no jump left to shorten.
             if target.jump_released && state.locomotion.allows_jump_cutoff() {
-                drive.cut_normal(config.jump_cutoff_factor);
+                drive.cut_rise(config.jump_cutoff_factor);
             }
 
             // Compute ground speed AFTER lockout tick + landing so a long-jump
@@ -519,7 +519,7 @@ fn apply_movement_rule(drive: &mut DriveIntent, rule: MovementRule) {
     drive.linear_target = rule.target;
     drive.steer_accel = rule.steer_accel;
     if rule.clamp_up {
-        drive.clamp_normal_rise();
+        drive.clamp_rise();
     }
 }
 
@@ -617,7 +617,7 @@ mod tests {
         // The verb is a command, not an edit: the projection is what cancels
         // the rise, and the planar target is untouched by it.
         assert_eq!(drive.linear_target.x, 5.0);
-        assert!(drive.normal_projection.clamp_positive);
+        assert!(drive.vertical_projection.clamp_positive);
     }
 
     /// A world holding one grounded character, with everything
@@ -693,7 +693,7 @@ mod tests {
 
         let drive = intent_of(&world, entity);
         let config = LocomotionConfig::player();
-        assert_eq!(drive.normal_impulse, Some(config.jump_speed));
+        assert_eq!(drive.jump_speed, Some(config.jump_speed));
         // The continuous channel never learns about the jump. It no longer
         // carries the measured fall either: the target is the gait's planar
         // ask, stated relative to the support, and the vertical axis belongs
@@ -859,7 +859,7 @@ mod tests {
         CharacterControlSystem.run_now(&world);
 
         let drive = intent_of(&world, entity);
-        assert_eq!(drive.normal_impulse, None);
+        assert_eq!(drive.jump_speed, None);
         assert_eq!(drive.linear_target, Vector3::zeros());
     }
 }

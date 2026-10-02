@@ -42,7 +42,7 @@ use smallvec::SmallVec;
 use crate::physics::body::RigidBody;
 use crate::physics::handle::RigidBodyHandle;
 
-use super::command::NormalVerbs;
+use super::command::VerticalVerbs;
 use super::ledger::AllowanceLedger;
 use super::support::SupportSets;
 
@@ -64,7 +64,7 @@ pub struct Allowance {
     /// declares a patch radius *and* a yaw allowance gets both authorities;
     /// declaring one or the other is almost always what is meant.
     pub yaw_accel: f32,
-    /// Largest speed along the support axis a jump may establish when there is
+    /// Largest speed along the jump axis a jump may establish when there is
     /// no Support Set to deliver it through, in m/s.
     ///
     /// Decision D2a: an unsupported jump is not dropped, it is conjured. This
@@ -97,7 +97,7 @@ pub struct AllowanceCommand {
     /// was granted no allowance at all.
     pub budget: Option<Allowance>,
     /// The frame's discrete verbs, consumed on the first substep.
-    pub verbs: NormalVerbs,
+    pub verbs: VerticalVerbs,
     /// Rate at which the linear target may be steered toward while nothing
     /// holds the body up, in m/s². Clamped to the budget's `air_accel`.
     ///
@@ -118,7 +118,7 @@ impl AllowanceCommand {
     /// Edge-triggered by nature: a jump commanded once must fire once, on the
     /// first substep of the frame it was commanded, or its height would depend
     /// on how many substeps that frame happened to run.
-    pub fn take_verbs(&mut self) -> NormalVerbs {
+    pub fn take_verbs(&mut self) -> VerticalVerbs {
         std::mem::take(&mut self.verbs)
     }
 }
@@ -131,8 +131,9 @@ impl AllowanceCommand {
 /// mutably twice.
 struct AllowancePlan {
     body: RigidBodyHandle,
-    /// Axis the discrete verbs and the yaw act along.
-    axis: Vector3<f32>,
+    /// Axis the yaw acts about: the support normal, or the world's up with
+    /// no support.
+    yaw_axis: Vector3<f32>,
     /// One share of a jump per supporting contact, each an impulse exchange
     /// with whatever is on the other end of it.
     jump: SmallVec<[JumpShare; 4]>,
@@ -142,7 +143,7 @@ struct AllowancePlan {
     shaping: Vector3<f32>,
     /// Impulse conjured to steer the body through the air.
     steer: Vector3<f32>,
-    /// Angular velocity change conjured about `axis`, and the angular impulse
+    /// Angular velocity change conjured about `yaw_axis`, and the angular impulse
     /// it stood for.
     yaw: (f32, f32),
 }
@@ -159,9 +160,10 @@ struct JumpShare {
 ///
 /// `first_substep` gates the edge-triggered verbs — a jump fires once per
 /// frame, not once per substep, or its height would follow the frame rate.
-/// `world_up` is the axis a body with no support falls back on; a world with
-/// no gravity has none, and there the vertical verbs are inert because there
-/// is no direction they could mean anything along.
+/// `world_up` is the axis the vertical verbs act along, and the yaw axis of a
+/// body with no support. A world with no gravity has none: there a supported
+/// body jumps off its support normal, and an unsupported one has no direction
+/// its verbs could mean anything along, so they are inert.
 pub fn apply_allowances(
     bodies: &mut Arena<RigidBody>,
     supports: &SupportSets,
@@ -209,18 +211,22 @@ fn plan_body(
     let drive = body.support_drive();
     let support = supports.get(handle).filter(|set| !set.is_empty());
 
-    // The axis every vertical verb and the yaw act along: what holds the body
-    // up if anything does, and the world's up if nothing does. A slope is
-    // therefore jumped off along the slope (§10.2), and a body in free fall
-    // still knows which way is up.
-    let axis = match support {
+    // The axis the yaw acts about: what holds the body up if anything does,
+    // and the world's up if nothing does, so a body in free fall still knows
+    // which way is up.
+    let yaw_axis = match support {
         Some(set) => set.mean_normal(),
         None => world_up.map(|up| up.into_inner())?,
     };
+    // The axis the vertical verbs act along: the world's up wherever there is
+    // one, so a slope is jumped off straight up and as high as the flat
+    // (§10.2). A world with no gravity has no up, and there a body pushes off
+    // whatever holds it.
+    let axis = world_up.map(|up| up.into_inner()).unwrap_or(yaw_axis);
 
     let mut plan = AllowancePlan {
         body: handle,
-        axis,
+        yaw_axis,
         jump: SmallVec::new(),
         conjured_jump: Vector3::zeros(),
         shaping: Vector3::zeros(),
@@ -236,7 +242,7 @@ fn plan_body(
         // that a jump taken while walking downhill is the same jump as one
         // taken from a standstill. It never brakes a body already leaving
         // faster than it asked for.
-        if let Some(speed) = command.verbs.impulse {
+        if let Some(speed) = command.verbs.jump_speed {
             match support {
                 Some(set) => {
                     let delta = speed - speed_along;
@@ -288,11 +294,11 @@ fn plan_body(
         }
 
         if budget.yaw_accel > 0.0 {
-            let desired = drive.angular_target.dot(&axis);
-            let current = body.angular_velocity().dot(&axis);
+            let desired = drive.angular_target.dot(&yaw_axis);
+            let current = body.angular_velocity().dot(&yaw_axis);
             let limit = budget.yaw_accel * dt;
             let delta = (desired - current).clamp(-limit, limit);
-            let inv_inertia_about_axis = axis.dot(&(body.world_inv_inertia() * axis));
+            let inv_inertia_about_axis = yaw_axis.dot(&(body.world_inv_inertia() * yaw_axis));
             let angular_impulse = if inv_inertia_about_axis > 1e-9 {
                 delta.abs() / inv_inertia_about_axis
             } else {
@@ -367,7 +373,7 @@ fn apply_plan(bodies: &mut Arena<RigidBody>, plan: &AllowancePlan, ledger: &mut 
         ledger.record_steer(plan.body, plan.steer.magnitude());
     }
     if plan.yaw.0 != 0.0 {
-        body.set_angular_velocity(body.angular_velocity() + plan.axis * plan.yaw.0);
+        body.set_angular_velocity(body.angular_velocity() + plan.yaw_axis * plan.yaw.0);
         ledger.record_yaw(plan.body, plan.yaw.1);
     }
 }
@@ -410,15 +416,15 @@ mod tests {
     fn budgeted() -> AllowanceCommand {
         AllowanceCommand {
             budget: Some(Allowance::character(8.0, 500.0, 7.0)),
-            verbs: NormalVerbs::default(),
+            verbs: VerticalVerbs::default(),
             steer_accel: Some(8.0),
         }
     }
 
     fn jumping(speed: f32) -> AllowanceCommand {
         AllowanceCommand {
-            verbs: NormalVerbs {
-                impulse: Some(speed),
+            verbs: VerticalVerbs {
+                jump_speed: Some(speed),
                 ..Default::default()
             },
             ..budgeted()
@@ -597,10 +603,10 @@ mod tests {
         assert_eq!(velocity(&arena, body), Vector3::zeros());
     }
 
-    /// A jump leaves along the support normal, so a slope is jumped off at an
-    /// angle (§10.2).
+    /// A jump leaves along the world's up, so a slope is jumped off straight
+    /// up and gains no direction the player did not ask for (§10.2).
     #[test]
-    fn a_jump_leaves_along_the_support_normal() {
+    fn a_jump_from_a_slope_leaves_straight_up() {
         let mut arena = bodies(1);
         let body = handle(&arena, 0);
         arena
@@ -617,8 +623,11 @@ mod tests {
         first_substep(&mut arena, &supports, &mut ledger);
 
         let measured = velocity(&arena, body);
-        assert!((measured.dot(&slope) - 7.0).abs() < 1e-4);
-        assert!(measured.x > 4.0, "and gains a direction it did not have");
+        assert!((measured.y - 7.0).abs() < 1e-4);
+        assert!(
+            measured.x.abs() < 1e-4,
+            "and gains no direction it did not have"
+        );
     }
 
     /// The yaw allowance turns a body about the axis holding it up, at its

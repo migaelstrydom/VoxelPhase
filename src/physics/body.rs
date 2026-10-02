@@ -7,7 +7,7 @@ use super::bulk::{self, BulkShape, Envelope, MassParts};
 use super::collider::Collider;
 use super::constraint::types::ConstraintHandle;
 use super::drive::allowance::AllowanceCommand;
-use super::drive::command::NormalVerbs;
+use super::drive::command::VerticalVerbs;
 use super::handle::ColliderHandle;
 use super::math::{integrate_orientation, skew, transform_inertia_tensor};
 
@@ -492,7 +492,7 @@ impl RigidBody {
 
     /// Consume the frame's edge-triggered verbs, leaving the continuous half
     /// of the allowance in place.
-    pub(crate) fn take_drive_verbs(&mut self) -> NormalVerbs {
+    pub(crate) fn take_drive_verbs(&mut self) -> VerticalVerbs {
         self.allowance.take_verbs()
     }
 

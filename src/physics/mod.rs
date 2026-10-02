@@ -72,8 +72,8 @@ pub use constraint::{Constraint, ConstraintHandle, ConstraintKind};
 pub use contact_event::{ContactEvent, ContactSource};
 pub use contact_work::ContactWorkLedger;
 pub use drive::{
-    Allowance, AllowanceCommand, AllowanceUsage, DriveCommand, NormalProjection, NormalVerbs,
-    ReactionAnchor, SupportConfig, SupportContact, SupportResolver, SupportSet, SupportSets,
+    Allowance, AllowanceCommand, AllowanceUsage, DriveCommand, ReactionAnchor, SupportConfig,
+    SupportContact, SupportResolver, SupportSet, SupportSets, VerticalProjection, VerticalVerbs,
 };
 pub use energy_audit::{energy_per_kg, EnergyAudit};
 pub use force_provider::{ForceContext, ForceOutput, SubstepForceProvider};

@@ -269,8 +269,8 @@ classDiagram
         <<ECS component — command>>
         +Vector3 linear_target
         +Vector3 angular_target
-        +Option~f32~ normal_impulse
-        +NormalProjection normal_projection
+        +Option~f32~ jump_speed
+        +VerticalProjection vertical_projection
         +Option~f32~ steer_accel
     }
     class Actuator {
@@ -1203,11 +1203,11 @@ each is to be noticed:
   body, not of the target, so an actuated body grips at its gain wherever its
   supports are — a player standing on ice does not slide (Stage 5, §11's
   ledger). If it reads as glued, the fix is a lower gain, not a conditional one.
-- **A jump off a slope leaves along the slope**, losing `cos²θ` of its height
-  and gaining lateral speed nobody asked for — 76% of the height and 3.47 m/s
-  sideways on a 30° ramp (§10.2). If that reads as "the jump button stopped
-  working near a hill", the correction is a documented blend of the support
-  normal toward `−gravity_direction`, which R6 explicitly sanctions.
+- **A jump off a slope leaves straight up** since the 2026-10-02 play-test
+  (§10.2). The open question it leaves is the steep end: a full-height jump
+  from anything up to the 60° support cone may let a player climb a steep wall
+  by jumping repeatedly. If that breaks levels, narrow what counts as jumpable
+  ground rather than tilting the jump.
 - **Walking a slope costs `cos θ` of pace**, and the fix is conservative and
   free: state `MovementRule::target` in the support's tangent plane instead of
   world XZ (Stage 6's Effort finding). That is also R6's last open gap. Whether
@@ -2200,6 +2200,24 @@ Whether that reads as "slopes are slopes" or as "the jump button stopped
 working near a hill" is still a play-test, and the correction §10.2 describes
 is still available and still legal. `a_jump_from_a_slope_leaves_along_the_slope`
 is the scenario that would change if it is taken.
+
+**Decided after play-testing (2026-10-02): a jump leaves straight up.** It read
+as the jump button failing, worst in a hole: every wall's normal points back
+toward the middle, so a jump from the wall went lower and was thrown back in.
+The vertical verbs — the jump and its shaping — now act along
+`-gravity_direction` wherever there is gravity, and along the support normal
+only in a world without it. The yaw still turns about the support normal. This
+is the full blend §10.2 allowed, with no partial normal bias; one can be added
+if flat-up turns out to feel dead on gentle slopes. Because a jump *establishes*
+a speed along the axis rather than adding one, a jump taken walking up or down
+a slope reaches the same height as one from a standstill. The scenario is now
+`a_jump_from_a_slope_leaves_straight_up`: on the 30° ramp it takes off at
+`(0.0000, 6.8658, 0.0000)` and peaks at 2.5038 m, identical to the flat-ground
+jump. It also makes `level_check`'s reach model, which assumes a flat-ground
+vertical arc, true for takeoffs from a slope. The verbs were renamed to match:
+`NormalVerbs` and `NormalProjection` are now `VerticalVerbs` and
+`VerticalProjection`, `DriveIntent::normal_impulse` is `jump_speed`, and
+`cut_normal` and `clamp_normal_rise` are `cut_rise` and `clamp_rise`.
 
 ### 10.3 Everything else
 

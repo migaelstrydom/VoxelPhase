@@ -50,7 +50,7 @@ pub mod plan;
 pub mod support;
 
 pub use allowance::{apply_allowances, Allowance, AllowanceCommand};
-pub use command::{DriveCommand, NormalProjection, NormalVerbs, ReactionAnchor};
+pub use command::{DriveCommand, ReactionAnchor, VerticalProjection, VerticalVerbs};
 pub use grip::stamp_non_support_grip;
 pub use ledger::{AllowanceLedger, AllowanceUsage, TractionLedger, TractionUsage};
 pub use plan::{TractionPlanner, TractionRow};

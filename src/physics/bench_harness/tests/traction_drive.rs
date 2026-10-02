@@ -32,8 +32,8 @@ use crate::debug::DebugLines;
 use crate::physics::constraint::ConstraintKind;
 use crate::physics::world::PhysicsConfig;
 use crate::physics::{
-    Allowance, ColliderDesc, DriveCommand, FrictionModel, NormalVerbs, PhysicsWorld, RigidBodyDesc,
-    RigidBodyHandle, StaticGeometry,
+    Allowance, ColliderDesc, DriveCommand, FrictionModel, PhysicsWorld, RigidBodyDesc,
+    RigidBodyHandle, StaticGeometry, VerticalVerbs,
 };
 use crate::platform::{DeckSuspension, MovingPlatform, REFERENCE_LOAD_KG};
 
@@ -182,11 +182,11 @@ impl Walker {
 
     /// `CharacterControlSystem` then `PhysicsSyncSystem`, once per frame.
     fn drive(&self, world: &mut PhysicsWorld) {
-        self.drive_with(world, NormalVerbs::default());
+        self.drive_with(world, VerticalVerbs::default());
     }
 
     /// The same, on a frame where a discrete verb fired.
-    fn drive_with(&self, world: &mut PhysicsWorld, verbs: NormalVerbs) {
+    fn drive_with(&self, world: &mut PhysicsWorld, verbs: VerticalVerbs) {
         let target = self.intent * self.config.walk_speed;
         let mut command = DriveCommand::support(target, Vector3::zeros(), 500.0, 500.0)
             .with_drive_gain(WALKER_DRIVE_GAIN);
@@ -197,9 +197,9 @@ impl Walker {
     }
 
     /// The jump verb, as `CharacterControlSystem` issues it.
-    fn jump(&self) -> NormalVerbs {
-        NormalVerbs {
-            impulse: Some(self.config.jump_speed),
+    fn jump(&self) -> VerticalVerbs {
+        VerticalVerbs {
+            jump_speed: Some(self.config.jump_speed),
             ..Default::default()
         }
     }
@@ -1069,7 +1069,7 @@ fn take_off(
     world: &mut PhysicsWorld,
     geometry: &dyn StaticGeometry,
     walker: &Walker,
-    verbs: NormalVerbs,
+    verbs: VerticalVerbs,
 ) -> JumpArc {
     let mut debug = DebugLines::default();
     for _ in 0..60 {
@@ -1181,14 +1181,13 @@ fn a_jump_off_a_deck_pushes_the_deck_down() {
     );
 }
 
-/// **Specification.** A jump leaves along the support normal, so a jump from a
-/// slope gains a direction it did not have (§10.2).
+/// **Specification.** A jump leaves along the world's up, so a jump from a
+/// slope goes straight up and as high as one from the flat (§10.2).
 ///
-/// Recorded as a specification because it is the mechanism working, not an
-/// accident: the risk §10.2 names is a feel question about whether the game
-/// wants it, and the answer to that is a play-test, not this assertion.
+/// Leaving along the support normal cost `cos²θ` of the height and threw the
+/// player downhill, which made a bowl's walls push a jump back into the bowl.
 #[test]
-fn a_jump_from_a_slope_leaves_along_the_slope() {
+fn a_jump_from_a_slope_leaves_straight_up() {
     let slope_degrees: f32 = 30.0;
     let run = 10.0;
     let tangent = slope_degrees.to_radians().tan();
@@ -1203,26 +1202,28 @@ fn a_jump_from_a_slope_leaves_along_the_slope() {
     let jump_speed = walker.config.jump_speed;
     let arc = take_off(&mut world, &geometry, &walker, walker.jump());
 
-    let radians = slope_degrees.to_radians();
-    let expected_lateral = jump_speed * radians.sin();
     let gravity = -world.config().gravity.y;
     let flat_rise = jump_speed * jump_speed / (2.0 * gravity);
 
     eprintln!(
-        "slope jump at {slope_degrees:.0}°: takeoff v=({:.4}, {:.4}, {:.4}) \
-         lateral expected {expected_lateral:.4}, peak rise {:.4} m (flat {flat_rise:.4})",
+        "slope jump at {slope_degrees:.0}°: takeoff v=({:.4}, {:.4}, {:.4}), \
+         peak rise {:.4} m (flat {flat_rise:.4})",
         arc.takeoff_velocity.x, arc.takeoff_velocity.y, arc.takeoff_velocity.z, arc.peak_rise
     );
 
-    // The ramp climbs toward +Z, so its normal — and the jump — leans toward −Z.
+    let lateral = Vector3::new(arc.takeoff_velocity.x, 0.0, arc.takeoff_velocity.z).magnitude();
     assert!(
-        (-arc.takeoff_velocity.z - expected_lateral).abs() < 0.6,
-        "a slope jump should leave downhill at {expected_lateral:.4} m/s: got {:.4}",
-        -arc.takeoff_velocity.z
+        lateral < 0.2,
+        "a slope jump should gain no direction the player did not ask for: {lateral:.4} m/s across"
     );
     assert!(
-        arc.peak_rise < flat_rise * radians.cos().powi(2) + 0.2,
-        "and lose the height that costs: rose {:.4} m against {flat_rise:.4} on the flat",
+        (arc.takeoff_velocity.y - jump_speed).abs() < 0.2,
+        "and leave at the speed it asked for: {:.4} m/s against {jump_speed:.4}",
+        arc.takeoff_velocity.y
+    );
+    assert!(
+        (arc.peak_rise - flat_rise).abs() < 0.15,
+        "and rise as high as from the flat: {:.4} m against {flat_rise:.4}",
         arc.peak_rise
     );
 }

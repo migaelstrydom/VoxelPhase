@@ -12,7 +12,8 @@ use nalgebra::Vector3;
 use super::allowance::AllowanceCommand;
 
 /// A projection allowance: what a jump verb does to the velocity component
-/// along the support normal.
+/// along the jump axis — the world's up, or the support normal in a world with
+/// no gravity.
 ///
 /// Jump shaping cannot be expressed as an impulse. "Cut the jump in half" is
 /// proportional to the velocity it acts on, so the same verb is a different
@@ -20,19 +21,19 @@ use super::allowance::AllowanceCommand;
 /// jump and reverse a slow one. Hence a projection: a scale, then an optional
 /// clamp, applied in that order.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct NormalProjection {
-    /// Multiplier on a *rising* normal component. `1.0` is the identity.
+pub struct VerticalProjection {
+    /// Multiplier on a *rising* vertical component. `1.0` is the identity.
     ///
-    /// Only a component that points up the support normal is scaled. Cutting
+    /// Only a component that points up the jump axis is scaled. Cutting
     /// a fall short is not a verb anyone has: the same multiplier applied to
     /// downward motion would read as a parachute.
     pub scale: f32,
-    /// When true, a rising normal component is zeroed after scaling — a
+    /// When true, a rising vertical component is zeroed after scaling — a
     /// walk-off starts falling immediately rather than lifting off the ramp.
     pub clamp_positive: bool,
 }
 
-impl Default for NormalProjection {
+impl Default for VerticalProjection {
     fn default() -> Self {
         Self {
             scale: 1.0,
@@ -41,8 +42,8 @@ impl Default for NormalProjection {
     }
 }
 
-impl NormalProjection {
-    /// True when this projection would leave the normal component untouched.
+impl VerticalProjection {
+    /// True when this projection would leave the vertical component untouched.
     pub fn is_identity(&self) -> bool {
         self.scale == 1.0 && !self.clamp_positive
     }
@@ -56,7 +57,7 @@ impl NormalProjection {
         self.scale *= factor;
     }
 
-    /// Apply this projection to one speed along the support normal.
+    /// Apply this projection to one speed along the jump axis.
     pub fn applied_to(&self, along: f32) -> f32 {
         if along <= 0.0 {
             return along;
@@ -69,24 +70,24 @@ impl NormalProjection {
 }
 
 /// The discrete half of one frame's command: the edge-triggered verbs that act
-/// along the support normal.
+/// along the jump axis.
 ///
-/// Consumed once, on the frame they are set. `DriveIntent::take_normal_verbs`
+/// Consumed once, on the frame they are set. `DriveIntent::take_vertical_verbs`
 /// takes them on gameplay's side of the seam, so the physics world never
 /// writes back into an ECS component.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
-pub struct NormalVerbs {
-    /// A jump: the speed to establish along the support normal.
-    pub impulse: Option<f32>,
+pub struct VerticalVerbs {
+    /// A jump: the speed to establish along the jump axis.
+    pub jump_speed: Option<f32>,
     /// Jump shaping, applied after the jump.
-    pub projection: NormalProjection,
+    pub projection: VerticalProjection,
 }
 
-impl NormalVerbs {
+impl VerticalVerbs {
     /// True when these verbs would leave the body untouched — the ordinary
     /// case, every frame nobody presses jump.
     pub fn is_inert(&self) -> bool {
-        self.impulse.is_none() && self.projection.is_identity()
+        self.jump_speed.is_none() && self.projection.is_identity()
     }
 }
 
@@ -202,7 +203,7 @@ mod tests {
     /// parachute.
     #[test]
     fn a_projection_shapes_a_rise_and_leaves_a_fall_alone() {
-        let cut = NormalProjection {
+        let cut = VerticalProjection {
             scale: 0.45,
             clamp_positive: false,
         };
@@ -213,7 +214,7 @@ mod tests {
     /// The walk-off verb: cancel the rise outright, whatever it was scaled by.
     #[test]
     fn a_clamp_cancels_a_rise_entirely() {
-        let walk_off = NormalProjection {
+        let walk_off = VerticalProjection {
             scale: 0.45,
             clamp_positive: true,
         };
@@ -226,7 +227,7 @@ mod tests {
     /// unguarded `v *= factor` call sites did.
     #[test]
     fn two_scalings_compose_as_a_product() {
-        let mut projection = NormalProjection::default();
+        let mut projection = VerticalProjection::default();
         assert!(projection.is_identity());
         projection.scale_by(0.5);
         projection.scale_by(0.5);
