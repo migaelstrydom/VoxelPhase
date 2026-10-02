@@ -660,9 +660,9 @@ Gem(pos: (6.0, 1.0, -4.5), colour: Some((0.4, 0.85, 1.0))),
 Goal(pos: (8.0, 0.0, -8.0), radius: 2.5, required_gems: 2),
 ```
 
-The HUD shows `Gems  n / total` (hidden when the level has none), the elapsed
-`Time`, `need n more gems` while standing in a goal that has not opened, and
-`LEVEL COMPLETE` with the finish time. The count is not validated against the
+The HUD shows `need n more gems` while standing in a goal that has not opened,
+and `LEVEL COMPLETE` with the finish time. The gem count and elapsed time are
+tracked but not shown while the level plays. The count is not validated against the
 level: a goal that wants more gems than the level places is unfinishable.
 
 Demo levels built on this: `thin_ice`, `wrecking_yard`, `skyway`.

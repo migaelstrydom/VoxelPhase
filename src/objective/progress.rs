@@ -16,7 +16,7 @@ pub struct LevelProgress {
     pub gems_collected: u32,
 
     /// Gems the level spawned. Counted as each one is created, so a level that
-    /// places none reports none and the gem readout disappears.
+    /// places none reports none.
     pub gems_total: u32,
 
     /// Seconds since the level started, frozen once the goal is reached.
@@ -73,36 +73,24 @@ impl<'a> System<'a> for ProgressSystem {
     }
 }
 
-/// Draws the objective readout on screen every frame.
+/// Announces on screen that the level is complete, with the run time.
+///
+/// The gem count and running clock are tracked in [`LevelProgress`] but not
+/// shown: the overlay is kept to the frame rate while the level plays.
 pub struct ObjectiveHudSystem;
 
 impl<'a> System<'a> for ObjectiveHudSystem {
     type SystemData = (Read<'a, LevelProgress>, Write<'a, DebugLines>);
 
     fn run(&mut self, (progress, mut debug): Self::SystemData) {
-        if progress.gems_total > 0 {
-            debug.add(
-                HUD_GEMS_KEY,
-                format!("{} / {}", progress.gems_collected, progress.gems_total),
-            );
-        }
-
-        debug.add(HUD_TIME_KEY, format_clock(progress.elapsed));
-
         if let Some(at) = progress.completed {
             debug.add(HUD_COMPLETE_KEY, format_clock(at));
         }
     }
 }
 
-/// Gem count. Leading punctuation sorts the objective above the alphabetical
-/// diagnostics that share the overlay.
-pub const HUD_GEMS_KEY: &str = "! Gems";
-
-/// Level clock.
-pub const HUD_TIME_KEY: &str = "! Time";
-
-/// Shown only once the goal has been reached.
+/// Shown only once the goal has been reached. Leading punctuation sorts it
+/// above the alphabetical diagnostics that share the overlay.
 pub const HUD_COMPLETE_KEY: &str = "!! LEVEL COMPLETE";
 
 /// Seconds as `m:ss.t` — the shape a run time is read in.

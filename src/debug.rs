@@ -32,7 +32,7 @@ impl Default for DebugConfig {
         Self {
             show_fps: true,
             show_cpu_ms: false,
-            show_gpu_ms: true,
+            show_gpu_ms: false,
         }
     }
 }
