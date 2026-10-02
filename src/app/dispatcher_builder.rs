@@ -26,6 +26,7 @@ use crate::platform::MovingPlatformSystem;
 use crate::projectile::{
     GrenadeSpawnSystem, GrenadeVisualSystem, LifetimeSystem, ProjectileDetonationSystem,
 };
+use crate::rubble::RubbleSpawnSystem;
 use crate::sensing::SensorProbeSystem;
 use crate::systems::{
     CameraControlSystem, CharacterControlSystem, PhysicsSyncSystem, PlayerInputSystem,
@@ -193,6 +194,7 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
             "explosion",
             &["projectile_detonation"],
         )
+        .with(RubbleSpawnSystem::default(), "rubble_spawn", &["explosion"])
         // The blast flash is the brightest light in the game and the shortest
         // lived, so it must be updated after explosions create it and before
         // the frame's lights are chosen.

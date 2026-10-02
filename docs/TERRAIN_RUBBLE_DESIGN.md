@@ -4,7 +4,7 @@ Terrain that a blast cuts loose becomes rubble: real rigid bodies for pieces
 worth simulating, falling scree for slivers, dust for crumbs. Rubble that comes
 to rest is then deposited back into the voxel field as new terrain.
 
-**Status:** design only. Nothing here is built yet.
+**Status:** Phase 1 is built (`src/terrain/fragment.rs`, `src/rubble/`, `src/rubble_viewer/`): every fragment crumbles into dust. Phases 2–5 are design only.
 
 ---
 
@@ -92,13 +92,20 @@ physics, rendering and the existing debris budget.
 
 ### The search region
 
-Connectivity only changes where samples changed, so the search is local. After
-the carve, `FragmentFinder` reads the samples of a box around the crater into a
-`VoxelBlock`:
+Connectivity only changes where samples changed, so the search is local.
+`Crater::survey` reads the samples of a box around the crater into a
+`VoxelBlock` **before** the carve, and `Search::run` reads the same box again
+after it:
 
 ```text
-half extent = radius + margin,   margin = clamp(1.5 · radius, 4 voxels, 32 voxels)
+half extent = radius + margin,   margin = clamp(3 · radius, 6 voxels, 32 voxels)
 ```
+
+The margin is the size of the largest structure a blast can bring down, so it
+is a cost against reach. Measured on `test_arena` at 1 m voxels, per grenade:
+1.5 radii cost 0.08 ms, 4 radii 0.25 ms, the 32-voxel ceiling everywhere
+5.8 ms. At 3 radii the whole search, both reads and up to four passes (below),
+costs 0.31 ms a grenade at 1 m voxels and 0.32 ms at 0.125 m.
 
 A `VoxelBlock` is not a unit of terrain storage. It is the dense, flat sample
 buffer that meshing already reads chunks into, sized to whatever box the caller
@@ -110,25 +117,32 @@ chunk boundary. The writes back go through the same chunks the carve just
 dirtied, plus any further chunk a fragment reaches into.
 
 **Simplifying assumption A: anything that reaches the edge of the search region
-is held up.** The flood fill seeds from:
+is held up.** The flood fill seeds from every bearing sample on the region's
+boundary and every indestructible sample, and a piece that reaches the boundary
+through weak samples is held up too. A severed bridge longer than the region
+stays standing: `rubble_viewer`'s `long_bridge` scenario records it, and the
+whole-terrain audit sees the span left floating. That is the known gap. Part 6
+or a search that grows on demand would close it.
 
-- every bearing sample on the region's boundary;
-- every indestructible sample;
-- every bearing sample on the **segment's bounds**. Terrain cut off at a
-  segment's edge is the edge of the authored world, not a break.
+There is no seed at the segment's bounds. Terrain cut off there ends in a
+visible cap, so a piece hanging only from that cap is floating, and falls.
 
-A severed bridge longer than the region stays standing. That is acceptable,
-since a pillar that tall would want structural analysis anyway (see Part 6), and
-it caps the cost at one flood fill over a region of known size.
+#### Before and after: authored floating terrain
 
-If no seed is found, the **largest component is held up**. That is the case of a
-small sky-island segment with the whole island inside the region: the island
-holds itself up, and only what the blast cut off it falls.
+An island over the ground stands on nothing the search can see. Judged on the
+field after the carve alone, any blast near it would bring the whole island
+down. So each piece standing free after the carve is judged by what it was
+part of before:
 
-At 1 m voxels and a 3 m crater the region is about 20³ samples. At 0.125 m
-voxels it is capped by the 32-voxel margin at about 112³ (1.4 M samples, one
-byte of label each). The flood fill is a plain queue over a bitset. The margin
-cap is tuned against `terrain_perf`.
+- **Cut off something held up:** some of its samples were held up before the
+  carve. It falls.
+- **Cut out of something that already stood free** (an authored island, or a
+  small island segment read whole): the largest such piece that has a bearing
+  sample goes on standing as the island did. The rest fall. A piece with no
+  bearing sample is no island if the blast reached it.
+
+A carve only removes solid, so every sample of a piece after the carve was solid
+before it, and the piece lay within one thing.
 
 ### Which samples bear load
 
@@ -139,7 +153,7 @@ anything up. So the flood fill only travels through **bearing** samples:
 | Rule | Why |
 |---|---|
 | `density ≥ BEARING_DENSITY` (≈ 0.25) | A sample closer than that to the surface is a rind. The slivers' samples all fail this. |
-| Not a **sheet sample**: on no axis are both neighbours air. Only applies within `radius + 1` voxel of the blast. | This is what drops the zero-thickness shelves. Limiting it to the blast keeps authored thin decks elsewhere in the block from collapsing. |
+| Not a **sheet sample**: on no axis are both neighbours air. Only applies within `radius + 2` voxels of the blast. | This is what drops the zero-thickness shelves. Limiting it to the blast keeps authored thin decks elsewhere in the block from collapsing. The carve changes samples a voxel past its radius, so a sample one voxel further out can have lost the neighbours either side of it. |
 | 6-connectivity | Conservative: a link that marching cubes would draw through a cell diagonal does not count. The worst case is that something falls that might have hung by a corner, and that reads correctly. |
 
 Non-bearing solid samples are assigned after the flood fill:
@@ -150,6 +164,16 @@ Non-bearing solid samples are assigned after the flood fill:
 - Every other non-bearing sample joins whichever fragment it touches. Connected
   non-bearing samples that touch no bearing sample form a fragment of their own.
   This is how the floating strips are handled.
+- Near the blast, a non-bearing sample that marching cubes would draw
+  **paper-thin** (two surfaces less than half a voxel apart across some axis)
+  is never a lip, and joins only other paper-thin samples. A lip that thin is
+  the flap the screenshots show, and a flap on an island's side is its own
+  piece, not part of the island.
+
+Lifting a piece can strip the last neighbour from a sample beside it and leave
+that paper-thin in turn, so `cut_loose` searches the same crater again until
+nothing more comes away (at most four passes). Over `rubble_viewer`'s scenarios
+no blast lifted anything on a third pass.
 
 #### 6-connectivity
 
@@ -217,8 +241,7 @@ piece needs exactly that gap.
 
 Fragments never cross a segment boundary. Segments do not touch: joins carry a
 gap, welded joins are not implemented, and each segment caps the terrain at its
-own bounds (`LEVEL_SEGMENTS_PLAN.md`). The finder works on one segment's grid,
-and its seeds at the segment's bounds hold up anything that reaches them.
+own bounds (`LEVEL_SEGMENTS_PLAN.md`). The finder works on one segment's grid.
 
 ---
 
@@ -614,10 +637,13 @@ report over time, and tests that run the catalogue.
  report (text, CSV)   ·   --film: filmstrip through level_viewer's renderer (GPU)
 ```
 
-**Invariants**, checked every frame of every scenario:
+**Invariants**, checked after every blast of every scenario (Phase 1 has the
+first and a second; the rest arrive with bodies):
 
 - **No floating terrain.** A flood fill over the whole segment (not just the
-  search region) reaches every bearing solid sample from a seed.
+  search region) finds no more solid standing free than before the blast.
+- **Nothing paper-thin.** No more samples drawn thinner than half a voxel
+  across some axis than before the blast.
 - **Volume ledger.** Terrain volume + boulders + scree + dust = the initial
   volume − what blasts carved, within the deposit tolerance. The same idea as
   water's ledger.
@@ -632,7 +658,7 @@ report over time, and tests that run the catalogue.
 | Scenario | Expects |
 |---|---|
 | `shelf` | A blast under a slab: one fragment, a lip ≤ 1 voxel left on the cliff, it lands. |
-| `rim_cusps` | The screenshot case reproduced: 30 seeded grenades on one patch of flat ground. After every blast, no fragment of grade scree or dust is left in the terrain. |
+| `rim_cusps` | The screenshot case reproduced: 60 seeded grenades across a field at 1 m voxels. With nothing lifted they leave 4 samples floating and 7 drawn paper-thin; with Phase 1, none after any blast. |
 | `arch_both_legs` / `arch_one_leg` | Cut both legs: the span falls as one boulder. Cut one: it stays. |
 | `sky_island` | A blast at the edge of a small island segment: the island stays, the piece cut off falls. |
 | `long_bridge` | A bridge cut at both ends but longer than the search region stays: assumption A, recorded so a change to it is a decision. |
@@ -640,8 +666,9 @@ report over time, and tests that run the catalogue.
 | `settle_blocked` | The same with a crate resting on the boulder: no deposit. |
 | `river_dam` | The Phase 4 headline: a cliff dropped into a channel deposits and raises the water upstream. |
 
-`cargo test --release --lib rubble_viewer` runs the catalogue. The slow ones
-are `#[ignore]`d, like `level_check::rest`.
+`cargo test --release --lib rubble_viewer` runs the catalogue, in a few
+seconds. A scenario can record a **known gap**: it is expected to break an
+invariant, and fails when it stops doing so (`long_bridge`).
 
 **Fuzz:** `rubble_viewer --fuzz <seeds>` sets off seeded random blasts over a
 real level's terrain (`perf::Ground`) with only the invariants as judge, in
@@ -652,7 +679,7 @@ and once understood becomes a scenario.
 
 | Bench | Addition | Initial budget |
 |---|---|---|
-| `terrain_perf` | `TerrainStage::FindFragments` and `LiftFragments`; fragments per blast in the record. The mesh fingerprint changes once, on purpose, when Phase 1 lands. | Finder ≤ 0.5 ms per blast at 0.5 m voxels, ≤ 2 ms at 0.125 m. |
+| `terrain_perf` | ✓ `TerrainStage::CutLoose` (survey, search and lift together) and fragments per blast in the table. | Finder ≤ 0.5 ms per blast at 0.5 m voxels, ≤ 2 ms at 0.125 m. Measured: 0.31 ms at 1 m, 0.32 ms at 0.125 m. |
 | `physics_perf` | A `cliff_collapse` scenario on real terrain: physics stages while the rubble tumbles, after it sleeps, and after it is deposited. | Spawn (mesh + AO + bricks) ≤ 1 ms per boulder. After the deposit, physics cost back to the pre-blast figure. |
 | `render_perf` | `RenderCounters` for rubble draws and mesh uploads, during the existing blast scenario. | Within the frame budget with the per-blast fragment cap reached. |
 
@@ -666,7 +693,7 @@ Each phase is shippable on its own and checked with the existing tools.
 
 | Phase | What | How it is checked |
 |---|---|---|
-| **1. Finder + dust** | `FragmentFinder`; every fragment just becomes a dust puff. This alone fixes the screenshots. | Unit tests: two overlapping carves leave a cusp, and the finder removes it; a shelf over a crater breaks off at a lip; a pillar reaching the block edge stays. `terrain_perf`: finder cost per blast, fingerprint changes only near rims. `level_check --mesh-edges`: no open edges. |
+| **1. Finder + dust** ✓ | `Crater`/`Search`/`cut_loose`; every fragment crumbles into a burst of the blast's debris effect, scaled down (a material-coloured puff waits for Phase 2). | 21 unit tests in `terrain::fragment`, one per rule, each shown to fail with its rule removed. `rubble_viewer` (`cargo test --lib rubble_viewer`): every scenario, with "nothing more standing free, nothing more paper-thin after any blast" as the invariant. `terrain_perf`: one `cut loose` stage, fingerprints unchanged on sweeps that cut nothing loose. |
 | **2. Scree** | `FallingScree`, render mesh from the fragment's own marching cubes. | `render_perf` during a blast: draw counts, cost. Play-test. |
 | **3. Boulders** | Brick shaper, compound bodies, debris budget. | Unit tests on the shaper (disjoint bricks, total volume within 30% of the voxel volume, never a refused hull panic). `physics_fuzz`-style seeded blasts: energy, finiteness. `physics_perf`: cost of a cliff collapse. |
 | **4. Deposition** | `TerrainWorld::deposit` with `DEPOSIT_BIAS` and its tests first, then `SettleSystem` and its conditions. | Volume conserved to within 1% at random poses; surface error within the measured table. `level_viewer` before/after. Water re-lays: a `water_viewer` scenario where a deposited boulder dams a channel. |
@@ -676,16 +703,23 @@ Each phase is shippable on its own and checked with the existing tools.
 
 Open, each with the phase that has to close it:
 
-- **A world without a renderer (Phase 1).** `rubble_viewer` needs the game's
-  simulation systems in the game's order without `RenderSystem`, and today
-  `GameWorld::assemble` takes a `Renderer`. The preferred fix is to split the
-  dispatcher builder so the simulation part can be built alone, which the
-  game and the tool then share. A hand-assembled subset of systems would
-  drift from the real frame order, so it is the fallback, not the plan.
-- **Calibrating `BEARING_DENSITY` (Phase 1).** 0.25 is reasoned, not
-  measured. `rim_cusps` is the calibration: the lowest value that leaves no
-  scree-grade sliver after 30 blasts, then checked against `shelf` for
-  over-eager collapse.
+- **A world without a renderer (Phase 3).** While fragments only crumble into
+  dust, `rubble_viewer` calls `TerrainWorld::detonate` directly, as the
+  explosion system does. Once fragments are bodies it needs the game's
+  simulation systems in the game's order without `RenderSystem`, and
+  `GameWorld::assemble` takes a `Renderer` and the GPU texture and resource
+  managers. The preferred fix is to split the dispatcher builder so the
+  simulation part can be built alone, which the game and the tool then share.
+- **The volume ledger (Phase 3).** With dust as the only outcome there is
+  nothing for a ledger to follow: the unit tests check that the samples lifted
+  are exactly the samples the fragments carry. The ledger arrives with bodies.
+- **`BEARING_DENSITY` (calibrated in Phase 1).** Swept over every scenario:
+  from 0 to 0.25 they all pass and `rim_cusps` cuts 11–12 one-sample
+  fragments; at 0.4, `rim_cusps` cuts 57 fragments of up to 8 samples out of
+  ordinary crater rims and `arch_both_legs` no longer brings the span down.
+  The sheet and paper-thin rules do most of the work, so 0.25 is the highest
+  value that does not erode sound terrain, and the unit tests' weak bars are
+  what it still catches alone.
 - **A per-blast fragment cap (Phase 3).** One blast through a honeycomb can
   free dozens of pieces. Past `MAX_BOULDERS_PER_BLAST`, the smallest are
   downgraded to scree. The cap is set from `physics_perf`'s `cliff_collapse`.
@@ -699,8 +733,15 @@ Open, each with the phase that has to close it:
 - **Thin authored geometry.** The sheet-sample rule only applies near the
   blast, but a grenade on a one-voxel deck now drops a piece of it. That is
   probably wanted. A per-material or per-segment opt-out is cheap if it isn't.
-- **Search cost at fine voxels.** The 0.125 m segment in `test_arena` is where
-  the margin cap matters. Measure before choosing the cap.
+- **Carve cost at fine voxels.** Not the search, which costs 0.32 ms a grenade
+  at 0.125 m voxels, but the carve before it: `blast::effective_radius` takes
+  343 ms per grenade on a flat 0.125 m field (`terrain_perf --level` on a
+  scratch level), before and after Phase 1 alike.
+- **Thin curved authored geometry.** A tube two voxels thick is joined to
+  itself only diagonally where it curves, so the audit finds parts of it
+  standing free as authored, and the before/after rule then treats it as an
+  island: cutting its feet brings nothing down. `rubble_viewer`'s arches are
+  2 m thick for this reason.
 - **The slivers that this does not remove.** A cusp still joined to bearing
   ground through bearing samples stays. If thin fins still show up, the
   sheet-sample rule can be extended to any axis-thin bearing sample in the

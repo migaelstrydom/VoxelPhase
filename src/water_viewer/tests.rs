@@ -359,12 +359,14 @@ fn a_breached_sea_wall_floods_the_lowland_until_it_joins_the_sea() {
 #[test]
 fn the_sea_pouring_back_over_a_lowland_s_weir_falls_along_its_far_side() {
     let scenario = find("sea_wall").unwrap();
-    // The weir is laid lowland → sea; the sea runs back over it.
+    // The weir is laid lowland → sea; the sea runs back over it. The breach
+    // goes off at 2 s and the sheet runs for about a second before the
+    // lowland fills up to it.
     let mut poured = Vec::new();
     run_with_captures(
         &scenario,
         RunConfig::default(),
-        &[4.0, 8.0, 16.0],
+        &[2.5, 3.0, 4.0, 8.0, 16.0],
         |_, _, water| {
             poured.push(water.network().links().any(|(id, l)| {
                 let heights = water.link_interface(id);

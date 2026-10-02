@@ -7,12 +7,13 @@ use super::components::{Explosion, UPWARD_BOOST};
 use super::visuals::ExplosionVisuals;
 use crate::components::{Position, Velocity};
 use crate::physics::PhysicsImpulseQueue;
+use crate::rubble::RubbleQueue;
 use crate::terrain::TerrainWorld;
 
 /// System that processes explosion events.
 ///
 /// For each unprocessed explosion:
-/// 1. Carves a crater in the terrain using modify_sphere
+/// 1. Carves a crater in the terrain, and queues what it cut loose as rubble
 /// 2. Applies knockback force to nearby entities with Velocity
 /// 3. Hands the blast to [`ExplosionVisuals`], which owns its own timing
 /// 4. Marks the explosion as processed for cleanup
@@ -38,6 +39,7 @@ impl<'a> System<'a> for ExplosionSystem {
         WriteStorage<'a, Velocity>,
         Read<'a, specs::LazyUpdate>,
         Write<'a, PhysicsImpulseQueue>,
+        Write<'a, RubbleQueue>,
     );
 
     fn run(&mut self, data: Self::SystemData) {
@@ -49,6 +51,7 @@ impl<'a> System<'a> for ExplosionSystem {
             mut velocities,
             lazy,
             mut impulse_queue,
+            mut rubble,
         ) = data;
 
         // Collect explosion data first to avoid borrow issues
@@ -71,10 +74,11 @@ impl<'a> System<'a> for ExplosionSystem {
             return;
         }
 
-        // Process terrain destruction
+        // Process terrain destruction. What a blast cuts loose is lifted out of
+        // the field here and handed on as rubble.
         if let Some(ref mut terrain_manager) = terrain_manager_opt {
             for &(_, center, blast, _, _, _) in &explosion_data {
-                terrain_manager.detonate(center, &blast);
+                rubble.extend(terrain_manager.detonate(center, &blast));
             }
         }
 

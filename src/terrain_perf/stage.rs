@@ -9,6 +9,8 @@ use crate::terrain::{ChunkBuildTimings, UpdateTimings};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TerrainStage {
     Detonate,
+    /// Finding what the crater cut loose, and lifting it out.
+    CutLoose,
     /// Every dirty chunk's replacement mesh, built in parallel.
     Build,
     Commit,
@@ -18,8 +20,9 @@ pub enum TerrainStage {
 }
 
 impl TerrainStage {
-    pub const ALL: [TerrainStage; 6] = [
+    pub const ALL: [TerrainStage; 7] = [
         TerrainStage::Detonate,
+        TerrainStage::CutLoose,
         TerrainStage::Build,
         TerrainStage::Commit,
         TerrainStage::Unlink,
@@ -30,6 +33,7 @@ impl TerrainStage {
     pub fn label(self) -> &'static str {
         match self {
             TerrainStage::Detonate => "detonate",
+            TerrainStage::CutLoose => "cut loose",
             TerrainStage::Build => "build (parallel)",
             TerrainStage::Commit => "commit",
             TerrainStage::Unlink => "adjacency/unlink",
@@ -42,6 +46,7 @@ impl TerrainStage {
     pub fn of(self, t: &UpdateTimings) -> Duration {
         match self {
             TerrainStage::Detonate => t.detonate,
+            TerrainStage::CutLoose => t.cut_loose,
             TerrainStage::Build => t.build,
             TerrainStage::Commit => t.commit,
             TerrainStage::Unlink => t.adjacency_split.unlink,
@@ -122,6 +127,7 @@ mod tests {
         let ms = Duration::from_millis;
         let mut t = UpdateTimings {
             detonate: ms(1),
+            cut_loose: ms(1),
             build: ms(20),
             commit: ms(2),
             concat: ms(3),

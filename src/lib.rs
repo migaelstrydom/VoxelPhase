@@ -37,6 +37,8 @@ pub mod projectile;
 pub mod render_perf;
 pub mod rendering;
 pub mod resources;
+pub mod rubble;
+pub mod rubble_viewer;
 pub mod sensing;
 pub mod skeleton;
 pub mod systems;

@@ -38,6 +38,7 @@ use crate::rendering::material::MaterialManager;
 use crate::rendering::renderer::Renderer;
 use crate::resources::manager::ResourceManager;
 use crate::resources::textures::TextureManager;
+use crate::rubble::RubbleQueue;
 use crate::sensing::{ContactCandidates, SensorSet};
 use crate::systems::{FrameStart, PhysicsResource};
 use crate::terrain::TerrainWorld;
@@ -165,6 +166,7 @@ impl WorldBuilder {
         self.world.insert(FrameStart::default());
         self.world.insert(PhysicsImpulseQueue::default());
         self.world.insert(DebrisBudget::default());
+        self.world.insert(RubbleQueue::default());
         self.world.insert(ActiveLights::default());
         self.world.insert(DamageQueue::default());
         self.world.insert(LevelProgress::default());

@@ -36,6 +36,7 @@ use super::adjacency::{AdjacencyTimings, DefectiveEdge};
 use super::blast::BlastConfig;
 use super::chunk::{ChunkCoord, ChunkTriangleRef};
 use super::chunk_rebuild::ChunkBuildTimings;
+use super::fragment::Fragment;
 use super::render_cache::ChunkRenderData;
 use super::segment::{ConcatTimings, Segment};
 use super::surface;
@@ -124,6 +125,10 @@ pub struct UpdateTimings {
     /// budget and writing the removed voxels. Runs before the update, usually
     /// earlier in the same frame.
     pub detonate: Duration,
+    /// Finding what those blasts cut loose and lifting it out of the field.
+    pub cut_loose: Duration,
+    /// How many fragments those blasts cut loose.
+    pub fragments: usize,
     /// Wall clock of building the dirty chunks' replacement meshes, which
     /// runs chunks in parallel.
     pub build: Duration,
@@ -147,7 +152,7 @@ pub struct UpdateTimings {
 impl UpdateTimings {
     /// Sum of the measured phases.
     pub fn total(&self) -> Duration {
-        self.detonate + self.build + self.commit + self.adjacency + self.concat
+        self.detonate + self.cut_loose + self.build + self.commit + self.adjacency + self.concat
     }
 }
 
@@ -208,9 +213,18 @@ pub struct TerrainWorld {
     /// Retained across idle frames so it can still be read after the event.
     last_update: Option<UpdateTimings>,
 
-    /// Time spent in `detonate` since the last `update()`, carried into that
-    /// update's timings so a blast is reported with the rebuild it caused.
-    pending_detonate: Duration,
+    /// What every `detonate` since the last `update()` cost and cut loose,
+    /// carried into that update's timings so a blast is reported with the
+    /// rebuild it caused.
+    pending_detonate: PendingDetonations,
+}
+
+/// Detonations not yet reported by an update.
+#[derive(Debug, Clone, Copy, Default)]
+struct PendingDetonations {
+    carve: Duration,
+    cut_loose: Duration,
+    fragments: usize,
 }
 
 impl TerrainWorld {
@@ -261,7 +275,7 @@ impl TerrainWorld {
             texture: None,
             bounds,
             last_update: None,
-            pending_detonate: Duration::ZERO,
+            pending_detonate: PendingDetonations::default(),
         }
     }
 
@@ -285,25 +299,48 @@ impl TerrainWorld {
 
     // === Modification ===
 
-    /// Detonate a charge at a world-space point.
+    /// Detonate a charge at a world-space point, returning the terrain it cut
+    /// loose. The fragments are already gone from the field; a caller with no
+    /// use for them can drop them.
     ///
     /// Routed to every segment within the charge's maximum reach, so an
     /// explosion straddling a join affects both sides. Each segment resolves the
     /// budget against its own material, which is what lets a charge cut deep
     /// into one segment's sand and barely mark the granite next to it.
-    pub fn detonate(&mut self, center: Point3<f32>, config: &BlastConfig) {
+    pub fn detonate(&mut self, center: Point3<f32>, config: &BlastConfig) -> Vec<Fragment> {
         let started = Instant::now();
+        let mut fragments = Vec::new();
+        let mut cut_loose = Duration::ZERO;
         for segment in &mut self.segments {
             if segment
                 .bounds()
                 .intersects_sphere(center, config.max_radius)
             {
-                if let Some(changed) = segment.detonate(center, config) {
-                    self.pending_changes.push(changed);
+                if let Some(detonation) = segment.detonate(center, config) {
+                    self.pending_changes.push(detonation.surface);
+                    cut_loose += detonation.timings.cut_loose;
+                    fragments.extend(detonation.fragments);
                 }
             }
         }
-        self.pending_detonate += started.elapsed();
+        let pending = &mut self.pending_detonate;
+        pending.carve += started.elapsed().saturating_sub(cut_loose);
+        pending.cut_loose += cut_loose;
+        pending.fragments += fragments.len();
+        fragments
+    }
+
+    /// Solid samples standing free across every segment: held up by nothing
+    /// and holding up nothing. Reads every segment whole, so it is for tests
+    /// and tools, not for a frame. See `Segment::loose_samples`.
+    pub fn loose_samples(&self) -> usize {
+        self.segments.iter().map(Segment::loose_samples).sum()
+    }
+
+    /// Destructible samples drawn paper-thin, across every segment: shelves
+    /// and strips. Reads every segment whole: tests and tools only.
+    pub fn paper_thin_samples(&self) -> usize {
+        self.segments.iter().map(Segment::paper_thin_samples).sum()
     }
 
     /// Update terrain incrementally, remeshing only the chunks marked dirty.
@@ -320,7 +357,7 @@ impl TerrainWorld {
         let mut build_cpu = ChunkBuildTimings::default();
         let mut commit = Duration::ZERO;
         let mut adjacency = AdjacencyTimings::default();
-        let detonate = std::mem::take(&mut self.pending_detonate);
+        let detonations = std::mem::take(&mut self.pending_detonate);
 
         let mut rebuilt = Vec::new();
         for segment in &mut self.segments {
@@ -358,7 +395,9 @@ impl TerrainWorld {
 
         let timings = UpdateTimings {
             chunks_dirtied,
-            detonate,
+            detonate: detonations.carve,
+            cut_loose: detonations.cut_loose,
+            fragments: detonations.fragments,
             build,
             build_cpu,
             commit,

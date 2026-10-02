@@ -30,6 +30,7 @@ use super::blast::{self, BlastConfig};
 use super::chunk::{ChunkCoord, ChunkTriangleRef};
 use super::chunk_grid::ChunkGrid;
 use super::chunk_rebuild::{ChunkBuildTimings, ChunkRebuild};
+use super::fragment::{self, Crater, Fragment, Search};
 use super::frame::SegmentFrame;
 use super::render_cache::{build_chunk_render_data, ChunkRenderCache, ChunkRenderData};
 use super::segment_adjacency::{adjacency_tolerance, SegmentAdjacency};
@@ -87,6 +88,24 @@ impl ConcatTimings {
         self.transform += other.transform;
         self.rebase += other.rebase;
     }
+}
+
+/// What one detonation did to a segment.
+pub struct Detonation {
+    /// World-space box the surface can have moved within.
+    pub surface: AABB,
+    /// The terrain the blast cut loose, already lifted out of the field.
+    pub fragments: Vec<Fragment>,
+    pub timings: DetonationTimings,
+}
+
+/// Wall clock of one detonation, by step.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DetonationTimings {
+    /// Resolving the blast's budget and carving the crater.
+    pub carve: Duration,
+    /// Finding what the crater cut loose and lifting it out.
+    pub cut_loose: Duration,
 }
 
 /// An independently placed chunk grid with a name, a frame and named anchors.
@@ -228,14 +247,15 @@ impl Segment {
 
     // === Modification ===
 
-    /// Detonate a charge at a world-space point. Returns the world-space box
-    /// the surface can have moved within, or `None` if nothing was carved.
+    /// Detonate a charge at a world-space point: carve the crater, then lift
+    /// out whatever it cut loose. `None` if nothing was carved.
     ///
     /// How far the cut reaches is the charge's budget against what it is digging
     /// through — see [`blast::effective_radius`]. The radius is resolved across
     /// the whole grid before anything is carved, so a blast on a chunk boundary
     /// spends one budget rather than one per chunk.
-    pub fn detonate(&mut self, center: Point3<f32>, config: &BlastConfig) -> Option<AABB> {
+    pub fn detonate(&mut self, center: Point3<f32>, config: &BlastConfig) -> Option<Detonation> {
+        let started = Instant::now();
         let local_center = self.frame.to_local(center);
         let voxel_size = self.grid.voxel_size();
 
@@ -246,6 +266,9 @@ impl Segment {
         let reach = radius + voxel_size;
         let affected = AABB::from_center_half_extents(local_center, Vector3::repeat(reach));
 
+        let surveyed = Instant::now();
+        let crater = Crater::survey(&self.grid, local_center, radius);
+        let survey = surveyed.elapsed();
         let coords: Vec<ChunkCoord> = self.grid.coords_in(&affected).collect();
         let mut any_destroyed = false;
         for coord in &coords {
@@ -257,17 +280,60 @@ impl Segment {
         if !any_destroyed {
             return None;
         }
-        for coord in &coords {
-            if let Some(chunk) = self.grid.chunk_mut(*coord) {
-                chunk.mark_dirty();
-            }
-        }
+        self.mark_dirty_within(&affected);
         // The carve moves samples out to a voxel past the radius (a density is
         // a clamped distance), and the surface moves in every cell such a
         // sample is a corner of: one voxel further again.
         let surface_reach = radius + 2.0 * voxel_size;
-        let surface = AABB::from_center_half_extents(local_center, Vector3::repeat(surface_reach));
-        Some(self.frame.aabb_to_world(&surface))
+        let mut surface =
+            AABB::from_center_half_extents(local_center, Vector3::repeat(surface_reach));
+        let carve = started.elapsed().saturating_sub(survey);
+
+        let started = Instant::now();
+        let cut = fragment::cut_loose(&mut self.grid, &crater, &self.frame);
+        if let Some(loose) = cut.lifted {
+            // A lifted sample moves the surface in every cell it is a corner
+            // of, on both sides of a seam.
+            let lifted = AABB::new(
+                loose.min - Vector3::repeat(voxel_size),
+                loose.max + Vector3::repeat(voxel_size),
+            );
+            self.mark_dirty_within(&lifted);
+            surface = surface.merged(&lifted);
+        }
+        let fragments = cut.fragments;
+
+        Some(Detonation {
+            surface: self.frame.aabb_to_world(&surface),
+            fragments,
+            timings: DetonationTimings {
+                carve,
+                cut_loose: survey + started.elapsed(),
+            },
+        })
+    }
+
+    /// How many solid samples anywhere in the segment hold up nothing and are
+    /// held up by nothing: what blasts should have cut loose and did not.
+    /// Reads the whole grid, so it is for tests and tools, not for a frame.
+    pub fn loose_samples(&self) -> usize {
+        Search::audit(&self.grid).loose_samples()
+    }
+
+    /// How many destructible samples in the segment are drawn paper-thin
+    /// across some axis. Reads the whole grid: tests and tools only.
+    pub fn paper_thin_samples(&self) -> usize {
+        Search::paper_thin_samples(&self.grid)
+    }
+
+    /// Mark every allocated chunk meeting a grid-local box for remeshing.
+    fn mark_dirty_within(&mut self, local: &AABB) {
+        let coords: Vec<ChunkCoord> = self.grid.coords_in(local).collect();
+        for coord in coords {
+            if let Some(chunk) = self.grid.chunk_mut(coord) {
+                chunk.mark_dirty();
+            }
+        }
     }
 
     /// Remesh the chunks marked dirty, appending their world bounds to

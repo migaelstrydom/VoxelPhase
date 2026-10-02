@@ -108,11 +108,13 @@ pub fn blast_table(run: &TerrainRun) -> String {
     let mut out = String::new();
     let _ = writeln!(
         out,
-        "{:>3} {:>22} {:>6} {:>9} {:>9} {:>9} {:>9} {:>9} {:>9} {:>9}",
+        "{:>3} {:>22} {:>6} {:>5} {:>9} {:>9} {:>9} {:>9} {:>9} {:>9} {:>9} {:>9}",
         "#",
         "site",
         "chunks",
+        "frags",
         "detonate",
+        "cut loose",
         "build",
         "commit",
         "adjacency",
@@ -124,14 +126,16 @@ pub fn blast_table(run: &TerrainRun) -> String {
         let t = blast.timings.unwrap_or_default();
         let _ = writeln!(
             out,
-            "{:>3} {:>22} {:>6} {:>9.2} {:>9.2} {:>9.2} {:>9.2} {:>9.2} {:>9.2} {:>9.2}",
+            "{:>3} {:>22} {:>6} {:>5} {:>9.2} {:>9.2} {:>9.2} {:>9.2} {:>9.2} {:>9.2} {:>9.2} {:>9.2}",
             index,
             format!(
                 "({:.1}, {:.1}, {:.1})",
                 blast.site.x, blast.site.y, blast.site.z
             ),
             blast.chunks_dirtied(),
+            t.fragments,
             as_ms(t.detonate),
+            as_ms(t.cut_loose),
             as_ms(t.build),
             as_ms(t.commit),
             as_ms(t.adjacency),
@@ -145,7 +149,7 @@ pub fn blast_table(run: &TerrainRun) -> String {
 
 /// Every blast as a CSV row: site, chunk count, wall clock, and each stage.
 pub fn write_csv(run: &TerrainRun, path: &Path) -> io::Result<()> {
-    let mut out = String::from("index,x,y,z,chunks,wall_ms,unaccounted_ms");
+    let mut out = String::from("index,x,y,z,chunks,fragments,wall_ms,unaccounted_ms");
     for stage in TerrainStage::ALL {
         let _ = write!(out, ",{}_ms", column(stage.label()));
     }
@@ -163,12 +167,13 @@ fn write_row(out: &mut String, index: usize, blast: &BlastRecord) {
     let t = blast.timings.unwrap_or_default();
     let _ = write!(
         out,
-        "{},{:.3},{:.3},{:.3},{},{:.4},{:.4}",
+        "{},{:.3},{:.3},{:.3},{},{},{:.4},{:.4}",
         index,
         blast.site.x,
         blast.site.y,
         blast.site.z,
         blast.chunks_dirtied(),
+        t.fragments,
         as_ms(blast.wall),
         as_ms(blast.unaccounted())
     );
