@@ -66,55 +66,99 @@ vec3 computeRayDir(vec2 clipPos) {
     return normalize(worldDir);
 }
 
-// Wispy cirrus clouds
+// Cirrus: thin, high ice cloud, combed into strands by the wind.
+//
+// Drawn on a plane above the eye, so the layer converges toward the horizon.
+// Large patches decide where cirrus is; inside them, noise stretched along the
+// wind draws the strands, and a coarser stretched layer bends them into the
+// hooks and tufts that make it read as cirrus rather than as smoke.
+
+/// Height of the cloud plane, in the units the projection is measured in.
+const float CIRRUS_HEIGHT = 0.15;
+
+/// Noise features per unit of the plane. Sets how many patches the sky holds:
+/// too low and the whole visible sky falls inside one noise cell, all clear
+/// or all cloud.
+const float CIRRUS_SCALE = 14.0;
+
+/// Direction the strands are combed along, on the plane.
+const vec2 CIRRUS_WIND = vec2(0.94, 0.34);
+
+/// How far the patches drift per second, in plane units.
+const float CIRRUS_DRIFT = 0.02;
+
+/// Fraction of the sky the patches cover, roughly.
+const float CIRRUS_COVERAGE = 0.45;
+
+/// Opacity of the densest cirrus. Cirrus is thin: the sky shows through it.
+const float CIRRUS_MAX_OPACITY = 0.85;
+
+/// Brightness of sunlit cirrus against the sky's radiance scale. Ice cloud
+/// is brighter than the blue behind it; this is what makes it visible.
+const float CIRRUS_BRIGHTNESS = 1.6;
+
+/// Cirrus opacity along a view ray, 0..CIRRUS_MAX_OPACITY.
 float cloudDensity(vec3 rayDir, float time) {
+    vec2 plane = rayDir.xz * (CIRRUS_HEIGHT / max(rayDir.y, 0.02)) * CIRRUS_SCALE;
+    vec2 across = vec2(-CIRRUS_WIND.y, CIRRUS_WIND.x);
+    vec2 wind_frame = vec2(dot(plane, CIRRUS_WIND), dot(plane, across));
+    wind_frame.x += time * CIRRUS_DRIFT;
+
+    // How much of the plane, across the wind, one pixel covers. Taken before
+    // any early return: derivatives need every pixel of the quad.
+    float pixel_across = fwidth(wind_frame.y);
+
     if (rayDir.y < 0.02) return 0.0;
 
-    float cloudHeight = 0.15;
-    float t = cloudHeight / max(0.001, rayDir.y);
-    vec2 cloudUV = rayDir.xz * t;
+    // Wide ramps throughout: cirrus has no surface, it thins out. A narrow
+    // threshold turns every noise contour into a hard edge.
+    float patches = fbm(wind_frame * vec2(0.25, 0.5), 4);
+    patches = smoothstep(0.55 - CIRRUS_COVERAGE * 0.3, 0.75 - CIRRUS_COVERAGE * 0.3, patches);
 
-    vec2 windOffset = vec2(time * 0.01, time * 0.005);
-    cloudUV += windOffset;
+    // Hooks bend the strands: a coarse field offsets where across the wind
+    // each strand is drawn, so they curl instead of running ruler-straight.
+    float hooks = fbm(wind_frame * vec2(0.6, 1.2) + vec2(31.7, 5.3), 3);
+    vec2 strand_frame = wind_frame + vec2(0.0, hooks * 0.8);
+    float strands = fbm(strand_frame * vec2(0.8, 7.0) + vec2(-12.1, 47.9), 4);
+    strands = smoothstep(0.3, 0.85, strands);
 
-    float largeScale = fbm(cloudUV * 0.5, 4);
-    largeScale = smoothstep(0.4, 0.7, largeScale);
+    // Fibres: far finer and more stretched than the strands, so each strand
+    // is a bundle of hairs rather than one smooth band.
+    // Toward the horizon they shrink below a pixel and would only alias, so
+    // they fade to their average there.
+    float fibres = fbm(strand_frame * vec2(1.5, 28.0) + vec2(7.3, -21.4), 3);
+    fibres = smoothstep(0.25, 0.75, fibres);
+    fibres = mix(fibres, 0.5, smoothstep(0.15, 0.4, pixel_across * 28.0));
 
-    float detail = fbm(cloudUV * 2.0 + vec2(time * 0.02, 0.0), 3);
+    float density = patches * strands * mix(0.35, 1.0, fibres);
 
-    float streaks = fbm(cloudUV * vec2(4.0, 1.0) + vec2(0.0, time * 0.01), 3);
-    streaks = smoothstep(0.45, 0.65, streaks);
+    // Fray: where the cloud is thin, fine noise breaks it into threads; the
+    // cores are left whole. The edges dissolve instead of being cut.
+    float fray = fbm(strand_frame * vec2(3.0, 16.0) + vec2(-3.9, 13.1), 2);
+    fray = mix(fray, 0.6, smoothstep(0.15, 0.4, pixel_across * 16.0));
+    density *= mix(fray * fray * 1.6, 1.0, smoothstep(0.1, 0.5, density));
 
-    float density = largeScale * 0.3 + detail * 0.15 + streaks * 0.25;
+    // Far toward the horizon the plane is so foreshortened that the strands
+    // only shimmer; fade them into the haze.
+    density *= smoothstep(0.03, 0.22, rayDir.y);
 
-    float horizonFade = smoothstep(0.02, 0.2, rayDir.y);
-    density *= horizonFade;
-
-    density = smoothstep(0.35, 0.65, density) * 0.5;
-
-    return density;
+    return density * CIRRUS_MAX_OPACITY;
 }
 
-vec3 renderClouds(vec3 rayDir, vec3 sunDir, float time) {
-    float density = cloudDensity(rayDir, time);
-
-    if (density < 0.001) return vec3(0.0);
-
+/// Radiance of cirrus seen along a ray: white, brightened toward the sun,
+/// where ice scatters light strongly forward, and warmed at a low sun.
+vec3 cloudRadiance(vec3 rayDir, vec3 sunDir) {
     float sunHeight = max(0.0, sunDir.y);
-    vec3 cloudColor = vec3(1.0, 1.0, 1.0);
-
     float sunDot = max(0.0, dot(rayDir, sunDir));
-    vec3 sunTint = vec3(1.0, 0.98, 0.9) * pow(sunDot, 2.0) * 0.2;
-    cloudColor += sunTint * sunHeight;
+
+    vec3 colour = vec3(1.0) * CIRRUS_BRIGHTNESS;
+    colour += vec3(1.0, 0.97, 0.9) * pow(sunDot, 8.0) * 1.5 * sunHeight;
 
     float sunsetFactor = smoothstep(0.0, 0.2, sunHeight) * (1.0 - smoothstep(0.2, 0.5, sunHeight));
-    vec3 sunsetTint = vec3(1.0, 0.75, 0.5) * sunsetFactor * 0.3;
-    cloudColor += sunsetTint;
-
-    cloudColor *= 0.95 + 0.15 * sunHeight;
+    colour = mix(colour, colour * vec3(1.0, 0.75, 0.5), sunsetFactor * 0.4);
 
     // Scaled alongside the sky so cloud and sky brightness stay in proportion.
-    return cloudColor * density * SKY_RADIANCE_SCALE;
+    return colour * SKY_RADIANCE_SCALE;
 }
 
 void main() {
@@ -126,8 +170,8 @@ void main() {
 
     vec3 color = skyRadiance(rayDir, sunDir) + sunDiscRadiance(rayDir, sunDir);
 
-    vec3 clouds = renderClouds(rayDir, sunDir, time);
-    color = mix(color, color + clouds, min(1.0, length(clouds)));
+    // Over the sun disc too: cirrus passing in front of the sun veils it.
+    color = mix(color, cloudRadiance(rayDir, sunDir), cloudDensity(rayDir, time));
 
     // Written as linear radiance. The post chain owns exposure and tonemapping;
     // resolving here would both double-tonemap and clamp the sun below the
