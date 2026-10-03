@@ -68,11 +68,8 @@ Level(
                     // ── Colonnade ─────────────────────────────────────────
                     // Back row: six columns 10 m tall, 4 m across down to
                     // 0.7 m. One grenade does not cut through a column of
-                    // 1.5 m or more. The thin ones it cuts, but a column that
-                    // tall reaches past what a grenade searches, so it stays
-                    // standing on nothing: assumption A in the design.
-                    // Front row: the same thin columns 3.5 m tall, which fit
-                    // inside the search and fall.
+                    // 1.5 m or more; the thin ones it cuts, and they fall
+                    // whole. Front row: the same thin columns 3.5 m tall.
                     Pillar(center: (18.0, 84.0), height: 12.0, radius: 2.0),
                     Pillar(center: (24.0, 84.0), height: 12.0, radius: 1.5),
                     Pillar(center: (29.0, 84.0), height: 12.0, radius: 1.0),
@@ -160,13 +157,12 @@ Level(
                     Island(center: (26.5, 6.6, 61.0), half_extents: (0.25, 1.6, 0.25), edge_noise: 0.0),
 
                     // ── Bridges ───────────────────────────────────────────
-                    // Decks of 6, 14 and 28 m between piers. Cut the 6 m deck,
-                    // a metre wide, at both ends and the middle falls. The
-                    // longer two are 1.5 m wide and reach past what a grenade
-                    // searches, so they stay up: assumption A.
+                    // Decks of 6, 14 and 28 m between piers, a metre wide.
+                    // Two grenades through each end and the middle falls,
+                    // however long it is.
                     Path(points: [(8.0, 8.0, 8.0),  (14.0, 8.0, 8.0)],  width: 1.0, thickness: 1.0),
-                    Path(points: [(8.0, 8.0, 16.0), (22.0, 8.0, 16.0)], width: 1.5, thickness: 1.0),
-                    Path(points: [(8.0, 8.0, 24.0), (36.0, 8.0, 24.0)], width: 1.5, thickness: 1.0),
+                    Path(points: [(8.0, 8.0, 16.0), (22.0, 8.0, 16.0)], width: 1.0, thickness: 1.0),
+                    Path(points: [(8.0, 8.0, 24.0), (36.0, 8.0, 24.0)], width: 1.0, thickness: 1.0),
 
                     // ── Slab walls ────────────────────────────────────────
                     // Three walls 7 m tall, 2 m, 1 m and 0.6 m thick. A

@@ -23,6 +23,7 @@ pub fn scenarios() -> Vec<Scenario> {
         island_chip(),
         stalactite_root(),
         short_bridge(),
+        long_bridge(),
         lip_root(),
         lip_underside(),
         hill_free_for_all(),
@@ -57,7 +58,8 @@ fn nothing_big_fell(run: &Run, max: usize) -> Result<(), String> {
 fn tall_columns() -> Scenario {
     Scenario {
         name: "garden_tall_columns",
-        description: "garden back row: a grenade at the foot of each 10 m column",
+        description:
+            "garden back row: a grenade at the foot of each 10 m column drops the thin ones whole",
         level: GARDEN,
         blasts: vec![
             grenade(15.9, 2.6, 84.0),
@@ -67,8 +69,8 @@ fn tall_columns() -> Scenario {
             grenade(35.9, 2.6, 84.0),
             grenade(39.1, 2.6, 84.0),
         ],
-        known_gap: Some("a column cut at its foot reaches past the search region and stays up"),
-        expect: |_| Ok(()),
+        known_gap: None,
+        expect: |run| something_fell(run, 80),
     }
 }
 
@@ -120,8 +122,8 @@ fn table_every_leg() -> Scenario {
             grenade(23.6, 3.0, 44.4),
             grenade(28.4, 3.0, 44.4),
         ],
-        known_gap: Some("the 6 m slab reaches past the search region and stays up on no legs"),
-        expect: |_| Ok(()),
+        known_gap: None,
+        expect: |run| something_fell(run, 500),
     }
 }
 
@@ -171,8 +173,24 @@ fn short_bridge() -> Scenario {
             grenade(13.2, 8.0, 8.0),
             grenade(13.2, 7.5, 8.0),
         ],
-        known_gap: Some("a grenade crater at 0.5 m voxels is small enough that the deck's 4 m middle reaches past the search region"),
-        expect: |_| Ok(()),
+        known_gap: None,
+        expect: |run| something_fell(run, 50),
+    }
+}
+
+fn long_bridge() -> Scenario {
+    Scenario {
+        name: "garden_long_bridge",
+        description: "garden bridges: the 28 m deck cut at both ends, two grenades each, falls",
+        level: GARDEN,
+        blasts: vec![
+            grenade(8.8, 8.0, 24.0),
+            grenade(8.8, 7.5, 24.0),
+            grenade(35.2, 8.0, 24.0),
+            grenade(35.2, 7.5, 24.0),
+        ],
+        known_gap: None,
+        expect: |run| something_fell(run, 300),
     }
 }
 

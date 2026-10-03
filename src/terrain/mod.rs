@@ -26,6 +26,7 @@ mod mesh_octree;
 mod render_cache;
 mod segment;
 mod segment_adjacency;
+mod split_race;
 pub mod surface;
 pub(crate) mod svo;
 pub mod traversal;

@@ -9,7 +9,10 @@
 //! ```text
 //!   Crater::survey ──▶ the samples around the crater, before the carve
 //!   carve
-//!   Search::run ──▶ the same samples, after it; for each of the two:
+//!   split_race ──▶ bearing pieces the carve closed off, however far they
+//!               │  reach: the region grows to take them in
+//!               ▼
+//!   Search::run ──▶ the region's samples before and after; for each of the two:
 //!               │  classify: air / weak / bearing / fixed
 //!               │  flood from the block's faces and fixed samples, through
 //!               │  bearing samples only ──▶ grounded
@@ -23,18 +26,26 @@
 //!                  ──into_fragments──▶ Vec<Fragment>  (world pose, own block)
 //! ```
 //!
+//! The race decides only how far to read. Without it, anything reaching past a
+//! fixed margin around the crater was held up by whatever it reached, so a
+//! column cut at its foot stood on nothing. With it, a piece is held up at the
+//! region's edge only if it is the largest piece racing, or the race ran out of
+//! budget before it closed.
+//!
 //! Comparing with the field before the carve is what keeps authored floating
 //! terrain up. An island over the ground is held up by nothing the search can
 //! see, before the blast as after it; only what the blast cuts off it falls.
 //!
 //! `docs/terrain_rubble/DESIGN.md` Part 1 has the reasoning behind each rule.
 
+use std::borrow::Cow;
 use std::collections::VecDeque;
 
 use nalgebra::{Isometry3, Point3, Translation3, Vector3};
 
 use super::chunk_grid::ChunkGrid;
 use super::frame::SegmentFrame;
+use super::split_race::{self, Node};
 use super::voxel::{Voxel, VoxelMaterial};
 use super::voxel_block::{SampleLattice, VoxelBlock, VoxelSource};
 use crate::collision::AABB;
@@ -62,6 +73,14 @@ const MAX_MARGIN_VOXELS: f32 = 32.0;
 /// surfaces marching cubes puts either side of a sample less than half a
 /// voxel apart.
 const PAPER_THIN: f32 = 0.5;
+
+/// The most samples one race visits. Past it, whatever is still racing is held
+/// up at the edge of the region, as everything past the margin used to be.
+const RACE_BUDGET: usize = 1 << 18;
+
+/// Samples of air read around a piece the race closed off, so that the weak
+/// rind and lip around its bearing samples are inside the region too.
+const CLOSED_PIECE_PADDING: f32 = 3.0;
 
 /// Air samples around a fragment's own block: one so its marching cubes
 /// closes, one more for the central differences its normals take.
@@ -160,6 +179,102 @@ impl Crater {
     }
 }
 
+impl Crater {
+    /// The field before the blast over the region the search has to read: the
+    /// surveyed samples, grown to take in every bearing piece the carve closed
+    /// off. Outside the survey the carve changed nothing, so the grid there is
+    /// the field before it, but for samples earlier passes `lifted`.
+    fn before_in(&self, grid: &ChunkGrid, lifted: &[(Point3<f32>, Voxel)]) -> Cow<'_, VoxelBlock> {
+        let surveyed = self.before.lattice().bounds();
+        let Some(closed) = self.closed_off(grid) else {
+            return Cow::Borrowed(&self.before);
+        };
+        let region = surveyed.merged(&closed);
+        if region == surveyed {
+            return Cow::Borrowed(&self.before);
+        }
+        let mut before = read_box(grid, &region);
+        let lattice = *before.lattice();
+        for &(at, voxel) in lifted {
+            if let Some([x, y, z]) = lattice.index_of(at) {
+                before.set(x, y, z, voxel);
+            }
+        }
+        overlay(&mut before, &self.before);
+        Cow::Owned(before)
+    }
+
+    /// A box around every bearing piece the carve closed off, padded by
+    /// [`CLOSED_PIECE_PADDING`] samples, or `None` if it closed off none.
+    fn closed_off(&self, grid: &ChunkGrid) -> Option<AABB> {
+        let step = grid.voxel_size();
+        let at = |c: [i32; 3]| Point3::new(c[0] as f32, c[1] as f32, c[2] as f32) * step;
+        let reach = self.undercut.reach + step;
+        let center = (self.undercut.center.coords / step).map(|v| v.round() as i32);
+        let span = (reach / step).ceil() as i32;
+        let seeds = (-span..=span)
+            .flat_map(|x| (-span..=span).flat_map(move |y| (-span..=span).map(move |z| [x, y, z])))
+            .map(|d| [center.x + d[0], center.y + d[1], center.z + d[2]])
+            .filter(|&c| (at(c) - self.undercut.center).norm() <= reach);
+
+        let undercut = self.undercut;
+        let solid = |c: [i32; 3]| grid.get(at(c)).is_solid();
+        let node = |c: [i32; 3]| {
+            let voxel = grid.get(at(c));
+            if !voxel.is_solid() {
+                Node::Off
+            } else if voxel.material.is_indestructible() {
+                Node::Anchor
+            } else if voxel.density >= BEARING_DENSITY
+                && !((at(c) - undercut.center).norm() <= undercut.reach && is_sheet_at(c, &solid))
+            {
+                Node::On
+            } else {
+                Node::Off
+            }
+        };
+
+        let pad = Vector3::repeat(CLOSED_PIECE_PADDING * step);
+        let outcome = split_race::race(seeds, node, RACE_BUDGET);
+        if outcome.out_of_budget {
+            log::debug!(
+                "split race ran out of budget after {} samples; what was still racing is held",
+                outcome.visited
+            );
+        }
+        outcome
+            .closed
+            .iter()
+            .map(|piece| AABB::new(at(piece.lo) - pad, at(piece.hi) + pad))
+            .reduce(|a, b| a.merged(&b))
+    }
+}
+
+/// Copy every sample of `source` that `target`'s lattice also holds.
+fn overlay(target: &mut VoxelBlock, source: &VoxelBlock) {
+    let (to, from) = (*target.lattice(), *source.lattice());
+    let [nx, ny, nz] = from.dims();
+    for x in 0..nx {
+        for y in 0..ny {
+            for z in 0..nz {
+                if let Some([tx, ty, tz]) = to.index_of(from.position(x, y, z)) {
+                    target.set(tx, ty, tz, source.get(x, y, z));
+                }
+            }
+        }
+    }
+}
+
+/// [`is_sheet`] for a sample of the grid rather than of a block.
+fn is_sheet_at(c: [i32; 3], solid: &impl Fn([i32; 3]) -> bool) -> bool {
+    (0..3).any(|axis| {
+        let (mut below, mut above) = (c, c);
+        below[axis] -= 1;
+        above[axis] += 1;
+        !solid(below) && !solid(above)
+    })
+}
+
 /// The most times [`cut_loose`] searches one crater. Lifting a piece can strip
 /// the last neighbour from a sample beside it and leave that paper-thin in
 /// turn, so a crater is searched again until nothing more comes away. Over
@@ -179,12 +294,13 @@ pub(super) struct CutLoose {
 pub(super) fn cut_loose(grid: &mut ChunkGrid, crater: &Crater, frame: &SegmentFrame) -> CutLoose {
     let mut lifted: Option<AABB> = None;
     let mut fragments = Vec::new();
+    let mut lifted_samples = Vec::new();
     for _ in 0..MAX_PASSES {
-        let search = Search::run(grid, crater);
+        let search = Search::run(grid, crater, &lifted_samples);
         let Some(loose) = search.bounds() else {
             break;
         };
-        search.lift(grid);
+        lifted_samples.extend(search.lift(grid));
         lifted = Some(lifted.map_or(loose, |b| b.merged(&loose)));
         fragments.extend(search.into_fragments(frame));
     }
@@ -200,14 +316,16 @@ pub(super) struct Search {
 }
 
 impl Search {
-    /// Find what `crater`, now carved into `grid`, cut loose.
-    pub(super) fn run(grid: &ChunkGrid, crater: &Crater) -> Self {
-        let mut after = VoxelBlock::air(*crater.before.lattice());
+    /// Find what `crater`, now carved into `grid`, cut loose. `lifted` holds
+    /// every sample earlier passes over the same crater lifted out, as it was.
+    pub(super) fn run(grid: &ChunkGrid, crater: &Crater, lifted: &[(Point3<f32>, Voxel)]) -> Self {
+        let before = crater.before_in(grid, lifted);
+        let mut after = VoxelBlock::air(*before.lattice());
         grid.fill_block(&mut after);
         let lattice = Lattice3 { dims: after.dims() };
 
         let undercut = crater.undercut;
-        let (stood_free, _) = standing_free(&crater.before, &lattice, None);
+        let (stood_free, _) = standing_free(&before, &lattice, None);
         let (stand_free, roles) = standing_free(&after, &lattice, Some(undercut));
         let reached = |i: usize| {
             let [x, y, z] = lattice.coords(i);
@@ -279,15 +397,21 @@ impl Search {
             })
     }
 
-    /// Remove every loose sample from the grid.
-    pub(super) fn lift(&self, grid: &mut ChunkGrid) {
+    /// Remove every loose sample from the grid; where each was, and what.
+    pub(super) fn lift(&self, grid: &mut ChunkGrid) -> Vec<(Point3<f32>, Voxel)> {
         let lattice = Lattice3 {
             dims: self.block.dims(),
         };
-        for &i in self.pieces.iter().flatten() {
-            let [x, y, z] = lattice.coords(i);
-            grid.set(self.block.lattice().position(x, y, z), Voxel::air());
-        }
+        self.pieces
+            .iter()
+            .flatten()
+            .map(|&i| {
+                let [x, y, z] = lattice.coords(i);
+                let at = self.block.lattice().position(x, y, z);
+                grid.set(at, Voxel::air());
+                (at, self.block.get(x, y, z))
+            })
+            .collect()
     }
 
     /// The loose pieces as fragments placed in the world by `frame`.
@@ -721,7 +845,7 @@ mod tests {
         before(&mut was);
         let mut is = ChunkGrid::new(1.0);
         after(&mut is);
-        Search::run(&is, &Crater::survey(&was, center, radius))
+        Search::run(&is, &Crater::survey(&was, center, radius), &[])
     }
 
     fn piece_sizes(s: &Search) -> Vec<usize> {
@@ -888,10 +1012,10 @@ mod tests {
         assert_eq!(piece_sizes(&s), vec![27]);
     }
 
-    /// Assumption A: what reaches the edge of the search is held up by
-    /// whatever it reaches, however thin the cut below it.
+    /// A column cut at its foot reaches far past the crater, but the race
+    /// closes it off long before the ground, so the search reads all of it.
     #[test]
-    fn a_column_running_out_of_the_search_stands() {
+    fn a_column_cut_at_its_foot_falls_whole() {
         let s = blast(
             |g| {
                 ground(g);
@@ -900,7 +1024,7 @@ mod tests {
             [0.0, 2.0, 0.0],
             1.0,
         );
-        assert!(s.pieces.is_empty());
+        assert_eq!(piece_sizes(&s), vec![3 * 3 * 58]);
     }
 
     /// The same for a bar too weak to bear but not paper-thin: it carries on

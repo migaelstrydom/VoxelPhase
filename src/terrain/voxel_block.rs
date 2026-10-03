@@ -83,6 +83,21 @@ impl SampleLattice {
         )
     }
 
+    /// Local index of the sample nearest `point`, or `None` if that sample is
+    /// outside the lattice.
+    pub fn index_of(&self, point: Point3<f32>) -> Option<[usize; 3]> {
+        let mut index = [0; 3];
+        for axis in 0..3 {
+            let global = ((point[axis] - self.origin[axis]) / self.spacing).round() as i32;
+            let local = global - self.base[axis];
+            if local < 0 || local as usize >= self.dims[axis] {
+                return None;
+            }
+            index[axis] = local as usize;
+        }
+        Some(index)
+    }
+
     /// Box enclosing every sample point in the lattice.
     ///
     /// Empty on any axis with no samples, which cannot enclose anything.
@@ -192,6 +207,7 @@ impl BlockRange {
 /// bulk octree fill produces — is a single slice write, and marching cubes'
 /// eight cell corners are two short strides apart instead of three pointer
 /// dereferences.
+#[derive(Clone)]
 pub struct VoxelBlock {
     lattice: SampleLattice,
     /// Indexed `(x * dims[1] + y) * dims[2] + z`.

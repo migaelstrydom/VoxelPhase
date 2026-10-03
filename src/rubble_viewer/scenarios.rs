@@ -132,23 +132,22 @@ fn sky_island() -> Scenario {
     }
 }
 
-/// Assumption A of the design: a span longer than the search reaches past
-/// its edge and is held up by whatever it reaches, cut free or not. The audit
-/// sees it left floating; recorded so that changing it is a decision.
+/// A span cut at both ends, longer than any fixed margin around either
+/// crater. The race closes it off, so it falls however far it reaches.
 fn long_bridge() -> Scenario {
     Scenario {
         name: "long_bridge",
-        description: "a span cut at both ends but longer than the search stays up (assumption A)",
+        description: "a span cut at both ends falls whole, however far it reaches",
         level: BRIDGE_LEVEL,
         blasts: vec![
             Blast::sized(Point3::new(9.0, 2.75, 0.0), 1.5),
             Blast::sized(Point3::new(-9.0, 2.75, 0.0), 1.5),
         ],
-        known_gap: Some("a span longer than the search region is left floating"),
+        known_gap: None,
         expect: |run| match largest(run) {
-            n if n < 50 => Ok(()),
+            n if n >= 400 => Ok(()),
             n => Err(format!(
-                "expected the span to stand, a fragment of {n} samples fell"
+                "expected the span to fall, largest fragment {n} samples"
             )),
         },
     }
