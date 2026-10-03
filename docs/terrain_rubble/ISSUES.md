@@ -17,12 +17,12 @@ An issue's **status** is one of:
 | [R1](#r1) | Pieces longer than about 3 m never fall at 0.5 m voxels | fixed `f3563f3` | blocks the design |
 | [R2](#r2) | A grenade's crater shrinks with the voxel size | open | high |
 | [R3](#r3) | Box edges on the lattice read as loose, paper-thin strips | open | medium |
-| [R4](#r4) | A grenade at a stalactite's root leaves 11 more samples paper-thin | pinned | medium |
+| [R4](#r4) | A grenade at a stalactite's root leaves 11 more samples paper-thin | pinned, diagnosed: follows from R3 | medium |
 | [R5](#r5) | One cave-hill blast leaves one more sample standing free | pinned | low |
 | [R6](#r6) | The terrain `Arch` drew its legs as slivers | fixed `f9007f4` | high |
 | [R7](#r7) | `level_viewer --blast` did nothing on a level without water | fixed `f9007f4` | low |
 | [R8](#r8) | The carve costs 343 ms a grenade at 0.125 m voxels | open | medium |
-| [R9](#r9) | Thin curved tubes are joined to themselves only diagonally | open | medium |
+| [R9](#r9) | Thin curved tubes are joined to themselves only diagonally | not reproduced since R6 | medium |
 | [R10](#r10) | `Caves` generates floating rock and paper-thin skins | open | medium |
 | [R11](#r11) | Clearing rim flaps changed a water test's timing | open, for review | low |
 | [R12](#r12) | A piece was judged held by its first sample alone | fixed `477795b` | high |
@@ -118,16 +118,27 @@ pollutes every audit count, though, and hides real regressions in the noise.
 <a id="r4"></a>
 ## R4. A grenade at a stalactite's root leaves 11 more samples paper-thin
 
-**Status:** pinned (`garden_stalactite_root`). Not investigated. **Found by:**
-E13.
+**Status:** pinned (`garden_stalactite_root`). Diagnosed (E16): follows
+from R3. **Found by:** E13.
 
 **Symptom.** A grenade at (22.2, 7.4, 59) drops the thickest stalactite (an
 8-sample fragment), and the paper-thin count rises from 718 to 729. That breaks
 the invariant that no blast leaves more terrain paper-thin than before it.
 
-**Suspects.** A stub left on the roof drawn thinner than half a voxel but
-outside the paper rule's reach (crater radius + 2 voxels, about 1.6 m here),
-or the neighbouring sub-voxel stalactites (R10's kind of authored geometry).
+**Cause (E16).** The 11 new paper-thin samples are not on the stalactite the
+grenade hit, but on its neighbour, the 0.9 m one at (23.5, 61), about 2.3 m from
+the blast. That stalactite's edge skin was standing free as authored (R3). The
+blast reaches it, and a free piece with nothing bearing in it falls (R13's
+rule), so the skin is lifted. That exposes the next layer of skin, which is
+now drawn paper-thin. It lies outside the paper rule's reach (crater radius +
+2 voxels, about 1.6 m), so nothing removes it.
+
+The same shows at the thin arch: a grenade at its foot raises the paper-thin
+count by 2.
+
+**Options.** Fixing R3 removes the free skin, and with it this. Otherwise, the
+re-search passes could apply the paper rule around every lifted sample as well
+as around the crater.
 
 <a id="r5"></a>
 ## R5. One cave-hill blast leaves one more sample standing free
@@ -181,8 +192,9 @@ charging per cubic metre, the crater at fine voxels grows and so does this.
 <a id="r9"></a>
 ## R9. Thin curved tubes are joined to themselves only diagonally
 
-**Status:** open; a limit of 6-connectivity. **Found by:** Phase 1
-`rubble_viewer` arch scenarios.
+**Status:** not reproduced since the R6 fix (E16). It was seen on the old
+`Arch`, whose legs were slivers, so it may have been R6 all along. **Found
+by:** Phase 1 `rubble_viewer` arch scenarios.
 
 A tube two voxels thick touches itself only diagonally where it curves, so the
 audit finds parts of it standing free as authored, and the before/after rule

@@ -312,3 +312,32 @@ cut nothing long free, it changes no terrain.
 0.8 ms in the worst blast measured. `skyway`'s cost is there without the race:
 opened R17. Not yet measured: a blast on a large authored island that is not
 the largest piece racing, which the race walks whole, up to its budget.
+
+## E16. Where R4's paper-thin samples are, and the thin arch (2026-10-03)
+
+**Question.** The play-test showed one stalactite that already looks
+paper-thin before any blast. Is that R4? And does R9 still show in the garden
+now that `Arch` is fixed?
+
+**Setup.** At `1f58fba`, two temporary probes that were then reverted:
+- `PAPER_DUMP` made `Search::paper_thin_samples` print every paper-thin
+  sample. `rubble_viewer garden_stalactite_root`, with the lists before and
+  after the blast diffed.
+- `probe_thin_arch` put two grenades at each foot of the garden's 0.8 m arch,
+  at (81, 2.4, 84) and (88, 2.4, 84).
+
+**Result.**
+- R4: 11 samples are new, and none went away. All have density 0.01 (skin),
+  at x 23.0–23.5, y 5.0–7.5, z 60.5–61.0: the 0.9 m stalactite, 2.3 m from the
+  blast at (22.2, 7.4, 59.0), not the one the grenade hit. 22 stalactite
+  samples were paper-thin as authored, including the 0.5 m stalactite, which
+  is one voxel across and can only be drawn as a sheet. That is the one the
+  play-test saw.
+- Thin arch: the fragments were 10, 1, 37 and 0 samples across the four
+  blasts, and the free count went 2,493 → 2,484: the arch falls, and nothing is
+  left free. Blast 0 raised the paper-thin count from 718 to 720.
+
+**Conclusion.** R4 follows from R3: lifting the free skin exposes skin behind
+it as paper-thin, outside the paper rule's reach. R9 does not show in the
+garden. The paper-thin strip the play-test saw is the sub-voxel stalactite,
+there by design.
