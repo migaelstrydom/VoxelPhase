@@ -126,10 +126,38 @@ dirtied, plus any further chunk a fragment reaches into.
 **Simplifying assumption A: anything that reaches the edge of the search region
 is held up.** The flood fill seeds from every bearing sample on the region's
 boundary and every indestructible sample, and a piece that reaches the boundary
-through weak samples is held up too. A severed bridge longer than the region
-stays standing: `rubble_viewer`'s `long_bridge` scenario records it, and the
-whole-terrain audit sees the span left floating. That is the known gap. Part 6
-or a search that grows on demand would close it.
+through weak samples is held up too. With a fixed margin, that held up anything
+longer than about 3 m at 0.5 m voxels (ISSUES.md R1), so the region now grows.
+
+#### Growing the region: racing searches (`terrain/split_race.rs`)
+
+After the carve, one breadth-first search starts from every bearing sample
+within the undercut reach (+1 voxel) of the crater. They run over bearing
+samples only (the sheet rule applies near the crater, as in `classify`),
+round-robin, one sample each per round. This is Even and Shiloach's
+decremental-connectivity trick:
+
+- searches that touch merge (union-find over search ids);
+- a search that reaches an indestructible sample is anchored, held, and stops;
+- a search whose frontier empties has **closed off** a whole bearing piece,
+  having walked that piece and nothing more;
+- the race stops when no search is running, or when one is running and none
+  is anchored. That last one is the largest piece, and is never walked.
+
+The region becomes the survey box merged with a box around every closed piece,
+padded by 3 samples so the piece's weak rind and lips are inside it. The
+search then runs on that region exactly as before: the field before the blast
+is the grid read over the region, with the survey's pre-carve samples and every
+sample an earlier pass lifted written back over it. So the race decides only
+**how far to read**. Whether a piece falls is still decided by the rules below:
+before and after, bearing, lip, paper.
+
+Assumption A becomes: **a piece is held up at the edge of the region only if it
+is the largest piece racing, or the race ran out of budget (`RACE_BUDGET`,
+2¹⁸ samples) before it closed.** Beside an anchored search, even the largest
+piece is raced to the end, because an anchor outweighs any size. A blast on a
+large authored island walks the whole island when it is not the largest piece
+racing, which is what the budget bounds.
 
 There is no seed at the segment's bounds. Terrain cut off there ends in a
 visible cap, so a piece hanging only from that cap is floating, and falls.
@@ -668,14 +696,14 @@ first and a second; the rest arrive with bodies):
 | `rim_cusps` | The screenshot case reproduced: 60 seeded grenades across a field at 1 m voxels. With nothing lifted they leave 4 samples floating and 7 drawn paper-thin; with Phase 1, none after any blast. |
 | `arch_both_legs` / `arch_one_leg` | Cut both legs: the span falls as one boulder. Cut one: it stays. |
 | `sky_island` | A blast at the edge of a small island segment: the island stays, the piece cut off falls. |
-| `long_bridge` | A bridge cut at both ends but longer than the search region stays: assumption A, recorded so a change to it is a decision. |
+| `long_bridge` | A bridge cut at both ends, longer than any fixed margin around either crater, falls whole: the race closes it off. |
 | `settle` | A boulder lands, sleeps, is deposited; the ledger closes. |
 | `settle_blocked` | The same with a crate resting on the boulder: no deposit. |
 | `river_dam` | The Phase 4 headline: a cliff dropped into a channel deposits and raises the water upstream. |
 
 `cargo test --release --lib rubble_viewer` runs the catalogue, in a few
 seconds. A scenario can record a **known gap**: it is expected to break an
-invariant, and fails when it stops doing so (`long_bridge`).
+invariant, and fails when it stops doing so (`garden_stalactite_root`, ISSUES.md R4).
 
 **Fuzz:** `rubble_viewer --fuzz <seeds>` sets off seeded random blasts over a
 real level's terrain (`perf::Ground`) with only the invariants as judge, in
@@ -700,7 +728,7 @@ Each phase is shippable on its own and checked with the existing tools.
 
 | Phase | What | How it is checked |
 |---|---|---|
-| **1. Finder + dust** ✓ | `Crater`/`Search`/`cut_loose`; every fragment crumbles into a burst of the blast's debris effect, scaled down (a material-coloured puff waits for Phase 2). | 21 unit tests in `terrain::fragment`, one per rule, each shown to fail with its rule removed. `rubble_viewer` (`cargo test --lib rubble_viewer`): every scenario, with "nothing more standing free, nothing more paper-thin after any blast" as the invariant. `terrain_perf`: one `cut loose` stage, fingerprints unchanged on sweeps that cut nothing loose. |
+| **1. Finder + dust** ✓ | `Crater`/`Search`/`cut_loose`, the region grown by `split_race`; every fragment crumbles into a burst of the blast's debris effect, scaled down (a material-coloured puff waits for Phase 2). | 21 unit tests in `terrain::fragment`, one per rule, each shown to fail with its rule removed. `rubble_viewer` (`cargo test --lib rubble_viewer`): every scenario, with "nothing more standing free, nothing more paper-thin after any blast" as the invariant. `terrain_perf`: one `cut loose` stage, fingerprints unchanged on sweeps that cut nothing loose. |
 | **2. Scree** | `FallingScree`, render mesh from the fragment's own marching cubes. | `render_perf` during a blast: draw counts, cost. Play-test. |
 | **3. Boulders** | Brick shaper, compound bodies, debris budget. | Unit tests on the shaper (disjoint bricks, total volume within 30% of the voxel volume, never a refused hull panic). `physics_fuzz`-style seeded blasts: energy, finiteness. `physics_perf`: cost of a cliff collapse. |
 | **4. Deposition** | `TerrainWorld::deposit` with `DEPOSIT_BIAS` and its tests first, then `SettleSystem` and its conditions. | Volume conserved to within 1% at random poses; surface error within the measured table. `level_viewer` before/after. Water re-lays: a `water_viewer` scenario where a deposited boulder dams a channel. |

@@ -255,3 +255,60 @@ suite, `cargo test --release`, passes: 1,684 tests.
 
 **Conclusion.** Opened R1, R4, R5. R1 is the one the design has to answer
 before anything else.
+
+## E14. Racing searches instead of a fixed margin (2026-10-03)
+
+**Question.** If the search region grows to take in every bearing piece that
+a race out of the crater closes off, do the pieces R1 left standing fall, and
+does anything else change?
+
+**Setup.** `f3563f3`: `terrain/split_race.rs`, called from `Crater::before_in`
+(DESIGN.md "Growing the region"). `rubble_viewer all`, then `cargo test
+--release`. The race's own unit tests check it on hand-built graphs, including
+that it never walks the larger side of a cut.
+
+**Result.** The four R1 known gaps stopped showing, as the suite reported by
+failing them:
+
+| Scenario | Before (largest fragment, change in free) | With the race |
+|---|---|---|
+| `long_bridge` | 20, free +298 | 465, free falls to 0 |
+| `garden_tall_columns` | 3, free +98 | 86 (the 1 m column), free −4 |
+| `garden_table_every_leg` | 4, free +451 | 547 (the slab, edges and all), free −96 |
+| `garden_short_bridge` | 1, free +33 | 65, free −36 |
+
+The unit test that pinned assumption A, a column 58 samples tall cut at its
+foot, now drops the column as one 522-sample piece; it became
+`a_column_cut_at_its_foot_falls_whole`. The garden's decks became 1 m wide (a
+grenade cannot sever 1.5 m, E12), and a new `garden_long_bridge` drops the 28 m
+deck's middle as a 461-sample piece. Every other scenario's result is
+unchanged, including R4 and R5. All 20 scenarios pass, and so do the 1,690
+tests.
+
+**Conclusion.** Fixed R1. The rules that judge a piece are untouched; only
+the region they read grew.
+
+## E15. What the race costs (2026-10-03)
+
+**Setup.** `terrain_perf --level <level> --blasts 40 --repeats 3`, at
+`f3563f3` and again with `closed_off` returning `None` (the race off), a
+temporary edit that was reverted.
+
+**Result.** The `cut loose` stage, ms per grenade:
+
+| Level | Race | Mean | p95 | Max | Fingerprint |
+|---|---|---|---|---|---|
+| `test_arena` | off | 0.339 | 0.445 | 0.958 | `3ee6e924…` |
+| `test_arena` | on | 0.443 | 0.518 | 1.135 | `3ee6e924…` |
+| `rubble_garden` | off | 0.300 | 0.334 | 0.373 | `e90c0b86…` |
+| `rubble_garden` | on | 0.445 | 0.496 | 1.194 | `e90c0b86…` |
+| `skyway` | off | 2.479 | 17.702 | 23.987 | `eab0fd0c…` |
+| `skyway` | on | 2.660 | 18.676 | 24.568 | `eab0fd0c…` |
+
+The fingerprints are the same with the race on and off: on these sweeps, which
+cut nothing long free, it changes no terrain.
+
+**Conclusion.** The race adds 0.1–0.2 ms a grenade on average, and up to
+0.8 ms in the worst blast measured. `skyway`'s cost is there without the race:
+opened R17. Not yet measured: a blast on a large authored island that is not
+the largest piece racing, which the race walks whole, up to its budget.

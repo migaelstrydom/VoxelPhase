@@ -14,7 +14,7 @@ An issue's **status** is one of:
 
 | # | Issue | Status | Severity |
 |---|---|---|---|
-| [R1](#r1) | Pieces longer than about 3 m never fall at 0.5 m voxels | pinned | blocks the design |
+| [R1](#r1) | Pieces longer than about 3 m never fall at 0.5 m voxels | fixed `f3563f3` | blocks the design |
 | [R2](#r2) | A grenade's crater shrinks with the voxel size | open | high |
 | [R3](#r3) | Box edges on the lattice read as loose, paper-thin strips | open | medium |
 | [R4](#r4) | A grenade at a stalactite's root leaves 11 more samples paper-thin | pinned | medium |
@@ -30,14 +30,16 @@ An issue's **status** is one of:
 | [R14](#r14) | Paper-thin flaps survived as "lips" | fixed `477795b` | high |
 | [R15](#r15) | Lifting a piece left new flaps behind it | fixed `477795b` | medium |
 | [R16](#r16) | The search stopped one voxel short of what the carve changes | fixed `477795b` | medium |
+| [R17](#r17) | Cut loose costs up to 24 ms a grenade on `skyway` | open | medium |
 
 ---
 
 <a id="r1"></a>
 ## R1. Pieces longer than about 3 m never fall at 0.5 m voxels
 
-**Status:** pinned (`garden_tall_columns`, `garden_table_every_leg`,
-`garden_short_bridge`, and the older `long_bridge`). **Found by:** E12, E13.
+**Status:** fixed in `f3563f3` (E14). Was pinned by `garden_tall_columns`,
+`garden_table_every_leg`, `garden_short_bridge` and the older `long_bridge`,
+which now expect the pieces to fall. **Found by:** E12, E13.
 
 **Symptom.** In the Rubble Garden, a 10 m column cut through at its foot, the
 table slab after its fourth leg, and a 6 m bridge deck cut at both ends all stay
@@ -60,6 +62,14 @@ that a 3 m piece is already "long".
   exhausts a sample budget, is held, and one that closes off inside the budget
   falls. Cost then scales with the piece, not the crater, and assumption A
   becomes "a piece bigger than the budget is held".
+
+**Fix.** Racing searches (`terrain/split_race.rs`, DESIGN.md "Growing the
+region"), a refinement of the budgeted flood: searches start from every
+bearing sample around the crater and advance one sample each per round, so the
+pieces that close off are walked whole and the largest piece is never walked.
+The region grows to take in every closed piece, and the existing rules judge
+it. Assumption A is now: held at the region's edge only as the largest piece
+racing, or past a 2¹⁸-sample budget.
 
 <a id="r2"></a>
 ## R2. A grenade's crater shrinks with the voxel size
@@ -245,3 +255,14 @@ from a sample beside it. `cut_loose` now repeats search-and-lift up to
 
 **Status:** fixed in `477795b`. The carve changes samples one voxel past its
 radius, so the sheet and paper rules now reach crater radius + 2 voxels.
+
+<a id="r17"></a>
+## R17. Cut loose costs up to 24 ms a grenade on `skyway`
+
+**Status:** open. Not introduced by the race: the same with it switched off.
+**Found by:** E15.
+
+`terrain_perf --level levels/skyway.level.ron`: the `cut loose` stage averages
+2.5 ms a grenade, with a p95 of 18 ms and a worst blast of 24 ms. On
+`test_arena` and the Rubble Garden it is 0.3–0.45 ms. Not yet profiled, and
+the per-blast table does not show which of `skyway`'s blasts pay it.
