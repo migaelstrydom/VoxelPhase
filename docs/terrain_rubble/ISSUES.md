@@ -15,7 +15,7 @@ An issue's **status** is one of:
 | # | Issue | Status | Severity |
 |---|---|---|---|
 | [R1](#r1) | Pieces longer than about 3 m never fall at 0.5 m voxels | fixed `f3563f3` | blocks the design |
-| [R2](#r2) | A grenade's crater shrinks with the voxel size | open | high |
+| [R2](#r2) | A grenade's crater shrinks with the voxel size | won't fix, for now | high |
 | [R3](#r3) | Box edges on the lattice read as loose, paper-thin strips | open | medium |
 | [R4](#r4) | A grenade at a stalactite's root leaves 11 more samples paper-thin | pinned, diagnosed: follows from R3 | medium |
 | [R5](#r5) | One cave-hill blast leaves one more sample standing free | pinned | low |
@@ -24,7 +24,7 @@ An issue's **status** is one of:
 | [R8](#r8) | The carve costs 343 ms a grenade at 0.125 m voxels | open | medium |
 | [R9](#r9) | Thin curved tubes are joined to themselves only diagonally | not reproduced since R6 | medium |
 | [R10](#r10) | `Caves` generates floating rock and paper-thin skins | open | medium |
-| [R11](#r11) | Clearing rim flaps changed a water test's timing | open, for review | low |
+| [R11](#r11) | Clearing rim flaps changed a water test's timing | fixed `477795b` | low |
 | [R12](#r12) | A piece was judged held by its first sample alone | fixed `477795b` | high |
 | [R13](#r13) | Authored floating islands would have fallen | fixed `477795b` | high |
 | [R14](#r14) | Paper-thin flaps survived as "lips" | fixed `477795b` | high |
@@ -74,8 +74,10 @@ racing, or past a 2¹⁸-sample budget.
 <a id="r2"></a>
 ## R2. A grenade's crater shrinks with the voxel size
 
-**Status:** open. Not introduced by rubble; rubble made it visible. **Found
-by:** E12.
+**Status:** won't fix, for now (decided 2026-10-03). The yield stays per
+voxel. The game may not need resolutions other than `test_arena`'s 1 m, and if
+it comes to need them, this is revisited then. Not introduced by rubble;
+rubble made it visible. **Found by:** E12.
 
 **Symptom.** A grenade at 0.5 m voxels cuts about 0.6 m deep. It does not sever
 a 1.5 m column, a 1 m × 1 m deck, or a 1.2 m cliff lip.
@@ -222,14 +224,14 @@ load.
 <a id="r11"></a>
 ## R11. Clearing rim flaps changed a water test's timing
 
-**Status:** open, for review. **Found by:** E8.
+**Status:** fixed in `477795b`; the new capture times were accepted on
+2026-10-03, because the change has a clear cause. **Found by:** E8.
 
 `the_sea_pouring_back_over_a_lowland_s_weir_falls_along_its_far_side` failed
 after Phase 1. The breach also clears the paper-thin rim flaps, so the lowland
 fills in about 12 s instead of 24 s. The backflow sheet the test looks for
 still forms, but at 2.5–3 s, so its captures moved to `[2.5, 3.0, 4.0, 8.0,
-16.0]`. Decide whether the test should instead keep the scenario's original
-timing.
+16.0]`.
 
 <a id="r12"></a>
 ## R12. A piece was judged held by its first sample alone
