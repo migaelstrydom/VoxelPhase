@@ -23,6 +23,7 @@
 //! it has to run the game's own systems instead.
 
 mod driver;
+mod garden;
 mod report;
 mod scenario;
 mod scenarios;

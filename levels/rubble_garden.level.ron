@@ -1,0 +1,199 @@
+// Rubble Garden — a sculpture park built to be blown apart.
+//
+// A play-test level for terrain rubble (docs/TERRAIN_RUBBLE_DESIGN.md). Every
+// station is something a grenade can cut loose, built in a range of thicknesses
+// so the edge cases sit next to the easy cases. Each station's comment says
+// what should happen; where the design says it can't happen yet, the comment
+// says that too.
+//
+//               N (+z)
+//   ┌────────────────────────────────────────────┐
+//   │ ▪boundary   colonnade          arches     │
+//   │                                            │
+//   │ islands,              swiss-cheese  cliff │
+//   │ hoodoo,     SPAWN        hill       with  │
+//   │ table,                              three │
+//   │ stalactites       fins              lips  │
+//   │                                            │
+//   │ bridges 6/14/28 m     slab walls          │
+//   └────────────────────────────────────────────┘
+//
+// The floor is at 2.0 and there is plenty of it under every station, so
+// whatever falls lands on open ground. 0.5 m voxels: anything under 1 m across
+// is below two voxels and comes out at whatever the lattice decides, which is
+// itself one of the cases worth seeing.
+Level(
+    name: "Rubble Garden",
+
+    segments: [
+        (
+            name: "garden",
+
+            terrain: Terrain(
+                voxel_size: 0.5,
+                bounds: (min: (0.0, -16.0, 0.0), max: (96.0, 32.0, 96.0)),
+                base_height: 2.0,
+                material_layers: [
+                    (depth: 0.5,   material: Grass),
+                    (depth: 2.0,   material: Dirt),
+                    (depth: 999.0, material: Rock),
+                ],
+
+                features: [
+                    // The cliff: a 10 m step along x = 84, its top at 12.
+                    Plateau(min: (84.0, 14.0), max: (96.0, 62.0), height: 12.0),
+
+                    // Bridge piers, deck level 8. One west pier per bridge
+                    // so a pier can be blown out from under its own deck.
+                    Plateau(min: (4.0, 6.0),  max: (8.0, 10.0),  height: 8.0),
+                    Plateau(min: (14.0, 6.0), max: (18.0, 10.0), height: 8.0),
+                    Plateau(min: (4.0, 14.0),  max: (8.0, 18.0),  height: 8.0),
+                    Plateau(min: (22.0, 14.0), max: (26.0, 18.0), height: 8.0),
+                    Plateau(min: (4.0, 22.0),  max: (8.0, 26.0),  height: 8.0),
+                    Plateau(min: (36.0, 22.0), max: (40.0, 26.0), height: 8.0),
+
+                    // Swiss-cheese hill, hollowed out by the caves below.
+                    Hill(center: (62.0, 58.0), radius: 11.0, height: 9.0),
+
+                    // Knife-edge fins: cosine ridges, a metre or two at the
+                    // root and nothing at the crest. The crest is where a
+                    // blast leaves paper-thin flaps if anything does.
+                    Wall(from: (54.0, 30.0), to: (54.0, 36.0), height: 6.0, thickness: 2.0),
+                    Wall(from: (58.0, 30.0), to: (58.0, 36.0), height: 6.0, thickness: 1.5),
+                    Wall(from: (62.0, 30.0), to: (62.0, 36.0), height: 6.0, thickness: 1.0),
+                    Wall(from: (66.0, 30.0), to: (66.0, 36.0), height: 6.0, thickness: 0.6),
+                ],
+
+                volumes: [
+                    // ── Colonnade ─────────────────────────────────────────
+                    // Back row: six columns 10 m tall, 4 m across down to
+                    // 0.7 m. One grenade does not cut through a column of
+                    // 1.5 m or more. The thin ones it cuts, but a column that
+                    // tall reaches past what a grenade searches, so it stays
+                    // standing on nothing: assumption A in the design.
+                    // Front row: the same thin columns 3.5 m tall, which fit
+                    // inside the search and fall.
+                    Pillar(center: (18.0, 84.0), height: 12.0, radius: 2.0),
+                    Pillar(center: (24.0, 84.0), height: 12.0, radius: 1.5),
+                    Pillar(center: (29.0, 84.0), height: 12.0, radius: 1.0),
+                    Pillar(center: (33.0, 84.0), height: 12.0, radius: 0.75),
+                    Pillar(center: (36.5, 84.0), height: 12.0, radius: 0.5),
+                    Pillar(center: (39.5, 84.0), height: 12.0, radius: 0.35),
+                    Pillar(center: (30.0, 77.0), height: 5.5, radius: 0.75),
+                    Pillar(center: (34.0, 77.0), height: 5.5, radius: 0.5),
+                    Pillar(center: (37.5, 77.0), height: 5.5, radius: 0.35),
+
+                    // ── Arches ────────────────────────────────────────────
+                    // Cut one leg: the arch stays up, held by the other.
+                    // Cut both: it falls whole. The thin arch on the right
+                    // only touches itself diagonally where it curves, so it
+                    // may already count as loose and refuse to fall (a known
+                    // gap).
+                    Arch(from: (52.0, 1.0, 84.0), to: (64.0, 1.0, 84.0), radius: 6.0, thickness: 2.0),
+                    Arch(from: (68.0, 1.0, 84.0), to: (77.0, 1.0, 84.0), radius: 4.5, thickness: 1.2),
+                    Arch(from: (81.0, 1.0, 84.0), to: (88.0, 1.0, 84.0), radius: 3.5, thickness: 0.8),
+
+                    // ── Cliff lips ────────────────────────────────────────
+                    // Three overhangs off the cliff top, 2.5 m, 1.2 m and
+                    // 0.7 m thick, 4 m deep and 6, 5 and 4 m long. Grenades all along
+                    // where a lip meets the cliff should drop it; one
+                    // underneath, against the face, is how the original
+                    // zero-thickness shelves were made.
+                    Overhang(from: (84.0, 18.0), to: (84.0, 24.0), height: 12.0, depth: 4.0, thickness: 2.5, direction: (-1.0, 0.0), noise: 0.5, noise_seed: 3),
+                    Overhang(from: (84.0, 34.0), to: (84.0, 39.0), height: 12.0, depth: 4.0, thickness: 1.2, direction: (-1.0, 0.0)),
+                    Overhang(from: (84.0, 50.0), to: (84.0, 54.0), height: 12.0, depth: 4.0, thickness: 0.7, direction: (-1.0, 0.0)),
+
+                    // ── Swiss-cheese hill ─────────────────────────────────
+                    // A shell about a metre thick over a cave network. A grenade opens
+                    // a skylight, and what it leaves of the roof, the struts
+                    // and the bridges between caves comes in every size. The
+                    // free-for-all station: grenade it at random and watch
+                    // for anything left floating.
+                    Caves(
+                        frequency: 0.18,
+                        octaves: 3,
+                        seed: 11,
+                        depth_curve: [
+                            (depth: 0.0,  threshold: 1.0),
+                            (depth: 0.8,  threshold: 1.0),
+                            (depth: 1.6,  threshold: 0.3),
+                            (depth: 7.0,  threshold: 0.35),
+                            (depth: 10.0, threshold: 1.0),
+                        ],
+                        region: Some(CaveRegion(center: (62.0, 6.0, 58.0), radius: 10.0, falloff: 3.0)),
+                        material_layers: [
+                            (depth: 0.5,   material: Ite),
+                            (depth: 999.0, material: Limestone),
+                        ],
+                    ),
+
+                    // ── Floating island ───────────────────────────────────
+                    // Authored floating: nothing holds it up before the
+                    // blast either, so a grenade on it chips it and the
+                    // island stays in the sky. Only the chips fall.
+                    Island(center: (14.0, 13.0, 34.0), half_extents: (3.5, 1.2, 3.5), edge_noise: 0.4),
+
+                    // ── Hoodoo ────────────────────────────────────────────
+                    // A cap balanced on a 1 m stem. Blow the stem and the cap
+                    // falls; it was held up before the blast.
+                    Pillar(center: (14.0, 48.0), height: 6.0, radius: 0.5),
+                    Island(center: (14.0, 6.6, 48.0), half_extents: (2.0, 0.8, 2.0), edge_noise: 0.3),
+
+                    // ── Table ─────────────────────────────────────────────
+                    // A 6 m slab on four legs 0.9 m across. Each leg you blow
+                    // leaves it standing on the rest, until the last one.
+                    Platform(center: (26.0, 7.0, 42.0), half_extents: (3.0, 3.0), thickness: 1.0),
+                    Pillar(center: (23.6, 39.6), height: 6.5, radius: 0.45),
+                    Pillar(center: (28.4, 39.6), height: 6.5, radius: 0.45),
+                    Pillar(center: (23.6, 44.4), height: 6.5, radius: 0.45),
+                    Pillar(center: (28.4, 44.4), height: 6.5, radius: 0.45),
+
+                    // ── Stalactite pavilion ───────────────────────────────
+                    // A roof on two piers with stalactites hanging under it,
+                    // thick to thin. Grenade the roof above one and it drops.
+                    Platform(center: (24.0, 9.0, 60.0), half_extents: (6.0, 3.5), thickness: 1.0),
+                    Pillar(center: (19.0, 60.0), height: 8.5, radius: 1.0),
+                    Pillar(center: (29.0, 60.0), height: 8.5, radius: 1.0),
+                    Island(center: (21.5, 6.6, 59.0), half_extents: (0.6, 1.6, 0.6), edge_noise: 0.0),
+                    Island(center: (23.5, 6.6, 61.0), half_extents: (0.45, 1.6, 0.45), edge_noise: 0.0),
+                    Island(center: (25.0, 6.6, 59.0), half_extents: (0.35, 1.6, 0.35), edge_noise: 0.0),
+                    Island(center: (26.5, 6.6, 61.0), half_extents: (0.25, 1.6, 0.25), edge_noise: 0.0),
+
+                    // ── Bridges ───────────────────────────────────────────
+                    // Decks of 6, 14 and 28 m between piers. Cut the 6 m deck,
+                    // a metre wide, at both ends and the middle falls. The
+                    // longer two are 1.5 m wide and reach past what a grenade
+                    // searches, so they stay up: assumption A.
+                    Path(points: [(8.0, 8.0, 8.0),  (14.0, 8.0, 8.0)],  width: 1.0, thickness: 1.0),
+                    Path(points: [(8.0, 8.0, 16.0), (22.0, 8.0, 16.0)], width: 1.5, thickness: 1.0),
+                    Path(points: [(8.0, 8.0, 24.0), (36.0, 8.0, 24.0)], width: 1.5, thickness: 1.0),
+
+                    // ── Slab walls ────────────────────────────────────────
+                    // Three walls 7 m tall, 2 m, 1 m and 0.6 m thick. A
+                    // grenade through the base leaves a lintel held at both
+                    // ends; two through the base side by side drop the panel
+                    // between them.
+                    Platform(center: (62.0, 9.0, 10.0), half_extents: (10.0, 1.0), thickness: 7.5),
+                    Platform(center: (62.0, 9.0, 16.0), half_extents: (10.0, 0.5), thickness: 7.5),
+                    Platform(center: (62.0, 9.0, 21.0), half_extents: (10.0, 0.3), thickness: 7.5),
+
+                    // ── Boundary column ───────────────────────────────────
+                    // Right at the segment's corner, where the search region
+                    // is clipped by the segment's edge. Short enough to fall.
+                    Pillar(center: (0.8, 95.0), height: 5.5, radius: 0.5),
+                ],
+            ),
+
+            anchors: [],
+            objects: [],
+        ),
+    ],
+
+    placements: [
+        Root(segment: "garden", origin: (0.0, 0.0, 0.0), yaw: 0.0),
+    ],
+
+    connections: [],
+
+    player_spawn: (44.0, 3.0, 48.0),
+)

@@ -708,7 +708,26 @@ fn apply_tunnel(
     }
 }
 
-/// Curved bridge (circular arc) between two 3D points.
+/// Distance from `(u, v)` in the arch's plane to its centre line: the upper
+/// half of an ellipse with semi-axes `a` along the span and `b` up, centred on
+/// the origin. Below the springing line the nearest point is a foot.
+///
+/// Inigo Quilez's first-order ellipse distance, exact for a circle. It must be
+/// a distance in every direction: the legs are steep, and an offset measured
+/// vertically draws them as slivers.
+fn distance_to_arc(u: f32, v: f32, a: f32, b: f32) -> f32 {
+    if v < 0.0 {
+        return (u.abs() - a).hypot(v);
+    }
+    let k0 = (u / a).hypot(v / b);
+    let k1 = (u / (a * a)).hypot(v / (b * b));
+    if k1 < 1e-6 {
+        return a.min(b);
+    }
+    (k0 * (k0 - 1.0) / k1).abs()
+}
+
+/// Curved bridge (half-ellipse) between two 3D points.
 fn apply_arch(
     grid: &mut ChunkGrid,
     fx: f32,
@@ -773,20 +792,10 @@ fn apply_arch(
                 let perp_h =
                     ((rel_x - along * dir_x).powi(2) + (rel_z - along * dir_z).powi(2)).sqrt();
 
-                // Only evaluate inside the span extent; outside we leave the
-                // voxel alone so the arch doesn't stamp air past its ends.
-                if along.abs() > half_span + step {
-                    z += step;
-                    continue;
-                }
-
-                let t_norm = (along / half_span).clamp(-1.0, 1.0);
-                let arc_y = mid_y + radius * (1.0 - t_norm * t_norm).max(0.0).sqrt();
-                // Signed distance to the sweep tube: take the larger of the
-                // horizontal and vertical offsets minus the tube half-thickness.
-                // Uses box-like metric rather than euclidean for simplicity.
-                let dy = (y - arc_y).abs();
-                let sd = perp_h.max(dy) - half_t;
+                let to_curve = distance_to_arc(along, y - mid_y, half_span, radius);
+                // Square cross-section: the larger of the offset across the
+                // span and the offset from the curve within its plane.
+                let sd = perp_h.max(to_curve) - half_t;
 
                 let material = material_at_depth(0.5, layers);
                 union_solid(grid, Point3::new(x, y, z), sd, step, material);

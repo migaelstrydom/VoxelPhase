@@ -5,6 +5,7 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
 use super::driver::Run;
+use super::garden;
 use super::scenario::{Blast, Scenario};
 
 /// Every scenario, in the order `--list` prints them.
@@ -17,6 +18,9 @@ pub fn catalogue() -> Vec<Scenario> {
         sky_island(),
         long_bridge(),
     ]
+    .into_iter()
+    .chain(garden::scenarios())
+    .collect()
 }
 
 /// The scenario called `name`, if there is one.
@@ -25,7 +29,7 @@ pub fn find(name: &str) -> Option<Scenario> {
 }
 
 /// The largest fragment of a run, in samples.
-fn largest(run: &Run) -> usize {
+pub(super) fn largest(run: &Run) -> usize {
     run.fragments().map(|f| f.samples).max().unwrap_or(0)
 }
 
@@ -80,8 +84,8 @@ fn arch_both_legs() -> Scenario {
         description: "an arch cut at both feet comes down as one piece",
         level: ARCH_LEVEL,
         blasts: vec![
-            Blast::sized(Point3::new(2.0, 0.25, 0.0), 1.0),
-            Blast::sized(Point3::new(-2.0, 0.25, 0.0), 1.0),
+            Blast::sized(Point3::new(2.0, 0.25, 0.0), 1.5),
+            Blast::sized(Point3::new(-2.0, 0.25, 0.0), 1.5),
         ],
         known_gap: None,
         expect: |run| match largest(run) {
@@ -99,7 +103,7 @@ fn arch_one_leg() -> Scenario {
         name: "arch_one_leg",
         description: "an arch cut at one foot stands on the other",
         level: ARCH_LEVEL,
-        blasts: vec![Blast::sized(Point3::new(2.0, 0.25, 0.0), 1.0)],
+        blasts: vec![Blast::sized(Point3::new(2.0, 0.25, 0.0), 1.5)],
         known_gap: None,
         expect: |run| match largest(run) {
             n if n < 20 => Ok(()),

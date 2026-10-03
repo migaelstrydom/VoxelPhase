@@ -37,5 +37,6 @@
         (level: "skyway.level.ron", triangles: 202944, open_edges: 0),
         (level: "water_park.level.ron", triangles: 611896, open_edges: 0),
         (level: "stack_yard.level.ron", triangles: 420300, open_edges: 0),
+        (level: "rubble_garden.level.ron", triangles: 257420, open_edges: 0),
     ],
 )

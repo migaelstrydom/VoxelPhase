@@ -150,7 +150,8 @@ impl LevelViewer {
 
     /// Set off each blast, drop a splash at each point, then run the water
     /// on for `seconds` of 60 Hz frames. The blasts' frame lasts `blast_dt`:
-    /// a blast frame in the game is a long one.
+    /// a blast frame in the game is a long one. A level without water is
+    /// only blasted.
     pub fn stir_water(
         &mut self,
         blasts: &[Point3<f32>],
@@ -159,14 +160,16 @@ impl LevelViewer {
         seconds: f32,
     ) {
         let mut terrain = self.world.write_resource::<TerrainWorld>();
+        for &at in blasts {
+            terrain.detonate(at, &BlastConfig::default());
+        }
+        if !blasts.is_empty() {
+            terrain.update();
+        }
         let Some(mut water) = self.world.try_fetch_mut::<WaterWorld>() else {
             return;
         };
         if !blasts.is_empty() {
-            for &at in blasts {
-                terrain.detonate(at, &BlastConfig::default());
-            }
-            terrain.update();
             water.on_terrain_update(&terrain);
             for &at in blasts {
                 water.disturb(at, 2.0, Disturbance::Velocity(-6.0));
