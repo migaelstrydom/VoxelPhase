@@ -1,6 +1,6 @@
 // Rubble Garden — a sculpture park built to be blown apart.
 //
-// A play-test level for terrain rubble (docs/TERRAIN_RUBBLE_DESIGN.md). Every
+// A play-test level for terrain rubble (docs/terrain_rubble/DESIGN.md). Every
 // station is something a grenade can cut loose, built in a range of thicknesses
 // so the edge cases sit next to the easy cases. Each station's comment says
 // what should happen; where the design says it can't happen yet, the comment

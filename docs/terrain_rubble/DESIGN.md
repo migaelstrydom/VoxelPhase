@@ -4,7 +4,14 @@ Terrain that a blast cuts loose becomes rubble: real rigid bodies for pieces
 worth simulating, falling scree for slivers, dust for crumbs. Rubble that comes
 to rest is then deposited back into the voxel field as new terrain.
 
-**Status:** Phase 1 is built (`src/terrain/fragment.rs`, `src/rubble/`, `src/rubble_viewer/`): every fragment crumbles into dust. Phases 2–5 are design only.
+**Status:** proof of concept, on the `terrain-rubble-poc` branch and not on
+`main`. Phase 1 is built there (`src/terrain/fragment.rs`, `src/rubble/`,
+`src/rubble_viewer/`, the play-test level `levels/rubble_garden.level.ron`):
+every fragment crumbles into dust. Phases 2–5 are design only. The play-test
+level turned up problems serious enough that the design has to be revisited
+before anything goes back to `main`; they are tracked in
+[ISSUES.md](ISSUES.md), and what was measured to find them is in
+[NOTEBOOK.md](NOTEBOOK.md).
 
 ---
 
@@ -701,7 +708,9 @@ Each phase is shippable on its own and checked with the existing tools.
 
 ## Risks and open questions
 
-Open, each with the phase that has to close it:
+Design risks, each with the phase that has to close it. Problems found by
+building and running it are in [ISSUES.md](ISSUES.md).
+
 
 - **A world without a renderer (Phase 3).** While fragments only crumble into
   dust, `rubble_viewer` calls `TerrainWorld::detonate` directly, as the
@@ -733,15 +742,8 @@ Open, each with the phase that has to close it:
 - **Thin authored geometry.** The sheet-sample rule only applies near the
   blast, but a grenade on a one-voxel deck now drops a piece of it. That is
   probably wanted. A per-material or per-segment opt-out is cheap if it isn't.
-- **Carve cost at fine voxels.** Not the search, which costs 0.32 ms a grenade
-  at 0.125 m voxels, but the carve before it: `blast::effective_radius` takes
-  343 ms per grenade on a flat 0.125 m field (`terrain_perf --level` on a
-  scratch level), before and after Phase 1 alike.
-- **Thin curved authored geometry.** A tube two voxels thick is joined to
-  itself only diagonally where it curves, so the audit finds parts of it
-  standing free as authored, and the before/after rule then treats it as an
-  island: cutting its feet brings nothing down. `rubble_viewer`'s arches are
-  2 m thick for this reason.
+- **Carve cost at fine voxels** and **thin curved authored geometry**: now
+  issues R8 and R9 in [ISSUES.md](ISSUES.md).
 - **The slivers that this does not remove.** A cusp still joined to bearing
   ground through bearing samples stays. If thin fins still show up, the
   sheet-sample rule can be extended to any axis-thin bearing sample in the

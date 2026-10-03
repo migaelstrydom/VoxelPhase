@@ -19,7 +19,7 @@
 //!
 //! Fragments only crumble into dust so far, so the terrain is all there is to
 //! judge, and the harness calls the same `detonate` the explosion system does.
-//! Once fragments become bodies (Phase 3 of `docs/TERRAIN_RUBBLE_DESIGN.md`)
+//! Once fragments become bodies (Phase 3 of `docs/terrain_rubble/DESIGN.md`)
 //! it has to run the game's own systems instead.
 
 mod driver;

@@ -1,6 +1,6 @@
 //! Terrain cut loose by a blast, and what becomes of it.
 //!
-//! `docs/TERRAIN_RUBBLE_DESIGN.md` is the plan. Every fragment crumbles into
+//! `docs/terrain_rubble/DESIGN.md` is the plan. Every fragment crumbles into
 //! dust for now; scree and boulders are later phases.
 
 mod dust;

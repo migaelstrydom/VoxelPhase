@@ -27,7 +27,7 @@
 //! terrain up. An island over the ground is held up by nothing the search can
 //! see, before the blast as after it; only what the blast cuts off it falls.
 //!
-//! `docs/TERRAIN_RUBBLE_DESIGN.md` Part 1 has the reasoning behind each rule.
+//! `docs/terrain_rubble/DESIGN.md` Part 1 has the reasoning behind each rule.
 
 use std::collections::VecDeque;
 
