@@ -42,6 +42,10 @@ Level(
                 features: [
                     // The cliff: a 10 m step along x = 84, its top at 12.
                     Plateau(min: (84.0, 14.0), max: (96.0, 62.0), height: 12.0),
+                    // The way up: a ramp onto the cliff's north end, about
+                    // 17°, clear of the arches. Walk south along the top to
+                    // reach the lips from above.
+                    Ramp(from: (92.0, 95.0), to: (92.0, 61.0), start_height: 2.0, end_height: 12.0, width: 5.0, flat_width: 4.0),
 
                     // Bridge piers, deck level 8. One west pier per bridge
                     // so a pier can be blown out from under its own deck.

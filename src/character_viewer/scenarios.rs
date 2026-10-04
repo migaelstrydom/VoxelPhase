@@ -4,6 +4,10 @@
 //! along z = 0 from dry land at x = -8 down to a 3 m sea floor at x = 12. The
 //! water's edge is at x = -3 and the depth grows 0.2 m per metre east of it.
 //! The pier stands 2 m over the deep end at x -8..8, z -20..-12.
+//!
+//! The exception is `climb_ramp`, in the Rubble Garden: the way up its cliff
+//! to the lips, a ramp at x = 92 from the floor at z = 95 to the top (12 m) at
+//! z = 61.
 
 use std::f32::consts::{FRAC_PI_2, PI};
 
@@ -14,6 +18,7 @@ use crate::anim_viewer::{Beat, Script};
 use super::scenario::{CameraRig, Scenario};
 
 const LEVEL: &str = "levels/swim_test.level.ron";
+const GARDEN: &str = "levels/rubble_garden.level.ron";
 
 /// Facing +x, down the beach into the sea.
 const SEAWARD: f32 = FRAC_PI_2;
@@ -115,6 +120,18 @@ pub fn catalogue() -> Vec<Scenario> {
                 .then(Beat::walk(9.0).named("ashore").towards(-Vector3::x()))
                 .then(Beat::stand(1.5)),
             camera: CameraRig::side().with_distance(5.0),
+        },
+        Scenario {
+            name: "climb_ramp",
+            summary: "Rubble Garden: run up the ramp onto the cliff top",
+            level: GARDEN,
+            start: (92.0, 94.0),
+            yaw: PI,
+            script: Script::new()
+                .then(Beat::stand(0.5))
+                .then(Beat::run(9.0).named("climb").towards(-Vector3::z()))
+                .then(Beat::stand(1.0)),
+            camera: CameraRig::side().with_azimuth(90.0).with_distance(8.0),
         },
     ]
 }
