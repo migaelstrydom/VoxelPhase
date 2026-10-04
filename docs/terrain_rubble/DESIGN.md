@@ -423,11 +423,14 @@ E22):
   between stalactites (R30). Cells are cut where the halves' boxes shrink
   most.
 - A shape that needs more than `max_bricks` (16) cells is not one body
-  (R31). The split tree is cut into subtrees of at most 16 cells, and
-  `Fragment::split` cuts each out as a fragment of its own, its siblings its
-  obstacles; each is graded and planned in turn. A hollow dome comes down in
-  pieces where its own convex pieces meet, not as a lid resting on its
-  hollow. This was the user's suggestion two play-tests before it was built.
+  (R31). `rubble::Cracker` cracks it into as many pieces as its cells fill
+  bodies: seeds spread by farthest-point sampling, pieces grown from them
+  through face neighbours with jittered costs, so each is connected and the
+  seams wander like cracks (R34, R35). `Fragment::split` cuts each out as a
+  fragment of its own, its siblings its obstacles; each is graded and planned
+  in turn. A hollow dome comes down like a cracked egg, not as a lid resting
+  on its hollow. Breaking a chunk into pieces was the user's suggestion two
+  play-tests before it was built.
 - The bricks know the ground. A fragment records the samples of its block
   that were solid but not its own (`Sample::Obstacle` in `terrain::Occupancy`).
   A cell whose brick holds one, or the midpoint to a neighbour, is split

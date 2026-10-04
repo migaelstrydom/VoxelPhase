@@ -46,7 +46,9 @@ An issue's **status** is one of:
 | [R30](#r30) | A boulder's brick spanned a hole or the gaps between stalactites | fixed (branch `rubble-phase2`) | high |
 | [R31](#r31) | A hollow shell needed more bricks than one body carries, and rested on its hollow | fixed (branch `rubble-phase2`) | high |
 | [R32](#r32) | Parts of one fragment that touched at an edge started overlapping | fixed (branch `rubble-phase2`) | high |
-| [R33](#r33) | Shaping a collapse costs up to 94 ms; one fragment makes any number of bodies | open, optimisation pass (R24) | medium |
+| [R33](#r33) | Shaping a collapse costs up to 230 ms; one fragment makes any number of bodies | open, optimisation pass (R24) | medium |
+| [R34](#r34) | The hill's shell came down as horizontal rings | fixed (branch `rubble-phase2`) | medium |
+| [R35](#r35) | Three stalactites came down as one body, joined only by air | fixed (branch `rubble-phase2`) | high |
 
 ---
 
@@ -613,13 +615,47 @@ writes air beside another part as -1, as the ground's is, so each part's
 surface stays within half a voxel of its samples.
 
 <a id="r33"></a>
-## R33. Shaping a collapse costs up to 94 ms; one fragment makes any number of bodies
+## R33. Shaping a collapse costs up to 230 ms; one fragment makes any number of bodies
 
 **Status:** open; for the optimisation pass (R24). **Found by:** E24.
 
-`RubblePlanner::plan` for the hill shell's blast takes 94 ms (19 bodies, each
+`RubblePlanner::plan` for the hill shell's blast took 94 ms (19 bodies, each
 meshed and shaped, the shaper splitting to single cells where the shell
-curves). The table's blast went from 1.4 ms to 16 ms: `Occupancy::encloses`
+curves), and 230 ms (32 bodies) once R34's ragged seams needed the ground
+stood for on all 26 sides of each obstacle sample, and each part is meshed
+and shaped again from scratch. The table's blast went from 1.4 ms to 28 ms: `Occupancy::encloses`
 walks 13 lines from every air sample of the block. A sweep per line direction
 would make it linear. `max_boulders` caps fragments, not the bodies they are
 split into.
+
+<a id="r34"></a>
+## R34. The hill's shell came down as horizontal rings
+
+**Status:** fixed on branch `rubble-phase2`. **Found by:** play-test.
+
+Parts were subtrees of the shaper's split tree, and the cut that shrinks a
+dome's boxes most is horizontal: the first splits sliced it into rings, and
+the parts followed. A fragment too intricate for one body is now cracked by
+`rubble::Cracker`: seeds spread over its samples by farthest-point sampling,
+one piece grown from each at once through face neighbours, each step's cost
+jittered by a fixed noise so seams wander. As many pieces as its cells fill
+bodies of `max_bricks`. The shell comes down as 32 patches 2 to 5 m across,
+like a cracked egg.
+
+Ragged seams interlock: parts that rested fine alone overlapped a sibling by
+a corner on their first frame. The ground's stand-in points now include the
+point halfway to every one of an obstacle sample's 26 neighbours that is not
+more ground, not only its 6 face neighbours.
+
+<a id="r35"></a>
+## R35. Three stalactites came down as one body, joined only by air
+
+**Status:** fixed on branch `rubble-phase2`. **Found by:** play-test (the
+stalactite table, its legs blasted).
+
+A subtree of the split tree could hold cells that do not touch: three
+stalactites whose deck went to other parts made one body. Pieces grown
+through face neighbours are connected by construction, and a sample no seed
+reaches is a piece of its own. `rubble_viewer` now fails any boulder whose
+samples are more than one face-connected piece; `Cracker`'s test fails with
+straight-line nearest-seed pieces.

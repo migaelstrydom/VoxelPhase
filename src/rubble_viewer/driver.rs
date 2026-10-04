@@ -1,5 +1,7 @@
 //! Runs a scenario: builds its terrain, sets off its blasts, audits after each.
 
+use std::collections::HashSet;
+
 use nalgebra::{Point3, Vector3};
 
 use super::scenario::{Blast, Scenario};
@@ -42,6 +44,9 @@ pub struct FragmentRecord {
     /// For a boulder, the air samples in its holes, gaps and hollows that
     /// its bricks hold: none, or the solver stands things on empty space.
     pub air_held: usize,
+    /// How many pieces, joined face to face, its samples make: one, or a
+    /// body moves things that only air joins.
+    pub in_pieces: usize,
 }
 
 /// What became of a fragment.
@@ -189,11 +194,14 @@ fn play(cut: Cut, planner: &mut RubblePlanner, terrain: &TerrainWorld) -> Vec<Fr
         .map(|(index, piece)| {
             let fragment = &piece.fragment;
             let mut air_held = 0;
+            let mut in_pieces = 1;
             let fate = match piece.plan {
                 Plan::Dust { .. } => Fate::Dust,
                 Plan::Scree { flight, .. } => fly(flight, terrain),
                 Plan::Boulder(boulder) => {
-                    air_held = air_held_by(&boulder.bricks, &fragment.occupancy(), GAP_DEPTH);
+                    let occupancy = fragment.occupancy();
+                    air_held = air_held_by(&boulder.bricks, &occupancy, GAP_DEPTH);
+                    in_pieces = pieces_of(&occupancy);
                     let mass = boulder.mass;
                     let placed = boulder.place(&mut world);
                     let thrown = shove
@@ -216,6 +224,7 @@ fn play(cut: Cut, planner: &mut RubblePlanner, terrain: &TerrainWorld) -> Vec<Fr
                 material: fragment.material(),
                 fate,
                 air_held,
+                in_pieces,
             }
         })
         .collect();
@@ -248,6 +257,32 @@ fn air_held_by(bricks: &Bricks, occupancy: &Occupancy, depth: f32) -> usize {
             })
         })
         .count()
+}
+
+/// How many pieces, joined face to face, the samples of `occupancy` make.
+fn pieces_of(occupancy: &Occupancy) -> usize {
+    let [nx, ny, nz] = occupancy.dims();
+    let mut seen = HashSet::new();
+    let mut pieces = 0;
+    for start in (0..nx).flat_map(|x| (0..ny).flat_map(move |y| (0..nz).map(move |z| [x, y, z]))) {
+        if !occupancy.is_solid(start) || !seen.insert(start) {
+            continue;
+        }
+        pieces += 1;
+        let mut stack = vec![start];
+        while let Some(s) = stack.pop() {
+            for axis in 0..3 {
+                for n in [s[axis].wrapping_sub(1), s[axis] + 1] {
+                    let mut next = s;
+                    next[axis] = n;
+                    if n < occupancy.dims()[axis] && occupancy.is_solid(next) && seen.insert(next) {
+                        stack.push(next);
+                    }
+                }
+            }
+        }
+    }
+    pieces
 }
 
 /// What one blast did.
@@ -317,6 +352,7 @@ impl Run {
                     Fate::Restless { .. } => "boulder never came to rest",
                     Fate::Lost => "boulder fell out of the world",
                     _ if fragment.air_held > 0 => "boulder's bricks hold air",
+                    _ if fragment.in_pieces > 1 => "boulder is pieces joined only by air",
                     _ => continue,
                 };
                 found.push(format!(

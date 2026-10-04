@@ -623,3 +623,23 @@ recursively through their parts.
 - With the shaper's air splitting switched off, the harness flags two bodies
   holding air and two pushed out.
 - Cost: 94 ms to plan the shell's blast; the table's 16 ms, from 1.4 (R33).
+
+## E25. Cracking instead of slicing (2026-10-04)
+
+**Question.** Does the shell crack into patches, each one connected, each
+resting on its own?
+
+**Setup.** `garden_hill_shell` and every other scenario, with
+`rubble::Cracker` (roughness 1.5) choosing the parts. Each part settled in a
+world of its own as a control. Part sizes from each part's mesh.
+
+**Result.**
+
+- With face-midpoint ground points: 18 parts, all at rest, but two pairs on
+  the shell and one on the hoodoo pushed out on their first frame; settled
+  alone, none was. Ragged seams interlock, and a brick slipped into the
+  corner of a sibling's tooth.
+- With the 26-neighbour ground points: no failures in any scenario; the
+  shell is 32 parts of 24–79 samples, 2–5 m across, spread over the dome.
+- No boulder anywhere is more than one face-connected piece.
+- Planning the shell's blast: 230 ms (R33); the table's: 28 ms.
