@@ -747,6 +747,47 @@ impl Renderer {
         Ok(())
     }
 
+    /// Draw every primitive of `model` with one `texture` and `surface`, in
+    /// place of the materials its primitives name. Resident like
+    /// [`Self::draw_model`]: uploaded the first time this `Arc` is drawn.
+    ///
+    /// For a mesh shaded as something the material library does not hold,
+    /// such as a piece of terrain, whose texture the terrain owns.
+    pub fn draw_model_as(
+        &mut self,
+        cb: vk::CommandBuffer,
+        model: &Arc<Model>,
+        world_transform: &Matrix4<f32>,
+        texture: &TextureHandle,
+        surface: SurfaceParams,
+        texture_manager: &TextureManager,
+    ) -> EngineResult<()> {
+        let primitives = self.resident.model(model)?.to_vec();
+        let mut resident = primitives.iter().copied();
+        for part in &model.parts {
+            let transform = world_transform * part.local_transform.to_matrix();
+            for _ in &part.primitives {
+                let Some(uploaded) = resident.next() else {
+                    return Ok(());
+                };
+                if uploaded.mesh.is_empty() {
+                    continue;
+                }
+                self.submit_draw(
+                    cb,
+                    uploaded.mesh.draw_info(),
+                    || uploaded.bounds,
+                    &transform,
+                    texture,
+                    surface,
+                    texture_manager,
+                    DrawOptions::OPAQUE,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
     /// Whether any primitive of `model`, drawn at `world_transform`, is in
     /// the widened view that decides who asks for a reflection probe.
     ///

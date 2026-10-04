@@ -1,3 +1,5 @@
+use nalgebra::Vector3;
+
 use crate::rendering::colour::Colour;
 use crate::rendering::grain::GrainSpec;
 use crate::rendering::reflection::{ProbeSlot, Reflects};
@@ -304,6 +306,7 @@ impl Material {
             relief: self.relief,
             reflects: self.reflects,
             probe: None,
+            projection_anchor: [0.0; 3],
         }
     }
 }
@@ -376,7 +379,8 @@ pub struct GpuSurface {
     pub optics: [f32; 4],
 
     /// x = depth of the relief in the diffuse alpha, in texture coordinates
-    /// (see [`Material::with_relief`]), yzw spare.
+    /// (see [`Material::with_relief`]), yzw = the projection anchor (see
+    /// [`SurfaceParams::anchored_at`]).
     pub detail: [f32; 4],
 }
 
@@ -428,6 +432,10 @@ pub struct SurfaceParams {
     /// The probe this draw reflects, when it asked for one and its object
     /// holds one. Set per draw by the renderer, never by a material.
     pub probe: Option<ProbeSlot>,
+
+    /// Added to model position to address a model-space triplanar albedo.
+    /// Read only with [`SurfaceSource::ALBEDO_MODEL_SPACE`]; set per draw.
+    pub projection_anchor: [f32; 3],
 }
 
 impl SurfaceParams {
@@ -443,6 +451,7 @@ impl SurfaceParams {
         relief: 0.0,
         reflects: Reflects::Sky,
         probe: None,
+        projection_anchor: [0.0; 3],
     };
 
     /// Give this surface a microstructure, projected from the object's own
@@ -487,6 +496,16 @@ impl SurfaceParams {
         self
     }
 
+    /// Address the triplanar albedo by model position plus `anchor` rather
+    /// than by world position, so the texture rides with the mesh. A mesh
+    /// whose model position plus `anchor` was its world position when it
+    /// stopped being still ground shows the same texture it had there.
+    pub fn anchored_at(mut self, anchor: Vector3<f32>) -> Self {
+        self.source = self.source.with(SurfaceSource::ALBEDO_MODEL_SPACE);
+        self.projection_anchor = anchor.into();
+        self
+    }
+
     /// Reflect the probe in `slot`, or the sky alone when `None`.
     pub fn with_probe(mut self, slot: Option<ProbeSlot>) -> Self {
         self.probe = slot;
@@ -528,7 +547,12 @@ impl SurfaceParams {
                 0.0,
                 0.0,
             ],
-            detail: [self.relief, 0.0, 0.0, 0.0],
+            detail: [
+                self.relief,
+                self.projection_anchor[0],
+                self.projection_anchor[1],
+                self.projection_anchor[2],
+            ],
         }
     }
 }
@@ -669,5 +693,21 @@ mod tests {
             .with_relief(0.0)
             .source
             .contains(SurfaceSource::RELIEF_IN_ALPHA));
+    }
+
+    /// An anchored projection reaches the table beside the relief without
+    /// disturbing it, and only an anchored surface asks for model space.
+    #[test]
+    fn an_anchor_reaches_the_surface_table_beside_the_relief() {
+        let plain = Material::coloured(Colour::WHITE).surface_params();
+        assert!(!plain.source.contains(SurfaceSource::ALBEDO_MODEL_SPACE));
+
+        let anchored = Material::coloured(Colour::WHITE)
+            .with_relief(0.004)
+            .surface_params()
+            .anchored_at(Vector3::new(1.0, -2.0, 3.5));
+        assert!(anchored.source.contains(SurfaceSource::ALBEDO_MODEL_SPACE));
+        assert!(anchored.source.contains(SurfaceSource::RELIEF_IN_ALPHA));
+        assert_eq!(anchored.to_gpu().detail, [0.004, 1.0, -2.0, 3.5]);
     }
 }

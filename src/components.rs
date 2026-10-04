@@ -56,6 +56,20 @@ impl ModelInstance {
 #[storage(DenseVecStorage)]
 pub struct Renderable;
 
+/// A mesh drawn with the terrain's own surface, for terrain that moves: a
+/// piece a blast cut loose. Its texture is projected from its own frame, so it
+/// rides with it rather than swimming across it.
+#[derive(Component)]
+#[storage(VecStorage)]
+pub struct TerrainMeshInstance {
+    /// The mesh, around the entity's position. Its primitives' materials are
+    /// not read: terrain's surface replaces them.
+    pub model: Arc<Model>,
+    /// Added to model position to address the texture: the world position the
+    /// mesh's origin had while it was still ground.
+    pub anchor: Vector3<f32>,
+}
+
 /// Per-instance override of the surface parameters of the entity's model.
 ///
 /// Materials are shared between every instance of a model, so anything that

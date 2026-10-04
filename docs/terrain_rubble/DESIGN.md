@@ -6,7 +6,11 @@ to rest is then deposited back into the voxel field as new terrain.
 
 **Status:** Phase 1 is on `main` since 2026-10-04 (`src/terrain/fragment.rs`, `src/terrain/split_race.rs`, `src/rubble/`,
 `src/rubble_viewer/`, the play-test level `levels/rubble_garden.level.ron`):
-every fragment crumbles into dust. Phases 2–5 are design only. The play-test
+every fragment crumbles into dust. Phase 2 (scree) is on the `rubble-phase2`
+branch, awaiting a play-test: fragments are graded, dust crumbles, and
+everything else falls as scree drawn with its own marching-cubes mesh and the
+terrain's texture; boulders fly as scree until Phase 3. Phases 3–5 are design
+only. The play-test
 level turned up problems that blocked the design: pieces longer than about
 3 m never fell (R1), and box edges read as loose strips (R3, R4). Those are
 fixed, and so is the cut-loose cost on `skyway` (R17). A grenade now cuts the
@@ -445,11 +449,20 @@ the moment of the blast. The shader projects `model_pos + origin` (and the
 model-space normal) instead of the world position. At spawn the body's frame
 has no rotation and sits at that centre, so the sum equals the world position:
 the texture is identical to the terrain it came out of at the moment it breaks
-off, and from then on it is fixed to the rock. A segment's yaw goes into the
-fragment's starting pose, and so does nothing to the texture.
+off, and from then on it is fixed to the rock. A segment's yaw is baked into
+the mesh (`Fragment::mesh` returns vertices in world axes), so the starting
+orientation is the identity and the yaw does nothing to the texture.
 
-Cost: one flag and a `vec3` in the push constants, and one branch in
-`triangle.frag` that picks the position the projection reads. When the boulder
+As built (Phase 2): the anchor travels in the surface table, not the push
+constants, which hold only a surface index. `SurfaceParams::anchored_at` sets
+the source flag `ALBEDO_MODEL_SPACE` and writes the anchor into `detail.yzw`,
+and `triangle.frag` projects `inModelPos + anchor` with the model-space normal,
+then turns the detail normal into the world. The terrain's texture belongs to
+`TerrainWorld`, and a `TextureHandle` cannot be cloned safely, so a fragment is
+not a `ModelInstance`: it is a `TerrainMeshInstance`, which `RenderSystem`
+draws with `Renderer::draw_model_as`, the terrain's texture and the terrain's
+surface, anchored. Reflection probes (`probe.frag`) still project terrain by
+world position, so in a probe a piece's texture swims (ISSUES.md R20). When the boulder
 is deposited (Part 5) it is textured by world position again, so the noise
 under it jumps to a different patch. The noise is isotropic, so that is a
 change in pattern, not in look.
@@ -465,12 +478,20 @@ mesh exactly like a boulder.
 - **Initial motion.** The blast's radial falloff at the fragment's centroid,
   plus a random spin. This is the same rule the knockback in `ExplosionSystem`
   already uses.
-- **Landing.** Each frame, a terrain ray from the previous centroid to the
-  current one is checked (`TerrainWorld` raycast). On a hit, the piece crumbles:
-  a dust puff in its material's colour, and the entity is deleted. Nothing is
-  seen sliding through the ground.
-- **Leaving.** It is deleted once it is below the level's kill height or after
-  `SCREE_LIFETIME` (≈ 4 s), whichever comes first.
+- **Landing.** Each frame, a terrain ray along the frame's motion from the
+  centroid, as long as the motion plus how far the piece reaches that way (its
+  mesh's extreme points over 26 directions, turned with it). On ground (a
+  surface facing up) the piece crumbles: a dust puff, and the entity is
+  deleted. Nothing is seen sliding through the ground. A wall or a ceiling
+  takes the velocity going into it and the piece falls on: slivers in a notch
+  were otherwise thrown up into the rock over them and crumbled on their first
+  frame (ISSUES.md R18). A piece glancing off walls for more than six frames
+  running is wedged, and crumbles there.
+- **Leaving.** It is deleted once it is more than 4 m below the terrain's
+  lowest point (no level has a kill height) or after 4 s, whichever comes
+  first.
+- **Speed.** The blast's impulse divided by the piece's mass
+  (`VoxelMaterial::mass_density`), capped at 12 m/s.
 
 This puts no load on the narrowphase and the solver, and none of the thin-body
 contact trouble that a sheet would bring. It still reads as a sliver of the
@@ -752,7 +773,7 @@ Each phase is shippable on its own and checked with the existing tools.
 | Phase | What | How it is checked |
 |---|---|---|
 | **1. Finder + dust** ✓ | `Crater`/`Search`/`cut_loose`, the region grown by `split_race`; every fragment crumbles into a burst of the blast's debris effect, scaled down (a material-coloured puff waits for Phase 2). | 21 unit tests in `terrain::fragment`, one per rule, each shown to fail with its rule removed. `rubble_viewer` (`cargo test --lib rubble_viewer`): every scenario, with "nothing more standing free, nothing more paper-thin after any blast" as the invariant. `terrain_perf`: one `cut loose` stage, fingerprints unchanged on sweeps that cut nothing loose. |
-| **2. Scree** | `FallingScree`, render mesh from the fragment's own marching cubes. | `render_perf` during a blast: draw counts, cost. Play-test. |
+| **2. Scree** (branch) | `Grade`, `FallingScree`, render mesh from the fragment's own marching cubes, the anchored projection. | Unit tests: grading, flight, the mesh bit-identical to the ground's. `rubble_viewer`: every scree lands, none on its first frame. `render_perf` during a blast: 3 scree draws, `rubble_spawn` 0.7 ms, no validation errors. Play-test owed. |
 | **3. Boulders** | Brick shaper, compound bodies, debris budget. | Unit tests on the shaper (disjoint bricks, total volume within 30% of the voxel volume, never a refused hull panic). `physics_fuzz`-style seeded blasts: energy, finiteness. `physics_perf`: cost of a cliff collapse. |
 | **4. Deposition** | `TerrainWorld::deposit` with `DEPOSIT_BIAS` and its tests first, then `SettleSystem` and its conditions. | Volume conserved to within 1% at random poses; surface error within the measured table. `level_viewer` before/after. Water re-lays: a `water_viewer` scenario where a deposited boulder dams a channel. |
 | **5. Necks** | Part 6. | A test overhang that drops when its neck is cut. |

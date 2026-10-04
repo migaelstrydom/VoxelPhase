@@ -4,7 +4,7 @@ use crate::animation::peeper::PeeperAnimator;
 use crate::animation::CharacterAnimator;
 use crate::components::{
     CameraComponent, MaterialModulation, ModelInstance, Orientation, Position, Renderable,
-    RigidBodyComponent, Rotation,
+    RigidBodyComponent, Rotation, TerrainMeshInstance,
 };
 use crate::core::error::{EngineError, EngineResult};
 use crate::debug::{DebugConfig, DebugLines, DebugLog, DebugOverlays};
@@ -204,6 +204,7 @@ impl<'a> System<'a> for RenderSystem {
         Option<Read<'a, TerrainWorld>>,
         Option<Read<'a, WaterWorld>>,
         ReadStorage<'a, ModelInstance>,
+        ReadStorage<'a, TerrainMeshInstance>,
         ReadStorage<'a, MaterialModulation>,
         ReadStorage<'a, Position>,
         ReadStorage<'a, Rotation>,
@@ -231,6 +232,7 @@ impl<'a> System<'a> for RenderSystem {
             terrain_manager_opt,
             water_opt,
             model_instances,
+            terrain_meshes,
             material_modulations,
             positions,
             rotations,
@@ -360,6 +362,30 @@ impl<'a> System<'a> for RenderSystem {
                                 &texture_manager,
                             ) {
                                 log::error!("RenderSystem: Failed to draw terrain: {}", e);
+                            }
+                        }
+
+                        // Terrain that moves: pieces a blast cut loose, still
+                        // wearing the texture they had in the ground.
+                        let texture = terrain_manager
+                            .texture()
+                            .unwrap_or(material_manager.fallback_texture());
+                        for (entity, instance, pos) in
+                            (&entities, &terrain_meshes, &positions).join()
+                        {
+                            let rotation = orientations
+                                .get(entity)
+                                .map_or(Matrix4::identity(), |o| o.0.to_homogeneous());
+                            let world_matrix = Matrix4::new_translation(&pos.0) * rotation;
+                            if let Err(e) = renderer.draw_model_as(
+                                draw_cb,
+                                &instance.model,
+                                &world_matrix,
+                                texture,
+                                terrain::surface::surface_params().anchored_at(instance.anchor),
+                                &texture_manager,
+                            ) {
+                                log::error!("RenderSystem: Failed to draw moving terrain: {}", e);
                             }
                         }
                     }

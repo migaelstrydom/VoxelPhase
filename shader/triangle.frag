@@ -75,17 +75,25 @@ void main() {
             ? reliefFromHardness(character)
             : materialGrainStrength();
 
+        // Terrain that moves carries its texture with it: projected from its
+        // own frame, then the detail normal turned into the world.
+        bool anchored = sourceHas(source, SOURCE_ALBEDO_MODEL_SPACE);
+        vec3 projected_pos = anchored ? inModelPos + materialProjectionAnchor() : inWorldPos;
+        vec3 projected_normal = anchored && length(inModelNormal) > 0.001
+            ? normalize(inModelNormal)
+            : normal;
+
         TriplanarSurface field = triplanarSurface(
             texSampler,
-            inWorldPos,
-            normal,
+            projected_pos,
+            projected_normal,
             materialTriplanarScale(),
             materialTriplanarSharpness(),
             relief);
 
         albedo_wash = vec3(field.wash);
         texture_alpha = 1.0;
-        normal = field.normal;
+        normal = anchored ? normalize(materialModelToWorld() * field.normal) : field.normal;
     } else {
         vec4 texColor = texture(texSampler, inTexCoord);
         albedo_wash = texColor.rgb;

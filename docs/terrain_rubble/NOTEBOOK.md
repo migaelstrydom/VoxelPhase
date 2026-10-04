@@ -508,3 +508,30 @@ roles in every pass of `cut_loose`.
   3 samples. Over every scenario, searches per blast: 1 (55), 2 (55), 3 (19),
   4 (3), 6 (1); the cap is 8. `cut loose` and the fingerprints on `test_arena`,
   the Rubble Garden and `island_sea` unchanged.
+
+## E21. Scree flown against the garden (2026-10-04)
+
+**Question.** Once graded and launched by `RubblePlanner`, does every piece of
+scree fall clear of where it broke and land, in every scenario?
+
+**Setup.** `rubble_viewer all`, each blast followed by `TerrainWorld::update`
+and every scree `Flight` stepped at 60 Hz against the remeshed terrain. Blast
+shove: `Explosion::new(centre).physics_impulse()`. `render_perf` on the Rubble
+Garden at (84.4, 50.5), the cliff lip, with synchronization validation.
+
+**Result.**
+
+- No piece expired: every one landed, 22–107 frames after it broke off,
+  dropping 0.2–9.5 m.
+- First version, any hit a landing: `garden_fins_and_walls` had 13 of 18
+  pieces land on their first frame, 0.15 m from where they started (R18), and
+  the table legs landed 0.3 m *above* where they broke, two frames in, thrown
+  up into the slab. With walls and ceilings glanced off: no first-frame
+  landing anywhere, every drop positive, the table legs land 3 m down.
+- Most fragments are dust: of `garden_hill`'s 160, 18 are scree; the rest have
+  no bearing sample, or are under 0.02 m³ (only at fine voxels: one sample at
+  0.5 m is 0.125 m³).
+- `render_perf`: draws go from 2 to 5 while three pieces fly and back to 2 once
+  they land. `rubble_spawn` (grade, mesh, AO) 0.7 ms for the blast. No
+  validation or synchronization messages. A snapshot 0.23 s after the blast
+  shows the lip's grass-topped pieces in the air with the terrain's texture.

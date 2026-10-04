@@ -48,7 +48,8 @@ struct GpuSurface {
     /// See src/rendering/transparency/optics.rs.
     vec4 optics;
     /// x = depth of the relief in the diffuse alpha, in texture coordinates.
-    /// yzw spare. See src/rendering/material.rs `with_relief`.
+    /// yzw = the projection anchor (SOURCE_ALBEDO_MODEL_SPACE). See
+    /// src/rendering/material.rs `with_relief` and `anchored_at`.
     vec4 detail;
 };
 
@@ -100,6 +101,10 @@ float materialReflectance() { return materialSurface().optics.y; }
 
 /// How deep the relief in the diffuse alpha runs, in texture coordinates.
 float materialReliefDepth() { return materialSurface().detail.x; }
+
+/// Added to model position to address a model-space triplanar albedo
+/// (SOURCE_ALBEDO_MODEL_SPACE).
+vec3 materialProjectionAnchor() { return materialSurface().detail.yzw; }
 
 /// Emissive radiance added independently of incoming light.
 ///

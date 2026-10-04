@@ -83,6 +83,16 @@ impl SurfaceSource {
     /// pits of weathered stone, which read as painted on without it.
     pub const RELIEF_IN_ALPHA: Self = Self(1 << 6);
 
+    /// Address the triplanar albedo by model position plus the surface's
+    /// projection anchor, and blend it by the model-space normal, rather than
+    /// by world position.
+    ///
+    /// For terrain that moves: a piece cut loose keeps the texture it had in
+    /// the ground. Its mesh is built so that model position plus the anchor is
+    /// its world position at the moment it broke off, and from then on the
+    /// texture is fixed to it.
+    pub const ALBEDO_MODEL_SPACE: Self = Self(1 << 7);
+
     /// Everything terrain asks for. The four bits that used to be one.
     pub const TERRAIN: Self = Self(
         Self::ALBEDO_TRIPLANAR.0
@@ -130,6 +140,7 @@ mod tests {
         assert_eq!(SurfaceSource::GRAIN_OBJECT_SPACE.0, 16);
         assert_eq!(SurfaceSource::GRAIN_BY_UV.0, 32);
         assert_eq!(SurfaceSource::RELIEF_IN_ALPHA.0, 64);
+        assert_eq!(SurfaceSource::ALBEDO_MODEL_SPACE.0, 128);
     }
 
     /// The whole point of the split: a prop can ask for grain without

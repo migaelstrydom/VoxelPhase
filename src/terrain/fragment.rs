@@ -361,7 +361,7 @@ impl Crater {
 }
 
 /// Copy every sample of `source` that `target`'s lattice also holds.
-fn overlay(target: &mut VoxelBlock, source: &VoxelBlock) {
+pub(super) fn overlay(target: &mut VoxelBlock, source: &VoxelBlock) {
     let (to, from) = (*target.lattice(), *source.lattice());
     let [nx, ny, nz] = from.dims();
     for x in 0..nx {
@@ -880,6 +880,41 @@ impl Fragment {
         self.samples as f32 * self.voxel_size().powi(3)
     }
 
+    /// How many of its samples bear load (`BEARING_DENSITY` or more): none
+    /// means every sample is a skin around nothing, drawn thinner than a
+    /// quarter of a voxel.
+    pub fn bearing_samples(&self) -> usize {
+        self.solid_samples()
+            .filter(|(_, voxel)| voxel.density >= BEARING_DENSITY)
+            .count()
+    }
+
+    /// How many of its samples are interior: bearing, with all six neighbours
+    /// solid. A fragment with none is a shell, a sheet or a strip at most two
+    /// samples thick.
+    pub fn core_samples(&self) -> usize {
+        let lattice = Lattice3 {
+            dims: self.voxels.dims(),
+        };
+        let solid = |i: usize| {
+            let [x, y, z] = lattice.coords(i);
+            self.voxels.get(x, y, z).is_solid()
+        };
+        (0..lattice.len())
+            .filter(|&i| {
+                let [x, y, z] = lattice.coords(i);
+                self.voxels.get(x, y, z).density >= BEARING_DENSITY
+                    && lattice.neighbours(i).filter(|&n| solid(n)).count() == 6
+            })
+            .count()
+    }
+
+    /// The longest side of the box around its samples, in metres.
+    pub fn extent(&self) -> f32 {
+        let longest = self.voxels.dims().into_iter().max().unwrap_or(0);
+        longest.saturating_sub(1 + 2 * FRAGMENT_PADDING) as f32 * self.voxel_size()
+    }
+
     /// Mean world position of its samples at the moment of the blast.
     pub fn world_centroid(&self) -> Point3<f32> {
         let sum = self
@@ -901,6 +936,17 @@ impl Fragment {
             .into_iter()
             .max_by_key(|&(_, n)| n)
             .map_or(VoxelMaterial::Air, |(m, _)| m)
+    }
+
+    /// Its samples, on the lattice it was cut from, in a block of their own.
+    pub(super) fn voxels(&self) -> &VoxelBlock {
+        &self.voxels
+    }
+
+    /// Takes the block's grid-local positions to the world, as they were at
+    /// the moment of the blast.
+    pub(super) fn pose(&self) -> &Isometry3<f32> {
+        &self.pose
     }
 
     /// Grid-local position and voxel of every sample it is made of.
@@ -1414,6 +1460,41 @@ mod tests {
         let counted: Vec<usize> = fragments.iter().map(Fragment::sample_count).collect();
         assert_eq!(counted, carried);
         assert_eq!(carried.iter().sum::<usize>(), 27 + 7);
+    }
+
+    /// A 3 × 3 × 3 block has one interior sample, all 27 bear, and it spans
+    /// two voxels; a strip of weak samples bears nothing and has no core.
+    #[test]
+    fn a_fragment_measures_its_core_and_its_extent() {
+        let measure = |s: Search| {
+            let f = s.into_fragments(&SegmentFrame::identity()).remove(0);
+            (
+                f.sample_count(),
+                f.bearing_samples(),
+                f.core_samples(),
+                f.extent(),
+            )
+        };
+        let block = blast(
+            |g| {
+                ground(g);
+                fill(g, [-1, 4, -1], [1, 6, 1], 1.0);
+            },
+            [0.0, 3.0, 0.0],
+            2.0,
+        );
+        assert_eq!(measure(block), (27, 27, 1, 2.0));
+        let strip = blast(
+            |g| {
+                ground(g);
+                for x in -3..=3 {
+                    put(g, [x, 3, 0], 0.05, VoxelMaterial::Grass);
+                }
+            },
+            [0.0, 2.0, 0.0],
+            2.0,
+        );
+        assert_eq!(measure(strip), (7, 0, 0, 6.0));
     }
 
     #[test]

@@ -31,6 +31,10 @@ An issue's **status** is one of:
 | [R15](#r15) | Lifting a piece left new flaps behind it | fixed `477795b` | medium |
 | [R16](#r16) | The search stopped one voxel short of what the carve changes | fixed `477795b` | medium |
 | [R17](#r17) | Cut loose costs up to 24 ms a grenade on `skyway` | fixed `45b48fa` | medium |
+| [R18](#r18) | Scree thrown into the rock over it crumbled on its first frame | fixed (branch `rubble-phase2`) | medium |
+| [R19](#r19) | Boulders fly as scree and crumble where they land | open, Phase 3 | medium |
+| [R20](#r20) | Reflection probes draw a piece's texture by world position | open | low |
+| [R21](#r21) | Dust is not in the material's colour | open | low |
 
 ---
 
@@ -373,3 +377,51 @@ the depth is about the radius, so the region is unchanged. The race's seeds are
 clipped to the changed samples too. `skyway`: mean 2.9 → 0.48 ms, worst 26 →
 1.1 ms. Terrain fingerprints on `test_arena`, the Rubble Garden and `skyway`,
 and the whole `rubble_viewer all` report, are unchanged.
+
+<a id="r18"></a>
+## R18. Scree thrown into the rock over it crumbled on its first frame
+
+**Status:** fixed on `rubble-phase2` (E21). **Found by:** `rubble_viewer`
+flying scree, E21.
+
+**Symptom.** In `garden_fins_and_walls`, 13 of 18 pieces of scree crumbled on
+their first frame, 0.15 m from where they broke: slivers of 1–3 samples cut
+out of the side of a knife-edge fin, under the fin's remaining rock.
+
+**Cause.** The blast's shove has an upward share, so a sliver under an
+overhang was thrown into the rock above it, and any hit counted as landing.
+
+**Fix.** Only ground (a hit normal with an upward share of at least 0.4) is
+landed on. A wall or a ceiling takes the velocity going into it, and the piece
+falls on; one glancing for more than six frames running crumbles where it is.
+`rubble_viewer` now fails a run in which any scree lands on its first frame
+(it started inside the ground) or never lands.
+
+<a id="r19"></a>
+## R19. Boulders fly as scree and crumble where they land
+
+**Status:** open; Phase 3 is the fix. **Found by:** design, seen in E21.
+
+Until boulders are bodies, every fragment graded `Boulder` flies as scree. A
+6 m bridge deck (465 samples) or the table slab (512) falls, lands and bursts
+into at most 48 flecks of dust, which reads as the slab vanishing.
+
+<a id="r20"></a>
+## R20. Reflection probes draw a piece's texture by world position
+
+**Status:** open. **Found by:** reading `shader/probe.frag` in Phase 2.
+
+`probe.frag` projects terrain's triplanar texture by world position and has no
+`ALBEDO_MODEL_SPACE` branch, so in a reflection a falling piece's texture swims
+across it. Pieces fly for about a second and probes are small, so it is not
+expected to show. The fix is the same branch as in `triangle.frag`, which
+needs the model position passed to the probe pipeline.
+
+<a id="r21"></a>
+## R21. Dust is not in the material's colour
+
+**Status:** open. **Found by:** design (Phase 1 deferred it to Phase 2).
+
+A crumble is the blast's `Debris` particle effect, scaled down, whatever the
+fragment is made of. `ParticleEmitter` has no tint; a crumble of grass and one
+of slate look the same.

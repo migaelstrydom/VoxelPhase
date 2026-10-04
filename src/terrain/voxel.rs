@@ -99,6 +99,22 @@ impl VoxelMaterial {
         }
     }
 
+    /// Mass per cubic metre, in kg: what a piece of it cut loose weighs.
+    /// Rough figures for the real materials, loose ground lighter than rock.
+    pub fn mass_density(&self) -> f32 {
+        match self {
+            VoxelMaterial::Air => 0.0,
+            VoxelMaterial::Grass => 1300.0,
+            VoxelMaterial::Sand => 1600.0,
+            VoxelMaterial::Dirt => 1500.0,
+            VoxelMaterial::Ite => 2300.0,
+            VoxelMaterial::Limestone => 2500.0,
+            VoxelMaterial::Rock => 2700.0,
+            VoxelMaterial::Slate => 2800.0,
+            VoxelMaterial::Bedrock => 3000.0,
+        }
+    }
+
     /// Whether no charge can remove this material.
     pub fn is_indestructible(&self) -> bool {
         self.toughness().is_none()

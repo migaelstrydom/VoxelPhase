@@ -28,6 +28,10 @@ const uint SOURCE_GRAIN_BY_UV = 1u << 5;
 /// The diffuse alpha is relief height rather than coverage.
 const uint SOURCE_RELIEF_IN_ALPHA = 1u << 6;
 
+/// The triplanar albedo is addressed by model position plus the surface's
+/// projection anchor, and blended by the model-space normal.
+const uint SOURCE_ALBEDO_MODEL_SPACE = 1u << 7;
+
 /// Either grain projection.
 const uint SOURCE_GRAIN_ANY = SOURCE_GRAIN_OBJECT_SPACE | SOURCE_GRAIN_BY_UV;
 

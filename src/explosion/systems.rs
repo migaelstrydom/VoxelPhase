@@ -77,8 +77,8 @@ impl<'a> System<'a> for ExplosionSystem {
         // Process terrain destruction. What a blast cuts loose is lifted out of
         // the field here and handed on as rubble.
         if let Some(ref mut terrain_manager) = terrain_manager_opt {
-            for &(_, center, blast, _, _, _) in &explosion_data {
-                rubble.extend(terrain_manager.detonate(center, &blast));
+            for &(_, center, blast, _, _, shove) in &explosion_data {
+                rubble.push_blast(shove, terrain_manager.detonate(center, &blast));
             }
         }
 
