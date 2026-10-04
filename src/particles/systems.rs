@@ -61,11 +61,11 @@ pub fn step_emitter(
     }
 
     let scale = emitter.scale;
-    let colour = emitter.colour;
+    let palette = emitter.palette;
     let mut spawn = |position: Vector3<f32>, rng: &mut _| {
         let mut particle = spec.sample(position, scale, rng);
-        if let Some(colour) = colour {
-            particle.ramp = particle.ramp.recoloured(colour);
+        if let Some(palette) = palette {
+            particle.ramp = particle.ramp.recoloured(palette.pick(rng));
             particle.colour = particle.ramp.sample(0.0);
         }
         particle.velocity += motion.inherited_velocity;

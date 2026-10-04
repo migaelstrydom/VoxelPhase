@@ -853,7 +853,26 @@ impl Fragment {
         let dims = [0, 1, 2].map(|a| hi[a] - lo[a] + 1 + 2 * FRAGMENT_PADDING);
         let own = SampleLattice::new(Point3::origin(), base, source.spacing(), dims);
 
+        // Air keeps the distance it carries: marching cubes places the surface
+        // between a solid sample and the air beside it by their densities,
+        // and air written as -1 would draw the piece thinner than the ground
+        // drew it. Solid that is not the piece (the ground it broke from,
+        // another piece) becomes air, and the break face closes against it.
         let mut voxels = VoxelBlock::air(own);
+        let [nx, ny, nz] = own.dims();
+        for x in 0..nx {
+            for y in 0..ny {
+                for z in 0..nz {
+                    let Some([rx, ry, rz]) = source.index_of(own.position(x, y, z)) else {
+                        continue;
+                    };
+                    let around = region.get(rx, ry, rz);
+                    if !around.is_solid() {
+                        voxels.set(x, y, z, around);
+                    }
+                }
+            }
+        }
         for c in &coords {
             let at = [0, 1, 2].map(|a| c[a] - lo[a] + FRAGMENT_PADDING);
             voxels.set(at[0], at[1], at[2], region.get(c[0], c[1], c[2]));
@@ -925,6 +944,14 @@ impl Fragment {
 
     /// What most of it is made of.
     pub fn material(&self) -> VoxelMaterial {
+        self.materials()
+            .into_iter()
+            .max_by_key(|&(_, n)| n)
+            .map_or(VoxelMaterial::Air, |(m, _)| m)
+    }
+
+    /// Everything it is made of, with how many samples of each.
+    pub fn materials(&self) -> Vec<(VoxelMaterial, usize)> {
         let mut counts: Vec<(VoxelMaterial, usize)> = Vec::new();
         for (_, voxel) in self.solid_samples() {
             match counts.iter_mut().find(|(m, _)| *m == voxel.material) {
@@ -933,9 +960,6 @@ impl Fragment {
             }
         }
         counts
-            .into_iter()
-            .max_by_key(|&(_, n)| n)
-            .map_or(VoxelMaterial::Air, |(m, _)| m)
     }
 
     /// Its samples, on the lattice it was cut from, in a block of their own.

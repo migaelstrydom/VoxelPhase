@@ -35,6 +35,9 @@ An issue's **status** is one of:
 | [R19](#r19) | Boulders fly as scree and crumble where they land | open, Phase 3 | medium |
 | [R20](#r20) | Reflection probes draw a piece's texture by world position | fixed (branch `rubble-phase2`) | low |
 | [R21](#r21) | Dust is not in the material's colour | fixed (branch `rubble-phase2`) | low |
+| [R22](#r22) | Falling pieces are drawn thinner than they stood | fixed (branch `rubble-phase2`) | high |
+| [R23](#r23) | A crumble is a few tiny flecks in one colour, whatever crumbled | fixed (branch `rubble-phase2`) | low |
+| [R24](#r24) | A blast's frame is a visible hitch | open, optimisation pass at the end | low |
 
 ---
 
@@ -436,3 +439,46 @@ of slate look the same.
 `ColourRamp::recoloured`, which keeps each stop's brightness relative to the
 first, and its alpha: the debris still darkens and fades as it ages. A crumble
 takes the colour of the fragment's main material.
+
+<a id="r22"></a>
+## R22. Falling pieces are drawn thinner than they stood
+
+**Status:** fixed on `rubble-phase2`. **Found by:** play-test, blasting the
+garden's pillars (2026-10-04).
+
+**Cause.** `Fragment::cut` wrote every sample around the piece as -1. Beside a
+surface, air carries its distance (-0.3, say), and marching cubes places the
+surface between a solid sample and its air neighbour by their densities, so -1
+pulled the surface in on every side. `a_free_piece_is_drawn_as_the_ground_drew_it`
+did not see it: its rock was authored with -1 air too.
+
+**Fix.** The fragment's block keeps the air around it as it was; only solid
+that is not the piece (the ground, another piece) becomes -1, so the break
+face closes as before. The test's rock now carries a clamped distance on both
+sides, and fails without the fix.
+
+<a id="r23"></a>
+## R23. A crumble is a few tiny flecks in one colour, whatever crumbled
+
+**Status:** fixed on `rubble-phase2`. **Found by:** play-test (2026-10-04).
+
+A crumble's flecks were capped at 48 and its scale set by the voxel size, so a
+500-sample slab landed as the same small burst as a chip. Its colour was the
+majority material's, so a rock pillar under grass crumbled grey.
+
+**Fix.** The debris effect's scale follows the cube root of the piece's volume
+(0.6 per metre, 0.15–2.0), flecks are capped at 120, and each fleck takes a
+colour from the piece's materials in proportion to their samples
+(`particles::Palette`). A one-sample chip at 0.5 m voxels crumbles as before.
+
+<a id="r24"></a>
+## R24. A blast's frame is a visible hitch
+
+**Status:** open; deliberately left for an optimisation pass once rubble is
+complete (user, 2026-10-04). Not a blocker. **Found by:** play-test.
+
+One frame drops visibly when a grenade goes off. `render_perf` on the Rubble
+Garden's cliff lip (E21): the blast frame takes 37 ms, of which
+`terrain_update` (remesh) is 20 ms and `explosion` (carve and cut loose) 8 ms;
+`rubble_spawn` (grade, mesh, AO) is 0.7 ms. Start there, and look again once
+Phase 3 adds bodies.

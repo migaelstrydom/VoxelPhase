@@ -13,6 +13,7 @@
 
 pub mod config;
 mod emitter;
+mod palette;
 mod particle;
 pub mod pipeline;
 pub mod ramp;
@@ -23,6 +24,7 @@ pub mod vertex;
 
 pub use config::ParticleConfig;
 pub use emitter::{ParticleEffectType, ParticleEmitter};
+pub use palette::Palette;
 pub use particle::{Particle, ParticlePool};
 pub use ramp::{ColourRamp, ColourStop};
 pub use renderer::ParticleRenderer;

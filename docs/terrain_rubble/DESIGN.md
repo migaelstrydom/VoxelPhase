@@ -7,9 +7,11 @@ to rest is then deposited back into the voxel field as new terrain.
 **Status:** Phase 1 is on `main` since 2026-10-04 (`src/terrain/fragment.rs`, `src/terrain/split_race.rs`, `src/rubble/`,
 `src/rubble_viewer/`, the play-test level `levels/rubble_garden.level.ron`):
 every fragment crumbles into dust. Phase 2 (scree) is on the `rubble-phase2`
-branch, awaiting a play-test: fragments are graded, dust crumbles, and
+branch, play-tested 2026-10-04: fragments are graded, dust crumbles, and
 everything else falls as scree drawn with its own marching-cubes mesh and the
-terrain's texture; boulders fly as scree until Phase 3. Phases 3–5 are design
+terrain's texture; boulders fly as scree until Phase 3. A boulder crumbling
+where it lands reads as vanishing, so the branch goes to `main` only with
+Phase 3. Phases 3–5 are design
 only. The play-test
 level turned up problems that blocked the design: pieces longer than about
 3 m never fell (R1), and box edges read as loose strips (R3, R4). Those are

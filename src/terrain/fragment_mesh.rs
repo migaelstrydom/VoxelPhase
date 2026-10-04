@@ -102,7 +102,8 @@ mod tests {
     use crate::terrain::frame::SegmentFrame;
     use crate::terrain::voxel::{Voxel, VoxelMaterial};
 
-    /// Bedrock, and a rounded rock standing free above it, as authored: the
+    /// Bedrock, and a rounded rock standing free above it, as authored, its
+    /// air carrying the distance to its surface as generation leaves it: the
     /// audit holds up only what an indestructible sample does.
     fn rock_over_ground() -> ChunkGrid {
         let mut grid = ChunkGrid::new(1.0);
@@ -125,16 +126,15 @@ mod tests {
             for y in 2..=10 {
                 for z in -4..=4 {
                     let at = Point3::new(x as f32, y as f32, z as f32);
+                    // A clamped distance on both sides, as generation
+                    // writes it: the air beside the surface is not -1.
                     let density = (2.6 - (at - centre).norm()).clamp(-1.0, 1.0);
-                    if density > 0.0 {
-                        grid.set(
-                            at,
-                            Voxel {
-                                density,
-                                material: VoxelMaterial::Rock,
-                            },
-                        );
-                    }
+                    let material = if density > 0.0 {
+                        VoxelMaterial::Rock
+                    } else {
+                        VoxelMaterial::Air
+                    };
+                    grid.set(at, Voxel { density, material });
                 }
             }
         }

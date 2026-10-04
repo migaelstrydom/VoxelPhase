@@ -3,6 +3,8 @@
 use nalgebra::Vector3;
 use specs::{Component, VecStorage};
 
+use super::palette::Palette;
+
 /// Types of particle effects available.
 ///
 /// Each names one [`ParticleSpec`](super::spec::ParticleSpec) in
@@ -60,9 +62,10 @@ pub struct ParticleEmitter {
     /// Spatial scale applied to every particle this emitter spawns — sizes,
     /// speeds and spawn spread. See [`ParticleSpec::sample`](super::spec::ParticleSpec::sample).
     pub scale: f32,
-    /// The colour every particle is drawn in, in place of its effect's own
-    /// hue (`ColourRamp::recoloured`), or `None` for the effect as authored.
-    pub colour: Option<Vector3<f32>>,
+    /// The colours particles are drawn in, each taking one in place of its
+    /// effect's own hue (`ColourRamp::recoloured`), or `None` for the effect
+    /// as authored.
+    pub palette: Option<Palette>,
     /// Fraction of the emitting entity's velocity each particle is born with.
     ///
     /// A trail shed by a fast body wants some of that motion, or the particles
@@ -87,7 +90,7 @@ impl ParticleEmitter {
             burst_spawned: false,
             delay: 0.0,
             scale: 1.0,
-            colour: None,
+            palette: None,
             velocity_inheritance: 0.0,
             last_position: None,
         }
@@ -123,10 +126,10 @@ impl ParticleEmitter {
         self
     }
 
-    /// Draw every particle this emitter spawns in `colour`, keeping the
-    /// effect's darkening and fade.
-    pub fn with_colour(mut self, colour: Vector3<f32>) -> Self {
-        self.colour = Some(colour);
+    /// Draw each particle this emitter spawns in a colour from `palette`,
+    /// keeping the effect's darkening and fade.
+    pub fn with_palette(mut self, palette: Palette) -> Self {
+        self.palette = Some(palette);
         self
     }
 
