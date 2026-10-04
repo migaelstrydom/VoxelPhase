@@ -397,3 +397,41 @@ scenario now uses (21.5, 7.6, 59.0). The `garden_hill` breaks join a weak-only
 piece the search cannot see the end of; they are R5, now at two blasts.
 
 **Issues.** Closes R3, R4. Updates R5.
+
+## E18. Where `skyway`'s cut-loose time goes, and what charging per m³ moves (2026-10-04)
+
+**Question.** Which of `skyway`'s blasts pay R17's 24 ms, and in which part of
+`cut_loose`? Separately, how big is R2's fix?
+
+**Setup.** At `689c07b`. `terrain_perf --level levels/skyway.level.ron`, then
+temporary probes timing the race, `Crater::before_in`, the post-carve read and
+`Search::run`, reverted. After the fix: `terrain_perf` on `test_arena`, the
+Rubble Garden and `skyway`, and `rubble_viewer all` against `689c07b`. For R2:
+cost × step³ in `effective_radius`, `cargo test --release`, `rubble_viewer
+all` and `terrain_perf` on the Rubble Garden and `island_sea`, reverted.
+
+**Result.**
+
+- Blasts #9 (92, 1, 29) and #16 (92, 4, 50) cost 25.6 and 19.9 ms in `cut
+  loose` and cut nothing loose. Every other blast is 0.26–0.58 ms.
+- At both, the race took 0.4 ms (229 samples) and closed nothing, so the
+  region was the survey alone: 89 × 89 × 89 samples, against 17³ elsewhere.
+  `Search::run` took 23.6 and 18.6 ms over it.
+- 89 samples at 1 m voxels is a radius of about 12 m with the 32-voxel margin:
+  the charges are in the open, and `effective_radius` pays for the nearest rock
+  however far it is.
+
+| Level | `cut loose` mean / worst, before | after | fingerprint |
+|---|---|---|---|
+| `test_arena` | 0.48 / 0.52 ms | 0.41 / 0.44 ms | `0d5349cdc69f039f`, unchanged |
+| Rubble Garden | 0.49 / 1.25 ms | 0.45 / 1.28 ms | `32799680603a21ed`, unchanged |
+| `skyway` | 2.86 / 26.1 ms | 0.48 / 1.08 ms | `48713b9006f02ac8`, unchanged |
+
+- Sizing the box by the changed samples took #9 to 1.25 ms; clipping the race's
+  seeds to them, 1.02 ms. What is left is a search over a cap that dirtied six
+  chunks.
+- `rubble_viewer all`: byte-identical report before and after.
+- A new unit test, `a_charge_in_the_open_reads_only_around_what_it_cuts`, reads
+  23 × 14 × 23 samples; with the old sizing it read 85³ and fails.
+- R2 trial: the results are in ISSUES.md R2, "Size of the fix".
+

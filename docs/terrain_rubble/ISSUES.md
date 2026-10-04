@@ -30,7 +30,7 @@ An issue's **status** is one of:
 | [R14](#r14) | Paper-thin flaps survived as "lips" | fixed `477795b` | high |
 | [R15](#r15) | Lifting a piece left new flaps behind it | fixed `477795b` | medium |
 | [R16](#r16) | The search stopped one voxel short of what the carve changes | fixed `477795b` | medium |
-| [R17](#r17) | Cut loose costs up to 24 ms a grenade on `skyway` | open | medium |
+| [R17](#r17) | Cut loose costs up to 24 ms a grenade on `skyway` | fixed `45b48fa` | medium |
 
 ---
 
@@ -90,6 +90,28 @@ volume. At 0.5 m voxels a grenade removes an eighth of the volume it removes at
 **Options.** Charge per cubic metre (cost × step³). That changes every
 crater in every level at any resolution other than 1 m, so it needs a
 play-test across the levels and a decision on what a grenade should cut.
+
+**Size of the fix (E18, tried and reverted).** The code is one factor in
+`effective_radius` and the `charge_yield` doc. What it moves:
+
+- **Craters.** At 0.5 m voxels a grenade cuts what it cuts at 1 m, about
+  1.5 m instead of 0.6 m. That is most play levels: `island_sea`, `water_park`,
+  `stack_yard`, `swim_test`, the Rubble Garden, and the 0.5 m segments of
+  `skyway`, `subsidence` and `test_segments`. 1 m levels are unchanged. Charging
+  per 0.5 m sample instead keeps those and shrinks the 1 m levels' craters.
+- **Tests.** Of the whole lib suite, 3 fail. Two `terrain::blast` tests run on
+  a 2 m lattice and need their own voxel size changed. In `rubble_viewer`, five
+  garden scenarios placed for small craters: four expect a fragment slightly
+  larger than the bigger crater now leaves (77 vs 80, 7 vs 8, 41 vs 50, 7 vs
+  10), and `garden_hill` no longer shows R5, so it needs pinning again or
+  closing. No invariant broke, and the water tests pass.
+- **Cost.** At 0.5 m voxels a blast's wall clock goes from 12.7 to 13.4 ms
+  (Rubble Garden) and 13.0 to 13.4 ms (`island_sea`). `cut loose` goes from
+  0.4–0.5 to 0.8–1.2 ms, because a deeper cut gets a wider margin. The 0.125 m
+  segment of `test_arena` would cut 64× the samples, which is R8's ground.
+
+The work for the agent is small: the line, the two blast tests, five scenarios.
+What takes time is the play-test and deciding what a grenade should cut.
 
 <a id="r3"></a>
 ## R3. Box edges on the lattice read as loose, paper-thin strips
@@ -293,10 +315,24 @@ radius, so the sheet and paper rules now reach crater radius + 2 voxels.
 <a id="r17"></a>
 ## R17. Cut loose costs up to 24 ms a grenade on `skyway`
 
-**Status:** open. Not introduced by the race: the same with it switched off.
+**Status:** fixed in `45b48fa` (E18). Not introduced by the race: the same with it switched off.
 **Found by:** E15.
 
 `terrain_perf --level levels/skyway.level.ron`: the `cut loose` stage averages
 2.5 ms a grenade, with a p95 of 18 ms and a worst blast of 24 ms. On
-`test_arena` and the Rubble Garden it is 0.3–0.45 ms. Not yet profiled, and
-the per-blast table does not show which of `skyway`'s blasts pay it.
+`test_arena` and the Rubble Garden it is 0.3–0.45 ms.
+
+**Cause (E18).** Two blasts pay all of it, #9 and #16 at x = 92, in the open
+above the canyon floor. A charge always pays for the nearest destructible
+sample, so a charge 11 m from rock gets a radius of about 11.5 m and takes a
+thin cap off the rock. The survey was sized from the radius, with the margin at
+its 32-voxel cap: an 89³ box, read and classified before and after the carve,
+for a cut of a few dozen samples. The race visited 229 samples in 0.4 ms.
+
+**Fix.** The survey box is the box around the solid samples the carve changes,
+grown by a margin of 3 × the cut's depth into the solid (radius less the
+distance to the nearest of them), clamped as before. For a charge on a surface
+the depth is about the radius, so the region is unchanged. The race's seeds are
+clipped to the changed samples too. `skyway`: mean 2.9 → 0.48 ms, worst 26 →
+1.1 ms. Terrain fingerprints on `test_arena`, the Rubble Garden and `skyway`,
+and the whole `rubble_viewer all` report, are unchanged.

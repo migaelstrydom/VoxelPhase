@@ -4,14 +4,15 @@ Terrain that a blast cuts loose becomes rubble: real rigid bodies for pieces
 worth simulating, falling scree for slivers, dust for crumbs. Rubble that comes
 to rest is then deposited back into the voxel field as new terrain.
 
-**Status:** proof of concept, on the `terrain-rubble-poc` branch and not on
-`main`. Phase 1 is built there (`src/terrain/fragment.rs`, `src/rubble/`,
+**Status:** Phase 1 is built on the `terrain-rubble-poc` branch, not yet on
+`main` (`src/terrain/fragment.rs`, `src/terrain/split_race.rs`, `src/rubble/`,
 `src/rubble_viewer/`, the play-test level `levels/rubble_garden.level.ron`):
 every fragment crumbles into dust. Phases 2–5 are design only. The play-test
-level turned up problems serious enough that the design has to be revisited
-before anything goes back to `main`; they are tracked in
-[ISSUES.md](ISSUES.md), and what was measured to find them is in
-[NOTEBOOK.md](NOTEBOOK.md).
+level turned up problems that blocked the design: pieces longer than about
+3 m never fell (R1), and box edges read as loose strips (R3, R4). Those are
+fixed, and so is the cut-loose cost on `skyway` (R17). What is still open is
+minor or older than rubble. Issues are tracked in [ISSUES.md](ISSUES.md), and
+what was measured to find them is in [NOTEBOOK.md](NOTEBOOK.md).
 
 ---
 
@@ -105,14 +106,23 @@ Connectivity only changes where samples changed, so the search is local.
 after it:
 
 ```text
-half extent = radius + margin,   margin = clamp(3 · radius, 6 voxels, 32 voxels)
+changed = box around the solid samples within radius + 1 voxel
+depth   = radius − distance to the nearest of them
+region  = changed grown by margin,   margin = clamp(3 · depth, 6 voxels, 32 voxels)
 ```
 
-The margin is the size of the largest structure a blast can bring down, so it
-is a cost against reach. Measured on `test_arena` at 1 m voxels, per grenade:
-1.5 radii cost 0.08 ms, 4 radii 0.25 ms, the 32-voxel ceiling everywhere
-5.8 ms. At 3 radii the whole search, both reads and up to four passes (below),
-costs 0.31 ms a grenade at 1 m voxels and 0.32 ms at 0.125 m.
+The box is sized by what the carve changes, not by its sphere. A grenade in
+the open spends its budget on the nearest rock, so its radius can be 11 m to
+take a thin cap off a wall 11 m away. Sized from that radius, the survey read
+89³ samples of mostly air and cost 25 ms (ISSUES.md R17). For a grenade on a
+surface, depth is about the radius and the region is what it always was.
+
+The margin was the reach of the search before the race (below) grew the
+region; it now bounds only how far a weak piece is followed. Measured on
+`test_arena` at 1 m voxels, per grenade: 1.5 radii cost 0.08 ms, 4 radii
+0.25 ms, the 32-voxel ceiling everywhere 5.8 ms. At 3 radii the whole search,
+both reads and up to four passes (below), costs 0.31 ms a grenade at 1 m voxels
+and 0.32 ms at 0.125 m.
 
 A `VoxelBlock` is not a unit of terrain storage. It is the dense, flat sample
 buffer that meshing already reads chunks into, sized to whatever box the caller
@@ -722,7 +732,7 @@ and once understood becomes a scenario.
 
 | Bench | Addition | Initial budget |
 |---|---|---|
-| `terrain_perf` | ✓ `TerrainStage::CutLoose` (survey, search and lift together) and fragments per blast in the table. | Finder ≤ 0.5 ms per blast at 0.5 m voxels, ≤ 2 ms at 0.125 m. Measured: 0.31 ms at 1 m, 0.32 ms at 0.125 m. |
+| `terrain_perf` | ✓ `TerrainStage::CutLoose` (survey, search and lift together) and fragments per blast in the table. | Finder ≤ 0.5 ms per blast at 0.5 m voxels, ≤ 2 ms at 0.125 m. Measured: 0.31 ms at 1 m, 0.32 ms at 0.125 m; mean 0.4–0.5 ms on `test_arena`, the Rubble Garden and `skyway`, worst 1.3 ms. |
 | `physics_perf` | A `cliff_collapse` scenario on real terrain: physics stages while the rubble tumbles, after it sleeps, and after it is deposited. | Spawn (mesh + AO + bricks) ≤ 1 ms per boulder. After the deposit, physics cost back to the pre-blast figure. |
 | `render_perf` | `RenderCounters` for rubble draws and mesh uploads, during the existing blast scenario. | Within the frame budget with the per-blast fragment cap reached. |
 
