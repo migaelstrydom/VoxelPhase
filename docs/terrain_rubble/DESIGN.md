@@ -4,8 +4,7 @@ Terrain that a blast cuts loose becomes rubble: real rigid bodies for pieces
 worth simulating, falling scree for slivers, dust for crumbs. Rubble that comes
 to rest is then deposited back into the voxel field as new terrain.
 
-**Status:** Phase 1 is built on the `terrain-rubble-poc` branch, not yet on
-`main` (`src/terrain/fragment.rs`, `src/terrain/split_race.rs`, `src/rubble/`,
+**Status:** Phase 1 is on `main` since 2026-10-04 (`src/terrain/fragment.rs`, `src/terrain/split_race.rs`, `src/rubble/`,
 `src/rubble_viewer/`, the play-test level `levels/rubble_garden.level.ron`):
 every fragment crumbles into dust. Phases 2–5 are design only. The play-test
 level turned up problems that blocked the design: pieces longer than about
