@@ -16,9 +16,9 @@ An issue's **status** is one of:
 |---|---|---|---|
 | [R1](#r1) | Pieces longer than about 3 m never fall at 0.5 m voxels | fixed `f3563f3` | blocks the design |
 | [R2](#r2) | A grenade's crater shrinks with the voxel size | won't fix, for now | high |
-| [R3](#r3) | Box edges on the lattice read as loose, paper-thin strips | open | medium |
-| [R4](#r4) | A grenade at a stalactite's root leaves 11 more samples paper-thin | pinned, diagnosed: follows from R3 | medium |
-| [R5](#r5) | One cave-hill blast leaves one more sample standing free | pinned | low |
+| [R3](#r3) | Box edges on the lattice read as loose, paper-thin strips | fixed `45787be` | medium |
+| [R4](#r4) | A grenade at a stalactite's root leaves 11 more samples paper-thin | fixed `45787be` | medium |
+| [R5](#r5) | A cave-hill blast leaves more samples standing free | pinned | low |
 | [R6](#r6) | The terrain `Arch` drew its legs as slivers | fixed `f9007f4` | high |
 | [R7](#r7) | `level_viewer --blast` did nothing on a level without water | fixed `f9007f4` | low |
 | [R8](#r8) | The carve costs 343 ms a grenade at 0.125 m voxels | open | medium |
@@ -94,63 +94,83 @@ play-test across the levels and a decision on what a grenade should cut.
 <a id="r3"></a>
 ## R3. Box edges on the lattice read as loose, paper-thin strips
 
-**Status:** open. **Found by:** E9.
+**Status:** fixed in `45787be` (E17). **Found by:** E9.
 
-**Symptom.** In the Rubble Garden as authored, every slab wall, deck, table and
-roof has a strip of "free" samples running along its edges: 140 samples on the
-2 m wall, 136 on the 1 m wall, 150 on the pavilion roof. Most of the level's
-2,133 free and 718 paper-thin samples before any blast are these.
+**Symptom.** In the Rubble Garden, as authored, every slab wall, deck, table and
+roof had a strip of "free" samples running along its edges: 140 samples on the
+2 m wall, 136 on the 1 m wall, 150 on the pavilion roof. The strips were most
+of the level's free samples before any blast. They were not drawn paper-thin:
+E17 found the paper-thin count before any blast unchanged by the fix.
 
 **Cause.** A face that lies exactly on lattice points writes density
 `SURFACE_BAND` (0.01) there: a weak sample. On a flat face it is grounded as a
 lip, because its inward neighbour bears. Along a convex edge, its only bearing
 neighbour is diagonal, so it is neither bearing nor a lip, and the edge's weak
-samples join into one free strip.
+samples join into one free strip. Faces within a quarter voxel of the lattice
+do the same, since their edge samples store less than `BEARING_DENSITY`.
 
-**Effect in play.** Small: when a blast reaches such a strip, the lifted samples
-chamfer the edge by up to half a voxel and add one-sample dust puffs. It
-pollutes every audit count, though, and hides real regressions in the noise.
+**Effect in play.** Small: when a blast reached such a strip, the lifted samples
+chamfered the edge and added one-sample dust puffs. It polluted every audit
+count, though, and hid real regressions in the noise. It also caused R4.
 
-**Options.**
-- Let the lip rule accept an edge-diagonal (18-neighbourhood) bearing
-  neighbour. Still one step only, and paper samples are still never lips. Must
-  be rerun against `rim_cusps` to show it does not bring flaps back.
-- Don't count a sample within `SURFACE_BAND` of the surface as matter at all.
+**Fix.** A new role, `Role::Rind`: a weak sample that marching cubes draws at
+least `PAPER_THIN` across every axis. A rind is a lip if any of its 26
+neighbours is grounded and bears; other weak samples still need a face
+neighbour, and paper samples are never lips. Thickness is what tells a box's
+edge from a flap touching ground at a corner: the edge is drawn whole, the flap
+a few hundredths of a voxel. Of the options listed before, the 18-neighbourhood
+lip leaves a box's corners free (their bearing neighbour is diagonal across all
+three axes), and not counting band samples as matter misses faces just off the
+lattice and leaves a falling piece's skin behind in the grid.
 
 <a id="r4"></a>
 ## R4. A grenade at a stalactite's root leaves 11 more samples paper-thin
 
-**Status:** pinned (`garden_stalactite_root`). Diagnosed (E16): follows
-from R3. **Found by:** E13.
+**Status:** fixed in `45787be` with R3 (E17). Was pinned by
+`garden_stalactite_root`. **Found by:** E13.
 
-**Symptom.** A grenade at (22.2, 7.4, 59) drops the thickest stalactite (an
-8-sample fragment), and the paper-thin count rises from 718 to 729. That breaks
-the invariant that no blast leaves more terrain paper-thin than before it.
+**Symptom.** A grenade at (22.2, 7.4, 59) raised the paper-thin count from 718 to
+729. That broke the invariant that no blast leaves more terrain paper-thin than
+before it. It was reported as dropping the thickest stalactite as an 8-sample
+fragment; E17 found it never did. Those 8 samples were the R3 strip on the
+0.9 m stalactite next to it, and the grenade's crater (R2) is too small to sever
+the 1.2 m one from there.
 
-**Cause (E16).** The 11 new paper-thin samples are not on the stalactite the
-grenade hit, but on its neighbour, the 0.9 m one at (23.5, 61), about 2.3 m from
-the blast. That stalactite's edge skin was standing free as authored (R3). The
-blast reaches it, and a free piece with nothing bearing in it falls (R13's
-rule), so the skin is lifted. That exposes the next layer of skin, which is
-now drawn paper-thin. It lies outside the paper rule's reach (crater radius +
-2 voxels, about 1.6 m), so nothing removes it.
+**Cause (E16, E17).** The 0.9 m stalactite, about 2.3 m from the blast, is a
+2 × 2 column of samples with one bearing column. Its corner column, diagonal to
+the bearing one, stood free as authored (R3). The blast's search reached it, and
+a free piece with nothing bearing in it falls (R13's rule), so it was lifted.
+That left the two columns beside it with air on both sides along one axis, drawn
+0.02 voxels thick. They lie outside the paper rule's reach (crater radius + 2
+voxels, about 1.6 m), so they stayed as lips.
 
-The same shows at the thin arch: a grenade at its foot raises the paper-thin
+The same showed at the thin arch: a grenade at its foot raised the paper-thin
 count by 2.
 
-**Options.** Fixing R3 removes the free skin, and with it this. Otherwise, the
-re-search passes could apply the paper rule around every lifted sample as well
-as around the crater.
+**Fix.** With R3 fixed, the corner column is a lip and nothing lifts it. The
+scenario now puts the grenade at (21.5, 7.6, 59.0), at the 1.2 m stalactite's
+root, which drops it as a 44-sample piece and leaves the paper-thin count at 718.
+
+**Left open.** The paper rule's reach is still narrower than the region the
+before/after rule judges. Any other way of lifting a piece out there can leave
+paper behind it the same way.
 
 <a id="r5"></a>
-## R5. One cave-hill blast leaves one more sample standing free
+## R5. A cave-hill blast leaves more samples standing free
 
-**Status:** pinned (`garden_hill`, blast 18 at (67.55, 2.17, 64.39)). Not
-investigated. **Found by:** E13.
+**Status:** pinned (`garden_hill`, blasts 10 at (66.60, 3.19, 64.11) and 18 at
+(67.55, 2.17, 64.39)). **Found by:** E13.
 
-**Symptom.** Thirty seeded grenades into the cave hill. Blast 18 leaves one
-more sample standing free than before it (2,131 → 2,132); every other blast
-holds the invariant.
+**Symptom.** Thirty seeded grenades into the cave hill. Before the R3 fix, blast
+18 left one more sample standing free than before it (2,491 → 2,492). Since it
+(E17), blast 10 leaves one more (1,186 → 1,187) and blast 18 two more
+(1,187 → 1,189).
+
+**Cause, partly (E17).** The new free samples are rind left by the carve. They
+join a 35-sample piece in which every sample is weak (density at most 0.09),
+running 3.7 m down into the caves under the hill, probably left by `Caves`
+(R10). The piece reaches past the search region, so the search holds it up
+(assumption A), while the whole-terrain audit finds it closed and free.
 
 <a id="r6"></a>
 ## R6. The terrain `Arch` drew its legs as slivers
