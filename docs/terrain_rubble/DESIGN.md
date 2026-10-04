@@ -461,8 +461,8 @@ then turns the detail normal into the world. The terrain's texture belongs to
 `TerrainWorld`, and a `TextureHandle` cannot be cloned safely, so a fragment is
 not a `ModelInstance`: it is a `TerrainMeshInstance`, which `RenderSystem`
 draws with `Renderer::draw_model_as`, the terrain's texture and the terrain's
-surface, anchored. Reflection probes (`probe.frag`) still project terrain by
-world position, so in a probe a piece's texture swims (ISSUES.md R20). When the boulder
+surface, anchored. `probe.frag` takes the same branch, so a piece's texture
+holds still in a reflection too. When the boulder
 is deposited (Part 5) it is textured by world position again, so the noise
 under it jumps to a different patch. The noise is isotropic, so that is a
 change in pattern, not in look.

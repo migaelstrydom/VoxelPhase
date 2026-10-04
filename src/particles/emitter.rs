@@ -60,6 +60,9 @@ pub struct ParticleEmitter {
     /// Spatial scale applied to every particle this emitter spawns — sizes,
     /// speeds and spawn spread. See [`ParticleSpec::sample`](super::spec::ParticleSpec::sample).
     pub scale: f32,
+    /// The colour every particle is drawn in, in place of its effect's own
+    /// hue (`ColourRamp::recoloured`), or `None` for the effect as authored.
+    pub colour: Option<Vector3<f32>>,
     /// Fraction of the emitting entity's velocity each particle is born with.
     ///
     /// A trail shed by a fast body wants some of that motion, or the particles
@@ -84,6 +87,7 @@ impl ParticleEmitter {
             burst_spawned: false,
             delay: 0.0,
             scale: 1.0,
+            colour: None,
             velocity_inheritance: 0.0,
             last_position: None,
         }
@@ -116,6 +120,13 @@ impl ParticleEmitter {
     /// Hold this emitter back for `seconds` before it starts.
     pub fn with_delay(mut self, seconds: f32) -> Self {
         self.delay = seconds;
+        self
+    }
+
+    /// Draw every particle this emitter spawns in `colour`, keeping the
+    /// effect's darkening and fade.
+    pub fn with_colour(mut self, colour: Vector3<f32>) -> Self {
+        self.colour = Some(colour);
         self
     }
 

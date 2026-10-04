@@ -33,8 +33,8 @@ An issue's **status** is one of:
 | [R17](#r17) | Cut loose costs up to 24 ms a grenade on `skyway` | fixed `45b48fa` | medium |
 | [R18](#r18) | Scree thrown into the rock over it crumbled on its first frame | fixed (branch `rubble-phase2`) | medium |
 | [R19](#r19) | Boulders fly as scree and crumble where they land | open, Phase 3 | medium |
-| [R20](#r20) | Reflection probes draw a piece's texture by world position | open | low |
-| [R21](#r21) | Dust is not in the material's colour | open | low |
+| [R20](#r20) | Reflection probes draw a piece's texture by world position | fixed (branch `rubble-phase2`) | low |
+| [R21](#r21) | Dust is not in the material's colour | fixed (branch `rubble-phase2`) | low |
 
 ---
 
@@ -409,19 +409,30 @@ into at most 48 flecks of dust, which reads as the slab vanishing.
 <a id="r20"></a>
 ## R20. Reflection probes draw a piece's texture by world position
 
-**Status:** open. **Found by:** reading `shader/probe.frag` in Phase 2.
+**Status:** fixed on `rubble-phase2`. **Found by:** reading `shader/probe.frag`
+in Phase 2.
 
 `probe.frag` projects terrain's triplanar texture by world position and has no
 `ALBEDO_MODEL_SPACE` branch, so in a reflection a falling piece's texture swims
 across it. Pieces fly for about a second and probes are small, so it is not
-expected to show. The fix is the same branch as in `triangle.frag`, which
-needs the model position passed to the probe pipeline.
+expected to show.
+
+**Fix.** `probe.vert` passes the model-space position and normal, and
+`probe.frag` takes the same `SOURCE_ALBEDO_MODEL_SPACE` branch as
+`triangle.frag` (albedo only: probes draw no detail normal). Pipelines build
+under validation; no level's probes have yet been seen to catch a piece.
 
 <a id="r21"></a>
 ## R21. Dust is not in the material's colour
 
-**Status:** open. **Found by:** design (Phase 1 deferred it to Phase 2).
+**Status:** fixed on `rubble-phase2`. **Found by:** design (Phase 1 deferred it
+to Phase 2).
 
 A crumble is the blast's `Debris` particle effect, scaled down, whatever the
 fragment is made of. `ParticleEmitter` has no tint; a crumble of grass and one
 of slate look the same.
+
+**Fix.** `ParticleEmitter::with_colour` draws an effect in another hue with
+`ColourRamp::recoloured`, which keeps each stop's brightness relative to the
+first, and its alpha: the debris still darkens and fades as it ages. A crumble
+takes the colour of the fragment's main material.

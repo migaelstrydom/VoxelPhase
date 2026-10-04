@@ -7,7 +7,7 @@
 //! separate fire and smoke effects never looks right, because the handover
 //! between the two is visible; the same particle has to do the whole journey.
 
-use nalgebra::Vector4;
+use nalgebra::{Vector3, Vector4};
 
 /// A colour the ramp passes through, and how far into the particle's life it
 /// is reached.
@@ -80,6 +80,20 @@ impl ColourRamp {
         Self::new(&[ColourStop::new(0.0, from), ColourStop::new(1.0, to)])
     }
 
+    /// The same ramp in another hue: each stop takes `colour`, scaled by how
+    /// bright that stop is beside the first, and keeps its alpha. A ramp that
+    /// darkens and fades as it ages still does, in the new colour.
+    pub fn recoloured(&self, colour: Vector3<f32>) -> Self {
+        let luminance = |c: Vector4<f32>| 0.2126 * c.x + 0.7152 * c.y + 0.0722 * c.z;
+        let base = luminance(self.stops[0].colour).max(f32::EPSILON);
+        let mut ramp = *self;
+        for stop in &mut ramp.stops[..self.count] {
+            let rgb = colour * (luminance(stop.colour) / base);
+            stop.colour = Vector4::new(rgb.x, rgb.y, rgb.z, stop.colour.w);
+        }
+        ramp
+    }
+
     /// The colour at normalised age `t`.
     ///
     /// Ages outside 0..1 clamp to the end stops, so a particle is never left
@@ -113,6 +127,19 @@ impl Default for ColourRamp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Recoloured, a ramp starts in the new colour and keeps its darkening
+    /// and its fade.
+    #[test]
+    fn a_recoloured_ramp_keeps_its_shape() {
+        let ramp = ColourRamp::new(&[
+            ColourStop::new(0.0, Vector4::new(0.4, 0.4, 0.4, 1.0)),
+            ColourStop::new(1.0, Vector4::new(0.2, 0.2, 0.2, 0.0)),
+        ])
+        .recoloured(Vector3::new(0.2, 0.6, 0.1));
+        assert!((ramp.sample(0.0) - Vector4::new(0.2, 0.6, 0.1, 1.0)).norm() < 1e-5);
+        assert!((ramp.sample(1.0) - Vector4::new(0.1, 0.3, 0.05, 0.0)).norm() < 1e-5);
+    }
 
     fn grey(value: f32, alpha: f32) -> Vector4<f32> {
         Vector4::new(value, value, value, alpha)

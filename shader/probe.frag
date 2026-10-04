@@ -29,6 +29,8 @@ layout(location = 1) in vec2 inTexCoord;
 layout(location = 2) in vec3 inWorldPos;
 layout(location = 3) in vec3 inNormal;
 layout(location = 4) in float inAo;
+layout(location = 5) in vec3 inModelPos;
+layout(location = 6) in vec3 inModelNormal;
 
 /// Alpha 1: this texel hit something. See reflection.glsl.
 layout(location = 0) out vec4 outColor;
@@ -42,10 +44,12 @@ void main() {
 
     vec3 albedo_wash;
     if (sourceHas(source, SOURCE_ALBEDO_TRIPLANAR)) {
+        // As in triangle.frag: terrain that moves carries its texture with it.
+        bool anchored = sourceHas(source, SOURCE_ALBEDO_MODEL_SPACE);
         TriplanarSurface field = triplanarSurface(
             texSampler,
-            inWorldPos,
-            normal,
+            anchored ? inModelPos + materialProjectionAnchor() : inWorldPos,
+            anchored && length(inModelNormal) > 0.001 ? normalize(inModelNormal) : normal,
             materialTriplanarScale(),
             materialTriplanarSharpness(),
             0.0);

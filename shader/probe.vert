@@ -18,6 +18,10 @@ layout(location = 1) out vec2 outTexCoord;
 layout(location = 2) out vec3 outWorldPos;
 layout(location = 3) out vec3 outNormal;
 layout(location = 4) out float outAo;
+/// The vertex and its normal in the model's own frame, for terrain that moves
+/// (SOURCE_ALBEDO_MODEL_SPACE).
+layout(location = 5) out vec3 outModelPos;
+layout(location = 6) out vec3 outModelNormal;
 
 layout(push_constant) uniform PushConstants {
     mat4 model;
@@ -31,4 +35,6 @@ void main() {
     outWorldPos = worldPos.xyz;
     outNormal = mat3(push.model) * inNormal;
     outAo = inAo;
+    outModelPos = inPosition;
+    outModelNormal = inNormal;
 }

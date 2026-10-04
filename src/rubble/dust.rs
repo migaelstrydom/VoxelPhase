@@ -1,22 +1,28 @@
 //! A fragment too small to be anything else, crumbling where it broke, and
 //! scree crumbling where it lands.
 
+use nalgebra::Vector3;
+
 use crate::particles::{ParticleEffectType, ParticleEmitter};
 use crate::terrain::Fragment;
 
-/// How big a crumble is: what it is made of, counted in samples.
+/// How big a crumble is, counted in samples, and what colour.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CrumbleSize {
     pub samples: usize,
     /// Edge of one sample, in metres.
     pub voxel_size: f32,
+    /// The colour of what it is mostly made of.
+    pub colour: Vector3<f32>,
 }
 
 impl CrumbleSize {
     pub fn of(fragment: &Fragment) -> Self {
+        let [r, g, b, _] = fragment.material().color();
         Self {
             samples: fragment.sample_count(),
             voxel_size: fragment.voxel_size(),
+            colour: Vector3::new(r, g, b),
         }
     }
 }
@@ -56,6 +62,7 @@ impl Crumble {
         ParticleEmitter::new(ParticleEffectType::Debris)
             .with_burst(flecks.clamp(self.min_flecks, self.max_flecks))
             .with_scale(self.scale_per_voxel_metre * size.voxel_size.min(1.0))
+            .with_colour(size.colour)
             .with_lifetime(EMITTER_LIFETIME)
     }
 }
