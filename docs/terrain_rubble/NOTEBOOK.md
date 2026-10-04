@@ -535,3 +535,37 @@ Garden at (84.4, 50.5), the cliff lip, with synchronization validation.
   they land. `rubble_spawn` (grade, mesh, AO) 0.7 ms for the blast. No
   validation or synchronization messages. A snapshot 0.23 s after the blast
   shows the lip's grass-topped pieces in the air with the terrain's texture.
+
+## E22. Boulders on the garden (2026-10-04)
+
+**Question.** Does every boulder, made a body of carved bricks, come to rest
+in the world without starting inside the ground?
+
+**Setup.** `rubble_viewer all`. After each blast and remesh, the blast's
+boulders are placed in a fresh `PhysicsWorld` and stepped at the game's
+cadence (60 Hz, 1/240 s substeps) on the terrain, the blast's shove thrown on
+the first frame, for up to 12 s. A boulder is judged ejected if after its
+first frame it is more than 5 mm from where free flight (the shove's velocity
+and gravity, integrated as the solver does) would put it: the solver resolves
+an overlap by moving the body, not by adding energy, so an energy check (tried
+first) cannot see one. Probes, since removed, measured mesh vertices and the
+remeshed terrain's vertices against each boulder's bricks.
+
+**Result.**
+
+- Bricks from sample cubes: the median mesh vertex sat 0.39 voxels inside the
+  brick faces (R25). Fitted to the mesh: within 0.1 voxels (the inset).
+- With bricks overlapping the ground by 0.6 voxels (inset set to -0.6), the
+  energy check flagged nothing; the drift check flags them.
+- At the real inset, three boulders were ejected, by up to 6.6 cm: their
+  bricks held ground samples, up to 1.2 voxels deep (R26). With ground-aware
+  shaping none does, and one remaining boulder drifted 9 mm. With its spin
+  set to zero the drift was under 0.01 mm: its end swung into the ground
+  (R27).
+- Now: 11 boulders across 9 scenarios, 1–11 bricks each, all at rest within
+  1.3–5.6 s, dropping 1.3–9.7 m. A blast's shove moves a boulder of tens of
+  tonnes by millimetres a second, so they fall where they broke.
+- `RubblePlanner::plan` for a blast with a boulder: 0.3–5 ms (R28).
+- `render_perf` on the garden's columns, with synchronization validation: no
+  messages, but a grenade dropped from above at a column's foot cratered
+  beside it without cutting it loose, so this run saw no boulder drawn.

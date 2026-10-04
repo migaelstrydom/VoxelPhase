@@ -6,12 +6,13 @@ to rest is then deposited back into the voxel field as new terrain.
 
 **Status:** Phase 1 is on `main` since 2026-10-04 (`src/terrain/fragment.rs`, `src/terrain/split_race.rs`, `src/rubble/`,
 `src/rubble_viewer/`, the play-test level `levels/rubble_garden.level.ron`):
-every fragment crumbles into dust. Phase 2 (scree) is on the `rubble-phase2`
-branch, play-tested 2026-10-04: fragments are graded, dust crumbles, and
-everything else falls as scree drawn with its own marching-cubes mesh and the
-terrain's texture; boulders fly as scree until Phase 3. A boulder crumbling
-where it lands reads as vanishing, so the branch goes to `main` only with
-Phase 3. Phases 3–5 are design
+every fragment crumbles into dust. Phases 2 (scree) and 3 (boulders) are on
+the `rubble-phase2` branch: fragments are graded, dust crumbles, scree falls
+drawn with its own marching-cubes mesh and the terrain's texture, and boulders
+are rigid bodies of carved bricks that tumble, land and sleep. Phase 2 was
+play-tested 2026-10-04; a boulder crumbling where it landed read as vanishing,
+so the branch goes to `main` only with Phase 3, which is awaiting its
+play-test. Phases 4–5 are design
 only. The play-test
 level turned up problems that blocked the design: pieces longer than about
 3 m never fell (R1), and box edges read as loose strips (R3, R4). Those are
@@ -405,6 +406,30 @@ plane. A brick is built from those:
 `split_hull` already refuses wafers and slivers, so a degenerate cut is
 skipped, never panicked on.
 
+As built (Phase 3), simpler and in two ways different (`rubble/brick_shaper.rs`,
+E22):
+
+- No normal clustering. Each brick is the 26-sided hull (box, twelve edge and
+  eight corner bevels) of what its cell holds: its samples, the mesh vertices
+  on their edges, and the midpoints to the samples of the cells it meets. It
+  is fitted to the **mesh**, not to the samples taken as cubes: those held a
+  resting boulder half a voxel off the ground (ISSUES.md R25). Every face
+  stands in by the inset, 0.1 voxels.
+- The bricks know the ground. A fragment records the samples of its block
+  that were solid but not its own (`Sample::Obstacle` in `terrain::Occupancy`).
+  A cell whose brick holds one, or the midpoint to a neighbour, is split
+  first, whatever its overcover; past the budget it is cut back with a plane.
+  Without this a convex brick reached into the ground a column or slab broke
+  from, and the solver threw the body out (R26).
+
+The body (`rubble/boulder.rs`) is made at the mesh's origin with one hull
+collider per brick, its density set so it weighs what its samples do, and is
+recentred on its colliders; the mesh follows the move. It starts still but
+spinning, so it is awake, and the shove queued for the next physics step
+throws it as the design below says. A long piece's spin is held so its
+furthest point turns no faster than 1.5 m/s: at a pebble's rate a boulder's
+end swung into the ground in its first frame (R27).
+
 ### Spawning
 
 The frame order already does what spawning needs:
@@ -776,7 +801,7 @@ Each phase is shippable on its own and checked with the existing tools.
 |---|---|---|
 | **1. Finder + dust** ✓ | `Crater`/`Search`/`cut_loose`, the region grown by `split_race`; every fragment crumbles into a burst of the blast's debris effect, scaled down (a material-coloured puff waits for Phase 2). | 21 unit tests in `terrain::fragment`, one per rule, each shown to fail with its rule removed. `rubble_viewer` (`cargo test --lib rubble_viewer`): every scenario, with "nothing more standing free, nothing more paper-thin after any blast" as the invariant. `terrain_perf`: one `cut loose` stage, fingerprints unchanged on sweeps that cut nothing loose. |
 | **2. Scree** (branch) | `Grade`, `FallingScree`, render mesh from the fragment's own marching cubes, the anchored projection. | Unit tests: grading, flight, the mesh bit-identical to the ground's. `rubble_viewer`: every scree lands, none on its first frame. `render_perf` during a blast: 3 scree draws, `rubble_spawn` 0.7 ms, no validation errors. Play-test owed. |
-| **3. Boulders** | Brick shaper, compound bodies, debris budget. | Unit tests on the shaper (disjoint bricks, total volume within 30% of the voxel volume, never a refused hull panic). `physics_fuzz`-style seeded blasts: energy, finiteness. `physics_perf`: cost of a cliff collapse. |
+| **3. Boulders** (branch) | Brick shaper, compound bodies, debris budget, at most 8 boulders a blast. | Unit tests on the shaper (every sample in one brick, the surface within the inset, disjoint bricks, volume no more than 30% over, 300 seeded lumps without a refused hull). `rubble_viewer`: every boulder comes to rest, none is moved off its free flight in its first frame (E22). Spawn cost over budget (R28). Play-test owed. |
 | **4. Deposition** | `TerrainWorld::deposit` with `DEPOSIT_BIAS` and its tests first, then `SettleSystem` and its conditions. | Volume conserved to within 1% at random poses; surface error within the measured table. `level_viewer` before/after. Water re-lays: a `water_viewer` scenario where a deposited boulder dams a channel. |
 | **5. Necks** | Part 6. | A test overhang that drops when its neck is cut. |
 
@@ -786,13 +811,10 @@ Design risks, each with the phase that has to close it. Problems found by
 building and running it are in [ISSUES.md](ISSUES.md).
 
 
-- **A world without a renderer (Phase 3).** While fragments only crumble into
-  dust, `rubble_viewer` calls `TerrainWorld::detonate` directly, as the
-  explosion system does. Once fragments are bodies it needs the game's
-  simulation systems in the game's order without `RenderSystem`, and
-  `GameWorld::assemble` takes a `Renderer` and the GPU texture and resource
-  managers. The preferred fix is to split the dispatcher builder so the
-  simulation part can be built alone, which the game and the tool then share.
+- **A world without a renderer (Phase 3).** Settled for now: `rubble_viewer`
+  steps a `PhysicsWorld` of each blast's boulders directly against the
+  remeshed terrain, with the same planner and body builder as the game, and
+  needs no ECS. Phase 4's settling may need the game's systems in order.
 - **The volume ledger (Phase 3).** With dust as the only outcome there is
   nothing for a ledger to follow: the unit tests check that the samples lifted
   are exactly the samples the fragments carry. The ledger arrives with bodies.
@@ -804,8 +826,10 @@ building and running it are in [ISSUES.md](ISSUES.md).
   value that does not erode sound terrain, and the unit tests' weak bars are
   what it still catches alone.
 - **A per-blast fragment cap (Phase 3).** One blast through a honeycomb can
-  free dozens of pieces. Past `MAX_BOULDERS_PER_BLAST`, the smallest are
-  downgraded to scree. The cap is set from `physics_perf`'s `cliff_collapse`.
+  free dozens of pieces. Past `RubblePlanner::max_boulders` (8, a starting
+  value), the smallest are downgraded to scree. No scenario makes more than
+  one boulder a blast yet; the cap still wants setting from a measured
+  collapse.
 
 - **Terrain shading on a moving mesh.** Both draw paths use the same `Vertex`
   (colour, normal, AO, surface character) and `triangle.frag`, so a

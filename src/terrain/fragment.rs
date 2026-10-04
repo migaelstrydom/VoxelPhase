@@ -836,6 +836,9 @@ pub struct Fragment {
     pose: Isometry3<f32>,
     /// How many of the block's samples belong to the fragment.
     samples: usize,
+    /// Block samples that were solid but not the fragment's: the ground it
+    /// broke from, or another piece. They read as air in `voxels`.
+    obstacles: Vec<[usize; 3]>,
 }
 
 impl Fragment {
@@ -859,6 +862,7 @@ impl Fragment {
         // drew it. Solid that is not the piece (the ground it broke from,
         // another piece) becomes air, and the break face closes against it.
         let mut voxels = VoxelBlock::air(own);
+        let mut solid_around = Vec::new();
         let [nx, ny, nz] = own.dims();
         for x in 0..nx {
             for y in 0..ny {
@@ -867,7 +871,9 @@ impl Fragment {
                         continue;
                     };
                     let around = region.get(rx, ry, rz);
-                    if !around.is_solid() {
+                    if around.is_solid() {
+                        solid_around.push([x, y, z]);
+                    } else {
                         voxels.set(x, y, z, around);
                     }
                 }
@@ -877,10 +883,15 @@ impl Fragment {
             let at = [0, 1, 2].map(|a| c[a] - lo[a] + FRAGMENT_PADDING);
             voxels.set(at[0], at[1], at[2], region.get(c[0], c[1], c[2]));
         }
+        let obstacles = solid_around
+            .into_iter()
+            .filter(|&[x, y, z]| !voxels.get(x, y, z).is_solid())
+            .collect();
         Self {
             voxels,
             pose,
             samples: piece.len(),
+            obstacles,
         }
     }
 
@@ -960,6 +971,11 @@ impl Fragment {
             }
         }
         counts
+    }
+
+    /// Block samples that were solid but not its own: what it broke from.
+    pub(super) fn obstacles(&self) -> &[[usize; 3]] {
+        &self.obstacles
     }
 
     /// Its samples, on the lattice it was cut from, in a block of their own.

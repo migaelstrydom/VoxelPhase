@@ -4,11 +4,16 @@
 //!   ExplosionSystem ──TerrainWorld::detonate──▶ fragments + the blast's shove
 //!                                                   │ RubbleQueue
 //!   RubbleSpawnSystem ◀─────────────────────────────┘
-//!     GradeRules::grade(Measure::of(fragment))
+//!     RubblePlanner::plan(cut), one blast at a time
+//!       GradeRules::grade(Measure::of(fragment))
 //!       ├── Dust    ──▶ a crumble emitter at its centroid
-//!       └── Scree   ──▶ FallingScree + TerrainMeshInstance, thrown by the
-//!           Boulder      blast's shove (boulders fly as scree until they
-//!                        become bodies, Phase 3)
+//!       ├── Scree   ──▶ FallingScree + TerrainMeshInstance, thrown by the
+//!       │               blast's shove
+//!       └── Boulder ──▶ BrickShaper ──▶ a body in the physics world
+//!                       + TerrainMeshInstance + Debris; the shove queued
+//!                       for the next physics step throws it. Past
+//!                       `max_boulders` in one blast, the smallest fall as
+//!                       scree.
 //! ```
 
 use std::sync::Arc;
@@ -18,23 +23,27 @@ use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use specs::{Builder, Entities, LazyUpdate, Read, System, Write};
 
+use super::boulder::Boulder;
+use super::brick_shaper::BrickShaper;
 use super::dust::{Crumble, CrumbleSize};
 use super::grade::{Grade, GradeRules, Measure};
 use super::scree::{FallingScree, Flight};
-use crate::components::{Orientation, Position, TerrainMeshInstance};
+use crate::components::{Orientation, Position, RigidBodyComponent, TerrainMeshInstance, Velocity};
+use crate::fracture::Debris;
 use crate::model::{MeshPrimitive, Model, ModelPart};
 use crate::physics::PhysicsImpulse;
 use crate::rendering::material::MaterialId;
+use crate::systems::PhysicsResource;
 use crate::terrain::{Fragment, FragmentMesh};
 
-/// A fragment and the blast that cut it loose.
+/// What one blast cut loose.
 pub struct Cut {
-    pub fragment: Fragment,
     /// The shove the blast gave everything around it.
     pub shove: PhysicsImpulse,
+    pub fragments: Vec<Fragment>,
 }
 
-/// Fragments cut loose this frame, waiting to be turned into rubble.
+/// Blasts this frame, waiting for what they cut loose to become rubble.
 #[derive(Default)]
 pub struct RubbleQueue {
     pending: Vec<Cut>,
@@ -43,16 +52,10 @@ pub struct RubbleQueue {
 impl RubbleQueue {
     /// Queue what one blast, which shoved its surroundings with `shove`, cut
     /// loose.
-    pub fn push_blast(
-        &mut self,
-        shove: PhysicsImpulse,
-        fragments: impl IntoIterator<Item = Fragment>,
-    ) {
-        self.pending.extend(
-            fragments
-                .into_iter()
-                .map(|fragment| Cut { fragment, shove }),
-        );
+    pub fn push_blast(&mut self, shove: PhysicsImpulse, fragments: Vec<Fragment>) {
+        if !fragments.is_empty() {
+            self.pending.push(Cut { shove, fragments });
+        }
     }
 
     pub fn drain(&mut self) -> std::vec::Drain<'_, Cut> {
@@ -67,6 +70,11 @@ pub struct Launch {
     /// tumble, so that a shelf does not fall as a flat card.
     pub min_spin: f32,
     pub max_spin: f32,
+    /// The fastest a piece's furthest point turns as it breaks away, m/s,
+    /// which slows the spin of a long one. A slab tumbling at a pebble's
+    /// rate reads as weightless, and a boulder's end would swing through
+    /// the gap it starts with from the ground in its first frame.
+    pub max_edge_speed: f32,
     /// The fastest a piece leaves the blast, m/s. A sliver weighs little, and
     /// the shove that sends a barrel a few metres would send it off the map.
     pub max_speed: f32,
@@ -77,19 +85,22 @@ impl Default for Launch {
         Self {
             min_spin: 0.5,
             max_spin: 3.0,
+            max_edge_speed: 1.5,
             max_speed: 12.0,
         }
     }
 }
 
 impl Launch {
-    /// How `fragment`, of `mass` kg with its centroid at `origin`, leaves the
-    /// blast: its velocity and its spin.
+    /// How a piece of `mass` kg with its centroid at `origin` and its
+    /// furthest point `reach` metres from it leaves the blast: its velocity
+    /// and its spin.
     fn of(
         &self,
         shove: &PhysicsImpulse,
         mass: f32,
         origin: Point3<f32>,
+        reach: f32,
         rng: &mut impl Rng,
     ) -> (Vector3<f32>, Vector3<f32>) {
         let velocity = shove
@@ -103,7 +114,10 @@ impl Launch {
         )
         .try_normalize(1e-3)
         .unwrap_or(Vector3::y());
-        (velocity, axis * rng.gen_range(self.min_spin..self.max_spin))
+        let spin = rng
+            .gen_range(self.min_spin..self.max_spin)
+            .min(self.max_edge_speed / reach.max(f32::EPSILON));
+        (velocity, axis * spin)
     }
 }
 
@@ -120,6 +134,8 @@ pub enum Plan {
         mesh: FragmentMesh,
         size: CrumbleSize,
     },
+    /// A body.
+    Boulder(Boulder),
 }
 
 /// Decides what each fragment becomes and how it leaves the blast. Shared by
@@ -128,6 +144,11 @@ pub enum Plan {
 pub struct RubblePlanner {
     pub grades: GradeRules,
     pub launch: Launch,
+    pub bricks: BrickShaper,
+    /// Most boulders one blast makes. A blast through a honeycomb can cut
+    /// dozens of pieces loose, and each body costs the solver every frame it
+    /// moves; the smallest past the cap fall as scree.
+    pub max_boulders: usize,
     rng: StdRng,
 }
 
@@ -136,38 +157,82 @@ impl Default for RubblePlanner {
         Self {
             grades: GradeRules::default(),
             launch: Launch::default(),
+            bricks: BrickShaper::default(),
+            max_boulders: 8,
             rng: StdRng::seed_from_u64(SPIN_SEED),
         }
     }
 }
 
 impl RubblePlanner {
-    /// What `cut` becomes. Boulders fly as scree until they become bodies.
-    pub fn plan(&mut self, cut: &Cut) -> Plan {
-        let fragment = &cut.fragment;
+    /// What each of `cut`'s fragments becomes, in order.
+    pub fn plan(&mut self, cut: &Cut) -> Vec<Plan> {
+        let mut grades: Vec<Grade> = cut
+            .fragments
+            .iter()
+            .map(|f| self.grades.grade(Measure::of(f)))
+            .collect();
+        let mut boulders: Vec<usize> = (0..grades.len())
+            .filter(|&i| grades[i] == Grade::Boulder)
+            .collect();
+        boulders.sort_by(|&a, &b| {
+            cut.fragments[b]
+                .volume()
+                .total_cmp(&cut.fragments[a].volume())
+        });
+        for &i in boulders.iter().skip(self.max_boulders) {
+            grades[i] = Grade::Scree;
+        }
+        cut.fragments
+            .iter()
+            .zip(grades)
+            .map(|(fragment, grade)| self.plan_one(fragment, grade, &cut.shove))
+            .collect()
+    }
+
+    fn plan_one(&mut self, fragment: &Fragment, grade: Grade, shove: &PhysicsImpulse) -> Plan {
         let size = CrumbleSize::of(fragment);
         let dust = || Plan::Dust {
             at: fragment.world_centroid(),
             size,
         };
-        match self.grades.grade(Measure::of(fragment)) {
-            Grade::Dust => dust(),
-            Grade::Scree | Grade::Boulder => {
-                let mesh = fragment.mesh();
-                if mesh.indices.is_empty() {
-                    return dust();
-                }
-                let mass = fragment.volume() * fragment.material().mass_density();
-                let (velocity, spin) = self.launch.of(&cut.shove, mass, mesh.origin, &mut self.rng);
-                let flight = Flight::new(
-                    mesh.origin,
-                    velocity,
-                    spin,
-                    mesh.vertices.iter().map(|v| v.pos),
-                );
-                Plan::Scree { flight, mesh, size }
-            }
+        if grade == Grade::Dust {
+            return dust();
         }
+        let mesh = fragment.mesh();
+        if mesh.indices.is_empty() {
+            return dust();
+        }
+        let mass = fragment.volume() * fragment.material().mass_density();
+        let reach = mesh
+            .vertices
+            .iter()
+            .map(|v| v.pos.norm())
+            .fold(0.0, f32::max);
+        let (velocity, spin) = self
+            .launch
+            .of(shove, mass, mesh.origin, reach, &mut self.rng);
+        if grade == Grade::Boulder {
+            return Plan::Boulder(Boulder {
+                bricks: self.bricks.shape(
+                    &fragment.occupancy(),
+                    mesh.vertices.iter().map(|v| mesh.origin + v.pos),
+                ),
+                mesh,
+                mass,
+                spin,
+                material: fragment.material(),
+                volume: fragment.volume(),
+                size,
+            });
+        }
+        let flight = Flight::new(
+            mesh.origin,
+            velocity,
+            spin,
+            mesh.vertices.iter().map(|v| v.pos),
+        );
+        Plan::Scree { flight, mesh, size }
     }
 }
 
@@ -179,27 +244,52 @@ pub struct RubbleSpawnSystem {
 }
 
 impl<'a> System<'a> for RubbleSpawnSystem {
-    type SystemData = (Entities<'a>, Read<'a, LazyUpdate>, Write<'a, RubbleQueue>);
+    type SystemData = (
+        Entities<'a>,
+        Read<'a, LazyUpdate>,
+        Write<'a, RubbleQueue>,
+        Write<'a, PhysicsResource>,
+    );
 
-    fn run(&mut self, (entities, lazy, mut queue): Self::SystemData) {
+    fn run(&mut self, (entities, lazy, mut queue, mut physics): Self::SystemData) {
         for cut in queue.drain() {
-            match self.planner.plan(&cut) {
-                Plan::Dust { at, size } => {
-                    lazy.create_entity(&entities)
-                        .with(Position(at.coords))
-                        .with(self.crumble.emitter(size))
-                        .build();
-                }
-                Plan::Scree { flight, mesh, size } => {
-                    lazy.create_entity(&entities)
-                        .with(Position(mesh.origin.coords))
-                        .with(Orientation::default())
-                        .with(TerrainMeshInstance {
-                            anchor: mesh.origin.coords,
-                            model: model_of(mesh),
-                        })
-                        .with(FallingScree { flight, size })
-                        .build();
+            for plan in self.planner.plan(&cut) {
+                match plan {
+                    Plan::Dust { at, size } => {
+                        lazy.create_entity(&entities)
+                            .with(Position(at.coords))
+                            .with(self.crumble.emitter(size))
+                            .build();
+                    }
+                    Plan::Scree { flight, mesh, size } => {
+                        lazy.create_entity(&entities)
+                            .with(Position(mesh.origin.coords))
+                            .with(Orientation::default())
+                            .with(TerrainMeshInstance {
+                                anchor: mesh.origin.coords,
+                                model: model_of(mesh),
+                            })
+                            .with(FallingScree { flight, size })
+                            .build();
+                    }
+                    Plan::Boulder(boulder) => {
+                        let volume = boulder.volume;
+                        let placed = boulder.place(&mut physics.world);
+                        let entity = lazy
+                            .create_entity(&entities)
+                            .with(Position(placed.centre.coords))
+                            .with(Velocity(Vector3::zeros()))
+                            .with(Orientation::default())
+                            .with(RigidBodyComponent(placed.body))
+                            .with(TerrainMeshInstance {
+                                anchor: placed.centre.coords,
+                                model: model_of(placed.mesh),
+                            })
+                            .build();
+                        // A boulder came off no object, so it is its own
+                        // origin: only the budget's overall cap applies.
+                        lazy.insert(entity, Debris::new(entity, volume));
+                    }
                 }
             }
         }

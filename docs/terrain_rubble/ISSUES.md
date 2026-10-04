@@ -32,12 +32,16 @@ An issue's **status** is one of:
 | [R16](#r16) | The search stopped one voxel short of what the carve changes | fixed `477795b` | medium |
 | [R17](#r17) | Cut loose costs up to 24 ms a grenade on `skyway` | fixed `45b48fa` | medium |
 | [R18](#r18) | Scree thrown into the rock over it crumbled on its first frame | fixed (branch `rubble-phase2`) | medium |
-| [R19](#r19) | Boulders fly as scree and crumble where they land | open, Phase 3 | medium |
+| [R19](#r19) | Boulders fly as scree and crumble where they land | fixed (branch `rubble-phase2`), Phase 3 | medium |
 | [R20](#r20) | Reflection probes draw a piece's texture by world position | fixed (branch `rubble-phase2`) | low |
 | [R21](#r21) | Dust is not in the material's colour | fixed (branch `rubble-phase2`) | low |
 | [R22](#r22) | Falling pieces are drawn thinner than they stood | fixed (branch `rubble-phase2`) | high |
 | [R23](#r23) | A crumble is a few tiny flecks in one colour, whatever crumbled | fixed (branch `rubble-phase2`) | low |
 | [R24](#r24) | A blast's frame is a visible hitch | open, optimisation pass at the end | low |
+| [R25](#r25) | Bricks built from sample cubes held a boulder half a voxel off the ground | fixed (branch `rubble-phase2`) | high |
+| [R26](#r26) | A boulder's convex brick reached into the ground it broke from | fixed (branch `rubble-phase2`) | high |
+| [R27](#r27) | A long boulder's spin swung its end into the ground on its first frame | fixed (branch `rubble-phase2`) | medium |
+| [R28](#r28) | Planning a blast with boulders costs up to 5 ms | open, optimisation pass (R24) | low |
 
 ---
 
@@ -403,7 +407,10 @@ falls on; one glancing for more than six frames running crumbles where it is.
 <a id="r19"></a>
 ## R19. Boulders fly as scree and crumble where they land
 
-**Status:** open; Phase 3 is the fix. **Found by:** design, seen in E21.
+**Status:** fixed on branch `rubble-phase2` (Phase 3): a boulder is a rigid
+body of carved bricks (`rubble/brick_shaper.rs`, `rubble/boulder.rs`) that
+tumbles, lands and sleeps; the debris budget takes it in the end, until Phase 4
+deposits it. **Found by:** design, seen in E21.
 
 Until boulders are bodies, every fragment graded `Boulder` flies as scree. A
 6 m bridge deck (465 samples) or the table slab (512) falls, lands and bursts
@@ -482,3 +489,57 @@ Garden's cliff lip (E21): the blast frame takes 37 ms, of which
 `terrain_update` (remesh) is 20 ms and `explosion` (carve and cut loose) 8 ms;
 `rubble_spawn` (grade, mesh, AO) is 0.7 ms. Start there, and look again once
 Phase 3 adds bodies.
+
+<a id="r25"></a>
+## R25. Bricks built from sample cubes held a boulder half a voxel off the ground
+
+**Status:** fixed on branch `rubble-phase2`. **Found by:** E22, before the
+first play-test.
+
+The first brick shaper took every sample as a cube 0.8 voxels across and
+hulled those. The drawn surface runs close to the outermost samples (the
+median mesh vertex sat 0.39 voxels inside the brick faces), so a resting
+boulder would hover about 0.2 m at 0.5 m voxels. Bricks are now fitted to the
+fragment's mesh vertices, stood in by the inset: every vertex is within 0.1
+voxels of a brick face.
+
+<a id="r26"></a>
+## R26. A boulder's convex brick reached into the ground it broke from
+
+**Status:** fixed on branch `rubble-phase2`. **Found by:** `rubble_viewer`'s
+new first-frame invariant (E22).
+
+A brick is convex and a fragment need not be. A column cut at its foot, or a
+table slab, has the ground in a concavity of its hull, and the solver pushed
+the body out on its first step: 6.6 cm up for a garden column. A fragment now
+records which samples of its block were solid but not its own
+(`Sample::Obstacle`); a cell whose brick holds one of them, or the midpoint to
+a neighbour, is split first, and one still holding one when the budget is
+spent is cut back with a plane. The nearest remeshed terrain vertex to any
+brick is now 0.1 voxels or more outside it.
+
+Not covered: the ground's surface can lie further than half a voxel from its
+sample when the air beside it carries a mild density (up to 0.83 voxels at
+-0.2). No scenario puts a brick there.
+
+<a id="r27"></a>
+## R27. A long boulder's spin swung its end into the ground on its first frame
+
+**Status:** fixed on branch `rubble-phase2`. **Found by:** E22.
+
+Pieces leave a blast with a random spin of 0.5–3 rad/s. A 5 m boulder at
+3 rad/s swings its end 0.25 m in one frame, through the 0.05 m gap it starts
+with. With the spin set to zero the first-frame drift vanished. `Launch` now
+caps the speed of a piece's furthest point at 1.5 m/s, which leaves small
+scree as it was and slows a long boulder to a fraction of a radian a second.
+
+<a id="r28"></a>
+## R28. Planning a blast with boulders costs up to 5 ms
+
+**Status:** open; for the optimisation pass (R24). **Found by:** E22.
+
+`RubblePlanner::plan` (grade, marching cubes and AO for every piece, bricks
+for boulders) takes 0.3–5 ms for a blast that makes a boulder, against a
+design budget of 1 ms a boulder. The worst is `garden_long_bridge` (431
+samples). Each shaper split rebuilds both halves' hulls and rescans their
+ground points; the mesh is the other half.

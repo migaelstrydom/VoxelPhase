@@ -14,7 +14,7 @@ pub fn report(run: &Run, verdict: &Result<(), Vec<String>>) -> String {
     );
     let _ = writeln!(
         out,
-        "{:>3} {:>24} {:>6} {:>8} {:>10} {:>8} {:>8} {:>5} {:>6} {:>7}",
+        "{:>3} {:>24} {:>6} {:>8} {:>10} {:>8} {:>8} {:>5} {:>6} {:>7} {:>8}",
         "#",
         "blast at",
         "frags",
@@ -24,7 +24,8 @@ pub fn report(run: &Run, verdict: &Result<(), Vec<String>>) -> String {
         "thin",
         "dust",
         "landed",
-        "expired"
+        "expired",
+        "boulders"
     );
     for (index, record) in run.blasts.iter().enumerate() {
         let c = record.blast.centre;
@@ -33,7 +34,7 @@ pub fn report(run: &Run, verdict: &Result<(), Vec<String>>) -> String {
         };
         let _ = writeln!(
             out,
-            "{:>3} {:>24} {:>6} {:>8} {:>10.3} {:>8} {:>8} {:>5} {:>6} {:>7}",
+            "{:>3} {:>24} {:>6} {:>8} {:>10.3} {:>8} {:>8} {:>5} {:>6} {:>7} {:>8}",
             index,
             format!("({:.2}, {:.2}, {:.2})", c.x, c.y, c.z),
             record.fragments.len(),
@@ -44,6 +45,7 @@ pub fn report(run: &Run, verdict: &Result<(), Vec<String>>) -> String {
             count(|f| f.fate == Fate::Dust),
             count(|f| matches!(f.fate, Fate::Landed { .. })),
             count(|f| matches!(f.fate, Fate::Expired { .. })),
+            count(|f| f.fate.is_boulder()),
         );
     }
     let _ = writeln!(
@@ -75,6 +77,33 @@ pub fn report(run: &Run, verdict: &Result<(), Vec<String>>) -> String {
             frames.iter().filter(|&&n| n == 1).count(),
             flights.iter().map(|&(_, d)| d).fold(f32::INFINITY, f32::min),
             flights.iter().map(|&(_, d)| d).fold(f32::NEG_INFINITY, f32::max),
+        );
+    }
+    let rests: Vec<(usize, f32)> = run
+        .fragments()
+        .filter_map(|f| match f.fate {
+            Fate::Rested { frames, drop, .. } => Some((frames, drop)),
+            _ => None,
+        })
+        .collect();
+    let boulders = run.fragments().filter(|f| f.fate.is_boulder()).count();
+    if boulders > 0 {
+        let mut frames: Vec<usize> = rests.iter().map(|&(n, _)| n).collect();
+        frames.sort_unstable();
+        let _ = writeln!(
+            out,
+            "boulders: {boulders}, at rest {}, seconds to rest median {:.1} / max {:.1}, \
+             drop min {:.2} m / max {:.2} m",
+            rests.len(),
+            frames
+                .get(frames.len() / 2)
+                .map_or(0.0, |&n| n as f32 / 60.0),
+            frames.last().map_or(0.0, |&n| n as f32 / 60.0),
+            rests.iter().map(|&(_, d)| d).fold(f32::INFINITY, f32::min),
+            rests
+                .iter()
+                .map(|&(_, d)| d)
+                .fold(f32::NEG_INFINITY, f32::max),
         );
     }
     for problem in run.violations() {

@@ -1,14 +1,28 @@
 //! Runs a scenario: builds its terrain, sets off its blasts, audits after each.
 
-use nalgebra::Point3;
+use nalgebra::{Point3, Vector3};
 
 use super::scenario::{Blast, Scenario};
+use crate::debug::DebugLines;
 use crate::explosion::Explosion;
-use crate::rubble::{Cut, Outcome, Plan, RubblePlanner, ScreeRules};
+use crate::physics::{PhysicsImpulse, PhysicsWorld, RigidBodyHandle, SequentialStepper, Stepper};
+use crate::rubble::{Cut, Flight, Outcome, Plan, RubblePlanner, ScreeRules};
 use crate::terrain::{TerrainWorld, VoxelMaterial};
 
-/// The frame rate scree is flown at, as in the game.
+/// The frame rate scree is flown and boulders stepped at, as in the game.
 const FRAME_SECONDS: f32 = 1.0 / 60.0;
+/// The game's physics substep and its cap per frame.
+const PHYSICS_DT: f32 = 1.0 / 240.0;
+const MAX_SUBSTEPS: u32 = 12;
+/// How long a blast's boulders are given to come to rest.
+const REST_SECONDS: f32 = 12.0;
+/// How far below the terrain's bounds a boulder is counted as lost.
+const LOST_MARGIN: f32 = 4.0;
+/// How far a boulder may be from where free flight puts it after its first
+/// frame, in metres. It starts clear of the ground by the bricks' inset, so
+/// it touches nothing in that frame unless it started inside something and
+/// the solver pushed it out, which moves it without adding energy.
+const EJECTION_TOLERANCE: f32 = 0.005;
 
 /// One fragment a blast cut loose, as the report needs it.
 #[derive(Debug, Clone, Copy)]
@@ -30,13 +44,32 @@ pub enum Fate {
     Landed { frames: usize, drop: f32 },
     /// Fell as scree and never landed: out of time, or out of the world.
     Expired { frames: usize },
+    /// Became a boulder and went to sleep `frames` later, `drop` metres below
+    /// where it broke. `ejected` if its first frame left it away from where
+    /// free flight would have.
+    Rested {
+        frames: usize,
+        drop: f32,
+        ejected: bool,
+    },
+    /// Became a boulder and was still moving when time ran out.
+    Restless { ejected: bool },
+    /// Became a boulder and fell out of the world.
+    Lost,
 }
 
-/// What becomes of `cut` in the game, played out against `terrain`.
-fn fate_of(cut: &Cut, planner: &mut RubblePlanner, terrain: &TerrainWorld) -> Fate {
-    let Plan::Scree { mut flight, .. } = planner.plan(cut) else {
-        return Fate::Dust;
-    };
+impl Fate {
+    /// Whether it became a boulder.
+    pub fn is_boulder(&self) -> bool {
+        matches!(
+            self,
+            Fate::Rested { .. } | Fate::Restless { .. } | Fate::Lost
+        )
+    }
+}
+
+/// Where scree on `flight` comes down, against `terrain`.
+fn fly(mut flight: Flight, terrain: &TerrainWorld) -> Fate {
     let rules = ScreeRules::default();
     let floor_y = terrain.bounds().min.y - rules.floor_margin;
     let start = flight.position;
@@ -53,6 +86,118 @@ fn fate_of(cut: &Cut, planner: &mut RubblePlanner, terrain: &TerrainWorld) -> Fa
         }
     }
     unreachable!("a flight ends within its lifetime")
+}
+
+/// A boulder being followed.
+struct Followed {
+    /// Index of its fragment in the blast.
+    index: usize,
+    body: RigidBodyHandle,
+    start: Point3<f32>,
+    /// The velocity the blast's shove gives it.
+    thrown: Vector3<f32>,
+}
+
+impl Followed {
+    /// Where free flight puts it after `substeps` steps of `dt`, integrated
+    /// as the solver does: velocity first, then position.
+    fn flown(&self, substeps: u32, dt: f32, gravity: Vector3<f32>) -> Point3<f32> {
+        let n = substeps as f32;
+        self.start + self.thrown * (n * dt) + gravity * (dt * dt * n * (n + 1.0) / 2.0)
+    }
+}
+
+/// Step one blast's boulders on `terrain` until they all sleep, fall out of
+/// the world or run out of time, the blast's `shove` thrown on the first
+/// frame as the game throws it.
+fn settle(
+    world: &mut PhysicsWorld,
+    followed: &[Followed],
+    shove: PhysicsImpulse,
+    terrain: &TerrainWorld,
+) -> Vec<(usize, Fate)> {
+    let mut stepper = SequentialStepper::new(PHYSICS_DT, MAX_SUBSTEPS);
+    let mut lines = DebugLines::default();
+    let floor_y = terrain.bounds().min.y - LOST_MARGIN;
+    let mut ejected = vec![false; followed.len()];
+    let mut fates: Vec<Option<Fate>> = vec![None; followed.len()];
+    let frames = (REST_SECONDS / FRAME_SECONDS) as usize;
+    for frame in 1..=frames {
+        let shoves = if frame == 1 { vec![shove] } else { Vec::new() };
+        let substeps = stepper
+            .step(world, FRAME_SECONDS, terrain, &shoves, &[], &mut lines)
+            .substeps;
+        let gravity = world.config().gravity;
+        lines.clear();
+        for (k, f) in followed.iter().enumerate() {
+            if fates[k].is_some() {
+                continue;
+            }
+            let Some(body) = world.body(f.body) else {
+                fates[k] = Some(Fate::Lost);
+                continue;
+            };
+            let at = body.position();
+            if frame == 1
+                && (at - f.flown(substeps, PHYSICS_DT, gravity)).norm() > EJECTION_TOLERANCE
+            {
+                ejected[k] = true;
+            }
+            if at.y < floor_y {
+                fates[k] = Some(Fate::Lost);
+                world.remove_body(f.body);
+            } else if world.is_sleeping(f.body) {
+                fates[k] = Some(Fate::Rested {
+                    frames: frame,
+                    drop: f.start.y - at.y,
+                    ejected: ejected[k],
+                });
+            }
+        }
+        if fates.iter().all(Option::is_some) {
+            break;
+        }
+    }
+    followed
+        .iter()
+        .zip(fates)
+        .zip(ejected)
+        .map(|((f, fate), ejected)| (f.index, fate.unwrap_or(Fate::Restless { ejected })))
+        .collect()
+}
+
+/// What becomes of everything `cut` holds, played out against `terrain`.
+fn fates_of(cut: &Cut, planner: &mut RubblePlanner, terrain: &TerrainWorld) -> Vec<Fate> {
+    let mut world = PhysicsWorld::default();
+    let mut followed = Vec::new();
+    let mut fates: Vec<Fate> = planner
+        .plan(cut)
+        .into_iter()
+        .enumerate()
+        .map(|(index, plan)| match plan {
+            Plan::Dust { .. } => Fate::Dust,
+            Plan::Scree { flight, .. } => fly(flight, terrain),
+            Plan::Boulder(boulder) => {
+                let mass = boulder.mass;
+                let placed = boulder.place(&mut world);
+                let thrown = cut
+                    .shove
+                    .impulse_at(placed.centre)
+                    .map_or(Vector3::zeros(), |j| j / mass);
+                followed.push(Followed {
+                    index,
+                    body: placed.body,
+                    start: placed.centre,
+                    thrown,
+                });
+                Fate::Lost
+            }
+        })
+        .collect();
+    for (index, fate) in settle(&mut world, &followed, cut.shove, terrain) {
+        fates[index] = fate;
+    }
+    fates
 }
 
 /// What one blast did.
@@ -87,20 +232,26 @@ impl Run {
 
     /// Breaches of what every run is held to: no blast leaves more terrain
     /// standing free, or more drawn paper-thin, than there was before it; and
-    /// every piece of scree falls clear of where it broke and lands. One that
-    /// lands on its first frame started inside the ground, and one that never
-    /// lands fell through it.
+    /// every piece of scree falls clear of where it broke and lands, and every
+    /// boulder comes to rest in the world without being thrown out of the
+    /// ground. Scree that lands on its first frame started inside the
+    /// ground, and scree that never lands fell through it.
     pub fn violations(&self) -> Vec<String> {
         let mut found = Vec::new();
         for (index, record) in self.blasts.iter().enumerate() {
             for fragment in &record.fragments {
                 let problem = match fragment.fate {
-                    Fate::Landed { frames: 1, .. } => "landed on its first frame",
-                    Fate::Expired { .. } => "never landed",
+                    Fate::Landed { frames: 1, .. } => "scree landed on its first frame",
+                    Fate::Expired { .. } => "scree never landed",
+                    Fate::Rested { ejected: true, .. } | Fate::Restless { ejected: true } => {
+                        "boulder was thrown out of the ground on its first frame"
+                    }
+                    Fate::Restless { .. } => "boulder never came to rest",
+                    Fate::Lost => "boulder fell out of the world",
                     _ => continue,
                 };
                 found.push(format!(
-                    "blast {index}: scree of {} samples at {:?} {problem}",
+                    "blast {index}: {} samples at {:?}: {problem}",
                     fragment.samples, fragment.centroid
                 ));
             }
@@ -143,23 +294,23 @@ pub fn run(scenario: &Scenario) -> Result<Run, String> {
         .blasts
         .iter()
         .map(|&blast| {
-            let shove = Explosion::new(blast.centre).physics_impulse();
-            let fragments = terrain.detonate(blast.centre, &blast.charge);
-            // Scree flies against the terrain as remeshed after the blast.
+            let cut = Cut {
+                shove: Explosion::new(blast.centre).physics_impulse(),
+                fragments: terrain.detonate(blast.centre, &blast.charge),
+            };
+            // Rubble falls on the terrain as remeshed after the blast.
             terrain.update();
-            let fragments = fragments
-                .into_iter()
-                .map(|fragment| {
-                    let cut = Cut { fragment, shove };
-                    let fate = fate_of(&cut, &mut planner, &terrain);
-                    let fragment = &cut.fragment;
-                    FragmentRecord {
-                        samples: fragment.sample_count(),
-                        volume: fragment.volume(),
-                        centroid: fragment.world_centroid(),
-                        material: fragment.material(),
-                        fate,
-                    }
+            let fates = fates_of(&cut, &mut planner, &terrain);
+            let fragments = cut
+                .fragments
+                .iter()
+                .zip(fates)
+                .map(|(fragment, fate)| FragmentRecord {
+                    samples: fragment.sample_count(),
+                    volume: fragment.volume(),
+                    centroid: fragment.world_centroid(),
+                    material: fragment.material(),
+                    fate,
                 })
                 .collect();
             BlastRecord {
