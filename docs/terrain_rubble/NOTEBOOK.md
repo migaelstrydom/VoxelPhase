@@ -341,3 +341,59 @@ now that `Arch` is fixed?
 it as paper-thin, outside the paper rule's reach. R9 does not show in the
 garden. The paper-thin strip the play-test saw is the sub-voxel stalactite,
 there by design.
+
+## E17. A rind is a lip across an edge or a corner (2026-10-04)
+
+**Question.** If a weak sample that marching cubes draws whole may be a lip
+through any of its 26 neighbours, do the R3 edge strips go, and does anything
+that should fall stop falling or any flap come back?
+
+**Setup.** At `75cdbd0` plus `Role::Rind` in `terrain/fragment.rs` (ISSUES.md
+R3, Fix). `rubble_viewer all`, before and after. Two temporary probes, reverted:
+`LIFT_DUMP` made `Search::lift` print every lifted sample, and `LOOSE_DUMP` made
+`Search::loose_samples` print every free sample at each audit. `terrain_perf
+--level levels/rubble_garden.level.ron`, before and after.
+
+**Result.**
+
+| Scenario | Free as authored, before → after | Fragments, before → after |
+|---|---|---|
+| `rim_cusps` | 0 → 0 | 12 → 11; still nothing left floating or paper-thin |
+| `arch_both_legs` | 9 → 0 | 7 → 6, largest 92 → 95 |
+| `arch_one_leg` | 9 → 0 | 4 → 3 |
+| `long_bridge` | 194 → 0 | 17 → 11, largest 465 both |
+| Rubble Garden (every `garden_*`) | 2,493 → 1,186 | as below |
+| `garden_short_bridge` | | 19 → 15, largest 65 → 63 |
+| `garden_long_bridge` | | 19 → 15, largest 461 → 459 |
+| `garden_hill` | | 44 → 33, largest 31 → 2 |
+
+- Paper-thin as authored is 718 in the garden and 24 on `long_bridge`, before
+  and after: the edge strips were never drawn paper-thin.
+- `garden_stalactite_root`, grenade at (22.2, 7.4, 59.0): before, 2 fragments,
+  9 samples. `LIFT_DUMP` showed them all at density 0.01: 8 down the corner of
+  the 0.9 m stalactite at x 23.0–23.5, z 60.5–61.0, and 1 at (21.5, 7.5, 58.0)
+  on the skin of the 1.2 m one. After, nothing falls and paper-thin stays at
+  718. Grenades at the roots: (21.5, 8.0, 59.0) drops nothing; (21.5, 7.6, 59.0)
+  drops the 1.2 m stalactite, 3 fragments, largest 44; (25.0, 8.0, 59.0) and
+  (23.5, 8.0, 61.0) drop 23 samples each. No invariant breaks at any of them.
+- `garden_hill`: blast 18 left one more sample free before; after, blast 10
+  leaves one more (1,186 → 1,187) and blast 18 two more (1,187 → 1,189).
+  `LOOSE_DUMP` puts the new samples at (66.0, 2.5, 63.5), (66.5, 1.5, 64.0) and
+  (66.5, 2.0, 63.5), density 0.02–0.04, drawn whole. Each joins a free piece of
+  35–37 samples, none denser than 0.09, spanning x 65–67, y −0.5–2.5,
+  z 61–64: into the caves, 3.7 m below the blast.
+- `terrain_perf` on the garden: cut loose 0.442 → 0.438 ms mean, 1.194 → 1.214 ms
+  worst. Mesh fingerprint `32799680603a21ed` both.
+- `cargo test --release --lib`: every test passes once the two scenarios are
+  re-pinned. Two new `fragment.rs` tests: `a_box_on_the_lattice_keeps_its_edges`
+  fails with the rind lip limited to faces, and
+  `a_thin_flap_touching_ground_at_an_edge_falls` fails with every weak sample
+  allowed all 26 neighbours. `level_check::rest` fails before and after with the same output.
+
+**Conclusion.** The rind lip removes R3 and with it R4, and `rim_cusps` shows
+no flap coming back. E13's reading of `garden_stalactite_root` was wrong: its
+grenade never dropped a stalactite, and its fragment was R3's strip. The
+scenario now uses (21.5, 7.6, 59.0). The `garden_hill` breaks join a weak-only
+piece the search cannot see the end of; they are R5, now at two blasts.
+
+**Issues.** Closes R3, R4. Updates R5.

@@ -90,8 +90,15 @@ const FRAGMENT_PADDING: usize = 2;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Role {
     Air,
-    /// Solid, but too thin to hold anything up.
+    /// Solid, but too thin to hold anything up: drawn thin across some axis
+    /// out of the paper rule's reach, or a sheet sample near the crater. Kept
+    /// only as a lip on a face of what bears it.
     Weak,
+    /// The skin of a solid that bears: under `BEARING_DENSITY` only because the
+    /// surface runs right past it, and drawn at least `PAPER_THIN` across every
+    /// axis. The edges and corners of a box authored on the lattice are this.
+    /// Kept as a lip on whatever bears it, even across an edge or a corner.
+    Rind,
     /// Weak, and drawn so thin it reads as paper: not even kept as a lip.
     Paper,
     Bearing,
@@ -134,6 +141,23 @@ impl Lattice3 {
     fn on_boundary(&self, i: usize) -> bool {
         let c = self.coords(i);
         (0..3).any(|a| c[a] == 0 || c[a] + 1 == self.dims[a])
+    }
+
+    /// The samples sharing a face, an edge or a corner with `i`: twenty-six,
+    /// fewer at the block's faces.
+    fn surrounding(&self, i: usize) -> impl Iterator<Item = usize> + '_ {
+        let c = self.coords(i);
+        (0..27).filter(|&k| k != 13).filter_map(move |k| {
+            let offset = [k / 9, (k / 3) % 3, k % 3];
+            let mut n = c;
+            for axis in 0..3 {
+                n[axis] = (c[axis] + offset[axis]).checked_sub(1)?;
+                if n[axis] >= self.dims[axis] {
+                    return None;
+                }
+            }
+            Some(self.index(n))
+        })
     }
 
     /// The samples sharing a face with `i`: six, fewer at the block's faces.
@@ -470,7 +494,8 @@ fn read_box(grid: &ChunkGrid, region: &AABB) -> VoxelBlock {
 ///
 /// Near the crater, a weak sample that marching cubes would draw paper-thin is
 /// not kept even as a lip: a lip that thin is the very flap this module exists
-/// to remove.
+/// to remove. A weak sample drawn thick is a rind: the skin of something that
+/// bears, which only reads as weak because the surface runs past it.
 fn classify(block: &VoxelBlock, lattice: &Lattice3, undercut: Option<Undercut>) -> Vec<Role> {
     let solid = |c: [usize; 3]| block.get(c[0], c[1], c[2]).is_solid();
 
@@ -490,8 +515,12 @@ fn classify(block: &VoxelBlock, lattice: &Lattice3, undercut: Option<Undercut>) 
             if voxel.density >= BEARING_DENSITY && !(near && is_sheet(c, lattice, &solid)) {
                 return Role::Bearing;
             }
-            if near && drawn_thickness(block, lattice, c) < PAPER_THIN {
+            let thickness = drawn_thickness(block, lattice, c);
+            if near && thickness < PAPER_THIN {
                 return Role::Paper;
+            }
+            if voxel.density < BEARING_DENSITY && thickness >= PAPER_THIN {
+                return Role::Rind;
             }
             Role::Weak
         })
@@ -546,7 +575,7 @@ fn drawn_thickness(block: &VoxelBlock, lattice: &Lattice3, c: [usize; 3]) -> f32
 }
 
 /// Which samples are held up: those reached through bearing samples from the
-/// block's faces or from a fixed sample, and the weak lip touching them.
+/// block's faces or from a fixed sample, and the lip touching them.
 fn ground(roles: &[Role], lattice: &Lattice3) -> Vec<bool> {
     let mut grounded = vec![false; roles.len()];
     let mut queue: VecDeque<usize> = (0..roles.len())
@@ -567,13 +596,16 @@ fn ground(roles: &[Role], lattice: &Lattice3) -> Vec<bool> {
     }
 
     // One step only: a shelf breaks a voxel out from the cliff, not flush with
-    // it, and a weak strip keeps its root but not its length.
+    // it, and a weak strip keeps its root but not its length. A rind may reach
+    // its bearer across an edge or a corner, as a box's edge on the lattice
+    // does; a thin weak sample may not, or a flap touching ground at a corner
+    // would stay.
+    let held = |n: usize| grounded[n] && roles[n].bears();
     let lip: Vec<usize> = (0..roles.len())
-        .filter(|&i| roles[i] == Role::Weak)
-        .filter(|&i| {
-            lattice
-                .neighbours(i)
-                .any(|n| grounded[n] && roles[n].bears())
+        .filter(|&i| match roles[i] {
+            Role::Weak => lattice.neighbours(i).any(held),
+            Role::Rind => lattice.surrounding(i).any(held),
+            _ => false,
         })
         .collect();
     for i in lip {
@@ -770,6 +802,7 @@ impl Fragment {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::terrain::csg::SURFACE_BAND;
 
     /// Half-width of the ground in every test: wider than any search reads, so
     /// the ground always reaches the search's faces.
@@ -995,6 +1028,33 @@ mod tests {
             1.5,
         );
         assert_eq!(piece_sizes(&s), vec![5]);
+    }
+
+    /// A box authored on the lattice: its faces store `SURFACE_BAND`, so its
+    /// edges and corners touch the bearing core only diagonally. They are its
+    /// rind, and stay with it.
+    #[test]
+    fn a_box_on_the_lattice_keeps_its_edges() {
+        let mut g = ChunkGrid::new(1.0);
+        for c in cells([-4, -1, -4], [4, -1, 4]) {
+            put(&mut g, c, 1.0, VoxelMaterial::Bedrock);
+        }
+        fill(&mut g, [-2, 0, -2], [2, 4, 2], SURFACE_BAND);
+        fill(&mut g, [-1, 0, -1], [1, 3, 1], 1.0);
+        assert_eq!(Search::audit(&g).loose_samples(), 0);
+    }
+
+    /// A weak sample drawn thin, touching what bears only along an edge, is a
+    /// flap: being near is not enough to keep it.
+    #[test]
+    fn a_thin_flap_touching_ground_at_an_edge_falls() {
+        let mut g = ChunkGrid::new(1.0);
+        for c in cells([-4, -1, -4], [4, -1, 4]) {
+            put(&mut g, c, 1.0, VoxelMaterial::Bedrock);
+        }
+        fill(&mut g, [-1, 0, -1], [1, 2, 1], 1.0);
+        put(&mut g, [2, 3, 0], 0.1, VoxelMaterial::Rock);
+        assert_eq!(Search::audit(&g).loose_samples(), 1);
     }
 
     /// Two samples meeting along an edge carry no load between them.

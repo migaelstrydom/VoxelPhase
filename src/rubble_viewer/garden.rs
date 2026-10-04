@@ -154,11 +154,9 @@ fn stalactite_root() -> Scenario {
         name: "garden_stalactite_root",
         description: "garden pavilion: a grenade at the root of the thickest stalactite drops it",
         level: GARDEN,
-        blasts: vec![grenade(22.2, 7.4, 59.0)],
-        known_gap: Some(
-            "open: the stalactite falls, but 11 more samples are left paper-thin than before",
-        ),
-        expect: |run| something_fell(run, 5),
+        blasts: vec![grenade(21.5, 7.6, 59.0)],
+        known_gap: None,
+        expect: |run| something_fell(run, 30),
     }
 }
 
@@ -236,7 +234,7 @@ fn hill_free_for_all() -> Scenario {
         description: "garden hill: 30 seeded grenades into the caves; nothing left may float",
         level: GARDEN,
         blasts,
-        known_gap: Some("open: blast 18 leaves one more sample standing free than before"),
+        known_gap: Some("open (R5): blasts 10 and 18 leave more samples standing free than before"),
         expect: |_| Ok(()),
     }
 }

@@ -196,6 +196,14 @@ Non-bearing solid samples are assigned after the flood fill:
 - A non-bearing sample 6-adjacent to a grounded bearing sample stays in the
   ground. This is the **lip**: a shelf breaks off one voxel out from the cliff,
   not flush with it, which looks like a break rather than a cut.
+- A **rind** sample is a lip across an edge or a corner too: one of its 26
+  neighbours bearing and grounded is enough. A rind is non-bearing only because
+  the surface runs right past it, and marching cubes draws it at least half a
+  voxel thick across every axis. The edges and corners of a box authored on the
+  lattice are rind: their samples store `SURFACE_BAND`, and their only bearing
+  neighbour is diagonal (ISSUES.md R3). A non-bearing sample drawn thinner than
+  that reaches its bearer through a face only, or a flap touching ground at a
+  corner would stay.
 - Every other non-bearing sample joins whichever fragment it touches. Connected
   non-bearing samples that touch no bearing sample form a fragment of their own.
   This is how the floating strips are handled.
@@ -640,7 +648,7 @@ except the filmstrip, which is for looking.
 
 | Module | Tests |
 |---|---|
-| `terrain/fragment.rs` | Hand-built fields, one rule each: the two-carve cusp from the screenshot detaches; a shelf over a crater breaks at a one-voxel lip; a link through an edge only (diagonal) detaches; a pillar reaching the region's edge stays; a sky island with no seed keeps its largest piece; indestructible and segment-bound samples seed. **Conservation:** solid samples before = after + Σ fragments, nothing lost or duplicated. **Gap:** the ground's and the fragment's new surfaces never meet. |
+| `terrain/fragment.rs` | Hand-built fields, one rule each: the two-carve cusp from the screenshot detaches; a shelf over a crater breaks at a one-voxel lip; a link through an edge only (diagonal) detaches; a box on the lattice keeps its edges (rind) while a thin flap touching ground at an edge falls; a pillar reaching the region's edge stays; a sky island with no seed keeps its largest piece; indestructible and segment-bound samples seed. **Conservation:** solid samples before = after + Σ fragments, nothing lost or duplicated. **Gap:** the ground's and the fragment's new surfaces never meet. |
 | `rubble/grade.rs` | Table-driven: dust, scree, boulder, too-big at each boundary. |
 | `rubble/brick_shaper.rs` | Bricks are disjoint; they cover ≥ 95% of the solid samples; total volume within 30% of the voxel volume; at most `MAX_BRICKS`. A seeded property test over 500 random fragments: no refused hull panics, every brick is a valid `ConvexHull`. |
 | `rubble/mesh.rs` | Away from the break, the fragment mesh's triangles are bit-identical to the chunk mesh it was lifted from. |
@@ -703,7 +711,7 @@ first and a second; the rest arrive with bodies):
 
 `cargo test --release --lib rubble_viewer` runs the catalogue, in a few
 seconds. A scenario can record a **known gap**: it is expected to break an
-invariant, and fails when it stops doing so (`garden_stalactite_root`, ISSUES.md R4).
+invariant, and fails when it stops doing so (`garden_hill`, ISSUES.md R5).
 
 **Fuzz:** `rubble_viewer --fuzz <seeds>` sets off seeded random blasts over a
 real level's terrain (`perf::Ground`) with only the invariants as judge, in
