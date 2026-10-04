@@ -99,13 +99,16 @@ impl Search {
     fn take(&mut self, sample: [i32; 3], node: Node) {
         self.frontier.push_back(sample);
         self.samples += 1;
-        for axis in 0..3 {
-            self.lo[axis] = self.lo[axis].min(sample[axis]);
-            self.hi[axis] = self.hi[axis].max(sample[axis]);
-        }
+        self.stretch(sample, sample);
         if node == Node::Anchor {
             self.state = State::Anchored;
         }
+    }
+
+    /// Grow the bounds to take in the box from `lo` to `hi`.
+    fn stretch(&mut self, lo: [i32; 3], hi: [i32; 3]) {
+        self.lo = std::array::from_fn(|axis| self.lo[axis].min(lo[axis]));
+        self.hi = std::array::from_fn(|axis| self.hi[axis].max(hi[axis]));
     }
 
     /// Fold `other` into this search.
@@ -116,10 +119,7 @@ impl Search {
         );
         self.frontier.extend(other.frontier);
         self.samples += other.samples;
-        for axis in 0..3 {
-            self.lo[axis] = self.lo[axis].min(other.lo[axis]);
-            self.hi[axis] = self.hi[axis].max(other.hi[axis]);
-        }
+        self.stretch(other.lo, other.hi);
         if other.state == State::Anchored {
             self.state = State::Anchored;
         }
