@@ -15,13 +15,13 @@ An issue's **status** is one of:
 | # | Issue | Status | Severity |
 |---|---|---|---|
 | [R1](#r1) | Pieces longer than about 3 m never fall at 0.5 m voxels | fixed `f3563f3` | blocks the design |
-| [R2](#r2) | A grenade's crater shrinks with the voxel size | won't fix, for now | high |
+| [R2](#r2) | A grenade's crater shrinks with the voxel size | fixed `61126dd` | high |
 | [R3](#r3) | Box edges on the lattice read as loose, paper-thin strips | fixed `45787be` | medium |
 | [R4](#r4) | A grenade at a stalactite's root leaves 11 more samples paper-thin | fixed `45787be` | medium |
-| [R5](#r5) | A cave-hill blast leaves more samples standing free | pinned | low |
+| [R5](#r5) | Cave-hill blasts leave more samples free or paper-thin | pinned | low |
 | [R6](#r6) | The terrain `Arch` drew its legs as slivers | fixed `f9007f4` | high |
 | [R7](#r7) | `level_viewer --blast` did nothing on a level without water | fixed `f9007f4` | low |
-| [R8](#r8) | The carve costs 343 ms a grenade at 0.125 m voxels | open | medium |
+| [R8](#r8) | A grenade costs 100 ms at 0.125 m voxels | open | medium |
 | [R9](#r9) | Thin curved tubes are joined to themselves only diagonally | not reproduced since R6 | medium |
 | [R10](#r10) | `Caves` generates floating rock and paper-thin skins | open | medium |
 | [R11](#r11) | Clearing rim flaps changed a water test's timing | fixed `477795b` | low |
@@ -74,10 +74,10 @@ racing, or past a 2¹⁸-sample budget.
 <a id="r2"></a>
 ## R2. A grenade's crater shrinks with the voxel size
 
-**Status:** won't fix, for now (decided 2026-10-03). The yield stays per
-voxel. The game may not need resolutions other than `test_arena`'s 1 m, and if
-it comes to need them, this is revisited then. Not introduced by rubble;
-rubble made it visible. **Found by:** E12.
+**Status:** fixed in `61126dd` (E19). First left as won't fix (2026-10-03), then
+fixed once E18 showed the fix was small, with craters made as close as possible
+to the 1 m ones (2026-10-04). Not introduced by rubble; rubble made it visible.
+**Found by:** E12.
 
 **Symptom.** A grenade at 0.5 m voxels cuts about 0.6 m deep. It does not sever
 a 1.5 m column, a 1 m × 1 m deck, or a 1.2 m cliff lip.
@@ -112,6 +112,19 @@ play-test across the levels and a decision on what a grenade should cut.
 
 The work for the agent is small: the line, the two blast tests, five scenarios.
 What takes time is the play-test and deciding what a grenade should cut.
+
+**Fix.** Everything in `effective_radius` is in metres, tuned at 1 m voxels:
+a sample costs toughness × its volume, and a voxel's enclosure is judged over a
+1.5 m probe (`voxel_probe_radius`) sampled at 1 m spacing (`probe_points`).
+Before, the probe was 1.5 voxels, so finer rock read as more buried. Sampling
+it at 1 m keeps its cost at about 19 samples at any resolution. Enclosure is now
+read only for the voxels the budget reaches, not for every solid voxel within
+`max_radius`. At 1 m every crater is unchanged (`test_arena`, `thin_ice`,
+`wrecking_yard` fingerprints), and `detonate` falls from 1.2 to 0.18 ms. On
+flat sand and rock, in the open and buried, the radii at 1, 0.5 and 0.25 m
+agree to within half a 1 m voxel (`a_charge_cuts_the_same_crater_at_any_voxel_size`).
+Three garden scenarios got new grenade sites, and `garden_hill`'s gap moved
+(R5).
 
 <a id="r3"></a>
 ## R3. Box edges on the lattice read as loose, paper-thin strips
@@ -178,15 +191,17 @@ before/after rule judges. Any other way of lifting a piece out there can leave
 paper behind it the same way.
 
 <a id="r5"></a>
-## R5. A cave-hill blast leaves more samples standing free
+## R5. Cave-hill blasts leave more samples free or paper-thin
 
-**Status:** pinned (`garden_hill`, blasts 10 at (66.60, 3.19, 64.11) and 18 at
-(67.55, 2.17, 64.39)). **Found by:** E13.
+**Status:** pinned (`garden_hill`, since R2's fix blasts 9 at (59.98, 8.09,
+54.51) and 16 at (55.95, 4.38, 53.75)). **Found by:** E13.
 
 **Symptom.** Thirty seeded grenades into the cave hill. Before the R3 fix, blast
 18 left one more sample standing free than before it (2,491 → 2,492). Since it
 (E17), blast 10 leaves one more (1,186 → 1,187) and blast 18 two more
-(1,187 → 1,189).
+(1,187 → 1,189). Since R2's fix (E19) the craters are larger and nothing is left
+standing free, but blasts 9 and 16 each leave one more sample paper-thin
+(716 → 717, 715 → 716). Not yet looked at.
 
 **Cause, partly (E17).** The new free samples are rind left by the carve. They
 join a 35-sample piece in which every sample is weak (density at most 0.09),
@@ -224,14 +239,19 @@ both arch scenarios now use 1.5 m blasts.
 `WaterWorld`. It now blasts any level and only stirs water when there is some.
 
 <a id="r8"></a>
-## R8. The carve costs 343 ms a grenade at 0.125 m voxels
+## R8. A grenade costs 100 ms at 0.125 m voxels
 
 **Status:** open. Not introduced by rubble. **Found by:** E5.
 
-`blast::effective_radius` takes 343 ms a grenade on a flat 0.125 m field
+`blast::effective_radius` took 343 ms a grenade on a flat 0.125 m field
 (`terrain_perf --level` on a scratch level), before and after Phase 1 alike.
-The search costs 0.32 ms at the same resolution (E4). If R2 is fixed by
-charging per cubic metre, the crater at fine voxels grows and so does this.
+
+Since R2's fix (E19), `detonate` takes 51 ms there: enclosure is read only for
+the voxels paid for, at a fixed sample count. Most of what is left is listing
+every lattice sample within `max_radius` (8 m, a million samples at 0.125 m)
+before sorting them. `cut loose` takes 41 ms: a grenade now cuts a 1.5 m
+crater there, 12 voxels deep, so the margin hits its 32-voxel cap and the
+search reads about 88³ samples twice. Only `test_arena` has a 0.125 m segment.
 
 <a id="r9"></a>
 ## R9. Thin curved tubes are joined to themselves only diagonally

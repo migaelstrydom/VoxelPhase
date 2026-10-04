@@ -10,8 +10,9 @@ to rest is then deposited back into the voxel field as new terrain.
 every fragment crumbles into dust. Phases 2–5 are design only. The play-test
 level turned up problems that blocked the design: pieces longer than about
 3 m never fell (R1), and box edges read as loose strips (R3, R4). Those are
-fixed, and so is the cut-loose cost on `skyway` (R17). What is still open is
-minor or older than rubble. Issues are tracked in [ISSUES.md](ISSUES.md), and
+fixed, and so is the cut-loose cost on `skyway` (R17). A grenade now cuts the
+same crater at any voxel size (R2). What is still open is minor or older than
+rubble. Issues are tracked in [ISSUES.md](ISSUES.md), and
 what was measured to find them is in [NOTEBOOK.md](NOTEBOOK.md).
 
 ---
@@ -732,7 +733,7 @@ and once understood becomes a scenario.
 
 | Bench | Addition | Initial budget |
 |---|---|---|
-| `terrain_perf` | ✓ `TerrainStage::CutLoose` (survey, search and lift together) and fragments per blast in the table. | Finder ≤ 0.5 ms per blast at 0.5 m voxels, ≤ 2 ms at 0.125 m. Measured: 0.31 ms at 1 m, 0.32 ms at 0.125 m; mean 0.4–0.5 ms on `test_arena`, the Rubble Garden and `skyway`, worst 1.3 ms. |
+| `terrain_perf` | ✓ `TerrainStage::CutLoose` (survey, search and lift together) and fragments per blast in the table. | Finder ≤ 0.5 ms per blast at 0.5 m voxels, ≤ 2 ms at 0.125 m. Measured: 0.4–0.5 ms mean at 1 m (`test_arena`, `skyway`); 0.9–1.7 ms at 0.5 m (`island_sea`, the Rubble Garden), where the craters are now as big as at 1 m; 41 ms at 0.125 m (ISSUES.md R8). |
 | `physics_perf` | A `cliff_collapse` scenario on real terrain: physics stages while the rubble tumbles, after it sleeps, and after it is deposited. | Spawn (mesh + AO + bricks) ≤ 1 ms per boulder. After the deposit, physics cost back to the pre-blast figure. |
 | `render_perf` | `RenderCounters` for rubble draws and mesh uploads, during the existing blast scenario. | Within the frame budget with the per-blast fragment cap reached. |
 
@@ -788,6 +789,9 @@ building and running it are in [ISSUES.md](ISSUES.md).
 - **Thin authored geometry.** The sheet-sample rule only applies near the
   blast, but a grenade on a one-voxel deck now drops a piece of it. That is
   probably wanted. A per-material or per-segment opt-out is cheap if it isn't.
+  The rule's reach grows with the crater: since R2's fix, the garden's 0.7 m
+  lip (one or two samples thick at 0.5 m voxels) comes down in pieces of up to
+  22 samples, not whole.
 - **Carve cost at fine voxels** and **thin curved authored geometry**: now
   issues R8 and R9 in [ISSUES.md](ISSUES.md).
 - **The slivers that this does not remove.** A cusp still joined to bearing

@@ -435,3 +435,44 @@ all` and `terrain_perf` on the Rubble Garden and `island_sea`, reverted.
   23 × 14 × 23 samples; with the old sizing it read 85³ and fails.
 - R2 trial: the results are in ISSUES.md R2, "Size of the fix".
 
+## E19. Craters independent of voxel size (2026-10-04)
+
+**Question.** With the yield charged per cubic metre, what else makes a crater
+depend on the voxel size, what does each part cost, and which scenarios move?
+
+**Setup.** At `efa0e6e`. A unit test detonating `BlastConfig::default` on flat
+sand and rock at 1, 0.5 and 0.25 m, at the surface and 4 m down. `terrain_perf`
+on `scratch/fine.level.ron` (0.125 m), the Rubble Garden, `island_sea`,
+`test_arena`, `thin_ice`, `wrecking_yard`. `rubble_viewer all`.
+
+**Result.**
+
+| Material, charge | Radius at 1 / 0.5 / 0.25 m |
+|---|---|
+| sand, surface | 1.42 / 1.66 / 1.77 |
+| sand, buried | 1.42 / 1.59 / 1.54 |
+| rock, surface | 1.01 / 1.01 / 1.03 |
+| rock, buried | 1.01 / 0.87 / 0.90 |
+
+- Per m³ alone, sand at the surface was 1.42 / 0.79 / 0.39 before it.
+- The voxel probe at 1.5 voxels instead of 1.5 m changes these by nothing at
+  0.5 m and 6–9% at 0.25 m on flat ground. It matters where the geometry is
+  thin, where a 0.75 m probe reads a 1 m ledge as more buried than the 1 m
+  lattice does.
+- Sampled on the grid's own lattice, the 1.5 m probe made `detonate` take
+  1,260 ms on the 0.125 m field. At 1 m spacing: 51 ms.
+- Enclosure read only for the voxels paid for: `detonate` 1.20 → 0.16 ms
+  (`thin_ice`), 1.21 → 0.18 ms (`wrecking_yard`), about 7 → 1.0–1.4 ms at
+  0.5 m. 1 m fingerprints unchanged: `0d5349cdc69f039f`, `041cfc605329ca47`,
+  `1c339fa57c62480d`.
+- `cut loose` at 0.5 m: 0.4–0.5 → 0.9–1.7 ms, a deeper cut getting a wider
+  margin. At 0.125 m: 41 ms (R8).
+- Scenarios. `garden_short_bridge`: grenades at x 8.8 and 13.2 left 1.4 m of a
+  6 m deck, largest piece 35; one grenade at each end (8.2, 13.8) drops 63.
+  `garden_boundary_column`: the crater at y 2.6 left the top 1.4 m, largest 6;
+  at y 1.6, 12. `garden_lip_root`: grenades at x 83.6 cut nothing on the third
+  blast and left nothing free, largest piece 8. On the cliff top at x 84.4: 22,
+  and at 84.8, inside the rock: 41. Taken: 84.4. `garden_tall_columns`, which
+  failed in E18's trial, passes. `garden_hill`: nothing is left free any more;
+  blasts 9 and 16 each leave one more sample paper-thin (R5).
+
