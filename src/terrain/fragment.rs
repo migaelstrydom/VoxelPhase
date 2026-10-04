@@ -57,12 +57,14 @@ use crate::collision::AABB;
 /// thinner than half this fraction of a voxel on either side.
 pub const BEARING_DENSITY: f32 = 0.25;
 
-/// How far past the crater the search reads, as a multiple of its radius,
-/// before the clamp below. Anything reaching further than this is held up by
-/// whatever it reaches, so this is the size of the largest structure a blast
-/// can bring down. Measured on `test_arena` at 1 m voxels: 1.5 costs 0.08 ms a
-/// grenade, 4 costs 0.25 ms, and the 32-voxel ceiling everywhere 5.8 ms.
-const MARGIN_PER_RADIUS: f32 = 3.0;
+/// How far past the samples the carve changes the survey reads, as a multiple
+/// of how deep the cut goes into the solid, before the clamp below. A bearing
+/// piece the carve closes off is read whole however far it reaches (the race
+/// grows the region), so the margin bounds only how far a weak piece is
+/// followed before the edge holds it up. Measured on `test_arena` at 1 m
+/// voxels: 1.5 costs 0.08 ms a grenade, 4 costs 0.25 ms, and the 32-voxel
+/// ceiling everywhere 5.8 ms.
+const MARGIN_PER_DEPTH: f32 = 3.0;
 
 /// Bounds on the margin, in voxels. The floor keeps a small crater's search
 /// from ending on its own rim; the ceiling caps the cost at fine resolutions.
@@ -183,21 +185,86 @@ impl Lattice3 {
 pub(super) struct Crater {
     before: VoxelBlock,
     undercut: Undercut,
+    /// Box around the solid samples the carve changes.
+    changed: AABB,
 }
 
 impl Crater {
     /// Read the samples a crater of `radius` at grid-local `center` will be
     /// searched over. Call before carving it.
+    ///
+    /// The region is sized by what the carve changes, not by its sphere. A
+    /// charge set off in the open spends its budget on the nearest rock, so its
+    /// radius can reach ten metres to take a thin cap off a wall; reading a box
+    /// that size around it costs tens of milliseconds and finds only air.
     pub(super) fn survey(grid: &ChunkGrid, center: Point3<f32>, radius: f32) -> Self {
         let step = grid.voxel_size();
-        let margin =
-            (MARGIN_PER_RADIUS * radius).clamp(MIN_MARGIN_VOXELS * step, MAX_MARGIN_VOXELS * step);
-        let region = AABB::from_center_half_extents(center, Vector3::repeat(radius + margin));
+        let cut = CutExtent::of(grid, center, radius);
+        let margin = (MARGIN_PER_DEPTH * cut.depth)
+            .clamp(MIN_MARGIN_VOXELS * step, MAX_MARGIN_VOXELS * step);
+        let region = AABB::new(
+            cut.changed.min - Vector3::repeat(margin),
+            cut.changed.max + Vector3::repeat(margin),
+        );
         Self {
             before: read_box(grid, &region),
             undercut: Undercut {
                 center,
                 reach: radius + 2.0 * step,
+            },
+            changed: cut.changed,
+        }
+    }
+}
+
+/// Where a carve of `radius` at `center` will change solid samples, and how
+/// deep it will cut into them.
+struct CutExtent {
+    /// Box around the solid samples the carve changes: those within a voxel of
+    /// its sphere, since a density is a clamped distance.
+    changed: AABB,
+    /// The radius less the distance to the nearest solid sample: about the
+    /// radius for a charge on a surface, a voxel or less for one that only
+    /// reaches a wall at the edge of its sphere.
+    depth: f32,
+}
+
+impl CutExtent {
+    fn of(grid: &ChunkGrid, center: Point3<f32>, radius: f32) -> Self {
+        let step = grid.voxel_size();
+        let reach = radius + step;
+        let sphere = read_box(
+            grid,
+            &AABB::from_center_half_extents(center, Vector3::repeat(reach)),
+        );
+        let lattice = *sphere.lattice();
+        let [nx, ny, nz] = lattice.dims();
+        let mut changed: Option<AABB> = None;
+        let mut nearest = f32::INFINITY;
+        for x in 0..nx {
+            for y in 0..ny {
+                for z in 0..nz {
+                    let at = lattice.position(x, y, z);
+                    let distance = (at - center).norm();
+                    if distance > reach || !sphere.get(x, y, z).is_solid() {
+                        continue;
+                    }
+                    nearest = nearest.min(distance);
+                    let point = AABB::new(at, at);
+                    changed = Some(changed.map_or(point, |b| b.merged(&point)));
+                }
+            }
+        }
+        match changed {
+            Some(changed) => Self {
+                changed,
+                depth: (radius - nearest).max(0.0),
+            },
+            // Nothing solid in reach: the carve will change nothing and the
+            // search will not run; keep the region the crater's own box.
+            None => Self {
+                changed: AABB::from_center_half_extents(center, Vector3::repeat(radius)),
+                depth: radius,
             },
         }
     }
@@ -233,12 +300,17 @@ impl Crater {
     fn closed_off(&self, grid: &ChunkGrid) -> Option<AABB> {
         let step = grid.voxel_size();
         let at = |c: [i32; 3]| Point3::new(c[0] as f32, c[1] as f32, c[2] as f32) * step;
+        // Seeds lie within the undercut reach of the crater, and near enough
+        // the changed samples to have lost a neighbour: a charge in the open
+        // has a sphere far larger than what it cuts.
         let reach = self.undercut.reach + step;
-        let center = (self.undercut.center.coords / step).map(|v| v.round() as i32);
-        let span = (reach / step).ceil() as i32;
-        let seeds = (-span..=span)
-            .flat_map(|x| (-span..=span).flat_map(move |y| (-span..=span).map(move |z| [x, y, z])))
-            .map(|d| [center.x + d[0], center.y + d[1], center.z + d[2]])
+        let near = 2.0 * step;
+        let lo =
+            ((self.changed.min.coords - Vector3::repeat(near)) / step).map(|v| v.floor() as i32);
+        let hi =
+            ((self.changed.max.coords + Vector3::repeat(near)) / step).map(|v| v.ceil() as i32);
+        let seeds = (lo.x..=hi.x)
+            .flat_map(|x| (lo.y..=hi.y).flat_map(move |y| (lo.z..=hi.z).map(move |z| [x, y, z])))
             .filter(|&c| (at(c) - self.undercut.center).norm() <= reach);
 
         let undercut = self.undercut;
@@ -879,6 +951,19 @@ mod tests {
         let mut is = ChunkGrid::new(1.0);
         after(&mut is);
         Search::run(&is, &Crater::survey(&was, center, radius), &[])
+    }
+
+    /// A charge ten voxels above the ground spends its budget on the nearest
+    /// rock, so its radius is ten voxels but it takes only a thin cap
+    /// off the top layer: samples within 11.4 of it, |x|, |z| ≤ 5 at y = 0 and
+    /// |x|, |z| ≤ 2 at y = -1. The survey reads the six-voxel margin around
+    /// that cap, not three radii around the sphere (an 85-sample cube).
+    #[test]
+    fn a_charge_in_the_open_reads_only_around_what_it_cuts() {
+        let mut grid = ChunkGrid::new(1.0);
+        ground(&mut grid);
+        let crater = Crater::survey(&grid, Point3::new(0.0, 10.0, 0.0), 10.4);
+        assert_eq!(crater.before.dims(), [23, 14, 23]);
     }
 
     fn piece_sizes(s: &Search) -> Vec<usize> {
