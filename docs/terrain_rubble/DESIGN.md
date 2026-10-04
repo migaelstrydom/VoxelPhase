@@ -311,24 +311,26 @@ own bounds (`LEVEL_SEGMENTS_PLAN.md`). The finder works on one segment's grid.
 
 ## Part 2: Grading (`rubble/grade.rs`)
 
-Three numbers, all cheap from the block:
+Three numbers, all cheap from the block (as built; `Measure`):
 
 - `volume`: solid sample count × voxel³.
-- `core`: the number of **interior** samples (bearing, and all six neighbours
-  solid).
-- `extent`: the longest side of the solid samples' bounding box.
+- `samples`: the solid sample count.
+- `bearing`: how many samples bear load (`BEARING_DENSITY` or more).
 
 | Grade | Rule (initial values, tunable) | What happens |
 |---|---|---|
-| **Dust** | `volume < 0.02 m³` | A particle puff in the material's colour at the centroid. |
-| **Scree** | no `core`, or `volume < 0.25 m³` | `FallingScree` (Part 4). |
-| **Boulder** | otherwise, up to `MAX_BOULDER_VOXELS` | A rigid body (Part 3). |
-| *too big* | `> MAX_BOULDER_VOXELS` (≈ 4 000) | Treated as grounded and left in the field. Becomes Part 6's question. |
+| **Dust** | `volume < 0.02 m³`, or no bearing sample | A burst of flecks in its materials' colours at the centroid. |
+| **Scree** | `volume < 0.25 m³`, or fewer than 4 samples | `FallingScree` (Part 4). |
+| **Boulder** | otherwise | A rigid body (Part 3). |
 
-"No core" is the thinness test: a fragment with no fully enclosed sample is a
-shell, a sheet or a strip at most two samples thick. Those are exactly the
-screenshot cases, and they should fall away rather than land and slide around
-as zero-thickness bodies.
+The design graded a fragment with no **core** sample (bearing, all six
+neighbours solid) as scree: a shell, a sheet or a strip, which should not land
+and slide around as a body with no thickness. Once bricks were fitted to the
+drawn surface a thin piece had a thickness to collide with, and the rule only
+turned 8 m lengths of column into scree that crumbled where it landed (R29). A
+piece of 1–3 samples is scree whatever its volume: its every face is sub-voxel
+detail, and as a body it started inside the crater wall (E23). The too-big
+cut-off (`MAX_BOULDER_VOXELS`, Part 6) is not built.
 
 ---
 
@@ -415,6 +417,9 @@ E22):
   is fitted to the **mesh**, not to the samples taken as cubes: those held a
   resting boulder half a voxel off the ground (ISSUES.md R25). Every face
   stands in by the inset, 0.1 voxels.
+- Bricks hold no air. A cell whose brick holds an air sample is split while
+  the budget (16) lasts, so no brick spans a hole or the gap between two
+  stalactites (R30). Cells are cut where the halves' boxes shrink most.
 - The bricks know the ground. A fragment records the samples of its block
   that were solid but not its own (`Sample::Obstacle` in `terrain::Occupancy`).
   A cell whose brick holds one, or the midpoint to a neighbour, is split

@@ -88,7 +88,7 @@ pub struct BrickShaper {
 impl Default for BrickShaper {
     fn default() -> Self {
         Self {
-            max_bricks: 12,
+            max_bricks: 16,
             max_overcover: 1.3,
             inset: 0.1,
         }
@@ -116,6 +116,21 @@ struct Cell {
     /// Points of what the fragment broke from that the brick holds, in
     /// sample indices.
     intrusions: Vec<Vector3<f32>>,
+    /// Whether the brick holds an air sample: spans a hole or a gap.
+    holds_air: bool,
+}
+
+/// What no brick may hold, in sample indices.
+struct Forbidden {
+    /// What the fragment broke from, stood for by each of its samples and the
+    /// midpoint to each neighbour that is not one of them. A brick holding
+    /// one is split, and cut back off it once the budget is spent.
+    ground: Vec<Vector3<f32>>,
+    /// Every air sample, so that a brick does not span a hole or a gap. A
+    /// brick holding one is split while the budget lasts; after that, the
+    /// air it still holds is in a dent, and cutting it back would carve
+    /// into the rock around.
+    air: Vec<Vector3<f32>>,
 }
 
 impl BrickShaper {
@@ -139,18 +154,26 @@ impl BrickShaper {
                 owner_of(occupancy, at).map(|owner| SurfacePoint { at, owner })
             })
             .collect();
-        let ground = ground_points(occupancy);
+        let forbidden = forbidden_points(occupancy);
         let mut cells = Vec::new();
         if !samples.is_empty() {
-            cells.push(self.cell(samples, surface, occupancy, &ground));
+            cells.push(self.cell(samples, surface, occupancy, &forbidden));
         }
 
         while cells.len() < self.max_bricks {
+            let splittable = |c: &&Cell| longest_span(c).1 >= 2;
             let intruded = cells
                 .iter()
                 .enumerate()
-                .filter(|(_, c)| !c.intrusions.is_empty() && longest_span(c).1 >= 2)
+                .filter(|(_, c)| !c.intrusions.is_empty() && splittable(c))
                 .max_by_key(|(_, c)| c.samples.len());
+            let airy = || {
+                cells
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, c)| c.holds_air && splittable(c))
+                    .max_by_key(|(_, c)| c.samples.len())
+            };
             let swollen = || {
                 cells
                     .iter()
@@ -158,20 +181,17 @@ impl BrickShaper {
                     .filter(|(_, c)| c.overcover > self.max_overcover && longest_span(c).1 >= 3)
                     .max_by(|(_, a), (_, b)| excess(a).total_cmp(&excess(b)))
             };
-            let Some(worst) = intruded.or_else(swollen).map(|(i, _)| i) else {
+            let Some(worst) = intruded.or_else(airy).or_else(swollen).map(|(i, _)| i) else {
                 break;
             };
             let cell = cells.swap_remove(worst);
-            let (axis, _) = longest_span(&cell);
-            let lo = cell.samples.iter().map(|s| s[axis]).min().unwrap_or(0);
-            let hi = cell.samples.iter().map(|s| s[axis]).max().unwrap_or(0);
-            let mid = lo + (hi - lo) / 2;
+            let (axis, mid) = best_split(&cell.samples);
             let (near, far): (Vec<_>, Vec<_>) =
                 cell.samples.into_iter().partition(|s| s[axis] <= mid);
             let (near_surface, far_surface): (Vec<_>, Vec<_>) =
                 cell.surface.into_iter().partition(|p| p.owner[axis] <= mid);
-            cells.push(self.cell(near, near_surface, occupancy, &ground));
-            cells.push(self.cell(far, far_surface, occupancy, &ground));
+            cells.push(self.cell(near, near_surface, occupancy, &forbidden));
+            cells.push(self.cell(far, far_surface, occupancy, &forbidden));
         }
 
         Bricks {
@@ -216,17 +236,15 @@ impl BrickShaper {
         samples: Vec<[usize; 3]>,
         surface: Vec<SurfacePoint>,
         occupancy: &Occupancy,
-        ground: &[Vector3<f32>],
+        forbidden: &Forbidden,
     ) -> Cell {
         let (brick, centre) = self.brick(&samples, &surface, occupancy);
         let solid = samples.len() as f32 * occupancy.spacing().powi(3);
         let overcover = brick.hull.compute_volume() / solid;
         let spacing = occupancy.spacing();
-        let intrusions = ground
-            .iter()
-            .filter(|p| holds(&brick.hull, (*p - centre) * spacing))
-            .copied()
-            .collect();
+        let held = |p: &&Vector3<f32>| holds(&brick.hull, (*p - centre) * spacing);
+        let intrusions = forbidden.ground.iter().filter(held).copied().collect();
+        let holds_air = forbidden.air.iter().any(|p| held(&p));
         Cell {
             samples,
             surface,
@@ -234,6 +252,7 @@ impl BrickShaper {
             centre,
             overcover,
             intrusions,
+            holds_air,
         }
     }
 
@@ -302,29 +321,33 @@ fn holds(hull: &ConvexHull, point: Vector3<f32>) -> bool {
     })
 }
 
-/// Points standing for the surface of what the fragment broke from, in
-/// sample indices: each of its samples, and the midpoint to each neighbour
-/// that is not one of them.
-fn ground_points(occupancy: &Occupancy) -> Vec<Vector3<f32>> {
+/// What no brick of the fragment whose samples are `occupancy` may hold.
+fn forbidden_points(occupancy: &Occupancy) -> Forbidden {
     let [nx, ny, nz] = occupancy.dims();
-    let mut points = Vec::new();
+    let mut forbidden = Forbidden {
+        ground: Vec::new(),
+        air: Vec::new(),
+    };
     for x in 0..nx {
         for y in 0..ny {
             for z in 0..nz {
                 let o = [x, y, z];
-                if occupancy.sample(o) != Sample::Obstacle {
-                    continue;
-                }
-                points.push(as_vector(&o));
-                for n in neighbours(occupancy, o) {
-                    if occupancy.sample(n) != Sample::Obstacle {
-                        points.push((as_vector(&o) + as_vector(&n)) / 2.0);
+                match occupancy.sample(o) {
+                    Sample::Solid => {}
+                    Sample::Air => forbidden.air.push(as_vector(&o)),
+                    Sample::Obstacle => {
+                        forbidden.ground.push(as_vector(&o));
+                        for n in neighbours(occupancy, o) {
+                            if occupancy.sample(n) != Sample::Obstacle {
+                                forbidden.ground.push((as_vector(&o) + as_vector(&n)) / 2.0);
+                            }
+                        }
                     }
                 }
             }
         }
     }
-    points
+    forbidden
 }
 
 fn as_vector(s: &[usize; 3]) -> Vector3<f32> {
@@ -383,6 +406,47 @@ fn bevels() -> impl Iterator<Item = Vector3<f32>> {
         .flat_map(|x| (-1..=1).flat_map(move |y| (-1..=1).map(move |z| [x, y, z])))
         .filter(|d: &[i32; 3]| d.iter().filter(|&&c| c != 0).count() >= 2)
         .map(|[x, y, z]| Vector3::new(x as f32, y as f32, z as f32).normalize())
+}
+
+/// Where to cut `samples` in two: the axis, and the last index along it that
+/// goes to the near half. The cut that leaves the two halves' boxes smallest
+/// in total, so a deck is parted from what hangs under it, and a slab from
+/// either side of a hole, before anything is cut in the middle.
+fn best_split(samples: &[[usize; 3]]) -> (usize, usize) {
+    let boxed = |half: &mut dyn Iterator<Item = &[usize; 3]>| -> usize {
+        let mut lo = [usize::MAX; 3];
+        let mut hi = [0; 3];
+        let mut any = false;
+        for s in half {
+            any = true;
+            for a in 0..3 {
+                lo[a] = lo[a].min(s[a]);
+                hi[a] = hi[a].max(s[a]);
+            }
+        }
+        if any {
+            (0..3).map(|a| hi[a] - lo[a] + 1).product()
+        } else {
+            0
+        }
+    };
+    // (total box volume, distance off centre, axis, last near index)
+    let mut best = (usize::MAX, usize::MAX, 0, 0);
+    for axis in 0..3 {
+        let lo = samples.iter().map(|s| s[axis]).min().unwrap_or(0);
+        let hi = samples.iter().map(|s| s[axis]).max().unwrap_or(0);
+        for mid in lo..hi {
+            let near = boxed(&mut samples.iter().filter(|s| s[axis] <= mid));
+            let far = boxed(&mut samples.iter().filter(|s| s[axis] > mid));
+            // Ties go to the cut nearest the middle, so a solid block is
+            // halved rather than shaved.
+            let off_centre = (2 * mid + 1).abs_diff(lo + hi);
+            if (near + far, off_centre) < (best.0, best.1) {
+                best = (near + far, off_centre, axis, mid);
+            }
+        }
+    }
+    (best.2, best.3)
 }
 
 /// The axis along which `cell`'s samples spread furthest, and how many
@@ -484,9 +548,9 @@ mod tests {
 
     /// Every sample inside a brick, the surface no further outside one than
     /// the inset, no two bricks overlapping, within the budget, and the
-    /// bricks' volume no more than 30% over the samples'. It may fall
-    /// further short: the inset is taken off every face, a large share of a
-    /// lump a few samples across.
+    /// bricks' volume no more than 30% over the samples'. How far short of
+    /// it they may fall is held by the surface check: the inset comes off
+    /// every face, most of a strand one sample thick.
     fn assert_sound(occupancy: &Occupancy, shaper: &BrickShaper, bricks: &Bricks) {
         let samples = samples(occupancy);
         assert!(!bricks.bricks.is_empty());
@@ -540,8 +604,10 @@ mod tests {
         let solid = samples.len() as f32 * SPACING.powi(3);
         let ratio = bricks.volume() / solid;
         assert!(
-            (0.6..=1.3).contains(&ratio),
-            "bricks hold {ratio} of the solid"
+            ratio <= 1.3,
+            "bricks hold {ratio} of the solid: {} samples, {} bricks",
+            samples.len(),
+            bricks.bricks.len()
         );
     }
 
@@ -567,6 +633,60 @@ mod tests {
         let bricks = shape(&shaper, &l);
         assert!(bricks.bricks.len() >= 2, "{} bricks", bricks.bricks.len());
         assert_sound(&l, &shaper, &bricks);
+    }
+
+    /// Air samples a brick holds deeper than the inset: empty space the
+    /// solver would treat as rock.
+    fn air_held(occupancy: &Occupancy, shaper: &BrickShaper, bricks: &Bricks) -> usize {
+        let [nx, ny, nz] = occupancy.dims();
+        (0..nx)
+            .flat_map(|x| (0..ny).flat_map(move |y| (0..nz).map(move |z| [x, y, z])))
+            .filter(|&s| occupancy.sample(s) == Sample::Air)
+            .filter(|s| {
+                let at = occupancy.world_position(as_vector(s));
+                bricks
+                    .bricks
+                    .iter()
+                    .any(|b| outside(bricks, b, at) < -shaper.inset * SPACING)
+            })
+            .count()
+    }
+
+    #[test]
+    fn a_hole_through_a_slab_stays_open() {
+        let slab = occupancy([20, 6, 20], |[x, y, z]| {
+            let hole = (8..12).contains(&x) && (8..12).contains(&z);
+            (2..18).contains(&x) && (2..4).contains(&y) && (2..18).contains(&z) && !hole
+        });
+        let shaper = BrickShaper::default();
+        let bricks = shape(&shaper, &slab);
+        assert_eq!(
+            air_held(&slab, &shaper, &bricks),
+            0,
+            "{} bricks",
+            bricks.bricks.len()
+        );
+        assert_sound(&slab, &shaper, &bricks);
+    }
+
+    #[test]
+    fn stalactites_under_a_slab_are_not_boxed_in() {
+        let slab = occupancy([20, 12, 20], |[x, y, z]| {
+            let deck = (2..18).contains(&x) && (8..10).contains(&y) && (2..18).contains(&z);
+            let spike = |cx: usize, cz: usize, len: usize| {
+                (cx..cx + 2).contains(&x) && (cz..cz + 2).contains(&z) && (8 - len..8).contains(&y)
+            };
+            deck || spike(4, 4, 5) || spike(12, 5, 4) || spike(6, 13, 6) || spike(14, 14, 3)
+        });
+        let shaper = BrickShaper::default();
+        let bricks = shape(&shaper, &slab);
+        assert_eq!(
+            air_held(&slab, &shaper, &bricks),
+            0,
+            "{} bricks",
+            bricks.bricks.len()
+        );
+        assert_sound(&slab, &shaper, &bricks);
     }
 
     #[test]

@@ -919,26 +919,6 @@ impl Fragment {
             .count()
     }
 
-    /// How many of its samples are interior: bearing, with all six neighbours
-    /// solid. A fragment with none is a shell, a sheet or a strip at most two
-    /// samples thick.
-    pub fn core_samples(&self) -> usize {
-        let lattice = Lattice3 {
-            dims: self.voxels.dims(),
-        };
-        let solid = |i: usize| {
-            let [x, y, z] = lattice.coords(i);
-            self.voxels.get(x, y, z).is_solid()
-        };
-        (0..lattice.len())
-            .filter(|&i| {
-                let [x, y, z] = lattice.coords(i);
-                self.voxels.get(x, y, z).density >= BEARING_DENSITY
-                    && lattice.neighbours(i).filter(|&n| solid(n)).count() == 6
-            })
-            .count()
-    }
-
     /// The longest side of the box around its samples, in metres.
     pub fn extent(&self) -> f32 {
         let longest = self.voxels.dims().into_iter().max().unwrap_or(0);
@@ -1502,18 +1482,13 @@ mod tests {
         assert_eq!(carried.iter().sum::<usize>(), 27 + 7);
     }
 
-    /// A 3 × 3 × 3 block has one interior sample, all 27 bear, and it spans
-    /// two voxels; a strip of weak samples bears nothing and has no core.
+    /// All of a 3 × 3 × 3 block bears, and it spans two voxels; a strip of
+    /// weak samples bears nothing.
     #[test]
-    fn a_fragment_measures_its_core_and_its_extent() {
+    fn a_fragment_measures_what_bears_and_its_extent() {
         let measure = |s: Search| {
             let f = s.into_fragments(&SegmentFrame::identity()).remove(0);
-            (
-                f.sample_count(),
-                f.bearing_samples(),
-                f.core_samples(),
-                f.extent(),
-            )
+            (f.sample_count(), f.bearing_samples(), f.extent())
         };
         let block = blast(
             |g| {
@@ -1523,7 +1498,7 @@ mod tests {
             [0.0, 3.0, 0.0],
             2.0,
         );
-        assert_eq!(measure(block), (27, 27, 1, 2.0));
+        assert_eq!(measure(block), (27, 27, 2.0));
         let strip = blast(
             |g| {
                 ground(g);
@@ -1534,7 +1509,7 @@ mod tests {
             [0.0, 2.0, 0.0],
             2.0,
         );
-        assert_eq!(measure(strip), (7, 0, 0, 6.0));
+        assert_eq!(measure(strip), (7, 0, 6.0));
     }
 
     #[test]

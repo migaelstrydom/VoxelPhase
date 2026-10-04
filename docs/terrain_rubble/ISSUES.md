@@ -42,6 +42,8 @@ An issue's **status** is one of:
 | [R26](#r26) | A boulder's convex brick reached into the ground it broke from | fixed (branch `rubble-phase2`) | high |
 | [R27](#r27) | A long boulder's spin swung its end into the ground on its first frame | fixed (branch `rubble-phase2`) | medium |
 | [R28](#r28) | Planning a blast with boulders costs up to 5 ms | open, optimisation pass (R24) | low |
+| [R29](#r29) | Big tower chunks crumbled where they landed | fixed (branch `rubble-phase2`) | high |
+| [R30](#r30) | A boulder's brick spanned a hole or the gaps between stalactites | fixed (branch `rubble-phase2`) | high |
 
 ---
 
@@ -543,3 +545,31 @@ for boulders) takes 0.3–5 ms for a blast that makes a boulder, against a
 design budget of 1 ms a boulder. The worst is `garden_long_bridge` (431
 samples). Each shaper split rebuilds both halves' hulls and rescans their
 ground points; the mesh is the other half.
+
+<a id="r29"></a>
+## R29. Big tower chunks crumbled where they landed
+
+**Status:** fixed on branch `rubble-phase2`. **Found by:** play-test.
+
+Grading made a fragment with no *core* sample (bearing, all six neighbours
+solid) scree, so a column one or two samples across fell and crumbled however
+big: an 8 m, 8.5 m³ length of a garden column. The rule was for thin pieces
+with nothing to collide as; bricks fitted to the mesh (R25) give them that. A
+fragment is now a boulder from 0.25 m³ and 4 samples. Under 4 samples it is
+scree: as bodies, 1- and 3-sample pieces started inside the crater wall (E23).
+
+<a id="r30"></a>
+## R30. A boulder's brick spanned a hole or the gaps between stalactites
+
+**Status:** fixed on branch `rubble-phase2`. **Found by:** play-test (the
+player stood in the air over a hole blown in a table slab, and a slab's
+collision enclosed the stalactites under it).
+
+A cell was split only when its brick was more than 1.3 × its solid, and a slab
+with a hole, or with stalactites under it, is well inside that: one brick held
+32 air samples over the hole; the stalactites spent the 12-brick budget and
+still held 188. Air samples are now forbidden like the ground: a brick holding
+one is split while the budget (now 16) lasts. A cell is cut where the two
+halves' boxes shrink most, not at its longest axis' midpoint, so a deck is
+parted from what hangs under it first. Air left once the budget is spent sits
+in dents and is kept; cutting bricks back off it carved into the rock.

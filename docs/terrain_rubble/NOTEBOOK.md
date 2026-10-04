@@ -569,3 +569,31 @@ remeshed terrain's vertices against each boulder's bricks.
 - `render_perf` on the garden's columns, with synchronization validation: no
   messages, but a grenade dropped from above at a column's foot cratered
   beside it without cutting it loose, so this run saw no boulder drawn.
+
+## E23. Grading by core, and bricks over holes (2026-10-04)
+
+**Question.** After the Phase 3 play-test: why did big tower chunks crumble,
+and why could the player stand over a hole in a fallen slab?
+
+**Setup.** A probe over every scenario listing fragments of 0.25 m³ or more
+that did not become boulders. Two new shaper tests: a 16 × 2 × 16 slab with a
+4 × 4 hole, and a slab with four stalactites under it, counting air samples
+held deeper than the inset.
+
+**Result.**
+
+- `garden_tall_columns` cut an 8.5 m³ piece 8 m long with 64 bearing samples
+  and no core sample, graded scree; likewise 2.0 m³ and 1.5 m³ column pieces.
+  Without the core rule: 4 boulders on the tall columns, 3 on the lip, all at
+  rest; 40 boulders in all.
+- Three of those failed the first-frame check, all of 1–3 samples: one at
+  1 m voxels on `rim_cusps`, two of 3 samples at 0.5 m. At least 8 samples:
+  no failures, but the fins' and hill's pieces of 4–7 samples (0.5–0.9 m³)
+  went back to scree. At least 4: no failures, and only 2–3-sample chips are
+  scree.
+- The slab with a hole: one brick, 32 air samples held. The stalactites: 12
+  bricks, 188 held. With air forbidden and the box-shrinking cut, both hold
+  none.
+- The seeded lumps then fell to 0.58 of their samples' volume, with 7 bricks:
+  strands one sample thick, the inset off every face. The surface check holds
+  them; the volume floor was dropped from the test.
