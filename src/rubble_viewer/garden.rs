@@ -27,6 +27,7 @@ pub fn scenarios() -> Vec<Scenario> {
         lip_root(),
         lip_underside(),
         hill_free_for_all(),
+        hill_shell(),
         fins_and_walls(),
     ]
 }
@@ -232,6 +233,38 @@ fn hill_free_for_all() -> Scenario {
         blasts,
         known_gap: None,
         expect: |_| Ok(()),
+    }
+}
+
+/// The play-test case: grenades round the hill's foot free its shell, a
+/// hollow dome too intricate for one body's bricks to hold without covering
+/// the hollow.
+fn hill_shell() -> Scenario {
+    let blasts = [(9.0, 3.0), (8.0, 4.5)]
+        .into_iter()
+        .flat_map(|(radius, height)| {
+            (0..14).map(move |k| {
+                let angle = k as f32 * std::f32::consts::TAU / 14.0;
+                grenade(
+                    62.0 + radius * angle.cos(),
+                    height,
+                    58.0 + radius * angle.sin(),
+                )
+            })
+        })
+        .collect();
+    Scenario {
+        name: "garden_hill_shell",
+        description: "garden hill: a ring of grenades round its foot drops the hollow shell",
+        level: GARDEN,
+        blasts,
+        known_gap: None,
+        expect: |run| match largest(run) {
+            n if n >= 1000 => Ok(()),
+            n => Err(format!(
+                "expected the shell to come down, largest fragment {n}"
+            )),
+        },
     }
 }
 

@@ -78,6 +78,29 @@ impl Occupancy {
         self.sample(index) == Sample::Solid
     }
 
+    /// Whether the sample at `index` is air with the fragment on both sides
+    /// of it along some line of the lattice (an axis, or a face or body
+    /// diagonal): in a hole, a gap or a hollow. Air outside a convex surface
+    /// never is.
+    pub fn encloses(&self, index: [usize; 3]) -> bool {
+        if self.sample(index) != Sample::Air {
+            return false;
+        }
+        let solid_along = |d: [i64; 3]| {
+            (1..)
+                .map_while(|k| {
+                    let at = [0, 1, 2].map(|a| index[a] as i64 + d[a] * k);
+                    let inside = (0..3).all(|a| (0..self.dims[a] as i64).contains(&at[a]));
+                    inside.then(|| self.is_solid(at.map(|i| i as usize)))
+                })
+                .any(|solid| solid)
+        };
+        (-1..=1i64)
+            .flat_map(|x| (-1..=1i64).flat_map(move |y| (-1..=1i64).map(move |z| [x, y, z])))
+            .filter(|d| *d > [0, 0, 0])
+            .any(|d| solid_along(d) && solid_along(d.map(|c| -c)))
+    }
+
     /// Distance between adjacent samples, in metres.
     pub fn spacing(&self) -> f32 {
         self.spacing

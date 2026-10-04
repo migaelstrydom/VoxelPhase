@@ -44,6 +44,9 @@ An issue's **status** is one of:
 | [R28](#r28) | Planning a blast with boulders costs up to 5 ms | open, optimisation pass (R24) | low |
 | [R29](#r29) | Big tower chunks crumbled where they landed | fixed (branch `rubble-phase2`) | high |
 | [R30](#r30) | A boulder's brick spanned a hole or the gaps between stalactites | fixed (branch `rubble-phase2`) | high |
+| [R31](#r31) | A hollow shell needed more bricks than one body carries, and rested on its hollow | fixed (branch `rubble-phase2`) | high |
+| [R32](#r32) | Parts of one fragment that touched at an edge started overlapping | fixed (branch `rubble-phase2`) | high |
+| [R33](#r33) | Shaping a collapse costs up to 94 ms; one fragment makes any number of bodies | open, optimisation pass (R24) | medium |
 
 ---
 
@@ -573,3 +576,50 @@ one is split while the budget (now 16) lasts. A cell is cut where the two
 halves' boxes shrink most, not at its longest axis' midpoint, so a deck is
 parted from what hangs under it first. Air left once the budget is spent sits
 in dents and is kept; cutting bricks back off it carved into the rock.
+
+<a id="r31"></a>
+## R31. A hollow shell needed more bricks than one body carries, and rested on its hollow
+
+**Status:** fixed on branch `rubble-phase2`. **Found by:** play-test (the
+Rubble Garden's hollow hill came down as one body and rested on air), then
+`garden_hill_shell`.
+
+R30's fix split bricks that held air only while a budget of 16 lasted; past
+it the air was kept. Terrain takes any shape, and a hollow dome needs far more
+convex pieces than that. The shaper now splits every brick that holds air in
+a hole, gap or hollow (`Occupancy::encloses`: the fragment on both sides along
+a lattice line), however many cells that takes. More than `max_bricks` cells
+and it returns `Shape::Parts`: the split tree cut into subtrees of at most
+`max_bricks` cells; `Fragment::split` cuts each out, its siblings its
+obstacles, and each is graded and planned in turn. The hill's shell (1,370
+samples, 171 m³) comes down as 19 bodies, all at rest. Simple shapes are
+unchanged: columns, slabs, a slab with a hole stay one body.
+
+Counting every air sample a brick held split a plain ball into 15 parts (a
+26-sided brick skims air off any curved surface); only enclosed air counts.
+A notch in a re-entrant corner is not enclosed and a brick may fill it.
+
+<a id="r32"></a>
+## R32. Parts of one fragment that touched at an edge started overlapping
+
+**Status:** fixed on branch `rubble-phase2`. **Found by:** `garden_hill_shell`
+(E24).
+
+With the shell first cut into 49 parts, about 25 were pushed out on their
+first frame; settled one at a time, one was. Air beside two parts kept its
+mild density, so each part's surface bulged up to 0.83 voxels into it, and
+two parts touching only at an edge met inside it. `Fragment::split` now
+writes air beside another part as -1, as the ground's is, so each part's
+surface stays within half a voxel of its samples.
+
+<a id="r33"></a>
+## R33. Shaping a collapse costs up to 94 ms; one fragment makes any number of bodies
+
+**Status:** open; for the optimisation pass (R24). **Found by:** E24.
+
+`RubblePlanner::plan` for the hill shell's blast takes 94 ms (19 bodies, each
+meshed and shaped, the shaper splitting to single cells where the shell
+curves). The table's blast went from 1.4 ms to 16 ms: `Occupancy::encloses`
+walks 13 lines from every air sample of the block. A sweep per line direction
+would make it linear. `max_boulders` caps fragments, not the bodies they are
+split into.

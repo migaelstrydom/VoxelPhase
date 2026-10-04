@@ -28,9 +28,10 @@ pub fn find(name: &str) -> Option<Scenario> {
     catalogue().into_iter().find(|s| s.name == name)
 }
 
-/// The largest fragment of a run, in samples.
+/// The largest fragment of a run, in samples, whole: what the finder cut
+/// loose, however many bodies it then became.
 pub(super) fn largest(run: &Run) -> usize {
-    run.fragments().map(|f| f.samples).max().unwrap_or(0)
+    run.fragment_sizes().into_iter().max().unwrap_or(0)
 }
 
 /// A blast under the surface opens a cavity and leaves the top layer as a

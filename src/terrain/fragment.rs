@@ -39,7 +39,7 @@
 //! `docs/terrain_rubble/DESIGN.md` Part 1 has the reasoning behind each rule.
 
 use std::borrow::Cow;
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 
 use nalgebra::{Isometry3, Point3, Translation3, Vector3};
 
@@ -951,6 +951,82 @@ impl Fragment {
             }
         }
         counts
+    }
+
+    /// The fragment cut into `parts`, each a set of its block's sample
+    /// indices, as fragments of their own. Each part sees the others as it
+    /// sees the ground: solid that is not its own, read as air, its break
+    /// face closing against them.
+    pub fn split(&self, parts: &[Vec<[usize; 3]>]) -> Vec<Fragment> {
+        let source = self.voxels.lattice();
+        let [sx, sy, sz] = source.dims();
+        let mut owner = vec![usize::MAX; sx * sy * sz];
+        let flat = |[x, y, z]: [usize; 3]| (x * sy + y) * sz + z;
+        for (k, part) in parts.iter().enumerate() {
+            for &s in part {
+                owner[flat(s)] = k;
+            }
+        }
+        let obstacles: HashSet<[usize; 3]> = self.obstacles.iter().copied().collect();
+        // Air beside another part is written as air at its fullest, -1, as
+        // the ground is: carrying its distance, it would let this part's
+        // surface bulge most of a voxel into it, and the other part's too,
+        // and two parts that only touch at an edge would start overlapping.
+        let beside_another = |at: [usize; 3], k: usize| {
+            (0..27).any(|n| {
+                let offset = [n / 9, n / 3 % 3, n % 3];
+                let mut s = [0usize; 3];
+                for a in 0..3 {
+                    let i = at[a] + offset[a];
+                    if i == 0 || i > source.dims()[a] {
+                        return false;
+                    }
+                    s[a] = i - 1;
+                }
+                let o = owner[flat(s)];
+                o != usize::MAX && o != k
+            })
+        };
+
+        parts
+            .iter()
+            .enumerate()
+            .filter(|(_, part)| !part.is_empty())
+            .map(|(k, part)| {
+                let lo = [0, 1, 2].map(|a| part.iter().map(|s| s[a]).min().unwrap_or(0));
+                let hi = [0, 1, 2].map(|a| part.iter().map(|s| s[a]).max().unwrap_or(0));
+                // The fragment's block is padded around all of it, so it
+                // reaches past any part's padding.
+                let first = lo.map(|i| i.saturating_sub(FRAGMENT_PADDING));
+                let dims = [0, 1, 2]
+                    .map(|a| (hi[a] + FRAGMENT_PADDING).min(source.dims()[a] - 1) - first[a] + 1);
+                let base = [0, 1, 2].map(|a| source.base()[a] + first[a] as i32);
+                let own = SampleLattice::new(Point3::origin(), base, source.spacing(), dims);
+                let mut voxels = VoxelBlock::air(own);
+                let mut own_obstacles = Vec::new();
+                for x in 0..dims[0] {
+                    for y in 0..dims[1] {
+                        for z in 0..dims[2] {
+                            let at = [first[0] + x, first[1] + y, first[2] + z];
+                            let voxel = self.voxels.get(at[0], at[1], at[2]);
+                            if owner[flat(at)] == k {
+                                voxels.set(x, y, z, voxel);
+                            } else if voxel.is_solid() || obstacles.contains(&at) {
+                                own_obstacles.push([x, y, z]);
+                            } else if !beside_another(at, k) {
+                                voxels.set(x, y, z, voxel);
+                            }
+                        }
+                    }
+                }
+                Fragment {
+                    voxels,
+                    pose: self.pose,
+                    samples: part.len(),
+                    obstacles: own_obstacles,
+                }
+            })
+            .collect()
     }
 
     /// Block samples that were solid but not its own: what it broke from.

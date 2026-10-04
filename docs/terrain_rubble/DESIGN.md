@@ -417,9 +417,17 @@ E22):
   is fitted to the **mesh**, not to the samples taken as cubes: those held a
   resting boulder half a voxel off the ground (ISSUES.md R25). Every face
   stands in by the inset, 0.1 voxels.
-- Bricks hold no air. A cell whose brick holds an air sample is split while
-  the budget (16) lasts, so no brick spans a hole or the gap between two
-  stalactites (R30). Cells are cut where the halves' boxes shrink most.
+- Bricks hold no air in a hole, gap or hollow (`Occupancy::encloses`: the
+  fragment on both sides along a lattice line). A brick holding some is
+  split, however many cells that takes, so no brick spans a hole or the gap
+  between stalactites (R30). Cells are cut where the halves' boxes shrink
+  most.
+- A shape that needs more than `max_bricks` (16) cells is not one body
+  (R31). The split tree is cut into subtrees of at most 16 cells, and
+  `Fragment::split` cuts each out as a fragment of its own, its siblings its
+  obstacles; each is graded and planned in turn. A hollow dome comes down in
+  pieces where its own convex pieces meet, not as a lid resting on its
+  hollow. This was the user's suggestion two play-tests before it was built.
 - The bricks know the ground. A fragment records the samples of its block
   that were solid but not its own (`Sample::Obstacle` in `terrain::Occupancy`).
   A cell whose brick holds one, or the midpoint to a neighbour, is split

@@ -12,8 +12,8 @@ mod scree;
 mod spawn;
 
 pub use boulder::{Boulder, PlacedBoulder};
-pub use brick_shaper::{Brick, BrickShaper, Bricks};
+pub use brick_shaper::{Brick, BrickShaper, Bricks, Shape};
 pub use dust::{Crumble, CrumbleSize};
 pub use grade::{Grade, GradeRules, Measure};
 pub use scree::{FallingScree, Flight, Outcome, ScreeRules, ScreeSystem};
-pub use spawn::{Cut, Launch, Plan, RubblePlanner, RubbleQueue, RubbleSpawnSystem};
+pub use spawn::{Cut, Launch, Piece, Plan, RubblePlanner, RubbleQueue, RubbleSpawnSystem};

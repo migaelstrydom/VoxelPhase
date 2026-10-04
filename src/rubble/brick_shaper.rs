@@ -1,23 +1,29 @@
-//! A boulder's collision shape: a few convex bricks fitted to its surface.
+//! A boulder's collision shape: convex bricks fitted to its surface, or, for a
+//! shape too intricate for one body, the parts to cut it into.
 //!
 //! The eye sees the fragment's true marching-cubes mesh; the solver sees up to
-//! a dozen convex bricks. The fragment's samples are partitioned into cells,
-//! and each cell's brick is the 26-sided hull (box, edge bevels, corner
+//! `max_bricks` convex bricks. The fragment's samples are partitioned into
+//! cells, and each cell's brick is the 26-sided hull (box, edge bevels, corner
 //! bevels) of what it holds: its samples, the mesh vertices on their edges,
-//! and the midpoints to its neighbour cells' samples, where it meets them. A
-//! cell whose brick swells well past the solid it holds is split in two along
-//! its longest axis, the worst cell first, until every brick fits or the
-//! budget is spent.
+//! and the midpoints to its neighbour cells' samples, where it meets them.
 //!
 //! ```text
 //!   Occupancy + mesh vertices ──▶ one cell around every sample
-//!                   │  brick: box ∩ 20 bevel planes, each through the
-//!                   │         farthest point that way, stood in by `inset`
-//!                   │  worst overcover > max_overcover and budget left?
-//!                   │     └── split at the longest axis' midpoint, repeat
-//!                   ▼
-//!   Bricks: hulls on the lattice's axes, centres in the world at the blast
+//!     │  1. split every cell whose brick holds air or ground, however many
+//!     │     cells that takes, each where its halves' boxes shrink most
+//!     ├── more than max_bricks cells ──▶ Shape::Parts: the split tree cut
+//!     │                                  into subtrees of at most
+//!     │                                  max_bricks cells, one body each
+//!     │  2. while the budget lasts, split cells whose brick swells past
+//!     │     max_overcover × their solid
+//!     ▼
+//!   Shape::Whole(Bricks): hulls on the lattice's axes, centres in the world
 //! ```
+//!
+//! Terrain takes any shape, and some (a hollow dome, a ring) need more convex
+//! pieces than any one body should carry. Bricks never hold air, so such a
+//! shape is not covered over: it comes down as several bodies, cut where its
+//! own convex pieces meet.
 //!
 //! Fitting the mesh, not the samples, matters: the surface runs close to the
 //! outermost samples, and bricks built from whole sample cubes hold a resting
@@ -29,10 +35,9 @@
 //! A brick is convex and the fragment need not be: a piece that broke off
 //! around a knuckle of ground would have its brick reach into the ground,
 //! and the solver would throw it out on its first step. The ground's samples
-//! and the midpoints to their neighbours stand for its surface; a cell whose
-//! brick holds one of them is split first, whatever its overcover, and one
-//! still holding one when the budget is spent is cut back with a plane
-//! through each, facing away from the cell's samples.
+//! and the midpoints to their neighbours stand for its surface, and a brick
+//! holding one is split. A cell one sample across that still holds one is cut
+//! back with a plane through each, facing away from its samples.
 
 use std::collections::HashSet;
 
@@ -57,6 +62,16 @@ pub struct Brick {
     pub centre: Point3<f32>,
 }
 
+/// What a fragment is shaped as.
+pub enum Shape {
+    /// One body, of these bricks.
+    Whole(Bricks),
+    /// More convex pieces than one body carries: these sets of the
+    /// fragment's sample indices, each to be cut out and shaped as a body of
+    /// its own.
+    Parts(Vec<Vec<[usize; 3]>>),
+}
+
 /// A boulder's collision shape.
 pub struct Bricks {
     pub bricks: Vec<Brick>,
@@ -75,7 +90,7 @@ impl Bricks {
 /// How finely a fragment is cut into bricks.
 #[derive(Debug, Clone, Copy)]
 pub struct BrickShaper {
-    /// Most bricks one boulder is given.
+    /// Most bricks one body is given.
     pub max_bricks: usize,
     /// A cell is split while its brick's volume is more than this many times
     /// the solid it holds.
@@ -118,30 +133,51 @@ struct Cell {
     intrusions: Vec<Vector3<f32>>,
     /// Whether the brick holds an air sample: spans a hole or a gap.
     holds_air: bool,
+    /// What no brick may hold, near enough to the cell that its brick, or
+    /// its children's, could.
+    nearby: Forbidden,
+    /// The cell's place in the split tree: near (`false`) or far (`true`)
+    /// at each split above it.
+    path: Vec<bool>,
 }
 
 /// What no brick may hold, in sample indices.
+#[derive(Default)]
 struct Forbidden {
     /// What the fragment broke from, stood for by each of its samples and the
-    /// midpoint to each neighbour that is not one of them. A brick holding
-    /// one is split, and cut back off it once the budget is spent.
+    /// midpoint to each neighbour that is not one of them.
     ground: Vec<Vector3<f32>>,
-    /// Every air sample, so that a brick does not span a hole or a gap. A
-    /// brick holding one is split while the budget lasts; after that, the
-    /// air it still holds is in a dent, and cutting it back would carve
-    /// into the rock around.
+    /// Every air sample in a hole, gap or hollow of the fragment
+    /// (`Occupancy::encloses`), so that a brick does not span one. Air
+    /// outside a convex surface is left out: every brick's bevels skim some.
     air: Vec<Vector3<f32>>,
 }
 
+impl Forbidden {
+    /// The points within `margin` of the box from `lo` to `hi`.
+    fn near(&self, lo: Vector3<f32>, hi: Vector3<f32>, margin: f32) -> Self {
+        let inside =
+            |p: &&Vector3<f32>| (0..3).all(|a| p[a] >= lo[a] - margin && p[a] <= hi[a] + margin);
+        Self {
+            ground: self.ground.iter().filter(inside).copied().collect(),
+            air: self.air.iter().filter(inside).copied().collect(),
+        }
+    }
+}
+
+/// How far past its samples a cell's brick can reach, in voxels: to the mesh
+/// vertices on their edges, never a whole voxel out.
+const REACH: f32 = 1.0;
+
 impl BrickShaper {
-    /// The bricks of the fragment whose samples are `occupancy` and whose
+    /// The shape of the fragment whose samples are `occupancy` and whose
     /// mesh has its vertices at `surface`, world positions at the blast.
-    /// Empty for a fragment with no samples.
+    /// A fragment with no samples is a whole of no bricks.
     pub fn shape(
         &self,
         occupancy: &Occupancy,
         surface: impl IntoIterator<Item = Point3<f32>>,
-    ) -> Bricks {
+    ) -> Shape {
         let [nx, ny, nz] = occupancy.dims();
         let samples: Vec<[usize; 3]> = (0..nx)
             .flat_map(|x| (0..ny).flat_map(move |y| (0..nz).map(move |z| [x, y, z])))
@@ -154,53 +190,64 @@ impl BrickShaper {
                 owner_of(occupancy, at).map(|owner| SurfacePoint { at, owner })
             })
             .collect();
-        let forbidden = forbidden_points(occupancy);
         let mut cells = Vec::new();
         if !samples.is_empty() {
-            cells.push(self.cell(samples, surface, occupancy, &forbidden));
+            let forbidden = forbidden_points(occupancy);
+            cells.push(self.cell(samples, surface, Vec::new(), occupancy, &forbidden));
+        }
+
+        let splittable = |c: &&Cell| longest_span(c).1 >= 2;
+        while let Some(worst) = cells
+            .iter()
+            .position(|c| (!c.intrusions.is_empty() || c.holds_air) && splittable(&c))
+        {
+            let cell = cells.swap_remove(worst);
+            cells.extend(self.split(cell, occupancy));
+        }
+        if cells.len() > self.max_bricks {
+            let mut parts = Vec::new();
+            group(cells, 0, self.max_bricks, &mut parts);
+            return Shape::Parts(parts);
         }
 
         while cells.len() < self.max_bricks {
-            let splittable = |c: &&Cell| longest_span(c).1 >= 2;
-            let intruded = cells
+            let swollen = cells
                 .iter()
                 .enumerate()
-                .filter(|(_, c)| !c.intrusions.is_empty() && splittable(c))
-                .max_by_key(|(_, c)| c.samples.len());
-            let airy = || {
-                cells
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, c)| c.holds_air && splittable(c))
-                    .max_by_key(|(_, c)| c.samples.len())
-            };
-            let swollen = || {
-                cells
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, c)| c.overcover > self.max_overcover && longest_span(c).1 >= 3)
-                    .max_by(|(_, a), (_, b)| excess(a).total_cmp(&excess(b)))
-            };
-            let Some(worst) = intruded.or_else(airy).or_else(swollen).map(|(i, _)| i) else {
+                .filter(|(_, c)| c.overcover > self.max_overcover && longest_span(c).1 >= 3)
+                .max_by(|(_, a), (_, b)| excess(a).total_cmp(&excess(b)))
+                .map(|(i, _)| i);
+            let Some(worst) = swollen else {
                 break;
             };
             let cell = cells.swap_remove(worst);
-            let (axis, mid) = best_split(&cell.samples);
-            let (near, far): (Vec<_>, Vec<_>) =
-                cell.samples.into_iter().partition(|s| s[axis] <= mid);
-            let (near_surface, far_surface): (Vec<_>, Vec<_>) =
-                cell.surface.into_iter().partition(|p| p.owner[axis] <= mid);
-            cells.push(self.cell(near, near_surface, occupancy, &forbidden));
-            cells.push(self.cell(far, far_surface, occupancy, &forbidden));
+            cells.extend(self.split(cell, occupancy));
         }
 
-        Bricks {
+        Shape::Whole(Bricks {
             bricks: cells
                 .into_iter()
                 .map(|c| self.cut_back(c, occupancy.spacing()))
                 .collect(),
             rotation: occupancy.rotation(),
-        }
+        })
+    }
+
+    /// `cell` cut in two where its halves' boxes shrink most.
+    fn split(&self, cell: Cell, occupancy: &Occupancy) -> [Cell; 2] {
+        let (axis, mid) = best_split(&cell.samples);
+        let (near, far): (Vec<_>, Vec<_>) = cell.samples.into_iter().partition(|s| s[axis] <= mid);
+        let (near_surface, far_surface): (Vec<_>, Vec<_>) =
+            cell.surface.into_iter().partition(|p| p.owner[axis] <= mid);
+        let path = |side: bool| {
+            let mut path = cell.path.clone();
+            path.push(side);
+            path
+        };
+        [
+            self.cell(near, near_surface, path(false), occupancy, &cell.nearby),
+            self.cell(far, far_surface, path(true), occupancy, &cell.nearby),
+        ]
     }
 
     /// `cell`'s brick, cut back off every point of the ground it holds.
@@ -235,16 +282,20 @@ impl BrickShaper {
         &self,
         samples: Vec<[usize; 3]>,
         surface: Vec<SurfacePoint>,
+        path: Vec<bool>,
         occupancy: &Occupancy,
         forbidden: &Forbidden,
     ) -> Cell {
+        let lo = Vector3::from_fn(|a, _| samples.iter().map(|s| s[a]).min().unwrap_or(0) as f32);
+        let hi = Vector3::from_fn(|a, _| samples.iter().map(|s| s[a]).max().unwrap_or(0) as f32);
+        let nearby = forbidden.near(lo, hi, REACH);
         let (brick, centre) = self.brick(&samples, &surface, occupancy);
         let solid = samples.len() as f32 * occupancy.spacing().powi(3);
         let overcover = brick.hull.compute_volume() / solid;
         let spacing = occupancy.spacing();
         let held = |p: &&Vector3<f32>| holds(&brick.hull, (*p - centre) * spacing);
-        let intrusions = forbidden.ground.iter().filter(held).copied().collect();
-        let holds_air = forbidden.air.iter().any(|p| held(&p));
+        let intrusions = nearby.ground.iter().filter(held).copied().collect();
+        let holds_air = nearby.air.iter().any(|p| held(&p));
         Cell {
             samples,
             surface,
@@ -253,6 +304,8 @@ impl BrickShaper {
             overcover,
             intrusions,
             holds_air,
+            nearby,
+            path,
         }
     }
 
@@ -321,6 +374,22 @@ fn holds(hull: &ConvexHull, point: Vector3<f32>) -> bool {
     })
 }
 
+/// `cells`, which share their first `depth` splits, gathered into sets of
+/// samples of at most `max` cells each: the split tree cut into subtrees, so
+/// each set is a lump of neighbouring cells.
+fn group(cells: Vec<Cell>, depth: usize, max: usize, out: &mut Vec<Vec<[usize; 3]>>) {
+    if cells.len() <= max {
+        out.push(cells.into_iter().flat_map(|c| c.samples).collect());
+        return;
+    }
+    let (near, far): (Vec<Cell>, Vec<Cell>) = cells.into_iter().partition(|c| !c.path[depth]);
+    for half in [near, far] {
+        if !half.is_empty() {
+            group(half, depth + 1, max, out);
+        }
+    }
+}
+
 /// What no brick of the fragment whose samples are `occupancy` may hold.
 fn forbidden_points(occupancy: &Occupancy) -> Forbidden {
     let [nx, ny, nz] = occupancy.dims();
@@ -334,7 +403,11 @@ fn forbidden_points(occupancy: &Occupancy) -> Forbidden {
                 let o = [x, y, z];
                 match occupancy.sample(o) {
                     Sample::Solid => {}
-                    Sample::Air => forbidden.air.push(as_vector(&o)),
+                    Sample::Air => {
+                        if occupancy.encloses(o) {
+                            forbidden.air.push(as_vector(&o));
+                        }
+                    }
                     Sample::Obstacle => {
                         forbidden.ground.push(as_vector(&o));
                         for n in neighbours(occupancy, o) {
@@ -515,7 +588,10 @@ mod tests {
     }
 
     fn shape(shaper: &BrickShaper, occupancy: &Occupancy) -> Bricks {
-        shaper.shape(occupancy, surface(occupancy))
+        match shaper.shape(occupancy, surface(occupancy)) {
+            Shape::Whole(bricks) => bricks,
+            Shape::Parts(parts) => panic!("cut into {} parts", parts.len()),
+        }
     }
 
     /// How far `point` is outside `brick`: its distance past the face it is
@@ -611,6 +687,37 @@ mod tests {
         );
     }
 
+    /// Shape `occupancy`; where it comes back in parts, cut each out as the
+    /// planner does, the others its obstacles, and shape it in turn. Every
+    /// body that results is sound, and the parts take every sample once.
+    fn assert_sound_in_parts(occupancy: &Occupancy, shaper: &BrickShaper) {
+        match shaper.shape(occupancy, surface(occupancy)) {
+            Shape::Whole(bricks) => assert_sound(occupancy, shaper, &bricks),
+            Shape::Parts(parts) => {
+                let mut taken: Vec<[usize; 3]> = parts.iter().flatten().copied().collect();
+                taken.sort_unstable();
+                let mut all = samples(occupancy);
+                all.sort_unstable();
+                assert_eq!(taken, all, "the parts do not take every sample once");
+                for part in &parts {
+                    let own: HashSet<[usize; 3]> = part.iter().copied().collect();
+                    let cut = Occupancy::new(
+                        occupancy.dims(),
+                        SPACING,
+                        occupancy.world_position(Vector3::zeros()),
+                        occupancy.rotation(),
+                        |s| match occupancy.sample(s) {
+                            Sample::Solid if own.contains(&s) => Sample::Solid,
+                            Sample::Air => Sample::Air,
+                            _ => Sample::Obstacle,
+                        },
+                    );
+                    assert_sound_in_parts(&cut, shaper);
+                }
+            }
+        }
+    }
+
     #[test]
     fn a_block_is_one_brick() {
         let block = occupancy([10, 8, 9], |[x, y, z]| {
@@ -689,6 +796,38 @@ mod tests {
         assert_sound(&slab, &shaper, &bricks);
     }
 
+    /// A hollow dome, a shell two samples thick, needs more convex pieces
+    /// than one body carries: it is cut into parts that take every sample
+    /// once, each a lump of neighbours.
+    #[test]
+    fn a_hollow_dome_comes_down_in_parts() {
+        let dome = occupancy([26, 15, 26], |[x, y, z]| {
+            let d = Vector3::new(x as f32, y as f32, z as f32) - Vector3::new(12.5, 2.0, 12.5);
+            (2..14).contains(&y) && (9.0..=11.0).contains(&d.norm())
+        });
+        let shaper = BrickShaper::default();
+        let Shape::Parts(parts) = shaper.shape(&dome, surface(&dome)) else {
+            panic!("a dome is shaped as one body");
+        };
+        assert!(parts.len() >= 2);
+        let mut taken: Vec<[usize; 3]> = parts.iter().flatten().copied().collect();
+        taken.sort_unstable();
+        let before = taken.len();
+        taken.dedup();
+        assert_eq!(taken.len(), before, "a sample is in two parts");
+        assert_eq!(taken, {
+            let mut all = samples(&dome);
+            all.sort_unstable();
+            all
+        });
+        for part in &parts {
+            let lo = [0, 1, 2].map(|a| part.iter().map(|s| s[a]).min().unwrap());
+            let hi = [0, 1, 2].map(|a| part.iter().map(|s| s[a]).max().unwrap());
+            let spread = (0..3).map(|a| hi[a] - lo[a]).max().unwrap();
+            assert!(spread < 26, "a part spans the dome: {lo:?}..{hi:?}");
+        }
+    }
+
     #[test]
     fn a_ball_is_bevelled_not_boxed() {
         let ball = occupancy([13, 13, 13], |[x, y, z]| {
@@ -733,7 +872,7 @@ mod tests {
             if samples(&lump).is_empty() {
                 continue;
             }
-            assert_sound(&lump, &shaper, &shape(&shaper, &lump));
+            assert_sound_in_parts(&lump, &shaper);
         }
     }
 }

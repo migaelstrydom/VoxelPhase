@@ -597,3 +597,29 @@ held deeper than the inset.
 - The seeded lumps then fell to 0.58 of their samples' volume, with 7 bricks:
   strands one sample thick, the inset off every face. The surface check holds
   them; the volume floor was dropped from the test.
+
+## E24. The hill's shell as parts (2026-10-04)
+
+**Question.** Can a fragment too intricate for one body come down as several,
+each resting on its own bricks?
+
+**Setup.** `garden_hill_shell`: 28 grenades in two rings round the hill's
+foot (radius 9 m at 3 m up, 8 m at 4.5 m). A single ring of 10 at 2.5 m cut
+only chips. Shaper unit tests: a ball, a hollow dome, 300 seeded lumps shaped
+recursively through their parts.
+
+**Result.**
+
+- Blast 24 frees the shell: 1,370 samples, 171 m³.
+- Every held air sample counted as a gap: a ball of radius 4.5 cut into 15
+  parts. Counting only air between the cell's own samples along an axis: the
+  ball is one body, the shell 49 parts.
+- 49 parts: about 25 pushed out on their first frame; each settled alone, 1.
+  With air beside another part written as -1: 15 parts, 2 failures. Lines
+  widened to the 13 of the lattice: one part's bricks still held two air
+  samples 0.78 voxels deep, a notch whose far side was another cell. Judged
+  against the whole fragment (`Occupancy::encloses`) instead of the cell: 19
+  parts, all at rest, none pushed, none holding enclosed air.
+- With the shaper's air splitting switched off, the harness flags two bodies
+  holding air and two pushed out.
+- Cost: 94 ms to plan the shell's blast; the table's 16 ms, from 1.4 (R33).

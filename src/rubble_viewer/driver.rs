@@ -6,9 +6,13 @@ use super::scenario::{Blast, Scenario};
 use crate::debug::DebugLines;
 use crate::explosion::Explosion;
 use crate::physics::{PhysicsImpulse, PhysicsWorld, RigidBodyHandle, SequentialStepper, Stepper};
-use crate::rubble::{Cut, Flight, Outcome, Plan, RubblePlanner, ScreeRules};
-use crate::terrain::{TerrainWorld, VoxelMaterial};
+use crate::rubble::{Bricks, Cut, Flight, Outcome, Plan, RubblePlanner, ScreeRules};
+use crate::terrain::{Occupancy, TerrainWorld, VoxelMaterial};
 
+/// How deep a boulder's bricks may hold air in its holes and hollows, in
+/// voxels. A brick's bevels skim the air at a concave corner by a few tenths
+/// of a voxel; deeper is a gap the solver would stand things on.
+const GAP_DEPTH: f32 = 0.5;
 /// The frame rate scree is flown and boulders stepped at, as in the game.
 const FRAME_SECONDS: f32 = 1.0 / 60.0;
 /// The game's physics substep and its cap per frame.
@@ -24,14 +28,20 @@ const LOST_MARGIN: f32 = 4.0;
 /// the solver pushed it out, which moves it without adding energy.
 const EJECTION_TOLERANCE: f32 = 0.005;
 
-/// One fragment a blast cut loose, as the report needs it.
+/// One piece of what a blast cut loose, as the report needs it: a fragment,
+/// or a part of one too intricate to be one body.
 #[derive(Debug, Clone, Copy)]
 pub struct FragmentRecord {
+    /// Which of the blast's fragments it is, or is a part of.
+    pub source: usize,
     pub samples: usize,
     pub volume: f32,
     pub centroid: Point3<f32>,
     pub material: VoxelMaterial,
     pub fate: Fate,
+    /// For a boulder, the air samples in its holes, gaps and hollows that
+    /// its bricks hold: none, or the solver stands things on empty space.
+    pub air_held: usize,
 }
 
 /// What became of a fragment.
@@ -166,38 +176,78 @@ fn settle(
         .collect()
 }
 
-/// What becomes of everything `cut` holds, played out against `terrain`.
-fn fates_of(cut: &Cut, planner: &mut RubblePlanner, terrain: &TerrainWorld) -> Vec<Fate> {
+/// What becomes of everything `cut` holds, played out against `terrain`:
+/// one record a piece.
+fn play(cut: Cut, planner: &mut RubblePlanner, terrain: &TerrainWorld) -> Vec<FragmentRecord> {
+    let shove = cut.shove;
     let mut world = PhysicsWorld::default();
     let mut followed = Vec::new();
-    let mut fates: Vec<Fate> = planner
+    let mut records: Vec<FragmentRecord> = planner
         .plan(cut)
         .into_iter()
         .enumerate()
-        .map(|(index, plan)| match plan {
-            Plan::Dust { .. } => Fate::Dust,
-            Plan::Scree { flight, .. } => fly(flight, terrain),
-            Plan::Boulder(boulder) => {
-                let mass = boulder.mass;
-                let placed = boulder.place(&mut world);
-                let thrown = cut
-                    .shove
-                    .impulse_at(placed.centre)
-                    .map_or(Vector3::zeros(), |j| j / mass);
-                followed.push(Followed {
-                    index,
-                    body: placed.body,
-                    start: placed.centre,
-                    thrown,
-                });
-                Fate::Lost
+        .map(|(index, piece)| {
+            let fragment = &piece.fragment;
+            let mut air_held = 0;
+            let fate = match piece.plan {
+                Plan::Dust { .. } => Fate::Dust,
+                Plan::Scree { flight, .. } => fly(flight, terrain),
+                Plan::Boulder(boulder) => {
+                    air_held = air_held_by(&boulder.bricks, &fragment.occupancy(), GAP_DEPTH);
+                    let mass = boulder.mass;
+                    let placed = boulder.place(&mut world);
+                    let thrown = shove
+                        .impulse_at(placed.centre)
+                        .map_or(Vector3::zeros(), |j| j / mass);
+                    followed.push(Followed {
+                        index,
+                        body: placed.body,
+                        start: placed.centre,
+                        thrown,
+                    });
+                    Fate::Lost
+                }
+            };
+            FragmentRecord {
+                source: piece.source,
+                samples: fragment.sample_count(),
+                volume: fragment.volume(),
+                centroid: fragment.world_centroid(),
+                material: fragment.material(),
+                fate,
+                air_held,
             }
         })
         .collect();
-    for (index, fate) in settle(&mut world, &followed, cut.shove, terrain) {
-        fates[index] = fate;
+    for (index, fate) in settle(&mut world, &followed, shove, terrain) {
+        records[index].fate = fate;
     }
-    fates
+    records
+}
+
+/// How many of the air samples in a boulder's holes, gaps and hollows its
+/// bricks hold deeper than `depth` voxels: empty space the solver treats as
+/// rock (`Occupancy::encloses`). A notch in a corner, which any convex brick
+/// fills, is not one.
+fn air_held_by(bricks: &Bricks, occupancy: &Occupancy, depth: f32) -> usize {
+    let [nx, ny, nz] = occupancy.dims();
+    let depth = depth * occupancy.spacing();
+    (0..nx)
+        .flat_map(|x| (0..ny).flat_map(move |y| (0..nz).map(move |z| [x, y, z])))
+        .filter(|&s| occupancy.encloses(s))
+        .filter(|s| {
+            let at = occupancy.world_position(Vector3::new(s[0] as f32, s[1] as f32, s[2] as f32));
+            bricks.bricks.iter().any(|brick| {
+                let local = bricks
+                    .rotation
+                    .inverse_transform_vector(&(at - brick.centre));
+                brick.hull.faces.iter().all(|face| {
+                    let on = brick.hull.vertices[face.vertex_indices[0] as usize];
+                    face.normal.dot(&(local - on)) < -depth
+                })
+            })
+        })
+        .count()
 }
 
 /// What one blast did.
@@ -225,7 +275,25 @@ pub struct Run {
 }
 
 impl Run {
-    /// Every fragment cut loose, in order.
+    /// The size in samples of every fragment cut loose, whole, before any
+    /// was cut into parts.
+    pub fn fragment_sizes(&self) -> Vec<usize> {
+        self.blasts
+            .iter()
+            .flat_map(|blast| {
+                let mut sizes: Vec<usize> = Vec::new();
+                for piece in &blast.fragments {
+                    if sizes.len() <= piece.source {
+                        sizes.resize(piece.source + 1, 0);
+                    }
+                    sizes[piece.source] += piece.samples;
+                }
+                sizes
+            })
+            .collect()
+    }
+
+    /// Every piece cut loose, in order.
     pub fn fragments(&self) -> impl Iterator<Item = &FragmentRecord> {
         self.blasts.iter().flat_map(|b| b.fragments.iter())
     }
@@ -248,6 +316,7 @@ impl Run {
                     }
                     Fate::Restless { .. } => "boulder never came to rest",
                     Fate::Lost => "boulder fell out of the world",
+                    _ if fragment.air_held > 0 => "boulder's bricks hold air",
                     _ => continue,
                 };
                 found.push(format!(
@@ -300,19 +369,7 @@ pub fn run(scenario: &Scenario) -> Result<Run, String> {
             };
             // Rubble falls on the terrain as remeshed after the blast.
             terrain.update();
-            let fates = fates_of(&cut, &mut planner, &terrain);
-            let fragments = cut
-                .fragments
-                .iter()
-                .zip(fates)
-                .map(|(fragment, fate)| FragmentRecord {
-                    samples: fragment.sample_count(),
-                    volume: fragment.volume(),
-                    centroid: fragment.world_centroid(),
-                    material: fragment.material(),
-                    fate,
-                })
-                .collect();
+            let fragments = play(cut, &mut planner, &terrain);
             BlastRecord {
                 blast,
                 fragments,

@@ -11,7 +11,9 @@
 //!       │               blast's shove
 //!       └── Boulder ──▶ BrickShaper ──▶ a body in the physics world
 //!                       + TerrainMeshInstance + Debris; the shove queued
-//!                       for the next physics step throws it. Past
+//!                       for the next physics step throws it. One too
+//!                       intricate for one body is Fragment::split into
+//!                       parts, each graded and planned in turn. Past
 //!                       `max_boulders` in one blast, the smallest fall as
 //!                       scree.
 //! ```
@@ -24,7 +26,7 @@ use rand::{Rng, SeedableRng};
 use specs::{Builder, Entities, LazyUpdate, Read, System, Write};
 
 use super::boulder::Boulder;
-use super::brick_shaper::BrickShaper;
+use super::brick_shaper::{BrickShaper, Shape};
 use super::dust::{Crumble, CrumbleSize};
 use super::grade::{Grade, GradeRules, Measure};
 use super::scree::{FallingScree, Flight};
@@ -124,7 +126,15 @@ impl Launch {
 /// Seed for the spin of everything cut loose: a blast replays the same.
 const SPIN_SEED: u64 = 0x5c4ee;
 
-/// What one fragment becomes.
+/// A piece of rubble: a fragment, or a part of one, and what it becomes.
+pub struct Piece {
+    pub fragment: Fragment,
+    /// Which of the cut's fragments it is, or is a part of.
+    pub source: usize,
+    pub plan: Plan,
+}
+
+/// What one piece becomes.
 pub enum Plan {
     /// A crumble of `size` at `at`.
     Dust { at: Point3<f32>, size: CrumbleSize },
@@ -165,8 +175,9 @@ impl Default for RubblePlanner {
 }
 
 impl RubblePlanner {
-    /// What each of `cut`'s fragments becomes, in order.
-    pub fn plan(&mut self, cut: &Cut) -> Vec<Plan> {
+    /// What `cut`'s fragments become: one piece each, or several for a
+    /// boulder too intricate for one body, cut where its convex pieces meet.
+    pub fn plan(&mut self, cut: Cut) -> Vec<Piece> {
         let mut grades: Vec<Grade> = cut
             .fragments
             .iter()
@@ -183,26 +194,60 @@ impl RubblePlanner {
         for &i in boulders.iter().skip(self.max_boulders) {
             grades[i] = Grade::Scree;
         }
-        cut.fragments
-            .iter()
-            .zip(grades)
-            .map(|(fragment, grade)| self.plan_one(fragment, grade, &cut.shove))
-            .collect()
+        let mut pieces = Vec::new();
+        for (source, (fragment, grade)) in cut.fragments.into_iter().zip(grades).enumerate() {
+            self.plan_piece(fragment, source, grade, &cut.shove, &mut pieces);
+        }
+        pieces
     }
 
-    fn plan_one(&mut self, fragment: &Fragment, grade: Grade, shove: &PhysicsImpulse) -> Plan {
-        let size = CrumbleSize::of(fragment);
-        let dust = || Plan::Dust {
+    /// What `fragment`, graded `grade`, becomes, onto `pieces`.
+    fn plan_piece(
+        &mut self,
+        fragment: Fragment,
+        source: usize,
+        grade: Grade,
+        shove: &PhysicsImpulse,
+        pieces: &mut Vec<Piece>,
+    ) {
+        let size = CrumbleSize::of(&fragment);
+        let dust = Plan::Dust {
             at: fragment.world_centroid(),
             size,
         };
         if grade == Grade::Dust {
-            return dust();
+            pieces.push(Piece {
+                fragment,
+                source,
+                plan: dust,
+            });
+            return;
         }
         let mesh = fragment.mesh();
         if mesh.indices.is_empty() {
-            return dust();
+            pieces.push(Piece {
+                fragment,
+                source,
+                plan: dust,
+            });
+            return;
         }
+        let bricks = if grade == Grade::Boulder {
+            let surface = mesh.vertices.iter().map(|v| mesh.origin + v.pos);
+            match self.bricks.shape(&fragment.occupancy(), surface) {
+                Shape::Whole(bricks) => Some(bricks),
+                Shape::Parts(parts) => {
+                    for part in fragment.split(&parts) {
+                        let grade = self.grades.grade(Measure::of(&part));
+                        self.plan_piece(part, source, grade, shove, pieces);
+                    }
+                    return;
+                }
+            }
+        } else {
+            None
+        };
+
         let mass = fragment.volume() * fragment.material().mass_density();
         let reach = mesh
             .vertices
@@ -212,27 +257,32 @@ impl RubblePlanner {
         let (velocity, spin) = self
             .launch
             .of(shove, mass, mesh.origin, reach, &mut self.rng);
-        if grade == Grade::Boulder {
-            return Plan::Boulder(Boulder {
-                bricks: self.bricks.shape(
-                    &fragment.occupancy(),
-                    mesh.vertices.iter().map(|v| mesh.origin + v.pos),
-                ),
+        let plan = match bricks {
+            Some(bricks) => Plan::Boulder(Boulder {
+                bricks,
                 mesh,
                 mass,
                 spin,
                 material: fragment.material(),
                 volume: fragment.volume(),
                 size,
-            });
-        }
-        let flight = Flight::new(
-            mesh.origin,
-            velocity,
-            spin,
-            mesh.vertices.iter().map(|v| v.pos),
-        );
-        Plan::Scree { flight, mesh, size }
+            }),
+            None => Plan::Scree {
+                flight: Flight::new(
+                    mesh.origin,
+                    velocity,
+                    spin,
+                    mesh.vertices.iter().map(|v| v.pos),
+                ),
+                mesh,
+                size,
+            },
+        };
+        pieces.push(Piece {
+            fragment,
+            source,
+            plan,
+        });
     }
 }
 
@@ -253,8 +303,8 @@ impl<'a> System<'a> for RubbleSpawnSystem {
 
     fn run(&mut self, (entities, lazy, mut queue, mut physics): Self::SystemData) {
         for cut in queue.drain() {
-            for plan in self.planner.plan(&cut) {
-                match plan {
+            for piece in self.planner.plan(cut) {
+                match piece.plan {
                     Plan::Dust { at, size } => {
                         lazy.create_entity(&entities)
                             .with(Position(at.coords))
