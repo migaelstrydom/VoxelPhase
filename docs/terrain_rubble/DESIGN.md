@@ -225,8 +225,12 @@ Non-bearing solid samples are assigned after the flood fill:
 
 Lifting a piece can strip the last neighbour from a sample beside it and leave
 that paper-thin in turn, so `cut_loose` searches the same crater again until
-nothing more comes away (at most four passes). Over `rubble_viewer`'s scenarios
-no blast lifted anything on a third pass.
+nothing more comes away (at most eight passes; no scenario lifts on a sixth).
+A piece can reach far past the crater, so beyond the undercut the paper rule
+applies to any sample the blast **made** paper-thin: thick in the field before
+it, thin after. A strip that was paper as authored stays, or each pass would
+unzip it a sample further. Each pass's region takes in everything earlier
+passes lifted (ISSUES.md R5).
 
 #### 6-connectivity
 
@@ -721,7 +725,8 @@ first and a second; the rest arrive with bodies):
 
 `cargo test --release --lib rubble_viewer` runs the catalogue, in a few
 seconds. A scenario can record a **known gap**: it is expected to break an
-invariant, and fails when it stops doing so (`garden_hill`, ISSUES.md R5).
+invariant, and fails when it stops doing so (`garden_hill` was one, until R5
+was fixed).
 
 **Fuzz:** `rubble_viewer --fuzz <seeds>` sets off seeded random blasts over a
 real level's terrain (`perf::Ground`) with only the invariants as judge, in

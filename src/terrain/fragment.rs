@@ -273,14 +273,28 @@ impl CutExtent {
 impl Crater {
     /// The field before the blast over the region the search has to read: the
     /// surveyed samples, grown to take in every bearing piece the carve closed
-    /// off. Outside the survey the carve changed nothing, so the grid there is
-    /// the field before it, but for samples earlier passes `lifted`.
+    /// off and everything earlier passes `lifted`. Outside the survey the carve
+    /// changed nothing, so the grid there is the field before it, but for
+    /// samples earlier passes lifted.
+    ///
+    /// The race runs on the grid as it is now, so it no longer sees a piece an
+    /// earlier pass lifted. The region still has to take in that piece's
+    /// surroundings: lifting it bared the samples beside it.
     fn before_in(&self, grid: &ChunkGrid, lifted: &[(Point3<f32>, Voxel)]) -> Cow<'_, VoxelBlock> {
         let surveyed = self.before.lattice().bounds();
-        let Some(closed) = self.closed_off(grid) else {
+        let pad = Vector3::repeat(CLOSED_PIECE_PADDING * grid.voxel_size());
+        let lifted_box = lifted
+            .iter()
+            .map(|&(at, _)| AABB::new(at - pad, at + pad))
+            .reduce(|a, b| a.merged(&b));
+        let Some(grown) = [self.closed_off(grid), lifted_box]
+            .into_iter()
+            .flatten()
+            .reduce(|a, b| a.merged(&b))
+        else {
             return Cow::Borrowed(&self.before);
         };
-        let region = surveyed.merged(&closed);
+        let region = surveyed.merged(&grown);
         if region == surveyed {
             return Cow::Borrowed(&self.before);
         }
@@ -374,9 +388,10 @@ fn is_sheet_at(c: [i32; 3], solid: &impl Fn([i32; 3]) -> bool) -> bool {
 /// The most times [`cut_loose`] searches one crater. Lifting a piece can strip
 /// the last neighbour from a sample beside it and leave that paper-thin in
 /// turn, so a crater is searched again until nothing more comes away. Over
-/// `rubble_viewer`'s scenarios no blast lifted anything on a third pass; the
-/// cap bounds a pathological field.
-const MAX_PASSES: usize = 4;
+/// `rubble_viewer`'s scenarios one blast lifted something on a fifth pass,
+/// peeling a cave's skin (ISSUES.md R5), and none on a sixth; the cap bounds a
+/// pathological field.
+const MAX_PASSES: usize = 8;
 
 /// What [`cut_loose`] lifted out of the grid.
 pub(super) struct CutLoose {
@@ -421,8 +436,12 @@ impl Search {
         let lattice = Lattice3 { dims: after.dims() };
 
         let undercut = crater.undercut;
+        let damage = Damage {
+            undercut,
+            before: &before,
+        };
         let (stood_free, _) = standing_free(&before, &lattice, None);
-        let (stand_free, roles) = standing_free(&after, &lattice, Some(undercut));
+        let (stand_free, roles) = standing_free(&after, &lattice, Some(&damage));
         let reached = |i: usize| {
             let [x, y, z] = lattice.coords(i);
             (after.lattice().position(x, y, z) - undercut.center).norm() <= undercut.reach
@@ -531,6 +550,37 @@ struct Undercut {
     reach: f32,
 }
 
+/// What a blast did to the field, as the rules for the field after it see it.
+struct Damage<'a> {
+    undercut: Undercut,
+    /// The field before the blast, over the same lattice as the block judged.
+    before: &'a VoxelBlock,
+}
+
+impl Damage<'_> {
+    /// Whether the sheet rule applies at `c`: within the undercut only.
+    fn undercuts(&self, block: &VoxelBlock, c: [usize; 3]) -> bool {
+        (block.lattice().position(c[0], c[1], c[2]) - self.undercut.center).norm()
+            <= self.undercut.reach
+    }
+
+    /// Whether a sample at `c` drawn `thickness` thin is the blast's paper.
+    /// Within the undercut it is, whatever it was before. Further out it is
+    /// only if the blast made it so: lifting a piece strips the samples beside
+    /// it as a carve does, however far the piece reaches, but a strip that
+    /// was paper as authored stays, or a lift would unzip it a sample a pass.
+    fn made_paper(
+        &self,
+        block: &VoxelBlock,
+        lattice: &Lattice3,
+        c: [usize; 3],
+        thickness: f32,
+    ) -> bool {
+        thickness < PAPER_THIN
+            && (self.undercuts(block, c) || drawn_thickness(self.before, lattice, c) >= PAPER_THIN)
+    }
+}
+
 /// Read every sample the grid holds, with a voxel of air around them; an empty
 /// block for an empty grid.
 fn read_whole(grid: &ChunkGrid) -> VoxelBlock {
@@ -568,7 +618,7 @@ fn read_box(grid: &ChunkGrid, region: &AABB) -> VoxelBlock {
 /// not kept even as a lip: a lip that thin is the very flap this module exists
 /// to remove. A weak sample drawn thick is a rind: the skin of something that
 /// bears, which only reads as weak because the surface runs past it.
-fn classify(block: &VoxelBlock, lattice: &Lattice3, undercut: Option<Undercut>) -> Vec<Role> {
+fn classify(block: &VoxelBlock, lattice: &Lattice3, damage: Option<&Damage>) -> Vec<Role> {
     let solid = |c: [usize; 3]| block.get(c[0], c[1], c[2]).is_solid();
 
     (0..lattice.len())
@@ -581,14 +631,12 @@ fn classify(block: &VoxelBlock, lattice: &Lattice3, undercut: Option<Undercut>) 
             if voxel.material.is_indestructible() {
                 return Role::Fixed;
             }
-            let near = undercut.is_some_and(|u| {
-                (block.lattice().position(c[0], c[1], c[2]) - u.center).norm() <= u.reach
-            });
-            if voxel.density >= BEARING_DENSITY && !(near && is_sheet(c, lattice, &solid)) {
+            let undercut = damage.is_some_and(|d| d.undercuts(block, c));
+            if voxel.density >= BEARING_DENSITY && !(undercut && is_sheet(c, lattice, &solid)) {
                 return Role::Bearing;
             }
             let thickness = drawn_thickness(block, lattice, c);
-            if near && thickness < PAPER_THIN {
+            if damage.is_some_and(|d| d.made_paper(block, lattice, c, thickness)) {
                 return Role::Paper;
             }
             if voxel.density < BEARING_DENSITY && thickness >= PAPER_THIN {
@@ -691,9 +739,9 @@ fn ground(roles: &[Role], lattice: &Lattice3) -> Vec<bool> {
 fn standing_free(
     block: &VoxelBlock,
     lattice: &Lattice3,
-    undercut: Option<Undercut>,
+    damage: Option<&Damage>,
 ) -> (Vec<Vec<usize>>, Vec<Role>) {
-    let roles = classify(block, lattice, undercut);
+    let roles = classify(block, lattice, damage);
     let grounded = ground(&roles, lattice);
     (loose_pieces(&roles, &grounded, lattice), roles)
 }
@@ -1281,6 +1329,58 @@ mod tests {
             [0.0, 3.0, 0.0],
             1.0,
         );
+        assert!(s.pieces.is_empty());
+    }
+
+    /// A later pass over a crater far below: an earlier pass has `lifted` a
+    /// piece out of the field `build` makes, and those samples are air in it.
+    fn search_after_lift(build: impl Fn(&mut ChunkGrid), lifted: &[[i32; 3]]) -> Search {
+        let solid = Voxel {
+            density: 1.0,
+            material: VoxelMaterial::Rock,
+        };
+        let mut was = ChunkGrid::new(1.0);
+        build(&mut was);
+        for &c in lifted {
+            put(&mut was, c, solid.density, solid.material);
+        }
+        let mut is = ChunkGrid::new(1.0);
+        build(&mut is);
+        let crater = Crater::survey(&was, Point3::new(0.0, 1.0, 12.0), 1.5);
+        let lifted: Vec<(Point3<f32>, Voxel)> = lifted
+            .iter()
+            .map(|c| (Point3::new(c[0] as f32, c[1] as f32, c[2] as f32), solid))
+            .collect();
+        Search::run(&is, &crater, &lifted)
+    }
+
+    /// A weak sample on a post, against a wall, with a piece beside it that an
+    /// earlier pass lifted: on every axis but one it has solid beside it, and
+    /// on that one the lift left it air on both sides.
+    fn post_against_a_wall(g: &mut ChunkGrid, wall: bool) {
+        ground(g);
+        fill(g, [0, 1, 0], [0, 5, 0], 1.0);
+        if wall {
+            fill(g, [-4, 1, -4], [4, 8, -1], 1.0);
+        }
+        put(g, [0, 6, 0], 0.05, VoxelMaterial::Rock);
+    }
+
+    /// Lifting a piece strips the samples beside it the way a carve does,
+    /// however far from the crater the piece reached and however far past
+    /// what the crater's survey read. A sample it leaves paper-thin falls.
+    #[test]
+    fn a_sample_a_lift_left_paper_thin_falls() {
+        let s = search_after_lift(|g| post_against_a_wall(g, true), &[[1, 6, 0]]);
+        assert_eq!(piece_sizes(&s), vec![1]);
+    }
+
+    /// A sample already paper-thin before the blast is part of the field as
+    /// authored, whatever is lifted beside it; otherwise every lift would
+    /// unzip an authored strip a sample further each pass.
+    #[test]
+    fn a_sample_paper_thin_before_the_lift_stays() {
+        let s = search_after_lift(|g| post_against_a_wall(g, false), &[[1, 6, 0]]);
         assert!(s.pieces.is_empty());
     }
 

@@ -18,7 +18,7 @@ An issue's **status** is one of:
 | [R2](#r2) | A grenade's crater shrinks with the voxel size | fixed `61126dd` | high |
 | [R3](#r3) | Box edges on the lattice read as loose, paper-thin strips | fixed `45787be` | medium |
 | [R4](#r4) | A grenade at a stalactite's root leaves 11 more samples paper-thin | fixed `45787be` | medium |
-| [R5](#r5) | Cave-hill blasts leave more samples free or paper-thin | pinned | low |
+| [R5](#r5) | Cave-hill blasts leave more samples free or paper-thin | fixed (branch `rubble-phase2`) | low |
 | [R6](#r6) | The terrain `Arch` drew its legs as slivers | fixed `f9007f4` | high |
 | [R7](#r7) | `level_viewer --blast` did nothing on a level without water | fixed `f9007f4` | low |
 | [R8](#r8) | A grenade costs 100 ms at 0.125 m voxels | open | medium |
@@ -186,15 +186,16 @@ count by 2.
 scenario now puts the grenade at (21.5, 7.6, 59.0), at the 1.2 m stalactite's
 root, which drops it as a 44-sample piece and leaves the paper-thin count at 718.
 
-**Left open.** The paper rule's reach is still narrower than the region the
-before/after rule judges. Any other way of lifting a piece out there can leave
+**Left open, since closed by R5's fix.** The paper rule's reach was narrower
+than the region the before/after rule judges, so a lift out there could leave
 paper behind it the same way.
 
 <a id="r5"></a>
 ## R5. Cave-hill blasts leave more samples free or paper-thin
 
-**Status:** pinned (`garden_hill`, since R2's fix blasts 9 at (59.98, 8.09,
-54.51) and 16 at (55.95, 4.38, 53.75)). **Found by:** E13.
+**Status:** fixed on `rubble-phase2` (E20). Was pinned by `garden_hill`, since
+R2's fix blasts 9 at (59.98, 8.09, 54.51) and 16 at (55.95, 4.38, 53.75).
+**Found by:** E13.
 
 **Symptom.** Thirty seeded grenades into the cave hill. Before the R3 fix, blast
 18 left one more sample standing free than before it (2,491 → 2,492). Since it
@@ -208,6 +209,22 @@ join a 35-sample piece in which every sample is weak (density at most 0.09),
 running 3.7 m down into the caves under the hill, probably left by `Caves`
 (R10). The piece reaches past the search region, so the search holds it up
 (assumption A), while the whole-terrain audit finds it closed and free.
+
+**Cause of what was left (E20).** Two things, both about passes after the
+first. Blast 9 lifted something on all four passes `cut_loose` allowed, and
+the fourth bared a rind that no fifth pass judged. Blast 16 lifted a 96-sample
+piece 7 m from its crater; the next pass's region no longer took that piece in
+(the race runs on the grid as it is now), so the samples it bared sat on the
+region's face, held, and out of the paper rule's reach besides. This is R4's
+"left open".
+
+**Fix.** The paper rule applies, beyond the undercut, to any sample the blast
+made paper-thin: thick in the field before it, thin after. Only a carve or a
+lift changes the field, so that is exactly the samples a lift stripped, however
+far the piece reached; a strip that was paper as authored is left alone, or a
+lift unzips it one sample a pass. Each pass's region takes in everything
+earlier passes lifted, padded by 3 samples. `MAX_PASSES` is 8; the most any
+scenario uses is 5 lifting passes.
 
 <a id="r6"></a>
 ## R6. The terrain `Arch` drew its legs as slivers

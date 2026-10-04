@@ -476,3 +476,35 @@ on `scratch/fine.level.ron` (0.125 m), the Rubble Garden, `island_sea`,
   failed in E18's trial, passes. `garden_hill`: nothing is left free any more;
   blasts 9 and 16 each leave one more sample paper-thin (R5).
 
+
+## E20. Where `garden_hill`'s new paper-thin samples come from (2026-10-04)
+
+**Question.** Which samples do blasts 9 and 16 of `garden_hill` leave
+paper-thin (R5), and why does the paper rule miss them?
+
+**Setup.** At `f3d13da`. The paper-thin audit printing every sample with its
+six neighbours' densities, diffed blast to blast; probes of those samples'
+roles in every pass of `cut_loose`.
+
+**Result.**
+
+- Blast 9 lifted something on all four passes (10, 5, 2, 1 samples). The
+  fourth lifted the sample above (61.5, 6.0, 53.0), a 0.019 rind; no fifth
+  pass ran, so it stayed, drawn 0.04 voxels thick. Raising the cap to 8 fixes
+  blast 9 alone.
+- Blast 16's two samples, (62.5, 4.0, 50.5) and (62.5, 4.0, 51.0), are 7 m from
+  the crater. Pass 1 lifted a 96-sample piece beside them. Pass 2's region is
+  the survey and what the race closes off, and the race runs on the grid as it
+  is, so it no longer saw that piece: the region shrank by a voxel and the two
+  samples sat on its face, held. Out of the paper rule's reach (crater radius +
+  2 voxels) they would have been lips anyway.
+- A first fix, paper rule on any sample face-adjacent to a lifted one, fixed
+  both but unzipped authored paper: a column's lattice-face strip in
+  `garden_tall_columns` lost one sample per pass up to the cap, and three
+  blasts ran all 8 passes. Those strips were paper-thin as authored.
+- Kept: the paper rule applies within the undercut as before, and anywhere
+  else to a sample the blast made paper-thin (thick in the field before it,
+  thin after). The region always takes in what earlier passes lifted, padded by
+  3 samples. Over every scenario, searches per blast: 1 (55), 2 (55), 3 (19),
+  4 (3), 6 (1); the cap is 8. `cut loose` and the fingerprints on `test_arena`,
+  the Rubble Garden and `island_sea` unchanged.

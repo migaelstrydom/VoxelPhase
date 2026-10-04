@@ -230,7 +230,7 @@ fn hill_free_for_all() -> Scenario {
         description: "garden hill: 30 seeded grenades into the caves; nothing left may float",
         level: GARDEN,
         blasts,
-        known_gap: Some("open (R5): blasts 9 and 16 leave one more sample paper-thin than before"),
+        known_gap: None,
         expect: |_| Ok(()),
     }
 }
