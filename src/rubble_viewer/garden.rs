@@ -94,7 +94,7 @@ fn boundary_column() -> Scenario {
         name: "garden_boundary_column",
         description: "garden corner: a column against the segment's edge drops like any other",
         level: GARDEN,
-        blasts: vec![grenade(1.4, 2.6, 95.0)],
+        blasts: vec![grenade(1.4, 1.6, 95.0)],
         known_gap: None,
         expect: |run| something_fell(run, 8),
     }
@@ -163,14 +163,9 @@ fn stalactite_root() -> Scenario {
 fn short_bridge() -> Scenario {
     Scenario {
         name: "garden_short_bridge",
-        description: "garden bridges: the 6 m deck cut at both ends, two grenades each, falls",
+        description: "garden bridges: the 6 m deck cut at both ends, a grenade each, falls",
         level: GARDEN,
-        blasts: vec![
-            grenade(8.8, 8.0, 8.0),
-            grenade(8.8, 7.5, 8.0),
-            grenade(13.2, 8.0, 8.0),
-            grenade(13.2, 7.5, 8.0),
-        ],
+        blasts: vec![grenade(8.2, 8.0, 8.0), grenade(13.8, 8.0, 8.0)],
         known_gap: None,
         expect: |run| something_fell(run, 50),
     }
@@ -195,12 +190,13 @@ fn long_bridge() -> Scenario {
 fn lip_root() -> Scenario {
     Scenario {
         name: "garden_lip_root",
-        description: "garden cliff: grenades along the root of the 0.7 m lip drop it",
+        description:
+            "garden cliff: grenades on the cliff top along the root of the 0.7 m lip drop it",
         level: GARDEN,
         blasts: vec![
-            grenade(83.6, 12.0, 50.5),
-            grenade(83.6, 12.0, 52.0),
-            grenade(83.6, 12.0, 53.5),
+            grenade(84.4, 12.0, 50.5),
+            grenade(84.4, 12.0, 52.0),
+            grenade(84.4, 12.0, 53.5),
         ],
         known_gap: None,
         expect: |run| something_fell(run, 10),
@@ -234,7 +230,7 @@ fn hill_free_for_all() -> Scenario {
         description: "garden hill: 30 seeded grenades into the caves; nothing left may float",
         level: GARDEN,
         blasts,
-        known_gap: Some("open (R5): blasts 10 and 18 leave more samples standing free than before"),
+        known_gap: Some("open (R5): blasts 9 and 16 leave one more sample paper-thin than before"),
         expect: |_| Ok(()),
     }
 }

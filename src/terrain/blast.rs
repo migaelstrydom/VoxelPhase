@@ -1,16 +1,23 @@
 //! How much terrain a charge removes.
 //!
 //! A blast carries a **budget** and spends it outward from the detonation
-//! point, paying [`VoxelMaterial::toughness`] for each voxel it takes. Soft
+//! point, paying [`VoxelMaterial::toughness`] for each cubic metre it takes. Soft
 //! ground lets the budget reach far and the crater is wide; hard rock stalls it
 //! close in and the same charge leaves a dent. The charge does not care what it
 //! is digging through — only how much it can afford.
 //!
 //! ```text
 //!   Blast ──▶ budget = yield x charge confinement   (how enclosed the charge is)
-//!         └─▶ spend outward, cost = toughness x voxel confinement
+//!         └─▶ spend outward, cost = toughness x voxel volume x voxel confinement
 //!         └─▶ the radius where the budget runs out ──▶ Chunk::carve_sphere
 //! ```
+//!
+//! # Independent of voxel size
+//!
+//! Everything is measured in metres: a sample costs its volume, and each
+//! enclosure is judged over a fixed radius in metres. So a charge cuts the same
+//! crater at any resolution, only drawn finer. The figures are tuned at 1 m
+//! voxels.
 //!
 //! # Why a radius and not a set of voxels
 //!
@@ -41,6 +48,9 @@ use nalgebra::Point3;
 
 use super::chunk_grid::ChunkGrid;
 
+/// The voxel size the figures in [`BlastConfig::default`] are tuned at.
+const TUNED_VOXEL_SIZE: f32 = 1.0;
+
 /// A multiplier interpolated from how enclosed something is.
 ///
 /// `at(0.0)` is fully exposed, `at(1.0)` fully buried.
@@ -62,7 +72,7 @@ impl ConfinementRange {
 #[derive(Debug, Clone, Copy)]
 pub struct BlastConfig {
     /// Budget an unconfined charge carries, in toughness-units. One unit buys
-    /// one voxel of `toughness` 1.0 — grass or sand.
+    /// one cubic metre of `toughness` 1.0 — grass or sand.
     pub charge_yield: f32,
 
     /// Hard cap on how far the cut can reach, whatever the budget affords.
@@ -74,6 +84,9 @@ pub struct BlastConfig {
 
     /// How much a voxel's cost grows as the voxel becomes enclosed.
     pub voxel_confinement: ConfinementRange,
+    /// Radius around a voxel sampled to judge how enclosed it is, in metres:
+    /// a voxel and a half at the [`TUNED_VOXEL_SIZE`] the figures are tuned at.
+    pub voxel_probe_radius: f32,
 
     /// Radius around the detonation point sampled to judge how enclosed the
     /// charge is. Roughly the standoff over which venting is decided.
@@ -94,6 +107,7 @@ impl Default for BlastConfig {
                 buried: 2.3,
             },
             charge_probe_radius: 3.0,
+            voxel_probe_radius: 1.5,
         }
     }
 }
@@ -116,14 +130,16 @@ impl BlastConfig {
             charge_confinement: neutral,
             voxel_confinement: neutral,
             charge_probe_radius: radius,
+            voxel_probe_radius: radius,
         }
     }
 }
 
-/// One voxel the blast could pay for, and what it would cost.
+/// One voxel the blast could pay for.
 struct Candidate {
+    sample: Point3<f32>,
     distance: f32,
-    cost: f32,
+    toughness: f32,
 }
 
 /// Radius the charge can actually afford to cut, in grid-local units.
@@ -142,28 +158,37 @@ pub fn effective_radius(
 ) -> Option<f32> {
     let step = grid.voxel_size();
     let budget = config.charge_yield
-        * config
-            .charge_confinement
-            .at(enclosure(grid, centre, config.charge_probe_radius));
+        * config.charge_confinement.at(enclosure(
+            grid,
+            lattice_points(centre, config.charge_probe_radius, step),
+        ));
 
+    let volume = step.powi(3);
     let mut candidates: Vec<Candidate> = lattice_points(centre, config.max_radius, step)
         .filter_map(|sample| {
             let voxel = grid.get(sample);
             if !voxel.is_solid() {
                 return None;
             }
-            let toughness = voxel.material.toughness()?;
             Some(Candidate {
+                sample,
                 distance: nalgebra::distance(&sample, &centre),
-                cost: toughness
-                    * config
-                        .voxel_confinement
-                        .at(enclosure(grid, sample, step * 1.5)),
+                toughness: voxel.material.toughness()?,
             })
         })
         .collect();
 
     candidates.sort_by(|a, b| a.distance.total_cmp(&b.distance));
+    // A voxel's enclosure is the expensive part, and only the voxels reached
+    // before the budget runs out need it.
+    let cost = |candidate: &Candidate| {
+        candidate.toughness
+            * volume
+            * config.voxel_confinement.at(enclosure(
+                grid,
+                probe_points(candidate.sample, config.voxel_probe_radius, step),
+            ))
+    };
 
     // Spend outward. The cut lands between the last voxel paid for and the
     // first that could not be, so the carve sphere contains exactly the set the
@@ -175,11 +200,12 @@ pub fn effective_radius(
         // carries. No material is ever a wall — a small charge repeated has to
         // make progress, or the player is left staring at terrain that looks
         // destructible and never is.
-        let affordable = last_paid.is_none() || spent + candidate.cost <= budget;
+        let cost = cost(candidate);
+        let affordable = last_paid.is_none() || spent + cost <= budget;
         if !affordable {
             return Some(midpoint(last_paid.unwrap(), candidate.distance, step));
         }
-        spent += candidate.cost;
+        spent += cost;
         last_paid = Some(candidate.distance);
     }
 
@@ -196,16 +222,15 @@ fn midpoint(paid: f32, unpaid: f32, step: f32) -> f32 {
     }
 }
 
-/// Fraction of the lattice samples within `radius` of `point` that are solid.
+/// Fraction of `samples` that are solid.
 ///
 /// 0.0 is open air, 1.0 is fully buried. Sampling the lattice rather than
 /// casting rays keeps this independent of voxel size: it reads the same
 /// neighbourhood shape whether a voxel is 2 m or 0.5 m.
-fn enclosure(grid: &ChunkGrid, point: Point3<f32>, radius: f32) -> f32 {
-    let step = grid.voxel_size();
+fn enclosure(grid: &ChunkGrid, samples: impl Iterator<Item = Point3<f32>>) -> f32 {
     let mut total = 0u32;
     let mut solid = 0u32;
-    for sample in lattice_points(point, radius, step) {
+    for sample in samples {
         total += 1;
         if grid.get(sample).is_solid() {
             solid += 1;
@@ -215,6 +240,21 @@ fn enclosure(grid: &ChunkGrid, point: Point3<f32>, radius: f32) -> f32 {
         return 0.0;
     }
     solid as f32 / total as f32
+}
+
+/// Samples within `radius` of the lattice sample `centre`, spaced as on the
+/// lattice the figures are tuned at ([`TUNED_VOXEL_SIZE`]), or on the grid's
+/// own when that is coarser.
+///
+/// A voxel's enclosure is the expensive part of a blast, read once for every
+/// voxel it pays for. Sampled on the grid's own lattice, a probe of fixed size
+/// costs 8× more with each halving of the voxel size: a second a grenade at
+/// 0.125 m. At the tuned spacing it reads the same ~19 samples at every
+/// resolution, the ones the 1 m lattice reads, and they still land on the
+/// grid's lattice, since the spacing is a whole number of its voxels.
+fn probe_points(centre: Point3<f32>, radius: f32, step: f32) -> impl Iterator<Item = Point3<f32>> {
+    let spacing = step * (TUNED_VOXEL_SIZE / step).round().max(1.0);
+    lattice_points(Point3::origin(), radius, spacing).map(move |offset| centre + offset.coords)
 }
 
 /// Lattice sample positions within `radius` of `centre`.
@@ -251,7 +291,7 @@ mod tests {
     use super::*;
     use crate::terrain::voxel::{Voxel, VoxelMaterial};
 
-    const VOXEL: f32 = 2.0;
+    const VOXEL: f32 = 1.0;
 
     /// A solid block of one material, centred on the origin.
     fn block(material: VoxelMaterial, half_extent: f32) -> ChunkGrid {
@@ -407,6 +447,46 @@ mod tests {
         let radius =
             effective_radius(&block(VoxelMaterial::Sand, 20.0), Point3::origin(), &config).unwrap();
         assert!(radius <= config.max_radius, "radius {radius}");
+    }
+
+    /// Solid ground of `material` at or below y = 0 on a lattice of `step`.
+    fn ground_at(step: f32, material: VoxelMaterial, half_extent: f32) -> ChunkGrid {
+        let mut grid = ChunkGrid::new(step);
+        let n = (half_extent / step) as i32;
+        for i in -n..=n {
+            for j in -n..=0 {
+                for k in -n..=n {
+                    let p = Point3::new(i as f32 * step, j as f32 * step, k as f32 * step);
+                    grid.set(p, Voxel::solid(material));
+                }
+            }
+        }
+        grid
+    }
+
+    /// A grenade cuts the crater it cuts at 1 m voxels at any resolution, only
+    /// drawn finer: in the open and buried, in sand and in rock. The radii
+    /// agree to within half a 1 m voxel, the step by which a crater on that
+    /// lattice grows; at 0.5 and 0.25 m they agree to a tenth of a metre.
+    #[test]
+    fn a_charge_cuts_the_same_crater_at_any_voxel_size() {
+        let config = BlastConfig::default();
+        for material in [VoxelMaterial::Sand, VoxelMaterial::Rock] {
+            for at in [Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, -4.0, 0.0)] {
+                let radii: Vec<f32> = [1.0, 0.5, 0.25]
+                    .iter()
+                    .map(|&step| {
+                        effective_radius(&ground_at(step, material, 12.0), at, &config).unwrap()
+                    })
+                    .collect();
+                let spread = radii.iter().cloned().fold(f32::MIN, f32::max)
+                    - radii.iter().cloned().fold(f32::MAX, f32::min);
+                assert!(
+                    spread <= 0.5,
+                    "{material:?} at {at:?}: radii at 1, 0.5, 0.25 m are {radii:?}"
+                );
+            }
+        }
     }
 
     #[test]
