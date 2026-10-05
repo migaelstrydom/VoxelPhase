@@ -26,7 +26,7 @@ use crate::platform::MovingPlatformSystem;
 use crate::projectile::{
     GrenadeSpawnSystem, GrenadeVisualSystem, LifetimeSystem, ProjectileDetonationSystem,
 };
-use crate::rubble::{RubbleSpawnSystem, ScreeSystem};
+use crate::rubble::{BoulderCullSystem, RubbleSpawnSystem, ScreeSystem};
 use crate::sensing::SensorProbeSystem;
 use crate::systems::{
     CameraControlSystem, CharacterControlSystem, PhysicsSyncSystem, PlayerInputSystem,
@@ -226,6 +226,11 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
         .with(TerrainUpdateSystem, "terrain_update", &["explosion"])
         // Scree falls against the terrain as remeshed this frame.
         .with(ScreeSystem::default(), "scree", &["terrain_update"])
+        .with(
+            BoulderCullSystem::default(),
+            "boulder_cull",
+            &["rubble_spawn"],
+        )
         .with(TerrainAnchorSystem, "terrain_anchor", &["terrain_update"])
         // Water simulation (after terrain update so dirty_regions are visible)
         .with(WaterSystem, "water", &["terrain_update"])

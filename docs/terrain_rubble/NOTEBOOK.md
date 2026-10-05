@@ -643,3 +643,25 @@ world of its own as a control. Part sizes from each part's mesh.
   shell is 32 parts of 24–79 samples, 2–5 m across, spread over the dome.
 - No boulder anywhere is more than one face-connected piece.
 - Planning the shell's blast: 230 ms (R33); the table's: 28 ms.
+
+## E26. What does not become a body, and why (2026-10-05)
+
+**Question.** Which sizeable pieces vanish, and by which rule?
+
+**Setup.** A probe over every scenario listing pieces of 0.5 m³ or more not
+planned as boulders, with their measure. Then large skins graded as boulders,
+and as scree, through `rubble_viewer all`.
+
+**Result.**
+
+- Every such piece but two was a skin (no bearing sample): 21–57 samples on
+  `garden_hill` and `garden_hill_shell`, 5–9 elsewhere. The two others were
+  single samples at 1 m voxels on `rim_cusps`, scree for being under 4
+  samples.
+- Skins as boulders: an 8-sample skin started inside the cave floor, and five
+  of the shell's 32 parts never came to rest in 12 s.
+- Skins as scree: they fall 0.2–9 m before shattering; one per hill scenario
+  lies flat on the floor and crumbles in place (exempt from the first-frame
+  landing check). The shell's five still did not rest in 12 s: skins now
+  draw spins from the planner's seeded sequence, changing every later spin.
+  Given 40 s the pile rests at 12.2 s, so the harness allows 20 s.

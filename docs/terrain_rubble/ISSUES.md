@@ -49,6 +49,8 @@ An issue's **status** is one of:
 | [R33](#r33) | Shaping a collapse costs up to 230 ms; one fragment makes any number of bodies | open, optimisation pass (R24) | medium |
 | [R34](#r34) | The hill's shell came down as horizontal rings | fixed (branch `rubble-phase2`) | medium |
 | [R35](#r35) | Three stalactites came down as one body, joined only by air | fixed (branch `rubble-phase2`) | high |
+| [R36](#r36) | Large skins vanished as dust where they broke | fixed (branch `rubble-phase2`) | medium |
+| [R37](#r37) | Boulders shared the props' 40-piece debris budget and sparkled away | fixed (branch `rubble-phase2`) | medium |
 
 ---
 
@@ -659,3 +661,31 @@ through face neighbours are connected by construction, and a sample no seed
 reaches is a piece of its own. `rubble_viewer` now fails any boulder whose
 samples are more than one face-connected piece; `Cracker`'s test fails with
 straight-line nearest-seed pieces.
+
+<a id="r36"></a>
+## R36. Large skins vanished as dust where they broke
+
+**Status:** fixed on branch `rubble-phase2`. **Found by:** play-test ("decent
+sized chunks just disappear"), then a probe over every scenario (E26).
+
+A fragment with no bearing sample was dust whatever its size. Every sizeable
+piece in the scenarios that did not become a body was one: the hill's skin
+came off in pieces of 21–57 samples (2.6–7.1 m³ by sample count, a
+quarter-metre crust over several square metres), each a puff where it broke.
+A skin of 8 samples or more now falls as scree and shatters where it lands.
+As bodies, skins kept the shell's collapse from settling, and one of 8
+samples started inside the cave floor.
+
+<a id="r37"></a>
+## R37. Boulders shared the props' 40-piece debris budget and sparkled away
+
+**Status:** fixed on branch `rubble-phase2`. **Found by:** reading the code
+after the play-test; no scenario shows it, since each blast's boulders settle
+in a world of their own.
+
+Boulders carried `Debris`, ranked with every prop shard against
+`DebrisBudget::keep_total` (40), culled 1.5 s after spawning with a glitter
+burst. The hill's shell alone is 32 bodies. Boulders now have their own
+budget (`BoulderCullSystem`): the largest 120 kept, 4 s grace, the smallest
+past it crumbling to dust in its own colours. Phase 4's deposition is the
+real answer.

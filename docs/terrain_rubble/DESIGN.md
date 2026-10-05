@@ -319,8 +319,8 @@ Three numbers, all cheap from the block (as built; `Measure`):
 
 | Grade | Rule (initial values, tunable) | What happens |
 |---|---|---|
-| **Dust** | `volume < 0.02 m³`, or no bearing sample | A burst of flecks in its materials' colours at the centroid. |
-| **Scree** | `volume < 0.25 m³`, or fewer than 4 samples | `FallingScree` (Part 4). |
+| **Dust** | `volume < 0.02 m³`, or a skin (no bearing sample) of fewer than 8 samples | A burst of flecks in its materials' colours at the centroid. |
+| **Scree** | `volume < 0.25 m³`, fewer than 4 samples, or a skin of 8 or more | `FallingScree` (Part 4). |
 | **Boulder** | otherwise | A rigid body (Part 3). |
 
 The design graded a fragment with no **core** sample (bearing, all six
@@ -329,8 +329,12 @@ and slide around as a body with no thickness. Once bricks were fitted to the
 drawn surface a thin piece had a thickness to collide with, and the rule only
 turned 8 m lengths of column into scree that crumbled where it landed (R29). A
 piece of 1–3 samples is scree whatever its volume: its every face is sub-voxel
-detail, and as a body it started inside the crater wall (E23). The too-big
-cut-off (`MAX_BOULDER_VOXELS`, Part 6) is not built.
+detail, and as a body it started inside the crater wall (E23). A skin, with
+no sample deep enough to bear load, is drawn a few hundredths to a few tenths
+of a voxel thick; the hill's skin came off in pieces of up to 57 samples and
+vanished as dust where it broke (R36). A large skin now falls as scree and
+shatters where it lands; as bodies, skins kept a collapse from settling
+(E26). The too-big cut-off (`MAX_BOULDER_VOXELS`, Part 6) is not built.
 
 ---
 
@@ -475,7 +479,10 @@ The body gets:
   `VoxelMaterial::surface()`, so grass, rock and sand already have their own
   friction and bounce);
 - `Debris { origin, size, age }`, so the existing `DebrisBudget` caps how many
-  boulders exist;
+  boulders exist. As built: a budget of their own (`rubble::BoulderCullSystem`,
+  `ResidentBoulder`), 120 boulders, 4 s grace, the smallest crumbling to dust
+  where they lie; the props' 40-piece budget took a collapse's boulders 1.5 s
+  after they landed (R37);
 - `bulk(...)` left unset, so the bricks are what water sees, and rock sinks.
 
 ### Texture that rides with the rock

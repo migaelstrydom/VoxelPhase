@@ -48,6 +48,12 @@ pub struct GradeRules {
     /// detail that bricks only guess at, and as a body it started inside the
     /// crater wall beside it (E23).
     pub min_boulder_samples: usize,
+    /// A skin, a fragment with no bearing sample, is drawn a few hundredths
+    /// to a few tenths of a voxel thick. With fewer samples than this it is
+    /// dust, a sliver; with more it covers metres and falls as scree, to
+    /// shatter where it lands. A hill's skin breaking off is not a puff of
+    /// dust, and as bodies skins kept a collapse from coming to rest (E26).
+    pub min_skin_samples: usize,
 }
 
 impl Default for GradeRules {
@@ -56,6 +62,7 @@ impl Default for GradeRules {
             dust_volume: 0.02,
             scree_volume: 0.25,
             min_boulder_samples: 4,
+            min_skin_samples: 8,
         }
     }
 }
@@ -63,15 +70,17 @@ impl Default for GradeRules {
 impl GradeRules {
     /// The grade of a fragment with `measure`.
     ///
-    /// A fragment with no bearing sample is dust whatever its volume: every
-    /// sample is a skin around nothing, and marching cubes draws it a few
-    /// hundredths of a voxel thick. A thin one with bearing samples is a
-    /// boulder like any other: a column one or two samples across is
-    /// drawn solid, and its bricks are fitted to what is drawn.
+    /// A thin fragment with bearing samples is a boulder like any other: a
+    /// column one or two samples across is drawn solid, and its bricks are
+    /// fitted to what is drawn.
     pub fn grade(&self, measure: Measure) -> Grade {
-        if measure.volume < self.dust_volume || measure.bearing == 0 {
+        let skin = measure.bearing == 0;
+        if measure.volume < self.dust_volume || (skin && measure.samples < self.min_skin_samples) {
             Grade::Dust
-        } else if measure.volume < self.scree_volume || measure.samples < self.min_boulder_samples {
+        } else if skin
+            || measure.volume < self.scree_volume
+            || measure.samples < self.min_boulder_samples
+        {
             Grade::Scree
         } else {
             Grade::Boulder
@@ -97,7 +106,8 @@ mod tests {
         let cases = [
             (measure(0.019, 8, 1), Grade::Dust),
             (measure(0.02, 8, 1), Grade::Scree),
-            (measure(4.0, 32, 0), Grade::Dust),
+            (measure(0.875, 7, 0), Grade::Dust),
+            (measure(4.0, 32, 0), Grade::Scree),
             (measure(0.249, 30, 30), Grade::Scree),
             (measure(0.25, 30, 30), Grade::Boulder),
             (measure(3.0, 3, 3), Grade::Scree),

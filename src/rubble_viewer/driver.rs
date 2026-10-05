@@ -20,8 +20,9 @@ const FRAME_SECONDS: f32 = 1.0 / 60.0;
 /// The game's physics substep and its cap per frame.
 const PHYSICS_DT: f32 = 1.0 / 240.0;
 const MAX_SUBSTEPS: u32 = 12;
-/// How long a blast's boulders are given to come to rest.
-const REST_SECONDS: f32 = 12.0;
+/// How long a blast's boulders are given to come to rest. A pile of thirty
+/// from the hill's shell takes 12 s (E26).
+const REST_SECONDS: f32 = 20.0;
 /// How far below the terrain's bounds a boulder is counted as lost.
 const LOST_MARGIN: f32 = 4.0;
 /// How far a boulder may be from where free flight puts it after its first
@@ -41,6 +42,8 @@ pub struct FragmentRecord {
     pub centroid: Point3<f32>,
     pub material: VoxelMaterial,
     pub fate: Fate,
+    /// Whether it is a skin: no sample of it bears load.
+    pub skin: bool,
     /// For a boulder, the air samples in its holes, gaps and hollows that
     /// its bricks hold: none, or the solver stands things on empty space.
     pub air_held: usize,
@@ -223,6 +226,7 @@ fn play(cut: Cut, planner: &mut RubblePlanner, terrain: &TerrainWorld) -> Vec<Fr
                 centroid: fragment.world_centroid(),
                 material: fragment.material(),
                 fate,
+                skin: fragment.bearing_samples() == 0,
                 air_held,
                 in_pieces,
             }
@@ -344,7 +348,11 @@ impl Run {
         for (index, record) in self.blasts.iter().enumerate() {
             for fragment in &record.fragments {
                 let problem = match fragment.fate {
-                    Fate::Landed { frames: 1, .. } => "scree landed on its first frame",
+                    // A skin pressed flat on the ground it broke from has
+                    // nowhere to fall, and crumbles where it lies.
+                    Fate::Landed { frames: 1, .. } if !fragment.skin => {
+                        "scree landed on its first frame"
+                    }
                     Fate::Expired { .. } => "scree never landed",
                     Fate::Rested { ejected: true, .. } | Fate::Restless { ejected: true } => {
                         "boulder was thrown out of the ground on its first frame"

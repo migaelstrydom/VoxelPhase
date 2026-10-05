@@ -10,7 +10,7 @@
 //!       ├── Scree   ──▶ FallingScree + TerrainMeshInstance, thrown by the
 //!       │               blast's shove
 //!       └── Boulder ──▶ BrickShaper ──▶ a body in the physics world
-//!                       + TerrainMeshInstance + Debris; the shove queued
+//!                       + TerrainMeshInstance + ResidentBoulder; the shove queued
 //!                       for the next physics step throws it. One too
 //!                       intricate for one body is Fragment::split into
 //!                       parts, each graded and planned in turn. Past
@@ -27,11 +27,11 @@ use specs::{Builder, Entities, LazyUpdate, Read, System, Write};
 
 use super::boulder::Boulder;
 use super::brick_shaper::{BrickShaper, Shape};
+use super::budget::ResidentBoulder;
 use super::dust::{Crumble, CrumbleSize};
 use super::grade::{Grade, GradeRules, Measure};
 use super::scree::{FallingScree, Flight};
 use crate::components::{Orientation, Position, RigidBodyComponent, TerrainMeshInstance, Velocity};
-use crate::fracture::Debris;
 use crate::model::{MeshPrimitive, Model, ModelPart};
 use crate::physics::PhysicsImpulse;
 use crate::rendering::material::MaterialId;
@@ -323,10 +323,9 @@ impl<'a> System<'a> for RubbleSpawnSystem {
                             .build();
                     }
                     Plan::Boulder(boulder) => {
-                        let volume = boulder.volume;
+                        let resident = ResidentBoulder::new(boulder.volume, boulder.size);
                         let placed = boulder.place(&mut physics.world);
-                        let entity = lazy
-                            .create_entity(&entities)
+                        lazy.create_entity(&entities)
                             .with(Position(placed.centre.coords))
                             .with(Velocity(Vector3::zeros()))
                             .with(Orientation::default())
@@ -335,10 +334,8 @@ impl<'a> System<'a> for RubbleSpawnSystem {
                                 anchor: placed.centre.coords,
                                 model: model_of(placed.mesh),
                             })
+                            .with(resident)
                             .build();
-                        // A boulder came off no object, so it is its own
-                        // origin: only the budget's overall cap applies.
-                        lazy.insert(entity, Debris::new(entity, volume));
                     }
                 }
             }
