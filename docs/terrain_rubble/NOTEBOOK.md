@@ -724,3 +724,31 @@ vertices read in the other side's trilinear field.
 
 **Conclusion.** `DEPOSIT_BIAS = 0.045`: within 2% on average for every shape,
 not 1%.
+
+## E29. Welding deposits to the ground (2026-10-05)
+
+**Question.** Why do deposited boulders stand free, and what joins them?
+
+**Setup.** Every `rubble_viewer` scenario with every resting boulder
+deposited through `Settler`, and the standing-free audit after the deposits.
+A debug pass listing each loose piece's samples and their densities.
+
+**Result.**
+
+| Union | Scenario failures | Notes |
+|---|---|---|
+| plain max | 25+ | arch 76 free, table 332, pavilion 379 |
+| smooth max, k = 1.0 / 1.5 | 25 / 24 | open mesh edges at 1.5 |
+| + band ties to air | 17 | most specks were `SURFACE_BAND` samples |
+| + weld only at bearing strength | 12 | hill's 203 gone |
+| split audit (finder before deposits; deposits by bearing samples) | 4 | 1–8 bearing samples |
+| smooth max k = 2.0 / 2.5 | 4 / 4 | the residue moves, it does not shrink |
+| plain max + path weld, reach 2 / 3 | 1 / 0 | 55 welds, 50 of one sample, 5 of two |
+
+- The specks: a near-zero union pushed into the solid by the band rule made
+  isolated samples of density 0.010; ties now go to the air.
+- The residue under every smooth radius: thin skins of 5–7 samples, one or
+  two of them bearing, lying on the ground or on another skin.
+
+**Conclusion.** A plain max and an explicit weld (R40). The weld is decided
+on the lattice, so it does not depend on where samples fall near a contact.

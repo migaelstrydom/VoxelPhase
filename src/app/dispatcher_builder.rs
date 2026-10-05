@@ -26,7 +26,7 @@ use crate::platform::MovingPlatformSystem;
 use crate::projectile::{
     GrenadeSpawnSystem, GrenadeVisualSystem, LifetimeSystem, ProjectileDetonationSystem,
 };
-use crate::rubble::{BoulderCullSystem, RubbleSpawnSystem, ScreeSystem};
+use crate::rubble::{BoulderCullSystem, RubbleSpawnSystem, ScreeSystem, SettleSystem};
 use crate::sensing::SensorProbeSystem;
 use crate::systems::{
     CameraControlSystem, CharacterControlSystem, PhysicsSyncSystem, PlayerInputSystem,
@@ -223,14 +223,16 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
             ],
         )
         .with(DeathSystem, "death", &["damage_apply"])
-        .with(TerrainUpdateSystem, "terrain_update", &["explosion"])
+        // A boulder deposited this frame is remeshed this frame.
+        .with(SettleSystem::default(), "settle", &["rubble_spawn"])
+        .with(
+            TerrainUpdateSystem,
+            "terrain_update",
+            &["explosion", "settle"],
+        )
         // Scree falls against the terrain as remeshed this frame.
         .with(ScreeSystem::default(), "scree", &["terrain_update"])
-        .with(
-            BoulderCullSystem::default(),
-            "boulder_cull",
-            &["rubble_spawn"],
-        )
+        .with(BoulderCullSystem::default(), "boulder_cull", &["settle"])
         .with(TerrainAnchorSystem, "terrain_anchor", &["terrain_update"])
         // Water simulation (after terrain update so dirty_regions are visible)
         .with(WaterSystem, "water", &["terrain_update"])

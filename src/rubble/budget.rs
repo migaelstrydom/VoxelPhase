@@ -15,8 +15,8 @@
 //!     entity deleted
 //! ```
 //!
-//! Phase 4 makes this the exception: a boulder at rest is deposited back
-//! into the terrain, and only those that never settle are left to the cull.
+//! This is the exception: a boulder at rest is deposited back into the
+//! terrain (`settle`), and only those that never settle are left to the cull.
 
 use specs::{
     Builder, Component, Entities, Entity, Join, Read, ReadStorage, System, VecStorage, Write,

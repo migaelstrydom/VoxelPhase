@@ -31,7 +31,7 @@ use super::chunk::{ChunkCoord, ChunkTriangleRef};
 use super::chunk_grid::ChunkGrid;
 use super::chunk_rebuild::{ChunkBuildTimings, ChunkRebuild};
 use super::deposit;
-use super::fragment::{self, Crater, Fragment, Search};
+use super::fragment::{self, Crater, Fragment, LooseSamples, Search};
 use super::frame::SegmentFrame;
 use super::render_cache::{build_chunk_render_data, ChunkRenderCache, ChunkRenderData};
 use super::segment_adjacency::{adjacency_tolerance, SegmentAdjacency};
@@ -332,7 +332,7 @@ impl Segment {
     /// How many solid samples anywhere in the segment hold up nothing and are
     /// held up by nothing: what blasts should have cut loose and did not.
     /// Reads the whole grid, so it is for tests and tools, not for a frame.
-    pub fn loose_samples(&self) -> usize {
+    pub fn loose_samples(&self) -> LooseSamples {
         Search::audit(&self.grid).loose_samples()
     }
 

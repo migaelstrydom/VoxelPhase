@@ -496,9 +496,25 @@ impl Search {
             .count()
     }
 
-    /// How many samples are loose, over every piece.
-    pub(super) fn loose_samples(&self) -> usize {
-        self.pieces.iter().map(Vec::len).sum()
+    /// How many samples are loose, over every piece, and how many of those
+    /// bear load.
+    pub(super) fn loose_samples(&self) -> LooseSamples {
+        let lattice = Lattice3 {
+            dims: self.block.dims(),
+        };
+        let bearing = self
+            .pieces
+            .iter()
+            .flatten()
+            .filter(|&&i| {
+                let [x, y, z] = lattice.coords(i);
+                self.block.get(x, y, z).density >= BEARING_DENSITY
+            })
+            .count();
+        LooseSamples {
+            all: self.pieces.iter().map(Vec::len).sum(),
+            bearing,
+        }
     }
 
     /// Grid-local box around every loose sample, or `None` if there are none.
@@ -827,6 +843,27 @@ fn fallen(
         }
     }
     fall
+}
+
+/// Solid standing free in the terrain, held up by nothing and holding up
+/// nothing, as an audit counts it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LooseSamples {
+    /// Every loose sample.
+    pub all: usize,
+    /// Those that bear load: rock, not a rind or a speck.
+    pub bearing: usize,
+}
+
+impl std::ops::Add for LooseSamples {
+    type Output = Self;
+
+    fn add(self, other: Self) -> Self {
+        Self {
+            all: self.all + other.all,
+            bearing: self.bearing + other.bearing,
+        }
+    }
 }
 
 /// A fragment cut into parts by [`Fragment::split`].
@@ -1514,7 +1551,7 @@ mod tests {
         }
         fill(&mut g, [-2, 0, -2], [2, 4, 2], SURFACE_BAND);
         fill(&mut g, [-1, 0, -1], [1, 3, 1], 1.0);
-        assert_eq!(Search::audit(&g).loose_samples(), 0);
+        assert_eq!(Search::audit(&g).loose_samples().all, 0);
     }
 
     /// A weak sample drawn thin, touching what bears only along an edge, is a
@@ -1527,7 +1564,7 @@ mod tests {
         }
         fill(&mut g, [-1, 0, -1], [1, 2, 1], 1.0);
         put(&mut g, [2, 3, 0], 0.1, VoxelMaterial::Rock);
-        assert_eq!(Search::audit(&g).loose_samples(), 1);
+        assert_eq!(Search::audit(&g).loose_samples().all, 1);
     }
 
     /// Two samples meeting along an edge carry no load between them.
@@ -1813,6 +1850,6 @@ mod tests {
         }
         fill(&mut g, [-8, 0, -8], [8, 0, 8], 0.5);
         fill(&mut g, [-1, 4, -1], [1, 6, 1], 1.0);
-        assert_eq!(Search::audit(&g).loose_samples(), 27);
+        assert_eq!(Search::audit(&g).loose_samples().all, 27);
     }
 }

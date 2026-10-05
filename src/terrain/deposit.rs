@@ -10,6 +10,7 @@
 //!       q = to_fragment · p               a point of the fragment's block
 //!       d = trilinear(block, q) + DEPOSIT_BIAS
 //!       union: keep max(existing, d), the fragment's material where d wins
+//!   weld: each piece of rock that bears joined to bearing ground
 //! ```
 //!
 //! Resampling at an angle loses what the lattice cannot hold: the surface
@@ -18,11 +19,13 @@
 //! blending of a clamped distance also cuts into convex features, the same
 //! amount for every shape and pose, which [`DEPOSIT_BIAS`] puts back.
 
+use std::collections::HashSet;
+
 use nalgebra::{Isometry3, Point3};
 
 use super::chunk_grid::ChunkGrid;
 use super::csg::SURFACE_BAND;
-use super::fragment::Fragment;
+use super::fragment::{Fragment, BEARING_DENSITY};
 use super::voxel::{Voxel, VoxelMaterial};
 use super::voxel_block::VoxelBlock;
 use crate::collision::AABB;
@@ -35,40 +38,179 @@ use crate::collision::AABB;
 /// over.
 pub(super) const DEPOSIT_BIAS: f32 = 0.045;
 
+/// How far a weld reaches from a rock to the ground, in samples on each axis.
+/// A rock resting on terrain touches it within a voxel, but may lie on a skin
+/// too weak to bear, deposited before it; one further from any rests on
+/// something else, a body or rock yet to be deposited. Over `rubble_viewer`'s
+/// scenarios no weld raised more than two samples.
+const WELD_REACH: i32 = 3;
+
 /// Union `fragment` into `grid`, `to_fragment` taking the grid's local
-/// positions to its block's. Returns the grid-local box around every sample
-/// it changed, or `None` if it changed none.
+/// positions to its block's, and weld it to the ground it rests on. Returns
+/// the grid-local box around every sample it changed, or `None` if it changed
+/// none.
 pub(super) fn deposit(
     grid: &mut ChunkGrid,
     fragment: &Fragment,
     to_fragment: &Isometry3<f32>,
 ) -> Option<AABB> {
     let block = fragment.voxels();
-    let fallback = fragment.material();
+    let material = fragment.material();
     let step = grid.voxel_size();
     let reach = to_grid_box(block, &to_fragment.inverse());
     let lo = (reach.min.coords / step).map(|v| v.floor() as i32);
     let hi = (reach.max.coords / step).map(|v| v.ceil() as i32);
 
-    let mut changed: Option<AABB> = None;
+    let mut changed = Vec::new();
+    let mut rock = HashSet::new();
     for x in lo.x..=hi.x {
         for y in lo.y..=hi.y {
             for z in lo.z..=hi.z {
-                let p = Point3::new(x as f32, y as f32, z as f32) * step;
+                let p = sample_at([x, y, z], step);
                 let Some(resampled) = resample(block, to_fragment * p) else {
                     continue;
                 };
                 let existing = grid.get(p);
-                let Some(voxel) = resampled.union(existing, fallback) else {
+                let Some(voxel) = resampled.union(existing, material) else {
                     continue;
                 };
                 grid.set(p, voxel);
-                let at = AABB::new(p, p);
-                changed = Some(changed.map_or(at, |c| c.merged(&at)));
+                changed.push([x, y, z]);
+                if voxel.density >= BEARING_DENSITY && existing.density < BEARING_DENSITY {
+                    rock.insert([x, y, z]);
+                }
             }
         }
     }
+    changed.extend(weld(grid, &rock, material));
     changed
+        .into_iter()
+        .map(|c| {
+            let p = sample_at(c, step);
+            AABB::new(p, p)
+        })
+        .reduce(|a, b| a.merged(&b))
+}
+
+/// Join every piece of `rock`, the samples a deposit made bear, to bearing
+/// ground: through a face it touches, or a piece already joined, or else
+/// along the shortest lattice path to the nearest within [`WELD_REACH`],
+/// each sample on it raised to bear. Support only travels through bearing
+/// samples (`BEARING_DENSITY`), and a rock resting on the ground touches it
+/// at a few points that no lattice sample need land near: unwelded, it would
+/// stand free of the ground it lies on, and the next blast near it would lift
+/// it again. Returns the samples it raised.
+fn weld(grid: &mut ChunkGrid, rock: &HashSet<[i32; 3]>, material: VoxelMaterial) -> Vec<[i32; 3]> {
+    let step = grid.voxel_size();
+    let mut pieces = face_connected(rock);
+    let mut joined: HashSet<[i32; 3]> = HashSet::new();
+    let mut raised = Vec::new();
+    loop {
+        let anchor = |grid: &ChunkGrid, joined: &HashSet<[i32; 3]>, c: [i32; 3]| {
+            (!rock.contains(&c) || joined.contains(&c))
+                && grid.get(sample_at(c, step)).density >= BEARING_DENSITY
+        };
+        let touching = pieces.iter().position(|piece| {
+            piece
+                .iter()
+                .any(|&c| face_neighbours(c).any(|n| anchor(grid, &joined, n)))
+        });
+        if let Some(k) = touching {
+            joined.extend(pieces.swap_remove(k));
+            continue;
+        }
+        let nearest = pieces
+            .iter()
+            .enumerate()
+            .flat_map(|(k, piece)| piece.iter().map(move |&c| (k, c)))
+            .flat_map(|(k, c)| within_reach(c).map(move |g| (k, c, g)))
+            .filter(|&(_, _, g)| anchor(grid, &joined, g))
+            .min_by_key(|&(_, c, g)| (0..3).map(|a| c[a].abs_diff(g[a])).sum::<u32>());
+        let Some((k, from, to)) = nearest else {
+            break;
+        };
+        for c in path_between(from, to) {
+            let p = sample_at(c, step);
+            let existing = grid.get(p);
+            if existing.density < BEARING_DENSITY {
+                let kept = if existing.is_solid() {
+                    existing.material
+                } else {
+                    material
+                };
+                grid.set(
+                    p,
+                    Voxel {
+                        density: BEARING_DENSITY,
+                        material: kept,
+                    },
+                );
+                raised.push(c);
+            }
+        }
+        joined.extend(pieces.swap_remove(k));
+    }
+    raised
+}
+
+/// `samples` in face-connected pieces.
+fn face_connected(samples: &HashSet<[i32; 3]>) -> Vec<Vec<[i32; 3]>> {
+    let mut seen = HashSet::new();
+    let mut pieces = Vec::new();
+    for &start in samples {
+        if !seen.insert(start) {
+            continue;
+        }
+        let mut piece = vec![start];
+        let mut next = 0;
+        while next < piece.len() {
+            let c = piece[next];
+            next += 1;
+            for n in face_neighbours(c) {
+                if samples.contains(&n) && seen.insert(n) {
+                    piece.push(n);
+                }
+            }
+        }
+        pieces.push(piece);
+    }
+    pieces
+}
+
+fn face_neighbours(c: [i32; 3]) -> impl Iterator<Item = [i32; 3]> {
+    (0..6).map(move |k| {
+        let mut n = c;
+        n[k / 2] += if k % 2 == 0 { -1 } else { 1 };
+        n
+    })
+}
+
+/// The samples within [`WELD_REACH`] of `c` on every axis.
+fn within_reach(c: [i32; 3]) -> impl Iterator<Item = [i32; 3]> {
+    let r = WELD_REACH;
+    (-r..=r).flat_map(move |x| {
+        (-r..=r).flat_map(move |y| (-r..=r).map(move |z| [c[0] + x, c[1] + y, c[2] + z]))
+    })
+}
+
+/// The samples strictly between `from` and `to` on a lattice path that
+/// closes the vertical first, then across.
+fn path_between(from: [i32; 3], to: [i32; 3]) -> Vec<[i32; 3]> {
+    let mut path = Vec::new();
+    let mut at = from;
+    for axis in [1, 0, 2] {
+        while at[axis] != to[axis] {
+            at[axis] += (to[axis] - at[axis]).signum();
+            if at != to {
+                path.push(at);
+            }
+        }
+    }
+    path
+}
+
+fn sample_at(c: [i32; 3], step: f32) -> Point3<f32> {
+    Point3::new(c[0] as f32, c[1] as f32, c[2] as f32) * step
 }
 
 /// The fragment's field at one point of its block.
@@ -84,20 +226,25 @@ impl Resampled {
     /// fragment is no denser. A deposit never lowers a density, and never
     /// turns indestructible ground into the fragment's material.
     fn union(&self, existing: Voxel, fallback: VoxelMaterial) -> Option<Voxel> {
-        if self.density <= existing.density {
+        let mut density = self.density;
+        // A sample on the iso-surface degenerates marching cubes (see
+        // `SURFACE_BAND`). An authored write pushes it into the solid; here
+        // that would make a speck of solid wherever the rock's field only
+        // just reaches, so it goes to the air.
+        if density.abs() < SURFACE_BAND {
+            density = -SURFACE_BAND;
+        }
+        if density <= existing.density {
             return None;
         }
-        let material = if self.density <= 0.0 {
+        let material = if density <= 0.0 {
             VoxelMaterial::Air
         } else if existing.is_solid() && existing.material.is_indestructible() {
             existing.material
         } else {
             self.material.unwrap_or(fallback)
         };
-        Some(Voxel {
-            density: self.density,
-            material,
-        })
+        Some(Voxel { density, material })
     }
 }
 
@@ -143,14 +290,8 @@ fn resample(block: &VoxelBlock, q: Point3<f32>) -> Option<Resampled> {
         return None;
     }
 
-    // A sample on the iso-surface degenerates marching cubes; like every
-    // authored write, it is pushed into the solid (see `SURFACE_BAND`).
-    let mut density = (density + DEPOSIT_BIAS).clamp(-1.0, 1.0);
-    if density.abs() < SURFACE_BAND {
-        density = SURFACE_BAND;
-    }
     Some(Resampled {
-        density,
+        density: (density + DEPOSIT_BIAS).clamp(-1.0, 1.0),
         material: densest.map(|v| v.material),
     })
 }
@@ -181,6 +322,7 @@ mod tests {
 
     use super::*;
     use crate::terrain::csg::union_solid;
+    use crate::terrain::fragment::Search;
     use crate::terrain::fragment_mesh::FragmentMesh;
 
     /// Every test lattice has metre voxels, so distances read in voxels.
@@ -376,6 +518,53 @@ mod tests {
             );
         }
         assert!(failures.is_empty(), "{failures:?}");
+    }
+
+    /// A ball lying a little clear of the ground, as on a skin too weak to
+    /// bear, shares no bearing sample with it: deposited, it is welded to
+    /// the ground, and nothing that bears stands free.
+    #[test]
+    fn a_ball_lying_on_the_ground_is_welded_to_it() {
+        let ball = Shape {
+            name: "ball",
+            sdf: |v| v.norm() - 2.3,
+            reach: 3.0,
+            mean: 0.0,
+            p99: 0.0,
+        };
+        let fragment = fragment_of(&ball);
+        let mut rng = StdRng::seed_from_u64(3);
+        for _ in 0..10 {
+            let mut grid = ChunkGrid::new(STEP);
+            for x in 30..=50 {
+                for z in 30..=50 {
+                    for y in 20..=30 {
+                        let p = Point3::new(x as f32, y as f32, z as f32);
+                        // Bedrock under the dirt holds it up.
+                        let material = if y < 23 {
+                            VoxelMaterial::Bedrock
+                        } else {
+                            VoxelMaterial::Dirt
+                        };
+                        union_solid(&mut grid, p, p.y - 26.3, STEP, material);
+                    }
+                }
+            }
+            let rest = Point3::new(
+                40.0 + rng.gen::<f32>(),
+                26.3 + 2.3 + 0.4,
+                40.0 + rng.gen::<f32>(),
+            );
+            let turn = UnitQuaternion::from_euler_angles(rng.gen(), rng.gen(), rng.gen());
+            let moved: Isometry3<f32> =
+                Translation3::from(rest.coords) * turn * Translation3::from(-BUILT_AT.coords);
+            deposit(&mut grid, &fragment, &moved.inverse()).expect("it changes samples");
+            let loose = Search::audit(&grid).loose_samples();
+            assert_eq!(
+                loose.bearing, 0,
+                "the ball at {rest} stands free: {loose:?}"
+            );
+        }
     }
 
     /// Deposited into the ground, a fragment raises densities and lowers

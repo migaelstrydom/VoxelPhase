@@ -36,7 +36,7 @@ use super::adjacency::{AdjacencyTimings, DefectiveEdge};
 use super::blast::BlastConfig;
 use super::chunk::{ChunkCoord, ChunkTriangleRef};
 use super::chunk_rebuild::ChunkBuildTimings;
-use super::fragment::Fragment;
+use super::fragment::{Fragment, LooseSamples};
 use super::render_cache::ChunkRenderData;
 use super::segment::{ConcatTimings, Segment};
 use super::surface;
@@ -355,8 +355,11 @@ impl TerrainWorld {
     /// Solid samples standing free across every segment: held up by nothing
     /// and holding up nothing. Reads every segment whole, so it is for tests
     /// and tools, not for a frame. See `Segment::loose_samples`.
-    pub fn loose_samples(&self) -> usize {
-        self.segments.iter().map(Segment::loose_samples).sum()
+    pub fn loose_samples(&self) -> LooseSamples {
+        self.segments
+            .iter()
+            .map(Segment::loose_samples)
+            .fold(LooseSamples::default(), |sum, loose| sum + loose)
     }
 
     /// Destructible samples drawn paper-thin, across every segment: shelves

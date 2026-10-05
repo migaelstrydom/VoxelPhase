@@ -53,6 +53,10 @@ An issue's **status** is one of:
 | [R37](#r37) | Boulders shared the props' 40-piece debris budget and sparkled away | fixed (branch `rubble-phase2`) | medium |
 | [R38](#r38) | Two cull systems, two body spawners: rubble repeats fracture's | open, simplification for later | low |
 | [R39](#r39) | Cracked pieces carried slivers and hairlines the whole fragment did not | fixed (branch `rubble-phase2`) | high |
+| [R40](#r40) | A deposited rock stood free of the ground it lay on | fixed (branch `rubble-phase2`) | high |
+| [R41](#r41) | A pile's boulders crowded each other out of depositing | fixed (branch `rubble-phase2`) | high |
+| [R42](#r42) | Deposits are not hidden from view | open, play-test | low |
+| [R43](#r43) | A rock can be deposited onto a boulder that is not | open | low |
 
 ---
 
@@ -739,3 +743,57 @@ it paper-thin than the whole did.
 Not covered: what a whole fragment draws paper-thin it still carries (the
 pavilion roof's 54, from the terrain as authored: the garden draws 718
 samples paper-thin before any blast).
+
+## R40. A deposited rock stood free of the ground it lay on
+
+**Status:** fixed on branch `rubble-phase2`. **Found by:** `rubble_viewer`,
+once every boulder was deposited (E29).
+
+Support travels only through bearing samples (`BEARING_DENSITY`). A rock
+resting on the ground touches it at a few points, and no lattice sample need
+land near them: the arch's span deposited 76 samples standing free, the
+table 332. In play, the next blast near a pile would lift all of it again.
+
+`deposit` now welds: each face-connected piece of the samples it made bear
+must touch bearing ground, or a piece already joined; one that does not is
+joined along the shortest lattice path to the nearest within 3 samples,
+each sample on it raised to bear. Over every scenario 55 welds were needed,
+none longer than two samples. A rounded union (smooth maximum) was tried
+first: it left 1–12 samples standing free at every radius tried, and made
+specks in the creases.
+
+The audit is split to match. A blast is held to leaving nothing more
+standing free or paper-thin, measured before anything it cut loose comes
+back; its deposits to leaving no more bearing samples standing free. A thin
+pebble may deposit with no sample strong enough to bear: it lies on the
+ground and the next blast near it crumbles it.
+
+## R41. A pile's boulders crowded each other out of depositing
+
+**Status:** fixed on branch `rubble-phase2`. **Found by:** design review
+before the first run.
+
+A boulder is not deposited while another body is within a voxel of it, so
+nothing ends up inside the stamped surface. In a pile every boulder touches
+another, so none would ever go. `Settler::ready` now runs over every boulder
+first; a boulder is crowded only by bodies not ready with it, and a pile at
+rest is deposited in one frame.
+
+## R42. Deposits are not hidden from view
+
+**Status:** open, for play-testing.
+
+DESIGN.md Part 5 deposits only out of view or past `DEPOSIT_VIEW_DISTANCE`.
+Not built: the pile the player made is the one they are looking at, which
+would then never deposit. The surface moves 0.05 voxel on average (E28); the
+texture changes from riding with the rock to the terrain's world projection,
+and the AO is rebaked. If the swap shows, a view condition is the fix.
+
+## R43. A rock can be deposited onto a boulder that is not
+
+**Status:** open. **Severity:** low.
+
+Boulders ready in the same frame do not crowd each other. If the one
+underneath is then refused (it lies across a segment join), the one on top
+is terrain resting on a body. Should the body later be culled, the deposited
+rock hangs in the air until a blast near it.

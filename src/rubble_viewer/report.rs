@@ -3,6 +3,7 @@
 use std::fmt::Write;
 
 use super::driver::{Fate, FragmentRecord, Run};
+use crate::rubble::Verdict;
 
 /// A table of what each blast cut loose, then the verdict.
 pub fn report(run: &Run, verdict: &Result<(), Vec<String>>) -> String {
@@ -10,11 +11,11 @@ pub fn report(run: &Run, verdict: &Result<(), Vec<String>>) -> String {
     let _ = writeln!(
         out,
         "{}  |  as authored: {} samples standing free, {} paper-thin",
-        run.scenario, run.loose_before, run.paper_thin_before
+        run.scenario, run.before.loose.all, run.before.paper_thin
     );
     let _ = writeln!(
         out,
-        "{:>3} {:>24} {:>6} {:>8} {:>10} {:>8} {:>8} {:>5} {:>6} {:>7} {:>8}",
+        "{:>3} {:>24} {:>6} {:>8} {:>10} {:>8} {:>8} {:>5} {:>6} {:>7} {:>8} {:>9}",
         "#",
         "blast at",
         "frags",
@@ -25,7 +26,8 @@ pub fn report(run: &Run, verdict: &Result<(), Vec<String>>) -> String {
         "dust",
         "landed",
         "expired",
-        "boulders"
+        "boulders",
+        "deposited"
     );
     for (index, record) in run.blasts.iter().enumerate() {
         let c = record.blast.centre;
@@ -34,18 +36,19 @@ pub fn report(run: &Run, verdict: &Result<(), Vec<String>>) -> String {
         };
         let _ = writeln!(
             out,
-            "{:>3} {:>24} {:>6} {:>8} {:>10.3} {:>8} {:>8} {:>5} {:>6} {:>7} {:>8}",
+            "{:>3} {:>24} {:>6} {:>8} {:>10.3} {:>8} {:>8} {:>5} {:>6} {:>7} {:>8} {:>9}",
             index,
             format!("({:.2}, {:.2}, {:.2})", c.x, c.y, c.z),
             record.fragments.len(),
             record.fragments.iter().map(|f| f.samples).sum::<usize>(),
             record.fragments.iter().map(|f| f.volume).sum::<f32>(),
-            record.loose,
-            record.paper_thin,
+            record.cut.loose.all,
+            record.cut.paper_thin,
             count(|f| f.fate == Fate::Dust),
             count(|f| matches!(f.fate, Fate::Landed { .. })),
             count(|f| matches!(f.fate, Fate::Expired { .. })),
             count(|f| f.fate.is_boulder()),
+            count(|f| f.settled == Some(Verdict::Deposited)),
         );
     }
     let _ = writeln!(

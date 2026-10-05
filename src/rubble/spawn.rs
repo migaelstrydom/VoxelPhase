@@ -10,12 +10,12 @@
 //!       ├── Scree   ──▶ FallingScree + TerrainMeshInstance, thrown by the
 //!       │               blast's shove
 //!       └── Boulder ──▶ BrickShaper ──▶ a body in the physics world
-//!                       + TerrainMeshInstance + ResidentBoulder; the shove queued
-//!                       for the next physics step throws it. One too
-//!                       intricate for one body is Fragment::split into
-//!                       parts, each graded and planned in turn. Past
-//!                       `max_boulders` in one blast, the smallest fall as
-//!                       scree.
+//!                       + TerrainMeshInstance + ResidentBoulder + Settling;
+//!                       the shove queued for the next physics step throws
+//!                       it. One too intricate for one body is
+//!                       Fragment::split into parts, each graded and planned
+//!                       in turn. Past `max_boulders` in one blast, the
+//!                       smallest fall as scree.
 //! ```
 
 use std::sync::Arc;
@@ -31,6 +31,7 @@ use super::budget::ResidentBoulder;
 use super::dust::{Crumble, CrumbleSize};
 use super::grade::{Grade, GradeRules, Measure};
 use super::scree::{FallingScree, Flight};
+use super::settle::Settling;
 use crate::components::{Orientation, Position, RigidBodyComponent, TerrainMeshInstance, Velocity};
 use crate::model::{MeshPrimitive, Model, ModelPart};
 use crate::physics::PhysicsImpulse;
@@ -329,6 +330,7 @@ impl<'a> System<'a> for RubbleSpawnSystem {
                     Plan::Boulder(boulder) => {
                         let resident = ResidentBoulder::new(boulder.volume, boulder.size);
                         let placed = boulder.place(&mut physics.world);
+                        let settling = Settling::new(piece.fragment, placed.centre);
                         lazy.create_entity(&entities)
                             .with(Position(placed.centre.coords))
                             .with(Velocity(Vector3::zeros()))
@@ -339,6 +341,7 @@ impl<'a> System<'a> for RubbleSpawnSystem {
                                 model: model_of(placed.mesh),
                             })
                             .with(resident)
+                            .with(settling)
                             .build();
                     }
                 }
