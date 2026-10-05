@@ -1,6 +1,7 @@
 //! Runs a scenario: builds its terrain, sets off its blasts, audits after each.
 
 use std::collections::HashSet;
+use std::time::{Duration, Instant};
 
 use nalgebra::{Point3, Vector3};
 
@@ -190,7 +191,12 @@ fn settle(
 
 /// What becomes of everything `cut` holds, played out against `terrain`:
 /// one record a piece.
-fn play(cut: Cut, planner: &mut RubblePlanner, terrain: &TerrainWorld) -> Vec<FragmentRecord> {
+/// Also returns how long planning took.
+fn play(
+    cut: Cut,
+    planner: &mut RubblePlanner,
+    terrain: &TerrainWorld,
+) -> (Vec<FragmentRecord>, Duration) {
     let shove = cut.shove;
     let thin_whole: Vec<usize> = cut
         .fragments
@@ -199,8 +205,10 @@ fn play(cut: Cut, planner: &mut RubblePlanner, terrain: &TerrainWorld) -> Vec<Fr
         .collect();
     let mut world = PhysicsWorld::default();
     let mut followed = Vec::new();
-    let mut records: Vec<FragmentRecord> = planner
-        .plan(cut)
+    let started = Instant::now();
+    let pieces = planner.plan(cut);
+    let planning = started.elapsed();
+    let mut records: Vec<FragmentRecord> = pieces
         .into_iter()
         .enumerate()
         .map(|(index, piece)| {
@@ -246,19 +254,18 @@ fn play(cut: Cut, planner: &mut RubblePlanner, terrain: &TerrainWorld) -> Vec<Fr
     for (index, fate) in settle(&mut world, &followed, shove, terrain) {
         records[index].fate = fate;
     }
-    records
+    (records, planning)
 }
 
 /// How many of the air samples in a boulder's holes, gaps and hollows its
 /// bricks hold deeper than `depth` voxels: empty space the solver treats as
-/// rock (`Occupancy::encloses`). A notch in a corner, which any convex brick
+/// rock (`Occupancy::enclosed`). A notch in a corner, which any convex brick
 /// fills, is not one.
 fn air_held_by(bricks: &Bricks, occupancy: &Occupancy, depth: f32) -> usize {
-    let [nx, ny, nz] = occupancy.dims();
     let depth = depth * occupancy.spacing();
-    (0..nx)
-        .flat_map(|x| (0..ny).flat_map(move |y| (0..nz).map(move |z| [x, y, z])))
-        .filter(|&s| occupancy.encloses(s))
+    occupancy
+        .enclosed()
+        .into_iter()
         .filter(|s| {
             let at = occupancy.world_position(Vector3::new(s[0] as f32, s[1] as f32, s[2] as f32));
             bricks.bricks.iter().any(|brick| {
@@ -309,6 +316,19 @@ pub struct BlastRecord {
     pub loose: usize,
     /// Samples drawn paper-thin anywhere in the terrain after this blast.
     pub paper_thin: usize,
+    /// Wall-clock cost of the blast's stages.
+    pub timing: BlastTiming,
+}
+
+/// How long one blast's stages took, wall clock.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct BlastTiming {
+    /// `TerrainWorld::detonate`: carving and lifting out what was cut loose.
+    pub detonate: Duration,
+    /// The remesh after it.
+    pub remesh: Duration,
+    /// `RubblePlanner::plan`: grading, meshing and shaping every piece.
+    pub plan: Duration,
 }
 
 /// A scenario played out.
@@ -436,18 +456,27 @@ pub fn run(scenario: &Scenario) -> Result<Run, String> {
         .blasts
         .iter()
         .map(|&blast| {
+            let started = Instant::now();
             let cut = Cut {
                 shove: Explosion::new(blast.centre).physics_impulse(),
                 fragments: terrain.detonate(blast.centre, &blast.charge),
             };
+            let detonate = started.elapsed();
             // Rubble falls on the terrain as remeshed after the blast.
+            let started = Instant::now();
             terrain.update();
-            let fragments = play(cut, &mut planner, &terrain);
+            let remesh = started.elapsed();
+            let (fragments, plan) = play(cut, &mut planner, &terrain);
             BlastRecord {
                 blast,
                 fragments,
                 loose: terrain.loose_samples(),
                 paper_thin: terrain.paper_thin_samples(),
+                timing: BlastTiming {
+                    detonate,
+                    remesh,
+                    plan,
+                },
             }
         })
         .collect();

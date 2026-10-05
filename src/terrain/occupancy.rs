@@ -78,27 +78,67 @@ impl Occupancy {
         self.sample(index) == Sample::Solid
     }
 
-    /// Whether the sample at `index` is air with the fragment on both sides
-    /// of it along some line of the lattice (an axis, or a face or body
-    /// diagonal): in a hole, a gap or a hollow. Air outside a convex surface
-    /// never is.
-    pub fn encloses(&self, index: [usize; 3]) -> bool {
-        if self.sample(index) != Sample::Air {
-            return false;
-        }
-        let solid_along = |d: [i64; 3]| {
-            (1..)
-                .map_while(|k| {
-                    let at = [0, 1, 2].map(|a| index[a] as i64 + d[a] * k);
-                    let inside = (0..3).all(|a| (0..self.dims[a] as i64).contains(&at[a]));
-                    inside.then(|| self.is_solid(at.map(|i| i as usize)))
-                })
-                .any(|solid| solid)
-        };
-        (-1..=1i64)
+    /// Every air sample with the fragment on both sides of it along some
+    /// line of the lattice (an axis, or a face or body diagonal): in a hole,
+    /// a gap or a hollow. Air outside a convex surface never is.
+    pub fn enclosed(&self) -> Vec<[usize; 3]> {
+        let mut enclosed = vec![false; self.samples.len()];
+        let lines = (-1..=1i64)
             .flat_map(|x| (-1..=1i64).flat_map(move |y| (-1..=1i64).map(move |z| [x, y, z])))
-            .filter(|d| *d > [0, 0, 0])
-            .any(|d| solid_along(d) && solid_along(d.map(|c| -c)))
+            .filter(|d| *d > [0, 0, 0]);
+        for d in lines {
+            let behind = self.solid_behind(d);
+            let ahead = self.solid_behind(d.map(|c| -c));
+            for (i, flag) in enclosed.iter_mut().enumerate() {
+                *flag |= behind[i] && ahead[i];
+            }
+        }
+        let [_, ny, nz] = self.dims;
+        enclosed
+            .into_iter()
+            .enumerate()
+            .filter(|&(i, flag)| flag && self.samples[i] == Sample::Air)
+            .map(|(i, _)| [i / (ny * nz), i / nz % ny, i % nz])
+            .collect()
+    }
+
+    /// For every sample, whether one of the fragment's lies somewhere behind
+    /// it along `step`: one sweep down each line of the lattice, each sample
+    /// taking its answer from the one before it.
+    fn solid_behind(&self, step: [i64; 3]) -> Vec<bool> {
+        let [nx, ny, nz] = self.dims;
+        let flat = |[x, y, z]: [usize; 3]| (x * ny + y) * nz + z;
+        // Each axis walked the way the step goes, so the sample behind is
+        // always answered first.
+        let order = |n: usize, step: i64| -> Vec<usize> {
+            if step < 0 {
+                (0..n).rev().collect()
+            } else {
+                (0..n).collect()
+            }
+        };
+        let back_of = |s: [usize; 3]| -> Option<[usize; 3]> {
+            let mut back = [0; 3];
+            for a in 0..3 {
+                let b = s[a] as i64 - step[a];
+                if b < 0 || b >= self.dims[a] as i64 {
+                    return None;
+                }
+                back[a] = b as usize;
+            }
+            Some(back)
+        };
+        let mut behind = vec![false; self.samples.len()];
+        for &x in &order(nx, step[0]) {
+            for &y in &order(ny, step[1]) {
+                for &z in &order(nz, step[2]) {
+                    if let Some(back) = back_of([x, y, z]) {
+                        behind[flat([x, y, z])] = self.is_solid(back) || behind[flat(back)];
+                    }
+                }
+            }
+        }
+        behind
     }
 
     /// Distance between adjacent samples, in metres.
@@ -147,5 +187,62 @@ impl Fragment {
                 }
             },
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rand::rngs::StdRng;
+    use rand::{Rng, SeedableRng};
+
+    /// Air with the fragment on both sides along some lattice line, found by
+    /// walking every line from every sample.
+    fn enclosed_by_walking(occupancy: &Occupancy) -> Vec<[usize; 3]> {
+        let dims = occupancy.dims();
+        let solid_along = |s: [usize; 3], d: [i64; 3]| {
+            (1..)
+                .map_while(|k| {
+                    let at = [0, 1, 2].map(|a| s[a] as i64 + d[a] * k);
+                    let inside = (0..3).all(|a| (0..dims[a] as i64).contains(&at[a]));
+                    inside.then(|| occupancy.is_solid(at.map(|i| i as usize)))
+                })
+                .any(|solid| solid)
+        };
+        (0..dims[0])
+            .flat_map(|x| (0..dims[1]).flat_map(move |y| (0..dims[2]).map(move |z| [x, y, z])))
+            .filter(|&s| occupancy.sample(s) == Sample::Air)
+            .filter(|&s| {
+                (-1..=1i64)
+                    .flat_map(|x| {
+                        (-1..=1i64).flat_map(move |y| (-1..=1i64).map(move |z| [x, y, z]))
+                    })
+                    .filter(|d| *d > [0, 0, 0])
+                    .any(|d| solid_along(s, d) && solid_along(s, d.map(|c| -c)))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn enclosed_air_is_air_between_the_fragments_samples() {
+        let mut rng = StdRng::seed_from_u64(7);
+        for _ in 0..50 {
+            let dims = [0; 3].map(|_| rng.gen_range(1..9));
+            let picks: Vec<Sample> = (0..dims.iter().product::<usize>())
+                .map(|_| match rng.gen_range(0..10) {
+                    0..3 => Sample::Solid,
+                    3 => Sample::Obstacle,
+                    _ => Sample::Air,
+                })
+                .collect();
+            let occupancy = Occupancy::new(
+                dims,
+                0.5,
+                Point3::origin(),
+                UnitQuaternion::identity(),
+                |[x, y, z]| picks[(x * dims[1] + y) * dims[2] + z],
+            );
+            assert_eq!(occupancy.enclosed(), enclosed_by_walking(&occupancy));
+        }
     }
 }

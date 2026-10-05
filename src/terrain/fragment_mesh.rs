@@ -17,6 +17,7 @@
 use nalgebra::Point3;
 
 use super::fragment::{overlay, Fragment};
+use super::marching_cubes::MarchingCubes;
 use super::mesh_octree::MeshOctree;
 use super::voxel_block::{VoxelBlock, VoxelSource};
 use crate::collision::AABB;
@@ -81,6 +82,23 @@ impl Fragment {
             indices,
             origin,
         }
+    }
+}
+
+impl Fragment {
+    /// Where its mesh's vertices were at the blast, in the world, without
+    /// the mesh: marching cubes alone over its own block, whose air padding
+    /// is the halo, with no occlusion and no triangles. What a boulder's
+    /// bricks are fitted to. Empty if it draws no surface.
+    pub fn surface(&self) -> Vec<Point3<f32>> {
+        let voxels = self.voxels();
+        let pose = self.pose();
+        MarchingCubes::new()
+            .generate_range(voxels, [0; 3], voxels.dims())
+            .positions
+            .into_iter()
+            .map(|p| pose * p)
+            .collect()
     }
 }
 
@@ -247,5 +265,29 @@ mod tests {
             mean.norm() < 0.3,
             "vertices centred on the origin, mean {mean:?}"
         );
+    }
+
+    /// A boulder's bricks are fitted to `surface`, and the eye sees `mesh`:
+    /// they must be the same points.
+    #[test]
+    fn the_surface_is_where_the_mesh_has_its_vertices() {
+        let frame = SegmentFrame::new(Point3::new(40.0, -3.0, 12.0), 1);
+        let fragment = Search::audit(&rock_over_ground())
+            .into_fragments(&frame)
+            .remove(0);
+        let mesh = fragment.mesh();
+        let quantise = |p: Point3<f32>| p.coords.map(|c| (c * 1e3).round() as i64);
+        let mut drawn: Vec<_> = mesh
+            .vertices
+            .iter()
+            .map(|v| quantise(mesh.origin + v.pos))
+            .collect();
+        let mut surface: Vec<_> = fragment.surface().into_iter().map(quantise).collect();
+        drawn.sort_unstable_by_key(|v| (v.x, v.y, v.z));
+        drawn.dedup();
+        surface.sort_unstable_by_key(|v| (v.x, v.y, v.z));
+        surface.dedup();
+        assert!(!surface.is_empty());
+        assert_eq!(surface, drawn);
     }
 }

@@ -1,8 +1,9 @@
 //! A run, as text.
 
 use std::fmt::Write;
+use std::time::Duration;
 
-use super::driver::{Fate, FragmentRecord, Run};
+use super::driver::{BlastTiming, Fate, FragmentRecord, Run};
 
 /// A table of what each blast cut loose, then the verdict.
 pub fn report(run: &Run, verdict: &Result<(), Vec<String>>) -> String {
@@ -14,7 +15,7 @@ pub fn report(run: &Run, verdict: &Result<(), Vec<String>>) -> String {
     );
     let _ = writeln!(
         out,
-        "{:>3} {:>24} {:>6} {:>8} {:>10} {:>8} {:>8} {:>5} {:>6} {:>7} {:>8}",
+        "{:>3} {:>24} {:>6} {:>8} {:>10} {:>8} {:>8} {:>5} {:>6} {:>7} {:>8} {:>8} {:>8} {:>8}",
         "#",
         "blast at",
         "frags",
@@ -25,7 +26,10 @@ pub fn report(run: &Run, verdict: &Result<(), Vec<String>>) -> String {
         "dust",
         "landed",
         "expired",
-        "boulders"
+        "boulders",
+        "carve ms",
+        "mesh ms",
+        "plan ms"
     );
     for (index, record) in run.blasts.iter().enumerate() {
         let c = record.blast.centre;
@@ -34,7 +38,7 @@ pub fn report(run: &Run, verdict: &Result<(), Vec<String>>) -> String {
         };
         let _ = writeln!(
             out,
-            "{:>3} {:>24} {:>6} {:>8} {:>10.3} {:>8} {:>8} {:>5} {:>6} {:>7} {:>8}",
+            "{:>3} {:>24} {:>6} {:>8} {:>10.3} {:>8} {:>8} {:>5} {:>6} {:>7} {:>8} {:>8.2} {:>8.2} {:>8.2}",
             index,
             format!("({:.2}, {:.2}, {:.2})", c.x, c.y, c.z),
             record.fragments.len(),
@@ -46,6 +50,9 @@ pub fn report(run: &Run, verdict: &Result<(), Vec<String>>) -> String {
             count(|f| matches!(f.fate, Fate::Landed { .. })),
             count(|f| matches!(f.fate, Fate::Expired { .. })),
             count(|f| f.fate.is_boulder()),
+            ms(record.timing.detonate),
+            ms(record.timing.remesh),
+            ms(record.timing.plan),
         );
     }
     let _ = writeln!(
@@ -106,6 +113,19 @@ pub fn report(run: &Run, verdict: &Result<(), Vec<String>>) -> String {
                 .fold(f32::NEG_INFINITY, f32::max),
         );
     }
+    let worst = |stage: fn(&BlastTiming) -> Duration| {
+        run.blasts
+            .iter()
+            .map(|b| ms(stage(&b.timing)))
+            .fold(0.0, f64::max)
+    };
+    let _ = writeln!(
+        out,
+        "slowest blast: carve {:.2} ms, mesh {:.2} ms, plan {:.2} ms",
+        worst(|t| t.detonate),
+        worst(|t| t.remesh),
+        worst(|t| t.plan),
+    );
     for problem in run.violations() {
         let _ = writeln!(out, "  invariant broken: {problem}");
     }
@@ -118,4 +138,9 @@ pub fn report(run: &Run, verdict: &Result<(), Vec<String>>) -> String {
         }
     }
     out
+}
+
+/// A duration in milliseconds.
+fn ms(d: Duration) -> f64 {
+    d.as_secs_f64() * 1000.0
 }

@@ -1,7 +1,8 @@
 //! Which pieces a cut split off, found by racing searches out of it.
 //!
 //! Cutting a graph can split a component in two. To find the pieces without
-//! walking the big one, start a breadth-first search on each side of the cut
+//! walking the big one, start a search on each side of the cut, lowest sample
+//! first (terrain is held up from below, so a search finds its anchor soonest),
 //! and advance them alternately, one node each (Even and Shiloach's
 //! decremental-connectivity trick). Searches that meet are one piece, and
 //! merge. A search that runs out of nodes has closed off a whole piece, the
@@ -29,7 +30,10 @@
 //! The graph is the lattice, 6-connected, and `node` says what each sample is,
 //! so the race knows nothing of densities or materials.
 
-use std::collections::{HashMap, VecDeque};
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
+
+use rustc_hash::FxHashMap;
 
 /// What one lattice sample is to the race.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,9 +76,15 @@ enum State {
     Anchored,
 }
 
+/// A sample waiting to be visited, ordered so the lowest comes out first,
+/// and of equals the first in.
+type Waiting = (Reverse<i32>, Reverse<u64>, [i32; 3]);
+
 /// One search, or several merged into one.
 struct Search {
-    frontier: VecDeque<[i32; 3]>,
+    /// Lowest first: terrain is held up from below, so a search heads for
+    /// what holds it before spreading through what it holds up.
+    frontier: BinaryHeap<Waiting>,
     samples: usize,
     lo: [i32; 3],
     hi: [i32; 3],
@@ -84,7 +94,7 @@ struct Search {
 impl Search {
     fn starting_at(seed: [i32; 3], node: Node) -> Self {
         Self {
-            frontier: VecDeque::from([seed]),
+            frontier: BinaryHeap::from([waiting(seed, 0)]),
             samples: 1,
             lo: seed,
             hi: seed,
@@ -96,8 +106,8 @@ impl Search {
         }
     }
 
-    fn take(&mut self, sample: [i32; 3], node: Node) {
-        self.frontier.push_back(sample);
+    fn take(&mut self, sample: [i32; 3], node: Node, order: u64) {
+        self.frontier.push(waiting(sample, order));
         self.samples += 1;
         self.stretch(sample, sample);
         if node == Node::Anchor {
@@ -177,7 +187,7 @@ pub(super) fn race(
     node: impl Fn([i32; 3]) -> Node,
     budget: usize,
 ) -> RaceOutcome {
-    let mut owner: HashMap<[i32; 3], usize> = HashMap::new();
+    let mut owner: FxHashMap<[i32; 3], usize> = FxHashMap::default();
     let mut all = Searches {
         parent: Vec::new(),
         searches: Vec::new(),
@@ -194,10 +204,15 @@ pub(super) fn race(
     }
 
     let mut visited = 0;
+    let mut order = 0;
     let mut out_of_budget = false;
+    // A search stops running by closing, anchoring or being merged into
+    // another, and never starts again, so the running set only shrinks; and
+    // an anchored search stays anchored, merged or not.
+    let mut running: Vec<usize> = all.roots_in(State::Running).collect();
+    let mut anchored = all.roots_in(State::Anchored).next().is_some();
     loop {
-        let running: Vec<usize> = all.roots_in(State::Running).collect();
-        let anchored = all.roots_in(State::Anchored).next().is_some();
+        running.retain(|&id| all.parent[id] == id && all.get(id).state == State::Running);
         if running.is_empty() || (running.len() == 1 && !anchored) {
             break;
         }
@@ -205,11 +220,11 @@ pub(super) fn race(
             out_of_budget = true;
             break;
         }
-        for id in running {
+        for &id in &running {
             if all.root(id) != id || all.get(id).state != State::Running {
                 continue;
             }
-            let Some(sample) = all.get(id).frontier.pop_front() else {
+            let Some((_, _, sample)) = all.get(id).frontier.pop() else {
                 all.get(id).state = State::Closed;
                 continue;
             };
@@ -227,7 +242,8 @@ pub(super) fn race(
                         let kind = node(next);
                         if kind != Node::Off {
                             owner.insert(next, here);
-                            all.get(here).take(next, kind);
+                            order += 1;
+                            all.get(here).take(next, kind, order);
                         }
                     }
                 }
@@ -236,6 +252,7 @@ pub(super) fn race(
             if search.state == State::Running && search.frontier.is_empty() {
                 search.state = State::Closed;
             }
+            anchored |= search.state == State::Anchored;
         }
     }
 
@@ -255,6 +272,11 @@ pub(super) fn race(
         visited,
         out_of_budget,
     }
+}
+
+/// `sample` in a frontier, taken `order`th.
+fn waiting(sample: [i32; 3], order: u64) -> Waiting {
+    (Reverse(sample[1]), Reverse(order), sample)
 }
 
 /// The six samples sharing a face with `c`.

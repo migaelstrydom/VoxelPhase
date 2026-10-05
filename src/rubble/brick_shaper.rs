@@ -40,8 +40,6 @@
 //! holding one is split. A cell one sample across that still holds one is cut
 //! back with a plane through each, facing away from its samples.
 
-use std::collections::HashSet;
-
 use nalgebra::{Point3, UnitQuaternion, Vector3};
 
 use super::crack::Cracker;
@@ -123,14 +121,28 @@ struct SurfacePoint {
     owner: [usize; 3],
 }
 
-/// Some of a fragment's samples, the surface on their edges, and the brick
-/// around them.
+/// Some of a fragment's samples, the surface on their edges, and the bounds
+/// of the brick around them.
 struct Cell {
     samples: Vec<[usize; 3]>,
     surface: Vec<SurfacePoint>,
+    /// The planes of its brick, in sample indices.
+    bounds: Bounds,
+    /// Whether `bounds` hold a point of what the fragment broke from or an
+    /// air sample in a hole or gap. Cheap to tell, and the brick holds
+    /// whatever its bounds do, so a cell that is blocked is split without
+    /// its brick ever being built.
+    blocked: bool,
+    /// What no brick may hold, near enough to the cell that its brick, or
+    /// its children's, could.
+    nearby: Forbidden,
+    /// Its brick, once built.
+    fitted: Option<Fitted>,
+}
+
+/// A cell's brick, built, and what it holds.
+struct Fitted {
     brick: Brick,
-    /// The brick's centre, in sample indices.
-    centre: Vector3<f32>,
     /// Brick volume over the volume of its samples.
     overcover: f32,
     /// Points of what the fragment broke from that the brick holds, in
@@ -138,9 +150,33 @@ struct Cell {
     intrusions: Vec<Vector3<f32>>,
     /// Whether the brick holds an air sample: spans a hole or a gap.
     holds_air: bool,
-    /// What no brick may hold, near enough to the cell that its brick, or
-    /// its children's, could.
-    nearby: Forbidden,
+}
+
+impl Fitted {
+    /// Whether the brick holds anything no brick may.
+    fn is_blocked(&self) -> bool {
+        !self.intrusions.is_empty() || self.holds_air
+    }
+}
+
+/// The 26 planes of a brick, in sample indices: its box, and the bevels on
+/// its edges and corners. A plane the hull builder refuses is left out of
+/// the brick, which only grows it, so the brick holds all the bounds do.
+struct Bounds {
+    centre: Vector3<f32>,
+    /// Half the box's size along each axis.
+    extent: Vector3<f32>,
+    /// Each bevel's unit normal and how far along it the brick reaches.
+    bevels: Vec<(Vector3<f32>, f32)>,
+}
+
+impl Bounds {
+    /// Whether `point` lies strictly inside every plane.
+    fn hold(&self, point: &Vector3<f32>) -> bool {
+        let off = point - self.centre;
+        (0..3).all(|a| off[a].abs() < self.extent[a])
+            && self.bevels.iter().all(|(n, reach)| n.dot(point) < *reach)
+    }
 }
 
 /// What no brick may hold, in sample indices.
@@ -150,7 +186,7 @@ struct Forbidden {
     /// point halfway to each of its 26 neighbours that is not one of them.
     ground: Vec<Vector3<f32>>,
     /// Every air sample in a hole, gap or hollow of the fragment
-    /// (`Occupancy::encloses`), so that a brick does not span one. Air
+    /// (`Occupancy::enclosed`), so that a brick does not span one. Air
     /// outside a convex surface is left out: every brick's bevels skim some.
     air: Vec<Vector3<f32>>,
 }
@@ -198,33 +234,45 @@ impl BrickShaper {
             cells.push(self.cell(samples, surface, occupancy, &forbidden));
         }
 
-        let splittable = |c: &&Cell| longest_span(c).1 >= 2;
-        while let Some(worst) = cells
-            .iter()
-            .position(|c| (!c.intrusions.is_empty() || c.holds_air) && splittable(&c))
-        {
+        let splittable = |c: &Cell| longest_span(c).1 >= 2;
+        loop {
+            while let Some(worst) = cells.iter().position(|c| c.blocked && splittable(c)) {
+                let cell = cells.swap_remove(worst);
+                cells.extend(self.split(cell, occupancy));
+            }
+            let cells_count = cells.len();
+            if cells_count > self.max_bricks {
+                let samples: Vec<[usize; 3]> = cells.into_iter().flat_map(|c| c.samples).collect();
+                let pieces = cells_count.div_ceil(self.max_bricks).max(2);
+                return Shape::Parts(self.cracker.crack(&samples, pieces));
+            }
+            for cell in &mut cells {
+                self.fit(cell, occupancy);
+            }
+            let held = |c: &Cell| c.fitted.as_ref().is_some_and(Fitted::is_blocked);
+            let Some(worst) = cells.iter().position(|c| held(c) && splittable(c)) else {
+                break;
+            };
             let cell = cells.swap_remove(worst);
             cells.extend(self.split(cell, occupancy));
         }
-        let cells_count = cells.len();
-        if cells_count > self.max_bricks {
-            let samples: Vec<[usize; 3]> = cells.into_iter().flat_map(|c| c.samples).collect();
-            let pieces = cells_count.div_ceil(self.max_bricks).max(2);
-            return Shape::Parts(self.cracker.crack(&samples, pieces));
-        }
 
+        let overcover = |c: &Cell| c.fitted.as_ref().map_or(0.0, |f| f.overcover);
         while cells.len() < self.max_bricks {
             let swollen = cells
                 .iter()
                 .enumerate()
-                .filter(|(_, c)| c.overcover > self.max_overcover && longest_span(c).1 >= 3)
+                .filter(|(_, c)| overcover(c) > self.max_overcover && longest_span(c).1 >= 3)
                 .max_by(|(_, a), (_, b)| excess(a).total_cmp(&excess(b)))
                 .map(|(i, _)| i);
             let Some(worst) = swollen else {
                 break;
             };
             let cell = cells.swap_remove(worst);
-            cells.extend(self.split(cell, occupancy));
+            for mut half in self.split(cell, occupancy) {
+                self.fit(&mut half, occupancy);
+                cells.push(half);
+            }
         }
 
         Shape::Whole(Bricks {
@@ -250,19 +298,22 @@ impl BrickShaper {
 
     /// `cell`'s brick, cut back off every point of the ground it holds.
     fn cut_back(&self, cell: Cell, spacing: f32) -> Brick {
-        if cell.intrusions.is_empty() {
-            return cell.brick;
+        let fitted = cell
+            .fitted
+            .expect("every cell is fitted before it is cut back");
+        if fitted.intrusions.is_empty() {
+            return fitted.brick;
         }
         let samples =
             cell.samples.iter().map(as_vector).sum::<Vector3<f32>>() / cell.samples.len() as f32;
-        let mut draft = HullDraft::of(&cell.brick.hull);
-        for point in &cell.intrusions {
+        let mut draft = HullDraft::of(&fitted.brick.hull);
+        for point in &fitted.intrusions {
             let Some(normal) = (point - samples).try_normalize(1e-6) else {
                 continue;
             };
             let plane = Plane {
                 normal,
-                offset: (normal.dot(&(point - cell.centre)) - self.inset) * spacing,
+                offset: (normal.dot(&(point - cell.bounds.centre)) - self.inset) * spacing,
             };
             if let Some(trimmed) = draft.trim(plane) {
                 draft = trimmed;
@@ -270,12 +321,12 @@ impl BrickShaper {
         }
         Brick {
             hull: draft.build(),
-            centre: cell.brick.centre,
+            centre: fitted.brick.centre,
         }
     }
 
     /// The cell holding `samples`, which must not be empty, and the surface
-    /// on their edges.
+    /// on their edges. Its brick is not built yet.
     fn cell(
         &self,
         samples: Vec<[usize; 3]>,
@@ -286,41 +337,80 @@ impl BrickShaper {
         let lo = Vector3::from_fn(|a, _| samples.iter().map(|s| s[a]).min().unwrap_or(0) as f32);
         let hi = Vector3::from_fn(|a, _| samples.iter().map(|s| s[a]).max().unwrap_or(0) as f32);
         let nearby = forbidden.near(lo, hi, REACH);
-        let (brick, centre) = self.brick(&samples, &surface, occupancy);
-        let solid = samples.len() as f32 * occupancy.spacing().powi(3);
-        let overcover = brick.hull.compute_volume() / solid;
-        let spacing = occupancy.spacing();
-        let held = |p: &&Vector3<f32>| holds(&brick.hull, (*p - centre) * spacing);
-        let intrusions = nearby.ground.iter().filter(held).copied().collect();
-        let holds_air = nearby.air.iter().any(|p| held(&p));
+        let bounds = self.bounds(&samples, &surface, occupancy);
+        let blocked = nearby
+            .ground
+            .iter()
+            .chain(&nearby.air)
+            .any(|p| bounds.hold(p));
         Cell {
             samples,
             surface,
-            brick,
-            centre,
-            overcover,
-            intrusions,
-            holds_air,
+            bounds,
+            blocked,
             nearby,
+            fitted: None,
         }
     }
 
-    /// The 26-sided hull of what a cell holds, stood in by `inset`, and its
-    /// centre in sample indices.
-    fn brick(
+    /// Build `cell`'s brick, if it is not built, and find what it holds.
+    fn fit(&self, cell: &mut Cell, occupancy: &Occupancy) {
+        if cell.fitted.is_some() {
+            return;
+        }
+        let spacing = occupancy.spacing();
+        let bounds = &cell.bounds;
+        let mut draft = HullDraft::of(&cube_hull(bounds.extent * spacing));
+        for &(normal, reach) in &bounds.bevels {
+            let plane = Plane {
+                normal,
+                offset: (reach - normal.dot(&bounds.centre)) * spacing,
+            };
+            // A bevel that misses the box, or that would leave a hull the
+            // builder refuses, is left uncut: the brick only grows.
+            if let Some(trimmed) = draft.trim(plane) {
+                draft = trimmed;
+            }
+        }
+        let brick = Brick {
+            hull: draft.build(),
+            centre: occupancy.world_position(bounds.centre),
+        };
+        let solid = cell.samples.len() as f32 * spacing.powi(3);
+        let overcover = brick.hull.compute_volume() / solid;
+        let held = |p: &&Vector3<f32>| holds(&brick.hull, (*p - bounds.centre) * spacing);
+        let intrusions = cell.nearby.ground.iter().filter(held).copied().collect();
+        let holds_air = cell.nearby.air.iter().any(|p| held(&p));
+        cell.fitted = Some(Fitted {
+            brick,
+            overcover,
+            intrusions,
+            holds_air,
+        });
+    }
+
+    /// The planes of the 26-sided hull of what a cell holds, stood in by
+    /// `inset`.
+    fn bounds(
         &self,
         samples: &[[usize; 3]],
         surface: &[SurfacePoint],
         occupancy: &Occupancy,
-    ) -> (Brick, Vector3<f32>) {
+    ) -> Bounds {
         let mut points: Vec<Vector3<f32>> = surface.iter().map(|p| p.at).collect();
         points.extend(samples.iter().map(as_vector));
         // Where the cell meets another, its brick reaches halfway to the
-        // other's samples, and the two meet there.
-        let own: HashSet<[usize; 3]> = samples.iter().copied().collect();
+        // other's samples, and the two meet there. Cells are cut from the
+        // fragment by planes across the lattice's axes, so a cell is every
+        // solid sample in its box, and a solid sample outside it is another's.
+        let lo: [usize; 3] =
+            std::array::from_fn(|a| samples.iter().map(|s| s[a]).min().unwrap_or(0));
+        let hi: [usize; 3] =
+            std::array::from_fn(|a| samples.iter().map(|s| s[a]).max().unwrap_or(0));
+        let own = |n: &[usize; 3]| (0..3).all(|a| (lo[a]..=hi[a]).contains(&n[a]));
         for s in samples {
             for neighbour in neighbours(occupancy, *s) {
-                if occupancy.is_solid(neighbour) && !own.contains(&neighbour) {
+                if occupancy.is_solid(neighbour) && !own(&neighbour) {
                     points.push((as_vector(s) + as_vector(&neighbour)) / 2.0);
                 }
             }
@@ -339,26 +429,11 @@ impl BrickShaper {
         let centre = (low + high) / 2.0;
         let extent = (high - low) / 2.0;
         let floor = (extent.max() * MIN_ASPECT).max(MIN_EXTENT);
-        let extent = extent.map(|e| e.max(floor));
-
-        let spacing = occupancy.spacing();
-        let mut draft = HullDraft::of(&cube_hull(extent * spacing));
-        for normal in bevels() {
-            let plane = Plane {
-                normal,
-                offset: (reach(&normal) - normal.dot(&centre)) * spacing,
-            };
-            // A bevel that misses the box, or that would leave a hull the
-            // builder refuses, is left uncut: the brick only grows.
-            if let Some(trimmed) = draft.trim(plane) {
-                draft = trimmed;
-            }
+        Bounds {
+            centre,
+            extent: extent.map(|e| e.max(floor)),
+            bevels: bevels().map(|n| (n, reach(&n))).collect(),
         }
-        let brick = Brick {
-            hull: draft.build(),
-            centre: occupancy.world_position(centre),
-        };
-        (brick, centre)
     }
 }
 
@@ -375,19 +450,14 @@ fn forbidden_points(occupancy: &Occupancy) -> Forbidden {
     let [nx, ny, nz] = occupancy.dims();
     let mut forbidden = Forbidden {
         ground: Vec::new(),
-        air: Vec::new(),
+        air: occupancy.enclosed().iter().map(as_vector).collect(),
     };
     for x in 0..nx {
         for y in 0..ny {
             for z in 0..nz {
                 let o = [x, y, z];
                 match occupancy.sample(o) {
-                    Sample::Solid => {}
-                    Sample::Air => {
-                        if occupancy.encloses(o) {
-                            forbidden.air.push(as_vector(&o));
-                        }
-                    }
+                    Sample::Solid | Sample::Air => {}
                     Sample::Obstacle => {
                         forbidden.ground.push(as_vector(&o));
                         // Halfway to every neighbour that is not more of it,
@@ -532,12 +602,15 @@ fn longest_span(cell: &Cell) -> (usize, usize) {
 
 /// How much more than its samples' volume `cell`'s brick covers, in samples.
 fn excess(cell: &Cell) -> f32 {
-    cell.samples.len() as f32 * (cell.overcover - 1.0)
+    let overcover = cell.fitted.as_ref().map_or(1.0, |f| f.overcover);
+    cell.samples.len() as f32 * (overcover - 1.0)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
+
     use rand::rngs::StdRng;
     use rand::{Rng, SeedableRng};
 

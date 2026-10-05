@@ -38,7 +38,7 @@ mod scenarios;
 #[cfg(test)]
 mod tests;
 
-pub use driver::{run, BlastRecord, FragmentRecord, Run};
+pub use driver::{run, BlastRecord, BlastTiming, FragmentRecord, Run};
 pub use report::report;
 pub use scenario::{Blast, Scenario};
 pub use scenarios::{catalogue, find};

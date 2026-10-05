@@ -223,18 +223,10 @@ impl RubblePlanner {
             });
             return;
         }
-        let mesh = fragment.mesh();
-        if mesh.indices.is_empty() {
-            pieces.push(Piece {
-                fragment,
-                source,
-                plan: dust,
-            });
-            return;
-        }
+        // A boulder is shaped before it is meshed: one too intricate for one
+        // body is cut into parts, each meshed on its own.
         let bricks = if grade == Grade::Boulder {
-            let surface = mesh.vertices.iter().map(|v| mesh.origin + v.pos);
-            match self.bricks.shape(&fragment.occupancy(), surface) {
+            match self.bricks.shape(&fragment.occupancy(), fragment.surface()) {
                 Shape::Whole(bricks) => Some(bricks),
                 Shape::Parts(parts) => {
                     let split = fragment.split(&parts);
@@ -251,6 +243,15 @@ impl RubblePlanner {
         } else {
             None
         };
+        let mesh = fragment.mesh();
+        if mesh.indices.is_empty() {
+            pieces.push(Piece {
+                fragment,
+                source,
+                plan: dust,
+            });
+            return;
+        }
 
         let mass = fragment.volume() * fragment.material().mass_density();
         let reach = mesh
