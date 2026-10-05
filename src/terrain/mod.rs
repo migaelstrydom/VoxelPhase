@@ -41,7 +41,7 @@ pub use anchor::{mate, outward, Anchor};
 pub use chunk::{ChunkCoord, CHUNK_VOXELS};
 pub use chunk_grid::ChunkGrid;
 pub use chunk_rebuild::ChunkBuildTimings;
-pub use fragment::{Fragment, BEARING_DENSITY};
+pub use fragment::{Fragment, SplitFragment, BEARING_DENSITY};
 pub use fragment_mesh::FragmentMesh;
 pub use frame::{SegmentFrame, YAW_STEP_DEGREES};
 pub use occupancy::{Occupancy, Sample};

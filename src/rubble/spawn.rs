@@ -237,9 +237,13 @@ impl RubblePlanner {
             match self.bricks.shape(&fragment.occupancy(), surface) {
                 Shape::Whole(bricks) => Some(bricks),
                 Shape::Parts(parts) => {
-                    for part in fragment.split(&parts) {
+                    let split = fragment.split(&parts);
+                    for part in split.parts {
                         let grade = self.grades.grade(Measure::of(&part));
                         self.plan_piece(part, source, grade, shove, pieces);
+                    }
+                    if let Some(crumbs) = split.crumbs {
+                        self.plan_piece(crumbs, source, Grade::Dust, shove, pieces);
                     }
                     return;
                 }

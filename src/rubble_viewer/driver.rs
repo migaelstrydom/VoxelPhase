@@ -42,6 +42,10 @@ pub struct FragmentRecord {
     pub centroid: Point3<f32>,
     pub material: VoxelMaterial,
     pub fate: Fate,
+    /// Samples drawn paper-thin in it, and in the whole fragment it came
+    /// from: cracking may not make a piece thinner than its fragment was.
+    pub paper_thin: usize,
+    pub paper_thin_whole: usize,
     /// Whether it is a skin: no sample of it bears load.
     pub skin: bool,
     /// For a boulder, the air samples in its holes, gaps and hollows that
@@ -188,6 +192,11 @@ fn settle(
 /// one record a piece.
 fn play(cut: Cut, planner: &mut RubblePlanner, terrain: &TerrainWorld) -> Vec<FragmentRecord> {
     let shove = cut.shove;
+    let thin_whole: Vec<usize> = cut
+        .fragments
+        .iter()
+        .map(|f| f.paper_thin_samples())
+        .collect();
     let mut world = PhysicsWorld::default();
     let mut followed = Vec::new();
     let mut records: Vec<FragmentRecord> = planner
@@ -226,6 +235,8 @@ fn play(cut: Cut, planner: &mut RubblePlanner, terrain: &TerrainWorld) -> Vec<Fr
                 centroid: fragment.world_centroid(),
                 material: fragment.material(),
                 fate,
+                paper_thin: fragment.paper_thin_samples(),
+                paper_thin_whole: thin_whole[piece.source],
                 skin: fragment.bearing_samples() == 0,
                 air_held,
                 in_pieces,
@@ -367,6 +378,24 @@ impl Run {
                     "blast {index}: {} samples at {:?}: {problem}",
                     fragment.samples, fragment.centroid
                 ));
+            }
+            // The drawn pieces of one fragment between them draw no more of
+            // it paper-thin than the whole fragment did.
+            let mut thin: Vec<(usize, usize)> = Vec::new();
+            for piece in record.fragments.iter().filter(|p| p.fate != Fate::Dust) {
+                if thin.len() <= piece.source {
+                    thin.resize(piece.source + 1, (0, 0));
+                }
+                thin[piece.source].0 += piece.paper_thin;
+                thin[piece.source].1 = piece.paper_thin_whole;
+            }
+            for (source, (pieces, whole)) in thin.into_iter().enumerate() {
+                if pieces > whole {
+                    found.push(format!(
+                        "blast {index}: fragment {source} cracked into pieces drawing {pieces} \
+                         samples paper-thin, up from {whole}"
+                    ));
+                }
             }
         }
         let (mut loose, mut thin) = (self.loose_before, self.paper_thin_before);

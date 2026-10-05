@@ -665,3 +665,29 @@ and as scree, through `rubble_viewer all`.
   landing check). The shell's five still did not rest in 12 s: skins now
   draw spins from the planner's seeded sequence, changing every later spin.
   Given 40 s the pile rests at 12.2 s, so the harness allows 20 s.
+
+## E27. Slivers from cracking (2026-10-05)
+
+**Question.** Where do the slivers on cracked pieces come from, and what
+removes them?
+
+**Setup.** `garden_pavilion_piers` (four grenades through the pavilion's
+piers) and every scenario, with an invariant comparing a fragment's
+paper-thin samples with its drawn pieces'. A debug pass in
+`Fragment::split` classifying each thin sample's neighbours and counting
+settling passes.
+
+**Result.**
+
+- Before: pavilion roof 54 → 202, shell 2 → 140, hoodoo 5 → 19.
+- Moving a thin sample to a part on its thin side: 56, 142, 13, and two
+  pavilion parts pushed out on their first frame; on the shell every one of
+  the 8 passes still moved samples: they bounced.
+- Shared seam air left at its own density instead of -1: 58, 127, 7. Smooth
+  cracks (roughness 0): 60, 133, 16. Neither is the cause.
+- The thin samples were crust (density 0.02–0.3) with own rock on one side
+  of every axis; thick in the whole fragment only through deep neighbours
+  now in two other parts. Moving only to a part that draws the sample
+  thick: 110 still thin on the shell, held by no part.
+- Crumbling those: every scenario passes, no ejections; 4 of the shell's
+  1,425 samples crumble, at most 8 of 190 elsewhere.

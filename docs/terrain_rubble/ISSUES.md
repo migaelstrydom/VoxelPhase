@@ -51,6 +51,8 @@ An issue's **status** is one of:
 | [R35](#r35) | Three stalactites came down as one body, joined only by air | fixed (branch `rubble-phase2`) | high |
 | [R36](#r36) | Large skins vanished as dust where they broke | fixed (branch `rubble-phase2`) | medium |
 | [R37](#r37) | Boulders shared the props' 40-piece debris budget and sparkled away | fixed (branch `rubble-phase2`) | medium |
+| [R38](#r38) | Two cull systems, two body spawners: rubble repeats fracture's | open, simplification for later | low |
+| [R39](#r39) | Cracked pieces carried slivers and hairlines the whole fragment did not | fixed (branch `rubble-phase2`) | high |
 
 ---
 
@@ -689,3 +691,51 @@ burst. The hill's shell alone is 32 bodies. Boulders now have their own
 budget (`BoulderCullSystem`): the largest 120 kept, 4 s grace, the smallest
 past it crumbling to dust in its own colours. Phase 4's deposition is the
 real answer.
+
+<a id="r38"></a>
+## R38. Two cull systems, two body spawners: rubble repeats fracture's
+
+**Status:** open; a simplification for once rubble works (user, 2026-10-05).
+**Found by:** review, on the user's question whether pieces are now made
+three ways.
+
+Props break through one pipeline (`CompoundFracture` + `FractureSystem`, with
+glass cracking and solid cleaving reshaping children in front of it). Rubble
+is a second pipeline because its input is voxels, and most of it has nothing
+to share: the finder, the brick shaper, the voxel cracker, the terrain-texture
+draw. Two parts do repeat fracture's:
+
+- `rubble::BoulderCullSystem` is `fracture::DebrisCullSystem` again, with
+  other numbers and a dust burst for glitter. One cull system with pools,
+  each with its own budget and its own effect.
+- `Boulder::place` and `spawn_freed_piece` share the body-and-entity step.
+
+And one opportunity: a boulder as a `CompoundFracture` (bricks as children,
+joined by fracture joints) would break up on a hard landing with the existing
+load machinery, rather than with a third system.
+
+<a id="r39"></a>
+## R39. Cracked pieces carried slivers and hairlines the whole fragment did not
+
+**Status:** fixed on branch `rubble-phase2`. **Found by:** play-test (the
+stalactite pavilion shattered: a piece trailed a hairline sliver, another
+had a lip), then `garden_pavilion_piers` and a new invariant (E27).
+
+The terrain is held to drawing nothing new paper-thin; pieces were not. A
+crack parts crust from the rock behind it: a low-density sample drawn thick
+in the whole fragment, thanks to a deep neighbour, is drawn as a fin once
+that neighbour goes to another part. Cracking took the pavilion's roof from
+54 paper-thin samples to 202, the hill's shell from 2 to 140.
+
+`Fragment::split` now settles the cut first. A sample it left thin goes to a
+neighbouring part that draws it thick (only there: moving it to any part on
+its thin side made samples bounce between parts for every pass); a sample
+no part draws thick, crust the crack parted from rock on two sides, crumbles
+to dust, repeated until nothing changes; a part left in pieces becomes one
+part a piece. A few samples crumble: 4 of the shell's 1,425, under 5%
+elsewhere. `rubble_viewer` fails a fragment whose drawn pieces draw more of
+it paper-thin than the whole did.
+
+Not covered: what a whole fragment draws paper-thin it still carries (the
+pavilion roof's 54, from the terrain as authored: the garden draws 718
+samples paper-thin before any blast).

@@ -22,6 +22,7 @@ pub fn scenarios() -> Vec<Scenario> {
         hoodoo_stem(),
         island_chip(),
         stalactite_root(),
+        pavilion_piers(),
         short_bridge(),
         long_bridge(),
         lip_root(),
@@ -158,6 +159,25 @@ fn stalactite_root() -> Scenario {
         blasts: vec![grenade(21.5, 7.6, 59.0)],
         known_gap: None,
         expect: |run| something_fell(run, 30),
+    }
+}
+
+/// The play-test case: both piers cut, the roof and its stalactites come
+/// down together, and whatever it cracks into must not carry flaps or strips
+/// thinner than the roof drew them.
+fn pavilion_piers() -> Scenario {
+    Scenario {
+        name: "garden_pavilion_piers",
+        description: "garden pavilion: both piers cut, the roof drops with its stalactites",
+        level: GARDEN,
+        blasts: vec![
+            grenade(19.0, 3.0, 60.0),
+            grenade(29.0, 3.0, 60.0),
+            grenade(19.0, 6.0, 60.0),
+            grenade(29.0, 6.0, 60.0),
+        ],
+        known_gap: None,
+        expect: |run| something_fell(run, 300),
     }
 }
 

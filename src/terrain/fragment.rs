@@ -76,6 +76,13 @@ const MAX_MARGIN_VOXELS: f32 = 32.0;
 /// voxel apart.
 const PAPER_THIN: f32 = 0.5;
 
+/// The owner, while a fragment is split, of a sample that crumbles.
+const CRUMB: usize = usize::MAX - 1;
+
+/// Most passes `Fragment::split` makes handing samples a cut left paper-thin
+/// across to a neighbouring part: each pass can thin the next sample behind.
+const MAX_SEAM_PASSES: usize = 8;
+
 /// The most samples one race visits. Past it, whatever is still racing is held
 /// up at the edge of the region, as everything past the margin used to be.
 const RACE_BUDGET: usize = 1 << 18;
@@ -823,6 +830,15 @@ fn fallen(
     fall
 }
 
+/// A fragment cut into parts by [`Fragment::split`].
+pub struct SplitFragment {
+    /// The parts, each connected, each a fragment of its own.
+    pub parts: Vec<Fragment>,
+    /// What the cut left too thin for any part to hold, which crumbles: not
+    /// connected, and not to be drawn.
+    pub crumbs: Option<Fragment>,
+}
+
 /// A piece of terrain cut loose by a blast, lifted out of the field.
 ///
 /// It keeps its own samples on the lattice it was cut from, so its surface can
@@ -957,7 +973,15 @@ impl Fragment {
     /// indices, as fragments of their own. Each part sees the others as it
     /// sees the ground: solid that is not its own, read as air, its break
     /// face closing against them.
-    pub fn split(&self, parts: &[Vec<[usize; 3]>]) -> Vec<Fragment> {
+    ///
+    /// The cut is settled first: a sample it left drawn paper-thin, which the
+    /// whole fragment drew thick, goes to a neighbouring part that draws it
+    /// thick, and one no part does crumbles; a part that is then in pieces
+    /// becomes one part a piece. A crack run alongside an edge would
+    /// otherwise leave a strip one sample wide, drawn as a sliver or a
+    /// hairline.
+    pub fn split(&self, parts: &[Vec<[usize; 3]>]) -> SplitFragment {
+        let (parts, crumbs) = self.settled(parts);
         let source = self.voxels.lattice();
         let [sx, sy, sz] = source.dims();
         let mut owner = vec![usize::MAX; sx * sy * sz];
@@ -966,6 +990,9 @@ impl Fragment {
             for &s in part {
                 owner[flat(s)] = k;
             }
+        }
+        for &s in &crumbs {
+            owner[flat(s)] = CRUMB;
         }
         let obstacles: HashSet<[usize; 3]> = self.obstacles.iter().copied().collect();
         // Air beside another part is written as air at its fullest, -1, as
@@ -988,45 +1015,186 @@ impl Fragment {
             })
         };
 
-        parts
-            .iter()
-            .enumerate()
-            .filter(|(_, part)| !part.is_empty())
-            .map(|(k, part)| {
-                let lo = [0, 1, 2].map(|a| part.iter().map(|s| s[a]).min().unwrap_or(0));
-                let hi = [0, 1, 2].map(|a| part.iter().map(|s| s[a]).max().unwrap_or(0));
-                // The fragment's block is padded around all of it, so it
-                // reaches past any part's padding.
-                let first = lo.map(|i| i.saturating_sub(FRAGMENT_PADDING));
-                let dims = [0, 1, 2]
-                    .map(|a| (hi[a] + FRAGMENT_PADDING).min(source.dims()[a] - 1) - first[a] + 1);
-                let base = [0, 1, 2].map(|a| source.base()[a] + first[a] as i32);
-                let own = SampleLattice::new(Point3::origin(), base, source.spacing(), dims);
-                let mut voxels = VoxelBlock::air(own);
-                let mut own_obstacles = Vec::new();
-                for x in 0..dims[0] {
-                    for y in 0..dims[1] {
-                        for z in 0..dims[2] {
-                            let at = [first[0] + x, first[1] + y, first[2] + z];
-                            let voxel = self.voxels.get(at[0], at[1], at[2]);
-                            if owner[flat(at)] == k {
-                                voxels.set(x, y, z, voxel);
-                            } else if voxel.is_solid() || obstacles.contains(&at) {
-                                own_obstacles.push([x, y, z]);
-                            } else if !beside_another(at, k) {
-                                voxels.set(x, y, z, voxel);
-                            }
+        let cut_out = |k: usize, part: &[[usize; 3]]| {
+            let lo = [0, 1, 2].map(|a| part.iter().map(|s| s[a]).min().unwrap_or(0));
+            let hi = [0, 1, 2].map(|a| part.iter().map(|s| s[a]).max().unwrap_or(0));
+            // The fragment's block is padded around all of it, so it
+            // reaches past any part's padding.
+            let first = lo.map(|i| i.saturating_sub(FRAGMENT_PADDING));
+            let dims = [0, 1, 2]
+                .map(|a| (hi[a] + FRAGMENT_PADDING).min(source.dims()[a] - 1) - first[a] + 1);
+            let base = [0, 1, 2].map(|a| source.base()[a] + first[a] as i32);
+            let own = SampleLattice::new(Point3::origin(), base, source.spacing(), dims);
+            let mut voxels = VoxelBlock::air(own);
+            let mut own_obstacles = Vec::new();
+            for x in 0..dims[0] {
+                for y in 0..dims[1] {
+                    for z in 0..dims[2] {
+                        let at = [first[0] + x, first[1] + y, first[2] + z];
+                        let voxel = self.voxels.get(at[0], at[1], at[2]);
+                        let whose = owner[flat(at)];
+                        if whose == k {
+                            voxels.set(x, y, z, voxel);
+                        } else if whose == CRUMB {
+                            // Gone to dust: air at its fullest.
+                        } else if voxel.is_solid() || obstacles.contains(&at) {
+                            own_obstacles.push([x, y, z]);
+                        } else if !beside_another(at, k) {
+                            voxels.set(x, y, z, voxel);
                         }
                     }
                 }
-                Fragment {
-                    voxels,
-                    pose: self.pose,
-                    samples: part.len(),
-                    obstacles: own_obstacles,
+            }
+            Fragment {
+                voxels,
+                pose: self.pose,
+                samples: part.len(),
+                obstacles: own_obstacles,
+            }
+        };
+        SplitFragment {
+            parts: parts
+                .iter()
+                .enumerate()
+                .filter(|(_, part)| !part.is_empty())
+                .map(|(k, part)| cut_out(k, part))
+                .collect(),
+            crumbs: (!crumbs.is_empty()).then(|| cut_out(CRUMB, &crumbs)),
+        }
+    }
+
+    /// `parts` with every sample the cut left paper-thin given to a
+    /// neighbouring part that draws it thick, then each part split into its
+    /// face-connected pieces; and the samples no part draws thick, which
+    /// crumble.
+    fn settled(&self, parts: &[Vec<[usize; 3]>]) -> (Vec<Vec<[usize; 3]>>, Vec<[usize; 3]>) {
+        let lattice = Lattice3 {
+            dims: self.voxels.dims(),
+        };
+        let index = |c: [usize; 3]| lattice.index(c);
+        let mut owner = vec![usize::MAX; lattice.len()];
+        for (k, part) in parts.iter().enumerate() {
+            for &c in part {
+                owner[index(c)] = k;
+            }
+        }
+        let samples: Vec<[usize; 3]> = parts.iter().flatten().copied().collect();
+        let density = |c: [usize; 3]| self.voxels.get(c[0], c[1], c[2]).density;
+
+        // How thick `c` is drawn if it belongs to part `k`: its own part's
+        // samples are solid, anything else is not, another part as much as
+        // air.
+        let thickness_in = |owner: &[usize], c: [usize; 3], k: usize| {
+            let seen = |n: [usize; 3]| {
+                if owner[index(n)] == k {
+                    density(n)
+                } else {
+                    density(n).min(-1.0)
                 }
+            };
+            let here = density(c);
+            (0..3)
+                .filter_map(|axis| {
+                    if c[axis] == 0 || c[axis] + 1 >= lattice.dims[axis] {
+                        return None;
+                    }
+                    let (mut lo, mut hi) = (c, c);
+                    lo[axis] -= 1;
+                    hi[axis] += 1;
+                    let (below, above) = (seen(lo), seen(hi));
+                    (below <= 0.0 && above <= 0.0)
+                        .then(|| here / (here - below) + here / (here - above))
+                })
+                .fold(f32::INFINITY, f32::min)
+        };
+
+        for _ in 0..MAX_SEAM_PASSES {
+            let mut moved = false;
+            for &c in &samples {
+                let k = owner[index(c)];
+                if thickness_in(&owner, c, k) >= PAPER_THIN
+                    || drawn_thickness(&self.voxels, &lattice, c) < PAPER_THIN
+                {
+                    continue;
+                }
+                // To a neighbouring part in which it is drawn thick: the one
+                // that took the rock behind it.
+                let to = lattice
+                    .neighbours(index(c))
+                    .map(|i| owner[i])
+                    .filter(|&o| o != usize::MAX && o != k)
+                    .find(|&o| thickness_in(&owner, c, o) >= PAPER_THIN);
+                if let Some(to) = to {
+                    owner[index(c)] = to;
+                    moved = true;
+                }
+            }
+            if !moved {
+                break;
+            }
+        }
+
+        // What is still thin crumbles: crust the crack parted from the rock
+        // behind it on two sides, which no one part holds. Each crumb can
+        // leave another sample thin, so this runs until nothing changes.
+        let mut crumbs = Vec::new();
+        loop {
+            let thin: Vec<[usize; 3]> = samples
+                .iter()
+                .copied()
+                .filter(|&c| {
+                    let k = owner[index(c)];
+                    k != CRUMB
+                        && thickness_in(&owner, c, k) < PAPER_THIN
+                        && drawn_thickness(&self.voxels, &lattice, c) >= PAPER_THIN
+                })
+                .collect();
+            if thin.is_empty() {
+                break;
+            }
+            for c in thin {
+                owner[index(c)] = CRUMB;
+                crumbs.push(c);
+            }
+        }
+
+        let mut settled = Vec::new();
+        let mut seen = vec![false; lattice.len()];
+        for &start in &samples {
+            if seen[index(start)] || owner[index(start)] == CRUMB {
+                continue;
+            }
+            let k = owner[index(start)];
+            seen[index(start)] = true;
+            let mut piece = vec![start];
+            let mut stack = vec![start];
+            while let Some(c) = stack.pop() {
+                for n in lattice.neighbours(index(c)).map(|i| lattice.coords(i)) {
+                    if owner[index(n)] == k && !seen[index(n)] {
+                        seen[index(n)] = true;
+                        piece.push(n);
+                        stack.push(n);
+                    }
+                }
+            }
+            settled.push(piece);
+        }
+        (settled, crumbs)
+    }
+
+    /// How many of its samples marching cubes draws thinner than half a
+    /// voxel: flaps and strips that read as paper, or as a hairline.
+    pub fn paper_thin_samples(&self) -> usize {
+        let lattice = Lattice3 {
+            dims: self.voxels.dims(),
+        };
+        (0..lattice.len())
+            .map(|i| lattice.coords(i))
+            .filter(|&c| {
+                self.voxels.get(c[0], c[1], c[2]).is_solid()
+                    && drawn_thickness(&self.voxels, &lattice, c) < PAPER_THIN
             })
-            .collect()
+            .count()
     }
 
     /// Block samples that were solid but not its own: what it broke from.
