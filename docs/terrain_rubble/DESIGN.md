@@ -9,7 +9,7 @@ lattice, crisp rock reads as weathered (NOTEBOOK E30).
 **Status:** Phase 1 is on `main` since 2026-10-04 (`src/terrain/fragment.rs`, `src/terrain/split_race.rs`, `src/rubble/`,
 `src/rubble_viewer/`, the play-test level `levels/rubble_garden.level.ron`):
 every fragment crumbles into dust. Phases 2 (scree) and 3 (boulders) are on
-the `rubble-phase2` branch: fragments are graded, dust crumbles, scree falls
+`main` since 2026-10-05: fragments are graded, dust crumbles, scree falls
 drawn with its own marching-cubes mesh and the terrain's texture, and boulders
 are rigid bodies of carved bricks that tumble, land and sleep. Phase 2 was
 play-tested 2026-10-04; a boulder crumbling where it landed read as vanishing,
@@ -868,8 +868,8 @@ Each phase is shippable on its own and checked with the existing tools.
 | Phase | What | How it is checked |
 |---|---|---|
 | **1. Finder + dust** ✓ | `Crater`/`Search`/`cut_loose`, the region grown by `split_race`; every fragment crumbles into a burst of the blast's debris effect, scaled down (a material-coloured puff waits for Phase 2). | 21 unit tests in `terrain::fragment`, one per rule, each shown to fail with its rule removed. `rubble_viewer` (`cargo test --lib rubble_viewer`): every scenario, with "nothing more standing free, nothing more paper-thin after any blast" as the invariant. `terrain_perf`: one `cut loose` stage, fingerprints unchanged on sweeps that cut nothing loose. |
-| **2. Scree** (branch) | `Grade`, `FallingScree`, render mesh from the fragment's own marching cubes, the anchored projection. | Unit tests: grading, flight, the mesh bit-identical to the ground's. `rubble_viewer`: every scree lands, none on its first frame. `render_perf` during a blast: 3 scree draws, `rubble_spawn` 0.7 ms, no validation errors. Play-test owed. |
-| **3. Boulders** (branch) | Brick shaper, compound bodies, debris budget, at most 8 boulders a blast. | Unit tests on the shaper (every sample in one brick, the surface within the inset, disjoint bricks, volume no more than 30% over, 300 seeded lumps without a refused hull). `rubble_viewer`: every boulder comes to rest, none is moved off its free flight in its first frame (E22). Spawn cost over budget (R28, R33). Play-tested 2026-10-05: tall columns, the table, the pavilion, the hill's shell (cracked into patches, R31–R35, R39). |
+| **2. Scree** ✓ | `Grade`, `FallingScree`, render mesh from the fragment's own marching cubes, the anchored projection. | Unit tests: grading, flight, the mesh bit-identical to the ground's. `rubble_viewer`: every scree lands, none on its first frame. `render_perf` during a blast: 3 scree draws, `rubble_spawn` 0.7 ms, no validation errors. Play-tested 2026-10-04. |
+| **3. Boulders** ✓ | Brick shaper, compound bodies, debris budget, at most 8 boulders a blast. | Unit tests on the shaper (every sample in one brick, the surface within the inset, disjoint bricks, volume no more than 30% over, 300 seeded lumps without a refused hull). `rubble_viewer`: every boulder comes to rest, none is moved off its free flight in its first frame (E22). Spawn cost brought down by the optimisation pass (E31; R33 open for the largest collapses). Play-tested 2026-10-05: tall columns, the table, the pavilion, the hill's shell (cracked into patches, R31–R35, R39). |
 | **4. Deposition** (dropped) | Built on `rubble-phase4`: `TerrainWorld::deposit`, the weld, `SettleSystem`. | Every check passed; the play-test did not: deposited rock reads as weathered (E30). |
 | **5. Necks** | Part 6. | A test overhang that drops when its neck is cut. |
 
