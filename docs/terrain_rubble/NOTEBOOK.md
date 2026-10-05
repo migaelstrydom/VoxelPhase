@@ -691,3 +691,36 @@ settling passes.
   thick: 110 still thin on the shell, held by no part.
 - Crumbling those: every scenario passes, no ejections; 4 of the shell's
   1,425 samples crumble, at most 8 of 190 elsewhere.
+
+## E28. The deposit bias in the engine (2026-10-05)
+
+**Question.** Does E3's `+0.055` hold when the engine's own mesher draws both
+sides?
+
+**Setup.** `terrain::deposit` tests: a lumpy rock (r ≈ 3), a 7-plane shard
+and an 8 × 2.4 × 6 slab built with `union_solid` at metre voxels, off the
+lattice, each deposited at 20 seeded random poses into an empty grid. Volume
+from `Fragment::mesh` before and after; surface error from each surface's
+vertices read in the other side's trilinear field.
+
+**Result.**
+
+| Bias | Rock | Shard | Slab |
+|---|---|---|---|
+| 0 | −6.4% | −6.5% | −5.3% |
+| 0.055 | −0.4% | +0.4% | +3.6% |
+| 0.045 | −1.5% | −0.9% | +1.9% |
+
+- The slab loses less per unit of surface than the curved shapes, so a
+  constant that fits one overshoots the other; E3's shelf did not show it.
+- Correcting each blend with the samples' second differences (the error term
+  of linear interpolation) left the rock −1.6% and the slab +2.3%: the clamp
+  at ±1 bends a flat face's field too. Not kept.
+- Surface error at 0.045: 0.05 voxel mean, ≤ 0.25 at the 99th percentile,
+  for every shape.
+- `level_viewer --blast 27.9,2.6,84 --deposit 25,3.2,73` on the Rubble
+  Garden: the dropped column is stamped back lying at 69°, its sandstone band
+  intact, meshed and shaded as ground.
+
+**Conclusion.** `DEPOSIT_BIAS = 0.045`: within 2% on average for every shape,
+not 1%.

@@ -41,7 +41,7 @@
 use std::borrow::Cow;
 use std::collections::{HashSet, VecDeque};
 
-use nalgebra::{Isometry3, Point3, Translation3, Vector3};
+use nalgebra::{Isometry3, Point3, Vector3};
 
 use super::chunk_grid::ChunkGrid;
 use super::frame::SegmentFrame;
@@ -538,8 +538,7 @@ impl Search {
 
     /// The loose pieces as fragments placed in the world by `frame`.
     pub(super) fn into_fragments(self, frame: &SegmentFrame) -> Vec<Fragment> {
-        let pose =
-            Isometry3::from_parts(Translation3::from(frame.origin().coords), frame.rotation());
+        let pose = frame.isometry();
         self.pieces
             .iter()
             .map(|piece| Fragment::cut(&self.block, piece, pose))
@@ -949,6 +948,20 @@ impl Fragment {
         self.pose * Point3::from(sum / self.samples.max(1) as f32)
     }
 
+    /// The world box around its surface once it has moved by `moved` from
+    /// where it broke: its samples' box, a voxel out on every side.
+    pub fn bounds(&self, moved: &Isometry3<f32>) -> AABB {
+        let pose = moved * self.pose;
+        let reach = Vector3::repeat(self.voxel_size());
+        self.solid_samples()
+            .map(|(p, _)| {
+                let at = pose * p;
+                AABB::new(at - reach, at + reach)
+            })
+            .reduce(|a, b| a.merged(&b))
+            .unwrap_or_else(AABB::empty)
+    }
+
     /// What most of it is made of.
     pub fn material(&self) -> VoxelMaterial {
         self.materials()
@@ -1226,6 +1239,23 @@ impl Fragment {
                 })
             })
         })
+    }
+}
+
+#[cfg(test)]
+impl Fragment {
+    /// Every solid sample of `grid` in a grid-local box as one fragment,
+    /// placed in the world by `pose`.
+    pub(super) fn of_region(grid: &ChunkGrid, region: &AABB, pose: Isometry3<f32>) -> Self {
+        let block = read_box(grid, region);
+        let lattice = Lattice3 { dims: block.dims() };
+        let piece: Vec<usize> = (0..lattice.len())
+            .filter(|&i| {
+                let [x, y, z] = lattice.coords(i);
+                block.get(x, y, z).is_solid()
+            })
+            .collect();
+        Self::cut(&block, &piece, pose)
     }
 }
 

@@ -18,6 +18,7 @@
 //! cargo run --bin level_viewer -- levels/subsidence.level.ron --shot pit_rim --width 1200 --height 800
 //! cargo run --bin level_viewer -- levels/subsidence.level.ron --eye 60,20,40 --look 74,10,62
 //! cargo run --bin level_viewer -- levels/island_sea.level.ron --eye 0,4,20 --look 0,0,8 --splash 0,0,6 --run 1.5
+//! cargo run --bin level_viewer -- levels/rubble_garden.level.ron --eye 28,8,70 --look 28,3,84 --blast 22.4,2.6,84 --deposit 24,3,76
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -49,6 +50,9 @@ struct Options {
     view: Option<(Point3<f32>, Point3<f32>)>,
     /// Grenade blasts set off before the shots.
     blasts: Vec<Point3<f32>>,
+    /// Where the largest piece the blasts cut loose is deposited, tipped
+    /// over, before the shots.
+    deposit: Option<Point3<f32>>,
     /// Splashes dropped on the water before the shots.
     splashes: Vec<Point3<f32>>,
     /// How long the blasts' frame lasts, s.
@@ -88,13 +92,19 @@ fn run(options: &Options) -> EngineResult<()> {
     );
 
     let mut viewer = LevelViewer::open(&level, options.width, options.height)?;
-    if !options.blasts.is_empty() || !options.splashes.is_empty() {
-        viewer.stir_water(
-            &options.blasts,
-            &options.splashes,
-            options.blast_dt,
-            options.run,
-        );
+    let blasts: &[Point3<f32>] = match options.deposit {
+        Some(at) => {
+            let deposited = viewer.drop_rubble(&options.blasts, at);
+            println!(
+                "deposit at {at}: {}",
+                if deposited { "done" } else { "refused" }
+            );
+            &[]
+        }
+        None => &options.blasts,
+    };
+    if !blasts.is_empty() || !options.splashes.is_empty() {
+        viewer.stir_water(blasts, &options.splashes, options.blast_dt, options.run);
     }
 
     let shots = match options.view {
@@ -204,6 +214,7 @@ fn parse_args() -> Result<Option<Options>, String> {
     let mut eye = None;
     let mut look = None;
     let mut blasts = Vec::new();
+    let mut deposit = None;
     let mut splashes = Vec::new();
     let mut blast_dt = 0.1;
     let mut run = 1.0;
@@ -221,6 +232,7 @@ fn parse_args() -> Result<Option<Options>, String> {
             "--eye" => eye = Some(parse_point(&mut args, "--eye")?),
             "--look" => look = Some(parse_point(&mut args, "--look")?),
             "--blast" => blasts.push(parse_point(&mut args, "--blast")?),
+            "--deposit" => deposit = Some(parse_point(&mut args, "--deposit")?),
             "--splash" => splashes.push(parse_point(&mut args, "--splash")?),
             "--blast-dt" => blast_dt = parse_f32(&mut args, "--blast-dt")?,
             "--run" => run = parse_f32(&mut args, "--run")?,
@@ -257,6 +269,7 @@ fn parse_args() -> Result<Option<Options>, String> {
         shot,
         view,
         blasts,
+        deposit,
         splashes,
         blast_dt,
         run,
@@ -305,6 +318,7 @@ fn print_usage() {
     println!("  --eye x,y,z        an explicit camera position, replacing the standard set");
     println!("  --look x,y,z       what that camera points at (required with --eye)");
     println!("  --blast x,y,z      set off a grenade there first (repeatable)");
+    println!("  --deposit x,y,z    stamp the largest piece the blasts cut loose back in there, tipped over");
     println!("  --splash x,y,z     drop a splash on the water there (repeatable)");
     println!("  --blast-dt <s>     how long the blast's frame lasts (default 0.1)");
     println!("  --run <s>          how long the water runs afterwards (default 1)");

@@ -18,7 +18,7 @@
 //! `x' = x·cosθ + z·sinθ` and `z' = −x·sinθ + z·cosθ`. So one quarter turn maps
 //! local `+X` onto world `−Z`, and local `+Z` onto world `+X`.
 
-use nalgebra::{Point3, UnitQuaternion, Vector3};
+use nalgebra::{Isometry3, Point3, Translation3, UnitQuaternion, Vector3};
 
 use crate::collision::AABB;
 
@@ -95,6 +95,11 @@ impl SegmentFrame {
     /// orientation (object spawning, debug rendering).
     pub fn rotation(&self) -> UnitQuaternion<f32> {
         UnitQuaternion::from_axis_angle(&Vector3::y_axis(), self.yaw_degrees().to_radians())
+    }
+
+    /// The frame as an isometry taking segment-local positions to the world.
+    pub fn isometry(&self) -> Isometry3<f32> {
+        Isometry3::from_parts(Translation3::from(self.origin.coords), self.rotation())
     }
 
     /// Rotate a local direction into world space. Exact: a permutation and sign

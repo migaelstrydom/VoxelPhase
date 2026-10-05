@@ -28,13 +28,15 @@
 //! What it is *not* is a running game: no systems are dispatched, so nothing has
 //! settled under gravity and nothing has moved. That is a feature. What it shows
 //! is the level exactly as authored, which is the thing being checked. The one
-//! exception is asked for: [`LevelViewer::stir_water`] blasts and splashes the
-//! water and runs it on, so ripples and their seams can be seen.
+//! exceptions are asked for: [`LevelViewer::stir_water`] blasts and splashes
+//! the water and runs it on, so ripples and their seams can be seen, and
+//! [`LevelViewer::drop_rubble`] stamps a piece a blast cut loose back into the
+//! terrain where it is told, as a rock that fell and settled there would be.
 
 use std::sync::Arc;
 
 use image::RgbaImage;
-use nalgebra::{Matrix4, Point3, Vector3};
+use nalgebra::{Matrix4, Point3, Translation3, UnitQuaternion, Vector3};
 use specs::{Join, World, WorldExt};
 
 use crate::animation::critter::CritterAnimator;
@@ -54,10 +56,15 @@ use crate::rendering::resident::VersionedMeshId;
 use crate::resources::manager::ResourceManager;
 use crate::resources::textures::TextureManager;
 use crate::systems::probe_owner;
-use crate::terrain::{self, BlastConfig, TerrainWorld};
+use crate::terrain::{self, BlastConfig, Fragment, TerrainWorld};
 use crate::water::{Disturbance, WaterWorld};
 
 use super::shots::ViewerShot;
+
+/// How far [`LevelViewer::drop_rubble`] tips a piece over, about the world's
+/// z axis, in radians: most of the way onto its side, and off every lattice
+/// axis.
+const RUBBLE_TIP: f32 = 1.2;
 
 /// The most frames a still is drawn over while its reflection probes are
 /// handed out. Each admits a few; this covers a probe atlas's worth.
@@ -183,6 +190,30 @@ impl LevelViewer {
         for _ in 0..(seconds / frame).round() as usize {
             water.step(frame);
         }
+    }
+
+    /// Set off each blast and stamp the largest piece they cut loose back
+    /// into the terrain with its centre at `at`, tipped over by
+    /// [`RUBBLE_TIP`]. Says whether it was deposited: not if nothing came
+    /// loose, or `at` is not inside one segment.
+    pub fn drop_rubble(&mut self, blasts: &[Point3<f32>], at: Point3<f32>) -> bool {
+        let mut terrain = self.world.write_resource::<TerrainWorld>();
+        let mut fragments: Vec<Fragment> = blasts
+            .iter()
+            .flat_map(|&blast| terrain.detonate(blast, &BlastConfig::default()))
+            .collect();
+        fragments.sort_by_key(Fragment::sample_count);
+        let deposited = fragments.last().is_some_and(|largest| {
+            let from = largest.world_centroid();
+            let tip = UnitQuaternion::from_axis_angle(&Vector3::z_axis(), RUBBLE_TIP);
+            let moved = Translation3::from(at.coords) * tip * Translation3::from(-from.coords);
+            terrain.deposit(largest, &moved)
+        });
+        terrain.update();
+        if let Some(mut water) = self.world.try_fetch_mut::<WaterWorld>() {
+            water.on_terrain_update(&terrain);
+        }
+        deposited
     }
 
     /// Render one view and read the result back as an image.

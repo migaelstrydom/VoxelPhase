@@ -18,6 +18,7 @@ mod chunk_grid;
 mod chunk_rebuild;
 mod csg;
 pub use csg::SURFACE_BAND;
+mod deposit;
 mod fragment;
 mod fragment_mesh;
 mod frame;
