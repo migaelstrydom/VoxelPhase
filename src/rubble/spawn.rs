@@ -4,7 +4,8 @@
 //!   ExplosionSystem ──TerrainWorld::detonate──▶ fragments + the blast's shove
 //!                                                   │ RubbleQueue
 //!   RubbleSpawnSystem ◀─────────────────────────────┘
-//!     RubblePlanner::plan(cut), one blast at a time
+//!     RubblePlanner::plan(cut), one blast at a time: its pieces shaped and
+//!     meshed in parallel, then launched in order from one seeded stream
 //!       GradeRules::grade(Measure::of(fragment))
 //!       ├── Dust    ──▶ a crumble emitter at its centroid
 //!       ├── Scree   ──▶ FallingScree + TerrainMeshInstance, thrown by the
@@ -23,10 +24,11 @@ use std::sync::Arc;
 use nalgebra::{Point3, Vector3};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
+use rayon::prelude::*;
 use specs::{Builder, Entities, LazyUpdate, Read, System, Write};
 
 use super::boulder::Boulder;
-use super::brick_shaper::{BrickShaper, Shape};
+use super::brick_shaper::{BrickShaper, Bricks, Shape};
 use super::budget::ResidentBoulder;
 use super::dust::{Crumble, CrumbleSize};
 use super::grade::{Grade, GradeRules, Measure};
@@ -194,34 +196,35 @@ impl RubblePlanner {
         for &i in boulders.iter().skip(self.max_boulders) {
             grades[i] = Grade::Scree;
         }
-        let mut pieces = Vec::new();
-        for (source, (fragment, grade)) in cut.fragments.into_iter().zip(grades).enumerate() {
-            self.plan_piece(fragment, source, grade, &cut.shove, &mut pieces);
-        }
-        pieces
+        // Shaping and meshing are each piece's own, and run in parallel; the
+        // launches draw on one random stream, in order.
+        let shaped: Vec<Shaped> = cut
+            .fragments
+            .into_par_iter()
+            .zip(grades)
+            .enumerate()
+            .flat_map_iter(|(source, (fragment, grade))| self.shape(fragment, source, grade))
+            .collect();
+        shaped
+            .into_iter()
+            .map(|piece| self.launch(piece, &cut.shove))
+            .collect()
     }
 
-    /// What `fragment`, graded `grade`, becomes, onto `pieces`.
-    fn plan_piece(
-        &mut self,
-        fragment: Fragment,
-        source: usize,
-        grade: Grade,
-        shove: &PhysicsImpulse,
-        pieces: &mut Vec<Piece>,
-    ) {
+    /// `fragment`, graded `grade`, shaped and meshed: one piece, or a piece
+    /// for each part of a boulder too intricate for one body.
+    fn shape(&self, fragment: Fragment, source: usize, grade: Grade) -> Vec<Shaped> {
         let size = CrumbleSize::of(&fragment);
-        let dust = Plan::Dust {
-            at: fragment.world_centroid(),
-            size,
-        };
-        if grade == Grade::Dust {
-            pieces.push(Piece {
+        let dust = |fragment| {
+            vec![Shaped {
                 fragment,
                 source,
-                plan: dust,
-            });
-            return;
+                size,
+                form: Form::Dust,
+            }]
+        };
+        if grade == Grade::Dust {
+            return dust(fragment);
         }
         // A boulder is shaped before it is meshed: one too intricate for one
         // body is cut into parts, each meshed on its own.
@@ -230,14 +233,20 @@ impl RubblePlanner {
                 Shape::Whole(bricks) => Some(bricks),
                 Shape::Parts(parts) => {
                     let split = fragment.split(&parts);
-                    for part in split.parts {
-                        let grade = self.grades.grade(Measure::of(&part));
-                        self.plan_piece(part, source, grade, shove, pieces);
-                    }
-                    if let Some(crumbs) = split.crumbs {
-                        self.plan_piece(crumbs, source, Grade::Dust, shove, pieces);
-                    }
-                    return;
+                    let crumbs = split
+                        .crumbs
+                        .map(|crumbs| self.shape(crumbs, source, Grade::Dust));
+                    return split
+                        .parts
+                        .into_par_iter()
+                        .flat_map_iter(|part| {
+                            let grade = self.grades.grade(Measure::of(&part));
+                            self.shape(part, source, grade)
+                        })
+                        .collect::<Vec<_>>()
+                        .into_iter()
+                        .chain(crumbs.into_iter().flatten())
+                        .collect();
                 }
             }
         } else {
@@ -245,14 +254,38 @@ impl RubblePlanner {
         };
         let mesh = fragment.mesh();
         if mesh.indices.is_empty() {
-            pieces.push(Piece {
-                fragment,
-                source,
-                plan: dust,
-            });
-            return;
+            return dust(fragment);
         }
+        vec![Shaped {
+            fragment,
+            source,
+            size,
+            form: Form::Drawn { mesh, bricks },
+        }]
+    }
 
+    /// What a shaped piece becomes, and how it leaves the blast that gave
+    /// everything around it `shove`.
+    fn launch(&mut self, piece: Shaped, shove: &PhysicsImpulse) -> Piece {
+        let Shaped {
+            fragment,
+            source,
+            size,
+            form,
+        } = piece;
+        let (mesh, bricks) = match form {
+            Form::Dust => {
+                return Piece {
+                    plan: Plan::Dust {
+                        at: fragment.world_centroid(),
+                        size,
+                    },
+                    fragment,
+                    source,
+                };
+            }
+            Form::Drawn { mesh, bricks } => (mesh, bricks),
+        };
         let mass = fragment.volume() * fragment.material().mass_density();
         let reach = mesh
             .vertices
@@ -283,12 +316,32 @@ impl RubblePlanner {
                 size,
             },
         };
-        pieces.push(Piece {
+        Piece {
             fragment,
             source,
             plan,
-        });
+        }
     }
+}
+
+/// A piece shaped and meshed, not yet launched.
+struct Shaped {
+    fragment: Fragment,
+    /// Which of the cut's fragments it is, or is a part of.
+    source: usize,
+    size: CrumbleSize,
+    form: Form,
+}
+
+/// What shaping made of a piece.
+enum Form {
+    /// Nothing to draw: it crumbles.
+    Dust,
+    /// Drawn with `mesh`; a body of `bricks` if it is a boulder.
+    Drawn {
+        mesh: FragmentMesh,
+        bricks: Option<Bricks>,
+    },
 }
 
 /// Turns each queued fragment into rubble.

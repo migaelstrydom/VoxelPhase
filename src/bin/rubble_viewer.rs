@@ -4,6 +4,8 @@
 //! cut at its feet, a floating island chipped, thirty grenades on one patch of
 //! ground. Each reports what every blast cut loose and audits the whole
 //! terrain after it: nothing may be left standing free that was not before.
+//! It also times each blast's carve, remesh and plan, and a physics frame of
+//! its boulders once they are all at rest: wall clock, so a release build.
 //!
 //! # Usage
 //!

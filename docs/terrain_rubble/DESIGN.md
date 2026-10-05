@@ -15,8 +15,9 @@ are rigid bodies of carved bricks that tumble, land and sleep. Phase 2 was
 play-tested 2026-10-04; a boulder crumbling where it landed read as vanishing,
 so the branch was held for Phase 3, play-tested 2026-10-05. Phase 4 was
 built, play-tested 2026-10-05 and dropped; its commits are on the
-`rubble-phase4` branch. `rubble-phase2` goes to `main` after a first
-optimisation pass (R28, R33). Phase 5 is design only.
+`rubble-phase4` branch. A first optimisation pass is done (E31): the worst
+blast's carve went from 62 to 9 ms and its plan from 158 to 24 ms. Phase 5 is
+design only.
 The play-test
 level turned up problems that blocked the design: pieces longer than about
 3 m never fell (R1), and box edges read as loose strips (R3, R4). Those are

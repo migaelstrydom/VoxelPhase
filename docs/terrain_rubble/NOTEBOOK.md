@@ -774,3 +774,61 @@ boulder budget; the code is on `rubble-phase4`. What it was for: physics
 cost (to measure in the optimisation pass), piles as ground (a boulder that
 fractures like a prop would cover it, R38), and dams (blocked anyway by
 water assuming terrain edits only remove material, R44).
+
+## E31. The optimisation pass (2026-10-05)
+
+**Question.** Where does a blast's time go once rubble is complete, and how
+much of it can go without changing what any blast does?
+
+**Setup.** `rubble_viewer all`, which now times each blast's carve
+(`TerrainWorld::detonate`), remesh and plan (`RubblePlanner::plan`), and a
+physics frame of each blast's boulders once all are at rest. Profiles of
+`garden_hill_shell` with macOS `sample` at 1 ms, five runs merged. Every
+change was checked against the previous report: every outcome the same,
+fragment by fragment. `terrain_perf`'s fingerprint unchanged.
+
+**Result.** Worst blast of each scenario, before → after:
+
+| scenario | carve ms | plan ms |
+|---|---|---|
+| `garden_hill_shell` | 62 → 9 | 158 → 24 |
+| `garden_pavilion_piers` | 4 → 3.5 | 49 → 14 |
+| `garden_hoodoo_stem` | 3.3 → 3.2 | 27 → 4.8 |
+| `garden_long_bridge` | 35 → 1.9 | 5.2 → 5.5 |
+
+- The split race was the carve: each round rescanned every search ever
+  started, and with an anchor present the hill's search flooded 45,000
+  samples breadth-first before it touched bedrock, on each of three passes.
+  A running list that only shrinks, and a frontier that takes the lowest
+  sample first (terrain is held from below), bring the worst race to 1,153
+  samples, 0.7 ms. With an anchor the outcome does not depend on the order
+  of the visit; without one, which search is last can.
+- Shaping split every cell after building its 26-sided hull with 20
+  `HullDraft::trim`s, most of them for cells later split again or thrown away
+  when the fragment cracked into parts. Splitting on the planes alone, and
+  building the hull only for cells that become bricks (checked exactly then),
+  halved it.
+- Every boulder was meshed with AO before it was shaped, and the mesh thrown
+  away if it cracked into parts. It is now shaped from marching-cubes
+  vertices alone (`Fragment::surface`) and meshed once its shape is final.
+- `Occupancy::encloses` walked 13 lines from every air sample;
+  `Occupancy::enclosed` sweeps each line once.
+- Pieces are shaped and meshed in parallel; launches still draw on one
+  stream in the same order, so a blast replays the same.
+- A pile at rest: 21 boulders cost 0.026 ms a physics frame, about 1.2 µs a
+  boulder, so the budget's 120 cost 0.15 ms. Their meshes average 332
+  triangles (32–1,524 over 52 boulders): 120 add about 40,000 to the
+  garden's 260,000.
+- `render_perf` on the garden's cliff lip (E21's site): the blast frame is
+  16.9 ms, of which `terrain_update` 9.2, `explosion` 3.0, `rubble_spawn`
+  0.8. `terrain_perf` on the garden: the remesh is a 4.1 ms parallel chunk
+  build (AO 36% of its CPU) and a 1.2 ms concat.
+
+**What is left.** The shell's 24 ms plan is a serial chain: 8 ms to shape
+the whole fragment only to learn it cracks into 13 parts, 4 ms to split it,
+then parts that crack again. Stopping the shaper once it has more cells than
+a body takes would save most of the 8 ms but crack into fewer parts, which
+changes the boulders. A blast that makes no boulder plans in under 1 ms;
+the hitch on an ordinary blast is the remesh, which is the terrain's, not
+rubble's.
+

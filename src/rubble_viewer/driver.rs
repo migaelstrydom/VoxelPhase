@@ -31,6 +31,9 @@ const LOST_MARGIN: f32 = 4.0;
 /// it touches nothing in that frame unless it started inside something and
 /// the solver pushed it out, which moves it without adding energy.
 const EJECTION_TOLERANCE: f32 = 0.005;
+/// Frames stepped once every boulder is at rest, to time what a pile at rest
+/// costs the physics each frame.
+const RESTING_FRAMES: usize = 60;
 
 /// One piece of what a blast cut loose, as the report needs it: a fragment,
 /// or a part of one too intricate to be one body.
@@ -132,13 +135,14 @@ impl Followed {
 
 /// Step one blast's boulders on `terrain` until they all sleep, fall out of
 /// the world or run out of time, the blast's `shove` thrown on the first
-/// frame as the game throws it.
+/// frame as the game throws it. Also returns what a frame cost once they all
+/// slept, if they did.
 fn settle(
     world: &mut PhysicsWorld,
     followed: &[Followed],
     shove: PhysicsImpulse,
     terrain: &TerrainWorld,
-) -> Vec<(usize, Fate)> {
+) -> (Vec<(usize, Fate)>, Option<Duration>) {
     let mut stepper = SequentialStepper::new(PHYSICS_DT, MAX_SUBSTEPS);
     let mut lines = DebugLines::default();
     let floor_y = terrain.bounds().min.y - LOST_MARGIN;
@@ -181,22 +185,32 @@ fn settle(
             break;
         }
     }
-    followed
+    let resting = (!followed.is_empty() && fates.iter().all(Option::is_some)).then(|| {
+        let started = Instant::now();
+        for _ in 0..RESTING_FRAMES {
+            stepper.step(world, FRAME_SECONDS, terrain, &[], &[], &mut lines);
+            lines.clear();
+        }
+        started.elapsed() / RESTING_FRAMES as u32
+    });
+    let fates = followed
         .iter()
         .zip(fates)
         .zip(ejected)
         .map(|((f, fate), ejected)| (f.index, fate.unwrap_or(Fate::Restless { ejected })))
-        .collect()
+        .collect();
+    (fates, resting)
 }
 
 /// What becomes of everything `cut` holds, played out against `terrain`:
 /// one record a piece.
-/// Also returns how long planning took.
+/// Also returns how long planning took, and what a frame of its boulders at
+/// rest cost.
 fn play(
     cut: Cut,
     planner: &mut RubblePlanner,
     terrain: &TerrainWorld,
-) -> (Vec<FragmentRecord>, Duration) {
+) -> (Vec<FragmentRecord>, Duration, Option<Duration>) {
     let shove = cut.shove;
     let thin_whole: Vec<usize> = cut
         .fragments
@@ -251,10 +265,11 @@ fn play(
             }
         })
         .collect();
-    for (index, fate) in settle(&mut world, &followed, shove, terrain) {
+    let (fates, resting) = settle(&mut world, &followed, shove, terrain);
+    for (index, fate) in fates {
         records[index].fate = fate;
     }
-    (records, planning)
+    (records, planning, resting)
 }
 
 /// How many of the air samples in a boulder's holes, gaps and hollows its
@@ -329,6 +344,9 @@ pub struct BlastTiming {
     pub remesh: Duration,
     /// `RubblePlanner::plan`: grading, meshing and shaping every piece.
     pub plan: Duration,
+    /// A physics frame once the blast's boulders are all at rest, if it made
+    /// any and they came to rest.
+    pub resting: Option<Duration>,
 }
 
 /// A scenario played out.
@@ -466,7 +484,7 @@ pub fn run(scenario: &Scenario) -> Result<Run, String> {
             let started = Instant::now();
             terrain.update();
             let remesh = started.elapsed();
-            let (fragments, plan) = play(cut, &mut planner, &terrain);
+            let (fragments, plan, resting) = play(cut, &mut planner, &terrain);
             BlastRecord {
                 blast,
                 fragments,
@@ -476,6 +494,7 @@ pub fn run(scenario: &Scenario) -> Result<Run, String> {
                     detonate,
                     remesh,
                     plan,
+                    resting,
                 },
             }
         })

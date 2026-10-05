@@ -126,6 +126,20 @@ pub fn report(run: &Run, verdict: &Result<(), Vec<String>>) -> String {
         worst(|t| t.remesh),
         worst(|t| t.plan),
     );
+    let resting: Vec<(usize, f64)> = run
+        .blasts
+        .iter()
+        .filter_map(|b| {
+            let boulders = b.fragments.iter().filter(|f| f.fate.is_boulder()).count();
+            b.timing.resting.map(|t| (boulders, ms(t)))
+        })
+        .collect();
+    if let Some(&(boulders, cost)) = resting.iter().max_by_key(|&&(n, _)| n) {
+        let _ = writeln!(
+            out,
+            "largest pile at rest: {boulders} boulders, {cost:.3} ms a physics frame"
+        );
+    }
     for problem in run.violations() {
         let _ = writeln!(out, "  invariant broken: {problem}");
     }

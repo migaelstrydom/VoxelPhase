@@ -497,8 +497,10 @@ colour from the piece's materials in proportion to their samples
 <a id="r24"></a>
 ## R24. A blast's frame is a visible hitch
 
-**Status:** open; deliberately left for an optimisation pass once rubble is
-complete (user, 2026-10-04). Not a blocker. **Found by:** play-test.
+**Status:** improved by the optimisation pass (E31): the cliff lip's blast
+frame is 16.9 ms, of which the remesh 9.2 and the carve 3.0. What is left is
+the terrain's remesh (AO and the concat), not rubble's. Open. **Found by:**
+play-test.
 
 One frame drops visibly when a grenade goes off. `render_perf` on the Rubble
 Garden's cliff lip (E21): the blast frame takes 37 ms, of which
@@ -552,7 +554,9 @@ scree as it was and slows a long boulder to a fraction of a radian a second.
 <a id="r28"></a>
 ## R28. Planning a blast with boulders costs up to 5 ms
 
-**Status:** open; for the optimisation pass (R24). **Found by:** E22.
+**Status:** fixed for most blasts (E31): a blast with one boulder plans in
+0.4–5.5 ms, and one with none in under 1 ms. `garden_long_bridge`'s single
+431-sample boulder is still 5.5 ms; its shaping is serial. **Found by:** E22.
 
 `RubblePlanner::plan` (grade, marching cubes and AO for every piece, bricks
 for boulders) takes 0.3–5 ms for a blast that makes a boulder, against a
@@ -626,7 +630,11 @@ surface stays within half a voxel of its samples.
 <a id="r33"></a>
 ## R33. Shaping a collapse costs up to 230 ms; one fragment makes any number of bodies
 
-**Status:** open; for the optimisation pass (R24). **Found by:** E24.
+**Status:** improved (E31): the shell's blast plans in 24 ms, not 230
+(158 before the pass); the table's in 2 ms. `Occupancy::enclosed` sweeps
+each line once. Open: the shaper still shapes a whole fragment before it
+learns it cracks into parts, and `max_boulders` still caps fragments, not
+bodies. **Found by:** E24.
 
 `RubblePlanner::plan` for the hill shell's blast took 94 ms (19 bodies, each
 meshed and shaped, the shaper splitting to single cells where the shell
