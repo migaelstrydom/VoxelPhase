@@ -832,3 +832,34 @@ changes the boulders. A blast that makes no boulder plans in under 1 ms;
 the hitch on an ordinary blast is the remesh, which is the terrain's, not
 rubble's.
 
+## E32. Stopping the shaper once a fragment must crack (2026-10-05)
+
+**Question.** E31 left 8 ms of the hill shell's plan in shaping the whole
+fragment only to learn it cracks into parts. Cells are only ever split, so
+once there are more than a body takes it will crack whatever happens next.
+Does stopping there save the time, and what does it do to the boulders?
+
+**Setup.** `BrickShaper::shape`'s first splitting loop stopped once the
+cells passed k × `max_bricks`, cracking into ⌈cells / max_bricks⌉ parts.
+`rubble_viewer all` against E31's code. Only the hill shell's collapse
+reaches the cap on a whole fragment; every other scenario was unchanged.
+
+**Result.** `garden_hill_shell`, its worst blast:
+
+| stop at | pieces | bodies | plan ms |
+|---|---|---|---|
+| never (E31) | 175 | 21 | 22.2 |
+| 17 cells (k = 1, 2 parts) | 187 | 22 | 25.1 |
+| 33 cells (k = 2) | 176 | 19 | 24.8 |
+| 65 cells (k = 4) | 180 | 22 | 22.0, one part thrown out (R45) |
+| 129 cells (k = 8) | 184 | 24 | 22.1 |
+
+Timed inside, with k = 1: shaping the 1,366 samples still took 6 ms, of which
+the forbidden points (3,817 ground, 1,711 air) 1.5 ms and sixteen splits 2.1
+ms; the split into 2 parts 3.7 ms. Shaping and splitting cost in proportion
+to the fragment's samples, whatever the number of cells, so cracking into
+fewer parts only adds levels, and each level pays again.
+
+**Conclusion.** Not kept: no stopping point is faster. The cost is in
+setting up each shaping, not in the splits it saves.
+

@@ -825,3 +825,17 @@ of the dam the level rises 0.2 m, not the 2 m the rock should back up, and
 the network stays one basin. Every deposit, on dry ground too, logs these
 errors. Nothing panics: §3.2 says the violation is debug-asserted, but the
 code only logs it.
+
+<a id="r45"></a>
+## R45. A different crack can leave a part thrown out of the ground
+
+**Status:** open; latent. **Found by:** E32.
+
+With the shaper stopped at 64 cells (E32), the hill shell's blast 24
+cracked differently and one 38-sample part was thrown out of the ground on
+its first frame. The crack in use does not produce that part, so nothing
+fails today, but the soundness of a part's bricks depends on where the
+crack falls. Reproduce: in `BrickShaper::shape`, stop the first splitting
+loop once `cells.len() > 4 * max_bricks`, then `rubble_viewer
+garden_hill_shell`.
+
