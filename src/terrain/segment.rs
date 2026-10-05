@@ -19,7 +19,7 @@
 //!
 //! [`TerrainWorld`]: super::world::TerrainWorld
 
-use nalgebra::{Isometry3, Point3, Vector3};
+use nalgebra::{Point3, Vector3};
 use rayon::prelude::*;
 use std::borrow::Cow;
 use std::time::{Duration, Instant};
@@ -30,8 +30,7 @@ use super::blast::{self, BlastConfig};
 use super::chunk::{ChunkCoord, ChunkTriangleRef};
 use super::chunk_grid::ChunkGrid;
 use super::chunk_rebuild::{ChunkBuildTimings, ChunkRebuild};
-use super::deposit;
-use super::fragment::{self, Crater, Fragment, LooseSamples, Search};
+use super::fragment::{self, Crater, Fragment, Search};
 use super::frame::SegmentFrame;
 use super::render_cache::{build_chunk_render_data, ChunkRenderCache, ChunkRenderData};
 use super::segment_adjacency::{adjacency_tolerance, SegmentAdjacency};
@@ -314,25 +313,10 @@ impl Segment {
         })
     }
 
-    /// Stamp `fragment` back into the field where it lies, `moved` having
-    /// carried it from where it broke. Returns the world box around the
-    /// surface it changed, or `None` if it changed nothing.
-    pub fn deposit(&mut self, fragment: &Fragment, moved: &Isometry3<f32>) -> Option<AABB> {
-        let to_fragment = (moved * fragment.pose()).inverse() * self.frame.isometry();
-        let changed = deposit::deposit(&mut self.grid, fragment, &to_fragment)?;
-        self.grid.allocate_seam_neighbours();
-        // A changed sample moves the surface in every cell it is a corner of,
-        // on both sides of a seam.
-        let reach = Vector3::repeat(self.grid.voxel_size());
-        let surface = AABB::new(changed.min - reach, changed.max + reach);
-        self.mark_dirty_within(&surface);
-        Some(self.frame.aabb_to_world(&surface))
-    }
-
     /// How many solid samples anywhere in the segment hold up nothing and are
     /// held up by nothing: what blasts should have cut loose and did not.
     /// Reads the whole grid, so it is for tests and tools, not for a frame.
-    pub fn loose_samples(&self) -> LooseSamples {
+    pub fn loose_samples(&self) -> usize {
         Search::audit(&self.grid).loose_samples()
     }
 

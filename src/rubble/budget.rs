@@ -15,8 +15,9 @@
 //!     entity deleted
 //! ```
 //!
-//! This is the exception: a boulder at rest is deposited back into the
-//! terrain (`settle`), and only those that never settle are left to the cull.
+//! A boulder at rest is not stamped back into the terrain: resampled onto
+//! the lattice, crisp rock reads as weathered (docs/terrain_rubble NOTEBOOK
+//! E30). It stays a sleeping body until this budget takes it.
 
 use specs::{
     Builder, Component, Entities, Entity, Join, Read, ReadStorage, System, VecStorage, Write,

@@ -115,10 +115,10 @@ pub fn run_breach(durations: Durations) -> Result<Subject, String> {
     let (centre, radius) = scenario
         .beats
         .iter()
-        .find_map(|beat| match beat.action {
-            Action::Blast { centre, radius } => Some((centre, radius)),
-            Action::Rockfall { .. } => None,
+        .map(|beat| match beat.action {
+            Action::Blast { centre, radius } => (centre, radius),
         })
+        .next()
         .ok_or("the breach scenario has no blast")?;
     Ok(run_subject(
         "breach (water_viewer)".into(),

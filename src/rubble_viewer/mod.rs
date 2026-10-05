@@ -7,23 +7,18 @@
 //! graded and launched by the game's own `RubblePlanner`, and every piece of
 //! scree is flown against the remeshed terrain until it lands: none may land
 //! on its first frame (it started inside the ground) or never land. Every
-//! boulder is stepped as a body until it sleeps and is deposited back into
-//! the terrain by the game's own `Settler`: none may leave free flight in its
-//! first frame (the solver pushed it out of the ground), fall out of the
-//! world, never come to rest or rest and not be deposited. The audit runs
-//! twice a blast: before the deposits for what the blast cut, after them for
-//! rock the deposits left standing free.
+//! boulder is stepped as a body until it sleeps: none may leave free flight
+//! in its first frame (the solver pushed it out of the ground), fall out of
+//! the world or never come to rest.
 //!
 //! ```text
 //!   Scenario { level RON, blasts, expect }
 //!       │
 //!       ▼
 //!   run: per blast  TerrainWorld::detonate ──▶ fragments
-//!                   TerrainWorld::loose_samples ──▶ the audit
 //!                   RubblePlanner::plan ──▶ dust, scree flown to landing,
 //!                                           or boulders stepped to sleep
-//!                   Settler ──▶ TerrainWorld::deposit
-//!                   TerrainWorld::loose_samples ──▶ the deposits' audit
+//!                   TerrainWorld::loose_samples ──▶ the audit
 //!        at the end TerrainWorld::update ──▶ open mesh edges
 //!       │
 //!       ▼
@@ -33,8 +28,7 @@
 //! No ECS: the harness calls the same `detonate` the explosion system does,
 //! flies `Flight` directly, and places each blast's boulders with the game's
 //! own `Boulder::place` in a `PhysicsWorld` of their own, stepped on the
-//! terrain with the blast's shove on the first frame, as the game throws it,
-//! and remeshes the terrain on any frame something is deposited.
+//! terrain with the blast's shove on the first frame, as the game throws it.
 
 mod driver;
 mod garden;

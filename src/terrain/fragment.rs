@@ -41,7 +41,7 @@
 use std::borrow::Cow;
 use std::collections::{HashSet, VecDeque};
 
-use nalgebra::{Isometry3, Point3, Translation3, UnitQuaternion, Vector3};
+use nalgebra::{Isometry3, Point3, Vector3};
 
 use super::chunk_grid::ChunkGrid;
 use super::frame::SegmentFrame;
@@ -496,25 +496,9 @@ impl Search {
             .count()
     }
 
-    /// How many samples are loose, over every piece, and how many of those
-    /// bear load.
-    pub(super) fn loose_samples(&self) -> LooseSamples {
-        let lattice = Lattice3 {
-            dims: self.block.dims(),
-        };
-        let bearing = self
-            .pieces
-            .iter()
-            .flatten()
-            .filter(|&&i| {
-                let [x, y, z] = lattice.coords(i);
-                self.block.get(x, y, z).density >= BEARING_DENSITY
-            })
-            .count();
-        LooseSamples {
-            all: self.pieces.iter().map(Vec::len).sum(),
-            bearing,
-        }
+    /// How many samples are loose, over every piece.
+    pub(super) fn loose_samples(&self) -> usize {
+        self.pieces.iter().map(Vec::len).sum()
     }
 
     /// Grid-local box around every loose sample, or `None` if there are none.
@@ -845,27 +829,6 @@ fn fallen(
     fall
 }
 
-/// Solid standing free in the terrain, held up by nothing and holding up
-/// nothing, as an audit counts it.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct LooseSamples {
-    /// Every loose sample.
-    pub all: usize,
-    /// Those that bear load: rock, not a rind or a speck.
-    pub bearing: usize,
-}
-
-impl std::ops::Add for LooseSamples {
-    type Output = Self;
-
-    fn add(self, other: Self) -> Self {
-        Self {
-            all: self.all + other.all,
-            bearing: self.bearing + other.bearing,
-        }
-    }
-}
-
 /// A fragment cut into parts by [`Fragment::split`].
 pub struct SplitFragment {
     /// The parts, each connected, each a fragment of its own.
@@ -983,28 +946,6 @@ impl Fragment {
             .solid_samples()
             .fold(Vector3::zeros(), |sum, (p, _)| sum + p.coords);
         self.pose * Point3::from(sum / self.samples.max(1) as f32)
-    }
-
-    /// The motion that lays it to rest with its centroid at `centre`,
-    /// turned by `turn` about it from how it stood when it broke: what a
-    /// tool that drops rubble by hand passes to `TerrainWorld::deposit`.
-    pub fn moved_to(&self, centre: Point3<f32>, turn: UnitQuaternion<f32>) -> Isometry3<f32> {
-        let from = self.world_centroid();
-        Translation3::from(centre.coords) * turn * Translation3::from(-from.coords)
-    }
-
-    /// The world box around its surface once it has moved by `moved` from
-    /// where it broke: its samples' box, a voxel out on every side.
-    pub fn bounds(&self, moved: &Isometry3<f32>) -> AABB {
-        let pose = moved * self.pose;
-        let reach = Vector3::repeat(self.voxel_size());
-        self.solid_samples()
-            .map(|(p, _)| {
-                let at = pose * p;
-                AABB::new(at - reach, at + reach)
-            })
-            .reduce(|a, b| a.merged(&b))
-            .unwrap_or_else(AABB::empty)
     }
 
     /// What most of it is made of.
@@ -1288,23 +1229,6 @@ impl Fragment {
 }
 
 #[cfg(test)]
-impl Fragment {
-    /// Every solid sample of `grid` in a grid-local box as one fragment,
-    /// placed in the world by `pose`.
-    pub(super) fn of_region(grid: &ChunkGrid, region: &AABB, pose: Isometry3<f32>) -> Self {
-        let block = read_box(grid, region);
-        let lattice = Lattice3 { dims: block.dims() };
-        let piece: Vec<usize> = (0..lattice.len())
-            .filter(|&i| {
-                let [x, y, z] = lattice.coords(i);
-                block.get(x, y, z).is_solid()
-            })
-            .collect();
-        Self::cut(&block, &piece, pose)
-    }
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
     use crate::terrain::csg::SURFACE_BAND;
@@ -1559,7 +1483,7 @@ mod tests {
         }
         fill(&mut g, [-2, 0, -2], [2, 4, 2], SURFACE_BAND);
         fill(&mut g, [-1, 0, -1], [1, 3, 1], 1.0);
-        assert_eq!(Search::audit(&g).loose_samples().all, 0);
+        assert_eq!(Search::audit(&g).loose_samples(), 0);
     }
 
     /// A weak sample drawn thin, touching what bears only along an edge, is a
@@ -1572,7 +1496,7 @@ mod tests {
         }
         fill(&mut g, [-1, 0, -1], [1, 2, 1], 1.0);
         put(&mut g, [2, 3, 0], 0.1, VoxelMaterial::Rock);
-        assert_eq!(Search::audit(&g).loose_samples().all, 1);
+        assert_eq!(Search::audit(&g).loose_samples(), 1);
     }
 
     /// Two samples meeting along an edge carry no load between them.
@@ -1858,6 +1782,6 @@ mod tests {
         }
         fill(&mut g, [-8, 0, -8], [8, 0, 8], 0.5);
         fill(&mut g, [-1, 4, -1], [1, 6, 1], 1.0);
-        assert_eq!(Search::audit(&g).loose_samples().all, 27);
+        assert_eq!(Search::audit(&g).loose_samples(), 27);
     }
 }

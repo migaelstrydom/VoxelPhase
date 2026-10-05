@@ -89,11 +89,6 @@ impl AABB {
             && self.max.z >= other.min.z
     }
 
-    /// Check if this AABB contains all of another.
-    pub fn contains(&self, other: &AABB) -> bool {
-        self.contains_point(other.min) && self.contains_point(other.max)
-    }
-
     /// Check if this AABB contains a point.
     pub fn contains_point(&self, point: Point3<f32>) -> bool {
         point.x >= self.min.x

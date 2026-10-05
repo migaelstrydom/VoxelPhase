@@ -752,3 +752,25 @@ A debug pass listing each loose piece's samples and their densities.
 
 **Conclusion.** A plain max and an explicit weld (R40). The weld is decided
 on the lattice, so it does not depend on where samples fall near a contact.
+
+## E30. Phase 4 play-tested: deposits read as weathered (2026-10-05)
+
+**Question.** Does a boulder stamped back into the terrain look like the
+boulder that was there a frame before?
+
+**Setup.** Branch `rubble-phase4` in the game: boulders deposited after
+sleeping 1 s, in the Rubble Garden.
+
+**Result.** The pop is plain to see. Before, the boulder is drawn from its
+own samples on the lattice it was cut from, and its edges are crisp. After,
+it has been resampled at an angle onto a lattice that cannot hold an edge
+sharper than its spacing, and every edge is rounded: the rock looks
+weathered for centuries. The volume and the mean surface (E28) are not what
+the eye reads; the edges are. Crumbling or dust to cover the swap would be
+stranger still on a boulder the player has carried and put down.
+
+**Conclusion.** Phase 4 dropped. Boulders stay bodies, bounded by the
+boulder budget; the code is on `rubble-phase4`. What it was for: physics
+cost (to measure in the optimisation pass), piles as ground (a boulder that
+fractures like a prop would cover it, R38), and dams (blocked anyway by
+water assuming terrain edits only remove material, R44).

@@ -8,11 +8,8 @@ use super::scenario::{Blast, Scenario};
 use crate::debug::DebugLines;
 use crate::explosion::Explosion;
 use crate::physics::{PhysicsImpulse, PhysicsWorld, RigidBodyHandle, SequentialStepper, Stepper};
-use crate::rubble::{
-    Bricks, Cut, Flight, Outcome, Piece, Plan, RubblePlanner, ScreeRules, Settler, Settling,
-    Verdict,
-};
-use crate::terrain::{LooseSamples, Occupancy, TerrainWorld, VoxelMaterial};
+use crate::rubble::{Bricks, Cut, Flight, Outcome, Plan, RubblePlanner, ScreeRules};
+use crate::terrain::{Occupancy, TerrainWorld, VoxelMaterial};
 
 /// How deep a boulder's bricks may hold air in its holes and hollows, in
 /// voxels. A brick's bevels skim the air at a concave corner by a few tenths
@@ -23,8 +20,8 @@ const FRAME_SECONDS: f32 = 1.0 / 60.0;
 /// The game's physics substep and its cap per frame.
 const PHYSICS_DT: f32 = 1.0 / 240.0;
 const MAX_SUBSTEPS: u32 = 12;
-/// How long a blast's boulders are given to come to rest and be deposited. A
-/// pile of thirty from the hill's shell takes 12 s to rest (E26).
+/// How long a blast's boulders are given to come to rest. A pile of thirty
+/// from the hill's shell takes 12 s (E26).
 const REST_SECONDS: f32 = 20.0;
 /// How far below the terrain's bounds a boulder is counted as lost.
 const LOST_MARGIN: f32 = 4.0;
@@ -57,9 +54,6 @@ pub struct FragmentRecord {
     /// How many pieces, joined face to face, its samples make: one, or a
     /// body moves things that only air joins.
     pub in_pieces: usize,
-    /// For a boulder that came to rest, what the settler last made of it:
-    /// `None` if it was never ready to be deposited.
-    pub settled: Option<Verdict>,
 }
 
 /// What became of a fragment.
@@ -124,7 +118,6 @@ struct Followed {
     start: Point3<f32>,
     /// The velocity the blast's shove gives it.
     thrown: Vector3<f32>,
-    settling: Settling,
 }
 
 impl Followed {
@@ -136,37 +129,30 @@ impl Followed {
     }
 }
 
-/// Step one blast's boulders on `terrain` until each is deposited, would not
-/// deposit, fell out of the world or ran out of time, the blast's `shove`
-/// thrown on the first frame as the game throws it. Each is deposited as the
-/// game's `SettleSystem` does it, and the terrain remeshed the same frame.
+/// Step one blast's boulders on `terrain` until they all sleep, fall out of
+/// the world or run out of time, the blast's `shove` thrown on the first
+/// frame as the game throws it.
 fn settle(
     world: &mut PhysicsWorld,
-    followed: &mut [Followed],
+    followed: &[Followed],
     shove: PhysicsImpulse,
-    terrain: &mut TerrainWorld,
-) -> Vec<(usize, Fate, Option<Verdict>)> {
+    terrain: &TerrainWorld,
+) -> Vec<(usize, Fate)> {
     let mut stepper = SequentialStepper::new(PHYSICS_DT, MAX_SUBSTEPS);
     let mut lines = DebugLines::default();
-    let settler = Settler::default();
     let floor_y = terrain.bounds().min.y - LOST_MARGIN;
     let mut ejected = vec![false; followed.len()];
     let mut fates: Vec<Option<Fate>> = vec![None; followed.len()];
-    let mut verdicts: Vec<Option<Verdict>> = vec![None; followed.len()];
-    let gone = |fate: &Option<Fate>, verdict: &Option<Verdict>| {
-        *fate == Some(Fate::Lost) || *verdict == Some(Verdict::Deposited)
-    };
     let frames = (REST_SECONDS / FRAME_SECONDS) as usize;
     for frame in 1..=frames {
         let shoves = if frame == 1 { vec![shove] } else { Vec::new() };
         let substeps = stepper
-            .step(world, FRAME_SECONDS, &*terrain, &shoves, &[], &mut lines)
+            .step(world, FRAME_SECONDS, terrain, &shoves, &[], &mut lines)
             .substeps;
         let gravity = world.config().gravity;
         lines.clear();
-        let mut ready = Vec::new();
-        for (k, f) in followed.iter_mut().enumerate() {
-            if gone(&fates[k], &verdicts[k]) {
+        for (k, f) in followed.iter().enumerate() {
+            if fates[k].is_some() {
                 continue;
             }
             let Some(body) = world.body(f.body) else {
@@ -182,56 +168,29 @@ fn settle(
             if at.y < floor_y {
                 fates[k] = Some(Fate::Lost);
                 world.remove_body(f.body);
-                continue;
-            }
-            let asleep = world.is_sleeping(f.body);
-            if asleep && fates[k].is_none() {
+            } else if world.is_sleeping(f.body) {
                 fates[k] = Some(Fate::Rested {
                     frames: frame,
                     drop: f.start.y - at.y,
                     ejected: ejected[k],
                 });
             }
-            if settler.ready(&mut f.settling, asleep, FRAME_SECONDS) {
-                ready.push(k);
-            }
         }
-
-        let handles: Vec<RigidBodyHandle> = ready.iter().map(|&k| followed[k].body).collect();
-        let mut deposited = false;
-        for &k in &ready {
-            let f = &mut followed[k];
-            let verdict = settler.deposit(&mut f.settling, f.body, &handles, world, terrain);
-            verdicts[k] = Some(verdict);
-            if verdict == Verdict::Deposited {
-                world.remove_body(f.body);
-                deposited = true;
-            }
-        }
-        if deposited {
-            terrain.update();
-        }
-
-        let done = fates.iter().zip(&verdicts).all(|(fate, verdict)| {
-            gone(fate, verdict) || (fate.is_some() && *verdict == Some(Verdict::Refused))
-        });
-        if done {
+        if fates.iter().all(Option::is_some) {
             break;
         }
     }
     followed
         .iter()
-        .zip(fates.into_iter().zip(verdicts))
+        .zip(fates)
         .zip(ejected)
-        .map(|((f, (fate, verdict)), ejected)| {
-            (f.index, fate.unwrap_or(Fate::Restless { ejected }), verdict)
-        })
+        .map(|((f, fate), ejected)| (f.index, fate.unwrap_or(Fate::Restless { ejected })))
         .collect()
 }
 
 /// What becomes of everything `cut` holds, played out against `terrain`:
 /// one record a piece.
-fn play(cut: Cut, planner: &mut RubblePlanner, terrain: &mut TerrainWorld) -> Vec<FragmentRecord> {
+fn play(cut: Cut, planner: &mut RubblePlanner, terrain: &TerrainWorld) -> Vec<FragmentRecord> {
     let shove = cut.shove;
     let thin_whole: Vec<usize> = cut
         .fragments
@@ -245,32 +204,16 @@ fn play(cut: Cut, planner: &mut RubblePlanner, terrain: &mut TerrainWorld) -> Ve
         .into_iter()
         .enumerate()
         .map(|(index, piece)| {
-            let Piece {
-                fragment,
-                source,
-                plan,
-            } = piece;
-            let mut record = FragmentRecord {
-                source,
-                samples: fragment.sample_count(),
-                volume: fragment.volume(),
-                centroid: fragment.world_centroid(),
-                material: fragment.material(),
-                fate: Fate::Dust,
-                paper_thin: fragment.paper_thin_samples(),
-                paper_thin_whole: thin_whole[source],
-                skin: fragment.bearing_samples() == 0,
-                air_held: 0,
-                in_pieces: 1,
-                settled: None,
-            };
-            record.fate = match plan {
+            let fragment = &piece.fragment;
+            let mut air_held = 0;
+            let mut in_pieces = 1;
+            let fate = match piece.plan {
                 Plan::Dust { .. } => Fate::Dust,
                 Plan::Scree { flight, .. } => fly(flight, terrain),
                 Plan::Boulder(boulder) => {
                     let occupancy = fragment.occupancy();
-                    record.air_held = air_held_by(&boulder.bricks, &occupancy, GAP_DEPTH);
-                    record.in_pieces = pieces_of(&occupancy);
+                    air_held = air_held_by(&boulder.bricks, &occupancy, GAP_DEPTH);
+                    in_pieces = pieces_of(&occupancy);
                     let mass = boulder.mass;
                     let placed = boulder.place(&mut world);
                     let thrown = shove
@@ -281,17 +224,27 @@ fn play(cut: Cut, planner: &mut RubblePlanner, terrain: &mut TerrainWorld) -> Ve
                         body: placed.body,
                         start: placed.centre,
                         thrown,
-                        settling: Settling::new(fragment, placed.centre),
                     });
                     Fate::Lost
                 }
             };
-            record
+            FragmentRecord {
+                source: piece.source,
+                samples: fragment.sample_count(),
+                volume: fragment.volume(),
+                centroid: fragment.world_centroid(),
+                material: fragment.material(),
+                fate,
+                paper_thin: fragment.paper_thin_samples(),
+                paper_thin_whole: thin_whole[piece.source],
+                skin: fragment.bearing_samples() == 0,
+                air_held,
+                in_pieces,
+            }
         })
         .collect();
-    for (index, fate, verdict) in settle(&mut world, &mut followed, shove, terrain) {
+    for (index, fate) in settle(&mut world, &followed, shove, terrain) {
         records[index].fate = fate;
-        records[index].settled = verdict;
     }
     records
 }
@@ -347,41 +300,25 @@ fn pieces_of(occupancy: &Occupancy) -> usize {
     pieces
 }
 
-/// The terrain as the audits find it.
-#[derive(Debug, Clone, Copy)]
-pub struct Audit {
-    /// Solid standing free.
-    pub loose: LooseSamples,
-    /// Samples drawn paper-thin.
-    pub paper_thin: usize,
-}
-
-impl Audit {
-    fn of(terrain: &TerrainWorld) -> Self {
-        Self {
-            loose: terrain.loose_samples(),
-            paper_thin: terrain.paper_thin_samples(),
-        }
-    }
-}
-
 /// What one blast did.
 #[derive(Debug, Clone)]
 pub struct BlastRecord {
     pub blast: Blast,
     pub fragments: Vec<FragmentRecord>,
-    /// The terrain after the blast, before anything it cut loose came back.
-    pub cut: Audit,
-    /// The terrain once the blast's boulders were deposited.
-    pub settled: Audit,
+    /// Samples standing free anywhere in the terrain after this blast.
+    pub loose: usize,
+    /// Samples drawn paper-thin anywhere in the terrain after this blast.
+    pub paper_thin: usize,
 }
 
 /// A scenario played out.
 #[derive(Debug, Clone)]
 pub struct Run {
     pub scenario: &'static str,
-    /// The terrain as authored: floating islands, paper-thin strips.
-    pub before: Audit,
+    /// Samples standing free in the terrain as authored: floating islands.
+    pub loose_before: usize,
+    /// Samples drawn paper-thin in the terrain as authored.
+    pub paper_thin_before: usize,
     pub blasts: Vec<BlastRecord>,
     /// Open mesh edges once the terrain has remeshed after the last blast.
     pub open_edges: usize,
@@ -412,11 +349,10 @@ impl Run {
     }
 
     /// Breaches of what every run is held to: no blast leaves more terrain
-    /// standing free, or more drawn paper-thin, than there was before it, and
-    /// its deposits leave no rock standing free; and
+    /// standing free, or more drawn paper-thin, than there was before it; and
     /// every piece of scree falls clear of where it broke and lands, and every
     /// boulder comes to rest in the world without being thrown out of the
-    /// ground, and is deposited. Scree that lands on its first frame started inside the
+    /// ground. Scree that lands on its first frame started inside the
     /// ground, and scree that never lands fell through it.
     pub fn violations(&self) -> Vec<String> {
         let mut found = Vec::new();
@@ -434,9 +370,6 @@ impl Run {
                     }
                     Fate::Restless { .. } => "boulder never came to rest",
                     Fate::Lost => "boulder fell out of the world",
-                    Fate::Rested { .. } if fragment.settled != Some(Verdict::Deposited) => {
-                        "boulder came to rest and was never deposited"
-                    }
                     _ if fragment.air_held > 0 => "boulder's bricks hold air",
                     _ if fragment.in_pieces > 1 => "boulder is pieces joined only by air",
                     _ => continue,
@@ -465,32 +398,21 @@ impl Run {
                 }
             }
         }
-        let mut base = self.before;
+        let (mut loose, mut thin) = (self.loose_before, self.paper_thin_before);
         for (index, record) in self.blasts.iter().enumerate() {
-            let at = record.blast.centre;
-            let (cut, settled) = (record.cut, record.settled);
-            if cut.loose.all > base.loose.all {
+            if record.loose > loose {
                 found.push(format!(
-                    "blast {index} at {at:?} left {} samples standing free, up from {}",
-                    cut.loose.all, base.loose.all
+                    "blast {index} at {:?} left {} samples standing free, up from {loose}",
+                    record.blast.centre, record.loose
                 ));
             }
-            if cut.paper_thin > base.paper_thin {
+            if record.paper_thin > thin {
                 found.push(format!(
-                    "blast {index} at {at:?} left {} samples paper-thin, up from {}",
-                    cut.paper_thin, base.paper_thin
+                    "blast {index} at {:?} left {} samples paper-thin, up from {thin}",
+                    record.blast.centre, record.paper_thin
                 ));
             }
-            // A deposit may leave a pebble too thin to bear lying loose, but
-            // not rock.
-            if settled.loose.bearing > cut.loose.bearing {
-                found.push(format!(
-                    "blast {index} at {at:?}: its deposits left {} bearing samples standing \
-                     free, up from {}",
-                    settled.loose.bearing, cut.loose.bearing
-                ));
-            }
-            base = settled;
+            (loose, thin) = (record.loose, record.paper_thin);
         }
         if self.open_edges > 0 {
             found.push(format!(
@@ -506,7 +428,8 @@ impl Run {
 pub fn run(scenario: &Scenario) -> Result<Run, String> {
     let mut terrain = scenario.terrain()?;
     terrain.update();
-    let before = Audit::of(&terrain);
+    let loose_before = terrain.loose_samples();
+    let paper_thin_before = terrain.paper_thin_samples();
 
     let mut planner = RubblePlanner::default();
     let blasts = scenario
@@ -519,13 +442,12 @@ pub fn run(scenario: &Scenario) -> Result<Run, String> {
             };
             // Rubble falls on the terrain as remeshed after the blast.
             terrain.update();
-            let audit = Audit::of(&terrain);
-            let fragments = play(cut, &mut planner, &mut terrain);
+            let fragments = play(cut, &mut planner, &terrain);
             BlastRecord {
                 blast,
                 fragments,
-                cut: audit,
-                settled: Audit::of(&terrain),
+                loose: terrain.loose_samples(),
+                paper_thin: terrain.paper_thin_samples(),
             }
         })
         .collect();
@@ -533,7 +455,8 @@ pub fn run(scenario: &Scenario) -> Result<Run, String> {
 
     Ok(Run {
         scenario: scenario.name,
-        before,
+        loose_before,
+        paper_thin_before,
         blasts,
         open_edges: terrain.open_edge_count(),
     })

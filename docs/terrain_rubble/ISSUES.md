@@ -53,11 +53,11 @@ An issue's **status** is one of:
 | [R37](#r37) | Boulders shared the props' 40-piece debris budget and sparkled away | fixed (branch `rubble-phase2`) | medium |
 | [R38](#r38) | Two cull systems, two body spawners: rubble repeats fracture's | open, simplification for later | low |
 | [R39](#r39) | Cracked pieces carried slivers and hairlines the whole fragment did not | fixed (branch `rubble-phase2`) | high |
-| [R40](#r40) | A deposited rock stood free of the ground it lay on | fixed (branch `rubble-phase2`) | high |
-| [R41](#r41) | A pile's boulders crowded each other out of depositing | fixed (branch `rubble-phase2`) | high |
-| [R42](#r42) | Deposits are not hidden from view | open, play-test | low |
-| [R43](#r43) | A rock can be deposited onto a boulder that is not | open | low |
-| [R44](#r44) | Water ignores deposited rock: hydrology assumes edits only remove material | open, design decision | blocks the Phase 4 headline |
+| [R40](#r40) | A deposited rock stood free of the ground it lay on | won't fix: Phase 4 dropped (`rubble-phase4`) | — |
+| [R41](#r41) | A pile's boulders crowded each other out of depositing | won't fix: Phase 4 dropped (`rubble-phase4`) | — |
+| [R42](#r42) | Deposits are not hidden from view | won't fix: Phase 4 dropped (`rubble-phase4`) | — |
+| [R43](#r43) | A rock can be deposited onto a boulder that is not | won't fix: Phase 4 dropped (`rubble-phase4`) | — |
+| [R44](#r44) | Water ignores deposited rock: hydrology assumes edits only remove material | won't fix: Phase 4 dropped (`rubble-phase4`) | — |
 
 ---
 
@@ -747,7 +747,7 @@ samples paper-thin before any blast).
 
 ## R40. A deposited rock stood free of the ground it lay on
 
-**Status:** fixed on branch `rubble-phase2`. **Found by:** `rubble_viewer`,
+**Status:** won't fix: Phase 4 was dropped after its play-test (E30); the work is on branch `rubble-phase4`.
 once every boulder was deposited (E29).
 
 Support travels only through bearing samples (`BEARING_DENSITY`). A rock
@@ -771,7 +771,7 @@ ground and the next blast near it crumbles it.
 
 ## R41. A pile's boulders crowded each other out of depositing
 
-**Status:** fixed on branch `rubble-phase2`. **Found by:** design review
+**Status:** won't fix: Phase 4 was dropped after its play-test (E30); the work is on branch `rubble-phase4`.
 before the first run.
 
 A boulder is not deposited while another body is within a voxel of it, so
@@ -782,7 +782,7 @@ rest is deposited in one frame.
 
 ## R42. Deposits are not hidden from view
 
-**Status:** open, for play-testing.
+**Status:** won't fix: Phase 4 was dropped after its play-test (E30); the work is on branch `rubble-phase4`.
 
 DESIGN.md Part 5 deposits only out of view or past `DEPOSIT_VIEW_DISTANCE`.
 Not built: the pile the player made is the one they are looking at, which
@@ -792,7 +792,7 @@ and the AO is rebaked. If the swap shows, a view condition is the fix.
 
 ## R43. A rock can be deposited onto a boulder that is not
 
-**Status:** open. **Severity:** low.
+**Status:** won't fix: Phase 4 was dropped after its play-test (E30); the work is on branch `rubble-phase4`.
 
 Boulders ready in the same frame do not crowd each other. If the one
 underneath is then refused (it lies across a segment join), the one on top
@@ -801,7 +801,7 @@ rock hangs in the air until a blast near it.
 
 ## R44. Water ignores deposited rock: hydrology assumes edits only remove material
 
-**Status:** open, needs a design decision. **Found by:** `water_viewer
+**Status:** won't fix: Phase 4 was dropped after its play-test (E30); the work is on branch `rubble-phase4`.
 river_dam`, the Phase 4 headline: a column blasted on a river's bank and
 deposited across the channel.
 

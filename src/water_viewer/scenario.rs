@@ -1,6 +1,6 @@
 //! What a water scenario is: terrain, water, and a script of things to do to it.
 
-use nalgebra::{Point3, UnitQuaternion};
+use nalgebra::Point3;
 
 use crate::level::loader::parse_level;
 use crate::level::Level;
@@ -21,15 +21,6 @@ pub struct Probe {
 pub enum Action {
     /// A charge that cuts a crater of exactly this radius.
     Blast { centre: Point3<f32>, radius: f32 },
-    /// A charge as `Blast`, then the largest piece it cut loose laid to rest
-    /// with its centroid at `rest`, turned by `turn`, and deposited back
-    /// into the terrain: a rockfall, without the fall.
-    Rockfall {
-        centre: Point3<f32>,
-        radius: f32,
-        rest: Point3<f32>,
-        turn: UnitQuaternion<f32>,
-    },
 }
 
 /// One scripted action and when it happens, in simulated seconds.

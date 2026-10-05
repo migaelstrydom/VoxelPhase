@@ -1,8 +1,10 @@
 # Terrain Rubble Design
 
 Terrain that a blast cuts loose becomes rubble: real rigid bodies for pieces
-worth simulating, falling scree for slivers, dust for crumbs. Rubble that comes
-to rest is then deposited back into the voxel field as new terrain.
+worth simulating, falling scree for slivers, dust for crumbs. A boulder that comes to rest
+stays a sleeping body until the boulder budget crumbles it. Depositing it
+back into the voxel field (Part 5) was built and dropped: resampled onto the
+lattice, crisp rock reads as weathered (NOTEBOOK E30).
 
 **Status:** Phase 1 is on `main` since 2026-10-04 (`src/terrain/fragment.rs`, `src/terrain/split_race.rs`, `src/rubble/`,
 `src/rubble_viewer/`, the play-test level `levels/rubble_garden.level.ron`):
@@ -11,10 +13,10 @@ the `rubble-phase2` branch: fragments are graded, dust crumbles, scree falls
 drawn with its own marching-cubes mesh and the terrain's texture, and boulders
 are rigid bodies of carved bricks that tumble, land and sleep. Phase 2 was
 play-tested 2026-10-04; a boulder crumbling where it landed read as vanishing,
-so the branch was held for Phase 3, play-tested 2026-10-05. Phase 4 is built
-on the branch too: a boulder at rest is stamped back into the terrain and
-welded to the ground it lies on; its play-test is owed. The branch goes to
-`main` after a first optimisation pass (R28, R33). Phase 5 is design only.
+so the branch was held for Phase 3, play-tested 2026-10-05. Phase 4 was
+built, play-tested 2026-10-05 and dropped; its commits are on the
+`rubble-phase4` branch. `rubble-phase2` goes to `main` after a first
+optimisation pass (R28, R33). Phase 5 is design only.
 The play-test
 level turned up problems that blocked the design: pieces longer than about
 3 m never fell (R1), and box edges read as loose strips (R3, R4). Those are
@@ -93,14 +95,14 @@ And one goal that makes it more than cleanup:
                          │ physics: thrown by the same blast impulse,
                          │ tumbles, lands, sleeps
                          ▼
-                    SettleSystem ──▶ TerrainWorld::deposit(fragment, pose)
-                                     voxels stamped back into the field,
-                                     body removed, water re-laid
+                    BoulderCullSystem: past the budget, the smallest
+                    crumble where they lie
 ```
 
+(Part 5's `SettleSystem ──▶ TerrainWorld::deposit` was dropped; see there.)
+
 The terrain side stays inside `src/terrain/`, and segments do not leak out:
-`TerrainWorld` returns fragments with world poses and accepts deposits in
-world space. The rubble side is an ordinary gameplay module that uses
+`TerrainWorld` returns fragments with world poses. The rubble side is an ordinary gameplay module that uses
 physics, rendering and the existing debris budget.
 
 ---
@@ -514,10 +516,7 @@ then turns the detail normal into the world. The terrain's texture belongs to
 not a `ModelInstance`: it is a `TerrainMeshInstance`, which `RenderSystem`
 draws with `Renderer::draw_model_as`, the terrain's texture and the terrain's
 surface, anchored. `probe.frag` takes the same branch, so a piece's texture
-holds still in a reflection too. When the boulder
-is deposited (Part 5) it is textured by world position again, so the noise
-under it jumps to a different patch. The noise is isotropic, so that is a
-change in pattern, not in look.
+holds still in a reflection too.
 
 ---
 
@@ -551,7 +550,18 @@ cliff falling away.
 
 ---
 
-## Part 5: Settling back into terrain (`rubble/settle.rs`)
+## Part 5: Settling back into terrain (dropped)
+
+> **Dropped after play-testing, 2026-10-05.** Built as designed (branch
+> `rubble-phase4`), it worked: volume within 2%, the surface moved 0.05 voxel
+> on average, every resting boulder welded into the ground. But the swap is
+> plain to see. The boulder in flight is drawn from samples on the lattice
+> it was cut from, so its edges are crisp; resampled at any other angle the
+> lattice cannot hold them, and the rock comes out rounded, as if weathered
+> for centuries. No effect hides that on a boulder the player has just
+> carried and put down. A boulder stays a body (NOTEBOOK E30). What follows
+> is the design as it was, kept for whoever tries again with a different idea
+> (a finer lattice for deposited rock, say).
 
 This is the part that makes rubble more than an effect.
 
@@ -675,7 +685,7 @@ with its tests, plus a `level_viewer` before/after picture of a fragment
 deposited at an angle onto real terrain. If that picture is wrong, Part 5 is
 dropped and Parts 1–4 stand without it.
 
-### As built (Phase 4)
+### As built (Phase 4, dropped)
 
 - `TerrainWorld::deposit(&fragment, &moved)`, `moved` carrying the fragment
   from where it broke to where it rests; written into the one segment whose
@@ -736,9 +746,8 @@ by a neck can come down, or stay as terrain until the neck goes.
 ```text
 src/terrain/
   fragment.rs        FragmentFinder, Fragment, the bearing rules
-  deposit.rs         a fragment resampled at its new pose, unioned, welded
-  segment.rs         detonate() returns fragments; deposit()
-  world.rs           TerrainWorld::detonate → Vec<Fragment> (world pose); deposit()
+  segment.rs         detonate() returns fragments
+  world.rs           TerrainWorld::detonate → Vec<Fragment> (world pose)
 
 src/rubble/          //! Terrain cut loose by a blast: graded, simulated, and settled back into the ground.
   mod.rs
@@ -747,7 +756,7 @@ src/rubble/          //! Terrain cut loose by a blast: graded, simulated, and se
   mesh.rs            Fragment → body-local render mesh (terrain marching cubes)
   scree.rs           FallingScree + its system
   spawn.rs           RubbleQueue, RubbleSpawnSystem
-  settle.rs          Settler (when), SettleSystem
+  budget.rs          BoulderCullSystem
 
 src/rubble_viewer/   //! Offline harness for rubble: scripted blasts on synthetic segments, judged by invariants.
 src/bin/rubble_viewer.rs
@@ -772,8 +781,8 @@ except the filmstrip, which is for looking.
 | `rubble/grade.rs` | Table-driven: dust, scree, boulder, too-big at each boundary. |
 | `rubble/brick_shaper.rs` | Bricks are disjoint; they cover ≥ 95% of the solid samples; total volume within 30% of the voxel volume; at most `MAX_BRICKS`. A seeded property test over 500 random fragments: no refused hull panics, every brick is a valid `ConvexHull`. |
 | `rubble/mesh.rs` | Away from the break, the fragment mesh's triangles are bit-identical to the chunk mesh it was lifted from. |
-| `terrain` deposit | The Python measurement ported: random poses, volume within 1%, surface error within the table in Part 5. Union never lowers a density. A deposit outside every segment writes nothing. |
-| `rubble/settle.rs` | Each deposit condition blocks a deposit on its own. |
+| `terrain` deposit (dropped) | The Python measurement ported: random poses, volume within 1%, surface error within the table in Part 5. Union never lowers a density. A deposit outside every segment writes nothing. |
+| `rubble/settle.rs` (dropped) | Each deposit condition blocks a deposit on its own. |
 
 ### End to end: a new `rubble_viewer`, not the bench harness
 
@@ -825,9 +834,9 @@ first and a second; the rest arrive with bodies):
 | `arch_both_legs` / `arch_one_leg` | Cut both legs: the span falls as one boulder. Cut one: it stays. |
 | `sky_island` | A blast at the edge of a small island segment: the island stays, the piece cut off falls. |
 | `long_bridge` | A bridge cut at both ends, longer than any fixed margin around either crater, falls whole: the race closes it off. |
-| `settle` | A boulder lands, sleeps, is deposited; the ledger closes. |
-| `settle_blocked` | The same with a crate resting on the boulder: no deposit. |
-| `river_dam` | The Phase 4 headline: a cliff dropped into a channel deposits and raises the water upstream. |
+| `settle` (dropped) | A boulder lands, sleeps, is deposited; the ledger closes. |
+| `settle_blocked` (dropped) | The same with a crate resting on the boulder: no deposit. |
+| `river_dam` (dropped) | The Phase 4 headline: a cliff dropped into a channel deposits and raises the water upstream. |
 
 `cargo test --release --lib rubble_viewer` runs the catalogue, in a few
 seconds. A scenario can record a **known gap**: it is expected to break an
@@ -860,7 +869,7 @@ Each phase is shippable on its own and checked with the existing tools.
 | **1. Finder + dust** ✓ | `Crater`/`Search`/`cut_loose`, the region grown by `split_race`; every fragment crumbles into a burst of the blast's debris effect, scaled down (a material-coloured puff waits for Phase 2). | 21 unit tests in `terrain::fragment`, one per rule, each shown to fail with its rule removed. `rubble_viewer` (`cargo test --lib rubble_viewer`): every scenario, with "nothing more standing free, nothing more paper-thin after any blast" as the invariant. `terrain_perf`: one `cut loose` stage, fingerprints unchanged on sweeps that cut nothing loose. |
 | **2. Scree** (branch) | `Grade`, `FallingScree`, render mesh from the fragment's own marching cubes, the anchored projection. | Unit tests: grading, flight, the mesh bit-identical to the ground's. `rubble_viewer`: every scree lands, none on its first frame. `render_perf` during a blast: 3 scree draws, `rubble_spawn` 0.7 ms, no validation errors. Play-test owed. |
 | **3. Boulders** (branch) | Brick shaper, compound bodies, debris budget, at most 8 boulders a blast. | Unit tests on the shaper (every sample in one brick, the surface within the inset, disjoint bricks, volume no more than 30% over, 300 seeded lumps without a refused hull). `rubble_viewer`: every boulder comes to rest, none is moved off its free flight in its first frame (E22). Spawn cost over budget (R28, R33). Play-tested 2026-10-05: tall columns, the table, the pavilion, the hill's shell (cracked into patches, R31–R35, R39). |
-| **4. Deposition** (branch) | `TerrainWorld::deposit` with `DEPOSIT_BIAS` and its tests first, then `SettleSystem` and its conditions. | Volume conserved to within 2% at random poses (E28); surface error within the measured table. `level_viewer --deposit` before/after ✓. Unit tests: a deposit welds a ball lying clear of the ground; each settle condition blocks a deposit. `rubble_viewer`: every resting boulder deposited ✓. Owed: a `water_viewer` scenario where a deposited boulder dams a channel; the play-test. |
+| **4. Deposition** (dropped) | Built on `rubble-phase4`: `TerrainWorld::deposit`, the weld, `SettleSystem`. | Every check passed; the play-test did not: deposited rock reads as weathered (E30). |
 | **5. Necks** | Part 6. | A test overhang that drops when its neck is cut. |
 
 ## Risks and open questions

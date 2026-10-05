@@ -26,7 +26,7 @@
 //! The broadphase is a linear scan. Segment counts are in the dozens and a
 //! spatial index would be premature.
 
-use nalgebra::{Isometry3, Point3, Vector3};
+use nalgebra::{Point3, Vector3};
 use rustc_hash::FxHashMap;
 use std::borrow::Cow;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -36,7 +36,7 @@ use super::adjacency::{AdjacencyTimings, DefectiveEdge};
 use super::blast::BlastConfig;
 use super::chunk::{ChunkCoord, ChunkTriangleRef};
 use super::chunk_rebuild::ChunkBuildTimings;
-use super::fragment::{Fragment, LooseSamples};
+use super::fragment::Fragment;
 use super::render_cache::ChunkRenderData;
 use super::segment::{ConcatTimings, Segment};
 use super::surface;
@@ -330,36 +330,11 @@ impl TerrainWorld {
         fragments
     }
 
-    /// Stamp `fragment` back into the terrain where it came to rest, `moved`
-    /// having carried it from where it broke, and say whether it was. Only
-    /// into a segment whose bounds hold all of it: a fragment across a join,
-    /// in a gap or past every segment writes nothing.
-    pub fn deposit(&mut self, fragment: &Fragment, moved: &Isometry3<f32>) -> bool {
-        let bounds = fragment.bounds(moved);
-        let Some(segment) = self
-            .segments
-            .iter_mut()
-            .find(|segment| segment.bounds().contains(&bounds))
-        else {
-            return false;
-        };
-        match segment.deposit(fragment, moved) {
-            Some(surface) => {
-                self.pending_changes.push(surface);
-                true
-            }
-            None => false,
-        }
-    }
-
     /// Solid samples standing free across every segment: held up by nothing
     /// and holding up nothing. Reads every segment whole, so it is for tests
     /// and tools, not for a frame. See `Segment::loose_samples`.
-    pub fn loose_samples(&self) -> LooseSamples {
-        self.segments
-            .iter()
-            .map(Segment::loose_samples)
-            .fold(LooseSamples::default(), |sum, loose| sum + loose)
+    pub fn loose_samples(&self) -> usize {
+        self.segments.iter().map(Segment::loose_samples).sum()
     }
 
     /// Destructible samples drawn paper-thin, across every segment: shelves
@@ -1084,53 +1059,6 @@ mod tests {
                 Point3::new(40.0, 2.0, 8.0),
             ),
         )
-    }
-
-    /// A block of rock lifted out of a grid of its own, as if it had broken
-    /// from a segment placed at `frame`, deposits where it lies in every
-    /// frame, and where it was moved to; moved out of every segment, it
-    /// writes nothing.
-    #[test]
-    fn a_fragment_deposits_where_it_lies() {
-        let (lo, hi) = (Point3::new(10.0, 4.0, 2.0), Point3::new(13.0, 6.0, 5.0));
-        let source = slab_grid(1.0, lo, hi);
-        let region = AABB::new(lo - Vector3::repeat(2.0), hi + Vector3::repeat(2.0));
-        for (name, frame) in frames() {
-            let fragment = Fragment::of_region(&source, &region, frame.isometry());
-            for shift in [Vector3::zeros(), Vector3::new(3.0, 1.0, -2.0)] {
-                let mut world = world_of(
-                    frame,
-                    slab_grid(
-                        1.0,
-                        Point3::new(0.0, 0.0, 0.0),
-                        Point3::new(24.0, 2.0, 12.0),
-                    ),
-                );
-                let moved = Isometry3::translation(shift.x, shift.y, shift.z);
-                assert!(world.deposit(&fragment, &moved), "{name}: not deposited");
-                let segment = &world.segments()[0];
-                for x in 10..=13 {
-                    for y in 4..=6 {
-                        for z in 2..=5 {
-                            let at = frame.to_world(Point3::new(x as f32, y as f32, z as f32));
-                            assert!(
-                                segment.voxel_at(at + shift).is_solid(),
-                                "{name}: {at} not stamped {shift:?} away"
-                            );
-                        }
-                    }
-                }
-                assert_eq!(world.pending_changes.len(), 1, "{name}: water not told");
-            }
-
-            let mut world = world_of(frame, slab_grid(1.0, Point3::origin(), hi));
-            let away = Isometry3::translation(0.0, 500.0, 0.0);
-            assert!(
-                !world.deposit(&fragment, &away),
-                "{name}: deposited nowhere"
-            );
-            assert!(world.pending_changes.is_empty());
-        }
     }
 
     /// The frames every frame-sensitive test is run against: identity, a pure
