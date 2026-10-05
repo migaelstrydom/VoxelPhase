@@ -41,7 +41,7 @@
 use std::borrow::Cow;
 use std::collections::{HashSet, VecDeque};
 
-use nalgebra::{Isometry3, Point3, Vector3};
+use nalgebra::{Isometry3, Point3, Translation3, UnitQuaternion, Vector3};
 
 use super::chunk_grid::ChunkGrid;
 use super::frame::SegmentFrame;
@@ -983,6 +983,14 @@ impl Fragment {
             .solid_samples()
             .fold(Vector3::zeros(), |sum, (p, _)| sum + p.coords);
         self.pose * Point3::from(sum / self.samples.max(1) as f32)
+    }
+
+    /// The motion that lays it to rest with its centroid at `centre`,
+    /// turned by `turn` about it from how it stood when it broke: what a
+    /// tool that drops rubble by hand passes to `TerrainWorld::deposit`.
+    pub fn moved_to(&self, centre: Point3<f32>, turn: UnitQuaternion<f32>) -> Isometry3<f32> {
+        let from = self.world_centroid();
+        Translation3::from(centre.coords) * turn * Translation3::from(-from.coords)
     }
 
     /// The world box around its surface once it has moved by `moved` from

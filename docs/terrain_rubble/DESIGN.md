@@ -694,6 +694,9 @@ dropped and Parts 1–4 stand without it.
   (R41). A refused boulder is not asked again until it wakes.
 - Not built: the view condition (R42), and the off switch (leave
   `SettleSystem` out of the dispatcher).
+- **Water does not see deposits (R44).** The hydrology holds floors to
+  falling only (WATER_HYDROLOGY_DESIGN §3.2), so a deposited dam does not
+  dam. `water_viewer river_dam` reproduces it.
 - `rubble_viewer` deposits every boulder that rests and fails one that is
   not deposited. A blast is audited before its deposits (nothing more
   standing free or paper-thin, as before); its deposits are audited after,

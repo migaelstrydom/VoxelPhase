@@ -36,7 +36,7 @@
 use std::sync::Arc;
 
 use image::RgbaImage;
-use nalgebra::{Matrix4, Point3, Translation3, UnitQuaternion, Vector3};
+use nalgebra::{Matrix4, Point3, UnitQuaternion, Vector3};
 use specs::{Join, World, WorldExt};
 
 use crate::animation::critter::CritterAnimator;
@@ -203,12 +203,10 @@ impl LevelViewer {
             .flat_map(|&blast| terrain.detonate(blast, &BlastConfig::default()))
             .collect();
         fragments.sort_by_key(Fragment::sample_count);
-        let deposited = fragments.last().is_some_and(|largest| {
-            let from = largest.world_centroid();
-            let tip = UnitQuaternion::from_axis_angle(&Vector3::z_axis(), RUBBLE_TIP);
-            let moved = Translation3::from(at.coords) * tip * Translation3::from(-from.coords);
-            terrain.deposit(largest, &moved)
-        });
+        let tip = UnitQuaternion::from_axis_angle(&Vector3::z_axis(), RUBBLE_TIP);
+        let deposited = fragments
+            .last()
+            .is_some_and(|largest| terrain.deposit(largest, &largest.moved_to(at, tip)));
         terrain.update();
         if let Some(mut water) = self.world.try_fetch_mut::<WaterWorld>() {
             water.on_terrain_update(&terrain);

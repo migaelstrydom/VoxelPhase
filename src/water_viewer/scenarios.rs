@@ -4,7 +4,7 @@
 //! reads as that behaviour and nothing else. The acceptance scenarios of the
 //! hydrology design (§9.3) live here as they come online.
 
-use nalgebra::Point3;
+use nalgebra::{Point3, UnitQuaternion, Vector3};
 
 use super::scenario::{Action, Beat, Probe, Scenario};
 
@@ -29,6 +29,7 @@ pub fn catalogue() -> Vec<Scenario> {
         low_mouth(),
         confluence(),
         river_blast(),
+        river_dam(),
     ]
 }
 
@@ -960,6 +961,80 @@ fn river_blast() -> Scenario {
         camera: (Point3::new(-6.0, 22.0, 18.0), Point3::new(-6.0, 7.0, 0.0)),
     }
 }
+
+/// Rubble's Phase 4 headline: the river of `river_blast`, and a column on
+/// its bank. A grenade at the column's foot brings it down across the
+/// channel, where it is deposited back into the terrain, and the river backs
+/// up behind it.
+fn river_dam() -> Scenario {
+    Scenario {
+        name: "river_dam",
+        description: "a column blasted into a running river is deposited across it and dams it",
+        level: RIVER_DAM_LEVEL,
+        duration: 120.0,
+        beats: vec![Beat {
+            at: 10.0,
+            action: Action::Rockfall {
+                centre: Point3::new(-6.0, 12.5, 5.0),
+                radius: 2.0,
+                rest: Point3::new(-6.0, 9.5, 0.0),
+                turn: UnitQuaternion::from_axis_angle(
+                    &Vector3::x_axis(),
+                    std::f32::consts::FRAC_PI_2,
+                ),
+            },
+        }],
+        probes: vec![
+            Probe {
+                name: "lake",
+                at: Point3::new(-25.0, 9.5, 0.0),
+            },
+            Probe {
+                name: "above",
+                at: Point3::new(-11.0, 9.0, 0.0),
+            },
+            Probe {
+                name: "pit",
+                at: Point3::new(14.0, 3.2, 0.0),
+            },
+        ],
+        camera: (Point3::new(-6.0, 22.0, 18.0), Point3::new(-6.0, 9.0, 0.0)),
+    }
+}
+
+const RIVER_DAM_LEVEL: &str = r#"
+Level(
+    name: "water_viewer: river_dam",
+    segments: [(
+        name: "main",
+        terrain: Terrain(
+            voxel_size: 0.5,
+            bounds: (min: (-32.0, -16.0, -32.0), max: (32.0, 24.0, 32.0)),
+            base_height: 0.0,
+            material_layers: [(depth: 999.0, material: Dirt)],
+            features: [
+                Plateau(min: (-40.0, -40.0), max: (40.0, 40.0), height: 12.0),
+                Plateau(min: (-30.0, -5.0), max: (-20.0, 5.0), height: 7.0),
+                Ramp(from: (-20.0, 0.0), to: (8.0, 0.0), start_height: 10.0, end_height: 6.0, width: 4.0, flat_width: 2.0),
+                Plateau(min: (8.0, -6.0), max: (40.0, 6.0), height: 3.0),
+            ],
+            volumes: [
+                // Six metres of column on the river's bank.
+                Pillar(center: (-6.0, 5.0), height: 18.0, radius: 1.5),
+            ],
+        ),
+    )],
+    placements: [Root(segment: "main")],
+    player_spawn: (0.0, 13.0, 10.0),
+    water: Some((
+        bodies: [
+            Pool(seed: (-25.0, 0.0), surface_level: 9.5),
+            Spring(position: (-25.0, 11.0, 4.5), direction: (0.0, 0.0, -1.0), discharge: 1.0),
+        ],
+        settle: Steady,
+    )),
+)
+"#;
 
 const RIVER_BLAST_LEVEL: &str = r#"
 Level(

@@ -1,7 +1,7 @@
 //! Runs a scenario: builds its world, plays its script, records the water.
 
 use crate::level::Settle;
-use crate::terrain::{BlastConfig, TerrainWorld};
+use crate::terrain::{BlastConfig, Fragment, TerrainWorld};
 use crate::water::network::Store;
 use crate::water::topology::TopologyEdit;
 use crate::water::WaterWorld;
@@ -208,6 +208,32 @@ fn apply(terrain: &mut TerrainWorld, action: Action) -> String {
             format!(
                 "blast r={radius:.1} at ({:.1}, {:.1}, {:.1})",
                 centre.x, centre.y, centre.z
+            )
+        }
+        Action::Rockfall {
+            centre,
+            radius,
+            rest,
+            turn,
+        } => {
+            let largest = terrain
+                .detonate(centre, &BlastConfig::fixed_radius(radius))
+                .into_iter()
+                .max_by_key(Fragment::sample_count);
+            let deposited = largest.is_some_and(|f| terrain.deposit(&f, &f.moved_to(rest, turn)));
+            format!(
+                "rockfall from ({:.1}, {:.1}, {:.1}) to ({:.1}, {:.1}, {:.1}): {}",
+                centre.x,
+                centre.y,
+                centre.z,
+                rest.x,
+                rest.y,
+                rest.z,
+                if deposited {
+                    "deposited"
+                } else {
+                    "not deposited"
+                }
             )
         }
     }

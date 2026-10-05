@@ -57,6 +57,7 @@ An issue's **status** is one of:
 | [R41](#r41) | A pile's boulders crowded each other out of depositing | fixed (branch `rubble-phase2`) | high |
 | [R42](#r42) | Deposits are not hidden from view | open, play-test | low |
 | [R43](#r43) | A rock can be deposited onto a boulder that is not | open | low |
+| [R44](#r44) | Water ignores deposited rock: hydrology assumes edits only remove material | open, design decision | blocks the Phase 4 headline |
 
 ---
 
@@ -797,3 +798,22 @@ Boulders ready in the same frame do not crowd each other. If the one
 underneath is then refused (it lies across a segment join), the one on top
 is terrain resting on a body. Should the body later be culled, the deposited
 rock hangs in the air until a blast near it.
+
+## R44. Water ignores deposited rock: hydrology assumes edits only remove material
+
+**Status:** open, needs a design decision. **Found by:** `water_viewer
+river_dam`, the Phase 4 headline: a column blasted on a river's bank and
+deposited across the channel.
+
+`docs/WATER_HYDROLOGY_DESIGN.md` §3.2 makes it an invariant that terrain
+edits only remove material: floors and saddles only drop, every old span's
+floor point is still air after an edit (so the span remap is total), and
+fill levels only fall (so drainage repair propagates decreases only). It
+names "a future place-terrain feature" as what would break it. A deposit is
+that feature. The rasteriser holds every raised floor at its old height and
+logs an error per column (`terrain edit raised a floor ... must only remove
+material`), so the water flows through the rock as if it were air: upstream
+of the dam the level rises 0.2 m, not the 2 m the rock should back up, and
+the network stays one basin. Every deposit, on dry ground too, logs these
+errors. Nothing panics: §3.2 says the violation is debug-asserted, but the
+code only logs it.
