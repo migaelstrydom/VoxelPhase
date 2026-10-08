@@ -51,6 +51,7 @@ use crate::rendering::colour::Colour;
 use crate::rendering::material::{MaterialManager, MaterialManagerBuilder, SurfaceModulation};
 use crate::rendering::renderer::Renderer;
 use crate::rendering::resident::VersionedMeshId;
+use crate::rendering::water::WaterScene;
 use crate::resources::manager::ResourceManager;
 use crate::resources::textures::TextureManager;
 use crate::systems::probe_owner;
@@ -148,6 +149,11 @@ impl LevelViewer {
         std::mem::swap(&mut *self.world.write_resource::<WaterWorld>(), water);
     }
 
+    /// Swap in a terrain from outside, and back out on the next call.
+    pub fn swap_terrain(&mut self, terrain: &mut TerrainWorld) {
+        std::mem::swap(&mut *self.world.write_resource::<TerrainWorld>(), terrain);
+    }
+
     /// Set off each blast, drop a splash at each point, then run the water
     /// on for `seconds` of 60 Hz frames. The blasts' frame lasts `blast_dt`:
     /// a blast frame in the game is a long one. A level without water is
@@ -190,6 +196,23 @@ impl LevelViewer {
     /// Mirrors `RenderSystem`'s frame sequence, minus the passes a static level
     /// has nothing to put in: no particles and no fire.
     pub fn render(&mut self, shot: &ViewerShot) -> EngineResult<RgbaImage> {
+        self.render_water(shot, None)
+    }
+
+    /// Render one view with `water` drawn in place of the level's own.
+    pub fn render_with(
+        &mut self,
+        shot: &ViewerShot,
+        water: &dyn WaterScene,
+    ) -> EngineResult<RgbaImage> {
+        self.render_water(shot, Some(water))
+    }
+
+    fn render_water(
+        &mut self,
+        shot: &ViewerShot,
+        water: Option<&dyn WaterScene>,
+    ) -> EngineResult<RgbaImage> {
         let extent = self.renderer.extent();
         let aspect = extent.width as f32 / extent.height as f32;
 
@@ -214,7 +237,7 @@ impl LevelViewer {
         // until every probe it wants is live. The game gets there within a
         // few frames of a level loading, so the still shows what it shows.
         for _ in 0..MAX_PROBE_SETTLING_FRAMES {
-            self.draw_frame(&view, &projection, &camera_pos, shot)?;
+            self.draw_frame(&view, &projection, &camera_pos, shot, water)?;
             if !self.renderer.probes.settling() {
                 break;
             }
@@ -234,6 +257,7 @@ impl LevelViewer {
         projection: &Matrix4<f32>,
         camera_pos: &Vector3<f32>,
         shot: &ViewerShot,
+        water: Option<&dyn WaterScene>,
     ) -> EngineResult<()> {
         let (view, projection, camera_pos) = (*view, *projection, *camera_pos);
         let (cb, image_index) = self.renderer.begin_frame()?;
@@ -248,7 +272,10 @@ impl LevelViewer {
         self.draw_terrain(cb)?;
         self.draw_objects(cb)?;
 
-        if let Some(water) = self.world.try_fetch::<WaterWorld>() {
+        if let Some(water) = water {
+            self.renderer
+                .submit_water(water, &view, &projection, &camera_pos, 0.0)?;
+        } else if let Some(water) = self.world.try_fetch::<WaterWorld>() {
             self.renderer
                 .submit_water(&*water, &view, &projection, &camera_pos, 0.0)?;
         }

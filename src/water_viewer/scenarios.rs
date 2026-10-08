@@ -6,10 +6,19 @@
 
 use nalgebra::Point3;
 
+use super::hunt::hunt;
 use super::scenario::{Action, Beat, Probe, Scenario};
 
-/// Every scenario, in the order they are worth reading.
+/// Every scenario, in the order they are worth reading: the acceptance
+/// scenarios, then the bug hunt.
 pub fn catalogue() -> Vec<Scenario> {
+    let mut all = acceptance();
+    all.extend(hunt());
+    all
+}
+
+/// The acceptance scenarios of the hydrology design (§9.3) and its stages.
+pub(super) fn acceptance() -> Vec<Scenario> {
     vec![
         breach(),
         spill_merge(),
@@ -144,7 +153,7 @@ fn island_pool() -> Scenario {
     }
 }
 
-const ISLAND_POOL_LEVEL: &str = r#"
+pub(super) const ISLAND_POOL_LEVEL: &str = r#"
 Level(
     name: "water_viewer: island_pool",
     segments: [(
@@ -949,8 +958,24 @@ fn river_blast() -> Scenario {
                 at: Point3::new(-25.0, 9.5, 0.0),
             },
             Probe {
+                name: "upper",
+                at: Point3::new(-15.0, 9.8, 0.0),
+            },
+            Probe {
+                name: "above",
+                at: Point3::new(-10.0, 9.1, 0.0),
+            },
+            Probe {
                 name: "crater",
                 at: Point3::new(-6.0, 6.5, 0.0),
+            },
+            Probe {
+                name: "below",
+                at: Point3::new(0.0, 7.6, 0.0),
+            },
+            Probe {
+                name: "lower",
+                at: Point3::new(5.0, 6.9, 0.0),
             },
             Probe {
                 name: "pit",
@@ -961,7 +986,7 @@ fn river_blast() -> Scenario {
     }
 }
 
-const RIVER_BLAST_LEVEL: &str = r#"
+pub(super) const RIVER_BLAST_LEVEL: &str = r#"
 Level(
     name: "water_viewer: river_blast",
     segments: [(

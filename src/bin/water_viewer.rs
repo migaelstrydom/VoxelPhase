@@ -11,6 +11,7 @@
 //! cargo run --bin water_viewer -- --list
 //! cargo run --bin water_viewer -- breach --no-render --fast-forward 60
 //! cargo run --bin water_viewer -- all --no-render            # one line per scenario
+//! cargo run --release --bin water_viewer -- river_blast --field     # on the shallow-water field
 //! cargo run --bin water_viewer -- breach --no-render --every 5 --csv /tmp/breach.csv
 //! cargo run --bin water_viewer -- island_pool --tiles 8 --from 0 --to 1
 //! cargo run --bin water_viewer -- sea_wall --eye 2,2,-4 --look 0,-1,-8   # a closer look
@@ -24,13 +25,15 @@ use nalgebra::Point3;
 use voxel_phase::level::Settle;
 use voxel_phase::level_viewer::{custom_shot, LevelViewer};
 use voxel_phase::rendering::visual_bench::contact_sheet;
+use voxel_phase::rendering::water::FieldScene;
 use voxel_phase::water_viewer::{
-    catalogue, report, run, run_with_captures, select, summary_line, write_csv, RunConfig, Scenario,
+    catalogue, field_report, report, run, run_field, run_with_captures, select, summary_line,
+    timing_line, write_csv, FieldRun, RunConfig, Scenario,
 };
 
 const USAGE: &str = "usage: water_viewer <scenario|all> [--no-render] [--fast-forward N]
                     [--settle steady|as-authored] [--every SECONDS] [--csv <out.csv>] [--reaches]
-                    [--tiles N] [--from F] [--to F] [--columns N]
+                    [--field] [--tiles N] [--from F] [--to F] [--columns N]
                     [--width W] [--height H] [--out <sheet.png>]
        water_viewer --list";
 
@@ -45,6 +48,8 @@ struct Options {
     render: bool,
     /// List every reach laid.
     reaches: bool,
+    /// Run the shallow-water field in place of the network.
+    field: bool,
     film: Film,
 }
 
@@ -81,6 +86,24 @@ fn main() -> ExitCode {
     }
 
     let single = scenarios.len() == 1;
+    if options.field {
+        for scenario in &scenarios {
+            let recorded = if options.render && single {
+                film_field(scenario, &options)
+            } else {
+                run_field(scenario, options.config, &[], |_, _, _| {})
+            };
+            match recorded {
+                Ok(run) if single => println!("{}", field_report(&run, options.every)),
+                Ok(run) => println!("{:<16} {}", run.scenario, timing_line(&run)),
+                Err(message) => {
+                    eprintln!("error: {message}");
+                    return ExitCode::FAILURE;
+                }
+            }
+        }
+        return ExitCode::SUCCESS;
+    }
     for scenario in &scenarios {
         let recorded = if options.render && single {
             film(scenario, &options)
@@ -121,18 +144,7 @@ fn film(scenario: &Scenario, options: &Options) -> Result<voxel_phase::water_vie
     let level = scenario.level()?;
     let mut viewer =
         LevelViewer::open(&level, film.width, film.height).map_err(|e| e.to_string())?;
-    let tiles = film.tiles.max(1);
-    let span = (film.to - film.from).max(0.0) * scenario.duration;
-    let captures: Vec<f32> = (0..tiles)
-        .map(|i| {
-            let f = if tiles == 1 {
-                0.0
-            } else {
-                i as f32 / (tiles - 1) as f32
-            };
-            film.from * scenario.duration + f * span
-        })
-        .collect();
+    let captures = capture_times(scenario, film);
 
     let (eye, look) = film.camera.unwrap_or(scenario.camera);
     let mut frames = Vec::new();
@@ -163,6 +175,58 @@ fn film(scenario: &Scenario, options: &Options) -> Result<voxel_phase::water_vie
     Ok(recorded)
 }
 
+/// Run a scenario on the field and photograph it at evenly spaced moments.
+fn film_field(scenario: &Scenario, options: &Options) -> Result<FieldRun, String> {
+    let film = &options.film;
+    let level = scenario.level()?;
+    let mut viewer =
+        LevelViewer::open(&level, film.width, film.height).map_err(|e| e.to_string())?;
+    let captures = capture_times(scenario, film);
+    let (eye, look) = film.camera.unwrap_or(scenario.camera);
+    let mut frames = Vec::new();
+    let mut failure = None;
+    let mut version = 0;
+    let recorded = run_field(scenario, options.config, &captures, |at, terrain, field| {
+        version += 1;
+        viewer.swap_terrain(terrain);
+        let mut shot = custom_shot(eye, look);
+        shot.label = format!("t = {at:.1} s");
+        match viewer.render_with(&shot, &FieldScene { field, version }) {
+            Ok(image) => frames.push((shot.label, image)),
+            Err(e) => failure = Some(e.to_string()),
+        }
+        viewer.swap_terrain(terrain);
+    })?;
+    if let Some(message) = failure {
+        return Err(message);
+    }
+    let out = film
+        .out
+        .clone()
+        .unwrap_or_else(|| PathBuf::from(format!("/tmp/field_{}.png", scenario.name)));
+    contact_sheet(&frames, film.columns)
+        .save(&out)
+        .map_err(|e| format!("writing {}: {e}", out.display()))?;
+    println!("wrote {}", out.display());
+    Ok(recorded)
+}
+
+/// The moments a filmstrip is shot at, in simulated seconds.
+fn capture_times(scenario: &Scenario, film: &Film) -> Vec<f32> {
+    let tiles = film.tiles.max(1);
+    let span = (film.to - film.from).max(0.0) * scenario.duration;
+    (0..tiles)
+        .map(|i| {
+            let f = if tiles == 1 {
+                0.0
+            } else {
+                i as f32 / (tiles - 1) as f32
+            };
+            film.from * scenario.duration + f * span
+        })
+        .collect()
+}
+
 fn parse_args(args: impl Iterator<Item = String>) -> Result<Option<Options>, String> {
     let mut scenario = None;
     let mut options = Options {
@@ -172,6 +236,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Option<Options>, Str
         csv: None,
         render: true,
         reaches: false,
+        field: false,
         film: Film {
             tiles: 8,
             from: 0.0,
@@ -195,6 +260,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Option<Options>, Str
             }
             "--no-render" => options.render = false,
             "--reaches" => options.reaches = true,
+            "--field" => options.field = true,
             "--fast-forward" => options.config.fast_forward = parse_number(&value(&arg)?)?,
             "--settle" => {
                 options.config.settle = Some(match value(&arg)?.as_str() {

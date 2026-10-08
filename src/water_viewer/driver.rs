@@ -201,7 +201,7 @@ fn describe_reach(id: u32, reach: &crate::water::network::Reach, time: f32) -> S
     )
 }
 
-fn apply(terrain: &mut TerrainWorld, action: Action) -> String {
+pub(super) fn apply(terrain: &mut TerrainWorld, action: Action) -> String {
     match action {
         Action::Blast { centre, radius } => {
             terrain.detonate(centre, &BlastConfig::fixed_radius(radius));

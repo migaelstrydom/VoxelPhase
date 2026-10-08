@@ -1043,7 +1043,7 @@ const SETTLE_HISTORY: [&str; 4] = ["river", "shoreline", "river_diversion", "riv
 #[test]
 fn laying_the_network_again_over_unchanged_ground_leaves_the_water_where_it_was() {
     let mut failures = Vec::new();
-    for scenario in super::scenarios::catalogue() {
+    for scenario in super::scenarios::acceptance() {
         let times = [0.3 * scenario.duration, 0.9 * scenario.duration];
         run_with_captures(&scenario, RunConfig::default(), &times, |t, _, water| {
             let volume = water.volume();
