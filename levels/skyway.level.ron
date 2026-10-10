@@ -74,6 +74,12 @@ Level(
                     // when you are alongside, or ride on and leave the gem.
                     Island(center: (48.0, 11.4, 34.0), half_extents: (2.0, 1.0, 2.0), edge_noise: 0.3),
 
+                    // The river is a lake held between the canyon's ends:
+                    // a sill across the channel at each edge of the map,
+                    // level with the floor, keeps it from running off.
+                    Platform(center: (1.0, 4.0, 32.0),  half_extents: (1.0, 6.0), thickness: 4.0),
+                    Platform(center: (94.0, 4.0, 32.0), half_extents: (1.0, 6.0), thickness: 4.0),
+
                     // A stone in the river with a gem on it. A wade.
                     Platform(center: (60.0, 3.4, 32.0), half_extents: (1.0, 1.0), thickness: 3.0),
                 ],

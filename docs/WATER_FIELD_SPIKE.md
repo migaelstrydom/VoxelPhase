@@ -209,9 +209,10 @@ Changed for play: the field has no ripple tiles, so bodies make spray but no
 waves (`level_viewer --splash` is gone); the sea has no swell; a sample's
 surface is its cell's, flat across the 0.5 m cell.
 
-`skyway`'s pool is authored at 3.0 m in a valley that spills off the map at
-1.01 m (the network found the same outlet), so it opens empty; the network
-drained it slowly instead.
+`skyway`'s pool was authored at 3.0 m in a channel that ran off both ends of
+the map at its 1.0 m bed (the network found the same outlet and drained it
+slowly; the field opened it empty). A sill across each end, level with the
+canyon floor, now holds it: 1756 m³.
 
 ## 8. Not done
 
