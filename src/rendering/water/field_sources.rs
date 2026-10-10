@@ -76,6 +76,32 @@ const BANK_DEPTH: f64 = 0.1;
 /// curtain. Lower steps are a sheet running down a slope, up to 200 %.
 pub(super) const JOIN: f64 = 1.0;
 
+/// The depth water at `level` stands over a dry bank whose floor is at
+/// `bed`, as the surface carried over it takes it: no more than zero, and no
+/// further below than `BANK_DEPTH`, so a surface carried over a wall's foot
+/// reaches the wall instead of being cut short of it.
+pub(super) fn bank_depth(level: f64, bed: f64) -> f64 {
+    (level - bed).clamp(-BANK_DEPTH, 0.0)
+}
+
+/// Least flow over an edge, per metre of it, that a falling sheet draws as
+/// full, m²/s: a sheet is as deep as the water pours over its edge, so the
+/// draw cuts it where it only trickles.
+const FULL_POUR: f64 = 1.0;
+
+/// How deep a sheet falling from cell `own` over the edge facing `face` is
+/// drawn: the water's depth there by its speed out over the edge, over
+/// `FULL_POUR`.
+pub(super) fn pour(
+    field: &WaterField,
+    cells: &DrawnCells,
+    own: SpanIndex,
+    face: Vector2<f32>,
+) -> f32 {
+    let out = field.velocity(own).dot(&face).max(0.0) as f64;
+    (cells.depth(own) * out / FULL_POUR) as f32
+}
+
 /// One cell meeting at a corner, as the corner sees it.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct Meeting {
@@ -153,7 +179,7 @@ pub(super) fn gather(meetings: &[Meeting], level: f64) -> (Corner, Shape) {
                 shape.wet |= 1 << i;
                 continue;
             }
-            None => (height - m.bed).clamp(-BANK_DEPTH, 0.0),
+            None => bank_depth(height, m.bed),
         };
         sum += depth;
         count += 1.0;
@@ -204,6 +230,9 @@ pub(super) enum VertexSource {
         bank: SpanIndex,
         floor: f32,
     },
+    /// A falling sheet's top: vertex `from`'s corner, drawn as deep as the
+    /// wet cell `own` pours over the sheet's edge.
+    Lip { from: u32, own: SpanIndex },
     /// A falling sheet's foot: the lower cell's corner below the sheet's
     /// top, vertex `from`, whose depth and flow it takes. The cells are the
     /// corner's, the lower cell's first. The sheet stands while the wet cell
@@ -309,7 +338,15 @@ pub(super) fn refresh(field: &WaterField, cells: &DrawnCells, mesh: &mut RiverMe
                 let source = mesh.vertices[from as usize];
                 let vertex = &mut mesh.vertices[v];
                 vertex.surface = source.surface;
-                vertex.depth = (level - cells.bed(bank) as f64).min(0.0) as f32;
+                vertex.depth = bank_depth(level, cells.bed(bank) as f64) as f32;
+                vertex.flow = source.flow;
+            }
+            &VertexSource::Lip { from, own } => {
+                let source = mesh.vertices[from as usize];
+                let vertex = &mut mesh.vertices[v];
+                let pour = pour(field, cells, own, vertex.face);
+                vertex.surface = source.surface;
+                vertex.depth = source.depth.min(pour);
                 vertex.flow = source.flow;
             }
             VertexSource::Foot {

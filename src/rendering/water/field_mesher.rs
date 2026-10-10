@@ -233,7 +233,7 @@ impl<'a> FieldScene<'a> {
             }
             if let Some(&(bank_cell, bank, floor)) = bank {
                 mesh.sources.reads(cells, bank_cell);
-                let far = (level - bank.bed).min(0.0);
+                let far = field_sources::bank_depth(level, bank.bed);
                 let ends = skirt(step.di, step.dk);
                 let skirt_corners = ends.map(|(i, away)| Corner {
                     height: corners[i].height,
@@ -268,8 +268,9 @@ impl FieldScene<'_> {
     /// A sheet of water falling over the edge a cell shares with the lower
     /// cell across `step`: from the cell's own corners on that edge (vertex
     /// `first + i`) down to the lower cell's corners there, so it meets both
-    /// surfaces, and as deep as the water it falls from, so it is cut where
-    /// that water is.
+    /// surfaces. It is as deep as the water pours over the edge, no deeper
+    /// than the water it falls from, so it is cut where little or nothing
+    /// pours.
     fn sheet(
         &self,
         mesh: &mut RiverMesh,
@@ -291,14 +292,20 @@ impl FieldScene<'_> {
         let (x0, z0) = column.min_corner();
         let face = Vector2::new(step.di as f32, step.dk as f32);
         let base = mesh.vertices.len() as u32;
-        let tops = ends.map(|(i, _)| mesh.vertices[(first as usize) + i]);
-        for (&(i, _), top) in ends.iter().zip(tops) {
-            mesh.vertices.push(RiverVertex { face, ..top });
-            mesh.sources.vertices.push(VertexSource::Edge {
+        let pour = field_sources::pour(self.field, &self.drawn_cells(), own, face);
+        for &(i, _) in &ends {
+            let top = mesh.vertices[(first as usize) + i];
+            mesh.vertices.push(RiverVertex {
+                face,
+                depth: top.depth.min(pour),
+                ..top
+            });
+            mesh.sources.vertices.push(VertexSource::Lip {
                 from: first + i as u32,
+                own,
             });
         }
-        for &(i, (sx, sz)) in ends.iter().rev() {
+        for (end, &(i, (sx, sz))) in ends.iter().enumerate().rev() {
             let (foot, _, source) = self.corner(lower_span, lower_level, sx, sz);
             let VertexSource::Corner { cells, shape } = source else {
                 unreachable!("a corner reads its cells");
@@ -306,16 +313,15 @@ impl FieldScene<'_> {
             for &c in &cells {
                 mesh.sources.reads(self.field.cells(), c);
             }
-            let top = mesh.vertices[(first as usize) + i];
+            let top = mesh.vertices[base as usize + end];
             let (cx, cz) = offsets[i];
             mesh.vertices.push(RiverVertex {
                 xz: Vector2::new(x0 + cx * COLUMN_SIZE, z0 + cz * COLUMN_SIZE),
                 surface: foot.height as f32,
-                face,
                 ..top
             });
             mesh.sources.vertices.push(VertexSource::Foot {
-                from: first + i as u32,
+                from: base + end as u32,
                 cells,
                 shape,
                 own,
