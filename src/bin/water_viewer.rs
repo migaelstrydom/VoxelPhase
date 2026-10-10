@@ -134,6 +134,7 @@ fn film(scenario: &Scenario, options: &Options) -> Result<Run, String> {
                 field,
                 versions: &versions,
                 clock: at,
+                waves: None,
             },
         ) {
             Ok(image) => frames.push((shot.label, image)),

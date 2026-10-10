@@ -56,9 +56,14 @@ use crate::resources::manager::ResourceManager;
 use crate::resources::textures::TextureManager;
 use crate::systems::probe_owner;
 use crate::terrain::{self, BlastConfig, TerrainWorld};
-use crate::water::WaterWorld;
+use crate::water::{Disturbance, Disturbances, WaterWorld};
 
 use super::shots::ViewerShot;
+
+/// A splash's radius, m, and the downward speed it gives the surface, m/s:
+/// something the size of a crate dropped in.
+const SPLASH_RADIUS: f32 = 0.5;
+const SPLASH_SPEED: f32 = -3.0;
 
 /// The most frames a still is drawn over while its reflection probes are
 /// handed out. Each admits a few; this covers a probe atlas's worth.
@@ -144,10 +149,17 @@ impl LevelViewer {
         std::mem::swap(&mut *self.world.write_resource::<TerrainWorld>(), terrain);
     }
 
-    /// Set off each blast, then run the water on for `seconds` of 60 Hz
-    /// frames. The blasts' frame lasts `blast_dt`: a blast frame in the game
-    /// is a long one. A level without water is only blasted.
-    pub fn stir_water(&mut self, blasts: &[Point3<f32>], blast_dt: f32, seconds: f32) {
+    /// Set off each blast, drop each splash on the water, then run the water
+    /// on for `seconds` of 60 Hz frames. The blasts' frame lasts `blast_dt`:
+    /// a blast frame in the game is a long one. A level without water is only
+    /// blasted.
+    pub fn stir_water(
+        &mut self,
+        blasts: &[Point3<f32>],
+        splashes: &[Point3<f32>],
+        blast_dt: f32,
+        seconds: f32,
+    ) {
         let mut terrain = self.world.write_resource::<TerrainWorld>();
         for &at in blasts {
             terrain.detonate(at, &BlastConfig::default());
@@ -162,6 +174,12 @@ impl LevelViewer {
             water.on_terrain_update(&terrain);
             water.step(blast_dt);
         }
+        water.apply(&Disturbances {
+            pending: splashes
+                .iter()
+                .map(|&at| (at, SPLASH_RADIUS, Disturbance::Velocity(SPLASH_SPEED)))
+                .collect(),
+        });
         let frame = 1.0 / 60.0;
         for _ in 0..(seconds / frame).round() as usize {
             water.step(frame);

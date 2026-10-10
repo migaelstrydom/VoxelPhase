@@ -18,6 +18,7 @@
 //! cargo run --bin level_viewer -- levels/subsidence.level.ron --shot pit_rim --width 1200 --height 800
 //! cargo run --bin level_viewer -- levels/subsidence.level.ron --eye 60,20,40 --look 74,10,62
 //! cargo run --bin level_viewer -- levels/island_sea.level.ron --eye 0,4,20 --look 0,0,8 --blast 0,0,6 --run 10
+//! cargo run --bin level_viewer -- levels/island_sea.level.ron --eye 0,4,20 --look 0,0,8 --splash 0,0,6 --run 1.5
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -49,6 +50,8 @@ struct Options {
     view: Option<(Point3<f32>, Point3<f32>)>,
     /// Grenade blasts set off before the shots.
     blasts: Vec<Point3<f32>>,
+    /// Splashes dropped on the water before the shots.
+    splashes: Vec<Point3<f32>>,
     /// How long the blasts' frame lasts, s.
     blast_dt: f32,
     /// How long the water runs before the shots, after any blasts, s.
@@ -89,9 +92,10 @@ fn run(options: &Options) -> EngineResult<()> {
     );
 
     let mut viewer = LevelViewer::open(&level, options.width, options.height)?;
-    if !options.blasts.is_empty() || options.run.is_some() {
+    if !options.blasts.is_empty() || !options.splashes.is_empty() || options.run.is_some() {
         viewer.stir_water(
             &options.blasts,
+            &options.splashes,
             options.blast_dt,
             options.run.unwrap_or(DEFAULT_RUN),
         );
@@ -204,6 +208,7 @@ fn parse_args() -> Result<Option<Options>, String> {
     let mut eye = None;
     let mut look = None;
     let mut blasts = Vec::new();
+    let mut splashes = Vec::new();
     let mut blast_dt = 0.1;
     let mut run = None;
 
@@ -220,6 +225,7 @@ fn parse_args() -> Result<Option<Options>, String> {
             "--eye" => eye = Some(parse_point(&mut args, "--eye")?),
             "--look" => look = Some(parse_point(&mut args, "--look")?),
             "--blast" => blasts.push(parse_point(&mut args, "--blast")?),
+            "--splash" => splashes.push(parse_point(&mut args, "--splash")?),
             "--blast-dt" => blast_dt = parse_f32(&mut args, "--blast-dt")?,
             "--run" => run = Some(parse_f32(&mut args, "--run")?),
             "--width" => width = parse_u32(&mut args, "--width")?,
@@ -255,6 +261,7 @@ fn parse_args() -> Result<Option<Options>, String> {
         shot,
         view,
         blasts,
+        splashes,
         blast_dt,
         run,
     }))
@@ -302,8 +309,9 @@ fn print_usage() {
     println!("  --eye x,y,z        an explicit camera position, replacing the standard set");
     println!("  --look x,y,z       what that camera points at (required with --eye)");
     println!("  --blast x,y,z      set off a grenade there first (repeatable)");
+    println!("  --splash x,y,z     drop a splash on the water there (repeatable)");
     println!("  --blast-dt <s>     how long the blast's frame lasts (default 0.1)");
-    println!("  --run <s>          run the water this long first, after any blasts (default 1 with --blast)");
+    println!("  --run <s>          run the water this long first, after any blasts (default 1 with --blast or --splash)");
     println!("  --width <px>       per-tile width (default {DEFAULT_WIDTH})");
     println!("  --height <px>      per-tile height (default {DEFAULT_HEIGHT})");
     println!("  --columns <n>      tiles per sheet row (default {DEFAULT_COLUMNS})");

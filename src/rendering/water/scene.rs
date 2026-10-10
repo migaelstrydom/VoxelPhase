@@ -8,7 +8,8 @@
 
 use crate::water::geometry::{SpanChunkCoord, COLUMNS_PER_CHUNK};
 use crate::water::ids::SurfaceId;
-use crate::water::surface::{RippleTiles, Swell, TILE_CORNERS};
+use crate::water::surface::{RippleKey, RippleTiles, Swell, TILE_CORNERS};
+use crate::water::waves::Sea;
 
 use super::river_mesh::RiverMesh;
 use super::vertex::BasinVertex;
@@ -45,26 +46,36 @@ pub struct RippleTileView<'a> {
     pub corners: &'a [f32; TILE_CORNERS * TILE_CORNERS],
     /// Edges beside coarse water, one bit each: +x, −x, +z, −z.
     pub sealed: u32,
+    /// The still level the tile ripples about, and the swell on it.
+    pub level: f32,
+    pub swell: Swell,
+    /// The river surface it is drawn in place of, if any.
+    pub replaces: Option<SurfaceId>,
     ripples: &'a RippleTiles,
 }
 
 impl<'a> RippleTileView<'a> {
+    /// The awake tile at `key`, rippling about `level` under `swell`, drawn
+    /// in place of the river surface `replaces`.
     pub fn new(
         ripples: &'a RippleTiles,
-        tile: SpanChunkCoord,
-        body: SurfaceId,
-        floors: &'a [f32; COLUMNS_PER_CHUNK],
-        corners: &'a [f32; TILE_CORNERS * TILE_CORNERS],
-        sealed: u32,
-    ) -> Self {
-        Self {
-            tile,
-            body,
-            floors,
-            corners,
-            sealed,
+        key: &RippleKey,
+        level: f32,
+        swell: Swell,
+        replaces: Option<SurfaceId>,
+    ) -> Option<Self> {
+        let (_, tile) = ripples.active().find(|(k, _)| *k == key)?;
+        Some(Self {
+            tile: key.0,
+            body: key.1,
+            floors: &tile.mask.floors,
+            corners: &tile.mask.corners,
+            sealed: ripples.sealed_edges(key),
+            level,
+            swell,
+            replaces,
             ripples,
-        }
+        })
     }
 
     /// Write the tile's heights as drawn, over `PADDED_CELLS`².
@@ -92,6 +103,12 @@ pub trait WaterScene {
     /// The clock the swell runs on, s.
     fn clock(&self) -> f32 {
         0.0
+    }
+
+    /// The sea's level and swell, which river surfaces near sea level take
+    /// up (`waves::swell_share`).
+    fn sea(&self) -> Option<Sea> {
+        None
     }
 
     /// Every awake ripple tile.

@@ -6,6 +6,7 @@ use nalgebra::{Point3, Vector3};
 use super::buoyancy::{WaterSample as SurfaceSample, WaterSurface};
 use super::field::{WaterField, WET_DEPTH};
 use super::ids::{SurfaceId, WaterBodyId};
+use super::waves::SurfaceWaves;
 
 /// The water at a point.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -26,19 +27,26 @@ pub struct WaterSample {
 /// all its water is one body.
 pub const FIELD_BODY: WaterBodyId = SurfaceId(0);
 
-/// Point queries against one [`WaterField`].
+/// Point queries against one [`WaterField`] and the waves over it.
 #[derive(Clone, Copy)]
 pub struct WaterQuery<'a> {
     field: &'a WaterField,
+    waves: &'a SurfaceWaves,
+    /// Seconds simulated: the swell's clock.
+    clock: f32,
 }
 
 impl<'a> WaterQuery<'a> {
-    pub fn new(field: &'a WaterField) -> Self {
-        Self { field }
+    pub fn new(field: &'a WaterField, waves: &'a SurfaceWaves, clock: f32) -> Self {
+        Self {
+            field,
+            waves,
+            clock,
+        }
     }
 
-    /// The level of the water at a 3D point. `None` if the point's span
-    /// holds no water.
+    /// The still level of the water at a 3D point, without swell or
+    /// ripples. `None` if the point's span holds no water.
     pub fn level_at(&self, point: Point3<f32>) -> Option<f32> {
         self.field.level_at(point)
     }
@@ -56,11 +64,15 @@ impl<'a> WaterQuery<'a> {
             return None;
         }
         let current = self.field.velocity(cell);
+        let still = cells.surface(cell) as f32;
+        let depth = cells.depth(cell) as f32;
+        let swell = self.waves.swell_at(still);
+        let (x, z, t) = (point.x, point.z, self.clock);
         Some(WaterSample {
-            surface: cells.surface(cell) as f32,
+            surface: still + swell.height(x, z, t, depth) + self.waves.ripple_at(x, z),
             floor: cells.bed(cell),
             velocity: Vector3::new(current.x, 0.0, current.y),
-            rise: 0.0,
+            rise: swell.rise_rate(x, z, t, depth),
             body: FIELD_BODY,
         })
     }

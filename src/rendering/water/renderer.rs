@@ -41,7 +41,8 @@ use crate::rendering::target::RefractionCopy;
 use crate::rendering::view_volume::ViewVolume;
 use crate::water::geometry::{CHUNK_COLUMNS, COLUMNS_PER_CHUNK, COLUMN_SIZE};
 use crate::water::ids::SurfaceId;
-use crate::water::surface::{RippleConfig, PADDED_CELLS_PER_TILE, TILE_CELLS, TILE_CORNERS};
+use crate::water::surface::{RippleConfig, Swell, PADDED_CELLS_PER_TILE, TILE_CELLS, TILE_CORNERS};
+use crate::water::waves::SEA_BAND;
 
 /// Ripple tiles one frame can draw: the ripple budget.
 fn ripple_layers() -> usize {
@@ -66,6 +67,19 @@ struct RippleSlot {
 /// How far above and below its level a tile's surface may be drawn, over its
 /// swell, for its ripples, m.
 const TILE_HEIGHT_PAD: f32 = 0.5;
+
+/// One awake ripple tile, as uploaded for this frame.
+#[derive(Debug, Clone, Copy)]
+struct RippleDraw {
+    /// Its layer in the storage buffer.
+    layer: usize,
+    /// Edges beside coarse water.
+    sealed: u32,
+    level: f32,
+    swell: Swell,
+    /// The river surface it is drawn in place of.
+    replaces: Option<SurfaceId>,
+}
 
 /// What a frame's prepared water tells the renderer.
 #[derive(Debug, Clone, Default)]
@@ -405,33 +419,59 @@ impl WaterRenderer {
             // anywhere on the screen.
             footprint.cover_all();
         }
+        let replaced: Vec<SurfaceId> = layers.values().filter_map(|t| t.replaces).collect();
+        let sea = water.sea();
+        let (swell, sea_level) = sea.map_or((Swell::default(), 0.0), |s| (s.swell, s.level));
         for draw in &self.rivers.mesh().draws {
+            if replaced.contains(&draw.id) {
+                continue;
+            }
             self.plan.push(PlannedDraw {
                 surface: WaterSurface::Rivers,
-                constants: [SHORE_DEPTH, 0.0, 0.0, clock, 0.0, 0.0, 0.0, 0.0],
+                constants: [
+                    SHORE_DEPTH,
+                    swell.amplitude,
+                    swell.phase,
+                    clock,
+                    sea_level,
+                    SEA_BAND,
+                    0.0,
+                    0.0,
+                ],
                 first_index: draw.first_index,
                 index_count: draw.index_count,
             });
         }
 
-        let mut tiles: Vec<(&(i32, i32, SurfaceId), &(usize, u32))> = layers.iter().collect();
-        tiles.sort();
-        for (&(tx, tz, id), &(layer, sealed)) in tiles {
-            let Some(level) = water.level(id) else {
-                continue;
-            };
-            if !in_view(&mut footprint, (tx, tz), level, water.swell(id).amplitude) {
+        let mut tiles: Vec<(&(i32, i32, SurfaceId), &RippleDraw)> = layers.iter().collect();
+        tiles.sort_by_key(|(key, _)| **key);
+        for (&(tx, tz, _), ripple) in tiles {
+            if !in_view(
+                &mut footprint,
+                (tx, tz),
+                ripple.level,
+                ripple.swell.amplitude,
+            ) {
                 continue;
             }
             let tile = [
                 tx as f32 * extent,
                 tz as f32 * extent,
-                layer as f32,
-                sealed as f32,
+                ripple.layer as f32,
+                ripple.sealed as f32,
             ];
             self.plan.push(PlannedDraw {
                 surface: WaterSurface::Ripples,
-                constants: body(id, level, tile),
+                constants: [
+                    ripple.level,
+                    ripple.swell.amplitude,
+                    ripple.swell.phase,
+                    clock,
+                    tile[0],
+                    tile[1],
+                    tile[2],
+                    tile[3],
+                ],
                 first_index: 0,
                 index_count: self.fine_indices,
             });
@@ -534,12 +574,11 @@ impl WaterRenderer {
 
 impl WaterRenderer {
     /// Write this frame's awake ripple tiles into the slot's storage buffer.
-    /// Returns each tile's layer and sealed edges, keyed by (tile x, tile z,
-    /// body).
+    /// Returns how to draw each, keyed by (tile x, tile z, body).
     fn upload_ripples(
         &self,
         water: &dyn WaterScene,
-    ) -> EngineResult<FxHashMap<(i32, i32, SurfaceId), (usize, u32)>> {
+    ) -> EngineResult<FxHashMap<(i32, i32, SurfaceId), RippleDraw>> {
         let mut layers = FxHashMap::default();
         let tiles = water.ripple_tiles();
         if tiles.is_empty() {
@@ -569,7 +608,16 @@ impl WaterRenderer {
                     base.add(PADDED_CELLS_PER_TILE + COLUMNS_PER_CHUNK),
                     TILE_CORNERS * TILE_CORNERS,
                 );
-                layers.insert((tile.tile.x, tile.tile.z, tile.body), (layer, tile.sealed));
+                layers.insert(
+                    (tile.tile.x, tile.tile.z, tile.body),
+                    RippleDraw {
+                        layer,
+                        sealed: tile.sealed,
+                        level: tile.level,
+                        swell: tile.swell,
+                        replaces: tile.replaces,
+                    },
+                );
             }
             buffer.unmap_memory();
         }

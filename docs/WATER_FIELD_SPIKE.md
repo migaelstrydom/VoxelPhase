@@ -205,9 +205,15 @@ Found getting there:
 | A spring's 3 × 3 footprint wet the bank above the channel it fell into | A jet's footprint spreads level and down, not up |
 | A river between high walls was not drawn | A dry cell counts at most 10 cm below the water in a corner's depth |
 
-Changed for play: the field has no ripple tiles, so bodies make spray but no
-waves (`level_viewer --splash` is gone); the sea has no swell; a sample's
-surface is its cell's, flat across the 0.5 m cell.
+Waves over the field (`water/waves.rs`): the network's ripple tiles and the
+sea's swell, laid over the field's surface and carrying no water. A ripple
+tile wakes only where its 8 m of water is flat to 3 cm (lakes, the sea; not
+running water) and is drawn on the fine grid in place of that chunk's
+surface. Water takes the sea's swell by how near sea level it stands, all of
+it there and none 0.5 m above or below, so a lake above the sea stays still
+and a river takes the swell up over its last stretch. The query adds both to
+the surface, so floats ride what is drawn. A sample's surface is otherwise
+its cell's, flat across the 0.5 m cell.
 
 `skyway`'s pool was authored at 3.0 m in a channel that ran off both ends of
 the map at its 1.0 m bed (the network found the same outlet and drained it
@@ -216,7 +222,8 @@ canyon floor, now holds it: 1756 m³.
 
 ## 8. Not done
 
-- waves from bodies (ripples) and the sea's swell;
+- ripples on running water, and a swell on lakes (the network gave large ones one);
+- grenades do not ripple the water, only bodies moving in it;
 - the GPU heightfield path for drawing;
 - parallel stepping (chunks are independent within a substep's phases);
 - fall sheets;

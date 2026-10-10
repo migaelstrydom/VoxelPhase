@@ -4,7 +4,7 @@ use nalgebra::{Point3, Vector3, Vector4};
 use rand::Rng;
 use specs::{Join, LendJoin, Read, ReadStorage, System, Write};
 
-use crate::components::{Position, RigidBodyComponent, Velocity};
+use crate::components::{CameraComponent, Position, RigidBodyComponent, Velocity};
 use crate::debug::DebugLog;
 use crate::drive::Actuator;
 use crate::particles::{ColourRamp, Particle, ParticleConfig, ParticlePool};
@@ -12,14 +12,15 @@ use crate::systems::PhysicsResource;
 use crate::terrain::TerrainWorld;
 use crate::time::Time;
 use crate::water::{
-    BodySnapshot, SplashEvent, StillSurface, WakeEvent, WaterWorld, WaveBodyCoupler,
+    BodySnapshot, Disturbances, SplashEvent, WakeEvent, WaterWorld, WaveBodyCoupler,
 };
 
 /// Steps the water each frame.
 ///
-/// Catches the water up with any terrain edit the frame made, advances the
-/// field by the frame's delta time, then lets the coupler find bodies
-/// entering or moving through water, for splash and wake spray.
+/// Catches the water up with any terrain edit the frame made, ranks ripple
+/// tiles by distance from the camera, advances the field and its waves by
+/// the frame's delta time, then lets the coupler find bodies entering or
+/// moving through water, for ripples and for splash and wake spray.
 pub struct WaterSystem;
 
 impl<'a> System<'a> for WaterSystem {
@@ -33,6 +34,7 @@ impl<'a> System<'a> for WaterSystem {
         ReadStorage<'a, Position>,
         ReadStorage<'a, Velocity>,
         ReadStorage<'a, Actuator>,
+        ReadStorage<'a, CameraComponent>,
         Write<'a, DebugLog>,
         Write<'a, ParticlePool>,
         Read<'a, ParticleConfig>,
@@ -50,6 +52,7 @@ impl<'a> System<'a> for WaterSystem {
             positions,
             velocities,
             actuators,
+            cameras,
             mut debug_log,
             mut particle_pool,
             particle_config,
@@ -62,12 +65,15 @@ impl<'a> System<'a> for WaterSystem {
         if let Some(ref terrain) = terrain_opt {
             water.on_terrain_update(terrain);
         }
+        water.set_focus(cameras.join().next().map(|camera| camera.0.position));
         water.step(time.delta_seconds());
 
         if let Some(mut coupler) = coupler_opt {
             let snapshots =
                 build_body_snapshots(&physics, &bodies, &positions, &velocities, &actuators);
-            coupler.update(&snapshots, &mut StillSurface, &water.query());
+            let mut disturbances = Disturbances::default();
+            coupler.update(&snapshots, &mut disturbances, &water.query());
+            water.apply(&disturbances);
             for splash in coupler.drain_splash_events() {
                 spawn_splash_particles(&splash, &particle_config, &mut particle_pool);
             }

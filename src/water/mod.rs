@@ -3,6 +3,7 @@
 //! ```text
 //!   presentation   rendering/water (FieldScene)        the field's surface, read again as it moves
 //!   interaction    world · query · buoyancy · coupling  WaterQuery::sample(point)
+//!   waves          waves · surface                     ripples and swell over the field
 //!   field          field                               depths in cells, discharges on faces
 //!   geometry       geometry                            spans, and the graph joining them
 //! ```
@@ -17,6 +18,7 @@ pub mod ids;
 pub mod query;
 pub mod sleep_tracker;
 pub mod surface;
+pub mod waves;
 pub mod world;
 
 pub use coupling::{

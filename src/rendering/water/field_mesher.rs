@@ -28,6 +28,8 @@ use smallvec::SmallVec;
 use crate::water::field::WaterField;
 use crate::water::geometry::{Column, SpanIndex, SpanRef, Step, COLUMN_SIZE, ORTHOGONAL};
 use crate::water::ids::SurfaceId;
+use crate::water::surface::Swell;
+use crate::water::waves::{Sea, SurfaceWaves};
 use crate::water::{WaterWorld, FIELD_BODY};
 
 use super::field_sources::{
@@ -35,7 +37,7 @@ use super::field_sources::{
 };
 use super::ocean_ring::{append_ring, occupied_bounds, MapRect};
 use super::river_mesh::{RiverDraw, RiverMesh};
-use super::scene::{MeshKey, WaterMesh, WaterScene};
+use super::scene::{MeshKey, RippleTileView, WaterMesh, WaterScene};
 use super::vertex::RiverVertex;
 
 /// The field, as the water renderer sees it.
@@ -46,6 +48,8 @@ pub struct FieldScene<'a> {
     pub versions: &'a [u32],
     /// Seconds simulated: the clock the drawn currents run on.
     pub clock: f32,
+    /// The ripples and swell over the field, if it has any.
+    pub waves: Option<&'a SurfaceWaves>,
 }
 
 impl<'a> FieldScene<'a> {
@@ -55,11 +59,30 @@ impl<'a> FieldScene<'a> {
             field: world.field(),
             versions: world.versions(),
             clock: world.clock(),
+            waves: Some(world.waves()),
         }
     }
 }
 
-impl FieldScene<'_> {
+impl<'a> FieldScene<'a> {
+    /// Each awake tile, over still water, drawn in place of its chunk's
+    /// surface.
+    fn ripple_views(&self) -> Vec<RippleTileView<'a>> {
+        let Some(waves) = self.waves else {
+            return Vec::new();
+        };
+        let cells = self.field.cells();
+        waves
+            .ripples()
+            .active()
+            .filter_map(|(key, tile)| {
+                let level = tile.mask.level;
+                let replaces = cells.slot_of(key.0).map(|slot| SurfaceId(slot as u32));
+                RippleTileView::new(waves.ripples(), key, level, waves.swell_at(level), replaces)
+            })
+            .collect()
+    }
+
     fn cell(&self, span: SpanRef) -> Option<SpanIndex> {
         self.field
             .cells()
@@ -340,6 +363,21 @@ impl WaterScene for FieldScene<'_> {
         self.clock
     }
 
+    /// The sea's swell, for its ring past the map's edges.
+    fn swell(&self, body: SurfaceId) -> Swell {
+        self.sea()
+            .filter(|_| body == FIELD_BODY)
+            .map_or(Swell::default(), |sea| sea.swell)
+    }
+
+    fn sea(&self) -> Option<Sea> {
+        self.waves?.sea()
+    }
+
+    fn ripple_tiles(&self) -> Vec<RippleTileView<'_>> {
+        self.ripple_views()
+    }
+
     fn ocean_key(&self) -> MeshKey {
         self.field
             .sea()
@@ -425,6 +463,18 @@ impl WaterScene for WaterWorld {
 
     fn clock(&self) -> f32 {
         FieldScene::of(self).clock()
+    }
+
+    fn swell(&self, body: SurfaceId) -> Swell {
+        FieldScene::of(self).swell(body)
+    }
+
+    fn sea(&self) -> Option<Sea> {
+        FieldScene::of(self).sea()
+    }
+
+    fn ripple_tiles(&self) -> Vec<RippleTileView<'_>> {
+        FieldScene::of(self).ripple_views()
     }
 
     fn ocean_key(&self) -> MeshKey {

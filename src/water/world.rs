@@ -4,20 +4,26 @@
 //! ```text
 //!   WaterWorld
 //!     field     WaterField       depths in cells, discharges on faces
+//!     waves     SurfaceWaves     ripples and the sea's swell, over the field
 //!     versions  SurfaceVersions  per chunk: moves when its surface visibly does
-//!     clock     f64              seconds simulated: the shader's flow clock
+//!     clock     f64              seconds simulated: the shaders' and swell's clock
 //! ```
 //!
-//! Each frame: carry the water over any terrain edit, then step the field.
+//! Each frame: carry the water over any terrain edit, step the field, then
+//! step the ripples over it.
 
 use std::time::{Duration, Instant};
+
+use nalgebra::Point3;
 
 use crate::debug::DebugLog;
 use crate::level::{Settle, WaterConfig};
 use crate::terrain::TerrainWorld;
 
+use super::coupling::Disturbances;
 use super::field::{SurfaceVersions, WaterField};
 use super::query::WaterQuery;
+use super::waves::SurfaceWaves;
 
 /// Step the field takes while the level opens steady, s: the solver takes
 /// as many substeps within it as its water needs.
@@ -35,6 +41,7 @@ const LONGEST_FRAME: f32 = 0.1;
 /// All of a level's water.
 pub struct WaterWorld {
     field: WaterField,
+    waves: SurfaceWaves,
     /// Each chunk's surface version, for the renderer.
     versions: SurfaceVersions,
     /// Seconds simulated: the clock the drawn currents run on.
@@ -55,6 +62,7 @@ impl WaterWorld {
         };
         Self {
             versions: SurfaceVersions::new(field.cells()),
+            waves: SurfaceWaves::new(config),
             field,
             clock: 0.0,
             opened: (settled, started.elapsed()),
@@ -84,12 +92,27 @@ impl WaterWorld {
         moving.sort_unstable();
         moving.dedup();
         self.versions.update(self.field.cells(), moving);
+        self.waves.step(&self.field, dt);
         self.clock += dt as f64;
+    }
+
+    /// Stir the ripples with every disturbance the coupler collected.
+    pub fn apply(&mut self, disturbances: &Disturbances) {
+        self.waves.apply(&self.field, disturbances);
+    }
+
+    /// Where the camera is, for ranking ripple tiles against their budget.
+    pub fn set_focus(&mut self, focus: Option<Point3<f32>>) {
+        self.waves.set_focus(focus);
     }
 
     /// Point queries against the water: buoyancy, currents, the player.
     pub fn query(&self) -> WaterQuery<'_> {
-        WaterQuery::new(&self.field)
+        WaterQuery::new(&self.field, &self.waves, self.clock())
+    }
+
+    pub fn waves(&self) -> &SurfaceWaves {
+        &self.waves
     }
 
     pub fn field(&self) -> &WaterField {
@@ -145,6 +168,10 @@ impl WaterWorld {
                 self.field.cells().chunks.len(),
                 frame.stats.substeps
             ),
+        );
+        log.add(
+            "Water/Ripples",
+            format!("{} tiles awake", self.waves.ripples().active_count()),
         );
         log.add(
             "Water/Time/Step",

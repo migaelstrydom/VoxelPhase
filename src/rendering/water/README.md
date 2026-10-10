@@ -82,7 +82,13 @@ the sea is the ocean ring.
 
 The vertex shader adds the body's swell (`swell.glsl`, a sum of five sines
 shared with the CPU so buoyancy floats bodies on the drawn surface), faded
-out over the last metre of depth using the vertex's floor.
+out over the last metre of depth using the vertex's floor. A river surface
+(`river.vert`) takes the sea's swell by how near sea level its water stands
+(`water::waves::swell_share`), so lakes above the sea stay still.
+
+The field's ripple tiles wake only over still water, and each is drawn in
+place of its chunk's river surface (`RippleTileView::replaces`), at the
+tile's own level and swell.
 
 A tile whose ripples are awake is not drawn from the coarse mesh. Instead a
 static 65 × 65 grid over the 8 m tile (`ripple.vert`) is displaced by the
