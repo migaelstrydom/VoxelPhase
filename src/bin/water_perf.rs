@@ -5,14 +5,11 @@
 //! running while it responds. Reports the field's CPU time per frame, quiet,
 //! on the blast frame, and through the transient: stepping, carrying the
 //! water over the edit, and rebuilding the drawn surface; and its opening.
-//! `--network` adds the hydrology network's figures: the same run, the
-//! worst-case re-flood, ripples, the scripted pond breach and steady loads.
 //!
 //! ```text
 //! cargo run --release --bin water_perf
 //! cargo run --release --bin water_perf -- --level levels/thin_ice.level.ron
 //! cargo run --release --bin water_perf -- --quiet 4 --transient 20
-//! cargo run --release --bin water_perf -- --network --basins
 //! ```
 //!
 //! No Vulkan, no window, no ECS. Always measure a release build.
@@ -20,19 +17,9 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use voxel_phase::water_perf::{
-    basin_table, field_table, ripple_cost, ripple_line, run_breach, run_field_level, run_level,
-    steady_line, steady_loads, subject_table, worst_case, worst_case_line, Durations,
-};
+use voxel_phase::water_perf::{field_table, run_field_level, Durations};
 
-const USAGE: &str = "usage: water_perf [--level <level.ron>]... [--quiet S] [--transient S]
-                  [--network] [--basins] [--repeats N]";
-
-/// Frames of ripple stepping measured per level.
-const RIPPLE_FRAMES: usize = 240;
-
-/// Re-floods of each level's largest basin, for the worst-case figure.
-const WORST_CASE_REPEATS: usize = 20;
+const USAGE: &str = "usage: water_perf [--level <level.ron>]... [--quiet S] [--transient S]";
 
 /// Every level that has water.
 const DEFAULT_LEVELS: [&str; 8] = [
@@ -50,10 +37,6 @@ const DEFAULT_LEVELS: [&str; 8] = [
 struct Options {
     levels: Vec<PathBuf>,
     durations: Durations,
-    /// Also measure the hydrology network.
-    network: bool,
-    show_basins: bool,
-    repeats: usize,
 }
 
 fn main() -> ExitCode {
@@ -68,15 +51,8 @@ fn main() -> ExitCode {
     if cfg!(debug_assertions) {
         eprintln!("warning: debug build — timings are not representative; use --release\n");
     }
-    let Options {
-        levels,
-        durations,
-        network,
-        show_basins,
-        repeats,
-    } = options;
+    let Options { levels, durations } = options;
 
-    println!("The field");
     for level in &levels {
         match run_field_level(level, durations) {
             Ok(subject) => println!("{}", field_table(&subject)),
@@ -86,78 +62,12 @@ fn main() -> ExitCode {
             }
         }
     }
-    if !network {
-        return ExitCode::SUCCESS;
-    }
-
-    println!("The hydrology network");
-    for level in &levels {
-        match run_level(level, durations) {
-            Ok(subject) => {
-                println!("{}", subject_table(&subject));
-                if show_basins {
-                    println!("{}", basin_table(&subject));
-                }
-            }
-            Err(message) => {
-                eprintln!("error: {message}");
-                return ExitCode::FAILURE;
-            }
-        }
-    }
-    println!("Worst case (§9.2): the largest basin re-flooded in place");
-    for level in &levels {
-        match worst_case(level, repeats) {
-            Ok(w) => println!("  {}", worst_case_line(&w)),
-            Err(message) => {
-                eprintln!("error: {message}");
-                return ExitCode::FAILURE;
-            }
-        }
-    }
-    println!();
-
-    println!("Ripples at the budget: the largest basin stirred on every tile it has");
-    for level in &levels {
-        match ripple_cost(level, RIPPLE_FRAMES) {
-            Ok(r) => println!("  {}", ripple_line(&r)),
-            Err(message) => {
-                eprintln!("error: {message}");
-                return ExitCode::FAILURE;
-            }
-        }
-    }
-    println!();
-
-    match run_breach(durations) {
-        Ok(subject) => println!("{}", subject_table(&subject)),
-        Err(message) => {
-            eprintln!("error: {message}");
-            return ExitCode::FAILURE;
-        }
-    }
-
-    println!("Opening at rest (settle: Steady), budget 200 ms");
-    match steady_loads() {
-        Ok(loads) => {
-            for load in &loads {
-                println!("  {}", steady_line(load));
-            }
-        }
-        Err(message) => {
-            eprintln!("error: {message}");
-            return ExitCode::FAILURE;
-        }
-    }
     ExitCode::SUCCESS
 }
 
 fn parse_args(args: impl Iterator<Item = String>) -> Result<Options, String> {
     let mut levels = Vec::new();
     let mut durations = Durations::default();
-    let mut network = false;
-    let mut show_basins = false;
-    let mut repeats = WORST_CASE_REPEATS;
     let mut args = args.peekable();
     while let Some(arg) = args.next() {
         let mut value = |name: &str| args.next().ok_or(format!("{name} needs a value"));
@@ -165,9 +75,6 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Options, String> {
             "--level" => levels.push(PathBuf::from(value(&arg)?)),
             "--quiet" => durations.quiet = parse_number(&value(&arg)?)?,
             "--transient" => durations.transient = parse_number(&value(&arg)?)?,
-            "--network" => network = true,
-            "--basins" => show_basins = true,
-            "--repeats" => repeats = parse_number(&value(&arg)?)?,
             "-h" | "--help" => return Err(String::new()),
             other => return Err(format!("unknown argument {other}")),
         }
@@ -175,13 +82,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Options, String> {
     if levels.is_empty() {
         levels = DEFAULT_LEVELS.iter().map(PathBuf::from).collect();
     }
-    Ok(Options {
-        levels,
-        durations,
-        network,
-        show_basins,
-        repeats,
-    })
+    Ok(Options { levels, durations })
 }
 
 fn parse_number<T: std::str::FromStr>(text: &str) -> Result<T, String> {

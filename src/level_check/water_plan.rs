@@ -1,49 +1,39 @@
-//! Where water would collect, and where the authored water is: the span
-//! graph, the drainage field and the level's basins, reduced to what a plan
-//! drawing can show.
+//! Where water would collect, and where the water stands once the level has
+//! opened: the span graph, its spill levels and the field, reduced to what a
+//! plan drawing can show.
 
 use crate::level::Level;
 use crate::terrain::TerrainWorld;
-use crate::water::geometry::{Column, Drain, COLUMN_SIZE};
-use crate::water::network::CrestKind;
-use crate::water::NetworkWater;
+use crate::water::field::{SpillLevels, WET_DEPTH};
+use crate::water::geometry::{Column, COLUMN_SIZE};
+use crate::water::WaterWorld;
 
 /// Still water shallower than this is not drawn, in metres.
 const MIN_DEPTH: f32 = 0.05;
+
+/// Water faster than this is drawn as running, m/s.
+const RUNNING_SPEED: f32 = 0.3;
 
 /// One column's worth of plan.
 #[derive(Debug, Clone, Copy)]
 pub struct PlanCell {
     pub column: Column,
-    /// Depth of still water at steady state if the column were filled to its
-    /// fill level: how deep a depression is there. Zero where water runs off.
+    /// Depth of still water if the column were filled to where it spills:
+    /// how deep a depression is there. Zero where water runs off.
     pub pooled: f32,
     /// More than one span: an overhang, a bridge, an island over ground.
     pub layered: bool,
-    /// No path to any outlet: a sealed pocket.
+    /// No way out to the map's edge: a sealed pocket.
     pub sealed: bool,
-}
-
-/// One cell of a crest, for drawing.
-#[derive(Debug, Clone, Copy)]
-pub struct PlanCrest {
-    pub column: Column,
-    pub saddle: f32,
-    /// Drains away (an outlet) rather than into a depression of its own.
-    pub outlet: bool,
 }
 
 /// The water-relevant geometry of a level, per column.
 pub struct WaterPlan {
     pub cells: Vec<PlanCell>,
-    /// Channels the level's first frame routes: each reach's centreline in
-    /// plan, (x, z).
-    pub channels: Vec<Vec<(f32, f32)>>,
-    /// Every fall's arc in plan, (x, z), lip first.
-    pub falls: Vec<Vec<(f32, f32)>>,
-    /// Columns under the authored water.
+    /// Columns under water once the level has opened.
     pub wet: Vec<Column>,
-    pub crests: Vec<PlanCrest>,
+    /// Of those, the columns whose water runs.
+    pub running: Vec<Column>,
     /// Width of a cell, in metres.
     pub cell: f32,
     pub parity_repairs: Vec<Column>,
@@ -52,44 +42,18 @@ pub struct WaterPlan {
 impl WaterPlan {
     pub fn from_level(level: &Level, terrain: &TerrainWorld) -> Self {
         let config = level.water.clone().unwrap_or_default();
-        let (mut water, _) = NetworkWater::from_config(&config, terrain);
-        // One frame, for the outflows that link at once to lay their channels.
-        water.step(1.0 / 60.0);
-        let channels = water
-            .network()
-            .stores()
-            .filter_map(|(_, s)| s.as_reach())
-            .map(|r| r.centreline.points.iter().map(|p| (p.x, p.z)).collect())
-            .collect();
-        let falls = water
-            .falls()
-            .map(|(_, _, f)| f.points.iter().map(|p| (p.x, p.z)).collect())
-            .collect();
-        let mut wet = Vec::new();
-        let mut crests = Vec::new();
-        for (_, basin) in water.basins() {
-            let surface = basin.level();
-            wet.extend(
-                basin
-                    .region
-                    .iter()
-                    .filter(|r| r.shape.floor_min < surface)
-                    .map(|r| r.span.column),
-            );
-            crests.extend(basin.crests.iter().map(|c| PlanCrest {
-                column: c.inside.column,
-                saddle: c.saddle,
-                outlet: c.kind == CrestKind::Outlet,
-            }));
-        }
-        wet.sort_unstable();
-        wet.dedup();
-
-        let geometry = water.geometry();
-        let graph = geometry.graph();
-        let drainage = geometry.drainage();
+        let world = WaterWorld::from_config(&config, terrain);
+        let field = world.field();
+        let (graph, cells) = (field.graph(), field.cells());
+        let spill = SpillLevels::find(graph, cells, field.sea().as_ref());
         let (min, max) = graph.column_bounds();
-        let mut cells = Vec::new();
+        let mut plan = Self {
+            cells: Vec::new(),
+            wet: Vec::new(),
+            running: Vec::new(),
+            cell: COLUMN_SIZE,
+            parity_repairs: field.repaired_columns().collect(),
+        };
         for k in min.k..=max.k {
             for i in min.i..=max.i {
                 let column = Column::new(i, k);
@@ -99,17 +63,30 @@ impl WaterPlan {
                 }
                 let mut pooled: f32 = 0.0;
                 let mut sealed = false;
+                let (mut wet, mut running) = (false, false);
                 for span in graph.refs(column) {
-                    let fill = drainage.fill(graph, span);
-                    sealed |= drainage.drain(graph, span) == Drain::Sealed;
+                    let fill = spill.at(cells, graph, span);
+                    sealed |= fill.is_infinite();
                     if fill.is_finite() {
                         pooled = pooled.max(fill - graph.span(span).floor_min);
                     }
+                    if let Some(at) = cells.index(graph, span.column, span.ordinal) {
+                        if cells.depth(at) > (MIN_DEPTH as f64).max(WET_DEPTH) {
+                            wet = true;
+                            running |= field.velocity(at).norm() > RUNNING_SPEED;
+                        }
+                    }
+                }
+                if wet {
+                    plan.wet.push(column);
+                }
+                if running {
+                    plan.running.push(column);
                 }
                 let pooled = if pooled >= MIN_DEPTH { pooled } else { 0.0 };
                 let layered = spans.len() > 1;
                 if pooled > 0.0 || layered || sealed {
-                    cells.push(PlanCell {
+                    plan.cells.push(PlanCell {
                         column,
                         pooled,
                         layered,
@@ -118,14 +95,6 @@ impl WaterPlan {
                 }
             }
         }
-        Self {
-            cells,
-            channels,
-            falls,
-            wet,
-            crests,
-            cell: COLUMN_SIZE,
-            parity_repairs: geometry.repaired_columns(),
-        }
+        plan
     }
 }

@@ -11,39 +11,32 @@
 //!            ──▶ a skirt carrying the shared edge's heights across it
 //! ```
 //!
-//! Each vertex also carries the water's depth there, negative over a bank,
-//! in the river vertex's `along`; the draw's wet range cuts the surface at
-//! `SHORE_DEPTH`, so a shoreline follows a contour across the quads instead
-//! of the edges of columns.
+//! Each vertex also carries the water's depth there, negative over a bank;
+//! the draw cuts the surface at `SHORE_DEPTH`, so a shoreline follows a
+//! contour across the quads instead of the edges of columns.
 //!
 //! Every vertex carries its own height and a velocity, the mean of the cells
 //! its corner joins, so the river shader's flow mapping runs on the field's
-//! currents and runs smoothly across cells. A surface is built
-//! from the graph when its shape changes; while only its water moves, every
-//! vertex is read again from the cells it was built from (`field_sources`). Past the map's open edges, the sea runs out
-//! to the horizon as the network's ring.
+//! currents and runs smoothly across cells. A surface is built from the graph
+//! when its shape changes; while only its water moves, every vertex is read
+//! again from the cells it was built from (`field_sources`). Past the map's
+//! open edges, the sea runs out to the horizon as a ring.
 
 use nalgebra::Vector2;
 use smallvec::SmallVec;
 
 use crate::water::field::WaterField;
 use crate::water::geometry::{Column, SpanIndex, SpanRef, Step, COLUMN_SIZE, ORTHOGONAL};
-use crate::water::ids::StoreId;
-use crate::water::network::ReachEnds;
+use crate::water::ids::SurfaceId;
 use crate::water::{WaterWorld, FIELD_BODY};
 
-use super::basin_mesher::{MeshKey, WaterMesh, WaterScene};
 use super::field_sources::{
     self, corner_flow, gather, Corner, Meeting, VertexSource, DRAWN_DEPTH, JOIN,
 };
-use super::ocean_mesher::occupied_bounds;
-use super::ocean_ring::{append_ring, MapRect};
-use super::reach_mesher::{RiverDraw, RiverMesh, RiverState};
+use super::ocean_ring::{append_ring, occupied_bounds, MapRect};
+use super::river_mesh::{RiverDraw, RiverMesh};
+use super::scene::{MeshKey, WaterMesh, WaterScene};
 use super::vertex::RiverVertex;
-
-/// Depth at which the drawn surface is cut, m: the shoreline's contour.
-/// Thinner water would lie on its floor and fight it for depth.
-const SHORE_DEPTH: f32 = 0.005;
 
 /// The field, as the water renderer sees it.
 pub struct FieldScene<'a> {
@@ -261,9 +254,8 @@ fn quad(
     for (((cx, cz), corner), flow) in offsets.iter().zip(corners).zip(flows) {
         mesh.vertices.push(RiverVertex {
             xz: Vector2::new(x0 + cx * COLUMN_SIZE, z0 + cz * COLUMN_SIZE),
-            bed: corner.height as f32,
-            depth: 0.0,
-            along: corner.depth as f32,
+            surface: corner.height as f32,
+            depth: corner.depth as f32,
             flow,
         });
     }
@@ -301,9 +293,8 @@ fn curtain(
     ] {
         mesh.vertices.push(RiverVertex {
             xz: Vector2::new(x, z),
-            bed: y,
-            depth: 0.0,
-            along: 1.0,
+            surface: y,
+            depth: 1.0,
             flow,
         });
         mesh.sources.vertices.push(VertexSource::Curtain {
@@ -338,7 +329,7 @@ impl WaterScene for FieldScene<'_> {
     }
 
     /// The sea's level, for its ring past the map's edges.
-    fn level(&self, body: StoreId) -> Option<f32> {
+    fn level(&self, body: SurfaceId) -> Option<f32> {
         self.field
             .sea()
             .filter(|_| body == FIELD_BODY)
@@ -381,11 +372,11 @@ impl WaterScene for FieldScene<'_> {
         self.versions
             .iter()
             .enumerate()
-            .map(|(slot, &v)| (StoreId(slot as u32), v))
+            .map(|(slot, &v)| (SurfaceId(slot as u32), v))
             .collect()
     }
 
-    fn build_river(&self, id: StoreId) -> RiverMesh {
+    fn build_river(&self, id: SurfaceId) -> RiverMesh {
         let slot = id.0 as usize;
         let mut mesh = RiverMesh::default();
         let Some(chunk) = self.field.cells().chunks.get(slot) else {
@@ -406,7 +397,7 @@ impl WaterScene for FieldScene<'_> {
         }
         if !mesh.indices.is_empty() {
             mesh.draws.push(RiverDraw {
-                reach: id,
+                id,
                 first_index: 0,
                 index_count: mesh.indices.len() as u32,
             });
@@ -414,22 +405,8 @@ impl WaterScene for FieldScene<'_> {
         mesh
     }
 
-    fn refresh_river(&self, _id: StoreId, mesh: &mut RiverMesh) -> bool {
+    fn refresh_river(&self, _id: SurfaceId, mesh: &mut RiverMesh) -> bool {
         field_sources::refresh(self.field, mesh)
-    }
-
-    fn river_state(&self, _reach: StoreId) -> Option<RiverState> {
-        Some(RiverState {
-            depth_scale: 1.0,
-            speed_scale: 1.0,
-            tail: SHORE_DEPTH,
-            front: f32::INFINITY,
-            ends: ReachEnds {
-                upstream: 0.0,
-                downstream: 0.0,
-            },
-            length: 1.0e6,
-        })
     }
 }
 
@@ -442,7 +419,7 @@ impl WaterScene for WaterWorld {
         FieldScene::of(self).build_mesh()
     }
 
-    fn level(&self, body: StoreId) -> Option<f32> {
+    fn level(&self, body: SurfaceId) -> Option<f32> {
         FieldScene::of(self).level(body)
     }
 
@@ -462,15 +439,11 @@ impl WaterScene for WaterWorld {
         FieldScene::of(self).river_key()
     }
 
-    fn build_river(&self, id: StoreId) -> RiverMesh {
+    fn build_river(&self, id: SurfaceId) -> RiverMesh {
         FieldScene::of(self).build_river(id)
     }
 
-    fn refresh_river(&self, id: StoreId, mesh: &mut RiverMesh) -> bool {
+    fn refresh_river(&self, id: SurfaceId, mesh: &mut RiverMesh) -> bool {
         FieldScene::of(self).refresh_river(id, mesh)
-    }
-
-    fn river_state(&self, reach: StoreId) -> Option<RiverState> {
-        FieldScene::of(self).river_state(reach)
     }
 }

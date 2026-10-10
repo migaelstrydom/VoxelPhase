@@ -57,7 +57,9 @@ impl SpillLevels {
         Self { levels }
     }
 
-    fn at(&self, cells: &FieldCells, graph: &SpanGraph, span: SpanRef) -> f32 {
+    /// The level water in a span can stand at before it runs off: infinite
+    /// in a pocket with no way out.
+    pub fn at(&self, cells: &FieldCells, graph: &SpanGraph, span: SpanRef) -> f32 {
         cells
             .index(graph, span.column, span.ordinal)
             .map_or(f32::INFINITY, |at| {

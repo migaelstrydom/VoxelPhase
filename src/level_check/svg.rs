@@ -566,8 +566,8 @@ fn plan_view(
 /// Where water would collect, over the heightmap: blue as deep as a
 /// depression is, violet where a column holds more than one layer of air,
 /// red where a pocket is sealed or its spans needed a parity repair. Over
-/// those, the authored water in solid blue, and its crests: orange where it
-/// spills away, purple where it spills into a depression of its own.
+/// those, the water once the level has opened in solid blue, dotted pale
+/// where it runs.
 fn water_overlay(
     s: &mut String,
     water: &WaterPlan,
@@ -607,7 +607,7 @@ fn water_overlay(
             water.cell * scale * len as f32 + 0.4,
         );
     }
-    // The authored water itself, over the potential pools.
+    // The water as the level opens, over the potential pools.
     let mut wet_runs: Vec<(Column, usize)> = Vec::new();
     for &column in &water.wet {
         match wet_runs.last_mut() {
@@ -627,44 +627,14 @@ fn water_overlay(
             water.cell * scale * len as f32 + 0.4,
         );
     }
-    for channel in &water.channels {
-        let points: Vec<String> = channel
-            .iter()
-            .map(|(x, z)| format!("{:.1},{:.1}", px(*x), pz(*z)))
-            .collect();
+    for &column in &water.running {
+        let (x, z) = column.centre();
         let _ = writeln!(
             s,
-            "<polyline points=\"{}\" fill=\"none\" stroke=\"#0a4fc4\" stroke-width=\"2.5\" stroke-linecap=\"round\"/>",
-            points.join(" ")
-        );
-    }
-    for fall in &water.falls {
-        let points: Vec<String> = fall
-            .iter()
-            .map(|(x, z)| format!("{:.1},{:.1}", px(*x), pz(*z)))
-            .collect();
-        let _ = writeln!(
-            s,
-            "<polyline points=\"{}\" fill=\"none\" stroke=\"#7fdbff\" stroke-width=\"2.5\" stroke-dasharray=\"3 2\"/>",
-            points.join(" ")
-        );
-        if let Some((x, z)) = fall.last() {
-            let _ = writeln!(
-                s,
-                "<circle cx=\"{:.1}\" cy=\"{:.1}\" r=\"3\" fill=\"#7fdbff\"/>",
-                px(*x),
-                pz(*z)
-            );
-        }
-    }
-    for crest in &water.crests {
-        let (x, z) = crest.column.centre();
-        let colour = if crest.outlet { "#e67e22" } else { "#8e44ad" };
-        let _ = writeln!(
-            s,
-            "<rect x=\"{:.1}\" y=\"{:.1}\" width=\"{size:.1}\" height=\"{size:.1}\" fill=\"{colour}\"/>",
-            px(x) - size * 0.5,
-            pz(z) - size * 0.5,
+            "<circle cx=\"{:.1}\" cy=\"{:.1}\" r=\"{:.1}\" fill=\"#7fdbff\"/>",
+            px(x),
+            pz(z),
+            size * 0.3,
         );
     }
     for column in &water.parity_repairs {

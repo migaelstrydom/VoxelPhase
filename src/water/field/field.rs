@@ -410,6 +410,17 @@ impl WaterField {
         &self.cells
     }
 
+    /// Every source, as its water lands now.
+    pub fn sources(&self) -> &[Source] {
+        &self.sources
+    }
+
+    /// Columns whose spans needed a parity repair: an open edge in the
+    /// terrain's mesh there.
+    pub fn repaired_columns(&self) -> impl Iterator<Item = Column> + '_ {
+        self.rasteriser.repaired_columns()
+    }
+
     /// The sea beyond the map's open edges, if the level has one.
     pub fn sea(&self) -> Option<SeaBoundary> {
         self.sea

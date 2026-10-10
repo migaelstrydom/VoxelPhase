@@ -118,6 +118,12 @@ impl WaterWorld {
         self.opened
     }
 
+    /// Whether the opening settle ran to its limit, so the level opens still
+    /// settling.
+    pub fn still_settling(&self) -> bool {
+        self.opened.0 >= SETTLE_LIMIT
+    }
+
     /// Write the F3 statistics.
     pub fn debug_log(&self, log: &mut DebugLog) {
         let ledger = self.field.ledger();

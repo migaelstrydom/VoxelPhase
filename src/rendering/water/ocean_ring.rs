@@ -17,10 +17,10 @@
 use nalgebra::Vector2;
 use rustc_hash::FxHashMap;
 
-use crate::water::geometry::{SpanChunkCoord, COLUMN_SIZE};
-use crate::water::ids::StoreId;
+use crate::water::geometry::{Column, SpanChunkCoord, SpanGraph, COLUMN_SIZE};
+use crate::water::ids::SurfaceId;
 
-use super::basin_mesher::{WaterDraw, WaterMesh};
+use super::scene::{WaterDraw, WaterMesh};
 use super::vertex::BasinVertex;
 
 /// Width of the band whose swell height fades out, in columns (8 m).
@@ -78,7 +78,7 @@ fn rings() -> Vec<Ring> {
 
 /// Append the ring beyond each open edge (−x, +x, −z, +z) to `mesh`, for
 /// a sea at `level`.
-pub fn append_ring(mesh: &mut WaterMesh, id: StoreId, level: f32, map: MapRect, open: [bool; 4]) {
+pub fn append_ring(mesh: &mut WaterMesh, id: SurfaceId, level: f32, map: MapRect, open: [bool; 4]) {
     if !open.iter().any(|&o| o) {
         return;
     }
@@ -209,7 +209,7 @@ mod tests {
             i1: 8,
             k1: 6,
         };
-        append_ring(&mut mesh, StoreId(0), 0.0, map, open);
+        append_ring(&mut mesh, SurfaceId(0), 0.0, map, open);
         mesh
     }
 
@@ -283,4 +283,27 @@ mod tests {
         assert!(!used.is_empty());
         assert!(used.iter().all(|p| p.y <= -3.0 + 1e-3), "only the −z side");
     }
+}
+
+/// The first and last columns with any spans: the terrain's own edge, which
+/// the graph's chunk-aligned bounds can overhang.
+pub fn occupied_bounds(graph: &SpanGraph) -> Option<(Column, Column)> {
+    let (min, max) = graph.column_bounds();
+    let mut out: Option<(Column, Column)> = None;
+    for k in min.k..=max.k {
+        for i in min.i..=max.i {
+            let column = Column::new(i, k);
+            if graph.spans(column).is_empty() {
+                continue;
+            }
+            out = Some(match out {
+                None => (column, column),
+                Some((lo, hi)) => (
+                    Column::new(lo.i.min(i), lo.k.min(k)),
+                    Column::new(hi.i.max(i), hi.k.max(k)),
+                ),
+            });
+        }
+    }
+    out
 }

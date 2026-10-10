@@ -1,10 +1,9 @@
 //! Water rendering pipelines.
 //!
-//! Four pipelines over one layout. Three share the water fragment shader:
-//! the coarse surface (a quad per column), the fine surface of an awake
-//! ripple tile (a static grid displaced from the ripple storage buffer) and a
-//! reach's surface. The fourth draws a fall's sheet with a fragment shader of
-//! its own. All are drawn in the HDR scene pass and depth-test against it
+//! Three pipelines over one layout, sharing the water fragment shader: the
+//! coarse surface (a quad per column), the fine surface of an awake ripple
+//! tile (a static grid displaced from the ripple storage buffer) and a river
+//! surface (each vertex at the water's own height). All are drawn in the HDR scene pass and depth-test against it
 //! without writing depth, read the refraction copy's depth for volumetric
 //! tint, and sample its colour at offset UVs for refraction.
 
@@ -18,7 +17,7 @@ use crate::rendering::shaders::ShaderManager;
 
 use crate::rendering::in_flight::FRAMES_IN_FLIGHT;
 
-use super::vertex::{BasinVertex, FallVertex, FineVertex, RiverVertex};
+use super::vertex::{BasinVertex, FineVertex, RiverVertex};
 
 /// Where each draw's constants start (its body, then its tile), and how many
 /// bytes they are.
@@ -42,9 +41,8 @@ pub struct WaterPipeline {
     pipeline: vk::Pipeline,
     /// The fine surface of an awake ripple tile.
     fine_pipeline: vk::Pipeline,
-    /// A reach's surface.
+    /// A river surface.
     river_pipeline: vk::Pipeline,
-    fall_pipeline: vk::Pipeline,
     pipeline_layout: vk::PipelineLayout,
     descriptor_set_layout: vk::DescriptorSetLayout,
     /// Set 1: the ripple storage buffer.
@@ -95,15 +93,6 @@ impl WaterPipeline {
             &RiverVertex::attribute_descriptions(),
             ShaderManager::load_water_fragment(&device)?,
         )?;
-        let fall_pipeline = Self::create_pipeline(
-            &device,
-            render_pass,
-            pipeline_layout,
-            ShaderManager::load_fall_vertex(&device)?,
-            FallVertex::binding_description(),
-            &FallVertex::attribute_descriptions(),
-            ShaderManager::load_fall_fragment(&device)?,
-        )?;
         let descriptor_pool = Self::create_descriptor_pool(&device)?;
 
         let descriptor_set =
@@ -122,7 +111,6 @@ impl WaterPipeline {
             pipeline,
             fine_pipeline,
             river_pipeline,
-            fall_pipeline,
             pipeline_layout,
             descriptor_set_layout,
             ripple_set_layout,
@@ -407,14 +395,9 @@ impl WaterPipeline {
         self.fine_pipeline
     }
 
-    /// The pipeline for a reach's surface.
+    /// The pipeline for a river surface.
     pub fn river_pipeline(&self) -> vk::Pipeline {
         self.river_pipeline
-    }
-
-    /// The pipeline for a fall's sheet, with a fragment shader of its own.
-    pub fn fall_pipeline(&self) -> vk::Pipeline {
-        self.fall_pipeline
     }
 
     /// A descriptor set pointing set 1 at a ripple storage buffer. One per
@@ -464,9 +447,6 @@ impl Drop for WaterPipeline {
             self.device
                 .device
                 .destroy_pipeline(self.river_pipeline, None);
-            self.device
-                .device
-                .destroy_pipeline(self.fall_pipeline, None);
             self.device
                 .device
                 .destroy_pipeline_layout(self.pipeline_layout, None);

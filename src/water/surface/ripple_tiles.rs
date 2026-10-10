@@ -85,7 +85,7 @@ impl TileMask {
     }
 }
 
-/// Where tile masks come from: the network, which knows each body's columns.
+/// Where tile masks come from: whatever knows each body's columns.
 pub trait MaskSource {
     /// The body's mask over a tile, or `None` if it has no water there.
     fn mask(&self, tile: SpanChunkCoord, body: WaterBodyId) -> Option<TileMask>;
@@ -710,7 +710,7 @@ fn priority(key: &RippleKey, tile: &RippleTile, focus: Option<Point3<f32>>) -> f
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::water::ids::StoreId;
+    use crate::water::ids::SurfaceId;
 
     /// Water everywhere, one metre deep.
     struct Everywhere;
@@ -725,7 +725,7 @@ mod tests {
         }
     }
 
-    const BODY: WaterBodyId = StoreId(0);
+    const BODY: WaterBodyId = SurfaceId(0);
 
     #[test]
     fn a_splash_spreads_and_dies_away() {

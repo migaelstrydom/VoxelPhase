@@ -1,16 +1,22 @@
-//! Runs the water on real terrain at the game's cadence and times each frame.
+//! The field, as the game runs it, on a real level: what it costs to open,
+//! to step quiet, on a blast's frame, and while the water answers the blast;
+//! and what rebuilding its drawn surface costs on the frames it moved.
 
+use std::fmt::Write as _;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
 use nalgebra::Point3;
 
-use crate::level::{load_level, Level, Settle};
+use crate::level::load_level;
 use crate::level_check::build_terrain;
-use crate::rendering::water::{MeshKey, WaterScene, RIPPLE_TILE_STRIDE};
+use crate::perf::stats::{as_ms, max_ms, mean_ms, percentile_ms};
+use crate::rendering::water::RiverParts;
 use crate::terrain::{BlastConfig, TerrainWorld};
-use crate::water::NetworkWater;
-use crate::water_viewer::{find, Action, TICK_RATE};
+use crate::water::field::{WaterField, WET_DEPTH};
+use crate::water::geometry::{SpanIndex, SpanRef};
+use crate::water::WaterWorld;
+use crate::water_viewer::TICK_RATE;
 
 /// Seconds of frames discarded before any are recorded.
 pub const WARM_UP: f32 = 0.2;
@@ -33,52 +39,66 @@ impl Default for Durations {
     }
 }
 
-/// Where one frame's water time went.
+/// Depth a shore cell must hold to be the blast's mark, m: open water, not
+/// a film on the bank.
+const SHORE_DEPTH: f64 = 0.3;
+
+/// Where one frame of the field went.
 #[derive(Debug, Clone, Copy, Default)]
-pub struct FrameCost {
-    /// Re-pairing spans and repairing drainage after a terrain edit.
-    pub geometry: Duration,
-    /// Laying the network again over the edited ground.
-    pub rebuild: Duration,
-    /// Between-tick topology.
-    pub settle: Duration,
-    /// Solver ticks.
-    pub solve: Duration,
-    /// Rebuilding the surface mesh, on the frames whose topology changed.
+pub struct FieldFrameCost {
+    /// Carrying the water over a terrain edit.
+    pub edit: Duration,
+    /// Stepping the field.
+    pub step: Duration,
+    /// Rebuilding the drawn surface, on the frames it moved.
     pub mesh: Duration,
+    /// Chunks awake after the frame.
+    pub awake: usize,
+    /// Surfaces left behind their water after the frame, and the most
+    /// frames any of them had gone unbuilt.
+    pub lag: (usize, u64),
     /// The terrain's own rebuild, reported beside the water, not in it.
     pub terrain: Duration,
 }
 
-impl FrameCost {
-    /// Every water stage: what the frame's water costs the CPU.
+impl FieldFrameCost {
+    /// What the frame's water costs the CPU.
     pub fn water(&self) -> Duration {
-        self.geometry + self.rebuild + self.settle + self.solve + self.mesh
+        self.edit + self.step + self.mesh
     }
 }
 
-/// One subject's recorded frames, split by phase.
-pub struct Subject {
+/// One level's recorded frames, split by phase.
+pub struct FieldSubject {
     pub label: String,
-    /// Where the charge went off.
-    pub blast_at: Point3<f32>,
-    pub quiet: Vec<FrameCost>,
-    pub blast: FrameCost,
-    pub transient: Vec<FrameCost>,
-    /// Surface mesh size, in indices, on the last quiet frame.
-    pub mesh_indices: usize,
-    /// Basins before the blast and at the end.
-    pub basins: (usize, usize),
-    /// Load: building spans, drainage and basins.
+    /// Where the charge went off, if the level has a shore to blast.
+    pub blast_at: Option<Point3<f32>>,
+    pub quiet: Vec<FieldFrameCost>,
+    pub blast: FieldFrameCost,
+    pub transient: Vec<FieldFrameCost>,
+    /// Building the field and filling it, then settling it: wall time.
     pub load: Duration,
-    /// Each basin before the blast and at the end, one line each.
-    pub basin_lines: (Vec<String>, Vec<String>),
+    /// Simulated seconds the opening settle ran.
+    pub settled: f32,
+    /// Chunks in the field, and cells over all of them.
+    pub chunks: usize,
+    pub cells: usize,
+    /// Largest drawn surface, in indices.
+    pub mesh_indices: usize,
+    /// Water held at the start of the quiet phase and at the end, m³, and
+    /// the ledger's error at the end.
+    pub volume: (f64, f64),
+    pub ledger_error: f64,
+    /// Let out to the void, sinks and the sea, and seeped from films, over
+    /// the whole run, m³.
+    pub sunk: f64,
+    pub lost: f64,
 }
 
-/// A level from disk, blasted at the lip of its largest basin.
-pub fn run_level(path: &Path, durations: Durations) -> Result<Subject, String> {
+/// A level from disk, blasted on its deepest shore.
+pub fn run_field_level(path: &Path, durations: Durations) -> Result<FieldSubject, String> {
     let level = load_level(path).map_err(|e| e.to_string())?;
-    let terrain = build_terrain(&level);
+    let mut terrain = build_terrain(&level);
     let label = path
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -87,307 +107,168 @@ pub fn run_level(path: &Path, durations: Durations) -> Result<Subject, String> {
         .water
         .as_ref()
         .ok_or_else(|| format!("{label} has no water"))?;
-    let started = Instant::now();
-    let (water, _) = NetworkWater::from_config(config, &terrain);
-    let load = started.elapsed();
-    let blast_at =
-        lip_site(&water, &terrain).ok_or_else(|| format!("{label}: no basin to blast"))?;
-    Ok(run_subject(
-        label,
-        &level,
-        terrain,
-        water,
-        load,
-        blast_at,
-        &BlastConfig::default(),
-        durations,
-    ))
-}
-
-/// The water harness's dam breach, the transient case.
-pub fn run_breach(durations: Durations) -> Result<Subject, String> {
-    let scenario = find("breach").ok_or("the breach scenario is missing")?;
-    let (level, terrain) = scenario.terrain()?;
-    let config = level.water.as_ref().ok_or("breach has no water")?;
-    let started = Instant::now();
-    let (water, _) = NetworkWater::from_config(config, &terrain);
-    let load = started.elapsed();
-    let (centre, radius) = scenario
-        .beats
-        .iter()
-        .map(|beat| match beat.action {
-            Action::Blast { centre, radius } => (centre, radius),
-        })
-        .next()
-        .ok_or("the breach scenario has no blast")?;
-    Ok(run_subject(
-        "breach (water_viewer)".into(),
-        &level,
-        terrain,
-        water,
-        load,
-        centre,
-        &BlastConfig::fixed_radius(radius),
-        durations,
-    ))
-}
-
-#[allow(clippy::too_many_arguments)]
-fn run_subject(
-    label: String,
-    _level: &Level,
-    mut terrain: TerrainWorld,
-    mut water: NetworkWater,
-    load: Duration,
-    blast_at: Point3<f32>,
-    charge: &BlastConfig,
-    durations: Durations,
-) -> Subject {
+    let mut water = WaterWorld::from_config(config, &terrain);
+    let (settled, load) = water.opened();
     let dt = 1.0 / TICK_RATE;
     let frames = |seconds: f32| (seconds * TICK_RATE).round() as usize;
-    let mut key = MeshKey::new();
+    let mut rivers = RiverParts::default();
     let mut indices = 0;
+    let mut run = |terrain: &mut TerrainWorld, water: &mut WaterWorld, n: usize| {
+        (0..n)
+            .map(|_| frame(terrain, water, &mut rivers, &mut indices, dt))
+            .collect::<Vec<_>>()
+    };
 
-    for _ in 0..frames(WARM_UP) {
-        frame(&mut terrain, &mut water, &mut key, &mut indices, dt);
+    run(&mut terrain, &mut water, frames(WARM_UP));
+    let before = water.volume();
+    let quiet = run(&mut terrain, &mut water, frames(durations.quiet));
+    let blast_at = shore_site(water.field(), &terrain);
+    if let Some(at) = blast_at {
+        terrain.detonate(at, &BlastConfig::default());
     }
-    let quiet: Vec<FrameCost> = (0..frames(durations.quiet))
-        .map(|_| frame(&mut terrain, &mut water, &mut key, &mut indices, dt))
-        .collect();
-    let mesh_indices = indices;
-    let before = water.basins().count();
-    let lines_before = basin_lines(&water);
-
-    terrain.detonate(blast_at, charge);
-    let blast = frame(&mut terrain, &mut water, &mut key, &mut indices, dt);
-    let transient = (0..frames(durations.transient))
-        .map(|_| frame(&mut terrain, &mut water, &mut key, &mut indices, dt))
-        .collect();
-
-    Subject {
+    let blast = run(&mut terrain, &mut water, 1)[0];
+    let transient = run(&mut terrain, &mut water, frames(durations.transient));
+    let field = water.field();
+    let volume = field.volume();
+    Ok(FieldSubject {
         label,
         blast_at,
         quiet,
         blast,
         transient,
-        mesh_indices,
-        basins: (before, water.basins().count()),
         load,
-        basin_lines: (lines_before, basin_lines(&water)),
-    }
+        settled,
+        chunks: field.cells().chunks.len(),
+        cells: field.cells().chunks.iter().map(|c| c.depth.len()).sum(),
+        mesh_indices: indices,
+        volume: (before, volume),
+        ledger_error: field.ledger().error(volume),
+        sunk: field.ledger().sunk,
+        lost: field.ledger().lost,
+    })
 }
 
-/// One line per basin: id, level, volume, region size, spill.
-fn basin_lines(water: &NetworkWater) -> Vec<String> {
-    water
-        .basins()
-        .map(|(id, b)| {
-            format!(
-                "basin {}: level {:.3}, {:.1} m³, {} spans, {} crests (lowest {:?}), spill {:?}, cap {:.2}",
-                id.0,
-                b.level(),
-                b.volume,
-                b.region.len(),
-                b.crests.len(),
-                b.crests.first().map(|c| (c.saddle, c.kind)),
-                b.spill(),
-                b.cap
-            )
-        })
-        .collect()
-}
-
-/// One game frame of terrain and water, and the mesh rebuild the renderer
-/// would make if the topology changed.
+/// One game frame of terrain and water, and the surface rebuild the
+/// renderer would make if the water moved.
 fn frame(
     terrain: &mut TerrainWorld,
-    water: &mut NetworkWater,
-    key: &mut MeshKey,
+    water: &mut WaterWorld,
+    rivers: &mut RiverParts,
     indices: &mut usize,
     dt: f32,
-) -> FrameCost {
+) -> FieldFrameCost {
     let started = Instant::now();
     terrain.update();
     let terrain_time = started.elapsed();
     water.on_terrain_update(terrain);
     water.step(dt);
-    let step = water.last_step_timings();
+    let field = water.field().frame();
 
     let started = Instant::now();
-    let now = water.mesh_key();
     let mut mesh = Duration::ZERO;
-    if now != *key {
-        let built = water.build_mesh();
-        *indices = built.indices.len();
-        *key = now;
+    if rivers.sync(&*water) {
+        *indices = (*indices).max(rivers.mesh().indices.len());
         mesh = started.elapsed();
     }
-    FrameCost {
-        geometry: step.geometry,
-        rebuild: step.rebuild,
-        settle: step.settle,
-        solve: step.solve,
+    FieldFrameCost {
+        edit: field.edit_time.unwrap_or_default(),
+        step: field.step_time,
         mesh,
+        awake: field.awake,
+        lag: rivers.lag(),
         terrain: terrain_time,
     }
 }
 
-/// The lip of the largest basin, on the terrain surface: a blast there
-/// re-floods the largest region, and may breach it.
-fn lip_site(water: &NetworkWater, terrain: &TerrainWorld) -> Option<Point3<f32>> {
-    let (_, basin) = water
-        .basins()
-        .max_by(|a, b| a.1.region.len().cmp(&b.1.region.len()))?;
-    let span = basin
-        .crests
-        .first()
-        .map(|c| c.inside)
-        .or_else(|| basin.region.first().map(|r| r.span))?;
+/// The deepest water standing beside dry ground, on the terrain surface: a
+/// blast there breaks the bank that holds the most back.
+fn shore_site(field: &WaterField, terrain: &TerrainWorld) -> Option<Point3<f32>> {
+    let graph = field.graph();
+    let cells = field.cells();
+    let depth = |span: SpanRef| {
+        cells
+            .index(graph, span.column, span.ordinal)
+            .map_or(0.0, |at: SpanIndex| cells.depth(at))
+    };
+    let (span, _) = graph
+        .all_refs()
+        .map(|span| (span, depth(span)))
+        .filter(|&(_, d)| d > SHORE_DEPTH)
+        .filter(|&(span, _)| {
+            graph
+                .orthogonal_neighbours(span)
+                .into_iter()
+                .any(|n| depth(SpanRef::key(n.span.column, n.span.ordinal)) <= WET_DEPTH)
+        })
+        .max_by(|a, b| a.1.total_cmp(&b.1))?;
     let (x, z) = span.column.centre();
     let y = terrain.mesh_surface_height_at(x, z)?;
     Some(Point3::new(x, y, z))
 }
 
-/// The worst case of §9.2: re-flooding the largest basin of a level, and
-/// rebuilding the surface mesh after it, repeated for a stable figure.
-pub struct WorstCase {
-    pub label: String,
-    pub spans: usize,
-    pub reregion: Vec<Duration>,
-    pub mesh: Vec<Duration>,
+/// One level: opening, quiet frames, the blast frame, and the transient.
+pub fn field_table(subject: &FieldSubject) -> String {
+    let mut out = String::new();
+    let blast = subject.blast_at.map_or("no shore to blast".into(), |p| {
+        format!("blast at {:.1}, {:.1}, {:.1}", p.x, p.y, p.z)
+    });
+    let _ = writeln!(
+        out,
+        "{}  ({blast}; {} chunks, {} cells; mesh up to {} indices)",
+        subject.label, subject.chunks, subject.cells, subject.mesh_indices
+    );
+    let _ = writeln!(
+        out,
+        "  opening {:.1} ms ({:.0} s settled); volume {:.1} -> {:.1} m³ (sunk {:.1}, seeped {:.1}), ledger error {:+.1e} m³",
+        as_ms(subject.load),
+        subject.settled,
+        subject.volume.0,
+        subject.volume.1,
+        subject.sunk,
+        subject.lost,
+        subject.ledger_error
+    );
+    let _ = writeln!(
+        out,
+        "  {:<18} {:>14} {:>14} {:>14} {:>10} {:>15} {:>24}",
+        "phase (ms)", "edit", "step", "mesh", "awake", "lagging/frames", "water mean/p99/max"
+    );
+    out.push_str(&phase_row("quiet", &subject.quiet));
+    out.push_str(&phase_row(
+        "blast frame",
+        std::slice::from_ref(&subject.blast),
+    ));
+    out.push_str(&phase_row("transient", &subject.transient));
+    let _ = writeln!(
+        out,
+        "  terrain rebuild on the blast frame: {:.2} ms (not water)",
+        as_ms(subject.blast.terrain)
+    );
+    out
 }
 
-pub fn worst_case(path: &Path, repeats: usize) -> Result<WorstCase, String> {
-    let level = load_level(path).map_err(|e| e.to_string())?;
-    let terrain = build_terrain(&level);
-    let label = path
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let config = level
-        .water
-        .as_ref()
-        .ok_or_else(|| format!("{label} has no water"))?;
-    let (mut water, _) = NetworkWater::from_config(config, &terrain);
-    // Flooded again, a basin is a new store: found again each time.
-    let largest = |water: &NetworkWater| {
-        water
-            .basins()
-            .map(|(id, b)| (id, b.region.len()))
-            .max_by_key(|(_, n)| *n)
+fn phase_row(name: &str, frames: &[FieldFrameCost]) -> String {
+    let pair = |f: fn(&FieldFrameCost) -> Duration| {
+        let times: Vec<Duration> = frames.iter().map(f).collect();
+        format!("{:.3}/{:.3}", mean_ms(&times), percentile_ms(&times, 0.99))
     };
-    let (_, spans) = largest(&water).ok_or_else(|| format!("{label} has no basin"))?;
-    let mut out = WorstCase {
-        label,
-        spans,
-        reregion: Vec::new(),
-        mesh: Vec::new(),
-    };
-    for _ in 0..repeats {
-        let (id, _) = largest(&water).expect("found above");
-        let started = Instant::now();
-        water.reregion(id);
-        out.reregion.push(started.elapsed());
-        let started = Instant::now();
-        let _ = water.build_mesh();
-        out.mesh.push(started.elapsed());
-    }
-    Ok(out)
-}
-
-/// Ripple tiles at their budget: every awake tile of the largest basin
-/// stepped, as many as the budget allows.
-pub struct RippleCost {
-    pub label: String,
-    pub tiles: usize,
-    pub steps: Vec<Duration>,
-    /// Bytes the renderer uploads per frame for them.
-    pub upload_bytes: usize,
-}
-
-pub fn ripple_cost(path: &Path, frames: usize) -> Result<RippleCost, String> {
-    let level = load_level(path).map_err(|e| e.to_string())?;
-    let terrain = build_terrain(&level);
-    let label = path
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let config = level
-        .water
-        .as_ref()
-        .ok_or_else(|| format!("{label} has no water"))?;
-    let (mut water, _) = NetworkWater::from_config(config, &terrain);
-    let points: Vec<Point3<f32>> = {
-        let (_, basin) = water
-            .basins()
-            .max_by_key(|(_, b)| b.region.len())
-            .ok_or_else(|| format!("{label} has no basin"))?;
-        let level = basin.level();
-        let mut tiles = std::collections::BTreeSet::new();
-        basin
-            .region
-            .iter()
-            .filter(|r| r.shape.floor_min < level)
-            .filter(|r| tiles.insert(r.span.column.chunk()))
-            .map(|r| {
-                let (x, z) = r.span.column.centre();
-                Point3::new(x, level, z)
-            })
-            .collect()
-    };
-    let dt = 1.0 / TICK_RATE;
-    let mut steps = Vec::with_capacity(frames);
-    for frame in 0..frames {
-        // Keep every tile stirred, as a crowd of floats would.
-        if frame % 30 == 0 {
-            for p in &points {
-                water.disturb(*p, 0.5, crate::water::Disturbance::Velocity(-1.0));
-            }
-        }
-        water.step(dt);
-        steps.push(water.last_step_timings().ripples);
-    }
-    let tiles = water.ripples().active_count();
-    Ok(RippleCost {
-        label,
-        tiles,
-        steps,
-        upload_bytes: tiles * RIPPLE_TILE_STRIDE * std::mem::size_of::<f32>(),
-    })
-}
-
-/// A level opened at rest: what the steady settle cost at load.
-#[derive(Debug, Clone)]
-pub struct SteadyLoad {
-    pub label: String,
-    /// The whole water load, settle included.
-    pub load: Duration,
-    pub sweeps: usize,
-    pub converged: bool,
-    /// Water the sources put in before the level opened, m³.
-    pub filled: f64,
-}
-
-/// Scenarios with sources, each opened steady (§13, budget §19).
-pub fn steady_loads() -> Result<Vec<SteadyLoad>, String> {
-    ["staircase", "spring_pools"]
-        .into_iter()
-        .map(|name| {
-            let scenario = find(name).ok_or(format!("the {name} scenario is missing"))?;
-            let (level, terrain) = scenario.terrain()?;
-            let mut config = level.water.clone().ok_or(format!("{name} has no water"))?;
-            config.settle = Settle::Steady;
-            let started = Instant::now();
-            let (water, _) = NetworkWater::from_config(&config, &terrain);
-            let load = started.elapsed();
-            let report = water.steady_report().ok_or("opened without a settle")?;
-            Ok(SteadyLoad {
-                label: format!("{name} (water_viewer)"),
-                load,
-                sweeps: report.sweeps,
-                converged: report.converged,
-                filled: water.ledger().emitted,
-            })
-        })
-        .collect()
+    let water: Vec<Duration> = frames.iter().map(FieldFrameCost::water).collect();
+    let awake = frames.iter().map(|f| f.awake).max().unwrap_or(0);
+    let lagging = frames.iter().map(|f| f.lag.0).max().unwrap_or(0);
+    let behind = frames.iter().map(|f| f.lag.1).max().unwrap_or(0);
+    format!(
+        "  {:<18} {:>14} {:>14} {:>14} {:>10} {:>15} {:>24}\n",
+        format!("{name} ({})", frames.len()),
+        pair(|f| f.edit),
+        pair(|f| f.step),
+        pair(|f| f.mesh),
+        format!("≤{awake}"),
+        format!("≤{lagging}/≤{behind}"),
+        format!(
+            "{:.3} / {:.3} / {:.3}",
+            mean_ms(&water),
+            percentile_ms(&water, 0.99),
+            max_ms(&water)
+        ),
+    )
 }

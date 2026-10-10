@@ -1,5 +1,5 @@
 use ash::vk;
-use nalgebra::{Vector2, Vector3};
+use nalgebra::Vector2;
 
 /// A water surface vertex. Its height is not stored: every draw pushes its
 /// body's level, so the mesh outlives a change of level.
@@ -77,19 +77,19 @@ impl FineVertex {
     }
 }
 
-/// A vertex of a reach's surface. Its height is the section's bed plus the
-/// design depth, scaled per draw to the reach's current discharge.
+/// A vertex of a river surface: the water's own surface there, its depth and
+/// its flow.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RiverVertex {
     pub xz: Vector2<f32>,
-    /// Bed height at the section's centre.
-    pub bed: f32,
-    /// Water depth at the design discharge.
+    /// Water surface height.
+    pub surface: f32,
+    /// Depth of water: positive under water, negative over a bank standing
+    /// above it. The draw cuts the surface below its shore depth, so a shore
+    /// is a contour, not the edge of a column.
     pub depth: f32,
-    /// Distance down the reach, m.
-    pub along: f32,
-    /// Flow velocity at the design discharge.
+    /// Depth-averaged velocity, m/s, x and z.
     pub flow: Vector2<f32>,
 }
 
@@ -111,71 +111,18 @@ impl RiverVertex {
                 format: vk::Format::R32G32_SFLOAT,
                 offset: 0,
             },
-            // (bed, depth, along)
+            // (surface, depth)
             vk::VertexInputAttributeDescription {
                 location: 1,
                 binding: 0,
-                format: vk::Format::R32G32B32_SFLOAT,
+                format: vk::Format::R32G32_SFLOAT,
                 offset: 2 * f,
             },
             vk::VertexInputAttributeDescription {
                 location: 2,
                 binding: 0,
                 format: vk::Format::R32G32_SFLOAT,
-                offset: 5 * f,
-            },
-        ]
-    }
-}
-
-/// A vertex of a fall's sheet: a point on the arc, and the horizontal
-/// direction across the sheet there. The shader sets the sheet's width from
-/// the discharge now.
-#[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct FallVertex {
-    /// On the arc.
-    pub centre: Vector3<f32>,
-    /// Unit, horizontal, across the sheet.
-    pub side: Vector3<f32>,
-    /// Which edge: −1 or +1.
-    pub across: f32,
-    /// Seconds from the lip.
-    pub time: f32,
-    /// Share of the arc's time from the lip to the ground, 0 to 1.
-    pub along: f32,
-}
-
-impl FallVertex {
-    pub fn binding_description() -> vk::VertexInputBindingDescription {
-        vk::VertexInputBindingDescription {
-            binding: 0,
-            stride: std::mem::size_of::<Self>() as u32,
-            input_rate: vk::VertexInputRate::VERTEX,
-        }
-    }
-
-    pub fn attribute_descriptions() -> [vk::VertexInputAttributeDescription; 3] {
-        let f = std::mem::size_of::<f32>() as u32;
-        [
-            vk::VertexInputAttributeDescription {
-                location: 0,
-                binding: 0,
-                format: vk::Format::R32G32B32_SFLOAT,
-                offset: 0,
-            },
-            vk::VertexInputAttributeDescription {
-                location: 1,
-                binding: 0,
-                format: vk::Format::R32G32B32_SFLOAT,
-                offset: 3 * f,
-            },
-            // (across, time, along)
-            vk::VertexInputAttributeDescription {
-                location: 2,
-                binding: 0,
-                format: vk::Format::R32G32B32_SFLOAT,
-                offset: 6 * f,
+                offset: 4 * f,
             },
         ]
     }

@@ -20,7 +20,7 @@ use smallvec::SmallVec;
 use crate::water::field::{FieldCells, WaterField};
 use crate::water::geometry::SpanIndex;
 
-use super::reach_mesher::RiverMesh;
+use super::river_mesh::RiverMesh;
 
 /// Depth a cell must hold to be drawn, m.
 pub(super) const DRAWN_DEPTH: f64 = 0.002;
@@ -234,15 +234,15 @@ pub(super) fn refresh(field: &WaterField, mesh: &mut RiverMesh) -> bool {
                 let (corner, now) = gather(&meetings, level);
                 held &= now == *shape;
                 let vertex = &mut mesh.vertices[v];
-                vertex.bed = corner.height as f32;
-                vertex.along = corner.depth as f32;
+                vertex.surface = corner.height as f32;
+                vertex.depth = corner.depth as f32;
                 vertex.flow = corner_flow(field, at, now);
             }
             &VertexSource::Edge { from } => {
                 let source = mesh.vertices[from as usize];
                 let vertex = &mut mesh.vertices[v];
-                vertex.bed = source.bed;
-                vertex.along = source.along;
+                vertex.surface = source.surface;
+                vertex.depth = source.depth;
                 vertex.flow = source.flow;
             }
             &VertexSource::Bank {
@@ -255,8 +255,8 @@ pub(super) fn refresh(field: &WaterField, mesh: &mut RiverMesh) -> bool {
                 held &= cells.depth(bank) <= DRAWN_DEPTH && level > floor as f64;
                 let source = mesh.vertices[from as usize];
                 let vertex = &mut mesh.vertices[v];
-                vertex.bed = source.bed;
-                vertex.along = (level - cells.bed(bank) as f64).min(0.0) as f32;
+                vertex.surface = source.surface;
+                vertex.depth = (level - cells.bed(bank) as f64).min(0.0) as f32;
                 vertex.flow = source.flow;
             }
             &VertexSource::Curtain { own, other, top } => {
@@ -267,7 +267,7 @@ pub(super) fn refresh(field: &WaterField, mesh: &mut RiverMesh) -> bool {
                 };
                 held &= (a - b).abs() > JOIN;
                 let vertex = &mut mesh.vertices[v];
-                vertex.bed = if top { a.max(b) } else { a.min(b) } as f32;
+                vertex.surface = if top { a.max(b) } else { a.min(b) } as f32;
                 vertex.flow = field.velocity(own);
             }
         }

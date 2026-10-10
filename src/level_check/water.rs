@@ -1,17 +1,22 @@
 //! Where each authored body of water actually ends up.
 //!
-//! A `Pool` is a seed and a surface level. Its basin is flooded from the seed
-//! over the span graph, exactly as the game does it, and stops at every crest:
-//! a pool can no longer escape its basin, but it can be authored above where
-//! it spills, and then the game opens by draining it to the lip. Nothing else
-//! in the pipeline says so, so it is reported here with the lip's location.
+//! A `Pool` is a seed and a surface level. The field fills its hollow from
+//! the seed, but never above where the hollow spills: water above that would
+//! run off, so the level opens with the pool at its lip instead. Nothing else
+//! in the pipeline says so, so it is reported here, with where each pool
+//! stands once the level has opened.
 
-use crate::level::Level;
+use nalgebra::Point3;
+
+use crate::level::{Level, WaterBody};
 use crate::terrain::TerrainWorld;
-use crate::water::network::{CrestKind, Store};
-use crate::water::NetworkWater;
+use crate::water::field::{pool_seed, SpillLevels, WET_DEPTH};
+use crate::water::WaterWorld;
 
 use super::report::{Report, Section};
+
+/// Farthest below its authored surface a pool may open, m.
+const POOL_TOLERANCE: f32 = 0.05;
 
 /// Place every body and report where each went.
 ///
@@ -31,121 +36,105 @@ pub fn check_water(level: &Level, terrain: &TerrainWorld, report: &mut Report) -
         );
     }
 
-    let (world, errors) = NetworkWater::from_config(config, terrain);
-    for error in errors {
-        report.warn("water", error.to_string());
-    }
-
-    for (id, basin) in world.basins() {
-        let level = basin.level();
-        let spill = basin
-            .crests
-            .iter()
-            .find(|c| c.kind == CrestKind::Outlet)
-            .copied();
-        let spill_text = match spill {
-            Some(c) => {
-                let (x, z) = c.inside.column.centre();
-                format!("spills at {:.2} by ({x:.1}, {z:.1})", c.saddle)
-            }
-            None => "no outlet".to_string(),
-        };
-        section.row(
-            format!("Basin {}", id.0),
+    let world = WaterWorld::from_config(config, terrain);
+    let field = world.field();
+    let (graph, cells) = (field.graph(), field.cells());
+    let spill = SpillLevels::find(graph, cells, field.sea().as_ref());
+    let (settled, took) = world.opened();
+    section.row(
+        "Opening",
+        format!(
+            "{:.0} m³ after {settled:.0} s settled, in {:.2} s",
+            world.volume(),
+            took.as_secs_f64()
+        ),
+    );
+    if world.still_settling() {
+        report.warn(
+            "water",
             format!(
-                "surface {level:.2} · {:.0} m³ · {} spans · {} · {} merge saddles",
-                basin.volume,
-                basin.region.len(),
-                spill_text,
-                basin.merge_saddles.len()
+                "the water did not come to rest in {settled:.0} s; the level opens still settling"
             ),
         );
-        // A basin a source feeds stands over its outlet by design.
-        let fed = world
-            .network()
-            .links()
-            .any(|(link, l)| l.down == id && world.link_discharge(link).is_some_and(|q| q > 0.0));
-        if let Some(crest) = spill.filter(|c| c.saddle < level && !fed) {
-            let (x, z) = crest.inside.column.centre();
-            let keep = basin.hypsometry.volume(crest.saddle);
+    }
+
+    let pools = config.bodies.iter().filter_map(|body| match body {
+        WaterBody::Pool {
+            seed,
+            surface_level,
+        } => Some((*seed, *surface_level)),
+        _ => None,
+    });
+    for (i, ((x, z), authored)) in pools.enumerate() {
+        let name = format!("Pool {i}");
+        let Some(span) = pool_seed(graph, x, z, authored) else {
+            report.error(
+                "water",
+                format!("pool at ({x:.1}, {z:.1}) has no ground under {authored:.2} to fill"),
+            );
+            section.row(name, "no ground to fill".to_string());
+            continue;
+        };
+        let spills = spill.at(cells, graph, span);
+        let stands = cells
+            .index(graph, span.column, span.ordinal)
+            .filter(|&at| cells.depth(at) > WET_DEPTH)
+            .map(|at| cells.surface(at) as f32);
+        let spill_text = if spills.is_finite() {
+            format!("spills at {spills:.2}")
+        } else {
+            "sealed".to_string()
+        };
+        let stands_text = stands.map_or("dry".to_string(), |s| format!("stands at {s:.2}"));
+        section.row(
+            name,
+            format!("authored {authored:.2} at ({x:.1}, {z:.1}) · {spill_text} · {stands_text}"),
+        );
+        if stands.is_none_or(|s| s < authored - POOL_TOLERANCE) {
             report.error(
                 "water",
                 format!(
-                    "basin {}: authored at {level:.2}, above its outlet at {:.2} by ({x:.1}, {z:.1}); \
-                     the level opens by draining {:.0} m³ over it. Raise the lip or lower the surface.",
-                    id.0,
-                    crest.saddle,
-                    basin.volume - keep,
+                    "pool at ({x:.1}, {z:.1}): authored at {authored:.2}, opens {stands_text} \
+                     ({spill_text}). Raise the lip or lower the surface."
                 ),
             );
         }
     }
 
-    for (i, source) in world.sources().iter().enumerate() {
-        let p = source.position;
+    for (i, source) in field.sources().iter().enumerate() {
+        let p = source.origin;
         let name = format!("Source {i}");
-        if source.buried {
-            report.error(
-                "water",
-                format!(
-                    "source at ({:.1}, {:.1}, {:.1}) is sealed in rock: no air within reach \
-                     along its direction, so nothing flows",
-                    p.x, p.y, p.z
-                ),
-            );
-            section.row(name, "sealed in rock".to_string());
-            continue;
-        }
-        let lands = source
-            .link
-            .and_then(|l| world.network().link(l))
-            .and_then(|l| l.fall.as_ref())
-            .and_then(|f| f.landing());
+        let lands = source.landing.first().map(|&at| {
+            let chunk = &cells.chunks[at.slot as usize];
+            let (local, _) = chunk.column_of(at.flat as usize);
+            let (lx, lz) = chunk.coord.column(local).centre();
+            Point3::new(lx, cells.bed(at), lz)
+        });
         let text = match lands {
             Some(at) => format!(
                 "{:.2} m³/s from ({:.1}, {:.1}, {:.1}), lands at ({:.1}, {:.1}, {:.1})",
                 source.discharge, p.x, p.y, p.z, at.x, at.y, at.z
             ),
-            None => format!(
-                "{:.2} m³/s from ({:.1}, {:.1}, {:.1})",
-                source.discharge, p.x, p.y, p.z
-            ),
+            None => {
+                report.warn(
+                    "water",
+                    format!(
+                        "source at ({:.1}, {:.1}, {:.1}) falls out of the world",
+                        p.x, p.y, p.z
+                    ),
+                );
+                format!(
+                    "{:.2} m³/s from ({:.1}, {:.1}, {:.1}), lands nowhere",
+                    source.discharge, p.x, p.y, p.z
+                )
+            }
         };
         section.row(name, text);
     }
-    // With a sea, a closed edge needs scenery: water should not run off it.
-    if config.ocean.is_some() {
-        let lost = world
-            .network()
-            .links()
-            .filter(|(_, l)| matches!(world.network().store(l.down), Some(Store::Sink)))
-            .filter_map(|(link, _)| world.link_discharge(link))
-            .sum::<f64>();
-        if lost > 0.0 {
-            report.warn(
-                "water",
-                format!(
-                    "{lost:.2} m³/s runs off a closed edge of the map at rest; \
-                     give that edge scenery or open it onto the sea"
-                ),
-            );
-        }
-    }
-    if let Some(steady) = world.steady_report() {
-        if !steady.converged {
-            report.warn(
-                "water",
-                format!(
-                    "the water did not come to rest in {} sweeps; the level opens still settling",
-                    steady.sweeps
-                ),
-            );
-        }
-    }
 
-    let repaired = world.geometry().repaired_columns();
-    if !repaired.is_empty() {
-        let (x, z) = repaired[0].centre();
+    let repaired: Vec<_> = field.repaired_columns().collect();
+    if let Some(first) = repaired.first() {
+        let (x, z) = first.centre();
         report.error(
             "water",
             format!(
@@ -156,17 +145,18 @@ pub fn check_water(level: &Level, terrain: &TerrainWorld, report: &mut Report) -
         );
     }
 
-    let balance = world.balance();
-    if !balance.is_balanced() {
+    let volume = world.volume();
+    let error = field.ledger().error(volume);
+    if error.abs() > 1.0e-6 * volume.max(1.0) {
         report.error(
             "water",
-            format!("the water ledger does not balance at load: {balance}"),
+            format!("the water ledger is out by {error:+.3e} m³ at load"),
         );
     }
 
     section.note(
-        "Each pool is flooded over the span graph from its seed and stops at every crest. A \
-         pool above its lowest outlet drains to it on the first frame.",
+        "Each pool fills its hollow from its seed, no higher than where the hollow spills; \
+         the level then settles as it opens. A pool authored above its spill opens at it.",
     );
     Some(section)
 }

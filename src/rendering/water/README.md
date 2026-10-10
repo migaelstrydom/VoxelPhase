@@ -1,9 +1,9 @@
 # Water Rendering
 
-This module draws every body of water from a static mesh. Meshes are built
-from the hydrology network's basins (`src/water/`, see
-`docs/WATER_HYDROLOGY_DESIGN.md` §15) when their topology changes, never per
-frame; each draw pushes its body's current level.
+This module draws the game's water: the shallow-water field's surface
+(`src/water/`, see `docs/WATER_FIELD_SPIKE.md`), one surface per 8 m chunk
+whose vertices carry the water's own height, and the sea's ring past the
+map's open edges, a still surface whose level is pushed per draw.
 
 ---
 
@@ -29,40 +29,39 @@ below, the reverse. A mesh crossing the surface (an ice floe) is drawn in both
 passes, each half clipped at the level through `gl_ClipDistance`
 (`triangle.vert`'s `clipPlane`). So smoke over a lake covers it, the lake shows
 through the dry part of a floe, and what is under the water is tinted and
-refracted by it. Rivers and falls are not in the divide; what stands in them
-counts as this side.
+refracted by it. Only still draws (the sea's ring, a bench's pool) are in the
+divide: the field's surfaces are not yet, so what stands in them counts as
+this side.
 
 `WaterRenderer::prepare` syncs meshes, uploads ripples and plans the frame's
 draws, leaving out tiles outside the view. A frame with no water in view is
 never split. `ScreenFootprint` (`footprint.rs`) projects the planned tiles'
 boxes, and the copy is limited to that rectangle plus the refraction's reach;
-a river or fall, whose draws carry no bounds, widens it to the whole screen.
+a river surface, whose draws carry no bounds, widens it to the whole screen.
 
 The water writes scene radiance like everything else in the pass; the resolve
 tonemaps it with the rest of the scene.
 
 ## Meshes
 
-`BasinMesher` builds one quad per region column of every basin, plus a ring of
-columns just outside it whose ground stands above the water. Columns beyond a
-crest, lower than the water, are left out, so a surface never hangs over the
-hillside below an outlet. The depth test against the terrain cuts the
-shoreline.
+Anything implementing `WaterScene` (`scene.rs`) can be drawn: the game's
+`WaterWorld` through `FieldScene`, and the visual bench's fixed `ScenePool`.
+It offers two kinds of surface:
 
-```
-x, z = column corners (0.5 m lattice)
-y    = the body's level, pushed per draw
-floor (per vertex) = the lowest floor of the column's span
-```
+- **Still surfaces** (`WaterMesh`): one quad per column, grouped into 8 m
+  tiles, one draw per (body, tile). The level and swell are push constants,
+  so a level change needs no new mesh; the mesh is built again only when its
+  key changes. The sea's ring (`ocean_ring.rs`) is one.
 
-Quads are grouped into 8 m tiles, one draw per (basin, tile). The mesh key is
-each basin's id and region version: a re-region, merge or split changes it and
-the mesh is rebuilt, then uploaded once into each frame slot's buffers. A
-level change is a push constant.
+  ```
+  x, z = column corners (0.5 m lattice)
+  y    = the body's level, pushed per draw
+  floor (per vertex) = the lowest floor of the column's span
+  ```
 
-Anything implementing `WaterScene` can be drawn: the game's `WaterWorld` (the
-field, below), the network's `NetworkWater` for the water tools, and the
-visual bench's fixed `ScenePool`.
+- **River surfaces** (`RiverMesh`, `river.vert`): every vertex at the water's
+  own height, with its depth (negative over a bank, so the shore depth cuts
+  a contour) and its flow, one draw per surface.
 
 ## The field
 
@@ -103,7 +102,7 @@ descriptor set per frame slot, both allocated once.
 |--------|------|----------|-------------------------------------------|
 | 0      | 64   | Vertex   | View matrix (mat4)                        |
 | 64     | 64   | Vertex   | Projection matrix (mat4)                  |
-| 128    | 16   | Vertex   | Body: level, swell amplitude, phase, clock — per draw |
+| 128    | 16   | Vertex   | Body: level, swell amplitude, phase, clock — per draw; a river surface: shore depth, —, —, clock |
 | 144    | 16   | Vertex   | Tile: origin x, origin z, ripple layer — fine draws only |
 | 160    | 16   | Fragment | Camera position (vec3 + padding)          |
 | 176    | 16   | Fragment | Sun direction (vec3 + padding)            |
@@ -264,11 +263,12 @@ opaque).
 ```
 src/rendering/water/
     mod.rs          -- re-exports
-    basin_mesher.rs -- basin meshes and the WaterScene trait
+    scene.rs        -- the WaterScene trait and still-surface meshes
+    river_mesh.rs   -- river-surface meshes
     field_mesher.rs -- the field's surface, per chunk
     field_sources.rs -- where each vertex of the field's surface reads its water
     river_parts.rs  -- river surfaces read again or rebuilt when their version moves
-    ocean_mesher.rs, ocean_ring.rs, reach_mesher.rs, fall_mesher.rs
+    ocean_ring.rs   -- the sea past the map's open edges
     divide.rs       -- which side of the water a blended surface lies on
     footprint.rs    -- the screen rectangle the water can read
     pipeline.rs     -- Vulkan pipelines, descriptor set for the refraction copy
@@ -280,5 +280,4 @@ Shaders:
 ```
 shader/water.vert, ripple.vert, river.vert -- surfaces
 shader/water.frag  -- Fresnel, specular, volumetric depth, refraction
-shader/fall.vert, fall.frag -- a fall's sheet
 ```

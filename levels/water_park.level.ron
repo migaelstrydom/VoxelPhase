@@ -168,8 +168,6 @@ Level(
 
     water: Some((
         ocean: Some((level: 0.0, open_edges: [South])),
-        // Breaches three times as fast as the weir laws alone: a demo.
-        drain_gain: 3.0,
         bodies: [
             // DAM
             Pool(seed: (-62.0, 40.0), surface_level: 8.5),

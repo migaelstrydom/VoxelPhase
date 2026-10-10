@@ -1,10 +1,12 @@
 //! Water surface rendering.
 //!
-//! Meshes are static between topology changes (see [`basin_mesher`]): the
-//! renderer rebuilds its mesh only when a basin's region changes, uploads it
-//! once into each frame slot's buffers, and otherwise only pushes each
-//! body's level and swell per draw. A tile whose ripples are awake is drawn
-//! instead from a fine grid displaced out of that frame's ripple storage.
+//! A still surface's mesh is static between changes of its key: the renderer
+//! builds it again only then, uploads it once into each frame slot's
+//! buffers, and otherwise only pushes each body's level and swell per draw.
+//! A tile whose ripples are awake is drawn instead from a fine grid displaced
+//! out of that frame's ripple storage. River surfaces (the field's chunks)
+//! carry their own heights, and are read again or built again as their water
+//! moves (`RiverParts`).
 //!
 //! The water is drawn inside the HDR scene pass, over a copy of the scene
 //! taken once everything beyond the surface is down, so a frame is prepared
@@ -14,8 +16,6 @@
 //!   prepare ──▶ meshes synced, ripples uploaded, draws planned ──▶ patches
 //!   record  ──▶ the plan, after the refraction copy
 //! ```
-//!
-//! [`basin_mesher`]: super::basin_mesher
 
 use std::sync::Arc;
 
@@ -23,13 +23,13 @@ use ash::vk;
 use nalgebra::{Matrix4, Vector2, Vector3};
 use rustc_hash::FxHashMap;
 
-use super::basin_mesher::{MeshKey, WaterMesh, WaterScene};
 use super::divide::WaterPatch;
-use super::fall_mesher::{FallKey, FallMesh, SPREAD as FALL_SPREAD};
 use super::footprint::ScreenFootprint;
 use super::ocean_ring::RING_TILE;
 use super::pipeline::{WaterPipeline, BODY_PUSH_OFFSET, FRAGMENT_PUSH_OFFSET};
+use super::river_mesh::SHORE_DEPTH;
 use super::river_parts::RiverParts;
+use super::scene::{MeshKey, WaterMesh, WaterScene};
 use super::vertex::FineVertex;
 use crate::core::device::ManagedDevice;
 use crate::core::error::EngineResult;
@@ -40,7 +40,7 @@ use crate::rendering::reflection::BoundingSphere;
 use crate::rendering::target::RefractionCopy;
 use crate::rendering::view_volume::ViewVolume;
 use crate::water::geometry::{CHUNK_COLUMNS, COLUMNS_PER_CHUNK, COLUMN_SIZE};
-use crate::water::ids::StoreId;
+use crate::water::ids::SurfaceId;
 use crate::water::surface::{RippleConfig, PADDED_CELLS_PER_TILE, TILE_CELLS, TILE_CORNERS};
 
 /// Ripple tiles one frame can draw: the ripple budget.
@@ -64,7 +64,7 @@ struct RippleSlot {
 }
 
 /// How far above and below its level a tile's surface may be drawn, over its
-/// swell: ripples and a reach easing into the basin, m.
+/// swell, for its ripples, m.
 const TILE_HEIGHT_PAD: f32 = 0.5;
 
 /// What a frame's prepared water tells the renderer.
@@ -84,14 +84,13 @@ enum WaterSurface {
     Ocean,
     Rivers,
     Ripples,
-    Falls,
 }
 
 /// One draw of the frame's plan, with every constant it pushes.
 #[derive(Debug, Clone, Copy)]
 struct PlannedDraw {
     surface: WaterSurface,
-    /// The body (or reach, or fall) constants at [`BODY_PUSH_OFFSET`].
+    /// The body (or river surface) constants at [`BODY_PUSH_OFFSET`].
     constants: [f32; 8],
     first_index: u32,
     index_count: u32,
@@ -164,7 +163,7 @@ pub struct WaterRenderer {
     /// Bumped on every rebuild of `mesh`.
     version: u64,
     slots: PerFrame<SlotMesh>,
-    /// The sea, kept apart so a basin's re-flood does not rebuild it.
+    /// The sea's ring, kept apart from the still surfaces.
     ocean: WaterMesh,
     ocean_key: MeshKey,
     ocean_version: u64,
@@ -172,10 +171,6 @@ pub struct WaterRenderer {
     rivers: RiverParts,
     river_version: u64,
     river_slots: PerFrame<SlotMesh>,
-    falls: FallMesh,
-    fall_key: FallKey,
-    fall_version: u64,
-    fall_slots: PerFrame<SlotMesh>,
     ripple_slots: PerFrame<RippleSlot>,
     /// The fine grid every awake ripple tile is drawn with. Never changes.
     fine_grid: StreamedMesh,
@@ -250,14 +245,6 @@ impl WaterRenderer {
                 capacity: (0, 0),
                 version: 0,
             }),
-            falls: FallMesh::default(),
-            fall_key: FallKey::new(),
-            fall_version: 0,
-            fall_slots: PerFrame::new(|_| SlotMesh {
-                buffers: None,
-                capacity: (0, 0),
-                version: 0,
-            }),
             slot: FrameSlot::default(),
             plan: Vec::new(),
             view: None,
@@ -309,20 +296,6 @@ impl WaterRenderer {
             &self.rivers.mesh().vertices,
             &self.rivers.mesh().indices,
         )?;
-        let key = water.fall_key();
-        if key != self.fall_key {
-            self.falls = water.build_falls();
-            self.fall_key = key;
-            self.fall_version += 1;
-        }
-        upload_slot(
-            &self.device,
-            &mut self.fall_slots[self.slot],
-            self.fall_version,
-            &self.falls.vertices,
-            &self.falls.indices,
-        )?;
-
         upload_slot(
             &self.device,
             &mut self.slots[self.slot],
@@ -371,13 +344,12 @@ impl WaterRenderer {
         if self.mesh.draws.is_empty()
             && self.ocean.draws.is_empty()
             && self.rivers.mesh().draws.is_empty()
-            && self.falls.draws.is_empty()
         {
             return Ok(WaterFrame::default());
         }
         let layers = self.upload_ripples(water)?;
         let clock = water.clock();
-        let body = |id: StoreId, level: f32, tile: [f32; 4]| {
+        let body = |id: SurfaceId, level: f32, tile: [f32; 4]| {
             let swell = water.swell(id);
             [
                 level,
@@ -428,33 +400,21 @@ impl WaterRenderer {
             }
         }
 
-        for draw in &self.rivers.mesh().draws {
-            let Some(state) = water.river_state(draw.reach) else {
-                continue;
-            };
-            if state.front <= state.tail {
-                continue;
-            }
-            // A reach's strip has no bounds of its own to place it by.
+        if !self.rivers.mesh().draws.is_empty() {
+            // The surfaces are not tiles a level places: they may be drawn
+            // anywhere on the screen.
             footprint.cover_all();
+        }
+        for draw in &self.rivers.mesh().draws {
             self.plan.push(PlannedDraw {
                 surface: WaterSurface::Rivers,
-                constants: [
-                    state.depth_scale,
-                    state.tail,
-                    state.front,
-                    clock,
-                    state.speed_scale,
-                    state.ends.upstream,
-                    state.ends.downstream,
-                    state.length,
-                ],
+                constants: [SHORE_DEPTH, 0.0, 0.0, clock, 0.0, 0.0, 0.0, 0.0],
                 first_index: draw.first_index,
                 index_count: draw.index_count,
             });
         }
 
-        let mut tiles: Vec<(&(i32, i32, StoreId), &(usize, u32))> = layers.iter().collect();
+        let mut tiles: Vec<(&(i32, i32, SurfaceId), &(usize, u32))> = layers.iter().collect();
         tiles.sort();
         for (&(tx, tz, id), &(layer, sealed)) in tiles {
             let Some(level) = water.level(id) else {
@@ -474,30 +434,6 @@ impl WaterRenderer {
                 constants: body(id, level, tile),
                 first_index: 0,
                 index_count: self.fine_indices,
-            });
-        }
-
-        // Falls last: a sheet reads the scene behind it, which holds no
-        // water.
-        for draw in &self.falls.draws {
-            let Some(state) = water.fall_state(draw.link, draw.back) else {
-                continue;
-            };
-            footprint.cover_all();
-            self.plan.push(PlannedDraw {
-                surface: WaterSurface::Falls,
-                constants: [
-                    state.half_width,
-                    state.strength,
-                    FALL_SPREAD,
-                    clock,
-                    state.lift,
-                    state.top,
-                    state.cut,
-                    state.aeration,
-                ],
-                first_index: draw.first_index,
-                index_count: draw.index_count,
             });
         }
 
@@ -584,7 +520,6 @@ impl WaterRenderer {
             WaterSurface::Ocean => self.ocean_slots[self.slot].buffers.as_ref(),
             WaterSurface::Rivers => self.river_slots[self.slot].buffers.as_ref(),
             WaterSurface::Ripples => Some(&self.fine_grid),
-            WaterSurface::Falls => self.fall_slots[self.slot].buffers.as_ref(),
         }
     }
 
@@ -593,7 +528,6 @@ impl WaterRenderer {
             WaterSurface::Basins | WaterSurface::Ocean => self.pipeline.pipeline(),
             WaterSurface::Rivers => self.pipeline.river_pipeline(),
             WaterSurface::Ripples => self.pipeline.fine_pipeline(),
-            WaterSurface::Falls => self.pipeline.fall_pipeline(),
         }
     }
 }
@@ -605,7 +539,7 @@ impl WaterRenderer {
     fn upload_ripples(
         &self,
         water: &dyn WaterScene,
-    ) -> EngineResult<FxHashMap<(i32, i32, StoreId), (usize, u32)>> {
+    ) -> EngineResult<FxHashMap<(i32, i32, SurfaceId), (usize, u32)>> {
         let mut layers = FxHashMap::default();
         let tiles = water.ripple_tiles();
         if tiles.is_empty() {

@@ -2,19 +2,18 @@
 #extension GL_ARB_separate_shader_objects : enable
 #extension GL_ARB_shading_language_420pack : enable
 
-// A reach's surface: cross-sections along its centreline, each vertex at the
-// section's bed plus the design depth, scaled to the reach's discharge now,
-// and each end eased to meet the store at its port. Mirrors
-// `Reach::surface_at` (src/water/network/reach.rs).
+// A river surface: each vertex at the water's own height, carrying its depth
+// (negative over a bank) and its flow. The fragment shader cuts the surface
+// where the depth falls below the shore depth, so a shoreline is a contour.
 layout(location = 0) in vec2 inXz;
-layout(location = 1) in vec3 inSection;  // (bed, design depth, distance down the reach)
-layout(location = 2) in vec2 inFlow;     // velocity at the design discharge
+layout(location = 1) in vec2 inWater;  // (surface, depth)
+layout(location = 2) in vec2 inFlow;   // depth-averaged velocity, m/s
 
 layout(push_constant) uniform PushConstants {
     mat4 view;
     mat4 proj;
-    vec4 body;   // (depth scale, tail, front, clock)
-    vec4 tile;   // (speed scale, upstream ease, downstream ease, length)
+    vec4 body;   // (shore depth, unused, unused, clock)
+    vec4 tile;   // unused by a river surface
 } pc;
 
 layout(location = 0) out vec3 fragNormal;
@@ -22,31 +21,19 @@ layout(location = 1) out vec3 fragWorldPos;
 layout(location = 2) flat out int fragLayer;
 layout(location = 3) flat out vec2 fragTileOrigin;
 layout(location = 4) out vec2 fragFlow;
-layout(location = 5) out float fragAlong;
+layout(location = 5) out float fragWetDepth;
 layout(location = 6) flat out vec2 fragWetRange;
 layout(location = 7) out vec4 fragSwell;
 
-// An end eases over 4 depths of water, never under 2 m, never over half
-// the reach.
-const float EASE_DEPTHS = 4.0;
-const float MIN_EASE = 2.0;
-
 void main() {
-    float depth = inSection.y * pc.body.x;
-    float along = inSection.z;
-    float length = pc.tile.w;
-    float ease = min(max(EASE_DEPTHS * depth, MIN_EASE), 0.5 * length);
-    float upstream = 1.0 - smoothstep(0.0, ease, along);
-    float downstream = smoothstep(length - ease, length, along);
-    float surface = inSection.x + depth + upstream * pc.tile.y + downstream * pc.tile.z;
-    vec3 position = vec3(inXz.x, surface, inXz.y);
+    vec3 position = vec3(inXz.x, inWater.x, inXz.y);
     gl_Position = pc.proj * pc.view * vec4(position, 1.0);
     fragNormal = vec3(0.0, 1.0, 0.0);
     fragSwell = vec4(0.0);
     fragWorldPos = position;
     fragLayer = -1;
     fragTileOrigin = vec2(0.0);
-    fragFlow = inFlow * pc.tile.x;
-    fragAlong = inSection.z;
-    fragWetRange = pc.body.yz;
+    fragFlow = inFlow;
+    fragWetDepth = inWater.y;
+    fragWetRange = vec2(pc.body.x, 1.0e9);
 }

@@ -2814,14 +2814,6 @@ pub struct WaterConfig {
     /// Individual water bodies placed in the level.
     pub bodies: Vec<WaterBody>,
 
-    /// Scales every weir and orifice discharge: the one dial on how dramatic
-    /// a breach is. Hydrology always runs at real time.
-    pub drain_gain: f32,
-
-    /// Water lost by minor stores, in mm/h over the area they wet. Clears
-    /// trickles and puddles; rivers and lakes never lose. Zero is off.
-    pub loss_rate: f32,
-
     /// How the level opens.
     pub settle: Settle,
 }
@@ -2831,8 +2823,6 @@ impl Default for WaterConfig {
         Self {
             ocean: None,
             bodies: Vec::new(),
-            drain_gain: 1.0,
-            loss_rate: 0.0,
             settle: Settle::default(),
         }
     }
@@ -2882,8 +2872,9 @@ impl MapEdge {
 /// How a level's water starts.
 #[derive(Deserialize, Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Settle {
-    /// At rest: channels routed and full, every fed basin at the level where
-    /// what flows in equals what flows out.
+    /// At rest: run until the water stops changing (within a limit), so
+    /// channels run full and every fed lake stands where what flows in
+    /// equals what flows out.
     #[default]
     Steady,
     /// Exactly as authored, and left to settle in play.
@@ -3008,8 +2999,6 @@ mod tests {
 
         assert_eq!(config.ocean, None);
         assert!(config.bodies.is_empty());
-        assert_eq!(config.drain_gain, 1.0);
-        assert_eq!(config.loss_rate, 0.0);
         assert_eq!(config.settle, Settle::Steady);
     }
 

@@ -10,10 +10,10 @@
 
 use std::collections::BTreeMap;
 
-use crate::water::ids::StoreId;
+use crate::water::ids::SurfaceId;
 
-use super::basin_mesher::WaterScene;
-use super::reach_mesher::RiverMesh;
+use super::river_mesh::RiverMesh;
+use super::scene::WaterScene;
 
 /// Most surfaces built again in one sync, by default.
 const BUILDS_PER_SYNC: usize = 8;
@@ -33,7 +33,7 @@ struct Part {
 /// Every river surface, apart and joined.
 #[derive(Debug)]
 pub struct RiverParts {
-    parts: BTreeMap<StoreId, Part>,
+    parts: BTreeMap<SurfaceId, Part>,
     /// Every surface joined, in id order.
     joined: RiverMesh,
     /// Syncs so far.
@@ -70,14 +70,14 @@ impl RiverParts {
     /// all. Returns whether anything changed.
     pub fn sync(&mut self, water: &dyn WaterScene) -> bool {
         self.syncs += 1;
-        let wanted: BTreeMap<StoreId, u32> = water.river_key().into_iter().collect();
+        let wanted: BTreeMap<SurfaceId, u32> = water.river_key().into_iter().collect();
         let before = self.parts.len();
         self.parts.retain(|id, _| wanted.contains_key(id));
         let mut reshaped = self.parts.len() != before;
 
-        let mut refreshed: Vec<StoreId> = Vec::new();
+        let mut refreshed: Vec<SurfaceId> = Vec::new();
         // Missing surfaces first, then those built longest ago.
-        let mut stale: Vec<(u64, StoreId, u32)> = Vec::new();
+        let mut stale: Vec<(u64, SurfaceId, u32)> = Vec::new();
         for (&id, &version) in &wanted {
             match self.parts.get_mut(&id) {
                 None => stale.push((0, id, version)),
@@ -189,7 +189,7 @@ mod tests {
         }
         assert!(refreshed > 0, "nothing was read again");
 
-        let versions: BTreeMap<StoreId, u32> = water.river_key().into_iter().collect();
+        let versions: BTreeMap<SurfaceId, u32> = water.river_key().into_iter().collect();
         let mut compared = 0;
         for (id, part) in &parts.parts {
             if part.version != versions[id] {
@@ -200,16 +200,16 @@ mod tests {
             for (a, b) in fresh.vertices.iter().zip(&part.mesh.vertices) {
                 assert_eq!(a.xz, b.xz, "{id:?}");
                 assert!(
-                    (a.bed - b.bed).abs() <= MATCH,
+                    (a.surface - b.surface).abs() <= MATCH,
                     "{id:?}: {} vs {}",
-                    a.bed,
-                    b.bed
+                    a.surface,
+                    b.surface
                 );
                 assert!(
-                    (a.along - b.along).abs() <= MATCH,
+                    (a.depth - b.depth).abs() <= MATCH,
                     "{id:?}: {} vs {}",
-                    a.along,
-                    b.along
+                    a.depth,
+                    b.depth
                 );
             }
             compared += 1;

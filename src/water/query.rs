@@ -5,7 +5,7 @@ use nalgebra::{Point3, Vector3};
 
 use super::buoyancy::{WaterSample as SurfaceSample, WaterSurface};
 use super::field::{WaterField, WET_DEPTH};
-use super::ids::{StoreId, WaterBodyId};
+use super::ids::{SurfaceId, WaterBodyId};
 
 /// The water at a point.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -24,7 +24,7 @@ pub struct WaterSample {
 
 /// The one body the field's water belongs to: a field has no stores, so
 /// all its water is one body.
-pub const FIELD_BODY: WaterBodyId = StoreId(0);
+pub const FIELD_BODY: WaterBodyId = SurfaceId(0);
 
 /// Point queries against one [`WaterField`].
 #[derive(Clone, Copy)]

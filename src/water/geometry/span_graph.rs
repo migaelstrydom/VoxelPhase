@@ -9,7 +9,7 @@
 
 use smallvec::SmallVec;
 
-use super::span::{Column, Span, SpanChunk, SpanChunkCoord, SpanOwner, SpanRef, CHUNK_COLUMNS};
+use super::span::{Column, Span, SpanChunk, SpanChunkCoord, SpanRef, CHUNK_COLUMNS};
 
 /// The least clearance between the higher floor and the lower ceiling for two
 /// spans to be joined, in metres. A hairline crack passes no water.
@@ -225,22 +225,6 @@ impl SpanGraph {
         chunk
             .column_spans(span.column.local_index())
             .get(span.ordinal as usize)
-    }
-
-    pub fn owner(&self, span: SpanRef) -> SpanOwner {
-        let chunk = self
-            .chunk(span.column.chunk())
-            .expect("SpanRef outside the graph");
-        self.check_generation(chunk, span);
-        chunk.column_owners(span.column.local_index())[span.ordinal as usize]
-    }
-
-    pub fn owner_mut(&mut self, span: SpanRef) -> &mut SpanOwner {
-        let index = self
-            .chunk_index(span.column.chunk())
-            .expect("SpanRef outside the graph");
-        self.check_generation(&self.chunks[index], span);
-        &mut self.chunks[index].column_owners_mut(span.column.local_index())[span.ordinal as usize]
     }
 
     #[allow(unused_variables)]

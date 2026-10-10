@@ -16,10 +16,10 @@ layout(location = 1) in vec3 fragWorldPos;
 // The ripple tile this fragment is drawn from, or -1 for the coarse surface.
 layout(location = 2) flat in int fragLayer;
 layout(location = 3) flat in vec2 fragTileOrigin;
-// A reach's flow velocity, its distance down the reach and its wetted range;
-// zero flow and an unbounded range for still water.
+// A river surface's flow velocity, its depth of water here and the depths it
+// is drawn over; zero flow and an unbounded range for still water.
 layout(location = 4) in vec2 fragFlow;
-layout(location = 5) in float fragAlong;
+layout(location = 5) in float fragWetDepth;
 layout(location = 6) flat in vec2 fragWetRange;
 // The swell under this fragment: (amplitude with its shore fade, phase,
 // clock, unused); zero amplitude where there is none.
@@ -107,8 +107,8 @@ void main() {
         discard;
     }
 
-    // A reach is wet only between its tail and its front.
-    if (fragAlong < fragWetRange.x || fragAlong > fragWetRange.y) {
+    // A river surface is drawn only where its water is deep enough.
+    if (fragWetDepth < fragWetRange.x || fragWetDepth > fragWetRange.y) {
         discard;
     }
 
@@ -231,7 +231,7 @@ void main() {
     float sss = pow(max(dot(V, -L), 0.0), 4.0) * (1.0 - depthFactor) * SSS_INTENSITY;
     color += SSS_COLOR * sss;
 
-    // --- Shoreline foam on still water, white water where a reach runs fast ---
+    // --- Shoreline foam on still water, white water where a river runs fast ---
     float running = step(1.0e-4, speed);
     float shoreFoam = (1.0 - smoothstep(0.0, 0.3, opticalDepth)) * (1.0 - running);
     float whiteWater = smoothstep(3.0, 7.0, speed) * 0.4 * fbm(worldXZ * 2.0 + carried * 2.0);

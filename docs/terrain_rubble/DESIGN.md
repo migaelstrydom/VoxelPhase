@@ -594,8 +594,8 @@ Consequences:
   pile of terrain, not two hundred sleeping bodies.
 - **The pile is ground.** It can be walked on and dug into again. Blasting it
   can make new rubble.
-- **Water notices.** A deposit is a terrain edit, so the hydrology network is
-  re-laid (`docs/WATER_HYDROLOGY_DESIGN.md`). Bring a cliff down into a river
+- **Water notices.** A deposit is a terrain edit, so the water field carries
+  its water over it (`docs/WATER_FIELD_SPIKE.md`). Bring a cliff down into a river
   and the river is dammed. Blast the dam and it flows again.
 
 ### Why the resampled field is valid terrain

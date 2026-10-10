@@ -11,8 +11,6 @@
 //!   SpanRef        (column, ordinal): the ordinal-th span up the column
 //! ```
 
-use crate::water::ids::StoreId;
-
 /// Width of a column, in metres.
 pub const COLUMN_SIZE: f32 = 0.5;
 
@@ -171,15 +169,6 @@ impl Ord for SpanRef {
     }
 }
 
-/// Which network objects claim a span. Parallel to the spans of a chunk.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct SpanOwner {
-    /// Water body whose region contains this span, wet or not.
-    pub body: Option<StoreId>,
-    /// Reach, and cell along it, whose channel runs over this span.
-    pub reach: Option<(StoreId, u16)>,
-}
-
 /// 16 × 16 columns of spans, in CSR order.
 #[derive(Debug, Clone)]
 pub struct SpanChunk {
@@ -187,8 +176,6 @@ pub struct SpanChunk {
     /// spans, bottom to top.
     column_offsets: [u16; COLUMNS_PER_CHUNK + 1],
     spans: Vec<Span>,
-    /// Parallel to `spans`.
-    owner: Vec<SpanOwner>,
     /// Bumped on every rebuild.
     generation: u32,
     /// The generation at which each column's spans last changed: a ref taken
@@ -202,7 +189,6 @@ impl Default for SpanChunk {
         Self {
             column_offsets: [0; COLUMNS_PER_CHUNK + 1],
             spans: Vec::new(),
-            owner: Vec::new(),
             generation: 0,
             changed: [0; COLUMNS_PER_CHUNK],
         }
@@ -210,8 +196,7 @@ impl Default for SpanChunk {
 }
 
 impl SpanChunk {
-    /// A chunk from per-column span lists, in local-index order, with no
-    /// owners.
+    /// A chunk from per-column span lists, in local-index order.
     pub fn from_columns(columns: &[Vec<Span>], generation: u32) -> Self {
         debug_assert_eq!(columns.len(), COLUMNS_PER_CHUNK);
         let mut chunk = Self {
@@ -223,7 +208,6 @@ impl SpanChunk {
             chunk.spans.extend_from_slice(spans);
             chunk.column_offsets[local + 1] = chunk.spans.len() as u16;
         }
-        chunk.owner = vec![SpanOwner::default(); chunk.spans.len()];
         chunk
     }
 
@@ -248,14 +232,6 @@ impl SpanChunk {
     }
 
     /// Owners of the column at a local index, parallel to its spans.
-    pub fn column_owners(&self, local: usize) -> &[SpanOwner] {
-        &self.owner[self.range(local)]
-    }
-
-    pub fn column_owners_mut(&mut self, local: usize) -> &mut [SpanOwner] {
-        let range = self.range(local);
-        &mut self.owner[range]
-    }
 
     /// Index into the flat span array of a column's `ordinal`-th span.
     pub fn flat_index(&self, local: usize, ordinal: u8) -> Option<usize> {

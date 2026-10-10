@@ -1,7 +1,8 @@
 # Water: a Hydrology Design
 
-Status: signed off; being implemented stage by stage (§21). Replaces the design in
-`WATER_SYSTEM_PLAN.md`.
+Status: superseded and removed. The game's water is now the shallow-water field
+(`WATER_FIELD_SPIKE.md`); this document records the network design that came before
+it, and why it was tried.
 
 ## 1. The idea in one paragraph
 

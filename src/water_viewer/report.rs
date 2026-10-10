@@ -1,94 +1,104 @@
-//! Printing a run: a table of the water over time, and a CSV of every frame.
+//! Printing a run: a table of the water over time, a line per scenario, and
+//! a CSV of every frame.
 
 use std::fmt::Write as _;
 use std::path::Path;
 
-use super::driver::{Run, Sample};
+use super::driver::Run;
 
-/// A table with one row per `every` simulated seconds, plus the events.
+/// The run as a table, one row every `every` seconds.
 pub fn report(run: &Run, every: f32) -> String {
     let mut out = String::new();
-    let _ = writeln!(out, "{}", run.scenario);
-    for event in &run.events {
-        let _ = writeln!(out, "  {:>7.2}s  {}", event.time, event.text);
+    let _ = writeln!(
+        out,
+        "{} (settled for {:.1} s)",
+        run.scenario, run.settled_for
+    );
+    for (time, text) in &run.events {
+        let _ = writeln!(out, "  {time:>8.2}s  {text}");
     }
-
-    let _ = write!(out, "  {:>8}", "t (s)");
+    let _ = write!(out, "{:>8}", "t (s)");
     for name in &run.probe_names {
-        let _ = write!(out, " {:>10}", name);
+        let _ = write!(out, " {name:>10}");
     }
     let _ = writeln!(
         out,
-        " {:>12} {:>10} {:>10} {:>7} {:>6}",
-        "volume m³", "sunk m³", "ledger", "basins", "links"
+        " {:>11} {:>10} {:>10} {:>6} {:>4} {:>8} {:>6}",
+        "volume m³", "sunk m³", "ledger", "awake", "sub", "step ms", "u m/s"
     );
-
-    let mut next = 0.0f32;
-    let last = run.samples.len().saturating_sub(1);
-    for (index, sample) in run.samples.iter().enumerate() {
-        if sample.time + 1e-4 < next && index != last {
+    let mut next = 0.0;
+    for s in &run.samples {
+        if s.time + 1e-4 < next {
             continue;
         }
-        next = sample.time + every;
-        out.push_str(&row(sample));
-    }
-    out
-}
-
-fn row(sample: &Sample) -> String {
-    let mut out = String::new();
-    let _ = write!(out, "  {:>8.2}", sample.time);
-    for level in &sample.probes {
-        match level {
-            Some(y) => {
-                let _ = write!(out, " {:>10.3}", y);
-            }
-            None => {
-                let _ = write!(out, " {:>10}", "dry");
+        next = s.time + every;
+        let _ = write!(out, "{:>8.2}", s.time);
+        for probe in &s.probes {
+            match probe {
+                Some(level) => {
+                    let _ = write!(out, " {level:>10.3}");
+                }
+                None => {
+                    let _ = write!(out, " {:>10}", "dry");
+                }
             }
         }
+        let _ = writeln!(
+            out,
+            " {:>11.2} {:>10.3} {:>10.1e} {:>6} {:>4} {:>8.3} {:>6.2}",
+            s.volume,
+            s.sunk,
+            s.ledger_error,
+            s.awake,
+            s.substeps,
+            s.step.as_secs_f64() * 1e3,
+            s.max_speed
+        );
     }
-    let _ = writeln!(
-        out,
-        " {:>12.2} {:>10.3} {:>10.1e} {:>7} {:>6}",
-        sample.volume, sample.sunk, sample.ledger_error, sample.basins, sample.links
-    );
+    let _ = writeln!(out, "{}", timing_line(run));
     out
 }
 
-/// One line per run: the final state against the start.
-pub fn summary_line(run: &Run) -> String {
-    let Some(last) = run.samples.last() else {
-        return format!("{:<14} no samples", run.scenario);
-    };
-    let probes: Vec<String> = run
-        .probe_names
+/// Mean, p99 and max stepping time, and the slowest edit.
+pub fn timing_line(run: &Run) -> String {
+    let mut times: Vec<f64> = run
+        .step_times
         .iter()
-        .zip(&last.probes)
-        .map(|(name, level)| match level {
-            Some(y) => format!("{name} {y:.2}"),
-            None => format!("{name} dry"),
-        })
+        .map(|d| d.as_secs_f64() * 1e3)
         .collect();
+    times.sort_by(f64::total_cmp);
+    let mean = times.iter().sum::<f64>() / times.len().max(1) as f64;
+    let at = |q: f64| {
+        times
+            .get(((times.len() as f64 - 1.0) * q) as usize)
+            .copied()
+            .unwrap_or(0.0)
+    };
+    let edit = run
+        .edit_times
+        .iter()
+        .max()
+        .map_or(0.0, |d| d.as_secs_f64() * 1e3);
     format!(
-        "{:<14} t={:.0}s  {}  volume {:.1} m³, sunk {:.2}, ledger {:+.1e}, {} basins",
-        run.scenario,
-        last.time,
-        probes.join("  "),
-        last.volume,
-        last.sunk,
-        last.ledger_error,
-        last.basins
+        "step ms: mean {mean:.3}, p99 {:.3}, max {:.3}; slowest edit {edit:.3} ms",
+        at(0.99),
+        at(1.0)
     )
 }
 
-/// Every recorded frame as CSV.
+/// One line for a run among many: its name and its stepping time.
+pub fn summary_line(run: &Run) -> String {
+    format!("{:<16} {}", run.scenario, timing_line(run))
+}
+
+/// Every recorded frame: time, each probe's level (empty where dry), and the
+/// volume, what has drained away, the ledger's error and the fastest water.
 pub fn write_csv(run: &Run, path: &Path) -> std::io::Result<()> {
     let mut out = String::from("time");
     for name in &run.probe_names {
         let _ = write!(out, ",{name}");
     }
-    out.push_str(",volume,sunk,discarded,ledger_error,basins,links\n");
+    out.push_str(",volume,sunk,ledger_error,awake,max_speed\n");
     for sample in &run.samples {
         let _ = write!(out, "{}", sample.time);
         for level in &sample.probes {
@@ -101,13 +111,8 @@ pub fn write_csv(run: &Run, path: &Path) -> std::io::Result<()> {
         }
         let _ = writeln!(
             out,
-            ",{},{},{},{},{},{}",
-            sample.volume,
-            sample.sunk,
-            sample.discarded,
-            sample.ledger_error,
-            sample.basins,
-            sample.links
+            ",{},{},{},{},{}",
+            sample.volume, sample.sunk, sample.ledger_error, sample.awake, sample.max_speed
         );
     }
     std::fs::write(path, out)

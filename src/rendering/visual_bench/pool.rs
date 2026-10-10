@@ -12,10 +12,10 @@ use nalgebra::Vector2;
 
 use crate::rendering::water::{BasinVertex, MeshKey, WaterDraw, WaterMesh, WaterScene};
 use crate::water::geometry::{SpanChunkCoord, COLUMN_SIZE};
-use crate::water::ids::StoreId;
+use crate::water::ids::SurfaceId;
 
 /// The pool's body id, as the renderer sees it.
-const POOL_BODY: StoreId = StoreId(0);
+const POOL_BODY: SurfaceId = SurfaceId(0);
 
 /// A rectangular pool at a fixed level, centred on the origin in x and z.
 #[derive(Clone, Copy, Debug)]
@@ -85,7 +85,7 @@ impl WaterScene for ScenePool {
         mesh
     }
 
-    fn level(&self, body: StoreId) -> Option<f32> {
+    fn level(&self, body: SurfaceId) -> Option<f32> {
         (body == POOL_BODY).then_some(self.level)
     }
 }

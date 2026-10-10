@@ -1,8 +1,8 @@
 # Water as a Shallow-Water Field: Spike
 
-Status: on branch `water-field`, the game runs the field, for play-testing
-(§7). The hydrology network (`WATER_HYDROLOGY_DESIGN.md`) is kept as
-`NetworkWater` for the water tools only.
+Status: on branch `water-field`, the game runs the field (§7). Play-tested
+and adopted; the hydrology network (`WATER_HYDROLOGY_DESIGN.md`) it replaced
+has been removed, and the water tools run the field.
 
 ## 1. Why
 
@@ -220,4 +220,5 @@ canyon floor, now holds it: 1756 m³.
 - the GPU heightfield path for drawing;
 - parallel stepping (chunks are independent within a substep's phases);
 - fall sheets;
-- the network's removal.
+- blended surfaces divided by the field's water (only the sea's ring is in
+  `WaterDivide`, so what stands in a lake counts as this side of it).

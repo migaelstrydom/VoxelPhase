@@ -21,8 +21,7 @@ use crate::terrain::{TerrainChunkId, TerrainWorld};
 
 use super::crossings::{rasterise_by_tile, Crossing, Facing, SurfacePiece, TileCrossings};
 use super::span::{
-    Column, Span, SpanChunk, SpanChunkCoord, SpanOwner, CHUNK_COLUMNS, COLUMNS_PER_CHUNK,
-    COLUMN_SIZE,
+    Column, Span, SpanChunk, SpanChunkCoord, CHUNK_COLUMNS, COLUMNS_PER_CHUNK, COLUMN_SIZE,
 };
 use super::span_graph::SpanGraph;
 
@@ -48,11 +47,8 @@ pub const REMAP_EPSILON: f32 = 1e-3;
 /// only drop.
 pub const RETRIANGULATION_TOLERANCE: f32 = 1.0;
 
-/// Where each span of the rebuilt columns went.
-///
-/// Owners are already rewritten when the remap is returned: each new span
-/// belongs to the owner of the lowest old span that landed in it. Entries
-/// sharing a new span are the conflicts of §8.3, for the caller to act on.
+/// Where each span of the rebuilt columns went. Entries sharing a new span
+/// are old spans the edit merged, for the caller to act on.
 #[derive(Debug, Clone, Default)]
 pub struct SpanRemap {
     /// Every re-paired column, including those that had no spans before.
@@ -69,16 +65,14 @@ pub struct RemapEntry {
     pub column: Column,
     pub old_ordinal: u8,
     pub old: Span,
-    /// Who owned the old span.
-    pub old_owner: SpanOwner,
     /// `None` where the edit blew away every floor below the old one: the
     /// span now opens onto the void, and its water leaves the world.
     pub new_ordinal: Option<u8>,
     /// Whether the new span still rests on this span's floor. Not for a
     /// sliver thinner than a voxel that the re-mesh closed: marching cubes
     /// does not resolve it, so it can vanish with no material added, and the
-    /// span above takes its air. Owners, holes, drains and the floor hold go
-    /// by the lowest span that rests.
+    /// span above takes its air. The floor hold goes by the lowest span
+    /// that rests.
     pub rests: bool,
 }
 
@@ -100,7 +94,7 @@ pub struct RebuildTimings {
     pub diff: Duration,
     /// Pairing the stale columns.
     pub pair: Duration,
-    /// Remapping, committing and rewriting owners.
+    /// Remapping and committing.
     pub commit: Duration,
     pub stale_columns: usize,
 }
@@ -288,20 +282,10 @@ impl SpanRasteriser {
             let old_changed: Vec<u32> = (0..COLUMNS_PER_CHUNK)
                 .map(|local| graph.chunk(coord).map_or(0, |c| c.changed(local)))
                 .collect();
-            let old_owners: Vec<Vec<SpanOwner>> = (0..COLUMNS_PER_CHUNK)
-                .map(|local| {
-                    graph
-                        .chunk(coord)
-                        .map(|c| c.column_owners(local).to_vec())
-                        .unwrap_or_default()
-                })
-                .collect();
-            let first_entry = remap.entries.len();
             let mut columns = columns;
             for column in stale {
                 remap.columns.push(*column);
                 let old = graph.spans(*column).to_vec();
-                let owners = old_owners[column.local_index()].clone();
                 let (x, z) = column.centre();
                 let voxel = terrain.voxel_size_at(nalgebra::Point3::new(
                     x,
@@ -309,38 +293,15 @@ impl SpanRasteriser {
                     z,
                 ));
                 let new = &mut columns[column.local_index()].spans;
-                self.remap_column(*column, &old, &owners, new, voxel, &mut remap);
+                self.remap_column(*column, &old, new, voxel, &mut remap);
             }
             self.commit(graph, coord, columns, generation);
 
-            for (local, owners) in old_owners.iter().enumerate() {
+            for local in 0..COLUMNS_PER_CHUNK {
                 let column = coord.column(local);
-                if stale.contains(&column) {
-                    continue;
+                if !stale.contains(&column) {
+                    graph.keep_changed(column, old_changed[local]);
                 }
-                graph.keep_changed(column, old_changed[local]);
-                for (ordinal, owner) in owners.iter().enumerate() {
-                    *graph.owner_mut(graph.make_ref(column, ordinal as u8)) = *owner;
-                }
-            }
-            // Old spans are remapped bottom-up, so the lowest old span to land
-            // in a new span claims it first: the one it still rests on (§8.3).
-            // A closed sliver claims only a span nothing resting landed in.
-            let mut claimed: BTreeSet<(Column, u8)> = BTreeSet::new();
-            let entries = &remap.entries[first_entry..];
-            for entry in entries
-                .iter()
-                .filter(|e| e.rests)
-                .chain(entries.iter().filter(|e| !e.rests))
-            {
-                let Some(new_ordinal) = entry.new_ordinal else {
-                    continue;
-                };
-                if !claimed.insert((entry.column, new_ordinal)) {
-                    continue;
-                }
-                let owner = old_owners[entry.column.local_index()][entry.old_ordinal as usize];
-                *graph.owner_mut(graph.make_ref(entry.column, new_ordinal)) = owner;
             }
             remap.chunks.push(coord);
         }
@@ -472,7 +433,6 @@ impl SpanRasteriser {
         &mut self,
         column: Column,
         old: &[Span],
-        old_owners: &[SpanOwner],
         new: &mut [Span],
         voxel_size: f32,
         remap: &mut SpanRemap,
@@ -498,7 +458,6 @@ impl SpanRasteriser {
                 column,
                 old_ordinal: ordinal as u8,
                 old: *span,
-                old_owner: old_owners.get(ordinal).copied().unwrap_or_default(),
                 new_ordinal: new_ordinal.map(|n| n as u8),
                 rests,
             });

@@ -19,9 +19,10 @@
 //! height against the level under it. A surface that crosses the level is
 //! drawn on both sides, each half clipped at the level ([`Side::clip_planes`]).
 //!
-//! The divide is taken from the basin and ocean draws the water renderer
-//! planned for the frame: one 8 m tile and one still level per draw. Rivers
-//! and falls are not in it, so what stands in them counts as Near.
+//! The divide is taken from the still draws (a bench's pool, the sea's ring)
+//! the water renderer planned for the frame: one 8 m tile and one still level
+//! per draw. River surfaces, the field's water, are not in it, so what stands
+//! in them counts as Near.
 
 use nalgebra::{Vector2, Vector3};
 
