@@ -16,8 +16,9 @@
 //! `SHORE_DEPTH`, so a shoreline follows a contour across the quads instead
 //! of the edges of columns.
 //!
-//! Every vertex carries its own height and the cell's velocity, so the river
-//! shader's flow mapping runs on the field's currents. A surface is built
+//! Every vertex carries its own height and a velocity, the mean of the cells
+//! its corner joins, so the river shader's flow mapping runs on the field's
+//! currents and runs smoothly across cells. A surface is built
 //! from the graph when its shape changes; while only its water moves, every
 //! vertex is read again from the cells it was built from (`field_sources`). Past the map's open edges, the sea runs out
 //! to the horizon as the network's ring.
@@ -32,7 +33,9 @@ use crate::water::network::ReachEnds;
 use crate::water::{WaterWorld, FIELD_BODY};
 
 use super::basin_mesher::{MeshKey, WaterMesh, WaterScene};
-use super::field_sources::{self, gather, Corner, Meeting, VertexSource, DRAWN_DEPTH, JOIN};
+use super::field_sources::{
+    self, corner_flow, gather, Corner, Meeting, VertexSource, DRAWN_DEPTH, JOIN,
+};
 use super::ocean_mesher::occupied_bounds;
 use super::ocean_ring::{append_ring, MapRect};
 use super::reach_mesher::{RiverDraw, RiverMesh, RiverState};
@@ -98,10 +101,16 @@ impl FieldScene<'_> {
     }
 
     /// The corner of `span`'s column on the (sx, sz) side, for a cell whose
-    /// surface stands at `level`, and where it reads from: the cell and the
+    /// surface stands at `level`, its flow, and where it reads from: the cell and the
     /// cells across from it on each side and diagonally, as `gather` joins
     /// them.
-    fn corner(&self, span: SpanRef, level: f64, sx: i32, sz: i32) -> (Corner, VertexSource) {
+    fn corner(
+        &self,
+        span: SpanRef,
+        level: f64,
+        sx: i32,
+        sz: i32,
+    ) -> (Corner, Vector2<f32>, VertexSource) {
         let x = self.across(span, sx, 0, level);
         let z = self.across(span, 0, sz, level);
         let diagonal = x
@@ -117,7 +126,8 @@ impl FieldScene<'_> {
             .map(|&c| Meeting::of(self.field.cells(), c))
             .collect();
         let (corner, shape) = gather(&meetings, level);
-        (corner, VertexSource::Corner { cells, shape })
+        let flow = corner_flow(self.field, &cells, shape);
+        (corner, flow, VertexSource::Corner { cells, shape })
     }
 
     /// Every wet cell joined to `span` across one orthogonal step.
@@ -138,17 +148,24 @@ impl FieldScene<'_> {
         let column = span.column;
         let built =
             [(-1, -1), (1, -1), (1, 1), (-1, 1)].map(|(sx, sz)| self.corner(span, level, sx, sz));
-        let corners = built.clone().map(|(corner, _)| corner);
+        let corners = built.clone().map(|(corner, _, _)| corner);
+        let flows = built.clone().map(|(_, flow, _)| flow);
         let flow = self.field.velocity(at);
         let first = mesh.vertices.len() as u32;
-        for (_, source) in &built {
+        for (_, _, source) in &built {
             if let VertexSource::Corner { cells: read, .. } = source {
                 for &c in read {
                     mesh.sources.reads(cells, c);
                 }
             }
         }
-        quad(mesh, column, corners, flow, built.map(|(_, source)| source));
+        quad(
+            mesh,
+            column,
+            corners,
+            flows,
+            built.map(|(_, _, source)| source),
+        );
 
         for (di, dk) in [(1, 0), (0, 1)] {
             for other in self.wet_across(span, di, dk) {
@@ -204,7 +221,13 @@ impl FieldScene<'_> {
                         VertexSource::Edge { from }
                     }
                 });
-                quad(mesh, next, skirt_corners, flow, sources);
+                quad(
+                    mesh,
+                    next,
+                    skirt_corners,
+                    ends.map(|(i, _)| flows[i]),
+                    sources,
+                );
             }
         }
     }
@@ -229,13 +252,13 @@ fn quad(
     mesh: &mut RiverMesh,
     column: Column,
     corners: [Corner; 4],
-    flow: Vector2<f32>,
+    flows: [Vector2<f32>; 4],
     sources: [VertexSource; 4],
 ) {
     let (x0, z0) = column.min_corner();
     let offsets = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
     let base = mesh.vertices.len() as u32;
-    for ((cx, cz), corner) in offsets.iter().zip(corners) {
+    for (((cx, cz), corner), flow) in offsets.iter().zip(corners).zip(flows) {
         mesh.vertices.push(RiverVertex {
             xz: Vector2::new(x0 + cx * COLUMN_SIZE, z0 + cz * COLUMN_SIZE),
             bed: corner.height as f32,

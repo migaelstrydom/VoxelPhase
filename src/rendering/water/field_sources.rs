@@ -14,6 +14,7 @@
 //! A refresh writes what it can even where the shape no longer holds, so
 //! the surface keeps moving while it waits to be built again.
 
+use nalgebra::Vector2;
 use smallvec::SmallVec;
 
 use crate::water::field::{FieldCells, WaterField};
@@ -123,11 +124,29 @@ pub(super) fn gather(meetings: &[Meeting], level: f64) -> (Corner, Shape) {
     (corner, shape)
 }
 
+/// A corner's flow: the mean velocity of the cells in its group, so that the
+/// shader's flow mapping runs smoothly across cells instead of switching at
+/// every edge.
+pub(super) fn corner_flow(field: &WaterField, cells: &[SpanIndex], shape: Shape) -> Vector2<f32> {
+    let (mut sum, mut count) = (Vector2::zeros(), 0.0);
+    for (i, &c) in cells.iter().enumerate() {
+        if shape.grouped & (1 << i) != 0 {
+            sum += field.velocity(c);
+            count += 1.0;
+        }
+    }
+    if count > 0.0 {
+        sum / count
+    } else {
+        Vector2::zeros()
+    }
+}
+
 /// Where one vertex reads its height, depth and flow.
 #[derive(Debug, Clone)]
 pub(super) enum VertexSource {
     /// A corner of a cell's quad: the cells meeting there, the cell's own
-    /// first, and the corner's shape when built. Its flow is the cell's.
+    /// first, and the corner's shape when built.
     Corner {
         cells: SmallVec<[SpanIndex; 4]>,
         shape: Shape,
@@ -217,7 +236,7 @@ pub(super) fn refresh(field: &WaterField, mesh: &mut RiverMesh) -> bool {
                 let vertex = &mut mesh.vertices[v];
                 vertex.bed = corner.height as f32;
                 vertex.along = corner.depth as f32;
-                vertex.flow = field.velocity(at[0]);
+                vertex.flow = corner_flow(field, at, now);
             }
             &VertexSource::Edge { from } => {
                 let source = mesh.vertices[from as usize];
