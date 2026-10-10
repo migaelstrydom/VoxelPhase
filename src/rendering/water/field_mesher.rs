@@ -92,6 +92,7 @@ impl<'a> FieldScene<'a> {
     fn drawn_cells(&self) -> DrawnCells<'a> {
         DrawnCells {
             cells: self.field.cells(),
+            graph: self.field.graph(),
             depths: self.depths,
         }
     }

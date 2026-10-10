@@ -18,7 +18,7 @@ use nalgebra::Vector2;
 use smallvec::SmallVec;
 
 use crate::water::field::{DrawnDepths, FieldCells, WaterField};
-use crate::water::geometry::SpanIndex;
+use crate::water::geometry::{SpanGraph, SpanIndex, SpanRef, ORTHOGONAL};
 
 use super::river_mesh::RiverMesh;
 use super::scene::Refreshed;
@@ -31,12 +31,18 @@ const DRAWN_DEPTH: f64 = 0.002;
 /// none to draw.
 const ROOF_GAP: f64 = 0.01;
 
+/// How far a neighbour's water must stand into a column, above its lowest
+/// floor and below its floor at the centre, and how thin the water on that
+/// centre floor must be, for the column to be drawn as the neighbour's, m.
+const PERCH: f64 = 0.1;
+
 /// The field's cells as the surfaces are drawn from them: each depth as it
 /// stood when its chunk's version last moved (`SurfaceVersions`), so every
 /// surface reading a cell reads it alike, whichever was drawn last.
 #[derive(Clone, Copy)]
 pub struct DrawnCells<'a> {
     pub cells: &'a FieldCells,
+    pub graph: &'a SpanGraph,
     pub depths: DrawnDepths<'a>,
 }
 
@@ -58,11 +64,49 @@ impl DrawnCells<'_> {
         self.bed(at) as f64 + self.depth(at)
     }
 
-    /// Whether a cell has a surface to draw: deep enough, and not filled to
-    /// its roof.
+    /// Whether a cell has a surface to draw: deep enough, not filled to its
+    /// roof, and not perched.
     pub(super) fn drawn(&self, at: SpanIndex) -> bool {
         let depth = self.depth(at);
-        depth > DRAWN_DEPTH && self.surface(at) < self.cells.ceiling(at) as f64 - ROOF_GAP
+        depth > DRAWN_DEPTH
+            && self.surface(at) < self.cells.ceiling(at) as f64 - ROOF_GAP
+            && !self.perched(at)
+    }
+
+    /// Whether a cell holds only a film perched on its column's floor at the
+    /// centre while a neighbour's water stands in the column below that
+    /// floor, as where a terrace's riser crosses the column's centre: the
+    /// column is then the neighbour's water, drawn on to the riser as its
+    /// shore, since one quad over the column would tilt the neighbour's
+    /// surface up to the film's in front of the riser.
+    fn perched(&self, at: SpanIndex) -> bool {
+        let bed = self.bed(at) as f64;
+        if self.depth(at) >= PERCH {
+            return false;
+        }
+        let chunk = &self.cells.chunks[at.slot as usize];
+        let (local, ordinal) = chunk.column_of(at.flat as usize);
+        let spans = self
+            .graph
+            .chunk_at_slot(at.slot as usize)
+            .column_spans(local);
+        let Some(floor) = spans.get(ordinal as usize).map(|s| s.floor_min as f64) else {
+            return false;
+        };
+        if floor + 2.0 * PERCH > bed {
+            return false;
+        }
+        let span = SpanRef::key(chunk.coord.column(local), ordinal);
+        ORTHOGONAL.iter().any(|&step| {
+            self.graph.joined(span, step).iter().any(|n| {
+                self.cells
+                    .index(self.graph, n.span.column, n.span.ordinal)
+                    .is_some_and(|c| {
+                        let s = self.surface(c);
+                        self.depth(c) > DRAWN_DEPTH && s > floor + PERCH && s < bed - PERCH
+                    })
+            })
+        })
     }
 }
 
@@ -158,26 +202,33 @@ pub(super) struct Shape {
 /// A corner from the cells meeting there, the cell's own first, for a cell
 /// whose surface stands at `level`.
 ///
-/// Its height is the mean surface of the cell's group among the wet cells:
-/// sorted by surface, split wherever two stand more than `JOIN` apart, so
-/// every cell at a corner sees the same groups. Its depth is the mean over
+/// Its height is the mean surface of the cell's group among the wet cells,
+/// each weighed by its depth: sorted by surface, split wherever two stand
+/// more than `JOIN` apart, so every cell at a corner sees the same groups.
+/// Weighed so, a film draining down a bank above deep water barely lifts
+/// the deep water's corner, where a plain mean would stand it in the air
+/// over the slope between them; and a cell only just wet barely moves it. Its depth is the mean over
 /// the cells of each one's depth: a dry one's is zero, or left out where its
 /// floor stands above the water, since the terrain hides the surface there.
 pub(super) fn gather(meetings: &[Meeting], level: f64) -> (Corner, Shape) {
-    let mut surfaces: SmallVec<[f64; 4]> = meetings.iter().filter_map(|m| m.surface).collect();
-    surfaces.sort_by(f64::total_cmp);
-    let mut group: SmallVec<[f64; 4]> = SmallVec::new();
-    for s in surfaces {
-        if group.last().is_some_and(|&last| s - last > JOIN) {
-            if group.contains(&level) {
+    let mut surfaces: SmallVec<[(f64, f64); 4]> = meetings
+        .iter()
+        .filter_map(|m| Some((m.surface?, m.depth)))
+        .collect();
+    surfaces.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut group: SmallVec<[(f64, f64); 4]> = SmallVec::new();
+    for (s, d) in surfaces {
+        if group.last().is_some_and(|&(last, _)| s - last > JOIN) {
+            if group.iter().any(|&(g, _)| g == level) {
                 break;
             }
             group.clear();
         }
-        group.push(s);
+        group.push((s, d));
     }
-    let height = group.iter().sum::<f64>() / group.len() as f64;
-    let (low, high) = (group[0], group[group.len() - 1]);
+    let held: f64 = group.iter().map(|&(_, d)| d).sum();
+    let height = group.iter().map(|&(s, d)| s * d).sum::<f64>() / held;
+    let (low, high) = (group[0].0, group[group.len() - 1].0);
 
     let mut shape = Shape { wet: 0, grouped: 0 };
     let (mut sum, mut count) = (0.0, 0.0);
@@ -301,7 +352,10 @@ pub(super) fn refresh(field: &WaterField, cells: &DrawnCells, mesh: &mut RiverMe
     }
     let (slot, read) = (sources.slot, sources.read);
     let mut held = cells.depths.depths[slot as usize].len() == sources.drawn.len()
-        && (!cells.replaced_since(slot, read)
+        && (!sources
+            .layouts
+            .iter()
+            .any(|&(s, _)| cells.replaced_since(s, read))
             || sources.drawn.iter().enumerate().all(|(flat, &was)| {
                 cells.drawn(SpanIndex {
                     slot,
