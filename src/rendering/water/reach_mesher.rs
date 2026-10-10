@@ -25,6 +25,7 @@ use nalgebra::{Point3, Vector2};
 use crate::water::ids::StoreId;
 use crate::water::network::{Centreline, Reach, ReachEnds};
 
+use super::field_sources::SurfaceSources;
 use super::vertex::RiverVertex;
 
 /// Spacing of vertices across a section, m.
@@ -61,6 +62,10 @@ pub struct RiverMesh {
     pub vertices: Vec<RiverVertex>,
     pub indices: Vec<u32>,
     pub draws: Vec<RiverDraw>,
+    /// Where each vertex reads its water, for a surface that can be read
+    /// again without being built; empty for one that cannot, and in a mesh
+    /// joined from several.
+    pub sources: SurfaceSources,
 }
 
 impl RiverMesh {

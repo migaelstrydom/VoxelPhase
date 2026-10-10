@@ -1,10 +1,12 @@
 //! River surfaces kept apart by id, so that only those whose version moved
-//! are built again, and joined into the one mesh the renderer uploads.
+//! are touched, and joined into the one mesh the renderer uploads.
 //!
-//! Under a budget, at most that many surfaces that already have a mesh are
-//! built again in one sync, stalest first: water that keeps moving
-//! everywhere at once is drawn a few frames behind in places rather than
-//! costing the frame. A surface with no mesh yet is always built.
+//! A surface whose version moved is first read again in place
+//! (`WaterScene::refresh_river`), every sync, so moving water is drawn as it
+//! moves. Only one whose shape changed is built again, and under a budget at
+//! most that many in one sync, stalest first: a shape that changes
+//! everywhere at once shows a few frames late in places rather than costing
+//! the frame. A surface with no mesh yet is always built.
 
 use std::collections::BTreeMap;
 
@@ -23,6 +25,8 @@ struct Part {
     version: u32,
     /// The sync it was built in.
     built: u64,
+    /// Its first vertex in the joined mesh.
+    joined_at: usize,
     mesh: RiverMesh,
 }
 
@@ -34,6 +38,9 @@ pub struct RiverParts {
     joined: RiverMesh,
     /// Syncs so far.
     syncs: u64,
+    /// After the last sync: surfaces still behind their version, and the
+    /// most syncs any of them has gone unbuilt.
+    lag: (usize, u64),
     /// Most surfaces built again in one sync; `None` for every one that
     /// moved.
     budget: Option<usize>,
@@ -45,6 +52,7 @@ impl Default for RiverParts {
             parts: BTreeMap::new(),
             joined: RiverMesh::default(),
             syncs: 0,
+            lag: (0, 0),
             budget: Some(BUILDS_PER_SYNC),
         }
     }
@@ -57,49 +65,155 @@ impl RiverParts {
         self.budget = budget;
     }
 
-    /// Build again the stalest surfaces whose version moved, drop those
-    /// gone, and join them all. Returns whether anything changed.
+    /// Read again every surface whose version moved, build again the
+    /// stalest of those whose shape changed, drop those gone, and join them
+    /// all. Returns whether anything changed.
     pub fn sync(&mut self, water: &dyn WaterScene) -> bool {
         self.syncs += 1;
         let wanted: BTreeMap<StoreId, u32> = water.river_key().into_iter().collect();
         let before = self.parts.len();
         self.parts.retain(|id, _| wanted.contains_key(id));
-        let mut changed = self.parts.len() != before;
+        let mut reshaped = self.parts.len() != before;
 
+        let mut refreshed: Vec<StoreId> = Vec::new();
         // Missing surfaces first, then those built longest ago.
-        let mut stale: Vec<(u64, StoreId, u32)> = wanted
-            .iter()
-            .filter_map(|(&id, &version)| match self.parts.get(&id) {
-                None => Some((0, id, version)),
-                Some(part) if part.version != version => Some((part.built, id, version)),
-                Some(_) => None,
-            })
-            .collect();
+        let mut stale: Vec<(u64, StoreId, u32)> = Vec::new();
+        for (&id, &version) in &wanted {
+            match self.parts.get_mut(&id) {
+                None => stale.push((0, id, version)),
+                Some(part) if part.version != version => {
+                    if water.refresh_river(id, &mut part.mesh) {
+                        part.version = version;
+                    } else {
+                        stale.push((part.built, id, version));
+                    }
+                    refreshed.push(id);
+                }
+                Some(_) => {}
+            }
+        }
         stale.sort_unstable();
         let missing = stale.iter().take_while(|s| s.0 == 0).count();
         let allowed = self.budget.map_or(stale.len(), |b| missing + b);
+        self.lag = stale
+            .iter()
+            .skip(allowed)
+            .fold((0, 0), |(n, age), s| (n + 1, age.max(self.syncs - s.0)));
         for &(_, id, version) in stale.iter().take(allowed) {
             let part = Part {
                 version,
                 built: self.syncs,
+                joined_at: 0,
                 mesh: water.build_river(id),
             };
             self.parts.insert(id, part);
-            changed = true;
+            reshaped = true;
         }
-        if changed {
-            self.joined.vertices.clear();
-            self.joined.indices.clear();
-            self.joined.draws.clear();
-            for part in self.parts.values() {
-                self.joined.append(&part.mesh);
+
+        if reshaped {
+            self.join();
+        } else {
+            for id in &refreshed {
+                let part = &self.parts[id];
+                let vertices = &part.mesh.vertices;
+                self.joined.vertices[part.joined_at..part.joined_at + vertices.len()]
+                    .copy_from_slice(vertices);
             }
         }
-        changed
+        reshaped || !refreshed.is_empty()
+    }
+
+    /// Join every surface again, in id order.
+    fn join(&mut self) {
+        self.joined.vertices.clear();
+        self.joined.indices.clear();
+        self.joined.draws.clear();
+        for part in self.parts.values_mut() {
+            part.joined_at = self.joined.vertices.len();
+            self.joined.append(&part.mesh);
+        }
+    }
+
+    /// Surfaces the last sync left behind their version, and the most syncs
+    /// any of them has gone unbuilt.
+    pub fn lag(&self) -> (usize, u64) {
+        self.lag
     }
 
     /// Every surface joined.
     pub fn mesh(&self) -> &RiverMesh {
         &self.joined
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use nalgebra::Point3;
+
+    use super::*;
+    use crate::level::load_level;
+    use crate::level_check::build_terrain;
+    use crate::terrain::BlastConfig;
+    use crate::water::WaterWorld;
+
+    /// Farthest a surface read again may stand from one built afresh, m:
+    /// the versions' tolerance, below which a surface is not read again.
+    const MATCH: f32 = 2.0e-3;
+
+    /// After a dam on water_park is blasted and its water runs, every
+    /// surface read again in place matches the same surface built afresh.
+    #[test]
+    #[ignore = "release: opens water_park"]
+    fn refreshed_surfaces_match_fresh_builds() {
+        let level = load_level(Path::new("levels/water_park.level.ron")).unwrap();
+        let mut terrain = build_terrain(&level);
+        let mut water = WaterWorld::from_config(level.water.as_ref().unwrap(), &terrain);
+        let mut parts = RiverParts::default();
+        parts.set_budget(Some(0));
+        let mut refreshed = 0;
+        for frame in 0..180 {
+            if frame == 30 {
+                terrain.detonate(Point3::new(-52.2, 2.0, 49.8), &BlastConfig::default());
+            }
+            terrain.update();
+            water.on_terrain_update(&terrain);
+            water.step(1.0 / 60.0);
+            parts.sync(&water);
+            refreshed += parts
+                .parts
+                .values()
+                .filter(|p| p.built < parts.syncs && p.version != 0)
+                .count();
+        }
+        assert!(refreshed > 0, "nothing was read again");
+
+        let versions: BTreeMap<StoreId, u32> = water.river_key().into_iter().collect();
+        let mut compared = 0;
+        for (id, part) in &parts.parts {
+            if part.version != versions[id] {
+                continue;
+            }
+            let fresh = water.build_river(*id);
+            assert_eq!(fresh.vertices.len(), part.mesh.vertices.len(), "{id:?}");
+            for (a, b) in fresh.vertices.iter().zip(&part.mesh.vertices) {
+                assert_eq!(a.xz, b.xz, "{id:?}");
+                assert!(
+                    (a.bed - b.bed).abs() <= MATCH,
+                    "{id:?}: {} vs {}",
+                    a.bed,
+                    b.bed
+                );
+                assert!(
+                    (a.along - b.along).abs() <= MATCH,
+                    "{id:?}: {} vs {}",
+                    a.along,
+                    b.along
+                );
+            }
+            compared += 1;
+        }
+        assert!(compared > 0);
     }
 }

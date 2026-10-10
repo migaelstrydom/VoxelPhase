@@ -112,6 +112,9 @@ impl FieldChunk {
 #[derive(Debug, Clone)]
 pub struct FieldCells {
     pub chunks: Vec<FieldChunk>,
+    /// Per slot: how many times its chunk's cells have been laid out again,
+    /// after which a `SpanIndex` into it means a different cell.
+    generations: Vec<u32>,
     /// Coordinate of `chunks[0]`, and the graph's width in chunks.
     origin: SpanChunkCoord,
     width: i32,
@@ -129,6 +132,7 @@ impl FieldCells {
         let width = (max.i - min.i + 1) / CHUNK_COLUMNS;
         let origin = chunks.first().map_or(min.chunk(), |c| c.coord);
         Self {
+            generations: vec![0; chunks.len()],
             chunks,
             origin,
             width,
@@ -138,6 +142,17 @@ impl FieldCells {
     /// The graph's width in chunks.
     pub fn width(&self) -> i32 {
         self.width
+    }
+
+    /// How many times a slot's cells have been laid out again.
+    pub fn generation(&self, slot: usize) -> u32 {
+        self.generations[slot]
+    }
+
+    /// Put fresh cells in a slot, as an edit lays them out again.
+    pub fn relay(&mut self, slot: usize, fresh: FieldChunk) -> FieldChunk {
+        self.generations[slot] = self.generations[slot].wrapping_add(1);
+        std::mem::replace(&mut self.chunks[slot], fresh)
     }
 
     /// The slot of a chunk coordinate, if it is in the field.

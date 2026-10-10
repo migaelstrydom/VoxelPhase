@@ -186,9 +186,14 @@ Each figure is stepping, carrying the water over the edit, and rebuilding the
 drawn surface. A chunk's surface is rebuilt only when its depths have moved by
 more than a millimetre (`SurfaceVersions`), along with the neighbours whose
 edges meet the cells that moved. The renderer keeps each chunk's mesh apart
-(`RiverParts`) and in the game rebuilds at most eight a frame, stalest first:
-a running river keeps some thirty chunks moving, so its surface is drawn a
-few frames behind in places. The offline viewers rebuild everything.
+(`RiverParts`). A moved surface whose shape held (no cell wet or dry, no
+corner's group split or joined, no relaid cells) is read again in place from
+the cells each vertex records; only a reshaped one is built again, at most
+eight a frame in the game, stalest first. Rebuilding alone, with the budget,
+left water_park's lakes (a hundred chunks moving) drawn at three or four
+updates a second, which play showed as jumps; read in place, no surface lags
+while quiet and at most two lag for three frames after a blast. The offline
+viewers rebuild everything.
 
 Found getting there:
 

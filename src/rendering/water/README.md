@@ -69,11 +69,15 @@ visual bench's fixed `ScenePool`.
 The game's water is a shallow-water field (`docs/WATER_FIELD_SPIKE.md`), drawn
 through the river pipeline by `field_mesher.rs`: one surface per 8 m chunk,
 keyed by a version the water moves only when that chunk's depths have moved
-by more than a millimetre. `RiverParts` keeps each river surface apart and
-builds again only those whose version moved, at most eight a frame in the
-game (stalest first; the offline viewers lift the cap), then joins them for
-upload. Past
-the map's open edges the sea is the ocean ring.
+by more than a millimetre. `RiverParts` keeps each river surface apart. One
+whose version moved is read again in place every frame: each vertex records
+the cells it was built from (`field_sources.rs`), so while the water keeps
+its shape (no cell going wet or dry, no group of surfaces splitting or
+joining, no edit relaying the cells) the heights, depths and flow are read
+again without the graph. Only a surface whose shape changed is built again,
+at most eight a frame in the game (stalest first; the offline viewers lift
+the cap). The surfaces are then joined for upload. Past the map's open edges
+the sea is the ocean ring.
 
 ## Swell and ripples
 
@@ -262,7 +266,8 @@ src/rendering/water/
     mod.rs          -- re-exports
     basin_mesher.rs -- basin meshes and the WaterScene trait
     field_mesher.rs -- the field's surface, per chunk
-    river_parts.rs  -- river surfaces rebuilt only when their version moves
+    field_sources.rs -- where each vertex of the field's surface reads its water
+    river_parts.rs  -- river surfaces read again or rebuilt when their version moves
     ocean_mesher.rs, ocean_ring.rs, reach_mesher.rs, fall_mesher.rs
     divide.rs       -- which side of the water a blended surface lies on
     footprint.rs    -- the screen rectangle the water can read

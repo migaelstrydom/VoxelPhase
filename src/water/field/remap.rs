@@ -58,7 +58,7 @@ pub fn carry(
             continue;
         };
         let fresh = FieldChunk::from_spans(coord, graph.chunk_at_slot(slot));
-        let old = std::mem::replace(&mut cells.chunks[slot], fresh);
+        let old = cells.relay(slot, fresh);
         let new = &mut cells.chunks[slot];
         for local in 0..COLUMNS_PER_CHUNK {
             if repaired.contains(&coord.column(local)) {

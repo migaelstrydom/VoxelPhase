@@ -116,6 +116,13 @@ pub trait WaterScene {
         RiverMesh::default()
     }
 
+    /// Read a built river surface's heights, depths and flow again from the
+    /// water, in place. Returns whether it kept its shape; where it did not,
+    /// it must be built again.
+    fn refresh_river(&self, _id: StoreId, _mesh: &mut RiverMesh) -> bool {
+        false
+    }
+
     /// A reach's state for its draw, if it is still there.
     fn river_state(&self, _reach: StoreId) -> Option<RiverState> {
         None

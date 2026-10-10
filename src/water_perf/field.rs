@@ -35,6 +35,9 @@ pub struct FieldFrameCost {
     pub mesh: Duration,
     /// Chunks awake after the frame.
     pub awake: usize,
+    /// Surfaces left behind their water after the frame, and the most
+    /// frames any of them had gone unbuilt.
+    pub lag: (usize, u64),
     /// The terrain's own rebuild, reported beside the water, not in it.
     pub terrain: Duration,
 }
@@ -153,6 +156,7 @@ fn frame(
         step: field.step_time,
         mesh,
         awake: field.awake,
+        lag: rivers.lag(),
         terrain: terrain_time,
     }
 }
@@ -207,8 +211,8 @@ pub fn field_table(subject: &FieldSubject) -> String {
     );
     let _ = writeln!(
         out,
-        "  {:<18} {:>14} {:>14} {:>14} {:>10} {:>24}",
-        "phase (ms)", "edit", "step", "mesh", "awake", "water mean/p99/max"
+        "  {:<18} {:>14} {:>14} {:>14} {:>10} {:>15} {:>24}",
+        "phase (ms)", "edit", "step", "mesh", "awake", "lagging/frames", "water mean/p99/max"
     );
     out.push_str(&phase_row("quiet", &subject.quiet));
     out.push_str(&phase_row(
@@ -231,13 +235,16 @@ fn phase_row(name: &str, frames: &[FieldFrameCost]) -> String {
     };
     let water: Vec<Duration> = frames.iter().map(FieldFrameCost::water).collect();
     let awake = frames.iter().map(|f| f.awake).max().unwrap_or(0);
+    let lagging = frames.iter().map(|f| f.lag.0).max().unwrap_or(0);
+    let behind = frames.iter().map(|f| f.lag.1).max().unwrap_or(0);
     format!(
-        "  {:<18} {:>14} {:>14} {:>14} {:>10} {:>24}\n",
+        "  {:<18} {:>14} {:>14} {:>14} {:>10} {:>15} {:>24}\n",
         format!("{name} ({})", frames.len()),
         pair(|f| f.edit),
         pair(|f| f.step),
         pair(|f| f.mesh),
         format!("≤{awake}"),
+        format!("≤{lagging}/≤{behind}"),
         format!(
             "{:.3} / {:.3} / {:.3}",
             mean_ms(&water),

@@ -2,6 +2,7 @@ mod basin_mesher;
 mod divide;
 mod fall_mesher;
 mod field_mesher;
+mod field_sources;
 mod footprint;
 mod ocean_mesher;
 mod ocean_ring;
