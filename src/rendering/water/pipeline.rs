@@ -335,10 +335,13 @@ impl WaterPipeline {
         let multisample = vk::PipelineMultisampleStateCreateInfo::default()
             .rasterization_samples(vk::SampleCountFlags::TYPE_1);
 
-        // Depth test enabled, depth write disabled (transparent surface)
+        // The water replaces what is behind it (below), so it writes depth:
+        // where two water surfaces overlap, as a falling sheet and the pool
+        // it falls into do, the nearer must be the one seen, whichever is
+        // drawn first. What is beyond the water reaches it through the copy.
         let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
             .depth_test_enable(true)
-            .depth_write_enable(false)
+            .depth_write_enable(true)
             .depth_compare_op(vk::CompareOp::LESS_OR_EQUAL);
 
         // No blending — the shader composites the final color internally

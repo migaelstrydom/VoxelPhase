@@ -8,8 +8,8 @@
 
 // The fine surface of an awake ripple tile: a static 33 x 33 grid over the
 // 8 m tile, displaced by the body's level, its swell and the tile's ripples.
-// The fragment shader masks it to the body's columns, and adds the swell's
-// slope to the ripples' for the normal.
+// The fragment shader masks it to the body's columns, and reads the
+// ripples' normal per pixel.
 //
 // Along an edge beside coarse water (a sealed edge) the fine surface must
 // meet the coarse one exactly: its ripples come to rest there through the
@@ -32,9 +32,8 @@ layout(location = 4) out vec2 fragFlow;
 layout(location = 5) out float fragWetDepth;
 layout(location = 6) flat out vec2 fragWetRange;
 layout(location = 7) out vec4 fragSwell;
+layout(location = 8) flat out int fragMasked;
 
-// Steepest a ripple may tilt the normal: past this the surface is noise.
-const float MAX_RIPPLE_SLOPE = 1.0;
 
 // Water depth at a column corner; none where no wet column touches it.
 float cornerDepth(int layer, ivec2 corner, float level) {
@@ -91,18 +90,14 @@ void main() {
     }
 
     float ripple = rippleHeightAt(layer, inLocal);
-    vec2 rippleSlope = rippleGradientAt(layer, inLocal);
-    float steepness = length(rippleSlope);
-    if (steepness > MAX_RIPPLE_SLOPE) {
-        rippleSlope *= MAX_RIPPLE_SLOPE / steepness;
-    }
 
     vec3 position = vec3(xz.x, level + swell.x + ripple, xz.y);
     gl_Position = pc.proj * pc.view * vec4(position, 1.0);
-    fragNormal = normalize(vec3(-rippleSlope.x, 1.0, -rippleSlope.y));
+    fragNormal = vec3(0.0, 1.0, 0.0);
     fragSwell = vec4(pc.body.y * swellShoreFade(depth), pc.body.z, pc.body.w, 0.0);
     fragWorldPos = position;
     fragLayer = layer;
+    fragMasked = 1;
     fragTileOrigin = origin;
     fragFlow = vec2(0.0);
     fragWetDepth = 0.0;

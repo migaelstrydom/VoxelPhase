@@ -28,6 +28,7 @@ layout(location = 4) out vec2 fragFlow;
 layout(location = 5) out float fragWetDepth;
 layout(location = 6) flat out vec2 fragWetRange;
 layout(location = 7) out vec4 fragSwell;
+layout(location = 8) flat out int fragMasked;
 
 void main() {
     float level = pc.body.x;
@@ -39,6 +40,7 @@ void main() {
     fragSwell = vec4(pc.body.y * swellShoreFade(depth), pc.body.z, pc.body.w, 0.0);
     fragWorldPos = position;
     fragLayer = -1;
+    fragMasked = 0;
     fragTileOrigin = vec2(0.0);
     fragFlow = vec2(0.0);
     fragWetDepth = 0.0;

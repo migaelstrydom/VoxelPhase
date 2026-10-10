@@ -77,8 +77,8 @@ impl FineVertex {
     }
 }
 
-/// A vertex of a river surface: the water's own surface there, its depth and
-/// its flow.
+/// A vertex of a river surface: the water's own surface there, its depth,
+/// its flow, and on a falling sheet the way the sheet faces.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RiverVertex {
@@ -91,6 +91,9 @@ pub struct RiverVertex {
     pub depth: f32,
     /// Depth-averaged velocity, m/s, x and z.
     pub flow: Vector2<f32>,
+    /// On a sheet of water falling over an edge, the way it faces: out over
+    /// the edge, x and z. Zero on the surface, which faces up.
+    pub face: Vector2<f32>,
 }
 
 impl RiverVertex {
@@ -102,7 +105,7 @@ impl RiverVertex {
         }
     }
 
-    pub fn attribute_descriptions() -> [vk::VertexInputAttributeDescription; 3] {
+    pub fn attribute_descriptions() -> [vk::VertexInputAttributeDescription; 4] {
         let f = std::mem::size_of::<f32>() as u32;
         [
             vk::VertexInputAttributeDescription {
@@ -123,6 +126,12 @@ impl RiverVertex {
                 binding: 0,
                 format: vk::Format::R32G32_SFLOAT,
                 offset: 4 * f,
+            },
+            vk::VertexInputAttributeDescription {
+                location: 3,
+                binding: 0,
+                format: vk::Format::R32G32_SFLOAT,
+                offset: 6 * f,
             },
         ]
     }

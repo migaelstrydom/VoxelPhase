@@ -21,6 +21,7 @@ use crate::water::field::{DrawnDepths, FieldCells, WaterField};
 use crate::water::geometry::SpanIndex;
 
 use super::river_mesh::RiverMesh;
+use super::scene::Refreshed;
 
 /// Depth a cell must hold to be drawn, m.
 const DRAWN_DEPTH: f64 = 0.002;
@@ -203,12 +204,15 @@ pub(super) enum VertexSource {
         bank: SpanIndex,
         floor: f32,
     },
-    /// A curtain's corner: the higher or lower of two wet cells' surfaces,
-    /// with the flow of the first.
-    Curtain {
+    /// A falling sheet's foot: the lower cell's corner below the sheet's
+    /// top, vertex `from`, whose depth and flow it takes. The cells are the
+    /// corner's, the lower cell's first. The sheet stands while the wet cell
+    /// `own` it falls from stands more than `JOIN` over the lower one.
+    Foot {
+        from: u32,
+        cells: SmallVec<[SpanIndex; 4]>,
+        shape: Shape,
         own: SpanIndex,
-        other: SpanIndex,
-        top: bool,
     },
 }
 
@@ -239,20 +243,20 @@ impl SurfaceSources {
     }
 }
 
-/// Read every vertex of a built surface again from the field. Returns
-/// whether the surface kept the shape it was built with; where it did not,
-/// what could be read is written anyway.
-pub(super) fn refresh(field: &WaterField, cells: &DrawnCells, mesh: &mut RiverMesh) -> bool {
+/// Read every vertex of a built surface again from the field. Where it no
+/// longer keeps the shape it was built with, what could be read is written
+/// anyway.
+pub(super) fn refresh(field: &WaterField, cells: &DrawnCells, mesh: &mut RiverMesh) -> Refreshed {
     let sources = &mesh.sources;
     if sources.vertices.len() != mesh.vertices.len() {
-        return false;
+        return Refreshed::Unreadable;
     }
     if sources
         .layouts
         .iter()
         .any(|&(slot, generation)| cells.cells.generation(slot as usize) != generation)
     {
-        return false;
+        return Refreshed::Unreadable;
     }
     let (slot, read) = (sources.slot, sources.read);
     let mut held = cells.depths.depths[slot as usize].len() == sources.drawn.len()
@@ -308,22 +312,35 @@ pub(super) fn refresh(field: &WaterField, cells: &DrawnCells, mesh: &mut RiverMe
                 vertex.depth = (level - cells.bed(bank) as f64).min(0.0) as f32;
                 vertex.flow = source.flow;
             }
-            &VertexSource::Curtain { own, other, top } => {
-                let (a, b) = (Meeting::of(cells, own), Meeting::of(cells, other));
-                let (Some(a), Some(b)) = (a.surface, b.surface) else {
+            VertexSource::Foot {
+                from,
+                cells: at,
+                shape,
+                own,
+            } => {
+                let meetings: SmallVec<[Meeting; 4]> =
+                    at.iter().map(|&c| Meeting::of(cells, c)).collect();
+                let (Some(lower), Some(upper)) =
+                    (meetings[0].surface, Meeting::of(cells, *own).surface)
+                else {
                     held = false;
                     continue;
                 };
-                held &= (a - b).abs() > JOIN;
+                let (corner, now) = gather(&meetings, lower);
+                held &= now == *shape && upper - lower > JOIN;
+                let top = mesh.vertices[*from as usize];
                 let vertex = &mut mesh.vertices[v];
-                vertex.surface = if top { a.max(b) } else { a.min(b) } as f32;
-                vertex.flow = field.velocity(own);
+                vertex.surface = corner.height as f32;
+                vertex.depth = top.depth;
+                vertex.flow = top.flow;
             }
         }
     }
     // A surface that lost its shape reads every cell again until built.
     if held {
         mesh.sources.read = cells.depths.now;
+        Refreshed::Held
+    } else {
+        Refreshed::Reshaped
     }
-    held
 }

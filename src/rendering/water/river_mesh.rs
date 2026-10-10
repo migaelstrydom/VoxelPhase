@@ -6,10 +6,6 @@ use crate::water::ids::SurfaceId;
 use super::field_sources::SurfaceSources;
 use super::vertex::RiverVertex;
 
-/// Depth at which a river surface is cut, m: the shoreline's contour.
-/// Thinner water would lie on its floor and fight it for depth.
-pub const SHORE_DEPTH: f32 = 0.005;
-
 /// One surface's draw.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RiverDraw {

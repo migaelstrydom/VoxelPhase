@@ -27,7 +27,6 @@ use super::divide::WaterPatch;
 use super::footprint::ScreenFootprint;
 use super::ocean_ring::RING_TILE;
 use super::pipeline::{WaterPipeline, BODY_PUSH_OFFSET, FRAGMENT_PUSH_OFFSET};
-use super::river_mesh::SHORE_DEPTH;
 use super::river_parts::RiverParts;
 use super::scene::{MeshKey, WaterMesh, WaterScene};
 use super::vertex::FineVertex;
@@ -77,8 +76,8 @@ struct RippleDraw {
     sealed: u32,
     level: f32,
     swell: Swell,
-    /// The river surface it is drawn in place of.
-    replaces: Option<SurfaceId>,
+    /// The river surface it ripples, which draws it.
+    surface: Option<SurfaceId>,
 }
 
 /// What a frame's prepared water tells the renderer.
@@ -420,24 +419,29 @@ impl WaterRenderer {
             // anywhere on the screen.
             footprint.cover_all();
         }
-        let replaced: Vec<SurfaceId> = layers.values().filter_map(|t| t.replaces).collect();
+        // A surface whose chunk's ripples are awake reads them from its
+        // tile's layer, about the tile's corner.
+        let rippling: FxHashMap<SurfaceId, (usize, i32, i32)> = layers
+            .iter()
+            .filter_map(|(&(tx, tz, _), t)| t.surface.map(|id| (id, (t.layer, tx, tz))))
+            .collect();
         let sea = water.sea();
         let (swell, sea_level) = sea.map_or((Swell::default(), 0.0), |s| (s.swell, s.level));
         for draw in &self.rivers.mesh().draws {
-            if replaced.contains(&draw.id) {
-                continue;
-            }
+            let (layer, tx, tz) = rippling
+                .get(&draw.id)
+                .map_or((-1.0, 0, 0), |&(layer, tx, tz)| (layer as f32, tx, tz));
             self.plan.push(PlannedDraw {
                 surface: WaterSurface::Rivers,
                 constants: [
-                    SHORE_DEPTH,
+                    layer,
                     swell.amplitude,
                     swell.phase,
                     clock,
                     sea_level,
                     SEA_BAND,
-                    0.0,
-                    0.0,
+                    tx as f32 * extent,
+                    tz as f32 * extent,
                 ],
                 first_index: draw.first_index,
                 index_count: draw.index_count,
@@ -447,6 +451,9 @@ impl WaterRenderer {
         let mut tiles: Vec<(&(i32, i32, SurfaceId), &RippleDraw)> = layers.iter().collect();
         tiles.sort_by_key(|(key, _)| **key);
         for (&(tx, tz, _), ripple) in tiles {
+            if ripple.surface.is_some() {
+                continue;
+            }
             if !in_view(
                 &mut footprint,
                 (tx, tz),
@@ -616,7 +623,7 @@ impl WaterRenderer {
                         sealed: tile.sealed,
                         level: tile.level,
                         swell: tile.swell,
-                        replaces: tile.replaces,
+                        surface: tile.surface,
                     },
                 );
             }

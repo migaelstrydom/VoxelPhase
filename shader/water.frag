@@ -15,10 +15,15 @@ const vec3  SSS_COLOR = vec3(0.15, 0.5, 0.4);
 // so the noise is never carried further than a period's flow: carried for
 // ever, the small currents of still water would shear it into swirls.
 const float FLOW_PERIOD = 2.0;
+// Steepest a ripple may tilt the normal: past this the surface is noise.
+const float MAX_RIPPLE_SLOPE = 1.0;
+// How fast a falling sheet's streaks run down it, m/s.
+const float SHEET_FALL_SPEED = 4.0;
 
 layout(location = 0) in vec3 fragNormal;
 layout(location = 1) in vec3 fragWorldPos;
-// The ripple tile this fragment is drawn from, or -1 for the coarse surface.
+// The ripple tile under this fragment, or -1 where none is awake, and the
+// tile's corner.
 layout(location = 2) flat in int fragLayer;
 layout(location = 3) flat in vec2 fragTileOrigin;
 // A river surface's flow velocity, its depth of water here and the depths it
@@ -29,6 +34,9 @@ layout(location = 6) flat in vec2 fragWetRange;
 // The swell under this fragment: (amplitude with its shore fade, phase,
 // clock, unused); zero amplitude where there is none.
 layout(location = 7) in vec4 fragSwell;
+// Whether this is a tile's own fine grid, which covers the whole tile and is
+// masked to its body's columns.
+layout(location = 8) flat in int fragMasked;
 
 // The scene beyond the water, copied before the water is drawn (sampled at
 // offset UVs for refraction)
@@ -106,9 +114,9 @@ void main() {
     // How much ground a pixel covers, taken before any fragment is discarded.
     float footprint = max(length(dFdx(fragWorldPos.xz)), length(dFdy(fragWorldPos.xz)));
 
-    // A ripple tile covers its whole 8 m square; only its body's columns are
-    // this body's water.
-    if (fragLayer >= 0 && isnan(rippleFloorAt(fragLayer, fragWorldPos.xz - fragTileOrigin))) {
+    // A tile's fine grid covers its whole 8 m square; only its body's
+    // columns are this body's water.
+    if (fragMasked != 0 && isnan(rippleFloorAt(fragLayer, fragWorldPos.xz - fragTileOrigin))) {
         discard;
     }
 
@@ -139,9 +147,17 @@ void main() {
         whiteNoise += weight * fbm(worldXZ * 2.0 + carried * 2.0);
     }
 
-    // The vertex normal carries the ripples; the swell's slope is added
-    // here, per pixel.
-    vec3 rippleN = normalize(fragNormal);
+    // The ripples' normal is read per pixel where a tile is awake; the
+    // swell's slope is added to it.
+    vec3 rippleN = vec3(0.0, 1.0, 0.0);
+    if (fragLayer >= 0) {
+        float extent = float(RIPPLE_COLUMNS) * RIPPLE_COLUMN;
+        vec2 local = clamp(worldXZ - fragTileOrigin, vec2(0.0), vec2(extent));
+        vec2 slope = rippleGradientAt(fragLayer, local);
+        float steepness = length(slope);
+        slope *= steepness > MAX_RIPPLE_SLOPE ? MAX_RIPPLE_SLOPE / steepness : 1.0;
+        rippleN = normalize(vec3(-slope.x, 1.0, -slope.y));
+    }
     vec2 swellSlope = swellSlopeAt(worldXZ, fragSwell.z, fragSwell.x, fragSwell.y, footprint);
     vec3 vertexN = normalize(vec3(
         rippleN.x / rippleN.y - swellSlope.x,
@@ -157,6 +173,18 @@ void main() {
     ));
 
     vec3 V = normalize(fpc.cameraPos.xyz - fragWorldPos);
+
+    // A sheet falling over an edge faces the way it falls, turned to the
+    // camera from either side, and is white water streaked down its face.
+    float sheetFoam = 0.0;
+    if (abs(fragNormal.y) < 0.5) {
+        vec3 face = normalize(vec3(fragNormal.x, 0.0, fragNormal.z));
+        face = dot(face, V) < 0.0 ? -face : face;
+        float along = dot(worldXZ, vec2(-face.z, face.x));
+        float streaks = fbm(vec2(along * 5.0, (fragWorldPos.y + time * SHEET_FALL_SPEED) * 0.4));
+        N = normalize(face + vec3(0.0, 0.3 * (streaks - 0.75), 0.0) + 0.5 * vec3(noiseN1.x, 0.0, noiseN1.z));
+        sheetFoam = 0.9 * smoothstep(0.6, 1.0, streaks);
+    }
     vec3 L = normalize(fpc.sunDir.xyz);
 
     float near = fpc.projParams.x;
@@ -251,7 +279,7 @@ void main() {
     float running = step(1.0e-4, speed);
     float shoreFoam = (1.0 - smoothstep(0.0, 0.3, opticalDepth)) * (1.0 - running);
     float whiteWater = smoothstep(3.0, 7.0, speed) * 0.4 * whiteNoise;
-    float foamFactor = max(shoreFoam, whiteWater);
+    float foamFactor = max(max(shoreFoam, whiteWater), sheetFoam);
     color = mix(color, vec3(0.9, 0.95, 1.0), foamFactor * 0.6);
 
     // Scene radiance, like `colorSampler`: the water is drawn into the HDR

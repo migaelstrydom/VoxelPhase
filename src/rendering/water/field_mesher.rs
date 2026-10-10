@@ -5,14 +5,14 @@
 //!                its group of the wet cells meeting there: split where two
 //!                surfaces stand more than JOIN apart
 //!   two wet cells whose surfaces step more than JOIN
-//!            ──▶ a curtain down their shared edge, upper surface to lower:
-//!                water going over the edge
+//!            ──▶ a sheet down their shared edge, from the upper surface's
+//!                corners to the lower's: water going over the edge
 //!   dry cell beside one, its square dipping under that water
 //!            ──▶ a skirt carrying the shared edge's heights across it
 //! ```
 //!
 //! Each vertex also carries the water's depth there, negative over a bank;
-//! the draw cuts the surface at `SHORE_DEPTH`, so a shoreline follows a
+//! the draw cuts the surface at `river.vert`'s shore depth, so a shoreline follows a
 //! contour across the quads instead of the edges of columns.
 //!
 //! Every vertex carries its own height and a velocity, the mean of the cells
@@ -38,7 +38,7 @@ use super::field_sources::{
 };
 use super::ocean_ring::{append_ring, occupied_bounds, MapRect};
 use super::river_mesh::{RiverDraw, RiverMesh};
-use super::scene::{MeshKey, RippleTileView, WaterMesh, WaterScene};
+use super::scene::{MeshKey, Refreshed, RippleTileView, WaterMesh, WaterScene};
 use super::vertex::RiverVertex;
 
 /// The field, as the water renderer sees it.
@@ -69,8 +69,7 @@ impl<'a> FieldScene<'a> {
 }
 
 impl<'a> FieldScene<'a> {
-    /// Each awake tile, over still water, drawn in place of its chunk's
-    /// surface.
+    /// Each awake tile, over still water, drawn on its chunk's surface.
     fn ripple_views(&self) -> Vec<RippleTileView<'a>> {
         let Some(waves) = self.waves else {
             return Vec::new();
@@ -81,8 +80,8 @@ impl<'a> FieldScene<'a> {
             .active()
             .filter_map(|(key, tile)| {
                 let level = tile.mask.level;
-                let replaces = cells.slot_of(key.0).map(|slot| SurfaceId(slot as u32));
-                RippleTileView::new(waves.ripples(), key, level, waves.swell_at(level), replaces)
+                let surface = cells.slot_of(key.0).map(|slot| SurfaceId(slot as u32));
+                RippleTileView::new(waves.ripples(), key, level, waves.swell_at(level), surface)
             })
             .collect()
     }
@@ -157,17 +156,19 @@ impl<'a> FieldScene<'a> {
     }
 
     /// Every wet cell joined to `span` across one orthogonal step.
-    fn wet_across(&self, span: SpanRef, di: i32, dk: i32) -> SmallVec<[SpanIndex; 2]> {
+    fn wet_across(&self, span: SpanRef, di: i32, dk: i32) -> SmallVec<[(SpanRef, SpanIndex); 2]> {
+        let drawn = self.drawn_cells();
         self.field
             .graph()
             .joined(span, Step { di, dk })
             .into_iter()
-            .filter_map(|n| self.cell(SpanRef::key(n.span.column, n.span.ordinal)))
-            .filter(|&c| Meeting::of(&self.drawn_cells(), c).surface.is_some())
+            .map(|n| SpanRef::key(n.span.column, n.span.ordinal))
+            .filter_map(|key| Some((key, self.cell(key)?)))
+            .filter(|&(_, c)| Meeting::of(&drawn, c).surface.is_some())
             .collect()
     }
 
-    /// A cell's quad, and the skirts and curtains around it.
+    /// A cell's quad, and the skirts, lips and falling sheets around it.
     fn cell_surface(&self, mesh: &mut RiverMesh, span: SpanRef, at: SpanIndex, level: f64) {
         let graph = self.field.graph();
         let cells = self.field.cells();
@@ -177,7 +178,6 @@ impl<'a> FieldScene<'a> {
             [(-1, -1), (1, -1), (1, 1), (-1, 1)].map(|(sx, sz)| self.corner(span, level, sx, sz));
         let corners = built.clone().map(|(corner, _, _)| corner);
         let flows = built.clone().map(|(_, flow, _)| flow);
-        let flow = self.field.velocity(at);
         let first = mesh.vertices.len() as u32;
         for (_, _, source) in &built {
             if let VertexSource::Corner { cells: read, .. } = source {
@@ -194,12 +194,11 @@ impl<'a> FieldScene<'a> {
             built.map(|(_, _, source)| source),
         );
 
-        for (di, dk) in [(1, 0), (0, 1)] {
-            for other in self.wet_across(span, di, dk) {
+        for step in ORTHOGONAL {
+            for (other_span, other) in self.wet_across(span, step.di, step.dk) {
                 let other_level = drawn.surface(other);
-                if (other_level - level).abs() > JOIN {
-                    mesh.sources.reads(cells, other);
-                    curtain(mesh, column, di, (at, level), (other, other_level), flow);
+                if level - other_level > JOIN {
+                    self.sheet(mesh, column, step, first, at, (other_span, other_level));
                 }
             }
         }
@@ -262,6 +261,68 @@ impl<'a> FieldScene<'a> {
                 );
             }
         }
+    }
+}
+
+impl FieldScene<'_> {
+    /// A sheet of water falling over the edge a cell shares with the lower
+    /// cell across `step`: from the cell's own corners on that edge (vertex
+    /// `first + i`) down to the lower cell's corners there, so it meets both
+    /// surfaces, and as deep as the water it falls from, so it is cut where
+    /// that water is.
+    fn sheet(
+        &self,
+        mesh: &mut RiverMesh,
+        column: Column,
+        step: Step,
+        first: u32,
+        own: SpanIndex,
+        (lower_span, lower_level): (SpanRef, f64),
+    ) {
+        // The edge's ends, as this cell's corner indices and as the sides of
+        // the lower cell's column they lie on.
+        let ends: [(usize, (i32, i32)); 2] = match (step.di, step.dk) {
+            (1, _) => [(1, (-1, -1)), (2, (-1, 1))],
+            (-1, _) => [(0, (1, -1)), (3, (1, 1))],
+            (_, 1) => [(3, (-1, -1)), (2, (1, -1))],
+            _ => [(0, (-1, 1)), (1, (1, 1))],
+        };
+        let offsets = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
+        let (x0, z0) = column.min_corner();
+        let face = Vector2::new(step.di as f32, step.dk as f32);
+        let base = mesh.vertices.len() as u32;
+        let tops = ends.map(|(i, _)| mesh.vertices[(first as usize) + i]);
+        for (&(i, _), top) in ends.iter().zip(tops) {
+            mesh.vertices.push(RiverVertex { face, ..top });
+            mesh.sources.vertices.push(VertexSource::Edge {
+                from: first + i as u32,
+            });
+        }
+        for &(i, (sx, sz)) in ends.iter().rev() {
+            let (foot, _, source) = self.corner(lower_span, lower_level, sx, sz);
+            let VertexSource::Corner { cells, shape } = source else {
+                unreachable!("a corner reads its cells");
+            };
+            for &c in &cells {
+                mesh.sources.reads(self.field.cells(), c);
+            }
+            let top = mesh.vertices[(first as usize) + i];
+            let (cx, cz) = offsets[i];
+            mesh.vertices.push(RiverVertex {
+                xz: Vector2::new(x0 + cx * COLUMN_SIZE, z0 + cz * COLUMN_SIZE),
+                surface: foot.height as f32,
+                face,
+                ..top
+            });
+            mesh.sources.vertices.push(VertexSource::Foot {
+                from: first + i as u32,
+                cells,
+                shape,
+                own,
+            });
+        }
+        mesh.indices
+            .extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
     }
 }
 
@@ -332,6 +393,7 @@ fn lip(
             surface: corners[i].height as f32,
             depth: corners[i].depth as f32,
             flow: flows[i],
+            face: Vector2::zeros(),
         });
         mesh.sources.vertices.push(VertexSource::Edge {
             from: first + i as u32,
@@ -357,66 +419,12 @@ fn quad(
             surface: corner.height as f32,
             depth: corner.depth as f32,
             flow,
+            face: Vector2::zeros(),
         });
     }
     mesh.sources.vertices.extend(sources);
     mesh.indices
         .extend_from_slice(&[base, base + 2, base + 1, base, base + 3, base + 2]);
-}
-
-/// A vertical quad, both sides, down the edge a column shares with its +x
-/// neighbour (`di` = 1) or its +z neighbour, between the surfaces of the
-/// column's cell and the cell across that edge.
-fn curtain(
-    mesh: &mut RiverMesh,
-    column: Column,
-    di: i32,
-    (own, a): (SpanIndex, f64),
-    (other, b): (SpanIndex, f64),
-    flow: Vector2<f32>,
-) {
-    let (x0, z0) = column.min_corner();
-    let (from, to) = if di != 0 {
-        let x = x0 + COLUMN_SIZE;
-        ((x, z0), (x, z0 + COLUMN_SIZE))
-    } else {
-        let z = z0 + COLUMN_SIZE;
-        ((x0, z), (x0 + COLUMN_SIZE, z))
-    };
-    let (top, bottom) = (a.max(b) as f32, a.min(b) as f32);
-    let base = mesh.vertices.len() as u32;
-    for ((x, z), y, high) in [
-        (from, top, true),
-        (to, top, true),
-        (to, bottom, false),
-        (from, bottom, false),
-    ] {
-        mesh.vertices.push(RiverVertex {
-            xz: Vector2::new(x, z),
-            surface: y,
-            depth: 1.0,
-            flow,
-        });
-        mesh.sources.vertices.push(VertexSource::Curtain {
-            own,
-            other,
-            top: high,
-        });
-    }
-    mesh.indices.extend_from_slice(&[
-        base,
-        base + 1,
-        base + 2,
-        base,
-        base + 2,
-        base + 3,
-        base,
-        base + 2,
-        base + 1,
-        base,
-        base + 3,
-        base + 2,
-    ]);
 }
 
 impl WaterScene for FieldScene<'_> {
@@ -539,7 +547,7 @@ impl WaterScene for FieldScene<'_> {
         mesh
     }
 
-    fn refresh_river(&self, _id: SurfaceId, mesh: &mut RiverMesh) -> bool {
+    fn refresh_river(&self, _id: SurfaceId, mesh: &mut RiverMesh) -> Refreshed {
         field_sources::refresh(self.field, &self.drawn_cells(), mesh)
     }
 }
@@ -593,7 +601,7 @@ impl WaterScene for WaterWorld {
         FieldScene::of(self).build_river(id)
     }
 
-    fn refresh_river(&self, id: SurfaceId, mesh: &mut RiverMesh) -> bool {
+    fn refresh_river(&self, id: SurfaceId, mesh: &mut RiverMesh) -> Refreshed {
         FieldScene::of(self).refresh_river(id, mesh)
     }
 }

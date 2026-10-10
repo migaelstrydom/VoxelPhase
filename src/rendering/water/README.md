@@ -86,11 +86,12 @@ out over the last metre of depth using the vertex's floor. A river surface
 (`river.vert`) takes the sea's swell by how near sea level its water stands
 (`water::waves::swell_share`), so lakes above the sea stay still.
 
-The field's ripple tiles wake only over still water, and each is drawn in
-place of its chunk's river surface (`RippleTileView::replaces`), at the
-tile's own level and swell.
+The field's ripple tiles wake only over still water, and each is drawn on
+its chunk's own river surface (`RippleTileView::surface`): `river.vert`
+lifts each vertex by the tile's ripples and `water.frag` takes their normal
+per pixel, so a rippling chunk is the same surface as its neighbours.
 
-A tile whose ripples are awake is not drawn from the coarse mesh. Instead a
+A still draw's tile (a bench's pool) is not drawn from the coarse mesh. Instead a
 static 65 × 65 grid over the 8 m tile (`ripple.vert`) is displaced by the
 tile's ripple heights, read from a storage buffer (set 1) the CPU fills each
 frame: per awake tile, 32 × 32 heights with a two-cell apron (36 × 36),

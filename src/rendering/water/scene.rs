@@ -50,20 +50,21 @@ pub struct RippleTileView<'a> {
     /// The still level the tile ripples about, and the swell on it.
     pub level: f32,
     pub swell: Swell,
-    /// The river surface it is drawn in place of, if any.
-    pub replaces: Option<SurfaceId>,
+    /// The river surface it ripples, which draws it; none for a still
+    /// draw's tile, drawn on its own fine grid.
+    pub surface: Option<SurfaceId>,
     ripples: &'a RippleTiles,
 }
 
 impl<'a> RippleTileView<'a> {
     /// The awake tile at `key`, rippling about `level` under `swell`, drawn
-    /// in place of the river surface `replaces`.
+    /// on the river surface `surface` if it has one.
     pub fn new(
         ripples: &'a RippleTiles,
         key: &RippleKey,
         level: f32,
         swell: Swell,
-        replaces: Option<SurfaceId>,
+        surface: Option<SurfaceId>,
     ) -> Option<Self> {
         let (_, tile) = ripples.active().find(|(k, _)| *k == key)?;
         Some(Self {
@@ -74,7 +75,7 @@ impl<'a> RippleTileView<'a> {
             sealed: ripples.sealed_edges(key),
             level,
             swell,
-            replaces,
+            surface,
             ripples,
         })
     }
@@ -83,6 +84,19 @@ impl<'a> RippleTileView<'a> {
     pub fn write_heights(&self, out: &mut [f32]) {
         self.ripples.write_padded(&(self.tile, self.body), out);
     }
+}
+
+/// What reading a built river surface again found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refreshed {
+    /// It kept its shape and is up to date.
+    Held,
+    /// Its shape changed; it was read as far as it could be, and must be
+    /// built again, but can wait.
+    Reshaped,
+    /// It could not be read at all: the cells it reads were laid out again.
+    /// It must be built again before it is drawn as it is now.
+    Unreadable,
 }
 
 /// Anything the water renderer can draw: still surfaces with static meshes
@@ -148,9 +162,8 @@ pub trait WaterScene {
     }
 
     /// Read a built river surface's heights, depths and flow again from the
-    /// water, in place. Returns whether it kept its shape; where it did not,
-    /// it must be built again.
-    fn refresh_river(&self, _id: SurfaceId, _mesh: &mut RiverMesh) -> bool {
-        false
+    /// water, in place, as far as it can be.
+    fn refresh_river(&self, _id: SurfaceId, _mesh: &mut RiverMesh) -> Refreshed {
+        Refreshed::Unreadable
     }
 }

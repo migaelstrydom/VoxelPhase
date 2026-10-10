@@ -6,14 +6,15 @@
 //! moves. Only one whose shape changed is built again, and under a budget at
 //! most that many in one sync, stalest first: a shape that changes
 //! everywhere at once shows a few frames late in places rather than costing
-//! the frame. A surface with no mesh yet is always built.
+//! the frame. A surface with no mesh yet, or whose cells were laid out again
+//! so it cannot be read, is always built.
 
 use std::collections::BTreeMap;
 
 use crate::water::ids::SurfaceId;
 
 use super::river_mesh::RiverMesh;
-use super::scene::WaterScene;
+use super::scene::{Refreshed, WaterScene};
 
 /// Most surfaces built again in one sync, by default.
 const BUILDS_PER_SYNC: usize = 8;
@@ -76,16 +77,18 @@ impl RiverParts {
         let mut reshaped = self.parts.len() != before;
 
         let mut refreshed: Vec<SurfaceId> = Vec::new();
-        // Missing surfaces first, then those built longest ago.
+        // Surfaces missing or unreadable first, all built now: the cells they
+        // read were laid out again, so they cannot be read until built. Then
+        // those built longest ago.
         let mut stale: Vec<(u64, SurfaceId, u32)> = Vec::new();
         for (&id, &version) in &wanted {
             match self.parts.get_mut(&id) {
                 None => stale.push((0, id, version)),
                 Some(part) if part.version != version => {
-                    if water.refresh_river(id, &mut part.mesh) {
-                        part.version = version;
-                    } else {
-                        stale.push((part.built, id, version));
+                    match water.refresh_river(id, &mut part.mesh) {
+                        Refreshed::Held => part.version = version,
+                        Refreshed::Reshaped => stale.push((part.built, id, version)),
+                        Refreshed::Unreadable => stale.push((0, id, version)),
                     }
                     refreshed.push(id);
                 }
@@ -229,32 +232,43 @@ mod tests {
     /// foot, water over a tunnel's).
     const SAME_SURFACE: f32 = 0.25;
 
-    /// While a dam on water_park bursts, every surface meets its
-    /// neighbours on their shared borders, except where one waits to be
-    /// built again in its new shape.
+    /// After a blast on a level's water, every surface meets its
+    /// neighbours on their shared borders, frame by frame.
     #[test]
-    #[ignore = "release: opens water_park"]
+    #[ignore = "release: opens water_park and thin_ice"]
     fn neighbouring_surfaces_meet() {
-        let level = load_level(Path::new("levels/water_park.level.ron")).unwrap();
+        for (level, at) in [
+            ("water_park", Point3::new(-52.2, 2.0, 49.8)),
+            ("thin_ice", Point3::new(45.0, 3.5, 60.0)),
+        ] {
+            let (parted, worst) = parted_after_blast(level, at);
+            assert_eq!(parted, 0, "{level}: surfaces parted by up to {worst} m");
+        }
+    }
+
+    /// Run a level's water through a blast at `at`, as the game draws it,
+    /// and count the border corners that stand apart from the neighbouring
+    /// surface's, and how far.
+    fn parted_after_blast(level: &str, at: Point3<f32>) -> (usize, f32) {
+        let level = load_level(Path::new(&format!("levels/{level}.level.ron"))).unwrap();
         let mut terrain = build_terrain(&level);
         let mut water = WaterWorld::from_config(level.water.as_ref().unwrap(), &terrain);
         let mut parts = RiverParts::default();
         let extent = CHUNK_COLUMNS as f32 * COLUMN_SIZE;
-        let (mut worst, mut seams, mut waiting) = (0.0f32, 0, 0);
+        let on = |c: f32| (c / extent - (c / extent).round()).abs() < 1.0e-4;
+        let (mut parted, mut worst) = (0, 0.0f32);
         for frame in 0..240 {
             if frame == 30 {
-                terrain.detonate(Point3::new(-52.2, 2.0, 49.8), &BlastConfig::default());
+                terrain.detonate(at, &BlastConfig::default());
             }
             terrain.update();
             water.on_terrain_update(&terrain);
             water.step(1.0 / 60.0);
             parts.sync(&water);
-            let versions: BTreeMap<SurfaceId, u32> = water.river_key().into_iter().collect();
             // Every quad corner on a chunk's border, by where it stands.
             let mut border: BTreeMap<(i64, i64), Vec<(SurfaceId, f32)>> = BTreeMap::new();
             for (id, part) in &parts.parts {
                 for (i, v) in part.mesh.vertices.iter().enumerate() {
-                    let on = |c: f32| (c / extent - (c / extent).round()).abs() < 1.0e-4;
                     let corner =
                         matches!(part.mesh.sources.vertices[i], VertexSource::Corner { .. });
                     if corner && (on(v.xz.x) || on(v.xz.y)) {
@@ -268,28 +282,18 @@ mod tests {
             }
             for found in border.values() {
                 for &(id, height) in found {
-                    let nearest = found
+                    let gap = found
                         .iter()
                         .filter(|(other, _)| *other != id)
-                        .map(|&(other, h)| (other, (h - height).abs()))
-                        .min_by(|a, b| a.1.total_cmp(&b.1));
-                    let Some((other, gap)) = nearest else {
-                        continue;
-                    };
-                    if gap <= SEAM || gap > SAME_SURFACE {
-                        continue;
-                    }
-                    let behind = |id: &SurfaceId| parts.parts[id].version != versions[id];
-                    if behind(&id) || behind(&other) {
-                        waiting += 1;
-                    } else {
-                        seams += 1;
+                        .map(|&(_, h)| (h - height).abs())
+                        .min_by(f32::total_cmp);
+                    if let Some(gap) = gap.filter(|&g| g > SEAM && g <= SAME_SURFACE) {
+                        parted += 1;
                         worst = worst.max(gap);
                     }
                 }
             }
         }
-        println!("{seams} border vertices parted, by up to {worst} m; {waiting} beside a surface waiting");
-        assert_eq!(seams, 0, "surfaces parted by up to {worst} m");
+        (parted, worst)
     }
 }
