@@ -29,9 +29,10 @@ use crate::water::field::WaterField;
 use crate::water::geometry::{Column, SpanIndex, SpanRef, Step, COLUMN_SIZE, ORTHOGONAL};
 use crate::water::ids::SurfaceId;
 use crate::water::surface::Swell;
-use crate::water::waves::{Sea, SurfaceWaves};
+use crate::water::waves::{still_level, Sea, SurfaceWaves};
 use crate::water::{WaterWorld, FIELD_BODY};
 
+use super::divide::WaterPatch;
 use super::field_sources::{
     self, corner_flow, gather, Corner, Meeting, VertexSource, DRAWN_DEPTH, JOIN,
 };
@@ -378,6 +379,19 @@ impl WaterScene for FieldScene<'_> {
         self.ripple_views()
     }
 
+    /// Every chunk whose water stands still.
+    fn still_water(&self) -> Vec<WaterPatch> {
+        self.field
+            .cells()
+            .chunks
+            .iter()
+            .filter_map(|chunk| {
+                still_level(self.field, chunk.coord)
+                    .map(|level| WaterPatch::tile(chunk.coord.x, chunk.coord.z, level))
+            })
+            .collect()
+    }
+
     fn ocean_key(&self) -> MeshKey {
         self.field
             .sea()
@@ -475,6 +489,10 @@ impl WaterScene for WaterWorld {
 
     fn ripple_tiles(&self) -> Vec<RippleTileView<'_>> {
         FieldScene::of(self).ripple_views()
+    }
+
+    fn still_water(&self) -> Vec<WaterPatch> {
+        FieldScene::of(self).still_water()
     }
 
     fn ocean_key(&self) -> MeshKey {

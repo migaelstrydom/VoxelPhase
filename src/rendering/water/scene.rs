@@ -11,6 +11,7 @@ use crate::water::ids::SurfaceId;
 use crate::water::surface::{RippleKey, RippleTiles, Swell, TILE_CORNERS};
 use crate::water::waves::Sea;
 
+use super::divide::WaterPatch;
 use super::river_mesh::RiverMesh;
 use super::vertex::BasinVertex;
 
@@ -113,6 +114,13 @@ pub trait WaterScene {
 
     /// Every awake ripple tile.
     fn ripple_tiles(&self) -> Vec<RippleTileView<'_>> {
+        Vec::new()
+    }
+
+    /// The still water the river surfaces hold, a patch per tile, for the
+    /// renderer to divide blended surfaces by. Still draws are divided by
+    /// their own tiles.
+    fn still_water(&self) -> Vec<WaterPatch> {
         Vec::new()
     }
 

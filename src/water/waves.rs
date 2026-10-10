@@ -120,6 +120,25 @@ pub fn swell_share(sea_level: f32, surface: f32) -> f32 {
     (1.0 - (surface - sea_level).abs() / SEA_BAND).clamp(0.0, 1.0)
 }
 
+/// The mean surface of a tile's wet cells, if they all stand within `FLAT`
+/// of one another: still water, which ripples and which the renderer divides
+/// blended surfaces by.
+pub fn still_level(field: &WaterField, tile: SpanChunkCoord) -> Option<f32> {
+    let cells = field.cells();
+    let chunk = &cells.chunks[cells.slot_of(tile)?];
+    let (mut low, mut high, mut sum, mut count) = (f64::INFINITY, f64::NEG_INFINITY, 0.0, 0);
+    for flat in 0..chunk.depth.len() {
+        if chunk.depth[flat] > WET_DEPTH {
+            let surface = chunk.surface(flat);
+            low = low.min(surface);
+            high = high.max(surface);
+            sum += surface;
+            count += 1;
+        }
+    }
+    (count > 0 && high - low <= FLAT as f64).then(|| (sum / count as f64) as f32)
+}
+
 /// Tile masks read off the field: where a tile's water is still, the
 /// columns it covers and the floor under each.
 struct FieldMasks<'a> {
@@ -131,7 +150,7 @@ impl MaskSource for FieldMasks<'_> {
         if body != FIELD_BODY {
             return None;
         }
-        let level = self.still_level(tile)?;
+        let level = still_level(self.field, tile)?;
         // The tile's columns, a ring of its neighbours' for the corners on
         // its edges, and one more ring to find the banks beside them.
         const SIDE: usize = CHUNK_COLUMNS as usize + 4;
@@ -189,25 +208,6 @@ impl MaskSource for FieldMasks<'_> {
 }
 
 impl FieldMasks<'_> {
-    /// The mean surface of the tile's wet cells, if they all stand within
-    /// `FLAT` of one another.
-    fn still_level(&self, tile: SpanChunkCoord) -> Option<f32> {
-        let cells = self.field.cells();
-        let slot = cells.slot_of(tile)?;
-        let chunk = &cells.chunks[slot];
-        let (mut low, mut high, mut sum, mut count) = (f64::INFINITY, f64::NEG_INFINITY, 0.0, 0);
-        for flat in 0..chunk.depth.len() {
-            if chunk.depth[flat] > WET_DEPTH {
-                let surface = chunk.surface(flat);
-                low = low.min(surface);
-                high = high.max(surface);
-                sum += surface;
-                count += 1;
-            }
-        }
-        (count > 0 && high - low <= FLAT as f64).then(|| (sum / count as f64) as f32)
-    }
-
     /// The floor of a column's span at `level`, if water there would cover
     /// some of it, and whether it is wet at that level.
     fn column(&self, column: Column, level: f32) -> Option<(f32, bool)> {

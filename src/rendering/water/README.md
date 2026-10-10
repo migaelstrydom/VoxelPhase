@@ -29,9 +29,9 @@ below, the reverse. A mesh crossing the surface (an ice floe) is drawn in both
 passes, each half clipped at the level through `gl_ClipDistance`
 (`triangle.vert`'s `clipPlane`). So smoke over a lake covers it, the lake shows
 through the dry part of a floe, and what is under the water is tinted and
-refracted by it. Only still draws (the sea's ring, a bench's pool) are in the
-divide: the field's surfaces are not yet, so what stands in them counts as
-this side.
+refracted by it. The divide holds the still draws (the sea's ring, a bench's pool) and every
+8 m tile of the field's water that stands still (`WaterScene::still_water`).
+Running water is not in it, so what stands in a river counts as this side.
 
 `WaterRenderer::prepare` syncs meshes, uploads ripples and plans the frame's
 draws, leaving out tiles outside the view. A frame with no water in view is

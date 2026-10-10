@@ -361,6 +361,7 @@ impl WaterRenderer {
         {
             return Ok(WaterFrame::default());
         }
+        patches.extend(water.still_water());
         let layers = self.upload_ripples(water)?;
         let clock = water.clock();
         let body = |id: SurfaceId, level: f32, tile: [f32; 4]| {
