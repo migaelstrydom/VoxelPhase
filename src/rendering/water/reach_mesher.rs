@@ -63,6 +63,20 @@ pub struct RiverMesh {
     pub draws: Vec<RiverDraw>,
 }
 
+impl RiverMesh {
+    /// Add another mesh's surfaces after this one's.
+    pub fn append(&mut self, other: &RiverMesh) {
+        let base = self.vertices.len() as u32;
+        let first = self.indices.len() as u32;
+        self.vertices.extend_from_slice(&other.vertices);
+        self.indices.extend(other.indices.iter().map(|i| i + base));
+        self.draws.extend(other.draws.iter().map(|d| RiverDraw {
+            first_index: d.first_index + first,
+            ..*d
+        }));
+    }
+}
+
 /// A reach's state as a draw needs it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RiverState {

@@ -150,14 +150,14 @@ fn film(scenario: &Scenario, options: &Options) -> Result<voxel_phase::water_vie
     let mut frames = Vec::new();
     let mut failure = None;
     let recorded = run_with_captures(scenario, options.config, &captures, |at, terrain, water| {
-        viewer.swap_state(terrain, water);
+        viewer.swap_terrain(terrain);
         let mut shot = custom_shot(eye, look);
         shot.label = format!("t = {at:.1} s");
-        match viewer.render(&shot) {
+        match viewer.render_with(&shot, &*water) {
             Ok(image) => frames.push((shot.label, image)),
             Err(e) => failure = Some(e.to_string()),
         }
-        viewer.swap_state(terrain, water);
+        viewer.swap_terrain(terrain);
     })?;
     if let Some(message) = failure {
         return Err(message);
@@ -185,13 +185,22 @@ fn film_field(scenario: &Scenario, options: &Options) -> Result<FieldRun, String
     let (eye, look) = film.camera.unwrap_or(scenario.camera);
     let mut frames = Vec::new();
     let mut failure = None;
-    let mut version = 0;
+    let mut capture = 0;
     let recorded = run_field(scenario, options.config, &captures, |at, terrain, field| {
-        version += 1;
+        // Each capture is drawn afresh: every chunk's version moves.
+        capture += 1;
+        let versions = vec![capture; field.cells().chunks.len()];
         viewer.swap_terrain(terrain);
         let mut shot = custom_shot(eye, look);
         shot.label = format!("t = {at:.1} s");
-        match viewer.render_with(&shot, &FieldScene { field, version }) {
+        match viewer.render_with(
+            &shot,
+            &FieldScene {
+                field,
+                versions: &versions,
+                clock: at,
+            },
+        ) {
             Ok(image) => frames.push((shot.label, image)),
             Err(e) => failure = Some(e.to_string()),
         }

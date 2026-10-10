@@ -60,8 +60,20 @@ each basin's id and region version: a re-region, merge or split changes it and
 the mesh is rebuilt, then uploaded once into each frame slot's buffers. A
 level change is a push constant.
 
-Anything implementing `WaterScene` can be drawn: `WaterWorld`, and the visual
-bench's fixed `ScenePool`.
+Anything implementing `WaterScene` can be drawn: the game's `WaterWorld` (the
+field, below), the network's `NetworkWater` for the water tools, and the
+visual bench's fixed `ScenePool`.
+
+## The field
+
+The game's water is a shallow-water field (`docs/WATER_FIELD_SPIKE.md`), drawn
+through the river pipeline by `field_mesher.rs`: one surface per 8 m chunk,
+keyed by a version the water moves only when that chunk's depths have moved
+by more than a millimetre. `RiverParts` keeps each river surface apart and
+builds again only those whose version moved, at most eight a frame in the
+game (stalest first; the offline viewers lift the cap), then joins them for
+upload. Past
+the map's open edges the sea is the ocean ring.
 
 ## Swell and ripples
 
@@ -249,6 +261,8 @@ opaque).
 src/rendering/water/
     mod.rs          -- re-exports
     basin_mesher.rs -- basin meshes and the WaterScene trait
+    field_mesher.rs -- the field's surface, per chunk
+    river_parts.rs  -- river surfaces rebuilt only when their version moves
     ocean_mesher.rs, ocean_ring.rs, reach_mesher.rs, fall_mesher.rs
     divide.rs       -- which side of the water a blended surface lies on
     footprint.rs    -- the screen rectangle the water can read

@@ -91,7 +91,7 @@ fn sea_columns(
 
 /// The first and last columns with any spans: the terrain's own edge, which
 /// the graph's chunk-aligned bounds can overhang.
-fn occupied_bounds(graph: &SpanGraph) -> Option<(Column, Column)> {
+pub(super) fn occupied_bounds(graph: &SpanGraph) -> Option<(Column, Column)> {
     let (min, max) = graph.column_bounds();
     let mut out: Option<(Column, Column)> = None;
     for k in min.k..=max.k {

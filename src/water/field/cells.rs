@@ -6,6 +6,8 @@
 //! of the column layout, so the cells can be carried across a rebuild after
 //! the graph has already replaced the chunk.
 
+use nalgebra::Vector2;
+
 use crate::water::geometry::{
     Column, SpanChunk, SpanChunkCoord, SpanGraph, SpanIndex, CHUNK_COLUMNS, COLUMNS_PER_CHUNK,
     COLUMN_SIZE,
@@ -29,6 +31,9 @@ pub struct FieldChunk {
     pub ceiling: Vec<f32>,
     /// Water depth over the bed, m, per cell.
     pub depth: Vec<f64>,
+    /// Depth-averaged velocity, m/s, per cell: x and z, as of the last step
+    /// whose water moved here.
+    pub velocity: Vec<Vector2<f32>>,
     /// Faces to the +x and +z neighbours, each owned by the cell on its −
     /// side, so every face between two cells is held exactly once.
     pub faces: Vec<Face>,
@@ -56,12 +61,14 @@ impl FieldChunk {
             offsets.push(bed.len() as u32);
         }
         let depth = vec![0.0; bed.len()];
+        let velocity = vec![Vector2::zeros(); bed.len()];
         Self {
             coord,
             offsets,
             bed,
             ceiling,
             depth,
+            velocity,
             faces: Vec::new(),
             boundary: Vec::new(),
             awake: false,

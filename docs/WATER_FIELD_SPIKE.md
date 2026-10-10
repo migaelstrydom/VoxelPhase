@@ -1,7 +1,8 @@
 # Water as a Shallow-Water Field: Spike
 
-Status: spike on branch `water-field`. The game still runs the hydrology network
-(`WATER_HYDROLOGY_DESIGN.md`); the field runs beside it in `water_viewer --field`.
+Status: on branch `water-field`, the game runs the field, for play-testing
+(§7). The hydrology network (`WATER_HYDROLOGY_DESIGN.md`) is kept as
+`NetworkWater` for the water tools only.
 
 ## 1. Why
 
@@ -56,9 +57,14 @@ no stores, links, routes or topology.
   An edit costs 1.7–2.2 ms: about 1 ms re-pairing, the rest carrying water.
 - **Sleep** (`activity.rs`). An 8 m chunk sleeps after 2 s calm. Any flow into
   it, an edit or a source wakes it. Still water costs nothing.
-- **Load.** A pool fills its own hollow by Priority-Flood from the bottom of the
-  hollow its seed lies in, and stops at the crest. A level with springs runs
-  until its volume holds steady.
+- **Load** (`fill.rs`). Every span's *spill level* is found first: the lowest
+  surface it could keep, by Priority-Flood inward from every way off the map.
+  A pool fills everything joined to its seed under `min(authored, spill)`, so
+  a pool authored above its rim opens at its rim. The sea fills everything
+  joined to its open edges below sea level. A level with springs then fills
+  each hollow below each spring to its crest plus a weir head over its lip,
+  wets the channel between them at normal depth, and runs (at most 30 s in
+  the game) to settle what those guesses got wrong.
 
 ## 3. Results
 
@@ -161,10 +167,50 @@ Open:
 - **Sources pour into a 3 × 3 footprint** at the arc's end. There is no momentum
   from the jet.
 
-## 7. Not done
+## 7. In the game
 
-- the game (`WaterWorld`, `WaterQuery`, buoyancy, splash coupling, the sleep
-  tracker), which still sees only the network;
+`WaterWorld` holds the field; `WaterQuery` samples it (surface, bed, the cell's
+velocity); the renderer draws it through `FieldScene` and the sea past the
+map's open edges as the ocean ring. `water_perf` measures it on every water
+level (release, one thread):
+
+| level | opening | quiet, mean / p99 | blast frame | after the blast, mean / p99 |
+|---|---|---|---|---|
+| island_sea | 0.29 s | 1.6 / 2.0 ms | 5.5 ms | 3.8 / 4.4 ms |
+| water_park | 2.7 s | 3.8 / 4.6 ms | 4.3 ms | 4.0 / 4.8 ms |
+| thin_ice | 36 ms | 0.6 / 1.4 ms | 6.7 ms | 1.4 / 2.3 ms |
+| swim_test | 15 ms | 0.2 / 0.6 ms | 3.2 ms | 1.8 / 2.7 ms |
+| test_arena, subsidence, wrecking_yard | ≤ 0.12 s | ≤ 0.8 / 1.4 ms | ≤ 2.1 ms | ≤ 0.7 / 1.0 ms |
+
+Each figure is stepping, carrying the water over the edit, and rebuilding the
+drawn surface. A chunk's surface is rebuilt only when its depths have moved by
+more than a millimetre (`SurfaceVersions`), along with the neighbours whose
+edges meet the cells that moved. The renderer keeps each chunk's mesh apart
+(`RiverParts`) and in the game rebuilds at most eight a frame, stalest first:
+a running river keeps some thirty chunks moving, so its surface is drawn a
+few frames behind in places. The offline viewers rebuild everything.
+
+Found getting there:
+
+| Found | Fix |
+|---|---|
+| Rebuilding the whole surface took 86 ms a frame | A per-cell velocity table read once a step (it was quadratic per chunk); a one-way neighbour lookup in the mesher; per-chunk versions and rebuilds, capped per frame |
+| `water_park` took 23 s to open (250 s of settling) | Fed hollows filled to a weir head and channels wet at normal depth before the run; a 0.1 s settle step |
+| Pools authored above their rim drained at load; water behind a shoal was left empty | Spill levels from the map's edges in place of the crest rule |
+| A spring's 3 × 3 footprint wet the bank above the channel it fell into | A jet's footprint spreads level and down, not up |
+| A river between high walls was not drawn | A dry cell counts at most 10 cm below the water in a corner's depth |
+
+Changed for play: the field has no ripple tiles, so bodies make spray but no
+waves (`level_viewer --splash` is gone); the sea has no swell; a sample's
+surface is its cell's, flat across the 0.5 m cell.
+
+`skyway`'s pool is authored at 3.0 m in a valley that spills off the map at
+1.01 m (the network found the same outlet), so it opens empty; the network
+drained it slowly instead.
+
+## 8. Not done
+
+- waves from bodies (ripples) and the sea's swell;
 - the GPU heightfield path for drawing;
 - parallel stepping (chunks are independent within a substep's phases);
 - fall sheets;

@@ -36,7 +36,7 @@ use voxel_phase::water::geometry::{Column, Span, COLUMN_SIZE};
 use voxel_phase::water::ids::StoreId;
 use voxel_phase::water::network::Store;
 use voxel_phase::water::topology::TopologyEdit;
-use voxel_phase::water::{Disturbance, WaterWorld};
+use voxel_phase::water::{Disturbance, NetworkWater};
 
 /// Frames run after each blast, at 60 Hz.
 const FRAMES_BETWEEN: usize = 45;
@@ -114,7 +114,7 @@ fn run_seed(options: &Options, seed: u64) -> Result<Vec<String>, String> {
     let level = load_level(&options.level).map_err(|e| e.to_string())?;
     let mut terrain = build_terrain(&level);
     let config = level.water.as_ref().ok_or("the level has no water")?;
-    let (mut water, _) = WaterWorld::recording(config, &terrain);
+    let (mut water, _) = NetworkWater::recording(config, &terrain);
     let mut rng = StdRng::seed_from_u64(seed);
     let mut findings = Vec::new();
     let mut violations = water.geometry().stats().invariant_violations;
@@ -242,7 +242,7 @@ fn run_seed(options: &Options, seed: u64) -> Result<Vec<String>, String> {
 /// Leave the water alone for [`REST`] and report any store, link or region
 /// it still re-lays in the last [`REST_QUIET`] of it. A lake still filling
 /// may reach a new bank now and then; edits frame after frame are churn.
-fn churn(water: &mut WaterWorld) -> Vec<String> {
+fn churn(water: &mut NetworkWater) -> Vec<String> {
     let dt = 1.0 / 60.0;
     let frames = (REST / dt) as usize;
     let quiet = ((REST - REST_QUIET) / dt) as usize;
@@ -320,7 +320,7 @@ fn profile(terrain: &TerrainWorld, column: Column, y: f32) -> String {
 
 /// A point on the floor of a random basin, dropped up to 3 m to reach
 /// whatever lies under it.
-fn blast_site(water: &WaterWorld, rng: &mut StdRng) -> Option<Point3<f32>> {
+fn blast_site(water: &NetworkWater, rng: &mut StdRng) -> Option<Point3<f32>> {
     let basins: Vec<_> = water
         .basins()
         .filter(|(_, b)| !b.region.is_empty())
@@ -340,7 +340,7 @@ fn blast_site(water: &WaterWorld, rng: &mut StdRng) -> Option<Point3<f32>> {
 }
 
 /// A point just under the surface of a random basin that holds water.
-fn splash_site(water: &WaterWorld, rng: &mut StdRng) -> Option<Point3<f32>> {
+fn splash_site(water: &NetworkWater, rng: &mut StdRng) -> Option<Point3<f32>> {
     let wet: Vec<_> = water
         .basins()
         .filter(|(_, b)| b.volume > 0.0)
@@ -362,7 +362,7 @@ fn splash_site(water: &WaterWorld, rng: &mut StdRng) -> Option<Point3<f32>> {
 
 /// One frame of the network: its new topology edits, every store and every
 /// open link.
-fn trace(water: &WaterWorld, frame: usize, logged: usize) {
+fn trace(water: &NetworkWater, frame: usize, logged: usize) {
     println!("frame {frame}");
     for edit in water.topology_log().iter().skip(logged) {
         println!("  edit {edit:?}");
@@ -404,13 +404,13 @@ fn trace(water: &WaterWorld, frame: usize, logged: usize) {
     }
 }
 
-fn basin_volumes(water: &WaterWorld) -> Vec<(StoreId, f64)> {
+fn basin_volumes(water: &NetworkWater) -> Vec<(StoreId, f64)> {
     water.basins().map(|(id, b)| (id, b.volume)).collect()
 }
 
 /// Basins that hold water deeper than [`DRAWN_DEPTH`] but would draw
 /// nothing.
-fn undrawn(water: &WaterWorld) -> Vec<String> {
+fn undrawn(water: &NetworkWater) -> Vec<String> {
     let mesh = water.build_mesh();
     water
         .basins()

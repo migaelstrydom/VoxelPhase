@@ -228,14 +228,12 @@ pub fn spawn_object(
 /// them, and any pool authored above where it spills.
 pub fn create_level_water(level: &Level, terrain: &TerrainWorld) -> Option<WaterWorld> {
     let config = level.water.as_ref()?;
-    let (water, errors) = WaterWorld::from_config(config, terrain);
-    for error in errors {
-        log::warn!("{error}");
-    }
+    let water = WaterWorld::from_config(config, terrain);
+    let (settled, took) = water.opened();
     log::info!(
-        "Water placed: {} basins, {:.0} m³",
-        water.basins().count(),
-        water.volume()
+        "Water placed: {:.0} m³, settled {settled:.0} s in {:.2} s",
+        water.volume(),
+        took.as_secs_f64()
     );
     Some(water)
 }

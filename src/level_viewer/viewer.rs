@@ -28,8 +28,8 @@
 //! What it is *not* is a running game: no systems are dispatched, so nothing has
 //! settled under gravity and nothing has moved. That is a feature. What it shows
 //! is the level exactly as authored, which is the thing being checked. The one
-//! exception is asked for: [`LevelViewer::stir_water`] blasts and splashes the
-//! water and runs it on, so ripples and their seams can be seen.
+//! exception is asked for: [`LevelViewer::stir_water`] blasts the ground and
+//! runs the water on, so what the water does about it can be seen.
 
 use std::sync::Arc;
 
@@ -56,7 +56,7 @@ use crate::resources::manager::ResourceManager;
 use crate::resources::textures::TextureManager;
 use crate::systems::probe_owner;
 use crate::terrain::{self, BlastConfig, TerrainWorld};
-use crate::water::{Disturbance, WaterWorld};
+use crate::water::WaterWorld;
 
 use super::shots::ViewerShot;
 
@@ -121,6 +121,8 @@ impl LevelViewer {
 
         // The wireframe pass would put black lines through every shot.
         renderer.debug_wireframe_backfaces = false;
+        // Each shot is one frame: every surface that moved is drawn as it is.
+        renderer.water_renderer.set_river_budget(None);
 
         Ok(Self {
             renderer,
@@ -137,34 +139,15 @@ impl LevelViewer {
         self.world.read_resource::<TerrainWorld>()
     }
 
-    /// Swap in a terrain and water from outside, and back out on the next
-    /// call: how an offline harness that edits and simulates its own world
-    /// photographs it without copying either.
-    pub fn swap_state(&mut self, terrain: &mut TerrainWorld, water: &mut WaterWorld) {
-        std::mem::swap(&mut *self.world.write_resource::<TerrainWorld>(), terrain);
-        if !self.world.has_value::<WaterWorld>() {
-            let (empty, _) = WaterWorld::from_config(&Default::default(), terrain);
-            self.world.insert(empty);
-        }
-        std::mem::swap(&mut *self.world.write_resource::<WaterWorld>(), water);
-    }
-
     /// Swap in a terrain from outside, and back out on the next call.
     pub fn swap_terrain(&mut self, terrain: &mut TerrainWorld) {
         std::mem::swap(&mut *self.world.write_resource::<TerrainWorld>(), terrain);
     }
 
-    /// Set off each blast, drop a splash at each point, then run the water
-    /// on for `seconds` of 60 Hz frames. The blasts' frame lasts `blast_dt`:
-    /// a blast frame in the game is a long one. A level without water is
-    /// only blasted.
-    pub fn stir_water(
-        &mut self,
-        blasts: &[Point3<f32>],
-        splashes: &[Point3<f32>],
-        blast_dt: f32,
-        seconds: f32,
-    ) {
+    /// Set off each blast, then run the water on for `seconds` of 60 Hz
+    /// frames. The blasts' frame lasts `blast_dt`: a blast frame in the game
+    /// is a long one. A level without water is only blasted.
+    pub fn stir_water(&mut self, blasts: &[Point3<f32>], blast_dt: f32, seconds: f32) {
         let mut terrain = self.world.write_resource::<TerrainWorld>();
         for &at in blasts {
             terrain.detonate(at, &BlastConfig::default());
@@ -177,13 +160,7 @@ impl LevelViewer {
         };
         if !blasts.is_empty() {
             water.on_terrain_update(&terrain);
-            for &at in blasts {
-                water.disturb(at, 2.0, Disturbance::Velocity(-6.0));
-            }
             water.step(blast_dt);
-        }
-        for &at in splashes {
-            water.disturb(at, 0.5, Disturbance::Velocity(-3.0));
         }
         let frame = 1.0 / 60.0;
         for _ in 0..(seconds / frame).round() as usize {

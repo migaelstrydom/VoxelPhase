@@ -14,9 +14,13 @@ const G: f32 = 9.81;
 /// Time step of the landing trace, s.
 const TRACE_STEP: f32 = 0.01;
 
-/// Farthest a neighbour's floor may stand from the floor the arc meets and
+/// Farthest a neighbour's floor may stand below the floor the arc meets and
 /// still take a share of its water, m.
-const FOOTPRINT_STEP: f32 = 1.0;
+const FOOTPRINT_DROP: f32 = 1.0;
+
+/// Farthest it may stand above, m: a jet spreads where it lands and down,
+/// not up a bank beside it.
+const FOOTPRINT_RISE: f32 = 0.1;
 
 /// Longest a trace runs before it gives up: water that has not landed by
 /// then has fallen out of the world, s.
@@ -56,7 +60,7 @@ impl Source {
     }
 
     /// Find where the water lands now: the first span whose floor the arc
-    /// reaches, and its neighbours within `FOOTPRINT_STEP` of its floor.
+    /// reaches, and its neighbours on much the same floor or below it.
     pub fn retrace(&mut self, graph: &SpanGraph, cells: &FieldCells) {
         self.landing.clear();
         let Some((column, ordinal)) = trace(graph, self.origin, self.velocity) else {
@@ -68,7 +72,10 @@ impl Source {
             .neighbours(hit)
             .into_iter()
             .map(|n| SpanRef::key(n.span.column, n.span.ordinal))
-            .filter(|s| (graph.span(*s).floor_c - floor).abs() < FOOTPRINT_STEP);
+            .filter(|s| {
+                let rise = graph.span(*s).floor_c - floor;
+                rise < FOOTPRINT_RISE && -rise < FOOTPRINT_DROP
+            });
         self.landing = std::iter::once(hit)
             .chain(around)
             .filter_map(|s| cells.index(graph, s.column, s.ordinal))

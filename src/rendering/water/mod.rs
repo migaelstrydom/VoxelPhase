@@ -8,6 +8,7 @@ mod ocean_ring;
 mod pipeline;
 mod reach_mesher;
 mod renderer;
+mod river_parts;
 mod vertex;
 
 pub use basin_mesher::{
@@ -19,4 +20,5 @@ pub use field_mesher::FieldScene;
 pub use footprint::ScreenFootprint;
 pub use reach_mesher::{RiverDraw, RiverMesh, RiverState};
 pub use renderer::{WaterFrame, WaterRenderer, WaterView, RIPPLE_TILE_STRIDE};
+pub use river_parts::RiverParts;
 pub use vertex::{BasinVertex, FallVertex, FineVertex, RiverVertex};

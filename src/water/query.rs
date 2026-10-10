@@ -4,19 +4,17 @@
 use nalgebra::{Point3, Vector3};
 
 use super::buoyancy::{WaterSample as SurfaceSample, WaterSurface};
-use super::geometry::Column;
-use super::ids::WaterBodyId;
-use super::world::WaterWorld;
+use super::field::{WaterField, WET_DEPTH};
+use super::ids::{StoreId, WaterBodyId};
 
 /// The water at a point.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct WaterSample {
     /// Surface height here, including swell and ripples.
     pub surface: f32,
-    /// Floor the water rests on (`floor_min` of the span).
+    /// Floor the water rests on.
     pub floor: f32,
-    /// Bulk velocity: the reach's velocity, or the basin's potential-flow
-    /// current.
+    /// Bulk velocity: the depth-averaged current.
     pub velocity: Vector3<f32>,
     /// How fast the surface rises here, m/s: the swell's heave.
     pub rise: f32,
@@ -24,89 +22,46 @@ pub struct WaterSample {
     pub body: WaterBodyId,
 }
 
-/// Point queries against one [`WaterWorld`].
+/// The one body the field's water belongs to: a field has no stores, so
+/// all its water is one body.
+pub const FIELD_BODY: WaterBodyId = StoreId(0);
+
+/// Point queries against one [`WaterField`].
 #[derive(Clone, Copy)]
 pub struct WaterQuery<'a> {
-    world: &'a WaterWorld,
+    field: &'a WaterField,
 }
 
 impl<'a> WaterQuery<'a> {
-    pub fn new(world: &'a WaterWorld) -> Self {
-        Self { world }
+    pub fn new(field: &'a WaterField) -> Self {
+        Self { field }
     }
 
-    /// The still level of the water at a 3D point, without swell or ripples:
-    /// what the hydrology holds. `None` if the point's span holds no water.
+    /// The level of the water at a 3D point. `None` if the point's span
+    /// holds no water.
     pub fn level_at(&self, point: Point3<f32>) -> Option<f32> {
-        let graph = self.world.geometry().graph();
-        let span = graph.span_at(Column::containing(point.x, point.z), point.y)?;
-        let floor = graph.span(span).floor_min;
-        let owner = graph.owner(span);
-        let still = owner
-            .body
-            .and_then(|body| self.world.level(body))
-            .filter(|level| *level > floor);
-        still.or_else(|| {
-            let (reach, _) = owner.reach?;
-            self.reach_sample(reach, point, floor).map(|s| s.surface)
-        })
+        self.field.level_at(point)
     }
 
-    /// Water at a 3D point, or `None` if the point's span holds no water. The
-    /// surface includes swell and ripples, exactly as drawn.
+    /// Water at a 3D point, or `None` if the point's span holds no water.
     ///
     /// The span is the one whose band holds the point: the air it is in, or
     /// for a point just inside the ground, the span resting on that ground.
     /// So a crate under a floating island reads the sea, and one on the
     /// island reads the island's pool.
     pub fn sample(&self, point: Point3<f32>) -> Option<WaterSample> {
-        let graph = self.world.geometry().graph();
-        let column = Column::containing(point.x, point.z);
-        let span = graph.span_at(column, point.y)?;
-        let owner = graph.owner(span);
-        let floor = graph.span(span).floor_min;
-        let still = owner
-            .body
-            .and_then(|body| Some((body, self.world.level(body)?)))
-            .filter(|(_, level)| *level > floor);
-        let Some((body, level)) = still else {
-            return owner
-                .reach
-                .and_then(|(reach, _)| self.reach_sample(reach, point, floor));
-        };
-        let swell = self.world.swell(body);
-        let (t, depth) = (self.world.clock(), level - floor);
-        let ripple = self.world.ripples().height_at(body, point.x, point.z);
-        Some(WaterSample {
-            surface: level + swell.height(point.x, point.z, t, depth) + ripple,
-            floor,
-            velocity: self.world.current_at(body, point),
-            rise: swell.rise_rate(point.x, point.z, t, depth),
-            body,
-        })
-    }
-
-    /// Water in a reach at a point, if the reach is wetted there: its
-    /// surface there, eased at its ends to meet its ports (§7.9), moving
-    /// down the channel at the reach's velocity.
-    fn reach_sample(&self, id: WaterBodyId, point: Point3<f32>, floor: f32) -> Option<WaterSample> {
-        let reach = self.world.network().store(id)?.as_reach()?;
-        let distance = reach.distance_at(point.x, point.z);
-        if distance < reach.tail || distance > reach.front {
+        let cell = self.field.cell_at(point)?;
+        let cells = self.field.cells();
+        if cells.depth(cell) <= WET_DEPTH {
             return None;
         }
-        let running = reach.running();
-        let surface = reach.surface_at(distance, self.world.reach_ends(id));
-        if surface <= floor {
-            return None;
-        }
-        let direction = reach.direction_at(distance) * running.velocity;
+        let current = self.field.velocity(cell);
         Some(WaterSample {
-            surface,
-            floor,
-            velocity: Vector3::new(direction.x, 0.0, direction.y),
+            surface: cells.surface(cell) as f32,
+            floor: cells.bed(cell),
+            velocity: Vector3::new(current.x, 0.0, current.y),
             rise: 0.0,
-            body: id,
+            body: FIELD_BODY,
         })
     }
 }

@@ -6,7 +6,7 @@ use crate::level::Level;
 use crate::terrain::TerrainWorld;
 use crate::water::geometry::{Column, Drain, COLUMN_SIZE};
 use crate::water::network::CrestKind;
-use crate::water::WaterWorld;
+use crate::water::NetworkWater;
 
 /// Still water shallower than this is not drawn, in metres.
 const MIN_DEPTH: f32 = 0.05;
@@ -52,7 +52,7 @@ pub struct WaterPlan {
 impl WaterPlan {
     pub fn from_level(level: &Level, terrain: &TerrainWorld) -> Self {
         let config = level.water.clone().unwrap_or_default();
-        let (mut water, _) = WaterWorld::from_config(&config, terrain);
+        let (mut water, _) = NetworkWater::from_config(&config, terrain);
         // One frame, for the outflows that link at once to lay their channels.
         water.step(1.0 / 60.0);
         let channels = water

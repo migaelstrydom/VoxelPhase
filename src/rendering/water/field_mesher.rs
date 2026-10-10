@@ -18,16 +18,21 @@
 //!
 //! Every vertex carries its own height and the cell's velocity, so the river
 //! shader's flow mapping runs on the field's currents. The mesh is built from
-//! the field each time it is drawn.
+//! the field each time it moves. Past the map's open edges, the sea runs out
+//! to the horizon as the network's ring.
 
 use nalgebra::Vector2;
+use smallvec::SmallVec;
 
 use crate::water::field::WaterField;
-use crate::water::geometry::{Column, SpanIndex, SpanRef, COLUMN_SIZE, ORTHOGONAL};
+use crate::water::geometry::{Column, SpanIndex, SpanRef, Step, COLUMN_SIZE, ORTHOGONAL};
 use crate::water::ids::StoreId;
 use crate::water::network::ReachEnds;
+use crate::water::{WaterWorld, FIELD_BODY};
 
 use super::basin_mesher::{MeshKey, WaterMesh, WaterScene};
+use super::ocean_mesher::occupied_bounds;
+use super::ocean_ring::{append_ring, MapRect};
 use super::reach_mesher::{RiverDraw, RiverMesh, RiverState};
 use super::vertex::RiverVertex;
 
@@ -38,6 +43,11 @@ const DRAWN_DEPTH: f64 = 0.002;
 /// Thinner water would lie on its floor and fight it for depth.
 const SHORE_DEPTH: f32 = 0.005;
 
+/// Farthest below the water a dry cell beside it counts, m, in a corner's
+/// depth: a wall is a bank whose foot the water meets, so a channel between
+/// high walls still has corners deep enough to draw.
+const BANK_DEPTH: f64 = 0.1;
+
 /// Surfaces further apart than this do not share a corner, m: a step this
 /// high between two wet cells is water going over an edge, drawn as a
 /// curtain. Lower steps are a sheet running down a slope, up to 200 %.
@@ -46,8 +56,22 @@ const JOIN: f64 = 1.0;
 /// The field, as the water renderer sees it.
 pub struct FieldScene<'a> {
     pub field: &'a WaterField,
-    /// Changes whenever the field has moved since the last draw.
-    pub version: u32,
+    /// Each chunk's surface version, by slot: changes whenever its surface
+    /// has moved since it was last drawn.
+    pub versions: &'a [u32],
+    /// Seconds simulated: the clock the drawn currents run on.
+    pub clock: f32,
+}
+
+impl<'a> FieldScene<'a> {
+    /// The game's water, as drawn.
+    pub fn of(world: &'a WaterWorld) -> Self {
+        Self {
+            field: world.field(),
+            versions: world.versions(),
+            clock: world.clock(),
+        }
+    }
 }
 
 /// One cell meeting at a corner, as the corner sees it.
@@ -93,28 +117,23 @@ impl FieldScene<'_> {
     /// surface at `level` would meet: the wet one whose surface stands
     /// nearest, else the one whose floor does.
     fn across(&self, span: SpanRef, di: i32, dk: i32, level: f64) -> Option<SpanRef> {
-        let candidates: Vec<(SpanRef, Meeting)> = self
-            .field
-            .graph()
-            .orthogonal_neighbours(span)
-            .into_iter()
-            .filter(|n| n.step.di == di && n.step.dk == dk)
-            .filter_map(|n| {
-                let key = SpanRef::key(n.span.column, n.span.ordinal);
-                Some((key, self.meeting(key)?))
-            })
-            .collect();
         let near = |m: &Meeting| (m.surface.unwrap_or(m.bed) - level).abs();
-        candidates
-            .iter()
-            .filter(|(_, m)| m.surface.is_some())
-            .min_by(|a, b| near(&a.1).total_cmp(&near(&b.1)))
-            .or_else(|| {
-                candidates
-                    .iter()
-                    .min_by(|a, b| near(&a.1).total_cmp(&near(&b.1)))
-            })
-            .map(|(key, _)| *key)
+        let mut wet: Option<(f64, SpanRef)> = None;
+        let mut any: Option<(f64, SpanRef)> = None;
+        for n in self.field.graph().joined(span, Step { di, dk }) {
+            let key = SpanRef::key(n.span.column, n.span.ordinal);
+            let Some(m) = self.meeting(key) else {
+                continue;
+            };
+            let d = near(&m);
+            if m.surface.is_some() && wet.is_none_or(|(best, _)| d < best) {
+                wet = Some((d, key));
+            }
+            if any.is_none_or(|(best, _)| d < best) {
+                any = Some((d, key));
+            }
+        }
+        wet.or(any).map(|(_, key)| key)
     }
 
     /// The corner of `span`'s column on the (sx, sz) side, for a cell whose
@@ -125,22 +144,22 @@ impl FieldScene<'_> {
     /// than `JOIN` apart, so every cell at a corner sees the same groups.
     /// Its depth is the mean over the cells meeting there of each one's
     /// depth, a dry one's taken as no more than zero and as far below as its
-    /// floor stands above the water.
+    /// floor stands above the water, down to `BANK_DEPTH`.
     fn corner(&self, span: SpanRef, level: f64, sx: i32, sz: i32) -> Corner {
         let x = self.across(span, sx, 0, level);
         let z = self.across(span, 0, sz, level);
         let diagonal = x
             .and_then(|n| self.across(n, 0, sz, level))
             .or_else(|| z.and_then(|n| self.across(n, sx, 0, level)));
-        let meetings: Vec<Meeting> = [Some(span), x, z, diagonal]
+        let meetings: SmallVec<[Meeting; 4]> = [Some(span), x, z, diagonal]
             .into_iter()
             .flatten()
             .filter_map(|s| self.meeting(s))
             .collect();
 
-        let mut surfaces: Vec<f64> = meetings.iter().filter_map(|m| m.surface).collect();
+        let mut surfaces: SmallVec<[f64; 4]> = meetings.iter().filter_map(|m| m.surface).collect();
         surfaces.sort_by(f64::total_cmp);
-        let mut group: Vec<f64> = Vec::new();
+        let mut group: SmallVec<[f64; 4]> = SmallVec::new();
         for s in surfaces {
             if group.last().is_some_and(|&last| s - last > JOIN) {
                 if group.contains(&level) {
@@ -153,26 +172,29 @@ impl FieldScene<'_> {
         let height = group.iter().sum::<f64>() / group.len() as f64;
         let (low, high) = (group[0], group[group.len() - 1]);
 
-        let depths: Vec<f64> = meetings
-            .iter()
-            .filter_map(|m| match m.surface {
-                Some(s) if s >= low && s <= high => Some(m.depth),
-                Some(_) => None,
-                None => Some((height - m.bed).min(0.0)),
-            })
-            .collect();
-        let depth = depths.iter().sum::<f64>() / depths.len() as f64;
-        Corner { height, depth }
+        let (mut sum, mut count) = (0.0, 0.0);
+        for m in &meetings {
+            let depth = match m.surface {
+                Some(s) if s >= low && s <= high => m.depth,
+                Some(_) => continue,
+                None => (height - m.bed).clamp(-BANK_DEPTH, 0.0),
+            };
+            sum += depth;
+            count += 1.0;
+        }
+        Corner {
+            height,
+            depth: sum / count,
+        }
     }
 
     /// Every wet cell joined to `span` across one orthogonal step, with its
     /// surface.
-    fn wet_across(&self, span: SpanRef, di: i32, dk: i32) -> Vec<f64> {
+    fn wet_across(&self, span: SpanRef, di: i32, dk: i32) -> SmallVec<[f64; 2]> {
         self.field
             .graph()
-            .orthogonal_neighbours(span)
+            .joined(span, Step { di, dk })
             .into_iter()
-            .filter(|n| n.step.di == di && n.step.dk == dk)
             .filter_map(|n| {
                 self.meeting(SpanRef::key(n.span.column, n.span.ordinal))?
                     .surface
@@ -207,9 +229,8 @@ impl FieldScene<'_> {
                 continue;
             }
             let bank = graph
-                .orthogonal_neighbours(span)
+                .joined(span, step)
                 .into_iter()
-                .filter(|n| n.step == step)
                 .map(|n| SpanRef::key(n.span.column, n.span.ordinal))
                 .find_map(|key| {
                     let m = self.meeting(key)?;
@@ -306,38 +327,77 @@ impl WaterScene for FieldScene<'_> {
         WaterMesh::default()
     }
 
-    fn level(&self, _body: StoreId) -> Option<f32> {
-        None
+    /// The sea's level, for its ring past the map's edges.
+    fn level(&self, body: StoreId) -> Option<f32> {
+        self.field
+            .sea()
+            .filter(|_| body == FIELD_BODY)
+            .map(|sea| sea.level)
     }
 
+    fn clock(&self) -> f32 {
+        self.clock
+    }
+
+    fn ocean_key(&self) -> MeshKey {
+        self.field
+            .sea()
+            .map(|_| (FIELD_BODY, 0))
+            .into_iter()
+            .collect()
+    }
+
+    /// The ring past the map's open edges only: the sea inside them is the
+    /// field's own water.
+    fn build_ocean(&self) -> WaterMesh {
+        let mut mesh = WaterMesh::default();
+        let graph = self.field.graph();
+        if let (Some(sea), Some((min, max))) = (self.field.sea(), occupied_bounds(graph)) {
+            let map = MapRect {
+                i0: min.i,
+                k0: min.k,
+                i1: max.i + 1,
+                k1: max.k + 1,
+            };
+            // The sea's edges run +x, +z, −x, −z; the ring's −x, +x, −z, +z.
+            let open = [sea.open[2], sea.open[0], sea.open[3], sea.open[1]];
+            append_ring(&mut mesh, FIELD_BODY, sea.level, map, open);
+        }
+        mesh
+    }
+
+    /// One surface per chunk, by slot.
     fn river_key(&self) -> MeshKey {
-        vec![(StoreId(0), self.version)]
+        self.versions
+            .iter()
+            .enumerate()
+            .map(|(slot, &v)| (StoreId(slot as u32), v))
+            .collect()
     }
 
-    fn build_rivers(&self) -> RiverMesh {
-        let cells = self.field.cells();
+    fn build_river(&self, id: StoreId) -> RiverMesh {
+        let slot = id.0 as usize;
         let mut mesh = RiverMesh::default();
-        for (slot, chunk) in cells.chunks.iter().enumerate() {
-            let first = mesh.indices.len() as u32;
-            for (flat, (local, ordinal)) in chunk.cell_columns().enumerate() {
-                let at = SpanIndex {
-                    slot: slot as u32,
-                    flat: flat as u32,
-                };
-                if chunk.depth[flat] <= DRAWN_DEPTH {
-                    continue;
-                }
-                let span = SpanRef::key(chunk.coord.column(local), ordinal);
-                self.cell_surface(&mut mesh, span, at, chunk.surface(flat));
+        let Some(chunk) = self.field.cells().chunks.get(slot) else {
+            return mesh;
+        };
+        for (flat, (local, ordinal)) in chunk.cell_columns().enumerate() {
+            if chunk.depth[flat] <= DRAWN_DEPTH {
+                continue;
             }
-            let count = mesh.indices.len() as u32 - first;
-            if count > 0 {
-                mesh.draws.push(RiverDraw {
-                    reach: StoreId(slot as u32),
-                    first_index: first,
-                    index_count: count,
-                });
-            }
+            let at = SpanIndex {
+                slot: slot as u32,
+                flat: flat as u32,
+            };
+            let span = SpanRef::key(chunk.coord.column(local), ordinal);
+            self.cell_surface(&mut mesh, span, at, chunk.surface(flat));
+        }
+        if !mesh.indices.is_empty() {
+            mesh.draws.push(RiverDraw {
+                reach: id,
+                first_index: 0,
+                index_count: mesh.indices.len() as u32,
+            });
         }
         mesh
     }
@@ -354,5 +414,43 @@ impl WaterScene for FieldScene<'_> {
             },
             length: 1.0e6,
         })
+    }
+}
+
+impl WaterScene for WaterWorld {
+    fn mesh_key(&self) -> MeshKey {
+        FieldScene::of(self).mesh_key()
+    }
+
+    fn build_mesh(&self) -> WaterMesh {
+        FieldScene::of(self).build_mesh()
+    }
+
+    fn level(&self, body: StoreId) -> Option<f32> {
+        FieldScene::of(self).level(body)
+    }
+
+    fn clock(&self) -> f32 {
+        FieldScene::of(self).clock()
+    }
+
+    fn ocean_key(&self) -> MeshKey {
+        FieldScene::of(self).ocean_key()
+    }
+
+    fn build_ocean(&self) -> WaterMesh {
+        FieldScene::of(self).build_ocean()
+    }
+
+    fn river_key(&self) -> MeshKey {
+        FieldScene::of(self).river_key()
+    }
+
+    fn build_river(&self, id: StoreId) -> RiverMesh {
+        FieldScene::of(self).build_river(id)
+    }
+
+    fn river_state(&self, reach: StoreId) -> Option<RiverState> {
+        FieldScene::of(self).river_state(reach)
     }
 }

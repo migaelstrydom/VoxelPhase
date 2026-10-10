@@ -277,6 +277,14 @@ impl SpanGraph {
         out
     }
 
+    /// The spans joined to `span` across one given orthogonal step.
+    pub fn joined(&self, span: SpanRef, step: Step) -> SmallVec<[Neighbour; 2]> {
+        let here = *self.span(span);
+        let mut out = SmallVec::new();
+        self.push_joined(&here, span.column.offset(step.di, step.dk), step, &mut out);
+        out
+    }
+
     /// The spans reachable in one step, orthogonal or open diagonal.
     ///
     /// A diagonal's saddle is the higher of the two orthogonal saddles through

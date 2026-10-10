@@ -11,7 +11,7 @@ use crate::water::ids::StoreId;
 use crate::water::network::{FallPath, Store, STEP_EPSILON};
 use crate::water::solver::Account;
 use crate::water::topology::TopologyEdit;
-use crate::water::WaterWorld;
+use crate::water::NetworkWater;
 
 use super::driver::{run, run_with_captures, RunConfig};
 use super::scenarios::find;
@@ -386,7 +386,7 @@ fn the_sea_pouring_back_over_a_lowland_s_weir_falls_along_its_far_side() {
 fn the_island_sea_demo_opens_with_its_pools_above_the_sea() {
     let level = load_level(Path::new("levels/island_sea.level.ron")).unwrap();
     let terrain = build_terrain(&level);
-    let (water, errors) = WaterWorld::from_config(level.water.as_ref().unwrap(), &terrain);
+    let (water, errors) = NetworkWater::from_config(level.water.as_ref().unwrap(), &terrain);
     assert!(errors.is_empty(), "{errors:?}");
     let query = water.query();
     // The floating pool and the sea beneath it are two bodies in one column.
@@ -401,7 +401,7 @@ fn the_island_sea_demo_opens_with_its_pools_above_the_sea() {
 fn the_water_park_opens_at_rest_with_its_river_running() {
     let level = load_level(Path::new("levels/water_park.level.ron")).unwrap();
     let terrain = build_terrain(&level);
-    let (water, errors) = WaterWorld::from_config(level.water.as_ref().unwrap(), &terrain);
+    let (water, errors) = NetworkWater::from_config(level.water.as_ref().unwrap(), &terrain);
     assert!(errors.is_empty(), "{errors:?}");
     assert!(water.steady_report().is_some_and(|r| r.converged));
     let query = water.query();
@@ -489,7 +489,7 @@ fn the_water_park_opens_at_rest_whatever_level_its_catch_lake_is_authored_at() {
                 *surface_level = authored;
             }
         }
-        let (water, _) = WaterWorld::from_config(&config, &terrain);
+        let (water, _) = NetworkWater::from_config(&config, &terrain);
         let report = water.steady_report().unwrap();
         assert!(report.converged, "authored at {authored}: {report:?}");
         assert!(report.sweeps < 60, "authored at {authored}: {report:?}");
@@ -588,7 +588,7 @@ fn every_level_s_water_comes_to_rest_when_it_opens() {
             continue;
         };
         let terrain = build_terrain(&level);
-        let (water, _) = WaterWorld::from_config(config, &terrain);
+        let (water, _) = NetworkWater::from_config(config, &terrain);
         if let Some(report) = water.steady_report() {
             assert!(report.converged, "{}: {report:?}", path.display());
         }
@@ -635,7 +635,7 @@ fn a_weir_between_two_basins_draws_a_sheet_only_while_there_is_a_step() {
 fn a_blast_under_the_water_a_fall_lands_in_leaves_the_river_above_it() {
     let level = load_level(Path::new("levels/water_park.level.ron")).unwrap();
     let mut terrain = build_terrain(&level);
-    let (mut water, _) = WaterWorld::recording(level.water.as_ref().unwrap(), &terrain);
+    let (mut water, _) = NetworkWater::recording(level.water.as_ref().unwrap(), &terrain);
     let lake = water
         .query()
         .sample(Point3::new(11.0, 2.0, 19.0))
@@ -659,7 +659,7 @@ fn a_blast_under_the_water_a_fall_lands_in_leaves_the_river_above_it() {
     let _ = reach;
     // The river falling into the lake, and the links along it, by where
     // they stand: every reach above the lake's fall link.
-    let river = |water: &WaterWorld| -> Vec<String> {
+    let river = |water: &NetworkWater| -> Vec<String> {
         let network = water.network();
         let lake = water
             .query()
@@ -820,7 +820,7 @@ fn a_channel_laid_again_as_water_rises_over_it_lets_out_what_it_did_before() {
 fn a_breached_dam_pours_down_its_spillway_as_a_river() {
     let level = load_level(Path::new("levels/water_park.level.ron")).unwrap();
     let mut terrain = build_terrain(&level);
-    let (mut water, _) = WaterWorld::from_config(level.water.as_ref().unwrap(), &terrain);
+    let (mut water, _) = NetworkWater::from_config(level.water.as_ref().unwrap(), &terrain);
     terrain.detonate(Point3::new(-48.3, 7.5, 40.0), &BlastConfig::default());
     terrain.update();
     water.on_terrain_update(&terrain);
@@ -861,7 +861,7 @@ fn a_lake_rising_past_its_cap_keeps_the_river_leaving_it() {
     let scenario = find("shoreline").unwrap();
     let dt = 1.0 / 60.0;
     let times: Vec<f32> = (0..2100).map(|i| 145.0 + i as f32 * dt).collect();
-    let refloods_seen = |water: &WaterWorld| {
+    let refloods_seen = |water: &NetworkWater| {
         water
             .topology_log()
             .iter()
@@ -948,7 +948,7 @@ fn a_tributary_joins_a_river_partway_down_it() {
 
 /// The network described by where its stores stand, not by their ids: two
 /// networks laid over the same ground holding the same water describe alike.
-fn fingerprint(water: &WaterWorld) -> Vec<String> {
+fn fingerprint(water: &NetworkWater) -> Vec<String> {
     let network = water.network();
     let graph = water.geometry().graph();
     let key = |id: StoreId| match network.store(id) {
@@ -1007,7 +1007,7 @@ fn fingerprint(water: &WaterWorld) -> Vec<String> {
 
 /// The still or running surface over every span's floor, where water
 /// stands: what the player sees, without swell or ripples.
-fn surfaces(water: &WaterWorld) -> Vec<(Point3<f32>, Option<f32>)> {
+fn surfaces(water: &NetworkWater) -> Vec<(Point3<f32>, Option<f32>)> {
     let graph = water.geometry().graph();
     let (min, max) = graph.column_bounds();
     let query = water.query();
@@ -1148,7 +1148,7 @@ fn a_crater_in_a_river_fills_while_the_river_below_it_runs_on() {
 fn a_river_falls_from_where_its_water_runs_as_wide_as_it_runs() {
     let level = load_level(Path::new("levels/water_park.level.ron")).unwrap();
     let terrain = build_terrain(&level);
-    let (water, _) = WaterWorld::from_config(level.water.as_ref().unwrap(), &terrain);
+    let (water, _) = NetworkWater::from_config(level.water.as_ref().unwrap(), &terrain);
     let graph = water.geometry().graph();
     let mut checked = 0;
     for (id, link) in water.network().links() {

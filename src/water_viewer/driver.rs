@@ -4,7 +4,7 @@ use crate::level::Settle;
 use crate::terrain::{BlastConfig, TerrainWorld};
 use crate::water::network::Store;
 use crate::water::topology::TopologyEdit;
-use crate::water::WaterWorld;
+use crate::water::NetworkWater;
 
 use super::scenario::{Action, Scenario};
 
@@ -86,7 +86,7 @@ pub fn run_with_captures(
     scenario: &Scenario,
     config: RunConfig,
     captures: &[f32],
-    mut capture: impl FnMut(f32, &mut TerrainWorld, &mut WaterWorld),
+    mut capture: impl FnMut(f32, &mut TerrainWorld, &mut NetworkWater),
 ) -> Result<Run, String> {
     let (level, mut terrain) = scenario.terrain()?;
     let mut water_config = level
@@ -96,7 +96,7 @@ pub fn run_with_captures(
     if let Some(settle) = config.settle {
         water_config.settle = settle;
     }
-    let (mut water, errors) = WaterWorld::recording(&water_config, &terrain);
+    let (mut water, errors) = NetworkWater::recording(&water_config, &terrain);
 
     let dt = 1.0 / TICK_RATE;
     let ticks = (scenario.duration * TICK_RATE).round() as u64;
@@ -165,7 +165,7 @@ pub fn run_with_captures(
 
 /// An edit as the report prints it: links with their ends, stores with
 /// their kind.
-fn describe(edit: &TopologyEdit, water: &WaterWorld) -> String {
+fn describe(edit: &TopologyEdit, water: &NetworkWater) -> String {
     match edit {
         TopologyEdit::AddLink(id) => match water.network().link(*id) {
             Some(l) => format!("AddLink({}: {} -> {})", id.0, l.up.0, l.down.0),
@@ -213,7 +213,7 @@ pub(super) fn apply(terrain: &mut TerrainWorld, action: Action) -> String {
     }
 }
 
-fn sample(scenario: &Scenario, water: &WaterWorld, time: f32) -> Sample {
+fn sample(scenario: &Scenario, water: &NetworkWater, time: f32) -> Sample {
     let query = water.query();
     Sample {
         time,

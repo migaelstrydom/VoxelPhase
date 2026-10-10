@@ -1,15 +1,15 @@
-//! Water as a network: stores that hold volume, joined by links that move it;
-//! and, on trial to replace it, as a shallow-water field over the same spans.
+//! Water as a shallow-water field over the terrain's spans; and the
+//! hydrology network it replaces, which only the water tools still run.
 //!
 //! ```text
-//!   presentation   rendering/water (BasinMesher)      static meshes, levels as uniforms
-//!   interaction    query · buoyancy · coupling        WaterQuery::sample(point)
-//!   network        network · solver · topology        stores, links, ledger
+//!   presentation   rendering/water (FieldScene)       the field's surface, rebuilt as it moves
+//!   interaction    world · query · buoyancy · coupling WaterQuery::sample(point)
 //!   field          field                              depths in cells, discharges on faces
+//!   network        network_world · network · solver · topology   stores, links, ledger (tools)
 //!   geometry       geometry                           spans, drainage field
 //! ```
 //!
-//! See `docs/WATER_HYDROLOGY_DESIGN.md`; the field, `docs/WATER_FIELD_SPIKE.md`.
+//! See `docs/WATER_FIELD_SPIKE.md`; the network, `docs/WATER_HYDROLOGY_DESIGN.md`.
 
 pub mod buoyancy;
 pub mod coupling;
@@ -18,6 +18,8 @@ pub mod field;
 pub mod geometry;
 pub mod ids;
 pub mod network;
+pub mod network_query;
+pub mod network_world;
 pub mod query;
 pub mod sleep_tracker;
 pub mod solver;
@@ -29,6 +31,8 @@ pub use coupling::{
     BodySnapshot, Disturbance, Disturbances, RippleField, SplashEvent, StillSurface, WakeEvent,
     WaveBodyCoupler, WaveCouplingConfig,
 };
-pub use query::{WaterQuery, WaterSample as WaterPointSample};
+pub use network_query::NetworkQuery;
+pub use network_world::{HydrologyConfig, NetworkWater, WaterTimings};
+pub use query::{WaterQuery, WaterSample as WaterPointSample, FIELD_BODY};
 pub use sleep_tracker::WaterSleepTracker;
-pub use world::{HydrologyConfig, WaterTimings, WaterWorld};
+pub use world::WaterWorld;

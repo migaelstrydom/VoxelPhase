@@ -9,7 +9,7 @@ use crate::level::{load_level, Level, Settle};
 use crate::level_check::build_terrain;
 use crate::rendering::water::{MeshKey, WaterScene, RIPPLE_TILE_STRIDE};
 use crate::terrain::{BlastConfig, TerrainWorld};
-use crate::water::WaterWorld;
+use crate::water::NetworkWater;
 use crate::water_viewer::{find, Action, TICK_RATE};
 
 /// Seconds of frames discarded before any are recorded.
@@ -88,7 +88,7 @@ pub fn run_level(path: &Path, durations: Durations) -> Result<Subject, String> {
         .as_ref()
         .ok_or_else(|| format!("{label} has no water"))?;
     let started = Instant::now();
-    let (water, _) = WaterWorld::from_config(config, &terrain);
+    let (water, _) = NetworkWater::from_config(config, &terrain);
     let load = started.elapsed();
     let blast_at =
         lip_site(&water, &terrain).ok_or_else(|| format!("{label}: no basin to blast"))?;
@@ -110,7 +110,7 @@ pub fn run_breach(durations: Durations) -> Result<Subject, String> {
     let (level, terrain) = scenario.terrain()?;
     let config = level.water.as_ref().ok_or("breach has no water")?;
     let started = Instant::now();
-    let (water, _) = WaterWorld::from_config(config, &terrain);
+    let (water, _) = NetworkWater::from_config(config, &terrain);
     let load = started.elapsed();
     let (centre, radius) = scenario
         .beats
@@ -137,7 +137,7 @@ fn run_subject(
     label: String,
     _level: &Level,
     mut terrain: TerrainWorld,
-    mut water: WaterWorld,
+    mut water: NetworkWater,
     load: Duration,
     blast_at: Point3<f32>,
     charge: &BlastConfig,
@@ -178,7 +178,7 @@ fn run_subject(
 }
 
 /// One line per basin: id, level, volume, region size, spill.
-fn basin_lines(water: &WaterWorld) -> Vec<String> {
+fn basin_lines(water: &NetworkWater) -> Vec<String> {
     water
         .basins()
         .map(|(id, b)| {
@@ -201,7 +201,7 @@ fn basin_lines(water: &WaterWorld) -> Vec<String> {
 /// would make if the topology changed.
 fn frame(
     terrain: &mut TerrainWorld,
-    water: &mut WaterWorld,
+    water: &mut NetworkWater,
     key: &mut MeshKey,
     indices: &mut usize,
     dt: f32,
@@ -234,7 +234,7 @@ fn frame(
 
 /// The lip of the largest basin, on the terrain surface: a blast there
 /// re-floods the largest region, and may breach it.
-fn lip_site(water: &WaterWorld, terrain: &TerrainWorld) -> Option<Point3<f32>> {
+fn lip_site(water: &NetworkWater, terrain: &TerrainWorld) -> Option<Point3<f32>> {
     let (_, basin) = water
         .basins()
         .max_by(|a, b| a.1.region.len().cmp(&b.1.region.len()))?;
@@ -268,9 +268,9 @@ pub fn worst_case(path: &Path, repeats: usize) -> Result<WorstCase, String> {
         .water
         .as_ref()
         .ok_or_else(|| format!("{label} has no water"))?;
-    let (mut water, _) = WaterWorld::from_config(config, &terrain);
+    let (mut water, _) = NetworkWater::from_config(config, &terrain);
     // Flooded again, a basin is a new store: found again each time.
-    let largest = |water: &WaterWorld| {
+    let largest = |water: &NetworkWater| {
         water
             .basins()
             .map(|(id, b)| (id, b.region.len()))
@@ -316,7 +316,7 @@ pub fn ripple_cost(path: &Path, frames: usize) -> Result<RippleCost, String> {
         .water
         .as_ref()
         .ok_or_else(|| format!("{label} has no water"))?;
-    let (mut water, _) = WaterWorld::from_config(config, &terrain);
+    let (mut water, _) = NetworkWater::from_config(config, &terrain);
     let points: Vec<Point3<f32>> = {
         let (_, basin) = water
             .basins()
@@ -378,7 +378,7 @@ pub fn steady_loads() -> Result<Vec<SteadyLoad>, String> {
             let mut config = level.water.clone().ok_or(format!("{name} has no water"))?;
             config.settle = Settle::Steady;
             let started = Instant::now();
-            let (water, _) = WaterWorld::from_config(&config, &terrain);
+            let (water, _) = NetworkWater::from_config(&config, &terrain);
             let load = started.elapsed();
             let report = water.steady_report().ok_or("opened without a settle")?;
             Ok(SteadyLoad {

@@ -29,7 +29,7 @@ use super::fall_mesher::{FallKey, FallMesh, SPREAD as FALL_SPREAD};
 use super::footprint::ScreenFootprint;
 use super::ocean_ring::RING_TILE;
 use super::pipeline::{WaterPipeline, BODY_PUSH_OFFSET, FRAGMENT_PUSH_OFFSET};
-use super::reach_mesher::RiverMesh;
+use super::river_parts::RiverParts;
 use super::vertex::FineVertex;
 use crate::core::device::ManagedDevice;
 use crate::core::error::EngineResult;
@@ -169,8 +169,7 @@ pub struct WaterRenderer {
     ocean_key: MeshKey,
     ocean_version: u64,
     ocean_slots: PerFrame<SlotMesh>,
-    rivers: RiverMesh,
-    river_key: MeshKey,
+    rivers: RiverParts,
     river_version: u64,
     river_slots: PerFrame<SlotMesh>,
     falls: FallMesh,
@@ -244,8 +243,7 @@ impl WaterRenderer {
                 capacity: (0, 0),
                 version: 0,
             }),
-            rivers: RiverMesh::default(),
-            river_key: MeshKey::new(),
+            rivers: RiverParts::default(),
             river_version: 0,
             river_slots: PerFrame::new(|_| SlotMesh {
                 buffers: None,
@@ -264,6 +262,12 @@ impl WaterRenderer {
             plan: Vec::new(),
             view: None,
         })
+    }
+
+    /// Most river surfaces built again per frame; `None` builds every one
+    /// that moved, as a tool drawing single frames needs.
+    pub fn set_river_budget(&mut self, budget: Option<usize>) {
+        self.rivers.set_budget(budget);
     }
 
     /// Point uploads at this frame's buffers, and forget last frame's plan.
@@ -295,18 +299,15 @@ impl WaterRenderer {
             &self.ocean.vertices,
             &self.ocean.indices,
         )?;
-        let key = water.river_key();
-        if key != self.river_key {
-            self.rivers = water.build_rivers();
-            self.river_key = key;
+        if self.rivers.sync(water) {
             self.river_version += 1;
         }
         upload_slot(
             &self.device,
             &mut self.river_slots[self.slot],
             self.river_version,
-            &self.rivers.vertices,
-            &self.rivers.indices,
+            &self.rivers.mesh().vertices,
+            &self.rivers.mesh().indices,
         )?;
         let key = water.fall_key();
         if key != self.fall_key {
@@ -369,7 +370,7 @@ impl WaterRenderer {
             };
         if self.mesh.draws.is_empty()
             && self.ocean.draws.is_empty()
-            && self.rivers.draws.is_empty()
+            && self.rivers.mesh().draws.is_empty()
             && self.falls.draws.is_empty()
         {
             return Ok(WaterFrame::default());
@@ -427,7 +428,7 @@ impl WaterRenderer {
             }
         }
 
-        for draw in &self.rivers.draws {
+        for draw in &self.rivers.mesh().draws {
             let Some(state) = water.river_state(draw.reach) else {
                 continue;
             };

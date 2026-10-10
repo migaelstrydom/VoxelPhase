@@ -18,12 +18,15 @@ use nalgebra::{Point3, Vector2, Vector3};
 
 use crate::level::{MapEdge, WaterBody, WaterConfig};
 use crate::terrain::TerrainWorld;
-use crate::water::geometry::{Column, SpanGraph, SpanIndex, SpanRasteriser, COLUMN_SIZE};
+use crate::water::geometry::{
+    Column, SpanChunkCoord, SpanGraph, SpanIndex, SpanRasteriser, SpanRef, COLUMN_SIZE,
+};
 
 use super::activity;
 use super::cells::{FieldCells, CELL_AREA};
-use super::faces::{face_owners, lay_faces, link_faces, Axis, SeaBoundary};
-use super::fill::{flood, pool_seed, sea_seeds};
+use super::currents;
+use super::faces::{lay_faces, link_faces, SeaBoundary};
+use super::fill::{fill_fed, fill_pool, fill_sea, pool_seed, SpillLevels};
 use super::remap::carry;
 use super::solver::{FieldSolver, FlowParams, StepStats};
 use super::sources::{Sink, Source};
@@ -126,9 +129,10 @@ impl WaterField {
         }
         let all: Vec<usize> = (0..cells.chunks.len()).collect();
         link_faces(&mut cells, &all);
-        if let Some(sea) = sea {
-            flood(&graph, &mut cells, &sea_seeds(&graph, &sea), sea.level);
+        if let Some(sea) = &sea {
+            fill_sea(&graph, &mut cells, sea);
         }
+        let spill = SpillLevels::find(&graph, &cells, sea.as_ref());
         let mut sources = Vec::new();
         let mut sinks = Vec::new();
         for body in &config.bodies {
@@ -138,7 +142,14 @@ impl WaterField {
                     surface_level,
                 } => {
                     if let Some(span) = pool_seed(&graph, seed.0, seed.1, *surface_level) {
-                        flood(&graph, &mut cells, &[span], *surface_level);
+                        fill_pool(&graph, &mut cells, &spill, span, *surface_level);
+                    } else {
+                        log::warn!(
+                            "pool at ({:.1}, {:.1}) has no ground under {:.2} m to fill",
+                            seed.0,
+                            seed.1,
+                            surface_level
+                        );
                     }
                 }
                 WaterBody::Spring {
@@ -196,13 +207,37 @@ impl WaterField {
     /// Run the field until it stops changing, or for `limit` seconds: the
     /// steady state a level opens in. Water nothing feeds is already as it
     /// stands, so a level without sources is left as authored. Returns the
-    /// seconds it ran. The ledger
-    /// starts again from what it holds then. Still means its volume held
-    /// to a part in ten thousand over a window: waves under a fall never stop.
+    /// seconds it ran. The ledger starts again from what it holds then.
+    ///
+    /// Every hollow a source's water would fill on its way down is filled
+    /// first, to its crest and a guess at the head over it, so the run only
+    /// has to set the water flowing and settle the heads. Still
+    /// means its volume held to a part in ten thousand over a window: waves
+    /// under a fall never stop.
     pub fn settle(&mut self, dt: f32, limit: f32) -> f32 {
         const WINDOW: f32 = 5.0;
         if self.sources.is_empty() {
             return 0.0;
+        }
+        let starts: Vec<(SpanRef, f32)> = self
+            .sources
+            .iter()
+            .filter_map(|s| Some((s.landing.first()?, s.discharge)))
+            .map(|(at, discharge)| {
+                let chunk = &self.cells.chunks[at.slot as usize];
+                let (local, ordinal) = chunk.column_of(at.flat as usize);
+                (SpanRef::key(chunk.coord.column(local), ordinal), discharge)
+            })
+            .collect();
+        let held: Vec<f64> = self.cells.chunks.iter().map(|c| c.volume()).collect();
+        let manning_n = self.solver.params.manning_n;
+        for (start, discharge) in starts {
+            fill_fed(&self.graph, &mut self.cells, start, discharge, manning_n);
+        }
+        for (slot, before) in held.into_iter().enumerate() {
+            if self.cells.chunks[slot].volume() != before {
+                self.cells.wake(slot);
+            }
         }
         let mut time = 0.0;
         let mut since = 0.0;
@@ -244,6 +279,12 @@ impl WaterField {
                 self.cells.wake(at.slot as usize);
             }
         }
+        // Chunks whose faces may carry water this step, before and after it:
+        // their cells' velocities, and those of the cells their faces reach
+        // into to the +x and +z, are read again after it.
+        let mut moving: Vec<usize> = (0..self.cells.chunks.len())
+            .filter(|&s| self.cells.chunks[s].awake)
+            .collect();
         let stats = self.solver.step(&mut self.cells, dt);
         self.ledger.sunk += stats.boundary_out;
         for sink in &self.sinks {
@@ -251,6 +292,22 @@ impl WaterField {
         }
         self.ledger.lost += seep(&mut self.cells, dt);
         let awake = activity::settle(&mut self.cells, dt);
+        moving.extend((0..self.cells.chunks.len()).filter(|&s| self.cells.chunks[s].awake));
+        let downstream: Vec<usize> = moving
+            .iter()
+            .flat_map(|&s| {
+                let c = self.cells.chunks[s].coord;
+                [
+                    SpanChunkCoord { x: c.x + 1, z: c.z },
+                    SpanChunkCoord { x: c.x, z: c.z + 1 },
+                ]
+            })
+            .filter_map(|c| self.cells.slot_of(c))
+            .collect();
+        moving.extend(downstream);
+        moving.sort_unstable();
+        moving.dedup();
+        currents::refresh(&mut self.cells, &moving);
         self.frame = FieldFrame {
             stats,
             awake,
@@ -296,57 +353,9 @@ impl WaterField {
         self.cells.index(&self.graph, column, span.ordinal)
     }
 
-    /// Depth-averaged velocity in a cell, m/s: on each axis, the mean over
-    /// its faces of the discharge over the mean depth either side, taken as
-    /// at least `MEASURED_DEPTH`. Dividing by a film's own depth would make
-    /// a trickle a torrent; a film that moves still reads as moving.
+    /// Depth-averaged velocity in a cell, m/s, x and z.
     pub fn velocity(&self, cell: SpanIndex) -> Vector2<f32> {
-        const MEASURED_DEPTH: f64 = 0.01;
-        let here = self.cells.depth(cell);
-        if here <= WET_DEPTH {
-            return Vector2::zeros();
-        }
-        let mut sum = Vector2::zeros();
-        let mut count = Vector2::zeros();
-        let mut add = |axis: Axis, q: f32, other: f64| {
-            let depth = (0.5 * (here + other)).max(MEASURED_DEPTH);
-            let u = q / depth as f32;
-            match axis {
-                Axis::X => {
-                    sum.x += u;
-                    count.x += 1.0;
-                }
-                Axis::Z => {
-                    sum.y += u;
-                    count.y += 1.0;
-                }
-            }
-        };
-        let chunk = &self.cells.chunks[cell.slot as usize];
-        for face in &chunk.faces {
-            if face.a == cell.flat {
-                add(face.axis, face.q, self.cells.depth(face.b));
-            }
-        }
-        for owner in self.inbound_owners(cell) {
-            let chunk = &self.cells.chunks[owner];
-            for face in &chunk.faces {
-                if face.b == cell {
-                    add(face.axis, face.q, chunk.depth[face.a as usize]);
-                }
-            }
-        }
-        let mean = |s: f32, n: f32| if n > 0.0 { s / n } else { 0.0 };
-        Vector2::new(mean(sum.x, count.x), mean(sum.y, count.y))
-    }
-
-    /// Slots whose faces may end in `cell`: its own and its −x and −z
-    /// neighbours.
-    fn inbound_owners(&self, cell: SpanIndex) -> impl Iterator<Item = usize> + '_ {
-        let coord = self.cells.chunks[cell.slot as usize].coord;
-        face_owners(coord)
-            .into_iter()
-            .filter_map(|c| self.graph.slot(c))
+        self.cells.chunks[cell.slot as usize].velocity[cell.flat as usize]
     }
 
     pub fn volume(&self) -> f64 {
@@ -399,6 +408,11 @@ impl WaterField {
 
     pub fn cells(&self) -> &FieldCells {
         &self.cells
+    }
+
+    /// The sea beyond the map's open edges, if the level has one.
+    pub fn sea(&self) -> Option<SeaBoundary> {
+        self.sea
     }
 
     pub fn params(&self) -> FlowParams {

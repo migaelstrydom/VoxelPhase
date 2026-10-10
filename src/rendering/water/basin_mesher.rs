@@ -18,7 +18,7 @@ use crate::water::geometry::{Column, SpanChunkCoord, COLUMNS_PER_CHUNK, COLUMN_S
 use crate::water::ids::{LinkId, StoreId};
 use crate::water::network::{Basin, Store};
 use crate::water::surface::{corner_floor, RippleTiles, Swell, TILE_CORNERS};
-use crate::water::WaterWorld;
+use crate::water::NetworkWater;
 
 use super::fall_mesher::{FallKey, FallMesh, FallState};
 use super::reach_mesher::{RiverMesh, RiverState};
@@ -105,13 +105,14 @@ pub trait WaterScene {
         WaterMesh::default()
     }
 
-    /// Changes whenever [`Self::build_rivers`] would build something
-    /// different.
+    /// Every river surface by id, with a version that changes whenever
+    /// [`Self::build_river`] would build that one differently.
     fn river_key(&self) -> MeshKey {
         Vec::new()
     }
 
-    fn build_rivers(&self) -> RiverMesh {
+    /// One river surface: its own vertices, indices and draws.
+    fn build_river(&self, _id: StoreId) -> RiverMesh {
         RiverMesh::default()
     }
 
@@ -137,7 +138,7 @@ pub trait WaterScene {
     }
 }
 
-impl WaterScene for WaterWorld {
+impl WaterScene for NetworkWater {
     fn mesh_key(&self) -> MeshKey {
         mesh_key(self.basins())
     }
@@ -171,7 +172,7 @@ impl WaterScene for WaterWorld {
     /// `None` for a basin no deeper than [`DRAWN_DEPTH`]: an empty one at
     /// the bottom of a dry pit waiting for water to reach it.
     fn level(&self, body: StoreId) -> Option<f32> {
-        let level = WaterWorld::level(self, body)?;
+        let level = NetworkWater::level(self, body)?;
         let basin = self.network().store(body).and_then(Store::as_basin);
         basin
             .is_none_or(|b| level - b.deepest() > DRAWN_DEPTH)
@@ -179,11 +180,11 @@ impl WaterScene for WaterWorld {
     }
 
     fn swell(&self, body: StoreId) -> Swell {
-        WaterWorld::swell(self, body)
+        NetworkWater::swell(self, body)
     }
 
     fn clock(&self) -> f32 {
-        WaterWorld::clock(self)
+        NetworkWater::clock(self)
     }
 
     fn river_key(&self) -> MeshKey {
@@ -193,11 +194,13 @@ impl WaterScene for WaterWorld {
             .collect()
     }
 
-    fn build_rivers(&self) -> RiverMesh {
+    fn build_river(&self, id: StoreId) -> RiverMesh {
         super::reach_mesher::build(
             self.network()
-                .stores()
-                .filter_map(|(id, s)| s.as_reach().map(|r| (id, r))),
+                .store(id)
+                .and_then(Store::as_reach)
+                .map(|r| (id, r))
+                .into_iter(),
         )
     }
 

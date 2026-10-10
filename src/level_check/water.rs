@@ -9,7 +9,7 @@
 use crate::level::Level;
 use crate::terrain::TerrainWorld;
 use crate::water::network::{CrestKind, Store};
-use crate::water::WaterWorld;
+use crate::water::NetworkWater;
 
 use super::report::{Report, Section};
 
@@ -31,7 +31,7 @@ pub fn check_water(level: &Level, terrain: &TerrainWorld, report: &mut Report) -
         );
     }
 
-    let (world, errors) = WaterWorld::from_config(config, terrain);
+    let (world, errors) = NetworkWater::from_config(config, terrain);
     for error in errors {
         report.warn("water", error.to_string());
     }
