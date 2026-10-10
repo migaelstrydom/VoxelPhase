@@ -66,22 +66,35 @@ impl DrawnCells<'_> {
     }
 }
 
-/// Farthest below the water a dry cell beside it counts, m, in a corner's
-/// depth: a wall is a bank whose foot the water meets, so a channel between
-/// high walls still has corners deep enough to draw.
-const BANK_DEPTH: f64 = 0.1;
-
 /// Surfaces further apart than this do not share a corner, m: a step this
 /// high between two wet cells is water going over an edge, drawn as a
-/// curtain. Lower steps are a sheet running down a slope, up to 200 %.
+/// falling sheet. Lower steps are a sheet running down a slope, up to 200 %.
 pub(super) const JOIN: f64 = 1.0;
 
-/// The depth water at `level` stands over a dry bank whose floor is at
-/// `bed`, as the surface carried over it takes it: no more than zero, and no
-/// further below than `BANK_DEPTH`, so a surface carried over a wall's foot
-/// reaches the wall instead of being cut short of it.
-pub(super) fn bank_depth(level: f64, bed: f64) -> f64 {
-    (level - bed).clamp(-BANK_DEPTH, 0.0)
+/// Whether a dry cell beside water at `level` is under rock there: its floor
+/// at its column's centre stands at or above the water, so a surface carried
+/// into its column runs into the terrain, which hides it. A column with no
+/// cell at that height is rock. Otherwise the dry cell is open, a hollow the
+/// water has not reached, and a surface carried over it is cut.
+pub(super) fn covered(cells: &DrawnCells, bank: Option<SpanIndex>, level: f64) -> bool {
+    bank.is_none_or(|b| cells.bed(b) as f64 >= level)
+}
+
+/// The depth a shore vertex carried from a corner `depth` deep draws over a
+/// dry `bank`: the corner's own where the bank is covered, so the surface
+/// runs on into the terrain and is never cut; its opposite where it is open,
+/// so the draw cuts the surface midway out over the hollow.
+pub(super) fn shore_depth(
+    cells: &DrawnCells,
+    bank: Option<SpanIndex>,
+    level: f64,
+    depth: f32,
+) -> f32 {
+    if covered(cells, bank, level) {
+        depth
+    } else {
+        -depth
+    }
 }
 
 /// Least flow over an edge, per metre of it, that a falling sheet draws as
@@ -148,8 +161,8 @@ pub(super) struct Shape {
 /// Its height is the mean surface of the cell's group among the wet cells:
 /// sorted by surface, split wherever two stand more than `JOIN` apart, so
 /// every cell at a corner sees the same groups. Its depth is the mean over
-/// the cells of each one's depth, a dry one's taken as no more than zero and
-/// as far below as its floor stands above the water, down to `BANK_DEPTH`.
+/// the cells of each one's depth: a dry one's is zero, or left out where its
+/// floor stands above the water, since the terrain hides the surface there.
 pub(super) fn gather(meetings: &[Meeting], level: f64) -> (Corner, Shape) {
     let mut surfaces: SmallVec<[f64; 4]> = meetings.iter().filter_map(|m| m.surface).collect();
     surfaces.sort_by(f64::total_cmp);
@@ -179,7 +192,8 @@ pub(super) fn gather(meetings: &[Meeting], level: f64) -> (Corner, Shape) {
                 shape.wet |= 1 << i;
                 continue;
             }
-            None => bank_depth(height, m.bed),
+            None if m.bed >= height => continue,
+            None => 0.0,
         };
         sum += depth;
         count += 1.0;
@@ -218,18 +232,14 @@ pub(super) enum VertexSource {
         cells: SmallVec<[SpanIndex; 4]>,
         shape: Shape,
     },
-    /// A skirt's corner on the edge it shares with a cell: that cell's
-    /// corner, vertex `from` of the same surface.
+    /// A shore patch's corner on its cell's own edge: that cell's corner,
+    /// vertex `from` of the same surface.
     Edge { from: u32 },
-    /// A skirt's far corner: vertex `from`'s height, as deep as the dry
-    /// `bank`'s floor stands under the surface of the wet cell `own`. The
-    /// skirt stands while that surface is above the bank's lowest floor.
-    Bank {
-        from: u32,
-        own: SpanIndex,
-        bank: SpanIndex,
-        floor: f32,
-    },
+    /// A shore patch's corner out over the dry column beside its cell:
+    /// vertex `from`'s height and flow, and its depth as `shore_depth` takes
+    /// it over the dry cell `bank` there (none for rock). The patch stands
+    /// while that cell stays dry.
+    Shore { from: u32, bank: Option<SpanIndex> },
     /// A falling sheet's top: vertex `from`'s corner, drawn as deep as the
     /// wet cell `own` pours over the sheet's edge.
     Lip { from: u32, own: SpanIndex },
@@ -246,18 +256,15 @@ pub(super) enum VertexSource {
 }
 
 /// A built surface's vertex sources, and what else must hold for its shape
-/// to: the layout of every slot they read, by generation; which of its own
-/// chunk's cells were drawn; and the lowest floor of the dry banks beside a
-/// wet cell that were too high for a skirt. A corner whose cells' depths
-/// have not been replaced since it was last read is passed over, but for
-/// its flow.
+/// to: the layout of every slot they read, by generation, and which of its
+/// own chunk's cells were drawn. A corner whose cells' depths have not been
+/// replaced since it was last read is passed over, but for its flow.
 #[derive(Debug, Clone, Default)]
 pub struct SurfaceSources {
     pub(super) vertices: Vec<VertexSource>,
     pub(super) layouts: SmallVec<[(u32, u32); 9]>,
     pub(super) slot: u32,
     pub(super) drawn: Vec<bool>,
-    pub(super) high_banks: Vec<(SpanIndex, f32)>,
     /// The update whose drawn depths the surface was last read from.
     pub(super) read: u64,
 }
@@ -265,9 +272,14 @@ pub struct SurfaceSources {
 impl SurfaceSources {
     /// Note the slot of a cell a vertex reads.
     pub(super) fn reads(&mut self, cells: &FieldCells, at: SpanIndex) {
-        if !self.layouts.iter().any(|&(slot, _)| slot == at.slot) {
-            let generation = cells.generation(at.slot as usize);
-            self.layouts.push((at.slot, generation));
+        self.reads_slot(cells, at.slot);
+    }
+
+    /// Note a slot whose layout a vertex depends on.
+    pub(super) fn reads_slot(&mut self, cells: &FieldCells, slot: u32) {
+        if !self.layouts.iter().any(|&(s, _)| s == slot) {
+            let generation = cells.generation(slot as usize);
+            self.layouts.push((slot, generation));
         }
     }
 }
@@ -295,11 +307,7 @@ pub(super) fn refresh(field: &WaterField, cells: &DrawnCells, mesh: &mut RiverMe
                     slot,
                     flat: flat as u32,
                 }) == was
-            }))
-        && sources
-            .high_banks
-            .iter()
-            .all(|&(own, floor)| cells.surface(own) <= floor as f64);
+            }));
     for (v, source) in sources.vertices.iter().enumerate() {
         match source {
             VertexSource::Corner { cells: at, shape } => {
@@ -327,18 +335,12 @@ pub(super) fn refresh(field: &WaterField, cells: &DrawnCells, mesh: &mut RiverMe
                 vertex.depth = source.depth;
                 vertex.flow = source.flow;
             }
-            &VertexSource::Bank {
-                from,
-                own,
-                bank,
-                floor,
-            } => {
-                let level = cells.surface(own);
-                held &= Meeting::of(cells, bank).surface.is_none() && level > floor as f64;
+            &VertexSource::Shore { from, bank } => {
+                held &= bank.is_none_or(|b| !cells.drawn(b));
                 let source = mesh.vertices[from as usize];
                 let vertex = &mut mesh.vertices[v];
                 vertex.surface = source.surface;
-                vertex.depth = bank_depth(level, cells.bed(bank) as f64) as f32;
+                vertex.depth = shore_depth(cells, bank, source.surface as f64, source.depth);
                 vertex.flow = source.flow;
             }
             &VertexSource::Lip { from, own } => {

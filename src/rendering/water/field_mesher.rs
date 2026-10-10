@@ -7,13 +7,16 @@
 //!   two wet cells whose surfaces step more than JOIN
 //!            ──▶ a sheet down their shared edge, from the upper surface's
 //!                corners to the lower's: water going over the edge
-//!   dry cell beside one, its square dipping under that water
-//!            ──▶ a skirt carrying the shared edge's heights across it
+//!   dry column beside one, or diagonal to it between two dry sides
+//!            ──▶ a shore patch carrying the cell's surface half a column
+//!                into it: drawn on into rock, which hides it; cut over a
+//!                hollow below the water
 //! ```
 //!
-//! Each vertex also carries the water's depth there, negative over a bank;
-//! the draw cuts the surface at `river.vert`'s shore depth, so a shoreline follows a
-//! contour across the quads instead of the edges of columns.
+//! Each vertex also carries the water's depth there, negative out over a
+//! hollow; the draw cuts the surface at `river.vert`'s shore depth. Against
+//! rock the terrain itself draws the shoreline, where it rises through the
+//! surface; over a hollow the shoreline is a contour across the patch.
 //!
 //! Every vertex carries its own height and a velocity, the mean of the cells
 //! its corner joins, so the river shader's flow mapping runs on the field's
@@ -168,9 +171,8 @@ impl<'a> FieldScene<'a> {
             .collect()
     }
 
-    /// A cell's quad, and the skirts, lips and falling sheets around it.
+    /// A cell's quad, and the falling sheets and shore patches around it.
     fn cell_surface(&self, mesh: &mut RiverMesh, span: SpanRef, at: SpanIndex, level: f64) {
-        let graph = self.field.graph();
         let cells = self.field.cells();
         let drawn = self.drawn_cells();
         let column = span.column;
@@ -203,65 +205,115 @@ impl<'a> FieldScene<'a> {
             }
         }
 
-        for step in ORTHOGONAL {
-            let next = column.offset(step.di, step.dk);
-            if !graph.contains_column(next) {
-                continue;
-            }
-            let beside: SmallVec<[(SpanIndex, Meeting, f32); 2]> = graph
-                .joined(span, step)
-                .into_iter()
-                .map(|n| SpanRef::key(n.span.column, n.span.ordinal))
-                .filter_map(|key| {
-                    let cell = self.cell(key)?;
-                    Some((cell, Meeting::of(&drawn, cell), graph.span(key).floor_min))
-                })
-                .collect();
-            let wet = beside.iter().any(|d| d.1.surface.is_some());
-            let dry: SmallVec<[(SpanIndex, Meeting, f32); 2]> = beside
-                .into_iter()
-                .filter(|d| d.1.surface.is_none())
-                .collect();
-            let bank = dry.iter().find(|d| (d.2 as f64) < level);
-            if bank.is_none() && !wet {
-                lip(mesh, column, step.di, step.dk, first, corners, flows);
-            }
-            if bank.is_none() {
-                if let Some(lowest) = dry.iter().map(|d| d.2).min_by(f32::total_cmp) {
-                    mesh.sources.high_banks.push((at, lowest));
-                }
-            }
-            if let Some(&(bank_cell, bank, floor)) = bank {
-                mesh.sources.reads(cells, bank_cell);
-                let far = field_sources::bank_depth(level, bank.bed);
-                let ends = skirt(step.di, step.dk);
-                let skirt_corners = ends.map(|(i, away)| Corner {
-                    height: corners[i].height,
-                    depth: if away { far } else { corners[i].depth },
-                });
-                let sources = ends.map(|(i, away)| {
-                    let from = first + i as u32;
-                    if away {
-                        VertexSource::Bank {
-                            from,
-                            own: at,
-                            bank: bank_cell,
-                            floor,
-                        }
-                    } else {
-                        VertexSource::Edge { from }
-                    }
-                });
-                quad(
-                    mesh,
-                    next,
-                    skirt_corners,
-                    ends.map(|(i, _)| flows[i]),
-                    sources,
-                );
-            }
+        self.shore(mesh, column, level, first);
+    }
+
+    /// What stands in `column` at `level`, beside a wet cell there: water,
+    /// a dry cell (none where the column is rock at that height), or the
+    /// map's edge.
+    fn beside(&self, column: Column, level: f64) -> Beside {
+        let graph = self.field.graph();
+        let Some(slot) = graph.slot(column.chunk()) else {
+            return Beside::Outside;
+        };
+        let cell = graph
+            .span_at(column, level as f32)
+            .and_then(|span| self.cell(span));
+        match cell {
+            Some(cell) if self.drawn_cells().drawn(cell) => Beside::Wet,
+            bank => Beside::Dry(slot as u32, bank),
         }
     }
+
+    /// The cell's surface carried out over the dry columns around it, half
+    /// a column into each beside it and a quarter into each diagonal whose
+    /// two sides are dry too, so a shore meets the terrain at outer and inner
+    /// corners alike. Each patch's corners copy the cell's nearest corner
+    /// (vertex `first + i`); `shore_depth` draws each over rock and cuts it
+    /// over a hollow. Patches from cells on either side of a dry column meet
+    /// at its centre, without overlapping.
+    fn shore(&self, mesh: &mut RiverMesh, column: Column, level: f64, first: u32) {
+        let cells = self.field.cells();
+        let drawn = self.drawn_cells();
+        let around: [[Beside; 3]; 3] =
+            [-1, 0, 1].map(|dk| [-1, 0, 1].map(|di| self.beside(column.offset(di, dk), level)));
+        let at = |di: i32, dk: i32| around[(dk + 1) as usize][(di + 1) as usize];
+        let dry = |di: i32, dk: i32| matches!(at(di, dk), Beside::Dry(..));
+        let mut patches: SmallVec<[(i32, i32); 8]> =
+            ORTHOGONAL.iter().map(|s| (s.di, s.dk)).collect();
+        for (sx, sz) in [(-1, -1), (1, -1), (1, 1), (-1, 1)] {
+            if dry(sx, 0) && dry(0, sz) {
+                patches.push((sx, sz));
+            }
+        }
+        let (x0, z0) = column.min_corner();
+        for (di, dk) in patches {
+            if !dry(di, dk) {
+                continue;
+            }
+            // The patch's span along one axis, in columns from the cell's
+            // minimum corner.
+            let range = |d: i32| match d {
+                1 => (1.0, 1.5),
+                -1 => (-0.5, 0.0),
+                _ => (0.0, 1.0),
+            };
+            let ((xa, xb), (za, zb)) = (range(di), range(dk));
+            let base = mesh.vertices.len() as u32;
+            for (x, z) in [(xa, za), (xb, za), (xb, zb), (xa, zb)] {
+                // The cell corner nearest, and the column beside the cell
+                // the patch corner lies out over, if any.
+                let (cx, cz) = (x >= 1.0, z >= 1.0);
+                let i = match (cx, cz) {
+                    (false, false) => 0,
+                    (true, false) => 1,
+                    (true, true) => 2,
+                    (false, true) => 3,
+                };
+                let out = |c: f32| (c > 1.0) as i32 - (c < 0.0) as i32;
+                let from = mesh.vertices[(first as usize) + i];
+                let (depth, source) = match at(out(x), out(z)) {
+                    Beside::Dry(slot, bank) if (out(x), out(z)) != (0, 0) => {
+                        mesh.sources.reads_slot(cells, slot);
+                        let depth = field_sources::shore_depth(
+                            &drawn,
+                            bank,
+                            from.surface as f64,
+                            from.depth,
+                        );
+                        let i = first + i as u32;
+                        (depth, VertexSource::Shore { from: i, bank })
+                    }
+                    _ => (
+                        from.depth,
+                        VertexSource::Edge {
+                            from: first + i as u32,
+                        },
+                    ),
+                };
+                mesh.vertices.push(RiverVertex {
+                    xz: Vector2::new(x0 + x * COLUMN_SIZE, z0 + z * COLUMN_SIZE),
+                    depth,
+                    ..from
+                });
+                mesh.sources.vertices.push(source);
+            }
+            mesh.indices
+                .extend_from_slice(&[base, base + 2, base + 1, base, base + 3, base + 2]);
+        }
+    }
+}
+
+/// What a wet cell's surface meets in a column beside it.
+#[derive(Debug, Clone, Copy)]
+enum Beside {
+    /// Water drawn there: its own surface covers the column.
+    Wet,
+    /// No water: the column's slot, and its dry cell at the water's height,
+    /// none where the column is rock there.
+    Dry(u32, Option<SpanIndex>),
+    /// Past the map's edge.
+    Outside,
 }
 
 impl FieldScene<'_> {
@@ -330,83 +382,6 @@ impl FieldScene<'_> {
         mesh.indices
             .extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
     }
-}
-
-/// A skirt's corners over the column beside a wet cell, as the cell's
-/// corners it takes and whether each lies on the far edge: the edge they
-/// share keeps the cell's corners, their heights carried straight across so
-/// the skirt follows the surface's slope along the bank, and the far edge is
-/// as deep as the bank's own floor makes it. Corners run (−x, −z), (+x, −z),
-/// (+x, +z), (−x, +z).
-fn skirt(di: i32, dk: i32) -> [(usize, bool); 4] {
-    match (di, dk) {
-        (1, _) => [(1, false), (1, true), (2, true), (2, false)],
-        (-1, _) => [(0, true), (0, false), (3, false), (3, true)],
-        (_, 1) => [(3, false), (2, false), (2, true), (3, true)],
-        _ => [(0, true), (1, true), (1, false), (0, false)],
-    }
-}
-
-/// Half a column of surface over the column beside a wet cell that stands
-/// in rock at the cell's level: the cell's edge carried on to that column's
-/// centre, where the rock is, so the surface meets the rock's face wherever
-/// in the column it lies instead of stopping short at the column's edge.
-/// Every corner is the cell's corner on the shared edge (vertex `first + i`).
-fn lip(
-    mesh: &mut RiverMesh,
-    column: Column,
-    di: i32,
-    dk: i32,
-    first: u32,
-    corners: [Corner; 4],
-    flows: [Vector2<f32>; 4],
-) {
-    let (x0, z0) = column.min_corner();
-    let half = 0.5 * COLUMN_SIZE;
-    // The lip's corners, in the cell's corner order, as offsets from the
-    // cell's (−x, −z) corner, each with the cell corner it copies.
-    let (from, to) = (0.0, COLUMN_SIZE);
-    let ends: [((f32, f32), usize); 4] = match (di, dk) {
-        (1, _) => [
-            ((to, from), 1),
-            ((to + half, from), 1),
-            ((to + half, to), 2),
-            ((to, to), 2),
-        ],
-        (-1, _) => [
-            ((-half, from), 0),
-            ((from, from), 0),
-            ((from, to), 3),
-            ((-half, to), 3),
-        ],
-        (_, 1) => [
-            ((from, to), 3),
-            ((to, to), 2),
-            ((to, to + half), 2),
-            ((from, to + half), 3),
-        ],
-        _ => [
-            ((from, -half), 0),
-            ((to, -half), 1),
-            ((to, from), 1),
-            ((from, from), 0),
-        ],
-    };
-    let base = mesh.vertices.len() as u32;
-    for ((cx, cz), i) in ends {
-        mesh.vertices.push(RiverVertex {
-            xz: Vector2::new(x0 + cx, z0 + cz),
-            surface: corners[i].height as f32,
-            depth: corners[i].depth as f32,
-            flow: flows[i],
-            face: Vector2::zeros(),
-        });
-        mesh.sources.vertices.push(VertexSource::Edge {
-            from: first + i as u32,
-        });
-    }
-    mesh.indices
-        .extend_from_slice(&[base, base + 2, base + 1, base, base + 3, base + 2]);
 }
 
 fn quad(

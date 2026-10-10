@@ -127,11 +127,16 @@ pipeline, with no new shader:
 - one quad per wet cell;
 - each corner is the mean surface of its group among the cells meeting there,
   split where two surfaces differ by more than 1 m;
-- a curtain down any edge where they differ by more;
-- a skirt over a dry bank the water reaches into.
+- a sheet down any edge where they differ by more, as deep as the water pours
+  over it;
+- a shore patch half a column into each dry column beside a wet cell, and a
+  quarter into each diagonal one between two dry sides.
 
-Each vertex carries a signed depth, negative over a bank. The draw's wet range
-discards below 5 mm, so a shoreline is a contour and not a staircase of columns.
+A shore patch over rock (the dry column's floor at its centre stands above the
+water) is never cut: the terrain rising through it draws the shoreline, at
+walls, steps and inside corners alike. Over a hollow below the water its far
+corners carry a negative depth, and the draw's wet range, which discards below
+5 mm, cuts it midway as a contour.
 
 Looked at and fixed:
 
