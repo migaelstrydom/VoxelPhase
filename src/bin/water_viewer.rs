@@ -26,6 +26,7 @@ use voxel_phase::level::Settle;
 use voxel_phase::level_viewer::{custom_shot, LevelViewer};
 use voxel_phase::rendering::visual_bench::contact_sheet;
 use voxel_phase::rendering::water::FieldScene;
+use voxel_phase::water::field::DrawnDepths;
 use voxel_phase::water_viewer::{
     catalogue, report, run, select, summary_line, write_csv, Run, RunConfig, Scenario,
 };
@@ -125,6 +126,13 @@ fn film(scenario: &Scenario, options: &Options) -> Result<Run, String> {
         // Each capture is drawn afresh: every chunk's version moves.
         capture += 1;
         let versions = vec![capture; field.cells().chunks.len()];
+        let depths: Vec<Vec<f64>> = field
+            .cells()
+            .chunks
+            .iter()
+            .map(|c| c.depth.clone())
+            .collect();
+        let replaced = vec![0; depths.len()];
         viewer.swap_terrain(terrain);
         let mut shot = custom_shot(eye, look);
         shot.label = format!("t = {at:.1} s");
@@ -133,6 +141,11 @@ fn film(scenario: &Scenario, options: &Options) -> Result<Run, String> {
             &FieldScene {
                 field,
                 versions: &versions,
+                depths: DrawnDepths {
+                    depths: &depths,
+                    replaced: &replaced,
+                    now: 0,
+                },
                 clock: at,
                 waves: None,
             },

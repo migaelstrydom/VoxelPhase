@@ -10,6 +10,11 @@
 const float REFRACTION_STRENGTH = 0.01;
 const float SSS_INTENSITY = 1.9;
 const vec3  SSS_COLOR = vec3(0.15, 0.5, 0.4);
+// How long the noise is carried by the flow before it starts over, s. Two
+// phases half a period apart cross-fade, each faded out as it starts over,
+// so the noise is never carried further than a period's flow: carried for
+// ever, the small currents of still water would shear it into swirls.
+const float FLOW_PERIOD = 2.0;
 
 layout(location = 0) in vec3 fragNormal;
 layout(location = 1) in vec3 fragWorldPos;
@@ -118,10 +123,21 @@ void main() {
     // Running water carries its detail downstream: the noise scrolls with the
     // flow, over a drift of its own.
     vec2 worldXZ = fragWorldPos.xz;
-    vec2 carried = -fragFlow * time;
     float speed = length(fragFlow);
-    vec3 noiseN1 = proceduralNormal(worldXZ + carried + vec2(time * 0.3, time * 0.2), 0.5, 0.07 + 0.015 * min(speed, 2.0));
-    vec3 noiseN2 = proceduralNormal(worldXZ + carried * 1.3 + vec2(-time * 0.15, time * 0.25), 1.0, 0.04 + 0.015 * min(speed, 2.0));
+    float phases[2] = float[2](fract(time / FLOW_PERIOD), fract(time / FLOW_PERIOD + 0.5));
+    float firstWeight = 1.0 - abs(1.0 - 2.0 * phases[0]);
+    vec3 noiseN1 = vec3(0.0);
+    vec3 noiseN2 = vec3(0.0);
+    float whiteNoise = 0.0;
+    for (int p = 0; p < 2; p++) {
+        // Each phase starts over at its own offset, so the restart is not
+        // seen as the same pattern coming back.
+        vec2 carried = -fragFlow * phases[p] * FLOW_PERIOD + vec2(0.5 * float(p), 0.37 * float(p));
+        float weight = p == 0 ? firstWeight : 1.0 - firstWeight;
+        noiseN1 += weight * proceduralNormal(worldXZ + carried + vec2(time * 0.3, time * 0.2), 0.5, 0.07 + 0.015 * min(speed, 2.0));
+        noiseN2 += weight * proceduralNormal(worldXZ + carried * 1.3 + vec2(-time * 0.15, time * 0.25), 1.0, 0.04 + 0.015 * min(speed, 2.0));
+        whiteNoise += weight * fbm(worldXZ * 2.0 + carried * 2.0);
+    }
 
     // The vertex normal carries the ripples; the swell's slope is added
     // here, per pixel.
@@ -234,7 +250,7 @@ void main() {
     // --- Shoreline foam on still water, white water where a river runs fast ---
     float running = step(1.0e-4, speed);
     float shoreFoam = (1.0 - smoothstep(0.0, 0.3, opticalDepth)) * (1.0 - running);
-    float whiteWater = smoothstep(3.0, 7.0, speed) * 0.4 * fbm(worldXZ * 2.0 + carried * 2.0);
+    float whiteWater = smoothstep(3.0, 7.0, speed) * 0.4 * whiteNoise;
     float foamFactor = max(shoreFoam, whiteWater);
     color = mix(color, vec3(0.9, 0.95, 1.0), foamFactor * 0.6);
 

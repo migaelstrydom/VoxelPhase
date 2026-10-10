@@ -17,13 +17,53 @@
 use nalgebra::Vector2;
 use smallvec::SmallVec;
 
-use crate::water::field::{FieldCells, WaterField};
+use crate::water::field::{DrawnDepths, FieldCells, WaterField};
 use crate::water::geometry::SpanIndex;
 
 use super::river_mesh::RiverMesh;
 
 /// Depth a cell must hold to be drawn, m.
-pub(super) const DRAWN_DEPTH: f64 = 0.002;
+const DRAWN_DEPTH: f64 = 0.002;
+
+/// Least room a cell must leave under its ceiling to have a surface, m: a
+/// cell filled to its roof, as water pressed into a sealed cavity is, has
+/// none to draw.
+const ROOF_GAP: f64 = 0.01;
+
+/// The field's cells as the surfaces are drawn from them: each depth as it
+/// stood when its chunk's version last moved (`SurfaceVersions`), so every
+/// surface reading a cell reads it alike, whichever was drawn last.
+#[derive(Clone, Copy)]
+pub struct DrawnCells<'a> {
+    pub cells: &'a FieldCells,
+    pub depths: DrawnDepths<'a>,
+}
+
+impl DrawnCells<'_> {
+    pub(super) fn depth(&self, at: SpanIndex) -> f64 {
+        self.depths.depths[at.slot as usize][at.flat as usize]
+    }
+
+    /// Whether a slot's depths were replaced after update `read`.
+    fn replaced_since(&self, slot: u32, read: u64) -> bool {
+        self.depths.replaced[slot as usize] > read
+    }
+
+    pub(super) fn bed(&self, at: SpanIndex) -> f32 {
+        self.cells.bed(at)
+    }
+
+    pub(super) fn surface(&self, at: SpanIndex) -> f64 {
+        self.bed(at) as f64 + self.depth(at)
+    }
+
+    /// Whether a cell has a surface to draw: deep enough, and not filled to
+    /// its roof.
+    pub(super) fn drawn(&self, at: SpanIndex) -> bool {
+        let depth = self.depth(at);
+        depth > DRAWN_DEPTH && self.surface(at) < self.cells.ceiling(at) as f64 - ROOF_GAP
+    }
+}
 
 /// Farthest below the water a dry cell beside it counts, m, in a corner's
 /// depth: a wall is a bank whose foot the water meets, so a channel between
@@ -38,7 +78,7 @@ pub(super) const JOIN: f64 = 1.0;
 /// One cell meeting at a corner, as the corner sees it.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct Meeting {
-    /// Its surface, if it is wet enough to draw.
+    /// Its surface, if it has one to draw.
     pub surface: Option<f64>,
     /// Its floor.
     pub bed: f64,
@@ -47,10 +87,10 @@ pub(super) struct Meeting {
 }
 
 impl Meeting {
-    pub fn of(cells: &FieldCells, at: SpanIndex) -> Self {
+    pub fn of(cells: &DrawnCells, at: SpanIndex) -> Self {
         let depth = cells.depth(at);
         Self {
-            surface: (depth > DRAWN_DEPTH).then(|| cells.surface(at)),
+            surface: cells.drawn(at).then(|| cells.surface(at)),
             bed: cells.bed(at) as f64,
             depth,
         }
@@ -175,7 +215,9 @@ pub(super) enum VertexSource {
 /// A built surface's vertex sources, and what else must hold for its shape
 /// to: the layout of every slot they read, by generation; which of its own
 /// chunk's cells were drawn; and the lowest floor of the dry banks beside a
-/// wet cell that were too high for a skirt.
+/// wet cell that were too high for a skirt. A corner whose cells' depths
+/// have not been replaced since it was last read is passed over, but for
+/// its flow.
 #[derive(Debug, Clone, Default)]
 pub struct SurfaceSources {
     pub(super) vertices: Vec<VertexSource>,
@@ -183,6 +225,8 @@ pub struct SurfaceSources {
     pub(super) slot: u32,
     pub(super) drawn: Vec<bool>,
     pub(super) high_banks: Vec<(SpanIndex, f32)>,
+    /// The update whose drawn depths the surface was last read from.
+    pub(super) read: u64,
 }
 
 impl SurfaceSources {
@@ -198,26 +242,27 @@ impl SurfaceSources {
 /// Read every vertex of a built surface again from the field. Returns
 /// whether the surface kept the shape it was built with; where it did not,
 /// what could be read is written anyway.
-pub(super) fn refresh(field: &WaterField, mesh: &mut RiverMesh) -> bool {
-    let cells = field.cells();
+pub(super) fn refresh(field: &WaterField, cells: &DrawnCells, mesh: &mut RiverMesh) -> bool {
     let sources = &mesh.sources;
-    if sources.vertices.is_empty() || sources.vertices.len() != mesh.vertices.len() {
+    if sources.vertices.len() != mesh.vertices.len() {
         return false;
     }
     if sources
         .layouts
         .iter()
-        .any(|&(slot, generation)| cells.generation(slot as usize) != generation)
+        .any(|&(slot, generation)| cells.cells.generation(slot as usize) != generation)
     {
         return false;
     }
-    let chunk = &cells.chunks[sources.slot as usize];
-    let mut held = chunk.depth.len() == sources.drawn.len()
-        && chunk
-            .depth
-            .iter()
-            .zip(&sources.drawn)
-            .all(|(&d, &drawn)| (d > DRAWN_DEPTH) == drawn)
+    let (slot, read) = (sources.slot, sources.read);
+    let mut held = cells.depths.depths[slot as usize].len() == sources.drawn.len()
+        && (!cells.replaced_since(slot, read)
+            || sources.drawn.iter().enumerate().all(|(flat, &was)| {
+                cells.drawn(SpanIndex {
+                    slot,
+                    flat: flat as u32,
+                }) == was
+            }))
         && sources
             .high_banks
             .iter()
@@ -225,6 +270,10 @@ pub(super) fn refresh(field: &WaterField, mesh: &mut RiverMesh) -> bool {
     for (v, source) in sources.vertices.iter().enumerate() {
         match source {
             VertexSource::Corner { cells: at, shape } => {
+                if !at.iter().any(|c| cells.replaced_since(c.slot, read)) {
+                    mesh.vertices[v].flow = corner_flow(field, at, *shape);
+                    continue;
+                }
                 let meetings: SmallVec<[Meeting; 4]> =
                     at.iter().map(|&c| Meeting::of(cells, c)).collect();
                 let Some(level) = meetings[0].surface else {
@@ -252,7 +301,7 @@ pub(super) fn refresh(field: &WaterField, mesh: &mut RiverMesh) -> bool {
                 floor,
             } => {
                 let level = cells.surface(own);
-                held &= cells.depth(bank) <= DRAWN_DEPTH && level > floor as f64;
+                held &= Meeting::of(cells, bank).surface.is_none() && level > floor as f64;
                 let source = mesh.vertices[from as usize];
                 let vertex = &mut mesh.vertices[v];
                 vertex.surface = source.surface;
@@ -271,6 +320,10 @@ pub(super) fn refresh(field: &WaterField, mesh: &mut RiverMesh) -> bool {
                 vertex.flow = field.velocity(own);
             }
         }
+    }
+    // A surface that lost its shape reads every cell again until built.
+    if held {
+        mesh.sources.read = cells.depths.now;
     }
     held
 }

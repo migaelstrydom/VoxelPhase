@@ -155,7 +155,9 @@ mod tests {
     use super::*;
     use crate::level::load_level;
     use crate::level_check::build_terrain;
+    use crate::rendering::water::field_sources::VertexSource;
     use crate::terrain::BlastConfig;
+    use crate::water::geometry::{CHUNK_COLUMNS, COLUMN_SIZE};
     use crate::water::WaterWorld;
 
     /// Farthest a surface read again may stand from one built afresh, m:
@@ -215,5 +217,79 @@ mod tests {
             compared += 1;
         }
         assert!(compared > 0);
+    }
+
+    /// Farthest apart two surfaces may stand where they meet on a chunk's
+    /// border, m: twice the versions' tolerance, as far as a border cell's
+    /// drawn depth may drift before its neighbours are drawn again.
+    const SEAM: f32 = 2.1e-3;
+
+    /// Nearer than this two border vertices are taken for the same surface,
+    /// m; further, they are two surfaces over one point (a curtain's top and
+    /// foot, water over a tunnel's).
+    const SAME_SURFACE: f32 = 0.25;
+
+    /// While a dam on water_park bursts, every surface meets its
+    /// neighbours on their shared borders, except where one waits to be
+    /// built again in its new shape.
+    #[test]
+    #[ignore = "release: opens water_park"]
+    fn neighbouring_surfaces_meet() {
+        let level = load_level(Path::new("levels/water_park.level.ron")).unwrap();
+        let mut terrain = build_terrain(&level);
+        let mut water = WaterWorld::from_config(level.water.as_ref().unwrap(), &terrain);
+        let mut parts = RiverParts::default();
+        let extent = CHUNK_COLUMNS as f32 * COLUMN_SIZE;
+        let (mut worst, mut seams, mut waiting) = (0.0f32, 0, 0);
+        for frame in 0..240 {
+            if frame == 30 {
+                terrain.detonate(Point3::new(-52.2, 2.0, 49.8), &BlastConfig::default());
+            }
+            terrain.update();
+            water.on_terrain_update(&terrain);
+            water.step(1.0 / 60.0);
+            parts.sync(&water);
+            let versions: BTreeMap<SurfaceId, u32> = water.river_key().into_iter().collect();
+            // Every quad corner on a chunk's border, by where it stands.
+            let mut border: BTreeMap<(i64, i64), Vec<(SurfaceId, f32)>> = BTreeMap::new();
+            for (id, part) in &parts.parts {
+                for (i, v) in part.mesh.vertices.iter().enumerate() {
+                    let on = |c: f32| (c / extent - (c / extent).round()).abs() < 1.0e-4;
+                    let corner =
+                        matches!(part.mesh.sources.vertices[i], VertexSource::Corner { .. });
+                    if corner && (on(v.xz.x) || on(v.xz.y)) {
+                        let key = (
+                            (v.xz.x * 1000.0).round() as i64,
+                            (v.xz.y * 1000.0).round() as i64,
+                        );
+                        border.entry(key).or_default().push((*id, v.surface));
+                    }
+                }
+            }
+            for found in border.values() {
+                for &(id, height) in found {
+                    let nearest = found
+                        .iter()
+                        .filter(|(other, _)| *other != id)
+                        .map(|&(other, h)| (other, (h - height).abs()))
+                        .min_by(|a, b| a.1.total_cmp(&b.1));
+                    let Some((other, gap)) = nearest else {
+                        continue;
+                    };
+                    if gap <= SEAM || gap > SAME_SURFACE {
+                        continue;
+                    }
+                    let behind = |id: &SurfaceId| parts.parts[id].version != versions[id];
+                    if behind(&id) || behind(&other) {
+                        waiting += 1;
+                    } else {
+                        seams += 1;
+                        worst = worst.max(gap);
+                    }
+                }
+            }
+        }
+        println!("{seams} border vertices parted, by up to {worst} m; {waiting} beside a surface waiting");
+        assert_eq!(seams, 0, "surfaces parted by up to {worst} m");
     }
 }

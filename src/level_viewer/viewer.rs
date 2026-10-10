@@ -272,7 +272,7 @@ impl LevelViewer {
                 .submit_water(water, &view, &projection, &camera_pos, 0.0)?;
         } else if let Some(water) = self.world.try_fetch::<WaterWorld>() {
             self.renderer
-                .submit_water(&*water, &view, &projection, &camera_pos, 0.0)?;
+                .submit_water(&*water, &view, &projection, &camera_pos, water.clock())?;
         }
         self.renderer.begin_transparent_pass(cb, image_index);
         self.renderer.end_frame(cb, image_index)?;

@@ -25,7 +25,7 @@
 use nalgebra::Vector2;
 use smallvec::SmallVec;
 
-use crate::water::field::WaterField;
+use crate::water::field::{DrawnDepths, WaterField};
 use crate::water::geometry::{Column, SpanIndex, SpanRef, Step, COLUMN_SIZE, ORTHOGONAL};
 use crate::water::ids::SurfaceId;
 use crate::water::surface::Swell;
@@ -34,7 +34,7 @@ use crate::water::{WaterWorld, FIELD_BODY};
 
 use super::divide::WaterPatch;
 use super::field_sources::{
-    self, corner_flow, gather, Corner, Meeting, VertexSource, DRAWN_DEPTH, JOIN,
+    self, corner_flow, gather, Corner, DrawnCells, Meeting, VertexSource, JOIN,
 };
 use super::ocean_ring::{append_ring, occupied_bounds, MapRect};
 use super::river_mesh::{RiverDraw, RiverMesh};
@@ -47,6 +47,8 @@ pub struct FieldScene<'a> {
     /// Each chunk's surface version, by slot: changes whenever its surface
     /// has moved since it was last drawn.
     pub versions: &'a [u32],
+    /// Each chunk's depths as its surface is drawn from them.
+    pub depths: DrawnDepths<'a>,
     /// Seconds simulated: the clock the drawn currents run on.
     pub clock: f32,
     /// The ripples and swell over the field, if it has any.
@@ -59,6 +61,7 @@ impl<'a> FieldScene<'a> {
         Self {
             field: world.field(),
             versions: world.versions(),
+            depths: world.drawn_depths(),
             clock: world.clock(),
             waves: Some(world.waves()),
         }
@@ -84,6 +87,13 @@ impl<'a> FieldScene<'a> {
             .collect()
     }
 
+    fn drawn_cells(&self) -> DrawnCells<'a> {
+        DrawnCells {
+            cells: self.field.cells(),
+            depths: self.depths,
+        }
+    }
+
     fn cell(&self, span: SpanRef) -> Option<SpanIndex> {
         self.field
             .cells()
@@ -91,7 +101,7 @@ impl<'a> FieldScene<'a> {
     }
 
     fn meeting(&self, span: SpanRef) -> Option<Meeting> {
-        Some(Meeting::of(self.field.cells(), self.cell(span)?))
+        Some(Meeting::of(&self.drawn_cells(), self.cell(span)?))
     }
 
     /// The span joined to `span` across one orthogonal step whose water a
@@ -138,10 +148,9 @@ impl<'a> FieldScene<'a> {
             .flatten()
             .filter_map(|s| self.cell(s))
             .collect();
-        let meetings: SmallVec<[Meeting; 4]> = cells
-            .iter()
-            .map(|&c| Meeting::of(self.field.cells(), c))
-            .collect();
+        let drawn = self.drawn_cells();
+        let meetings: SmallVec<[Meeting; 4]> =
+            cells.iter().map(|&c| Meeting::of(&drawn, c)).collect();
         let (corner, shape) = gather(&meetings, level);
         let flow = corner_flow(self.field, &cells, shape);
         (corner, flow, VertexSource::Corner { cells, shape })
@@ -154,7 +163,7 @@ impl<'a> FieldScene<'a> {
             .joined(span, Step { di, dk })
             .into_iter()
             .filter_map(|n| self.cell(SpanRef::key(n.span.column, n.span.ordinal)))
-            .filter(|&c| Meeting::of(self.field.cells(), c).surface.is_some())
+            .filter(|&c| Meeting::of(&self.drawn_cells(), c).surface.is_some())
             .collect()
     }
 
@@ -162,6 +171,7 @@ impl<'a> FieldScene<'a> {
     fn cell_surface(&self, mesh: &mut RiverMesh, span: SpanRef, at: SpanIndex, level: f64) {
         let graph = self.field.graph();
         let cells = self.field.cells();
+        let drawn = self.drawn_cells();
         let column = span.column;
         let built =
             [(-1, -1), (1, -1), (1, 1), (-1, 1)].map(|(sx, sz)| self.corner(span, level, sx, sz));
@@ -186,7 +196,7 @@ impl<'a> FieldScene<'a> {
 
         for (di, dk) in [(1, 0), (0, 1)] {
             for other in self.wet_across(span, di, dk) {
-                let other_level = cells.surface(other);
+                let other_level = drawn.surface(other);
                 if (other_level - level).abs() > JOIN {
                     mesh.sources.reads(cells, other);
                     curtain(mesh, column, di, (at, level), (other, other_level), flow);
@@ -199,19 +209,24 @@ impl<'a> FieldScene<'a> {
             if !graph.contains_column(next) {
                 continue;
             }
-            let dry: SmallVec<[(SpanIndex, Meeting, f32); 2]> = graph
+            let beside: SmallVec<[(SpanIndex, Meeting, f32); 2]> = graph
                 .joined(span, step)
                 .into_iter()
                 .map(|n| SpanRef::key(n.span.column, n.span.ordinal))
                 .filter_map(|key| {
                     let cell = self.cell(key)?;
-                    let m = Meeting::of(cells, cell);
-                    m.surface
-                        .is_none()
-                        .then_some((cell, m, graph.span(key).floor_min))
+                    Some((cell, Meeting::of(&drawn, cell), graph.span(key).floor_min))
                 })
                 .collect();
+            let wet = beside.iter().any(|d| d.1.surface.is_some());
+            let dry: SmallVec<[(SpanIndex, Meeting, f32); 2]> = beside
+                .into_iter()
+                .filter(|d| d.1.surface.is_none())
+                .collect();
             let bank = dry.iter().find(|d| (d.2 as f64) < level);
+            if bank.is_none() && !wet {
+                lip(mesh, column, step.di, step.dk, first, corners, flows);
+            }
             if bank.is_none() {
                 if let Some(lowest) = dry.iter().map(|d| d.2).min_by(f32::total_cmp) {
                     mesh.sources.high_banks.push((at, lowest));
@@ -263,6 +278,67 @@ fn skirt(di: i32, dk: i32) -> [(usize, bool); 4] {
         (_, 1) => [(3, false), (2, false), (2, true), (3, true)],
         _ => [(0, true), (1, true), (1, false), (0, false)],
     }
+}
+
+/// Half a column of surface over the column beside a wet cell that stands
+/// in rock at the cell's level: the cell's edge carried on to that column's
+/// centre, where the rock is, so the surface meets the rock's face wherever
+/// in the column it lies instead of stopping short at the column's edge.
+/// Every corner is the cell's corner on the shared edge (vertex `first + i`).
+fn lip(
+    mesh: &mut RiverMesh,
+    column: Column,
+    di: i32,
+    dk: i32,
+    first: u32,
+    corners: [Corner; 4],
+    flows: [Vector2<f32>; 4],
+) {
+    let (x0, z0) = column.min_corner();
+    let half = 0.5 * COLUMN_SIZE;
+    // The lip's corners, in the cell's corner order, as offsets from the
+    // cell's (−x, −z) corner, each with the cell corner it copies.
+    let (from, to) = (0.0, COLUMN_SIZE);
+    let ends: [((f32, f32), usize); 4] = match (di, dk) {
+        (1, _) => [
+            ((to, from), 1),
+            ((to + half, from), 1),
+            ((to + half, to), 2),
+            ((to, to), 2),
+        ],
+        (-1, _) => [
+            ((-half, from), 0),
+            ((from, from), 0),
+            ((from, to), 3),
+            ((-half, to), 3),
+        ],
+        (_, 1) => [
+            ((from, to), 3),
+            ((to, to), 2),
+            ((to, to + half), 2),
+            ((from, to + half), 3),
+        ],
+        _ => [
+            ((from, -half), 0),
+            ((to, -half), 1),
+            ((to, from), 1),
+            ((from, from), 0),
+        ],
+    };
+    let base = mesh.vertices.len() as u32;
+    for ((cx, cz), i) in ends {
+        mesh.vertices.push(RiverVertex {
+            xz: Vector2::new(x0 + cx, z0 + cz),
+            surface: corners[i].height as f32,
+            depth: corners[i].depth as f32,
+            flow: flows[i],
+        });
+        mesh.sources.vertices.push(VertexSource::Edge {
+            from: first + i as u32,
+        });
+    }
+    mesh.indices
+        .extend_from_slice(&[base, base + 2, base + 1, base, base + 3, base + 2]);
 }
 
 fn quad(
@@ -434,18 +510,24 @@ impl WaterScene for FieldScene<'_> {
         let Some(chunk) = self.field.cells().chunks.get(slot) else {
             return mesh;
         };
+        let drawn = self.drawn_cells();
+        let at = |flat: usize| SpanIndex {
+            slot: slot as u32,
+            flat: flat as u32,
+        };
         mesh.sources.slot = slot as u32;
-        mesh.sources.drawn = chunk.depth.iter().map(|&d| d > DRAWN_DEPTH).collect();
+        mesh.sources.read = self.depths.now;
+        // Its own layout, which an empty surface reads nothing else to note.
+        mesh.sources.reads(self.field.cells(), at(0));
+        mesh.sources.drawn = (0..chunk.depth.len())
+            .map(|flat| drawn.drawn(at(flat)))
+            .collect();
         for (flat, (local, ordinal)) in chunk.cell_columns().enumerate() {
-            if chunk.depth[flat] <= DRAWN_DEPTH {
+            if !mesh.sources.drawn[flat] {
                 continue;
             }
-            let at = SpanIndex {
-                slot: slot as u32,
-                flat: flat as u32,
-            };
             let span = SpanRef::key(chunk.coord.column(local), ordinal);
-            self.cell_surface(&mut mesh, span, at, chunk.surface(flat));
+            self.cell_surface(&mut mesh, span, at(flat), drawn.surface(at(flat)));
         }
         if !mesh.indices.is_empty() {
             mesh.draws.push(RiverDraw {
@@ -458,7 +540,7 @@ impl WaterScene for FieldScene<'_> {
     }
 
     fn refresh_river(&self, _id: SurfaceId, mesh: &mut RiverMesh) -> bool {
-        field_sources::refresh(self.field, mesh)
+        field_sources::refresh(self.field, &self.drawn_cells(), mesh)
     }
 }
 

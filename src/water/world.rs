@@ -21,7 +21,7 @@ use crate::level::{Settle, WaterConfig};
 use crate::terrain::TerrainWorld;
 
 use super::coupling::Disturbances;
-use super::field::{SurfaceVersions, WaterField};
+use super::field::{DrawnDepths, SurfaceVersions, WaterField};
 use super::query::WaterQuery;
 use super::waves::SurfaceWaves;
 
@@ -123,6 +123,11 @@ impl WaterWorld {
     /// surface would.
     pub fn versions(&self) -> &[u32] {
         self.versions.versions()
+    }
+
+    /// Each chunk's depths as its surface is drawn from them.
+    pub fn drawn_depths(&self) -> DrawnDepths<'_> {
+        self.versions.drawn()
     }
 
     /// Seconds simulated.
