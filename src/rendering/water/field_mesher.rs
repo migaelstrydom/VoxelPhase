@@ -2,11 +2,12 @@
 //!
 //! ```text
 //!   wet cell ──▶ one quad over its column, each corner the mean surface of
-//!                its group of the wet cells meeting there: split where two
-//!                surfaces stand more than JOIN apart
-//!   two wet cells whose surfaces step more than JOIN
+//!                its group of the wet cells meeting there: split where one
+//!                falls to the next
+//!   two wet cells, the upper falling to the lower
 //!            ──▶ a sheet down their shared edge, from the upper surface's
-//!                corners to the lower's: water going over the edge
+//!                corners to the lower's: water going over the edge, hung
+//!                out at the lip
 //!   dry column beside one, or diagonal to it between two dry sides
 //!            ──▶ a shore patch carrying the cell's surface half a column
 //!                into it: drawn on into rock, which hides it; cut over a
@@ -37,7 +38,7 @@ use crate::water::{WaterWorld, FIELD_BODY};
 
 use super::divide::WaterPatch;
 use super::field_sources::{
-    self, corner_flow, gather, Corner, DrawnCells, Meeting, VertexSource, JOIN,
+    self, corner_flow, falls, gather, Corner, DrawnCells, Meeting, VertexSource,
 };
 use super::ocean_ring::{append_ring, occupied_bounds, MapRect};
 use super::river_mesh::{RiverDraw, RiverMesh};
@@ -200,7 +201,7 @@ impl<'a> FieldScene<'a> {
         for step in ORTHOGONAL {
             for (other_span, other) in self.wet_across(span, step.di, step.dk) {
                 let other_level = drawn.surface(other);
-                if level - other_level > JOIN {
+                if falls(level, drawn.bed(at) as f64, other_level) {
                     self.sheet(mesh, column, step, first, at, (other_span, other_level));
                 }
             }

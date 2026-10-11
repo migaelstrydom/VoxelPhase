@@ -133,8 +133,10 @@ pipeline, with no new shader:
 
 - one quad per wet cell;
 - each corner is the mean surface of its group among the cells meeting there,
-  split where two surfaces differ by more than 1 m;
-- a sheet down any edge where they differ by more, as deep as the water pours
+  split where one falls to the next: a step over 1 m, or over 0.5 m where the
+  upper water's bed stands above the lower water, which a slope would cut
+  through;
+- a sheet down any edge where one falls to the next, as deep as the water pours
   over it, hung out at the lip where the lower column's own floor carries the
   ledge on (each span keeps a bed per quarter of its square for this);
 - a shore patch half a column into each dry column beside a wet cell, and a

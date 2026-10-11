@@ -112,8 +112,23 @@ impl DrawnCells<'_> {
 
 /// Surfaces further apart than this do not share a corner, m: a step this
 /// high between two wet cells is water going over an edge, drawn as a
-/// falling sheet. Lower steps are a sheet running down a slope, up to 200 %.
+/// falling sheet. Lower steps are a sheet running down a slope, up to 200 %,
+/// unless the water `falls`.
 pub(super) const JOIN: f64 = 1.0;
+
+/// Least step, m, at which water standing on a floor above the water below
+/// it is drawn falling rather than sloping: steeper than 45° across a
+/// column.
+const FALL: f64 = 0.5;
+
+/// Whether water at `upper` on a bed at `bed` goes over an edge to water at
+/// `lower`, drawn as a sheet between them rather than a slope: a step over
+/// `JOIN`, or over `FALL` where the upper water's own floor stands above the
+/// lower water, which a slope between them would run through.
+pub(super) fn falls(upper: f64, bed: f64, lower: f64) -> bool {
+    let step = upper - lower;
+    step > JOIN || (step > FALL && bed > lower)
+}
 
 /// Whether a dry cell beside water at `level` is under rock there: its floor
 /// at its column's centre stands at or above the water, so a surface carried
@@ -203,22 +218,22 @@ pub(super) struct Shape {
 /// whose surface stands at `level`.
 ///
 /// Its height is the mean surface of the cell's group among the wet cells,
-/// each weighed by its depth: sorted by surface, split wherever two stand
-/// more than `JOIN` apart, so every cell at a corner sees the same groups.
+/// each weighed by its depth: sorted by surface, split wherever one `falls`
+/// to the next, so every cell at a corner sees the same groups.
 /// Weighed so, a film draining down a bank above deep water barely lifts
 /// the deep water's corner, where a plain mean would stand it in the air
 /// over the slope between them; and a cell only just wet barely moves it. Its depth is the mean over
 /// the cells of each one's depth: a dry one's is zero, or left out where its
 /// floor stands above the water, since the terrain hides the surface there.
 pub(super) fn gather(meetings: &[Meeting], level: f64) -> (Corner, Shape) {
-    let mut surfaces: SmallVec<[(f64, f64); 4]> = meetings
+    let mut surfaces: SmallVec<[(f64, f64, f64); 4]> = meetings
         .iter()
-        .filter_map(|m| Some((m.surface?, m.depth)))
+        .filter_map(|m| Some((m.surface?, m.depth, m.bed)))
         .collect();
     surfaces.sort_by(|a, b| a.0.total_cmp(&b.0));
     let mut group: SmallVec<[(f64, f64); 4]> = SmallVec::new();
-    for (s, d) in surfaces {
-        if group.last().is_some_and(|&(last, _)| s - last > JOIN) {
+    for (s, d, bed) in surfaces {
+        if group.last().is_some_and(|&(last, _)| falls(s, bed, last)) {
             if group.iter().any(|&(g, _)| g == level) {
                 break;
             }
@@ -297,7 +312,7 @@ pub(super) enum VertexSource {
     /// A falling sheet's foot: the lower cell's corner below the sheet's
     /// top, vertex `from`, whose depth and flow it takes. The cells are the
     /// corner's, the lower cell's first. The sheet stands while the wet cell
-    /// `own` it falls from stands more than `JOIN` over the lower one.
+    /// `own` it falls from `falls` to the lower one.
     Foot {
         from: u32,
         cells: SmallVec<[SpanIndex; 4]>,
@@ -413,14 +428,13 @@ pub(super) fn refresh(field: &WaterField, cells: &DrawnCells, mesh: &mut RiverMe
             } => {
                 let meetings: SmallVec<[Meeting; 4]> =
                     at.iter().map(|&c| Meeting::of(cells, c)).collect();
-                let (Some(lower), Some(upper)) =
-                    (meetings[0].surface, Meeting::of(cells, *own).surface)
-                else {
+                let source = Meeting::of(cells, *own);
+                let (Some(lower), Some(upper)) = (meetings[0].surface, source.surface) else {
                     held = false;
                     continue;
                 };
                 let (corner, now) = gather(&meetings, lower);
-                held &= now == *shape && upper - lower > JOIN;
+                held &= now == *shape && falls(upper, source.bed, lower);
                 let top = mesh.vertices[*from as usize];
                 let vertex = &mut mesh.vertices[v];
                 vertex.surface = corner.height as f32;
