@@ -172,15 +172,49 @@ mod tests {
     #[test]
     #[ignore = "release: opens water_park"]
     fn refreshed_surfaces_match_fresh_builds() {
-        let level = load_level(Path::new("levels/water_park.level.ron")).unwrap();
+        let dam = [Point3::new(-52.2, 2.0, 49.8)];
+        assert_refreshes_match("levels/water_park.level.ron", &dam, 180, Some(0));
+    }
+
+    /// The same, over a ditch blasted from thin_ice's lake to the map's
+    /// edge, where the water falls off the map.
+    #[test]
+    #[ignore = "release: opens thin_ice"]
+    fn refreshed_sheets_off_the_map_match_fresh_builds() {
+        let ditch: Vec<_> = (0..10)
+            .map(|i| Point3::new(42.0, 5.0, 82.0 + 1.5 * i as f32))
+            .collect();
+        let parts = assert_refreshes_match("levels/thin_ice.level.ron", &ditch, 600, None);
+        let brinks = parts
+            .parts
+            .values()
+            .flat_map(|p| &p.mesh.sources.vertices)
+            .filter(|v| matches!(v, VertexSource::Brink { .. }))
+            .count();
+        assert!(brinks > 0, "no water falls off the map");
+    }
+
+    /// Blast `blasts` into `level` at frame 30 and run it for `frames`,
+    /// building at most `budget` surfaces afresh a sync beyond those that
+    /// cannot be read; then every surface read again matches the same
+    /// surface built afresh.
+    fn assert_refreshes_match(
+        level: &str,
+        blasts: &[Point3<f32>],
+        frames: usize,
+        budget: Option<usize>,
+    ) -> RiverParts {
+        let level = load_level(Path::new(level)).unwrap();
         let mut terrain = build_terrain(&level);
         let mut water = WaterWorld::from_config(level.water.as_ref().unwrap(), &terrain);
         let mut parts = RiverParts::default();
-        parts.set_budget(Some(0));
+        parts.set_budget(budget);
         let mut refreshed = 0;
-        for frame in 0..180 {
+        for frame in 0..frames {
             if frame == 30 {
-                terrain.detonate(Point3::new(-52.2, 2.0, 49.8), &BlastConfig::default());
+                for &blast in blasts {
+                    terrain.detonate(blast, &BlastConfig::default());
+                }
             }
             terrain.update();
             water.on_terrain_update(&terrain);
@@ -220,6 +254,7 @@ mod tests {
             compared += 1;
         }
         assert!(compared > 0);
+        parts
     }
 
     /// Farthest apart two surfaces may stand where they meet on a chunk's

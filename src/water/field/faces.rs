@@ -70,6 +70,15 @@ pub struct SeaBoundary {
     pub open: [bool; 4],
 }
 
+/// What a cell standing on `bed` at the map's edge in `direction` (an
+/// index into `ORTHOGONAL`) lets its water out to: the sea's level, or
+/// `Some(None)` for the void; `None` where the edge is a wall below sea level.
+pub fn past_edge(sea: Option<SeaBoundary>, direction: usize, bed: f32) -> Option<Option<f32>> {
+    let outside = sea.filter(|sea| sea.open[direction]).map(|sea| sea.level);
+    let walled = outside.is_none() && sea.is_some_and(|sea| bed < sea.level);
+    (!walled).then_some(outside)
+}
+
 /// The axis and sign of an orthogonal step.
 fn axis_of(step: Step) -> (Axis, f32) {
     match (step.di, step.dk) {
@@ -93,11 +102,9 @@ pub fn lay_faces(chunk: &mut FieldChunk, graph: &SpanGraph, sea: Option<SeaBound
             let next = column.offset(step.di, step.dk);
             let (axis, sign) = axis_of(*step);
             if !graph.contains_column(next) || graph.spans(next).is_empty() {
-                let outside = sea.filter(|sea| sea.open[direction]).map(|sea| sea.level);
-                let walled = outside.is_none() && sea.is_some_and(|sea| here.bed < sea.level);
-                if walled {
+                let Some(outside) = past_edge(sea, direction, here.bed) else {
                     continue;
-                }
+                };
                 boundary.push(BoundaryFace {
                     cell: flat as u32,
                     axis,

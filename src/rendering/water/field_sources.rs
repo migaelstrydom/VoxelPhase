@@ -161,6 +161,15 @@ pub(super) fn shore_depth(
 /// draw cuts it where it only trickles.
 const FULL_POUR: f64 = 1.0;
 
+/// How far a sheet falling into the void past the map's edge hangs, m.
+const VOID_DROP: f64 = 6.0;
+
+/// The water a surface at `level` falls to off the map's edge: the sea's
+/// level `outside`, or `VOID_DROP` below where there is none.
+pub(super) fn off_map(level: f64, outside: Option<f64>) -> f64 {
+    outside.unwrap_or(level - VOID_DROP)
+}
+
 /// How deep a sheet falling from cell `own` over the edge facing `face` is
 /// drawn: the water's depth there by its speed out over the edge, over
 /// `FULL_POUR`.
@@ -319,6 +328,14 @@ pub(super) enum VertexSource {
         shape: Shape,
         own: SpanIndex,
     },
+    /// The foot of a sheet falling off the map's edge: vertex `from`, the
+    /// sheet's top, lowered to the water `outside` (`off_map`). The sheet
+    /// stands while the wet cell `own` it falls from `falls` to it.
+    Brink {
+        from: u32,
+        own: SpanIndex,
+        outside: Option<f64>,
+    },
 }
 
 /// A built surface's vertex sources, and what else must hold for its shape
@@ -438,6 +455,19 @@ pub(super) fn refresh(field: &WaterField, cells: &DrawnCells, mesh: &mut RiverMe
                 let top = mesh.vertices[*from as usize];
                 let vertex = &mut mesh.vertices[v];
                 vertex.surface = corner.height as f32;
+                vertex.depth = top.depth;
+                vertex.flow = top.flow;
+            }
+            &VertexSource::Brink { from, own, outside } => {
+                let source = Meeting::of(cells, own);
+                let Some(upper) = source.surface else {
+                    held = false;
+                    continue;
+                };
+                held &= falls(upper, source.bed, off_map(upper, outside));
+                let top = mesh.vertices[from as usize];
+                let vertex = &mut mesh.vertices[v];
+                vertex.surface = off_map(top.surface as f64, outside) as f32;
                 vertex.depth = top.depth;
                 vertex.flow = top.flow;
             }

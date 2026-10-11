@@ -139,6 +139,9 @@ pipeline, with no new shader:
 - a sheet down any edge where one falls to the next, as deep as the water pours
   over it, hung out at the lip where the lower column's own floor carries the
   ledge on (each span keeps a bed per quarter of its square for this);
+- a sheet off the map's edge where a cell's water leaves through it: down to
+  the sea's level past an open edge, or 6 m into the void where there is no
+  sea (the same `falls` rule, so water level with the sea draws none);
 - a shore patch half a column into each dry column beside a wet cell, and a
   quarter into each diagonal one between two dry sides.
 

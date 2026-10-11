@@ -8,6 +8,8 @@
 //!            ──▶ a sheet down their shared edge, from the upper surface's
 //!                corners to the lower's: water going over the edge, hung
 //!                out at the lip
+//!   wet cell at the map's edge, its water leaving
+//!            ──▶ a sheet off the edge, down to the sea or into the void
 //!   dry column beside one, or diagonal to it between two dry sides
 //!            ──▶ a shore patch carrying the cell's surface half a column
 //!                into it: drawn on into rock, which hides it; cut over a
@@ -29,7 +31,7 @@
 use nalgebra::Vector2;
 use smallvec::SmallVec;
 
-use crate::water::field::{DrawnDepths, WaterField};
+use crate::water::field::{past_edge, DrawnDepths, WaterField};
 use crate::water::geometry::{Column, SpanIndex, SpanRef, Step, COLUMN_SIZE, ORTHOGONAL};
 use crate::water::ids::SurfaceId;
 use crate::water::surface::Swell;
@@ -207,6 +209,17 @@ impl<'a> FieldScene<'a> {
             }
         }
 
+        let graph = self.field.graph();
+        for (direction, step) in ORTHOGONAL.iter().enumerate() {
+            let next = column.offset(step.di, step.dk);
+            if graph.contains_column(next) && !graph.spans(next).is_empty() {
+                continue;
+            }
+            if let Some(outside) = past_edge(self.field.sea(), direction, drawn.bed(at)) {
+                self.brink(mesh, *step, first, at, outside);
+            }
+        }
+
         self.shore(mesh, column, level, first);
     }
 
@@ -339,14 +352,7 @@ impl FieldScene<'_> {
         own: SpanIndex,
         (lower_span, lower_level): (SpanRef, f64),
     ) {
-        // The edge's ends, as this cell's corner indices and as the sides of
-        // the lower cell's column they lie on.
-        let ends: [(usize, (i32, i32)); 2] = match (step.di, step.dk) {
-            (1, _) => [(1, (-1, -1)), (2, (-1, 1))],
-            (-1, _) => [(0, (1, -1)), (3, (1, 1))],
-            (_, 1) => [(3, (-1, -1)), (2, (1, -1))],
-            _ => [(0, (-1, 1)), (1, (1, 1))],
-        };
+        let ends = edge_ends(step);
         let offsets = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
         let (x0, z0) = column.min_corner();
         let face = Vector2::new(step.di as f32, step.dk as f32);
@@ -370,21 +376,7 @@ impl FieldScene<'_> {
             mesh.indices
                 .extend_from_slice(&[a, b, base + 1, a, base + 1, base]);
         }
-        let base = mesh.vertices.len() as u32;
-        let pour = field_sources::pour(self.field, &self.drawn_cells(), own, face);
-        for (&(i, _), shift) in ends.iter().zip(shift) {
-            let top = mesh.vertices[(first as usize) + i];
-            mesh.vertices.push(RiverVertex {
-                xz: top.xz + shift,
-                face,
-                depth: top.depth.min(pour),
-                ..top
-            });
-            mesh.sources.vertices.push(VertexSource::Lip {
-                from: first + i as u32,
-                own,
-            });
-        }
+        let base = self.lip_vertices(mesh, first, own, ends, shift, face);
         for (end, &(i, (sx, sz))) in ends.iter().enumerate().rev() {
             let (foot, _, source) = self.corner(lower_span, lower_level, sx, sz);
             let VertexSource::Corner { cells, shape } = source else {
@@ -409,6 +401,91 @@ impl FieldScene<'_> {
         }
         mesh.indices
             .extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+    }
+}
+
+impl FieldScene<'_> {
+    /// The tops of a sheet falling from cell `own` over the edge facing
+    /// `face`: its corners at `ends` (vertex `first + i`) moved out by
+    /// `shift`, as deep as the water pours over the edge. Returns the first.
+    fn lip_vertices(
+        &self,
+        mesh: &mut RiverMesh,
+        first: u32,
+        own: SpanIndex,
+        ends: [(usize, (i32, i32)); 2],
+        shift: [Vector2<f32>; 2],
+        face: Vector2<f32>,
+    ) -> u32 {
+        let base = mesh.vertices.len() as u32;
+        let pour = field_sources::pour(self.field, &self.drawn_cells(), own, face);
+        for (&(i, _), shift) in ends.iter().zip(shift) {
+            let top = mesh.vertices[(first as usize) + i];
+            mesh.vertices.push(RiverVertex {
+                xz: top.xz + shift,
+                face,
+                depth: top.depth.min(pour),
+                ..top
+            });
+            mesh.sources.vertices.push(VertexSource::Lip {
+                from: first + i as u32,
+                own,
+            });
+        }
+        base
+    }
+
+    /// A sheet of water falling off the map's edge across `step`, from the
+    /// cell's own corners on that edge (vertex `first + i`) down to the
+    /// water `outside`: the sea's level, or `VOID_DROP` below the cell's
+    /// surface where nothing lies beyond. Drawn where the cell `falls` to it,
+    /// as deep as the water pours out.
+    fn brink(
+        &self,
+        mesh: &mut RiverMesh,
+        step: Step,
+        first: u32,
+        own: SpanIndex,
+        outside: Option<f32>,
+    ) {
+        let drawn = self.drawn_cells();
+        let level = drawn.surface(own);
+        let outside = outside.map(f64::from);
+        if !falls(
+            level,
+            drawn.bed(own) as f64,
+            field_sources::off_map(level, outside),
+        ) {
+            return;
+        }
+        let ends = edge_ends(step);
+        let face = Vector2::new(step.di as f32, step.dk as f32);
+        let base = self.lip_vertices(mesh, first, own, ends, [Vector2::zeros(); 2], face);
+        for end in (0..2).rev() {
+            let top = mesh.vertices[base as usize + end];
+            mesh.vertices.push(RiverVertex {
+                surface: field_sources::off_map(top.surface as f64, outside) as f32,
+                ..top
+            });
+            mesh.sources.vertices.push(VertexSource::Brink {
+                from: base + end as u32,
+                own,
+                outside,
+            });
+        }
+        mesh.indices
+            .extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+    }
+}
+
+/// The ends of a cell's edge across `step`: as the cell's corner indices,
+/// and as the sides of the neighbouring column they lie on.
+fn edge_ends(step: Step) -> [(usize, (i32, i32)); 2] {
+    match (step.di, step.dk) {
+        (1, _) => [(1, (-1, -1)), (2, (-1, 1))],
+        (-1, _) => [(0, (1, -1)), (3, (1, 1))],
+        (_, 1) => [(3, (-1, -1)), (2, (1, -1))],
+        _ => [(0, (-1, 1)), (1, (1, 1))],
     }
 }
 

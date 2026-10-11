@@ -2,7 +2,8 @@
 //! the chunks whose water moved, so that queries and the mesher look it up.
 //!
 //! On each axis, a cell's velocity is the mean over its faces of the
-//! discharge over the mean depth either side, taken as at least
+//! discharge over the mean depth either side (its own, at the map's edge),
+//! taken as at least
 //! `MEASURED_DEPTH`: dividing by a film's own depth would make a trickle a
 //! torrent, and a film that moves still reads as moving.
 
@@ -71,6 +72,17 @@ pub fn refresh(cells: &mut FieldCells, slots: &[usize]) {
             if let Some(tally) = tallies[face.b.slot as usize].as_mut() {
                 tally[face.b.flat as usize].add(face.axis, u);
             }
+        }
+    }
+    for &slot in slots {
+        let chunk = &cells.chunks[slot];
+        let Some(tally) = tallies[slot].as_mut() else {
+            continue;
+        };
+        for face in &chunk.boundary {
+            let depth = chunk.depth[face.cell as usize];
+            let u = face.outward * face.q / depth.max(MEASURED_DEPTH) as f32;
+            tally[face.cell as usize].add(face.axis, u);
         }
     }
     for &slot in slots {
