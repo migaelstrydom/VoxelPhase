@@ -1,12 +1,13 @@
 //! The frame's prediction: pick a source, fly its launch, keep the landing.
 
-use nalgebra::Point3;
+use nalgebra::{Point3, Vector3};
 use specs::{Join, Read, ReadExpect, ReadStorage, System, Write};
 
 use crate::camera::FollowTarget;
 use crate::character::grab::GrabConfig;
 use crate::character::{facing_from_rotation, ArmState, CharacterIntent, CharacterState};
 use crate::components::{Position, RigidBodyComponent, Rotation};
+use crate::debug::DebugLog;
 use crate::player::Player;
 use crate::projectile::GrenadeConfig;
 use crate::sensing::{ProbeSet, ProbeTarget};
@@ -34,6 +35,7 @@ pub struct AimPredictionSystem {
 impl<'a> System<'a> for AimPredictionSystem {
     type SystemData = (
         Write<'a, AimState>,
+        Write<'a, DebugLog>,
         ReadExpect<'a, PhysicsResource>,
         ReadExpect<'a, GrenadeConfig>,
         ReadExpect<'a, GrabConfig>,
@@ -50,6 +52,7 @@ impl<'a> System<'a> for AimPredictionSystem {
     fn run(&mut self, data: Self::SystemData) {
         let (
             mut aim,
+            mut debug_log,
             physics,
             grenade_config,
             grab_config,
@@ -79,6 +82,7 @@ impl<'a> System<'a> for AimPredictionSystem {
             self.gate.reset();
             return;
         };
+        debug_log.add("Player/Position", format_point(&position.0));
 
         if !self
             .gate
@@ -130,5 +134,13 @@ impl<'a> System<'a> for AimPredictionSystem {
                 kind: source.kind(),
                 impact,
             });
+        if let Some(solution) = &aim.solution {
+            debug_log.add("Aim/Landing", format_point(&solution.impact.point.coords));
+        }
     }
+}
+
+/// A point as `x,y,z`, the form the tools' `--blast` and `--eye` take.
+fn format_point(p: &Vector3<f32>) -> String {
+    format!("{:.2},{:.2},{:.2}", p.x, p.y, p.z)
 }
