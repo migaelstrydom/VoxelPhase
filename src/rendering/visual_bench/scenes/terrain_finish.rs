@@ -218,7 +218,7 @@ fn description() -> Terrain {
         // covering the remainder means no sample can reach the fallback.
         bedrock_thickness: GROUND_HEIGHT - STACK_DEPTH,
         surface_bands: Vec::new(),
-        smooth_slopes: false,
+        smooth_slopes: true,
         features: Vec::new(),
         volumes: Vec::new(),
     }

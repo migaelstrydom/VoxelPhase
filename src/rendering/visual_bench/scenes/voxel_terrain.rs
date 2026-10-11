@@ -232,7 +232,7 @@ fn description() -> Terrain {
         ],
         bedrock_thickness: 0.0,
         surface_bands: Vec::new(),
-        smooth_slopes: false,
+        smooth_slopes: true,
         features: vec![
             cliff(),
             TerrainFeature::TerrainRoughness {

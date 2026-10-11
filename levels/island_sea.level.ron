@@ -38,8 +38,6 @@ Level(
                     (depth: 2.5,   material: Dirt),
                     (depth: 999.0, material: Rock),
                 ],
-                // Slopes and cliffs mesh smooth, not in half-voxel steps.
-                smooth_slopes: true,
                 surface_bands: [
                     // Cliffs are bare rock.
                     (steeper_than: Some(1.5), layers: [(depth: 999.0, material: Rock)]),

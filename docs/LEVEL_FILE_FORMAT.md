@@ -582,10 +582,10 @@ Two terrain-level settings go with them:
   `below` a height (sand under a coast line), `steeper_than` a slope (bare
   rock on cliffs), or both. The first band that holds a column wins; columns
   no band holds take `material_layers`.
-- `smooth_slopes: true` encodes the surface by its distance across the slope,
-  so steep heightfield slopes mesh as smooth faces rather than half-voxel
-  steps. Off by default: it also leans a plateau's wall across the voxel at
-  its edge.
+- `smooth_slopes` (on by default) encodes the surface by its distance across
+  the slope, so steep heightfield slopes mesh as smooth faces rather than
+  half-voxel steps. It also leans a plateau's wall across the voxel at its
+  edge; `smooth_slopes: false` stands it at the voxel's middle again.
 
 ### Pass 2: Volumetric Features
 

@@ -232,8 +232,9 @@ pub struct Terrain {
     /// Encode the heightfield's surface by its distance across the slope
     /// rather than straight down, so slopes steeper than one in one mesh as
     /// smooth faces instead of half-voxel steps. A plateau's wall then leans
-    /// across the voxel at its edge instead of standing at its middle.
-    #[serde(default)]
+    /// across the voxel at its edge instead of standing at its middle. On
+    /// unless a level turns it off.
+    #[serde(default = "default_smooth_slopes")]
     pub smooth_slopes: bool,
     /// Thickness of the indestructible bedrock band at the bottom of `bounds`.
     ///
@@ -253,6 +254,10 @@ pub struct Terrain {
 /// reach through it from above.
 fn default_bedrock_thickness() -> f32 {
     2.0
+}
+
+fn default_smooth_slopes() -> bool {
+    true
 }
 
 /// Maps a depth range below the terrain surface to a voxel material.
