@@ -31,6 +31,13 @@ One cell per span, holding a depth. Faces join spans in orthogonally adjacent co
 by the span graph's own rule, and carry a discharge. Nothing else is state: there are
 no stores, links, routes or topology.
 
+A cell's depth stands on its span's *bed*: the median height of the span's floor over
+the column's 0.5 m square, by area seen from above. The span itself is found, and
+remapped across edits, at the column's centre, but a centre sample on a terrace can
+land on a riser and make a shelf the column mostly lacks, which held water up to
+0.8 m above the drawn terrain and poured it as a sheet. An edit holds the bed at or
+below its old height.
+
 ```text
   TerrainWorld ──▶ SpanRasteriser ──▶ SpanGraph ──▶ FieldCells (+ faces)
        │ edit           │ re-pair         │ remap        │
@@ -132,9 +139,9 @@ pipeline, with no new shader:
 - a shore patch half a column into each dry column beside a wet cell, and a
   quarter into each diagonal one between two dry sides.
 
-A shore patch over rock (the dry column's floor at its centre stands above the
-water) is never cut: the terrain rising through it draws the shoreline, at
-walls, steps and inside corners alike. Over a hollow below the water its far
+A shore patch over rock (the dry column's bed stands above the water) is never
+cut: the terrain rising through it draws the shoreline, at walls, steps and inside
+corners alike. Over a hollow below the water its far
 corners carry a negative depth, and the draw's wet range, which discards below
 5 mm, cuts it midway as a contour.
 

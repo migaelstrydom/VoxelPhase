@@ -94,7 +94,7 @@ pub fn lay_faces(chunk: &mut FieldChunk, graph: &SpanGraph, sea: Option<SeaBound
             let (axis, sign) = axis_of(*step);
             if !graph.contains_column(next) || graph.spans(next).is_empty() {
                 let outside = sea.filter(|sea| sea.open[direction]).map(|sea| sea.level);
-                let walled = outside.is_none() && sea.is_some_and(|sea| here.floor_c < sea.level);
+                let walled = outside.is_none() && sea.is_some_and(|sea| here.bed < sea.level);
                 if walled {
                     continue;
                 }

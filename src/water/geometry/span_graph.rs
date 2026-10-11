@@ -366,6 +366,7 @@ mod tests {
     fn span(floor: f32, ceiling: f32) -> Span {
         Span {
             floor_c: floor,
+            bed: floor,
             floor_min: floor,
             floor_max: floor,
             ceiling,

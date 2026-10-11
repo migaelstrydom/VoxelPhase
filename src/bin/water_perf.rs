@@ -10,6 +10,7 @@
 //! cargo run --release --bin water_perf
 //! cargo run --release --bin water_perf -- --level levels/thin_ice.level.ron
 //! cargo run --release --bin water_perf -- --quiet 4 --transient 20
+//! cargo run --release --bin water_perf -- --level levels/water_park.level.ron --blast -48.5,9.45,37.74
 //! ```
 //!
 //! No Vulkan, no window, no ECS. Always measure a release build.
@@ -17,9 +18,12 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use nalgebra::Point3;
+
 use voxel_phase::water_perf::{field_table, run_field_level, Durations};
 
-const USAGE: &str = "usage: water_perf [--level <level.ron>]... [--quiet S] [--transient S]";
+const USAGE: &str =
+    "usage: water_perf [--level <level.ron>]... [--quiet S] [--transient S] [--blast x,y,z]";
 
 /// Every level that has water.
 const DEFAULT_LEVELS: [&str; 8] = [
@@ -37,6 +41,8 @@ const DEFAULT_LEVELS: [&str; 8] = [
 struct Options {
     levels: Vec<PathBuf>,
     durations: Durations,
+    /// Where the grenade goes off; the deepest shore when not given.
+    blast: Option<Point3<f32>>,
 }
 
 fn main() -> ExitCode {
@@ -51,10 +57,14 @@ fn main() -> ExitCode {
     if cfg!(debug_assertions) {
         eprintln!("warning: debug build — timings are not representative; use --release\n");
     }
-    let Options { levels, durations } = options;
+    let Options {
+        levels,
+        durations,
+        blast,
+    } = options;
 
     for level in &levels {
-        match run_field_level(level, durations) {
+        match run_field_level(level, durations, blast) {
             Ok(subject) => println!("{}", field_table(&subject)),
             Err(message) => {
                 eprintln!("error: {message}");
@@ -68,6 +78,7 @@ fn main() -> ExitCode {
 fn parse_args(args: impl Iterator<Item = String>) -> Result<Options, String> {
     let mut levels = Vec::new();
     let mut durations = Durations::default();
+    let mut blast = None;
     let mut args = args.peekable();
     while let Some(arg) = args.next() {
         let mut value = |name: &str| args.next().ok_or(format!("{name} needs a value"));
@@ -75,6 +86,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Options, String> {
             "--level" => levels.push(PathBuf::from(value(&arg)?)),
             "--quiet" => durations.quiet = parse_number(&value(&arg)?)?,
             "--transient" => durations.transient = parse_number(&value(&arg)?)?,
+            "--blast" => blast = Some(parse_point(&value(&arg)?)?),
             "-h" | "--help" => return Err(String::new()),
             other => return Err(format!("unknown argument {other}")),
         }
@@ -82,7 +94,22 @@ fn parse_args(args: impl Iterator<Item = String>) -> Result<Options, String> {
     if levels.is_empty() {
         levels = DEFAULT_LEVELS.iter().map(PathBuf::from).collect();
     }
-    Ok(Options { levels, durations })
+    Ok(Options {
+        levels,
+        durations,
+        blast,
+    })
+}
+
+fn parse_point(text: &str) -> Result<Point3<f32>, String> {
+    let parts: Vec<f32> = text
+        .split(',')
+        .map(parse_number)
+        .collect::<Result<_, _>>()?;
+    match parts[..] {
+        [x, y, z] => Ok(Point3::new(x, y, z)),
+        _ => Err(format!("not a point x,y,z: {text}")),
+    }
 }
 
 fn parse_number<T: std::str::FromStr>(text: &str) -> Result<T, String> {

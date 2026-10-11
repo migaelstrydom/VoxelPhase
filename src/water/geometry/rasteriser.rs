@@ -29,6 +29,10 @@ use super::span_graph::SpanGraph;
 /// silhouette edge, and are dropped as a pair.
 const ZERO_HEIGHT: f32 = 1e-4;
 
+/// Floor seen from above over less of a column than this, m², is too little
+/// to set its bed by.
+const MIN_BED_AREA: f32 = 0.01 * COLUMN_SIZE * COLUMN_SIZE;
+
 /// Height above an old floor at which the remap looks for its new span. Air
 /// on both sides of any edit (§3.2).
 pub const REMAP_EPSILON: f32 = 1e-3;
@@ -464,8 +468,8 @@ impl SpanRasteriser {
         }
     }
 
-    /// Keep a re-paired span's floor from rising above the old span it rests
-    /// on.
+    /// Keep a re-paired span's floor and bed from rising above the old span
+    /// it rests on.
     fn hold_floor(&mut self, column: Column, old: &Span, new: &mut Span, voxel_size: f32) {
         if new.floor_c > old.floor_c {
             let rise = (new.floor_c - old.floor_c) / voxel_size;
@@ -481,8 +485,9 @@ impl SpanRasteriser {
             self.stats.floor_min_holds += 1;
             new.floor_min = old.floor_min;
         }
+        new.bed = new.bed.min(old.bed);
         new.floor_max = new.floor_max.max(new.floor_c);
-        new.floor_min = new.floor_min.min(new.floor_c);
+        new.floor_min = new.floor_min.min(new.floor_c).min(new.bed);
     }
 
     fn report_violation(&mut self, column: Column, old: f32, new: f32) {
@@ -524,6 +529,7 @@ fn pair_column(
         .into_iter()
         .map(|(floor, ceiling)| Span {
             floor_c: floor,
+            bed: floor,
             floor_min: floor,
             floor_max: floor,
             ceiling,
@@ -607,9 +613,15 @@ fn repaired_intervals(
 /// is the floor of other air, such as a cave reaching into the square's
 /// corner, not this span's; a cave's end wall faces up and down by turns all
 /// the way to its roof, so only floor rising above the roof counts.
+///
+/// A span's bed is the median height of the floor in its band, by area seen
+/// from above: the floor under most of the square. Where the band's floor is
+/// all wall, the bed stays at the centre.
 fn fold_floor_bands(spans: &mut [Span], pieces: &[SurfacePiece]) {
     let mut below = f32::NEG_INFINITY;
+    let mut floor: Vec<(f32, f32)> = Vec::new();
     for span in spans.iter_mut() {
+        floor.clear();
         let band_hi = span.ceiling;
         let band_lo = pieces
             .iter()
@@ -625,10 +637,29 @@ fn fold_floor_bands(spans: &mut [Span], pieces: &[SurfacePiece]) {
             if lo <= hi {
                 span.floor_min = span.floor_min.min(lo);
                 span.floor_max = span.floor_max.max(hi);
+                floor.push((piece.y_mean.clamp(lo, hi), piece.area));
             }
+        }
+        if let Some(bed) = median_by_area(&mut floor) {
+            span.bed = bed;
         }
         below = band_hi;
     }
+}
+
+/// The height below which half the area lies, of `(height, area)` pairs; none
+/// where they cover next to no area.
+fn median_by_area(floor: &mut [(f32, f32)]) -> Option<f32> {
+    let total: f32 = floor.iter().map(|f| f.1).sum();
+    if total < MIN_BED_AREA {
+        return None;
+    }
+    floor.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut covered = 0.0;
+    floor.iter().find_map(|&(y, area)| {
+        covered += area;
+        (covered >= 0.5 * total).then_some(y)
+    })
 }
 
 #[cfg(test)]
@@ -677,28 +708,22 @@ mod tests {
         let mut spans = vec![
             Span {
                 floor_c: 0.0,
+                bed: 0.0,
                 floor_min: 0.0,
                 floor_max: 0.0,
                 ceiling: 4.0,
             },
             Span {
                 floor_c: 8.0,
+                bed: 8.0,
                 floor_min: 8.0,
                 floor_max: 8.0,
                 ceiling: f32::INFINITY,
             },
         ];
         let pieces = [
-            SurfacePiece {
-                y_min: -0.3,
-                y_max: 0.2,
-                facing: Facing::Floor,
-            },
-            SurfacePiece {
-                y_min: 7.9,
-                y_max: 8.1,
-                facing: Facing::Floor,
-            },
+            piece(-0.3, 0.2, Facing::Floor),
+            piece(7.9, 8.1, Facing::Floor),
         ];
         fold_floor_bands(&mut spans, &pieces);
         assert_eq!((spans[0].floor_min, spans[0].floor_max), (-0.3, 0.2));
@@ -706,9 +731,16 @@ mod tests {
     }
 
     fn piece(y_min: f32, y_max: f32, facing: Facing) -> SurfacePiece {
+        flat(y_min, y_max, COLUMN_SIZE * COLUMN_SIZE, facing)
+    }
+
+    /// A piece covering `area` of the square, its mean height midway.
+    fn flat(y_min: f32, y_max: f32, area: f32, facing: Facing) -> SurfacePiece {
         SurfacePiece {
             y_min,
             y_max,
+            y_mean: 0.5 * (y_min + y_max),
+            area,
             facing,
         }
     }
@@ -716,6 +748,7 @@ mod tests {
     fn top_span(floor: f32) -> Span {
         Span {
             floor_c: floor,
+            bed: floor,
             floor_min: floor,
             floor_max: floor,
             ceiling: f32::INFINITY,
@@ -747,5 +780,31 @@ mod tests {
         ];
         fold_floor_bands(&mut spans, &pieces);
         assert_eq!(spans[0].floor_min, 2.0);
+    }
+
+    /// A terrace's riser across the centre: the centre stands on the upper
+    /// tread's edge, but most of the square is the lower tread, and the bed
+    /// is that.
+    #[test]
+    fn a_riser_across_the_centre_beds_on_the_wider_tread() {
+        let mut spans = vec![top_span(7.0)];
+        let quarter = 0.25 * COLUMN_SIZE * COLUMN_SIZE;
+        let pieces = [
+            flat(6.1, 6.2, 2.5 * quarter, Facing::Floor),
+            flat(6.2, 7.7, 0.01 * quarter, Facing::Floor),
+            flat(7.7, 7.8, 1.5 * quarter, Facing::Floor),
+        ];
+        fold_floor_bands(&mut spans, &pieces);
+        assert!((spans[0].bed - 6.15).abs() < 1e-5);
+        assert_eq!(spans[0].floor_c, 7.0);
+    }
+
+    /// Floor that is all wall says nothing about where water rests.
+    #[test]
+    fn a_wall_alone_leaves_the_bed_at_the_centre() {
+        let mut spans = vec![top_span(7.0)];
+        let pieces = [flat(6.0, 8.0, 0.0, Facing::Floor)];
+        fold_floor_bands(&mut spans, &pieces);
+        assert_eq!(spans[0].bed, 7.0);
     }
 }

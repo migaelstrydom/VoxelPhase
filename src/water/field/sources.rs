@@ -67,13 +67,13 @@ impl Source {
             return;
         };
         let hit = SpanRef::key(column, ordinal);
-        let floor = graph.span(hit).floor_c;
+        let floor = graph.span(hit).bed;
         let around = graph
             .neighbours(hit)
             .into_iter()
             .map(|n| SpanRef::key(n.span.column, n.span.ordinal))
             .filter(|s| {
-                let rise = graph.span(*s).floor_c - floor;
+                let rise = graph.span(*s).bed - floor;
                 rise < FOOTPRINT_RISE && -rise < FOOTPRINT_DROP
             });
         self.landing = std::iter::once(hit)
@@ -93,7 +93,7 @@ fn trace(graph: &SpanGraph, origin: Point3<f32>, velocity: Vector3<f32>) -> Opti
             return None;
         }
         let span = graph.span_at(column, p.y)?;
-        if graph.span(span).floor_c >= p.y {
+        if graph.span(span).bed >= p.y {
             return Some((column, span.ordinal));
         }
         t += TRACE_STEP;
@@ -133,7 +133,7 @@ impl Sink {
                     continue;
                 }
                 for (ordinal, span) in graph.spans(column).iter().enumerate() {
-                    if (self.min.y..=self.max.y).contains(&span.floor_c) {
+                    if (self.min.y..=self.max.y).contains(&span.bed) {
                         if let Some(at) = cells.index(graph, column, ordinal as u8) {
                             self.cells.push(at);
                         }

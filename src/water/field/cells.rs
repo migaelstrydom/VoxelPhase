@@ -55,7 +55,7 @@ impl FieldChunk {
         offsets.push(0);
         for local in 0..COLUMNS_PER_CHUNK {
             for span in chunk.column_spans(local) {
-                bed.push(span.floor_c);
+                bed.push(span.bed);
                 ceiling.push(span.ceiling);
             }
             offsets.push(bed.len() as u32);

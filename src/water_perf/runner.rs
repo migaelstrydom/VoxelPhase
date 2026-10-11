@@ -95,8 +95,12 @@ pub struct FieldSubject {
     pub lost: f64,
 }
 
-/// A level from disk, blasted on its deepest shore.
-pub fn run_field_level(path: &Path, durations: Durations) -> Result<FieldSubject, String> {
+/// A level from disk, blasted at `site`, or on its deepest shore.
+pub fn run_field_level(
+    path: &Path,
+    durations: Durations,
+    site: Option<Point3<f32>>,
+) -> Result<FieldSubject, String> {
     let level = load_level(path).map_err(|e| e.to_string())?;
     let mut terrain = build_terrain(&level);
     let label = path
@@ -122,7 +126,7 @@ pub fn run_field_level(path: &Path, durations: Durations) -> Result<FieldSubject
     run(&mut terrain, &mut water, frames(WARM_UP));
     let before = water.volume();
     let quiet = run(&mut terrain, &mut water, frames(durations.quiet));
-    let blast_at = shore_site(water.field(), &terrain);
+    let blast_at = site.or_else(|| shore_site(water.field(), &terrain));
     if let Some(at) = blast_at {
         terrain.detonate(at, &BlastConfig::default());
     }

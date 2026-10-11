@@ -44,12 +44,49 @@ pub struct Crossing {
     pub facing: Facing,
 }
 
-/// The height range of one triangle, clipped to one column's square.
+/// One triangle clipped to one column's square.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SurfacePiece {
     pub y_min: f32,
     pub y_max: f32,
+    /// Its mean height over the square, weighted by area seen from above.
+    pub y_mean: f32,
+    /// Its area seen from above, m²; next to none for a wall.
+    pub area: f32,
     pub facing: Facing,
+}
+
+impl SurfacePiece {
+    /// The piece a convex polygon makes.
+    fn of(points: &[[f32; 3]], facing: Facing) -> Self {
+        let (mut y_min, mut y_max) = (f32::INFINITY, f32::NEG_INFINITY);
+        for p in points {
+            y_min = y_min.min(p[1]);
+            y_max = y_max.max(p[1]);
+        }
+        let (mut area, mut weighted) = (0.0, 0.0);
+        let first = points[0];
+        for pair in points[1..].windows(2) {
+            let (b, c) = (pair[0], pair[1]);
+            let cross =
+                (b[0] - first[0]) * (c[2] - first[2]) - (c[0] - first[0]) * (b[2] - first[2]);
+            let a = 0.5 * cross.abs();
+            area += a;
+            weighted += a * (first[1] + b[1] + c[1]) / 3.0;
+        }
+        let y_mean = if area > 0.0 {
+            (weighted / area).clamp(y_min, y_max)
+        } else {
+            0.5 * (y_min + y_max)
+        };
+        Self {
+            y_min,
+            y_max,
+            y_mean,
+            area,
+            facing,
+        }
+    }
 }
 
 /// What one terrain chunk contributes to one column.
@@ -352,8 +389,8 @@ struct Polygon {
     len: usize,
 }
 
-/// The height range of a triangle clipped to a column's square, or `None` if
-/// the two do not overlap.
+/// A triangle clipped to a column's square, or `None` if the two do not
+/// overlap.
 fn clip_to_square(
     vertices: &[Point3<f32>; 3],
     column: Column,
@@ -363,16 +400,7 @@ fn clip_to_square(
     let (x1, z1) = (x0 + COLUMN_SIZE, z0 + COLUMN_SIZE);
     let inside_square = |p: &Point3<f32>| p.x >= x0 && p.x <= x1 && p.z >= z0 && p.z <= z1;
     if vertices.iter().all(inside_square) {
-        let (lo, hi) = vertices
-            .iter()
-            .fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), p| {
-                (lo.min(p.y), hi.max(p.y))
-            });
-        return Some(SurfacePiece {
-            y_min: lo,
-            y_max: hi,
-            facing,
-        });
+        return Some(SurfacePiece::of(&vertices.map(|p| [p.x, p.y, p.z]), facing));
     }
     let mut polygon = Polygon {
         points: [[0.0; 3]; MAX_CLIPPED],
@@ -388,16 +416,7 @@ fn clip_to_square(
             return None;
         }
     }
-    let (y_min, y_max) = polygon.points[..polygon.len]
-        .iter()
-        .fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), p| {
-            (lo.min(p[1]), hi.max(p[1]))
-        });
-    Some(SurfacePiece {
-        y_min,
-        y_max,
-        facing,
-    })
+    Some(SurfacePiece::of(&polygon.points[..polygon.len], facing))
 }
 
 /// One Sutherland–Hodgman pass against an axis-aligned plane.

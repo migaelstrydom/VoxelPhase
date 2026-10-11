@@ -105,6 +105,11 @@ pub struct Span {
     /// The floor at the column centre. The structure, the remap and the
     /// removal-only invariant are all defined here.
     pub floor_c: f32,
+    /// The floor water rests on: the height of the floor under most of the
+    /// column's square, so that a riser crossing the centre does not hold
+    /// water on a shelf the column mostly lacks. Within
+    /// `floor_min..=floor_max`; only drops across an edit.
+    pub bed: f32,
     /// Lowest point of this span's floor anywhere in the column's square.
     /// Saddles use it, so water errs low and never stands in the air.
     pub floor_min: f32,
@@ -282,6 +287,7 @@ mod tests {
     fn csr_returns_each_column_its_own_spans() {
         let span = |y: f32| Span {
             floor_c: y,
+            bed: y,
             floor_min: y,
             floor_max: y,
             ceiling: f32::INFINITY,

@@ -32,8 +32,8 @@ const DRAWN_DEPTH: f64 = 0.002;
 const ROOF_GAP: f64 = 0.01;
 
 /// How far a neighbour's water must stand into a column, above its lowest
-/// floor and below its floor at the centre, and how thin the water on that
-/// centre floor must be, for the column to be drawn as the neighbour's, m.
+/// floor and below its bed, and how thin the water on that bed must be, for
+/// the column to be drawn as the neighbour's, m.
 const PERCH: f64 = 0.1;
 
 /// The field's cells as the surfaces are drawn from them: each depth as it
@@ -73,12 +73,12 @@ impl DrawnCells<'_> {
             && !self.perched(at)
     }
 
-    /// Whether a cell holds only a film perched on its column's floor at the
-    /// centre while a neighbour's water stands in the column below that
-    /// floor, as where a terrace's riser crosses the column's centre: the
-    /// column is then the neighbour's water, drawn on to the riser as its
-    /// shore, since one quad over the column would tilt the neighbour's
-    /// surface up to the film's in front of the riser.
+    /// Whether a cell holds only a film perched on its bed while a
+    /// neighbour's water stands in the column below it, as where a terrace's
+    /// riser crosses a column whose upper tread is the wider: the column is
+    /// then the neighbour's water, drawn on to the riser as its shore, since
+    /// one quad over the column would tilt the neighbour's surface up to the
+    /// film's in front of the riser.
     fn perched(&self, at: SpanIndex) -> bool {
         let bed = self.bed(at) as f64;
         if self.depth(at) >= PERCH {

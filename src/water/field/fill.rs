@@ -35,7 +35,7 @@ impl SpillLevels {
         let mut queue: BinaryHeap<Reverse<(Height, SpanRef)>> = BinaryHeap::new();
         for span in graph.all_refs() {
             if on_map_edge(graph, span.column) {
-                let level = graph.span(span).floor_c.max(floor_at_edge);
+                let level = graph.span(span).bed.max(floor_at_edge);
                 queue.push(Reverse((Height(level), span)));
             }
         }
@@ -50,7 +50,7 @@ impl SpillLevels {
             *slot = level;
             for next in graph.orthogonal_neighbours(span) {
                 let key = SpanRef::key(next.span.column, next.span.ordinal);
-                let through = level.max(next.saddle).max(graph.span(key).floor_c);
+                let through = level.max(next.saddle).max(graph.span(key).bed);
                 queue.push(Reverse((Height(through), key)));
             }
         }
@@ -98,7 +98,7 @@ fn fill_under(
     let mut seen: FxHashSet<SpanRef> = FxHashSet::default();
     let mut stack: Vec<SpanRef> = Vec::new();
     for &seed in seeds {
-        if graph.span(seed).floor_c < surface(cells, seed) && seen.insert(seed) {
+        if graph.span(seed).bed < surface(cells, seed) && seen.insert(seed) {
             stack.push(seed);
         }
     }
@@ -106,15 +106,13 @@ fn fill_under(
         let here = *graph.span(span);
         let level = surface(cells, span);
         if let Some(at) = cells.index(graph, span.column, span.ordinal) {
-            let depth = (level.min(here.ceiling) - here.floor_c).max(0.0) as f64;
+            let depth = (level.min(here.ceiling) - here.bed).max(0.0) as f64;
             let cell = cells.depth_mut(at);
             *cell = cell.max(depth);
         }
         for next in graph.orthogonal_neighbours(span) {
             let key = SpanRef::key(next.span.column, next.span.ordinal);
-            if next.saddle < level
-                && graph.span(key).floor_c < surface(cells, key)
-                && seen.insert(key)
+            if next.saddle < level && graph.span(key).bed < surface(cells, key) && seen.insert(key)
             {
                 stack.push(key);
             }
@@ -154,7 +152,7 @@ pub fn fill_fed(
         let mut members = Vec::new();
         let mut crest = f32::NEG_INFINITY;
         seen.insert(seed);
-        queue.push(Reverse((Height(graph.span(seed).floor_c), seed)));
+        queue.push(Reverse((Height(graph.span(seed).bed), seed)));
         let mut spill = None;
         let mut beyond: FxHashSet<SpanRef> = FxHashSet::default();
         let mut off_map = false;
@@ -164,7 +162,7 @@ pub fn fill_fed(
             if spill.is_some() && entry > crest + LIP_BAND {
                 break;
             }
-            if graph.span(span).floor_c < crest - CREST_DROP {
+            if graph.span(span).bed < crest - CREST_DROP {
                 spill.get_or_insert(span);
                 beyond.insert(span);
                 continue;
@@ -180,7 +178,7 @@ pub fn fill_fed(
             for next in graph.orthogonal_neighbours(span) {
                 let key = SpanRef::key(next.span.column, next.span.ordinal);
                 if seen.insert(key) {
-                    let floor = graph.span(key).floor_c;
+                    let floor = graph.span(key).bed;
                     queue.push(Reverse((Height(next.saddle.max(floor)), key)));
                 }
             }
@@ -200,7 +198,7 @@ pub fn fill_fed(
         for &span in &members {
             let here = graph.span(span);
             if let Some(at) = cells.index(graph, span.column, span.ordinal) {
-                let depth = (level.min(here.ceiling) - here.floor_c).max(0.0) as f64;
+                let depth = (level.min(here.ceiling) - here.bed).max(0.0) as f64;
                 let cell = cells.depth_mut(at);
                 *cell = cell.max(depth);
             }
@@ -222,7 +220,7 @@ fn lip_width(
 ) -> f32 {
     let lips = members
         .iter()
-        .filter(|&&span| (graph.span(span).floor_c - crest).abs() <= LIP_BAND)
+        .filter(|&&span| (graph.span(span).bed - crest).abs() <= LIP_BAND)
         .filter(|&&span| {
             graph
                 .orthogonal_neighbours(span)
@@ -267,14 +265,14 @@ fn bottom(graph: &SpanGraph, span: SpanRef) -> SpanRef {
 fn descent(graph: &SpanGraph, mut span: SpanRef) -> Vec<SpanRef> {
     let mut path = vec![span];
     loop {
-        let floor = graph.span(span).floor_c;
+        let floor = graph.span(span).bed;
         let lowest = graph
             .orthogonal_neighbours(span)
             .into_iter()
             .map(|n| SpanRef::key(n.span.column, n.span.ordinal))
-            .min_by(|a, b| graph.span(*a).floor_c.total_cmp(&graph.span(*b).floor_c));
+            .min_by(|a, b| graph.span(*a).bed.total_cmp(&graph.span(*b).bed));
         match lowest {
-            Some(next) if graph.span(next).floor_c < floor => {
+            Some(next) if graph.span(next).bed < floor => {
                 span = next;
                 path.push(span);
             }
@@ -300,7 +298,7 @@ fn wet_channel(
     let q = discharge / width;
     let reach = (0.5 * width / COLUMN_SIZE).round() as i32;
     for pair in path.windows(2) {
-        let (from, to) = (graph.span(pair[0]).floor_c, graph.span(pair[1]).floor_c);
+        let (from, to) = (graph.span(pair[0]).bed, graph.span(pair[1]).bed);
         let slope = ((from - to) / COLUMN_SIZE).max(LEAST_SLOPE);
         let level = to + (q * manning_n / slope.sqrt()).powf(0.6);
         let centre = pair[1].column;
@@ -310,7 +308,7 @@ fn wet_channel(
         while let Some(span) = stack.pop() {
             let here = graph.span(span);
             if let Some(at) = cells.index(graph, span.column, span.ordinal) {
-                let depth = (level.min(here.ceiling) - here.floor_c).max(0.0) as f64;
+                let depth = (level.min(here.ceiling) - here.bed).max(0.0) as f64;
                 let cell = cells.depth_mut(at);
                 *cell = cell.max(depth);
             }
@@ -319,7 +317,7 @@ fn wet_channel(
                 let near = (key.column.i - centre.i)
                     .abs()
                     .max((key.column.k - centre.k).abs());
-                if near <= reach && graph.span(key).floor_c < level && seen.insert(key) {
+                if near <= reach && graph.span(key).bed < level && seen.insert(key) {
                     stack.push(key);
                 }
             }
