@@ -53,6 +53,8 @@ pub struct SurfacePiece {
     pub y_mean: f32,
     /// Its area seen from above, m²; next to none for a wall.
     pub area: f32,
+    /// Where its area lies seen from above: the centroid's x and z.
+    pub centre: [f32; 2],
     pub facing: Facing,
 }
 
@@ -64,7 +66,7 @@ impl SurfacePiece {
             y_min = y_min.min(p[1]);
             y_max = y_max.max(p[1]);
         }
-        let (mut area, mut weighted) = (0.0, 0.0);
+        let (mut area, mut weighted, mut centre) = (0.0, 0.0, [0.0, 0.0]);
         let first = points[0];
         for pair in points[1..].windows(2) {
             let (b, c) = (pair[0], pair[1]);
@@ -73,7 +75,18 @@ impl SurfacePiece {
             let a = 0.5 * cross.abs();
             area += a;
             weighted += a * (first[1] + b[1] + c[1]) / 3.0;
+            centre[0] += a * (first[0] + b[0] + c[0]) / 3.0;
+            centre[1] += a * (first[2] + b[2] + c[2]) / 3.0;
         }
+        let n = points.len() as f32;
+        let centre = if area > 0.0 {
+            centre.map(|c| c / area)
+        } else {
+            [
+                points.iter().map(|p| p[0]).sum::<f32>() / n,
+                points.iter().map(|p| p[2]).sum::<f32>() / n,
+            ]
+        };
         let y_mean = if area > 0.0 {
             (weighted / area).clamp(y_min, y_max)
         } else {
@@ -84,6 +97,7 @@ impl SurfacePiece {
             y_max,
             y_mean,
             area,
+            centre,
             facing,
         }
     }

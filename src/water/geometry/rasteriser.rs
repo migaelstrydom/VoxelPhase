@@ -530,12 +530,13 @@ fn pair_column(
         .map(|(floor, ceiling)| Span {
             floor_c: floor,
             bed: floor,
+            quarters: [floor; 4],
             floor_min: floor,
             floor_max: floor,
             ceiling,
         })
         .collect();
-    fold_floor_bands(&mut spans, pieces);
+    fold_floor_bands(column, &mut spans, pieces);
     PairedColumn { spans, repaired }
 }
 
@@ -616,12 +617,19 @@ fn repaired_intervals(
 ///
 /// A span's bed is the median height of the floor in its band, by area seen
 /// from above: the floor under most of the square. Where the band's floor is
-/// all wall, the bed stays at the centre.
-fn fold_floor_bands(spans: &mut [Span], pieces: &[SurfacePiece]) {
+/// all wall, the bed stays at the centre. Each quarter's bed is the same
+/// median over the pieces whose area lies mostly in that quarter.
+fn fold_floor_bands(column: Column, spans: &mut [Span], pieces: &[SurfacePiece]) {
+    let (x0, z0) = column.min_corner();
+    let mid = (x0 + 0.5 * COLUMN_SIZE, z0 + 0.5 * COLUMN_SIZE);
+    let quarter =
+        |p: &SurfacePiece| (p.centre[0] >= mid.0) as usize + 2 * (p.centre[1] >= mid.1) as usize;
     let mut below = f32::NEG_INFINITY;
     let mut floor: Vec<(f32, f32)> = Vec::new();
+    let mut quarters: [Vec<(f32, f32)>; 4] = Default::default();
     for span in spans.iter_mut() {
         floor.clear();
+        quarters.iter_mut().for_each(Vec::clear);
         let band_hi = span.ceiling;
         let band_lo = pieces
             .iter()
@@ -637,21 +645,26 @@ fn fold_floor_bands(spans: &mut [Span], pieces: &[SurfacePiece]) {
             if lo <= hi {
                 span.floor_min = span.floor_min.min(lo);
                 span.floor_max = span.floor_max.max(hi);
-                floor.push((piece.y_mean.clamp(lo, hi), piece.area));
+                let y = piece.y_mean.clamp(lo, hi);
+                floor.push((y, piece.area));
+                quarters[quarter(piece)].push((y, piece.area));
             }
         }
-        if let Some(bed) = median_by_area(&mut floor) {
+        if let Some(bed) = median_by_area(&mut floor, MIN_BED_AREA) {
             span.bed = bed;
+        }
+        for (q, floor) in quarters.iter_mut().enumerate() {
+            span.quarters[q] = median_by_area(floor, 0.25 * MIN_BED_AREA).unwrap_or(span.bed);
         }
         below = band_hi;
     }
 }
 
 /// The height below which half the area lies, of `(height, area)` pairs; none
-/// where they cover next to no area.
-fn median_by_area(floor: &mut [(f32, f32)]) -> Option<f32> {
+/// where they cover less than `least`.
+fn median_by_area(floor: &mut [(f32, f32)], least: f32) -> Option<f32> {
     let total: f32 = floor.iter().map(|f| f.1).sum();
-    if total < MIN_BED_AREA {
+    if total < least {
         return None;
     }
     floor.sort_by(|a, b| a.0.total_cmp(&b.0));
@@ -709,6 +722,7 @@ mod tests {
             Span {
                 floor_c: 0.0,
                 bed: 0.0,
+                quarters: [0.0; 4],
                 floor_min: 0.0,
                 floor_max: 0.0,
                 ceiling: 4.0,
@@ -716,6 +730,7 @@ mod tests {
             Span {
                 floor_c: 8.0,
                 bed: 8.0,
+                quarters: [8.0; 4],
                 floor_min: 8.0,
                 floor_max: 8.0,
                 ceiling: f32::INFINITY,
@@ -725,7 +740,7 @@ mod tests {
             piece(-0.3, 0.2, Facing::Floor),
             piece(7.9, 8.1, Facing::Floor),
         ];
-        fold_floor_bands(&mut spans, &pieces);
+        fold_floor_bands(Column::new(0, 0), &mut spans, &pieces);
         assert_eq!((spans[0].floor_min, spans[0].floor_max), (-0.3, 0.2));
         assert_eq!((spans[1].floor_min, spans[1].floor_max), (7.9, 8.1));
     }
@@ -741,6 +756,7 @@ mod tests {
             y_max,
             y_mean: 0.5 * (y_min + y_max),
             area,
+            centre: [0.5 * COLUMN_SIZE; 2],
             facing,
         }
     }
@@ -749,6 +765,7 @@ mod tests {
         Span {
             floor_c: floor,
             bed: floor,
+            quarters: [floor; 4],
             floor_min: floor,
             floor_max: floor,
             ceiling: f32::INFINITY,
@@ -765,7 +782,7 @@ mod tests {
             piece(1.9, 4.0, Facing::Ceiling),
             piece(9.9, 10.0, Facing::Floor),
         ];
-        fold_floor_bands(&mut spans, &pieces);
+        fold_floor_bands(Column::new(0, 0), &mut spans, &pieces);
         assert_eq!((spans[0].floor_min, spans[0].floor_max), (9.9, 10.0));
     }
 
@@ -778,7 +795,7 @@ mod tests {
             piece(2.0, 2.1, Facing::Floor),
             piece(9.9, 10.0, Facing::Floor),
         ];
-        fold_floor_bands(&mut spans, &pieces);
+        fold_floor_bands(Column::new(0, 0), &mut spans, &pieces);
         assert_eq!(spans[0].floor_min, 2.0);
     }
 
@@ -794,7 +811,7 @@ mod tests {
             flat(6.2, 7.7, 0.01 * quarter, Facing::Floor),
             flat(7.7, 7.8, 1.5 * quarter, Facing::Floor),
         ];
-        fold_floor_bands(&mut spans, &pieces);
+        fold_floor_bands(Column::new(0, 0), &mut spans, &pieces);
         assert!((spans[0].bed - 6.15).abs() < 1e-5);
         assert_eq!(spans[0].floor_c, 7.0);
     }
@@ -804,7 +821,27 @@ mod tests {
     fn a_wall_alone_leaves_the_bed_at_the_centre() {
         let mut spans = vec![top_span(7.0)];
         let pieces = [flat(6.0, 8.0, 0.0, Facing::Floor)];
-        fold_floor_bands(&mut spans, &pieces);
+        fold_floor_bands(Column::new(0, 0), &mut spans, &pieces);
         assert_eq!(spans[0].bed, 7.0);
+    }
+
+    /// A step along the square's x midline: the −x quarters are the low
+    /// tread and the +x quarters the high one, whatever the centre says.
+    #[test]
+    fn each_quarter_beds_on_its_own_tread() {
+        let mut spans = vec![top_span(7.0)];
+        let quarter = 0.25 * COLUMN_SIZE * COLUMN_SIZE;
+        let at = |x: f32, z: f32, y: f32| SurfacePiece {
+            centre: [x * COLUMN_SIZE, z * COLUMN_SIZE],
+            ..flat(y, y, quarter, Facing::Floor)
+        };
+        let pieces = [
+            at(0.25, 0.25, 6.0),
+            at(0.25, 0.75, 6.0),
+            at(0.75, 0.25, 7.5),
+            at(0.75, 0.75, 7.5),
+        ];
+        fold_floor_bands(Column::new(0, 0), &mut spans, &pieces);
+        assert_eq!(spans[0].quarters, [6.0, 7.5, 6.0, 7.5]);
     }
 }

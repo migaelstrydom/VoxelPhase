@@ -110,6 +110,11 @@ pub struct Span {
     /// water on a shelf the column mostly lacks. Within
     /// `floor_min..=floor_max`; only drops across an edit.
     pub bed: f32,
+    /// The bed of each quarter of the column's square, by the same rule,
+    /// for drawing where the floor steps within the column: index
+    /// `x + 2·z`, each 1 on the quarter's + side. A quarter whose floor is
+    /// all wall takes the span's bed.
+    pub quarters: [f32; 4],
     /// Lowest point of this span's floor anywhere in the column's square.
     /// Saddles use it, so water errs low and never stands in the air.
     pub floor_min: f32,
@@ -288,6 +293,7 @@ mod tests {
         let span = |y: f32| Span {
             floor_c: y,
             bed: y,
+            quarters: [y; 4],
             floor_min: y,
             floor_max: y,
             ceiling: f32::INFINITY,

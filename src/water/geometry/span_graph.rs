@@ -367,6 +367,7 @@ mod tests {
         Span {
             floor_c: floor,
             bed: floor,
+            quarters: [floor; 4],
             floor_min: floor,
             floor_max: floor,
             ceiling,

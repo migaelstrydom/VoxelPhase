@@ -324,6 +324,11 @@ impl FieldScene<'_> {
     /// surfaces. It is as deep as the water pours over the edge, no deeper
     /// than the water it falls from, so it is cut where little or nothing
     /// pours.
+    ///
+    /// Where the lower column's own floor carries the ledge on (`lip`), each
+    /// end of the sheet hangs out at the lip instead, and the cell's surface
+    /// runs on over the ledge to meet it. The ledge is told by the two beds
+    /// alone, so the sheet keeps its place while the water moves.
     fn sheet(
         &self,
         mesh: &mut RiverMesh,
@@ -344,11 +349,32 @@ impl FieldScene<'_> {
         let offsets = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
         let (x0, z0) = column.min_corner();
         let face = Vector2::new(step.di as f32, step.dk as f32);
+        let lower = self.field.graph().span(lower_span);
+        let ledge = 0.5 * (self.field.cells().bed(own) + lower.bed);
+        let quarters = lower.quarters;
+        let shift = ends.map(|(_, sides)| face * lip(step, sides, &quarters, ledge) * COLUMN_SIZE);
+        if shift.iter().any(|s| *s != Vector2::zeros()) {
+            let base = mesh.vertices.len() as u32;
+            for (&(i, _), shift) in ends.iter().zip(shift) {
+                let top = mesh.vertices[(first as usize) + i];
+                mesh.vertices.push(RiverVertex {
+                    xz: top.xz + shift,
+                    ..top
+                });
+                mesh.sources.vertices.push(VertexSource::Edge {
+                    from: first + i as u32,
+                });
+            }
+            let [a, b] = ends.map(|(i, _)| first + i as u32);
+            mesh.indices
+                .extend_from_slice(&[a, b, base + 1, a, base + 1, base]);
+        }
         let base = mesh.vertices.len() as u32;
         let pour = field_sources::pour(self.field, &self.drawn_cells(), own, face);
-        for &(i, _) in &ends {
+        for (&(i, _), shift) in ends.iter().zip(shift) {
             let top = mesh.vertices[(first as usize) + i];
             mesh.vertices.push(RiverVertex {
+                xz: top.xz + shift,
                 face,
                 depth: top.depth.min(pour),
                 ..top
@@ -369,7 +395,7 @@ impl FieldScene<'_> {
             let top = mesh.vertices[base as usize + end];
             let (cx, cz) = offsets[i];
             mesh.vertices.push(RiverVertex {
-                xz: Vector2::new(x0 + cx * COLUMN_SIZE, z0 + cz * COLUMN_SIZE),
+                xz: Vector2::new(x0 + cx * COLUMN_SIZE, z0 + cz * COLUMN_SIZE) + shift[end],
                 surface: foot.height as f32,
                 ..top
             });
@@ -382,6 +408,20 @@ impl FieldScene<'_> {
         }
         mesh.indices
             .extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+    }
+}
+
+/// How far past the edge into the lower column across `step` its floor
+/// stands above `ledge`, in columns, along the row of quarters from the end
+/// of the edge on the lower column's `sides`: where the ledge the water
+/// falls from really ends.
+fn lip(step: Step, (sx, sz): (i32, i32), quarters: &[f32; 4], ledge: f32) -> f32 {
+    let near = (sx > 0) as usize + 2 * (sz > 0) as usize;
+    let far = near ^ if step.di != 0 { 1 } else { 2 };
+    match (quarters[near] > ledge, quarters[far] > ledge) {
+        (false, _) => 0.0,
+        (true, false) => 0.5,
+        (true, true) => 1.0,
     }
 }
 

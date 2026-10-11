@@ -135,7 +135,8 @@ pipeline, with no new shader:
 - each corner is the mean surface of its group among the cells meeting there,
   split where two surfaces differ by more than 1 m;
 - a sheet down any edge where they differ by more, as deep as the water pours
-  over it;
+  over it, hung out at the lip where the lower column's own floor carries the
+  ledge on (each span keeps a bed per quarter of its square for this);
 - a shore patch half a column into each dry column beside a wet cell, and a
   quarter into each diagonal one between two dry sides.
 
