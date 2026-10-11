@@ -239,7 +239,7 @@ mod tests {
     use crate::level_check::build_terrain;
     use crate::water::WaterWorld;
 
-    /// A splash on island_sea's pool wakes a tile, whose ripples spread
+    /// A splash on island_sea's open sea wakes a tile, whose ripples spread
     /// out from it and move the surface floating bodies read.
     #[test]
     #[ignore = "release: opens island_sea"]
@@ -247,8 +247,8 @@ mod tests {
         let level = load_level(Path::new("levels/island_sea.level.ron")).unwrap();
         let terrain = build_terrain(&level);
         let mut water = WaterWorld::from_config(level.water.as_ref().unwrap(), &terrain);
-        let at = Point3::new(-4.0, 1.0, 12.0);
-        let still = water.query().level_at(at).expect("the pool is wet there");
+        let at = Point3::new(-30.0, 0.0, 36.0);
+        let still = water.query().level_at(at).expect("the sea is wet there");
         water.apply(&Disturbances {
             pending: vec![(at, 0.5, Disturbance::Velocity(-3.0))],
         });
@@ -256,7 +256,7 @@ mod tests {
         let mut moved: f32 = 0.0;
         for _ in 0..60 {
             water.step(1.0 / 60.0);
-            let ring = water.query().sample(Point3::new(-2.5, 1.0, 12.0)).unwrap();
+            let ring = water.query().sample(Point3::new(-28.5, 0.0, 36.0)).unwrap();
             moved = moved.max((ring.surface - still).abs());
         }
         assert!(moved > 1.0e-3, "1.5 m out the surface moved {moved} m");

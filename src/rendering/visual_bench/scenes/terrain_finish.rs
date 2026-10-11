@@ -217,6 +217,8 @@ fn description() -> Terrain {
         // shows up as a stray ring of dirt in the middle of the dish. Bedrock
         // covering the remainder means no sample can reach the fallback.
         bedrock_thickness: GROUND_HEIGHT - STACK_DEPTH,
+        surface_bands: Vec::new(),
+        smooth_slopes: false,
         features: Vec::new(),
         volumes: Vec::new(),
     }

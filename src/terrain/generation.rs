@@ -15,7 +15,10 @@ use nalgebra::Point3;
 
 use super::chunk::{ChunkCoord, CHUNK_VOXELS};
 use super::chunk_grid::ChunkGrid;
-use super::csg::{carve_with_sdf, debias_height, index_range, sample_range, union_solid};
+use super::csg::{
+    carve_with_sdf, debias_height, index_range, sample_range, union_solid, SURFACE_BAND,
+};
+use super::landform::{Basin, Channel, Landmass};
 use super::traversal::{excavate, rasterise, route_plan, RoutePart};
 use super::voxel::{Voxel, VoxelMaterial};
 use crate::collision::AABB;
@@ -105,10 +108,8 @@ fn generate_heightfield(grid: &mut ChunkGrid, terrain: &Terrain, bounds: &AABB, 
     let chunk_x = (div_floor(ix0, n), div_floor(ix1 - 1, n));
     let chunk_z = (div_floor(iz0, n), div_floor(iz1 - 1, n));
 
-    // Per voxel column within one chunk column: surface height and the index of
-    // the topmost solid voxel.
-    let mut heights: Vec<f32> = Vec::new();
-    let mut tops: Vec<i32> = Vec::new();
+    // Per voxel column within one chunk column.
+    let mut columns: Vec<Column> = Vec::new();
 
     for cx in chunk_x.0..=chunk_x.1 {
         let xs = (cx * n).max(ix0);
@@ -125,27 +126,18 @@ fn generate_heightfield(grid: &mut ChunkGrid, terrain: &Terrain, bounds: &AABB, 
             }
 
             // Evaluate the heightfield once for this chunk column.
-            heights.clear();
-            tops.clear();
+            columns.clear();
             let mut top_index = iy0;
             for ix in xs..xe {
                 for iz in zs..ze {
-                    // Debiased before anything is derived from it: an authored
-                    // height that lands exactly on a lattice plane degenerates
-                    // marching cubes, and the column's indices below must
-                    // describe the height actually encoded.
-                    let height =
-                        debias_height(height_at(ix as f32 * step, iz as f32 * step, terrain), step);
-                    // Topmost solid voxel: the last index strictly below `height`.
-                    let top = (((height / step).ceil() as i32) - 1).max(iy0);
-                    heights.push(height);
-                    tops.push(top);
-                    top_index = top_index.max(top + 1);
+                    let column = Column::at(ix as f32 * step, iz as f32 * step, iy0, step, terrain);
+                    top_index = top_index.max(column.air_top + 1);
+                    columns.push(column);
                 }
             }
 
             // Only the chunks between the floor and the highest surface (plus the
-            // partial-air voxel above it) hold anything.
+            // partial-air voxels above it) hold anything.
             let cy_lo = div_floor(iy0, n);
             let cy_hi = div_floor(top_index.min(iy1 - 1), n);
 
@@ -157,48 +149,42 @@ fn generate_heightfield(grid: &mut ChunkGrid, terrain: &Terrain, bounds: &AABB, 
                 }
 
                 let chunk = grid.chunk_or_insert(ChunkCoord::new(cx, cy, cz));
-                let mut column = 0usize;
+                let mut index = 0usize;
                 for ix in xs..xe {
                     let x = ix as f32 * step;
                     for iz in zs..ze {
                         let z = iz as f32 * step;
-                        let height = heights[column];
-                        let top = tops[column];
-                        column += 1;
+                        let column = &columns[index];
+                        index += 1;
 
-                        let top_voxel_y = top as f32 * step;
-                        // Index of the partial-air voxel capping this column,
-                        // present only where the column has at least one solid
-                        // voxel and the cap still lies inside the bounds.
-                        let air_index = (top_voxel_y < height && top + 1 < iy1).then_some(top + 1);
+                        let top_voxel_y = column.top as f32 * step;
+                        // A column wholly below the floor holds nothing.
+                        if top_voxel_y >= column.height {
+                            continue;
+                        }
 
-                        for iy in ys..ye.min(top + 2) {
+                        for iy in ys..ye.min(column.air_top + 1) {
                             let y = iy as f32 * step;
-                            if y < height {
+                            let density = column.density_at(y, step);
+                            if y < column.height {
                                 let depth = top_voxel_y - y;
                                 let material = if y <= floor_y + terrain.bedrock_thickness {
                                     VoxelMaterial::Bedrock
                                 } else {
-                                    material_at_depth(depth, &terrain.material_layers)
+                                    material_at_depth(depth, column.layers)
                                 };
                                 let mut voxel = Voxel::solid(material);
-                                // Topmost voxel: encode the sub-voxel surface offset
-                                // as an SDF density so marching cubes lands the
-                                // triangle at y = height instead of at the midpoint
-                                // between solid and air corners.
-                                if y + step > height {
-                                    voxel.density =
-                                        ((height - y) / step).clamp(f32::MIN_POSITIVE, 1.0);
-                                }
+                                // Near the surface, the SDF density lands
+                                // marching cubes' triangle at y = height instead
+                                // of at the midpoint between solid and air.
+                                voxel.density = density.max(f32::MIN_POSITIVE);
                                 chunk.set_voxel(Point3::new(x, y, z), voxel);
-                            } else if air_index == Some(iy) {
-                                // Matching partial-air voxel directly above the
-                                // surface so the MC edge interpolates to exactly
-                                // y = height.
+                            } else {
+                                // The matching partial-air voxels above it.
                                 chunk.set_voxel(
                                     Point3::new(x, y, z),
                                     Voxel {
-                                        density: ((height - y) / step).clamp(-1.0, 0.0),
+                                        density: density.min(0.0),
                                         material: VoxelMaterial::Air,
                                     },
                                 );
@@ -208,6 +194,68 @@ fn generate_heightfield(grid: &mut ChunkGrid, terrain: &Terrain, bounds: &AABB, 
                 }
             }
         }
+    }
+}
+
+/// One voxel column of the heightfield: where its surface is and how it is
+/// encoded.
+struct Column<'a> {
+    /// Surface height, debiased off the lattice planes.
+    height: f32,
+    /// Index of the topmost solid voxel: the last strictly below `height`.
+    top: i32,
+    /// Index of the topmost partial-air voxel above the surface.
+    air_top: i32,
+    /// Vertical metres per metre of distance from the surface:
+    /// `sqrt(1 + slope²)` with `Terrain::smooth_slopes`, else 1.
+    stretch: f32,
+    /// The layers the column is laid with.
+    layers: &'a [MaterialLayer],
+}
+
+impl<'a> Column<'a> {
+    fn at(x: f32, z: f32, iy0: i32, step: f32, terrain: &'a Terrain) -> Self {
+        // Debiased before anything is derived from it: an authored height
+        // that lands exactly on a lattice plane degenerates marching cubes, and
+        // the column's indices must describe the height actually encoded.
+        let height = debias_height(height_at(x, z, terrain), step);
+        let needs_slope = terrain.smooth_slopes
+            || terrain
+                .surface_bands
+                .iter()
+                .any(|band| band.steeper_than.is_some());
+        let slope = if needs_slope {
+            surface_slope(x, z, step, terrain)
+        } else {
+            0.0
+        };
+        let stretch = if terrain.smooth_slopes {
+            slope.hypot(1.0)
+        } else {
+            1.0
+        };
+        let top = (((height / step).ceil() as i32) - 1).max(iy0);
+        // The last lattice plane within one voxel's distance above the surface.
+        let air_top = ((((height + step * stretch) / step).ceil() as i32) - 1).max(top + 1);
+        Self {
+            height,
+            top,
+            air_top,
+            stretch,
+            layers: surface_layers(height, slope, terrain),
+        }
+    }
+
+    /// Density at height `y`: the signed distance to the surface in voxels,
+    /// saturating at one. Vertical distance over `stretch` is the distance
+    /// across a uniform slope, which lets marching cubes place a steep face
+    /// between columns where it crosses, not at the midpoint between them.
+    ///
+    /// Held out of [`SURFACE_BAND`] on its own side: `debias_height` keeps the
+    /// vertical distance out of it, and the stretch would shrink it back in.
+    fn density_at(&self, y: f32, step: f32) -> f32 {
+        let density = ((self.height - y) / (step * self.stretch)).clamp(-1.0, 1.0);
+        density.signum() * density.abs().max(SURFACE_BAND)
     }
 }
 
@@ -229,6 +277,24 @@ fn height_at(x: f32, z: f32, terrain: &Terrain) -> f32 {
         h += contribute(feature, x, z, h);
     }
     h
+}
+
+/// The layers that lay a column whose surface stands at `height` with
+/// `slope`: the first surface band holding it, or the terrain's own.
+fn surface_layers(height: f32, slope: f32, terrain: &Terrain) -> &[MaterialLayer] {
+    terrain
+        .surface_bands
+        .iter()
+        .find(|band| band.holds(height, slope))
+        .map_or(&terrain.material_layers, |band| &band.layers)
+}
+
+/// Steepness of the heightfield at (x, z), rise over run, from the heights a
+/// voxel away on either side.
+fn surface_slope(x: f32, z: f32, step: f32, terrain: &Terrain) -> f32 {
+    let along_x = height_at(x + step, z, terrain) - height_at(x - step, z, terrain);
+    let along_z = height_at(x, z + step, terrain) - height_at(x, z - step, terrain);
+    along_x.hypot(along_z) / (2.0 * step)
 }
 
 /// Compute the additive height contribution of a single terrain feature.
@@ -405,6 +471,57 @@ fn contribute(feature: &TerrainFeature, x: f32, z: f32, current_h: f32) -> f32 {
             let target = low_height + (high_height - low_height) * t + noise_offset;
             (target - current_h) * end_factor
         }
+
+        TerrainFeature::Landmass {
+            ref outline,
+            shore_height,
+            height,
+            rise,
+            skirt,
+            warp,
+            relief,
+            seed,
+        } => Landmass {
+            outline,
+            shore_height,
+            height,
+            rise,
+            skirt,
+            warp,
+            relief,
+            seed,
+        }
+        .contribute(x, z, current_h),
+
+        TerrainFeature::Channel {
+            ref points,
+            width,
+            bank,
+            warp,
+            seed,
+        } => Channel {
+            points,
+            width,
+            bank,
+            warp,
+            seed,
+        }
+        .contribute(x, z, current_h),
+
+        TerrainFeature::Basin {
+            center,
+            radius,
+            floor,
+            warp,
+            seed,
+        } => Basin {
+            center,
+            radius,
+            floor,
+            warp,
+            seed,
+        }
+        .contribute(x, z, current_h),
     }
 }
 
@@ -1228,7 +1345,14 @@ fn point_to_segment_dist(px: f32, pz: f32, ax: f32, az: f32, bx: f32, bz: f32) -
 
 /// Project point (px, pz) onto segment (ax, az)→(bx, bz).
 /// Returns (t, perpendicular_distance) where t is the clamped [0,1] parameter.
-fn point_to_segment_projection(px: f32, pz: f32, ax: f32, az: f32, bx: f32, bz: f32) -> (f32, f32) {
+pub(super) fn point_to_segment_projection(
+    px: f32,
+    pz: f32,
+    ax: f32,
+    az: f32,
+    bx: f32,
+    bz: f32,
+) -> (f32, f32) {
     let abx = bx - ax;
     let abz = bz - az;
     let len_sq = abx * abx + abz * abz;

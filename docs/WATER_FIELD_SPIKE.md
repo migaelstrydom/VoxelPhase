@@ -194,7 +194,7 @@ level (release, one thread):
 
 | level | opening | quiet, mean / p99 | blast frame | after the blast, mean / p99 |
 |---|---|---|---|---|
-| island_sea | 0.29 s | 1.6 / 2.0 ms | 5.5 ms | 3.8 / 4.4 ms |
+| island_sea | 1.0 s | 5.2 / 6.2 ms | 9.5 ms | 6.0 / 7.8 ms |
 | water_park | 2.7 s | 3.8 / 4.6 ms | 4.3 ms | 4.0 / 4.8 ms |
 | thin_ice | 36 ms | 0.6 / 1.4 ms | 6.7 ms | 1.4 / 2.3 ms |
 | swim_test | 15 ms | 0.2 / 0.6 ms | 3.2 ms | 1.8 / 2.7 ms |

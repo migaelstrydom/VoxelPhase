@@ -22,6 +22,7 @@ mod fragment;
 mod fragment_mesh;
 mod frame;
 pub mod generation;
+mod landform;
 mod marching_cubes;
 mod mesh_octree;
 mod occupancy;

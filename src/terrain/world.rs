@@ -1647,6 +1647,8 @@ mod tests {
                 },
                 base_height: 0.0,
                 material_layers: Vec::new(),
+                surface_bands: Vec::new(),
+                smooth_slopes: false,
                 features: Vec::new(),
                 volumes: Vec::new(),
             };
@@ -1763,6 +1765,8 @@ mod tests {
             },
             base_height,
             material_layers: Vec::new(),
+            surface_bands: Vec::new(),
+            smooth_slopes: false,
             features: Vec::new(),
             volumes: Vec::new(),
         }

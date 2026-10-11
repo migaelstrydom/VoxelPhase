@@ -17,8 +17,8 @@
 //! cargo run --bin level_viewer -- levels/subsidence.level.ron --tiles --columns 2
 //! cargo run --bin level_viewer -- levels/subsidence.level.ron --shot pit_rim --width 1200 --height 800
 //! cargo run --bin level_viewer -- levels/subsidence.level.ron --eye 60,20,40 --look 74,10,62
-//! cargo run --bin level_viewer -- levels/island_sea.level.ron --eye 0,4,20 --look 0,0,8 --blast 0,0,6 --run 10
-//! cargo run --bin level_viewer -- levels/island_sea.level.ron --eye 0,4,20 --look 0,0,8 --splash 0,0,6 --run 1.5
+//! cargo run --bin level_viewer -- levels/island_sea.level.ron --eye 32,8,14 --look 24,2,1 --blast 21,3,5 --run 10
+//! cargo run --bin level_viewer -- levels/island_sea.level.ron --eye 32,8,14 --look 24,2,1 --splash 24,3,1 --run 1.5
 //! ```
 
 use std::path::{Path, PathBuf};

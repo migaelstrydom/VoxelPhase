@@ -566,6 +566,26 @@ Each feature modifies the height at (x, z) additively. Features are evaluated in
 | **Wall** | Thin raised strip along a line segment | from/to (xz), height, thickness |
 | **Ramp** | Linear height gradient between two points | from/to (xz), start/end height, width |
 | **TerrainRoughness** | FBM noise layer for natural surface variation | frequency, amplitude, octaves, seed |
+| **Cliff** | Sigmoid step between two heights along a line | from/to (xz), low/high height, high_side, steepness, end_falloff, roughness |
+| **Landmass** | Land rising inside a noise-warped outline; raises only | outline (xz polygon), shore_height, height, rise, skirt, warp, relief, seed |
+| **Channel** | Watercourse cut along a polyline to absolute bed heights; lowers only. A step in the bed is a fall | points (x, bed y, z), width, bank, warp, seed |
+| **Basin** | Level-floored hollow with an irregular rim: a tarn, a plunge pool; lowers only | center (xz), radius, floor, warp, seed |
+
+The landforms (`Landmass`, `Channel`, `Basin`, in `terrain/landform.rs`) are
+for natural ground: absolute heights, outlines a domain warp keeps from
+looking drawn, and one direction each, so the list reads as union and carve.
+`levels/island_sea.level.ron` is built from them.
+
+Two terrain-level settings go with them:
+
+- `surface_bands` lays a column with other layers by where its surface lies:
+  `below` a height (sand under a coast line), `steeper_than` a slope (bare
+  rock on cliffs), or both. The first band that holds a column wins; columns
+  no band holds take `material_layers`.
+- `smooth_slopes: true` encodes the surface by its distance across the slope,
+  so steep heightfield slopes mesh as smooth faces rather than half-voxel
+  steps. Off by default: it also leans a plateau's wall across the voxel at
+  its edge.
 
 ### Pass 2: Volumetric Features
 

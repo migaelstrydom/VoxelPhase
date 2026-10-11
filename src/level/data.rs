@@ -222,6 +222,19 @@ pub struct Terrain {
     /// Material layering by depth below the surface.
     #[serde(default)]
     pub material_layers: Vec<MaterialLayer>,
+    /// Material layering by where a column's surface lies: the first band
+    /// that holds the column lays its layers in place of `material_layers`,
+    /// as bare rock on cliffs and sand under a coast line. A column no band
+    /// holds takes `material_layers`. Heightfield only: volumes keep
+    /// `material_layers`.
+    #[serde(default)]
+    pub surface_bands: Vec<SurfaceBand>,
+    /// Encode the heightfield's surface by its distance across the slope
+    /// rather than straight down, so slopes steeper than one in one mesh as
+    /// smooth faces instead of half-voxel steps. A plateau's wall then leans
+    /// across the voxel at its edge instead of standing at its middle.
+    #[serde(default)]
+    pub smooth_slopes: bool,
     /// Thickness of the indestructible bedrock band at the bottom of `bounds`.
     ///
     /// The floor of the world rather than a durability tier: it exists so the
@@ -251,6 +264,29 @@ pub struct MaterialLayer {
     /// after the first unreachable, silently.
     pub depth: f32,
     pub material: VoxelMaterialId,
+}
+
+/// The surface layers of the columns whose surface meets a band's conditions:
+/// every condition given must hold.
+#[derive(Deserialize)]
+pub struct SurfaceBand {
+    /// Absolute height the column's surface must lie below.
+    #[serde(default)]
+    pub below: Option<f32>,
+    /// Slope (rise over run) the column's surface must exceed, as on a cliff,
+    /// where soil would not stay.
+    #[serde(default)]
+    pub steeper_than: Option<f32>,
+    /// Layers by depth, as `Terrain::material_layers`.
+    pub layers: Vec<MaterialLayer>,
+}
+
+impl SurfaceBand {
+    /// Whether a surface at `height` with `slope` lies in this band.
+    pub fn holds(&self, height: f32, slope: f32) -> bool {
+        self.below.is_none_or(|below| height < below)
+            && self.steeper_than.is_none_or(|steepest| slope > steepest)
+    }
 }
 
 /// Voxel material identifiers matching the engine's `VoxelMaterial` enum.
@@ -346,6 +382,72 @@ pub enum TerrainFeature {
         /// Noise seed for face roughness.
         #[serde(default = "default_cliff_seed")]
         roughness_seed: u32,
+    },
+
+    // --- Landforms --------------------------------------------------------
+    //
+    // Shapes with natural outlines, set in absolute heights. A landmass only
+    // ever raises the ground and a channel or basin only ever lowers it, so
+    // they compose by order like union and carve. See `terrain::landform`.
+    /// Land rising inside an outline: a coast and the country behind it.
+    Landmass {
+        /// Closed outline in (x, z), in order around the land. The coast
+        /// stands at `shore_height` on it.
+        outline: Vec<(f32, f32)>,
+        /// Absolute height on the outline.
+        shore_height: f32,
+        /// Absolute height inland, once the land has risen.
+        height: f32,
+        /// Distance inland over which the land rises from `shore_height` to
+        /// `height`. A short rise is a cliff.
+        rise: f32,
+        /// Distance outside the outline over which the coast falls back to
+        /// the ground. Zero ends the land in a wall at the outline.
+        #[serde(default)]
+        skirt: f32,
+        /// How far noise moves the outline in and out (m): coves and
+        /// headlands finer than the outline's own points.
+        #[serde(default)]
+        warp: f32,
+        /// Amplitude of rolling relief inland (m), fading to none at the coast.
+        #[serde(default)]
+        relief: f32,
+        /// Noise seed for warp and relief.
+        #[serde(default)]
+        seed: u32,
+    },
+    /// A watercourse cut along a polyline: a river bed, a gully, a ravine.
+    Channel {
+        /// Centreline in (x, bed height, z). The bed runs linearly between
+        /// points, so two points close together at different heights make a
+        /// fall.
+        points: Vec<(f32, f32, f32)>,
+        /// Full width of the flat bed.
+        width: f32,
+        /// Horizontal width of each bank, over which the cut rises back to
+        /// the ground. A narrow bank is a steep wall.
+        bank: f32,
+        /// How far noise moves the channel's edges (m).
+        #[serde(default)]
+        warp: f32,
+        /// Noise seed for the warp.
+        #[serde(default)]
+        seed: u32,
+    },
+    /// A hollow with a level floor and an irregular rim: a tarn, a plunge pool.
+    Basin {
+        center: (f32, f32),
+        /// Mean radius of the rim, where the hollow meets the ground. The
+        /// floor is level over the inner half.
+        radius: f32,
+        /// Absolute height of the floor.
+        floor: f32,
+        /// How far noise moves the rim in and out (m).
+        #[serde(default)]
+        warp: f32,
+        /// Noise seed for the warp.
+        #[serde(default)]
+        seed: u32,
     },
 }
 
