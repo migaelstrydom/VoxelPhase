@@ -22,7 +22,7 @@ use super::drive::{
     DriveCommand, ReactionAnchor, SupportConfig, SupportResolver, SupportSets, TractionLedger,
     TractionPlanner, TractionUsage,
 };
-use super::force_provider::{ForceContext, ForceOutput, SubstepForceProvider};
+use super::force_provider::{ForceContext, ForceOutput, MediumDrag, SubstepForceProvider};
 use super::grounding::{GroundedBodies, GroundingDetector};
 use super::handle::{ColliderHandle, RigidBodyHandle};
 use super::impact::ImpactLedger;
@@ -1244,7 +1244,7 @@ impl PhysicsWorld {
         for (_, body) in self.bodies.iter_mut() {
             body.set_force(Vector3::zeros());
             body.set_torque(Vector3::zeros());
-            body.set_drag(0.0, 0.0, Vector3::zeros());
+            body.set_drag(MediumDrag::NONE);
         }
 
         if providers.is_empty() {
@@ -1272,11 +1272,7 @@ impl PhysicsWorld {
             if let Some(body) = self.bodies.get_mut(handle.0) {
                 body.set_force(output.force);
                 body.set_torque(output.torque);
-                body.set_drag(
-                    output.linear_drag_coeff,
-                    output.angular_drag_coeff,
-                    output.drag_velocity,
-                );
+                body.set_drag(output.drag);
             }
         }
     }

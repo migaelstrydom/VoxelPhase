@@ -20,18 +20,40 @@ pub struct ForceContext<'a> {
     pub gravity_magnitude: f32,
 }
 
+/// Drag from the medium a body moves through: it relaxes the body's velocity
+/// and spin towards the medium's own, exactly however stiff the drag is
+/// against the body's mass and inertia, so water carries a light body at its
+/// own speed and spins it no faster than it moves past it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MediumDrag {
+    /// Linear drag per unit velocity relative to `velocity`, N·s/m.
+    pub linear: f32,
+    /// Angular drag per unit angular velocity relative to `spin`,
+    /// N·m·s/rad.
+    pub angular: f32,
+    /// Velocity of the medium, m/s: a current or a falling stream.
+    pub velocity: nalgebra::Vector3<f32>,
+    /// Spin the medium drives the body towards, rad/s: zero in still
+    /// water; where a stream strikes a body off its centre, the spin at
+    /// which the struck side moves with the water.
+    pub spin: nalgebra::Vector3<f32>,
+}
+
+impl MediumDrag {
+    /// No medium.
+    pub const NONE: Self = Self {
+        linear: 0.0,
+        angular: 0.0,
+        velocity: nalgebra::Vector3::new(0.0, 0.0, 0.0),
+        spin: nalgebra::Vector3::new(0.0, 0.0, 0.0),
+    };
+}
+
 /// Mutable target for a single body's force output.
 pub struct ForceOutput {
     pub force: nalgebra::Vector3<f32>,
     pub torque: nalgebra::Vector3<f32>,
-    /// Linear drag per unit velocity relative to `drag_velocity`, N·s/m.
-    pub linear_drag_coeff: f32,
-    pub angular_drag_coeff: f32,
-    /// Velocity of the medium the linear drag acts relative to, m/s: a
-    /// current or a falling stream. The body relaxes towards it exactly
-    /// however strong the drag, so a light body in fast water is carried at
-    /// the water's speed, never past it.
-    pub drag_velocity: nalgebra::Vector3<f32>,
+    pub drag: MediumDrag,
 }
 
 impl ForceOutput {
@@ -39,9 +61,7 @@ impl ForceOutput {
         Self {
             force: nalgebra::Vector3::zeros(),
             torque: nalgebra::Vector3::zeros(),
-            linear_drag_coeff: 0.0,
-            angular_drag_coeff: 0.0,
-            drag_velocity: nalgebra::Vector3::zeros(),
+            drag: MediumDrag::NONE,
         }
     }
 }

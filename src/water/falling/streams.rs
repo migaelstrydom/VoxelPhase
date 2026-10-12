@@ -41,6 +41,9 @@ pub struct Strike {
     pub velocity: Vector3<f32>,
     /// The area of the body's section it strikes, m².
     pub area: f32,
+    /// The middle of where it strikes, in the body's section through the
+    /// sphere's centre: off the centre, it turns the body.
+    pub at: Point3<f32>,
 }
 
 impl Strike {
@@ -117,14 +120,19 @@ impl Stream {
         if offset.dot(&tangent).abs() > half_side {
             return None;
         }
+        // The span of the square and the stream's section that overlap,
+        // along each axis of the section, from the sphere's centre.
         let overlap = |at: f32, half: f32| {
-            ((at + half_side).min(half) - (at - half_side).max(-half)).max(0.0)
+            let (low, high) = ((at - half_side).max(-half), (at + half_side).min(half));
+            ((high - low).max(0.0), 0.5 * (low + high) - at)
         };
-        let area = overlap(offset.dot(&slab.across), slab.half_length)
-            * overlap(offset.dot(&slab.over), slab.half_thickness);
+        let (along, along_middle) = overlap(offset.dot(&slab.across), slab.half_length);
+        let (over, over_middle) = overlap(offset.dot(&slab.over), slab.half_thickness);
+        let area = along * over;
         (area > 0.0).then_some(Strike {
             velocity: slab.velocity,
             area,
+            at: centre + slab.across * along_middle + slab.over * over_middle,
         })
     }
 }
@@ -354,6 +362,18 @@ mod tests {
     }
 
     #[test]
+    fn a_body_reaching_past_its_end_is_struck_on_the_side_it_reaches_in() {
+        let stream = curtain();
+        let middle = stream.path.at(stream.path.time_at(7.0)).centre;
+        // Half a sphere past the curtain's end, along the lip (z).
+        let centre = middle + Vector3::z() * 0.3;
+        let strike = stream
+            .strike(centre, 0.3)
+            .expect("its near side is in the curtain");
+        assert!(strike.at.z < centre.z - 0.05, "struck at {}", strike.at);
+    }
+
+    #[test]
     fn a_body_beside_or_behind_it_is_not() {
         let stream = curtain();
         let at = stream.path.at(stream.path.time_at(7.0)).centre;
@@ -380,6 +400,7 @@ mod tests {
         let strike = Strike {
             velocity: Vector3::new(0.0, -8.0, 0.0),
             area: 0.1,
+            at: Point3::origin(),
         };
         let drag = strike.drag_coeff(Vector3::zeros(), 1000.0);
         assert!((drag * 8.0 - 1000.0 * 0.1 * 64.0).abs() < 1.0e-3);

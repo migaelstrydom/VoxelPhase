@@ -76,7 +76,7 @@ pub use drive::{
     SupportContact, SupportResolver, SupportSet, SupportSets, VerticalProjection, VerticalVerbs,
 };
 pub use energy_audit::{energy_per_kg, EnergyAudit};
-pub use force_provider::{ForceContext, ForceOutput, SubstepForceProvider};
+pub use force_provider::{ForceContext, ForceOutput, MediumDrag, SubstepForceProvider};
 pub use handle::{ColliderHandle, RigidBodyHandle};
 pub use impact::{Impact, ImpactLedger};
 pub use impulses::{PhysicsImpulse, PhysicsImpulseQueue};

@@ -8,6 +8,7 @@ use super::collider::Collider;
 use super::constraint::types::ConstraintHandle;
 use super::drive::allowance::AllowanceCommand;
 use super::drive::command::VerticalVerbs;
+use super::force_provider::MediumDrag;
 use super::handle::ColliderHandle;
 use super::math::{integrate_orientation, skew, transform_inertia_tensor};
 
@@ -214,14 +215,11 @@ pub struct RigidBody {
     force: Vector3<f32>,
     torque: Vector3<f32>,
 
-    // Drag coefficients set by external systems (e.g. water buoyancy).
-    // Applied per substep using current velocity, so drag tracks the body's
-    // actual speed even as it changes within a frame.
-    // F_drag = -linear_drag_coeff * (v - drag_velocity),
-    // τ_drag = -angular_drag_coeff * ω.
-    linear_drag_coeff: f32,
-    angular_drag_coeff: f32,
-    drag_velocity: Vector3<f32>,
+    // Drag set by external systems (e.g. water buoyancy). Applied per
+    // substep using current velocity, so drag tracks the body's actual speed
+    // even as it changes within a frame.
+    // F_drag = -linear * (v - velocity), τ_drag = -angular * (ω - spin).
+    drag: MediumDrag,
 
     // Attached colliders
     colliders: Vec<ColliderHandle>,
@@ -292,9 +290,7 @@ impl RigidBody {
             inv_local_inertia: Matrix3::zeros(),
             force: Vector3::zeros(),
             torque: Vector3::zeros(),
-            linear_drag_coeff: 0.0,
-            angular_drag_coeff: 0.0,
-            drag_velocity: Vector3::zeros(),
+            drag: MediumDrag::NONE,
             colliders: Vec::new(),
             bulk: desc.bulk.map(Box::new),
             drive: None,
@@ -560,13 +556,8 @@ impl RigidBody {
     /// velocity. This ensures drag tracks actual speed even as the body
     /// accelerates within a frame (e.g. a light body bobbing in water).
     ///
-    /// `linear`: drag force magnitude per unit velocity relative to
-    /// `medium`, the velocity of the water or air it acts in (N·s/m).
-    /// `angular`: drag torque magnitude per unit angular velocity (N·m·s/rad).
-    pub fn set_drag(&mut self, linear: f32, angular: f32, medium: Vector3<f32>) {
-        self.linear_drag_coeff = linear;
-        self.angular_drag_coeff = angular;
-        self.drag_velocity = medium;
+    pub fn set_drag(&mut self, drag: MediumDrag) {
+        self.drag = drag;
     }
 
     // === Internal methods ===
@@ -630,22 +621,22 @@ impl RigidBody {
         // Apply all external effects: gravity, accumulated forces, drag.
         self.linear_velocity += gravity * self.gravity_scale * dt;
         self.linear_velocity += self.force * self.inv_mass * dt;
-        if self.linear_drag_coeff > 0.0 {
-            // Exact for the drag alone: the body relaxes towards the medium's
-            // velocity, however stiff the drag is against its mass.
-            let decay = (-self.linear_drag_coeff * self.inv_mass * dt).exp();
-            let medium = self.drag_velocity;
-            self.linear_velocity = medium + (self.linear_velocity - medium) * decay;
+        // Exact for the drag alone: the body relaxes towards the medium's
+        // velocity and spin, however stiff the drag is against its mass.
+        let drag = self.drag;
+        if drag.linear > 0.0 {
+            let decay = (-drag.linear * self.inv_mass * dt).exp();
+            self.linear_velocity = drag.velocity + (self.linear_velocity - drag.velocity) * decay;
         }
 
         self.angular_velocity += self.world_inv_inertia() * self.torque * dt;
-        if self.angular_drag_coeff > 0.0 {
+        if drag.angular > 0.0 {
             // Use the average inverse inertia (trace(I_inv)/3) so that
             // angular drag scales with rotational inertia, not mass.
             let inv_i = self.world_inv_inertia();
             let avg_inv_inertia = (inv_i.m11 + inv_i.m22 + inv_i.m33) / 3.0;
-            let decay = (-self.angular_drag_coeff * avg_inv_inertia * dt).exp();
-            self.angular_velocity *= decay;
+            let decay = (-drag.angular * avg_inv_inertia * dt).exp();
+            self.angular_velocity = drag.spin + (self.angular_velocity - drag.spin) * decay;
         }
 
         // Gyroscopic correction: Euler's equation for rigid body rotation is

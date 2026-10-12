@@ -16,7 +16,8 @@ use nalgebra::{Point3, UnitQuaternion, Vector3};
 use smallvec::SmallVec;
 
 use crate::physics::{
-    ColliderShape, ForceContext, ForceOutput, PhysicsWorld, RigidBodyHandle, SubstepForceProvider,
+    ColliderShape, ForceContext, ForceOutput, MediumDrag, PhysicsWorld, RigidBodyHandle,
+    SubstepForceProvider,
 };
 
 use super::falling::Strike;
@@ -134,6 +135,8 @@ impl SubstepForceProvider for BuoyancyForceProvider<'_> {
         let mut part_count = 0u32;
         let mut strike_drag = 0.0f32;
         let mut strike_carry = Vector3::zeros();
+        let mut strike_turn = Vector3::zeros();
+        let mut strike_spin_drag = 0.0f32;
 
         for part in body.envelope(ctx.colliders) {
             let part_xform = part.world_transform(body_pos, body_rot);
@@ -147,6 +150,16 @@ impl SubstepForceProvider for BuoyancyForceProvider<'_> {
                 let drag = strike.drag_coeff(body.linear_velocity(), self.fluid_density);
                 strike_drag += drag;
                 strike_carry += strike.velocity * drag;
+                // Off the body's centre it turns it, τ = r × c(u − v), until
+                // the struck side moves with the water: spin resisted by c
+                // times the square of the arm square to the water's path.
+                let relative = strike.velocity - body.linear_velocity();
+                let arm = strike.at - body_pos;
+                strike_turn += arm.cross(&(relative * drag));
+                let lever = relative
+                    .try_normalize(1.0e-6)
+                    .map_or(arm, |path| arm - path * arm.dot(&path));
+                strike_spin_drag += drag * lever.norm_squared();
             }
 
             let result = match compute_buoyancy(
@@ -196,22 +209,32 @@ impl SubstepForceProvider for BuoyancyForceProvider<'_> {
         };
 
         // Both drags pull towards their own water's velocity: together, towards
-        // the mean of the two weighed by their strength.
-        let linear_drag_coeff = water_drag + strike_drag;
-        if linear_drag_coeff <= 0.0 && part_count == 0 {
+        // the mean of the two weighed by their strength. Standing water stills
+        // a body's spin; a strike drives it.
+        let linear = water_drag + strike_drag;
+        let angular = angular_drag_coeff + strike_spin_drag;
+        if linear <= 0.0 && part_count == 0 {
             return ForceOutput::zero();
         }
-        let drag_velocity = if linear_drag_coeff > 0.0 {
-            (water_velocity * water_drag + strike_carry) / linear_drag_coeff
+        let velocity = if linear > 0.0 {
+            (water_velocity * water_drag + strike_carry) / linear
+        } else {
+            Vector3::zeros()
+        };
+        let spin = if angular > 0.0 {
+            strike_turn / angular
         } else {
             Vector3::zeros()
         };
         ForceOutput {
             force: total_force,
             torque: total_torque,
-            linear_drag_coeff,
-            angular_drag_coeff,
-            drag_velocity,
+            drag: MediumDrag {
+                linear,
+                angular,
+                velocity,
+                spin,
+            },
         }
     }
 }
@@ -1224,13 +1247,14 @@ mod falling_tests {
     use super::*;
     use crate::debug::DebugLines;
     use crate::physics::bench_harness::geometry::FlatQuadGeometry;
-    use crate::physics::{ColliderDesc, PhysicsConfig, RigidBodyDesc};
+    use crate::physics::{ColliderDesc, ForceContext, PhysicsConfig, RigidBodyDesc};
 
     /// No standing water, and a stream striking everything at `velocity`
-    /// over `area`.
+    /// over `area`, `offset` from the centre of what it strikes.
     struct Stream {
         velocity: Vector3<f32>,
         area: f32,
+        offset: Vector3<f32>,
     }
 
     impl WaterSurface for Stream {
@@ -1242,6 +1266,7 @@ mod falling_tests {
             smallvec![Strike {
                 velocity: self.velocity,
                 area: self.area,
+                at: _centre + self.offset,
             }]
         }
     }
@@ -1249,6 +1274,20 @@ mod falling_tests {
     /// A ball of `mass` kg in mid-air struck by `stream` for `seconds`: its
     /// velocity after each substep.
     fn struck_ball(stream: &Stream, mass: f32, seconds: f32) -> Vec<Vector3<f32>> {
+        struck_ball_motion(stream, mass, seconds, true)
+            .into_iter()
+            .map(|(velocity, _)| velocity)
+            .collect()
+    }
+
+    /// The same, with or without gravity: its velocity and spin after each
+    /// substep.
+    fn struck_ball_motion(
+        stream: &Stream,
+        mass: f32,
+        seconds: f32,
+        gravity: bool,
+    ) -> Vec<(Vector3<f32>, Vector3<f32>)> {
         const DT: f32 = 1.0 / 240.0;
         const RADIUS: f32 = 0.15;
         let volume = 4.0 / 3.0 * PI * RADIUS.powi(3);
@@ -1267,9 +1306,73 @@ mod falling_tests {
             .map(|_| {
                 world.update_contacts(DT, 1, &floor, &[], &mut debug);
                 world.substep(DT, &floor, &providers);
-                world.body(body).unwrap().linear_velocity()
+                let state = world.body(body).unwrap();
+                (state.linear_velocity(), state.angular_velocity())
             })
             .collect()
+    }
+
+    /// The water's drag on a still ball of 0.15 m struck by `stream`.
+    fn drag_on_a_still_ball(stream: &Stream) -> MediumDrag {
+        let mut world = PhysicsWorld::new(PhysicsConfig::default());
+        let body =
+            world.create_body(RigidBodyDesc::dynamic().position(Point3::new(0.0, 50.0, 0.0)));
+        world.attach_collider(body, ColliderDesc::sphere(0.15).density(500.0));
+        let ctx = ForceContext {
+            bodies: world.bodies(),
+            colliders: world.colliders_arena(),
+            gravity: Vector3::new(0.0, -9.81, 0.0),
+            gravity_magnitude: 9.81,
+        };
+        BuoyancyForceProvider::new(stream, vec![body])
+            .compute_force(body, &ctx)
+            .drag
+    }
+
+    #[test]
+    fn a_strike_off_centre_drives_the_spin_at_which_the_struck_side_moves_with_the_water() {
+        let stream = Stream {
+            velocity: Vector3::new(0.0, -8.0, 0.0),
+            area: 0.05,
+            offset: Vector3::new(0.15, 0.0, 0.0),
+        };
+        let spin = drag_on_a_still_ball(&stream).spin;
+        // Struck on its +x side by water falling at 8 m/s: it turns about
+        // −z until that side moves at 8 m/s, 8 / 0.15 rad/s.
+        assert!(
+            (spin - Vector3::new(0.0, 0.0, -8.0 / 0.15)).norm() < 1.0e-3,
+            "{spin}"
+        );
+    }
+
+    #[test]
+    fn a_strike_through_the_centre_drives_no_spin() {
+        let stream = Stream {
+            velocity: Vector3::new(0.0, -8.0, 0.0),
+            area: 0.05,
+            offset: Vector3::new(0.0, 0.1, 0.0),
+        };
+        let drag = drag_on_a_still_ball(&stream);
+        assert!(drag.spin.norm() < 1.0e-5 && drag.angular < 1.0e-5);
+    }
+
+    #[test]
+    fn a_light_ball_struck_off_centre_spins_up_but_never_past_the_water() {
+        let stream = Stream {
+            velocity: Vector3::new(0.0, -8.0, 0.0),
+            area: 0.05,
+            offset: Vector3::new(0.15, 0.0, 0.0),
+        };
+        let motion = struck_ball_motion(&stream, 0.5, 0.5, false);
+        let fastest = motion.iter().map(|(_, spin)| -spin.z).fold(0.0, f32::max);
+        assert!(fastest > 5.0, "spun up to {fastest} rad/s");
+        // Its struck side never outruns the water.
+        assert!(
+            motion
+                .iter()
+                .all(|(_, spin)| spin.norm() * 0.15 <= 8.0 + 1.0e-3),
+            "overspun"
+        );
     }
 
     #[test]
@@ -1279,6 +1382,7 @@ mod falling_tests {
         let stream = Stream {
             velocity: Vector3::new(5.0, 0.0, 0.0),
             area: 0.05,
+            offset: Vector3::zeros(),
         };
         let velocities = struck_ball(&stream, 0.5, 0.5);
         assert!(velocities.iter().all(|v| v.x <= 5.0 + 1.0e-4), "overshot");
@@ -1293,6 +1397,7 @@ mod falling_tests {
         let stream = Stream {
             velocity: Vector3::new(0.0, -8.0, 0.0),
             area: 0.05,
+            offset: Vector3::zeros(),
         };
         let mass = 2.0;
         let last = *struck_ball(&stream, mass, 1.0).last().unwrap();
@@ -1324,6 +1429,15 @@ mod falls_in_a_level {
         wet: bool,
         start: impl Fn(&WaterWorld) -> Point3<f32>,
     ) -> (Point3<f32>, Vector3<f32>) {
+        let (at, velocity, _) = crate_motion(wet, start);
+        (at, velocity)
+    }
+
+    /// The same, and how fast it spins.
+    fn crate_motion(
+        wet: bool,
+        start: impl Fn(&WaterWorld) -> Point3<f32>,
+    ) -> (Point3<f32>, Vector3<f32>, Vector3<f32>) {
         const DT: f32 = 1.0 / 60.0;
         let level = load_level(Path::new("levels/island_sea.level.ron")).unwrap();
         let terrain = build_terrain(&level);
@@ -1349,7 +1463,11 @@ mod falls_in_a_level {
             stepper.step(&mut world, DT, &terrain, &[], &providers, &mut debug);
         }
         let state = world.body(body).unwrap();
-        (state.position(), state.linear_velocity())
+        (
+            state.position(),
+            state.linear_velocity(),
+            state.angular_velocity(),
+        )
     }
 
     /// The middle of the crag spring's jet.
@@ -1360,6 +1478,25 @@ mod falls_in_a_level {
         let path = FallPath::jet(spring.origin, spring.velocity, spring.discharge, landing)
             .expect("the spring comes out above the tarn");
         path.at(0.5 * path.duration()).centre
+    }
+
+    /// Where the east falls strike a crate hardest off its centre halfway
+    /// down, 5.5 m up: at an end of the curtain.
+    fn at_the_east_falls_end(water: &WaterWorld) -> Point3<f32> {
+        let query = water.query();
+        let turning = |at: &Point3<f32>| -> f32 {
+            query
+                .falling(*at, 0.35)
+                .iter()
+                .map(|s| (s.at - at).cross(&s.velocity).norm() * s.area)
+                .sum()
+        };
+        (0..40)
+            .flat_map(|i| (0..40).map(move |k| (i, k)))
+            .map(|(i, k)| Point3::new(15.0 + 0.1 * i as f32, 5.5, -8.0 + 0.1 * k as f32))
+            .max_by(|a, b| turning(a).total_cmp(&turning(b)))
+            .filter(|at| turning(at) > 0.0)
+            .expect("the east falls pour")
     }
 
     /// Where the east falls strike a crate hardest halfway down, 5.5 m up.
@@ -1410,5 +1547,14 @@ mod falls_in_a_level {
             wet_v.y,
             dry_v.y
         );
+    }
+
+    #[test]
+    #[ignore = "release: opens island_sea"]
+    fn the_end_of_the_east_falls_spins_a_crate_half_in_it() {
+        let (_, _, dry) = crate_motion(false, at_the_east_falls_end);
+        let (_, _, wet) = crate_motion(true, at_the_east_falls_end);
+        assert!(dry.norm() < 0.1, "spun dry at {} rad/s", dry.norm());
+        assert!(wet.norm() > 1.0, "spun at {} rad/s", wet.norm());
     }
 }
