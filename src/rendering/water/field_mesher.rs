@@ -11,7 +11,7 @@
 //!   wet cell at the map's edge, its water leaving
 //!            ──▶ a sheet off the edge, down to the sea or into the void
 //!   a source landing in the chunk
-//!            ──▶ a ribbon along its jet's arc, from where it comes out
+//!            ──▶ a tube along its jet's arc, from where it comes out
 //!                down to the water it lands in
 //!   dry column beside one, or diagonal to it between two dry sides
 //!            ──▶ a shore patch carrying the cell's surface half a column
@@ -45,7 +45,7 @@ use super::divide::WaterPatch;
 use super::field_sources::{
     self, corner_flow, falls, gather, Corner, DrawnCells, Meeting, VertexSource,
 };
-use super::jet::{Jet, JET_ROWS};
+use super::jet::{Jet, JET_RING, JET_ROWS};
 use super::nappe::{strip, Face, Nappe, NAPPE_ROWS};
 use super::ocean_ring::{append_ring, occupied_bounds, MapRect};
 use super::river_mesh::{RiverDraw, RiverMesh};
@@ -609,23 +609,23 @@ impl FieldScene<'_> {
         let Some(jet) = Jet::new(source, self.drawn_cells().surface(landing) as f32) else {
             return;
         };
-        for face in Face::BOTH {
-            let mut rows = Vec::with_capacity(JET_ROWS as usize + 1);
-            for row in 0..=JET_ROWS {
-                rows.push([-1.0f32, 1.0].map(|side| {
-                    mesh.vertices.push(jet.vertex(row, side, face));
-                    mesh.sources.vertices.push(VertexSource::Jet {
-                        source: index as u32,
-                        landing,
-                        row,
-                        side,
-                        face,
-                    });
-                    mesh.vertices.len() as u32 - 1
-                }));
+        let mut rows = Vec::with_capacity(JET_ROWS as usize + 1);
+        for row in 0..=JET_ROWS {
+            let first = mesh.vertices.len() as u32;
+            for around in 0..JET_RING {
+                mesh.vertices.push(jet.vertex(row, around));
+                mesh.sources.vertices.push(VertexSource::Jet {
+                    source: index as u32,
+                    landing,
+                    row,
+                    around,
+                });
             }
-            strip(mesh, &rows);
+            let ring: SmallVec<[u32; JET_RING as usize + 1]> =
+                (0..=JET_RING).map(|k| first + k % JET_RING).collect();
+            rows.push(ring);
         }
+        strip(mesh, &rows);
     }
 }
 

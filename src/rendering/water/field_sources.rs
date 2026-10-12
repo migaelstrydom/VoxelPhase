@@ -378,15 +378,14 @@ pub(super) enum VertexSource {
         own: SpanIndex,
         outside: Option<f64>,
     },
-    /// A point on `face` of the jet of the field's source `source`, on
-    /// `side` of row `row` along its arc down to the water in the cell
-    /// `landing`. The jet stands while its water still lands there.
+    /// Vertex `around` of row `row` of the jet of the field's source
+    /// `source`, along its arc down to the water in the cell `landing`. The
+    /// jet stands while its water still lands there.
     Jet {
         source: u32,
         landing: SpanIndex,
         row: u32,
-        side: f32,
-        face: Face,
+        around: u32,
     },
     /// A point on `face` of a falling sheet's body, on row `row` down from
     /// its lip, vertex `lip`, to its foot, vertex `foot`, both on its top
@@ -540,13 +539,12 @@ pub(super) fn refresh(field: &WaterField, cells: &DrawnCells, mesh: &mut RiverMe
                 source,
                 landing,
                 row,
-                side,
-                face,
+                around,
             } => {
                 let source = &field.sources()[source as usize];
                 held &= source.landing.first() == Some(&landing);
                 match Jet::new(source, cells.surface(landing) as f32) {
-                    Some(jet) => mesh.vertices[v] = jet.vertex(row, side, face),
+                    Some(jet) => mesh.vertices[v] = jet.vertex(row, around),
                     None => held = false,
                 }
             }

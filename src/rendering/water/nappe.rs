@@ -14,7 +14,7 @@
 //! at each end of its edge. The top face is wound to face out and up, the
 //! under face in and down towards the rock, and the sheets' pipeline culls
 //! back faces: from in front only the top is seen, from behind only the
-//! under face. A jet is drawn the same way along its own arc (`jet.rs`).
+//! under face.
 
 use nalgebra::{Vector2, Vector3, Vector4};
 
@@ -107,12 +107,7 @@ impl Nappe {
 /// on `face` of the body `thickness` thick there: the top's normal is
 /// square to the velocity, out and up; the under face lies that thickness
 /// below the top along it, facing the other way.
-pub(super) fn layered(
-    top: RiverVertex,
-    velocity: Vector3<f32>,
-    thickness: f32,
-    face: Face,
-) -> RiverVertex {
+fn layered(top: RiverVertex, velocity: Vector3<f32>, thickness: f32, face: Face) -> RiverVertex {
     let level = Vector2::new(velocity.x, velocity.z);
     let speed = level.norm();
     let out = if speed > 1.0e-4 {
@@ -138,15 +133,19 @@ pub(super) fn layered(
     }
 }
 
-/// The triangles of one face of a body of water: `rows`, each the face's
-/// vertex at the two ends of its edge, joined row to row and each wound to
-/// face the way its vertices' normals do, so the pipeline culls the faces
-/// turned away.
-pub(super) fn strip(mesh: &mut RiverMesh, rows: &[[u32; 2]]) {
+/// The triangles of a body of water's surface: `rows` of vertices across
+/// it, each joined to the next along the row and to the row after, each
+/// triangle wound to face the way its vertices' normals do, so the pipeline
+/// culls the faces turned away. A face of a sheet is rows of its two ends;
+/// a jet, rows of a ring closed by its first vertex again.
+pub(super) fn strip<R: AsRef<[u32]>>(mesh: &mut RiverMesh, rows: &[R]) {
     for pair in rows.windows(2) {
-        let ([a, b], [d, c]) = (pair[0], pair[1]);
-        for [p, q, r] in [[a, b, c], [a, c, d]] {
-            mesh.sheet_indices.extend(wound(mesh, [p, q, r]));
+        let (near, far) = (pair[0].as_ref(), pair[1].as_ref());
+        for i in 0..near.len().min(far.len()).saturating_sub(1) {
+            let (a, b, c, d) = (near[i], near[i + 1], far[i + 1], far[i]);
+            for [p, q, r] in [[a, b, c], [a, c, d]] {
+                mesh.sheet_indices.extend(wound(mesh, [p, q, r]));
+            }
         }
     }
 }

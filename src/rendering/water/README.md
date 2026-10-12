@@ -113,9 +113,11 @@ neighbours. A sheet's end frays out only where it ends the fall (`fray` = 1):
 where another sheet falls over an edge meeting at that corner, it runs on
 into it (`FieldScene::frays`).
 
-A source's jet (`jet.rs`) is a body of `JET_ROWS` rows along its arc down to
-the water it lands in, both faces like a sheet's, built into the chunk it
-lands in; refreshing it recomputes the arc to the landing water's level.
+A source's jet (`jet.rs`) is a tube of `JET_ROWS` rings of `JET_RING`
+vertices along its arc down to the water it lands in, its section carrying
+the discharge at the water's speed there, spreading and flattening as it
+falls. It is built into the chunk it lands in; refreshing it recomputes the
+arc to the landing water's level.
 
 ## Swell and ripples
 
@@ -349,7 +351,7 @@ src/rendering/water/
     river_parts.rs  -- river surfaces read again or rebuilt when their version moves
     ocean_ring.rs   -- the sea past the map's open edges
     nappe.rs        -- a falling sheet's body: top and under faces, lip to foot
-    jet.rs          -- a source's jet, drawn as a body of falling water
+    jet.rs          -- a source's jet, drawn as a tube of falling water
     divide.rs       -- which side of the water a blended surface lies on
     footprint.rs    -- the screen rectangle the water can read
     pipeline.rs     -- Vulkan pipelines, descriptor set for the refraction copy
