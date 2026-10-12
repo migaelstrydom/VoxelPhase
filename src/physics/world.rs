@@ -497,6 +497,14 @@ impl PhysicsWorld {
             .flat_map(|body| body.envelope(&self.colliders))
     }
 
+    /// How far a body's envelope reaches from its origin, m: the radius of
+    /// a sphere round it.
+    pub fn reach(&self, handle: RigidBodyHandle) -> f32 {
+        self.envelope(handle)
+            .map(|part| part.offset.translation.vector.norm() + part.shape.bounding_radius())
+            .fold(0.0, f32::max)
+    }
+
     // === Constraint Management ===
 
     /// Create a new constraint and return its handle.
@@ -1236,7 +1244,7 @@ impl PhysicsWorld {
         for (_, body) in self.bodies.iter_mut() {
             body.set_force(Vector3::zeros());
             body.set_torque(Vector3::zeros());
-            body.set_drag(0.0, 0.0);
+            body.set_drag(0.0, 0.0, Vector3::zeros());
         }
 
         if providers.is_empty() {
@@ -1264,7 +1272,11 @@ impl PhysicsWorld {
             if let Some(body) = self.bodies.get_mut(handle.0) {
                 body.set_force(output.force);
                 body.set_torque(output.torque);
-                body.set_drag(output.linear_drag_coeff, output.angular_drag_coeff);
+                body.set_drag(
+                    output.linear_drag_coeff,
+                    output.angular_drag_coeff,
+                    output.drag_velocity,
+                );
             }
         }
     }

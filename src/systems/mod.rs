@@ -2,6 +2,7 @@
 
 mod camera;
 mod character_control;
+mod fall_spray;
 mod physics_sync;
 mod player_input;
 mod render;

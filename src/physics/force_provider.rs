@@ -24,8 +24,14 @@ pub struct ForceContext<'a> {
 pub struct ForceOutput {
     pub force: nalgebra::Vector3<f32>,
     pub torque: nalgebra::Vector3<f32>,
+    /// Linear drag per unit velocity relative to `drag_velocity`, N·s/m.
     pub linear_drag_coeff: f32,
     pub angular_drag_coeff: f32,
+    /// Velocity of the medium the linear drag acts relative to, m/s: a
+    /// current or a falling stream. The body relaxes towards it exactly
+    /// however strong the drag, so a light body in fast water is carried at
+    /// the water's speed, never past it.
+    pub drag_velocity: nalgebra::Vector3<f32>,
 }
 
 impl ForceOutput {
@@ -35,6 +41,7 @@ impl ForceOutput {
             torque: nalgebra::Vector3::zeros(),
             linear_drag_coeff: 0.0,
             angular_drag_coeff: 0.0,
+            drag_velocity: nalgebra::Vector3::zeros(),
         }
     }
 }

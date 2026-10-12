@@ -1,5 +1,6 @@
 //! Tracks water surface levels at sleeping body positions and wakes bodies
-//! when the surface changes significantly (waves, flow redistribution).
+//! when the surface changes significantly (waves, flow redistribution), or
+//! when falling water strikes them.
 
 use std::collections::HashMap;
 
@@ -43,7 +44,8 @@ impl WaterSleepTracker {
         }
     }
 
-    /// Check a sleeping body and return true if the water level changed enough
+    /// Check a sleeping body reaching `radius` from `position` and return
+    /// true if falling water strikes it or the water level changed enough
     /// to warrant waking it.
     ///
     /// A sleeping body in water with no recorded level has never been at rest
@@ -54,7 +56,11 @@ impl WaterSleepTracker {
         handle: RigidBodyHandle,
         water: &dyn WaterSurface,
         position: Point3<f32>,
+        radius: f32,
     ) -> bool {
+        if !water.falling(position, radius).is_empty() {
+            return true;
+        }
         let stored_level = self.levels.get(&handle).copied();
         match (water.sample(position), stored_level) {
             (Some(sample), Some(stored)) => (sample.surface_level - stored).abs() > WAKE_THRESHOLD,
@@ -102,40 +108,40 @@ mod tests {
     #[test]
     fn body_created_asleep_in_water_wakes() {
         let tracker = WaterSleepTracker::new();
-        assert!(tracker.should_wake(handle(0), &POOL, Point3::origin()));
+        assert!(tracker.should_wake(handle(0), &POOL, Point3::origin(), 0.5));
     }
 
     #[test]
     fn body_asleep_on_dry_ground_stays_asleep() {
         let tracker = WaterSleepTracker::new();
-        assert!(!tracker.should_wake(handle(0), &Dry, Point3::origin()));
+        assert!(!tracker.should_wake(handle(0), &Dry, Point3::origin(), 0.5));
     }
 
     #[test]
     fn body_at_rest_in_still_water_stays_asleep() {
         let mut tracker = WaterSleepTracker::new();
         tracker.record(handle(0), &POOL, Point3::origin());
-        assert!(!tracker.should_wake(handle(0), &POOL, Point3::origin()));
+        assert!(!tracker.should_wake(handle(0), &POOL, Point3::origin(), 0.5));
     }
 
     #[test]
     fn rising_water_wakes_a_body_at_rest_in_it() {
         let mut tracker = WaterSleepTracker::new();
         tracker.record(handle(0), &POOL, Point3::origin());
-        assert!(tracker.should_wake(handle(0), &RAISED, Point3::origin()));
+        assert!(tracker.should_wake(handle(0), &RAISED, Point3::origin(), 0.5));
     }
 
     #[test]
     fn water_arriving_under_a_body_asleep_dry_wakes_it() {
         let mut tracker = WaterSleepTracker::new();
         tracker.record(handle(0), &Dry, Point3::origin());
-        assert!(tracker.should_wake(handle(0), &POOL, Point3::origin()));
+        assert!(tracker.should_wake(handle(0), &POOL, Point3::origin(), 0.5));
     }
 
     #[test]
     fn water_draining_from_under_a_body_wakes_it() {
         let mut tracker = WaterSleepTracker::new();
         tracker.record(handle(0), &POOL, Point3::origin());
-        assert!(tracker.should_wake(handle(0), &Dry, Point3::origin()));
+        assert!(tracker.should_wake(handle(0), &Dry, Point3::origin(), 0.5));
     }
 }

@@ -6,11 +6,12 @@
 //!     field     WaterField       depths in cells, discharges on faces
 //!     waves     SurfaceWaves     ripples and the sea's swell, over the field
 //!     versions  SurfaceVersions  per chunk: moves when its surface visibly does
+//!     falling   FallingWater     the streams in the air this frame
 //!     clock     f64              seconds simulated: the shaders' and swell's clock
 //! ```
 //!
-//! Each frame: carry the water over any terrain edit, step the field, then
-//! step the ripples over it.
+//! Each frame: carry the water over any terrain edit, step the field, find
+//! its falling water, then step the ripples over it.
 
 use std::time::{Duration, Instant};
 
@@ -21,6 +22,7 @@ use crate::level::{Settle, WaterConfig};
 use crate::terrain::TerrainWorld;
 
 use super::coupling::Disturbances;
+use super::falling::FallingWater;
 use super::field::{DrawnDepths, SurfaceVersions, WaterField};
 use super::query::WaterQuery;
 use super::waves::SurfaceWaves;
@@ -44,6 +46,8 @@ pub struct WaterWorld {
     waves: SurfaceWaves,
     /// Each chunk's surface version, for the renderer.
     versions: SurfaceVersions,
+    /// The field's falling water, as it stood after the last step or edit.
+    falling: FallingWater,
     /// Seconds simulated: the clock the drawn currents run on.
     clock: f64,
     /// Simulated seconds the level's opening settle ran, and what it cost.
@@ -62,6 +66,7 @@ impl WaterWorld {
         };
         Self {
             versions: SurfaceVersions::new(field.cells()),
+            falling: FallingWater::build(&field),
             waves: SurfaceWaves::new(config),
             field,
             clock: 0.0,
@@ -77,6 +82,7 @@ impl WaterWorld {
         self.field.on_terrain_update(terrain);
         let cells = self.field.cells();
         self.versions.update(cells, 0..cells.chunks.len());
+        self.falling = FallingWater::build(&self.field);
     }
 
     /// Advance by one frame.
@@ -92,6 +98,7 @@ impl WaterWorld {
         moving.sort_unstable();
         moving.dedup();
         self.versions.update(self.field.cells(), moving);
+        self.falling = FallingWater::build(&self.field);
         self.waves.step(&self.field, dt);
         self.clock += dt as f64;
     }
@@ -108,7 +115,12 @@ impl WaterWorld {
 
     /// Point queries against the water: buoyancy, currents, the player.
     pub fn query(&self) -> WaterQuery<'_> {
-        WaterQuery::new(&self.field, &self.waves, self.clock())
+        WaterQuery::new(&self.field, &self.waves, &self.falling, self.clock())
+    }
+
+    /// The field's falling water this frame.
+    pub fn falling(&self) -> &FallingWater {
+        &self.falling
     }
 
     pub fn waves(&self) -> &SurfaceWaves {

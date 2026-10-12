@@ -7,12 +7,12 @@
 //!   two wet cells, the upper falling to the lower
 //!            ──▶ a sheet down their shared edge, from the upper surface's
 //!                corners to the lower's: water going over the edge, hung
-//!                out at the lip
+//!                out at the lip, and foam where it lands
 //!   wet cell at the map's edge, its water leaving
 //!            ──▶ a sheet off the edge, down to the sea or into the void
 //!   a source landing in the chunk
 //!            ──▶ a tube along its jet's arc, from where it comes out
-//!                down to the water it lands in
+//!                down to the water it lands in, and foam where it lands
 //!   dry column beside one, or diagonal to it between two dry sides
 //!            ──▶ a shore patch carrying the cell's surface half a column
 //!                into it: drawn on into rock, which hides it; cut over a
@@ -34,6 +34,7 @@
 use nalgebra::{Vector2, Vector3, Vector4};
 use smallvec::SmallVec;
 
+use crate::water::falling::{falls, ledge_reach, off_map};
 use crate::water::field::{past_edge, DrawnDepths, Source, WaterField};
 use crate::water::geometry::{Column, SpanIndex, SpanRef, Step, COLUMN_SIZE, ORTHOGONAL};
 use crate::water::ids::SurfaceId;
@@ -42,11 +43,9 @@ use crate::water::waves::{still_level, Sea, SurfaceWaves};
 use crate::water::{WaterWorld, FIELD_BODY};
 
 use super::divide::WaterPatch;
-use super::field_sources::{
-    self, corner_flow, falls, gather, Corner, DrawnCells, Meeting, VertexSource,
-};
-use super::jet::{Jet, JET_RING, JET_ROWS};
-use super::nappe::{strip, Face, Nappe, NAPPE_ROWS};
+use super::field_sources::{self, corner_flow, gather, Corner, DrawnCells, Meeting, VertexSource};
+use super::jet::{Jet, JET_RING, JET_ROWS, PLUNGE_CORNERS};
+use super::nappe::{fan, plunge, strip, Face, Nappe, NAPPE_ROWS};
 use super::ocean_ring::{append_ring, occupied_bounds, MapRect};
 use super::river_mesh::{RiverDraw, RiverMesh};
 use super::scene::{MeshKey, Refreshed, RippleTileView, WaterMesh, WaterScene};
@@ -406,7 +405,8 @@ impl FieldScene<'_> {
     /// Where the lower cell is a step the fall runs over (`passed`), the
     /// sheet falls on past it to the water it `landing`s in.
     ///
-    /// Where the lower column's own floor carries the ledge on (`lip`), each
+    /// Where the lower column's own floor carries the ledge on
+    /// (`ledge_reach`), each
     /// end of the sheet hangs out at the lip instead, and the cell's surface
     /// runs on over the ledge to meet it. The ledge is told by the two beds
     /// alone, so the sheet keeps its place while the water moves.
@@ -424,7 +424,8 @@ impl FieldScene<'_> {
         let lower = self.field.graph().span(lower_span);
         let ledge = 0.5 * (self.field.cells().bed(own) + lower.bed);
         let quarters = lower.quarters;
-        let shift = ends.map(|(_, sides)| face * lip(step, sides, &quarters, ledge) * COLUMN_SIZE);
+        let shift =
+            ends.map(|(_, sides)| face * ledge_reach(step, sides, &quarters, ledge) * COLUMN_SIZE);
         if shift.iter().any(|s| *s != Vector2::zeros()) {
             let base = mesh.vertices.len() as u32;
             for (&(i, _), shift) in ends.iter().zip(shift) {
@@ -572,11 +573,7 @@ impl FieldScene<'_> {
         let drawn = self.drawn_cells();
         let level = drawn.surface(own);
         let outside = outside.map(f64::from);
-        if !falls(
-            level,
-            drawn.bed(own) as f64,
-            field_sources::off_map(level, outside),
-        ) {
+        if !falls(level, drawn.bed(own) as f64, off_map(level, outside)) {
             return;
         }
         let ends = edge_ends(step);
@@ -590,7 +587,7 @@ impl FieldScene<'_> {
         let mut feet = [0; 2];
         for (end, foot) in feet.iter_mut().enumerate() {
             let top = mesh.vertices[base as usize + end];
-            let fall = top.surface - field_sources::off_map(top.surface as f64, outside) as f32;
+            let fall = top.surface - off_map(top.surface as f64, outside) as f32;
             *foot = foot_vertex(mesh, base + end as u32, fall);
             mesh.sources.vertices.push(VertexSource::Brink {
                 from: base + end as u32,
@@ -626,6 +623,20 @@ impl FieldScene<'_> {
             rows.push(ring);
         }
         strip(mesh, &rows);
+
+        let first = mesh.vertices.len() as u32;
+        for corner in 0..=PLUNGE_CORNERS {
+            mesh.vertices.push(jet.plunge(corner));
+            mesh.sources.vertices.push(VertexSource::JetPlunge {
+                source: index as u32,
+                landing,
+                corner,
+            });
+        }
+        let ring: SmallVec<[u32; PLUNGE_CORNERS as usize + 1]> = (0..=PLUNGE_CORNERS)
+            .map(|k| first + 1 + k % PLUNGE_CORNERS)
+            .collect();
+        fan(mesh, first, &ring);
     }
 }
 
@@ -639,7 +650,7 @@ fn foot_vertex(mesh: &mut RiverMesh, lip: u32, fall: f32) -> u32 {
 
 /// The body of a sheet whose top face runs from its `lips` to its `feet`,
 /// one of each at either end of its edge: both its faces, row by row
-/// between them.
+/// between them, and the foam where it lands.
 fn nappe(mesh: &mut RiverMesh, lips: [u32; 2], feet: [u32; 2]) {
     let nappes = [0, 1].map(|end| {
         Nappe::between(
@@ -671,6 +682,23 @@ fn nappe(mesh: &mut RiverMesh, lips: [u32; 2], feet: [u32; 2]) {
         }
         strip(mesh, &rows);
     }
+    let mut rows = Vec::with_capacity(2);
+    for share in [0.0, 1.0] {
+        let mut pair = [0; 2];
+        for (end, index) in pair.iter_mut().enumerate() {
+            let lip = mesh.vertices[lips[end] as usize];
+            mesh.vertices
+                .push(plunge(lip, &mesh.vertices[feet[end] as usize], share));
+            mesh.sources.vertices.push(VertexSource::Plunge {
+                lip: lips[end],
+                foot: feet[end],
+                share,
+            });
+            *index = mesh.vertices.len() as u32 - 1;
+        }
+        rows.push(pair);
+    }
+    strip(mesh, &rows);
 }
 
 /// The ends of a cell's edge across `step`: as the cell's corner indices,
@@ -691,20 +719,6 @@ fn along_edge(step: Step, (sx, sz): (i32, i32)) -> (i32, i32) {
         (0, sz)
     } else {
         (sx, 0)
-    }
-}
-
-/// How far past the edge into the lower column across `step` its floor
-/// stands above `ledge`, in columns, along the row of quarters from the end
-/// of the edge on the lower column's `sides`: where the ledge the water
-/// falls from really ends.
-fn lip(step: Step, (sx, sz): (i32, i32), quarters: &[f32; 4], ledge: f32) -> f32 {
-    let near = (sx > 0) as usize + 2 * (sz > 0) as usize;
-    let far = near ^ if step.di != 0 { 1 } else { 2 };
-    match (quarters[near] > ledge, quarters[far] > ledge) {
-        (false, _) => 0.0,
-        (true, false) => 0.5,
-        (true, true) => 1.0,
     }
 }
 

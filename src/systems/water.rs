@@ -1,9 +1,11 @@
-//! System that steps the water and turns what bodies do in it into spray.
+//! System that steps the water and turns what bodies do in it, and where
+//! its falls land, into spray.
 
 use nalgebra::{Point3, Vector3, Vector4};
 use rand::Rng;
 use specs::{Join, LendJoin, Read, ReadStorage, System, Write};
 
+use super::fall_spray::FallSpray;
 use crate::components::{CameraComponent, Position, RigidBodyComponent, Velocity};
 use crate::debug::DebugLog;
 use crate::drive::Actuator;
@@ -20,8 +22,12 @@ use crate::water::{
 /// Catches the water up with any terrain edit the frame made, ranks ripple
 /// tiles by distance from the camera, advances the field and its waves by
 /// the frame's delta time, then lets the coupler find bodies entering or
-/// moving through water, for ripples and for splash and wake spray.
-pub struct WaterSystem;
+/// moving through water, for ripples and for splash and wake spray, and
+/// throws spray and mist where its falls land.
+#[derive(Default)]
+pub struct WaterSystem {
+    spray: FallSpray,
+}
 
 impl<'a> System<'a> for WaterSystem {
     type SystemData = (
@@ -65,8 +71,15 @@ impl<'a> System<'a> for WaterSystem {
         if let Some(ref terrain) = terrain_opt {
             water.on_terrain_update(terrain);
         }
-        water.set_focus(cameras.join().next().map(|camera| camera.0.position));
+        let eye = cameras.join().next().map(|camera| camera.0.position);
+        water.set_focus(eye);
         water.step(time.delta_seconds());
+        self.spray.emit(
+            water.falling(),
+            eye,
+            time.delta_seconds(),
+            &mut particle_pool,
+        );
 
         if let Some(mut coupler) = coupler_opt {
             let snapshots =

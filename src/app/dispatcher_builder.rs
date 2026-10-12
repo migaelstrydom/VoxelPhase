@@ -233,7 +233,7 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
         )
         .with(TerrainAnchorSystem, "terrain_anchor", &["terrain_update"])
         // Water simulation (after terrain update so dirty_regions are visible)
-        .with(WaterSystem, "water", &["terrain_update"])
+        .with(WaterSystem::default(), "water", &["terrain_update"])
         // Particles
         .with(
             ParticleSpawnSystem,

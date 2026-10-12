@@ -217,9 +217,11 @@ pub struct RigidBody {
     // Drag coefficients set by external systems (e.g. water buoyancy).
     // Applied per substep using current velocity, so drag tracks the body's
     // actual speed even as it changes within a frame.
-    // F_drag = -linear_drag_coeff * v, τ_drag = -angular_drag_coeff * ω.
+    // F_drag = -linear_drag_coeff * (v - drag_velocity),
+    // τ_drag = -angular_drag_coeff * ω.
     linear_drag_coeff: f32,
     angular_drag_coeff: f32,
+    drag_velocity: Vector3<f32>,
 
     // Attached colliders
     colliders: Vec<ColliderHandle>,
@@ -292,6 +294,7 @@ impl RigidBody {
             torque: Vector3::zeros(),
             linear_drag_coeff: 0.0,
             angular_drag_coeff: 0.0,
+            drag_velocity: Vector3::zeros(),
             colliders: Vec::new(),
             bulk: desc.bulk.map(Box::new),
             drive: None,
@@ -557,11 +560,13 @@ impl RigidBody {
     /// velocity. This ensures drag tracks actual speed even as the body
     /// accelerates within a frame (e.g. a light body bobbing in water).
     ///
-    /// `linear`: drag force magnitude per unit velocity (N·s/m).
+    /// `linear`: drag force magnitude per unit velocity relative to
+    /// `medium`, the velocity of the water or air it acts in (N·s/m).
     /// `angular`: drag torque magnitude per unit angular velocity (N·m·s/rad).
-    pub fn set_drag(&mut self, linear: f32, angular: f32) {
+    pub fn set_drag(&mut self, linear: f32, angular: f32, medium: Vector3<f32>) {
         self.linear_drag_coeff = linear;
         self.angular_drag_coeff = angular;
+        self.drag_velocity = medium;
     }
 
     // === Internal methods ===
@@ -626,8 +631,11 @@ impl RigidBody {
         self.linear_velocity += gravity * self.gravity_scale * dt;
         self.linear_velocity += self.force * self.inv_mass * dt;
         if self.linear_drag_coeff > 0.0 {
+            // Exact for the drag alone: the body relaxes towards the medium's
+            // velocity, however stiff the drag is against its mass.
             let decay = (-self.linear_drag_coeff * self.inv_mass * dt).exp();
-            self.linear_velocity *= decay;
+            let medium = self.drag_velocity;
+            self.linear_velocity = medium + (self.linear_velocity - medium) * decay;
         }
 
         self.angular_velocity += self.world_inv_inertia() * self.torque * dt;

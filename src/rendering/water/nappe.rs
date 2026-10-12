@@ -14,7 +14,8 @@
 //! at each end of its edge. The top face is wound to face out and up, the
 //! under face in and down towards the rock, and the sheets' pipeline culls
 //! back faces: from in front only the top is seen, from behind only the
-//! under face.
+//! under face. Where it lands, a patch of foam lies on the water out from
+//! its foot (`plunge`).
 
 use nalgebra::{Vector2, Vector3, Vector4};
 
@@ -27,6 +28,18 @@ pub(super) const NAPPE_ROWS: u32 = 8;
 
 /// Gravity, m/s².
 const GRAVITY: f32 = 9.81;
+
+/// How far out from its foot the foam where a sheet lands reaches, m: so
+/// far for any fall, and this much further per metre it falls.
+const PLUNGE_REACH: f32 = 0.4;
+const PLUNGE_REACH_PER_FALL: f32 = 0.12;
+const MAX_PLUNGE_REACH: f32 = 1.5;
+/// How far above the water its foam is drawn, m, clear of the surface's
+/// own depth.
+pub(super) const PLUNGE_LIFT: f32 = 0.02;
+/// The least share of its reach a foam vertex is drawn at, so its whole
+/// patch reads as past the foot (`RiverVertex::sheet`).
+pub(super) const PLUNGE_START: f32 = 1.0e-3;
 
 /// Thinnest and thickest a falling body of water is drawn, m.
 const MIN_THICKNESS: f32 = 0.02;
@@ -130,6 +143,33 @@ fn layered(top: RiverVertex, velocity: Vector3<f32>, thickness: f32, face: Face)
                 ..top
             }
         }
+    }
+}
+
+/// A vertex of the foam where a sheet whose top face runs from `lip` to
+/// `foot` lands: on the water at the foot, `share` of its reach out the way
+/// the sheet was thrown. Its drop is its fall plus that share, past its
+/// foot: what the draw takes for foam.
+pub(super) fn plunge(lip: RiverVertex, foot: &RiverVertex, share: f32) -> RiverVertex {
+    let fall = lip.surface - foot.surface;
+    let out = (foot.xz - lip.xz).try_normalize(1.0e-4).unwrap_or(lip.face);
+    let reach = (PLUNGE_REACH + PLUNGE_REACH_PER_FALL * fall).min(MAX_PLUNGE_REACH);
+    let share = share.max(PLUNGE_START);
+    RiverVertex {
+        xz: foot.xz + out * (reach * share),
+        surface: foot.surface + PLUNGE_LIFT,
+        sheet: Vector4::new(fall + share, fall, lip.sheet.z, lip.sheet.w),
+        normal: Vector3::y(),
+        ..lip
+    }
+}
+
+/// The triangles of a patch of foam: `centre` joined to each pair of
+/// neighbours round `ring`, wound to face up.
+pub(super) fn fan(mesh: &mut RiverMesh, centre: u32, ring: &[u32]) {
+    for pair in ring.windows(2) {
+        let triangle = wound(mesh, [centre, pair[0], pair[1]]);
+        mesh.sheet_indices.extend(triangle);
     }
 }
 

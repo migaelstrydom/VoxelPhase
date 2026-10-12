@@ -2,8 +2,10 @@
 //! through here.
 
 use nalgebra::{Point3, Vector3};
+use smallvec::SmallVec;
 
 use super::buoyancy::{WaterSample as SurfaceSample, WaterSurface};
+use super::falling::{FallingWater, Strike};
 use super::field::{WaterField, WET_DEPTH};
 use super::ids::{SurfaceId, WaterBodyId};
 use super::waves::SurfaceWaves;
@@ -32,17 +34,29 @@ pub const FIELD_BODY: WaterBodyId = SurfaceId(0);
 pub struct WaterQuery<'a> {
     field: &'a WaterField,
     waves: &'a SurfaceWaves,
+    falling: &'a FallingWater,
     /// Seconds simulated: the swell's clock.
     clock: f32,
 }
 
 impl<'a> WaterQuery<'a> {
-    pub fn new(field: &'a WaterField, waves: &'a SurfaceWaves, clock: f32) -> Self {
+    pub fn new(
+        field: &'a WaterField,
+        waves: &'a SurfaceWaves,
+        falling: &'a FallingWater,
+        clock: f32,
+    ) -> Self {
         Self {
             field,
             waves,
+            falling,
             clock,
         }
+    }
+
+    /// The falling water striking a sphere at `centre` of `radius`.
+    pub fn falling(&self, centre: Point3<f32>, radius: f32) -> SmallVec<[Strike; 4]> {
+        self.falling.strikes(centre, radius)
     }
 
     /// The still level of the water at a 3D point, without swell or
@@ -86,5 +100,9 @@ impl WaterSurface for WaterQuery<'_> {
             velocity: s.velocity,
             surface_rise: s.rise,
         })
+    }
+
+    fn falling(&self, centre: Point3<f32>, radius: f32) -> SmallVec<[Strike; 4]> {
+        WaterQuery::falling(self, centre, radius)
     }
 }

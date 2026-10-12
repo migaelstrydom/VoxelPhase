@@ -22,6 +22,10 @@ connects them.
 - **Media see a body's bulk, not its colliders.** Water, buoyancy, drag and splash read
   `RigidBody::envelope()`, and mass properties read `mass_parts()`. Both fall back to the
   colliders unless the body declares a `BulkShape` (`bulk.rs`).
+- **Drag pulls towards the medium's velocity.** A force provider's linear drag acts relative
+  to `ForceOutput::drag_velocity` (a current, a falling stream), and `integrate_forces`
+  relaxes the body towards it exactly, `v ← u + (v − u)·e^(−c·dt/m)`, so drag far stiffer
+  than a body's mass carries it at the water's speed and never past it.
 
 ## Bodies, colliders, constraints
 

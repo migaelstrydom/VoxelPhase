@@ -1,7 +1,8 @@
 //! Pure buoyancy force calculation.
 //!
 //! Computes buoyancy, linear drag, and angular drag forces for rigid bodies
-//! partially submerged in water. No ECS dependency — the ECS system in
+//! partially submerged in water, and the drag of falling water striking
+//! them. No ECS dependency — the ECS system in
 //! `src/systems/buoyancy.rs` bridges between the physics world and these
 //! functions.
 //!
@@ -12,10 +13,13 @@
 use std::f32::consts::PI;
 
 use nalgebra::{Point3, UnitQuaternion, Vector3};
+use smallvec::SmallVec;
 
 use crate::physics::{
     ColliderShape, ForceContext, ForceOutput, PhysicsWorld, RigidBodyHandle, SubstepForceProvider,
 };
+
+use super::falling::Strike;
 
 /// Water surface and floor level at a single probe point.
 pub struct WaterSample {
@@ -107,8 +111,7 @@ impl SubstepForceProvider for BuoyancyForceProvider<'_> {
         let body_rot = body.rotation();
 
         // Drag acts relative to the water, so a current carries a floating
-        // body with it: −c·(v − u) is −c·v, which the engine applies, plus
-        // c·u, added below.
+        // body with it.
         let water_velocity = self
             .water
             .sample(body_pos)
@@ -120,7 +123,8 @@ impl SubstepForceProvider for BuoyancyForceProvider<'_> {
         // Accumulate contributions from every part of the body's envelope, so
         // compound bodies (bridges, fracturable structures) get their whole
         // buoyancy, and a body whose bulk is not its colliders floats as its
-        // bulk does.
+        // bulk does. Falling water striking a part drags it towards the
+        // water's own velocity there, as a current does.
         let mut total_force = Vector3::zeros();
         let mut total_torque = Vector3::zeros();
         let mut total_heave_stiffness = 0.0f32;
@@ -128,11 +132,22 @@ impl SubstepForceProvider for BuoyancyForceProvider<'_> {
         let mut total_angular_drag_coeff = 0.0f32;
         let mut total_submerged_fraction = 0.0f32;
         let mut part_count = 0u32;
+        let mut strike_drag = 0.0f32;
+        let mut strike_carry = Vector3::zeros();
 
         for part in body.envelope(ctx.colliders) {
             let part_xform = part.world_transform(body_pos, body_rot);
             let part_center = Point3::from(part_xform.translation.vector);
             let part_rot = part_xform.rotation;
+
+            for strike in self
+                .water
+                .falling(part_center, part.shape.bounding_radius())
+            {
+                let drag = strike.drag_coeff(body.linear_velocity(), self.fluid_density);
+                strike_drag += drag;
+                strike_carry += strike.velocity * drag;
+            }
 
             let result = match compute_buoyancy(
                 part_center,
@@ -158,38 +173,60 @@ impl SubstepForceProvider for BuoyancyForceProvider<'_> {
             part_count += 1;
         }
 
-        if part_count == 0 {
+        let (water_drag, angular_drag_coeff) = if part_count > 0 {
+            let avg_submerged_fraction = total_submerged_fraction / part_count as f32;
+
+            // Linearized heave damping target: c = 2 ζ sqrt(m k).
+            let mass = body.mass().max(1e-4);
+            let linear_drag_floor =
+                2.0 * HEAVE_DAMPING_RATIO * (mass * total_heave_stiffness.max(0.0)).sqrt();
+
+            // Quadratic drag from shape area: Fd = -k |v - u| (v - u).
+            let angular_speed = body.angular_velocity().magnitude();
+
+            // Angular drag floor: linear term that guarantees rocking settles
+            // even at low angular speeds where the quadratic term vanishes.
+            let angular_drag_floor = ANGULAR_DRAG_FLOOR * avg_submerged_fraction;
+            (
+                linear_drag_floor + total_linear_drag_coeff * linear_speed,
+                angular_drag_floor + total_angular_drag_coeff * angular_speed,
+            )
+        } else {
+            (0.0, 0.0)
+        };
+
+        // Both drags pull towards their own water's velocity: together, towards
+        // the mean of the two weighed by their strength.
+        let linear_drag_coeff = water_drag + strike_drag;
+        if linear_drag_coeff <= 0.0 && part_count == 0 {
             return ForceOutput::zero();
         }
-
-        let avg_submerged_fraction = total_submerged_fraction / part_count as f32;
-
-        // Linearized heave damping target: c = 2 ζ sqrt(m k).
-        let mass = body.mass().max(1e-4);
-        let linear_drag_floor =
-            2.0 * HEAVE_DAMPING_RATIO * (mass * total_heave_stiffness.max(0.0)).sqrt();
-
-        // Quadratic drag from shape area: Fd = -k |v - u| (v - u).
-        let angular_speed = body.angular_velocity().magnitude();
-
-        // Angular drag floor: linear term that guarantees rocking settles
-        // even at low angular speeds where the quadratic term vanishes.
-        let angular_drag_floor = ANGULAR_DRAG_FLOOR * avg_submerged_fraction;
-
-        let linear_drag_coeff = linear_drag_floor + total_linear_drag_coeff * linear_speed;
+        let drag_velocity = if linear_drag_coeff > 0.0 {
+            (water_velocity * water_drag + strike_carry) / linear_drag_coeff
+        } else {
+            Vector3::zeros()
+        };
         ForceOutput {
-            force: total_force + water_velocity * linear_drag_coeff,
+            force: total_force,
             torque: total_torque,
             linear_drag_coeff,
-            angular_drag_coeff: angular_drag_floor + total_angular_drag_coeff * angular_speed,
+            angular_drag_coeff,
+            drag_velocity,
         }
     }
 }
 
-/// Water as buoyancy sees it: the surface and floor over a point.
+/// Water as buoyancy sees it: the surface and floor over a point, and the
+/// water falling through the air.
 pub trait WaterSurface {
     /// The water at a point, or `None` where there is none.
     fn sample(&self, point: Point3<f32>) -> Option<WaterSample>;
+
+    /// The falling water striking a sphere at `centre` of `radius`. None
+    /// unless the water has falls.
+    fn falling(&self, _centre: Point3<f32>, _radius: f32) -> SmallVec<[Strike; 4]> {
+        SmallVec::new()
+    }
 }
 
 /// Still water standing at `surface` over a flat floor at `floor`,
@@ -1177,5 +1214,201 @@ mod tests {
         let mean = drag(None);
         assert!(end_on < mean && mean < side_on, "{end_on} {mean} {side_on}");
         assert!((side_on / end_on - (1.0 + 0.34 * 0.66 / (PI * 0.0289))).abs() < 1e-3);
+    }
+}
+
+#[cfg(test)]
+mod falling_tests {
+    use smallvec::smallvec;
+
+    use super::*;
+    use crate::debug::DebugLines;
+    use crate::physics::bench_harness::geometry::FlatQuadGeometry;
+    use crate::physics::{ColliderDesc, PhysicsConfig, RigidBodyDesc};
+
+    /// No standing water, and a stream striking everything at `velocity`
+    /// over `area`.
+    struct Stream {
+        velocity: Vector3<f32>,
+        area: f32,
+    }
+
+    impl WaterSurface for Stream {
+        fn sample(&self, _point: Point3<f32>) -> Option<WaterSample> {
+            None
+        }
+
+        fn falling(&self, _centre: Point3<f32>, _radius: f32) -> SmallVec<[Strike; 4]> {
+            smallvec![Strike {
+                velocity: self.velocity,
+                area: self.area,
+            }]
+        }
+    }
+
+    /// A ball of `mass` kg in mid-air struck by `stream` for `seconds`: its
+    /// velocity after each substep.
+    fn struck_ball(stream: &Stream, mass: f32, seconds: f32) -> Vec<Vector3<f32>> {
+        const DT: f32 = 1.0 / 240.0;
+        const RADIUS: f32 = 0.15;
+        let volume = 4.0 / 3.0 * PI * RADIUS.powi(3);
+        let mut config = PhysicsConfig::default();
+        config.sleep.enabled = false;
+        let mut world = PhysicsWorld::new(config);
+        let body =
+            world.create_body(RigidBodyDesc::dynamic().position(Point3::new(0.0, 50.0, 0.0)));
+        world.attach_collider(body, ColliderDesc::sphere(RADIUS).density(mass / volume));
+        world.wake_body(body);
+        let floor = FlatQuadGeometry::new(20.0);
+        let water = BuoyancyForceProvider::new(stream, vec![body]);
+        let providers: [&dyn SubstepForceProvider; 1] = [&water];
+        let mut debug = DebugLines::default();
+        (0..(seconds / DT) as usize)
+            .map(|_| {
+                world.update_contacts(DT, 1, &floor, &[], &mut debug);
+                world.substep(DT, &floor, &providers);
+                world.body(body).unwrap().linear_velocity()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_light_ball_is_carried_at_the_streams_speed_and_never_past_it() {
+        // Its drag is stiff against its mass: twice its velocity's worth of
+        // relaxation in a substep.
+        let stream = Stream {
+            velocity: Vector3::new(5.0, 0.0, 0.0),
+            area: 0.05,
+        };
+        let velocities = struck_ball(&stream, 0.5, 0.5);
+        assert!(velocities.iter().all(|v| v.x <= 5.0 + 1.0e-4), "overshot");
+        let last = velocities.last().unwrap();
+        assert!(last.x > 4.9, "carried at {} m/s", last.x);
+    }
+
+    #[test]
+    fn a_falling_stream_drives_a_ball_down_to_its_own_speed_and_a_little_past() {
+        // Past it by as much as its drag at that speed holds its weight up:
+        // ρ A Δ² = m g.
+        let stream = Stream {
+            velocity: Vector3::new(0.0, -8.0, 0.0),
+            area: 0.05,
+        };
+        let mass = 2.0;
+        let last = *struck_ball(&stream, mass, 1.0).last().unwrap();
+        let past = (mass * 9.81 / (FLUID_DENSITY * stream.area)).sqrt();
+        assert!(
+            (last.y + 8.0 + past).abs() < 0.05,
+            "falling at {} m/s",
+            last.y
+        );
+    }
+}
+
+#[cfg(test)]
+mod falls_in_a_level {
+    use std::path::Path;
+
+    use super::*;
+    use crate::debug::DebugLines;
+    use crate::level::load_level;
+    use crate::level_check::build_terrain;
+    use crate::physics::{ColliderDesc, PhysicsConfig, RigidBodyDesc, SequentialStepper, Stepper};
+    use crate::water::falling::FallPath;
+    use crate::water::WaterWorld;
+
+    /// Where a 0.4 m pine crate dropped at a point island_sea's water picks
+    /// is a quarter of a second later, and how fast it goes; with the water,
+    /// or without it.
+    fn crate_dropped(
+        wet: bool,
+        start: impl Fn(&WaterWorld) -> Point3<f32>,
+    ) -> (Point3<f32>, Vector3<f32>) {
+        const DT: f32 = 1.0 / 60.0;
+        let level = load_level(Path::new("levels/island_sea.level.ron")).unwrap();
+        let terrain = build_terrain(&level);
+        let water = WaterWorld::from_config(level.water.as_ref().unwrap(), &terrain);
+        let start = start(&water);
+
+        let mut config = PhysicsConfig::default();
+        config.sleep.enabled = false;
+        let mut world = PhysicsWorld::new(config);
+        let body = world.create_body(RigidBodyDesc::dynamic().position(start));
+        world.attach_collider(
+            body,
+            ColliderDesc::box_shape(Vector3::repeat(0.2)).density(500.0),
+        );
+        world.wake_body(body);
+        let query = water.query();
+        let buoyancy = BuoyancyForceProvider::new(&query, vec![body]);
+        let providers: Vec<&dyn SubstepForceProvider> =
+            if wet { vec![&buoyancy] } else { Vec::new() };
+        let mut stepper = SequentialStepper::new(1.0 / 240.0, 12);
+        let mut debug = DebugLines::default();
+        for _ in 0..15 {
+            stepper.step(&mut world, DT, &terrain, &[], &providers, &mut debug);
+        }
+        let state = world.body(body).unwrap();
+        (state.position(), state.linear_velocity())
+    }
+
+    /// The middle of the crag spring's jet.
+    fn in_the_jet(water: &WaterWorld) -> Point3<f32> {
+        let field = water.field();
+        let spring = &field.sources()[0];
+        let landing = field.cells().surface(spring.landing[0]) as f32;
+        let path = FallPath::jet(spring.origin, spring.velocity, spring.discharge, landing)
+            .expect("the spring comes out above the tarn");
+        path.at(0.5 * path.duration()).centre
+    }
+
+    /// Where the east falls strike a crate hardest halfway down, 5.5 m up.
+    fn in_the_east_falls(water: &WaterWorld) -> Point3<f32> {
+        let query = water.query();
+        let struck =
+            |at: &Point3<f32>| -> f32 { query.falling(*at, 0.35).iter().map(|s| s.area).sum() };
+        (0..40)
+            .flat_map(|i| (0..40).map(move |k| (i, k)))
+            .map(|(i, k)| Point3::new(15.0 + 0.1 * i as f32, 5.5, -8.0 + 0.1 * k as f32))
+            .max_by(|a, b| struck(a).total_cmp(&struck(b)))
+            .filter(|at| struck(at) > 0.0)
+            .expect("the east falls pour")
+    }
+
+    #[test]
+    #[ignore = "release: opens island_sea"]
+    fn the_crag_springs_jet_carries_a_crate_along_it() {
+        let (dry_at, dry_v) = crate_dropped(false, in_the_jet);
+        let (wet_at, wet_v) = crate_dropped(true, in_the_jet);
+        // The jet flies east at 7 m/s and falls at about 7 m/s halfway down:
+        // its 3 tonnes a second take the crate with them.
+        assert!(wet_v.x > 3.0, "carried east at {} m/s", wet_v.x);
+        assert!(
+            wet_v.y < dry_v.y - 1.0,
+            "{} against {} m/s down",
+            wet_v.y,
+            dry_v.y
+        );
+        assert!(
+            wet_at.x > dry_at.x + 0.5,
+            "{} against {}",
+            wet_at.x,
+            dry_at.x
+        );
+    }
+
+    #[test]
+    #[ignore = "release: opens island_sea"]
+    fn the_east_falls_drive_a_crate_down() {
+        let (_, dry_v) = crate_dropped(false, in_the_east_falls);
+        let (_, wet_v) = crate_dropped(true, in_the_east_falls);
+        // Halfway down the 7.6 m falls the water falls at 8 m/s; dropped
+        // still into it, the crate is driven down faster than it falls.
+        assert!(
+            wet_v.y < dry_v.y - 0.5,
+            "{} against {} m/s down",
+            wet_v.y,
+            dry_v.y
+        );
     }
 }

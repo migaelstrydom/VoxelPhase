@@ -1,7 +1,7 @@
-//! A source's jet: a tube of water along its ballistic arc from where its
-//! water comes out down to the water it lands in. Its cross-section carries
-//! the discharge at the speed the water has there, so it narrows as it
-//! speeds up; it also spreads across its flight and flattens as it falls.
+//! A source's jet: a tube of water round its path (`FallPath::jet`) from
+//! where its water comes out down to the water it lands in, the section the
+//! physics sees: carrying the discharge at the speed the water has there,
+//! spreading across its flight and flattening as it falls.
 //!
 //! ```text
 //!   origin ●──╮   row 0          each row: a ring of JET_RING vertices round
@@ -15,8 +15,10 @@ use std::f32::consts::TAU;
 
 use nalgebra::{Vector2, Vector3, Vector4};
 
+use crate::water::falling::FallPath;
 use crate::water::field::Source;
 
+use super::nappe::{PLUNGE_LIFT, PLUNGE_START};
 use super::vertex::RiverVertex;
 
 /// Rows of vertices along a jet's arc, after the first. Fixed, so a jet
@@ -25,57 +27,36 @@ pub(super) const JET_ROWS: u32 = 20;
 /// Vertices round each row.
 pub(super) const JET_RING: u32 = 10;
 
-/// Gravity on a jet, m/s².
-const GRAVITY: f32 = 9.81;
-/// Least and most half-width a jet is drawn, m.
-const MIN_RADIUS: f32 = 0.04;
-const MAX_RADIUS: f32 = 0.6;
-/// Least half-thickness a jet is drawn, m.
-const MIN_HALF_THICKNESS: f32 = 0.02;
-/// How much wider a jet is where it lands than a round jet of the same
-/// section would be, as a share: it spreads across its flight as it falls,
-/// and flattens to keep its section.
-const SPREAD: f32 = 0.8;
+/// Corners round the foam where a jet lands, and how far out past its
+/// edge it reaches, m.
+pub(super) const PLUNGE_CORNERS: u32 = 8;
+const PLUNGE_MARGIN: f32 = 0.6;
+
 /// How deep a jet is drawn per m³/s, and at most, m: a sheet's depth is how
 /// much of a curtain it is.
 const DEPTH_PER_DISCHARGE: f32 = 0.1;
 const MAX_DEPTH: f32 = 0.3;
 
 /// One source's jet down to a landing surface.
-pub(super) struct Jet<'a> {
-    source: &'a Source,
-    /// How far it falls, m.
-    fall: f32,
-    /// How long it flies, s.
-    duration: f32,
-    /// The way it flies, level, and across it.
+pub(super) struct Jet {
+    path: FallPath,
+    /// The way it flies, level.
     face: Vector2<f32>,
-    edge: Vector2<f32>,
+    /// Its flow, level, as every vertex carries it.
+    flow: Vector2<f32>,
     depth: f32,
 }
 
-impl<'a> Jet<'a> {
+impl Jet {
     /// The jet of `source` landing in water at `level`; none if it does not
     /// come out above it.
-    pub fn new(source: &'a Source, level: f32) -> Option<Self> {
-        let (origin, velocity) = (source.origin, source.velocity);
-        let fall = origin.y - level;
-        if fall <= 0.0 {
-            return None;
-        }
-        let duration = (velocity.y + (velocity.y.powi(2) + 2.0 * GRAVITY * fall).sqrt()) / GRAVITY;
-        let flight = Vector2::new(velocity.x, velocity.z);
-        let face = if flight.norm() > 1.0e-4 {
-            flight.normalize()
-        } else {
-            Vector2::new(1.0, 0.0)
-        };
+    pub fn new(source: &Source, level: f32) -> Option<Self> {
+        let path = FallPath::jet(source.origin, source.velocity, source.discharge, level)?;
+        let flow = Vector2::new(source.velocity.x, source.velocity.z);
         Some(Self {
-            source,
-            fall,
-            duration,
-            face,
-            edge: Vector2::new(-face.y, face.x),
+            path,
+            face: flow.try_normalize(1.0e-4).unwrap_or_else(Vector2::x),
+            flow,
             depth: (source.discharge * DEPTH_PER_DISCHARGE).min(MAX_DEPTH),
         })
     }
@@ -83,36 +64,62 @@ impl<'a> Jet<'a> {
     /// The vertex `around` of `JET_RING` round row `row`, from the top of
     /// the jet.
     pub fn vertex(&self, row: u32, around: u32) -> RiverVertex {
-        let (origin, velocity) = (self.source.origin, self.source.velocity);
-        let share = row as f32 / JET_ROWS as f32;
-        let t = self.duration * share;
-        let at = origin.coords + velocity * t - Vector3::y() * (0.5 * GRAVITY * t * t);
-        let moving = velocity - Vector3::y() * (GRAVITY * t);
-        // Its section carries the discharge at the speed it has here.
-        let section = self.source.discharge / moving.norm().max(1.0e-3);
-        let round = (section / std::f32::consts::PI).sqrt();
-        let half_width = (round * (1.0 + SPREAD * share)).clamp(MIN_RADIUS, MAX_RADIUS);
-        let half_thickness = (section / (std::f32::consts::PI * half_width))
-            .clamp(MIN_HALF_THICKNESS, half_width.max(MIN_HALF_THICKNESS));
-        // Square to the flight: across it, level, and over it, upwards.
-        let across = Vector3::new(self.edge.x, 0.0, self.edge.y);
-        let tangent = moving.try_normalize(1.0e-6).unwrap_or_else(Vector3::x);
-        let over = tangent.cross(&across);
-        let over = if over.y < 0.0 { -over } else { over };
+        let slab = self
+            .path
+            .at(self.path.duration() * row as f32 / JET_ROWS as f32);
         let angle = TAU * around as f32 / JET_RING as f32 + 0.25 * TAU;
         let (sin, cos) = angle.sin_cos();
-        let offset = across * (cos * half_width) + over * (sin * half_thickness);
-        let normal = (across * (cos / half_width) + over * (sin / half_thickness)).normalize();
-        let point = at + offset;
-        let mouth = Vector2::new(origin.x, origin.z).dot(&self.edge);
+        let offset =
+            slab.across * (cos * slab.half_length) + slab.over * (sin * slab.half_thickness);
+        let normal = (slab.across * (cos / slab.half_length)
+            + slab.over * (sin / slab.half_thickness))
+            .normalize();
+        let point = slab.centre + offset;
+        let origin = self.path.origin();
+        let edge = Vector2::new(slab.across.x, slab.across.z);
+        let mouth = Vector2::new(origin.x, origin.z).dot(&edge);
         RiverVertex {
             xz: Vector2::new(point.x, point.z),
             surface: point.y,
             depth: self.depth,
-            flow: Vector2::new(velocity.x, velocity.z),
+            flow: self.flow,
             face: self.face,
-            sheet: Vector4::new(origin.y - at.y, self.fall, 0.0, mouth + cos * half_width),
+            sheet: Vector4::new(
+                origin.y - slab.centre.y,
+                self.path.fall(),
+                0.0,
+                mouth + cos * slab.half_length,
+            ),
             normal,
+            fray: 0.0,
+        }
+    }
+
+    /// A vertex of the foam where the jet lands, lying on the water: its
+    /// middle for `corner` 0, else corner `corner` of `PLUNGE_CORNERS` round
+    /// it, as far out as the jet is wide and `PLUNGE_MARGIN` more. Its drop
+    /// is its fall plus how far out it is as a share of that, past the foot.
+    pub fn plunge(&self, corner: u32) -> RiverVertex {
+        let slab = self.path.at(self.path.duration());
+        let landed = slab.centre + slab.over * slab.half_thickness;
+        let (share, offset) = if corner == 0 {
+            (PLUNGE_START, Vector2::zeros())
+        } else {
+            let angle = TAU * (corner - 1) as f32 / PLUNGE_CORNERS as f32;
+            let (sin, cos) = angle.sin_cos();
+            let reach = slab.half_length + PLUNGE_MARGIN;
+            let edge = Vector2::new(slab.across.x, slab.across.z);
+            (1.0, (edge * cos + self.face * sin) * reach)
+        };
+        let fall = self.path.fall();
+        RiverVertex {
+            xz: Vector2::new(landed.x, landed.z) + offset,
+            surface: landed.y + PLUNGE_LIFT,
+            depth: self.depth,
+            flow: self.flow,
+            face: self.face,
+            sheet: Vector4::new(fall + share, fall, 0.0, 0.0),
+            normal: Vector3::y(),
             fray: 0.0,
         }
     }

@@ -17,11 +17,12 @@
 use nalgebra::Vector2;
 use smallvec::SmallVec;
 
+use crate::water::falling::{falls, off_map, thrown};
 use crate::water::field::{DrawnDepths, FieldCells, WaterField};
 use crate::water::geometry::{SpanGraph, SpanIndex, SpanRef, ORTHOGONAL};
 
 use super::jet::Jet;
-use super::nappe::{Face, Nappe, NAPPE_ROWS};
+use super::nappe::{plunge, Face, Nappe, NAPPE_ROWS};
 use super::river_mesh::RiverMesh;
 use super::scene::Refreshed;
 use super::vertex::RiverVertex;
@@ -113,26 +114,6 @@ impl DrawnCells<'_> {
     }
 }
 
-/// Surfaces further apart than this do not share a corner, m: a step this
-/// high between two wet cells is water going over an edge, drawn as a
-/// falling sheet. Lower steps are a sheet running down a slope, up to 200 %,
-/// unless the water `falls`.
-pub(super) const JOIN: f64 = 1.0;
-
-/// Least step, m, at which water standing on a floor above the water below
-/// it is drawn falling rather than sloping: steeper than 45° across a
-/// column.
-const FALL: f64 = 0.5;
-
-/// Whether water at `upper` on a bed at `bed` goes over an edge to water at
-/// `lower`, drawn as a sheet between them rather than a slope: a step over
-/// `JOIN`, or over `FALL` where the upper water's own floor stands above the
-/// lower water, which a slope between them would run through.
-pub(super) fn falls(upper: f64, bed: f64, lower: f64) -> bool {
-    let step = upper - lower;
-    step > JOIN || (step > FALL && bed > lower)
-}
-
 /// Whether a dry cell beside water at `level` is under rock there: its floor
 /// at its column's centre stands at or above the water, so a surface carried
 /// into its column runs into the terrain, which hides it. A column with no
@@ -163,47 +144,6 @@ pub(super) fn shore_depth(
 /// full, m²/s: a sheet is as deep as the water pours over its edge, so the
 /// draw cuts it where it only trickles.
 const FULL_POUR: f64 = 1.0;
-
-/// How far a sheet falling into the void past the map's edge hangs, m.
-const VOID_DROP: f64 = 6.0;
-
-/// The water a surface at `level` falls to off the map's edge: the sea's
-/// level `outside`, or `VOID_DROP` below where there is none.
-pub(super) fn off_map(level: f64, outside: Option<f64>) -> f64 {
-    outside.unwrap_or(level - VOID_DROP)
-}
-
-/// How fast water is thrown out over a lip when it barely moves, m/s, so
-/// even a trickle clears the face it falls down.
-const LIP_SPEED: f32 = 0.8;
-
-/// The furthest a sheet's foot is thrown out from its lip, m.
-const MAX_THROW: f32 = 1.6;
-
-/// Gravity, m/s².
-const GRAVITY: f32 = 9.81;
-
-/// How far out from its lip a sheet's foot lands: water leaving the lip at
-/// its velocity falls `fall` metres in sqrt(2 fall / g) seconds. The sheet
-/// leans out to it, clear of rock that leans out below the lip.
-///
-/// It is thrown the way its water moves, which the lip's corner shares with
-/// the sheets beside it: a lip running across the lattice is a staircase of
-/// sheets facing two ways, and thrown each its own way they would cross.
-/// The face only keeps it going out.
-pub(super) fn thrown(face: Vector2<f32>, flow: Vector2<f32>, fall: f32) -> Vector2<f32> {
-    if fall <= 0.0 {
-        return Vector2::zeros();
-    }
-    let velocity = flow + face * (LIP_SPEED - flow.dot(&face)).max(0.0) * 0.5;
-    let speed = velocity.norm();
-    let direction = if speed > 1.0e-4 {
-        velocity / speed
-    } else {
-        face
-    };
-    direction * (speed * (2.0 * fall / GRAVITY).sqrt()).min(MAX_THROW)
-}
 
 /// The foot of a sheet falling `fall` from `lip`, thrown out from it,
 /// on its top face; notes the fall on the lip.
@@ -396,6 +336,17 @@ pub(super) enum VertexSource {
         row: u32,
         face: Face,
     },
+    /// Corner `corner` of the foam where the jet of the field's source
+    /// `source` lands in the cell `landing` (`Jet::plunge`). It stands while
+    /// the jet's water still lands there.
+    JetPlunge {
+        source: u32,
+        landing: SpanIndex,
+        corner: u32,
+    },
+    /// A corner of the foam where a sheet lands, `share` of its reach out
+    /// from its foot, vertex `foot`, below its lip, vertex `lip` (`plunge`).
+    Plunge { lip: u32, foot: u32, share: f32 },
 }
 
 /// A built surface's vertex sources, and what else must hold for its shape
@@ -568,6 +519,22 @@ pub(super) fn refresh(field: &WaterField, cells: &DrawnCells, mesh: &mut RiverMe
                 let lip = mesh.vertices[lip as usize];
                 mesh.vertices[v] =
                     Nappe::between(lip, &mesh.vertices[foot as usize]).vertex(row, face);
+            }
+            &VertexSource::JetPlunge {
+                source,
+                landing,
+                corner,
+            } => {
+                let source = &field.sources()[source as usize];
+                held &= source.landing.first() == Some(&landing);
+                match Jet::new(source, cells.surface(landing) as f32) {
+                    Some(jet) => mesh.vertices[v] = jet.plunge(corner),
+                    None => held = false,
+                }
+            }
+            &VertexSource::Plunge { lip, foot, share } => {
+                let lip = mesh.vertices[lip as usize];
+                mesh.vertices[v] = plunge(lip, &mesh.vertices[foot as usize], share);
             }
         }
     }

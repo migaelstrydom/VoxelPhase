@@ -34,6 +34,8 @@ const float SHEET_GLASS_THICKNESS = 0.15;
 const float SHEET_WRAP = 0.4;
 // Gravity, m/s².
 const float GRAVITY = 9.81;
+// Most a patch of foam where falling water lands covers what is under it.
+const float PLUNGE_OPACITY = 0.9;
 // Pour depth at which a sheet is a full curtain, not a few strands, m.
 const float SHEET_FULL_POUR = 0.12;
 // Share of a sheet's half-width that overlaps its neighbour, to fade: its
@@ -244,6 +246,29 @@ vec4 shadeSheet(vec3 noiseN, vec3 V, vec3 L, float behindDepth, float time) {
     return vec4(color, alpha);
 }
 
+// Foam churned up where falling water lands, lying on the water out from
+// the foot: `fragSheet.x` past the fall by the share of its reach. White and
+// boiling under the fall, breaking into patches and thinning out to nothing
+// at its edge.
+vec4 shadePlunge(vec3 L, float time) {
+    float share = clamp(fragSheet.x - fragSheet.y, 0.0, 1.0);
+    vec2 xz = fragWorldPos.xz;
+    vec2 drift = vec2(0.31, -0.27) * time;
+    float patches = fbm(xz * 2.3 + drift) / 1.5;
+    float bubbles = foamLace(xz * 6.0 + drift * 1.5, time * 1.6, 0.35);
+    // Solid under the fall, in patches further out, gone before its edge.
+    float churn = 1.0 - share;
+    float cover = smoothstep(0.15, 0.6, 0.8 * patches + 0.7 * churn - 0.3);
+    cover *= 1.0 - smoothstep(0.7, 0.95, share);
+    float pour = smoothstep(0.0, SHEET_FULL_POUR, fragWetDepth);
+    float alpha = cover * pour * (0.75 + 0.25 * bubbles) * PLUNGE_OPACITY;
+    // The ends of a fall fray out here too.
+    float across = abs(fragSheet.w) + (patches - 0.5) * SHEET_OVERLAP_SHARE;
+    alpha *= 1.0 - fragFray * smoothstep(1.0 - SHEET_OVERLAP_SHARE, 1.0, across);
+    vec3 color = vec3(0.92, 0.96, 1.0) * (0.78 + 0.22 * max(L.y, 0.0) + 0.1 * bubbles);
+    return vec4(color, alpha);
+}
+
 void main() {
     // How much ground a pixel covers, taken before any fragment is discarded.
     float footprint = max(length(dFdx(fragWorldPos.xz)), length(dFdy(fragWorldPos.xz)));
@@ -431,7 +456,9 @@ void main() {
     color += SSS_COLOR * sss;
 
     if (sheet) {
-        outColor = shadeSheet(noiseN1, V, L, opticalDepth, time);
+        // Past its foot, falling water is the foam where it lands.
+        outColor = fragSheet.x > fragSheet.y ? shadePlunge(L, time)
+                                             : shadeSheet(noiseN1, V, L, opticalDepth, time);
         return;
     }
 

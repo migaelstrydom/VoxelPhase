@@ -3,6 +3,7 @@
 //! ```text
 //!   presentation   rendering/water (FieldScene)        the field's surface, read again as it moves
 //!   interaction    world · query · buoyancy · coupling  WaterQuery::sample(point)
+//!                  falling                             streams in the air, what they strike
 //!   waves          waves · surface                     ripples and swell over the field
 //!   field          field                               depths in cells, discharges on faces
 //!   geometry       geometry                            spans, and the graph joining them
@@ -12,6 +13,7 @@
 
 pub mod buoyancy;
 pub mod coupling;
+pub mod falling;
 pub mod field;
 pub mod geometry;
 pub mod ids;

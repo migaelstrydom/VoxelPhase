@@ -90,7 +90,8 @@ the sea is the ocean ring.
 
 A falling sheet's vertices carry `sheet` = (drop below the lip, whole fall,
 side, along the edge), the `normal` of their face, and `fray`. Its foot is
-thrown out from the lip (`field_sources::thrown`): the way the lip's water
+thrown out from the lip (`water::falling::thrown`, the rule the physics'
+falling streams use too): the way the lip's water
 moves, as far as it flies while it falls, so the sheet leans clear of rock
 that leans out below the lip; a staircase of sheets down a diagonal lip is
 thrown one way, not each its own.
@@ -114,7 +115,8 @@ where another sheet falls over an edge meeting at that corner, it runs on
 into it (`FieldScene::frays`).
 
 A source's jet (`jet.rs`) is a tube of `JET_ROWS` rings of `JET_RING`
-vertices along its arc down to the water it lands in, its section carrying
+vertices round its path (`water::falling::FallPath`, the jet the physics
+strikes bodies with) down to the water it lands in, its section carrying
 the discharge at the water's speed there, spreading and flattening as it
 falls. It is built into the chunk it lands in; refreshing it recomputes the
 arc to the landing water's level.
@@ -321,6 +323,14 @@ It is lit by its face's normal, wrapped (`SHEET_WRAP`), so the curl over the
 brink and the round of the curtain show. It frays in below its lip and out
 over its foot, frays out at the ends of a fall and fades where it runs
 against rock.
+
+Where falling water lands, a patch of foam lies on the water out from its
+foot (`nappe::plunge`, `Jet::plunge`): a quad per sheet, a fan under a jet.
+Its vertices' drop is past their fall by the share of the patch's reach,
+which is how the shader tells foam (`shadePlunge`) from the fall itself:
+solid under the fall, breaking into patches, gone before its edge. Spray and
+mist are particles, thrown where streams land in water that stays
+(`systems/fall_spray.rs`), on a fixed budget shared by every fall.
 
 ---
 

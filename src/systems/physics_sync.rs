@@ -313,14 +313,16 @@ impl<'a> System<'a> for PhysicsSyncSystem {
 
         let water_query = water_opt.as_deref().map(WaterWorld::query);
 
-        // Wake sleeping bodies whose water surface has changed.
+        // Wake sleeping bodies whose water surface has changed, or that
+        // falling water strikes.
         if let Some(ref query) = water_query {
             let sleeping = physics.world.sleeping_bodies();
             for handle in &sleeping {
                 if let Some(body) = physics.world.body(*handle) {
+                    let reach = physics.world.reach(*handle);
                     if self
                         .water_sleep_tracker
-                        .should_wake(*handle, query, body.position())
+                        .should_wake(*handle, query, body.position(), reach)
                     {
                         physics.world.wake_body(*handle);
                     }
