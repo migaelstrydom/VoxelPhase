@@ -27,6 +27,12 @@ Level(
                 features: [
                     //TerrainRoughness(frequency: 0.1, amplitude: 3.0, octaves: 3, seed: 42),
                     Crater(center: (-10.0, 10.0), radius: 10.0, depth: 5.0),
+                    // A rock pillar for the jet to come out of.
+                    Landmass(
+                        outline: [(-17.5, -15.5), (-14.5, -15.5), (-14.5, -12.5), (-17.5, -12.5)],
+                        shore_height: 0.0, height: 5.0, rise: 0.6, skirt: 0.0,
+                        warp: 0.0, relief: 0.0, seed: 51,
+                    ),
                     // Cliff(
                     //     from: (-40.0, -60.0),
                     //     to: (40.0, -60.0),
@@ -209,6 +215,20 @@ Level(
                     base: (6.0, 0.0, -10.0),
                     layers: 7,
                 ),
+
+                // The jet's test bed, round where the pillar's spring lands
+                // at (-11.2, 0, -13.8). The arc clips the top of the stack
+                // as it comes down; a plank's end lies where it lands, so it
+                // is struck off its centre and should spin; the rest are to
+                // push into the stream.
+                Box(pos: (-12.0, 0.3, -14.0), half_extents: (0.3, 0.3, 0.3), density: 300.0),
+                Box(pos: (-12.0, 0.9, -14.0), half_extents: (0.3, 0.3, 0.3), density: 300.0, yaw: 10.0),
+                Box(pos: (-12.0, 1.5, -14.0), half_extents: (0.3, 0.3, 0.3), density: 300.0, yaw: -8.0),
+                Plank(pos: (-11.2, 0.3, -12.7), length: 2.4, width: 0.8, yaw: 90.0),
+                Box(pos: (-9.5, 0.3, -14.0), half_extents: (0.3, 0.3, 0.3), density: 300.0),
+                Box(pos: (-9.2, 0.3, -15.4), half_extents: (0.3, 0.3, 0.3), density: 300.0, yaw: 20.0),
+                Plank(pos: (-9.6, 0.3, -12.2), length: 2.0, width: 0.8),
+                Plank(pos: (-7.6, 0.3, -16.8), length: 2.0, width: 0.8, yaw: 35.0),
 
                 PlankBridge(
                     pos: (8.0, 0.0, 10.0),
@@ -444,6 +464,10 @@ Level(
                 seed: (-10.0, 10.0),
                 surface_level: -1.5,
             ),
+            // Out of the pillar's east face, arcing down 4 m onto the
+            // drain below: 0.3 m³/s, about 2.9 kN where it lands.
+            Spring(position: (-14.8, 4.0, -14.0), direction: (4.0, 0.0, 0.0), discharge: 0.3),
+            Sink(min: (-13.5, -1.0, -16.5), max: (-8.5, 0.6, -11.5)),
         ],
     )),
 )

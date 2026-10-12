@@ -32,9 +32,9 @@ pub(super) const JET_RING: u32 = 10;
 pub(super) const PLUNGE_CORNERS: u32 = 8;
 const PLUNGE_MARGIN: f32 = 0.6;
 
-/// How deep a jet is drawn per m³/s, and at most, m: a sheet's depth is how
-/// much of a curtain it is.
-const DEPTH_PER_DISCHARGE: f32 = 0.1;
+/// Deepest a jet is drawn, m. A sheet's depth is how much of a curtain it
+/// is; a jet's is its own thickness, so a small jet is as solid as a big
+/// one.
 const MAX_DEPTH: f32 = 0.3;
 
 /// One source's jet down to a landing surface.
@@ -44,7 +44,6 @@ pub(super) struct Jet {
     face: Vector2<f32>,
     /// Its flow, level, as every vertex carries it.
     flow: Vector2<f32>,
-    depth: f32,
 }
 
 impl Jet {
@@ -57,7 +56,6 @@ impl Jet {
             path,
             face: flow.try_normalize(1.0e-4).unwrap_or_else(Vector2::x),
             flow,
-            depth: (source.discharge * DEPTH_PER_DISCHARGE).min(MAX_DEPTH),
         })
     }
 
@@ -81,7 +79,7 @@ impl Jet {
         RiverVertex {
             xz: Vector2::new(point.x, point.z),
             surface: point.y,
-            depth: self.depth,
+            depth: (2.0 * slab.half_thickness).min(MAX_DEPTH),
             flow: self.flow,
             face: self.face,
             sheet: Vector4::new(
@@ -115,7 +113,7 @@ impl Jet {
         RiverVertex {
             xz: Vector2::new(landed.x, landed.z) + offset,
             surface: landed.y + PLUNGE_LIFT,
-            depth: self.depth,
+            depth: (2.0 * slab.half_thickness).min(MAX_DEPTH),
             flow: self.flow,
             face: self.face,
             sheet: Vector4::new(fall + share, fall, 0.0, 0.0),
