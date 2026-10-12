@@ -5,7 +5,13 @@
 //!   woken by a disturbance, or by energy crossing in from an active neighbour
 //!   asleep after 2 s quiet; at most 32 awake, a tile woken past that kept only
 //!   if it outranks the weakest and farthest by a margin, which it displaces
+//!   each step: waves (c = 1.25 m/s) ─▶ carried along by the current under them
 //! ```
+//!
+//! Ripples ride the water they are on: on a river the current carries them
+//! downstream, so one faster than the waves sweeps a splash's ring away
+//! instead of letting it spread upstream. Where the surface breaks, down a
+//! fall or a step in rapids, they die.
 //!
 //! Keyed by body, so an island pool and the sea beneath it ripple apart, and
 //! each tile is masked to its body's columns. A merge or split makes a new
@@ -19,7 +25,7 @@
 
 use std::collections::BTreeMap;
 
-use nalgebra::Point3;
+use nalgebra::{Point3, Vector2};
 
 use crate::water::coupling::Disturbance;
 use crate::water::geometry::{
@@ -65,11 +71,41 @@ pub struct TileMask {
     /// [`corner_floor`](super::corner_floor) of the columns touching it, this tile's and its
     /// neighbours'.
     pub corners: [f32; TILE_CORNERS * TILE_CORNERS],
-    /// The body's level when the mask was taken, m.
+    /// Per column: the surface its water stands at, the one a dry column
+    /// banking the water takes from the water beside it; NaN where the body
+    /// holds no water there.
+    pub surfaces: [f32; COLUMNS_PER_CHUNK],
+    /// Per column: the water's current, m/s, x and z.
+    pub flows: [Vector2<f32>; COLUMNS_PER_CHUNK],
+    /// Per column: whether the surface breaks there, stepping down a fall
+    /// or through rapids, where ripples die.
+    pub breaks: [bool; COLUMNS_PER_CHUNK],
+    /// The mean surface of the tile's water when the mask was taken, m.
     pub level: f32,
 }
 
 impl TileMask {
+    /// Still water at `level` over the columns whose floor is not NaN.
+    pub fn still(
+        floors: [f32; COLUMNS_PER_CHUNK],
+        corners: [f32; TILE_CORNERS * TILE_CORNERS],
+        level: f32,
+    ) -> Self {
+        Self {
+            floors,
+            corners,
+            surfaces: floors.map(|f| if f.is_nan() { f32::NAN } else { level }),
+            flows: [Vector2::zeros(); COLUMNS_PER_CHUNK],
+            breaks: [false; COLUMNS_PER_CHUNK],
+            level,
+        }
+    }
+
+    /// Whether any of the tile's water runs.
+    fn flowing(&self) -> bool {
+        self.flows.iter().any(|f| *f != Vector2::zeros())
+    }
+
     pub fn is_empty(&self) -> bool {
         self.floors.iter().all(|f| f.is_nan())
     }
@@ -79,10 +115,32 @@ impl TileMask {
     }
 
     fn floor_under(&self, cell: usize) -> f32 {
-        let (ci, ck) = (cell % TILE_CELLS, cell / TILE_CELLS);
-        let column = (ck / CELLS_PER_COLUMN) * CHUNK_COLUMNS as usize + ci / CELLS_PER_COLUMN;
-        self.floors[column]
+        self.floors[column_of(cell)]
     }
+
+    /// The current at a cell's centre, bilinear between column centres and
+    /// held at the tile's edge.
+    fn flow_at(&self, cell: usize) -> Vector2<f32> {
+        let n = CHUNK_COLUMNS as usize;
+        let at = |c: usize| (c as f32 + 0.5) / CELLS_PER_COLUMN as f32 - 0.5;
+        let (fx, fz) = (
+            at(cell % TILE_CELLS).clamp(0.0, (n - 1) as f32),
+            at(cell / TILE_CELLS).clamp(0.0, (n - 1) as f32),
+        );
+        let (i0, k0) = (fx.floor() as usize, fz.floor() as usize);
+        let (i1, k1) = ((i0 + 1).min(n - 1), (k0 + 1).min(n - 1));
+        let (tx, tz) = (fx - i0 as f32, fz - k0 as f32);
+        let f = |i: usize, k: usize| self.flows[k * n + i];
+        let a = f(i0, k0) * (1.0 - tx) + f(i1, k0) * tx;
+        let b = f(i0, k1) * (1.0 - tx) + f(i1, k1) * tx;
+        a * (1.0 - tz) + b * tz
+    }
+}
+
+/// The column holding a cell, row-major over the tile's columns.
+fn column_of(cell: usize) -> usize {
+    let (ci, ck) = (cell % TILE_CELLS, cell / TILE_CELLS);
+    (ck / CELLS_PER_COLUMN) * CHUNK_COLUMNS as usize + ci / CELLS_PER_COLUMN
 }
 
 /// Where tile masks come from: whatever knows each body's columns.
@@ -146,6 +204,11 @@ pub struct RippleTile {
     wet: Vec<f32>,
     /// The most a cell's height may stray from the surface, m.
     cap: Vec<f32>,
+    /// The current under each cell, m/s, x and z; empty where the tile's
+    /// water stands still.
+    flow: Vec<Vector2<f32>>,
+    /// Damping where the surface breaks, 1/s, per cell.
+    breaking: Vec<f32>,
     /// Scratch for the step's new velocities.
     next_velocity: Vec<f32>,
     /// Seconds spent below the sleep energy.
@@ -162,6 +225,8 @@ impl RippleTile {
             velocity: vec![0.0; CELLS_PER_TILE],
             wet: vec![0.0; CELLS_PER_TILE],
             cap: vec![0.0; CELLS_PER_TILE],
+            flow: Vec::new(),
+            breaking: vec![0.0; CELLS_PER_TILE],
             next_velocity: vec![0.0; CELLS_PER_TILE],
             quiet: 0.0,
             energy: 0.0,
@@ -172,12 +237,24 @@ impl RippleTile {
 
     /// Take a new mask, stilling any cell that has gone dry.
     fn set_mask(&mut self, mask: TileMask, config: &RippleConfig) {
+        self.flow.clear();
+        if mask.flowing() {
+            self.flow
+                .extend((0..CELLS_PER_TILE).map(|cell| mask.flow_at(cell)));
+        }
         for cell in 0..CELLS_PER_TILE {
-            let floor = mask.floor_under(cell);
+            let column = column_of(cell);
+            let floor = mask.floors[column];
             let wet = !floor.is_nan();
             self.wet[cell] = if wet { 1.0 } else { 0.0 };
             self.cap[cell] = if wet {
-                (config.height_per_depth * (mask.level - floor)).clamp(0.0, config.max_height)
+                (config.height_per_depth * (mask.surfaces[column] - floor))
+                    .clamp(0.0, config.max_height)
+            } else {
+                0.0
+            };
+            self.breaking[cell] = if mask.breaks[column] {
+                BREAK_DAMPING
             } else {
                 0.0
             };
@@ -385,25 +462,11 @@ impl RippleTiles {
         for (key, next) in keys.iter().zip(next_velocities.iter_mut()) {
             let tile = &self.tiles[key];
             let neighbours = self.neighbours(key);
-            padded.fill(0.0);
-            for k in 0..TILE_CELLS {
-                let row = &tile.height[k * TILE_CELLS..(k + 1) * TILE_CELLS];
-                padded[(k + 1) * P + 1..(k + 1) * P + 1 + TILE_CELLS].copy_from_slice(row);
-            }
-            for along in 0..TILE_CELLS {
-                if let Some(n) = neighbours[0] {
-                    padded[(along + 1) * P + P - 1] = n.height[along * TILE_CELLS];
-                }
-                if let Some(n) = neighbours[1] {
-                    padded[(along + 1) * P] = n.height[along * TILE_CELLS + TILE_CELLS - 1];
-                }
-                if let Some(n) = neighbours[2] {
-                    padded[(P - 1) * P + along + 1] = n.height[along];
-                }
-                if let Some(n) = neighbours[3] {
-                    padded[along + 1] = n.height[(TILE_CELLS - 1) * TILE_CELLS + along];
-                }
-            }
+            pad(
+                &tile.height,
+                neighbours.map(|n| n.map(|t| &t.height[..])),
+                &mut padded,
+            );
             let mut sponge_x = [0.0f32; TILE_CELLS];
             let mut sponge_z = [0.0f32; TILE_CELLS];
             self.sponge_profile(&neighbours, &mut sponge_x, &mut sponge_z);
@@ -415,18 +478,20 @@ impl RippleTiles {
                 let row = k * TILE_CELLS..(k + 1) * TILE_CELLS;
                 let velocity = &tile.velocity[row.clone()];
                 let wet = &tile.wet[row.clone()];
+                let breaking = &tile.breaking[row.clone()];
                 let base = self.config.damping;
                 let damp_z = sponge_z[k];
-                for (((((out, w), (a, b)), v), wet), sx) in next[row]
+                for ((((((out, w), (a, b)), v), wet), sx), br) in next[row]
                     .iter_mut()
                     .zip(here.windows(3))
                     .zip(above.iter().zip(below))
                     .zip(velocity)
                     .zip(wet)
                     .zip(&sponge_x)
+                    .zip(breaking)
                 {
                     let laplacian = w[0] + w[2] + a + b - 4.0 * w[1];
-                    let damping = base + damp_z.max(*sx);
+                    let damping = base + damp_z.max(*sx) + br;
                     *out = (v + c2_dx2 * laplacian * dt) / (1.0 + damping * dt) * wet;
                 }
             }
@@ -457,7 +522,7 @@ impl RippleTiles {
                     let v = next[cell];
                     // The sponge settles heights as well as motion, so the
                     // edge it guards comes to rest at the still surface.
-                    let settle = 1.0 + sponge_z[k].max(sponge_x[i]) * dt;
+                    let settle = 1.0 + (sponge_z[k].max(sponge_x[i]) + tile.breaking[cell]) * dt;
                     let cap = tile.cap[cell];
                     let h = ((tile.height[cell] + v * dt) / settle).clamp(-cap, cap);
                     tile.velocity[cell] = v;
@@ -474,6 +539,8 @@ impl RippleTiles {
             }
         }
 
+        self.carry(dt, &keys);
+
         let sleep_after = self.config.sleep_after;
         self.tiles.retain(|_, t| t.quiet < sleep_after);
         for key in wakes {
@@ -481,6 +548,38 @@ impl RippleTiles {
                 break;
             }
             self.wake(key, masks);
+        }
+    }
+
+    /// Carry each flowing tile's ripples along the current under them, `dt`
+    /// seconds: each cell takes the heights and motion found upstream of it,
+    /// at most a cell away. Plain semi-Lagrangian steps blur a ripple a
+    /// little every frame, half a metre a second at a brisk current, which
+    /// is a ripple's own size; MacCormack's correction undoes most of that,
+    /// held within the values it sampled so it never overshoots. It costs
+    /// some speed on the shortest ripples, which ride at 70–85 % of the
+    /// current and die sooner than on still water. Every tile reads its
+    /// neighbours' cells as they were before any moved.
+    fn carry(&mut self, dt: f32, keys: &[RippleKey]) {
+        let mut carried: Vec<(RippleKey, Vec<f32>, Vec<f32>)> = Vec::new();
+        let mut scratch = Carry::default();
+        for key in keys {
+            let tile = &self.tiles[key];
+            if tile.flow.is_empty() {
+                continue;
+            }
+            let neighbours = self.neighbours(key);
+            let (height, velocity) = scratch.carry(
+                tile,
+                neighbours.map(|n| n.map(|t| (&t.height[..], &t.velocity[..]))),
+                dt / RIPPLE_CELL,
+            );
+            carried.push((*key, height, velocity));
+        }
+        for (key, height, velocity) in carried {
+            let tile = self.tiles.get_mut(&key).expect("key from this map");
+            tile.height = height;
+            tile.velocity = velocity;
         }
     }
 
@@ -598,6 +697,173 @@ impl RippleTiles {
         self.tiles.remove(&evicted);
     }
 }
+
+/// A tile's values in a buffer one cell wider all round, `(TILE_CELLS + 2)`
+/// square: the border holds the facing edge of each awake neighbour, given
+/// in [`EDGES`] order, and still water where there is none.
+fn pad(values: &[f32], neighbours: [Option<&[f32]>; 4], out: &mut [f32]) {
+    const P: usize = TILE_CELLS + 2;
+    out.fill(0.0);
+    for k in 0..TILE_CELLS {
+        out[(k + 1) * P + 1..(k + 1) * P + 1 + TILE_CELLS]
+            .copy_from_slice(&values[k * TILE_CELLS..(k + 1) * TILE_CELLS]);
+    }
+    for along in 0..TILE_CELLS {
+        if let Some(n) = neighbours[0] {
+            out[(along + 1) * P + P - 1] = n[along * TILE_CELLS];
+        }
+        if let Some(n) = neighbours[1] {
+            out[(along + 1) * P] = n[along * TILE_CELLS + TILE_CELLS - 1];
+        }
+        if let Some(n) = neighbours[2] {
+            out[(P - 1) * P + along + 1] = n[along];
+        }
+        if let Some(n) = neighbours[3] {
+            out[along + 1] = n[(TILE_CELLS - 1) * TILE_CELLS + along];
+        }
+    }
+}
+
+/// Side of a tile's buffer padded with one cell all round.
+const PADDED: usize = TILE_CELLS + 2;
+
+/// Scratch for carrying a tile's heights and motion along its current.
+#[derive(Default)]
+struct Carry {
+    heights: Vec<f32>,
+    velocities: Vec<f32>,
+    /// The forward step's heights and motion, and the least and most of
+    /// the values each was taken between.
+    forward: Vec<[f32; 2]>,
+    bounds: Vec<[f32; 4]>,
+}
+
+/// Where a point between a padded buffer's cells lies: the cell at its
+/// low corner and its weight toward each of the four around it.
+#[derive(Clone, Copy)]
+struct Sample {
+    at: usize,
+    weights: [f32; 4],
+}
+
+impl Sample {
+    /// Cell `cell` of the tile, moved `shift` cells (each at most one).
+    fn of(cell: usize, shift: Vector2<f32>) -> Self {
+        let last = (PADDED - 2) as f32;
+        let x = ((cell % TILE_CELLS + 1) as f32 + shift.x).clamp(0.0, last);
+        let z = ((cell / TILE_CELLS + 1) as f32 + shift.y).clamp(0.0, last);
+        let (x0, z0) = (x.floor(), z.floor());
+        let (tx, tz) = (x - x0, z - z0);
+        Self {
+            at: z0 as usize * PADDED + x0 as usize,
+            weights: [
+                (1.0 - tx) * (1.0 - tz),
+                tx * (1.0 - tz),
+                (1.0 - tx) * tz,
+                tx * tz,
+            ],
+        }
+    }
+
+    fn corners(self, values: &[f32]) -> [f32; 4] {
+        let a = self.at;
+        [
+            values[a],
+            values[a + 1],
+            values[a + PADDED],
+            values[a + PADDED + 1],
+        ]
+    }
+
+    fn read(self, values: &[f32]) -> f32 {
+        let c = self.corners(values);
+        let w = self.weights;
+        c[0] * w[0] + c[1] * w[1] + c[2] * w[2] + c[3] * w[3]
+    }
+
+    /// The value, and the least and most of the four it lies between.
+    fn read_bounded(self, values: &[f32]) -> (f32, f32, f32) {
+        let c = self.corners(values);
+        let w = self.weights;
+        (
+            c[0] * w[0] + c[1] * w[1] + c[2] * w[2] + c[3] * w[3],
+            c[0].min(c[1]).min(c[2].min(c[3])),
+            c[0].max(c[1]).max(c[2].max(c[3])),
+        )
+    }
+}
+
+impl Carry {
+    /// A tile's heights and motion, each wet cell's moved by its current
+    /// over `cells_per_speed` (MacCormack): carried forward, carried back
+    /// again, and corrected by half of what the round trip lost, within the
+    /// values the forward step sampled. Heights stay within the tile's cap.
+    fn carry(
+        &mut self,
+        tile: &RippleTile,
+        neighbours: [Option<(&[f32], &[f32])>; 4],
+        cells_per_speed: f32,
+    ) -> (Vec<f32>, Vec<f32>) {
+        let shift = |cell: usize| (tile.flow[cell] * cells_per_speed).map(|d| d.clamp(-1.0, 1.0));
+        self.heights.resize(PADDED * PADDED, 0.0);
+        self.velocities.resize(PADDED * PADDED, 0.0);
+        pad(
+            &tile.height,
+            neighbours.map(|n| n.map(|n| n.0)),
+            &mut self.heights,
+        );
+        pad(
+            &tile.velocity,
+            neighbours.map(|n| n.map(|n| n.1)),
+            &mut self.velocities,
+        );
+        self.forward.clear();
+        self.bounds.clear();
+        for cell in 0..CELLS_PER_TILE {
+            if tile.wet[cell] == 0.0 {
+                let (h, v) = (tile.height[cell], tile.velocity[cell]);
+                self.forward.push([h, v]);
+                self.bounds.push([h, h, v, v]);
+                continue;
+            }
+            let from = Sample::of(cell, -shift(cell));
+            let (h, h_low, h_high) = from.read_bounded(&self.heights);
+            let (v, v_low, v_high) = from.read_bounded(&self.velocities);
+            self.forward.push([h, v]);
+            self.bounds.push([h_low, h_high, v_low, v_high]);
+        }
+        let forward_h: Vec<f32> = self.forward.iter().map(|f| f[0]).collect();
+        let forward_v: Vec<f32> = self.forward.iter().map(|f| f[1]).collect();
+        pad(
+            &forward_h,
+            neighbours.map(|n| n.map(|n| n.0)),
+            &mut self.heights,
+        );
+        pad(
+            &forward_v,
+            neighbours.map(|n| n.map(|n| n.1)),
+            &mut self.velocities,
+        );
+        let mut height = forward_h;
+        let mut velocity = forward_v;
+        for cell in 0..CELLS_PER_TILE {
+            if tile.wet[cell] == 0.0 {
+                continue;
+            }
+            let back = Sample::of(cell, shift(cell));
+            let [h_low, h_high, v_low, v_high] = self.bounds[cell];
+            let cap = tile.cap[cell];
+            let h = height[cell] + 0.5 * (tile.height[cell] - back.read(&self.heights));
+            height[cell] = h.clamp(h_low, h_high).clamp(-cap, cap);
+            let v = velocity[cell] + 0.5 * (tile.velocity[cell] - back.read(&self.velocities));
+            velocity[cell] = v.clamp(v_low, v_high);
+        }
+        (height, velocity)
+    }
+}
+
+/// Damping where the surface breaks, 1/s: a sponge's outer edge.
+const BREAK_DAMPING: f32 = SPONGE_DAMPING;
 
 /// How many times the weakest awake tile's priority a tile woken past the
 /// budget needs to displace it.
@@ -717,15 +983,87 @@ mod tests {
 
     impl MaskSource for Everywhere {
         fn mask(&self, _tile: SpanChunkCoord, _body: WaterBodyId) -> Option<TileMask> {
-            Some(TileMask {
-                floors: [-1.0; COLUMNS_PER_CHUNK],
-                corners: [-1.0; TILE_CORNERS * TILE_CORNERS],
-                level: 0.0,
-            })
+            Some(TileMask::still(
+                [-1.0; COLUMNS_PER_CHUNK],
+                [-1.0; TILE_CORNERS * TILE_CORNERS],
+                0.0,
+            ))
         }
     }
 
     const BODY: WaterBodyId = SurfaceId(0);
+
+    /// Water everywhere, one metre deep, running along +x at `0` m/s.
+    struct Running(f32);
+
+    impl MaskSource for Running {
+        fn mask(&self, tile: SpanChunkCoord, body: WaterBodyId) -> Option<TileMask> {
+            let mut mask = Everywhere.mask(tile, body)?;
+            mask.flows = [Vector2::new(self.0, 0.0); COLUMNS_PER_CHUNK];
+            Some(mask)
+        }
+    }
+
+    /// Where a tile's ripples stand, weighted by their height squared, m
+    /// from its corner.
+    fn centre_of(ripples: &RippleTiles) -> Vector2<f32> {
+        let (_, tile) = ripples.active().next().expect("a tile awake");
+        let (mut sum, mut weight) = (Vector2::zeros(), 0.0);
+        for (cell, &h) in tile.height.iter().enumerate() {
+            let at = Vector2::new((cell % TILE_CELLS) as f32, (cell / TILE_CELLS) as f32)
+                .add_scalar(0.5)
+                * RIPPLE_CELL;
+            sum += at * h * h;
+            weight += h * h;
+        }
+        sum / weight
+    }
+
+    /// The tile's ripples' energy, Σh².
+    fn energy_of(ripples: &RippleTiles) -> f32 {
+        let (_, tile) = ripples.active().next().expect("a tile awake");
+        tile.height.iter().map(|h| h * h).sum()
+    }
+
+    /// Carrying ripples must not smear them: a ring carried by a current
+    /// keeps nearly the energy it keeps in still water.
+    #[test]
+    fn a_current_carries_ripples_without_smearing_them() {
+        let energy = |speed: f32| {
+            let masks = Running(speed);
+            let mut ripples = RippleTiles::new(RippleConfig::default());
+            ripples.disturb(BODY, 3.0, 4.0, 0.3, Disturbance::Velocity(-3.0), &masks);
+            for _ in 0..60 {
+                ripples.step(1.0 / 60.0, &masks);
+            }
+            energy_of(&ripples)
+        };
+        let (still, carried) = (energy(0.0), energy(1.5));
+        assert!(carried > 0.8 * still, "still {still}, carried {carried}");
+    }
+
+    #[test]
+    fn a_current_carries_a_splash_downstream() {
+        let drift = |speed: f32| {
+            let masks = Running(speed);
+            let mut ripples = RippleTiles::new(RippleConfig::default());
+            ripples.disturb(BODY, 3.0, 4.0, 0.5, Disturbance::Displacement(0.1), &masks);
+            let before = centre_of(&ripples);
+            for _ in 0..60 {
+                ripples.step(1.0 / 60.0, &masks);
+            }
+            centre_of(&ripples) - before
+        };
+        let still = drift(0.0);
+        assert!(still.norm() < 0.1, "still water held it at {still:?}");
+        // The correction that keeps ripples from smearing slows the
+        // shortest of them: they ride at most of the current's speed.
+        let carried = drift(1.0);
+        assert!(
+            (0.5..1.1).contains(&carried.x) && carried.y.abs() < 0.1,
+            "a 1 m/s current moved it {carried:?} in a second"
+        );
+    }
 
     #[test]
     fn a_splash_spreads_and_dies_away() {

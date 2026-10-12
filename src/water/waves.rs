@@ -4,15 +4,16 @@
 //! ```text
 //!   field surface ──▶ + swell   where the water stands near sea level,
 //!                               fading out over SEA_BAND either side
-//!                 ──▶ + ripples in awake tiles over still water: a tile
-//!                               wakes only where its water is flat to FLAT
+//!                 ──▶ + ripples in awake tiles, still or running: the
+//!                               current under them carries them, and they
+//!                               die where the surface breaks
 //! ```
 //!
 //! The field carries the water; the waves carry nothing. They only move the
 //! surface that is drawn and that floating bodies ride, and both read them
 //! the same way, so a body bobs on the swell it is drawn on.
 
-use nalgebra::Point3;
+use nalgebra::{Point3, Vector2};
 
 use crate::level::WaterConfig;
 use crate::water::coupling::{Disturbance, Disturbances};
@@ -29,9 +30,14 @@ use crate::water::surface::{
 /// takes it up over its last stretch rather than at a line.
 pub const SEA_BAND: f32 = 0.5;
 
-/// Most a tile's water may vary in height and still ripple, m: still water.
-/// Running water carries no ripple tile.
+/// Most a tile's water may vary in height and still stand still, m: still
+/// water, which the renderer divides blended surfaces by as one level.
 const FLAT: f32 = 0.03;
+
+/// Least step between neighbouring columns' surfaces at which the surface
+/// breaks, m: a fall's lip and foot, or a step in rapids, where ripples die.
+/// A river's own slope steps a few centimetres a column.
+const BREAK_STEP: f32 = 0.15;
 
 /// The sea beyond the map's open edges, as its swell sees it.
 #[derive(Debug, Clone, Copy)]
@@ -139,10 +145,22 @@ pub fn still_level(field: &WaterField, tile: SpanChunkCoord) -> Option<f32> {
     (count > 0 && high - low <= FLAT as f64).then(|| (sum / count as f64) as f32)
 }
 
-/// Tile masks read off the field: where a tile's water is still, the
-/// columns it covers and the floor under each.
+/// Tile masks read off the field: the columns a tile's water covers, the
+/// floor and surface under each and the current through it, still or
+/// running.
 struct FieldMasks<'a> {
     field: &'a WaterField,
+}
+
+/// A column's water as a tile's mask reads it.
+#[derive(Clone, Copy)]
+struct ColumnWater {
+    floor: f32,
+    surface: f32,
+    flow: Vector2<f32>,
+    /// Whether it holds water itself, rather than banking the water beside
+    /// it.
+    wet: bool,
 }
 
 impl MaskSource for FieldMasks<'_> {
@@ -150,83 +168,130 @@ impl MaskSource for FieldMasks<'_> {
         if body != FIELD_BODY {
             return None;
         }
-        let level = still_level(self.field, tile)?;
         // The tile's columns, a ring of its neighbours' for the corners on
         // its edges, and one more ring to find the banks beside them.
         const SIDE: usize = CHUNK_COLUMNS as usize + 4;
+        const ORTHOGONAL: [(i32, i32); 4] = [(1, 0), (-1, 0), (0, 1), (0, -1)];
         let origin = tile.column(0).offset(-2, -2);
         let at = |i: usize, k: usize| origin.offset(i as i32, k as i32);
-        let mut wet = [false; SIDE * SIDE];
-        let mut floor = [f32::NAN; SIDE * SIDE];
+        let beside = |i: usize, k: usize| {
+            ORTHOGONAL.iter().filter_map(move |&(di, dk)| {
+                let (ni, nk) = (i as i32 + di, k as i32 + dk);
+                ((0..SIDE as i32).contains(&ni) && (0..SIDE as i32).contains(&nk))
+                    .then(|| nk as usize * SIDE + ni as usize)
+            })
+        };
+        let mut water: [Option<ColumnWater>; SIDE * SIDE] = [None; SIDE * SIDE];
         for k in 0..SIDE {
             for i in 0..SIDE {
-                if let Some((f, w)) = self.column(at(i, k), level) {
-                    floor[k * SIDE + i] = f;
-                    wet[k * SIDE + i] = w;
-                }
+                water[k * SIDE + i] = self.wet_column(at(i, k));
             }
         }
         // A dry column is water's only where it banks wet water: its foot
-        // under the level, beside a wet column.
-        let drawn = |i: usize, k: usize| -> f32 {
-            let here = k * SIDE + i;
-            let beside = [(1, 0), (-1, 0), (0, 1), (0, -1)].iter().any(|&(di, dk)| {
-                let (ni, nk) = (i as i32 + di, k as i32 + dk);
-                (0..SIDE as i32).contains(&ni)
-                    && (0..SIDE as i32).contains(&nk)
-                    && wet[nk as usize * SIDE + ni as usize]
-            });
-            if wet[here] || beside {
-                floor[here]
-            } else {
-                f32::NAN
+        // under the surface beside it.
+        let mut drawn = water;
+        for k in 0..SIDE {
+            for i in 0..SIDE {
+                if water[k * SIDE + i].is_some() {
+                    continue;
+                }
+                let surface = beside(i, k)
+                    .filter_map(|n| water[n].map(|w| w.surface))
+                    .fold(f32::NAN, f32::max);
+                if !surface.is_nan() {
+                    drawn[k * SIDE + i] = self.bank(at(i, k), surface);
+                }
             }
-        };
+        }
+
         let n = CHUNK_COLUMNS as usize;
         let mut mask = TileMask {
             floors: [f32::NAN; COLUMNS_PER_CHUNK],
             corners: [f32::NAN; TILE_CORNERS * TILE_CORNERS],
-            level,
+            surfaces: [f32::NAN; COLUMNS_PER_CHUNK],
+            flows: [Vector2::zeros(); COLUMNS_PER_CHUNK],
+            breaks: [false; COLUMNS_PER_CHUNK],
+            level: 0.0,
         };
+        let (mut sum, mut count) = (0.0, 0);
         for k in 0..n {
             for i in 0..n {
-                mask.floors[k * n + i] = drawn(i + 2, k + 2);
+                let here = (k + 2) * SIDE + i + 2;
+                let Some(column) = drawn[here] else {
+                    continue;
+                };
+                let at = k * n + i;
+                mask.floors[at] = column.floor;
+                mask.surfaces[at] = column.surface;
+                mask.flows[at] = column.flow;
+                mask.breaks[at] = column.wet
+                    && beside(i + 2, k + 2).any(|b| {
+                        water[b].is_some_and(|w| (w.surface - column.surface).abs() > BREAK_STEP)
+                    });
+                if column.wet {
+                    sum += column.surface;
+                    count += 1;
+                }
             }
         }
+        if count == 0 {
+            return None;
+        }
+        mask.level = sum / count as f32;
+        let floor = |i: usize, k: usize| drawn[k * SIDE + i].map_or(f32::NAN, |c| c.floor);
         for k in 0..TILE_CORNERS {
             for i in 0..TILE_CORNERS {
                 mask.corners[k * TILE_CORNERS + i] = corner_floor([
-                    drawn(i + 1, k + 1),
-                    drawn(i + 2, k + 1),
-                    drawn(i + 1, k + 2),
-                    drawn(i + 2, k + 2),
+                    floor(i + 1, k + 1),
+                    floor(i + 2, k + 1),
+                    floor(i + 1, k + 2),
+                    floor(i + 2, k + 2),
                 ]);
             }
         }
-        (!mask.is_empty()).then_some(mask)
+        Some(mask)
     }
 }
 
 impl FieldMasks<'_> {
-    /// The floor of a column's span at `level`, if water there would cover
-    /// some of it, and whether it is wet at that level.
-    fn column(&self, column: Column, level: f32) -> Option<(f32, bool)> {
+    /// A column's water: of its wet spans, the one standing highest, which
+    /// is what is seen from above.
+    fn wet_column(&self, column: Column) -> Option<ColumnWater> {
         let graph = self.field.graph();
         if !graph.contains_column(column) {
             return None;
         }
-        let span = graph.span_at(column, level)?;
-        let floor = graph.span(span).floor_min;
-        if floor >= level {
+        let cells = self.field.cells();
+        graph
+            .spans(column)
+            .iter()
+            .enumerate()
+            .filter_map(|(ordinal, span)| {
+                let at = cells.index(graph, column, ordinal as u8)?;
+                (cells.depth(at) > WET_DEPTH).then(|| ColumnWater {
+                    floor: span.floor_min,
+                    surface: cells.surface(at) as f32,
+                    flow: self.field.velocity(at),
+                    wet: true,
+                })
+            })
+            .max_by(|a, b| a.surface.total_cmp(&b.surface))
+    }
+
+    /// A dry column beside water standing at `surface`, if its floor dips
+    /// under that surface: the water's bank, ripples running up it.
+    fn bank(&self, column: Column, surface: f32) -> Option<ColumnWater> {
+        let graph = self.field.graph();
+        if !graph.contains_column(column) {
             return None;
         }
-        let cells = self.field.cells();
-        let wet = cells
-            .index(graph, span.column, span.ordinal)
-            .is_some_and(|at| {
-                cells.depth(at) > WET_DEPTH && (cells.surface(at) as f32 - level).abs() <= FLAT
-            });
-        Some((floor, wet))
+        let floor = graph.span(graph.span_at(column, surface)?).floor_min;
+        (floor < surface).then_some(ColumnWater {
+            floor,
+            surface,
+            flow: Vector2::zeros(),
+            wet: false,
+        })
     }
 }
 
@@ -260,5 +325,42 @@ mod tests {
             moved = moved.max((ring.surface - still).abs());
         }
         assert!(moved > 1.0e-3, "1.5 m out the surface moved {moved} m");
+    }
+
+    /// A splash on island_sea's river below the cascade ripples it, and the
+    /// current, faster there than the waves, carries every ripple
+    /// downstream: none reaches as far upstream. Read from the ripples
+    /// themselves, as the river is still settling under them.
+    #[test]
+    #[ignore = "release: opens island_sea"]
+    fn a_splash_on_a_river_is_carried_downstream() {
+        let level = load_level(Path::new("levels/island_sea.level.ron")).unwrap();
+        let terrain = build_terrain(&level);
+        let mut water = WaterWorld::from_config(level.water.as_ref().unwrap(), &terrain);
+        let at = Point3::new(13.75, 10.0, -10.75);
+        let cell = water.field().cell_at(at).expect("the river runs there");
+        let current = water.field().velocity(cell);
+        assert!(current.norm() > 1.5, "the river runs at {current:?} there");
+        let along = current.normalize() * 1.25;
+        water.apply(&Disturbances {
+            pending: vec![(at, 0.3, Disturbance::Velocity(-3.0))],
+        });
+        assert!(water.waves().ripples().active_count() >= 1, "a tile woken");
+        let ripple = |water: &WaterWorld, sign: f32| {
+            water
+                .waves()
+                .ripple_at(at.x + sign * along.x, at.z + sign * along.y)
+                .abs()
+        };
+        let (mut downstream, mut upstream): (f32, f32) = (0.0, 0.0);
+        for _ in 0..60 {
+            water.step(1.0 / 60.0);
+            downstream = downstream.max(ripple(&water, 1.0));
+            upstream = upstream.max(ripple(&water, -1.0));
+        }
+        assert!(
+            downstream > 1.0e-2 && upstream < 1.0e-3,
+            "ripples {downstream} m downstream, {upstream} m upstream"
+        );
     }
 }

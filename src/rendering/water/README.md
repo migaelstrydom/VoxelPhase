@@ -129,7 +129,8 @@ out over the last metre of depth using the vertex's floor. A river surface
 (`river.vert`) takes the sea's swell by how near sea level its water stands
 (`water::waves::swell_share`), so lakes above the sea stay still.
 
-The field's ripple tiles wake only over still water, and each is drawn on
+The field's ripple tiles wake on still and running water alike (the current
+carries them, `water/surface/ripple_tiles.rs`), and each is drawn on
 its chunk's own river surface (`RippleTileView::surface`): `river.vert`
 lifts each vertex by the tile's ripples and `water.frag` takes their normal
 per pixel, so a rippling chunk is the same surface as its neighbours.

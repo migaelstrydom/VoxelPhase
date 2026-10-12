@@ -13,7 +13,7 @@
 
 use std::collections::HashMap;
 
-use nalgebra::Point3;
+use nalgebra::{Point3, Vector3};
 
 use crate::water::buoyancy::WaterSurface;
 
@@ -278,10 +278,15 @@ impl WaveBodyCoupler {
                 }
             }
 
-            // 3. Wake: self-propelled body moving horizontally through water.
-            //    Uses displacement injection behind the body.
-            if body.is_self_propelled && breaks_surface {
-                let horizontal_vel = nalgebra::Vector3::new(body.velocity.x, 0.0, body.velocity.z);
+            // 3. Wake: a body moving through the surface, against the
+            //    current: a swimmer across a pond, or a crate a river runs
+            //    past while something holds it. One drifting with the river
+            //    stirs nothing. Displacement is injected behind the body, as
+            //    the water passes it.
+            if breaks_surface {
+                let current = sample.as_ref().map_or(Vector3::zeros(), |s| s.velocity);
+                let relative = body.velocity - current;
+                let horizontal_vel = Vector3::new(relative.x, 0.0, relative.z);
                 let h_speed = horizontal_vel.magnitude();
                 if h_speed > self.config.wake_speed_threshold {
                     let move_dir = horizontal_vel / h_speed;
@@ -289,7 +294,14 @@ impl WaveBodyCoupler {
                     // Inject behind the body (opposite movement direction).
                     let wake_offset = -move_dir * body.footprint_radius * 0.8;
                     let wake_pos = body.position + wake_offset;
-                    let strength = -h_speed * self.config.wake_strength;
+                    // A swimmer pushes the water at full strength; a body
+                    // only carried or held by as much as its mass.
+                    let push = if body.is_self_propelled {
+                        1.0
+                    } else {
+                        mass_factor
+                    };
+                    let strength = -h_speed * self.config.wake_strength * push;
                     let surface_y = sample.as_ref().map_or(body.position.y, |s| s.surface_level);
                     ripples.disturb(
                         Point3::new(wake_pos.x, surface_y, wake_pos.z),
@@ -429,6 +441,34 @@ mod tests {
             "{:?}",
             ripples.disturbances
         );
+    }
+
+    /// Water at 5 m running at 1.5 m/s along x: a river.
+    struct River;
+
+    impl WaterSurface for River {
+        fn sample(&self, _point: Point3<f32>) -> Option<WaterSample> {
+            Some(WaterSample {
+                velocity: Vector3::new(1.5, 0.0, 0.0),
+                ..Flat
+                    .sample(Point3::origin())
+                    .expect("flat water everywhere")
+            })
+        }
+    }
+
+    #[test]
+    fn a_river_wakes_a_body_held_in_it_but_not_one_it_carries() {
+        let wakes = |velocity: Vector3<f32>| {
+            let mut ripples = Recorder::default();
+            let mut coupler = WaveBodyCoupler::new(WaveCouplingConfig::default());
+            for _ in 0..2 {
+                coupler.update(&[body(4.8, velocity, false)], &mut ripples, &River);
+            }
+            coupler.wake_events.len()
+        };
+        assert_eq!(wakes(Vector3::zeros()), 1, "held against the current");
+        assert_eq!(wakes(Vector3::new(1.5, 0.0, 0.0)), 0, "carried by it");
     }
 
     #[test]

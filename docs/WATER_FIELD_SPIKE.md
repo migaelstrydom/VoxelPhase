@@ -227,9 +227,13 @@ Found getting there:
 
 Waves over the field (`water/waves.rs`): the network's ripple tiles and the
 sea's swell, laid over the field's surface and carrying no water. A ripple
-tile wakes only where its 8 m of water is flat to 3 cm (lakes, the sea; not
-running water) and is drawn on the fine grid in place of that chunk's
-surface. Water takes the sea's swell by how near sea level it stands, all of
+tile wakes on any of the field's water and is drawn on that chunk's own
+surface. The current under it carries its ripples downstream
+(MacCormack-corrected semi-Lagrangian, at most a cell a step), so on a
+river faster than the waves a splash's ripples never reach upstream; they
+die where the surface steps more than 15 cm between columns, down a fall
+or through rapids. Bodies stir the water by how fast they move through it,
+so one held in a river leaves a wake and one it carries does not. Water takes the sea's swell by how near sea level it stands, all of
 it there and none 0.5 m above or below, so a lake above the sea stays still
 and a river takes the swell up over its last stretch. The query adds both to
 the surface, so floats ride what is drawn. A sample's surface is otherwise
@@ -242,7 +246,9 @@ canyon floor, now holds it: 1756 m³.
 
 ## 8. Not done
 
-- ripples on running water, and a swell on lakes (the network gave large ones one);
+- a swell on lakes (the network gave large ones one);
+- carried ripples ride at 70–85 % of the current and the shortest die
+  sooner than on still water: what keeps them from smearing costs that;
 - grenades do not ripple the water, only bodies moving in it;
 - the GPU heightfield path for drawing;
 - parallel stepping (chunks are independent within a substep's phases);
