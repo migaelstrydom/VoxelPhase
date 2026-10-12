@@ -31,7 +31,7 @@
 //! again from the cells it was built from (`field_sources`). Past the map's
 //! open edges, the sea runs out to the horizon as a ring.
 
-use nalgebra::{Vector2, Vector4};
+use nalgebra::{Vector2, Vector3, Vector4};
 use smallvec::SmallVec;
 
 use crate::water::field::{past_edge, DrawnDepths, Source, WaterField};
@@ -46,6 +46,7 @@ use super::field_sources::{
     self, corner_flow, falls, gather, Corner, DrawnCells, Meeting, VertexSource,
 };
 use super::jet::{Jet, JET_ROWS};
+use super::nappe::{strip, Face, Nappe, NAPPE_ROWS};
 use super::ocean_ring::{append_ring, occupied_bounds, MapRect};
 use super::river_mesh::{RiverDraw, RiverMesh};
 use super::scene::{MeshKey, Refreshed, RippleTileView, WaterMesh, WaterScene};
@@ -183,6 +184,11 @@ impl<'a> FieldScene<'a> {
     fn cell_surface(&self, mesh: &mut RiverMesh, span: SpanRef, at: SpanIndex, level: f64) {
         let cells = self.field.cells();
         let drawn = self.drawn_cells();
+        if let Some((upper, lower)) = self.passed(span, at) {
+            mesh.sources.passes(cells, upper, at);
+            mesh.sources.passes(cells, at, lower);
+            return;
+        }
         let column = span.column;
         let built =
             [(-1, -1), (1, -1), (1, 1), (-1, 1)].map(|(sx, sz)| self.corner(span, level, sx, sz));
@@ -208,7 +214,9 @@ impl<'a> FieldScene<'a> {
             for (other_span, other) in self.wet_across(span, step.di, step.dk) {
                 let other_level = drawn.surface(other);
                 if falls(level, drawn.bed(at) as f64, other_level) {
-                    self.sheet(mesh, column, step, first, at, (other_span, other_level));
+                    let (landing, land) = self.landing(mesh, (other_span, other));
+                    let landing = (landing, drawn.surface(land));
+                    self.sheet(mesh, step, first, (span, at), other_span, landing);
                 }
             }
         }
@@ -220,11 +228,59 @@ impl<'a> FieldScene<'a> {
                 continue;
             }
             if let Some(outside) = past_edge(self.field.sea(), direction, drawn.bed(at)) {
-                self.brink(mesh, *step, first, at, outside);
+                self.brink(mesh, span, *step, first, at, outside);
             }
         }
 
         self.shore(mesh, column, level, first);
+    }
+
+    /// The wet cell `span` (cell `at`) pours on to over one of its edges,
+    /// if any: the lowest it `falls` to.
+    fn pours_to(&self, span: SpanRef, at: SpanIndex) -> Option<(SpanRef, SpanIndex)> {
+        let drawn = self.drawn_cells();
+        let (level, bed) = (drawn.surface(at), drawn.bed(at) as f64);
+        ORTHOGONAL
+            .iter()
+            .flat_map(|s| self.wet_across(span, s.di, s.dk))
+            .filter(|&(_, c)| falls(level, bed, drawn.surface(c)))
+            .min_by(|a, b| drawn.surface(a.1).total_cmp(&drawn.surface(b.1)))
+    }
+
+    /// Whether the wet cell `span` (cell `at`) is a step a fall runs over:
+    /// water falls on to it from a cell beside it and it pours straight on
+    /// over another edge, as where a cliff leans across a column and its
+    /// face holds a film on each column it crosses. Water falling so fast
+    /// would clear it, so the fall above is drawn on past it (`landing`)
+    /// and it is not drawn. The cell it is fed from and the one it pours to.
+    fn passed(&self, span: SpanRef, at: SpanIndex) -> Option<(SpanIndex, SpanIndex)> {
+        let (_, lower) = self.pours_to(span, at)?;
+        let drawn = self.drawn_cells();
+        let level = drawn.surface(at);
+        let upper = ORTHOGONAL
+            .iter()
+            .flat_map(|s| self.wet_across(span, s.di, s.dk))
+            .map(|(_, c)| c)
+            .find(|&c| falls(drawn.surface(c), drawn.bed(c) as f64, level))?;
+        Some((upper, lower))
+    }
+
+    /// Where water falling on to the wet cell `lower` lands: that cell,
+    /// or past every step it runs over (`passed`), the first that does not
+    /// pour on. Each step passed is noted for the surface's shape to hold.
+    fn landing(
+        &self,
+        mesh: &mut RiverMesh,
+        mut lower: (SpanRef, SpanIndex),
+    ) -> (SpanRef, SpanIndex) {
+        for _ in 0..MAX_STEPS_PASSED {
+            let Some(next) = self.pours_to(lower.0, lower.1) else {
+                break;
+            };
+            mesh.sources.passes(self.field.cells(), lower.1, next.1);
+            lower = next;
+        }
+        lower
     }
 
     /// What stands in `column` at `level`, beside a wet cell there: water,
@@ -323,6 +379,9 @@ impl<'a> FieldScene<'a> {
     }
 }
 
+/// Most steps a fall is drawn on past (`FieldScene::landing`).
+const MAX_STEPS_PASSED: usize = 16;
+
 /// What a wet cell's surface meets in a column beside it.
 #[derive(Debug, Clone, Copy)]
 enum Beside {
@@ -338,10 +397,14 @@ enum Beside {
 impl FieldScene<'_> {
     /// A sheet of water falling over the edge a cell shares with the lower
     /// cell across `step`: from the cell's own corners on that edge (vertex
-    /// `first + i`) down to the lower cell's corners there, so it meets both
-    /// surfaces. It is as deep as the water pours over the edge, no deeper
+    /// `first + i`) down to the lower cell's surface at its corners there,
+    /// so it meets both surfaces, its foot thrown out from the lip and its
+    /// body curling over between them (`nappe`). It is as deep as the water pours over the edge, no deeper
     /// than the water it falls from, so it is cut where little or nothing
     /// pours.
+    ///
+    /// Where the lower cell is a step the fall runs over (`passed`), the
+    /// sheet falls on past it to the water it `landing`s in.
     ///
     /// Where the lower column's own floor carries the ledge on (`lip`), each
     /// end of the sheet hangs out at the lip instead, and the cell's surface
@@ -350,15 +413,13 @@ impl FieldScene<'_> {
     fn sheet(
         &self,
         mesh: &mut RiverMesh,
-        column: Column,
         step: Step,
         first: u32,
-        own: SpanIndex,
-        (lower_span, lower_level): (SpanRef, f64),
+        (own_span, own): (SpanRef, SpanIndex),
+        lower_span: SpanRef,
+        (landing, landing_level): (SpanRef, f64),
     ) {
         let ends = edge_ends(step);
-        let offsets = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
-        let (x0, z0) = column.min_corner();
         let face = Vector2::new(step.di as f32, step.dk as f32);
         let lower = self.field.graph().span(lower_span);
         let ledge = 0.5 * (self.field.cells().bed(own) + lower.bed);
@@ -380,27 +441,19 @@ impl FieldScene<'_> {
             mesh.indices
                 .extend_from_slice(&[a, b, base + 1, a, base + 1, base]);
         }
-        let base = self.lip_vertices(mesh, first, own, ends, shift, face);
-        for (end, &(i, (sx, sz))) in ends.iter().enumerate().rev() {
-            let (foot, _, source) = self.corner(lower_span, lower_level, sx, sz);
+        let frays = self.frays(own_span, own, step, ends);
+        let base = self.lip_vertices(mesh, first, own, ends, shift, face, frays);
+        let mut feet = [0; 2];
+        for (end, &(_, (sx, sz))) in ends.iter().enumerate() {
+            let (foot, _, source) = self.corner(landing, landing_level, sx, sz);
             let VertexSource::Corner { cells, shape } = source else {
                 unreachable!("a corner reads its cells");
             };
             for &c in &cells {
                 mesh.sources.reads(self.field.cells(), c);
             }
-            let top = mesh.vertices[base as usize + end];
-            let (cx, cz) = offsets[i];
-            let fall = top.surface - foot.height as f32;
-            mesh.vertices[base as usize + end].sheet.y = fall;
-            mesh.vertices.push(RiverVertex {
-                xz: Vector2::new(x0 + cx * COLUMN_SIZE, z0 + cz * COLUMN_SIZE)
-                    + shift[end]
-                    + field_sources::thrown(face, top.flow, fall),
-                surface: foot.height as f32,
-                sheet: Vector4::new(fall, fall, top.sheet.z, top.sheet.w),
-                ..top
-            });
+            let fall = mesh.vertices[base as usize + end].surface - foot.height as f32;
+            feet[end] = foot_vertex(mesh, base + end as u32, fall);
             mesh.sources.vertices.push(VertexSource::Foot {
                 from: base + end as u32,
                 cells,
@@ -408,15 +461,16 @@ impl FieldScene<'_> {
                 own,
             });
         }
-        mesh.sheet_indices
-            .extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+        nappe(mesh, [base, base + 1], feet);
     }
 }
 
 impl FieldScene<'_> {
     /// The tops of a sheet falling from cell `own` over the edge facing
     /// `face`: its corners at `ends` (vertex `first + i`) moved out by
-    /// `shift`, as deep as the water pours over the edge. Returns the first.
+    /// `shift`, as deep as the water pours over the edge, each fraying out
+    /// where `frays` says. Returns the first.
+    #[allow(clippy::too_many_arguments)]
     fn lip_vertices(
         &self,
         mesh: &mut RiverMesh,
@@ -425,6 +479,7 @@ impl FieldScene<'_> {
         ends: [(usize, (i32, i32)); 2],
         shift: [Vector2<f32>; 2],
         face: Vector2<f32>,
+        frays: [bool; 2],
     ) -> u32 {
         let base = mesh.vertices.len() as u32;
         let pour = field_sources::pour(self.field, &self.drawn_cells(), own, face);
@@ -439,6 +494,7 @@ impl FieldScene<'_> {
                 face,
                 depth: top.depth.min(pour),
                 sheet: Vector4::new(0.0, 0.0, side, along),
+                fray: frays[end] as u32 as f32,
                 ..top
             });
             mesh.sources.vertices.push(VertexSource::Lip {
@@ -449,6 +505,56 @@ impl FieldScene<'_> {
         base
     }
 
+    /// Whether each end of the sheet falling from `span` (cell `at`) across
+    /// `step` is an end of its fall, frayed out, rather than joining the
+    /// sheet beside it: no other water falls over an edge meeting at that
+    /// end's corner, between the four columns round it.
+    fn frays(
+        &self,
+        span: SpanRef,
+        at: SpanIndex,
+        step: Step,
+        ends: [(usize, (i32, i32)); 2],
+    ) -> [bool; 2] {
+        let graph = self.field.graph();
+        let drawn = self.drawn_cells();
+        let wet = |column: Column| -> SmallVec<[(SpanRef, SpanIndex); 2]> {
+            if !graph.contains_column(column) {
+                return SmallVec::new();
+            }
+            (0..graph.spans(column).len())
+                .map(|ordinal| SpanRef::key(column, ordinal as u8))
+                .filter_map(|key| Some((key, self.cell(key)?)))
+                .filter(|&(_, c)| drawn.drawn(c))
+                .collect()
+        };
+        // Whether water in `from` falls to `to` across (di, dk), other than
+        // this sheet's own.
+        let pours = |from: Column, di: i32, dk: i32| {
+            wet(from).into_iter().any(|(a_span, a)| {
+                self.wet_across(a_span, di, dk).into_iter().any(|(_, b)| {
+                    let own = a == at && (di, dk) == (step.di, step.dk);
+                    !own && falls(drawn.surface(a), drawn.bed(a) as f64, drawn.surface(b))
+                })
+            })
+        };
+        let column = span.column;
+        ends.map(|(_, sides)| {
+            let (ei, ek) = along_edge(step, sides);
+            let along = column.offset(ei, ek);
+            let below = column.offset(step.di, step.dk);
+            let edges = [
+                (column, ei, ek),
+                (along, step.di, step.dk),
+                (column, step.di, step.dk),
+                (below, ei, ek),
+            ];
+            !edges
+                .iter()
+                .any(|&(from, di, dk)| pours(from, di, dk) || pours(from.offset(di, dk), -di, -dk))
+        })
+    }
+
     /// A sheet of water falling off the map's edge across `step`, from the
     /// cell's own corners on that edge (vertex `first + i`) down to the
     /// water `outside`: the sea's level, or `VOID_DROP` below the cell's
@@ -457,6 +563,7 @@ impl FieldScene<'_> {
     fn brink(
         &self,
         mesh: &mut RiverMesh,
+        span: SpanRef,
         step: Step,
         first: u32,
         own: SpanIndex,
@@ -474,26 +581,24 @@ impl FieldScene<'_> {
         }
         let ends = edge_ends(step);
         let face = Vector2::new(step.di as f32, step.dk as f32);
-        let base = self.lip_vertices(mesh, first, own, ends, [Vector2::zeros(); 2], face);
-        for end in (0..2).rev() {
+        let frays = ends.map(|(_, sides)| {
+            let (di, dk) = along_edge(step, sides);
+            self.wet_across(span, di, dk).is_empty()
+        });
+        let shift = [Vector2::zeros(); 2];
+        let base = self.lip_vertices(mesh, first, own, ends, shift, face, frays);
+        let mut feet = [0; 2];
+        for (end, foot) in feet.iter_mut().enumerate() {
             let top = mesh.vertices[base as usize + end];
-            let surface = field_sources::off_map(top.surface as f64, outside) as f32;
-            let fall = top.surface - surface;
-            mesh.vertices[base as usize + end].sheet.y = fall;
-            mesh.vertices.push(RiverVertex {
-                xz: top.xz + field_sources::thrown(face, top.flow, fall),
-                surface,
-                sheet: Vector4::new(fall, fall, top.sheet.z, top.sheet.w),
-                ..top
-            });
+            let fall = top.surface - field_sources::off_map(top.surface as f64, outside) as f32;
+            *foot = foot_vertex(mesh, base + end as u32, fall);
             mesh.sources.vertices.push(VertexSource::Brink {
                 from: base + end as u32,
                 own,
                 outside,
             });
         }
-        mesh.sheet_indices
-            .extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+        nappe(mesh, [base, base + 1], feet);
     }
 }
 
@@ -504,23 +609,67 @@ impl FieldScene<'_> {
         let Some(jet) = Jet::new(source, self.drawn_cells().surface(landing) as f32) else {
             return;
         };
-        let base = mesh.vertices.len() as u32;
-        for row in 0..=JET_ROWS {
-            for side in [-1.0f32, 1.0] {
-                mesh.vertices.push(jet.vertex(row, side));
-                mesh.sources.vertices.push(VertexSource::Jet {
-                    source: index as u32,
-                    landing,
-                    row,
-                    side,
-                });
+        for face in Face::BOTH {
+            let mut rows = Vec::with_capacity(JET_ROWS as usize + 1);
+            for row in 0..=JET_ROWS {
+                rows.push([-1.0f32, 1.0].map(|side| {
+                    mesh.vertices.push(jet.vertex(row, side, face));
+                    mesh.sources.vertices.push(VertexSource::Jet {
+                        source: index as u32,
+                        landing,
+                        row,
+                        side,
+                        face,
+                    });
+                    mesh.vertices.len() as u32 - 1
+                }));
             }
+            strip(mesh, &rows);
         }
-        for row in 0..JET_ROWS {
-            let a = base + 2 * row;
-            mesh.sheet_indices
-                .extend_from_slice(&[a, a + 1, a + 3, a, a + 3, a + 2]);
+    }
+}
+
+/// Push the foot of a sheet whose lip is vertex `lip`, falling `fall`
+/// (`field_sources::foot`), and return its index.
+fn foot_vertex(mesh: &mut RiverMesh, lip: u32, fall: f32) -> u32 {
+    let foot = field_sources::foot(&mut mesh.vertices[lip as usize], fall);
+    mesh.vertices.push(foot);
+    mesh.vertices.len() as u32 - 1
+}
+
+/// The body of a sheet whose top face runs from its `lips` to its `feet`,
+/// one of each at either end of its edge: both its faces, row by row
+/// between them.
+fn nappe(mesh: &mut RiverMesh, lips: [u32; 2], feet: [u32; 2]) {
+    let nappes = [0, 1].map(|end| {
+        Nappe::between(
+            mesh.vertices[lips[end] as usize],
+            &mesh.vertices[feet[end] as usize],
+        )
+    });
+    for face in Face::BOTH {
+        let mut rows = Vec::with_capacity(NAPPE_ROWS as usize + 1);
+        for row in 0..=NAPPE_ROWS {
+            let mut pair = [0; 2];
+            for (end, index) in pair.iter_mut().enumerate() {
+                *index = match (face, row) {
+                    (Face::Top, 0) => lips[end],
+                    (Face::Top, NAPPE_ROWS) => feet[end],
+                    _ => {
+                        mesh.vertices.push(nappes[end].vertex(row, face));
+                        mesh.sources.vertices.push(VertexSource::Nappe {
+                            lip: lips[end],
+                            foot: feet[end],
+                            row,
+                            face,
+                        });
+                        mesh.vertices.len() as u32 - 1
+                    }
+                };
+            }
+            rows.push(pair);
         }
+        strip(mesh, &rows);
     }
 }
 
@@ -532,6 +681,16 @@ fn edge_ends(step: Step) -> [(usize, (i32, i32)); 2] {
         (-1, _) => [(0, (1, -1)), (3, (1, 1))],
         (_, 1) => [(3, (-1, -1)), (2, (1, -1))],
         _ => [(0, (-1, 1)), (1, (1, 1))],
+    }
+}
+
+/// The step along a cell's edge across `step` towards its end on the
+/// neighbouring column's `sides` (`edge_ends`).
+fn along_edge(step: Step, (sx, sz): (i32, i32)) -> (i32, i32) {
+    if step.di != 0 {
+        (0, sz)
+    } else {
+        (sx, 0)
     }
 }
 
@@ -567,6 +726,8 @@ fn quad(
             flow,
             face: Vector2::zeros(),
             sheet: Vector4::zeros(),
+            normal: Vector3::y(),
+            fray: 0.0,
         });
     }
     mesh.sources.vertices.extend(sources);

@@ -1,5 +1,5 @@
 use ash::vk;
-use nalgebra::{Vector2, Vector4};
+use nalgebra::{Vector2, Vector3, Vector4};
 
 /// A water surface vertex. Its height is not stored: every draw pushes its
 /// body's level, so the mesh outlives a change of level.
@@ -101,6 +101,13 @@ pub struct RiverVertex {
     /// side, along) at the foot, wherever the foot is thrown. Zero on the
     /// surface.
     pub sheet: Vector4<f32>,
+    /// On falling water, the way its face faces: a sheet or jet is drawn as
+    /// a body with a top face and an under face (`nappe.rs`). Up on the
+    /// surface.
+    pub normal: Vector3<f32>,
+    /// On falling water, 1 at an end of a fall, which frays out, and 0 at
+    /// an end that joins the sheet beside it. Zero on the surface.
+    pub fray: f32,
 }
 
 impl RiverVertex {
@@ -112,7 +119,7 @@ impl RiverVertex {
         }
     }
 
-    pub fn attribute_descriptions() -> [vk::VertexInputAttributeDescription; 5] {
+    pub fn attribute_descriptions() -> [vk::VertexInputAttributeDescription; 7] {
         let f = std::mem::size_of::<f32>() as u32;
         [
             vk::VertexInputAttributeDescription {
@@ -146,6 +153,18 @@ impl RiverVertex {
                 binding: 0,
                 format: vk::Format::R32G32B32A32_SFLOAT,
                 offset: 8 * f,
+            },
+            vk::VertexInputAttributeDescription {
+                location: 5,
+                binding: 0,
+                format: vk::Format::R32G32B32_SFLOAT,
+                offset: 12 * f,
+            },
+            vk::VertexInputAttributeDescription {
+                location: 6,
+                binding: 0,
+                format: vk::Format::R32_SFLOAT,
+                offset: 15 * f,
             },
         ]
     }

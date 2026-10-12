@@ -46,7 +46,9 @@ Surfaces replace the pixel and write depth; they composite with the copy
 themselves (refraction, absorption, their soft edges). Falling sheets and
 jets are drawn after every surface by a second pipeline that blends by alpha
 and writes no depth (`Composite` in `pipeline.rs`), so a curtain of strands
-shows the pool it falls into, which the copy does not hold.
+shows the pool it falls into, which the copy does not hold. It culls back
+faces: falling water is a body with a top face and an under face, and only
+the one turned to the eye is drawn.
 
 ## Meshes
 
@@ -87,16 +89,33 @@ the cap). The surfaces are then joined for upload. Past the map's open edges
 the sea is the ocean ring.
 
 A falling sheet's vertices carry `sheet` = (drop below the lip, whole fall,
-side, along the edge). Its foot is thrown out from the lip
-(`field_sources::thrown`): the way the lip's water moves, as far as it flies
-while it falls, so the sheet leans clear of rock that leans out below the
-lip; a staircase of sheets down a diagonal lip is thrown one way, not each
-its own. `river.vert` widens each sheet past the ends of its edge so it
-overlaps its neighbours, and the fragment shader fades the overlap.
+side, along the edge), the `normal` of their face, and `fray`. Its foot is
+thrown out from the lip (`field_sources::thrown`): the way the lip's water
+moves, as far as it flies while it falls, so the sheet leans clear of rock
+that leans out below the lip; a staircase of sheets down a diagonal lip is
+thrown one way, not each its own.
 
-A source's jet (`jet.rs`) is a ribbon of `JET_ROWS` rows along its arc down
-to the water it lands in, built into the chunk it lands in and drawn as a
-sheet; refreshing it recomputes the arc to the landing water's level.
+Between lip and foot the sheet is a tongue of water (`nappe.rs`): its top
+face follows the ballistic curve from the lip's surface to the foot in
+`NAPPE_ROWS` rows, curling over the brink; its under face lies below it by
+the water's thickness, the lip's pour depth at first, thinning as the water
+speeds up. Each face's rows are refreshed from the lip and foot.
+
+A cell on a cliff's face that water falls on to and pours straight on from,
+as where a leaning cliff crosses a column, is a step the fall runs over
+(`FieldScene::passed`): it is not drawn, and the sheet above falls on past
+it to the water it lands in, so a fall is one curtain, not a staircase of
+short ones with films on the ledges between. The surface's shape holds while
+each step passed still falls (`SurfaceSources::passes`).
+
+`river.vert` widens each sheet past the ends of its edge so it overlaps its
+neighbours. A sheet's end frays out only where it ends the fall (`fray` = 1):
+where another sheet falls over an edge meeting at that corner, it runs on
+into it (`FieldScene::frays`).
+
+A source's jet (`jet.rs`) is a body of `JET_ROWS` rows along its arc down to
+the water it lands in, both faces like a sheet's, built into the chunk it
+lands in; refreshing it recomputes the arc to the landing water's level.
 
 ## Swell and ripples
 
@@ -293,10 +312,13 @@ than `WHITE_WATER_SPEED`. It is worked out only where it can show.
 
 A sheet (`shadeSheet`) is clear glass for its first `SHEET_GLASS_DROP` below
 the lip, then white water in two layers of streaks falling at their own
-speeds, with air between them, sparser where little pours. It frays in below
-its lip and out over its foot, fades its widened ends over its neighbours and
-fades where it runs against rock. It is lit mostly by the sky, so its quads'
-facings do not show.
+speeds, with air between them, sparser where little pours. Its glass is
+deeper and less clear where the tongue is thick (`SHEET_GLASS_THICKNESS`),
+its thickness taken from the pour depth and the drop as the mesh takes it.
+It is lit by its face's normal, wrapped (`SHEET_WRAP`), so the curl over the
+brink and the round of the curtain show. It frays in below its lip and out
+over its foot, frays out at the ends of a fall and fades where it runs
+against rock.
 
 ---
 
@@ -326,7 +348,8 @@ src/rendering/water/
     field_sources.rs -- where each vertex of the field's surface reads its water
     river_parts.rs  -- river surfaces read again or rebuilt when their version moves
     ocean_ring.rs   -- the sea past the map's open edges
-    jet.rs          -- a source's jet, drawn as a falling sheet
+    nappe.rs        -- a falling sheet's body: top and under faces, lip to foot
+    jet.rs          -- a source's jet, drawn as a body of falling water
     divide.rs       -- which side of the water a blended surface lies on
     footprint.rs    -- the screen rectangle the water can read
     pipeline.rs     -- Vulkan pipelines, descriptor set for the refraction copy

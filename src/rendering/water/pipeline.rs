@@ -29,8 +29,9 @@ pub const BODY_PUSH_SIZE: u32 = 32;
 enum Composite {
     /// Replace the pixel and write depth: a surface.
     Replace,
-    /// Blend over it by the fragment's alpha, writing no depth: a falling
-    /// sheet.
+    /// Blend over it by the fragment's alpha, writing no depth, and cull
+    /// back faces: falling water, a body whose far face must not show
+    /// through its near one.
     Blend,
 }
 
@@ -43,7 +44,8 @@ pub const FRAGMENT_PUSH_OFFSET: u32 = BODY_PUSH_OFFSET + BODY_PUSH_SIZE;
 /// - Surfaces that composite with the copy themselves, replace the pixel and
 ///   write depth; falling sheets blended over them, writing none (`Composite`)
 /// - Depth test enabled (water occluded by terrain)
-/// - No backface culling (water visible from both sides)
+/// - No backface culling on surfaces (visible from both sides); falling
+///   water culls its far face
 /// - Combined image sampler for the refraction copy's depth (volumetric depth)
 /// - Combined image sampler for its colour (screen-space refraction)
 pub struct WaterPipeline {
@@ -355,7 +357,10 @@ impl WaterPipeline {
 
         let rasterization = vk::PipelineRasterizationStateCreateInfo::default()
             .polygon_mode(vk::PolygonMode::FILL)
-            .cull_mode(vk::CullModeFlags::NONE)
+            .cull_mode(match composite {
+                Composite::Replace => vk::CullModeFlags::NONE,
+                Composite::Blend => vk::CullModeFlags::BACK,
+            })
             .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
             .line_width(1.0);
 

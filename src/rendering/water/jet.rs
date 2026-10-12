@@ -1,9 +1,10 @@
-//! A source's jet, drawn as a falling sheet: a ribbon along its ballistic
-//! arc from where its water comes out down to the water it lands in, facing
-//! the way it flies and widening as it falls.
+//! A source's jet, drawn as a falling sheet: a body of water along its
+//! ballistic arc from where its water comes out down to the water it lands
+//! in, its faces square to the way it flies (`nappe::layered`), widening and
+//! thinning as it falls.
 //!
 //! ```text
-//!   origin ●──╮   row 0          each row: two vertices, a side apart
+//!   origin ●──╮   row 0          each row of each face: two vertices, a side apart
 //!              ╲                 across the flight; the sheet shader sees
 //!               ╲  row k         (drop, fall, side, along) as on any sheet
 //!                ╲
@@ -14,6 +15,7 @@ use nalgebra::{Vector2, Vector3, Vector4};
 
 use crate::water::field::Source;
 
+use super::nappe::{layered, Face};
 use super::vertex::RiverVertex;
 
 /// Rows of vertices along a jet's arc, after the first. Fixed, so a jet
@@ -76,21 +78,28 @@ impl<'a> Jet<'a> {
         })
     }
 
-    /// The vertex on `side` (-1 or 1 across the flight) of row `row`.
-    pub fn vertex(&self, row: u32, side: f32) -> RiverVertex {
+    /// The vertex of `face` on `side` (-1 or 1 across the flight) of row
+    /// `row`.
+    pub fn vertex(&self, row: u32, side: f32, face: Face) -> RiverVertex {
         let (origin, velocity) = (self.source.origin, self.source.velocity);
         let share = row as f32 / JET_ROWS as f32;
         let t = self.duration * share;
         let at = origin.coords + velocity * t - Vector3::y() * (0.5 * GRAVITY * t * t);
         let half = 0.5 * self.width * (1.0 + SPREAD * share);
         let mouth = Vector2::new(origin.x, origin.z).dot(&self.edge);
-        RiverVertex {
+        let moving = velocity - Vector3::y() * (GRAVITY * t);
+        // Its discharge through the width it has spread to, at its speed.
+        let thickness = self.source.discharge / (2.0 * half * moving.norm().max(1.0e-3));
+        let top = RiverVertex {
             xz: Vector2::new(at.x, at.z) + self.edge * (side * half),
             surface: at.y,
             depth: self.depth,
             flow: Vector2::new(velocity.x, velocity.z),
             face: self.face,
             sheet: Vector4::new(origin.y - at.y, self.fall, side, side * half + mouth),
-        }
+            normal: Vector3::y(),
+            fray: 1.0,
+        };
+        layered(top, moving, thickness, face)
     }
 }

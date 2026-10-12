@@ -27,6 +27,13 @@ const float SHEET_GLASS_DROP = 1.2;
 // fall steps down a column at a time.
 const float SHEET_FOOT_FADE = 0.9;
 const float SHEET_LIP_FADE = 0.25;
+// How thick falling glass is when it is two-thirds opaque, m.
+const float SHEET_GLASS_THICKNESS = 0.15;
+// How far light wraps round a falling curtain past its terminator: white
+// water scatters it, so its shadowed side is only dimmer.
+const float SHEET_WRAP = 0.4;
+// Gravity, m/s².
+const float GRAVITY = 9.81;
 // Pour depth at which a sheet is a full curtain, not a few strands, m.
 const float SHEET_FULL_POUR = 0.12;
 // Share of a sheet's half-width that overlaps its neighbour, to fade: its
@@ -81,6 +88,7 @@ layout(location = 8) flat in int fragMasked;
 // along its edge it hangs from, m; and across the sheet, -1 to 1 between the
 // ends of its widened edge. Zero on a surface.
 layout(location = 9) in vec4 fragSheet;
+layout(location = 10) in float fragFray;
 
 // The scene beyond the water, copied before the water is drawn (sampled at
 // offset UVs for refraction)
@@ -185,8 +193,8 @@ vec2 refractedLookup(vec2 screenUV, vec3 N, float opticalDepth) {
 vec4 shadeSheet(vec3 noiseN, vec3 V, vec3 L, float behindDepth, float time) {
     float drop = max(fragSheet.x, 0.0);
     float fall = max(fragSheet.y, 1.0e-3);
-    vec3 face = normalize(vec3(fragNormal.x, 0.0, fragNormal.z));
-    face = dot(face, V) < 0.0 ? -face : face;
+    // The face seen: the pipeline culls the one turned away.
+    vec3 face = normalize(fragNormal);
     // Along the edge, as it hangs from its lip and the same on every quad of
     // it, so the streaks fall straight and run on from one to the next.
     float along = fragSheet.z;
@@ -198,28 +206,39 @@ vec4 shadeSheet(vec3 noiseN, vec3 V, vec3 L, float behindDepth, float time) {
     float aerated = smoothstep(0.0, SHEET_GLASS_DROP, drop);
     float pour = smoothstep(0.0, SHEET_FULL_POUR, fragWetDepth);
 
-    // Lit mostly by the sky round it, little by its facing: each quad faces
-    // its own way, and white water shows no facets.
-    vec3 sheetN = normalize(face + vec3(0.0, 0.35 * (strands - 0.5), 0.0) + 0.6 * vec3(noiseN.x, 0.0, noiseN.z));
-    float NdotL = max(dot(sheetN, L), 0.0);
+    // How thick the tongue is here: the flow over its lip keeps its rate as
+    // it speeds up, so it thins as it falls (`nappe.rs`), from about 1 m/s
+    // off the lip. Thick glass is deep green and hides what is behind it.
+    float thickness = fragWetDepth * inversesqrt(1.0 + 2.0 * GRAVITY * drop);
+    float body = 1.0 - exp(-thickness / SHEET_GLASS_THICKNESS);
+
+    // Lit by its own shape, so the curl over the lip and the round of the
+    // curtain show; the streaks and the noise only ruffle it.
+    vec3 sheetN = normalize(face + vec3(0.0, 0.25 * (strands - 0.5), 0.0) + 0.35 * vec3(noiseN.x, 0.0, noiseN.z));
+    float wrapped = clamp((dot(sheetN, L) + SHEET_WRAP) / (1.0 + SHEET_WRAP), 0.0, 1.0);
+    float skyward = 0.5 + 0.5 * sheetN.y;
+    vec3 H = normalize(L + V);
+    float NdotH = max(dot(sheetN, H), 0.0);
     float fresnel = 0.02 + 0.98 * pow(1.0 - max(dot(sheetN, V), 0.0), 5.0);
     vec3 sky = mix(vec3(0.6, 0.7, 0.8), vec3(0.25, 0.4, 0.7), max(reflect(-V, sheetN).y, 0.0));
-    vec3 glass = mix(vec3(0.07, 0.24, 0.26), sky, 0.15 + 0.6 * fresnel)
-        + vec3(1.0, 0.95, 0.8) * pow(max(dot(sheetN, normalize(L + V)), 0.0), 96.0) * 0.6;
-    vec3 white = vec3(0.92, 0.96, 1.0) * (0.72 + 0.18 * NdotL + 0.25 * strands);
+    vec3 tint = mix(vec3(0.10, 0.30, 0.32), vec3(0.03, 0.15, 0.17), body);
+    vec3 glass = mix(tint, sky, 0.1 + 0.6 * fresnel)
+        + vec3(1.0, 0.95, 0.8) * pow(NdotH, 96.0) * 0.6;
+    vec3 white = vec3(0.92, 0.96, 1.0) * (0.42 + 0.45 * wrapped + 0.15 * skyward + 0.2 * strands)
+        + vec3(1.0, 0.95, 0.8) * pow(NdotH, 24.0) * 0.15;
     vec3 color = mix(glass, white, aerated * (0.6 + 0.4 * strands));
 
-    // Glass is a thin film over the rock; white water is strands with air
-    // between them, sparser where little pours.
-    float glassAlpha = 0.28 + 0.25 * fresnel;
+    // Glass is clear where it is thin and deep where it is thick; white
+    // water is strands with air between them, sparser where little pours.
+    float glassAlpha = mix(0.25, 0.75, body) + 0.25 * fresnel;
     float strandAlpha = smoothstep(0.62 - 0.3 * pour, 0.82 - 0.25 * pour, strands + 0.12 * aerated);
     float alpha = mix(glassAlpha * mix(0.4, 1.0, pour), 0.92 * strandAlpha, aerated);
     // It frays in below its lip and out over the white water at its foot.
     alpha *= smoothstep(0.0, SHEET_FOOT_FADE * (0.5 + coarse), fall - drop);
     alpha *= smoothstep(0.0, SHEET_LIP_FADE * (0.5 + coarse), drop);
-    // Its widened ends fade over the sheets beside it, raggedly.
+    // The ends of a fall fray out; where a sheet joins the next it runs on.
     float across = abs(fragSheet.w) + (coarse - 0.5) * SHEET_OVERLAP_SHARE;
-    alpha *= 1.0 - smoothstep(1.0 - SHEET_OVERLAP_SHARE, 1.0, across);
+    alpha *= 1.0 - fragFray * smoothstep(1.0 - SHEET_OVERLAP_SHARE, 1.0, across);
     // Where it runs against rock, it fades into it rather than cutting it.
     alpha *= smoothstep(0.0, 0.12, behindDepth);
     return vec4(color, alpha);
@@ -235,7 +254,7 @@ void main() {
         discard;
     }
 
-    bool sheet = abs(fragNormal.y) < 0.5;
+    bool sheet = fragSheet.y > 0.0;
     float time = fpc.projParams.z;
 
     // A river surface is drawn only where its water is deep enough: past its
