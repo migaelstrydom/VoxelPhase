@@ -13,16 +13,20 @@
 //!   a source landing in the chunk
 //!            ──▶ a tube along its jet's arc, from where it comes out
 //!                down to the water it lands in, and foam where it lands
-//!   dry column beside one, or diagonal to it between two dry sides
-//!            ──▶ a shore patch carrying the cell's surface half a column
-//!                into it: drawn on into rock, which hides it; cut over a
-//!                hollow below the water
+//!   dry column beside one
+//!            ──▶ a skirt carrying the cell's surface over it, each quarter
+//!                of the column laid by one wet cell
 //! ```
 //!
-//! Each vertex also carries the water's depth there, negative out over a
-//! hollow; the draw cuts the surface at `river.vert`'s shore depth. Against
-//! rock the terrain itself draws the shoreline, where it rises through the
-//! surface; over a hollow the shoreline is a contour across the patch.
+//! The mesher does not decide where a shore is. The skirt reaches past it,
+//! and the draw finds it to the pixel: the terrain hides the skirt wherever
+//! the ground stands above the water, and `water.frag` fades the surface
+//! where the ground under it, read from the scene's depth, comes up to it,
+//! and drops a skirt over a hollow the water has not reached.
+//!
+//! Each vertex also carries the water's depth there, as the field has it;
+//! within the water's own cells the draw cuts the surface at `river.vert`'s
+//! shore depth too.
 //!
 //! Every vertex carries its own height and a velocity, the mean of the cells
 //! its corner joins, so the river shader's flow mapping runs on the field's
@@ -179,7 +183,7 @@ impl<'a> FieldScene<'a> {
             .collect()
     }
 
-    /// A cell's quad, and the falling sheets and shore patches around it.
+    /// A cell's quad, and the falling sheets and skirt around it.
     fn cell_surface(&self, mesh: &mut RiverMesh, span: SpanRef, at: SpanIndex, level: f64) {
         let cells = self.field.cells();
         let drawn = self.drawn_cells();
@@ -231,7 +235,7 @@ impl<'a> FieldScene<'a> {
             }
         }
 
-        self.shore(mesh, column, level, first);
+        self.skirt(mesh, column, level, first);
     }
 
     /// The wet cell `span` (cell `at`) pours on to over one of its edges,
@@ -299,83 +303,164 @@ impl<'a> FieldScene<'a> {
         }
     }
 
-    /// The cell's surface carried out over the dry columns around it, half
-    /// a column into each beside it and a quarter into each diagonal whose
-    /// two sides are dry too, so a shore meets the terrain at outer and inner
-    /// corners alike. Each patch's corners copy the cell's nearest corner
-    /// (vertex `first + i`); `shore_depth` draws each over rock and cuts it
-    /// over a hollow. Patches from cells on either side of a dry column meet
-    /// at its centre, without overlapping.
-    fn shore(&self, mesh: &mut RiverMesh, column: Column, level: f64, first: u32) {
-        let cells = self.field.cells();
-        let drawn = self.drawn_cells();
-        let around: [[Beside; 3]; 3] =
-            [-1, 0, 1].map(|dk| [-1, 0, 1].map(|di| self.beside(column.offset(di, dk), level)));
-        let at = |di: i32, dk: i32| around[(dk + 1) as usize][(di + 1) as usize];
-        let dry = |di: i32, dk: i32| matches!(at(di, dk), Beside::Dry(..));
-        let mut patches: SmallVec<[(i32, i32); 8]> =
-            ORTHOGONAL.iter().map(|s| (s.di, s.dk)).collect();
-        for (sx, sz) in [(-1, -1), (1, -1), (1, 1), (-1, 1)] {
-            if dry(sx, 0) && dry(0, sz) {
-                patches.push((sx, sz));
-            }
+    /// The cell's surface carried out over the dry columns around it, as a
+    /// skirt the depth test and the fragment shader trim: the terrain hides
+    /// it wherever the ground stands above the water, and the shader drops
+    /// it wherever the water under it would be deeper than a bank could be
+    /// that far out (`river.vert`'s reach). Nothing here decides where the
+    /// shore is.
+    ///
+    /// Each quarter of a dry column beside water is laid once, by the wet
+    /// cell nearest it (`skirt_owner`), so skirts never overlap. Its corners
+    /// take the cell's surface where they lie, clamped to the cell's square:
+    /// along the cell's edge they meet its quad exactly.
+    fn skirt(&self, mesh: &mut RiverMesh, column: Column, level: f64, first: u32) {
+        let near = AROUND.map(|(di, dk)| self.beside(column.offset(di, dk), level));
+        if !near.iter().any(|b| matches!(b, Beside::Dry(..))) {
+            return;
         }
+        // Who lays a quarter can turn on a column two out.
+        let around: [[Beside; 5]; 5] = [-2, -1, 0, 1, 2].map(|dk| {
+            [-2, -1, 0, 1, 2].map(|di| match AROUND.iter().position(|&o| o == (di, dk)) {
+                Some(i) => near[i],
+                None if (di, dk) == (0, 0) => Beside::Wet,
+                None => self.beside(column.offset(di, dk), level),
+            })
+        });
+        let at = |di: i32, dk: i32| around[(dk + 2) as usize][(di + 2) as usize];
         let (x0, z0) = column.min_corner();
-        for (di, dk) in patches {
-            if !dry(di, dk) {
+        for (di, dk) in AROUND {
+            let Beside::Dry(slot, bank) = at(di, dk) else {
+                continue;
+            };
+            let owned: SmallVec<[((i32, i32), SmallVec<[SpanIndex; 4]>); 4]> = QUARTERS
+                .into_iter()
+                .filter_map(|side| Some((side, skirt_owner((di, dk), side, at)?)))
+                .collect();
+            if owned.is_empty() {
                 continue;
             }
-            // The patch's span along one axis, in columns from the cell's
-            // minimum corner.
-            let range = |d: i32| match d {
-                1 => (1.0, 1.5),
-                -1 => (-0.5, 0.0),
-                _ => (0.0, 1.0),
-            };
-            let ((xa, xb), (za, zb)) = (range(di), range(dk));
-            let base = mesh.vertices.len() as u32;
-            for (x, z) in [(xa, za), (xb, za), (xb, zb), (xa, zb)] {
-                // The cell corner nearest, and the column beside the cell
-                // the patch corner lies out over, if any.
-                let (cx, cz) = (x >= 1.0, z >= 1.0);
-                let i = match (cx, cz) {
-                    (false, false) => 0,
-                    (true, false) => 1,
-                    (true, true) => 2,
-                    (false, true) => 3,
-                };
-                let out = |c: f32| (c > 1.0) as i32 - (c < 0.0) as i32;
-                let from = mesh.vertices[(first as usize) + i];
-                let (depth, source) = match at(out(x), out(z)) {
-                    Beside::Dry(slot, bank) if (out(x), out(z)) != (0, 0) => {
-                        mesh.sources.reads_slot(cells, slot);
-                        let depth = field_sources::shore_depth(
-                            &drawn,
-                            bank,
-                            from.surface as f64,
-                            from.depth,
-                        );
-                        let i = first + i as u32;
-                        (depth, VertexSource::Shore { from: i, bank })
+            mesh.sources.reads_slot(self.field.cells(), slot);
+            // A column the cell lays whole is one quad, not four.
+            let pieces: SmallVec<[(Option<(i32, i32)>, SmallVec<[SpanIndex; 4]>); 4]> =
+                if owned.len() == QUARTERS.len() {
+                    let mut dry: SmallVec<[SpanIndex; 4]> = SmallVec::new();
+                    for c in owned.into_iter().flat_map(|(_, d)| d) {
+                        if !dry.contains(&c) {
+                            dry.push(c);
+                        }
                     }
-                    _ => (
-                        from.depth,
-                        VertexSource::Edge {
-                            from: first + i as u32,
-                        },
-                    ),
+                    smallvec::smallvec![(None, dry)]
+                } else {
+                    owned.into_iter().map(|(side, d)| (Some(side), d)).collect()
                 };
-                mesh.vertices.push(RiverVertex {
-                    xz: Vector2::new(x0 + x * COLUMN_SIZE, z0 + z * COLUMN_SIZE),
-                    depth,
-                    ..from
-                });
-                mesh.sources.vertices.push(source);
+            for (side, dry) in pieces {
+                let held: SmallVec<[SpanIndex; 4]> = bank.into_iter().chain(dry).collect();
+                // The piece's span along one axis, in columns from the cell's
+                // minimum corner: the column, or its half on side `s`.
+                let range = |d: i32, s: Option<i32>| match s {
+                    None => (d as f32, d as f32 + 1.0),
+                    Some(s) => {
+                        let near = d as f32 + if s < 0 { 0.0 } else { 0.5 };
+                        (near, near + 0.5)
+                    }
+                };
+                let ((xa, xb), (za, zb)) = (
+                    range(di, side.map(|(sx, _)| sx)),
+                    range(dk, side.map(|(_, sz)| sz)),
+                );
+                let base = mesh.vertices.len() as u32;
+                for (x, z) in [(xa, za), (xb, za), (xb, zb), (xa, zb)] {
+                    let within = Vector2::new(x.clamp(0.0, 1.0), z.clamp(0.0, 1.0));
+                    let reach = (Vector2::new(x, z) - within).norm() * COLUMN_SIZE;
+                    let from = skirt_vertex(&mesh.vertices, first, within);
+                    mesh.vertices.push(RiverVertex {
+                        xz: Vector2::new(x0 + x * COLUMN_SIZE, z0 + z * COLUMN_SIZE),
+                        reach,
+                        ..from
+                    });
+                    mesh.sources.vertices.push(VertexSource::Skirt {
+                        first,
+                        within,
+                        dry: held.clone(),
+                    });
+                }
+                mesh.indices.extend_from_slice(&[
+                    base,
+                    base + 2,
+                    base + 1,
+                    base,
+                    base + 3,
+                    base + 2,
+                ]);
             }
-            mesh.indices
-                .extend_from_slice(&[base, base + 2, base + 1, base, base + 3, base + 2]);
         }
     }
+}
+
+/// The eight columns around a cell, as (di, dk).
+const AROUND: [(i32, i32); 8] = [
+    (-1, -1),
+    (0, -1),
+    (1, -1),
+    (-1, 0),
+    (1, 0),
+    (-1, 1),
+    (0, 1),
+    (1, 1),
+];
+
+/// The quarters of a column, as the side of its centre each lies on.
+const QUARTERS: [(i32, i32); 4] = [(-1, -1), (1, -1), (1, 1), (-1, 1)];
+
+/// Whether the cell at (0, 0) lays the skirt over the quarter on the
+/// (sx, sz) side of the dry column `(di, dk)` from it, as `at` tells what
+/// stands in each column around it at its level: the first wet column of
+/// those touching the quarter beside it (on x, then on z), diagonal to it,
+/// then the column's far sides (x, then z) lays it. Every cell around the
+/// column asks the same question of the same columns, so each quarter has
+/// one owner. If it is the cell's, the dry cells that would have taken it
+/// had they been wet: the skirt stands while they stay dry.
+fn skirt_owner(
+    (di, dk): (i32, i32),
+    (sx, sz): (i32, i32),
+    at: impl Fn(i32, i32) -> Beside,
+) -> Option<SmallVec<[SpanIndex; 4]>> {
+    let mut passed = SmallVec::new();
+    for (cx, cz) in [(sx, 0), (0, sz), (sx, sz), (-sx, 0), (0, -sz)] {
+        let (x, z) = (di + cx, dk + cz);
+        match at(x, z) {
+            Beside::Wet if (x, z) == (0, 0) => return Some(passed),
+            Beside::Wet => return None,
+            Beside::Dry(_, Some(cell)) => passed.push(cell),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// The cell's surface at `within` its square, in columns from its minimum
+/// corner: its quad's corners (vertex `first + i`, counter-clockwise from
+/// the minimum) blended across it.
+pub(super) fn skirt_vertex(
+    vertices: &[RiverVertex],
+    first: u32,
+    within: Vector2<f32>,
+) -> RiverVertex {
+    let corner = |i: usize| vertices[first as usize + i];
+    let (u, v) = (within.x, within.y);
+    let weights = [(1.0 - u) * (1.0 - v), u * (1.0 - v), u * v, (1.0 - u) * v];
+    let mut out = corner(0);
+    out.surface = 0.0;
+    out.depth = 0.0;
+    out.flow = Vector2::zeros();
+    for (i, w) in weights.into_iter().enumerate() {
+        let c = corner(i);
+        out.surface += w * c.surface;
+        out.depth += w * c.depth;
+        out.flow += c.flow * w;
+    }
+    out
 }
 
 /// Most steps a fall is drawn on past (`FieldScene::landing`).
@@ -742,6 +827,7 @@ fn quad(
             sheet: Vector4::zeros(),
             normal: Vector3::y(),
             fray: 0.0,
+            reach: 0.0,
         });
     }
     mesh.sources.vertices.extend(sources);

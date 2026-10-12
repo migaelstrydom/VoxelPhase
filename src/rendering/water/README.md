@@ -293,6 +293,16 @@ away from the sun.
 
 ### 5. Soft edges
 
+Shorelines are found per pixel, not meshed. Each wet cell's surface runs on
+as a skirt over the dry columns beside it (`FieldScene::skirt`), each quarter
+of a column laid by one wet cell so skirts never overlap. The terrain hides
+the skirt wherever the ground stands above the water; `water.frag` reads how
+far below the surface the ground behind each pixel lies from the scene's
+depth copy (`groundDepth`, which needs the 32-bit depth buffer), takes it as
+the water's depth where the field's is shallower, and drops a skirt pixel
+whose ground lies deeper than the water at its cell's edge plus
+`HOLLOW_MARGIN`: a hollow the water has not reached.
+
 Wherever a surface thins out it fades into the copy rather than being cut:
 
 - past the shore depth, over `SHORE_SOFTNESS` of ground (the depth's
@@ -302,7 +312,8 @@ Wherever a surface thins out it fades into the copy rather than being cut:
   meets a bank, a body or the floor under a thin film.
 
 Both edges wander with noise near an edge (`FOAMY_DEPTH`), so they lap
-rather than draw lines.
+rather than draw lines. The edge's froth fades out as the ground under it
+steepens (`FROTHING_SLOPE`): a beach froths, a wall does not.
 
 ### 6. Foam
 

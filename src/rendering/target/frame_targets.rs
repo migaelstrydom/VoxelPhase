@@ -15,8 +15,10 @@ use crate::rendering::target::images::{ColorTarget, DepthBuffer};
 use crate::rendering::target::output::FrameOutput;
 use crate::rendering::target::refraction::RefractionCopy;
 
-/// Depth format used by both render passes.
-pub const DEPTH_FORMAT: vk::Format = vk::Format::D16_UNORM;
+/// Depth format used by both render passes. 32-bit: the water reads the
+/// ground's depth below its surface from it to the pixel, which 16 bits
+/// resolve only to centimetres a few metres out.
+pub const DEPTH_FORMAT: vk::Format = vk::Format::D32_SFLOAT;
 
 /// What geometry is drawn into.
 ///

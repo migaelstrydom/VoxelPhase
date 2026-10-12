@@ -220,6 +220,7 @@ mod tests {
             sheet: Vector4::new(0.0, 4.0, 1.0, 2.0),
             normal: Vector3::y(),
             fray: 1.0,
+            reach: 0.0,
         }
     }
 

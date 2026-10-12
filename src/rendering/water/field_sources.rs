@@ -21,6 +21,7 @@ use crate::water::falling::{falls, off_map, thrown};
 use crate::water::field::{DrawnDepths, FieldCells, WaterField};
 use crate::water::geometry::{SpanGraph, SpanIndex, SpanRef, ORTHOGONAL};
 
+use super::field_mesher::skirt_vertex;
 use super::jet::Jet;
 use super::nappe::{plunge, Face, Nappe, NAPPE_ROWS};
 use super::river_mesh::RiverMesh;
@@ -111,32 +112,6 @@ impl DrawnCells<'_> {
                     })
             })
         })
-    }
-}
-
-/// Whether a dry cell beside water at `level` is under rock there: its floor
-/// at its column's centre stands at or above the water, so a surface carried
-/// into its column runs into the terrain, which hides it. A column with no
-/// cell at that height is rock. Otherwise the dry cell is open, a hollow the
-/// water has not reached, and a surface carried over it is cut.
-pub(super) fn covered(cells: &DrawnCells, bank: Option<SpanIndex>, level: f64) -> bool {
-    bank.is_none_or(|b| cells.bed(b) as f64 >= level)
-}
-
-/// The depth a shore vertex carried from a corner `depth` deep draws over a
-/// dry `bank`: the corner's own where the bank is covered, so the surface
-/// runs on into the terrain and is never cut; its opposite where it is open,
-/// so the draw cuts the surface midway out over the hollow.
-pub(super) fn shore_depth(
-    cells: &DrawnCells,
-    bank: Option<SpanIndex>,
-    level: f64,
-    depth: f32,
-) -> f32 {
-    if covered(cells, bank, level) {
-        depth
-    } else {
-        -depth
     }
 }
 
@@ -289,14 +264,18 @@ pub(super) enum VertexSource {
         cells: SmallVec<[SpanIndex; 4]>,
         shape: Shape,
     },
-    /// A shore patch's corner on its cell's own edge: that cell's corner,
-    /// vertex `from` of the same surface.
+    /// A copy of vertex `from` of the same surface, moved: a ledge's
+    /// surface carried out to meet a sheet hung at its lip.
     Edge { from: u32 },
-    /// A shore patch's corner out over the dry column beside its cell:
-    /// vertex `from`'s height and flow, and its depth as `shore_depth` takes
-    /// it over the dry cell `bank` there (none for rock). The patch stands
-    /// while that cell stays dry.
-    Shore { from: u32, bank: Option<SpanIndex> },
+    /// A skirt's corner out over a dry column: the surface of the cell
+    /// whose quad's corners are vertices `first..first + 4`, at `within`
+    /// its square (`skirt_vertex`). The skirt stands while the `dry` cells
+    /// stay dry: the one under it, and those that would lay it if wet.
+    Skirt {
+        first: u32,
+        within: Vector2<f32>,
+        dry: SmallVec<[SpanIndex; 4]>,
+    },
     /// A falling sheet's top: vertex `from`'s corner, drawn as deep as the
     /// wet cell `own` pours over the sheet's edge.
     Lip { from: u32, own: SpanIndex },
@@ -452,13 +431,13 @@ pub(super) fn refresh(field: &WaterField, cells: &DrawnCells, mesh: &mut RiverMe
                 vertex.depth = source.depth;
                 vertex.flow = source.flow;
             }
-            &VertexSource::Shore { from, bank } => {
-                held &= bank.is_none_or(|b| !cells.drawn(b));
-                let source = mesh.vertices[from as usize];
+            VertexSource::Skirt { first, within, dry } => {
+                held &= dry.iter().all(|&c| !cells.drawn(c));
+                let from = skirt_vertex(&mesh.vertices, *first, *within);
                 let vertex = &mut mesh.vertices[v];
-                vertex.surface = source.surface;
-                vertex.depth = shore_depth(cells, bank, source.surface as f64, source.depth);
-                vertex.flow = source.flow;
+                vertex.surface = from.surface;
+                vertex.depth = from.depth;
+                vertex.flow = from.flow;
             }
             &VertexSource::Lip { from, own } => {
                 let source = mesh.vertices[from as usize];

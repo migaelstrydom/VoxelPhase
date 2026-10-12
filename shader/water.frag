@@ -62,10 +62,19 @@ const float EDGE_WANDER = 1.2;
 // Ground over which the edge carries a frill of foam, m: where the water
 // thins out over a beach or an advancing front, not up a wall.
 const float EDGE_FOAM_REACH = 0.35;
+// Slopes of the ground under the water, rise over run, over which its edge
+// stops frothing: a beach froths, a wall does not.
+const vec2 FROTHING_SLOPE = vec2(0.4, 1.0);
 // Wet depth under which a surface is near enough an edge to wander and carry
 // its foam, m: past it neither is ever seen however steep the shore, so
 // neither is worked out.
 const float FOAMY_DEPTH = 0.6;
+// A skirt is carried a column out over the dry ground beside the water; the
+// terrain hides it where the ground stands above the water. Where the ground
+// lies below, it stands for the bank only if no deeper than the water at the
+// cell's edge, give or take `HOLLOW_MARGIN`: deeper, it is a hollow the water
+// has not reached, and the skirt is dropped.
+const float HOLLOW_MARGIN = 0.15;
 // Speeds over which running water turns to lace of white water, m/s.
 const vec2 WHITE_WATER_SPEED = vec2(1.2, 3.5);
 
@@ -91,6 +100,9 @@ layout(location = 8) flat in int fragMasked;
 // ends of its widened edge. Zero on a surface.
 layout(location = 9) in vec4 fragSheet;
 layout(location = 10) in float fragFray;
+// On a river surface's skirt over the dry columns beside its water, how far
+// past the wet cell's edge, m; 0 over the water's own cells.
+layout(location = 11) in float fragReach;
 
 // The scene beyond the water, copied before the water is drawn (sampled at
 // offset UVs for refraction)
@@ -281,6 +293,26 @@ void main() {
 
     bool sheet = fragSheet.y > 0.0;
     float time = fpc.projParams.z;
+    float near = fpc.projParams.x;
+    float far = fpc.projParams.y;
+    vec2 screenUV = gl_FragCoord.xy / fpc.screenParams.xy;
+
+    // How far below the surface whatever is behind this pixel lies, m: the
+    // ground's own depth, to the pixel, where the field's is a column's.
+    float terrainDepthRaw = texture(depthSampler, screenUV).r;
+    float waterDepthRaw = gl_FragCoord.z;
+    float terrainDist = linearizeDepth(terrainDepthRaw, near, far);
+    float waterDist = linearizeDepth(waterDepthRaw, near, far);
+    vec3 behindPos = fpc.cameraPos.xyz + (fragWorldPos - fpc.cameraPos.xyz) * (terrainDist / waterDist);
+    float groundDepth = fragWorldPos.y - behindPos.y;
+
+    // A surface's water is as deep as the ground under it, to the pixel; a
+    // skirt's, unless that is a hollow.
+    bool skirt = fragReach > 0.0;
+    if (skirt && groundDepth > max(fragWetDepth, 0.0) + HOLLOW_MARGIN) {
+        discard;
+    }
+    float wetDepth = sheet ? fragWetDepth : skirt ? groundDepth : min(fragWetDepth, groundDepth);
 
     // A river surface is drawn only where its water is deep enough: past its
     // shore depth it fades in over a wandering edge, not a cut along its
@@ -288,19 +320,19 @@ void main() {
     // nothing pours, and thins out below a full curtain on its own.
     // Only water near an edge wanders; deep water against a wall fades into
     // it straight.
-    bool nearEdge = fragWetDepth - fragWetRange.x < FOAMY_DEPTH;
+    bool nearEdge = wetDepth - fragWetRange.x < FOAMY_DEPTH;
     float wander = nearEdge
         ? fbm(fragWorldPos.xz * 2.3 + vec2(time * 0.21, -time * 0.17)) / 1.5 - 0.5
         : 0.0;
-    if (fragWetDepth > fragWetRange.y) {
+    if (wetDepth > fragWetRange.y) {
         discard;
     }
     float shoreWidth = max(SHORE_SOFTNESS_DEPTH,
-                           fwidth(fragWetDepth) / max(footprint, 1.0e-4) * SHORE_SOFTNESS);
+                           fwidth(wetDepth) / max(footprint, 1.0e-4) * SHORE_SOFTNESS);
     float shore = sheet
-        ? step(fragWetRange.x, fragWetDepth)
+        ? step(fragWetRange.x, wetDepth)
         : smoothstep(0.0, shoreWidth,
-                     fragWetDepth - fragWetRange.x + wander * EDGE_WANDER * shoreWidth);
+                     wetDepth - fragWetRange.x + wander * EDGE_WANDER * shoreWidth);
     if (shore <= 0.0) {
         discard;
     }
@@ -367,19 +399,8 @@ void main() {
 
     vec3 L = normalize(fpc.sunDir.xyz);
 
-    float near = fpc.projParams.x;
-    float far = fpc.projParams.y;
-
-    // Screen UV for texture sampling.
-    vec2 screenUV = gl_FragCoord.xy / fpc.screenParams.xy;
 
     // --- Volumetric depth from depth buffer ---
-    float terrainDepthRaw = texture(depthSampler, screenUV).r;
-    float waterDepthRaw = gl_FragCoord.z;
-
-    float terrainDist = linearizeDepth(terrainDepthRaw, near, far);
-    float waterDist = linearizeDepth(waterDepthRaw, near, far);
-
     float opticalDepth = max(terrainDist - waterDist, 0.0);
 
     float depthFactor = 1.0 - exp(-opticalDepth * 0.06);
@@ -469,8 +490,10 @@ void main() {
     float froth = patches * (0.45 + 0.55 * lace);
     float foamDepth = shoreWidth / SHORE_SOFTNESS * EDGE_FOAM_REACH;
     float edge = 1.0 - smoothstep(0.0, foamDepth,
-                                  fragWetDepth - fragWetRange.x + wander * foamDepth);
-    float edgeFoam = edge * mix(0.15, 0.5, froth);
+                                  wetDepth - fragWetRange.x + wander * foamDepth);
+    // Water thinning up a wall is no beach: only a gentle shore froths.
+    float slope = fwidth(wetDepth) / max(footprint, 1.0e-4);
+    float edgeFoam = edge * mix(0.15, 0.5, froth) * (1.0 - smoothstep(FROTHING_SLOPE.x, FROTHING_SLOPE.y, slope));
     float whiteWater = smoothstep(WHITE_WATER_SPEED.x, WHITE_WATER_SPEED.y, speed) * froth * 0.6;
     float foamFactor = max(edgeFoam, whiteWater);
     vec3 foamColor = vec3(0.9, 0.95, 1.0) * (0.8 + 0.2 * NdotL);

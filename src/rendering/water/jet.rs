@@ -90,6 +90,7 @@ impl Jet {
             ),
             normal,
             fray: 0.0,
+            reach: 0.0,
         }
     }
 
@@ -119,6 +120,7 @@ impl Jet {
             sheet: Vector4::new(fall + share, fall, 0.0, 0.0),
             normal: Vector3::y(),
             fray: 0.0,
+            reach: 0.0,
         }
     }
 }
