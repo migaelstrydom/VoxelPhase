@@ -296,12 +296,19 @@ away from the sun.
 Shorelines are found per pixel, not meshed. Each wet cell's surface runs on
 as a skirt over the dry columns beside it (`FieldScene::skirt`), each quarter
 of a column laid by one wet cell so skirts never overlap. The terrain hides
-the skirt wherever the ground stands above the water; `water.frag` reads how
+the skirt wherever the ground stands above the water. `water.frag` reads how
 far below the surface the ground behind each pixel lies from the scene's
-depth copy (`groundDepth`, which needs the 32-bit depth buffer), takes it as
-the water's depth where the field's is shallower, and drops a skirt pixel
-whose ground lies deeper than the water at its cell's edge plus
-`HOLLOW_MARGIN`: a hollow the water has not reached.
+depth copy (`groundDepth`, which needs the 32-bit depth buffer), and how
+steeply it rises (`groundSlope`, from the neighbouring pixels on the side
+nearer in depth, so a silhouette in front of the water is not read as a
+slope). Where the field has the water shallow (`GROUND_TRUSTED_DEPTH`) it
+takes that as the water's depth where it is shallower, so a beach's edge
+fades to the pixel. Where the field has it deep it keeps the field's depth:
+whatever stands shallow in deep water is a body, which stays under the
+water, and a wall cuts the water with only the contact softness below.
+
+A skirt can lie over a dry hollow beside the water only where a ridge
+thinner than a column parts them; it is not dropped there.
 
 Wherever a surface thins out it fades into the copy rather than being cut:
 

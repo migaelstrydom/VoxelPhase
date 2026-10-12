@@ -35,7 +35,6 @@ layout(location = 7) out vec4 fragSwell;
 layout(location = 8) flat out int fragMasked;
 layout(location = 9) out vec4 fragSheet;
 layout(location = 10) out float fragFray;
-layout(location = 11) out float fragReach;
 
 
 // Water depth at a column corner; none where no wet column touches it.
@@ -103,7 +102,6 @@ void main() {
     fragMasked = 1;
     fragSheet = vec4(0.0);
     fragFray = 0.0;
-    fragReach = 0.0;
     fragTileOrigin = origin;
     fragFlow = vec2(0.0);
     fragWetDepth = 0.0;

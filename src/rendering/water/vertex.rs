@@ -108,10 +108,6 @@ pub struct RiverVertex {
     /// On falling water, 1 at an end of a fall, which frays out, and 0 at
     /// an end that joins the sheet beside it. Zero on the surface.
     pub fray: f32,
-    /// On the surface, how far past the edge of the wet cell it is carried
-    /// from this vertex lies, m: zero over the cell itself, rising across the
-    /// skirt it lays over the dry columns around it. Zero on falling water.
-    pub reach: f32,
 }
 
 impl RiverVertex {
@@ -123,7 +119,7 @@ impl RiverVertex {
         }
     }
 
-    pub fn attribute_descriptions() -> [vk::VertexInputAttributeDescription; 8] {
+    pub fn attribute_descriptions() -> [vk::VertexInputAttributeDescription; 7] {
         let f = std::mem::size_of::<f32>() as u32;
         [
             vk::VertexInputAttributeDescription {
@@ -169,12 +165,6 @@ impl RiverVertex {
                 binding: 0,
                 format: vk::Format::R32_SFLOAT,
                 offset: 15 * f,
-            },
-            vk::VertexInputAttributeDescription {
-                location: 7,
-                binding: 0,
-                format: vk::Format::R32_SFLOAT,
-                offset: 16 * f,
             },
         ]
     }

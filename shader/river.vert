@@ -25,7 +25,6 @@ layout(location = 3) in vec2 inFace;   // a falling sheet's facing; zero on the 
 layout(location = 4) in vec4 inSheet;  // a falling sheet's (drop below its lip, whole fall, side, along)
 layout(location = 5) in vec3 inNormal; // falling water's face normal; up on the surface
 layout(location = 6) in float inFray;  // 1 at an end of a fall, 0 where it joins the sheet beside it
-layout(location = 7) in float inReach; // how far past its wet cell's edge a skirt lies, m; 0 elsewhere
 
 layout(push_constant) uniform PushConstants {
     mat4 view;
@@ -45,7 +44,6 @@ layout(location = 7) out vec4 fragSwell;
 layout(location = 8) flat out int fragMasked;
 layout(location = 9) out vec4 fragSheet;
 layout(location = 10) out float fragFray;
-layout(location = 11) out float fragReach;
 
 // Depth at which the surface is cut, m: the shoreline's contour. Thinner
 // water would lie on its floor and fight it for depth.
@@ -80,7 +78,6 @@ void main() {
     fragMasked = 0;
     fragSheet = vec4(inSheet.xy, inSheet.w + inSheet.z * SHEET_OVERLAP, inSheet.z);
     fragFray = inFray;
-    fragReach = inReach;
     fragFlow = inFlow;
     fragWetDepth = depth;
     fragWetRange = vec2(SHORE_DEPTH, 1.0e9);

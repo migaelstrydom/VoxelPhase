@@ -20,9 +20,9 @@
 //!
 //! The mesher does not decide where a shore is. The skirt reaches past it,
 //! and the draw finds it to the pixel: the terrain hides the skirt wherever
-//! the ground stands above the water, and `water.frag` fades the surface
-//! where the ground under it, read from the scene's depth, comes up to it,
-//! and drops a skirt over a hollow the water has not reached.
+//! the ground stands above the water, and where the water is shallow
+//! `water.frag` fades the surface as the ground behind it, read from the
+//! scene's depth, comes up to it.
 //!
 //! Each vertex also carries the water's depth there, as the field has it;
 //! within the water's own cells the draw cuts the surface at `river.vert`'s
@@ -305,10 +305,9 @@ impl<'a> FieldScene<'a> {
 
     /// The cell's surface carried out over the dry columns around it, as a
     /// skirt the depth test and the fragment shader trim: the terrain hides
-    /// it wherever the ground stands above the water, and the shader drops
-    /// it wherever the water under it would be deeper than a bank could be
-    /// that far out (`river.vert`'s reach). Nothing here decides where the
-    /// shore is.
+    /// it wherever the ground stands above the water, and `water.frag` fades
+    /// it where the ground behind it comes up to it. Nothing here decides
+    /// where the shore is.
     ///
     /// Each quarter of a dry column beside water is laid once, by the wet
     /// cell nearest it (`skirt_owner`), so skirts never overlap. Its corners
@@ -372,11 +371,9 @@ impl<'a> FieldScene<'a> {
                 let base = mesh.vertices.len() as u32;
                 for (x, z) in [(xa, za), (xb, za), (xb, zb), (xa, zb)] {
                     let within = Vector2::new(x.clamp(0.0, 1.0), z.clamp(0.0, 1.0));
-                    let reach = (Vector2::new(x, z) - within).norm() * COLUMN_SIZE;
                     let from = skirt_vertex(&mesh.vertices, first, within);
                     mesh.vertices.push(RiverVertex {
                         xz: Vector2::new(x0 + x * COLUMN_SIZE, z0 + z * COLUMN_SIZE),
-                        reach,
                         ..from
                     });
                     mesh.sources.vertices.push(VertexSource::Skirt {
@@ -827,7 +824,6 @@ fn quad(
             sheet: Vector4::zeros(),
             normal: Vector3::y(),
             fray: 0.0,
-            reach: 0.0,
         });
     }
     mesh.sources.vertices.extend(sources);
