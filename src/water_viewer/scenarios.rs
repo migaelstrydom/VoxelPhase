@@ -38,6 +38,7 @@ pub(super) fn acceptance() -> Vec<Scenario> {
         low_mouth(),
         confluence(),
         river_blast(),
+        bearing(),
     ]
 }
 
@@ -930,6 +931,62 @@ Level(
         bodies: [
             Spring(position: (-24.5, 10.6, 0.0), direction: (1.5, 0.0, 0.0), discharge: 1.0),
             Spring(position: (-12.3, 11.6, -16.5), direction: (0.8, 0.0, 1.27), discharge: 0.5),
+        ],
+        settle: AsAuthored,
+    )),
+)
+"#;
+
+/// Two channels alike in all but their bearing, one along the lattice and
+/// one across it at 45°, each fed by a spring alike: a river runs as deep on
+/// either, since its depth is its flow's, slope's and bed's, not the grid's.
+fn bearing() -> Scenario {
+    Scenario {
+        name: "bearing",
+        description: "the same river along the lattice and across it at 45°: both run as deep",
+        level: BEARING_LEVEL,
+        duration: 60.0,
+        beats: Vec::new(),
+        probes: vec![
+            // Each 16 m down its channel, over a bed at 4 m.
+            Probe {
+                name: "along",
+                at: Point3::new(-8.0, 4.5, -14.0),
+            },
+            Probe {
+                name: "across",
+                at: Point3::new(-4.69, 4.5, 11.31),
+            },
+        ],
+        camera: (Point3::new(-8.0, 30.0, 20.0), Point3::new(-8.0, 4.0, 0.0)),
+    }
+}
+
+const BEARING_LEVEL: &str = r#"
+Level(
+    name: "water_viewer: bearing",
+    segments: [(
+        name: "main",
+        terrain: Terrain(
+            voxel_size: 0.5,
+            bounds: (min: (-32.0, -16.0, -32.0), max: (32.0, 16.0, 32.0)),
+            base_height: 0.0,
+            material_layers: [(depth: 999.0, material: Rock)],
+            features: [
+                Plateau(min: (-40.0, -40.0), max: (40.0, 40.0), height: 6.0),
+                // Both fall 1 m in 16 into the pit.
+                Ramp(from: (-24.0, -14.0), to: (8.0, -14.0), start_height: 5.0, end_height: 3.0, width: 4.0, flat_width: 2.0),
+                Ramp(from: (-16.0, 0.0), to: (8.0, 24.0), start_height: 5.0, end_height: 2.879, width: 4.0, flat_width: 2.0),
+                Plateau(min: (8.0, -32.0), max: (40.0, 40.0), height: 0.0),
+            ],
+        ),
+    )],
+    placements: [Root(segment: "main")],
+    player_spawn: (0.0, 7.0, 0.0),
+    water: Some((
+        bodies: [
+            Spring(position: (-23.5, 5.6, -14.0), direction: (1.5, 0.0, 0.0), discharge: 0.5),
+            Spring(position: (-15.6, 5.6, 0.4), direction: (1.06, 0.0, 1.06), discharge: 0.5),
         ],
         settle: AsAuthored,
     )),

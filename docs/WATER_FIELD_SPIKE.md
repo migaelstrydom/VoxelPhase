@@ -125,6 +125,8 @@ seiche.
 | A centimetre's seiche for minutes, never asleep | Nothing in the scheme stops a pond sloshing | A linear drag on slow, deep water that fades out with speed and depth |
 | Films crept down slopes for ever | Friction grows without bound as a film thins | Water under 5 mm (never drawn) seeps away at 0.5 mm/s, booked as lost |
 | A 30 cm mound under a source | θ cancels the outflow at a point source | A source pours over its landing cell and the cells around it |
+| Films stood on steep banks beside a river, 15–30 cm above it | θ blended the river's discharge into the film's shallow face every substep, pushing water up the bank | θ blends each neighbour's velocity, carried at the face's own depth |
+| A river running diagonally stood 11 cm deeper than the same river along the lattice | θ blended each face towards the dry bank ahead of it | A dry neighbour face counts as the face itself, as a wall does (`bearing` scenario) |
 
 ## 5. Rendering
 

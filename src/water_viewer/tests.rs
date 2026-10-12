@@ -134,3 +134,21 @@ fn a_pool_fills_its_own_hollow() {
     assert_eq!(probe(&pond, "pond")[0], Some(-1.5));
     assert_eq!(probe(&pond, "pond_open")[0], Some(-1.5));
 }
+
+/// A river runs as deep across the lattice as along it. Blending a face's
+/// flow towards the dry bank ahead of it held a diagonal river 11 cm high
+/// here and rising, as if its bed were rougher.
+#[test]
+#[ignore]
+fn a_river_runs_as_deep_across_the_lattice_as_along_it() {
+    let run = run("bearing");
+    let (along, across) = (probe(&run, "along"), probe(&run, "across"));
+    let (along, across) = (
+        along.last().unwrap().unwrap(),
+        across.last().unwrap().unwrap(),
+    );
+    assert!(
+        (along - across).abs() < 0.02,
+        "along the lattice at {along}, across it at {across}"
+    );
+}

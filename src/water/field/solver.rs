@@ -101,9 +101,10 @@ pub struct FieldSolver {
     /// Chunks with a cell at either end of a stepped face: the stepped ones
     /// and their +x and +z neighbours.
     touched: Vec<usize>,
-    /// Per stepped chunk, per face: its discharge at the start of the
-    /// substep, so every face's update reads its neighbours' old values.
-    previous: Vec<Vec<f32>>,
+    /// Per stepped chunk, per face: its discharge and flow depth at the
+    /// start of the substep, so every face's update reads its neighbours'
+    /// old values.
+    previous: Vec<Vec<(f32, f32)>>,
     /// Per chunk: whether it is stepped this frame.
     is_stepped: Vec<bool>,
 }
@@ -212,18 +213,32 @@ impl FieldSolver {
         for &slot in &self.stepped {
             let previous = &mut self.previous[slot];
             previous.clear();
-            previous.extend(cells.chunks[slot].faces.iter().map(|f| f.q));
+            let a = |flat| SpanIndex {
+                slot: slot as u32,
+                flat,
+            };
+            previous.extend(
+                cells.chunks[slot]
+                    .faces
+                    .iter()
+                    .map(|f| (f.q, flow_depth(cells, a(f.a), f))),
+            );
         }
         let mut count = 0;
         for &slot in &self.stepped {
             let mut faces = std::mem::take(&mut cells.chunks[slot].faces);
-            for face in &mut faces {
+            for (face, &(_, depth)) in faces.iter_mut().zip(&self.previous[slot]) {
                 let a = SpanIndex {
                     slot: slot as u32,
                     flat: face.a,
                 };
-                let blended = self.blended(cells, face);
-                face.q = face_discharge(cells, a, face, blended, dt, &p);
+                face.q = if depth <= p.dry_depth {
+                    0.0
+                } else {
+                    let blended = self.blended(cells, face, depth);
+                    let slope = (cells.surface(face.b) - cells.surface(a)) as f32 / DX;
+                    inertial(blended, depth, slope, dt, &p)
+                };
             }
             count += faces.len() as u64;
             let chunk = &mut cells.chunks[slot];
@@ -239,24 +254,39 @@ impl FieldSolver {
     }
 
     /// A face's discharge at the start of the substep, blended with the mean
-    /// of the faces behind and ahead of it. A missing neighbour counts as
-    /// the face itself. A neighbour in a chunk not stepped this frame has
-    /// not moved, so its discharge now is its discharge then.
-    fn blended(&self, cells: &FieldCells, face: &Face) -> f32 {
+    /// of the faces behind and ahead of it, the face's flow `depth` deep.
+    /// What blends is each face's velocity, carried at this face's depth:
+    /// blended as discharge, a film's face beside a river's took a share of
+    /// the river's flow each substep and pushed it up the bank. A missing or
+    /// dry neighbour counts as the face itself, as a wall does: blended
+    /// towards a dry face's nothing, every face of a river running
+    /// diagonally, each with dry bank ahead of it, dragged and held the
+    /// river 20 cm high. A neighbour in a chunk not
+    /// stepped this frame has not moved, so its discharge now is its
+    /// discharge then.
+    fn blended(&self, cells: &FieldCells, face: &Face, depth: f32) -> f32 {
         let own = face.q;
         let theta = self.params.theta;
         if theta >= 1.0 {
             return own;
         }
+        let dry = self.params.dry_depth;
         let old = |r: Option<FaceRef>| {
-            r.map_or(own, |r| {
+            r.and_then(|r| {
                 let (slot, index) = (r.slot as usize, r.index as usize);
-                if self.is_stepped[slot] {
+                let (q, d) = if self.is_stepped[slot] {
                     self.previous[slot][index]
                 } else {
-                    cells.chunks[slot].faces[index].q
-                }
+                    let f = &cells.chunks[slot].faces[index];
+                    let a = SpanIndex {
+                        slot: r.slot,
+                        flat: f.a,
+                    };
+                    (f.q, flow_depth(cells, a, f))
+                };
+                (d > dry).then(|| q * depth / d)
             })
+            .unwrap_or(own)
         };
         theta * own + 0.5 * (1.0 - theta) * (old(face.behind) + old(face.ahead))
     }
@@ -403,23 +433,12 @@ fn wake_on_flow(cells: &mut FieldCells, slot: usize, volume: f64) {
     }
 }
 
-/// The local inertial update of one face between two cells.
-fn face_discharge(
-    cells: &FieldCells,
-    a: SpanIndex,
-    face: &Face,
-    q: f32,
-    dt: f32,
-    p: &FlowParams,
-) -> f32 {
-    let (za, zb) = (cells.bed(a), cells.bed(face.b));
-    let (ea, eb) = (cells.surface(a) as f32, cells.surface(face.b) as f32);
-    let floor = za.max(zb);
-    let depth = ea.max(eb).min(face.roof) - floor;
-    if depth <= p.dry_depth {
-        return 0.0;
-    }
-    inertial(q, depth, (eb - ea) / DX, dt, p)
+/// How deep the water flows through a face whose owning cell is `a`: from
+/// the higher bed to the higher surface, under its roof.
+fn flow_depth(cells: &FieldCells, a: SpanIndex, face: &Face) -> f32 {
+    let floor = cells.bed(a).max(cells.bed(face.b));
+    let surface = (cells.surface(a) as f32).max(cells.surface(face.b) as f32);
+    surface.min(face.roof) - floor
 }
 
 /// The update of a boundary face. To the void, a free overfall. To the sea,
