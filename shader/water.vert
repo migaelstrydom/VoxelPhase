@@ -47,6 +47,7 @@ void main() {
     fragFray = 0.0;
     fragTileOrigin = vec2(0.0);
     fragFlow = vec2(0.0);
-    fragWetDepth = 0.0;
+    // No field depth here: taken as deep, never as a film, and without a shore.
+    fragWetDepth = 1.0e9;
     fragWetRange = vec2(-1.0e9, 1.0e9);
 }

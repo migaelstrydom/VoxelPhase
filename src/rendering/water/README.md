@@ -306,6 +306,11 @@ takes that as the water's depth where it is shallower, so a beach's edge
 fades to the pixel. Where the field has it deep it keeps the field's depth:
 whatever stands shallow in deep water is a body, which stays under the
 water, and a wall cuts the water with only the contact softness below.
+Shallow water lies on the ground, so where the ground behind it lies well
+below the field's depth (`LIFTED_GAP`) the surface is in the air and is not
+drawn: a film on a bank steeper than one quad per column can follow stands
+its quad out over the slope below it. Surfaces with no field depth of their
+own (sea and ripple tiles) are taken as deep.
 
 A skirt can lie over a dry hollow beside the water only where a ridge
 thinner than a column parts them; it is not dropped there.

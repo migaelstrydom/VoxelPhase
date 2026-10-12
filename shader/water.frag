@@ -68,6 +68,11 @@ const vec2 FROTHING_SLOPE = vec2(0.4, 1.0);
 // Depths of water, as the field has them, over which a surface stops taking
 // its depth from what is behind it, m.
 const vec2 GROUND_TRUSTED_DEPTH = vec2(0.15, 0.3);
+// How far the ground behind a surface the field has shallow may lie below
+// the field's depth before the surface is taken to stand in the air, m,
+// fading out over the second: a film on a bank steeper than its column can
+// draw, seen against the slope below it.
+const vec2 LIFTED_GAP = vec2(0.05, 0.12);
 // Wet depth under which a surface is near enough an edge to wander and carry
 // its foam, m: past it neither is ever seen however steep the shore, so
 // neither is worked out.
@@ -340,6 +345,11 @@ void main() {
     float wetDepth = byGround ? mix(fragWetDepth, groundDepth, trust) : fragWetDepth;
     // How fast the water thins across the ground, per metre of it.
     float thinning = byGround ? mix(fieldSlope, slope, trust) : fieldSlope;
+    // Shallow water lies on the ground: where what is behind it lies well
+    // below the field's depth, its quad stands in the air over a drop its
+    // column cannot draw, and there is no water there.
+    float lifted = sheet ? 0.0
+        : trust * smoothstep(LIFTED_GAP.x, LIFTED_GAP.y, groundDepth - fragWetDepth);
 
     // A river surface is drawn only where its water is deep enough: past its
     // shore depth it fades in over a wandering edge, not a cut along its
@@ -359,7 +369,8 @@ void main() {
     float shore = sheet
         ? step(fragWetRange.x, wetDepth)
         : smoothstep(0.0, shoreWidth,
-                     wetDepth - fragWetRange.x + wander * EDGE_WANDER * shoreWidth);
+                     wetDepth - fragWetRange.x + wander * EDGE_WANDER * shoreWidth)
+          * (1.0 - lifted);
     if (shore <= 0.0) {
         discard;
     }
