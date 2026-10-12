@@ -131,10 +131,10 @@ pub trait WaterScene {
         Vec::new()
     }
 
-    /// The still water the river surfaces hold, a patch per tile, for the
-    /// renderer to divide blended surfaces by. Still draws are divided by
-    /// their own tiles.
-    fn still_water(&self) -> Vec<WaterPatch> {
+    /// The water the river surfaces hold, for the renderer to divide
+    /// blended surfaces by: a patch per tile of still water, and per column
+    /// of running water. Still draws are divided by their own tiles.
+    fn surface_patches(&self) -> Vec<WaterPatch> {
         Vec::new()
     }
 

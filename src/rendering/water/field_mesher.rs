@@ -867,17 +867,28 @@ impl WaterScene for FieldScene<'_> {
         self.ripple_views()
     }
 
-    /// Every chunk whose water stands still.
-    fn still_water(&self) -> Vec<WaterPatch> {
-        self.field
-            .cells()
-            .chunks
-            .iter()
-            .filter_map(|chunk| {
-                still_level(self.field, chunk.coord)
-                    .map(|level| WaterPatch::tile(chunk.coord.x, chunk.coord.z, level))
-            })
-            .collect()
+    /// Every chunk whose water stands still, at its level, and every drawn
+    /// column of the chunks whose water runs, at its surface.
+    fn surface_patches(&self) -> Vec<WaterPatch> {
+        let drawn = self.drawn_cells();
+        let mut patches = Vec::new();
+        for (slot, chunk) in self.field.cells().chunks.iter().enumerate() {
+            if let Some(level) = still_level(self.field, chunk.coord) {
+                patches.push(WaterPatch::tile(chunk.coord.x, chunk.coord.z, level));
+                continue;
+            }
+            for flat in 0..chunk.depth.len() {
+                let at = SpanIndex {
+                    slot: slot as u32,
+                    flat: flat as u32,
+                };
+                if drawn.drawn(at) {
+                    let column = chunk.coord.column(chunk.column_of(flat).0);
+                    patches.push(WaterPatch::column(column, drawn.surface(at) as f32));
+                }
+            }
+        }
+        patches
     }
 
     fn ocean_key(&self) -> MeshKey {
@@ -996,8 +1007,8 @@ impl WaterScene for WaterWorld {
         FieldScene::of(self).ripple_views()
     }
 
-    fn still_water(&self) -> Vec<WaterPatch> {
-        FieldScene::of(self).still_water()
+    fn surface_patches(&self) -> Vec<WaterPatch> {
+        FieldScene::of(self).surface_patches()
     }
 
     fn ocean_key(&self) -> MeshKey {

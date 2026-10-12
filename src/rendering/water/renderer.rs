@@ -83,7 +83,8 @@ struct RippleDraw {
 /// What a frame's prepared water tells the renderer.
 #[derive(Debug, Clone, Default)]
 pub struct WaterFrame {
-    /// Every tile of still water, in view or not.
+    /// Every tile of still water and column of running water, in view or
+    /// not.
     pub patches: Vec<WaterPatch>,
     /// The part of the screen the planned draws can read.
     pub footprint: ScreenFootprint,
@@ -362,7 +363,7 @@ impl WaterRenderer {
         {
             return Ok(WaterFrame::default());
         }
-        patches.extend(water.still_water());
+        patches.extend(water.surface_patches());
         let layers = self.upload_ripples(water)?;
         let clock = water.clock();
         let body = |id: SurfaceId, level: f32, tile: [f32; 4]| {

@@ -19,40 +19,62 @@
 //! height against the level under it. A surface that crosses the level is
 //! drawn on both sides, each half clipped at the level ([`Side::clip_planes`]).
 //!
-//! The divide is taken from the still water of the frame, one 8 m tile and
-//! one still level each: the still draws (a bench's pool, the sea's ring) and
-//! every tile of the field's water that stands still. Running water is not in
-//! it, so what stands in a river counts as Near.
+//! The divide is taken from the water of the frame: the still draws (a
+//! bench's pool, the sea's ring) and every tile of the field's water that
+//! stands still, one 8 m tile and one level each, and every column of its
+//! running water at that column's surface. A surface through running water
+//! is clipped level at the surface over its centre, which the water's own
+//! slope across it moves by no more than a column's step.
 
 use nalgebra::{Vector2, Vector3};
+use rustc_hash::FxHashMap;
 
-use crate::water::geometry::{CHUNK_COLUMNS, COLUMN_SIZE};
+use crate::water::geometry::{Column, CHUNK_COLUMNS, COLUMN_SIZE};
+
+/// Width of a water tile, m.
+const TILE_EXTENT: f32 = CHUNK_COLUMNS as f32 * COLUMN_SIZE;
 
 /// A clip plane `(n, d)` passing `dot(n, p) + d >= 0`; the one that clips
 /// nothing.
 pub const NO_CLIP: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
 
-/// One tile of still water: the square it covers and its level.
+/// A square of water at one level: a tile of still water, or a column of
+/// running water.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct WaterPatch {
-    /// The tile's lowest x and z corner.
+    /// The square's lowest x and z corner.
     pub min: Vector2<f32>,
-    /// The tile's highest x and z corner.
+    /// The square's highest x and z corner.
     pub max: Vector2<f32>,
-    /// The still surface over the tile, without swell or ripples.
+    /// The surface over the square, without swell or ripples.
     pub level: f32,
 }
 
 impl WaterPatch {
     /// The patch covering water tile `(x, z)` at `level`.
     pub fn tile(x: i32, z: i32, level: f32) -> Self {
-        let extent = CHUNK_COLUMNS as f32 * COLUMN_SIZE;
-        let min = Vector2::new(x as f32 * extent, z as f32 * extent);
+        let min = Vector2::new(x as f32, z as f32) * TILE_EXTENT;
         Self {
             min,
-            max: min + Vector2::repeat(extent),
+            max: min + Vector2::repeat(TILE_EXTENT),
             level,
         }
+    }
+
+    /// The patch covering one column at `level`.
+    pub fn column(column: Column, level: f32) -> Self {
+        let (x, z) = column.min_corner();
+        let min = Vector2::new(x, z);
+        Self {
+            min,
+            max: min + Vector2::repeat(COLUMN_SIZE),
+            level,
+        }
+    }
+
+    /// The tile the patch lies in.
+    fn tile_key(&self) -> (i32, i32) {
+        tile_of(self.min + Vector2::repeat(0.5 * COLUMN_SIZE))
     }
 
     fn contains(&self, xz: Vector2<f32>) -> bool {
@@ -104,10 +126,20 @@ impl Side {
     }
 }
 
+/// The tile holding a point.
+fn tile_of(xz: Vector2<f32>) -> (i32, i32) {
+    (
+        (xz.x / TILE_EXTENT).floor() as i32,
+        (xz.y / TILE_EXTENT).floor() as i32,
+    )
+}
+
 /// The frame's water surfaces, and which side of them the camera is on.
 #[derive(Debug, Clone, Default)]
 pub struct WaterDivide {
-    patches: Vec<WaterPatch>,
+    /// The patches, by the tile they lie in: a point is looked up among its
+    /// own tile's, however much running water the frame holds.
+    patches: FxHashMap<(i32, i32), Vec<WaterPatch>>,
     camera_submerged: bool,
 }
 
@@ -118,8 +150,12 @@ impl WaterDivide {
     }
 
     pub fn new(patches: Vec<WaterPatch>, camera: Vector3<f32>) -> Self {
+        let mut by_tile: FxHashMap<(i32, i32), Vec<WaterPatch>> = FxHashMap::default();
+        for patch in patches {
+            by_tile.entry(patch.tile_key()).or_default().push(patch);
+        }
         let mut divide = Self {
-            patches,
+            patches: by_tile,
             camera_submerged: false,
         };
         divide.camera_submerged = divide
@@ -158,12 +194,13 @@ impl WaterDivide {
         }
     }
 
-    /// The water level over a point's tile. Patches may stack, as a pool on
-    /// an island over the sea does; a tile holds no floors to tell which body
+    /// The water level over a point. Patches may stack, as a pool on an
+    /// island over the sea does; a patch holds no floors to tell which body
     /// a point is in, so it is taken to be in the one whose level is nearest.
     fn level_under(&self, point: Vector3<f32>) -> Option<f32> {
         let xz = Vector2::new(point.x, point.z);
         self.patches
+            .get(&tile_of(xz))?
             .iter()
             .filter(|patch| patch.contains(xz))
             .map(|patch| patch.level)
@@ -228,5 +265,22 @@ mod tests {
         assert_eq!(divide.of_point(Vector3::new(3.0, 11.0, 3.0)), Side::Beyond);
         assert_eq!(divide.of_point(Vector3::new(3.0, 5.0, 3.0)), Side::Near);
         assert_eq!(divide.of_point(Vector3::new(3.0, -1.0, 3.0)), Side::Beyond);
+    }
+
+    #[test]
+    fn a_floe_in_a_river_is_divided_by_the_surface_over_it() {
+        let river = (0..4)
+            .map(|i| WaterPatch::column(Column::new(i, 0), 2.0 - 0.1 * i as f32))
+            .collect();
+        let divide = WaterDivide::new(river, Vector3::new(4.0, 6.0, 4.0));
+        let side = divide.of_sphere(Vector3::new(1.25, 1.8, 0.25), 0.3);
+        assert_eq!(
+            side,
+            Side::Across {
+                level: 1.8,
+                camera_submerged: false
+            }
+        );
+        assert_eq!(divide.of_point(Vector3::new(1.25, 1.8, 0.75)), Side::Near);
     }
 }
