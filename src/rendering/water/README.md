@@ -42,6 +42,12 @@ a river surface, whose draws carry no bounds, widens it to the whole screen.
 The water writes scene radiance like everything else in the pass; the resolve
 tonemaps it with the rest of the scene.
 
+Surfaces replace the pixel and write depth; they composite with the copy
+themselves (refraction, absorption, their soft edges). Falling sheets and
+jets are drawn after every surface by a second pipeline that blends by alpha
+and writes no depth (`Composite` in `pipeline.rs`), so a curtain of strands
+shows the pool it falls into, which the copy does not hold.
+
 ## Meshes
 
 Anything implementing `WaterScene` (`scene.rs`) can be drawn: the game's
@@ -61,7 +67,9 @@ It offers two kinds of surface:
 
 - **River surfaces** (`RiverMesh`, `river.vert`): every vertex at the water's
   own height, with its depth (negative over a bank, so the shore depth cuts
-  a contour) and its flow, one draw per surface.
+  a contour) and its flow, one draw per surface. A surface's falling sheets
+  are indexed apart (`sheet_indices`); `RiverParts` uploads every surface's
+  triangles, then every sheet's, and each surface has a draw for each.
 
 ## The field
 
@@ -77,6 +85,18 @@ again without the graph. Only a surface whose shape changed is built again,
 at most eight a frame in the game (stalest first; the offline viewers lift
 the cap). The surfaces are then joined for upload. Past the map's open edges
 the sea is the ocean ring.
+
+A falling sheet's vertices carry `sheet` = (drop below the lip, whole fall,
+side, along the edge). Its foot is thrown out from the lip
+(`field_sources::thrown`): the way the lip's water moves, as far as it flies
+while it falls, so the sheet leans clear of rock that leans out below the
+lip; a staircase of sheets down a diagonal lip is thrown one way, not each
+its own. `river.vert` widens each sheet past the ends of its edge so it
+overlaps its neighbours, and the fragment shader fades the overlap.
+
+A source's jet (`jet.rs`) is a ribbon of `JET_ROWS` rows along its arc down
+to the water it lands in, built into the chunk it lands in and drawn as a
+sheet; refreshing it recomputes the arc to the landing water's level.
 
 ## Swell and ripples
 
@@ -248,6 +268,36 @@ colour *= 0.5 + 0.5 * NdotL
 The 0.5 ambient floor prevents water from going fully black on surfaces facing
 away from the sun.
 
+### 5. Soft edges
+
+Wherever a surface thins out it fades into the copy rather than being cut:
+
+- past the shore depth, over `SHORE_SOFTNESS` of ground (the depth's
+  gradient per pixel turns it into depth), so a shoreline does not follow its
+  triangles; films thinner than `SHORE_SOFTNESS_DEPTH` read as wet ground;
+- over the first `CONTACT_SOFTNESS` of view ray through the water, where it
+  meets a bank, a body or the floor under a thin film.
+
+Both edges wander with noise near an edge (`FOAMY_DEPTH`), so they lap
+rather than draw lines.
+
+### 6. Foam
+
+Foam is froth: patches of noise carrying a lace of drifting cells
+(`foamLace`), laid in the flow's frame and stretched downstream. It frills
+the edge where water thins over a beach or an advancing front (measured on
+the ground, so it never outlines a wall), and covers water running faster
+than `WHITE_WATER_SPEED`. It is worked out only where it can show.
+
+### 7. Falling water
+
+A sheet (`shadeSheet`) is clear glass for its first `SHEET_GLASS_DROP` below
+the lip, then white water in two layers of streaks falling at their own
+speeds, with air between them, sparser where little pours. It frays in below
+its lip and out over its foot, fades its widened ends over its neighbours and
+fades where it runs against rock. It is lit mostly by the sky, so its quads'
+facings do not show.
+
 ---
 
 ## Colour palette
@@ -276,6 +326,7 @@ src/rendering/water/
     field_sources.rs -- where each vertex of the field's surface reads its water
     river_parts.rs  -- river surfaces read again or rebuilt when their version moves
     ocean_ring.rs   -- the sea past the map's open edges
+    jet.rs          -- a source's jet, drawn as a falling sheet
     divide.rs       -- which side of the water a blended surface lies on
     footprint.rs    -- the screen rectangle the water can read
     pipeline.rs     -- Vulkan pipelines, descriptor set for the refraction copy

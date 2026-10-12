@@ -24,15 +24,25 @@ use super::vertex::{BasinVertex, FineVertex, RiverVertex};
 pub const BODY_PUSH_OFFSET: u32 = 128;
 pub const BODY_PUSH_SIZE: u32 = 32;
 
+/// How a pipeline's fragments meet what is already drawn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Composite {
+    /// Replace the pixel and write depth: a surface.
+    Replace,
+    /// Blend over it by the fragment's alpha, writing no depth: a falling
+    /// sheet.
+    Blend,
+}
+
 /// Where the fragment stage's constants start.
 pub const FRAGMENT_PUSH_OFFSET: u32 = BODY_PUSH_OFFSET + BODY_PUSH_SIZE;
 
 /// Graphics pipeline for water surface rendering.
 ///
 /// Configured with:
-/// - Alpha blending (translucent water surface)
+/// - Surfaces that composite with the copy themselves, replace the pixel and
+///   write depth; falling sheets blended over them, writing none (`Composite`)
 /// - Depth test enabled (water occluded by terrain)
-/// - Depth write disabled (terrain behind water still visible through alpha)
 /// - No backface culling (water visible from both sides)
 /// - Combined image sampler for the refraction copy's depth (volumetric depth)
 /// - Combined image sampler for its colour (screen-space refraction)
@@ -43,6 +53,8 @@ pub struct WaterPipeline {
     fine_pipeline: vk::Pipeline,
     /// A river surface.
     river_pipeline: vk::Pipeline,
+    /// A river surface's falling sheets, blended over every surface.
+    sheet_pipeline: vk::Pipeline,
     pipeline_layout: vk::PipelineLayout,
     descriptor_set_layout: vk::DescriptorSetLayout,
     /// Set 1: the ripple storage buffer.
@@ -74,6 +86,7 @@ impl WaterPipeline {
             BasinVertex::binding_description(),
             &BasinVertex::attribute_descriptions(),
             ShaderManager::load_water_fragment(&device)?,
+            Composite::Replace,
         )?;
         let fine_pipeline = Self::create_pipeline(
             &device,
@@ -83,6 +96,7 @@ impl WaterPipeline {
             FineVertex::binding_description(),
             &FineVertex::attribute_descriptions(),
             ShaderManager::load_water_fragment(&device)?,
+            Composite::Replace,
         )?;
         let river_pipeline = Self::create_pipeline(
             &device,
@@ -92,6 +106,17 @@ impl WaterPipeline {
             RiverVertex::binding_description(),
             &RiverVertex::attribute_descriptions(),
             ShaderManager::load_water_fragment(&device)?,
+            Composite::Replace,
+        )?;
+        let sheet_pipeline = Self::create_pipeline(
+            &device,
+            render_pass,
+            pipeline_layout,
+            ShaderManager::load_river_vertex(&device)?,
+            RiverVertex::binding_description(),
+            &RiverVertex::attribute_descriptions(),
+            ShaderManager::load_water_fragment(&device)?,
+            Composite::Blend,
         )?;
         let descriptor_pool = Self::create_descriptor_pool(&device)?;
 
@@ -111,6 +136,7 @@ impl WaterPipeline {
             pipeline,
             fine_pipeline,
             river_pipeline,
+            sheet_pipeline,
             pipeline_layout,
             descriptor_set_layout,
             ripple_set_layout,
@@ -302,6 +328,7 @@ impl WaterPipeline {
         binding_description: vk::VertexInputBindingDescription,
         attribute_descriptions: &[vk::VertexInputAttributeDescription],
         frag_module: vk::ShaderModule,
+        composite: Composite,
     ) -> EngineResult<vk::Pipeline> {
         let entry_name = c"main";
         let shader_stages = [
@@ -335,22 +362,35 @@ impl WaterPipeline {
         let multisample = vk::PipelineMultisampleStateCreateInfo::default()
             .rasterization_samples(vk::SampleCountFlags::TYPE_1);
 
-        // The water replaces what is behind it (below), so it writes depth:
-        // where two water surfaces overlap, as a falling sheet and the pool
-        // it falls into do, the nearer must be the one seen, whichever is
-        // drawn first. What is beyond the water reaches it through the copy.
+        // A surface replaces what is behind it, so it writes depth: where
+        // two surfaces overlap, the nearer must be the one seen, whichever is
+        // drawn first. What is beyond it reaches it through the copy. A
+        // falling sheet is drawn after every surface and blended over them,
+        // so it writes none.
         let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
             .depth_test_enable(true)
-            .depth_write_enable(true)
+            .depth_write_enable(composite == Composite::Replace)
             .depth_compare_op(vk::CompareOp::LESS_OR_EQUAL);
 
-        // No blending — the shader composites the final color internally
-        // (samples the refraction copy, applies absorption/Fresnel/etc.)
-        // and outputs alpha = 1.0, fully replacing the destination pixel.
-        let color_blend_attachment = vk::PipelineColorBlendAttachmentState {
-            blend_enable: vk::FALSE,
-            color_write_mask: vk::ColorComponentFlags::RGBA,
-            ..Default::default()
+        let color_blend_attachment = match composite {
+            // The shader composites with the copy itself (refraction,
+            // absorption, its soft edges) and replaces the pixel.
+            Composite::Replace => vk::PipelineColorBlendAttachmentState {
+                blend_enable: vk::FALSE,
+                color_write_mask: vk::ColorComponentFlags::RGBA,
+                ..Default::default()
+            },
+            // Over the water already drawn, which the copy does not hold.
+            Composite::Blend => vk::PipelineColorBlendAttachmentState {
+                blend_enable: vk::TRUE,
+                src_color_blend_factor: vk::BlendFactor::SRC_ALPHA,
+                dst_color_blend_factor: vk::BlendFactor::ONE_MINUS_SRC_ALPHA,
+                color_blend_op: vk::BlendOp::ADD,
+                src_alpha_blend_factor: vk::BlendFactor::ZERO,
+                dst_alpha_blend_factor: vk::BlendFactor::ONE,
+                alpha_blend_op: vk::BlendOp::ADD,
+                color_write_mask: vk::ColorComponentFlags::RGBA,
+            },
         };
 
         let color_blend = vk::PipelineColorBlendStateCreateInfo::default()
@@ -403,6 +443,11 @@ impl WaterPipeline {
         self.river_pipeline
     }
 
+    /// The pipeline for a river surface's falling sheets.
+    pub fn sheet_pipeline(&self) -> vk::Pipeline {
+        self.sheet_pipeline
+    }
+
     /// A descriptor set pointing set 1 at a ripple storage buffer. One per
     /// frame slot, allocated once: a set is never rewritten while a frame may
     /// be reading it.
@@ -450,6 +495,9 @@ impl Drop for WaterPipeline {
             self.device
                 .device
                 .destroy_pipeline(self.river_pipeline, None);
+            self.device
+                .device
+                .destroy_pipeline(self.sheet_pipeline, None);
             self.device
                 .device
                 .destroy_pipeline_layout(self.pipeline_layout, None);

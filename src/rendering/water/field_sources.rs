@@ -20,6 +20,7 @@ use smallvec::SmallVec;
 use crate::water::field::{DrawnDepths, FieldCells, WaterField};
 use crate::water::geometry::{SpanGraph, SpanIndex, SpanRef, ORTHOGONAL};
 
+use super::jet::Jet;
 use super::river_mesh::RiverMesh;
 use super::scene::Refreshed;
 
@@ -168,6 +169,38 @@ const VOID_DROP: f64 = 6.0;
 /// level `outside`, or `VOID_DROP` below where there is none.
 pub(super) fn off_map(level: f64, outside: Option<f64>) -> f64 {
     outside.unwrap_or(level - VOID_DROP)
+}
+
+/// How fast water is thrown out over a lip when it barely moves, m/s, so
+/// even a trickle clears the face it falls down.
+const LIP_SPEED: f32 = 0.8;
+
+/// The furthest a sheet's foot is thrown out from its lip, m.
+const MAX_THROW: f32 = 1.6;
+
+/// Gravity, m/s².
+const GRAVITY: f32 = 9.81;
+
+/// How far out from its lip a sheet's foot lands: water leaving the lip at
+/// its velocity falls `fall` metres in sqrt(2 fall / g) seconds. The sheet
+/// leans out to it, clear of rock that leans out below the lip.
+///
+/// It is thrown the way its water moves, which the lip's corner shares with
+/// the sheets beside it: a lip running across the lattice is a staircase of
+/// sheets facing two ways, and thrown each its own way they would cross.
+/// The face only keeps it going out.
+pub(super) fn thrown(face: Vector2<f32>, flow: Vector2<f32>, fall: f32) -> Vector2<f32> {
+    if fall <= 0.0 {
+        return Vector2::zeros();
+    }
+    let velocity = flow + face * (LIP_SPEED - flow.dot(&face)).max(0.0) * 0.5;
+    let speed = velocity.norm();
+    let direction = if speed > 1.0e-4 {
+        velocity / speed
+    } else {
+        face
+    };
+    direction * (speed * (2.0 * fall / GRAVITY).sqrt()).min(MAX_THROW)
 }
 
 /// How deep a sheet falling from cell `own` over the edge facing `face` is
@@ -336,6 +369,15 @@ pub(super) enum VertexSource {
         own: SpanIndex,
         outside: Option<f64>,
     },
+    /// A point on the jet of the field's source `source`, on `side` of row
+    /// `row` along its arc down to the water in the cell `landing`. The jet
+    /// stands while its water still lands there.
+    Jet {
+        source: u32,
+        landing: SpanIndex,
+        row: u32,
+        side: f32,
+    },
 }
 
 /// A built surface's vertex sources, and what else must hold for its shape
@@ -453,10 +495,28 @@ pub(super) fn refresh(field: &WaterField, cells: &DrawnCells, mesh: &mut RiverMe
                 let (corner, now) = gather(&meetings, lower);
                 held &= now == *shape && falls(upper, source.bed, lower);
                 let top = mesh.vertices[*from as usize];
+                let fall = top.surface - corner.height as f32;
+                mesh.vertices[*from as usize].sheet.y = fall;
                 let vertex = &mut mesh.vertices[v];
+                vertex.xz = top.xz + thrown(top.face, top.flow, fall);
                 vertex.surface = corner.height as f32;
                 vertex.depth = top.depth;
                 vertex.flow = top.flow;
+                vertex.sheet.x = fall;
+                vertex.sheet.y = fall;
+            }
+            &VertexSource::Jet {
+                source,
+                landing,
+                row,
+                side,
+            } => {
+                let source = &field.sources()[source as usize];
+                held &= source.landing.first() == Some(&landing);
+                match Jet::new(source, cells.surface(landing) as f32) {
+                    Some(jet) => mesh.vertices[v] = jet.vertex(row, side),
+                    None => held = false,
+                }
             }
             &VertexSource::Brink { from, own, outside } => {
                 let source = Meeting::of(cells, own);
@@ -466,10 +526,16 @@ pub(super) fn refresh(field: &WaterField, cells: &DrawnCells, mesh: &mut RiverMe
                 };
                 held &= falls(upper, source.bed, off_map(upper, outside));
                 let top = mesh.vertices[from as usize];
+                let surface = off_map(top.surface as f64, outside) as f32;
+                let fall = top.surface - surface;
+                mesh.vertices[from as usize].sheet.y = fall;
                 let vertex = &mut mesh.vertices[v];
-                vertex.surface = off_map(top.surface as f64, outside) as f32;
+                vertex.xz = top.xz + thrown(top.face, top.flow, fall);
+                vertex.surface = surface;
                 vertex.depth = top.depth;
                 vertex.flow = top.flow;
+                vertex.sheet.x = fall;
+                vertex.sheet.y = fall;
             }
         }
     }

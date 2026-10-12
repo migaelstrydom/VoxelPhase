@@ -37,6 +37,9 @@ pub struct RiverParts {
     parts: BTreeMap<SurfaceId, Part>,
     /// Every surface joined, in id order.
     joined: RiverMesh,
+    /// The joined mesh's index buffer as uploaded: every surface's
+    /// triangles, then every falling sheet's.
+    index_buffer: Vec<u32>,
     /// Syncs so far.
     syncs: u64,
     /// After the last sync: surfaces still behind their version, and the
@@ -52,6 +55,7 @@ impl Default for RiverParts {
         Self {
             parts: BTreeMap::new(),
             joined: RiverMesh::default(),
+            index_buffer: Vec::new(),
             syncs: 0,
             lag: (0, 0),
             budget: Some(BUILDS_PER_SYNC),
@@ -135,6 +139,21 @@ impl RiverParts {
             part.joined_at = self.joined.vertices.len();
             self.joined.append(&part.mesh);
         }
+        self.index_buffer.clear();
+        self.index_buffer.extend_from_slice(&self.joined.indices);
+        self.index_buffer
+            .extend_from_slice(&self.joined.sheet_indices);
+    }
+
+    /// The index buffer to upload with the joined mesh's vertices: its
+    /// surfaces' indices, then its sheets', which start at [`Self::sheet_base`].
+    pub fn index_buffer(&self) -> &[u32] {
+        &self.index_buffer
+    }
+
+    /// Where the sheets' indices start in [`Self::index_buffer`].
+    pub fn sheet_base(&self) -> u32 {
+        self.joined.indices.len() as u32
     }
 
     /// Surfaces the last sync left behind their version, and the most syncs
@@ -166,6 +185,12 @@ mod tests {
     /// Farthest a surface read again may stand from one built afresh, m:
     /// the versions' tolerance, below which a surface is not read again.
     const MATCH: f32 = 2.0e-3;
+
+    /// Farthest a sheet's foot read again may lie from one built afresh, m.
+    /// It is thrown out by its flow and the square root of its fall, which
+    /// turns the surface's tolerance into several times that over a short
+    /// fall.
+    const THROWN_MATCH: f32 = 1.0e-2;
 
     /// After a dam on water_park is blasted and its water runs, every
     /// surface read again in place matches the same surface built afresh.
@@ -237,7 +262,12 @@ mod tests {
             let fresh = water.build_river(*id);
             assert_eq!(fresh.vertices.len(), part.mesh.vertices.len(), "{id:?}");
             for (a, b) in fresh.vertices.iter().zip(&part.mesh.vertices) {
-                assert_eq!(a.xz, b.xz, "{id:?}");
+                assert!(
+                    (a.xz - b.xz).norm() <= THROWN_MATCH,
+                    "{id:?}: {} vs {}",
+                    a.xz,
+                    b.xz
+                );
                 assert!(
                     (a.surface - b.surface).abs() <= MATCH,
                     "{id:?}: {} vs {}",

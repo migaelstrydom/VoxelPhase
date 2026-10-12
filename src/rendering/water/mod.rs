@@ -2,6 +2,7 @@ mod divide;
 mod field_mesher;
 mod field_sources;
 mod footprint;
+mod jet;
 mod ocean_ring;
 mod pipeline;
 mod renderer;

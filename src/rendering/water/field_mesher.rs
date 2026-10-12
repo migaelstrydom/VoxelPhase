@@ -10,6 +10,9 @@
 //!                out at the lip
 //!   wet cell at the map's edge, its water leaving
 //!            ──▶ a sheet off the edge, down to the sea or into the void
+//!   a source landing in the chunk
+//!            ──▶ a ribbon along its jet's arc, from where it comes out
+//!                down to the water it lands in
 //!   dry column beside one, or diagonal to it between two dry sides
 //!            ──▶ a shore patch carrying the cell's surface half a column
 //!                into it: drawn on into rock, which hides it; cut over a
@@ -28,10 +31,10 @@
 //! again from the cells it was built from (`field_sources`). Past the map's
 //! open edges, the sea runs out to the horizon as a ring.
 
-use nalgebra::Vector2;
+use nalgebra::{Vector2, Vector4};
 use smallvec::SmallVec;
 
-use crate::water::field::{past_edge, DrawnDepths, WaterField};
+use crate::water::field::{past_edge, DrawnDepths, Source, WaterField};
 use crate::water::geometry::{Column, SpanIndex, SpanRef, Step, COLUMN_SIZE, ORTHOGONAL};
 use crate::water::ids::SurfaceId;
 use crate::water::surface::Swell;
@@ -42,6 +45,7 @@ use super::divide::WaterPatch;
 use super::field_sources::{
     self, corner_flow, falls, gather, Corner, DrawnCells, Meeting, VertexSource,
 };
+use super::jet::{Jet, JET_ROWS};
 use super::ocean_ring::{append_ring, occupied_bounds, MapRect};
 use super::river_mesh::{RiverDraw, RiverMesh};
 use super::scene::{MeshKey, Refreshed, RippleTileView, WaterMesh, WaterScene};
@@ -387,9 +391,14 @@ impl FieldScene<'_> {
             }
             let top = mesh.vertices[base as usize + end];
             let (cx, cz) = offsets[i];
+            let fall = top.surface - foot.height as f32;
+            mesh.vertices[base as usize + end].sheet.y = fall;
             mesh.vertices.push(RiverVertex {
-                xz: Vector2::new(x0 + cx * COLUMN_SIZE, z0 + cz * COLUMN_SIZE) + shift[end],
+                xz: Vector2::new(x0 + cx * COLUMN_SIZE, z0 + cz * COLUMN_SIZE)
+                    + shift[end]
+                    + field_sources::thrown(face, top.flow, fall),
                 surface: foot.height as f32,
+                sheet: Vector4::new(fall, fall, top.sheet.z, top.sheet.w),
                 ..top
             });
             mesh.sources.vertices.push(VertexSource::Foot {
@@ -399,7 +408,7 @@ impl FieldScene<'_> {
                 own,
             });
         }
-        mesh.indices
+        mesh.sheet_indices
             .extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
     }
 }
@@ -419,12 +428,17 @@ impl FieldScene<'_> {
     ) -> u32 {
         let base = mesh.vertices.len() as u32;
         let pour = field_sources::pour(self.field, &self.drawn_cells(), own, face);
-        for (&(i, _), shift) in ends.iter().zip(shift) {
+        let edge = Vector2::new(-face.y, face.x);
+        let xz = ends.map(|(i, _)| mesh.vertices[(first as usize) + i].xz);
+        for (end, (&(i, _), shift)) in ends.iter().zip(shift).enumerate() {
             let top = mesh.vertices[(first as usize) + i];
+            let side = (xz[end] - xz[1 - end]).dot(&edge).signum();
+            let along = (top.xz + shift).dot(&edge);
             mesh.vertices.push(RiverVertex {
                 xz: top.xz + shift,
                 face,
                 depth: top.depth.min(pour),
+                sheet: Vector4::new(0.0, 0.0, side, along),
                 ..top
             });
             mesh.sources.vertices.push(VertexSource::Lip {
@@ -463,8 +477,13 @@ impl FieldScene<'_> {
         let base = self.lip_vertices(mesh, first, own, ends, [Vector2::zeros(); 2], face);
         for end in (0..2).rev() {
             let top = mesh.vertices[base as usize + end];
+            let surface = field_sources::off_map(top.surface as f64, outside) as f32;
+            let fall = top.surface - surface;
+            mesh.vertices[base as usize + end].sheet.y = fall;
             mesh.vertices.push(RiverVertex {
-                surface: field_sources::off_map(top.surface as f64, outside) as f32,
+                xz: top.xz + field_sources::thrown(face, top.flow, fall),
+                surface,
+                sheet: Vector4::new(fall, fall, top.sheet.z, top.sheet.w),
                 ..top
             });
             mesh.sources.vertices.push(VertexSource::Brink {
@@ -473,8 +492,35 @@ impl FieldScene<'_> {
                 outside,
             });
         }
-        mesh.indices
+        mesh.sheet_indices
             .extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+    }
+}
+
+impl FieldScene<'_> {
+    /// Source `index`'s jet, down to the water in the cell it lands in.
+    fn jet(&self, mesh: &mut RiverMesh, index: usize, source: &Source) {
+        let landing = source.landing[0];
+        let Some(jet) = Jet::new(source, self.drawn_cells().surface(landing) as f32) else {
+            return;
+        };
+        let base = mesh.vertices.len() as u32;
+        for row in 0..=JET_ROWS {
+            for side in [-1.0f32, 1.0] {
+                mesh.vertices.push(jet.vertex(row, side));
+                mesh.sources.vertices.push(VertexSource::Jet {
+                    source: index as u32,
+                    landing,
+                    row,
+                    side,
+                });
+            }
+        }
+        for row in 0..JET_ROWS {
+            let a = base + 2 * row;
+            mesh.sheet_indices
+                .extend_from_slice(&[a, a + 1, a + 3, a, a + 3, a + 2]);
+        }
     }
 }
 
@@ -520,6 +566,7 @@ fn quad(
             depth: corner.depth as f32,
             flow,
             face: Vector2::zeros(),
+            sheet: Vector4::zeros(),
         });
     }
     mesh.sources.vertices.extend(sources);
@@ -637,11 +684,22 @@ impl WaterScene for FieldScene<'_> {
             let span = SpanRef::key(chunk.coord.column(local), ordinal);
             self.cell_surface(&mut mesh, span, at(flat), drawn.surface(at(flat)));
         }
-        if !mesh.indices.is_empty() {
+        for (index, source) in self.field.sources().iter().enumerate() {
+            if source
+                .landing
+                .first()
+                .is_some_and(|c| c.slot == slot as u32)
+            {
+                self.jet(&mut mesh, index, source);
+            }
+        }
+        if !mesh.indices.is_empty() || !mesh.sheet_indices.is_empty() {
             mesh.draws.push(RiverDraw {
                 id,
                 first_index: 0,
                 index_count: mesh.indices.len() as u32,
+                first_sheet_index: 0,
+                sheet_index_count: mesh.sheet_indices.len() as u32,
             });
         }
         mesh

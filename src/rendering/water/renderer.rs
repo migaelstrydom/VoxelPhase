@@ -97,6 +97,8 @@ enum WaterSurface {
     Ocean,
     Rivers,
     Ripples,
+    /// The falling sheets of the river surfaces, drawn last and blended.
+    Sheets,
 }
 
 /// One draw of the frame's plan, with every constant it pushes.
@@ -307,7 +309,7 @@ impl WaterRenderer {
             &mut self.river_slots[self.slot],
             self.river_version,
             &self.rivers.mesh().vertices,
-            &self.rivers.mesh().indices,
+            self.rivers.index_buffer(),
         )?;
         upload_slot(
             &self.device,
@@ -427,7 +429,13 @@ impl WaterRenderer {
             .collect();
         let sea = water.sea();
         let (swell, sea_level) = sea.map_or((Swell::default(), 0.0), |s| (s.swell, s.level));
-        for draw in &self.rivers.mesh().draws {
+        for draw in self
+            .rivers
+            .mesh()
+            .draws
+            .iter()
+            .filter(|d| d.index_count > 0)
+        {
             let (layer, tx, tz) = rippling
                 .get(&draw.id)
                 .map_or((-1.0, 0, 0), |&(layer, tx, tz)| (layer as f32, tx, tz));
@@ -482,6 +490,30 @@ impl WaterRenderer {
                 ],
                 first_index: 0,
                 index_count: self.fine_indices,
+            });
+        }
+
+        // Falling sheets are drawn over every surface, so they blend over
+        // the pool they fall into: they write no depth to hide it by.
+        let sheet_base = self.rivers.sheet_base();
+        for draw in &self.rivers.mesh().draws {
+            if draw.sheet_index_count == 0 {
+                continue;
+            }
+            self.plan.push(PlannedDraw {
+                surface: WaterSurface::Sheets,
+                constants: [
+                    -1.0,
+                    swell.amplitude,
+                    swell.phase,
+                    clock,
+                    sea_level,
+                    SEA_BAND,
+                    0.0,
+                    0.0,
+                ],
+                first_index: sheet_base + draw.first_sheet_index,
+                index_count: draw.sheet_index_count,
             });
         }
 
@@ -566,7 +598,9 @@ impl WaterRenderer {
         match surface {
             WaterSurface::Basins => self.slots[self.slot].buffers.as_ref(),
             WaterSurface::Ocean => self.ocean_slots[self.slot].buffers.as_ref(),
-            WaterSurface::Rivers => self.river_slots[self.slot].buffers.as_ref(),
+            WaterSurface::Rivers | WaterSurface::Sheets => {
+                self.river_slots[self.slot].buffers.as_ref()
+            }
             WaterSurface::Ripples => Some(&self.fine_grid),
         }
     }
@@ -576,6 +610,7 @@ impl WaterRenderer {
             WaterSurface::Basins | WaterSurface::Ocean => self.pipeline.pipeline(),
             WaterSurface::Rivers => self.pipeline.river_pipeline(),
             WaterSurface::Ripples => self.pipeline.fine_pipeline(),
+            WaterSurface::Sheets => self.pipeline.sheet_pipeline(),
         }
     }
 }
