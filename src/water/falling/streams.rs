@@ -108,9 +108,8 @@ impl Stream {
     /// the sphere's height.
     fn strike(&self, centre: Point3<f32>, radius: f32) -> Option<Strike> {
         let reach = Vector3::repeat(radius);
-        if (centre + reach).inf(&self.max) != centre + reach
-            || (centre - reach).sup(&self.min) != centre - reach
-        {
+        let (low, high) = (centre - reach, centre + reach);
+        if (0..3).any(|axis| low[axis] > self.max[axis] || high[axis] < self.min[axis]) {
             return None;
         }
         let slab = self.path.at(self.path.time_at(centre.y));
@@ -359,6 +358,21 @@ mod tests {
         let strike = stream.strike(at, 0.3).expect("in the curtain");
         assert!(strike.velocity.y < -7.0);
         assert!(strike.area > 0.0 && strike.area < 0.5 * 0.6);
+    }
+
+    #[test]
+    fn a_body_wider_than_the_stream_is_struck() {
+        // A narrow jet through the middle of a crate twice its width.
+        let path = FallPath::jet(
+            Point3::new(0.0, 4.0, 0.0),
+            Vector3::new(4.0, 0.0, 0.0),
+            0.3,
+            0.0,
+        )
+        .unwrap();
+        let stream = Stream::new(path, None, None);
+        let through = path.at(path.time_at(1.5)).centre;
+        assert!(stream.strike(through, 0.52).is_some());
     }
 
     #[test]
