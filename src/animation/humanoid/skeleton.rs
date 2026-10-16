@@ -257,6 +257,7 @@ impl Skeleton {
             config.upper_leg_length,
             config.lower_leg_length,
             left_bend,
+            frame.up,
         );
 
         // Right leg IK
@@ -268,6 +269,7 @@ impl Skeleton {
             config.upper_leg_length,
             config.lower_leg_length,
             right_bend,
+            frame.up,
         );
     }
 

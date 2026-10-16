@@ -103,7 +103,7 @@ impl CritterSkeleton {
         for (index, side) in [FootSide::Left, FootSide::Right].into_iter().enumerate() {
             let hip = self.pelvis + right * (side.side_sign() * config.hip_width);
             let foot = feet[index];
-            self.legs[index].solve(&mut self.solver, hip, foot.position, bend);
+            self.legs[index].solve(&mut self.solver, hip, foot.position, bend, Vector3::y());
             self.legs[index].foot_forward = foot.forward;
             self.legs[index].foot_up = foot.up;
         }

@@ -30,8 +30,9 @@ pub fn within_reach(joint: Point3<f32>, target: Point3<f32>, length: f32) -> Poi
 
 /// Solve one leg and return where its knee belongs.
 ///
-/// `bend_dir` is the direction the knee should break toward — forward for
-/// a knee, backward for a hock.
+/// `bend_dir` is the direction the knee should break toward with the foot
+/// under the hip — forward for a knee, backward for a hock. `up` is the
+/// body's up: with it, `bend_dir` names the plane the leg swings in.
 pub fn solve_knee(
     solver: &mut FABRIKSolver,
     hip: Point3<f32>,
@@ -40,6 +41,7 @@ pub fn solve_knee(
     upper_length: f32,
     lower_length: f32,
     bend_dir: Vector3<f32>,
+    up: Vector3<f32>,
 ) -> Point3<f32> {
     let mut positions = vec![hip, current_knee, foot];
     let chain = IKChain::new(vec![0, 1, 2], &positions);
@@ -48,12 +50,30 @@ pub fn solve_knee(
     solver.solve(&mut positions, &chain, &target, true);
 
     let mut knee = positions[1] + bend_dir * BEND_BIAS;
-    constrain_knee(&mut knee, &hip, &foot, upper_length, lower_length, bend_dir);
+    constrain_knee(
+        &mut knee,
+        &hip,
+        &foot,
+        upper_length,
+        lower_length,
+        bend_dir,
+        up,
+    );
 
     knee
 }
 
-/// Move the knee on to the circle where both bones keep their length.
+/// Move the knee on to the circle where both bones keep their length, at
+/// the point of it the leg's hinge allows.
+///
+/// A knee is a hinge across the leg, its axis `bend_dir × up`: the knee
+/// swings fore and aft in the plane of `bend_dir` and `up`, whatever the foot
+/// is doing. Bending toward `bend_dir` itself, rather than about the hinge,
+/// fails as the foot comes forward: with the foot ahead of the hip the line
+/// to it nearly is `bend_dir`, and what is left to bend toward is whatever
+/// sideways splay `bend_dir` carries — the knee flails out to the side
+/// instead of rising.
+#[allow(clippy::too_many_arguments)]
 fn constrain_knee(
     knee: &mut Point3<f32>,
     hip: &Point3<f32>,
@@ -61,6 +81,7 @@ fn constrain_knee(
     upper: f32,
     lower: f32,
     bend_dir: Vector3<f32>,
+    up: Vector3<f32>,
 ) {
     let hip_to_foot = foot - hip;
     let dist = hip_to_foot.magnitude();
@@ -79,12 +100,12 @@ fn constrain_knee(
 
     let forward = hip_to_foot.normalize();
 
-    let bend_axis = forward.cross(&bend_dir);
-    let bend_dir_orth = if bend_axis.magnitude() > 0.01 {
-        bend_axis.cross(&forward).normalize()
-    } else {
-        Vector3::y()
-    };
+    let hinge = bend_dir.cross(&up);
+    let bend_dir_orth = hinge
+        .cross(&forward)
+        .try_normalize(0.01)
+        .or_else(|| forward.cross(&bend_dir).cross(&forward).try_normalize(0.01))
+        .unwrap_or_else(Vector3::y);
 
     let knee_offset = forward * (angle.cos() * upper) + bend_dir_orth * (angle.sin() * upper);
     *knee = hip + knee_offset;
@@ -148,6 +169,7 @@ impl Leg {
         hip: Point3<f32>,
         foot_target: Point3<f32>,
         bend_dir: Vector3<f32>,
+        up: Vector3<f32>,
     ) {
         self.hip = hip;
         self.foot = within_reach(hip, foot_target, self.reach());
@@ -159,6 +181,7 @@ impl Leg {
             self.upper_length,
             self.lower_length,
             bend_dir,
+            up,
         );
     }
 }
@@ -189,6 +212,35 @@ mod tests {
         assert!(direction > 0.999, "the leg still points at the target");
     }
 
+    /// Running uphill the swinging foot comes up level with the hip, ahead
+    /// of it. The knee is a hinge, so it rises; it does not swing out
+    /// toward the few degrees of splay in its bend direction, which is all
+    /// that bending toward that direction leaves once the foot is nearly
+    /// along it.
+    #[test]
+    fn a_knee_rises_rather_than_splays_as_the_foot_comes_up_ahead() {
+        let mut solver = FABRIKSolver::default();
+        let hip = Point3::new(0.0, 1.0, 0.0);
+        let splayed = Vector3::new(0.2, 0.0, 1.0).normalize();
+        let mut leg = Leg::new(hip, 0.25, 0.25, Vector3::z(), splayed);
+
+        leg.solve(
+            &mut solver,
+            hip,
+            Point3::new(0.0, 1.0, 0.3),
+            splayed,
+            Vector3::y(),
+        );
+
+        let knee = leg.knee - hip;
+        assert!(
+            knee.y > 0.1 && knee.x.abs() < 0.05,
+            "knee {:.2} m out to the side and {:.2} m up",
+            knee.x,
+            knee.y
+        );
+    }
+
     /// A leg is a pair of bones: wherever the foot is asked to go, the
     /// knee has to sit where both bones keep their length.
     #[test]
@@ -207,7 +259,13 @@ mod tests {
             Point3::new(0.1, 0.8, -0.1),
             Point3::new(0.0, 0.55, 0.0),
         ] {
-            leg.solve(&mut solver, Point3::new(0.0, 1.0, 0.0), foot, Vector3::z());
+            leg.solve(
+                &mut solver,
+                Point3::new(0.0, 1.0, 0.0),
+                foot,
+                Vector3::z(),
+                Vector3::y(),
+            );
             let upper = (leg.knee - leg.hip).magnitude();
             let lower = (leg.foot - leg.knee).magnitude();
             assert!((upper - 0.25).abs() < 1e-3, "upper bone {upper}");
