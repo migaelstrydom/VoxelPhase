@@ -167,6 +167,46 @@ pub fn catalogue() -> Vec<Scenario> {
             camera: CameraRig::three_quarter().with_azimuth(296.0),
         },
         Scenario {
+            name: "throw",
+            summary: "throw standing, then walking, then two in quick succession",
+            level: LEVEL,
+            start: (-7.0, 6.0),
+            yaw: SEAWARD,
+            script: Script::new()
+                .then(Beat::stand(0.3))
+                .then(Beat::stand(0.9).throwing().named("throw"))
+                .then(
+                    Beat::walk(0.9)
+                        .towards(Vector3::x())
+                        .throwing()
+                        .named("walk_throw"),
+                )
+                .then(Beat::stand(0.15).throwing().named("rapid"))
+                .then(Beat::stand(0.9).throwing().named("rapid")),
+            camera: CameraRig::side().with_distance(3.0),
+        },
+        Scenario {
+            name: "throw_around",
+            summary: "standing, throw to the left, then behind, then to the right, each turning \
+                      from where the last left the body; then behind while walking",
+            level: LEVEL,
+            start: (-7.0, 6.0),
+            yaw: SEAWARD,
+            script: Script::new()
+                .then(Beat::stand(0.3))
+                .then(Beat::stand(1.0).throwing_at(-Vector3::z()).named("left"))
+                .then(Beat::stand(1.0).throwing_at(Vector3::z()).named("behind"))
+                .then(Beat::stand(1.0).throwing_at(-Vector3::x()).named("right"))
+                .then(Beat::walk(1.2).towards(-Vector3::x()).named("turn"))
+                .then(
+                    Beat::walk(1.2)
+                        .towards(-Vector3::x())
+                        .throwing_at(Vector3::x())
+                        .named("walk_behind"),
+                ),
+            camera: CameraRig::side().with_distance(2.2).with_elevation(10.0),
+        },
+        Scenario {
             name: "run_uphill",
             summary: "Island Sea: run up the hillside",
             level: ISLAND,

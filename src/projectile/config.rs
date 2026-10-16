@@ -32,6 +32,9 @@ pub struct GrenadeConfig {
     pub detonation_impact_speed: f32,
     /// Cooldown between throws (seconds).
     pub cooldown: f32,
+    /// Seconds from the click to the grenade leaving the hand: the arm's
+    /// wind-up. The aim is taken when it leaves, not on the click.
+    pub release_delay: f32,
     /// Base upward angle offset for throws (radians). Added to throw direction.
     pub upward_offset: f32,
     /// How much camera pitch influences throw direction (0.0 = none, 1.0 = full).
@@ -50,6 +53,7 @@ impl Default for GrenadeConfig {
             arm_delay: 0.15,
             detonation_impact_speed: 3.0,
             cooldown: 0.01,
+            release_delay: 0.12,
             upward_offset: 0.1,
             pitch_influence: 0.5,
         }

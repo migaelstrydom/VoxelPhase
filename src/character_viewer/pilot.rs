@@ -45,6 +45,8 @@ impl<'a> Pilot<'a> {
             crouch: beat.crouch,
             crouch_just_pressed: beat.crouch && !was_crouching,
             sprint: beat.sprint,
+            throw: beat.throw && first_frame,
+            aim: beat.aim,
             ..Default::default()
         };
         Some((intent, beat))

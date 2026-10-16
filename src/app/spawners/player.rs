@@ -4,6 +4,7 @@ use specs::{Builder, Entity, World, WorldExt};
 use crate::animation::{CharacterAnimator, CharacterRigConfig};
 use crate::character::{
     AttitudeControl, CharacterIntent, CharacterState, Grounding, Immersion, LocomotionConfig,
+    Throws,
 };
 use crate::components::{
     Orientation, Position, Renderable, RigidBodyComponent, Rotation, Velocity,
@@ -159,6 +160,7 @@ pub fn spawn_player(world: &mut World, initial_pos: Point3<f32>) -> Entity {
         .with(Player)
         .with(CharacterIntent::default())
         .with(CharacterState::default())
+        .with(Throws::default())
         .with(locomotion)
         .with(Grounding::default())
         .with(Immersion::default())

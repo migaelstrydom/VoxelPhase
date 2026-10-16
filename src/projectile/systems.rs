@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use nalgebra::Point3;
+use nalgebra::{Point3, Vector3};
 use specs::{
     Builder, Entities, Entity, Join, LazyUpdate, Read, ReadExpect, ReadStorage, System, Write,
     WriteStorage,
@@ -10,14 +10,16 @@ use specs::{
 
 use super::components::{Grenade, Lifetime, Projectile};
 use super::config::GrenadeConfig;
+use super::held::HeldGrenade;
 use super::spawn::spawn_grenade;
 use super::throw::grenade_launch;
 use crate::camera::FollowTarget;
-use crate::character::CharacterIntent;
-use crate::components::{Position, RigidBodyComponent};
+use crate::character::{CharacterIntent, Throws};
+use crate::components::{
+    ModelInstance, Orientation, Position, Renderable, RigidBodyComponent, Rotation,
+};
 use crate::explosion::Explosion;
 use crate::model::Model;
-use crate::player::Player;
 use crate::systems::PhysicsResource;
 use crate::time::Time;
 
@@ -63,10 +65,17 @@ pub struct GrenadeCooldown {
     pub remaining: f32,
 }
 
-/// System that spawns grenades on left mouse click.
+/// System that throws grenades for any character with `Throws` asking to.
+///
+/// The click commits to a throw and puts a grenade in the hand; the grenade
+/// flies once the arm has wound up (`GrenadeConfig::release_delay`), from
+/// where the thrower is then, along where it is then aiming: the intent's aim
+/// if it has one, where the camera looks if the camera follows it, its own
+/// facing if not.
 pub struct GrenadeSpawnSystem;
 
 impl<'a> System<'a> for GrenadeSpawnSystem {
+    #[allow(clippy::type_complexity)]
     type SystemData = (
         Entities<'a>,
         ReadExpect<'a, GrenadeConfig>,
@@ -74,10 +83,15 @@ impl<'a> System<'a> for GrenadeSpawnSystem {
         Write<'a, PhysicsResource>,
         Write<'a, GrenadeCooldown>,
         Read<'a, GrenadeModelResource>,
-        ReadStorage<'a, Player>,
         ReadStorage<'a, CharacterIntent>,
-        ReadStorage<'a, Position>,
+        ReadStorage<'a, Rotation>,
         ReadStorage<'a, FollowTarget>,
+        WriteStorage<'a, Throws>,
+        WriteStorage<'a, Position>,
+        WriteStorage<'a, Orientation>,
+        WriteStorage<'a, ModelInstance>,
+        WriteStorage<'a, Renderable>,
+        WriteStorage<'a, HeldGrenade>,
         Read<'a, LazyUpdate>,
     );
 
@@ -89,76 +103,103 @@ impl<'a> System<'a> for GrenadeSpawnSystem {
             mut physics,
             mut cooldown,
             grenade_model,
-            players,
-            player_targets,
-            positions,
+            intents,
+            rotations,
             follow_targets,
+            mut throws,
+            mut positions,
+            mut orientations,
+            mut models,
+            mut renderables,
+            mut held,
             lazy,
         ) = data;
 
-        // Update cooldown
         cooldown.remaining = (cooldown.remaining - time.delta_seconds()).max(0.0);
 
-        // throw_grenade is resolved by PlayerControlSystem — only true when the
-        // throw action was not consumed by a grab-throw.
-        let should_throw = (&players, &player_targets)
-            .join()
-            .any(|(_, target)| target.throw_grenade);
-        if !should_throw {
+        let Some(model) = grenade_model.model.clone() else {
             return;
-        }
-
-        // Check cooldown
-        if cooldown.remaining > 0.0 {
-            return;
-        }
-
-        // Get the grenade model
-        let model = match &grenade_model.model {
-            Some(m) => m.clone(),
-            None => {
-                log::warn!("No grenade model available");
-                return;
-            }
         };
-
-        // Get player position
-        let player_pos = match (&players, &positions).join().next() {
-            Some((_, pos)) => pos.0,
-            None => return,
-        };
-
-        // Get camera orientation from FollowTarget
-        // orbit_angle is where the camera is positioned, so we add π to get the look direction
-        let (look_angle, camera_pitch) = match (&follow_targets,).join().next() {
-            Some((follow,)) => (follow.orbit_angle + std::f32::consts::PI, follow.pitch),
-            None => {
-                log::warn!("No camera FollowTarget found");
-                return;
-            }
-        };
-
-        // The one statement of what a grenade throw is, shared with the
-        // aiming cursor so the two cannot drift apart.
         let world_gravity = physics.world.config().gravity;
-        let launch = grenade_launch(
-            &config,
-            Point3::new(player_pos.x, player_pos.y, player_pos.z),
-            look_angle,
-            camera_pitch,
-            world_gravity,
-        );
-        spawn_grenade(
-            lazy.create_entity(&entities),
-            &mut physics.world,
-            &config,
-            model,
-            launch.origin,
-            launch.velocity,
-        );
+        // Yaw and pitch a thrower aims along. orbit_angle is where the camera
+        // sits, so the look direction is opposite it.
+        let aim_of = |thrower: Entity, intent: &CharacterIntent, yaw: f32| {
+            if let Some(aim) = intent.aim {
+                return (aim.x.atan2(aim.z), 0.0);
+            }
+            follow_targets
+                .join()
+                .find(|follow| follow.target == thrower)
+                .map_or((yaw, 0.0), |follow| {
+                    (follow.orbit_angle + std::f32::consts::PI, follow.pitch)
+                })
+        };
 
-        // Set cooldown
-        cooldown.remaining = config.cooldown;
+        let mut new_props = Vec::new();
+        let mut releases = Vec::new();
+        for (thrower, intent, position, rotation, throws) in
+            (&entities, &intents, &positions, &rotations, &mut throws).join()
+        {
+            let (look_angle, camera_pitch) = aim_of(thrower, intent, rotation.0);
+            // throw_grenade is resolved by PlayerControlSystem — only true
+            // when the throw action was not consumed by a grab-throw.
+            let commit = cooldown.remaining <= 0.0 && intent.throw_grenade;
+            if commit {
+                cooldown.remaining = config.cooldown;
+            }
+            let aim = commit.then(|| Vector3::new(look_angle.sin(), 0.0, look_angle.cos()));
+            let released = throws.advance(time.delta_seconds(), aim, config.release_delay);
+
+            if commit {
+                if let Some(stroke) = throws.strokes().last().filter(|s| s.elapsed == 0.0) {
+                    new_props.push((thrower, stroke.id, stroke.hand, position.0));
+                }
+            }
+            for stroke in released {
+                releases.push((thrower, stroke.id, position.0, look_angle, camera_pitch));
+            }
+        }
+
+        for (thrower, stroke, hand, at) in new_props {
+            let prop = entities.create();
+            let _ = positions.insert(prop, Position(at));
+            let _ = orientations.insert(prop, Orientation::default());
+            let _ = models.insert(prop, ModelInstance::new(model.clone()));
+            let _ = renderables.insert(prop, Renderable);
+            let _ = held.insert(
+                prop,
+                HeldGrenade {
+                    thrower,
+                    stroke,
+                    hand,
+                },
+            );
+        }
+
+        for (thrower, stroke, at, look_angle, camera_pitch) in releases {
+            for (prop, held) in (&entities, &held).join() {
+                if held.thrower == thrower && held.stroke == stroke {
+                    let _ = entities.delete(prop);
+                }
+            }
+            // The one statement of what a grenade throw is, shared with the
+            // aiming cursor so the two cannot drift apart.
+            let launch = grenade_launch(
+                &config,
+                Point3::from(at),
+                look_angle,
+                camera_pitch,
+                world_gravity,
+            );
+            spawn_grenade(
+                lazy.create_entity(&entities),
+                &mut physics.world,
+                &config,
+                model.clone(),
+                launch.origin,
+                launch.velocity,
+            );
+        }
     }
 }
 

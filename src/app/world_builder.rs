@@ -8,6 +8,7 @@ use crate::camera::{CameraConfig, FollowTarget};
 use crate::character::grab::GrabConfig;
 use crate::character::{
     AttitudeControl, CharacterIntent, CharacterState, Grounding, Immersion, LocomotionConfig,
+    Throws,
 };
 use crate::cleave::BrittleSolid;
 use crate::components::{
@@ -32,7 +33,8 @@ use crate::physics::PhysicsImpulseQueue;
 use crate::platform::MovingPlatform;
 use crate::player::Player;
 use crate::projectile::{
-    Grenade, GrenadeConfig, GrenadeCooldown, GrenadeModelResource, Lifetime, Projectile,
+    Grenade, GrenadeConfig, GrenadeCooldown, GrenadeModelResource, HeldGrenade, Lifetime,
+    Projectile,
 };
 use crate::rendering::material::MaterialManager;
 use crate::rendering::renderer::Renderer;
@@ -69,6 +71,7 @@ impl WorldBuilder {
         world.register::<Player>();
         world.register::<CharacterIntent>();
         world.register::<CharacterState>();
+        world.register::<Throws>();
         world.register::<LocomotionConfig>();
         world.register::<Grounding>();
         world.register::<Immersion>();
@@ -100,6 +103,7 @@ impl WorldBuilder {
         world.register::<BodyMotion>();
         world.register::<MovingPlatform>();
         world.register::<Grenade>();
+        world.register::<HeldGrenade>();
         world.register::<Lifetime>();
         world.register::<Debris>();
         world.register::<Projectile>();

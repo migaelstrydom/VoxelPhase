@@ -5,6 +5,7 @@ pub mod gait;
 pub mod pose_state;
 pub mod skeleton;
 pub mod stride_sync;
+pub mod throw;
 pub mod upper_state;
 
 pub use body_frame::BodyFrame;

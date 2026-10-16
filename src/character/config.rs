@@ -75,6 +75,9 @@ pub struct LocomotionConfig {
     /// Higher = snappier turns when unloaded. When holding a heavy object,
     /// the constraint reaction torque limits the actual turn rate regardless.
     pub turn_aggression: f32,
+    /// The same gain while turning to face a throw. Stiffer, so a throw
+    /// behind has mostly come round by the time it leaves the hand.
+    pub throw_turn_aggression: f32,
 
     /// Radius of the player's capsule collider.
     ///
@@ -112,6 +115,7 @@ impl LocomotionConfig {
             ground_forgiveness_window: 0.08,
             launch_window: 0.2,
             turn_aggression: 10.0,
+            throw_turn_aggression: 20.0,
             collider_radius: 0.25,
             collider_half_height: 0.5,
             swim: SwimConfig::default(),

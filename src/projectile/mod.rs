@@ -5,6 +5,7 @@
 
 mod components;
 mod config;
+mod held;
 pub mod model;
 mod spawn;
 pub mod systems;
@@ -13,6 +14,7 @@ mod visuals;
 
 pub use components::{Grenade, Lifetime, Projectile};
 pub use config::GrenadeConfig;
+pub use held::{HeldGrenade, HeldGrenadeSystem};
 pub use model::{build_grenade_model, GrenadeMaterials};
 pub use spawn::{create_grenade_body, spawn_grenade};
 pub use systems::{

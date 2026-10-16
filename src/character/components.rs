@@ -513,6 +513,10 @@ pub struct CharacterIntent {
     pub throw: bool,
     /// Resolved by CharacterControlSystem: true when throw should spawn a grenade.
     pub throw_grenade: bool,
+    /// Horizontal direction to throw in, for a brain that aims somewhere
+    /// other than where it walks. `None` leaves the aim to the camera when
+    /// it follows this character, and to the facing otherwise.
+    pub aim: Option<Vector3<f32>>,
 }
 
 impl Default for CharacterIntent {
@@ -530,6 +534,7 @@ impl Default for CharacterIntent {
             grab_just_released: false,
             throw: false,
             throw_grenade: false,
+            aim: None,
         }
     }
 }

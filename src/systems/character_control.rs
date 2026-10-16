@@ -2,7 +2,7 @@ use crate::character::grab::{self, GrabConfig, ReachFrame};
 use crate::character::{
     approach, facing_from_rotation, ArmState, AttitudeControl, CharacterIntent, CharacterState,
     Grounding, Immersion, LocomotionConfig, LocomotionInput, LocomotionState, MovementRule,
-    RuleSpeeds,
+    RuleSpeeds, Throws,
 };
 use crate::components::{Position, RigidBodyComponent, Rotation};
 use crate::debug::DebugOverlays;
@@ -53,6 +53,7 @@ impl<'a> System<'a> for CharacterControlSystem {
         ReadStorage<'a, BodyMotion>,
         ReadStorage<'a, Immersion>,
         ReadStorage<'a, AttitudeControl>,
+        ReadStorage<'a, Throws>,
         Write<'a, DebugOverlays>,
     );
 
@@ -73,6 +74,7 @@ impl<'a> System<'a> for CharacterControlSystem {
             body_motions,
             immersions,
             attitudes,
+            throws,
             mut debug_overlays,
         ) = data;
         let dt = time.delta_seconds();
@@ -100,6 +102,7 @@ impl<'a> System<'a> for CharacterControlSystem {
             _,
             immersion,
             attitude,
+            throws,
         ) in (
             &mut intents,
             &mut character_states,
@@ -113,6 +116,7 @@ impl<'a> System<'a> for CharacterControlSystem {
             &actuators,
             (&immersions).maybe(),
             (&attitudes).maybe(),
+            (&throws).maybe(),
         )
             .join()
         {
@@ -206,10 +210,17 @@ impl<'a> System<'a> for CharacterControlSystem {
             };
             rotation.0 = current_yaw;
 
-            if move_dir.magnitude() > 0.001 {
-                let target_yaw = -move_dir.z.atan2(move_dir.x) + std::f32::consts::PI / 2.0;
+            // A thrower faces its throw, whichever way it is moving.
+            let heading = match throws.and_then(Throws::facing) {
+                Some(aim) => Some((aim, config.throw_turn_aggression)),
+                None => {
+                    (move_dir.magnitude() > 0.001).then_some((move_dir, config.turn_aggression))
+                }
+            };
+            if let Some((heading, aggression)) = heading {
+                let target_yaw = -heading.z.atan2(heading.x) + std::f32::consts::PI / 2.0;
                 let yaw_error = wrap_angle(target_yaw - current_yaw);
-                drive.angular_target = Vector3::new(0.0, yaw_error * config.turn_aggression, 0.0);
+                drive.angular_target = Vector3::new(0.0, yaw_error * aggression, 0.0);
             } else {
                 drive.angular_target = Vector3::zeros();
             }
@@ -630,6 +641,7 @@ mod tests {
         world.register::<Grounding>();
         world.register::<Immersion>();
         world.register::<AttitudeControl>();
+        world.register::<Throws>();
         world.register::<Position>();
         world.register::<RigidBodyComponent>();
         world.register::<Rotation>();

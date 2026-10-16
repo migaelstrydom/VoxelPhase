@@ -24,7 +24,8 @@ use crate::objective::{GemMotionSystem, GoalSystem, ObjectiveHudSystem, Progress
 use crate::particles::{ParticleSpawnSystem, ParticleUpdateSystem};
 use crate::platform::MovingPlatformSystem;
 use crate::projectile::{
-    GrenadeSpawnSystem, GrenadeVisualSystem, LifetimeSystem, ProjectileDetonationSystem,
+    GrenadeSpawnSystem, GrenadeVisualSystem, HeldGrenadeSystem, LifetimeSystem,
+    ProjectileDetonationSystem,
 };
 use crate::rubble::{BoulderCullSystem, RubbleSpawnSystem, ScreeSystem};
 use crate::sensing::SensorProbeSystem;
@@ -131,11 +132,6 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
         // next, like grounding.
         .with(ImmersionSystem, "immersion", &["physics_sync"])
         .with(
-            CharacterAnimationSystem,
-            "character_animation",
-            &["sensor_probe", "contact_grounding", "immersion"],
-        )
-        .with(
             CritterAnimationSystem,
             "critter_animation",
             &["sensor_probe", "contact_grounding"],
@@ -177,6 +173,19 @@ pub fn build_dispatcher<'a, 'b>() -> Dispatcher<'a, 'b> {
         // Projectiles and explosions
         .with(GrenadeSpawnSystem, "grenade_spawn", &["camera_control"])
         .with(LifetimeSystem, "lifetime", &["grenade_spawn"])
+        .with(
+            CharacterAnimationSystem,
+            "character_animation",
+            // After the throw is committed, so the arm moves on the click.
+            &[
+                "sensor_probe",
+                "contact_grounding",
+                "immersion",
+                "grenade_spawn",
+            ],
+        )
+        // The grenade being wound up rides in the hand the animator drew.
+        .with(HeldGrenadeSystem, "held_grenade", &["character_animation"])
         // Grenade glow tracks velocity, so it runs after physics has synced it
         // and before lights are collected for the frame.
         .with(

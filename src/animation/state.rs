@@ -4,6 +4,8 @@
 
 use nalgebra::{Point3, Vector2, Vector3};
 
+use crate::character::ThrowingHand;
+
 /// State of a single foot.
 #[derive(Debug, Clone)]
 pub struct FootState {
@@ -87,6 +89,21 @@ impl WaterEntry {
     }
 }
 
+/// An arm throwing: wound up from the click, let go at `windup`, then
+/// carried through and back to whatever the arms were doing.
+#[derive(Debug, Clone, Copy)]
+pub struct ThrowGesture {
+    /// The throw this is: the id of its `ThrowStroke`.
+    pub stroke: u32,
+    pub hand: ThrowingHand,
+    /// Seconds since the click.
+    pub elapsed: f32,
+    /// Seconds from the click to the release: gameplay's `release_at`.
+    pub windup: f32,
+    /// Horizontal direction thrown in.
+    pub aim: Vector3<f32>,
+}
+
 /// State of a single hand (simpler than FootState - no ground contact).
 #[derive(Debug, Clone)]
 pub struct HandState {
@@ -161,6 +178,8 @@ pub struct AnimationState {
     pub wade: f32,
     /// A fall into the water still being recovered from.
     pub water_entry: Option<WaterEntry>,
+    /// Throws being played out, oldest first; at most one per hand.
+    pub throws: Vec<ThrowGesture>,
 }
 
 impl AnimationState {
@@ -200,6 +219,7 @@ impl AnimationState {
             stroke_phase: 0.0,
             wade: 0.0,
             water_entry: None,
+            throws: Vec::new(),
         }
     }
 }

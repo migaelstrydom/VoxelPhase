@@ -23,6 +23,7 @@ mod grounding_system;
 mod immersion;
 mod immersion_system;
 mod swim;
+mod throws;
 
 pub use attitude::{approach, AttitudeControl};
 pub use components::{
@@ -37,3 +38,4 @@ pub use grounding_system::ContactGroundingSystem;
 pub use immersion::{Immersion, WaterAtBody};
 pub use immersion_system::ImmersionSystem;
 pub use swim::SwimConfig;
+pub use throws::{ThrowStroke, ThrowingHand, Throws};

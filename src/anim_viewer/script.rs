@@ -23,6 +23,10 @@ pub struct Beat {
     pub crouch: bool,
     /// Press jump on the first frame of this beat.
     pub jump: bool,
+    /// Press throw on the first frame of this beat.
+    pub throw: bool,
+    /// Where to throw, if not where the character faces.
+    pub aim: Option<Vector3<f32>>,
     /// Rotate `direction` about Y at this rate, in radians per second. Turns a
     /// straight walk into a circle without needing a per-frame script.
     pub turn_rate: f32,
@@ -38,6 +42,8 @@ impl Beat {
             sprint: false,
             crouch: false,
             jump: false,
+            throw: false,
+            aim: None,
             turn_rate: 0.0,
         }
     }
@@ -82,6 +88,19 @@ impl Beat {
             jump: true,
             ..Self::walk(duration)
         }
+    }
+
+    /// Throw on the first frame of this beat, whatever else it is doing.
+    pub fn throwing(mut self) -> Self {
+        self.throw = true;
+        self
+    }
+
+    /// Throw on the first frame of this beat, toward `aim`.
+    pub fn throwing_at(mut self, aim: Vector3<f32>) -> Self {
+        self.throw = true;
+        self.aim = Some(aim);
+        self
     }
 
     pub fn towards(mut self, direction: Vector3<f32>) -> Self {

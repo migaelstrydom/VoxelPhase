@@ -9,7 +9,7 @@ use super::animator::{BodyReading, CharacterAnimator};
 use super::debug_config::AnimationDebugConfig;
 use super::foot_placer::{FootPhase, FootPlacer};
 use crate::character::grab::GrabConfig;
-use crate::character::{CharacterIntent, CharacterState, Grounding, Immersion};
+use crate::character::{CharacterIntent, CharacterState, Grounding, Immersion, Throws};
 use crate::components::{Orientation, Position, Rotation, Velocity};
 use crate::debug::{DebugLines, DebugOverlays};
 use crate::rendering::Colour;
@@ -71,6 +71,7 @@ impl<'a> System<'a> for CharacterAnimationSystem {
         ReadStorage<'a, ContactCandidates>,
         ReadStorage<'a, Grounding>,
         ReadStorage<'a, Immersion>,
+        ReadStorage<'a, Throws>,
         WriteStorage<'a, CharacterAnimator>,
         Write<'a, DebugLines>,
         Write<'a, DebugOverlays>,
@@ -91,6 +92,7 @@ impl<'a> System<'a> for CharacterAnimationSystem {
             candidates,
             groundings,
             immersions,
+            throws,
             mut animators,
             mut debug_lines,
             mut debug_overlays,
@@ -128,6 +130,9 @@ impl<'a> System<'a> for CharacterAnimationSystem {
                 grounding,
                 immersion: &immersion,
             };
+            if let Some(throws) = throws.get(entity) {
+                animator.observe_throws(throws.this_frame(), dt);
+            }
             animator.update(dt, &body, character_state, target, &grab_config, contacts);
 
             if let Some(status) = animator.recording_status() {

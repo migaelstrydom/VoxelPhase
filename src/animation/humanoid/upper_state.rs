@@ -12,6 +12,7 @@ use super::body_frame::BodyFrame;
 use super::gait::GaitCycle;
 use super::pose_state::{smoothstep, AirKind, Stroke, Takeoff};
 use super::stride_sync;
+use super::throw::{self, ThrowRig};
 use crate::animation::config::{CharacterRigConfig, GaitPreset};
 use crate::animation::pose::{Cycle, CycleKind, HandsPose, PoseFragment};
 use crate::animation::state::{AnimationState, HandState};
@@ -132,8 +133,18 @@ impl UpperState {
         }
     }
 
-    /// Emit the upper-body fragment (hands + shoulder twist).
+    /// Emit the upper-body fragment (hands + shoulder twist), with any
+    /// throws in progress laid over it.
     pub fn sample(&self, ctx: &UpperSampleCtx<'_>) -> PoseFragment {
+        let mut fragment = self.sample_own(ctx);
+        if !ctx.anim.throws.is_empty() {
+            overlay_throws(ctx, &mut fragment);
+        }
+        fragment
+    }
+
+    /// The fragment this state draws by itself.
+    fn sample_own(&self, ctx: &UpperSampleCtx<'_>) -> PoseFragment {
         match self {
             UpperState::Swinging => sample_swinging(ctx),
             UpperState::Braced => sample_braced(ctx),
@@ -145,6 +156,30 @@ impl UpperState {
             } => sample_holding(ctx, *current_hold_height),
         }
     }
+}
+
+/// Throw over whatever the arms are doing: the torso turns first, and the
+/// hands are placed from the shoulders it turned.
+fn overlay_throws(ctx: &UpperSampleCtx<'_>, fragment: &mut PoseFragment) {
+    let rig = ThrowRig {
+        facing: ctx.anim.facing,
+        reach: ctx.rig.arm_length(),
+        torso_pitch: ctx.torso_pitch,
+    };
+    let throws = &ctx.anim.throws;
+    let turn = throw::torso_turn(throws, fragment.shoulder_twist.unwrap_or(0.0), &rig);
+    let leaned = UpperSampleCtx {
+        torso_pitch: turn.torso_pitch,
+        ..*ctx
+    };
+    let shoulders = shoulders_with_twist(&leaned, turn.twist);
+    throw::apply(
+        throws,
+        fragment,
+        [shoulders.left, shoulders.right],
+        &turn,
+        &rig,
+    );
 }
 
 /// Shoulder positions for a twist-aware rig.

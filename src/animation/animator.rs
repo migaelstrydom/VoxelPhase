@@ -14,10 +14,11 @@ use super::humanoid::stride_sync;
 use super::humanoid::upper_state::{UpperSampleCtx, UpperState, UpperTickCtx};
 use super::legged::{LeggedLocomotion, LocomotionCtx};
 use super::pose::{Crossfade, Linear, PoseFragment};
-use super::state::{AnimationState, FootState, WaterEntry};
+use super::state::{AnimationState, FootState, ThrowGesture, WaterEntry};
 use crate::character::grab::GrabConfig;
 use crate::character::{
     AirSteering, ArmState, CharacterIntent, CharacterState, Grounding, Immersion, LocomotionState,
+    ThrowStroke, ThrowingHand,
 };
 use crate::rendering::vertex::Vertex;
 use crate::sensing::{ContactCandidate, Probe};
@@ -423,6 +424,52 @@ impl CharacterAnimator {
         } else {
             self.state.water_entry.and_then(|entry| entry.advanced(dt))
         };
+    }
+
+    /// Play out the throws in progress and take up any new ones, before
+    /// [`Self::update`]. `strokes` are the character's throws in hand this
+    /// frame; a gesture keeps the stroke's clock while it is in hand and its
+    /// own afterwards, through the follow-through.
+    pub fn observe_throws<'s>(
+        &mut self,
+        strokes: impl IntoIterator<Item = &'s ThrowStroke>,
+        dt: f32,
+    ) {
+        let throws = &mut self.state.throws;
+        for gesture in throws.iter_mut() {
+            gesture.elapsed += dt;
+        }
+        throws.retain(|gesture| !gesture.finished());
+        for stroke in strokes {
+            if let Some(gesture) = throws.iter_mut().find(|g| g.stroke == stroke.id) {
+                gesture.elapsed = stroke.elapsed;
+                continue;
+            }
+            // A new throw takes its hand from whatever that hand was
+            // still finishing.
+            throws.retain(|gesture| gesture.hand != stroke.hand);
+            throws.push(ThrowGesture {
+                stroke: stroke.id,
+                hand: stroke.hand,
+                elapsed: stroke.elapsed,
+                windup: stroke.release_at,
+                aim: stroke.aim,
+            });
+        }
+    }
+
+    /// Where a hand is, and which way its forearm runs out of it: what
+    /// something held in it hangs from.
+    pub fn grip(&self, hand: ThrowingHand) -> (Point3<f32>, Vector3<f32>) {
+        let s = &self.skeleton;
+        let (elbow, hand) = match hand {
+            ThrowingHand::Left => (s.left_elbow, s.left_hand),
+            ThrowingHand::Right => (s.right_elbow, s.right_hand),
+        };
+        let forearm = (hand - elbow)
+            .try_normalize(1e-6)
+            .unwrap_or_else(Vector3::y);
+        (hand, forearm)
     }
 
     /// Start recording placer input, or stop and write what was kept.
