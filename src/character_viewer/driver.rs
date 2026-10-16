@@ -23,18 +23,20 @@ use std::path::Path;
 use nalgebra::{Point3, UnitQuaternion, Vector3};
 use specs::{Entity, Join, WorldExt};
 
-use crate::animation::{CharacterAnimator, CharacterRigConfig};
-use crate::character::{CharacterIntent, CharacterState, Grounding, Immersion, LocomotionConfig};
+use crate::animation::{CharacterAnimator, CharacterRigConfig, FootSide};
+use crate::character::{
+    CharacterIntent, CharacterState, Grounding, Immersion, LocomotionConfig, Timer,
+};
 use crate::components::{Position, RigidBodyComponent, Rotation};
 use crate::core::error::{EngineError, EngineResult};
 use crate::level::load_level;
 use crate::player::Player;
 use crate::render_perf::GameHarness;
-use crate::systems::PhysicsResource;
+use crate::systems::{resolve_ground_speed, PhysicsResource};
 use crate::water::WaterWorld;
 
 use super::pilot::Pilot;
-use super::record::{tilt_degrees, FrameRecord, Take, Tile};
+use super::record::{tilt_degrees, FootRecord, FrameRecord, Take, Tile};
 use super::scenario::Scenario;
 
 /// How a run is played and filmed.
@@ -88,12 +90,20 @@ pub fn run(scenario: &Scenario, config: &RunConfig) -> EngineResult<Take> {
     let mut surface = None;
 
     while let Some((intent, beat)) = pilot.intent(time, dt) {
+        let asked_speed = asked_speed(&harness, character, &intent);
         drive(&mut harness, character, intent);
         let (eye, look) = scenario.camera.frame(body, surface);
         harness.place_camera(eye, look);
         harness.step();
 
-        let record = record(&harness, character, frames.len(), time, beat.label)?;
+        let record = record(
+            &harness,
+            character,
+            frames.len(),
+            time,
+            beat.label,
+            asked_speed,
+        )?;
         body = record.body;
         surface = record.level;
 
@@ -111,6 +121,7 @@ pub fn run(scenario: &Scenario, config: &RunConfig) -> EngineResult<Take> {
 
     Ok(Take {
         scenario: scenario.name.to_string(),
+        station: scenario.station,
         frames,
         tiles,
     })
@@ -218,6 +229,22 @@ fn drive(harness: &mut GameHarness, character: Entity, intent: CharacterIntent) 
     }
 }
 
+/// Planar speed `intent` asks of the character, in m/s: what the character
+/// controller resolves its gait to, scaled by how hard the stick is pushed.
+fn asked_speed(harness: &GameHarness, character: Entity, intent: &CharacterIntent) -> f32 {
+    let push = intent.direction.magnitude().min(1.0);
+    if push == 0.0 {
+        return 0.0;
+    }
+    harness
+        .world()
+        .read_storage::<LocomotionConfig>()
+        .get(character)
+        .map_or(0.0, |config| {
+            push * resolve_ground_speed(intent, config, &Timer::default())
+        })
+}
+
 fn body_position(harness: &GameHarness, character: Entity) -> Point3<f32> {
     harness
         .world()
@@ -234,6 +261,7 @@ fn record(
     index: usize,
     time: f32,
     beat: &'static str,
+    asked_speed: f32,
 ) -> EngineResult<FrameRecord> {
     let world = harness.world();
     let missing = |what: &str| EngineError::InvalidState(format!("the character has no {what}"));
@@ -283,7 +311,22 @@ fn record(
         floor: water.map(|w| w.floor),
         pelvis: animator.skeleton.pelvis,
         head: animator.skeleton.head,
+        asked_speed,
+        feet: [
+            foot_record(animator, FootSide::Left, animator.skeleton.left_foot),
+            foot_record(animator, FootSide::Right, animator.skeleton.right_foot),
+        ],
     })
+}
+
+/// One foot as the placer holds it and the rig drew it at `drawn`.
+fn foot_record(animator: &CharacterAnimator, side: FootSide, drawn: Point3<f32>) -> FootRecord {
+    let foot = animator.locomotion.foot(side);
+    FootRecord {
+        planted: foot.is_planted(),
+        anchor: foot.planted_position,
+        position: drawn,
+    }
 }
 
 fn caption(record: &FrameRecord) -> String {

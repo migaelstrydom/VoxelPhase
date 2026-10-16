@@ -5,6 +5,8 @@ use nalgebra::{Point3, Vector3};
 
 use crate::anim_viewer::Script;
 
+use super::traversal::Station;
+
 /// Where the camera sits for a scenario's filmstrip.
 ///
 /// Always relative to the character, so a swim across the bay stays in frame,
@@ -95,4 +97,6 @@ pub struct Scenario {
     pub yaw: f32,
     pub script: Script,
     pub camera: CameraRig,
+    /// What a traversal scenario crosses, for the report to judge it on.
+    pub station: Option<Station>,
 }

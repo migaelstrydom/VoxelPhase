@@ -3,6 +3,8 @@
 use image::RgbaImage;
 use nalgebra::{Point3, UnitQuaternion, Vector3};
 
+use super::traversal::Station;
+
 /// One frame of the character, as the game left it.
 #[derive(Clone, Debug)]
 pub struct FrameRecord {
@@ -34,6 +36,21 @@ pub struct FrameRecord {
     /// The pelvis the rig drew, and its head.
     pub pelvis: Point3<f32>,
     pub head: Point3<f32>,
+    /// Planar speed the intent asked for this frame, in m/s; zero standing.
+    pub asked_speed: f32,
+    /// The left foot and the right, as the rig drew them.
+    pub feet: [FootRecord; 2],
+}
+
+/// One foot of one frame.
+#[derive(Clone, Copy, Debug)]
+pub struct FootRecord {
+    /// Whether the foot placer has the foot planted.
+    pub planted: bool,
+    /// Where the foot placer has it planted; meaningful while `planted`.
+    pub anchor: Point3<f32>,
+    /// Where the rig drew the foot.
+    pub position: Point3<f32>,
 }
 
 impl FrameRecord {
@@ -65,6 +82,8 @@ pub struct Tile {
 /// A whole run.
 pub struct Take {
     pub scenario: String,
+    /// The station the scenario crosses, if it is a traversal scenario.
+    pub station: Option<Station>,
     pub frames: Vec<FrameRecord>,
     pub tiles: Vec<Tile>,
 }

@@ -1,0 +1,155 @@
+// Traversal Garden: one station per lane for the character_viewer's traversal
+// scenarios (`src/character_viewer/traversal_scenarios.rs`).
+//
+// Every lane runs along +x. A scenario starts at x = -5 on flat ground, has
+// 12 m to come up to speed, meets its station at x = 7 (the bridges start at
+// x = 3) and runs out east of it to x = 35. Lanes, by z:
+//
+//   z -12 -8 -4 0 4     lips of 3, 8, 15, 25 and 40 cm, faces at x = 7
+//   z  10               the Test Arena's plank bridge, plank for plank
+//   z  18               a plank bridge with wider gaps (7 planks)
+//   z  26               rough field: craggy rocks standing 8-30 cm proud
+//   z  34               40 degree slope up to a shelf 6.7 m high
+//   z  42               50 degree slope up to a shelf 7.2 m high
+//   z  50               35 degree scree: the slope strewn with rocks
+//   z  58               a 0.7 m ledge: a wall with a top to mantle onto
+//   z  66               a cave lip: a roof 0.9 m up between two walls
+//
+// A plank bridge lays its planks out from a hash of its position, so the one
+// at z = 10 stands where the Test Arena's does, (8, 0, 10), turned to run
+// along x: its gaps are that bridge's, 0.22 to 0.69 m. The wide one's run
+// 0.35 to 0.88 m. Both lie on the ground between two decks level with their
+// planks (0.56 m), so the lane is flush from deck to bridge to deck.
+//
+// Fine voxels, so a 3 cm lip is a lip and not a ramp. The player's capsule is
+// 1 m tall and 0.5 m across.
+Level(
+    name: "Traversal Garden",
+
+    segments: [
+        (
+            name: "garden",
+
+            terrain: Terrain(
+                voxel_size: 0.25,
+                bounds: (min: (-16.0, -8.0, -16.0), max: (40.0, 16.0, 72.0)),
+                base_height: 0.0,
+                material_layers: [
+                    (depth: 1.0,  material: Grass),
+                    (depth: 4.0,  material: Dirt),
+                    (depth: 999.0, material: Rock),
+                ],
+                features: [
+                    // Slopes, each with a shelf at its top to run out onto.
+                    Ramp(from: (7.0, 34.0), to: (15.0, 34.0), start_height: 0.0, end_height: 6.71, width: 5.0, flat_width: 4.0),
+                    Plateau(min: (15.0, 31.5), max: (35.0, 36.5), height: 6.71),
+                    Ramp(from: (7.0, 42.0), to: (13.0, 42.0), start_height: 0.0, end_height: 7.15, width: 5.0, flat_width: 4.0),
+                    Plateau(min: (13.0, 39.5), max: (35.0, 44.5), height: 7.15),
+                    Ramp(from: (7.0, 50.0), to: (15.0, 50.0), start_height: 0.0, end_height: 5.60, width: 5.0, flat_width: 4.0),
+                    Plateau(min: (15.0, 47.5), max: (35.0, 52.5), height: 5.60),
+                ],
+                volumes: [
+                    // Lips: decks rising from x = 7.
+                    Platform(center: (21.0, 0.03, -12.0), half_extents: (14.0, 1.5), thickness: 1.0),
+                    Platform(center: (21.0, 0.08, -8.0), half_extents: (14.0, 1.5), thickness: 1.0),
+                    Platform(center: (21.0, 0.15, -4.0), half_extents: (14.0, 1.5), thickness: 1.0),
+                    Platform(center: (21.0, 0.25, 0.0), half_extents: (14.0, 1.5), thickness: 1.0),
+                    Platform(center: (21.0, 0.40, 4.0), half_extents: (14.0, 1.5), thickness: 1.0),
+
+                    // Decks either side of the bridges, level with the planks.
+                    Platform(center: (-3.025, 0.56, 10.0), half_extents: (5.975, 2.0), thickness: 1.0),
+                    Platform(center: (24.025, 0.56, 10.0), half_extents: (10.975, 2.0), thickness: 1.0),
+                    Platform(center: (-3.025, 0.56, 18.0), half_extents: (5.975, 2.0), thickness: 1.0),
+                    Platform(center: (24.025, 0.56, 18.0), half_extents: (10.975, 2.0), thickness: 1.0),
+
+                    // Rough field.
+                    Island(center: (10.89, -0.20, 24.74), half_extents: (0.46, 0.40, 0.32), edge_noise: 0.5),
+                    Island(center: (11.39, -0.22, 24.41), half_extents: (0.43, 0.40, 0.31), edge_noise: 0.5),
+                    Island(center: (7.84, -0.29, 24.53), half_extents: (0.41, 0.40, 0.51), edge_noise: 0.5),
+                    Island(center: (9.68, -0.23, 26.46), half_extents: (0.54, 0.40, 0.44), edge_noise: 0.5),
+                    Island(center: (18.72, -0.29, 24.37), half_extents: (0.51, 0.40, 0.37), edge_noise: 0.5),
+                    Island(center: (8.41, -0.19, 25.31), half_extents: (0.50, 0.40, 0.35), edge_noise: 0.5),
+                    Island(center: (14.67, -0.31, 25.54), half_extents: (0.44, 0.40, 0.32), edge_noise: 0.5),
+                    Island(center: (9.47, -0.19, 26.65), half_extents: (0.41, 0.40, 0.38), edge_noise: 0.5),
+                    Island(center: (12.44, -0.27, 25.28), half_extents: (0.50, 0.40, 0.47), edge_noise: 0.5),
+                    Island(center: (13.89, -0.26, 26.09), half_extents: (0.52, 0.40, 0.48), edge_noise: 0.5),
+                    Island(center: (18.76, -0.29, 24.63), half_extents: (0.40, 0.40, 0.49), edge_noise: 0.5),
+                    Island(center: (12.87, -0.19, 24.34), half_extents: (0.47, 0.40, 0.49), edge_noise: 0.5),
+                    Island(center: (17.51, -0.19, 25.33), half_extents: (0.47, 0.40, 0.45), edge_noise: 0.5),
+                    Island(center: (12.47, -0.17, 27.22), half_extents: (0.54, 0.40, 0.42), edge_noise: 0.5),
+                    Island(center: (7.73, -0.14, 26.73), half_extents: (0.46, 0.40, 0.55), edge_noise: 0.5),
+                    Island(center: (10.42, -0.22, 25.59), half_extents: (0.47, 0.40, 0.31), edge_noise: 0.5),
+                    Island(center: (9.02, -0.29, 24.62), half_extents: (0.31, 0.40, 0.49), edge_noise: 0.5),
+                    Island(center: (9.97, -0.22, 25.61), half_extents: (0.52, 0.40, 0.32), edge_noise: 0.5),
+                    Island(center: (13.59, -0.26, 27.38), half_extents: (0.50, 0.40, 0.52), edge_noise: 0.5),
+                    Island(center: (11.98, -0.29, 25.49), half_extents: (0.52, 0.40, 0.54), edge_noise: 0.5),
+                    Island(center: (9.11, -0.19, 25.04), half_extents: (0.36, 0.40, 0.42), edge_noise: 0.5),
+                    Island(center: (10.15, -0.20, 24.21), half_extents: (0.40, 0.40, 0.39), edge_noise: 0.5),
+                    Island(center: (18.44, -0.17, 26.69), half_extents: (0.43, 0.40, 0.45), edge_noise: 0.5),
+                    Island(center: (7.65, -0.14, 27.44), half_extents: (0.49, 0.40, 0.52), edge_noise: 0.5),
+                    Island(center: (11.71, -0.31, 25.64), half_extents: (0.33, 0.40, 0.46), edge_noise: 0.5),
+                    Island(center: (7.81, -0.31, 24.95), half_extents: (0.34, 0.40, 0.39), edge_noise: 0.5),
+                    Island(center: (7.00, -0.31, 24.74), half_extents: (0.33, 0.40, 0.39), edge_noise: 0.5),
+                    Island(center: (17.49, -0.24, 26.41), half_extents: (0.34, 0.40, 0.36), edge_noise: 0.5),
+                    Island(center: (11.37, -0.22, 24.64), half_extents: (0.51, 0.40, 0.55), edge_noise: 0.5),
+                    Island(center: (12.81, -0.26, 24.51), half_extents: (0.33, 0.40, 0.39), edge_noise: 0.5),
+                    Island(center: (16.95, -0.20, 24.78), half_extents: (0.31, 0.40, 0.54), edge_noise: 0.5),
+                    Island(center: (8.76, -0.10, 26.16), half_extents: (0.31, 0.40, 0.43), edge_noise: 0.5),
+                    Island(center: (17.36, -0.28, 26.71), half_extents: (0.37, 0.40, 0.39), edge_noise: 0.5),
+                    Island(center: (16.26, -0.27, 26.12), half_extents: (0.49, 0.40, 0.38), edge_noise: 0.5),
+                    Island(center: (16.74, -0.14, 27.75), half_extents: (0.51, 0.40, 0.50), edge_noise: 0.5),
+                    Island(center: (15.88, -0.31, 25.02), half_extents: (0.43, 0.40, 0.39), edge_noise: 0.5),
+                    Island(center: (7.34, -0.11, 25.21), half_extents: (0.36, 0.40, 0.47), edge_noise: 0.5),
+                    Island(center: (12.37, -0.24, 27.57), half_extents: (0.55, 0.40, 0.54), edge_noise: 0.5),
+                    Island(center: (9.65, -0.18, 25.02), half_extents: (0.35, 0.40, 0.35), edge_noise: 0.5),
+                    Island(center: (17.80, -0.14, 27.23), half_extents: (0.42, 0.40, 0.46), edge_noise: 0.5),
+
+                    // Scree on the 35 degree slope.
+                    Island(center: (10.65, 2.24, 50.22), half_extents: (0.39, 0.40, 0.32), edge_noise: 0.5),
+                    Island(center: (11.65, 2.97, 48.86), half_extents: (0.33, 0.40, 0.34), edge_noise: 0.5),
+                    Island(center: (8.00, 0.41, 49.29), half_extents: (0.26, 0.40, 0.37), edge_noise: 0.5),
+                    Island(center: (7.61, 0.13, 51.74), half_extents: (0.39, 0.40, 0.35), edge_noise: 0.5),
+                    Island(center: (8.47, 0.69, 48.25), half_extents: (0.33, 0.40, 0.26), edge_noise: 0.5),
+                    Island(center: (9.09, 1.19, 48.31), half_extents: (0.32, 0.40, 0.32), edge_noise: 0.5),
+                    Island(center: (11.14, 2.59, 50.51), half_extents: (0.32, 0.40, 0.35), edge_noise: 0.5),
+                    Island(center: (9.36, 1.36, 51.79), half_extents: (0.40, 0.40, 0.38), edge_noise: 0.5),
+                    Island(center: (9.63, 1.56, 49.03), half_extents: (0.29, 0.40, 0.26), edge_noise: 0.5),
+                    Island(center: (10.26, 2.01, 51.25), half_extents: (0.31, 0.40, 0.39), edge_noise: 0.5),
+                    Island(center: (7.30, -0.05, 48.95), half_extents: (0.39, 0.40, 0.32), edge_noise: 0.5),
+                    Island(center: (10.24, 1.94, 48.46), half_extents: (0.34, 0.40, 0.37), edge_noise: 0.5),
+                    Island(center: (7.94, 0.31, 49.40), half_extents: (0.39, 0.40, 0.36), edge_noise: 0.5),
+                    Island(center: (9.12, 1.14, 48.56), half_extents: (0.26, 0.40, 0.37), edge_noise: 0.5),
+                    Island(center: (11.44, 2.76, 49.81), half_extents: (0.28, 0.40, 0.36), edge_noise: 0.5),
+                    Island(center: (12.06, 3.21, 48.62), half_extents: (0.31, 0.40, 0.28), edge_noise: 0.5),
+                    Island(center: (14.48, 4.90, 51.09), half_extents: (0.30, 0.40, 0.38), edge_noise: 0.5),
+                    Island(center: (10.22, 1.99, 51.28), half_extents: (0.35, 0.40, 0.27), edge_noise: 0.5),
+                    Island(center: (8.88, 0.98, 49.13), half_extents: (0.37, 0.40, 0.30), edge_noise: 0.5),
+                    Island(center: (7.84, 0.29, 48.52), half_extents: (0.34, 0.40, 0.29), edge_noise: 0.5),
+                    Island(center: (10.05, 1.83, 49.83), half_extents: (0.39, 0.40, 0.32), edge_noise: 0.5),
+                    Island(center: (13.71, 4.42, 48.86), half_extents: (0.27, 0.40, 0.39), edge_noise: 0.5),
+
+                    // Ledge: a wall 0.7 m high, chest height on the capsule,
+                    // with a 4 m deep top.
+                    Platform(center: (11.0, 0.7, 58.0), half_extents: (4.0, 2.0), thickness: 2.0),
+
+                    // Cave lip: two walls with a roof between them, its underside
+                    // 0.9 m up, a tenth below the top of the capsule.
+                    Platform(center: (13.0, 2.5, 63.5), half_extents: (6.0, 0.5), thickness: 3.0),
+                    Platform(center: (13.0, 2.5, 68.5), half_extents: (6.0, 0.5), thickness: 3.0),
+                    Platform(center: (13.0, 2.5, 66.0), half_extents: (6.0, 2.0), thickness: 1.6),
+                ],
+            ),
+
+            objects: [
+                PlankBridge(pos: (8.0, 0.0, 10.0), length: 10.0, yaw: 90.0),
+                PlankBridge(pos: (8.0, 0.0, 18.0), length: 10.0, plank_count: 7, yaw: 90.0),
+            ],
+        ),
+    ],
+
+    placements: [
+        Root(segment: "garden"),
+    ],
+
+    player_spawn: (-5.0, 1.0, -12.0),
+)

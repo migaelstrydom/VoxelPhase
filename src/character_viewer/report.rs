@@ -3,8 +3,10 @@
 use std::fmt::Write;
 
 use super::record::{FrameRecord, Take};
+use super::traversal::{summarise, TraversalSummary};
 
-/// Every state change the run went through, then a row every `every` frames.
+/// Every state change the run went through, then a row every `every` frames,
+/// then how it crossed its station if it has one.
 pub fn report(take: &Take, every: usize) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "== {} ({} frames)", take.scenario, take.frames.len());
@@ -40,7 +42,7 @@ pub fn report(take: &Take, every: usize) -> String {
     let _ = writeln!(out, "-- frames");
     let _ = writeln!(
         out,
-        "  {:>6} {:8} {:10} {:12} {:9} {:>5} {:>3} {:>6} {:>6} {:>7} {:>7} {:>6} {:>6}",
+        "  {:>6} {:8} {:10} {:12} {:9} {:>5} {:>3} {:>6} {:>6} {:>7} {:>7} {:>6} {:>6} {:>20}",
         "t",
         "beat",
         "locomotion",
@@ -53,12 +55,25 @@ pub fn report(take: &Take, every: usize) -> String {
         "body-sf",
         "pelv-sf",
         "speed",
-        "vy"
+        "vy",
+        "body"
     );
     for frame in take.frames.iter().step_by(every.max(1)) {
         let _ = writeln!(out, "  {}", row(frame));
     }
+    if let Some(summary) = traversal(take) {
+        let _ = writeln!(out, "-- traversal");
+        let _ = writeln!(out, "  {}", TraversalSummary::header());
+        let _ = writeln!(out, "  {}", summary.row(&take.scenario));
+    }
     out
+}
+
+/// How the run crossed its station, if its scenario has one.
+pub fn traversal(take: &Take) -> Option<TraversalSummary> {
+    take.station
+        .as_ref()
+        .map(|station| summarise(&take.frames, station))
 }
 
 fn row(f: &FrameRecord) -> String {
@@ -68,7 +83,7 @@ fn row(f: &FrameRecord) -> String {
             .unwrap_or_else(|| "      -".to_string())
     };
     format!(
-        "{:6.2} {:8} {:10} {:12} {:9} {:2.0}/{:2.0} {:>3} {} {} {} {} {:6.2} {:+6.2}",
+        "{:6.2} {:8} {:10} {:12} {:9} {:2.0}/{:2.0} {:>3} {} {} {} {} {:6.2} {:+6.2} {:6.2} {:6.2} {:6.2}",
         f.time,
         f.beat,
         f.locomotion,
@@ -82,7 +97,10 @@ fn row(f: &FrameRecord) -> String {
         above(f.body.y),
         above(f.pelvis.y),
         f.planar_speed(),
-        f.velocity.y
+        f.velocity.y,
+        f.body.x,
+        f.body.y,
+        f.body.z
     )
 }
 

@@ -10,7 +10,12 @@
 //! cargo run --release --bin character_viewer -- wade_in
 //! cargo run --release --bin character_viewer -- swim --tiles 16 --from 0.2 --to 0.6
 //! cargo run --release --bin character_viewer -- all --tiles 0      # reports only
+//! cargo run --release --bin character_viewer -- traversal --tiles 0 --summary
 //! ```
+//!
+//! `traversal` runs every scenario that crosses a station of the Traversal
+//! Garden; `--summary` prints only each one's traversal summary as a table
+//! (speed lost, snags, bounce, foot slip, whether it got across).
 //!
 //! The anim_viewer is the fast, GPU-free tool for gait on analytic ground;
 //! this one is for anything the physics body itself does — floating, pitching
@@ -19,11 +24,14 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use voxel_phase::character_viewer::{catalogue, find, report, run, RunConfig, Scenario};
+use voxel_phase::character_viewer::{
+    catalogue, find, report, run, traversal, RunConfig, Scenario, TraversalSummary,
+};
 use voxel_phase::rendering::visual_bench::contact_sheet;
 
 const USAGE: &str =
-    "usage: character_viewer <scenario|all> [--list] [--tiles N] [--from F] [--to F]
+    "usage: character_viewer <scenario|all|traversal> [--list] [--summary] [--tiles N]
+                        [--from F] [--to F]
                         [--fps HZ] [--width W] [--height H] [--columns C]
                         [--every N] [--out <sheet.png>]
                         [--azimuth DEG] [--elevation DEG] [--distance M]";
@@ -42,6 +50,8 @@ struct Args {
     columns: u32,
     /// Print a report row every this many frames.
     every: usize,
+    /// Print only the traversal summary table, not the frame-by-frame report.
+    summary: bool,
     out: Option<PathBuf>,
 }
 
@@ -56,6 +66,9 @@ fn main() -> ExitCode {
         }
     };
 
+    if args.summary {
+        println!("{}", TraversalSummary::header());
+    }
     for scenario in &args.scenarios {
         let take = match run(scenario, &args.config) {
             Ok(take) => take,
@@ -64,7 +77,13 @@ fn main() -> ExitCode {
                 return ExitCode::FAILURE;
             }
         };
-        print!("{}", report(&take, args.every));
+        if args.summary {
+            if let Some(summary) = traversal(&take) {
+                println!("{}", summary.row(&take.scenario));
+            }
+        } else {
+            print!("{}", report(&take, args.every));
+        }
         if take.tiles.is_empty() {
             continue;
         }
@@ -94,6 +113,7 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Option<Args>, St
     let mut config = RunConfig::default();
     let mut columns = 4;
     let mut every = 3;
+    let mut summary = false;
     let mut out = None;
     let mut camera = CameraOverride::default();
 
@@ -102,10 +122,11 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Option<Args>, St
         match arg.as_str() {
             "--list" => {
                 for s in catalogue() {
-                    println!("{:12} {}", s.name, s.summary);
+                    println!("{:16} {}", s.name, s.summary);
                 }
                 return Ok(None);
             }
+            "--summary" => summary = true,
             "--tiles" => config.tiles = parse(&value("--tiles")?)?,
             "--from" => config.from = parse(&value("--from")?)?,
             "--to" => config.to = parse(&value("--to")?)?,
@@ -126,6 +147,11 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Option<Args>, St
     let which = which.ok_or("name a scenario, or 'all'")?;
     let mut scenarios = if which == "all" {
         catalogue()
+    } else if which == "traversal" {
+        catalogue()
+            .into_iter()
+            .filter(|s| s.station.is_some())
+            .collect()
     } else {
         vec![find(&which).ok_or(format!("no scenario '{which}' (try --list)"))?]
     };
@@ -140,6 +166,7 @@ fn parse_args(mut args: impl Iterator<Item = String>) -> Result<Option<Args>, St
         config,
         columns,
         every,
+        summary,
         out,
     }))
 }
