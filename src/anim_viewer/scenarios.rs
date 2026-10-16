@@ -337,6 +337,18 @@ fn slopes() -> Vec<Scenario> {
             support: SupportMotion::Still,
         },
         Scenario {
+            name: "walk_across",
+            description: "Walking along a 35° hillside, the ground falling away to the right, \
+                          where the downhill foot has the further to reach.",
+            ground: Box::new(Slope::degrees("up35", 35.0)),
+            script: Script::new()
+                .then(Beat::stand(0.5))
+                .then(Beat::walk(5.0).towards(Vector3::z()).named("across")),
+            start: (0.0, 0.0),
+            speed: None,
+            support: SupportMotion::Still,
+        },
+        Scenario {
             name: "run_up_gentle",
             description: "Sprinting up a 10° slope: the shortest reach budget meets the longest \
                           stride.",

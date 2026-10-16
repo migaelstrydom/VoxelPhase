@@ -4,11 +4,11 @@
 //! looks like while doing it:
 //!
 //! ```text
-//!   body position ─┬─► pelvis_for ──► pelvis
-//!                  │
-//!   Grounding ─────┴─► observe_support ──► support frame
-//!                                              │
-//!   probes ──► process_contacts ──► FootGround │
+//!   body position ─┬─► pelvis_for ──► pelvis ◄── PelvisDrop ◄─┐
+//!                  │                                          │
+//!   Grounding ─────┴─► observe_support ──► support frame      │
+//!                                              │              │
+//!   probes ──► process_contacts ──► FootGround ┼──────────────┘
 //!                                              ▼
 //!   intent, yaw, velocity ──────────────► FootPlacer ──► feet
 //! ```
@@ -26,6 +26,7 @@ use super::super::foot_placer::{FootPlacer, FootSide, PlacerCtx, PlacerFoot, Pla
 use super::super::FootPlacerConfig;
 use super::dims::LegRigDims;
 use super::ground::{self, FootGround};
+use super::pelvis_drop::PelvisDrop;
 
 /// How long locomotion keeps animating in a lost surface's frame, in
 /// seconds.
@@ -98,6 +99,10 @@ pub struct LeggedLocomotion {
     /// answer a stride by dragging its foot. See [`Self::pelvis_for`].
     body_to_pelvis: f32,
 
+    /// How much further the pelvis is lowered so the lower foot can reach
+    /// its ground on a hillside. Included in [`Self::pelvis_for`].
+    pelvis_drop: PelvisDrop,
+
     /// Previous-frame yaw, used to derive yaw rate for the placer.
     last_yaw: f32,
 
@@ -138,6 +143,7 @@ impl LeggedLocomotion {
             support_velocity: Vector3::zeros(),
             support_age: SUPPORT_MEMORY,
             body_to_pelvis,
+            pelvis_drop: PelvisDrop::default(),
             last_yaw: yaw,
             recorder: PlacerRecorder::from_env(pelvis, yaw, dims.hip_width, foot_centre_y),
         }
@@ -149,7 +155,34 @@ impl LeggedLocomotion {
     /// drawn around it. Everything that hands locomotion a position hands it
     /// a body position and goes through here.
     pub fn pelvis_for(&self, body_position: Point3<f32>) -> Point3<f32> {
-        body_position - Vector3::y() * self.body_to_pelvis
+        body_position - Vector3::y() * (self.body_to_pelvis + self.pelvis_drop.drop())
+    }
+
+    /// Lower the pelvis for this frame's ground, and return it re-lowered.
+    ///
+    /// `pelvis` is what [`Self::pelvis_for`] gave this frame; call after
+    /// [`Self::process_contacts`], so the drop is read off the ground the
+    /// probes just found, and before [`Self::tick`], so the gait is planned
+    /// from the pelvis that is drawn.
+    pub fn lower_pelvis(
+        &mut self,
+        pelvis: Point3<f32>,
+        yaw: f32,
+        grounding: &Grounding,
+        dt: f32,
+    ) -> Point3<f32> {
+        let undropped = pelvis + Vector3::y() * self.pelvis_drop.drop();
+        let foothold = |side: FootSide| {
+            self.foot(side)
+                .is_planted()
+                .then(|| self.ground(side).contact)
+                .flatten()
+        };
+        let footholds = [foothold(FootSide::Left), foothold(FootSide::Right)];
+        let support = grounding.is_grounded.then(|| grounding.normal_or_up());
+        self.pelvis_drop
+            .update(undropped, yaw, support, footholds, &self.dims, dt);
+        undropped - Vector3::y() * self.pelvis_drop.drop()
     }
 
     /// The measurements this gait is planned against.

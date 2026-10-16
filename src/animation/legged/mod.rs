@@ -3,6 +3,7 @@
 mod dims;
 mod ground;
 mod locomotion;
+mod pelvis_drop;
 
 pub use dims::LegRigDims;
 pub use ground::{probe_tags, FootGround};

@@ -31,6 +31,16 @@ use super::timing::GaitTiming;
 /// Hard cap on substeps per frame, guarding against pathological dt.
 const MAX_SUBSTEPS: f32 = 64.0;
 
+/// Least `normal.y` of a face a foot may stand on: about 66° from level.
+///
+/// Physics sets no slope limit on support, so a body can be held up by
+/// faces far steeper than a comfortable walk: wedged in the crease of a V
+/// channel, each face it stands on is near 57°. A cut-off below what the
+/// body can stand on leaves its feet with no floor anywhere, and they hang
+/// in a swing that never lands. Only faces past this are walls: crate
+/// sides, cliff faces, a creature's flank.
+const FLOOR_MIN_NORMAL_Y: f32 = 0.4;
+
 /// Which foot a `PlacerFoot` represents.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FootSide {
@@ -1025,7 +1035,7 @@ fn floor_sample(ctx: &PlacerCtx<'_>, side: FootSide) -> Option<(Point3<f32>, Vec
         FootSide::Left => (ctx.left_ground, ctx.left_ground_normal),
         FootSide::Right => (ctx.right_ground, ctx.right_ground_normal),
     };
-    contact.filter(|_| normal.y > 0.6).map(|c| (c, normal))
+    contact.filter(|_| is_floor(normal)).map(|c| (c, normal))
 }
 
 /// Whether this foot's probe found any geometry at all, floor-like or not.
@@ -1044,11 +1054,18 @@ fn probe_found_geometry(ctx: &PlacerCtx<'_>, side: FootSide) -> bool {
     }
 }
 
+/// Whether a face with this normal is one a foot may stand on.
+pub(crate) fn is_floor(normal: Vector3<f32>) -> bool {
+    normal.y > FLOOR_MIN_NORMAL_Y
+}
+
 /// Height of the floor plane through `contact` with the given normal,
 /// evaluated at `(x, z)`. Exact for uniform slopes; for flat treads
 /// (normal = +Y) it degenerates to `contact.y`.
-fn floor_height_at(contact: Point3<f32>, normal: Vector3<f32>, x: f32, z: f32) -> f32 {
-    contact.y - (normal.x * (x - contact.x) + normal.z * (z - contact.z)) / normal.y.max(0.6)
+pub(crate) fn floor_height_at(contact: Point3<f32>, normal: Vector3<f32>, x: f32, z: f32) -> f32 {
+    contact.y
+        - (normal.x * (x - contact.x) + normal.z * (z - contact.z))
+            / normal.y.max(FLOOR_MIN_NORMAL_Y)
 }
 
 /// Where a completing swing may put its foot down, if anywhere.
@@ -1770,6 +1787,32 @@ mod tests {
             "planted at {:.3} m, mid-arc, rather than on the floor at {:.3} m",
             plant.y,
             ground.y
+        );
+    }
+
+    /// Climbing a V channel, the body is wedged in the crease and each foot
+    /// stands on one of its walls: the Water Park's ramp climbs 43° with
+    /// sides that rise about 50° across it, a face near 57° from level.
+    /// Physics holds the body up there, so it is floor; were it a wall, the
+    /// feet would find nowhere to land all the way up and never step.
+    #[test]
+    fn a_face_the_body_stands_on_in_a_crease_is_floor() {
+        let config = FootPlacerConfig::default();
+        let pelvis = Point3::new(0.0, STANDING_HEIGHT, 0.0);
+        let mut ctx = riding(pelvis, Vector3::zeros(), &config);
+        ctx.left_ground = Some(Point3::new(0.0, 0.0, HIP_WIDTH));
+        ctx.left_ground_normal = Vector3::new(-1.2, 1.0, -0.93).normalize();
+        ctx.right_ground = Some(Point3::new(0.0, 0.3, -HIP_WIDTH));
+        ctx.right_ground_normal = Vector3::new(1.0, 0.0, 0.0);
+
+        assert!(
+            floor_sample(&ctx, FootSide::Left).is_some(),
+            "a face {:.0}° from level, which the body stands on, was taken for a wall",
+            ctx.left_ground_normal.y.acos().to_degrees()
+        );
+        assert!(
+            floor_sample(&ctx, FootSide::Right).is_none(),
+            "an upright face was taken for floor"
         );
     }
 

@@ -7,7 +7,10 @@
 //!
 //! The exception is `climb_ramp`, in the Rubble Garden: the way up its cliff
 //! to the lips, a ramp at x = 92 from the floor at z = 95 to the top (12 m) at
-//! z = 61.
+//! z = 61. And `climb_steep`, in the Water Park: the ramp down to the cavern
+//! courtyard at x = -33, rising 11 m from z = -12 to z = -24 (about 43°). And
+//! `contour` and `run_uphill`, on Island Sea's hillside: along it with the
+//! ground falling away on the right, and straight up it at a run.
 
 use std::f32::consts::{FRAC_PI_2, PI};
 
@@ -19,6 +22,8 @@ use super::scenario::{CameraRig, Scenario};
 
 const LEVEL: &str = "levels/swim_test.level.ron";
 const GARDEN: &str = "levels/rubble_garden.level.ron";
+const PARK: &str = "levels/water_park.level.ron";
+const ISLAND: &str = "levels/island_sea.level.ron";
 
 /// Facing +x, down the beach into the sea.
 const SEAWARD: f32 = FRAC_PI_2;
@@ -132,6 +137,50 @@ pub fn catalogue() -> Vec<Scenario> {
                 .then(Beat::run(9.0).named("climb").towards(-Vector3::z()))
                 .then(Beat::stand(1.0)),
             camera: CameraRig::side().with_azimuth(90.0).with_distance(8.0),
+        },
+        Scenario {
+            name: "climb_steep",
+            summary: "Water Park: walk up the 43° ramp from the cavern courtyard",
+            level: PARK,
+            start: (-33.0, -12.5),
+            yaw: PI,
+            script: Script::new()
+                .then(Beat::stand(0.5))
+                .then(Beat::walk(5.0).named("climb").towards(-Vector3::z()))
+                .then(Beat::stand(1.0)),
+            camera: CameraRig::side().with_azimuth(90.0).with_distance(6.0),
+        },
+        Scenario {
+            name: "contour",
+            summary: "Island Sea: walk along the hillside, the slope falling away to the right",
+            level: ISLAND,
+            start: (-5.91, 8.05),
+            yaw: 2.04,
+            script: Script::new()
+                .then(Beat::stand(0.5))
+                .then(
+                    Beat::walk(3.0)
+                        .named("contour")
+                        .towards(Vector3::new(0.893, 0.0, -0.450)),
+                )
+                .then(Beat::stand(1.0)),
+            camera: CameraRig::three_quarter().with_azimuth(296.0),
+        },
+        Scenario {
+            name: "run_uphill",
+            summary: "Island Sea: run up the hillside",
+            level: ISLAND,
+            start: (-3.74, 10.09),
+            yaw: -2.72,
+            script: Script::new()
+                .then(Beat::stand(0.5))
+                .then(
+                    Beat::run(1.5)
+                        .named("uphill")
+                        .towards(Vector3::new(-0.413, 0.0, -0.911)),
+                )
+                .then(Beat::stand(1.0)),
+            camera: CameraRig::side().with_azimuth(-2.72f32.to_degrees() + 180.0),
         },
     ]
 }

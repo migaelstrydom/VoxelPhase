@@ -171,7 +171,13 @@ impl CharacterAnimator {
         grab_config: &GrabConfig,
         contacts: &[ContactCandidate],
     ) {
-        let (pelvis_position, yaw, grounding) = (body.pelvis, body.yaw, body.grounding);
+        let (yaw, grounding) = (body.yaw, body.grounding);
+        // The probes are read first: how low the pelvis hangs depends on how
+        // far the ground under each hip has fallen away.
+        self.locomotion.process_contacts(contacts);
+        let pelvis_position = self
+            .locomotion
+            .lower_pelvis(body.pelvis, yaw, grounding, dt);
         // Everything below the neck is animated in the frame of whatever is
         // holding the character up. A body riding a platform has the
         // platform's velocity and is nonetheless standing still: it should
@@ -188,7 +194,6 @@ impl CharacterAnimator {
         self.state.velocity = velocity;
         self.state.body_pitch = body.up.dot(&facing).atan2(body.up.y);
         self.state.water_surface = body.immersion.water.map(|w| w.surface);
-        self.locomotion.process_contacts(contacts);
         self.state.left.normal = self.locomotion.ground(FootSide::Left).normal_or_up();
         self.state.right.normal = self.locomotion.ground(FootSide::Right).normal_or_up();
         // Support is decided by the contacts the physics engine solved, not by
